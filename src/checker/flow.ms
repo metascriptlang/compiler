@@ -1585,38 +1585,36 @@ function paramNamesOf(container: Node): string[] {
 function isPastLastAssignment(sym: Symbol, closure: Node): boolean {
 	const [container, created] = declaringContainerOf(sym, closure);
 	if (container == null) return false;
-	const scan = new AssignmentScan(sym, created);
-	forEachChild(container, (child: Node): void => { scanAssignments(scan, child, false); });
-	return !scan.anytime && scan.closureAt > 0 && scan.lastAssignment < scan.closureAt;
+	const scan = assignmentsIn(container!);
+	return scan.ordinals.has(created) && lastAssignmentOf(sym, scan) < scan.ordinals.get(created)!;
 }
 
 function declaringContainerOf(sym: Symbol, closure: Node): [Node | null, Node] {
 	let inner = closure;
-	while (inner.flowNode != null) {
-		const [start, declared] = enclosingStart(inner.flowNode!, sym.declNode);
-		if (start == null || start.node == null) break;
-		const container = start.node!;
-		if (declared || declaresParam(container, sym)) return [container, inner];
-		if (container.kind != NodeKind.ArrowFunction && container.kind != NodeKind.FunctionExpr) break;
-		inner = container;
+	while (true) {
+		const container = enclosingContainer(inner);
+		if (container == null) break;
+		if (declaresParam(container!, sym) || (sym.declNode != null && assignmentsIn(container!).ordinals.has(sym.declNode))) return [container, inner];
+		if (container!.kind != NodeKind.ArrowFunction && container!.kind != NodeKind.FunctionExpr) break;
+		inner = container!;
 	}
 	return [null, inner];
 }
 
-function enclosingStart(from: FlowNode, decl: Node | null): [FlowNode | null, boolean] {
+function enclosingContainer(closure: Node): Node | null {
+	if (closureContainers.has(closure)) return closureContainers.get(closure)!;
+	if (closure.flowNode == null) return null;
 	const seen = new HashSet<FlowNode>();
-	const todo: FlowNode[] = [from];
-	let start: FlowNode | null = null;
-	let declared = false;
+	const todo: FlowNode[] = [closure.flowNode!];
 	while (todo.length > 0) {
 		const flow = todo.pop();
 		if (flow == null || flow.flags.has(FlowFlag.Unreachable) || seen.has(flow)) continue;
 		seen.add(flow);
 		if (flow.flags.has(FlowFlag.Start)) {
-			start = flow;
-			continue;
+			if (flow.node == null) return null;
+			closureContainers.set(closure, flow.node!);
+			return flow.node;
 		}
-		if (decl != null && flow.flags.has(FlowFlag.Assignment) && flow.node == decl) declared = true;
 		if (flow.antecedent != null) todo.push(flow.antecedent);
 		let list: FlowList | null = flow.antecedents;
 		while (list != null) {
@@ -1624,57 +1622,99 @@ function enclosingStart(from: FlowNode, decl: Node | null): [FlowNode | null, bo
 			list = list.next;
 		}
 	}
-	return [start, declared];
+	return null;
 }
 
-class AssignmentScan {
-	sym: Symbol;
-	closure: Node;
-	ordinal: int32 = 0;
-	declAt: int32 = 0;
-	closureAt: int32 = 0;
-	lastAssignment: int32 = 0;
-	anytime: boolean = false;
-	openAt: int32[] = [];
-	openAssigns: boolean[] = [];
+const WRITTEN_LATER: int32 = 2147483647;
 
-	constructor(sym: Symbol, closure: Node) {
+class AssignmentWrite {
+	name: string;
+	sym: Symbol | null;
+	at: int32;
+	nested: boolean;
+	open: int32[];
+
+	constructor(name: string, sym: Symbol | null, at: int32, nested: boolean, open: int32[]) {
+		this.name = name;
 		this.sym = sym;
-		this.closure = closure;
+		this.at = at;
+		this.nested = nested;
+		this.open = open;
 	}
 }
 
-function scanAssignments(scan: AssignmentScan, node: Node, nested: boolean): void {
+class ContainerAssignments {
+	ordinal: int32 = 0;
+	ordinals: HashMap<Node, int32> = new HashMap<Node, int32>();
+	writes: AssignmentWrite[] = [];
+	statementStart: int32[] = [];
+	statementEnd: int32[] = [];
+	open: int32[] = [];
+}
+
+let containerAssignments = new HashMap<Node, ContainerAssignments>();
+let lastAssignments = new HashMap<Symbol, int32>();
+let closureContainers = new HashMap<Node, Node>();
+
+export function resetCapturedAssignments(): void {
+	containerAssignments = new HashMap<Node, ContainerAssignments>();
+	lastAssignments = new HashMap<Symbol, int32>();
+	closureContainers = new HashMap<Node, Node>();
+}
+
+function assignmentsIn(container: Node): ContainerAssignments {
+	const known = containerAssignments.get(container);
+	if (known != null) return known;
+	const scan = new ContainerAssignments();
+	forEachChild(container, (child: Node): void => { scanAssignments(scan, child, false); });
+	containerAssignments.set(container, scan);
+	return scan;
+}
+
+function lastAssignmentOf(sym: Symbol, scan: ContainerAssignments): int32 {
+	if (lastAssignments.has(sym)) return lastAssignments.get(sym)!;
+	const declAt = sym.declNode != null && scan.ordinals.has(sym.declNode) ? scan.ordinals.get(sym.declNode)! : 0;
+	let last = 0;
+	for (const write of scan.writes) {
+		if (write.name != sym.name || (write.sym != null && write.sym != sym)) continue;
+		if (write.nested) {
+			last = WRITTEN_LATER;
+			break;
+		}
+		let at = write.at;
+		for (const i of write.open) {
+			if (scan.statementStart[i] > declAt) {
+				at = scan.statementEnd[i];
+				break;
+			}
+		}
+		if (at > last) last = at;
+	}
+	lastAssignments.set(sym, last);
+	return last;
+}
+
+function scanAssignments(scan: ContainerAssignments, node: Node, nested: boolean): void {
 	scan.ordinal += 1;
 	const at = scan.ordinal;
-	if (node == scan.closure) scan.closureAt = at;
-	if (node == scan.sym.declNode) scan.declAt = at;
-	if (writesSymbol(node, scan.sym, nested)) markAssignment(scan, at, nested);
+	const k = node.kind;
+	if (!nested && (k == NodeKind.VariableDecl || k == NodeKind.DestructuringDecl || k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr)) {
+		scan.ordinals.set(node, at);
+	}
+	const written: Node[] = [];
+	writtenNames(node, written);
+	for (const n of written) {
+		scan.writes.push(new AssignmentWrite((n.data as IdentifierData).name, nested ? null : n.resolvedSym, at, nested, scan.open.slice(0)));
+	}
 	const later = nested || runsLater(node);
 	const extending = !later && extendsAssignment(node);
 	if (extending) {
-		scan.openAt.push(at);
-		scan.openAssigns.push(false);
+		scan.open.push(scan.statementStart.length);
+		scan.statementStart.push(at);
+		scan.statementEnd.push(0);
 	}
 	forEachChild(node, (child: Node): void => { scanAssignments(scan, child, later); });
-	if (extending) {
-		scan.openAt.pop();
-		if (scan.openAssigns.pop() && scan.ordinal > scan.lastAssignment) scan.lastAssignment = scan.ordinal;
-	}
-}
-
-function markAssignment(scan: AssignmentScan, at: int32, nested: boolean): void {
-	if (nested) {
-		scan.anytime = true;
-		return;
-	}
-	for (let i = 0; i < scan.openAt.length; i += 1) {
-		if (scan.openAt[i] > scan.declAt) {
-			scan.openAssigns[i] = true;
-			return;
-		}
-	}
-	if (at > scan.lastAssignment) scan.lastAssignment = at;
+	if (extending) scan.statementEnd[scan.open.pop()] = scan.ordinal;
 }
 
 function runsLater(node: Node): boolean {
@@ -1693,22 +1733,23 @@ function extendsAssignment(node: Node): boolean {
 		|| k == NodeKind.SwitchStmt || k == NodeKind.MatchStmt || k == NodeKind.TryCatchStmt;
 }
 
-function writesSymbol(node: Node, sym: Symbol, nested: boolean): boolean {
+function writtenNames(node: Node, out: Node[]): void {
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
-		return isAssignmentOperator(d.operator) && targetsSymbol(d.left, sym, nested);
-	}
-	if (node.kind == NodeKind.UpdateExpr) return namesSymbol((node.data as UpdateExprData).updateArg, sym, nested);
-	if (node.kind == NodeKind.OutExpr) return namesSymbol((node.data as OutExprData).outArg, sym, nested);
-	if (node.kind == NodeKind.MoveExpr) return namesSymbol((node.data as MoveExprData).moveArg, sym, nested);
-	if (node.kind == NodeKind.CallExpr) {
+		if (isAssignmentOperator(d.operator)) collectTargets(d.left, out);
+	} else if (node.kind == NodeKind.UpdateExpr) {
+		collectName((node.data as UpdateExprData).updateArg, out);
+	} else if (node.kind == NodeKind.OutExpr) {
+		collectName((node.data as OutExprData).outArg, out);
+	} else if (node.kind == NodeKind.MoveExpr) {
+		collectName((node.data as MoveExprData).moveArg, out);
+	} else if (node.kind == NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;
 		const fnType = calleeType(cd.callee);
 		for (let i = 0; i < cd.arguments.length; i += 1) {
-			if (namesSymbol(cd.arguments[i], sym, nested) && argumentMayBeRef(fnType, i)) return true;
+			if (argumentMayBeRef(fnType, i)) collectName(cd.arguments[i], out);
 		}
 	}
-	return false;
 }
 
 function argumentMayBeRef(fnType: Type | null, i: int32): boolean {
@@ -1720,22 +1761,21 @@ function isAssignmentOperator(op: string): boolean {
 	return op.endsWith("=") && op != "==" && op != "===" && op != "!=" && op != "!==" && op != "<=" && op != ">=";
 }
 
-function targetsSymbol(target: Node | null, sym: Symbol, nested: boolean): boolean {
+function collectTargets(target: Node | null, out: Node[]): void {
 	const t = stripHidden(target);
-	if (t == null) return false;
+	if (t == null) return;
 	if (t.kind == NodeKind.ArrayLiteral || t.kind == NodeKind.ObjectLiteral) {
-		let found = false;
-		forEachChild(t, (part: Node): void => { if (!found && targetsSymbol(part, sym, nested)) found = true; });
-		return found;
+		forEachChild(t, (part: Node): void => { collectTargets(part, out); });
+	} else if (t.kind == NodeKind.SpreadExpr) {
+		collectTargets((t.data as SpreadExprData).spreadArg, out);
+	} else {
+		collectName(t, out);
 	}
-	if (t.kind == NodeKind.SpreadExpr) return targetsSymbol((t.data as SpreadExprData).spreadArg, sym, nested);
-	return namesSymbol(t, sym, nested);
 }
 
-function namesSymbol(node: Node | null, sym: Symbol, nested: boolean): boolean {
+function collectName(node: Node | null, out: Node[]): void {
 	const n = stripHidden(node);
-	if (n == null || n.kind != NodeKind.Identifier || (n.data as IdentifierData).name != sym.name) return false;
-	return nested || n.resolvedSym == null || n.resolvedSym == sym;
+	if (n != null && n.kind == NodeKind.Identifier) out.push(n);
 }
 
 function writesReference(node: Node | null, refNode: Node): boolean {
