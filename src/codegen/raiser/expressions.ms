@@ -351,8 +351,9 @@ function emitCompoundArith(s: RaiserCompState, op: string, dest: int32, lhs: int
 	if (isBitwiseOp(base) && convClassOf(target.nodeType) == (RaiserConvClass.F64 as int32)) {
 		const asInt = emitConvTo(s, lhs, RaiserConvClass.I32Wrap as int32, RaiserConvClass.F64 as int32);
 		const stored = base == ">>>" ? createPrimitive(TypeKind.Uint32) : int32Type();
-		emitBitwise(s, base, dest, asInt, rhs, stored);
-		emitInst(s, raiserABC(RaiserOpcode.Move, dest, emitConvTo(s, dest, RaiserConvClass.F64 as int32, convClassOf(stored)), 0));
+		const bits = allocWord(s);
+		emitBitwise(s, base, bits, asInt, rhs, stored);
+		emitInst(s, raiserABC(RaiserOpcode.Move, dest, emitConvTo(s, bits, RaiserConvClass.F64 as int32, convClassOf(stored)), 0));
 		return;
 	}
 	if (isBitwiseOp(base)) {
