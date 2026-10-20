@@ -933,22 +933,6 @@ function refusePromiseOfThenable(ctx: CheckerContext, node: Node, result: Type):
 	addError(ctx, `this call makes '${typeDisplayName(result)}', a promise of a thenable, which is refused: a promise adopts what a thenable delivers, so it holds '${typeDisplayName(promised)}'`, node.location.line, node.location.column);
 }
 
-function expressionBodyType(callback: Node): Type | null {
-	if (callback.kind != NodeKind.ArrowFunction) return null;
-	const body = (callback.data as ArrowFunctionData).arrowBody;
-	return body != null && body.kind != NodeKind.BlockStmt ? body.nodeType : null;
-}
-
-function refuseThenCallbackThenable(ctx: CheckerContext, node: Node): void {
-	if (node.kind != NodeKind.CallExpr) return;
-	const d = node.data as CallExprData;
-	if (d.callee.kind != NodeKind.MemberExpr || (d.callee.data as MemberExprData).property != "then" || d.arguments.length == 0) return;
-	const receiver = (d.callee.data as MemberExprData).object.nodeType;
-	const returned = expressionBodyType(d.arguments[0]);
-	if (receiver == null || !isAwaitable(receiver) || returned == null || thenSignatureOf(ctx, returned) == null) return;
-	addError(ctx, `a '.then' callback returns '${typeDisplayName(returned)}', a thenable the promise would adopt, but '.then' gives 'Promise<void>' and drops what the callback returns: await it in an async function instead`, d.arguments[0].location.line, d.arguments[0].location.column);
-}
-
 function checkPromiseConstruction(ctx: CheckerContext, node: Node, expected: Type | null): Type {
 	const d = node.data as NewExprData;
 	const factory = ctx.compilerFuncs.get("promiseFromExecutor");
@@ -1428,7 +1412,6 @@ export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 	let r = checkCallExprInner(ctx, node, adoptPromiseInputs(ctx, node, expectedType));
 	if (node.kind == NodeKind.CallExpr) for (const arg of (node.data as CallExprData).arguments) iterateSpreadSource(ctx, arg);
 	refusePromiseOfThenable(ctx, node, r);
-	refuseThenCallbackThenable(ctx, node);
 	tracker.argIdents.shrink(identsFrom);
 	settleUnassignedArgs(ctx, readsFrom);
 	const seen = node.kind == NodeKind.CallExpr && isUnresolvedType(r) ? callSelfReadType((node.data as CallExprData).callee) : null;

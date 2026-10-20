@@ -119,12 +119,10 @@ class Thing {
 async function written(): Promise<Thing> { return new Thing(); }
 async function main(): Promise<void> {
 	const made = new Promise<Thing>((resolve, reject) => { resolve(new Thing()); });
-	Promise.resolve(1).then((v: int32) => new Thing());
 }
 `).errors.join("\n");
 	assert text.contains("'Promise<Thing>' is a promise of a thenable, which is refused: a promise adopts what a thenable delivers, so write 'Promise<int32>'"), text;
 	assert text.contains("this call makes 'Promise<Thing>', a promise of a thenable, which is refused"), text;
-	assert text.contains("a '.then' callback returns 'Thing', a thenable the promise would adopt"), text;
 }
 
 test "a class is not a promise and a promise is not a class" {
@@ -147,6 +145,22 @@ async function main(): Promise<void> {
 	assert text.contains("Type 'Thing' is not assignable to type 'Promise<int32>'"), text;
 	assert text.contains("Type 'Empty' is not assignable to type 'Promise<int32>'"), text;
 	assert text.contains("Type 'Promise<int32>' is not assignable to type 'Empty'"), text;
+}
+
+test "a '.then' callback's promise is adopted and its thenable is refused" {
+	const result = checkOnly(`
+class Thing {
+	then(onFulfilled: (v: int32) => void): void { onFulfilled(1); }
+}
+async function inner(v: int32): Promise<int32> { return v; }
+async function main(): Promise<void> {
+	const adopted: int32 = await Promise.resolve(1).then((v) => inner(v));
+	Promise.resolve(1).then((v) => new Thing());
+}
+`);
+	const text = result.errors.join("\n");
+	assert result.errors.length == 1, "only the thenable: " + text;
+	assert text.contains("this call makes 'Promise<Thing>', a promise of a thenable, which is refused: a promise adopts what a thenable delivers, so it holds 'int32'"), text;
 }
 
 test "a thenable returned inside a try with catch or finally is refused, return await is kept" {
