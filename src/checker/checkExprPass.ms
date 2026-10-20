@@ -1716,6 +1716,39 @@ function literalStampType(expectedType: Type | null, fallback: Type): Type {
 	return stampType != null ? stampType : fallback;
 }
 
+function putLiteralField(names: string[], types: Type[] | null, name: string, t: Type | null): void {
+	const at = names.indexOf(name);
+	if (at < 0) {
+		names.push(name);
+		if (types != null) types.push(t!);
+	} else if (types != null) {
+		types[at] = t!;
+	}
+}
+
+function literalFields(ctx: CheckerContext, d: ObjectLiteralData, names: string[], types: Type[] | null): void {
+	for (let i = 0; i < d.keys.length && i < d.properties.length; i += 1) {
+		const value = d.properties[i];
+		if (d.keys[i] == "..." && value.kind == NodeKind.SpreadExpr) {
+			checkExpr(ctx, value, null);
+			const fields = spreadFieldsOf((value.data as SpreadExprData).spreadArg.nodeType);
+			if (fields != null) {
+				for (let fi = 0; fi < fields.typeNames.length && fi < fields.typeChildren.length; fi += 1) {
+					if (!fields.typeNames[fi].startsWith("__")) putLiteralField(names, types, fields.typeNames[fi], fields.typeChildren[fi]);
+				}
+				continue;
+			}
+		}
+		let probed: Type | null = null;
+		if (types != null) {
+			const probe = cloneNodeForCheck(value);
+			checkExpr(ctx, probe, null);
+			probed = probe.nodeType;
+		}
+		putLiteralField(names, types, d.keys[i], probed);
+	}
+}
+
 function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const d = node.data as ObjectLiteralData;
 	// Unwrap ownership modifiers (Sink/Lent/Var) and Ref — transparent wrappers.
@@ -2024,9 +2057,9 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 		}
 		// Fallback: name-only matching (legacy path for non-string-discriminant unions)
 		if (varIdx < 0 && stringDiscName == "") {
-			varIdx = (d.keys.length > 0)
-				? findUnionVariant(objExpected, d.keys, [])
-				: -1;
+			const fieldNames: string[] = [];
+			literalFields(ctx, d, fieldNames, null);
+			varIdx = findUnionVariant(objExpected, fieldNames, []);
 			// Ambiguous? (e.g. { value: X } matches both NumberLiteral and StringLiteral)
 			// Check property CLONES without expectedType to get actual types — purely
 			// for variant selection. Original properties stay unchecked so the
@@ -2035,17 +2068,11 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 			// `cloneDefaultNode` (line ~1356): exploratory check on a clone leaves
 			// the live AST untouched, avoiding double-insert of HiddenDeref /
 			// coercion nodes that `checkExpr` is not idempotent against.
-			if (varIdx >= 0 && d.keys.length > 0 && isAmbiguousVariant(objExpected, varIdx, d.keys)) {
-				const propTypes: Type[] = [];
-				let pi = 0;
-				while (pi < d.properties.length) {
-					const probe = cloneNodeForCheck(d.properties[pi]);
-					checkExpr(ctx, probe, null);
-					const probeType = probe.nodeType;
-					propTypes.push(probeType!);
-					pi = pi + 1;
-				}
-				const refined = findUnionVariant(objExpected, d.keys, propTypes);
+			if (varIdx >= 0 && isAmbiguousVariant(objExpected, varIdx, fieldNames)) {
+				const probedNames: string[] = [];
+				const probedTypes: Type[] = [];
+				literalFields(ctx, d, probedNames, probedTypes);
+				const refined = findUnionVariant(objExpected, probedNames, probedTypes);
 				if (refined >= 0) varIdx = refined;
 			}
 		}
