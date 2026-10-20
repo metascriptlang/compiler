@@ -342,5 +342,40 @@ enqueue rp
 rr=$(waitfor rp 60)
 check "S25 rp landed after a local gate" '[ "$rr" = 0 ] && onmain more.txt && grep -q "^wt/rp " "$T/ctl/gates.log"'
 
+for variant in same other shared changed whitespace conflict dirty; do
+  echo "== S26 local GREEN survives a refused land ($variant)"
+  setup
+  printf '1\n2\n3\n4\n5\n' >"$R/shared.txt"; git -C "$R" add shared.txt; git -C "$R" commit -qm "add shared"
+  mkwt lr hold
+  printf 'one\n2\n3\n4\n5\n' >"$T/ws/.wt/wt-lr/shared.txt"; git -C "$T/ws/.wt/wt-lr" commit -qam "edit shared top"
+  enqueue lr
+  for i in $(seq 1 40); do [ -e "$LQ_TEST/holding.lr" ] && break; sleep 0.25; done
+  printf 'held\n' >"$R/lr.txt"
+  touch "$LQ_TEST/release"
+  rr=$(waitfor lr 60)
+  check "S26 $variant GREEN recorded before main checkout refused land" '[ "$rr" = 1 ] && ! onmain lr.txt && grep -q "the green gate is recorded" "$MSC_LAND_QUEUE/lr.land.log" && [ -s "$(git -C "$T/ws/.wt/wt-lr" rev-parse --absolute-git-dir)/wt-land-verdict" ]'
+  rm -f "$R/lr.txt"
+  case "$variant" in
+    other) printf 'other\n' >"$R/other.txt"; git -C "$R" add other.txt; git -C "$R" commit -qm "add other on main" ;;
+    shared) printf '1\n2\nthree\n4\n5\n' >"$R/shared.txt"; git -C "$R" commit -qam "edit shared next line on main" ;;
+    changed) printf 'more\n' >>"$T/ws/.wt/wt-lr/lr.txt"; git -C "$T/ws/.wt/wt-lr" commit -qam "change patch" ;;
+    whitespace) printf 'l r\n' >"$T/ws/.wt/wt-lr/lr.txt"; git -C "$T/ws/.wt/wt-lr" commit -qam "change patch whitespace" ;;
+    conflict) printf 'uno\n2\n3\n4\n5\n' >"$R/shared.txt"; git -C "$R" commit -qam "edit the same line on main" ;;
+    dirty) printf 'dirty\n' >>"$T/ws/.wt/wt-lr/lr.txt" ;;
+  esac
+  enqueue lr; enq=$?
+  case "$variant" in
+    conflict|dirty)
+      check "S26 $variant refused without another gate" '[ "$enq" = 1 ] && ! onmain lr.txt && grep -Eq "conflicts|uncommitted" "$T/ctl/enq.lr" && [ "$(grep -c "^wt/lr " "$T/ctl/gates.log")" = 1 ]' ;;
+    *)
+      rr=$(waitfor lr 60)
+      check "S26 $variant landed" '[ "$rr" = 0 ] && onmain lr.txt'
+      case "$variant" in
+        changed|whitespace) check "S26 $variant invalidates the old GREEN" '[ "$(grep -c "^wt/lr " "$T/ctl/gates.log")" = 2 ]' ;;
+        *) check "S26 $variant reuses the old GREEN" '[ "$(grep -c "^wt/lr " "$T/ctl/gates.log")" = 1 ]' ;;
+      esac ;;
+  esac
+done
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
