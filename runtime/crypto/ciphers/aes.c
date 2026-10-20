@@ -12,7 +12,7 @@
 #include <string.h>
 
 /* mbedTLS AES — only need the core AES module */
-#include "mbedtls/aes.h"
+#include "mbedtls/private/aes.h"
 
 /* ===== Random IV Generation ===== */
 

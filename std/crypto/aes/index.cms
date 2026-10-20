@@ -10,6 +10,8 @@
 
 // mbedTLS AES source + platform_util (needed if aes imported without base crypto)
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aes.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aesni.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aesce.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform_util.c");
 
 // mbedTLS include paths (shared with base crypto module)
@@ -17,7 +19,9 @@
 @passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/include");
 @passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
 @passC("-Ivendor/mbedtls/tf-psa-crypto/core");
-@passC("-Ivendor/mbedtls/include");
+@passC("-Iruntime/crypto");
+@passC("-DMBEDTLS_CONFIG_FILE=\"<mbedtls/mbedtlsConfig.h>\"");
+@passC("-DMBEDTLS_DECLARE_PRIVATE_IDENTIFIERS");
 
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 
