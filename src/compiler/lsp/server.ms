@@ -50,11 +50,9 @@ import {
 } from "./handlers/lifecycle";
 import { writeStderr, stdinDisableBuffering } from "std/io";
 import {
-	LspTransport, MemoryWire, FrameEnd, lspReadFrame, stdioTransport, memoryTransport, createMemoryWire, lspSplitFrames,
+	LspTransport, FrameEnd, lspReadFrame, stdioTransport, memoryTransport, createMemoryWire,
 } from "./transport";
-import { parseJson } from "std/serialize/json/parser";
-import { JsonKind, JsonValue } from "std/serialize/json/types";
-import { getDynamicField, asString, asInt32, asBoolean } from "std/serialize/json/accessors";
+import { LspReplay, lspTranscript, lspScenarioByName } from "./replayScenarios";
 import { resolveRuntimeDir } from "../../utils/path";
 
 
@@ -541,332 +539,75 @@ test "wire completion: the server survives a file with an absent child slot" {
 }
 
 // ===== Framed replay through lspServe =====
+// Scenarios live in replayScenarios.ms so a process driver runs the same ones.
 
-class LspReplay {
-	wire: MemoryWire;
-	messages: JsonValue[];
-	exitCode: int32;
-}
-
-function replay(drains: string[]): LspReplay {
-	const wire = createMemoryWire(drains);
+function replay(drains: string[][]): LspReplay {
+	const chunks: string[] = [];
+	for (const drain of drains) chunks.push(drain.join(""));
+	const wire = createMemoryWire(chunks);
 	const exitCode = lspServe(memoryTransport(wire));
-	const messages: JsonValue[] = [];
-	for (const body of lspSplitFrames(wire.output)) {
-		const parsed = parseJson(body);
-		if (!parsed.ok) throw new Error("server frame is not JSON: " + body);
-		messages.push(parsed.value);
+	return lspTranscript(wire.output, exitCode, wire.nextChunk);
+}
+
+function runMemoryScenario(name: string): string {
+	const found = lspScenarioByName(name);
+	if (!found.ok) {
+		writeStderr(found.error + "\n");
+		return found.error;
 	}
-	return { wire, messages, exitCode };
+	const scenario = found.value;
+	const r = replay(scenario.drains);
+	let failure = scenario.check(r);
+	const invariant = scenario.checkAnyBatching;
+	if (failure == "" && invariant != null) failure = invariant(r);
+	if (failure != "") writeStderr("replay: " + name + ": " + failure + "\n");
+	return failure;
 }
-
-function frames(bodies: string[]): string {
-	let chunk = "";
-	for (const body of bodies) chunk = chunk + lspFormatMessage(body);
-	return chunk;
-}
-
-function request(idJson: string, method: string, params: string): string {
-	return `{"jsonrpc":"2.0","id":${idJson},"method":${lspJsonString(method)},"params":${params}}`;
-}
-
-function notification(method: string, params: string): string {
-	return `{"jsonrpc":"2.0","method":${lspJsonString(method)},"params":${params}}`;
-}
-
-function initializeChunk(): string {
-	return frames([request("1", "initialize", "{}"), notification("initialized", "{}")]);
-}
-
-function openParams(uri: string, text: string): string {
-	return `{"textDocument":{"uri":${lspJsonString(uri)},"languageId":"metascript","version":1,"text":${lspJsonString(text)}}}`;
-}
-
-function changeParams(uri: string, version: int32, text: string): string {
-	return `{"textDocument":{"uri":${lspJsonString(uri)},"version":${version}},"contentChanges":[{"text":${lspJsonString(text)}}]}`;
-}
-
-function positionParams(uri: string, line: int32, character: int32): string {
-	return `{"textDocument":{"uri":${lspJsonString(uri)}},"position":{"line":${line},"character":${character}}}`;
-}
-
-function idKey(id: JsonValue): string {
-	return match (id.kind) {
-		JsonKind.Int => "n:" + id.intVal,
-		JsonKind.String => "s:" + id.strVal,
-		_ => "",
-	};
-}
-
-function answersTo(r: LspReplay, key: string): JsonValue[] {
-	const found: JsonValue[] = [];
-	for (const m of r.messages) {
-		if (idKey(m.getDynamicField("id")) == key) found.push(m);
-	}
-	return found;
-}
-
-function onlyAnswer(r: LspReplay, key: string): JsonValue {
-	const found = answersTo(r, key);
-	if (found.length != 1) throw new Error("expected one answer to " + key + ", got " + found.length);
-	return found[0];
-}
-
-function published(r: LspReplay, uri: string): JsonValue[][] {
-	const found: JsonValue[][] = [];
-	for (const m of r.messages) {
-		if (m.getDynamicField("method").asString() == "textDocument/publishDiagnostics"
-			&& m.getDynamicField("params").getDynamicField("uri").asString() == uri) {
-			const diagnostics = m.getDynamicField("params").getDynamicField("diagnostics");
-			if (diagnostics.kind != JsonKind.Array) throw new Error("diagnostics is not an array for " + uri);
-			found.push(diagnostics.items);
-		}
-	}
-	return found;
-}
-
-function hasKey(m: JsonValue, key: string): boolean {
-	return m.kind == JsonKind.Object && m.keys.indexOf(key) >= 0;
-}
-
-function spanOf(diagnostic: JsonValue): string {
-	const range = diagnostic.getDynamicField("range");
-	const start = range.getDynamicField("start");
-	const end = range.getDynamicField("end");
-	return start.getDynamicField("line").asInt32(-1) + ":" + start.getDynamicField("character").asInt32(-1)
-		+ "-" + end.getDynamicField("line").asInt32(-1) + ":" + end.getDynamicField("character").asInt32(-1);
-}
-
-function definitionSpan(answer: JsonValue): string {
-	const result = answer.getDynamicField("result");
-	if (result.kind != JsonKind.Array || result.items.length != 1) return "no location";
-	return spanOf(result.items[0]);
-}
-
-const BAD_VALUE = "export const value: int32 = \"wrong\";";
-const GOOD_VALUE = "export const value: int32 = 42;";
-const NOT_ASSIGNABLE = "Type 'string' is not assignable to type 'int32'";
 
 test "replay: initialize, open with an error, then a fix clears it" {
-	const uri = "file:///lspwire/open.ms";
-	const r = replay([
-		initializeChunk(),
-		frames([notification("textDocument/didOpen", openParams(uri, BAD_VALUE))]),
-		frames([notification("textDocument/didChange", changeParams(uri, 2, GOOD_VALUE))]),
-	]);
-	assert r.messages.length == 3;
-	const init = r.messages[0];
-	assert idKey(init.getDynamicField("id")) == "n:1";
-	const caps = init.getDynamicField("result").getDynamicField("capabilities");
-	assert caps.getDynamicField("textDocumentSync").asInt32(-1) == 1;
-	assert caps.getDynamicField("hoverProvider").asBoolean(false);
-	const diagnostics = published(r, uri);
-	assert diagnostics.length == 2;
-	assert diagnostics[0].length == 1;
-	assert diagnostics[0][0].getDynamicField("message").asString() == NOT_ASSIGNABLE;
-	assert diagnostics[0][0].getDynamicField("severity").asInt32(-1) == 1;
-	assert spanOf(diagnostics[0][0]) == "0:28-0:29";
-	assert diagnostics[1].length == 0;
-	assert r.exitCode == 0;
+	assert runMemoryScenario("initialize, open with an error, then a fix clears it") == "";
 }
 
 test "replay: Content-Length counts bytes of a multibyte request body" {
-	const uri = "file:///lspwire/multibyte.ms";
-	const r = replay([
-		initializeChunk(),
-		frames([
-			notification("textDocument/didOpen", `{"textDocument":{"uri":"${uri}","languageId":"metascript","version":1,"text":"/*é😀*/ export const value: int32 = \\"wrong\\";\\nexport const w = value;"}}`),
-			request("\"é😀-1\"", "textDocument/definition", positionParams(uri, 1, 17)),
-		]),
-	]);
-	const diagnostics = published(r, uri);
-	assert diagnostics.length == 1;
-	assert diagnostics[0].length == 1;
-	assert spanOf(diagnostics[0][0]) == "0:36-0:37";
-	assert definitionSpan(onlyAnswer(r, "s:é😀-1")) == "0:21-0:26";
+	assert runMemoryScenario("Content-Length counts bytes of a multibyte request body") == "";
 }
 
 test "replay: two edits in one drain publish once, in two drains publish twice" {
-	const uri = "file:///lspwire/coalesce.ms";
-	const r = replay([
-		initializeChunk(),
-		frames([notification("textDocument/didOpen", openParams(uri, GOOD_VALUE))]),
-		frames([
-			notification("textDocument/didChange", changeParams(uri, 2, BAD_VALUE)),
-			notification("textDocument/didChange", changeParams(uri, 3, GOOD_VALUE)),
-		]),
-	]);
-	const once = published(r, uri);
-	assert once.length == 2;
-	assert once[1].length == 0;
-
-	const split = "file:///lspwire/split.ms";
-	const s = replay([
-		initializeChunk(),
-		frames([notification("textDocument/didOpen", openParams(split, GOOD_VALUE))]),
-		frames([notification("textDocument/didChange", changeParams(split, 2, BAD_VALUE))]),
-		frames([notification("textDocument/didChange", changeParams(split, 3, GOOD_VALUE))]),
-	]);
-	const twice = published(s, split);
-	assert twice.length == 3;
-	assert twice[1].length == 1;
-	assert twice[1][0].getDynamicField("message").asString() == NOT_ASSIGNABLE;
-	assert twice[2].length == 0;
+	assert runMemoryScenario("two edits in one drain publish once") == "";
+	assert runMemoryScenario("two edits in two drains publish twice") == "";
 }
 
 test "replay: a request between two edits answers the edit before it" {
-	const uri = "file:///lspwire/between.ms";
-	const r = replay([
-		initializeChunk(),
-		frames([notification("textDocument/didOpen", openParams(uri, "const a = 1;\nconst b = a;"))]),
-		frames([
-			notification("textDocument/didChange", changeParams(uri, 2, "\nconst a = 1;\nconst b = a;")),
-			request("3", "textDocument/definition", positionParams(uri, 2, 10)),
-			notification("textDocument/didChange", changeParams(uri, 3, "\n\nconst a = 1;\nconst b = a;")),
-		]),
-		frames([request("4", "textDocument/definition", positionParams(uri, 3, 10))]),
-	]);
-	assert definitionSpan(onlyAnswer(r, "n:3")) == "1:6-1:7";
-	assert definitionSpan(onlyAnswer(r, "n:4")) == "2:6-2:7";
+	assert runMemoryScenario("a request between two edits answers the edit before it") == "";
 }
 
 test "replay: superseded and coalesced requests answer ContentModified" {
-	const uri = "file:///lspwire/superseded.ms";
-	const r = replay([
-		initializeChunk(),
-		frames([notification("textDocument/didOpen", openParams(uri, GOOD_VALUE))]),
-		frames([
-			request("5", "textDocument/inlayHint", `{"textDocument":{"uri":${lspJsonString(uri)}},"range":{"start":{"line":0,"character":0},"end":{"line":1,"character":0}}}`),
-			notification("textDocument/didChange", changeParams(uri, 2, BAD_VALUE)),
-			request("6", "textDocument/semanticTokens/full", `{"textDocument":{"uri":${lspJsonString(uri)}}}`),
-			request("7", "textDocument/semanticTokens/full", `{"textDocument":{"uri":${lspJsonString(uri)}}}`),
-		]),
-	]);
-	for (const key of ["n:5", "n:6"]) {
-		assert onlyAnswer(r, key).getDynamicField("error").getDynamicField("code").asInt32(0) == -32801;
-	}
-	assert onlyAnswer(r, "n:7").getDynamicField("result").getDynamicField("data").kind == JsonKind.Array;
-	const diagnostics = published(r, uri);
-	assert diagnostics.length == 2;
-	assert diagnostics[1].length == 1;
+	assert runMemoryScenario("superseded and coalesced requests answer ContentModified") == "";
 }
 
 test "replay: request ids come back exactly, number and string" {
-	const uri = "file:///lspwire/ids.ms";
-	const r = replay([
-		initializeChunk(),
-		frames([notification("textDocument/didOpen", openParams(uri, "const a = 1;\nconst b = a;"))]),
-		frames([
-			request("0", "textDocument/definition", positionParams(uri, 1, 10)),
-			request("42", "textDocument/definition", positionParams(uri, 1, 10)),
-			request("\"42\"", "textDocument/definition", positionParams(uri, 1, 10)),
-			request("\"req-α\"", "textDocument/hover", positionParams(uri, 1, 6)),
-		]),
-	]);
-	assert definitionSpan(onlyAnswer(r, "n:0")) == "0:6-0:7";
-	assert definitionSpan(onlyAnswer(r, "n:42")) == "0:6-0:7";
-	assert definitionSpan(onlyAnswer(r, "s:42")) == "0:6-0:7";
-	assert onlyAnswer(r, "s:req-α").getDynamicField("result").kind == JsonKind.Object;
+	assert runMemoryScenario("request ids come back exactly, number and string") == "";
 }
 
 test "replay: shutdown answers null and the server waits for exit" {
-	const r = replay([
-		initializeChunk(),
-		frames([request("9", "shutdown", "null")]),
-		frames([notification("exit", "null")]),
-	]);
-	assert r.messages.length == 2;
-	const shutdown = onlyAnswer(r, "n:9");
-	assert shutdown.getDynamicField("result").kind == JsonKind.Null;
-	assert hasKey(shutdown, "result");
-	assert r.wire.nextChunk == 3;
-	assert r.exitCode == 0;
+	assert runMemoryScenario("shutdown answers null and the server waits for exit") == "";
 }
 
 test "replay: after shutdown a request answers InvalidRequest and a notification is dropped" {
-	const uri = "file:///lspwire/aftershutdown.ms";
-	const r = replay([
-		initializeChunk(),
-		frames([notification("textDocument/didOpen", openParams(uri, GOOD_VALUE))]),
-		frames([request("9", "shutdown", "null")]),
-		frames([
-			request("10", "textDocument/definition", positionParams(uri, 0, 0)),
-			notification("textDocument/didChange", changeParams(uri, 2, BAD_VALUE)),
-			request("11", "shutdown", "null"),
-		]),
-		frames([notification("exit", "null")]),
-	]);
-	assert onlyAnswer(r, "n:9").getDynamicField("result").kind == JsonKind.Null;
-	for (const key of ["n:10", "n:11"]) {
-		assert onlyAnswer(r, key).getDynamicField("error").getDynamicField("code").asInt32(0) == -32600;
-	}
-	assert published(r, uri).length == 1;
-	assert r.exitCode == 0;
+	assert runMemoryScenario("after shutdown a request answers InvalidRequest and a notification is dropped") == "";
 }
 
 test "replay: exit ends the loop at once, its code says whether shutdown came first" {
-	const uri = "file:///lspwire/exit.ms";
-	const after = replay([
-		initializeChunk(),
-		frames([
-			request("9", "shutdown", "null"),
-			notification("exit", "null"),
-			request("10", "textDocument/hover", positionParams(uri, 0, 0)),
-		]),
-		frames([request("11", "textDocument/hover", positionParams(uri, 0, 0))]),
-	]);
-	assert after.exitCode == 0;
-	assert answersTo(after, "n:10").length == 0;
-	assert answersTo(after, "n:11").length == 0;
-	assert after.wire.nextChunk == 2;
-
-	const without = replay([initializeChunk(), frames([notification("exit", "null")])]);
-	assert without.exitCode == 1;
-	assert without.messages.length == 1;
-
-	const closed = replay([initializeChunk()]);
-	assert closed.exitCode == 0;
+	assert runMemoryScenario("exit after shutdown ends the loop at once with code 0") == "";
+	assert runMemoryScenario("exit without shutdown ends the loop with code 1") == "";
+	assert runMemoryScenario("input closed before exit ends the loop with code 0") == "";
 }
 
 test "replay: a frame cut short by EOF is not processed and ends the server" {
-	const body = request("9", "shutdown", "null");
-	const r = replay([
-		initializeChunk(),
-		"Content-Length: " + (body.byteLength + 10) + "\r\n\r\n" + body,
-	]);
-	assert answersTo(r, "n:9").length == 0;
-	assert r.exitCode == 1;
-
-	const header = replay([initializeChunk(), "Content-Length: 30\r\n"]);
-	assert header.messages.length == 1;
-	assert header.exitCode == 0;
+	assert runMemoryScenario("a body cut short by EOF is not processed and ends the server with code 1") == "";
+	assert runMemoryScenario("a header cut short by EOF ends the server with code 0") == "";
 }
 
 test "replay: a cancelled request still in the drain answers RequestCancelled" {
-	const uri = "file:///lspwire/cancel.ms";
-	const text = "const a = 1;\nconst b = a;";
-	const r = replay([
-		initializeChunk(),
-		frames([notification("textDocument/didOpen", openParams(uri, text))]),
-		frames([
-			request("4", "textDocument/definition", positionParams(uri, 1, 10)),
-			request("\"four\"", "textDocument/definition", positionParams(uri, 1, 10)),
-			request("5", "textDocument/definition", positionParams(uri, 1, 10)),
-			notification("$/cancelRequest", "{\"id\":4}"),
-			notification("$/cancelRequest", "{\"id\":\"four\"}"),
-			notification("$/cancelRequest", "{\"id\":99}"),
-		]),
-		frames([request("6", "textDocument/definition", positionParams(uri, 1, 10))]),
-		frames([notification("$/cancelRequest", "{\"id\":6}")]),
-	]);
-	for (const key of ["n:4", "s:four"]) {
-		const cancelled = onlyAnswer(r, key);
-		assert !hasKey(cancelled, "result");
-		const error = cancelled.getDynamicField("error");
-		assert error.getDynamicField("code").asInt32(0) == -32800;
-		assert error.getDynamicField("message").asString() == "RequestCancelled";
-	}
-	assert definitionSpan(onlyAnswer(r, "n:5")) == "0:6-0:7";
-	assert definitionSpan(onlyAnswer(r, "n:6")) == "0:6-0:7";
-	assert answersTo(r, "n:99").length == 0;
+	assert runMemoryScenario("a cancelled request still in the drain answers RequestCancelled") == "";
 }
