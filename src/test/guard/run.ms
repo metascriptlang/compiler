@@ -675,6 +675,70 @@ function fieldNameKeepsNoRoutine(): void {
 	ok(tag);
 }
 
+function routineBody(text: string, name: string): string {
+	let at = text.indexOf(`int32_t ${name}__`, 0);
+	while (at >= 0 && text.charAt(text.indexOf("\n", at) - 1) != "{") at = text.indexOf(`int32_t ${name}__`, at + 1);
+	if (at < 0) return "";
+	const end = text.indexOf("\nMS_LIB_PRIVATE ", at);
+	return text.slice(at, end < 0 ? text.length : end);
+}
+
+function refArrayAcyclicEmitsPlainRelease(): void {
+	const tag = "refArrayAcyclicEmitsPlainRelease";
+	const dir = freshDir("refarrayfamily");
+	writeFile(`${dir}/main.ms`, readFileOr(`${GUARD_DIR}/refArrayElementFamily.ms`, ""));
+	const b = execFileResult(MSC, ["build", "main.ms", "--emit=c"], dir);
+	writeFile(`${LOG_DIR}/${tag}.log`, both(b));
+	if (!succeeded(b)) {
+		fail(tag, "emit error");
+		return;
+	}
+	let leafOps = "";
+	let linkOps = "";
+	let acyclicCell = false;
+	let cyclicCell = false;
+	for (const f of readDir(`${dir}/out/debug`)) {
+		if (!f.endsWith(".c")) continue;
+		const text = try readFile(`${dir}/out/debug/${f}`) catch "";
+		if (leafOps == "") leafOps = routineBody(text, "leafOps");
+		if (linkOps == "") linkOps = routineBody(text, "linkOps");
+		for (const line of lines(text)) {
+			if (!line.contains("RefCellTypeInfo = {")) continue;
+			if (line.contains("(msDestroyProc)msAcyclicRefArrayDestroy,")) acyclicCell = true;
+			if (line.contains("(msDestroyProc)msRefArrayDestroy,")) {
+				if (!line.contains(".isCyclic = MS_TRUE")) {
+					fail(tag, `an acyclic array cell is released by the cyclic helper: ${line.trim()}`);
+					return;
+				}
+				cyclicCell = true;
+			}
+		}
+	}
+	if (!acyclicCell || !cyclicCell) {
+		fail(tag, `array cells: acyclic helper ${acyclicCell}, cyclic helper ${cyclicCell}; both expected`);
+		return;
+	}
+	for (const banned of ["msDecrefCyclic(", "msRefArraySetLen(", "msRefArraySplice3("]) {
+		if (leafOps.contains(banned)) {
+			fail(tag, `leafOps, over an acyclic class, calls ${banned}`);
+			return;
+		}
+	}
+	for (const want of ["msAcyclicRefArraySetLen(", "msAcyclicRefArraySplice3("]) {
+		if (!leafOps.contains(want)) {
+			fail(tag, `leafOps, over an acyclic class, never calls ${want}`);
+			return;
+		}
+	}
+	for (const want of ["msDecrefCyclic(", "msRefArraySetLen(", "msRefArraySplice3("]) {
+		if (!linkOps.contains(want)) {
+			fail(tag, `linkOps, over a cyclic class, never calls ${want}`);
+			return;
+		}
+	}
+	ok(tag);
+}
+
 // `msc build` never runs a `test` block, so a globalImports loader check can
 // only be a gate: an inline guard test is green whatever the loader does.
 function preludeGate(tag: string, name: string, globalImport: string, probeCall: string, onMissing: string, onExit: string, link: string): void {
@@ -792,6 +856,7 @@ function main(): void {
 	emitCAfterBuild();
 	deadFrameEmitsNoHooks();
 	fieldNameKeepsNoRoutine();
+	refArrayAcyclicEmitsPlainRelease();
 	buildMsTargetDecides();
 	preludeGate("preludeUserModule", "gi", `${GUARD_DIR}/fixtures/preludeUserModule`, "neonGuardPreludeProbe",
 		"globalImports symbol never reached the entry module", "", "");
