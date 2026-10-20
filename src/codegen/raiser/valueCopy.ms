@@ -1,6 +1,6 @@
 import { Type, TypeKind, TypeFlag } from "../../ast/node";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
-import { distinctBody, enumMemberValue, isStructType, needsValueCopy, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable } from "../../checker/types";
+import { distinctBody, enumMemberValue, isStructType, needsValueCopy, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase } from "../../checker/types";
 import { RaiserOpcode, RaiserRegClass, raiserABC, raiserAx } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil } from "../../raiser/value";
 import { peelToRepr, unwrapRef } from "../../checker/types";
@@ -283,6 +283,7 @@ function classOfType(s: RaiserCompState, t: Type | null, depth: int32): RaiserRe
 			return classOfType(s, t.typeReturn, depth + 1);
 		},
 		TypeKind.Sink | TypeKind.Lent | TypeKind.Cursor | TypeKind.Alias | TypeKind.Distinct => classOfType(s, t.typeReturn, depth + 1),
+		TypeKind.NumberLiteral => classOfType(s, numberLiteralBase(t), depth + 1),
 		TypeKind.GenericInstance => {
 			if (isAwaitable(t)) return RaiserRegClass.Dyn;
 			const repr = distinctBody(t);
