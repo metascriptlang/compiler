@@ -669,6 +669,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 			const s = syms[symCursor];
 			symCursor += 1;
 			enqType(s.symbolType);
+			for (const tp of s.typeParams) enqType(tp);
 			if (s.overloads != null) {
 				for (const ov of s.overloads) enqSym(ov, false);
 			}
@@ -759,7 +760,9 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 			for (const sf of s.staticFields) stf.push(idxSym(sf));
 		}
 		const dp = idxs(s.defaultParams);
-		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint32}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(s.builtinKind)}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}\t${s.disamb}\t${escapeP(s.exportName)}\t${idxSym(s.staticOwner)}`);
+		const tps: int32[] = [];
+		for (const tp of s.typeParams) tps.push(idxType(tp));
+		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint32}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(s.builtinKind)}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}\t${s.disamb}\t${escapeP(s.exportName)}\t${idxSym(s.staticOwner)}\t${intsCsv(tps)}`);
 	}
 
 	const importIdx: int32[] = [];
@@ -1131,6 +1134,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const symStaticIdx: int32[][] = [];
 	const symDeclIdx: int32[] = [];
 	const symOwnerIdx: int32[] = [];
+	const symTypeParamsIdx: int32[][] = [];
 	const symDpRaw: string[] = [];
 	const inScopeFlags: int32[] = [];
 	const nodeTypeRef: int32[] = [];
@@ -1224,6 +1228,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			if (f.length > 24) s.disamb = f[24].parseInt() as int32;
 			if (f.length > 25) s.exportName = unescapeP(f[25]);
 			symOwnerIdx.push(f.length > 26 ? f[26].parseInt() as int32 : -1);
+			symTypeParamsIdx.push(f.length > 27 ? parseIntsCsv(f[27]) : []);
 			syms.push(s);
 		} else if (f[0] == "E") {
 			extRows.push(f);
@@ -1284,6 +1289,12 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			stf.push(syms[k]);
 		}
 		s.staticFields = stf;
+		const tps: Type[] = [];
+		for (const k of symTypeParamsIdx[i]) {
+			if (k < 0 || k >= types.length) return null;
+			tps.push(types[k]);
+		}
+		s.typeParams = tps;
 		s.staticOwner = symOwnerIdx[i] >= 0 && symOwnerIdx[i] < syms.length ? syms[symOwnerIdx[i]] : null;
 		s.declNode = symDeclIdx[i] >= 0 && symDeclIdx[i] < nodes.length ? nodes[symDeclIdx[i]] : null as unknown as Node;
 		s.defaultParams = parseNodeArr(symDpRaw[i], nodes);

@@ -4049,6 +4049,7 @@ function makeSymbol(name: string, kind: SymbolKind): Symbol {
 		instantiatedFrom: null,
 		borrowedFrom: null,
 		staticOwner: null,
+		typeParams: [],
 	};
 }
 

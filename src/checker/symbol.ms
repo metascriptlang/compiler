@@ -384,6 +384,7 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | 
 		item: 0,
 		instantiatedFrom: null,
 		borrowedFrom: null,
+		typeParams: [],
 	};
 }
 
@@ -419,6 +420,7 @@ export function initSymbol(sym: Symbol, name: string, kind: SymbolKind, symType:
 	sym.instantiatedFrom = null;
 	sym.borrowedFrom = null;
 	sym.staticOwner = null;
+	sym.typeParams = [];
 }
 
 // Look up an exported symbol in Module / Global scopes. Uses symbols for
