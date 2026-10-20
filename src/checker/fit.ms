@@ -543,11 +543,20 @@ export function fitDistinctComparison(ctx: CheckerContext, node: Node, d: Binary
 	return DistinctComparison.Bound;
 }
 
+function refuseUncomparable(ctx: CheckerContext, op: string, primary: string, leftType: Type, rightType: Type, node: Node): boolean {
+	if (primary == "==") return checkBinaryOperands(ctx, op, leftType, rightType, node);
+	if (!relationalOperandsFail(ctx, op, leftType, rightType)) return false;
+	checkRelationalOperands(ctx, op, leftType, rightType, node);
+	return true;
+}
+
 function refuseDistinctComparison(ctx: CheckerContext, node: Node, op: string, primary: string, leftType: Type, rightType: Type): void {
 	const at = node.location;
 	const left = typeDisplayName(leftType);
 	const right = typeDisplayName(rightType);
 	if (!sameType(skipModifier(leftType), skipModifier(rightType))) {
+		const basesCompare = builtinComparisonHolds(ctx, primary, distinctBase(leftType) ?? leftType, distinctBase(rightType) ?? rightType);
+		if (!basesCompare && refuseUncomparable(ctx, op, primary, leftType, rightType, node)) return;
 		addError(ctx, `operator '${op}' cannot compare '${left}' with '${right}': a distinct type compares only with itself — convert one side with \`as\``, at.line, at.column);
 		return;
 	}
