@@ -452,9 +452,14 @@ export function distinctTextRefusal(t: Type): string {
 		+ typeDisplayName(distinctBody(t)) + "), or declare function toString(this x: " + shown + "): string with a body or with @delegate";
 }
 
+function textsAsItsBase(t: Type): boolean {
+	const base = distinctWidenBody(t);
+	return base != null && base.kind != TypeKind.Function;
+}
+
 export function distinctText(ctx: CheckerContext, expr: Node, t: Type): Node | null {
 	const text = declaredToString(ctx, expr);
-	if (text == null) addError(ctx, distinctTextRefusal(t), expr.location.line, expr.location.column);
+	if (text == null && !textsAsItsBase(t)) addError(ctx, distinctTextRefusal(t), expr.location.line, expr.location.column);
 	return text;
 }
 
