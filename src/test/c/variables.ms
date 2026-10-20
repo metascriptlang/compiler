@@ -27,8 +27,8 @@ test "E2E C: const boolean" {
 test "E2E C: enum member access" {
 	const c = compileToC("enum Color { Red, Green, Blue }\nconst x: Color = Color.Green;");
 	assert c.ok;
-	assert c.value.contains("typedef int32_t Color");
-	assert c.value.contains("Color_Green");
+	assert c.value.contains("typedef uint8_t Color__");
+	assert c.value.contains("_Green;");
 }
 
 test "E2E C: let variable" {
