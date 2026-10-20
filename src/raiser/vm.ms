@@ -2,12 +2,12 @@
 
 import {
 	RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, convClassBits, convClassSigned, convTarget, convSource, convOperand,
-	raiserABC, raiserABx, raiserAx,
-	packedOp, packedA, packedBx, packedBranch, immValue, immField, branchField
+	raiserABC, raiserABx, raiserAx, regClassLetter, operandKind, OPERAND_TAGGED, OPERAND_RAW, OPERAND_BARE, operandTagged,
+	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField
 } from "./bytecode";
 import {
-	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, makeHandle, handleIndex, handleHeapKind, handleAgrees,
-	raiserNil, raiserInt, raiserFloat, raiserConstString, raiserArray, raiserToString, copyValueInto,
+	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue,
+	raiserNil, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserArray, raiserToString, copyValueInto,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, heapBoxLive,
@@ -28,21 +28,24 @@ import { int64Bits } from "../utils/stdBackport";
 @include("runtime/promise/dispatch.h");
 extern function msMonoTimeMs(): int64;
 extern function msSleepMs(ms: int32): void;
-extern function msFloat64Bits(d: float64): uint64;
+extern function msFloat64Bits(d: float64): int64;
+extern function msBitsFloat64(u: int64): float64;
 extern function msToInt32(d: float64): int32;
 
 // --- VM State ---
 
 export interface RaiserRegFile {
-	slots: RaiserValue[];
+	words: int64[];   // int, bool, enum and float bits
+	refs: int64[];    // heap handles; 0 is nil, a Dyn register holds a box handle
 }
 
 export interface RaiserCallFrame {
 	funcIdx: int32;
 	returnIp: int32;
-	returnReg: int32;
-	baseReg: int32;
-	spBase: int32;   // safePoints length where the callee's own handlers begin
+	returnDest: int32;   // the caller's destination operand, tagged
+	wordBase: int32;     // the caller's frame
+	refBase: int32;
+	spBase: int32;       // safePoints length where the callee's own handlers begin
 }
 
 // items[0..depth) are the live frames; a popped record stays for the next call to rewrite.
@@ -54,7 +57,7 @@ export interface RaiserCallFrames {
 // A strand is one independent line of execution: its own register file, its
 // own frame stack and its own heap. The whole of it is reified data — MS-level
 // calls never use the host stack (vmHandleCall pushes a frame and re-points
-// funcIdx/ip/baseReg) — so a strand suspends by copying those fields out of
+// funcIdx/ip/wordBase/refBase) — so a strand suspends by copying those fields out of
 // the VM and resumes by copying them back. No CPS transform, no per-opcode
 // changes: vm.arrayHeap / vm.objectHeap are the running strand's heap, so
 // every allocating opcode stays exactly as it was.
@@ -74,7 +77,8 @@ export interface RaiserStrand {
 	objectHeap: RaiserObjectHeap;
 	ip: int32;
 	funcIdx: int32;
-	baseReg: int32;
+	wordBase: int32;
+	refBase: int32;
 	loopCount: number;
 	status: RaiserStrandStatus;
 	result: RaiserValue;
@@ -198,7 +202,8 @@ export interface RaiserVM {
 	output: string;
 	printSink: RaiserPrintSink | null;
 	funcIdx: int32;
-	baseReg: int32;
+	wordBase: int32;
+	refBase: int32;
 	callStack: RaiserCallFrames;
 	arrayHeap: RaiserArrayHeap;
 	objectHeap: RaiserObjectHeap;
@@ -223,14 +228,17 @@ export interface RaiserVM {
 	hostCallsRestricted: boolean;
 	hostPolicySource: string;
 	programArgv: string[] | null;   // what the program's `argv` reads; null leaves the host's own argv visible
-	frameFloor: number;
+	wordFloor: number;
+	refFloor: number;
 	suspendedRuns: RaiserRun[];
 }
 
 interface RaiserRun {
-	floor: number;
+	wordFloor: number;
+	refFloor: number;
 	funcIdx: int32;
-	baseReg: int32;
+	wordBase: int32;
+	refBase: int32;
 	ip: int32;
 	halted: boolean;
 	yielded: boolean;
@@ -253,20 +261,20 @@ interface RaiserRun {
 	currentException: RaiserValue;
 }
 
-// Initial register file size. The slots array grows on demand via
-// `ensureSlots` at function-call entry — this constant only sets the
-// starting capacity to avoid most early reallocations. NOT a hard cap.
+// Initial register file size. Each file grows on demand at function-call entry
+// (`ensureWords`, `ensureRefs`); this constant only sets the starting capacity to avoid most
+// early reallocations. NOT a hard cap.
 const RAISER_INITIAL_SLOTS = 256;
 
-// Grow the register file to hold at least `count` slots. Pads new slots
-// with fresh nil values so direct indexing (`slots[i]`) is always safe up
-// to the high-water mark. Called at every function-call entry with
-// `baseReg + callee.maxRegs` so the callee's frame is fully reserved
-// before any opcode in it accesses a register.
-export function ensureSlots(regs: RaiserRegFile, count: number): void {
-	while (regs.slots.length < count) {
-		regs.slots.push(raiserNil());
-	}
+// Grow a file to hold at least `count` registers. Called at every function-call entry with the
+// callee's base plus its register count, so the frame is fully reserved before any opcode in it
+// reads or writes a register.
+export function ensureWords(regs: RaiserRegFile, count: number): void {
+	while (regs.words.length < count) regs.words.push(0);
+}
+
+export function ensureRefs(regs: RaiserRegFile, count: number): void {
+	while (regs.refs.length < count) regs.refs.push(0);
 }
 
 // Default iteration budget. The unit is the BACKWARD JUMP (loop back-edge),
@@ -286,14 +294,13 @@ export function setDefaultLoopLimit(n: number): void {
 
 export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM {
 	if (gcMode != "arena" && gcMode != "orc") throw new Error(`internal: unknown Raiser gcMode "${gcMode}"`);
-	const slots: RaiserValue[] = [];
-	const regs: RaiserRegFile = { slots };
+	const regs: RaiserRegFile = { words: [], refs: [] };
 	// Reserve the entry function's frame up-front (and at least the initial
 	// capacity) so the entry's first opcode can write to its locals without
 	// hitting an empty register file.
 	const entryFunc = getModuleFunc(mod, mod.entry);
-	const entryReserve = entryFunc.maxRegs > RAISER_INITIAL_SLOTS ? entryFunc.maxRegs : RAISER_INITIAL_SLOTS;
-	ensureSlots(regs, entryReserve);
+	ensureWords(regs, entryFunc.wordRegs > RAISER_INITIAL_SLOTS ? entryFunc.wordRegs : RAISER_INITIAL_SLOTS);
+	ensureRefs(regs, entryFunc.refRegs > RAISER_INITIAL_SLOTS ? entryFunc.refRegs : RAISER_INITIAL_SLOTS);
 	const nilVal = raiserNil();
 	const callFrames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: callFrames, depth: 0 };
@@ -303,7 +310,7 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const mainSafePoints: number[] = [];
 	const globals: RaiserValue[] = [];
 	for (let i = 0; i < mod.globalCount; i += 1) globals.push(i < mod.globalInit.length ? mod.globalInit[i] : raiserNil());
-	const mainStrand: RaiserStrand = { id: 0, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: mod.entry as int32, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil() };
+	const mainStrand: RaiserStrand = { id: 0, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: mod.entry as int32, wordBase: 0, refBase: 0, loopCount: 0, status: RaiserStrandStatus.Running, result: mainResult, resultFuture: -1, safePoints: mainSafePoints, currentException: raiserNil() };
 	const strandItems: RaiserStrand[] = [mainStrand];
 	const strands: RaiserStrands = { items: strandItems };
 	const futureItems: RaiserFuture[] = [];
@@ -312,54 +319,49 @@ export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM 
 	const timers: RaiserTimers = { items: timerItems };
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod) };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, baseReg: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, orc: gcMode == "orc", gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, frameFloor: 0, suspendedRuns: [] };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, wordBase: 0, refBase: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: vmLoopLimitDefault, error: "", gcMode, orc: gcMode == "orc", gcThreshold: 256, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, wordFloor: 0, refFloor: 0, suspendedRuns: [] };
 }
 
-// --- Register access via helper functions (DRC-safe) ---
+// --- Register access ---
 
-// Slot accessors. Every Call/CallIndirect/spawn reserves baseReg + callee.maxRegs
-// slots before control transfers, so an access past the file is a codegen bug
-// (maxRegs underestimating its function), reported by name.
-function slotOutside(idx: number): Error {
-	return new Error(`internal: register ${idx} is outside the reserved register file`);
+// A tagged operand is (rank << 3) | class. Word, Float and Bool name a word of the word file, Ref and
+// Dyn a handle of the ref file. The typed handlers read the files directly; every other opcode reads
+// and writes through the helpers below, which turn a register into a RaiserValue and back.
+
+const CLS_WORD: int32 = 0;
+const CLS_REF: int32 = 1;
+const CLS_DYN: int32 = 2;
+const CLS_FLOAT: int32 = 3;
+const CLS_BOOL: int32 = 4;
+
+function slotOutside(cls: int32, idx: number): Error {
+	return new Error(`internal: ${regClassLetter(cls as RaiserRegClass)} register ${idx} is outside the reserved register files`);
 }
 
-function getReg(vm: RaiserVM, idx: number): RaiserValue {
-	if (idx >= vm.regs.slots.length) throw slotOutside(idx);
-	return vm.regs.slots[idx];
+function absOf(vm: RaiserVM, t: int32): number {
+	const cls = t & 7;
+	return (t >> 3) + (cls == CLS_REF || cls == CLS_DYN ? vm.refBase : vm.wordBase);
 }
 
-when (mode != "danger") {
-	function vmCheckRegClass(vm: RaiserVM, func: RaiserFunction, rel: number, kind: RaiserValueKind, handle: int64): void {
-		if (rel < 0 || rel >= func.regClasses.length) {
-			vmError(vm, `internal: register R${rel} of ${func.name} is outside its ${func.regClasses.length} registers`);
-			return;
-		}
-		if (!func.classed) return;
-		const cls = func.regClasses[rel];
-		if (!kindFitsClass(kind, cls)) vmError(vm, `internal: register R${rel} of ${func.name} is ${cls}, got ${kind}`);
-		else if (!handleAgrees(kind, handle)) vmError(vm, `internal: register R${rel} of ${func.name} holds kind ${kind} but handle ${handle} names heap kind ${handleHeapKind(handle)}`);
+function readAbs(vm: RaiserVM, cls: int32, abs: number): RaiserValue {
+	if (cls == CLS_REF || cls == CLS_DYN) {
+		when (mode != "danger") { if (abs >= vm.regs.refs.length) throw slotOutside(cls, abs); }
+		return handleValue(vm.regs.refs[abs]);
 	}
+	when (mode != "danger") { if (abs >= vm.regs.words.length) throw slotOutside(cls, abs); }
+	const w = vm.regs.words[abs];
+	if (cls == CLS_WORD) return raiserInt(w);
+	if (cls == CLS_FLOAT) return raiserFloat(msBitsFloat64(w));
+	return raiserBool(w != 0);
+}
 
-	function vmCheckArguments(vm: RaiserVM, base: number, funcIdx: number, argc: number): void {
-		const callee = getModuleFunc(vm.mod, funcIdx);
-		for (let i = 0; i < argc && i < callee.regClasses.length; i += 1) {
-			if (base + i >= vm.regs.slots.length) throw slotOutside(base + i);
-			vmCheckRegClass(vm, callee, i, vm.regs.slots[base + i].kind, vm.regs.slots[base + i].intVal);
-		}
-	}
+// A register as the value in it; a Dyn register reads as its box, which getDyn looks through.
+function getReg(vm: RaiserVM, t: int32): RaiserValue {
+	return readAbs(vm, t & 7, absOf(vm, t));
+}
 
-	function vmCheckWrite(vm: RaiserVM, idx: number, kind: RaiserValueKind, handle: int64): void {
-		let funcIdx = vm.funcIdx;
-		let base = vm.baseReg;
-		let depth = vm.callStack.depth;
-		while (idx < base && depth > 0) {
-			depth = depth - 1;
-			funcIdx = vm.callStack.items[depth].funcIdx;
-			base = vm.callStack.items[depth].baseReg;
-		}
-		vmCheckRegClass(vm, getModuleFunc(vm.mod, funcIdx), idx - base, kind, handle);
-	}
+function getDyn(vm: RaiserVM, t: int32): RaiserValue {
+	return readDyn(vm.arrayHeap, getReg(vm, t));
 }
 
 // --- Refcount helpers: ORC counts every heap kind; arena mode counts strings only,
@@ -400,93 +402,116 @@ function vmMaybeCollect(vm: RaiserVM): void {
 	vm.gcThreshold = next;
 }
 
-// A register slot owns one box for its lifetime (ensureSlots makes it); every
-// write goes into that box and no other location ever holds it, so a value
-// leaves a register only by being copied out.
-function setReg(vm: RaiserVM, idx: number, val: RaiserValue): void {
-	if (idx >= vm.regs.slots.length) throw slotOutside(idx);
-	when (mode != "danger") { vmCheckWrite(vm, idx, val.kind, val.intVal); }
-	// Kinds below String hold no heap handle, so a scalar move skips both counters.
-	// incref-before-decref: safe under self-assignment (setReg(i, slots[i]))
-	if (val.kind >= RaiserValueKind.String) vmHold(vm, val.kind, val.intVal);
-	const oldKind = vm.regs.slots[idx].kind;
-	const oldHandle = vm.regs.slots[idx].intVal;
-	copyValueInto(vm.regs.slots[idx], val);
-	if (oldKind >= RaiserValueKind.String) vmRelease(vm, oldKind, oldHandle);
+function isStringHandle(h: int64): boolean {
+	const tag = handleTag(h);
+	return tag == (RaiserHeapKind.String as int64) || tag == (RaiserHeapKind.ConstString as int64);
 }
 
-function setRegScalar(vm: RaiserVM, idx: number, kind: RaiserValueKind, intVal: int64, floatVal: number): void {
-	const dst = getReg(vm, idx);
-	when (mode != "danger") { vmCheckWrite(vm, idx, kind, intVal); }
-	const oldKind = dst.kind;
-	const oldHandle = dst.intVal;
-	dst.kind = kind;
-	dst.intVal = intVal;
-	dst.floatVal = floatVal;
-	if (oldKind >= RaiserValueKind.String) vmRelease(vm, oldKind, oldHandle);
+function holdHandle(vm: RaiserVM, h: int64): void {
+	if (h != 0 && (vm.orc || isStringHandle(h))) rcIncrefHandle(vm.arrayHeap, vm.objectHeap, h);
 }
 
-function setRegInt(vm: RaiserVM, idx: number, n: int64): void {
-	setRegScalar(vm, idx, RaiserValueKind.Int, n, 0.0);
+function releaseHandle(vm: RaiserVM, h: int64): void {
+	if (h != 0 && (vm.orc || isStringHandle(h))) rcDecrefHandle(vm.arrayHeap, vm.objectHeap, h);
 }
 
-function setRegFloat(vm: RaiserVM, idx: number, f: number): void {
-	setRegScalar(vm, idx, RaiserValueKind.Float, 0, f);
+// The counted store of a handle into the ref file: the new one is held before the old one is
+// released, so storing a register's own handle back into it is safe.
+function writeRef(vm: RaiserVM, abs: number, handle: int64): void {
+	const refs = vm.regs.refs;
+	const old = refs[abs];
+	holdHandle(vm, handle);
+	refs[abs] = handle;
+	releaseHandle(vm, old);
 }
 
-function setRegBool(vm: RaiserVM, idx: number, b: boolean): void {
-	setRegScalar(vm, idx, RaiserValueKind.Bool, b ? 1 : 0, 0.0);
+// Writes a plain value (or a box) into register `abs` of file `cls` in that register's class: a Dyn
+// register gets a box, any other the value a box holds.
+function writeAbs(vm: RaiserVM, cls: int32, abs: number, value: RaiserValue): void {
+	let val = value;
+	if (val.kind == RaiserValueKind.Box && cls != CLS_DYN) val = heapBoxValue(vm.arrayHeap, val.intVal);
+	if (cls == CLS_DYN) {
+		if (val.kind == RaiserValueKind.Nil) { writeRef(vm, abs, 0); return; }
+		if (val.kind == RaiserValueKind.Box) { writeRef(vm, abs, val.intVal); return; }
+		vmIncref(vm, val);
+		writeRef(vm, abs, heapAllocBox(vm.arrayHeap, val));
+		return;
+	}
+	if (cls == CLS_FLOAT && val.kind == RaiserValueKind.Int) {
+		vm.regs.words[abs] = msFloat64Bits(val.intVal as number);
+		return;
+	}
+	when (mode != "danger") {
+		if (!kindFitsClass(val.kind, cls as RaiserRegClass)) {
+			const rank = abs - (cls == CLS_REF ? vm.refBase : vm.wordBase);
+			vmError(vm, `internal: register R${rank} of ${vm.mod.functions[vm.funcIdx].name} is ${cls as RaiserRegClass}, got ${val.kind}`);
+			return;
+		}
+	}
+	if (cls == CLS_REF) { writeRef(vm, abs, val.kind == RaiserValueKind.Nil ? 0 : val.intVal); return; }
+	if (cls == CLS_WORD || cls == CLS_BOOL) { vm.regs.words[abs] = val.intVal; return; }
+	vm.regs.words[abs] = msFloat64Bits(val.floatVal);
 }
 
-function setRegNil(vm: RaiserVM, idx: number): void {
-	setRegScalar(vm, idx, RaiserValueKind.Nil, 0, 0.0);
+function setRegConform(vm: RaiserVM, t: int32, val: RaiserValue): void {
+	writeAbs(vm, t & 7, absOf(vm, t), val);
 }
 
-function setRegString(vm: RaiserVM, idx: number, s: string): void {
-	setRegRef(vm, idx, RaiserValueKind.String, heapAllocString(vm.arrayHeap, s).intVal);
+function setRegInt(vm: RaiserVM, t: int32, n: int64): void {
+	if ((t & 7) == CLS_WORD) { vm.regs.words[(t >> 3) + vm.wordBase] = n; return; }
+	setRegConform(vm, t, raiserInt(n));
+}
+
+function setRegFloat(vm: RaiserVM, t: int32, f: number): void {
+	if ((t & 7) == CLS_FLOAT) { vm.regs.words[(t >> 3) + vm.wordBase] = msFloat64Bits(f); return; }
+	setRegConform(vm, t, raiserFloat(f));
+}
+
+function setRegBool(vm: RaiserVM, t: int32, b: boolean): void {
+	if ((t & 7) == CLS_BOOL) { vm.regs.words[(t >> 3) + vm.wordBase] = b ? 1 : 0; return; }
+	setRegConform(vm, t, raiserBool(b));
+}
+
+function setRegNil(vm: RaiserVM, t: int32): void {
+	setRegConform(vm, t, raiserNil());
+}
+
+function setRegRef(vm: RaiserVM, t: int32, kind: RaiserValueKind, handle: int64): void {
+	if ((t & 7) == CLS_REF) {
+		when (mode != "danger") { if (!kindFitsClass(kind, RaiserRegClass.Ref)) { setRegConform(vm, t, { kind, intVal: handle, floatVal: 0.0 }); return; } }
+		writeRef(vm, (t >> 3) + vm.refBase, handle);
+		return;
+	}
+	setRegConform(vm, t, { kind, intVal: handle, floatVal: 0.0 });
+}
+
+function setRegString(vm: RaiserVM, t: int32, s: string): void {
+	setRegRef(vm, t, RaiserValueKind.String, heapAllocString(vm.arrayHeap, s).intVal);
 }
 
 function vmText(vm: RaiserVM, v: RaiserValue): string {
 	return heapStringText(vm.arrayHeap, v);
 }
 
-function setRegRef(vm: RaiserVM, idx: number, kind: RaiserValueKind, handle: int64): void {
-	const dst = getReg(vm, idx);
-	when (mode != "danger") { vmCheckWrite(vm, idx, kind, handle); }
-	if (kind >= RaiserValueKind.String) vmHold(vm, kind, handle);
-	const oldKind = dst.kind;
-	const oldHandle = dst.intVal;
-	dst.kind = kind;
-	dst.intVal = handle;
-	dst.floatVal = 0.0;
-	if (oldKind >= RaiserValueKind.String) vmRelease(vm, oldKind, oldHandle);
-}
-
-// A register is read as the value it holds: a Dyn register holds a box, which every
-// reader of an unknown-class operand looks through.
-function getDyn(vm: RaiserVM, idx: number): RaiserValue {
-	return readDyn(vm.arrayHeap, getReg(vm, idx));
-}
-
-function destIsDyn(vm: RaiserVM, idx: number): boolean {
-	const func = getModuleFunc(vm.mod, vm.funcIdx);
-	return func.hasDyn && func.regClasses[idx - vm.baseReg] == RaiserRegClass.Dyn;
-}
-
-// Writes a plain value (or a box) into a register of the running frame in that register's class:
-// a Dyn register gets a box, any other the value the box holds.
-function setRegConform(vm: RaiserVM, idx: number, val: RaiserValue): void {
-	if (val.kind == RaiserValueKind.Box) {
-		if (destIsDyn(vm, idx)) setReg(vm, idx, val);
-		else setReg(vm, idx, heapBoxValue(vm.arrayHeap, val.intVal));
+// A register's value stored into a heap slot (a field, an element or a global): the slot takes its
+// own count of whatever the register holds and gives up the count of what it held.
+function storeRegInto(vm: RaiserVM, t: int32, dst: RaiserValue): void {
+	const cls = t & 7;
+	const abs = absOf(vm, t);
+	if (cls == CLS_REF || cls == CLS_DYN) {
+		const h = vm.regs.refs[abs];
+		let inner = handleValue(h);
+		if (inner.kind == RaiserValueKind.Box) inner = heapBoxValue(vm.arrayHeap, inner.intVal);
+		vmIncref(vm, inner);
+		vmDecref(vm, dst);
+		copyValueInto(dst, inner);
 		return;
 	}
-	if (val.kind != RaiserValueKind.Nil && destIsDyn(vm, idx)) {
-		vmIncref(vm, val);
-		setRegRef(vm, idx, RaiserValueKind.Box, heapAllocBox(vm.arrayHeap, val));
-		return;
-	}
-	setReg(vm, idx, val);
+	const w = vm.regs.words[abs];
+	vmDecref(vm, dst);
+	if (cls == CLS_WORD) { dst.kind = RaiserValueKind.Int; dst.intVal = w; dst.floatVal = 0.0; }
+	else if (cls == CLS_BOOL) { dst.kind = RaiserValueKind.Bool; dst.intVal = w; dst.floatVal = 0.0; }
+	else { dst.kind = RaiserValueKind.Float; dst.intVal = 0; dst.floatVal = msBitsFloat64(w); }
 }
 
 // --- Error helper ---
@@ -521,9 +546,10 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 		return raiserNil();
 	}
 	const callee = getModuleFunc(vm.mod, funcIdx);
-	if (vm.frameFloor > 0 && !runSuspendedAt(vm, vm.frameFloor)) suspendRun(vm);
+	if (hasFloor(vm) && !runSuspendedAt(vm)) suspendRun(vm);
 	vm.funcIdx = funcIdx as int32;
-	vm.baseReg = vm.frameFloor as int32;
+	vm.wordBase = vm.wordFloor as int32;
+	vm.refBase = vm.refFloor as int32;
 	vm.ip = 0;
 	vm.halted = false;
 	vm.error = "";
@@ -532,10 +558,11 @@ export function vmCallFunction(vm: RaiserVM, funcIdx: number, args: RaiserValue[
 	vm.loopCount = 0;
 	vm.callStack.depth = 0;
 	resetStrands(vm, funcIdx);
-	ensureSlots(vm.regs, vm.baseReg + callee.maxRegs);
+	ensureWords(vm.regs, vm.wordBase + callee.wordRegs);
+	ensureRefs(vm.regs, vm.refBase + callee.refRegs);
 	let i = 0;
-	while (i < args.length) {
-		setRegConform(vm, vm.baseReg + i, args[i]);
+	while (i < args.length && i < callee.regOps.length) {
+		setRegConform(vm, callee.regOps[i], args[i]);
 		i = i + 1;
 	}
 	execLoop(vm);
@@ -551,23 +578,33 @@ function forgetHeapStrings(slots: RaiserValue[]): void {
 	}
 }
 
+function forgetHeapStringRefs(refs: int64[]): void {
+	for (let i = 0; i < refs.length; i += 1) {
+		if (refs[i] != 0 && handleHeapKind(refs[i]) == RaiserHeapKind.String) refs[i] = 0;
+	}
+}
+
+function hasFloor(vm: RaiserVM): boolean {
+	return vm.wordFloor > 0 || vm.refFloor > 0;
+}
+
 export function vmReleaseHeaps(vm: RaiserVM): void {
-	if (vm.frameFloor > 0) return;
+	if (hasFloor(vm)) return;
 	clearObjectHeap(vm.objectHeap);
 	clearArrayHeap(vm.arrayHeap);
-	forgetHeapStrings(vm.regs.slots);
+	forgetHeapStringRefs(vm.regs.refs);
 	forgetHeapStrings(vm.globals);
 	if (vm.currentException.kind == RaiserValueKind.String && handleHeapKind(vm.currentException.intVal) == RaiserHeapKind.String) vm.currentException = raiserNil();
 }
 
-function runSuspendedAt(vm: RaiserVM, floor: number): boolean {
+function runSuspendedAt(vm: RaiserVM): boolean {
 	const runs = vm.suspendedRuns;
-	return runs.length > 0 && runs[runs.length - 1].floor == floor;
+	return runs.length > 0 && runs[runs.length - 1].wordFloor == vm.wordFloor && runs[runs.length - 1].refFloor == vm.refFloor;
 }
 
 function suspendRun(vm: RaiserVM): void {
 	vm.suspendedRuns.push({
-		floor: vm.frameFloor, funcIdx: vm.funcIdx, baseReg: vm.baseReg, ip: vm.ip, halted: vm.halted, yielded: vm.yielded,
+		wordFloor: vm.wordFloor, refFloor: vm.refFloor, funcIdx: vm.funcIdx, wordBase: vm.wordBase, refBase: vm.refBase, ip: vm.ip, halted: vm.halted, yielded: vm.yielded,
 		exitValue: vm.exitValue, error: vm.error, diagMessage: vm.diagMessage, diagLine: vm.diagLine, diagColumn: vm.diagColumn,
 		diagEndLine: vm.diagEndLine, diagEndColumn: vm.diagEndColumn, loopCount: vm.loopCount, globals: vm.globals, regs: vm.regs,
 		callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, sched: vm.sched, current: vm.current,
@@ -585,7 +622,8 @@ function suspendRun(vm: RaiserVM): void {
 
 function resumeRun(vm: RaiserVM, run: RaiserRun): void {
 	vm.funcIdx = run.funcIdx;
-	vm.baseReg = run.baseReg;
+	vm.wordBase = run.wordBase;
+	vm.refBase = run.refBase;
 	vm.ip = run.ip;
 	vm.halted = run.halted;
 	vm.yielded = run.yielded;
@@ -616,7 +654,7 @@ function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
 	vm.safePoints.length = 0;
 	// The main strand keeps the VM's existing heap objects: the host holds that
 	// identity across runs (context.ms captures it, vmReleaseHeaps clears it).
-	const mainStrand: RaiserStrand = { id: 0, globals: vm.globals, regs: vm.regs, callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: entryFuncIdx as int32, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException };
+	const mainStrand: RaiserStrand = { id: 0, globals: vm.globals, regs: vm.regs, callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: entryFuncIdx as int32, wordBase: 0, refBase: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException };
 	vm.sched.strands.items.push(mainStrand);
 	vm.current = 0;
 	vm.sched.nextStrandId = 1;
@@ -710,8 +748,8 @@ function vmHandleSleep(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 		vmError(vm, "sleepAsync is not available in compile-time evaluation: a timer would make its result depend on wall-clock time");
 		return;
 	}
-	const fut = vmArmTimer(vm, getReg(vm, vm.baseReg + ib));
-	setRegConform(vm, vm.baseReg + ia, raiserFuture(fut));
+	const fut = vmArmTimer(vm, getDyn(vm, ib));
+	setRegConform(vm, ia, raiserFuture(fut));
 }
 
 function futureFail(vm: RaiserVM, handle: int64, message: string, thrown: RaiserValue): void {
@@ -770,7 +808,8 @@ function unwindFrame(vm: RaiserVM): void {
 	vm.safePoints.length = frame.spBase;
 	vm.funcIdx = frame.funcIdx;
 	vm.ip = frame.returnIp;
-	vm.baseReg = frame.baseReg;
+	vm.wordBase = frame.wordBase;
+	vm.refBase = frame.refBase;
 }
 
 function unhandledException(vm: RaiserVM): void {
@@ -808,9 +847,9 @@ const FINALLY_NORMAL: int64 = 0;
 const FINALLY_RAISE: int64 = 1;
 const FINALLY_RETURN: int64 = 2;
 
-function enterFinally(vm: RaiserVM, routeReg: number, kind: int64, value: RaiserValue): void {
-	setRegInt(vm, vm.baseReg + routeReg, kind);
-	setRegConform(vm, vm.baseReg + routeReg + 1, value);
+function enterFinally(vm: RaiserVM, routeRank: number, heldRank: number, kind: int64, value: RaiserValue): void {
+	vm.regs.words[vm.wordBase + routeRank] = kind;
+	setRegConform(vm, operandTagged(heldRank as int32, RaiserRegClass.Dyn), value);
 }
 
 // Landing on a Catch ends the unwind; landing on a Finally runs it and comes
@@ -829,12 +868,12 @@ function unwindStep(vm: RaiserVM): void {
 				// Bind the caught value into the register the handler names,
 				// now rather than later: a throw inside the handler body
 				// overwrites currentException.
-				setRegConform(vm, vm.baseReg + packedA(meta), vm.currentException);
+				setRegConform(vm, packedA(meta) as int32, vm.currentException);
 				vm.ip = (sp + 1) as int32;
 				return;
 			}
 			if (packedOp(meta) == RaiserOpcode.Finally) {
-				enterFinally(vm, packedA(meta), FINALLY_RAISE, vm.currentException);
+				enterFinally(vm, packedA(meta), packedB(meta), FINALLY_RAISE, vm.currentException);
 				vm.ip = (sp + 1) as int32;
 				return;
 			}
@@ -864,7 +903,7 @@ function cleanUpOnReturn(vm: RaiserVM): number {
 	const fin = func.packed[sp];
 	if (packedOp(fin) != RaiserOpcode.Finally) return -1;
 	vm.safePoints.length = n - 1;
-	enterFinally(vm, packedA(fin), FINALLY_RETURN, raiserInt((vm.ip - 1) as int64));
+	enterFinally(vm, packedA(fin), packedB(fin), FINALLY_RETURN, raiserInt((vm.ip - 1) as int64));
 	return sp + 1;
 }
 
@@ -894,7 +933,7 @@ function vmTakeMacroError(vm: RaiserVM, thrown: RaiserValue): boolean {
 }
 
 function vmHandleThrow(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const thrown = getDyn(vm, vm.baseReg + ia);
+	const thrown = getDyn(vm, ia);
 	if (vmTakeMacroError(vm, thrown)) return;
 	copyValueInto(vm.currentException, thrown);
 	unwindStep(vm);
@@ -917,7 +956,8 @@ function strandSave(vm: RaiserVM): void {
 	s.objectHeap = vm.objectHeap;
 	s.ip = vm.ip;
 	s.funcIdx = vm.funcIdx;
-	s.baseReg = vm.baseReg;
+	s.wordBase = vm.wordBase;
+	s.refBase = vm.refBase;
 	s.loopCount = vm.loopCount;
 	s.safePoints = vm.safePoints;
 	s.currentException = vm.currentException;
@@ -933,7 +973,8 @@ function strandResume(vm: RaiserVM, idx: number): void {
 	vm.objectHeap = s.objectHeap;
 	vm.ip = s.ip;
 	vm.funcIdx = s.funcIdx;
-	vm.baseReg = s.baseReg;
+	vm.wordBase = s.wordBase;
+	vm.refBase = s.refBase;
 	vm.loopCount = s.loopCount;
 	vm.safePoints = s.safePoints;
 	vm.currentException = s.currentException;
@@ -971,7 +1012,7 @@ function vmLedger(vm: RaiserVM, held: RaiserStrand[], extra: RaiserValue[], wher
 	if (!vm.orc || vm.error != "") return;
 	const roots: RaiserValue[] = [];
 	for (const s of held) {
-		for (const slot of s.regs.slots) roots.push(slot);
+		for (const h of s.regs.refs) if (h != 0) roots.push(handleValue(h));
 		if (s.globals != held[0].globals) for (const g of s.globals) roots.push(g);
 	}
 	for (const g of held[0].globals) roots.push(g);
@@ -1023,7 +1064,8 @@ function finishProgram(vm: RaiserVM, value: RaiserValue, abrupt: boolean): void 
 
 function strandCopyMap(vm: RaiserVM): RaiserCopyMap {
 	const map = createCopyMap();
-	map.sourceRegs = vm.regs.slots;
+	map.sourceWords = vm.regs.words;
+	map.sourceRefs = vm.regs.refs;
 	map.sourceGlobals = vm.globals;
 	return map;
 }
@@ -1052,9 +1094,9 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 		return -1;
 	}
 	const callee = getModuleFunc(vm.mod, funcIdx as number);
-	const slots: RaiserValue[] = [];
-	const regs: RaiserRegFile = { slots };
-	ensureSlots(regs, callee.maxRegs);
+	const regs: RaiserRegFile = { words: [], refs: [] };
+	ensureWords(regs, callee.wordRegs);
+	ensureRefs(regs, callee.refRegs);
 	const frames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: frames, depth: 0 };
 	const id = vm.sched.nextStrandId;
@@ -1064,7 +1106,7 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
 	const globals = copyStrandGlobals(vm, arrayHeap, objectHeap, strandCopyMap(vm));
-	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil() };
+	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, wordBase: 0, refBase: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: -1, safePoints: sp, currentException: raiserNil() };
 	vm.sched.strands.items.push(s);
 	return id;
 }
@@ -1085,9 +1127,9 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 		return -1;
 	}
 	const callee = getModuleFunc(vm.mod, funcIdx as number);
-	const slots: RaiserValue[] = [];
-	const regs: RaiserRegFile = { slots };
-	ensureSlots(regs, callee.maxRegs);
+	const regs: RaiserRegFile = { words: [], refs: [] };
+	ensureWords(regs, callee.wordRegs);
+	ensureRefs(regs, callee.refRegs);
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
 	const envField = heapObjectGetField(vm.objectHeap, closure.intVal, "env");
@@ -1099,8 +1141,11 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 		// heap, so the capture graph crosses as a copy the child owns.
 		const envSlot = copyGraphWith(vm.arrayHeap, vm.objectHeap, arrayHeap, objectHeap, envField, copyMap);
 		rcIncref(arrayHeap, objectHeap, envSlot);
-		when (mode != "danger") { vmCheckRegClass(vm, callee, 0, envSlot.kind, envSlot.intVal); }
-		copyValueInto(regs.slots[0], envSlot);
+		if (callee.regOps.length == 0 || (callee.regOps[0] & 7) != CLS_REF) {
+			vmError(vm, `spawn: ${callee.name} does not take the closure environment in a ref register`);
+			return -1;
+		}
+		regs.refs[callee.regOps[0] >> 3] = envSlot.intVal;
 	}
 	const frames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: frames, depth: 0 };
@@ -1109,7 +1154,7 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 	const fut = newFuture(vm);
 	const result = raiserNil();
 	const sp: number[] = [];
-	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil() };
+	const s: RaiserStrand = { id, globals, regs, callStack, arrayHeap, objectHeap, ip: 0, funcIdx: funcIdx as int32, wordBase: 0, refBase: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result, resultFuture: fut, safePoints: sp, currentException: raiserNil() };
 	vm.sched.strands.items.push(s);
 	return fut;
 }
@@ -1121,11 +1166,10 @@ function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
 // stackless; a strand carries its whole frame stack, so one mechanism covers
 // all three — and `await` works at any call depth here.
 function vmHandleAwait(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const base = vm.baseReg;
-	const v = getDyn(vm, base + ib);
+	const v = getDyn(vm, ib);
 	if (v.kind != RaiserValueKind.Future) {
 		// Awaiting a plain value is the identity — Promise.resolve semantics.
-		setRegConform(vm, base + ia, v);
+		setRegConform(vm, ia, v);
 		return;
 	}
 	if (!futureHandleValid(vm, v.intVal)) {
@@ -1142,7 +1186,7 @@ function vmHandleAwait(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 		// Non-destructive: the affine rules (R1/R2) make a second await a
 		// compile error, so there is no read-once slot to clear here.
 		const copy = copyGraph(f.valueArrayHeap, f.valueObjectHeap, vm.arrayHeap, vm.objectHeap, f.value);
-		setRegConform(vm, base + ia, copy);
+		setRegConform(vm, ia, copy);
 		return;
 	}
 	vm.ip = vm.ip - 1;
@@ -1214,19 +1258,18 @@ function vmHandleModuleImport(vm: RaiserVM, ia: int32, bx: int32, func: RaiserFu
 	vm.sched.futures.items[handleIndex(fut)].record = at;
 	vm.sched.modules.pending.push({ kind: RaiserModuleJobKind.Import, record: at, future: fut, error: raiserNil() });
 	if (vm.sched.modules.strand < 0) moduleArmTask(vm);
-	setRegConform(vm, vm.baseReg + ia, raiserFuture(fut));
+	setRegConform(vm, ia, raiserFuture(fut));
 }
 
 function moduleNewStrand(vm: RaiserVM, funcIdx: number): number {
 	const main = vm.sched.strands.items[0];
-	const slots: RaiserValue[] = [];
-	const regs: RaiserRegFile = { slots };
+	const regs: RaiserRegFile = { words: [], refs: [] };
 	const frames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: frames, depth: 0 };
 	const sp: number[] = [];
 	const id = vm.sched.nextStrandId;
 	vm.sched.nextStrandId = id + 1;
-	const s: RaiserStrand = { id, globals: main.globals, regs, callStack, arrayHeap: main.arrayHeap, objectHeap: main.objectHeap, ip: 0, funcIdx: funcIdx as int32, baseReg: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: -1, safePoints: sp, currentException: raiserNil() };
+	const s: RaiserStrand = { id, globals: main.globals, regs, callStack, arrayHeap: main.arrayHeap, objectHeap: main.objectHeap, ip: 0, funcIdx: funcIdx as int32, wordBase: 0, refBase: 0, loopCount: 0, status: RaiserStrandStatus.Ready, result: raiserNil(), resultFuture: -1, safePoints: sp, currentException: raiserNil() };
 	vm.sched.strands.items.push(s);
 	return vm.sched.strands.items.length - 1;
 }
@@ -1273,12 +1316,14 @@ function moduleFail(vm: RaiserVM, error: RaiserValue): void {
 
 function moduleRunBody(vm: RaiserVM, funcIdx: number): void {
 	const body = getModuleFunc(vm.mod, funcIdx);
-	ensureSlots(vm.regs, body.maxRegs);
+	ensureWords(vm.regs, body.wordRegs);
+	ensureRefs(vm.regs, body.refRegs);
 	vm.callStack.depth = 0;
 	const sp: number[] = [];
 	vm.safePoints = sp;
 	vm.funcIdx = funcIdx as int32;
-	vm.baseReg = 0;
+	vm.wordBase = 0;
+	vm.refBase = 0;
 	vm.ip = 0;
 }
 
@@ -1291,7 +1336,8 @@ function moduleExecuteAsync(vm: RaiserVM, at: int32): void {
 	}
 	const init = vm.mod.records[at].init;
 	const s = moduleNewStrand(vm, init);
-	ensureSlots(vm.sched.strands.items[s].regs, getModuleFunc(vm.mod, init).maxRegs);
+	ensureWords(vm.sched.strands.items[s].regs, getModuleFunc(vm.mod, init).wordRegs);
+	ensureRefs(vm.sched.strands.items[s].regs, getModuleFunc(vm.mod, init).refRegs);
 	ev.states[at].bodyStrand = s;
 	ev.starting = s;
 	ev.fresh = true;
@@ -1603,6 +1649,25 @@ function vmLoopLimitMessage(vm: RaiserVM): string {
 	return `interpretation requires too many iterations (limit ${vm.loopLimit}); if you are sure this is not a bug in your code, raise it with --max-vm-iterations=<n>`;
 }
 
+// What the retagging in the generic path needs per operand slot: OPERAND_* kinds from the opcode's roles.
+function buildOperandKinds(): int32[] {
+	const table: int32[] = [];
+	for (let op = 0; op <= (RaiserOpcode.BrNeR as int32); op += 1) {
+		for (let slot = 0; slot < 3; slot += 1) table.push(operandKind(op as RaiserOpcode, slot as int32));
+	}
+	return table;
+}
+
+const OPERAND_KINDS: int32[] = buildOperandKinds();
+
+function retag(kind: int32, raw: int32): int32 {
+	return kind <= CLS_BOOL ? (raw << 3) | kind : raw;
+}
+
+// The hot opcodes run here on the two files and the frame's bases; every other opcode takes its
+// operands retagged (each register operand carries its class) into vmStepHeap or vmStepSlow.
+// vm.funcIdx, vm.wordBase and vm.refBase always hold the running frame; vm.ip is written back
+// before any call that reads it.
 function runStrandSlice(vm: RaiserVM): void {
 	if (vm.halted || vm.yielded) return;
 	const mod = vm.mod;
@@ -1611,9 +1676,11 @@ function runStrandSlice(vm: RaiserVM): void {
 	assertPacked(func);
 	let code = func.packed;
 	let regs = vm.regs;
-	let slots = regs.slots;
+	let words = regs.words;
+	let refs = regs.refs;
 	let ip = vm.ip;
-	let base = vm.baseReg;
+	let wb = vm.wordBase;
+	let rb = vm.refBase;
 	while (true) {
 		const pc = ip;
 		const word = code[pc];
@@ -1622,6 +1689,7 @@ function runStrandSlice(vm: RaiserVM): void {
 		const ia = ((word >> 8) & 65535) as int32;
 		const ib = ((word >> 24) & 65535) as int32;
 		const ic = ((word >> 40) & 65535) as int32;
+		let slow = false;
 
 		match (op) {
 			RaiserOpcode.LoadConst => {
@@ -1630,52 +1698,35 @@ function runStrandSlice(vm: RaiserVM): void {
 					vm.ip = ip; vmError(vm, `constant index out of bounds: ${bx}`); break;
 				} else {
 					const val = getFuncConst(func, bx);
-					setReg(vm, base + ia, val);
+					const cls = ia & 7;
+					if (cls == CLS_WORD || cls == CLS_BOOL) {
+						words[wb + (ia >> 3)] = val.intVal;
+					} else if (cls == CLS_FLOAT) {
+						words[wb + (ia >> 3)] = msFloat64Bits(val.floatVal);
+					} else {
+						writeRef(vm, rb + (ia >> 3), val.kind == RaiserValueKind.Nil ? 0 : val.intVal);
+					}
 				}
 			},
-			RaiserOpcode.Move => {
-				setReg(vm, base + ia, slots[base + ib]);
+			RaiserOpcode.MoveW => {
+				words[wb + ia] = words[wb + ib];
 			},
-			RaiserOpcode.LoadGlobal => {
-				setRegConform(vm, base + ia, vm.globals[ib]);
-			},
-			RaiserOpcode.StoreGlobal => {
-				const source = getDyn(vm, base + ia);
-				vmIncref(vm, source);
-				vmDecref(vm, vm.globals[ib]);
-				copyValueInto(vm.globals[ib], source);
-			},
-			RaiserOpcode.CopyValue => {
-				const source = getDyn(vm, base + ib);
-				const copied = copyTypedValue(vm.arrayHeap, vm.objectHeap, source,
-					func.copyPlans, ic as int32);
-				setRegConform(vm, base + ia, copied);
-				vmMaybeCollect(vm);
-			},
-			RaiserOpcode.Box => {
-				const source = slots[base + ib];
-				if (source.kind == RaiserValueKind.Nil || source.kind == RaiserValueKind.Box) {
-					setReg(vm, base + ia, source);
-				} else {
-					vmIncref(vm, source);
-					setRegRef(vm, base + ia, RaiserValueKind.Box, heapAllocBox(vm.arrayHeap, source));
-				}
-			},
-			RaiserOpcode.Unbox => {
-				const source = slots[base + ib];
-				if (ic == 1) {
-					const inner = readDyn(vm.arrayHeap, source);
-					setRegInt(vm, base + ia, inner.kind == RaiserValueKind.Float ? int64Bits(msFloat64Bits(inner.floatVal)) : inner.intVal);
-				} else if (source.kind == RaiserValueKind.Box) {
-					setReg(vm, base + ia, heapBoxValue(vm.arrayHeap, source.intVal));
-				} else if (source.kind == RaiserValueKind.Nil && func.regClasses[ia] == RaiserRegClass.Word) {
-					vm.ip = ip; vmError(vm, "internal: unbox of nil into the word register R" + ia + " of " + func.name); break;
-				} else {
-					setReg(vm, base + ia, source);
-				}
+			RaiserOpcode.MoveR => {
+				writeRef(vm, rb + ia, refs[rb + ib]);
 			},
 			RaiserOpcode.LoadNil => {
-				setRegNil(vm, base + ia);
+				const cls = ia & 7;
+				if (cls == CLS_REF || cls == CLS_DYN) {
+					writeRef(vm, rb + (ia >> 3), 0);
+				} else {
+					vm.ip = ip; vmError(vm, `internal: register R${ia >> 3} of ${func.name} is ${cls as RaiserRegClass}, got Nil`); break;
+				}
+			},
+			RaiserOpcode.LoadGlobal => {
+				setRegConform(vm, ia, vm.globals[ib]);
+			},
+			RaiserOpcode.StoreGlobal => {
+				storeRegInto(vm, ia, vm.globals[ib]);
 			},
 			RaiserOpcode.Jump => {
 				const rawAx = ia * 65536 + ib * 256 + ic;
@@ -1690,319 +1741,515 @@ function runStrandSlice(vm: RaiserVM): void {
 				}
 				ip = ip + (offset as int32);
 			},
+			RaiserOpcode.LoadInt => {
+				words[wb + ia] = immValue(ib);
+			},
+			RaiserOpcode.BTruthy => {
+				const cls = ia & 7;
+				const truthy = cls == CLS_WORD || cls == CLS_BOOL ? words[wb + (ia >> 3)] != 0 : raiserToBool(vm.arrayHeap, getReg(vm, ia));
+				if (truthy) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.Call => {
+				const blocks = func.blocks;
+				const argc = blocks[ic + 2];
+				const sig = blocks[ic + 3];
+				const depth = vm.callStack.depth;
+				const callee = ib < mod.functions.length ? mod.functions[ib] : func;
+				if (ib < mod.functions.length && depth < MAX_CALL_DEPTH && sig >= 0 && argc < callee.sigs.length && callee.sigs[argc] == sig) {
+					if (depth == vm.callStack.items.length) {
+						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, wordBase: 0, refBase: 0, spBase: 0 });
+					}
+					const frame = vm.callStack.items[depth];
+					frame.funcIdx = funcIdx;
+					frame.returnIp = ip;
+					frame.returnDest = ia;
+					frame.wordBase = wb;
+					frame.refBase = rb;
+					frame.spBase = vm.safePoints.length as int32;
+					vm.callStack.depth = depth + 1;
+					wb = wb + (blocks[ic] as int32);
+					rb = rb + (blocks[ic + 1] as int32);
+					if (words.length < wb + callee.wordRegs) ensureWords(regs, wb + callee.wordRegs);
+					if (refs.length < rb + callee.refRegs) ensureRefs(regs, rb + callee.refRegs);
+					funcIdx = ib;
+					func = callee;
+					code = callee.packed;
+					if (code.length != func.code.length) assertPacked(func);
+					vm.funcIdx = funcIdx;
+					vm.wordBase = wb;
+					vm.refBase = rb;
+					ip = 0;
+				} else {
+					slow = true;
+				}
+			},
+			RaiserOpcode.Ret => {
+				const depth = vm.callStack.depth;
+				if (depth > 0 && vm.safePoints.length == vm.callStack.items[depth - 1].spBase) {
+					const frame = vm.callStack.items[depth - 1];
+					const dest = frame.returnDest;
+					const cls = ia & 7;
+					if (cls == (dest & 7)) {
+						if (cls == CLS_REF || cls == CLS_DYN) {
+							writeRef(vm, frame.refBase + (dest >> 3), refs[rb + (ia >> 3)]);
+						} else {
+							words[frame.wordBase + (dest >> 3)] = words[wb + (ia >> 3)];
+						}
+						vm.callStack.depth = depth - 1;
+						wb = frame.wordBase;
+						rb = frame.refBase;
+						funcIdx = frame.funcIdx;
+						func = mod.functions[funcIdx];
+						code = func.packed;
+						if (code.length != func.code.length) assertPacked(func);
+						vm.funcIdx = funcIdx;
+						vm.wordBase = wb;
+						vm.refBase = rb;
+						ip = frame.returnIp;
+					} else {
+						slow = true;
+					}
+				} else {
+					slow = true;
+				}
+			},
 			RaiserOpcode.BrEqI64 => {
-				if (slots[base + ia].intVal == slots[base + ib].intVal) {
+				if (words[wb + ia] == words[wb + ib]) {
 					const offset = packedBranch(word);
 					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
 					ip = ip + offset;
 				}
 			},
 			RaiserOpcode.BrNeI64 => {
-				if (slots[base + ia].intVal != slots[base + ib].intVal) {
+				if (words[wb + ia] != words[wb + ib]) {
 					const offset = packedBranch(word);
 					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
 					ip = ip + offset;
 				}
 			},
 			RaiserOpcode.BrLtI64 => {
-				if (slots[base + ia].intVal < slots[base + ib].intVal) {
+				if (words[wb + ia] < words[wb + ib]) {
 					const offset = packedBranch(word);
 					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
 					ip = ip + offset;
 				}
 			},
 			RaiserOpcode.BrLeI64 => {
-				if (slots[base + ia].intVal <= slots[base + ib].intVal) {
+				if (words[wb + ia] <= words[wb + ib]) {
 					const offset = packedBranch(word);
 					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
 					ip = ip + offset;
 				}
 			},
 			RaiserOpcode.BrGtI64 => {
-				if (slots[base + ia].intVal > slots[base + ib].intVal) {
+				if (words[wb + ia] > words[wb + ib]) {
 					const offset = packedBranch(word);
 					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
 					ip = ip + offset;
 				}
 			},
 			RaiserOpcode.BrGeI64 => {
-				if (slots[base + ia].intVal >= slots[base + ib].intVal) {
+				if (words[wb + ia] >= words[wb + ib]) {
 					const offset = packedBranch(word);
 					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
 					ip = ip + offset;
 				}
 			},
 			RaiserOpcode.BrEqI64Imm => {
-				if (slots[base + ia].intVal == immValue(ib)) {
+				if (words[wb + ia] == immValue(ib)) {
 					const offset = packedBranch(word);
 					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
 					ip = ip + offset;
 				}
 			},
 			RaiserOpcode.BrNeI64Imm => {
-				if (slots[base + ia].intVal != immValue(ib)) {
+				if (words[wb + ia] != immValue(ib)) {
 					const offset = packedBranch(word);
 					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
 					ip = ip + offset;
 				}
 			},
 			RaiserOpcode.BrLtI64Imm => {
-				if (slots[base + ia].intVal < immValue(ib)) {
+				if (words[wb + ia] < immValue(ib)) {
 					const offset = packedBranch(word);
 					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
 					ip = ip + offset;
 				}
 			},
 			RaiserOpcode.BrLeI64Imm => {
-				if (slots[base + ia].intVal <= immValue(ib)) {
+				if (words[wb + ia] <= immValue(ib)) {
 					const offset = packedBranch(word);
 					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
 					ip = ip + offset;
 				}
 			},
 			RaiserOpcode.BrGtI64Imm => {
-				if (slots[base + ia].intVal > immValue(ib)) {
+				if (words[wb + ia] > immValue(ib)) {
 					const offset = packedBranch(word);
 					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
 					ip = ip + offset;
 				}
 			},
 			RaiserOpcode.BrGeI64Imm => {
-				if (slots[base + ia].intVal >= immValue(ib)) {
+				if (words[wb + ia] >= immValue(ib)) {
 					const offset = packedBranch(word);
 					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
 					ip = ip + offset;
 				}
 			},
-			RaiserOpcode.LoadInt => {
-				setRegInt(vm, base + ia, immValue(ib));
+			RaiserOpcode.BrEqR => {
+				if (refs[rb + ia] == refs[rb + ib]) {
+					const offset = packedBranch(word);
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					ip = ip + offset;
+				}
+			},
+			RaiserOpcode.BrNeR => {
+				if (refs[rb + ia] != refs[rb + ib]) {
+					const offset = packedBranch(word);
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					ip = ip + offset;
+				}
+			},
+			RaiserOpcode.BeqR => {
+				if (refs[rb + ia] == refs[rb + ib]) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BneR => {
+				if (refs[rb + ia] != refs[rb + ib]) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BeqI64 => {
+				if (words[wb + ia] == words[wb + ib]) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BneI64 => {
+				if (words[wb + ia] != words[wb + ib]) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BltI64 => {
+				if (words[wb + ia] < words[wb + ib]) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BleI64 => {
+				if (words[wb + ia] <= words[wb + ib]) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BgtI64 => {
+				if (words[wb + ia] > words[wb + ib]) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BgeI64 => {
+				if (words[wb + ia] >= words[wb + ib]) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BeqI64Imm => {
+				if (words[wb + ia] == immValue(ib)) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BneI64Imm => {
+				if (words[wb + ia] != immValue(ib)) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BltI64Imm => {
+				if (words[wb + ia] < immValue(ib)) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BleI64Imm => {
+				if (words[wb + ia] <= immValue(ib)) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BgtI64Imm => {
+				if (words[wb + ia] > immValue(ib)) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BgeI64Imm => {
+				if (words[wb + ia] >= immValue(ib)) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BeqF64 => {
+				if (msBitsFloat64(words[wb + ia]) == msBitsFloat64(words[wb + ib])) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BneF64 => {
+				if (msBitsFloat64(words[wb + ia]) != msBitsFloat64(words[wb + ib])) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BltF64 => {
+				if (msBitsFloat64(words[wb + ia]) < msBitsFloat64(words[wb + ib])) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BleF64 => {
+				if (msBitsFloat64(words[wb + ia]) <= msBitsFloat64(words[wb + ib])) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BgtF64 => {
+				if (msBitsFloat64(words[wb + ia]) > msBitsFloat64(words[wb + ib])) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BgeF64 => {
+				if (msBitsFloat64(words[wb + ia]) >= msBitsFloat64(words[wb + ib])) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BltU64 => {
+				if ((words[wb + ia] as uint64) < (words[wb + ib] as uint64)) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.BleU64 => {
+				if ((words[wb + ia] as uint64) <= (words[wb + ib] as uint64)) ip = ip + (ic as int32);
+			},
+			RaiserOpcode.AddF64 => {
+				words[wb + ia] = msFloat64Bits(msBitsFloat64(words[wb + ib]) + msBitsFloat64(words[wb + ic]));
+			},
+			RaiserOpcode.SubF64 => {
+				words[wb + ia] = msFloat64Bits(msBitsFloat64(words[wb + ib]) - msBitsFloat64(words[wb + ic]));
+			},
+			RaiserOpcode.MulF64 => {
+				words[wb + ia] = msFloat64Bits(msBitsFloat64(words[wb + ib]) * msBitsFloat64(words[wb + ic]));
+			},
+			RaiserOpcode.DivF64 => {
+				words[wb + ia] = msFloat64Bits(msBitsFloat64(words[wb + ib]) / msBitsFloat64(words[wb + ic]));
+			},
+			RaiserOpcode.NegF64 => {
+				words[wb + ia] = msFloat64Bits(-msBitsFloat64(words[wb + ib]));
 			},
 			RaiserOpcode.AddI64Imm => {
-				const lhs = slots[base + ib].intVal;
+				const lhs = words[wb + ib];
 				const imm = immValue(ic);
 				const sum = int64Bits((lhs as uint64) + (imm as uint64));
-				if ((sum ^ lhs) >= 0 || (sum ^ imm) >= 0) { setRegInt(vm, base + ia, sum);
+				if ((sum ^ lhs) >= 0 || (sum ^ imm) >= 0) { words[wb + ia] = sum;
 				} else { vm.ip = ip; vmError(vm, "over- or underflow"); break; }
 			},
 			RaiserOpcode.SubI64Imm => {
-				const lhs = slots[base + ib].intVal;
+				const lhs = words[wb + ib];
 				const imm = immValue(ic);
 				const diff = int64Bits((lhs as uint64) - (imm as uint64));
-				if ((diff ^ lhs) >= 0 || (diff ^ ~imm) >= 0) { setRegInt(vm, base + ia, diff);
+				if ((diff ^ lhs) >= 0 || (diff ^ ~imm) >= 0) { words[wb + ia] = diff;
 				} else { vm.ip = ip; vmError(vm, "over- or underflow"); break; }
 			},
+			RaiserOpcode.LoadField => {
+				const handle = refs[rb + ib];
+				const objects = vm.objectHeap.objects;
+				if (handleTag(handle) == (RaiserHeapKind.Object as int64) && handleIndex(handle) < objects.length) {
+					const fields = objects[handleIndex(handle)].fields;
+					const idx = func.fieldCache[pc];
+					if (idx >= 0 && idx < fields.length && fields[idx].name == func.names[ic]) {
+						const val = fields[idx].value;
+						const cls = ia & 7;
+						if (cls == CLS_WORD && val.kind == RaiserValueKind.Int) {
+							words[wb + (ia >> 3)] = val.intVal;
+						} else if (cls == CLS_FLOAT && val.kind == RaiserValueKind.Float) {
+							words[wb + (ia >> 3)] = msFloat64Bits(val.floatVal);
+						} else {
+							slow = true;
+						}
+					} else {
+						slow = true;
+					}
+				} else {
+					slow = true;
+				}
+			},
+			RaiserOpcode.StoreField => {
+				const handle = refs[rb + ia];
+				const objects = vm.objectHeap.objects;
+				if (handleTag(handle) == (RaiserHeapKind.Object as int64) && handleIndex(handle) < objects.length) {
+					const fields = objects[handleIndex(handle)].fields;
+					const idx = func.fieldCache[pc];
+					if (idx >= 0 && idx < fields.length && fields[idx].name == func.names[ib]) {
+						const slot = fields[idx].value;
+						const cls = ic & 7;
+						if (cls == CLS_WORD && slot.kind == RaiserValueKind.Int) {
+							slot.intVal = words[wb + (ic >> 3)];
+						} else if (cls == CLS_FLOAT && slot.kind == RaiserValueKind.Float) {
+							slot.floatVal = msBitsFloat64(words[wb + (ic >> 3)]);
+						} else {
+							slow = true;
+						}
+					} else {
+						slow = true;
+					}
+				} else {
+					slow = true;
+				}
+			},
 			RaiserOpcode.AddI64 => {
-				const lhs = slots[base + ib];
-				const rhs = slots[base + ic];
-				const sum = int64Bits((lhs.intVal as uint64) + (rhs.intVal as uint64));
-				if ((sum ^ lhs.intVal) >= 0 || (sum ^ rhs.intVal) >= 0) { setRegInt(vm, base + ia, sum);
+				const lhs = words[wb + ib];
+				const rhs = words[wb + ic];
+				const sum = int64Bits((lhs as uint64) + (rhs as uint64));
+				if ((sum ^ lhs) >= 0 || (sum ^ rhs) >= 0) { words[wb + ia] = sum;
 				} else { vm.ip = ip; vmError(vm, "over- or underflow"); break; }
 			},
 			RaiserOpcode.SubI64 => {
-				const lhs = slots[base + ib];
-				const rhs = slots[base + ic];
-				const diff = int64Bits((lhs.intVal as uint64) - (rhs.intVal as uint64));
-				if ((diff ^ lhs.intVal) >= 0 || (diff ^ ~rhs.intVal) >= 0) { setRegInt(vm, base + ia, diff);
+				const lhs = words[wb + ib];
+				const rhs = words[wb + ic];
+				const diff = int64Bits((lhs as uint64) - (rhs as uint64));
+				if ((diff ^ lhs) >= 0 || (diff ^ ~rhs) >= 0) { words[wb + ia] = diff;
 				} else { vm.ip = ip; vmError(vm, "over- or underflow"); break; }
 			},
 			RaiserOpcode.MulI64 => {
-				const lhs = slots[base + ib];
-				const rhs = slots[base + ic];
-				if (mulOverflowsI64(lhs.intVal, rhs.intVal)) { vm.ip = ip; vmError(vm, "over- or underflow"); break;
-				} else { setRegInt(vm, base + ia, int64Bits((lhs.intVal as uint64) * (rhs.intVal as uint64))); }
+				const lhs = words[wb + ib];
+				const rhs = words[wb + ic];
+				if (mulOverflowsI64(lhs, rhs)) { vm.ip = ip; vmError(vm, "over- or underflow"); break;
+				} else { words[wb + ia] = int64Bits((lhs as uint64) * (rhs as uint64)); }
 			},
 			RaiserOpcode.DivI64 => {
-				const lhs = slots[base + ib];
-				const rhs = slots[base + ic];
-				if (rhs.intVal == 0) { vm.ip = ip; vmError(vm, "integer division by zero"); break;
-				} else if (rhs.intVal == -1) {
-					if (lhs.intVal == INT64_LOW) { vm.ip = ip; vmError(vm, "over- or underflow"); break;
-					} else { setRegInt(vm, base + ia, -lhs.intVal); }
+				const lhs = words[wb + ib];
+				const rhs = words[wb + ic];
+				if (rhs == 0) { vm.ip = ip; vmError(vm, "integer division by zero"); break;
+				} else if (rhs == -1) {
+					if (lhs == INT64_LOW) { vm.ip = ip; vmError(vm, "over- or underflow"); break;
+					} else { words[wb + ia] = -lhs; }
 				} else {
-					setRegInt(vm, base + ia, lhs.intVal / rhs.intVal);
+					words[wb + ia] = lhs / rhs;
 				}
 			},
 			RaiserOpcode.ModI64 => {
-				if (slots[base + ic].intVal == 0) { vm.ip = ip; vmError(vm, "integer modulo by zero"); break;
+				if (words[wb + ic] == 0) { vm.ip = ip; vmError(vm, "integer modulo by zero"); break;
 				} else {
-					setRegInt(vm, base + ia, slots[base + ic].intVal == -1 ? 0 : slots[base + ib].intVal % slots[base + ic].intVal);
+					words[wb + ia] = words[wb + ic] == -1 ? 0 : words[wb + ib] % words[wb + ic];
 				}
 			},
 			RaiserOpcode.DivU64 => {
-				if (slots[base + ic].intVal == 0) { vm.ip = ip; vmError(vm, "integer division by zero"); break;
+				if (words[wb + ic] == 0) { vm.ip = ip; vmError(vm, "integer division by zero"); break;
 				} else {
-					setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) / (slots[base + ic].intVal as uint64)));
+					words[wb + ia] = int64Bits((words[wb + ib] as uint64) / (words[wb + ic] as uint64));
 				}
 			},
 			RaiserOpcode.ModU64 => {
-				if (slots[base + ic].intVal == 0) { vm.ip = ip; vmError(vm, "integer modulo by zero"); break;
+				if (words[wb + ic] == 0) { vm.ip = ip; vmError(vm, "integer modulo by zero"); break;
 				} else {
-					setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) % (slots[base + ic].intVal as uint64)));
+					words[wb + ia] = int64Bits((words[wb + ib] as uint64) % (words[wb + ic] as uint64));
 				}
 			},
 			RaiserOpcode.AddU64 => {
-				setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) + (slots[base + ic].intVal as uint64)));
+				words[wb + ia] = int64Bits((words[wb + ib] as uint64) + (words[wb + ic] as uint64));
 			},
 			RaiserOpcode.SubU64 => {
-				setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) - (slots[base + ic].intVal as uint64)));
+				words[wb + ia] = int64Bits((words[wb + ib] as uint64) - (words[wb + ic] as uint64));
 			},
 			RaiserOpcode.MulU64 => {
-				setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) * (slots[base + ic].intVal as uint64)));
-			},
-			RaiserOpcode.AddrReg => {
-				setRegConform(vm, base + ia, { kind: RaiserValueKind.RegAddr, intVal: (base + ib) as int64, floatVal: 0.0 });
-			},
-			RaiserOpcode.AddrGlobal => {
-				setRegConform(vm, base + ia, { kind: RaiserValueKind.GlobalAddr, intVal: (ib * 256 + ic) as int64, floatVal: 0.0 });
-			},
-			RaiserOpcode.InstanceOf => {
-				const held = getDyn(vm, base + ib);
-				const key = constStringText(getFuncConst(func, ic));
-				setRegBool(vm, base + ia, held.kind == RaiserValueKind.Object && raiserIsInstance(vm.objectHeap.objects[handleIndex(held.intVal)].classType, key));
-			},
-			RaiserOpcode.ObjConv => {
-				const held = getDyn(vm, base + ia);
-				if (held.kind != RaiserValueKind.Nil) {
-					const classType = held.kind == RaiserValueKind.Object ? vm.objectHeap.objects[handleIndex(held.intVal)].classType : RAISER_NO_CLASS;
-					if (!raiserIsInstance(classType, constStringText(getFuncConst(func, ib)))) {
-						vm.ip = ip; vmError(vm, "invalid object conversion: " + (classType.name != "" ? classType.name : "<untyped>") + " is not " + constStringText(getFuncConst(func, ic))); break;
-					}
-				}
-			},
-			RaiserOpcode.SameLoc => {
-				const l = getDyn(vm, base + ib);
-				const r = getDyn(vm, base + ic);
-				setRegBool(vm, base + ia, l.kind == r.kind && (l.kind == RaiserValueKind.String ? heapStringEquals(vm.arrayHeap, l, r) : l.intVal == r.intVal && l.floatVal == r.floatVal));
+				words[wb + ia] = int64Bits((words[wb + ib] as uint64) * (words[wb + ic] as uint64));
 			},
 			RaiserOpcode.NegI64 => {
-				const val = slots[base + ib];
-				if (val.intVal == INT64_LOW) { vm.ip = ip; vmError(vm, "over- or underflow"); break;
-				} else { setRegInt(vm, base + ia, -val.intVal); }
-			},
-			RaiserOpcode.BeqI64 => {
-				if (slots[base + ia].intVal == slots[base + ib].intVal) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BneI64 => {
-				if (slots[base + ia].intVal != slots[base + ib].intVal) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BeqI64Imm => {
-				if (slots[base + ia].intVal == immValue(ib)) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BneI64Imm => {
-				if (slots[base + ia].intVal != immValue(ib)) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BltI64Imm => {
-				if (slots[base + ia].intVal < immValue(ib)) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BleI64Imm => {
-				if (slots[base + ia].intVal <= immValue(ib)) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BgtI64Imm => {
-				if (slots[base + ia].intVal > immValue(ib)) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BgeI64Imm => {
-				if (slots[base + ia].intVal >= immValue(ib)) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BTruthy => {
-				if (raiserToBool(vm.arrayHeap, slots[base + ia])) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BltI64 => {
-				if (slots[base + ia].intVal < slots[base + ib].intVal) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BleI64 => {
-				if (slots[base + ia].intVal <= slots[base + ib].intVal) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BltU64 => {
-				if ((slots[base + ia].intVal as uint64) < (slots[base + ib].intVal as uint64)) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BleU64 => {
-				if ((slots[base + ia].intVal as uint64) <= (slots[base + ib].intVal as uint64)) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BgtI64 => {
-				if (slots[base + ia].intVal > slots[base + ib].intVal) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BgeI64 => {
-				if (slots[base + ia].intVal >= slots[base + ib].intVal) ip = ip + (ic as int32);
+				const val = words[wb + ib];
+				if (val == INT64_LOW) { vm.ip = ip; vmError(vm, "over- or underflow"); break;
+				} else { words[wb + ia] = -val; }
 			},
 			RaiserOpcode.BitAnd => {
-				setRegInt(vm, base + ia, slots[base + ib].intVal & slots[base + ic].intVal);
+				words[wb + ia] = words[wb + ib] & words[wb + ic];
 			},
 			RaiserOpcode.BitOr => {
-				setRegInt(vm, base + ia, slots[base + ib].intVal | slots[base + ic].intVal);
+				words[wb + ia] = words[wb + ib] | words[wb + ic];
 			},
 			RaiserOpcode.BitXor => {
-				setRegInt(vm, base + ia, slots[base + ib].intVal ^ slots[base + ic].intVal);
+				words[wb + ia] = words[wb + ib] ^ words[wb + ic];
 			},
 			RaiserOpcode.BitNot => {
-				const val = slots[base + ib];
-				setRegInt(vm, base + ia, ~val.intVal);
+				words[wb + ia] = ~words[wb + ib];
 			},
 			RaiserOpcode.ShiftLeft => {
-				const count = (slots[base + ic].intVal & 63) as uint64;
-				setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) << count));
+				const count = (words[wb + ic] & 63) as uint64;
+				words[wb + ia] = int64Bits((words[wb + ib] as uint64) << count);
 			},
 			RaiserOpcode.ShiftRight => {
-				setRegInt(vm, base + ia, slots[base + ib].intVal >> (slots[base + ic].intVal & 63));
-			},
-			RaiserOpcode.NarrowU => {
-				const val = slots[base + ia];
-				const width = ib as int64;
-				setRegInt(vm, base + ia, val.intVal & (((1 as int64) << width) - 1));
-			},
-			RaiserOpcode.NarrowS => {
-				const val = slots[base + ia];
-				const half = (1 as int64) << ((ib as int64) - 1);
-				const low = ic == 1 ? 0 : -half;
-				if (val.intVal < low || val.intVal >= low + 2 * half) { vm.ip = ip; vmError(vm, "over- or underflow"); break; }
-			},
-			RaiserOpcode.SignExtend => {
-				const val = slots[base + ia];
-				const imm = 64 - (ib as int64);
-				const raised = int64Bits((val.intVal as uint64) << (imm as uint64));
-				setRegInt(vm, base + ia, raised >> imm);
+				words[wb + ia] = words[wb + ib] >> (words[wb + ic] & 63);
 			},
 			RaiserOpcode.ShiftRightU => {
-				const count = (slots[base + ic].intVal & 63) as uint64;
-				setRegInt(vm, base + ia, int64Bits((slots[base + ib].intVal as uint64) >> count));
+				const count = (words[wb + ic] & 63) as uint64;
+				words[wb + ia] = int64Bits((words[wb + ib] as uint64) >> count);
 			},
-			RaiserOpcode.IsKind => {
-				const v = getDyn(vm, base + ib);
-				setRegBool(vm, base + ia, (v.kind as number) == ic);
+			RaiserOpcode.NarrowU => {
+				const width = ib as int64;
+				words[wb + ia] = words[wb + ia] & (((1 as int64) << width) - 1);
+			},
+			RaiserOpcode.NarrowS => {
+				const val = words[wb + ia];
+				const half = (1 as int64) << ((ib as int64) - 1);
+				const low = ic == 1 ? 0 : -half;
+				if (val < low || val >= low + 2 * half) { vm.ip = ip; vmError(vm, "over- or underflow"); break; }
+			},
+			RaiserOpcode.SignExtend => {
+				const imm = 64 - (ib as int64);
+				const raised = int64Bits((words[wb + ia] as uint64) << (imm as uint64));
+				words[wb + ia] = raised >> imm;
 			},
 			_ => {
-				vm.ip = ip;
-				if (vmStepHeap(vm, op, ia, ib, ic, func, pc, base)) {
-					ip = vm.ip;
-					if (vm.halted) break;
-				} else {
-					vmStepSlow(vm, op, ia, ib, ic, func, base, slots);
-					if (vm.halted || vm.yielded) break;
-					ip = vm.ip;
-					base = vm.baseReg;
-					if (vm.funcIdx != funcIdx) {
-						funcIdx = vm.funcIdx;
-						func = mod.functions[funcIdx];
-						code = func.packed;
-						if (code.length != func.code.length) assertPacked(func);
-					}
-					if (vm.regs != regs) {
-						regs = vm.regs;
-						slots = regs.slots;
-					}
-				}
+				slow = true;
 			},
+		}
+		if (slow) {
+			vm.ip = ip;
+			const k = (op as int32) * 3;
+			const ta = retag(OPERAND_KINDS[k], ia);
+			const tb = retag(OPERAND_KINDS[k + 1], ib);
+			const tc = retag(OPERAND_KINDS[k + 2], ic);
+			if (vmStepHeap(vm, op, ta, tb, tc, func, pc)) {
+				ip = vm.ip;
+				if (vm.halted) break;
+			} else {
+				vmStepSlow(vm, op, ta, tb, tc, func);
+				if (vm.halted || vm.yielded) break;
+				ip = vm.ip;
+				wb = vm.wordBase;
+				rb = vm.refBase;
+				if (vm.funcIdx != funcIdx) {
+					funcIdx = vm.funcIdx;
+					func = mod.functions[funcIdx];
+					code = func.packed;
+					if (code.length != func.code.length) assertPacked(func);
+				}
+				if (vm.regs != regs) {
+					regs = vm.regs;
+					words = regs.words;
+					refs = regs.refs;
+				}
+			}
 		}
 	}
 }
 
-function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: int32, func: RaiserFunction, pc: int32, base: int32): boolean {
+// A generic opcode, its register operands retagged. Heap opcodes answer true when handled here.
+function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: int32, func: RaiserFunction, pc: int32): boolean {
 	match (op) {
+		RaiserOpcode.CopyValue => {
+			const source = getDyn(vm, ib);
+			const copied = copyTypedValue(vm.arrayHeap, vm.objectHeap, source, func.copyPlans, ic as int32);
+			setRegConform(vm, ia, copied);
+			vmMaybeCollect(vm);
+		},
+		RaiserOpcode.Box => {
+			setRegConform(vm, ia, getReg(vm, ib));
+		},
+		RaiserOpcode.Unbox => {
+			const source = getReg(vm, ib);
+			const cls = ia & 7;
+			if (ic == 1) {
+				const inner = readDyn(vm.arrayHeap, source);
+				if (cls != CLS_WORD) { vmError(vm, `internal: payload unbox into a ${regClassLetter(cls as RaiserRegClass)} register of ${func.name}`); return true; }
+				vm.regs.words[absOf(vm, ia)] = inner.kind == RaiserValueKind.Float ? msFloat64Bits(inner.floatVal) : inner.intVal;
+			} else if (source.kind == RaiserValueKind.Box) {
+				setRegConform(vm, ia, heapBoxValue(vm.arrayHeap, source.intVal));
+			} else if (source.kind == RaiserValueKind.Nil && (cls == CLS_WORD || cls == CLS_FLOAT || cls == CLS_BOOL)) {
+				vmError(vm, "internal: unbox of nil into the word register R" + (ia >> 3) + " of " + func.name);
+			} else {
+				setRegConform(vm, ia, source);
+			}
+		},
+		RaiserOpcode.AddrReg => {
+			setRegConform(vm, ia, { kind: RaiserValueKind.RegAddr, intVal: ((absOf(vm, ib) as int64) << 3) | ((ib & 7) as int64), floatVal: 0.0 });
+		},
+		RaiserOpcode.AddrGlobal => {
+			setRegConform(vm, ia, { kind: RaiserValueKind.GlobalAddr, intVal: (ib * 256 + ic) as int64, floatVal: 0.0 });
+		},
+		RaiserOpcode.InstanceOf => {
+			const held = getDyn(vm, ib);
+			const key = constStringText(getFuncConst(func, ic));
+			setRegBool(vm, ia, held.kind == RaiserValueKind.Object && raiserIsInstance(vm.objectHeap.objects[handleIndex(held.intVal)].classType, key));
+		},
+		RaiserOpcode.ObjConv => {
+			const held = getDyn(vm, ia);
+			if (held.kind != RaiserValueKind.Nil) {
+				const classType = held.kind == RaiserValueKind.Object ? vm.objectHeap.objects[handleIndex(held.intVal)].classType : RAISER_NO_CLASS;
+				if (!raiserIsInstance(classType, constStringText(getFuncConst(func, ib)))) {
+					vmError(vm, "invalid object conversion: " + (classType.name != "" ? classType.name : "<untyped>") + " is not " + constStringText(getFuncConst(func, ic)));
+				}
+			}
+		},
+		RaiserOpcode.SameLoc => {
+			const l = getDyn(vm, ib);
+			const r = getDyn(vm, ic);
+			setRegBool(vm, ia, l.kind == r.kind && (l.kind == RaiserValueKind.String ? heapStringEquals(vm.arrayHeap, l, r) : l.intVal == r.intVal && l.floatVal == r.floatVal));
+		},
+		RaiserOpcode.IsKind => {
+			const v = getDyn(vm, ib);
+			setRegBool(vm, ia, (v.kind as number) == ic);
+		},
 		RaiserOpcode.AddrIndex => {
 			vmHandleAddrIndex(vm, ia, ib, ic);
 		},
 		RaiserOpcode.AddrField => {
-			const handle = vmHeapOperand(vm, getDyn(vm, base + ib), RaiserValueKind.Object, "an object");
-			if (!vm.halted) setRegConform(vm, base + ia, raiserFieldAddrAt(handle, getFuncConst(func, ic).intVal));
+			const handle = vmHeapOperand(vm, getDyn(vm, ib), RaiserValueKind.Object, "an object");
+			if (!vm.halted) setRegConform(vm, ia, raiserFieldAddrAt(handle, getFuncConst(func, ic).intVal));
 		},
 		RaiserOpcode.LoadDeref => {
 			vmHandleLoadDeref(vm, ia, ib, ic);
@@ -2014,7 +2261,7 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			vmHandleConv(vm, ia, ib, ic);
 		},
 		RaiserOpcode.NewArray => {
-			vmHandleNewArray(vm, ia, ib, ic);
+			vmHandleNewArray(vm, func, ia, ib, ic);
 		},
 		RaiserOpcode.LoadIndex => {
 			vmHandleLoadIndex(vm, ia, ib, ic);
@@ -2068,47 +2315,14 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			vmHandleStrLen(vm, ia, ib, ic);
 		},
 		RaiserOpcode.StrByteLen => {
-			const value = heapStringByteLength(vm.arrayHeap, getDyn(vm, vm.baseReg + ib));
-			setRegInt(vm, vm.baseReg + ia, value);
+			const value = heapStringByteLength(vm.arrayHeap, getDyn(vm, ib));
+			setRegInt(vm, ia, value);
 		},
 		RaiserOpcode.StrCharAt => {
 			vmHandleStrCharAt(vm, ia, ib, ic);
 		},
 		RaiserOpcode.StrSlice => {
 			vmHandleStrSlice(vm, ia, ib, ic);
-		},
-		RaiserOpcode.AddF64 => {
-			vmHandleAddF64(vm, ia, ib, ic);
-		},
-		RaiserOpcode.SubF64 => {
-			vmHandleSubF64(vm, ia, ib, ic);
-		},
-		RaiserOpcode.MulF64 => {
-			vmHandleMulF64(vm, ia, ib, ic);
-		},
-		RaiserOpcode.DivF64 => {
-			vmHandleDivF64(vm, ia, ib, ic);
-		},
-		RaiserOpcode.NegF64 => {
-			vmHandleNegF64(vm, ia, ib, ic);
-		},
-		RaiserOpcode.BeqF64 => {
-			vmCmpBranchF64(vm, ia, ib, ic, 0);
-		},
-		RaiserOpcode.BneF64 => {
-			vmCmpBranchF64(vm, ia, ib, ic, 1);
-		},
-		RaiserOpcode.BltF64 => {
-			vmCmpBranchF64(vm, ia, ib, ic, 2);
-		},
-		RaiserOpcode.BleF64 => {
-			vmCmpBranchF64(vm, ia, ib, ic, 3);
-		},
-		RaiserOpcode.BgtF64 => {
-			vmCmpBranchF64(vm, ia, ib, ic, 4);
-		},
-		RaiserOpcode.BgeF64 => {
-			vmCmpBranchF64(vm, ia, ib, ic, 5);
 		},
 		_ => {
 			return false;
@@ -2117,10 +2331,10 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 	return true;
 }
 
-function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: int32, func: RaiserFunction, base: int32, slots: RaiserValue[]): void {
+function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: int32, func: RaiserFunction): void {
 	match (op) {
 		RaiserOpcode.Halt => {
-			const haltVal = getDyn(vm, base + ia);
+			const haltVal = getDyn(vm, ia);
 			if (ib != 1 && strandFinish(vm, haltVal)) {
 				vm.yielded = true;
 			} else {
@@ -2128,7 +2342,7 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			}
 		},
 		RaiserOpcode.Print => {
-			const val = slots[base + ia];
+			const val = getReg(vm, ia);
 			const s = raiserToString(vm.arrayHeap, val);
 			vm.output = `${vm.output}${s}\n`;
 			const sink = vm.printSink;
@@ -2150,8 +2364,8 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			vm.yielded = true;
 		},
 		RaiserOpcode.Spawn => {
-			const fut = vmSpawnClosure(vm, getDyn(vm, base + ib));
-			if (fut >= 0) setRegConform(vm, base + ia, raiserFuture(fut));
+			const fut = vmSpawnClosure(vm, getDyn(vm, ib));
+			if (fut >= 0) setRegConform(vm, ia, raiserFuture(fut));
 		},
 		RaiserOpcode.Await => {
 			vmHandleAwait(vm, ia, ib, ic);
@@ -2163,13 +2377,13 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			vmHandleModuleImport(vm, ia, ib * 256 + ic, func);
 		},
 		RaiserOpcode.FutureNew => {
-			setRegConform(vm, base + ia, raiserFuture(newFuture(vm)));
+			setRegConform(vm, ia, raiserFuture(newFuture(vm)));
 		},
 		RaiserOpcode.FutureSettle => {
-			futureComplete(vm, getDyn(vm, base + ia).intVal, getDyn(vm, base + ib));
+			futureComplete(vm, getDyn(vm, ia).intVal, getDyn(vm, ib));
 		},
 		RaiserOpcode.FutureFail => {
-			futureFail(vm, getDyn(vm, base + ia).intVal, vmExceptionText(vm, getDyn(vm, base + ib)), getDyn(vm, base + ib));
+			futureFail(vm, getDyn(vm, ia).intVal, vmExceptionText(vm, getDyn(vm, ib)), getDyn(vm, ib));
 		},
 		RaiserOpcode.Try => {
 			vm.safePoints.push(vm.ip - 1 + (ib * 256 + ic));
@@ -2180,20 +2394,18 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		RaiserOpcode.Finally => {
 			// Only reached when the guarded region completed without raising.
 			popSafePoint(vm);
-			enterFinally(vm, ia, FINALLY_NORMAL, raiserNil());
+			enterFinally(vm, ia >> 3, ib, FINALLY_NORMAL, raiserNil());
 		},
 		RaiserOpcode.FinallyEnd => {
-			const kind = getReg(vm, base + ia);
-			const held = getDyn(vm, base + ia + 1);
-			if (kind.kind != RaiserValueKind.Int) {
-				vmError(vm, `FinallyEnd reached without its Finally: R[${ia}] holds no routing`);
-			} else if (kind.intVal == FINALLY_RAISE) {
+			const kind = vm.regs.words[absOf(vm, ia)];
+			const held = getDyn(vm, operandTagged(ib, RaiserRegClass.Dyn));
+			if (kind == FINALLY_RAISE) {
 				copyValueInto(vm.currentException, held);
 				unwindStep(vm);
-			} else if (kind.intVal == FINALLY_RETURN) {
+			} else if (kind == FINALLY_RETURN) {
 				vm.ip = held.intVal as int32;
-			} else if (kind.intVal != FINALLY_NORMAL) {
-				vmError(vm, `FinallyEnd: unknown routing ${kind.intVal}`);
+			} else if (kind != FINALLY_NORMAL) {
+				vmError(vm, `FinallyEnd: unknown routing ${kind}`);
 			}
 		},
 		RaiserOpcode.Throw => {
@@ -2212,45 +2424,45 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 
 // --- Call/Ret handlers ---
 
-// An argument arrives in the register class its caller declared for the slot, and the callee holds
-// it in the class of its own parameter: a Dyn parameter gets a box, any other the value in it.
-function conformArguments(vm: RaiserVM, base: number, callee: RaiserFunction, argc: number): void {
-	const count = argc < callee.regClasses.length ? argc : callee.regClasses.length;
-	for (let i = 0; i < count; i += 1) {
-		const slot = vm.regs.slots[base + i];
-		if (slot.kind == RaiserValueKind.Box) {
-			if (callee.regClasses[i] != RaiserRegClass.Dyn) setReg(vm, base + i, heapBoxValue(vm.arrayHeap, slot.intVal));
-		} else if (slot.kind != RaiserValueKind.Nil && callee.regClasses[i] == RaiserRegClass.Dyn) {
-			vmIncref(vm, slot);
-			setRegRef(vm, base + i, RaiserValueKind.Box, heapAllocBox(vm.arrayHeap, slot));
-		}
+// The frame of the callee begins at the first word and the first ref the call site names, so an
+// argument whose class matches its parameter is already in place; one that differs is read out as a value
+// first and then written into the callee's own class, because the two layouts overlap.
+function enterCallee(vm: RaiserVM, dest: int32, calleeFuncIdx: number, site: int32): void {
+	const caller = getModuleFunc(vm.mod, vm.funcIdx);
+	const callee = vm.mod.functions[calleeFuncIdx];
+	const blocks = caller.blocks;
+	const argc = blocks[site + 2] as int32;
+	const sig = blocks[site + 3];
+	let args: RaiserValue[] | null = null;
+	if (sig < 0 || argc >= callee.sigs.length || callee.sigs[argc] != sig) {
+		args = [];
+		for (let i = 0; i < argc; i += 1) args.push(getReg(vm, blocks[site + 4 + i] as int32));
 	}
-}
-
-function enterCallee(vm: RaiserVM, destReg: number, calleeFuncIdx: number, argc: number): void {
-	// Callee's base = right at args (R[dest+1..dest+N] become callee's R[0..N-1]),
-	// so the arguments are never copied; only the frame record is written.
-	const newBase = vm.baseReg + destReg + 1;
-	const reserve = newBase + vm.mod.functions[calleeFuncIdx].maxRegs;
-	if (vm.regs.slots.length < reserve) ensureSlots(vm.regs, reserve);
+	const newWordBase = vm.wordBase + (blocks[site] as int32);
+	const newRefBase = vm.refBase + (blocks[site + 1] as int32);
+	if (vm.regs.words.length < newWordBase + callee.wordRegs) ensureWords(vm.regs, newWordBase + callee.wordRegs);
+	if (vm.regs.refs.length < newRefBase + callee.refRegs) ensureRefs(vm.regs, newRefBase + callee.refRegs);
 
 	const depth = vm.callStack.depth;
 	if (depth == vm.callStack.items.length) {
-		vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnReg: 0, baseReg: 0, spBase: 0 });
+		vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, wordBase: 0, refBase: 0, spBase: 0 });
 	}
-	vm.callStack.items[depth].funcIdx = vm.funcIdx;
-	vm.callStack.items[depth].returnIp = vm.ip;
-	vm.callStack.items[depth].returnReg = (vm.baseReg + destReg) as int32;
-	vm.callStack.items[depth].baseReg = vm.baseReg;
-	vm.callStack.items[depth].spBase = vm.safePoints.length as int32;
+	const frame = vm.callStack.items[depth];
+	frame.funcIdx = vm.funcIdx;
+	frame.returnIp = vm.ip;
+	frame.returnDest = dest;
+	frame.wordBase = vm.wordBase;
+	frame.refBase = vm.refBase;
+	frame.spBase = vm.safePoints.length as int32;
 	vm.callStack.depth = depth + 1;
 
-	vm.baseReg = newBase as int32;
+	vm.wordBase = newWordBase as int32;
+	vm.refBase = newRefBase as int32;
 	vm.funcIdx = calleeFuncIdx as int32;
 	vm.ip = 0;
-	const callee = vm.mod.functions[calleeFuncIdx];
-	if (callee.classed && argc > 0) conformArguments(vm, newBase, callee, argc);
-	when (mode != "danger") { vmCheckArguments(vm, newBase, calleeFuncIdx, argc); }
+	if (args != null) {
+		for (let i = 0; i < argc && i < callee.regOps.length; i += 1) setRegConform(vm, callee.regOps[i], args[i]);
+	}
 }
 
 function vmHandleCall(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
@@ -2289,7 +2501,7 @@ function vmRetSpecial(vm: RaiserVM, ia: int32): boolean {
 	}
 	// Top-level return — the strand is finished; the main one ends the
 	// program, but only once the remaining strands have drained.
-	const retVal = getDyn(vm, vm.baseReg + ia);
+	const retVal = getDyn(vm, ia);
 	if (strandFinish(vm, retVal)) {
 		vm.yielded = true;
 		return true;
@@ -2310,31 +2522,26 @@ function vmHandleRet(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 		vm.safePoints.length = vm.callStack.items[depth - 1].spBase;
 	}
 
-	if (vm.baseReg + ia >= vm.regs.slots.length) throw slotOutside(vm.baseReg + ia);
-	const returnedSlot = vm.baseReg + ia;
-	const returnReg = vm.callStack.items[depth - 1].returnReg;
+	const returned = getReg(vm, ia);
+	const frame = vm.callStack.items[depth - 1];
 
-	// No blanket frame-exit decref: the global register file is reused across
-	// calls, so a callee slot may hold a stale handle from a prior frame that this
-	// frame never owned — decref-ing the whole range over-decrefs it (UAF).
-	// Reclamation instead happens lazily via setReg's decref-on-overwrite when the
-	// slot is next written (frame reuse). Residual: a never-reused slot's ref lingers.
+	// No blanket frame-exit decref: the register files are reused across calls, so a callee
+	// register may hold a stale handle from a prior frame that this frame never owned —
+	// decref-ing the whole range over-decrefs it (UAF). Reclamation instead happens lazily
+	// through the counted store when the register is next written (frame reuse).
 
-	vm.funcIdx = vm.callStack.items[depth - 1].funcIdx;
-	vm.baseReg = vm.callStack.items[depth - 1].baseReg;
-	vm.ip = vm.callStack.items[depth - 1].returnIp;
-	setRegConform(vm, returnReg, vm.regs.slots[returnedSlot]);
+	vm.funcIdx = frame.funcIdx;
+	vm.wordBase = frame.wordBase;
+	vm.refBase = frame.refBase;
+	vm.ip = frame.returnIp;
+	setRegConform(vm, frame.returnDest, returned);
 }
 
 function vmHandleCallIndirect(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	if (vm.callStack.depth >= MAX_CALL_DEPTH) {
 		vmError(vm, `call stack overflow (depth ${MAX_CALL_DEPTH})`); return;
 	}
-	const funcIdxReg = getDyn(vm, vm.baseReg + ib);
-	if (funcIdxReg.kind != RaiserValueKind.Int) {
-		vmError(vm, "indirect call target is not a function"); return;
-	}
-	const calleeFuncIdx = funcIdxReg.intVal;
+	const calleeFuncIdx = vm.regs.words[absOf(vm, ib)];
 	if (calleeFuncIdx < 0 || calleeFuncIdx >= vm.mod.functions.length) {
 		vmError(vm, `function index out of bounds: ${calleeFuncIdx}`); return;
 	}
@@ -2343,15 +2550,15 @@ function vmHandleCallIndirect(vm: RaiserVM, ia: int32, ib: int32, ic: int32): vo
 
 // --- Array opcode handlers ---
 
-function vmHandleNewArray(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
+function vmHandleNewArray(vm: RaiserVM, func: RaiserFunction, ia: int32, ib: int32, ic: int32): void {
 	const handle = heapAllocArray(vm.arrayHeap);
 	const elemCount = ib;
 	for (let i = 0; i < elemCount; i = i + 1) {
-		const elem = getDyn(vm, vm.baseReg + ia + 1 + i);
+		const elem = getDyn(vm, func.blocks[ic + 4 + i] as int32);
 		heapArrayPush(vm.arrayHeap, handle, elem);
 		vmIncref(vm, elem);
 	}
-	setRegRef(vm, vm.baseReg + ia, RaiserValueKind.Array, handle);
+	setRegRef(vm, ia, RaiserValueKind.Array, handle);
 	vmMaybeCollect(vm);
 }
 
@@ -2377,23 +2584,23 @@ function vmElemIndex(vm: RaiserVM, handle: int64, idx: int64): boolean {
 }
 
 function vmHandleAddrIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const handle = vmHeapOperand(vm, getDyn(vm, vm.baseReg + ib), RaiserValueKind.Array, "an array");
+	const handle = vmHeapOperand(vm, getDyn(vm, ib), RaiserValueKind.Array, "an array");
 	if (vm.halted) return;
-	const idx = getDyn(vm, vm.baseReg + ic).intVal;
+	const idx = getDyn(vm, ic).intVal;
 	if (!vmElemIndex(vm, handle, idx)) return;
 	const data = vm.arrayHeap.arrays[handleIndex(handle)];
 	if (data.viewOff >= 0) {
-		setRegConform(vm, vm.baseReg + ia, raiserElemAddr(data.items[0].intVal, data.viewOff + idx));
+		setRegConform(vm, ia, raiserElemAddr(data.items[0].intVal, data.viewOff + idx));
 		return;
 	}
-	setRegConform(vm, vm.baseReg + ia, raiserElemAddr(handle, idx));
+	setRegConform(vm, ia, raiserElemAddr(handle, idx));
 }
 
 function vmHandleLoadDeref(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const ptr = getDyn(vm, vm.baseReg + ib);
+	const ptr = getDyn(vm, ib);
 	let held = ptr;
 	if (ptr.kind == RaiserValueKind.RegAddr) {
-		held = getReg(vm, ptr.intVal as number);
+		held = readAbs(vm, (ptr.intVal & 7) as int32, (ptr.intVal >> 3) as number);
 	} else if (ptr.kind == RaiserValueKind.GlobalAddr) {
 		held = vm.globals[ptr.intVal];
 	} else if (ptr.kind == RaiserValueKind.ElemAddr) {
@@ -2404,19 +2611,22 @@ function vmHandleLoadDeref(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 	} else if (ptr.kind == RaiserValueKind.Nil) {
 		vmError(vm, "attempt to read through a nil pointer"); return;
 	}
-	setRegConform(vm, vm.baseReg + ia, held);
+	setRegConform(vm, ia, held);
 }
 
 function vmHandleStoreDeref(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const ptr = getDyn(vm, vm.baseReg + ia);
-	const held = getReg(vm, vm.baseReg + ic);
+	const ptr = getDyn(vm, ia);
+	const held = getReg(vm, ic);
 	const val = ptr.kind == RaiserValueKind.RegAddr || ptr.kind == RaiserValueKind.GlobalAddr ? held : readDyn(vm.arrayHeap, held);
 	if (ptr.kind == RaiserValueKind.RegAddr || ptr.kind == RaiserValueKind.GlobalAddr) {
-		const dst = ptr.kind == RaiserValueKind.RegAddr ? getReg(vm, ptr.intVal as number) : vm.globals[ptr.intVal];
-		when (mode != "danger") { if (ptr.kind == RaiserValueKind.RegAddr) vmCheckWrite(vm, ptr.intVal as number, val.kind, val.intVal); }
-		vmIncref(vm, val);
-		vmDecref(vm, dst);
-		copyValueInto(dst, val);
+		if (ptr.kind == RaiserValueKind.RegAddr) {
+			writeAbs(vm, (ptr.intVal & 7) as int32, (ptr.intVal >> 3) as number, val);
+		} else {
+			const dst = vm.globals[ptr.intVal];
+			vmIncref(vm, val);
+			vmDecref(vm, dst);
+			copyValueInto(dst, val);
+		}
 	} else if (ptr.kind == RaiserValueKind.ElemAddr) {
 		const idx = ptr.floatVal as int64;
 		if (!vmElemIndex(vm, ptr.intVal, idx)) return;
@@ -2435,8 +2645,8 @@ function vmHandleStoreDeref(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 }
 
 function vmHandleLoadIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const arrVal = getDyn(vm, vm.baseReg + ib);
-	const idxVal = getDyn(vm, vm.baseReg + ic);
+	const arrVal = getDyn(vm, ib);
+	const idxVal = getDyn(vm, ic);
 	const handle = vmHeapOperand(vm, arrVal, RaiserValueKind.Array, "an array");
 	if (vm.halted) return;
 	const idx = idxVal.intVal;
@@ -2447,13 +2657,13 @@ function vmHandleLoadIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 	if (idx < 0 || idx >= arrLen) {
 		vmError(vm, `array index out of bounds: ${idx} (length ${arrLen})`); return;
 	}
-	setRegConform(vm, vm.baseReg + ia, heapArrayGet(vm.arrayHeap, handle, idx));
+	setRegConform(vm, ia, heapArrayGet(vm.arrayHeap, handle, idx));
 }
 
 function vmHandleStoreIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const arrVal = getDyn(vm, vm.baseReg + ia);
-	const idxVal = getDyn(vm, vm.baseReg + ib);
-	const val = getDyn(vm, vm.baseReg + ic);
+	const arrVal = getDyn(vm, ia);
+	const idxVal = getDyn(vm, ib);
+	const val = getDyn(vm, ic);
 	const handle = vmHeapOperand(vm, arrVal, RaiserValueKind.Array, "an array");
 	if (vm.halted) return;
 	const idx = idxVal.intVal;
@@ -2470,19 +2680,19 @@ function vmHandleStoreIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 }
 
 function vmHandleArrayLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const arrVal = getDyn(vm, vm.baseReg + ib);
+	const arrVal = getDyn(vm, ib);
 	const handle = vmHeapOperand(vm, arrVal, RaiserValueKind.Array, "an array");
 	if (vm.halted) return;
 	if (handleIndex(handle) >= vm.arrayHeap.arrays.length) {
 		vmError(vm, `array handle out of bounds: ${handle}`); return;
 	}
 	const len = heapArrayLen(vm.arrayHeap, handle);
-	setRegInt(vm, vm.baseReg + ia, len as int64);
+	setRegInt(vm, ia, len as int64);
 }
 
 function vmHandleArrayPush(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const arrVal = getDyn(vm, vm.baseReg + ia);
-	const val = getDyn(vm, vm.baseReg + ib);
+	const arrVal = getDyn(vm, ia);
+	const val = getDyn(vm, ib);
 	const handle = vmHeapOperand(vm, arrVal, RaiserValueKind.Array, "an array");
 	if (vm.halted) return;
 	if (handleIndex(handle) >= vm.arrayHeap.arrays.length) {
@@ -2496,8 +2706,8 @@ function vmHandleArrayPush(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 }
 
 function vmHandleArraySetLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const arrVal = getDyn(vm, vm.baseReg + ia);
-	const lenVal = getDyn(vm, vm.baseReg + ib);
+	const arrVal = getDyn(vm, ia);
+	const lenVal = getDyn(vm, ib);
 	const handle = vmHeapOperand(vm, arrVal, RaiserValueKind.Array, "an array");
 	if (vm.halted) return;
 	if (handleIndex(handle) >= vm.arrayHeap.arrays.length) {
@@ -2520,9 +2730,9 @@ function vmHandleArraySetLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): voi
 }
 
 function vmHandleArraySlice(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const srcVal = getDyn(vm, vm.baseReg + ib);
-	const start = getDyn(vm, vm.baseReg + ic).intVal;
-	const end = getDyn(vm, vm.baseReg + ic + 1).intVal;
+	const srcVal = getDyn(vm, ib);
+	const start = getDyn(vm, ic).intVal;
+	const end = getDyn(vm, ic + 8).intVal;
 	const handle = vmHeapOperand(vm, srcVal, RaiserValueKind.Array, "an array");
 	if (vm.halted) return;
 	if (handleIndex(handle) >= vm.arrayHeap.arrays.length) {
@@ -2541,7 +2751,7 @@ function vmHandleArraySlice(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 	}
 	const view = heapAllocView(vm.arrayHeap, base, off, (end - start) as int32);
 	vmIncref(vm, base);
-	setRegRef(vm, vm.baseReg + ia, RaiserValueKind.Array, view);
+	setRegRef(vm, ia, RaiserValueKind.Array, view);
 	vmMaybeCollect(vm);
 }
 
@@ -2550,12 +2760,12 @@ function vmHandleArraySlice(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 function vmHandleNewObject(vm: RaiserVM, ia: int32, ib: int32, func: RaiserFunction): void {
 	const handle = heapAllocObject(vm.objectHeap);
 	if (ib > 0) vm.objectHeap.objects[handleIndex(handle)].classType = func.classTypes[ib - 1];
-	setRegRef(vm, vm.baseReg + ia, RaiserValueKind.Object, handle);
+	setRegRef(vm, ia, RaiserValueKind.Object, handle);
 	vmMaybeCollect(vm);
 }
 
 function vmHandleLoadField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: int32, ib: int32, ic: int32): void {
-	const objVal = getDyn(vm, vm.baseReg + ib);
+	const objVal = getDyn(vm, ib);
 	const handle = vmHeapOperand(vm, objVal, RaiserValueKind.Object, "an object");
 	if (vm.halted) return;
 	if (handleIndex(handle) >= vm.objectHeap.objects.length) {
@@ -2569,7 +2779,7 @@ function vmHandleLoadField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: in
 	if (idx >= 0 && idx < fields.length) {
 		if (fields[idx].name == func.names[ic]) {
 			// Cache hit — O(1) access
-			setRegConform(vm, vm.baseReg + ia, fields[idx].value);
+			setRegConform(vm, ia, fields[idx].value);
 			return;
 		}
 	}
@@ -2580,22 +2790,17 @@ function vmHandleLoadField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: in
 	while (fi < fields.length) {
 		if (fields[fi].name == fieldName) {
 			func.fieldCache[pc] = fi;
-			setRegConform(vm, vm.baseReg + ia, fields[fi].value);
+			setRegConform(vm, ia, fields[fi].value);
 			return;
 		}
 		fi = fi + 1;
 	}
 	// Field not found — load nil
-	const dst = getReg(vm, vm.baseReg + ia);
-	when (mode != "danger") { vmCheckWrite(vm, vm.baseReg + ia, RaiserValueKind.Nil, 0); }
-	vmDecref(vm, dst);
-	dst.kind = RaiserValueKind.Nil;
-	dst.intVal = 0;
-	dst.floatVal = 0.0;
+	setRegConform(vm, ia, raiserNil());
 }
 
 function vmHandleStoreField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: int32, ib: int32, ic: int32): void {
-	const objVal = getDyn(vm, vm.baseReg + ia);
+	const objVal = getDyn(vm, ia);
 	const handle = vmHeapOperand(vm, objVal, RaiserValueKind.Object, "an object");
 	if (vm.halted) return;
 	if (handleIndex(handle) >= vm.objectHeap.objects.length) {
@@ -2603,7 +2808,7 @@ function vmHandleStoreField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: i
 	}
 	const obj = vm.objectHeap.objects[handleIndex(handle)];
 	const fields = obj.fields;
-	const val = getDyn(vm, vm.baseReg + ic);
+	const val = getDyn(vm, ic);
 
 	// MIC: try cached index first
 	let idx = func.fieldCache[pc];
@@ -2643,17 +2848,17 @@ function vmHandleStoreField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: i
 // destination write releases the old value, which may be the source's own string.
 
 function vmHandleConcatStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const lhs = getDyn(vm, vm.baseReg + ib);
-	const rhs = getDyn(vm, vm.baseReg + ic);
+	const lhs = getDyn(vm, ib);
+	const rhs = getDyn(vm, ic);
 	if (lhs.kind == RaiserValueKind.String && rhs.kind == RaiserValueKind.String) {
 		if (ia == ib && heapStringHeldOnce(vm.arrayHeap, lhs) && rhs.intVal != lhs.intVal) {
 			heapAppend(vm.arrayHeap, lhs.intVal, rhs);
 			return;
 		}
-		setRegRef(vm, vm.baseReg + ia, RaiserValueKind.String, heapConcat(vm.arrayHeap, lhs, rhs).intVal);
+		setRegRef(vm, ia, RaiserValueKind.String, heapConcat(vm.arrayHeap, lhs, rhs).intVal);
 		return;
 	}
-	setRegString(vm, vm.baseReg + ia, raiserToString(vm.arrayHeap, lhs) + raiserToString(vm.arrayHeap, rhs));
+	setRegString(vm, ia, raiserToString(vm.arrayHeap, lhs) + raiserToString(vm.arrayHeap, rhs));
 }
 
 function vmHandleEqVal(vm: RaiserVM, ia: int32, ib: int32, ic: int32, wanted: boolean): void {
@@ -2663,25 +2868,25 @@ function vmHandleEqVal(vm: RaiserVM, ia: int32, ib: int32, ic: int32, wanted: bo
 }
 
 function vmHandleEqStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	if (heapStringEquals(vm.arrayHeap, getDyn(vm, vm.baseReg + ia), getDyn(vm, vm.baseReg + ib))) {
+	if (heapStringEquals(vm.arrayHeap, getDyn(vm, ia), getDyn(vm, ib))) {
 		vm.ip = vm.ip + (ic as int32);
 	}
 }
 
 function vmHandleNeStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	if (!heapStringEquals(vm.arrayHeap, getDyn(vm, vm.baseReg + ia), getDyn(vm, vm.baseReg + ib))) {
+	if (!heapStringEquals(vm.arrayHeap, getDyn(vm, ia), getDyn(vm, ib))) {
 		vm.ip = vm.ip + (ic as int32);
 	}
 }
 
 function vmHandleLtStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	if (heapStringLess(vm.arrayHeap, getDyn(vm, vm.baseReg + ia), getDyn(vm, vm.baseReg + ib))) {
+	if (heapStringLess(vm.arrayHeap, getDyn(vm, ia), getDyn(vm, ib))) {
 		vm.ip = vm.ip + (ic as int32);
 	}
 }
 
 function vmHandleLeStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	if (heapStringLessEq(vm.arrayHeap, getDyn(vm, vm.baseReg + ia), getDyn(vm, vm.baseReg + ib))) {
+	if (heapStringLessEq(vm.arrayHeap, getDyn(vm, ia), getDyn(vm, ib))) {
 		vm.ip = vm.ip + (ic as int32);
 	}
 }
@@ -2689,21 +2894,21 @@ function vmHandleLeStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 // --- String method handlers ---
 
 function vmHandleStrLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const length = heapStringLength(vm.arrayHeap, getDyn(vm, vm.baseReg + ib));
-	setRegInt(vm, vm.baseReg + ia, length);
+	const length = heapStringLength(vm.arrayHeap, getDyn(vm, ib));
+	setRegInt(vm, ia, length);
 }
 
 function vmHandleStrCharAt(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const source = getDyn(vm, vm.baseReg + ib);
-	const i = getDyn(vm, vm.baseReg + ic).intVal;
-	setRegString(vm, vm.baseReg + ia, i >= 0 && i < heapStringLength(vm.arrayHeap, source) ? heapStringSlice(vm.arrayHeap, source, i as int32, (i + 1) as int32) : "");
+	const source = getDyn(vm, ib);
+	const i = getDyn(vm, ic).intVal;
+	setRegString(vm, ia, i >= 0 && i < heapStringLength(vm.arrayHeap, source) ? heapStringSlice(vm.arrayHeap, source, i as int32, (i + 1) as int32) : "");
 }
 
 function vmHandleStrSlice(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const source = getDyn(vm, vm.baseReg + ib);
-	const start = getDyn(vm, vm.baseReg + ic).intVal;
-	const end = getDyn(vm, vm.baseReg + ic + 1).intVal;
-	setRegString(vm, vm.baseReg + ia, heapStringSlice(vm.arrayHeap, source, start as int32, end as int32));
+	const source = getDyn(vm, ib);
+	const start = getDyn(vm, ic).intVal;
+	const end = getDyn(vm, ic + 8).intVal;
+	setRegString(vm, ia, heapStringSlice(vm.arrayHeap, source, start as int32, end as int32));
 }
 
 // --- Float value extraction (handles int-to-float promotion) ---
@@ -2735,48 +2940,48 @@ function vmConvToChar(vm: RaiserVM, ia: int32, ib: int32, ic: int32, src: Raiser
 			vmError(vm, `value ${src.floatVal} not in range 0 .. 255`);
 			return;
 		}
-		setRegInt(vm, vm.baseReg + ia, src.floatVal as int64);
+		setRegInt(vm, ia, src.floatVal as int64);
 		return;
 	}
 	if (src.intVal < 0 || src.intVal > 255) {
 		vmError(vm, `value ${fromUnsigned ? `${src.intVal as uint64}` : `${src.intVal}`} not in range 0 .. 255`);
 		return;
 	}
-	setRegInt(vm, vm.baseReg + ia, src.intVal);
+	setRegInt(vm, ia, src.intVal);
 }
 
 function vmHandleConv(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const src = getDyn(vm, vm.baseReg + ib);
+	const src = getDyn(vm, ib);
 	const cls = convTarget(ic);
 	const fromUnsigned = convSource(ic) == (RaiserConvClass.U64 as int32);
 	if (cls == RaiserConvClass.F64Bits) {
-		setRegInt(vm, vm.baseReg + ia, int64Bits(msFloat64Bits(asNum(src))));
+		setRegInt(vm, ia, msFloat64Bits(asNum(src)));
 		return;
 	}
 	if (cls == RaiserConvClass.I32Wrap) {
-		setRegInt(vm, vm.baseReg + ia, msToInt32(asNum(src)) as int64);
+		setRegInt(vm, ia, msToInt32(asNum(src)) as int64);
 		return;
 	}
 	if (cls == RaiserConvClass.HandleBits) {
 		if (src.kind == RaiserValueKind.Nil) {
-			setRegInt(vm, vm.baseReg + ia, 0);
+			setRegInt(vm, ia, 0);
 		} else if (src.kind == RaiserValueKind.Object || src.kind == RaiserValueKind.Array) {
-			setRegInt(vm, vm.baseReg + ia, src.intVal);
+			setRegInt(vm, ia, src.intVal);
 		} else {
 			vmError(vm, `no identity bits for a value of kind ${src.kind}`);
 		}
 		return;
 	}
 	if (cls == RaiserConvClass.F64 || cls == RaiserConvClass.F32) {
-		setRegFloat(vm, vm.baseReg + ia, convToFloat(src, fromUnsigned, cls == RaiserConvClass.F32));
+		setRegFloat(vm, ia, convToFloat(src, fromUnsigned, cls == RaiserConvClass.F32));
 		return;
 	}
 	if (cls == RaiserConvClass.Str && convSource(ic) == (RaiserConvClass.Char as int32)) {
-		setRegString(vm, vm.baseReg + ia, fromCodePoint(src.intVal >= 0 && src.intVal < 0x80 ? src.intVal as int32 : 0xFFFD));
+		setRegString(vm, ia, fromCodePoint(src.intVal >= 0 && src.intVal < 0x80 ? src.intVal as int32 : 0xFFFD));
 		return;
 	}
 	if (cls == RaiserConvClass.Str) {
-		setRegString(vm, vm.baseReg + ia, fromUnsigned && src.kind == RaiserValueKind.Int ? `${src.intVal as uint64}` : raiserToString(vm.arrayHeap, src));
+		setRegString(vm, ia, fromUnsigned && src.kind == RaiserValueKind.Int ? `${src.intVal as uint64}` : raiserToString(vm.arrayHeap, src));
 		return;
 	}
 	if (cls == RaiserConvClass.Char) {
@@ -2791,7 +2996,7 @@ function vmHandleConv(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 		return;
 	}
 	if (cls == RaiserConvClass.U64 && src.kind == RaiserValueKind.Float && src.floatVal >= 9223372036854775808.0) {
-		setRegInt(vm, vm.baseReg + ia, int64Bits(src.floatVal as uint64));
+		setRegInt(vm, ia, int64Bits(src.floatVal as uint64));
 		return;
 	}
 	const hi: int64 = bits == 64
@@ -2808,7 +3013,7 @@ function vmHandleConv(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	}
 	const whole: int64 = src.kind == RaiserValueKind.Float ? (src.floatVal as int64) : src.intVal;
 	if (bits == 64) {
-		setRegInt(vm, vm.baseReg + ia, whole);
+		setRegInt(vm, ia, whole);
 		return;
 	}
 	if (signed) {
@@ -2816,81 +3021,10 @@ function vmHandleConv(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 			vmError(vm, `value ${whole} not in range ${lo} .. ${hi}`);
 			return;
 		}
-		setRegInt(vm, vm.baseReg + ia, whole);
+		setRegInt(vm, ia, whole);
 		return;
 	}
-	setRegInt(vm, vm.baseReg + ia, whole & (((1 as int64) << (bits as int64)) - 1));
-}
-
-// --- Float arithmetic handlers ---
-
-function vmHandleAddF64(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const lhs = getReg(vm, vm.baseReg + ib);
-	const rhs = getReg(vm, vm.baseReg + ic);
-	const dst = getReg(vm, vm.baseReg + ia);
-	when (mode != "danger") { vmCheckWrite(vm, vm.baseReg + ia, RaiserValueKind.Float, 0); }
-	vmDecref(vm, dst);
-	dst.kind = RaiserValueKind.Float;
-	dst.floatVal = asNum(lhs) + asNum(rhs);
-	dst.intVal = 0;
-}
-
-function vmHandleSubF64(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const lhs = getReg(vm, vm.baseReg + ib);
-	const rhs = getReg(vm, vm.baseReg + ic);
-	const dst = getReg(vm, vm.baseReg + ia);
-	when (mode != "danger") { vmCheckWrite(vm, vm.baseReg + ia, RaiserValueKind.Float, 0); }
-	vmDecref(vm, dst);
-	dst.kind = RaiserValueKind.Float;
-	dst.floatVal = asNum(lhs) - asNum(rhs);
-	dst.intVal = 0;
-}
-
-function vmHandleMulF64(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const lhs = getReg(vm, vm.baseReg + ib);
-	const rhs = getReg(vm, vm.baseReg + ic);
-	const dst = getReg(vm, vm.baseReg + ia);
-	when (mode != "danger") { vmCheckWrite(vm, vm.baseReg + ia, RaiserValueKind.Float, 0); }
-	vmDecref(vm, dst);
-	dst.kind = RaiserValueKind.Float;
-	dst.floatVal = asNum(lhs) * asNum(rhs);
-	dst.intVal = 0;
-}
-
-function vmHandleDivF64(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const lhs = getReg(vm, vm.baseReg + ib);
-	const rhs = getReg(vm, vm.baseReg + ic);
-	const dst = getReg(vm, vm.baseReg + ia);
-	when (mode != "danger") { vmCheckWrite(vm, vm.baseReg + ia, RaiserValueKind.Float, 0); }
-	vmDecref(vm, dst);
-	dst.kind = RaiserValueKind.Float;
-	dst.floatVal = asNum(lhs) / asNum(rhs);
-	dst.intVal = 0;
-}
-
-function vmHandleNegF64(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const src = getReg(vm, vm.baseReg + ib);
-	const dst = getReg(vm, vm.baseReg + ia);
-	when (mode != "danger") { vmCheckWrite(vm, vm.baseReg + ia, RaiserValueKind.Float, 0); }
-	vmDecref(vm, dst);
-	dst.kind = RaiserValueKind.Float;
-	dst.floatVal = -asNum(src);
-	dst.intVal = 0;
-}
-
-// --- Float compare-branch handlers ---
-
-function vmCmpBranchF64(vm: RaiserVM, ia: int32, ib: int32, ic: int32, cmpOp: number): void {
-	const l = asNum(getReg(vm, vm.baseReg + ia));
-	const r = asNum(getReg(vm, vm.baseReg + ib));
-	let cond = false;
-	if (cmpOp == 0) { cond = l == r; }
-	else if (cmpOp == 1) { cond = l != r; }
-	else if (cmpOp == 2) { cond = l < r; }
-	else if (cmpOp == 3) { cond = l <= r; }
-	else if (cmpOp == 4) { cond = l > r; }
-	else if (cmpOp == 5) { cond = l >= r; }
-	if (cond) { vm.ip = vm.ip + (ic as int32); }
+	setRegInt(vm, ia, whole & (((1 as int64) << (bits as int64)) - 1));
 }
 
 // --- Bitwise handlers ---
@@ -2904,7 +3038,6 @@ function vmCmpBranchF64(vm: RaiserVM, ia: int32, ib: int32, ic: int32, cmpOp: nu
 // type-specific marshalling.
 
 function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const base = vm.baseReg;
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
 	const nameConst = getFuncConst(func, ib);
 	if (nameConst.kind != RaiserValueKind.String) {
@@ -2923,12 +3056,12 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 		return;
 	}
 
-	// Collect args from R[A+1] .. R[A+C]
+	const argc = func.blocks[ic + 2] as int32;
 	const args: RaiserValue[] = [];
 	let i = 0;
-	while (i < ic) {
+	while (i < argc) {
 		const argBox = raiserNil();
-		copyValueInto(argBox, getDyn(vm, base + ia + 1 + i));
+		copyValueInto(argBox, getDyn(vm, func.blocks[ic + 4 + i] as int32));
 		args.push(argBox);
 		i = i + 1;
 	}
@@ -2940,15 +3073,18 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	const prevArgv = activeProgramArgv();
 	setActiveHostHeaps(vm.objectHeap, vm.arrayHeap);
 	setActiveProgramArgv(vm.programArgv);
-	const outerFloor = vm.frameFloor;
+	const outerWordFloor = vm.wordFloor;
+	const outerRefFloor = vm.refFloor;
 	const suspended = vm.suspendedRuns.length;
-	vm.frameFloor = vm.regs.slots.length;
+	vm.wordFloor = vm.regs.words.length;
+	vm.refFloor = vm.regs.refs.length;
 	const result = fn(args);
 	if (vm.suspendedRuns.length > suspended) {
 		resumeRun(vm, vm.suspendedRuns[suspended]);
 		vm.suspendedRuns.shrink(suspended);
 	}
-	vm.frameFloor = outerFloor;
+	vm.wordFloor = outerWordFloor;
+	vm.refFloor = outerRefFloor;
 	if (prevObjHeap != null && prevArrHeap != null) {
 		setActiveHostHeaps(prevObjHeap, prevArrHeap);
 	}
@@ -2966,7 +3102,7 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 		return;
 	}
 
-	setRegConform(vm, base + ia, result);
+	setRegConform(vm, ia, result);
 }
 
 // --- Stack trace ---
@@ -3034,30 +3170,6 @@ test "halt returns constant" {
 	assert vm.exitValue.intVal == 42;
 }
 
-test "a register keeps its box: ops write into it, and a string left in it is cleared" {
-	const vm = createVM(makeTestModule(
-		[
-			raiserABx(RaiserOpcode.LoadConst, 0, 0),
-			raiserABC(RaiserOpcode.Move, 1, 0, 0),
-			raiserABx(RaiserOpcode.LoadConst, 3, 1),
-			raiserABC(RaiserOpcode.AddI64, 2, 0, 1),
-			raiserABC(RaiserOpcode.AddI64, 3, 0, 1),
-			raiserABC(RaiserOpcode.AddI64, 0, 0, 0),
-			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-		],
-		[raiserInt(7), raiserConstString("old")]
-	));
-	const r0 = vm.regs.slots[0];
-	const r1 = vm.regs.slots[1];
-	const r2 = vm.regs.slots[2];
-	const r3 = vm.regs.slots[3];
-	execLoop(vm);
-	assert r0.intVal == 14;
-	assert r1.intVal == 7;
-	assert r2.intVal == 14;
-	assert r3.kind == RaiserValueKind.Int && r3.intVal == 14;
-}
-
 function classedModule(code: RaiserInstruction[], constants: RaiserValue[], classes: RaiserRegClass[]): RaiserModule {
 	const func = createRaiserFunction("classed", code, constants, 0, 0, classes.length, classes);
 	return createRaiserModule("classed", [func], 0);
@@ -3070,18 +3182,6 @@ test "a register write of a kind its class does not hold names the register, its
 		[RaiserRegClass.Word, RaiserRegClass.Dyn]
 	));
 	assert word.error.indexOf("internal: register R0 of classed is Word, got Nil") >= 0, word.error;
-	const ref = execModule(classedModule(
-		[raiserABx(RaiserOpcode.LoadConst, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)],
-		[raiserInt(3)],
-		[RaiserRegClass.Ref, RaiserRegClass.Dyn]
-	));
-	assert ref.error.indexOf("internal: register R0 of classed is Ref, got Int") >= 0, ref.error;
-	const dyn = execModule(classedModule(
-		[raiserABx(RaiserOpcode.LoadConst, 0, 0), raiserABC(RaiserOpcode.LoadNil, 1, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)],
-		[raiserInt(3)],
-		[RaiserRegClass.Dyn, RaiserRegClass.Dyn]
-	));
-	assert dyn.error.indexOf("internal: register R0 of classed is Dyn, got Int") >= 0, dyn.error;
 	const boxed = execModule(classedModule(
 		[raiserABx(RaiserOpcode.LoadConst, 0, 0), raiserABC(RaiserOpcode.Box, 1, 0, 0), raiserABC(RaiserOpcode.LoadNil, 2, 0, 0), raiserABC(RaiserOpcode.Halt, 1, 0, 0)],
 		[raiserInt(3)],
@@ -3126,7 +3226,7 @@ test "Unbox of nil into a word register names the register" {
 		[],
 		[RaiserRegClass.Dyn, RaiserRegClass.Word]
 	));
-	assert vm.error.indexOf("internal: unbox of nil into the word register R1 of classed") >= 0, vm.error;
+	assert vm.error.indexOf("internal: unbox of nil into the word register R0 of classed") >= 0, vm.error;
 }
 
 test "Unbox into a ref register reads a boxed run-time string back" {
@@ -3632,7 +3732,7 @@ test "ArraySetLen with C = 1 accepts a valid count without growing" {
 		],
 		[raiserInt(3)]
 	));
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.exitValue.intVal == 0;
 }
 
@@ -3876,7 +3976,7 @@ test "orc: a string op that writes its own source register reads the source firs
 		],
 		[raiserConstString("ab"), raiserConstString("cd"), raiserInt(1), raiserInt(3), raiserInt(0)]
 	), "orc");
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vmText(vm, vm.exitValue) == "b";
 	assert heapStringLive(vm.arrayHeap) == 1;
 }
@@ -3892,16 +3992,16 @@ test "releasing the heaps leaves no register or global holding a string of the c
 		[raiserConstString("ab"), raiserConstString("cd")]
 	), "arena");
 	execLoop(vm);
-	assert vm.error == "";
-	assert vm.regs.slots[2].kind == RaiserValueKind.String && vm.regs.slots[2].intVal != 0 && handleHeapKind(vm.regs.slots[2].intVal) == RaiserHeapKind.String;
+	assert vm.error == "", vm.error;
+	assert vm.regs.refs[2] != 0 && handleHeapKind(vm.regs.refs[2]) == RaiserHeapKind.String;
 	vmReleaseHeaps(vm);
-	for (const slot of vm.regs.slots) {
-		assert slot.kind != RaiserValueKind.String || handleHeapKind(slot.intVal) != RaiserHeapKind.String;
+	for (const h of vm.regs.refs) {
+		assert handleHeapKind(h) != RaiserHeapKind.String;
 	}
 	vm.ip = 0;
 	vm.halted = false;
 	execLoop(vm);
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vmText(vm, vm.exitValue) == "abcd";
 }
 
@@ -4078,15 +4178,25 @@ test "forward jumps are free; only back-edges consume the budget" {
 	const funcs: RaiserFunction[] = [func];
 	const mod = createRaiserModule("test", funcs, 0);
 	const vm = execModule(mod);
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.loopCount == 3;
 	assert vm.exitValue.intVal == 0;
+}
+
+// An opcode whose operands all name register 0 can name two classes for it; those take one register per operand.
+function opcodeModule(i: int32, b: number, c: number): RaiserModule {
+	return makeTestModule([raiserABC(i as RaiserOpcode, 0, b, c), raiserABC(RaiserOpcode.Halt, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], [raiserConstString("missingFn")]);
 }
 
 test "every opcode reaches a branch of the dispatch" {
 	for (let i: int32 = 0; i <= (RaiserOpcode.MulU64 as int32); i += 1) {
 		// a constant, a global and a copy plan give CallHost, LoadGlobal, StoreGlobal and CopyValue an operand to read
-		const mod = makeTestModule([raiserABC(i as RaiserOpcode, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], [raiserConstString("missingFn")]);
+		let mod: RaiserModule;
+		try {
+			mod = opcodeModule(i, 0, 0);
+		} catch (e) {
+			mod = opcodeModule(i, 1, 2);
+		}
 		mod.globalCount = 1;
 		mod.functions[0].copyPlans.push({ kind: RaiserCopyKind.Preserve, names: [], children: [], discriminants: [] });
 		const vm = execModule(mod);
@@ -4140,7 +4250,7 @@ test "CallHost echo string roundtrip" {
 	];
 	const consts: RaiserValue[] = [raiserConstString("echo"), raiserConstString("hello")];
 	const vm = execModule(makeTestModule(code, consts));
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.exitValue.kind == RaiserValueKind.String;
 	assert vmText(vm, vm.exitValue) == "hello";
 }
@@ -4160,7 +4270,7 @@ test "CallHost two-arg native" {
 	];
 	const consts: RaiserValue[] = [raiserConstString("add"), raiserInt(10), raiserInt(32)];
 	const vm = execModule(makeTestModule(code, consts));
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.exitValue.intVal == 42;
 }
 
@@ -4177,7 +4287,7 @@ test "CallHost zero-arg native" {
 	];
 	const consts: RaiserValue[] = [raiserConstString("seven")];
 	const vm = execModule(makeTestModule(code, consts));
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.exitValue.intVal == 7;
 }
 
@@ -4231,7 +4341,7 @@ test "a recoverable host error reaches the guest catch after a fatal host error"
 	const fatal = execHostRaiseInCatch(true);
 	assert fatal.error == "host failure";
 	const vm = execHostRaiseInCatch(false);
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.output == "host failure\nfinally\n";
 	assert vmText(vm, vm.exitValue) == "host failure";
 	assert vm.safePoints.length == 0;
@@ -4316,7 +4426,7 @@ test "restricted CallHost allows a classified pure host" {
 	vm.hostCallsRestricted = true;
 	vm.hostPolicySource = "/cache/good.ms";
 	execLoop(vm);
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.exitValue.intVal == 7;
 }
 
@@ -4371,34 +4481,6 @@ test "array negative index" {
 	assert vm.halted;
 }
 
-test "store to invalid array handle" {
-	const vm = execModule(makeTestModule(
-		[
-			raiserABx(RaiserOpcode.LoadConst, 0, 0),     // R0 = 999 (bad handle)
-			raiserABx(RaiserOpcode.LoadConst, 1, 1),     // R1 = 0 (index)
-			raiserABx(RaiserOpcode.LoadConst, 2, 1),     // R2 = 0 (value)
-			raiserABC(RaiserOpcode.StoreIndex, 0, 1, 2), // R0[0] = 0 — bad handle
-			raiserABC(RaiserOpcode.Halt, 0, 0, 0),
-		],
-		[raiserInt(999), raiserInt(0)]
-	));
-	assert vm.error.length > 0;
-	assert vm.halted;
-}
-
-test "object handle out of bounds" {
-	const vm = execModule(makeTestModule(
-		[
-			raiserABx(RaiserOpcode.LoadConst, 0, 0),     // R0 = -1 (bad handle)
-			raiserABC(RaiserOpcode.LoadField, 1, 0, 1),  // R1 = R0.field — bad handle
-			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
-		],
-		[raiserInt(-1), raiserConstString("x")]
-	));
-	assert vm.error.length > 0;
-	assert vm.halted;
-}
-
 test "a field read through nil is a nil access, not a read of a live object" {
 	const vm = execModule(makeTestModule(
 		[
@@ -4428,20 +4510,6 @@ test "a field write through nil is a nil access" {
 	));
 	assert vm.halted;
 	assert vm.error == "attempt to access a nil address";
-}
-
-test "an integer is not an object handle" {
-	const vm = execModule(makeTestModule(
-		[
-			raiserABC(RaiserOpcode.NewObject, 0, 0, 0),
-			raiserABx(RaiserOpcode.LoadConst, 1, 1),
-			raiserABC(RaiserOpcode.LoadField, 2, 1, 0),
-			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-		],
-		[raiserConstString("kind"), raiserInt(0)]
-	));
-	assert vm.halted;
-	assert vm.error.indexOf("expected an object", 0) >= 0;
 }
 
 test "an element read through nil is a nil access, not a read of a live array" {
@@ -4657,10 +4725,10 @@ test "vmCallFunction: a host call that runs the VM again resumes the run that ma
 		return raiserInt(first.intVal + second.intVal);
 	});
 	const r = vmCallFunction(vm, 1, [raiserInt(5)]);
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert r.intVal == 218;
 	assert vm.suspendedRuns.length == 0;
-	assert vm.frameFloor == 0;
+	assert vm.wordFloor == 0 && vm.refFloor == 0;
 }
 
 test "vmCallFunction: a host call made two frames deep returns through the frames it left" {
@@ -4698,11 +4766,11 @@ test "vmCallFunction: a host call made two frames deep returns through the frame
 		return raiserInt(first.intVal + second.intVal);
 	});
 	const r = vmCallFunction(vm, 3, [raiserInt(5)]);
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert r.intVal == 23;
 	assert vm.callStack.depth == 0;
 	assert vm.suspendedRuns.length == 0;
-	assert vm.frameFloor == 0;
+	assert vm.wordFloor == 0 && vm.refFloor == 0;
 }
 
 // --- Strand scheduling ---
@@ -4724,7 +4792,7 @@ test "global slots remain independent across strand heaps" {
 	copyValueInto(vm.globals[0], raiserInt(3));
 	vmSpawnStrand(vm, 1);
 	execLoop(vm);
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.exitValue.intVal == 3;
 	assert vm.sched.strands.items[1].globals[0].intVal == 9;
 }
@@ -4863,7 +4931,7 @@ test "spawn returns a future the strand completes, await reads it" {
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const mod = createRaiserModule("t", funcs, 0);
 	const vm = execModule(mod, "arena");
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.output == "7\n";
 	assert vm.exitValue.intVal == 7;
 	assert vm.sched.futures.items.length == 1;
@@ -4891,7 +4959,7 @@ test "a ref result crosses three heaps: producer, future, reader" {
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const mod = createRaiserModule("t", funcs, 0);
 	const vm = execModule(mod, "arena");
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	// The value survives being materialized twice — out of the strand that
 	// built it, then out of the future's own storage into the reader.
 	assert vm.output == "42\n";
@@ -4930,7 +4998,7 @@ test "a spawned strand writes to its own copy of the captured env" {
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const mod = createRaiserModule("t", funcs, 0);
 	const vm = execModule(mod, "arena");
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	// C would let the child write straight through the borrow; here the child
 	// owns a copy, so the parent still reads what it stored (Amendment J).
 	assert vm.output == "7\n";
@@ -4966,7 +5034,7 @@ test "await parks the reader until the future completes" {
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const mod = createRaiserModule("t", funcs, 0);
 	const vm = execModule(mod, "arena");
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.output == "1\n2\n3\n";
 }
 
@@ -4988,7 +5056,7 @@ test "a finished future can be read again" {
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const mod = createRaiserModule("t", funcs, 0);
 	const vm = execModule(mod, "arena");
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.output == "7\n7\n";
 }
 
@@ -5013,7 +5081,7 @@ test "main ending drains the strands it left running" {
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const mod = createRaiserModule("t", funcs, 0);
 	const vm = execModule(mod, "arena");
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.output.length == 4;
 	assert vm.sched.strands.items[1].status == RaiserStrandStatus.Done;
 	assert vm.exitValue.intVal == 1;
@@ -5072,7 +5140,7 @@ test "main ending waits for a strand parked on a pending timer" {
 	const funcs: RaiserFunction[] = [yieldingMain(0), sleepingWorker(20)];
 	const before = msMonoTimeMs();
 	const vm = execModule(createRaiserModule("t", funcs, 0), "orc");
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.output == "1\n2\n";
 	assert msMonoTimeMs() - before >= 20;
 }
@@ -5080,7 +5148,7 @@ test "main ending waits for a strand parked on a pending timer" {
 test "process.exit drops a pending timer" {
 	const funcs: RaiserFunction[] = [yieldingMain(1), sleepingWorker(20)];
 	const vm = execModule(createRaiserModule("t", funcs, 0), "orc");
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.output == "1\n";
 	assert vm.sched.timers.items.length == 1;
 }
@@ -5135,7 +5203,7 @@ test "throw lands in the enclosing catch, then the finally runs" {
 		],
 		[raiserInt(5), raiserInt(9)]
 	));
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.output == "5\n9\n";
 	assert vm.exitValue.intVal == 5;
 	assert vm.safePoints.length == 0;
@@ -5160,7 +5228,7 @@ test "no throw skips the catch and still runs the finally" {
 		],
 		[raiserInt(7), raiserInt(9)]
 	));
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.output == "7\n9\n";
 	assert vm.safePoints.length == 0;
 }
@@ -5201,7 +5269,7 @@ test "a throw unwinds out of the callee into the caller's catch" {
 	const fBoom = createRaiserFunction("boom", boomCode, [raiserInt(42)], 0, 0, 4);
 	const funcs: RaiserFunction[] = [fMain, fBoom];
 	const vm = execModule(createRaiserModule("t", funcs, 0), "arena");
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	// The statement after the throwing call must not run.
 	assert vm.output == "42\n";
 	assert vm.exitValue.intVal == 42;
@@ -5227,7 +5295,7 @@ test "a returning callee leaves no handler behind and its frame record is reused
 	const fGuarded = createRaiserFunction("guarded", guardedCode, [raiserInt(7)], 0, 0, 4);
 	const funcs: RaiserFunction[] = [fMain, fGuarded];
 	const vm = execModule(createRaiserModule("t", funcs, 0), "arena");
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.exitValue.intVal == 7;
 	assert vm.safePoints.length == 0;
 	assert vm.callStack.depth == 0;
@@ -5265,7 +5333,7 @@ test "a finally on the way out runs before the outer catch sees the throw" {
 	const fInner = createRaiserFunction("inner", innerCode, [raiserInt(8), raiserInt(6)], 0, 0, 4);
 	const funcs: RaiserFunction[] = [fMain, fInner];
 	const vm = execModule(createRaiserModule("t", funcs, 0), "arena");
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.output == "6\n8\n";
 }
 
@@ -5294,7 +5362,7 @@ test "a throw in a spawned strand fails its future and re-raises in the reader" 
 	const fWorker = createRaiserFunction("worker", workerCode, [raiserConstString("boom")], 0, 0, 4);
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const vm = execModule(createRaiserModule("t", funcs, 0), "arena");
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.output == "boom\n";
 	assert vm.sched.futures.items[0].failed;
 	assert vm.sched.futures.items[0].errorObserved;
@@ -5314,7 +5382,7 @@ test "a failed future nobody read is an orphan rejection" {
 	const fWorker = createRaiserFunction("worker", workerCode, [raiserConstString("dropped")], 0, 0, 4);
 	const funcs: RaiserFunction[] = [fMain, fWorker];
 	const vm = execModule(createRaiserModule("t", funcs, 0), "arena");
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	const orphans = vmOrphanFailures(vm);
 	assert orphans.length == 1;
 	assert orphans[0] == "dropped";
@@ -5329,7 +5397,7 @@ test "awaiting a plain value is the identity" {
 		],
 		[raiserInt(5)]
 	));
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert vm.exitValue.intVal == 5;
 }
 
@@ -5347,18 +5415,18 @@ test "trap opcode fails the VM with its message" {
 	assert vm.halted;
 }
 
-test "indirect call on a non-function value fails loud" {
+test "an indirect call through an index outside the module fails loud" {
 	const code: RaiserInstruction[] = [
 		raiserABx(RaiserOpcode.LoadConst, 1, 0),
 		raiserABC(RaiserOpcode.CallIndirect, 2, 1, 0),
 		raiserABC(RaiserOpcode.Halt, 2, 0, 0),
 	];
-	const consts: RaiserValue[] = [raiserNil()];
+	const consts: RaiserValue[] = [raiserInt(-1)];
 	const f = createRaiserFunction("main", code, consts, 0, 0, 8);
 	const funcs: RaiserFunction[] = [f];
 	const mod = createRaiserModule("t", funcs, 0);
 	const vm = execModule(mod, "arena");
-	assert vm.error == "indirect call target is not a function";
+	assert vm.error == "function index out of bounds: -1", vm.error;
 }
 
 test "createVM refuses an unknown gcMode" {
@@ -5370,24 +5438,6 @@ test "createVM refuses an unknown gcMode" {
 		refused = e.message;
 	}
 	assert refused == "internal: unknown Raiser gcMode \"bogus\"";
-}
-
-test "a register write past the reserved file is an internal error" {
-	const main = createRaiserFunction("main", [
-		raiserABC(RaiserOpcode.Call, 0, 1, 0),
-		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
-	], [raiserNil()], 0, 0, 8);
-	const wild = createRaiserFunction("wild", [
-		raiserABC(RaiserOpcode.LoadNil, 255, 0, 0),
-		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
-	], [raiserNil()], 0, 0, 1);
-	let refused = "";
-	try {
-		execModule(createRaiserModule("t", [main, wild], 0), "arena");
-	} catch (e) {
-		refused = e.message;
-	}
-	assert refused == "internal: register 256 is outside the reserved register file";
 }
 
 test "a runtime error after a loop reports the line of the instruction that raised it" {
@@ -5546,7 +5596,7 @@ function liveItems(vm: RaiserVM): number {
 }
 
 function releaseRoots(vm: RaiserVM): void {
-	for (const slot of vm.regs.slots) { vmDecref(vm, slot); slot.kind = RaiserValueKind.Nil; }
+	for (let i = 0; i < vm.regs.refs.length; i += 1) { releaseHandle(vm, vm.regs.refs[i]); vm.regs.refs[i] = 0; }
 	for (const g of vm.globals) { vmDecref(vm, g); g.kind = RaiserValueKind.Nil; }
 }
 
@@ -5566,7 +5616,7 @@ const dropsEverythingConsts = [raiserConstString("ab"), raiserConstString("cd"),
 
 test "ledger: a program that drops strings, arrays, objects and boxes ends with nothing live once its registers are released" {
 	const vm = execModule(makeTestModule(dropsEverything, dropsEverythingConsts), "orc");
-	assert vm.error == "";
+	assert vm.error == "", vm.error;
 	assert liveItems(vm) > 0;
 	releaseRoots(vm);
 	assert liveItems(vm) == 0;
@@ -5633,6 +5683,124 @@ test "Unbox with the payload flag reads the word of any boxed kind" {
 		[RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Ref, RaiserRegClass.Dyn, RaiserRegClass.Word, RaiserRegClass.Dyn, RaiserRegClass.Word]
 	), "orc");
 	assert vm.error == "", vm.error;
-	assert vm.exitValue.kind == RaiserValueKind.Int && vm.exitValue.intVal == vm.regs.slots[2].intVal;
-	assert vm.regs.slots[6].intVal == 0;
+	assert vm.exitValue.kind == RaiserValueKind.Int && vm.exitValue.intVal == vm.regs.refs[2];
+	assert vm.regs.words[1] == 0;
+}
+
+// A callee of `argc` parameters whose class in the word or ref file follows bit i of `pattern`, and the
+// value it returns: ten times each word argument's position plus the length of each ref argument.
+function windowCallee(pattern: int32, argc: int32): RaiserFunction {
+	const classes: RaiserRegClass[] = [];
+	for (let i = 0; i < argc; i += 1) classes.push(((pattern >> i) & 1) == 1 ? RaiserRegClass.Ref : RaiserRegClass.Word);
+	classes.push(RaiserRegClass.Word);
+	classes.push(RaiserRegClass.Word);
+	const acc = argc;
+	const tmp = argc + 1;
+	const code: RaiserInstruction[] = [raiserABC(RaiserOpcode.LoadInt, acc, immField(0), 0)];
+	for (let i = 0; i < argc; i += 1) {
+		if (((pattern >> i) & 1) == 1) {
+			code.push(raiserABC(RaiserOpcode.StrLen, tmp, i, 0));
+			code.push(raiserABC(RaiserOpcode.AddI64, acc, acc, tmp));
+		} else {
+			code.push(raiserABC(RaiserOpcode.AddI64, acc, acc, i));
+		}
+	}
+	code.push(raiserABC(RaiserOpcode.Ret, acc, 0, 0));
+	return createRaiserFunction("window", code, [], argc, argc, argc + 2, classes);
+}
+
+function windowExpected(pattern: int32, argc: int32): int64 {
+	let total: int64 = 0;
+	for (let i = 0; i < argc; i += 1) total += ((pattern >> i) & 1) == 1 ? (i + 1) : (i + 1) * 10;
+	return total;
+}
+
+// The caller puts argument i in R[1 + i]: a word holding (i + 1) * 10, or a string of i + 1 characters.
+function windowCaller(pattern: int32, argc: int32, indirect: boolean): RaiserFunction {
+	const classes: RaiserRegClass[] = [RaiserRegClass.Word];
+	const consts: RaiserValue[] = [];
+	const code: RaiserInstruction[] = [];
+	for (let i = 0; i < argc; i += 1) {
+		if (((pattern >> i) & 1) == 1) {
+			classes.push(RaiserRegClass.Ref);
+			let text = "";
+			for (let k = 0; k <= i; k += 1) text = text + "x";
+			consts.push(raiserConstString(text));
+			code.push(raiserABx(RaiserOpcode.LoadConst, 1 + i, consts.length - 1));
+		} else {
+			classes.push(RaiserRegClass.Word);
+			code.push(raiserABC(RaiserOpcode.LoadInt, 1 + i, immField((i + 1) * 10), 0));
+		}
+	}
+	classes.push(RaiserRegClass.Word);
+	if (indirect) {
+		code.push(raiserABC(RaiserOpcode.LoadInt, argc + 1, immField(1), 0));
+		code.push(raiserABC(RaiserOpcode.CallIndirect, 0, argc + 1, argc));
+	} else {
+		code.push(raiserABC(RaiserOpcode.Call, 0, 1, argc));
+	}
+	code.push(raiserABC(RaiserOpcode.Halt, 0, 0, 0));
+	return createRaiserFunction("caller", code, consts, 0, 0, argc + 2, classes);
+}
+
+test "word and ref arguments in every order reach their parameters through Call and CallIndirect" {
+	for (let argc = 0; argc <= 6; argc += 1) {
+		for (let pattern = 0; pattern < (1 << argc); pattern += 1) {
+			for (const indirect of [false, true]) {
+				const funcs: RaiserFunction[] = [windowCaller(pattern, argc, indirect), windowCallee(pattern, argc)];
+				const vm = execModule(createRaiserModule("window", funcs, 0), "arena");
+				assert vm.error == "", `argc ${argc} pattern ${pattern} indirect ${indirect}: ${vm.error}`;
+				assert vm.exitValue.intVal == windowExpected(pattern, argc), `argc ${argc} pattern ${pattern} indirect ${indirect}: ${vm.exitValue.intVal}`;
+			}
+		}
+	}
+}
+
+// A spawned strand runs in a frame of its own whose first register is the environment slot, whatever
+// order the rest of its registers take.
+test "a spawned strand keeps its word and ref registers apart in every order" {
+	for (let argc = 0; argc <= 5; argc += 1) {
+		for (let pattern = 0; pattern < (1 << argc); pattern += 1) {
+			const classes: RaiserRegClass[] = [RaiserRegClass.Ref];
+			const workerConsts: RaiserValue[] = [];
+			const workerCode: RaiserInstruction[] = [];
+			for (let i = 0; i < argc; i += 1) {
+				const ref = ((pattern >> i) & 1) == 1;
+				classes.push(ref ? RaiserRegClass.Ref : RaiserRegClass.Word);
+				if (ref) {
+					workerConsts.push(raiserConstString("xy"));
+					workerCode.push(raiserABx(RaiserOpcode.LoadConst, 1 + i, workerConsts.length - 1));
+				} else {
+					workerCode.push(raiserABC(RaiserOpcode.LoadInt, 1 + i, immField(10), 0));
+				}
+			}
+			classes.push(RaiserRegClass.Word);
+			classes.push(RaiserRegClass.Word);
+			const acc = argc + 1;
+			const tmp = argc + 2;
+			workerCode.push(raiserABC(RaiserOpcode.LoadInt, acc, immField(0), 0));
+			let expected: int64 = 0;
+			for (let i = 0; i < argc; i += 1) {
+				if (((pattern >> i) & 1) == 1) {
+					workerCode.push(raiserABC(RaiserOpcode.StrLen, tmp, 1 + i, 0));
+					workerCode.push(raiserABC(RaiserOpcode.AddI64, acc, acc, tmp));
+					expected += 2;
+				} else {
+					workerCode.push(raiserABC(RaiserOpcode.AddI64, acc, acc, 1 + i));
+					expected += 10;
+				}
+			}
+			workerCode.push(raiserABC(RaiserOpcode.Ret, acc, 0, 0));
+			const worker = createRaiserFunction("worker", workerCode, workerConsts, 0, 0, argc + 3, classes);
+			const mainCode = closurePairCode();
+			mainCode.push(raiserABC(RaiserOpcode.Spawn, 3, 1, 0));
+			mainCode.push(raiserABC(RaiserOpcode.Await, 4, 3, 0));
+			mainCode.push(raiserABC(RaiserOpcode.Halt, 4, 0, 0));
+			const mainFn = createRaiserFunction("main", mainCode, closurePairConsts(1), 0, 0, 8);
+			const funcs: RaiserFunction[] = [mainFn, worker];
+			const vm = execModule(createRaiserModule("spawnWindow", funcs, 0), "arena");
+			assert vm.error == "", `argc ${argc} pattern ${pattern}: ${vm.error}`;
+			assert vm.exitValue.intVal == expected, `argc ${argc} pattern ${pattern}: ${vm.exitValue.intVal}`;
+		}
+	}
 }

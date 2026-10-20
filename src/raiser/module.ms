@@ -3,12 +3,13 @@
 import { RaiserInstruction, RaiserOpcode, RaiserRegClass, raiserABC, raiserABx, packInstruction } from "./bytecode";
 import { RaiserValue, RaiserValueKind, RaiserClassType, raiserInt, constStringText } from "./value";
 import { RaiserCopyPlan } from "./valueCopy";
+import { layoutRegisters } from "./regs";
 
 // --- Function ---
 
 export interface RaiserFunction {
 	name: string;
-	code: RaiserInstruction[];  // disasm, tests and codegen only: the VM reads `packed`
+	code: RaiserInstruction[];  // registers renumbered into ranks; disasm and tests read it, the VM reads `packed`
 	packed: int64[];      // code, packed once by createRaiserFunction
 	lines: int32[];       // source line per instruction, 0 = unknown
 	fieldCache: int32[];  // LoadField/StoreField cached field index per instruction, -1 = miss
@@ -16,10 +17,12 @@ export interface RaiserFunction {
 	names: string[];      // constants[i] read as text, "" for a non-string; LoadField and StoreField compare it on every access
 	arity: number;
 	localsCount: number;
-	maxRegs: number;
-	regClasses: RaiserRegClass[];
-	classed: boolean;     // built with declared register classes; a function without them holds plain values in every register
-	hasDyn: boolean;      // classed and owns a Dyn register, which holds a box or nil
+	wordRegs: int32;      // registers of the word file the frame holds
+	refRegs: int32;       // registers of the ref file the frame holds
+	regClasses: RaiserRegClass[];   // class of each register in the numbering the function was built with
+	regOps: int32[];      // the tagged operand of each of those registers
+	blocks: int64[];      // site table: word start, ref start, argument count, class signature, then a tagged operand per argument
+	sigs: int64[];        // sigs[n] is the class signature of the first n registers
 	copyPlans: RaiserCopyPlan[];
 	classTypes: RaiserClassType[];
 }
@@ -57,25 +60,19 @@ export interface RaiserModule {
 
 // --- Constructors ---
 
-export function createRaiserFunction(name: string, code: RaiserInstruction[], constants: RaiserValue[], arity: number, localsCount: number, maxRegs: number, classes: RaiserRegClass[] | null = null): RaiserFunction {
+export function createRaiserFunction(name: string, code: RaiserInstruction[], constants: RaiserValue[], arity: number, localsCount: number, regCount: number, classes: RaiserRegClass[] | null = null): RaiserFunction {
+	const layout = layoutRegisters(name, code, constants, regCount as int32, classes);
 	const packed: int64[] = [];
 	const lines: int32[] = [];
 	const fieldCache: int32[] = [];
-	for (const inst of code) {
+	for (const inst of layout.code) {
 		packed.push(packInstruction(inst));
 		lines.push(inst.line as int32);
 		fieldCache.push(-1);
 	}
 	const names: string[] = [];
 	for (const c of constants) names.push(c.kind == RaiserValueKind.String ? constStringText(c) : "");
-	const regClasses: RaiserRegClass[] = [];
-	if (classes == null) {
-		for (let r = 0; r < maxRegs; r += 1) regClasses.push(RaiserRegClass.Dyn);
-	} else {
-		if (classes.length != maxRegs) throw new Error(`internal: function ${name} has ${maxRegs} registers but ${classes.length} register classes`);
-		for (const c of classes) regClasses.push(c);
-	}
-	return { name, code, packed, lines, fieldCache, constants, names, arity, localsCount, maxRegs, regClasses, classed: classes != null, hasDyn: classes != null && regClasses.includes(RaiserRegClass.Dyn), copyPlans: [], classTypes: [] };
+	return { name, code: layout.code, packed, lines, fieldCache, constants, names, arity, localsCount, wordRegs: layout.wordRegs, refRegs: layout.refRegs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: layout.sigs, copyPlans: [], classTypes: [] };
 }
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {
@@ -136,7 +133,7 @@ test "create function" {
 	assert getFuncCodeLen(func) == 1;
 	assert getFuncConstLen(func) == 0;
 	assert func.arity == 0;
-	assert func.maxRegs == 4;
+	assert func.wordRegs + func.refRegs == 4;
 }
 
 test "function with constants" {

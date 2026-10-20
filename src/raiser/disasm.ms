@@ -1,7 +1,7 @@
 // Raiser VM — Disassembler
 // Human-readable bytecode formatting for debugging and test output.
 
-import { RaiserOpcode, RaiserInstruction, regClassLetter, raiserABC, raiserABx, raiserAx, getBx, getSignedAx, immField, immValue, isBranchI64, branchField, branchOffset } from "./bytecode";
+import { RaiserOpcode, RaiserInstruction, RaiserRegClass, regClassLetter, operandTagged, operandKind, operandRank, operandClass, OPERAND_TAGGED, raiserABC, raiserABx, raiserAx, getBx, getSignedAx, immField, immValue, isBranchI64, branchField, branchOffset } from "./bytecode";
 import { raiserInt, raiserToString, createArrayHeap } from "./value";
 import {
 	RaiserModule, RaiserFunction,
@@ -14,6 +14,12 @@ export function opName(op: RaiserOpcode): string {
 	return match (op) {
 		RaiserOpcode.LoadConst => "LoadConst",
 		RaiserOpcode.Move => "Move",
+		RaiserOpcode.MoveW => "MoveW",
+		RaiserOpcode.MoveR => "MoveR",
+		RaiserOpcode.BeqR => "BeqR",
+		RaiserOpcode.BneR => "BneR",
+		RaiserOpcode.BrEqR => "BrEqR",
+		RaiserOpcode.BrNeR => "BrNeR",
 		RaiserOpcode.CopyValue => "CopyValue",
 		RaiserOpcode.LoadGlobal => "LoadGlobal",
 		RaiserOpcode.StoreGlobal => "StoreGlobal",
@@ -158,14 +164,25 @@ function isAxOp(op: RaiserOpcode): boolean {
 	return op == RaiserOpcode.Jump;
 }
 
+// A register operand as its class letter and rank when the opcode's role or the operand's tag says the class, else as R and the number
+function regText(op: RaiserOpcode, slot: int32, v: number): string {
+	const kind = operandKind(op, slot);
+	if (kind < 5) return `${regClassLetter(kind as RaiserRegClass)}${v}`;
+	if (kind == OPERAND_TAGGED) return `${regClassLetter(operandClass(v as int32))}${operandRank(v as int32)}`;
+	return `R${v}`;
+}
+
 export function disasmInst(inst: RaiserInstruction): string {
-	if (isAxOp(inst.op)) return `${opName(inst.op)} ${getSignedAx(inst)}`;
-	if (inst.op == RaiserOpcode.LoadInt) return `${opName(inst.op)} R${inst.a} #${immValue(inst.b)}`;
-	if (inst.op == RaiserOpcode.AddI64Imm || inst.op == RaiserOpcode.SubI64Imm) return `${opName(inst.op)} R${inst.a} R${inst.b} #${immValue(inst.c)}`;
-	if (isBranchI64(inst.op)) return `${opName(inst.op)} R${inst.a} ${isBranchImm(inst.op) ? `#${immValue(inst.b)}` : `R${inst.b}`} ->${branchOffset(inst.c)}`;
-	if (isImmCompare(inst.op)) return `${opName(inst.op)} R${inst.a} #${immValue(inst.b)} R${inst.c}`;
-	if (isABxOp(inst.op)) return `${opName(inst.op)} R${inst.a} K${getBx(inst)}`;
-	return `${opName(inst.op)} R${inst.a} R${inst.b} R${inst.c}`;
+	const op = inst.op;
+	const name = opName(op);
+	const ra = regText(op, 0, inst.a);
+	if (isAxOp(op)) return `${name} ${getSignedAx(inst)}`;
+	if (op == RaiserOpcode.LoadInt) return `${name} ${ra} #${immValue(inst.b)}`;
+	if (op == RaiserOpcode.AddI64Imm || op == RaiserOpcode.SubI64Imm) return `${name} ${ra} ${regText(op, 1, inst.b)} #${immValue(inst.c)}`;
+	if (isBranchI64(op)) return `${name} ${ra} ${isBranchImm(op) ? `#${immValue(inst.b)}` : regText(op, 1, inst.b)} ->${branchOffset(inst.c)}`;
+	if (isImmCompare(op)) return `${name} ${ra} #${immValue(inst.b)} ${regText(op, 2, inst.c)}`;
+	if (isABxOp(op)) return `${name} ${ra} K${getBx(inst)}`;
+	return `${name} ${ra} ${regText(op, 1, inst.b)} ${regText(op, 2, inst.c)}`;
 }
 
 // Disassemble a function to a single string (for test assertions)
@@ -200,12 +217,12 @@ export function printModule(mod: RaiserModule): void {
 // --- Tests ---
 test "ABC instruction format" {
 	const inst = raiserABC(RaiserOpcode.AddI64, 2, 0, 1);
-	assert disasmInst(inst) == "AddI64 R2 R0 R1";
+	assert disasmInst(inst) == "AddI64 W2 W0 W1";
 }
 
 test "ABx instruction format" {
 	const inst = raiserABx(RaiserOpcode.LoadConst, 0, 3);
-	assert disasmInst(inst) == "LoadConst R0 K3";
+	assert disasmInst(inst) == "LoadConst W0 K3";
 }
 
 test "Ax instruction format" {
@@ -214,7 +231,7 @@ test "Ax instruction format" {
 }
 
 test "Halt format" {
-	const inst = raiserABC(RaiserOpcode.Halt, 2, 0, 0);
+	const inst = raiserABC(RaiserOpcode.Halt, operandTagged(2, RaiserRegClass.Ref), 0, 0);
 	assert disasmInst(inst) == "Halt R2 R0 R0";
 }
 
@@ -233,8 +250,8 @@ test "disasmFunc includes constant annotations" {
 }
 
 test "immediate operands print as numbers" {
-	assert disasmInst(raiserABC(RaiserOpcode.LoadInt, 1, immField(-7), 0)) == "LoadInt R1 #-7";
-	assert disasmInst(raiserABC(RaiserOpcode.AddI64Imm, 2, 0, immField(32767))) == "AddI64Imm R2 R0 #32767";
+	assert disasmInst(raiserABC(RaiserOpcode.LoadInt, 1, immField(-7), 0)) == "LoadInt W1 #-7";
+	assert disasmInst(raiserABC(RaiserOpcode.AddI64Imm, 2, 0, immField(32767))) == "AddI64Imm W2 W0 #32767";
 	assert disasmInst(raiserABC(RaiserOpcode.BltI64Imm, 0, immField(2), 1)) == "BltI64Imm R0 #2 R1";
 }
 

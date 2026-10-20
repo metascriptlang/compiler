@@ -33,6 +33,7 @@ import {
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
 	setRaiserModulePath, getRaiserModulePath,
 	resolveRoutine, RaiserCompState,
+	isScalarClass
 } from "./context";
 import { compileStmt } from "./statements";
 import { compileExpr, classTargetKey } from "./expressions";
@@ -577,7 +578,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 	const zeroState = createCompState();
 	for (let gi = 0; gi < globalCount; gi += 1) compiled.globalInit.push(raiserNil());
 	for (const entry of globals.items) {
-		if (regClassOf(zeroState, entry.symbol.symbolType) == RaiserRegClass.Word) compiled.globalInit[entry.index] = zeroScalar(entry.symbol.symbolType);
+		if (isScalarClass(regClassOf(zeroState, entry.symbol.symbolType))) compiled.globalInit[entry.index] = zeroScalar(entry.symbol.symbolType);
 	}
 	for (let ri = 0; ri < plan.records.length; ri += 1) {
 		const path = plan.records[ri];
@@ -1260,12 +1261,12 @@ test "non-capturing closure" {
 
 // Reference parity: environment parameter is LAST
 test "closure with capture" {
-	const ctx = evalRaiser("function lifted(y, _e: { x: number }) { return _e.x + y; } const e = { x: 5 }; const f = { fn: lifted, env: e }; return f(3);");
+	const ctx = evalRaiser("function lifted(y, _e: { x: int32 }) { return _e.x + y; } const e = { x: 5 }; const f = { fn: lifted, env: e }; return f(3);");
 	assert ctx.lastResult.intVal == 8;
 }
 
 test "higher-order: makeAdder" {
-	const ctx = evalRaiser("function liftedAdd(x, _e: { n: number }) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd, env: { n: n } }; } const add5 = makeAdder(5); return add5(3);");
+	const ctx = evalRaiser("function liftedAdd(x, _e: { n: int32 }) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd, env: { n: n } }; } const add5 = makeAdder(5); return add5(3);");
 	assert ctx.lastResult.intVal == 8;
 }
 
@@ -1275,12 +1276,12 @@ test "multiple captures" {
 }
 
 test "chained call: makeAdder(5)(3)" {
-	const ctx = evalRaiser("function liftedAdd(x, _e: { n: number }) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd, env: { n: n } }; } return makeAdder(5)(3);");
+	const ctx = evalRaiser("function liftedAdd(x, _e: { n: int32 }) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd, env: { n: n } }; } return makeAdder(5)(3);");
 	assert ctx.lastResult.intVal == 8;
 }
 
 test "closure in loop" {
-	const ctx = evalRaiser("function lifted(_e: { i: number }) { return _e.i; } let sum = 0; let i = 0; while (i < 5) { const f = { fn: lifted, env: { i: i } }; sum = sum + f(); i = i + 1; } return sum;");
+	const ctx = evalRaiser("function lifted(_e: { i: int32 }) { return _e.i; } let sum = 0; let i = 0; while (i < 5) { const f = { fn: lifted, env: { i: i } }; sum = sum + f(); i = i + 1; } return sum;");
 	assert ctx.lastResult.intVal == 10;
 }
 
@@ -1290,17 +1291,17 @@ test "closure returning closure" {
 }
 
 test "lambda-lifted capture pattern" {
-	const ctx = evalRaiser("function lifted1(_envP: { x: number }) { return _envP.x; } const x = 99; const f = { fn: lifted1, env: { x: x } }; return f();");
+	const ctx = evalRaiser("function lifted1(_envP: { x: int32 }) { return _envP.x; } const x = 99; const f = { fn: lifted1, env: { x: x } }; return f();");
 	assert ctx.lastResult.intVal == 99;
 }
 
 test "lambda-lifted capture with args" {
-	const ctx = evalRaiser("function lifted1(y, _envP: { x: number }) { return _envP.x + y; } const x = 10; const f = { fn: lifted1, env: { x: x } }; return f(32);");
+	const ctx = evalRaiser("function lifted1(y, _envP: { x: int32 }) { return _envP.x + y; } const x = 10; const f = { fn: lifted1, env: { x: x } }; return f(32);");
 	assert ctx.lastResult.intVal == 42;
 }
 
 test "lambda-lifted capture inside function" {
-	const ctx = evalRaiser("function lifted1(_envP: { x: number }) { return _envP.x; } function make() { const x = 42; const f = { fn: lifted1, env: { x: x } }; return f(); } return make();");
+	const ctx = evalRaiser("function lifted1(_envP: { x: int32 }) { return _envP.x; } function make() { const x = 42; const f = { fn: lifted1, env: { x: x } }; return f(); } return make();");
 	assert ctx.lastResult.intVal == 42;
 }
 
@@ -1564,8 +1565,8 @@ test "method with params" {
 }
 
 test "closure env mutation" {
-	const ctx = evalRaiser("function inc(_e: { n: number }) { _e.n = _e.n + 1; } const obj = { n: 0 }; const f = { fn: inc, env: obj }; f(); return obj.n;");
-	assert unboxFloat(ctx.lastResult) == 1;
+	const ctx = evalRaiser("function inc(_e: { n: int32 }) { _e.n = _e.n + 1; } const obj = { n: 0 }; const f = { fn: inc, env: obj }; f(); return obj.n;");
+	assert ctx.lastResult.intVal == 1;
 }
 
 test "method mutation single call" {

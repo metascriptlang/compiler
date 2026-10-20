@@ -1292,7 +1292,7 @@ test "hand-written closure pair (no transforms)" {
 }
 
 test "closure pair nested fn (no transforms)" {
-	const ctx = evalRaiserDirect("function liftedFn(_envP: unknown): number { return _envP.x; } function make(): number { const x = 42; const f = { fn: liftedFn, env: { x: x } }; return f(); } return make();");
+	const ctx = evalRaiserDirect("function liftedFn(_envP: unknown): number { return _envP.x; } function make(): int32 { const x = 42; const f = { fn: liftedFn, env: { x: x } }; return f(); } return make();");
 	assert ctx.lastResult.intVal == 42;
 }
 
@@ -1698,15 +1698,19 @@ function countOp(f: RaiserFunction, op: RaiserOpcode): number {
 	return n;
 }
 
+function countMoves(f: RaiserFunction): number {
+	return countOp(f, RaiserOpcode.Move) + countOp(f, RaiserOpcode.MoveW) + countOp(f, RaiserOpcode.MoveR);
+}
+
 test "engine: a call argument, a local assignment and a branch value land without a Move" {
 	const fib = compiledFunc("function fib(n: int32): int32 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); } console.log(`${fib(10)}`);", "fib");
-	assert countOp(fib, RaiserOpcode.Move) == 0, disasmFunc(fib);
+	assert countMoves(fib) == 0, disasmFunc(fib);
 	const asg = compiledFunc("function f(a: int64, b: int64): int64 { let x: int64 = 1; x = a + b; x = x + a; return x; } console.log(`${f(1, 2)}`);", "f");
-	assert countOp(asg, RaiserOpcode.Move) == 0, disasmFunc(asg);
+	assert countMoves(asg) == 0, disasmFunc(asg);
 	const tern = compiledFunc("function f(a: int64, b: int64): int64 { let x: int64 = 0; x = a < b ? a + 1 : b + 2; return x; } console.log(`${f(1, 2)}`);", "f");
-	assert countOp(tern, RaiserOpcode.Move) == 1, disasmFunc(tern);
+	assert countMoves(tern) == 1, disasmFunc(tern);
 	const glob = compiledFunc("let g: int64 = 5; function h(a: int64, b: int64): int64 { return a + b; } function f(a: int64): int64 { return h(g, a * 2); } console.log(`${f(1)}`);", "f");
-	assert countOp(glob, RaiserOpcode.Move) == 0, disasmFunc(glob);
+	assert countMoves(glob) == 0, disasmFunc(glob);
 }
 
 test "engine: a condition on a float, a string or a negated value jumps on its ToBoolean" {
@@ -2066,14 +2070,14 @@ function funcNamed(code: string, prefix: string): RaiserFunction {
 test "register classes: a parameter takes the class of its declared type" {
 	const f = compiledFunc("function p(a: number, s: string, o: { x: number } | null, n: number | null, u: number | string, b: boolean, c: () => number): number { return a; }"
 		+ " console.log(`${p(1, \"s\", null, null, 1, true, (): number => 1)}`);", "p");
-	assert classTable(f) == "WRRDDWR", classTable(f);
+	assert classTable(f) == "FRRDDBR", classTable(f);
 }
 
 test "register classes: a local takes the class of its declared type, not of its initializer" {
 	const code = "function l(): number { let k: number = 1; let s: string = \"a\"; let o: { x: number } | null = null; let n: number | null = null; let u: number | string = 1; return k + s.length; }"
 		+ " console.log(`${l()}`);";
 	const table = classTable(compiledFunc(code, "l"));
-	assert table.slice(0, 9) == "WRRRRDWDW", table;
+	assert table.slice(0, 9) == "FRRRRDFDW", table;
 	const vm = evalOrcVM(code);
 	assert vm.error == "", vm.error;
 	assert vm.output == "2\n", vm.output;
@@ -2081,20 +2085,18 @@ test "register classes: a local takes the class of its declared type, not of its
 
 test "register classes: a number local never assigned on the path read reads as zero" {
 	const code = "function u(k: number): number { let z: number; if (k > 5) { z = 2; } return z; } console.log(`${u(1)} ${u(9)}`);";
-	assert classTable(compiledFunc(code, "u")).slice(0, 2) == "WW", classTable(compiledFunc(code, "u"));
+	assert classTable(compiledFunc(code, "u")).slice(0, 2) == "FF", classTable(compiledFunc(code, "u"));
 	const vm = evalOrcVM(code);
 	assert vm.error == "", vm.error;
 	assert vm.output == "0 2\n", vm.output;
 }
 
-test "register classes: a for-of counter and length are words, its element takes the element class" {
+test "register classes: a number accumulator is a float, a for-of counter and length are words, its element takes the element class" {
 	const code = "function fo(xs: number[], ss: string[]): number { let t: number = 0; for (const v of xs) { t += v; } for (const w of ss) { t += w.length; } return t; } console.log(`${fo([1, 2], [\"ab\"])}`);";
 	const f = compiledFunc(code, "fo");
 	const table = classTable(f);
-	assert table.slice(0, 3) == "RRW", table;
-	for (let i = 0; i < f.code.length; i = i + 1) {
-		if (f.code[i].op == RaiserOpcode.AddI64Imm) assert regClassLetter(f.regClasses[f.code[i].a]) == "W", disasmFunc(f);
-	}
+	assert table.slice(0, 3) == "RRF", table;
+	assert disasmFunc(f).indexOf("AddI64Imm R") < 0, disasmFunc(f);
 	const vm = evalOrcVM(code);
 	assert vm.error == "", vm.error;
 	assert vm.output == "5\n", vm.output;

@@ -2,10 +2,10 @@
 // Register allocator, constant pool builder, instruction emitter.
 
 import {
-	RaiserOpcode, RaiserInstruction, RaiserRegClass,
+	RaiserOpcode, RaiserInstruction, RaiserRegClass, RaiserRole, RaiserConvClass, opRole, convOperand,
 	raiserABC, raiserABx, raiserAx, getSignedAx, fitsImm, immField, isBranchI64, branchField, branchOffset
 } from "../../raiser/bytecode";
-import { RaiserValue, RaiserValueKind, RaiserClassType, raiserInt, raiserConstString, raiserNil } from "../../raiser/value";
+import { RaiserValue, RaiserValueKind, RaiserClassType, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserNil } from "../../raiser/value";
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind } from "../../ast/node";
 import { RaiserCopyPlan } from "../../raiser/valueCopy";
 import { CheckerError, Severity } from "../../checker/context";
@@ -174,32 +174,8 @@ export function resolveStaticInitGuard(s: RaiserCompState, sym: Symbol | null): 
 	return -1;
 }
 
-const OPERAND_A: int32 = 1;
-const OPERAND_B: int32 = 2;
-const OPERAND_C: int32 = 4;
-
-// The operands an opcode reads as plain numbers: a Dyn register holds a box, and these opcodes
-// read the register's own word.
-function wordOperands(op: RaiserOpcode): int32 {
-	return match (op) {
-		RaiserOpcode.AddI64 | RaiserOpcode.SubI64 | RaiserOpcode.MulI64 | RaiserOpcode.DivI64 | RaiserOpcode.ModI64
-			| RaiserOpcode.AddU64 | RaiserOpcode.SubU64 | RaiserOpcode.MulU64 | RaiserOpcode.DivU64 | RaiserOpcode.ModU64
-			| RaiserOpcode.AddF64 | RaiserOpcode.SubF64 | RaiserOpcode.MulF64 | RaiserOpcode.DivF64
-			| RaiserOpcode.BitAnd | RaiserOpcode.BitOr | RaiserOpcode.BitXor
-			| RaiserOpcode.ShiftLeft | RaiserOpcode.ShiftRight | RaiserOpcode.ShiftRightU => OPERAND_B | OPERAND_C,
-		RaiserOpcode.NegI64 | RaiserOpcode.NegF64 | RaiserOpcode.BitNot | RaiserOpcode.AddI64Imm | RaiserOpcode.SubI64Imm => OPERAND_B,
-		RaiserOpcode.BeqI64 | RaiserOpcode.BneI64 | RaiserOpcode.BltI64 | RaiserOpcode.BleI64 | RaiserOpcode.BgtI64 | RaiserOpcode.BgeI64
-			| RaiserOpcode.BeqF64 | RaiserOpcode.BneF64 | RaiserOpcode.BltF64 | RaiserOpcode.BleF64 | RaiserOpcode.BgtF64 | RaiserOpcode.BgeF64
-			| RaiserOpcode.BltU64 | RaiserOpcode.BleU64
-			| RaiserOpcode.BrEqI64 | RaiserOpcode.BrNeI64 | RaiserOpcode.BrLtI64 | RaiserOpcode.BrLeI64 | RaiserOpcode.BrGtI64 | RaiserOpcode.BrGeI64 => OPERAND_A | OPERAND_B,
-		RaiserOpcode.BeqI64Imm | RaiserOpcode.BneI64Imm | RaiserOpcode.BltI64Imm | RaiserOpcode.BleI64Imm | RaiserOpcode.BgtI64Imm | RaiserOpcode.BgeI64Imm
-			| RaiserOpcode.BrEqI64Imm | RaiserOpcode.BrNeI64Imm | RaiserOpcode.BrLtI64Imm | RaiserOpcode.BrLeI64Imm | RaiserOpcode.BrGtI64Imm | RaiserOpcode.BrGeI64Imm => OPERAND_A,
-		_ => 0,
-	};
-}
-
-// The class of the plain value an opcode writes into R[A]; Dyn when the VM conforms the write itself.
-function plainResult(op: RaiserOpcode): RaiserRegClass {
+// Opcodes whose A operand is the register they write, in the class their role names.
+function writesA(op: RaiserOpcode): boolean {
 	return match (op) {
 		RaiserOpcode.LoadInt | RaiserOpcode.AddI64 | RaiserOpcode.SubI64 | RaiserOpcode.MulI64 | RaiserOpcode.DivI64 | RaiserOpcode.ModI64 | RaiserOpcode.NegI64
 			| RaiserOpcode.AddU64 | RaiserOpcode.SubU64 | RaiserOpcode.MulU64 | RaiserOpcode.DivU64 | RaiserOpcode.ModU64
@@ -207,55 +183,80 @@ function plainResult(op: RaiserOpcode): RaiserRegClass {
 			| RaiserOpcode.BitAnd | RaiserOpcode.BitOr | RaiserOpcode.BitXor | RaiserOpcode.BitNot
 			| RaiserOpcode.ShiftLeft | RaiserOpcode.ShiftRight | RaiserOpcode.ShiftRightU | RaiserOpcode.AddI64Imm | RaiserOpcode.SubI64Imm
 			| RaiserOpcode.Conv | RaiserOpcode.ArrayLen | RaiserOpcode.StrLen | RaiserOpcode.StrByteLen
-			| RaiserOpcode.IsKind | RaiserOpcode.InstanceOf | RaiserOpcode.SameLoc => RaiserRegClass.Word,
-		RaiserOpcode.ConcatStr | RaiserOpcode.StrCharAt | RaiserOpcode.StrSlice | RaiserOpcode.NewObject | RaiserOpcode.ArraySlice => RaiserRegClass.Ref,
+			| RaiserOpcode.IsKind | RaiserOpcode.InstanceOf | RaiserOpcode.SameLoc
+			| RaiserOpcode.ConcatStr | RaiserOpcode.StrCharAt | RaiserOpcode.StrSlice | RaiserOpcode.NewObject | RaiserOpcode.ArraySlice | RaiserOpcode.NewArray => true,
+		_ => false,
+	};
+}
+
+// The class a fixed operand role names; Dyn for a role that leaves the class open.
+function roleClass(role: RaiserRole): RaiserRegClass {
+	return match (role) {
+		RaiserRole.Int | RaiserRole.IntLike => RaiserRegClass.Word,
+		RaiserRole.Float => RaiserRegClass.Float,
+		RaiserRole.Bool => RaiserRegClass.Bool,
+		RaiserRole.Ref => RaiserRegClass.Ref,
 		_ => RaiserRegClass.Dyn,
+	};
+}
+
+export function convDestClass(convClass: number): RaiserRegClass {
+	if (convClass == (RaiserConvClass.F64 as number) || convClass == (RaiserConvClass.F32 as number)) return RaiserRegClass.Float;
+	return convClass == (RaiserConvClass.Str as number) ? RaiserRegClass.Ref : RaiserRegClass.Word;
+}
+
+// The integer compares read the payload of a Dyn operand whatever its kind, as a compare of two
+// slots does: a union equality has a string, an object or nil on either side.
+function comparesPayload(op: RaiserOpcode): boolean {
+	return isBranchI64(op) || match (op) {
+		RaiserOpcode.BeqI64 | RaiserOpcode.BneI64 | RaiserOpcode.BltI64 | RaiserOpcode.BleI64 | RaiserOpcode.BgtI64 | RaiserOpcode.BgeI64
+			| RaiserOpcode.BeqI64Imm | RaiserOpcode.BneI64Imm | RaiserOpcode.BltI64Imm | RaiserOpcode.BleI64Imm | RaiserOpcode.BgtI64Imm | RaiserOpcode.BgeI64Imm => true,
+		_ => false,
 	};
 }
 
 const PAYLOAD_WORD = 1;
 
-// The integer compares read the payload of a Dyn operand whatever its kind, as a compare of two
-// slots does: a union equality has a string, an object or nil on either side.
-function comparesPayload(op: RaiserOpcode): boolean {
-	return match (op) {
-		RaiserOpcode.BeqI64 | RaiserOpcode.BneI64 | RaiserOpcode.BltI64 | RaiserOpcode.BleI64 | RaiserOpcode.BgtI64 | RaiserOpcode.BgeI64
-			| RaiserOpcode.BrEqI64 | RaiserOpcode.BrNeI64 | RaiserOpcode.BrLtI64 | RaiserOpcode.BrLeI64 | RaiserOpcode.BrGtI64 | RaiserOpcode.BrGeI64
-			| RaiserOpcode.BeqI64Imm | RaiserOpcode.BneI64Imm | RaiserOpcode.BltI64Imm | RaiserOpcode.BleI64Imm | RaiserOpcode.BgtI64Imm | RaiserOpcode.BgeI64Imm
-			| RaiserOpcode.BrEqI64Imm | RaiserOpcode.BrNeI64Imm | RaiserOpcode.BrLtI64Imm | RaiserOpcode.BrLeI64Imm | RaiserOpcode.BrGtI64Imm | RaiserOpcode.BrGeI64Imm => true,
-		_ => false,
-	};
-}
-
-function unboxedWord(s: RaiserCompState, reg: number, how: number): number {
+function unboxedAs(s: RaiserCompState, reg: number, cls: RaiserRegClass, how: number): number {
 	if (classOfReg(s, reg as int32) != RaiserRegClass.Dyn) return reg;
-	const word = allocWord(s);
-	s.code.push(raiserABC(RaiserOpcode.Unbox, word, reg, how));
-	return word;
+	const plain = allocReg(s, cls);
+	s.code.push(raiserABC(RaiserOpcode.Unbox, plain, reg, how));
+	return plain;
 }
 
 // A Dyn register holds a box or nil and every other class holds the plain value, so a Move
-// between the two sides is the Box or Unbox that crosses them, and an opcode that reads a plain
-// number reads the unboxed one.
+// between the two sides is the Box or Unbox that crosses them, and an opcode whose operand role
+// names a class reads a register of that class: a Dyn operand is unboxed into one first, and a
+// Dyn destination is written through one and boxed after. A Move of an integer into a number register
+// is the widening Conv, as TypeScript reads an integer where a number is wanted.
 export function emitInst(s: RaiserCompState, inst: RaiserInstruction): void {
 	if (inst.op == RaiserOpcode.Move) {
 		const toDyn = classOfReg(s, inst.a as int32) == RaiserRegClass.Dyn;
 		if (toDyn != (classOfReg(s, inst.b as int32) == RaiserRegClass.Dyn)) inst.op = toDyn ? RaiserOpcode.Box : RaiserOpcode.Unbox;
+		else if (classOfReg(s, inst.a as int32) == RaiserRegClass.Float && classOfReg(s, inst.b as int32) == RaiserRegClass.Word) {
+			inst.op = RaiserOpcode.Conv;
+			inst.c = convOperand(RaiserConvClass.F64, RaiserConvClass.I64 as int32);
+		}
 	}
-	const words = wordOperands(inst.op);
-	if (words != 0) {
-		const how = comparesPayload(inst.op) ? PAYLOAD_WORD : 0;
-		if ((words & OPERAND_A) != 0) inst.a = unboxedWord(s, inst.a, how);
-		if ((words & OPERAND_B) != 0) inst.b = unboxedWord(s, inst.b, how);
-		if ((words & OPERAND_C) != 0) inst.c = unboxedWord(s, inst.c, how);
+	const op = inst.op;
+	const how = comparesPayload(op) ? PAYLOAD_WORD : 0;
+	const dest = writesA(op);
+	for (let slot = dest ? 1 : 0; slot < 3; slot += 1) {
+		const cls = roleClass(opRole(op, slot));
+		if (cls == RaiserRegClass.Dyn) continue;
+		if (slot == 0) inst.a = unboxedAs(s, inst.a, cls, how);
+		else if (slot == 1) inst.b = unboxedAs(s, inst.b, cls, how);
+		else inst.c = unboxedAs(s, inst.c, cls, how);
 	}
-	const produced = plainResult(inst.op);
-	if (produced != RaiserRegClass.Dyn && classOfReg(s, inst.a as int32) == RaiserRegClass.Dyn) {
-		const dest = inst.a;
-		inst.a = allocReg(s, produced);
-		s.code.push(inst);
-		s.code.push(raiserABC(RaiserOpcode.Box, dest, inst.a, 0));
-		return;
+	if (dest) {
+		const produced = op == RaiserOpcode.Conv ? convDestClass(inst.c) : roleClass(opRole(op, 0));
+		if (classOfReg(s, inst.a as int32) == RaiserRegClass.Dyn) {
+			const held = inst.a;
+			inst.a = allocReg(s, produced);
+			s.code.push(inst);
+			s.code.push(raiserABC(RaiserOpcode.Box, held, inst.a, 0));
+			return;
+		}
 	}
 	s.code.push(inst);
 }
@@ -299,6 +300,14 @@ export function allocRef(s: RaiserCompState): int32 {
 	return allocReg(s, RaiserRegClass.Ref);
 }
 
+export function allocFloat(s: RaiserCompState): int32 {
+	return allocReg(s, RaiserRegClass.Float);
+}
+
+export function allocBool(s: RaiserCompState): int32 {
+	return allocReg(s, RaiserRegClass.Bool);
+}
+
 export function allocDyn(s: RaiserCompState): int32 {
 	return allocReg(s, RaiserRegClass.Dyn);
 }
@@ -328,13 +337,35 @@ export function resetTemps(s: RaiserCompState): void {
 
 // --- Typed emit helpers ---
 
-export function emitLoadConst(s: RaiserCompState, reg: int32, val: RaiserValue): void {
-	if (val.kind != RaiserValueKind.Nil && classOfReg(s, reg) == RaiserRegClass.Dyn) {
-		const plain = val.kind == RaiserValueKind.Bool || val.kind == RaiserValueKind.Int || val.kind == RaiserValueKind.Float ? allocWord(s) : allocRef(s);
-		emitLoadConst(s, plain, val);
+export function isScalarClass(cls: RaiserRegClass): boolean {
+	return cls != RaiserRegClass.Ref && cls != RaiserRegClass.Dyn;
+}
+
+export function classOfConstant(val: RaiserValue): RaiserRegClass {
+	return match (val.kind) {
+		RaiserValueKind.Int => RaiserRegClass.Word,
+		RaiserValueKind.Float => RaiserRegClass.Float,
+		RaiserValueKind.Bool => RaiserRegClass.Bool,
+		_ => RaiserRegClass.Ref,
+	};
+}
+
+// A constant of the kind the register's class holds; an integer constant for a number or boolean register reads as that.
+function constantFor(cls: RaiserRegClass, val: RaiserValue): RaiserValue {
+	if (cls == RaiserRegClass.Float && val.kind == RaiserValueKind.Int) return raiserFloat(val.intVal as number);
+	if (cls == RaiserRegClass.Bool && val.kind == RaiserValueKind.Int) return raiserBool(val.intVal != 0);
+	return val;
+}
+
+export function emitLoadConst(s: RaiserCompState, reg: int32, value: RaiserValue): void {
+	const dest = classOfReg(s, reg);
+	if (value.kind != RaiserValueKind.Nil && dest == RaiserRegClass.Dyn) {
+		const plain = allocReg(s, classOfConstant(value));
+		emitLoadConst(s, plain, value);
 		emitInst(s, raiserABC(RaiserOpcode.Move, reg, plain, 0));
 		return;
 	}
+	const val = constantFor(dest, value);
 	if (val.kind == RaiserValueKind.Int && fitsImm(val.intVal)) {
 		emitInst(s, raiserABC(RaiserOpcode.LoadInt, reg, immField(val.intVal), 0));
 		return;

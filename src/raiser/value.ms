@@ -4,6 +4,9 @@
 
 import { RaiserRegClass } from "./bytecode";
 
+@include("runtime/core/hashBits.h");
+extern function msBitsFloat64(u: int64): float64;
+
 
 // A kind from String up holds one heap handle in intVal; the kinds below it hold no reference.
 export enum RaiserValueKind {
@@ -37,6 +40,10 @@ export enum RaiserHeapKind {
 const HEAP_KIND_BITS = 3;
 const HEAP_KIND_MASK = 7;
 
+export function bitsToFloat(w: int64): float64 {
+	return msBitsFloat64(w);
+}
+
 export function makeHandle(index: int64, heapKind: RaiserHeapKind): int64 {
 	return (index << HEAP_KIND_BITS) | (heapKind as int64);
 }
@@ -64,6 +71,12 @@ export function handleKind(handle: int64): RaiserValueKind {
 		RaiserHeapKind.Box => RaiserValueKind.Box,
 		_ => { throw new Error(`internal: handle ${handle} names no heap kind`); },
 	};
+}
+
+// The value a ref register's handle stands for.
+export function handleValue(h: int64): RaiserValue {
+	if (h == 0) return raiserNil();
+	return { kind: handleKind(h), intVal: h, floatVal: 0.0 };
 }
 
 // A reference-holding value's kind must be the one its handle names; location values name the heap they point into.
@@ -156,8 +169,10 @@ export function fieldAddrName(v: RaiserValue): string {
 
 export function kindFitsClass(kind: RaiserValueKind, cls: RaiserRegClass): boolean {
 	return match (kind) {
-		RaiserValueKind.Bool | RaiserValueKind.Int | RaiserValueKind.Float => cls == RaiserRegClass.Word,
-		RaiserValueKind.Nil => cls != RaiserRegClass.Word,
+		RaiserValueKind.Int => cls == RaiserRegClass.Word,
+		RaiserValueKind.Float => cls == RaiserRegClass.Float,
+		RaiserValueKind.Bool => cls == RaiserRegClass.Bool,
+		RaiserValueKind.Nil => cls == RaiserRegClass.Ref || cls == RaiserRegClass.Dyn,
 		RaiserValueKind.String | RaiserValueKind.Array | RaiserValueKind.Object | RaiserValueKind.Future => cls == RaiserRegClass.Ref,
 		RaiserValueKind.Box => cls == RaiserRegClass.Dyn,
 		RaiserValueKind.RegAddr | RaiserValueKind.GlobalAddr | RaiserValueKind.ElemAddr | RaiserValueKind.FieldAddr => false,
@@ -881,7 +896,8 @@ export interface RaiserCopyMap {
 	arrDst: int64[];
 	objSrc: int64[];
 	objDst: int64[];
-	sourceRegs: RaiserValue[] | null;
+	sourceWords: int64[] | null;
+	sourceRefs: int64[] | null;
 	sourceGlobals: RaiserValue[] | null;
 	destGlobals: RaiserValue[] | null;
 	slotSrc: RaiserValue[] | null;
@@ -893,7 +909,7 @@ export function createCopyMap(): RaiserCopyMap {
 	const arrDst: int64[] = [];
 	const objSrc: int64[] = [];
 	const objDst: int64[] = [];
-	return { arrSrc, arrDst, objSrc, objDst, sourceRegs: null, sourceGlobals: null, destGlobals: null, slotSrc: null, slotDst: null };
+	return { arrSrc, arrDst, objSrc, objDst, sourceWords: null, sourceRefs: null, sourceGlobals: null, destGlobals: null, slotSrc: null, slotDst: null };
 }
 
 export function copyGraph(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue): RaiserValue {
@@ -901,11 +917,31 @@ export function copyGraph(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dst
 	return copyGraphWith(srcArr, srcObj, dstArr, dstObj, val, map);
 }
 
+// The value in the register a RegAddr names: its intVal is (absolute rank << 3) | register class.
+function copiedRegisterValue(map: RaiserCopyMap, address: int64): RaiserValue {
+	const cls = (address & 7) as RaiserRegClass;
+	const abs = address >> 3;
+	const words = map.sourceWords;
+	const refs = map.sourceRefs;
+	if (words == null || refs == null) throw "internal: a copied slot address must have its source storage";
+	if (cls == RaiserRegClass.Ref || cls == RaiserRegClass.Dyn) {
+		if (abs >= refs.length) throw "internal: a copied slot address must have its source storage";
+		const h = refs[abs];
+		return handleValue(h);
+	}
+	if (abs >= words.length) throw "internal: a copied slot address must have its source storage";
+	if (cls == RaiserRegClass.Word) return raiserInt(words[abs]);
+	if (cls == RaiserRegClass.Bool) return raiserBool(words[abs] != 0);
+	return raiserFloat(bitsToFloat(words[abs]));
+}
+
 export function copyGraphWith(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
 	if (val.kind == RaiserValueKind.RegAddr || val.kind == RaiserValueKind.GlobalAddr) {
-		const source = val.kind == RaiserValueKind.RegAddr ? map.sourceRegs : map.sourceGlobals;
-		if (source == null || val.intVal < 0 || val.intVal >= source.length) throw "internal: a copied slot address must have its source storage";
-		if (val.kind == RaiserValueKind.GlobalAddr && map.destGlobals != null) return raiserGlobalAddr(val.intVal);
+		const source = map.sourceGlobals;
+		if (val.kind == RaiserValueKind.GlobalAddr) {
+			if (source == null || val.intVal < 0 || val.intVal >= source.length) throw "internal: a copied slot address must have its source storage";
+			if (map.destGlobals != null) return raiserGlobalAddr(val.intVal);
+		}
 		let keys = map.slotSrc;
 		let copies = map.slotDst;
 		if (keys == null || copies == null) {
@@ -921,7 +957,8 @@ export function copyGraphWith(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap,
 		const address = raiserElemAddr(handle, 0);
 		keys.push(val);
 		copies.push(address);
-		const copied = copyGraphWith(srcArr, srcObj, dstArr, dstObj, source![val.intVal], map);
+		const held = val.kind == RaiserValueKind.RegAddr ? copiedRegisterValue(map, val.intVal) : source![val.intVal];
+		const copied = copyGraphWith(srcArr, srcObj, dstArr, dstObj, held, map);
 		heapArrayPush(dstArr, handle, copied);
 		rcIncref(dstArr, dstObj, copied);
 		return address;
@@ -1005,19 +1042,20 @@ test "copyGraph preserves aliases to a register snapshot without retaining its s
 	const sObj = createStructHeap();
 	const dArr = createArrayHeap();
 	const dObj = createStructHeap();
-	const slots: RaiserValue[] = [heapAllocString(sArr, "source")];
+	const refs: int64[] = [heapAllocString(sArr, "source").intVal];
 	const owner = heapAllocArray(sArr);
-	heapArrayPush(sArr, owner, raiserRegAddr(0));
-	heapArrayPush(sArr, owner, raiserRegAddr(0));
+	heapArrayPush(sArr, owner, raiserRegAddr(1));
+	heapArrayPush(sArr, owner, raiserRegAddr(1));
 	const map = createCopyMap();
-	map.sourceRegs = slots;
+	map.sourceWords = [];
+	map.sourceRefs = refs;
 	const copied = copyGraphWith(sArr, sObj, dArr, dObj, raiserArray(owner), map);
 	const first = heapArrayGet(dArr, copied.intVal, 0);
 	const second = heapArrayGet(dArr, copied.intVal, 1);
 	assert heapStringText(dArr, heapArrayGet(dArr, first.intVal, first.floatVal as int64)) == "source";
 	heapArraySet(dArr, first.intVal, first.floatVal as int64, heapAllocString(dArr, "destination"));
 	assert heapStringText(dArr, heapArrayGet(dArr, second.intVal, second.floatVal as int64)) == "destination";
-	assert heapStringText(sArr, slots[0]) == "source";
+	assert heapStringText(sArr, handleValue(refs[0])) == "source";
 }
 
 // --- Cross-heap copy tests ---
