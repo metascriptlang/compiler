@@ -213,15 +213,9 @@ function parseTypeAtom(state: ParserState): Node {
 function applyArraySuffix(state: ParserState, result: Node): Node {
 	while (!isAtEnd(state) && current(state).kind == TokenKind.LBracket) {
 		const brackToken = current(state);
-		advance(state); // consume [
-		let size = -1;
-		if (!isAtEnd(state) && current(state).kind == TokenKind.Number) {
-			size = parseFloat(current(state).value) as int32;
-			advance(state);
-		}
-		if (!isAtEnd(state) && current(state).kind == TokenKind.RBracket) {
-			advance(state);
-		}
+		const literalSize = peek(state, 1).kind == TokenKind.Number && peek(state, 2).kind == TokenKind.RBracket;
+		const size = literalSize ? parseFloat(peek(state, 1).value) as int32 : -1;
+		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
 		result = createNode(NodeKind.TypeArray, { typExprElement: result, typExprSize: size }, brackToken);
 	}
 	return result;
