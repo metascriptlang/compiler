@@ -196,6 +196,12 @@ export enum RaiserOpcode {
 	FutureCombine,    // ABC: R[A] = a future settled from the futures in array R[A+1] by RaiserCombine C; Any fails with R[A+2]
 	Box,              // ABC: R[A] (a Dyn register) = a box holding R[B], or nil when R[B] is nil
 	Unbox,            // ABC: R[A] = the value in the box R[B]; a nil box reads as nil, fatal into a Word register
+	MoveW,            // ABC: words[A] = words[B]
+	MoveR,            // ABC: refs[A] = refs[B], counted
+	BeqR,             // ABC: if refs[A] == refs[B] skip C instructions
+	BneR,             // ABC: if refs[A] != refs[B] skip C instructions
+	BrEqR,            // ABC: if refs[A] == refs[B] pc += branchOffset(C)
+	BrNeR,            // ABC: if refs[A] != refs[B] pc += branchOffset(C)
 }
 
 // How FutureCombine settles its result from its inputs (Promise.all, race, any).
@@ -205,10 +211,14 @@ export enum RaiserCombine {
 	Any,
 }
 
+// A register holds one class for the whole function: Word, Float and Bool live in the word file,
+// Ref and Dyn in the ref file. The numbers are the 3-bit class tag of a tagged operand.
 export enum RaiserRegClass {
 	Word,
 	Ref,
 	Dyn,
+	Float,
+	Bool,
 }
 
 export function regClassLetter(cls: RaiserRegClass): string {
@@ -216,7 +226,154 @@ export function regClassLetter(cls: RaiserRegClass): string {
 		RaiserRegClass.Word => "W",
 		RaiserRegClass.Ref => "R",
 		RaiserRegClass.Dyn => "D",
+		RaiserRegClass.Float => "F",
+		RaiserRegClass.Bool => "B",
 	};
+}
+
+export function inRefFile(cls: RaiserRegClass): boolean {
+	return cls == RaiserRegClass.Ref || cls == RaiserRegClass.Dyn;
+}
+
+export function operandTagged(rank: int32, cls: RaiserRegClass): int32 {
+	return (rank << 3) | (cls as int32);
+}
+
+export function operandRank(tagged: int32): int32 {
+	return tagged >> 3;
+}
+
+export function operandClass(tagged: int32): RaiserRegClass {
+	return (tagged & 7) as RaiserRegClass;
+}
+
+// What an instruction operand is. A fixed role names the class the opcode needs, so the operand
+// holds the bare rank in that class's file; Any holds a tagged operand (rank << 3 | class).
+// Code reaches createRaiserFunction with one number per register and leaves it renumbered.
+export enum RaiserRole {
+	None,     // an immediate, a constant index, a count or a site
+	Int,      // a Word register
+	IntLike,  // a Word or Bool register read for its integer payload
+	Float,
+	Bool,
+	Word,     // any register of the word file, class equal to the other operand
+	Ref,
+	Dyn,
+	Slot,     // any register of the ref file, class equal to the other operand
+	Any,      // a register of any class, tagged
+	IntPair,  // a Word register followed by the next Word register
+	Route,    // a Word register followed by a Dyn register, the second named by B
+}
+
+function roleOf(letter: string): RaiserRole {
+	return match (letter) {
+		"-" => RaiserRole.None,
+		"i" => RaiserRole.Int,
+		"l" => RaiserRole.IntLike,
+		"f" => RaiserRole.Float,
+		"b" => RaiserRole.Bool,
+		"w" => RaiserRole.Word,
+		"r" => RaiserRole.Ref,
+		"d" => RaiserRole.Dyn,
+		"y" => RaiserRole.Slot,
+		"x" => RaiserRole.Any,
+		"p" => RaiserRole.IntPair,
+		"e" => RaiserRole.Route,
+		_ => { throw new Error(`internal: role letter '${letter}' is not defined`); },
+	};
+}
+
+// One letter for each of A, B and C. A call-like opcode's last operand is a site: its arguments are the registers after A.
+function opRoleLetters(op: RaiserOpcode): string {
+	return match (op) {
+		RaiserOpcode.LoadConst | RaiserOpcode.LoadNil | RaiserOpcode.LoadGlobal | RaiserOpcode.StoreGlobal | RaiserOpcode.Halt | RaiserOpcode.Print
+			| RaiserOpcode.Ret | RaiserOpcode.Throw | RaiserOpcode.FutureNew | RaiserOpcode.ModuleImport | RaiserOpcode.Catch | RaiserOpcode.ObjConv => "x--",
+		RaiserOpcode.Move => "xx-",
+		RaiserOpcode.MoveW => "ww-",
+		RaiserOpcode.MoveR => "yy-",
+		RaiserOpcode.AddI64 | RaiserOpcode.SubI64 | RaiserOpcode.MulI64 | RaiserOpcode.DivI64 | RaiserOpcode.ModI64
+			| RaiserOpcode.AddU64 | RaiserOpcode.SubU64 | RaiserOpcode.MulU64 | RaiserOpcode.DivU64 | RaiserOpcode.ModU64
+			| RaiserOpcode.BitAnd | RaiserOpcode.BitOr | RaiserOpcode.BitXor
+			| RaiserOpcode.ShiftLeft | RaiserOpcode.ShiftRight | RaiserOpcode.ShiftRightU => "iii",
+		RaiserOpcode.NegI64 | RaiserOpcode.BitNot => "ii-",
+		RaiserOpcode.AddI64Imm | RaiserOpcode.SubI64Imm => "ii-",
+		RaiserOpcode.LoadInt | RaiserOpcode.NarrowU | RaiserOpcode.NarrowS | RaiserOpcode.SignExtend => "i--",
+		RaiserOpcode.BeqI64 | RaiserOpcode.BneI64 | RaiserOpcode.BltI64 | RaiserOpcode.BleI64 | RaiserOpcode.BgtI64 | RaiserOpcode.BgeI64
+			| RaiserOpcode.BrEqI64 | RaiserOpcode.BrNeI64 | RaiserOpcode.BrLtI64 | RaiserOpcode.BrLeI64 | RaiserOpcode.BrGtI64 | RaiserOpcode.BrGeI64 => "ll-",
+		RaiserOpcode.BltU64 | RaiserOpcode.BleU64 => "ii-",
+		RaiserOpcode.BeqI64Imm | RaiserOpcode.BneI64Imm | RaiserOpcode.BltI64Imm | RaiserOpcode.BleI64Imm | RaiserOpcode.BgtI64Imm | RaiserOpcode.BgeI64Imm
+			| RaiserOpcode.BrEqI64Imm | RaiserOpcode.BrNeI64Imm | RaiserOpcode.BrLtI64Imm | RaiserOpcode.BrLeI64Imm | RaiserOpcode.BrGtI64Imm | RaiserOpcode.BrGeI64Imm => "l--",
+		RaiserOpcode.BeqR | RaiserOpcode.BneR | RaiserOpcode.BrEqR | RaiserOpcode.BrNeR => "rr-",
+		RaiserOpcode.AddF64 | RaiserOpcode.SubF64 | RaiserOpcode.MulF64 | RaiserOpcode.DivF64 => "fff",
+		RaiserOpcode.NegF64 => "ff-",
+		RaiserOpcode.BeqF64 | RaiserOpcode.BneF64 | RaiserOpcode.BltF64 | RaiserOpcode.BleF64 | RaiserOpcode.BgtF64 | RaiserOpcode.BgeF64 => "ff-",
+		RaiserOpcode.BTruthy => "x--",
+		RaiserOpcode.IsKind | RaiserOpcode.InstanceOf => "bx-",
+		RaiserOpcode.SameLoc => "bxx",
+		RaiserOpcode.Conv => "xx-",
+		RaiserOpcode.CopyValue => "xx-",
+		RaiserOpcode.Box => "dx-",
+		RaiserOpcode.Unbox => "xd-",
+		RaiserOpcode.NewArray | RaiserOpcode.NewObject => "r--",
+		RaiserOpcode.LoadIndex => "xri",
+		RaiserOpcode.StoreIndex => "rix",
+		RaiserOpcode.ArrayLen => "ir-",
+		RaiserOpcode.ArrayPush => "rx-",
+		RaiserOpcode.ArraySetLen => "ri-",
+		RaiserOpcode.ArraySlice => "rrp",
+		RaiserOpcode.LoadField => "xr-",
+		RaiserOpcode.StoreField => "r-x",
+		RaiserOpcode.ConcatStr => "rxx",
+		RaiserOpcode.EqStr | RaiserOpcode.NeStr | RaiserOpcode.LtStr | RaiserOpcode.LeStr => "rr-",
+		RaiserOpcode.StrLen | RaiserOpcode.StrByteLen => "ir-",
+		RaiserOpcode.StrCharAt => "rri",
+		RaiserOpcode.StrSlice => "rrp",
+		RaiserOpcode.AddrReg => "dx-",
+		RaiserOpcode.AddrGlobal => "d--",
+		RaiserOpcode.AddrIndex => "dri",
+		RaiserOpcode.AddrField => "dr-",
+		RaiserOpcode.LoadDeref => "xx-",
+		RaiserOpcode.StoreDeref => "x-x",
+		RaiserOpcode.Call | RaiserOpcode.CallHost => "x--",
+		RaiserOpcode.CallIndirect => "xi-",
+		RaiserOpcode.Spawn | RaiserOpcode.Await | RaiserOpcode.FutureSettle | RaiserOpcode.FutureFail => "xx-",
+		RaiserOpcode.Sleep => "xx-",
+		RaiserOpcode.Finally | RaiserOpcode.FinallyEnd => "e--",
+		RaiserOpcode.Jump | RaiserOpcode.Try | RaiserOpcode.Yield | RaiserOpcode.Trap => "---",
+	};
+}
+
+export function opRole(op: RaiserOpcode, slot: int32): RaiserRole {
+	return roleOf(opRoleLetters(op).charAt(slot));
+}
+
+// What a generic handler finds in an operand once it is retagged: 0..4 is the class a fixed role names,
+// OPERAND_TAGGED an operand that already carries its class, OPERAND_RAW one that is no register, and
+// OPERAND_BARE a bare rank whose class the role leaves open (only the typed handlers read those).
+export const OPERAND_TAGGED: int32 = 5;
+export const OPERAND_RAW: int32 = 6;
+export const OPERAND_BARE: int32 = 7;
+
+export function operandKind(op: RaiserOpcode, slot: int32): int32 {
+	return match (opRole(op, slot)) {
+		RaiserRole.None => OPERAND_RAW,
+		RaiserRole.Int | RaiserRole.IntPair | RaiserRole.Route => RaiserRegClass.Word as int32,
+		RaiserRole.Float => RaiserRegClass.Float as int32,
+		RaiserRole.Bool => RaiserRegClass.Bool as int32,
+		RaiserRole.Ref => RaiserRegClass.Ref as int32,
+		RaiserRole.Dyn => RaiserRegClass.Dyn as int32,
+		RaiserRole.Any => OPERAND_TAGGED,
+		_ => OPERAND_BARE,
+	};
+}
+
+export function opHasSite(op: RaiserOpcode): boolean {
+	return op == RaiserOpcode.Call || op == RaiserOpcode.CallIndirect || op == RaiserOpcode.CallHost || op == RaiserOpcode.NewArray;
+}
+
+// How many registers follow A as the arguments of a site opcode: the count sits in C, or in B for NewArray.
+export function siteArgCount(inst: RaiserInstruction): number {
+	return inst.op == RaiserOpcode.NewArray ? inst.b : inst.c;
 }
 
 export enum RaiserConvClass {
@@ -340,7 +497,7 @@ export function isBranchI64(op: RaiserOpcode): boolean {
 	return match (op) {
 		RaiserOpcode.BrEqI64 | RaiserOpcode.BrNeI64 | RaiserOpcode.BrLtI64 | RaiserOpcode.BrLeI64 | RaiserOpcode.BrGtI64 | RaiserOpcode.BrGeI64
 			| RaiserOpcode.BrEqI64Imm | RaiserOpcode.BrNeI64Imm | RaiserOpcode.BrLtI64Imm | RaiserOpcode.BrLeI64Imm
-			| RaiserOpcode.BrGtI64Imm | RaiserOpcode.BrGeI64Imm => true,
+			| RaiserOpcode.BrGtI64Imm | RaiserOpcode.BrGeI64Imm | RaiserOpcode.BrEqR | RaiserOpcode.BrNeR => true,
 		_ => false,
 	};
 }
@@ -372,6 +529,10 @@ export function packedOp(word: int64): RaiserOpcode {
 
 export function packedA(word: int64): number {
 	return ((word >> 8) & 65535) as number;
+}
+
+export function packedB(word: int64): number {
+	return ((word >> 24) & 65535) as number;
 }
 
 export function packedBx(word: int64): number {
