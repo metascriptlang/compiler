@@ -412,12 +412,15 @@ export function forgetInstances(ctx: CheckerContext): void {
 const _instanceLeft: Type[] = [];
 const _instanceRight: Type[] = [];
 
+function identityFlags(t: Type): BitSet<TypeFlag> {
+	return t.typeFlags.excl(TypeFlag.HasAsgn).excl(TypeFlag.HasGenericParam).excl(TypeFlag.HasInheritedFields);
+}
+
 export function sameInstanceType(a: Type | null, b: Type | null): boolean {
 	if (a == b) return true;
 	if (a == null || b == null) return false;
 	if (a.kind != b.kind) return sameType(a, b);
-	if (a.typeFlags.excl(TypeFlag.HasAsgn).excl(TypeFlag.HasGenericParam)
-		!= b.typeFlags.excl(TypeFlag.HasAsgn).excl(TypeFlag.HasGenericParam)) return false;
+	if (identityFlags(a) != identityFlags(b)) return false;
 	for (let i = 0; i < _instanceLeft.length; i += 1) {
 		if (_instanceLeft[i] == a && _instanceRight[i] == b) return true;
 	}
