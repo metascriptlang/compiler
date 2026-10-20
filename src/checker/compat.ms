@@ -1655,7 +1655,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				if (leavesInlineConv(actual, formal)) return TypeRelation.None;
 				const formalParams = runtimeParams(formal);
 				const actualParams = runtimeParams(actual);
-				if (formalParams.length != actualParams.length) return TypeRelation.None;
+				if (formalParams.length != actualParams.length) return arityAdapts(actual, formal) ? TypeRelation.Convertible : TypeRelation.None;
 				let worst = TypeRelation.Exact;
 				for (let pi = 0; pi < formalParams.length; pi += 1) {
 					if (sinkModeDiffers(formalParams[pi], actualParams[pi])) return TypeRelation.None;
