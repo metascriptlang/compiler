@@ -75,7 +75,7 @@ const TWO_CONSTS = "const a = 1;\nconst b = a;";
 // Every reader is total: a missing message or field reads as a value the
 // check reports, so a check names the first wrong field instead of throwing.
 
-function idKey(id: JsonValue): string {
+export function idKey(id: JsonValue): string {
 	return match (id.kind) {
 		JsonKind.Int => "n:" + id.intVal,
 		JsonKind.String => "s:" + id.strVal,
@@ -83,7 +83,7 @@ function idKey(id: JsonValue): string {
 	};
 }
 
-function hasKey(m: JsonValue, key: string): boolean {
+export function hasKey(m: JsonValue, key: string): boolean {
 	return m.kind == JsonKind.Object && m.keys.indexOf(key) >= 0;
 }
 
