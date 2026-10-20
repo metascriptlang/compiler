@@ -1004,7 +1004,7 @@ export function isAnonLiteralName(name: string): boolean {
 
 export function isValueStructDecl(t: Type | null): boolean {
 	if (t == null) return false;
-	return t.sym != null && t.sym.symbolType != null && t.sym.symbolType.kind == TypeKind.Struct;
+	return t.sym != null && t.sym.symbolType != null && t.sym.symbolType.kind == TypeKind.Struct && !t.typeFlags.has(TypeFlag.DuVariant);
 }
 
 export function valueStructBaseDepth(source: Type, target: Type): int32 {
@@ -1289,12 +1289,12 @@ export function sameNominal(a: Type, b: Type): boolean {
 	if (a == b) return true;
 	if (isMaybeType(a) && isMaybeType(b)) return sameType(a.typeReturn, b.typeReturn);
 	if (a.sym != null && b.sym != null) {
-		if (a.sym == b.sym) return true;
-		return a.sym.modulePath != "" && a.sym.modulePath == b.sym.modulePath
+		const declared = a.sym == b.sym || (a.sym.modulePath != "" && a.sym.modulePath == b.sym.modulePath
 			&& a.sym.name == b.sym.name && a.sym.symbolKind == b.sym.symbolKind
 			&& a.sym.location.line > 0
 			&& a.sym.location.line == b.sym.location.line
-			&& a.sym.location.column == b.sym.location.column;
+			&& a.sym.location.column == b.sym.location.column);
+		return declared && (!a.typeFlags.has(TypeFlag.DuVariant) || sameTypeList(a.typeChildren, b.typeChildren));
 	}
 	return a.sym == null && b.sym == null && a.kind == b.kind
 		&& a.typeName != "" && a.typeName == b.typeName
