@@ -1,6 +1,6 @@
 // Raiser VM — Module and Function structures
 
-import { RaiserInstruction, RaiserOpcode, raiserABC, raiserABx, packInstruction } from "./bytecode";
+import { RaiserInstruction, RaiserOpcode, RaiserRegClass, raiserABC, raiserABx, packInstruction } from "./bytecode";
 import { RaiserValue, RaiserValueKind, RaiserClassType, raiserInt, constStringText } from "./value";
 import { RaiserCopyPlan } from "./valueCopy";
 
@@ -17,6 +17,7 @@ export interface RaiserFunction {
 	arity: number;
 	localsCount: number;
 	maxRegs: number;
+	regClasses: RaiserRegClass[];
 	copyPlans: RaiserCopyPlan[];
 	classTypes: RaiserClassType[];
 }
@@ -47,13 +48,14 @@ export interface RaiserModule {
 	functions: RaiserFunction[];
 	entry: number;
 	globalCount: int32;
+	globalInit: RaiserValue[];
 	records: RaiserModuleRecord[];
 	exports: RaiserExport[];
 }
 
 // --- Constructors ---
 
-export function createRaiserFunction(name: string, code: RaiserInstruction[], constants: RaiserValue[], arity: number, localsCount: number, maxRegs: number): RaiserFunction {
+export function createRaiserFunction(name: string, code: RaiserInstruction[], constants: RaiserValue[], arity: number, localsCount: number, maxRegs: number, classes: RaiserRegClass[] | null = null): RaiserFunction {
 	const packed: int64[] = [];
 	const lines: int32[] = [];
 	const fieldCache: int32[] = [];
@@ -64,11 +66,18 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 	}
 	const names: string[] = [];
 	for (const c of constants) names.push(c.kind == RaiserValueKind.String ? constStringText(c) : "");
-	return { name, code, packed, lines, fieldCache, constants, names, arity, localsCount, maxRegs, copyPlans: [], classTypes: [] };
+	const regClasses: RaiserRegClass[] = [];
+	if (classes == null) {
+		for (let r = 0; r < maxRegs; r += 1) regClasses.push(RaiserRegClass.Dyn);
+	} else {
+		if (classes.length != maxRegs) throw new Error(`internal: function ${name} has ${maxRegs} registers but ${classes.length} register classes`);
+		for (const c of classes) regClasses.push(c);
+	}
+	return { name, code, packed, lines, fieldCache, constants, names, arity, localsCount, maxRegs, regClasses, copyPlans: [], classTypes: [] };
 }
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {
-	return { name, functions, entry, globalCount: 0, records: [], exports: [] };
+	return { name, functions, entry, globalCount: 0, globalInit: [], records: [], exports: [] };
 }
 
 // --- Test Helper ---

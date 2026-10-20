@@ -305,6 +305,33 @@ function equalityEntry(ctx: CheckerContext, left: Type, right: Type): string {
 	return "";
 }
 
+// A value of one member of a union, taken into the union as a call argument is, so a comparison
+// reads both sides as the union and compares the member each holds.
+export function widenToSlotUnion(ctx: CheckerContext, member: Node, union: Type): Node {
+	const held = member.nodeType;
+	if (held == null || held.kind == TypeKind.Null || isUnresolvedType(held)) return member;
+	const peeled = peelTransparentInstance(held);
+	if (isSlotUnion(peeled) || !slotTakesValue(held, union)) return member;
+	return fitNode(ctx, member, union, held);
+}
+
+export function comparedUnion(t: Type | null): Type | null {
+	if (t == null) return null;
+	const peeled = peelTransparentInstance(t);
+	return isSlotUnion(peeled) && !hasGenericParams(peeled) ? peeled : null;
+}
+
+export function widenEqualityOperand(ctx: CheckerContext, d: BinaryExprData): void {
+	const op = d.operator;
+	if (op != "==" && op != "===" && op != "!=" && op != "!==") return;
+	const left = comparedUnion(d.left.nodeType);
+	const right = comparedUnion(d.right.nodeType);
+	if ((left == null) == (right == null)) return;
+	if (ctx.extensionRegistry != null && resolveUserOperator(ctx, "==", [d.left.nodeType!, d.right.nodeType!]) != null) return;
+	if (left != null) d.right = widenToSlotUnion(ctx, d.right, left);
+	else d.left = widenToSlotUnion(ctx, d.left, right!);
+}
+
 export function boundCallOf(sym: Symbol, args: Node[], loc: SourceLocation): Node {
 	const callee = createNodeAt(NodeKind.Identifier, { name: sym.name }, loc);
 	callee.resolvedSym = sym;

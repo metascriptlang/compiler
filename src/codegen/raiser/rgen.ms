@@ -12,7 +12,7 @@ import { classDeclNodeOf, parentClassSymOf, hasFlag } from "../../checker/symbol
 import { isGenericFn } from "../../checker/context";
 import { hasGenericParams, classParentOf } from "../../checker/types";
 import { parseSource } from "../../parser/statements/validation";
-import { RaiserOpcode, RaiserInstruction, raiserABC } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC } from "../../raiser/bytecode";
 import {
 	RaiserValue, RaiserValueKind, raiserNil, raiserConstString,
 	heapObjectGetField, heapObjectGetString, heapObjectGetObjectHandle, heapStringText,
@@ -28,7 +28,7 @@ import { forEachChild } from "../../ast/visitor";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import {
 	RaiserFuncMap, RaiserGlobalMap, createFuncMap,
-	createCompState, emitInst, emitLoadConst, emitRet, emitImplicitReturn, allocReg, raiserClassKey,
+	createCompState, emitInst, emitLoadConst, emitRet, emitImplicitReturn, allocRef, allocDyn, raiserClassKey,
 	addConst, declareLocal, declaredSymbol, resetTemps, emitClosurePair,
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
 	setRaiserModulePath, getRaiserModulePath,
@@ -36,7 +36,7 @@ import {
 } from "./context";
 import { compileStmt } from "./statements";
 import { compileExpr, classTargetKey } from "./expressions";
-import { emitZeroValue } from "./valueCopy";
+import { emitZeroValue, allocFor, regClassOf, zeroScalar } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { checkProgram } from "../../checker/checkPass";
 import { transformForRaiser } from "../../transform/raiserLowering";
@@ -131,7 +131,7 @@ export function compileFuncBody(funcMap: RaiserFuncMap, fnName: string, paramSym
 
 	// Declare params as locals R[0..arity-1]
 	for (const paramSym of paramSyms) {
-		declareLocal(s, paramSym, allocReg(s));
+		declareLocal(s, paramSym, allocFor(s, paramSym.symbolType));
 	}
 
 	// Expression-body functions (e.g., arrow `(x) => x * 2` lifted to FunctionDecl):
@@ -145,7 +145,7 @@ export function compileFuncBody(funcMap: RaiserFuncMap, fnName: string, paramSym
 
 	emitImplicitReturn(s);
 
-	const compiled = createRaiserFunction(fnName, s.code, s.constants, paramSyms.length, 0, s.maxRegSeen);
+	const compiled = createRaiserFunction(fnName, s.code, s.constants, paramSyms.length, 0, s.regClasses.length, s.regClasses);
 	compiled.copyPlans = s.copyPlans;
 	compiled.classTypes = s.classTypes;
 	return compiled;
@@ -196,17 +196,17 @@ function compileClassInit(
 	const s = createCompState();
 	s.funcMap = funcMap;
 	if (globals != null) s.globals = globals;
-	const thisReg = allocReg(s);
+	const thisReg = allocRef(s);
 	s.receiverReg = thisReg;
 	for (let i = 0; i < ctorSyms.length; i += 1) {
-		declareLocal(s, ctorSyms[i], i == 0 ? thisReg : allocReg(s));
+		declareLocal(s, ctorSyms[i], i == 0 ? thisReg : allocFor(s, ctorSyms[i].symbolType));
 	}
 	storeZeroFields(s, thisReg, classBody);
 	if (ctorBody != null) {
 		compileStmt(s, ctorBody);
 	}
 	emitImplicitReturn(s);
-	const compiled = createRaiserFunction(className + "_init", s.code, s.constants, ctorArity(ctorSyms) + 1, 0, s.maxRegSeen);
+	const compiled = createRaiserFunction(className + "_init", s.code, s.constants, ctorArity(ctorSyms) + 1, 0, s.regClasses.length, s.regClasses);
 	compiled.copyPlans = s.copyPlans;
 	compiled.classTypes = s.classTypes;
 	return compiled;
@@ -238,11 +238,11 @@ function compileClassConstructor(
 	// Declare ctor params
 	const arity = ctorArity(ctorSyms);
 	for (let i = 1; i < ctorSyms.length; i += 1) {
-		declareLocal(s, ctorSyms[i], allocReg(s));
+		declareLocal(s, ctorSyms[i], allocFor(s, ctorSyms[i].symbolType));
 	}
 
 	// Create this object
-	const thisReg = allocReg(s);
+	const thisReg = allocRef(s);
 	emitInst(s, raiserABC(RaiserOpcode.NewObject, thisReg, classTypeOperand(s, className, classSym), 0));
 	s.receiverReg = thisReg;
 	if (ctorSyms.length > 0) declareLocal(s, ctorSyms[0], thisReg);
@@ -259,7 +259,7 @@ function compileClassConstructor(
 	// Always return this
 	emitRet(s, thisReg);
 
-	const compiled = createRaiserFunction(className + "_new", s.code, s.constants, arity, 0, s.maxRegSeen);
+	const compiled = createRaiserFunction(className + "_new", s.code, s.constants, arity, 0, s.regClasses.length, s.regClasses);
 	compiled.copyPlans = s.copyPlans;
 	compiled.classTypes = s.classTypes;
 	return compiled;
@@ -542,11 +542,11 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 			}
 		}
 
-		const nilReg = allocReg(s);
+		const nilReg = allocRef(s);
 		emitLoadConst(s, nilReg, raiserNil());
 		emitRet(s, nilReg);
 
-		const initFunc = createRaiserFunction("__init_" + mi, s.code, s.constants, 0, 0, s.maxRegSeen);
+		const initFunc = createRaiserFunction("__init_" + mi, s.code, s.constants, 0, 0, s.regClasses.length, s.regClasses);
 		initFunc.copyPlans = s.copyPlans;
 		initFunc.classTypes = s.classTypes;
 		functions.push(initFunc);
@@ -560,20 +560,25 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 	let lastResultReg = 0;
 	for (let ii = 0; ii < initIndices.length; ii += 1) {
 		if (plan.lazy.has(modules[ii].modulePath)) continue;
-		const destReg = allocReg(entryS);
+		const destReg = allocDyn(entryS);
 		emitInst(entryS, raiserABC(RaiserOpcode.Call, destReg, initIndices[ii], 0));
 		lastResultReg = destReg;
 	}
 	if (initIndices.length == 0) {
-		emitLoadConst(entryS, 0, raiserNil());
+		emitLoadConst(entryS, allocRef(entryS), raiserNil());
 	}
 	emitInst(entryS, raiserABC(RaiserOpcode.Halt, lastResultReg, 0, 0));
-	const entryFunc = createRaiserFunction("__entry", entryS.code, entryS.constants, 0, 0, entryS.maxRegSeen);
+	const entryFunc = createRaiserFunction("__entry", entryS.code, entryS.constants, 0, 0, entryS.regClasses.length, entryS.regClasses);
 	functions.push(entryFunc);
 
 	const compiled = createRaiserModule("project", functions, functions.length - 1);
 	compiled.globalCount = globalCount;
 	compiled.exports = exports;
+	const zeroState = createCompState();
+	for (let gi = 0; gi < globalCount; gi += 1) compiled.globalInit.push(raiserNil());
+	for (const entry of globals.items) {
+		if (regClassOf(zeroState, entry.symbol.symbolType) == RaiserRegClass.Word) compiled.globalInit[entry.index] = zeroScalar(entry.symbol.symbolType);
+	}
 	for (let ri = 0; ri < plan.records.length; ri += 1) {
 		const path = plan.records[ri];
 		let init: number = -1;

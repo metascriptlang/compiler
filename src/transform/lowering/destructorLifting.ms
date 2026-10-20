@@ -1661,12 +1661,9 @@ function tupleNeedsHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): boolean {
 // No-RC tuples generate nothing — classify.ms returns noRcInfo, so no hook is referenced.
 function ensureAnonUnionHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
 	if (t.typeName != "" || t.typeChildren == null || t.typeChildren.length < 2) return "";
-	let allPrimitive = true;
 	for (const c of t.typeChildren) {
 		if (c == null || c.kind == TypeKind.Null || c.kind == TypeKind.Ptr) return "";
-		if (!isPrimitiveUnionMember(c)) allPrimitive = false;
 	}
-	if (allPrimitive) return "";
 	const name = anonUnionCName(t);
 	if (!nameSetContains(lctx.generated, opTypeKey(t)) && !hasLiftedOp(t, AttachedOp.AttachedDestructor)) {
 		if (!typeNeedsHooks(t, lctx, loc)) return "";

@@ -42,7 +42,7 @@ import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineI
 import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
-import { convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral } from "./fit";
+import { convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, comparedUnion, widenToSlotUnion } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerDemandBinding, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
@@ -2639,9 +2639,12 @@ function checkSwitchStmt(ctx: CheckerContext, node: Node): void {
 		if (cd.isDefault) hasDefault = true;
 		restoreInitState(ctx.initTracker, oldState);
 		restoreConsumeState(ctx.affineTracker, oldAffine);
-		for (const t of cd.caseTests) {
+		for (let i = 0; i < cd.caseTests.length; i += 1) {
+			const t = cd.caseTests[i];
 			checkExpr(ctx, t, null);
 			checkSwitchCase(ctx, d.switchDisc, t);
+			const heldUnion = comparedUnion(d.switchDisc.nodeType);
+			if (heldUnion != null) cd.caseTests[i] = widenToSlotUnion(ctx, t, heldUnion);
 		}
 		const savedInSwitch = ctx.inSwitch;
 		ctx.inSwitch = true;
