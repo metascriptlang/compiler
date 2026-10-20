@@ -425,6 +425,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	const openNullableTarget = openNullableUnionPayload(target, source);
 	if (openNullableTarget != null) return isAssignable(source.typeReturn, openNullableTarget);
 
+	if (classOutsideLineage(source, target)) return false;
 	if (missingRoutine(source, target) != "") return false;
 
 	// Same kind is always compatible
@@ -1096,6 +1097,11 @@ function answersTo(source: Type, fields: string[], name: string): boolean {
 // A class instance answers to its methods and accessors as well as its fields:
 // the first routine of the target class the source has no member for, or empty.
 // An instantiated class body has no class of its own; its instance relates it.
+function classOutsideLineage(source: Type, target: Type): boolean {
+	const targetClass = classBodyOf(target);
+	return targetClass != null && classBodyOf(source) != null && !derivesFromClass(source, targetClass.sym!);
+}
+
 function missingRoutine(source: Type, target: Type): string {
 	let cls = classBodyOf(target);
 	if (cls == null) return "";
@@ -1163,6 +1169,8 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 	}
 	const order = unionOrderHint(source, target);
 	if (order != "") return order;
+	const lineage = classLineageHint(skipModifier(source), skipModifier(objectShapeTarget(source, target)));
+	if (lineage != "") return lineage;
 	const shapeTarget = objectShapeTarget(source, target);
 	const s0 = skipModifier(source);
 	const t0 = skipModifier(shapeTarget);
@@ -1196,6 +1204,20 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 		ti += 1;
 	}
 	return routineHint(s, t);
+}
+
+function classLineageHint(source: Type | null, targetIn: Type | null): string {
+	const target = targetIn != null ? unwrapRefNullUnion(targetIn) ?? targetIn : null;
+	if (source == null || target == null || !classOutsideLineage(source, target)) return "";
+	const from = typeDisplayName(source);
+	const to = typeDisplayName(target);
+	const sourceClass = classBodyOf(source);
+	if (sourceClass != null && derivesFromClass(target, sourceClass.sym!)) {
+		return " (not every " + from + " is a " + to + ": test it with `instanceof " + to
+			+ "`, or convert it with `as " + to + "`, which is checked at run time)";
+	}
+	return " (" + from + " is not a " + to + ": classes convert only along `extends`; make " + from
+		+ " extend " + to + ", or type the slot with an interface)";
 }
 
 function routineHint(source: Type, target: Type): string {
@@ -1462,6 +1484,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	// Never is the bottom type — relates to everything. After exhaustive
 	// narrowing eliminates all union variants, the residual is never.
 	if (actual.kind == TypeKind.Never) return TypeRelation.Exact;
+	if (classOutsideLineage(actual, formal)) return TypeRelation.None;
 	if (formal.kind == TypeKind.Function && actual.kind != TypeKind.Function) {
 		const widened = distinctWidenBody(actual);
 		if (widened != null && widened.kind == TypeKind.Function) {
