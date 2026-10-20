@@ -64,6 +64,7 @@ import "./scenarios/objectOnlyAfterExtends";
 import "./scenarios/instanceExtensionOffTypeName";
 import "./scenarios/objectViewMissingField";
 import "./scenarios/matchAlternativesNarrow";
+import "./scenarios/capturedBindingNarrowing";
 import "./scenarios/distinctClassFromValue";
 import "./scenarios/spreadLiteralUnionMember";
 import "./scenarios/classImplements";
