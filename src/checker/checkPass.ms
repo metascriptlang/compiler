@@ -21,7 +21,7 @@ import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { defaultGlobalImports, extraGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
-import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainStructuralPrefix } from "./compat";
+import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineGenericParam, refuseNestedView, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
@@ -1564,7 +1564,7 @@ function refuseUnimplemented(ctx: CheckerContext, node: Node, classType: Type, w
 			at.line, at.column);
 		return;
 	}
-	if (isAssignable(classType, implemented)) return;
+	if (holdsMembersOf(classType, implemented)) return;
 	const role = shape.sym != null && shape.sym.symbolKind == SymbolKind.Class ? "class" : "interface";
 	const own = unwrapRef(classType);
 	let memberRefused = false;
@@ -1610,7 +1610,7 @@ function unimplementedReason(d: ClassDeclData, own: Type, shape: Type, classType
 		const why = fieldRefusal(own.typeChildren[si], shape.typeChildren[ti]);
 		if (why != "") return `: property '${name}' of '${d.className}': ${why}`;
 	}
-	if (missing.length == 0) return explainStructuralPrefix(classType, implemented);
+	if (missing.length == 0) return explainMemberPrefix(classType, implemented);
 	const listed = "'" + missing.join("', '") + "'";
 	const routines: string[] = [];
 	for (const raw of d.classBody) {

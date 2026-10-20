@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, ClassDeclData, MethodDeclData, DecoratedDeclData } from "../ast/node";
 import { makeSymbol, classDeclNodeOf } from "./symbol";
-import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass } from "./types";
+import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -1105,6 +1105,16 @@ function classOutsideLineage(source: Type, target: Type): boolean {
 	return (shape.kind == TypeKind.Struct && !isMaybeType(shape)) || shape.kind == TypeKind.GenericInstance;
 }
 
+// What an `implements` clause relates: the class holds every member of the implemented
+// type, field by field in the leading slots and routine by name. No conversion into a slot
+// follows from it, so the lineage a class slot needs does not enter.
+export function holdsMembersOf(classType: Type, implemented: Type): boolean {
+	if (classBodyOf(implemented) == null) return isAssignable(classType, implemented);
+	const shape = peelToStructOrUnion(implemented);
+	return shape != null && missingRoutine(classType, implemented) == ""
+		&& isObjectAssignable(unwrapRefBase(classType), shape);
+}
+
 function missingRoutine(source: Type, target: Type): string {
 	let cls = classBodyOf(target);
 	if (cls == null) return "";
@@ -1174,6 +1184,12 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 	if (order != "") return order;
 	const lineage = classLineageHint(skipModifier(source), skipModifier(objectShapeTarget(source, target)));
 	if (lineage != "") return lineage;
+	return explainMemberPrefix(source, target);
+}
+
+// The members of `target` that `source` does not hold where a structural match reads them:
+// a field in another slot, or a routine of a class `source` has no member for.
+export function explainMemberPrefix(source: Type | null, target: Type | null): string {
 	const shapeTarget = objectShapeTarget(source, target);
 	const s0 = skipModifier(source);
 	const t0 = skipModifier(shapeTarget);
