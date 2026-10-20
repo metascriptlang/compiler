@@ -16,8 +16,8 @@ import {
 	Node, NodeKind, DeclKind, SourceLocation, createNode,
 	ArrayLiteralData, SpreadExprData, IdentifierData, Type, TypeKind,
 } from "../../ast/node";
-import { TransformContext, freshTempSym } from "../context";
-import { int32Type, peelTransparentInstance } from "../../checker/types";
+import { TransformContext, freshTempSym, reportTransformError } from "../context";
+import { int32Type, peelTransparentInstance, typeDisplayName } from "../../checker/types";
 import { Symbol } from "../../ast/node";
 import { walkExpandBlocks, walkOnceEvaluated, OnceEvalState } from "../walker";
 import {
@@ -68,6 +68,11 @@ function tupleSource(t: Type | null): Type | null {
 	return u != null && u.kind == TypeKind.Tuple ? u : null;
 }
 
+function isIndexedSource(t: Type | null): boolean {
+	const u = bareArrayType(t);
+	return u != null && (u.kind == TypeKind.Array || u.kind == TypeKind.SizedArray || u.kind == TypeKind.Span || u.kind == TypeKind.String);
+}
+
 function viewRef(sym: Symbol, t: Type | null, loc: SourceLocation): Node {
 	if (!isRefArray(t)) return typedRef(sym, t, loc);
 	const deref = makeHiddenDeref(typedRef(sym, t, loc), loc);
@@ -106,6 +111,10 @@ export function expandSpreadLiteral(lit: Node, ctx: TransformContext, out: Node[
 		const sd = e.data as SpreadExprData;
 		const srcT = sd.spreadArg.nodeType;
 		const tuple = tupleSource(srcT);
+		if (tuple == null && !isIndexedSource(srcT)) {
+			reportTransformError(ctx, `a spread of '${typeDisplayName(srcT)}' is unsupported on this backend: spread an array, a tuple or a string`, sd.spreadArg.location);
+			continue;
+		}
 		const srcSym = freshTempSym(ctx, "sprs", srcT);
 		const srcDecl = makeVarDecl(srcSym.name, sd.spreadArg, DeclKind.Const, loc);
 		srcDecl.resolvedSym = srcSym;
