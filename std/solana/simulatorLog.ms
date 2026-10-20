@@ -151,7 +151,7 @@ export function getRent(out: uint64): uint64 {
 	return 0;
 }
 
-// host.c msSolHostSetReturnData; the C shim msSolHostSetReturnData passes the pointer and the length as words
+// hostEntry.c msSolHostSetReturnData; the C shim msSolHostSetReturnData passes the pointer and the length as words
 @exportName("msSolHostSetReturnDataAt")
 export function setReturnData(data: uint64, length: uint64): void {
 	if (msSolHostFaultCodeOf() != 0) { return; }

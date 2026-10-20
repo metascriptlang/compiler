@@ -18,11 +18,6 @@ static uint64_t msSolHostAccounts[MS_SOL_MAX_ACCOUNTS];
 static uint8_t* msSolHostInputBuffer;
 static uint64_t msSolHostFaultCode;
 static char msSolHostFaultText[160];
-void msSolHostResetSimulator(void);
-void msSolHostResetDispatcher(void);
-void msSolHostHoldAccounts(uint64_t table, uint64_t count);
-void msSolHostSettle(void);
-void msSolHostSetReturnDataAt(uint64_t data, uint64_t length);
 
 msSolanaContext* msSolHostContext(void) {
     if (msSolHostState.input == 0) {
@@ -57,21 +52,15 @@ uint64_t msSolHostScratch(uint64_t size) {
     return msSolHostAlloc(size);
 }
 
-static void msSolHostForget(void) {
-    msSolHostResetSimulator();
-    msSolHostResetDispatcher();
-}
-
-void msSolHostEnter(uint64_t input) {
-    msSolHostForget();
+uint64_t msSolHostReset(uint64_t input) {
     memset(msSolHostHeap, 0, sizeof(msSolHostHeap));
     memset(&msSolHostState, 0, sizeof(msSolHostState));
     msSolHostState.input = input == 0 ? (uint64_t)msSolHostEmptyInput : input;
     msSolHostState.arenaPosition = sizeof(msSolanaContext);
     msSolParse(msSolHostAccounts);
-    msSolHostHoldAccounts((uint64_t)msSolHostAccounts, msSolHostState.accountCount);
     msSolHostFaultCode = 0;
     msSolHostFaultText[0] = 0;
+    return (uint64_t)msSolHostAccounts;
 }
 
 uint64_t msSolHostInput(uint64_t size) {
@@ -114,14 +103,6 @@ void msSolHostRaise(uint64_t code, msString text) {
     char line[256];
     snprintf(line, sizeof(line), "%.*s", (int)text.len, text.p == NULL ? "" : (const char*)text.p->data);
     msSolHostFault(code, line);
-}
-void msSolHostLeave(void) {
-    if (msSolHostState.result != 0) return;
-    msSolHostSettle();
-}
-
-void msSolHostSetReturnData(const uint8_t* data, int64_t length) {
-    msSolHostSetReturnDataAt((uint64_t)data, (uint64_t)length);
 }
 
 #endif
