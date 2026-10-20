@@ -58,8 +58,8 @@ export interface ServerResponse {
 	_upgraded: boolean;
 }
 
-export type RequestHandler = (req: HttpRequest, res: ServerResponse) => void;
-export type AsyncRequestHandler = (req: HttpRequest, res: ServerResponse) => Promise<void>;
+export type RequestHandler = Sendable<(req: HttpRequest, res: ServerResponse) => void>;
+export type AsyncRequestHandler = Sendable<(req: HttpRequest, res: ServerResponse) => Promise<void>>;
 
 // Client request options (http.request() equivalent).
 export interface RequestOptions {
