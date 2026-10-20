@@ -80,7 +80,7 @@ mkwt() {
 remotegreen() {
   mkdir -p "$MSC_REMOTE_VERDICTS"
   printf 'patch=%s\nbase=%s\nhost=test-host\nresult=GREEN\n' \
-    "$(git -C "$R" diff --no-renames main "wt/$1" | git patch-id --stable | cut -d' ' -f1)" "$(git -C "$R" rev-parse main)" >"$MSC_REMOTE_VERDICTS/$1"
+    "$(git -C "$R" diff -U0 --no-renames main "wt/$1" | git patch-id --stable | cut -d' ' -f1)" "$(git -C "$R" rev-parse main)" >"$MSC_REMOTE_VERDICTS/$1"
 }
 setverdict() { printf '%s\n' "$2" >"$T/ws/.wt/wt-$1/verdict"; git -C "$T/ws/.wt/wt-$1" commit -qam "verdict $2"; }
 sbwt() { env -u WT_CWD -u CLAUDE_PROJECT_DIR bash "$WT" "$@"; }
@@ -127,17 +127,17 @@ rh=$(waitfor h); rd=$(waitfor d)
 check "S4 h landed" '[ "$rh" = 0 ] && onmain h.txt'
 check "S4 dirty d reported red, not dropped silently" '[ "$rd" = 1 ] && grep -q "uncommitted" "$MSC_LAND_QUEUE/d.red"'
 
-echo "== S5 main moves during the gate through a file the slice changes: requeued, regated, landed"
+echo "== S5 main moves during the gate through a file the slice changes, the rebase is clean: one gate, landed"
 setup; printf '1\n2\n3\n4\n5\n' >"$R/shared.txt"; git -C "$R" add shared.txt; git -C "$R" commit -qm "add shared"
 mkwt m hold
 sed -i.bak 's/^1$/one/' "$T/ws/.wt/wt-m/shared.txt"; rm -f "$T/ws/.wt/wt-m/shared.txt.bak"; git -C "$T/ws/.wt/wt-m" commit -qam "edit shared top"
 enqueue m
 for i in $(seq 1 40); do [ -e "$LQ_TEST/holding.m" ] && break; sleep 0.25; done
-sed -i.bak 's/^5$/five/' "$R/shared.txt"; rm -f "$R/shared.txt.bak"; git -C "$R" commit -qam "edit shared bottom on main"
+sed -i.bak 's/^3$/three/' "$R/shared.txt"; rm -f "$R/shared.txt.bak"; git -C "$R" commit -qam "edit shared next line on main"
 touch "$LQ_TEST/release"
 rm=$(waitfor m 60)
-check "S5 landed after retry" '[ "$rm" = 0 ] && onmain m.txt && [ "$(git -C "$R" show main:shared.txt | paste -sd, -)" = one,2,3,4,five ]'
-check "S5 gated twice" '[ "$(grep -c "^wt/m " "$T/ctl/gates.log")" = 2 ]'
+check "S5 landed" '[ "$rm" = 0 ] && onmain m.txt && [ "$(git -C "$R" show main:shared.txt | paste -sd, -)" = one,2,three,4,5 ]'
+check "S5 gated once" '[ "$(grep -c "^wt/m " "$T/ctl/gates.log")" = 1 ]'
 
 echo "== S5b main moves during the gate by files the slice leaves alone: one gate, landed"
 setup; mkwt m2 hold
@@ -312,15 +312,16 @@ rr=$(waitfor rm 60)
 check "S23 rm landed beside other.txt" '[ "$rr" = 0 ] && onmain rm.txt && onmain other.txt'
 check "S23 no local gate ran" '! grep -q "^wt/rm " "$T/ctl/gates.log" 2>/dev/null'
 
-echo "== S24 main moved after the remote gate through a file the slice changes: the land gates"
+echo "== S24 main moved after the remote gate through a file the slice changes, the rebase is clean: still no local gate"
 setup; printf '1\n2\n3\n4\n5\n' >"$R/shared.txt"; git -C "$R" add shared.txt; git -C "$R" commit -qm "add shared"
 mkwt ro
 sed -i.bak 's/^1$/one/' "$T/ws/.wt/wt-ro/shared.txt"; rm -f "$T/ws/.wt/wt-ro/shared.txt.bak"; git -C "$T/ws/.wt/wt-ro" commit -qam "edit shared top"
 remotegreen ro
-sed -i.bak 's/^5$/five/' "$R/shared.txt"; rm -f "$R/shared.txt.bak"; git -C "$R" commit -qam "edit shared bottom on main"
+sed -i.bak 's/^3$/three/' "$R/shared.txt"; rm -f "$R/shared.txt.bak"; git -C "$R" commit -qam "edit shared next line on main"
 enqueue ro
 rr=$(waitfor ro 60)
-check "S24 ro landed after a local gate" '[ "$rr" = 0 ] && onmain ro.txt && grep -q "^wt/ro " "$T/ctl/gates.log"'
+check "S24 ro landed beside main's edit" '[ "$rr" = 0 ] && onmain ro.txt && [ "$(git -C "$R" show main:shared.txt | paste -sd, -)" = one,2,three,4,5 ]'
+check "S24 no local gate ran" '! grep -q "^wt/ro " "$T/ctl/gates.log" 2>/dev/null'
 
 echo "== S25 the slice gained a commit after the remote gate: the land gates"
 setup; mkwt rp

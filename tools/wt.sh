@@ -483,23 +483,17 @@ commit_pruned_known() {
   say "land: committed the known-red set without the entries the gate saw green ($(git -C "$w" rev-parse --short "$new"))"
 }
 
-shared_files() {
-  comm -12 <(git -C "$1" diff --name-only --no-renames "$2" "$3" | sort) <(git -C "$1" diff --name-only --no-renames "$2" "$4" | sort) | paste -sd' ' -
-}
-
 remote_verdict() {
-  local f="${MSC_REMOTE_VERDICTS:-$HOME/metascript/.wt/verdicts}/$1" w=$2 old=$3 new=$4 base shared
+  local f="${MSC_REMOTE_VERDICTS:-$HOME/metascript/.wt/verdicts}/$1" w=$2 old=$3 new=$4 base
   [ -f "$f" ] && [ "$(sed -n 's/^result=//p' "$f")" = GREEN ] || return 1
   base=$(sed -n 's/^base=//p' "$f")
   git -C "$w" merge-base --is-ancestor "$base" "$old" 2>/dev/null || return 1
-  [ "$(git -C "$w" diff --no-renames "$old" "$new" | git patch-id --stable | cut -d' ' -f1)" = "$(sed -n 's/^patch=//p' "$f")" ] || return 1
-  shared=$(shared_files "$w" "$old" "$base" "$new")
-  [ -z "$shared" ] || { say "land: the remote gate ran on $(git -C "$w" rev-parse --short "$base"); $BASE has since changed files this slice changes ($shared), so the land gates"; return 1; }
+  [ "$(git -C "$w" diff -U0 --no-renames "$old" "$new" | git patch-id --stable | cut -d' ' -f1)" = "$(sed -n 's/^patch=//p' "$f")" ] || return 1
   printf '%s on %s' "$(sed -n 's/^host=//p' "$f")" "$(git -C "$w" rev-parse --short "$base")"
 }
 
 cmd_land() {
-  local target="" also=() w old new moved paths clash p failed=0 cmd gate=1 async=0 wait=0 qd item name verdict remote shared
+  local target="" also=() w old new moved paths clash p failed=0 cmd gate=1 async=0 wait=0 qd item name verdict remote
   while [ $# -gt 0 ]; do
     case "$1" in
       --also) also+=("${2:?--also needs a command}"); shift ;;
@@ -591,9 +585,7 @@ $(printf '%s\n' "$clash" | sed 's/^/  /')"
   while :; do
     moved=$(git -C "$MAIN" rev-parse "$BASE")
     if [ "$moved" != "$old" ]; then
-      shared=$(shared_files "$w" "$old" "$moved" "$new")
-      [ -z "$shared" ] || die "land: $BASE moved during the gate to $(git -C "$MAIN" rev-parse --short "$moved") through files this slice changes ($shared); run land again"
-      say "land: $BASE moved to $(git -C "$MAIN" rev-parse --short "$moved") by files this slice leaves alone; rebasing onto it without a second gate"
+      say "land: $BASE moved to $(git -C "$MAIN" rev-parse --short "$moved"); rebasing onto it without a second gate"
       catch_up "$w" "$moved" || die "land: catching up with $BASE conflicts; merge or rebase by hand in $w"
       old=$moved
       new=$(git -C "$w" rev-parse HEAD)
