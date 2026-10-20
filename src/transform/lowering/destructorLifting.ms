@@ -28,7 +28,7 @@ import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBas
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
-import { canFormAcycle } from "../cycles";
+import { canFormAcycle, isAcyclicRefElement } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { CheckerContext, newSym, addError } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
@@ -492,10 +492,11 @@ function genShrinkLoop(elemType: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: N
 	buf.items.push(makeWhile(cond, makeBlock(bodyBuf.items, loc), loc));
 }
 
-function runtimeCellDestroy(elem: Type | null, canon: Type): string {
+function runtimeCellDestroy(elem: Type | null, canon: Type, lctx: LiftCtx): string {
 	if (elem == null || isUncountedPtrElement(elem)) return "msNumberArrayDestroy";
 	if (elem.kind == TypeKind.String) return "msStringArrayDestroy";
 	if (elem.kind == TypeKind.Function) return "msClosureArrayDestroy";
+	if (isAcyclicRefElement(elem, lctx.cyclicCache, lctx.nonCyclicCache)) return "msAcyclicRefArrayDestroy";
 	if (elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr) {
 		if (elem.sym != null && elem.sym.symbolKind == SymbolKind.Actor) return "msNumberArrayDestroy";
 		return isAtomicRef(elem) ? "msAtomicRefArrayDestroy" : "msRefArrayDestroy";
@@ -513,7 +514,7 @@ function registerArrayOps(arrT: Type, lctx: LiftCtx): void {
 	const cell = createRef(arrT);
 	if (getOpByKey(cell, AttachedOp.AttachedDestructor) != null) return;
 	const canon = elem == arrT.typeReturn ? arrT : createArray(elem);
-	let cellDestroy: Symbol = attachedOpSym(runtimeCellDestroy(elem, canon), AttachedOp.AttachedDestructor);
+	let cellDestroy: Symbol = attachedOpSym(runtimeCellDestroy(elem, canon, lctx), AttachedOp.AttachedDestructor);
 	if (!isRuntimeArrayFamily(canon)) {
 		const seqName = arrayCTypeName(canon);
 		for (const hook of ["destroy", "copy", "sink", "wasMoved"]) {

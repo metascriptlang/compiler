@@ -11,7 +11,7 @@ import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, 
 import { attachedOpSym } from "../transform/util";
 import { makeCtx } from "../transform/testUtil";
 import { NodeKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, AttachedOp } from "../ast/node";
-import { canFormAcycle } from "../transform/cycles";
+import { canFormAcycle, isAcyclicRefElement } from "../transform/cycles";
 import { monoInstanceName } from "../monomorphize/registry";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, anonUnionCName, hashToBase36, typeKey, requireOpByKey, getOpByKey, liftedOp, resetHookSyms } from "../codegen/c/types";
 
@@ -144,6 +144,9 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	}
 	if (isUncountedPtrElement(elem)) {
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
+	}
+	if (isAcyclicRefElement(elem, ctx.cyclicCache, ctx.acyclicCache)) {
+		return makeRcInfo(RcKind.Named, "", "msArrayAcyclicRefDestroy", "msArrayAcyclicRefCopy", "msArrayRefWasMoved", "msArrayAcyclicRefSink", true);
 	}
 	// Ref/Ptr elements (class arrays) — msRefArray (all pointers are void*)
 	// Actor elements are exempt from DRC (managed by actor runtime).

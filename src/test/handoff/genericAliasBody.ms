@@ -135,7 +135,7 @@ test "C treats an array of bare-parameter alias instances of a class as an array
 	const out = emitC(TAGGED + COUNTER + "const arr: Tagged<Counter>[] = [new Counter()];\narr.length = 0;\narr.push(new Counter());\nconsole.log(arr[0].n);\n");
 	assert out.indexOf("error:", 0) < 0, out;
 	assert out.indexOf("Destroy(Tagged", 0) < 0, out;
-	assert out.indexOf("msRefArraySetLen(", 0) >= 0, out;
+	assert out.indexOf("msAcyclicRefArraySetLen(", 0) >= 0, out;
 }
 
 test "growing an array of bare-parameter alias instances of a class is refused as for the class" {

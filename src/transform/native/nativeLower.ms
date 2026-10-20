@@ -17,6 +17,7 @@ import { Node, NodeKind, NodeFlag, ArrayAccessData, CallExprData, MemberExprData
 import { isNumeric, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, countedEvictElement, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
 import { findChar } from "../../utils/string";
 import { TransformContext } from "../context";
+import { isAcyclicRefElement } from "../cycles";
 import { makeCtx } from "../testUtil";
 import { walkNode } from "../walker";
 import { makeCall, makeNumber, makeMember, syntheticToken, runtimeRef, generatedRef, makeTypedIdentResolved, makeArrayAccess, makeHiddenSubConv, isRuntimeProcCall } from "../util";
@@ -89,7 +90,7 @@ function rewriteAccess(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.ArrayLiteral) return rewriteArrayLiteral(node);
 	if (node.kind == NodeKind.ObjectLiteral) return rewriteAtomicLiteral(node);
 	if (node.kind == NodeKind.NewExpr) return rewriteNewExpr(node);
-	if (node.kind == NodeKind.CallExpr) return rewriteExternArrayReturn(rewriteArrayEvictCall(node));
+	if (node.kind == NodeKind.CallExpr) return rewriteExternArrayReturn(rewriteArrayEvictCall(node, ctx));
 	return node;
 }
 
@@ -252,17 +253,18 @@ function getArrayMacroName(elemType: Type | null, boundChecks: boolean): string 
 // atomic cell is born at MS_RC_INCREMENT, so it needs the atomic twin on top.
 // The counted-element test mirrors classify.ms classifyArray — Actor handles
 // and nested ref-arrays keep their own families.
-export function evictHelperName(nativeName: string, elemType: Type | null): string {
+export function evictHelperName(nativeName: string, elemType: Type | null, ctx: TransformContext): string {
 	const bare = countedEvictElement(elemType);
 	if (bare == null) return "";
 	const atomic = isAtomicRef(bare);
-	if (nativeName == "msGenericArraySetLen") return atomic ? "msAtomicRefArraySetLen" : "msRefArraySetLen";
+	const acyclic = isAcyclicRefElement(elemType, ctx.cyclicCache, ctx.acyclicCache);
+	if (nativeName == "msGenericArraySetLen") return atomic ? "msAtomicRefArraySetLen" : acyclic ? "msAcyclicRefArraySetLen" : "msRefArraySetLen";
 	if (nativeName == "msRefArraySplice") return atomic ? "msAtomicRefArraySplice" : "";
-	if (nativeName == "msRefArraySplice3") return atomic ? "msAtomicRefArraySplice3" : "";
+	if (nativeName == "msRefArraySplice3") return atomic ? "msAtomicRefArraySplice3" : acyclic ? "msAcyclicRefArraySplice3" : "";
 	return "";
 }
 
-function rewriteArrayEvictCall(node: Node): Node {
+function rewriteArrayEvictCall(node: Node, ctx: TransformContext): Node {
 	const d = node.data as CallExprData;
 	if (d.arguments.length == 0) return node;
 	let sym = node.resolvedSym;
@@ -276,7 +278,7 @@ function rewriteArrayEvictCall(node: Node): Node {
 		? recvT.typeReturn
 		: recvT;
 	if (arrT.kind != TypeKind.Array) return node;
-	const helper = evictHelperName(native, arrT.typeReturn);
+	const helper = evictHelperName(native, arrT.typeReturn, ctx);
 	if (helper == "") return node;
 	const call = makeCall(runtimeRef(helper, node.location), d.arguments, node.location);
 	call.nodeType = node.nodeType;

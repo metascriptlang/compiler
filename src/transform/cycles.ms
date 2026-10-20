@@ -18,7 +18,7 @@
 
 import { Type, TypeKind, TypeFlag } from "../ast/node";
 import { NameSet, createNameSet, nameSetAdd, nameSetContains } from "./context";
-import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey } from "../checker/types";
+import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef } from "../checker/types";
 import { anonTypeName, isAnonTypeName, typeKey } from "../codegen/c/types";
 import { monoInstanceName } from "../monomorphize/registry";
 
@@ -159,4 +159,9 @@ export function canFormAcycle(t: Type | null, cyclicCache: NameSet, acyclicCache
 		if (result) { nameSetAdd(cyclicCache, key); } else { nameSetAdd(acyclicCache, key); }
 	}
 	return result;
+}
+
+export function isAcyclicRefElement(elem: Type | null, cyclicCache: NameSet, acyclicCache: NameSet): boolean {
+	const bare = countedEvictElement(elem);
+	return bare != null && bare.kind == TypeKind.Ref && !isAtomicRef(bare) && !canFormAcycle(bare, cyclicCache, acyclicCache);
 }
