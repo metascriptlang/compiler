@@ -1449,15 +1449,20 @@ static inline void msSetSchedulerID(int id) {
     msMySchedulerID = id;
 }
 
+static inline void msActorClaimEventLoopScheduler(void) {
+    if (!msIsPoolWorker) msMySchedulerID = 0;
+}
+
+static inline bool msActorPollEventLoop(void) {
+    msActorClaimEventLoopScheduler();
+    return msActorPollLocal();
+}
+
 static inline void msActorRegister(msActor* a) {
     if (msSchedulerCount == 0) {
-        /* Hooks MUST be set before msPoolGet(): pool workers spawn inside
-         * msPoolInit and read msPoolSchedIdSetterFn at startup. Hook-after-pool
-         * races leave worker TLS at -1 → msActorPollLocal early-returns →
-         * only main thread polls actors. */
         msEnsureWakePipe();  /* wake pipe must exist before any actor send */
-        msMySchedulerID = 0;  /* main thread = scheduler 0 */
-        msSetActorPollHook(msActorPollLocal);
+        msActorClaimEventLoopScheduler();
+        msSetActorPollHook(msActorPollEventLoop);
         msPoolSetActorHooks(msActorPollLocal, msSetSchedulerID);
         msThreadPool* p = msPoolGet();
         msSchedulerCount = (p != NULL ? p->workerCount : 0) + 1;
