@@ -1936,7 +1936,7 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 	}
 	if (objExpected != null && isAtomicRef(objExpected) && !isLockedRef(objExpected)
 		&& objExpected.typeReturn != null && !hasGenericParams(objExpected.typeReturn)) {
-		checkArcPointeeSendable(ctx, objExpected.typeReturn, node.location.line, node.location.column);
+		checkArcPointeeSendable(ctx, objExpected.typeReturn, (owner: Type): boolean => declaresUserHook(owner, ctx), node.location.line, node.location.column);
 	}
 	// Unwrap Ref for class types — ObjectLiteral constructs the inner struct
 	if (objExpected != null && objExpected.kind == TypeKind.Ref && objExpected.typeReturn != null) {
@@ -4192,7 +4192,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
-import { instantiateClassConstructor, pickBodyCtx, literalFieldInitializer, instantiateParentClass } from "./instantiate";
+import { instantiateClassConstructor, pickBodyCtx, literalFieldInitializer, instantiateParentClass, declaresUserHook } from "./instantiate";
 import { iterateSpreadSource, adoptExpansionResult, anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, keepFoldedType, keepComptimeNominalType, isNominalLiteralType, takeDefaultArgTemps, adoptAwaitedThenable, awaitReturnedThenable, refuseUnhashableKey } from "./callResolve";
 
 function bodyIntoBlock(body: Node, temps: Node[]): void {

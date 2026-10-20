@@ -1002,7 +1002,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		// SHARE pointee rule (PARALOCK Amendment I): the pointee is aliased
 		// across threads, so it must be deep-immutable data.
 		if (pointee != null && pointee.kind != TypeKind.Error) {
-			checkArcPointeeSendable(ctx, pointee, d.newCallee.location.line, d.newCallee.location.column);
+			checkArcPointeeSendable(ctx, pointee, (owner: Type): boolean => declaresUserHook(owner, ctx), d.newCallee.location.line, d.newCallee.location.column);
 		}
 		const arcType = createArc(pointee);
 			typeNewCallee(ctx, d.newCallee);
@@ -1027,7 +1027,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			const payloadArgType = d.newArguments[0].nodeType;
 			if (payload == null && payloadArgType != null) { payload = payloadArgType; }
 			if (payload != null && payload.kind != TypeKind.Error) {
-				checkLockedPayloadSendable(ctx, payload, d.newCallee.location.line, d.newCallee.location.column);
+				checkLockedPayloadSendable(ctx, payload, (owner: Type): boolean => declaresUserHook(owner, ctx), d.newCallee.location.line, d.newCallee.location.column);
 			}
 			const lockedType = createLocked(payload);
 			typeNewCallee(ctx, d.newCallee);

@@ -25,30 +25,32 @@ enum SendLeaf {
 	GenericParam = 4,  // unknowable here — re-checked at instantiation
 }
 
-function isDeepSendable(t: Type | null, leaves: int32): boolean {
+function isDeepSendable(t: Type | null, leaves: int32, declaresHook: (owner: Type) => boolean): boolean {
 	if (t == null) return true;
 	if (isPrimitiveKind(t.kind)) return true;
 	return match (t.kind) {
 		TypeKind.String => (leaves & SendLeaf.String) != 0,
 		TypeKind.GenericParam => (leaves & SendLeaf.GenericParam) != 0,
 		TypeKind.Array => (leaves & SendLeaf.Array) != 0
-			&& (t.typeReturn == null || isDeepSendable(t.typeReturn, leaves)),
+			&& (t.typeReturn == null || isDeepSendable(t.typeReturn, leaves, declaresHook)),
 		TypeKind.Struct when (isStructType(t)) => {
+			if (declaresHook(t)) return false;
 			for (const ft of t.typeChildren) {
-				if (!isDeepSendable(ft, leaves)) return false;
+				if (!isDeepSendable(ft, leaves, declaresHook)) return false;
 			}
 			return true;
 		},
 		TypeKind.Tuple => {
 			for (const et of t.typeChildren) {
-				if (!isDeepSendable(et, leaves)) return false;
+				if (!isDeepSendable(et, leaves, declaresHook)) return false;
 			}
 			return true;
 		},
 		TypeKind.GenericInstance => {
-			if (t.typeReturn != null && !isDeepSendable(t.typeReturn, leaves)) return false;
+			if (declaresHook(t)) return false;
+			if (t.typeReturn != null && !isDeepSendable(t.typeReturn, leaves, declaresHook)) return false;
 			for (const ta of t.typeChildren) {
-				if (!isDeepSendable(ta, leaves)) return false;
+				if (!isDeepSendable(ta, leaves, declaresHook)) return false;
 			}
 			return true;
 		},
@@ -61,7 +63,16 @@ function isDeepSendable(t: Type | null, leaves: int32): boolean {
 // A string is copied at the boundary and an array's ownership travels with the
 // message, so both are sendable.
 function isTypeSendable(t: Type | null): boolean {
-	return isDeepSendable(t, (SendLeaf.String | SendLeaf.Array) as int32);
+	return isDeepSendable(t, (SendLeaf.String | SendLeaf.Array) as int32, declaresNoHook);
+}
+
+function declaresNoHook(owner: Type): boolean {
+	return false;
+}
+
+function hookedPayloadError(ctx: CheckerContext, what: string, t: Type, line: int32, column: int32): void {
+	addError(ctx, `${what} must not declare a lifecycle hook — '${typeDisplayName(t)}' declares one or holds a value that does\nthe cell copies its payload in and out without running onCopy, so onDestroy would run once per copy`,
+		line, column);
 }
 
 // Arc<T> pointee rule (PARALOCK Amendment I): SHARE aliases the pointee across
@@ -71,7 +82,7 @@ function isTypeSendable(t: Type | null): boolean {
 // transfers with it) but stays mutable through an Arc handle, so any array
 // anywhere inside the pointee is rejected; so is any Ref (locks included).
 export function isArcPointeeSendable(t: Type | null): boolean {
-	return isDeepSendable(t, SendLeaf.String as int32);
+	return isDeepSendable(t, SendLeaf.String as int32, declaresNoHook);
 }
 
 export function checkActorStaticField(ctx: CheckerContext, raw: Node): void {
@@ -93,8 +104,12 @@ export function checkActorStaticField(ctx: CheckerContext, raw: Node): void {
 		member.location.line, member.location.column);
 }
 
-export function checkArcPointeeSendable(ctx: CheckerContext, pointee: Type, line: int32, column: int32): void {
-	if (isArcPointeeSendable(pointee)) return;
+export function checkArcPointeeSendable(ctx: CheckerContext, pointee: Type, declaresHook: (owner: Type) => boolean, line: int32, column: int32): void {
+	if (isDeepSendable(pointee, SendLeaf.String as int32, declaresHook)) return;
+	if (isArcPointeeSendable(pointee)) {
+		hookedPayloadError(ctx, "Arc<T> pointee", pointee, line, column);
+		return;
+	}
 	addError(ctx, `Arc<T> pointee must be deep-immutable data — '${typeDisplayName(pointee)}' contains a reference or array\nSHARE aliases the pointee across threads; shared mutable state is Locked<T> (PARALOCK Amendment I)`,
 		line, column);
 }
@@ -107,11 +122,15 @@ export function checkArcPointeeSendable(ctx: CheckerContext, pointee: Type, line
 // A GenericParam is unknowable here; the concrete instantiation is re-checked
 // after monomorphization.
 export function isLockedPayloadSendable(t: Type | null): boolean {
-	return isDeepSendable(t, SendLeaf.GenericParam as int32);
+	return isDeepSendable(t, SendLeaf.GenericParam as int32, declaresNoHook);
 }
 
-export function checkLockedPayloadSendable(ctx: CheckerContext, payload: Type, line: int32, column: int32): void {
-	if (isLockedPayloadSendable(payload)) return;
+export function checkLockedPayloadSendable(ctx: CheckerContext, payload: Type, declaresHook: (owner: Type) => boolean, line: int32, column: int32): void {
+	if (isDeepSendable(payload, SendLeaf.GenericParam as int32, declaresHook)) return;
+	if (isLockedPayloadSendable(payload)) {
+		hookedPayloadError(ctx, "Locked<T> payload", payload, line, column);
+		return;
+	}
 	addError(ctx, `Locked<T> payload must be plain data — '${typeDisplayName(payload)}' owns memory (string, array or reference)\nthe cell's payload is stored under the lock by value; an owning payload has no destroy-on-store (PARALOCK I22)`,
 		line, column);
 }
@@ -355,6 +374,17 @@ test "Locked payload is deep-POD — owns nothing" {
 	assert !isLockedPayloadSendable(stringType());
 	assert !isLockedPayloadSendable(createStruct("Owner", ["s"], [stringType()], true));
 	assert !isLockedPayloadSendable(createArray(int32Type()));
+}
+
+test "a lifecycle hook anywhere in a payload fails only the walks given a hook predicate" {
+	const hooked = createStruct("Hooked", ["n"], [int32Type()], true);
+	const outer = createStruct("Outer", ["h", "n"], [hooked, int32Type()], true);
+	const declaresHook = (owner: Type): boolean => owner == hooked;
+	assert !isDeepSendable(outer, SendLeaf.String as int32, declaresHook);
+	assert !isDeepSendable(hooked, SendLeaf.GenericParam as int32, declaresHook);
+	assert isArcPointeeSendable(outer);
+	assert isLockedPayloadSendable(outer);
+	assert isTypeSendable(outer);
 }
 
 test "a generic param passes the Locked payload rule, not the Arc pointee rule" {

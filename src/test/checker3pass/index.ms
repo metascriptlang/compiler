@@ -34,6 +34,7 @@ import "./scenarios/promiseFlow";
 import "./scenarios/nestedPromise";
 import "./scenarios/awaitedThenable";
 import "./scenarios/arcLiteralSafety";
+import "./scenarios/atomicPayloadHooks";
 import "./scenarios/returnBeforeBody";
 import "./scenarios/generatorYields";
 import "./scenarios/localForwardReferences";
