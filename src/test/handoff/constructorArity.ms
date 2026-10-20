@@ -74,9 +74,11 @@ test "a generic class counts the constructor of its declaration" {
 	assert hasError(pre + "const f = new Box<number>(1, 2, 3);", TOO_MANY + "Box': expected at most 2, got 3");
 }
 
-test "a spread argument has no count the checker can compare" {
-	const pre = "class Many { n: number = 0; constructor(...rest: number[]) { this.n = rest.length; } }\nconst xs: number[] = [1, 2];\n";
-	assert strictErrorCount(pre + "const a = new Many(...xs);") == 0;
+test "a spread argument fills only the rest parameter of a constructor" {
+	const pre = "class Many { n: number = 0; constructor(...rest: number[]) { this.n = rest.length; } }\nclass Bar { n: number = 0; constructor(a: number, b: number) { this.n = a + b; } }\nconst xs: number[] = [1, 2];\n";
+	assert strictErrorCount(pre + "const a = new Many(...xs);\nconst b = new Bar(...[1, 2]);") == 0;
+	assert hasError(pre + "const f = new Bar(...xs);", "A spread argument must either have a tuple type or be passed to a rest parameter");
+	assert hasError(pre + "const f = new Bar(...[1]);", TOO_FEW + "Bar': expected at least 2, got 1");
 }
 
 test "an extern class keeps the arguments of its native constructor" {
