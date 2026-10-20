@@ -62,6 +62,7 @@ export {
 	field,
 	length,
 	at,
+	text,
 } from "../raiser/marshal";
 
 export function createInterpreter(runtimeRoot: string, searchPaths: string[] = []): Result<Interpreter, string> {
@@ -351,7 +352,7 @@ test "callRoutine passes floats and strings and returns them" {
 	if (step.ok) assert unboxFloat(step.value.root) == 2.25;
 	const greet = callRoutine(interp, routineOf(interp, "greet"), [hostValue(boxString("haro"))]);
 	assert greet.ok;
-	if (greet.ok) assert unboxString(greet.value.root) == "hi haro";
+	if (greet.ok) assert greet.value.text() == "hi haro";
 	removeAll(dir);
 }
 
@@ -449,13 +450,13 @@ test "callRoutine returns a struct whose array of structs, absent optional and l
 	const config = routineValue(interp, "current", []);
 	const fonts = config.field("fontFamily");
 	assert fonts.length() == 2;
-	assert unboxString(fonts.at(1).root) == "Menlo";
+	assert fonts.at(1).text() == "Menlo";
 	assert config.field("fontSize").root.kind == RaiserValueKind.Nil;
-	assert unboxString(config.field("mode").root) == "alt";
+	assert config.field("mode").text() == "alt";
 	const binds = config.field("binds");
 	assert binds.length() == 2;
-	assert unboxString(binds.at(1).field("keys").root) == "ctrl+e";
-	assert unboxString(binds.at(1).field("text").root) == "end";
+	assert binds.at(1).field("keys").text() == "ctrl+e";
+	assert binds.at(1).field("text").text() == "end";
 	removeAll(dir);
 }
 
@@ -466,11 +467,11 @@ test "callRoutine passes a struct the host built and the struct it returns outli
 	const key = keyEvent("KeyA", 2);
 	const first = routineValue(interp, "onKey", [key]);
 	assert unboxBool(first.field("handled").root);
-	assert unboxString(first.field("send").root) == "KeyA:2";
+	assert first.field("send").text() == "KeyA:2";
 	const second = routineValue(interp, "onKey", [keyEvent("KeyB", 0)]);
 	assert !unboxBool(second.field("handled").root);
-	assert unboxString(first.field("send").root) == "KeyA:2";
-	assert unboxString(routineValue(interp, "onKey", [key]).field("send").root) == "KeyA:2";
+	assert first.field("send").text() == "KeyA:2";
+	assert routineValue(interp, "onKey", [key]).field("send").text() == "KeyA:2";
 	const vm = interp.run!.vm!;
 	const objects = vm.objectHeap.objects.length;
 	const arrays = vm.arrayHeap.arrays.length;
@@ -487,7 +488,7 @@ test "a host routine receives a nested struct with a nullable field and returns 
 	implementRoutine("embedTest.decorate", (args: RaiserValue[]): RaiserValue => {
 		const d = unboxValue(args[0]);
 		const color = d.field("style").field("color");
-		const shown = color.root.kind == RaiserValueKind.Nil ? "none" : unboxString(color.root);
+		const shown = color.root.kind == RaiserValueKind.Nil ? "none" : color.text();
 		const echo = `${unboxInt(d.field("row").root)} ${unboxBool(d.field("style").field("bold").root)} ${shown}`;
 		return boxValue(hostObject(["accepted", "echo"], [hostValue(boxBool(true)), hostValue(boxString(echo))]));
 	});
@@ -498,8 +499,8 @@ test "a host routine receives a nested struct with a nullable field and returns 
 		+ `\tconst r = decorate({ row, style: { bold: row > 1, color } });\n\treturn \`\${r.accepted} \${r.echo}\`;\n}\n`);
 	const interp = evaluatedInterpreter(`${dir}/main.ms`);
 	const teal = routineValue(interp, "paint", [hostValue(boxInt(3)), hostValue(boxString("teal"))]);
-	assert unboxString(teal.root) == "true 3 true teal";
+	assert teal.text() == "true 3 true teal";
 	const plain = routineValue(interp, "paint", [hostValue(boxInt(1)), hostValue(boxVoid())]);
-	assert unboxString(plain.root) == "true 1 false none";
+	assert plain.text() == "true 1 false none";
 	removeAll(dir);
 }

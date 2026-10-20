@@ -109,6 +109,10 @@ function isScalarKind(kind: RaiserValueKind): boolean {
 		|| kind == RaiserValueKind.String;
 }
 
+function isHeapString(v: RaiserValue): boolean {
+	return v.kind == RaiserValueKind.String && v.intVal >= 0;
+}
+
 function crossHeaps(
 	v: RaiserValue,
 	fromArrays: RaiserArrayHeap,
@@ -116,10 +120,7 @@ function crossHeaps(
 	toArrays: RaiserArrayHeap,
 	toObjects: RaiserObjectHeap,
 ): RaiserValue {
-	if (!isScalarKind(v.kind)) return copyGraph(fromArrays, fromObjects, toArrays, toObjects, v);
-	const out = raiserNil();
-	copyValueInto(out, v);
-	return out;
+	return copyGraph(fromArrays, fromObjects, toArrays, toObjects, v);
 }
 
 export function hostValue(v: RaiserValue): RaiserHostValue {
@@ -127,6 +128,10 @@ export function hostValue(v: RaiserValue): RaiserHostValue {
 		const kind = v.kind.toString();
 		throw new Error(`hostValue takes a boxed scalar, not a handle of kind ${kind}: `
 			+ "build an aggregate with hostObject or hostArray");
+	}
+	if (isHeapString(v)) {
+		const arrayHeap = createArrayHeap();
+		return { root: heapAllocString(arrayHeap, unboxString(v)), arrayHeap, objectHeap: SCALAR_OBJECTS };
 	}
 	const root = raiserNil();
 	copyValueInto(root, v);
@@ -181,6 +186,14 @@ export function length(this v: RaiserHostValue): int32 {
 	return heapArrayLen(v.arrayHeap, v.root.intVal);
 }
 
+export function text(this v: RaiserHostValue): string {
+	if (v.root.kind != RaiserValueKind.String) {
+		const kind = v.root.kind.toString();
+		throw new Error(`text of a value of kind ${kind}: only a string has text`);
+	}
+	return heapStringText(v.arrayHeap, v.root);
+}
+
 export function at(this v: RaiserHostValue, index: int32): RaiserHostValue {
 	const count = v.length();
 	if (index < 0 || index >= count) throw new Error(`element ${index} of an array of ${count}`);
@@ -192,7 +205,7 @@ export function copyToHost(
 	objectHeap: RaiserObjectHeap,
 	v: RaiserValue,
 ): RaiserHostValue {
-	if (isScalarKind(v.kind)) return hostValue(v);
+	if (isScalarKind(v.kind) && !isHeapString(v)) return hostValue(v);
 	const arrays = createArrayHeap();
 	const objects = createStructHeap();
 	const root = copyGraph(arrayHeap, objectHeap, arrays, objects, v);
@@ -280,7 +293,7 @@ test "a host value built from scalars crosses into a VM heap and back with its c
 	const back = copyToHost(vmArrays, vmObjects, placed);
 	assert back.objectHeap != vmObjects;
 	assert back.field("binds").length() == 2;
-	assert unboxString(back.field("binds").at(1).field("text").root) == "home";
+	assert back.field("binds").at(1).field("text").text() == "home";
 	assert back.field("fontSize").root.kind == RaiserValueKind.Nil;
 	assert back.field("absent").root.kind == RaiserValueKind.Nil;
 }
