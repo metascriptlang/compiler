@@ -1,10 +1,11 @@
 // LSP Handlers — Code Actions (quick fixes) and Document Formatting.
 
 import {
-	TransAmDb, dbParse, createTransAmDb, dbSetFileText
+	TransAmDb, dbParse, createTransAmDb, dbSetFileText, dbTypeCheck
 } from "../../transam/index";
 import { writeStderr } from "std/io";
-import { lspJsonString, lspGetObjectField, lspGetField, lspGetNumberField, lspUriToPath, lspResponse, lspErrorResponse } from "../protocol";
+import { lspJsonString, lspGetObjectField, lspGetField, lspGetNumberField, lspGetArrayItems, lspUriToPath, lspResponse, lspErrorResponse } from "../protocol";
+import { parseJson } from "std/serialize/json/parser";
 import { lspFmtRange, lspFmtTextEdit } from "../format";
 import { formatNode } from "../../fmt/printer";
 import { FmtPos, formatStatementEdit, innermostStatement, lineOffset, applyEdit } from "../../fmt/edit";
@@ -73,7 +74,13 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 			const fmtLines = splitLines(_codeActionFmtResult);
 
 			if (startLine < fmtLines.length && fmtLines[startLine] != line) {
-				// Single-line fix: replace this line with the formatted version
+				const lineNo = (startLine + 1) as int32;
+				const proposed = applyEdit(source, {
+					start: { line: lineNo, column: 1 },
+					end: { line: lineNo, column: line.byteLength + 1 },
+					newText: fmtLines[startLine],
+				});
+				if (!checkLossless(source, proposed).ok) return lspResponse(id, "[]");
 				const edit = lspFmtTextEdit(startLine, 0, line.length, fmtLines[startLine]);
 				const changesJson = "{" + lspJsonString(uri) + ":[" + edit + "]}";
 				const title = hasIndentIssue ? "Fix: Reformat this line" : "Fix: Remove trailing whitespace";
@@ -180,4 +187,56 @@ test "range formatting refuses an edit that changes a token" {
 
 test "document formatting still edits a lossless source" {
 	assert handleFormatting("1", FORMAT_PARAMS, formattingDb("const  a=1;\n")).contains("newText");
+}
+
+function quickfixItems(source: string): string[] {
+	const params = "{\"textDocument\":{\"uri\":\"file:///fmt/probe.ms\"},\"range\":{\"start\":{\"line\":1,\"character\":0},\"end\":{\"line\":1,\"character\":1}}}";
+	const response = handleCodeAction("1", params, formattingDb(source));
+	const parsed = parseJson(response);
+	if (!parsed.ok) throw new Error(parsed.error);
+	const items = lspGetObjectField(response, "result");
+	if (lspGetNumberField(response, "id") != 1 || !items.startsWith("[")) throw new Error("Expected code actions: " + response);
+	return lspGetArrayItems(items);
+}
+
+function applyAsciiQuickfix(source: string, action: string): string {
+	if (source.length != source.byteLength) throw new Error("ASCII fixture required for this edit applicator");
+	const changes = lspGetObjectField(lspGetObjectField(action, "edit"), "changes");
+	const edits = lspGetArrayItems(lspGetObjectField(changes, "file:///fmt/probe.ms"));
+	if (edits.length != 1) throw new Error("Expected one quickfix edit: " + action);
+	const range = lspGetObjectField(edits[0], "range");
+	const start = lspGetObjectField(range, "start");
+	const end = lspGetObjectField(range, "end");
+	return applyEdit(source, {
+		start: { line: (lspGetNumberField(start, "line") + 1) as int32, column: (lspGetNumberField(start, "character") + 1) as int32 },
+		end: { line: (lspGetNumberField(end, "line") + 1) as int32, column: (lspGetNumberField(end, "character") + 1) as int32 },
+		newText: lspGetField(edits[0], "newText"),
+	});
+}
+
+test "indent quickfix refuses an edit that drops an adjacent statement" {
+	const source = "export function f(): int32 {\n \tconst x = 1; const y = 2;\n\treturn x + y;\n}\n";
+	assert quickfixItems(source).length == 0;
+}
+
+test "trailing-space quickfix refuses an edit that drops an adjacent statement" {
+	const source = "export function f(): int32 {\n    const x = 1; const y = 2;   \n\treturn x + y;\n}\n";
+	assert quickfixItems(source).length == 0;
+}
+
+test "safe quickfix edits preserve surrounding text and still parse and check" {
+	const prefix = "export function f(): int32 {\n";
+	const suffix = "\n\treturn x;\n}\n";
+	for (const line of [" \tconst x = 1;", "    const x = 1;   "]) {
+		const source = prefix + line + suffix;
+		const actions = quickfixItems(source);
+		assert actions.length == 1;
+		const result = applyAsciiQuickfix(source, actions[0]);
+		assert result != source;
+		assert result.startsWith(prefix);
+		assert result.endsWith(suffix);
+		assert checkLossless(source, result).ok;
+		assert parseSource(result).ok;
+		assert dbTypeCheck(formattingDb(result), "/fmt/probe.ms").errors.length == 0;
+	}
 }
