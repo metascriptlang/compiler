@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, ClassDeclData, MethodDeclData, DecoratedDeclData } from "../ast/node";
 import { makeSymbol, classDeclNodeOf } from "./symbol";
-import { isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass } from "./types";
+import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -1504,7 +1504,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 			},
 			TypeKind.GenericInstance => {
 				// Structural type arg comparison (Result, Promise, Map, Set, user generics)
-				if (!sameGenericBase(formal, actual)) return TypeRelation.None;
+				if (!sameGenericBase(formal, actual)) return ancestorRelation(formal, actual);
 				const giLimit = formal.typeChildren.length < actual.typeChildren.length ? formal.typeChildren.length : actual.typeChildren.length;
 				let instRel = TypeRelation.Exact;
 				for (let gi = 0; gi < giLimit; gi += 1) {
@@ -1547,6 +1547,10 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 			},
 			_ => TypeRelation.Exact,
 		};
+	}
+	if ((formal.kind == TypeKind.GenericInstance && actual.kind == TypeKind.Struct)
+			|| (formal.kind == TypeKind.Struct && actual.kind == TypeKind.GenericInstance)) {
+		return ancestorRelation(formal, actual);
 	}
 	// Var (out param) unwrap: formal is Var<T>, actual is T → match inner
 	if (formal.kind == TypeKind.Var && formal.typeReturn != null) {
@@ -1671,6 +1675,13 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	return TypeRelation.None;
 }
 
+function ancestorRelation(formal: Type, actual: Type): TypeRelation {
+	const ancestor = classAncestorInstance(actual, formal);
+	if (ancestor == null) return TypeRelation.None;
+	const rel = typeRelation(formal, ancestor);
+	return rel == TypeRelation.Exact || rel == TypeRelation.Generic ? TypeRelation.Subtype : rel;
+}
+
 // Score a candidate function against actual arguments.
 // Returns sum of TypeRelation values, or -1 if any param doesn't match.
 export function scoreCandidate(paramTypes: Type[], argTypes: Type[]): int32 {
@@ -1778,8 +1789,14 @@ export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], min
 			return score;
 		}
 		countRelation(score, rel);
+		if (rel == TypeRelation.Exact || rel == TypeRelation.Subtype) addInheritancePenalty(score, classDistance(argTypes[i], paramTypes[i]));
 	}
 	return score;
+}
+
+function addInheritancePenalty(score: CandidateScore, depth: int32): void {
+	if (depth < 0) return;
+	score.inheritancePenalty += depth + (score.inheritancePenalty < 0 ? 1 : 0);
 }
 
 export function countRelation(score: CandidateScore, rel: TypeRelation): void {

@@ -3324,15 +3324,25 @@ export function classBodyOf(t: Type | null): Type | null {
 	return cls != null && cls.kind == TypeKind.Struct && cls.sym != null && cls.sym.symbolKind == SymbolKind.Class ? cls : null;
 }
 
+function classDepth(t: Type | null, cls: Symbol | null): int32 {
+	let cur = classBodyOf(t);
+	for (let depth = 0; cur != null && depth < PEEL_MAX_DEPTH; depth += 1) {
+		if (classOrigin(cur.sym) == classOrigin(cls)) return depth;
+		cur = classBodyOf(cur.typeExtra);
+	}
+	return -1;
+}
+
 // Whether a value of `t` is an instance of some instantiation of the class `cls`.
 export function derivesFromClass(t: Type | null, cls: Symbol): boolean {
 	if (isAwaitable(t)) return cls.builtinKind == "Promise";
-	let cur = classBodyOf(t);
-	for (let depth = 0; cur != null && depth < PEEL_MAX_DEPTH; depth += 1) {
-		if (classOrigin(cur.sym) == classOrigin(cls)) return true;
-		cur = classBodyOf(cur.typeExtra);
-	}
-	return false;
+	return classDepth(t, cls) >= 0;
+}
+
+// How many parent steps lead from the class of `t` to the class of `ancestor`; -1 when it is not one.
+export function classDistance(t: Type | null, ancestor: Type | null): int32 {
+	const target = classBodyOf(ancestor);
+	return target != null ? classDepth(t, target.sym) : -1;
 }
 
 // The members of a union that `x instanceof cls` selects, for a generic `cls`;

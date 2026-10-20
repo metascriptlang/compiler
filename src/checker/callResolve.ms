@@ -4183,7 +4183,7 @@ function mostSpecificGenericExt(exts: ExtensionMethod[]): int32 {
 
 function rankExtensionOverloads(ctx: CheckerContext, exts: ExtensionMethod[], candidates: Type[], args: Node[], argTypes: Type[],
 	scopeDepths: number[], recvRelations: TypeRelation[], objType: Type | null, skipMask: boolean[], rejected: boolean[]): number {
-	let idx = resolveOverloadIdxWithInheritance(ctx, candidates, args, argTypes, scopeDepths, recvRelations, exts, skipMask, rejected);
+	let idx = resolveExtensionOverloadIdx(ctx, candidates, args, argTypes, scopeDepths, recvRelations, exts, skipMask, rejected);
 	if (idx == -2) {
 		// Tiebreaker: an exact receiver beats a widening one — `this uint8[]`
 		// wins over `this number[]` on a uint8[] object instead of tying.
@@ -4435,30 +4435,6 @@ function superInstance(t: Type | null): Type | null {
 	return body != null && body.kind == TypeKind.GenericInstance ? body : null;
 }
 
-// Walk class inheritance chain from sourceType to targetType.
-// Returns depth (1 = direct parent, 2 = grandparent), or -1 if not in chain.
-function inheritanceDepth(sourceType: Type, targetType: Type, ctx: CheckerContext): int32 {
-	if (sourceType == null || targetType == null) return -1;
-	// Unwrap Ref<Object> to access inner Object's typeName/typeExtra
-	const src = unwrapRef(sourceType);
-	const tgt = unwrapRef(targetType);
-	if (src.typeName == "" || tgt.typeName == "") return -1;
-	let current = src;
-	let depth = 0;
-	while (current != null) {
-		depth = depth + 1;
-		if (current.typeExtra == null) return -1;
-		if (current.typeExtra.typeName == "") return -1;
-		if (current.typeExtra.typeName == tgt.typeName) return depth;
-		const baseSym = lookupSymbol(ctx.table, current.typeExtra.typeName);
-		if (baseSym == null) return -1;
-		if (baseSym.symbolKind != SymbolKind.Class) return -1;
-		current = unwrapRef(baseSym.symbolType);
-		if (depth > 20) return -1;
-	}
-	return -1;
-}
-
 function withoutArrayEnvelope(t: Type): Type {
 	return t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array ? t.typeReturn : t;
 }
@@ -4476,8 +4452,7 @@ function receiverRelation(formal: Type, objType: Type | null): TypeRelation {
 	return rel;
 }
 
-// Resolve overloads with inheritance penalty.
-function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type[], args: Node[],
+function resolveExtensionOverloadIdx(ctx: CheckerContext, candidates: Type[], args: Node[],
 	argTypes: Type[], scopeDepths: number[], recvRelations: TypeRelation[], exts: ExtensionMethod[], skipMask: boolean[], rejected: boolean[]): number {
 	let bestIdx = -1;
 	let bestScore = emptyCandidateScore();
@@ -4491,25 +4466,6 @@ function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type
 		if (i < recvRelations.length) countRelation(score, recvRelations[i]);
 		if (i < scopeDepths.length) {
 			score.calleeScope = scopeDepths[i];
-		}
-		// Compute inheritance penalty
-		let maxDepth = -1;
-		let pi = 0;
-		while (pi < candidates[i].typeChildren.length && pi < argTypes.length) {
-			const pType = candidates[i].typeChildren[pi];
-			const aType = argTypes[pi];
-			if (aType != null && pType.kind == TypeKind.Struct && aType.kind == TypeKind.Struct) {
-				if (pType.typeName != "" && aType.typeName != "" && pType.typeName != aType.typeName) {
-					const depth = inheritanceDepth(aType, pType, ctx);
-					if (depth > 0 && (maxDepth == -1 || depth > maxDepth)) {
-						maxDepth = depth;
-					}
-				}
-			}
-			pi = pi + 1;
-		}
-		if (maxDepth > 0) {
-			score.inheritancePenalty = maxDepth;
 		}
 		if (bestIdx == -1) {
 			bestIdx = i;
