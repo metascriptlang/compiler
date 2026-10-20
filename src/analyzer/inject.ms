@@ -9,6 +9,7 @@
 //
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
+import { isBakeableAggregateConst } from "../checker/reachability";
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { createPrimitive, unwrapRefNullUnion, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
@@ -2612,6 +2613,25 @@ function destroyHcrCell(cell: Symbol, loc: SourceLocation, dctx: DrcContext): No
 	return [tmp, makeDestroyCall(tmpSym, rcInfo, loc)];
 }
 
+function isBakedArrayCell(decl: Node): boolean {
+	const t = decl.resolvedSym!.symbolType;
+	return t != null && t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array
+		&& isBakeableAggregateConst(decl);
+}
+
+function destroyBakedArrayCell(cell: Symbol, loc: SourceLocation, dctx: DrcContext): Node[] {
+	const valueType = cell.symbolType!.typeReturn!;
+	const rcInfo = classifyRc(valueType, dctx);
+	if (!rcInfo.needsCleanup) return [];
+	const value = makeHiddenDeref(makeIdentResolved(cell, loc), loc);
+	value.nodeType = valueType;
+	const tmpSym = freshTempSym(dctx.ctx, "bakedExit", valueType);
+	const tmp = makeVarDecl(tmpSym.name, value, DeclKind.Const, loc);
+	tmp.nodeType = valueType;
+	tmp.resolvedSym = tmpSym;
+	return [tmp, makeDestroyCall(tmpSym, rcInfo, loc)];
+}
+
 export function injectProgram(program: Node, dctx: DrcContext): Node {
 	if (program.kind != NodeKind.Program) return program;
 	const d = program.data as ProgramData;
@@ -2623,6 +2643,11 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	for (const s of d.programStmts) {
 		if (s.kind == NodeKind.VariableDecl && s.resolvedSym != null && hasFlag(s.resolvedSym, SymbolFlag.HcrCell)) cells.push(s.resolvedSym);
 	}
+	const baked: Symbol[] = [];
+	for (const s of d.programStmts) {
+		const decl = s.kind == NodeKind.ExportDecl ? (s.data as ExportDeclData).exportedDecl : s;
+		if (decl.kind == NodeKind.VariableDecl && decl.resolvedSym != null && isBakedArrayCell(decl)) baked.push(decl.resolvedSym);
+	}
 	pushScope(dctx, false, false);
 	dctx.finallyProtectedVars = collectFinallyVars(program);
 	inferCursors(program);
@@ -2632,9 +2657,15 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	const moduleScope = popScope(dctx);
 	for (const s of generateCleanup(moduleScope, program.location)) d.programStmts.push(s);
 	const exits: Node[] = [];
-	if (dctx.globalsToDestroy.length > 0) {
-		const exitScope: DrcScope = { varsToCleanup: dctx.globalsToDestroy, wasMoved: [], preStmts: [], pendingStmts: [], needsTry: false, isLoop: false, isFunction: false };
-		for (const s of generateCleanup(exitScope, program.location)) exits.push(s);
+	let g = dctx.globalsToDestroy.length;
+	while (g > 0) {
+		g -= 1;
+		const vi = dctx.globalsToDestroy[g];
+		if (baked.includes(vi.sym)) {
+			for (const s of destroyBakedArrayCell(vi.sym, program.location, dctx)) exits.push(s);
+		} else if (!vi.isCursor && vi.rcInfo.destroyFn != null) {
+			exits.push(makeDestroyCall(vi.sym, vi.rcInfo, program.location));
+		}
 	}
 	for (let i = cells.length - 1; i >= 0; i -= 1) {
 		for (const s of destroyHcrCell(cells[i], program.location, dctx)) exits.push(s);
