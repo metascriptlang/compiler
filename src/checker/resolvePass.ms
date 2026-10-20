@@ -179,6 +179,21 @@ function findTopLevelKeyword(text: string, keyword: string): int32 {
 	return -1;
 }
 
+function findTrueBranchEnd(textAfterQuestion: string): int32 {
+	let depth = 0;
+	let nestedConditionals = 0;
+	for (let i = 0; i < textAfterQuestion.length; i += 1) {
+		depth += bracketDepthStep(textAfterQuestion, i);
+		if (depth != 0) continue;
+		if (textAfterQuestion.slice(i, i + 9) == " extends ") nestedConditionals += 1;
+		if (textAfterQuestion.charAt(i) == ":") {
+			if (nestedConditionals == 0) return i;
+			nestedConditionals -= 1;
+		}
+	}
+	return -1;
+}
+
 // Parse function type string to resolved Function type
 function resolveFunctionType(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
 	let depth = 0;
@@ -642,8 +657,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		if (qIdx >= 0) {
 			const constraintPart = afterExtends.slice(0, qIdx).trim();
 			const afterQ = afterExtends.slice(qIdx + 1, afterExtends.length).trim();
-			// Find top-level ':' in the remainder (after '?')
-			const colonIdx = findTopLevelKeyword(afterQ, ":");
+			const colonIdx = findTrueBranchEnd(afterQ);
 			if (colonIdx >= 0) {
 				const truePart = afterQ.slice(0, colonIdx).trim();
 				const falsePart = afterQ.slice(colonIdx + 1, afterQ.length).trim();
