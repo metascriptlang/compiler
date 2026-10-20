@@ -172,6 +172,7 @@ function coalesceQueue(queue: QueuedMessage[]): QueuedMessage[] {
 
 const REQUEST_CANCELLED: number = -32800;
 const CONTENT_MODIFIED: number = -32801;
+const INVALID_REQUEST: number = -32600;
 
 function answerContentModified(io: LspTransport, qm: QueuedMessage): void {
 	const id = lspMessageId(qm.body);
@@ -303,6 +304,10 @@ export function processMessage(msg: string, state: LspServerState): string {
 	const method = lspGetField(msg, "method");
 	const idStr = lspMessageId(msg);
 	const params = lspGetObjectField(msg, "params");
+
+	if (state.shutdownRequested) {
+		return idStr == "" ? "" : lspFormatMessage(lspErrorResponse(idStr, INVALID_REQUEST, "InvalidRequest: server is shutting down"));
+	}
 
 	// Track lifecycle
 	if (method == "initialize") {
@@ -775,6 +780,27 @@ test "replay: shutdown answers null and the server waits for exit" {
 	assert shutdown.getDynamicField("result").kind == JsonKind.Null;
 	assert hasKey(shutdown, "result");
 	assert r.wire.nextChunk == 3;
+	assert r.exitCode == 0;
+}
+
+test "replay: after shutdown a request answers InvalidRequest and a notification is dropped" {
+	const uri = "file:///lspwire/aftershutdown.ms";
+	const r = replay([
+		initializeChunk(),
+		frames([notification("textDocument/didOpen", openParams(uri, GOOD_VALUE))]),
+		frames([request("9", "shutdown", "null")]),
+		frames([
+			request("10", "textDocument/definition", positionParams(uri, 0, 0)),
+			notification("textDocument/didChange", changeParams(uri, 2, BAD_VALUE)),
+			request("11", "shutdown", "null"),
+		]),
+		frames([notification("exit", "null")]),
+	]);
+	assert onlyAnswer(r, "n:9").getDynamicField("result").kind == JsonKind.Null;
+	for (const key of ["n:10", "n:11"]) {
+		assert onlyAnswer(r, key).getDynamicField("error").getDynamicField("code").asInt32(0) == -32600;
+	}
+	assert published(r, uri).length == 1;
 	assert r.exitCode == 0;
 }
 
