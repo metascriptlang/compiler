@@ -461,6 +461,7 @@ function emitActorStruct(node: Node, d: ActorDeclData, ctx: TransformContext, lo
 		classExtends: "",
 		classBody: structMembers,
 		nameLocation: d.nameLocation,
+		classImplements: [],
 	}, syntheticToken(loc));
 	classNode.resolvedSym = node.resolvedSym;
 	classNode.nodeType = node.nodeType;

@@ -325,6 +325,7 @@ export function emitActorDecl(gen: JSGenerator, node: Node): void {
 		classExtends: "",
 		classBody: body,
 		nameLocation: d.nameLocation,
+		classImplements: [],
 	} as ClassDeclData, node.location);
 	cls.resolvedSym = node.resolvedSym;
 	gen.actorHandle = pidField;

@@ -1184,6 +1184,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStr(objHeap, handle, "className", d.className);
 			setStr(objHeap, handle, "classExtends", d.classExtends);
 			setNodes(objHeap, arrHeap, handle, "classBody", d.classBody);
+			setStrs(objHeap, arrHeap, handle, "classImplements", d.classImplements);
 			setStr(objHeap, handle, "typeArg", node.typeArg);
 		},
 		NodeKind.ActorDecl => {
@@ -2170,8 +2171,9 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const className = readStr(objHeap, h, "className");
 			const classExtends = readStr(objHeap, h, "classExtends");
 			const classBody = readNodes(objHeap, arrHeap, h, "classBody", loc);
+			const classImplements = readStrs(objHeap, arrHeap, h, "classImplements");
 			const decl = createNodeAt(NodeKind.ClassDecl, {
-				className, classExtends, classBody, nameLocation: loc,
+				className, classExtends, classBody, nameLocation: loc, classImplements,
 			}, loc);
 			decl.typeArg = readStr(objHeap, h, "typeArg");
 			return decl;
@@ -4217,6 +4219,20 @@ test "round-trip InterfaceDecl keeps interfaceExtends" {
 	assert d.interfaceExtends[0] == "Base";
 }
 
+test "round-trip ClassDecl keeps classImplements" {
+	const objH = createStructHeap();
+	const arrH = createArrayHeap();
+	const loc = makeLoc(3, 1);
+	const orig = createNode(NodeKind.ClassDecl, {
+		className: "Pet", classDisplayName: "Pet", classExtends: "Animal", classBody: [] as Node[], nameLocation: loc,
+		classImplements: ["Named", "Box<T>"],
+	}, synthToken(loc));
+	const back = valueToNode(nodeToValue(orig, objH, arrH), objH, arrH, loc);
+	const d = back.data as ClassDeclData;
+	assert d.classImplements.length == 2;
+	assert d.classImplements[1] == "Box<T>";
+}
+
 test "round-trip StructDecl keeps interfaceExtends" {
 	const objH = createStructHeap();
 	const arrH = createArrayHeap();
@@ -4276,7 +4292,7 @@ test "round-trip keeps the generic params of an interface, a struct, a class and
 		interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: [[]],
 	}, synthToken(loc));
 	strukt.typeArg = "T:number";
-	const cls = createNode(NodeKind.ClassDecl, { className: "Pair", classDisplayName: "Pair", classExtends: "", classBody: [] as Node[], nameLocation: loc }, synthToken(loc));
+	const cls = createNode(NodeKind.ClassDecl, { className: "Pair", classDisplayName: "Pair", classExtends: "", classBody: [] as Node[], nameLocation: loc, classImplements: [] as string[] }, synthToken(loc));
 	cls.typeArg = "A,B:number";
 	const act = createNode(NodeKind.ActorDecl, { actorName: "Worker", actorBody: [] as Node[], nameLocation: loc }, synthToken(loc));
 	act.typeArg = "M";

@@ -2637,7 +2637,7 @@ test "hasUserMacroInvocation detects macro in ClassDecl body" {
 		methodDefaults: [], nativeName: "", nameLocation: loc,
 	}, synthToken(loc));
 	const cls = createNode(NodeKind.ClassDecl, {
-		className: "C", classDisplayName: "C", classExtends: "", classBody: [method], nameLocation: loc,
+		className: "C", classDisplayName: "C", classExtends: "", classBody: [method], nameLocation: loc, classImplements: [],
 	}, synthToken(loc));
 	assert hasUserMacroInvocation(cls, ctx);
 }
