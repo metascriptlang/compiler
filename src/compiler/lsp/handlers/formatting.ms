@@ -123,13 +123,24 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 	for (let i = 0; i < source.byteLength; i = i + 1) {
 		if (source.byteAt(i) == "\n".code) { lineCount = lineCount + 1; lastNl = i; }
 	}
-	const lastLineLen = source.byteLength - lastNl - 1;
+	const lastLineLen = source.byteSlice(lastNl + 1, source.byteLength).length;
 	const range = lspFmtRange(0, 0, lineCount, lastLineLen);
 	const t5 = performance.now();
 	const edit = "{\"range\":" + range + ",\"newText\":" + lspJsonString(formatted) + "}";
 	const t6 = performance.now();
 	writeStderr(`[LSP-FMT] json=${t6 - t5}ms total=${t6 - t0}ms lines=${lineCount} lastLineLen=${lastLineLen} responseLen=${edit.length}\n`);
 	return lspResponse(id, "[" + edit + "]");
+}
+
+function formattingBytePosition(source: string, position: string): Result<FmtPos, string> {
+	const line = (lspGetNumberField(position, "line") + 1) as int32;
+	let character = lspGetNumberField(position, "character") as int32;
+	if (line < 1 || character < 0) return Result.err("Formatting position requires non-negative line and character");
+	const text = source.byteSlice(lineOffset(source, line), lineOffset(source, line + 1));
+	const previous = text.charCodeAt(character - 1);
+	const current = text.charCodeAt(character);
+	if (previous >= 0xD800 && previous <= 0xDBFF && current >= 0xDC00 && current <= 0xDFFF) character -= 1;
+	return Result.ok({ line, column: text.slice(0, character).byteLength + 1 });
 }
 
 export function handleRangeFormatting(id: string, params: string, db: TransAmDb): string {
@@ -142,8 +153,10 @@ export function handleRangeFormatting(id: string, params: string, db: TransAmDb)
 	const range = lspGetObjectField(params, "range");
 	const rs = lspGetObjectField(range, "start");
 	const re = lspGetObjectField(range, "end");
-	const from: FmtPos = { line: (lspGetNumberField(rs, "line") + 1) as int32, column: (lspGetNumberField(rs, "character") + 1) as int32 };
-	const to: FmtPos = { line: (lspGetNumberField(re, "line") + 1) as int32, column: (lspGetNumberField(re, "character") + 1) as int32 };
+	const from = formattingBytePosition(source, rs);
+	if (!from.ok) return lspErrorResponse(id, -32602, from.error);
+	const to = formattingBytePosition(source, re);
+	if (!to.ok) return lspErrorResponse(id, -32602, to.error);
 
 	if (!_fmtParsersRegistered) {
 		registerCoreParsers();
@@ -151,7 +164,7 @@ export function handleRangeFormatting(id: string, params: string, db: TransAmDb)
 	}
 	const parsed = parseSource(source);
 	if (!parsed.ok) return lspResponse(id, "[]");
-	const stmt = innermostStatement(parsed.value, from, to);
+	const stmt = innermostStatement(parsed.value, from.value, to.value);
 	if (stmt == null) return lspResponse(id, "[]");
 
 	const edit = formatStatementEdit(stmt, source, getFormatOptions(db, path));
@@ -163,7 +176,9 @@ export function handleRangeFormatting(id: string, params: string, db: TransAmDb)
 	const endOffset = lineOffset(source, e.end.line) + e.end.column - 1;
 	if (source.byteSlice(startOffset, endOffset) == e.newText) return lspResponse(id, "[]");
 
-	const lspRange = lspFmtRange(e.start.line - 1, e.start.column - 1, e.end.line - 1, e.end.column - 1);
+	const startCharacter = source.byteSlice(lineOffset(source, e.start.line), startOffset).length;
+	const endCharacter = source.byteSlice(lineOffset(source, e.end.line), endOffset).length;
+	const lspRange = lspFmtRange(e.start.line - 1, startCharacter, e.end.line - 1, endCharacter);
 	return lspResponse(id, "[{\"range\":" + lspRange + ",\"newText\":" + lspJsonString(e.newText) + "}]");
 }
 
@@ -189,14 +204,17 @@ test "document formatting still edits a lossless source" {
 	assert handleFormatting("1", FORMAT_PARAMS, formattingDb("const  a=1;\n")).contains("newText");
 }
 
-function quickfixItems(source: string): string[] {
-	const params = "{\"textDocument\":{\"uri\":\"file:///fmt/probe.ms\"},\"range\":{\"start\":{\"line\":1,\"character\":0},\"end\":{\"line\":1,\"character\":1}}}";
-	const response = handleCodeAction("1", params, formattingDb(source));
+function formattingItems(response: string): string[] {
 	const parsed = parseJson(response);
 	if (!parsed.ok) throw new Error(parsed.error);
 	const items = lspGetObjectField(response, "result");
-	if (lspGetNumberField(response, "id") != 1 || !items.startsWith("[")) throw new Error("Expected code actions: " + response);
+	if (lspGetNumberField(response, "id") != 1 || !items.startsWith("[")) throw new Error("Expected formatting result: " + response);
 	return lspGetArrayItems(items);
+}
+
+function quickfixItems(source: string): string[] {
+	const params = "{\"textDocument\":{\"uri\":\"file:///fmt/probe.ms\"},\"range\":{\"start\":{\"line\":1,\"character\":0},\"end\":{\"line\":1,\"character\":1}}}";
+	return formattingItems(handleCodeAction("1", params, formattingDb(source)));
 }
 
 function applyAsciiQuickfix(source: string, action: string): string {
@@ -239,4 +257,97 @@ test "safe quickfix edits preserve surrounding text and still parse and check" {
 		assert parseSource(result).ok;
 		assert dbTypeCheck(formattingDb(result), "/fmt/probe.ms").errors.length == 0;
 	}
+}
+
+function applySingleLineUtf16Edit(source: string, edit: string): string {
+	const range = lspGetObjectField(edit, "range");
+	const start = lspGetObjectField(range, "start");
+	const end = lspGetObjectField(range, "end");
+	const from = lspGetNumberField(start, "character") as int32;
+	const to = lspGetNumberField(end, "character") as int32;
+	if (lspGetNumberField(start, "line") != 0 || lspGetNumberField(end, "line") != 0 || from < 0 || to < from || to > source.length) throw new Error("Invalid single-line edit: " + edit);
+	return source.slice(0, from) + lspGetField(edit, "newText") + source.slice(to, source.length);
+}
+
+function assertDocumentUtf16(text: string, endCharacter: int32): void {
+	const source = "export const s=\"" + text + "\";";
+	const edits = formattingItems(handleFormatting("1", FORMAT_PARAMS, formattingDb(source)));
+	if (edits.length != 1) throw new Error("Expected one document edit");
+	const range = lspGetObjectField(edits[0], "range");
+	const start = lspGetObjectField(range, "start");
+	const end = lspGetObjectField(range, "end");
+	if (lspGetNumberField(start, "character") != 0 || lspGetNumberField(end, "character") != endCharacter) throw new Error("Wrong document UTF-16 range: " + edits[0]);
+	const result = applySingleLineUtf16Edit(source, edits[0]);
+	if (result != "export const s = \"" + text + "\";\n") throw new Error("Wrong formatted document: " + result);
+	if (!parseSource(result).ok || dbTypeCheck(formattingDb(result), "/fmt/probe.ms").errors.length != 0) throw new Error("Formatted document must parse and check");
+}
+
+function assertRangeUtf16(text: string, startCharacter: int32, endCharacter: int32): void {
+	const prefix = "export const s=\"" + text + "\"; ";
+	const source = prefix + "export const   n=2;";
+	const character = startCharacter + 1;
+	const params = `{"textDocument":{"uri":"file:///fmt/probe.ms"},"range":{"start":{"line":0,"character":${character}},"end":{"line":0,"character":${character}}}}`;
+	const edits = formattingItems(handleRangeFormatting("1", params, formattingDb(source)));
+	if (edits.length != 1) throw new Error("Expected one range edit for " + text);
+	const range = lspGetObjectField(edits[0], "range");
+	const start = lspGetObjectField(range, "start");
+	const end = lspGetObjectField(range, "end");
+	if (lspGetNumberField(start, "character") != startCharacter || lspGetNumberField(end, "character") != endCharacter) throw new Error("Wrong selected statement or UTF-16 range: " + edits[0]);
+	const result = applySingleLineUtf16Edit(source, edits[0]);
+	if (result != prefix + "export const n = 2;") throw new Error("Range edit changed surrounding text: " + result);
+	if (!checkLossless(source, result).ok || !parseSource(result).ok || dbTypeCheck(formattingDb(result), "/fmt/probe.ms").errors.length != 0) throw new Error("Range edit must preserve tokens, parse and check");
+}
+
+test "formatting position clamps inside an astral pair to its start" {
+	const before = formattingBytePosition("é😀z", "{\"line\":0,\"character\":1}");
+	const inside = formattingBytePosition("é😀z", "{\"line\":0,\"character\":2}");
+	const after = formattingBytePosition("é😀z", "{\"line\":0,\"character\":3}");
+	assert before.ok && inside.ok && after.ok;
+	assert before.value.column == 3;
+	assert inside.value.column == 3;
+	assert after.value.column == 7;
+}
+
+test "range formatting reports invalid position parameters" {
+	const db = formattingDb("export const x=1;");
+	for (const position of ["{\"line\":0,\"character\":-1}", "{\"line\":-1,\"character\":0}", "{}"]) {
+		const params = `{"textDocument":{"uri":"file:///fmt/probe.ms"},"range":{"start":${position},"end":${position}}}`;
+		const response = handleRangeFormatting("1", params, db);
+		assert parseJson(response).ok;
+		assert lspGetNumberField(response, "id") == 1;
+		assert lspGetNumberField(lspGetObjectField(response, "error"), "code") == -32602;
+	}
+}
+
+test "formatting client fixture slices count UTF-16 units" {
+	const text = "é😀日";
+	assert text.length == 4;
+	assert text.byteLength == 9;
+	assert text.slice(0, 1) == "é";
+	assert text.slice(0, 3) == "é😀";
+	assert text.byteSlice(0, 6).length == 3;
+}
+
+test "document formatting ASCII coordinate control" {
+	assertDocumentUtf16("x", 19);
+}
+
+test "document formatting ends at BMP UTF-16 position" {
+	assertDocumentUtf16("ééé", 21);
+}
+
+test "document formatting ends at astral UTF-16 position" {
+	assertDocumentUtf16("😀😀😀", 24);
+}
+
+test "range formatting ASCII coordinate control" {
+	assertRangeUtf16("x", 20, 39);
+}
+
+test "range formatting selects and edits after BMP text" {
+	assertRangeUtf16("ééé", 22, 41);
+}
+
+test "range formatting selects and edits after astral text" {
+	assertRangeUtf16("😀😀😀", 25, 44);
 }
