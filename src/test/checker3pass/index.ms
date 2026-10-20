@@ -63,3 +63,4 @@ import "./scenarios/objectViewMissingField";
 import "./scenarios/distinctClassFromValue";
 import "./scenarios/spreadLiteralUnionMember";
 import "./scenarios/classImplements";
+import "./scenarios/distinctCollectionKey";
