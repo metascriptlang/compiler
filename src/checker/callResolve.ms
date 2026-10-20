@@ -2042,7 +2042,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				|| (objType != null && objType.kind == TypeKind.Module);
 			const callsOwnFunctionField = objType != null && getProperty(objType, me.property).kind == TypeKind.Function;
 			if (objType != null && !isNamespaceQualified && !callsOwnFunctionField) {
-				const allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
+				const allByName = boundExtensions(d.callee, findAllExtensionsByName(ctx.extensionRegistry, me.property));
 				// Type-level access (e.g., Buffer.method()) — only static extensions apply.
 				const isStaticAccess = isTypeLevelAccess(ctx, me.object, me.property);
 				let filtered = filterExtsByReceiverType(allByName, objType);
@@ -5240,6 +5240,16 @@ function refuseReadonlyViewCall(ctx: CheckerContext, node: Node, property: strin
 	addError(ctx, "cannot call '" + property + "' on " + typeDisplayName(objType) + " — a read-only view; a method callable through the view declares its receiver read-only: '" + property + "(this: Readonly<" + receiverName + ">)' on the class, or 'function " + property + "(this x: Readonly<" + receiverName + ">)' as an extension (PARALOCK E24)", node.location.line, node.location.column);
 }
 
+function boundExtensions(member: Node, byName: ExtensionMethod[]): ExtensionMethod[] {
+	if (!member.flags.has(NodeFlag.BoundSym) || member.resolvedSym == null) return byName;
+	const origin = member.resolvedSym.instantiatedFrom != null ? member.resolvedSym.instantiatedFrom : member.resolvedSym;
+	const bound: ExtensionMethod[] = [];
+	for (const e of byName) {
+		if (e.sym == origin) bound.push(e);
+	}
+	return bound;
+}
+
 export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	const d = node.data as MemberExprData;
 	checkInTypeSlot(ctx, d.object);
@@ -5727,7 +5737,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	}
 	// Fall back to extension registry — standard-aligned type-based lookup
 	if (ctx.extensionRegistry != null) {
-		const allByName = findAllExtensionsByName(ctx.extensionRegistry, d.property);
+		const allByName = boundExtensions(node, findAllExtensionsByName(ctx.extensionRegistry, d.property));
 		const recvLookupType = withoutReadonlyView(objType);
 		let ext = isStaticClassAccess ? null as unknown as ExtensionMethod : findFirstMatchingExt(allByName, recvLookupType);
 		let extObjType = recvLookupType;
