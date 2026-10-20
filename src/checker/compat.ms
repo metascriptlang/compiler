@@ -1605,6 +1605,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 		return typeRelation(formal.typeReturn, actual);
 	}
 
+	if (actual.kind == TypeKind.Unknown && !takesUnknown(formal)) return TypeRelation.None;
 	// Inference sentinels + user unknown score as Generic
 	if (formal.kind == TypeKind.Unknown || actual.kind == TypeKind.Unknown
 		|| formal.kind == TypeKind.None || actual.kind == TypeKind.None
