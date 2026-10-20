@@ -774,13 +774,9 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 			addError(ctx, "cannot infer the element type of an empty array literal — annotate the variable type", d.nameLocation.line, d.nameLocation.column);
 		}
 	}
-	// PARALOCK Phase 1: explicit `: Promise<T>` annotation on a affine Promise-producing
-	// initializer strips affine tracking. Warn so the opt-out is deliberate, not accidental.
 	if (declType != null && initType != null
 		&& isAwaitable(declType) && !isAffineAwaitable(declType) && isAffineAwaitable(initType)) {
-		addWarning(ctx,
-			`explicit 'Promise<T>' annotation on a spawn result strips PARALOCK affine tracking — '${d.declName}' will not be lifetime-checked. Remove the annotation to enable affine checking, or keep it as an opt-out`,
-			d.nameLocation.line, d.nameLocation.column);
+		declType = initType;
 	}
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing integer conversions
 	if (declType != null && d.initializer != null) {
