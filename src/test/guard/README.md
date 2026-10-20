@@ -26,8 +26,7 @@ exact counts, e.g. `tests/arc/tarcmisc.nim`).
 ## Running
 
 ```bash
-msc run --target=raiser src/test/guard/run.ms              # both gc modes (drc + orc)
-GUARD_GC=drc msc run --target=raiser src/test/guard/run.ms
+msc run --target=raiser src/test/guard/run.ms
 MSC=./msc msc run --target=raiser src/test/guard/run.ms    # a specific compiler
 ```
 

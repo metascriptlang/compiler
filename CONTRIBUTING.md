@@ -11,8 +11,8 @@ The compiler is written in MetaScript. Working on it means building it with the 
 ## Build
 
 ```bash
-msc build src/index.ms --gc=drc --danger --output=msc              # optimized self-host binary
-msc build src/index.ms --gc=drc --danger --cc=clang --output=msc   # macOS: adds thin LTO
+msc build src/index.ms --danger --output=msc              # optimized self-host binary
+msc build src/index.ms --danger --cc=clang --output=msc   # macOS: adds thin LTO
 msc run src/index.ms                                               # unoptimized build + run
 ```
 

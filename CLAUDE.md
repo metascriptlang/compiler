@@ -36,13 +36,13 @@ msc run src/index.ms                              # build + run natively
 msc build examples/actorSpawnBasic.ms --target=c
 
 # Optimized self-host binary → ./msc. Add --cc=clang on macOS to get LTO.
-msc build src/index.ms --gc=drc --danger --output=msc
+msc build src/index.ms --danger --output=msc
 
 # Dev loop (edit → rebuild → test): drop thin-LTO. The link then takes ~0.2s
 # instead of ~15s — thin-LTO produces machine code only at link, so every
 # rebuild re-pays it even when clang hits the object cache. Same -O3.
 # Numbers + method: docs/BUILD-PERF.md "Measured 2026-09-26".
-msc build src/index.ms --gc=drc --danger --lto=off --output=msc
+msc build src/index.ms --danger --lto=off --output=msc
 
 # Sync to ~/.metascript/ so downstream projects pick it up via $PATH
 ./msc run --target=raiser tools/syncLocalBinary.ms            # full sync
@@ -62,7 +62,7 @@ Opt level and LTO are **separate axes**. `modeFlags` (`src/compiler/cc.ms`): def
 `--lto` is capability-resolved after the compiler is known (`resolveLto`): `--danger` takes thin LTO where the resolved compiler can link it, drops it with a stderr notice where it cannot, and an explicit `--lto=` against a proven-broken pair fails loud.
 
 ```bash
-msc build src/index.ms --gc=drc --danger --cc=clang --output=msc   # macOS
+msc build src/index.ms --danger --cc=clang --output=msc   # macOS
 ```
 
 **Do not re-litigate**: macOS/zig and Windows/zig cannot LTO (verified 2026-07-30 and 2026-08-31, target-scoped, no flag fixes it from our side); GNU gcc never gets LTO by default and spells it `-flto=auto`. The gain is **LTO, not clang** — clang and zig are equivalent code generators. Capability table: `src/compiler/cc.ms` (`ltoBroken`). Evidence + measurement method: [`docs/BUILD-PERF.md`](docs/BUILD-PERF.md).
