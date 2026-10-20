@@ -772,7 +772,7 @@ class ModuleEmissionResult {
 	finished: float64 = 0;
 }
 
-type ModuleEmitter = (job: Readonly<ModuleEmissionJob>, aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>, isTestBuild: boolean, isHcr: boolean) => ModuleEmissionResult;
+type ModuleEmitter = Sendable<(job: Readonly<ModuleEmissionJob>, aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>, isTestBuild: boolean, isHcr: boolean) => ModuleEmissionResult>;
 
 function emitModuleJob(job: Readonly<ModuleEmissionJob>, aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>, isTestBuild: boolean, isHcr: boolean): ModuleEmissionResult {
 	const result = new ModuleEmissionResult();
@@ -894,7 +894,8 @@ test "bounded module emission preserves slots and joins before stopping" {
 			assert complete[slot].output.modulePath == slot.toString();
 		}
 		if (workers > 1) assert emissionOverlapped(complete);
-		for (const emitter of [probeFailedModuleEmission, probeDiagnosticModuleEmission]) {
+		const emitters: ModuleEmitter[] = [probeFailedModuleEmission, probeDiagnosticModuleEmission];
+		for (const emitter of emitters) {
 			const failed = emitModulesBounded(jobs, aliveSet, facts, workers, false, "", emitter);
 			let completed = 0;
 			for (let slot = 0; slot < failed.length; slot += 1) {
