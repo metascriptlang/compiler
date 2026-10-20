@@ -65,3 +65,35 @@ const d: Dst = { ...s, n: 4 };
 `).errors;
 	assert errors.length == 0, "n written after the spread replaces the spread's n: " + errors.join("\n");
 }
+
+test "a field the target requires that no spread or key gives is refused" {
+	const text = checkOnly(`
+class Box { v: int32 = 1; }
+interface Src { a: number; }
+interface DstArr { a: number; items: int32[]; }
+interface DstBox { a: number; box: Box; }
+interface DstFn { a: number; f: (n: int32) => int32; }
+const s: Src = { a: 1 };
+const d: DstArr = { ...s };
+const b: DstBox = { ...s };
+const f: DstFn = { ...s };
+`).errors.join("\n");
+	assert text.contains("field 'items' must be initialized"), "an array field the spread lacks: " + text;
+	assert text.contains("field 'box' must be initialized"), "a class field the spread lacks: " + text;
+	assert text.contains("field 'f' must be initialized"), "a function field the spread lacks: " + text;
+}
+
+test "a required field a spread or a later key gives, or a nullable field left out, is accepted" {
+	const errors = checkOnly(`
+interface Src { a: number; }
+interface WithItems { a: number; items: int32[]; }
+interface Dst { a: number; items: int32[]; }
+interface DstOpt { a: number; note: string | null; items?: int32[] | null; }
+const s: Src = { a: 1 };
+const w: WithItems = { a: 2, items: [1, 2] };
+const given: Dst = { ...w };
+const after: Dst = { ...s, items: [3] };
+const opt: DstOpt = { ...s };
+`).errors;
+	assert errors.length == 0, "every required field is given: " + errors.join("\n");
+}
