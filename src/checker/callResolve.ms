@@ -1216,18 +1216,35 @@ function pushEffectiveArg(out: Node[], a: Node): void {
 	for (const e of ((a.data as SpreadExprData).spreadArg.data as ArrayLiteralData).elements) pushEffectiveArg(out, e);
 }
 
+function refuseMisplacedSpread(ctx: CheckerContext, args: Node[], formals: Type[], minArgs: number): boolean {
+	const restAt = formals.length > 0 && formals[formals.length - 1].kind == TypeKind.Varargs ? formals.length - 1 : -1;
+	for (let i = 0; i < args.length; i += 1) {
+		const a = args[i];
+		if (a.kind != NodeKind.SpreadExpr || (restAt >= 0 && i >= restAt)) continue;
+		const source = (a.data as SpreadExprData).spreadArg.nodeType;
+		const tuple = source != null && peelTransparentInstance(unwrapRef(source)).kind == TypeKind.Tuple;
+		const fixedOnly = i < minArgs || (restAt < 0 && i >= formals.length);
+		addError(ctx, !tuple && fixedOnly ? "A spread argument must either have a tuple type or be passed to a rest parameter"
+			: "a spread argument can fill only the rest parameter: pass the arguments before the rest parameter one by one",
+			a.location.line, a.location.column);
+		return true;
+	}
+	return false;
+}
+
 function checkNewArity(ctx: CheckerContext, node: Node, classSym: Symbol, innerType: Type | null, routine: Symbol | null, defaultsFrom: Symbol | null): void {
 	const args = (node.data as NewExprData).newArguments;
 	if (hasFlag(classSym, SymbolFlag.ImportC)) return;
-	for (const a of args) { if (a.kind == NodeKind.SpreadExpr) return; }
 	let required: int32 = 0;
 	let allowed: int32 = args.length;
 	if (hasFlag(classSym, SymbolFlag.HasConstructor)) {
 		const formals = ctorFormalTypes(routine);
 		if (formals == null) return;
 		required = requiredCtorArgs(formals, defaultsFrom != null ? defaultsFrom.defaultParams : null);
+		if (refuseMisplacedSpread(ctx, args, formals, required)) return;
 		if (formals.length == 0 || formals[formals.length - 1].kind != TypeKind.Varargs) allowed = formals.length;
 	} else {
+		if (refuseMisplacedSpread(ctx, args, [], 0)) return;
 		if (classSym.symbolKind != SymbolKind.Class && classSym.symbolKind != SymbolKind.Struct) return;
 		if (innerType == null || innerType.kind != TypeKind.Struct) return;
 		allowed = innerType.typeNames.length;
@@ -2026,7 +2043,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		const extMinArDeclared = callMinArity(calleeType);
 		const extMinAr = extHasRest && extMinArDeclared >= calleeType.typeChildren.length
 			? calleeType.typeChildren.length - 1 : extMinArDeclared;
-		if (d.arguments.length < extMinAr) {
+		if (refuseMisplacedSpread(ctx, d.arguments, calleeType.typeChildren, extMinAr)) {
+		} else if (d.arguments.length < extMinAr) {
 			const me = d.callee.data as MemberExprData;
 			addError(ctx, `Too few arguments to '${me.property}': expected at least ${extMinAr}, got ${d.arguments.length}`, node.location.line, node.location.column);
 		} else if (!extHasRest && d.arguments.length > calleeType.typeChildren.length) {
@@ -2179,7 +2197,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		// Rest param is optional (accepts 0+ args), so effective min excludes it
 		const effectiveMin = hasRest && minAr >= calleeType.typeChildren.length
 			? calleeType.typeChildren.length - 1 : minAr;
-		if (argTypes.length < effectiveMin) {
+		if (refuseMisplacedSpread(ctx, d.arguments, calleeType.typeChildren, effectiveMin)) {
+		} else if (argTypes.length < effectiveMin) {
 			addError(ctx, `Too few arguments: expected at least ${effectiveMin}, got ${argTypes.length}`, node.location.line, node.location.column);
 		} else if (!hasRest && argTypes.length > calleeType.typeChildren.length) {
 			addError(ctx, `Too many arguments: expected at most ${calleeType.typeChildren.length}, got ${argTypes.length}`, node.location.line, node.location.column);
