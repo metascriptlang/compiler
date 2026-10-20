@@ -63,6 +63,11 @@ function bareArrayType(t: Type | null): Type | null {
 	return u.kind == TypeKind.Ref && u.typeReturn != null ? u.typeReturn : u;
 }
 
+function tupleSource(t: Type | null): Type | null {
+	const u = t != null ? peelTransparentInstance(t) : null;
+	return u != null && u.kind == TypeKind.Tuple ? u : null;
+}
+
 function viewRef(sym: Symbol, t: Type | null, loc: SourceLocation): Node {
 	if (!isRefArray(t)) return typedRef(sym, t, loc);
 	const deref = makeHiddenDeref(typedRef(sym, t, loc), loc);
@@ -70,11 +75,7 @@ function viewRef(sym: Symbol, t: Type | null, loc: SourceLocation): Node {
 	return deref;
 }
 
-function pushStmt(accSym: Symbol, accT: Type | null, arg: Node, loc: SourceLocation, ctx: TransformContext): Node {
-	if (ctx.keepBuiltinMemberCalls) {
-		const receiver = typedRef(accSym, accT, loc);
-		return makeExprStmt(makeCall(makeMember(receiver, "push", loc), [arg], loc), loc);
-	}
+function pushStmt(accSym: Symbol, accT: Type | null, arg: Node, loc: SourceLocation): Node {
 	const args: Node[] = [];
 	if (isRefArray(accT)) {
 		args.push(typedRef(accSym, accT, loc));
@@ -99,16 +100,25 @@ export function expandSpreadLiteral(lit: Node, ctx: TransformContext, out: Node[
 	for (const e of d.elements) {
 		if (e == null) continue;
 		if (e.kind != NodeKind.SpreadExpr) {
-			out.push(pushStmt(accSym, litT, e, loc, ctx));
+			out.push(pushStmt(accSym, litT, e, loc));
 			continue;
 		}
 		const sd = e.data as SpreadExprData;
 		const srcT = sd.spreadArg.nodeType;
+		const tuple = tupleSource(srcT);
 		const srcSym = freshTempSym(ctx, "sprs", srcT);
 		const srcDecl = makeVarDecl(srcSym.name, sd.spreadArg, DeclKind.Const, loc);
 		srcDecl.resolvedSym = srcSym;
 		srcDecl.nodeType = srcT;
 		out.push(srcDecl);
+		if (tuple != null) {
+			for (let i = 0; i < tuple.typeChildren.length; i += 1) {
+				const item = makeArrayAccess(typedRef(srcSym, srcT, loc), makeNumber(i, loc), loc);
+				item.nodeType = tuple.typeChildren[i];
+				out.push(pushStmt(accSym, litT, item, loc));
+			}
+			continue;
+		}
 		const indexType = counterType(ctx);
 		const iSym = freshTempSym(ctx, "spri", indexType);
 		const iDecl = makeVarDecl(iSym.name, makeNumber(0, loc), DeclKind.Let, loc);
@@ -119,7 +129,7 @@ export function expandSpreadLiteral(lit: Node, ctx: TransformContext, out: Node[
 		const bareSrc = bareArrayType(srcT);
 		elemAccess.nodeType = bareSrc != null ? bareSrc.typeReturn : null;
 		const bodyStmts: Node[] = [];
-		bodyStmts.push(pushStmt(accSym, litT, elemAccess, loc, ctx));
+		bodyStmts.push(pushStmt(accSym, litT, elemAccess, loc));
 		bodyStmts.push(makeCounterStep(iSym, indexType, loc));
 		const lenMember = makeMember(viewRef(srcSym, srcT, loc), "length", loc);
 		lenMember.nodeType = int32Type();
