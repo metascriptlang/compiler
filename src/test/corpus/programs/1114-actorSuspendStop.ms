@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // @stdout: send-then-stop 200
 // @stdout: stop-only 200
 // @stdout: timer-then-stop 200

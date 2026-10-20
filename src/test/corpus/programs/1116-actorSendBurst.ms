@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // @stdout: one 6000000
 // @stdout: two 6000000 6000000
 

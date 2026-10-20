@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: Unknown host function: msFutureThen
 // @stdout: seq 20000
 // @stdout: chain 20000
 

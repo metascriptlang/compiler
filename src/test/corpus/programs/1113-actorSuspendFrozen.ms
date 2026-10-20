@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser VM has no actors: Cannot resolve module 'std/actor'
 // @stdout: send work 0->0;ping;
 // @stdout: call sum=4000000
 import { stop, ExitReason } from "std/actor";
