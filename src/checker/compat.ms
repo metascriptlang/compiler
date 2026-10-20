@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, ClassDeclData, MethodDeclData, DecoratedDeclData } from "../ast/node";
 import { makeSymbol, classDeclNodeOf } from "./symbol";
-import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion } from "./types";
+import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, peelToStructOrUnion, isVarargs  } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -954,6 +954,30 @@ function isFunctionAssignable(source: Type | null, target: Type | null): boolean
 		return isAssignable(source.typeReturn, target.typeReturn);
 	}
 	return true;
+}
+
+export function arityAdapts(source: Type | null, target: Type | null): boolean {
+	if (source == null || target == null || source.kind != TypeKind.Function || target.kind != TypeKind.Function) return false;
+	if (target.callConv != CallingConvention.CcClosure || hasGenericParams(source) || hasGenericParams(target)) return false;
+	const sourceParams = runtimeParams(source);
+	const targetParams = runtimeParams(target);
+	if (sourceParams.length >= targetParams.length || takesVarargs(sourceParams) || takesVarargs(targetParams)) return false;
+	const leading: Type[] = [];
+	const names: string[] = [];
+	for (let i = 0; i < sourceParams.length; i += 1) {
+		leading.push(targetParams[i]);
+		names.push("p" + String(i));
+	}
+	const prefix = createFunction(leading, names, target.typeReturn);
+	prefix.callConv = target.callConv;
+	return isFunctionAssignable(source, prefix);
+}
+
+function takesVarargs(params: Type[]): boolean {
+	for (const param of params) {
+		if (isVarargs(param)) return true;
+	}
+	return false;
 }
 
 function paramRefusal(source: Type | null, target: Type | null): string {

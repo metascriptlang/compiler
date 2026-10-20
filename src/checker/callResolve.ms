@@ -11,7 +11,7 @@ import { findChar, splitTopLevel } from "../utils/string";
 import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc, writeThroughGraphBackedge } from "./assignable";
 import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
-import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal } from "./compat";
+import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, arityAdapts } from "./compat";
 import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash } from "./context";
 import { comparesAtBase, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol } from "./fit";
 import { checkImportCall } from "./importCall";
@@ -2685,7 +2685,8 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 					&& !isMaybeType(argHeld)
 					&& (args[pi].kind == NodeKind.NullLiteral
 						|| argTypes[pi].kind == TypeKind.Null
-						|| isAssignable(argTypes[pi], maybeFormal.typeReturn))) {
+						|| isAssignable(argTypes[pi], maybeFormal.typeReturn)
+						|| arityAdapts(argTypes[pi], maybeFormal.typeReturn))) {
 				args[pi] = synthMaybeWrap(args[pi], maybeFormal, argTypes[pi]);
 				argTypes[pi] = maybeFormal;
 			}
@@ -3602,7 +3603,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			cd.arguments[pi] = synthMaybeWrap(arg, maybeSubstituted, arg.nodeType!);
 			if (pi < argTypes.length) argTypes[pi] = maybeSubstituted;
 		} else if (arg.nodeType != null && !isMaybeType(arg.nodeType)
-				&& isAssignable(arg.nodeType, maybeSubstituted.typeReturn)) {
+				&& (isAssignable(arg.nodeType, maybeSubstituted.typeReturn) || arityAdapts(arg.nodeType, maybeSubstituted.typeReturn))) {
 			cd.arguments[pi] = synthMaybeWrap(arg, maybeSubstituted, arg.nodeType);
 			if (pi < argTypes.length) argTypes[pi] = maybeSubstituted;
 		}
