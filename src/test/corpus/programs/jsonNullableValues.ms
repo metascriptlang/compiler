@@ -1,8 +1,8 @@
-// @stdout: {"id":1,"s":null,"n":null,"i":null,"f":null,"b":null,"c":null,"o":null,"arr":[],"ai":[],"ao":[],"sa":null,"du":null,"dus":[]}
+// @stdout: {"id":1,"n":null,"i":null,"f":null,"b":null,"c":null,"o":null,"arr":[],"ai":[],"ao":[],"sa":null,"du":null,"dus":[]}
 // @stdout: {"id":2,"s":"q\"","n":"x","i":7,"f":1.5,"b":true,"c":"Green","o":{"x":3},"arr":["x",null],"ai":[null,4],"ao":[null,{"x":5}],"sa":["k"],"du":{"kind":"b","s":"z"},"dus":[{"kind":"a","v":1},{"kind":"b","s":"t"}]}
 // @stdout: ["x",null] [null,2.5] null "a"
-// @stdout: parsed {"id":3,"s":null,"n":"y","i":null,"f":null,"b":false,"c":null,"o":null,"arr":[],"ai":[],"ao":[],"sa":null,"du":null,"dus":[]}
-// note: JSON.stringify writes a null `T | null` value as null, field, array element or top level alike; `s?: string` is `string | null`, so an absent optional field is written as null too. Same output on every lane.
+// @stdout: parsed {"id":3,"n":"y","i":null,"f":null,"b":false,"c":null,"o":null,"arr":[],"ai":[],"ao":[],"sa":null,"du":null,"dus":[]}
+// note: JSON.stringify writes a null `T | null` value as null, field, array element or top level alike; an optional field `s?: string` holding null is left out, as TypeScript leaves out an absent property. Same output on every lane.
 enum Color { Red, Green }
 interface Inner { x: int32; }
 interface ShapeA { kind: "a"; v: int32; }
