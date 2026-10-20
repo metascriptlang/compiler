@@ -16,15 +16,13 @@
 //   reference comparisons  — template `>` = y < x           → derived from <
 //   reference comparisons  — template `>=` = y <= x         → derived from <=
 
-import { Node, NodeKind, BinaryExprData, ExprStmtData, NewExprData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind, AttachedOp, NodeFlag, CallingConvention, ObjectLiteralData } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, ExprStmtData, NewExprData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind, AttachedOp, NodeFlag, CallingConvention } from "../../ast/node";
 import { TransformContext, PendingTupleOp, reportTransformError } from "../context";
 import { liftedOp, hookBaseCName, hasUnionEq, anonUnionCName, opTypeKey } from "../../codegen/c/types";
-import { walkNode, hasEffect, walkExpandBlocks, walkWithinStatement, walkOutsideInstanceFieldInits } from "../walker";
-import { cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, receiverKind, makeTypedIdentResolved, makeIdentResolved } from "../util";
+import { walkNode, hasEffect } from "../walker";
+import { cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, receiverKind, makeTypedIdentResolved, runtimeRef, isRuntimeProcCall } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isResult, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion, isStdCollectionKind } from "../../checker/types";
 import { cloneIfPure } from "../coercion/intArithJS";
-import { bindOnce } from "../coercion/nullishCoalesce";
-import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { resolveOperatorCall, ExtensionMethod, getExtFnType, declaredKeyHash, findAllExtensionsByName, hasConcreteReceiver, isReceiverMatch } from "../../checker/context";
 
 // The checker binds every operator a routine in scope is declared for; an operator that reaches
@@ -267,56 +265,20 @@ function isClosureValue(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Function && t.callConv == CallingConvention.CcClosure;
 }
 
-function rereadable(n: Node): boolean {
-	if (n.kind != NodeKind.ObjectLiteral || !n.flags.has(NodeFlag.Closure)) return cloneIfPure(n) != null;
-	for (const part of (n.data as ObjectLiteralData).properties) {
-		if (part.kind != NodeKind.NullLiteral && cloneIfPure(part) == null) return false;
-	}
-	return true;
-}
-
-function boundRead(bound: Node, loc: SourceLocation): Node {
-	return makeIdentResolved((bound.data as BinaryExprData).left.resolvedSym!, loc);
-}
-
-function lowerClosureEquality(node: Node, ctx: TransformContext, temps: Node[] | null): Node {
+function lowerClosureEquality(node: Node, ctx: TransformContext): Node {
 	if (node.kind != NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
 	const op = d.operator;
 	if (op != "==" && op != "===" && op != "!=" && op != "!==") return node;
 	if (!isClosureValue(resolveType(ctx, d.left)) || !isClosureValue(resolveType(ctx, d.right))) return node;
-	const loc = node.location;
-	let left = d.left;
-	let right = d.right;
-	let leftAgain = d.left;
-	let rightAgain = d.right;
-	if (rereadable(left) && rereadable(right)) {
-		leftAgain = cloneNodeKeepSem(left);
-		rightAgain = cloneNodeKeepSem(right);
-	} else if (temps != null) {
-		left = bindOnce(d.left, ctx, temps, loc);
-		right = bindOnce(d.right, ctx, temps, loc);
-		leftAgain = boundRead(left, loc);
-		rightAgain = boundRead(right, loc);
-	} else {
-		reportTransformError(ctx, "internal: a function comparison whose operand has effects reached lowering outside a statement", loc);
-		return node;
-	}
-	const fnEq = makeBinary(makeMember(left, "fn", loc), "===", makeMember(right, "fn", loc), loc);
-	const envEq = makeBinary(makeMember(leftAgain, "env", loc), "===", makeMember(rightAgain, "env", loc), loc);
-	const bothEq = makeBinary(fnEq, "&&", envEq, loc);
-	return op == "!=" || op == "!==" ? makeUnary("!", bothEq, loc) : bothEq;
+	const same = makeCall(runtimeRef("msClosureSame", node.location), [d.left, d.right], node.location);
+	same.nodeType = booleanType();
+	return op == "!=" || op == "!==" ? makeUnary("!", same, node.location) : same;
 }
 
 export function lowerClosureEqualities(program: Node, ctx: TransformContext): Node {
 	if (ctx.jsBackend) return program;
-	walkExpandBlocks(program, (stmt: Node, c: TransformContext): Node[] => {
-		const temps: Node[] = [];
-		const lowered = walkWithinStatement(stmt, (node: Node): Node => lowerClosureEquality(node, c, temps));
-		temps.push(lowered);
-		return temps;
-	}, ctx);
-	return walkOutsideInstanceFieldInits(program, (node: Node): Node => lowerClosureEquality(node, ctx, null));
+	return walkNode(program, (node: Node): Node => lowerClosureEquality(node, ctx));
 }
 
 function lowerUnaryNode(node: Node, ctx: TransformContext): Node {
@@ -779,10 +741,10 @@ function loweredOperator(stmts: Node[]): string {
 	return e.kind == NodeKind.BinaryExpr ? (e.data as BinaryExprData).operator : "";
 }
 
-test "closure === compares the fn word and the env word on C" {
+test "closure === compares the adaptees on C" {
 	const stmts = lowerClosuresOf("a === b;", createClosureType([], [], numberType()), false);
 	assert stmts.length == 1;
-	assert loweredOperator(stmts) == "&&";
+	assert isRuntimeProcCall((stmts[0].data as ExprStmtData).expr, "msClosureSame");
 }
 
 test "closure === is left to the JS backend" {
@@ -793,11 +755,10 @@ test "two named functions compare as plain pointers" {
 	assert loweredOperator(lowerClosuresOf("a === b;", createFunction([], [], numberType()), false)) == "===";
 }
 
-test "a closure operand with effects binds both operands once" {
+test "a closure operand with effects is read once" {
 	const stmts = lowerClosuresOf("a === g();", createClosureType([], [], numberType()), false);
-	assert stmts.length == 3;
-	assert stmts[0].kind == NodeKind.VariableDecl && stmts[1].kind == NodeKind.VariableDecl;
-	assert loweredOperator(stmts) == "&&";
+	assert stmts.length == 1;
+	assert isRuntimeProcCall((stmts[0].data as ExprStmtData).expr, "msClosureSame");
 }
 
 test "tuple < rewrites to _lt call" {

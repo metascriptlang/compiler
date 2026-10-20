@@ -40,8 +40,9 @@ import {
 	RaiserValue, RaiserValueKind, RaiserObjectHeap, RaiserArrayHeap, raiserNil,
 	heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldValueAt, heapObjectGetField,
 	heapArrayLen, heapArrayGet, heapAllocArray, heapArrayPush, heapAllocStoredString, rcIncref, raiserArray,
-	heapAllocObject, heapObjectSetField, raiserObject, raiserInt, createStructHeap, createArrayHeap,
+	heapAllocObject, heapObjectSetField, raiserObject, raiserInt, createStructHeap, createArrayHeap, raiserEqual,
 } from "../../raiser/value";
+import { ADAPTEE_FIELD } from "../../transform/coercion/implicitConvLower";
 import {
 	HostCapability, registerHostFn, markHostRegistryInitialized, isHostRegistryInitialized, setActiveHostHeaps,
 	activeHostObjectHeap, activeHostArrayHeap, activeProgramArgv, raiseFromHost,
@@ -1018,6 +1019,29 @@ function _bridgeMsCheckRangeI32FromU64(args: RaiserValue[]): RaiserValue {
 	return v;
 }
 
+function closureAdaptee(objHeap: RaiserObjectHeap, closure: RaiserValue): RaiserValue {
+	let c = closure;
+	while (c.kind == RaiserValueKind.Object) {
+		const env = heapObjectGetField(objHeap, c.intVal, "env");
+		if (env.kind != RaiserValueKind.Object) break;
+		const adaptee = heapObjectGetField(objHeap, env.intVal, ADAPTEE_FIELD);
+		if (adaptee.kind != RaiserValueKind.Object) break;
+		c = adaptee;
+	}
+	return c;
+}
+
+function _bridgeMsClosureSame(args: RaiserValue[]): RaiserValue {
+	const objHeap = activeHostObjectHeap();
+	const arrHeap = activeHostArrayHeap();
+	if (objHeap == null || arrHeap == null) throw new Error("internal: msClosureSame called with no active host heap");
+	const a = closureAdaptee(objHeap, args[0]);
+	const b = closureAdaptee(objHeap, args[1]);
+	if (a.kind != RaiserValueKind.Object || b.kind != RaiserValueKind.Object) return boxBool(raiserEqual(arrHeap, a, b));
+	return boxBool(raiserEqual(arrHeap, heapObjectGetField(objHeap, a.intVal, "fn"), heapObjectGetField(objHeap, b.intVal, "fn"))
+		&& raiserEqual(arrHeap, heapObjectGetField(objHeap, a.intVal, "env"), heapObjectGetField(objHeap, b.intVal, "env")));
+}
+
 function _bridgeMsMaybeGet(args: RaiserValue[]): RaiserValue {
 	if (args[0].kind == RaiserValueKind.Nil) raiseFromHost(unboxString(args[1]) + unboxString(args[2]) + "'", true);
 	return args[0];
@@ -1044,6 +1068,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msUnionReadMaybe", _bridgeMsUnionReadMaybe, HostCapability.Pure);
 	registerHostFn("msUnionWrapMaybe", _bridgeMsUnionWrapMaybe, HostCapability.Pure);
 	registerHostFn("msMaybeGet", _bridgeMsMaybeGet, HostCapability.Pure);
+	registerHostFn("msClosureSame", _bridgeMsClosureSame, HostCapability.Pure);
 	registerHostFn("msCheckRangeI32", _bridgeMsCheckRangeI32, HostCapability.Pure);
 	registerHostFn("msCheckRangeI32FromU64", _bridgeMsCheckRangeI32FromU64, HostCapability.Pure);
 

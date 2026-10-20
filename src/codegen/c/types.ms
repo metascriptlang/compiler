@@ -1134,7 +1134,7 @@ export function emitOwnedTypeInfos(g: CGen): void {
 		const label = typeInfoLabel(g, info);
 		const shown = info.kind != TypeInfoKind.Object ? "" : runtimeClassSym(info.subject) != null ? typeDisplayName(info.subject) : "Object";
 		const fields = `.name = "${label}", .isCyclic = ${info.trace != null ? "MS_TRUE" : "MS_FALSE"}, `
-			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = 0, .base = ${baseRef}`
+			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info.subject)}, .base = ${baseRef}`
 			+ (shown != "" && shown != label ? `, .displayName = "${escapeCString(shown)}"` : "");
 		if (viaRegistry && !info.moduleLocal && !hcrTypeInfoRef(g, info.cName)) {
 			addCGenError(g, `internal: HCR image ${g.modulePath} owns TypeInfo ${info.cName} but no image module registers it`, 0, 0);
@@ -1176,6 +1176,10 @@ function emitTypeInfoDisplay(g: CGen, info: Readonly<CTypeInfoDemand>): void {
 function gateFlaglessUnknown(g: CGen, t: Type): void {
 	const pn = g.currentProc != null ? g.currentProc.name : "<toplevel>";
 	addCGenError(g, "internal: unresolved type (kind=" + (t.kind as number).toString() + ") reached codegen in " + g.modulePath + " proc " + pn, 0, 0);
+}
+
+function typeInfoFlags(subject: Type | null): string {
+	return subject != null && subject.typeFlags.has(TypeFlag.ArityAdapter) ? "MS_TYPE_FLAG_ARITY_ADAPTER" : "0";
 }
 
 export function getTypeDesc(g: CGen, t: Type | null): string {
