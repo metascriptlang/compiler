@@ -4053,11 +4053,18 @@ function isCallableValueType(t: Type): boolean {
 	return match (t.kind) {
 		TypeKind.Function => true,
 		TypeKind.Inferred | TypeKind.Unknown | TypeKind.Pending | TypeKind.Error | TypeKind.Never
-			| TypeKind.GenericParam | TypeKind.GenericInstance | TypeKind.TypeReference | TypeKind.Conditional | TypeKind.IndexedAccess | TypeKind.KeyOf => true,
+			| TypeKind.GenericParam | TypeKind.TypeReference | TypeKind.Conditional | TypeKind.IndexedAccess | TypeKind.KeyOf => true,
+		TypeKind.GenericInstance => isCallableInstance(t),
 		TypeKind.Ref | TypeKind.Var | TypeKind.Lent | TypeKind.Sink | TypeKind.Borrow | TypeKind.Alias | TypeKind.Distinct =>
 			t.typeReturn == null || isCallableValueType(t.typeReturn),
 		_ => false,
 	};
+}
+
+function isCallableInstance(t: Type): boolean {
+	if (t.typeReturn == null) instantiateGenericBody(t, genericParamsOf(t));
+	const body = t.typeReturn ?? distinctBody(t);
+	return body == null || isCallableValueType(body);
 }
 
 function dynamicFieldCalleeHint(callee: Node): string {
