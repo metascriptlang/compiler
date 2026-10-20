@@ -26,15 +26,6 @@ msString msCryptoAesSeal(msString key, msString plainText, msString aad);
  * Returns empty string on auth failure or error. */
 msString msCryptoAesOpen(msString key, msString sealed, msString aad);
 
-/* ===== Structured API (encrypt/decrypt with separate fields) ===== */
-
-/* GCM encrypt with explicit IV. Returns cipherText.
- * Tag is written to tagOut (16 bytes). */
-msString msCryptoAesGcmEncrypt(msString key, msString plainText, msString iv, msString aad, msString* tagOut);
-
-/* GCM decrypt with explicit IV and tag. Returns plainText or empty on auth failure. */
-msString msCryptoAesGcmDecrypt(msString key, msString cipherText, msString iv, msString aad, msString authTag);
-
 /* ===== CBC Mode (expert use) ===== */
 
 /* CBC encrypt with PKCS7 padding. IV must be 16 bytes. */

@@ -2,7 +2,6 @@
 // import { seal, open } from "std/crypto/aes"
 //
 // Safe by default: seal/open use AES-GCM with auto-generated nonce.
-// Structured API (encrypt/decrypt) for interop with specific wire formats.
 // CBC mode available for legacy interop (expert use).
 
 @include("runtime/crypto/ciphers/aes.h");
