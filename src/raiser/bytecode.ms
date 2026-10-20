@@ -193,6 +193,20 @@ export enum RaiserOpcode {
 	BrGeI64Imm,       // ABC: if R[A] >= the immediate in B pc += branchOffset(C)
 }
 
+export enum RaiserRegClass {
+	Word,
+	Ref,
+	Dyn,
+}
+
+export function regClassLetter(cls: RaiserRegClass): string {
+	return match (cls) {
+		RaiserRegClass.Word => "W",
+		RaiserRegClass.Ref => "R",
+		RaiserRegClass.Dyn => "D",
+	};
+}
+
 export enum RaiserConvClass {
 	F64,
 	I64,
