@@ -427,6 +427,9 @@ when (mscDeclaresRuntime) {
 	extern function msArrayAtomicRefDestroy(arr: Ptr<void>): void;
 
 	@compilerFunc
+	extern function msArrayAcyclicRefDestroy(arr: Ptr<void>): void;
+
+	@compilerFunc
 	extern function msArrayCopy(d: Ptr<void>, s: Ptr<void>): void;
 
 	@compilerFunc
@@ -445,6 +448,9 @@ when (mscDeclaresRuntime) {
 	extern function msArrayAtomicRefCopy(d: Ptr<void>, s: Ptr<void>): void;
 
 	@compilerFunc
+	extern function msArrayAcyclicRefCopy(d: Ptr<void>, s: Ptr<void>): void;
+
+	@compilerFunc
 	extern function msArraySetLen(d: Ptr<void>, s: Ptr<void>): void;
 
 	@compilerFunc
@@ -452,6 +458,9 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msArrayRefSink(d: Ptr<void>, v: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msArrayAcyclicRefSink(d: Ptr<void>, v: Ptr<void>): void;
 
 	@compilerFunc
 	extern function msArrayStringSink(d: Ptr<void>, v: Ptr<void>): void;
@@ -478,6 +487,9 @@ when (mscDeclaresRuntime) {
 	extern function msAtomicRefArrayDestroy(arr: Ptr<void>): void;
 
 	@compilerFunc
+	extern function msAcyclicRefArrayDestroy(arr: Ptr<void>): void;
+
+	@compilerFunc
 	extern function msGenericArraySetLen(arr: Ptr<void>, newLen: int64): void;
 
 	@compilerFunc
@@ -493,6 +505,9 @@ when (mscDeclaresRuntime) {
 	extern function msAtomicRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
 
 	@compilerFunc
+	extern function msAcyclicRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
+
+	@compilerFunc
 	extern function msRefArraySplice(arr: Ptr<void>, start: int64, deleteCount: int64): void;
 
 	@compilerFunc
@@ -503,6 +518,9 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msAtomicRefArraySplice3(arr: Ptr<void>, start: int64, deleteCount: int64, item: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msAcyclicRefArraySplice3(arr: Ptr<void>, start: int64, deleteCount: int64, item: Ptr<void>): void;
 
 	@compilerFunc
 	extern function msSliceLen(start: int64, end: int64, len: int64): int64;
