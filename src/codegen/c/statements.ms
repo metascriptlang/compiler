@@ -77,7 +77,11 @@ function genNrvoCallExpr(g: CGen, p: CProc, callNode: Readonly<Node>, destVar: s
 		: genExpr(g, p, cd.callee);
 	// Resolve callee symbol + function type once (used for ABI shim + proto)
 	const nrvoSym = winner != null ? winner.winnerSym : (callNode.resolvedSym != null ? callNode.resolvedSym : cd.callee.resolvedSym);
-	const nrvoFnType = nrvoSym != null && nrvoSym.symbolType != null ? nrvoSym.symbolType : (cd.callee.nodeType != null ? cd.callee.nodeType : null as unknown as Type);
+	let nrvoFnType = nrvoSym != null && nrvoSym.symbolType != null ? nrvoSym.symbolType : (cd.callee.nodeType != null ? cd.callee.nodeType : null as unknown as Type);
+	if (nrvoFnType == null || nrvoFnType.kind != TypeKind.Function) {
+		const calleeFnType = getCalleeFuncType(callNode);
+		if (calleeFnType != null) nrvoFnType = calleeFnType;
+	}
 	const hasParamTypes = nrvoFnType != null && nrvoFnType.kind == TypeKind.Function && nrvoFnType.typeChildren != null;
 	let argsStr = "";
 	for (let i = 0; i < cd.arguments.length; i += 1) {
