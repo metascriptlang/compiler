@@ -377,5 +377,22 @@ for variant in same other shared changed whitespace conflict dirty; do
   esac
 done
 
+echo "== S27 manual re-enqueue preserves history without replaying old BUSY"
+setup; mkwt history busyred
+enqueue history
+rr=$(waitfor history)
+check "S27 initial BUSY then RED" '[ "$rr" = 1 ] && [ "$(cat "$T/ctl/count.history")" = 2 ]'
+enqueue history
+rr=$(waitfor history)
+check "S27 old BUSY cannot retry the new RED" '[ "$rr" = 1 ] && [ "$(cat "$T/ctl/count.history")" = 3 ]'
+check "S27 prior BUSY evidence survives" 'grep -q "^gate: BUSY load" "$MSC_LAND_QUEUE/history.land.log"'
+check "S27 both RED attempts survive" '[ "$(grep -c "^gate: RED" "$MSC_LAND_QUEUE/history.land.log")" = 2 ]'
+setverdict history green
+enqueue history
+rr=$(waitfor history)
+check "S27 fixed slice lands" '[ "$rr" = 0 ] && onmain history.txt'
+check "S27 GREEN preserves all four attempts" '[ "$(grep -c "^===== " "$MSC_LAND_QUEUE/history.land.log")" = 4 ]'
+check "S27 result state is current, not historical" '[ -e "$MSC_LAND_QUEUE/history.done" ] && [ ! -e "$MSC_LAND_QUEUE/history.red" ] && [ "$(cat "$T/ctl/count.history")" = 4 ]'
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

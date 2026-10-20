@@ -552,7 +552,7 @@ cmd_land() {
       exit 0
     fi
     queued_for "$qd" "$name" item | while IFS= read -r p; do rm -f "$p"; done
-    rm -f "$qd/$name.done" "$qd/$name.red" "$qd/$name.land.log"
+    rm -f "$qd/$name.done" "$qd/$name.red"
     item="$qd/$(date +%s)-$$.item"
     printf 'name=%s\nworktree=%s\n' "$name" "$w" >"$item.tmp" && mv "$item.tmp" "$item"
     start_runner
