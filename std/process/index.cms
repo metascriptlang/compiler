@@ -89,7 +89,6 @@ export function cwd(): string {
 //
 // The command runs through /bin/sh (POSIX) or cmd.exe (Windows), so shell
 // features (pipes, redirects, glob, variable expansion) work naturally.
-// 16 MB cap per stream; longer outputs truncate.
 //
 // Naming convention: sync is the default in std/* — async variant would be
 // named `execAsync` (mirrors hashAsync, rsaGenerateAsync, etc.).

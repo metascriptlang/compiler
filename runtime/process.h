@@ -534,8 +534,8 @@ static inline double msProcessExecFile(msString path, msStringArray* args) {
 // Windows: CreatePipe() × 2 + CreateProcess() + ReadFile loops +
 //          WaitForSingleObject + GetExitCodeProcess.
 //
-// Output cap: 16 MB per stream. Longer outputs are truncated (matches stdout
-// capture semantics in popen-based shells like Bun.$).
+// Each stream grows without a cap; an allocation failure reports a pipe error
+// instead of a shortened capture.
 //
 // Both platforms service the two pipes from one thread and never let either
 // fill: a child that writes past the pipe buffer on one stream while the
@@ -559,17 +559,11 @@ static inline int32_t msProcSpawnGetPipeOk(void) { return _msProcSpawnPipeOk; }
 static inline int32_t msProcSpawnGetErrno(void) { return _msProcSpawnErrno; }
 static inline int32_t msProcSpawnGetUnsupported(void) { return _msProcSpawnErrno == ENOSYS; }
 
-#define MS_SPAWN_MAX_OUTPUT (16 * 1024 * 1024)
-
 #if !defined(_WIN32) && !MS_NO_SPAWN
 /* Move whatever is currently readable on `fd` into a growable buffer. Only ever
  * called on a descriptor poll() just reported ready, so the read cannot block.
  * Returns 0 once the pipe is at EOF (every write end closed), on a read error,
- * or on allocation failure.
- *
- * Past MS_SPAWN_MAX_OUTPUT the data is read and discarded rather than left in
- * the pipe: stopping the reads would refill the buffer and block the child in
- * write(), which is the very deadlock this pump exists to avoid. */
+ * or on allocation failure. */
 static inline int msSpawnPumpFd(int fd, char** buf, size_t* cap, size_t* len) {
 	if (*buf == NULL) return 0;
 
@@ -583,8 +577,6 @@ static inline int msSpawnPumpFd(int fd, char** buf, size_t* cap, size_t* len) {
 	}
 
 	size_t got = (size_t)n;
-	if (*len >= MS_SPAWN_MAX_OUTPUT) return 1;               /* capped: drained and dropped */
-	if (*len + got > MS_SPAWN_MAX_OUTPUT) got = MS_SPAWN_MAX_OUTPUT - *len;
 	while (*len + got + 1 > *cap) {
 		size_t newCap = *cap * 2;
 		char* grown = (char*)realloc(*buf, newCap);
@@ -658,11 +650,7 @@ static inline msString _msPosixFinishCapture(int outFd, int errFd, pid_t pid) {
 /* Move whatever is currently buffered in `h` into a growable buffer without
  * blocking. Returns FALSE once the pipe is at EOF (every write end closed) or
  * on allocation failure; *didRead reports whether bytes moved so the caller can
- * skip its backoff while either pipe is still producing.
- *
- * Past MS_SPAWN_MAX_OUTPUT the data is read and discarded rather than left in
- * the pipe: stopping the reads would refill the buffer and block the child in
- * WriteFile, which is the very deadlock this pump exists to avoid. */
+ * skip its backoff while either pipe is still producing. */
 static inline BOOL msSpawnPumpPipe(HANDLE h, char** buf, size_t* cap, size_t* len, BOOL* didRead) {
 	DWORD avail = 0;
 	if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL)) return FALSE;  /* broken pipe == EOF */
@@ -676,8 +664,6 @@ static inline BOOL msSpawnPumpPipe(HANDLE h, char** buf, size_t* cap, size_t* le
 	*didRead = TRUE;
 
 	size_t got = (size_t)nRead;
-	if (*len >= MS_SPAWN_MAX_OUTPUT) return TRUE;               /* capped: drained and dropped */
-	if (*len + got > MS_SPAWN_MAX_OUTPUT) got = MS_SPAWN_MAX_OUTPUT - *len;
 	while (*len + got + 1 > *cap) {
 		size_t newCap = *cap * 2;
 		char* grown = (char*)realloc(*buf, newCap);
