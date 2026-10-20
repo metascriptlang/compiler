@@ -1104,6 +1104,64 @@ test "position-only edits preserve UTF-16 diagnostic spans through undo" {
 	}
 }
 
+test "semantic UTF-16 deltas survive prefix and gap edits and undo" {
+	const initialized = parseJson(handleInitialize("71"));
+	assert initialized.ok;
+	if (initialized.ok) {
+		const legend = initialized.value.getDynamicField("result")
+			.getDynamicField("capabilities").getDynamicField("semanticTokensProvider")
+			.getDynamicField("legend");
+		const types = legend.getDynamicField("tokenTypes");
+		const modifiers = legend.getDynamicField("tokenModifiers");
+		if (types.kind != JsonKind.Array) throw new Error("Expected semantic token types");
+		if (modifiers.kind != JsonKind.Array) throw new Error("Expected semantic token modifiers");
+		assert types.items.length > 8;
+		assert modifiers.items.length > 2;
+		assert types.items[8].asString() == "variable";
+		assert modifiers.items[0].asString() == "declaration";
+		assert modifiers.items[2].asString() == "readonly";
+	}
+	const db = createTransAmDb(100);
+	const path = "/semantic-token-utf16.ms";
+	const uri = "file:///semantic-token-utf16.ms";
+	const params = "{\"textDocument\":{\"uri\":" + lspJsonString(uri) + "}}";
+	const prefixes = [
+		"", "/*a*/ ", "/*é*/ ", "/*😀*/ ", "\n/*é*/ ", "\r\n\r\n/*😀*/ ", "", "", "",
+	];
+	const gaps = ["", "", "", "", "", "", "/*é*/ ", "/*😀*/ ", ""];
+	const lines = [0, 0, 0, 0, 1, 2, 0, 0, 0];
+	const characters = [6, 12, 12, 13, 12, 13, 6, 6, 6];
+	const deltas = [17, 17, 17, 17, 17, 17, 23, 24, 17];
+	for (let i = 0; i < prefixes.length; i++) {
+		const source = prefixes[i] + "const first = 1; " + gaps[i] + "const second = first;";
+		assert dbSetFileText(db, path, source);
+		const response = handleSemanticTokensFull("71", params, db);
+		assert dbTypeCheck(db, path).errors.length == 0;
+		const parsed = parseJson(response);
+		assert parsed.ok;
+		if (parsed.ok) {
+			assert parsed.value.getDynamicField("jsonrpc").asString() == "2.0";
+			assert parsed.value.getDynamicField("id").asInt32(-1) == 71;
+			const data = parsed.value.getDynamicField("result").getDynamicField("data");
+			if (data.kind != JsonKind.Array) throw new Error("Expected semantic token data");
+			const expected = [
+				lines[i], characters[i], 5, 8, 5,
+				0, deltas[i], 6, 8, 5,
+				0, 9, 5, 8, 4,
+			];
+			assert data.items.length == expected.length;
+			for (let j = 0; j < expected.length; j++) {
+				assert data.items[j].asInt32(-1) == expected[j];
+			}
+		}
+		assert handleSemanticTokensFull("71", params, db) == response;
+		const revision = db.revision.value;
+		assert !dbSetFileText(db, path, source);
+		assert db.revision.value == revision;
+		assert handleSemanticTokensFull("71", params, db) == response;
+	}
+}
+
 test "first type check on a fresh db stays under 1500ms" {
 	const db = testDb("file:///test.ms", "function foo(x: number): number { return x + 1; }\nconst y = foo(42);");
 	const t0 = performance.now();
