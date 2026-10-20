@@ -152,6 +152,7 @@ import "./sinkParamModes";
 import "./borrowReturn";
 import "./arrayLengthGrowth";
 import "./relationalOperands";
+import "./distinctArithmetic";
 import "./typeNameValue";
 import "./dynamicImport";
 import "./routineInterface";
