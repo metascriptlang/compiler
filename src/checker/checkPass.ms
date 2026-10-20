@@ -13,7 +13,7 @@ import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endD
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
-import { readFile } from "std/fs";
+import { readFile, writeFile, ensureDir } from "std/fs";
 import { env, cwd } from "std/process";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, normalize, isAbsolute } from "std/fs/path";
@@ -6204,4 +6204,51 @@ test "promoting a module into the prelude every build shares is an internal erro
 	promoteModuleIntoPrelude(preludeContextFor("", ".cms"), ctx);
 	assert hasErrors(ctx);
 	assert ctx.errors[0].message.startsWith("internal:");
+}
+
+function preludeOfModules(dir: string, sources: string[][]): CheckerContext {
+	const std = `/tmp/msc-prelude-order/${dir}/std`;
+	for (const s of sources) {
+		ensureDir(`${std}/core/${s[0]}`);
+		writeFile(`${std}/core/${s[0]}/index.cms`, s[1]);
+	}
+	return checkPreludeFromSource(std, ".cms");
+}
+
+function preludeExports(ctx: CheckerContext, name: string): boolean {
+	const sym = lookupSymbol(ctx.table, name);
+	return sym != null && isPreludeExport(ctx, sym);
+}
+
+const preludeMath = "export class Math {}\nexport extern function trunc(this typeof Math, x: float64): float64 from \"trunc\";\n";
+
+test "a prelude module that imports a later prelude module leaves that module's exports in the prelude" {
+	for (const date of [
+		"import { Math, trunc } from \"../math\";\nexport function clip(t: number): number { return Math.trunc(t); }\n",
+		"when (!bare) {\n\timport { Math } from \"../math\";\n\texport function clip(t: number): number { return Math.trunc(t); }\n}\n",
+	]) {
+		const ctx = preludeOfModules("later", [["date", date], ["math", preludeMath]]);
+		assert ctx.errors.length == 0, ctx.errors.length > 0 ? ctx.errors[0].message : "";
+		assert preludeExports(ctx, "Math") && preludeExports(ctx, "clip");
+	}
+}
+
+test "a prelude import two prelude modules deep leaves both modules' exports in the prelude" {
+	const ctx = preludeOfModules("deep", [
+		["date", "import { Math } from \"../math\";\nexport function clip(t: number): number { return Math.trunc(t); }\n"],
+		["math", "import { Number } from \"../number\";\n" + preludeMath + "export function nan(): number { return Number.NaN; }\n"],
+		["number", "export class Number {\n\tstatic NaN: number = 0.0 / 0.0;\n}\n"],
+	]);
+	assert ctx.errors.length == 0, ctx.errors.length > 0 ? ctx.errors[0].message : "";
+	assert preludeExports(ctx, "Math") && preludeExports(ctx, "Number");
+}
+
+test "a prelude module that imports an earlier prelude module checks it once" {
+	const ctx = preludeOfModules("earlier", [
+		["date", "export const DAY = 86400000.0;\n"],
+		["math", "import { DAY } from \"../date\";\nexport class Math {}\nexport function days(t: number): number { return t / DAY; }\n"],
+	]);
+	assert ctx.errors.length == 0, ctx.errors.length > 0 ? ctx.errors[0].message : "";
+	assert ctx.preludeModuleScopes.size == 0;
+	assert preludeExports(ctx, "DAY") && preludeExports(ctx, "days");
 }
