@@ -605,32 +605,30 @@ msRefArray msRefArrayNew(int64_t cap) {
 	return arr;
 }
 
-static void msRefArrayFreeAfterDrop(void* owner, int32_t resume) {
+static void msRefPayloadFreeAfterDrop(void* payload, int32_t resume) {
 	(void)resume;
-	msRefArray* arr = (msRefArray*)owner;
-	free(arr->p);
-	arr->p = NULL;
-	arr->len = 0;
+	free(payload);
 }
 
 void msRefArrayDestroy(msRefArray* arr) {
-	if (arr->p != NULL) {
-		bool pending = false;
-		if (msDropHasRoom()) {
-			for (int64_t i = 0; i < arr->len; i++) msDecrefCyclic(arr->p->data[i]);
-		} else for (int64_t i = 0; i < arr->len; i++) {
-			void* e = arr->p->data[i];
-			if (e != NULL && msHeader(e)->type != NULL && !msHeader(e)->type->isCyclic) msDecrefCyclic(e);
-			else pending |= msDecrefCyclicEdge(arr, e);
-		}
-		if (pending) {
-			msDropDefer(arr, msRefArrayFreeAfterDrop, 0);
-			return;
-		}
-		free(arr->p);
-		arr->p = NULL;
-	}
+	msRefPayload* p = arr->p;
+	int64_t len = arr->len;
+	arr->p = NULL;
 	arr->len = 0;
+	if (p == NULL) return;
+	bool pending = false;
+	if (msDropHasRoom()) {
+		for (int64_t i = 0; i < len; i++) msDecrefCyclic(p->data[i]);
+	} else for (int64_t i = 0; i < len; i++) {
+		void* e = p->data[i];
+		if (e != NULL && msHeader(e)->type != NULL && !msHeader(e)->type->isCyclic) msDecrefCyclic(e);
+		else pending |= msDecrefCyclicEdge(arr, e);
+	}
+	if (pending) {
+		msDropDefer(p, msRefPayloadFreeAfterDrop, 0);
+		return;
+	}
+	free(p);
 }
 
 void msRefArrayPush(msRefArray* arr, void* value) {
@@ -829,12 +827,14 @@ void msRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount) {
 /* Atomic-rc elements (Locked<T>, Arc<T>) — same walk, atomic ops. A cell is
  * born at MS_RC_INCREMENT, so a plain msDecref never reaches last and leaks. */
 void msAtomicRefArrayDestroy(msRefArray* arr) {
-	if (arr->p != NULL) {
-		for (int64_t i = 0; i < arr->len; i++) msAtomicDecref(arr->p->data[i]);
-		free(arr->p);
-		arr->p = NULL;
-	}
+	msRefPayload* p = arr->p;
+	int64_t len = arr->len;
+	arr->p = NULL;
 	arr->len = 0;
+	if (p != NULL) {
+		for (int64_t i = 0; i < len; i++) msAtomicDecref(p->data[i]);
+		free(p);
+	}
 }
 
 /* splice(start, deleteCount, item): delete deleteCount then insert item.
@@ -905,16 +905,18 @@ void msAtomicRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount
  * Layout: msClosure structs stored inline (16B stride), NOT void* indirection. */
 
 void msClosureArrayDestroy(msClosureArray* arr) {
-	if (arr->p != NULL) {
-		for (int64_t i = 0; i < arr->len; i++) {
-			if (arr->p->data[i].env != NULL) {
-				msDecref(arr->p->data[i].env);
+	msClosurePayload* p = arr->p;
+	int64_t len = arr->len;
+	arr->p = NULL;
+	arr->len = 0;
+	if (p != NULL) {
+		for (int64_t i = 0; i < len; i++) {
+			if (p->data[i].env != NULL) {
+				msDecref(p->data[i].env);
 			}
 		}
-		free(arr->p);
-		arr->p = NULL;
+		free(p);
 	}
-	arr->len = 0;
 }
 
 void msClosureArrayPush(msClosureArray* arr, msClosure value) {
