@@ -1851,20 +1851,21 @@ function runStrandSlice(vm: RaiserVM): void {
 	let wb = vm.wordBase;
 	let rb = vm.refBase;
 	while (true) {
+		@computedGoto;
 		const pc = ip;
 		const word = code[pc];
 		ip = pc + 1;
 		const op = (word & 255) as RaiserOpcode;
-		const ia = ((word >> 8) & 65535) as int32;
-		const ib = ((word >> 24) & 65535) as int32;
-		const ic = ((word >> 40) & 65535) as int32;
 		let slow = false;
 
-		match (op) {
-			RaiserOpcode.LoadConst => {
+		switch (op) {
+			case RaiserOpcode.LoadConst: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				const bx = (ib * 256 + ic);
 				if (bx >= getFuncConstLen(func)) {
-					vm.ip = ip; vmError(vm, `constant index out of bounds: ${bx}`); break;
+					vm.ip = ip; vmError(vm, `constant index out of bounds: ${bx}`); return;
 				} else {
 					const val = getFuncConst(func, bx);
 					const cls = ia & 7;
@@ -1876,28 +1877,46 @@ function runStrandSlice(vm: RaiserVM): void {
 						writeRef(vm, rb + (ia >> 3), val.kind == RaiserValueKind.Nil ? 0 : val.intVal);
 					}
 				}
-			},
-			RaiserOpcode.MoveW => {
+				break;
+			}
+			case RaiserOpcode.MoveW: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				words[wb + ia] = words[wb + ib];
-			},
-			RaiserOpcode.MoveR => {
+				break;
+			}
+			case RaiserOpcode.MoveR: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				writeRef(vm, rb + ia, refs[rb + ib]);
-			},
-			RaiserOpcode.LoadNil => {
+				break;
+			}
+			case RaiserOpcode.LoadNil: {
+				const ia = ((word >> 8) & 65535) as int32;
 				const cls = ia & 7;
 				if (cls == CLS_REF || cls == CLS_DYN) {
 					writeRef(vm, rb + (ia >> 3), 0);
 				} else {
-					vm.ip = ip; vmError(vm, `internal: register R${ia >> 3} of ${func.name} is ${cls as RaiserRegClass}, got Nil`); break;
+					vm.ip = ip; vmError(vm, `internal: register R${ia >> 3} of ${func.name} is ${cls as RaiserRegClass}, got Nil`); return;
 				}
-			},
-			RaiserOpcode.LoadGlobal => {
+				break;
+			}
+			case RaiserOpcode.LoadGlobal: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				setRegConform(vm, ia, vm.globals[ib]);
-			},
-			RaiserOpcode.StoreGlobal => {
+				break;
+			}
+			case RaiserOpcode.StoreGlobal: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				storeRegInto(vm, ia, vm.globals[ib]);
-			},
-			RaiserOpcode.Jump => {
+				break;
+			}
+			case RaiserOpcode.Jump: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				const rawAx = ia * 65536 + ib * 256 + ic;
 				const offset = rawAx >= 8388608 ? rawAx - 16777216 : rawAx;
 				if (offset < 0) {
@@ -1906,19 +1925,29 @@ function runStrandSlice(vm: RaiserVM): void {
 					// MAX_CALL_DEPTH, so back-edges are the only unbounded source
 					// worth budgeting (reference: handleJmpBack decrements
 					// loopIterations only on backward jumps).
-					if (vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					if (vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
 				}
 				ip = ip + (offset as int32);
-			},
-			RaiserOpcode.LoadInt => {
+				break;
+			}
+			case RaiserOpcode.LoadInt: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				words[wb + ia] = immValue(ib);
-			},
-			RaiserOpcode.BTruthy => {
+				break;
+			}
+			case RaiserOpcode.BTruthy: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				const cls = ia & 7;
 				const truthy = cls == CLS_WORD || cls == CLS_BOOL ? words[wb + (ia >> 3)] != 0 : raiserToBool(vm.arrayHeap, getReg(vm, ia));
 				if (truthy) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.Call => {
+				break;
+			}
+			case RaiserOpcode.Call: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				const blocks = func.blocks;
 				const argc = blocks[ic + 2];
 				const sig = blocks[ic + 3];
@@ -1951,8 +1980,10 @@ function runStrandSlice(vm: RaiserVM): void {
 				} else {
 					slow = true;
 				}
-			},
-			RaiserOpcode.Ret => {
+				break;
+			}
+			case RaiserOpcode.Ret: {
+				const ia = ((word >> 8) & 65535) as int32;
 				const depth = vm.callStack.depth;
 				if (depth > 0 && vm.safePoints.length == vm.callStack.items[depth - 1].spBase) {
 					const frame = vm.callStack.items[depth - 1];
@@ -1982,201 +2013,362 @@ function runStrandSlice(vm: RaiserVM): void {
 				} else {
 					slow = true;
 				}
-			},
-			RaiserOpcode.BrEqI64 => {
+				break;
+			}
+			case RaiserOpcode.BrEqI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] == words[wb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
-			},
-			RaiserOpcode.BrNeI64 => {
+				break;
+			}
+			case RaiserOpcode.BrNeI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] != words[wb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
-			},
-			RaiserOpcode.BrLtI64 => {
+				break;
+			}
+			case RaiserOpcode.BrLtI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] < words[wb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
-			},
-			RaiserOpcode.BrLeI64 => {
+				break;
+			}
+			case RaiserOpcode.BrLeI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] <= words[wb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
-			},
-			RaiserOpcode.BrGtI64 => {
+				break;
+			}
+			case RaiserOpcode.BrGtI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] > words[wb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
-			},
-			RaiserOpcode.BrGeI64 => {
+				break;
+			}
+			case RaiserOpcode.BrGeI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] >= words[wb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
-			},
-			RaiserOpcode.BrEqI64Imm => {
+				break;
+			}
+			case RaiserOpcode.BrEqI64Imm: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] == immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
-			},
-			RaiserOpcode.BrNeI64Imm => {
+				break;
+			}
+			case RaiserOpcode.BrNeI64Imm: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] != immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
-			},
-			RaiserOpcode.BrLtI64Imm => {
+				break;
+			}
+			case RaiserOpcode.BrLtI64Imm: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] < immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
-			},
-			RaiserOpcode.BrLeI64Imm => {
+				break;
+			}
+			case RaiserOpcode.BrLeI64Imm: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] <= immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
-			},
-			RaiserOpcode.BrGtI64Imm => {
+				break;
+			}
+			case RaiserOpcode.BrGtI64Imm: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] > immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
-			},
-			RaiserOpcode.BrGeI64Imm => {
+				break;
+			}
+			case RaiserOpcode.BrGeI64Imm: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] >= immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
-			},
-			RaiserOpcode.BrEqR => {
+				break;
+			}
+			case RaiserOpcode.BrEqR: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				if (refs[rb + ia] == refs[rb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
-			},
-			RaiserOpcode.BrNeR => {
+				break;
+			}
+			case RaiserOpcode.BrNeR: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				if (refs[rb + ia] != refs[rb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); break; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
-			},
-			RaiserOpcode.BeqR => {
+				break;
+			}
+			case RaiserOpcode.BeqR: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (refs[rb + ia] == refs[rb + ib]) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BneR => {
+				break;
+			}
+			case RaiserOpcode.BneR: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (refs[rb + ia] != refs[rb + ib]) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BeqI64 => {
+				break;
+			}
+			case RaiserOpcode.BeqI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (words[wb + ia] == words[wb + ib]) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BneI64 => {
+				break;
+			}
+			case RaiserOpcode.BneI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (words[wb + ia] != words[wb + ib]) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BltI64 => {
+				break;
+			}
+			case RaiserOpcode.BltI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (words[wb + ia] < words[wb + ib]) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BleI64 => {
+				break;
+			}
+			case RaiserOpcode.BleI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (words[wb + ia] <= words[wb + ib]) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BgtI64 => {
+				break;
+			}
+			case RaiserOpcode.BgtI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (words[wb + ia] > words[wb + ib]) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BgeI64 => {
+				break;
+			}
+			case RaiserOpcode.BgeI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (words[wb + ia] >= words[wb + ib]) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BeqI64Imm => {
+				break;
+			}
+			case RaiserOpcode.BeqI64Imm: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (words[wb + ia] == immValue(ib)) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BneI64Imm => {
+				break;
+			}
+			case RaiserOpcode.BneI64Imm: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (words[wb + ia] != immValue(ib)) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BltI64Imm => {
+				break;
+			}
+			case RaiserOpcode.BltI64Imm: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (words[wb + ia] < immValue(ib)) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BleI64Imm => {
+				break;
+			}
+			case RaiserOpcode.BleI64Imm: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (words[wb + ia] <= immValue(ib)) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BgtI64Imm => {
+				break;
+			}
+			case RaiserOpcode.BgtI64Imm: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (words[wb + ia] > immValue(ib)) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BgeI64Imm => {
+				break;
+			}
+			case RaiserOpcode.BgeI64Imm: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (words[wb + ia] >= immValue(ib)) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BeqF64 => {
+				break;
+			}
+			case RaiserOpcode.BeqF64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (msBitsFloat64(words[wb + ia]) == msBitsFloat64(words[wb + ib])) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BneF64 => {
+				break;
+			}
+			case RaiserOpcode.BneF64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (msBitsFloat64(words[wb + ia]) != msBitsFloat64(words[wb + ib])) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BltF64 => {
+				break;
+			}
+			case RaiserOpcode.BltF64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (msBitsFloat64(words[wb + ia]) < msBitsFloat64(words[wb + ib])) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BleF64 => {
+				break;
+			}
+			case RaiserOpcode.BleF64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (msBitsFloat64(words[wb + ia]) <= msBitsFloat64(words[wb + ib])) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BgtF64 => {
+				break;
+			}
+			case RaiserOpcode.BgtF64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (msBitsFloat64(words[wb + ia]) > msBitsFloat64(words[wb + ib])) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BgeF64 => {
+				break;
+			}
+			case RaiserOpcode.BgeF64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if (msBitsFloat64(words[wb + ia]) >= msBitsFloat64(words[wb + ib])) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BltU64 => {
+				break;
+			}
+			case RaiserOpcode.BltU64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if ((words[wb + ia] as uint64) < (words[wb + ib] as uint64)) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.BleU64 => {
+				break;
+			}
+			case RaiserOpcode.BleU64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				if ((words[wb + ia] as uint64) <= (words[wb + ib] as uint64)) ip = ip + (ic as int32);
-			},
-			RaiserOpcode.AddF64 => {
+				break;
+			}
+			case RaiserOpcode.AddF64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				words[wb + ia] = msFloat64Bits(msBitsFloat64(words[wb + ib]) + msBitsFloat64(words[wb + ic]));
-			},
-			RaiserOpcode.SubF64 => {
+				break;
+			}
+			case RaiserOpcode.SubF64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				words[wb + ia] = msFloat64Bits(msBitsFloat64(words[wb + ib]) - msBitsFloat64(words[wb + ic]));
-			},
-			RaiserOpcode.MulF64 => {
+				break;
+			}
+			case RaiserOpcode.MulF64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				words[wb + ia] = msFloat64Bits(msBitsFloat64(words[wb + ib]) * msBitsFloat64(words[wb + ic]));
-			},
-			RaiserOpcode.DivF64 => {
+				break;
+			}
+			case RaiserOpcode.DivF64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				words[wb + ia] = msFloat64Bits(msBitsFloat64(words[wb + ib]) / msBitsFloat64(words[wb + ic]));
-			},
-			RaiserOpcode.NegF64 => {
+				break;
+			}
+			case RaiserOpcode.NegF64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				words[wb + ia] = msFloat64Bits(-msBitsFloat64(words[wb + ib]));
-			},
-			RaiserOpcode.AddI64Imm => {
+				break;
+			}
+			case RaiserOpcode.AddI64Imm: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				const lhs = words[wb + ib];
 				const imm = immValue(ic);
 				const sum = int64Bits((lhs as uint64) + (imm as uint64));
 				if ((sum ^ lhs) >= 0 || (sum ^ imm) >= 0) { words[wb + ia] = sum;
-				} else { vm.ip = ip; vmError(vm, "over- or underflow"); break; }
-			},
-			RaiserOpcode.SubI64Imm => {
+				} else { vm.ip = ip; vmError(vm, "over- or underflow"); return; }
+				break;
+			}
+			case RaiserOpcode.SubI64Imm: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				const lhs = words[wb + ib];
 				const imm = immValue(ic);
 				const diff = int64Bits((lhs as uint64) - (imm as uint64));
 				if ((diff ^ lhs) >= 0 || (diff ^ ~imm) >= 0) { words[wb + ia] = diff;
-				} else { vm.ip = ip; vmError(vm, "over- or underflow"); break; }
-			},
-			RaiserOpcode.LoadField => {
+				} else { vm.ip = ip; vmError(vm, "over- or underflow"); return; }
+				break;
+			}
+			case RaiserOpcode.LoadField: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				const handle = refs[rb + ib];
 				const objects = vm.objectHeap.objects;
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64) && handleIndex(handle) < objects.length) {
@@ -2198,8 +2390,12 @@ function runStrandSlice(vm: RaiserVM): void {
 				} else {
 					slow = true;
 				}
-			},
-			RaiserOpcode.StoreField => {
+				break;
+			}
+			case RaiserOpcode.StoreField: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				const handle = refs[rb + ia];
 				const objects = vm.objectHeap.objects;
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64) && handleIndex(handle) < objects.length) {
@@ -2221,114 +2417,199 @@ function runStrandSlice(vm: RaiserVM): void {
 				} else {
 					slow = true;
 				}
-			},
-			RaiserOpcode.AddI64 => {
+				break;
+			}
+			case RaiserOpcode.AddI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				const lhs = words[wb + ib];
 				const rhs = words[wb + ic];
 				const sum = int64Bits((lhs as uint64) + (rhs as uint64));
 				if ((sum ^ lhs) >= 0 || (sum ^ rhs) >= 0) { words[wb + ia] = sum;
-				} else { vm.ip = ip; vmError(vm, "over- or underflow"); break; }
-			},
-			RaiserOpcode.SubI64 => {
+				} else { vm.ip = ip; vmError(vm, "over- or underflow"); return; }
+				break;
+			}
+			case RaiserOpcode.SubI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				const lhs = words[wb + ib];
 				const rhs = words[wb + ic];
 				const diff = int64Bits((lhs as uint64) - (rhs as uint64));
 				if ((diff ^ lhs) >= 0 || (diff ^ ~rhs) >= 0) { words[wb + ia] = diff;
-				} else { vm.ip = ip; vmError(vm, "over- or underflow"); break; }
-			},
-			RaiserOpcode.MulI64 => {
+				} else { vm.ip = ip; vmError(vm, "over- or underflow"); return; }
+				break;
+			}
+			case RaiserOpcode.MulI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				const lhs = words[wb + ib];
 				const rhs = words[wb + ic];
-				if (mulOverflowsI64(lhs, rhs)) { vm.ip = ip; vmError(vm, "over- or underflow"); break;
+				if (mulOverflowsI64(lhs, rhs)) { vm.ip = ip; vmError(vm, "over- or underflow"); return;
 				} else { words[wb + ia] = int64Bits((lhs as uint64) * (rhs as uint64)); }
-			},
-			RaiserOpcode.DivI64 => {
+				break;
+			}
+			case RaiserOpcode.DivI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				const lhs = words[wb + ib];
 				const rhs = words[wb + ic];
-				if (rhs == 0) { vm.ip = ip; vmError(vm, "integer division by zero"); break;
+				if (rhs == 0) { vm.ip = ip; vmError(vm, "integer division by zero"); return;
 				} else if (rhs == -1) {
-					if (lhs == INT64_LOW) { vm.ip = ip; vmError(vm, "over- or underflow"); break;
+					if (lhs == INT64_LOW) { vm.ip = ip; vmError(vm, "over- or underflow"); return;
 					} else { words[wb + ia] = -lhs; }
 				} else {
 					words[wb + ia] = lhs / rhs;
 				}
-			},
-			RaiserOpcode.ModI64 => {
-				if (words[wb + ic] == 0) { vm.ip = ip; vmError(vm, "integer modulo by zero"); break;
+				break;
+			}
+			case RaiserOpcode.ModI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
+				if (words[wb + ic] == 0) { vm.ip = ip; vmError(vm, "integer modulo by zero"); return;
 				} else {
 					words[wb + ia] = words[wb + ic] == -1 ? 0 : words[wb + ib] % words[wb + ic];
 				}
-			},
-			RaiserOpcode.DivU64 => {
-				if (words[wb + ic] == 0) { vm.ip = ip; vmError(vm, "integer division by zero"); break;
+				break;
+			}
+			case RaiserOpcode.DivU64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
+				if (words[wb + ic] == 0) { vm.ip = ip; vmError(vm, "integer division by zero"); return;
 				} else {
 					words[wb + ia] = int64Bits((words[wb + ib] as uint64) / (words[wb + ic] as uint64));
 				}
-			},
-			RaiserOpcode.ModU64 => {
-				if (words[wb + ic] == 0) { vm.ip = ip; vmError(vm, "integer modulo by zero"); break;
+				break;
+			}
+			case RaiserOpcode.ModU64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
+				if (words[wb + ic] == 0) { vm.ip = ip; vmError(vm, "integer modulo by zero"); return;
 				} else {
 					words[wb + ia] = int64Bits((words[wb + ib] as uint64) % (words[wb + ic] as uint64));
 				}
-			},
-			RaiserOpcode.AddU64 => {
+				break;
+			}
+			case RaiserOpcode.AddU64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				words[wb + ia] = int64Bits((words[wb + ib] as uint64) + (words[wb + ic] as uint64));
-			},
-			RaiserOpcode.SubU64 => {
+				break;
+			}
+			case RaiserOpcode.SubU64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				words[wb + ia] = int64Bits((words[wb + ib] as uint64) - (words[wb + ic] as uint64));
-			},
-			RaiserOpcode.MulU64 => {
+				break;
+			}
+			case RaiserOpcode.MulU64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				words[wb + ia] = int64Bits((words[wb + ib] as uint64) * (words[wb + ic] as uint64));
-			},
-			RaiserOpcode.NegI64 => {
+				break;
+			}
+			case RaiserOpcode.NegI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				const val = words[wb + ib];
-				if (val == INT64_LOW) { vm.ip = ip; vmError(vm, "over- or underflow"); break;
+				if (val == INT64_LOW) { vm.ip = ip; vmError(vm, "over- or underflow"); return;
 				} else { words[wb + ia] = -val; }
-			},
-			RaiserOpcode.BitAnd => {
+				break;
+			}
+			case RaiserOpcode.BitAnd: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				words[wb + ia] = words[wb + ib] & words[wb + ic];
-			},
-			RaiserOpcode.BitOr => {
+				break;
+			}
+			case RaiserOpcode.BitOr: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				words[wb + ia] = words[wb + ib] | words[wb + ic];
-			},
-			RaiserOpcode.BitXor => {
+				break;
+			}
+			case RaiserOpcode.BitXor: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				words[wb + ia] = words[wb + ib] ^ words[wb + ic];
-			},
-			RaiserOpcode.BitNot => {
+				break;
+			}
+			case RaiserOpcode.BitNot: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				words[wb + ia] = ~words[wb + ib];
-			},
-			RaiserOpcode.ShiftLeft => {
+				break;
+			}
+			case RaiserOpcode.ShiftLeft: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				const count = (words[wb + ic] & 63) as uint64;
 				words[wb + ia] = int64Bits((words[wb + ib] as uint64) << count);
-			},
-			RaiserOpcode.ShiftRight => {
+				break;
+			}
+			case RaiserOpcode.ShiftRight: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				words[wb + ia] = words[wb + ib] >> (words[wb + ic] & 63);
-			},
-			RaiserOpcode.ShiftRightU => {
+				break;
+			}
+			case RaiserOpcode.ShiftRightU: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				const count = (words[wb + ic] & 63) as uint64;
 				words[wb + ia] = int64Bits((words[wb + ib] as uint64) >> count);
-			},
-			RaiserOpcode.NarrowU => {
+				break;
+			}
+			case RaiserOpcode.NarrowU: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				const width = ib as int64;
 				words[wb + ia] = words[wb + ia] & (((1 as int64) << width) - 1);
-			},
-			RaiserOpcode.NarrowS => {
+				break;
+			}
+			case RaiserOpcode.NarrowS: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				const val = words[wb + ia];
 				const half = (1 as int64) << ((ib as int64) - 1);
 				const low = ic == 1 ? 0 : -half;
-				if (val < low || val >= low + 2 * half) { vm.ip = ip; vmError(vm, "over- or underflow"); break; }
-			},
-			RaiserOpcode.SignExtend => {
+				if (val < low || val >= low + 2 * half) { vm.ip = ip; vmError(vm, "over- or underflow"); return; }
+				break;
+			}
+			case RaiserOpcode.SignExtend: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
 				const imm = 64 - (ib as int64);
 				const raised = int64Bits((words[wb + ia] as uint64) << (imm as uint64));
 				words[wb + ia] = raised >> imm;
-			},
-			_ => {
+				break;
+			}
+			case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallIndirect: case RaiserOpcode.CallHost: case RaiserOpcode.IsKind: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: {
 				slow = true;
-			},
+				break;
+			}
 		}
 		if (slow) {
 			vm.ip = ip;
+			const ia = ((word >> 8) & 65535) as int32;
+			const ib = ((word >> 24) & 65535) as int32;
+			const ic = ((word >> 40) & 65535) as int32;
 			const k = (op as int32) * 3;
 			const ta = retag(OPERAND_KINDS[k], ia);
 			const tb = retag(OPERAND_KINDS[k + 1], ib);
