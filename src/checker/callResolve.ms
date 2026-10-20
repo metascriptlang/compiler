@@ -2174,7 +2174,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	}
 	// Multi-overload extension — needs argTypes for scoring
 	if (extMultiFiltered.length > 1) {
-		return resolveExtensionOverloadCall(ctx, extMultiFiltered, argTypes, literalArgs, extMultiObjType, extMultiMethodName, node);
+		return resolveExtensionOverloadCall(ctx, extMultiFiltered, argTypes, literalArgs, extMultiObjType, extMultiMethodName, node, expectedType);
 	}
 	// @builtin("PromiseSpawn"): infer affine `Promise<T>` from closure's return type.
 	// PARALOCK: spawn produces `Promise<T>` tagged with AwaitableAffine +
@@ -3722,9 +3722,7 @@ function fitsFormal(argType: Type, formal: Type): boolean {
 	const bindings = createUnifyBindings();
 	unifyType(formal, argType, bindings);
 	const bound = bindings.names.length > 0 ? instantiateGeneric(formal, bindings.names, bindings.types) : formal;
-	if (!hasGenericParams(bound)) return isAssignable(argType, bound);
-	return bound.kind == TypeKind.GenericParam || bound.kind == TypeKind.Union
-		|| (bound.kind == TypeKind.Function) == (argType.kind == TypeKind.Function);
+	return isAssignable(argType, bound);
 }
 
 function signatureReturn(sigType: Type, argTypes: Type[]): Type | null {
@@ -3886,6 +3884,22 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 			if (tryIdx >= 0) tried = winnerFormals(ctx, callNode, candSyms[tryIdx], candidates[tryIdx], args, argTypes, skipMask, expectedType);
 		}
 		if (tryIdx >= 0) {
+			const typed = typedContextArgs(args, argTypes, skipMask);
+			const rescored: CandidateScore[] = [];
+			for (let si = 0; si < candidates.length; si += 1) {
+				const c = candidates[si];
+				rescored.push(isNoMatch(scores[si]) ? scores[si] : scoreCandidateWithSkip(c.typeChildren, typed, getMinArity(c), allScored(skipMask), literalRelations(c.typeChildren, args, typed)));
+			}
+			const best = nextRanked(rescored, candidates, rejected);
+			if (best >= 0 && best != tryIdx) {
+				const bestFormals = winnerFormals(ctx, callNode, candSyms[best], candidates[best], args, argTypes, skipMask, expectedType);
+				if (contextArgsFit(ctx, args, skipMask, bestFormals.checked)) {
+					tryIdx = best;
+					tried = bestFormals;
+				} else {
+					contextArgsFit(ctx, args, skipMask, tried.checked);
+				}
+			}
 			bestIdx = tryIdx;
 			formals = tried;
 			settled = true;
@@ -4228,7 +4242,7 @@ function rankExtensionOverloads(ctx: CheckerContext, exts: ExtensionMethod[], ca
 }
 
 function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod[],
-	argTypes: Type[], literalArgs: boolean[], objType: Type | null, methodName: string, callNode: Node): Type {
+	argTypes: Type[], literalArgs: boolean[], objType: Type | null, methodName: string, callNode: Node, expectedType: Type | null): Type {
 	// Receiver specificity: scoring strips the receiver param, so `this string`
 	// and `this unknown` would otherwise tie into ambiguity. A catch-all
 	// `this unknown` receiver only participates when no concrete-receiver
@@ -4302,15 +4316,17 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		addError(ctx, "Ambiguous call to overloaded extension method '" + methodName + "'", callNode.location.line, callNode.location.column);
 		return getReturnType(candidates[0]);
 	}
+	const contextFormals: Type[] = [];
+	for (const c of candidates) contextFormals.push(boundByExpectedReturn(c, expectedType));
 	let settled = false;
 	if (idx >= 0 && skipMask.includes(true)) {
 		let tryIdx = idx;
-		while (tryIdx >= 0 && !contextArgsFit(ctx, args, skipMask, candidates[tryIdx])) {
+		while (tryIdx >= 0 && !contextArgsFit(ctx, args, skipMask, contextFormals[tryIdx])) {
 			rejected[tryIdx] = true;
 			tryIdx = rankExtensionOverloads(ctx, exts, candidates, args, argTypes, scopeDepths, recvRelations, objType, skipMask, rejected);
 		}
 		if (tryIdx >= 0) {
-			idx = tryIdx;
+			idx = rankWithContextArgs(ctx, exts, candidates, contextFormals, args, argTypes, scopeDepths, recvRelations, objType, skipMask, rejected, tryIdx);
 			settled = true;
 		}
 	}
@@ -4343,8 +4359,9 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	for (let ai = 0; ai < skipMask.length; ai += 1) {
 		if (!skipMask[ai]) continue;
 		if (!settled) {
+			const formal = contextFormals[idx];
 			clearCheckerState(args[ai]);
-			callCheckExpr(ctx, args[ai], ai < winnerType.typeChildren.length ? winnerType.typeChildren[ai] : null);
+			callCheckExpr(ctx, args[ai], ai < formal.typeChildren.length ? formal.typeChildren[ai] : null);
 		}
 		argTypes[ai] = args[ai].nodeType!;
 	}
@@ -4399,6 +4416,33 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	callee.resolvedSym = callNode.resolvedSym;
 	callee.nodeType = winnerType;
 	return inferGenericReturn(ctx, winnerType, argTypes, null, callNode);
+}
+
+function typedContextArgs(args: Node[], argTypes: Type[], skipMask: boolean[]): Type[] {
+	const typed = argTypes.slice(0);
+	for (let ai = 0; ai < skipMask.length; ai += 1) {
+		if (skipMask[ai]) typed[ai] = args[ai].nodeType!;
+	}
+	return typed;
+}
+
+function allScored(skipMask: boolean[]): boolean[] {
+	return skipMask.map((s) => false);
+}
+
+function rankWithContextArgs(ctx: CheckerContext, exts: ExtensionMethod[], candidates: Type[], contextFormals: Type[], args: Node[], argTypes: Type[],
+	scopeDepths: number[], recvRelations: TypeRelation[], objType: Type | null, skipMask: boolean[], rejected: boolean[], settled: number): number {
+	const best = rankExtensionOverloads(ctx, exts, candidates, args, typedContextArgs(args, argTypes, skipMask), scopeDepths, recvRelations, objType, allScored(skipMask), rejected);
+	if (best < 0 || best == settled) return settled;
+	if (contextArgsFit(ctx, args, skipMask, contextFormals[best])) return best;
+	contextArgsFit(ctx, args, skipMask, contextFormals[settled]);
+	return settled;
+}
+
+function boundByExpectedReturn(candidate: Type, expectedType: Type | null): Type {
+	if (candidate.kind != TypeKind.Function || !hasGenericParams(candidate)) return candidate;
+	const bindings = bindFromExpectedReturn(candidate, expectedType);
+	return bindings.names.length > 0 ? instantiateGeneric(candidate, bindings.names, bindings.types) : candidate;
 }
 
 function formatCandidateSig(name: string, fnType: Type): string {
