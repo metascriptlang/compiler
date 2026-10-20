@@ -11,6 +11,10 @@
 import { Node, NodeKind } from "std/meta";
 import { detectUnionDisc, namesStruct, parseDiscKey, unwrapType, implementationOf } from "../discDetect";
 
+function isOptionalField(name: string, optionalFields: string[]): boolean {
+	return optionalFields.indexOf(name) >= 0;
+}
+
 export macro jsonValueOf(t: Node): Node {
 	let tt = implementationOf(t);
 	if (tt.kind == NodeKind.TypeGeneric) tt = unwrapType(tt);
@@ -222,12 +226,15 @@ export macro jsonValueOf(t: Node): Node {
 			// Build key/value arrays for jsonObject — disc first, then payload.
 			const vKeyNodes: Node[] = [{ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: discField }];
 			const vValueNodes: Node[] = [discValueNode];
+			const vOptional: string[] = v.typExprOptionalFields;
+			const vOptionalFlags: Node[] = [{ kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: false }];
 			let fi = 0;
 			while (fi < v.typExprFieldNames.length) {
 				const fname: string = v.typExprFieldNames[fi];
 				const ft: Node = v.typExprFieldTypes[fi];
 				if (fname != discField) {
 					vKeyNodes.push({ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: fname });
+					vOptionalFlags.push({ kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: isOptionalField(fname, vOptional) });
 					const memberExpr: Node = {
 						kind: NodeKind.MemberExpr, line: t.line, column: t.column,
 						object: t, property: fname, nodeType: ft, isOptional: false,
@@ -250,11 +257,17 @@ export macro jsonValueOf(t: Node): Node {
 				caseGuard: null as unknown as Node,
 				caseBody: {
 					kind: NodeKind.CallExpr, line: t.line, column: t.column,
-					callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "jsonObject" },
-					arguments: [
-						{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: vKeyNodes },
-						{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: vValueNodes },
-					],
+					callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: vOptional.length > 0 ? "_jsonObjectOmitAbsent" : "jsonObject" },
+					arguments: vOptional.length > 0
+						? [
+							{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: vKeyNodes },
+							{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: vValueNodes },
+							{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: vOptionalFlags },
+						]
+						: [
+							{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: vKeyNodes },
+							{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: vValueNodes },
+						],
 				},
 			});
 		}
@@ -361,6 +374,8 @@ export macro jsonValueOf(t: Node): Node {
 	const fieldTypes: Node[] = tt.typExprFieldTypes;
 	const valueNodes: Node[] = [];
 	const keyNodes: Node[] = [];
+	const optionalFields: string[] = tt.typExprOptionalFields;
+	const optionalFlags: Node[] = [];
 	let fi = 0;
 	while (fi < fields.length) {
 		const f: string = fields[fi];
@@ -401,6 +416,7 @@ export macro jsonValueOf(t: Node): Node {
 			value: f,
 		};
 		keyNodes.push(keyLit);
+		optionalFlags.push({ kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: isOptionalField(f, optionalFields) });
 		fi = fi + 1;
 	}
 
@@ -412,22 +428,18 @@ export macro jsonValueOf(t: Node): Node {
 			kind: NodeKind.Identifier,
 			line: t.line,
 			column: t.column,
-			name: "jsonObject",
+			name: optionalFields.length > 0 ? "_jsonObjectOmitAbsent" : "jsonObject",
 		},
-		arguments: [
-			{
-				kind: NodeKind.ArrayLiteral,
-				line: t.line,
-				column: t.column,
-				elements: keyNodes,
-			},
-			{
-				kind: NodeKind.ArrayLiteral,
-				line: t.line,
-				column: t.column,
-				elements: valueNodes,
-			},
-		],
+		arguments: optionalFields.length > 0
+			? [
+				{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: keyNodes },
+				{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: valueNodes },
+				{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: optionalFlags },
+			]
+			: [
+				{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: keyNodes },
+				{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: valueNodes },
+			],
 	};
 }
 

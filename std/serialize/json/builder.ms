@@ -31,6 +31,17 @@ export function jsonObject(keys: string[], values: JsonValue[]): JsonValue {
 	return { kind: JsonKind.Object, keys: keys, values: values };
 }
 
+export function _jsonObjectOmitAbsent(keys: string[], values: JsonValue[], optional: boolean[]): JsonValue {
+	const presentKeys: string[] = [];
+	const presentValues: JsonValue[] = [];
+	for (let i = 0; i < keys.length; i++) {
+		if (optional[i] && values[i].kind == JsonKind.Null) continue;
+		presentKeys.push(keys[i]);
+		presentValues.push(values[i]);
+	}
+	return { kind: JsonKind.Object, keys: presentKeys, values: presentValues };
+}
+
 @compilerFunc
 export function jsonInt(n: int64): JsonValue {
 	return { kind: JsonKind.Int, intVal: n };

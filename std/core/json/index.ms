@@ -5,7 +5,7 @@
 
 export { JsonKind, JsonValue, JsonValueData, jsonToString, jsonToNumber, jsonToBoolean, jsonToInt32, jsonToInt64 } from "std/serialize/json/types";
 export {
-	jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject, jsonInt, _jsonEnumName,
+	jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject, _jsonObjectOmitAbsent, jsonInt, _jsonEnumName,
 	jsonArrayOfStrings, jsonArrayOfBooleans, jsonArrayOfNumbers, jsonArrayOfFloat32,
 	jsonArrayOfInt8, jsonArrayOfInt16, jsonArrayOfInt32, jsonArrayOfInt64,
 	jsonArrayOfUint8, jsonArrayOfUint16, jsonArrayOfUint32,
