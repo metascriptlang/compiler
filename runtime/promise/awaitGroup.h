@@ -303,6 +303,7 @@ extern void msPoolBusyInc(void);
 typedef struct msAwaitSlot {
     _Atomic(int32_t) pending;     /* starts at N, decremented per completion */
     _Atomic(bool) failed;
+    _Atomic(bool) cancelled;      /* a task not yet started is skipped */
     void* error;
     void* result;                 /* single-slot result (void*, boxed) */
 } msAwaitSlot;

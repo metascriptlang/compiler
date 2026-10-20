@@ -1060,6 +1060,9 @@ when (mscDeclaresRuntime) {
 	extern function msAwaitSlotWait(sp: Ptr<void>): void;
 
 	@compilerFunc
+	extern function msAwaitSlotSettle(sp: Ptr<void>): void;
+
+	@compilerFunc
 	extern function msActorCreatePid(state: Ptr<void>, dispatch: Ptr<void>): int64;
 
 	@compilerFunc

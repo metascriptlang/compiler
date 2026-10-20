@@ -29,7 +29,7 @@ test "the C prelude declares every runtime routine the lowerings synthesize" {
 	"msAsyncStart", "msAtomicDecref", "msAtomicIncref", "msAwaitGroupBlocking",
 	"msAwaitGroupBlockingWithDeadline", "msAwaitGroupCancel", "msAwaitGroupCheckFailed", "msAwaitGroupFree",
 	"msAwaitGroupInit", "msAwaitGroupResult", "msAwaitGroupSetDoneFut", "msAwaitGroupTimedOut",
-	"msAwaitSlotCreate", "msAwaitSlotRelease", "msAwaitSlotWait", "msBigIntAdd", "msBigIntAnd", "msBigIntCmp",
+	"msAwaitSlotCreate", "msAwaitSlotRelease", "msAwaitSlotSettle", "msAwaitSlotWait", "msBigIntAdd", "msBigIntAnd", "msBigIntCmp",
 	"msBigIntDiv", "msBigIntFromFloat64", "msBigIntFromLit", "msBigIntIsZero", "msBigIntMod", "msBigIntMul",
 	"msBigIntNeg", "msBigIntNot", "msBigIntOr", "msBigIntPow", "msBigIntShl", "msBigIntShr", "msBigIntSub",
 	"msBigIntToFloat64", "msBigIntToInt64", "msBigIntToString", "msBigIntXor", "msBoolToString", "msBoxDouble",

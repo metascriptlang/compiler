@@ -370,6 +370,7 @@ void* msAwaitSlotCreate(int32_t n) {
 	}
 	atomic_store_explicit(&s->pending, n, memory_order_relaxed);
 	atomic_store_explicit(&s->failed, false, memory_order_relaxed);
+	atomic_store_explicit(&s->cancelled, false, memory_order_relaxed);
 	s->error = NULL;
 	s->result = NULL;
 	return (void*)s;

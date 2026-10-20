@@ -72,10 +72,10 @@ extern void msCompletionQueuePushEnvRelease(void* env);
 
 static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 	void* result = NULL;
-	if (ctx->env != NULL) {
-		result = ((void*(*)(void*))ctx->fn)(ctx->env);
-	} else {
-		result = ((void*(*)(void))ctx->fn)();
+	bool cancelledBeforeStart = ctx->cancelFlag != NULL
+		&& atomic_load_explicit(ctx->cancelFlag, memory_order_acquire);
+	if (!cancelledBeforeStart) {
+		result = ctx->env != NULL ? ((void*(*)(void*))ctx->fn)(ctx->env) : ((void*(*)(void))ctx->fn)();
 	}
 
 	if (ctx->slotGroup != NULL) {
@@ -261,10 +261,25 @@ static inline void msSpawnSlotSubmit(void* s, int32_t slot, msClosure fn) {
 		.env = fn.env,
 		.slotGroup = s,
 		.slot = slot,
+		.cancelFlag = &((msAwaitSlot*)s)->cancelled,
 	};
 	/* No msIncRef — fused path guarantees env alive through msAwaitSlotWait.
 	 * Worker skips msDecref for slotGroup path (see msSpawnWorkerRun). */
 	msPoolSubmit(&ctx);
+}
+
+/* msPoolHelpOne runs queued tasks on this thread and msSpawnWorkerRun reads msErr as
+ * the task's own: keep the caller's in-flight exception out of the wait. */
+static inline void msAwaitSlotSettle(void* sp) {
+	bool err = msErr;
+	msException* exc = msCurrException;
+	msErr = false;
+	msCurrException = NULL;
+	atomic_store_explicit(&((msAwaitSlot*)sp)->cancelled, true, memory_order_release);
+	msAwaitSlotWait(sp);
+	msAwaitSlotRelease(sp);
+	msErr = err;
+	msCurrException = exc;
 }
 
 #endif /* MS_THREAD_H */
