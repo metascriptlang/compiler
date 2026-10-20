@@ -301,12 +301,6 @@ when (mscDeclaresRuntime) {
 	extern function msRefCopyCyclic(d: Ptr<void>, s: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msOrcBeginTeardown(): void;
-
-	@compilerFunc
-	extern function msOrcEndTeardown(): void;
-
-	@compilerFunc
 	extern function msOrcTraceRef(child: Ptr<void>, env: Ptr<void>): void;
 
 	@compilerFunc

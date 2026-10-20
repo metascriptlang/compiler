@@ -1346,18 +1346,10 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		}
 	}
 
-	// Wrap the destroy body in the ORC teardown critical section (msOrcBeginTeardown/EndTeardown):
-	// a field decref here can register a cycle root and trigger a re-entrant collect that traces
-	// this object's already-freed, not-yet-nulled slots (UAF). The guard defers collection until
-	// the whole teardown unwinds. Destroy hooks are single-exit (no early return), so bracketing
-	// the statement list is sufficient. No-op under --gc=drc.
 	if (lctx.dropOwner != null && classType != null) {
 		buf.items = deferAfterDropEdges(buf.items, s1, classType, cName, lctx, loc);
 	}
 	lctx.dropOwner = outerDropOwner;
-	if (hook == "destroy") {
-		buf.items = bracketTeardown(buf.items, loc);
-	}
 
 	const suffix = hookSuffix(hook);
 
@@ -1385,13 +1377,6 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	return sym;
 }
 
-function bracketTeardown(items: Node[], loc: SourceLocation): Node[] {
-	const wrapped: Node[] = [makeExprStmt(makeCall(runtimeRef("msOrcBeginTeardown", loc), [], loc), loc)];
-	for (const it of items) { wrapped.push(it); }
-	wrapped.push(makeExprStmt(makeCall(runtimeRef("msOrcEndTeardown", loc), [], loc), loc));
-	return wrapped;
-}
-
 function dropEdgeCall(stmt: Node): Node | null {
 	if (stmt.kind != NodeKind.ExprStmt) return null;
 	const call = (stmt.data as ExprStmtData).expr;
@@ -1412,7 +1397,7 @@ function deferAfterDropEdges(items: Node[], self: Symbol, classType: Type, cName
 	const selfDecl = makeVarDecl(self.name, makeHiddenSubConv(makeIdentResolved(ownerSym, loc), classType, loc), DeclKind.Const, loc);
 	selfDecl.resolvedSym = self;
 	const head: Node[] = [];
-	const rest: Node[] = [makeExprStmt(makeCall(runtimeRef("msOrcBeginTeardown", loc), [], loc), loc), selfDecl];
+	const rest: Node[] = [selfDecl];
 	let segment: Node[] = [];
 	let resume = 0;
 	for (let i = 0; i < items.length; i += 1) {
@@ -1425,7 +1410,6 @@ function deferAfterDropEdges(items: Node[], self: Symbol, classType: Type, cName
 		resume += 1;
 		const deferred: Node[] = [
 			makeExprStmt(makeCall(runtimeRef("msDropDefer", loc), [makeIdentResolved(self, loc), makeIdentResolved(restSym, loc), makeNumber(resume, loc)], loc), loc),
-			makeExprStmt(makeCall(runtimeRef("msOrcEndTeardown", loc), [], loc), loc),
 			makeReturn(null as unknown as Node, loc),
 		];
 		const guard = makeIf(edge, makeBlock(deferred, loc), null as unknown as Node, loc);
@@ -1439,7 +1423,6 @@ function deferAfterDropEdges(items: Node[], self: Symbol, classType: Type, cName
 		}
 	}
 	for (const it of segment) rest.push(it);
-	rest.push(makeExprStmt(makeCall(runtimeRef("msOrcEndTeardown", loc), [], loc), loc));
 	(restFn.data as FunctionDeclData).fnBody = makeBlock(rest, loc);
 	lctx.collector.push(restFn);
 	return head;

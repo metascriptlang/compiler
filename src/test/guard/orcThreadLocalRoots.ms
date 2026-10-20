@@ -8,7 +8,7 @@
 //   keeps the same partition, so no reference collector shares a root set.
 //
 // WHAT IT CATCHES: any of the ORC state variables in runtime/drc.{c,h} losing
-//   _Thread_local. A worker's msOrcEndTeardown then collects over the MAIN
+//   _Thread_local. A worker's msRegisterCycle then collects over the MAIN
 //   thread's msRoots — freeing objects main is still using, and hitting the
 //   re-entrancy guard (drc.c: threshold=INT32_MAX, roots.len=0) which drops
 //   main's registered roots so its cycles are never reclaimed.
@@ -34,7 +34,7 @@
 //   buy.
 //
 // RED MEANS: ORC collector state stopped being per-thread. Run /trace-nim on
-//   msOrcEndTeardown / msRegisterCycle (runtime/drc.{c,h}) against orc.nim.
+//   msRegisterCycle (runtime/drc.{c,h}) against orc.nim.
 // GUARD-BALANCE-ORC Link
 // GUARD-BALANCE-ORC Solo
 

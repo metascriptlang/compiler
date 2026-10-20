@@ -668,10 +668,6 @@ static inline void  msLockedRelease(void* cell)              { (void)cell; }
 /* ===== ORC stubs ===== */
 static inline void msOrcCollect(void) {}
 static inline void msOrcTraceRef(void* child, void* env) { (void)child; (void)env; }
-/* Teardown critical section - drc.h:411-412 already stubs these when ORC is off;
- * manual.h owns the guard, so the same pair has to exist here. */
-static inline void msOrcBeginTeardown(void) {}
-static inline void msOrcEndTeardown(void) {}
 
 /* ===== Async stubs ===== */
 #ifndef MS_THREAD_LOCAL

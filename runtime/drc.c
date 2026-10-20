@@ -462,8 +462,6 @@ _Thread_local msCellSeq msRoots;
 MS_TLS_PUBLISH(msRoots)
 _Thread_local int32_t msRootsThreshold = 128;
 MS_TLS_PUBLISH(msRootsThreshold)
-_Thread_local int32_t msOrcTeardownDepth = 0;
-MS_TLS_PUBLISH(msOrcTeardownDepth)
 
 /* ===== ORC Diagnostics ===== */
 #ifdef MSGC_ORC_STATS
@@ -482,11 +480,7 @@ void msRegisterCycle(void* p, const msTypeInfo* type) {
 	MS_DRC_STAT_CYCLE(type);
 	msCell cell = { p, type };
 	msCellSeqPush(&msRoots, cell);
-
-	/* Auto-trigger collection when threshold exceeded (Standard reference implementation parity).
-	 * Skip while a =destroy is unwinding — a re-entrant collect there traces half-torn-down,
-	 * not-yet-nulled slots (UAF). msOrcEndTeardown runs the deferred collect once it is safe. */
-	if (msOrcTeardownDepth == 0 && msRoots.len - 128 >= msRootsThreshold) {
+	if (msRoots.len - 128 >= msRootsThreshold) {
 		msOrcCollect();
 	}
 }
