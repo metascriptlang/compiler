@@ -2563,17 +2563,20 @@ export function evaluateConditionalType(t: Type | null): Type {
 	const ext = t.typeChildren[1];
 	// Defer if check type still has unresolved generic params (not yet substituted)
 	if (hasGenericParams(check)) return t;
-	// Tier 3: if the extends type has GenericParam (from `infer X`), use unifyType
-	// to extract bindings, then substitute into the true branch.
 	if (hasGenericParams(ext)) {
 		const bindings = createUnifyBindings();
 		unifyType(ext, check, bindings);
-		if (bindings.names.length > 0) {
-			// infer succeeded — substitute bindings into true branch
-			return substituteAllParams(t.typeChildren[2], bindings.names, bindings.types);
+		const inferNames: string[] = [];
+		collectGenericParamNames(ext, inferNames, 0);
+		for (const name of inferNames) {
+			if (bindings.names.indexOf(name) < 0) {
+				bindings.names.push(name);
+				bindings.types.push(unknownType());
+			}
 		}
-		// infer failed — no match, return false branch
-		return t.typeChildren[3];
+		const inferredExt = substituteAllParams(ext, bindings.names, bindings.types);
+		if (!isAssignableForConditional(check, inferredExt)) return t.typeChildren[3];
+		return substituteAllParams(t.typeChildren[2], bindings.names, bindings.types);
 	}
 	return isAssignableForConditional(check, ext) ? t.typeChildren[2] : t.typeChildren[3];
 }
