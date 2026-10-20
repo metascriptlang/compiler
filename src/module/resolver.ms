@@ -462,6 +462,44 @@ test "explicit .cms extension" {
 	assert r[0] == "/std/core.cms";
 }
 
+test "absolute path with an explicit extension names that one file" {
+	const cfg = createDefaultConfig(Backend.C, "/std");
+	const r = resolveImportWithConfig("/x/lib/m.ms", "/proj/main.ms", cfg);
+	assert r.length == 1;
+	assert r[0] == "/x/lib/m.ms";
+}
+
+test "absolute path to a directory's index.ms names that one file" {
+	const cfg = createDefaultConfig(Backend.JS, "/std");
+	const r = resolveImportWithConfig("/x/lib/index.ms", "/proj/main.ms", cfg);
+	assert r.length == 1;
+	assert r[0] == "/x/lib/index.ms";
+}
+
+test "absolute path with an explicit extension is never joined onto a search path" {
+	const cfg = createDefaultConfig(Backend.C, "");
+	cfg.searchPaths.push("/proj/lib");
+	cfg.searchPaths.push("/proj/vendor");
+	const r = resolveImportWithConfig("/x/lib/m.ms", "/proj/main.ms", cfg);
+	assert r.length == 1;
+	assert r[0] == "/x/lib/m.ms";
+}
+
+test "drive-letter absolute path with an explicit extension names that one file" {
+	const cfg = createDefaultConfig(Backend.C, "");
+	const r = resolveImportWithConfig("C:\\x\\lib\\m.ms", "C:\\proj\\main.ms", cfg);
+	assert r.length == 1;
+	assert r[0] == "C:/x/lib/m.ms";
+}
+
+test "absolute path without an extension probes extensions and index files" {
+	const cfg = createDefaultConfig(Backend.C, "");
+	const r = resolveImportWithConfig("/x/lib/m", "/proj/main.ms", cfg);
+	assert r.length == 8;
+	assert r[1] == "/x/lib/m.ms";
+	assert r[5] == "/x/lib/m/index.ms";
+}
+
 test "explicit .h extension resolves directly" {
 	const cfg = createDefaultConfig(Backend.C,"");
 	const r = resolveImportWithConfig("./dawn.h", "/a/b.ms", cfg);

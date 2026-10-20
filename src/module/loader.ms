@@ -19,7 +19,14 @@ import {
 	Module, ModuleGraph, ModuleState, createModuleGraph, createModule, createImportEntry,
 	findModule, hasModule, addModule, pushImportStack, popImportStack, createModuleError, ModuleError, ErrorSeverity,
 } from "./graph";
-import { resolveImport, resolveImportWithConfig, isStdImport, ResolverConfig, Backend } from "./resolver";
+import {
+	resolveImport,
+	resolveImportWithConfig,
+	isStdImport,
+	ResolverConfig,
+	Backend,
+	createDefaultConfig,
+} from "./resolver";
 import { lex } from "../lexer/lexer";
 import { TokenKind } from "../lexer/token";
 import { createState, getParserDefines, setParserDefines } from "../parser/context";
@@ -1046,6 +1053,24 @@ test "no duplicate loading" {
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	assert graph.modules.length == 2;
+}
+
+test "an absolute import with an explicit extension loads the module it names" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry(
+		"/src/a.ms",
+		"import { x } from \"/vendor/m.ms\"; import { y } from \"/vendor/pkg/index.ms\";",
+	));
+	entries.push(makeEntry("/vendor/m.ms", "export const x = 1;"));
+	entries.push(makeEntry("/vendor/pkg/index.ms", "export const y = 2;"));
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraphWithConfig("/src/a.ms", provider, createDefaultConfig(Backend.C, ""));
+	assert graph.modules.length == 3;
+	const mod = findModule(graph, "/src/a.ms");
+	assert mod != null;
+	assert mod.errors.length == 0;
+	assert mod.imports[0].sourcePath == "/vendor/m.ms";
+	assert mod.imports[1].sourcePath == "/vendor/pkg/index.ms";
 }
 
 test "C header import inlines declarations" {
