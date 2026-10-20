@@ -14,7 +14,7 @@
 // native JS spread.
 
 import { Node, NodeKind, DeclKind, ObjectLiteralData, SpreadExprData, SourceLocation, Type, TypeKind } from "../../ast/node";
-import { peelThrough, PEEL_ALL, unwrapRef } from "../../checker/types";
+import { peelThrough, PEEL_ALL, unwrapRef, peelToStructOrUnion } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocks, walkOnceEvaluated, OnceEvalState } from "../walker";
@@ -33,6 +33,14 @@ export function spreadStructOf(t: Type | null): Type | null {
 	return s;
 }
 
+function builtStructOf(lit: Node): Type | null {
+	const own = spreadStructOf(lit.nodeType);
+	if (own != null || lit.variantSlot <= 0) return own;
+	const u = peelToStructOrUnion(lit.nodeType);
+	if (u == null || u.kind != TypeKind.Union || u.typeChildren == null || lit.variantSlot > u.typeChildren.length) return null;
+	return spreadStructOf(u.typeChildren[lit.variantSlot - 1]);
+}
+
 function structHasField(t: Type, name: string): boolean {
 	for (const n of t.typeNames) {
 		if (n == name) return true;
@@ -44,7 +52,7 @@ function structHasField(t: Type, name: string): boolean {
 
 function maybeHoistOperands(lit: Node, ctx: TransformContext, decls: Node[], safe: Node[] | null): void {
 	const d = lit.data as ObjectLiteralData;
-	if (spreadStructOf(lit.nodeType) == null) return;
+	if (builtStructOf(lit) == null) return;
 	let i = 0;
 	while (i < d.keys.length) {
 		if (d.keys[i] == "..." && d.properties[i].kind == NodeKind.SpreadExpr && (safe == null || safe.includes(d.properties[i]))) {
@@ -130,7 +138,7 @@ export function expandObjectSpread(node: Node): Node {
 		if (k == "...") { hasSpread = true; break; }
 	}
 	if (!hasSpread) return node;
-	const target0 = spreadStructOf(node.nodeType);
+	const target0 = builtStructOf(node);
 	if (target0 == null) return node;
 	const target = target0;
 	let i = 0;
