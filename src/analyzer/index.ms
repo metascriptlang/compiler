@@ -98,15 +98,15 @@ function destroyedGlobal(stmt: Node): string {
 	return found;
 }
 
-test "module globals are destroyed in reverse declaration order at program end" {
+test "module globals are destroyed in reverse declaration order at program end, each emptied after its release" {
 	const result = analyzePipeline("const first: string[] = [\"a\"];\nconst second: string[] = [\"b\"];\nconsole.log(first.length + second.length);");
 	const stmts = (result.data as ProgramData).programStmts;
 	const exitBlock = stmts[stmts.length - 1];
 	assert exitBlock.kind == NodeKind.BlockStmt && exitBlock.flags.has(NodeFlag.GlobalDestroys);
 	const destroys = (exitBlock.data as BlockStmtData).statements;
-	assert destroys.length == 2;
-	assert destroyedGlobal(destroys[0]) == "second";
-	assert destroyedGlobal(destroys[1]) == "first";
+	assert destroys.length == 4;
+	assert destroyedGlobal(destroys[0]) == "second" && destroyedGlobal(destroys[1]) == "second";
+	assert destroyedGlobal(destroys[2]) == "first" && destroyedGlobal(destroys[3]) == "first";
 }
 
 test "a program without owned globals carries no global destroys" {
