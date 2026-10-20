@@ -21,7 +21,7 @@ export {
 	jsonToInt8ArrayE, jsonToInt16ArrayE, jsonToInt32ArrayE, jsonToInt64ArrayE,
 	jsonToUint8ArrayE, jsonToUint16ArrayE, jsonToUint32ArrayE,
 	kindName, reqString, reqBoolean, reqNumber, reqInt64, reqArray, reqObject, joinDecodeErrors,
-	_jsonCheckDiscStr, _jsonIsNull, _jsonEnumOrd, _jsonEnumOrdE,
+	_jsonCheckDiscStr, _jsonIsNull, _jsonEnumOrd, _jsonEnumOrdE, _jsonLiteralMatches,
 } from "std/serialize/json/accessors";
 
 // Macro system constraint: when macro X's expansion result contains a call
@@ -86,6 +86,24 @@ export function _jsonArrayOfValues<T>(arr: Readonly<Span<T>>): JsonValue {
 export function _jsonNullable<T>(v: T | null): JsonValue {
 	if (v == null) return jsonNull();
 	return jsonValueOf(v);
+}
+
+export function _jsonLiteralE<T>(
+	v: JsonValue,
+	members: T[],
+	errs: string[],
+	pfx: string,
+	field: string,
+): T {
+	const texts: string[] = [];
+	for (let i = 0; i < members.length; i++) {
+		const member = jsonValueOf(members[i]);
+		if (_jsonLiteralMatches(v, member)) return members[i];
+		texts.push(stringify(member, false));
+	}
+	const got = v == null ? "null" : stringify(v, false);
+	errs.push("field '" + pfx + field + "': expected " + texts.join(" | ") + ", got " + got);
+	return members[0];
 }
 
 export function _jsonArrayOfEnums<T>(arr: Readonly<Span<T>>, ords: int32[], names: string[]): JsonValue {

@@ -22,7 +22,7 @@ import { Node, NodeKind, TypeUnionData, TypeGenericData, TypeObjectData, Identif
 	StringLiteralData, BooleanLiteralData,
 	CallExprData, MemberExprData, TypeAssertionData,
 	createNodeAt, makeLoc,
-	SourceLocation, getTypeImpl, TypeKind, typeKind } from "std/meta";
+	SourceLocation, getTypeImpl, TypeKind, typeKind, isFloatLiteral } from "std/meta";
 
 export function namesStruct(n: Node): boolean {
 	return n.kind == NodeKind.Identifier && typeKind(n) == TypeKind.Struct;
@@ -215,6 +215,27 @@ function isNullVariant(m: Node): boolean {
 	if (m.kind != NodeKind.Identifier) return false;
 	const id: IdentifierData = m as IdentifierData;
 	return id.name == "null";
+}
+
+export function literalCarrier(n: Node): string {
+	return match (n.kind) {
+		NodeKind.StringLiteral => "string",
+		NodeKind.BooleanLiteral => "boolean",
+		NodeKind.NumberLiteral => isFloatLiteral(n) ? "float" : "int",
+		_ => "",
+	};
+}
+
+export function literalMembers(t: Node): Node[] {
+	if (literalCarrier(t) != "") return [t];
+	if (t.kind != NodeKind.TypeUnion) return [];
+	const members: Node[] = [];
+	for (const m of (t as TypeUnionData).typExprMembers) {
+		const carrier = literalCarrier(m);
+		if (carrier == "" || (members.length > 0 && carrier != literalCarrier(members[0]))) return [];
+		members.push(m);
+	}
+	return members;
 }
 
 export function detectUnionDisc(tt: Node): DiscInfo {

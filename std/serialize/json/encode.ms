@@ -9,7 +9,15 @@
 // macro call which walkExpand re-expands at the appropriate recursion depth.
 //
 import { Node, NodeKind } from "std/meta";
-import { detectUnionDisc, namesStruct, parseDiscKey, unwrapType, implementationOf } from "../discDetect";
+import {
+	detectUnionDisc,
+	namesStruct,
+	parseDiscKey,
+	unwrapType,
+	implementationOf,
+	literalCarrier,
+	literalMembers,
+} from "../discDetect";
 
 function isOptionalField(name: string, optionalFields: string[]): boolean {
 	for (const f of optionalFields) {
@@ -146,6 +154,25 @@ export macro jsonValueOf(t: Node): Node {
 				name: helperName,
 			},
 			arguments: [t],
+		};
+	}
+
+	const literals = literalMembers(tt);
+	if (literals.length > 0) {
+		const carrier = literalCarrier(literals[0]);
+		const builderName: string = match (carrier) {
+			"string" => "jsonString",
+			"boolean" => "jsonBool",
+			"float" => "jsonNumber",
+			_ => "jsonInt",
+		};
+		const literalArg: Node = carrier == "int"
+			? { kind: NodeKind.TypeAssertion, line: t.line, column: t.column, asExpr: t, asType: "int64" }
+			: t;
+		return {
+			kind: NodeKind.CallExpr, line: t.line, column: t.column,
+			callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: builderName },
+			arguments: [literalArg],
 		};
 	}
 
@@ -310,24 +337,6 @@ export macro jsonValueOf(t: Node): Node {
 					{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: ords },
 					{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: names },
 				],
-			};
-		}
-		// Literal-typed field (TS-style DU disc, e.g. `kind: "circle"`).
-		// Bridge emits StringLiteral/BooleanLiteral nodes for these — the
-		// runtime field value is just a regular string/bool, so route to
-		// jsonString/jsonBool. Without this branch they fell through to the
-		// Identifier path below, got tn="circle", missed the atomic match,
-		// and landed in jsonInt with a bad msString-as-int64 cast.
-		const literalBuilder: string = match (tt.kind) {
-			NodeKind.StringLiteral => "jsonString",
-			NodeKind.BooleanLiteral => "jsonBool",
-			_ => "",
-		};
-		if (literalBuilder != "") {
-			return {
-				kind: NodeKind.CallExpr, line: t.line, column: t.column,
-				callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: literalBuilder },
-				arguments: [t],
 			};
 		}
 		// V1 supports atomic types and arrays-of-atomic. Unions / Functions

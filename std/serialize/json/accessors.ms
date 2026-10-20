@@ -7,7 +7,7 @@
 //   value.at(idx), value.length
 
 import { JsonKind, JsonValue, asString, asNumber, asBoolean, asInt64 } from "./types";
-import { jsonNull, jsonObject, jsonString, jsonInt } from "./builder";
+import { jsonNull, jsonObject, jsonString, jsonInt, jsonNumber, jsonBool } from "./builder";
 
 export { asString, asNumber, asBoolean, asInt32, asInt64 } from "./types";
 
@@ -182,6 +182,38 @@ test "_jsonIsNull — null sentinel and absent field are null, values are not" {
 	assert _jsonIsNull(obj.getDynamicField("missing"));
 	assert _jsonIsNull(jsonNull());
 	assert !_jsonIsNull(obj.getDynamicField("a"));
+}
+
+export function _jsonLiteralMatches(input: JsonValue, member: JsonValue): boolean {
+	if (input == null || member == null) return false;
+	if (member.kind == JsonKind.String) {
+		return input.kind == JsonKind.String && input.strVal == member.strVal;
+	}
+	if (member.kind == JsonKind.Bool) {
+		return input.kind == JsonKind.Bool && input.boolVal == member.boolVal;
+	}
+	if (member.kind == JsonKind.Int) {
+		return input.kind == JsonKind.Int && input.intVal == member.intVal;
+	}
+	if (member.kind != JsonKind.Number) return false;
+	if (input.kind == JsonKind.Int) return (input.intVal as number) == member.numVal;
+	return input.kind == JsonKind.Number && input.numVal == member.numVal;
+}
+
+test "_jsonLiteralMatches — a literal matches only its own carrier and value" {
+	assert _jsonLiteralMatches(jsonString("alt"), jsonString("alt"));
+	assert !_jsonLiteralMatches(jsonString("Alt"), jsonString("alt"));
+	assert !_jsonLiteralMatches(jsonInt(1), jsonString("1"));
+	assert _jsonLiteralMatches(jsonBool(true), jsonBool(true));
+	assert !_jsonLiteralMatches(jsonNull(), jsonBool(false));
+	assert _jsonLiteralMatches(jsonInt(2), jsonInt(2));
+	assert !_jsonLiteralMatches(jsonNumber(2.0), jsonInt(2));
+}
+
+test "_jsonLiteralMatches — a fractional literal accepts either number carrier" {
+	assert _jsonLiteralMatches(jsonNumber(1.5), jsonNumber(1.5));
+	assert _jsonLiteralMatches(jsonInt(2), jsonNumber(2.0));
+	assert !_jsonLiteralMatches(jsonNumber(2.5), jsonNumber(1.5));
 }
 
 // ===== Dynamic Field Access (protocol — `getDynamicField`) =====
