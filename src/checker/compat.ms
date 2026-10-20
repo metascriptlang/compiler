@@ -1909,8 +1909,6 @@ export function cmpCandidates(a: CandidateScore, b: CandidateScore,
 }
 
 // Generic specialization: cross-test formal types for specificity.
-// f<T>(x: T[]) is more specific than f<T>(x: T) because T[] can match T generically
-// but T cannot match T[].
 // Returns >0 if A is more specific, <0 if B, 0 if equal/contradictory.
 export function checkGenericSpecialization(typeA: Type, typeB: Type): number {
 	if (typeA == null || typeB == null) return 0;
@@ -1924,13 +1922,12 @@ export function checkGenericSpecialization(typeA: Type, typeB: Type): number {
 	while (i < lenA) {
 		const pA = typeA.typeChildren[i];
 		const pB = typeB.typeChildren[i];
-		// Cross-test: can B's formal match A's as Generic?
-		const bMatchesA = typeRelation(pA, pB);
-		const aMatchesB = typeRelation(pB, pA);
-		if (bMatchesA == TypeRelation.Generic && aMatchesB != TypeRelation.Generic) {
-			aWins = aWins + 1; // A is more specific (B is more general)
-		} else if (aMatchesB == TypeRelation.Generic && bMatchesA != TypeRelation.Generic) {
-			bWins = bWins + 1; // B is more specific (A is more general)
+		const bTakesA = typeRelation(pB, pA);
+		const aTakesB = typeRelation(pA, pB);
+		if (bTakesA == TypeRelation.Generic && aTakesB == TypeRelation.None) {
+			aWins = aWins + 1;
+		} else if (aTakesB == TypeRelation.Generic && bTakesA == TypeRelation.None) {
+			bWins = bWins + 1;
 		}
 		i = i + 1;
 	}
