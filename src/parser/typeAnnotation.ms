@@ -809,6 +809,22 @@ test "generic call lookahead consumes tuple array type arguments" {
 	assert state.position == 0;
 }
 
+function genericCallAhead(typeArgsThenCall: string): boolean {
+	const lr = lex("f" + typeArgsThenCall);
+	if (!lr.ok) return false;
+	const state = createState(lr.value);
+	advance(state);
+	const ahead = isGenericCallAhead(state);
+	return ahead && state.position == 1;
+}
+
+test "generic call lookahead consumes an indexed access type argument" {
+	assert genericCallAhead("<T[K]>(t)");
+	assert genericCallAhead("<Box<T[K]>>(t)");
+	assert genericCallAhead("<T[\"a\" | \"b\"], int32[N + 1]>(t)");
+	assert !genericCallAhead("< b[k] && a > (y)");
+}
+
 test "typeExpr union" {
 	assert typeExprKind("string | number") == NodeKind.TypeUnion;
 }
