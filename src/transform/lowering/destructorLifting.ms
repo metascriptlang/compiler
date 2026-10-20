@@ -375,6 +375,20 @@ function keepOld(xf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): No
 	return makeTypedIdentResolved(oldSym, oldInit.nodeType, loc);
 }
 
+function heldCount(self: Symbol, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): Node {
+	const ctr = lctx.tempCounter;
+	lctx.tempCounter = ctr + 1;
+	const name = "$held_" + ctr.toString();
+	const t = int32Type();
+	const read = makeCall(runtimeRef("msHeldCount", loc), [makeIdentResolved(self, loc)], loc);
+	read.nodeType = t;
+	const sym = liftTempSym(lctx, name, t);
+	const decl = makeVarDecl(name, read, DeclKind.Let, loc);
+	decl.resolvedSym = sym;
+	buf.items.push(decl);
+	return makeTypedIdentResolved(sym, t, loc);
+}
+
 function takeOutThenDestroy(destroyName: string, wasMovedName: string, xf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	const old = keepOld(xf, lctx, buf, loc);
 	genCall(wasMovedName, "wasMoved", clonePath(xf, loc), xf, buf, loc);
@@ -1298,6 +1312,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	// still has its fields released after it, so such a hook detaches what it walked.
 	const hookSym = getUserDefinedHookSym(subject, attachedOpOf(hook), lctx);
 	const releasesAfterHook = hookSym != null && hook == "destroy" && classType != null;
+	const held = releasesAfterHook ? heldCount(s1, lctx, buf, loc) : null;
 	const outerDropOwner = lctx.dropOwner;
 	lctx.dropOwner = hook == "destroy" && hookSym == null && classType != null && !lctx.jsBackend ? s1 : null;
 	if (hookSym != null) {
@@ -1365,7 +1380,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 			}
 		}
 	}
-
+	if (held != null) buf.items.push(makeExprStmt(makeCall(runtimeRef("msDestroyLeftNoRef", loc), [makeIdentResolved(s1, loc), held], loc), loc));
 	if (lctx.dropOwner != null && classType != null) {
 		buf.items = deferAfterDropEdges(buf.items, s1, classType, cName, lctx, loc);
 	}

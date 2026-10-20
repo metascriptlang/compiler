@@ -615,6 +615,7 @@ _Noreturn void msRaiseVariantError(int64_t tag, int64_t expected);
 _Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag);
 _Noreturn void msRaiseUnreachable(const char* text);
 _Noreturn void msRaiseObjectConversionError(void* p, const msTypeInfo* target);
+_Noreturn void msRaiseDestroyKeptSelf(void* p);
 _Noreturn void msRaiseStrLitError(msString s, msString target);
 msString msStrLitConv(msString s, msString members, msString target);
 _Noreturn void msRaiseNumLitError(double v, msString target);
@@ -623,6 +624,14 @@ double msNumLitConv(double v, const double* members, int64_t n, msString target)
 static inline void* msObjDownConv(void* p, const msTypeInfo* target) {
 	if (p != NULL && !msIsInstance(p, target)) msRaiseObjectConversionError(p, target);
 	return p;
+}
+
+static inline int32_t msHeldCount(void* p) {
+	return msHeader(p)->rc & ~MS_RC_MASK;
+}
+
+static inline void msDestroyLeftNoRef(void* p, int32_t held) {
+	if (msHeldCount(p) > held) msRaiseDestroyKeptSelf(p);
 }
 
 static inline void msFfiRetain(void* p) { msIncrefCyclic(p); }
