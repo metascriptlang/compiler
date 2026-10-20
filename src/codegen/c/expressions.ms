@@ -1126,7 +1126,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 				ensureCrossModuleProto(g, calleeName, idSym.symbolType, idSym);
 			}
 			let emitted = calleeName;
-			if (g.checkerCtx != null && g.checkerCtx.gcMode != GcMode.Manual) {
+			if (g.checkerCtx != null && g.checkerCtx.gcMode != GcMode.Manual && !node.flags.has(NodeFlag.NoDispatch)) {
 				const de = dispatchEntryFor(idSym);
 				if (de != null && !de.overloaded) {
 					const ovs = dispatchOverridesFor(de.classSym, de.methodName);

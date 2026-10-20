@@ -328,6 +328,7 @@ export enum NodeFlag {
 	TypeModifier,   // parser: the declaration is spelled `import type` / `export type`; `importTypeNames` holds the specifiers spelled `type A`
 	Optional,      // parser: this class field was written `name?`
 	ContinuesList, // parser: this declarator follows a comma in the declaration list of the statement before it
+	NoDispatch,    // transform: this identifier calls the routine it names, never the dispatcher of its overrides (reference: procCall)
 }
 
 // ===== Node Kind Enum =====

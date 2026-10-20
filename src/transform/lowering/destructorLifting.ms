@@ -20,7 +20,7 @@
 //   =dup       TypeName_dup(src): TypeName       — clone (init + copy, return)
 //   =trace     TypeName_trace(self, callback)    — ORC cycle tracing (cyclic types only)
 
-import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
 import { int32Type, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
@@ -1289,18 +1289,20 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	}
 
 	// User-defined hook dispatch (Reference considerUserDefinedOp).
-	// A user hook fully OVERRIDES the compiler's field traversal (reference parity:
+	// A user hook OVERRIDES the compiler's field traversal (reference parity:
 	// destructors.md "the compiler-generated hooks can be overridden ... to use an
 	// alternative traversal ... or to avoid deep recursions"). This is load-bearing:
 	// the default destroy recurses per field, so a deep/self-referential structure
 	// overflows the stack (see resolvePass owning-self-referential-field warning) —
-	// a user hook lets the author traverse iteratively instead. The author is
-	// therefore responsible for ALL owned fields. Same for copy/sink/wasMoved/trace.
+	// a user hook lets the author traverse iteratively instead. A class's onDestroy
+	// still has its fields released after it, so such a hook detaches what it walked.
 	const hookSym = getUserDefinedHookSym(subject, attachedOpOf(hook), lctx);
+	const releasesAfterHook = hookSym != null && hook == "destroy" && classType != null;
 	const outerDropOwner = lctx.dropOwner;
 	lctx.dropOwner = hook == "destroy" && hookSym == null && classType != null && !lctx.jsBackend ? s1 : null;
 	if (hookSym != null) {
 		const hookIdent = makeIdentResolved(hookSym, loc);
+		hookIdent.flags = hookIdent.flags.incl(NodeFlag.NoDispatch);
 		const u1 = userHookArg(hookSym, 0, s1, classType, loc);
 		if (isTrace) {
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1, makeIdentResolved(s2, loc)], loc), loc));
@@ -1310,9 +1312,10 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 			const u2 = userHookArg(hookSym, 1, s2, classType, loc);
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1, u2], loc), loc));
 		}
-	} else if (hook == "sink" && hasUserDefinedHook(subject, "destroy", lctx)) {
+	}
+	if (hookSym == null && hook == "sink" && hasUserDefinedHook(subject, "destroy", lctx)) {
 		storeThenDestroyWhole(objType, s1, s2, lctx, buf, loc);
-	} else {
+	} else if (hookSym == null || releasesAfterHook) {
 		const base = baseClassOf(objType);
 		if (base != null) ensureClassHooks(base, lctx, loc);
 
@@ -1334,17 +1337,20 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		} else if (objType.kind == TypeKind.Distinct) {
 			fillBody(hook, x1, x2, "", objType.typeReturn!, lctx, buf, createNameSet(), loc);
 		} else if (hook == "destroy") {
-			// Destroy: fields first (reverse), then base class (LIFO — standard pattern)
+			const releaseBase = (): void => {
+				if (owner != null) {
+					callBaseHook(owner, hook, s1, s2, lctx, buf, loc);
+				} else if (!fieldsFlattened && base != null && namedTypeHasHooks(base, lctx)) {
+					genOpCall(requireOpByKey(base, AttachedOp.AttachedDestructor), hook, x1, x2, buf, loc);
+				}
+			};
+			if (releasesAfterHook) releaseBase();
 			for (let i = objType.typeNames.length - 1; i >= firstOwn; i -= 1) {
 				if (!fieldStored(objType, i)) continue;
 				const visited: NameSet = createNameSet();
 				fillBody(hook, x1, x2, objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
 			}
-			if (owner != null) {
-				callBaseHook(owner, hook, s1, s2, lctx, buf, loc);
-			} else if (!fieldsFlattened && base != null && namedTypeHasHooks(base, lctx)) {
-				genOpCall(requireOpByKey(base, AttachedOp.AttachedDestructor), hook, x1, x2, buf, loc);
-			}
+			if (!releasesAfterHook) releaseBase();
 		} else {
 			// Copy/sink/trace/wasMoved: base class first, then fields (standard pattern)
 			if (owner != null) {
