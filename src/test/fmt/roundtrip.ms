@@ -11,7 +11,7 @@
 
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core"; // side-effect: register sub-parsers
-import { Node, NodeKind,
+import { Node, NodeKind, NodeFlag,
 	IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData,
 	ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData,
@@ -224,9 +224,10 @@ export function astShape(node: Node | null): string {
 		},
 		NodeKind.ImportDecl => {
 			const d = node.data as ImportDeclData;
-			let names = "";
+			let names = node.flags.has(NodeFlag.TypeModifier) ? "type " : "";
 			for (let i = 0; i < d.importNames.length; i = i + 1) {
 				if (i > 0) names = names + ",";
+				if (d.importTypeNames.includes(d.importNames[i])) names = names + "type ";
 				const alias = d.importAliases[i];
 				if (alias !== "" && alias !== d.importNames[i]) {
 					names = names + d.importNames[i] + " as " + alias;
