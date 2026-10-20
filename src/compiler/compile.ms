@@ -49,6 +49,7 @@ import { liftHcrState } from "../transform/native/hcrLift";
 import { HcrIndirectModule, hcrFunctions, lowerHcrIndirection } from "../transform/native/hcrIndirect";
 import { lookupModuleCtx, lookupModuleProgram, drainPendingInstances, distinctInstances, placeInstance, retainCheckedInstances } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
+import { markTypeOnlyImports } from "../checker/importElision";
 import { createTransformContextWithChecker } from "../transform/context";
 import { resetLiftedOps, setJsProgramScope } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity, planDynamicModules } from "../module/graph";
@@ -471,6 +472,7 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 		if (_diagnosticHook == null) printDiag(`${error("error")}: ${graphErrors} type error(s) found, stopping before codegen`);
 		stopBuild();
 	}
+	markTypeOnlyImports(graph, config.stdPath);
 	return graph;
 }
 
