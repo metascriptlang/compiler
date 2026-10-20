@@ -198,10 +198,39 @@ function wordOperands(op: RaiserOpcode): int32 {
 	};
 }
 
-function unboxedWord(s: RaiserCompState, reg: number): number {
+// The class of the plain value an opcode writes into R[A]; Dyn when the VM conforms the write itself.
+function plainResult(op: RaiserOpcode): RaiserRegClass {
+	return match (op) {
+		RaiserOpcode.LoadInt | RaiserOpcode.AddI64 | RaiserOpcode.SubI64 | RaiserOpcode.MulI64 | RaiserOpcode.DivI64 | RaiserOpcode.ModI64 | RaiserOpcode.NegI64
+			| RaiserOpcode.AddU64 | RaiserOpcode.SubU64 | RaiserOpcode.MulU64 | RaiserOpcode.DivU64 | RaiserOpcode.ModU64
+			| RaiserOpcode.AddF64 | RaiserOpcode.SubF64 | RaiserOpcode.MulF64 | RaiserOpcode.DivF64 | RaiserOpcode.NegF64
+			| RaiserOpcode.BitAnd | RaiserOpcode.BitOr | RaiserOpcode.BitXor | RaiserOpcode.BitNot
+			| RaiserOpcode.ShiftLeft | RaiserOpcode.ShiftRight | RaiserOpcode.ShiftRightU | RaiserOpcode.AddI64Imm | RaiserOpcode.SubI64Imm
+			| RaiserOpcode.Conv | RaiserOpcode.ArrayLen | RaiserOpcode.StrLen | RaiserOpcode.StrByteLen
+			| RaiserOpcode.IsKind | RaiserOpcode.InstanceOf | RaiserOpcode.SameLoc => RaiserRegClass.Word,
+		RaiserOpcode.ConcatStr | RaiserOpcode.StrCharAt | RaiserOpcode.StrSlice | RaiserOpcode.NewObject | RaiserOpcode.ArraySlice => RaiserRegClass.Ref,
+		_ => RaiserRegClass.Dyn,
+	};
+}
+
+const PAYLOAD_WORD = 1;
+
+// The integer compares read the payload of a Dyn operand whatever its kind, as a compare of two
+// slots does: a union equality has a string, an object or nil on either side.
+function comparesPayload(op: RaiserOpcode): boolean {
+	return match (op) {
+		RaiserOpcode.BeqI64 | RaiserOpcode.BneI64 | RaiserOpcode.BltI64 | RaiserOpcode.BleI64 | RaiserOpcode.BgtI64 | RaiserOpcode.BgeI64
+			| RaiserOpcode.BrEqI64 | RaiserOpcode.BrNeI64 | RaiserOpcode.BrLtI64 | RaiserOpcode.BrLeI64 | RaiserOpcode.BrGtI64 | RaiserOpcode.BrGeI64
+			| RaiserOpcode.BeqI64Imm | RaiserOpcode.BneI64Imm | RaiserOpcode.BltI64Imm | RaiserOpcode.BleI64Imm | RaiserOpcode.BgtI64Imm | RaiserOpcode.BgeI64Imm
+			| RaiserOpcode.BrEqI64Imm | RaiserOpcode.BrNeI64Imm | RaiserOpcode.BrLtI64Imm | RaiserOpcode.BrLeI64Imm | RaiserOpcode.BrGtI64Imm | RaiserOpcode.BrGeI64Imm => true,
+		_ => false,
+	};
+}
+
+function unboxedWord(s: RaiserCompState, reg: number, how: number): number {
 	if (classOfReg(s, reg as int32) != RaiserRegClass.Dyn) return reg;
 	const word = allocWord(s);
-	s.code.push(raiserABC(RaiserOpcode.Unbox, word, reg, 0));
+	s.code.push(raiserABC(RaiserOpcode.Unbox, word, reg, how));
 	return word;
 }
 
@@ -215,9 +244,18 @@ export function emitInst(s: RaiserCompState, inst: RaiserInstruction): void {
 	}
 	const words = wordOperands(inst.op);
 	if (words != 0) {
-		if ((words & OPERAND_A) != 0) inst.a = unboxedWord(s, inst.a);
-		if ((words & OPERAND_B) != 0) inst.b = unboxedWord(s, inst.b);
-		if ((words & OPERAND_C) != 0) inst.c = unboxedWord(s, inst.c);
+		const how = comparesPayload(inst.op) ? PAYLOAD_WORD : 0;
+		if ((words & OPERAND_A) != 0) inst.a = unboxedWord(s, inst.a, how);
+		if ((words & OPERAND_B) != 0) inst.b = unboxedWord(s, inst.b, how);
+		if ((words & OPERAND_C) != 0) inst.c = unboxedWord(s, inst.c, how);
+	}
+	const produced = plainResult(inst.op);
+	if (produced != RaiserRegClass.Dyn && classOfReg(s, inst.a as int32) == RaiserRegClass.Dyn) {
+		const dest = inst.a;
+		inst.a = allocReg(s, produced);
+		s.code.push(inst);
+		s.code.push(raiserABC(RaiserOpcode.Box, dest, inst.a, 0));
+		return;
 	}
 	s.code.push(inst);
 }
