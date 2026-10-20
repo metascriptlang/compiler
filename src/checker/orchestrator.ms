@@ -16,7 +16,7 @@ import { isAssignableProfile } from "./compat";
 import { TargetInfo, hostTargetInfo, unifyTypeProfile, substituteTypeProfile, typeNameOfProfile, typeDisplayNameProfile, getPropertyProfile, findVariantByFieldNameProfile } from "./types";
 import { findAllExtensionsByNameProfile } from "./context";
 import { checkCallExprProfile } from "./callResolve";
-import { instantiateProfile, instantiateTimings, lookupModuleCtx } from "./instantiate";
+import { instantiateProfile, instantiateTimings, lookupModuleCtx, resetInstantiationState } from "./instantiate";
 import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbTypeCheck, TransAmDb } from "../compiler/transam/index";
 import { opMark, opsFrom, replayOps, KeyedOp } from "../codegen/c/types";
 
@@ -892,6 +892,7 @@ function sharedPreludeShape(ctx: CheckerContext): string {
 }
 
 test "a graph check leaves the prelude every build shares as it found it" {
+	resetInstantiationState();
 	const shared = preludeContextFor("", ".cms");
 	const before = sharedPreludeShape(shared);
 	const entries: MapEntry[] = [];
