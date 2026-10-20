@@ -1,6 +1,7 @@
 // Parity program — a distinct type over an integer, char, boolean or enum keys a Map, Set or
 // HashSet with its base's hash, through any depth of distinct; a distinct over another base keys
-// one once it declares an exported hash.
+// one once it declares an exported hash. Equality is not inherited: each key delegates an
+// exported `==`, the one the collection's generic code can see.
 //
 // @stdout: user=a,1 admin=1,1,true,1,1 flag=1,1 ch=1,1 big=1,1 tint=1,-1,1 score=2,true,false
 // @exit: 0
@@ -13,6 +14,14 @@ type Big = distinct int64;
 enum Color { Red, Green }
 type Tint = distinct Color;
 type Score = distinct float64;
+
+@delegate export function `==`(this a: UserId, b: UserId): boolean;
+@delegate export function `==`(this a: AdminId, b: AdminId): boolean;
+@delegate export function `==`(this a: Flag, b: Flag): boolean;
+@delegate export function `==`(this a: Ch, b: Ch): boolean;
+@delegate export function `==`(this a: Big, b: Big): boolean;
+@delegate export function `==`(this a: Tint, b: Tint): boolean;
+@delegate export function `==`(this a: Score, b: Score): boolean;
 
 export function hash(this s: Score): int64 { return Math.floor(s as float64) as int64; }
 
