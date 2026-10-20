@@ -195,6 +195,20 @@ export enum RaiserOpcode {
 	NeVal,            // ABC: if !raiserEqual(R[A], R[B]) skip C
 }
 
+export enum RaiserRegClass {
+	Word,
+	Ref,
+	Dyn,
+}
+
+export function regClassLetter(cls: RaiserRegClass): string {
+	return match (cls) {
+		RaiserRegClass.Word => "W",
+		RaiserRegClass.Ref => "R",
+		RaiserRegClass.Dyn => "D",
+	};
+}
+
 export enum RaiserConvClass {
 	F64,
 	I64,

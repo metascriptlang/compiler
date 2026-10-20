@@ -2,6 +2,8 @@
 // Day-1: flat tagged interface. No NaN-boxing.
 // Bool stored as intVal (0/1) to keep the interface simple.
 
+import { RaiserRegClass } from "./bytecode";
+
 
 export enum RaiserValueKind {
 	Nil,
@@ -90,6 +92,15 @@ export function raiserFieldAddrAt(handle: int64, nameHandle: int64): RaiserValue
 
 export function fieldAddrName(v: RaiserValue): string {
 	return constText(v.floatVal as int64);
+}
+
+export function kindFitsClass(kind: RaiserValueKind, cls: RaiserRegClass): boolean {
+	return match (kind) {
+		RaiserValueKind.Bool | RaiserValueKind.Int | RaiserValueKind.Float => cls != RaiserRegClass.Ref,
+		RaiserValueKind.Nil | RaiserValueKind.String | RaiserValueKind.Array | RaiserValueKind.Object | RaiserValueKind.Future => cls != RaiserRegClass.Word,
+		RaiserValueKind.RegAddr | RaiserValueKind.GlobalAddr | RaiserValueKind.ElemAddr | RaiserValueKind.FieldAddr => cls == RaiserRegClass.Dyn,
+		_ => { throw new Error(`internal: value kind ${kind} has no register class`); },
+	};
 }
 
 export function heldHandle(v: RaiserValue): RaiserValue {

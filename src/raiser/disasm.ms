@@ -1,7 +1,7 @@
 // Raiser VM — Disassembler
 // Human-readable bytecode formatting for debugging and test output.
 
-import { RaiserOpcode, RaiserInstruction, raiserABC, raiserABx, raiserAx, getBx, getSignedAx, immField, immValue, isBranchI64, branchField, branchOffset } from "./bytecode";
+import { RaiserOpcode, RaiserInstruction, regClassLetter, raiserABC, raiserABx, raiserAx, getBx, getSignedAx, immField, immValue, isBranchI64, branchField, branchOffset } from "./bytecode";
 import { raiserInt, raiserToString, createArrayHeap } from "./value";
 import {
 	RaiserModule, RaiserFunction,
@@ -168,7 +168,9 @@ export function disasmInst(inst: RaiserInstruction): string {
 
 // Disassemble a function to a single string (for test assertions)
 export function disasmFunc(func: RaiserFunction): string {
-	let result = `; ${getFuncName(func)}\n`;
+	let classes = "";
+	for (const cls of func.regClasses) classes = classes + regClassLetter(cls);
+	let result = `; ${getFuncName(func)} classes=${classes}\n`;
 	const len = getFuncCodeLen(func);
 	const constants = createArrayHeap();
 	for (let i = 0; i < len; i = i + 1) {
