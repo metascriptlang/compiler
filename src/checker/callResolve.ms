@@ -2,7 +2,7 @@
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
 import { refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
-import { AwaitExprData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
+import { AwaitExprData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem, monoConcreteTypeName } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
@@ -960,6 +960,7 @@ function checkPromiseConstruction(ctx: CheckerContext, node: Node, expected: Typ
 
 export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | null): Type {
 	const d = node.data as NewExprData;
+	d.newArguments = inlineLiteralSpreads(d.newArguments);
 	// new BuiltinType<...>() — construct value types (Map, Set) and Promise
 	if (d.newCallee.kind == NodeKind.Identifier) {
 		const id = d.newCallee.data as IdentifierData;
@@ -1194,6 +1195,27 @@ function requiredCtorArgs(formals: Type[], defaults: Node[] | null): int32 {
 	return required;
 }
 
+function inlineLiteralSpreads(args: Node[]): Node[] {
+	let found = false;
+	for (const a of args) { if (isLiteralSpread(a)) { found = true; break; } }
+	if (!found) return args;
+	const out: Node[] = [];
+	for (const a of args) pushEffectiveArg(out, a);
+	return out;
+}
+
+function isLiteralSpread(a: Node): boolean {
+	return a.kind == NodeKind.SpreadExpr && (a.data as SpreadExprData).spreadArg.kind == NodeKind.ArrayLiteral;
+}
+
+function pushEffectiveArg(out: Node[], a: Node): void {
+	if (!isLiteralSpread(a)) {
+		out.push(a);
+		return;
+	}
+	for (const e of ((a.data as SpreadExprData).spreadArg.data as ArrayLiteralData).elements) pushEffectiveArg(out, e);
+}
+
 function checkNewArity(ctx: CheckerContext, node: Node, classSym: Symbol, innerType: Type | null, routine: Symbol | null, defaultsFrom: Symbol | null): void {
 	const args = (node.data as NewExprData).newArguments;
 	if (hasFlag(classSym, SymbolFlag.ImportC)) return;
@@ -1342,7 +1364,9 @@ export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 	const identsFrom = tracker.argIdents.length;
 	const readsFrom = tracker.pendingReads.length;
 	if (node.kind == NodeKind.CallExpr) {
-		for (const arg of (node.data as CallExprData).arguments) if (arg.kind == NodeKind.Identifier) tracker.argIdents.push(arg);
+		const cd = node.data as CallExprData;
+		cd.arguments = inlineLiteralSpreads(cd.arguments);
+		for (const arg of cd.arguments) if (arg.kind == NodeKind.Identifier) tracker.argIdents.push(arg);
 	}
 	let r = checkCallExprInner(ctx, node, adoptPromiseInputs(ctx, node, expectedType));
 	refusePromiseOfThenable(ctx, node, r);

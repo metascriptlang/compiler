@@ -8,7 +8,6 @@
 //  5. nullishCoalesce       — sees already-lowered optional chains
 //  6. stringTruthiness      — normalize bare conditions after coercions
 //  8. destructuringLower    — unpack array/object patterns before forOf/result
-//  9. spreadExpand          — inline array literal spreads after destructuring
 // 11. forLoopLower          — normalize for→while before forOf
 // 12. forOfLower            — desugars for-of to while
 // 13. resultDesugar         — 1:N expansion of try expressions
@@ -53,7 +52,6 @@ import { lowerStringTruthiness, instanceFieldInitializers, lowerMovedFieldInitTr
 import { eraseBrandTypes } from "./coercion/brandErase";
 import { lowerImplicitConv } from "./coercion/implicitConvLower";
 import { lowerDestructuring } from "./desugar/destructuringLower";
-import { lowerSpread } from "./desugar/spreadExpand";
 import { lowerObjectSpread } from "./desugar/objectSpreadLower";
 import { lowerArraySpread } from "./desugar/arraySpreadLower";
 import { lowerForLoop } from "./lowering/forLoopLower";
@@ -143,7 +141,6 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerStringTruthiness(result, ctx);
 	result = lowerRestParams(result, ctx);
 	result = lowerDestructuring(result, ctx);
-	result = lowerSpread(result, ctx);
 	if (!jsBackend) { result = lowerForLoop(result, ctx); }
 	result = lowerForOf(result, ctx);
 	result = lowerTryExpr(result, ctx);

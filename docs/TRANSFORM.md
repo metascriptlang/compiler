@@ -87,7 +87,6 @@ Order is the exact `index.ms` sequence. **Backend**: `both` / `C` (C + Raiser, i
 | 7 | stringTruthiness | `coercion/stringTruthiness.ms` | both | `if (str)` → `if (str.length > 0)` |
 | 8 | restParamLower | `lowering/restParamLower.ms` | both | rest param `...args` → call-site varargs array packing |
 | 9 | destructuringLower | `desugar/destructuringLower.ms` | both | `const [a,b] = f()` → temp + indexed access |
-| 10 | spreadExpand | `desugar/spreadExpand.ms` | both | `fn(...[a,b])` → `fn(a,b)` (array-literal spread inline) |
 | 11 | arrayMethodInline | `desugar/arrayMethodInline.ms` | C | `arr.map/filter/reduce` → inline `while` loops |
 | 12 | forLoopLower | `lowering/forLoopLower.ms` | C | `for(init;cond;upd)` → `{ init; while(cond){ body; upd; } }` |
 | 13 | forOfLower | `lowering/forOfLower.ms` | C | `for (x of arr)` → `while` + iterator |

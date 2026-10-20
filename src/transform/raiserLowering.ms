@@ -16,7 +16,6 @@ import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
 import { lowerTypeCoercion } from "./coercion/typeCoercion";
 import { lowerRestParams } from "./lowering/restParamLower";
 import { lowerDestructuring } from "./desugar/destructuringLower";
-import { lowerSpread } from "./desugar/spreadExpand";
 import { lowerForLoop } from "./lowering/forLoopLower";
 import { lowerForOf } from "./lowering/forOfLower";
 import { retargetJumps } from "./lowering/jumpRetarget";
@@ -69,7 +68,6 @@ function lowerForRaiser(program: Node, ctx: TransformContext): Node {
 	result = materializeMaybeReads(result, ctx);
 	result = lowerTypeCoercion(result, ctx);
 	result = lowerDestructuring(result, ctx);
-	result = lowerSpread(result, ctx);
 	result = lowerForLoop(result, ctx);
 	result = lowerForOf(result, ctx);
 	result = lowerTryExpr(result, ctx);
