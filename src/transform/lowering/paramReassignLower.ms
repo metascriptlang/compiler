@@ -1,7 +1,8 @@
 // Param Reassign Lowering (C backend) — the DRC analyzer models params as
 // borrowed slots that are never destroyed, so assigning an owned value into a
-// param leaks it. Redirect assigned params through an owned shadow local; the
-// analyzer's existing local sink/destroy handling then applies unchanged.
+// param leaks it, and a `ref` or `out` formal that writes it frees the caller's
+// value. Redirect such params through an owned shadow local; the analyzer's
+// existing local sink/destroy handling then applies unchanged.
 //
 // function f(s: string): int32 {
 //     s = s + "x";
@@ -18,7 +19,7 @@ import {
 	Node, NodeKind, DeclKind, Symbol, SymbolKind, TypeKind,
 	FunctionDeclData, MethodDeclData, ConstructorDeclData,
 	ArrowFunctionData, FunctionExprData,
-	BinaryExprData, UpdateExprData, IdentifierData,
+	BinaryExprData, UpdateExprData, IdentifierData, HiddenDerefData, CallExprData, OutExprData,
 } from "../../ast/node";
 import { TransformContext, freshOwnedSym } from "../context";
 import { walkNode, mapChildren } from "../walker";
@@ -92,6 +93,10 @@ function collectAssigned(n: Node, params: string[], out: Symbol[]): void {
 	} else if (n.kind == NodeKind.UpdateExpr) {
 		const ud = n.data as UpdateExprData;
 		recordTarget(ud.updateArg, params, out);
+	} else if (n.kind == NodeKind.HiddenAddr) {
+		recordTarget((n.data as HiddenDerefData).expr, params, out);
+	} else if (n.kind == NodeKind.CallExpr) {
+		recordAddressArgs(n.data as CallExprData, params, out);
 	}
 	mapChildren(n, (c: Node): Node => {
 		collectAssigned(c, params, out);
@@ -119,6 +124,18 @@ function recordTarget(target: Node, params: string[], out: Symbol[]): void {
 	}
 	const targetSym = target.resolvedSym;
 	out.push(targetSym!);
+}
+
+function recordAddressArgs(d: CallExprData, params: string[], out: Symbol[]): void {
+	let t = d.callee != null ? d.callee.nodeType : null;
+	if ((t == null || t.kind != TypeKind.Function) && d.callee != null && d.callee.resolvedSym != null) t = d.callee.resolvedSym.symbolType;
+	if (t == null || t.kind != TypeKind.Function) return;
+	for (let i = 0; i < d.arguments.length && i < t.typeChildren.length; i += 1) {
+		const formal = t.typeChildren[i];
+		const arg = d.arguments[i];
+		if (formal == null || formal.kind != TypeKind.Var || arg == null) continue;
+		recordTarget(arg.kind == NodeKind.OutExpr ? (arg.data as OutExprData).outArg : arg, params, out);
+	}
 }
 
 function isAssignOp(op: string): boolean {
