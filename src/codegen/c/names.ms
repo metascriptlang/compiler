@@ -7,6 +7,7 @@
 import { Symbol, SymbolKind } from "../../ast/node";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../../checker/symbol";
 import { noneType } from "../../checker/types";
+import { isAbsolute, relative } from "std/fs/path";
 
 
 // ===== C Keywords — identifiers that need escaping =====
@@ -186,7 +187,52 @@ function isLowerOrDigit(ch: string): boolean {
 // a-z, 0-9 pass through; / → Z; . → O;
 // everything else (A-Z, _, special) → ord(c) as decimal string.
 
+export interface ModuleNameRoots {
+	compiler: string;
+	packages: string;
+	project: string;
+}
+
+let moduleNameRoots: ModuleNameRoots = { compiler: "", packages: "", project: "" };
+
+export function setModuleNameRoots(roots: ModuleNameRoots): void {
+	moduleNameRoots = roots;
+}
+
+function pathUnder(path: string, root: string): string {
+	if (root == "" || !path.startsWith(`${root}/`)) return "";
+	return path.slice(root.byteLength + 1, path.byteLength);
+}
+
+interface RootedModulePath {
+	mark: string;
+	path: string;
+}
+
+function rootModulePath(modulePath: string, roots: ModuleNameRoots): RootedModulePath {
+	if (!isAbsolute(modulePath)) return { mark: "", path: modulePath };
+	const inCompiler = pathUnder(modulePath, roots.compiler);
+	if (inCompiler != "") return { mark: "S", path: inCompiler };
+	const inPackages = pathUnder(modulePath, roots.packages);
+	if (inPackages != "") return { mark: "P", path: inPackages };
+	if (roots.project == "") return { mark: "", path: modulePath };
+	return { mark: "", path: relative(roots.project, modulePath) };
+}
+
+export function moduleDisplayPath(modulePath: string): string {
+	return rootModulePath(modulePath, moduleNameRoots).path;
+}
+
 export function mangleModuleName(modulePath: string): string {
+	return mangleRootedModuleName(modulePath, moduleNameRoots);
+}
+
+function mangleRootedModuleName(modulePath: string, roots: ModuleNameRoots): string {
+	const rooted = rootModulePath(modulePath, roots);
+	return rooted.mark + encodeModulePath(rooted.path);
+}
+
+function encodeModulePath(modulePath: string): string {
 	let result = "";
 	for (let i = 0; i < modulePath.byteLength; i += 1) {
 		const ch = modulePath.charAt(i);
@@ -669,3 +715,13 @@ test "windows drive letter does not produce digit-leading identifier" {
 test "underscore becomes ordinal" { assert mangleModuleName("my_mod") == "my95mod"; }
 
 test "full path with mixed case" { assert mangleModuleName("src/codegen/MyGen") == "srcZcodegenZ77y71en"; }
+
+test "a module name is spelled from its root, so a std module and a same-named project module stay apart" {
+	const roots: ModuleNameRoots = { compiler: "/msc", packages: "/pkgs", project: "/proj" };
+	assert mangleRootedModuleName("/msc/std/a.ms", roots) == "SstdZaOms";
+	assert mangleRootedModuleName("/proj/std/a.ms", roots) == "stdZaOms";
+	assert mangleRootedModuleName("/pkgs/p/a.ms", roots) == "PpZaOms";
+	assert mangleRootedModuleName("/proj/sub/a.ms", roots) == "subZaOms";
+	assert mangleRootedModuleName("/other/a.ms", roots) == "OOZotherZaOms";
+	assert mangleRootedModuleName("/proj/std/a.ms", { compiler: "", packages: "", project: "" }) == "ZprojZstdZaOms";
+}

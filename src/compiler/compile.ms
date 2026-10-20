@@ -24,7 +24,7 @@ import { RaiserModule } from "../raiser/module";
 import { RaiserPrintSink } from "../raiser/marshal";
 import { RaiserValueKind } from "../raiser/value";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission, replayCModuleEmission } from "../codegen/c/index";
-import { isModuleGlobalVar, mangledFunctionName, mangledGlobalName, mangleModuleName, mangleProcName, mangleQualified, safeName } from "../codegen/c/names";
+import { isModuleGlobalVar, mangledFunctionName, mangledGlobalName, mangleModuleName, mangleProcName, mangleQualified, safeName, setModuleNameRoots, moduleDisplayPath } from "../codegen/c/names";
 import { aliveSetHasDecl, aliveSetHasModule, aliveSetHasNamed, aliveSetImportsC, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
@@ -57,7 +57,7 @@ import { registerPreludeStampFn, preludePackKey, preludePackStamp, packRoot, try
 import { modulePassIdentity } from "../checker/prelude";
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
-import { registrySrcPath, gitSrcPath } from "./package/cache";
+import { registrySrcPath, gitSrcPath, cacheRoot } from "./package/cache";
 import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
 import { dbLower } from "./transam/index";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
@@ -406,8 +406,23 @@ export function setGraphLoadTiming(on: boolean): void {
 	graphLoadTiming = on;
 }
 
+function moduleNameProjectRoot(entryPath: string, projectRoot: string): string {
+	const entry = canonicalModulePath(entryPath);
+	if (projectRoot != "" && exists(join(projectRoot, "build.ms"))) {
+		const root = canonicalModulePath(projectRoot);
+		if (entry.startsWith(`${root}/`)) return root;
+	}
+	return dirname(entry);
+}
+
 function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliOptions, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, session: CheckSession | null = null): ModuleGraph {
 	if (opts.verbose) verboseLog(`loading module graph from ${entryPath}`);
+	const packages = cacheRoot();
+	setModuleNameRoots({
+		compiler: config.stdPath != "" ? dirname(config.stdPath) : "",
+		packages: packages != "" ? `${packages}/extracted` : "",
+		project: moduleNameProjectRoot(entryPath, opts.projectRoot),
+	});
 	const provider = createFileSystemProvider();
 
 	// Load preludes FIRST so they end up at the start of graph.loadOrder.
@@ -1442,8 +1457,6 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
 	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo);
 	const outDir = outputDir != "" ? outputDir : "out";
-	// Project root for deriving module IDs
-	const projectRoot = config.stdPath.length > 4 ? config.stdPath.slice(0, config.stdPath.length - 4) : dirname(entryPath);
 
 	// Collect all external @import entries (from .jms files), dedup by modulePath
 	const extImportKeys: string[] = [];
@@ -1528,7 +1541,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const transformed = transformProgram(unitPrograms[ui], unitCtxs[ui], true);
 		exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
 
-		const moduleId = replaceExt(relative(projectRoot, modPath), "");
+		const moduleId = replaceExt(moduleDisplayPath(modPath), "");
 		const result = generateJSBundleModule(transformed, modPath, opts.sourcemap, helpers, dynamicPlan);
 		if (hasTopLevelAwait(transformed)) {
 			anyTopLevelAwait = true;
