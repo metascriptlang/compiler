@@ -531,7 +531,7 @@ export function nullableUnionOf(members: Type[]): Type {
 	for (const member of members) {
 		if (member == null) continue;
 		const nested = nestedUnionOf(member);
-		const m = nested != null ? nested : member;
+		const m = nested != null ? nested : peelTransparentInstance(member);
 		if (m.kind == TypeKind.Null) { sawNull = true; continue; }
 		if (isMaybeType(m) && m.typeReturn != null) {
 			sawNull = true;
@@ -608,7 +608,7 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 	// codegen falls back to a literal tagged union.
 	let needsFlatten = false;
 	for (const ut of types) {
-		if (nestedUnionOf(ut) != null) { needsFlatten = true; break; }
+		if (nestedUnionOf(ut) != null || (ut != null && peelTransparentInstance(ut) != ut)) { needsFlatten = true; break; }
 	}
 	let flat: Type[] = types;
 	if (needsFlatten) {
@@ -620,7 +620,7 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 					if (inner != null) flat.push(inner);
 				}
 			} else if (ut != null) {
-				flat.push(ut);
+				flat.push(peelTransparentInstance(ut));
 			}
 		}
 	}
