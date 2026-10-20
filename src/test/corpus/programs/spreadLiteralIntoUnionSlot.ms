@@ -1,3 +1,4 @@
+// @xfail(raiser): typeof cannot tell a function from an object on Raiser: 'object' and 'function' variants share Raiser value kind 6, card .inbox/compiler/2026-10-15-raiser-typeof-cannot-tell-a-function-from-an-object
 // @stdout: paint 0.75:2 0.5:2 0.5:5 1:4 0.25:6 0.5:2 fn 0.125
 // @stdout: card 0.75 0.5 | alias 0.5:3 | generic 0.75:2 0.5:9
 // @stdout: nullable got:a got:a:7 none
