@@ -1,11 +1,12 @@
 // Effects are read from checked bodies, and a callee later in the module is not
 // checked yet where its caller is: queue a check with deferEffectCheck.
 
-import { ArrowFunctionData, CallExprData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, PropertyDeclData, Symbol, SymbolKind, Type } from "../ast/node";
+import { ArrowFunctionData, CallExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, PropertyDeclData, Symbol, SymbolKind, Type } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, dispatchEntryFor, dispatchOverridesFor } from "./context";
 import { SymbolFlag, hasFlag, parentClassSymOf } from "./symbol";
-import { isAtomicRef, isSendableFunction, typeCarriesRef } from "./types";
+import { functionSlotOf, isAtomicRef, isSendableFunction, typeCarriesRef } from "./types";
+import { constBindingInitializer } from "./constFold";
 
 export enum Effect {
 	SideEffect,
@@ -30,6 +31,7 @@ function emptyTable(): EffectTable {
 let sideTable: EffectTable = emptyTable();
 let spawnTable: EffectTable = emptyTable();
 let assumedOpen = false;
+let ownParams: string[] = [];
 interface DeferredCheck {
 	site: Node;
 	check: (ctx: CheckerContext) => void;
@@ -70,6 +72,66 @@ export function routineBody(decl: Node | null): Node | null {
 		NodeKind.FunctionExpr => (decl.data as FunctionExprData).funcExprBody,
 		_ => null,
 	};
+}
+
+function routineParams(decl: Node): string[] {
+	return match (decl.kind) {
+		NodeKind.FunctionDecl => (decl.data as FunctionDeclData).params,
+		NodeKind.MethodDecl => (decl.data as MethodDeclData).methodParams,
+		NodeKind.ConstructorDecl => (decl.data as ConstructorDeclData).ctorParams,
+		NodeKind.ArrowFunction => (decl.data as ArrowFunctionData).arrowParams,
+		NodeKind.FunctionExpr => (decl.data as FunctionExprData).funcExprParams,
+		_ => [],
+	};
+}
+
+function isRoutineNode(n: Node): boolean {
+	return n.kind == NodeKind.FunctionDecl || n.kind == NodeKind.MethodDecl || n.kind == NodeKind.ConstructorDecl
+		|| n.kind == NodeKind.ArrowFunction || n.kind == NodeKind.FunctionExpr;
+}
+
+function walkRoutine(decl: Node | null, e: Effect): EffectCause | null {
+	if (decl == null) return null;
+	const outer = ownParams;
+	ownParams = routineParams(decl);
+	const c = walkEffect(routineBody(decl), e);
+	ownParams = outer;
+	return c;
+}
+
+function walkNestedRoutine(decl: Node, e: Effect): EffectCause | null {
+	const outer = ownParams;
+	ownParams = routineParams(decl);
+	const c = walkChildren(decl, e);
+	ownParams = outer;
+	return c;
+}
+
+function isOwnParam(n: Node | null): boolean {
+	if (n == null || n.kind != NodeKind.Identifier) return false;
+	const sym = n.resolvedSym;
+	return sym != null && sym.symbolKind == SymbolKind.Parameter && ownParams.includes(sym.name);
+}
+
+function peelConv(n: Node): Node {
+	let cur = n;
+	while (cur.kind == NodeKind.HiddenStdConv || cur.kind == NodeKind.HiddenDeref) {
+		cur = cur.kind == NodeKind.HiddenStdConv ? (cur.data as HiddenStdConvData).convExpr : (cur.data as HiddenDerefData).expr;
+	}
+	return cur;
+}
+
+function argumentEffect(arg: Node, e: Effect): EffectCause | null {
+	if (functionSlotOf(arg.nodeType) == null) return null;
+	if (e == Effect.SpawnUnsafe && isSendableFunction(arg.nodeType)) return null;
+	const a = peelConv(arg);
+	if (isRoutineNode(a) || isOwnParam(a)) return null;
+	if (a.kind == NodeKind.Identifier && a.resolvedSym != null) {
+		if (isRoutine(a.resolvedSym)) return null;
+		const bound = constBindingInitializer(a.resolvedSym);
+		if (bound != null && isRoutineNode(peelConv(bound))) return walkEffect(peelConv(bound), e);
+	}
+	return cause(arg, "passes a function value");
 }
 
 export function receiverOf(call: Node): Node | null {
@@ -136,7 +198,7 @@ function memo(sym: Symbol, e: Effect, compute: () => EffectCause | null): Effect
 }
 
 export function routineEffect(sym: Symbol, e: Effect): EffectCause | null {
-	return memo(sym, e, (): EffectCause | null => walkEffect(routineBody(unpackDecl(sym.declNode)), e));
+	return memo(sym, e, (): EffectCause | null => walkRoutine(unpackDecl(sym.declNode), e));
 }
 
 export function constructionEffect(classSym: Symbol, e: Effect): EffectCause | null {
@@ -150,7 +212,7 @@ export function constructionEffect(classSym: Symbol, e: Effect): EffectCause | n
 			if (member.kind == NodeKind.PropertyDecl && !(member.data as PropertyDeclData).propIsStatic) {
 				c = walkEffect((member.data as PropertyDeclData).propInitializer, e);
 			} else if (member.kind == NodeKind.ConstructorDecl) {
-				c = walkEffect((member.data as ConstructorDeclData).ctorBody, e);
+				c = walkRoutine(member, e);
 			}
 			if (c != null) return c;
 		}
@@ -180,6 +242,7 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 	if (isSuperCall(callee)) return null;
 	const sym = call.resolvedSym;
 	if (!isRoutine(sym)) {
+		if (isOwnParam(callee)) return null;
 		const valueType: Type | null = callee != null ? callee.nodeType : null;
 		if (e == Effect.SpawnUnsafe && isSendableFunction(valueType)) return null;
 		return cause(call, "calls a function value");
@@ -191,6 +254,10 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 	}
 	const name = callee != null && callee.kind == NodeKind.Identifier ? (callee.data as IdentifierData).name
 		: callee != null && callee.kind == NodeKind.MemberExpr ? (callee.data as MemberExprData).property : sym!.name;
+	for (const arg of (call.data as CallExprData).arguments) {
+		const passed = argumentEffect(arg, e);
+		if (passed != null) return through(call, "calls '" + name + "'", passed);
+	}
 	const own = through(call, "calls '" + name + "'", routineEffect(sym!, e));
 	if (own != null) return own;
 	return dispatchedEffect(call, sym!, e);
@@ -212,6 +279,7 @@ function useEffect(node: Node, e: Effect): EffectCause | null {
 
 export function walkEffect(node: Node | null, e: Effect): EffectCause | null {
 	if (node == null) return null;
+	if (isRoutineNode(node)) return walkNestedRoutine(node, e);
 	const here: EffectCause | null = match (node.kind) {
 		NodeKind.Identifier | NodeKind.MemberExpr => useEffect(node, e),
 		NodeKind.CallExpr => callEffect(node, e),
@@ -219,6 +287,10 @@ export function walkEffect(node: Node | null, e: Effect): EffectCause | null {
 		_ => null,
 	};
 	if (here != null) return here;
+	return walkChildren(node, e);
+}
+
+function walkChildren(node: Node, e: Effect): EffectCause | null {
 	const found: (EffectCause | null)[] = [null];
 	forEachChild(node, (child: Node): void => {
 		if (found[0] == null) found[0] = walkEffect(child, e);

@@ -92,3 +92,35 @@ test "sendableFunction: a const scalar or a Locked<T> module binding reaches ano
 	const spawned = shared + "async function f(): Promise<int32> { return await spawn(() => peek(cell) + LIMIT); }";
 	assert warningCount(spawned) == warningCount(shared), "spawn over a const scalar and a Locked<T>";
 }
+
+test "sendableFunction: a callback a routine calls is judged where it is passed" {
+	const HELPERS = "import { lockedUpdate } from \"std/core/promise\";\nlet hits: int32 = 0;\n" +
+		"const cell: Locked<int32> = new Locked<int32>(0);\n" +
+		"function apply(f: (v: int32) => int32, v: int32): int32 { return f(v); }\n" +
+		"function forward(g: (v: int32) => int32, v: int32): int32 { return apply(g, v) + 1; }\n";
+	const quiet = [
+		{ name: "a pure callback to lockedUpdate", body: "lockedUpdate(cell, (v: int32): int32 => v + 1); return 0;" },
+		{ name: "a pure callback to a helper", body: "return apply((v: int32): int32 => v * 2, 1);" },
+		{ name: "a pure callback forwarded twice", body: "return forward((v: int32): int32 => v * 2, 1);" },
+	];
+	for (const row of quiet) {
+		const source = HELPERS + "async function f(): Promise<int32> { return await spawn(() => { " + row.body + " }); }";
+		assert warningCount(source) == warningCount(HELPERS), row.name;
+	}
+	const writes = "(v: int32): int32 => { hits = hits + 1; return v; }";
+	const warned = [
+		{ name: "a writing callback to lockedUpdate", body: "lockedUpdate(cell, " + writes + "); return 0;" },
+		{ name: "a writing callback to a helper", body: "return apply(" + writes + ", 1);" },
+		{ name: "a writing callback forwarded twice", body: "return forward(" + writes + ", 1);" },
+	];
+	for (const row of warned) {
+		const source = HELPERS + "async function f(): Promise<int32> { return await spawn(() => { " + row.body + " }); }";
+		assert hasWarning(source, "uses module-level 'hits'"), row.name;
+	}
+	const escaped = HELPERS + "function later(f: (v: int32) => int32): () => int32 { return (): int32 => f(1); }\n" +
+		"async function g(): Promise<int32> { return await spawn(() => later((v: int32): int32 => v)()); }";
+	assert hasWarning(escaped, "calls a function value"), "a callback called from a closure it escapes into";
+	const opaque = HELPERS + "function pick(): (v: int32) => int32 { return (v: int32): int32 => v; }\n" +
+		"async function g(): Promise<int32> { const h = pick(); return await spawn(() => apply(h, 1)); }";
+	assert hasWarning(opaque, "passes a function value"), "a function value whose body is not visible";
+}
