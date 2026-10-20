@@ -22,48 +22,39 @@ export function distinctMisplacedMessage(line: int32): string {
 
 // ===== Type Annotation Skipping =====
 
-// Skip the trailing `& T & U` of an intersection chain after an atom has already
-// been consumed. Reused by the top-level skipper and by each union member.
 // Erasure-tier — accepted by parser, collapsed by resolver to first operand.
-function skipIntersectionTail(state: ParserState): void {
+function skipIntersectionType(state: ParserState, leavesQuestion: boolean): void {
+	if (leavesQuestion) skipTypeAtomNoOptional(state); else skipTypeAtom(state);
 	while (!isAtEnd(state) && current(state).kind == TokenKind.Amp) {
 		advance(state);
-		skipTypeAtom(state);
+		if (leavesQuestion) skipTypeAtomNoOptional(state); else skipTypeAtom(state);
+	}
+}
+
+function skipUnionType(state: ParserState, leavesQuestion: boolean): void {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
+		advance(state);
+	}
+	skipIntersectionType(state, leavesQuestion);
+	while (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
+		advance(state);
+		skipIntersectionType(state, leavesQuestion);
 	}
 }
 
 export function skipTypeAnnotation(state: ParserState): void {
-	// Leading pipe for discriminated union types: | { ... } | { ... }
-	if (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
-		advance(state);
-	}
-	skipTypeAtom(state);
-
-	// Intersection: T & U & V (binds tighter than union and conditional)
-	skipIntersectionTail(state);
-
-	// Tier 3: Conditional type: T extends U ? A : B
-	// Must be checked BEFORE union pipe so `T extends U ? A : B` isn't split as `T extends U ? A` | `B`
+	skipUnionType(state, false);
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Extends) {
-		advance(state); // consume 'extends'
-		// Skip constraint type WITHOUT consuming '?' (which skipTypeAtom would eat as optional marker)
-		skipTypeAtomNoOptional(state);
+		advance(state);
+		skipUnionType(state, true);
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
-			advance(state); // consume '?'
-			skipTypeAnnotation(state); // skip true branch (recursive — handles nested conditionals)
+			advance(state);
+			skipTypeAnnotation(state);
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Colon) {
-				advance(state); // consume ':'
-				skipTypeAnnotation(state); // skip false branch
+				advance(state);
+				skipTypeAnnotation(state);
 			}
 		}
-		return;
-	}
-
-	// Union types: T | U | V — each member may itself be an intersection (T & U).
-	while (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
-		advance(state);
-		skipTypeAtom(state);
-		skipIntersectionTail(state);
 	}
 }
 
