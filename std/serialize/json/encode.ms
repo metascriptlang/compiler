@@ -12,7 +12,10 @@ import { Node, NodeKind } from "std/meta";
 import { detectUnionDisc, namesStruct, parseDiscKey, unwrapType, implementationOf } from "../discDetect";
 
 function isOptionalField(name: string, optionalFields: string[]): boolean {
-	return optionalFields.indexOf(name) >= 0;
+	for (const f of optionalFields) {
+		if (f == name) return true;
+	}
+	return false;
 }
 
 export macro jsonValueOf(t: Node): Node {
