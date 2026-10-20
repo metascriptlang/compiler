@@ -719,6 +719,14 @@ test "union of generics" { assert skipsType("Result<A, B> | Error"); }
 
 test "optional generic array" { assert skipsType("HashMap<string, number>[]?"); }
 
+test "a conditional type's check and extends types are unions" {
+	assert skipsType("V extends string | number ? \"leaf\" : \"node\"");
+	assert skipsType("V extends string | number | boolean ? 1 : 2");
+	assert skipsType("V extends (string | number) ? 1 : 2");
+	assert skipsType("V extends A & B | C[] ? 1 : V extends D ? 2 : 3");
+	assert skipsType("V | null extends string ? 1 : 2");
+}
+
 // ===== TypeAnnotation Node Tests =====
 
 function annotationKind(typeStr: string): NodeKind {
