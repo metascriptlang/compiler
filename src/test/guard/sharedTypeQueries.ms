@@ -1,7 +1,7 @@
 import { TypeKind } from "../../../std/meta/node";
 import {
-	createArray, createGenericParam, createStruct, hasGenericParams,
-	numberType, setConcurrentTypeQueries, substituteAllParams, substituteType,
+	createArray, createGenericInstance, createGenericParam, createStruct, hasGenericParams,
+	instantiateGenericBody, numberType, setConcurrentTypeQueries, substituteAllParams, substituteType,
 } from "../../checker/types";
 
 class QueryResult {
@@ -14,6 +14,8 @@ class QueryResult {
 }
 
 const shared = createStruct("SharedRecursive", ["value"], [createGenericParam("T")], false);
+const box = createStruct("Box", ["value"], [createGenericParam("T")], false);
+const holder = createStruct("Holder", ["box"], [createGenericInstance(box, [createGenericParam("T")])], false);
 
 function query(rounds: int32): QueryResult {
 	let checks = 0;
@@ -24,7 +26,12 @@ function query(rounds: int32): QueryResult {
 		if (one.kind != TypeKind.Struct || one.typeChildren[0].kind != TypeKind.Number) return new QueryResult(false, checks);
 		const all = substituteAllParams(shared, ["T"], [numberType()]);
 		if (all.kind != TypeKind.Struct || all.typeChildren[0].kind != TypeKind.Number) return new QueryResult(false, checks);
-		checks = checks + 3;
+		const fresh = createGenericInstance(box, [numberType()]);
+		instantiateGenericBody(fresh, "T");
+		if (fresh.typeReturn == null || fresh.typeReturn.typeChildren[0].kind != TypeKind.Number) return new QueryResult(false, checks);
+		const held = substituteAllParams(holder, ["T"], [numberType()]);
+		if (held.kind != TypeKind.Struct || held.typeChildren[0].kind != TypeKind.GenericInstance) return new QueryResult(false, checks);
+		checks = checks + 5;
 		i = i + 1;
 	}
 	return new QueryResult(true, checks);
@@ -46,7 +53,7 @@ function main(): void {
 		if (!result.ok) throw "shared type query mismatch";
 		checks = checks + result.checks;
 	}
-	if (checks != 12000) throw "shared type query count";
+	if (checks != 20000) throw "shared type query count";
 	console.log("GUARD-OK");
 }
 
