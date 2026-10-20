@@ -147,7 +147,8 @@ no Raiser) on installed `msc` v0.3.4 (BUILD `c235d7de9`), plus the r1 batches
 named in a row (Raiser lane on). Cards are `~/metascript/.inbox/compiler/` file
 names without the date; each one names the generator site it parks.
 
-**No row is verified under the acceptance above.** Every row either lacks the
+**No row is verified under the acceptance above** (strict reading; §End-game
+applies the criterion decided on 2026-10-20). Every row either lacks the
 batch report of construct hits for an axis (the report exists since `ffd7c8e01`;
 r0 predates it), or has an axis that is not generated. Every gap below has one
 of three dispositions: a card with a "Done when" (the reopen condition is that
@@ -232,10 +233,11 @@ fixed in `24867fb86`, `2c69e0f28`, `04def4312` and `f5dffc177`.
 The person handed these to the session ("làm một mạch tới end-game"); each
 follows the recommendation that had been put to them.
 
-- **Verified means verified for the generated axes**: a standalone, a SAN and a
-  plant batch, a hits report, and every non-clean program explained by an open
-  card. An axis that is not generated is parked under its card and does not
-  count against the row.
+- **Verified means verified for the generated axes**: a standalone batch with at
+  least 25 of 30 clean and every other program on an open card, a SAN batch 5/5,
+  a plant batch 2/2, a hits report that reaches every construct of the family,
+  and no requested lane skipped by every program of the family. An axis that
+  is not generated is parked under its card and does not count against the row.
 - **T1 and T2 leave this arc.** Each needs a Smith-side adapter (T1 through
   `src/test/guard` bare/solana or `tools/solana`; T2 through an init/reload
   fixture for `src/test/hcr/run.ms`), a NEW MECHANISM whose risk is a build-only
@@ -243,6 +245,59 @@ follows the recommendation that had been put to them.
   approved on its own.
 - **A race may hold a bounded timer.** `raceTimer` (100–150 ms gap between the
   winner and the loser) measured 0/144 flaky, so the C4 oracle allows it.
+
+## End-game — 2026-10-20
+
+**Graduation.** A real Smith finding went the whole way: the card
+`an-awaited-int64-from-an-async-function-is-cut-to-int32-on-c` (Smith G7 scout)
+was fixed in the compiler and pinned by corpus `futureKeepsIntegerWidth`. Two
+more cards with Smith park sites closed the same way:
+`raiser-loses-a-finally-when-a-raise-starts-in-catch-or-finally` (pins
+`finallyRunsAtEveryExit`, `961-finallyPathsOwnException`) and
+`numeric-literal-type-annotation-unresolved` (pins `numericLiteralTypes` and
+three corpus programs). The fixing sessions' unpark notes named the sites;
+`gen.ms` now generates 64-bit scalars and payloads across `await`, futures and
+actor replies, overlapping calls and `Promise.all` at module level, finally
+paths on the Raiser, and integer, negative and fractional literal unions.
+
+Probe of the unparked axes, two seeds each, installed `msc` BUILD `ebe16a0cf`,
+Raiser on:
+
+| vector | clean | the other program |
+|---|---|---|
+| `fams=async types=int32,int64,uint64,float64` | 1/2 | JS `(-(-g2))` emitted as `--g2`: card `js-double-negation-emits-decrement` |
+| `fams=enum` | 1/2 | JS `i0 is not defined`: card `js-a-wide-bitset-update-in-a-conditional-branch-moves-the-for-loop-update-before-the-loop` |
+| `fams=exc`, finally / rethrow / recover weights 60 | 2/2 | — (20 finally blocks, no Raiser skip) |
+| `fams=spawn,actor,race types=int64,uint64,int8` | 2/2 | — |
+
+Not measured: a 30-seed batch per unparked axis (`out/smith/g7/batches.r2.txt`
+waits for a quiet machine) and SAN over them.
+
+**Row verdicts** under the criterion in §Decisions, from the r1 numbers:
+
+| rows | verdict | what holds the row (reopen when it changes) |
+|---|---|---|
+| H6 (`cls`), H11, H13, C1, C2, C4 | verified for the generated axes | — (the C1 64-bit axis has only the probe above) |
+| H6 (`agg`, `gcls`), H7, H10, H12, H14, N1, N2 | parked | hits short of every construct (agg 11/14, gcls 36/38, enum 43/45, coll 18/26, seq 11/38, own 9/16, iter 13/14, native 48/51) |
+| H1, H3, H4 | parked | the core family has no hits report, and the r1 core batch named `bigint`, so the Raiser skipped all of it |
+| H2 | parked | C lane blind on `ternary-hoist-lost-when-else-holds-a-nested-ternary` until the `strExpr` park; Raiser blind on `raiser-string-index-expects-array` |
+| H5, H8, H9 | parked | no SAN batch for `closure`, `union`, `generic`; generic C builds fail on the ternary-hoist card |
+| H15 | parked | project batches 11–14 of 20 clean, no hits report |
+| B1, M1, M2 | parked | meta SAN 4/5 |
+| C3 | parked | every actor program skips the Raiser (no actor constructor there); SAN 4/5 on the `stop-right-after-spawn` use-after-free card |
+| Q1 | parked | the D rows of H7, H11, B1, C3, M1, M2 are not in the catalogue |
+| T1, T2 | out of this arc | the adapters in §Decisions |
+| T3 | environment | only macOS / clang here |
+
+Every gap inside a parked row carries its card or refusal in §G7 row
+dispositions; a parked row reopens when that card lands or the missing batch
+runs.
+
+**Running campaigns.** `tools/smith/campaign.sh <batch file> <run dir>` runs
+`run` batches one at a time on a quiet machine; `tools/smith/campaign.txt` is
+the matrix campaign (r1's 71 batches). Each batch leaves `<name>.log` and
+`<name>.new` (the bundles it wrote) in the run dir; `touch <run dir>/hold`
+before editing `tools/smith/` pauses the next batch.
 
 ## Audit gaps before hardening
 

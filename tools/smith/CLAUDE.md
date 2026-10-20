@@ -29,6 +29,7 @@ msc test tools/smith/gen.ms                                   # generator, featu
 msc test tools/smith/proj.ms                                  # + the module-tree splitter
 msc test tools/smith/diag.ms                                  # + the diagnostic catalogue (main.ms runs its CLI under test; not a test entry)
 msc run tools/smith/main.ms cov 1 20 --msc=out/smith/cov/msc-cov   # per-pass coverage of a batch
+tools/smith/campaign.sh tools/smith/campaign.txt out/smith/r3        # the matrix campaign, one batch at a time on a quiet machine
 ```
 
 `cov` needs a coverage-instrumented compiler and the commit it was built from beside it:
