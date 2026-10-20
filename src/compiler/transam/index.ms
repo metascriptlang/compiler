@@ -1492,6 +1492,47 @@ const w = farValue();');
 	assert localTypeName(after, "w") == "int64";
 }
 
+test "exported field edits reach transitive readers through undo and redo" {
+	const db = createTransAmDb(100);
+	const paths = ["/fields/dep.ms", "/fields/view.ms", "/fields/far.ms", "/fields/stable.ms"];
+	const integerSource = 'export interface Reading { value: int32; }
+export const reading: Reading = { value: 1 };';
+	const stringSource = 'export interface Reading { value: string; }
+export const reading: Reading = { value: "ok" };';
+	dbSetFileText(db, paths[0], integerSource);
+	dbSetFileText(db, paths[1], 'import { reading } from "./dep";
+export const observed = reading.value;');
+	dbSetFileText(db, paths[2], 'import { observed } from "./view";
+export const mirrored = observed;');
+	dbSetFileText(db, paths[3], "export const stable: int32 = 7;");
+	recordModuleImport(
+		db.moduleDeps, getFileId(db.fileInput, paths[1]), getFileId(db.fileInput, paths[0]),
+	);
+	recordModuleImport(
+		db.moduleDeps, getFileId(db.fileInput, paths[2]), getFileId(db.fileInput, paths[1]),
+	);
+	const counts: LowerCount[] = [{ n: 0 }, { n: 0 }, { n: 0 }, { n: 0 }];
+	const names = ["reading", "observed", "mirrored", "stable"];
+	const snapshots = [integerSource, stringSource, integerSource, stringSource];
+	const types = ["int32", "string", "int32", "string"];
+	for (let i = 0; i < snapshots.length; i++) {
+		dbSetFileText(db, paths[0], snapshots[i]);
+		for (const path of paths) dbParse(db, path);
+		const expectedTypes = ["Reading", types[i], types[i], "int32"];
+		for (let j = 0; j < paths.length; j++) {
+			const ctx = dbTypeCheck(db, paths[j]);
+			assert ctx.errors.length == 0;
+			assert localTypeName(ctx, names[j]) == expectedTypes[j];
+			const lowered = dbLower(db, paths[j], countLowering, counts[j]);
+			const expectedCount = j == 3 ? 1 : i + 1;
+			assert counts[j].n == expectedCount;
+			assert dbLower(db, paths[j], countLowering, counts[j]) == lowered;
+			assert dbTypeCheck(db, paths[j]) == ctx;
+			assert counts[j].n == expectedCount;
+		}
+	}
+}
+
 test "a line shift in a module rechecks it at the new positions" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "/shift/a.ms", "export function one(): int32 { return 1; }");
