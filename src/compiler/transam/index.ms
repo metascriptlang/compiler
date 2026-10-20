@@ -1179,26 +1179,70 @@ test "dbTypeCheck records parse dep with real hash" {
 	assert foundParseDep;
 }
 
-test "whitespace-only edit keeps typecheck green" {
+test "position edits and undo refresh checked spans and lower once per revision" {
 	const db = createTransAmDb(100);
-	dbSetFileText(db, "test.ms", "const x=1;");
-	dbTypeCheck(db, "test.ms");
+	const path = "/reuse/value.ms";
+	const source = "export const value: int32 = 1;";
+	dbSetFileText(db, path, source);
+	dbSetFileText(db, "/reuse/other.ms", "export const other: int32 = 7;");
+	const count: LowerCount = { n: 0 };
+	const first = dbLower(db, path, countLowering, count);
+	const firstCtx = dbTypeCheck(db, path);
+	const initialRevision = db.revision.value;
+	const fileId = getFileId(db.fileInput, path);
+	const kinds: TaQueryKind[] = [TaQueryKind.Parse, TaQueryKind.TypeCheck, TaQueryKind.Lower];
+	assert firstCtx.errors.length == 0;
+	assert localTypeName(firstCtx, "value") == "int32";
+	const firstDecl = (first.data as ProgramData).programStmts[0];
+	assert firstDecl.location.line == 1;
+	assert firstDecl.location.column == 1;
+	assert firstDecl.location.endLine == 1;
+	assert firstDecl.location.endColumn == 31;
+	assert dbLower(db, path, countLowering, count) == first;
+	assert count.n == 1;
 
-	// Add whitespace only
-	dbSetFileText(db, "test.ms", "const  x=1;");
-	dbParse(db, "test.ms");
+	dbSetFileText(db, "/reuse/other.ms", "export const other: int32 = 8;");
+	assert db.revision.value > initialRevision;
+	assert dbLower(db, path, countLowering, count) == first;
+	assert dbTypeCheck(db, path) == firstCtx;
+	assert count.n == 1;
+	for (const kind of kinds) {
+		const entry = cacheGet(db.cache, createQueryKey(kind, fileId));
+		assert entry != null;
+		assert entry.computedAt == initialRevision;
+		assert entry.verifiedAt == db.revision.value;
+	}
 
-	// Whitespace changes token positions but not AST structure
-	// However, the parser may produce different results due to spacing
-	// This test verifies the hash comparison path works correctly either way
-	const checkKey = createQueryKey(TaQueryKind.TypeCheck, 0);
-	const parseKey = createQueryKey(TaQueryKind.Parse, 0);
-	const parseEntry = cacheGet(db.cache, parseKey);
-	const checkEntry = cacheGet(db.cache, checkKey);
-
-	// Parse was recomputed (file changed)
-	assert parseEntry.state == TaQueryState.Green;
-	assert parseEntry.computedAt == 2;
+	const snapshots = ["\n  " + source, source];
+	const lines: int32[] = [2, 1];
+	const columns: int32[] = [3, 1];
+	const ends: int32[] = [33, 31];
+	for (let i = 0; i < snapshots.length; i += 1) {
+		dbSetFileText(db, path, snapshots[i]);
+		const revision = db.revision.value;
+		const lowered = dbLower(db, path, countLowering, count);
+		const ctx = dbTypeCheck(db, path);
+		assert ctx.errors.length == 0;
+		assert localTypeName(ctx, "value") == "int32";
+		const decl = (lowered.data as ProgramData).programStmts[0];
+		assert decl.location.line == lines[i];
+		assert decl.location.column == columns[i];
+		assert decl.location.endLine == lines[i];
+		assert decl.location.endColumn == ends[i];
+		assert count.n == i + 2;
+		dbSetFileText(db, path, snapshots[i]);
+		assert db.revision.value == revision;
+		assert dbLower(db, path, countLowering, count) == lowered;
+		assert dbTypeCheck(db, path) == ctx;
+		assert count.n == i + 2;
+		for (const kind of kinds) {
+			const entry = cacheGet(db.cache, createQueryKey(kind, fileId));
+			assert entry != null;
+			assert entry.state == TaQueryState.Green;
+			assert entry.computedAt == revision;
+			assert entry.verifiedAt == revision;
+		}
+	}
 }
 
 test "syntax error parse still stores hash" {
