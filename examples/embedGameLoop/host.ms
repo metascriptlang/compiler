@@ -1,4 +1,4 @@
-import { createInterpreter, evalModule, selectRoutine, callRoutine, implementRoutine, Interpreter, Routine, RaiserValue, boxInt, boxFloat, boxVoid, unboxInt, unboxFloat } from "../../src/embed/index";
+import { createInterpreter, evalModule, selectRoutine, callRoutine, implementRoutine, Interpreter, Routine, RaiserValue, RaiserHostValue, hostValue, boxInt, boxFloat, boxVoid, unboxInt, unboxFloat } from "../../src/embed/index";
 import { argv, exit } from "std/process";
 
 const BALLS: int32 = 1000;
@@ -14,13 +14,13 @@ function routine(interp: Interpreter, name: string): Routine {
 	return selected.value;
 }
 
-function call(interp: Interpreter, r: Routine, args: RaiserValue[]): RaiserValue {
+function call(interp: Interpreter, r: Routine, args: RaiserHostValue[]): RaiserValue {
 	const result = callRoutine(interp, r, args);
 	if (!result.ok) {
 		console.log(result.error);
 		exit(1);
 	}
-	return result.value;
+	return result.value.root;
 }
 
 function rounded(x: number, scale: number): number {
@@ -50,16 +50,16 @@ if (!evaluated.ok) {
 }
 console.log(`check + compile + run module: ${Math.round(performance.now() - t0)} ms`);
 
-const balls = unboxInt(call(interp, routine(interp, "start"), [boxInt(BALLS)]));
+const balls = unboxInt(call(interp, routine(interp, "start"), [hostValue(boxInt(BALLS))]));
 console.log(`start: ${balls} balls, host saw ${spawnedCount} spawned() calls`);
 
 const update = routine(interp, "update");
-const dt = boxFloat(1.0 / 60.0);
+const dt = hostValue(boxFloat(1.0 / 60.0));
 const t1 = performance.now();
 let frames: int32 = 0;
 for (let f: int32 = 0; f < FRAMES; f += 1) frames = unboxInt(call(interp, update, [dt])) as int32;
 const perFrame = (performance.now() - t1) / (FRAMES as number);
-console.log(`update: ${frames} frames, ${rounded(perFrame, 1000)} ms per frame for ${BALLS} balls, ball 0 at x=${rounded(unboxFloat(call(interp, routine(interp, "ballX"), [boxInt(0)])), 100)}`);
+console.log(`update: ${frames} frames, ${rounded(perFrame, 1000)} ms per frame for ${BALLS} balls, ball 0 at x=${rounded(unboxFloat(call(interp, routine(interp, "ballX"), [hostValue(boxInt(0))])), 100)}`);
 
 const noop = routine(interp, "noop");
 const t2 = performance.now();

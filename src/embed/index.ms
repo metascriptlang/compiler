@@ -7,8 +7,8 @@ import { ModuleError, ErrorSeverity } from "../module/graph";
 import { RaiserModule } from "../raiser/module";
 import { RaiserContext } from "../raiser/context";
 import { RaiserValue, RaiserValueKind } from "../raiser/value";
-import { RaiserHostFn } from "../raiser/marshal";
-import { registerHostFn } from "../raiser/hostRegistry";
+import { RaiserHostFn, RaiserHostValue, copyToHost, copyToVm } from "../raiser/marshal";
+import { registerHostFn, activeHostArrayHeap, activeHostObjectHeap } from "../raiser/hostRegistry";
 import { vmCallFunction, vmDumpStack } from "../raiser/vm";
 import { setHostRuntimeDir, resolveRuntimeDir } from "../utils/path";
 import { writeFile, ensureDir, removeAll, exists } from "std/fs";
@@ -44,7 +44,25 @@ export interface Routine {
 }
 
 export { RaiserValue, RaiserValueKind } from "../raiser/value";
-export { RaiserHostFn, boxInt, boxFloat, boxString, boxBool, boxVoid, unboxInt, unboxFloat, unboxString, unboxBool } from "../raiser/marshal";
+export {
+	RaiserHostFn,
+	RaiserHostValue,
+	boxInt,
+	boxFloat,
+	boxString,
+	boxBool,
+	boxVoid,
+	unboxInt,
+	unboxFloat,
+	unboxString,
+	unboxBool,
+	hostValue,
+	hostObject,
+	hostArray,
+	field,
+	length,
+	at,
+} from "../raiser/marshal";
 
 export function createInterpreter(runtimeRoot: string, searchPaths: string[] = []): Result<Interpreter, string> {
 	if (!exists(join(runtimeRoot, "std/core/system/index.ms"))) {
@@ -112,18 +130,34 @@ export function selectRoutine(interp: Interpreter, name: string): Result<Routine
 	return Result.ok(found);
 }
 
-export function callRoutine(interp: Interpreter, routine: Routine, args: RaiserValue[]): Result<RaiserValue, string> {
+export function callRoutine(interp: Interpreter, routine: Routine, args: RaiserHostValue[]): Result<RaiserHostValue, string> {
 	const run = interp.run;
 	if (run == null || run.mod != routine.mod) return Result.err(`'${routine.name}' was selected before the last evalModule; select it again`);
 	if (args.length != routine.arity) return Result.err(`'${routine.name}' takes ${routine.arity} argument(s), got ${args.length}`);
 	const vm = run.vm!;
-	const result = vmCallFunction(vm, routine.funcIdx, args);
+	const passed: RaiserValue[] = [];
+	for (const arg of args) passed.push(copyToVm(vm.arrayHeap, vm.objectHeap, arg));
+	const result = vmCallFunction(vm, routine.funcIdx, passed);
 	if (vm.error != "") return Result.err(`raiser runtime error in '${routine.name}': ${vm.error}\n${vmDumpStack(vm)}`);
-	return Result.ok(result);
+	return Result.ok(copyToHost(vm.arrayHeap, vm.objectHeap, result));
 }
 
 export function implementRoutine(nativeName: string, impl: RaiserHostFn): void {
 	registerHostFn(nativeName, impl);
+}
+
+export function unboxValue(v: RaiserValue): RaiserHostValue {
+	const arrays = activeHostArrayHeap();
+	const objects = activeHostObjectHeap();
+	if (arrays == null || objects == null) throw new Error("unboxValue reads an argument of a host routine, and no script has called one");
+	return copyToHost(arrays, objects, v);
+}
+
+export function boxValue(v: RaiserHostValue): RaiserValue {
+	const arrays = activeHostArrayHeap();
+	const objects = activeHostObjectHeap();
+	if (arrays == null || objects == null) throw new Error("boxValue builds the result of a host routine, and no script has called one");
+	return copyToVm(arrays, objects, v);
 }
 
 function scratchDir(): string {
@@ -289,10 +323,10 @@ function routineOf(interp: Interpreter, name: string): Routine {
 	return selected.value;
 }
 
-function intCall(interp: Interpreter, routine: Routine, args: RaiserValue[]): number {
+function intCall(interp: Interpreter, routine: Routine, args: RaiserHostValue[]): number {
 	const r = callRoutine(interp, routine, args);
 	if (!r.ok) throw new Error(r.error);
-	return unboxInt(r.value);
+	return unboxInt(r.value.root);
 }
 
 test "callRoutine calls an exported function again and again over the module's state" {
@@ -300,10 +334,10 @@ test "callRoutine calls an exported function again and again over the module's s
 	writeFile(`${dir}/main.ms`, `let total: int32 = 100;\nexport function add(n: int32): int32 { total += n; return total; }\n`);
 	const interp = evaluatedInterpreter(`${dir}/main.ms`);
 	const add = routineOf(interp, "add");
-	assert intCall(interp, add, [boxInt(2)]) == 102;
-	assert intCall(interp, add, [boxInt(3)]) == 105;
-	for (let i = 0; i < 1000; i += 1) intCall(interp, add, [boxInt(1)]);
-	assert intCall(interp, add, [boxInt(0)]) == 1105;
+	assert intCall(interp, add, [hostValue(boxInt(2))]) == 102;
+	assert intCall(interp, add, [hostValue(boxInt(3))]) == 105;
+	for (let i = 0; i < 1000; i += 1) intCall(interp, add, [hostValue(boxInt(1))]);
+	assert intCall(interp, add, [hostValue(boxInt(0))]) == 1105;
 	removeAll(dir);
 }
 
@@ -312,12 +346,12 @@ test "callRoutine passes floats and strings and returns them" {
 	writeFile(`${dir}/main.ms`, `export function step(x: number, dt: number): number { return x + 2.5 * dt; }\n`
 		+ `export function greet(who: string): string { return \`hi \${who}\`; }\n`);
 	const interp = evaluatedInterpreter(`${dir}/main.ms`);
-	const step = callRoutine(interp, routineOf(interp, "step"), [boxFloat(1.0), boxFloat(0.5)]);
+	const step = callRoutine(interp, routineOf(interp, "step"), [hostValue(boxFloat(1.0)), hostValue(boxFloat(0.5))]);
 	assert step.ok;
-	if (step.ok) assert unboxFloat(step.value) == 2.25;
-	const greet = callRoutine(interp, routineOf(interp, "greet"), [boxString("haro")]);
+	if (step.ok) assert unboxFloat(step.value.root) == 2.25;
+	const greet = callRoutine(interp, routineOf(interp, "greet"), [hostValue(boxString("haro"))]);
 	assert greet.ok;
-	if (greet.ok) assert unboxString(greet.value) == "hi haro";
+	if (greet.ok) assert unboxString(greet.value.root) == "hi haro";
 	removeAll(dir);
 }
 
@@ -354,10 +388,10 @@ test "callRoutine refuses a wrong arity and a routine selected before a reload" 
 	if (!wrong.ok) assert wrong.error.includes("takes 1 argument(s), got 0");
 	writeFile(`${dir}/main.ms`, `export function twice(n: int32): int32 { return n * 3; }\n`);
 	assert evalModule(interp, `${dir}/main.ms`).ok;
-	const stale = callRoutine(interp, twice, [boxInt(5)]);
+	const stale = callRoutine(interp, twice, [hostValue(boxInt(5))]);
 	assert !stale.ok;
 	if (!stale.ok) assert stale.error.includes("select it again");
-	assert intCall(interp, routineOf(interp, "twice"), [boxInt(5)]) == 15;
+	assert intCall(interp, routineOf(interp, "twice"), [hostValue(boxInt(5))]) == 15;
 	removeAll(dir);
 }
 
@@ -366,10 +400,10 @@ test "callRoutine returns a runtime error of the routine and the host keeps call
 	writeFile(`${dir}/main.ms`, `const xs: int32[] = [1, 2];\nexport function at(i: int32): int32 { return xs[i]; }\n`);
 	const interp = evaluatedInterpreter(`${dir}/main.ms`);
 	const at = routineOf(interp, "at");
-	const bad = callRoutine(interp, at, [boxInt(7)]);
+	const bad = callRoutine(interp, at, [hostValue(boxInt(7))]);
 	assert !bad.ok;
 	if (!bad.ok) assert bad.error.startsWith("raiser runtime error in 'at'");
-	assert intCall(interp, at, [boxInt(1)]) == 2;
+	assert intCall(interp, at, [hostValue(boxInt(1))]) == 2;
 	removeAll(dir);
 }
 
@@ -382,7 +416,7 @@ test "a script calls a function the host implements" {
 	const dir = scratchDir();
 	writeFile(`${dir}/main.ms`, `extern function record(n: int32): void from "embedTest.record";\nrecord(1);\nexport function tick(n: int32): void { record(n * 10); }\n`);
 	const interp = evaluatedInterpreter(`${dir}/main.ms`);
-	const r = callRoutine(interp, routineOf(interp, "tick"), [boxInt(4)]);
+	const r = callRoutine(interp, routineOf(interp, "tick"), [hostValue(boxInt(4))]);
 	assert r.ok;
 	assert seen.length == 2;
 	assert seen[0] == 1;
