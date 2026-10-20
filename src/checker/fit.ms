@@ -455,6 +455,7 @@ export function fitComparedOperands(ctx: CheckerContext, d: BinaryExprData, left
 	if (leftBase == null && rightBase == null && !leftNamed && !rightNamed) return false;
 	const ops = equality ? ["==", "!=", "===", "!=="] : ["<", "<=", ">", ">="];
 	if (hasGenericParams(leftType) || hasGenericParams(rightType) || declaresComparison(ctx, ops, [leftType, rightType])) return false;
+	if (relationalOperandsFail(ctx, d.operator, left, right) || binaryOperandsFail(ctx, d.operator, left, right)) return false;
 	if (leftBase != null) d.left = wrapInConv(d.left, leftBase);
 	if (rightBase != null) d.right = wrapInConv(d.right, rightBase);
 	if (leftNamed) d.left = asClosure(d.left, left);
