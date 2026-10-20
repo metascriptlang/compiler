@@ -9,7 +9,7 @@
 // Swap to a hash map if profiling shows it matters.
 
 import { RaiserHostFn } from "./marshal";
-import { RaiserObjectHeap, RaiserArrayHeap } from "./value";
+import { RaiserObjectHeap, RaiserArrayHeap, createStructHeap, createArrayHeap } from "./value";
 
 export enum HostCapability {
 	Unsafe,
@@ -136,8 +136,8 @@ export function activeProgramArgv(): string[] | null {
 export function _resetHostRegistryForTests(): void {
 	_registry.entries.length = 0;
 	_registry.initialized = false;
-	_activeObjectHeap = null;
-	_activeArrayHeap = null;
+	_activeObjectHeap = createStructHeap();
+	_activeArrayHeap = createArrayHeap();
 	_activeProgramArgv = null;
 	_hostRaise = null;
 	_hostRaiseFatal = false;
@@ -146,7 +146,7 @@ export function _resetHostRegistryForTests(): void {
 // --- Tests ---
 
 import { RaiserValue } from "./value";
-import { raiserString, raiserInt, RaiserValueKind, createStructHeap, createArrayHeap } from "./value";
+import { raiserConstString, raiserInt, RaiserValueKind, heapStringText } from "./value";
 
 test "register and lookup host fn" {
 	_resetHostRegistryForTests();
@@ -156,9 +156,9 @@ test "register and lookup host fn" {
 	registerHostFn("echo", echoFn);
 	const fn = lookupHostFn("echo");
 	assert fn != null;
-	const result = fn([raiserString("hello")]);
+	const result = fn([raiserConstString("hello")]);
 	assert result.kind == RaiserValueKind.String;
-	assert result.strVal == "hello";
+	assert heapStringText(createArrayHeap(), result) == "hello";
 }
 
 test "lookup missing returns null" {

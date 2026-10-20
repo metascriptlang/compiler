@@ -2386,7 +2386,7 @@ resume_close
 if [ "$record" -eq 1 ]; then
   sha=$(git rev-parse --short HEAD)
   target="$KNOWN"
-  [ "$record_local" -eq 0 ] || { target="$KNOWN_LOCAL"; mkdir -p "$GATES_DIR" || die "--record --local: cannot create $GATES_DIR"; }
+  [ "$record_local" -eq 0 ] || { target="$KNOWN_LOCAL"; mkdir -p "$(dirname "$KNOWN_LOCAL")" || die "--record --local: cannot create the directory of $KNOWN_LOCAL"; }
   [ -f "$target" ] || echo '{}' >"$target.prev"
   [ -f "$target" ] && cp "$target" "$target.prev"
   merged="$OUT/known.merged"

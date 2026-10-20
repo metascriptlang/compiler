@@ -15,7 +15,7 @@ import {
 	createNodeAt
 } from "../../ast/node";
 import { RaiserOpcode, RaiserInstruction, RaiserConvClass, raiserABC, raiserABx, convOperand, fitsImm, immField, branchField } from "../../raiser/bytecode";
-import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
+import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserConstString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
 import { nonNullMemberOfNullable } from "../../checker/compat";
@@ -247,6 +247,12 @@ function emitConvTo(s: RaiserCompState, srcReg: int32, cls: int32, fromCls: int3
 	return dest;
 }
 
+function compileIndex(s: RaiserCompState, index: Node): int32 {
+	const reg = compileExpr(s, index);
+	if (!isFloatExpr(index)) return reg;
+	return emitConvTo(s, reg, RaiserConvClass.I64 as int32, RaiserConvClass.F64 as int32);
+}
+
 function emitNumericConv(s: RaiserCompState, reg: int32, from: Type | null, to: Type | null): int32 {
 	const fromCls = convClassOf(from);
 	const toCls = convClassOf(to);
@@ -372,7 +378,7 @@ function emitHostPair(s: RaiserCompState, name: string, dest: int32, lhs: int32,
 	const a2 = allocReg(s);
 	emitInst(s, raiserABC(RaiserOpcode.Move, a1, lhs, 0));
 	emitInst(s, raiserABC(RaiserOpcode.Move, a2, rhs, 0));
-	emitInst(s, raiserABC(RaiserOpcode.CallHost, out, addConst(s, raiserString(name)), 2));
+	emitInst(s, raiserABC(RaiserOpcode.CallHost, out, addConst(s, raiserConstString(name)), 2));
 	emitInst(s, raiserABC(RaiserOpcode.Move, dest, out, 0));
 }
 
@@ -448,7 +454,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 		NodeKind.StringLiteral => {
 			const d = node.data as StringLiteralData;
 			const reg = allocReg(s);
-			emitLoadConst(s, reg, raiserString(d.value));
+			emitLoadConst(s, reg, raiserConstString(d.value));
 			return reg;
 		},
 		NodeKind.BooleanLiteral => {
@@ -657,7 +663,7 @@ function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 
 		const srcReg = compileExpr(s, right);
 		const ad = left.data as ArrayAccessData;
 		const arrReg = compileExpr(s, ad.array);
-		const idxReg = compileExpr(s, ad.index);
+		const idxReg = compileIndex(s, ad.index);
 		const held = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, held, arrReg, idxReg));
 		const result = emitValueAssign(s, held, srcReg, left.nodeType);
@@ -668,7 +674,7 @@ function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 
 		const srcReg = compileExpr(s, right);
 		const md = left.data as MemberExprData;
 		const objReg = compileExpr(s, md.object);
-		const nameIdx = addConst(s, raiserString(md.property));
+		const nameIdx = addConst(s, raiserConstString(md.property));
 		const held = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.LoadField, held, objReg, nameIdx));
 		const result = emitValueAssign(s, held, srcReg, left.nodeType);
@@ -746,13 +752,13 @@ function compileAddress(s: RaiserCompState, place: Node): int32 {
 		const held = skipModifier(d.array.nodeType);
 		if (held != null && held.kind == TypeKind.Ptr) return compileExpr(s, d.array);
 		const arrReg = compileExpr(s, d.array);
-		const idxReg = compileExpr(s, d.index);
+		const idxReg = compileIndex(s, d.index);
 		emitInst(s, raiserABC(RaiserOpcode.AddrIndex, dest, arrReg, idxReg));
 		return dest;
 	} else if (place.kind == NodeKind.MemberExpr) {
 		const d = place.data as MemberExprData;
 		const objReg = compileExpr(s, d.object);
-		emitInst(s, raiserABC(RaiserOpcode.AddrField, dest, objReg, addConst(s, raiserString(d.property))));
+		emitInst(s, raiserABC(RaiserOpcode.AddrField, dest, objReg, addConst(s, raiserConstString(d.property))));
 		return dest;
 	} else if (place.kind == NodeKind.HiddenDeref) {
 		return compileExpr(s, (place.data as HiddenDerefData).expr);
@@ -810,7 +816,7 @@ function emitObjConv(s: RaiserCompState, node: Node, reg: int32): int32 {
 		queueRaiserCompileError(msg, node.location.line, node.location.column);
 		return emitTrapNil(s, msg);
 	}
-	emitInst(s, raiserABC(RaiserOpcode.ObjConv, reg, addConst(s, raiserString(key)), addConst(s, raiserString(classTargetDisplay(node.nodeType, key)))));
+	emitInst(s, raiserABC(RaiserOpcode.ObjConv, reg, addConst(s, raiserConstString(key)), addConst(s, raiserConstString(classTargetDisplay(node.nodeType, key)))));
 	return reg;
 }
 
@@ -824,7 +830,7 @@ function compileInstanceOf(s: RaiserCompState, node: Node, d: BinaryExprData): i
 	}
 	const held = compileExpr(s, d.left);
 	const dest = allocReg(s);
-	emitInst(s, raiserABC(RaiserOpcode.InstanceOf, dest, held, addConst(s, raiserString(key))));
+	emitInst(s, raiserABC(RaiserOpcode.InstanceOf, dest, held, addConst(s, raiserConstString(key))));
 	return dest;
 }
 
@@ -993,14 +999,14 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		if (d.left.kind == NodeKind.ArrayAccess) {
 			const ad = d.left.data as ArrayAccessData;
 			const arrReg = compileExpr(s, ad.array);
-			const idxReg = compileExpr(s, ad.index);
+			const idxReg = compileIndex(s, ad.index);
 			emitInst(s, raiserABC(RaiserOpcode.StoreIndex, arrReg, idxReg, srcReg));
 			return srcReg;
 		}
 		if (d.left.kind == NodeKind.MemberExpr) {
 			const md = d.left.data as MemberExprData;
 			const objReg = compileExpr(s, md.object);
-			const nameIdx = addConst(s, raiserString(md.property));
+			const nameIdx = addConst(s, raiserConstString(md.property));
 			emitInst(s, raiserABC(RaiserOpcode.StoreField, objReg, nameIdx, srcReg));
 			return srcReg;
 		}
@@ -1091,7 +1097,7 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		const a2 = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.Move, a1, lReg, 0));
 		emitInst(s, raiserABC(RaiserOpcode.Move, a2, rReg, 0));
-		const nameIdx = addConst(s, raiserString(op == "**" ? "pow" : "fmod"));
+		const nameIdx = addConst(s, raiserConstString(op == "**" ? "pow" : "fmod"));
 		emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, 2));
 		const resultCls = convClassOf(node.nodeType);
 		if (resultCls >= 0 && resultCls != (RaiserConvClass.F64 as int32)) return emitConvTo(s, dest, resultCls, RaiserConvClass.F64 as int32);
@@ -1173,7 +1179,7 @@ function compileTypeof(s: RaiserCompState, operand: Node): int32 {
 	}
 	const dest = allocReg(s);
 	const fallback = tags.length > 0 ? tags[tags.length - 1] : typeofTagOf(opType);
-	emitLoadConst(s, dest, raiserString(fallback));
+	emitLoadConst(s, dest, raiserConstString(fallback));
 	const zeroReg = allocReg(s);
 	const isKind = allocReg(s);
 	emitLoadConst(s, zeroReg, raiserInt(0));
@@ -1181,7 +1187,7 @@ function compileTypeof(s: RaiserCompState, operand: Node): int32 {
 		if (tags[i] == fallback) continue;
 		emitInst(s, raiserABC(RaiserOpcode.IsKind, isKind, valReg, kinds[i]));
 		emitInst(s, raiserABC(RaiserOpcode.BeqI64, isKind, zeroReg, 1));
-		emitLoadConst(s, dest, raiserString(tags[i]));
+		emitLoadConst(s, dest, raiserConstString(tags[i]));
 	}
 	return dest;
 }
@@ -1286,7 +1292,7 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 	if (d.left.kind == NodeKind.MemberExpr) {
 		const md = d.left.data as MemberExprData;
 		const objReg = compileExpr(s, md.object);
-		const nameIdx = addConst(s, raiserString(md.property));
+		const nameIdx = addConst(s, raiserConstString(md.property));
 		const tmpReg = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.LoadField, tmpReg, objReg, nameIdx));
 		const strConcat = op == "+=" && (exprIsString(s, d.left) || exprIsString(s, d.right));
@@ -1304,7 +1310,7 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 	if (d.left.kind == NodeKind.ArrayAccess) {
 		const ad = d.left.data as ArrayAccessData;
 		const arrReg = compileExpr(s, ad.array);
-		const idxReg = compileExpr(s, ad.index);
+		const idxReg = compileIndex(s, ad.index);
 		const tmpReg = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, tmpReg, arrReg, idxReg));
 		const rhsReg = compileCompoundOperand(s, op, d.right);
@@ -1524,7 +1530,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	}
 	if (builtinKind == "ModuleImport" && d.arguments.length == 1 && d.arguments[0].kind == NodeKind.StringLiteral) {
 		const dest = allocReg(s);
-		const name = addConst(s, raiserString((d.arguments[0].data as StringLiteralData).value));
+		const name = addConst(s, raiserConstString((d.arguments[0].data as StringLiteralData).value));
 		emitInst(s, raiserABx(RaiserOpcode.ModuleImport, dest, name));
 		return dest;
 	}
@@ -1587,7 +1593,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		const lineReg = allocReg(s);
 		const line = compileEchoLine(s, d.arguments);
 		if (line != lineReg) emitInst(s, raiserABC(RaiserOpcode.Move, lineReg, line, 0));
-		const nameIdx = addConst(s, raiserString("msEprintln"));
+		const nameIdx = addConst(s, raiserConstString("msEprintln"));
 		emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, 1));
 		return dest;
 	}
@@ -1605,7 +1611,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 			if (sym.nativeName != "") checkHostBridgeCoverage(sym, d.callee);
 			const dest = allocReg(s);
 			emitCallArgs(s, dest, hostValues(d.arguments));
-			const nameIdx = addConst(s, raiserString(hostName));
+			const nameIdx = addConst(s, raiserConstString(hostName));
 			emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, d.arguments.length));
 			return dest;
 		}
@@ -1629,7 +1635,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 			for (const a of d.arguments) { allArgs.push(a); }
 			const dest = allocReg(s);
 			emitCallArgs(s, dest, hostValues(allArgs));
-			const nameIdx = addConst(s, raiserString(sym.nativeName));
+			const nameIdx = addConst(s, raiserConstString(sym.nativeName));
 			emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, allArgs.length));
 			return dest;
 		}
@@ -1709,9 +1715,9 @@ function compileDispatchedCall(s: RaiserCompState, node: Node, methodName: strin
 	for (let i = 0; i < d.arguments.length; i += 1) allocReg(s);
 	for (let i = 0; i < d.arguments.length; i += 1) compileExprInto(s, d.arguments[i], dest + 1 + i);
 	const closureReg = allocReg(s);
-	emitInst(s, raiserABC(RaiserOpcode.LoadField, closureReg, dest + 1, addConst(s, raiserString(methodName))));
+	emitInst(s, raiserABC(RaiserOpcode.LoadField, closureReg, dest + 1, addConst(s, raiserConstString(methodName))));
 	const fnReg = allocReg(s);
-	emitInst(s, raiserABC(RaiserOpcode.LoadField, fnReg, closureReg, addConst(s, raiserString("fn"))));
+	emitInst(s, raiserABC(RaiserOpcode.LoadField, fnReg, closureReg, addConst(s, raiserConstString("fn"))));
 	emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, fnReg, d.arguments.length));
 	return dest;
 }
@@ -1724,11 +1730,11 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 
 	// Extract fn field (integer = function index) and env field
 	const fnIdxReg = allocReg(s);
-	const fnConstIdx = addConst(s, raiserString("fn"));
+	const fnConstIdx = addConst(s, raiserConstString("fn"));
 	emitInst(s, raiserABC(RaiserOpcode.LoadField, fnIdxReg, closureReg, fnConstIdx));
 
 	const envReg = allocReg(s);
-	const envConstIdx = addConst(s, raiserString("env"));
+	const envConstIdx = addConst(s, raiserConstString("env"));
 	emitInst(s, raiserABC(RaiserOpcode.LoadField, envReg, closureReg, envConstIdx));
 
 	// Allocate dest + (argCount+1) slots (worst case: env + args) and compute each argument into its slot
@@ -1855,7 +1861,7 @@ function compileUpdateExpr(s: RaiserCompState, node: Node, resultUnused: boolean
 	if (d.updateArg.kind == NodeKind.MemberExpr) {
 		const md = d.updateArg.data as MemberExprData;
 		const objReg = compileExpr(s, md.object);
-		const nameIdx = addConst(s, raiserString(md.property));
+		const nameIdx = addConst(s, raiserConstString(md.property));
 		const oldReg = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.LoadField, oldReg, objReg, nameIdx));
 		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg);
@@ -1866,7 +1872,7 @@ function compileUpdateExpr(s: RaiserCompState, node: Node, resultUnused: boolean
 	if (d.updateArg.kind == NodeKind.ArrayAccess) {
 		const ad = d.updateArg.data as ArrayAccessData;
 		const arrReg = compileExpr(s, ad.array);
-		const idxReg = compileExpr(s, ad.index);
+		const idxReg = compileIndex(s, ad.index);
 		const oldReg = allocReg(s);
 		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, oldReg, arrReg, idxReg));
 		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg);
@@ -1894,7 +1900,7 @@ function compileObjectLiteral(s: RaiserCompState, node: Node): int32 {
 		const fieldType = node.nodeType != null
 			? getProperty(node.nodeType, d.keys[i]) : d.properties[i].nodeType;
 		const valReg = emitValueCopy(s, compileExpr(s, d.properties[i]), fieldType);
-		const nameIdx = addConst(s, raiserString(d.keys[i]));
+		const nameIdx = addConst(s, raiserConstString(d.keys[i]));
 		emitInst(s, raiserABC(RaiserOpcode.StoreField, dest, nameIdx, valReg));
 	}
 	if (d.keys.length == d.properties.length) emitOmittedFieldZeros(s, dest, node.nodeType, d.keys);
@@ -1994,7 +2000,7 @@ function compileStringBytes(s: RaiserCompState, strReg: int32): int32 {
 	const dest = allocReg(s);
 	const arg = allocReg(s);
 	emitInst(s, raiserABC(RaiserOpcode.Move, arg, strReg, 0));
-	const nameIdx = addConst(s, raiserString("msAsBytes"));
+	const nameIdx = addConst(s, raiserConstString("msAsBytes"));
 	emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, 1));
 	return dest;
 }
@@ -2036,7 +2042,7 @@ function compileArrayAccess(s: RaiserCompState, node: Node): int32 {
 		if (bd.operator == ".." || bd.operator == "...") return compileArraySlice(s, d, bd);
 	}
 	const arrReg = compileExpr(s, d.array);
-	const idxReg = compileExpr(s, d.index);
+	const idxReg = compileIndex(s, d.index);
 	const dest = allocReg(s);
 	emitInst(s, raiserABC(RaiserOpcode.LoadIndex, dest, arrReg, idxReg));
 	return dest;
@@ -2097,7 +2103,7 @@ function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 
 	// General field access on objects
 	const objReg = compileExpr(s, d.object);
-	const nameIdx = addConst(s, raiserString(d.property));
+	const nameIdx = addConst(s, raiserConstString(d.property));
 	const dest = allocReg(s);
 	emitInst(s, raiserABC(RaiserOpcode.LoadField, dest, objReg, nameIdx));
 	return dest;
@@ -2140,7 +2146,7 @@ function compileToStringCall(s: RaiserCompState, node: Node): int32 {
 function compileTextOf(s: RaiserCompState, obj: Node): int32 {
 	const objReg = compileStringPart(s, obj);
 	const emptyReg = allocReg(s);
-	emitLoadConst(s, emptyReg, raiserString(""));
+	emitLoadConst(s, emptyReg, raiserConstString(""));
 	const dest = allocReg(s);
 	emitInst(s, raiserABC(RaiserOpcode.ConcatStr, dest, objReg, emptyReg));
 	return dest;
@@ -2184,16 +2190,16 @@ function compileExitCall(s: RaiserCompState, node: Node): int32 {
 function compileMapFatalCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 	const head = allocReg(s);
-	emitLoadConst(s, head, raiserString("fatal error: "));
+	emitLoadConst(s, head, raiserConstString("fatal error: "));
 	const text = allocReg(s);
 	emitInst(s, raiserABC(RaiserOpcode.ConcatStr, text, head, compileExpr(s, d.arguments[0])));
 	const newline = allocReg(s);
-	emitLoadConst(s, newline, raiserString("\n"));
+	emitLoadConst(s, newline, raiserConstString("\n"));
 	emitInst(s, raiserABC(RaiserOpcode.ConcatStr, text, text, newline));
 	const written = allocReg(s);
 	const arg = allocReg(s);
 	emitInst(s, raiserABC(RaiserOpcode.Move, arg, text, 0));
-	emitInst(s, raiserABC(RaiserOpcode.CallHost, written, addConst(s, raiserString("msWriteStderr")), 1));
+	emitInst(s, raiserABC(RaiserOpcode.CallHost, written, addConst(s, raiserConstString("msWriteStderr")), 1));
 	const code = allocReg(s);
 	emitLoadConst(s, code, raiserInt(2));
 	emitInst(s, raiserABC(RaiserOpcode.Halt, code, 1, 0));
@@ -2252,9 +2258,9 @@ function compileStrSlice(s: RaiserCompState, node: Node): int32 {
 // Coerce each argument (ConcatStr with "") and space-join them into one line (C/JS parity).
 function compileEchoLine(s: RaiserCompState, args: Node[]): int32 {
 	const spaceReg = allocReg(s);
-	emitLoadConst(s, spaceReg, raiserString(" "));
+	emitLoadConst(s, spaceReg, raiserConstString(" "));
 	const emptyReg = allocReg(s);
-	emitLoadConst(s, emptyReg, raiserString(""));
+	emitLoadConst(s, emptyReg, raiserConstString(""));
 	const acc = allocReg(s);
 	if (args.length == 0) {
 		emitInst(s, raiserABC(RaiserOpcode.Move, acc, emptyReg, 0));

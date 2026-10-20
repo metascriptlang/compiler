@@ -1,6 +1,6 @@
 import { ensureHostTableLoaded, _resetBridgeStateForTests } from "../../compiler/meta/hostTable";
 import { lookupHostFn, _resetHostRegistryForTests } from "../../raiser/hostRegistry";
-import { raiserString, raiserInt, RaiserValueKind } from "../../raiser/value";
+import { raiserConstString, raiserInt, RaiserValueKind } from "../../raiser/value";
 import { exists, isDir, readFile, writeFile, removeAll, join } from "std/fs";
 import { env } from "std/process";
 
@@ -31,14 +31,14 @@ test "comptime host effects: mkdir return code agrees with filesystem and errno"
 	const path = freshComptimePath("msc-comptime-mkdir-contract");
 	const mkdirFn = lookupHostFn("msFsMkdir");
 	const errno = lookupHostFn("msFsLastErrno");
-	const result = mkdirFn([raiserString(path)]);
+	const result = mkdirFn([raiserConstString(path)]);
 	assert result.kind == RaiserValueKind.Int;
 	assert result.intVal == 1;
 	assert errno([]).intVal == 0;
 	assert exists(path) && isDir(path);
 	removeAll(path);
 	const missing = join(path, "absent/child");
-	const refused = mkdirFn([raiserString(missing)]);
+	const refused = mkdirFn([raiserConstString(missing)]);
 	assert refused.kind == RaiserValueKind.Int;
 	assert refused.intVal == 0;
 	assert errno([]).intVal != 0;
@@ -56,7 +56,7 @@ test "comptime host effects: append and replace modes produce their promised byt
 		{ mode: "wb", input: "c", expected: "c" },
 	];
 	for (const item of cases) {
-		const result = writeFn([raiserString(path), raiserString(item.input), raiserString(item.mode)]);
+		const result = writeFn([raiserConstString(path), raiserConstString(item.input), raiserConstString(item.mode)]);
 		assert result.kind == RaiserValueKind.Int;
 		assert result.intVal == 1, item.mode;
 		assert errno([]).intVal == 0, item.mode;
@@ -66,13 +66,13 @@ test "comptime host effects: append and replace modes produce their promised byt
 	}
 	const chmodFn = lookupHostFn("msFsChmod");
 	assert chmodFn != null;
-	const changed = chmodFn([raiserString(path), raiserInt(420)]);
+	const changed = chmodFn([raiserConstString(path), raiserInt(420)]);
 	assert changed.kind == RaiserValueKind.Int;
 	assert changed.intVal == 1;
 	removeAll(path);
 	const executable = lookupHostFn("msFsIsExecutable");
 	assert executable != null;
-	const missing = executable([raiserString(path)]);
+	const missing = executable([raiserConstString(path)]);
 	assert missing.kind == RaiserValueKind.Int;
 	assert missing.intVal == 0;
 }

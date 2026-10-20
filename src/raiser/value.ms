@@ -15,68 +15,81 @@ export enum RaiserValueKind {
 	RegAddr,    // address of a register slot: intVal = absolute slot index
 	GlobalAddr, // address of a global: intVal = global index
 	ElemAddr,   // address of an array element: intVal = array handle, floatVal = index
-	FieldAddr,  // address of an object field: intVal = object handle, strVal = field name
+	FieldAddr,  // address of an object field: intVal = object handle, floatVal = field name constant handle
 }
 
 // Flat interface — all fields always present, unused ones zeroed.
 // Matches project convention (see checker/types.ms Type interface).
+// A String's text lives on a string heap: intVal >= 0 indexes the running
+// strand's heap, intVal < 0 names a constant (see "String Heap" below).
 export interface RaiserValue {
 	kind: RaiserValueKind;
 	intVal: int64;
 	floatVal: number;
-	strVal: string;
 }
 
 // --- Constructors ---
 
 export function raiserNil(): RaiserValue {
-	return { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0, strVal: "" };
+	return { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0 };
 }
 
 export function raiserBool(b: boolean): RaiserValue {
 	let v = 0;
 	if (b) { v = 1; }
-	return { kind: RaiserValueKind.Bool, intVal: v, floatVal: 0.0, strVal: "" };
+	return { kind: RaiserValueKind.Bool, intVal: v, floatVal: 0.0 };
 }
 
 export function raiserInt(n: int64): RaiserValue {
-	return { kind: RaiserValueKind.Int, intVal: n, floatVal: 0.0, strVal: "" };
+	return { kind: RaiserValueKind.Int, intVal: n, floatVal: 0.0 };
 }
 
 export function raiserFloat(f: number): RaiserValue {
-	return { kind: RaiserValueKind.Float, intVal: 0, floatVal: f, strVal: "" };
+	return { kind: RaiserValueKind.Float, intVal: 0, floatVal: f };
 }
 
-export function raiserString(s: string): RaiserValue {
-	return { kind: RaiserValueKind.String, intVal: 0, floatVal: 0.0, strVal: s };
+// A constant string: interned once for the process, never freed, readable from any heap.
+// Only code generation and module load call this, because the table never shrinks;
+// every run-time string goes through heapAllocString.
+export function raiserConstString(s: string): RaiserValue {
+	return { kind: RaiserValueKind.String, intVal: constHandle(s), floatVal: 0.0 };
 }
 
 export function raiserArray(handle: int64): RaiserValue {
-	return { kind: RaiserValueKind.Array, intVal: handle, floatVal: 0.0, strVal: "" };
+	return { kind: RaiserValueKind.Array, intVal: handle, floatVal: 0.0 };
 }
 
 export function raiserObject(handle: int64): RaiserValue {
-	return { kind: RaiserValueKind.Object, intVal: handle, floatVal: 0.0, strVal: "" };
+	return { kind: RaiserValueKind.Object, intVal: handle, floatVal: 0.0 };
 }
 
 export function raiserFuture(handle: int64): RaiserValue {
-	return { kind: RaiserValueKind.Future, intVal: handle, floatVal: 0.0, strVal: "" };
+	return { kind: RaiserValueKind.Future, intVal: handle, floatVal: 0.0 };
 }
 
 export function raiserRegAddr(slot: int64): RaiserValue {
-	return { kind: RaiserValueKind.RegAddr, intVal: slot, floatVal: 0.0, strVal: "" };
+	return { kind: RaiserValueKind.RegAddr, intVal: slot, floatVal: 0.0 };
 }
 
 export function raiserGlobalAddr(index: int64): RaiserValue {
-	return { kind: RaiserValueKind.GlobalAddr, intVal: index, floatVal: 0.0, strVal: "" };
+	return { kind: RaiserValueKind.GlobalAddr, intVal: index, floatVal: 0.0 };
 }
 
 export function raiserElemAddr(handle: int64, index: int64): RaiserValue {
-	return { kind: RaiserValueKind.ElemAddr, intVal: handle, floatVal: index as number, strVal: "" };
+	return { kind: RaiserValueKind.ElemAddr, intVal: handle, floatVal: index as number };
 }
 
+// floatVal holds the field name's constant handle.
 export function raiserFieldAddr(handle: int64, name: string): RaiserValue {
-	return { kind: RaiserValueKind.FieldAddr, intVal: handle, floatVal: 0.0, strVal: name };
+	return raiserFieldAddrAt(handle, constHandle(name));
+}
+
+export function raiserFieldAddrAt(handle: int64, nameHandle: int64): RaiserValue {
+	return { kind: RaiserValueKind.FieldAddr, intVal: handle, floatVal: nameHandle as number };
+}
+
+export function fieldAddrName(v: RaiserValue): string {
+	return constText(v.floatVal as int64);
 }
 
 export function heldHandle(v: RaiserValue): RaiserValue {
@@ -85,17 +98,170 @@ export function heldHandle(v: RaiserValue): RaiserValue {
 	return v;
 }
 
+// --- String Heap ---
+// A string is immutable text on a side heap, like arrays and objects: the value
+// holds an index, rc counts the holders (only under gcMode "orc"), a freed slot
+// goes on the free list. The heap hangs off the array heap, so every place that
+// already carries the strand's heaps reaches it. Handles below zero index the
+// constant table instead; the table is shared, append-only and never freed.
+
+export interface RaiserStringHeap {
+	texts: string[];
+	rc: int32[];
+	freeList: int64[];
+}
+
+export function createStringHeap(): RaiserStringHeap {
+	const texts: string[] = [];
+	const rc: int32[] = [];
+	const freeList: int64[] = [];
+	return { texts, rc, freeList };
+}
+
+const constTexts: string[] = [""];
+const constIndex: Map<string, int64> = new Map<string, int64>();
+constIndex.set("", -1);
+
+function constHandle(text: string): int64 {
+	if (constIndex.has(text)) return constIndex.get(text)!;
+	constTexts.push(text);
+	const handle = -(constTexts.length as int64);
+	constIndex.set(text, handle);
+	return handle;
+}
+
+function constText(handle: int64): string {
+	return constTexts[(-handle - 1) as number];
+}
+
+// Module constants and field names are interned, so reading one needs no heap.
+export function constStringText(v: RaiserValue): string {
+	if (v.kind != RaiserValueKind.String || v.intVal >= 0) throw new Error("internal: a module constant must be an interned string");
+	return constText(v.intVal);
+}
+
+export function constStringCount(): number {
+	return constTexts.length;
+}
+
+export function heapAllocString(arr: RaiserArrayHeap, text: string): RaiserValue {
+	if (text.length == 0) return { kind: RaiserValueKind.String, intVal: -1, floatVal: 0.0 };
+	const heap = arr.strings;
+	let handle: int64 = 0;
+	if (heap.freeList.length > 0) {
+		handle = heap.freeList[heap.freeList.length - 1];
+		heap.freeList.length = heap.freeList.length - 1;
+		heap.texts[handle] = text;
+		heap.rc[handle] = 0;
+	} else {
+		handle = heap.texts.length;
+		heap.texts.push(text);
+		heap.rc.push(0);
+	}
+	return { kind: RaiserValueKind.String, intVal: handle, floatVal: 0.0 };
+}
+
+// A string the host stores into a container it built: the container holds the first count.
+export function heapAllocStoredString(arr: RaiserArrayHeap, text: string): RaiserValue {
+	const v = heapAllocString(arr, text);
+	if (v.intVal >= 0) arr.strings.rc[v.intVal] = 1;
+	return v;
+}
+
+// A value that is not a String reads as "", the way an unset text field always did.
+export function heapStringText(arr: RaiserArrayHeap, v: RaiserValue): string {
+	if (v.kind != RaiserValueKind.String) return "";
+	if (v.intVal < 0) return constText(v.intVal);
+	return arr.strings.texts[v.intVal];
+}
+
+// The operations below read a string where it lives and never hand its text out as an
+// owned copy: a handle below zero selects the constant table, otherwise the strand's
+// heap, and an element read inside an expression is a cursor.
+
+function textTable(arr: RaiserArrayHeap, v: RaiserValue): string[] {
+	return v.kind == RaiserValueKind.String && v.intVal >= 0 ? arr.strings.texts : constTexts;
+}
+
+function textIndex(v: RaiserValue): number {
+	if (v.kind != RaiserValueKind.String) return 0;
+	return (v.intVal >= 0 ? v.intVal : -v.intVal - 1) as number;
+}
+
+export function heapStringEquals(arr: RaiserArrayHeap, a: RaiserValue, b: RaiserValue): boolean {
+	if (a.intVal == b.intVal) return true;
+	const ta = textTable(arr, a);
+	const tb = textTable(arr, b);
+	const ia = textIndex(a);
+	const ib = textIndex(b);
+	return ta[ia] == tb[ib];
+}
+
+export function heapStringLess(arr: RaiserArrayHeap, a: RaiserValue, b: RaiserValue): boolean {
+	const ta = textTable(arr, a);
+	const tb = textTable(arr, b);
+	const ia = textIndex(a);
+	const ib = textIndex(b);
+	return ta[ia] < tb[ib];
+}
+
+export function heapStringLessEq(arr: RaiserArrayHeap, a: RaiserValue, b: RaiserValue): boolean {
+	const ta = textTable(arr, a);
+	const tb = textTable(arr, b);
+	const ia = textIndex(a);
+	const ib = textIndex(b);
+	return ta[ia] <= tb[ib];
+}
+
+export function heapStringLength(arr: RaiserArrayHeap, v: RaiserValue): int64 {
+	const t = textTable(arr, v);
+	const i = textIndex(v);
+	return t[i].length as int64;
+}
+
+export function heapStringByteLength(arr: RaiserArrayHeap, v: RaiserValue): int64 {
+	const t = textTable(arr, v);
+	const i = textIndex(v);
+	return t[i].byteLength as int64;
+}
+
+export function heapStringSlice(arr: RaiserArrayHeap, v: RaiserValue, start: int32, end: int32): string {
+	const t = textTable(arr, v);
+	const i = textIndex(v);
+	return t[i].slice(start, end);
+}
+
+export function heapConcat(arr: RaiserArrayHeap, a: RaiserValue, b: RaiserValue): RaiserValue {
+	const ta = textTable(arr, a);
+	const tb = textTable(arr, b);
+	const ia = textIndex(a);
+	const ib = textIndex(b);
+	return heapAllocString(arr, ta[ia] + tb[ib]);
+}
+
+// Appends in place to a heap string; the caller has checked that the destination is
+// held once and that the suffix is not the destination itself.
+export function heapAppend(arr: RaiserArrayHeap, dst: int64, suffix: RaiserValue): void {
+	const texts = arr.strings.texts;
+	const tb = textTable(arr, suffix);
+	const i = textIndex(suffix);
+	texts[dst as number] += tb[i];
+}
+
+export function heapStringHeldOnce(arr: RaiserArrayHeap, v: RaiserValue): boolean {
+	return v.intVal >= 0 && arr.strings.rc[v.intVal] == 1;
+}
+
+export function heapStringLive(arr: RaiserArrayHeap): number {
+	return arr.strings.texts.length - arr.strings.freeList.length;
+}
+
 // --- Deep copy (avoids pointer aliasing) ---
 
-// strVal is non-empty only in a String or FieldAddr value, so a copy between
-// two other kinds has no text to move.
 export function copyValueInto(dst: RaiserValue, src: RaiserValue): void {
-	const carriesText = src.kind == RaiserValueKind.String || src.kind == RaiserValueKind.FieldAddr
-		|| dst.kind == RaiserValueKind.String || dst.kind == RaiserValueKind.FieldAddr;
 	dst.kind = src.kind;
 	dst.intVal = src.intVal;
 	dst.floatVal = src.floatVal;
-	if (carriesText) dst.strVal = src.strVal;
 }
 
 // --- Accessors ---
@@ -109,12 +275,12 @@ export function raiserToFloat(v: RaiserValue): number {
 	return v.intVal as float64;
 }
 
-export function raiserToBool(v: RaiserValue): boolean {
+export function raiserToBool(arr: RaiserArrayHeap, v: RaiserValue): boolean {
 	return match (v.kind) {
 		RaiserValueKind.Nil => false,
 		RaiserValueKind.Bool | RaiserValueKind.Int => v.intVal != 0,
 		RaiserValueKind.Float => v.floatVal != 0.0 && v.floatVal == v.floatVal,
-		RaiserValueKind.String => v.strVal.length > 0,
+		RaiserValueKind.String => heapStringLength(arr, v) > 0,
 		RaiserValueKind.Array | RaiserValueKind.Object | RaiserValueKind.Future => true,
 		RaiserValueKind.RegAddr | RaiserValueKind.GlobalAddr | RaiserValueKind.ElemAddr | RaiserValueKind.FieldAddr => true,
 	};
@@ -126,26 +292,26 @@ export function raiserIsNil(v: RaiserValue): boolean {
 
 // --- Equality ---
 
-export function raiserEqual(a: RaiserValue, b: RaiserValue): boolean {
+export function raiserEqual(arr: RaiserArrayHeap, a: RaiserValue, b: RaiserValue): boolean {
 	if (a.kind != b.kind) return false;
 	return match (a.kind) {
 		RaiserValueKind.Nil => true,
 		RaiserValueKind.Bool | RaiserValueKind.Int | RaiserValueKind.Array | RaiserValueKind.Object => a.intVal == b.intVal,
 		RaiserValueKind.Float => a.floatVal == b.floatVal,
-		RaiserValueKind.String => a.strVal == b.strVal,
+		RaiserValueKind.String => heapStringEquals(arr, a, b),
 		_ => false,
 	};
 }
 
 // --- Debug ---
 
-export function raiserToString(v: RaiserValue): string {
+export function raiserToString(arr: RaiserArrayHeap, v: RaiserValue): string {
 	return match (v.kind) {
 		RaiserValueKind.Nil => "null",
 		RaiserValueKind.Bool => { if (v.intVal != 0) { return "true"; } else { return "false"; } },
 		RaiserValueKind.Int => `${v.intVal}`,
 		RaiserValueKind.Float => `${v.floatVal}`,
-		RaiserValueKind.String => v.strVal,
+		RaiserValueKind.String => heapStringText(arr, v),
 		RaiserValueKind.Array => "[array]",
 		RaiserValueKind.Object => "[object]",
 		_ => "?",
@@ -157,33 +323,33 @@ test "nil" {
 	const v = raiserNil();
 	assert v.kind == RaiserValueKind.Nil;
 	assert raiserIsNil(v);
-	assert !raiserToBool(v);
+	assert !raiserToBool(createArrayHeap(), v);
 }
 
 test "bool true" {
 	const v = raiserBool(true);
 	assert v.kind == RaiserValueKind.Bool;
 	assert v.intVal == 1;
-	assert raiserToBool(v);
+	assert raiserToBool(createArrayHeap(), v);
 }
 
 test "bool false" {
 	const v = raiserBool(false);
 	assert v.kind == RaiserValueKind.Bool;
 	assert v.intVal == 0;
-	assert !raiserToBool(v);
+	assert !raiserToBool(createArrayHeap(), v);
 }
 
 test "int" {
 	const v = raiserInt(42);
 	assert v.kind == RaiserValueKind.Int;
 	assert raiserToInt(v) == 42;
-	assert raiserToBool(v);
+	assert raiserToBool(createArrayHeap(), v);
 }
 
 test "int zero is falsy" {
 	const v = raiserInt(0);
-	assert !raiserToBool(v);
+	assert !raiserToBool(createArrayHeap(), v);
 }
 
 test "float" {
@@ -194,10 +360,10 @@ test "float" {
 
 test "float NaN, 0 and -0 are falsy" {
 	const zero = 0.0;
-	assert !raiserToBool(raiserFloat(zero / zero));
-	assert !raiserToBool(raiserFloat(zero));
-	assert !raiserToBool(raiserFloat(-zero));
-	assert raiserToBool(raiserFloat(0.5));
+	assert !raiserToBool(createArrayHeap(), raiserFloat(zero / zero));
+	assert !raiserToBool(createArrayHeap(), raiserFloat(zero));
+	assert !raiserToBool(createArrayHeap(), raiserFloat(-zero));
+	assert raiserToBool(createArrayHeap(), raiserFloat(0.5));
 }
 
 test "int to float conversion" {
@@ -205,31 +371,31 @@ test "int to float conversion" {
 	assert raiserToFloat(v) == 5.0;
 }
 
-test "nil equals nil" { assert raiserEqual(raiserNil(), raiserNil()); }
+test "nil equals nil" { assert raiserEqual(createArrayHeap(), raiserNil(), raiserNil()); }
 
-test "int equals same int" { assert raiserEqual(raiserInt(42), raiserInt(42)); }
+test "int equals same int" { assert raiserEqual(createArrayHeap(), raiserInt(42), raiserInt(42)); }
 
-test "int not equals different int" { assert !raiserEqual(raiserInt(1), raiserInt(2)); }
+test "int not equals different int" { assert !raiserEqual(createArrayHeap(), raiserInt(1), raiserInt(2)); }
 
 test "different kinds not equal" {
-	assert !raiserEqual(raiserInt(0), raiserNil());
-	assert !raiserEqual(raiserInt(1), raiserBool(true));
+	assert !raiserEqual(createArrayHeap(), raiserInt(0), raiserNil());
+	assert !raiserEqual(createArrayHeap(), raiserInt(1), raiserBool(true));
 }
 
 test "bool equality" {
-	assert raiserEqual(raiserBool(true), raiserBool(true));
-	assert !raiserEqual(raiserBool(true), raiserBool(false));
+	assert raiserEqual(createArrayHeap(), raiserBool(true), raiserBool(true));
+	assert !raiserEqual(createArrayHeap(), raiserBool(true), raiserBool(false));
 }
 
-test "nil prints as null" { assert raiserToString(raiserNil()) == "null"; }
+test "nil prints as null" { assert raiserToString(createArrayHeap(), raiserNil()) == "null"; }
 
-test "true" { assert raiserToString(raiserBool(true)) == "true"; }
+test "true" { assert raiserToString(createArrayHeap(), raiserBool(true)) == "true"; }
 
-test "false" { assert raiserToString(raiserBool(false)) == "false"; }
+test "false" { assert raiserToString(createArrayHeap(), raiserBool(false)) == "false"; }
 
-test "int" { assert raiserToString(raiserInt(42)) == "42"; }
+test "int" { assert raiserToString(createArrayHeap(), raiserInt(42)) == "42"; }
 
-test "array" { assert raiserToString(raiserArray(0)) == "[array]"; }
+test "array" { assert raiserToString(createArrayHeap(), raiserArray(0)) == "[array]"; }
 
 // --- Array Heap ---
 // Arrays live on a side heap. RaiserValue with kind=Array stores an integer handle
@@ -246,12 +412,13 @@ export interface RaiserArrayData {
 export interface RaiserArrayHeap {
 	arrays: RaiserArrayData[];
 	freeList: int64[];
+	strings: RaiserStringHeap;
 }
 
 export function createArrayHeap(): RaiserArrayHeap {
 	const arrays: RaiserArrayData[] = [];
 	const freeList: int64[] = [];
-	return { arrays, freeList };
+	return { arrays, freeList, strings: createStringHeap() };
 }
 
 export function heapAllocArray(heap: RaiserArrayHeap): int64 {
@@ -310,7 +477,7 @@ export function heapArraySet(heap: RaiserArrayHeap, handle: int64, index: int64,
 
 export function heapArrayPush(heap: RaiserArrayHeap, handle: int64, val: RaiserValue): void {
 	// Deep copy to avoid pointer aliasing (register values are shared objects)
-	const copy: RaiserValue = { kind: val.kind, intVal: val.intVal, floatVal: val.floatVal, strVal: val.strVal };
+	const copy: RaiserValue = { kind: val.kind, intVal: val.intVal, floatVal: val.floatVal };
 	heap.arrays[handle].items.push(copy);
 }
 
@@ -322,7 +489,7 @@ export function heapArraySetLen(heap: RaiserArrayHeap, handle: int64, newLen: in
 		items.shrink(newLen < 0 ? 0 : newLen);
 	} else {
 		while (items.length < newLen) {
-			const nilCopy: RaiserValue = { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0, strVal: "" };
+			const nilCopy: RaiserValue = { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0 };
 			items.push(nilCopy);
 		}
 	}
@@ -374,7 +541,7 @@ test "array value kind" {
 	const v = raiserArray(3);
 	assert v.kind == RaiserValueKind.Array;
 	assert v.intVal == 3;
-	assert raiserToBool(v);
+	assert raiserToBool(createArrayHeap(), v);
 }
 
 // --- Object Heap ---
@@ -451,17 +618,17 @@ test "heapObjectFieldNameAt/ValueAt follow insertion order" {
 	const heap = createStructHeap();
 	const h = heapAllocObject(heap);
 	heapObjectSetField(heap, h, "kind", raiserInt(5));
-	heapObjectSetField(heap, h, "left", raiserString("L"));
+	heapObjectSetField(heap, h, "left", raiserConstString("L"));
 	assert heapObjectFieldNameAt(heap, h, 0) == "kind";
 	assert heapObjectFieldNameAt(heap, h, 1) == "left";
-	assert heapObjectFieldValueAt(heap, h, 1).strVal == "L";
+	assert heapStringText(createArrayHeap(), heapObjectFieldValueAt(heap, h, 1)) == "L";
 	assert heapObjectFieldNameAt(heap, h, 2) == "";
 	assert heapObjectFieldValueAt(heap, h, 9).kind == RaiserValueKind.Nil;
 }
 
 export function heapObjectFieldValueAt(heap: RaiserObjectHeap, handle: int64, index: int64): RaiserValue {
 	const obj = heap.objects[handle];
-	if (index < 0 || index >= obj.fields.length) return { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0, strVal: "" };
+	if (index < 0 || index >= obj.fields.length) return { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0 };
 	return obj.fields[index].value;
 }
 
@@ -473,7 +640,7 @@ export function heapObjectGetField(heap: RaiserObjectHeap, handle: int64, name: 
 		}
 	}
 	// Field not found — return nil
-	return { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0, strVal: "" };
+	return { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0 };
 }
 
 export function heapObjectSetField(heap: RaiserObjectHeap, handle: int64, name: string, val: RaiserValue): void {
@@ -487,13 +654,13 @@ export function heapObjectSetField(heap: RaiserObjectHeap, handle: int64, name: 
 		}
 	}
 	// Add new field (deep copy value)
-	const copy: RaiserValue = { kind: val.kind, intVal: val.intVal, floatVal: val.floatVal, strVal: val.strVal };
+	const copy: RaiserValue = { kind: val.kind, intVal: val.intVal, floatVal: val.floatVal };
 	const field: RaiserObjectField = { name, value: copy };
 	obj.fields.push(field);
 }
 
 // --- ORC refcount primitives ---
-// Only Array/Object are heap refs; a ref can hold cross-heap children, so both
+// Array, Object and String are heap refs; a ref can hold cross-heap children, so both
 // heaps are threaded through. Destroy is generic (the heap object is self-describing).
 
 export function rcIncref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): void {
@@ -509,6 +676,8 @@ export function rcIncrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHe
 		arrHeap.arrays[handle].rc = arrHeap.arrays[handle].rc + 1;
 	} else if (kind == RaiserValueKind.Object || kind == RaiserValueKind.FieldAddr) {
 		objHeap.objects[handle].rc = objHeap.objects[handle].rc + 1;
+	} else if (kind == RaiserValueKind.String && handle >= 0) {
+		arrHeap.strings.rc[handle] = arrHeap.strings.rc[handle] + 1;
 	}
 }
 
@@ -521,6 +690,10 @@ export function rcDecrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHe
 		const data = objHeap.objects[handle];
 		data.rc = data.rc - 1;
 		if (data.rc <= 0) { rcDestroyObject(arrHeap, objHeap, handle); }
+	} else if (kind == RaiserValueKind.String && handle >= 0) {
+		const strings = arrHeap.strings;
+		strings.rc[handle] = strings.rc[handle] - 1;
+		if (strings.rc[handle] <= 0) { strings.texts[handle] = ""; strings.freeList.push(handle); }
 	}
 }
 
@@ -625,7 +798,7 @@ export function copyGraphWith(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap,
 	if (val.kind == RaiserValueKind.Object || val.kind == RaiserValueKind.FieldAddr) {
 		for (let i = 0; i < map.objSrc.length; i = i + 1) {
 			if (map.objSrc[i] == val.intVal) {
-				return val.kind == RaiserValueKind.Object ? raiserObject(map.objDst[i]) : raiserFieldAddr(map.objDst[i], val.strVal);
+				return val.kind == RaiserValueKind.Object ? raiserObject(map.objDst[i]) : raiserFieldAddrAt(map.objDst[i], val.floatVal as int64);
 			}
 		}
 		if (val.intVal < 0 || val.intVal >= srcObj.objects.length) {
@@ -642,8 +815,9 @@ export function copyGraphWith(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap,
 			heapObjectSetField(dstObj, dstHandle, fields[i].name, copied);
 			rcIncref(dstArr, dstObj, copied);
 		}
-		return val.kind == RaiserValueKind.Object ? raiserObject(dstHandle) : raiserFieldAddr(dstHandle, val.strVal);
+		return val.kind == RaiserValueKind.Object ? raiserObject(dstHandle) : raiserFieldAddrAt(dstHandle, val.floatVal as int64);
 	}
+	if (val.kind == RaiserValueKind.String && val.intVal >= 0) return heapAllocString(dstArr, heapStringText(srcArr, val));
 	const out = raiserNil();
 	copyValueInto(out, val);
 	return out;
@@ -655,15 +829,15 @@ test "copyGraph relocates a field address that points into its own owner" {
 	const dArr = createArrayHeap();
 	const dObj = createStructHeap();
 	const padding = heapAllocObject(sObj);
-	heapObjectSetField(sObj, padding, "text", raiserString("unrelated"));
+	heapObjectSetField(sObj, padding, "text", raiserConstString("unrelated"));
 	const owner = heapAllocObject(sObj);
-	heapObjectSetField(sObj, owner, "text", raiserString("source"));
+	heapObjectSetField(sObj, owner, "text", heapAllocString(sArr, "source"));
 	heapObjectSetField(sObj, owner, "pointer", raiserFieldAddr(owner, "text"));
 	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserObject(owner));
 	const pointer = heapObjectGetField(dObj, copied.intVal, "pointer");
-	heapObjectSetField(dObj, pointer.intVal, pointer.strVal, raiserString("destination"));
-	assert heapObjectGetString(dObj, copied.intVal, "text") == "destination";
-	assert heapObjectGetString(sObj, owner, "text") == "source";
+	heapObjectSetField(dObj, pointer.intVal, fieldAddrName(pointer), heapAllocString(dArr, "destination"));
+	assert heapObjectGetString(dArr, dObj, copied.intVal, "text") == "destination";
+	assert heapObjectGetString(sArr, sObj, owner, "text") == "source";
 }
 
 test "copyGraph preserves aliases to a register snapshot without retaining its source slot" {
@@ -671,7 +845,7 @@ test "copyGraph preserves aliases to a register snapshot without retaining its s
 	const sObj = createStructHeap();
 	const dArr = createArrayHeap();
 	const dObj = createStructHeap();
-	const slots: RaiserValue[] = [raiserString("source")];
+	const slots: RaiserValue[] = [heapAllocString(sArr, "source")];
 	const owner = heapAllocArray(sArr);
 	heapArrayPush(sArr, owner, raiserRegAddr(0));
 	heapArrayPush(sArr, owner, raiserRegAddr(0));
@@ -680,10 +854,10 @@ test "copyGraph preserves aliases to a register snapshot without retaining its s
 	const copied = copyGraphWith(sArr, sObj, dArr, dObj, raiserArray(owner), map);
 	const first = heapArrayGet(dArr, copied.intVal, 0);
 	const second = heapArrayGet(dArr, copied.intVal, 1);
-	assert heapArrayGet(dArr, first.intVal, first.floatVal as int64).strVal == "source";
-	heapArraySet(dArr, first.intVal, first.floatVal as int64, raiserString("destination"));
-	assert heapArrayGet(dArr, second.intVal, second.floatVal as int64).strVal == "destination";
-	assert slots[0].strVal == "source";
+	assert heapStringText(dArr, heapArrayGet(dArr, first.intVal, first.floatVal as int64)) == "source";
+	heapArraySet(dArr, first.intVal, first.floatVal as int64, heapAllocString(dArr, "destination"));
+	assert heapStringText(dArr, heapArrayGet(dArr, second.intVal, second.floatVal as int64)) == "destination";
+	assert heapStringText(sArr, slots[0]) == "source";
 }
 
 // --- Cross-heap copy tests ---
@@ -696,11 +870,11 @@ test "copyGraph materializes a nested graph in the destination heap" {
 	heapArrayPush(sArr, inner, raiserInt(7));
 	const outer = heapAllocObject(sObj);
 	heapObjectSetField(sObj, outer, "kids", raiserArray(inner));
-	heapObjectSetField(sObj, outer, "tag", raiserString("t"));
+	heapObjectSetField(sObj, outer, "tag", heapAllocString(sArr, "t"));
 
 	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserObject(outer));
 	assert copied.kind == RaiserValueKind.Object;
-	assert heapObjectGetString(dObj, copied.intVal, "tag") == "t";
+	assert heapObjectGetString(dArr, dObj, copied.intVal, "tag") == "t";
 	const kids = heapObjectGetField(dObj, copied.intVal, "kids");
 	assert kids.kind == RaiserValueKind.Array;
 	assert heapArrayLen(dArr, kids.intVal) == 1;
@@ -761,7 +935,9 @@ test "copyGraph passes scalars and future handles through" {
 	const dArr = createArrayHeap();
 	const dObj = createStructHeap();
 	assert copyGraph(sArr, sObj, dArr, dObj, raiserInt(3)).intVal == 3;
-	assert copyGraph(sArr, sObj, dArr, dObj, raiserString("s")).strVal == "s";
+	const text = copyGraph(sArr, sObj, dArr, dObj, heapAllocString(sArr, "s"));
+	assert heapStringText(dArr, text) == "s";
+	assert text.intVal == 0 && sArr.strings.texts.length == 1 && dArr.strings.texts.length == 1;
 	const fut = copyGraph(sArr, sObj, dArr, dObj, raiserFuture(4));
 	assert fut.kind == RaiserValueKind.Future;
 	assert fut.intVal == 4;
@@ -846,9 +1022,9 @@ test "rc object destroy decrefs field refs" {
 // --- Object field convenience accessors ---
 // These let the host read typed config fields from a VM result object.
 
-export function heapObjectGetString(heap: RaiserObjectHeap, handle: int64, field: string): string {
+export function heapObjectGetString(arr: RaiserArrayHeap, heap: RaiserObjectHeap, handle: int64, field: string): string {
 	const val = heapObjectGetField(heap, handle, field);
-	return val.strVal;
+	return heapStringText(arr, val);
 }
 
 export function heapObjectGetInt(heap: RaiserObjectHeap, handle: int64, field: string): number {
@@ -867,6 +1043,7 @@ export function heapObjectGetObjectHandle(heap: RaiserObjectHeap, handle: int64,
 
 export function clearArrayHeap(heap: RaiserArrayHeap): void {
 	heap.arrays.length = 0;
+	heap.strings = createStringHeap();
 }
 
 export function clearObjectHeap(heap: RaiserObjectHeap): void {
@@ -924,7 +1101,7 @@ test "object value kind" {
 	const v = raiserObject(5);
 	assert v.kind == RaiserValueKind.Object;
 	assert v.intVal == 5;
-	assert raiserToBool(v);
+	assert raiserToBool(createArrayHeap(), v);
 }
 
 test "clearArrayHeap resets storage" {
@@ -953,15 +1130,60 @@ test "clearObjectHeap resets storage" {
 	assert h2 == 0;
 }
 
-test "a kind below Array holds no handle the counters touch" {
+test "a kind below String holds no handle the counters touch" {
 	const arrays = createArrayHeap();
 	const objects = createStructHeap();
 	heapAllocArray(arrays);
 	heapAllocObject(objects);
 	arrays.arrays[0].rc = 1;
 	objects.objects[0].rc = 1;
-	for (let k = 0; k < (RaiserValueKind.Array as number); k++) rcIncrefHandle(arrays, objects, k as RaiserValueKind, 0);
+	for (let k = 0; k < (RaiserValueKind.String as number); k++) rcIncrefHandle(arrays, objects, k as RaiserValueKind, 0);
 	assert arrays.arrays[0].rc == 1 && objects.objects[0].rc == 1;
-	for (let k = 0; k < (RaiserValueKind.Array as number); k++) rcDecrefHandle(arrays, objects, k as RaiserValueKind, 0);
+	for (let k = 0; k < (RaiserValueKind.String as number); k++) rcDecrefHandle(arrays, objects, k as RaiserValueKind, 0);
 	assert arrays.arrays[0].rc == 1 && objects.objects[0].rc == 1 && arrays.freeList.length == 0;
+}
+
+// --- String heap tests ---
+test "a string frees at rc zero and its slot is reused" {
+	const arr = createArrayHeap();
+	const obj = createStructHeap();
+	const s = heapAllocString(arr, "abc");
+	rcIncref(arr, obj, s);
+	rcIncref(arr, obj, s);
+	rcDecref(arr, obj, s);
+	assert heapStringLive(arr) == 1;
+	rcDecref(arr, obj, s);
+	assert heapStringLive(arr) == 0;
+	const again = heapAllocString(arr, "xyz");
+	assert again.intVal == s.intVal;
+	assert heapStringText(arr, again) == "xyz";
+}
+
+test "a constant string is shared by every heap and never freed" {
+	const a = createArrayHeap();
+	const b = createArrayHeap();
+	const obj = createStructHeap();
+	const c = raiserConstString("shared");
+	assert c.intVal < 0 && raiserConstString("shared").intVal == c.intVal;
+	rcIncref(a, obj, c);
+	rcDecref(a, obj, c);
+	assert heapStringText(a, c) == "shared" && heapStringText(b, c) == "shared";
+	assert heapStringLive(a) == 0;
+}
+
+test "destroying a container releases its strings" {
+	const arr = createArrayHeap();
+	const obj = createStructHeap();
+	const holder = heapAllocArray(arr);
+	const s = heapAllocString(arr, "kept");
+	heapArrayPush(arr, holder, s);
+	rcIncref(arr, obj, s);
+	rcIncref(arr, obj, raiserArray(holder));
+	assert heapStringLive(arr) == 1;
+	rcDecref(arr, obj, raiserArray(holder));
+	assert heapStringLive(arr) == 0;
+}
+
+test "a non-string reads as empty text" {
+	assert heapStringText(createArrayHeap(), raiserInt(5)) == "";
 }

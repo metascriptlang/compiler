@@ -2,7 +2,7 @@ import { Type, TypeKind, TypeFlag } from "../../ast/node";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
 import { distinctBody, enumMemberValue, isStructType, needsValueCopy, valueCopyRepr } from "../../checker/types";
 import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
-import { RaiserValue, RaiserValueKind, raiserInt, raiserString, raiserFloat, raiserBool, raiserNil } from "../../raiser/value";
+import { RaiserValue, RaiserValueKind, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil } from "../../raiser/value";
 import { peelToRepr, unwrapRef } from "../../checker/types";
 import { RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrapNil } from "./context";
 
@@ -102,7 +102,7 @@ export function emitValueAssign(s: RaiserCompState, destination: int32, source: 
 	patchJumpTo(s, destinationHeld, codeLen(s));
 	if (t.kind == TypeKind.Struct) {
 		for (let i = 0; i < t.typeNames.length; i += 1) {
-			const name = addConst(s, raiserString(t.typeNames[i]));
+			const name = addConst(s, raiserConstString(t.typeNames[i]));
 			const fieldType = i < t.typeChildren.length ? t.typeChildren[i] : null;
 			const held = allocReg(s);
 			emitInst(s, raiserABC(RaiserOpcode.LoadField, held, destination, name));
@@ -149,7 +149,7 @@ function zeroScalar(t: Type | null): RaiserValue {
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 | TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 | TypeKind.Enum | TypeKind.Char => raiserInt(0),
 		TypeKind.Number | TypeKind.Float32 | TypeKind.Float64 => raiserFloat(0),
 		TypeKind.Boolean => raiserBool(false),
-		TypeKind.String => raiserString(""),
+		TypeKind.String => raiserConstString(""),
 		_ => raiserNil(),
 	};
 }
@@ -183,7 +183,7 @@ function emitZeroOf(s: RaiserCompState, valueType: Type | null, open: Type[]): i
 		open.push(t);
 		for (let i = 0; i < t.typeNames.length; i += 1) {
 			const field = emitZeroOf(s, i < t.typeChildren.length ? t.typeChildren[i] : null, open);
-			emitInst(s, raiserABC(RaiserOpcode.StoreField, object, addConst(s, raiserString(t.typeNames[i])), field));
+			emitInst(s, raiserABC(RaiserOpcode.StoreField, object, addConst(s, raiserConstString(t.typeNames[i])), field));
 		}
 		open.pop();
 		return object;
@@ -228,6 +228,6 @@ export function emitOmittedFieldZeros(s: RaiserCompState, object: int32, literal
 		const name = t.typeNames[i];
 		if (name.startsWith("__") || keys.includes(name)) continue;
 		const field = emitZeroValue(s, i < t.typeChildren.length ? t.typeChildren[i] : null);
-		emitInst(s, raiserABC(RaiserOpcode.StoreField, object, addConst(s, raiserString(name)), field));
+		emitInst(s, raiserABC(RaiserOpcode.StoreField, object, addConst(s, raiserConstString(name)), field));
 	}
 }

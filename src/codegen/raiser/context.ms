@@ -5,7 +5,7 @@ import {
 	RaiserOpcode, RaiserInstruction,
 	raiserABC, raiserABx, raiserAx, getSignedAx, fitsImm, immField, isBranchI64, branchField, branchOffset
 } from "../../raiser/bytecode";
-import { RaiserValue, RaiserValueKind, RaiserClassType, raiserInt, raiserString, raiserNil } from "../../raiser/value";
+import { RaiserValue, RaiserValueKind, RaiserClassType, raiserInt, raiserConstString, raiserNil } from "../../raiser/value";
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind } from "../../ast/node";
 import { RaiserCopyPlan } from "../../raiser/valueCopy";
 import { CheckerError, Severity } from "../../checker/context";
@@ -395,9 +395,9 @@ export function emitClosurePair(s: RaiserCompState, funcIdx: int32, envReg: int3
 	emitInst(s, raiserABC(RaiserOpcode.NewObject, pairReg, 0, 0));
 	const fnReg = allocReg(s);
 	emitLoadConst(s, fnReg, raiserInt(funcIdx));
-	const fnConst = addConst(s, raiserString("fn"));
+	const fnConst = addConst(s, raiserConstString("fn"));
 	emitInst(s, raiserABC(RaiserOpcode.StoreField, pairReg, fnConst, fnReg));
-	const envConst = addConst(s, raiserString("env"));
+	const envConst = addConst(s, raiserConstString("env"));
 	if (envReg < 0) {
 		// Non-capturing: store -1 sentinel
 		const sentinelReg = allocReg(s);
@@ -476,7 +476,7 @@ export function callRaiserStmtCompiler(s: RaiserCompState, stmt: Node): void {
 }
 
 export function emitTrapNil(s: RaiserCompState, message: string): int32 {
-	const cIdx = addConst(s, raiserString(message));
+	const cIdx = addConst(s, raiserConstString(message));
 	emitInst(s, raiserABx(RaiserOpcode.Trap, 0, cIdx));
 	const reg = allocReg(s);
 	emitLoadConst(s, reg, raiserNil());
@@ -494,7 +494,7 @@ function writesResultAfterReading(op: RaiserOpcode): boolean {
 			| RaiserOpcode.AddF64 | RaiserOpcode.SubF64 | RaiserOpcode.MulF64 | RaiserOpcode.DivF64 | RaiserOpcode.NegF64
 			| RaiserOpcode.BitAnd | RaiserOpcode.BitOr | RaiserOpcode.BitXor | RaiserOpcode.BitNot
 			| RaiserOpcode.ShiftLeft | RaiserOpcode.ShiftRight | RaiserOpcode.ShiftRightU
-			| RaiserOpcode.Conv | RaiserOpcode.ArrayLen | RaiserOpcode.StrLen | RaiserOpcode.StrCharAt
+			| RaiserOpcode.Conv | RaiserOpcode.ArrayLen | RaiserOpcode.StrLen | RaiserOpcode.StrCharAt | RaiserOpcode.ConcatStr
 			| RaiserOpcode.IsKind => true,
 		_ => false,
 	};

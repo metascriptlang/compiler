@@ -2,7 +2,7 @@
 // Human-readable bytecode formatting for debugging and test output.
 
 import { RaiserOpcode, RaiserInstruction, raiserABC, raiserABx, raiserAx, getBx, getSignedAx, immField, immValue, isBranchI64, branchField, branchOffset } from "./bytecode";
-import { raiserInt, raiserToString } from "./value";
+import { raiserInt, raiserToString, createArrayHeap } from "./value";
 import {
 	RaiserModule, RaiserFunction,
 	getModuleEntry, getFuncName, getFuncCodeLen, getFuncInst, getFuncConst, getFuncConstLen, makeTestModule
@@ -168,6 +168,7 @@ export function disasmInst(inst: RaiserInstruction): string {
 export function disasmFunc(func: RaiserFunction): string {
 	let result = `; ${getFuncName(func)}\n`;
 	const len = getFuncCodeLen(func);
+	const constants = createArrayHeap();
 	for (let i = 0; i < len; i = i + 1) {
 		const inst = getFuncInst(func, i);
 		let line = `  ${i}: ${disasmInst(inst)}`;
@@ -175,7 +176,7 @@ export function disasmFunc(func: RaiserFunction): string {
 			const cIdx = getBx(inst);
 			if (cIdx < getFuncConstLen(func)) {
 				const cVal = getFuncConst(func, cIdx);
-				line = `${line}  ; ${raiserToString(cVal)}`;
+				line = `${line}  ; ${raiserToString(constants, cVal)}`;
 			}
 		}
 		result = `${result}${line}\n`;
