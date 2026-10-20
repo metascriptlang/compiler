@@ -8,7 +8,7 @@ import { SourceLocation } from "../ast/node";
 type ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type | null) => void;
 type StmtCheckerFn = (ctx: CheckerContext, node: Node) => void;
 type BodyCheckerFn = (ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[] | null) => Symbol[];
-type InstantiateGenericFn = (sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation) => Symbol | null;
+type InstantiateGenericFn = (sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation, params: (Type | null)[]) => Symbol | null;
 type EvalComptimeBlockFn = (node: Node, ctx: CheckerContext) => Node;
 type ExpandMacroInvocationFn = (node: Node, ctx: CheckerContext, depth: int32) => Node;
 type ApplyDecoratorsFn = (ctx: CheckerContext, program: Node) => void;
@@ -29,7 +29,7 @@ let bodyCheckerFn: BodyCheckerFn = (ctx: CheckerContext, sym: Symbol, params: st
 	return [];
 };
 
-let instantiateGenericFn: InstantiateGenericFn = (sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol | null => {
+let instantiateGenericFn: InstantiateGenericFn = (sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation, params: (Type | null)[]): Symbol | null => {
 	return null;
 };
 
@@ -81,8 +81,8 @@ export function callCheckFunctionBody(ctx: CheckerContext, sym: Symbol, params: 
 	return bodyCheckerFn(ctx, sym, params, body, paramLocs);
 }
 
-export function callInstantiateGeneric(sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol | null {
-	return instantiateGenericFn(sym, paramNames, concreteTypes, ctx, callLoc);
+export function callInstantiateGeneric(sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation, params: (Type | null)[] = []): Symbol | null {
+	return instantiateGenericFn(sym, paramNames, concreteTypes, ctx, callLoc, params);
 }
 
 export function callEvalComptimeBlock(node: Node, ctx: CheckerContext): Node {

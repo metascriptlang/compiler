@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, ClassDeclData, MethodDeclData, DecoratedDeclData } from "../ast/node";
 import { makeSymbol, classDeclNodeOf } from "./symbol";
-import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion } from "./types";
+import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -321,11 +321,11 @@ const _assignTargets: Type[] = [];
 let _isaCount: float64 = 0;
 let _isaTime: float64 = 0;
 export function isAssignableProfile(): float64[] { return [_isaCount, _isaTime]; }
-export function unmetConstraint(owner: Type, name: string, bound: Type, names: string[], types: Type[]): Type | null {
+export function unmetConstraint(owner: Type, name: string, bound: Type, names: string[], types: Type[], param: Type | null = null, params: (Type | null)[] = []): Type | null {
 	if (bound == null || bound.kind == TypeKind.Error || isUnresolvedType(bound) || isUnknownType(bound) || hasGenericParams(bound)) return null;
-	const raw = typeParamConstraint(owner, name, 0);
+	const raw = param != null ? param.typeExtra : typeParamConstraint(owner, name, 0);
 	if (raw == null) return null;
-	const constraint = substituteAllParams(raw, names, types);
+	const constraint = substituteParams(raw, names, params, types);
 	if (constraint == null || isUnresolvedType(constraint) || hasGenericParams(constraint)) return null;
 	return isAssignable(bound, constraint) ? null : constraint;
 }
@@ -1766,18 +1766,28 @@ export function scoreCandidate(paramTypes: Type[], argTypes: Type[]): int32 {
 
 export interface TypeParamFold {
 	names: string[];
+	params: (Type | null)[];
 	types: Type[];
 	chosen: int32[];
 	misfits: int32[];
 }
 
-export function foldTypeParamCandidates(candNames: string[], candTypes: Type[], skip: boolean[], fixedNames: string[], fixedTypes: Type[]): TypeParamFold {
-	const out: TypeParamFold = { names: [], types: [], chosen: [], misfits: [] };
+function sameCandidate(candNames: string[], candParams: (Type | null)[], a: int32, b: int32): boolean {
+	const pa = a < candParams.length ? candParams[a] : null;
+	const pb = b < candParams.length ? candParams[b] : null;
+	if (pa != null && pb != null) return pa == pb;
+	return candNames[a] == candNames[b];
+}
+
+export function foldTypeParamCandidates(candNames: string[], candTypes: Type[], skip: boolean[], fixedNames: string[], fixedTypes: Type[], candParams: (Type | null)[] = []): TypeParamFold {
+	const out: TypeParamFold = { names: [], params: [], types: [], chosen: [], misfits: [] };
+	const firsts: int32[] = [];
 	for (let ci = 0; ci < candNames.length; ci += 1) {
 		const name = candNames[ci];
 		let seen = false;
-		for (const n of out.names) { if (n == name) { seen = true; break; } }
+		for (const f of firsts) { if (sameCandidate(candNames, candParams, f, ci)) { seen = true; break; } }
 		if (seen) continue;
+		firsts.push(ci);
 		let fixedIdx = -1;
 		for (let fi = 0; fi < fixedNames.length; fi += 1) { if (fixedNames[fi] == name) { fixedIdx = fi; break; } }
 		let chosen: int32 = -1;
@@ -1785,15 +1795,16 @@ export function foldTypeParamCandidates(candNames: string[], candTypes: Type[], 
 		if (fixedIdx < 0) {
 			chosen = ci;
 			for (let cj = ci + 1; cj < candNames.length; cj += 1) {
-				if (candNames[cj] != name || skip[cj]) continue;
+				if (!sameCandidate(candNames, candParams, ci, cj) || skip[cj]) continue;
 				if (isAssignable(bound, candTypes[cj]) && !isAssignable(candTypes[cj], bound)) { bound = candTypes[cj]; chosen = cj; }
 			}
 		}
 		out.names.push(name);
+		out.params.push(ci < candParams.length ? candParams[ci] : null);
 		out.types.push(bound);
 		out.chosen.push(chosen);
 		for (let cj = ci; cj < candNames.length; cj += 1) {
-			if (candNames[cj] != name || cj == chosen || skip[cj]) continue;
+			if (!sameCandidate(candNames, candParams, ci, cj) || cj == chosen || skip[cj]) continue;
 			if (!isAssignable(candTypes[cj], bound)) out.misfits.push(cj);
 		}
 	}

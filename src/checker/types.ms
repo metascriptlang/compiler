@@ -2178,8 +2178,10 @@ export function instantiatedBodyCount(): int32 { return _instantiatedBodies; }
 
 function bodyWouldShareTheDeclaration(base: Type, names: string[], args: Type[]): boolean {
 	if (!isDeclaredStruct(base) || symGenericParams(base.sym) == "") return false;
+	const declared = base.sym.typeParams;
 	for (let i = 0; i < names.length; i += 1) {
-		if (args[i] == null || args[i].kind != TypeKind.GenericParam || args[i].typeName != names[i]) return true;
+		if (args[i] == null || args[i].kind != TypeKind.GenericParam) return true;
+		if (i < declared.length ? args[i] != declared[i] : args[i].typeName != names[i]) return true;
 	}
 	return false;
 }
@@ -2591,14 +2593,11 @@ export function evaluateConditionalType(t: Type | null): Type {
 		const inferNames: string[] = [];
 		collectGenericParamNames(ext, inferNames, 0);
 		for (const name of inferNames) {
-			if (bindings.names.indexOf(name) < 0) {
-				bindings.names.push(name);
-				bindings.types.push(unknownType());
-			}
+			if (bindings.names.indexOf(name) < 0) bindName(bindings, name, unknownType());
 		}
-		const inferredExt = substituteAllParams(ext, bindings.names, bindings.types);
+		const inferredExt = substituteBound(ext, bindings);
 		if (!isAssignableForConditional(check, inferredExt)) return t.typeChildren[3];
-		return substituteAllParams(t.typeChildren[2], bindings.names, bindings.types);
+		return substituteBound(t.typeChildren[2], bindings);
 	}
 	return isAssignableForConditional(check, ext) ? t.typeChildren[2] : t.typeChildren[3];
 }
@@ -3070,6 +3069,7 @@ function typeKeyInner(t: Type, keying: Type[]): string {
 	if (t == null) return "null";
 	if (t.kind == TypeKind.NumberLiteral) return "numlit:" + t.typeName;
 	if (t.kind == TypeKind.Alias && t.typeReturn != null) return typeKeyIn(t.typeReturn, keying);
+	if (t.kind == TypeKind.GenericParam && t.sym != null) return `${t.typeName}#${t.sym.itemModule}.${t.sym.item}`;
 	if (t.typeName != "" && isNominalKind(t.kind)) return t.typeName + "_" + _stdHashToBase36(nominalTypeKey(t));
 	if (t.typeName != "" && t.kind != TypeKind.Tuple && t.kind != TypeKind.Function && t.kind != TypeKind.GenericInstance) return t.typeName;
 	return match (t.kind) {
@@ -3808,9 +3808,9 @@ function substitutedConditional(t: Type, paramName: string, concrete: Type, acti
 	return evaluateConditionalType(cond);
 }
 
-function substitutedConditionalAll(t: Type, names: string[], concretes: Type[], active: Cursor<Type>[]): Type {
+function substitutedConditionalAll(t: Type, names: string[], params: (Type | null)[], concretes: Type[], active: Cursor<Type>[]): Type {
 	const cond = copyTypeForSubst(t);
-	substituteChildrenInPlaceAll(cond, names, concretes, active);
+	substituteChildrenInPlaceAll(cond, names, params, concretes, active);
 	return evaluateConditionalType(cond);
 }
 
@@ -3938,92 +3938,100 @@ function substituteTypeWalk(t: Type, paramName: string, concrete: Type, active: 
 // per call site; on self-host that was 21M single-param node walks (~56s).
 export function substituteAllParams(t: Type | null, names: string[], concretes: Type[]): Type {
 	const seen: Cursor<Type>[] = [];
-	return substituteAllParamsInner(t, names, concretes, seen);
+	return substituteAllParamsInner(t, names, [], concretes, seen);
 }
 
-function substituteAllParamsInner(t: Type | null, names: string[], concretes: Type[], seen: Cursor<Type>[]): Type {
+export function substituteParams(t: Type | null, names: string[], params: (Type | null)[], concretes: Type[]): Type {
+	const seen: Cursor<Type>[] = [];
+	return substituteAllParamsInner(t, names, params, concretes, seen);
+}
+
+export function substituteBound(t: Type | null, b: UnifyBindings): Type {
+	if (b.names.length == 0) return t != null ? t : inferredType();
+	return substituteParams(t, b.names, b.params, b.types);
+}
+
+function substituteAllParamsInner(t: Type | null, names: string[], params: (Type | null)[], concretes: Type[], seen: Cursor<Type>[]): Type {
 	if (t == null) return inferredType();
 	if (t.kind == TypeKind.GenericParam) {
-		for (let ni = 0; ni < names.length; ni += 1) {
-			if (t.typeName == names[ni]) return concretes[ni];
-		}
-		return t;
+		const slot = paramSlot(names, params, t);
+		return slot >= 0 ? concretes[slot] : t;
 	}
 	if (typeVisitHas(seen, t)) return t;
 	seen.push(t);
-	const result = substituteAllParamsWalk(t, names, concretes, seen);
+	const result = substituteAllParamsWalk(t, names, params, concretes, seen);
 	seen.pop();
 	return result;
 }
 
-function substituteAllParamsWalk(t: Type, names: string[], concretes: Type[], active: Cursor<Type>[]): Type {
+function substituteAllParamsWalk(t: Type, names: string[], params: (Type | null)[], concretes: Type[], active: Cursor<Type>[]): Type {
 	const result = match (t.kind) {
 			TypeKind.Number | TypeKind.String | TypeKind.Boolean |
 			TypeKind.Void | TypeKind.Null | TypeKind.Unknown |
 			TypeKind.Never | TypeKind.Error | TypeKind.None | TypeKind.Inferred |
 			TypeKind.GenericParam | TypeKind.CString => t,
-			TypeKind.Array => createArray(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
-			TypeKind.SizedArray => createSizedArray(substituteAllParamsInner(t.typeReturn, names, concretes, active), t.typeValue),
-			TypeKind.Span => createSpan(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
-			TypeKind.Set => createBitSet(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
+			TypeKind.Array => createArray(substituteAllParamsInner(t.typeReturn, names, params, concretes, active)),
+			TypeKind.SizedArray => createSizedArray(substituteAllParamsInner(t.typeReturn, names, params, concretes, active), t.typeValue),
+			TypeKind.Span => createSpan(substituteAllParamsInner(t.typeReturn, names, params, concretes, active)),
+			TypeKind.Set => createBitSet(substituteAllParamsInner(t.typeReturn, names, params, concretes, active)),
 			TypeKind.Varargs => t.typeChildren.length > 0
-				? createVarargs(substituteAllParamsInner(t.typeChildren[0], names, concretes, active))
+				? createVarargs(substituteAllParamsInner(t.typeChildren[0], names, params, concretes, active))
 				: t,
 			TypeKind.Function => {
 				const fn = copyTypeForSubst(t);
-				substituteChildrenInPlaceAll(fn, names, concretes, active);
-				fn.typeReturn = substituteAllParamsInner(t.typeReturn, names, concretes, active);
+				substituteChildrenInPlaceAll(fn, names, params, concretes, active);
+				fn.typeReturn = substituteAllParamsInner(t.typeReturn, names, params, concretes, active);
 				return fn;
 			},
 			TypeKind.Union | TypeKind.Tuple => {
 				if (t.kind == TypeKind.Union && t.typeName != "" && !hasGenericParams(t)) return t;
 				const copy = copyTypeForSubst(t);
-				substituteChildrenInPlaceAll(copy, names, concretes, active);
+				substituteChildrenInPlaceAll(copy, names, params, concretes, active);
 				return t.kind == TypeKind.Union ? canonicalSubstitutedUnion(copy) : copy;
 			},
-			TypeKind.Ref => rebuildRefLike(t, substituteAllParamsInner(refSubstInner(t), names, concretes, active)),
-			TypeKind.Ptr => createPtr(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
-			TypeKind.Borrow => createBorrow(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
-			TypeKind.Var => substitutedVar(t, substituteAllParamsInner(t.typeReturn, names, concretes, active)),
-			TypeKind.Sink => createSink(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
-			TypeKind.Cursor => createCursor(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
-			TypeKind.Struct => substituteStructAll(t, names, concretes, active),
+			TypeKind.Ref => rebuildRefLike(t, substituteAllParamsInner(refSubstInner(t), names, params, concretes, active)),
+			TypeKind.Ptr => createPtr(substituteAllParamsInner(t.typeReturn, names, params, concretes, active)),
+			TypeKind.Borrow => createBorrow(substituteAllParamsInner(t.typeReturn, names, params, concretes, active)),
+			TypeKind.Var => substitutedVar(t, substituteAllParamsInner(t.typeReturn, names, params, concretes, active)),
+			TypeKind.Sink => createSink(substituteAllParamsInner(t.typeReturn, names, params, concretes, active)),
+			TypeKind.Cursor => createCursor(substituteAllParamsInner(t.typeReturn, names, params, concretes, active)),
+			TypeKind.Struct => substituteStructAll(t, names, params, concretes, active),
 			TypeKind.GenericInstance => {
 				// typeExtra intentionally NOT walked — same rationale as
 				// substituteTypeInner (walking it cost ~20× compile time).
 				const gi = copyTypeForSubst(t);
-				substituteChildrenInPlaceAll(gi, names, concretes, active);
+				substituteChildrenInPlaceAll(gi, names, params, concretes, active);
 				const building = instanceBeingBuilt(gi);
 				if (building != null) return building;
 				if (gi.typeReturn != null && typeVisitHas(active, gi.typeReturn)) {
 					gi.typeReturn = null as unknown as Type;
 				} else if (gi.typeReturn != null) {
-					gi.typeReturn = substituteAllParamsInner(gi.typeReturn, names, concretes, active);
+					gi.typeReturn = substituteAllParamsInner(gi.typeReturn, names, params, concretes, active);
 					nameInstanceBody(gi, t);
 				}
 				return gi;
 			},
 			TypeKind.Conditional => {
-				const checkIndex = t.typeChildren.length == 4 ? names.indexOf(t.typeChildren[0].typeName) : -1;
+				const checkIndex = t.typeChildren.length == 4 && t.typeChildren[0].kind == TypeKind.GenericParam ? paramSlot(names, params, t.typeChildren[0]) : -1;
 				const members = checkIndex >= 0 ? distributedMembers(t, names[checkIndex], concretes[checkIndex]) : [];
-				if (members.length == 0) return substitutedConditionalAll(t, names, concretes, active);
+				if (members.length == 0) return substitutedConditionalAll(t, names, params, concretes, active);
 				const parts: Type[] = [];
 				for (const m of members) {
 					const each: Type[] = [];
 					for (const c of concretes) each.push(c);
 					each[checkIndex] = m;
-					parts.push(substitutedConditionalAll(t, names, each, active));
+					parts.push(substitutedConditionalAll(t, names, params, each, active));
 				}
 				return unionOfParts(parts);
 			},
 			TypeKind.IndexedAccess => {
 				const access = copyTypeForSubst(t);
-				substituteChildrenInPlaceAll(access, names, concretes, active);
+				substituteChildrenInPlaceAll(access, names, params, concretes, active);
 				return evaluateIndexedAccessType(access);
 			},
 			TypeKind.KeyOf => {
 				const keyOf = copyTypeForSubst(t);
-				substituteChildrenInPlaceAll(keyOf, names, concretes, active);
+				substituteChildrenInPlaceAll(keyOf, names, params, concretes, active);
 				return evaluateKeyOfType(keyOf);
 			},
 			_ => t,
@@ -4031,18 +4039,18 @@ function substituteAllParamsWalk(t: Type, names: string[], concretes: Type[], ac
 	return isReadonlyView(t) ? createReadonlyView(result) : result;
 }
 
-function substituteChildrenInPlaceAll(copy: Type, names: string[], concretes: Type[], seen: Cursor<Type>[]): void {
+function substituteChildrenInPlaceAll(copy: Type, names: string[], params: (Type | null)[], concretes: Type[], seen: Cursor<Type>[]): void {
 	for (let ci = 0; ci < copy.typeChildren.length; ci += 1) {
-		copy.typeChildren[ci] = substituteAllParamsInner(copy.typeChildren[ci], names, concretes, seen);
+		copy.typeChildren[ci] = substituteAllParamsInner(copy.typeChildren[ci], names, params, concretes, seen);
 	}
 }
 
-function substituteStructAll(t: Type, names: string[], concretes: Type[], seen: Cursor<Type>[]): Type {
+function substituteStructAll(t: Type, names: string[], params: (Type | null)[], concretes: Type[], seen: Cursor<Type>[]): Type {
 	if (isDeclaredStruct(t) && !t.typeFlags.has(TypeFlag.HasGenericParam)) return t;
 	const newFieldTypes: Type[] = [];
 	let changed = false;
 	for (let ci = 0; ci < t.typeChildren.length; ci += 1) {
-		const sub = substituteAllParamsInner(t.typeChildren[ci], names, concretes, seen);
+		const sub = substituteAllParamsInner(t.typeChildren[ci], names, params, concretes, seen);
 		newFieldTypes.push(sub);
 		if (sub != t.typeChildren[ci]) changed = true;
 	}
@@ -4085,25 +4093,56 @@ export function instantiateGeneric(t: Type, genericParamNames: string[], typeArg
 
 export interface UnifyBindings {
 	names: string[];
+	params: (Type | null)[];
 	types: Type[];
 }
 
 export function createUnifyBindings(): UnifyBindings {
-	return { names: [], types: [] };
+	return { names: [], params: [], types: [] };
 }
 
-// Merge `from` into `into`, skipping any name already present. Stable union:
+export function bindParam(b: UnifyBindings, param: Type, t: Type): void {
+	b.names.push(param.typeName);
+	b.params.push(param);
+	b.types.push(t);
+}
+
+export function bindName(b: UnifyBindings, name: string, t: Type): void {
+	b.names.push(name);
+	b.params.push(null);
+	b.types.push(t);
+}
+
+export function bindAt(b: UnifyBindings, from: UnifyBindings, i: int32): void {
+	b.names.push(from.names[i]);
+	b.params.push(from.params[i]);
+	b.types.push(from.types[i]);
+}
+
+function sameBoundParam(aName: string, a: Type | null, bName: string, b: Type | null): boolean {
+	if (a != null && b != null) return a == b;
+	return aName == bName;
+}
+
+export function paramSlot(names: string[], params: (Type | null)[], gp: Type): int32 {
+	for (let i = 0; i < names.length; i += 1) {
+		if (sameBoundParam(names[i], i < params.length ? params[i] : null, gp.typeName, gp)) return i;
+	}
+	return -1;
+}
+
+export function boundSlot(b: UnifyBindings, name: string, param: Type | null): int32 {
+	for (let i = 0; i < b.names.length; i += 1) {
+		if (sameBoundParam(b.names[i], b.params[i], name, param)) return i;
+	}
+	return -1;
+}
+
+// Merge `from` into `into`, skipping any parameter already bound. Stable union:
 // arg-driven bindings keep priority, explicit-type-arg bindings fill gaps.
 export function mergeUnifyBindings(into: UnifyBindings, from: UnifyBindings): void {
 	for (let i = 0; i < from.names.length; i += 1) {
-		let alreadyBound = false;
-		for (const existing of into.names) {
-			if (existing == from.names[i]) { alreadyBound = true; break; }
-		}
-		if (!alreadyBound) {
-			into.names.push(from.names[i]);
-			into.types.push(from.types[i]);
-		}
+		if (boundSlot(into, from.names[i], from.params[i]) < 0) bindAt(into, from, i);
 	}
 }
 
@@ -4135,8 +4174,8 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	if (concrete == null) return;
 	// Direct generic param match
 	if (formal.kind == TypeKind.GenericParam) {
-		bindings.names.push(formal.typeName);
-		bindings.types.push(closureStorageType(concrete));
+		if (formal.sym != null) bindParam(bindings, formal, closureStorageType(concrete));
+		else bindName(bindings, formal.typeName, closureStorageType(concrete));
 		return;
 	}
 	if ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Borrow || formal.kind == TypeKind.Cursor || formal.kind == TypeKind.Sink) && formal.typeReturn != null) {
