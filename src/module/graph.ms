@@ -398,3 +398,19 @@ test "planDynamicModules is empty without import()" {
 	addModule(g, createModule("/main.ms"));
 	assert planDynamicModules(g, "/main.ms", ["/main.ms"], "").records.length == 0;
 }
+
+test "planDynamicModules leaves a module reached only through type-only imports unevaluated" {
+	const g = createModuleGraph();
+	const paths = ["/gpu.ms", "/types.ms", "/main.ms"];
+	for (const p of paths) addModule(g, createModule(p));
+	const typeOnly = createImportEntry(["Rgba"], ["Rgba"], "/types.ms", "./types");
+	typeOnly.typeOnly = true;
+	findModule(g, "/main.ms").imports.push(typeOnly);
+	findModule(g, "/types.ms").imports.push(createImportEntry(["slots"], ["slots"], "/gpu.ms", "./gpu"));
+	const plan = planDynamicModules(g, "/main.ms", paths, "");
+	assert plan.lazy.has("/types.ms") && plan.lazy.has("/gpu.ms") && plan.lazy.size == 2;
+	assert plan.records.length == 0;
+	findModule(g, "/main.ms").runtimeDeps.push("/gpu.ms");
+	const reached = planDynamicModules(g, "/main.ms", paths, "");
+	assert reached.lazy.has("/types.ms") && reached.lazy.size == 1;
+}
