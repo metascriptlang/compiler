@@ -16,14 +16,16 @@
 //   reference comparisons  — template `>` = y < x           → derived from <
 //   reference comparisons  — template `>=` = y <= x         → derived from <=
 
-import { Node, NodeKind, BinaryExprData, ExprStmtData, NewExprData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind, AttachedOp, NodeFlag } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, ExprStmtData, NewExprData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind, AttachedOp, NodeFlag, CallingConvention, ObjectLiteralData } from "../../ast/node";
 import { TransformContext, PendingTupleOp, reportTransformError } from "../context";
 import { liftedOp, hookBaseCName, hasUnionEq, anonUnionCName, opTypeKey } from "../../codegen/c/types";
-import { walkNode, hasEffect } from "../walker";
-import { cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, receiverKind, makeTypedIdentResolved } from "../util";
+import { walkNode, hasEffect, walkExpandBlocks, walkWithinStatement, walkOutsideInstanceFieldInits } from "../walker";
+import { cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, receiverKind, makeTypedIdentResolved, makeIdentResolved } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isResult, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion, isStdCollectionKind } from "../../checker/types";
 import { cloneIfPure } from "../coercion/intArithJS";
-import { resolveOperatorCall, ExtensionMethod, getExtFnType, declaredKeyHash } from "../../checker/context";
+import { bindOnce } from "../coercion/nullishCoalesce";
+import { cloneNodeKeepSem } from "../../monomorphize/clone";
+import { resolveOperatorCall, ExtensionMethod, getExtFnType, declaredKeyHash, findAllExtensionsByName, hasConcreteReceiver, isReceiverMatch } from "../../checker/context";
 
 // The checker binds every operator a routine in scope is declared for; an operator that reaches
 // lowering unbound calls a prelude or extension operator, the same one in every scope.
@@ -261,16 +263,60 @@ function cloneLvalue(node: Node): Node {
 	return node;
 }
 
-// Closure equality: a === b -> a.fn === b.fn && a.env === b.env (reference parity). Only a
-// plain path operand is read twice; any other operand is left as written.
-function lowerClosureEquality(node: Node, opName: string, left: Node, right: Node, loc: SourceLocation): Node {
-	const readsTwice = (n: Node): boolean => n.kind == NodeKind.Identifier || n.kind == NodeKind.MemberExpr;
-	if (!readsTwice(left) || !readsTwice(right)) return node;
-	const fnEq = makeBinary(makeMember(cloneLvalue(left), "fn", loc), "===", makeMember(cloneLvalue(right), "fn", loc), loc);
-	const envEq = makeBinary(makeMember(left, "env", loc), "===", makeMember(right, "env", loc), loc);
+function isClosureValue(t: Type | null): boolean {
+	return t != null && t.kind == TypeKind.Function && t.callConv == CallingConvention.CcClosure;
+}
+
+function rereadable(n: Node): boolean {
+	if (n.kind != NodeKind.ObjectLiteral || !n.flags.has(NodeFlag.Closure)) return cloneIfPure(n) != null;
+	for (const part of (n.data as ObjectLiteralData).properties) {
+		if (part.kind != NodeKind.NullLiteral && cloneIfPure(part) == null) return false;
+	}
+	return true;
+}
+
+function boundRead(bound: Node, loc: SourceLocation): Node {
+	return makeIdentResolved((bound.data as BinaryExprData).left.resolvedSym!, loc);
+}
+
+function lowerClosureEquality(node: Node, ctx: TransformContext, temps: Node[] | null): Node {
+	if (node.kind != NodeKind.BinaryExpr) return node;
+	const d = node.data as BinaryExprData;
+	const op = d.operator;
+	if (op != "==" && op != "===" && op != "!=" && op != "!==") return node;
+	if (!isClosureValue(resolveType(ctx, d.left)) || !isClosureValue(resolveType(ctx, d.right))) return node;
+	const loc = node.location;
+	let left = d.left;
+	let right = d.right;
+	let leftAgain = d.left;
+	let rightAgain = d.right;
+	if (rereadable(left) && rereadable(right)) {
+		leftAgain = cloneNodeKeepSem(left);
+		rightAgain = cloneNodeKeepSem(right);
+	} else if (temps != null) {
+		left = bindOnce(d.left, ctx, temps, loc);
+		right = bindOnce(d.right, ctx, temps, loc);
+		leftAgain = boundRead(left, loc);
+		rightAgain = boundRead(right, loc);
+	} else {
+		reportTransformError(ctx, "internal: a function comparison whose operand has effects reached lowering outside a statement", loc);
+		return node;
+	}
+	const fnEq = makeBinary(makeMember(left, "fn", loc), "===", makeMember(right, "fn", loc), loc);
+	const envEq = makeBinary(makeMember(leftAgain, "env", loc), "===", makeMember(rightAgain, "env", loc), loc);
 	const bothEq = makeBinary(fnEq, "&&", envEq, loc);
-	if (opName == "!=" || opName == "!==") return makeUnary("!", bothEq, loc);
-	return bothEq;
+	return op == "!=" || op == "!==" ? makeUnary("!", bothEq, loc) : bothEq;
+}
+
+export function lowerClosureEqualities(program: Node, ctx: TransformContext): Node {
+	if (ctx.jsBackend) return program;
+	walkExpandBlocks(program, (stmt: Node, c: TransformContext): Node[] => {
+		const temps: Node[] = [];
+		const lowered = walkWithinStatement(stmt, (node: Node): Node => lowerClosureEquality(node, c, temps));
+		temps.push(lowered);
+		return temps;
+	}, ctx);
+	return walkOutsideInstanceFieldInits(program, (node: Node): Node => lowerClosureEquality(node, ctx, null));
 }
 
 function lowerUnaryNode(node: Node, ctx: TransformContext): Node {
@@ -380,10 +426,6 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 			d.right = hasNullLeft ? fnMember : bareNull;
 			return node;
 		}
-	}
-
-	if (leftType != null && !ctx.jsBackend && leftType.kind == TypeKind.Function && isNullEqOp && !hasNullLeft && !hasNullRight) {
-		return lowerClosureEquality(node, opName, d.left, d.right, loc);
 	}
 
 	if (leftType == null) return node;
@@ -501,7 +543,7 @@ export function bindCollectionKeyOps(program: Node, ctx: TransformContext): Node
 // ===== Tests =====
 
 import { createContext, createExtensionRegistry, registerExtension } from "../../checker/context";
-import { createStruct, createFunction, createTuple, createRef, createPtr, createMaybeType, inferredType, numberType, stringType, booleanType } from "../../checker/types";
+import { createStruct, createFunction, createClosureType, createTuple, createRef, createPtr, createMaybeType, inferredType, numberType, stringType, booleanType } from "../../checker/types";
 import { defineSymbol, makeSymbol, lookupSymbol, SymbolTable } from "../../checker/symbol";
 import { forEachChild } from "../../ast/visitor";
 import { createTransformContextWithChecker } from "../context";
@@ -714,34 +756,48 @@ test "tuple === is refused at lowering: the checker routes it to the std equalit
 	assert ctx.pendingTupleOps.length == 0;
 }
 
-test "closure === compares the fn word and the env word on C" {
+function lowerClosuresOf(src: string, operand: Type, jsBackend: boolean): Node[] {
 	const checkerCtx = createContext();
 	checkerCtx.extensionRegistry = createExtensionRegistry();
-	const fnType = createFunction([], [], numberType());
-	defineSymbol(checkerCtx.table, makeSymbol("a", SymbolKind.Variable, fnType, false));
-	defineSymbol(checkerCtx.table, makeSymbol("b", SymbolKind.Variable, fnType, false));
+	defineSymbol(checkerCtx.table, makeSymbol("a", SymbolKind.Variable, operand, false));
+	defineSymbol(checkerCtx.table, makeSymbol("b", SymbolKind.Variable, operand, false));
+	defineSymbol(checkerCtx.table, makeSymbol("g", SymbolKind.Variable, createClosureType([], [], operand), false));
 	const ctx = createTransformContextWithChecker(checkerCtx);
-	const pr = parseInput("a === b;");
-	if (!pr.ok) return;
-	const result = lowerBound(pr.value, ctx);
-	const stmt = getStmts(result)[0].data as ExprStmtData;
-	assert stmt.expr.kind == NodeKind.BinaryExpr;
-	assert (stmt.expr.data as BinaryExprData).operator == "&&";
+	ctx.jsBackend = jsBackend;
+	const pr = parseInput(src);
+	if (!pr.ok) return [];
+	bindFromTable(pr.value, checkerCtx.table);
+	walkNode(pr.value, (n: Node): Node => {
+		if (n.kind == NodeKind.CallExpr) n.nodeType = operand;
+		return n;
+	});
+	return getStmts(lowerClosureEqualities(pr.value, ctx));
+}
+
+function loweredOperator(stmts: Node[]): string {
+	const e = (stmts[stmts.length - 1].data as ExprStmtData).expr;
+	return e.kind == NodeKind.BinaryExpr ? (e.data as BinaryExprData).operator : "";
+}
+
+test "closure === compares the fn word and the env word on C" {
+	const stmts = lowerClosuresOf("a === b;", createClosureType([], [], numberType()), false);
+	assert stmts.length == 1;
+	assert loweredOperator(stmts) == "&&";
 }
 
 test "closure === is left to the JS backend" {
-	const checkerCtx = createContext();
-	checkerCtx.extensionRegistry = createExtensionRegistry();
-	const fnType = createFunction([], [], numberType());
-	defineSymbol(checkerCtx.table, makeSymbol("a", SymbolKind.Variable, fnType, false));
-	defineSymbol(checkerCtx.table, makeSymbol("b", SymbolKind.Variable, fnType, false));
-	const ctx = createTransformContextWithChecker(checkerCtx);
-	ctx.jsBackend = true;
-	const pr = parseInput("a === b;");
-	if (!pr.ok) return;
-	const result = lowerBound(pr.value, ctx);
-	const stmt = getStmts(result)[0].data as ExprStmtData;
-	assert (stmt.expr.data as BinaryExprData).operator == "===";
+	assert loweredOperator(lowerClosuresOf("a === b;", createClosureType([], [], numberType()), true)) == "===";
+}
+
+test "two named functions compare as plain pointers" {
+	assert loweredOperator(lowerClosuresOf("a === b;", createFunction([], [], numberType()), false)) == "===";
+}
+
+test "a closure operand with effects binds both operands once" {
+	const stmts = lowerClosuresOf("a === g();", createClosureType([], [], numberType()), false);
+	assert stmts.length == 3;
+	assert stmts[0].kind == NodeKind.VariableDecl && stmts[1].kind == NodeKind.VariableDecl;
+	assert loweredOperator(stmts) == "&&";
 }
 
 test "tuple < rewrites to _lt call" {
