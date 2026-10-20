@@ -1829,12 +1829,12 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 						if (filtered.indexOf(owned) < 0) filtered.push(owned);
 					}
 				}
-				if (isStaticAccess && filtered.length > 1) {
+				if (isStaticAccess) {
 					const staticOnly: ExtensionMethod[] = [];
 					for (const ext of filtered) {
 						if (ext.isStatic) staticOnly.push(ext);
 					}
-					if (staticOnly.length > 0) filtered = staticOnly;
+					filtered = staticOnly;
 				}
 				if (filtered.length == 1) {
 					const winner = filtered[0];
@@ -5208,13 +5208,13 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	if (ctx.extensionRegistry != null) {
 		const allByName = findAllExtensionsByName(ctx.extensionRegistry, d.property);
 		const recvLookupType = withoutReadonlyView(objType);
-		let ext = findFirstMatchingExt(allByName, recvLookupType);
+		let ext = isStaticClassAccess ? null as unknown as ExtensionMethod : findFirstMatchingExt(allByName, recvLookupType);
 		let extObjType = recvLookupType;
 		// reference array: UFCS methods (push/slice/...) are declared on the value
 		// Array receiver; a Ref<Array> must deref before the lookup matches. Insert a
 		// HiddenDeref so codegen sees through the Ref, and unify generics on the
 		// unwrapped Array so T binds (mirrors the class-method deref path above).
-		if (ext == null && needsDeref && (resolvedObjType.kind == TypeKind.Array || resolvedObjType.kind == TypeKind.SizedArray || resolvedObjType.kind == TypeKind.Span)) {
+		if (ext == null && !isStaticClassAccess && needsDeref && (resolvedObjType.kind == TypeKind.Array || resolvedObjType.kind == TypeKind.SizedArray || resolvedObjType.kind == TypeKind.Span)) {
 			const derefExt = findFirstMatchingExt(allByName, resolvedObjType);
 			if (derefExt != null) {
 				ext = derefExt;
