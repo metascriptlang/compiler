@@ -2572,6 +2572,8 @@ actor Unsafe {
 
 Actors also support cooperative suspension — async actor methods (`CALL` pattern) suspend the actor while awaiting an internal future, freeing the scheduler to process other actors' mailboxes.
 
+The suspended actor's own mailbox waits: a send or CALL that reaches it while one of its methods awaits runs after that method has finished, so the actor's fields stay as the method left them across its await (measured 2026-10-20 on C and JS: an awaited CALL and a timer in corpus `actorCallsIntoASuspendedActorWaitForIt`, a spawn in corpus 1113). A mailbox is unbounded and a send never pauses its sender; a sender that awaits a CALL to its receiver after each burst has at most one burst queued there (measured 2026-10-20 on C: 1M sends to a busy actor peaked at 33.7 MB, and at 2.2 MB with a CALL after every 200).
+
 #### Supervision (Erlang OTP)
 
 Supervisors monitor child actors and restart them on failure:
