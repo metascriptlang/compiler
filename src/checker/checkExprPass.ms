@@ -37,6 +37,8 @@ import { storedTypeOfNullRead, branchFitsSlot, checkBitwiseOperands, checkNegate
 
 function literalElemType(el: Node): Type | null {
 	if (el.kind != NodeKind.SpreadExpr) return el.nodeType;
+	const tuple = spreadTuple(el);
+	if (tuple != null) return joinBranchTypes(tuple.typeChildren);
 	let src = (el.data as SpreadExprData).spreadArg.nodeType;
 	if (src != null && src.kind == TypeKind.Ref && src.typeReturn != null) src = src.typeReturn;
 	if (src != null && (src.kind == TypeKind.Array || src.kind == TypeKind.SizedArray || src.kind == TypeKind.Span)
@@ -44,18 +46,35 @@ function literalElemType(el: Node): Type | null {
 	return el.nodeType;
 }
 
+function spreadTuple(spread: Node): Type | null {
+	const src = (spread.data as SpreadExprData).spreadArg.nodeType;
+	const bare = src != null ? peelTransparentInstance(src) : null;
+	return bare != null && bare.kind == TypeKind.Tuple && bare.typeChildren.length > 0 ? bare : null;
+}
+
 function refuseSpreadElements(ctx: CheckerContext, spread: Node, elem: Type | null): void {
-	const from = literalElemType(spread);
-	if (from == null || elem == null || isUnresolvedType(from) || isUnresolvedType(elem)) return;
-	if (hasGenericParams(from) || hasGenericParams(elem) || sameType(from, elem)) return;
+	const tuple = spreadTuple(spread);
+	if (tuple == null) {
+		refuseSpreadElement(ctx, spread, literalElemType(spread), elem);
+		return;
+	}
+	for (const from of tuple.typeChildren) {
+		if (refuseSpreadElement(ctx, spread, from, elem)) return;
+	}
+}
+
+function refuseSpreadElement(ctx: CheckerContext, spread: Node, from: Type | null, elem: Type | null): boolean {
+	if (from == null || elem == null || isUnresolvedType(from) || isUnresolvedType(elem)) return false;
+	if (hasGenericParams(from) || hasGenericParams(elem) || sameType(from, elem)) return false;
 	const numeric = isNumeric(from) && isNumeric(elem);
 	const wraps = !numeric && (isMaybeType(elem) || (elem.kind == TypeKind.Union && unwrapRefNullUnion(elem) == null));
-	if (numeric ? !numericConvRefuses(from, elem) : (!wraps && isAssignable(from, elem))) return;
+	if (numeric ? !numericConvRefuses(from, elem) : (!wraps && isAssignable(from, elem))) return false;
 	const why = numeric ? `implicit ${typeDisplayName(from)} → ${typeDisplayName(elem)} conversion ${numericRefusalReason(from, elem)}`
 		: wraps ? `each '${typeDisplayName(from)}' would have to be converted to '${typeDisplayName(elem)}'`
 		: `'${typeDisplayName(from)}' is not assignable to '${typeDisplayName(elem)}'${explainStructuralPrefix(from, elem)}`;
 	addError(ctx, `a spread copies its elements into the array as they are: ${why} — convert them first, e.g. with map`,
 		spread.location.line, spread.location.column);
+	return true;
 }
 
 function isComparisonOp(op: string): boolean {
