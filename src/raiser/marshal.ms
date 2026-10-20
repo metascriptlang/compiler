@@ -9,13 +9,18 @@
 // to bridge between Raiser's tagged register file and the host's native C
 // types (cstring, int32, etc.).
 //
-// Defensive: kind mismatches return a safe zero-equivalent rather than
-// corrupting register state. Callers should pass already-validated values
-// where possible (extern type signatures enforce this at the call site).
+// The scalar unbox helpers are defensive: kind mismatches return a safe
+// zero-equivalent rather than corrupting register state. Callers should pass
+// already-validated values where possible (extern type signatures enforce this
+// at the call site).
 
 import {
 	RaiserValue, RaiserValueKind,
-	raiserNil, raiserBool, raiserInt, raiserFloat, raiserString,
+	raiserNil, raiserBool, raiserInt, raiserFloat, raiserString, raiserObject, raiserArray,
+	copyValueInto,
+	RaiserArrayHeap, RaiserObjectHeap, createArrayHeap, createStructHeap, copyGraph,
+	heapAllocObject, heapObjectSetField, heapObjectGetField,
+	heapAllocArray, heapArrayPush, heapArrayLen, heapArrayGet,
 } from "./value";
 
 // --- Host function signature ---
@@ -75,6 +80,121 @@ export function boxFloat(f: number): RaiserValue {
 
 export function boxBool(b: boolean): RaiserValue {
 	return raiserBool(b);
+}
+
+// --- Host-owned values ---
+
+export interface RaiserHostValue {
+	root: RaiserValue;
+	arrayHeap: RaiserArrayHeap;
+	objectHeap: RaiserObjectHeap;
+}
+
+const SCALAR_ARRAYS: RaiserArrayHeap = createArrayHeap();
+const SCALAR_OBJECTS: RaiserObjectHeap = createStructHeap();
+
+function isScalarKind(kind: RaiserValueKind): boolean {
+	return kind == RaiserValueKind.Nil || kind == RaiserValueKind.Bool
+		|| kind == RaiserValueKind.Int || kind == RaiserValueKind.Float
+		|| kind == RaiserValueKind.String;
+}
+
+function crossHeaps(
+	v: RaiserValue,
+	fromArrays: RaiserArrayHeap,
+	fromObjects: RaiserObjectHeap,
+	toArrays: RaiserArrayHeap,
+	toObjects: RaiserObjectHeap,
+): RaiserValue {
+	if (!isScalarKind(v.kind)) return copyGraph(fromArrays, fromObjects, toArrays, toObjects, v);
+	const out = raiserNil();
+	copyValueInto(out, v);
+	return out;
+}
+
+export function hostValue(v: RaiserValue): RaiserHostValue {
+	if (!isScalarKind(v.kind)) {
+		const kind = v.kind.toString();
+		throw new Error(`hostValue takes a boxed scalar, not a handle of kind ${kind}: `
+			+ "build an aggregate with hostObject or hostArray");
+	}
+	const root = raiserNil();
+	copyValueInto(root, v);
+	return { root, arrayHeap: SCALAR_ARRAYS, objectHeap: SCALAR_OBJECTS };
+}
+
+export function hostObject(names: string[], values: RaiserHostValue[]): RaiserHostValue {
+	if (names.length != values.length) {
+		throw new Error(`hostObject: ${names.length} field name(s) for ${values.length} value(s)`);
+	}
+	const arrayHeap = createArrayHeap();
+	const objectHeap = createStructHeap();
+	const handle = heapAllocObject(objectHeap);
+	for (let i = 0; i < names.length; i += 1) {
+		const v = values[i];
+		const copied = crossHeaps(v.root, v.arrayHeap, v.objectHeap, arrayHeap, objectHeap);
+		heapObjectSetField(objectHeap, handle, names[i], copied);
+	}
+	return { root: raiserObject(handle), arrayHeap, objectHeap };
+}
+
+export function hostArray(items: RaiserHostValue[]): RaiserHostValue {
+	const arrayHeap = createArrayHeap();
+	const objectHeap = createStructHeap();
+	const handle = heapAllocArray(arrayHeap);
+	for (const v of items) {
+		const copied = crossHeaps(v.root, v.arrayHeap, v.objectHeap, arrayHeap, objectHeap);
+		heapArrayPush(arrayHeap, handle, copied);
+	}
+	return { root: raiserArray(handle), arrayHeap, objectHeap };
+}
+
+function part(v: RaiserHostValue, slot: RaiserValue): RaiserHostValue {
+	const root = raiserNil();
+	copyValueInto(root, slot);
+	return { root, arrayHeap: v.arrayHeap, objectHeap: v.objectHeap };
+}
+
+export function field(this v: RaiserHostValue, name: string): RaiserHostValue {
+	if (v.root.kind != RaiserValueKind.Object) {
+		const kind = v.root.kind.toString();
+		throw new Error(`field '${name}' of a value of kind ${kind}: only an object has fields`);
+	}
+	return part(v, heapObjectGetField(v.objectHeap, v.root.intVal, name));
+}
+
+export function length(this v: RaiserHostValue): int32 {
+	if (v.root.kind != RaiserValueKind.Array) {
+		const kind = v.root.kind.toString();
+		throw new Error(`length of a value of kind ${kind}: only an array has a length`);
+	}
+	return heapArrayLen(v.arrayHeap, v.root.intVal);
+}
+
+export function at(this v: RaiserHostValue, index: int32): RaiserHostValue {
+	const count = v.length();
+	if (index < 0 || index >= count) throw new Error(`element ${index} of an array of ${count}`);
+	return part(v, heapArrayGet(v.arrayHeap, v.root.intVal, index));
+}
+
+export function copyToHost(
+	arrayHeap: RaiserArrayHeap,
+	objectHeap: RaiserObjectHeap,
+	v: RaiserValue,
+): RaiserHostValue {
+	if (isScalarKind(v.kind)) return hostValue(v);
+	const arrays = createArrayHeap();
+	const objects = createStructHeap();
+	const root = copyGraph(arrayHeap, objectHeap, arrays, objects, v);
+	return { root, arrayHeap: arrays, objectHeap: objects };
+}
+
+export function copyToVm(
+	arrayHeap: RaiserArrayHeap,
+	objectHeap: RaiserObjectHeap,
+	v: RaiserHostValue,
+): RaiserValue {
+	return crossHeaps(v.root, v.arrayHeap, v.objectHeap, arrayHeap, objectHeap);
 }
 
 // --- Tests ---
