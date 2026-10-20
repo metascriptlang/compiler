@@ -174,7 +174,51 @@ export function resolveStaticInitGuard(s: RaiserCompState, sym: Symbol | null): 
 	return -1;
 }
 
+const OPERAND_A: int32 = 1;
+const OPERAND_B: int32 = 2;
+const OPERAND_C: int32 = 4;
+
+// The operands an opcode reads as plain numbers: a Dyn register holds a box, and these opcodes
+// read the register's own word.
+function wordOperands(op: RaiserOpcode): int32 {
+	return match (op) {
+		RaiserOpcode.AddI64 | RaiserOpcode.SubI64 | RaiserOpcode.MulI64 | RaiserOpcode.DivI64 | RaiserOpcode.ModI64
+			| RaiserOpcode.AddU64 | RaiserOpcode.SubU64 | RaiserOpcode.MulU64 | RaiserOpcode.DivU64 | RaiserOpcode.ModU64
+			| RaiserOpcode.AddF64 | RaiserOpcode.SubF64 | RaiserOpcode.MulF64 | RaiserOpcode.DivF64
+			| RaiserOpcode.BitAnd | RaiserOpcode.BitOr | RaiserOpcode.BitXor
+			| RaiserOpcode.ShiftLeft | RaiserOpcode.ShiftRight | RaiserOpcode.ShiftRightU => OPERAND_B | OPERAND_C,
+		RaiserOpcode.NegI64 | RaiserOpcode.NegF64 | RaiserOpcode.BitNot | RaiserOpcode.AddI64Imm | RaiserOpcode.SubI64Imm => OPERAND_B,
+		RaiserOpcode.BeqI64 | RaiserOpcode.BneI64 | RaiserOpcode.BltI64 | RaiserOpcode.BleI64 | RaiserOpcode.BgtI64 | RaiserOpcode.BgeI64
+			| RaiserOpcode.BeqF64 | RaiserOpcode.BneF64 | RaiserOpcode.BltF64 | RaiserOpcode.BleF64 | RaiserOpcode.BgtF64 | RaiserOpcode.BgeF64
+			| RaiserOpcode.BltU64 | RaiserOpcode.BleU64
+			| RaiserOpcode.BrEqI64 | RaiserOpcode.BrNeI64 | RaiserOpcode.BrLtI64 | RaiserOpcode.BrLeI64 | RaiserOpcode.BrGtI64 | RaiserOpcode.BrGeI64 => OPERAND_A | OPERAND_B,
+		RaiserOpcode.BeqI64Imm | RaiserOpcode.BneI64Imm | RaiserOpcode.BltI64Imm | RaiserOpcode.BleI64Imm | RaiserOpcode.BgtI64Imm | RaiserOpcode.BgeI64Imm
+			| RaiserOpcode.BrEqI64Imm | RaiserOpcode.BrNeI64Imm | RaiserOpcode.BrLtI64Imm | RaiserOpcode.BrLeI64Imm | RaiserOpcode.BrGtI64Imm | RaiserOpcode.BrGeI64Imm => OPERAND_A,
+		_ => 0,
+	};
+}
+
+function unboxedWord(s: RaiserCompState, reg: number): number {
+	if (classOfReg(s, reg as int32) != RaiserRegClass.Dyn) return reg;
+	const word = allocWord(s);
+	s.code.push(raiserABC(RaiserOpcode.Unbox, word, reg, 0));
+	return word;
+}
+
+// A Dyn register holds a box or nil and every other class holds the plain value, so a Move
+// between the two sides is the Box or Unbox that crosses them, and an opcode that reads a plain
+// number reads the unboxed one.
 export function emitInst(s: RaiserCompState, inst: RaiserInstruction): void {
+	if (inst.op == RaiserOpcode.Move) {
+		const toDyn = classOfReg(s, inst.a as int32) == RaiserRegClass.Dyn;
+		if (toDyn != (classOfReg(s, inst.b as int32) == RaiserRegClass.Dyn)) inst.op = toDyn ? RaiserOpcode.Box : RaiserOpcode.Unbox;
+	}
+	const words = wordOperands(inst.op);
+	if (words != 0) {
+		if ((words & OPERAND_A) != 0) inst.a = unboxedWord(s, inst.a);
+		if ((words & OPERAND_B) != 0) inst.b = unboxedWord(s, inst.b);
+		if ((words & OPERAND_C) != 0) inst.c = unboxedWord(s, inst.c);
+	}
 	s.code.push(inst);
 }
 
@@ -247,6 +291,12 @@ export function resetTemps(s: RaiserCompState): void {
 // --- Typed emit helpers ---
 
 export function emitLoadConst(s: RaiserCompState, reg: int32, val: RaiserValue): void {
+	if (val.kind != RaiserValueKind.Nil && classOfReg(s, reg) == RaiserRegClass.Dyn) {
+		const plain = val.kind == RaiserValueKind.Bool || val.kind == RaiserValueKind.Int || val.kind == RaiserValueKind.Float ? allocWord(s) : allocRef(s);
+		emitLoadConst(s, plain, val);
+		emitInst(s, raiserABC(RaiserOpcode.Move, reg, plain, 0));
+		return;
+	}
 	if (val.kind == RaiserValueKind.Int && fitsImm(val.intVal)) {
 		emitInst(s, raiserABC(RaiserOpcode.LoadInt, reg, immField(val.intVal), 0));
 		return;
@@ -426,10 +476,9 @@ export function emitClosurePair(s: RaiserCompState, funcIdx: int32, envReg: int3
 	emitInst(s, raiserABC(RaiserOpcode.StoreField, pairReg, fnConst, fnReg));
 	const envConst = addConst(s, raiserConstString("env"));
 	if (envReg < 0) {
-		// Non-capturing: store -1 sentinel
-		const sentinelReg = allocWord(s);
-		emitLoadConst(s, sentinelReg, raiserInt(-1));
-		emitInst(s, raiserABC(RaiserOpcode.StoreField, pairReg, envConst, sentinelReg));
+		const nilReg = allocRef(s);
+		emitLoadConst(s, nilReg, raiserNil());
+		emitInst(s, raiserABC(RaiserOpcode.StoreField, pairReg, envConst, nilReg));
 	} else {
 		// Capturing: store actual env register
 		emitInst(s, raiserABC(RaiserOpcode.StoreField, pairReg, envConst, envReg));
