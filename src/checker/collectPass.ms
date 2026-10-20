@@ -1099,7 +1099,8 @@ export function collectExtern(ctx: CheckerContext, node: Node): void {
 		_ => SymbolKind.Variable,
 	};
 	const symType = d.externKind == ExternKind.Struct ? retainedType(ctx, node, createStruct(d.externName, [], [], true)) : inferredType();
-	const sym = declSymbol(ctx, node, d.externName, kind, symType, false);
+	const mutable = d.externKind == ExternKind.Var || d.externKind == ExternKind.Let;
+	const sym = declSymbol(ctx, node, d.externName, kind, symType, mutable);
 	sym.symbolType.sym = sym;
 	setFlag(sym, SymbolFlag.ImportC);
 	// Wire nativeName from AST 'from "c_name"' clause
