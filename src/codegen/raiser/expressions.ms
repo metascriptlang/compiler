@@ -11,7 +11,7 @@ import {
 	ConditionalExprData, TypeAssertionData, UpdateExprData,
 	ArrayLiteralData, ArrayAccessData, ObjectLiteralData,
 	MoveExprData, OutExprData, VariableDeclData, AwaitExprData, NewExprData,
-	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData, SpreadExprData,
+	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData, SpreadExprData, ClassDeclData, MethodDeclData,
 	createNodeAt
 } from "../../ast/node";
 import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, RaiserCombine, raiserABC, raiserABx, raiserAx, convOperand, fitsImm, immField, branchField } from "../../raiser/bytecode";
@@ -20,18 +20,18 @@ import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation } from "./valueCopy";
 import { placedInstanceOf } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
-import { widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion } from "../../checker/types";
+import { runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion } from "../../checker/types";
 import { isSlotUnion } from "../../checker/fit";
-import { SymbolFlag, isViewBinding } from "../../checker/symbol";
+import { SymbolFlag, isViewBinding, classDeclNodeOf, parentClassSymOf, hasFlag } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
 import { carriesBigInt, RAISER_NO_BIGINT_MSG } from "../../checker/bigIntOnRaiser";
-import { dispatchEntryFor, dispatchOverridesFor } from "../../checker/context";
+import { dispatchEntryFor, dispatchOverridesFor, isGenericFn } from "../../checker/context";
 import {
 	RaiserCompState, emitInst, allocReg, allocBlock, allocWord, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, resolveLocal,
 	isLocalString,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
-	callRaiserStmtCompiler, emitTrapNil, resolveGlobal, raiserClassKey, classSymOfType, landResult,
+	callRaiserStmtCompiler, emitTrapNil, resolveGlobal, raiserClassKey, classSymOfType, landResult, declaredSymbol, emitClosurePair,
 } from "./context";
 import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros } from "./valueCopy";
 
@@ -1939,8 +1939,7 @@ function compileObjectLiteral(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as ObjectLiteralData;
 	const dest = allocRef(s);
 
-	// Create empty object
-	emitInst(s, raiserABC(RaiserOpcode.NewObject, dest, 0, 0));
+	emitClassInstanceShell(s, dest, literalClass(node.nodeType));
 
 	// Set each field
 	for (let i = 0; i < d.keys.length; i = i + 1) {
@@ -2397,4 +2396,63 @@ function isConsoleLog(node: Node): boolean {
 	if (d.object.kind != NodeKind.Identifier) return false;
 	const obj = d.object.data as IdentifierData;
 	return obj.name == "console";
+}
+
+// --- Class instances ---
+
+export function emitsRoutine(decl: Node, flags: string): boolean {
+	const sym = decl.resolvedSym;
+	if (sym != null && (hasFlag(sym, SymbolFlag.OverloadSig) || hasFlag(sym, SymbolFlag.Borrow))) return false;
+	return !isGenericFn(flags) && (decl.nodeType == null || !hasGenericParams(decl.nodeType));
+}
+
+export function storeMethodClosures(s: RaiserCompState, thisReg: int32, className: string, classBody: Node[]): void {
+	for (const member of classBody) {
+		if (member.kind != NodeKind.MethodDecl || !emitsRoutine(member, (member.data as MethodDeclData).methodFlags)) continue;
+		const md = member.data as MethodDeclData;
+		const methodIdx = resolveRoutine(s, declaredSymbol(member, `${className}.${md.methodName}`));
+		if (methodIdx < 0) continue;
+		const closureReg = emitClosurePair(s, methodIdx, -1);
+		const methodNameIdx = addConst(s, raiserConstString(md.methodName));
+		emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, methodNameIdx, closureReg));
+	}
+}
+
+export function storeInheritedClosures(s: RaiserCompState, thisReg: int32, classSym: Symbol | null, depth: int32): void {
+	const parent = classSym != null && depth < 64 ? parentClassSymOf(classSym) : null;
+	if (parent == null) return;
+	storeInheritedClosures(s, thisReg, parent, depth + 1);
+	const decl = classDeclNodeOf(parent);
+	if (decl == null || decl.kind != NodeKind.ClassDecl) return;
+	const pd = decl.data as ClassDeclData;
+	storeMethodClosures(s, thisReg, pd.className, pd.classBody);
+}
+
+export function classTypeOperand(s: RaiserCompState, className: string, classSym: Symbol | null): int32 {
+	if (classSym == null) return 0;
+	const chain: string[] = [raiserClassKey(classSym)];
+	let up = classParentOf(classSym.symbolType);
+	while (up != null && classTargetKey(up) != "") {
+		if (chain.length == 64) throw new Error(`internal: the class chain of '${className}' is deeper than 64`);
+		chain.push(classTargetKey(up));
+		up = classParentOf(up);
+	}
+	s.classTypes.push({ name: className, chain });
+	return s.classTypes.length;
+}
+
+function literalClass(t: Type | null): Symbol | null {
+	const bare = t != null && t.kind == TypeKind.Ref ? t.typeReturn : t;
+	if (runtimeClassSym(bare) == null) return null;
+	const sym = classSymOfType(bare);
+	return sym != null ? placedInstanceOf(sym) : null;
+}
+
+export function emitClassInstanceShell(s: RaiserCompState, dest: int32, classSym: Symbol | null): void {
+	const decl = classSym != null ? classDeclNodeOf(classSym) : null;
+	const className = decl != null && decl.kind == NodeKind.ClassDecl ? (decl.data as ClassDeclData).className : "";
+	emitInst(s, raiserABC(RaiserOpcode.NewObject, dest, classSym != null ? classTypeOperand(s, className != "" ? className : classSym.name, classSym) : 0, 0));
+	if (classSym == null || decl == null || decl.kind != NodeKind.ClassDecl) return;
+	storeInheritedClosures(s, dest, classSym, 0);
+	storeMethodClosures(s, dest, className, (decl.data as ClassDeclData).classBody);
 }

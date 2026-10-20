@@ -647,6 +647,19 @@ export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 			}
 		}
 	}
+	const cls = node.nodeType != null && jsMemberKind(node.nodeType) == "class" && node.nodeType.typeReturn.kind != TypeKind.GenericInstance ? runtimeClassSym(node.nodeType.typeReturn) : null;
+	if (cls != null) {
+		emit(gen, "globalThis.Object.assign(globalThis.Object.create(");
+		emitNode(gen, classReference(cls, node.location));
+		emit(gen, ".prototype), ");
+		emitPlainObjectLiteral(gen, node, d);
+		emit(gen, ")");
+		return;
+	}
+	emitPlainObjectLiteral(gen, node, d);
+}
+
+function emitPlainObjectLiteral(gen: JSGenerator, node: Node, d: ObjectLiteralData): void {
 	const omitted = omittedFieldZeros(node, d);
 	if (d.keys.length == 0 && omitted.length == 0) {
 		emit(gen, "{}");

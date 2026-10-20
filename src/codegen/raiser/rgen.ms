@@ -8,9 +8,6 @@ import {
 	ClassDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
-import { classDeclNodeOf, parentClassSymOf, hasFlag } from "../../checker/symbol";
-import { isGenericFn } from "../../checker/context";
-import { hasGenericParams, classParentOf } from "../../checker/types";
 import { parseSource } from "../../parser/statements/validation";
 import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC } from "../../raiser/bytecode";
 import {
@@ -35,7 +32,7 @@ import {
 	resolveRoutine, RaiserCompState,
 } from "./context";
 import { compileStmt } from "./statements";
-import { compileExpr, classTargetKey } from "./expressions";
+import { compileExpr, classTargetKey, emitsRoutine, storeMethodClosures, storeInheritedClosures, classTypeOperand } from "./expressions";
 import { emitZeroValue, allocFor, regClassOf, zeroScalar } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { checkProgram } from "../../checker/checkPass";
@@ -94,11 +91,6 @@ function isExpressionBody(node: Node): boolean {
 		k != NodeKind.DoWhileStmt;
 }
 
-function emitsRoutine(decl: Node, flags: string): boolean {
-	const sym = decl.resolvedSym;
-	if (sym != null && (hasFlag(sym, SymbolFlag.OverloadSig) || hasFlag(sym, SymbolFlag.Borrow))) return false;
-	return !isGenericFn(flags) && (decl.nodeType == null || !hasGenericParams(decl.nodeType));
-}
 
 function paramSymbolsOf(decl: Node, name: string): Symbol[] {
 	if (decl.paramSyms == null) throw new Error(`internal: the Raiser routine '${name}' reached codegen without parameter symbols`);
@@ -155,27 +147,7 @@ export function compileFuncBody(funcMap: RaiserFuncMap, fnName: string, paramSym
 // Creates ClassName_new(params...): allocates object, sets property defaults,
 // stores method closures, executes ctor body, returns this.
 
-function storeMethodClosures(s: RaiserCompState, thisReg: int32, className: string, classBody: Node[]): void {
-	for (const member of classBody) {
-		if (member.kind != NodeKind.MethodDecl || !emitsRoutine(member, (member.data as MethodDeclData).methodFlags)) continue;
-		const md = member.data as MethodDeclData;
-		const methodIdx = resolveRoutine(s, declaredSymbol(member, `${className}.${md.methodName}`));
-		if (methodIdx < 0) continue;
-		const closureReg = emitClosurePair(s, methodIdx, -1);
-		const methodNameIdx = addConst(s, raiserConstString(md.methodName));
-		emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, methodNameIdx, closureReg));
-	}
-}
 
-function storeInheritedClosures(s: RaiserCompState, thisReg: int32, classSym: Symbol | null, depth: int32): void {
-	const parent = classSym != null && depth < 64 ? parentClassSymOf(classSym) : null;
-	if (parent == null) return;
-	storeInheritedClosures(s, thisReg, parent, depth + 1);
-	const decl = classDeclNodeOf(parent);
-	if (decl == null || decl.kind != NodeKind.ClassDecl) return;
-	const pd = decl.data as ClassDeclData;
-	storeMethodClosures(s, thisReg, pd.className, pd.classBody);
-}
 
 function storeZeroFields(s: RaiserCompState, thisReg: int32, classBody: Node[]): void {
 	for (let ci = 0; ci < classBody.length; ci += 1) {
@@ -212,18 +184,6 @@ function compileClassInit(
 	return compiled;
 }
 
-function classTypeOperand(s: RaiserCompState, className: string, classSym: Symbol | null): int32 {
-	if (classSym == null) return 0;
-	const chain: string[] = [raiserClassKey(classSym)];
-	let up = classParentOf(classSym.symbolType);
-	while (up != null && classTargetKey(up) != "") {
-		if (chain.length == 64) throw new Error(`internal: the class chain of '${className}' is deeper than 64`);
-		chain.push(classTargetKey(up));
-		up = classParentOf(up);
-	}
-	s.classTypes.push({ name: className, chain });
-	return s.classTypes.length;
-}
 
 function compileClassConstructor(
 	funcMap: RaiserFuncMap,
