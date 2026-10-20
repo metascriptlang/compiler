@@ -1,5 +1,4 @@
 // @xfail(c): resolving main's promise from a spawn task runs main's .then on the worker, concurrently with main's synchronous code, so the total loses updates (PARALOCK-runtime Amendment R)
-// @xfail(orc): resolving main's promise from a spawn task runs main's .then on the worker, concurrently with main's synchronous code, so the total loses updates (PARALOCK-runtime Amendment R)
 // @xfail(danger): resolving main's promise from a spawn task runs main's .then on the worker, concurrently with main's synchronous code, so the total loses updates (PARALOCK-runtime Amendment R)
 // @xfail(raiser): raiser runtime error: Unknown host function: msFutureThen
 // @serial

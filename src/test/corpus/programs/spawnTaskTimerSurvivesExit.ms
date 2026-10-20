@@ -1,5 +1,4 @@
 // @xfail(c): a timer or un-awaited async call started in a spawn task is dropped at exit, exit 0, inbox 2026-10-20-a-timer-armed-inside-a-spawn-task-is-dropped-at-exit (PARALOCK-runtime Amendment R)
-// @xfail(orc): a timer or un-awaited async call started in a spawn task is dropped at exit, exit 0, inbox 2026-10-20-a-timer-armed-inside-a-spawn-task-is-dropped-at-exit (PARALOCK-runtime Amendment R)
 // @xfail(danger): a timer or un-awaited async call started in a spawn task is dropped at exit, exit 0, inbox 2026-10-20-a-timer-armed-inside-a-spawn-task-is-dropped-at-exit (PARALOCK-runtime Amendment R)
 // @xfail(raiser): raiser runtime error: Unknown host function: msSetTimeout
 // @serial

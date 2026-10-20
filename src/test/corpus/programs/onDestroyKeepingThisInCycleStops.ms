@@ -1,9 +1,7 @@
 // @exit: 1
 // @stdout: linked 2
 // @stdout: Error: onDestroy kept a reference to the Leaf it destroys
-// @xfail(c): --gc=drc has no cycle collector, so the cycle is never freed and its onDestroy never runs
-// @xfail(danger): built with --gc=drc, which has no cycle collector, so the cycle is never freed
-// @xfail(san): built with --gc=drc, which has no cycle collector, so the cycle is never freed
+// @xfail(san): the program stops inside the collection, so the cycle's other Leaf is never destroyed (ledger Leaf alloc=2 destroy=1)
 // @xfail(raiser): the Raiser VM runs no lifecycle hooks, so onDestroy never runs and the program exits 0
 // @skip-js: onDestroy does not run on JS
 // note: the collector frees a cycle whose inherited onDestroy stores `this` in a global; the program stops with the freed object's own class named. Sibling: onDestroyKeepingThisStops (the plain free path).
