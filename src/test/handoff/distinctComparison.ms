@@ -76,6 +76,15 @@ test "distinctComparison: a delegate takes only a comparison the base has" {
 	assert count("@delegate function `<=`(this a: UserId, b: UserId): int32;\n", "@delegate '<=' returns 'int32' but <=(int32, int32) returns 'boolean'") == 1;
 }
 
+test "distinctComparison: a distinct of a match struct borrows only an equality declared for the struct" {
+	const shape = "enum K { A, B }\nstruct M = match (kind: K) { K.A => { x: int32 }, K.B => { y: int32 } };\ntype D = distinct M;\n";
+	const declared = "function `==`(this a: M, b: M): boolean { return a.kind == b.kind; }\n";
+	const delegated = "@delegate function `==`(this a: D, b: D): boolean;\n";
+	assert count(shape + compared("D", "=="), "declare `function `==`(this a: D, b: D): boolean { … }`") == 1;
+	assert count(shape + delegated + compared("D", "!="), "@delegate '==': no ==(") == 1;
+	assert refused(shape + declared + delegated + compared("D", "==") + compared("D", "!=")) == 0;
+}
+
 test "distinctComparison: a generic routine names the delegate it cannot see" {
 	const row = "struct Row { tag: Tag; }\nfunction f(a: Row, b: Row): boolean { return a == b; }\n";
 	assert count("@delegate function `==`(this a: Tag, b: Tag): boolean;\n" + row, "its `==` is not exported, and a generic routine sees only exported operators") == 1;
