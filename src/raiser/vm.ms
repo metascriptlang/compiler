@@ -10,7 +10,7 @@ import {
 	raiserNil, raiserInt, raiserFloat, raiserConstString, raiserArray, raiserToString, copyValueInto,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS,
-	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive,
+	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, heapBoxLive,
 	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, clearArrayHeap, clearObjectHeap,
 } from "./value";
 import {
@@ -18,6 +18,7 @@ import {
 	makeTestModule, assertPacked, getFuncConst, getFuncConstLen, getModuleFunc, createRaiserFunction, createRaiserModule,
 } from "./module";
 import { orcCollectCycles } from "./orc";
+import { ledgerAudit } from "./ledger";
 import { RaiserCopyKind, copyTypedValue } from "./valueCopy";
 import { parseIntStr } from "../utils/string";
 import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, hostFnSpawnsChild, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv, takeHostRaise, hostRaiseIsFatal, raiseFromHost } from "./hostRegistry";
@@ -1108,7 +1109,30 @@ function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
 	copyValueInto(s.result, value);
 	s.status = RaiserStrandStatus.Done;
 	if (s.resultFuture >= 0) futureComplete(vm, s.resultFuture, value);
+	if (vm.current != 0) {
+		when (mode != "danger") { vmLedger(vm, vm.regs.slots, vm.globals, [], "strand"); }
+	}
 	return vm.current != 0;
+}
+
+function vmLedger(vm: RaiserVM, slots: RaiserValue[], globals: RaiserValue[], extra: RaiserValue[], where: string): void {
+	if (!vm.orc || vm.error != "") return;
+	const roots: RaiserValue[] = [];
+	for (const slot of slots) roots.push(slot);
+	for (const g of globals) roots.push(g);
+	for (const e of extra) roots.push(e);
+	orcCollectCycles(vm.arrayHeap, vm.objectHeap);
+	const verdict = ledgerAudit(vm.arrayHeap, vm.objectHeap, roots, where);
+	if (verdict != "") vmError(vm, verdict);
+}
+
+function vmProgramLedger(vm: RaiserVM): void {
+	const main = vm.sched.strands.items[0];
+	const ev = vm.sched.modules;
+	const extra: RaiserValue[] = [];
+	for (const st of ev.states) extra.push(st.error);
+	for (const job of ev.pending) extra.push(job.error);
+	vmLedger(vm, main.regs.slots, main.globals, extra, "program");
 }
 
 function vmHasRunnable(vm: RaiserVM): boolean {
@@ -1187,7 +1211,7 @@ export function vmSpawnStrand(vm: RaiserVM, funcIdx: number): number {
 }
 
 // Start a strand for a closure pair { fn, env } and hand back the future it
-// completes — the VM's msSpawn. env carries the -1 sentinel when the closure
+// completes — the VM's msSpawn. env is nil when the closure
 // captures nothing; otherwise it is the callee's last argument, and `spawn`
 // takes a zero-arg closure, so env is its only one.
 function vmSpawnClosure(vm: RaiserVM, closure: RaiserValue): int64 {
@@ -1670,6 +1694,7 @@ export function execLoop(vm: RaiserVM): void {
 		vm.arrayHeap = main.arrayHeap;
 		vm.objectHeap = main.objectHeap;
 		vm.globals = main.globals;
+		when (mode != "danger") { if (vm.halted) vmProgramLedger(vm); }
 	}
 }
 
@@ -5617,4 +5642,65 @@ test "a compare-and-branch that jumps backward spends the loop budget and a forw
 	assert vm.error.indexOf("too many iterations") >= 0;
 	assert vm.loopCount == 101;
 	assert branchTaken(RaiserOpcode.BrEqI64Imm, 5, 5, true);
+}
+
+function liveItems(vm: RaiserVM): number {
+	return heapStringLive(vm.arrayHeap) + heapBoxLive(vm.arrayHeap) + vmLiveCount(vm);
+}
+
+function releaseRoots(vm: RaiserVM): void {
+	for (const slot of vm.regs.slots) { vmDecref(vm, slot); slot.kind = RaiserValueKind.Nil; }
+	for (const g of vm.globals) { vmDecref(vm, g); g.kind = RaiserValueKind.Nil; }
+}
+
+const dropsEverything: RaiserInstruction[] = [
+	raiserABx(RaiserOpcode.LoadConst, 0, 0),
+	raiserABx(RaiserOpcode.LoadConst, 1, 1),
+	raiserABC(RaiserOpcode.ConcatStr, 2, 0, 1),
+	raiserABC(RaiserOpcode.Move, 4, 2, 0),
+	raiserABC(RaiserOpcode.NewArray, 3, 1, 0),
+	raiserABC(RaiserOpcode.NewObject, 5, 0, 0),
+	raiserABC(RaiserOpcode.StoreField, 5, 2, 3),
+	raiserABC(RaiserOpcode.Box, 6, 5, 0),
+	raiserABx(RaiserOpcode.LoadConst, 7, 3),
+	raiserABC(RaiserOpcode.Halt, 7, 0, 0),
+];
+const dropsEverythingConsts = [raiserConstString("ab"), raiserConstString("cd"), raiserConstString("f"), raiserInt(0)];
+
+test "ledger: a program that drops strings, arrays, objects and boxes ends with nothing live once its registers are released" {
+	const vm = execModule(makeTestModule(dropsEverything, dropsEverythingConsts), "orc");
+	assert vm.error == "";
+	assert liveItems(vm) > 0;
+	releaseRoots(vm);
+	assert liveItems(vm) == 0;
+}
+
+test "ledger: an item no root reaches but still counted fails the program end" {
+	const vm = createVM(makeTestModule(dropsEverything, dropsEverythingConsts), "orc");
+	rcIncref(vm.arrayHeap, vm.objectHeap, heapAllocString(vm.arrayHeap, "leaked"));
+	execLoop(vm);
+	assert vm.error == "internal: 1 string items live after program end", vm.error;
+}
+
+test "ledger: a box nothing holds fails the program end and a held one does not" {
+	const vm = createVM(makeTestModule(dropsEverything, dropsEverythingConsts), "orc");
+	const lost = heapAllocBox(vm.arrayHeap, raiserInt(1));
+	rcIncref(vm.arrayHeap, vm.objectHeap, { kind: RaiserValueKind.Box, intVal: lost, floatVal: 0.0 });
+	execLoop(vm);
+	assert vm.error == "internal: 1 box items live after program end", vm.error;
+}
+
+test "ledger: a spawned strand that drops everything ends clean and a leak in its heap names the strand" {
+	const main = createRaiserFunction("main", [raiserABx(RaiserOpcode.LoadConst, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], [raiserInt(0)], 0, 0, 1);
+	const worker = createRaiserFunction("worker", dropsEverything, dropsEverythingConsts, 0, 0, 8);
+	const clean = createVM(createRaiserModule("m", [main, worker], 0), "orc");
+	vmSpawnStrand(clean, 1);
+	execLoop(clean);
+	assert clean.error == "", clean.error;
+	const leaky = createVM(createRaiserModule("m", [main, worker], 0), "orc");
+	vmSpawnStrand(leaky, 1);
+	const own = leaky.sched.strands.items[1];
+	rcIncref(own.arrayHeap, own.objectHeap, heapAllocString(own.arrayHeap, "leaked"));
+	execLoop(leaky);
+	assert leaky.error == "internal: 1 string items live after strand end", leaky.error;
 }
