@@ -185,6 +185,48 @@ waits for the person (the last section).
 | T2 | nothing | — | needs an HCR adapter: decision below |
 | T3 | macOS / clang only | r0 and r1 ran on this host | environment: Linux, Windows and the gcc/zig toolchain axes are unavailable here, reported as unavailable, never as clean |
 
+### Campaign r1 — measured 2026-10-20
+
+74 batches of `out/smith/g7/batches.txt`, Raiser lane on, logs and the hits line
+per batch in `out/smith/g7/<batch>.log`. The installed `msc` was synced six
+times during the run (`c235d7de9`, `5d46e5b43`, `733aafe43`, `f6102cd1c`,
+`940c41a44`, `ca1cc0d55`); each bundle records its build. Clean/programs:
+
+| rows | standalone | SAN | hits |
+|---|---|---|---|
+| H1, H3, H4 | core 30/30 | 5/5 | — |
+| H2 | str 1/30; after the `strExpr` park 5/30 | 0/5 | str 34/34 |
+| H5 | closure 28/30 | — | — |
+| H6 | cls 25/30, agg 27/30, gcls 27/30 | 5/5, 5/5, 5/5 | cls 13/13, agg 11/14, gcls 36/38 |
+| H7 | enum 24/30; rerun after the `ixAt` fix 26/30 | 5/5 | enum 43/45 |
+| H8, H13 | union 28/30, exc 29/30 | exc 5/5 | exc 12/12 |
+| H9 | generic 25/30 | — | generic 3/3 |
+| H10 | coll 28/30, seq 24/30 | 5/5, 5/5 | coll 18/26, seq 11/38 (SAN) |
+| H11 | conv 27/30 | 5/5 | conv 8/8 |
+| H12 | own 29/30 | 5/5 | own 9/16 |
+| H14 | iter 28/30 | 5/5 | iter 13/14 (SAN) |
+| H15 | proj 14/20, proj-cycle 11/20, proj-hub 14/20, proj-fams 14/20 | 4/5 | — |
+| B1, M1, M2 | meta 26/30; rerun after the OptBox fix 28/30 | 4/5 | meta 33/33 |
+| C1 | async 25/30, mixed-async 7/20 | 5/5 | async 18/18 |
+| C2, C3, C4 | spawn 30/30, actor 30/30, race 30/30 | 5/5, 4/5, 5/5 | spawn 9/9, actor 6/6, race 6/6 |
+| N1, N2 | native 29/30, mixed-native 20/20 | 5/5 | native 48/51 |
+
+Every plant batch caught its planted defect (23 batches, 0 clean), but in five
+programs the C build failed first on `ternary-hoist-lost-when-else-holds-a-nested-ternary`
+(plant-str 2, plant-generic 1, plant-proj 1, plant-san 1). The same card failed
+24 of 30 str programs and all 5 str SAN programs, because a string test is
+always a hoisted call; `Gen.strExpr` now builds both arms with no ternary
+(str rerun: 2 of 30). The Raiser lane of the str family stays blind on
+`raiser-string-index-expects-array` (23 of 30 after the park; held out only
+with the async family). One generic program timed out on the Raiser beside a
+gate and finished in 0.3–0.7 s alone: not a finding.
+
+New cards from r1: `infer-against-an-interface-imported-under-an-alias-gives-never`
+(H15), `raiser-power-assign-on-a-module-let-declared-after-an-arrow-cannot-compile`
+(H3), `logical-assignment-operators-do-not-parse` (H3: `??=`, `||=`, `&&=` are not
+generated). The other findings are sightings of open cards or generator defects
+fixed in `24867fb86`, `2c69e0f28`, `04def4312` and `f5dffc177`.
+
 ### Waiting for the person
 
 - **Verified criterion.** Strict reading (every axis of the row) leaves every row
