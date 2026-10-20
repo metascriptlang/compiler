@@ -425,6 +425,13 @@ test "comptime CallHost msFsFileSize positive" {
 	assert ctx.lastResult.intVal > 0;
 }
 
+test "comptime CallHost msFsFileSize declared number reads back as a float" {
+	const ctx = _smokeCallHost("extern function msFsFileSize(path: string): number; return msFsFileSize(\"README.md\") / 2;");
+	assert ctx.lastError == "";
+	assert ctx.lastResult.kind == RaiserValueKind.Float;
+	assert ctx.lastResult.floatVal > 0.0;
+}
+
 test "comptime CallHost msProcessGetEnv missing var" {
 	const ctx = _smokeCallHost("extern function msProcessGetEnv(name: string): string; return msProcessGetEnv(\"__NEVER_SET_ABCXYZ__\");");
 	assert ctx.lastError == "";
