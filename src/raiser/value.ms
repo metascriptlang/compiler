@@ -156,9 +156,11 @@ export function fieldAddrName(v: RaiserValue): string {
 
 export function kindFitsClass(kind: RaiserValueKind, cls: RaiserRegClass): boolean {
 	return match (kind) {
-		RaiserValueKind.Bool | RaiserValueKind.Int | RaiserValueKind.Float => cls != RaiserRegClass.Ref,
-		RaiserValueKind.Nil | RaiserValueKind.String | RaiserValueKind.Array | RaiserValueKind.Object | RaiserValueKind.Future => cls != RaiserRegClass.Word,
-		RaiserValueKind.RegAddr | RaiserValueKind.GlobalAddr | RaiserValueKind.ElemAddr | RaiserValueKind.FieldAddr => cls == RaiserRegClass.Dyn,
+		RaiserValueKind.Bool | RaiserValueKind.Int | RaiserValueKind.Float => cls == RaiserRegClass.Word,
+		RaiserValueKind.Nil => cls != RaiserRegClass.Word,
+		RaiserValueKind.String | RaiserValueKind.Array | RaiserValueKind.Object | RaiserValueKind.Future => cls == RaiserRegClass.Ref,
+		RaiserValueKind.Box => cls == RaiserRegClass.Dyn,
+		RaiserValueKind.RegAddr | RaiserValueKind.GlobalAddr | RaiserValueKind.ElemAddr | RaiserValueKind.FieldAddr => false,
 		_ => { throw new Error(`internal: value kind ${kind} has no register class`); },
 	};
 }

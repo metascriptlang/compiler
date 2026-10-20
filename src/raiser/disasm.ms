@@ -133,6 +133,8 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.BrGeI64Imm => "BrGeI64Imm",
 		RaiserOpcode.EqVal => "EqVal",
 		RaiserOpcode.NeVal => "NeVal",
+		RaiserOpcode.Box => "Box",
+		RaiserOpcode.Unbox => "Unbox",
 	};
 }
 

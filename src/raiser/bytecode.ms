@@ -193,6 +193,8 @@ export enum RaiserOpcode {
 	BrGeI64Imm,       // ABC: if R[A] >= the immediate in B pc += branchOffset(C)
 	EqVal,            // ABC: if raiserEqual(R[A], R[B]) skip C: kind and payload, a string by text
 	NeVal,            // ABC: if !raiserEqual(R[A], R[B]) skip C
+	Box,              // ABC: R[A] (a Dyn register) = a box holding R[B], or nil when R[B] is nil
+	Unbox,            // ABC: R[A] = the value in the box R[B]; a nil box reads as nil, fatal into a Word register
 }
 
 export enum RaiserRegClass {

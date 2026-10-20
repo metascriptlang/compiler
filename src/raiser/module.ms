@@ -18,6 +18,8 @@ export interface RaiserFunction {
 	localsCount: number;
 	maxRegs: number;
 	regClasses: RaiserRegClass[];
+	classed: boolean;     // built with declared register classes; a function without them holds plain values in every register
+	hasDyn: boolean;      // classed and owns a Dyn register, which holds a box or nil
 	copyPlans: RaiserCopyPlan[];
 	classTypes: RaiserClassType[];
 }
@@ -73,7 +75,7 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 		if (classes.length != maxRegs) throw new Error(`internal: function ${name} has ${maxRegs} registers but ${classes.length} register classes`);
 		for (const c of classes) regClasses.push(c);
 	}
-	return { name, code, packed, lines, fieldCache, constants, names, arity, localsCount, maxRegs, regClasses, copyPlans: [], classTypes: [] };
+	return { name, code, packed, lines, fieldCache, constants, names, arity, localsCount, maxRegs, regClasses, classed: classes != null, hasDyn: classes != null && regClasses.includes(RaiserRegClass.Dyn), copyPlans: [], classTypes: [] };
 }
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {
