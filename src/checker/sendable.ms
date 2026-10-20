@@ -2,8 +2,8 @@
 
 import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeKind, ObjectLiteralData, OutExprData, PropertyDeclData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, TryExprData, Type, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { CheckerContext, addError } from "./context";
-import { Effect, callEffect, deferEffectCheck, newEffect } from "./effects";
+import { CheckerContext, addError, addWarning } from "./context";
+import { Effect, EffectCause, callEffect, deferEffectCheck, newEffect, routineEffect, walkEffect } from "./effects";
 import { constBindingInitializer } from "./constFold";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
 import { createArray, createGenericParam, createRef, createStruct, int32Type, isPrimitiveKind, isSendableFunction, isStructType, isAtomicRef, stringType, typeCarriesRef, typeDisplayName } from "./types";
@@ -245,6 +245,27 @@ export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawn
 		if (iifeCallee.kind == NodeKind.ArrowFunction) closure = (iifeCallee.data as ArrowFunctionData).arrowBody;
 	}
 	checkClosureCaptures(ctx, closure, "spawn");
+	requireSpawnSafe(closure, "spawn runs this thunk on another thread", spawnNode);
+}
+
+function spawnEffectOf(fn: Node): EffectCause | null {
+	if (fn.kind != NodeKind.Identifier) return walkEffect(fn, Effect.SpawnUnsafe);
+	const sym = fn.resolvedSym;
+	if (sym == null) return null;
+	if (sym.symbolKind == SymbolKind.Function) return routineEffect(sym, Effect.SpawnUnsafe);
+	const bound = constBindingInitializer(sym);
+	if (bound == null) return null;
+	const declared = peelHidden(bound);
+	const isRoutine = declared.kind == NodeKind.FunctionDecl || declared.kind == NodeKind.ArrowFunction || declared.kind == NodeKind.FunctionExpr;
+	return isRoutine ? walkEffect(declared, Effect.SpawnUnsafe) : null;
+}
+
+function requireSpawnSafe(fn: Node, runs: string, at: Node): void {
+	deferEffectCheck(at, (ctx: CheckerContext): void => {
+		const c = spawnEffectOf(peelHidden(fn));
+		if (c == null) return;
+		addWarning(ctx, runs + ", but it " + c.text + "; module state crosses threads only as a const value, a Locked<T> or an Arc<T>", at.location.line, at.location.column);
+	});
 }
 
 function checkClosureCaptures(ctx: CheckerContext, closure: Node, by: string): void {
@@ -276,6 +297,9 @@ function checkClosureCaptures(ctx: CheckerContext, closure: Node, by: string): v
 export function checkSendableSource(ctx: CheckerContext, expr: Node): boolean {
 	const source = peelHidden(expr);
 	const mark = ctx.errors.length;
+	if (source.kind == NodeKind.ArrowFunction || source.kind == NodeKind.FunctionExpr || source.kind == NodeKind.Identifier) {
+		requireSpawnSafe(source, "a Sendable function may run on another thread", expr);
+	}
 	if (source.kind == NodeKind.ArrowFunction || source.kind == NodeKind.FunctionExpr) {
 		checkClosureCaptures(ctx, source, "a Sendable function");
 		return ctx.errors.length == mark;
@@ -567,7 +591,7 @@ function requireFresh(rhs: Node | null, what: string, w: OwnerWalk): void {
 }
 
 function requireNoSideEffect(site: Node, w: OwnerWalk): void {
-	deferEffectCheck(site, (): void => {
+	deferEffectCheck(site, (ctx: CheckerContext): void => {
 		if (w.reported) return;
 		const c = site.kind == NodeKind.NewExpr ? newEffect(site, Effect.SideEffect) : callEffect(site, Effect.SideEffect);
 		if (c != null) reportNotSoleOwner(w, "a call with side effects may keep an alias of it: " + c.text);

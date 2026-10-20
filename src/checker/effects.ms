@@ -3,7 +3,7 @@
 
 import { ArrowFunctionData, CallExprData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, PropertyDeclData, Symbol, SymbolKind, Type } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { dispatchEntryFor, dispatchOverridesFor } from "./context";
+import { CheckerContext, dispatchEntryFor, dispatchOverridesFor } from "./context";
 import { SymbolFlag, hasFlag, parentClassSymOf } from "./symbol";
 import { isAtomicRef, isSendableFunction, typeCarriesRef } from "./types";
 
@@ -32,7 +32,7 @@ let spawnTable: EffectTable = emptyTable();
 let assumedOpen = false;
 interface DeferredCheck {
 	site: Node;
-	check: () => void;
+	check: (ctx: CheckerContext) => void;
 }
 
 let deferred: DeferredCheck[] = [];
@@ -41,17 +41,17 @@ function tableFor(e: Effect): EffectTable {
 	return e == Effect.SideEffect ? sideTable : spawnTable;
 }
 
-export function deferEffectCheck(site: Node, check: () => void): void {
+export function deferEffectCheck(site: Node, check: (ctx: CheckerContext) => void): void {
 	for (const d of deferred) {
 		if (d.site.kind == site.kind && d.site.location.line == site.location.line && d.site.location.column == site.location.column) return;
 	}
 	deferred.push({ site, check });
 }
 
-export function runDeferredEffectChecks(): void {
+export function runDeferredEffectChecks(ctx: CheckerContext): void {
 	const checks = deferred;
 	deferred = [];
-	for (const d of checks) d.check();
+	for (const d of checks) d.check(ctx);
 	sideTable = emptyTable();
 	spawnTable = emptyTable();
 }

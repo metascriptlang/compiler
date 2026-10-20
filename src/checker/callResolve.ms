@@ -2836,6 +2836,8 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				argTypes[pi] = paramType;
 			}
 			if (instantiateGenericFnValue(ctx, args[pi], paramType)) argTypes[pi] = args[pi].nodeType!;
+			const sendableArg = fitSendable(ctx, args[pi], paramType, argTypes[pi]);
+			if (sendableArg != null) argTypes[pi] = sendableArg;
 			const thunkArg = synthClosureThunk(args[pi], peelSink(paramType), argTypes[pi], ctx);
 			if (thunkArg != null as unknown as Node) {
 				args[pi] = thunkArg;
@@ -2846,8 +2848,6 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				args[pi] = synthCStringConv(args[pi], paramType);
 				argTypes[pi] = paramType;
 			}
-			const sendableArg = fitSendable(ctx, args[pi], paramType, argTypes[pi]);
-			if (sendableArg != null) argTypes[pi] = sendableArg;
 			const formalAwaitsBinding = pi < args.length && args[pi] != null
 				&& hasGenericParams(paramType);
 			let addressAtC = false;

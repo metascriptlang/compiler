@@ -4172,7 +4172,7 @@ export function finishModuleCheck(bound: BoundModule): CheckerContext {
 	if (!isEngineCheckMode()) stampHeaderPaths(ctx);
 	stampJsModulePaths(ctx);
 	analyzeParamMutations(ctx, program);
-	runDeferredEffectChecks();
+	runDeferredEffectChecks(ctx);
 	checkViewBorrows(ctx, program);
 	checkPointerEscapes(ctx, program);
 	// Register this module's ctx so later cross-module generic instantiation can

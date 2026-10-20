@@ -1,4 +1,4 @@
-import { hasError, strictErrorCount } from "./helpers";
+import { hasError, hasWarning, strictErrorCount, warningCount } from "./helpers";
 
 const HANDLER = `
 type Handler = (n: int32) => int32;
@@ -74,4 +74,21 @@ test "sendableFunction: a Sendable<F> crosses spawn and actor calls where a plai
 	const plainArg = ACTOR + "async function f(w: Worker): Promise<int32> {\n" +
 		"\tconst h: Handler = twice;\n\treturn await w.applyPlain(h, 4);\n}";
 	assert hasError(plainArg, "take a Sendable<F> instead");
+}
+
+test "sendableFunction: code that may run on another thread is warned when it reaches mutable module state" {
+	const bump = "let hits: int32 = 0;\nfunction bump(): int32 { hits = hits + 1; return hits; }\n";
+	const spawned = bump + "async function f(): Promise<int32> { return await spawn(() => bump()); }";
+	assert hasWarning(spawned, "spawn runs this thunk on another thread, but it calls 'bump'");
+	const sendable = HANDLER + bump + "const r = run((n: int32): int32 => n + bump(), 1);";
+	assert hasWarning(sendable, "a Sendable function may run on another thread, but it calls 'bump'");
+	const sendableDecl = HANDLER + bump + "function addHits(n: int32): int32 { return n + bump(); }\nconst r = run(addHits, 1);";
+	assert hasWarning(sendableDecl, "a Sendable function may run on another thread, but it calls 'bump'");
+}
+
+test "sendableFunction: a const scalar or a Locked<T> module binding reaches another thread without a warning" {
+	const shared = "const LIMIT: int32 = 3;\nconst cell: Locked<int32> = new Locked<int32>(0);\n" +
+		"function peek(c: Locked<int32>): int32 { return LIMIT; }\n";
+	const spawned = shared + "async function f(): Promise<int32> { return await spawn(() => peek(cell) + LIMIT); }";
+	assert warningCount(spawned) == warningCount(shared), "spawn over a const scalar and a Locked<T>";
 }
