@@ -669,6 +669,8 @@ function setLocs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, 
 		const lh = heapAllocObject(objHeap);
 		heapObjectSetField(objHeap, lh, "line", raiserInt(l.line));
 		heapObjectSetField(objHeap, lh, "column", raiserInt(l.column));
+		heapObjectSetField(objHeap, lh, "endLine", raiserInt(l.endLine));
+		heapObjectSetField(objHeap, lh, "endColumn", raiserInt(l.endColumn));
 		heapArrayPush(arrHeap, outer, raiserObject(lh));
 	}
 	heapObjectSetField(objHeap, h, name, raiserArray(outer));
@@ -788,10 +790,8 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 	heapObjectSetField(objHeap, handle, "line", lineVal);
 	const colVal = raiserInt(node.location.column);
 	heapObjectSetField(objHeap, handle, "column", colVal);
-	if (node.location.endLine > 0) {
-		heapObjectSetField(objHeap, handle, "endLine", raiserInt(node.location.endLine));
-		heapObjectSetField(objHeap, handle, "endColumn", raiserInt(node.location.endColumn));
-	}
+	heapObjectSetField(objHeap, handle, "endLine", raiserInt(node.location.endLine));
+	heapObjectSetField(objHeap, handle, "endColumn", raiserInt(node.location.endColumn));
 	const syntaxFlags = node.flags.intersection(PARSER_NODE_FLAGS);
 	if (!syntaxFlags.isEmpty()) heapObjectSetField(objHeap, handle, "flags", raiserInt((syntaxFlags as uint64) as int64));
 	if (node.resolvedSym != null && declaresLocal(node)) {
