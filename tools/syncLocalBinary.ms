@@ -11,7 +11,7 @@
 // A hold refuses every sync until released, expired, or its pid (bash's $$) has exited.
 // Env: MSC_INSTALL_DIR overrides the destination; MSC_SYNC_BREAK_HOLD=<owner> breaks a hold.
 import { argv, cwd, env, execFileResult, exit, platform } from "std/process";
-import { chmod, copyFile, ensureDir, exists, fileSize, isDir, modifiedTime, readDir, readFile, removeAll, rename, writeFile } from "std/fs";
+import { chmod, copyFile, ensureDir, exists, fileSize, isDir, modifiedTime, readDir, readFile, realpath, removeAll, rename, writeFile } from "std/fs";
 
 const windows = platform == "windows";
 
@@ -218,17 +218,24 @@ function put(from: string, to: string): void {
 	if (!copyFile(from, to).ok) die(`cannot copy ${from} -> ${to}`);
 }
 
+function wanted(roots: string[], path: string): boolean {
+	for (const root of roots) {
+		if (path == root || path.startsWith(`${root}/`) || root.startsWith(`${path}/`)) return true;
+	}
+	return false;
+}
+
 // The destination becomes an exact copy of the source without its `.git`: entries missing
-// from the source are deleted, as `rsync -a --delete` did.
-function mirror(from: string, to: string): void {
+// from the source or outside `roots` are deleted, as `rsync -a --delete` did.
+function mirror(from: string, to: string, roots: string[]): void {
 	if (!check) ensureDir(to);
 	const keep: string[] = [];
 	for (const e of readDir(from)) {
 		const name = e.endsWith("/") ? e.slice(0, e.length - 1) : e;
-		if (name == ".git") continue;
+		if (name == ".git" || !wanted(roots, `${from}/${name}`)) continue;
 		keep.push(name);
 		if (isDir(`${from}/${name}`)) {
-			mirror(`${from}/${name}`, `${to}/${name}`);
+			mirror(`${from}/${name}`, `${to}/${name}`, roots);
 		} else {
 			put(`${from}/${name}`, `${to}/${name}`);
 		}
@@ -246,10 +253,33 @@ function mirror(from: string, to: string): void {
 	}
 }
 
-function syncTree(rel: string): void {
+function syncRoots(rel: string, roots: string[]): void {
 	changes = 0;
-	mirror(`${SRC}/${rel}`, `${DEST}/${rel}`);
+	mirror(`${SRC}/${rel}`, `${DEST}/${rel}`, roots);
 	console.log(check ? `${rel}/: ${changes} file(s) would change` : `synced ${rel}/ → ${DEST}/${rel}/ (${changes} changed)`);
+}
+
+function syncTree(rel: string): void {
+	syncRoots(rel, [`${SRC}/${rel}`]);
+}
+
+function embedImportClosure(): string[] {
+	const work = `${SRC}/out/syncEmbed`;
+	removeAll(work);
+	ensureDir(work);
+	const r = execFileResult(builder(), ["build", `${SRC}/src/embed/index.ms`, "--emit=c", "--gendeps", "--no-color"], work);
+	const deps = readFile(`${work}/out/debug/index.deps`);
+	removeAll(work);
+	if (!r.started || r.exitCode != 0 || !deps.ok) die(`cannot list the modules src/embed imports:\n${r.output}${r.errorOutput}`);
+	const root = slashes(realpath(SRC));
+	const files: string[] = [];
+	for (const line of deps.value.split("\n")) {
+		const path = slashes(line.trim());
+		if (path == "" || path.startsWith(`${root}/std/`)) continue;
+		if (!path.startsWith(`${root}/src/`)) die(`src/embed imports ${path}, outside the src and std trees the sync installs`);
+		files.push(`${SRC}/${path.slice(root.length + 1)}`);
+	}
+	return files;
 }
 
 if (web) {
@@ -271,6 +301,9 @@ if (web) {
 	console.log(`synced browser compiler → ${out}/`);
 	exit(0);
 }
+
+const srcRoots = embedImportClosure();
+srcRoots.push(`${SRC}/src/module/cparse/include`);
 
 if (!check) {
 	ensureDir(`${DEST}/bin`);
@@ -295,7 +328,7 @@ if (syncBinary) {
 	}
 }
 
-syncTree("src/module/cparse/include");
+syncRoots("src", srcRoots);
 syncTree("std");
 syncTree("runtime");
 for (const lib of VENDOR_LIBS) {
