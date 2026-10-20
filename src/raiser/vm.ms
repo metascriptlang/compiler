@@ -2862,7 +2862,7 @@ function vmHandleConcatStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 }
 
 function vmHandleEqVal(vm: RaiserVM, ia: int32, ib: int32, ic: int32, wanted: boolean): void {
-	if (raiserEqual(vm.arrayHeap, getReg(vm, vm.baseReg + ia), getReg(vm, vm.baseReg + ib)) == wanted) {
+	if (raiserEqual(vm.arrayHeap, getDyn(vm, ia), getDyn(vm, ib)) == wanted) {
 		vm.ip = vm.ip + (ic as int32);
 	}
 }

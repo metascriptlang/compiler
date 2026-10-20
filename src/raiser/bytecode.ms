@@ -317,6 +317,7 @@ function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.StoreField => "r-x",
 		RaiserOpcode.ConcatStr => "rxx",
 		RaiserOpcode.EqStr | RaiserOpcode.NeStr | RaiserOpcode.LtStr | RaiserOpcode.LeStr => "rr-",
+		RaiserOpcode.EqVal | RaiserOpcode.NeVal => "xx-",
 		RaiserOpcode.StrLen | RaiserOpcode.StrByteLen => "ir-",
 		RaiserOpcode.StrCharAt => "rri",
 		RaiserOpcode.StrSlice => "rrp",
