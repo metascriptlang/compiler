@@ -2007,6 +2007,9 @@ solana_replays() {
     solana_check "${pin%%:*}-build" "$CAND" build "tools/solana/${pin#*:}.ms" --os=solana --release --output="$dir/${pin#*:}.so" \
       && { solana_check "${pin%%:*}-replay" node "tools/solana/${pin%%:*}.mjs" "$dir/${pin#*:}.so" || rc=1; } || rc=1
   done
+  solana_check accountLimit-build "$CAND" build tools/solana/accountLimitProbe.ms --os=solana --release --passC=-DMS_SOL_MAX_ACCOUNTS=2 --output="$dir/accountLimit2.so" \
+    && solana_check accountLimit-default-build "$CAND" build tools/solana/accountLimitProbe.ms --os=solana --release --output="$dir/accountLimit.so" \
+    && { solana_check accountLimit-replay node tools/solana/accountLimit.mjs "$dir/accountLimit2.so" "$dir/accountLimit.so" || rc=1; } || rc=1
   return $rc
 }
 
@@ -2017,11 +2020,12 @@ run_solana_lane() {
     std/solana/idlTest.ms std/solana/accountCodecTest.ms std/solana/memoryTest.ms std/solana/simulatorContextTest.ms \
     std/solana/simulatorSeedsTest.ms std/solana/simulatorMetasTest.ms std/solana/simulatorLogTest.ms \
     std/solana/simulatorProgramsTest.ms std/solana/simulatorTokenTest.ms std/solana/simulatorInvokeTest.ms \
-    examples/escrow/program.ms examples/escrow/idl.cms examples/anchorBench/helloworld/program.ms; do
+    std/solana/simulatorHostTest.ms examples/escrow/program.ms examples/escrow/idl.cms examples/anchorBench/helloworld/program.ms; do
     solana_host_test "$entry" || rc=1
   done
   for entry in std/solana/accountCodecTest.ms std/solana/memoryTest.ms std/solana/memoryMachineTest.jms std/solana/kernelTest.jms \
-    std/solana/simulatorContextTest.ms std/solana/simulatorSeedsTest.ms std/solana/simulatorMetasTest.ms std/solana/simulatorLogTest.ms; do
+    std/solana/simulatorContextTest.ms std/solana/simulatorSeedsTest.ms std/solana/simulatorMetasTest.ms std/solana/simulatorLogTest.ms \
+    std/solana/simulatorHostTest.ms; do
     solana_host_test "$entry" --target=js || rc=1
   done
   if [ "$release" -eq 1 ] || awk -F'\t' '$1=="solana" && $2 ~ /^(tools\/solana|runtime\/freestanding)\//{f=1} END{exit !f}' "$OUT/why"; then

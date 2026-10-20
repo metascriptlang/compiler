@@ -89,7 +89,19 @@ export function emitFunctionDecl(gen: JSGenerator, node: Node): void {
 }
 
 // ===== Enum Declaration =====
-// TypeScript IIFE pattern: var E; (function(E) { E[E["A"]=0]="A"; })(E || (E = {}));
+
+function enumMemberValue(d: EnumDeclData, i: number): number {
+	return (d.enumValues != null && i < d.enumValues.length) ? d.enumValues[i] : i;
+}
+
+export function jsEnumObject(local: string, d: EnumDeclData): string {
+	let out = `const ${local} = {};\n`;
+	for (let i = 0; i < d.enumMembers.length; i += 1) {
+		const name = escapeJSString(d.enumMembers[i]);
+		out = out + `${local}[${local}["${name}"] = ${enumMemberValue(d, i)}] = "${name}";\n`;
+	}
+	return out;
+}
 
 function emitEnumDeclInner(gen: JSGenerator, node: Node, linePrefix: string): void {
 	const d = node.data as EnumDeclData;
@@ -100,9 +112,8 @@ function emitEnumDeclInner(gen: JSGenerator, node: Node, linePrefix: string): vo
 	// linePrefix carries `export ` to members past the first — the caller
 	// already spent its own `export ` on member zero.
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
-		const val = (d.enumValues != null && i < d.enumValues.length) ? d.enumValues[i] : i;
 		if (i > 0) { emitIndent(gen); emit(gen, linePrefix); }
-		emit(gen, `var ${enumMemberName(node.resolvedSym, safeJsName(d.enumName), d.enumMembers[i])} = ${val};\n`);
+		emit(gen, `var ${enumMemberName(node.resolvedSym, safeJsName(d.enumName), d.enumMembers[i])} = ${enumMemberValue(d, i)};\n`);
 	}
 }
 
@@ -536,11 +547,16 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 			emit(gen, ";\n");
 		},
 		NodeKind.EnumDecl => {
+			const ed = inner.data as EnumDeclData;
 			if (gen.multiFile) {
-				const ed = inner.data as EnumDeclData;
 				for (const m of ed.enumMembers) { gen.exportedNames.push(enumMemberName(inner.resolvedSym, safeJsName(ed.enumName), m)); }
 			}
 			emitEnumDeclInner(gen, inner, gen.multiFile ? "export " : "");
+			if (gen.multiFile) {
+				gen.exportedNames.push(safeJsName(ed.enumName));
+				emitIndent(gen);
+				emit(gen, `export ${jsEnumObject(safeJsName(ed.enumName), ed)}`);
+			}
 		},
 		NodeKind.ClassDecl => {
 			if (gen.multiFile) { gen.exportedNames.push(jsSymbolName(gen, inner.resolvedSym, (inner.data as ClassDeclData).className)); }

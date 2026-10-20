@@ -58,8 +58,8 @@ function check(what, condition) {
 }
 
 check("the host simulator says the same thing",
-	readFileSync(new URL("../../runtime/solana/host.c", import.meta.url), "utf8")
-		.includes("the 32 KiB program heap is exhausted (asked %llu more bytes at %llu)"));
+	readFileSync(new URL("../../std/solana/simulatorContext.ms", import.meta.url), "utf8")
+		.includes("the 32 KiB program heap is exhausted (asked ${size} more bytes at ${position})"));
 
 async function run(op, count, accounts = [program]) {
 	const message = pipe(

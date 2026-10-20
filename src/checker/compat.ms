@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention } from "../ast/node";
 import { makeSymbol } from "./symbol";
-import { isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type } from "./types";
+import { isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -409,6 +409,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// narrowing (all union variants handled), the residual type is never.
 	// `return x` where `x: never` must be valid regardless of the return type.
 	if (source.kind == TypeKind.Never) return true;
+	if (target.kind == TypeKind.NonPrimitive) return isNonPrimitiveType(source);
 
 	// `A | null` into `A | B | null`. MUST precede the same-kind arm below: both
 	// sides are Maybe carriers, so kind equality sends them to the struct
@@ -955,16 +956,38 @@ function paramRefusal(source: Type | null, target: Type | null): string {
 		if (taken != null && taken.kind == TypeKind.Void) { ni += 1; continue; }
 		if (ri >= targetParams.length) return "";
 		const passed = targetParams[ri];
-		if (!isAssignable(passed, taken)) {
-			if (taken == null || taken.kind == TypeKind.Function || passed.kind == TypeKind.Function) return "";
-			const name = ni < source.typeNames.length ? source.typeNames[ni] : String(ri);
+		if (taken == null) return "";
+		const name = ni < source.typeNames.length ? source.typeNames[ni] : String(ri);
+		if (taken.kind == TypeKind.Function && passed.kind == TypeKind.Function) {
+			if (!isAssignable(passed, taken)) {
+				return " — parameter '" + name + "' is typed '" + signatureText(taken) + "', but the expected function passes it '"
+					+ signatureText(passed) + "'; declare the parameter '" + signatureText(passed) + "' or leave it unannotated";
+			}
+		} else if (!isAssignable(passed, taken)) {
+			if (taken.kind == TypeKind.Function || passed.kind == TypeKind.Function) return "";
 			return " — parameter '" + name + "' takes " + typeDisplayName(taken) + ", but the expected function passes it "
 				+ typeDisplayName(passed) + "; declare the parameter " + typeDisplayName(passed) + " and narrow it inside";
 		}
 		ri += 1;
 		ni += 1;
 	}
-	return "";
+	const held = skipModifier(source.typeReturn);
+	const slot = skipModifier(target.typeReturn);
+	if (held == null || slot == null || isAssignable(held, slot)) return "";
+	if (unknownReturnRefusal(source, target) != "" || returnReprRefusal(source, target, "") != "") return "";
+	return " — the function returns '" + signatureText(held) + "', but the expected function returns '" + signatureText(slot) + "'";
+}
+
+function signatureText(t: Type): string {
+	if (t.kind != TypeKind.Function) return typeDisplayName(t);
+	const parts: string[] = [];
+	for (let i = 0; i < t.typeChildren.length; i += 1) {
+		const param = t.typeChildren[i];
+		if (param != null && param.kind == TypeKind.Void) continue;
+		const text = param != null ? signatureText(param) : "?";
+		parts.push(i < t.typeNames.length && t.typeNames[i] != "" ? t.typeNames[i] + ": " + text : text);
+	}
+	return "(" + parts.join(", ") + ") => " + (t.typeReturn != null ? signatureText(t.typeReturn) : "void");
 }
 
 // A literal bound without an annotation freezes as `__anonN__...` (anonStructName).
@@ -1434,11 +1457,13 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				// callConv is folded in only for the inline convention (NIM-REF CK-52:
 				// MS has one closure repr, so the others carry no discriminating information).
 				if (leavesInlineConv(actual, formal)) return TypeRelation.None;
-				if (formal.typeChildren.length != actual.typeChildren.length) return TypeRelation.None;
+				const formalParams = runtimeParams(formal);
+				const actualParams = runtimeParams(actual);
+				if (formalParams.length != actualParams.length) return TypeRelation.None;
 				let worst = TypeRelation.Exact;
-				for (let pi = 0; pi < formal.typeChildren.length; pi += 1) {
-					if (fnSlotReprMismatch(formal.typeChildren[pi], actual.typeChildren[pi])) return TypeRelation.None;
-					const paramRel = typeRelation(formal.typeChildren[pi], actual.typeChildren[pi]);
+				for (let pi = 0; pi < formalParams.length; pi += 1) {
+					if (fnSlotReprMismatch(formalParams[pi], actualParams[pi])) return TypeRelation.None;
+					const paramRel = typeRelation(formalParams[pi], actualParams[pi]);
 					if (paramRel == TypeRelation.None) return TypeRelation.None;
 					if (paramRel < worst) worst = paramRel;
 				}

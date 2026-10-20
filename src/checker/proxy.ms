@@ -8,7 +8,7 @@ import { cloneNodeForCheck } from "../monomorphize/clone";
 import { callCheckExpr, callCheckStmt } from "./checkerCallbacks";
 import { CheckerContext, addError, findAllExtensionsByName, findFirstMatchingExt } from "./context";
 import { lookupSymbol } from "./symbol";
-import { errorType, isArrayType, isNumeric, peelToStruct, skipModifier, typeDisplayName, typeNameOf } from "./types";
+import { peelTransparentInstance, errorType, isArrayType, isNumeric, peelToStruct, skipModifier, typeDisplayName, typeNameOf } from "./types";
 import { declaringSymOf } from "./visibility";
 
 function isStdProxy(ctx: CheckerContext): boolean {
@@ -18,7 +18,8 @@ function isStdProxy(ctx: CheckerContext): boolean {
 
 // The target and handler types of a `Proxy<T, H>`, null for any other type.
 export function proxyPartsOf(ctx: CheckerContext, t: Type | null): Type[] | null {
-	const s = skipModifier(t);
+	const held = skipModifier(t);
+	const s = held != null ? peelTransparentInstance(held) : null;
 	if (s == null || s.kind != TypeKind.GenericInstance || s.typeName != "Proxy" || s.typeChildren.length != 2) return null;
 	return isStdProxy(ctx) ? s.typeChildren : null;
 }

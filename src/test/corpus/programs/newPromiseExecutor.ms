@@ -22,7 +22,7 @@ function inferred(): Promise<number> {
 }
 
 function annotated(ms: number): Promise<number> {
-	return new Promise<number>((resolve: (v: number) => void, reject: (e: Error) => void): void => { resolve(ms); });
+	return new Promise<number>((resolve: (v: number) => void, reject: (e: string | Error) => void): void => { resolve(ms); });
 }
 
 async function main(): Promise<void> {

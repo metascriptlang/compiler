@@ -1132,7 +1132,7 @@ export function createdPdaAccountAt(
 	return Result.ok(bump[0]);
 }
 
-@inline export function slottedCanonicalBump(account: Account, seeds: SlottedSeeds): Result<uint8, ProgramError> {
+export function slottedCanonicalBump(account: Account, seeds: SlottedSeeds): Result<uint8, ProgramError> {
 	const failure = seedsCanonicalFailure(account.keyAddress(), seeds);
 	if (failure != 0) { return Result.err({ code: failure }); }
 	return Result.ok(slotBump(seeds));

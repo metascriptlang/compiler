@@ -33,8 +33,8 @@ The worked example is Anchor's escrow: `examples/escrow/layout.ms` (shared by pr
 | `std/solana/idl.ms` | compile time | `anchorIdl<Op>(spec)`: the program's Anchor IDL as a string literal |
 | `std/solana/host.ms` | C host, JS | the simulator's surface: builds the runtime's input buffer, runs an entry function, reads the accounts back; `run`, `logs`, `invocations` and the test settings |
 | `std/solana/memory.cms` / `memory.jms` | C, SBF / JS | the memory kernel: loads, stores, copy, fill and compare at an integer address, the address of a span, string or table, the account data room and claim record, the fault bridge. On C each is a `solana.h` function. On JS an integer address means nothing without a machine, so `memory.jms` is one: a simulated address space of regions over byte buffers, plain arrays and struct tables, with the runtime's input at `0x400000000` and the heap at `0x300000000`, and `msSolViewAt<T>` behind `data<T>()` |
-| `std/solana/kernel.cms` / `kernel.jms` | C, SBF / JS | the syscall kernel: context, logs, sha256, curve check, program addresses, CPI, return data, clock, rent, and the host driver (`msSolHostEnter`, `Leave`, `Result`, …) that `host.ms` calls. On C they are `solana.h` syscalls on SBF and `runtime/solana/host.c` or a simulator module on a host; on JS they call the simulator modules over `memory.jms`. Only the runtime's boundary is split |
-| `std/solana/simulator*.ms` | C host, JS | the host simulator's logic, shared by both backends: the input parse (`simulatorContext`), sha256, curve and address derivation (`simulatorCrypto`, `simulatorCryptoCore`), seed walks (`simulatorSeeds`), CPI metas (`simulatorMetas`), the System program (`simulatorPrograms`), Token, Token-2022 and Associated Token (`simulatorToken`), logs, base58, return data and sysvars (`simulatorLog`, `simulatorLogCore`), held accounts, signers, the CPI dispatcher and the invocation records (`simulatorInvoke`). They import only `./memory` and pure modules; `kernel.cms` pulls them into a host build under `when (!solana)`, each keeping its `solana.h` name with `@exportName`, so an SBF build never sees them. `runtime/solana/host.c` keeps the C plumbing: the context, heap, input buffer, enter/leave shells and fault storage |
+| `std/solana/kernel.cms` / `kernel.jms` | C, SBF / JS | the syscall kernel: context, logs, sha256, curve check, program addresses, CPI, return data, clock, rent, and the host driver (`msSolHostEnter`, `Leave`, `Result`, …) that `host.ms` calls. On C they are `solana.h` syscalls on SBF and a simulator module on a host; on JS they call the same simulator modules over `memory.jms`. Only the runtime's boundary is split |
+| `std/solana/simulator*.ms` | C host, JS | the host simulator's logic, shared by both backends: the host driver (`simulatorHost`: the context at the start of the heap in the runtime's layout, the heap arena, the input buffer, enter and leave; its storage is module arrays on C and mapped regions on JS), the input parse (`simulatorContext`), sha256, curve and address derivation (`simulatorCrypto`, `simulatorCryptoCore`), seed walks (`simulatorSeeds`), CPI metas (`simulatorMetas`), the System program (`simulatorPrograms`), Token, Token-2022 and Associated Token (`simulatorToken`), logs, base58, return data and sysvars (`simulatorLog`, `simulatorLogCore`), held accounts, signers, the CPI dispatcher and the invocation records (`simulatorInvoke`). They import only `./memory` and pure modules; `kernel.cms` pulls them into a host build under `when (!solana)`, each keeping its `solana.h` name with `@exportName`. Three of them are the program's own code on SBF too: the entry parse (`simulatorContext`), the seed walks (`simulatorSeeds`) and the CPI metas (`simulatorMetas`); `solana.h` keeps only their frames, uninitialized, and calls the `…At` routines, while a host or JS caller passes zeroed frames to the same routines. `runtime/solana/host.c` keeps the C half of the memory kernel's fault bridge and byte moves: the fault store, `msSolHostRaise`, copy with the overlap refusal, fill and compare |
 | `std/solana/accountCodecKernel.cms` / `.jms` | C / JS | float bit casts and a zeroed byte array for the account codec (§4, Portable account bytes): `runtime/solana/accountCodec.h` on C, a `DataView` on JS |
 | `std/solana/index.ms` | C, SBF, JS | `std/solana` is `pubkey`, `error`, `discriminator`, an explicit list from `core` and `typed`, and the macros, one barrel for every backend; the kernels the macros bind (`closedProgramAccount`, `resizedProgramAccount`, `createdAccount`, `createdPdaAccount`, `createAccountAllowPrefund`, the `*Failure`, `*Account` and `seeds*` checks, `keysEqual`, `createPdaOf`/`createPdaProven`/`createPdaAt`) are not on it, so `import { closedProgramAccount } from "std/solana"` is an error (`solanaProofFailurePrivate.ms`); a deep import of `std/solana/core` still reaches them |
 
@@ -946,6 +946,31 @@ Size 5/5, CU 0/13. Measured causes of the rest: the early program-id check (abou
 instruction; removed, see below), the curve check on a stored-bump PDA (161 CU in nested increment/reset and multisig
 set_label/execute), the eager account table (about 35–60 CU against a lazy cursor) and
 by-value `Result`/`Pubkey` copies in create and transfer. `accountValues` 16,905 cases, max 446 CU.
+
+### Entry parse, seed walks and CPI metas from `.ms` on SBF — measured 2026-10-20
+
+The entry parse, the seed walks and the CPI metas run from `simulatorContext.ms`, `simulatorSeeds.ms` and
+`simulatorMetas.ms` on SBF, on the C host and on JS; `solana.h` keeps the uninitialized frames of the helpers above
+and calls the modules' `…At` routines with them, and its C copies of the walks are gone. Base `97805bf34`, the 20 SBF
+builds of the solana lane, LiteSVM replays:
+
+| step | bytes vs base (261 544) | CU sum vs base (2 712 189) |
+|---|---:|---:|
+| first port, every frame a zeroed `.ms` local | +7 160 | +44 677 |
+| frames in C, rows read and written through `Ptr<SeedSlice>` | +272 | +895 |
+| proven PDA create signs from a free slice of its seed list, associated check by the canonical walk, `put*` stores through the storage pointer | +600 | −1 021 |
+
+The byte total of the last row is escrow debug (+632 over the row before; release escrow is 64 smaller). Release
+rows: escrow make 20 231 → 20 188, take 7 005 → 6 942, refund 4 188 → 4 157, the associated refusal 2 300 → 2 250;
+hello, nested and prop-amm unchanged; multisig execute 2 537 → 2 564, create +8, vault +3/+4, 500 seed rounds +5.
+The same canonical walk in `expectAssociated` measured escrow make +24 and take +88 CU and was not kept. The parse
+keeps `MS_SOL_MAX_ACCOUNTS`: an SBF build with a 2-slot table sees 2 of 5 accounts (`tools/solana/accountLimit.mjs`).
+`slottedCanonicalBump` is a plain function, one core the `Delegated<T>` wrappers share: as `@inline` its body,
+now a call where it held the C walk, went into every `Delegated<T>.verifiedPda` copy (16 → 368 bytes,
+`solanaGenericSize.ms`); escrow debug pays 96 bytes and 5 CU for the call, release is unchanged.
+Left for the compiler: `ExternalMutable<TokenAccount>.read()` builds the struct in a local and copies it out through
+the builtins' `memcpy` shim, and zeroes each absent key's payload, about 25 CU per read
+(`.inbox/compiler/2026-10-20-sbf-struct-result-copies-through-memcpy-shim.md`).
 
 ### Early program-id check removed — measured 2026-10-10
 

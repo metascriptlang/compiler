@@ -27,7 +27,7 @@ import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, moduleScopeNamed, enumMemberName } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, isPrimitiveKind, derivesFromClass, matchUnionBehindInstance } from "./types";
+import { isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, isPrimitiveKind, derivesFromClass, matchUnionBehindInstance } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callThroughProxy, checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
 
@@ -427,7 +427,7 @@ function contextResultSlot(calleeSym: Symbol | null, formal: Type | null, contex
 
 function bindFromExpectedReturn(calleeType: Type, expectedType: Type | null): UnifyBindings {
 	const bindings = createUnifyBindings();
-	if (expectedType != null && calleeType != null && calleeType.typeReturn != null) {
+	if (expectedType != null && !isUnknownType(expectedType) && calleeType != null && calleeType.typeReturn != null) {
 		unifyType(calleeType.typeReturn, expectedType, bindings);
 	}
 	return bindings;
@@ -849,6 +849,33 @@ export function awaitReturnedThenable(ctx: CheckerContext, value: Node): Node {
 	return awaited;
 }
 
+export function raisedOperand(ctx: CheckerContext, operand: Node): Node | null {
+	callCheckExpr(ctx, operand, null);
+	const argType = operand.nodeType;
+	if (argType == null || argType.kind == TypeKind.Error || isUnresolvedType(argType) || hasGenericParams(argType)) return operand;
+	const errSym = lookupSymbol(ctx.table, "Error");
+	if (errSym == null || errSym.symbolType == null) {
+		addError(ctx, "throw needs the std 'Error' class in scope", operand.location.line, operand.location.column);
+		return null;
+	}
+	const opaque = isUnknownType(argType);
+	if (!opaque && isAssignable(argType, errSym.symbolType)) return operand;
+	if (opaque || !isAssignable(argType, stringType())) {
+		addError(ctx, "only an 'Error' or a 'string' can be thrown, got '" + typeDisplayName(argType) + "'", operand.location.line, operand.location.column);
+		return null;
+	}
+	const loc = operand.location;
+	const callee = createNodeAt(NodeKind.Identifier, { name: "Error" }, loc);
+	ensureShaped(errSym, ctx);
+	markUsedIn(ctx, errSym);
+	callee.resolvedSym = errSym;
+	callee.nodeType = errSym.symbolType;
+	callee.flags = callee.flags.incl(NodeFlag.BoundSym).incl(NodeFlag.Sem);
+	const boxed = createNodeAt(NodeKind.NewExpr, { newCallee: callee, newArguments: [operand] }, loc);
+	callCheckExpr(ctx, boxed, null);
+	return boxed;
+}
+
 const PROMISE_COMBINATORS = ["all", "race", "any", "allSettled"];
 
 function promiseStaticOf(ctx: CheckerContext, callee: Node): string {
@@ -868,6 +895,12 @@ function adoptPromiseInputs(ctx: CheckerContext, node: Node, expected: Type | nu
 	const name = promiseStaticOf(ctx, d.callee);
 	if (name == "" || d.arguments.length != 1 || takesContext(d.arguments[0])) return expected;
 	const arg = d.arguments[0];
+	if (name == "reject") {
+		const raised = raisedOperand(ctx, arg);
+		if (raised != null) d.arguments[0] = raised;
+		else arg.nodeType = errorType();
+		return expected;
+	}
 	if (name == "resolve") {
 		callCheckExpr(ctx, arg, expected != null && isAwaitable(expected) ? awaitedType(expected) : null);
 		const adoption = thenableAdoption(ctx, arg, "The value 'Promise.resolve' takes");
@@ -1348,7 +1381,8 @@ export function typeTraitOf(node: Node): Symbol | null {
 	const d = node.data as CallExprData;
 	const sym = node.resolvedSym != null ? node.resolvedSym : (d.callee != null ? d.callee.resolvedSym : null);
 	if (sym == null) return null;
-	return sym.builtinKind == "IsPlainData" || sym.builtinKind == "NeedsCopy" || sym.builtinKind == "IsArray" ? sym : null;
+	return sym.builtinKind == "IsPlainData" || sym.builtinKind == "NeedsCopy" || sym.builtinKind == "IsArray"
+		|| sym.builtinKind == "IsObject" ? sym : null;
 }
 
 function foldTypeTrait(ctx: CheckerContext, node: Node, callType: Type): Type {
@@ -1367,6 +1401,7 @@ function foldTypeTrait(ctx: CheckerContext, node: Node, callType: Type): Type {
 	}
 	const answer = trait.builtinKind == "IsPlainData" ? isPlainDataType(asked, (owner: Type): boolean => declaresUserHook(owner, ctx))
 		: trait.builtinKind == "IsArray" ? isArrayType(asked)
+		: trait.builtinKind == "IsObject" ? isAssignable(asked, nonPrimitiveType())
 		: needsValueCopy(asked);
 	node.kind = NodeKind.BooleanLiteral;
 	node.data = { boolValue: answer } as BooleanLiteralData;
@@ -1888,6 +1923,10 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		const calleeSym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
 		if (ai == 0 && calleeSym != null && calleeSym.builtinKind == "PromiseSpawn") ctx.pendingSpawnThunk = true;
 		if (extMultiFiltered.length > 1 && literalArgs[ai]) paramExpected = null;
+		if (paramExpected != null && paramExpected.kind == TypeKind.Varargs) {
+			const restElem = getElementType(unwrapRef(unwrapVarargs(paramExpected)));
+			paramExpected = restElem != null && restElem.kind != TypeKind.Inferred && !isUnknownType(restElem) ? restElem : null;
+		}
 		callCheckExpr(ctx, d.arguments[ai], paramExpected);
 		ctx.pendingSpawnThunk = false;
 		let argType = d.arguments[ai].nodeType;

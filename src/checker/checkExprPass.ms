@@ -6,7 +6,7 @@ import { callCheckStmt, checkInTypeSlot, registerCheckExpr, callDemandReturn, ca
 import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData } from "../ast/node";
 import { getIdentId } from "./idents";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { peelTransparentInstance, isStdCollection, isTagCarriedUnion, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, spelled, peelThrough, PEEL_ALL, PEEL_ALIAS, literalBase, getResultErrType, isValuePointee, classParentOf, isNullableShape, isOutParam, distinctBody, genericInstanceMembers, functionSlotOf, holdsInferred, createNumberLiteral, numberLiteralBase, integerLiteralName, fractionLiteralName, widenNumberLiteralType, isIterator, isLockedRef, getIteratorYieldType } from "./types";
+import { peelTransparentInstance, isStdCollection, isTagCarriedUnion, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isSharedGraphType, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createArc, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createTypeRef, createPrimitive, createUnion, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, substituteType, instantiateGeneric, createGenericInstance, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapVarargs, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByStringDiscriminant, findSharedStringDiscriminant, detectUnionDiscriminant, collectStringDiscriminantValues, findFieldInVariant, unionVariantHasProperty, findUnionVariant, isAmbiguousVariant, findVariantByFieldName, duSharedFieldOffsetDiffers, unifyType, createUnifyBindings, mergeUnifyBindings, UnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, createSpawnHandle, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, createEnumLiteral, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, isBrandDistinct, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, spelled, peelThrough, PEEL_ALL, PEEL_ALIAS, literalBase, getResultErrType, isValuePointee, classParentOf, isNullableShape, isOutParam, distinctBody, genericInstanceMembers, functionSlotOf, holdsInferred, createNumberLiteral, numberLiteralBase, integerLiteralName, fractionLiteralName, widenNumberLiteralType, isIterator, isLockedRef, getIteratorYieldType } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, classDeclNodeOf, parentClassSymOf, isVisibleSymbol, Scope } from "./symbol";
 import { markUsedIn, CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, resolveUserOperator, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, refusesTypeAsValue, extDeclaresReceiver, addFatalError, findAccessor } from "./context";
 import {
@@ -3297,6 +3297,22 @@ export function giveBareReturnsNull(ctx: CheckerContext): void {
 	if (!isUnresolvedType(joined)) ctx.inferredReturn = joined;
 }
 
+export function awaitReturnedPromise(ctx: CheckerContext, arg: Node, expected: Type | null): Node {
+	const t = arg.nodeType;
+	if (t == null) return arg;
+	if (!isAwaitable(t) || isAffineAwaitable(t)) return arg;
+	const inner = awaitedType(t);
+	if (inner == null) return arg;
+	if (expected != null && !isUnresolvedType(expected) && !isAssignable(inner, expected)) return arg;
+	if (ctx.tryGuardedFunction != null && ctx.tryGuardedFunction == ctx.currentFunction) {
+		addError(ctx, "a returned promise is not awaited inside try — write `return await …` so catch and finally see its result", arg.location.line, arg.location.column);
+	}
+	const awaited = createNodeAt(NodeKind.AwaitExpr, { awaitArg: arg }, arg.location);
+	awaited.nodeType = inner;
+	awaited.flags = awaited.flags.incl(NodeFlag.Sem);
+	return awaited;
+}
+
 // ===== Anonymous Functions =====
 
 export function refuseFallingOffEnd(ctx: CheckerContext, name: string, body: Node, declared: Type | null, isAsync: boolean, isGenerator: boolean, at: SourceLocation): void {
@@ -3440,15 +3456,12 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		}
 	} else {
 		let bodyExpected = explicitReturnType;
-		if (isAsync && bodyExpected != null) {
-			const unwrapped = awaitedType(bodyExpected);
-			if (unwrapped != null) bodyExpected = unwrapped;
-		}
+		if (isAsync && bodyExpected != null) bodyExpected = asyncBodyType(bodyExpected);
 		const hoistMark = ctx.pendingHoisted.length;
 		checkExpr(ctx, body, bodyExpected);
 		let result = body;
 		if (fnNode.kind == NodeKind.ArrowFunction && returnsFromAsyncBody(ctx)) {
-			result = awaitReturnedThenable(ctx, body);
+			result = awaitReturnedThenable(ctx, awaitReturnedPromise(ctx, body, bodyExpected));
 			(fnNode.data as ArrowFunctionData).arrowBody = result;
 		}
 		const exprType = result.nodeType;
@@ -3598,10 +3611,7 @@ function checkArrowExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 	if (d.arrowBody != null && d.arrowBody.kind != NodeKind.BlockStmt
 		&& fnType.typeReturn != null && !isUnresolvedType(fnType.typeReturn)) {
 		let returnExpected = fnType.typeReturn;
-		if (d.arrowFlags == "async" || d.arrowFlags == "async_generator") {
-			const unwrapped = awaitedType(returnExpected);
-			if (unwrapped != null) returnExpected = unwrapped;
-		}
+		if (d.arrowFlags == "async" || d.arrowFlags == "async_generator") returnExpected = asyncBodyType(returnExpected);
 		if (returnExpected.kind != TypeKind.Void) d.arrowBody = fitNode(ctx, d.arrowBody, returnExpected, d.arrowBody.nodeType);
 	}
 	return fnType;

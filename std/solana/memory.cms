@@ -26,4 +26,23 @@ export extern function msSolDataRoom(record: uint64): uint64;
 export extern function msSolClaimRecord(address: uint64): void;
 export extern function msSolHostRaise(code: uint64, text: string): void;
 export extern function msSolHostFaultCodeOf(): uint64;
+export extern function msSolMemoryFaultText(): string from "msSolHostFaultMessage";
+export extern function msSolMemoryClearFault(): void from "msSolHostClearFault";
 export extern function msSolProgramId(): uint64;
+
+// A seed row read through a typed pointer, so the C compiler can forward a row the caller has just written
+@inline export function msSolSeedRowLength(table: uint64, index: uint64): uint64 {
+	const rows = msSolPointer(table) as Ptr<SeedSlice>;
+	return rows[index].length;
+}
+
+@inline export function msSolSeedRowAddress(table: uint64, index: uint64): uint64 {
+	const rows = msSolPointer(table) as Ptr<SeedSlice>;
+	return rows[index].address;
+}
+
+@inline export function msSolSeedRowSet(table: uint64, index: uint64, address: uint64, length: uint64): void {
+	const rows = msSolPointer(table) as Ptr<SeedSlice>;
+	rows[index].address = address;
+	rows[index].length = length;
+}

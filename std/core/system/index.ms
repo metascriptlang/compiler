@@ -904,22 +904,43 @@ when (mscDeclaresRuntime) {
 	extern function msFutureThen_double(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
 
 	@compilerFunc
+	extern function msFutureThen_doubleWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
+
+	@compilerFunc
 	extern function msFutureThen_int32(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
+
+	@compilerFunc
+	extern function msFutureThen_int32WithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
 
 	@compilerFunc
 	extern function msFutureThen_int64(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
 
 	@compilerFunc
+	extern function msFutureThen_int64WithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
+
+	@compilerFunc
 	extern function msFutureThen_bool(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
+
+	@compilerFunc
+	extern function msFutureThen_boolWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
 
 	@compilerFunc
 	extern function msFutureThen_msString(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
 
 	@compilerFunc
+	extern function msFutureThen_msStringWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
+
+	@compilerFunc
 	extern function msFutureThen_ptr(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
 
 	@compilerFunc
+	extern function msFutureThen_ptrWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
+
+	@compilerFunc
 	extern function msFutureThen_ref(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
+
+	@compilerFunc
+	extern function msFutureThen_refWithRejected(input: Ptr<void>, onFulfilled: () => void, onRejected: () => void): Ptr<void>;
 
 	@compilerFunc
 	extern function msFutureCatch_double(input: Ptr<void>, onRejected: () => void): Ptr<void>;
@@ -962,6 +983,9 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msFutureThenTyped(input: Ptr<void>, onFulfilled: () => void, typeTag: int32): Ptr<void>;
+
+	@compilerFunc
+	extern function msFutureThenTypedWithRejected(input: Ptr<void>, onFulfilled: () => void, typeTag: int32, onRejected: () => void): Ptr<void>;
 
 	@compilerFunc
 	extern function msFutureCatchTyped(input: Ptr<void>, onRejected: () => void, typeTag: int32): Ptr<void>;

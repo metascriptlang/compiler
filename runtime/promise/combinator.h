@@ -126,6 +126,7 @@ typedef struct {
 	msFuture* output;
 	msFuture* input;
 	msClosure onFulfilled;
+	msClosure onRejected;  /* fn NULL: .then without a rejection handler */
 	int typeTag;
 } msFutureThenEnv;
 
@@ -144,6 +145,7 @@ typedef struct {
 
 msFuture* msFutureThen(msFuture* input, msClosure onFulfilled);
 void* msFutureThenTyped(void* input, msClosure onFulfilled, int typeTag);
+void* msFutureThenTypedWithRejected(void* input, msClosure onFulfilled, int typeTag, msClosure onRejected);
 msFuture* msFutureCatch(msFuture* input, msClosure onRejected);
 void* msFutureCatchTyped(void* input, msClosure onRejected, int typeTag);
 void* msFutureFinally(void* input, msClosure onSettled);
@@ -155,6 +157,41 @@ void* msFutureFinally(void* input, msClosure onSettled);
  *
  * The output future is still msFuture_ptr* for now; .then callbacks don't currently
  * return values through the chain, so output storage type is irrelevant. */
+
+/* The failed input of a .then: a rejection handler receives the Error the input holds (lent:
+ * the input keeps its count) and the output settles by the handler's outcome; without a
+ * handler the output fails with the same Error. */
+static inline void msFutureThenRejected(msFutureThenEnv* e) {
+    if (e->onRejected.fn == NULL) {
+        msFutureFailShared(e->output, e->input->base.error);
+        return;
+    }
+    void* fn = (void*)e->onRejected.fn;
+    void* env = e->onRejected.env;
+    if (env) ((void(*)(void*, void*))fn)(e->input->base.error, env);
+    else ((void(*)(void*))fn)(e->input->base.error);
+    if (msErr) {
+        msFutureFail(e->output, (void*)msCurrException);
+        msErr = false; msCurrException = NULL;
+    } else {
+        msFutureComplete(e->output, NULL);
+    }
+}
+
+static inline void msFutureThenEnvFree(msFutureThenEnv* e) {
+    msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled); msClosureDestroy(e->onRejected); free(e);
+}
+
+static inline msFuture* msFutureThenAttach(void* input, msClosure onFulfilled, msClosure onRejected, int typeTag, msClosureFn cb) {
+    msFuture* output = (msFuture*)msFutureCreate();
+    msFutureThenEnv* env = (msFutureThenEnv*)malloc(sizeof(msFutureThenEnv));
+    env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output);
+    msClosureCopy(onFulfilled); env->onFulfilled = onFulfilled;
+    msClosureCopy(onRejected); env->onRejected = onRejected;
+    env->typeTag = typeTag;
+    msFutureAddCallback(input, (msClosure){.fn = cb, .env = env});
+    return output;
+}
 
 /* Typed .then: read input as T, pass to callback, complete output with NULL.
  *
@@ -174,8 +211,8 @@ void* msFutureFinally(void* input, msClosure onSettled);
 static inline void name##_cb(void* raw) { \
     msFutureThenEnv* e = (msFutureThenEnv*)raw; \
     if (e->input->base.failed || e->input->base.cancelled) { \
-        msFutureFailShared(e->output, e->input->base.error); \
-        msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled); free(e); \
+        msFutureThenRejected(e); \
+        msFutureThenEnvFree(e); \
         return; \
     } \
     T val = ((fut_type*)e->input)->value; \
@@ -190,14 +227,13 @@ static inline void name##_cb(void* raw) { \
     } else { \
         msFutureComplete(e->output, NULL); \
     } \
-    msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled); free(e); \
+    msFutureThenEnvFree(e); \
+} \
+static inline void* name##WithRejected(void* input, msClosure onFulfilled, msClosure onRejected) { \
+    return msFutureThenAttach(input, onFulfilled, onRejected, 0, (msClosureFn)name##_cb); \
 } \
 static inline void* name(void* input, msClosure onFulfilled) { \
-    msFuture* output = (msFuture*)msFutureCreate(); \
-    msFutureThenEnv* env = (msFutureThenEnv*)malloc(sizeof(msFutureThenEnv)); \
-    env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onFulfilled); env->onFulfilled = onFulfilled; env->typeTag = 0; \
-    msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)name##_cb, .env = env}); \
-    return output; \
+    return name##WithRejected(input, onFulfilled, (msClosure){0}); \
 }
 
 /* Typed .then for a value type the future holds BOXED (struct, tuple, union: asyncBridge
@@ -213,8 +249,8 @@ static inline void* name(void* input, msClosure onFulfilled) { \
 static void name##_cb(void* raw) { \
     msFutureThenEnv* e = (msFutureThenEnv*)raw; \
     if (e->input->base.failed || e->input->base.cancelled) { \
-        msFutureFailShared(e->output, e->input->base.error); \
-        msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled); free(e); \
+        msFutureThenRejected(e); \
+        msFutureThenEnvFree(e); \
         return; \
     } \
     void* box = e->input->value; \
@@ -233,14 +269,13 @@ static void name##_cb(void* raw) { \
     if (!owned) drop(&val); \
     if (failed) msFutureFail(e->output, exception); \
     else msFutureComplete(e->output, NULL); \
-    msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled); free(e); \
+    msFutureThenEnvFree(e); \
+} \
+static inline void* name##WithRejected(void* input, msClosure onFulfilled, msClosure onRejected) { \
+    return msFutureThenAttach(input, onFulfilled, onRejected, 0, (msClosureFn)name##_cb); \
 } \
 static inline void* name(void* input, msClosure onFulfilled) { \
-    msFuture* output = (msFuture*)msFutureCreate(); \
-    msFutureThenEnv* env = (msFutureThenEnv*)malloc(sizeof(msFutureThenEnv)); \
-    env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onFulfilled); env->onFulfilled = onFulfilled; env->typeTag = 0; \
-    msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)name##_cb, .env = env}); \
-    return output; \
+    return name##WithRejected(input, onFulfilled, (msClosure){0}); \
 }
 
 /* Typed .finally: invoke handler, then propagate input (value or error) to output
@@ -272,8 +307,8 @@ static inline void* name(void* input, msClosure onSettled) { \
 }
 
 /* Typed .catch: on success, propagate input value to output via typed complete.
- * On error, invoke handler (error is always msString in MetaScript), complete output
- * with NULL on handler success or propagate handler's rethrow. */
+ * On error, invoke handler with the Error the input holds (lent: the input keeps its
+ * count), complete output with NULL on handler success or propagate handler's rethrow. */
 #define MS_DEFINE_FUTURE_CATCH(name, fut_type) \
 static inline void name##_cb(void* raw) { \
     msFutureCatchEnv* e = (msFutureCatchEnv*)raw; \
@@ -281,9 +316,8 @@ static inline void name##_cb(void* raw) { \
         void* err = e->input->base.error; \
         void* fn = (void*)e->onRejected.fn; \
         void* env = e->onRejected.env; \
-        msString sval = err ? *(msString*)err : MS_EMPTY_STRING; \
-        if (env) ((void(*)(msString, void*))fn)(sval, env); \
-        else ((void(*)(msString))fn)(sval); \
+        if (env) ((void(*)(void*, void*))fn)(err, env); \
+        else ((void(*)(void*))fn)(err); \
         if (msErr) { \
             msFutureFail(e->output, (void*)msCurrException); \
             msErr = false; msCurrException = NULL; \
@@ -300,7 +334,7 @@ static inline void name##_cb(void* raw) { \
 static inline void* name(void* input, msClosure onRejected) { \
     msFuture* output = (msFuture*)msAlloc(sizeof(fut_type)); \
     msFutureCatchEnv* env = (msFutureCatchEnv*)malloc(sizeof(msFutureCatchEnv)); \
-    env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onRejected); env->onRejected = onRejected; env->typeTag = 3; \
+    env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onRejected); env->onRejected = onRejected; env->typeTag = MS_TYPETAG_PTR; \
     msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)name##_cb, .env = env}); \
     return output; \
 }

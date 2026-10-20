@@ -3,7 +3,7 @@ import { ProgramError } from "./error";
 import { ProgramAddress } from "./pda";
 import { msSolDeriveAddress, msSolFindAddress, msSolFindCanonicalAddress, msSolFindCanonicalStaged, msSolFindExpectedAddress, msSolFindExpectedStaged, msSolHashIsStaged, msSolSeedStageInPlace } from "./kernel";
 import { SeedSlice, SignerSeeds } from "./addressTables";
-import { msSolCopy, msSolLoadU64, msSolProgramId, msSolSeedsAddress, msSolSignersAddress, msSolSpanAddress, msSolStringAddress, msSolStringLength, msSolTableAddress } from "./memory";
+import { msSolCopy, msSolLoadU64, msSolProgramId, msSolSeedRowSet, msSolSeedsAddress, msSolSignersAddress, msSolSpanAddress, msSolStringAddress, msSolStringLength, msSolTableAddress } from "./memory";
 
 export { SeedSlice, SignerSeeds } from "./addressTables";
 
@@ -126,6 +126,13 @@ export function findAt(
 	return canonicalFailure(msSolFindCanonicalAddress(table, count, program, expected, bumpOut));
 }
 
+// The canonical address of `seeds` is `expected`, or the code of why not: `mismatch` when it is another address.
+export function canonicalAddressFailure(seeds: Readonly<Span<SeedSlice>>, program: uint64, expected: uint64, mismatch: uint64): uint64 {
+	let bump: uint8[1] = [0];
+	const code = msSolFindCanonicalAddress(tableAddress(seeds), seeds.length as uint64, program, expected, msSolSpanAddress(bump));
+	return code == 3 ? mismatch : canonicalFailure(code);
+}
+
 @inline export function findCanonicalStagedFailure(table: uint64, used: uint64, expected: uint64): uint64 {
 	return canonicalFailure(msSolFindCanonicalStaged(table, used, expected));
 }
@@ -160,6 +167,13 @@ export function findAddress(
 	program: uint64,
 ): Result<ProgramAddress, ProgramError> {
 	return findAt(tableAddress(seeds), seeds.length as uint64, program);
+}
+
+// `table` holds `used` seeds and one free slice after them, which takes the bump byte at `bump`.
+export function bumpInPlace(table: uint64, used: uint64, bump: uint64): boolean {
+	if (!fits(table, used, MAX_SEEDS - 1)) { return false; }
+	msSolSeedRowSet(table, used, bump, 1);
+	return true;
 }
 
 // The bump byte lives in the caller's table; returning the table by value would leave it dangling.

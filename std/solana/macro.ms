@@ -3,7 +3,7 @@ import { eventDiscriminator, instructionDiscriminator, snakeCase } from "./discr
 import { derivedAddressOf } from "./pda";
 import { Pubkey, pubkeyOf } from "./pubkey";
 import { ProgramError } from "./error";
-import { SEED_LIST_REQUIRED, seedTable, slottedTable } from "./accountSeeds";
+import { SEED_LIST_REQUIRED, bumpTable, seedTable, slottedTable } from "./accountSeeds";
 import {
 	argBool,
 	argBoolValid,
@@ -895,7 +895,7 @@ export macro createPda(payer: Node, target: Node, seeds: Node): Node {
 				kind: NodeKind.CallExpr,
 				line: seeds.line,
 				column: seeds.column,
-				callee: bindSym("seedTable"),
+				callee: bindSym("bumpTable"),
 				arguments: [seeds],
 				isDirectCall: false,
 				resolvedOverloadIdx: -1,

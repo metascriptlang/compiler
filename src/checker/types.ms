@@ -496,6 +496,10 @@ export function awaitedType(t: Type | null): Type | null {
 	return p.typeReturn;
 }
 
+export function asyncBodyType(declared: Type): Type {
+	return awaitedType(declared) ?? declared;
+}
+
 // isAffineAwaitable — an awaitable carrying affine consumption semantics
 // (spawn-origin Promises, @affineAwaitable types). Reads the flag bit set by T2.
 // Used by PARALOCK R1-R6 affine checker rules.
@@ -1266,7 +1270,9 @@ export function peelTransparentInstance(t: Type): Type {
 	let _g = 0;
 	while (_g < PEEL_MAX_DEPTH) {
 		_g = _g + 1;
-		if (cur.kind != TypeKind.GenericInstance || cur.typeReturn == null) return cur;
+		if (cur.kind != TypeKind.GenericInstance) return cur;
+		if (cur.typeReturn == null) instantiateGenericBody(cur, genericParamsOf(cur));
+		if (cur.typeReturn == null) return cur;
 		if (cur.typeExtra != null && cur.typeExtra.kind == TypeKind.Distinct) return cur;
 		const nominal = peelToStructOrUnion(cur.typeExtra);
 		if (nominal != null
@@ -2265,6 +2271,26 @@ export function nullType(): Type { return getSysType(TypeKind.Null); }
 // Unknown sits past the 0..Error getSysType preallocation on purpose
 // (bootstrap-stable ordinals) — this accessor returns a fresh type per call.
 export function unknownType(): Type { return getSysType(TypeKind.Unknown); }
+
+export function nonPrimitiveType(): Type { return getSysType(TypeKind.NonPrimitive); }
+
+export function isNonPrimitiveType(t: Type | null): boolean {
+	const s = skipModifier(t);
+	if (s == null) return false;
+	if (s.kind == TypeKind.Union) {
+		for (const member of s.typeChildren) {
+			if (!isNonPrimitiveType(member)) return false;
+		}
+		return s.typeChildren.length > 0;
+	}
+	return match (s.kind) {
+		TypeKind.Ref | TypeKind.Struct | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Tuple
+			| TypeKind.Function | TypeKind.Set | TypeKind.Result | TypeKind.NonPrimitive => true,
+		TypeKind.GenericInstance => s.typeReturn == null || isNonPrimitiveType(s.typeReturn),
+		TypeKind.Distinct | TypeKind.Alias => isNonPrimitiveType(s.typeReturn),
+		_ => false,
+	};
+}
 
 export function isUnresolvedType(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Inferred;
@@ -4044,6 +4070,11 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		// is in flag bits, not in the name. Simple equality covers both.
 		const namesMatch = formal.typeName == concrete.typeName;
 		if (!namesMatch) {
+			const aliased = peelTransparentInstance(concrete);
+			if (aliased != concrete) {
+				unifyType(formal, aliased, bindings);
+				return;
+			}
 			const ancestor = classAncestorInstance(concrete, formal);
 			if (ancestor != null) unifyType(formal, ancestor, bindings);
 			return;
@@ -4689,6 +4720,7 @@ function typeDisplayNameInner(t: Type | null): string {
 		TypeKind.Void => "void",
 		TypeKind.Never => "never",
 		TypeKind.Unknown => "unknown",
+		TypeKind.NonPrimitive => "object",
 		TypeKind.Error => "<error>",
 		TypeKind.None => "<none>",
 		TypeKind.Inferred => "<inferring>",

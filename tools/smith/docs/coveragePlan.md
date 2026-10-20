@@ -139,6 +139,65 @@ Reserved/internal/legacy syntax still gets a positive or negative boundary probe
 not silently dropped from the inventory. Erlang is postponed by the repo; it is
 an explicit target decision to record, not an invented working backend.
 
+## G7 row dispositions — measured 2026-10-19
+
+Supersedes the "present Smith state" column above. Mechanisms: `DESIGN.md` §G7.
+Evidence is campaign r0 (`out/smith/g7/r0`, lanes c / orc / danger / js / esm,
+no Raiser) on installed `msc` v0.3.4 (BUILD `c235d7de9`), plus the r1 batches
+named in a row (Raiser lane on). Cards are `~/metascript/.inbox/compiler/` file
+names without the date; each one names the generator site it parks.
+
+**No row is verified under the acceptance above.** Every row either lacks the
+batch report of construct hits for an axis (the report exists since `ffd7c8e01`;
+r0 predates it), or has an axis that is not generated. Every gap below has one
+of three dispositions: a card with a "Done when" (the reopen condition is that
+card's landing), refused by the language with a named error, or a decision that
+waits for the person (the last section).
+
+| id | generated (family, weight keys) | r0 clean/programs, plant, SAN | not generated → disposition |
+|---|---|---|---|
+| H1 | all 13 `Ty` in core; width aliases `w.core.alias` | core 30/30, plant 2/2, SAN 5/5 | the four new types appear only with `types=` set, never in mixed/swarm vectors: generator choice, reopen with a swarm batch over them |
+| H2 | `fams=str` | mixed 26/30, swarm 28/30; no standalone r0 batch | regex: card `regex-literal-on-c-is-an-internal-error` (JS now drops the pattern silently); astral text: excluded by this plan |
+| H3 | core operators, `??`, `**`, compound, update; `?.` (`w.core.optional`), `>>>` / `>>>=` (`w.core.ushr`) | core 30/30 | `?.[i]`: card `optional-element-access-on-a-nullable-array-fails-the-checker`; operator overloads: H11 |
+| H4 | if, match, switch, for, while, do, for-of, break/continue, early return, `unreachable` | core 30/30 | for-in: refused (`'for...in' is not supported`, `src/checker/checkPass.ms` `checkForInStmt`); labels: card `a-labelled-loop-does-not-parse` |
+| H5 | arrows, closures, defaults, rest, overloads, recursion, function values, `void` values (`w.core.void`) | mixed/swarm only in r0 | held out behind cards: a routine in a static block (`function-declared-in-a-static-block-is-undefined`), a spread over a fixed parameter (`a-spread-argument-over-a-fixed-parameter-breaks-every-backend`), a generic function as a value (`a-generic-function-read-as-a-value-…`) |
+| H6 | `fams=cls,agg,gcls`; abstract classes, `static {}` (`w.cls.decl.abstract`, `.block`), object spread (`w.agg.spread`) | cls 23/30, plant 2/2, SAN 5/5; gcls 27/30 | `override`, abstract methods, `new` of an abstract class: card `abstract-class-can-be-constructed-and-override-is-a-parse-error`; class-typed spread: card `spreading-a-class-instance-into-a-class-typed-literal-…` |
+| H7 | `fams=enum`; intersections and conditional types (`w.enum.inter`, `.cond`) | enum 28/30, plant 2/2; no SAN | intersection member positions: card `an-intersection-value-is-not-assignable-to-its-second-member`; `keyof` annotations: card `keyof-parses-only-as-a-constraint`; mapped and utility types other than `Readonly`: planned in `docs/LANG.md`, reopen when they ship; D for type refusals: not in the Q1 catalogue |
+| H8 | `fams=union,exc`; `Result` | exc 27/30, plant 2/2, SAN 5/5 | object pattern in `match`: card `an-object-pattern-in-match-does-not-parse` |
+| H9 | `fams=generic,gcls`; inferred calls and bounds (`w.generic.infer`, `.bound`, `w.gcls.infer`) | gcls 27/30, plant 2/2, SAN 4/5 | literal, nullable and tuple inference: card `generic-inference-refusals-on-legal-typescript`; `new C(..)` without type arguments: refused (`requires explicit type arguments`) |
+| H10 | `fams=coll,seq` | seq 26/30, plant 2/2, SAN 5/5; coll via mixed | Record and index signatures: card `an-index-signature-object-breaks-on-c-and-js`; tuple spread: `c-spreading-a-tuple-fails-clang`; Set and Map spread: `set-and-map-spread-is-an-internal-error-on-c`; nested destructuring: `nested-array-destructuring-binds-no-inner-names`; `reverse`: `raiser-array-has-no-reverse`. The `gen.ms` test `no program names a shape that is parked behind an open compiler card` holds them out |
+| H11 | `fams=conv` | conv 27/30, plant 2/2, SAN 5/5 | D for illegal conversions: not in the Q1 catalogue |
+| H12 | `fams=own`; `Readonly<T>` views, frozen snapshots, `readonly` fields (`w.own.view`, `.freeze`, `.ro`) | no standalone or SAN batch in r0 | readonly array operator: card `readonly-array-type-operator-does-not-parse`; borrow/cursor: N1 |
+| H13 | `fams=exc`: throw, catch, finally, defer, rethrow, unwinding | exc 27/30, plant 2/2, SAN 5/5 | throwing constructor: card `c-a-throwing-constructor-is-not-checked-after-new` |
+| H14 | `fams=iter` | iter 28/30, plant 2/2; no SAN in r0; r1 iter 28/30 with the Raiser | `yield*`: card `yield-star-is-not-lowered-…`; finally in a generator: card `for-of-exit-skips-the-generators-finally` |
+| H15 | `modules=N`, alias, namespace, re-export, star, cycle, init, `select` (`when (js)` / `when (c)` per module) | proj 14/20, proj-cycle 14/20, proj-hub 15/20, plant 2/2, SAN 2/5 | per-backend files (`.jms` / `.cms`): the bundle layout accepts `.ms` names only (`drive.ms`), open inside the approved manifest scope |
+| B1 | `fams=meta`: `when`, traits, `@inline` / `@noinline`; build modes through `plant=opt` | meta 29/30, plant 2/2 | `when (true)`: card `when-true-is-refused-…`; D for illegal forms: not in the Q1 catalogue |
+| C1 | `fams=async` (opt-in); `Promise<Result<…>>` (`w.async.result`) | async 29/30, plant 2/2, SAN 5/5; mixed-async 6/20 | `int64` across `await` held out: card `an-awaited-int64-from-an-async-function-is-cut-to-int32-on-c` |
+| C2 | `fams=spawn` (opt-in), model oracle | spawn 30/30, plant 2/2 (model), SAN 5/5 | `Locked` and `Arc` scenarios skip the Raiser lane |
+| C3 | `fams=actor` (opt-in), model oracle | actor 30/30, plant 2/2 (model), SAN 4/5 | shutdown and orphan-error D rows: not in the Q1 catalogue |
+| C4 | `fams=race` (opt-in), model oracle | race 30/30, plant 2/2 (model); no SAN | `raceTimer` sleeps 100–150 ms against "no timers": decision below |
+| M1 | `fams=meta`: comptime, macros, quote/splice, decorators, reflection; meta pair oracle | meta 29/30, plant 2/2 (meta) | D for invalid boundaries: not in the Q1 catalogue |
+| M2 | `fams=meta` JSX; non-empty spread (`w.meta.spread`) | same batches as M1 | D for an illegal runtime `Node` escape: not in the Q1 catalogue |
+| N1 | `fams=native` (opt-in): `Ptr`, `Ref`, `Borrow`, `Cursor`, `cstring`, `sizeof`, libc | native 30/30, plant 2/2 (opt), SAN 5/5, mixed-native 20/20 | callback into C: card `a-function-passed-to-a-c-function-pointer-fails-at-clang`; header import: needs a project fixture (approved manifest scope, open) |
+| N2 | `@include` of libc headers and extern functions only | same as N1 | compile/link/`passC`/`passL`/raw emit: open inside the approved manifest scope |
+| Q1 | `diag`: 12 kinds × 6 places, message + line + column pinned through `msc check` | 200 seeds: 187 pinned; 11 `extra-errors` (card `an-undeclared-name-adds-a-second-error-after-the-first`), 2 `false-alarm` from a comptime string index in the legal twin (card `raiser-string-index-expects-array`); plant 29/29 | the D rows named in H7, H11, B1, C3, M1, M2 |
+| T1 | nothing | — | needs a target adapter: decision below |
+| T2 | nothing | — | needs an HCR adapter: decision below |
+| T3 | macOS / clang only | r0 and r1 ran on this host | environment: Linux, Windows and the gcc/zig toolchain axes are unavailable here, reported as unavailable, never as clean |
+
+### Waiting for the person
+
+- **Verified criterion.** Strict reading (every axis of the row) leaves every row
+  partial. A relaxed reading, "verified for the generated axes" with standalone,
+  SAN and plant batches plus a hits report, would admit H13, H11 and H6 after r1.
+- **T1 / T2 adapters (NEW MECHANISM).** T1 drives a target program through
+  `src/test/guard` (bare, solana) or `tools/solana`; T2 emits an init/reload
+  fixture for `src/test/hcr/run.ms` and compares cold run with reload run. Each
+  adds a Smith-side adapter; risk: build-only green or a missing SDK read as an
+  execution pass.
+- **Race timer.** `raceTimer` measured 0/144 flaky; either the plan allows
+  bounded timers in a race scenario, or the scenario leaves the generator.
+
 ## Audit gaps before hardening
 
 Snapshot at the audit source tree above, not current implementation status.
