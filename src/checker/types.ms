@@ -3418,7 +3418,8 @@ export function unwrapRef(t: Type): Type {
 }
 
 // If t is Union(Ref<T>, Null), Union(Ptr<T>, Null), Union(unknown, Null) or
-// Union(bigint, Null), return the pointer-shaped member. Otherwise return null.
+// Union(bigint, Null), or a distinct of one of them with Null, return the
+// pointer-shaped member. Otherwise return null.
 // Used by codegen to collapse nullable-pointer unions to bare pointer types (the
 // null pointer is the natural sentinel — no Maybe wrapper needed).
 export function unwrapRefNullUnion(t: Type): Type | null {
@@ -3427,12 +3428,13 @@ export function unwrapRefNullUnion(t: Type): Type | null {
 	const a = t.typeChildren[0];
 	const b = t.typeChildren[1];
 	if (a == null || b == null) return null;
-	if (isNullablePointerKind(a.kind) && b.kind == TypeKind.Null) return a;
-	if (isNullablePointerKind(b.kind) && a.kind == TypeKind.Null) return b;
+	if (isNullablePointer(a) && b.kind == TypeKind.Null) return a;
+	if (isNullablePointer(b) && a.kind == TypeKind.Null) return b;
 	return null;
 }
 
-function isNullablePointerKind(k: TypeKind): boolean {
+function isNullablePointer(t: Type): boolean {
+	const k = (peelToRepr(t) ?? t).kind;
 	return k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Unknown || k == TypeKind.BigInt;
 }
 
