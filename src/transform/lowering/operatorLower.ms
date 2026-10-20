@@ -23,7 +23,7 @@ import { walkNode, hasEffect } from "../walker";
 import { cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, receiverKind, makeTypedIdentResolved } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isResult, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion, isStdCollectionKind } from "../../checker/types";
 import { cloneIfPure } from "../coercion/intArithJS";
-import { resolveOperatorCall, ExtensionMethod, getExtFnType, findAllExtensionsByName, hasConcreteReceiver, isReceiverMatch } from "../../checker/context";
+import { resolveOperatorCall, ExtensionMethod, getExtFnType, declaredKeyHash } from "../../checker/context";
 
 // The checker binds every operator a routine in scope is declared for; an operator that reaches
 // lowering unbound calls a prelude or extension operator, the same one in every scope.
@@ -473,13 +473,6 @@ function constructedCollectionKey(node: Node): Type | null {
 	return t != null && t.kind == TypeKind.GenericInstance && t.typeChildren.length > 0 ? t.typeChildren[0] : null;
 }
 
-function declaredKeyHash(ctx: TransformContext, keyType: Type): Symbol | null {
-	for (const ext of findAllExtensionsByName(ctx.checkerCtx.extensionRegistry, "hash")) {
-		if (ext.sym != null && hasConcreteReceiver(ext) && isReceiverMatch(ext, keyType)) return ext.sym;
-	}
-	return null;
-}
-
 function keyOpRef(sym: Symbol | null, loc: SourceLocation): Node {
 	return sym != null ? makeTypedIdentResolved(sym, sym.symbolType, loc) : makeNull(loc);
 }
@@ -495,7 +488,7 @@ export function bindCollectionKeyOps(program: Node, ctx: TransformContext): Node
 		const shape = peelTransparentInstance(peeled);
 		if (!hasValueEq(shape) && shape.kind != TypeKind.Tuple) return node;
 		const eq = resolveOperatorCall(ctx.checkerCtx.table, ctx.checkerCtx.extensionRegistry, "==", [keyType, keyType]);
-		const hash = declaredKeyHash(ctx, keyType);
+		const hash = declaredKeyHash(ctx.checkerCtx.extensionRegistry, keyType);
 		if (eq == null && hash == null) return node;
 		const d = node.data as NewExprData;
 		const loc = node.location;

@@ -679,6 +679,13 @@ export function hasConcreteReceiver(ext: ExtensionMethod): boolean {
 	return !isUnresolvedType(receiver) && receiver.kind != TypeKind.Unknown && receiver.kind != TypeKind.GenericParam;
 }
 
+export function declaredKeyHash(registry: ExtensionRegistry, keyType: Type): Symbol | null {
+	for (const ext of findAllExtensionsByName(registry, "hash")) {
+		if (ext.sym != null && hasConcreteReceiver(ext) && isReceiverMatch(ext, keyType)) return ext.sym;
+	}
+	return null;
+}
+
 export function findFirstMatchingExt(exts: ExtensionMethod[], objType: Type): ExtensionMethod {
 	let cur: Type | null = objType;
 	let depth = 0;
