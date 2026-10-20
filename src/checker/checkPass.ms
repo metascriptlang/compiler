@@ -14,7 +14,7 @@ import { collectFunction, collectClass, collectActor, collectInterface, collectS
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { readFile } from "std/fs";
-import { env } from "std/process";
+import { env, cwd } from "std/process";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, normalize, isAbsolute } from "std/fs/path";
 import { translateCHeader } from "../module/cimport/emit";
@@ -3581,7 +3581,7 @@ function defineBuiltinConstants(ctx: CheckerContext): void {
 // Resolution mirrors src/module/resolver.ms: backend-specific extension FIRST
 // so per-target preludes (e.g., struct.jms for JS) win over the generic .ms.
 function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: string, backendExt: string): void {
-	const base = stdPath.length > 0 ? stdPath + "/" + stdSpecifier.slice(4, stdSpecifier.length) : stdSpecifier;
+	const base = stdPath + "/" + stdSpecifier.slice(4, stdSpecifier.length);
 	let src = try readFile(base + backendExt) catch "";
 	let resolvedPath = base + backendExt;
 	if (src.length == 0) {
@@ -3660,7 +3660,7 @@ function resolvePreludeSubSource(specifier: string, indexDir: string, stdPath: s
 		}
 		basePath = indexDir + "/" + rel;
 	} else if (specifier.length > 4 && specifier.slice(0, 4) == "std/") {
-		basePath = stdPath != "" ? stdPath + "/" + specifier.slice(4, specifier.length) : specifier;
+		basePath = stdPath + "/" + specifier.slice(4, specifier.length);
 	} else {
 		return { path: "", source: "" };
 	}
@@ -3825,7 +3825,8 @@ export function checkPreludeFromSource(stdPath: string, backendExt: string): Che
 	const outerGensym = beginGensymUnit();
 	const ctx = createContextWithCache(createIdentCache());
 	ctx.extensionRegistry = createExtensionRegistry();
-	for (const imp of imps) loadPreludeOne(ctx, imp, stdPath, backendExt);
+	const stdRoot = stdPath != "" ? stdPath : join(cwd(), "std");
+	for (const imp of imps) loadPreludeOne(ctx, imp, stdRoot, backendExt);
 	forgetInstances(ctx);
 	rewindTemplateGensym(outerGensym);
 	return ctx;
