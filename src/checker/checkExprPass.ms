@@ -1,7 +1,7 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
-import { refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, declaresReadonlyField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
+import { refuseUnassignedRead, refuseHookValue, requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, declaresReadonlyField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import { callCheckStmt, checkInTypeSlot, registerCheckExpr, callDemandReturn, callDemandBinding, callUndefinedVariableMessage, callExpandMacroInvocation, callEvalComptimeBlock, callInstantiateGeneric } from "./checkerCallbacks";
 import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData } from "../ast/node";
 import { getIdentId } from "./idents";
@@ -672,7 +672,11 @@ function checkExprKind(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		},
 		NodeKind.SpliceMany => { checkSpliceMany(ctx, node, expectedType); return; },
 		NodeKind.ComptimeBlock => { checkComptimeBlock(ctx, node, expectedType); return; },
-		NodeKind.Identifier => { checkIdentifier(ctx, node, expectedType); return; },
+		NodeKind.Identifier => {
+			checkIdentifier(ctx, node, expectedType);
+			refuseHookValue(ctx, node);
+			return;
+		},
 		NodeKind.BinaryExpr => { checkBinaryExpr(ctx, node, expectedType); return; },
 		NodeKind.UnaryExpr => { checkUnaryExpr(ctx, node, expectedType); return; },
 		NodeKind.UpdateExpr => { checkUpdateExpr(ctx, node, expectedType); return; },
@@ -683,6 +687,7 @@ function checkExprKind(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		},
 		NodeKind.MemberExpr => {
 			node.nodeType = checkMemberExpr(ctx, node, expectedType);
+			refuseHookValue(ctx, node);
 			return;
 		},
 		NodeKind.ArrayAccess => { checkArrayAccess(ctx, node, expectedType); return; },

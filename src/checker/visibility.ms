@@ -1,6 +1,6 @@
-import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, HiddenStdConvData, IdentifierData } from "../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, HiddenStdConvData, IdentifierData, FunctionDeclData } from "../ast/node";
 import { classDeclNodeOf, parentClassSymOf, Scope } from "./symbol";
-import { CheckerContext, addError, extReceiverSym } from "./context";
+import { CheckerContext, addError, extReceiverSym, isLifecycleHookName, getExtReceiverType } from "./context";
 import { skipModifier, distinctBody, isStructType, isMaybeType, typeDisplayName } from "./types";
 import { markInitialized } from "./initTracker";
 
@@ -295,6 +295,44 @@ export function refuseExtendingPrivateConstructor(ctx: CheckerContext, parent: S
 	const owner = originOf(parent);
 	if (constructorVisibility(owner) != DeclaredVisibility.Private || enclosingGrant(ctx, owner, false) != null) return;
 	addError(ctx, `Cannot extend a class '${owner.name}'. Class constructor is marked as private`, line, column);
+}
+
+function hookNamed(sym: Symbol): string {
+	const decl = unwrapDecl(originOf(sym).declNode);
+	if (decl == null) return "";
+	if (decl.kind == NodeKind.MethodDecl) {
+		const md = decl.data as MethodDeclData;
+		return !md.methodIsStatic && isLifecycleHookName(md.methodName) ? md.methodName : "";
+	}
+	if (decl.kind == NodeKind.FunctionDecl) {
+		const fd = decl.data as FunctionDeclData;
+		return isLifecycleHookName(fd.fnName) && getExtReceiverType(fd.fnFlags) != "" ? fd.fnName : "";
+	}
+	return "";
+}
+
+const HOOK_RUNS_ONCE = "is a lifecycle hook and runs exactly once, when the compiler releases the value";
+
+export function refuseHookCall(ctx: CheckerContext, call: Node): void {
+	if (call.kind != NodeKind.CallExpr) return;
+	const d = call.data as CallExprData;
+	const set = d.callee == null ? null : call.resolvedSym != null ? call.resolvedSym : d.callee.resolvedSym;
+	if (set == null) return;
+	const idx = d.resolvedOverloadIdx;
+	const hook = hookNamed(idx > 0 && idx - 1 < set.overloads.length ? set.overloads[idx - 1] : set);
+	if (hook == "") return;
+	const callee = (call.data as CallExprData).callee;
+	const viaSuper = callee.kind == NodeKind.MemberExpr && isSuperReceiver((callee.data as MemberExprData).object);
+	const why = viaSuper ? "the base class hook runs on its own after this one"
+		: "a call by hand would run it again — to end a value early, pass it with 'move' to a function that takes it";
+	addError(ctx, `'${hook}' ${HOOK_RUNS_ONCE}: ${why}`, call.location.line, call.location.column);
+}
+
+export function refuseHookValue(ctx: CheckerContext, node: Node): void {
+	if (node == ctx.calleeExpr || node.resolvedSym == null) return;
+	const hook = hookNamed(node.resolvedSym);
+	if (hook == "") return;
+	addError(ctx, `'${hook}' ${HOOK_RUNS_ONCE}: it has no value to keep and call later`, node.location.line, node.location.column);
 }
 
 export function isSuperReceiver(object: Node): boolean {
