@@ -21,11 +21,17 @@ function makeLocFromToken(token: Token): SourceLocation {
 // Assumes opening '{' already consumed. Consumes up to but not including '}'.
 interface SpecifierList { names: string[]; aliases: string[]; locations: SourceLocation[]; }
 
+function writesTypeModifier(state: ParserState): boolean {
+	const next = peek(state, 1).kind;
+	return next != TokenKind.As && next != TokenKind.Comma && next != TokenKind.RBrace && next != TokenKind.From && next != TokenKind.Eof;
+}
+
 function parseSpecifierList(state: ParserState): SpecifierList {
 	const names: string[] = [];
 	const aliases: string[] = [];
 	const locations: SourceLocation[] = [];
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
+		if (current(state).kind == TokenKind.Type && writesTypeModifier(state)) advance(state);
 		const specifier = current(state);
 		if (!isIdentOrKeyword(specifier.kind)) { break; }
 		const specName = specifier.value;
@@ -315,6 +321,7 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 export function parseImportDecl(state: ParserState): NodeResult {
 	const importToken = current(state);
 	advance(state);
+	if (current(state).kind == TokenKind.Type && writesTypeModifier(state)) advance(state);
 
 	// Side-effect import: import "module";
 	if (current(state).kind == TokenKind.String) {
@@ -411,6 +418,7 @@ export function parseExportDecl(state: ParserState): NodeResult {
 
 function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 	// Each branch uses const + immediate return to avoid DRC try aliasing bug
+	if (current(state).kind == TokenKind.Type && (peek(state, 1).kind == TokenKind.LBrace || peek(state, 1).kind == TokenKind.Star)) advance(state);
 	const nextKind = current(state).kind;
 	// Star re-export: export * from "module";
 	if (nextKind == TokenKind.Star) {
