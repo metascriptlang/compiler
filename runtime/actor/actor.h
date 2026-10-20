@@ -51,11 +51,8 @@ typedef void (*msActorSystemMsgFn)(void* state, void* msg);
 
 /* ===== Sync Flags (Pony-derived) ===== */
 
-#define MS_ACTOR_OVERLOADED     0x01  /* mailbox non-empty after batch */
-#define MS_ACTOR_UNDER_PRESSURE 0x02  /* application-level backpressure */
-#define MS_ACTOR_MUTED          0x04  /* paused by scheduler (target overloaded) */
 #define MS_ACTOR_BLOCKED        0x08  /* idle + RC > 0 (cycle detection candidate) */
-#define MS_ACTOR_CYCLE_MARKED   0x10  /* internal: marked for cycle collection (do not reuse MUTED) */
+#define MS_ACTOR_CYCLE_MARKED   0x10  /* internal: marked for cycle collection */
 #define MS_ACTOR_SUSPENDED      0x20  /* Phase 5: actor awaiting spawn completion (cooperative) */
 
 /* ===== Actor Struct ===== */
@@ -72,11 +69,6 @@ typedef struct msActor {
     _Atomic(bool) processing;     /* CAS guard: only one thread may process at a time (enables work stealing) */
     _Atomic(bool) scheduled;      /* Pony parity: true = in run queue or being processed. Prevents double-enqueue. */
     _Atomic(struct msActor*) runNext;  /* Intrusive run queue link (lock-free stack per scheduler) */
-    /* Muting: pids of actors paused because this actor is overloaded (I19: pids,
-     * never pointers — a muted sender may be reaped while in this list) */
-    int64_t* mutedBy;
-    int mutedByCount;
-    int mutedByCap;
     /* Cycle detection: pids this actor references (I19: pids — CD walks these
      * cross-scheduler, referents may be reaped at any time) */
     int64_t* refs;
@@ -327,35 +319,6 @@ static inline bool msActorHasFlag(msActor* a, uint8_t flag) {
     return (msActorGetFlags(a) & flag) != 0;
 }
 
-/* ===== Muting ===== */
-
-/* Mute a sender because the receiver is overloaded. */
-static inline void msActorMute(msActor* sender, msActor* receiver) {
-    if (sender == NULL || sender == receiver) return;
-    if (msActorHasFlag(sender, MS_ACTOR_MUTED)) return;
-    msActorSetFlag(sender, MS_ACTOR_MUTED);
-    /* Track who we muted so we can unmute them later (grow on demand) */
-    if (receiver->mutedByCount >= receiver->mutedByCap) {
-        int newCap = receiver->mutedByCap == 0 ? 4 : receiver->mutedByCap * 2;
-        receiver->mutedBy = (int64_t*)realloc(receiver->mutedBy, newCap * sizeof(int64_t));
-        receiver->mutedByCap = newCap;
-    }
-    receiver->mutedBy[receiver->mutedByCount++] = sender->pid;
-}
-
-/* Unmute all actors that were muted because this actor was overloaded. */
-static inline void msActorUnmuteAll(msActor* receiver) {
-    for (int i = 0; i < receiver->mutedByCount; i++) {
-        msActor* m = msActorFromPid(receiver->mutedBy[i]);
-        if (m != NULL) {
-            msActorClearFlag(m, MS_ACTOR_MUTED);
-            msHazardClear(m);
-        }
-        receiver->mutedBy[i] = 0;
-    }
-    receiver->mutedByCount = 0;
-}
-
 /* ===== Actor Lifecycle ===== */
 
 static inline msActor* msActorCreate(void* state, msActorDispatchFn dispatch) {
@@ -369,9 +332,6 @@ static inline msActor* msActorCreate(void* state, msActorDispatchFn dispatch) {
     atomic_store_explicit(&a->processing, false, memory_order_relaxed);
     atomic_store_explicit(&a->scheduled, false, memory_order_relaxed);
     atomic_store_explicit(&a->runNext, NULL, memory_order_relaxed);
-    a->mutedBy = NULL;
-    a->mutedByCount = 0;
-    a->mutedByCap = 0;
     a->refs = NULL;
     a->refsCount = 0;
     a->refsCap = 0;
@@ -625,7 +585,6 @@ extern void msCallActorDestroyHook(void* actor);
 
 /*
  * Send a message to an actor (any thread, wait-free).
- * If receiver is overloaded, mutes the current actor (sender).
  */
 static inline void msActorSend(msActor* a, msMessage* msg) {
     /* Guard: null actor (DRC scope cleanup or uninitialized) */
@@ -662,11 +621,6 @@ static inline void msActorSend(msActor* a, msMessage* msg) {
     bool wasEmpty = msMpscPush(&a->mailbox, msg);
     atomic_store_explicit(&a->hasWork, true, memory_order_release);
 
-    /* Backpressure: if receiver overloaded, mute sender */
-    if (msActorHasFlag(a, MS_ACTOR_OVERLOADED) && msCurrentActor != NULL) {
-        msActorMute(msCurrentActor, a);
-    }
-
     /* Pony messageq gate: schedule iff this push transitioned the mailbox empty→non-empty.
      * wasEmpty is atomic with the processing thread's markEmpty, so exactly one party (this
      * sender, or the processing thread's re-enqueue) schedules the actor — no stale-flag
@@ -693,7 +647,6 @@ static inline void msActorSend(msActor* a, msMessage* msg) {
 
 /*
  * Process up to `maxBatch` messages from the actor's mailbox.
- * Sets/clears OVERLOADED flag. Triggers unmute when caught up.
  */
 static inline int msActorProcess(msActor* a, int maxBatch) {
     /* Dead actor guard — may be in run queue from before destruction */
@@ -790,22 +743,12 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         }
     }
 
-    /* Scheduling decision, made WHILE HOLDING processing. Flags (heuristics) from the
+    /* Scheduling decision, made WHILE HOLDING processing. BLOCKED (a heuristic) from the
      * pre-check; markEmpty is the LAST mailbox op and runs under processing so it shares the
      * single-consumer exclusion with msMpscPop (reading/CASing q->tail off-processing is the
-     * two-consumer race). OVERLOADED/BLOCKED slightly-stale on a racing late message is
-     * harmless. */
-    bool emptyPre = msMpscIsEmpty(&a->mailbox);
-    if (emptyPre) {
-        if (msActorHasFlag(a, MS_ACTOR_OVERLOADED)) {
-            msActorClearFlag(a, MS_ACTOR_OVERLOADED);
-            msActorUnmuteAll(a);
-        }
-        if (a->state != NULL && msHeader(a->state)->rc > 0) {
-            msActorSetFlag(a, MS_ACTOR_BLOCKED);
-        }
-    } else {
-        msActorSetFlag(a, MS_ACTOR_OVERLOADED);
+     * two-consumer race). BLOCKED slightly-stale on a racing late message is harmless. */
+    if (msMpscIsEmpty(&a->mailbox) && a->state != NULL && msHeader(a->state)->rc > 0) {
+        msActorSetFlag(a, MS_ACTOR_BLOCKED);
     }
 
     /* markEmpty: the LAST consumer op, under processing.
@@ -1019,9 +962,7 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
         msMsgSetDouble(downMsg, 2, (double)reason);  /* exit reason */
         msActorSend(watcher, downMsg);  /* send clears the pin */
     }
-    /* Step 4: unmute senders */
-    msActorUnmuteAll(a);
-    /* Step 5: drain remaining messages. Do NOT free the popped message — pop
+    /* Step 4: drain remaining messages. Do NOT free the popped message — pop
      * already made it the new tail stub (freed by the next pop, or by
      * msMpscDestroy below). Freeing it here threads the live tail into the
      * msg-pool free list and the drain chases pool nodes forever.
@@ -1034,7 +975,6 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
         }
     }
     msMpscDestroy(&a->mailbox);
-    if (a->mutedBy != NULL) free(a->mutedBy);
     if (a->links != NULL) free(a->links);
     if (a->monitorWatchers != NULL) free(a->monitorWatchers);
     if (a->monitorRefs != NULL) free(a->monitorRefs);
@@ -1089,7 +1029,6 @@ static inline void msActorReapLocalQueue(void) {
     msSchedActors* sched = &msSchedulers[id];
     msActor* a;
     while ((a = msSchedRunPop(sched)) != NULL) {
-        if (msActorHasFlag(a, MS_ACTOR_MUTED)) continue;
         msActorProcess(a, MS_ACTOR_BATCH);
     }
 }
@@ -1513,7 +1452,6 @@ static inline bool msActorPollLocal(void) {
     msSchedActors* sched = &msSchedulers[id];
     msActor* a;
     while ((a = msSchedRunPop(sched)) != NULL) {
-        if (msActorHasFlag(a, MS_ACTOR_MUTED)) continue;
         int n = msActorProcess(a, MS_ACTOR_BATCH);
         if (n > 0) didWork = true;
     }
@@ -1532,10 +1470,8 @@ static inline bool msActorPollLocal(void) {
             msSchedActors* other = &msSchedulers[s];
             a = msSchedRunPop(other);
             if (a != NULL) {
-                if (!msActorHasFlag(a, MS_ACTOR_MUTED)) {
-                    int n = msActorProcess(a, MS_ACTOR_BATCH);
-                    if (n > 0) didWork = true;
-                }
+                int n = msActorProcess(a, MS_ACTOR_BATCH);
+                if (n > 0) didWork = true;
                 break;  /* stole one actor, return to own work */
             }
         }
@@ -1633,10 +1569,8 @@ static inline bool msActorPollAll(void) {
     for (int s = 0; s < msSchedulerCount; s++) {
         msActor* a;
         while ((a = msSchedRunPop(&msSchedulers[s])) != NULL) {
-            if (!msActorHasFlag(a, MS_ACTOR_MUTED)) {
-                int n = msActorProcess(a, MS_ACTOR_BATCH);
-                if (n > 0) didWork = true;
-            }
+            int n = msActorProcess(a, MS_ACTOR_BATCH);
+            if (n > 0) didWork = true;
         }
     }
     return didWork;
