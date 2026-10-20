@@ -11,7 +11,8 @@ import { mkdir, writeFile } from "std/fs";
 import { lspNotification, lspFormatMessage, lspPathToUri, lspGetField, lspGetObjectField, lspGetArrayItems, lspGetNumberField, dirname } from "../protocol";
 import { parseJson } from "std/serialize/json/parser";
 import { lspFmtDiagnostic, lspFmtDiagnosticRange, lspFmtPublishDiagnostics } from "../format";
-import { sgCollectDiagnostics } from "../../../checker/suggest";
+import { sgCollectDiagnostics, sgGetLineOffset } from "../../../checker/suggest";
+import { addErrorRange, addErrorFullRange } from "../../../checker/context";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../../../ast/node";
 import { FormatOptions, defaultFormatOptions, applyFmtSection } from "../../fmt/options";
 import { loadFmtSection, loadLspSection, validateBuildConfig, LspSection } from "../../buildConfig";
@@ -235,8 +236,15 @@ function lspBasename(path: string): string {
 
 // ===== Diagnostics =====
 
+function diagnosticCharacter(source: string, line: int32, column: int32): int32 {
+	const offset = sgGetLineOffset(source, line);
+	const byteColumn = column > 0 ? column - 1 : 0;
+	return source.byteSlice(offset, offset + byteColumn).length;
+}
+
 export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): string {
 	const ctx = dbTypeCheck(db, path);
+	const source = dbGetSource(db, path);
 
 	let diagArray = "[";
 	let diagCount = 0;
@@ -247,10 +255,10 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 			if (diagCount > 0) diagArray = diagArray + ",";
 			const d = diags[i];
 			const line = d.line - 1;
-			// Convert 1-based checker columns to 0-based LSP columns
-			const col = d.column > 0 ? d.column - 1 : 0;
+			const col = diagnosticCharacter(source, d.line, d.column);
 			const endLine = d.endLine > 0 ? d.endLine - 1 : line;
-			const endCol = d.endColumn > d.column ? d.endColumn - 1 : col + 1;
+			const hasEnd = d.endColumn > 0 && (endLine > line || d.endColumn > d.column);
+			const endCol = hasEnd ? diagnosticCharacter(source, endLine + 1, d.endColumn) : col + 1;
 			diagArray = diagArray + lspFmtDiagnosticRange(
 				line, col, endLine, endCol, d.severity, d.message, "metascript", 0, d.tags
 			);
@@ -459,6 +467,41 @@ test "getLspTarget defaults to host + orc without section" {
 	const t = getLspTarget(dir + "/main.ms");
 	assert t.os == platform;
 	assert t.gc == "orc";
+}
+
+test "synthetic checker spans keep both UTF-16 endpoints" {
+	const sources = ["/*abcdef*/\n/*ghijkl*/", "/*é😀*/\n/*日😀*/", "/*é😀*/\r\n/*日😀*/"];
+	const characters = [8, 5, 5];
+	const messages = ["same-line boundary", "multiline boundary"];
+	const path = "/diagnostic-span-adapter.ms";
+	const uri = "file:///diagnostic-span-adapter.ms";
+	for (let i = 0; i < sources.length; i++) {
+		const db = createTransAmDb(8);
+		dbSetFileText(db, path, sources[i]);
+		const ctx = dbTypeCheck(db, path);
+		assert ctx.errors.length == 0;
+		addErrorRange(ctx, messages[0], 1, 3, 9);
+		addErrorFullRange(ctx, messages[1], 1, 9, 2, 3);
+		const response = buildDiagnosticsJson(uri, db, path);
+		assert parseJson(response).ok;
+		assert lspGetField(response, "uri") == uri;
+		const items = lspGetArrayItems(lspGetObjectField(response, "diagnostics"));
+		assert items.length == 2;
+		for (let j = 0; j < items.length; j++) {
+			assert lspGetField(items[j], "message") == messages[j];
+			assert lspGetField(items[j], "source") == "metascript";
+			assert lspGetNumberField(items[j], "severity") == 1;
+			const range = lspGetObjectField(items[j], "range");
+			const start = lspGetObjectField(range, "start");
+			const end = lspGetObjectField(range, "end");
+			const expectedStart = j == 0 ? 2 : characters[i];
+			const expectedEnd = j == 0 ? characters[i] : 2;
+			assert lspGetNumberField(start, "line") == 0;
+			assert lspGetNumberField(start, "character") == expectedStart;
+			assert lspGetNumberField(end, "line") == j;
+			assert lspGetNumberField(end, "character") == expectedEnd;
+		}
+	}
 }
 
 function assertTrailingWhitespaceDiagnostic(eol: string): void {

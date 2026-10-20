@@ -1070,26 +1070,37 @@ test "cancelled type check is not cached and retry checks the same text" {
 	assert dbCheckIsCurrent(db, path);
 }
 
-test "position-only edits move diagnostics at every checkpoint and undo" {
+test "position-only edits preserve UTF-16 diagnostic spans through undo" {
 	const db = createTransAmDb(100);
 	const uri = "file:///lsp-position.ms";
 	const source = "export const value: int32 = \"wrong\";";
 	assert testDiagnosticItems(handleDidOpen(didOpenParams(uri, source), db), uri).length == 1;
-	const prefixes = ["\n", "\r\n\r\n", "\n// moved\n", ""];
-	const lines = [1, 2, 2, 0];
+	const prefixes = [
+		"\n", "\r\n\r\n", "\n// moved\n", "", "/*a*/ ", "/*é*/ ",
+		"/*😀*/ ", "\n/*é*/ ", "\r\n\r\n/*😀*/ ", "",
+	];
+	const lines = [1, 2, 2, 0, 0, 0, 0, 1, 2, 0];
+	const characters = [28, 28, 28, 28, 34, 34, 35, 34, 35, 28];
 	for (let i = 0; i < prefixes.length; i += 1) {
 		const text = prefixes[i] + source;
 		handleDidChange(didChangeParams(uri, text), db);
 		const warm = testPublishedItems(publishPendingDiagnostics(db), uri);
 		assert warm.length == 1;
-		const start = warm[0].getDynamicField("range").getDynamicField("start");
-		assert start.getDynamicField("line").asInt32(-1) == lines[i];
 		const cold = testDiagnosticItems(handleDidOpen(didOpenParams(uri, text), createTransAmDb(100)), uri);
 		assert cold.length == 1;
-		assert cold[0].getDynamicField("message").asString() == warm[0].getDynamicField("message").asString();
-		const coldStart = cold[0].getDynamicField("range").getDynamicField("start");
-		assert coldStart.getDynamicField("line").asInt32(-1) == lines[i];
-		assert coldStart.getDynamicField("character").asInt32(-1) == start.getDynamicField("character").asInt32(-1);
+		for (const diagnostic of [warm[0], cold[0]]) {
+			assert diagnostic.getDynamicField("message").asString()
+				== "Type 'string' is not assignable to type 'int32'";
+			assert diagnostic.getDynamicField("severity").asInt32(-1) == 1;
+			assert diagnostic.getDynamicField("source").asString() == "metascript";
+			const range = diagnostic.getDynamicField("range");
+			const start = range.getDynamicField("start");
+			const end = range.getDynamicField("end");
+			assert start.getDynamicField("line").asInt32(-1) == lines[i];
+			assert start.getDynamicField("character").asInt32(-1) == characters[i];
+			assert end.getDynamicField("line").asInt32(-1) == lines[i];
+			assert end.getDynamicField("character").asInt32(-1) == characters[i] + 1;
+		}
 	}
 }
 
