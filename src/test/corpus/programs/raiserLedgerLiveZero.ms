@@ -1,4 +1,4 @@
-// @stdout: 40 40 15
+// @stdout: 40 40 15 2
 // note: a program that makes and drops strings, arrays, objects and boxes must leave every heap item accounted for by its holders when it ends, and so must the strand that runs a spawned closure. The Raiser VM audits the live items outside --danger and fails the run when a count disagrees with its holders, so the program's own output is the proof the audit stayed quiet.
 
 class Link { next: Link | null = null; label: string = ""; }
@@ -23,4 +23,9 @@ const direct = churn(8);
 const viaStrand = await spawn(() => churn(8));
 let boxed: number | null = null;
 for (let i = 0; i < 6; i++) { boxed = (boxed == null ? 0 : boxed) + i; }
-console.log(`${direct} ${viaStrand} ${boxed}`);
+const kept: string[] = [];
+for (let i = 0; i < 5; i++) { kept.push("s" + i); }
+kept.pop();
+kept.shift();
+kept.splice(1, 1, kept[0]);
+console.log(`${direct} ${viaStrand} ${boxed} ${kept.length - 1}`);

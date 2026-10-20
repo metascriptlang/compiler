@@ -2125,3 +2125,23 @@ test "register classes: a call through a closure whose environment is null passe
 	assert ctx.lastError == "", ctx.lastError;
 	assert unboxFloat(ctx.lastResult) == 42;
 }
+
+test "register classes: arithmetic assigned to a union local boxes the result" {
+	const vm = evalOrcVM("let x: number | null = null; for (let i = 0; i < 3; i++) { x = (x == null ? 0 : x) + 1.5; } console.log(`${x}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "4.5\n", vm.output;
+}
+
+test "register classes: a union equality compares the payload of both boxes" {
+	const code = "type NamedU = int32 | string; function g(a: NamedU, b: NamedU): boolean { return a == b; } function num(n: int32): NamedU { return n; } function str(s: string): NamedU { return s; }"
+		+ " console.log(`${g(num(3), num(3))} ${g(num(3), num(4))} ${g(str('a'), str('a'))} ${g(str('a'), num(3))}`);";
+	const vm = evalOrcVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "true false true false\n", vm.output;
+}
+
+test "register classes: a borrowed class reference parameter reads through its address" {
+	const vm = evalOrcVM("class C { text: string; constructor(text: string) { this.text = text; } } function read(p: Borrow<C>): string { return p.text; } console.log(read(new C('x') as Borrow<C>));");
+	assert vm.error == "", vm.error;
+	assert vm.output == "x\n", vm.output;
+}
