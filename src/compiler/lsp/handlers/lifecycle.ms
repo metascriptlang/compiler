@@ -1070,6 +1070,29 @@ test "cancelled type check is not cached and retry checks the same text" {
 	assert dbCheckIsCurrent(db, path);
 }
 
+test "position-only edits move diagnostics at every checkpoint and undo" {
+	const db = createTransAmDb(100);
+	const uri = "file:///lsp-position.ms";
+	const source = "export const value: int32 = \"wrong\";";
+	assert testDiagnosticItems(handleDidOpen(didOpenParams(uri, source), db), uri).length == 1;
+	const prefixes = ["\n", "\r\n\r\n", "\n// moved\n", ""];
+	const lines = [1, 2, 2, 0];
+	for (let i = 0; i < prefixes.length; i += 1) {
+		const text = prefixes[i] + source;
+		handleDidChange(didChangeParams(uri, text), db);
+		const warm = testPublishedItems(publishPendingDiagnostics(db), uri);
+		assert warm.length == 1;
+		const start = warm[0].getDynamicField("range").getDynamicField("start");
+		assert start.getDynamicField("line").asInt32(-1) == lines[i];
+		const cold = testDiagnosticItems(handleDidOpen(didOpenParams(uri, text), createTransAmDb(100)), uri);
+		assert cold.length == 1;
+		assert cold[0].getDynamicField("message").asString() == warm[0].getDynamicField("message").asString();
+		const coldStart = cold[0].getDynamicField("range").getDynamicField("start");
+		assert coldStart.getDynamicField("line").asInt32(-1) == lines[i];
+		assert coldStart.getDynamicField("character").asInt32(-1) == start.getDynamicField("character").asInt32(-1);
+	}
+}
+
 test "first type check on a fresh db stays under 1500ms" {
 	const db = testDb("file:///test.ms", "function foo(x: number): number { return x + 1; }\nconst y = foo(42);");
 	const t0 = performance.now();
