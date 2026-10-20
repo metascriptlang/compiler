@@ -2,7 +2,7 @@
 // onDestroy writes the new closure before it releases the old one, so the hook, reading the
 // destination, calls the new closure.
 //
-// Nim liftdestructors.nim closureOp, attachedSink and attachedAsgn, isCyclic branch: assign,
+// Nim liftdestructors.nim atomicClosureOp, attachedSink and attachedAsgn, isCyclic branch: assign,
 // then release the old env. Proven red on 2c7d9781a, which released first: the hooks read
 // -1, -2 and -3, the old closures; with a second capture the sink is a heap-use-after-free
 // under ASan.

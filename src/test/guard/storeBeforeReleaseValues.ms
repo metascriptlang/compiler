@@ -2,9 +2,9 @@
 // onDestroy run by the release that reads the variable finds the new value, never the dying one.
 //
 // Nim stores first only for a type that can form a cycle (liftdestructors.nim atomicRefOp and
-// closureOp, isCyclic branch) and releases first for every other ref and object field; NIM-REF
-// records the forced divergence, because releasing first let such a hook read freed memory
-// (ASan heap-use-after-free on MS and on the Nim 2.2.2 twin under arc and orc).
+// atomicClosureOp, isCyclic branch) and releases first for every other ref and object field;
+// NIM-REF records the forced divergence, because releasing first let such a hook read freed
+// memory (ASan heap-use-after-free on MS and on the Nim 2.2.2 twin under arc and orc).
 //
 // RED MEANS an overwrite of that shape releases the old value while the destination still names
 // it: the hook read its own tag (1) instead of the new value's (2), or crashed.
