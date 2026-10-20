@@ -1,7 +1,7 @@
 import { compileRaiser, runRaiser, setDiagnosticHook } from "../compiler/compile";
 import { setRecoverableBuild, BUILD_STOPPED } from "../compiler/io";
 import { CliOptions, newCliOptions } from "../compiler/options";
-import { defaultResolveSection } from "../compiler/buildConfig";
+import { ResolveSection, defaultResolveSection } from "../compiler/buildConfig";
 import { BuildSession, createBuildSession } from "../compiler/buildSession";
 import { ModuleError, ErrorSeverity } from "../module/graph";
 import { RaiserModule } from "../raiser/module";
@@ -30,6 +30,7 @@ export interface Evaluation {
 
 export interface Interpreter {
 	opts: CliOptions;
+	resolve: ResolveSection;
 	session: BuildSession;
 	run: RaiserContext | null;
 	output: string[];
@@ -45,12 +46,17 @@ export interface Routine {
 export { RaiserValue, RaiserValueKind } from "../raiser/value";
 export { RaiserHostFn, boxInt, boxFloat, boxString, boxBool, boxVoid, unboxInt, unboxFloat, unboxString, unboxBool } from "../raiser/marshal";
 
-export function createInterpreter(runtimeRoot: string): Result<Interpreter, string> {
+export function createInterpreter(runtimeRoot: string, searchPaths: string[] = []): Result<Interpreter, string> {
 	if (!exists(join(runtimeRoot, "std/core/system/index.ms"))) {
 		return Result.err(`no MetaScript std under ${runtimeRoot}: expected ${runtimeRoot}/std/core/system/index.ms`);
 	}
+	const resolve = defaultResolveSection();
+	for (const dir of searchPaths) {
+		if (!exists(dir)) return Result.err(`no search path ${dir}: the directory does not exist`);
+		resolve.searchPaths.push(dir);
+	}
 	setHostRuntimeDir(runtimeRoot);
-	return Result.ok({ opts: newCliOptions(), session: createBuildSession(true), run: null, output: [] });
+	return Result.ok({ opts: newCliOptions(), resolve, session: createBuildSession(true), run: null, output: [] });
 }
 
 function errorAt(file: string, message: string): Diagnostic {
@@ -66,7 +72,7 @@ export function evalModule(interp: Interpreter, path: string): Result<Evaluation
 	interp.run = null;
 	let compiled: RaiserModule | null = null;
 	try {
-		compiled = compileRaiser(path, interp.opts, defaultResolveSection(), interp.session, true);
+		compiled = compileRaiser(path, interp.opts, interp.resolve, interp.session, true);
 	} catch (e) {
 		if (e.message != BUILD_STOPPED) {
 			diagnostics.push(errorAt(path, `internal: ${e.message}`));
