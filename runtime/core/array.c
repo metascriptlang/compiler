@@ -655,12 +655,12 @@ void* msRefArrayAt(msRefArray* arr, int64_t idx) {
 
 void msRefArrayShrink(msRefArray* arr, int64_t newLen) {
 	if (newLen < 0) newLen = 0;
-	if (newLen >= arr->len) return;
-	for (int64_t i = newLen; i < arr->len; i++) {
-		msDecrefCyclic(arr->p->data[i]);
-		arr->p->data[i] = NULL;
+	while (arr->len > newLen) {
+		arr->len--;
+		void* evicted = arr->p->data[arr->len];
+		arr->p->data[arr->len] = NULL;
+		msDecrefCyclic(evicted);
 	}
-	arr->len = newLen;
 }
 
 void msRefArrayGrow(msRefArray* arr, int64_t newLen, void* value) {
