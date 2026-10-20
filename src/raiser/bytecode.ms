@@ -310,6 +310,7 @@ function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.BTruthy => "x--",
 		RaiserOpcode.IsKind | RaiserOpcode.InstanceOf => "bx-",
 		RaiserOpcode.SameLoc => "bxx",
+		RaiserOpcode.EqVal | RaiserOpcode.NeVal => "xx-",
 		RaiserOpcode.Conv => "xx-",
 		RaiserOpcode.CopyValue => "xx-",
 		RaiserOpcode.Box => "dx-",
