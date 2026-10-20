@@ -435,7 +435,7 @@ function instanceOfAliasToNamedType(ctx: CheckerContext, alias: Symbol, baseName
 	const namesDeclared = body.kind == TypeKind.Alias || (inner.kind == TypeKind.Struct && declaredByAnotherSymbol(inner, alias));
 	if (namesDeclared && genericParamsOf(body.kind == TypeKind.Alias ? body.typeReturn : inner) != "") return null;
 	if (!namesDeclared && inner.kind != TypeKind.GenericInstance && inner.kind != TypeKind.Conditional) return null;
-	checkTypeArgConstraints(ctx, baseName, genericParams, args, line, col);
+	checkTypeArgConstraints(ctx, alias, baseName, args, line, col);
 	if (namesDeclared) return body;
 	const inst = substituteAllParams(inner, splitTopLevel(genericParamNamesOf(genericParams), ","), args);
 	if (inst.kind == TypeKind.GenericInstance && inst.typeReturn == null) {
@@ -452,20 +452,19 @@ function resolveTypeTest(text: string, ctx: CheckerContext, line: int32, col: in
 	return tested;
 }
 
-function checkTypeArgConstraints(ctx: CheckerContext, baseName: string, genericParams: string, args: Type[], line: int32, col: int32): void {
-	const paramList = splitTopLevel(genericParams, ",");
-	for (let ci = 0; ci < paramList.length && ci < args.length; ci += 1) {
-		const paramStr = paramList[ci].trim();
-		const colonPos = findChar(paramStr, ":");
-		if (colonPos <= 0) continue;
-		const constraintName = paramStr.slice(colonPos + 1, paramStr.length).trim();
-		const constraintType = resolveTypeTest(constraintName, ctx, line, col);
-		if (!isUnresolvedType(constraintType)
+function checkTypeArgConstraints(ctx: CheckerContext, sym: Symbol, baseName: string, args: Type[], line: int32, col: int32): void {
+	const names: string[] = [];
+	for (const param of sym.typeParams) names.push(param.typeName);
+	for (let ci = 0; ci < sym.typeParams.length && ci < args.length; ci += 1) {
+		const declared = sym.typeParams[ci].typeExtra;
+		if (declared == null) continue;
+		const constraint = substituteAllParams(declared, names, args);
+		if (!isUnresolvedType(constraint)
+				&& !hasGenericParams(constraint)
 				&& !isUnresolvedType(args[ci])
 				&& args[ci].kind != TypeKind.GenericParam
-				&& !isAssignableCheck(args[ci], constraintType)) {
-			const paramName = paramStr.slice(0, colonPos).trim();
-			addError(ctx, `Type '${typeDisplayName(args[ci])}' does not satisfy constraint '${constraintName}' for type parameter '${paramName}' in '${baseName}'`, line, col);
+				&& !isAssignableCheck(args[ci], constraint)) {
+			addError(ctx, `Type '${typeDisplayName(args[ci])}' does not satisfy constraint '${typeDisplayName(constraint)}' for type parameter '${names[ci]}' in '${baseName}'`, line, col);
 		}
 	}
 }
@@ -1000,7 +999,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				for (const a of args) {
 					resolvedArgs.push(resolveAnnotation(a.trim(), ctx, line, col));
 				}
-				checkTypeArgConstraints(ctx, baseName, genericParams, resolvedArgs, line, col);
+				checkTypeArgConstraints(ctx, baseSym2, baseName, resolvedArgs, line, col);
 				const gi2 = createGenericInstance(baseType2, resolvedArgs);
 				gi2.typeName = baseName;
 				instantiateGenericBody(gi2, genericParams);
@@ -1487,7 +1486,7 @@ function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerConte
 
 // Extract generic param names from fnFlags: "gen:T,U" or "async|gen:T,U" -> ["T", "U"]
 // Define a generic param symbol, handling optional constraint: "T" or "T:Comparable"
-export function defineGenericParam(ctx: CheckerContext, paramStr: string): void {
+export function defineGenericParam(ctx: CheckerContext, paramStr: string): Type {
 	const colonPos = findChar(paramStr, ":");
 	if (colonPos > 0) {
 		// Has constraint: "T:Comparable" -> name="T", constraint="Comparable"
@@ -1497,10 +1496,29 @@ export function defineGenericParam(ctx: CheckerContext, paramStr: string): void 
 		// Store constraint type in typeExtra
 		gp.typeExtra = resolveTypeTest(constraintStr, ctx, 0, 0);
 		defineSymbol(ctx.table, makeSymbol(paramName, SymbolKind.TypeAlias, gp, false));
-	} else {
-		// No constraint: "T"
-		defineSymbol(ctx.table, makeSymbol(paramStr, SymbolKind.TypeAlias, createGenericParam(paramStr), false));
+		return gp;
 	}
+	// No constraint: "T"
+	const gp = createGenericParam(paramStr);
+	defineSymbol(ctx.table, makeSymbol(paramStr, SymbolKind.TypeAlias, gp, false));
+	return gp;
+}
+
+function defineTypeParams(ctx: CheckerContext, sym: Symbol, params: string): void {
+	openScope(ctx.table, ScopeKind.Block);
+	const constraints: string[] = [];
+	const declared: Type[] = [];
+	for (const param of splitTopLevel(params, ",")) {
+		const trimmed = param.trim();
+		if (trimmed == "") continue;
+		const colonPos = findChar(trimmed, ":");
+		declared.push(defineGenericParam(ctx, colonPos > 0 ? trimmed.slice(0, colonPos) : trimmed));
+		constraints.push(colonPos > 0 ? trimmed.slice(colonPos + 1, trimmed.length) : "");
+	}
+	for (let i = 0; i < declared.length; i += 1) {
+		if (constraints[i] != "") declared[i].typeExtra = resolveTypeTest(constraints[i], ctx, 0, 0);
+	}
+	sym.typeParams = declared;
 }
 
 // ===== B. Resolve Declarations (Pass 2) =====
@@ -2020,16 +2038,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	// Check for generic params (e.g., interface Box<T> — parser stores in side-channel)
 	const genericStr = declGenericParams(node);
 	const hasGenerics = genericStr != "";
-	if (hasGenerics) {
-		openScope(ctx.table, ScopeKind.Block);
-		const genericNames = splitTopLevel(genericStr, ",");
-		for (const gp of genericNames) {
-			const trimGp = gp.trim();
-			if (trimGp != "") {
-				defineGenericParam(ctx, trimGp);
-			}
-		}
-	}
+	if (hasGenerics) defineTypeParams(ctx, sym, genericStr);
 
 	const fieldTypes = resolveTypeStrings(d.interfaceFieldTypes, d.interfaceFields.length, ctx, node.location.line, node.location.column);
 	resolveTypeExprs(node.typeExprs, ctx);
@@ -2226,13 +2235,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		// instead of Unknown. Without this, instantiated generic match-types lose their
 		// type parameters and field access returns Unknown.
 		const hasGenericAliasDU = d.aliasGenericParams != null && d.aliasGenericParams != "";
-		if (hasGenericAliasDU) {
-			openScope(ctx.table, ScopeKind.Block);
-			const paramList = splitTopLevel(d.aliasGenericParams, ",");
-			for (const p of paramList) {
-				defineGenericParam(ctx, p.trim());
-			}
-		}
+		if (hasGenericAliasDU) defineTypeParams(ctx, sym, d.aliasGenericParams);
 		const resolved = resolveDiscriminatedUnion(ctx, d, node.flags.has(NodeFlag.ValueUnion));
 		if (hasGenericAliasDU) {
 			closeScope(ctx.table);
@@ -2249,13 +2252,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	// Tier 3: generic type alias — define generic param symbols in a nested scope
 	// so the body can reference them (e.g. type Box<T> = { value: T }).
 	const hasGenericAlias = d.aliasGenericParams != null && d.aliasGenericParams != "";
-	if (hasGenericAlias) {
-		openScope(ctx.table, ScopeKind.Block);
-		const paramList = splitTopLevel(d.aliasGenericParams, ",");
-		for (const p of paramList) {
-			defineGenericParam(ctx, p.trim());
-		}
-	}
+	if (hasGenericAlias) defineTypeParams(ctx, sym, d.aliasGenericParams);
 
 	const resolved = resolveAnnotation(d.aliasType, ctx, node.location.line, node.location.column);
 	resolveTypeExpr(node.typeExpr, ctx);
@@ -2563,16 +2560,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	// Check for generic params (e.g., class Container<T> — parser stores in side-channel)
 	const genericStr = declGenericParams(node);
 	const hasGenerics = genericStr != "";
-	if (hasGenerics) {
-		openScope(ctx.table, ScopeKind.Block);
-		const genericNames = splitTopLevel(genericStr, ",");
-		for (const gp of genericNames) {
-			const trimGp = gp.trim();
-			if (trimGp != "") {
-				defineGenericParam(ctx, trimGp);
-			}
-		}
-	}
+	if (hasGenerics) defineTypeParams(ctx, sym, genericStr);
 
 	// Save collectPass type to preserve decorator metadata (nativeName/builtinKind on typeName)
 	const oldType = sym.symbolType;
@@ -2799,16 +2787,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 
 	const genericStr = declGenericParams(node);
 	const hasGenerics = genericStr != "";
-	if (hasGenerics) {
-		openScope(ctx.table, ScopeKind.Block);
-		const genericNames = splitTopLevel(genericStr, ",");
-		for (const gp of genericNames) {
-			const trimGp = gp.trim();
-			if (trimGp != "") {
-				defineGenericParam(ctx, trimGp);
-			}
-		}
-	}
+	if (hasGenerics) defineTypeParams(ctx, sym, genericStr);
 
 	// Build struct type — collect instance properties and resolve methods
 	const memberNames: string[] = [];
