@@ -46,7 +46,6 @@ after another, and compare every red against src/test/known-red.json.
                  sees is recorded there, never in the tracked set
   --reuse        read a lane log that already ended instead of running that lane again
   --reds <lane> <log>  print the failure names the gate reads out of a lane log
-  --inert <from> <to>  exit 0 when every path changed from..to picks no lane
   --select       print the corpus programs whose emitted C or JS differs from the merge base
   --tree-key <rev>  print the key of the src and std tree at <rev> (what msc.key holds)
   --route        read paths on stdin, print "lane<TAB>path" for each lane a path picks
@@ -249,12 +248,6 @@ tier_select() {
   ledger tier-select $((SECONDS - t0)) 0 0 0 0 0 "${ADMIT_WAITED:-0}"
   select_ledger tier-select "$((SECONDS - t0))" "$(grep -c . "$OUT/tier/keep" | tr -d ' ')" "$n" "" "" ""
   return 0
-}
-
-inert_range() {
-  local paths
-  paths=$(git diff --name-only --no-renames "$1" "$2") || return 2
-  ! printf '%s\n' "$paths" | grep -Ev "$INERT" | grep . >/dev/null
 }
 
 digest() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
@@ -1774,7 +1767,6 @@ while [ $# -gt 0 ]; do
     --local) record_local=1 ;;
     --reuse) reuse=1 ;;
     --reds) reds_of "${2:?--reds needs a lane}" "${3:?--reds needs a log}" 1; exit 0 ;;
-    --inert) inert_range "${2:?--inert needs <from> <to>}" "${3:?--inert needs <from> <to>}"; exit $? ;;
     --route) route_paths; exit 0 ;;
     --self-test) self_test; exit $? ;;
     -h|--help|help) usage; exit 0 ;;

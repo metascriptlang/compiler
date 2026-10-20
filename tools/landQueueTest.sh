@@ -51,7 +51,6 @@ setup() {
   cp "$ADAPTER" "$R/tools/wt.sh"; cp "$RUNNER" "$R/tools/landQueue.sh"
   cat >"$R/tools/gate.sh" <<'EOF'
 #!/usr/bin/env bash
-if [ "$1" = --inert ]; then exit "$(cat "$LQ_TEST/inert" 2>/dev/null || echo 0)"; fi
 [ "$1" = --tree-key ] && exit 0
 name=$(git symbolic-ref --short HEAD)
 printf '%s head=%s files=%s par=%s jobs=%s\n' "$name" "$(git rev-parse --short HEAD)" "$(git ls-tree --name-only HEAD | grep -v '^tools$' | paste -sd, -)" "${GATE_PAR:-}" "${MSCORPUS_BUILD_JOBS:-}" >>"$LQ_TEST/gates.log"
@@ -128,17 +127,27 @@ rh=$(waitfor h); rd=$(waitfor d)
 check "S4 h landed" '[ "$rh" = 0 ] && onmain h.txt'
 check "S4 dirty d reported red, not dropped silently" '[ "$rd" = 1 ] && grep -q "uncommitted" "$MSC_LAND_QUEUE/d.red"'
 
-echo "== S5 main moves during the gate by a tested path: requeued, regated, landed"
-setup; mkwt m hold
-echo 1 >"$LQ_TEST/inert"
+echo "== S5 main moves during the gate through a file the slice changes: requeued, regated, landed"
+setup; printf '1\n2\n3\n4\n5\n' >"$R/shared.txt"; git -C "$R" add shared.txt; git -C "$R" commit -qm "add shared"
+mkwt m hold
+sed -i.bak 's/^1$/one/' "$T/ws/.wt/wt-m/shared.txt"; rm -f "$T/ws/.wt/wt-m/shared.txt.bak"; git -C "$T/ws/.wt/wt-m" commit -qam "edit shared top"
 enqueue m
 for i in $(seq 1 40); do [ -e "$LQ_TEST/holding.m" ] && break; sleep 0.25; done
-echo other >"$R/other.txt"; git -C "$R" add other.txt; git -C "$R" commit -qm "add other on main"
+sed -i.bak 's/^5$/five/' "$R/shared.txt"; rm -f "$R/shared.txt.bak"; git -C "$R" commit -qam "edit shared bottom on main"
 touch "$LQ_TEST/release"
 rm=$(waitfor m 60)
-check "S5 landed after retry" '[ "$rm" = 0 ] && onmain m.txt && onmain other.txt'
+check "S5 landed after retry" '[ "$rm" = 0 ] && onmain m.txt && [ "$(git -C "$R" show main:shared.txt | paste -sd, -)" = one,2,3,4,five ]'
 check "S5 gated twice" '[ "$(grep -c "^wt/m " "$T/ctl/gates.log")" = 2 ]'
-check "S5 second gate saw other.txt" '[ "$(grep "^wt/m " "$T/ctl/gates.log" | tail -1 | grep -c other\.txt)" = 1 ]'
+
+echo "== S5b main moves during the gate by files the slice leaves alone: one gate, landed"
+setup; mkwt m2 hold
+enqueue m2
+for i in $(seq 1 40); do [ -e "$LQ_TEST/holding.m2" ] && break; sleep 0.25; done
+echo other >"$R/other.txt"; git -C "$R" add other.txt; git -C "$R" commit -qm "add other on main"
+touch "$LQ_TEST/release"
+rm2=$(waitfor m2 60)
+check "S5b landed beside other.txt" '[ "$rm2" = 0 ] && onmain m2.txt && onmain other.txt'
+check "S5b gated once" '[ "$(grep -c "^wt/m2 " "$T/ctl/gates.log")" = 1 ]'
 
 echo "== S6 gate BUSY is queued again without counting a try, past the try limit, and lands"
 setup; mkwt y busy3
@@ -199,9 +208,8 @@ rw=$(waitfor w 30)
 check "S12 gated at once beside msc.exe" '[ "$rw" = 0 ] && onmain w.txt && ! grep -q "machine busy" "$MSC_LAND_QUEUE/runner.log"'
 unset MSC_LAND_QUEUE_BUSY_MAX
 
-echo "== S13 a commit made during the gate, main moved by an inert path: nothing ungated lands"
+echo "== S13 a commit made during the gate, main moved by a file the slice leaves alone: nothing ungated lands"
 setup; mkwt g hold
-echo 0 >"$LQ_TEST/inert"
 enqueue g
 for i in $(seq 1 40); do [ -e "$LQ_TEST/holding.g" ] && break; sleep 0.25; done
 echo late >"$T/ws/.wt/wt-g/late.txt"; git -C "$T/ws/.wt/wt-g" add late.txt; git -C "$T/ws/.wt/wt-g" commit -qm "add late"
