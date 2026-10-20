@@ -1,9 +1,9 @@
 // @stdout: full {"mode":"~alt","need":"alt","lvl":3,"half":0.25,"exact":1.5,"tag":"close_window","on":true}
 // @stdout: bare {"mode":null,"need":"~alt","lvl":null,"half":null,"exact":1.5,"tag":null,"on":null}
-// @stdout: nested {"name":"haro","steps":[{"key":"a","dir":"up"},{"key":"b","dir":"down"}],"main":{"mode":"alt","need":"~alt","lvl":1,"half":0.5,"exact":1.5,"tag":null,"on":null}}
+// @stdout: nested {"name":"haro","steps":[{"key":"a","dir":"up","hold":"~alt"},{"key":"b","dir":"down","hold":null}],"main":{"mode":"alt","need":"~alt","lvl":1,"half":0.5,"exact":1.5,"tag":null,"on":null}}
 // @stdout: back {"mode":"~alt","need":"alt","lvl":3,"half":0.25,"exact":1.5,"tag":"close_window","on":true}
 // @stdout: absent {"mode":null,"need":"alt","lvl":null,"half":null,"exact":1.5,"tag":null,"on":null}
-// @stdout: nested back {"name":"haro","steps":[{"key":"a","dir":"up"},{"key":"b","dir":"down"}],"main":{"mode":"alt","need":"~alt","lvl":1,"half":0.5,"exact":1.5,"tag":null,"on":null}}
+// @stdout: nested back {"name":"haro","steps":[{"key":"a","dir":"up","hold":"~alt"},{"key":"b","dir":"down","hold":null}],"main":{"mode":"alt","need":"~alt","lvl":1,"half":0.5,"exact":1.5,"tag":null,"on":null}}
 // @stdout: bad string err field 'need': expected "alt" | "~alt", got "Alt"
 // @stdout: bad number err field 'lvl': expected 1 | 2 | 3, got 7
 // @stdout: bad fraction err field 'exact': expected 1.5, got 2
@@ -26,6 +26,7 @@ interface Bind {
 interface Step {
 	key: string;
 	dir: "up" | "down";
+	hold?: Mode;
 }
 
 interface Keys {
@@ -62,7 +63,7 @@ const full: Bind = {
 const bare: Bind = { need: "~alt", exact: 1.5 };
 const keys: Keys = {
 	name: "haro",
-	steps: [{ key: "a", dir: "up" }, { key: "b", dir: "down" }],
+	steps: [{ key: "a", dir: "up", hold: "~alt" }, { key: "b", dir: "down" }],
 	main: { mode: "alt", need: "~alt", lvl: 1, half: 0.5, exact: 1.5 },
 };
 console.log("full " + JSON.stringify(full));

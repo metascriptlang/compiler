@@ -5292,6 +5292,13 @@ test "a pod union is not viewable" {
 	assert !isReadonlyView(createReadonlyView(podUnion));
 }
 
+test "a nullable pod union is not viewable" {
+	const literals = createUnion([createStringLiteral("alt"), createStringLiteral("~alt")]);
+	assert !isReadonlyView(createReadonlyView(createMaybeType(literals)));
+	const nested = createUnion([createUnion([int32Type(), stringType()]), createArray(int32Type())]);
+	assert isReadonlyView(createReadonlyView(nested));
+}
+
 test "substitute generic param" {
 	const gp = createGenericParam("T");
 	const result = substituteType(gp, "T", numberType());
