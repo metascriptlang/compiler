@@ -188,3 +188,4 @@ import "./keyedAccess";
 import "./literalTypeAssign";
 import "./proxyRefusals";
 import "./importAssign";
+import "./externMutability";

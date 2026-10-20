@@ -1669,6 +1669,12 @@ add an `as XxxData` cast if needed. Tier 3 generic aliases
 (`createNodeAt<K extends NodeKind>(kind: K, data: DataFor<K>, loc): Node`)
 will be the proper long-term solution.
 
+A callback argument whose parameter types come from the overload (an unannotated arrow) ranks
+the overloads once it is typed: a block that returns nothing takes a `(…) => void` overload over a
+generic `(…) => U` one in either declaration order, and a callback that returns a value takes the
+generic one, for functions, class methods and extension methods. Measured 2026-10-20 on the
+wt/root-sweep candidate, C (drc, orc, danger) and JS: corpus `overloadContextArgRanksByItsType`.
+
 ### Conditional Types
 
 Type-level if/else based on assignability (Tier 3).
@@ -2067,11 +2073,23 @@ fetchUser(42)
 | Method | Callback Signature | Returns | Behavior |
 |--------|-------------------|---------|----------|
 | `.then(fn)` | `(value: T) => void` | `Promise<void>` | Called on fulfillment, rejection propagates |
+| `.then(fn)` | `(value: T) => U` | `Promise<U>` | Resolves with what `fn` returns |
+| `.then(fn)` | `(value: T) => Promise<U>` | `Promise<U>` | Adopts the promise `fn` returns, one level as in TS |
 | `.then(fn, onRejected)` | `(value: T) => void`, `(error: Error) => void` | `Promise<void>` | `onRejected` is called on the input's rejection only; a throw from `fn` rejects the output |
-| `.catch(fn)` | `(error: Error) => void` | `Promise<T>` | Called on rejection, fulfillment passes through |
-| `.finally(fn)` | `() => void` | `Promise<T>` | Called always, original value/error preserved |
+| `.then(fn, onRejected)` | `(value: T) => U`, `(error: Error) => U` | `Promise<U>` | Resolves with the result of the callback that ran; a throw from `fn` skips `onRejected` and rejects the output |
+| `.catch(fn)` | `(error: Error) => void` | `Promise<void>` | Called on rejection |
+| `.catch(fn)` | `(error: Error) => T` | `Promise<T>` | Resolves with the input's value, or with `fn`'s on a rejection |
+| `.finally(fn)` | `() => void` | `Promise<T>` | Called always, original value/error preserved; a throw from `fn` rejects the output |
 
-All three return a new `Promise`, enabling chaining. Exceptions thrown inside callbacks are captured and propagate as rejections on the output promise.
+All of them return a new `Promise`, enabling chaining. Exceptions thrown inside callbacks are captured and propagate as rejections on the output promise.
+
+The callback picks the row: a block that returns nothing takes the `void` row, which the runtime
+calls directly, and a callback that returns a value takes the `U` (or `T`) row, an async method of
+`Promise`. Measured 2026-10-20 on the wt/root-sweep candidate, C (drc, orc, danger) and JS: corpus
+`promiseThenValue`, `promiseThenFlattens`, `promiseThenOverload`, `promiseThenNoValue`,
+`promiseThenStruct`, `promiseThenRegistersArguments`, `promiseThenValueOwned`,
+`promiseCatchFinallyValues`, `promiseRejectThroughThen` and `promiseFinallyHandlerThrowRejects`
+print their pinned lines; all but the last also under SAN. Not run: the Raiser.
 
 Every rejection reaches its reader as an `Error`: `try { await p } catch (e)`, `.catch` and the
 second callback of `.then` see the same object, a string reason having become an `Error` whose
@@ -2553,6 +2571,8 @@ actor Unsafe {
 ```
 
 Actors also support cooperative suspension — async actor methods (`CALL` pattern) suspend the actor while awaiting an internal future, freeing the scheduler to process other actors' mailboxes.
+
+The suspended actor's own mailbox waits: a send or CALL that reaches it while one of its methods awaits runs after that method has finished, so the actor's fields stay as the method left them across its await (measured 2026-10-20 on C and JS: an awaited CALL and a timer in corpus `actorCallsIntoASuspendedActorWaitForIt`, a spawn in corpus 1113). A mailbox is unbounded and a send never pauses its sender; a sender that awaits a CALL to its receiver after each burst has at most one burst queued there (measured 2026-10-20 on C: 1M sends to a busy actor peaked at 33.7 MB, and at 2.2 MB with a CALL after every 200).
 
 #### Supervision (Erlang OTP)
 
@@ -3765,11 +3785,9 @@ Refused, each at its site with the reason:
 - a `then` whose first parameter is not a callback, or whose `onRejected` takes something other than
   `Error` or a subclass (`unknown`, `string`), since a rejection is an `Error` as in `Promise.reject`;
 - `Promise<T>` with a thenable `T`, written or made by a call (`new Promise<Thenable>(…)`, a generic
-  instantiated with one): write `Promise<U>`;
+  instantiated with one, a `.then` callback returning one): write `Promise<U>`;
 - `return thenable` inside a `try` that has a catch or finally, since the catch would not see the
   rejection: write `return await`;
-- a `.then` callback whose expression body is a thenable, since `.then` gives `Promise<void>` and drops
-  what the callback returns;
 - an executor's `resolve(thenable)`: `resolve` takes a value of the promised type, as it refuses a
   promise; and a combinator over a `Thenable[]` variable: thenables are adopted from an array literal.
 

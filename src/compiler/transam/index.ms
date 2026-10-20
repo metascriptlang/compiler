@@ -1179,26 +1179,70 @@ test "dbTypeCheck records parse dep with real hash" {
 	assert foundParseDep;
 }
 
-test "whitespace-only edit keeps typecheck green" {
+test "position edits and undo refresh checked spans and lower once per revision" {
 	const db = createTransAmDb(100);
-	dbSetFileText(db, "test.ms", "const x=1;");
-	dbTypeCheck(db, "test.ms");
+	const path = "/reuse/value.ms";
+	const source = "export const value: int32 = 1;";
+	dbSetFileText(db, path, source);
+	dbSetFileText(db, "/reuse/other.ms", "export const other: int32 = 7;");
+	const count: LowerCount = { n: 0 };
+	const first = dbLower(db, path, countLowering, count);
+	const firstCtx = dbTypeCheck(db, path);
+	const initialRevision = db.revision.value;
+	const fileId = getFileId(db.fileInput, path);
+	const kinds: TaQueryKind[] = [TaQueryKind.Parse, TaQueryKind.TypeCheck, TaQueryKind.Lower];
+	assert firstCtx.errors.length == 0;
+	assert localTypeName(firstCtx, "value") == "int32";
+	const firstDecl = (first.data as ProgramData).programStmts[0];
+	assert firstDecl.location.line == 1;
+	assert firstDecl.location.column == 1;
+	assert firstDecl.location.endLine == 1;
+	assert firstDecl.location.endColumn == 31;
+	assert dbLower(db, path, countLowering, count) == first;
+	assert count.n == 1;
 
-	// Add whitespace only
-	dbSetFileText(db, "test.ms", "const  x=1;");
-	dbParse(db, "test.ms");
+	dbSetFileText(db, "/reuse/other.ms", "export const other: int32 = 8;");
+	assert db.revision.value > initialRevision;
+	assert dbLower(db, path, countLowering, count) == first;
+	assert dbTypeCheck(db, path) == firstCtx;
+	assert count.n == 1;
+	for (const kind of kinds) {
+		const entry = cacheGet(db.cache, createQueryKey(kind, fileId));
+		assert entry != null;
+		assert entry.computedAt == initialRevision;
+		assert entry.verifiedAt == db.revision.value;
+	}
 
-	// Whitespace changes token positions but not AST structure
-	// However, the parser may produce different results due to spacing
-	// This test verifies the hash comparison path works correctly either way
-	const checkKey = createQueryKey(TaQueryKind.TypeCheck, 0);
-	const parseKey = createQueryKey(TaQueryKind.Parse, 0);
-	const parseEntry = cacheGet(db.cache, parseKey);
-	const checkEntry = cacheGet(db.cache, checkKey);
-
-	// Parse was recomputed (file changed)
-	assert parseEntry.state == TaQueryState.Green;
-	assert parseEntry.computedAt == 2;
+	const snapshots = ["\n  " + source, source];
+	const lines: int32[] = [2, 1];
+	const columns: int32[] = [3, 1];
+	const ends: int32[] = [33, 31];
+	for (let i = 0; i < snapshots.length; i += 1) {
+		dbSetFileText(db, path, snapshots[i]);
+		const revision = db.revision.value;
+		const lowered = dbLower(db, path, countLowering, count);
+		const ctx = dbTypeCheck(db, path);
+		assert ctx.errors.length == 0;
+		assert localTypeName(ctx, "value") == "int32";
+		const decl = (lowered.data as ProgramData).programStmts[0];
+		assert decl.location.line == lines[i];
+		assert decl.location.column == columns[i];
+		assert decl.location.endLine == lines[i];
+		assert decl.location.endColumn == ends[i];
+		assert count.n == i + 2;
+		dbSetFileText(db, path, snapshots[i]);
+		assert db.revision.value == revision;
+		assert dbLower(db, path, countLowering, count) == lowered;
+		assert dbTypeCheck(db, path) == ctx;
+		assert count.n == i + 2;
+		for (const kind of kinds) {
+			const entry = cacheGet(db.cache, createQueryKey(kind, fileId));
+			assert entry != null;
+			assert entry.state == TaQueryState.Green;
+			assert entry.computedAt == revision;
+			assert entry.verifiedAt == revision;
+		}
+	}
 }
 
 test "syntax error parse still stores hash" {
@@ -1326,22 +1370,68 @@ test "a module's type check registers the program it checked" {
 	assert program == dbGetCheckedProgram(db, "/test/registered.ms");
 }
 
-test "both sides of an import cycle bind the symbols each side checks" {
-	const db = createTransAmDb(100);
-	dbSetFileText(db, "/test/ca.ms", 'import { fb } from "./cb";\nexport function fa(n: int32): int32 { return fb(n); }');
-	dbSetFileText(db, "/test/cb.ms", 'import { fa } from "./ca";\nexport function fb(n: int32): int32 { return n <= 0 ? 0 : fa(n - 1); }');
-	const aId = getFileId(db.fileInput, "/test/ca.ms");
-	const bId = getFileId(db.fileInput, "/test/cb.ms");
-	recordModuleImport(db.moduleDeps, aId, bId);
-	recordModuleImport(db.moduleDeps, bId, aId);
-	const ctxB = dbTypeCheck(db, "/test/cb.ms");
-	const ctxA = dbTypeCheck(db, "/test/ca.ms");
-	assert ctxA != null && ctxB != null;
-	const fa = lookupLocal(ctxA.table, "fa");
-	const fb = lookupLocal(ctxB.table, "fb");
-	assert fa != null && fb != null;
-	assert lookupLocal(ctxB.table, "fa") == fa;
-	assert lookupLocal(ctxA.table, "fb") == fb;
+test "import cycles refresh signatures and reuse lowering through undo and redo" {
+	const paths = ["/cycles/a.ms", "/cycles/b.ms", "/cycles/view.ms", "/cycles/stable.ms"];
+	const a32 = 'import { fb } from "./b";
+export function fa(n: int32): int32 { return fb(n); }';
+	const b32 = 'import { fa } from "./a";
+export function fb(n: int32): int32 { return n <= 0 ? 0 : fa(n - 1); }';
+	const a64 = 'import { fb } from "./b";
+export function fa(n: int64): int64 { return fb(n); }';
+	const b64 = 'import { fa } from "./a";
+export function fb(n: int64): int64 { return n <= 0 ? 0 : fa(n - 1); }';
+	const sourcesA = [a32, a64, a32, a64];
+	const sourcesB = [b32, b64, b32, b64];
+	const types = ["int32", "int64", "int32", "int64"];
+	const names = ["fa", "fb", "observed", "stable"];
+	for (let order = 0; order < 2; order++) {
+		const db = createTransAmDb(100);
+		dbSetFileText(db, paths[0], a32);
+		dbSetFileText(db, paths[1], b32);
+		dbSetFileText(db, paths[2], 'import { fa } from "./a";
+export const observed = fa(2);');
+		dbSetFileText(db, paths[3], "export const stable: int32 = 7;");
+		const aId = getFileId(db.fileInput, paths[0]);
+		const bId = getFileId(db.fileInput, paths[1]);
+		recordModuleImport(db.moduleDeps, aId, bId);
+		recordModuleImport(db.moduleDeps, bId, aId);
+		recordModuleImport(db.moduleDeps, getFileId(db.fileInput, paths[2]), aId);
+		const counts: LowerCount[] = [{ n: 0 }, { n: 0 }, { n: 0 }, { n: 0 }];
+		const indices = order == 0 ? [0, 1, 2, 3] : [1, 0, 2, 3];
+		for (let i = 0; i < sourcesA.length; i++) {
+			dbSetFileText(db, paths[0], sourcesA[i]);
+			dbSetFileText(db, paths[1], sourcesB[i]);
+			for (const path of paths) dbParse(db, path);
+			for (const j of indices) {
+				const ctx = dbTypeCheck(db, paths[j]);
+				assert ctx.errors.length == 0;
+				const expectedType = j == 3 ? "int32" : types[i];
+				const sym = lookupLocal(ctx.table, names[j]);
+				assert sym != null;
+				if (j < 2) {
+					assert sym.symbolType.typeReturn != null;
+					assert typeDisplayName(sym.symbolType.typeReturn) == expectedType;
+					assert sym.symbolType.typeChildren.length == 1;
+					assert typeDisplayName(sym.symbolType.typeChildren[0]) == expectedType;
+				} else {
+					assert localTypeName(ctx, names[j]) == expectedType;
+				}
+				const lowered = dbLower(db, paths[j], countLowering, counts[j]);
+				const expectedCount = j == 3 ? 1 : i + 1;
+				assert counts[j].n == expectedCount;
+				assert dbLower(db, paths[j], countLowering, counts[j]) == lowered;
+				assert dbTypeCheck(db, paths[j]) == ctx;
+				assert counts[j].n == expectedCount;
+			}
+			const ctxA = dbTypeCheck(db, paths[0]);
+			const ctxB = dbTypeCheck(db, paths[1]);
+			const fa = lookupLocal(ctxA.table, "fa");
+			const fb = lookupLocal(ctxB.table, "fb");
+			assert fa != null && fb != null;
+			assert lookupLocal(ctxB.table, "fa") == fa;
+			assert lookupLocal(ctxA.table, "fb") == fb;
+		}
+	}
 }
 
 test "a db bound to a loaded graph checks each module against the graph's module" {
@@ -1446,6 +1536,47 @@ const w = farValue();');
 	const after = checkChain(db, order);
 	assert localTypeName(after, "v") == "int64";
 	assert localTypeName(after, "w") == "int64";
+}
+
+test "exported field edits reach transitive readers through undo and redo" {
+	const db = createTransAmDb(100);
+	const paths = ["/fields/dep.ms", "/fields/view.ms", "/fields/far.ms", "/fields/stable.ms"];
+	const integerSource = 'export interface Reading { value: int32; }
+export const reading: Reading = { value: 1 };';
+	const stringSource = 'export interface Reading { value: string; }
+export const reading: Reading = { value: "ok" };';
+	dbSetFileText(db, paths[0], integerSource);
+	dbSetFileText(db, paths[1], 'import { reading } from "./dep";
+export const observed = reading.value;');
+	dbSetFileText(db, paths[2], 'import { observed } from "./view";
+export const mirrored = observed;');
+	dbSetFileText(db, paths[3], "export const stable: int32 = 7;");
+	recordModuleImport(
+		db.moduleDeps, getFileId(db.fileInput, paths[1]), getFileId(db.fileInput, paths[0]),
+	);
+	recordModuleImport(
+		db.moduleDeps, getFileId(db.fileInput, paths[2]), getFileId(db.fileInput, paths[1]),
+	);
+	const counts: LowerCount[] = [{ n: 0 }, { n: 0 }, { n: 0 }, { n: 0 }];
+	const names = ["reading", "observed", "mirrored", "stable"];
+	const snapshots = [integerSource, stringSource, integerSource, stringSource];
+	const types = ["int32", "string", "int32", "string"];
+	for (let i = 0; i < snapshots.length; i++) {
+		dbSetFileText(db, paths[0], snapshots[i]);
+		for (const path of paths) dbParse(db, path);
+		const expectedTypes = ["Reading", types[i], types[i], "int32"];
+		for (let j = 0; j < paths.length; j++) {
+			const ctx = dbTypeCheck(db, paths[j]);
+			assert ctx.errors.length == 0;
+			assert localTypeName(ctx, names[j]) == expectedTypes[j];
+			const lowered = dbLower(db, paths[j], countLowering, counts[j]);
+			const expectedCount = j == 3 ? 1 : i + 1;
+			assert counts[j].n == expectedCount;
+			assert dbLower(db, paths[j], countLowering, counts[j]) == lowered;
+			assert dbTypeCheck(db, paths[j]) == ctx;
+			assert counts[j].n == expectedCount;
+		}
+	}
 }
 
 test "a line shift in a module rechecks it at the new positions" {

@@ -10,7 +10,7 @@
 //
 // What lives here:
 //   - per-T suffix/dispatch helpers (futureTypedSuffix, futureThenFnForInner,
-//     futureCatchFnForInner, futureFinallyFnForInner, promiseAllFnForInner)
+//     futureCatchFnForInner, promiseAllFnForInner)
 //   - box/unbox helpers for primitive values flowing through msFuture* slots
 //   - typeTagFor (int/double/string/ptr tag dispatch for msFutureThenTyped etc.)
 //   - handlers for PromiseThen / PromiseCatch / PromiseFinally / PromiseResolve
@@ -74,11 +74,6 @@ function futureCatchFnForInner(t: Type | null): string {
 	return suffix == "" ? "" : "msFutureCatch_" + suffix;
 }
 
-function futureFinallyFnForInner(t: Type | null): string {
-	const suffix = futureTypedSuffix(t);
-	return suffix == "" ? "" : "msFutureFinally_" + suffix;
-}
-
 // Per-type Promise.all variant name — picks msPromiseAllFor_msFuture_<suffix>
 // for primitive/string/ptr/struct inner types. Returns "" only for void/array
 // (those fall through to legacy generic msPromiseAll). Struct types use their
@@ -109,7 +104,7 @@ function mkTypedCall(fnName: string, args: Node[], nodeType: Type | null, loc: S
 // ===== Builtin handlers =====
 
 // Promise.then/catch/finally — rewrite to typed C runtime calls.
-// Typed variants (msFutureThen_<T>, msFutureCatch_<T>, msFutureFinally_<T>)
+// Typed variants (msFutureThen_<T>, msFutureCatch_<T>)
 // read input.value via the correct typed struct cast, preserving msString
 // (16B) and primitive widths on pass-through. Struct/array/void/unknown
 // fall back to the legacy tag-dispatch path.
@@ -144,10 +139,9 @@ function lowerPromiseThenCatchFinally(node: Node, builtinKind: string, loc: Sour
 		},
 		_ => {
 			// PromiseFinally — wildcard is safe: outer dispatch restricts to these three.
-			const typedFn = futureFinallyFnForInner(innerType);
 			const finallyArgs: Node[] = [receiver];
 			for (const a of handlers) { finallyArgs.push(a); }
-			return mkTypedCall(typedFn != "" ? typedFn : "msFutureFinally", finallyArgs, node.nodeType, loc);
+			return mkTypedCall("msFutureFinally", finallyArgs, node.nodeType, loc);
 		},
 	};
 }

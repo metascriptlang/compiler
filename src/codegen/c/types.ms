@@ -1130,21 +1130,24 @@ function typeInfoLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 	};
 }
 
+function emitRttiHook(g: CGen, name: string, hook: Symbol, trace: boolean): string {
+	const hookName = opCName(hook);
+	ensureDrcProto(g, hookName, hook);
+	const params = trace ? "void* dest, void* env" : "void* dest";
+	addLine(sec(g, CSection.ProcHeaders), `static void ${name}(${params});`);
+	addLine(sec(g, CSection.Procs), `static void ${name}(${params}) { ${hookName}(dest${trace ? ", env" : ""}); }`);
+	return name;
+}
+
 export function emitOwnedTypeInfos(g: CGen): void {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
 	const viaRegistry = isHcrImageModule(g, g.modulePath);
 	for (const info of g.emissionFacts.typeInfoOrder) {
 		if (info.owner != g.modulePath) continue;
 		let destroyName = "NULL";
-		if (info.destroy != null) {
-			destroyName = opCName(info.destroy);
-			ensureDrcProto(g, destroyName, info.destroy);
-		}
+		if (info.destroy != null) destroyName = emitRttiHook(g, info.cName + "RttiDestroy", info.destroy, false);
 		let traceName = "NULL";
-		if (info.trace != null) {
-			traceName = opCName(info.trace);
-			ensureDrcProto(g, traceName, info.trace);
-		}
+		if (info.trace != null) traceName = emitRttiHook(g, info.cName + "RttiTrace", info.trace, true);
 		let baseRef = "NULL";
 		if (info.baseKey != "") {
 			const base = demandedTypeInfo(g, info.baseKey, "base class");
@@ -1153,7 +1156,7 @@ export function emitOwnedTypeInfos(g: CGen): void {
 		const label = typeInfoLabel(g, info);
 		const shown = info.kind == TypeInfoKind.Object ? typeDisplayName(info.subject) : "";
 		const fields = `.name = "${label}", .isCyclic = ${info.trace != null ? "MS_TRUE" : "MS_FALSE"}, `
-			+ `.traceFn = (msTraceProc)${traceName}, .destroyFn = (msDestroyProc)${destroyName}, .flags = 0, .base = ${baseRef}`
+			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = 0, .base = ${baseRef}`
 			+ (shown != "" && shown != label ? `, .displayName = "${escapeCString(shown)}"` : "");
 		if (viaRegistry && !info.moduleLocal && !hcrTypeInfoRef(g, info.cName)) {
 			addCGenError(g, `internal: HCR image ${g.modulePath} owns TypeInfo ${info.cName} but no image module registers it`, 0, 0);
