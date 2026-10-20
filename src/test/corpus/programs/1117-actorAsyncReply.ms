@@ -1,9 +1,9 @@
 // @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
-// @maxrss: 38
+// @maxrss: 22
 // @stdout: ints 100000 strs 100000
 // @serial
-// note: the bound sits between a reply chain that drains (28 MB, macOS) and one that
-//   completes on the worker and never releases the reply's in-flight ref (47 MB).
+// note: the bound sits between a reply that drains (13 MB, macOS) and one that
+//   completes on the worker and never releases the reply's in-flight ref (31 MB).
 
 actor Pump {
 	n: int32;
