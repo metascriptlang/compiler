@@ -9,7 +9,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols } from "./symbol";
-import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
+import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
@@ -3580,7 +3580,7 @@ function defineBuiltinConstants(ctx: CheckerContext): void {
 
 // Resolution mirrors src/module/resolver.ms: backend-specific extension FIRST
 // so per-target preludes (e.g., struct.jms for JS) win over the generic .ms.
-function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: string, backendExt: string): void {
+function preludeSource(stdSpecifier: string, stdPath: string, backendExt: string): { path: string, source: string } {
 	const base = stdPath + "/" + stdSpecifier.slice(4, stdSpecifier.length);
 	let src = try readFile(base + backendExt) catch "";
 	let resolvedPath = base + backendExt;
@@ -3601,6 +3601,14 @@ function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: stri
 		src = try readFile(base + "/index.ms") catch "";
 		resolvedPath = base + "/index.ms";
 	}
+	return { path: resolvedPath, source: src };
+}
+
+function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: string, backendExt: string): void {
+	const found = preludeSource(stdSpecifier, stdPath, backendExt);
+	const resolvedPath = found.path;
+	let src = found.source;
+	if (ctx.ownModules.has(resolvedPath)) return;
 	if (src.length > 0) {
 		const fsProvider = createFileSystemProvider();
 		src = inlineHeaderImports(src, resolvedPath, fsProvider);
@@ -3619,6 +3627,10 @@ function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: stri
 			runThreePasses(ctx, pr.value);
 			ctx.preludeInterf.set(stdSpecifier, ctx.interf);
 			for (const exported of ctx.interf) ctx.preludeExports.add(exported);
+			const exports = collectExports(ctx, resolvedPath);
+			registerModuleExports(ctx.exportRegistry, resolvedPath, exports);
+			const bare = stripModuleExtension(resolvedPath);
+			if (bare != resolvedPath) registerModuleExports(ctx.exportRegistry, bare, exports);
 			ctx.modulePath = savedPath;
 			collectDirectives(ctx, pr.value);
 			stampHeaderPaths(ctx);
@@ -3684,6 +3696,15 @@ function resolvePreludeSubSource(specifier: string, indexDir: string, stdPath: s
 	return { path: "", source: "" };
 }
 
+// The global import whose source is `path`, or "" when `path` is no prelude module.
+function preludeSpecifierOf(path: string, stdPath: string, backendExt: string): string {
+	for (const specifier of defaultGlobalImports()) {
+		if (!path.startsWith(normalize(stdPath + "/" + specifier.slice(4, specifier.length)))) continue;
+		if (normalize(preludeSource(specifier, stdPath, backendExt).path) == path) return specifier;
+	}
+	return "";
+}
+
 // Load prelude sub-modules referenced by:
 //   - relative re-exports: `export { X } from "./sub"`
 //   - relative direct imports: `import { X } from "./sub"`
@@ -3728,6 +3749,11 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		// can reference the same module via different paths (e.g., one prelude
 		// imports std/serialize/json/decode, another re-exports it relatively).
 		if (findModuleExports(ctx.exportRegistry, subResolved) != null) continue;
+		const preludeSpecifier = preludeSpecifierOf(subResolved, stdPath, backendExt);
+		if (preludeSpecifier != "") {
+			loadPreludeOne(ctx, preludeSpecifier, stdPath, backendExt);
+			continue;
+		}
 		// Inline .h imports in sub-module source before parsing
 		subSrc = inlineHeaderImports(subSrc, subResolved, createFileSystemProvider());
 		const subPr = parseSource(subSrc);
