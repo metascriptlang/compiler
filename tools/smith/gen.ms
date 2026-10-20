@@ -105,6 +105,7 @@ enum AK {
 	Cell,
 	Pt,
 	Arr,
+	Wide,
 }
 
 struct Afn {
@@ -379,12 +380,15 @@ struct ETy {
 }
 
 const FLAG_COUNTS: int32[] = [3, 8, 9, 17, 33, 65];
-const LIT_SETS: string[] = ["n,e,s,w", "red,green,blue", "on,off", "lo,mid,hi,max"];
+const LIT_SETS: string[] = ["n,e,s,w", "1,2,5", "-1,0.5"];
 const BIT_OPS: string[] = ["&", "|", "^"];
 
 function quoted(s: string): string { return "\"" + s + "\""; }
 
-const EXC_SKIP_FINALLY: string = "// @skip-raiser: 2026-10-14-raiser-loses-a-finally-when-a-raise-starts-in-catch-or-finally";
+function isNumLit(s: string): boolean { return "-0123456789".includes(s.slice(0, 1)); }
+
+function litText(s: string): string { return isNumLit(s) ? s : quoted(s); }
+
 const EXC_SKIP_DEFER: string = "// @skip-raiser: 2026-10-19-raiser-defer-in-a-loop-is-skipped-by-continue-and-late-after-break";
 
 const EXC_BASE: string = "class ExcErr extends Error {\n" +
@@ -472,8 +476,6 @@ struct Worker {
 }
 
 function isTaskFam(f: Fam): boolean { return f == Fam.Spawn || f == Fam.Actor || f == Fam.Race; }
-
-function wireSafe(t: Ty): boolean { return t != Ty.Int64 && t != Ty.Uint64; }
 
 function joinSafe(t: Ty): boolean { return t == Ty.Int32 || t == Ty.Float64; }
 
@@ -4011,15 +4013,12 @@ class Gen {
 		return !this.asyncCtx || (this.localCount < ASYNC_NAME_LAST && this.entCount < ASYNC_NAME_LAST && this.loopCount < ASYNC_NAME_LAST);
 	}
 
-	payloadTys(): Ty[] {
-		const out: Ty[] = [];
-		for (const t of this.tys) { if (t != Ty.Int64 && t != Ty.Uint64) { out.push(t); } }
-		return out;
-	}
+	pickPayload(): Ty { return this.tys.length > 0 ? this.tys[this.rng.below(this.tys.length)] : Ty.Int32; }
 
-	pickPayload(): Ty {
-		const ok = this.payloadTys();
-		return ok.length > 0 ? ok[this.rng.below(ok.length)] : Ty.Int32;
+	akTy(k: AK): Ty {
+		if (k == AK.Cell || k == AK.Pt || k == AK.Arr) { return this.pickPayload(); }
+		if (k == AK.Wide) { return this.hasTy(Ty.Int64) && (!this.hasTy(Ty.Uint64) || this.rng.chance(50)) ? Ty.Int64 : Ty.Uint64; }
+		return Ty.Int32;
 	}
 
 	asyncKinds(): AK[] {
@@ -4028,11 +4027,12 @@ class Gen {
 		if (this.hasTy(Ty.Float64)) { out.push(AK.Float); }
 		out.push(AK.Str);
 		out.push(AK.Bool);
-		if (this.payloadTys().length > 0) {
+		if (this.tys.length > 0) {
 			out.push(AK.Cell);
 			out.push(AK.Pt);
 			out.push(AK.Arr);
 		}
+		if (this.hasTy(Ty.Int64) || this.hasTy(Ty.Uint64)) { out.push(AK.Wide); }
 		return out;
 	}
 
@@ -4065,12 +4065,14 @@ class Gen {
 			AK.Cell => "CellC" + tyTitle(t),
 			AK.Pt => "PtS" + tyTitle(t),
 			AK.Arr => tyName(t) + "[]",
+			AK.Wide => tyName(t),
 		};
 	}
 
 	akValue(k: AK, t: Ty, depth: int32, minItems: int32): string {
 		if (k == AK.Int) { return this.expr(Ty.Int32, depth); }
 		if (k == AK.Float) { return this.expr(Ty.Float64, depth); }
+		if (k == AK.Wide) { return this.expr(t, depth); }
 		if (k == AK.Str) { return this.strText(depth); }
 		if (k == AK.Bool) { return this.cond(depth); }
 		if (k == AK.Cell) {
@@ -4086,7 +4088,7 @@ class Gen {
 
 	akShow(k: AK, v: string): string {
 		return match (k) {
-			AK.Int | AK.Float => "String(" + v + ")",
+			AK.Int | AK.Float | AK.Wide => "String(" + v + ")",
 			AK.Str => v,
 			AK.Bool => "(" + v + " ? \"T\" : \"F\")",
 			AK.Cell => "String(" + v + ".v) + String(" + v + ".p.n.c)",
@@ -4105,8 +4107,8 @@ class Gen {
 		const T = this.akType(k, t);
 		let name = "";
 		let decl = "";
-		if (k == AK.Int || k == AK.Float) {
-			name = this.newLocal(k == AK.Int ? Ty.Int32 : Ty.Float64);
+		if (k == AK.Int || k == AK.Float || k == AK.Wide) {
+			name = this.newLocal(k == AK.Int ? Ty.Int32 : k == AK.Float ? Ty.Float64 : t);
 			decl = "let " + name + ": " + T + " = " + rhs + ";\n";
 		} else if (k == AK.Str) {
 			name = this.entName("s");
@@ -4132,12 +4134,14 @@ class Gen {
 	}
 
 	asyncExpr(t: Ty, depth: int32): string {
-		if (!this.awaitOk() || (t != Ty.Int32 && t != Ty.Float64)) { return ""; }
+		const wide = t == Ty.Int64 || t == Ty.Uint64;
+		if (!this.awaitOk() || (t != Ty.Int32 && t != Ty.Float64 && !wide)) { return ""; }
 		if (this.pickW(W.AsyncAwait, W.AsyncImmediate) == 1) {
 			if (!this.reserve(2 as int64)) { return ""; }
 			return "(await Promise.resolve(" + this.expr(t, depth + 1) + "))";
 		}
-		const fns = this.afnsOf(t == Ty.Int32 ? AK.Int : AK.Float);
+		const fns: Afn[] = [];
+		for (const a of this.afnsOf(t == Ty.Int32 ? AK.Int : t == Ty.Float64 ? AK.Float : AK.Wide)) { if (!wide || a.ty == t) { fns.push(a); } }
 		if (fns.length == 0) { return ""; }
 		const a = this.pickAfn(fns);
 		if (!this.reserve(a.cost + (2 as int64))) { return ""; }
@@ -4175,13 +4179,13 @@ class Gen {
 		if (!this.reserve(3 as int64)) { return ""; }
 		const kinds = this.asyncKinds();
 		const k = kinds[this.rng.below(kinds.length)];
-		const t = this.pickPayload();
+		const t = this.akTy(k);
 		return this.akBind(k, t, "await Promise.resolve(" + this.akValue(k, t, 0, 1) + ")", indent);
 	}
 
 	asyncInterleave(indent: string): string {
 		const fns = this.afnsPlain();
-		if (fns.length == 0 || !this.concurrent || this.atTop) { return ""; }
+		if (fns.length == 0 || !this.concurrent) { return ""; }
 		const n = this.rng.between(2, 3);
 		const picked: Afn[] = [];
 		let cost = (n + 3) as int64;
@@ -4212,7 +4216,7 @@ class Gen {
 	}
 
 	asyncAll(indent: string): string {
-		if (!this.concurrent || this.atTop) { return ""; }
+		if (!this.concurrent) { return ""; }
 		const joinable: Afn[] = [];
 		for (const a of this.afnsPlain()) { if (a.kind != AK.Bool) { joinable.push(a); } }
 		if (joinable.length == 0) { return ""; }
@@ -4252,7 +4256,7 @@ class Gen {
 			if (!this.reserve(4 as int64)) { return ""; }
 			const kinds = this.asyncKinds();
 			const k = kinds[this.rng.below(kinds.length)];
-			const t = this.pickPayload();
+			const t = this.akTy(k);
 			return indent + "try {\n" +
 				indent + "\tawait Promise.reject<" + this.akType(k, t) + ">(new Error(\"" + this.entName("j") + "\"));\n" +
 				this.note(indent + "\t", "\"no\"") +
@@ -4454,7 +4458,7 @@ class Gen {
 	asyncFn(): string {
 		const kinds = this.asyncKinds();
 		const k = kinds[this.rng.below(kinds.length)];
-		const t = k == AK.Cell || k == AK.Pt || k == AK.Arr ? this.pickPayload() : Ty.Int32;
+		const t = this.akTy(k);
 		const fails = this.rng.chance(30);
 		const form = this.pickW(W.AsyncFunc, W.AsyncMethod);
 		const index = this.asyncCount;
@@ -4544,12 +4548,7 @@ class Gen {
 
 	pickOf(tys: Ty[]): Ty { return tys[this.rng.below(tys.length)]; }
 
-	wireTys(): Ty[] {
-		const out: Ty[] = [];
-		for (const t of this.tys) { if (wireSafe(t)) { out.push(t); } }
-		if (out.length == 0) { out.push(Ty.Int32); }
-		return out;
-	}
+	wireTys(): Ty[] { return this.tys.length > 0 ? this.tys : [Ty.Int32]; }
 
 	joinTys(): Ty[] {
 		const out: Ty[] = [];
@@ -6831,7 +6830,7 @@ class Gen {
 		const lits = LIT_SETS[k].split(",");
 		const n = lits.length;
 		let union = "";
-		for (let j = 0; j < n; j++) { union += (j == 0 ? "" : " | ") + quoted(lits[j]); }
+		for (let j = 0; j < n; j++) { union += (j == 0 ? "" : " | ") + litText(lits[j]); }
 		let at = "function at" + name + "(i: int32): " + name + " {\n\tconst r = ixI(i, " + String(n) + ");\n";
 		let next = "function next" + name + "(d: " + name + "): " + name + " {\n";
 		let ifc = "function if" + name + "(d: " + name + ", a: int32, b: int32): int32 {\n";
@@ -6839,23 +6838,22 @@ class Gen {
 		for (let j = 0; j < n; j++) {
 			const pick = j % 2 == 0 ? "a" : "b";
 			if (j < n - 1) {
-				at += "\tif (r == " + String(j) + ") { return " + quoted(lits[j]) + "; }\n";
-				next += "\tif (d == " + quoted(lits[j]) + ") { return " + quoted(lits[j + 1]) + "; }\n";
-				ifc += "\tif (d " + (j % 2 == 0 ? "===" : "==") + " " + quoted(lits[j]) + ") { return " + pick + "; }\n";
+				at += "\tif (r == " + String(j) + ") { return " + litText(lits[j]) + "; }\n";
+				next += "\tif (d == " + litText(lits[j]) + ") { return " + litText(lits[j + 1]) + "; }\n";
+				ifc += "\tif (d " + (j % 2 == 0 ? "===" : "==") + " " + litText(lits[j]) + ") { return " + pick + "; }\n";
 			}
-			mx += "\t\t" + quoted(lits[j]) + " => " + pick + ",\n";
+			mx += "\t\t" + litText(lits[j]) + " => " + pick + ",\n";
 		}
-		at += "\treturn " + quoted(lits[n - 1]) + ";\n}\n";
-		next += "\treturn " + quoted(lits[0]) + ";\n}\n";
+		at += "\treturn " + litText(lits[n - 1]) + ";\n}\n";
+		next += "\treturn " + litText(lits[0]) + ";\n}\n";
 		ifc += "\treturn b;\n}\n";
 		mx += "\t};\n}\n";
-		const mw = "function mw" + name + "(d: " + name + ", a: int32, b: int32): int32 {\n\treturn match (d) {\n\t\t" + quoted(lits[0]) + " => a,\n\t\t_ => b,\n\t};\n}\n";
+		const mw = "function mw" + name + "(d: " + name + ", a: int32, b: int32): int32 {\n\treturn match (d) {\n\t\t" + litText(lits[0]) + " => a,\n\t\t_ => b,\n\t};\n}\n";
 		const cmp = "function cmp" + name + "(d: " + name + ", e: " + name + ", form: int32): int32 {\n" +
-			"\tif (form == 0) { if (d == " + quoted(lits[0]) + ") { return 1; } return 2; }\n" +
-			"\tif (form == 1) { if (d != " + quoted(lits[1]) + ") { return 3; } return 4; }\n" +
-			"\tif (form == 2) { if (d === " + quoted(lits[n - 1]) + ") { return 5; } return 6; }\n" +
-			"\tconst s: string = d;\n" +
-			"\tconst u: string = e;\n" +
+			"\tif (form == 0) { if (d == " + litText(lits[0]) + ") { return 1; } return 2; }\n" +
+			"\tif (form == 1) { if (d != " + litText(lits[1]) + ") { return 3; } return 4; }\n" +
+			"\tif (form == 2) { if (d === " + litText(lits[n - 1]) + ") { return 5; } return 6; }\n" +
+			(isNumLit(lits[0]) ? "\tconst s: string = String(d);\n\tconst u: string = String(e);\n" : "\tconst s: string = d;\n\tconst u: string = e;\n") +
 			"\tif (s == u) { return s.length; }\n" +
 			"\treturn u.length + 10;\n}\n";
 		this.useHelper(name, "type " + name + " = " + union + ";\n" + at + next + ifc + mx + mw + cmp);
@@ -7024,7 +7022,7 @@ class Gen {
 		if (vars.length > 0 && this.rng.chance(40)) { return this.pickEnt(vars).name; }
 		if (et.shape == EShape.Bitset) { return this.maskExpr(et, 0); }
 		if (et.shape == EShape.Numeric && this.rng.chance(40)) { return this.member(et); }
-		if (et.shape == EShape.Literal && this.rng.chance(30)) { return quoted(et.lits[this.rng.below(et.n)]); }
+		if (et.shape == EShape.Literal && this.rng.chance(30)) { return litText(et.lits[this.rng.below(et.n)]); }
 		const s = this.smallInt(depth);
 		if (et.shape == EShape.Numeric || et.shape == EShape.Literal) { return "at" + et.name + "(" + s + ")"; }
 		if (et.shape == EShape.Distinct) { return "ds" + et.name.slice(2, et.name.length) + "(" + s + ")"; }
@@ -7388,7 +7386,6 @@ class Gen {
 			return head + indent + tr + ".push(\"r\" + String(" + name + "(" + this.smallInt(0) + ", " + tr + ")));\n" + tail;
 		}
 		if (form == 1) {
-			this.directive(EXC_SKIP_FINALLY);
 			const kv = this.entName("n");
 			const iv = this.excLoopVar();
 			const jump = this.rng.chance(50) ? "continue" : "break";
@@ -7407,7 +7404,6 @@ class Gen {
 				indent + "}\n" + tail;
 		}
 		if (form == 2) {
-			this.directive(EXC_SKIP_FINALLY);
 			return head +
 				indent + "try {\n" +
 				i1 + "try {\n" +
@@ -7456,7 +7452,6 @@ class Gen {
 		if (form == 2) { handler = i2 + "if (" + xa + " instanceof ExcErr2) { throw " + xa + "; }\n" + handler; }
 		let fin = i1 + "} catch (" + xa + ") {\n" + handler + i1 + "}\n";
 		if (form == 3) {
-			this.directive(EXC_SKIP_FINALLY);
 			fin = i1 + "} catch (" + xa + ") {\n" + handler + i1 + "} finally {\n" + i2 + tr + ".push(\"F1\");\n" + i1 + "}\n";
 		}
 		const outerFin = this.rng.chance(30) ? " finally {\n" + i1 + tr + ".push(\"F2\");\n" + indent + "}" : "";
@@ -7689,7 +7684,6 @@ class Gen {
 		if (form == 2) { handler += i2 + "break;\n"; }
 		let fin = "";
 		if (form == 4) {
-			this.directive(EXC_SKIP_FINALLY);
 			fin = " finally {\n" + i2 + tr + ".push(\"F\");\n" + i1 + "}";
 		} else if (form == 0 && this.rng.chance(40)) {
 			fin = " finally {\n" + i2 + tr + ".push(\"F\");\n" + i1 + "}";
@@ -10054,11 +10048,20 @@ test "match arms hold identical or disjoint pattern sets" {
 	assert helpers == 60;
 }
 
+test "a literal union holds integer, negative and fractional members (inbox numeric-literal-type-annotation-unresolved, fixed)" {
+	const f = withWeights("fams=enum stmts=8 w.stmt.fam=80 w.expr.fam=40");
+	let ints = 0;
+	let mixed = 0;
+	for (let seed = 1; seed < 41; seed++) {
+		const text = generate(seed as uint64, f);
+		ints += countOf(text, "type Lt1 = 1 | 2 | 5;");
+		mixed += countOf(text, "type Lt2 = -1 | 0.5;");
+	}
+	assert ints > 0 && mixed > 0;
+}
+
 test "the enum family emits no shape a compiler card parks" {
 	const f = withWeights("fams=enum stmts=8 w.stmt.fam=80 w.expr.fam=40");
-	for (const set of LIT_SETS) {
-		for (const lit of set.split(",")) { assert lit.length > 0 && !"-0123456789".includes(lit.slice(0, 1)); }
-	}
 	for (let seed = 1; seed < 41; seed++) {
 		const text = generate(seed as uint64, f);
 		assert !text.contains("distinct string") && !text.contains("Map<Ds") && !text.contains("Set<Ds");
@@ -10138,18 +10141,6 @@ function excMarks(): string[] {
 	return out;
 }
 
-function excFinallyHazard(lines: string[]): boolean {
-	for (let i = 0; i < lines.length; i++) {
-		const t = lines[i].trim();
-		const next = i + 1 < lines.length ? lines[i + 1].trim() : "";
-		if (t.contains("throw new ExcErr(\"fin\", 1)")) { return true; }
-		if (t.startsWith("if (ixI(n") && (t.endsWith(", 4) == 1) { continue; }") || t.endsWith(", 4) == 1) { break; }"))) { return true; }
-		if (t == "continue;" && next.startsWith("} finally {")) { return true; }
-		if (t.startsWith("if (ixI(") && t.contains("{ throw ") && next.startsWith("} finally {")) { return true; }
-	}
-	return false;
-}
-
 function excDeferHazard(lines: string[]): boolean {
 	for (const line of lines) {
 		const t = line.trim();
@@ -10191,21 +10182,19 @@ test "a hazard shape carries its skip directive and every other shape carries no
 		for (let seed = 1; seed <= 60; seed++) {
 			const text = generate(seed as uint64, f);
 			const lines = text.split("\n");
-			const fin = excFinallyHazard(lines);
 			const def = excDeferHazard(lines);
-			assert text.contains(EXC_SKIP_FINALLY + "\n") == fin;
 			assert text.contains(EXC_SKIP_DEFER + "\n") == def;
 			assert !text.contains("@skip-js");
-			if (fin || def) {
+			if (def) {
 				hazardous++;
 				assert lines[1].startsWith("// @skip-raiser: ");
 				let at = 1;
 				while (lines[at].startsWith("// @")) { at++; }
-				assert at == 1 + (fin ? 1 : 0) + (def ? 1 : 0);
+				assert at == 2;
 				assert !lines[at].startsWith("//");
 			}
 		}
-		const only = keys[i] == "finally" || keys[i] == "rethrow" || keys[i] == "deferloop" || keys[i] == "recover";
+		const only = keys[i] == "deferloop";
 		if (only) { assert hazardous > 0 && hazardous < 60; }
 		if (!only && i < EXC_STMT_KEYS.length) { assert hazardous == 0; }
 	}
@@ -10213,9 +10202,9 @@ test "a hazard shape carries its skip directive and every other shape carries no
 
 test "a directive line is kept once" {
 	const g = new Gen();
-	g.directive(EXC_SKIP_FINALLY);
 	g.directive(EXC_SKIP_DEFER);
-	g.directive(EXC_SKIP_FINALLY);
+	g.directive(SKIP_RAISER_INLINE);
+	g.directive(EXC_SKIP_DEFER);
 	assert g.directives.length == 2;
 }
 
@@ -10592,15 +10581,16 @@ test "a task family keeps a task body to one printed summary after its compariso
 	}
 }
 
-test "a 64-bit type never crosses a future or an actor reply" {
+test "a 64-bit type crosses a future and an actor reply (inbox an-awaited-int64-from-an-async-function-is-cut-to-int32-on-c, fixed)" {
 	const f = withWeights("fams=spawn,actor,race types=int64,uint64,int8");
+	let futures = 0;
+	let replies = 0;
 	for (let seed = 1; seed < 41; seed++) {
 		const text = generate(seed as uint64, f);
-		assert !text.contains("Promise<int64>") && !text.contains("Promise<uint64>");
-		assert !text.contains("): int64 { return this.st") && !text.contains("): uint64 { return this.st");
-		assert !text.contains("st0: int64") && !text.contains("st0: uint64") && !text.contains("st1: int64") && !text.contains("st1: uint64");
-		assert !text.contains("function work0(p0: int64") && !text.contains("function work0(p0: uint64");
+		futures += countOf(text, "Promise<int64>") + countOf(text, "Promise<uint64>");
+		replies += countOf(text, "): int64 { return this.st") + countOf(text, "): uint64 { return this.st");
 	}
+	assert futures > 0 && replies > 0;
 }
 
 test "Promise.all joins only int32 and float64 results" {
@@ -11743,16 +11733,17 @@ test "an async Result function is declared as a function, an arrow and a method,
 	for (let i = 0; i < marks.length; i++) { assert seen[i]; }
 }
 
-test "a Result promise holds no 64-bit integer, and the Raiser has nothing to skip for it" {
+test "a Result promise holds a 64-bit integer, and the Raiser has nothing to skip for it (inbox an-awaited-int64-from-an-async-function-is-cut-to-int32-on-c, fixed)" {
 	const f = withWeights(ASYNC_RESULT_ONLY.replace("types=int32,uint8,float64", "types=int32,int64,uint64,float64") + "w.async.result=40 " + CORE_OFF);
 	let results = 0;
+	let wide = 0;
 	for (let seed = 1; seed < 41; seed++) {
 		const text = generate(seed as uint64, f);
-		assert !text.contains("Result<int64") && !text.contains("Result<uint64") && !text.contains("Result<CellCInt64") && !text.contains("Result<PtSUint64");
+		wide += countOf(text, "Result<int64") + countOf(text, "Result<uint64") + countOf(text, "Result<CellCInt64") + countOf(text, "Result<PtSUint64");
 		assert !text.contains("@skip");
 		results += countOf(text, " = await arRs");
 	}
-	assert results > 20;
+	assert results > 20 && wide > 0;
 }
 
 test "a zero async result weight keeps its functions and calls out of every program" {
@@ -11768,7 +11759,7 @@ test "a zero async result weight keeps its functions and calls out of every prog
 }
 
 test "an async result weight at 0 keeps the stream of the async family without the shape" {
-	const pins: int64[] = [56007945, 985272385, 974582668, 785827362, 398344360, 121206787];
+	const pins: int64[] = [520673630, 456981720, 565375334, 909701209, 337737951, 324186633];
 	const vectors = ["fams=async ", "fams=async types=int32,float64,uint8 stmts=8 w.stmt.fam=80 "];
 	const seeds: uint64[] = [3, 9, 14, 2, 5, 11];
 	for (let v = 0; v < vectors.length; v++) {
@@ -11816,14 +11807,16 @@ test "a directive is kept once however often its shape appears" {
 	assert g.directives.length == 2;
 }
 
-test "no 64-bit integer goes through a promise" {
+test "a 64-bit integer goes through a promise as a scalar and inside a payload (inbox an-awaited-int64-from-an-async-function-is-cut-to-int32-on-c, fixed)" {
 	const f = withWeights("fams=async types=int32,int64,uint64,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40");
+	const seen: string[] = [];
 	for (let seed = 1; seed < 41; seed++) {
 		const text = generate(seed as uint64, f);
-		for (const n of ["int64", "uint64", "CellCInt64", "CellCUint64", "PtSInt64", "PtSUint64"]) {
-			assert !text.contains("Promise<" + n) && !text.contains("reject<" + n);
+		for (const n of ["int64>", "uint64>", "CellCInt64>", "CellCUint64>", "PtSInt64>", "PtSUint64>"]) {
+			if (text.contains("Promise<" + n) && !seen.includes(n)) { seen.push(n); }
 		}
 	}
+	assert seen.length == 6;
 }
 
 test "Promise.all is never emitted over a boolean result" {
@@ -11879,21 +11872,19 @@ test "Promise.all joins promises of one exact type" {
 	assert joined > 20;
 }
 
-test "calls started together and Promise.all stay out of module level and of ordered programs" {
+test "calls started together and Promise.all reach module level and stay out of ordered programs (inbox await-of-a-settled-promise-in-a-sync-context, fixed)" {
 	for (let seed = 1; seed < 41; seed++) {
 		for (const top of [true, false]) {
-			const g = new Gen();
-			g.rng = Rng.seeded(seed as uint64);
-			g.tys = [Ty.Int32];
-			g.costCap = FN_COST_CAP;
-			g.concurrent = top == false;
-			g.atTop = top;
-			g.afns = [{ name: "avInt0", kind: AK.Int, ty: Ty.Int32, fails: false, cost: 1 as int64 },
-				{ name: "avInt1", kind: AK.Int, ty: Ty.Int32, fails: false, cost: 1 as int64 }];
-			if (top) {
-				assert g.asyncInterleave("") == "" && g.asyncAll("") == "";
-			} else {
-				assert g.asyncInterleave("") != "" && g.asyncAll("") != "";
+			for (const concurrent of [true, false]) {
+				const g = new Gen();
+				g.rng = Rng.seeded(seed as uint64);
+				g.tys = [Ty.Int32];
+				g.costCap = FN_COST_CAP;
+				g.concurrent = concurrent;
+				g.atTop = top;
+				g.afns = [{ name: "avInt0", kind: AK.Int, ty: Ty.Int32, fails: false, cost: 1 as int64 },
+					{ name: "avInt1", kind: AK.Int, ty: Ty.Int32, fails: false, cost: 1 as int64 }];
+				assert (g.asyncInterleave("") != "" && g.asyncAll("") != "") == concurrent;
 			}
 		}
 	}
@@ -12239,9 +12230,9 @@ function digest(text: string): int64 {
 test "core weights at 0 keep the stream of the generator without core" {
 	const vectors = ["", "fams=none", "fams=closure", "fams=union", "fams=generic", "fams=agg", "fams=coll", "fams=str", "fams=own", "fams=iter", "types=int8,uint32,float64", "types=int64 fams=none", "types=float64,int32 depth=2", "types=int32 stmts=12 expr=4 trips=16"];
 	const pins: int64[] = [
-		777384880, 838568104, 87231079, 497882655, 686987382, 514565319, 391752332, 107266103, 723415936, 861497373,
+		777384880, 434225743, 87231079, 497882655, 686987382, 514565319, 391752332, 107266103, 723415936, 861497373,
 		412924459, 288809904, 959089982, 370177479, 603192299, 217576910, 718724068, 606921276, 651104178, 2913754,
-		553907640, 178907495, 247101655, 884432220, 429445262, 460525096, 207847309, 349738871,
+		553907640, 178907495, 247101655, 884432220, 429445262, 460525096, 45689216, 349738871,
 	];
 	for (let v = 0; v < vectors.length; v++) {
 		const f = withWeights((vectors[v] == "" ? "" : vectors[v] + " ") + CORE_OFF + " " + TYPE_OFF);
@@ -12619,8 +12610,8 @@ const GAP_VECTORS = [
 
 test "the gap weights at 0 keep the stream of the generator without them" {
 	const pins: int64[] = [
-		133744062, 894288676, 709567793, 430927381, 467908320, 469491598, 943975115, 622102701,
-		449176796, 656840684, 649565891, 801577426, 546248524, 513190738, 215550540, 771418514,
+		133744062, 894288676, 709567793, 430927381, 467908320, 469491598, 585634564, 154504915,
+		449176796, 656840684, 649565891, 801577426, 546248524, 513190738, 420956683, 771418514,
 	];
 	for (let v = 0; v < GAP_VECTORS.length; v++) {
 		const f = withWeights(GAP_VECTORS[v] + " " + TYPE_OFF + " " + GAP_OFF + " w.meta.spread=0 w.async.result=0");
