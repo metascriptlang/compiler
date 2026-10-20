@@ -431,6 +431,23 @@ function writeRef(vm: RaiserVM, abs: number, handle: int64): void {
 	releaseHandle(vm, old);
 }
 
+function releaseFrameRefs(vm: RaiserVM, base: number, count: number): void {
+	const refs = vm.regs.refs;
+	for (let r = base; r < base + count; r += 1) {
+		const h = refs[r];
+		if (h != 0) {
+			refs[r] = 0;
+			releaseHandle(vm, h);
+		}
+	}
+}
+
+function setException(vm: RaiserVM, value: RaiserValue): void {
+	vmIncref(vm, value);
+	vmDecref(vm, vm.currentException);
+	copyValueInto(vm.currentException, value);
+}
+
 // Writes a plain value (or a box) into register `abs` of file `cls` in that register's class: a Dyn
 // register gets a box, any other the value a box holds.
 function writeAbs(vm: RaiserVM, cls: int32, abs: number, value: RaiserValue): void {
@@ -950,6 +967,8 @@ function popSafePoint(vm: RaiserVM): number {
 // Pop one call frame without delivering a return value: the call is being
 // abandoned by an exception.
 function unwindFrame(vm: RaiserVM): void {
+	const func = getModuleFunc(vm.mod, vm.funcIdx);
+	releaseFrameRefs(vm, vm.refBase + func.paramRefs, func.refRegs - func.paramRefs);
 	const depth = vm.callStack.depth - 1;
 	const frame = vm.callStack.items[depth];
 	vm.callStack.depth = depth;
@@ -1083,15 +1102,15 @@ function vmTakeMacroError(vm: RaiserVM, thrown: RaiserValue): boolean {
 function vmHandleThrow(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	const thrown = getDyn(vm, ia);
 	if (vmTakeMacroError(vm, thrown)) return;
-	copyValueInto(vm.currentException, thrown);
+	setException(vm, thrown);
 	unwindStep(vm);
 }
 
 // Re-raise a failed future in its reader — the VM's msFutureRaiseFrom.
 function raiseFromFuture(vm: RaiserVM, f: RaiserFuture): void {
 	f.errorObserved = true;
-	if (f.record >= 0) copyValueInto(vm.currentException, moduleErrorForReader(vm, f.record));
-	else copyValueInto(vm.currentException, f.error.kind == RaiserValueKind.Nil ? heapAllocString(vm.arrayHeap, f.errorMsg) : copyGraph(f.valueArrayHeap, f.valueObjectHeap, vm.arrayHeap, vm.objectHeap, f.error));
+	if (f.record >= 0) setException(vm, moduleErrorForReader(vm, f.record));
+	else setException(vm, f.error.kind == RaiserValueKind.Nil ? heapAllocString(vm.arrayHeap, f.errorMsg) : copyGraph(f.valueArrayHeap, f.valueObjectHeap, vm.arrayHeap, vm.objectHeap, f.error));
 	unwindStep(vm);
 }
 
@@ -1159,9 +1178,11 @@ function strandFinish(vm: RaiserVM, value: RaiserValue): boolean {
 function vmLedger(vm: RaiserVM, held: RaiserStrand[], extra: RaiserValue[], where: string): void {
 	if (!vm.orc || vm.error != "") return;
 	const roots: RaiserValue[] = [];
+	roots.push(vm.currentException);
 	for (const s of held) {
 		for (const h of s.regs.refs) if (h != 0) roots.push(handleValue(h));
 		if (s.globals != held[0].globals) for (const g of s.globals) roots.push(g);
+		if (s.currentException != vm.currentException) roots.push(s.currentException);
 	}
 	for (const g of held[0].globals) roots.push(g);
 	for (const e of extra) roots.push(e);
@@ -1943,6 +1964,7 @@ function runStrandSlice(vm: RaiserVM): void {
 						} else {
 							words[frame.wordBase + (dest >> 3)] = words[wb + (ia >> 3)];
 						}
+						if (func.refRegs > func.paramRefs) releaseFrameRefs(vm, rb + func.paramRefs, func.refRegs - func.paramRefs);
 						vm.callStack.depth = depth - 1;
 						wb = frame.wordBase;
 						rb = frame.refBase;
@@ -2551,7 +2573,7 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			const kind = vm.regs.words[absOf(vm, ia)];
 			const held = getDyn(vm, operandTagged(ib, RaiserRegClass.Dyn));
 			if (kind == FINALLY_RAISE) {
-				copyValueInto(vm.currentException, held);
+				setException(vm, held);
 				unwindStep(vm);
 			} else if (kind == FINALLY_RETURN) {
 				vm.ip = held.intVal as int32;
@@ -2675,17 +2697,16 @@ function vmHandleRet(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 
 	const returned = getReg(vm, ia);
 	const frame = vm.callStack.items[depth - 1];
-
-	// No blanket frame-exit decref: the register files are reused across calls, so a callee
-	// register may hold a stale handle from a prior frame that this frame never owned —
-	// decref-ing the whole range over-decrefs it (UAF). Reclamation instead happens lazily
-	// through the counted store when the register is next written (frame reuse).
+	const callee = getModuleFunc(vm.mod, vm.funcIdx);
+	const calleeOwnBase = vm.refBase + callee.paramRefs;
+	const calleeOwn = callee.refRegs - callee.paramRefs;
 
 	vm.funcIdx = frame.funcIdx;
 	vm.wordBase = frame.wordBase;
 	vm.refBase = frame.refBase;
 	vm.ip = frame.returnIp;
 	setRegConform(vm, frame.returnDest, returned);
+	releaseFrameRefs(vm, calleeOwnBase, calleeOwn);
 }
 
 function vmHandleCallIndirect(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
@@ -3252,7 +3273,7 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 			vmError(vm, raised);
 			return;
 		}
-		copyValueInto(vm.currentException, heapAllocString(vm.arrayHeap, raised));
+		setException(vm, heapAllocString(vm.arrayHeap, raised));
 		unwindStep(vm);
 		return;
 	}
@@ -5805,6 +5826,16 @@ test "ledger: a spawned strand that drops everything ends clean and a leak in it
 	rcIncref(own.arrayHeap, own.objectHeap, heapAllocString(own.arrayHeap, "leaked"));
 	execLoop(leaky);
 	assert leaky.error == "internal: 1 string items live after strand end", leaky.error;
+}
+
+test "ledger: a returning call releases what its frame still holds, leaving only the caller's boxed result" {
+	const body = dropsEverything.slice(0, dropsEverything.length - 1);
+	body.push(raiserABC(RaiserOpcode.Ret, 7, 0, 0));
+	const main = createRaiserFunction("main", [raiserABC(RaiserOpcode.Call, 0, 1, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)], [], 0, 0, 1);
+	const worker = createRaiserFunction("worker", body, dropsEverythingConsts, 0, 0, 8);
+	const vm = execModule(createRaiserModule("m", [main, worker], 0), "orc");
+	assert vm.error == "", vm.error;
+	assert heapStringLive(vm.arrayHeap) == 0 && vmLiveCount(vm) == 0 && heapBoxLive(vm.arrayHeap) == 1, `${heapStringLive(vm.arrayHeap)} ${vmLiveCount(vm)} ${heapBoxLive(vm.arrayHeap)}`;
 }
 
 test "ledger: ArraySetLen releases the strings it truncates" {

@@ -1,6 +1,6 @@
 // Raiser VM — Module and Function structures
 
-import { RaiserInstruction, RaiserOpcode, RaiserRegClass, raiserABC, raiserABx, packInstruction } from "./bytecode";
+import { RaiserInstruction, RaiserOpcode, RaiserRegClass, raiserABC, raiserABx, packInstruction, inRefFile } from "./bytecode";
 import { RaiserValue, RaiserValueKind, RaiserClassType, raiserInt, constStringText } from "./value";
 import { RaiserCopyPlan } from "./valueCopy";
 import { layoutRegisters } from "./regs";
@@ -19,6 +19,7 @@ export interface RaiserFunction {
 	localsCount: number;
 	wordRegs: int32;      // registers of the word file the frame holds
 	refRegs: int32;       // registers of the ref file the frame holds
+	paramRefs: int32;     // the leading ref registers that hold its parameters, which are the caller's argument registers
 	regClasses: RaiserRegClass[];   // class of each register in the numbering the function was built with
 	regOps: int32[];      // the tagged operand of each of those registers
 	blocks: int64[];      // site table: word start, ref start, argument count, class signature, then a tagged operand per argument
@@ -72,7 +73,9 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 	}
 	const names: string[] = [];
 	for (const c of constants) names.push(c.kind == RaiserValueKind.String ? constStringText(c) : "");
-	return { name, code: layout.code, packed, lines, fieldCache, constants, names, arity, localsCount, wordRegs: layout.wordRegs, refRegs: layout.refRegs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: layout.sigs, copyPlans: [], classTypes: [] };
+	let paramRefs: int32 = 0;
+	for (let r = 0; r < arity && r < layout.regOps.length; r += 1) if (inRefFile((layout.regOps[r] & 7) as RaiserRegClass)) paramRefs += 1;
+	return { name, code: layout.code, packed, lines, fieldCache, constants, names, arity, localsCount, wordRegs: layout.wordRegs, refRegs: layout.refRegs, paramRefs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: layout.sigs, copyPlans: [], classTypes: [] };
 }
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {
