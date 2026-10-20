@@ -110,6 +110,7 @@ function monoTypeKeyBody(t: Type): string {
 		TypeKind.Struct | TypeKind.Enum => {
 			if (t.typeName == "") return "anon" + hashToBase36(monoStructuralKey(t));
 			if (isMaybeType(t) && t.typeReturn != null && representedPayload(t.typeReturn) != t.typeReturn) return "Maybe_" + monoTypeKey(t.typeReturn);
+			if (t.typeFlags.has(TypeFlag.DuVariant)) return t.typeName + "_" + hashToBase36(nominalTypeKey(t));
 			const owner = monoOwnerPath(t);
 			const name = monoDeclaredName(t);
 			if (owner != "") return name + "_" + hashToBase36(owner);

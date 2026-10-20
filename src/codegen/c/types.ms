@@ -17,6 +17,7 @@ import { CheckerContext, newSym, GcMode, addError, createContext } from "../../c
 import { cStringLiteral, escapeCString } from "./literals";
 
 export function resolvedTypeCName(t: Type, hasCheckerCtx: boolean): string {
+	if (t.sym != null && t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(t.sym, t.typeName) + "_" + hashToBase36(nominalTypeKey(t));
 	if (t.sym != null) return mangledTypeName(t.sym, t.typeName);
 	if (hasCheckerCtx && t.typeName != "" && isNominalKind(t.kind)) nominalTypeKey(t);
 	return mangledTypeName(null, t.typeName);
@@ -47,7 +48,6 @@ export function hookBaseCName(typeName: string, t: Type | null, cc: Readonly<Che
 	if (typeName.indexOf("__", 0) >= 0) return typeName;
 	const named = t != null && t.typeName == typeName;
 	if (named && t.typeInst != null) return monoInstanceName(t.typeInst);
-	if (named && t.sym != null) return mangledTypeName(t.sym, typeName);
 	if (named) return resolvedTypeCName(t, cc != null);
 	return typeName;
 }
@@ -513,9 +513,8 @@ export function annotationToC(annotation: string): string {
 // Generates a unique string key for a Type (used for cache lookups).
 
 function structKeyIdentity(t: Type): string {
-	if (t.sym != null) return mangledTypeName(t.sym, t.typeName);
-	nominalTypeKey(t);
-	return mangledTypeName(null, t.typeName);
+	if (t.sym != null && !t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(t.sym, t.typeName);
+	return mangledTypeName(null, nominalTypeKey(t));
 }
 
 export function anonUnionCName(t: Type): string {

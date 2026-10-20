@@ -2993,10 +2993,21 @@ export function hasTypeIdentity(t: Type): boolean {
 
 export function nominalTypeKey(t: Type): string {
 	const sym = t.sym;
-	if (sym != null) return `${sym.modulePath}:${sym.name}:${sym.disamb}`;
+	if (sym != null) {
+		const declared = `${sym.modulePath}:${sym.name}:${sym.disamb}`;
+		return t.typeFlags.has(TypeFlag.DuVariant) ? duVariantKey(declared, t) : declared;
+	}
 	if (t.typeInst != null) return typeKey(t.typeInst);
 	if (!hasTypeIdentity(t)) throw new Error(`internal: named type '${t.typeName}' (kind ${t.kind as number}) has no declaring symbol`);
 	return t.typeName;
+}
+
+function duVariantKey(declared: string, t: Type): string {
+	let k = declared;
+	for (let i = 0; i < t.typeChildren.length; i += 1) {
+		k = k + "|" + (i < t.typeNames.length ? t.typeNames[i] : "") + ":" + typeKey(t.typeChildren[i]);
+	}
+	return k;
 }
 
 export function isNominalKind(k: TypeKind): boolean {
@@ -3702,7 +3713,10 @@ function substituteStruct(t: Type, paramName: string, concrete: Type, seen: Curs
 	// createStruct recomputes HasAsgn from substituted children; DuVariant is an
 	// identity bit (set at createUnion) that must survive the rebuild or mono'd
 	// generic-union payloads lose their DU ownership marker.
-	if (t.typeFlags.has(TypeFlag.DuVariant)) result.typeFlags = result.typeFlags.incl(TypeFlag.DuVariant);
+	if (t.typeFlags.has(TypeFlag.DuVariant)) {
+		result.typeFlags = result.typeFlags.incl(TypeFlag.DuVariant);
+		result.sym = t.sym;
+	}
 	if (t.typeFlags.has(TypeFlag.Spelled)) result.typeFlags = result.typeFlags.incl(TypeFlag.Spelled);
 	return result;
 }
@@ -4008,7 +4022,10 @@ function substituteStructAll(t: Type, names: string[], concretes: Type[], seen: 
 	const result = createStruct(t.typeName, newNames, newFieldTypes, isStructType(t));
 	result.typeReturn = t.typeReturn;
 	result.typeExtra = t.typeExtra;
-	if (t.typeFlags.has(TypeFlag.DuVariant)) result.typeFlags = result.typeFlags.incl(TypeFlag.DuVariant);
+	if (t.typeFlags.has(TypeFlag.DuVariant)) {
+		result.typeFlags = result.typeFlags.incl(TypeFlag.DuVariant);
+		result.sym = t.sym;
+	}
 	if (t.typeFlags.has(TypeFlag.Spelled)) result.typeFlags = result.typeFlags.incl(TypeFlag.Spelled);
 	return result;
 }

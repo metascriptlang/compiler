@@ -438,7 +438,10 @@ function sameInstanceTypeBody(a: Type, b: Type): boolean {
 	}
 	if (isMaybeType(a) && isMaybeType(b)) return sameInstanceType(a.typeReturn, b.typeReturn);
 	if (a.kind == TypeKind.Struct || a.kind == TypeKind.Enum || a.kind == TypeKind.Distinct) {
-		if (a.sym != null || b.sym != null) return a.sym != null && a.sym == b.sym;
+		if (a.sym != null || b.sym != null) {
+			if (a.sym == null || a.sym != b.sym) return false;
+			return !a.typeFlags.has(TypeFlag.DuVariant) || sameInstanceArgs(a.typeChildren, b.typeChildren);
+		}
 		if (a.typeFlags.has(TypeFlag.Spelled)) return a.typeName == b.typeName;
 		if (a.typeName != "" || b.typeName != "") return false;
 	}
