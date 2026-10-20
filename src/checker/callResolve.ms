@@ -498,6 +498,12 @@ function parentClassSym(classSym: Symbol): Symbol {
 	return null as unknown as Symbol;
 }
 
+function declaredUnionOfNarrowed(obj: Node): Type | null {
+	if (obj.resolvedSym == null || obj.resolvedSym.symbolType == null || obj.resolvedSym.symbolType == obj.nodeType) return null;
+	const declared = peelToStructOrUnion(obj.resolvedSym.symbolType);
+	return declared != null && declared.kind == TypeKind.Union ? obj.resolvedSym.symbolType : null;
+}
+
 function staticExtsOwnedBy(ctx: CheckerContext, exts: ExtensionMethod[], owner: Symbol, objType: Type | null): ExtensionMethod[] {
 	for (const e of exts) {
 		if (e.isStatic && e.sym != null) ensureShaped(e.sym, ctx);
@@ -4701,7 +4707,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	const d = node.data as MemberExprData;
 	checkInTypeSlot(ctx, d.object);
 	const declaredUnion = d.object.nodeType != null && d.object.nodeType.kind != TypeKind.Union ? declaredTagUnionOf(d.object) : null;
-	if (declaredUnion != null && !(isDiscriminatedUnion(declaredUnion) && getDiscriminantName(declaredUnion) == d.property)) {
+	if (declaredUnion != null && unionVariantHasProperty(declaredUnion, d.property)
+			&& !(isDiscriminatedUnion(declaredUnion) && getDiscriminantName(declaredUnion) == d.property)) {
 		const projected = narrowUnionToVariant(d.object, d.object.nodeType!);
 		if (projected != null as unknown as Node) d.object = projected;
 	}
@@ -4950,7 +4957,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				// readable: variant structs do not re-declare it (it lives in the
 				// union's metadata at a fixed offset), and disc re-reads inside a
 				// narrowed block were always legal.
-				if (getDiscriminantName(resolvedObjType) != d.property) {
+				if (getDiscriminantName(resolvedObjType) != d.property && unionVariantHasProperty(resolvedObjType, d.property)) {
 					addError(ctx, `Property '${d.property}' does not exist on type '${typeDisplayName(narrowedObjType)}'. Available: ${pinnedVariant.typeNames.join(", ")}`,
 						node.location.line, node.location.column);
 					return propType;
@@ -5195,6 +5202,14 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		const recvLookupType = withoutReadonlyView(objType);
 		let ext = findFirstMatchingExt(allByName, recvLookupType);
 		let extObjType = recvLookupType;
+		const narrowedDeclared = ext == null ? declaredUnionOfNarrowed(d.object) : null;
+		if (narrowedDeclared != null) {
+			ext = findFirstMatchingExt(allByName, narrowedDeclared);
+			if (ext != null) {
+				extObjType = narrowedDeclared;
+				d.object.nodeType = narrowedDeclared;
+			}
+		}
 		// reference array: UFCS methods (push/slice/...) are declared on the value
 		// Array receiver; a Ref<Array> must deref before the lookup matches. Insert a
 		// HiddenDeref so codegen sees through the Ref, and unify generics on the
