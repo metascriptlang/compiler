@@ -551,12 +551,30 @@ function refuseDistinctComparison(ctx: CheckerContext, node: Node, op: string, p
 		addError(ctx, `operator '${op}' cannot compare '${left}' with '${right}': a distinct type compares only with itself — convert one side with \`as\``, at.line, at.column);
 		return;
 	}
+	if (hiddenFromInstance(ctx, primary, leftType)) {
+		addError(ctx, `operator '${op}' cannot be applied to type '${left}' here: its \`${primary}\` is not exported, and a generic routine sees only exported operators — export it`, at.line, at.column);
+		return;
+	}
 	const base = distinctBody(skipModifier(leftType));
 	const follows = primary != op && op != "===" ? ` (\`${op}\` follows from \`${primary}\`)` : "";
 	const fix = base != null && builtinComparisonHolds(ctx, primary, base, base)
 		? `add \`@delegate function \`${primary}\`(this a: ${left}, b: ${left}): boolean;\` to compare as '${typeDisplayName(base)}'`
 		: `declare \`function \`${primary}\`(this a: ${left}, b: ${left}): boolean { … }\``;
 	addError(ctx, `operator '${op}' cannot be applied to type '${left}': a distinct type does not inherit the comparisons of its base; ${fix}${follows}`, at.line, at.column);
+}
+
+function hiddenFromInstance(ctx: CheckerContext, op: string, operand: Type): boolean {
+	if (ctx.instantiatingCtx == null) return false;
+	const set = lookupSymbol(ctx.instantiatingCtx.table, op);
+	if (set == null) return false;
+	const cands: Symbol[] = [set];
+	for (const o of set.overloads) cands.push(o);
+	for (const cand of cands) {
+		const ft = cand.symbolType;
+		if (ft == null || ft.kind != TypeKind.Function || ft.typeChildren.length != 2 || hasFlag(cand, SymbolFlag.Exported)) continue;
+		if (sameType(ft.typeChildren[0], operand) && sameType(ft.typeChildren[1], operand)) return true;
+	}
+	return false;
 }
 
 function brandBase(t: Type | null): Type | null {
@@ -3542,7 +3560,7 @@ export function settleYields(ctx: CheckerContext, name: string, at: SourceLocati
 	return createIterator(elem);
 }
 
-import { makeSymbol, hasFlag } from "./symbol";
+import { makeSymbol, hasFlag, lookupSymbol } from "./symbol";
 
 function declaredStruct(name: string, names: string[], types: Type[], isValue: boolean): Type {
 	const t = createStruct(name, names, types, isValue);
