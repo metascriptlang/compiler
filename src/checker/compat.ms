@@ -1099,7 +1099,10 @@ function answersTo(source: Type, fields: string[], name: string): boolean {
 // An instantiated class body has no class of its own; its instance relates it.
 function classOutsideLineage(source: Type, target: Type): boolean {
 	const targetClass = classBodyOf(target);
-	return targetClass != null && classBodyOf(source) != null && !derivesFromClass(source, targetClass.sym!);
+	if (targetClass == null) return false;
+	if (classBodyOf(source) != null) return !derivesFromClass(source, targetClass.sym!);
+	const shape = unwrapRefBase(source);
+	return (shape.kind == TypeKind.Struct && !isMaybeType(shape)) || shape.kind == TypeKind.GenericInstance;
 }
 
 function missingRoutine(source: Type, target: Type): string {
@@ -1215,6 +1218,10 @@ function classLineageHint(source: Type | null, targetIn: Type | null): string {
 	if (sourceClass != null && derivesFromClass(target, sourceClass.sym!)) {
 		return " (not every " + from + " is a " + to + ": test it with `instanceof " + to
 			+ "`, or convert it with `as " + to + "`, which is checked at run time)";
+	}
+	if (sourceClass == null) {
+		const literal = isAnonLiteralName(unwrapRefBase(source).typeName) ? "annotate the literal `const x: " + to + " = { ... }`, or " : "";
+		return " (" + from + " is not a " + to + ": classes convert only along `extends`; " + literal + "type the slot with an interface)";
 	}
 	return " (" + from + " is not a " + to + ": classes convert only along `extends`; make " + from
 		+ " extend " + to + ", or type the slot with an interface)";
