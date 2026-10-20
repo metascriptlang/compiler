@@ -493,11 +493,12 @@ local_verdict() {
 }
 
 remote_verdict() {
-  local f="${MSC_REMOTE_VERDICTS:-$HOME/metascript/.wt/verdicts}/$1" w=$2 old=$3 new=$4 base
+  local f="${MSC_REMOTE_VERDICTS:-$HOME/metascript/.wt/verdicts}/$1" w=$2 old=$3 new=$4 base checked
   [ -f "$f" ] && [ "$(sed -n 's/^result=//p' "$f")" = GREEN ] || return 1
   base=$(sed -n 's/^base=//p' "$f")
   git -C "$w" merge-base --is-ancestor "$base" "$old" 2>/dev/null || return 1
-  [ "$(git -C "$w" diff -U0 --no-renames "$old" "$new" | git patch-id --stable | cut -d' ' -f1)" = "$(sed -n 's/^patch=//p' "$f")" ] || return 1
+  checked=$(sed -n 's/^patch_verbatim=//p' "$f")
+  [ -n "$checked" ] && [ "$(git -C "$w" diff -U0 --no-renames "$old" "$new" | git patch-id --verbatim | cut -d' ' -f1)" = "$checked" ] || return 1
   printf '%s on %s' "$(sed -n 's/^host=//p' "$f")" "$(git -C "$w" rev-parse --short "$base")"
 }
 

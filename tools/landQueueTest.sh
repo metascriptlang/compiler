@@ -79,8 +79,9 @@ mkwt() {
 
 remotegreen() {
   mkdir -p "$MSC_REMOTE_VERDICTS"
-  printf 'patch=%s\nbase=%s\nhost=test-host\nresult=GREEN\n' \
-    "$(git -C "$R" diff -U0 --no-renames main "wt/$1" | git patch-id --stable | cut -d' ' -f1)" "$(git -C "$R" rev-parse main)" >"$MSC_REMOTE_VERDICTS/$1"
+  printf 'patch=%s\npatch_verbatim=%s\nbase=%s\nhost=test-host\nresult=GREEN\n' \
+    "$(git -C "$R" diff -U0 --no-renames main "wt/$1" | git patch-id --stable | cut -d' ' -f1)" \
+    "$(git -C "$R" diff -U0 --no-renames main "wt/$1" | git patch-id --verbatim | cut -d' ' -f1)" "$(git -C "$R" rev-parse main)" >"$MSC_REMOTE_VERDICTS/$1"
 }
 setverdict() { printf '%s\n' "$2" >"$T/ws/.wt/wt-$1/verdict"; git -C "$T/ws/.wt/wt-$1" commit -qam "verdict $2"; }
 sbwt() { env -u WT_CWD -u CLAUDE_PROJECT_DIR bash "$WT" "$@"; }
@@ -393,6 +394,40 @@ rr=$(waitfor history)
 check "S27 fixed slice lands" '[ "$rr" = 0 ] && onmain history.txt'
 check "S27 GREEN preserves all four attempts" '[ "$(grep -c "^===== " "$MSC_LAND_QUEUE/history.land.log")" = 4 ]'
 check "S27 result state is current, not historical" '[ -e "$MSC_LAND_QUEUE/history.done" ] && [ ! -e "$MSC_LAND_QUEUE/history.red" ] && [ "$(cat "$T/ctl/count.history")" = 4 ]'
+
+for variant in legacy empty verbatim-only space tab space-red; do
+  echo "== S28 remote verdict keeps significant whitespace ($variant)"
+  setup; verdict=green; [ "$variant" != space-red ] || verdict=red
+  mkwt rv "$verdict"
+  printf 'console.log("ab")\n' >"$T/ws/.wt/wt-rv/value.ms"
+  git -C "$T/ws/.wt/wt-rv" add value.ms; git -C "$T/ws/.wt/wt-rv" commit -qm "add literal"
+  remotegreen rv
+  case "$variant" in
+    legacy|verbatim-only)
+      field=patch_verbatim; [ "$variant" != verbatim-only ] || field=patch
+      grep -v "^$field=" "$MSC_REMOTE_VERDICTS/rv" >"$MSC_REMOTE_VERDICTS/rv.tmp"
+      mv "$MSC_REMOTE_VERDICTS/rv.tmp" "$MSC_REMOTE_VERDICTS/rv" ;;
+    empty)
+      sed -i.bak 's/^patch_verbatim=.*/patch_verbatim=/' "$MSC_REMOTE_VERDICTS/rv"
+      rm -f "$MSC_REMOTE_VERDICTS/rv.bak" ;;
+    space|tab|space-red)
+      whitespace=' '; [ "$variant" != tab ] || whitespace=$'\t'
+      printf 'console.log("a%sb")\n' "$whitespace" >"$T/ws/.wt/wt-rv/value.ms"
+      git -C "$T/ws/.wt/wt-rv" commit -qam "change literal whitespace" ;;
+  esac
+  enqueue rv
+  rr=$(waitfor rv 60)
+  if [ "$variant" = space-red ]; then
+    check "S28 changed whitespace cannot bypass a RED gate" '[ "$rr" = 1 ] && ! onmain value.ms'
+  else
+    check "S28 $variant landed" '[ "$rr" = 0 ] && onmain value.ms'
+  fi
+  if [ "$variant" = verbatim-only ]; then
+    check "S28 verbatim alone is sufficient" '! grep -q "^wt/rv " "$T/ctl/gates.log" 2>/dev/null'
+  else
+    check "S28 $variant cannot reuse the remote GREEN" '[ "$(grep -c "^wt/rv " "$T/ctl/gates.log" 2>/dev/null)" = 1 ]'
+  fi
+done
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
