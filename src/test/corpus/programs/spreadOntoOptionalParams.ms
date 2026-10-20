@@ -15,6 +15,11 @@
 // @stdout: tuple-optional=1 2 3|
 // @stdout: tuple-mixed=k4|
 // @stdout: tuple-new=2x tuple-rest=7|
+// @stdout: generic=1 2 null|a y z|1 null null|
+// @stdout: overload=n 1 2|s x y z|n 1 null|
+// @stdout: method-overload=n 1 2|
+// @stdout: ctor=1 y z|1 null d|
+// @stdout: rest=1 null []|1 2 []|1 5 [6,7,8]|calls=2|
 // @stdout: loop=< null z;< a z;< b c;< d e;|
 // note: a spread argument that lands only on optional parameters fills each one from the array in order, evaluates the array once, leaves a missing element to the parameter's absent value or default and drops the elements past the last parameter; a tuple spread expands into one argument per element, so it can also fill required parameters. Same output on every lane.
 function one(a: number, b?: number): string { return `${a} ${b}`; }
@@ -42,6 +47,25 @@ function sumRest(first: number, ...rest: number[]): number {
 	let total = first;
 	for (const r of rest) total += r;
 	return total;
+}
+
+function gen<T>(a: T, b?: T, c?: T): string { return `${a} ${b} ${c}`; }
+
+function ov(a: number, b?: number): string { return `n ${a} ${b}`; }
+function ov(a: string, b?: string, c?: string): string { return `s ${a} ${b} ${c}`; }
+
+class Hi {
+	hi(a: number, b?: number): string { return `n ${a} ${b}`; }
+	hi(a: string, b?: string): string { return `s ${a} ${b}`; }
+}
+
+class Made {
+	s: string;
+	constructor(a: number, b?: string, c: string = "d") { this.s = `${a} ${b} ${c}`; }
+}
+
+function optRest(a: number, b?: number, ...rest: number[]): string {
+	return `${a} ${b} [${rest.join(",")}]`;
 }
 
 class Greeter {
@@ -91,6 +115,14 @@ function main(): void {
 	const ps: [number, string] = [2, "x"];
 	const ns: [number, number] = [3, 4];
 	console.log(`tuple-new=${new Pair(...ps).s} tuple-rest=${sumRest(...ns)}|`);
+	const yz: string[] = ["y", "z", "w"];
+	const none: string[] = [];
+	console.log(`generic=${gen(1, ...short)}|${gen("a", ...yz)}|${gen(1, ...empty)}|`);
+	console.log(`overload=${ov(1, ...short)}|${ov("x", ...yz)}|${ov(1, ...empty)}|`);
+	const hi = new Hi();
+	console.log(`method-overload=${hi.hi(1, ...short)}|`);
+	console.log(`ctor=${new Made(1, ...yz).s}|${new Made(1, ...none).s}|`);
+	console.log(`rest=${optRest(1, ...empty)}|${optRest(1, ...short)}|${optRest(1, ...make())}|calls=${calls}|`);
 	console.log(`loop=${inLoop([[], ["a"], ["b", "c"], ["d", "e", "f"]])}|`);
 }
 
