@@ -382,4 +382,6 @@ test "a spread whose elements would each need a conversion to the array's union 
 	assert hasError("const s: string[] = [\"a\"];\nconst t = [...s, 3];\n", "a spread copies its elements into the array as they are: each 'string' would have to be converted");
 	assert hasError("const s: string[] = [\"a\"];\nconst t: (string | int32)[] = [...s, 3];\n", "a spread copies its elements");
 	assert errorCount("const s: string[] = [\"a\"];\nconst t = [...s, \"b\"];\n") == 0;
+	assert hasError("const p: [int32, string, boolean] = [1, \"a\", true];\nconst t = [...p];\n", "each 'int32' would have to be converted");
+	assert errorCount("const p: [int32, int32] = [1, 2];\nconst t = [...p, 3];\nconst n: int32 = t[0];\n") == 0;
 }
