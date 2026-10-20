@@ -776,10 +776,12 @@ function bindExpression(state: BinderState, node: Node): void {
 		NodeKind.MatchExpr => bindMatchExpr(state, node),
 		NodeKind.ArrowFunction => {
 			const d = node.data as ArrowFunctionData;
+			node.flowNode = state.currentFlow;
 			bindContainer(state, node, d.arrowBody);
 		},
 		NodeKind.FunctionExpr => {
 			const d = node.data as FunctionExprData;
+			node.flowNode = state.currentFlow;
 			bindContainer(state, node, d.funcExprBody);
 		},
 		NodeKind.HiddenDeref => {
