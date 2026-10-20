@@ -3,7 +3,7 @@
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { makeSymbol } from "../checker/symbol";
 import { hashToBase36 } from "std/hash";
-import { nominalTypeKey, hasTypeIdentity, isMaybeType, representedPayload, isBrandDistinct } from "../checker/types";
+import { nominalTypeKey, hasTypeIdentity, isMaybeType, representedPayload, isBrandDistinct, peelTransparentInstance } from "../checker/types";
 
 // Field-name + field-type signature for a nameless struct. Named field types key
 // by name and stop, so a cycle (which always passes through a named type in
@@ -117,6 +117,8 @@ function monoTypeKeyBody(t: Type): string {
 			return name;
 		},
 		TypeKind.GenericInstance => {
+			const seen = peelTransparentInstance(t);
+			if (seen != t) return monoTypeKey(seen);
 			let key = monoBaseName(t.typeName, monoGenericOwner(t));
 			let i = 0;
 			while (i < t.typeChildren.length) {

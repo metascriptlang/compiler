@@ -1398,7 +1398,8 @@ function sameEnumMember(a: Type, b: Type): boolean {
 function skipAliasWrapper(t: Type): Type {
 	let cur = t;
 	while (cur.kind == TypeKind.Alias && cur.typeReturn != null) cur = cur.typeReturn;
-	return cur;
+	const seen = peelTransparentInstance(cur);
+	return seen != cur ? skipAliasWrapper(seen) : cur;
 }
 
 export function sameType(a: Type | null, b: Type | null): boolean {
