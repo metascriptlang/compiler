@@ -377,6 +377,14 @@ function isMatchStruct(t: Type): boolean {
 	return false;
 }
 
+function declaresComparison(ctx: CheckerContext, ops: string[], pair: Type[]): boolean {
+	if (ctx.extensionRegistry == null) return false;
+	for (const op of ops) {
+		if (resolveUserOperator(ctx, op, pair) != null) return true;
+	}
+	return false;
+}
+
 function unequalMatchStruct(ctx: CheckerContext, t: Type, seen: Type[]): Type | null {
 	const s = valueShape(t);
 	const body = s.kind == TypeKind.GenericInstance && s.typeReturn != null ? s.typeReturn : s;
@@ -411,6 +419,46 @@ export function refuseMatchStructEquality(ctx: CheckerContext, node: Node, d: Bi
 	const held = shown == named ? "" : "it holds '" + named + "', ";
 	addError(ctx, "cannot compare '" + shown + "' with '" + d.operator + "': " + held + "a match struct has no built-in equality; declare `==`(this a: "
 		+ named + ", b: " + named + "): boolean for it", node.location.line, node.location.column);
+	return true;
+}
+
+function distinctBase(t: Type): Type | null {
+	let base = distinctBody(skipModifier(t));
+	for (let depth = 0; base != null && depth < PEEL_MAX_DEPTH; depth += 1) {
+		const inner = distinctBody(skipModifier(base));
+		if (inner == null) return base;
+		base = inner;
+	}
+	return base;
+}
+
+function namedFunction(t: Type): boolean {
+	const s = skipModifier(t) ?? t;
+	return s.kind == TypeKind.Function && s.callConv != CallingConvention.CcClosure;
+}
+
+function asClosure(expr: Node, t: Type): Node {
+	const s = skipModifier(t) ?? t;
+	const thunk = synthClosureThunk(expr, closureStorageType(s), s);
+	return thunk != null ? thunk : expr;
+}
+
+export function fitComparedOperands(ctx: CheckerContext, d: BinaryExprData, leftType: Type, rightType: Type): boolean {
+	const equality = binaryOperandClass(d.operator) == "eq";
+	const leftBase = distinctBase(leftType);
+	const rightBase = distinctBase(rightType);
+	const left = leftBase ?? leftType;
+	const right = rightBase ?? rightType;
+	const bothFn = equality && (skipModifier(left) ?? left).kind == TypeKind.Function && (skipModifier(right) ?? right).kind == TypeKind.Function;
+	const leftNamed = bothFn && namedFunction(left) && !namedFunction(right);
+	const rightNamed = bothFn && namedFunction(right) && !namedFunction(left);
+	if (leftBase == null && rightBase == null && !leftNamed && !rightNamed) return false;
+	const ops = equality ? ["==", "!=", "===", "!=="] : ["<", "<=", ">", ">="];
+	if (hasGenericParams(leftType) || hasGenericParams(rightType) || declaresComparison(ctx, ops, [leftType, rightType])) return false;
+	if (leftBase != null) d.left = wrapInConv(d.left, leftBase);
+	if (rightBase != null) d.right = wrapInConv(d.right, rightBase);
+	if (leftNamed) d.left = asClosure(d.left, left);
+	if (rightNamed) d.right = asClosure(d.right, right);
 	return true;
 }
 
