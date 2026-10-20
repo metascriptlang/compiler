@@ -14,13 +14,12 @@
 
 import {
 	Node, NodeKind, DeclKind, SourceLocation, createNode,
-	ArrayLiteralData, SpreadExprData, IdentifierData, BinaryExprData, Type, TypeKind,
+	ArrayLiteralData, SpreadExprData, IdentifierData, Type, TypeKind,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { int32Type, peelTransparentInstance } from "../../checker/types";
 import { Symbol } from "../../ast/node";
 import { walkExpandBlocks, walkOnceEvaluated, OnceEvalState } from "../walker";
-import { forEachChild } from "../../ast/visitor";
 import {
 	makeVarDecl, makeIdentResolved, makeIdent, makeCall, makeMember, makeExprStmt, makeBlock,
 	makeWhile, makeBinary, makeNumber, makeArrayAccess, makeHiddenAddr, makeHiddenDeref, syntheticToken, runtimeRef, counterType, makeCounterStep,
@@ -38,26 +37,6 @@ export function isLowerableSpreadLiteral(node: Node): boolean {
 		if (e != null && e.kind == NodeKind.SpreadExpr) return true;
 	}
 	return false;
-}
-
-function isAssignedPattern(parent: Node, child: Node): boolean {
-	if (parent.kind != NodeKind.BinaryExpr || child.kind != NodeKind.ArrayLiteral) return false;
-	const bd = parent.data as BinaryExprData;
-	return bd.operator == "=" && bd.left == child;
-}
-
-function collectEverySpreadLiteral(node: Node, out: Node[]): void {
-	if (node == null) return;
-	forEachChild(node, (c: Node): void => {
-		if (c == null) return;
-		const k = c.kind;
-		if (k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr
-			|| k == NodeKind.FunctionDecl || k == NodeKind.MethodDecl
-			|| k == NodeKind.BlockStmt) return;
-		if (isAssignedPattern(node, c)) return;
-		collectEverySpreadLiteral(c, out);
-	});
-	if (isLowerableSpreadLiteral(node)) out.push(node);
 }
 
 function collectLeadingSpreadLiterals(stmt: Node, out: Node[]): void {
@@ -159,12 +138,6 @@ function expandLeading(stmt: Node, ctx: TransformContext): Node[] {
 	return expandBefore(stmt, lits, ctx);
 }
 
-function expandEvery(stmt: Node, ctx: TransformContext): Node[] {
-	const lits: Node[] = [];
-	collectEverySpreadLiteral(stmt, lits);
-	return expandBefore(stmt, lits, ctx);
-}
-
 function expandBefore(stmt: Node, lits: Node[], ctx: TransformContext): Node[] {
 	if (lits.length == 0) return [stmt];
 	const out: Node[] = [];
@@ -175,10 +148,5 @@ function expandBefore(stmt: Node, lits: Node[], ctx: TransformContext): Node[] {
 
 export function lowerArraySpread(program: Node, ctx: TransformContext): Node {
 	walkExpandBlocks(program, expandLeading, ctx);
-	return program;
-}
-
-export function lowerArraySpreadEager(program: Node, ctx: TransformContext): Node {
-	walkExpandBlocks(program, expandEvery, ctx);
 	return program;
 }

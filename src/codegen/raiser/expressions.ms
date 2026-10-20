@@ -11,10 +11,10 @@ import {
 	ConditionalExprData, TypeAssertionData, UpdateExprData,
 	ArrayLiteralData, ArrayAccessData, ObjectLiteralData,
 	MoveExprData, OutExprData, VariableDeclData, AwaitExprData, NewExprData,
-	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData,
+	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData, SpreadExprData,
 	createNodeAt
 } from "../../ast/node";
-import { RaiserOpcode, RaiserInstruction, RaiserConvClass, raiserABC, raiserABx, convOperand, fitsImm, immField, branchField } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserInstruction, RaiserConvClass, raiserABC, raiserABx, raiserAx, convOperand, fitsImm, immField, branchField } from "../../raiser/bytecode";
 import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
@@ -1955,6 +1955,9 @@ function compileNewExpr(s: RaiserCompState, node: Node): int32 {
 
 function compileArrayLiteral(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as ArrayLiteralData;
+	for (const e of d.elements) {
+		if (e.kind == NodeKind.SpreadExpr) return compileSpreadArrayLiteral(s, node);
+	}
 	const elemCount = d.elements.length;
 
 	// Reserve dest + N element slots upfront
@@ -1982,6 +1985,51 @@ function compileArrayLiteral(s: RaiserCompState, node: Node): int32 {
 		emitZeroFill(s, dest, tail, sized.typeReturn);
 	}
 	return dest;
+}
+
+function compileSpreadArrayLiteral(s: RaiserCompState, node: Node): int32 {
+	const d = node.data as ArrayLiteralData;
+	const elementType = node.nodeType != null ? getElementType(unwrapRef(node.nodeType)) : null;
+	const dest = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.NewArray, dest, 0, 0));
+	for (const e of d.elements) {
+		if (e.kind == NodeKind.SpreadExpr) {
+			appendSpreadSource(s, dest, (e.data as SpreadExprData).spreadArg, elementType);
+			continue;
+		}
+		const item = emitValueCopy(s, compileExpr(s, e), elementType);
+		emitInst(s, raiserABC(RaiserOpcode.ArrayPush, dest, item, 0));
+	}
+	return dest;
+}
+
+function isIndexedSpreadSource(t: Type | null): boolean {
+	if (t == null) return false;
+	const bare = unwrapRef(peelTransparentInstance(unwrapRef(t)));
+	return bare.kind == TypeKind.Array || bare.kind == TypeKind.SizedArray || bare.kind == TypeKind.Span || bare.kind == TypeKind.Tuple;
+}
+
+function appendSpreadSource(s: RaiserCompState, dest: int32, source: Node, elementType: Type | null): void {
+	if (!isIndexedSpreadSource(source.nodeType)) {
+		const msg = `a spread of '${typeDisplayName(source.nodeType)}' is unsupported by the Raiser bytecode compiler`;
+		queueRaiserCompileError(msg, source.location.line, source.location.column);
+		emitTrapNil(s, msg);
+		return;
+	}
+	const sourceReg = compileExpr(s, source);
+	const idx = allocReg(s);
+	emitLoadConst(s, idx, raiserInt(0));
+	const len = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.ArrayLen, len, sourceReg, 0));
+	const item = allocReg(s);
+	const loopStart = codeLen(s);
+	emitInst(s, raiserABC(RaiserOpcode.BltI64, idx, len, 1));
+	const exit = emitJumpPlaceholder(s);
+	emitInst(s, raiserABC(RaiserOpcode.LoadIndex, item, sourceReg, idx));
+	emitInst(s, raiserABC(RaiserOpcode.ArrayPush, dest, emitValueCopy(s, item, elementType), 0));
+	emitInst(s, raiserABC(RaiserOpcode.AddI64Imm, idx, idx, immField(1)));
+	emitInst(s, raiserAx(RaiserOpcode.Jump, loopStart - codeLen(s) - 1));
+	patchJumpTo(s, exit, codeLen(s));
 }
 
 function isSpanType(t: Type | null): boolean {

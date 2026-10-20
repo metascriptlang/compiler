@@ -21,7 +21,6 @@ import { lowerForLoop } from "./lowering/forLoopLower";
 import { lowerForOf } from "./lowering/forOfLower";
 import { retargetJumps } from "./lowering/jumpRetarget";
 import { lowerObjectSpreadEager } from "./desugar/objectSpreadLower";
-import { lowerArraySpreadEager } from "./desugar/arraySpreadLower";
 import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerSwitch } from "./lowering/switchLower";
@@ -65,7 +64,6 @@ function lowerForRaiser(program: Node, ctx: TransformContext): Node {
 	result = lowerConstFold(result, ctx);
 	result = lowerRestParams(result, ctx);
 	result = lowerObjectSpreadEager(result, ctx);
-	result = lowerArraySpreadEager(result, ctx);
 	result = lowerOptionalChain(result, ctx);
 	result = lowerNullishCoalesce(result, ctx);
 	result = materializeMaybeReads(result, ctx);
