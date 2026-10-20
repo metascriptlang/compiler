@@ -2637,6 +2637,25 @@ function destroyBakedCell(cell: Symbol, loc: SourceLocation, dctx: DrcContext): 
 	return [tmp, makeDestroyCall(tmpSym, rcInfo, loc)];
 }
 
+function releaseLeavesSlotNamingIt(rcInfo: RcInfo): boolean {
+	return rcInfo.rcKind == RcKind.Ref || rcInfo.rcKind == RcKind.String;
+}
+
+function tearDownGlobals(dctx: DrcContext, baked: Symbol[], loc: SourceLocation): Node[] {
+	const result: Node[] = [];
+	for (let i = dctx.globalsToDestroy.length - 1; i >= 0; i -= 1) {
+		const vi = dctx.globalsToDestroy[i];
+		if (baked.includes(vi.sym)) {
+			for (const s of destroyBakedCell(vi.sym, loc, dctx)) result.push(s);
+			continue;
+		}
+		if (vi.isCursor || vi.rcInfo.destroyFn == null) continue;
+		result.push(makeDestroyCall(vi.sym, vi.rcInfo, loc));
+		if (releaseLeavesSlotNamingIt(vi.rcInfo)) result.push(makeWasMovedCall(vi.sym, vi.rcInfo, loc));
+	}
+	return result;
+}
+
 export function injectProgram(program: Node, dctx: DrcContext): Node {
 	if (program.kind != NodeKind.Program) return program;
 	const d = program.data as ProgramData;
@@ -2661,17 +2680,7 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	d.programStmts = processStmtList(d.programStmts, dctx, program.location);
 	const moduleScope = popScope(dctx);
 	for (const s of generateCleanup(moduleScope, program.location)) d.programStmts.push(s);
-	const exits: Node[] = [];
-	let g = dctx.globalsToDestroy.length;
-	while (g > 0) {
-		g -= 1;
-		const vi = dctx.globalsToDestroy[g];
-		if (baked.includes(vi.sym)) {
-			for (const s of destroyBakedCell(vi.sym, program.location, dctx)) exits.push(s);
-		} else if (!vi.isCursor && vi.rcInfo.destroyFn != null) {
-			exits.push(makeDestroyCall(vi.sym, vi.rcInfo, program.location));
-		}
-	}
+	const exits: Node[] = tearDownGlobals(dctx, baked, program.location);
 	for (let i = cells.length - 1; i >= 0; i -= 1) {
 		for (const s of destroyHcrCell(cells[i], program.location, dctx)) exits.push(s);
 	}

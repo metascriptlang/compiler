@@ -318,9 +318,12 @@ function genInlineSink(destroyFn: string, xf: Node, yf: Node, buf: NodeBuf, loc:
 // Each helper owns all runtime names for its type family.
 
 // --- Standard string hook generator ---
-function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: NodeBuf, loc: SourceLocation): void {
+function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, empties: boolean, buf: NodeBuf, loc: SourceLocation): void {
 	match (hook) {
-		"destroy" => { genCall("msStringDecref", hook, xf, yf, buf, loc); },
+		"destroy" => {
+			genCall("msStringDecref", hook, xf, yf, buf, loc);
+			if (empties) genCall("msStringWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
+		},
 		"copy" => { genCopyRef("msStringCopy", xf, yf, fieldName, buf, loc); },
 		"sink" => { genInlineSink("msStringDecref", xf, yf, buf, loc); },
 		"wasMoved" => { genCall("msStringWasMoved", hook, xf, yf, buf, loc); },
@@ -352,6 +355,12 @@ function storeThenDestroyWhole(objType: Type, s1: Symbol, s2: Symbol, lctx: Lift
 }
 
 function storeKeepingOld(xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): Node {
+	const old = keepOld(xf, lctx, buf, loc);
+	buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
+	return old;
+}
+
+function keepOld(xf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): Node {
 	const ctr = lctx.tempCounter;
 	lctx.tempCounter = ctr + 1;
 	const oldName = "$old_" + ctr.toString();
@@ -362,8 +371,35 @@ function storeKeepingOld(xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: S
 	const oldDecl = makeVarDecl(oldName, oldInit, DeclKind.Let, loc);
 	oldDecl.resolvedSym = oldSym;
 	buf.items.push(oldDecl);
-	buf.items.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
 	return makeTypedIdentResolved(oldSym, oldInit.nodeType, loc);
+}
+
+function takeOutThenDestroy(destroyName: string, wasMovedName: string, xf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	const old = keepOld(xf, lctx, buf, loc);
+	genCall(wasMovedName, "wasMoved", clonePath(xf, loc), xf, buf, loc);
+	genCall(destroyName, "destroy", old, clonePath(old, loc), buf, loc);
+}
+
+function dropEdge(owner: Symbol, xf: Node, buf: NodeBuf, loc: SourceLocation): void {
+	buf.items.push(makeExprStmt(makeCall(runtimeRef("msDecrefCyclicEdge", loc), [makeIdentResolved(owner, loc), xf], loc), loc));
+}
+
+function takeOutThenDropEdge(owner: Symbol, xf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	const old = keepOld(xf, lctx, buf, loc);
+	genCall("msPtrWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
+	dropEdge(owner, old, buf, loc);
+}
+
+function isArrayCell(t: Type): boolean {
+	return t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array;
+}
+
+function emptiesSlot(hook: string, x: Node, fieldName: string): boolean {
+	if (hook != "destroy") return false;
+	if (fieldName != "") return true;
+	if (x.kind != NodeKind.ArrayAccess) return false;
+	const arrT = (x.data as ArrayAccessData).array.nodeType;
+	return arrT != null && arrT.kind == TypeKind.SizedArray;
 }
 
 // --- Inline element loop (reference parity: unrolled loops for elements) ---
@@ -493,8 +529,14 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 	if (needsElemLoop && elem != null) registerArrayOps(createArray(elem), lctx);
 	match (hook) {
 		"destroy" => {
-			if (needsElemLoop) { genArrayLoop("destroy", elem, xf, yf, lctx, buf, loc); }
-			genCall(isU8Elem ? "msArrayUint8Destroy" : "msArrayDestroy", hook, xf, yf, buf, loc);
+			if (needsElemLoop) {
+				const old = keepOld(xf, lctx, buf, loc);
+				genCall("msArrayWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
+				genArrayLoop("destroy", elem, old, clonePath(old, loc), lctx, buf, loc);
+				genCall("msArrayDestroy", hook, clonePath(old, loc), old, buf, loc);
+			} else {
+				genCall(isU8Elem ? "msArrayUint8Destroy" : "msArrayDestroy", hook, xf, yf, buf, loc);
+			}
 		},
 		"copy" => {
 			if (needsElemLoop && elem != null && elem.kind == TypeKind.String) {
@@ -534,16 +576,20 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 // --- Standard atomic reference hook generator ---
 // isCyclic: true for types that can form reference cycles (reference parity: atomicRefOp)
 // Cyclic types use msDecrefCyclic/msIncrefCyclic (ORC-aware when MSGC_ORC defined)
-function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: boolean, atomic: boolean, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+function refOp(hook: string, xf: Node, yf: Node, empties: boolean, heldType: Type, isCyclic: boolean, atomic: boolean, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	const decrefFn = atomic ? "msAtomicDecref" : (isCyclic ? "msDecrefCyclic" : "msDecref");
 	const increfFn = atomic ? "msAtomicIncref" : (isCyclic ? "msIncrefCyclic" : "msIncref");
 	match (hook) {
 		"destroy" => {
 			const owner = lctx.dropOwner;
-			if (owner != null && isCyclic && !atomic) {
-				buf.items.push(makeExprStmt(makeCall(runtimeRef("msDecrefCyclicEdge", loc), [makeIdentResolved(owner, loc), xf], loc), loc));
+			const edge = owner != null && isCyclic && !atomic;
+			if (empties && !isArrayCell(heldType)) {
+				if (edge) takeOutThenDropEdge(owner as Symbol, xf, lctx, buf, loc);
+				else takeOutThenDestroy(decrefFn, "msPtrWasMoved", xf, lctx, buf, loc);
 			} else {
-				genCall(decrefFn, hook, xf, yf, buf, loc);
+				if (edge) dropEdge(owner as Symbol, xf, buf, loc);
+				else genCall(decrefFn, hook, xf, yf, buf, loc);
+				if (empties) genCall("msPtrWasMoved", "wasMoved", clonePath(xf, loc), xf, buf, loc);
 			}
 		},
 		"copy" => {
@@ -622,6 +668,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		? makeMember(y, fieldName, loc)
 		: y;
 	if (fieldName != "" && hook != "trace") { yf.nodeType = fieldType; }
+	const empties = emptiesSlot(hook, x, fieldName);
 
 	// Tuple case extracted from match (MetaScript match arm limitation with block-scoped vars)
 	if (fieldType.kind == TypeKind.Tuple) {
@@ -637,7 +684,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 
 	// Primitives fall through to _ => defaultOp (isPrimitiveKind is canonical list)
 	match (fieldType.kind) {
-		TypeKind.String | TypeKind.StringLiteral => { stringOp(hook, xf, yf, fieldName, buf, loc); },
+		TypeKind.String | TypeKind.StringLiteral => { stringOp(hook, xf, yf, fieldName, empties, buf, loc); },
 		TypeKind.Array => {
 			const elem = fieldType.typeReturn;
 			if (elem != null) arrayOp(hook, elem, xf, yf, lctx, buf, loc);
@@ -682,33 +729,35 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				defaultOp(hook, xf, yf, buf, loc);
 			} else {
 				const cyclic = isCyclicType(fieldType, lctx, visited);
-				refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(fieldType), lctx, buf, loc);
+				refOp(hook, xf, yf, empties, fieldType, cyclic, isAtomicRef(fieldType), lctx, buf, loc);
 			}
 		},
 		TypeKind.BigInt => {
 			// msBigInt is a refcounted heap value that can never form a cycle and
 			// carries no atomic count — the plain non-cyclic ref ops, matching the
 			// RcInfo classify.ms hands the analyzer for the same type.
-			refOp(hook, xf, yf, fieldName, false, false, lctx, buf, loc);
+			refOp(hook, xf, yf, empties, fieldType, false, false, lctx, buf, loc);
 		},
 		TypeKind.Ptr => {
 			defaultOp(hook, xf, yf, buf, loc);
 		},
 		TypeKind.Unknown => {
-			refOp(hook, xf, yf, fieldName, true, false, lctx, buf, loc);
+			refOp(hook, xf, yf, empties, fieldType, true, false, lctx, buf, loc);
 		},
 		TypeKind.Function => {
 			if (hook == "copy") {
 				genCopyRef("msClosureCopy", xf, yf, fieldName, buf, loc);
 			} else if (hook == "sink") {
 				genCall("msClosureSink", hook, xf, yf, buf, loc);
+			} else if (empties) {
+				takeOutThenDestroy("msClosureDestroy", "msClosureWasMoved", xf, lctx, buf, loc);
 			} else {
 				runtimeOp("msClosure", "msClosureDestroy", "Copy", "WasMoved", "Trace", true, hook, xf, yf, buf, loc);
 			}
 		},
 		TypeKind.GenericInstance => {
 			if (isAwaitable(fieldType)) {
-				refOp(hook, xf, yf, fieldName, false, false, lctx, buf, loc);
+				refOp(hook, xf, yf, empties, fieldType, false, false, lctx, buf, loc);
 				return;
 			}
 			const distinctInner = distinctBody(fieldType);
@@ -743,14 +792,14 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 					defaultOp(hook, xf, yf, buf, loc);
 				} else {
 					const cyclic = isCyclicType(fieldType, lctx, visited);
-					refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(refInner), lctx, buf, loc);
+					refOp(hook, xf, yf, empties, refInner, cyclic, isAtomicRef(refInner), lctx, buf, loc);
 				}
 				return;
 			}
 			// Pure strlit union is msString-backed (see isTaggedUnion below) —
 			// same ops as a String field, never named tagged-union hooks.
 			if (isStringLike(fieldType)) {
-				stringOp(hook, xf, yf, fieldName, buf, loc);
+				stringOp(hook, xf, yf, fieldName, empties, buf, loc);
 			} else if (fieldType.typeName != "") {
 				if (hook != "trace" || isCyclicType(fieldType, lctx, visited)) {
 					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
@@ -762,6 +811,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				}
 			} else if (isPrimitiveOnlyUnion(fieldType)) {
 				primitiveUnionOp(hook, fieldType, xf, yf, buf, loc);
+				if (empties) primitiveUnionOp("wasMoved", fieldType, clonePath(xf, loc), clonePath(xf, loc), buf, loc);
 			} else {
 				const anonName = ensureAnonUnionHooks(fieldType, lctx, loc);
 				if (anonName != "") namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
