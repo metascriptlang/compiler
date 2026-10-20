@@ -1,5 +1,5 @@
-// std/core/promise — Raiser tier. `spawn`, `sleepAsync` and `Promise.resolve`
-// compile by their @builtin kind to VM opcodes (src/codegen/raiser/expressions.ms);
+// std/core/promise — Raiser tier. `spawn`, `sleepAsync`, `Promise.resolve`,
+// `Promise.all`, `race` and `any` compile by their @builtin kind to VM opcodes (src/codegen/raiser/expressions.ms);
 // any other extern here reaches CallHost and needs a bridge in
 // src/compiler/meta/hostTable.ms.
 
@@ -23,8 +23,9 @@ export class Promise<T> {
 	static extern race<T>(promises: Promise<T>[]): Promise<T> from "msPromiseRace";
 	@builtin("PromiseAllSettled")
 	static extern allSettled<T>(promises: Promise<T>[]): Promise<T[]> from "msPromiseAllSettled";
-	@builtin("PromiseAny")
-	static extern any<T>(promises: Promise<T>[]): Promise<T> from "msPromiseAny";
+	static any<T>(promises: Promise<T>[]): Promise<T> {
+		return msPromiseAny(promises, new Error("All promises were rejected"));
+	}
 
 	@builtin("PromiseResolve")
 	static extern resolve(value: T): Promise<T> from "msPromiseResolve";
@@ -32,6 +33,8 @@ export class Promise<T> {
 	static extern reject(error: Error): Promise<never> from "msPromiseReject";
 }
 
+@builtin("PromiseAny")
+extern function msPromiseAny<T>(promises: Promise<T>[], rejection: Error): Promise<T> from "msPromiseAny";
 @builtin("PromisePending")
 extern function msPromisePending<T>(): Promise<T> from "msFutureCreate";
 @builtin("PromiseSettle")
