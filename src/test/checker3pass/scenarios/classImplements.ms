@@ -48,6 +48,31 @@ class Pet implements Named, Owned { name: string = "rex"; }
 	assert errors[0].contains("Class 'Pet' incorrectly implements interface 'Owned': property 'owner' is missing in 'Pet'"), errors[0];
 }
 
+test "a class the conversion to the interface refuses is refused at the clause" {
+	const src = `
+interface Named { name: string; }
+interface Aged { age: int32; }
+interface Greeter { greet: () => string; }
+interface Labeled { label?: string; }
+class Ordered implements Named { age: int32 = 3; name: string = "o"; }
+class Both implements Named, Aged { name: string = "b"; age: int32 = 3; }
+class Method implements Greeter { greet(): string { return "hi"; } }
+class Getter implements Named { get name(): string { return "g"; } }
+class Omitted implements Labeled { n: int32 = 1; }
+class NonNull implements Labeled { label: string = "x"; }
+`;
+	const errors = checkOnly(src).errors;
+	const text = errors.join("\n");
+	assert errors.length == 6, "one error per class: " + text;
+	assert text.contains("Class 'Ordered' incorrectly implements interface 'Named' ('name' is field 0 of Named but field 1 of Ordered; a structural match is a pointer cast"), "field order: " + text;
+	assert text.contains("Class 'Both' incorrectly implements interface 'Aged' ('age' is field 0 of Aged but field 1 of Both; a structural match is a pointer cast"), "a second interface with other fields: " + text;
+	assert !text.contains("Class 'Both' incorrectly implements interface 'Named'"), "the first interface is held: " + text;
+	assert text.contains("Class 'Method' incorrectly implements interface 'Greeter': property 'greet' is missing in 'Method' ('greet' is declared there as a method or accessor, which is not a field of the instance)"), "a method for a function-typed field: " + text;
+	assert text.contains("Class 'Getter' incorrectly implements interface 'Named': property 'name' is missing in 'Getter' ('name' is declared there as a method or accessor, which is not a field of the instance)"), "a getter for a field: " + text;
+	assert text.contains("Class 'Omitted' incorrectly implements interface 'Labeled': property 'label' is missing in 'Omitted'"), "an omitted optional member: " + text;
+	assert text.contains("Property 'label' in class 'NonNull' is not assignable to the same property in interface 'Labeled': 'string' and 'string | null' are stored differently, and a structural match is a pointer cast"), "an optional member declared non-null: " + text;
+}
+
 test "an implemented type that is not an object type is refused" {
 	const errors = checkOnly(`
 type U = string | int32;
