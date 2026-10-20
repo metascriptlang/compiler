@@ -161,26 +161,20 @@ function wrapModifierTypes(flags: string, paramTypes: Type[]): void {
 
 // ===== A. Resolve Annotation Strings =====
 
+function bracketDepthStep(text: string, i: int32): int32 {
+	const c = text.charAt(i);
+	if (c == "(" || c == "[" || c == "{" || c == "<") return 1;
+	const arrowTail = c == ">" && i > 0 && text.charAt(i - 1) == "=";
+	if (c == ")" || c == "]" || c == "}" || (c == ">" && !arrowTail)) return -1;
+	return 0;
+}
+
 // Tier 3: find a keyword string at top level (not inside brackets/parens/braces/angles).
 function findTopLevelKeyword(text: string, keyword: string): int32 {
 	let depth = 0;
 	for (let i = 0; i <= text.length - keyword.length; i += 1) {
-		const c = text.charAt(i);
-		if (c == "(" || c == "[" || c == "{" || c == "<") depth += 1;
-		if (c == ")" || c == "]" || c == "}" || c == ">") depth -= 1;
+		depth += bracketDepthStep(text, i);
 		if (depth == 0 && text.slice(i, i + keyword.length) == keyword) return i;
-	}
-	return -1;
-}
-
-// Tier 3: find a single character at top level (not inside brackets/parens/braces/angles).
-function findTopLevelChar(text: string, ch: string): int32 {
-	let depth = 0;
-	for (let i = 0; i < text.length; i += 1) {
-		const c = text.charAt(i);
-		if (c == "(" || c == "[" || c == "{" || c == "<") depth += 1;
-		if (c == ")" || c == "]" || c == "}" || c == ">") depth -= 1;
-		if (depth == 0 && c == ch) return i;
 	}
 	return -1;
 }
@@ -644,12 +638,12 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		const checkPart = trimmed.slice(0, extendsIdx).trim();
 		const afterExtends = trimmed.slice(extendsIdx + 9, trimmed.length).trim();
 		// Find top-level '?' in the remainder
-		const qIdx = findTopLevelChar(afterExtends, "?");
+		const qIdx = findTopLevelKeyword(afterExtends, "?");
 		if (qIdx >= 0) {
 			const constraintPart = afterExtends.slice(0, qIdx).trim();
 			const afterQ = afterExtends.slice(qIdx + 1, afterExtends.length).trim();
 			// Find top-level ':' in the remainder (after '?')
-			const colonIdx = findTopLevelChar(afterQ, ":");
+			const colonIdx = findTopLevelKeyword(afterQ, ":");
 			if (colonIdx >= 0) {
 				const truePart = afterQ.slice(0, colonIdx).trim();
 				const falsePart = afterQ.slice(colonIdx + 1, afterQ.length).trim();
