@@ -2085,11 +2085,13 @@ function stabilizeLocation(n: Node, dctx: DrcContext): Node {
 function processAssignedValue(
 	rhs: Node,
 	mode: DrcMode,
+	mocFlags: int32,
 	idx: number,
 	stmts: Node[],
 	dctx: DrcContext,
 ): Node {
-	return copiesInPlace(rhs, idx, stmts, dctx) ? rhs : processNode(rhs, dctx, mode);
+	const initializes = (mocFlags & MOC_IS_DECL) != 0;
+	return !initializes && copiesInPlace(rhs, idx, stmts, dctx) ? rhs : processNode(rhs, dctx, mode);
 }
 
 function copiesInPlace(rhs: Node, idx: number, stmts: Node[], dctx: DrcContext): boolean {
@@ -2122,7 +2124,7 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 			return stmt;
 		}
 		bd.left = stabilizeLocation(bd.left, dctx);
-		bd.right = processAssignedValue(bd.right, DrcMode.SinkArg, idx, stmts, dctx);
+		bd.right = processAssignedValue(bd.right, DrcMode.SinkArg, fieldFlags, idx, stmts, dctx);
 		return moveOrCopy(stmt, bd.left, bd.right, rcInfo, fieldFlags, idx, stmts, dctx, loc);
 	}
 
@@ -2134,7 +2136,7 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 			return stmt;
 		}
 		bd.left = stabilizeLocation(bd.left, dctx);
-		bd.right = processAssignedValue(bd.right, DrcMode.SinkArg, idx, stmts, dctx);
+		bd.right = processAssignedValue(bd.right, DrcMode.SinkArg, fieldFlags, idx, stmts, dctx);
 		return moveOrCopy(stmt, bd.left, bd.right, rcInfo, fieldFlags, idx, stmts, dctx, loc);
 	}
 
@@ -2145,7 +2147,7 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 			return stmt;
 		}
 		bd.left = stabilizeLocation(bd.left, dctx);
-		bd.right = processAssignedValue(bd.right, DrcMode.SinkArg, idx, stmts, dctx);
+		bd.right = processAssignedValue(bd.right, DrcMode.SinkArg, fieldFlags, idx, stmts, dctx);
 		return moveOrCopy(stmt, bd.left, bd.right, rcInfo, fieldFlags, idx, stmts, dctx, loc);
 	}
 
@@ -2185,7 +2187,7 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 	// (e.g. a `return x` in a sibling branch — flow-insensitive move record).
 	const movedBeforeRhs = !isFirstWrite && varMovedInContext(dctx, sym);
 
-	bd.right = processAssignedValue(bd.right, rhsMode(bd.right), idx, stmts, dctx);
+	bd.right = processAssignedValue(bd.right, rhsMode(bd.right), MOC_NONE, idx, stmts, dctx);
 
 	// Reference parity: when dest appears in the RHS (e.g., result = f(result)),
 	// processNode emits wasMoved(dest) as pending because isLastRead is true
