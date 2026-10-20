@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, ClassDeclData, MethodDeclData, DecoratedDeclData } from "../ast/node";
 import { makeSymbol, classDeclNodeOf } from "./symbol";
-import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, peelToStructOrUnion, isVarargs  } from "./types";
+import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, peelToStructOrUnion, isVarargs , isVarargs, unwrapVarargs  } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -913,7 +913,7 @@ function leavesInlineConv(source: Type, target: Type): boolean {
 	return source.callConv == CallingConvention.CcInline && target.callConv != CallingConvention.CcInline;
 }
 
-function runtimeParams(fn: Type): Type[] {
+export function runtimeParams(fn: Type): Type[] {
 	const params: Type[] = [];
 	for (const param of fn.typeChildren) {
 		if (param == null || param.kind != TypeKind.Void) params.push(param);
@@ -961,16 +961,48 @@ export function arityAdapts(source: Type | null, target: Type | null): boolean {
 	if (target.callConv != CallingConvention.CcClosure || hasGenericParams(source) || hasGenericParams(target)) return false;
 	const sourceParams = runtimeParams(source);
 	const targetParams = runtimeParams(target);
-	if (sourceParams.length >= targetParams.length || takesVarargs(sourceParams) || takesVarargs(targetParams)) return false;
+	if (takesVarargs(targetParams) || runtimeMinArity(source) > targetParams.length) return false;
+	if (takesVarargs(sourceParams)) return restTakesSlot(source, sourceParams, target, targetParams);
+	if (sourceParams.length == targetParams.length) return false;
+	const shared = sourceParams.length < targetParams.length ? sourceParams.length : targetParams.length;
+	return isFunctionAssignable(leadingParams(source, shared), leadingParams(target, shared));
+}
+
+function restTakesSlot(source: Type, sourceParams: Type[], target: Type, targetParams: Type[]): boolean {
+	const fixed = sourceParams.length - 1;
+	if (!isVarargs(sourceParams[fixed])) return false;
+	const shared = fixed < targetParams.length ? fixed : targetParams.length;
+	if (!isFunctionAssignable(leadingParams(source, shared), leadingParams(target, shared))) return false;
+	const array = unwrapRef(unwrapVarargs(sourceParams[fixed]));
+	const element = array.kind == TypeKind.Array ? array.typeReturn : null;
+	if (element == null) return false;
+	for (let i = fixed; i < targetParams.length; i += 1) {
+		if (sinkModeDiffers(targetParams[i], element) || !isAssignable(targetParams[i], element)) return false;
+	}
+	return true;
+}
+
+export function runtimeMinArity(fn: Type): int32 {
+	const required = getMinArity(fn);
+	let n = 0;
+	for (let i = 0; i < fn.typeChildren.length && i < required; i += 1) {
+		const param = fn.typeChildren[i];
+		if (param == null || (param.kind != TypeKind.Void && !isVarargs(param))) n += 1;
+	}
+	return n;
+}
+
+function leadingParams(fn: Type, count: int32): Type {
+	const params = runtimeParams(fn);
 	const leading: Type[] = [];
 	const names: string[] = [];
-	for (let i = 0; i < sourceParams.length; i += 1) {
-		leading.push(targetParams[i]);
+	for (let i = 0; i < count; i += 1) {
+		leading.push(params[i]);
 		names.push("p" + String(i));
 	}
-	const prefix = createFunction(leading, names, target.typeReturn);
-	prefix.callConv = target.callConv;
-	return isFunctionAssignable(source, prefix);
+	const prefix = createFunction(leading, names, fn.typeReturn);
+	prefix.callConv = fn.callConv;
+	return prefix;
 }
 
 function takesVarargs(params: Type[]): boolean {
@@ -980,9 +1012,18 @@ function takesVarargs(params: Type[]): boolean {
 	return false;
 }
 
+function restSlotRefusal(sourceParams: Type[], targetParams: Type[]): string {
+	const restAt = targetParams.length - 1;
+	if (restAt < 0 || !isVarargs(targetParams[restAt]) || takesVarargs(sourceParams) || sourceParams.length <= restAt) return "";
+	return " — the expected function passes its arguments from position " + String(restAt + 1)
+		+ " on as a rest parameter, which can hold none, so a fixed parameter there has no guaranteed argument; declare it as a rest parameter";
+}
+
 function paramRefusal(source: Type | null, target: Type | null): string {
 	if (source == null || target == null || source.kind != TypeKind.Function || target.kind != TypeKind.Function) return "";
 	const targetParams = runtimeParams(target);
+	const rest = restSlotRefusal(runtimeParams(source), targetParams);
+	if (rest != "") return rest;
 	let ri = 0;
 	let ni = 0;
 	for (const taken of source.typeChildren) {

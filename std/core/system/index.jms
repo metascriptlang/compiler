@@ -113,6 +113,12 @@ function msClosureSame(a: unknown, b: unknown): boolean {
 }
 
 @compilerFunc
+function msClosureAdapt(source: unknown, thunk: unknown): unknown {
+	@emit(`const adapted = (...args) => ${thunk}(${source}, ...args); adapted.$adaptee = ${source}; return adapted;`);
+	unreachable;
+}
+
+@compilerFunc
 function msCharToString(c: char): string {
 	@emit(`return ${c} < 128 ? String.fromCharCode(${c}) : "\\uFFFD";`);
 	unreachable;

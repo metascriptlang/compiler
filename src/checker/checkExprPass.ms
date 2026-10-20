@@ -2472,7 +2472,7 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 		node.nodeType = targetType;
 	}
 	if (srcType != null && (srcType.kind != TypeKind.Union || isLiteralSet(srcType)) && targetType.kind == TypeKind.Union) {
-		const widened = widenVariantToUnion(d.asExpr, targetType, srcType);
+		const widened = widenVariantToUnion(d.asExpr, targetType, srcType, ctx);
 		if (widened != null as unknown as Node) node.data = { asExpr: widened, asType: d.asType };
 	}
 	const castSrcUnknown =(srcType != null && srcType.kind == TypeKind.Union) ? unwrapRefNullUnion(srcType) : srcType;
@@ -4561,7 +4561,7 @@ function convertAsBetweenUnions(ctx: CheckerContext, node: Node, srcType: Type, 
 	}
 	if (nullableTarget != null && (convertsBetweenUnions(srcType, nullableTarget) || reachesScalar || unionConversionRefusal(srcType, nullableTarget, false) != "")) {
 		refusalTarget = nullableTarget;
-		if (unionConversionRefusal(srcType, nullableTarget, false) == "") converted = synthMaybeWrap(convertUnionToUnion(d.asExpr, srcType, nullableTarget), targetType, nullableTarget);
+		if (unionConversionRefusal(srcType, nullableTarget, false) == "") converted = synthMaybeWrap(convertUnionToUnion(d.asExpr, srcType, nullableTarget), targetType, nullableTarget, ctx);
 	} else {
 		const storedRead = convertStoredUnionRead(d.asExpr, srcType, targetType);
 		const payloads = nullableUnionPayloads(srcType, targetType);

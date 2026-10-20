@@ -3,11 +3,11 @@
 // what every later pass reads: the `{ value, present }` carrier, the `{ fn, env }`
 // pair and the address of the borrowed place.
 
-import { Node, NodeKind, NodeFlag, TypeKind, TypeFlag, Type, Symbol, SymbolKind, SourceLocation, CallingConvention, HiddenStdConvData, ProgramData, createNode } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, TypeKind, TypeFlag, Type, Symbol, SymbolKind, SourceLocation, CallingConvention, HiddenStdConvData, ProgramData, CallExprData, createNode } from "../../ast/node";
 import { isMaybeType, closureStorageType, createFunction, createPtr, createRef, voidType } from "../../checker/types";
 import { TransformContext, mintSym, newLoweredSym, freshTemp } from "../context";
 import { walkNode } from "../walker";
-import { makeNull, makeTypedObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeTypedIdentResolved, makeMember, makeCall, makeReturn, makeExprStmt, makeBlock, makeFnDecl, makeInterfaceDeclFromTypes, syntheticToken } from "../util";
+import { runtimeRef, makeNull, makeTypedObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeTypedIdentResolved, makeMember, makeCall, makeReturn, makeExprStmt, makeBlock, makeFnDecl, makeInterfaceDeclFromTypes, syntheticToken } from "../util";
 import { wrapMaybeValue } from "../native/nullableLower";
 
 export const ADAPTEE_FIELD: string = "$adaptee";
@@ -34,8 +34,10 @@ function lowerImplicitConvNode(node: Node, ctx: TransformContext, adapterDecls: 
 		addr.nodeType = d.convType;
 		return addr;
 	}
-	if (dropsTrailingParams(d)) {
-		return ctx.jsBackend ? d.convExpr : arityAdapter(d, ctx, adapterDecls, node.location);
+	if (node.paramSyms != null) {
+		if (!ctx.jsBackend) return arityAdapter(d, node.paramSyms, ctx, adapterDecls, node.location);
+		const call = d.convExpr.data as CallExprData;
+		return call.arguments.length < node.paramSyms.length ? call.callee : jsArityAdapter(d, node.paramSyms, ctx, adapterDecls, node.location);
 	}
 	if (isClosureThunkConv(d)) return closurePair(d.convExpr, d.convType, node.location);
 	return node;
@@ -53,24 +55,11 @@ function isClosureThunkConv(d: HiddenStdConvData): boolean {
 		&& inner != null && inner.kind == TypeKind.Function && inner.callConv != CallingConvention.CcClosure;
 }
 
-function runtimeParamCount(fn: Type): int32 {
-	let n = 0;
-	for (const param of fn.typeChildren) {
-		if (param == null || param.kind != TypeKind.Void) n += 1;
-	}
-	return n;
-}
-
-function dropsTrailingParams(d: HiddenStdConvData): boolean {
-	const inner = d.convExpr.nodeType;
-	return d.convType.kind == TypeKind.Function && inner != null && inner.kind == TypeKind.Function
-		&& runtimeParamCount(inner) < runtimeParamCount(d.convType);
-}
-
-function arityAdapter(d: HiddenStdConvData, ctx: TransformContext, adapterDecls: Node[], loc: SourceLocation): Node {
-	const sourceType = d.convExpr.nodeType!;
+function arityAdapter(d: HiddenStdConvData, paramSyms: Symbol[], ctx: TransformContext, adapterDecls: Node[], loc: SourceLocation): Node {
+	const call = d.convExpr.data as CallExprData;
+	const sourceType = call.callee.nodeType!;
 	const adapteeType = closureStorageType(sourceType);
-	const adaptee = sourceType.callConv == CallingConvention.CcClosure ? d.convExpr : closurePair(d.convExpr, adapteeType, loc);
+	const adaptee = sourceType.callConv == CallingConvention.CcClosure ? call.callee : closurePair(call.callee, adapteeType, loc);
 	const thunkName = freshTemp(ctx, "arity");
 	const envDecl = makeInterfaceDeclFromTypes(thunkName + "Env", [ADAPTEE_FIELD], [""], [adapteeType], loc);
 	const envType = envDecl.nodeType!;
@@ -81,47 +70,55 @@ function arityAdapter(d: HiddenStdConvData, ctx: TransformContext, adapterDecls:
 	envType.sym = envSym;
 	adapterDecls.push(envDecl);
 
-	const slotType = d.convType;
-	const paramSyms: Symbol[] = [];
-	const paramTypes: string[] = [];
-	const args: Node[] = [];
-	let ri = 0;
-	for (const param of slotType.typeChildren) {
-		if (param != null && param.kind == TypeKind.Void) continue;
-		const sym = newLoweredSym(ctx, SymbolKind.Parameter, "a" + String(ri), param);
-		paramSyms.push(sym);
-		paramTypes.push("");
-		if (ri < runtimeParamCount(sourceType)) args.push(makeTypedIdentResolved(sym, param, loc));
-		ri += 1;
-	}
 	const envParam = newLoweredSym(ctx, SymbolKind.Parameter, "_envP", createPtr(voidType()));
-	paramSyms.push(envParam);
-	paramTypes.push("void*");
 	const envCast = createNode(NodeKind.TypeAssertion, { asExpr: makeTypedIdentResolved(envParam, null, loc), asType: envType.typeName }, syntheticToken(loc));
 	envCast.nodeType = createPtr(envType);
 	const envRead = makeHiddenDeref(envCast, loc);
 	envRead.nodeType = envType;
 	const callee = makeMember(envRead, ADAPTEE_FIELD, loc);
 	callee.nodeType = adapteeType;
-	const call = makeCall(callee, args, loc);
-	call.nodeType = sourceType.typeReturn != null ? sourceType.typeReturn : voidType();
-	const returnsVoid = slotType.typeReturn == null || slotType.typeReturn.kind == TypeKind.Void;
-	const body = makeBlock([returnsVoid ? makeExprStmt(call, loc) : makeReturn(call, loc)], loc);
-	const thunk = makeFnDecl(thunkName, paramSyms, paramTypes, body, "", "", loc);
-	const thunkParams: Type[] = [];
-	for (const ps of paramSyms) thunkParams.push(ps.symbolType!);
-	const thunkNames: string[] = [];
-	for (const ps of paramSyms) thunkNames.push(ps.name);
-	thunk.nodeType = createFunction(thunkParams, thunkNames, slotType.typeReturn != null ? slotType.typeReturn : voidType());
-	const thunkSym = mintSym(ctx, SymbolKind.Function, thunkName, thunk.nodeType);
+	callee.resolvedSym = newLoweredSym(ctx, SymbolKind.Property, ADAPTEE_FIELD, adapteeType);
+	const thunkParams: Symbol[] = [];
+	for (const sym of paramSyms) thunkParams.push(sym);
+	thunkParams.push(envParam);
+	const thunkSym = adapterThunk(ctx, thunkName, thunkParams, callee, d, adapterDecls, loc);
+
+	const env = makeTypedObjectLiteral([ADAPTEE_FIELD], [adaptee], createRef(envType), loc);
+	const pair = makeTypedObjectLiteral(["fn", "env"], [makeTypedIdentResolved(thunkSym, d.convType, loc), env], d.convType, loc);
+	pair.flags = pair.flags.incl(NodeFlag.Closure);
+	return pair;
+}
+
+function jsArityAdapter(d: HiddenStdConvData, paramSyms: Symbol[], ctx: TransformContext, adapterDecls: Node[], loc: SourceLocation): Node {
+	const source = (d.convExpr.data as CallExprData).callee;
+	const sourceParam = newLoweredSym(ctx, SymbolKind.Parameter, "source", source.nodeType);
+	const thunkParams: Symbol[] = [sourceParam];
+	for (const sym of paramSyms) thunkParams.push(sym);
+	const thunkSym = adapterThunk(ctx, freshTemp(ctx, "arity"), thunkParams, makeTypedIdentResolved(sourceParam, source.nodeType, loc), d, adapterDecls, loc);
+	const adapted = makeCall(runtimeRef("msClosureAdapt", loc), [source, makeTypedIdentResolved(thunkSym, thunkSym.symbolType, loc)], loc);
+	adapted.nodeType = d.convType;
+	return adapted;
+}
+
+function adapterThunk(ctx: TransformContext, name: string, params: Symbol[], callee: Node, d: HiddenStdConvData, adapterDecls: Node[], loc: SourceLocation): Symbol {
+	const adapted = makeCall(callee, (d.convExpr.data as CallExprData).arguments, loc);
+	adapted.nodeType = d.convExpr.nodeType;
+	const slotReturn = d.convType.typeReturn != null ? d.convType.typeReturn : voidType();
+	const body = makeBlock([slotReturn.kind == TypeKind.Void ? makeExprStmt(adapted, loc) : makeReturn(adapted, loc)], loc);
+	const paramTypes: string[] = [];
+	const types: Type[] = [];
+	const names: string[] = [];
+	for (const p of params) {
+		paramTypes.push(p.name == "_envP" ? "void*" : "");
+		types.push(p.symbolType!);
+		names.push(p.name);
+	}
+	const thunk = makeFnDecl(name, params, paramTypes, body, "", "", loc);
+	thunk.nodeType = createFunction(types, names, slotReturn);
+	const thunkSym = mintSym(ctx, SymbolKind.Function, name, thunk.nodeType);
 	thunkSym.declNode = thunk;
 	thunkSym.location = loc;
 	thunk.resolvedSym = thunkSym;
 	adapterDecls.push(thunk);
-
-	const env = makeTypedObjectLiteral([ADAPTEE_FIELD], [adaptee], createRef(envType), loc);
-	const fnRef = makeTypedIdentResolved(thunkSym, slotType, loc);
-	const pair = makeTypedObjectLiteral(["fn", "env"], [fnRef, env], slotType, loc);
-	pair.flags = pair.flags.incl(NodeFlag.Closure);
-	return pair;
+	return thunkSym;
 }

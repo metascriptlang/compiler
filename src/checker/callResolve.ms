@@ -2687,7 +2687,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 						|| argTypes[pi].kind == TypeKind.Null
 						|| isAssignable(argTypes[pi], maybeFormal.typeReturn)
 						|| arityAdapts(argTypes[pi], maybeFormal.typeReturn))) {
-				args[pi] = synthMaybeWrap(args[pi], maybeFormal, argTypes[pi]);
+				args[pi] = synthMaybeWrap(args[pi], maybeFormal, argTypes[pi], ctx);
 				argTypes[pi] = maybeFormal;
 			}
 			// `A | null` meeting `A | B | null`. Same reason the wrap above
@@ -2711,7 +2711,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				argTypes[pi] = paramType;
 			}
 			if (instantiateGenericFnValue(ctx, args[pi], paramType)) argTypes[pi] = args[pi].nodeType!;
-			const thunkArg = synthClosureThunk(args[pi], peelSink(paramType), argTypes[pi]);
+			const thunkArg = synthClosureThunk(args[pi], peelSink(paramType), argTypes[pi], ctx);
 			if (thunkArg != null as unknown as Node) {
 				args[pi] = thunkArg;
 				argTypes[pi] = paramType;
@@ -2814,7 +2814,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 			const paramValue = skipModifier(paramType);
 			if (!formalAwaitsBinding && paramValue != null && matchUnionBehindInstance(paramValue).kind == TypeKind.Union && pi < args.length && argTypes[pi] != null) {
 				const argNow = args[pi].nodeType != null ? args[pi].nodeType! : argTypes[pi];
-				const uw = widenVariantToUnion(args[pi], paramValue, argNow);
+				const uw = widenVariantToUnion(args[pi], paramValue, argNow, ctx);
 				if (uw != null as unknown as Node) args[pi] = uw;
 			}
 			if (paramValue != null && matchUnionBehindInstance(paramValue).kind != TypeKind.Union && pi < args.length && argTypes[pi] != null) {
@@ -3092,7 +3092,7 @@ export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: 
 			const formal = applySubstitutions(fnType.typeChildren[ai], argBindings);
 			const formalValue = skipModifier(formal);
 			if (formalValue != null && matchUnionBehindInstance(formalValue).kind == TypeKind.Union) {
-				const uw = widenVariantToUnion(arg, formalValue, arg.nodeType);
+				const uw = widenVariantToUnion(arg, formalValue, arg.nodeType, ctx);
 				if (uw != null as unknown as Node) cd.arguments[ai] = uw;
 			}
 			const adoptedGen = tryAdoptAnonStruct(ctx, arg, formal, arg.nodeType);
@@ -3542,7 +3542,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		const substituted = applySubstitutions(calleeType.typeChildren[pi], eb);
 		if (substituted == null) continue;
 		if (arg.nodeType != null && !hasGenericParams(substituted)) {
-			const thunkArg = synthClosureThunk(arg, substituted, arg.nodeType);
+			const thunkArg = synthClosureThunk(arg, substituted, arg.nodeType, ctx);
 			if (thunkArg != null as unknown as Node) {
 				cd.arguments[pi] = thunkArg;
 				if (pi < argTypes.length) argTypes[pi] = substituted;
@@ -3567,7 +3567,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			}
 			if (arg.nodeType == null) arg.nodeType = carried;
 			if (carried != substituted && !isMaybeType(arg.nodeType)) {
-				cd.arguments[pi] = synthMaybeWrap(arg, substituted, arg.nodeType);
+				cd.arguments[pi] = synthMaybeWrap(arg, substituted, arg.nodeType, ctx);
 				if (pi < argTypes.length) argTypes[pi] = substituted;
 				continue;
 			}
@@ -3584,7 +3584,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		}
 		const substitutedValue = skipModifier(substituted);
 		if (substitutedValue != null && matchUnionBehindInstance(substitutedValue).kind == TypeKind.Union && arg.nodeType != null) {
-			const uw = widenVariantToUnion(arg, substitutedValue, arg.nodeType);
+			const uw = widenVariantToUnion(arg, substitutedValue, arg.nodeType, ctx);
 			if (uw != null as unknown as Node) {
 				cd.arguments[pi] = uw;
 				if (pi < argTypes.length) argTypes[pi] = substitutedValue;
@@ -3600,11 +3600,11 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			continue;
 		}
 		if (arg.kind == NodeKind.NullLiteral) {
-			cd.arguments[pi] = synthMaybeWrap(arg, maybeSubstituted, arg.nodeType!);
+			cd.arguments[pi] = synthMaybeWrap(arg, maybeSubstituted, arg.nodeType!, ctx);
 			if (pi < argTypes.length) argTypes[pi] = maybeSubstituted;
 		} else if (arg.nodeType != null && !isMaybeType(arg.nodeType)
 				&& (isAssignable(arg.nodeType, maybeSubstituted.typeReturn) || arityAdapts(arg.nodeType, maybeSubstituted.typeReturn))) {
-			cd.arguments[pi] = synthMaybeWrap(arg, maybeSubstituted, arg.nodeType);
+			cd.arguments[pi] = synthMaybeWrap(arg, maybeSubstituted, arg.nodeType, ctx);
 			if (pi < argTypes.length) argTypes[pi] = maybeSubstituted;
 		}
 	}
