@@ -463,6 +463,40 @@ export function fitComparedOperands(ctx: CheckerContext, d: BinaryExprData, left
 	return true;
 }
 
+function brandBase(t: Type | null): Type | null {
+	let base = distinctWidenBody(skipModifier(t));
+	for (let depth = 0; base != null && depth < PEEL_MAX_DEPTH; depth += 1) {
+		const inner = distinctWidenBody(skipModifier(base));
+		if (inner == null) return base;
+		base = inner;
+	}
+	return base;
+}
+
+function textOperandOrBase(op: string, t: Type, other: Type): Type | null {
+	const base = brandBase(t);
+	if (base == null || op != "+" || isStringLike(base)) return base;
+	return isStringLike(brandBase(other) ?? other) ? null : base;
+}
+
+export function widenBrandOperands(ctx: CheckerContext, d: BinaryExprData, leftType: Type | null, rightType: Type | null): boolean {
+	if (binaryOperandClass(d.operator) != "arith" && !isBitwiseBinaryOp(d.operator)) return false;
+	if (leftType == null || rightType == null) return false;
+	const leftBase = textOperandOrBase(d.operator, leftType, rightType);
+	const rightBase = textOperandOrBase(d.operator, rightType, leftType);
+	if (leftBase == null && rightBase == null) return false;
+	if (declaresComparison(ctx, [d.operator], [leftType, rightType])) return false;
+	if (leftBase != null) d.left = wrapInConv(d.left, leftBase);
+	if (rightBase != null) d.right = wrapInConv(d.right, rightBase);
+	return true;
+}
+
+function ownDistinct(t: Type | null): boolean {
+	if (t == null) return false;
+	const s = skipModifier(t);
+	return distinctBody(s) != null && distinctWidenBody(s) == null;
+}
+
 export function refuseNamespaceText(ctx: CheckerContext, expr: Node): boolean {
 	if (expr.nodeType == null || expr.nodeType.kind != TypeKind.Module) return false;
 	addError(ctx, `a module namespace (${typeDisplayName(expr.nodeType)}) has no text form here; read one of its exports instead`, expr.location.line, expr.location.column);
@@ -1356,7 +1390,8 @@ export function binaryOperandsFail(ctx: CheckerContext, op: string, leftType: Ty
 		return ctx.extensionRegistry == null
 			|| resolveOperatorCall(ctx.table, ctx.extensionRegistry, bop, [leftType, rightType]) == null;
 	}
-	const ok = cls == "arith" ? arithOperandsOk(bop, a, b) : equalityOperandsOk(leftType, rightType);
+	const ownArith = cls == "arith" && (ownDistinct(leftType) || ownDistinct(rightType)) && !isStringLike(a) && !isStringLike(b);
+	const ok = cls == "arith" ? !ownArith && arithOperandsOk(bop, a, b) : equalityOperandsOk(leftType, rightType);
 	if (ok) return false;
 	return ctx.extensionRegistry == null
 		|| resolveOperatorCall(ctx.table, ctx.extensionRegistry, bop, [leftType, rightType]) == null;
@@ -1375,7 +1410,7 @@ function numericLikeOperand(s: Type): boolean {
 export function unaryArithFails(ctx: CheckerContext, op: string, t: Type | null): boolean {
 	if (t == null) return false;
 	const s = operandShape(t);
-	if (s == null || binaryOperandSkip(s) || numericLikeOperand(s)) return false;
+	if (s == null || binaryOperandSkip(s) || (numericLikeOperand(s) && !ownDistinct(t))) return false;
 	return ctx.extensionRegistry == null || resolveOperatorCall(ctx.table, ctx.extensionRegistry, op, [t]) == null;
 }
 
