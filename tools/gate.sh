@@ -987,10 +987,12 @@ restamp() { find "$@" -type f -exec touch {} +; }
 
 prepare_emit_workspace() {
   local part
+  local -a copy=(cp -aL)
+  case "$OSTYPE" in darwin*) copy=(/bin/cp -caL) ;; esac
   mkdir -p "$CTL_WORK/bin/ctrl" "$CTL_WORK/bin/cand" || return 1
   for part in src std runtime vendor; do
     rm -rf "$CTL_WORK/$part"
-    cp -aL "$TOP/$part" "$CTL_WORK/$part" || return 1
+    "${copy[@]}" "$TOP/$part" "$CTL_WORK/$part" || return 1
   done
   restamp "$CTL_WORK/std" "$CTL_WORK/src" && [ -f "$CTL_WORK/std/core/system/index.ms" ]
 }
@@ -1301,16 +1303,39 @@ stable_emit_self_test() (
 )
 
 support_cache_self_test() (
-  local d old new copied before after bad=0 CONTROL_SUPPORT
+  local d old new copied before after bad=0 CONTROL_SUPPORT TOP CTL_WORK platform expected fail_copy=0
+  local real_os=$OSTYPE OSTYPE=$OSTYPE
   d=$(mktemp -d) || return 1
-  mkdir -p "$d/a/src" "$d/a/std" "$d/a/runtime" "$d/a/vendor/lib" "$d/b"
-  printf 'source\n' >"$d/a/src/a.ms"; printf 'std\n' >"$d/a/std/a.ms"
-  printf '#define RUNTIME_VALUE 1\n' >"$d/a/runtime/core.h"
+  TOP="$d/a" CTL_WORK="$d/b"
+  mkdir -p "$TOP/src/empty dir" "$TOP/std/core/system" "$TOP/runtime" "$TOP/vendor/lib"
+  printf 'source\n' >"$TOP/src/a.ms"; printf 'std\n' >"$TOP/std/a.ms"
+  printf 'system\n' >"$TOP/std/core/system/index.ms"
+  chmod +x "$TOP/src/a.ms"
+  printf '#define RUNTIME_VALUE 1\n' >"$TOP/runtime/core.h"
   printf '#define VENDOR_VALUE 1\n' >"$d/shared.h"
-  ln -s "$d/shared.h" "$d/a/vendor/lib/shared.h"
-  (cd "$d/a" && git init -q && git -c user.name=t -c user.email=t@t add src std runtime vendor \
+  ln -s "$d/shared.h" "$TOP/vendor/lib/shared.h"
+  (cd "$TOP" && git init -q && git -c user.name=t -c user.email=t@t add src std runtime vendor \
     && git -c user.name=t -c user.email=t@t commit -qm inputs) >"$d/git.log" 2>&1 || { rm -rf "$d"; return 1; }
-  cp -aL "$d/a/runtime" "$d/a/vendor" "$d/a/std" "$d/b"
+  cp() {
+    printf 'portable\n' >>"$d/copies"
+    [ "$fail_copy" -eq 0 ] && command cp "$@"
+  }
+  function /bin/cp() {
+    printf 'native\n' >>"$d/copies"
+    [ "$fail_copy" -eq 0 ] && [ "$1" = -caL ] || return 1
+    if [[ "$real_os" == darwin* ]]; then command /bin/cp "$@"; else shift; command cp -aL "$@"; fi
+  }
+  for platform in linux-gnu msys darwin-test; do
+    OSTYPE=$platform; expected=portable
+    [[ "$platform" != darwin* ]] || expected=native
+    : >"$d/copies"
+    prepare_emit_workspace || { printf 'FAIL shared support: %s snapshot failed\n' "$platform"; bad=1; break; }
+    [ "$(grep -c "^$expected$" "$d/copies")" = 4 ] \
+      || { printf 'FAIL shared support: %s used the wrong copy route\n' "$platform"; bad=1; }
+    cmp -s "$TOP/src/a.ms" "$CTL_WORK/src/a.ms" && [ -x "$CTL_WORK/src/a.ms" ] \
+      && [ -d "$CTL_WORK/src/empty dir" ] && [ ! -L "$CTL_WORK/vendor/lib/shared.h" ] \
+      || { printf 'FAIL shared support: %s changed source bytes/mode or retained a link\n' "$platform"; bad=1; }
+  done
   old=$(control_support "$d/a")
   copied=$(control_support "$d/b")
   [ "$old" = "$copied" ] || { printf 'FAIL shared support: same files at another root changed identity\n'; bad=1; }
@@ -1331,6 +1356,8 @@ support_cache_self_test() (
   new=$(control_support "$d/a")
   printf 'export default {};\n' >"$d/build.ms"
   [ "$(control_support "$d/a")" != "$new" ] || { printf 'FAIL shared support: an ambient build.ms above the workspace kept the same identity\n'; bad=1; }
+  fail_copy=1
+  if prepare_emit_workspace; then printf 'FAIL shared support: a failed copy was accepted\n'; bad=1; fi
   rm -rf "$d"
   return $bad
 )
