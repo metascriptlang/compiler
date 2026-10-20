@@ -8,8 +8,9 @@ import { readFile } from "std/fs";
 import { translateCHeader } from "../../../module/cimport/emit";
 import { writeStderr } from "std/io";
 import {
-	lspGetField, lspGetNumberField, lspGetObjectField,
+	lspGetField, lspGetNumberField, lspGetObjectField, lspUriToPath,
 } from "../protocol";
+import { lineOffset } from "../../fmt/edit";
 
 
 // ===== Completion Cache =====
@@ -78,12 +79,29 @@ export interface LspCursorParams {
 	col1: int32;   // 1-based (for AST node position matching)
 }
 
-export function lspExtractPosition(params: string): LspCursorParams {
+// LSP characters count UTF-16 code units; checker columns count bytes from 1.
+export function lspByteColumn(source: string, line: int32, character: int32): int32 {
+	const text = source.byteSlice(lineOffset(source, line), lineOffset(source, line + 1));
+	const previous = text.charCodeAt(character - 1);
+	const current = text.charCodeAt(character);
+	const inside = previous >= 0xD800 && previous <= 0xDBFF && current >= 0xDC00 && current <= 0xDFFF;
+	return text.slice(0, inside ? character - 1 : character).byteLength + 1;
+}
+
+export function lspCharacter(source: string, line: int32, column: int32): int32 {
+	const start = lineOffset(source, line);
+	const end = start + (column > 0 ? column - 1 : 0);
+	return source.byteSlice(start, end < source.byteLength ? end : source.byteLength).length;
+}
+
+export function lspExtractPosition(params: string, db: TransAmDb | null = null): LspCursorParams {
 	const textDoc = lspGetObjectField(params, "textDocument");
 	const uri = lspGetField(textDoc, "uri");
 	const position = lspGetObjectField(params, "position");
-	const col0 = lspGetNumberField(position, "character") as int32;
-	return { uri, line: (lspGetNumberField(position, "line") as int32) + 1, col: col0, col1: col0 + 1 };
+	const line = (lspGetNumberField(position, "line") as int32) + 1;
+	const character = lspGetNumberField(position, "character") as int32;
+	const col1 = db != null ? lspByteColumn(dbGetSource(db, lspUriToPath(uri)), line, character) : character + 1;
+	return { uri, line, col: col1 - 1, col1 };
 }
 
 // Simple linear search for dedup (O(n^2) acceptable for typical reference counts).

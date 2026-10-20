@@ -11,13 +11,13 @@ import { mkdir, writeFile } from "std/fs";
 import { lspNotification, lspFormatMessage, lspPathToUri, lspGetField, lspGetObjectField, lspGetArrayItems, lspGetNumberField, dirname } from "../protocol";
 import { parseJson } from "std/serialize/json/parser";
 import { lspFmtDiagnostic, lspFmtDiagnosticRange, lspFmtPublishDiagnostics } from "../format";
-import { sgCollectDiagnostics, sgGetLineOffset } from "../../../checker/suggest";
+import { sgCollectDiagnostics } from "../../../checker/suggest";
 import { addErrorRange, addErrorFullRange } from "../../../checker/context";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../../../ast/node";
 import { FormatOptions, defaultFormatOptions, applyFmtSection } from "../../fmt/options";
 import { loadFmtSection, loadLspSection, validateBuildConfig, LspSection } from "../../buildConfig";
 import { collectFreestandingAsync, freestandingAsyncLoc, FREESTANDING_ASYNC_MSG } from "../../../checker/freestanding";
-import { dbGetSource, lspEnsureFileLoaded } from "./shared";
+import { dbGetSource, lspEnsureFileLoaded, lspCharacter } from "./shared";
 import { dbResolveImport } from "../../transam/index";
 import { findProjectRoot } from "../../../utils/path";
 
@@ -236,12 +236,6 @@ function lspBasename(path: string): string {
 
 // ===== Diagnostics =====
 
-function diagnosticCharacter(source: string, line: int32, column: int32): int32 {
-	const offset = sgGetLineOffset(source, line);
-	const byteColumn = column > 0 ? column - 1 : 0;
-	return source.byteSlice(offset, offset + byteColumn).length;
-}
-
 export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): string {
 	const ctx = dbTypeCheck(db, path);
 	const source = dbGetSource(db, path);
@@ -255,10 +249,10 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 			if (diagCount > 0) diagArray = diagArray + ",";
 			const d = diags[i];
 			const line = d.line - 1;
-			const col = diagnosticCharacter(source, d.line, d.column);
+			const col = lspCharacter(source, d.line, d.column);
 			const endLine = d.endLine > 0 ? d.endLine - 1 : line;
 			const hasEnd = d.endColumn > 0 && (endLine > line || d.endColumn > d.column);
-			const endCol = hasEnd ? diagnosticCharacter(source, endLine + 1, d.endColumn) : col + 1;
+			const endCol = hasEnd ? lspCharacter(source, endLine + 1, d.endColumn) : col + 1;
 			diagArray = diagArray + lspFmtDiagnosticRange(
 				line, col, endLine, endCol, d.severity, d.message, "metascript", 0, d.tags
 			);

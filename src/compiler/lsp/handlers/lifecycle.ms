@@ -1104,6 +1104,51 @@ test "position-only edits preserve UTF-16 diagnostic spans through undo" {
 	}
 }
 
+function utf16Span(item: string): string {
+	const range = lspGetObjectField(item, "range");
+	const start = lspGetObjectField(range, "start");
+	const end = lspGetObjectField(range, "end");
+	if (lspGetNumberField(start, "line") != lspGetNumberField(end, "line")) return "multiline:" + range;
+	return (lspGetNumberField(start, "line") as int32) + ":" + (lspGetNumberField(start, "character") as int32)
+		+ "-" + (lspGetNumberField(end, "character") as int32);
+}
+
+function utf16SpansMatch(label: string, items: string[], expected: string[]): boolean {
+	const spans: string[] = [];
+	for (const item of items) spans.push(utf16Span(item));
+	let matched = spans.length == expected.length;
+	for (const span of expected) {
+		if (spans.indexOf(span) < 0) matched = false;
+	}
+	if (!matched) writeStderr(label + ": expected " + expected.join(",") + " got " + spans.join(",") + "\n");
+	return matched;
+}
+
+test "queries read and answer UTF-16 positions after non-ASCII text" {
+	const prefixes = ["", "/*é*/ ", "/*😀*/ ", "/*é*/\n/*😀*/ ", "/*é*/\r\n/*😀*/ ", ""];
+	const gaps = ["", "", "", "", "", "/*é😀*/ "];
+	const lines = [0, 0, 0, 1, 1, 0];
+	const declarations = [6, 12, 13, 13, 13, 6];
+	const uses = [23, 29, 30, 30, 30, 31];
+	const uri = "file:///query-utf16.ms";
+	for (let i = 0; i < prefixes.length; i++) {
+		const db = testDb(uri, prefixes[i] + "const s = 1; " + gaps[i] + "const t = s;");
+		const decl = lines[i] + ":" + declarations[i] + "-" + (declarations[i] + 1);
+		const use = lines[i] + ":" + uses[i] + "-" + (uses[i] + 1);
+		const params = "{\"textDocument\":{\"uri\":" + lspJsonString(uri) + "},\"position\":{\"line\":"
+			+ lines[i] + ",\"character\":" + uses[i] + "}";
+		const label = "utf16 case " + i;
+		assert utf16SpansMatch(label + " definition", lspGetArrayItems(lspGetObjectField(handleDefinition("80", params + "}", db), "result")), [decl]);
+		assert utf16SpansMatch(label + " hover", [lspGetObjectField(handleHover("81", params + "}", db), "result")], [use]);
+		assert utf16SpansMatch(label + " references", lspGetArrayItems(lspGetObjectField(handleReferences("82", params + "}", db), "result")), [decl, use]);
+		assert utf16SpansMatch(label + " highlight", lspGetArrayItems(lspGetObjectField(handleDocumentHighlight("83", params + "}", db), "result")), [decl, use]);
+		const rename = handleRename("84", params + ",\"newName\":\"v\"}", db);
+		const edits = lspGetArrayItems(lspGetObjectField(lspGetObjectField(lspGetObjectField(rename, "result"), "changes"), uri));
+		assert utf16SpansMatch(label + " rename", edits, [decl, use]);
+		for (const edit of edits) assert lspGetField(edit, "newText") == "v";
+	}
+}
+
 test "semantic UTF-16 deltas survive prefix and gap edits and undo" {
 	const initialized = parseJson(handleInitialize("71"));
 	assert initialized.ok;

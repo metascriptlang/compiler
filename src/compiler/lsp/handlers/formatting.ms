@@ -12,7 +12,7 @@ import { FmtPos, formatStatementEdit, innermostStatement, lineOffset, applyEdit 
 import { checkLossless } from "../../fmt/lossless";
 import { registerCoreParsers } from "../../../parser/statements/core";
 import { parseSource } from "../../../parser/statements/validation";
-import { dbGetSource } from "./shared";
+import { dbGetSource, lspByteColumn, lspCharacter } from "./shared";
 import { getFormatOptions, splitLines, detectLineIndent } from "./diagnostics";
 
 
@@ -134,13 +134,9 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 
 function formattingBytePosition(source: string, position: string): Result<FmtPos, string> {
 	const line = (lspGetNumberField(position, "line") + 1) as int32;
-	let character = lspGetNumberField(position, "character") as int32;
+	const character = lspGetNumberField(position, "character") as int32;
 	if (line < 1 || character < 0) return Result.err("Formatting position requires non-negative line and character");
-	const text = source.byteSlice(lineOffset(source, line), lineOffset(source, line + 1));
-	const previous = text.charCodeAt(character - 1);
-	const current = text.charCodeAt(character);
-	if (previous >= 0xD800 && previous <= 0xDBFF && current >= 0xDC00 && current <= 0xDFFF) character -= 1;
-	return Result.ok({ line, column: text.slice(0, character).byteLength + 1 });
+	return Result.ok({ line, column: lspByteColumn(source, line, character) });
 }
 
 export function handleRangeFormatting(id: string, params: string, db: TransAmDb): string {
@@ -176,8 +172,8 @@ export function handleRangeFormatting(id: string, params: string, db: TransAmDb)
 	const endOffset = lineOffset(source, e.end.line) + e.end.column - 1;
 	if (source.byteSlice(startOffset, endOffset) == e.newText) return lspResponse(id, "[]");
 
-	const startCharacter = source.byteSlice(lineOffset(source, e.start.line), startOffset).length;
-	const endCharacter = source.byteSlice(lineOffset(source, e.end.line), endOffset).length;
+	const startCharacter = lspCharacter(source, e.start.line, e.start.column);
+	const endCharacter = lspCharacter(source, e.end.line, e.end.column);
 	const lspRange = lspFmtRange(e.start.line - 1, startCharacter, e.end.line - 1, endCharacter);
 	return lspResponse(id, "[{\"range\":" + lspRange + ",\"newText\":" + lspJsonString(e.newText) + "}]");
 }

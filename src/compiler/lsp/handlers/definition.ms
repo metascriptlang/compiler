@@ -14,7 +14,7 @@ import {
 import { sgGetPrefix, sgFindImportSource, sgFindExportedDecl, sgQueryAtPosition } from "../../../checker/suggest";
 import { SymbolFlag, hasFlag } from "../../../checker/symbol";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData, SourceLocation, makeLoc, SymbolKind } from "../../../ast/node";
-import { lspExtractPosition, dbGetSource, lspEnsureFileLoaded } from "./shared";
+import { lspExtractPosition, dbGetSource, lspEnsureFileLoaded, lspCharacter } from "./shared";
 import { dbResolveImport } from "../../transam/index";
 
 
@@ -243,7 +243,7 @@ function lspSearchHeaderForName(nativeName: string, headerRelPath: string, modul
 // ===== Definition =====
 
 export function handleDefinition(id: string, params: string, db: TransAmDb): string {
-	const pos = lspExtractPosition(params);
+	const pos = lspExtractPosition(params, db);
 	const path = lspUriToPath(pos.uri);
 
 	const program = dbParse(db, path);
@@ -299,6 +299,7 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 
 		// Refine line/col using source text
 		if (defSrc != "") {
+			defCol = lspCharacter(defSrc, defLine + 1, defCol + 1);
 			if (suggest.kind == SymbolKind.EnumMember && suggest.containerName != "") {
 				// Enum member: search for "enum ContainerName" then member within block
 				const enumLoc = lspFindEnumMemberLine(defSrc, suggest.containerName, suggest.name);
@@ -320,7 +321,7 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 				if (nameCol >= 0) defCol = nameCol;
 			}
 		}
-		const location = lspFmtLocation(defUri, defLine, defCol, defLine, defCol + suggest.name.byteLength);
+		const location = lspFmtLocation(defUri, defLine, defCol, defLine, defCol + suggest.name.length);
 		return lspResponse(id, "[" + location + "]");
 	}
 
@@ -348,6 +349,7 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 	let tCol = declLoc.column - 1;
 	const targetSrc = dbGetSource(db, targetPath);
 	if (targetSrc != "") {
+		tCol = lspCharacter(targetSrc, tLine + 1, tCol + 1);
 		const tNameCol = lspFindNameCol(targetSrc, tLine, identName);
 		if (tNameCol >= 0) tCol = tNameCol;
 	}
