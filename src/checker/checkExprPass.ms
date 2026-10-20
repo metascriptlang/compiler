@@ -2082,8 +2082,12 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 		}
 		if (objNames != null && !(isEngineCheckMode() && containerName == "Node")) {
 			let hasDynamicKey = false;
-			for (const k of d.keys) {
+			let fieldsUnknown = false;
+			for (let ki = 0; ki < d.keys.length; ki += 1) {
+				const k = d.keys[ki];
 				if (k == "..." || k == "__computed__") hasDynamicKey = true;
+				if (k == "__computed__" || (k == "..." && (ki >= d.properties.length || d.properties[ki].kind != NodeKind.SpreadExpr
+					|| spreadFieldsOf((d.properties[ki].data as SpreadExprData).spreadArg.nodeType) == null))) fieldsUnknown = true;
 			}
 			if (!hasDynamicKey && d.keys.length == d.properties.length) {
 				for (let oi = 0; oi < objNames.length && oi < objChildren.length; oi += 1) {
@@ -2095,7 +2099,7 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 					if (d.keyLocations != null) d.keyLocations.push(makeLoc(0, 0));
 				}
 			}
-			if (!hasDynamicKey) {
+			if (!fieldsUnknown) {
 				let mi = 0;
 				while (mi < objNames.length) {
 					const wantT = mi < objChildren.length ? objChildren[mi] : null as unknown as Type;
@@ -2104,6 +2108,7 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 					if (wantT != null && (hidden || requiresInit(ctx, wantT))) {
 						let present = false;
 						for (const k of d.keys) { if (k == want) { present = true; break; } }
+						if (!present && hasDynamicKey) present = givenAfter(d, -1, want);
 						if (!present && hidden) {
 							addError(ctx, `type '${containerName}' has a private field and can only be built by the module that declares it — obtain one from that module`, node.location.line, node.location.column);
 						} else if (!present && hiddenHolder(ctx, wantT, 0) != null) {
