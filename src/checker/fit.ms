@@ -467,10 +467,10 @@ function brandBase(t: Type | null): Type | null {
 	let base = distinctWidenBody(skipModifier(t));
 	for (let depth = 0; base != null && depth < PEEL_MAX_DEPTH; depth += 1) {
 		const inner = distinctWidenBody(skipModifier(base));
-		if (inner == null) return base;
+		if (inner == null) break;
 		base = inner;
 	}
-	return base;
+	return base != null && skipModifier(base).kind != TypeKind.Function ? base : null;
 }
 
 function textOperandOrBase(op: string, t: Type, other: Type): Type | null {
@@ -494,7 +494,7 @@ export function widenBrandOperands(ctx: CheckerContext, d: BinaryExprData, leftT
 function ownDistinct(t: Type | null): boolean {
 	if (t == null) return false;
 	const s = skipModifier(t);
-	return distinctBody(s) != null && distinctWidenBody(s) == null;
+	return distinctBody(s) != null && brandBase(s) == null;
 }
 
 export function refuseNamespaceText(ctx: CheckerContext, expr: Node): boolean {
