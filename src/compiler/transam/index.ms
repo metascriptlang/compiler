@@ -1370,22 +1370,68 @@ test "a module's type check registers the program it checked" {
 	assert program == dbGetCheckedProgram(db, "/test/registered.ms");
 }
 
-test "both sides of an import cycle bind the symbols each side checks" {
-	const db = createTransAmDb(100);
-	dbSetFileText(db, "/test/ca.ms", 'import { fb } from "./cb";\nexport function fa(n: int32): int32 { return fb(n); }');
-	dbSetFileText(db, "/test/cb.ms", 'import { fa } from "./ca";\nexport function fb(n: int32): int32 { return n <= 0 ? 0 : fa(n - 1); }');
-	const aId = getFileId(db.fileInput, "/test/ca.ms");
-	const bId = getFileId(db.fileInput, "/test/cb.ms");
-	recordModuleImport(db.moduleDeps, aId, bId);
-	recordModuleImport(db.moduleDeps, bId, aId);
-	const ctxB = dbTypeCheck(db, "/test/cb.ms");
-	const ctxA = dbTypeCheck(db, "/test/ca.ms");
-	assert ctxA != null && ctxB != null;
-	const fa = lookupLocal(ctxA.table, "fa");
-	const fb = lookupLocal(ctxB.table, "fb");
-	assert fa != null && fb != null;
-	assert lookupLocal(ctxB.table, "fa") == fa;
-	assert lookupLocal(ctxA.table, "fb") == fb;
+test "import cycles refresh signatures and reuse lowering through undo and redo" {
+	const paths = ["/cycles/a.ms", "/cycles/b.ms", "/cycles/view.ms", "/cycles/stable.ms"];
+	const a32 = 'import { fb } from "./b";
+export function fa(n: int32): int32 { return fb(n); }';
+	const b32 = 'import { fa } from "./a";
+export function fb(n: int32): int32 { return n <= 0 ? 0 : fa(n - 1); }';
+	const a64 = 'import { fb } from "./b";
+export function fa(n: int64): int64 { return fb(n); }';
+	const b64 = 'import { fa } from "./a";
+export function fb(n: int64): int64 { return n <= 0 ? 0 : fa(n - 1); }';
+	const sourcesA = [a32, a64, a32, a64];
+	const sourcesB = [b32, b64, b32, b64];
+	const types = ["int32", "int64", "int32", "int64"];
+	const names = ["fa", "fb", "observed", "stable"];
+	for (let order = 0; order < 2; order++) {
+		const db = createTransAmDb(100);
+		dbSetFileText(db, paths[0], a32);
+		dbSetFileText(db, paths[1], b32);
+		dbSetFileText(db, paths[2], 'import { fa } from "./a";
+export const observed = fa(2);');
+		dbSetFileText(db, paths[3], "export const stable: int32 = 7;");
+		const aId = getFileId(db.fileInput, paths[0]);
+		const bId = getFileId(db.fileInput, paths[1]);
+		recordModuleImport(db.moduleDeps, aId, bId);
+		recordModuleImport(db.moduleDeps, bId, aId);
+		recordModuleImport(db.moduleDeps, getFileId(db.fileInput, paths[2]), aId);
+		const counts: LowerCount[] = [{ n: 0 }, { n: 0 }, { n: 0 }, { n: 0 }];
+		const indices = order == 0 ? [0, 1, 2, 3] : [1, 0, 2, 3];
+		for (let i = 0; i < sourcesA.length; i++) {
+			dbSetFileText(db, paths[0], sourcesA[i]);
+			dbSetFileText(db, paths[1], sourcesB[i]);
+			for (const path of paths) dbParse(db, path);
+			for (const j of indices) {
+				const ctx = dbTypeCheck(db, paths[j]);
+				assert ctx.errors.length == 0;
+				const expectedType = j == 3 ? "int32" : types[i];
+				const sym = lookupLocal(ctx.table, names[j]);
+				assert sym != null;
+				if (j < 2) {
+					assert sym.symbolType.typeReturn != null;
+					assert typeDisplayName(sym.symbolType.typeReturn) == expectedType;
+					assert sym.symbolType.typeChildren.length == 1;
+					assert typeDisplayName(sym.symbolType.typeChildren[0]) == expectedType;
+				} else {
+					assert localTypeName(ctx, names[j]) == expectedType;
+				}
+				const lowered = dbLower(db, paths[j], countLowering, counts[j]);
+				const expectedCount = j == 3 ? 1 : i + 1;
+				assert counts[j].n == expectedCount;
+				assert dbLower(db, paths[j], countLowering, counts[j]) == lowered;
+				assert dbTypeCheck(db, paths[j]) == ctx;
+				assert counts[j].n == expectedCount;
+			}
+			const ctxA = dbTypeCheck(db, paths[0]);
+			const ctxB = dbTypeCheck(db, paths[1]);
+			const fa = lookupLocal(ctxA.table, "fa");
+			const fb = lookupLocal(ctxB.table, "fb");
+			assert fa != null && fb != null;
+			assert lookupLocal(ctxB.table, "fa") == fa;
+			assert lookupLocal(ctxA.table, "fb") == fb;
+		}
+	}
 }
 
 test "a db bound to a loaded graph checks each module against the graph's module" {
