@@ -4085,7 +4085,7 @@ export function finishModuleCheck(bound: BoundModule): CheckerContext {
 	// Register this module's ctx so later cross-module generic instantiation can
 	// re-check cloned bodies in THIS module's scope (resolving private consts,
 	// helper functions, etc.). Reference parity: Nim's graph.ifaces[module].
-	if (!isEngineCheckMode()) registerModuleCtx(ctx.modulePath, ctx);
+	if (!isEngineCheckMode() && !sharedPreludeOwns(ctx.preludeCtx, ctx.modulePath)) registerModuleCtx(ctx.modulePath, ctx);
 	return ctx;
 }
 
@@ -4096,6 +4096,7 @@ interface SharedPrelude {
 	duVariants: Type[];
 	ctorRoutines: CtorRow[];
 	dispatch: DispatchRecords;
+	owned: HashSet<string> | null;
 }
 
 let _preludeCtxByKey: Map<string, SharedPrelude> = new Map<string, SharedPrelude>();
@@ -4127,6 +4128,7 @@ function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude 
 		duVariants: duVariantsFrom(duMark),
 		ctorRoutines: ctorRoutinesFrom(ctorMark),
 		dispatch: endDispatchCapture(outerDispatch),
+		owned: null,
 	};
 }
 
@@ -4134,6 +4136,32 @@ function replayPreludeContributions(shared: SharedPrelude): void {
 	replayDuVariants(shared.duVariants);
 	replayCtorRoutines(shared.ctorRoutines);
 	replayDispatchRecords(shared.dispatch);
+}
+
+// The modules the prelude every build shares loaded from the default global imports. Such a
+// module checked on its own keeps its diagnostics, while generics the prelude declares in it
+// still instantiate against the prelude's copy, as a build that skips it does.
+export function sharedPreludeOwns(prelude: CheckerContext | null, modulePath: string): boolean {
+	if (prelude == null) return false;
+	for (const shared of _preludeCtxByKey.values()) {
+		if (shared.ctx.table != prelude.table) continue;
+		if (shared.owned == null) shared.owned = preludeModulePaths(shared.ctx);
+		return shared.owned!.has(modulePath);
+	}
+	return false;
+}
+
+function preludeModulePaths(prelude: CheckerContext): HashSet<string> {
+	const owned = new HashSet<string>();
+	for (const path of prelude.preludeModuleScopes.keys()) owned.add(path);
+	for (const specifier of defaultGlobalImports()) {
+		const members = prelude.preludeInterf.get(specifier);
+		if (members == null) continue;
+		for (const sym of members) {
+			if (sym.modulePath != "") owned.add(sym.modulePath);
+		}
+	}
+	return owned;
 }
 
 export function isSharedPrelude(ctx: CheckerContext): boolean {
