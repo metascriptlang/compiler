@@ -96,7 +96,7 @@ export function initDefines(t: DefineTable, backendName: string, targetOs: strin
 	seed(t, "backend", backendName);
 	seed(t, "os", os);
 	seed(t, "cpu", cpu);
-	seed(t, "gc", gcMode);
+	seed(t, "mm", gcMode);
 	seed(t, "mode", modeName);
 }
 
@@ -114,8 +114,8 @@ export function seedProjectDir(t: DefineTable, dir: string): void {
 
 // A name msc answers from its own options, on this build or another: a project define of it would
 // turn `when solana` or `os == …` into a lie about the build.
-const OPTION_NAMES = ["msc", "backend", "os", "cpu", "gc", "mode", "hcr", "projectDir", "posix", "unix", "bsd",
-	"c", "js", "raiser", "debug", "release", "danger", "drc", "orc", "none", "manual",
+const OPTION_NAMES = ["msc", "backend", "os", "cpu", "mm", "mode", "hcr", "projectDir", "posix", "unix", "bsd",
+	"c", "js", "raiser", "debug", "release", "danger", "drc", "none", "manual",
 	"bare", "solana", "wasm", "emcc", "linux", "macos", "windows", "darwin", "freebsd", "ios", "android"];
 
 export function isOptionDefine(t: DefineTable, name: string): boolean {
@@ -213,18 +213,18 @@ test "define: undef removes" {
 	assert !isDefined(t, "gone");
 }
 
-test "initDefines seeds backend, os, cpu, gc and mode" {
+test "initDefines seeds backend, os, cpu, mm and mode" {
 	const t = createDefineTable();
-	initDefines(t, "js", "darwin", "arm64", "orc", 0);
+	initDefines(t, "js", "darwin", "arm64", "manual", 0);
 	assert isDefined(t, "js");
 	assert isDefined(t, "macos");
-	assert isDefined(t, "orc");
+	assert isDefined(t, "manual");
 	assert isDefined(t, "debug");
 	assert definedValue(t, "backend") == "js";
 	assert definedValue(t, "os") == "macos";
 	assert isDefined(t, "arm64");
 	assert definedValue(t, "cpu") == "arm64";
-	assert definedValue(t, "gc") == "orc";
+	assert definedValue(t, "mm") == "manual";
 	assert definedValue(t, "mode") == "debug";
 }
 

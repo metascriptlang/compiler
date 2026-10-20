@@ -1,6 +1,6 @@
 // Freestanding-runtime diagnostics — FREESTANDING E01/E02.
 //
-// The freestanding runtime (`--gc=manual`, forced by `--os=bare` and
+// The freestanding runtime (`--mm=manual`, forced by `--os=bare` and
 // `--os=solana`) has no dispatcher, no thread pool and no await slots:
 // runtime/manual.h REPLACES runtime/core/system.h (it reuses its include
 // guard) and stubs the future machinery, so an emitted `await` / `spawn`

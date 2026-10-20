@@ -173,7 +173,7 @@ export function compileToCWithStd(source: string): CompileResult {
 	const loadErr = loadFailure(mod);
 	if (loadErr != "") return Result.err(loadErr);
 
-	checkModuleGraph(graph, stdPath, ".cms", platform, hostTargetInfo(), GcMode.Orc, config);
+	checkModuleGraph(graph, stdPath, ".cms", platform, hostTargetInfo(), GcMode.Drc, config);
 
 	const unit = checkedUnit(modPath);
 	if (unit == null) return Result.err(uncheckedError(mod));

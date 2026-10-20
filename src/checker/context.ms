@@ -1304,14 +1304,11 @@ export interface CheckerError {
 
 // ===== GC Mode =====
 // GC mode — explicitly chosen, drives DRC and allocation behavior.
-// Orc: default, ARC + cycle collector (malloc + refcount + ORC cycle detection).
-// Drc: ARC only, no cycle collection (malloc + refcount, no ORC).
 // None: no RC, use malloc, never free (debug/leak testing).
 // Manual: no RC, freestanding — arena allocator, no malloc, no POSIX (see docs/BARE.md).
 
 export enum GcMode {
 	Drc,
-	Orc,
 	None,
 	Manual,
 }
@@ -1415,7 +1412,7 @@ export function createContext(): CheckerContext {
 	return {
 		table,
 		errors: [],
-		gcMode: GcMode.Orc,
+		gcMode: GcMode.Drc,
 		targetOs: platform,
 		targetInfo: hostTargetInfo(),
 		appMode: "console",

@@ -72,9 +72,9 @@ export interface CliOptions {
 	testsInDir: boolean;       // --tests-in-dir: test runs only modules under the entry's directory
 	testsShard: int32;         // --tests-shard=<i>/<n>: test runs the tested modules whose position mod n is i
 	testsShards: int32;
-	gcMode: string;            // --gc=drc|none|manual: memory management mode
-	gcExplicit: boolean;       // true when --gc= was passed. Distinguishes an explicit
-	                           // --gc=orc from the default, so target-implied modes
+	gcMode: string;            // --mm=drc|manual|none: memory management mode
+	gcExplicit: boolean;       // true when --mm= was passed. Distinguishes an explicit
+	                           // --mm=drc from the default, so target-implied modes
 	                           // (--os=bare/solana => manual) never override the user.
 	lto: string;               // --lto=off|thin|full: link-time optimization strategy (empty = mode default)
 	autoYes: boolean;          // --yes: auto-accept managed toolchain install (also MSC_AUTO_INSTALL_CC=1)
@@ -171,7 +171,7 @@ export function newCliOptions(): CliOptions {
 		testsInDir: false,
 		testsShard: 0,
 		testsShards: 1,
-		gcMode: "orc",
+		gcMode: "drc",
 		gcExplicit: false,
 		lto: "",
 		autoYes: false,
@@ -263,7 +263,7 @@ export function applyProjectConfig(opts: CliOptions, projectRoot: string): Resul
 		}
 		const reserved = applyConfigDefines(opts.defines, config.defines.keys, config.defines.values);
 		if (reserved != "") {
-			return Result.err(`${buildMsPath}: define '${reserved}' is a name msc sets from its own options (backend, --os, --cpu, --gc, the build mode); give the project's define another name`);
+			return Result.err(`${buildMsPath}: define '${reserved}' is a name msc sets from its own options (backend, --os, --cpu, --mm, the build mode); give the project's define another name`);
 		}
 	}
 	setExtraGlobalImports([]);
@@ -403,18 +403,13 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 			}
 			opts.testsShard = shard[0];
 			opts.testsShards = shard[1];
-		} else if (arg == "--gc=none") {
-			opts.gcMode = "none";
+		} else if (arg.startsWith("--mm=")) {
+			const mm = arg.slice(5, arg.length);
+			if (mm != "drc" && mm != "manual" && mm != "none") return Result.err(`unknown memory management '${mm}'. Valid: --mm=drc|manual|none`);
+			opts.gcMode = mm;
 			opts.gcExplicit = true;
-		} else if (arg == "--gc=manual") {
-			opts.gcMode = "manual";
-			opts.gcExplicit = true;
-		} else if (arg == "--gc=drc") {
-			opts.gcMode = "drc";
-			opts.gcExplicit = true;
-		} else if (arg == "--gc=orc") {
-			opts.gcMode = "orc";
-			opts.gcExplicit = true;
+		} else if (arg == "--gc" || arg.startsWith("--gc=")) {
+			return Result.err(`'${arg}' is gone: memory management is --mm=drc|manual|none, and drc always collects cycles`);
 		} else if (arg.startsWith("--lto=")) {
 			const ltoVal = arg.slice(6, arg.length);
 			if (ltoVal == "off" || ltoVal == "thin" || ltoVal == "full") {
@@ -598,6 +593,24 @@ test "build and test refuse --target=raiser instead of building C, whichever ord
 test "run: -d: right after the file is an msc option too" {
 	const r = applyArgs(newCliOptions(), ["run", "cli.ms", "-d:foo"], 0);
 	assert !r.ok;
+}
+
+test "--mm picks the memory management, and --gc is refused with the --mm spelling" {
+	for (const mm of ["drc", "manual", "none"]) {
+		const opts = newCliOptions();
+		assert applyArgs(opts, ["build", "a.ms", "--mm=" + mm], 0).ok;
+		assert opts.gcMode == mm;
+		assert opts.gcExplicit;
+	}
+	assert newCliOptions().gcMode == "drc";
+	const orc = applyArgs(newCliOptions(), ["build", "a.ms", "--mm=orc"], 0);
+	assert !orc.ok;
+	if (!orc.ok) { assert orc.error == "unknown memory management 'orc'. Valid: --mm=drc|manual|none"; }
+	for (const old of ["--gc=drc", "--gc=orc", "--gc=manual", "--gc"]) {
+		const r = applyArgs(newCliOptions(), ["build", "a.ms", old], 0);
+		assert !r.ok;
+		if (!r.ok) { assert r.error == `'${old}' is gone: memory management is --mm=drc|manual|none, and drc always collects cycles`; }
+	}
 }
 
 test "an unknown flag outside run is an error" {

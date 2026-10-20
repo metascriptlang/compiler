@@ -1694,7 +1694,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		}
 		if (d.operator == "instanceof") {
 			if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) {
-				addCGenError(g, "instanceof requires RTTI, unavailable under --gc=manual", 0, 0);
+				addCGenError(g, "instanceof requires RTTI, unavailable under --mm=manual", 0, 0);
 				ctx.results.push("false");
 				return;
 			}

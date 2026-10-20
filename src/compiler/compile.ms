@@ -67,7 +67,7 @@ import { registrySrcPath, gitSrcPath, cacheRoot } from "./package/cache";
 import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
 import { dbLower } from "./transam/index";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
-import { ResolveSection, DepsSection, defaultResolveSection, defaultDepsSection, loadBuildConfig } from "./buildConfig";
+import { ResolveSection, DepsSection, defaultResolveSection, defaultDepsSection, loadBuildConfig, targetMemoryMode } from "./buildConfig";
 import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
@@ -372,37 +372,27 @@ function resetCompiledOFiles(): void {
 	_compiledOFiles = new HashSet<string>();
 }
 
-// Resolve the gc mode the build will actually run with, BEFORE the graph is
+// Resolve the memory mode the build will actually run with, BEFORE the graph is
 // checked — the checker needs it (freestanding async gate) and it must agree
-// with what codegen/cc see later. Freestanding targets carry no allocator of
-// their own, so they imply --gc=manual; an explicit --gc= always wins for
-// bare (the user asked for it), while solana keeps its older unconditional
-// force because its SBF runtime cannot host DRC/ORC at all.
+// with what codegen/cc see later.
 // Mutates opts so every later consumer reads one resolved value.
 export function resolveTargetGcMode(opts: CliOptions): void {
-	if (opts.targetOs == "solana") {
-		if (opts.gcMode == "" || opts.gcMode == "drc" || opts.gcMode == "orc") opts.gcMode = "manual";
-		return;
-	}
-	if (opts.targetOs == "bare" && !opts.gcExplicit) opts.gcMode = "manual";
+	opts.gcMode = targetMemoryMode(opts.targetOs, opts.gcExplicit ? opts.gcMode : "");
 }
 
-// String gc mode → checker enum. Single spelling of the mapping that
+// String memory mode → checker enum. Single spelling of the mapping that
 // applyGcMode and the per-module stamping in cmdBuildC/cmdTest repeat.
 export function gcModeOf(gc: string): GcMode {
 	if (gc == "none") return GcMode.None;
 	if (gc == "manual") return GcMode.Manual;
-	if (gc == "drc") return GcMode.Drc;
-	return GcMode.Orc;
+	return GcMode.Drc;
 }
 
-// Apply --gc flag: set GcMode on the shared prelude context so all modules inherit it.
+// Apply --mm flag: set GcMode on the shared prelude context so all modules inherit it.
 // analyzeProgram checks ctx.gcMode and skips DRC injection for None/Manual.
 export function applyGcMode(opts: CliOptions): void {
 	if (graphPreludeCtx == null) return;
-	if (opts.gcMode == "none") graphPreludeCtx.gcMode = GcMode.None;
-	else if (opts.gcMode == "manual") graphPreludeCtx.gcMode = GcMode.Manual;
-	else if (opts.gcMode == "orc") graphPreludeCtx.gcMode = GcMode.Orc;
+	graphPreludeCtx.gcMode = gcModeOf(opts.gcMode);
 	graphPreludeCtx.targetOs = opts.targetOs;
 	graphPreludeCtx.targetInfo = opts.targetInfo;
 }
@@ -423,7 +413,7 @@ function moduleNameProjectRoot(entryPath: string, projectRoot: string): string {
 	return dirname(entry);
 }
 
-function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliOptions, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Orc, session: CheckSession | null = null): ModuleGraph {
+function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliOptions, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Drc, session: CheckSession | null = null): ModuleGraph {
 	if (opts.verbose) verboseLog(`loading module graph from ${entryPath}`);
 	const packages = cacheRoot();
 	setModuleNameRoots({
@@ -738,9 +728,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	flowStop("a2.native", _fn0);
 	const hcrLifted = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx, job.hcrModules[hcrSlot].moduleId) : nativeTransformed;
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
-	if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
-		else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
-		else if (opts.gcMode == "orc") ctx.gcMode = GcMode.Orc;
+	ctx.gcMode = gcModeOf(opts.gcMode);
 	ctx.targetOs = opts.targetOs;
 	ctx.targetInfo = opts.targetInfo;
 	const _ta0 = performance.now();
@@ -2635,7 +2623,7 @@ function buildCPhases(entryPath: string, opts: CliOptions, resolveSection: Resol
 	flowStop("phase.setup", fSetup);
 	const t0 = performance.now();
 	const fGraph = flowStart();
-	// Before ANY phase reads it: freestanding targets imply --gc=manual, and the
+	// Before ANY phase reads it: freestanding targets imply --mm=manual, and the
 	// checker needs the resolved mode (freestanding async gate) — applyGcMode
 	// below runs too late for that, it only re-stamps the prelude context.
 	resolveTargetGcMode(opts);
@@ -3580,9 +3568,7 @@ resetLiftedOps();
 		const nativeTransformed = transformForNative(transformed, nativeCtx);
 		const hcrResult = opts.isHcr && modPath == filePath ? liftHcrState(nativeTransformed, nativeCtx, replaceExt(entryName(filePath), "")) : nativeTransformed;
 		exitOnCheckerErrors(ctx, modPath, cm.source);
-		if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
-			else if (opts.gcMode == "manual") ctx.gcMode = GcMode.Manual;
-			else if (opts.gcMode == "orc") ctx.gcMode = GcMode.Orc;
+		ctx.gcMode = gcModeOf(opts.gcMode);
 		ctx.targetOs = opts.targetOs;
 		ctx.targetInfo = opts.targetInfo;
 
@@ -4320,7 +4306,7 @@ export function cmdTestJS(filePath: string, opts: CliOptions): void {
 export function compileRaiser(filePath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection(), session: BuildSession | null = null, exportRoutines: boolean = false): RaiserModule {
 	if (session != null) startSessionBuild(session);
 	const config = buildResolverConfig(Target.Raiser, resolveSection, platform, opts.projectRoot);
-	const graph = loadAndCheckGraph(filePath, config, opts, hostTargetInfo(), GcMode.Orc, session != null ? session.check : null);
+	const graph = loadAndCheckGraph(filePath, config, opts, hostTargetInfo(), GcMode.Drc, session != null ? session.check : null);
 
 	const modules: RaiserModuleInput[] = [];
 	const entryCanonical = canonicalModulePath(filePath);

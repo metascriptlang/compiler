@@ -94,7 +94,7 @@ function strictWarnings(source: string, strictNil: boolean): int32 {
 		{ entryPath: "/src/strictEntry.ms", entrySource: "import \"./strictPolicy\";" },
 	];
 	const graph = loadModuleGraph("/src/strictEntry.ms", createMapProvider(entries));
-	checkModuleGraph(graph, "", ".cms", platform, hostTargetInfo(), GcMode.Orc, null, null, strictNil);
+	checkModuleGraph(graph, "", ".cms", platform, hostTargetInfo(), GcMode.Drc, null, null, strictNil);
 	const mod = findModule(graph, "/src/strictPolicy.ms");
 	if (mod == null) return -1;
 	let warnings: int32 = 0;

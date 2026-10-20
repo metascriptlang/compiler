@@ -15,7 +15,7 @@ import { sgCollectDiagnostics } from "../../../checker/suggest";
 import { addErrorRange, addErrorFullRange } from "../../../checker/context";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../../../ast/node";
 import { FormatOptions, defaultFormatOptions, applyFmtSection } from "../../fmt/options";
-import { loadFmtSection, loadLspSection, validateBuildConfig, LspSection } from "../../buildConfig";
+import { loadFmtSection, loadLspSection, validateBuildConfig, LspSection, targetMemoryMode } from "../../buildConfig";
 import { collectFreestandingAsync, freestandingAsyncLoc, FREESTANDING_ASYNC_MSG } from "../../../checker/freestanding";
 import { dbGetSource, lspEnsureFileLoaded, lspCharacter } from "./shared";
 import { dbResolveImport } from "../../transam/index";
@@ -52,12 +52,9 @@ export function resetFormatOptions(): void {
 
 // ===== LSP Target from build.ms =====
 
-// Effective build target for diagnostics that depend on target capabilities.
-// Mirrors the compile-side resolution: os defaults to the host platform, gc
-// infers from os (bare/solana => manual, else orc). An explicit lsp.gc wins.
 export interface LspTarget {
 	os: string;
-	gc: string;
+	mm: string;
 }
 
 let _lspTargetCache: HashMap<string, LspTarget> = new HashMap<string, LspTarget>();
@@ -66,15 +63,12 @@ export function getLspTarget(path: string): LspTarget {
 	const projectRoot = findProjectRoot(path);
 	const cached = _lspTargetCache.get(projectRoot);
 	if (cached != null) return cached;
-	let section: LspSection = { os: "", gc: "" };
+	let section: LspSection = { os: "", mm: "" };
 	if (projectRoot != "") {
 		section = loadLspSection(projectRoot);
 	}
 	const os = section.os != "" ? section.os : platform;
-	const gc = section.gc != ""
-		? section.gc
-		: ((os == "bare" || os == "solana") ? "manual" : "orc");
-	const target: LspTarget = { os, gc };
+	const target: LspTarget = { os, mm: targetMemoryMode(os, section.mm) };
 	_lspTargetCache.set(projectRoot, target);
 	return target;
 }
@@ -252,7 +246,7 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 	// error — the editor cannot know if the user will build with a different
 	// target. Silent unless the lsp section opts in (host default never manual).
 	const lspTarget = getLspTarget(path);
-	if (lspTarget.gc == "manual" && !(db.stdPath != "" && path.startsWith(db.stdPath))) {
+	if (lspTarget.mm == "manual" && !(db.stdPath != "" && path.startsWith(db.stdPath))) {
 		const fsProgram = dbGetCheckedProgram(db, path);
 		if (fsProgram != null) {
 			const fsHits = collectFreestandingAsync(fsProgram);
@@ -416,27 +410,27 @@ test "getLspTarget infers manual for bare os" {
 	resetLspTargetCache();
 	const t = getLspTarget(dir + "/main.ms");
 	assert t.os == "bare";
-	assert t.gc == "manual";
+	assert t.mm == "manual";
 }
 
-test "getLspTarget keeps explicit gc over inference" {
-	const dir = lspProbeTmpDir() + "/msc-lspprobe-gc";
+test "getLspTarget keeps explicit mm over inference" {
+	const dir = lspProbeTmpDir() + "/msc-lspprobe-mm";
 	mkdir(dir);
-	writeFile(dir + "/build.ms", "const config = { lsp: { os: \"bare\", gc: \"drc\" } };\n\nexport default config;\n");
+	writeFile(dir + "/build.ms", "const config = { lsp: { os: \"bare\", mm: \"drc\" } };\n\nexport default config;\n");
 	resetLspTargetCache();
 	const t = getLspTarget(dir + "/main.ms");
 	assert t.os == "bare";
-	assert t.gc == "drc";
+	assert t.mm == "drc";
 }
 
-test "getLspTarget defaults to host + orc without section" {
+test "getLspTarget defaults to host + drc without section" {
 	const dir = lspProbeTmpDir() + "/msc-lspprobe-none";
 	mkdir(dir);
 	writeFile(dir + "/build.ms", "const config = { entry: \"./src/index\" };\n\nexport default config;\n");
 	resetLspTargetCache();
 	const t = getLspTarget(dir + "/main.ms");
 	assert t.os == platform;
-	assert t.gc == "orc";
+	assert t.mm == "drc";
 }
 
 test "synthetic checker spans keep both UTF-16 endpoints" {

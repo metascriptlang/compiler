@@ -485,7 +485,7 @@ test "HCR ABI signature ignores parameter names and detects width changes" {
 test "HCR ABI manifest rejects duplicate stable export ids" {
 	const a = createHcrAbiExport("logic", "logic_value", "func():int32");
 	const b = createHcrAbiExport("logic", "logic_value", "func():int64");
-	const result = buildHcrModuleAbi("logic", "linux-x64", "orc", "toolchain", [], [a, b]);
+	const result = buildHcrModuleAbi("logic", "linux-x64", "drc", "toolchain", [], [a, b]);
 	assert !result.ok;
 }
 
@@ -527,9 +527,9 @@ test "HCR ABI signature and removal changes reload dependents" {
 	const value32 = createHcrAbiExport("logic", "logic_value", "func():int32");
 	const value64 = createHcrAbiExport("logic", "logic_value", "func():int64");
 	const label = createHcrAbiExport("logic", "logic_label", "func():string");
-	const current = classifierTestManifest("linux-x64", "orc", "toolchain", [], [value32, label]);
-	const signature = classifierTestManifest("linux-x64", "orc", "toolchain", [], [value64, label]);
-	const removed = classifierTestManifest("linux-x64", "orc", "toolchain", [], [value32]);
+	const current = classifierTestManifest("linux-x64", "drc", "toolchain", [], [value32, label]);
+	const signature = classifierTestManifest("linux-x64", "drc", "toolchain", [], [value64, label]);
+	const removed = classifierTestManifest("linux-x64", "drc", "toolchain", [], [value32]);
 	const signatureDecision = classifyHcrReload(current, signature);
 	const removedDecision = classifyHcrReload(current, removed);
 	assert signatureDecision.kind == HcrReloadKind.ReloadDependents;
