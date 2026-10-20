@@ -419,6 +419,9 @@ export function printClassDecl(node: Node, options: FormatOptions): Doc {
 	if (d.classExtends != "") {
 		parts.push(docText(" extends " + d.classExtends));
 	}
+	if (d.classImplements.length > 0) {
+		parts.push(docText(" implements " + d.classImplements.join(", ")));
+	}
 	parts.push(docText(" {"));
 	if (d.classBody.length > 0) {
 		// Body comments are attached to the ClassDecl node (not to
