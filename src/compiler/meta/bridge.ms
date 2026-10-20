@@ -781,17 +781,15 @@ export function stripMacroArgWrappers(node: Node): Node {
 export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, includeTypeAst: boolean = true): RaiserValue {
 	const node = stripMacroArgWrappers(nodeIn);
 	const handle = heapAllocObject(objHeap);
-	// Common fields: kind, line, column
+	// Common fields: kind, line, column, endLine, endColumn
 	const kindVal = raiserInt(node.kind as int64);
 	heapObjectSetField(objHeap, handle, "kind", kindVal);
 	const lineVal = raiserInt(node.location.line);
 	heapObjectSetField(objHeap, handle, "line", lineVal);
 	const colVal = raiserInt(node.location.column);
 	heapObjectSetField(objHeap, handle, "column", colVal);
-	if (node.location.endLine > 0) {
-		heapObjectSetField(objHeap, handle, "endLine", raiserInt(node.location.endLine));
-		heapObjectSetField(objHeap, handle, "endColumn", raiserInt(node.location.endColumn));
-	}
+	heapObjectSetField(objHeap, handle, "endLine", raiserInt(node.location.endLine));
+	heapObjectSetField(objHeap, handle, "endColumn", raiserInt(node.location.endColumn));
 	const syntaxFlags = node.flags.intersection(PARSER_NODE_FLAGS);
 	if (!syntaxFlags.isEmpty()) heapObjectSetField(objHeap, handle, "flags", raiserInt((syntaxFlags as uint64) as int64));
 	if (node.resolvedSym != null && declaresLocal(node)) {

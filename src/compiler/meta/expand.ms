@@ -296,12 +296,10 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst
 		keys.push("gensym");
 		values.push(mkBool(true, loc));
 	}
-	if (node.location.endLine > 0) {
-		keys.push("endLine");
-		values.push(mkNumber(node.location.endLine, loc));
-		keys.push("endColumn");
-		values.push(mkNumber(node.location.endColumn, loc));
-	}
+	keys.push("endLine");
+	values.push(mkNumber(node.location.endLine, loc));
+	keys.push("endColumn");
+	values.push(mkNumber(node.location.endColumn, loc));
 
 	// Append kind-specific fields
 	addKindFields(node, keys, values, loc);
@@ -2532,12 +2530,8 @@ test "nodeToASTLiteral builds ObjectLiteral for NumberLiteral" {
 	const literal = nodeToASTLiteral(numNode, loc);
 	assert literal.kind == NodeKind.ObjectLiteral;
 	const d = literal.data as ObjectLiteralData;
-	// Should have kind, line, column, value
-	assert d.keys.length == 4;
-	assert d.keys[0] == "kind";
-	assert d.keys[3] == "value";
-	// Value at index 3 should be a NumberLiteral with the right value
-	const valueNode = d.properties[3];
+	assert d.keys.join(",") == "kind,line,column,endLine,endColumn,value";
+	const valueNode = d.properties[5];
 	assert valueNode.kind == NodeKind.NumberLiteral;
 	assert (valueNode.data as NumberLiteralData).value == 42;
 }
@@ -2548,9 +2542,7 @@ test "nodeToASTLiteral builds ObjectLiteral for Identifier" {
 	const literal = nodeToASTLiteral(idNode, loc);
 	assert literal.kind == NodeKind.ObjectLiteral;
 	const d = literal.data as ObjectLiteralData;
-	// Should have kind, line, column, name
-	assert d.keys.length == 4;
-	assert d.keys[3] == "name";
+	assert d.keys.join(",") == "kind,line,column,endLine,endColumn,name";
 }
 
 test "nodeToASTLiteral writes the explicit type arguments of a call" {
