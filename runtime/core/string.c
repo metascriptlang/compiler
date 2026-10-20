@@ -609,6 +609,31 @@ static int msWtf8EncodeSurrogate(uint32_t unit, char* out) {
 	return 3;
 }
 
+/* One string per UTF-16 code unit, in one pass: an astral code point yields its
+ * two surrogate halves WTF-8-encoded, as TS `split("")` does. */
+static msStringArray msStringCodeUnits(msString s) {
+	msStringArray units = msStringArrayNew(s.len > 0 ? s.len : 1);
+	if (s.p == NULL) return units;
+	const unsigned char* p = (const unsigned char*)s.p->data;
+	const unsigned char* end = p + s.len;
+	while (p < end) {
+		if (*p < 0x80) { msStringArrayPush(&units, msCharTable[*p]); p++; continue; }
+		int seqlen;
+		uint32_t cp = msUtf8Decode(p, end, &seqlen);
+		if (cp >= 0x10000 && seqlen == 4) {
+			char half[3];
+			msWtf8EncodeSurrogate(0xD800 + ((cp - 0x10000) >> 10), half);
+			msStringArrayPush(&units, msStringNew(half, 3));
+			msWtf8EncodeSurrogate(0xDC00 + ((cp - 0x10000) & 0x3FF), half);
+			msStringArrayPush(&units, msStringNew(half, 3));
+		} else {
+			msStringArrayPush(&units, msStringNew((const char*)p, seqlen));
+		}
+		p += seqlen;
+	}
+	return units;
+}
+
 msString msStringCharAtSlow(msString s, int64_t idx) {
 	if (idx < 0 || s.p == NULL || idx >= s.len) return MS_EMPTY_STRING;
 	const unsigned char* p = (const unsigned char*)s.p->data;
@@ -858,9 +883,8 @@ msString msStringRepeat(msString s, int64_t count) {
 }
 
 msString msStringReplace(msString s, msString search, msString replacement) {
-	if (s.len == 0 || search.len == 0) {
-		return s.len > 0 ? msStringNew(s.p->data, s.len) : MS_EMPTY_STRING;
-	}
+	if (search.len == 0) return msStringConcat(replacement, s);
+	if (s.len == 0) return MS_EMPTY_STRING;
 	int64_t pos = msStringByteIndexOf(s, search, 0);
 	if (pos < 0) {
 		return msStringNew(s.p->data, s.len);
@@ -883,9 +907,18 @@ msString msStringReplace(msString s, msString search, msString replacement) {
 }
 
 msString msStringReplaceAll(msString s, msString search, msString replacement) {
-	if (s.len == 0 || search.len == 0) {
-		return s.len > 0 ? msStringNew(s.p->data, s.len) : MS_EMPTY_STRING;
+	if (search.len == 0) {
+		msStringArray units = msStringCodeUnits(s);
+		msString result = msStringNewCap(s.len + (units.len + 1) * replacement.len);
+		msStringAppend(&result, replacement);
+		for (int64_t i = 0; i < units.len; i++) {
+			msStringAppend(&result, units.p->data[i]);
+			msStringAppend(&result, replacement);
+		}
+		msStringArrayDestroy(&units);
+		return result;
 	}
+	if (s.len == 0) return MS_EMPTY_STRING;
 
 	/* Count occurrences first to preallocate */
 	int64_t count = msStringCount(s, search);
@@ -1319,18 +1352,11 @@ msString msBoolToString(int value) {
 /* ===== Splitting & Joining ===== */
 
 msStringArray msStringSplit(msString s, msString delimiter) {
+	if (delimiter.len == 0) return msStringCodeUnits(s);
 	msStringArray arr = msStringArrayNew(8);
 
 	if (s.len == 0) {
 		msStringArrayPush(&arr, MS_EMPTY_STRING);
-		return arr;
-	}
-
-	if (delimiter.len == 0) {
-		/* Split into individual characters */
-		for (int64_t i = 0; i < s.len; i++) {
-			msStringArrayPush(&arr, msStringNew(s.p->data + i, 1));
-		}
 		return arr;
 	}
 
