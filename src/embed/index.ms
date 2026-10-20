@@ -423,3 +423,83 @@ test "a script calls a function the host implements" {
 	assert seen[1] == 40;
 	removeAll(dir);
 }
+
+function routineValue(interp: Interpreter, name: string, args: RaiserHostValue[]): RaiserHostValue {
+	const r = callRoutine(interp, routineOf(interp, name), args);
+	if (!r.ok) throw new Error(r.error);
+	return r.value;
+}
+
+function keyEvent(code: string, mods: number): RaiserHostValue {
+	return hostObject(["code", "mods"], [hostValue(boxString(code)), hostValue(boxInt(mods))]);
+}
+
+const HARO_SCRIPT = `export interface Bind { keys: string; text: string; }\n`
+	+ `export interface HaroConfig { fontFamily: string[]; fontSize?: number; mode?: "alt" | "~alt"; binds: Bind[]; }\n`
+	+ `export const config: HaroConfig = { fontFamily: ["Operator Mono", "Menlo"], mode: "alt", `
+	+ `binds: [{ keys: "ctrl+a", text: "home" }, { keys: "ctrl+e", text: "end" }] };\n`
+	+ `export function current(): HaroConfig { return config; }\n`
+	+ `export function onKey(e: { code: string; mods: int32 }): { handled: boolean; send: string } {\n`
+	+ `\treturn { handled: e.mods == 2, send: \`\${e.code}:\${e.mods}\` };\n}\n`;
+
+test "callRoutine returns a struct whose array of structs, absent optional and literal-union field the host reads" {
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, HARO_SCRIPT);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const config = routineValue(interp, "current", []);
+	const fonts = config.field("fontFamily");
+	assert fonts.length() == 2;
+	assert unboxString(fonts.at(1).root) == "Menlo";
+	assert config.field("fontSize").root.kind == RaiserValueKind.Nil;
+	assert unboxString(config.field("mode").root) == "alt";
+	const binds = config.field("binds");
+	assert binds.length() == 2;
+	assert unboxString(binds.at(1).field("keys").root) == "ctrl+e";
+	assert unboxString(binds.at(1).field("text").root) == "end";
+	removeAll(dir);
+}
+
+test "callRoutine passes a struct the host built and the struct it returns outlives the next call" {
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, HARO_SCRIPT);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const key = keyEvent("KeyA", 2);
+	const first = routineValue(interp, "onKey", [key]);
+	assert unboxBool(first.field("handled").root);
+	assert unboxString(first.field("send").root) == "KeyA:2";
+	const second = routineValue(interp, "onKey", [keyEvent("KeyB", 0)]);
+	assert !unboxBool(second.field("handled").root);
+	assert unboxString(first.field("send").root) == "KeyA:2";
+	assert unboxString(routineValue(interp, "onKey", [key]).field("send").root) == "KeyA:2";
+	const vm = interp.run!.vm!;
+	const objects = vm.objectHeap.objects.length;
+	const arrays = vm.arrayHeap.arrays.length;
+	for (let i = 0; i < 2000; i += 1) {
+		routineValue(interp, "onKey", [key]);
+		routineValue(interp, "current", []);
+	}
+	assert vm.objectHeap.objects.length == objects;
+	assert vm.arrayHeap.arrays.length == arrays;
+	removeAll(dir);
+}
+
+test "a host routine receives a nested struct with a nullable field and returns a struct" {
+	implementRoutine("embedTest.decorate", (args: RaiserValue[]): RaiserValue => {
+		const d = unboxValue(args[0]);
+		const color = d.field("style").field("color");
+		const shown = color.root.kind == RaiserValueKind.Nil ? "none" : unboxString(color.root);
+		const echo = `${unboxInt(d.field("row").root)} ${unboxBool(d.field("style").field("bold").root)} ${shown}`;
+		return boxValue(hostObject(["accepted", "echo"], [hostValue(boxBool(true)), hostValue(boxString(echo))]));
+	});
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, `extern function decorate(d: { row: int32; style: { bold: boolean; color: string | null } }): `
+		+ `{ accepted: boolean; echo: string } from "embedTest.decorate";\n`
+		+ `export function paint(row: int32, color: string | null): string {\n`
+		+ `\tconst r = decorate({ row, style: { bold: row > 1, color } });\n\treturn \`\${r.accepted} \${r.echo}\`;\n}\n`);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const teal = routineValue(interp, "paint", [hostValue(boxInt(3)), hostValue(boxString("teal"))]);
+	assert unboxString(teal.root) == "true 3 true teal";
+	const plain = routineValue(interp, "paint", [hostValue(boxInt(1)), hostValue(boxVoid())]);
+	assert unboxString(plain.root) == "true 1 false none";
+	removeAll(dir);
+}
