@@ -93,6 +93,7 @@ test "without a valueOf declaration an accessor read is an error" {
 	assert hasError(NO_PROTOCOL + NEEDS + "needsNum(c);", "got Accessor<number>, expected number");
 	assert hasError(NO_PROTOCOL + "const e: number = c * 2;", "operator '*' cannot be applied to types 'Accessor<number>'");
 	assert hasError(NO_PROTOCOL + "const b2: boolean = c > 1;", "operator '>' cannot be applied to types 'Accessor<number>'");
+	assert hasError(NO_PROTOCOL + "const b4: boolean = 1 <= c;", "operator '<=' cannot be applied to types 'int32' and 'Accessor<number>'");
 	assert hasError(NO_PROTOCOL + "const b3: boolean = c === 1;", "operator '===' cannot be applied to types 'Accessor<number>'");
 	assert hasError(NO_PROTOCOL + "if (flag) { }", "a function is always truthy");
 	assert hasError(NO_PROTOCOL + "const u: number = -c;", "unary '-' needs a numeric operand");
