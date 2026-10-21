@@ -1599,6 +1599,11 @@ test "engine: a field of a receiver whose type fixes its layout is read and writ
 	const step = compiledFunc("class P { x: int64 = 0; y: int64 = 0; } function step(p: P): int64 { p.y = p.y + 1; return p.x; } console.log(`${step(new P())}`);", "step");
 	const text = disasmFunc(step);
 	assert text.includes("LoadSlot") && text.includes("StoreSlot") && !text.includes("Field"), text;
+	const slots: number[] = [];
+	for (const inst of step.code) {
+		if (inst.op == RaiserOpcode.LoadSlot || inst.op == RaiserOpcode.StoreSlot) slots.push(inst.slot);
+	}
+	assert slots.join(",") == "1,1,0", `${slots.join(",")}\n${text}`;
 }
 
 function backJumpSpan(f: RaiserFunction): number {
