@@ -6,6 +6,7 @@ import { resetInstantiationState, checkedInstanceOf } from "../checker/instantia
 import { resetDispatchRegistry } from "../checker/context";
 import { resetRaises } from "../checker/raises";
 import { resetResizeSummaries } from "../checker/varPartitions";
+import { resetCapturedAssignments } from "../checker/flow";
 import { resetDuVariantRegistry } from "../checker/types";
 import { resetDuHashes } from "../analyzer/classify";
 import { resetLinkState } from "../utils/linkState";
@@ -90,6 +91,7 @@ export function resetBuildState(): void {
 	resetDispatchRegistry();
 	resetRaises();
 	resetResizeSummaries();
+	resetCapturedAssignments();
 	resetDuVariantRegistry();
 	resetDuHashes();
 	resetLinkState();

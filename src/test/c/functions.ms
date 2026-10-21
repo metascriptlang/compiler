@@ -66,12 +66,11 @@ test "E2E C: array param passed by pointer" {
 	assert c.value.contains("msStringArray*");
 }
 
-test "E2E C: array return is by value not pointer" {
+test "E2E C: an array is returned as its reference" {
 	const src = "function getItems(): string[] { return []; }\nconst a = getItems();";
 	const c = compileToC(src);
 	assert c.ok;
-	// Return types must NOT be promoted to pointers — arrays returned by value
-	assert c.value.contains("msStringArray getItems__");
+	assert c.value.contains("msStringArray* getItems__");
 }
 
 test "E2E C: an extern's rest arguments are passed to C one by one" {

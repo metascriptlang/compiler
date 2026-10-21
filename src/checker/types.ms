@@ -104,6 +104,7 @@ export function assignType(target: Type, source: Type): void {
 	target.typeValue = source.typeValue;
 	target.callConv = source.callConv;
 	target.attachedOps = source.attachedOps;
+	target.optionalFields = source.optionalFields;
 }
 
 // ===== Constructors =====
@@ -530,7 +531,7 @@ export function nullableUnionOf(members: Type[]): Type {
 	for (const member of members) {
 		if (member == null) continue;
 		const nested = nestedUnionOf(member);
-		const m = nested != null ? nested : member;
+		const m = nested != null ? nested : peelTransparentInstance(member);
 		if (m.kind == TypeKind.Null) { sawNull = true; continue; }
 		if (isMaybeType(m) && m.typeReturn != null) {
 			sawNull = true;
@@ -607,7 +608,7 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 	// codegen falls back to a literal tagged union.
 	let needsFlatten = false;
 	for (const ut of types) {
-		if (nestedUnionOf(ut) != null) { needsFlatten = true; break; }
+		if (nestedUnionOf(ut) != null || (ut != null && peelTransparentInstance(ut) != ut)) { needsFlatten = true; break; }
 	}
 	let flat: Type[] = types;
 	if (needsFlatten) {
@@ -619,7 +620,7 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 					if (inner != null) flat.push(inner);
 				}
 			} else if (ut != null) {
-				flat.push(ut);
+				flat.push(peelTransparentInstance(ut));
 			}
 		}
 	}
@@ -1665,6 +1666,7 @@ export function copyTypeShallow(t: Type): Type {
 	c.callConv = t.callConv;
 	c.attachedOps = t.attachedOps;
 	c.sym = t.sym;
+	c.optionalFields = t.optionalFields;
 	return c;
 }
 
@@ -1677,7 +1679,7 @@ function isPodFieldType(t: Type | null, depth: int32): boolean {
 			| TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.Void | TypeKind.Null => true,
 		TypeKind.Distinct | TypeKind.SizedArray => isPodFieldType(t.typeReturn, depth + 1),
 		TypeKind.Ref => isAtomicRef(t),
-		TypeKind.Struct => !structCarriesRef(t, depth + 1),
+		TypeKind.Struct | TypeKind.Union => !structCarriesRef(t, depth + 1),
 		_ => false,
 	};
 }
@@ -3069,7 +3071,7 @@ function typeKeyInner(t: Type, keying: Type[]): string {
 	if (t.kind == TypeKind.NumberLiteral) return "numlit:" + t.typeName;
 	if (t.kind == TypeKind.Alias && t.typeReturn != null) return typeKeyIn(t.typeReturn, keying);
 	if (t.typeName != "" && isNominalKind(t.kind)) return t.typeName + "_" + _stdHashToBase36(nominalTypeKey(t));
-	if (t.typeName != "" && t.kind != TypeKind.Tuple && t.kind != TypeKind.GenericInstance) return t.typeName;
+	if (t.typeName != "" && t.kind != TypeKind.Tuple && t.kind != TypeKind.Function && t.kind != TypeKind.GenericInstance) return t.typeName;
 	return match (t.kind) {
 		TypeKind.GenericInstance => {
 			let k = genericHeadKey(t) + "<";
@@ -3742,6 +3744,7 @@ function substituteStruct(t: Type, paramName: string, concrete: Type, seen: Curs
 	const result = createStruct(t.typeName, newNames, newFieldTypes, isStructType(t));
 	result.typeReturn = t.typeReturn;
 	result.typeExtra = t.typeExtra;
+	result.optionalFields = t.optionalFields;
 	// createStruct recomputes HasAsgn from substituted children; DuVariant is an
 	// identity bit (set at createUnion) that must survive the rebuild or mono'd
 	// generic-union payloads lose their DU ownership marker.
@@ -4054,6 +4057,7 @@ function substituteStructAll(t: Type, names: string[], concretes: Type[], seen: 
 	const result = createStruct(t.typeName, newNames, newFieldTypes, isStructType(t));
 	result.typeReturn = t.typeReturn;
 	result.typeExtra = t.typeExtra;
+	result.optionalFields = t.optionalFields;
 	if (t.typeFlags.has(TypeFlag.DuVariant)) {
 		result.typeFlags = result.typeFlags.incl(TypeFlag.DuVariant);
 		result.sym = t.sym;
@@ -4755,6 +4759,7 @@ export function typeDisplayName(t: Type | null): string {
 function typeDisplayNameInner(t: Type | null): string {
 	if (t == null) return "<null>";
 	if (t.typeInst != null) return typeDisplayName(t.typeInst);
+	if (isBrandDistinct(t) && t.sym != null) return t.sym.name;
 	if (t.kind == TypeKind.Function && t.callConv == CallingConvention.CcInline) return "@inline function";
 	if (t.kind == TypeKind.Varargs && t.typeChildren.length > 0) {
 		return "..." + typeDisplayName(t.typeChildren[0]);
@@ -5286,6 +5291,13 @@ test "a union of ref variants is viewable" {
 test "a pod union is not viewable" {
 	const podUnion = createUnion([int32Type(), stringType()]);
 	assert !isReadonlyView(createReadonlyView(podUnion));
+}
+
+test "a nullable pod union is not viewable" {
+	const literals = createUnion([createStringLiteral("alt"), createStringLiteral("~alt")]);
+	assert !isReadonlyView(createReadonlyView(createMaybeType(literals)));
+	const nested = createUnion([createUnion([int32Type(), stringType()]), createArray(int32Type())]);
+	assert isReadonlyView(createReadonlyView(nested));
 }
 
 test "substitute generic param" {

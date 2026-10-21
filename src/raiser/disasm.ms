@@ -105,6 +105,7 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.FutureNew => "FutureNew",
 		RaiserOpcode.FutureSettle => "FutureSettle",
 		RaiserOpcode.FutureFail => "FutureFail",
+		RaiserOpcode.FutureCombine => "FutureCombine",
 		RaiserOpcode.Try => "Try",
 		RaiserOpcode.Catch => "Catch",
 		RaiserOpcode.Finally => "Finally",

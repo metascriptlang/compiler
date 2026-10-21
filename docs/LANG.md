@@ -791,6 +791,8 @@ const h: Handler = { tag: 1 };            // cb omitted → null
 if (h.cb !== null) { h.cb(7); }           // narrow, then call
 ```
 
+`JSON.stringify` leaves out an optional field that holds `null`, as TypeScript leaves out an absent property: `interface P { name: string; nick?: string; nul: string | null }` writes `{ name: "a", nul: null }` as `{"name":"a","nul":null}`. A field typed `T | null` without `?` still writes `null`, and `nick?: string | null` holding `null` is left out, because MS cannot tell it from absent. The mark reaches nested, array, class, inherited, generic, intersection, anonymous, union-variant and imported shapes; `JSON.parse` reads a missing optional key as `null` (measured 2026-10-21 on C, JS and the Raiser; corpus `jsonOptionalFieldOmitted`). Not measured: the CBOR encoder, which does not read the mark.
+
 **Fields without a default value** (measured 2026-10-06 on C, JS and the Raiser; checker3pass `constructionFieldInit`, corpus `constructionGivesEveryField`, `classFieldZeroValue`): a field whose type has no default — an array, a class instance, a `Map`, a function, or a struct holding one — must be given wherever the object is built. An object literal that omits one is an error (`field 'items' must be initialized: type 'int32[]' has no default value`) unless the class declares an initializer for it. `new C()` of a class without a constructor is an error when such a field, its own or a parent's, has no initializer (`'new Rec()' leaves 'items' without a value`). Value fields (numbers, `boolean`, `string`, a struct of those) keep their zero value; `?` and `| null` opt out, and a nullable function defaults to `null`. Before this rule the omitted field read as nil: `b.items.length` crashed on C, JS and the Raiser. `tsc` refuses every omitted non-optional property (TS2739/TS2741), value fields included; MS keeps the zero value for those. A class field without initializer, a struct-valued one included, reads its zero value after `new` on JS as on C (it read `undefined` before).
 
 **Field initializers in an object literal** (measured 2026-10-07 on C, JS and the Raiser, ASan clean; corpus `literalFieldInitializer`, checker3pass `constructionFieldInit`): an object literal of a class type runs the initializer of every field it omits, own or inherited, the same initializer `new C()` runs. `class C { k: int32 = 5; xs: int32[] = [1, 2]; }` gives `{}` → `k` 5, `xs` `[1, 2]` (before: `k` read 0, an omitted `xs` crashed). Each literal runs its own copy, once, after the fields it names, so a call in an initializer runs per literal and not at all when the literal gives the field; names in the initializer resolve in the class's module (a private constant of another module works, a local of the same name at the literal does not capture it). Generic classes (`G<string>`, and `G<T>` inside a generic function) and nested literals (`inner: Inner = {}`) take them too. An initializer that reads `this` is refused at the literal (`field 'b' of 'T' has an initializer that reads 'this', which an object literal cannot run`); today such an initializer is already refused at its declaration. A class that declares a constructor takes them too, without running the constructor. A literal with a spread takes no initializers. Not measured: a spread whose source lacks an initialized field. A `struct` field takes no initializer, so a struct literal is unchanged.
@@ -4317,6 +4319,33 @@ generic distinct whose base does not depend on its type parameter can delegate;
 the concrete base function is still not generic.
 
 The public spelling is `@delegate`; `@borrow` is not a compatibility alias.
+
+#### Comparing a distinct
+
+A distinct type does not inherit its base's comparisons. `==`, `!=`, `===`, `!==`, `<`, `<=`,
+`>` and `>=` on two values of `type UserId = distinct int32` are refused until the program
+declares or delegates one, and the refusal names the line to write:
+
+```ms
+type UserId = distinct int32;
+@delegate function `==`(this a: UserId, b: UserId): boolean;
+@delegate function `<`(this a: UserId, b: UserId): boolean;
+```
+
+`==` gives `!=`, `===` and `!==`; `<` gives `>`; `<=` gives `>=`. Delegating `!=`, `>` or `>=`
+itself is refused (`no !=(int32, int32) to delegate to`). A delegated comparison is the
+base's own: built in for numbers, strings, enums and structs, or the routine the base declares.
+A distinct compared with its base, a literal or another distinct is refused with or without a
+delegate (`a distinct type compares only with itself — convert one side with as`). A brand
+(`int32 & { __brand: "Id" }`) compares as its base. A struct with a distinct field compares
+that field through the field type's comparison; the std routine that folds the fields sees the
+delegate only when it is exported.
+
+Measured 2026-10-21 on C, JS and the Raiser with the candidate of `wt/trace-distinct-compare`:
+corpus `distinctDelegatedComparison` (string, int32, struct, enum, phantom generic, distinct of a
+distinct, struct field, a declared routine and a delegate to the base's routine) prints the same
+on all three, and handoff `distinctComparison` pins the refusals. Not measured: a distinct of a
+class or of a nullable type.
 This does not rename `Handle.borrow` or other ownership-borrowing APIs.
 
 The intrinsic symbol is exported by the system prelude:

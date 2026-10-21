@@ -14,7 +14,7 @@ import { AliveSet, CTypeInfoDemand, TypeInfoKind, createAliveSet, aliveSetAddSym
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
 import { refArrayCellKey, refArrayCellOp, requireOpByKey, getOpByKey, typeInfoSubject, objectTypeInfoKey, isPrivateTypeInfoSubject, arcCellKey, promiseAllShape, PromiseAllShape, promiseAllCellKey, hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, makeSymbol } from "./symbol";
-import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym } from "./types";
+import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, getProperty, peelToStructOrUnion } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { ctorRoutineOf } from "./ctorRoutine";
@@ -833,16 +833,39 @@ export function isBakeableAggregateConst(node: Readonly<Node>): boolean {
 	if (init.flags.has(NodeFlag.Closure)) return false;
 	const od = init.data as ObjectLiteralData;
 	if (od.properties.length == 0) return false;
-	for (const prop of od.properties) {
+	const owner = peelToStructOrUnion(node.nodeType);
+	for (let i = 0; i < od.properties.length; i += 1) {
+		const prop = od.properties[i];
 		if (prop == null) return false;
+		if (owner != null && owner.kind == TypeKind.Struct && storesNothing(owner, getProperty(owner, od.keys[i]))) {
+			if (prop.kind != NodeKind.BooleanLiteral) return false;
+			continue;
+		}
 		const bakeable = match (prop.kind) {
 			NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral => true,
-			NodeKind.ObjectLiteral => prop.flags.has(NodeFlag.Closure),
+			NodeKind.ObjectLiteral => prop.flags.has(NodeFlag.Closure) && closureWithoutEnv(prop),
 			_ => false,
 		};
 		if (!bakeable) return false;
 	}
 	return true;
+}
+
+function closureWithoutEnv(pair: Readonly<Node>): boolean {
+	const pd = pair.data as ObjectLiteralData;
+	const env = pd.keys.indexOf("env");
+	const fn = pd.keys.indexOf("fn");
+	if (env < 0 || fn < 0 || pd.properties[env].kind != NodeKind.NullLiteral) return false;
+	const routine = pd.properties[fn].resolvedSym;
+	return pd.properties[fn].kind == NodeKind.Identifier && routine != null
+		&& (routine.symbolKind == SymbolKind.Function || routine.symbolKind == SymbolKind.Method);
+}
+
+export function bakesIntoStaticCell(node: Readonly<Node>): boolean {
+	const t = node.nodeType;
+	if (t == null || t.kind != TypeKind.Ref || !isBakeableAggregateConst(node)) return false;
+	const k = (node.data as VariableDeclData).initializer.kind;
+	return k == NodeKind.ObjectLiteral || k == NodeKind.ArrayLiteral || k == NodeKind.CallExpr;
 }
 
 function isExportedDecl(node: Node): boolean {
@@ -1142,4 +1165,20 @@ test "side-effect import cycle terminates" {
 	const graph = importGraph([["/main.ms", "/a.ms"], ["/a.ms", "/b.ms"], ["/b.ms", "/a.ms"]]);
 	assert moduleAlive(graph, "/a.ms");
 	assert moduleAlive(graph, "/b.ms");
+}
+
+function closureFieldConst(source: string, routineKind: SymbolKind): Node {
+	const decl = (allocationOf(source).data as ProgramData).programStmts[0];
+	decl.nodeType = createRef(createStruct("Cfg", ["name", "on"], [stringType(), stringType()], true));
+	const pair = ((decl.data as VariableDeclData).initializer.data as ObjectLiteralData).properties[1];
+	pair.flags = pair.flags.incl(NodeFlag.Closure);
+	const fn = (pair.data as ObjectLiteralData).properties[0];
+	fn.resolvedSym = makeSymbol((fn.data as IdentifierData).name, routineKind, stringType(), false);
+	return decl;
+}
+
+test "a module constant bakes a closure field only when it names a routine and carries no environment" {
+	assert bakesIntoStaticCell(closureFieldConst("const cfg = { name: \"a\", on: { fn: zero, env: null } };", SymbolKind.Function));
+	assert !bakesIntoStaticCell(closureFieldConst("const cfg = { name: \"a\", on: { fn: zero, env: held } };", SymbolKind.Function));
+	assert !bakesIntoStaticCell(closureFieldConst("const cfg = { name: \"a\", on: { fn: pick, env: null } };", SymbolKind.Variable));
 }

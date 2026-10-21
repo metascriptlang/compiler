@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: msPromiseAll
 // note: Promise.all over a list that names the same promise twice yields its value in both slots, as in TypeScript, for every storage tier.
 
 struct Pair { n: int32; tag: string; }

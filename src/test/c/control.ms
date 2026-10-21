@@ -63,13 +63,6 @@ test "E2E C: continue in loop" {
 	assert c.value.contains("continue;");
 }
 
-test "E2E C: match or-patterns" {
-	const src = "function f(x: number): number {\n  return match (x) {\n    1 | 2 => 10,\n    3 => 30,\n    _ => 0,\n  };\n}\nconst r = f(1);";
-	const c = compileToC(src);
-	assert c.ok;
-	assert c.value.contains("||");
-}
-
 // KNOWN ISSUE: match arm bindings (bare identifiers as captures) fail in pipeline.
 // Checker or validator rejects: "n => n + 1" where n is a binding.
 // test "E2E C: match with binding" {

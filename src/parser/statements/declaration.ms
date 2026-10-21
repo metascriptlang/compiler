@@ -875,6 +875,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 	const fieldLocations: SourceLocation[] = [];
 	const fieldVisibility: string[] = [];
 	const fieldDecorators: Node[][] = [];
+	const optionalFields: string[] = [];
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 		if (nodeKind == NodeKind.StructDecl && (current(state).kind == TokenKind.Get || current(state).kind == TokenKind.Set)
 				&& isIdentLike(peek(state, 1)) && peek(state, 2).kind == TokenKind.LParen) {
@@ -923,6 +924,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 				return Result.err(`Optional field '${field.value}?' in struct at line ${field.line}: '?' means '| null' and a struct field is a value type — write the nullable union type explicitly`);
 			}
 			fieldIsOptional = true;
+			optionalFields.push(field.value);
 			advance(state);
 		}
 
@@ -950,6 +952,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		nameLocation: nameLoc != null ? nameLoc : makeLocFromToken(token),
 		interfaceFieldVisibility: fieldVisibility,
 		interfaceFieldDecorators: fieldDecorators,
+		interfaceOptionalFields: optionalFields,
 	}, token);
 	ifaceNode.typeArg = genericNames;
 	ifaceNode.typeExprs = fieldTypeExprs;
@@ -1011,6 +1014,7 @@ function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: Node
 			nameLocation: nameLoc,
 			interfaceFieldVisibility: [],
 			interfaceFieldDecorators: [],
+			interfaceOptionalFields: [],
 		}, token);
 		aliasNode.typeArg = genericNames;
 		aliasNode.typeExprs = [];
@@ -1332,6 +1336,7 @@ function parseClassMember(state: ParserState): NodeResult {
 	}, nameToken);
 	propNode.typeExpr = propTypeExpr;
 	if (autoAccessor) propNode.flags = propNode.flags.incl(NodeFlag.AutoAccessor);
+	if (memberIsOptional) propNode.flags = propNode.flags.incl(NodeFlag.Optional);
 	return Result.ok(propNode);
 }
 

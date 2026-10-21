@@ -13,7 +13,7 @@ import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBloc
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
 import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal } from "./compat";
 import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash } from "./context";
-import { fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol } from "./fit";
+import { comparesAtBase, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol } from "./fit";
 import { checkImportCall } from "./importCall";
 import { isImportKeyword } from "../module/loader";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
@@ -410,13 +410,9 @@ function deriveCallBindings(
 	expectedType: Type | null,
 ): UnifyBindings {
 	const bindings = createUnifyBindings();
-	if (calleeSym != null
-		&& calleeSym.declNode != null
-		&& calleeSym.declNode.kind == NodeKind.FunctionDecl) {
+	if (calleeSym != null) {
 		const names = extractGenericNames(getGenericDeclFlags(calleeSym.declNode));
-		if (names.length > 0) {
-			mergeUnifyBindings(bindings, bindFromExplicitTypeArgs(callNode, names, ctx));
-		}
+		mergeUnifyBindings(bindings, bindFromExplicitTypeArgs(callNode, names, ctx));
 	}
 	mergeUnifyBindings(bindings, bindFromExpectedReturn(calleeType, expectedType));
 	return bindings;
@@ -896,6 +892,12 @@ function takesContext(n: Node): boolean {
 	return n.kind == NodeKind.ArrowFunction || n.kind == NodeKind.FunctionExpr;
 }
 
+function resolvedValueContext(ctx: CheckerContext, node: Node, expected: Type | null): Type | null {
+	const spelled = bindFromExplicitTypeArgs(node, ["T"], ctx);
+	if (spelled.types.length > 0) return spelled.types[0];
+	return expected != null && isAwaitable(expected) ? awaitedType(expected) : null;
+}
+
 function adoptPromiseInputs(ctx: CheckerContext, node: Node, expected: Type | null): Type | null {
 	if (node.kind != NodeKind.CallExpr) return expected;
 	const d = node.data as CallExprData;
@@ -909,7 +911,7 @@ function adoptPromiseInputs(ctx: CheckerContext, node: Node, expected: Type | nu
 		return expected;
 	}
 	if (name == "resolve") {
-		callCheckExpr(ctx, arg, expected != null && isAwaitable(expected) ? awaitedType(expected) : null);
+		callCheckExpr(ctx, arg, resolvedValueContext(ctx, node, expected));
 		const adoption = thenableAdoption(ctx, arg, "The value 'Promise.resolve' takes");
 		if (adoption == null) return expected;
 		node.data = adoption.call.data;
@@ -951,7 +953,7 @@ function checkPromiseConstruction(ctx: CheckerContext, node: Node, expected: Typ
 
 export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | null): Type {
 	const d = node.data as NewExprData;
-	d.newArguments = inlineLiteralSpreads(d.newArguments);
+	d.newArguments = expandTupleSpreads(ctx, inlineLiteralSpreads(d.newArguments));
 	// new BuiltinType<...>() — construct value types (Map, Set) and Promise
 	if (d.newCallee.kind == NodeKind.Identifier) {
 		const id = d.newCallee.data as IdentifierData;
@@ -1157,12 +1159,18 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 	const ctorRoutine = ctorOwner != null ? ctorRoutineFor(ctx, ctorOwner) : null;
 	const declaring = hasCtor && ctorOwner != null ? constructorDeclaringClass(ctorOwner) : null;
 	const defaultsFrom = declaring != null ? ctorRoutineOf(declaring) : ctorRoutine;
-	if (classSym != null) checkNewArity(ctx, node, classSym, innerType, ctorRoutine, defaultsFrom);
-	if (hasCtor && ctorRoutine != null) {
-		const routineFormals = ctorFormalTypes(ctorRoutine);
-		if (routineFormals != null && defaultsFrom != null) {
-			fillDefaults(ctx, d.newArguments, defaultsFrom.defaultParams, routineFormals.length, 0, routineFormals, defaultsFrom.modulePath, defaultsFrom.symbolType.typeNames.slice(1));
-		}
+	const routineFormals = hasCtor && ctorRoutine != null ? ctorFormalTypes(ctorRoutine) : null;
+	let ctorSpread: SpreadTake = { spread: null, at: -1, taken: false };
+	if (routineFormals != null && defaultsFrom != null) {
+		const pd: ParamDefaults = { defaults: defaultsFrom.defaultParams, names: defaultsFrom.symbolType.typeNames.slice(1), offset: 0 };
+		ctorSpread = takeOptionalSpread(ctx, d.newArguments, [], pd, routineFormals, firstDefaulted(pd, routineFormals));
+	}
+	if (classSym != null && (ctorSpread.spread == null || ctorSpread.taken)) {
+		checkNewArity(ctx, node, classSym, innerType, ctorRoutine, defaultsFrom);
+	}
+	if (routineFormals != null && defaultsFrom != null) {
+		fillDefaults(ctx, d.newArguments, defaultsFrom.defaultParams, routineFormals.length, 0, routineFormals, defaultsFrom.modulePath, defaultsFrom.symbolType.typeNames.slice(1));
+		fillTakenSpread(ctx, d.newArguments, [], ctorSpread, routineFormals);
 	}
 	node.resolvedSym = ctorRoutine;
 	if (!hasCtor && d.newArguments.length == 0 && d.newCallee.resolvedSym != null) {
@@ -1230,6 +1238,175 @@ function pushEffectiveArg(out: Node[], a: Node): void {
 		return;
 	}
 	for (const e of ((a.data as SpreadExprData).spreadArg.data as ArrayLiteralData).elements) pushEffectiveArg(out, e);
+}
+
+function expandTupleSpreads(ctx: CheckerContext, args: Node[]): Node[] {
+	let out: Node[] | null = null;
+	for (let i = 0; i < args.length; i += 1) {
+		const tuple = spreadTupleType(ctx, args[i]);
+		if (tuple == null) {
+			if (out != null) out.push(args[i]);
+			continue;
+		}
+		if (out == null) out = args.slice(0, i);
+		const source = (args[i].data as SpreadExprData).spreadArg;
+		const spread = readSpreadSource(ctx, source);
+		for (let e = 0; e < tuple.typeChildren.length; e += 1) {
+			out.push(elementRead(e == 0 ? spread.first : cloneNodeKeepSem(spread.again), e, source.location));
+		}
+	}
+	return out != null ? out : args;
+}
+
+function spreadTupleType(ctx: CheckerContext, a: Node): Type | null {
+	if (a.kind != NodeKind.SpreadExpr) return null;
+	const source = (a.data as SpreadExprData).spreadArg;
+	callCheckExpr(ctx, source, null);
+	const t = bareSpreadSource(source.nodeType);
+	return t != null && t.kind == TypeKind.Tuple && t.typeChildren.length > 0 ? t : null;
+}
+
+interface SpreadRead { first: Node; again: Node; }
+
+function readSpreadSource(ctx: CheckerContext, source: Node): SpreadRead {
+	if (readsWithoutEffect(source)) return { first: source, again: source };
+	const bound = bindArgumentOnce(ctx, source);
+	return { first: bound.assign, again: bound.value };
+}
+
+function elementRead(source: Node, index: int32, loc: SourceLocation): Node {
+	return createNodeAt(NodeKind.ArrayAccess, { array: source, index: indexLiteral(index, loc) }, loc);
+}
+
+function indexLiteral(index: int32, loc: SourceLocation): Node {
+	return createNodeAt(NodeKind.NumberLiteral,
+		{ value: index, isFloat: false, intVal: index as int64, outOfRangeText: "", isBitPattern: false }, loc);
+}
+
+function optionalSpreadAt(args: Node[], formals: Type[], minArgs: number): int32 {
+	const at = args.length - 1;
+	if (at < minArgs || at >= fixedCount(formals) || args[at].kind != NodeKind.SpreadExpr) return -1;
+	for (let i = 0; i < at; i += 1) { if (args[i].kind == NodeKind.SpreadExpr) return -1; }
+	const source = bareSpreadSource((args[at].data as SpreadExprData).spreadArg.nodeType);
+	return source != null && source.kind == TypeKind.Array ? at : -1;
+}
+
+function fixedCount(formals: Type[]): int32 {
+	const n = formals.length;
+	return n > 0 && formals[n - 1].kind == TypeKind.Varargs ? n - 1 : n;
+}
+
+interface ParamDefaults { defaults: Node[] | null; names: string[]; offset: int32; }
+
+function calleeDefaults(node: Node, chosen: Symbol | null, offset: int32): ParamDefaults {
+	const d = node.data as CallExprData;
+	const sym = chosen != null ? chosen : (d.callee.resolvedSym != null ? d.callee.resolvedSym : node.resolvedSym);
+	const names: string[] = [];
+	if (sym != null && sym.symbolType != null) { for (const n of sym.symbolType.typeNames) names.push(n); }
+	return { defaults: declaredDefaults(sym), names, offset };
+}
+
+function firstDefaulted(pd: ParamDefaults, formals: Type[]): int32 {
+	const defaults = pd.defaults;
+	let from = fixedCount(formals);
+	while (defaults != null && from > 0 && from - 1 + pd.offset < defaults.length
+		&& defaults[from - 1 + pd.offset] != null) from -= 1;
+	return from;
+}
+
+function defaultReadsSpreadSlot(ctx: CheckerContext, spread: Node, pd: ParamDefaults, at: int32, formals: Type[]): boolean {
+	const defaults = pd.defaults;
+	if (defaults == null) return false;
+	const names = pd.names;
+	const o = pd.offset;
+	for (let k = at + 1; k < fixedCount(formals); k += 1) {
+		const def = k + o < defaults.length ? defaults[k + o] : null;
+		if (def == null || k + o >= names.length) continue;
+		const filled = names.slice(at + o, k + o);
+		const used = referencedParams(def, filled);
+		for (let u = 0; u < used.length; u += 1) {
+			if (!used[u]) continue;
+			addError(ctx, `the default value of parameter '${names[k + o]}' reads '${filled[u]}', which the spread argument fills: pass the arguments one by one`,
+				spread.location.line, spread.location.column);
+			return true;
+		}
+	}
+	return false;
+}
+
+function trailingArraySpread(args: Node[]): int32 {
+	const at = args.length - 1;
+	if (at < 0 || args[at].kind != NodeKind.SpreadExpr) return -1;
+	for (let i = 0; i < at; i += 1) { if (args[i].kind == NodeKind.SpreadExpr) return -1; }
+	const source = bareSpreadSource((args[at].data as SpreadExprData).spreadArg.nodeType);
+	return source != null && source.kind == TypeKind.Array ? at : -1;
+}
+
+function hasSpreadArg(args: Node[]): boolean {
+	for (const a of args) { if (a.kind == NodeKind.SpreadExpr) return true; }
+	return false;
+}
+
+function spreadElementType(spread: Node): Type {
+	return getElementType(bareSpreadSource((spread.data as SpreadExprData).spreadArg.nodeType)!);
+}
+
+function spreadFitsCandidate(candType: Type, at: int32, element: Type, minArgs: number): boolean {
+	const formals = candType.typeChildren;
+	if (at < minArgs || at >= fixedCount(formals) || fixedCount(formals) != formals.length) return false;
+	for (let k = at; k < formals.length; k += 1) {
+		if (typeRelation(formals[k], element) == TypeRelation.None) return false;
+	}
+	return true;
+}
+
+interface SpreadTake { spread: Node | null; at: int32; taken: boolean; }
+
+function takeOptionalSpread(ctx: CheckerContext, args: Node[], argTypes: Type[], pd: ParamDefaults, formals: Type[], minArgs: number): SpreadTake {
+	const at = optionalSpreadAt(args, formals, minArgs);
+	if (at < 0) return { spread: null, at, taken: false };
+	const spread = args[at];
+	if (defaultReadsSpreadSlot(ctx, spread, pd, at, formals)) return { spread, at, taken: false };
+	args.shrink(at);
+	if (argTypes.length > at) argTypes.shrink(at);
+	return { spread, at, taken: true };
+}
+
+function fillTakenSpread(ctx: CheckerContext, args: Node[], argTypes: Type[], take: SpreadTake, formals: Type[]): void {
+	if (take.taken) fillFromSpread(ctx, args, argTypes, take.at, take.spread!, formals);
+}
+
+function fillFromSpread(ctx: CheckerContext, args: Node[], argTypes: Type[], at: int32, spread: Node, formals: Type[]): void {
+	const fixed = fixedCount(formals);
+	if (args.length < fixed) return;
+	const source = (spread.data as SpreadExprData).spreadArg;
+	const loc = spread.location;
+	const read = readSpreadSource(ctx, source);
+	for (let k = at; k < fixed; k += 1) {
+		const i = k - at;
+		const array = k == at ? read.first : cloneNodeKeepSem(read.again);
+		const length = createNodeAt(NodeKind.MemberExpr, { object: array, property: "length", isOptional: false }, loc);
+		const test = createNodeAt(NodeKind.BinaryExpr, { operator: ">", left: length, right: indexLiteral(i, loc) }, loc);
+		const slot = createNodeAt(NodeKind.ConditionalExpr, {
+			ternaryCondition: test,
+			ternaryConsequent: elementRead(cloneNodeKeepSem(read.again), i, loc),
+			ternaryAlternate: args[k],
+		}, loc);
+		callCheckExpr(ctx, slot, formals[k]);
+		args[k] = slot;
+		if (k < argTypes.length) argTypes[k] = slot.nodeType!; else argTypes.push(slot.nodeType!);
+	}
+	if (fixed == formals.length) return;
+	if (args.length > fixed) args.shrink(fixed);
+	if (argTypes.length > fixed) argTypes.shrink(fixed);
+	const remainder = fixed == at ? read.first : cloneNodeKeepSem(read.again);
+	const callee = createNodeAt(NodeKind.MemberExpr, { object: remainder, property: "slice", isOptional: false }, loc);
+	const slice = createNodeAt(NodeKind.CallExpr,
+		{ callee, arguments: [indexLiteral(fixed - at, loc)], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+	const rest = createNodeAt(NodeKind.SpreadExpr, { spreadArg: slice }, loc);
+	callCheckExpr(ctx, rest, null);
+	args.push(rest);
+	argTypes.push(rest.nodeType!);
 }
 
 export function iterateSpreadSource(ctx: CheckerContext, spread: Node): void {
@@ -1431,7 +1608,7 @@ export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 	const readsFrom = tracker.pendingReads.length;
 	if (node.kind == NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;
-		cd.arguments = inlineLiteralSpreads(cd.arguments);
+		cd.arguments = expandTupleSpreads(ctx, inlineLiteralSpreads(cd.arguments));
 		for (const arg of cd.arguments) if (arg.kind == NodeKind.Identifier) tracker.argIdents.push(arg);
 	}
 	let r = checkCallExprInner(ctx, node, adoptPromiseInputs(ctx, node, expectedType));
@@ -1829,12 +2006,12 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 						if (filtered.indexOf(owned) < 0) filtered.push(owned);
 					}
 				}
-				if (isStaticAccess && filtered.length > 1) {
+				if (isStaticAccess) {
 					const staticOnly: ExtensionMethod[] = [];
 					for (const ext of filtered) {
 						if (ext.isStatic) staticOnly.push(ext);
 					}
-					if (staticOnly.length > 0) filtered = staticOnly;
+					filtered = staticOnly;
 				}
 				if (filtered.length == 1) {
 					const winner = filtered[0];
@@ -2082,6 +2259,9 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		// Fill default args (calleeType already has receiver stripped for non-static)
 		// defaultOffset = 1 for non-static (fnDefaults[0] is receiver slot), 0 for static (receiver stripped in parser)
 		const extDefaultOffset = node.flags.has(NodeFlag.ExtStatic) ? 0 : 1;
+		const extDefaults = calleeDefaults(node, null, extDefaultOffset);
+		const extSpread = takeOptionalSpread(ctx, d.arguments, argTypes, extDefaults, calleeType.typeChildren,
+			firstDefaulted(extDefaults, calleeType.typeChildren));
 		if (argTypes.length < calleeType.typeChildren.length) {
 			const me = d.callee.data as MemberExprData;
 			fillDefaultArgsForNode(ctx, node, me.property, calleeType.typeChildren.length, extDefaultOffset);
@@ -2093,7 +2273,10 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		const extMinArDeclared = callMinArity(calleeType);
 		const extMinAr = extHasRest && extMinArDeclared >= calleeType.typeChildren.length
 			? calleeType.typeChildren.length - 1 : extMinArDeclared;
-		if (refuseMisplacedSpread(ctx, d.arguments, calleeType.typeChildren, extMinAr)) {
+		if (extSpread.taken) {
+			fillTakenSpread(ctx, d.arguments, argTypes, extSpread, calleeType.typeChildren);
+		} else if (extSpread.spread != null) {
+		} else if (refuseMisplacedSpread(ctx, d.arguments, calleeType.typeChildren, extMinAr)) {
 		} else if (d.arguments.length < extMinAr) {
 			const me = d.callee.data as MemberExprData;
 			addError(ctx, `Too few arguments to '${me.property}': expected at least ${extMinAr}, got ${d.arguments.length}`, node.location.line, node.location.column);
@@ -2247,7 +2430,9 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		// Rest param is optional (accepts 0+ args), so effective min excludes it
 		const effectiveMin = hasRest && minAr >= calleeType.typeChildren.length
 			? calleeType.typeChildren.length - 1 : minAr;
-		if (refuseMisplacedSpread(ctx, d.arguments, calleeType.typeChildren, effectiveMin)) {
+		const spread = takeOptionalSpread(ctx, d.arguments, argTypes, calleeDefaults(node, null, 0), calleeType.typeChildren, effectiveMin);
+		if (spread.spread != null && !spread.taken) {
+		} else if (refuseMisplacedSpread(ctx, d.arguments, calleeType.typeChildren, effectiveMin)) {
 		} else if (argTypes.length < effectiveMin) {
 			addError(ctx, `Too few arguments: expected at least ${effectiveMin}, got ${argTypes.length}`, node.location.line, node.location.column);
 		} else if (!hasRest && argTypes.length > calleeType.typeChildren.length) {
@@ -2259,6 +2444,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			}
 			fillNullableTail(ctx, d.arguments, calleeType.typeChildren, node.location);
 		}
+		fillTakenSpread(ctx, d.arguments, argTypes, spread, calleeType.typeChildren);
 		relateCallArgs(ctx, node, calleeType!, argTypes, isActorMethodCall);
 		// On-demand generic instantiation for direct calls (transitive
 		// instantiation). Handles both regular FunctionDecl and STATIC class
@@ -2505,7 +2691,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				argTypes[pi] = paramType;
 			}
 			if (instantiateGenericFnValue(ctx, args[pi], paramType)) argTypes[pi] = args[pi].nodeType!;
-			const thunkArg = synthClosureThunk(args[pi], paramType, argTypes[pi]);
+			const thunkArg = synthClosureThunk(args[pi], peelSink(paramType), argTypes[pi]);
 			if (thunkArg != null as unknown as Node) {
 				args[pi] = thunkArg;
 				argTypes[pi] = paramType;
@@ -3062,9 +3248,13 @@ function declTakesReceiver(declNode: Node): boolean {
 }
 
 function getGenericDeclFlags(declNode: Node): string {
-	if (declNode == null) return "";
-	if (declNode.kind == NodeKind.FunctionDecl) return (declNode.data as FunctionDeclData).fnFlags;
-	if (declNode.kind == NodeKind.MethodDecl) return (declNode.data as MethodDeclData).methodFlags;
+	let decl = declNode;
+	while (decl != null && decl.kind == NodeKind.DecoratedDecl) {
+		decl = (decl.data as DecoratedDeclData).decoratedNode;
+	}
+	if (decl == null) return "";
+	if (decl.kind == NodeKind.FunctionDecl) return (decl.data as FunctionDeclData).fnFlags;
+	if (decl.kind == NodeKind.MethodDecl) return (decl.data as MethodDeclData).methodFlags;
 	return "";
 }
 
@@ -3801,6 +3991,13 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 		}
 	}
 
+	const spreadAt = trailingArraySpread(args);
+	if (spreadAt < 0 && hasSpreadArg(args)) {
+		refuseMisplacedSpread(ctx, args, [], 0);
+		return getReturnType(sym.symbolType);
+	}
+	if (spreadAt >= 0) argTypes[spreadAt] = spreadElementType(args[spreadAt]);
+
 	// Score each candidate using the shared priority machinery, detecting
 	// ambiguity (two candidates with equal top scores).
 	let bestIdx: int32 = -1;
@@ -3813,6 +4010,7 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 		const candType = candidates[ci];
 		const score = candType == null || candType.kind != TypeKind.Function || (!implAsFallback && isHiddenImplementation(candSyms[ci], ci < ownCount ? sym : gathered!))
 			? noMatchScore()
+			: spreadAt >= 0 && !spreadFitsCandidate(candType, spreadAt, argTypes[spreadAt], getMinArity(candType)) ? noMatchScore()
 			: scoreCandidateWithSkip(candType.typeChildren, argTypes, getMinArity(candType), skipMask, literalRelations(candType.typeChildren, args, argTypes));
 		scores.push(score);
 		const cmp = score.exactMatches < 0 ? -1 : bestIdx < 0 ? 1 : cmpCandidates(score, bestScore, candType, candidates[bestIdx]);
@@ -3954,6 +4152,15 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	// the winner sym to the body-bearing impl before mangling. Keeping
 	// the redirect localized to codegen avoids conflating "which overload
 	// matched" with "which symbol gets emitted".
+	if (spreadAt >= 0 && winnerType.kind == TypeKind.Function) {
+		const picked = candSyms[bestIdx];
+		const owner = hasFlag(picked, SymbolFlag.OverloadSig) && declaredDefaults(picked) == null ? impl : picked;
+		const take = takeOptionalSpread(ctx, args, argTypes, calleeDefaults(callNode, owner, 0), winnerType.typeChildren, spreadAt);
+		if (take.taken) {
+			fillDefaultArgsForNode(ctx, callNode, sym.name, winnerType.typeChildren.length, 0, owner);
+			fillTakenSpread(ctx, args, argTypes, take, winnerType.typeChildren);
+		}
+	}
 	if (winnerType.kind == TypeKind.Function && winnerType.typeChildren != null) {
 		relateCallArgs(ctx, callNode, winnerType, argTypes, false);
 	}
@@ -4089,6 +4296,12 @@ export function resolveBorrow(ctx: CheckerContext, sym: Symbol, name: string, at
 		const text = builtinTextFor(ctx, name, baseArgs, fnType.typeReturn);
 		if (text != null) {
 			sym.borrowedFrom = text;
+			return;
+		}
+		if (comparesAtBase(ctx, sym)) {
+			if (fnType.typeReturn == null || fnType.typeReturn.kind != TypeKind.Boolean) {
+				addError(ctx, `@delegate '${name}' returns '${typeDisplayName(fnType.typeReturn)}' but ${shown} returns 'boolean'`, at.line, at.column);
+			}
 			return;
 		}
 		addError(ctx, `@delegate '${name}': no ${shown} to delegate to`, at.line, at.column);
@@ -4316,10 +4529,20 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		di = di + 1;
 	}
 	const args = (callNode.data as CallExprData).arguments;
+	const spreadAt = trailingArraySpread(args);
+	if (spreadAt < 0 && hasSpreadArg(args)) {
+		refuseMisplacedSpread(ctx, args, [], 0);
+		return getReturnType(candidates[0]);
+	}
+	if (spreadAt >= 0) argTypes[spreadAt] = spreadElementType(args[spreadAt]);
 	const skipMask: boolean[] = [];
 	const rejected: boolean[] = [];
 	for (let ai = 0; ai < args.length; ai += 1) skipMask.push(ai < argTypes.length && argTypes[ai] == null && isContextSensitive(args[ai]));
-	for (let ci = 0; ci < candidates.length; ci += 1) rejected.push(false);
+	for (let ci = 0; ci < candidates.length; ci += 1) {
+		const offset: int32 = exts[ci].isStatic ? 0 : 1;
+		const minArgs = firstDefaulted(calleeDefaults(callNode, exts[ci].sym, offset), candidates[ci].typeChildren);
+		rejected.push(spreadAt >= 0 && !spreadFitsCandidate(candidates[ci], spreadAt, argTypes[spreadAt], minArgs));
+	}
 	let idx = rankExtensionOverloads(ctx, exts, candidates, args, argTypes, scopeDepths, recvRelations, objType, skipMask, rejected);
 	if (idx == -2) {
 		addError(ctx, "Ambiguous call to overloaded extension method '" + methodName + "'", callNode.location.line, callNode.location.column);
@@ -4374,10 +4597,14 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		}
 		argTypes[ai] = args[ai].nodeType!;
 	}
+	const ovDefaultOffset: int32 = (idx >= 0 && idx < exts.length && exts[idx].isStatic) ? 0 : 1;
+	const ovSpread = spreadAt >= 0 && winnerType.kind == TypeKind.Function
+		? takeOptionalSpread(ctx, args, argTypes, calleeDefaults(callNode, null, ovDefaultOffset), winnerType.typeChildren, spreadAt)
+		: { spread: null, at: -1, taken: false } as SpreadTake;
 	if (winnerType.kind == TypeKind.Function && argTypes.length < winnerType.typeChildren.length) {
-		const ovDefaultOffset = (idx >= 0 && idx < exts.length && exts[idx].isStatic) ? 0 : 1;
 		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset);
 	}
+	if (winnerType.kind == TypeKind.Function) fillTakenSpread(ctx, args, argTypes, ovSpread, winnerType.typeChildren);
 	if (winnerType.kind == TypeKind.Function) {
 		for (let ai = 0; ai < literalArgs.length && ai < winnerType.typeChildren.length; ai += 1) {
 			if (retypeLiteralArg(ctx, args[ai], literalArgs[ai], winnerType.typeChildren[ai]) && args[ai].nodeType != null) argTypes[ai] = args[ai].nodeType!;
@@ -5208,13 +5435,13 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	if (ctx.extensionRegistry != null) {
 		const allByName = findAllExtensionsByName(ctx.extensionRegistry, d.property);
 		const recvLookupType = withoutReadonlyView(objType);
-		let ext = findFirstMatchingExt(allByName, recvLookupType);
+		let ext = isStaticClassAccess ? null as unknown as ExtensionMethod : findFirstMatchingExt(allByName, recvLookupType);
 		let extObjType = recvLookupType;
 		// reference array: UFCS methods (push/slice/...) are declared on the value
 		// Array receiver; a Ref<Array> must deref before the lookup matches. Insert a
 		// HiddenDeref so codegen sees through the Ref, and unify generics on the
 		// unwrapped Array so T binds (mirrors the class-method deref path above).
-		if (ext == null && needsDeref && (resolvedObjType.kind == TypeKind.Array || resolvedObjType.kind == TypeKind.SizedArray || resolvedObjType.kind == TypeKind.Span)) {
+		if (ext == null && !isStaticClassAccess && needsDeref && (resolvedObjType.kind == TypeKind.Array || resolvedObjType.kind == TypeKind.SizedArray || resolvedObjType.kind == TypeKind.Span)) {
 			const derefExt = findFirstMatchingExt(allByName, resolvedObjType);
 			if (derefExt != null) {
 				ext = derefExt;

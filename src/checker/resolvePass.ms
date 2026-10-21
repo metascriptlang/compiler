@@ -325,8 +325,11 @@ function tryBrandIntersection(operandTypes: Type[]): Type | null {
 // Collision policy: error on duplicate name (Nim-style). Operand label flows
 // into error message so user sees which parent / intersection operand introduced
 // the colliding field.
-function appendStructFields(operandStruct: Type, operandLabel: string, accumNames: string[], accumTypes: Type[], ctx: CheckerContext, line: int32, col: int32): void {
+function appendStructFields(operandStruct: Type, operandLabel: string, accumNames: string[], accumTypes: Type[], ctx: CheckerContext, line: int32, col: int32, accumOptional: string[] = []): void {
 	if (operandStruct.typeNames == null || operandStruct.typeChildren == null) return;
+	if (operandStruct.optionalFields != null) {
+		for (const name of operandStruct.optionalFields) accumOptional.push(name);
+	}
 	for (let pi = 0; pi < operandStruct.typeNames.length; pi += 1) {
 		const fname = operandStruct.typeNames[pi];
 		let collided = false;
@@ -726,10 +729,13 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		if (operandTypes.length >= 2 && allObjectLike) {
 			const mergedNames: string[] = [];
 			const mergedTypes: Type[] = [];
+			const mergedOptional: string[] = [];
 			for (let oi = 0; oi < operandTypes.length; oi += 1) {
-				appendStructFields(unwrapToStruct(operandTypes[oi]), operandLabels[oi], mergedNames, mergedTypes, ctx, line, col);
+				appendStructFields(unwrapToStruct(operandTypes[oi]), operandLabels[oi], mergedNames, mergedTypes, ctx, line, col, mergedOptional);
 			}
-			return createRef(createStruct("", mergedNames, mergedTypes, true));
+			const merged = createStruct("", mergedNames, mergedTypes, true);
+			if (mergedOptional.length > 0) merged.optionalFields = mergedOptional;
+			return createRef(merged);
 		}
 		if (operandTypes.length >= 2) {
 			const brand = tryBrandIntersection(operandTypes);
@@ -839,6 +845,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		const fields = splitTopLevel(inner, hasSemicolon ? ";" : ",");
 		const names: string[] = [];
 		const types: Type[] = [];
+		const optionalFields: string[] = [];
 		for (const f of fields) {
 			const field = f.trim();
 			if (field != "") {
@@ -851,13 +858,17 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 						fieldIsOptional = true;
 					}
 					let ftypeStr = field.slice(colonIdx + 1, field.length).trim();
-					if (fieldIsOptional) ftypeStr = optionalizeTypeString(ftypeStr);
+					if (fieldIsOptional) {
+						ftypeStr = optionalizeTypeString(ftypeStr);
+						optionalFields.push(fname);
+					}
 					names.push(fname);
 					types.push(resolveAnnotation(ftypeStr, ctx, line, col));
 				}
 			}
 		}
 		const objectType = createStruct("", names, types, true);
+		if (optionalFields.length > 0) objectType.optionalFields = optionalFields;
 		recordForwardFields(objectType, types);
 		return createRef(objectType);
 	}
@@ -2089,6 +2100,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	// algorithm at type resolution time.
 	const mergedNames: string[] = [];
 	const mergedTypes: Type[] = [];
+	const optionalFields: string[] = [];
 	for (let xi = 0; xi < d.interfaceExtends.length; xi += 1) {
 		const parentExpr = d.interfaceExtends[xi];
 		const pt = parentTypes[xi];
@@ -2102,7 +2114,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 			addError(ctx, "cannot extend non-object type '" + parentExpr + "'", node.location.line, node.location.column);
 			continue;
 		}
-		appendStructFields(parentStruct, parentExpr, mergedNames, mergedTypes, ctx, node.location.line, node.location.column);
+		appendStructFields(parentStruct, parentExpr, mergedNames, mergedTypes, ctx, node.location.line, node.location.column, optionalFields);
 		if (d.interfaceExtends.length > 1 && parentStruct.typeNames != null) {
 			const inherited = firstPrivateField(parentStruct.sym, parentStruct.typeNames);
 			if (inherited != "") {
@@ -2167,6 +2179,8 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	target.typeNames = mergedNames;
 	target.typeChildren = mergedTypes;
 	target.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct);
+	for (const name of d.interfaceOptionalFields) optionalFields.push(name);
+	target.optionalFields = optionalFields.length > 0 ? optionalFields : null;
 	if (sym.symbolType.kind == TypeKind.Struct && parentTypes.length == 1 && isValueStructDecl(parentTypes[0])) target.typeExtra = parentTypes[0];
 	for (const pt of mergedTypes) { propagateToOwner(target, pt); }
 	if (sym.symbolType.kind == TypeKind.Struct && declaresLifecycleHook(ctx, sym)) target.typeFlags = target.typeFlags.incl(TypeFlag.HasAsgn);
@@ -2583,6 +2597,8 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	// Build Object type — collect members inline
 	const memberNames: string[] = [];
 	const memberTypes: Type[] = [];
+	const ownOptional: string[] = [];
+	const optionalFields: string[] = [];
 	for (let mi = 0; mi < d.classBody.length; mi += 1) {
 		let member = d.classBody[mi];
 		// Unwrap DecoratedDecl to get the inner declaration
@@ -2654,6 +2670,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				}
 			} else {
 				memberNames.push(pd.propName);
+				if (member.flags.has(NodeFlag.Optional)) ownOptional.push(pd.propName);
 				if (pd.propType != "") {
 					const propType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
@@ -2753,7 +2770,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			} else {
 				const newNames: string[] = [];
 				const newTypes: Type[] = [];
-				appendStructFields(parentStruct, parentExpr, newNames, newTypes, ctx, node.location.line, node.location.column);
+				appendStructFields(parentStruct, parentExpr, newNames, newTypes, ctx, node.location.line, node.location.column, optionalFields);
 				for (let oi = 0; oi < memberNames.length; oi += 1) {
 					const fname = memberNames[oi];
 					let collided = false;
@@ -2780,6 +2797,8 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	if (hasGenerics) closeScope(ctx.table);
 	inner.typeNames = mergedNames;
 	inner.typeChildren = mergedTypes;
+	for (const name of ownOptional) optionalFields.push(name);
+	inner.optionalFields = optionalFields.length > 0 ? optionalFields : null;
 	if (didMergeParent) {
 		inner.typeFlags = inner.typeFlags.incl(TypeFlag.HasInheritedFields);
 	}
@@ -2918,7 +2937,7 @@ function declareGeneric(ctx: CheckerContext, kind: NodeKind, name: string, param
 		}
 		decl = createNodeAt(NodeKind.ClassDecl, { className: name, classDisplayName: name, classExtends: "", classBody: body, nameLocation: zl, classImplements: [] }, zl);
 	} else {
-		decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: fields, interfaceFieldTypes: types, interfaceExtends: [], nameLocation: zl, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: noFieldDecorators(fields.length) }, zl);
+		decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: fields, interfaceFieldTypes: types, interfaceExtends: [], nameLocation: zl, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: noFieldDecorators(fields.length), interfaceOptionalFields: [] as string[] }, zl);
 	}
 	decl.typeArg = params;
 	const sym = makeSymbol(name, kind == NodeKind.ClassDecl ? SymbolKind.Class : SymbolKind.Interface, createStruct(name, fields, [], true), false);

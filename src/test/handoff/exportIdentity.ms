@@ -8,7 +8,7 @@ function declaringSymbol(name: string, kind: NodeKind): Result<Symbol, string> {
 	const loc = makeLoc(0, 0);
 	const sym = makeSymbol(name, SymbolKind.TypeAlias, inferredType(), false);
 	if (kind == NodeKind.InterfaceDecl) {
-		sym.declNode = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [], nameLocation: loc, interfaceFieldVisibility: [], interfaceFieldDecorators: [] }, loc);
+		sym.declNode = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [], nameLocation: loc, interfaceFieldVisibility: [], interfaceFieldDecorators: [], interfaceOptionalFields: [] }, loc);
 	} else if (kind == NodeKind.TypeAliasDecl) {
 		sym.declNode = createNodeAt(NodeKind.TypeAliasDecl, { aliasName: name, aliasType: "", aliasGenericParams: "", discriminantName: "", discriminantType: "", variantKeys: [], variantTypes: [], nameLocation: loc }, loc);
 	} else if (kind == NodeKind.ClassDecl) {

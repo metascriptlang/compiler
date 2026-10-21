@@ -64,6 +64,38 @@ test "an explicit type arg of a static generic is checked against the arguments"
 	assert fromErr.contains("Argument type mismatch in 'err' arg 0: got int32, expected string");
 }
 
+const HOLDER = "class Holder {\n\tkeep<T>(v: T): T { return v; }\n"
+	+ "\tstatic skeep<T>(v: T): T { return v; }\n}\n"
+	+ "class Box<T> { static make(v: T): T { return v; } }\n"
+	+ "const h = new Holder();\n";
+
+test "a method's explicit type argument types its literal argument" {
+	const src = HOLDER + "const a = h.keep<int8>(-5);\nconst w: int8 = a;\n"
+		+ "const xs = h.keep<number[]>([1, 2]);";
+	assert strictErrorCount(src) == 0;
+}
+
+test "a static method's explicit type argument types its literal argument" {
+	const src = HOLDER + "const a = Holder.skeep<int8>(-5);\nconst w: int8 = a;\n"
+		+ "const b = Box.make<int16>(-30000);\nconst v: int16 = b;";
+	assert strictErrorCount(src) == 0;
+}
+
+test "a builtin static's explicit type argument types its literal argument" {
+	const src = "const p = Promise.resolve<float32>(5);\nconst f: float32 = await p;\n"
+		+ "const r = Result.ok<number[], string>([1, 2]);";
+	assert strictErrorCount(src) == 0;
+}
+
+test "a method's explicit type argument still refuses a contradicting typed argument" {
+	const src = HOLDER + "const x: int32 = 3;\nconst a = h.keep<int8>(x);";
+	assert hasError(src, "Argument type mismatch in 'keep' arg 0: got int32, expected int8");
+}
+
+test "a method's explicit type argument refuses a literal it cannot hold" {
+	assert hasError(HOLDER + "const a = h.keep<int8>(300);", "cannot convert 300 to int8");
+}
+
 // ===== Rejected: the same rule inside template expansion =====
 
 test "template argument contradicting an inferred T is rejected" {

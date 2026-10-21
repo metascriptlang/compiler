@@ -534,7 +534,7 @@ export function writePreludeDeps(key: string, stamp: string, snap: PreludeDepsSn
 // ===== Writer =====
 //
 // Line format (tab-separated; \1.. prefixes keep the reader dumb):
-//   T idx kind flags callConv typeName typeNamesCsv childrenCsv ret extra symIdx opsCsv
+//   T idx kind flags callConv typeName typeNamesCsv childrenCsv ret extra symIdx optionalFieldsCsv
 //   N idx kind flags l c el ec typeIdx symIdx typeExprIdx typeExprsCsv paramLocsCsv typeArg variantSlot paramSymsCsv baseExprsCsv <payload...>
 //   S idx kind state flags overloadIdx mutatedParams duVariantSlot
 //     locLine locCol locEndLine locEndCol inScope
@@ -723,12 +723,13 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 			for (const c of t.typeChildren) children.push(idxType(c));
 		}
 		const names: string[] = t.typeNames != null ? t.typeNames : [];
+		const optional: string[] = t.optionalFields != null ? t.optionalFields : [];
 		if (t.attachedOps != null) {
 			for (const o of t.attachedOps) {
 				if (o != null) throw new Error(`internal: prelude pack type '${t.typeName}' carries attached op '${o.name}', which exists only after lowering`);
 			}
 		}
-		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${idxType(t.typeReturn)}\t${idxType(t.typeExtra)}\t${idxSym(t.sym)}`);
+		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${idxType(t.typeReturn)}\t${idxType(t.typeExtra)}\t${idxSym(t.sym)}\t${joinCsv(optional)}`);
 	}
 
 	_wnodeIdx = nodeIdx;
@@ -1081,7 +1082,7 @@ function buildNodeData(kind: NodeKind, f: string[], nodes: Node[], types: Type[]
 	if (kind == NodeKind.ExportDecl) return { exportedDecl: nd(f[0].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.TypeAliasDecl) return { aliasName: unescapeP(f[0]), aliasType: unescapeP(f[1]), aliasIsDistinct: f[2] == "1", aliasGenericParams: unescapeP(f[3]), discriminantName: unescapeP(f[4]), discriminantType: unescapeP(f[5]), variantKeys: splitCsv(f[6]), variantTypes: splitCsv(f[7]), nameLocation: parseLoc(f[8]) } as NodeData;
 	if (kind == NodeKind.EnumDecl) return { enumName: unescapeP(f[0]), enumMembers: splitCsv(f[1]), enumValues: parseFloatsCsv(f[2]), nameLocation: parseLoc(f[3]), memberLocations: parseLocs(f[4]), enumInits: parseNodeArr(f[5], nodes) } as NodeData;
-	if (kind == NodeKind.InterfaceDecl || kind == NodeKind.StructDecl) return { interfaceName: unescapeP(f[0]), interfaceFields: splitCsv(f[1]), interfaceFieldTypes: splitCsv(f[2]), interfaceExtends: splitCsv(f[3]), nameLocation: parseLoc(f[4]), interfaceFieldVisibility: splitCsv(f[5]), interfaceFieldDecorators: parseNestedNodeArrs(f[6], nodes) } as NodeData;
+	if (kind == NodeKind.InterfaceDecl || kind == NodeKind.StructDecl) return { interfaceName: unescapeP(f[0]), interfaceFields: splitCsv(f[1]), interfaceFieldTypes: splitCsv(f[2]), interfaceExtends: splitCsv(f[3]), nameLocation: parseLoc(f[4]), interfaceFieldVisibility: splitCsv(f[5]), interfaceFieldDecorators: parseNestedNodeArrs(f[6], nodes), interfaceOptionalFields: splitCsv(f[7]) } as NodeData;
 	if (kind == NodeKind.ClassDecl) return { className: unescapeP(f[0]), classDisplayName: unescapeP(f[1]), classExtends: unescapeP(f[2]), classBody: parseNodeArr(f[3], nodes), nameLocation: parseLoc(f[4]), classImplements: splitCsv(f[5]) } as NodeData;
 	if (kind == NodeKind.PropertyDecl) return { propName: unescapeP(f[0]), propType: unescapeP(f[1]), propIsStatic: f[2] == "1", propIsReadonly: f[3] == "1", propVisibility: unescapeP(f[4]), propInitializer: nd(f[5].parseInt() as int32, nodes) as Node } as NodeData;
 	if (kind == NodeKind.MethodDecl) return { methodName: unescapeP(f[0]), methodParams: splitCsv(f[1]), methodParamTypes: splitCsv(f[2]), methodBody: nd(f[3].parseInt() as int32, nodes) as Node, methodIsStatic: f[4] == "1", methodFlags: unescapeP(f[5]), methodVisibility: unescapeP(f[6]), methodReturnType: unescapeP(f[7]), methodDefaults: parseNodeArr(f[8], nodes), nativeName: unescapeP(f[9]), nameLocation: parseLoc(f[10]) } as NodeData;
@@ -1102,7 +1103,7 @@ function buildNodeData(kind: NodeKind, f: string[], nodes: Node[], types: Type[]
 	if (kind == NodeKind.TypeUnion) return { typExprMembers: parseNodeArr(f[0], nodes), discFieldName: unescapeP(f[1]), variantKeys: splitCsv(f[2]), discKind: unescapeP(f[3]) } as NodeData;
 	if (kind == NodeKind.TypeIntersection) return { typExprMembers: parseNodeArr(f[0], nodes) } as NodeData;
 	if (kind == NodeKind.TypeFunction) return { typExprParams: parseNodeArr(f[0], nodes), typExprReturn: nd(f[1].parseInt() as int32, nodes) as Node, typExprParamNames: splitCsv(f[2]) } as NodeData;
-	if (kind == NodeKind.TypeObject) return { typExprFieldNames: splitCsv(f[0]), typExprFieldTypes: parseNodeArr(f[1], nodes), typExprIndexKey: nd(f[2].parseInt() as int32, nodes) as Node, typExprIndexValue: nd(f[3].parseInt() as int32, nodes) as Node, typExprFieldDecorators: parseNestedNodeArrs(f[4], nodes), typExprTypeName: unescapeP(f[5]) } as NodeData;
+	if (kind == NodeKind.TypeObject) return { typExprFieldNames: splitCsv(f[0]), typExprFieldTypes: parseNodeArr(f[1], nodes), typExprIndexKey: nd(f[2].parseInt() as int32, nodes) as Node, typExprIndexValue: nd(f[3].parseInt() as int32, nodes) as Node, typExprFieldDecorators: parseNestedNodeArrs(f[4], nodes), typExprTypeName: unescapeP(f[5]), typExprOptionalFields: splitCsv(f[6]) } as NodeData;
 	if (kind == NodeKind.Program) return { programStmts: parseNodeArr(f[0], nodes) } as NodeData;
 	if (kind == NodeKind.ActorDecl) return { actorName: unescapeP(f[0]), actorBody: parseNodeArr(f[1], nodes), nameLocation: parseLoc(f[2]) } as NodeData;
 	if (kind == NodeKind.SpliceMany) return { spliceNodes: parseNodeArr(f[0], nodes) } as NodeData;
@@ -1174,6 +1175,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			typeReturnIdx.push(f[9].parseInt() as int32);
 			typeExtraIdx.push(f[10].parseInt() as int32);
 			typeSymIdx.push(f[11].parseInt() as int32);
+			if (f[12] != "-") t.optionalFields = splitCsv(f[12]);
 			t.attachedOps = [];
 			types.push(t);
 		} else if (f[0] == "N") {
@@ -1473,6 +1475,7 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		p2.kind = TypeKind.String;
 		fnType.typeChildren = [p1, p2];
 		fnType.typeReturn = null as unknown as Type;
+		fnType.optionalFields = ["b"];
 		sym.symbolType = fnType;
 		const ov = makeSymbolState("pkTestFn", SymbolKind.Function, null, false, SymbolState.Hollow);
 		ov.state = SymbolState.Checked;
@@ -1513,6 +1516,8 @@ test "preludePack: write then load reconstructs symbols, types, nodes, exts, dir
 		assert got.symbolType.typeNames.length == 2;
 		assert got.symbolType.typeNames[1] == "b";
 		assert got.symbolType.typeChildren[0].kind == TypeKind.Int32;
+		assert got.symbolType.optionalFields != null && got.symbolType.optionalFields.length == 1 && got.symbolType.optionalFields[0] == "b", "a type's optional fields did not survive the pack";
+		assert got.symbolType.typeChildren[0].optionalFields == null;
 		assert got.overloads.length == 1 && got.overloads[0].name == "pkTestFn";
 		// N-table roundtrip: declNode restored with full body structure.
 		assert got.declNode != null;

@@ -21,7 +21,7 @@ import { TransformContext } from "../context";
 import { addError } from "../../checker/context";
 import { walkNode } from "../walker";
 import { makeBinary, makeCall, makeMember, makeNumber, generatedRef, runtimeRef } from "../util";
-import { createPrimitive, isIntegerType, peelToRepr } from "../../checker/types";
+import { createPrimitive, isIntegerType, peelToRepr, literalUnionBase } from "../../checker/types";
 import { int64ToDecimal, uint64ToDecimal } from "../../utils/string";
 import { cloneIfPure } from "./intArithJS";
 import { makeRangeCheckFor } from "../native/rangeCheckInject";
@@ -120,7 +120,8 @@ function bigLit(text: string, kind: TypeKind, loc: SourceLocation): Node {
 export function readsUnionMember(d: TypeAssertionData): boolean {
 	if (d.asExpr == null) return false;
 	if (d.asExpr.kind == NodeKind.HiddenSubConv) return true;
-	return d.asExpr.nodeType != null && d.asExpr.nodeType.kind == TypeKind.Union;
+	const t = d.asExpr.nodeType;
+	return t != null && t.kind == TypeKind.Union && literalUnionBase(t) == null;
 }
 
 function bigintCast(node: Node, d: TypeAssertionData, rangeChecks: boolean): Node | null {

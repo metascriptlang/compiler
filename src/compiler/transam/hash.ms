@@ -9,7 +9,7 @@
 
 import { TaQueryKey, TaQueryKind } from "./revision";
 import {
-	Node, NodeKind,
+	Node, NodeKind, NodeFlag,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData, RegexLiteralData, BigIntLiteralData,
 	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData,
 	MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData,
@@ -380,7 +380,7 @@ export function transAmHashNode(node: Node): number {
 		NodeKind.InterfaceDecl | NodeKind.StructDecl => {
 			const d = node.data as InterfaceDeclData;
 			h = hS(h, d.interfaceName); h = hStrings(h, d.interfaceFields); h = hStrings(h, d.interfaceFieldTypes);
-			h = hNodeRows(h, d.interfaceFieldDecorators);
+			h = hNodeRows(h, d.interfaceFieldDecorators); h = hStrings(h, d.interfaceOptionalFields);
 		},
 		NodeKind.ClassDecl => {
 			const d = node.data as ClassDeclData;
@@ -392,7 +392,7 @@ export function transAmHashNode(node: Node): number {
 		},
 		NodeKind.PropertyDecl => {
 			const d = node.data as PropertyDeclData;
-			h = hS(h, d.propName); h = hS(h, d.propType); h = hB(h, d.propIsStatic); h = hB(h, d.propIsReadonly); h = hS(h, d.propVisibility); if (d.propInitializer != null) { h = hNodes(h, [d.propInitializer]); }
+			h = hS(h, d.propName); h = hS(h, d.propType); h = hB(h, d.propIsStatic); h = hB(h, d.propIsReadonly); h = hS(h, d.propVisibility); h = hB(h, node.flags.has(NodeFlag.Optional)); if (d.propInitializer != null) { h = hNodes(h, [d.propInitializer]); }
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
@@ -484,7 +484,7 @@ export function transAmHashNode(node: Node): number {
 		NodeKind.TypeObject => {
 			const d = node.data as TypeObjectData;
 			h = hStrings(h, d.typExprFieldNames); h = hNodes(h, d.typExprFieldTypes);
-			h = hN(h, d.typExprIndexKey); h = hN(h, d.typExprIndexValue);
+			h = hN(h, d.typExprIndexKey); h = hN(h, d.typExprIndexValue); h = hStrings(h, d.typExprOptionalFields);
 		},
 		// JSX (compile-time only — but hashed for Trans-Am cache consistency)
 		NodeKind.JSXElement => {

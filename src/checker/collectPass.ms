@@ -932,7 +932,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 	methodSym.modulePath = ctx.modulePath;
 	methodSym.disamb = nextDisamb(ctx, ctx.modulePath, mangledName);
 	stampItem(ctx, methodSym);
-	methodSym.declNode = member;
+	methodSym.declNode = methodNode;
 	member.resolvedSym = methodSym;
 	methodNode.resolvedSym = methodSym;
 	if (methodDefinesRoutine(md)) {

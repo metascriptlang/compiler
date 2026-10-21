@@ -50,14 +50,16 @@ const b = new Sub() as M;
 const c = new Bare() as X;
 const d = p as X;
 `;
-	const text = checkOnly(src).errors.join("\n");
+	const errors = checkOnly(src).errors;
+	const text = errors.join("\n");
 	assert text.contains("cannot convert K to M: its 'name' is a method, not a field"), "a method is not a field of the view: " + text;
 	assert text.contains("cannot convert Sub to M: its 'name' is a method, not a field"), "an inherited method is not a field of the view: " + text;
 	assert text.contains("cannot convert Bare to X: it has no field 'extra'"), "a class missing a field of an unrelated interface is refused: " + text;
-	assert text.contains("cannot convert P to X: it has no field 'extra'"), "an interface missing a field of an unrelated interface is refused: " + text;
+	assert text.contains("cannot convert P to X: X is an interface with no run-time identity"), "an interface source down to a narrower interface is refused for its missing identity: " + text;
+	assert errors.length == 4, "each refused cast reports one error: " + text;
 }
 
-test "as down an interface extends chain is not refused by the object view rule" {
+test "as down an interface extends chain is refused for the missing run-time identity, not by the object view rule" {
 	const src = `
 interface S { a: string; }
 interface C extends S { b: string; }
@@ -70,5 +72,9 @@ const d = s as D;
 const m = new F() as M;
 `;
 	const errors = checkOnly(src).errors;
-	assert errors.length == 0, "a descendant interface and a function-typed field are not refused: " + errors.join("\n");
+	const text = errors.join("\n");
+	assert text.contains("cannot convert S to C: C is an interface with no run-time identity"), "a child interface is refused for its missing identity: " + text;
+	assert text.contains("cannot convert S to D: D is an interface with no run-time identity"), "a grandchild interface is refused for its missing identity: " + text;
+	assert !text.contains("an object type cast reads the object's own fields"), "the object view rule does not fire down the chain: " + text;
+	assert errors.length == 2, "a function-typed field held by a class is not refused: " + text;
 }

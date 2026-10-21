@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, ClassDeclData, MethodDeclData, DecoratedDeclData } from "../ast/node";
 import { makeSymbol, classDeclNodeOf } from "./symbol";
-import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass } from "./types";
+import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -425,6 +425,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	const openNullableTarget = openNullableUnionPayload(target, source);
 	if (openNullableTarget != null) return isAssignable(source.typeReturn, openNullableTarget);
 
+	if (classOutsideLineage(source, target)) return false;
 	if (missingRoutine(source, target) != "") return false;
 
 	// Same kind is always compatible
@@ -1096,6 +1097,24 @@ function answersTo(source: Type, fields: string[], name: string): boolean {
 // A class instance answers to its methods and accessors as well as its fields:
 // the first routine of the target class the source has no member for, or empty.
 // An instantiated class body has no class of its own; its instance relates it.
+function classOutsideLineage(source: Type, target: Type): boolean {
+	const targetClass = classBodyOf(target);
+	if (targetClass == null) return false;
+	if (classBodyOf(source) != null) return !derivesFromClass(source, targetClass.sym!);
+	const shape = unwrapRefBase(source);
+	return (shape.kind == TypeKind.Struct && !isMaybeType(shape)) || shape.kind == TypeKind.GenericInstance;
+}
+
+// What an `implements` clause relates: the class holds every member of the implemented
+// type, field by field in the leading slots and routine by name. No conversion into a slot
+// follows from it, so the lineage a class slot needs does not enter.
+export function holdsMembersOf(classType: Type, implemented: Type): boolean {
+	if (classBodyOf(implemented) == null) return isAssignable(classType, implemented);
+	const shape = peelToStructOrUnion(implemented);
+	return shape != null && missingRoutine(classType, implemented) == ""
+		&& isObjectAssignable(unwrapRefBase(classType), shape);
+}
+
 function missingRoutine(source: Type, target: Type): string {
 	let cls = classBodyOf(target);
 	if (cls == null) return "";
@@ -1163,6 +1182,14 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 	}
 	const order = unionOrderHint(source, target);
 	if (order != "") return order;
+	const lineage = classLineageHint(skipModifier(source), skipModifier(objectShapeTarget(source, target)));
+	if (lineage != "") return lineage;
+	return explainMemberPrefix(source, target);
+}
+
+// The members of `target` that `source` does not hold where a structural match reads them:
+// a field in another slot, or a routine of a class `source` has no member for.
+export function explainMemberPrefix(source: Type | null, target: Type | null): string {
 	const shapeTarget = objectShapeTarget(source, target);
 	const s0 = skipModifier(source);
 	const t0 = skipModifier(shapeTarget);
@@ -1196,6 +1223,24 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 		ti += 1;
 	}
 	return routineHint(s, t);
+}
+
+function classLineageHint(source: Type | null, targetIn: Type | null): string {
+	const target = targetIn != null ? unwrapRefNullUnion(targetIn) ?? targetIn : null;
+	if (source == null || target == null || !classOutsideLineage(source, target)) return "";
+	const from = typeDisplayName(source);
+	const to = typeDisplayName(target);
+	const sourceClass = classBodyOf(source);
+	if (sourceClass != null && derivesFromClass(target, sourceClass.sym!)) {
+		return " (not every " + from + " is a " + to + ": test it with `instanceof " + to
+			+ "`, or convert it with `as " + to + "`, which is checked at run time)";
+	}
+	if (sourceClass == null) {
+		const literal = isAnonLiteralName(unwrapRefBase(source).typeName) ? "annotate the literal `const x: " + to + " = { ... }`, or " : "";
+		return " (" + from + " is not a " + to + ": classes convert only along `extends`; " + literal + "type the slot with an interface)";
+	}
+	return " (" + from + " is not a " + to + ": classes convert only along `extends`; make " + from
+		+ " extend " + to + ", or type the slot with an interface)";
 }
 
 function routineHint(source: Type, target: Type): string {
@@ -1353,7 +1398,8 @@ function sameEnumMember(a: Type, b: Type): boolean {
 function skipAliasWrapper(t: Type): Type {
 	let cur = t;
 	while (cur.kind == TypeKind.Alias && cur.typeReturn != null) cur = cur.typeReturn;
-	return cur;
+	const seen = peelTransparentInstance(cur);
+	return seen != cur ? skipAliasWrapper(seen) : cur;
 }
 
 export function sameType(a: Type | null, b: Type | null): boolean {
@@ -1462,6 +1508,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	// Never is the bottom type — relates to everything. After exhaustive
 	// narrowing eliminates all union variants, the residual is never.
 	if (actual.kind == TypeKind.Never) return TypeRelation.Exact;
+	if (classOutsideLineage(actual, formal)) return TypeRelation.None;
 	if (formal.kind == TypeKind.Function && actual.kind != TypeKind.Function) {
 		const widened = distinctWidenBody(actual);
 		if (widened != null && widened.kind == TypeKind.Function) {
@@ -1558,6 +1605,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 		return typeRelation(formal.typeReturn, actual);
 	}
 
+	if (actual.kind == TypeKind.Unknown && !takesUnknown(formal)) return TypeRelation.None;
 	// Inference sentinels + user unknown score as Generic
 	if (formal.kind == TypeKind.Unknown || actual.kind == TypeKind.Unknown
 		|| formal.kind == TypeKind.None || actual.kind == TypeKind.None
@@ -1862,8 +1910,6 @@ export function cmpCandidates(a: CandidateScore, b: CandidateScore,
 }
 
 // Generic specialization: cross-test formal types for specificity.
-// f<T>(x: T[]) is more specific than f<T>(x: T) because T[] can match T generically
-// but T cannot match T[].
 // Returns >0 if A is more specific, <0 if B, 0 if equal/contradictory.
 export function checkGenericSpecialization(typeA: Type, typeB: Type): number {
 	if (typeA == null || typeB == null) return 0;
@@ -1877,13 +1923,12 @@ export function checkGenericSpecialization(typeA: Type, typeB: Type): number {
 	while (i < lenA) {
 		const pA = typeA.typeChildren[i];
 		const pB = typeB.typeChildren[i];
-		// Cross-test: can B's formal match A's as Generic?
-		const bMatchesA = typeRelation(pA, pB);
-		const aMatchesB = typeRelation(pB, pA);
-		if (bMatchesA == TypeRelation.Generic && aMatchesB != TypeRelation.Generic) {
-			aWins = aWins + 1; // A is more specific (B is more general)
-		} else if (aMatchesB == TypeRelation.Generic && bMatchesA != TypeRelation.Generic) {
-			bWins = bWins + 1; // B is more specific (A is more general)
+		const bTakesA = typeRelation(pB, pA);
+		const aTakesB = typeRelation(pA, pB);
+		if (bTakesA == TypeRelation.Generic && aTakesB == TypeRelation.None) {
+			aWins = aWins + 1;
+		} else if (aTakesB == TypeRelation.Generic && bTakesA == TypeRelation.None) {
+			bWins = bWins + 1;
 		}
 		i = i + 1;
 	}
@@ -2020,6 +2065,22 @@ test "unknown flows only into a slot that takes unknown" {
 	assert isAssignable(unknownType(), unknownType());
 	assert isAssignable(unknownType(), createUnion([unknownType(), nullType()]));
 	assert isAssignable(cls, unknownType());
+}
+
+test "an unknown argument ranks only against a formal that takes unknown" {
+	const gp = createGenericParam("E");
+	assert typeRelation(createArray(gp), unknownType()) == TypeRelation.None;
+	assert typeRelation(createRef(createStruct("Foo", ["n"], [createPrimitive(TypeKind.Int32)], true)), unknownType()) == TypeRelation.None;
+	assert typeRelation(gp, unknownType()) == TypeRelation.Generic;
+	assert typeRelation(createUnion([unknownType(), nullType()]), unknownType()) == TypeRelation.Generic;
+	assert typeRelation(unknownType(), unknownType()) == TypeRelation.Exact;
+}
+
+test "a generic container formal is more specific than an unknown one" {
+	const arrayFormal = createFunction([createArray(createGenericParam("E"))], ["x"], stringType());
+	const unknownFormal = createFunction([unknownType()], ["x"], stringType());
+	assert checkGenericSpecialization(arrayFormal, unknownFormal) > 0;
+	assert checkGenericSpecialization(unknownFormal, arrayFormal) < 0;
 }
 
 test "a function taking a class does not stand in for one taking unknown" {

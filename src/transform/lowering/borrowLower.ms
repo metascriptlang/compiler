@@ -1,4 +1,4 @@
-import { Node, NodeKind, CallExprData, MemberExprData, Symbol } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, CallExprData, MemberExprData, Symbol } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { hasFlag, overloadWinner, SymbolFlag } from "../../checker/symbol";
@@ -30,6 +30,11 @@ function lowerBorrowNode(node: Node): Node {
 	if (node.kind == NodeKind.Identifier) {
 		const target = borrowTarget(node.resolvedSym);
 		if (target != null && node.resolvedSym!.overloads.length == 0) retarget(node, target);
+		return node;
+	}
+	if (node.flags.has(NodeFlag.UserOp)) {
+		const routine = borrowTarget(node.resolvedSym);
+		if (routine != null) node.resolvedSym = routine;
 		return node;
 	}
 	if (node.kind != NodeKind.CallExpr) return node;

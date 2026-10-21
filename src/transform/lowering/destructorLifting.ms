@@ -402,6 +402,27 @@ function genElementLoop(hook: string, elemType: Type, bound: Node | null, xf: No
 	buf.items.push(makeWhile(cond, makeBlock(bodyBuf.items, loc), loc));
 }
 
+function genShrinkLoop(elemType: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	const ctr = lctx.tempCounter;
+	lctx.tempCounter = ctr + 1;
+	const counterName = "$i_" + ctr.toString();
+	const counterSym = liftTempSym(lctx, counterName, numberType());
+	const counterDecl = makeVarDecl(counterName, makeMember(clonePath(xf, loc), "length", loc), DeclKind.Let, loc);
+	counterDecl.resolvedSym = counterSym;
+	const cond = makeBinary(makeTypedIdentResolved(counterSym, null, loc), ">", makeMember(clonePath(yf, loc), "length", loc), loc);
+	const bodyBuf = newBuf();
+	bodyBuf.items.push(makeExprStmt(makeAssign(
+		makeTypedIdentResolved(counterSym, null, loc),
+		makeBinary(makeTypedIdentResolved(counterSym, null, loc), "-", makeNumber(1, loc), loc),
+		loc
+	), loc));
+	const xi = makeArrayAccess(clonePath(xf, loc), makeTypedIdentResolved(counterSym, null, loc), loc);
+	fillBody("destroy", xi, xi, "", elemType, lctx, bodyBuf, createNameSet(), loc);
+	if (bodyBuf.items.length == 1) return;
+	buf.items.push(counterDecl);
+	buf.items.push(makeWhile(cond, makeBlock(bodyBuf.items, loc), loc));
+}
+
 function runtimeCellDestroy(elem: Type | null, canon: Type): string {
 	if (elem == null || isUncountedPtrElement(elem)) return "msNumberArrayDestroy";
 	if (elem.kind == TypeKind.String) return "msStringArrayDestroy";
@@ -464,6 +485,7 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 				// C temporary instead of the array slot (msArrayAccess returns by value).
 				genCall("msArrayStringCopy", hook, xf, yf, buf, loc);
 			} else if (needsElemLoop) {
+				genShrinkLoop(elem, xf, yf, lctx, buf, loc);
 				genCall("msArraySetLen", hook, xf, yf, buf, loc);
 				genArrayLoop("copy", elem, xf, yf, lctx, buf, loc);
 			} else {

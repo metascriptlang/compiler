@@ -215,6 +215,20 @@ export function isUtf8(this typeof Buffer, value: Buffer): boolean {
 	return true;
 }
 
+export function byteLength(this typeof Buffer, str: string, encoding: string = "utf-8"): number {
+	if (encoding == "ascii" || encoding == "latin1" || encoding == "binary") return str.length;
+	if (encoding == "utf16le" || encoding == "ucs2" || encoding == "ucs-2") return str.length * 2;
+	const n = str.byteLength;
+	if (encoding == "hex") return n / 2;
+	if (encoding == "base64" || encoding == "base64url") {
+		let m = n;
+		if (m > 0 && str.byteAt(m - 1) == "=".code) m -= 1;
+		if (m > 1 && str.byteAt(m - 1) == "=".code) m -= 1;
+		return (m * 3) / 4;
+	}
+	return n;
+}
+
 export function isBufferEncoding(this typeof Buffer, encoding: string): boolean {
 	if (encoding == "utf8" || encoding == "utf-8" ||
 			encoding == "hex" || encoding == "ascii" ||

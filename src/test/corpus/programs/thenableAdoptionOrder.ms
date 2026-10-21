@@ -1,5 +1,5 @@
 // @stdout: A start|A after call|then 1|A 1|B start|B after resolve|then 2|B 2|E start|E after all|then 5|then 6|E 5,6
-// @xfail(raiser): the Raiser has no job queue and calls `then` inside the adopting call (NIM-REF RT-39 Open: it resumes awaits eagerly), and has no host function for msPromiseAll
+// @xfail(raiser): the Raiser has no job queue and calls `then` inside the adopting call (NIM-REF RT-39 Open: it resumes awaits eagerly)
 // @exit: 0
 // note: an async function's return, `Promise.resolve` and `Promise.all` call a thenable's `then` from a queued job, after the caller's next statement, as `await` does.
 

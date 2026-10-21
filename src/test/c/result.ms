@@ -29,7 +29,7 @@ test "E2E C: try with catch fallback" {
 }
 
 test "E2E C: Result field access .ok .value .error" {
-	const src = "function f(): Result<number, string> { return Result.ok(42); }\nconst r = f();\nconst b: boolean = r.ok;\nconst v: number = r.value;";
+	const src = "function f(): Result<number, string> { return Result.ok(42); }\nconst r = f();\nconst b: boolean = r.ok;\nconst v: number = r.ok ? r.value : 0;\nconst e: string = r.ok ? \"\" : r.error;";
 	const c = compileToC(src);
 	assert c.ok;
 }

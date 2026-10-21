@@ -108,3 +108,24 @@ class Copy implements Base { name: string = "c"; }
 	const errors = checkOnly(src).errors;
 	assert errors.length == 0, "every implemented member is held: " + errors.join("\n");
 }
+
+test "a class implements a class by its members, which puts it in no slot of that class" {
+	const src = `
+class Crate<T> { value: T; constructor(v: T) { this.value = v; } get(): T { return this.value; } }
+class Animal { name: string = "a"; speak(): string { return "..."; } }
+class Dog extends Animal { age: int32 = 3; }
+class IntCopy implements Crate<int32> { value: int32 = 1; get(): int32 { return this.value; } }
+class FakeDog implements Dog { name: string = "f"; age: int32 = 1; speak(): string { return "f"; } }
+class Mute implements Animal { name: string = "m"; }
+class Nameless implements Dog { age: int32 = 2; speak(): string { return "n"; } }
+const d: Dog = new FakeDog();
+`;
+	const errors = checkOnly(src).errors;
+	const text = errors.join("\n");
+	assert !text.contains("'IntCopy'"), "a generic class instantiated: " + text;
+	assert !text.contains("'FakeDog' incorrectly"), "a subclass with an inherited member: " + text;
+	assert text.contains("Class 'Mute' incorrectly implements class 'Animal' (property 'speak' is missing in type 'Mute' but required in type 'Animal')"), "a missing method: " + text;
+	assert text.contains("Class 'Nameless' incorrectly implements class 'Dog': property 'name' is missing in 'Nameless'"), "a missing inherited field: " + text;
+	assert text.contains("FakeDog is not a Dog: classes convert only along `extends`"), "implementing a class does not convert to it: " + text;
+	assert errors.length == 3, "three refusals: " + text;
+}

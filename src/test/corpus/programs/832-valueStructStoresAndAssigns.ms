@@ -1,5 +1,5 @@
-// @stdout: values-ok push=1 inner=1 set=2 tags=1 fill=1 slice=1 at=1 concat=1 spread=1 elem=2 local=2 field=3 nested=2 param=9/1 forof=1 generic=1/9/1
-// note: a value struct stored into a new home is a copy of its own (push, Map.set, fill, slice, at, concat, spread), and an assignment into a location that already holds one writes into it, so every Ptr to that location sees the new value; a value parameter and a for-of binding rebind. Same output on every backend.
+// @stdout: values-ok push=1 inner=1 set=2 tags=1 fill=1 slice=1 at=1 concat=1 spread=1 elem=2 local=2 field=3 nested=2 param=9/1 forof=1 generic=1/9/1 nullable=1
+// note: a value struct stored into a new home is a copy of its own (push, Map.set, fill, slice, at, concat, spread, a binding behind `| null`), and an assignment into a location that already holds one writes into it, so every Ptr to that location sees the new value; a value parameter and a for-of binding rebind. Same output on every backend.
 
 struct S { n: int32; }
 struct H { s: S; }
@@ -72,6 +72,9 @@ let wv: Wrap<Vec<int32>> = { inner: { a: [1], b: [] } };
 const wvs: Wrap<Vec<int32>>[] = [];
 wvs.push(wv);
 wv.inner.a.push(5);
+let nh: H | null = { s: { n: 1 } };
+const nk: H | null = nh;
+if (nh != null) nh.s.n = 4;
 
 console.log("values-ok push=" + vs[0].n.toString() + " inner=" + rs[0].n.toString()
 	+ " set=" + g.inner.v.toString() + " tags=" + g.inner.tags.length.toString()
@@ -80,4 +83,4 @@ console.log("values-ok push=" + vs[0].n.toString() + " inner=" + rs[0].n.toStrin
 	+ " elem=" + pe.n.toString() + " local=" + pl.n.toString() + " field=" + pf.n.toString()
 	+ " nested=" + po.inner.tags.length.toString() + " param=" + r.toString() + "/" + pv.n.toString()
 	+ " forof=" + loop[0].n.toString() + " generic=" + gs[0].a.toString() + "/" + gf[1].a.toString()
-	+ "/" + wvs[0].inner.a.length.toString());
+	+ "/" + wvs[0].inner.a.length.toString() + " nullable=" + (nk == null ? "null" : nk.s.n.toString()));

@@ -86,7 +86,7 @@ import { lowerStaticInit } from "./lowering/staticLower";
 import { lowerNewExpr } from "./lowering/newExprLower";
 import { lowerBuiltins } from "./native/builtinLower";
 import { lowerCStringConv } from "./native/cstringConvLower";
-import { lowerOperators, bindCollectionKeyOps } from "./lowering/operatorLower";
+import { lowerOperators, lowerClosureEqualities, bindCollectionKeyOps } from "./lowering/operatorLower";
 import { lowerBigIntOps } from "./native/bigIntOpLower";
 import { lowerStringOps } from "./native/stringOpLower";
 import { lowerConditionalExpr } from "./lowering/conditionalExprLower";
@@ -187,6 +187,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerBuiltins(result, ctx);
 	if (jsBackend) { result = lowerStringLengthJS(result, ctx); }
 	result = lowerCStringConv(result, ctx);
+	result = lowerClosureEqualities(result, ctx);
 	result = lowerOperators(result, ctx);
 	if (jsBackend) { result = bindCollectionKeyOps(result, ctx); }
 	if (!jsBackend) { result = lowerBigIntOps(result, ctx); }
