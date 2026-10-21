@@ -1815,14 +1815,38 @@ type Box<T> = { value: T };
 
 ### Utility Types
 ```ms
-Partial<T>           // All properties optional (planned)
-Required<T>          // All properties required (planned)
-Readonly<T>          // Read-only view of T (shipped) — deep, never converts back to T; `readonly T[]` for arrays.
+Partial<T>           // Every property optional: `{ [P in keyof T]?: T[P] }`
+Required<T>          // Every property required: `{ [P in keyof T]-?: T[P] }`
+Readonly<T>          // Read-only view of T — deep, never converts back to T; `readonly T[]` for arrays.
                      // Not the `readonly` parameter modifier above (that one is an explicit copy). See Spawn.
-Record<K, V>         // Object type with keys K and values V (planned)
-Pick<T, K>           // Subset of properties (planned)
-Omit<T, K>           // Exclude properties (planned)
+Record<K, V>         // Literal keys K give an object type; `string` or `number` keys give Map<K, V>
+Pick<T, K>           // The properties of T named by K; K must be a subset of keyof T
+Omit<T, K>           // The properties of T not named by K
+Exclude<T, U>        // The members of the union T not assignable to U
+Extract<T, U>        // The members of the union T assignable to U
 ```
+
+A property written `x?: T` is optional, which MetaScript stores as `T | null`. The field
+remembers that it was declared optional, so `Required<T>` and the `-?` modifier make it
+required again and take the `null` out. Because `undefined` is an alias of `null` here,
+`Required<{ a?: string | null }>` also gives `a: string`, where TypeScript keeps `null`.
+
+When a spread gives a property that was declared optional, a `null` value keeps the value
+written or spread before it, so a patch merges the way it does in TypeScript:
+
+```ms
+interface User { id: int32; name: string }
+const base: User = { id: 1, name: "ann" };
+const patch: Partial<User> = {};
+const merged = { ...base, ...patch };   // merged.name is "ann"
+```
+
+Measured 2026-10-21 on C, JavaScript and the Raiser, with the same output on each: the corpus
+programs `partialSpreadMerge`, `requiredDropsOptional`, `pickOmitKeys`, `recordKeys` and
+`userMappedType`. Refusals pinned in `src/test/checker3pass/scenarios/mappedTypeRefusals.ms`.
+A value of `User` does not pass where `Pick<User, "id">` or `Required<User>` is expected:
+MetaScript does not accept an object type with a different set of fields as a wider type.
+Not verified: `Record<K, V>` with `K` a type parameter later bound to `string`.
 
 `Readonly<T>` can widen into a union through a compatible read-only member. A mutable
 member, or an unrelated read-only member beside a mutable one, does not allow the view
@@ -1837,10 +1861,19 @@ The complete compatibility module's JavaScript tests were not run: its unchanged
 
 ### Mapped Types
 ```ms
-// Planned — not yet implemented
 type MyPartial<T> = { [K in keyof T]?: T[K] };
 type Nullable<T> = { [K in keyof T]: T[K] | null };
+type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+type Strict<T> = { [K in keyof T]-?: T[K] };
+type NoEmail<T> = { [K in keyof T as Exclude<K, "email">]: T[K] };
+type Flags<K extends string> = { [P in K]: int32 };
 ```
+
+The modifiers `?`, `-?`, `readonly` and `-readonly` and the `as` key clause follow TypeScript.
+Over `keyof T` the mapped type keeps each property's optional mark, maps an array or tuple
+element by element, and returns a primitive unchanged. `readonly` makes the whole object a
+read-only view rather than marking single properties. Keys must be string literal types;
+a mapped type with other members in the same braces is refused, as in TypeScript.
 
 ### Type Assertions
 ```typescript
@@ -4039,7 +4072,8 @@ console.log(msg); // msg is pair._0 in C
 ```
 
 ### 4. Record<K, V>
-A TypeScript utility type that is semantically identical to `Map<K, V>` in MetaScript.
+With `string` or `number` keys, `Record<K, V>` is `Map<K, V>`. With string literal keys
+(`Record<"x" | "y", int32>`) it is an object type with those properties.
 
 ```typescript
 const registry: Record<string, number> = new Map();
