@@ -15,7 +15,8 @@ import { skipConvDfa } from "./alias";
 import { RcInfo, noRcInfo } from "./classify";
 import { makeNumber, makeString } from "../checker/literalNodes";
 import { createArray, createFunction, int32Type, stringType } from "../checker/types";
-import { generatedRef, isRuntimeProcSym, makeAssign, makeCall, makeIdentResolved } from "../transform/util";
+import { generatedRef, makeAssign, makeCall, makeIdentResolved } from "../transform/util";
+import { cstringSource } from "../transform/native/cstringConvLower";
 
 const ELEMENT_SLOT = "E";
 export const ANY_HEAP_SLOT = "*";
@@ -602,12 +603,6 @@ function pathSlots(n: Node, out: string[]): Symbol | null {
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { return pathSlots((t.data as HiddenDerefData).expr, out); },
 		_ => { return null; },
 	};
-}
-
-export function cstringSource(a: Node | null): Node | null {
-	if (a == null || a.kind != NodeKind.CallExpr) return null;
-	const cd = a.data as CallExprData;
-	return cd.arguments.length == 1 && isRuntimeProcSym(cd.callee.resolvedSym, "msStringToCString") ? cd.arguments[0] : null;
 }
 
 export function borrowedArgsToCopy(call: Node): boolean[] {

@@ -31,7 +31,8 @@ import {
 } from "./scope";
 import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym, skipConvDfa } from "./alias";
 import { inferCursors } from "./cursors";
-import { borrowedArgsToCopy, cstringSource } from "./writeEffects";
+import { borrowedArgsToCopy } from "./writeEffects";
+import { cstringSource } from "../transform/native/cstringConvLower";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
 import { checkSource } from "../checker/checkPass";
 import { checkedCtx, bindCStd } from "../transform/testUtil";
