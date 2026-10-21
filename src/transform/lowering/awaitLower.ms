@@ -36,10 +36,10 @@ import {
 import { TransformContext, freshTempSym, freshOwnedSym, SymSet, createSymSet, symSetAdd, symSetContains } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { walkExpandBlocksHooked, containsExprKind, walkNode } from "../walker";
-import { makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, makeAssign, makeDefaultValue, unboxVoidPtrToTyped, runtimeRef, isRuntimeProcSym, ownedInFuture, isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck, typedFutureReadFn, makeBool, makeUnary } from "../util";
+import { makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, makeAssign, makeDefaultValue, unboxVoidPtrToTyped, runtimeRef, attachedOpSym, makeTypedIdentResolved, isRuntimeProcSym, ownedInFuture, isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck, typedFutureReadFn, makeBool, makeUnary } from "../util";
 import { lowerDefer } from "./deferLower";
-import { createPtr, createPrimitive, awaitedType, booleanType } from "../../checker/types";
-import { TypeKind, FunctionExprData, ArrowFunctionData, IdentifierData } from "../../ast/node";
+import { createPtr, createPrimitive, awaitedType, booleanType, closureStorageType } from "../../checker/types";
+import { TypeKind, AttachedOp, FunctionExprData, ArrowFunctionData, IdentifierData } from "../../ast/node";
 import { injectCancelSafePoints } from "./cancelSafePoints";
 import { setFlag, SymbolFlag } from "../../checker/symbol";
 import { Symbol } from "../../ast/node";
@@ -48,7 +48,7 @@ import { Symbol } from "../../ast/node";
 // Tracks `const h = spawn(fn);` declarations. When `await h` is later found
 // in the same scope, rewrites to zero-alloc msAwaitSlot path instead of
 // heap-allocated msFuture. Cleared at function boundaries.
-struct SpawnSlotEntry { slotIdent: Node; closureArg: Node; innerType: Type | null; joined: Symbol | null; }
+struct SpawnSlotEntry { slotIdent: Node; task: Symbol | null; innerType: Type | null; joined: Symbol | null; }
 let _spawnSlotMap: HashMap<Symbol, SpawnSlotEntry> = new HashMap<Symbol, SpawnSlotEntry>();
 let _awaitOnlyHandles: SymSet = createSymSet();
 let _moduleLevelHandles: SymSet = createSymSet();
@@ -104,11 +104,26 @@ function exitSpawnSlotFrame(_fn: Node): void {
 	_awaitOnlyHandles = frame.handles;
 }
 
-function settleOnExit(slot: Symbol, joined: Symbol, loc: SourceLocation): Node {
+function bindTask(ctx: TransformContext, closure: Node, loc: SourceLocation): { decl: Node, ident: Node, sym: Symbol } | null {
+	if (closure.kind != NodeKind.CallExpr || closure.nodeType == null || closure.nodeType!.kind != TypeKind.Function) return null;
+	const t = closureStorageType(closure.nodeType!);
+	const sym = freshOwnedSym(ctx, "task", t);
+	const decl = makeVarDecl(sym.name, closure, DeclKind.Const, loc);
+	decl.nodeType = t;
+	decl.resolvedSym = sym;
+	return { decl, ident: makeIdentResolved(sym, loc), sym };
+}
+
+function dropTask(task: Symbol | null, loc: SourceLocation): Node[] {
+	if (task == null) return [];
+	return [ makeExprStmt(makeCall(makeTypedIdentResolved(attachedOpSym("msClosureDestroy", AttachedOp.AttachedDestructor), null, loc), [makeIdentResolved(task!, loc)], loc), loc)];
+}
+
+function settleOnExit(slot: Symbol, joined: Symbol, task: Symbol | null, loc: SourceLocation): Node {
 	const notJoined = makeUnary("!", makeIdentResolved(joined, loc), loc);
 	notJoined.nodeType = booleanType();
 	const settle = makeExprStmt(makeCall(runtimeRef("msAwaitSlotSettle", loc), [makeIdentResolved(slot, loc)], loc), loc);
-	const deferData: NodeData = { deferExpr: makeBlock([makeIf(notJoined, makeBlock([settle], loc), null, loc)], loc) };
+	const deferData: NodeData = { deferExpr: makeBlock([makeIf(notJoined, makeBlock([settle], loc), null, loc)].concat(dropTask(task, loc)), loc) };
 	_settleDeferred = true;
 	return createNodeAt(NodeKind.DeferStmt, deferData, loc);
 }
@@ -249,12 +264,15 @@ function expandFusedAwait(closureArg: Node, loc: SourceLocation, ctx: TransformC
 	stmts.push(as.decl);
 
 	// 2. msSpawnSlotSubmit($as, 0, closure);
+	const task = bindTask(ctx, closureArg, loc);
+	if (task != null) stmts.push(task!.decl);
 	stmts.push(makeExprStmt(
-		makeCall(runtimeRef("msSpawnSlotSubmit", loc), [as.ident, makeNumber(0, loc), closureArg], loc), loc));
+		makeCall(runtimeRef("msSpawnSlotSubmit", loc), [as.ident, makeNumber(0, loc), task != null ? task!.ident : closureArg], loc), loc));
 
-	// 3. msAwaitSlotWait($as);
+	// 3. msAwaitSlotWait($as); the joined task's closure and its moved captures drop here.
 	stmts.push(makeExprStmt(
 		makeCall(runtimeRef("msAwaitSlotWait", loc), [as.ident], loc), loc));
+	for (const d of dropTask(task != null ? task!.sym : null, loc)) stmts.push(d);
 
 	// 4. const $agr = msAwaitSlotResult($as);
 	const agr = makeTempDecl(ctx, "agr", makeCall(runtimeRef("msAwaitSlotResult", loc), [as.ident], loc), VOID_PTR_TYPE, loc);
@@ -412,6 +430,7 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 			// msAwaitSlotWait($slot);
 			stmts.push(makeExprStmt(
 				makeCall(runtimeRef("msAwaitSlotWait", loc), [slotEntry.slotIdent], loc), loc));
+			for (const d of dropTask(slotEntry.task, loc)) stmts.push(d);
 			if (slotEntry.joined != null) {
 				stmts.push(makeExprStmt(makeAssign(makeIdentResolved(slotEntry.joined!, loc), makeBool(true, loc), loc), loc));
 			}
@@ -489,11 +508,14 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 						joined = flag.sym;
 					}
 					// msSpawnSlotSubmit($slot, 0, closure);
+					const task = bindTask(ctx, si.closure!, loc);
+					const taskSym = task != null ? task!.sym : null;
+					if (task != null) stmts.push(task!.decl);
 					stmts.push(makeExprStmt(
-						makeCall(runtimeRef("msSpawnSlotSubmit", loc), [slot.ident, makeNumber(0, loc), si.closure], loc), loc));
-					if (joined != null) stmts.push(settleOnExit(slot.sym, joined!, loc));
+						makeCall(runtimeRef("msSpawnSlotSubmit", loc), [slot.ident, makeNumber(0, loc), task != null ? task!.ident : si.closure!], loc), loc));
+					if (joined != null) stmts.push(settleOnExit(slot.sym, joined!, taskSym, loc));
 					// Register for later `await h` lookup
-					_spawnSlotMap.set(stmt.resolvedSym, { slotIdent: slot.ident, closureArg: si.closure, innerType, joined });
+					_spawnSlotMap.set(stmt.resolvedSym, { slotIdent: slot.ident, task: taskSym, innerType, joined });
 					return stmts;  // Original VarDecl is eliminated (h is never emitted)
 				}
 			}

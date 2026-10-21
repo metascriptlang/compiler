@@ -513,6 +513,8 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	let sinkParams: Type[] | null = null;
 	if (sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function) {
 		sinkParams = sym.symbolType.typeChildren;
+	} else if (cd.callee.nodeType != null && cd.callee.nodeType.kind == TypeKind.Function) {
+		sinkParams = cd.callee.nodeType.typeChildren;
 	}
 	const sinksAll = isCtorRoutine(cd.callee.resolvedSym) || isCtorRoutine(sym);
 	const calleeSym = isCtorRoutine(cd.callee.resolvedSym) ? cd.callee.resolvedSym : sym;
