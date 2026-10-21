@@ -9,7 +9,7 @@ import { resetResizeSummaries } from "../checker/varPartitions";
 import { resetCapturedAssignments } from "../checker/flow";
 import { resetDuVariantRegistry } from "../checker/types";
 import { resetDuHashes } from "../analyzer/classify";
-import { clearWriteSummaries } from "../analyzer/writeEffects";
+import { clearWriteSummaries, resetRoutineDecls } from "../analyzer/writeEffects";
 import { resetLinkState } from "../utils/linkState";
 import { resetLiftedOps } from "../transform/lowering/destructorLifting";
 import { ModuleError } from "../module/graph";
@@ -94,6 +94,7 @@ export function resetBuildState(): void {
 	resetResizeSummaries();
 	resetCapturedAssignments();
 	clearWriteSummaries();
+	resetRoutineDecls();
 	resetDuVariantRegistry();
 	resetDuHashes();
 	resetLinkState();

@@ -13,7 +13,7 @@ import { createTransformContextWithChecker } from "../transform/context";
 import { createDrcContext, pushScope, popScope, classifyRc } from "./scope";
 import { injectProgram } from "./inject";
 import { optimizeDrc } from "./optimize";
-import { bindWriteEffects } from "./writeEffects";
+import { bindWriteEffects, noteRoutineDecls } from "./writeEffects";
 import { classifyType, RcKind, RcInfo, noRcInfo } from "./classify";
 
 import { parseSource } from "../parser/statements/validation";
@@ -29,6 +29,8 @@ export function analyzeProgram(program: Node, checkerCtx: CheckerContext): Node 
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const dctx = createDrcContext(ctx);
 	bindWriteEffects(checkerCtx, (t: Type | null): RcInfo => classifyRc(t, dctx));
+	flowLap("analyze.context");
+	noteRoutineDecls(checkerCtx.modulePath, program);
 	flowLap("analyze.context");
 	const injected = injectProgram(program, dctx);
 	flowLap("analyze.inject");

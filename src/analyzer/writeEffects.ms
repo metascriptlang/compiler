@@ -4,7 +4,7 @@
 // run; borrowedArgsToCopy picks the arguments the caller must keep alive, and mayWrite tells
 // cursor inference which statements end a borrow.
 
-import { Node, NodeKind, Symbol, SymbolKind, SourceLocation, Type, TypeKind, makeLoc, BinaryExprData, CallExprData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, NewExprData, PropertyDeclData, ArrayAccessData, IdentifierData } from "../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, SourceLocation, Type, TypeKind, makeLoc, BinaryExprData, CallExprData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, NewExprData, PropertyDeclData, ArrayAccessData, IdentifierData, ProgramData, ExportDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, hasFlag, makeSymbol, parentClassSymOf } from "../checker/symbol";
 import { CheckerContext, LIFECYCLE_HOOK_NAMES, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "../checker/context";
@@ -52,6 +52,8 @@ let constructionSummaries = new HashMap<Symbol, WriteSummary>();
 let hookSummaries = new HashMap<Type, WriteSummary>();
 let hookless = new HashSet<Type>();
 let ownerHookCache = new HashMap<Symbol, Symbol[]>();
+let routineDecls = new HashMap<Symbol, Node>();
+let unitRoutines = new HashMap<string, Symbol[]>();
 let stack: WriteSummary[] = [];
 let nextIndex: int32 = 0;
 let checker: CheckerContext | null = null;
@@ -65,6 +67,27 @@ export function bindWriteEffects(ctx: CheckerContext | null, classify: (t: Type 
 export function resetWriteEffects(ctx: CheckerContext | null, classify: (t: Type | null) => RcInfo): void {
 	clearWriteSummaries();
 	bindWriteEffects(ctx, classify);
+}
+
+export function noteRoutineDecls(unit: string, program: Node): void {
+	const previous = unitRoutines.get(unit);
+	if (previous != null) {
+		for (const sym of previous) routineDecls.delete(sym);
+	}
+	const syms: Symbol[] = [];
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		let decl = unpackDecl(stmt);
+		if (decl != null && decl.kind == NodeKind.ExportDecl) decl = unpackDecl((decl.data as ExportDeclData).exportedDecl);
+		if (decl == null || decl.resolvedSym == null || (decl.kind != NodeKind.FunctionDecl && decl.kind != NodeKind.ClassDecl)) continue;
+		routineDecls.set(decl.resolvedSym!, decl);
+		syms.push(decl.resolvedSym!);
+	}
+	unitRoutines.set(unit, syms);
+}
+
+export function resetRoutineDecls(): void {
+	routineDecls = new HashMap<Symbol, Node>();
+	unitRoutines = new HashMap<string, Symbol[]>();
 }
 
 export function clearWriteSummaries(): void {
@@ -100,6 +123,10 @@ function markUnknown(s: WriteSummary): boolean {
 function unpackDecl(decl: Node | null): Node | null {
 	if (decl != null && decl.kind == NodeKind.DecoratedDecl) return (decl.data as DecoratedDeclData).decoratedNode;
 	return decl;
+}
+
+function routineDecl(sym: Symbol): Node | null {
+	return routineDecls.get(sym) ?? unpackDecl(sym.declNode);
 }
 
 function isRoutineNode(n: Node): boolean {
@@ -187,7 +214,7 @@ function isGeneratedProc(sym: Symbol | null): boolean {
 }
 
 function runsNativeOnC(sym: Symbol): boolean {
-	return hasFlag(sym, SymbolFlag.ImportC) || routineBody(unpackDecl(sym.declNode)) == null;
+	return hasFlag(sym, SymbolFlag.ImportC) || routineBody(routineDecl(sym)) == null;
 }
 
 function nativeEffect(s: WriteSummary, call: Node, sym: Symbol): void {
@@ -390,11 +417,11 @@ function link(s: WriteSummary, call: Node | null, callee: WriteSummary): void {
 function walkSummary(s: WriteSummary): void {
 	match (s.kind) {
 		SummaryKind.Routine => {
-			const decl = unpackDecl(s.sym!.declNode);
+			const decl = routineDecl(s.sym!);
 			walkBody(s, routineBody(decl), decl != null ? decl.paramSyms : null, (decl != null && decl.kind == NodeKind.ConstructorDecl) || hasFlag(s.sym!, SymbolFlag.ClassInit));
 		},
 		SummaryKind.Construction => {
-			const decl = unpackDecl(s.sym!.declNode);
+			const decl = routineDecl(s.sym!);
 			if (decl == null || decl.kind != NodeKind.ClassDecl) return;
 			for (const m of (decl.data as ClassDeclData).classBody) {
 				const member = unpackDecl(m);
@@ -410,7 +437,7 @@ function walkSummary(s: WriteSummary): void {
 		},
 		SummaryKind.Hooks => {
 			for (const h of s.hooks) {
-				if (routineBody(unpackDecl(h.declNode)) != null) link(s, null, routineSummary(h));
+				if (routineBody(routineDecl(h)) != null) link(s, null, routineSummary(h));
 			}
 		},
 	};
@@ -453,7 +480,7 @@ function absorb(s: WriteSummary, e: Edge): boolean {
 		if (addSlot(s, slot)) changed = true;
 	}
 	if (e.call != null && c.refParamWrites != 0 && s.kind == SummaryKind.Routine) {
-		const decl = unpackDecl(s.sym!.declNode);
+		const decl = routineDecl(s.sym!);
 		const params = decl != null ? decl.paramSyms : null;
 		const args = (e.call.data as CallExprData).arguments;
 		for (let i = 0; i < args.length && i < 31; i += 1) {
