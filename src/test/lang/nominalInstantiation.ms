@@ -94,6 +94,22 @@ function moduleArgumentsOk(): Result<int32, ModuleArgumentsErr> {
 	return Result.ok(n);
 }
 
+struct PhantomTag<T> { addr: int32; }
+struct PhantomPair<A, B> { addr: int32; }
+struct PhantomCounter { value: int32; }
+struct PhantomAccounts { admin: int32; counter: PhantomTag<PhantomCounter>; pair: PhantomPair<PhantomCounter, string>; }
+struct PhantomOuter { inner: PhantomAccounts; }
+
+export function neverCalledPhantom(): Result<PhantomTag<PhantomCounter>, int32> {
+	return Result.err(1);
+}
+
+test "nominalInstantiation: a struct that ignores its parameters is emitted where only a field or a return names it" {
+	const outers: PhantomOuter[] = [];
+	const accounts: PhantomAccounts[] = [];
+	assert outers.length + accounts.length == 0;
+}
+
 test "nominalInstantiation: nominal unions with identical shapes preserve both active payloads" {
 	for (const divisor of [4.0, 0.0]) {
 		const either = eitherDiv(20, divisor);

@@ -2278,7 +2278,7 @@ export function createGenericInstance(baseType: Type, typeArgs: Type[]): Type {
 let _instantiatedBodies: int32 = 0;
 export function instantiatedBodyCount(): int32 { return _instantiatedBodies; }
 
-function bodyWouldShareTheDeclaration(base: Readonly<Type | null>, names: string[], args: Type[]): boolean {
+function bodyWouldShareTheDeclaration(base: Readonly<Type | null>, names: string[], args: Readonly<Type[]>): boolean {
 	if (base == null || !isDeclaredStruct(base) || symGenericParams(base.sym) == "") return false;
 	const declared = base.sym.typeParams;
 	for (let i = 0; i < names.length; i += 1) {
@@ -2312,8 +2312,10 @@ function pendingBody(gi: Readonly<Type>, declaredParams: string): boolean {
 	if (baseType == null) return false;
 	const innerBase = baseType.kind == TypeKind.Ref && baseType.typeReturn != null ? baseType.typeReturn : baseType;
 	if (innerBase.kind == TypeKind.Error || isUnresolvedType(innerBase)) return false;
-	const count = splitTopLevel(genericParamNamesOf(declaredParams), ",").length;
-	return count > 0 && count <= gi.typeChildren.length;
+	const names = splitTopLevel(genericParamNamesOf(declaredParams), ",");
+	if (names.length == 0 || names.length > gi.typeChildren.length) return false;
+	const phantom = isDeclaredStruct(innerBase) && !innerBase.typeFlags.has(TypeFlag.HasGenericParam);
+	return !(phantom && bodyWouldShareTheDeclaration(innerBase, names, gi.typeChildren));
 }
 
 export function instantiateGenericBody(gi: Type, declaredParams: string): void {
