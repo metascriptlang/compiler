@@ -417,6 +417,11 @@ export function buildTransitiveDiagnosticsWire(db: TransAmDb, path: string): str
 	return result;
 }
 
+export function recordPublishedDiagnostics(path: string, diagJson: string): string {
+	_lastDiagCache.set(path, diagJson);
+	return diagJson;
+}
+
 export function forgetPublishedDiagnostics(path: string): void {
 	_lastDiagCache.delete(path);
 }
