@@ -199,7 +199,7 @@ function hoistLiteral(lit: Node, hoisted: Node[], ctx: TransformContext): Node {
 		expandSpreadLiteral(lit, ctx, hoisted);
 		return lit;
 	}
-	return lit.kind == NodeKind.ObjectLiteral ? expandObjectSpread(lit) : lit;
+	return lit.kind == NodeKind.ObjectLiteral ? expandObjectSpread(lit, ctx) : lit;
 }
 
 function aggregateInitType(expr: Node): Type | null {

@@ -3,6 +3,8 @@
 // @maxrss: 60
 // @stdout: leak-send-moved-arg-async done
 // @serial
+// @ledger-slack(Sink) 1
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: Sibling of 418 (sync void, FIXED). This pins the async half. History of
 //   what this program caught, in order:
 //   (1) the moved-ref leak — FIXED; the ledger on this shape at 2k sends reports

@@ -4,6 +4,7 @@
 // should have nodeType matching the struct, not void.
 
 import { fullPipeline, findFnDecl } from "./helpers";
+import { compileToC } from "../helpers";
 import { Node, NodeKind, FunctionDeclData, BlockStmtData, ExprStmtData, BinaryExprData, CallExprData, VariableDeclData, TypeKind } from "../../ast/node";
 
 // Walk statements to find the assignment `p = makePair(2)`
@@ -24,28 +25,22 @@ function findAssignment(fn: Node): Node {
 	return null as unknown as Node;
 }
 
-test "struct var decl from NRVO call has struct type" {
-	const src = "interface Pair { a: number; b: number; }\nfunction makePair(x: number): Pair { return { a: x, b: x }; }\nfunction main(): void {\n  let p: Pair = makePair(1);\n  p = makePair(2);\n}";
-	const prog = fullPipeline(src);
-	assert prog != null;
-	const fn = findFnDecl(prog, "main");
-	assert fn != null;
+test "E2E C: struct reassignment from NRVO call stores the temp, not a void cast" {
+	const c = compileToC("struct Pair { a: number; b: string; }\nfunction makePair(x: number): Pair { return { a: x, b: \"s\" }; }\nfunction main(): void {\n  let p: Pair = makePair(1);\n  p = makePair(2);\n  console.log(p.b);\n}");
+	assert c.ok;
+	assert c.value.contains("(p_1_ = T");
+	assert !c.value.contains("((void)(T");
 }
 
 test "struct reassignment RHS has struct nodeType not void" {
-	const src = "interface Pair { a: number; b: number; }\nfunction makePair(x: number): Pair { return { a: x, b: x }; }\nfunction main(): void {\n  let p: Pair = makePair(1);\n  p = makePair(2);\n}";
+	const src = "struct Pair { a: number; b: string; }\nfunction makePair(x: number): Pair { return { a: x, b: \"s\" }; }\nfunction main(): void {\n  let p: Pair = makePair(1);\n  p = makePair(2);\n}";
 	const prog = fullPipeline(src);
 	const fn = findFnDecl(prog, "main");
 	assert fn != null;
 	const assign = findAssignment(fn);
-	// After DRC transforms, the assignment might be wrapped differently
-	// but the RHS call should retain its struct return type
-	if (assign != null) {
-		const bin = assign.data as BinaryExprData;
-		if (bin.right.kind == NodeKind.CallExpr && bin.right.nodeType != null) {
-			// The CallExpr's nodeType should be Struct (Pair), not Void
-			assert bin.right.nodeType.kind != TypeKind.Void;
-		}
-	}
-	assert true;
+	assert assign != null;
+	const bin = assign.data as BinaryExprData;
+	assert bin.right.kind == NodeKind.CallExpr;
+	assert bin.right.nodeType != null;
+	assert bin.right.nodeType.kind == TypeKind.Struct;
 }

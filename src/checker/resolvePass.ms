@@ -8,10 +8,10 @@
 
 import { firstPrivateField } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
-import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, instantiateGeneric, numberLiteralTypeOf, markDuVariant } from "./types";
+import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
-import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam } from "./context";
+import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem } from "./context";
 import { checkFieldDecoratorNames } from "./decoratorHelpers";
 import { getIdentId } from "./idents";
 import { proxyAtExtern } from "./proxy";
@@ -350,18 +350,22 @@ function appendStructFields(operandStruct: Type, operandLabel: string, accumName
 // `infer X` vars from a conditional's extends clause, in scope only while its
 // true/false branches resolve. A branch's bare `X` resolves against this stack to
 // a GenericParam (substituted by evaluateConditionalType) instead of erroring.
-let inferScope: string[] = [];
+let inferScope: Type[] = [];
+let inferDeclared: Type[] | null = null;
 
-function inferScopeHas(name: string): boolean {
-	for (const n of inferScope) { if (n == name) return true; }
-	return false;
+function inferScopeFind(name: string): Type | null {
+	for (let i = inferScope.length - 1; i >= 0; i -= 1) { if (inferScope[i].typeName == name) return inferScope[i]; }
+	return null;
 }
 
-function collectInferParamNames(t: Type | null, acc: string[]): void {
-	if (t == null) return;
-	if (t.kind == TypeKind.GenericParam) { acc.push(t.typeName); return; }
-	for (const c of t.typeChildren) collectInferParamNames(c, acc);
-	collectInferParamNames(t.typeReturn, acc);
+function declareInfer(ctx: CheckerContext, name: string): Type {
+	const declared = inferDeclared;
+	if (declared == null) return createGenericParam(name);
+	for (const gp of declared) { if (gp.typeName == name) return gp; }
+	const gp = createGenericParam(name);
+	typeParamSym(ctx, gp);
+	declared.push(gp);
+	return gp;
 }
 
 // One annotation reaches resolveAnnotation once per checker pass, and the
@@ -407,22 +411,26 @@ export function refuseUsedSuspendingViewParams(ctx: CheckerContext, paramSyms: S
 	}
 }
 
-export function bindFromExplicitTypeArgs(node: Node, paramNames: string[], ctx: CheckerContext): UnifyBindings {
-	const result = createUnifyBindings();
-	if (paramNames.length == 0) return result;
+export function explicitTypeArgs(node: Node, ctx: CheckerContext, limit: int32): (Type | null)[] {
+	const out: (Type | null)[] = [];
 	const explicitStr = findCallTypeArg(node);
-	if (explicitStr == "") return result;
+	if (explicitStr == "") return out;
 	const argNames = splitTopLevel(explicitStr, ",");
-	const limit = paramNames.length < argNames.length ? paramNames.length : argNames.length;
-	for (let i = 0; i < limit; i += 1) {
-		const paramName = paramNames[i].trim();
+	for (let i = 0; i < limit && i < argNames.length; i += 1) {
 		const argTypeStr = argNames[i].trim();
-		if (paramName == "" || argTypeStr == "") continue;
-		const resolved = resolveAnnotation(argTypeStr, ctx, node.location.line, node.location.column);
-		if (resolved != null && !isUnresolvedType(resolved)) {
-			result.names.push(paramName);
-			result.types.push(resolved);
-		}
+		const resolved = argTypeStr == "" ? null : resolveAnnotation(argTypeStr, ctx, node.location.line, node.location.column);
+		out.push(resolved != null && !isUnresolvedType(resolved) ? resolved : null);
+	}
+	return out;
+}
+
+export function bindFromExplicitTypeArgs(node: Node, params: Type[], ctx: CheckerContext): UnifyBindings {
+	const result = createUnifyBindings();
+	if (params.length == 0) return result;
+	const args = explicitTypeArgs(node, ctx, params.length);
+	for (let i = 0; i < args.length; i += 1) {
+		const resolved = args[i];
+		if (resolved != null) bindParam(result, params[i], resolved);
 	}
 	return result;
 }
@@ -463,7 +471,8 @@ function instanceOfAliasToNamedType(ctx: CheckerContext, alias: Symbol, baseName
 	if (!namesDeclared && inner.kind != TypeKind.GenericInstance && inner.kind != TypeKind.Conditional) return null;
 	checkTypeArgConstraints(ctx, alias, baseName, args, line, col);
 	if (namesDeclared) return body;
-	const inst = substituteAllParams(inner, splitTopLevel(genericParamNamesOf(genericParams), ","), args);
+	const names = splitTopLevel(genericParamNamesOf(genericParams), ",");
+	const inst = substituteParams(inner, declaredTypeParams(alias, names.length), args);
 	if (inst.kind == TypeKind.GenericInstance && inst.typeReturn == null) {
 		const declParams = genericParamsOf(inst);
 		if (declParams != "") instantiateGenericBody(inst, declParams);
@@ -479,18 +488,16 @@ function resolveTypeTest(text: string, ctx: CheckerContext, line: int32, col: in
 }
 
 function checkTypeArgConstraints(ctx: CheckerContext, sym: Symbol, baseName: string, args: Type[], line: int32, col: int32): void {
-	const names: string[] = [];
-	for (const param of sym.typeParams) names.push(param.typeName);
 	for (let ci = 0; ci < sym.typeParams.length && ci < args.length; ci += 1) {
 		const declared = sym.typeParams[ci].typeExtra;
 		if (declared == null) continue;
-		const constraint = substituteAllParams(declared, names, args);
+		const constraint = substituteParams(declared, sym.typeParams, args);
 		if (!isUnresolvedType(constraint)
 				&& !hasGenericParams(constraint)
 				&& !isUnresolvedType(args[ci])
 				&& args[ci].kind != TypeKind.GenericParam
 				&& !isAssignableCheck(args[ci], constraint)) {
-			addError(ctx, `Type '${typeDisplayName(args[ci])}' does not satisfy constraint '${typeDisplayName(constraint)}' for type parameter '${names[ci]}' in '${baseName}'`, line, col);
+			addError(ctx, `Type '${typeDisplayName(args[ci])}' does not satisfy constraint '${typeDisplayName(constraint)}' for type parameter '${sym.typeParams[ci].typeName}' in '${baseName}'`, line, col);
 		}
 	}
 }
@@ -648,7 +655,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 	// Tier 3: infer X — produce a GenericParam placeholder for conditional type unification
 	if (trimmed.length > 6 && trimmed.slice(0, 6) == "infer ") {
 		const inferName = trimmed.slice(6, trimmed.length).trim();
-		if (inferName != "") return createGenericParam(inferName);
+		if (inferName != "") return declareInfer(ctx, inferName);
 	}
 
 	// Function type: (params) => returnType
@@ -687,9 +694,13 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				const truePart = afterQ.slice(0, colonIdx).trim();
 				const falsePart = afterQ.slice(colonIdx + 1, afterQ.length).trim();
 				const checkType = resolveAnnotation(checkPart, ctx, line, col);
+				const outerDeclared = inferDeclared;
+				const declared: Type[] = [];
+				inferDeclared = declared;
 				const extendsType = resolveTypeTest(constraintPart, ctx, line, col);
+				inferDeclared = outerDeclared;
 				const inferSaved = inferScope.length;
-				collectInferParamNames(extendsType, inferScope);
+				for (const gp of declared) inferScope.push(gp);
 				const trueType = resolveAnnotation(truePart, ctx, line, col);
 				const falseType = resolveAnnotation(falsePart, ctx, line, col);
 				while (inferScope.length > inferSaved) { inferScope.pop(); }
@@ -925,7 +936,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		}
 	}
 
-	// Check for generic types: Name<A, B> or Name < A , B > (token-joined form)
+	// Check for generic types: Name<A, B> or Name < A, B > (token-joined form)
 	const angleBracket = findChar(trimmed, "<");
 	if (angleBracket > 0 && trimmed.endsWith(">")) {
 		const writtenName = trimmed.slice(0, angleBracket).trim();
@@ -1134,6 +1145,8 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		"char" => charType(),
 		"cstring" => cstringType(),
 		_ => {
+			const inferred = inferScopeFind(trimmed);
+			if (inferred != null) return inferred;
 			const sym = lookupTypeSym(ctx, trimmed);
 			if (sym != null && line > 0 && isGenericTypeDecl(sym)) {
 				const count = splitTopLevel(declGenericParams(sym.declNode), ",").length;
@@ -1154,7 +1167,6 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				// and all references automatically see the resolved type.
 				return sym.symbolType;
 			}
-			if (inferScopeHas(trimmed)) return createGenericParam(trimmed);
 			return emitUnresolvedTypeRef(ctx, trimmed, line, col, "");
 		},
 	};
@@ -1388,7 +1400,7 @@ export function thenSignatureOf(ctx: CheckerContext, t: Type): Type | null {
 	if (method.kind != TypeKind.Function || method.typeChildren.length == 0) return null;
 	const bindings = createUnifyBindings();
 	unifyType(method.typeChildren[0], receiver, bindings);
-	return stripReceiverParam(bindings.names.length > 0 ? instantiateGeneric(method, bindings.names, bindings.types) : method);
+	return stripReceiverParam(bindings.names.length > 0 ? substituteBound(method, bindings) : method);
 }
 
 export function thenablePromised(ctx: CheckerContext, t: Type | null): Type | null {
@@ -1520,6 +1532,13 @@ function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerConte
 
 // Extract generic param names from fnFlags: "gen:T,U" or "async|gen:T,U" -> ["T", "U"]
 // Define a generic param symbol, handling optional constraint: "T" or "T:Comparable"
+function typeParamSym(ctx: CheckerContext, gp: Type): Symbol {
+	const sym = makeSymbol(gp.typeName, SymbolKind.TypeAlias, gp, false);
+	stampItem(ctx, sym);
+	gp.sym = sym;
+	return sym;
+}
+
 export function defineGenericParam(ctx: CheckerContext, paramStr: string): Type {
 	const colonPos = findChar(paramStr, ":");
 	if (colonPos > 0) {
@@ -1529,17 +1548,21 @@ export function defineGenericParam(ctx: CheckerContext, paramStr: string): Type 
 		const gp = createGenericParam(paramName);
 		// Store constraint type in typeExtra
 		gp.typeExtra = resolveTypeTest(constraintStr, ctx, 0, 0);
-		defineSymbol(ctx.table, makeSymbol(paramName, SymbolKind.TypeAlias, gp, false));
+		defineSymbol(ctx.table, typeParamSym(ctx, gp));
 		return gp;
 	}
 	// No constraint: "T"
 	const gp = createGenericParam(paramStr);
-	defineSymbol(ctx.table, makeSymbol(paramStr, SymbolKind.TypeAlias, gp, false));
+	defineSymbol(ctx.table, typeParamSym(ctx, gp));
 	return gp;
 }
 
-function defineTypeParams(ctx: CheckerContext, sym: Symbol, params: string): void {
+export function defineTypeParams(ctx: CheckerContext, sym: Symbol, params: string): void {
 	openScope(ctx.table, ScopeKind.Block);
+	if (sym.typeParams.length > 0) {
+		for (const gp of sym.typeParams) defineSymbol(ctx.table, makeSymbol(gp.typeName, SymbolKind.TypeAlias, gp, false));
+		return;
+	}
 	const constraints: string[] = [];
 	const declared: Type[] = [];
 	for (const param of splitTopLevel(params, ",")) {
@@ -1553,6 +1576,12 @@ function defineTypeParams(ctx: CheckerContext, sym: Symbol, params: string): voi
 		if (constraints[i] != "") declared[i].typeExtra = resolveTypeTest(constraints[i], ctx, 0, 0);
 	}
 	sym.typeParams = declared;
+}
+
+function declaredMethodSym(ctx: CheckerContext, member: Node, written: Node): Symbol {
+	const sym = member.resolvedSym != null ? member.resolvedSym : written.resolvedSym;
+	if (sym == null) throw new Error(`internal: method at ${member.location.line}:${member.location.column} has no declaration symbol for its type parameters`);
+	return sym;
 }
 
 // ===== B. Resolve Declarations (Pass 2) =====
@@ -1718,12 +1747,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
  // so resolveAnnotation finds "T" -> GenericParam("T")
 	const genericNames = extractGenericParamDecls(d.fnFlags);
 
-	if (genericNames.length > 0) {
-		openScope(ctx.table, ScopeKind.Block);
-		for (const gp of genericNames) {
-			defineGenericParam(ctx, gp);
-		}
-	}
+	if (genericNames.length > 0) defineTypeParams(ctx, sym, genericNames.join(","));
 
 	const paramTypes = resolveTypeStrings(d.fnParamTypes, d.params.length, ctx, node.location.line, node.location.column, node.typeExprs);
 	resolveTypeExprs(node.typeExprs, ctx);
@@ -2342,6 +2366,8 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	} else {
 		assignType(sym.symbolType, resolved);
 		node.nodeType = sym.symbolType;
+		const bodyParam = resolved.kind == TypeKind.GenericParam ? sym.typeParams.indexOf(resolved) : -1;
+		if (bodyParam >= 0) sym.typeParams[bodyParam] = sym.symbolType;
 	}
 	refuseAliasCycle(ctx, d, sym, resolved);
 	settleForwardTypes();
@@ -2545,7 +2571,7 @@ function inheritConstructor(ctx: CheckerContext, node: Node, sym: Symbol, parent
 	const args: Node[] = [];
 	const locs: SourceLocation[] = [];
 	for (let i = 0; i < parentCtor.typeChildren.length; i += 1) {
-		const pt = names.length > 0 ? substituteAllParams(parentCtor.typeChildren[i], names, instance.typeChildren) : parentCtor.typeChildren[i];
+		const pt = names.length > 0 ? substituteParams(parentCtor.typeChildren[i], declaredTypeParams(parentSym, names.length), instance.typeChildren) : parentCtor.typeChildren[i];
 		const name = i < parentCtor.typeNames.length && parentCtor.typeNames[i] != "" ? parentCtor.typeNames[i] : "p" + i.toString();
 		params.push(name);
 		paramTypes.push(pt);
@@ -2617,14 +2643,13 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			// so resolveAnnotation finds "T" → GenericParam("T"), same as resolveFunctionDecl.
 			const methodGenericNames = extractGenericParamDecls(md.methodFlags);
 			const hasMethodGenerics = methodGenericNames.length > 0;
-			if (hasMethodGenerics) {
-				openScope(ctx.table, ScopeKind.Block);
-				for (const mgp of methodGenericNames) {
-					defineGenericParam(ctx, mgp);
-				}
-			}
 			md.methodFlags = liftParamModifiers(md.methodParams, md.methodFlags);
+			const receiver = hasMethodGenerics && !md.methodIsStatic && md.methodParams.length > 0 && md.methodParams[0] == "this"
+				? resolveTypeStrings(md.methodParamTypes, 1, ctx, member.location.line, member.location.column)[0]
+				: null;
+			if (hasMethodGenerics) defineTypeParams(ctx, declaredMethodSym(ctx, member, d.classBody[mi]), methodGenericNames.join(","));
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column);
+			if (receiver != null) paramTypes[0] = receiver;
 			wrapModifierTypes(md.methodFlags, paramTypes);
 			resolveTypeExprs(member.typeExprs, ctx);
 			const returnType = (md.methodReturnType != "") ? resolveReturnAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : inferredType();
@@ -2839,12 +2864,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 			refuseActorParamModes(ctx, d.actorName, md, member);
 			const methodGenericNames = extractGenericParamDecls(md.methodFlags);
 			const hasMethodGenerics = methodGenericNames.length > 0;
-			if (hasMethodGenerics) {
-				openScope(ctx.table, ScopeKind.Block);
-				for (const mgp of methodGenericNames) {
-					defineGenericParam(ctx, mgp);
-				}
-			}
+			if (hasMethodGenerics) defineTypeParams(ctx, declaredMethodSym(ctx, member, d.actorBody[mi]), methodGenericNames.join(","));
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column);
 			resolveTypeExprs(member.typeExprs, ctx);
 			const returnType = (md.methodReturnType != "") ? resolveReturnAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : inferredType();

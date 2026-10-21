@@ -6,7 +6,7 @@ import { requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, hidden
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, TypeAssertionData, SizeofExprData, TypeAnnotationData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
+import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, setConditionalAssignFn, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols } from "./symbol";
 import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
@@ -23,9 +23,9 @@ import { defaultGlobalImports, extraGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
 import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
 setConditionalAssignFn(isAssignable);
-import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineGenericParam, refuseNestedView, refuseUsedSuspendingViewParams } from "./resolvePass";
+import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
-import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram } from "./instantiate";
+import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
 import { CtorRow, ctorRoutineMark, ctorRoutinesFrom, replayCtorRoutines } from "./ctorRoutine";
 import { isBuiltinDirective, inlineDecorator } from "./decoratorHelpers";
 import { isComputedGotoMark, computedGotoMarks, isRegisteredMark, refuseComputedGotoMisuse } from "./computedGoto";
@@ -45,7 +45,7 @@ import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGens
 import { convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, comparedUnion, widenToSlotUnion } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
-import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerDemandReturn, registerDemandBinding, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
+import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerCheckLocalInstance, registerDemandReturn, registerDemandBinding, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { isLetter, isAlphanumeric } from "../lexer/chars";
 import { forEachChild } from "../ast/visitor";
@@ -558,6 +558,10 @@ function checkStmtNode(ctx: CheckerContext, node: Node): void {
 				addError(ctx, "converter '" + fd.fnName + "' is only allowed at module level", fd.nameLocation.line, fd.nameLocation.column);
 			} else if (fdFlags.indexOf("extern", 0) >= 0 && fdLocal) {
 				checkExternFunctionStmt(ctx, node);
+			} else if (ctx.currentFunction != null && isGenericFn(fdFlags)) {
+				collectFunction(ctx, node);
+				resolveFunction(ctx, node);
+				declareLocalGeneric(node.resolvedSym!, ctx.table.current);
 			} else if (ctx.currentFunction != null) {
 				rewriteNestedFunctionDecl(ctx, node);
 				checkVariableDecl(ctx, node);
@@ -1281,10 +1285,7 @@ function demandMethodBody(ctx: CheckerContext, decl: Node, sym: Symbol): void {
 	const genericStr = declGenericParams(classDecl);
 	if (genericStr != "") {
 		ctx.inGenericContext = 1;
-		openScope(ctx.table, ScopeKind.Block);
-		for (const gp of splitTopLevel(genericStr, ",")) {
-			if (gp.trim() != "") defineGenericParam(ctx, gp.trim());
-		}
+		defineTypeParams(ctx, owner, genericStr);
 	}
 	const friends = expansionFriendsOf(ctx, decl);
 	const friendScope = befriend(ctx, friends);
@@ -1524,12 +1525,7 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	const hasGenerics = genericStr != "";
 	if (hasGenerics) {
 		ctx.inGenericContext += 1;
-		openScope(ctx.table, ScopeKind.Block);
-		const genericNames = splitTopLevel(genericStr, ",");
-		for (const gp of genericNames) {
-			const trimGp = gp.trim();
-			if (trimGp != "") defineGenericParam(ctx, trimGp);
-		}
+		defineTypeParams(ctx, sym, genericStr);
 	}
 	let ctorExits: string[][] | null = null;
 	for (const member of d.classBody) {
@@ -2454,13 +2450,14 @@ function isLocalFunctionStmt(node: Node): boolean {
 function forwardDeclareLocalRun(ctx: CheckerContext, stmts: Node[], from: int32): void {
 	let end = from;
 	while (end < stmts.length && isLocalFunctionStmt(stmts[end])) {
-		rewriteNestedFunctionDecl(ctx, stmts[end]);
+		if (!isGenericFn((stmts[end].data as FunctionDeclData).fnFlags)) rewriteNestedFunctionDecl(ctx, stmts[end]);
 		end += 1;
 	}
 	for (let i = from; i < end; i += 1) forwardDeclareLocal(ctx, stmts[i]);
 }
 
 function forwardDeclareLocal(ctx: CheckerContext, node: Node): void {
+	if (node.kind != NodeKind.VariableDecl) return;
 	const d = node.data as VariableDeclData;
 	if (d.initializer == null || d.initializer.kind != NodeKind.FunctionExpr || lookupLocal(ctx.table, d.declName) != null) return;
 	const fd = d.initializer.data as FunctionExprData;
@@ -2527,9 +2524,31 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 		}
 		i = i + drainHoisted(ctx, d.statements, i, hoistMark) + 1;
 	}
+	placeLocalInstances(d.statements);
 	// PARALOCK Phase 1: verify every affine Promise declared in this block was consumed
 	checkAffineConsumption(ctx, ctx.table.current, ctx.affineTracker);
 	closeScope(ctx.table);
+}
+
+function placeLocalInstances(stmts: Node[]): void {
+	for (let i = stmts.length - 1; i >= 0; i -= 1) {
+		const s = stmts[i];
+		if (s.kind != NodeKind.FunctionDecl || s.resolvedSym == null) continue;
+		const instances = takeLocalInstances(s.resolvedSym);
+		if (instances != null) spliceStatementsAt(stmts, i, instances);
+	}
+}
+
+function checkLocalInstance(ctx: CheckerContext, node: Node, declared: (sym: Symbol) => void): Symbol | null {
+	rewriteNestedFunctionDecl(ctx, node);
+	forwardDeclareLocal(ctx, node);
+	const name = (node.data as VariableDeclData).declName;
+	const early = lookupLocal(ctx.table, name);
+	if (early != null) declared(early);
+	checkVariableDecl(ctx, node);
+	const sym = early ?? lookupLocal(ctx.table, name);
+	if (early == null && sym != null) declared(sym);
+	return sym;
 }
 
 function checkReturnStmt(ctx: CheckerContext, node: Node): void {
@@ -4237,6 +4256,7 @@ export function checkProgramWithRegistryCancellable(
 
 // Register callbacks at module load time
 registerCheckStmt((ctx: CheckerContext, node: Node): void => { checkStmt(ctx, node); });
+registerCheckLocalInstance((ctx: CheckerContext, node: Node, declared: (sym: Symbol) => void): Symbol | null => { return checkLocalInstance(ctx, node, declared); });
 registerCheckFunctionBody((ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[] | null): Symbol[] => { return checkFunctionBody(ctx, sym, params, body, paramLocs); });
 registerDemandReturn(demandReturnType);
 registerDemandBinding(demandBindingType);
@@ -4846,12 +4866,11 @@ test "declared struct answers generic queries from its members" {
 test "substitution keeps a declared struct without generic params" {
 	const ctx = checkSource("class Plain { n: number = 0; items: number[] = []; next: Plain | null = null; } class Box<T> { value: T; constructor(v: T) { this.value = v; } }");
 	assert !hasErrors(ctx);
+	const boxSym = lookupSymbol(ctx.table, "Box");
 	const plain = unwrapRef(lookupSymbol(ctx.table, "Plain").symbolType);
-	assert substituteType(plain, "T", numberType()) == plain;
-	assert substituteAllParams(plain, ["T"], [numberType()]) == plain;
-	const box = unwrapRef(lookupSymbol(ctx.table, "Box").symbolType);
-	assert substituteType(box, "T", numberType()) != box;
-	assert substituteAllParams(box, ["T"], [numberType()]) != box;
+	assert substituteParams(plain, boxSym.typeParams, [numberType()]) == plain;
+	const box = unwrapRef(boxSym.symbolType);
+	assert substituteParams(box, boxSym.typeParams, [numberType()]) != box;
 }
 
 test "generic type alias simple" {

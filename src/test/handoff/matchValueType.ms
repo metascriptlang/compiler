@@ -28,7 +28,7 @@ function colorName(c: Color): string {
 test "match expr returning Result emits zero init" {
 	const src = `
 function tryParse(input: string): Result<number, string> {
-	const r = match (input) {
+	const r: Result<number, string> = match (input) {
 		"yes" => Result.ok(1),
 		"no" => Result.ok(0),
 		_ => Result.err("unknown"),

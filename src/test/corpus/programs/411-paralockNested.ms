@@ -3,6 +3,8 @@
 // @maxrss: 20
 // @stdout: paralock-nested check=99990 total=100000
 // @serial
+// @ledger-slack(Accumulator) 1
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: PARALOCK guard: spawn + actor + async crossed, 100k-iteration massive interleave on the shared worker pool. Standing answer to 'did my change break PARALOCK seamlessly?'. The final marker only prints if the actor tag round-trips. Bound 80-to-20 + iters 20000-to-100000 (2026-09-04 RSS audit): the concurrency runtime steady-state is ~8.6MB (Linux drc) - the old 80 bound left 71MB slack, blind under 3.9KB/iter; 20 keeps 2.3x platform headroom while a per-iter leak of the churned population (2 spawn futures + actor reply + async chain ~ 570B/iter ~ 34MB) now trips.
 
 // PARALOCK guard — spawn + actor + async crossed, massive, run NATIVELY.

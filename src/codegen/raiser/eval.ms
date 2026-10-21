@@ -13,7 +13,7 @@ import { join } from "std/fs/path";
 import { writeStderr } from "std/io";
 import { createTransformContextWithChecker } from "../../transform/context";
 import { transformForRaiser } from "../../transform/raiserLowering";
-import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapArrayLen, heapArrayGet, raiserConstString } from "../../raiser/value";
+import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapArrayLen, heapArrayGet, raiserConstString, handleIndex } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
 import { RaiserInstruction, raiserABC, RaiserOpcode, getSignedAx, branchOffset, regClassLetter } from "../../raiser/bytecode";
 import { disasmFunc, opName } from "../../raiser/disasm";
@@ -261,6 +261,7 @@ function compileProgramIntoEngine(program: Node, seeds: Symbol[], exts: Extensio
 	// whose nested transformForEngine overwrites _lastEngineCheckErrors — restore this
 	// program's own check errors so the caller reads them, not the last helper's (bug053).
 	const ownErrors = _lastEngineCheckErrors;
+	for (const e of ownErrors) if (e.severity == Severity.Error) return -1;
 	const idx = appendProgramToImage(_engine.image, _engine.funcMap, transformed, wantFn, wantSym);
 	_lastEngineCheckErrors = ownErrors;
 	return idx;
@@ -820,6 +821,20 @@ test "engine: sleepAsync is refused in compile-time evaluation" {
 	assert r.lastError.includes("sleepAsync is not available in compile-time evaluation");
 }
 
+const RAISER_TIER_CHILD = "extern function msProcChildSpawn(path: string, args: string[], cwd: string, mergeStderr: int32): int64; extern function msProcChildKill(h: int64): int32; extern function msProcChildFree(h: int64): void;";
+
+test "engine: spawning a child is refused in compile-time evaluation" {
+	const r = evalFull(RAISER_TIER_CHILD + " return msProcChildSpawn(\"/bin/sleep\", [\"5\"], \"\", 0);");
+	assert r.lastError.includes("spawn is not available in compile-time evaluation");
+}
+
+test "engine: spawning a child runs at run time" {
+	const vm = evalOrcVM(RAISER_TIER_CHILD
+		+ " const h = msProcChildSpawn(\"/bin/sleep\", [\"5\"], \"\", 0); const killed = msProcChildKill(h); msProcChildFree(h); console.log(`${h > 0} ${killed}`);");
+	assert vm.error == "";
+	assert vm.output == "true 0\n";
+}
+
 test "engine: shift left on int64 keeps bits past 31" {
 	const r = evalSourceFull("function shl(one: int64, n: int64): int64 { return one << n; } return shl(1, 39);");
 	assert r.lastError == "";
@@ -1323,7 +1338,7 @@ test "hand-written closure pair (no transforms)" {
 }
 
 test "closure pair nested fn (no transforms)" {
-	const ctx = evalRaiserDirect("function liftedFn(_envP: unknown): number { return _envP.x; } function make(): number { const x = 42; const f = { fn: liftedFn, env: { x: x } }; return f(); } return make();");
+	const ctx = evalRaiserDirect("function liftedFn(_envP: unknown): number { return _envP.x; } function make(): int32 { const x = 42; const f = { fn: liftedFn, env: { x: x } }; return f(); } return make();");
 	assert ctx.lastResult.intVal == 42;
 }
 
@@ -1729,15 +1744,19 @@ function countOp(f: RaiserFunction, op: RaiserOpcode): number {
 	return n;
 }
 
+function countMoves(f: RaiserFunction): number {
+	return countOp(f, RaiserOpcode.Move) + countOp(f, RaiserOpcode.MoveW) + countOp(f, RaiserOpcode.MoveR);
+}
+
 test "engine: a call argument, a local assignment and a branch value land without a Move" {
 	const fib = compiledFunc("function fib(n: int32): int32 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); } console.log(`${fib(10)}`);", "fib");
-	assert countOp(fib, RaiserOpcode.Move) == 0, disasmFunc(fib);
+	assert countMoves(fib) == 0, disasmFunc(fib);
 	const asg = compiledFunc("function f(a: int64, b: int64): int64 { let x: int64 = 1; x = a + b; x = x + a; return x; } console.log(`${f(1, 2)}`);", "f");
-	assert countOp(asg, RaiserOpcode.Move) == 0, disasmFunc(asg);
+	assert countMoves(asg) == 0, disasmFunc(asg);
 	const tern = compiledFunc("function f(a: int64, b: int64): int64 { let x: int64 = 0; x = a < b ? a + 1 : b + 2; return x; } console.log(`${f(1, 2)}`);", "f");
-	assert countOp(tern, RaiserOpcode.Move) == 1, disasmFunc(tern);
+	assert countMoves(tern) == 1, disasmFunc(tern);
 	const glob = compiledFunc("let g: int64 = 5; function h(a: int64, b: int64): int64 { return a + b; } function f(a: int64): int64 { return h(g, a * 2); } console.log(`${f(1)}`);", "f");
-	assert countOp(glob, RaiserOpcode.Move) == 0, disasmFunc(glob);
+	assert countMoves(glob) == 0, disasmFunc(glob);
 }
 
 test "engine: a condition on a float, a string or a negated value jumps on its ToBoolean" {
@@ -1985,7 +2004,7 @@ test "a string a host function stores in the array it builds is held by that arr
 		assert heapArrayLen(vm.arrayHeap, argvArray) == 2;
 		for (let i = 0; i < 2; i++) {
 			const item = heapArrayGet(vm.arrayHeap, argvArray, i);
-			assert vm.arrayHeap.strings.rc[item.intVal] == 1, `${mode} ${i}`;
+			assert vm.arrayHeap.strings.rc[handleIndex(item.intVal)] == 1, `${mode} ${i}`;
 		}
 	}
 }
@@ -2037,14 +2056,14 @@ test "orc: a bare return in a constructor still yields the object" {
 }
 
 
-const finallyInFlight = "let log = ''; function note(s: string): void { log = log + s + '|'; } function boom(m: number): void { throw m; }"
+const finallyInFlight = "let log = ''; function note(s: string): void { log = log + s + '|'; } class Boom { n: number; constructor(n: number) { this.n = n; } } function boom(m: number): void { throw new Boom(m); }"
 	+ " function ownCatch(): void { try { boom(9); } catch (e) { note('own'); } }"
-	+ " function replaced(): void { try { try { boom(1); } finally { note('f'); boom(2); } } catch (e) { note(String(e as number)); } }"
-	+ " function viaCall(): void { try { try { boom(3); } finally { ownCatch(); } } catch (e) { note(String(e as number)); } }"
-	+ " function sameFrame(): void { try { try { boom(3); } finally { try { boom(9); } catch (e) { note('own'); } } } catch (e) { note(String(e as number)); } }"
+	+ " function replaced(): void { try { try { boom(1); } finally { note('f'); boom(2); } } catch (e) { note(String((e as Boom).n)); } }"
+	+ " function viaCall(): void { try { try { boom(3); } finally { ownCatch(); } } catch (e) { note(String((e as Boom).n)); } }"
+	+ " function sameFrame(): void { try { try { boom(3); } finally { try { boom(9); } catch (e) { note('own'); } } } catch (e) { note(String((e as Boom).n)); } }"
 	+ " function returns(): number { try { return 7; } finally { ownCatch(); try { boom(8); } catch (e) { note('own2'); } } }"
 	+ " function normal(): void { try { note('body'); } finally { ownCatch(); note('fin'); } }"
-	+ " function twoLevels(): void { try { try { try { boom(4); } finally { ownCatch(); note('f1'); } } finally { ownCatch(); note('f2'); } } catch (e) { note(String(e as number)); } }"
+	+ " function twoLevels(): void { try { try { try { boom(4); } finally { ownCatch(); note('f1'); } } finally { ownCatch(); note('f2'); } } catch (e) { note(String((e as Boom).n)); } }"
 	+ " function cancelled(): number { try { try { boom(5); } finally { return 3; } } catch (e) { return 4; } }"
 	+ " replaced(); viaCall(); sameFrame(); note(`${returns()}`); normal(); twoLevels(); note(`${cancelled()}`); console.log(log);";
 const finallyInFlightOut = "f|2|own|3|own|3|own|own2|7|body|own|fin|own|f1|own|f2|4|3|\n";
@@ -2097,14 +2116,14 @@ function funcNamed(code: string, prefix: string): RaiserFunction {
 test "register classes: a parameter takes the class of its declared type" {
 	const f = compiledFunc("function p(a: number, s: string, o: { x: number } | null, n: number | null, u: number | string, b: boolean, c: () => number): number { return a; }"
 		+ " console.log(`${p(1, \"s\", null, null, 1, true, (): number => 1)}`);", "p");
-	assert classTable(f) == "WRRDDWR", classTable(f);
+	assert classTable(f) == "FRRDDBR", classTable(f);
 }
 
 test "register classes: a local takes the class of its declared type, not of its initializer" {
 	const code = "function l(): number { let k: number = 1; let s: string = \"a\"; let o: { x: number } | null = null; let n: number | null = null; let u: number | string = 1; return k + s.length; }"
 		+ " console.log(`${l()}`);";
 	const table = classTable(compiledFunc(code, "l"));
-	assert table.slice(0, 9) == "WRRRDWDWW", table;
+	assert table.slice(0, 9) == "FRRRDFDWF", table;
 	const vm = evalOrcVM(code);
 	assert vm.error == "", vm.error;
 	assert vm.output == "2\n", vm.output;
@@ -2112,20 +2131,18 @@ test "register classes: a local takes the class of its declared type, not of its
 
 test "register classes: a number local never assigned on the path read reads as zero" {
 	const code = "function u(k: number): number { let z: number; if (k > 5) { z = 2; } return z; } console.log(`${u(1)} ${u(9)}`);";
-	assert classTable(compiledFunc(code, "u")).slice(0, 2) == "WW", classTable(compiledFunc(code, "u"));
+	assert classTable(compiledFunc(code, "u")).slice(0, 2) == "FF", classTable(compiledFunc(code, "u"));
 	const vm = evalOrcVM(code);
 	assert vm.error == "", vm.error;
 	assert vm.output == "0 2\n", vm.output;
 }
 
-test "register classes: a for-of counter and length are words, its element takes the element class" {
+test "register classes: a number accumulator is a float, a for-of counter and length are words, its element takes the element class" {
 	const code = "function fo(xs: number[], ss: string[]): number { let t: number = 0; for (const v of xs) { t += v; } for (const w of ss) { t += w.length; } return t; } console.log(`${fo([1, 2], [\"ab\"])}`);";
 	const f = compiledFunc(code, "fo");
 	const table = classTable(f);
-	assert table.slice(0, 3) == "RRW", table;
-	for (let i = 0; i < f.code.length; i = i + 1) {
-		if (f.code[i].op == RaiserOpcode.AddI64Imm) assert regClassLetter(f.regClasses[f.code[i].a]) == "W", disasmFunc(f);
-	}
+	assert table.slice(0, 3) == "RRF", table;
+	assert disasmFunc(f).indexOf("AddI64Imm R") < 0, disasmFunc(f);
 	const vm = evalOrcVM(code);
 	assert vm.error == "", vm.error;
 	assert vm.output == "5\n", vm.output;
@@ -2145,7 +2162,7 @@ test "register classes: this and the environment of a closure inside a loop insi
 		+ " mk(): number { let t: number = 0; for (let i = 0; i < 3; i++) { const f = (): number => i + this.n; t += f(); } return t; } }"
 		+ " console.log(`${new C().get() + new C().mk()}`);";
 	assert classTable(compiledFunc(code, "C_get")).charAt(0) == "R", classTable(compiledFunc(code, "C_get"));
-	assert classTable(funcNamed(code, "$lifted_anon")).charAt(0) == "D", classTable(funcNamed(code, "$lifted_anon"));
+	assert classTable(funcNamed(code, "$lifted_anon")).charAt(0) == "R", classTable(funcNamed(code, "$lifted_anon"));
 	const vm = evalOrcVM(code);
 	assert vm.error == "", vm.error;
 	assert vm.output == "7\n", vm.output;
@@ -2155,4 +2172,24 @@ test "register classes: a call through a closure whose environment is null passe
 	const ctx = evalFull("const f = (x: number): number => x * 2; return f(21);");
 	assert ctx.lastError == "", ctx.lastError;
 	assert unboxFloat(ctx.lastResult) == 42;
+}
+
+test "register classes: arithmetic assigned to a union local boxes the result" {
+	const vm = evalOrcVM("let x: number | null = null; for (let i = 0; i < 3; i++) { x = (x == null ? 0 : x) + 1.5; } console.log(`${x}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "4.5\n", vm.output;
+}
+
+test "register classes: a union equality compares the payload of both boxes" {
+	const code = "type NamedU = int32 | string; function g(a: NamedU, b: NamedU): boolean { return a == b; } function num(n: int32): NamedU { return n; } function str(s: string): NamedU { return s; }"
+		+ " console.log(`${g(num(3), num(3))} ${g(num(3), num(4))} ${g(str('a'), str('a'))} ${g(str('a'), num(3))}`);";
+	const vm = evalOrcVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "true false true false\n", vm.output;
+}
+
+test "register classes: a borrowed class reference parameter reads through its address" {
+	const vm = evalOrcVM("class C { text: string; constructor(text: string) { this.text = text; } } function read(p: Borrow<C>): string { return p.text; } console.log(read(new C('x') as Borrow<C>));");
+	assert vm.error == "", vm.error;
+	assert vm.output == "x\n", vm.output;
 }

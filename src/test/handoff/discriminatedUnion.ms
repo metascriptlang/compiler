@@ -74,16 +74,8 @@ test "a variant is found by the member's enum, not by its spelling" {
 	assert variantOf(ctx, t, "Other", "Round_One") == -1;
 }
 
-test "direct field access on discriminated union — unique field" {
-	// "x" only exists in variant A — should resolve to number without as-cast
-	const ctx = checkSource("enum Kind { A, B }\ntype Data = match (kind: Kind) {\n\tKind.A => { x: number },\n\tKind.B => { y: string },\n};\nfunction getX(d: Data): number { return d.x; }");
-	assert ctx != null;
-	if (ctx.errors.length > 0) {
-		for (const e of ctx.errors) {
-			console.log("FIELD-ERR: " + e.message);
-		}
-	}
-	assert !hasErrors(ctx);
+test "direct field access on discriminated union — a field of one variant needs narrowing" {
+	assert hasError("enum Kind { A, B }\ntype Data = match (kind: Kind) {\n\tKind.A => { x: number },\n\tKind.B => { y: string },\n};\nfunction getX(d: Data): number { return d.x; }", "exists only on some variants");
 }
 
 test "direct field access — discriminant field returns enum type" {
@@ -126,8 +118,8 @@ test "discriminated union rejects non-enum discriminant" {
 	assert hasError("type Data = match (kind: string) {\n\tFoo => { x: number },\n};", "must be an enum");
 }
 
-test "multi-field variant access" {
-	const ctx = checkSource("enum Kind { A, B }\ntype Data = match (kind: Kind) {\n\tKind.A => { x: number, y: number },\n\tKind.B => { name: string },\n};\nfunction getY(d: Data): number { return d.y; }");
+test "multi-field variant access after narrowing on the discriminant" {
+	const ctx = checkSource("enum Kind { A, B }\ntype Data = match (kind: Kind) {\n\tKind.A => { x: number, y: number },\n\tKind.B => { name: string },\n};\nfunction getY(d: Data): number { if (d.kind == Kind.A) { return d.x + d.y; } return 0; }");
 	assert ctx != null;
 	assert !hasErrors(ctx);
 }

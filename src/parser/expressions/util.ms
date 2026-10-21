@@ -1,38 +1,27 @@
 // Expression Test Utilities
 // Provides parseOk() for integration tests across expression sub-modules.
-// core.ms registers the real parseExpression at module load time.
-// Test callbacks are lazy (registered during load, executed after), so
-// parseFn is always set by the time tests actually run.
 
-import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
+import { TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, createNodeAt, makeLoc, BinaryExprData, UnaryExprData, UpdateExprData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd } from "../context";
 import { lex } from "../../lexer/lexer";
 import { parseNumberLiteral, parseIntegerLiteral, integerLiteralFits, integerLiteralIsBitPattern, numericLiteralIsFloat } from "../../utils/string";
 import { isIdentLike } from "../util";
+import { callParseExpr } from "../statements/callbacks";
 
 type ExprResult = Result<Expression, string>;
-type ParseExprFn = (tokens: Token[]) => ExprResult;
-
-let parseFn: ParseExprFn = (tokens: Token[]): ExprResult => {
-	return Result.err("parseOk not registered");
-};
-
-export function registerParseExpr(fn: ParseExprFn): void {
-	parseFn = fn;
-}
 
 export function parseOk(input: string): boolean {
 	const lr = lex(input);
 	if (!lr.ok) return false;
-	const pr = parseFn(lr.value);
+	const pr = callParseExpr(lr.value);
 	return pr.ok;
 }
 
 export function exprKind(input: string): NodeKind {
 	const lr = lex(input);
 	if (!lr.ok) return NodeKind.NumberLiteral;
-	const pr = parseFn(lr.value);
+	const pr = callParseExpr(lr.value);
 	if (!pr.ok) return NodeKind.NumberLiteral;
 	return pr.value.kind;
 }
@@ -40,7 +29,7 @@ export function exprKind(input: string): NodeKind {
 export function exprNode(input: string): Node {
 	const lr = lex(input);
 	if (!lr.ok) return createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, makeLoc(0, 0));
-	const pr = parseFn(lr.value);
+	const pr = callParseExpr(lr.value);
 	if (!pr.ok) return createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, makeLoc(0, 0));
 	return pr.value;
 }
@@ -48,7 +37,7 @@ export function exprNode(input: string): Node {
 export function exprOp(input: string): string {
 	const lr = lex(input);
 	if (!lr.ok) return "";
-	const pr = parseFn(lr.value);
+	const pr = callParseExpr(lr.value);
 	if (!pr.ok) return "";
 	if (pr.value.kind == NodeKind.BinaryExpr) {
 		const d = pr.value.data as BinaryExprData;
@@ -130,7 +119,7 @@ export function tryParseLiteralKeyword(state: ParserState): Node {
 export function binLeftKind(input: string): NodeKind {
 	const lr = lex(input);
 	if (!lr.ok) return NodeKind.NumberLiteral;
-	const pr = parseFn(lr.value);
+	const pr = callParseExpr(lr.value);
 	if (!pr.ok) return NodeKind.NumberLiteral;
 	const d = pr.value.data as BinaryExprData;
 	return d.left.kind;

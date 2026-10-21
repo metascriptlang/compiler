@@ -3,6 +3,7 @@
 // to call back into core.ms without circular imports.
 // core.ms registers the real implementations at module load time.
 
+import { Token } from "../../lexer/token";
 import { Node } from "../../ast/node";
 import { ParserState } from "../context";
 
@@ -11,6 +12,7 @@ type BlockParserFn = (state: ParserState) => NodeResult;
 type ExprParserFn = (state: ParserState) => NodeResult;
 type StmtParserFn = (state: ParserState) => NodeResult;
 type StateProgramParserFn = (state: ParserState) => NodeResult;
+type ParseExprFn = (tokens: Token[]) => NodeResult;
 
 let blockParserFn: BlockParserFn = (state: ParserState): NodeResult => {
 	return Result.err("Block parser not registered");
@@ -27,6 +29,18 @@ let stmtParserFn: StmtParserFn = (state: ParserState): NodeResult => {
 let stateProgramParserFn: StateProgramParserFn = (state: ParserState): NodeResult => {
 	return Result.err("State program parser not registered");
 };
+
+let parseExprFn: ParseExprFn = (tokens: Token[]): NodeResult => {
+	return Result.err("Token expression parser not registered");
+};
+
+export function registerParseExpr(fn: ParseExprFn): void {
+	parseExprFn = fn;
+}
+
+export function callParseExpr(tokens: Token[]): NodeResult {
+	return parseExprFn(tokens);
+}
 
 export function registerStmtBlockParser(fn: BlockParserFn): void {
 	blockParserFn = fn;

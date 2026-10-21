@@ -527,6 +527,9 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	keepOperandOrder(cd.arguments, marks, dctx);
 	// ensureDestruction on the call's return value is consolidated in processNode (Normal mode) —
 	// NOT applied to individual arguments (each nested call arg gets its own via the recursive walk).
+	if ((mode == DrcMode.SinkArg || mode == DrcMode.Consumed) && isCursorSlot(node.nodeType)) {
+		return passCopyToSink(node, dctx, mode == DrcMode.SinkArg);
+	}
 	return node;
 }
 
@@ -744,6 +747,10 @@ function processArrayAccess(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		}
 	}
 	return node;
+}
+
+function isCursorSlot(t: Type | null): boolean {
+	return t != null && t.kind == TypeKind.Cursor;
 }
 
 function isPtrField(objType: Type | null, fieldName: string): boolean {
@@ -1864,6 +1871,9 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	const outerFinallyVars = dctx.finallyProtectedVars;
 	const outerBody = dctx.currentFuncBody;
 	const outerCache = dctx.cfgCache;
+	const outerResultIsCursor = dctx.resultIsCursor;
+	const fnType = ownerSym != null && ownerSym.symbolType != null && ownerSym.symbolType.kind == TypeKind.Function ? ownerSym.symbolType : funcNodeType;
+	dctx.resultIsCursor = fnType != null && fnType.kind == TypeKind.Function && isCursorSlot(fnType.typeReturn);
 
 	// Phase A: scan finally blocks for protected variables
 	dctx.finallyProtectedVars = collectFinallyVars(body);
@@ -1901,6 +1911,7 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	dctx.finallyProtectedVars = outerFinallyVars;
 	dctx.currentFuncBody = outerBody;
 	dctx.cfgCache = outerCache;
+	dctx.resultIsCursor = outerResultIsCursor;
 
 	return makeBlock(assembleScope(processed, cleanup, scope, loc), loc);
 }
@@ -2369,6 +2380,10 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 		const origKind = d.argument.kind;
 		const origSym = origKind == NodeKind.Identifier ? d.argument.resolvedSym : noSym;
 
+		if (dctx.resultIsCursor) {
+			d.argument = processNode(d.argument, dctx, DrcMode.Normal);
+			return stmt;
+		}
 		d.argument = processNode(d.argument, dctx, returnMode(d.argument, dctx));
 
 		// Borrowed RC pointer return: wrap in temp + incref to prevent use-after-free

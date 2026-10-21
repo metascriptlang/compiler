@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, ClassDeclData, MethodDeclData, DecoratedDeclData } from "../ast/node";
 import { makeSymbol, classDeclNodeOf } from "./symbol";
-import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion } from "./types";
+import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, peelToStructOrUnion, isVarargs, isVarargs, unwrapVarargs, UnifyBindings } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -321,11 +321,11 @@ const _assignTargets: Type[] = [];
 let _isaCount: float64 = 0;
 let _isaTime: float64 = 0;
 export function isAssignableProfile(): float64[] { return [_isaCount, _isaTime]; }
-export function unmetConstraint(owner: Type, name: string, bound: Type, names: string[], types: Type[]): Type | null {
+export function unmetConstraint(param: Type, bound: Type, params: Type[], types: Type[]): Type | null {
 	if (bound == null || bound.kind == TypeKind.Error || isUnresolvedType(bound) || isUnknownType(bound) || hasGenericParams(bound)) return null;
-	const raw = typeParamConstraint(owner, name, 0);
+	const raw = param.typeExtra;
 	if (raw == null) return null;
-	const constraint = substituteAllParams(raw, names, types);
+	const constraint = substituteParams(raw, params, types);
 	if (constraint == null || isUnresolvedType(constraint) || hasGenericParams(constraint)) return null;
 	return isAssignable(bound, constraint) ? null : constraint;
 }
@@ -913,7 +913,7 @@ function leavesInlineConv(source: Type, target: Type): boolean {
 	return source.callConv == CallingConvention.CcInline && target.callConv != CallingConvention.CcInline;
 }
 
-function runtimeParams(fn: Type): Type[] {
+export function runtimeParams(fn: Type): Type[] {
 	const params: Type[] = [];
 	for (const param of fn.typeChildren) {
 		if (param == null || param.kind != TypeKind.Void) params.push(param);
@@ -956,9 +956,80 @@ function isFunctionAssignable(source: Type | null, target: Type | null): boolean
 	return true;
 }
 
+export function arityAdapts(source: Type | null, target: Type | null): boolean {
+	if (source == null || target == null || source.kind != TypeKind.Function || target.kind != TypeKind.Function) return false;
+	if (target.callConv != CallingConvention.CcClosure || hasGenericParams(source) || hasGenericParams(target)) return false;
+	const sourceParams = runtimeParams(source);
+	const targetParams = runtimeParams(target);
+	if (takesVarargs(targetParams) || runtimeMinArity(source) > targetParams.length) return false;
+	if (takesVarargs(sourceParams)) return restTakesSlot(source, sourceParams, target, targetParams);
+	if (sourceParams.length == targetParams.length) return false;
+	const shared = sourceParams.length < targetParams.length ? sourceParams.length : targetParams.length;
+	return isFunctionAssignable(leadingParams(source, shared), leadingParams(target, shared));
+}
+
+function adaptedRelation(formal: Type, actual: Type, formalParams: Type[], actualParams: Type[]): TypeRelation {
+	let shared = formalParams.length < actualParams.length ? formalParams.length : actualParams.length;
+	if (takesVarargs(actualParams)) shared = actualParams.length - 1 < shared ? actualParams.length - 1 : shared;
+	return typeRelation(leadingParams(formal, shared), leadingParams(actual, shared));
+}
+
+function restTakesSlot(source: Type, sourceParams: Type[], target: Type, targetParams: Type[]): boolean {
+	const fixed = sourceParams.length - 1;
+	if (!isVarargs(sourceParams[fixed])) return false;
+	const shared = fixed < targetParams.length ? fixed : targetParams.length;
+	if (!isFunctionAssignable(leadingParams(source, shared), leadingParams(target, shared))) return false;
+	const array = unwrapRef(unwrapVarargs(sourceParams[fixed]));
+	const element = array.kind == TypeKind.Array ? array.typeReturn : null;
+	if (element == null) return false;
+	for (let i = fixed; i < targetParams.length; i += 1) {
+		if (sinkModeDiffers(targetParams[i], element) || !isAssignable(targetParams[i], element)) return false;
+	}
+	return true;
+}
+
+export function runtimeMinArity(fn: Type): int32 {
+	const required = getMinArity(fn);
+	let n = 0;
+	for (let i = 0; i < fn.typeChildren.length && i < required; i += 1) {
+		const param = fn.typeChildren[i];
+		if (param == null || (param.kind != TypeKind.Void && !isVarargs(param))) n += 1;
+	}
+	return n;
+}
+
+function leadingParams(fn: Type, count: int32): Type {
+	const params = runtimeParams(fn);
+	const leading: Type[] = [];
+	const names: string[] = [];
+	for (let i = 0; i < count; i += 1) {
+		leading.push(params[i]);
+		names.push("p" + String(i));
+	}
+	const prefix = createFunction(leading, names, fn.typeReturn);
+	prefix.callConv = fn.callConv;
+	return prefix;
+}
+
+function takesVarargs(params: Type[]): boolean {
+	for (const param of params) {
+		if (isVarargs(param)) return true;
+	}
+	return false;
+}
+
+function restSlotRefusal(sourceParams: Type[], targetParams: Type[]): string {
+	const restAt = targetParams.length - 1;
+	if (restAt < 0 || !isVarargs(targetParams[restAt]) || takesVarargs(sourceParams) || sourceParams.length <= restAt) return "";
+	return " — the expected function passes its arguments from position " + String(restAt + 1)
+		+ " on as a rest parameter, which can hold none, so a fixed parameter there has no guaranteed argument; declare it as a rest parameter";
+}
+
 function paramRefusal(source: Type | null, target: Type | null): string {
 	if (source == null || target == null || source.kind != TypeKind.Function || target.kind != TypeKind.Function) return "";
 	const targetParams = runtimeParams(target);
+	const rest = restSlotRefusal(runtimeParams(source), targetParams);
+	if (rest != "") return rest;
 	let ri = 0;
 	let ni = 0;
 	for (const taken of source.typeChildren) {
@@ -1296,15 +1367,15 @@ export enum TypeRelation {
 // branches may only collapse into one when their types are the same, or a
 // union variant is silently dropped.
 //
-// Structure mirrors the reference `sameType`/`sameTypeAux`: dispatch on kind,
-// nominal types compare by name, anonymous aggregates compare field names +
-// field types + repr flags, value-carrying types compare values, transparent
-// wrappers compare their inner type. Self-referential types (Node, Scope)
-// make the walk cyclic, so the reference bounds it with a recursion check and
-// assumes "same" once the budget is spent — the conservative answer for a
-// merge is to treat the pair as identical rather than to recurse forever.
+interface SameTypeClosure {
+	recCheck: int32;
+	left: Type[];
+	right: Type[];
+}
 
-let _sameTypeDepth = 0;
+function createSameTypeClosure(): SameTypeClosure {
+	return { recCheck: 0, left: [], right: [] };
+}
 
 export function dropsReadonlyView(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null) return false;
@@ -1326,25 +1397,31 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 		|| dst.kind == TypeKind.Unknown;
 }
 
-function sameDistinct(a: Type, b: Type): boolean {
+function sameDistinct(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
 	if (isBrandDistinct(a) || isBrandDistinct(b)) return a.typeName == b.typeName;
-	return sameNominal(a, b);
+	return sameNominalAux(a, b, c);
 }
 
 export function sameNominal(a: Type, b: Type): boolean {
 	if (a == b) return true;
-	if (isMaybeType(a) && isMaybeType(b)) return sameType(a.typeReturn, b.typeReturn);
+	return sameNominalAux(a, b, createSameTypeClosure());
+}
+
+function sameNominalAux(a: Type, b: Type, c: SameTypeClosure): boolean {
+	if (a == b) return true;
+	if (isMaybeType(a) && isMaybeType(b)) return sameTypeAux(a.typeReturn, b.typeReturn, c);
 	if (a.sym != null && b.sym != null) {
 		const declared = a.sym == b.sym || (a.sym.modulePath != "" && a.sym.modulePath == b.sym.modulePath
 			&& a.sym.name == b.sym.name && a.sym.symbolKind == b.sym.symbolKind
 			&& a.sym.location.line > 0
 			&& a.sym.location.line == b.sym.location.line
 			&& a.sym.location.column == b.sym.location.column);
-		return declared && (!a.typeFlags.has(TypeFlag.DuVariant) || sameTypeList(a.typeChildren, b.typeChildren));
+		return declared && (!a.typeFlags.has(TypeFlag.DuVariant)
+			|| sameTypeList(a.typeChildren, b.typeChildren, c));
 	}
 	return a.sym == null && b.sym == null && a.kind == b.kind
 		&& a.typeName != "" && a.typeName == b.typeName
-		&& sameNameList(a.typeNames, b.typeNames) && sameTypeList(a.typeChildren, b.typeChildren);
+		&& sameNameList(a.typeNames, b.typeNames) && sameTypeList(a.typeChildren, b.typeChildren, c);
 }
 
 // The variant of an enum-discriminated union whose key names the member `lit`
@@ -1365,8 +1442,10 @@ function isOwnGenericBase(base: Type, inst: Type): boolean {
 	return inst.kind == TypeKind.GenericInstance && inst.typeExtra != null && unwrapRefBase(inst.typeExtra) == base;
 }
 
-function sameGenericBase(a: Type, b: Type): boolean {
-	if (a.typeExtra != null && b.typeExtra != null) return sameNominal(unwrapRefBase(a.typeExtra), unwrapRefBase(b.typeExtra));
+function sameGenericBase(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
+	if (a.typeExtra != null && b.typeExtra != null) {
+		return sameNominalAux(unwrapRefBase(a.typeExtra), unwrapRefBase(b.typeExtra), c);
+	}
 	return a.typeName == b.typeName;
 }
 
@@ -1389,9 +1468,9 @@ function differentGenericsFit(source: Type, target: Type): boolean {
 	return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && objectLayoutFits(s, t);
 }
 
-function sameEnumMember(a: Type, b: Type): boolean {
+function sameEnumMember(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
 	if (a.typeNames.length == 0 || b.typeNames.length == 0 || a.typeNames[0] != b.typeNames[0]) return false;
-	if (a.typeReturn != null && b.typeReturn != null) return sameNominal(a.typeReturn, b.typeReturn);
+	if (a.typeReturn != null && b.typeReturn != null) return sameNominalAux(a.typeReturn, b.typeReturn, c);
 	return a.typeName == b.typeName;
 }
 
@@ -1405,19 +1484,31 @@ function skipAliasWrapper(t: Type): Type {
 export function sameType(a: Type | null, b: Type | null): boolean {
 	if (a == b) return true;
 	if (a == null || b == null) return false;
-	if (_sameTypeDepth > 12) return true;
-	_sameTypeDepth = _sameTypeDepth + 1;
-	const result = sameTypeInner(skipAliasWrapper(a), skipAliasWrapper(b));
-	_sameTypeDepth = _sameTypeDepth - 1;
-	return result;
+	return sameTypeAux(a, b, createSameTypeClosure());
 }
 
-function sameTypeList(a: Type[], b: Type[]): boolean {
+function sameTypeAux(a: Type | null, b: Type | null, c: SameTypeClosure): boolean {
+	if (a == b) return true;
+	if (a == null || b == null) return false;
+	const left = skipAliasWrapper(a);
+	const right = skipAliasWrapper(b);
+	if (left == right) return true;
+	if (c.recCheck < 3) {
+		c.recCheck += 1;
+	} else {
+		if (pairOnStack(c.left, c.right, left, right)) return true;
+		c.left.push(left);
+		c.right.push(right);
+	}
+	return sameTypeInner(left, right, c);
+}
+
+function sameTypeList(a: Type[], b: Type[], c: SameTypeClosure): boolean {
 	if (a == null && b == null) return true;
 	if (a == null || b == null) return false;
 	if (a.length != b.length) return false;
 	for (let i = 0; i < a.length; i += 1) {
-		if (!sameType(a[i], b[i])) return false;
+		if (!sameTypeAux(a[i], b[i], c)) return false;
 	}
 	return true;
 }
@@ -1432,42 +1523,42 @@ function sameNameList(a: string[], b: string[]): boolean {
 	return true;
 }
 
-function sameStructType(a: Type, b: Type): boolean {
-	if (isMaybeType(a) && isMaybeType(b)) return sameType(a.typeReturn, b.typeReturn);
-	if (a.typeName != "" || b.typeName != "") return sameNominal(a, b);
+function sameStructType(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
+	if (isMaybeType(a) && isMaybeType(b)) return sameTypeAux(a.typeReturn, b.typeReturn, c);
+	if (a.typeName != "" || b.typeName != "") return sameNominalAux(a, b, c);
 	if (a.typeFlags != b.typeFlags) return false;
 	if (!sameNameList(a.typeNames, b.typeNames)) return false;
-	return sameTypeList(a.typeChildren, b.typeChildren);
+	return sameTypeList(a.typeChildren, b.typeChildren, c);
 }
 
-function sameInnerType(a: Type, b: Type): boolean {
+function sameInnerType(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
 	if (a.typeReturn == null && b.typeReturn == null) return true;
 	if (a.typeReturn == null || b.typeReturn == null) return false;
-	return sameType(a.typeReturn, b.typeReturn);
+	return sameTypeAux(a.typeReturn, b.typeReturn, c);
 }
 
 function isDoubleKind(t: Type): boolean {
 	return t.kind == TypeKind.Number || t.kind == TypeKind.Float64;
 }
 
-function sameTypeInner(a: Type, b: Type): boolean {
+function sameTypeInner(a: Type, b: Type, c: SameTypeClosure): boolean {
 	if (a.kind != b.kind) return isDoubleKind(a) && isDoubleKind(b);
 	return match (a.kind) {
-		TypeKind.Struct => sameStructType(a, b),
-		TypeKind.Enum => sameNominal(a, b),
-		TypeKind.Distinct => sameDistinct(a, b),
+		TypeKind.Struct => sameStructType(a, b, c),
+		TypeKind.Enum => sameNominalAux(a, b, c),
+		TypeKind.Distinct => sameDistinct(a, b, c),
 		TypeKind.GenericParam | TypeKind.StringLiteral | TypeKind.BooleanLiteral | TypeKind.NumberLiteral
 			| TypeKind.TypeReference => a.typeName == b.typeName,
-		TypeKind.EnumLiteral => sameEnumMember(a, b),
-		TypeKind.GenericInstance => sameGenericBase(a, b) && sameTypeList(a.typeChildren, b.typeChildren),
+		TypeKind.EnumLiteral => sameEnumMember(a, b, c),
+		TypeKind.GenericInstance => sameGenericBase(a, b, c) && sameTypeList(a.typeChildren, b.typeChildren, c),
 		TypeKind.Union | TypeKind.Tuple | TypeKind.Varargs
-			| TypeKind.Conditional | TypeKind.IndexedAccess | TypeKind.KeyOf => sameTypeList(a.typeChildren, b.typeChildren),
-		TypeKind.Function => sameTypeList(a.typeChildren, b.typeChildren) && sameInnerType(a, b),
-		TypeKind.SizedArray => a.typeValue == b.typeValue && sameInnerType(a, b),
-		TypeKind.Set => sameInnerType(a, b),
+			| TypeKind.Conditional | TypeKind.IndexedAccess | TypeKind.KeyOf => sameTypeList(a.typeChildren, b.typeChildren, c),
+		TypeKind.Function => sameTypeList(a.typeChildren, b.typeChildren, c) && sameInnerType(a, b, c),
+		TypeKind.SizedArray => a.typeValue == b.typeValue && sameInnerType(a, b, c),
+		TypeKind.Set => sameInnerType(a, b, c),
 		TypeKind.Array | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr
 			| TypeKind.Borrow | TypeKind.Var | TypeKind.Sink
-			| TypeKind.Lent => sameInnerType(a, b),
+			| TypeKind.Lent => sameInnerType(a, b, c),
 		// Primitives and every remaining kind carry no payload — same kind is
 		// the whole answer.
 		_ => true,
@@ -1570,7 +1661,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				if (leavesInlineConv(actual, formal)) return TypeRelation.None;
 				const formalParams = runtimeParams(formal);
 				const actualParams = runtimeParams(actual);
-				if (formalParams.length != actualParams.length) return TypeRelation.None;
+				if (formalParams.length != actualParams.length) return arityAdapts(actual, formal) ? adaptedRelation(formal, actual, formalParams, actualParams) : TypeRelation.None;
 				let worst = TypeRelation.Exact;
 				for (let pi = 0; pi < formalParams.length; pi += 1) {
 					if (sinkModeDiffers(formalParams[pi], actualParams[pi])) return TypeRelation.None;
@@ -1746,34 +1837,35 @@ export function scoreCandidate(paramTypes: Type[], argTypes: Type[]): int32 {
 
 export interface TypeParamFold {
 	names: string[];
+	params: Type[];
 	types: Type[];
 	chosen: int32[];
 	misfits: int32[];
 }
 
-export function foldTypeParamCandidates(candNames: string[], candTypes: Type[], skip: boolean[], fixedNames: string[], fixedTypes: Type[]): TypeParamFold {
-	const out: TypeParamFold = { names: [], types: [], chosen: [], misfits: [] };
-	for (let ci = 0; ci < candNames.length; ci += 1) {
-		const name = candNames[ci];
-		let seen = false;
-		for (const n of out.names) { if (n == name) { seen = true; break; } }
-		if (seen) continue;
-		let fixedIdx = -1;
-		for (let fi = 0; fi < fixedNames.length; fi += 1) { if (fixedNames[fi] == name) { fixedIdx = fi; break; } }
+export function foldTypeParamCandidates(candParams: Type[], candTypes: Type[], skip: boolean[], fixed: UnifyBindings): TypeParamFold {
+	const out: TypeParamFold = { names: [], params: [], types: [], chosen: [], misfits: [] };
+	const firsts: Type[] = [];
+	for (let ci = 0; ci < candParams.length; ci += 1) {
+		const param = candParams[ci];
+		if (firsts.indexOf(param) >= 0) continue;
+		firsts.push(param);
+		const fixedIdx = fixed.params.indexOf(param);
 		let chosen: int32 = -1;
-		let bound = fixedIdx >= 0 ? fixedTypes[fixedIdx] : candTypes[ci];
+		let bound = fixedIdx >= 0 ? fixed.types[fixedIdx] : candTypes[ci];
 		if (fixedIdx < 0) {
 			chosen = ci;
-			for (let cj = ci + 1; cj < candNames.length; cj += 1) {
-				if (candNames[cj] != name || skip[cj]) continue;
+			for (let cj = ci + 1; cj < candParams.length; cj += 1) {
+				if (candParams[cj] != param || skip[cj]) continue;
 				if (isAssignable(bound, candTypes[cj]) && !isAssignable(candTypes[cj], bound)) { bound = candTypes[cj]; chosen = cj; }
 			}
 		}
-		out.names.push(name);
+		out.names.push(param.typeName);
+		out.params.push(param);
 		out.types.push(bound);
 		out.chosen.push(chosen);
-		for (let cj = ci; cj < candNames.length; cj += 1) {
-			if (candNames[cj] != name || cj == chosen || skip[cj]) continue;
+		for (let cj = ci; cj < candParams.length; cj += 1) {
+			if (candParams[cj] != param || cj == chosen || skip[cj]) continue;
 			if (!isAssignable(candTypes[cj], bound)) out.misfits.push(cj);
 		}
 	}

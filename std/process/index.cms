@@ -19,6 +19,7 @@ import {
 // Re-export error types so callers do `import { exec, ProcessError } from "std/process"`.
 export { ProcessError, ProcessErrorKind } from "./errors";
 export { processError, spawnFailed, startFailed, notFound, nonZeroExit, signalTerminated, pipeError, isNotFound, isNonZeroExit, isRetryable } from "./errors";
+export { spawn, ChildProcess, ChildStream, ExitStatus, ReadChunk, SpawnOptions } from "./child";
 
 extern function msProcessArgc(): number;
 extern function msProcessArgvAt(idx: number): string;
@@ -88,7 +89,6 @@ export function cwd(): string {
 //
 // The command runs through /bin/sh (POSIX) or cmd.exe (Windows), so shell
 // features (pipes, redirects, glob, variable expansion) work naturally.
-// 16 MB cap per stream; longer outputs truncate.
 //
 // Naming convention: sync is the default in std/* — async variant would be
 // named `execAsync` (mirrors hashAsync, rsaGenerateAsync, etc.).

@@ -2,6 +2,8 @@
 // @stdout: send nx nx
 // @stdout: call ny-7 ny
 // @stdout: done
+// @ledger-slack(Keeper) 1
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: A struct passed to an actor method is copied into the message: the caller keeps its own
 // value. Before, the boxing of a struct argument moved it out of the caller's variable, so the
 // caller read an empty string after the send (`send nx ` on C, DRC and ORC, while JS printed the

@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType } from "../../checker/types";
 import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
@@ -1010,14 +1010,6 @@ export function hasUnionEq(t: Type): boolean {
 	return true;
 }
 
-export function promiseAllCellKey(arrT: Type): string {
-	return "pall|" + opTypeKey(arrT);
-}
-
-export function promiseAllCellName(arrT: Type): string {
-	return "msPromiseAllCell_" + hashToBase36(opTypeKey(arrT));
-}
-
 function typeInfoPointer(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 	if (!info.moduleLocal && hcrTypeInfoRef(g, info.cName)) return `&${info.cName}TypeInfo`;
 	const forwKey = "typeInfo:" + info.cName;
@@ -1051,12 +1043,6 @@ export function typeInfoRef(g: CGen, type: Type | null): string {
 export function ensureArcCellTypeInfo(g: CGen, pointeeType: Type): string {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
 	const info = demandedTypeInfo(g, arcCellKey(pointeeType), "Arc cell");
-	return info == null ? "NULL" : typeInfoPointer(g, info);
-}
-
-export function ensurePromiseAllCellTypeInfo(g: CGen, arrT: Type): string {
-	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
-	const info = demandedTypeInfo(g, promiseAllCellKey(arrT), "Promise.all cell");
 	return info == null ? "NULL" : typeInfoPointer(g, info);
 }
 
@@ -1108,13 +1094,6 @@ function refArrayCellLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 	return (bare != "" ? getArrayTypeName(bare) : arrCType) + "RefCell";
 }
 
-function promiseAllCellLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
-	const arrCType = getTypeDesc(g, info.subject);
-	const elemCName = arrCType.slice(0, arrCType.length - 5);
-	const bare = typeCacheGet(g.typeCache, "bare:" + elemCName);
-	return (bare != "" ? getArrayTypeName(bare) : arrCType) + "PallCell";
-}
-
 function objectTypeInfoLabel(info: Readonly<CTypeInfoDemand>): string {
 	const t = info.subject;
 	if (t.kind == TypeKind.GenericInstance || t.sym == null || t.typeName.indexOf("__", 0) >= 0 || isAnonTypeName(t.typeName)) return info.cName;
@@ -1126,7 +1105,6 @@ function typeInfoLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 		TypeInfoKind.RefArrayCell => refArrayCellLabel(g, info),
 		TypeInfoKind.Object => objectTypeInfoLabel(info),
 		TypeInfoKind.ArcCell => mangle(getTypeDesc(g, info.subject)) + "Arc",
-		TypeInfoKind.PromiseAllCell => promiseAllCellLabel(g, info),
 	};
 }
 
@@ -1156,7 +1134,7 @@ export function emitOwnedTypeInfos(g: CGen): void {
 		const label = typeInfoLabel(g, info);
 		const shown = info.kind != TypeInfoKind.Object ? "" : runtimeClassSym(info.subject) != null ? typeDisplayName(info.subject) : "Object";
 		const fields = `.name = "${label}", .isCyclic = ${info.trace != null ? "MS_TRUE" : "MS_FALSE"}, `
-			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${viaRegistry && !info.moduleLocal && info.kind == TypeInfoKind.Object ? "MS_TYPE_FLAG_HCR" : "0"}, .base = ${baseRef}`
+			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info.subject)}${viaRegistry && !info.moduleLocal && info.kind == TypeInfoKind.Object ? " | MS_TYPE_FLAG_HCR" : ""}, .base = ${baseRef}`
 			+ (shown != "" && shown != label ? `, .displayName = "${escapeCString(shown)}"` : "");
 		if (viaRegistry && !info.moduleLocal && !hcrTypeInfoRef(g, info.cName)) {
 			addCGenError(g, `internal: HCR image ${g.modulePath} owns TypeInfo ${info.cName} but no image module registers it`, 0, 0);
@@ -1198,6 +1176,10 @@ function emitTypeInfoDisplay(g: CGen, info: Readonly<CTypeInfoDemand>): void {
 function gateFlaglessUnknown(g: CGen, t: Type): void {
 	const pn = g.currentProc != null ? g.currentProc.name : "<toplevel>";
 	addCGenError(g, "internal: unresolved type (kind=" + (t.kind as number).toString() + ") reached codegen in " + g.modulePath + " proc " + pn, 0, 0);
+}
+
+function typeInfoFlags(subject: Type | null): string {
+	return subject != null && subject.typeFlags.has(TypeFlag.ArityAdapter) ? "MS_TYPE_FLAG_ARITY_ADAPTER" : "0";
 }
 
 export function getTypeDesc(g: CGen, t: Type | null): string {
@@ -1348,14 +1330,8 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 				// Substitute generic params in fields with concrete type args
 				const genericDecl = genericParamsOf(t);
 				if (genericDecl != "") {
-					const paramNames = splitTopLevel(genericDecl, ",");
-					let concType: Type = baseType;
-					for (let pi = 0; pi < paramNames.length; pi += 1) {
-						if (pi < t.typeChildren.length) {
-							concType = substituteType(concType, paramNames[pi].trim(), t.typeChildren[pi]);
-						}
-					}
-					// If substituteType returned the same object, clone to avoid mutating the shared base
+					let concType: Type = substituteInstanceArgs(t, baseType);
+					// If substitution returned the same object, clone to avoid mutating the shared base
 					if (concType == baseType) {
 						const newChildren: Type[] = [];
 						for (const c of concType.typeChildren) newChildren.push(c);
@@ -1376,13 +1352,7 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			if (baseType != null && baseType.kind == TypeKind.Union) {
 				const genericDecl = genericParamsOf(t);
 				if (genericDecl != "") {
-					const paramNames = splitTopLevel(genericDecl, ",");
-					let concType: Type = baseType;
-					for (let pi = 0; pi < paramNames.length; pi += 1) {
-						if (pi < t.typeChildren.length) {
-							concType = substituteType(concType, paramNames[pi].trim(), t.typeChildren[pi]);
-						}
-					}
+					let concType: Type = substituteInstanceArgs(t, baseType);
 					// Stamp instance name so genUnionType caches under it (Phase 1b emits typedef)
 					if (concType != baseType) {
 						concType.typeName = instName;
@@ -2036,7 +2006,7 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
 	if (shape == PromiseAllShape.None) return "";
 	const arrT = createArray(innerType);
 	genArrayType(g, arrT);
-	const arrTypeInfo = ensurePromiseAllCellTypeInfo(g, arrT);
+	const arrTypeInfo = ensureRefArrayCellTypeInfo(g, arrT);
 	if (shape == PromiseAllShape.Int32) {
 		emitPromiseAllInstance(g, "msFuture_int32", "int32_t", "int32_t", "int32_tArray", "int32_tArray__Content", "MS_COPY_SAME", arrTypeInfo);
 		return "msPromiseAllFor_msFuture_int32";

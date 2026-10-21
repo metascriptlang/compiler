@@ -80,18 +80,25 @@ export interface LspCursorParams {
 }
 
 // LSP characters count UTF-16 code units; checker columns count bytes from 1.
-export function lspByteColumn(source: string, line: int32, character: int32): int32 {
+function lspLineText(source: string, line: int32): string {
 	const text = source.byteSlice(lineOffset(source, line), lineOffset(source, line + 1));
-	const previous = text.charCodeAt(character - 1);
-	const current = text.charCodeAt(character);
+	const terminator = text.endsWith("\r\n") ? 2 : text.endsWith("\n") ? 1 : 0;
+	return text.byteSlice(0, text.byteLength - terminator);
+}
+
+export function lspByteColumn(source: string, line: int32, character: int32): int32 {
+	const text = lspLineText(source, line);
+	const unit = character < text.length ? character : text.length;
+	const previous = text.charCodeAt(unit - 1);
+	const current = text.charCodeAt(unit);
 	const inside = previous >= 0xD800 && previous <= 0xDBFF && current >= 0xDC00 && current <= 0xDFFF;
-	return text.slice(0, inside ? character - 1 : character).byteLength + 1;
+	return text.slice(0, inside ? unit - 1 : unit).byteLength + 1;
 }
 
 export function lspCharacter(source: string, line: int32, column: int32): int32 {
-	const start = lineOffset(source, line);
-	const end = start + (column > 0 ? column - 1 : 0);
-	return source.byteSlice(start, end < source.byteLength ? end : source.byteLength).length;
+	const text = lspLineText(source, line);
+	const end = column > 0 ? column - 1 : 0;
+	return text.byteSlice(0, end < text.byteLength ? end : text.byteLength).length;
 }
 
 export function lspExtractPosition(params: string, db: TransAmDb | null = null): LspCursorParams {

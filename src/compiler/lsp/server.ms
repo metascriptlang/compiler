@@ -48,7 +48,11 @@ import {
 	lspDispatch, publishPendingDiagnostics,
 	clientSupportsWatchedFileRegistration, watchedFilesRegistration,
 } from "./handlers/lifecycle";
-import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
+import { writeStderr, stdinDisableBuffering } from "std/io";
+import {
+	LspTransport, FrameEnd, lspReadFrame, stdioTransport, memoryTransport, createMemoryWire,
+} from "./transport";
+import { LspReplay, lspTranscript, lspScenarioByName } from "./replayScenarios";
 import { resolveRuntimeDir } from "../../utils/path";
 
 
@@ -109,8 +113,7 @@ function isAutoFired(method: string): boolean {
 
 // Coalesce queue: dedup auto-fired requests per (method, fileUri).
 // Preserves ordering. Never discards lifecycle or content-sync messages.
-function coalesceQueue(queue: QueuedMessage[]): QueuedMessage[] {
-	if (queue.length <= 1) return queue;
+function coalesceKeep(queue: QueuedMessage[]): boolean[] {
 	// Mark earlier duplicates of auto-fired requests for removal.
 	// Walk backwards — the last occurrence wins.
 	const keep: boolean[] = [];
@@ -142,22 +145,46 @@ function coalesceQueue(queue: QueuedMessage[]): QueuedMessage[] {
 		if (qm.method == "textDocument/didChange" && qm.fileUri.length > 0) {
 			let j = i + 1;
 			while (j < queue.length) {
-				if (queue[j].method == "textDocument/didChange" && queue[j].fileUri == qm.fileUri) {
-					keep[i] = false;
-					break;
+				if (queue[j].fileUri == qm.fileUri) {
+					if (queue[j].method == "textDocument/didChange") keep[i] = false;
+					if (!isAutoFired(queue[j].method)) break;
 				}
 				j = j + 1;
 			}
 		}
 		i = i + 1;
 	}
+	return keep;
+}
+
+function coalesceQueue(queue: QueuedMessage[]): QueuedMessage[] {
+	const keep = coalesceKeep(queue);
 	const result: QueuedMessage[] = [];
-	i = 0;
+	let i = 0;
 	while (i < queue.length) {
 		if (keep[i]) result.push(queue[i]);
 		i = i + 1;
 	}
 	return result;
+}
+
+const REQUEST_CANCELLED: number = -32800;
+const CONTENT_MODIFIED: number = -32801;
+const INVALID_REQUEST: number = -32600;
+
+function answerContentModified(io: LspTransport, qm: QueuedMessage): void {
+	const id = lspMessageId(qm.body);
+	if (id != "") io.write(lspFormatMessage(lspErrorResponse(id, CONTENT_MODIFIED, "ContentModified")));
+}
+
+function isCancelled(id: string, queue: QueuedMessage[], fromIdx: number): boolean {
+	for (let j = fromIdx; j < queue.length; j += 1) {
+		if (queue[j].method == "$/cancelRequest"
+			&& lspMessageId(lspGetObjectField(queue[j].body, "params")) == id) {
+			return true;
+		}
+	}
+	return false;
 }
 
 // Check if a request is superseded by a later didChange for the same file.
@@ -173,57 +200,66 @@ function isSuperseded(qm: QueuedMessage, queue: QueuedMessage[], fromIdx: number
 	return false;
 }
 
-// ===== Message Reading =====
-
-function readOneMessage(): string {
-	// Read headers until we find Content-Length (may not be the first header)
-	let contentLength = -1;
-	while (contentLength < 0) {
-		const line = readLine();
-		if (line.length == 0) return "";  // EOF or end-of-headers without Content-Length
-		contentLength = lspParseContentLength(line);
-	}
-	// Skip remaining headers until empty line
-	let sep = readLine();
-	while (sep.length > 0) { sep = readLine(); }
-	return readBytes(contentLength);
-}
-
 // ===== Main Loop =====
 
 export function lspRunServer(): void {
 	stdinDisableBuffering();  // Ensure select() sees all buffered data
-	const state = createServerState();
 	lspLog("MetaScript LSP server starting");
+	const exitCode = lspServe(stdioTransport());
+	lspLog("MetaScript LSP server exiting");
+	if (exitCode != 0) process.exit(exitCode);
+}
 
-	while (!state.shutdownRequested) {
+function streamExitCode(end: FrameEnd): int32 {
+	return end == FrameEnd.Truncated ? 1 : 0;
+}
+
+export function lspServe(io: LspTransport): int32 {
+	const state = createServerState();
+	while (true) {
 		// 1. Read first message (blocking wait)
-		const first = readOneMessage();
-		if (first.length == 0) break;
+		const first = lspReadFrame(io);
+		if (!first.ok) return streamExitCode(first.error);
 
 		// 2. Drain all buffered messages (non-blocking)
 		const queue: QueuedMessage[] = [];
-		queue.push(parseQueuedMessage(first));
-		while (stdinHasData()) {
-			const next = readOneMessage();
-			if (next.length == 0) break;
-			queue.push(parseQueuedMessage(next));
+		queue.push(parseQueuedMessage(first.value));
+		let streamOpen = true;
+		let streamEnd = FrameEnd.Closed;
+		while (streamOpen && io.hasBufferedData()) {
+			const next = lspReadFrame(io);
+			if (next.ok) {
+				queue.push(parseQueuedMessage(next.value));
+			} else {
+				streamOpen = false;
+				streamEnd = next.error;
+			}
 		}
 
 		// 3. Coalesce: dedup auto-fired + didChange per file
-		const coalesced = coalesceQueue(queue);
+		const keep = coalesceKeep(queue);
+		const coalesced: QueuedMessage[] = [];
+		for (let k = 0; k < queue.length; k += 1) {
+			if (keep[k]) coalesced.push(queue[k]);
+			else answerContentModified(io, queue[k]);
+		}
 
 		if (queue.length > 1) {
 			lspLog("queue: " + queue.length + " drained, " + coalesced.length + " after coalesce");
 		}
 
 		// 4. Process in order
-		let qi = 0;
-		while (qi < coalesced.length) {
+		for (let qi = 0; qi < coalesced.length; qi += 1) {
 			const qm = coalesced[qi];
 			// Skip requests superseded by a later didChange for the same file
 			if (isAutoFired(qm.method) && isSuperseded(qm, coalesced, qi + 1)) {
-				qi = qi + 1;
+				answerContentModified(io, qm);
+				continue;
+			}
+			if (qm.method == "exit") return state.shutdownRequested ? 0 : 1;
+			const id = qm.method == "$/cancelRequest" ? "" : lspMessageId(qm.body);
+			if (id != "" && isCancelled(id, coalesced, qi + 1)) {
+				io.write(lspFormatMessage(lspErrorResponse(id, REQUEST_CANCELLED, "RequestCancelled")));
 				continue;
 			}
 			try {
@@ -232,38 +268,44 @@ export function lspRunServer(): void {
 					if (response.length > 5000) {
 						writeStderr(`[LSP] sending response len=${response.length} method=${qm.method}\n`);
 					}
-					writeStdout(response);
+					io.write(response);
 				}
 			} catch (e) {
 				lspLog("Handler error: " + e);
 			}
-			qi = qi + 1;
 		}
 
 		// 5. Post-drain: publish diagnostics for the last changed file.
 		// Only the FINAL content state gets type-checked — intermediate keystrokes skipped.
 		const pendingDiag = publishPendingDiagnostics(state.db);
 		if (pendingDiag.length > 0) {
-			writeStdout(pendingDiag);
+			io.write(pendingDiag);
 		}
+		if (!streamOpen) return streamExitCode(streamEnd);
 	}
-
-	lspLog("MetaScript LSP server exiting");
+	return 0;
 }
 
 // ===== Message Processing =====
+
+function lspMessageId(msg: string): string {
+	const idNum = lspGetNumberField(msg, "id");
+	if (idNum >= 0) return lspJsonNumber(idNum);
+	const idText = lspGetField(msg, "id");
+	return idText != "" ? lspJsonString(idText) : "";
+}
 
 // Process a single JSON-RPC message. Returns wire-formatted response(s)
 // (Content-Length + JSON), or "" if no response needed.
 // For didChange, appends transitive diagnostics notifications.
 export function processMessage(msg: string, state: LspServerState): string {
 	const method = lspGetField(msg, "method");
-	const idNum = lspGetNumberField(msg, "id");
-	// LSP spec allows `id` to be int OR string — VSCode/Neovim/Zed send int,
-	// IntelliJ (LSP4IJ) sends string. Fall back to string lookup when no int.
-	const idAsStr = idNum >= 0 ? "" : lspGetField(msg, "id");
-	const idStr = idNum >= 0 ? lspJsonNumber(idNum) : (idAsStr != "" ? lspJsonString(idAsStr) : "");
+	const idStr = lspMessageId(msg);
 	const params = lspGetObjectField(msg, "params");
+
+	if (state.shutdownRequested) {
+		return idStr == "" ? "" : lspFormatMessage(lspErrorResponse(idStr, INVALID_REQUEST, "InvalidRequest: server is shutting down"));
+	}
 
 	// Track lifecycle
 	if (method == "initialize") {
@@ -494,4 +536,78 @@ test "wire completion: the server survives a file with an absent child slot" {
 	assert second.indexOf("\"id\":3", 0) > 0;
 	const hover = processMessage("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"" + KW_WIRE_URI + "\"},\"position\":{\"line\":0,\"character\":1}}}", state);
 	assert hover.length > 0;
+}
+
+// ===== Framed replay through lspServe =====
+// Scenarios live in replayScenarios.ms so a process driver runs the same ones.
+
+function replay(drains: string[][]): LspReplay {
+	const chunks: string[] = [];
+	for (const drain of drains) chunks.push(drain.join(""));
+	const wire = createMemoryWire(chunks);
+	const exitCode = lspServe(memoryTransport(wire));
+	return lspTranscript(wire.output, exitCode, wire.nextChunk);
+}
+
+function runMemoryScenario(name: string): string {
+	const found = lspScenarioByName(name);
+	if (!found.ok) {
+		writeStderr(found.error + "\n");
+		return found.error;
+	}
+	const scenario = found.value;
+	const r = replay(scenario.drains);
+	let failure = scenario.check(r);
+	const invariant = scenario.checkAnyBatching;
+	if (failure == "" && invariant != null) failure = invariant(r);
+	if (failure != "") writeStderr("replay: " + name + ": " + failure + "\n");
+	return failure;
+}
+
+test "replay: initialize, open with an error, then a fix clears it" {
+	assert runMemoryScenario("initialize, open with an error, then a fix clears it") == "";
+}
+
+test "replay: Content-Length counts bytes of a multibyte request body" {
+	assert runMemoryScenario("Content-Length counts bytes of a multibyte request body") == "";
+}
+
+test "replay: two edits in one drain publish once, in two drains publish twice" {
+	assert runMemoryScenario("two edits in one drain publish once") == "";
+	assert runMemoryScenario("two edits in two drains publish twice") == "";
+}
+
+test "replay: a request between two edits answers the edit before it" {
+	assert runMemoryScenario("a request between two edits answers the edit before it") == "";
+}
+
+test "replay: superseded and coalesced requests answer ContentModified" {
+	assert runMemoryScenario("superseded and coalesced requests answer ContentModified") == "";
+}
+
+test "replay: request ids come back exactly, number and string" {
+	assert runMemoryScenario("request ids come back exactly, number and string") == "";
+}
+
+test "replay: shutdown answers null and the server waits for exit" {
+	assert runMemoryScenario("shutdown answers null and the server waits for exit") == "";
+}
+
+test "replay: after shutdown a request answers InvalidRequest and a notification is dropped" {
+	assert runMemoryScenario("after shutdown a request answers InvalidRequest and a notification is dropped") == "";
+}
+
+test "replay: exit ends the loop at once, its code says whether shutdown came first" {
+	assert runMemoryScenario("exit after shutdown ends the loop at once with code 0") == "";
+	assert runMemoryScenario("exit without shutdown ends the loop with code 1") == "";
+	assert runMemoryScenario("input closed before exit ends the loop with code 0") == "";
+}
+
+test "replay: a frame cut short by EOF is not processed and ends the server" {
+	assert runMemoryScenario("a body cut short by EOF is not processed and ends the server with code 1") == "";
+	assert runMemoryScenario("a header cut short by EOF ends the server with code 0") == "";
+}
+
+test "replay: a cancelled request still in the drain answers RequestCancelled" {
+	assert runMemoryScenario("a cancelled request still in the drain answers RequestCancelled") == "";
 }

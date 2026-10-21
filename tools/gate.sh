@@ -12,19 +12,20 @@ RULES=(
   'build|^tools/.*\.ms$'
   'hcr|^src/test/hcr/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^runtime/hcr|^examples/hcrProbe/'
   'tests|^src/test/(c|js|handoff|fmt|checker3pass|lang)/|^src/test/helpers\.ms$'
+  'lsp|^src/compiler/(lsp|transam)/|^src/test/lsp/|^std/process/|^runtime/process\.h$'
   "tests,corpus|$EMITS"
   "solana|$SOLANA_SDK|$SOLANA_COMPILER"
   'guard|^(std|runtime)/solana/'
   'guard|^src/test/guard/'
-  'corpus|^src/test/corpus/'
-  'san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
+  'corpus,san|^src/test/corpus/'
+  'san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h|promise/|actor/)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
   'fmt|^src/(compiler/fmt|parser|lexer)/|^src/test/fmt/|^std/meta/'
   'boundary|^src/compiler/(buildConfig|cache|cc|commands|compile|defines|options|toolchain)\.ms$|^src/compiler/(meta/hostTable\.ms$|package/)|^src/index\.ms$|^src/test/nativeBuildBoundary\.ms$|^(runtime|vendor)/|^std/(fs|process)/'
 )
 DEFAULT_LANES="build suite"
-ORDER="tools build boundary suite hcr tests fmt corpus san guard solana"
-LADDER="build boundary suite hcr tests fmt corpus san guard solana"
-KNOWN_LANES="boundary suite hcr tests fmt corpus san guard solana"
+ORDER="tools build boundary suite lsp hcr tests fmt corpus san guard solana"
+LADDER="build boundary suite lsp hcr tests fmt corpus san guard solana"
+KNOWN_LANES="boundary suite lsp hcr tests fmt corpus san guard solana"
 RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|\.rms$|^src/test/corpus/run\.ms$'
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
 SELECT_STD='^std/.*\.(ms|cms|jms)$'
@@ -38,7 +39,7 @@ after another, and compare every red against src/test/known-red.json.
 
   --base <rev>   diff against <rev> (default: main); uncommitted paths count too
   --release      the full ladder, whatever the diff says
-  --lanes a,b    run exactly these lanes: tools build boundary suite hcr tests fmt corpus san guard solana
+  --lanes a,b    run exactly these lanes: tools build boundary suite lsp hcr tests fmt corpus san guard solana
   --dry-run      print the chosen lanes and the paths that pulled each one in
   --record       run the ladder on a clean main and rewrite known-red.json (macOS only)
   --local        with --record: write the reds the shared set lacks to this machine's
@@ -583,7 +584,7 @@ reds_of() {
       '
       ;;
     corpus|san) sed -n 's/^ *✗ FAIL \([^]]*\]\).*$/\1/p' "$log" ;;
-    guard|hcr) sed -n 's/^FAIL \([^:]*\):.*$/\1/p' "$log" ;;
+    guard|hcr|lsp) sed -n 's/^FAIL \([^:]*\):.*$/\1/p' "$log" ;;
     solana) sed -n 's/^FAIL solana \([^:]*\):.*$/\1/p' "$log" ;;
     fmt) sed -nE 's/^(LOSSY|UNSTABLE|NO-FMT|UNREADABLE) (.*\.ms).*$/\2/p' "$log" ;;
   esac | sort -u
@@ -1591,14 +1592,19 @@ src/utils/path.ms|build corpus suite tests
 src/index.ms|boundary build corpus suite tests
 src/analyzer/inject.ms|build corpus guard san suite tests
 runtime/drc.h|boundary build corpus guard san suite tests
+runtime/promise/future.h|boundary build corpus guard san suite tests
+runtime/actor/actor.h|boundary build corpus guard san suite tests
 runtime/hcr.c|boundary build corpus hcr suite tests
 src/codegen/c/expressions.ms|build corpus solana suite tests
 src/transform/lowering/deferLower.ms|build corpus guard san suite tests
 src/compiler/cc.ms|boundary build corpus solana suite tests
 src/compiler/compile.ms|boundary build corpus hcr solana suite tests
 src/compiler/meta/comptime.ms|build corpus solana suite tests
-src/compiler/lsp/server.ms|build suite
-src/compiler/transam/query.ms|build suite
+src/compiler/lsp/server.ms|build lsp suite
+src/compiler/transam/query.ms|build lsp suite
+src/test/lsp/run.ms|build lsp suite
+std/process/child.cms|boundary build corpus lsp suite tests
+runtime/process.h|boundary build corpus lsp suite tests
 src/compiler/package/install.ms|boundary build suite
 src/compiler/meta/hostTable.ms|boundary build corpus solana suite tests
 src/test/nativeBuildBoundary.ms|boundary build suite
@@ -1606,7 +1612,9 @@ src/compiler/fmt/printer.ms|build fmt suite
 src/test/c/json.ms|build suite tests
 src/test/helpers.ms|build suite tests
 src/test/fmt/run.ms|build fmt suite tests
-src/test/corpus/programs/804-enumNegativeValue.ms|build corpus suite
+src/test/corpus/programs/804-enumNegativeValue.ms|build corpus san suite
+src/test/corpus/run.ms|build corpus san suite
+src/test/corpus/hammerAsan.sh|build corpus san suite
 src/test/guard/run.ms|build guard suite
 src/test/hcr/run.ms|build hcr suite
 src/test/native/programs/x.ms|build suite
@@ -1943,6 +1951,7 @@ lane_cmd() {
     corpus) printf '%s%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$([ "$raiser_on" -eq 1 ] && printf 'MSCORPUS_RAISER=1 ')" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     fmt) printf '%s run src/test/fmt/run.ms' "$BUILDER" ;;
+    lsp) printf 'MSC=%s %s run --target=raiser src/test/lsp/run.ms' "$CAND" "$CAND" ;;
   esac
 }
 
@@ -2282,7 +2291,7 @@ lane_body() {
     guard) bounded run_sharded_lane guard GUARD_SHARD src/test/guard/run.ms "${GATE_GUARD_SHARDS:-$PAR}" >"$log" 2>&1; rc=$? ;;
     hcr) bounded run_sharded_lane hcr HCR_SHARD src/test/hcr/run.ms "${GATE_HCR_SHARDS:-$PAR}" >"$log" 2>&1; rc=$? ;;
     solana) with_slot bounded run_solana_lane >"$log" 2>&1; rc=$? ;;
-    boundary|corpus|san) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
+    boundary|corpus|san|lsp) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
     *) with_slot bounded env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
   esac
   if [ "$lane" = build ] && [ "$rc" -eq 0 ] && [ -n "$cand_key" ] && [ -z "$(git status --porcelain -- src std)" ] \
@@ -2292,7 +2301,7 @@ lane_body() {
   printf '\nSECS=%d\nRC=%d\nEND\n' "$((SECONDS - t0))" "$rc" >>"$log"
 }
 
-PHASES=("build" "tools boundary suite tests fmt" "hcr" "corpus guard" "san" "solana")
+PHASES=("build" "tools boundary suite tests fmt lsp" "hcr" "corpus guard" "san" "solana")
 
 start=$SECONDS
 ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0 stale_local=0

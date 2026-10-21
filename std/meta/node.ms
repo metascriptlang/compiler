@@ -86,6 +86,7 @@ export enum TypeFlag {
 	Spelled,              // the compiler spelled this name from an owner and arguments: it is the identity and no declaring symbol exists
 	OutParam,             // a Var parameter type written `out`: the callee fills it, so an unassigned variable may be passed
 	ValueUnion,           // a discriminated union declared `struct X = match`: a value, copied where a `type X = match` union is shared
+	ArityAdapter,         // env of a closure that drops the slot's trailing arguments: identity compares its adaptee
 }
 
 // ===== Attached Lifecycle Ops =====

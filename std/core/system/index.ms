@@ -216,6 +216,9 @@ extern function msUnionWrapMaybe(v: Ptr<void>, tag: int32): Ptr<void>;
 @compilerFunc
 extern function msMaybeGet(v: Ptr<void>, head: string, labels: string): Ptr<void>;
 
+@compilerFunc
+extern function msClosureSame(a: () => void, b: () => void): boolean;
+
 export class AbortSignal {
 	aborted: boolean;
 	reason: string;

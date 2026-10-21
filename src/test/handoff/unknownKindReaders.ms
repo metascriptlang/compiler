@@ -12,8 +12,8 @@
 //        diagnostic and emits a call to a specialisation that was never emitted.
 //
 // The Phase 2 kind split landed: user `unknown` is TypeKind.Unknown, the flag is gone, and
-// the former disagreement cells now assert agreement. Cells still marked DEBT
-// pin behaviour that flips at Phase 3 (pending-at-emission population).
+// the former disagreement cells now assert agreement. §4.1 is closed: the checker
+// refuses an uninferrable T.
 
 import { TypeKind } from "../../ast/node";
 import { createPrimitive, unknownType, isUnknownType, isPointerShapedForUnknown } from "../../checker/types";
@@ -100,28 +100,14 @@ test "control: a pointer-shaped value passes through the same alias" {
 	assert !hasErrors(ctx);
 }
 
-// ===== D. §4.1 — an uninferrable generic reaches codegen =====
+// ===== D. §4.1 — an uninferrable generic is refused by the checker =====
 
-test "DEBT: uninferrable T is not diagnosed and reaches codegen" {
-	// Desired behaviour after the split: c.ok === false with a "cannot infer T"
-	// diagnostic. Today the checker is silent and codegen emits a CALL to a
-	// specialisation that is never declared or defined — exactly one line in the
-	// whole module mentions it — so the failure surfaces in the C compiler as
-	// "call to undeclared function". Flipping this cell is the acceptance test.
-	// Counting how often the symbol is mentioned proves nothing — a correctly
-	// specialised call is mentioned exactly as often. The discriminator is that
-	// T is never bound into the symbol name, and the local falls back to the
-	// generic Ref repr instead of the element-typed one.
+test "an uninferrable T is diagnosed before codegen" {
 	const un = compileToC("function mk<T>(): T[] { return []; }\nfunction main(): void { const a = mk(); }");
 	const ex = compileToC("function mk<T>(): T[] { return []; }\nfunction main(): void { const a = mk<number>(); }");
-	assert un.ok, "uninferrable T is now diagnosed — flip this cell (see the §4.1 note in this file's header)";
+	assert !un.ok;
+	assert un.error.contains("cannot instantiate: 'T'");
 	assert ex.ok;
-	if (un.ok && ex.ok) {
-		assert ex.value.contains("mk__number__"), "control: an explicit targ must bind T into the symbol name";
-		assert ex.value.contains("msNumberArray* a_1_"), "control: an explicit targ must pick the element-typed repr";
-		assert !un.value.contains("mk__number__"), "T is now bound — §4.1 changed";
-		assert un.value.contains("msRefArray* a_1_"), "the unbound-T fallback repr changed — §4.1 changed";
-	}
 }
 
 // ===== E. emission seam (gateFlaglessUnknown, codegen/c/types.ms) — armed as
@@ -135,8 +121,10 @@ test "a Pending type at getTypeDesc raises the internal error (B4, Nim else-bran
 	assert ctx != null;
 	assert !hasErrors(ctx);
 	const g = createCGen(ctx, "gate.ms");
+	assert g.errors.length == 0;
 	getTypeDesc(g, createPrimitive(TypeKind.Pending));
-	assert hasErrors(ctx), "seam went silent again — gateFlaglessUnknown must addError (codegen/c/types.ms)";
+	assert g.errors.length == 1, "seam went silent again — gateFlaglessUnknown must addCGenError (codegen/c/types.ms)";
+	assert g.errors[0].message.contains("internal: unresolved type");
 }
 
 test "emission gate control: user unknown emits void* with no error" {
@@ -144,5 +132,5 @@ test "emission gate control: user unknown emits void* with no error" {
 	assert ctx != null;
 	const g = createCGen(ctx, "gate.ms");
 	assert getTypeDesc(g, unknownType()) == "void*";
-	assert !hasErrors(ctx);
+	assert g.errors.length == 0;
 }

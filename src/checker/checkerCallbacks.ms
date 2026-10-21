@@ -8,7 +8,8 @@ import { SourceLocation } from "../ast/node";
 type ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type | null) => void;
 type StmtCheckerFn = (ctx: CheckerContext, node: Node) => void;
 type BodyCheckerFn = (ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[] | null) => Symbol[];
-type InstantiateGenericFn = (sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation) => Symbol | null;
+type LocalInstanceCheckerFn = (ctx: CheckerContext, node: Node, declared: (sym: Symbol) => void) => Symbol | null;
+type InstantiateGenericFn = (sym: Symbol, params: Type[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation) => Symbol | null;
 type EvalComptimeBlockFn = (node: Node, ctx: CheckerContext) => Node;
 type ExpandMacroInvocationFn = (node: Node, ctx: CheckerContext, depth: int32) => Node;
 type ApplyDecoratorsFn = (ctx: CheckerContext, program: Node) => void;
@@ -29,7 +30,11 @@ let bodyCheckerFn: BodyCheckerFn = (ctx: CheckerContext, sym: Symbol, params: st
 	return [];
 };
 
-let instantiateGenericFn: InstantiateGenericFn = (sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol | null => {
+let localInstanceCheckerFn: LocalInstanceCheckerFn = (ctx: CheckerContext, node: Node, declared: (sym: Symbol) => void): Symbol | null => {
+	return null;
+};
+
+let instantiateGenericFn: InstantiateGenericFn = (sym: Symbol, params: Type[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol | null => {
 	return null;
 };
 
@@ -81,8 +86,12 @@ export function callCheckFunctionBody(ctx: CheckerContext, sym: Symbol, params: 
 	return bodyCheckerFn(ctx, sym, params, body, paramLocs);
 }
 
-export function callInstantiateGeneric(sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol | null {
-	return instantiateGenericFn(sym, paramNames, concreteTypes, ctx, callLoc);
+export function callCheckLocalInstance(ctx: CheckerContext, node: Node, declared: (sym: Symbol) => void): Symbol | null {
+	return localInstanceCheckerFn(ctx, node, declared);
+}
+
+export function callInstantiateGeneric(sym: Symbol, params: Type[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol | null {
+	return instantiateGenericFn(sym, params, concreteTypes, ctx, callLoc);
 }
 
 export function callEvalComptimeBlock(node: Node, ctx: CheckerContext): Node {
@@ -103,6 +112,10 @@ export function registerCheckStmt(fn: StmtCheckerFn): void {
 
 export function registerCheckFunctionBody(fn: BodyCheckerFn): void {
 	bodyCheckerFn = fn;
+}
+
+export function registerCheckLocalInstance(fn: LocalInstanceCheckerFn): void {
+	localInstanceCheckerFn = fn;
 }
 
 export function registerInstantiateGeneric(fn: InstantiateGenericFn): void {

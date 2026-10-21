@@ -6,7 +6,7 @@
  */
 
 @import("node:process", { exit, cwd });
-@import("node:child_process", { execSync, spawnSync });
+@import("node:child_process", { spawnSync });
 @import("node:fs", { existsSync, readdirSync });
 @import("node:os", { constants });
 
@@ -17,7 +17,6 @@ extern class process {
 	static extern arch: string;
 	static extern argv: string[];
 }
-extern function execSync(cmd: string): string;
 extern function spawnSync(cmd: string, args: string[], options: SpawnOpts): SpawnResult;
 extern function existsSync(path: string): boolean;
 extern function readdirSync(path: string): string[];
@@ -25,7 +24,7 @@ extern function readdirSync(path: string): string[];
 interface SpawnOpts { stdio: string; }
 interface SpawnResult { status: number; }
 
-import { ProcessError, startFailed, nonZeroExit, signalTerminated } from "./errors";
+import { ProcessError, spawnFailed, startFailed, notFound, nonZeroExit, signalTerminated, pipeError } from "./errors";
 
 export { ProcessError, ProcessErrorKind } from "./errors";
 export { processError, spawnFailed, startFailed, notFound, nonZeroExit, signalTerminated, pipeError, isNotFound, isNonZeroExit, isRetryable } from "./errors";
@@ -53,9 +52,16 @@ export function fileExists(path: string): boolean {
 	return existsSync(path);
 }
 
-export function exec(command: string): number {
-	execSync(command);
-	return 0;
+export function exec(command: string): Result<string, ProcessError> {
+	const r = spawnCapture(command, [], "", true);
+	if (r.startError != "") return Result.err(spawnFailed(command, r.startError));
+	if (r.pipeError != "") return Result.err(pipeError(command, r.pipeError));
+	if (r.signal != 0) return Result.err(signalTerminated(command, r.signal, r.output, r.errorOutput));
+	if (r.exitCode != 0) {
+		if (r.exitCode == 127) return Result.err(notFound(command));
+		return Result.err(nonZeroExit(command, r.exitCode, r.output, r.errorOutput));
+	}
+	return Result.ok(r.output);
 }
 
 // Node-style `execFile`: no shell, forward-slash paths accepted natively.
@@ -66,16 +72,22 @@ export function execFile(path: string, args: string[] = []): number {
 
 interface Captured {
 	startError: string;
+	startErrno: int32;
+	pipeError: string;
 	exitCode: int32;
 	signal: int32;
 	output: string;
 	errorOutput: string;
 }
 
-function spawnCapture(path: string, args: string[], cwd: string): Captured {
-	@emit(`const r = spawnSync(${path}, ${args}, { cwd: ${cwd} === "" ? undefined : ${cwd}, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+function spawnCapture(path: string, args: string[], cwd: string, shell: boolean): Captured {
+	@emit(`const r = spawnSync(${path}, ${args}, { cwd: ${cwd} === "" ? undefined : ${cwd}, shell: ${shell}, encoding: "utf8", maxBuffer: Infinity });
+const code = r.error ? (typeof r.error.code === "string" ? r.error.code : "UNKNOWN") : "";
+const started = !r.error || r.pid !== 0;
 return {
-	startError: r.error ? (typeof r.error.code === "string" ? r.error.code : "UNKNOWN") : "",
+	startError: started ? "" : code,
+	startErrno: started ? 0 : (constants.errno[code] ?? 0),
+	pipeError: started && r.error ? code : "",
 	exitCode: r.status ?? 0,
 	signal: r.signal ? (constants.signals[r.signal] ?? 0) : 0,
 	output: r.stdout ?? "",
@@ -85,25 +97,54 @@ return {
 }
 
 export function execFileCapture(path: string, args: string[] = [], cwd: string = ""): Result<string, ProcessError> {
-	const r = spawnCapture(path, args, cwd);
+	const r = spawnCapture(path, args, cwd, false);
 	if (r.startError != "") return Result.err(startFailed(path, r.startError));
+	if (r.pipeError != "") return Result.err(pipeError(path, r.pipeError));
 	if (r.signal != 0) return Result.err(signalTerminated(path, r.signal, r.output, r.errorOutput));
 	if (r.exitCode != 0) return Result.err(nonZeroExit(path, r.exitCode, r.output, r.errorOutput));
 	return Result.ok(r.output);
 }
 
+export interface ExecFileResult {
+	started: boolean;
+	pipeOk: boolean;
+	exitCode: int32;
+	signal: int32;
+	output: string;
+	errorOutput: string;
+	startErrno: int32;
+}
+
+export function execFileResult(path: string, args: string[] = [], cwd: string = ""): ExecFileResult {
+	const r = spawnCapture(path, args, cwd, false);
+	return {
+		started: r.startError == "",
+		pipeOk: r.pipeError == "",
+		exitCode: r.exitCode,
+		signal: r.signal,
+		output: r.output,
+		errorOutput: r.errorOutput,
+		startErrno: r.startErrno,
+	};
+}
+
 // env — Deno-style namespaced env API.
 export class env {
 	static get(name: string): string {
-		return "";
+		@emit(`return process.env[${name}] ?? "";`);
+		unreachable;
 	}
 
 	static set(name: string, value: string): boolean {
-		return false;
+		@emit(`process.env[${name}] = ${value};
+return true;`);
+		unreachable;
 	}
 
 	static delete(name: string): boolean {
-		return false;
+		@emit(`delete process.env[${name}];
+return true;`);
+		unreachable;
 	}
 }
 

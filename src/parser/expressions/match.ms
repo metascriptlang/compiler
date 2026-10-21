@@ -214,6 +214,8 @@ function parseSinglePattern(state: ParserState): ExprResult {
 }
 
 // ===== Tests =====
+
+import "../statements/core"; // registers parser callbacks
 test "number patterns" { assert parseOk("match (x) { 1 => \"one\", _ => \"other\" }"); }
 
 test "string patterns" { assert parseOk("match (s) { \"a\" => 1, \"b\" => 2, _ => 0 }"); }

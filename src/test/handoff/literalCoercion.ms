@@ -107,11 +107,9 @@ test "literal + literal is int32" {
 
 // ===== D: Float literals don't coerce =====
 
-test "float literal does not coerce to int32" {
+test "float literal into int32 is an error" {
 	const src = "const x: int32 = 3.14;";
-	// 3.14 is not a whole number → literal stays as number
-	// declType overrides anyway, no error
-	assert strictErrorCount(src) == 0;
+	assert strictErrorCount(src) == 1;
 }
 
 // ===== E: Chained expressions =====
@@ -260,9 +258,7 @@ test "a local constant is judged at a narrower slot by its folded value, as a mo
 
 test "negative literal out of range for uint8 is error" {
 	const src = "const x: uint8 = -1;";
-	// -1 is UnaryExpr so won't trigger literal check directly
-	// but the inner literal 1 fits in uint8, so no error from literal handler
-	assert strictErrorCount(src) == 0;
+	assert strictErrorCount(src) == 1;
 }
 
 // ===== K: fitNode — implicit narrowing HiddenStdConv insertion =====
@@ -279,10 +275,9 @@ test "widening int8 to int32 has no HiddenStdConv" {
 	assert strictErrorCount(src) == 0;
 }
 
-test "narrowing number to int8 assignment" {
-	// Assignment: x = someNumber where x is int8
+test "narrowing number to int8 assignment is an error" {
 	const src = "let x: int8 = 0 as int8;\nconst y: number = 42;\nx = y;";
-	assert strictErrorCount(src) == 0;
+	assert strictErrorCount(src) == 1;
 }
 
 test "same type no conversion" {

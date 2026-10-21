@@ -11,7 +11,7 @@ import { findChar, splitTopLevel } from "../utils/string";
 import { WriteSite, isLocation, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc, writeThroughGraphBackedge } from "./assignable";
 import { callCheckStmt, callDemandReturn, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
-import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal } from "./compat";
+import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, arityAdapts } from "./compat";
 import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash } from "./context";
 import { comparesAtBase, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol } from "./fit";
 import { checkImportCall } from "./importCall";
@@ -20,14 +20,14 @@ import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, markInitialized, mergeInitBranches, restoreInitState, saveInitState, unwrittenOutParam } from "./initTracker";
 import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
 import { ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
-import { bindFromExplicitTypeArgs, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation, builtinTypeNamed, thenSignatureOf, thenablePromised } from "./resolvePass";
+import { bindFromExplicitTypeArgs, explicitTypeArgs, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation, builtinTypeNamed, thenSignatureOf, thenablePromised } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive, isLiteralTree } from "./speculate";
 import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, moduleScopeNamed, enumMemberName } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createTypeRef, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGeneric, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, numberType, peelToStructOrUnion, setMinArity, stringType, substituteAllParams, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, peelThrough, PEEL_ALL, PEEL_MAX_DEPTH, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, isPrimitiveKind, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType } from "./types";
+import { isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callThroughProxy, checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
 
@@ -123,9 +123,10 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 			concreteTypes.push(giCtx.typeChildren[pi]);
 		}
 	}
-	for (let pi = 0; pi < trimmedParamNames.length && calleeSym != null; pi += 1) {
+	const declared = calleeSym != null ? declaredTypeParams(calleeSym, trimmedParamNames.length) : [];
+	for (let pi = 0; pi < declared.length; pi += 1) {
 		const bound = concreteTypes[pi];
-		const constraint = unmetConstraint(calleeSym.symbolType, trimmedParamNames[pi], bound, trimmedParamNames, concreteTypes);
+		const constraint = unmetConstraint(declared[pi], bound, declared, concreteTypes);
 		if (constraint == null) continue;
 		addError(ctx, `Type '${typeDisplayName(bound)}' does not satisfy constraint '${typeDisplayName(constraint)}' for type parameter '${trimmedParamNames[pi]}' in '${calleeName}'`,
 			callee.location.line, callee.location.column);
@@ -134,8 +135,8 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 	if (baseSym == null) return { type: calleeType, instance: null };
 	ensureShaped(baseSym, ctx);
 	// Build GenericInstance — same structure as type annotation path in resolvePass.
-	// Avoids instantiateGeneric which creates shared type references that cause DRC
-	// use-after-free when the original base type is freed (substituteType shallow copies).
+	// Avoids substituting the base type, which creates shared type references that cause DRC
+	// use-after-free when the original base type is freed (substitution shallow copies).
 	const isRefBase = baseSym.symbolType.kind == TypeKind.Ref;
 	let baseType = baseSym.symbolType;
 	if (isRefBase && baseType.typeReturn != null) baseType = baseType.typeReturn;
@@ -412,7 +413,7 @@ function deriveCallBindings(
 	const bindings = createUnifyBindings();
 	if (calleeSym != null) {
 		const names = extractGenericNames(getGenericDeclFlags(calleeSym.declNode));
-		mergeUnifyBindings(bindings, bindFromExplicitTypeArgs(callNode, names, ctx));
+		mergeUnifyBindings(bindings, bindFromExplicitTypeArgs(callNode, ownTypeParams(calleeSym, names), ctx));
 	}
 	mergeUnifyBindings(bindings, bindFromExpectedReturn(calleeType, expectedType));
 	return bindings;
@@ -424,7 +425,7 @@ function deriveCallBindings(
 function contextResultSlot(calleeSym: Symbol | null, formal: Type | null, context: UnifyBindings): Type | null {
 	if (calleeSym == null || formal == null || context.names.length == 0) return null;
 	if (calleeSym.builtinKind != "ResultOk" && calleeSym.builtinKind != "ResultErr") return null;
-	const slot = instantiateGeneric(formal, context.names, context.types);
+	const slot = substituteBound(formal, context);
 	return hasGenericParams(slot) ? null : slot;
 }
 
@@ -755,17 +756,22 @@ function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: str
 	fillDefaults(ctx, cd.arguments, fnDefaults, totalParams, defaultOffset, paramTypes, definingModulePath, paramNames, receiverSlot);
 }
 
-function instanceBindings(names: string[], args: Type[]): UnifyBindings {
+function instanceBindings(params: Type[], args: Type[]): UnifyBindings {
 	const b = createUnifyBindings();
-	for (let i = 0; i < names.length; i += 1) {
-		b.names.push(names[i]);
-		b.types.push(args[i]);
-	}
+	for (let i = 0; i < params.length; i += 1) bindParam(b, params[i], args[i]);
 	return b;
 }
 
 function checkNewArgs(ctx: CheckerContext, args: Node[]): void {
 	for (const arg of args) { callCheckExpr(ctx, arg, null); }
+}
+
+function fitPositionalArgs(ctx: CheckerContext, args: Node[], fields: Type | null): void {
+	for (let ai = 0; ai < args.length; ai += 1) {
+		const formal = fields != null && ai < fields.typeChildren.length ? fields.typeChildren[ai] : null;
+		callCheckExpr(ctx, args[ai], formal);
+		if (formal != null && args[ai].nodeType != null) args[ai] = fitNode(ctx, args[ai], formal, args[ai].nodeType);
+	}
 }
 
 function typeNewCallee(ctx: CheckerContext, callee: Node): void {
@@ -899,8 +905,8 @@ function takesContext(n: Node): boolean {
 }
 
 function resolvedValueContext(ctx: CheckerContext, node: Node, expected: Type | null): Type | null {
-	const spelled = bindFromExplicitTypeArgs(node, ["T"], ctx);
-	if (spelled.types.length > 0) return spelled.types[0];
+	const spelled = explicitTypeArgs(node, ctx, 1);
+	if (spelled.length > 0 && spelled[0] != null) return spelled[0];
 	return expected != null && isAwaitable(expected) ? awaitedType(expected) : null;
 }
 
@@ -1022,7 +1028,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 				&& expected.typeName == id.name && (newSym == null || !hasFlag(newSym, SymbolFlag.HasConstructor))) {
 			typeNewCallee(ctx, d.newCallee);
 			node.nodeType = expected;
-			checkNewArgs(ctx, d.newArguments);
+			fitPositionalArgs(ctx, d.newArguments, newSym != null ? positionalFieldsOf(expected) : null);
 			return expected;
 		}
 		// Array with expected element type: new Array(32) in typed context.
@@ -1127,18 +1133,19 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 				}
 				const classBindings = innerType != null && innerType.kind == TypeKind.GenericInstance
 					&& innerType.typeChildren.length == classGenericNames.length
-					? instanceBindings(classGenericNames, innerType.typeChildren)
-					: bindFromExplicitTypeArgs(node, classGenericNames, ctx);
+					? instanceBindings(ownTypeParams(classSym, classGenericNames), innerType.typeChildren)
+					: bindFromExplicitTypeArgs(node, ownTypeParams(classSym, classGenericNames), ctx);
 				if (classBindings.names.length > 0) {
 					const substituted: Type[] = [];
 					for (const t of rawCtorTypes) {
-						substituted.push(instantiateGeneric(t, classBindings.names, classBindings.types));
+						substituted.push(substituteBound(t, classBindings));
 					}
 					ctorFormals = substituted;
 				}
 			}
 		}
 	}
+	const fields = hasCtor ? null : positionalFieldsOf(innerType);
 	const ctorRestIdx = hasCtor && ctorFormals != null && ctorFormals.length > 0
 		&& ctorFormals[ctorFormals.length - 1].kind == TypeKind.Varargs ? ctorFormals.length - 1 : -1;
 	let ai = 0;
@@ -1150,13 +1157,13 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			argExpected = restElem.kind == TypeKind.Inferred || d.newArguments[ai].kind == NodeKind.SpreadExpr ? restArr : restElem;
 		} else if (hasCtor && ctorFormals != null && ai < ctorFormals.length) {
 			argExpected = ctorFormals[ai];
-		} else if (!hasCtor && innerType != null && innerType.typeChildren != null && ai < innerType.typeChildren.length) {
-			argExpected = innerType.typeChildren[ai];
+		} else if (fields != null && ai < fields.typeChildren.length) {
+			argExpected = fields.typeChildren[ai];
 		}
 		callCheckExpr(ctx, d.newArguments[ai], argExpected);
 		iterateSpreadSource(ctx, d.newArguments[ai]);
 		const argType = d.newArguments[ai].nodeType;
-		if (hasCtor && argExpected != null && argType != null) {
+		if (argExpected != null && argType != null) {
 			d.newArguments[ai] = fitNode(ctx, d.newArguments[ai], argExpected, argType);
 		}
 		ai = ai + 1;
@@ -1489,8 +1496,9 @@ function checkNewArity(ctx: CheckerContext, node: Node, classSym: Symbol, innerT
 	} else {
 		if (refuseMisplacedSpread(ctx, args, [], 0)) return;
 		if (classSym.symbolKind != SymbolKind.Class && classSym.symbolKind != SymbolKind.Struct) return;
-		if (innerType == null || innerType.kind != TypeKind.Struct) return;
-		allowed = innerType.typeNames.length;
+		const fields = positionalFieldsOf(innerType);
+		if (fields == null) return;
+		allowed = fields.typeNames.length;
 	}
 	if (args.length < required) {
 		addError(ctx, `Too few arguments to 'new ${classSym.name}': expected at least ${required}, got ${args.length}`, node.location.line, node.location.column);
@@ -1839,7 +1847,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		d.callee.resolvedSym = parentCtor;
 		let ctorParamTypes = ctorFormalTypes(parentCtor);
 		if (substNames.length > 0 && ctorParamTypes != null && parentInst != null) {
-			ctorParamTypes = ctorParamTypes.map((t: Type): Type => substituteAllParams(t, substNames, parentInst.typeChildren));
+			const substParams = declaredTypeParams(parentSym, substNames.length);
+			ctorParamTypes = ctorParamTypes.map((t: Type): Type => substituteTypeParams(t, substParams, parentInst.typeChildren));
 		}
 		const expectedCount = ctorParamTypes != null ? ctorParamTypes.length : 0;
 		for (let ai = 0; ai < d.arguments.length; ai += 1) {
@@ -2057,9 +2066,9 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 							// never coerces to the element type.
 							unifyArrayReceiver(extType.typeChildren[0], objType, eb);
 							if (winner.sym != null && winner.sym.declNode != null && winner.sym.declNode.kind == NodeKind.FunctionDecl) {
-								for (let ri = 0; ri < eb.names.length; ri += 1) reportUnmetConstraint(ctx, extType, ri, eb, me.property, node.location);
+								for (let ri = 0; ri < eb.names.length; ri += 1) reportUnmetConstraint(ctx, ri, eb, me.property, node.location);
 							}
-							if (eb.names.length > 0) extType = instantiateGeneric(extType, eb.names, eb.types);
+							if (eb.names.length > 0) extType = substituteBound(extType, eb);
 							extRecvBindings = eb;
 						}
 						calleeType = stripReceiverParam(extType);
@@ -2113,7 +2122,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	//      actual arg type to extract new bindings; subsequent args see those
 	//      bindings via on-demand formal substitution.
 	//
-	// Bindings drive each arg's expectedType via on-demand instantiateGeneric.
+	// Bindings drive each arg's expectedType via on-demand substituteBound.
 	// Kept SEPARATE from calleeType so the existing arg-mismatch check at
 	// line ~1831 still sees GenericParam and correctly skips — a concrete-arg
 	// call nested in an incompatible outer context (e.g. `console.log(max(3, 7))`
@@ -2163,13 +2172,13 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			: null as unknown as Type;
 		if (_formal != null) {
 			if (_isGenericCall && _argBindings.names.length > 0) {
-				paramExpected = instantiateGeneric(_formal, _argBindings.names, _argBindings.types);
+				paramExpected = substituteBound(_formal, _argBindings);
 			} else {
 				paramExpected = _formal;
 			}
 			if (_contextBindings.names.length > 0 && hasGenericParams(paramExpected)
 				&& takesContext(ctx, d.arguments[ai])) {
-				paramExpected = instantiateGeneric(paramExpected, _contextBindings.names, _contextBindings.types);
+				paramExpected = substituteBound(paramExpected, _contextBindings);
 			}
 			if (_isGenericCall && hasGenericParams(paramExpected)
 				&& literalParamsAwaitFormal(d.arguments[ai])
@@ -2177,17 +2186,17 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				&& node.resolvedSym.declNode != null
 				&& node.resolvedSym.declNode.kind == NodeKind.FunctionDecl) {
 				mergeUnifyBindings(_argBindings, bindFromLiteralAnnotations(ctx, d.arguments[ai], _formal));
-				paramExpected = instantiateGeneric(_formal, _argBindings.names, _argBindings.types);
-				if (_contextBindings.names.length > 0) paramExpected = instantiateGeneric(paramExpected, _contextBindings.names, _contextBindings.types);
+				paramExpected = substituteBound(_formal, _argBindings);
+				if (_contextBindings.names.length > 0) paramExpected = substituteBound(paramExpected, _contextBindings);
 				refuseUnboundLiteralParam(ctx, d.arguments[ai], paramExpected);
 				const declParams = extractGenericNames(getGenericDeclFlags(node.resolvedSym.declNode));
-				for (const declParam of declParams) {
-					let alreadyBound = false;
-					for (const bn of _argBindings.names) { if (bn == declParam) { alreadyBound = true; break; } }
-					if (!alreadyBound) {
-						paramExpected = substituteType(paramExpected, declParam, inferredType());
-					}
+				const declared = declaredTypeParams(node.resolvedSym, declParams.length);
+				const unbound = createUnifyBindings();
+				for (let di = 0; di < declParams.length; di += 1) {
+					const gp = di < declared.length ? declared[di] : null;
+					if (gp != null && boundSlot(_argBindings, gp) < 0) bindParam(unbound, gp, inferredType());
 				}
+				paramExpected = applySubstitutions(paramExpected, unbound);
 			}
 			// Non-empty array/object literal under a still-generic formal:
 			// drop the expected type so the literal infers bottom-up and the
@@ -2683,8 +2692,9 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 					&& !isMaybeType(argHeld)
 					&& (args[pi].kind == NodeKind.NullLiteral
 						|| argTypes[pi].kind == TypeKind.Null
-						|| isAssignable(argTypes[pi], maybeFormal.typeReturn))) {
-				args[pi] = synthMaybeWrap(args[pi], maybeFormal, argTypes[pi]);
+						|| isAssignable(argTypes[pi], maybeFormal.typeReturn)
+						|| arityAdapts(argTypes[pi], maybeFormal.typeReturn))) {
+				args[pi] = synthMaybeWrap(args[pi], maybeFormal, argTypes[pi], ctx);
 				argTypes[pi] = maybeFormal;
 			}
 			// `A | null` meeting `A | B | null`. Same reason the wrap above
@@ -2708,7 +2718,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				argTypes[pi] = paramType;
 			}
 			if (instantiateGenericFnValue(ctx, args[pi], paramType)) argTypes[pi] = args[pi].nodeType!;
-			const thunkArg = synthClosureThunk(args[pi], peelSink(paramType), argTypes[pi]);
+			const thunkArg = synthClosureThunk(args[pi], peelSink(paramType), argTypes[pi], ctx);
 			if (thunkArg != null as unknown as Node) {
 				args[pi] = thunkArg;
 				argTypes[pi] = paramType;
@@ -2811,7 +2821,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 			const paramValue = skipModifier(paramType);
 			if (!formalAwaitsBinding && paramValue != null && matchUnionBehindInstance(paramValue).kind == TypeKind.Union && pi < args.length && argTypes[pi] != null) {
 				const argNow = args[pi].nodeType != null ? args[pi].nodeType! : argTypes[pi];
-				const uw = widenVariantToUnion(args[pi], paramValue, argNow);
+				const uw = widenVariantToUnion(args[pi], paramValue, argNow, ctx);
 				if (uw != null as unknown as Node) args[pi] = uw;
 			}
 			if (paramValue != null && matchUnionBehindInstance(paramValue).kind != TypeKind.Union && pi < args.length && argTypes[pi] != null) {
@@ -2843,34 +2853,30 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 	// positional bindings instead — `Result.ok<int32, string>(5)` needs both.
 	const argNames = splitTopLevel(explicitArg, ",");
 	if (argNames.length > 1) {
-		let genericNames: string[] = [];
+		let params: Type[] = [];
 		if (node.resolvedSym != null) {
-			genericNames = extractGenericNames(getGenericDeclFlags(node.resolvedSym.declNode));
+			params = ownTypeParams(node.resolvedSym, extractGenericNames(getGenericDeclFlags(node.resolvedSym.declNode)));
 		}
-		if (genericNames.length == 0) {
+		if (params.length == 0) {
 			const cd = node.data as CallExprData;
 			if (cd.callee != null && cd.callee.kind == NodeKind.MemberExpr) {
 				const me = cd.callee.data as MemberExprData;
 				if (me.object != null && me.object.kind == NodeKind.Identifier) {
-					const classParams = me.object.resolvedSym != null ? symGenericParams(me.object.resolvedSym) : genericParamsOf(me.object.nodeType);
-					if (classParams != "") {
-						genericNames = extractGenericNames("gen:" + classParams);
-					}
+					const objSym = me.object.resolvedSym;
+					const classNames = splitTopLevel(objSym != null ? genericParamNamesOf(symGenericParams(objSym)) : genericParamsOf(me.object.nodeType), ",");
+					params = objSym != null ? declaredTypeParams(objSym, classNames.length) : me.object.nodeType != null ? declaredParamsOf(me.object.nodeType, classNames.length) : [];
 				}
 			}
 		}
-		if (genericNames.length == 0) {
+		if (params.length == 0) {
 			return inferGenericReturn(ctx, fnType, argTypes, expectedType, node);
 		}
 		const eb = createUnifyBindings();
-		for (let i = 0; i < argNames.length && i < genericNames.length; i += 1) {
+		for (let i = 0; i < argNames.length && i < params.length; i += 1) {
 			const argName = argNames[i].trim();
 			if (argName == "") continue;
 			const resolved = resolveAnnotation(argName, ctx, node.location.line, node.location.column);
-			if (resolved != null && !isUnresolvedType(resolved)) {
-				eb.names.push(genericNames[i]);
-				eb.types.push(resolved);
-			}
+			if (resolved != null && !isUnresolvedType(resolved)) bindParam(eb, params[i], resolved);
 		}
 		if (eb.names.length == 0) {
 			return inferGenericReturn(ctx, fnType, argTypes, expectedType, node);
@@ -2907,15 +2913,13 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 			sgRecordSym(ctx, node.location.line, typeArgCol, typeArgCol + explicitArg.length, resolvedSym, concreteType, symKind, explicitArg, "", false);
 		}
 	}
-	// Find first generic param name in the return type and substitute
-	const genericParamName = findFirstGenericParamName(returnType);
-	// Single type arg → bind to first generic param found
-	if (genericParamName != "") {
+	// Single type arg → bind to first generic param found in the return type
+	const firstParam = findFirstGenericParam(returnType);
+	if (firstParam != null) {
 		const single = createUnifyBindings();
-		single.names.push(genericParamName);
-		single.types.push(concreteType);
+		bindParam(single, firstParam, concreteType);
 		fitArgsToBoundFormals(ctx, node, fnType, single);
-		returnType = substituteType(returnType, genericParamName, concreteType);
+		returnType = substituteBound(returnType, single);
 		// Reference parity: eagerly instantiate body for concrete GenericInstance
 		if (returnType.kind == TypeKind.GenericInstance && returnType.typeReturn == null) {
 			const declParams = genericParamsOf(returnType);
@@ -2965,10 +2969,7 @@ function bindFromUnfitDestination(fnType: Type, bindings: UnifyBindings, fixed: 
 	if (!argumentsMatchFormals(fnType, argTypes, bindings)) return false;
 	const context = bindFromExpectedReturn(fnType, expectedType);
 	const rebound = createUnifyBindings();
-	for (let bi = 0; bi < bindings.names.length; bi += 1) {
-		rebound.names.push(bindings.names[bi]);
-		rebound.types.push(bindings.types[bi]);
-	}
+	for (let bi = 0; bi < bindings.names.length; bi += 1) bindAt(rebound, bindings, bi);
 	mergeUnifyBindings(rebound, context);
 	const current = applySubstitutions(ret, rebound);
 	if (hasGenericParams(current) || !slotRefuses(current, expectedType)) return false;
@@ -3011,26 +3012,23 @@ function computeTypeArgCol(node: Node): int32 {
 	return 0;
 }
 
-// Find the first GenericParam name in a type tree (non-recursive to avoid array-by-value bug)
+function findFirstGenericParam(t: Type | null): Type | null {
+	if (t == null) return null;
+	if (t.kind == TypeKind.GenericParam) return t;
+	const viaReturn = findFirstGenericParam(t.typeReturn);
+	if (viaReturn != null) return viaReturn;
+	const viaExtra = findFirstGenericParam(t.typeExtra);
+	if (viaExtra != null) return viaExtra;
+	for (const c of t.typeChildren) {
+		const found = findFirstGenericParam(c);
+		if (found != null) return found;
+	}
+	return null;
+}
+
 function findFirstGenericParamName(t: Type): string {
-	if (t == null) return "";
-	if (t.kind == TypeKind.GenericParam) return t.typeName;
-	// Check typeReturn (Result.okType, Array.elemType, Function.returnType, etc.)
-	if (t.typeReturn != null) {
-		const name = findFirstGenericParamName(t.typeReturn);
-		if (name != "") return name;
-	}
-	// Check typeExtra (Result.errType, Map.valueType, etc.)
-	if (t.typeExtra != null) {
-		const name = findFirstGenericParamName(t.typeExtra);
-		if (name != "") return name;
-	}
-	// Check typeChildren (Function params, Union members, etc.)
-	for (let i = 0; i < t.typeChildren.length; i += 1) {
-		const name = findFirstGenericParamName(t.typeChildren[i]);
-		if (name != "") return name;
-	}
-	return "";
+	const gp = findFirstGenericParam(t);
+	return gp != null ? gp.typeName : "";
 }
 
 // Apply assertion narrowing: `asserts paramName is TargetType`. Mutates the
@@ -3094,7 +3092,7 @@ export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: 
 			const formal = applySubstitutions(fnType.typeChildren[ai], argBindings);
 			const formalValue = skipModifier(formal);
 			if (formalValue != null && matchUnionBehindInstance(formalValue).kind == TypeKind.Union) {
-				const uw = widenVariantToUnion(arg, formalValue, arg.nodeType);
+				const uw = widenVariantToUnion(arg, formalValue, arg.nodeType, ctx);
 				if (uw != null as unknown as Node) cd.arguments[ai] = uw;
 			}
 			const adoptedGen = tryAdoptAnonStruct(ctx, arg, formal, arg.nodeType);
@@ -3159,12 +3157,12 @@ function findBindingIndex(b: UnifyBindings, name: string): number {
 	return -1;
 }
 
-// Apply every binding in `b` to type `t` via substituteType. Used by callers
+// Apply every binding in `b` to type `t` by identity. Used by callers
 // that need to convert a formal type containing GenericParam(s) into its
 // concrete substituted form after Pass 1/2/3 binding.
 function applySubstitutions(t: Type, b: UnifyBindings): Type {
 	if (b.names.length == 0) return t;
-	return substituteAllParams(t, b.names, b.types);
+	return substituteBound(t, b);
 }
 
 function hasBindingName(b: UnifyBindings, name: string): boolean {
@@ -3287,29 +3285,28 @@ function isGenericInstanceMethod(sym: Symbol): boolean {
 	return !md.methodIsStatic && isGenericFn(md.methodFlags);
 }
 
-function collectArgCandidates(bound: UnifyBindings, raw: UnifyBindings, argIdx: int32, arg: Node, candNames: string[], candTypes: Type[], candFrom: int32[], candSkip: boolean[]): void {
-	for (let bi = 0; bi < raw.names.length; bi += 1) {
+function collectArgCandidates(bound: UnifyBindings, raw: UnifyBindings, argIdx: int32, arg: Node, candParams: Type[], candTypes: Type[], candFrom: int32[], candSkip: boolean[]): void {
+	for (let bi = 0; bi < raw.params.length; bi += 1) {
 		const t = raw.types[bi];
-		if (hasGenericParams(t) || findBindingIndex(bound, raw.names[bi]) != -1) continue;
-		candNames.push(raw.names[bi]);
+		if (hasGenericParams(t) || boundSlot(bound, raw.params[bi]) != -1) continue;
+		candParams.push(raw.params[bi]);
 		candTypes.push(t);
 		candFrom.push(argIdx);
 		candSkip.push(bindingConflictSkipArg(arg) || isUnresolvedType(t));
 	}
 }
 
-function reportTypeParamMisfits(ctx: CheckerContext, fold: TypeParamFold, candNames: string[], candTypes: Type[], candFrom: int32[], cd: CallExprData, conflicted: int32[]): void {
+function reportTypeParamMisfits(ctx: CheckerContext, fold: TypeParamFold, candParams: Type[], candTypes: Type[], candFrom: int32[], cd: CallExprData, conflicted: int32[]): void {
 	for (const m of fold.misfits) {
 		const argIdx = candFrom[m];
 		let reported = false;
 		for (const c of conflicted) { if (c == argIdx) { reported = true; break; } }
 		if (reported) continue;
-		let k = 0;
-		for (let ni = 0; ni < fold.names.length; ni += 1) { if (fold.names[ni] == candNames[m]) { k = ni; break; } }
+		const k = fold.params.indexOf(candParams[m]);
 		const arg = cd.arguments[argIdx];
 		addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(argIdx)
 			+ ": got " + typeDisplayName(candTypes[m]) + ", expected " + typeDisplayName(fold.types[k])
-			+ " — '" + candNames[m] + "' was bound by argument " + String(candFrom[fold.chosen[k]]),
+			+ " — '" + candParams[m].typeName + "' was bound by argument " + String(candFrom[fold.chosen[k]]),
 			arg.location.line, arg.location.column);
 		conflicted.push(argIdx);
 	}
@@ -3386,19 +3383,23 @@ function refuseUnboundLiteralParam(ctx: CheckerContext, lit: Node, slot: Type | 
 	}
 }
 
-function inDeclaredOrder(eb: UnifyBindings, receiverBindings: UnifyBindings | null, genericNames: string[]): UnifyBindings {
-	const order: string[] = [];
-	if (receiverBindings != null) for (const n of receiverBindings.names) if (!order.includes(n)) order.push(n);
-	for (const n of genericNames) if (!order.includes(n)) order.push(n);
-	for (const n of eb.names) if (!order.includes(n)) order.push(n);
+function inDeclaredOrder(eb: UnifyBindings, receiverBindings: UnifyBindings | null, own: Type[]): UnifyBindings {
 	const out = createUnifyBindings();
-	for (const n of order) {
-		const bi = findBindingIndex(eb, n);
-		if (bi < 0) continue;
-		out.names.push(n);
-		out.types.push(eb.types[bi]);
+	if (receiverBindings != null) {
+		for (let ri = 0; ri < receiverBindings.params.length; ri += 1) takeBinding(out, eb, receiverBindings.params[ri]);
 	}
+	for (const gp of own) takeBinding(out, eb, gp);
+	for (let bi = 0; bi < eb.params.length; bi += 1) takeBinding(out, eb, eb.params[bi]);
 	return out;
+}
+
+function takeBinding(out: UnifyBindings, eb: UnifyBindings, param: Type): void {
+	const bi = boundSlot(eb, param);
+	if (bi >= 0 && boundSlot(out, eb.params[bi]) < 0) bindAt(out, eb, bi);
+}
+
+function ownTypeParams(sym: Symbol, genericNames: string[]): Type[] {
+	return sym.typeParams.length == genericNames.length ? sym.typeParams : [];
 }
 
 function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType: Type, argTypes: Type[], flags: string, expectedType: Type | null = null as unknown as Type, receiverBindings: UnifyBindings | null = null as unknown as UnifyBindings): Type {
@@ -3414,12 +3415,13 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	const eb = createUnifyBindings();
 	const ebFrom: int32[] = [];
 	const conflicted: int32[] = [];
-	mergeUnifyBindings(eb, bindFromExplicitTypeArgs(node, genericNames, ctx));
+	const own = ownTypeParams(sym, genericNames);
+	mergeUnifyBindings(eb, bindFromExplicitTypeArgs(node, own, ctx));
 	if (receiverBindings != null) mergeUnifyBindings(eb, receiverBindings);
 	while (ebFrom.length < eb.names.length) ebFrom.push(-1);
 	// Pass 1: unify args against params to derive bindings.
 	const limit = argTypes.length < calleeType.typeChildren.length ? argTypes.length : calleeType.typeChildren.length;
-	const candNames: string[] = [];
+	const candParams: Type[] = [];
 	const candTypes: Type[] = [];
 	const candFrom: int32[] = [];
 	const candSkip: boolean[] = [];
@@ -3433,16 +3435,15 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			// concrete object literal.
 			const ab = createUnifyBindings();
 			unifyType(calleeType.typeChildren[i], argTypes[i], ab);
-			collectArgCandidates(eb, ab, i, cd.arguments[i], candNames, candTypes, candFrom, candSkip);
+			collectArgCandidates(eb, ab, i, cd.arguments[i], candParams, candTypes, candFrom, candSkip);
 		}
 	}
-	const fold = foldTypeParamCandidates(candNames, candTypes, candSkip, [], []);
-	for (let k = 0; k < fold.names.length; k += 1) {
-		eb.names.push(fold.names[k]);
-		eb.types.push(fold.types[k]);
+	const fold = foldTypeParamCandidates(candParams, candTypes, candSkip, createUnifyBindings());
+	for (let k = 0; k < fold.params.length; k += 1) {
+		bindParam(eb, fold.params[k], fold.types[k]);
 		ebFrom.push(candFrom[fold.chosen[k]]);
 	}
-	reportTypeParamMisfits(ctx, fold, candNames, candTypes, candFrom, cd, conflicted);
+	reportTypeParamMisfits(ctx, fold, candParams, candTypes, candFrom, cd, conflicted);
 	const fixedNames: string[] = [];
 	for (let bi = 0; bi < eb.names.length; bi += 1) {
 		if (ebFrom[bi] < 0) fixedNames.push(eb.names[bi]);
@@ -3466,8 +3467,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	// return Array<T> vs expected Array<Color>.
 	if (argumentsMatchFormals(calleeType, argTypes, eb)) mergeUnifyBindings(eb, bindFromExpectedReturn(calleeType, expectedType));
 	if (eb.names.length == 0) return null as unknown as Type;
-	const declType = sym.symbolType != null ? sym.symbolType : calleeType;
-	if (reportUnmetConstraints(ctx, node, declType, eb, ebFrom, receiverBindings)) return null as unknown as Type;
+	if (reportUnmetConstraints(ctx, node, eb, ebFrom, receiverBindings)) return null as unknown as Type;
 
 	// Post-mono arg reconciliation: substitute generic params in formal types
 	// and apply Maybe-wrap for null literal args against value-type Maybe<T>
@@ -3509,15 +3509,15 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			unifyType(argSym.symbolType.typeChildren[gi], substFormal.typeChildren[gi], gbRaw);
 		}
 		unifyType(argSym.symbolType.typeReturn, substFormal.typeReturn, gbRaw);
-		const gNames: string[] = [];
+		const gParams: Type[] = [];
 		const gTypes: Type[] = [];
 		const gFrom: int32[] = [];
 		const gSkip: boolean[] = [];
-		collectArgCandidates(createUnifyBindings(), gbRaw, ai, argN, gNames, gTypes, gFrom, gSkip);
-		const gFold = foldTypeParamCandidates(gNames, gTypes, gSkip, [], []);
-		if (gFold.misfits.length > 0) { reportTypeParamMisfits(ctx, gFold, gNames, gTypes, gFrom, cd, conflicted); continue; }
+		collectArgCandidates(createUnifyBindings(), gbRaw, ai, argN, gParams, gTypes, gFrom, gSkip);
+		const gFold = foldTypeParamCandidates(gParams, gTypes, gSkip, createUnifyBindings());
+		if (gFold.misfits.length > 0) { reportTypeParamMisfits(ctx, gFold, gParams, gTypes, gFrom, cd, conflicted); continue; }
 		if (gFold.names.length == 0) continue;
-		const argInst = callInstantiateGeneric(argSym, gFold.names, gFold.types, ctx, argN.location);
+		const argInst = callInstantiateGeneric(argSym, gFold.params, gFold.types, ctx, argN.location);
 		if (argInst == null) continue;
 		argN.resolvedSym = argInst;
 		argN.nodeType = argInst.symbolType;
@@ -3526,18 +3526,8 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		unifyType(calleeType.typeChildren[ai], argInst.symbolType, ib);
 		for (let ii = 0; ii < ib.names.length; ii += 1) {
 			if (hasGenericParams(ib.types[ii])) continue;
-			let found = false;
-			for (let ei = 0; ei < eb.names.length; ei += 1) {
-				if (eb.names[ei] == ib.names[ii]) {
-					eb.types[ei] = ib.types[ii];
-					found = true;
-					break;
-				}
-			}
-			if (!found) {
-				eb.names.push(ib.names[ii]);
-				eb.types.push(ib.types[ii]);
-			}
+			const ei = boundSlot(eb, ib.params[ii]);
+			if (ei >= 0) eb.types[ei] = ib.types[ii]; else bindAt(eb, ib, ii);
 		}
 	}
 	for (let pi = 0; pi < reconcileLimit; pi += 1) {
@@ -3546,7 +3536,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		const substituted = applySubstitutions(calleeType.typeChildren[pi], eb);
 		if (substituted == null) continue;
 		if (arg.nodeType != null && !hasGenericParams(substituted)) {
-			const thunkArg = synthClosureThunk(arg, substituted, arg.nodeType);
+			const thunkArg = synthClosureThunk(arg, substituted, arg.nodeType, ctx);
 			if (thunkArg != null as unknown as Node) {
 				cd.arguments[pi] = thunkArg;
 				if (pi < argTypes.length) argTypes[pi] = substituted;
@@ -3571,7 +3561,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			}
 			if (arg.nodeType == null) arg.nodeType = carried;
 			if (carried != substituted && !isMaybeType(arg.nodeType)) {
-				cd.arguments[pi] = synthMaybeWrap(arg, substituted, arg.nodeType);
+				cd.arguments[pi] = synthMaybeWrap(arg, substituted, arg.nodeType, ctx);
 				if (pi < argTypes.length) argTypes[pi] = substituted;
 				continue;
 			}
@@ -3588,7 +3578,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		}
 		const substitutedValue = skipModifier(substituted);
 		if (substitutedValue != null && matchUnionBehindInstance(substitutedValue).kind == TypeKind.Union && arg.nodeType != null) {
-			const uw = widenVariantToUnion(arg, substitutedValue, arg.nodeType);
+			const uw = widenVariantToUnion(arg, substitutedValue, arg.nodeType, ctx);
 			if (uw != null as unknown as Node) {
 				cd.arguments[pi] = uw;
 				if (pi < argTypes.length) argTypes[pi] = substitutedValue;
@@ -3604,11 +3594,11 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			continue;
 		}
 		if (arg.kind == NodeKind.NullLiteral) {
-			cd.arguments[pi] = synthMaybeWrap(arg, maybeSubstituted, arg.nodeType!);
+			cd.arguments[pi] = synthMaybeWrap(arg, maybeSubstituted, arg.nodeType!, ctx);
 			if (pi < argTypes.length) argTypes[pi] = maybeSubstituted;
 		} else if (arg.nodeType != null && !isMaybeType(arg.nodeType)
-				&& isAssignable(arg.nodeType, maybeSubstituted.typeReturn)) {
-			cd.arguments[pi] = synthMaybeWrap(arg, maybeSubstituted, arg.nodeType);
+				&& (isAssignable(arg.nodeType, maybeSubstituted.typeReturn) || arityAdapts(arg.nodeType, maybeSubstituted.typeReturn))) {
+			cd.arguments[pi] = synthMaybeWrap(arg, maybeSubstituted, arg.nodeType, ctx);
 			if (pi < argTypes.length) argTypes[pi] = maybeSubstituted;
 		}
 	}
@@ -3650,8 +3640,8 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			cd.arguments[ai].location.line, cd.arguments[ai].location.column);
 	}
 
-	const declared = inDeclaredOrder(eb, receiverBindings, genericNames);
-	const instSym = callInstantiateGeneric(sym, declared.names, declared.types, ctx, node.location);
+	const declared = inDeclaredOrder(eb, receiverBindings, own);
+	const instSym = callInstantiateGeneric(sym, declared.params, declared.types, ctx, node.location);
 	if (instSym == null) return null as unknown as Type;
 
 	node.resolvedSym = instSym;
@@ -3660,20 +3650,20 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	return instSym.symbolType;
 }
 
-function reportUnmetConstraints(ctx: CheckerContext, node: Node, declType: Type, eb: UnifyBindings, ebFrom: int32[], receiverBindings: UnifyBindings | null): boolean {
+function reportUnmetConstraints(ctx: CheckerContext, node: Node, eb: UnifyBindings, ebFrom: int32[], receiverBindings: UnifyBindings | null): boolean {
 	const cd = node.data as CallExprData;
 	let unmetAny = false;
 	for (let i = 0; i < eb.names.length; i += 1) {
-		if (receiverBindings != null && hasBindingName(receiverBindings, eb.names[i])) continue;
+		if (receiverBindings != null && boundSlot(receiverBindings, eb.params[i]) >= 0) continue;
 		const from = i < ebFrom.length ? ebFrom[i] : -1;
 		const at = from >= 0 && from < cd.arguments.length ? cd.arguments[from].location : node.location;
-		if (reportUnmetConstraint(ctx, declType, i, eb, getCalleeName(cd.callee), at)) unmetAny = true;
+		if (reportUnmetConstraint(ctx, i, eb, getCalleeName(cd.callee), at)) unmetAny = true;
 	}
 	return unmetAny;
 }
 
-function reportUnmetConstraint(ctx: CheckerContext, declType: Type, i: int32, eb: UnifyBindings, calleeName: string, at: SourceLocation): boolean {
-	const unmet = unmetConstraint(declType, eb.names[i], eb.types[i], eb.names, eb.types);
+function reportUnmetConstraint(ctx: CheckerContext, i: int32, eb: UnifyBindings, calleeName: string, at: SourceLocation): boolean {
+	const unmet = unmetConstraint(eb.params[i], eb.types[i], eb.params, eb.types);
 	if (unmet == null) return false;
 	addError(ctx, `Type '${typeDisplayName(eb.types[i])}' does not satisfy constraint '${typeDisplayName(unmet)}' for type parameter '${eb.names[i]}' in '${calleeName}'`,
 		at.line, at.column);
@@ -3904,7 +3894,7 @@ function winnerFormals(ctx: CheckerContext, callNode: Node, winnerSym: Symbol, w
 	if (winnerType.kind != TypeKind.Function || !hasGenericParams(winnerType)) return { checked: winnerType, explicit: winnerType };
 	let explicit = winnerType;
 	const bindings = deriveCallBindings(ctx, callNode, winnerSym, winnerType, null);
-	if (bindings.names.length > 0) explicit = instantiateGeneric(winnerType, bindings.names, bindings.types);
+	if (bindings.names.length > 0) explicit = substituteBound(winnerType, bindings);
 	for (const ai of genericArgOrder(ctx, args, true)) {
 		if (skipMask[ai] || argTypes[ai] == null || ai >= winnerType.typeChildren.length) continue;
 		const fwd = createUnifyBindings();
@@ -3912,7 +3902,7 @@ function winnerFormals(ctx: CheckerContext, callNode: Node, winnerSym: Symbol, w
 		mergeUnifyBindings(bindings, fwd);
 	}
 	mergeUnifyBindings(bindings, bindFromExpectedReturn(winnerType, expectedType));
-	const checked = bindings.names.length > 0 ? instantiateGeneric(winnerType, bindings.names, bindings.types) : winnerType;
+	const checked = bindings.names.length > 0 ? substituteBound(winnerType, bindings) : winnerType;
 	return { checked, explicit };
 }
 
@@ -3937,7 +3927,7 @@ function fitsFormal(argType: Type, formal: Type): boolean {
 	if (!hasGenericParams(formal)) return isAssignable(argType, formal);
 	const bindings = createUnifyBindings();
 	unifyType(formal, argType, bindings);
-	const bound = bindings.names.length > 0 ? instantiateGeneric(formal, bindings.names, bindings.types) : formal;
+	const bound = bindings.names.length > 0 ? substituteBound(formal, bindings) : formal;
 	return isAssignable(argType, bound);
 }
 
@@ -3948,7 +3938,7 @@ function signatureReturn(sigType: Type, argTypes: Type[]): Type | null {
 	for (let ai = 0; ai < argTypes.length && ai < sigType.typeChildren.length; ai += 1) {
 		if (argTypes[ai] != null) unifyType(sigType.typeChildren[ai], argTypes[ai], bindings);
 	}
-	const bound = bindings.names.length > 0 ? instantiateGeneric(ret, bindings.names, bindings.types) : ret;
+	const bound = bindings.names.length > 0 ? substituteBound(ret, bindings) : ret;
 	return hasGenericParams(bound) ? null : bound;
 }
 
@@ -3959,6 +3949,17 @@ function isHiddenImplementation(cand: Symbol, set: Symbol): boolean {
 		if (hasFlag(o, SymbolFlag.OverloadSig)) return true;
 	}
 	return false;
+}
+
+function takesAdaptedArg(cand: Type, argTypes: Type[], skipMask: boolean[]): boolean {
+	for (let ai = 0; ai < argTypes.length && ai < cand.typeChildren.length; ai += 1) {
+		if (!skipMask[ai] && arityAdapts(argTypes[ai], cand.typeChildren[ai])) return true;
+	}
+	return false;
+}
+
+function adapterTie(a: Type, b: Type, argTypes: Type[], skipMask: boolean[]): boolean {
+	return takesAdaptedArg(a, argTypes, skipMask) || takesAdaptedArg(b, argTypes, skipMask);
 }
 
 function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Node, expectedType: Type | null = null as unknown as Type): Type {
@@ -4035,7 +4036,7 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 			bestIdx = ci;
 			bestScore = score;
 			ambiguous = false;
-		} else if (cmp == 0) {
+		} else if (cmp == 0 && !adapterTie(candType, candidates[bestIdx], argTypes, skipMask)) {
 			ambiguous = true;
 		}
 		ci = ci + 1;
@@ -4523,7 +4524,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 			const eb = createUnifyBindings();
 			unifyArrayReceiver(srcType.typeChildren[0], objType, eb);
 			if (eb.names.length > 0) {
-				srcType = instantiateGeneric(srcType, eb.names, eb.types);
+				srcType = substituteBound(srcType, eb);
 			}
 		}
 		if (!exts[ei].isStatic && srcType.typeChildren.length > 0) {
@@ -4637,7 +4638,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		const recvBindings = createUnifyBindings();
 		unifyArrayReceiver(getExtFnType(exts[idx]).typeChildren[0], objType, recvBindings);
 		if (recvBindings.names.length > 0 && bindingsCoverDecl(recvBindings, extWinnerSym.declNode)) {
-			const instSym = callInstantiateGeneric(extWinnerSym, recvBindings.names, recvBindings.types, ctx, callNode.location);
+			const instSym = callInstantiateGeneric(extWinnerSym, recvBindings.params, recvBindings.types, ctx, callNode.location);
 			if (instSym != null) {
 				callNode.resolvedSym = instSym;
 				winnerType = stripReceiverParam(instSym.symbolType);
@@ -4651,7 +4652,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 			const methodInst = tryInstantiateGenericCallee(ctx, callNode, winnerType, argTypes, getGenericDeclFlags(extWinnerSym.declNode), null, recvBindings);
 			if (methodInst != null) winnerType = stripReceiverParam(methodInst);
 		} else if (recvBindings.names.length > 0) {
-			const instSym = callInstantiateGeneric(extWinnerSym, recvBindings.names, recvBindings.types, ctx, callNode.location);
+			const instSym = callInstantiateGeneric(extWinnerSym, recvBindings.params, recvBindings.types, ctx, callNode.location);
 			if (instSym != null) {
 				ensureShaped(instSym, ctx);
 				callNode.resolvedSym = instSym;
@@ -4695,7 +4696,7 @@ function rankWithContextArgs(ctx: CheckerContext, exts: ExtensionMethod[], candi
 function boundByExpectedReturn(candidate: Type, expectedType: Type | null): Type {
 	if (candidate.kind != TypeKind.Function || !hasGenericParams(candidate)) return candidate;
 	const bindings = bindFromExpectedReturn(candidate, expectedType);
-	return bindings.names.length > 0 ? instantiateGeneric(candidate, bindings.names, bindings.types) : candidate;
+	return bindings.names.length > 0 ? substituteBound(candidate, bindings) : candidate;
 }
 
 function formatCandidateSig(name: string, fnType: Type): string {
@@ -4774,7 +4775,7 @@ function resolveExtensionOverloadIdx(ctx: CheckerContext, candidates: Type[], ar
 				bestIdx = i;
 				bestScore = score;
 				ambiguous = false;
-			} else if (cmp == 0 && !onlySkipped) {
+			} else if (cmp == 0 && !onlySkipped && !adapterTie(candidates[i], candidates[bestIdx], argTypes, skipMask)) {
 				ambiguous = true;
 			}
 		}
@@ -4796,7 +4797,7 @@ function isPointerInC(t: Type, ctx: CheckerContext): boolean {
 
 // Validate object literal construction against a discriminated union type.
 // Finds the discriminant field in the literal, resolves the variant, and validates fields.
-export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: ObjectLiteralData, unionType: Type | null, stampType: Type | null): Type {
+export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: ObjectLiteralData, unionType: Type | null, stampType: Type | null, spreadDisc: Type | null): Type {
 	if (unionType == null) return inferredType();
 	const discName = unionType.typeNames[0]; // discriminant field name (e.g. "kind")
 
@@ -4811,7 +4812,7 @@ export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, 
 		ki = ki + 1;
 	}
 
-	if (discIdx < 0) {
+	if (discIdx < 0 && spreadDisc == null) {
 		// No discriminant field — fall back to checking all properties without validation
 		for (const prop of d.properties) {
 			callCheckExpr(ctx, prop, null);
@@ -4821,23 +4822,32 @@ export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, 
 		return node.nodeType;
 	}
 
-	// Check the discriminant expression first to get its value
-	const discExpr = d.properties[discIdx];
-	callCheckExpr(ctx, discExpr, unionType.typeExtra);
-
 	let variantIdx = -1;
-	if (discExpr.kind == NodeKind.BooleanLiteral) {
-		variantIdx = findVariantByBooleanDiscriminant(unionType, discName, (discExpr.data as BooleanLiteralData).boolValue);
+	let discExpr: Node | null = null;
+	if (spreadDisc != null) {
+		if (spreadDisc.kind == TypeKind.BooleanLiteral) variantIdx = findVariantByBooleanDiscriminant(unionType, discName, booleanLiteralValue(spreadDisc));
+		else if (spreadDisc.kind == TypeKind.EnumLiteral) variantIdx = findVariantByEnumMember(unionType, spreadDisc);
+		if (variantIdx < 0) {
+			addError(ctx, `the spread gives '${discName}' as ${typeDisplayName(spreadDisc)}, which names no member of '${unionType.typeName}': give '${discName}' after the spread`, node.location.line, node.location.column);
+		}
 	} else {
-		const lit = enumMemberLiteralOf(discExpr);
-		if (lit != null) variantIdx = findVariantByEnumMember(unionType, lit);
+		// Check the discriminant expression first to get its value
+		const written = d.properties[discIdx];
+		callCheckExpr(ctx, written, unionType.typeExtra);
+		discExpr = written;
+		if (written.kind == NodeKind.BooleanLiteral) {
+			variantIdx = findVariantByBooleanDiscriminant(unionType, discName, (written.data as BooleanLiteralData).boolValue);
+		} else {
+			const lit = enumMemberLiteralOf(written);
+			if (lit != null) variantIdx = findVariantByEnumMember(unionType, lit);
+		}
 	}
 
 	if (variantIdx >= 0 && variantIdx < unionType.typeChildren.length) {
 		const variant = unionType.typeChildren[variantIdx];
 		if (variant.kind == TypeKind.Ref) {
 			const discField = findFieldInVariant(variant, discName);
-			if (discField != null) discExpr.nodeType = discField;
+			if (discField != null && discExpr != null) discExpr.nodeType = discField;
 			rearmLiteralForRecheck(node, variant);
 			callCheckExpr(ctx, node, variant);
 			const retyped = node.nodeType as Type | null;
@@ -4849,7 +4859,7 @@ export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, 
 		node.variantSlot = variantIdx + 1;
 		let fi = 0;
 		while (fi < d.keys.length) {
-			if (fi == discIdx) {
+			if (fi == discIdx && discExpr != null) {
 				// Discriminant already checked
 				fi = fi + 1;
 				continue;
@@ -4870,7 +4880,7 @@ export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, 
 	// Could not resolve variant — check properties without validation
 	let pi = 0;
 	while (pi < d.properties.length) {
-		if (pi != discIdx) {
+		if (pi != discIdx || discExpr == null) {
 			callCheckExpr(ctx, d.properties[pi], null);
 		}
 		pi = pi + 1;
@@ -5422,7 +5432,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				// discovered bindings and point the call at the mono'd symbol (mirrors the
 				// extension-method instantiation path below).
 				if (eb.names.length > 0 && classMethSym.builtinKind == "" && classMethSym.declNode != null && !isGenericInstanceMethod(classMethSym)) {
-					const instSym = callInstantiateGeneric(classMethSym, eb.names, eb.types, ctx, node.location);
+					const instSym = callInstantiateGeneric(classMethSym, eb.params, eb.types, ctx, node.location);
 					if (instSym != null) {
 						ensureShaped(instSym, ctx);
 						node.resolvedSym = instSym;
@@ -5431,20 +5441,12 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				let callParams: Type[] = [];
 				const callNames: string[] = [];
 				for (let ci = 1; ci < methType.typeChildren.length; ci += 1) {
-					let paramType = methType.typeChildren[ci];
-					for (let gi = 0; gi < eb.names.length; gi += 1) {
-						paramType = substituteType(paramType, eb.names[gi], eb.types[gi]);
-					}
-					callParams.push(paramType);
+					callParams.push(substituteBound(methType.typeChildren[ci], eb));
 				}
 				for (let ci = 1; ci < methType.typeNames.length; ci += 1) {
 					callNames.push(methType.typeNames[ci]);
 				}
-				let retType = methType.typeReturn;
-				for (let gi = 0; gi < eb.names.length; gi += 1) {
-					retType = substituteType(retType, eb.names[gi], eb.types[gi]);
-				}
-				return createFunction(callParams, callNames, retType);
+				return createFunction(callParams, callNames, substituteBound(methType.typeReturn, eb));
 			}
 			return methType;
 		}
@@ -5524,12 +5526,12 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 						// On-demand instantiation (generateInstance pattern)
 						// Clone the generic function, substitute types, register specialized version
 						if (ext.sym != null && ext.sym.declNode != null && ext.sym.builtinKind == "" && bindingsCoverDecl(eb, ext.sym.declNode)) {
-							const instSym = callInstantiateGeneric(ext.sym, eb.names, eb.types, ctx, node.location);
+							const instSym = callInstantiateGeneric(ext.sym, eb.params, eb.types, ctx, node.location);
 							if (instSym != null) {
 								node.resolvedSym = instSym;
 							}
 						}
-						srcType = instantiateGeneric(srcType, eb.names, eb.types);
+						srcType = substituteBound(srcType, eb);
 					}
 				}
 				return stripReceiverParam(srcType);

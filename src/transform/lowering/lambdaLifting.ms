@@ -148,6 +148,7 @@ interface RoutineInfo {
 	sym: Symbol;
 	liftedSym: Symbol;
 	envStructType: Type | null;
+	promised: boolean;
 }
 
 function mintLiftedSym(state: LiftState, name: string): Symbol {
@@ -1643,6 +1644,7 @@ function walkLiftStmtList(stmts: Node[], state: LiftState, isTopLevel: boolean):
 		if (state.activeEnvRewrites.length > 0) {
 			stmts[si] = applyActiveRewrites(state, stmts[si], state.activeEnvRewrites);
 		}
+		if (!isTopLevel) promiseRun(state, stmts, si);
 		const pendingBefore = state.pendingEnvRewrites.length;
 		walkLift(stmts[si], state);
 		// Check if liftClosure queued new env rewrites
@@ -2120,8 +2122,8 @@ interface SharedEnvSnapshot {
 	loopEnvs: LoopEnv[];
 }
 
-function saveSharedEnv(state: LiftState): SharedEnvSnapshot {
-	const snap: SharedEnvSnapshot = {
+function currentSharedEnv(state: LiftState): SharedEnvSnapshot {
+	return {
 		active: state.sharedEnvActive,
 		name: state.sharedEnvName,
 		varSym: state.sharedEnvVarSym,
@@ -2132,6 +2134,10 @@ function saveSharedEnv(state: LiftState): SharedEnvSnapshot {
 		chainTypes: state.sharedEnvChainTypes,
 		loopEnvs: state.loopEnvs,
 	};
+}
+
+function saveSharedEnv(state: LiftState): SharedEnvSnapshot {
+	const snap = currentSharedEnv(state);
 	state.sharedEnvActive = false;
 	state.loopEnvs = [];
 	return snap;
@@ -2183,6 +2189,138 @@ function collectOwnDeclSyms(node: Node, acc: SymSet): void {
 	};
 }
 
+interface LoopPlan {
+	carrierIdx: number;
+	preSyms: SymSet | null;
+	preIdents: Node[];
+	preParent: Type | null;
+}
+
+function planLoopEnv(state: LiftState, body: Node, ss: ScopeStack, routine: Symbol | null, ownCaptures: SymSet, ownCapturedIdents: Node[], ownLocals: SymSet, shared: SharedEnvSnapshot): LoopPlan {
+	const plan: LoopPlan = { carrierIdx: -1, preSyms: null, preIdents: [], preParent: null };
+	const enclosingLoops = shared.loopEnvs;
+	if (enclosingLoops.length == 0 && state.insideLoop == 0) return plan;
+	const directIdents: Node[] = [];
+	const direct = detectCaptures(body, cloneScopeStack(ss), directIdents, routine, null);
+	const fullSet = createSymSet();
+	const fullIdents: Node[] = [];
+	for (const ds of withoutRoutines(direct, state).items) { symSetAdd(fullSet, ds); }
+	for (const di of directIdents) { fullIdents.push(di); }
+	for (const os of withoutRoutines(ownCaptures, state).items) {
+		if (symSetContains(ownLocals, os)) continue;
+		if (!symSetContains(fullSet, os)) {
+			symSetAdd(fullSet, os);
+			const oi = findCapturedIdent(os, ownCapturedIdents);
+			if (oi != null) { fullIdents.push(oi); }
+		}
+	}
+	let carrierIdx = innermostLoopHolding(enclosingLoops, fullSet);
+	for (const ri of directIdents) {
+		const info = routineInfoOf(state, ri.resolvedSym);
+		if (info == null || info.envStructType == null) continue;
+		for (let li = enclosingLoops.length - 1; li > carrierIdx; li -= 1) {
+			if (enclosingLoops[li].envStructType == info.envStructType) carrierIdx = li;
+		}
+	}
+	for (const ri of ownCapturedIdents) {
+		const info = routineInfoOf(state, ri.resolvedSym);
+		if (info == null || info.envStructType == null) continue;
+		for (let li = enclosingLoops.length - 1; li > carrierIdx; li -= 1) {
+			if (enclosingLoops[li].envStructType == info.envStructType) carrierIdx = li;
+		}
+	}
+	if (!shared.active) {
+		if (carrierIdx >= 0 && !loopsHoldAll(enclosingLoops, carrierIdx, fullSet)) carrierIdx = -1;
+		if (carrierIdx < 0 && state.insideLoop > 0 && fullSet.items.length > 0) {
+			plan.preSyms = fullSet;
+			plan.preIdents = fullIdents;
+		}
+	} else {
+		const snap = splitLoopCaptures(fullSet, fullIdents, enclosingLoops, state.splitLoopLocals);
+		if (snap.syms.items.length > 0) {
+			plan.preSyms = snap.syms;
+			plan.preIdents = snap.idents;
+			plan.preParent = carrierIdx >= 0 ? enclosingLoops[carrierIdx].envStructType : shared.structType;
+		}
+	}
+	plan.carrierIdx = carrierIdx;
+	return plan;
+}
+
+interface RoutineEnv {
+	captures: boolean;
+	known: boolean;
+	envStructType: Type | null;
+}
+
+function routineEnv(state: LiftState, body: Node, ss: ScopeStack, routine: Symbol, ownCaptures: SymSet, plan: LoopPlan, shared: SharedEnvSnapshot): RoutineEnv {
+	const pre = detectCaptures(body, cloneScopeStack(ss), [], routine, null);
+	const captures = pre.items.length > 0 || ownCaptures.items.length > 0;
+	if (!captures) return { captures, known: true, envStructType: null };
+	if (plan.preSyms == null && plan.carrierIdx >= 0) return { captures, known: true, envStructType: shared.loopEnvs[plan.carrierIdx].envStructType };
+	if (plan.preSyms == null && shared.active) return { captures, known: true, envStructType: shared.structType };
+	return { captures, known: false, envStructType: null };
+}
+
+function routineFn(state: LiftState, stmt: Node): Node | null {
+	if (stmt.kind != NodeKind.VariableDecl || !isRoutineSym(state, routineBindingSym(stmt))) return null;
+	return (stmt.data as VariableDeclData).initializer;
+}
+
+function fnParamsAndBody(fn: Node): { params: string[], body: Node } {
+	if (fn.kind == NodeKind.ArrowFunction) {
+		const d = fn.data as ArrowFunctionData;
+		return { params: d.arrowParams, body: d.arrowBody };
+	}
+	const d = fn.data as FunctionExprData;
+	return { params: d.funcExprParams, body: d.funcExprBody };
+}
+
+function promiseRun(state: LiftState, stmts: Node[], from: number): void {
+	if (routineFn(state, stmts[from]) == null || (from > 0 && routineFn(state, stmts[from - 1]) != null)) return;
+	let end = from;
+	while (end < stmts.length && routineFn(state, stmts[end]) != null) end += 1;
+	let forward = false;
+	for (let k = from; k < end && !forward; k += 1) {
+		const later: Symbol[] = [];
+		for (let m = k + 1; m < end; m += 1) later.push(stmts[m].resolvedSym!);
+		forward = refsAnySym(routineFn(state, stmts[k]), later);
+	}
+	if (!forward) return;
+	const shared = currentSharedEnv(state);
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (let k = from; k < end; k += 1) {
+			const sym = stmts[k].resolvedSym!;
+			const fn = routineFn(state, stmts[k])!;
+			const pb = fnParamsAndBody(fn);
+			const ss = cloneScopeStack(state.ss);
+			pushFuncBoundary(ss);
+			defineParams(ss, fn.paramSyms, pb.params);
+			const ownCaptures = detectionGetCaptures(state.detection, fn);
+			const ownLocals = createSymSet();
+			if (fn.paramSyms != null) {
+				for (const p of fn.paramSyms) symSetAdd(ownLocals, p);
+			}
+			collectOwnDeclSyms(pb.body, ownLocals);
+			const plan = planLoopEnv(state, pb.body, ss, sym, ownCaptures, detectionGetCapturedIdents(state.detection, fn), ownLocals, shared);
+			const env = routineEnv(state, pb.body, ss, sym, ownCaptures, plan, shared);
+			if (!env.known) continue;
+			const info = routineInfoOf(state, sym);
+			if (info == null) {
+				state.closureCounter += 1;
+				const lifted = mintLiftedSym(state, `${env.captures ? "$lifted" : "$fn"}_${state.currentFnName}_${state.closureCounter}`);
+				state.routineInfos.push({ sym, liftedSym: lifted, envStructType: env.envStructType, promised: true });
+				changed = true;
+			} else if (info.promised && info.envStructType != env.envStructType) {
+				info.envStructType = env.envStructType;
+				changed = true;
+			}
+		}
+	}
+}
+
 // `lifter` is the per-kind closure constructor (liftArrow vs liftFuncExpr).
 // `body` is guaranteed BlockStmt via `normalizeArrowBodies`.
 function liftCapturingClosureBody(
@@ -2222,52 +2360,11 @@ function liftCapturingClosureBody(
 	const savedCurrentParams = state.currentParams;
 	// Decided before the body walk so `setupSharedEnv` and `liftClosure` agree on the
 	// env `_envP` carries; uses the outer fn name, so it runs before the rename below.
-	let preEnv: PreCreatedEnv = null as unknown as PreCreatedEnv;
-	let carrierIdx: number = -1;
 	const enclosingLoops = savedShared.loopEnvs;
-	if (enclosingLoops.length > 0 || state.insideLoop > 0) {
-		const directIdents: Node[] = [];
-		const direct = detectCaptures(body, cloneScopeStack(state.ss), directIdents, routine, null);
-		const fullSet = createSymSet();
-		const fullIdents: Node[] = [];
-		for (const ds of withoutRoutines(direct, state).items) { symSetAdd(fullSet, ds); }
-		for (const di of directIdents) { fullIdents.push(di); }
-		for (const os of withoutRoutines(ownCaptures, state).items) {
-			if (symSetContains(ownLocals, os)) continue;
-			if (!symSetContains(fullSet, os)) {
-				symSetAdd(fullSet, os);
-				const oi = findCapturedIdent(os, ownCapturedIdents);
-				if (oi != null) { fullIdents.push(oi); }
-			}
-		}
-		carrierIdx = innermostLoopHolding(enclosingLoops, fullSet);
-		for (const ri of directIdents) {
-			const info = routineInfoOf(state, ri.resolvedSym);
-			if (info == null || info.envStructType == null) continue;
-			for (let li = enclosingLoops.length - 1; li > carrierIdx; li -= 1) {
-				if (enclosingLoops[li].envStructType == info.envStructType) carrierIdx = li;
-			}
-		}
-		for (const ri of ownCapturedIdents) {
-			const info = routineInfoOf(state, ri.resolvedSym);
-			if (info == null || info.envStructType == null) continue;
-			for (let li = enclosingLoops.length - 1; li > carrierIdx; li -= 1) {
-				if (enclosingLoops[li].envStructType == info.envStructType) carrierIdx = li;
-			}
-		}
-		if (!savedShared.active) {
-			if (carrierIdx >= 0 && !loopsHoldAll(enclosingLoops, carrierIdx, fullSet)) carrierIdx = -1;
-			if (carrierIdx < 0 && state.insideLoop > 0 && fullSet.items.length > 0) {
-				preEnv = createSnapshotPairEnv(fullSet, fullIdents, state, node.location, null);
-			}
-		} else {
-			const snap = splitLoopCaptures(fullSet, fullIdents, enclosingLoops, state.splitLoopLocals);
-			if (snap.syms.items.length > 0) {
-				const parentType = carrierIdx >= 0 ? enclosingLoops[carrierIdx].envStructType : savedShared.structType;
-				preEnv = createSnapshotPairEnv(snap.syms, snap.idents, state, node.location, parentType);
-			}
-		}
-	}
+	const plan = planLoopEnv(state, body, state.ss, routine, ownCaptures, ownCapturedIdents, ownLocals, savedShared);
+	const carrierIdx = plan.carrierIdx;
+	let preEnv: PreCreatedEnv = null as unknown as PreCreatedEnv;
+	if (plan.preSyms != null) preEnv = createSnapshotPairEnv(plan.preSyms, plan.preIdents, state, node.location, plan.preParent);
 	let entryChain = envChainFrom(enclosingLoops, carrierIdx, savedShared.name, savedShared.structType, savedShared.chainNames, savedShared.chainTypes);
 	if (preEnv != null) {
 		const names: string[] = [preEnv.envName];
@@ -2279,17 +2376,19 @@ function liftCapturingClosureBody(
 	let routineSym: Symbol | null = null;
 	let routineCaptures = false;
 	if (routine != null && isRoutineSym(state, routine)) {
-		const pre = detectCaptures(body, cloneScopeStack(state.ss), [], routine, null);
-		routineCaptures = pre.items.length > 0 || ownCaptures.items.length > 0;
-		state.closureCounter += 1;
-		const lifted = mintLiftedSym(state, `${routineCaptures ? "$lifted" : "$fn"}_${savedFnName}_${state.closureCounter}`);
-		routineSym = lifted;
-		if (!routineCaptures) {
-			state.routineInfos.push({ sym: routine, liftedSym: lifted, envStructType: null });
-		} else if (preEnv == null && carrierIdx >= 0) {
-			state.routineInfos.push({ sym: routine, liftedSym: lifted, envStructType: enclosingLoops[carrierIdx].envStructType });
-		} else if (preEnv == null && savedShared.active) {
-			state.routineInfos.push({ sym: routine, liftedSym: lifted, envStructType: savedShared.structType });
+		const env = routineEnv(state, body, state.ss, routine, ownCaptures, plan, savedShared);
+		routineCaptures = env.captures;
+		const promised = routineInfoOf(state, routine);
+		if (promised != null && promised.promised) {
+			promised.promised = false;
+			if (!env.known || promised.envStructType != env.envStructType) {
+				reportTransformError(state.ctx, `internal: '${routine.name}' was promised another env than its lift decided`, node.location);
+			}
+			routineSym = promised.liftedSym;
+		} else {
+			state.closureCounter += 1;
+			routineSym = mintLiftedSym(state, `${routineCaptures ? "$lifted" : "$fn"}_${savedFnName}_${state.closureCounter}`);
+			if (env.known) state.routineInfos.push({ sym: routine, liftedSym: routineSym, envStructType: env.envStructType, promised: false });
 		}
 	}
 	if (ownCaptures.items.length > 0) {

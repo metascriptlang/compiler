@@ -181,6 +181,8 @@ export function parseJsxRoot(state: ParserState, parseExpr: ExprParser): ExprRes
 
 // ===== JSX Parser Tests (docs/JSX-ROADMAP.md Phase 3) =====
 
+import "../statements/core"; // registers parser callbacks
+
 test "jsx parse self-closing element" {
 	assert exprKind("<a/>") == NodeKind.JSXElement;
 	const d = exprNode("<a/>").data as JSXElementData;

@@ -49,6 +49,8 @@ interface SpreadPrecedenceStyle { width: number | null; height: number | null; }
 
 interface SpreadPrecedencePt { x: number; y: number; label: string; }
 
+interface SpreadPrecedenceXY { x: number; y: number; }
+
 let spreadPrecedenceCalls = 0;
 
 function spreadPrecedenceMk(): SpreadPrecedencePt {
@@ -267,10 +269,10 @@ test "valueStorage: later spread wins field-wise (static-type semantics)" {
 	assert m.height == 9.0;
 }
 
-test "valueStorage: explicit key before spread is overridden" {
-	const p: SpreadPrecedencePt = { x: 5, y: 6, label: "base" };
-	const m: SpreadPrecedencePt = { label: "pre", ...p };
-	assert m.label == "base";
+test "valueStorage: explicit key before a spread that lacks it is kept" {
+	const xy: SpreadPrecedenceXY = { x: 5, y: 6 };
+	const m: SpreadPrecedencePt = { label: "pre", ...xy };
+	assert m.label == "pre";
 	assert m.x == 5;
 }
 

@@ -1,6 +1,8 @@
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @stdout: logged 3
 // @serial
+// @ledger-slack(Logger) 1
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: the first actor of the program is created on a pool worker and only receives sends;
 //   the exit drain still runs them after every worker has gone idle.
 actor Logger {

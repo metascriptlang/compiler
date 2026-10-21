@@ -64,6 +64,8 @@ export function parseTemplateLiteral(state: ParserState, parsePrec: PrecParserFn
 }
 
 // ===== Tests =====
+
+import "../statements/core"; // registers parser callbacks
 test "no substitution" { assert parseOk("`hello`"); }
 
 test "single interpolation" { assert parseOk("`hello ${name}`"); }

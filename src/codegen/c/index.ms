@@ -22,7 +22,7 @@ import { mangleModuleName, mangledFunctionName, mangledTypeName } from "./names"
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable } from "./test";
 import { emitIncludeDirectives } from "./context";
-import { emitOwnedTypeInfos, refArrayCellName, arcCellName, promiseAllCellName, typeInfoCName, defineDeferredElements, isHcrImageModule, objectTypeInfoKey } from "./types";
+import { emitOwnedTypeInfos, refArrayCellName, arcCellName, typeInfoCName, defineDeferredElements, isHcrImageModule, objectTypeInfoKey } from "./types";
 import { collectModuleTypeInfoDemands } from "../../checker/reachability";
 import { DynamicModulePlan } from "../../module/graph";
 
@@ -93,7 +93,6 @@ function registerTypeInfoDemands(demands: AliveSet, facts: CEmissionFacts): void
 		info.cName = match (info.kind) {
 			TypeInfoKind.RefArrayCell => refArrayCellName(info.subject.typeReturn!),
 			TypeInfoKind.ArcCell => arcCellName(info.subject),
-			TypeInfoKind.PromiseAllCell => promiseAllCellName(info.subject),
 			_ => typeInfoCName(info.subject),
 		};
 		facts.typeInfos.set(info.key, info);

@@ -261,11 +261,24 @@ come with it:
 | `./msc` (repo root) | the candidate you just built | **this repo** — your edits |
 | `msc` (PATH → `~/.metascript/bin/msc`) | the last PUBLISHED build | `~/.metascript/` — the last sync |
 
-So the loop is: edit the repo → `msc build … --output=msc` (the published
-compiler builds the candidate) → **test the candidate** → `./msc run --target=raiser tools/syncLocalBinary.ms`
+The table covers what a binary *reads* when it compiles a program. What it
+*carries* is the std/ + runtime/ of the compiler that built it, compiled in:
+Raiser host bridges (`src/compiler/meta/hostTable.ms`) run that copy. A
+candidate built by `msc build … --output=msc` carries `~/.metascript/`, the
+last sync, and its link response file `msc_link.rsp` names that root in every
+`-iquote <root>/std/…` flag. Measured 2026-10-21 on 60cddf0ab: such a build ran
+`execCaptureKeepsEveryByte` on Raiser with the 16 MiB cap a sync had already
+removed from the repo, while the same source built by `./msc build` (the repo
+root) printed every byte.
+
+So the loop is: edit the repo → `./msc build src/index.ms --gc=drc --danger --cc=clang --output=msc`
+(`msc build` only when no `./msc` exists yet, then once more with `./msc`) →
+**test the candidate** → `./msc run --target=raiser tools/syncLocalBinary.ms`
 only once green (publish: candidate + repo std/runtime become the installed
-ones). Between build and sync the two trees legitimately differ — that gap is
-the whole reason the runners must be told which compiler to exercise.
+ones). The sync refuses a binary whose `_link.rsp` is missing, was written by
+another build, or names a root other than the checkout it publishes. Between
+build and sync the two trees legitimately differ — that gap is the whole
+reason the runners must be told which compiler to exercise.
 
 Convention, applied by `corpus/run.ms` and `guard/run.ms` alike:
 

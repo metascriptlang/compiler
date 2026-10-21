@@ -66,7 +66,7 @@ import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { ResolveSection, DepsSection, defaultResolveSection, defaultDepsSection, loadBuildConfig } from "./buildConfig";
 import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
-import { ensureHostTableLoaded } from "./meta/hostTable";
+import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
 import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
@@ -988,11 +988,16 @@ function userProjectFlag(path: string, projectRoot: string, compilerRoot: string
 	return quoteCcArg(`-I${projectRoot}`);
 }
 
-// Resolve a relative directory path against the include search list.
-// Mirrors @compile path resolution (processCompileDirectives): try CWD first,
-// then search registered include paths (which contain compilerRoot).
-function resolveIncludeDir(dir: string, includePaths: HashSet<string>): string {
+function ownedBySupportRoot(dir: string, compilerRoot: string): boolean {
+	return compilerRoot != "" && (dir == compilerRoot || isUnder(dir, `${compilerRoot}/std`));
+}
+
+// Resolve a relative directory path the way processCompileDirectives resolves
+// a bare @compile path: the support tree for its own modules, else CWD, then
+// the registered include paths (which contain compilerRoot).
+function resolveIncludeDir(dir: string, includePaths: HashSet<string>, ownerDir: string, compilerRoot: string): string {
 	if (dir == "" || isAbsolute(dir)) return dir;
+	if (ownedBySupportRoot(ownerDir, compilerRoot)) return `${compilerRoot}/${dir}`;
 	if (exists(dir)) return dir;
 	for (const ip of includePaths) {
 		const candidate = `${ip}/${dir}`;
@@ -1002,19 +1007,18 @@ function resolveIncludeDir(dir: string, includePaths: HashSet<string>): string {
 }
 
 // Resolve relative -I/-iquote/-isystem paths in a flags string using the
-// same rule as @compile: try CWD, then search includePaths. Lets std @passC
-// directives work from any CWD when the compiler is installed elsewhere.
-function resolveIncludeFlags(flags: string, includePaths: HashSet<string>): string {
+// same rule as @compile.
+function resolveIncludeFlags(flags: string, includePaths: HashSet<string>, ownerDir: string, compilerRoot: string): string {
 	if (flags == "") return flags;
 	let result = "";
 	for (const p of flagArgsOrExit(flags)) {
 		let resolved = p;
 		if (p.length > 2 && p.slice(0, 2) == "-I") {
-			resolved = "-I" + resolveIncludeDir(p.slice(2, p.length), includePaths);
+			resolved = "-I" + resolveIncludeDir(p.slice(2, p.length), includePaths, ownerDir, compilerRoot);
 		} else if (p.length > 7 && p.slice(0, 7) == "-iquote") {
-			resolved = "-iquote" + resolveIncludeDir(p.slice(7, p.length), includePaths);
+			resolved = "-iquote" + resolveIncludeDir(p.slice(7, p.length), includePaths, ownerDir, compilerRoot);
 		} else if (p.length > 8 && p.slice(0, 8) == "-isystem") {
-			resolved = "-isystem" + resolveIncludeDir(p.slice(8, p.length), includePaths);
+			resolved = "-isystem" + resolveIncludeDir(p.slice(8, p.length), includePaths, ownerDir, compilerRoot);
 		}
 		result = appendFlag(result, quoteCcArg(resolved));
 	}
@@ -1091,10 +1095,13 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 					customFlags = entry.slice(tabPos + 1, entry.length);
 				}
 				// ./ or ../ prefix: resolve relative to the declaring module's directory.
-				// Bare paths: try CWD, then search registered include paths.
+				// Bare paths: the support tree for its own modules, else CWD, then
+				// the registered include paths.
 				let fullPath = cPath;
 				if (cPath.slice(0, 2) == "./" || cPath.slice(0, 3) == "../") {
 					fullPath = `${moduleDir}/${cPath}`;
+				} else if (ownedBySupportRoot(moduleDir, compilerRoot)) {
+					fullPath = `${compilerRoot}/${cPath}`;
 				} else if (!exists(fullPath)) {
 					for (const dir of includePaths) {
 						const candidate = `${dir}/${cPath}`;
@@ -1610,14 +1617,14 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string, opts: CliOptions): string[] {
 	if (opts.targetOs == "bare" && opts.cpuTarget == "wasm32") {
 		return processCompileDirectives(
-			"runtime/freestanding/libc.c", ".", includePaths, allFlags,
+			"runtime/freestanding/libc.c", resolveRuntimeDir(), includePaths, allFlags,
 			opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose,
 			opts.targetOs, opts.projectRoot, resolveRuntimeDir(),
 		);
 	}
 	if (opts.targetOs == "solana") {
 		return processCompileDirectives(
-			"runtime/freestanding/musl/pow.c\nruntime/freestanding/musl/pow_data.c\nruntime/freestanding/musl/exp_data.c", ".", includePaths, allFlags,
+			"runtime/freestanding/musl/pow.c\nruntime/freestanding/musl/pow_data.c\nruntime/freestanding/musl/exp_data.c", resolveRuntimeDir(), includePaths, allFlags,
 			opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose,
 			opts.targetOs, opts.projectRoot, resolveRuntimeDir(),
 		);
@@ -1647,7 +1654,7 @@ function compilePlatformRuntime(includePaths: HashSet<string>, allFlags: string,
 	if (opts.isHcr) rtFiles = rtFiles + "\n" + "runtime/hcr.c";
 
 	if (rtFiles == "") return [];
-	return processCompileDirectives(rtFiles, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
+	return processCompileDirectives(rtFiles, resolveRuntimeDir(), includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 }
 
 // ===== Check =====
@@ -2798,8 +2805,8 @@ resetLiftedOps();
 		transformedPaths.push(modPath);
 
 		// Accumulate compiler flags (@passC). Relative -I paths resolved using same
-		// rule as @compile (try CWD, then search includePaths which contains compilerRoot).
-		const resolved = resolveIncludeFlags(ctx.compilerFlags, includePaths);
+		// rule as @compile.
+		const resolved = resolveIncludeFlags(ctx.compilerFlags, includePaths, dirname(modPath), resolveRuntimeDir());
 		allFlags = mergeFlagsDeduped(allFlags, resolved);
 		// @passL/@link go directly to global linkState — no per-module merge
 		registerIncludePaths(resolved, includePaths);
@@ -2880,7 +2887,7 @@ resetLiftedOps();
 	const coreFlags = hcrImages ? appendFlag(allFlags, "-DMS_HCR_CORE") : allFlags;
 	const imageFlags = hcrImages ? appendFlag(allFlags, "-DMS_HCR_MODULE") : allFlags;
 	if (graphPreludeCtx != null && graphPreludeCtx.compileDirectives != "") {
-		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", includePaths, coreFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
+		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, resolveRuntimeDir(), includePaths, coreFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 		for (const oFile of preludeObjs) oFiles.push(oFile);
 	}
 
@@ -3425,7 +3432,7 @@ resetLiftedOps();
 		transformedPrograms.push(nativeLowered);
 		transformedPaths.push(modPath);
 
-		const resolved = resolveIncludeFlags(ctx.compilerFlags, includePaths);
+		const resolved = resolveIncludeFlags(ctx.compilerFlags, includePaths, dirname(modPath), resolveRuntimeDir());
 		allFlags = mergeFlagsDeduped(allFlags, resolved);
 		registerIncludePaths(resolved, includePaths);
 	}
@@ -3437,7 +3444,7 @@ resetLiftedOps();
 
 	// Compile prelude @compile directives — unconditional (reference-aligned: all @compile are always built)
 	if (graphPreludeCtx != null && graphPreludeCtx.compileDirectives != "") {
-		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
+		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, resolveRuntimeDir(), includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose, opts.targetOs, opts.projectRoot, resolveRuntimeDir());
 		for (const oFile of preludeObjs) oFiles.push(oFile);
 	}
 
@@ -4054,8 +4061,10 @@ function jsTestHarnessSource(): string {
 		"  let filesPassed = 0, filesFailed = 0, testsPassed = 0, testsFailed = 0;",
 		"  const failures = [];",
 		"  const t0 = Date.now();",
-		"  for (const mod of modules) {",
-		"    const ns = await import(mod.spec);",
+		"  const namespaces = [];",
+		"  for (const mod of modules) namespaces.push(await import(mod.spec));",
+		"  for (let mi = 0; mi < modules.length; mi += 1) {",
+		"    const mod = modules[mi], ns = namespaces[mi];",
 		"    const started = Date.now();",
 		"    let modFailed = 0;",
 		"    for (let i = 0; i < mod.funcs.length; i += 1) {",
@@ -4218,6 +4227,7 @@ export function runRaiser(mod: RaiserModule, programArgv: string[], printSink: R
 	ctx.printSink = printSink;
 	raiserLoad(ctx, mod);
 	raiserExecute(ctx);
+	closeHostChildren();
 	return ctx;
 }
 

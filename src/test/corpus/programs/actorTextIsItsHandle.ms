@@ -1,5 +1,7 @@
 // @stdout: true true true true
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
+// @ledger-slack(Counter) 1
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: an actor turns into text as its handle alone, from outside and from inside its own methods: its state belongs to the actor's thread, so neither String() nor a template reads it.
 
 actor Counter {

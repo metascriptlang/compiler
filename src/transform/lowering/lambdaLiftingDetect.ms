@@ -142,31 +142,11 @@ function collectRoutineCandidates(n: Node | null, depth: number, splitLoopLocals
 	forEachChild(n, (c: Node): void => { collectRoutineCandidates(c, inner, splitLoopLocals, out); });
 }
 
-function collectForwardRefs(n: Node | null, candidates: SymSet, declared: Symbol[], forward: Symbol[]): void {
-	if (n == null) return;
-	if (n.kind == NodeKind.Identifier) {
-		const sym = n.resolvedSym;
-		if (sym != null && symSetContains(candidates, sym) && !symIn(declared, sym) && !symIn(forward, sym)) forward.push(sym);
-		return;
-	}
-	if (n.kind == NodeKind.VariableDecl && symSetContains(candidates, n.resolvedSym)) {
-		declared.push(n.resolvedSym!);
-	}
-	forEachChild(n, (c: Node): void => { collectForwardRefs(c, candidates, declared, forward); });
-}
-
 export function routineSyms(root: Node, depth: number, splitLoopLocals: Symbol[]): SymSet {
 	const routines = createSymSet();
 	const candidates: Symbol[] = [];
 	collectRoutineCandidates(root, depth, splitLoopLocals, candidates);
-	if (candidates.length == 0) return routines;
-	const candidateSet = createSymSet();
-	for (const s of candidates) symSetAdd(candidateSet, s);
-	const forward: Symbol[] = [];
-	collectForwardRefs(root, candidateSet, [], forward);
-	for (const s of candidates) {
-		if (!symIn(forward, s)) symSetAdd(routines, s);
-	}
+	for (const s of candidates) symSetAdd(routines, s);
 	return routines;
 }
 

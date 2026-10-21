@@ -8,9 +8,6 @@ import {
 	ClassDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
-import { classDeclNodeOf, parentClassSymOf, hasFlag } from "../../checker/symbol";
-import { isGenericFn } from "../../checker/context";
-import { hasGenericParams, classParentOf } from "../../checker/types";
 import { parseSource } from "../../parser/statements/validation";
 import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC } from "../../raiser/bytecode";
 import {
@@ -33,9 +30,10 @@ import {
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
 	setRaiserModulePath, getRaiserModulePath,
 	resolveRoutine, RaiserCompState,
+	isScalarClass
 } from "./context";
 import { compileStmt } from "./statements";
-import { compileExpr, classTargetKey } from "./expressions";
+import { compileExpr, classTargetKey, emitsRoutine, storeMethodClosures, storeInheritedClosures, classTypeOperand } from "./expressions";
 import { emitZeroValue, allocFor, regClassOf, zeroScalar } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { checkProgram } from "../../checker/checkPass";
@@ -94,11 +92,6 @@ function isExpressionBody(node: Node): boolean {
 		k != NodeKind.DoWhileStmt;
 }
 
-function emitsRoutine(decl: Node, flags: string): boolean {
-	const sym = decl.resolvedSym;
-	if (sym != null && (hasFlag(sym, SymbolFlag.OverloadSig) || hasFlag(sym, SymbolFlag.Borrow))) return false;
-	return !isGenericFn(flags) && (decl.nodeType == null || !hasGenericParams(decl.nodeType));
-}
 
 function paramSymbolsOf(decl: Node, name: string): Symbol[] {
 	if (decl.paramSyms == null) throw new Error(`internal: the Raiser routine '${name}' reached codegen without parameter symbols`);
@@ -155,27 +148,7 @@ export function compileFuncBody(funcMap: RaiserFuncMap, fnName: string, paramSym
 // Creates ClassName_new(params...): allocates object, sets property defaults,
 // stores method closures, executes ctor body, returns this.
 
-function storeMethodClosures(s: RaiserCompState, thisReg: int32, className: string, classBody: Node[]): void {
-	for (const member of classBody) {
-		if (member.kind != NodeKind.MethodDecl || !emitsRoutine(member, (member.data as MethodDeclData).methodFlags)) continue;
-		const md = member.data as MethodDeclData;
-		const methodIdx = resolveRoutine(s, declaredSymbol(member, `${className}.${md.methodName}`));
-		if (methodIdx < 0) continue;
-		const closureReg = emitClosurePair(s, methodIdx, -1);
-		const methodNameIdx = addConst(s, raiserConstString(md.methodName));
-		emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, methodNameIdx, closureReg));
-	}
-}
 
-function storeInheritedClosures(s: RaiserCompState, thisReg: int32, classSym: Symbol | null, depth: int32): void {
-	const parent = classSym != null && depth < 64 ? parentClassSymOf(classSym) : null;
-	if (parent == null) return;
-	storeInheritedClosures(s, thisReg, parent, depth + 1);
-	const decl = classDeclNodeOf(parent);
-	if (decl == null || decl.kind != NodeKind.ClassDecl) return;
-	const pd = decl.data as ClassDeclData;
-	storeMethodClosures(s, thisReg, pd.className, pd.classBody);
-}
 
 function storeZeroFields(s: RaiserCompState, thisReg: int32, classBody: Node[]): void {
 	for (let ci = 0; ci < classBody.length; ci += 1) {
@@ -212,18 +185,6 @@ function compileClassInit(
 	return compiled;
 }
 
-function classTypeOperand(s: RaiserCompState, className: string, classSym: Symbol | null): int32 {
-	if (classSym == null) return 0;
-	const chain: string[] = [raiserClassKey(classSym)];
-	let up = classParentOf(classSym.symbolType);
-	while (up != null && classTargetKey(up) != "") {
-		if (chain.length == 64) throw new Error(`internal: the class chain of '${className}' is deeper than 64`);
-		chain.push(classTargetKey(up));
-		up = classParentOf(up);
-	}
-	s.classTypes.push({ name: className, chain });
-	return s.classTypes.length;
-}
 
 function compileClassConstructor(
 	funcMap: RaiserFuncMap,
@@ -577,7 +538,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 	const zeroState = createCompState();
 	for (let gi = 0; gi < globalCount; gi += 1) compiled.globalInit.push(raiserNil());
 	for (const entry of globals.items) {
-		if (regClassOf(zeroState, entry.symbol.symbolType) == RaiserRegClass.Word) compiled.globalInit[entry.index] = zeroScalar(entry.symbol.symbolType);
+		if (isScalarClass(regClassOf(zeroState, entry.symbol.symbolType))) compiled.globalInit[entry.index] = zeroScalar(entry.symbol.symbolType);
 	}
 	for (let ri = 0; ri < plan.records.length; ri += 1) {
 		const path = plan.records[ri];
@@ -1249,38 +1210,38 @@ test "string length in condition" {
 }
 
 test "a catch binding ends with its clause" {
-	const ctx = evalRaiser("let r = 0; try { throw 1; } catch (e) { try { throw 2; } catch (e) { r = r + e; } r = r * 10 + e; } return r;");
-	assert ctx.lastResult.intVal == 21;
+	const ctx = evalRaiser("class E { n: number; constructor(n: number) { this.n = n; } } let r = 0; try { throw new E(1); } catch (e) { try { throw new E(2); } catch (e) { r = r + (e as E).n; } r = r * 10 + (e as E).n; } return r;");
+	assert unboxFloat(ctx.lastResult) == 21;
 }
 
 test "non-capturing closure" {
-	const ctx = evalRaiser("function lifted(_e) { return 42; } const f = { fn: lifted, env: {} }; return f();");
+	const ctx = evalRaiser("function lifted(_e: { k: number }) { return 42; } const f = { fn: lifted, env: { k: 0 } }; return f();");
 	assert ctx.lastResult.intVal == 42;
 }
 
 // Reference parity: environment parameter is LAST
 test "closure with capture" {
-	const ctx = evalRaiser("function lifted(y, _e) { return _e.x + y; } const e = { x: 5 }; const f = { fn: lifted, env: e }; return f(3);");
+	const ctx = evalRaiser("function lifted(y, _e: { x: int32 }) { return _e.x + y; } const e = { x: 5 }; const f = { fn: lifted, env: e }; return f(3);");
 	assert ctx.lastResult.intVal == 8;
 }
 
 test "higher-order: makeAdder" {
-	const ctx = evalRaiser("function liftedAdd(x, _e) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd, env: { n: n } }; } const add5 = makeAdder(5); return add5(3);");
+	const ctx = evalRaiser("function liftedAdd(x, _e: { n: int32 }) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd, env: { n: n } }; } const add5 = makeAdder(5); return add5(3);");
 	assert ctx.lastResult.intVal == 8;
 }
 
 test "multiple captures" {
-	const ctx = evalRaiser("function lifted(_e) { return _e.a + _e.b; } const f = { fn: lifted, env: { a: 3, b: 7 } }; return f();");
-	assert ctx.lastResult.intVal == 10;
+	const ctx = evalRaiser("function lifted(_e: { a: number; b: number }) { return _e.a + _e.b; } const f = { fn: lifted, env: { a: 3, b: 7 } }; return f();");
+	assert unboxFloat(ctx.lastResult) == 10;
 }
 
 test "chained call: makeAdder(5)(3)" {
-	const ctx = evalRaiser("function liftedAdd(x, _e) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd, env: { n: n } }; } return makeAdder(5)(3);");
+	const ctx = evalRaiser("function liftedAdd(x, _e: { n: int32 }) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd, env: { n: n } }; } return makeAdder(5)(3);");
 	assert ctx.lastResult.intVal == 8;
 }
 
 test "closure in loop" {
-	const ctx = evalRaiser("function lifted(_e) { return _e.i; } let sum = 0; let i = 0; while (i < 5) { const f = { fn: lifted, env: { i: i } }; sum = sum + f(); i = i + 1; } return sum;");
+	const ctx = evalRaiser("function lifted(_e: { i: int32 }) { return _e.i; } let sum = 0; let i = 0; while (i < 5) { const f = { fn: lifted, env: { i: i } }; sum = sum + f(); i = i + 1; } return sum;");
 	assert ctx.lastResult.intVal == 10;
 }
 
@@ -1290,17 +1251,17 @@ test "closure returning closure" {
 }
 
 test "lambda-lifted capture pattern" {
-	const ctx = evalRaiser("function lifted1(_envP) { return _envP.x; } const x = 99; const f = { fn: lifted1, env: { x: x } }; return f();");
+	const ctx = evalRaiser("function lifted1(_envP: { x: int32 }) { return _envP.x; } const x = 99; const f = { fn: lifted1, env: { x: x } }; return f();");
 	assert ctx.lastResult.intVal == 99;
 }
 
 test "lambda-lifted capture with args" {
-	const ctx = evalRaiser("function lifted1(y, _envP) { return _envP.x + y; } const x = 10; const f = { fn: lifted1, env: { x: x } }; return f(32);");
+	const ctx = evalRaiser("function lifted1(y, _envP: { x: int32 }) { return _envP.x + y; } const x = 10; const f = { fn: lifted1, env: { x: x } }; return f(32);");
 	assert ctx.lastResult.intVal == 42;
 }
 
 test "lambda-lifted capture inside function" {
-	const ctx = evalRaiser("function lifted1(_envP) { return _envP.x; } function make() { const x = 42; const f = { fn: lifted1, env: { x: x } }; return f(); } return make();");
+	const ctx = evalRaiser("function lifted1(_envP: { x: int32 }) { return _envP.x; } function make() { const x = 42; const f = { fn: lifted1, env: { x: x } }; return f(); } return make();");
 	assert ctx.lastResult.intVal == 42;
 }
 
@@ -1309,8 +1270,8 @@ test "lambda-lifted multiple captures" {
 	assert ctx.lastResult.intVal == 17;
 }
 
-test "non-capturing closure pair with -1 sentinel" {
-	const ctx = evalRaiser("function add(a, b) { return a + b; } const f = { fn: add, env: -1 }; return f(10, 20);");
+test "non-capturing closure pair with a nil env" {
+	const ctx = evalRaiser("function add(a, b) { return a + b; } const f = { fn: add, env: null }; return f(10, 20);");
 	assert ctx.lastResult.intVal == 30;
 }
 
@@ -1564,7 +1525,7 @@ test "method with params" {
 }
 
 test "closure env mutation" {
-	const ctx = evalRaiser("function inc(_e) { _e.n = _e.n + 1; } const obj = { n: 0 }; const f = { fn: inc, env: obj }; f(); return obj.n;");
+	const ctx = evalRaiser("function inc(_e: { n: int32 }) { _e.n = _e.n + 1; } const obj = { n: 0 }; const f = { fn: inc, env: obj }; f(); return obj.n;");
 	assert ctx.lastResult.intVal == 1;
 }
 

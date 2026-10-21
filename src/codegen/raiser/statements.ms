@@ -19,7 +19,7 @@ import {
 	emitAbxPlaceholder, patchAbxTo,
 	pushLoop, jumpTarget, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
 	emitClosurePair,
-	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, resolveRoutine, addConst,
+	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, resolveRoutine, addConst, isScalarClass,
 } from "./context";
 import { compileExpr, compileExprForEffect, condJumps, exprIsString } from "./expressions";
 import { emitValueCopy, emitZeroValue, regClassOf, allocFor } from "./valueCopy";
@@ -146,7 +146,7 @@ function compileVariableDecl(s: RaiserCompState, node: Node): void {
 }
 
 function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDeclData): void {
-	const placeholderNull = d.initializer != null && d.initializer.kind == NodeKind.NullLiteral && regClassOf(s, node.nodeType) == RaiserRegClass.Word;
+	const placeholderNull = d.initializer != null && d.initializer.kind == NodeKind.NullLiteral && isScalarClass(regClassOf(s, node.nodeType));
 	if (d.initializer != null && !placeholderNull) {
 		if (d.initializer.kind == NodeKind.Identifier) {
 			const fIdx = resolveRoutine(s, d.initializer.resolvedSym);

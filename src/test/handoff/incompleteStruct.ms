@@ -7,21 +7,27 @@
 
 import { compileToC } from "../helpers";
 
+// True when the struct's full definition precedes the closure env definition that holds it by value.
+function definedBeforeEnv(code: string, structName: string): boolean {
+	const def = code.indexOf("\nstruct " + structName + "__");
+	const env = code.indexOf("\nstruct dollarEnv_");
+	return def >= 0 && env >= 0 && def < env && code.contains("_Static_assert(sizeof(struct " + structName + "__");
+}
+
 // ===== Local struct captured in closure by value =====
 
 test "local struct captured in closure emits full definition" {
-	const src = "interface Point { x: number; y: number; }\nfunction makeAdder(p: Point): () => number {\n\treturn () => p.x + p.y;\n}";
+	const src = "struct Point { x: number; y: number; }\nfunction makeAdder(p: Point): () => number {\n\treturn () => p.x + p.y;\n}";
 	const result = compileToC(src);
 	assert result.ok;
-	// The generated C must have the full Point struct before the env struct
-	assert result.value.contains("struct Point {");
+	assert definedBeforeEnv(result.value, "Point");
 }
 
 test "local struct in closure env is not just forward-declared" {
-	const src = "interface Config { width: number; height: number; name: string; }\nfunction process(c: Config): () => string {\n\treturn () => c.name;\n}";
+	const src = "struct Config { width: number; height: number; name: string; }\nfunction process(c: Config): () => string {\n\treturn () => c.name;\n}";
 	const result = compileToC(src);
 	assert result.ok;
-	assert result.value.contains("struct Config {");
+	assert definedBeforeEnv(result.value, "Config");
 }
 
 test "non-exported struct used by closure compiles" {
@@ -41,9 +47,9 @@ test "array of local struct in closure compiles" {
 // ===== Struct with nested struct field captured in closure =====
 
 test "nested struct captured in closure compiles" {
-	const src = "interface Inner { val: number; }\ninterface Outer { inner: Inner; name: string; }\nfunction wrap(o: Outer): () => number {\n\treturn () => o.inner.val;\n}";
+	const src = "struct Inner { val: number; }\nstruct Outer { inner: Inner; name: string; }\nfunction wrap(o: Outer): () => number {\n\treturn () => o.inner.val;\n}";
 	const result = compileToC(src);
 	assert result.ok;
-	assert result.value.contains("struct Inner {");
-	assert result.value.contains("struct Outer {");
+	assert definedBeforeEnv(result.value, "Inner");
+	assert definedBeforeEnv(result.value, "Outer");
 }

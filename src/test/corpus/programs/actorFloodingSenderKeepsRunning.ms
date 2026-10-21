@@ -2,6 +2,9 @@
 // @serial
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @stdout: rounds 20
+// @ledger-slack(A) 20
+// @ledger-slack(B) 20
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: an actor that floods a busy receiver and then waits on a reply from it keeps
 //   being scheduled. The runtime once paused a sender whose receiver was behind and
 //   dropped the paused actor's run-queue entry; this shape then hung 10 runs of 10.

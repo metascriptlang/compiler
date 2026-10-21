@@ -7,14 +7,13 @@ import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDecl
 	ExportDeclData, VariableDeclData, ObjectLiteralData, ArrayLiteralData, ClassDeclData, ActorDeclData,
 	CallExprData, MemberExprData, NewExprData, BinaryExprData, DecoratedDeclData, ExternDeclData, IdentifierData, ExprStmtData, MacroInvocationData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { runtimeProcSym } from "../transform/util";
 import { getDeclName } from "./collectPass";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { AliveSet, CTypeInfoDemand, TypeInfoKind, createAliveSet, aliveSetAddSym, aliveSetHasSym, aliveSetAddModule, aliveSetHasDecl, aliveSetHasModule, aliveSetModuleCount } from "../codegen/c/context";
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
-import { refArrayCellKey, refArrayCellOp, requireOpByKey, getOpByKey, typeInfoSubject, objectTypeInfoKey, isPrivateTypeInfoSubject, arcCellKey, promiseAllShape, PromiseAllShape, promiseAllCellKey, hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName } from "../codegen/c/types";
+import { refArrayCellKey, refArrayCellOp, getOpByKey, typeInfoSubject, objectTypeInfoKey, isPrivateTypeInfoSubject, arcCellKey, promiseAllShape, PromiseAllShape, hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, makeSymbol } from "./symbol";
-import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, getProperty, peelToStructOrUnion } from "./types";
+import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, getProperty, peelToStructOrUnion } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { ctorRoutineOf } from "./ctorRoutine";
@@ -245,22 +244,8 @@ function markPromiseAllResult(resultType: Type, modulePath: string): void {
 	let collected = awaitedType(resultType);
 	if (collected != null && collected.kind == TypeKind.Ref && collected.typeReturn != null) collected = collected.typeReturn;
 	if (collected == null || collected.kind != TypeKind.Array || collected.typeReturn == null) return;
-	const elem = collected.typeReturn;
-	if (promiseAllShape(elem) == PromiseAllShape.None) return;
-	const arrT = createArray(elem);
-	const key = promiseAllCellKey(arrT);
-	if (_aliveSet.typeInfoKeys.has(key)) return;
-	let destroy = runtimeProcSym("msNumberArrayDestroy");
-	let owner = _singleModule != "" ? _singleModule : modulePath;
-	if (elem.kind == TypeKind.Struct && elem.typeName != "" && hasAsgnFlag(elem)) {
-		destroy = requireOpByKey(arrT, AttachedOp.AttachedDestructor);
-		if (_singleModule == "" && destroy.modulePath != "") owner = destroy.modulePath;
-		markReferenced(destroy, owner);
-	}
-	_aliveSet.typeInfoKeys.add(key);
-	const demand: CTypeInfoDemand = { kind: TypeInfoKind.PromiseAllCell, subject: arrT, key, owner, cName: "", destroy, trace: null, baseKey: "", moduleLocal: false };
-	_aliveSet.typeInfos.push(demand);
-	aliveSetAddModule(_aliveSet, owner);
+	if (promiseAllShape(collected.typeReturn) == PromiseAllShape.None) return;
+	markRefArrayCell(createArray(collected.typeReturn), modulePath);
 }
 
 // Union narrow/project sites make codegen emit variant Copy/Destroy calls with no AST edge.

@@ -32,9 +32,10 @@
 
 import {
 	Node, NodeKind, NewExprData, VariableDeclData, ExprStmtData, IfStmtData,
-	ReturnStmtData, WhileStmtData, DeclKind, Type, TypeKind,
+	ReturnStmtData, WhileStmtData, DeclKind, Type,
 } from "../../ast/node";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
+import { positionalFieldsOf } from "../../checker/types";
 import { TransformContext, createTransformContext, freshTempSym } from "../context";
 import { walkExpandBlocks, replaceInExpr } from "../walker";
 import { forEachChild } from "../../ast/visitor";
@@ -53,11 +54,8 @@ function positionalStruct(node: Node): Type | null {
 	if (d.newArguments.length == 0) return null;
 	const sym = d.newCallee.resolvedSym;
 	if (sym == null || hasFlag(sym, SymbolFlag.HasConstructor)) return null;
-	const classType = node.nodeType;
-	if (classType == null) return null;
-	const inner = (classType.kind == TypeKind.Ref || classType.kind == TypeKind.Ptr) ? classType.typeReturn : classType;
-	if (inner == null) return null;
-	if (inner.typeNames == null || d.newArguments.length > inner.typeNames.length) return null;
+	const inner = positionalFieldsOf(node.nodeType);
+	if (inner == null || d.newArguments.length > inner.typeNames.length) return null;
 	return inner;
 }
 

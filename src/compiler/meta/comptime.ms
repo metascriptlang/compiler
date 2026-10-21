@@ -321,7 +321,7 @@ test "Phase 8a: outer fn chain (transitive same-file)" {
 
 test "Phase 8a: outer fn + extern via CallHost" {
 	const pr = parseSource(
-		"extern function msFsExists(path: string): number;" +
+		"extern function msFsExists(path: string): int32;" +
 		"function bothExist(a: string, b: string): number {" +
 		"  return msFsExists(a) + msFsExists(b);" +
 		"}" +
@@ -396,33 +396,40 @@ test "comptime CallHost msProcessCwd" {
 }
 
 test "comptime CallHost msFsExists present file" {
-	const ctx = _smokeCallHost("extern function msFsExists(path: string): number; return msFsExists(\"README.md\");");
+	const ctx = _smokeCallHost("extern function msFsExists(path: string): int32; return msFsExists(\"README.md\");");
 	assert ctx.lastError == "";
 	assert ctx.lastResult.intVal == 1;
 }
 
 test "comptime CallHost msFsExists missing file" {
-	const ctx = _smokeCallHost("extern function msFsExists(path: string): number; return msFsExists(\"/tmp/__nope_xyz__\");");
+	const ctx = _smokeCallHost("extern function msFsExists(path: string): int32; return msFsExists(\"/tmp/__nope_xyz__\");");
 	assert ctx.lastError == "";
 	assert ctx.lastResult.intVal == 0;
 }
 
 test "comptime CallHost msFsIsFile README" {
-	const ctx = _smokeCallHost("extern function msFsIsFile(path: string): number; return msFsIsFile(\"README.md\");");
+	const ctx = _smokeCallHost("extern function msFsIsFile(path: string): int32; return msFsIsFile(\"README.md\");");
 	assert ctx.lastError == "";
 	assert ctx.lastResult.intVal == 1;
 }
 
 test "comptime CallHost msFsIsDir cwd" {
-	const ctx = _smokeCallHost("extern function msFsIsDir(path: string): number; return msFsIsDir(\".\");");
+	const ctx = _smokeCallHost("extern function msFsIsDir(path: string): int32; return msFsIsDir(\".\");");
 	assert ctx.lastError == "";
 	assert ctx.lastResult.intVal == 1;
 }
 
 test "comptime CallHost msFsFileSize positive" {
-	const ctx = _smokeCallHost("extern function msFsFileSize(path: string): number; return msFsFileSize(\"README.md\");");
+	const ctx = _smokeCallHost("extern function msFsFileSize(path: string): int32; return msFsFileSize(\"README.md\");");
 	assert ctx.lastError == "";
 	assert ctx.lastResult.intVal > 0;
+}
+
+test "comptime CallHost msFsFileSize declared number reads back as a float" {
+	const ctx = _smokeCallHost("extern function msFsFileSize(path: string): number; return msFsFileSize(\"README.md\") / 2;");
+	assert ctx.lastError == "";
+	assert ctx.lastResult.kind == RaiserValueKind.Float;
+	assert ctx.lastResult.floatVal > 0.0;
 }
 
 test "comptime CallHost msProcessGetEnv missing var" {
@@ -463,7 +470,7 @@ test "comptime CallHost msFsReadFile reads README" {
 test "comptime CallHost msFsReadFile missing → empty + errno set" {
 	const ctx = _smokeCallHost(
 		"extern function msFsReadFile(path: string): string;" +
-		"extern function msFsLastErrno(): number;" +
+		"extern function msFsLastErrno(): int32;" +
 		"const raw = msFsReadFile(\"/tmp/__missing_zzz__\");" +
 		"return msFsLastErrno();"
 	);
@@ -476,7 +483,7 @@ test "comptime CallHost wrapper-inline Result-like" {
 	// branch + Object construction. Mirrors std/fs.readFile body exactly.
 	const ctx = _smokeCallHost(
 		"extern function msFsReadFile(path: string): string;" +
-		"extern function msFsLastErrno(): number;" +
+		"extern function msFsLastErrno(): int32;" +
 		"interface FileRes { ok: boolean; value: string; err: number; }" +
 		"function tryRead(path: string): FileRes {" +
 		"  const raw = msFsReadFile(path);" +

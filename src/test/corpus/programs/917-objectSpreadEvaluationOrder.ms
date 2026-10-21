@@ -4,9 +4,11 @@ let log = "";
 function one(): int32 { log = log + "o"; return 9; }
 interface P { x: int32; y: int32; }
 function pt(): P { log = log + "P"; return { x: 1, y: 2 }; }
+interface X { x: int32; }
+function px(): X { log = log + "X"; return { x: 1 }; }
 function run(): void {
 	log = "";
-	const q: P = { y: one(), ...pt() };
+	const q: P = { y: one(), ...px() };
 	console.log("after property: " + log + " " + q.x.toString() + q.y.toString());
 	log = "";
 	const q2: P = { ...pt(), y: one() };

@@ -147,6 +147,7 @@ export function jsBundleReferenceName(sym: Symbol, text: string): string {
 
 function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: string): string {
 	if (sym == null) return safeJsName(name);
+	if (sym.symbolKind == SymbolKind.Variable && sym.instantiatedFrom != null) return safeJsName(sym.name);
 	if (gen.multiFile && sym.jsModulePath != "" && sym.modulePath != "" && sym.modulePath != gen.currentModulePath) {
 		return recordNeededImport(gen, sym.modulePath, safeJsName(name));
 	}
@@ -657,6 +658,19 @@ export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 			}
 		}
 	}
+	const cls = node.nodeType != null && jsMemberKind(node.nodeType) == "class" && node.nodeType.typeReturn.kind != TypeKind.GenericInstance ? runtimeClassSym(node.nodeType.typeReturn) : null;
+	if (cls != null) {
+		emit(gen, "globalThis.Object.assign(globalThis.Object.create(");
+		emitNode(gen, classReference(cls, node.location));
+		emit(gen, ".prototype), ");
+		emitPlainObjectLiteral(gen, node, d);
+		emit(gen, ")");
+		return;
+	}
+	emitPlainObjectLiteral(gen, node, d);
+}
+
+function emitPlainObjectLiteral(gen: JSGenerator, node: Node, d: ObjectLiteralData): void {
 	const omitted = omittedFieldZeros(node, d);
 	if (d.keys.length == 0 && omitted.length == 0) {
 		emit(gen, "{}");

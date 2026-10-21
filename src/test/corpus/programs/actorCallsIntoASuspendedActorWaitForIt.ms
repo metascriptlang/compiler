@@ -5,6 +5,9 @@
 // @stdout: nap m-start;m-end 5;note;y;nap-end;
 // @stdout: got 7
 // @stdout: final m-start;m-end 5;note;y;nap-end;y;
+// @ledger-slack(A) 1
+// @ledger-slack(B) 1
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: a send or call that reaches an actor while one of its methods awaits runs after
 //   that method has finished (PARALOCK §14 for an awaited CALL and a timer; 1113 pins the
 //   spawn await). A call back into the waiting actor completes then, both when the callee

@@ -67,6 +67,19 @@ typedef struct {
 } msClosure;
 #endif
 
+static inline msClosure msClosureAdaptee(msClosure c) {
+	while (c.env != NULL && msHeader(c.env)->type != NULL && (msHeader(c.env)->type->flags & MS_TYPE_FLAG_ARITY_ADAPTER)) {
+		c = *(msClosure*)c.env;
+	}
+	return c;
+}
+
+static inline MS_BOOL msClosureSame(msClosure a, msClosure b) {
+	a = msClosureAdaptee(a);
+	b = msClosureAdaptee(b);
+	return a.fn == b.fn && a.env == b.env;
+}
+
 /* Closure array: msClosure structs stored INLINE (16B stride). Single
  * typed helper works for ALL closure types — closure layout is uniform
  * (per-env-type cleanup is virtual-dispatched via env's typeInfo, not

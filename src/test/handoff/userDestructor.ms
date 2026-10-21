@@ -21,6 +21,17 @@ function countSub(hay: string, needle: string): number {
 	return n;
 }
 
+// The body of the `<T>__<mod>Destroy` definition, from its signature line to its closing brace; "" when absent.
+function destroyBody(code: string, typeName: string): string {
+	const lines = code.split("\n");
+	let i = 0;
+	while (i < lines.length && !(lines[i].startsWith("void " + typeName + "__") && lines[i].contains("Destroy(" + typeName + "__") && lines[i].endsWith(" {"))) i = i + 1;
+	if (i == lines.length) return "";
+	let body = "";
+	while (i < lines.length && lines[i] != "}") { body = body + lines[i] + "\n"; i = i + 1; }
+	return body;
+}
+
 test "user onDestroy on a handle-only class is wired into the destructor" {
 	const src = "class Res { h: int64; onDestroy(): void { this.h = 0; } }\n"
 		+ "function use(): void { const a: Res = { h: 1 }; a.h = 2; }\n"
@@ -29,7 +40,7 @@ test "user onDestroy on a handle-only class is wired into the destructor" {
 	assert c.ok;
 	// Gating: a handle-only class would emit only minimal TypeInfo (no destructor)
 	// without the fix — the destructor existing proves the user hook forced it.
-	assert c.value.contains("ResDestroy");
+	assert destroyBody(c.value, "Res") != "";
 	// Wiring: decl + def + call (3×). Without the call it would be 2×.
 	assert countSub(c.value, "Res_onDestroy") >= 3;
 }
@@ -42,12 +53,8 @@ test "user onDestroy OVERRIDES the field walk (replace, not augment)" {
 	assert c.ok;
 	// Isolate the destructor body (def-brace → next function) and assert the hook
 	// is called but the owned `name` string is NOT auto-freed — the author owns it.
-	const defPat = "AugDestroy(Aug* self) {";
-	const start = c.value.indexOf(defPat);
-	assert start >= 0;
-	const after = c.value.indexOf("\nvoid ", start + defPat.length);
-	const body = after >= 0 ? c.value.slice(start, after) : c.value.slice(start, c.value.length);
-	assert body.indexOf("Aug_onDestroy") >= 0;
+	const body = destroyBody(c.value, "Aug");
+	assert body.contains("Aug_onDestroy");
 	assert body.indexOf("msStringDecref") < 0;
 }
 
@@ -58,7 +65,7 @@ test "extension-method onDestroy is wired (registry retrieval, not name guess)" 
 		+ "use();";
 	const c = compileToC(src);
 	assert c.ok;
-	assert c.value.contains("ExtDestroy");
+	assert destroyBody(c.value, "Ext").contains("onDestroy");
 	assert countSub(c.value, "onDestroy") >= 3;
 }
 

@@ -199,6 +199,43 @@ function builder(): string {
 	return built;
 }
 
+const LINK_WINDOW_SECONDS = 900;
+
+function unquote(arg: string): string {
+	return arg.length >= 2 && arg.startsWith("\"") && arg.endsWith("\"") ? arg.slice(1, arg.length - 1) : arg;
+}
+
+function samePath(a: string, b: string): boolean {
+	return windows ? a.toLowerCase() == b.toLowerCase() : a == b;
+}
+
+function foreignBuildRoot(built: string): string {
+	const rsp = `${built}_link.rsp`;
+	if (!exists(rsp)) return `${rsp} is missing, so nothing shows which std/ and runtime/ ${built} was compiled against`;
+	const age = modifiedTime(built) - modifiedTime(rsp);
+	if (age < 0) return `${rsp} was written ${Math.round(-age)} s after ${built}, by a later build that did not produce this binary`;
+	if (age > LINK_WINDOW_SECONDS) {
+		return `${rsp} was written ${Math.round(age)} s before ${built}, longer than the ${LINK_WINDOW_SECONDS} s a link takes, so it describes another build`;
+	}
+	const text = readFile(rsp);
+	if (!text.ok) return `cannot read ${rsp}`;
+	const own = slashes(realpath(SRC));
+	const roots: string[] = [];
+	for (const line of text.value.split("\n")) {
+		const arg = slashes(unquote(line.trim()));
+		if (!arg.startsWith("-iquote")) continue;
+		const at = arg.indexOf("/std/");
+		if (at < 0) continue;
+		const root = arg.slice("-iquote".length, at);
+		if (!roots.includes(root)) roots.push(root);
+	}
+	if (roots.length == 0) return `${rsp} names no -iquote <root>/std/ flag, so nothing shows which std/ and runtime/ ${built} was compiled against`;
+	for (const root of roots) {
+		if (!samePath(root, own)) return `${built} was compiled against the std/ and runtime/ of ${root}, not of ${own} that this sync publishes`;
+	}
+	return "";
+}
+
 let changes = 0;
 
 function sameFile(a: string, b: string): boolean {
@@ -312,6 +349,15 @@ if (!check) {
 if (syncBinary) {
 	const built = builder();
 	const installed = `${DEST}/bin/msc${EXE}`;
+	const foreign = foreignBuildRoot(built);
+	if (foreign != "") {
+		const fix = `rebuild it from this checkout: cd ${SRC} && ./msc build src/index.ms --gc=drc --danger --cc=clang --output=msc`;
+		if (check) {
+			console.log(`note: a sync now would refuse: ${foreign}\n${fix}`);
+		} else {
+			die(`${foreign}\n${fix}`);
+		}
+	}
 	if (check) {
 		console.log(`would: copy ${built} → ${installed}`);
 	} else {

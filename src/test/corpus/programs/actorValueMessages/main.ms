@@ -1,6 +1,9 @@
 // @stdout: messages 7 2 7 3 4
 // @serial
 // @xfail(raiser): actor constructors and mailbox calls are not in the Raiser VM yet (PARALOCK-raiser step 4)
+// @ledger-slack(Service) 1
+// @ledger-slack(StartedService) 1
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 
 import { Config, Service, StartedService } from "./service";
 

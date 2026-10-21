@@ -1,10 +1,28 @@
-// Route 17: Union narrowing via as-cast — codegen must emit .vN, not anonymous struct
+// Route 17: Union narrowing via as-cast — codegen reads the union's variant member
 //
 // Bug: `doc.data as { flat: Doc, broken: Doc }` where DocData is a union type
-// emits `msAnon_xxx d = ...` in C instead of `DocData_v3 d = ((*doc).data).v3`.
+// emitted a fresh anonymous struct instead of reading the variant. The cast must
+// read `((*doc).data).vN`, and the local must have that member's struct type,
+// whose fields are the full variant's.
 
 import { compileToC, compileProjectToC } from "../helpers";
 import { MapEntry } from "../../module/loader";
+
+// The struct body the as-cast local `d` reads, when it reads a union member of
+// that same struct type; "" otherwise.
+function variantReadBody(code: string): string {
+	const access = "((*doc).data).v";
+	const at = code.indexOf(access);
+	if (at < 0) return "";
+	const idx = code.slice(at + access.length, code.indexOf(")", at + access.length));
+	const memberAt = code.indexOf("* v" + idx + ";");
+	if (memberAt < 0) return "";
+	const memberType = code.slice(code.lastIndexOf(" ", memberAt - 1) + 1, memberAt);
+	if (!code.contains(memberType + "* d_")) return "";
+	const bodyAt = code.indexOf("struct " + memberType + " {");
+	if (bodyAt < 0) return "";
+	return code.slice(bodyAt, code.indexOf("}", bodyAt));
+}
 
 test "union narrowing as-cast emits variant accessor" {
 	const r = compileToC(`
@@ -29,9 +47,9 @@ test "union narrowing as-cast emits variant accessor" {
 	if (!r.ok) console.log("COMPILE ERROR: " + r.error);
 	assert r.ok;
 	const cCode = r.value;
-	assert !cCode.contains("msAnon_");
-	assert cCode.contains("DocData_v3");
-	assert cCode.contains(".v3");
+	const body = variantReadBody(cCode);
+	assert body.contains(" flat;");
+	assert body.contains(" broken;");
 }
 
 test "partial as-cast resolves to full variant" {
@@ -55,9 +73,9 @@ test "partial as-cast resolves to full variant" {
 	if (!r.ok) console.log("COMPILE ERROR: " + r.error);
 	assert r.ok;
 	const cCode = r.value;
-	assert !cCode.contains("msAnon_");
-	assert cCode.contains("DocData_v3");
-	assert cCode.contains(".v3");
+	const body = variantReadBody(cCode);
+	assert body.contains(" flat;");
+	assert body.contains(" broken;");
 }
 
 test "union narrowing as-cast works across files" {
@@ -90,7 +108,7 @@ test "union narrowing as-cast works across files" {
 		console.log("compileProjectToC failed: " + cCode);
 		assert false;
 	}
-	assert !cCode.contains("msAnon_");
-	assert cCode.contains("DocData_v3");
-	assert cCode.contains(".v3");
+	const body = variantReadBody(cCode);
+	assert body.contains(" flat;");
+	assert body.contains(" broken;");
 }

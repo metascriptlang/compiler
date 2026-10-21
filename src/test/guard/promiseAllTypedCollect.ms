@@ -8,7 +8,7 @@
 // An unread Promise.all result must be released by the future's valueDestructor.
 // GUARD-BALANCE msNumberArrayPallCell
 // GUARD-BALANCE msStringArrayPallCell
-// GUARD-BALANCE UserArrayPallCell
+// GUARD-BALANCE UserArrayRefCell
 // GUARD-BALANCE msRefArrayRefCell
 // GUARD-BALANCE BoxI
 

@@ -79,7 +79,7 @@ test "a Promise.all cell of structs and a cross-module class adapt their TypeInf
 	];
 	const c = compileProjectToC(entries, "src/main.ms");
 	assert !c.startsWith("ERROR:");
-	assert c.contains("PallCell");
+	assert c.contains(".name = \"TagArrayRefCell\"");
 	assert hookSlots(c, "destroyFn") >= 2;
 	assert unadaptedSlots(c, "destroyFn", "void* dest").length == 0;
 	assert unadaptedSlots(c, "traceFn", "void* dest, void* env").length == 0;

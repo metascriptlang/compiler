@@ -285,6 +285,8 @@ export function parseBareIdentArrow(
 
 // ===== Tests =====
 
+import "../statements/core"; // registers parser callbacks
+
 function mockBlock(state: ParserState): ExprResult {
 	return Result.err("mock: block not supported");
 }

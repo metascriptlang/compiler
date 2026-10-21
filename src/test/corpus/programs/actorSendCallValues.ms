@@ -1,6 +1,8 @@
 // @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms); the program pins the native sync-context await
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @stdout: PASS: actorOnly
+// @ledger-slack(Counter) 1
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // PARALOCK scenario — actor only.
 //
 // Covers: SEND (void method) + CALL (returning method) with int and

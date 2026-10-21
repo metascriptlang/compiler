@@ -1,6 +1,7 @@
 // @xfail(raiser): raiser runs no user lifecycle hooks (stdout misses its @stdout line)
 // @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
 // @stdout: hooks value=1 ref=2 var=3
+// @xfail(san): the user onDestroy hook leaves its value's fields unfreed, so msAnon_1poz19a is never destroyed; card 2026-10-21-design-a-user-ondestroy-hook-leaves-the-fields-of-its-value-unfreed.md
 
 struct ByValue { id: int32; name: string; }
 struct ByRef { id: int32; name: string; }

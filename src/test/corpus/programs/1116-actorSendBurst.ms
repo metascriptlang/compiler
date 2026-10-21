@@ -2,6 +2,8 @@
 // @stdout: one 6000000
 // @stdout: two 6000000 6000000
 // @stdout: three 200000 200000 200000
+// @ledger-slack(Counter) 6
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 
 actor Counter {
 	n: int32;
