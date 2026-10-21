@@ -291,19 +291,15 @@ export function createEnum(name: string, members: string[], values: number[] = [
 // `void` type args (`Result<void, E>` for fallible-no-payload calls) leave
 // the field with `void` type — codegen filters it out at typedef + hook walk
 // to avoid emitting invalid `void value;` declarations.
+const _resultParams: Type[] = [createGenericParam("T"), createGenericParam("E")];
+const _iteratorResultParam: Type = createGenericParam("T");
+
 export function createResult(okType: Type, errType: Type): Type {
-	// Use Result's own GenericParam placeholders (named "T"/"E") in variants
-	// instead of baking the user-supplied okType/errType. Why: when the user
-	// composes `Result<T[], E>` inside a function whose own generic param is
-	// also named "T", the baked `Array<GenericParam("T_user"))` collides with
-	// Result's "T" at codegen substitution time — sub fires twice, producing
-	// `Array<Array<int32>>` (the msRefArrayArray double-wrap bug).
-	// Keeping variants generic until codegen substitutes Result's "T"/"E"
-	// against `typeChildren` cleanly avoids the name collision. Concrete
-	// user types live ONLY in typeChildren; getResultOkType/getResultErrType
-	// already read from typeChildren, so accessor callers are unaffected.
-	const tParam = createGenericParam("T");
-	const eParam = createGenericParam("E");
+	// Concrete user types live ONLY in typeChildren; the variants keep Result's
+	// own parameters until an instance substitutes them by identity, so a user
+	// `T` inside `Result<T[], E>` is never confused with Result's `T`.
+	const tParam = _resultParams[0];
+	const eParam = _resultParams[1];
 	const trueVariant = emptyType();
 	trueVariant.kind = TypeKind.Struct;
 	trueVariant.typeNames = ["ok", "value"];
@@ -353,7 +349,7 @@ export function createSpawnHandle(innerType: Type | null): Type {
 // Iterator<T> — return type of function* generators. Wraps yield type T.
 // At runtime: { next: () => { value: T, done: boolean } }
 export function createIteratorResult(yieldType: Type): Type {
-	const genericBase = spelled(createStruct("IteratorResult", ["value", "done"], [createGenericParam("T"), createPrimitive(TypeKind.Boolean)], false));
+	const genericBase = spelled(createStruct("IteratorResult", ["value", "done"], [_iteratorResultParam, createPrimitive(TypeKind.Boolean)], false));
 	const gi = createGenericInstance(genericBase, [yieldType]);
 	instantiateGenericBody(gi, "T");
 	return gi;
@@ -1942,15 +1938,13 @@ function instanceBody(t: Type): Type | null {
 	const base = t.typeExtra;
 	if (base == null || base.typeReturn == null) return null;
 	if (t.typeReturn != null) return t.typeReturn;
-	const paramNames = splitTopLevel(genericParamsOf(t), ",");
-	if (paramNames.length == 0 || paramNames.length > t.typeChildren.length) return base.typeReturn;
-	const names: string[] = [];
-	const args: Type[] = [];
-	for (let pi = 0; pi < paramNames.length; pi += 1) {
-		names.push(paramNames[pi].trim());
-		args.push(t.typeChildren[pi]);
-	}
-	return substituteParams(base.typeReturn, names, declaredParamsOf(t, names.length), args);
+	return substituteInstanceArgs(t, base.typeReturn);
+}
+
+export function substituteInstanceArgs(gi: Type, target: Type): Type {
+	const names = splitTopLevel(genericParamsOf(gi), ",").map((n: string): string => n.trim());
+	if (names.length == 0 || names.length > gi.typeChildren.length) return target;
+	return substituteParams(target, names, declaredParamsOf(gi, names.length), gi.typeChildren);
 }
 
 export function distinctInstanceRepr(t: Type | null): Type | null {
@@ -2164,10 +2158,14 @@ export function declaredTypeParams(sym: Symbol, count: int32): (Type | null)[] {
 	return sym.typeParams.length == count ? sym.typeParams.map((gp: Type): Type | null => gp) : [];
 }
 
-function declaredParamsOf(t: Type, count: int32): (Type | null)[] {
+export function declaredParamsOf(t: Type, count: int32): (Type | null)[] {
 	const cur = (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) && t.typeReturn != null ? t.typeReturn : t;
 	const owner = genericOwnerOf(cur);
-	return owner != null ? declaredTypeParams(owner, count) : [];
+	if (owner != null) return declaredTypeParams(owner, count);
+	if (cur.kind != TypeKind.GenericInstance || cur.typeExtra == null) return [];
+	const own: Type[] = [];
+	collectGenericParams(unwrapRefBase(cur.typeExtra), own, 0);
+	return own.length == count ? own.map((gp: Type): Type | null => gp) : [];
 }
 
 export function genericParamNamesOf(params: string): string {
@@ -2609,10 +2607,10 @@ export function evaluateConditionalType(t: Type | null): Type {
 	if (hasGenericParams(ext)) {
 		const bindings = createUnifyBindings();
 		unifyType(ext, check, bindings);
-		const inferNames: string[] = [];
-		collectGenericParamNames(ext, inferNames, 0);
-		for (const name of inferNames) {
-			if (bindings.names.indexOf(name) < 0) bindName(bindings, name, unknownType());
+		const inferParams: Type[] = [];
+		collectGenericParams(ext, inferParams, 0);
+		for (const gp of inferParams) {
+			if (boundSlot(bindings, gp.typeName, gp) < 0) bindParam(bindings, gp, unknownType());
 		}
 		const inferredExt = substituteBound(ext, bindings);
 		if (!isAssignableForConditional(check, inferredExt)) return t.typeChildren[3];
@@ -4180,8 +4178,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	if (concrete == null) return;
 	// Direct generic param match
 	if (formal.kind == TypeKind.GenericParam) {
-		if (formal.sym != null) bindParam(bindings, formal, closureStorageType(concrete));
-		else bindName(bindings, formal.typeName, closureStorageType(concrete));
+		bindParam(bindings, formal, closureStorageType(concrete));
 		return;
 	}
 	if ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Borrow || formal.kind == TypeKind.Cursor || formal.kind == TypeKind.Sink) && formal.typeReturn != null) {
@@ -4521,25 +4518,15 @@ function constraintScan(t: Type | null, name: string, depth: int32, visited: Typ
 	return null;
 }
 
-// Collect unique GenericParam names from a type tree (used by getProperty for GenericInstance substitution)
-function collectGenericParamNames(t: Type | null, names: string[], depth: int32): void {
-	if (t == null) return;
-	if (t == null) return;
-	if (depth > 20) return;
+function collectGenericParams(t: Type | null, found: Type[], depth: int32): void {
+	if (t == null || depth > 20) return;
 	if (t.kind == TypeKind.GenericParam) {
-		let dup = false;
-		let ni = 0;
-		while (ni < names.length) { if (names[ni] == t.typeName) { dup = true; } ni = ni + 1; }
-		if (!dup) names.push(t.typeName);
+		if (found.indexOf(t) < 0) found.push(t);
 		return;
 	}
-	if (t.typeReturn != null) collectGenericParamNames(t.typeReturn, names, depth + 1);
-	if (t.typeExtra != null) collectGenericParamNames(t.typeExtra, names, depth + 1);
-	let ci = 0;
-	while (ci < t.typeChildren.length) {
-		collectGenericParamNames(t.typeChildren[ci], names, depth + 1);
-		ci = ci + 1;
-	}
+	collectGenericParams(t.typeReturn, found, depth + 1);
+	collectGenericParams(t.typeExtra, found, depth + 1);
+	for (const c of t.typeChildren) collectGenericParams(c, found, depth + 1);
 }
 
 let _gpCount: float64 = 0;
@@ -4585,17 +4572,7 @@ function getPropertyInner(t: Type | null, name: string): Type {
 		if (t.typeExtra != null) {
 			let baseProp = getProperty(t.typeExtra, name);
 			if (isUnresolvedType(baseProp)) return baseProp;
-			if (hasGenericParams(baseProp) && t.typeChildren.length > 0) {
-				const paramNames: string[] = [];
-				collectGenericParamNames(t.typeExtra, paramNames, 0);
-				let gi = 0;
-				while (gi < paramNames.length) {
-					if (gi < t.typeChildren.length) {
-						baseProp = substituteType(baseProp, paramNames[gi], t.typeChildren[gi]);
-					}
-					gi = gi + 1;
-				}
-			}
+			if (hasGenericParams(baseProp) && t.typeChildren.length > 0) baseProp = substituteInstanceArgs(t, baseProp);
 			return baseProp;
 		}
 	}
