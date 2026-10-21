@@ -3,7 +3,7 @@
 
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
-import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar, unwrapRefNullUnion } from "../checker/types";
+import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar, unwrapRefNullUnion, literalUnionBase } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
 import { requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
@@ -46,7 +46,8 @@ export function isCSwitchableType(t: Type | null): boolean {
 //   neither        → primitive bits in the void* slot
 // A writer/reader pair disagreeing on this = silent garbage or UAF; do not
 // branch on layout anywhere else. A closure is a two-word value, so it is boxed,
-// and so is a union that is not a nullable reference: C holds it as a tagged struct.
+// and so is a union C holds as a tagged struct: neither a nullable reference nor
+// a union of literals, which C holds as their base type.
 export function inlineInFuture(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.String;
 }
@@ -54,7 +55,7 @@ export function inlineInFuture(t: Type | null): boolean {
 export function boxedInFuture(t: Type | null): boolean {
 	if (t == null) return false;
 	return t.kind == TypeKind.Array || t.kind == TypeKind.Function || (isStructLikeType(t) && t.kind != TypeKind.String)
-		|| (t.kind == TypeKind.Union && unwrapRefNullUnion(t) == null);
+		|| (t.kind == TypeKind.Union && unwrapRefNullUnion(t) == null && literalUnionBase(t) == null);
 }
 
 export function refInFuture(t: Type | null): boolean {
