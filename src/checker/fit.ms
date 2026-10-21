@@ -2910,13 +2910,18 @@ export function widenNumberLiteral(node: Node): Node {
 		read.flags = read.flags.incl(NodeFlag.Sem);
 		return read;
 	}
-	let read = node;
-	if (declaredTagUnionOf(node) != null) {
-		const projected = narrowUnionToVariant(node, held);
-		if (projected != null as unknown as Node) read = projected;
-	}
+	const read = projectNarrowedRead(node);
 	read.nodeType = widened;
 	return read;
+}
+
+export function projectNarrowedRead(node: Node): Node {
+	const held = node.nodeType;
+	if (held == null || widenNumberLiteralType(held) == held || declaredTagUnionOf(node) == null) return node;
+	const projected = narrowUnionToVariant(node, held);
+	if (projected == null as unknown as Node) return node;
+	projected.nodeType = held;
+	return projected;
 }
 
 export function tagUnionMemberSlot(declared: Type, exprType: Type): int32 {
