@@ -77,6 +77,7 @@ when (windows) {
 	extern function cRealpath(path: cstring, resolved: Ptr<uint8> | null): Ptr<uint8> from "realpath";
 	extern function cFree(p: Ptr<uint8>): void from "free";
 	extern function msStringFromCStr(s: cstring): string;
+	extern function msStringNew(data: cstring, length: int64): string;
 
 	extern struct Timespec from "struct timespec" { tv_sec: int64; tv_nsec: int64; }
 	when (macos || ios) {
@@ -166,15 +167,47 @@ when (windows) {
 		let st: Stat = {};
 		return cStat(path as cstring, st) == 0 ? mtimeOf(st).tv_sec as number : -1;
 	}
-	function nanos(t: Timespec): string {
-		return `${t.tv_sec}.${`${t.tv_nsec}`.padStart(9, "0")}`;
+	// changeStamp runs once per cached source file, so it formats into one stack buffer
+	// as the C kernel did, instead of building intermediate strings.
+	@inline
+	function putDigits(ref buf: uint8[128], at: int32, value: uint64, width: int32): int32 {
+		let digits = 1;
+		let rest = value;
+		while (rest >= 10) { rest = rest / 10; digits += 1; }
+		if (digits < width) digits = width;
+		let i = at + digits - 1;
+		rest = value;
+		while (i >= at) {
+			buf[i] = (48 + rest % 10) as uint8;
+			rest = rest / 10;
+			i -= 1;
+		}
+		return at + digits;
+	}
+	@inline
+	function putSigned(ref buf: uint8[128], at: int32, value: int64): int32 {
+		if (value >= 0) return putDigits(buf, at, value as uint64, 1);
+		buf[at] = 45;
+		return putDigits(buf, at + 1, (0 - (value + 1)) as uint64 + 1, 1);
+	}
+	@inline
+	function putTime(ref buf: uint8[128], at: int32, t: Timespec): int32 {
+		const dot = putSigned(buf, at, t.tv_sec);
+		buf[dot] = 46;
+		return putDigits(buf, dot + 1, t.tv_nsec as uint64, 9);
 	}
 	function changeStampKernel(path: string): string {
 		let st: Stat = {};
 		if (cStat(path as cstring, st) != 0) return "";
 		const changed = ctimeOf(st);
 		if (changed.tv_sec == 0 && changed.tv_nsec == 0) return "";
-		return `${st.st_dev}:${st.st_ino}:${st.st_size}:${nanos(mtimeOf(st))}:${nanos(changed)}`;
+		let buf: uint8[128] = [];
+		let n = putDigits(buf, 0, st.st_dev, 1);
+		buf[n] = 58; n = putDigits(buf, n + 1, st.st_ino, 1);
+		buf[n] = 58; n = putSigned(buf, n + 1, st.st_size);
+		buf[n] = 58; n = putTime(buf, n + 1, mtimeOf(st));
+		buf[n] = 58; n = putTime(buf, n + 1, changed);
+		return msStringNew(((buf as Span<uint8>) as Ptr<uint8>) as cstring, n as int64);
 	}
 }
 
