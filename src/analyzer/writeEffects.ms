@@ -4,15 +4,18 @@
 // run; borrowedArgsToCopy picks the arguments the caller must keep alive, and mayWrite tells
 // cursor inference which statements end a borrow.
 
-import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, BinaryExprData, CallExprData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, NewExprData, PropertyDeclData, ArrayAccessData, IdentifierData } from "../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, SourceLocation, Type, TypeKind, makeLoc, BinaryExprData, CallExprData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, NewExprData, PropertyDeclData, ArrayAccessData, IdentifierData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, hasFlag, parentClassSymOf } from "../checker/symbol";
+import { SymbolFlag, hasFlag, makeSymbol, parentClassSymOf } from "../checker/symbol";
 import { CheckerContext, LIFECYCLE_HOOK_NAMES, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "../checker/context";
 import { routineBody, receiverOf } from "../checker/effects";
 import { lookupInstanceHook, pickBodyCtx } from "../checker/instantiate";
 import { isMutatingArrayMethod } from "../checker/paramMutationAnalysis";
 import { skipConvDfa } from "./alias";
-import { RcInfo } from "./classify";
+import { RcInfo, noRcInfo } from "./classify";
+import { makeNumber, makeString } from "../checker/literalNodes";
+import { createArray, createFunction, int32Type, stringType } from "../checker/types";
+import { generatedRef, makeAssign, makeCall, makeIdentResolved } from "../transform/util";
 
 const ELEMENT_SLOT = "E";
 export const ANY_HEAP_SLOT = "*";
@@ -138,7 +141,7 @@ function writeTarget(s: WriteSummary, target: Node | null, params: Symbol[] | nu
 		NodeKind.ArrayAccess => { return addSlot(s, ELEMENT_SLOT); },
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { return writeTarget(s, (t.data as HiddenDerefData).expr, params, inCtor); },
 		_ => {
-			let changed = false;
+			let changed = isGeneratedProc(t.resolvedSym) && addSlot(s, ELEMENT_SLOT);
 			forEachChild(t, (child: Node): void => { if (writeTarget(s, child, params, inCtor)) changed = true; });
 			return changed;
 		},
@@ -149,13 +152,28 @@ function isRoutineSym(sym: Symbol | null): boolean {
 	return sym != null && (sym.symbolKind == SymbolKind.Function || sym.symbolKind == SymbolKind.Method);
 }
 
+function mayBeFunctionValue(t: Type | null): boolean {
+	return t != null && (t.kind == TypeKind.Function || t.kind == TypeKind.Unknown || t.kind == TypeKind.GenericParam);
+}
+
+function passesFunctionValue(call: Node): boolean {
+	for (const a of (call.data as CallExprData).arguments) {
+		if (a != null && mayBeFunctionValue(a.nodeType)) return true;
+	}
+	return false;
+}
+
 function takesFunctionValue(sym: Symbol): boolean {
 	const t = sym.symbolType;
 	if (t == null || t.kind != TypeKind.Function) return true;
 	for (const formal of t.typeChildren) {
-		if (formal != null && (formal.kind == TypeKind.Function || formal.kind == TypeKind.Unknown || formal.kind == TypeKind.GenericParam)) return true;
+		if (mayBeFunctionValue(formal)) return true;
 	}
 	return false;
+}
+
+function isGeneratedProc(sym: Symbol | null): boolean {
+	return sym != null && sym.symbolType == null && sym.declNode == null && hasFlag(sym, SymbolFlag.ImportC);
 }
 
 function runsNativeOnC(sym: Symbol): boolean {
@@ -163,6 +181,10 @@ function runsNativeOnC(sym: Symbol): boolean {
 }
 
 function nativeEffect(s: WriteSummary, call: Node, sym: Symbol): void {
+	if (isGeneratedProc(sym)) {
+		if (passesFunctionValue(call)) markUnknown(s);
+		return;
+	}
 	const recv = receiverOf(call);
 	for (const a of (call.data as CallExprData).arguments) {
 		if (a != null && isArrayStorage(a.nodeType)) addSlot(s, ELEMENT_SLOT);
@@ -526,4 +548,39 @@ export function borrowedArgsToCopy(call: Node): boolean[] {
 		flags[i] = keep;
 	}
 	return flags;
+}
+
+function writeProbe(): SourceLocation {
+	resetWriteEffects(null, (t: Type | null): RcInfo => noRcInfo());
+	return makeLoc(0, 0);
+}
+
+function localOf(name: string, t: Type, loc: SourceLocation): Node {
+	return makeIdentResolved(makeSymbol(name, SymbolKind.Variable, t, false), loc);
+}
+
+function elementRead(loc: SourceLocation): Node {
+	return makeCall(generatedRef("msArrayAccess", loc), [localOf("arr", createArray(stringType()), loc), makeNumber(0, loc)], loc);
+}
+
+test "an element read through a generated access macro writes nothing" {
+	const loc = writeProbe();
+	assert !mayWrite(elementRead(loc), [ELEMENT_SLOT]);
+}
+
+test "a store through a generated access macro writes the elements" {
+	const loc = writeProbe();
+	assert mayWrite(makeAssign(elementRead(loc), makeString("s", loc), loc), [ELEMENT_SLOT]);
+}
+
+test "a union projection through a generated macro writes nothing" {
+	const loc = writeProbe();
+	const read = makeCall(generatedRef("msVariantAccessVal", loc), [localOf("u", int32Type(), loc), makeNumber(0, loc), makeString("a", loc), makeString("a|b", loc)], loc);
+	assert !mayWrite(read, [ELEMENT_SLOT, fieldSlot("a")]);
+}
+
+test "a generated macro handed a function value may write anything" {
+	const loc = writeProbe();
+	const callback = localOf("cb", createFunction([], [], int32Type()), loc);
+	assert mayWrite(makeCall(generatedRef("msSpanAccess", loc), [callback, makeNumber(0, loc)], loc), [fieldSlot("a")]);
 }
