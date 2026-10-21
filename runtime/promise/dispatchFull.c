@@ -282,7 +282,7 @@ static HANDLE msFirstLoopIocp(void) {
  * any thread has a target") spelled in IOCP terms. Name kept because actor.h
  * declares one symbol for both platforms. */
 void msEnsureWakePipe(void) {
-	(void)msGetDispatcher();
+	if (!msIsPoolWorker) (void)msGetDispatcher();
 }
 
 /* Wake the event loop(s) from another thread — the IOCP twin of POSIX's 1-byte
