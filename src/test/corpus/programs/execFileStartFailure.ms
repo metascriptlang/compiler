@@ -15,6 +15,6 @@ console.log(missing.ok ? "missing ran" : `missing ${kindName(missing.error)} ${m
 const dir = cwd();
 const directory = execFileCapture(dir, []);
 const refused = !directory.ok && (platform == "windows"
-	? directory.error.exitCode >= 126 && (directory.error.message == `spawnSync ${dir} EACCES` || directory.error.message == `spawnSync ${dir} ENOENT`)
+	? directory.error.kind == ProcessErrorKind.NotFound && directory.error.exitCode == 127 && directory.error.message == `spawnSync ${dir} ENOENT`
 	: directory.error.kind == ProcessErrorKind.SpawnFailed && directory.error.exitCode == 126 && directory.error.message == `spawnSync ${dir} EACCES`);
 console.log(refused ? "directory refused as the host reports it" : directory.ok ? "directory ran" : `directory ${kindName(directory.error)} ${directory.error.exitCode} ${directory.error.message}`);
