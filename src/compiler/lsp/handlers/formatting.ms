@@ -62,6 +62,7 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 				_fmtParsersRegistered = true;
 			}
 			const parseResult = parseSource(source);
+			options.source = source;
 			if (parseResult.ok) {
 				const printed = formatNode(parseResult.value, options);
 				_codeActionFmtResult = printed.ok && checkLossless(source, printed.value).ok ? printed.value : "";
@@ -438,4 +439,27 @@ test "trailing-space Unicode quickfix preserves LF surroundings" {
 
 test "trailing-space Unicode quickfix preserves CRLF surroundings" {
 	assertUnicodeQuickfix("\r\n", "const x = \"é😀\";   ", 19);
+}
+
+function quickfixText(source: string): string {
+	const actions = quickfixItems(source);
+	if (actions.length != 1) throw new Error("Expected one quickfix, got " + actions.length.toString());
+	return lspGetField(quickfixEdit(actions[0]), "newText");
+}
+
+test "indent quickfix keeps each literal spelled as written" {
+	const prefix = "export function f(): string {\n";
+	const suffix = "\n\treturn x;\n}\n";
+	for (const literal of ["'a'", "\"a\\u0041\"", "`a${1}`"]) {
+		const source = prefix + " \tconst x = " + literal + ";" + suffix;
+		const result = prefix + "  const x = " + literal + ";" + suffix;
+		assert quickfixText(source) == "  const x = " + literal + ";";
+		assertFormattedBuffer(source, result);
+	}
+}
+
+test "indent quickfix reads its own buffer after another document was formatted" {
+	const source = "export function f(): string {\n \tconst x = \"a\";\n\treturn x;\n}\n";
+	handleFormatting("1", FORMAT_PARAMS, formattingDb("export const a = 1;\nconst x12 = 'zzzz';\n"));
+	assert quickfixText(source) == "  const x = \"a\";";
 }
