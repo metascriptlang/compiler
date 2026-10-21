@@ -4086,19 +4086,6 @@ function substituteStructAll(t: Type, names: string[], params: (Type | null)[], 
 	return result;
 }
 
-// Instantiate a generic type with concrete type arguments.
-export function instantiateGeneric(t: Type, genericParamNames: string[], typeArgs: Type[]): Type {
-	const limit = genericParamNames.length < typeArgs.length ? genericParamNames.length : typeArgs.length;
-	if (limit == 0) return t;
-	const names: string[] = [];
-	const args: Type[] = [];
-	for (let i = 0; i < limit; i += 1) {
-		names.push(genericParamNames[i]);
-		args.push(typeArgs[i]);
-	}
-	return substituteAllParams(t, names, args);
-}
-
 // ===== Type Unification =====
 // Recursively match formal (may contain GenericParam) against concrete (always resolved).
 // Extracts bindings into UnifyBindings (parallel arrays: names + types).
@@ -5403,16 +5390,6 @@ test "a union substituted into a union is the flat union the resolver builds" {
 	const all = substituteAllParams(generic, ["T"], [literals]);
 	assert one.typeChildren.length == 3 && typeKey(one) == typeKey(direct);
 	assert all.typeChildren.length == 3 && typeKey(all) == typeKey(direct);
-}
-
-test "instantiateGeneric multi-param" {
-	const r = createResult(createGenericParam("T"), createGenericParam("E"));
-	const result = instantiateGeneric(r, ["T", "E"], [numberType(), stringType()]);
-	assert isResult(result);
-	const ok = getResultOkType(result);
-	assert ok != null && ok.kind == TypeKind.Number;
-	const err = getResultErrType(result);
-	assert err != null && err.kind == TypeKind.String;
 }
 
 // substituteType keeps typeExtra un-substituted (would cost ~20× compile
