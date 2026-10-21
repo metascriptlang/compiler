@@ -715,9 +715,12 @@ export interface RaiserObjectData {
 	classType: RaiserClassType;
 }
 
-export function raiserIsInstance(classType: RaiserClassType, key: string): boolean {
-	for (const k of classType.chain) {
-		if (k == key) return true;
+// Whether a class is, or extends, the one a module constant names; the constant is read in place.
+export function raiserIsInstance(classType: RaiserClassType, key: RaiserValue): boolean {
+	when (mode != "danger") { if (key.kind != RaiserValueKind.String || !isConstHandle(key.intVal)) throw new Error("internal: a class key must be an interned string"); }
+	const at = handleIndex(key.intVal) as number;
+	for (let i = 0; i < classType.chain.length; i += 1) {
+		if (classType.chain[i] == constTexts[at]) return true;
 	}
 	return false;
 }

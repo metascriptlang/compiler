@@ -2748,14 +2748,13 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		},
 		RaiserOpcode.InstanceOf => {
 			const held = getDyn(vm, ib);
-			const key = constStringText(getFuncConst(func, ic));
-			setRegBool(vm, ia, held.kind == RaiserValueKind.Object && raiserIsInstance(vm.objectHeap.objects[handleIndex(held.intVal)].classType, key));
+			setRegBool(vm, ia, held.kind == RaiserValueKind.Object && raiserIsInstance(vm.objectHeap.objects[handleIndex(held.intVal)].classType, getFuncConst(func, ic)));
 		},
 		RaiserOpcode.ObjConv => {
 			const held = getDyn(vm, ia);
 			if (held.kind != RaiserValueKind.Nil) {
 				const classType = held.kind == RaiserValueKind.Object ? vm.objectHeap.objects[handleIndex(held.intVal)].classType : RAISER_NO_CLASS;
-				if (!raiserIsInstance(classType, constStringText(getFuncConst(func, ib)))) {
+				if (!raiserIsInstance(classType, getFuncConst(func, ib))) {
 					vmError(vm, "invalid object conversion: " + (classType.name != "" ? classType.name : held.kind == RaiserValueKind.Object ? "Object" : "<untyped>") + " is not " + constStringText(getFuncConst(func, ic)));
 				}
 			}
