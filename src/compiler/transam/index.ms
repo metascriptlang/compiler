@@ -1657,8 +1657,8 @@ test "opening a module the shared prelude loaded leaves its generics on the prel
 	assert errors.length == 0, errors.join("\n");
 }
 
-test "opening a sub-module the shared prelude loaded leaves its generics on the prelude's copy" {
-	const errors = checkAfterOpening("/core/array/shared.ms");
+test "opening a directory module the shared prelude loaded leaves its generics on the prelude's copy" {
+	const errors = checkAfterOpening("/core/array/index.cms");
 	assert errors.length == 0, errors.join("\n");
 }
 
@@ -1672,4 +1672,18 @@ test "an edited module checks clean again and stays registered for its importers
 		assert ctx.errors.length == 0, ctx.errors.map((e: CheckerError): string => e.message).join("\n");
 		assert lookupModuleCtx("/p/b.ms") == ctx;
 	}
+}
+
+test "a module the shared prelude imports stays registered when checked, as a build registers it" {
+	resetInstantiationState();
+	const db = createTransAmDb(100);
+	const std = resolveRuntimeDir() + "/std";
+	dbSetStdPath(db, std);
+	dbSetFileText(db, "/p/c.ms", MAP_USE);
+	dbTypeCheck(db, "/p/c.ms");
+	const imported = std + "/core/array/shared.ms";
+	assert db.preludeCtx.preludeModuleScopes.has(imported), imported;
+	dbSetFileText(db, imported, try readStdFile(imported) catch "");
+	const ctx = dbTypeCheck(db, imported);
+	assert lookupModuleCtx(imported) == ctx;
 }
