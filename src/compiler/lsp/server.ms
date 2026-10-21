@@ -797,3 +797,38 @@ test "editing the macro statement or the macro re-checks the importer of the spl
 	const missing = "[0:0 Module './lib' has no export 'Foo']";
 	assert publishesOf(r, lspPathToUri(dir + "/user.ms")) == ["[]", missing, "[]", missing, "[]"].join(" ");
 }
+
+const HOME_LIB = 'import { fooBody } from "./mac";
+fooBody(0);
+export class Home {
+  n: int32 = 1;
+}
+export function built(h: Home, f: Foo): int32 {
+  return f.x == null ? h.n : 0;
+}
+';
+const HOME_GEN = 'import { Home, Foo, built } from "./lib";
+export function each<T>(x: T, h: Home, f: Foo): int32 {
+  return built(h, f);
+}
+';
+const HOME_USER = 'import { each } from "./gen";
+import { Home, Foo } from "./lib";
+const f: Foo = { x: null };
+console.log(each<int32>(1, new Home(), f));
+';
+
+test "a class from a macro-importing module keeps one identity for a generic checked before its importer" {
+	const dir = spliceDir("home");
+	const files = [["mac.ms", spliceMac("Foo")], ["lib.ms", HOME_LIB], ["gen.ms", HOME_GEN], ["user.ms", HOME_USER]];
+	for (const f of files) writeFile(dir + "/" + f[0], f[1]);
+	const gen = lspPathToUri(dir + "/gen.ms");
+	const user = lspPathToUri(dir + "/user.ms");
+	const r = replay([
+		initializeDrain(),
+		frames([notification("textDocument/didOpen", openParams(gen, HOME_GEN))]),
+		frames([notification("textDocument/didOpen", openParams(user, HOME_USER))]),
+	]);
+	assert publishesOf(r, gen) == "[]";
+	assert publishesOf(r, user) == "[]";
+}
