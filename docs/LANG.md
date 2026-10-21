@@ -4273,6 +4273,40 @@ test files pin `$1`, `$$`, the refused `$2`, the plain JS name, the literal char
 `#`-after-`@` refusal. Not measured: extern class methods with a pattern, which the count check
 does not cover (the C refusal does).
 
+#### Extern structs
+
+```ms
+@include("sys/stat.h");
+extern struct Stat from "struct stat" {   // a C struct tag, only the fields read
+	st_mode: uint32;
+	st_size: int64;
+	st_mtime: int64;
+}
+extern struct Pair { b: int64; }           // a C typedef named like the struct
+extern struct DIR;                         // opaque: only `Ptr<DIR>` crosses
+extern function cStat(path: cstring, ref buf: Stat): int32 from "stat";
+```
+
+An `extern struct` with a field list declares a struct the header defines. `from "<C name>"`
+goes before the field list (after it is a parse error); without `from` the C name is the declared
+name. The header owns the layout: no struct is emitted, a value is declared with the C name
+(`struct stat st`), a field is read and written by its C name (so a field that is a C macro, like
+`st_mtime` on macOS, works), and the fields declared may be any subset of the C fields, in any
+order. A literal zero-fills the whole C struct (`memset(&v, 0, sizeof(struct stat))`) before it
+sets the fields it names. `sizeof S` is C's `sizeof`, never a size computed from the declared
+fields; on JS, where no C layout exists, `sizeof S` is refused. A field declared `cstring` over a
+C `char[N]` array reads the array as a C string (`e.d_name as string` for `struct dirent`).
+
+Measured 2026-10-21 on `wt/fix-extern-struct-tag`: corpus `1140-externStructTag` prints
+`dir true | file 6 true | missing|f.txt:8` (`struct stat` through `stat`, `struct dirent` through
+`readdir`) and `15 8 2 1 23 800 true true` (a non-prefix subset of fields copied by value and
+passed as `Ptr<S>`; `sizeof` equal to C's for a tag and for a typedef) on C drc, C orc, `--danger`
+and under ASan; the compiler before the change failed to parse the tag form and folded `sizeof`
+of a 24-byte typedef struct declaring one `int32` to `4`. On JS and raiser an extern struct is a plain object: a three-line program that builds a
+`Stat`, adds 1 to `st_mode` and prints it prints `8` on both; on C the same program without the
+`@include` fails in the C compiler (`struct stat` is incomplete). Not measured: a field whose name
+is a C keyword.
+
 ### Distinct Types
 ```typescript
 type UserId = distinct number;    // Nominal typing wrapper
