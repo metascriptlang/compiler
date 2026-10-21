@@ -22,7 +22,7 @@ import { placedInstanceOf } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
 import { runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike } from "../../checker/types";
 import { isSlotUnion } from "../../checker/fit";
-import { SymbolFlag, isViewBinding, classDeclNodeOf, parentClassSymOf, hasFlag } from "../../checker/symbol";
+import { SymbolFlag, isViewBinding, classDeclNodeOf, hasFlag } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
 import { carriesBigInt, RAISER_NO_BIGINT_MSG } from "../../checker/bigIntOnRaiser";
 import { dispatchEntryFor, dispatchOverridesFor, isGenericFn } from "../../checker/context";
@@ -31,7 +31,7 @@ import {
 	isLocalString,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
-	callRaiserStmtCompiler, emitTrapNil, resolveGlobal, raiserClassKey, classSymOfType, landResult, declaredSymbol, emitClosurePair,
+	callRaiserStmtCompiler, emitTrapNil, resolveGlobal, raiserClassKey, classSymOfType, landResult, declaredSymbol,
 } from "./context";
 import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros } from "./valueCopy";
 
@@ -1730,16 +1730,13 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		if (calleeSym != null && calleeSym.overloads != null && calleeSym.overloads.length > 0) {
 			calleeSym = resolveOverloadWinner(calleeSym, d.resolvedOverloadIdx).winnerSym;
 		}
-		const overridden = overriddenMethodName(calleeSym);
-		if (overridden != "" && d.arguments.length > 0) return compileDispatchedCall(s, node, overridden);
-		let funcIdx = resolveRoutine(s, calleeSym);
-		if (funcIdx < 0 && calleeSym != null) {
-			funcIdx = callRaiserOnDemand(calleeSym);
-		}
+		const funcIdx = routineIndex(s, calleeSym);
 		if (funcIdx >= 0) {
 			const dest = callBlock(s, node.nodeType, d.arguments, calleeParamTypes(calleeSym));
 			emitCallArgs(s, dest, d.arguments);
+			const pastBase = d.arguments.length > 0 ? emitOverrideCalls(s, node, dest, dispatchOverrides(calleeSym)) : [];
 			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, d.arguments.length));
+			patchJumpsTo(s, pastBase, codeLen(s));
 			return dest;
 		}
 	}
@@ -1780,23 +1777,38 @@ function compileSuperCall(s: RaiserCompState, node: Node, superSym: Symbol): int
 	return dest;
 }
 
-function overriddenMethodName(sym: Symbol | null): string {
-	if (sym == null) return "";
-	const entry = dispatchEntryFor(sym);
-	if (entry == null || entry.overloaded) return "";
-	return dispatchOverridesFor(entry.classSym, entry.methodName).length > 0 ? entry.methodName : "";
+function routineIndex(s: RaiserCompState, sym: Symbol | null): int32 {
+	const funcIdx = resolveRoutine(s, sym);
+	return funcIdx < 0 && sym != null ? callRaiserOnDemand(sym) : funcIdx;
 }
 
-function compileDispatchedCall(s: RaiserCompState, node: Node, methodName: string): int32 {
-	const d = node.data as CallExprData;
-	const dest = callBlock(s, node.nodeType, d.arguments, null);
-	for (let i = 0; i < d.arguments.length; i += 1) compileExprInto(s, d.arguments[i], dest + 1 + i);
-	const closureReg = allocRef(s);
-	emitInst(s, raiserABC(RaiserOpcode.LoadField, closureReg, dest + 1, addConst(s, raiserConstString(methodName))));
-	const fnReg = allocWord(s);
-	emitInst(s, raiserABC(RaiserOpcode.LoadField, fnReg, closureReg, addConst(s, raiserConstString("fn"))));
-	emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, fnReg, d.arguments.length));
-	return dest;
+function dispatchOverrides(sym: Symbol | null): Symbol[] {
+	const entry = sym != null ? dispatchEntryFor(sym) : null;
+	if (entry == null || entry.overloaded) return [];
+	return dispatchOverridesFor(entry.classSym, entry.methodName).map((e) => e.sym);
+}
+
+// The receiver's class picks the override, deepest class first, as the C
+// backend's dispatcher does; the base call the caller emits next is the fallthrough.
+function emitOverrideCalls(s: RaiserCompState, node: Node, dest: int32, overrides: Symbol[]): int32[] {
+	const argCount = (node.data as CallExprData).arguments.length;
+	const ends: int32[] = [];
+	for (const ov of overrides) {
+		const ft = ov.symbolType;
+		const key = ft != null && ft.typeChildren.length > 0 ? classTargetKey(ft.typeChildren[0]) : "";
+		const funcIdx = routineIndex(s, ov);
+		if (key == "" || funcIdx < 0) {
+			queueRaiserCompileError(`internal: the override '${ov.name}' has no ${key == "" ? "receiver class" : "Raiser routine"}`, node.location.line, node.location.column);
+			continue;
+		}
+		const isOv = allocBool(s);
+		emitInst(s, raiserABC(RaiserOpcode.InstanceOf, isOv, dest + 1, addConst(s, raiserConstString(key))));
+		const next = emitBranchIfFalsy(s, isOv);
+		emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, argCount));
+		ends.push(emitJumpPlaceholder(s));
+		patchJumpTo(s, next, codeLen(s));
+	}
+	return ends;
 }
 
 function compileClosureCall(s: RaiserCompState, node: Node): int32 {
@@ -2442,28 +2454,6 @@ export function emitsRoutine(decl: Node, flags: string): boolean {
 	return !isGenericFn(flags) && (decl.nodeType == null || !hasGenericParams(decl.nodeType));
 }
 
-export function storeMethodClosures(s: RaiserCompState, thisReg: int32, className: string, classBody: Node[]): void {
-	for (const member of classBody) {
-		if (member.kind != NodeKind.MethodDecl || !emitsRoutine(member, (member.data as MethodDeclData).methodFlags)) continue;
-		const md = member.data as MethodDeclData;
-		const methodIdx = resolveRoutine(s, declaredSymbol(member, `${className}.${md.methodName}`));
-		if (methodIdx < 0) continue;
-		const closureReg = emitClosurePair(s, methodIdx, -1);
-		const methodNameIdx = addConst(s, raiserConstString(md.methodName));
-		emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, methodNameIdx, closureReg));
-	}
-}
-
-export function storeInheritedClosures(s: RaiserCompState, thisReg: int32, classSym: Symbol | null, depth: int32): void {
-	const parent = classSym != null && depth < 64 ? parentClassSymOf(classSym) : null;
-	if (parent == null) return;
-	storeInheritedClosures(s, thisReg, parent, depth + 1);
-	const decl = classDeclNodeOf(parent);
-	if (decl == null || decl.kind != NodeKind.ClassDecl) return;
-	const pd = decl.data as ClassDeclData;
-	storeMethodClosures(s, thisReg, pd.className, pd.classBody);
-}
-
 export function classTypeOperand(s: RaiserCompState, className: string, classSym: Symbol | null): int32 {
 	if (classSym == null) return 0;
 	const chain: string[] = [raiserClassKey(classSym)];
@@ -2488,7 +2478,4 @@ export function emitClassInstanceShell(s: RaiserCompState, dest: int32, classSym
 	const decl = classSym != null ? classDeclNodeOf(classSym) : null;
 	const className = decl != null && decl.kind == NodeKind.ClassDecl ? (decl.data as ClassDeclData).className : "";
 	emitInst(s, raiserABC(RaiserOpcode.NewObject, dest, classSym != null ? classTypeOperand(s, className != "" ? className : classSym.name, classSym) : 0, 0));
-	if (classSym == null || decl == null || decl.kind != NodeKind.ClassDecl) return;
-	storeInheritedClosures(s, dest, classSym, 0);
-	storeMethodClosures(s, dest, className, (decl.data as ClassDeclData).classBody);
 }

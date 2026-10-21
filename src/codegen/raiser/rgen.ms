@@ -33,7 +33,7 @@ import {
 	isScalarClass
 } from "./context";
 import { compileStmt } from "./statements";
-import { compileExpr, classTargetKey, emitsRoutine, storeMethodClosures, storeInheritedClosures, classTypeOperand } from "./expressions";
+import { compileExpr, classTargetKey, emitsRoutine, classTypeOperand } from "./expressions";
 import { emitZeroValue, allocFor, regClassOf, zeroScalar } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { checkProgram } from "../../checker/checkPass";
@@ -209,8 +209,6 @@ function compileClassConstructor(
 	if (ctorSyms.length > 0) declareLocal(s, ctorSyms[0], thisReg);
 
 	storeZeroFields(s, thisReg, classBody);
-	storeInheritedClosures(s, thisReg, classSym, 0);
-	storeMethodClosures(s, thisReg, className, classBody);
 
 	// Execute constructor body
 	if (ctorBody != null) {
@@ -1495,7 +1493,7 @@ test "new carries every positional argument" {
 }
 
 test "new with no arguments reaches methods" {
-	const ctx = evalRaiser("class Box { answer() { return 42; } } const b = new Box(); return b.answer();");
+	const ctx = evalLowered("class Box { answer(): int32 { return 42; } } const b = new Box(); return b.answer();");
 	assert ctx.lastResult.intVal == 42;
 }
 
