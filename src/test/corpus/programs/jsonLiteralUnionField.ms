@@ -1,16 +1,16 @@
 // @stdout: full {"mode":"~alt","need":"alt","lvl":3,"half":0.25,"exact":1.5,"tag":"close_window","on":true}
-// @stdout: bare {"mode":null,"need":"~alt","lvl":null,"half":null,"exact":1.5,"tag":null,"on":null}
-// @stdout: nested {"name":"haro","steps":[{"key":"a","dir":"up","hold":"~alt"},{"key":"b","dir":"down","hold":null}],"main":{"mode":"alt","need":"~alt","lvl":1,"half":0.5,"exact":1.5,"tag":null,"on":null}}
+// @stdout: bare {"need":"~alt","exact":1.5}
+// @stdout: nested {"name":"haro","steps":[{"key":"a","dir":"up","hold":"~alt"},{"key":"b","dir":"down"}],"main":{"mode":"alt","need":"~alt","lvl":1,"half":0.5,"exact":1.5}}
 // @stdout: back {"mode":"~alt","need":"alt","lvl":3,"half":0.25,"exact":1.5,"tag":"close_window","on":true}
-// @stdout: absent {"mode":null,"need":"alt","lvl":null,"half":null,"exact":1.5,"tag":null,"on":null}
-// @stdout: nested back {"name":"haro","steps":[{"key":"a","dir":"up","hold":"~alt"},{"key":"b","dir":"down","hold":null}],"main":{"mode":"alt","need":"~alt","lvl":1,"half":0.5,"exact":1.5,"tag":null,"on":null}}
+// @stdout: absent {"need":"alt","exact":1.5}
+// @stdout: nested back {"name":"haro","steps":[{"key":"a","dir":"up","hold":"~alt"},{"key":"b","dir":"down"}],"main":{"mode":"alt","need":"~alt","lvl":1,"half":0.5,"exact":1.5}}
 // @stdout: bad string err field 'need': expected "alt" | "~alt", got "Alt"
 // @stdout: bad number err field 'lvl': expected 1 | 2 | 3, got 7
 // @stdout: bad fraction err field 'exact': expected 1.5, got 2
 // @stdout: bad kind err field 'need': expected "alt" | "~alt", got 5; field 'on': expected true, got false
 // @stdout: missing err field 'need': expected "alt" | "~alt", got null
 // @stdout: bad nested err field 'steps[1].dir': expected "down" | "up", got "left"; field 'main.mode': expected "alt" | "~alt", got "ALT"
-// note: a field typed by literal types is stored as their base scalar, so it is written as that string, number or boolean and read back only when the value is one of the members; an absent optional field is written as null like `s?: string` (corpus `jsonNullableValues`).
+// note: a field typed by literal types is stored as their base scalar, so it is written as that string, number or boolean and read back only when the value is one of the members; an absent optional field is left out like `s?: string` (corpus `jsonNullableValues`).
 type Mode = "alt" | "~alt";
 
 interface Bind {
