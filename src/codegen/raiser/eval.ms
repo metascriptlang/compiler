@@ -597,6 +597,12 @@ test "engine: an instance holds its declared fields only, and the receiver's cla
 	assert heapObjectGetField(ctx.objectHeap, ctx.lastResult.intVal, "y").intVal == 112131;
 }
 
+test "engine: a subclass with no constructor holds its parent's fields first, as its type lays them out" {
+	const ctx = evalFull("class A { x: int32 = 1; } class B extends A { y: int32 = 2; } return new B();");
+	const names = ctx.objectHeap.objects[handleIndex(ctx.lastResult.intVal)].fields.map((f) => f.name);
+	assert names.join(",") == "x,y", names.join(",");
+}
+
 test "engine: a for-of raises when the string it iterates changes length" {
 	const ctx = evalOrcVM("let s = 'abc'; let seen = ''; try { for (const c of s) { seen = seen + c; s = s + 'd'; } } catch (e) { console.log('raised after ' + seen); }");
 	assert ctx.error == "", ctx.error;
@@ -1587,6 +1593,12 @@ function compiledFunc(code: string, name: string): RaiserFunction {
 	}
 	unreachable;
 	return mod.functions[0];
+}
+
+test "engine: a field of a receiver whose type fixes its layout is read and written at its slot" {
+	const step = compiledFunc("class P { x: int64 = 0; y: int64 = 0; } function step(p: P): int64 { p.y = p.y + 1; return p.x; } console.log(`${step(new P())}`);", "step");
+	const text = disasmFunc(step);
+	assert text.includes("LoadSlot") && text.includes("StoreSlot") && !text.includes("Field"), text;
 }
 
 function backJumpSpan(f: RaiserFunction): number {
