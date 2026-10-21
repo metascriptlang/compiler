@@ -51,20 +51,30 @@ let routineSummaries = new HashMap<Symbol, WriteSummary>();
 let constructionSummaries = new HashMap<Symbol, WriteSummary>();
 let hookSummaries = new HashMap<Type, WriteSummary>();
 let hookless = new HashSet<Type>();
+let ownerHookCache = new HashMap<Symbol, Symbol[]>();
 let stack: WriteSummary[] = [];
 let nextIndex: int32 = 0;
 let checker: CheckerContext | null = null;
-let rcOf: (t: Type | null) => RcInfo = (t: Type | null): RcInfo => { throw new Error("internal: write effects read before resetWriteEffects"); };
+let rcOf: (t: Type | null) => RcInfo = (t: Type | null): RcInfo => { throw new Error("internal: write effects read before bindWriteEffects"); };
+
+export function bindWriteEffects(ctx: CheckerContext | null, classify: (t: Type | null) => RcInfo): void {
+	checker = ctx;
+	rcOf = classify;
+}
 
 export function resetWriteEffects(ctx: CheckerContext | null, classify: (t: Type | null) => RcInfo): void {
+	clearWriteSummaries();
+	bindWriteEffects(ctx, classify);
+}
+
+export function clearWriteSummaries(): void {
+	ownerHookCache = new HashMap<Symbol, Symbol[]>();
 	routineSummaries = new HashMap<Symbol, WriteSummary>();
 	constructionSummaries = new HashMap<Symbol, WriteSummary>();
 	hookSummaries = new HashMap<Type, WriteSummary>();
 	hookless = new HashSet<Type>();
 	stack = [];
 	nextIndex = 0;
-	checker = ctx;
-	rcOf = classify;
 }
 
 function newSummary(kind: SummaryKind, sym: Symbol | null, hooks: Symbol[]): WriteSummary {
@@ -245,9 +255,18 @@ function calleesOf(call: Node, s: WriteSummary): WriteSummary[] {
 	return out;
 }
 
+function addHook(out: Symbol[], hook: Symbol): void {
+	if (!out.includes(hook)) out.push(hook);
+}
+
 function hookRoutines(t: Type, seen: HashSet<Type>, out: Symbol[]): void {
-	if (seen.has(t)) return;
+	if (seen.has(t) || hookless.has(t)) return;
 	seen.add(t);
+	const finished = hookSummaries.get(t);
+	if (finished != null) {
+		for (const h of finished.hooks) addHook(out, h);
+		return;
+	}
 	match (t.kind) {
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 | TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
 			| TypeKind.Float32 | TypeKind.Float64 | TypeKind.Boolean | TypeKind.String | TypeKind.Void | TypeKind.Function => { return; },
@@ -255,11 +274,11 @@ function hookRoutines(t: Type, seen: HashSet<Type>, out: Symbol[]): void {
 	};
 	for (const name of LIFECYCLE_HOOK_NAMES) {
 		const hook = lookupInstanceHook(t, name);
-		if (hook != null) out.push(hook);
+		if (hook != null) addHook(out, hook);
 	}
 	let owner = t.kind == TypeKind.Struct ? nominalTypeSym(t) : null;
 	while (owner != null) {
-		ownerHooks(owner, out);
+		for (const h of ownerHooks(owner)) addHook(out, h);
 		owner = owner.symbolKind == SymbolKind.Class ? parentClassSymOf(owner) : null;
 	}
 	for (const c of t.typeChildren) { if (c != null) hookRoutines(c, seen, out); }
@@ -267,15 +286,20 @@ function hookRoutines(t: Type, seen: HashSet<Type>, out: Symbol[]): void {
 	if (t.typeExtra != null) hookRoutines(t.typeExtra, seen, out);
 }
 
-function ownerHooks(owner: Symbol, out: Symbol[]): void {
-	if (checker == null) return;
-	const registry = pickBodyCtx(owner.modulePath, checker).extensionRegistry;
-	if (registry == null) return;
-	for (const name of LIFECYCLE_HOOK_NAMES) {
-		for (const ext of findAllExtensionsByName(registry, name)) {
-			if (!ext.isStatic && ext.sym != null && extReceiverSym(ext) == owner) out.push(ext.sym);
+function ownerHooks(owner: Symbol): Symbol[] {
+	const known = ownerHookCache.get(owner);
+	if (known != null) return known;
+	const out: Symbol[] = [];
+	const registry = checker != null ? pickBodyCtx(owner.modulePath, checker!).extensionRegistry : null;
+	if (registry != null) {
+		for (const name of LIFECYCLE_HOOK_NAMES) {
+			for (const ext of findAllExtensionsByName(registry, name)) {
+				if (!ext.isStatic && ext.sym != null && extReceiverSym(ext) == owner) out.push(ext.sym);
+			}
 		}
 	}
+	ownerHookCache.set(owner, out);
+	return out;
 }
 
 function hookSummary(t: Type): WriteSummary | null {

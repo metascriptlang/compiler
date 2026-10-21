@@ -48,6 +48,7 @@ import { resetCapturedAssignments, capturedAssignmentCount } from "../../checker
 import { registerModuleProgram, registerModuleCtx, lookupModuleProgram, lookupModuleCtx, resetInstantiationState } from "../../checker/instantiate";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
+import { clearWriteSummaries } from "../../analyzer/writeEffects";
 import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
 import { macroCompileCount, macroPreprocessCount } from "../meta/expand";
 import { boundHandleCount } from "../meta/bridge"; // also registers the expandMacroInvocation callback
@@ -1076,6 +1077,7 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 	recordDependency(db.depStack, ckKey, ckEntry != null ? ckEntry.outputHash : 0);
 
 	const transformed = transformProgram(program, checkerCtx, false);
+	clearWriteSummaries();
 	const analyzed = analyzeProgram(transformed, checkerCtx);
 	db.trees.set(analyzeNodeKey(fileId), analyzed);
 	const analyzeHash = transAmHashNode(analyzed);

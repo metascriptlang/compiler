@@ -9,6 +9,7 @@ import { resetResizeSummaries } from "../checker/varPartitions";
 import { resetCapturedAssignments } from "../checker/flow";
 import { resetDuVariantRegistry } from "../checker/types";
 import { resetDuHashes } from "../analyzer/classify";
+import { clearWriteSummaries } from "../analyzer/writeEffects";
 import { resetLinkState } from "../utils/linkState";
 import { resetLiftedOps } from "../transform/lowering/destructorLifting";
 import { ModuleError } from "../module/graph";
@@ -92,6 +93,7 @@ export function resetBuildState(): void {
 	resetRaises();
 	resetResizeSummaries();
 	resetCapturedAssignments();
+	clearWriteSummaries();
 	resetDuVariantRegistry();
 	resetDuHashes();
 	resetLinkState();
@@ -100,6 +102,7 @@ export function resetBuildState(): void {
 
 export function startSessionBuild(session: BuildSession): void {
 	if (session.check.db == null) resetBuildState();
+	else clearWriteSummaries();
 	session.staleReason = "";
 	session.moduleCount = 0;
 	session.loweredCount = 0;
