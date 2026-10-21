@@ -202,8 +202,13 @@ export function checkActorArgSendable(ctx: CheckerContext, argNode: Node, pi: nu
 // let `x++` (UpdateExpr) and any argument wrapped in HiddenStdConv through.
 function walkForMutableCaptures(node: Node | null, params: string[], reported: string[], ctx: CheckerContext, by: string): void {
 	if (node == null) return;
-	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ArrowFunction) return;
 	match (node.kind) {
+		// A nested routine runs on the same thread as the thunk that calls it, so its
+		// captures are the thunk's captures; its own parameters bind, like the thunk's.
+		NodeKind.FunctionDecl | NodeKind.FunctionExpr | NodeKind.ArrowFunction => {
+			const nested = routineParamsAndBody(node);
+			walkForMutableCaptures(nested.body, params.concat(nested.params), reported, ctx, by);
+		},
 		NodeKind.Identifier => {
 			const d = node.data as IdentifierData;
 			let skip = false;
@@ -244,7 +249,18 @@ export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawn
 		const iifeCallee = (closure.data as CallExprData).callee;
 		if (iifeCallee.kind == NodeKind.ArrowFunction) closure = (iifeCallee.data as ArrowFunctionData).arrowBody;
 	}
-	checkClosureCaptures(ctx, closure, "spawn");
+	const source = peelHidden(closure);
+	if (source.kind != NodeKind.ArrowFunction && source.kind != NodeKind.FunctionExpr && !isSendableFunction(source.nodeType)) {
+		const sym = source.kind == NodeKind.Identifier ? source.resolvedSym : null;
+		if (sym == null || !judgedAtDeclaration(ctx, sym, "spawn")) {
+			const name = describeExpr(source);
+			addError(ctx, `'${name}' is a function value that may capture mutable state, so spawn cannot run it on another thread — spawn a function declaration or a closure, or declare '${name}' as Sendable<F>`,
+				source.location.line, source.location.column);
+			return;
+		}
+	} else {
+		checkClosureCaptures(ctx, source, "spawn");
+	}
 	requireSpawnSafe(closure, "spawn runs this thunk on another thread", spawnNode);
 }
 
@@ -268,25 +284,30 @@ function requireSpawnSafe(fn: Node, runs: string, at: Node): void {
 	});
 }
 
-function checkClosureCaptures(ctx: CheckerContext, closure: Node, by: string): void {
-	let params: string[] = [];
-	let body: Node | null = null;
+struct RoutineParts { params: string[]; body: Node | null; }
+
+function routineParamsAndBody(closure: Node): RoutineParts {
 	if (closure.kind == NodeKind.ArrowFunction) {
 		const ad = closure.data as ArrowFunctionData;
-		params = ad.arrowParams;
-		body = ad.arrowBody;
-	} else if (closure.kind == NodeKind.FunctionExpr) {
-		const fd = closure.data as FunctionExprData;
-		params = fd.funcExprParams;
-		body = fd.funcExprBody;
-	} else if (closure.kind == NodeKind.FunctionDecl) {
-		const fd = closure.data as FunctionDeclData;
-		params = fd.params;
-		body = fd.fnBody;
+		return { params: ad.arrowParams, body: ad.arrowBody };
 	}
+	if (closure.kind == NodeKind.FunctionExpr) {
+		const fd = closure.data as FunctionExprData;
+		return { params: fd.funcExprParams, body: fd.funcExprBody };
+	}
+	if (closure.kind == NodeKind.FunctionDecl) {
+		const fd = closure.data as FunctionDeclData;
+		return { params: fd.params, body: fd.fnBody };
+	}
+	return { params: [], body: null };
+}
+
+function checkClosureCaptures(ctx: CheckerContext, closure: Node, by: string): void {
+	const parts = routineParamsAndBody(closure);
+	const body = parts.body;
 	const reported: string[] = [];
 	if (body != null) {
-		walkForMutableCaptures(body, params, reported, ctx, by);
+		walkForMutableCaptures(body, parts.params, reported, ctx, by);
 		if (ctx.currentActor != null) {
 			const actorReported: string[] = [];
 			walkActorSpawnRules(ctx, body, actorReported);
@@ -312,7 +333,7 @@ export function checkSendableSource(ctx: CheckerContext, expr: Node): boolean {
 	return false;
 }
 
-function judgedAtDeclaration(ctx: CheckerContext, sym: Symbol): boolean {
+function judgedAtDeclaration(ctx: CheckerContext, sym: Symbol, by: string = "a Sendable function"): boolean {
 	const home = scopeHolding(ctx.table, sym);
 	if (home == null) return false;
 	const routine = sym.symbolKind == SymbolKind.Function;
@@ -322,7 +343,7 @@ function judgedAtDeclaration(ctx: CheckerContext, sym: Symbol): boolean {
 	if (declared == null || (declared.kind != NodeKind.FunctionDecl && declared.kind != NodeKind.ArrowFunction && declared.kind != NodeKind.FunctionExpr)) return false;
 	const here = ctx.table.current;
 	ctx.table.current = home;
-	checkClosureCaptures(ctx, declared, "a Sendable function");
+	checkClosureCaptures(ctx, declared, by);
 	ctx.table.current = here;
 	return true;
 }
@@ -371,7 +392,19 @@ function actorDeclaresMethod(ctx: CheckerContext, methodName: string): boolean {
 	return false;
 }
 
-function walkActorSpawnRules(ctx: CheckerContext, node: Node, reportedKeys: string[]): void {
+function holdsActor(t: Type | null, actorSym: Symbol, seen: Type[]): boolean {
+	if (t == null || seen.includes(t)) return false;
+	if (t.sym == actorSym) return true;
+	seen.push(t);
+	if (holdsActor(t.typeReturn, actorSym, seen)) return true;
+	if (t.kind == TypeKind.Function) return false;
+	for (const c of t.typeChildren) {
+		if (holdsActor(c, actorSym, seen)) return true;
+	}
+	return false;
+}
+
+function walkActorSpawnRules(ctx: CheckerContext, node: Node | null, reportedKeys: string[]): void {
 	if (node == null) return;
 	match (node.kind) {
 		NodeKind.BinaryExpr => {
@@ -402,8 +435,24 @@ function walkActorSpawnRules(ctx: CheckerContext, node: Node, reportedKeys: stri
 			walkActorSpawnRules(ctx, d.object, reportedKeys);
 		},
 		NodeKind.Identifier => {
-			if ((node.data as IdentifierData).name == "this" && pushIfNew(reportedKeys, "this")) {
-				addError(ctx, "spawn thunk inside an actor method cannot capture 'this' — borrow individual fields instead (PARALOCK S1/E61)", node.location.line, node.location.column);
+			const name = (node.data as IdentifierData).name;
+			if (name == "this") {
+				if (pushIfNew(reportedKeys, "this")) {
+					addError(ctx, "spawn thunk inside an actor method cannot capture 'this' — borrow individual fields instead (PARALOCK S1/E61)", node.location.line, node.location.column);
+				}
+				return;
+			}
+			const sym = lookupSymbol(ctx.table, name);
+			if (sym == null || (node.resolvedSym != null && node.resolvedSym != sym)) return;
+			if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Parameter) return;
+			if (holdsActor(sym.symbolType, ctx.currentActor!, []) && pushIfNew(reportedKeys, "v:" + name)) {
+				addError(ctx, `spawn thunk inside an actor method cannot capture '${name}', which can hold the actor 'this' — borrow individual fields instead (PARALOCK S1/E61)`, node.location.line, node.location.column);
+				return;
+			}
+			const bound = constBindingInitializer(sym);
+			const routine = bound != null ? peelHidden(bound) : null;
+			if (routine != null && (routine.kind == NodeKind.ArrowFunction || routine.kind == NodeKind.FunctionExpr) && pushIfNew(reportedKeys, "c:" + name)) {
+				walkActorSpawnRules(ctx, routineParamsAndBody(routine).body, reportedKeys);
 			}
 		},
 		NodeKind.CallExpr => {
