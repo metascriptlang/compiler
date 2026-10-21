@@ -292,7 +292,7 @@ export function printEnumDecl(node: Node, options: FormatOptions): Doc {
 function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions): Doc {
 	const d = node.data as InterfaceDeclData;
 	const extendsClause = d.interfaceExtends.length > 0 ? " extends " + d.interfaceExtends.join(", ") : "";
-	const head = keyword + " " + d.interfaceName + genericsFor(options, d.nameLocation, d.interfaceName, node.typeArg) + extendsClause;
+	const head = keyword + " " + d.interfaceName + genericsFor(options, d.nameLocation, d.interfaceName, node.typeArg) + extendsClause + (d.nativeName != "" ? " from \"" + d.nativeName + "\"" : "");
 	const accessors = keyword == "struct" ? takeStructAccessors() : [];
 	let accessorIdx = 0;
 	if (d.interfaceFields.length == 0 && accessors.length == 0) return docText(head + " {}");

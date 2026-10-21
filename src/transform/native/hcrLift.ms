@@ -232,6 +232,7 @@ export function hcrStorageDecl(t: Type, loc: SourceLocation): Node {
 		interfaceName: t.typeName, interfaceFields: ["value"], interfaceFieldTypes: [],
 		interfaceExtends: [], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: noFieldDecorators(1),
 		interfaceOptionalFields: [] as string[],
+		nativeName: "",
 	}, syntheticToken(loc));
 	decl.nodeType = t;
 	return decl;

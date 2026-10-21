@@ -23,3 +23,8 @@ test "fmt: extern function with a body keeps the body" {
 test "fmt: abstract method stays bodyless" {
 	assert assertFmtLossless("export extern function g(): void;\nclass A {\n\tm(): void;\n}\n");
 }
+
+test "fmt: extern struct keeps the C name before its field list" {
+	assert assertFmtLossless("extern struct Stat from \"struct stat\" {\n\tst_mode: uint32;\n}\n");
+	assert assertFmtLossless("extern struct Tag from \"struct T\";\n");
+}
