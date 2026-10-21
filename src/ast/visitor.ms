@@ -31,76 +31,77 @@ import {
 type ChildVisitor = (child: Node) => void;
 
 // Visit all child nodes of a given node (read-only, no mutation).
-export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
+function visitChild(cb: ChildVisitor, n: Node): void {
+	if (n != null) cb(n);
+}
+
+export function forEachChild(node: Node, cb: ChildVisitor): void {
 	if (node == null) return;
-	const cb = (n: Node): void => {
-		if (n != null) cbRaw(n);
-	};
 	match (node.kind) {
 		// Program root
 		NodeKind.Program => {
 			const d = node.data as ProgramData;
 			let i = 0;
 			while (i < d.programStmts.length) {
-				cb(d.programStmts[i]);
+				visitChild(cb, d.programStmts[i]);
 				i += 1;
 			}
 		},
 		// SpliceMany — A2 macro multi-decl emission
 		NodeKind.SpliceMany => {
 			const d = node.data as SpliceManyData;
-			for (const child of d.spliceNodes) cb(child);
+			for (const child of d.spliceNodes) visitChild(cb, child);
 		},
 		// Block
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
 			let i = 0;
 			while (i < d.statements.length) {
-				cb(d.statements[i]);
+				visitChild(cb, d.statements[i]);
 				i += 1;
 			}
 		},
 		// Statements with child nodes
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			cb(d.condition);
-			cb(d.consequent);
-			cb(d.alternate);
+			visitChild(cb, d.condition);
+			visitChild(cb, d.consequent);
+			visitChild(cb, d.alternate);
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
-			cb(d.whileCondition);
-			cb(d.whileBody);
+			visitChild(cb, d.whileCondition);
+			visitChild(cb, d.whileBody);
 		},
 		NodeKind.ForStmt => {
 			const d = node.data as ForStmtData;
-			cb(d.forInit);
-			cb(d.forCondition);
-			cb(d.forUpdate);
-			cb(d.forBody);
+			visitChild(cb, d.forInit);
+			visitChild(cb, d.forCondition);
+			visitChild(cb, d.forUpdate);
+			visitChild(cb, d.forBody);
 		},
 		NodeKind.ForOfStmt => {
 			const d = node.data as ForOfStmtData;
-			cb(d.forOfIterable);
-			cb(d.forOfBody);
-			if (d.forOfPattern != null) { cb(d.forOfPattern); }
+			visitChild(cb, d.forOfIterable);
+			visitChild(cb, d.forOfBody);
+			if (d.forOfPattern != null) { visitChild(cb, d.forOfPattern); }
 		},
 		NodeKind.ForInStmt => {
 			const d = node.data as ForInStmtData;
-			cb(d.forInObject);
-			cb(d.forInBody);
+			visitChild(cb, d.forInObject);
+			visitChild(cb, d.forInBody);
 		},
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
-			cb(d.doBody);
-			cb(d.doCondition);
+			visitChild(cb, d.doBody);
+			visitChild(cb, d.doCondition);
 		},
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
-			cb(d.switchDisc);
+			visitChild(cb, d.switchDisc);
 			let i = 0;
 			while (i < d.switchCases.length) {
-				cb(d.switchCases[i]);
+				visitChild(cb, d.switchCases[i]);
 				i += 1;
 			}
 		},
@@ -108,30 +109,30 @@ export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 			const d = node.data as SwitchCaseData;
 			let i = 0;
 			while (i < d.caseTests.length) {
-				cb(d.caseTests[i]);
+				visitChild(cb, d.caseTests[i]);
 				i += 1;
 			}
 			let j = 0;
 			while (j < d.caseStmts.length) {
-				cb(d.caseStmts[j]);
+				visitChild(cb, d.caseStmts[j]);
 				j += 1;
 			}
 		},
 		NodeKind.MatchStmt => {
 			const d = node.data as MatchStmtData;
-			cb(d.matchStmtDisc);
+			visitChild(cb, d.matchStmtDisc);
 			let i = 0;
 			while (i < d.matchStmtCases.length) {
-				cb(d.matchStmtCases[i]);
+				visitChild(cb, d.matchStmtCases[i]);
 				i += 1;
 			}
 		},
 		NodeKind.MatchExpr => {
 			const d = node.data as MatchExprData;
-			cb(d.matchDisc);
+			visitChild(cb, d.matchDisc);
 			let i = 0;
 			while (i < d.matchCases.length) {
-				cb(d.matchCases[i]);
+				visitChild(cb, d.matchCases[i]);
 				i += 1;
 			}
 		},
@@ -139,117 +140,117 @@ export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 			const d = node.data as MatchCaseData;
 			let i = 0;
 			while (i < d.casePatterns.length) {
-				cb(d.casePatterns[i]);
+				visitChild(cb, d.casePatterns[i]);
 				i += 1;
 			}
-			if (d.caseGuard != null) { cb(d.caseGuard); }
-			cb(d.caseBody);
+			if (d.caseGuard != null) { visitChild(cb, d.caseGuard); }
+			visitChild(cb, d.caseBody);
 		},
 		// Declarations with bodies
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
-			cb(d.fnBody);
+			visitChild(cb, d.fnBody);
 		},
 		NodeKind.ArrowFunction => {
 			const d = node.data as ArrowFunctionData;
-			cb(d.arrowBody);
+			visitChild(cb, d.arrowBody);
 		},
 		NodeKind.FunctionExpr => {
 			const d = node.data as FunctionExprData;
-			cb(d.funcExprBody);
+			visitChild(cb, d.funcExprBody);
 		},
 		NodeKind.ClassDecl => {
 			const d = node.data as ClassDeclData;
 			let i = 0;
 			while (i < d.classBody.length) {
-				cb(d.classBody[i]);
+				visitChild(cb, d.classBody[i]);
 				i += 1;
 			}
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
-			cb(d.methodBody);
+			visitChild(cb, d.methodBody);
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
-			cb(d.ctorBody);
+			visitChild(cb, d.ctorBody);
 		},
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
-			cb(d.exportedDecl);
+			visitChild(cb, d.exportedDecl);
 		},
 		NodeKind.DecoratedDecl => {
 			const d = node.data as DecoratedDeclData;
-			cb(d.decoratedNode);
+			visitChild(cb, d.decoratedNode);
 		},
 		NodeKind.MacroDecl => {
 			const d = node.data as MacroDeclData;
-			cb(d.macroDeclBody);
+			visitChild(cb, d.macroDeclBody);
 		},
 		// Simple statements with one child
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			cb(d.initializer);
+			visitChild(cb, d.initializer);
 		},
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;
-			cb(d.argument!);
+			visitChild(cb, d.argument!);
 		},
 		NodeKind.ThrowStmt => {
 			const d = node.data as ThrowStmtData;
-			cb(d.throwArg);
+			visitChild(cb, d.throwArg);
 		},
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
-			cb(d.expr);
+			visitChild(cb, d.expr);
 		},
 		NodeKind.DeferStmt => {
 			const d = node.data as DeferStmtData;
-			cb(d.deferExpr);
+			visitChild(cb, d.deferExpr);
 		},
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
-			cb(d.tryBody);
-			cb(d.catchBody);
-			cb(d.finallyBody);
+			visitChild(cb, d.tryBody);
+			visitChild(cb, d.catchBody);
+			visitChild(cb, d.finallyBody);
 		},
 		// Expressions
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
-			cb(d.left);
-			cb(d.right);
+			visitChild(cb, d.left);
+			visitChild(cb, d.right);
 		},
 		NodeKind.UnaryExpr => {
 			const d = node.data as UnaryExprData;
-			cb(d.operand);
+			visitChild(cb, d.operand);
 		},
 		NodeKind.UpdateExpr => {
 			const d = node.data as UpdateExprData;
-			cb(d.updateArg);
+			visitChild(cb, d.updateArg);
 		},
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
-			cb(d.callee);
+			visitChild(cb, d.callee);
 			let i = 0;
 			while (i < d.arguments.length) {
-				cb(d.arguments[i]);
+				visitChild(cb, d.arguments[i]);
 				i += 1;
 			}
 		},
 		NodeKind.MemberExpr => {
 			const d = node.data as MemberExprData;
-			cb(d.object);
+			visitChild(cb, d.object);
 		},
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
-			cb(d.array);
-			cb(d.index);
+			visitChild(cb, d.array);
+			visitChild(cb, d.index);
 		},
 		NodeKind.ObjectLiteral => {
 			const d = node.data as ObjectLiteralData;
 			let i = 0;
 			while (i < d.properties.length) {
-				cb(d.properties[i]);
+				visitChild(cb, d.properties[i]);
 				i += 1;
 			}
 		},
@@ -257,114 +258,114 @@ export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 			const d = node.data as ArrayLiteralData;
 			let i = 0;
 			while (i < d.elements.length) {
-				cb(d.elements[i]);
+				visitChild(cb, d.elements[i]);
 				i += 1;
 			}
 		},
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
-			cb(d.ternaryCondition);
-			cb(d.ternaryConsequent);
-			cb(d.ternaryAlternate);
+			visitChild(cb, d.ternaryCondition);
+			visitChild(cb, d.ternaryConsequent);
+			visitChild(cb, d.ternaryAlternate);
 		},
 		NodeKind.SpreadExpr => {
 			const d = node.data as SpreadExprData;
-			cb(d.spreadArg);
+			visitChild(cb, d.spreadArg);
 		},
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
-			cb(d.newCallee);
+			visitChild(cb, d.newCallee);
 			let i = 0;
 			while (i < d.newArguments.length) {
-				cb(d.newArguments[i]);
+				visitChild(cb, d.newArguments[i]);
 				i += 1;
 			}
 		},
 		NodeKind.TryExpr => {
 			const d = node.data as TryExprData;
-			cb(d.tryArg);
-			if (d.hasCatch) { cb(d.catchVal); }
+			visitChild(cb, d.tryArg);
+			if (d.hasCatch) { visitChild(cb, d.catchVal); }
 		},
 		NodeKind.AwaitExpr => {
 			const d = node.data as AwaitExprData;
-			cb(d.awaitArg);
+			visitChild(cb, d.awaitArg);
 		},
 		NodeKind.YieldExpr => {
 			const d = node.data as YieldExprData;
-			cb(d.yieldArg);
+			visitChild(cb, d.yieldArg);
 		},
 		NodeKind.MoveExpr => {
 			const d = node.data as MoveExprData;
-			cb(d.moveArg);
+			visitChild(cb, d.moveArg);
 		},
 		NodeKind.OutExpr => {
 			const d = node.data as OutExprData;
-			cb(d.outArg);
+			visitChild(cb, d.outArg);
 		},
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
 			const d = node.data as HiddenDerefData;
-			cb(d.expr);
+			visitChild(cb, d.expr);
 		},
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
 			const d = node.data as HiddenStdConvData;
-			cb(d.convExpr);
+			visitChild(cb, d.convExpr);
 		},
 		NodeKind.TypeAssertion => {
 			const d = node.data as TypeAssertionData;
-			cb(d.asExpr);
+			visitChild(cb, d.asExpr);
 		},
 		NodeKind.DestructuringDecl => {
 			const d = node.data as DestructuringDeclData;
-			cb(d.destrPattern);
-			cb(d.destrInit);
+			visitChild(cb, d.destrPattern);
+			visitChild(cb, d.destrInit);
 		},
 		NodeKind.QuoteExpr => {
 			const d = node.data as QuoteExprData;
-			cb(d.quoteBody);
+			visitChild(cb, d.quoteBody);
 		},
 		NodeKind.ComptimeBlock => {
 			const d = node.data as ComptimeBlockData;
-			cb(d.comptimeBody);
+			visitChild(cb, d.comptimeBody);
 		},
 		NodeKind.MacroInvocation => {
 			const d = node.data as MacroInvocationData;
 			let i = 0;
 			while (i < d.macroArgs.length) {
-				cb(d.macroArgs[i]);
+				visitChild(cb, d.macroArgs[i]);
 				i += 1;
 			}
 		},
 		NodeKind.TestDecl => {
 			const d = node.data as TestDeclData;
-			cb(d.testBody);
+			visitChild(cb, d.testBody);
 		},
 		NodeKind.AssertStmt => {
 			const d = node.data as AssertStmtData;
-			cb(d.assertExpr);
-			if (d.assertMessageExpr != null) cb(d.assertMessageExpr);
+			visitChild(cb, d.assertExpr);
+			if (d.assertMessageExpr != null) visitChild(cb, d.assertMessageExpr);
 		},
 		NodeKind.ActorDecl => {
 			const d = node.data as ActorDeclData;
 			let i = 0;
 			while (i < d.actorBody.length) {
-				cb(d.actorBody[i]);
+				visitChild(cb, d.actorBody[i]);
 				i += 1;
 			}
 		},
 		NodeKind.PropertyDecl => {
 			const d = node.data as PropertyDeclData;
-			if (d.propInitializer != null) { cb(d.propInitializer); }
+			if (d.propInitializer != null) { visitChild(cb, d.propInitializer); }
 		},
 		NodeKind.ArrayPattern => {
 			const d = node.data as ArrayPatternData;
 			let i = 0;
 			while (i < d.patternElements.length) {
-				cb(d.patternElements[i]);
+				visitChild(cb, d.patternElements[i]);
 				i += 1;
 			}
 			i = 0;
 			while (i < d.patternDefaults.length) {
-				if (d.patternDefaults[i] != null) { cb(d.patternDefaults[i]); }
+				if (d.patternDefaults[i] != null) { visitChild(cb, d.patternDefaults[i]); }
 				i += 1;
 			}
 		},
@@ -372,67 +373,67 @@ export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 			const d = node.data as ObjectPatternData;
 			let i = 0;
 			while (i < d.patternProps.length) {
-				cb(d.patternProps[i]);
+				visitChild(cb, d.patternProps[i]);
 				i += 1;
 			}
 		},
 		NodeKind.ObjectPatternProp => {
 			const d = node.data as ObjectPatternPropData;
-			if (d.propAlias != null) { cb(d.propAlias); }
-			if (d.propDefault != null) { cb(d.propDefault); }
+			if (d.propAlias != null) { visitChild(cb, d.propAlias); }
+			if (d.propDefault != null) { visitChild(cb, d.propDefault); }
 		},
 		NodeKind.TypeGeneric => {
 			const d = node.data as TypeGenericData;
-			cb(d.typExprBase);
+			visitChild(cb, d.typExprBase);
 			let i = 0;
 			while (i < d.typExprArgs.length) {
-				cb(d.typExprArgs[i]);
+				visitChild(cb, d.typExprArgs[i]);
 				i += 1;
 			}
 		},
 		NodeKind.TypeArray => {
 			const d = node.data as TypeArrayData;
-			cb(d.typExprElement);
+			visitChild(cb, d.typExprElement);
 		},
 		NodeKind.TypeUnion => {
 			const d = node.data as TypeUnionData;
 			let i = 0;
 			while (i < d.typExprMembers.length) {
-				cb(d.typExprMembers[i]);
+				visitChild(cb, d.typExprMembers[i]);
 				i += 1;
 			}
 		},
 		NodeKind.TypeIntersection => {
 			const d = node.data as TypeIntersectionData;
 			for (const member of d.typExprMembers) {
-				cb(member);
+				visitChild(cb, member);
 			}
 		},
 		NodeKind.TypeFunction => {
 			const d = node.data as TypeFunctionData;
 			let i = 0;
 			while (i < d.typExprParams.length) {
-				cb(d.typExprParams[i]);
+				visitChild(cb, d.typExprParams[i]);
 				i += 1;
 			}
-			if (d.typExprReturn != null) { cb(d.typExprReturn); }
+			if (d.typExprReturn != null) { visitChild(cb, d.typExprReturn); }
 		},
 		NodeKind.TypeObject => {
 			const d = node.data as TypeObjectData;
 			let i = 0;
 			while (i < d.typExprFieldTypes.length) {
-				cb(d.typExprFieldTypes[i]);
+				visitChild(cb, d.typExprFieldTypes[i]);
 				i += 1;
 			}
-			if (d.typExprIndexKey != null) { cb(d.typExprIndexKey); }
-			if (d.typExprIndexValue != null) { cb(d.typExprIndexValue); }
+			if (d.typExprIndexKey != null) { visitChild(cb, d.typExprIndexKey); }
+			if (d.typExprIndexValue != null) { visitChild(cb, d.typExprIndexValue); }
 			// Per-field decorators (V2): each inner array holds 0+ decorator nodes
 			let di = 0;
 			while (di < d.typExprFieldDecorators.length) {
 				const decs = d.typExprFieldDecorators[di];
 				let dj = 0;
 				while (dj < decs.length) {
-					cb(decs[dj]);
+					visitChild(cb, decs[dj]);
 					dj += 1;
 				}
 				di += 1;
@@ -440,29 +441,29 @@ export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 		},
 		NodeKind.JSXElement => {
 			const d = node.data as JSXElementData;
-			for (const a of d.jsxAttrs) { cb(a); }
-			for (const c of d.jsxChildren) { cb(c); }
+			for (const a of d.jsxAttrs) { visitChild(cb, a); }
+			for (const c of d.jsxChildren) { visitChild(cb, c); }
 		},
 		NodeKind.JSXFragment => {
 			const d = node.data as JSXFragmentData;
-			for (const c of d.jsxFragChildren) { cb(c); }
+			for (const c of d.jsxFragChildren) { visitChild(cb, c); }
 		},
 		NodeKind.JSXExpressionContainer => {
 			const d = node.data as JSXExpressionContainerData;
-			cb(d.jsxExpr);
+			visitChild(cb, d.jsxExpr);
 		},
 		NodeKind.JSXAttribute => {
 			const d = node.data as JSXAttributeData;
-			cb(d.jsxAttrValue);
+			visitChild(cb, d.jsxAttrValue);
 		},
 		NodeKind.JSXSpreadAttribute => {
 			const d = node.data as JSXSpreadAttributeData;
-			cb(d.jsxSpreadArg);
+			visitChild(cb, d.jsxSpreadArg);
 		},
 		NodeKind.ComputedProperty => {
 			const d = node.data as ComputedPropertyData;
-			cb(d.computedKey);
-			cb(d.computedValue);
+			visitChild(cb, d.computedKey);
+			visitChild(cb, d.computedValue);
 		},
 		// Genuine leaves (no Node children). Listed explicitly (not via `_`) so
 		// adding a new NodeKind forces an exhaustiveness error here, preventing
