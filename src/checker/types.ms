@@ -3017,6 +3017,14 @@ export function isAllStringLiteralUnion(t: Type | null): boolean {
 	return true;
 }
 
+export function numberLiteralSet(t: Type | null): Type[] | null {
+	if (t == null) return null;
+	const members: Type[] = t.kind == TypeKind.NumberLiteral ? [t] : literalUnionBase(t) != null && literalUnionBase(t)!.kind != TypeKind.String ? t.typeChildren : [];
+	if (members.length == 0) return null;
+	for (const m of members) if (!isNumeric(numberLiteralBase(m))) return null;
+	return members;
+}
+
 // isStringLike — true for String, StringLiteral, and Union<StringLiteral...>.
 // Single source of truth: these are all msString at runtime.
 export function isStringLike(t: Type | null): boolean {

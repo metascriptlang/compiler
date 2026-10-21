@@ -20,7 +20,7 @@ import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation } from "./valueCopy";
 import { placedInstanceOf } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
-import { runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion } from "../../checker/types";
+import { runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike } from "../../checker/types";
 import { isSlotUnion } from "../../checker/fit";
 import { SymbolFlag, isViewBinding, classDeclNodeOf, parentClassSymOf, hasFlag } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
@@ -572,6 +572,7 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 			if (refused >= 0) return refused;
 			const reg = compileExpr(s, d.asExpr);
 			if (node.flags.has(NodeFlag.ObjCheck)) return emitObjConv(s, node, reg);
+			if (node.flags.has(NodeFlag.ConvCheck)) emitLitConv(s, node, reg);
 			return emitNumericConv(s, reg, d.asExpr.nodeType, node.nodeType);
 		},
 		NodeKind.UpdateExpr => { return compileUpdateExpr(s, node, false); },
@@ -849,6 +850,20 @@ function emitObjConv(s: RaiserCompState, node: Node, reg: int32): int32 {
 	}
 	emitInst(s, raiserABC(RaiserOpcode.ObjConv, reg, addConst(s, raiserConstString(key)), addConst(s, raiserConstString(classTargetDisplay(node.nodeType, key)))));
 	return reg;
+}
+
+function emitLitConv(s: RaiserCompState, node: Node, reg: int32): void {
+	const t = node.nodeType;
+	if (t == null) return;
+	const payload = isMaybeType(t) && t.typeReturn != null ? t.typeReturn : t;
+	const literals: Type[] | null = payload.kind != TypeKind.String && isStringLike(payload)
+		? (payload.kind == TypeKind.StringLiteral ? [payload] : payload.typeChildren)
+		: numberLiteralSet(payload);
+	if (literals == null) return;
+	let list = "";
+	for (const lit of literals) list += `${lit.typeName.length}:${lit.typeName}`;
+	const name = payload.sym != null && payload.sym.name != "" ? payload.sym.name : typeDisplayName(payload);
+	emitInst(s, raiserABC(RaiserOpcode.LitConv, reg, addConst(s, raiserConstString(list)), addConst(s, raiserConstString(name))));
 }
 
 function compileInstanceOf(s: RaiserCompState, node: Node, d: BinaryExprData): int32 {

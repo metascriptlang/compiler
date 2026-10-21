@@ -9,7 +9,7 @@
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, VariableDeclData, DeclKind, Type, TypeKind, Symbol, SymbolKind, ProgramData } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { duVariantIndexOfType } from "../../checker/compat";
-import { skipModifier, isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing, matchUnionBehindInstance } from "../../checker/types";
+import { skipModifier, numberLiteralSet, isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing, matchUnionBehindInstance } from "../../checker/types";
 import { SymbolFlag, hasFlag, isTypeSymbol } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -90,6 +90,24 @@ function variantFailArgs(g: CGen, u: Type, slot: int32): string {
 	const head = `member '${slot < labels.length ? labels[slot] : "?"}' is not accessible for type '${unionName}' using '`;
 	const joined = labels.join("|");
 	return `${msStringPoolRef(internString(g.stringPool, head), cStringByteLen(head))}, ${msStringPoolRef(internString(g.stringPool, joined), cStringByteLen(joined))}`;
+}
+
+function litSetPayload(t: Type): Type | null {
+	const payload = isMaybeType(t) && t.typeReturn != null ? t.typeReturn : t;
+	return strLitPayload(payload) ?? (numberLiteralSet(payload) != null ? payload : null);
+}
+
+function litSourceFits(from: Type, set: Type): boolean {
+	return isStringLike(set) ? isStringLike(from) : isNumeric(from) || numberLiteralSet(from) != null;
+}
+
+function litConvCall(g: CGen, value: string, set: Type): string {
+	if (isStringLike(set)) return `msStrLitConv(${value}, ${strLitConvArgs(g, set)})`;
+	const members = numberLiteralSet(set)!;
+	const values: string[] = [];
+	for (const m of members) values.push(m.typeName);
+	const name = set.sym != null && set.sym.name != "" ? set.sym.name : typeDisplayName(set);
+	return `((${getTypeDesc(g, set)})msNumLitConv((double)(${value}), (const double[]){${values.join(", ")}}, ${members.length}, ${msStringPoolRef(internString(g.stringPool, name), cStringByteLen(name))}))`;
 }
 
 function strLitConvArgs(g: CGen, set: Type): string {
@@ -2011,20 +2029,20 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			}
 		}
 
-		const strLitTarget = node.nodeType != null && node.flags.has(NodeFlag.ConvCheck) ? strLitPayload(node.nodeType) : null;
-		if (strLitTarget != null && node.nodeType != null) {
+		const litTarget = node.nodeType != null && node.flags.has(NodeFlag.ConvCheck) ? litSetPayload(node.nodeType) : null;
+		if (litTarget != null && node.nodeType != null) {
 			const from = d.asExpr != null ? d.asExpr.nodeType : null;
-			if (!isMaybeType(node.nodeType) && from != null && !isMaybeType(from) && isStringLike(from)) {
-				ctx.results.push(`msStrLitConv(${expr}, ${strLitConvArgs(g, strLitTarget)})`);
+			if (!isMaybeType(node.nodeType) && from != null && !isMaybeType(from) && litSourceFits(from, litTarget)) {
+				ctx.results.push(litConvCall(g, expr, litTarget));
 				return;
 			}
-			if (isMaybeType(node.nodeType) && from != null && isMaybeType(from) && from.typeReturn != null && isStringLike(from.typeReturn)) {
+			if (isMaybeType(node.nodeType) && from != null && isMaybeType(from) && from.typeReturn != null && litSourceFits(from.typeReturn, litTarget)) {
 				const targetC = getTypeDesc(g, node.nodeType);
 				g.labels += 1;
 				const tmp = `_mconv${g.labels}_`;
 				emitProcLocalsLine(p, `${getTypeDesc(g, from)} ${tmp};`);
 				emitStmtsLine(p, `${tmp} = ${expr};`);
-				ctx.results.push(`(${tmp}.present ? (${targetC}){.value=msStrLitConv(${tmp}.value, ${strLitConvArgs(g, strLitTarget)}), .present=true} : (${targetC}){0})`);
+				ctx.results.push(`(${tmp}.present ? (${targetC}){.value=${litConvCall(g, `${tmp}.value`, litTarget)}, .present=true} : (${targetC}){0})`);
 				return;
 			}
 			addCGenError(g, "internal: checked `as " + d.asType + "` into a string-literal union reached codegen from " + (from != null ? typeDisplayName(from) : "an untyped value") + " at " + g.modulePath + ":" + node.location.line.toString(), node.location.line, node.location.column);

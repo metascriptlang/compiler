@@ -21,7 +21,7 @@ import { isStaticExtensionSym, isNativePattern } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
 import { spreadStructOf } from "../../transform/desugar/objectSpreadLower";
-import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind, peelThrough, PEEL_ALL, unwrapRef } from "../../checker/types";
+import { unwrapRefNullUnion, isMaybeType, isStringLike, numberLiteralSet, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind, peelThrough, PEEL_ALL, unwrapRef } from "../../checker/types";
 import { DYNAMIC_IMPORT } from "../../checker/importCall";
 import { enumMemberLiteral } from "../../checker/constFold";
 
@@ -1028,6 +1028,17 @@ function emitCheckedNarrowing(gen: JSGenerator, node: Node, d: TypeAssertionData
 		if (union != null && stringSlot != null) openTagTest(gen, stringSlot, union, pass, node.location);
 		emitNode(gen, d.asExpr);
 		emit(gen, union != null && stringSlot != null ? "))" : ")");
+		return true;
+	}
+	const numbers = numberLiteralSet(payload);
+	if (numbers != null) {
+		const tests: string[] = [];
+		for (const lit of numbers) tests.push("v == " + lit.typeName);
+		emit(gen, "((v) => (" + pass + tests.join(" || ") + ") ? v : ");
+		emitDefectCall(gen, "\"invalid union conversion: \" + String(v) + \" is not " + escapeJSString(namedTypeDisplay(payload)) + "\"", node.location);
+		emit(gen, ")(");
+		emitNode(gen, d.asExpr);
+		emit(gen, ")");
 		return true;
 	}
 	if (union == null) return false;
