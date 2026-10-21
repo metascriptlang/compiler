@@ -17,7 +17,8 @@
 // (source "metascript", error or warning) with `<msc> check --colors=off`: start line and byte
 // column, severity and message, in order. Batch output has no end column, so ends are pinned by
 // the scenario oracles only. Every child runs in that neutral directory, because a file outside
-// a project takes its build.ms from the working directory.
+// a project takes its build.ms from the working directory. A scenario with a project is written
+// under the neutral directory first, its documents live there, and batch checks them in place.
 //
 // Env: MSC=<path to msc> (default: ./msc, else installed msc)
 //      LSP_REPLAY_TIMEOUT_MS=<deadline of each wait> (default 10000)
@@ -43,6 +44,11 @@ import {
 	initializeDrain,
 	openParams,
 	positionParams,
+	materialiseProject,
+	replaceInFrames,
+	projectUri,
+	scenarioSlug,
+	PROJECT_URI,
 } from "../../compiler/lsp/replayScenarios";
 
 function slashes(p: string): string {
@@ -304,7 +310,13 @@ function readToEnd(s: Session): Result<void, string> {
 
 // Writes the drains and waits as the header says; returns the drains written in full.
 // After each checkpoint drain it runs the differential and stops at the first difference.
-function drive(s: Session, drains: string[][], name: string = "", checkpoints: LspCheckpoints | null = null): Result<int32, string> {
+function drive(
+	s: Session,
+	drains: string[][],
+	name: string = "",
+	checkpoints: LspCheckpoints | null = null,
+	inProject: boolean = false,
+): Result<int32, string> {
 	let shutdownSent = false;
 	const snap: Snapshot = { uris: [], texts: [] };
 	let taken = 0;
@@ -327,7 +339,7 @@ function drive(s: Session, drains: string[][], name: string = "", checkpoints: L
 		if (checkpoints == null || checkpoints.afterDrains.indexOf(i as int32) < 0) continue;
 		taken++;
 		const where = `checkpoint ${taken} (after drain ${i + 1})`;
-		const differs = compareCheckpoint(s, snap, checkpoints, `${slug(name)}-${taken}`, taken);
+		const differs = compareCheckpoint(s, snap, checkpoints, `${scenarioSlug(name)}-${taken}`, taken, inProject);
 		if (differs != "") return Result.err(`${where}: ${differs}`);
 	}
 	if (checkpoints != null && taken != checkpoints.afterDrains.length) {
@@ -522,7 +534,14 @@ function finishCheck(started: Result<ChildProcess, ProcessError>, file: string, 
 	return failure == "" ? Result.ok(output) : Result.err(failure);
 }
 
-function compareCheckpoint(s: Session, snap: Snapshot, checkpoints: LspCheckpoints, name: string, taken: int32): string {
+function compareCheckpoint(
+	s: Session,
+	snap: Snapshot,
+	checkpoints: LspCheckpoints,
+	name: string,
+	taken: int32,
+	inProject: boolean,
+): string {
 	const query = queryDrain(snap, checkpoints, taken);
 	const queried = drive(s, [query]);
 	if (!queried.ok) return `warm queries: ${queried.error}`;
@@ -536,7 +555,7 @@ function compareCheckpoint(s: Session, snap: Snapshot, checkpoints: LspCheckpoin
 	const files: string[] = [];
 	const checks: Result<ChildProcess, ProcessError>[] = [];
 	for (let i = 0; i < snap.uris.length; i++) {
-		const file = `${realpath(dir)}/${basename(lspUriPath(snap.uris[i]))}`;
+		const file = inProject ? lspUriPath(snap.uris[i]) : `${realpath(dir)}/${basename(lspUriPath(snap.uris[i]))}`;
 		writeFile(file, snap.texts[i]);
 		files.push(file);
 	}
@@ -570,8 +589,8 @@ function verdict(scenario: LspScenario, r: LspReplay): string {
 	return invariant(r);
 }
 
-function replayOnProcess(s: Session, scenario: LspScenario): string {
-	const driven = drive(s, scenario.drains, scenario.name, scenario.checkpoints);
+function replayOnProcess(s: Session, scenario: LspScenario, drains: string[][], projectDir: string): string {
+	const driven = drive(s, drains, scenario.name, scenario.checkpoints, projectDir != "");
 	if (!driven.ok) return driven.error;
 	s.child.closeStdin();
 	const drained = readToEnd(s);
@@ -584,31 +603,31 @@ function replayOnProcess(s: Session, scenario: LspScenario): string {
 	if (s.parsedTo != s.received.byteLength) {
 		return `stdout ends inside a frame at byte ${s.parsedTo} of ${s.received.byteLength}`;
 	}
-	const r = lspTranscript(s.received, status.value.code, driven.value);
+	const output = projectDir == "" ? s.received : replaceInFrames(s.received, projectUri(projectDir), PROJECT_URI);
+	const r = lspTranscript(output, status.value.code, driven.value);
 	r.messages = r.messages.filter((m: JsonValue) => !isQueryAnswer(m));
 	return verdict(scenario, r);
 }
 
-function slug(name: string): string {
-	let out = "";
-	for (let i = 0; i < name.byteLength; i++) {
-		const b = name.byteAt(i);
-		const keep = (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || (b >= 48 && b <= 57);
-		if (keep) out += name.byteSlice(i, i + 1);
-		else if (!out.endsWith("-")) out += "-";
-	}
-	return out;
-}
-
 function runScenario(scenario: LspScenario): string {
+	let drains = scenario.drains;
+	let projectDir = "";
+	const project = scenario.project;
+	if (project != null) {
+		ensureDir(`${NEUTRAL}/${scenarioSlug(scenario.name)}`);
+		projectDir = realpath(`${NEUTRAL}/${scenarioSlug(scenario.name)}`);
+		const moved = materialiseProject(project, drains, projectDir);
+		if (!moved.ok) return moved.error;
+		drains = moved.value;
+	}
 	const started = startSession(`scenario: ${scenario.name}\ncompiler: ${MSC}\n`);
 	if (!started.ok) return started.error;
 	const s = started.value;
-	const failure = replayOnProcess(s, scenario);
+	const failure = replayOnProcess(s, scenario, drains, projectDir);
 	s.child.close();
 	s.log += `<<< stderr\n${s.child.takeStderr()}\n`;
 	s.log += `=== ${failure == "" ? "ok" : "FAIL " + failure}\n`;
-	writeFile(`${OUT}/${slug(scenario.name)}.txt`, s.log);
+	writeFile(`${OUT}/${scenarioSlug(scenario.name)}.txt`, s.log);
 	return failure;
 }
 

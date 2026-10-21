@@ -7,6 +7,8 @@ import { parseJson } from "std/serialize/json/parser";
 import { JsonKind, JsonValue } from "std/serialize/json/types";
 import { getDynamicField, at, asInt32 } from "std/serialize/json/accessors";
 import { jsonNull } from "std/serialize/json/builder";
+import { ensureDir, writeFile } from "std/fs";
+import { dirname } from "std/fs/path";
 
 export class LspReplay {
 	messages: JsonValue[];
@@ -30,6 +32,13 @@ export interface LspCheckpoints {
 	probes: LspProbe[];
 }
 
+export interface LspProjectFile {
+	path: string;
+	text: string;
+}
+
+// A scenario with a project runs inside a directory holding these files; every
+// PROJECT_URI in its drains and transcript names that directory.
 export interface LspScenario {
 	name: string;
 	batching: LspBatching;
@@ -37,6 +46,38 @@ export interface LspScenario {
 	check: (r: LspReplay) => string;
 	checkAnyBatching: ((r: LspReplay) => string) | null;
 	checkpoints: LspCheckpoints | null;
+	project: LspProjectFile[] | null;
+}
+
+export const PROJECT_URI = "file:///lspwire/";
+
+export function projectUri(dir: string): string {
+	return `file://${dir}/`;
+}
+
+// Every frame of `wire` with `from` replaced by `to`, framed again.
+export function replaceInFrames(wire: string, from: string, to: string): string {
+	let out = "";
+	for (const body of lspSplitFrames(wire)) out += lspFormatMessage(body.replaceAll(from, to));
+	return out;
+}
+
+// Writes the project files under dir; returns the drains with PROJECT_URI moved there.
+export function materialiseProject(files: LspProjectFile[], drains: string[][], dir: string): Result<string[][], string> {
+	for (const file of files) {
+		const path = `${dir}/${file.path}`;
+		const parent = dirname(path);
+		if (!ensureDir(parent).ok) return Result.err(`cannot create ${parent}`);
+		const written = writeFile(path, file.text);
+		if (!written.ok) return Result.err(`cannot write ${path}`);
+	}
+	const moved: string[][] = [];
+	for (const drain of drains) {
+		const frames: string[] = [];
+		for (const frame of drain) frames.push(replaceInFrames(frame, PROJECT_URI, projectUri(dir)));
+		moved.push(frames);
+	}
+	return Result.ok(moved);
 }
 
 export function lspTranscript(output: string, exitCode: int32, drainsConsumed: int32): LspReplay {
@@ -277,6 +318,7 @@ function openWithErrorThenFix(): LspScenario {
 		]),
 		checkAnyBatching: null,
 		checkpoints: { afterDrains: [1, 2], probes: [{ uri, line: 0, character: 13 }] },
+		project: null,
 	};
 }
 
@@ -299,6 +341,7 @@ function multibyteContentLength(): LspScenario {
 		]),
 		checkAnyBatching: null,
 		checkpoints: { afterDrains: [1], probes: [{ uri, line: 1, character: 17 }, { uri, line: 0, character: 22 }] },
+		project: null,
 	};
 }
 
@@ -322,6 +365,7 @@ function twoEditsOneDrain(): LspScenario {
 			sameText("final diagnostic count", "0", finalDiagnosticCount(r, uri)),
 		]),
 		checkpoints: null,
+		project: null,
 	};
 }
 
@@ -342,6 +386,7 @@ function twoEditsTwoDrains(): LspScenario {
 		]),
 		checkAnyBatching: null,
 		checkpoints: { afterDrains: [2], probes: [{ uri, line: 0, character: 13 }] },
+		project: null,
 	};
 }
 
@@ -366,6 +411,7 @@ function requestBetweenEdits(): LspScenario {
 		]),
 		checkAnyBatching: null,
 		checkpoints: { afterDrains: [3], probes: [{ uri, line: 3, character: 10 }, { uri, line: 1, character: 10 }] },
+		project: null,
 	};
 }
 
@@ -397,6 +443,7 @@ function supersededAndCoalesced(): LspScenario {
 			sameText("final diagnostic count", "1", finalDiagnosticCount(r, uri)),
 		]),
 		checkpoints: null,
+		project: null,
 	};
 }
 
@@ -423,6 +470,7 @@ function idsComeBackExactly(): LspScenario {
 		]),
 		checkAnyBatching: null,
 		checkpoints: null,
+		project: null,
 	};
 }
 
@@ -443,6 +491,7 @@ function shutdownWaitsForExit(): LspScenario {
 		]),
 		checkAnyBatching: null,
 		checkpoints: null,
+		project: null,
 	};
 }
 
@@ -471,6 +520,7 @@ function afterShutdown(): LspScenario {
 		]),
 		checkAnyBatching: null,
 		checkpoints: null,
+		project: null,
 	};
 }
 
@@ -496,6 +546,7 @@ function exitAfterShutdown(): LspScenario {
 		]),
 		checkAnyBatching: null,
 		checkpoints: null,
+		project: null,
 	};
 }
 
@@ -510,6 +561,7 @@ function exitWithoutShutdown(): LspScenario {
 		]),
 		checkAnyBatching: null,
 		checkpoints: null,
+		project: null,
 	};
 }
 
@@ -521,6 +573,7 @@ function closedBeforeExit(): LspScenario {
 		check: (r: LspReplay) => sameCount("exit code", 0, r.exitCode),
 		checkAnyBatching: null,
 		checkpoints: null,
+		project: null,
 	};
 }
 
@@ -536,6 +589,7 @@ function bodyCutShort(): LspScenario {
 		]),
 		checkAnyBatching: null,
 		checkpoints: null,
+		project: null,
 	};
 }
 
@@ -550,6 +604,7 @@ function headerCutShort(): LspScenario {
 		]),
 		checkAnyBatching: null,
 		checkpoints: null,
+		project: null,
 	};
 }
 
@@ -589,6 +644,7 @@ function cancelledInDrain(): LspScenario {
 			sameText("final diagnostic count", "0", finalDiagnosticCount(r, uri)),
 		]),
 		checkpoints: null,
+		project: null,
 	};
 }
 
@@ -635,6 +691,7 @@ function positionEditsShiftRanges(): LspScenario {
 			afterDrains: [1, 2, 3],
 			probes: [{ uri, line: 2, character: 17 }, { uri, line: 1, character: 17 }, { uri, line: 1, character: 30 }],
 		},
+		project: null,
 	};
 }
 
@@ -667,6 +724,7 @@ function dependencyEditsRecheckDependent(): LspScenario {
 		]),
 		checkAnyBatching: null,
 		checkpoints: { afterDrains: [2, 3, 4, 5], probes: [{ uri: user, line: 1, character: 18 }, { uri: user, line: 0, character: 9 }] },
+		project: null,
 	};
 }
 
@@ -708,6 +766,7 @@ function cancelledWorkDoesNotPoison(): LspScenario {
 		]),
 		checkAnyBatching: afterCancel,
 		checkpoints: { afterDrains: [2, 3, 4], probes: [{ uri, line: 2, character: 17 }, { uri, line: 1, character: 14 }] },
+		project: null,
 	};
 }
 
@@ -723,7 +782,85 @@ function unusedImportWarnsInEditorAndBatch(): LspScenario {
 			publishedAt(r, uri, 0)),
 		checkAnyBatching: null,
 		checkpoints: { afterDrains: [1], probes: [{ uri, line: 0, character: 10 }] },
+		project: null,
 	};
+}
+
+const WHEN_FAST = "let n: int32 = 0;\nwhen (fast) { n = 1; } else { n = \"slow\"; }\nconsole.log(n);\n";
+const HELLO = "export function hello(): int32 { return 7; }\n";
+
+function buildConfigReachesEditor(): LspScenario {
+	const globals = PROJECT_URI + "globals.ms";
+	const defines = PROJECT_URI + "defines.ms";
+	const deps = PROJECT_URI + "deps.ms";
+	const build = "const config = { globalImports: [\"./helper\"], defines: { fast: true }, deps: { \"lib\": \"file:./deplib\" } };\nexport default config;\n";
+	return {
+		name: "build.ms config reaches the editor as it reaches batch checking",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([
+				notification("textDocument/didOpen", openParams(globals, "const n: int32 = hello();\nconsole.log(n);\n")),
+				notification("textDocument/didOpen", openParams(defines, WHEN_FAST)),
+				notification("textDocument/didOpen", openParams(deps, "import { libVal } from \"lib/val\";\nconst n: int32 = libVal();\nconsole.log(n);\n")),
+			]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("globals.ms publish 0", "[]", publishedAt(r, globals, 0)),
+			sameText("defines.ms publish 0", "[]", publishedAt(r, defines, 0)),
+			sameText("deps.ms publish 0", "[]", publishedAt(r, deps, 0)),
+		]),
+		checkAnyBatching: null,
+		checkpoints: { afterDrains: [1], probes: [{ uri: globals, line: 0, character: 18 }, { uri: deps, line: 1, character: 18 }] },
+		project: [
+			{ path: "build.ms", text: build },
+			{ path: "helper.ms", text: HELLO },
+			{ path: "deplib/val.ms", text: "export function libVal(): int32 { return 3; }\n" },
+		],
+	};
+}
+
+function twoProjectsKeepTheirConfig(): LspScenario {
+	const fast = PROJECT_URI + "fast/defines.ms";
+	const greet = PROJECT_URI + "greet/globals.ms";
+	const greetText = "let n: int32 = hello();\nwhen (fast) { n = \"leaked\"; }\nconsole.log(n);\n";
+	return {
+		name: "two projects in one session each keep their own build.ms",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(fast, WHEN_FAST))]),
+			frames([notification("textDocument/didOpen", openParams(greet, greetText))]),
+			frames([
+				notification("textDocument/didChange", changeParams(fast, 2, WHEN_FAST + "// edited\n")),
+				notification("textDocument/didChange", changeParams(greet, 2, greetText + "// edited\n")),
+			]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("fast/defines.ms publish 0", "[]", publishedAt(r, fast, 0)),
+			sameText("greet/globals.ms publish 0", "[]", publishedAt(r, greet, 0)),
+			sameText("fast/defines.ms last publish", "[]", lastPublished(r, fast)),
+			sameText("greet/globals.ms last publish", "[]", lastPublished(r, greet)),
+		]),
+		checkAnyBatching: null,
+		checkpoints: { afterDrains: [2, 3], probes: [{ uri: greet, line: 0, character: 16 }] },
+		project: [
+			{ path: "fast/build.ms", text: "const config = { defines: { fast: true } };\nexport default config;\n" },
+			{ path: "greet/build.ms", text: "const config = { globalImports: [\"./helper\"] };\nexport default config;\n" },
+			{ path: "greet/helper.ms", text: HELLO },
+		],
+	};
+}
+
+export function scenarioSlug(name: string): string {
+	let out = "";
+	for (let i = 0; i < name.byteLength; i++) {
+		const b = name.byteAt(i);
+		const keep = (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || (b >= 48 && b <= 57);
+		if (keep) out += name.byteSlice(i, i + 1);
+		else if (!out.endsWith("-")) out += "-";
+	}
+	return out;
 }
 
 export function lspScenarios(): LspScenario[] {
@@ -747,6 +884,8 @@ export function lspScenarios(): LspScenario[] {
 		dependencyEditsRecheckDependent(),
 		cancelledWorkDoesNotPoison(),
 		unusedImportWarnsInEditorAndBatch(),
+		buildConfigReachesEditor(),
+		twoProjectsKeepTheirConfig(),
 	];
 }
 

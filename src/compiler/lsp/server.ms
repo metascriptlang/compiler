@@ -30,7 +30,16 @@ import { writeStderr, stdinDisableBuffering } from "std/io";
 import {
 	LspTransport, FrameEnd, lspReadFrame, stdioTransport, memoryTransport, createMemoryWire,
 } from "./transport";
-import { LspReplay, lspTranscript, lspScenarioByName } from "./replayScenarios";
+import {
+	LspReplay,
+	lspTranscript,
+	lspScenarioByName,
+	materialiseProject,
+	replaceInFrames,
+	projectUri,
+	scenarioSlug,
+	PROJECT_URI,
+} from "./replayScenarios";
 import { resolveRuntimeDir } from "../../utils/path";
 
 
@@ -567,12 +576,20 @@ test "an opened file's msc.lock packages reach that project's resolver" {
 // ===== Framed replay through lspServe =====
 // Scenarios live in replayScenarios.ms so a process driver runs the same ones.
 
-function replay(drains: string[][]): LspReplay {
+function replay(drains: string[][], projectDir: string = ""): LspReplay {
 	const chunks: string[] = [];
 	for (const drain of drains) chunks.push(drain.join(""));
 	const wire = createMemoryWire(chunks);
 	const exitCode = lspServe(memoryTransport(wire));
-	return lspTranscript(wire.output, exitCode, wire.nextChunk);
+	const output = projectDir == "" ? wire.output : replaceInFrames(wire.output, projectUri(projectDir), PROJECT_URI);
+	return lspTranscript(output, exitCode, wire.nextChunk);
+}
+
+function memoryProjectDir(name: string): string {
+	const tmp = env.get("TMPDIR") != "" ? env.get("TMPDIR") : "/tmp";
+	const dir = `${tmp}/mscLspMemory/${scenarioSlug(name)}`;
+	ensureDir(dir);
+	return realpath(dir);
 }
 
 function runMemoryScenario(name: string): string {
@@ -582,7 +599,19 @@ function runMemoryScenario(name: string): string {
 		return found.error;
 	}
 	const scenario = found.value;
-	const r = replay(scenario.drains);
+	let drains = scenario.drains;
+	let projectDir = "";
+	const project = scenario.project;
+	if (project != null) {
+		projectDir = memoryProjectDir(name);
+		const moved = materialiseProject(project, drains, projectDir);
+		if (!moved.ok) {
+			writeStderr("replay: " + name + ": " + moved.error + "\n");
+			return moved.error;
+		}
+		drains = moved.value;
+	}
+	const r = replay(drains, projectDir);
 	let failure = scenario.check(r);
 	const invariant = scenario.checkAnyBatching;
 	if (failure == "" && invariant != null) failure = invariant(r);
@@ -652,4 +681,12 @@ test "replay: cancelled requests do not poison the checks after them" {
 
 test "replay: an unused import warns in the editor and in batch checking" {
 	assert runMemoryScenario("an unused import warns in the editor and in batch checking") == "";
+}
+
+test "replay: build.ms config reaches the editor as it reaches batch checking" {
+	assert runMemoryScenario("build.ms config reaches the editor as it reaches batch checking") == "";
+}
+
+test "replay: two projects in one session each keep their own build.ms" {
+	assert runMemoryScenario("two projects in one session each keep their own build.ms") == "";
 }
