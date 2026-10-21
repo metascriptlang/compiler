@@ -553,7 +553,7 @@ function mulOverflowsI64(a: int64, b: int64): boolean {
 	if (b == -1) return a == INT64_LOW;
 	return int64Bits((a as uint64) * (b as uint64)) / a != b;
 }
-const MAX_ARRAY_COUNT = 4294967295;
+const MAX_ARRAY_COUNT = 2147483647;
 
 // --- Execute ---
 
@@ -3197,8 +3197,7 @@ function vmHandleArraySetLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): voi
 		vmError(vm, `ArraySetLen expected an integer length, got kind ${lenVal.kind}`); return;
 	}
 	if (ic == 1) {
-		if (lenVal.intVal < 0) vmError(vm, `value ${lenVal.intVal} not in range 0 .. 9223372036854775807`);
-		else if (lenVal.intVal > MAX_ARRAY_COUNT) vmError(vm, "over- or underflow");
+		if (lenVal.intVal < 0 || lenVal.intVal > MAX_ARRAY_COUNT) vmError(vm, `value ${lenVal.intVal} not in range 0 .. ${MAX_ARRAY_COUNT}`);
 		return;
 	}
 	if (heapArrayIsView(vm.arrayHeap, handle)) {
@@ -4189,10 +4188,10 @@ test "ArraySetLen with C = 1 refuses a negative count" {
 		[raiserInt(-1)]
 	));
 	assert vm.halted;
-	assert vm.error == "value -1 not in range 0 .. 9223372036854775807";
+	assert vm.error == "value -1 not in range 0 .. 2147483647";
 }
 
-test "ArraySetLen with C = 1 refuses a count past 2^32 - 1" {
+test "ArraySetLen with C = 1 refuses a count past 2^31 - 1" {
 	const vm = execModule(makeTestModule(
 		[
 			raiserABC(RaiserOpcode.NewArray, 0, 0, 0),
@@ -4200,9 +4199,9 @@ test "ArraySetLen with C = 1 refuses a count past 2^32 - 1" {
 			raiserABC(RaiserOpcode.ArraySetLen, 0, 1, 1),
 			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
 		],
-		[raiserInt(4294967296)]
+		[raiserInt(2147483648)]
 	));
-	assert vm.error == "over- or underflow";
+	assert vm.error == "value 2147483648 not in range 0 .. 2147483647";
 }
 
 test "ArraySetLen with C = 1 accepts a valid count without growing" {
