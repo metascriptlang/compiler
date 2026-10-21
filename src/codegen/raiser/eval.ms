@@ -587,6 +587,16 @@ test "engine: an as into a narrower literal union stops on a value outside it" {
 	assert numbers.output == "2\n", numbers.output;
 }
 
+test "engine: an instance holds its declared fields only, and the receiver's class picks the override" {
+	const ctx = evalFull("class A { x: int32 = 1; get(): int32 { return this.x; } tag(): int32 { return 1; } }"
+		+ " class B extends A { y: int32 = 2; tag(): int32 { return 2; } } class C extends B { tag(): int32 { return 3; } }"
+		+ " function who(a: A): int32 { return a.tag() * 10 + a.get(); }"
+		+ " const b = new B(); b.y = who(new A()) * 10000 + who(b) * 100 + who(new C()); return b;");
+	const names = ctx.objectHeap.objects[handleIndex(ctx.lastResult.intVal)].fields.map((f) => f.name);
+	assert names.length == 2 && names.includes("x") && names.includes("y"), names.join(",");
+	assert heapObjectGetField(ctx.objectHeap, ctx.lastResult.intVal, "y").intVal == 112131;
+}
+
 test "engine: a for-of raises when the string it iterates changes length" {
 	const ctx = evalOrcVM("let s = 'abc'; let seen = ''; try { for (const c of s) { seen = seen + c; s = s + 'd'; } } catch (e) { console.log('raised after ' + seen); }");
 	assert ctx.error == "", ctx.error;
