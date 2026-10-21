@@ -12,7 +12,7 @@
 // (guards over-collection → UAF). If the collector regressed: garbage cycles leak
 // (objHeap grows unbounded → RSS balloons) or the keeper gets freed (keeperOk=0).
 
-import { createArrayHeap, createStructHeap, heapAllocObject, heapObjectSetField, heapObjectFieldCount, raiserObject, rcIncref } from "../../../raiser/value";
+import { createArrayHeap, createStructHeap, heapAllocObject, heapObjectSetField, heapObjectFieldCount, raiserObject, rcIncref, handleIndex } from "../../../raiser/value";
 import { orcCollectCycles } from "../../../raiser/orc";
 import { console } from "std/core/system";
 
@@ -37,7 +37,7 @@ function main(): void {
 		round = round + 1;
 	}
 
-	const keeperOk = obj.objects[ka].rc >= 1 && heapObjectFieldCount(obj, ka) == 1;
+	const keeperOk = obj.objects[handleIndex(ka)].rc >= 1 && heapObjectFieldCount(obj, ka) == 1;
 	console.log("raiser-cycle freed=" + (totalFreed % 1000000).toString() + " keeperOk=" + (keeperOk ? "1" : "0"));
 }
 
