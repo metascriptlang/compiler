@@ -29,7 +29,7 @@ import {
 import { TransformContext } from "../context";
 import { walkExpandBlocksHooked } from "../walker";
 import { makeCall, makeExprStmt, makeNumber, makeNull, makeObjectLiteral, runtimeRef } from "../util";
-import { awaitedType, createPtr, voidType } from "../../checker/types";
+import { awaitedType, createPromise, createPtr, voidType } from "../../checker/types";
 import { getSpawnInfo, makeTempDecl, emitAwaitGroupWait, makeUnboxCall, VOID_PTR_TYPE } from "./awaitLower";
 import { injectCancelSafePoints } from "./cancelSafePoints";
 import { boxReturns, boxForType } from "./spawnLower";
@@ -95,7 +95,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 	if (isAsync) {
 		doneFut = makeTempDecl(ctx, "doneFut",
 			makeCall(runtimeRef("msFutureCreate", loc), [], loc),
-			VOID_PTR_TYPE, loc);
+			createPromise(voidType()), loc);
 		stmts.push(doneFut.decl);
 		stmts.push(makeExprStmt(
 			makeCall(runtimeRef("msAwaitGroupSetDoneFut", loc), [ag.ident, doneFut.ident], loc), loc));
