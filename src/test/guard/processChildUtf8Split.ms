@@ -5,6 +5,7 @@
 // on its own (the concatenation then differs).
 
 import { spawn, ChildStream, exit } from "std/process";
+import { host } from "./fixtures/childHost";
 
 let failed = 0;
 
@@ -14,7 +15,7 @@ function report(msg: string): void {
 }
 
 const script = "for i in 1 2 3; do printf '\\303'; sleep 0.05; printf '\\251'; sleep 0.05; done";
-const started = spawn("/bin/sh", ["-c", script]);
+const started = spawn(host("sh"), ["-c", script]);
 if (!started.ok) {
 	report(`spawn: ${started.error.message}`);
 } else {

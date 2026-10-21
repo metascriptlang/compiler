@@ -188,17 +188,24 @@ test "spawn of a missing program is NotFound naming ENOENT" {
 	}
 }
 
+extern function msProcessPlatform(): string;
+
+const onWindows = msProcessPlatform() == "windows";
+const shell = onWindows ? "sh" : "/bin/sh";
+
 test "cwd sets the child's working directory" {
-	const r = spawn("/bin/pwd", [], { cwd: "/" });
+	const r = onWindows
+		? spawn("cmd", ["/c", "cd"], { cwd: "C:\\" })
+		: spawn("/bin/pwd", [], { cwd: "/" });
 	assert r.ok;
 	if (r.ok) {
-		assert readAll(r.value, ChildStream.Stdout) == "/\n";
+		assert readAll(r.value, ChildStream.Stdout) == (onWindows ? "C:\\\r\n" : "/\n");
 		r.value.close();
 	}
 }
 
 test "mergeStderr sends stderr down stdout and leaves stderr ended" {
-	const r = spawn("/bin/sh", ["-c", "echo out; echo err >&2"], { mergeStderr: true });
+	const r = spawn(shell, ["-c", "echo out; echo err >&2"], { mergeStderr: true });
 	assert r.ok;
 	if (r.ok) {
 		const child = r.value;
@@ -210,7 +217,7 @@ test "mergeStderr sends stderr down stdout and leaves stderr ended" {
 }
 
 test "a closed handle refuses reads and writes and keeps its status" {
-	const r = spawn("/bin/sh", ["-c", "exit 4"]);
+	const r = spawn(shell, ["-c", "exit 4"]);
 	assert r.ok;
 	if (r.ok) {
 		const child = r.value;

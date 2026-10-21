@@ -6,6 +6,7 @@
 // RED on a compiler without `spawn` in std/process (build error: no export 'spawn').
 
 import { spawn, ChildProcess, ChildStream, exit } from "std/process";
+import { host } from "./fixtures/childHost";
 
 let failed = 0;
 
@@ -28,7 +29,7 @@ function readUntil(child: ChildProcess, want: string): string {
 	return text;
 }
 
-const started = spawn("/bin/cat", []);
+const started = spawn(host("cat"), []);
 if (!started.ok) {
 	report(`spawn: ${started.error.message}`);
 } else {

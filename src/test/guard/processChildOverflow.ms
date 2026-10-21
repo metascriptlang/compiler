@@ -6,6 +6,7 @@
 // overflow. RED on a compiler without `spawn` in std/process.
 
 import { spawn, ChildStream, ProcessErrorKind, exit } from "std/process";
+import { host } from "./fixtures/childHost";
 
 let failed = 0;
 
@@ -16,7 +17,7 @@ function report(msg: string): void {
 
 const TOTAL = 20000000;
 
-const started = spawn("/bin/sh", ["-c", `head -c ${TOTAL} /dev/zero`]);
+const started = spawn(host("sh"), ["-c", `head -c ${TOTAL} /dev/zero`]);
 if (!started.ok) {
 	report(`spawn: ${started.error.message}`);
 } else {
