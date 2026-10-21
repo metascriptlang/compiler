@@ -1630,6 +1630,7 @@ function setRelation(formal: Type, actual: Type): TypeRelation {
 }
 export function typeRelation(formal: Type | null, actual: Type | null): TypeRelation {
 	if (formal == null || actual == null) return typeRelationInner(formal, actual);
+	if (dropsReadonlyView(actual, formal)) return TypeRelation.None;
 	if (pairOnStack(_relationFormals, _relationActuals, formal, actual)) return TypeRelation.Exact;
 	if (_relationFormals.length >= RELATION_MAX_DEPTH) return TypeRelation.None;
 	_relationFormals.push(formal);
@@ -1637,7 +1638,7 @@ export function typeRelation(formal: Type | null, actual: Type | null): TypeRela
 	const result = typeRelationInner(formal, actual);
 	_relationFormals.pop();
 	_relationActuals.pop();
-	return result;
+	return result == TypeRelation.Exact && dropsReadonlyView(formal, actual) ? TypeRelation.Subtype : result;
 }
 
 function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelation {
@@ -2412,6 +2413,15 @@ test "two object types of the same shape relate exactly, a different shape does 
 	assert typeRelation(a, same) == TypeRelation.Exact;
 	assert typeRelation(a, wider) == TypeRelation.Subtype;
 	assert typeRelation(a, other) == TypeRelation.None;
+}
+
+test "a mutable argument ranks below an exact match on a view formal, and a view never ranks on a mutable formal" {
+	const cart = createRef(createStruct("Cart", [], [], false));
+	const view = createReadonlyView(cart);
+	assert typeRelation(cart, cart) == TypeRelation.Exact;
+	assert typeRelation(view, view) == TypeRelation.Exact;
+	assert typeRelation(view, cart) == TypeRelation.Subtype;
+	assert typeRelation(cart, view) == TypeRelation.None;
 }
 
 test "exact args" {
