@@ -421,6 +421,8 @@ MS_TLS_EXTERN(int32_t, msRootsThreshold);
 
 void msRegisterCycle(void* p, const msTypeInfo* type);
 void msUnregisterCycle(void* p);
+void msRootsSwap(msCellSeq* other);
+void msRootsAdopt(msCellSeq* orphan);
 
 /* rememberCycle — register/unregister cycle candidate */
 static inline void msRememberCycle(bool isDestroy, void* p, const msTypeInfo* desc) {

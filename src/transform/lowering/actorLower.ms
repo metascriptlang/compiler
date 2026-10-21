@@ -969,7 +969,9 @@ function generateActorWiring(thisSym: Symbol, actor: ActorLowered, loc: SourceLo
 		for (let i = 1; i < ctorParams.length; i += 1) ctorArgs.push(makeIdentResolved(ctorParams[i], loc));
 		const ctorCall = makeCall(makeIdentResolved(ctor, loc), ctorArgs, loc);
 		ctorCall.resolvedSym = null;
-		result.push(makeExprStmt(ctorCall, loc));
+		result.push(makeExprStmt(makeCall(runtimeRef("msActorCtorEnter", loc), [actorPidMember(thisSym, loc)], loc), loc));
+		const leave = makeExprStmt(makeCall(runtimeRef("msActorCtorLeave", loc), [actorPidMember(thisSym, loc)], loc), loc);
+		result.push(makeTryFinally(makeBlock([makeExprStmt(ctorCall, loc)], loc), makeBlock([leave], loc), loc));
 	}
 	return result;
 }

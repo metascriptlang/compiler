@@ -102,6 +102,9 @@ typedef struct msActor {
     /* Phase 6 R1: out-of-band stop — supervisor can kill suspended actor without mailbox */
     _Atomic(bool) stopRequested;
     _Atomic(int32_t) stopReason;  /* written before the stopRequested acq_rel exchange */
+    /* The actor's cycle roots: the running thread's while a visit holds processing
+     * (msRootsSwap), so its cells keep their root entries when it changes threads. */
+    msCellSeq roots;
 } msActor;
 
 /* ===== Batch Size ===== */
@@ -348,6 +351,28 @@ static inline msActor* msActorCreate(void* state, msActorDispatchFn dispatch) {
     atomic_store_explicit(&a->alive, true, memory_order_relaxed);
     msPidPublish(a);
     return a;
+}
+
+/* The constructor is the actor's first visit: it holds processing and runs over the
+ * actor's root set, so the cells it builds are the actor's from their first root entry. */
+static inline void msActorCtorEnter(int64_t pid) {
+    msActor* a = msActorFromPid(pid);
+    if (a == NULL) return;
+    bool expected = false;
+    while (!atomic_compare_exchange_weak_explicit(&a->processing, &expected, true,
+            memory_order_acquire, memory_order_relaxed)) {
+        expected = false;
+    }
+    msRootsSwap(&a->roots);
+    msHazardClear(a);
+}
+
+static inline void msActorCtorLeave(int64_t pid) {
+    msActor* a = msActorFromPid(pid);
+    if (a == NULL) return;
+    msRootsSwap(&a->roots);
+    atomic_store_explicit(&a->processing, false, memory_order_release);
+    msHazardClear(a);
 }
 
 /* Create actor and return its pid (for the typed pid field in the actor struct) */
@@ -709,6 +734,8 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         return 0;
     }
 
+    msRootsSwap(&a->roots);
+
     /* Clear BLOCKED — we're actively processing */
     msActorClearFlag(a, MS_ACTOR_BLOCKED);
 
@@ -737,6 +764,7 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
                 || (atomic_load_explicit(&a->syncFlags, memory_order_relaxed) & MS_ACTOR_SUSPENDED) != 0) {
             atomic_store_explicit(&a->scheduled, false, memory_order_release);
             msCurrentActor = prevActor;
+            msRootsSwap(&a->roots);
             atomic_store_explicit(&a->processing, false, memory_order_release);
             msFutureReleaseFlush();
             return processed;
@@ -767,6 +795,7 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
     }
 
     msCurrentActor = prevActor;
+    msRootsSwap(&a->roots);
     atomic_store_explicit(&a->processing, false, memory_order_release);
 
     if (reEnqueue && a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) {
@@ -917,6 +946,7 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
     /* Guard: prevent double-destroy (re-entrancy from link cascade or supervisor) */
     bool wasAlive = atomic_exchange_explicit(&a->alive, false, memory_order_acq_rel);
     if (!wasAlive) return;
+    msRootsSwap(&a->roots);
     /* I19: release the pid slot FIRST — no new lookup reaches a dying shell.
      * Sends to this pid from onTerminate onward are cleanly dropped. */
     msPidRelease(a);
@@ -1003,6 +1033,9 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
         msDestroyAndDispose(a->state);
         a->state = NULL;
     }
+    msOrcCollect();
+    msRootsSwap(&a->roots);
+    msRootsAdopt(&a->roots);
     /* I19: defer the free while any in-flight lookup still pins the shell. The
      * pid slot is long released, so no NEW pin can appear — pins only drain. */
     if (msHazardScan(a)) {

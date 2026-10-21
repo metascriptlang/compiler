@@ -1075,6 +1075,12 @@ when (mscDeclaresRuntime) {
 	extern function msActorRegister(a: Ptr<void>): void;
 
 	@compilerFunc
+	extern function msActorCtorEnter(pid: int64): void;
+
+	@compilerFunc
+	extern function msActorCtorLeave(pid: int64): void;
+
+	@compilerFunc
 	extern function msActorSend(a: Ptr<void>, msg: Ptr<void>): void;
 
 	@compilerFunc

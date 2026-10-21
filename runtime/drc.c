@@ -489,6 +489,20 @@ void msUnregisterCycle(void* p) {
 	h->rootIdx = -1;
 }
 
+void msRootsSwap(msCellSeq* other) {
+	msCellSeq running = msRoots;
+	msRoots = *other;
+	*other = running;
+}
+
+void msRootsAdopt(msCellSeq* orphan) {
+	for (int32_t i = 0; i < orphan->len; i++) {
+		msHeader(orphan->data[i].ptr)->rootIdx = msRoots.len;
+		msCellSeqPush(&msRoots, orphan->data[i]);
+	}
+	msCellSeqFree(orphan);
+}
+
 /* ===== Color Helpers ===== */
 
 static inline int32_t getColor(msRefHeader* h) {
