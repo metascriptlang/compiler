@@ -124,9 +124,9 @@ test "E2E C: trim keeps receiver" {
 	const src = "const s = \"  hi  \";\nconst t = s.trim();";
 	const result = compileToC(src);
 	assert result.ok;
-	// Must keep receiver s — NOT msStringTrim(). Module-level const s is path-mangled,
-	// so match the receiver prefix only.
-	assert result.value.indexOf("msStringTrim(s") >= 0;
+	// Must keep receiver s as the argument of the std trim. Module-level const s is
+	// path-mangled, so match the receiver prefix only.
+	assert result.value.contains("_u0(s__");
 }
 
 // ===== Multi-param generics =====
