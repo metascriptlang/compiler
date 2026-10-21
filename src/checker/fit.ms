@@ -1497,13 +1497,19 @@ function isTextlessScalar(t: Type): boolean {
 }
 
 export function scalarConversionRefusal(src: Type, target: Type): string {
-	const head = "cannot convert " + typeDisplayName(src) + " to " + typeDisplayName(target) + " — ";
+	const reason = scalarConversionReason(src, target);
+	return reason == "" ? "" : "cannot convert " + typeDisplayName(src) + " to " + typeDisplayName(target) + " — " + reason;
+}
+
+export function scalarConversionReason(src: Type, target: Type): string {
+	const toBoolean = target.kind == TypeKind.Boolean || target.kind == TypeKind.BooleanLiteral;
 	if (isStringLike(src) && isTextlessScalar(target) && target.kind != TypeKind.BigInt) {
-		if (target.kind == TypeKind.Boolean || target.kind == TypeKind.BooleanLiteral) return head + "a string is not a boolean; compare it instead (s != \"\")";
-		return head + "a string is not a number; read a character code with s.charCodeAt(i), a byte with s.byteAt(i), or parse the text";
+		if (toBoolean) return "a string is not a boolean; compare it instead (s != \"\")";
+		return "a string is not a number; read a character code with s.charCodeAt(i), a byte with s.byteAt(i), or parse the text";
 	}
-	if (isTextlessScalar(src) && isStringLike(target)) return head + "format it with String(x) or x.toString()";
-	if ((src.kind == TypeKind.Boolean || src.kind == TypeKind.BooleanLiteral) && isNumeric(target)) return head + "a boolean is not a number; pick one with a conditional (b ? 1 : 0)";
+	if (isTextlessScalar(src) && isStringLike(target)) return "format it with String(x) or x.toString()";
+	if ((src.kind == TypeKind.Boolean || src.kind == TypeKind.BooleanLiteral) && isNumeric(target)) return "a boolean is not a number; pick one with a conditional (b ? 1 : 0)";
+	if (isNumeric(widenNumberLiteralType(src)) && toBoolean) return "a number is not a boolean; compare it instead (x != 0)";
 	return "";
 }
 

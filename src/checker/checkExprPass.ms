@@ -31,7 +31,7 @@ import { bindContainerNames, releaseNames, paramSymbol } from "./bindNames";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { storedTypeOfNullRead, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, branchContributesToJoin, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, isBitwiseCompoundOp, compoundBase, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, refuseDisjointStrings, fitComparedOperands, fitDistinctComparison, DistinctComparison, comparesAtBase, widenBrandOperands, typeofComparisonHint, UnionRead, readUnionOperand, integerLiteralText, convertedTo, wrapsIntoUnsignedTarget, rejectCharArith, rejectCharUnary, textlessValue, scalarConversionRefusal, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns, widenNumberLiteral, isLiteralSet, declaredTypeOfLocation, refuseMatchStructEquality, widenEqualityOperand } from "./fit";
+import { storedTypeOfNullRead, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, branchContributesToJoin, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, isBitwiseCompoundOp, compoundBase, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, refuseDisjointStrings, fitComparedOperands, fitDistinctComparison, DistinctComparison, comparesAtBase, widenBrandOperands, typeofComparisonHint, UnionRead, readUnionOperand, integerLiteralText, convertedTo, wrapsIntoUnsignedTarget, rejectCharArith, rejectCharUnary, textlessValue, scalarConversionRefusal, scalarConversionReason, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns, widenNumberLiteral, isLiteralSet, declaredTypeOfLocation, refuseMatchStructEquality, widenEqualityOperand } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -2381,6 +2381,13 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 				node.nodeType = targetType;
 				return;
 			}
+		} else if (!reportedErrorSince(ctx, operandMark)) {
+			const reason = disjointCastReason(srcType, targetType);
+			if (reason != "") {
+				addError(ctx, "cannot convert " + typeDisplayName(srcType) + " to " + typeDisplayName(targetType) + " — " + reason, asLoc.line, asLoc.column);
+				node.nodeType = targetType;
+				return;
+			}
 		}
 	}
 	if (srcType != null && !isUnresolvedType(srcType) && !isUnresolvedType(targetType)
@@ -4137,6 +4144,47 @@ function interfaceOf(t: Type): Type | null {
 
 function viewsAsInterface(source: Type, target: Type): boolean {
 	return interfaceOf(target) != null && viewedObjectBody(source) != null;
+}
+
+// The kinds whose overlap is certain: a cast between two of them that share none is refused
+// as TS refuses it, and any other kind leaves the decision to the conversions below.
+enum PlainKind { Unknown, Number, Text, Truth, List, Null }
+
+function plainKind(t: Type): PlainKind {
+	const k = t.kind;
+	if (k == TypeKind.Null) return PlainKind.Null;
+	if (isNumeric(widenNumberLiteralType(t))) return PlainKind.Number;
+	if (k == TypeKind.String || k == TypeKind.StringLiteral) return PlainKind.Text;
+	if (k == TypeKind.Boolean || k == TypeKind.BooleanLiteral) return PlainKind.Truth;
+	if (isArrayShaped(t)) return PlainKind.List;
+	return PlainKind.Unknown;
+}
+
+function disjointCastReason(src: Type, target: Type): string {
+	const from: Type[] = [];
+	const to: Type[] = [];
+	castLeaves(src, from, 0);
+	castLeaves(target, to, 0);
+	let fromValue: Type | null = null;
+	let toValue: Type | null = null;
+	for (const a of from) {
+		const ka = plainKind(a);
+		if (ka == PlainKind.Unknown) return "";
+		if (fromValue == null && ka != PlainKind.Null) fromValue = a;
+		for (const b of to) {
+			const kb = plainKind(b);
+			if (kb == PlainKind.Unknown || ka == kb) return "";
+		}
+	}
+	for (const b of to) {
+		if (toValue == null && plainKind(b) != PlainKind.Null) toValue = b;
+	}
+	if (fromValue == null || toValue == null) return "";
+	const scalar = scalarConversionReason(fromValue, toValue);
+	if (scalar != "") return scalar;
+	if (plainKind(fromValue) == PlainKind.List) return "an array is not a " + typeDisplayName(toValue) + "; read an element or its length";
+	if (plainKind(toValue) == PlainKind.List) return "only an array converts to an array; build one ([x])";
+	return "neither type overlaps the other";
 }
 
 function peelDistinct(t: Type | null): Type | null {
