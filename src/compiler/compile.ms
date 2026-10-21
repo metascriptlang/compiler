@@ -2052,7 +2052,7 @@ function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[]
 	}
 	for (const info of facts.typeInfoOrder) {
 		for (const module of modules) {
-			if (info.owner == module.modulePath && !info.moduleLocal && !module.typeInfos.includes(info.cName)) module.typeInfos.push(info.cName);
+			if (info.owner == module.modulePath && !module.typeInfos.includes(info.cName)) module.typeInfos.push(info.cName);
 		}
 	}
 	for (const module of modules) {

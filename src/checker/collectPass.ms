@@ -972,7 +972,7 @@ function collectStructLike(ctx: CheckerContext, node: Node, kind: SymbolKind, is
 	innerType.sym = sym;
 	if (isExtern) {
 		setFlag(sym, SymbolFlag.ImportC);
-		sym.nativeName = d.interfaceName;
+		sym.nativeName = d.nativeName != "" ? formatExternName(ctx, "declaration", d.interfaceName, d.nativeName, node.location) : d.interfaceName;
 	}
 	defineOrError(ctx, sym, node);
 }

@@ -906,6 +906,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addStrArrayField(keys, values, "interfaceFieldTypes", d.interfaceFieldTypes, loc);
 		addNodeArrayArrayField(keys, values, "interfaceFieldDecorators", d.interfaceFieldDecorators, loc);
 		addStrArrayField(keys, values, "interfaceOptionalFields", d.interfaceOptionalFields, loc);
+		addStrField(keys, values, "nativeName", d.nativeName, loc);
 		return;
 	}
 	if (k == NodeKind.ClassDecl) {
@@ -2644,7 +2645,7 @@ test "hasUserMacroInvocation detects macro in DecoratedDecl decorators" {
 	defineTestMacro(ctx, "myDeco", loc);
 	const inv = createNode(NodeKind.MacroInvocation, { macroName: "myDeco", macroArgs: [], macroHasParens: false }, synthToken(loc));
 	const inner = createNode(NodeKind.InterfaceDecl, {
-		interfaceName: "X", interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: [], interfaceOptionalFields: [] as string[],
+		interfaceName: "X", interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: [], interfaceOptionalFields: [] as string[], nativeName: "",
 	}, synthToken(loc));
 	const dec = createNode(NodeKind.DecoratedDecl, {
 		decorators: [inv], decoratedNode: inner,

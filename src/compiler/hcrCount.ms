@@ -84,14 +84,14 @@ function countSpec(layout: HcrTypeLayout, module: HcrIndirectModule, modules: Hc
 	if (hasGenericParams(subject)) return "!is generic, and the counter does not cover its instances";
 	const own = fieldNames(subject);
 	if (own == null) return "!has a layout the counter cannot compare with other types";
-	const key = objectTypeInfoKey(subject, module.modulePath);
+	const key = objectTypeInfoKey(subject);
 	const entries: string[] = [];
 	for (const other of facts.typeInfoOrder) {
 		if (other.kind != TypeInfoKind.Object) continue;
 		const itself = other.key == key;
 		if (!itself && !viewsAs(other, subject, own, key, facts)) continue;
 		const owner = moduleIdOf(other.owner, modules);
-		if (other.moduleLocal || owner == "") {
+		if (owner == "") {
 			if (itself) return "!is allocated outside the HCR registry";
 			return `!may also be viewed through '${other.subject.typeName}', which is outside the HCR registry`;
 		}

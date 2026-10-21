@@ -23,7 +23,7 @@ import {
 } from "./shared";
 import {
 	buildDiagnosticsJson, buildTransitiveDiagnosticsWire, recordImportsForFile,
-	resetFormatOptions, resetLspTargetCache, forgetPublishedDiagnostics,
+	resetFormatOptions, resetLspTargetCache, forgetPublishedDiagnostics, recordPublishedDiagnostics,
 } from "./diagnostics";
 import { prebuildCompletionCache, handleCompletion, handleCompletionResolve } from "./completion";
 import { handleDefinition } from "./definition";
@@ -50,14 +50,15 @@ export function publishPendingDiagnostics(db: TransAmDb): string {
 		const uri = entry[1];
 		try {
 			prebuildCompletionCache(db, path, uri);
-			const diagParams = buildDiagnosticsJson(uri, db, path);
+			const diagParams = recordPublishedDiagnostics(path, buildDiagnosticsJson(uri, db, path));
 			result = result + lspFormatMessage(lspNotification("textDocument/publishDiagnostics", diagParams));
 			result = result + buildTransitiveDiagnosticsWire(db, path);
 		} catch (e) {
 			const fileId = getFileId(db.fileInput, path);
 			if (fileId >= 0) invalidateFile(db.cache, db.moduleDeps, fileId);
 			writeStderr("[LSP] type check failed for " + path + ": " + e + "\n");
-			result = result + lspFormatMessage(lspNotification("textDocument/publishDiagnostics", lspFmtPublishDiagnostics(uri, "[]")));
+			const emptyParams = recordPublishedDiagnostics(path, lspFmtPublishDiagnostics(uri, "[]"));
+			result = result + lspFormatMessage(lspNotification("textDocument/publishDiagnostics", emptyParams));
 		}
 	}
 	for (const path of drainStaleDependents()) {
@@ -125,7 +126,7 @@ export function handleDidOpen(params: string, db: TransAmDb): string {
 	const t4 = performance.now();
 	prebuildCompletionCache(db, path, uri);
 	const t5 = performance.now();
-	const diagParams = buildDiagnosticsJson(uri, db, path);
+	const diagParams = recordPublishedDiagnostics(path, buildDiagnosticsJson(uri, db, path));
 	const t6 = performance.now();
 	writeStderr(`[LSP-OPEN] ${path} parse=${t2 - t1}ms imports=${t3 - t2}ms check=${t4 - t3}ms cache=${t5 - t4}ms diag=${t6 - t5}ms total=${t6 - t0}ms\n`);
 	return lspNotification("textDocument/publishDiagnostics", diagParams);
@@ -1271,6 +1272,21 @@ test "a dependency changed on disk re-checks an open importer" {
 	handleDidChangeWatchedFiles(syncWatchedParams(depPath, 2), db);
 	publishPendingDiagnostics(db);
 	assert !syncReportsMissingPercent(db, usePath);
+	markDocumentClosed(usePath);
+}
+
+test "an importer published on open is not republished while its diagnostics stay the same" {
+	const dir = syncTmpDir("opened");
+	const depPath = dir + "/dep.ms";
+	const usePath = dir + "/use.ms";
+	writeFile(depPath, DEP_WITH_PERCENT);
+	writeFile(usePath, USE_PERCENT);
+	const db = createTransAmDb(100);
+	handleDidOpen(syncOpenParams(depPath, DEP_WITH_PERCENT), db);
+	handleDidOpen(syncOpenParams(usePath, USE_PERCENT), db);
+	assert !syncReportsMissingPercent(db, usePath);
+	assert buildTransitiveDiagnosticsWire(db, depPath) == "";
+	markDocumentClosed(depPath);
 	markDocumentClosed(usePath);
 }
 

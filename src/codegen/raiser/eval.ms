@@ -576,6 +576,17 @@ test "engine: an object keeps its class, which instanceof and a checked conversi
 	assert ctx.output == "true true false true false true false\n2 true\n", ctx.output;
 }
 
+test "engine: an as into a narrower literal union stops on a value outside it" {
+	const strings = evalOrcVM("type Wide = 'a' | 'b' | 'c'; type Narrow = 'a' | 'b'; function r(x: Wide | null): Wide | null { return x; }"
+		+ " const n: Narrow | null = r(null) as Narrow | null; console.log(r('b') as Narrow | null, n); console.log(r('c') as Narrow | null);");
+	assert strings.error.startsWith("invalid union conversion: \"c\" is not "), strings.error;
+	assert strings.output == "b null\n", strings.output;
+	const numbers = evalOrcVM("type Wide = 1 | 2 | 3; type Narrow = 1 | 2; function r(x: int32): int32 { return x; }"
+		+ " const k: Narrow = r(2) as Narrow; console.log(k); const w: Narrow = r(3) as Narrow; console.log(w);");
+	assert numbers.error.startsWith("invalid union conversion: 3 is not "), numbers.error;
+	assert numbers.output == "2\n", numbers.output;
+}
+
 test "engine: a for-of raises when the string it iterates changes length" {
 	const ctx = evalOrcVM("let s = 'abc'; let seen = ''; try { for (const c of s) { seen = seen + c; s = s + 'd'; } } catch (e) { console.log('raised after ' + seen); }");
 	assert ctx.error == "", ctx.error;

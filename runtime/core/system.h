@@ -591,6 +591,8 @@ _Noreturn void msRaiseUnreachable(const char* text);
 _Noreturn void msRaiseObjectConversionError(void* p, const msTypeInfo* target);
 _Noreturn void msRaiseStrLitError(msString s, msString target);
 msString msStrLitConv(msString s, msString members, msString target);
+_Noreturn void msRaiseNumLitError(double v, msString target);
+double msNumLitConv(double v, const double* members, int64_t n, msString target);
 
 static inline void* msObjDownConv(void* p, const msTypeInfo* target) {
 	if (p != NULL && !msIsInstance(p, target)) msRaiseObjectConversionError(p, target);

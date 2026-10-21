@@ -2595,28 +2595,76 @@ export function createConditionalType(check: Type, extendsType: Type, trueType: 
 	return t;
 }
 
+// The `infer` parameters a conditional's extends clause declares, kept as the elements of
+// typeReturn; every other parameter in the clause is an outer one, so the conditional defers.
+export function setInferParams(cond: Type, declared: Type[]): void {
+	if (declared.length > 0) cond.typeReturn = createTuple(declared);
+}
+
+function inferParamsOf(t: Type): Type[] {
+	return t.typeReturn != null ? t.typeReturn.typeChildren : [];
+}
+
+// A conditional whose check type is written as a naked type parameter distributes over a
+// union that parameter is given (reference: root.isDistributive). typeExtra keeps that
+// parameter: a substitution replaces it in the check type only, and inside the extends type
+// and the branches it is bound per member when the conditional is evaluated.
+export function markDistributive(cond: Type): void {
+	const check = cond.typeChildren.length == 4 ? cond.typeChildren[0] : null;
+	if (check != null && check.kind == TypeKind.GenericParam) cond.typeExtra = check;
+}
+
+function distributiveParam(t: Type): Type | null {
+	return t.typeExtra != null && t.typeExtra.kind == TypeKind.GenericParam ? t.typeExtra : null;
+}
+
 // Evaluate a conditional type if its check and extends types are concrete (no GenericParam).
 // Returns the true/false branch, or the original type if unevaluable.
 export function evaluateConditionalType(t: Type | null): Type {
 	if (t == null || t.kind != TypeKind.Conditional) return t != null ? t : inferredType();
 	if (t.typeChildren.length < 4) return t;
 	const check = t.typeChildren[0];
-	const ext = t.typeChildren[1];
 	// Defer if check type still has unresolved generic params (not yet substituted)
 	if (hasGenericParams(check)) return t;
+	const param = distributiveParam(t);
+	if (param == null) return conditionalFor(t, check, [], []);
+	const members = mappedSourceMembers(check);
+	if (members.length == 0) return conditionalFor(t, check, [param], [check]);
+	const parts: Type[] = [];
+	for (const m of members) {
+		const part = conditionalFor(t, m, [param], [m]);
+		if (part == t) return t;
+		parts.push(part);
+	}
+	return unionOfParts(parts);
+}
+
+function conditionalFor(t: Type, check: Type, params: Type[], concretes: Type[]): Type {
+	const ext = params.length > 0 ? substituteParams(t.typeChildren[1], params, concretes) : t.typeChildren[1];
 	if (hasGenericParams(ext)) {
 		const bindings = createUnifyBindings();
 		unifyType(ext, check, bindings);
-		const inferParams: Type[] = [];
-		collectGenericParams(ext, inferParams, 0);
+		const inferParams = inferParamsOf(t);
+		for (let i = bindings.params.length - 1; i >= 0; i -= 1) {
+			if (inferParams.indexOf(bindings.params[i]) >= 0) continue;
+			bindings.names.splice(i, 1);
+			bindings.params.splice(i, 1);
+			bindings.types.splice(i, 1);
+		}
 		for (const gp of inferParams) {
 			if (boundSlot(bindings, gp) < 0) bindParam(bindings, gp, unknownType());
 		}
 		const inferredExt = substituteBound(ext, bindings);
-		if (!isAssignableForConditional(check, inferredExt)) return t.typeChildren[3];
+		if (hasGenericParams(inferredExt)) return t;
+		if (!isAssignableForConditional(check, inferredExt)) return branchFor(t.typeChildren[3], params, concretes);
+		for (let i = 0; i < params.length; i += 1) bindParam(bindings, params[i], concretes[i]);
 		return substituteBound(t.typeChildren[2], bindings);
 	}
-	return isAssignableForConditional(check, ext) ? t.typeChildren[2] : t.typeChildren[3];
+	return branchFor(isAssignableForConditional(check, ext) ? t.typeChildren[2] : t.typeChildren[3], params, concretes);
+}
+
+function branchFor(branch: Type, params: Type[], concretes: Type[]): Type {
+	return params.length > 0 ? substituteParams(branch, params, concretes) : branch;
 }
 
 // Simplified assignability check for conditional type evaluation.
@@ -2670,7 +2718,23 @@ function memberOfKey(objectType: Type, key: Type): Type | null {
 		if (isNumeric(key)) return array.typeReturn;
 		return key.kind == TypeKind.StringLiteral && key.typeName == "length" ? numberType() : null;
 	}
+	const tuple = peelTransparentInstance(unwrapRef(objectType));
+	if (tuple.kind == TypeKind.Tuple) {
+		const at = key.kind == TypeKind.StringLiteral || key.kind == TypeKind.NumberLiteral ? parseIntStrict(key.typeName) : -1;
+		return at >= 0 && at < tuple.typeChildren.length ? tuple.typeChildren[at] : null;
+	}
 	return key.kind == TypeKind.StringLiteral ? findFieldInVariant(objectType, key.typeName) : null;
+}
+
+function parseIntStrict(text: string): int32 {
+	if (text.length == 0 || text.length > 9) return -1;
+	let n = 0;
+	for (let i = 0; i < text.length; i += 1) {
+		const c = text.byteAt(i);
+		if (c < "0".code || c > "9".code) return -1;
+		n = n * 10 + (c - "0".code);
+	}
+	return n;
 }
 
 export function evaluateIndexedAccessType(t: Type): Type {
@@ -2691,6 +2755,232 @@ export function evaluateKeyOfType(t: Type): Type {
 	if (t.typeChildren.length < 1 || hasGenericParams(t.typeChildren[0])) return t;
 	const keys = keyOfType(t.typeChildren[0]);
 	return keys != null ? keys : t;
+}
+
+// Mapped type `{ [P in C as N]: X }`, deferred while its keys, its template or the object its
+// modifiers come from are generic. typeReturn = P (typeNames[0] its name); typeChildren = [C, X]
+// and N when written;
+// typeExtra = the modifiers type: T of a `keyof T` constraint, or of a `K extends keyof T` one.
+export enum MappedModifier {
+	IncludeReadonly,
+	ExcludeReadonly,
+	IncludeOptional,
+	ExcludeOptional,
+	KeyOfDeclared,
+}
+
+function mappedParam(t: Type): Type | null {
+	return t.typeReturn;
+}
+
+export function mappedModifiers(t: Type): BitSet<MappedModifier> {
+	return (t.typeValue as uint8) as BitSet<MappedModifier>;
+}
+
+export function createMappedType(param: Type, constraint: Type, template: Type, nameType: Type | null, modifiersType: Type | null, modifiers: BitSet<MappedModifier>): Type {
+	const t = emptyType();
+	t.kind = TypeKind.Mapped;
+	t.typeNames = [param.typeName];
+	t.typeReturn = param;
+	t.typeChildren = nameType != null ? [constraint, template, nameType] : [constraint, template];
+	t.typeExtra = modifiersType;
+	t.typeValue = (modifiers as uint8) as int32;
+	return t;
+}
+
+// The members of a homomorphic mapped type's source that it maps one by one: the
+// members of a union, `null` included; none for any other type.
+function mappedSourceMembers(source: Type): Type[] {
+	if (source.kind == TypeKind.Union) return source.typeChildren;
+	if (isMaybeType(source) && source.typeReturn != null) {
+		const payload = source.typeReturn!;
+		const members: Type[] = payload.kind == TypeKind.Union ? [...payload.typeChildren] : [payload];
+		members.push(nullType());
+		return members;
+	}
+	return [];
+}
+
+function isObjectSource(t: Type): boolean {
+	const s = peelTransparentInstance(unwrapRef(t));
+	return s.kind == TypeKind.Struct || s.kind == TypeKind.Tuple || arrayOf(t) != null;
+}
+
+function withNullMember(t: Type): Type {
+	return isNullableShape([t]) ? t : nullableUnionOf([t, nullType()]);
+}
+
+// `T | null` without its null: T; `null` alone is never.
+export function withoutNullMember(t: Type): Type {
+	if (t.kind == TypeKind.Null) return neverType();
+	if (isMaybeType(t)) return unwrapMaybeType(t);
+	if (t.kind != TypeKind.Union || t.typeChildren == null) return t;
+	const remaining: Type[] = [];
+	for (const v of t.typeChildren) {
+		if (v.kind != TypeKind.Null) remaining.push(v);
+	}
+	if (remaining.length == t.typeChildren.length) return t;
+	if (remaining.length == 0) return neverType();
+	if (remaining.length == 1) return remaining[0];
+	return createUnion(remaining);
+}
+
+function mappedTemplateAt(t: Type, child: int32, key: Type): Type {
+	return substituteParams(t.typeChildren[child], [mappedParam(t)!], [key]);
+}
+
+// The keys the constraint names, as property-name literals; null when one is no property name.
+function mappedKeys(constraint: Type): Type[] | null {
+	const members: Type[] = constraint.kind == TypeKind.Union ? constraint.typeChildren : [constraint];
+	const keys: Type[] = [];
+	for (const m of members) {
+		if (m == null || m.kind == TypeKind.Never) continue;
+		if (m.kind != TypeKind.StringLiteral) return null;
+		keys.push(m);
+	}
+	return keys;
+}
+
+// The value a homomorphic mapped type over an array or a tuple maps to: the element
+// type under key `number`, or each element under its index.
+function mappedArrayLike(t: Type, source: Type, mods: BitSet<MappedModifier>): Type {
+	const tuple = peelTransparentInstance(unwrapRef(source));
+	const readonly = mods.has(MappedModifier.IncludeReadonly)
+		|| (!mods.has(MappedModifier.ExcludeReadonly) && isReadonlyView(source));
+	if (tuple.kind == TypeKind.Tuple) {
+		const elements: Type[] = [];
+		for (let i = 0; i < tuple.typeChildren.length; i += 1) {
+			const element = mappedTemplateAt(t, 1, createStringLiteral(String(i)));
+			if (hasGenericParams(element)) return t;
+			elements.push(mods.has(MappedModifier.IncludeOptional) ? withNullMember(element) : element);
+		}
+		const mapped = createTuple(elements);
+		const required = getMinArity(tuple);
+		if (mods.has(MappedModifier.IncludeOptional)) setMinArity(mapped, 0);
+		else if (!mods.has(MappedModifier.ExcludeOptional) && required < tuple.typeChildren.length) setMinArity(mapped, required);
+		return mapped;
+	}
+	let element = mappedTemplateAt(t, 1, numberType());
+	if (hasGenericParams(element)) return t;
+	if (mods.has(MappedModifier.IncludeOptional)) element = withNullMember(element);
+	const array = createRef(createArray(element));
+	return readonly ? createReadonlyView(array) : array;
+}
+
+// Reference: resolveMappedTypeMembers — one property per key of the constraint; `?` and
+// `readonly` from the modifiers, else inherited from the modifiers type's property.
+// `{ readonly [P in keyof T]: T[P] }` keeps T's members and only forbids writes: the read-only
+// view of T itself.
+function isReadonlyOnly(t: Type, source: Type, mods: BitSet<MappedModifier>): boolean {
+	if (!mods.has(MappedModifier.IncludeReadonly) || mods.has(MappedModifier.IncludeOptional) || mods.has(MappedModifier.ExcludeOptional)) return false;
+	const template = t.typeChildren[1];
+	return template.kind == TypeKind.IndexedAccess && template.typeChildren.length == 2
+		&& template.typeChildren[0] == source
+		&& template.typeChildren[1] == mappedParam(t);
+}
+
+export function evaluateMappedType(t: Type): Type {
+	if (t.kind != TypeKind.Mapped || t.typeChildren.length < 2) return t;
+	const mods = mappedModifiers(t);
+	const source = t.typeExtra;
+	if (source != null && hasGenericParams(source)) return t;
+	if (mods.has(MappedModifier.KeyOfDeclared) && source != null && t.typeChildren.length == 2) {
+		if (!isObjectSource(source) && mappedSourceMembers(source).length == 0) return source;
+		if (arrayOf(source) != null || peelTransparentInstance(unwrapRef(source)).kind == TypeKind.Tuple) return mappedArrayLike(t, source, mods);
+		if (isReadonlyOnly(t, source, mods)) return createReadonlyView(source);
+	}
+	const constraint = t.typeChildren[0];
+	if (hasGenericParams(constraint)) return t;
+	const keys = mappedKeys(constraint);
+	if (keys == null) return t;
+	const modifiersStruct = source != null ? peelToStruct(source) : null;
+	const optionalOfSource: string[] = modifiersStruct != null && modifiersStruct.kind == TypeKind.Struct && modifiersStruct.optionalFields != null
+		? modifiersStruct.optionalFields : [];
+	const names: string[] = [];
+	const types: Type[] = [];
+	const optional: string[] = [];
+	for (const key of keys) {
+		const propNames: Type[] = [];
+		if (t.typeChildren.length > 2) {
+			const named = mappedTemplateAt(t, 2, key);
+			if (hasGenericParams(named)) return t;
+			const remapped = mappedKeys(named);
+			if (remapped == null) return t;
+			for (const n of remapped) propNames.push(n);
+		} else {
+			propNames.push(key);
+		}
+		for (const propName of propNames) {
+			const name = propName.typeName;
+			if (names.indexOf(name) >= 0) return t;
+			const sourceOptional = optionalOfSource.indexOf(key.typeName) >= 0;
+			const isOptional = mods.has(MappedModifier.IncludeOptional) || (!mods.has(MappedModifier.ExcludeOptional) && sourceOptional);
+			let propType = mappedTemplateAt(t, 1, key);
+			if (hasGenericParams(propType) || propType.kind == TypeKind.IndexedAccess) return t;
+			if (isOptional) propType = withNullMember(propType);
+			else if (sourceOptional) propType = withoutNullMember(propType);
+			names.push(name);
+			types.push(propType);
+			if (isOptional) optional.push(name);
+		}
+	}
+	const struct = createStruct("", names, types, true);
+	if (optional.length > 0) struct.optionalFields = optional;
+	const result = createRef(struct);
+	const readonly = mods.has(MappedModifier.IncludeReadonly)
+		|| (!mods.has(MappedModifier.ExcludeReadonly) && source != null && isReadonlyView(source));
+	return readonly ? createReadonlyView(result) : result;
+}
+
+// A mapped type waits while its keys, its source or its template name an outer type parameter.
+export function mappedIsGeneric(t: Type): boolean {
+	if (hasGenericParams(t.typeChildren[0]) || (t.typeExtra != null && hasGenericParams(t.typeExtra))) return true;
+	for (let ci = 1; ci < t.typeChildren.length; ci += 1) {
+		if (hasGenericParams(mappedTemplateAt(t, ci, neverType()))) return true;
+	}
+	return false;
+}
+
+// The key type of a mapped type whose keys are all of `string` or of `number`: an index signature.
+export function mappedIndexKey(t: Type): Type | null {
+	const key = t.typeChildren[0];
+	if (t.typeChildren.length > 2 || (key.kind != TypeKind.String && !isNumeric(key))) return null;
+	return key;
+}
+
+export function mappedValueAt(t: Type, key: Type): Type {
+	const value = mappedTemplateAt(t, 1, key);
+	return mappedModifiers(t).has(MappedModifier.IncludeOptional) ? withNullMember(value) : value;
+}
+
+// Why a mapped type with nothing generic left did not become an object type.
+export function mappedRefusal(t: Type): string {
+	const source = t.typeExtra;
+	const constraint = t.typeChildren[0];
+	const shown = typeDisplayName(constraint);
+	if (source != null && mappedModifiers(t).has(MappedModifier.KeyOfDeclared) && mappedSourceMembers(source).length == 0 && !isObjectSource(source)) {
+		return "it maps over '" + typeDisplayName(source) + "', which has no properties";
+	}
+	const keys = mappedKeys(constraint);
+	if (keys == null) {
+		const members: Type[] = constraint.kind == TypeKind.Union ? constraint.typeChildren : [constraint];
+		for (const m of members) {
+			if (m.kind == TypeKind.String || isNumeric(m)) return "its keys '" + shown + "' name no fixed set of properties: write '{ [key: " + typeDisplayName(m) + "]: V }' or 'Map<" + typeDisplayName(m) + ", V>'";
+			if (m.kind != TypeKind.StringLiteral && m.kind != TypeKind.Never) return "its key '" + typeDisplayName(m) + "' is no property name: a key is a string literal type";
+		}
+	}
+	if (t.typeChildren.length > 2) return "its 'as' clause does not give string literal property names, one per key";
+	return "its template '" + typeDisplayName(t.typeChildren[1]) + "' does not resolve for every key of '" + shown + "'";
+}
+
+function mappedDisplay(t: Type): string {
+	if (t.typeChildren.length < 2 || t.typeNames.length < 1) return "unknown";
+	const mods = mappedModifiers(t);
+	const readonly = mods.has(MappedModifier.IncludeReadonly) ? "readonly " : mods.has(MappedModifier.ExcludeReadonly) ? "-readonly " : "";
+	const optional = mods.has(MappedModifier.IncludeOptional) ? "?" : mods.has(MappedModifier.ExcludeOptional) ? "-?" : "";
+	const constraint = mods.has(MappedModifier.KeyOfDeclared) && t.typeExtra != null ? "keyof " + typeDisplayName(t.typeExtra) : typeDisplayName(t.typeChildren[0]);
+	const remap = t.typeChildren.length > 2 ? " as " + typeDisplayName(t.typeChildren[2]) : "";
+	return "{ " + readonly + "[" + t.typeNames[0] + " in " + constraint + remap + "]" + optional + ": " + typeDisplayName(t.typeChildren[1]) + " }";
 }
 
 // A constraint that holds only property names: a string literal, a union of them, or keyof T.
@@ -2725,6 +3015,14 @@ export function isAllStringLiteralUnion(t: Type | null): boolean {
 		if (child == null || child.kind != TypeKind.StringLiteral) return false;
 	}
 	return true;
+}
+
+export function numberLiteralSet(t: Type | null): Type[] | null {
+	if (t == null) return null;
+	const members: Type[] = t.kind == TypeKind.NumberLiteral ? [t] : literalUnionBase(t) != null && literalUnionBase(t)!.kind != TypeKind.String ? t.typeChildren : [];
+	if (members.length == 0) return null;
+	for (const m of members) if (!isNumeric(numberLiteralBase(m))) return null;
+	return members;
 }
 
 // isStringLike — true for String, StringLiteral, and Union<StringLiteral...>.
@@ -3771,25 +4069,68 @@ function copyTypeForSubst(t: Type): Type {
 	return result;
 }
 
-function distributedMembers(t: Type, param: Type, concrete: Type): Type[] {
-	if (t.typeChildren.length != 4 || t.typeChildren[0] != param) return [];
-	if (concrete.kind == TypeKind.Union) return concrete.typeChildren;
-	if (isMaybeType(concrete) && concrete.typeReturn != null) {
-		const payload = concrete.typeReturn!;
-		const members: Type[] = payload.kind == TypeKind.Union ? [...payload.typeChildren] : [payload];
-		members.push(nullType());
-		return members;
+// The bindings without `param`, so a parameter a type operator binds itself is not replaced by
+// a substitution from outside it.
+function withoutParam(params: Type[], concretes: Type[], param: Type | null): ParamBindings {
+	const out: ParamBindings = { params: [], concretes: [] };
+	for (let i = 0; i < params.length; i += 1) {
+		if (params[i] == param) continue;
+		out.params.push(params[i]);
+		out.concretes.push(concretes[i]);
 	}
-	return [];
+	return out;
 }
 
+interface ParamBindings {
+	params: Type[];
+	concretes: Type[];
+}
+
+// The check type is substituted; a distributive conditional's parameter stays in the extends
+// type and the branches, bound to the check type when the conditional is evaluated.
 function substitutedConditionalAll(t: Type, params: Type[], concretes: Type[], active: Cursor<Type>[]): Type {
+	if (t.typeChildren.length != 4) return t;
+	const inner = withoutParam(params, concretes, distributiveParam(t));
 	const cond = copyTypeForSubst(t);
-	substituteChildrenInPlaceAll(cond, params, concretes, active);
+	cond.typeChildren[0] = substituteAllParamsInner(t.typeChildren[0], params, concretes, active);
+	for (let ci = 1; ci < 4; ci += 1) {
+		cond.typeChildren[ci] = substituteAllParamsInner(t.typeChildren[ci], inner.params, inner.concretes, active);
+	}
 	return evaluateConditionalType(cond);
 }
 
-function unionOfParts(parts: Type[]): Type {
+// Reference: instantiateMappedType — a homomorphic mapped type distributes over a union its
+// type variable is instantiated with; P is bound inside the template and the `as` clause only.
+function substitutedMapped(t: Type, params: Type[], concretes: Type[], active: Cursor<Type>[]): Type {
+	const source = t.typeExtra;
+	const variable = mappedModifiers(t).has(MappedModifier.KeyOfDeclared) && source != null && source.kind == TypeKind.GenericParam
+		? params.indexOf(source) as int32 : -1;
+	const members = variable >= 0 ? mappedSourceMembers(concretes[variable]) : [];
+	if (members.length > 0) {
+		const parts: Type[] = [];
+		for (const m of members) {
+			const each: Type[] = [...concretes];
+			each[variable] = m;
+			parts.push(substitutedMapped(t, params, each, active));
+		}
+		return unionOfParts(parts);
+	}
+	const inner = withoutParam(params, concretes, mappedParam(t));
+	const m = copyTypeForSubst(t);
+	m.typeChildren[0] = substituteAllParamsInner(t.typeChildren[0], params, concretes, active);
+	for (let ci = 1; ci < t.typeChildren.length; ci += 1) {
+		m.typeChildren[ci] = substituteAllParamsInner(t.typeChildren[ci], inner.params, inner.concretes, active);
+	}
+	m.typeExtra = source != null ? substituteAllParamsInner(source, params, concretes, active) : null;
+	return evaluateMappedType(m);
+}
+
+function unionOfParts(all: Type[]): Type {
+	const parts: Type[] = [];
+	for (const p of all) {
+		if (p.kind != TypeKind.Never) parts.push(p);
+	}
+	if (parts.length == 0) return neverType();
 	if (parts.length == 1) return parts[0];
 	return isNullableShape(parts) ? nullableUnionOf(parts) : createUnion(parts);
 }
@@ -3884,19 +4225,7 @@ function substituteAllParamsWalk(t: Type, params: Type[], concretes: Type[], act
 				}
 				return gi;
 			},
-			TypeKind.Conditional => {
-				const checkIndex = t.typeChildren.length == 4 && t.typeChildren[0].kind == TypeKind.GenericParam ? params.indexOf(t.typeChildren[0]) : -1;
-				const members = checkIndex >= 0 ? distributedMembers(t, params[checkIndex], concretes[checkIndex]) : [];
-				if (members.length == 0) return substitutedConditionalAll(t, params, concretes, active);
-				const parts: Type[] = [];
-				for (const m of members) {
-					const each: Type[] = [];
-					for (const c of concretes) each.push(c);
-					each[checkIndex] = m;
-					parts.push(substitutedConditionalAll(t, params, each, active));
-				}
-				return unionOfParts(parts);
-			},
+			TypeKind.Conditional => substitutedConditionalAll(t, params, concretes, active),
 			TypeKind.IndexedAccess => {
 				const access = copyTypeForSubst(t);
 				substituteChildrenInPlaceAll(access, params, concretes, active);
@@ -3907,6 +4236,7 @@ function substituteAllParamsWalk(t: Type, params: Type[], concretes: Type[], act
 				substituteChildrenInPlaceAll(keyOf, params, concretes, active);
 				return evaluateKeyOfType(keyOf);
 			},
+			TypeKind.Mapped => substitutedMapped(t, params, concretes, active),
 			_ => t,
 		};
 	return isReadonlyView(t) ? createReadonlyView(result) : result;
@@ -4122,6 +4452,11 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	}
 	if (formal.kind == TypeKind.Union && concrete.kind != TypeKind.Union && !isMaybeType(concrete)) {
 		unifyIntoUnionFormal(formal, concrete, bindings);
+		return;
+	}
+	if (formal.kind == TypeKind.Conditional && concrete.kind != TypeKind.Conditional && formal.typeChildren.length == 4) {
+		unifyType(formal.typeChildren[2], concrete, bindings);
+		unifyType(formal.typeChildren[3], concrete, bindings);
 		return;
 	}
 	// Structural match — same kind, recurse into children
@@ -4546,6 +4881,7 @@ function typeNameOfInner(t: Type | null): string {
 		TypeKind.NumberLiteral => t2.typeName,
 		TypeKind.IndexedAccess => t2.typeChildren.length < 2 ? "unknown" : typeDisplayName(t2.typeChildren[0]) + "[" + typeDisplayName(t2.typeChildren[1]) + "]",
 		TypeKind.KeyOf => t2.typeChildren.length < 1 ? "unknown" : "keyof " + typeDisplayName(t2.typeChildren[0]),
+		TypeKind.Mapped => mappedDisplay(t2),
 		TypeKind.EnumLiteral => t2.typeName + "." + (t2.typeNames.length > 0 ? t2.typeNames[0] : ""),
 		// Result and Promise are now GenericInstance — handled above via t2.typeName
 		TypeKind.Enum => t2.typeName,
@@ -4656,7 +4992,10 @@ function typeDisplayNameInner(t: Type | null): string {
 	}
 	if (t.kind == TypeKind.Tuple && t.typeChildren.length > 0) {
 		const parts: string[] = [];
-		for (const c of t.typeChildren) parts.push(typeDisplayName(c));
+		const required = getMinArity(t);
+		for (let i = 0; i < t.typeChildren.length; i += 1) {
+			parts.push(typeDisplayName(t.typeChildren[i]) + (i >= required ? "?" : ""));
+		}
 		return "[" + parts.join(", ") + "]";
 	}
 	if (name != "") return name;
@@ -4877,6 +5216,7 @@ function sizeOfStruct(tg: TargetInfo, t: Type, depth: int32): int32 {
 
 // Size and field offsets share one traversal, including padding and erased fields.
 function structLayoutAt(tg: TargetInfo, t: Type, depth: int32, fieldIndex: int32): int32 {
+	if (t.sym != null && t.sym.symFlags.has(SymbolFlag.ImportC)) return SIZE_NOT_COMPUTABLE;
 	let offset = 0;
 	let maxAlign = 1;
 	if (t.typeChildren != null) {

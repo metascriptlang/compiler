@@ -27,7 +27,7 @@ import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, moduleScopeNamed, enumMemberName } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf } from "./types";
+import { isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callThroughProxy, checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
 
@@ -2166,9 +2166,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		let paramExpected: Type | null = null;
 		const _formal: Type | null = (calleeType != null
 			&& calleeType.kind == TypeKind.Function
-			&& calleeType.typeChildren != null
-			&& ai < calleeType.typeChildren.length)
-			? calleeType.typeChildren[ai]
+			&& calleeType.typeChildren != null)
+			? formalAtPosition(calleeType, ai)
 			: null as unknown as Type;
 		if (_formal != null) {
 			if (_isGenericCall && _argBindings.names.length > 0) {
@@ -2456,9 +2455,13 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		// Rest param is optional (accepts 0+ args), so effective min excludes it
 		const effectiveMin = hasRest && minAr >= calleeType.typeChildren.length
 			? calleeType.typeChildren.length - 1 : minAr;
+		const restTuple = restTupleOf(calleeType!);
 		const spread = takeOptionalSpread(ctx, d.arguments, argTypes, calleeDefaults(node, null, 0), calleeType.typeChildren, effectiveMin);
 		if (spread.spread != null && !spread.taken) {
 		} else if (refuseMisplacedSpread(ctx, d.arguments, calleeType.typeChildren, effectiveMin)) {
+		} else if (restTuple != null) {
+			fitRestTupleArgs(ctx, node, calleeType!, restTuple, minAr, argTypes.length);
+		} else if (hasRest && restAwaitsInstance(lastCT!)) {
 		} else if (argTypes.length < effectiveMin) {
 			addError(ctx, `Too few arguments: expected at least ${effectiveMin}, got ${argTypes.length}`, node.location.line, node.location.column);
 		} else if (!hasRest && argTypes.length > calleeType.typeChildren.length) {
@@ -2604,6 +2607,85 @@ function refuseTextlessArgs(ctx: CheckerContext, args: Node[], hasReceiver: bool
 	return refused;
 }
 
+function restTupleOf(calleeType: Type): Type | null {
+	const n = calleeType.typeChildren.length;
+	const last = n > 0 ? calleeType.typeChildren[n - 1] : null;
+	if (last == null || last.kind != TypeKind.Varargs) return null;
+	const inner = peelTransparentInstance(unwrapVarargs(last));
+	return inner.kind == TypeKind.Tuple ? inner : null;
+}
+
+function formalAtPosition(calleeType: Type, pos: int32): Type | null {
+	const restIdx = calleeType.typeChildren.length - 1;
+	if (pos < restIdx) return calleeType.typeChildren[pos];
+	const rest = restIdx >= 0 ? calleeType.typeChildren[restIdx] : null;
+	if (rest != null && rest.kind == TypeKind.Varargs && restAwaitsInstance(rest)) return awaitedRestElement(rest, pos - restIdx);
+	const tuple = restTupleOf(calleeType);
+	if (tuple == null) return pos == restIdx ? rest : null;
+	return pos - restIdx < tuple.typeChildren.length ? tuple.typeChildren[pos - restIdx] : null;
+}
+
+function awaitedRestElement(rest: Type, at: int32): Type | null {
+	const inner = peelTransparentInstance(unwrapVarargs(rest));
+	if (inner.kind != TypeKind.Conditional || inner.typeChildren.length != 4) return null;
+	const whenTrue = tupleElementAt(inner.typeChildren[2], at);
+	const whenFalse = tupleElementAt(inner.typeChildren[3], at);
+	if (whenTrue == null || whenFalse == null) return whenTrue != null ? whenTrue : whenFalse;
+	return sameType(whenTrue, whenFalse) ? whenTrue : null;
+}
+
+function tupleElementAt(t: Type, at: int32): Type | null {
+	const tuple = peelTransparentInstance(t);
+	return tuple.kind == TypeKind.Tuple && at < tuple.typeChildren.length ? tuple.typeChildren[at] : null;
+}
+
+function restWithoutElements(rest: Type): boolean {
+	if (rest.kind != TypeKind.Varargs) return false;
+	const inner = peelTransparentInstance(unwrapVarargs(rest));
+	if (inner.kind == TypeKind.Conditional) return true;
+	if (inner.kind == TypeKind.Tuple || getElementType(unwrapRef(inner)).kind != TypeKind.Inferred) return false;
+	return inner.kind == TypeKind.GenericInstance || hasGenericParams(inner);
+}
+
+function restAwaitsInstance(rest: Type): boolean {
+	const inner = peelTransparentInstance(unwrapVarargs(rest));
+	if (isArrayShaped(inner) || inner.kind == TypeKind.Span || inner.kind == TypeKind.Tuple) return false;
+	return hasGenericParams(inner);
+}
+
+function restArgsTuple(argTypes: Type[], from: int32): Type {
+	const elements: Type[] = [];
+	for (let i = from; i < argTypes.length; i += 1) elements.push(argTypes[i] != null ? argTypes[i] : inferredType());
+	return createTuple(elements);
+}
+
+function fitRestTupleArgs(ctx: CheckerContext, node: Node, calleeType: Type, tuple: Type, fixedMin: number, given: int32): void {
+	const args = (node.data as CallExprData).arguments;
+	const restIdx = calleeType.typeChildren.length - 1;
+	for (let i = restIdx; i < args.length; i += 1) {
+		if (args[i].kind != NodeKind.SpreadExpr) continue;
+		addError(ctx, "a spread argument cannot fill the tuple rest parameter '" + typeDisplayName(tuple) + "': pass its elements one by one",
+			args[i].location.line, args[i].location.column);
+		return;
+	}
+	const required = getMinArity(tuple);
+	const min = required > 0 ? restIdx + required : (fixedMin < restIdx ? fixedMin : restIdx);
+	const max = restIdx + tuple.typeChildren.length;
+	if (given < min || given > max) {
+		const bound = given < min ? "at least " + String(min) : "at most " + String(max);
+		addError(ctx, (given < min ? "Too few" : "Too many") + " arguments: expected " + bound + ", got " + String(given)
+			+ " (the rest parameter takes '" + typeDisplayName(tuple) + "')", node.location.line, node.location.column);
+		return;
+	}
+	if (given < restIdx) {
+		const calleeNameForDef = getCalleeNameForDefaults(node);
+		if (calleeNameForDef != "") fillDefaultArgsForNode(ctx, node, calleeNameForDef, restIdx, 0);
+	}
+	const expanded: Type[] = calleeType.typeChildren.slice(0, restIdx);
+	for (const element of tuple.typeChildren) expanded.push(element);
+	fillNullableTail(ctx, args, expanded, node.location);
+}
+
 function argLabelCap(pi: int32, hasReceiver: boolean): string {
 	if (hasReceiver && pi == 0) return "Receiver";
 	return "Argument " + String(hasReceiver ? pi - 1 : pi);
@@ -2620,10 +2702,16 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 	const hasRest = lastCT != null && lastCT.kind == TypeKind.Varargs;
 	// Type-check provided args (rest args check against element type of rest param)
 	const restParamIdx = hasRest ? calleeType.typeChildren.length - 1 : -1;
+	const restTuple = restTupleOf(calleeType);
 	let actorBorrowReported = false;
 	for (let pi = 0; pi < argTypes.length; pi += 1) {
 		let paramType: Type = null as unknown as Type;
-		if (hasRest && pi >= restParamIdx) {
+		if (restTuple != null && pi >= restParamIdx) {
+			if (pi - restParamIdx >= restTuple.typeChildren.length) continue;
+			paramType = restTuple.typeChildren[pi - restParamIdx];
+		} else if (hasRest && pi >= restParamIdx && restWithoutElements(lastCT!)) {
+			continue;
+		} else if (hasRest && pi >= restParamIdx) {
 			const restArr = unwrapRef(unwrapVarargs(lastCT));
 			const restElem = getElementType(restArr);
 			paramType = restElem.kind == TypeKind.Inferred ? restArr : restElem;
@@ -2941,6 +3029,7 @@ function fitArgsToBoundFormals(ctx: CheckerContext, node: Node, fnType: Type, bi
 		const arg = cd.arguments[ai];
 		if (arg == null || arg.nodeType == null || arg.nodeType.kind == TypeKind.Error) continue;
 		const formal = applySubstitutions(fnType.typeChildren[ai], bindings);
+		if (formal != null && restWithoutElements(formal)) continue;
 		if (formal == null || hasGenericParams(formal)) continue;
 		if (!isAssignable(arg.nodeType, formal) && !needsStdConv(arg.nodeType, formal)) {
 			addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(ai) + ": got " + typeDisplayName(arg.nodeType) + ", expected " + typeDisplayName(formal) + returnReprRefusal(arg.nodeType, formal, wrappedFnText(arg)) + refDerefHint(arg, arg.nodeType, formal),
@@ -3420,13 +3509,28 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	if (receiverBindings != null) mergeUnifyBindings(eb, receiverBindings);
 	while (ebFrom.length < eb.names.length) ebFrom.push(-1);
 	// Pass 1: unify args against params to derive bindings.
-	const limit = argTypes.length < calleeType.typeChildren.length ? argTypes.length : calleeType.typeChildren.length;
+	const restIdx = calleeType.typeChildren.length - 1;
+	const declRest = restIdx >= 0 ? calleeType.typeChildren[restIdx] : null;
+	const deferredRest = receiverBindings == null && declRest != null && declRest.kind == TypeKind.Varargs && restAwaitsInstance(declRest);
+	const tupleRest = receiverBindings == null && restTupleOf(calleeType) != null;
+	const limit = tupleRest ? argTypes.length
+		: argTypes.length < calleeType.typeChildren.length ? argTypes.length : calleeType.typeChildren.length;
 	const candParams: Type[] = [];
 	const candTypes: Type[] = [];
 	const candFrom: int32[] = [];
 	const candSkip: boolean[] = [];
 	for (let i = 0; i < limit; i += 1) {
-		if (argTypes[i] != null) {
+		if (deferredRest && i == restIdx) {
+			const ab = createUnifyBindings();
+			unifyType(unwrapVarargs(declRest!), restArgsTuple(argTypes, restIdx), ab);
+			collectArgCandidates(eb, ab, i, cd.arguments[i], candParams, candTypes, candFrom, candSkip);
+		} else if (tupleRest && i >= restIdx) {
+			const element = formalAtPosition(calleeType, i);
+			if (element == null || argTypes[i] == null) continue;
+			const ab = createUnifyBindings();
+			unifyType(element, argTypes[i], ab);
+			collectArgCandidates(eb, ab, i, cd.arguments[i], candParams, candTypes, candFrom, candSkip);
+		} else if (argTypes[i] != null) {
 			// Per-arg filter: a binding whose bound type still CONTAINS generic
 			// params is unusable (instantiateGenericFunction refuses it) but under
 			// first-wins merge it would shadow a clean binding from a later arg —
@@ -3620,7 +3724,13 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		}
 		if (rawFormal == null || !hasGenericParams(rawFormal)) continue;
 		let formalT: Type = applySubstitutions(rawFormal, eb);
-		if (formalT != null && formalT.kind == TypeKind.Varargs) {
+		const restTuple = formalT != null && formalT.kind == TypeKind.Varargs ? peelTransparentInstance(unwrapVarargs(formalT)) : null;
+		if (restTuple != null && restTuple.kind == TypeKind.Tuple) {
+			if (ai - lastFormalIdx >= restTuple.typeChildren.length) continue;
+			formalT = restTuple.typeChildren[ai - lastFormalIdx];
+		} else if (formalT != null && restWithoutElements(formalT)) {
+			continue;
+		} else if (formalT != null && formalT.kind == TypeKind.Varargs) {
 			const restArr = unwrapRef(unwrapVarargs(formalT));
 			const restElem = restArr != null ? getElementType(restArr) : null;
 			if (restElem == null || restElem.kind == TypeKind.Inferred) continue;
@@ -3647,6 +3757,8 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	node.resolvedSym = instSym;
 	cd.callee.resolvedSym = instSym;
 	cd.callee.nodeType = instSym.symbolType;
+	const instRest = deferredRest && instSym.symbolType != null ? restTupleOf(instSym.symbolType) : null;
+	if (instRest != null) fitRestTupleArgs(ctx, node, instSym.symbolType!, instRest, callMinArity(instSym.symbolType), argTypes.length);
 	return instSym.symbolType;
 }
 
@@ -4391,7 +4503,7 @@ function isCallableValueType(t: Type): boolean {
 	return match (t.kind) {
 		TypeKind.Function => true,
 		TypeKind.Inferred | TypeKind.Unknown | TypeKind.Pending | TypeKind.Error | TypeKind.Never
-			| TypeKind.GenericParam | TypeKind.TypeReference | TypeKind.Conditional | TypeKind.IndexedAccess | TypeKind.KeyOf => true,
+			| TypeKind.GenericParam | TypeKind.TypeReference | TypeKind.Conditional | TypeKind.IndexedAccess | TypeKind.KeyOf | TypeKind.Mapped => true,
 		TypeKind.GenericInstance => isCallableInstance(t),
 		TypeKind.Ref | TypeKind.Var | TypeKind.Lent | TypeKind.Sink | TypeKind.Borrow | TypeKind.Alias | TypeKind.Distinct =>
 			t.typeReturn == null || isCallableValueType(t.typeReturn),

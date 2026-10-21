@@ -979,6 +979,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		interfaceFieldVisibility: fieldVisibility,
 		interfaceFieldDecorators: fieldDecorators,
 		interfaceOptionalFields: optionalFields,
+		nativeName: "",
 	}, token);
 	ifaceNode.typeArg = genericNames;
 	ifaceNode.typeExprs = fieldTypeExprs;
@@ -1041,6 +1042,7 @@ function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: Node
 			interfaceFieldVisibility: [],
 			interfaceFieldDecorators: [],
 			interfaceOptionalFields: [],
+			nativeName: "",
 		}, token);
 		aliasNode.typeArg = genericNames;
 		aliasNode.typeExprs = [];
@@ -1870,6 +1872,16 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	// Extern interface with field body: parse as InterfaceDecl with ExternC flag.
 	// Reuses the full interface resolution pipeline (fields, types, generics).
 	// Only applies when body contains fields (name: Type), not methods (name(): Type).
+	const structNativeName = externKind == ExternKind.Struct ? parseOptionalFromClause(state) : "";
+	if (structNativeName != "" && (isAtEnd(state) || current(state).kind != TokenKind.LBrace)) {
+		consumeSemicolon(state);
+		return Result.ok(createNode(NodeKind.ExternDecl, {
+			externKind,
+			externName: nameToken.value,
+			nativeName: structNativeName,
+			externType: "",
+		}, externToken));
+	}
 	if ((externKind == ExternKind.Interface || externKind == ExternKind.Struct) && !isAtEnd(state) && current(state).kind == TokenKind.LBrace) {
 		const bodyNodeKind = externKind == ExternKind.Struct ? NodeKind.StructDecl : NodeKind.InterfaceDecl;
 		// Peek ahead to determine if body has fields or methods
@@ -1890,9 +1902,16 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		if (hasFieldBody) {
 			const ifaceResult = parseInterfaceBody(state, nameToken.value, externToken, genericNames, bodyNodeKind, makeLocFromToken(nameToken));
 			if (ifaceResult.ok) {
+				if (!isAtEnd(state) && current(state).kind == TokenKind.From) {
+					return Result.err(`extern ${kindToken.value} '${nameToken.value}': write 'from "<C name>"' before the field list, not after it, at line ${current(state).line}`);
+				}
 				ifaceResult.value.flags = ifaceResult.value.flags.incl(NodeFlag.ExternC);
+				(ifaceResult.value.data as InterfaceDeclData).nativeName = structNativeName;
 				return ifaceResult;
 			}
+		}
+		if (structNativeName != "") {
+			return Result.err(`extern struct '${nameToken.value}' from "${structNativeName}": the body must be a field list (name: Type) at line ${nameToken.line}`);
 		}
 	}
 
@@ -2147,6 +2166,23 @@ test "export struct" { assert programOk("export struct Vec2 { x: number; y: numb
 test "exported distinct modifier rejected" { assert !programOk("export distinct type EntityId = number;"); }
 
 test "extern struct" { assert programOk("extern struct NativePoint { x: float64; y: float64; }"); }
+
+test "an extern struct names its C tag with from before its field list" {
+	const n = stmtAt("extern struct Stat from \"struct stat\" { st_mode: uint32; st_size: int64; }", 0);
+	assert n.kind == NodeKind.StructDecl;
+	assert n.flags.has(NodeFlag.ExternC);
+	const d = n.data as InterfaceDeclData;
+	assert d.nativeName == "struct stat";
+	assert d.interfaceFields.length == 2;
+	assert (stmtAt("extern struct Pt { x: int32; }", 0).data as InterfaceDeclData).nativeName == "";
+	const opaque = stmtAt("extern struct Tag from \"struct T\";", 0);
+	assert opaque.kind == NodeKind.ExternDecl && (opaque.data as ExternDeclData).nativeName == "struct T";
+}
+
+test "an extern struct refuses from after its field list or over a method body" {
+	assert parseError("extern struct Stat { st_mode: uint32; } from \"struct stat\";").indexOf("before the field list") >= 0;
+	assert parseError("extern struct Stat from \"struct stat\" { size(): int64; }").indexOf("must be a field list") >= 0;
+}
 
 test "struct field decorators keep name, arguments and order, one row per field" {
 	const d = stmtAt("struct S { @a @b(1, x) f: int32; g: int32; }", 0).data as InterfaceDeclData;

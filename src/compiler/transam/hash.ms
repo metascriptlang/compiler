@@ -380,7 +380,7 @@ export function transAmHashNode(node: Node): number {
 		NodeKind.InterfaceDecl | NodeKind.StructDecl => {
 			const d = node.data as InterfaceDeclData;
 			h = hS(h, d.interfaceName); h = hStrings(h, d.interfaceFields); h = hStrings(h, d.interfaceFieldTypes);
-			h = hNodeRows(h, d.interfaceFieldDecorators); h = hStrings(h, d.interfaceOptionalFields);
+			h = hNodeRows(h, d.interfaceFieldDecorators); h = hStrings(h, d.interfaceOptionalFields); h = hS(h, d.nativeName);
 		},
 		NodeKind.ClassDecl => {
 			const d = node.data as ClassDeclData;

@@ -405,12 +405,9 @@ function importStatementStarts(source: string): int32[] {
 	if (source.indexOf(".h\"", 0) < 0 && source.indexOf(".h'", 0) < 0) return starts;
 	const lexed = lex(source);
 	if (!lexed.ok) return starts;
+	const lines = source.split("\n");
 	const lineStarts: int32[] = [0];
-	let nl = source.indexOf("\n", 0);
-	while (nl >= 0) {
-		lineStarts.push(nl + 1);
-		nl = source.indexOf("\n", nl + 1);
-	}
+	for (let i = 0; i + 1 < lines.length; i += 1) lineStarts.push(lineStarts[i] + lines[i].length + 1);
 	const toks = lexed.value;
 	for (let i = 0; i < toks.length; i += 1) {
 		const t = toks[i];
@@ -1137,6 +1134,22 @@ test "C header import keeps every later line where the source has it" {
 	assert lines.length == 3;
 	assert lines[1] == "const x = 1;";
 	assert lines[2] == "const y = 2;";
+}
+
+test "C header import after lines of multi-unit characters inlines at its own statement" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/src/app.ms", "// é — 👍 日本\nconst s = \"→\";\nimport { foo } from \"./lib.h\";\nconst x = 1;"));
+	entries.push(makeEntry("/src/lib.h", "void foo(int x);"));
+	const graph = loadModuleGraph("/src/app.ms", createMapProvider(entries));
+	assert graph.errors.length == 0;
+	const mod = findModule(graph, "/src/app.ms");
+	assert mod != null;
+	const lines = mod.source.split("\n");
+	assert lines.length == 4;
+	assert lines[0] == "// é — 👍 日本";
+	assert lines[1] == "const s = \"→\";";
+	assert lines[2].startsWith("import { foo } from \"./lib.h\";") && lines[2].indexOf("extern") >= 0, lines[2];
+	assert lines[3] == "const x = 1;";
 }
 
 test "a module keeps the source it was read from beside its inlined source" {

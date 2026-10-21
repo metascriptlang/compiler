@@ -16,12 +16,27 @@ export class LspReplay {
 
 export type LspBatching = "exact" | "any";
 
+export interface LspProbe {
+	uri: string;
+	line: int32;
+	character: int32;
+}
+
+// After each drain index in afterDrains the open documents are a checkpoint: a process
+// driver compares the session there with a fresh server and with batch checking,
+// asking hover and definition at every probe.
+export interface LspCheckpoints {
+	afterDrains: int32[];
+	probes: LspProbe[];
+}
+
 export interface LspScenario {
 	name: string;
 	batching: LspBatching;
 	drains: string[][];
 	check: (r: LspReplay) => string;
 	checkAnyBatching: ((r: LspReplay) => string) | null;
+	checkpoints: LspCheckpoints | null;
 }
 
 export function lspTranscript(output: string, exitCode: int32, drainsConsumed: int32): LspReplay {
@@ -36,33 +51,33 @@ export function lspTranscript(output: string, exitCode: int32, drainsConsumed: i
 
 // ===== Drain builders =====
 
-function frames(bodies: string[]): string[] {
+export function frames(bodies: string[]): string[] {
 	const out: string[] = [];
 	for (const body of bodies) out.push(lspFormatMessage(body));
 	return out;
 }
 
-function request(idJson: string, method: string, params: string): string {
+export function request(idJson: string, method: string, params: string): string {
 	return `{"jsonrpc":"2.0","id":${idJson},"method":${lspJsonString(method)},"params":${params}}`;
 }
 
-function notification(method: string, params: string): string {
+export function notification(method: string, params: string): string {
 	return `{"jsonrpc":"2.0","method":${lspJsonString(method)},"params":${params}}`;
 }
 
-function initializeDrain(): string[] {
+export function initializeDrain(): string[] {
 	return frames([request("1", "initialize", "{}"), notification("initialized", "{}")]);
 }
 
-function openParams(uri: string, text: string): string {
+export function openParams(uri: string, text: string): string {
 	return `{"textDocument":{"uri":${lspJsonString(uri)},"languageId":"metascript","version":1,"text":${lspJsonString(text)}}}`;
 }
 
-function changeParams(uri: string, version: int32, text: string): string {
+export function changeParams(uri: string, version: int32, text: string): string {
 	return `{"textDocument":{"uri":${lspJsonString(uri)},"version":${version}},"contentChanges":[{"text":${lspJsonString(text)}}]}`;
 }
 
-function positionParams(uri: string, line: int32, character: int32): string {
+export function positionParams(uri: string, line: int32, character: int32): string {
 	return `{"textDocument":{"uri":${lspJsonString(uri)}},"position":{"line":${line},"character":${character}}}`;
 }
 
@@ -171,6 +186,24 @@ function spanOf(diagnostic: JsonValue): string {
 		+ "-" + end.getDynamicField("line").asInt32(-1) + ":" + end.getDynamicField("character").asInt32(-1);
 }
 
+// Every diagnostic of the n-th publish for uri as "span severity message", joined by "; ".
+function publishedAt(r: LspReplay, uri: string, publish: int32): string {
+	const all = published(r, uri);
+	if (publish >= all.length) return "no publish " + publish;
+	const diagnostics = all[publish];
+	if (diagnostics.kind != JsonKind.Array) return render(diagnostics);
+	const items: string[] = [];
+	for (const d of diagnostics.items) {
+		items.push(spanOf(d) + " " + field(d, "severity") + " " + field(d, "message"));
+	}
+	return "[" + items.join("; ") + "]";
+}
+
+function lastPublished(r: LspReplay, uri: string): string {
+	const count = published(r, uri).length;
+	return count == 0 ? "no publish" : publishedAt(r, uri, (count - 1) as int32);
+}
+
 function definitionSpan(r: LspReplay, key: string): string {
 	const answer = onlyAnswer(r, key);
 	if (!answer.ok) return answer.error;
@@ -243,6 +276,7 @@ function openWithErrorThenFix(): LspScenario {
 			sameCount("exit code", 0, r.exitCode),
 		]),
 		checkAnyBatching: null,
+		checkpoints: { afterDrains: [1, 2], probes: [{ uri, line: 0, character: 13 }] },
 	};
 }
 
@@ -264,6 +298,7 @@ function multibyteContentLength(): LspScenario {
 			sameText("s:é😀-1 definition", "0:21-0:26", definitionSpan(r, "s:é😀-1")),
 		]),
 		checkAnyBatching: null,
+		checkpoints: { afterDrains: [1], probes: [{ uri, line: 1, character: 17 }, { uri, line: 0, character: 22 }] },
 	};
 }
 
@@ -286,6 +321,7 @@ function twoEditsOneDrain(): LspScenario {
 			everyRequestAnsweredOnce(r, drains),
 			sameText("final diagnostic count", "0", finalDiagnosticCount(r, uri)),
 		]),
+		checkpoints: null,
 	};
 }
 
@@ -305,6 +341,7 @@ function twoEditsTwoDrains(): LspScenario {
 			sameText("publish 1 message", lspJsonString(NOT_ASSIGNABLE), field(diagnosticAt(r, uri, 1, 0), "message")),
 		]),
 		checkAnyBatching: null,
+		checkpoints: { afterDrains: [2], probes: [{ uri, line: 0, character: 13 }] },
 	};
 }
 
@@ -328,6 +365,7 @@ function requestBetweenEdits(): LspScenario {
 			sameText("n:4 definition", "2:6-2:7", definitionSpan(r, "n:4")),
 		]),
 		checkAnyBatching: null,
+		checkpoints: { afterDrains: [3], probes: [{ uri, line: 3, character: 10 }, { uri, line: 1, character: 10 }] },
 	};
 }
 
@@ -358,6 +396,7 @@ function supersededAndCoalesced(): LspScenario {
 			everyRequestAnsweredOnce(r, drains),
 			sameText("final diagnostic count", "1", finalDiagnosticCount(r, uri)),
 		]),
+		checkpoints: null,
 	};
 }
 
@@ -383,6 +422,7 @@ function idsComeBackExactly(): LspScenario {
 			sameText("s:req-α result", "object", answerField(r, "s:req-α", "result")),
 		]),
 		checkAnyBatching: null,
+		checkpoints: null,
 	};
 }
 
@@ -402,6 +442,7 @@ function shutdownWaitsForExit(): LspScenario {
 			sameCount("exit code", 0, r.exitCode),
 		]),
 		checkAnyBatching: null,
+		checkpoints: null,
 	};
 }
 
@@ -429,6 +470,7 @@ function afterShutdown(): LspScenario {
 			sameCount("exit code", 0, r.exitCode),
 		]),
 		checkAnyBatching: null,
+		checkpoints: null,
 	};
 }
 
@@ -453,6 +495,7 @@ function exitAfterShutdown(): LspScenario {
 			sameCount("drains consumed", 2, r.drainsConsumed),
 		]),
 		checkAnyBatching: null,
+		checkpoints: null,
 	};
 }
 
@@ -466,6 +509,7 @@ function exitWithoutShutdown(): LspScenario {
 			sameCount("messages", 1, r.messages.length),
 		]),
 		checkAnyBatching: null,
+		checkpoints: null,
 	};
 }
 
@@ -476,6 +520,7 @@ function closedBeforeExit(): LspScenario {
 		drains: [initializeDrain()],
 		check: (r: LspReplay) => sameCount("exit code", 0, r.exitCode),
 		checkAnyBatching: null,
+		checkpoints: null,
 	};
 }
 
@@ -490,6 +535,7 @@ function bodyCutShort(): LspScenario {
 			sameCount("exit code", 1, r.exitCode),
 		]),
 		checkAnyBatching: null,
+		checkpoints: null,
 	};
 }
 
@@ -503,6 +549,7 @@ function headerCutShort(): LspScenario {
 			sameCount("exit code", 0, r.exitCode),
 		]),
 		checkAnyBatching: null,
+		checkpoints: null,
 	};
 }
 
@@ -541,6 +588,141 @@ function cancelledInDrain(): LspScenario {
 			everyRequestAnsweredOnce(r, drains),
 			sameText("final diagnostic count", "0", finalDiagnosticCount(r, uri)),
 		]),
+		checkpoints: null,
+	};
+}
+
+// The oracles below are written from the source text: UTF-16 columns counted by hand.
+
+const MB_LINE = "/*é😀*/ export const value: int32 = \"wrong\";";
+const MB_USE = "export const w = value;";
+
+function positionEditsShiftRanges(): LspScenario {
+	const uri = "file:///lspwire/shift.ms";
+	const shifted = "// ñ😀\n/*é😀*/ /*😀*/ export const value: int32 = \"wrong\";\n" + MB_USE;
+	const fixed = "// ñ😀\n/*é😀*/ /*😀*/ export const value: int32 = 42;\n" + MB_USE;
+	const notAssignable = lspJsonString(NOT_ASSIGNABLE);
+	const drains = [
+		initializeDrain(),
+		frames([
+			notification("textDocument/didOpen", openParams(uri, MB_LINE + "\n" + MB_USE)),
+			request("11", "textDocument/definition", positionParams(uri, 1, 17)),
+		]),
+		frames([
+			notification("textDocument/didChange", changeParams(uri, 2, shifted)),
+			request("12", "textDocument/definition", positionParams(uri, 2, 17)),
+		]),
+		frames([
+			notification("textDocument/didChange", changeParams(uri, 3, fixed)),
+			request("13", "textDocument/definition", positionParams(uri, 2, 17)),
+		]),
+	];
+	return {
+		name: "position edits past non-ASCII text shift the diagnostic and the definition, a fix clears it",
+		batching: "any",
+		drains,
+		check: (r: LspReplay) => firstFailure([
+			everyRequestAnsweredOnce(r, drains),
+			sameText("publish 0", "[0:36-0:37 1 " + notAssignable + "]", publishedAt(r, uri, 0)),
+			sameText("n:11 definition", "0:21-0:26", definitionSpan(r, "n:11")),
+			sameText("publish 1", "[1:43-1:44 1 " + notAssignable + "]", publishedAt(r, uri, 1)),
+			sameText("n:12 definition", "1:28-1:33", definitionSpan(r, "n:12")),
+			sameText("publish 2", "[]", publishedAt(r, uri, 2)),
+			sameText("n:13 definition", "1:28-1:33", definitionSpan(r, "n:13")),
+		]),
+		checkAnyBatching: null,
+		checkpoints: {
+			afterDrains: [1, 2, 3],
+			probes: [{ uri, line: 2, character: 17 }, { uri, line: 1, character: 17 }, { uri, line: 1, character: 30 }],
+		},
+	};
+}
+
+function dependencyEditsRecheckDependent(): LspScenario {
+	const dep = "file:///lspwire/dep/b.ms";
+	const user = "file:///lspwire/dep/a.ms";
+	const depInt = "export const value: int32 = 42;";
+	const depString = "export const value: string = \"x\";";
+	const wantsString = "import { value } from \"./b\";\nconst s: string = value;\nexport const t = s;";
+	const wantsInt = "import { value } from \"./b\";\nconst n: int32 = value;\nexport const t = n;";
+	return {
+		name: "a dependency edit re-checks the dependent and clears or raises its diagnostic",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(dep, depInt))]),
+			frames([notification("textDocument/didOpen", openParams(user, wantsString))]),
+			frames([notification("textDocument/didChange", changeParams(dep, 2, depString))]),
+			frames([notification("textDocument/didChange", changeParams(user, 2, wantsInt))]),
+			frames([notification("textDocument/didChange", changeParams(dep, 3, depInt))]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("a.ms publish 0 start and message", "1:18 " + lspJsonString("Type 'int32' is not assignable to type 'string'"),
+				spanOf(diagnosticAt(r, user, 0, 0)).split("-")[0] + " " + field(diagnosticAt(r, user, 0, 0), "message")),
+			sameText("a.ms after b.ms exports a string", "[]", publishedAt(r, user, 1)),
+			sameText("a.ms publish 2 start and message", "1:17 " + lspJsonString("Type 'string' is not assignable to type 'int32'"),
+				spanOf(diagnosticAt(r, user, 2, 0)).split("-")[0] + " " + field(diagnosticAt(r, user, 2, 0), "message")),
+			sameText("a.ms after b.ms exports an int32 again", "[]", lastPublished(r, user)),
+			sameText("b.ms last publish", "[]", lastPublished(r, dep)),
+		]),
+		checkAnyBatching: null,
+		checkpoints: { afterDrains: [2, 3, 4, 5], probes: [{ uri: user, line: 1, character: 18 }, { uri: user, line: 0, character: 9 }] },
+	};
+}
+
+function cancelledWorkDoesNotPoison(): LspScenario {
+	const uri = "file:///lspwire/cancelok.ms";
+	const good = "// café ☕\nexport const value: int32 = 42;\nexport const w = value;";
+	const bad = "// café ☕\nexport const value: int32 = \"wrong\";\nexport const w = value;";
+	const drains = [
+		initializeDrain(),
+		frames([notification("textDocument/didOpen", openParams(uri, good))]),
+		frames([
+			notification("textDocument/didChange", changeParams(uri, 2, bad)),
+			request("20", "textDocument/hover", positionParams(uri, 2, 17)),
+			request("21", "textDocument/definition", positionParams(uri, 2, 17)),
+			notification("$/cancelRequest", "{\"id\":20}"),
+			notification("$/cancelRequest", "{\"id\":21}"),
+		]),
+		frames([request("22", "textDocument/definition", positionParams(uri, 2, 17))]),
+		frames([
+			notification("textDocument/didChange", changeParams(uri, 3, good)),
+			notification("$/cancelRequest", "{\"id\":99}"),
+		]),
+	];
+	const afterCancel = (r: LspReplay) => firstFailure([
+		everyRequestAnsweredOnce(r, drains),
+		sameText("publish 1", "[1:28-1:29 1 " + lspJsonString(NOT_ASSIGNABLE) + "]", publishedAt(r, uri, 1)),
+		sameText("n:22 definition", "1:13-1:18", definitionSpan(r, "n:22")),
+		sameText("last publish", "[]", lastPublished(r, uri)),
+	]);
+	return {
+		name: "cancelled requests do not poison the checks after them",
+		batching: "exact",
+		drains,
+		check: (r: LspReplay) => firstFailure([
+			sameText("n:20 error.code", "-32800", answerField(r, "n:20", "error.code")),
+			sameText("n:21 error.code", "-32800", answerField(r, "n:21", "error.code")),
+			sameText("diagnostic counts per publish", "[0,1,0]", publishedCounts(r, uri)),
+			afterCancel(r),
+		]),
+		checkAnyBatching: afterCancel,
+		checkpoints: { afterDrains: [2, 3, 4], probes: [{ uri, line: 2, character: 17 }, { uri, line: 1, character: 14 }] },
+	};
+}
+
+function unusedImportWarnsInEditorAndBatch(): LspScenario {
+	const uri = "file:///lspwire/warn.ms";
+	const text = "import { exists } from \"std/fs\";\nexport const v: int32 = 1;";
+	return {
+		name: "an unused import warns in the editor and in batch checking",
+		batching: "any",
+		drains: [initializeDrain(), frames([notification("textDocument/didOpen", openParams(uri, text))])],
+		check: (r: LspReplay) => sameText("publish 0",
+			"[0:9-0:15 2 " + lspJsonString("'exists' is imported but never used") + "]",
+			publishedAt(r, uri, 0)),
+		checkAnyBatching: null,
+		checkpoints: { afterDrains: [1], probes: [{ uri, line: 0, character: 10 }] },
 	};
 }
 
@@ -561,6 +743,10 @@ export function lspScenarios(): LspScenario[] {
 		bodyCutShort(),
 		headerCutShort(),
 		cancelledInDrain(),
+		positionEditsShiftRanges(),
+		dependencyEditsRecheckDependent(),
+		cancelledWorkDoesNotPoison(),
+		unusedImportWarnsInEditorAndBatch(),
 	];
 }
 

@@ -1553,6 +1553,7 @@ function sameTypeInner(a: Type, b: Type, c: SameTypeClosure): boolean {
 		TypeKind.GenericInstance => sameGenericBase(a, b, c) && sameTypeList(a.typeChildren, b.typeChildren, c),
 		TypeKind.Union | TypeKind.Tuple | TypeKind.Varargs
 			| TypeKind.Conditional | TypeKind.IndexedAccess | TypeKind.KeyOf => sameTypeList(a.typeChildren, b.typeChildren, c),
+		TypeKind.Mapped => a.typeValue == b.typeValue && sameTypeList(a.typeChildren, b.typeChildren, c),
 		TypeKind.Function => sameTypeList(a.typeChildren, b.typeChildren, c) && sameInnerType(a, b, c),
 		TypeKind.SizedArray => a.typeValue == b.typeValue && sameInnerType(a, b, c),
 		TypeKind.Set => sameInnerType(a, b, c),

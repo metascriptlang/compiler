@@ -112,6 +112,7 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.FutureSettle => "FutureSettle",
 		RaiserOpcode.FutureFail => "FutureFail",
 		RaiserOpcode.FutureCombine => "FutureCombine",
+		RaiserOpcode.LitConv => "LitConv",
 		RaiserOpcode.Try => "Try",
 		RaiserOpcode.Catch => "Catch",
 		RaiserOpcode.Finally => "Finally",

@@ -611,3 +611,19 @@ test "replay: a frame cut short by EOF is not processed and ends the server" {
 test "replay: a cancelled request still in the drain answers RequestCancelled" {
 	assert runMemoryScenario("a cancelled request still in the drain answers RequestCancelled") == "";
 }
+
+test "replay: position edits past non-ASCII text shift the diagnostic and the definition" {
+	assert runMemoryScenario("position edits past non-ASCII text shift the diagnostic and the definition, a fix clears it") == "";
+}
+
+test "replay: a dependency edit re-checks the dependent" {
+	assert runMemoryScenario("a dependency edit re-checks the dependent and clears or raises its diagnostic") == "";
+}
+
+test "replay: cancelled requests do not poison the checks after them" {
+	assert runMemoryScenario("cancelled requests do not poison the checks after them") == "";
+}
+
+test "replay: an unused import warns in the editor and in batch checking" {
+	assert runMemoryScenario("an unused import warns in the editor and in batch checking") == "";
+}
