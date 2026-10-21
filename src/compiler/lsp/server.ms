@@ -6,13 +6,14 @@
 // requires ms_stdio.h (readLine, readBytes, writeStdout).
 
 import {
-	lspParseContentLength, lspFormatMessage, lspUriToPath,
+	lspParseContentLength, lspFormatMessage, lspUriToPath, lspPathToUri,
 	lspGetField, lspGetNumberField, lspGetObjectField, lspJsonNumber, lspJsonString,
 	lspErrorResponse
 } from "./protocol";
 import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath, dbSetResolverConfig } from "../transam/index";
 import { findProjectRoot } from "../../utils/path";
-import { ensureDir, realpath, writeFile } from "std/fs";
+import { ensureDir, mkdir, realpath, writeFile } from "std/fs";
+import { normalize } from "std/fs/path";
 import { registrySrcPath } from "../package/cache";
 import { env } from "std/process";
 import { newCliOptions, applyProjectConfig } from "../options";
@@ -39,7 +40,9 @@ import {
 	projectUri,
 	scenarioSlug,
 	PROJECT_URI,
+	frames, notification, initializeDrain, openParams, changeParams,
 } from "./replayScenarios";
+import { getDynamicField, at, length, asString, asInt32 } from "std/serialize/json/accessors";
 import { resolveRuntimeDir } from "../../utils/path";
 
 
@@ -689,4 +692,108 @@ test "replay: build.ms config reaches the editor as it reaches batch checking" {
 
 test "replay: two projects in one session each keep their own build.ms" {
 	assert runMemoryScenario("two projects in one session each keep their own build.ms") == "";
+}
+
+// ===== Exports a top-level macro statement splices =====
+// lib.ms gets `export interface Foo` only from the macro statement `fooBody(0);`, so an
+// importer checked before lib.ms sees Foo only if the macro statement was expanded.
+
+const SPLICE_MAC = 'import { Node, NodeKind } from "std/meta";
+export macro fooBody(node: Node): Node {
+	const L = node.line;
+	const C = node.column;
+	return {
+		kind: NodeKind.SpliceMany, line: L, column: C,
+		spliceNodes: [{
+			kind: NodeKind.ExportDecl, line: L, column: C,
+			exportedDecl: {
+				kind: NodeKind.InterfaceDecl, line: L, column: C,
+				interfaceName: "NAME", interfaceFields: ["x"], interfaceFieldTypes: ["number | null"], interfaceExtends: [],
+				nameLocation: { line: L, column: C },
+			},
+		}],
+	};
+}
+';
+const SPLICE_USE = 'import { Foo } from "./lib";
+const f: Foo = { x: 2 };
+console.log(f.x == f.x);
+';
+const SPLICE_TAKE = 'import { makeFoo } from "./lib";
+function take(v: string | null): void { console.log(v == v); }
+take(makeFoo());
+';
+
+function spliceMac(name: string): string {
+	return SPLICE_MAC.replace("NAME", name);
+}
+
+function spliceLib(statement: string): string {
+	return 'import { fooBody } from "./mac";\n' + statement + '\nexport function makeFoo(): Foo {\n\treturn { x: 1 };\n}\n';
+}
+
+function spliceDir(name: string): string {
+	const tmp = env.get("TMPDIR") != "" ? env.get("TMPDIR") : "/tmp";
+	const dir = normalize(tmp + "/msc-lspsplice-" + name);
+	mkdir(dir);
+	return dir;
+}
+
+function writeSpliceTriple(dir: string, user: string): string[] {
+	const files = [["mac.ms", spliceMac("Foo")], ["user.ms", user], ["lib.ms", spliceLib("fooBody(0);")]];
+	const opens: string[] = [];
+	for (const f of files) {
+		writeFile(dir + "/" + f[0], f[1]);
+		opens.push(notification("textDocument/didOpen", openParams(lspPathToUri(dir + "/" + f[0]), f[1])));
+	}
+	return frames(opens);
+}
+
+function publishesOf(r: LspReplay, uri: string): string {
+	const publishes: string[] = [];
+	for (const m of r.messages) {
+		if (m.getDynamicField("method").asString() != "textDocument/publishDiagnostics") continue;
+		const params = m.getDynamicField("params");
+		if (params.getDynamicField("uri").asString() != uri) continue;
+		const diagnostics = params.getDynamicField("diagnostics");
+		const items: string[] = [];
+		for (let i = 0; i < diagnostics.length(); i++) {
+			const d = diagnostics.at(i);
+			const start = d.getDynamicField("range").getDynamicField("start");
+			items.push(start.getDynamicField("line").asInt32(-1) + ":" + start.getDynamicField("character").asInt32(-1)
+				+ " " + d.getDynamicField("message").asString());
+		}
+		publishes.push("[" + items.join("; ") + "]");
+	}
+	const text = publishes.join(" ");
+	writeStderr("splice: " + uri + " publishes " + text + "\n");
+	return text;
+}
+
+test "a type a macro statement exports reaches an importer opened before its module" {
+	const dir = spliceDir("use");
+	const r = replay([initializeDrain(), writeSpliceTriple(dir, SPLICE_USE)]);
+	assert publishesOf(r, lspPathToUri(dir + "/user.ms")) == "[]";
+}
+
+test "a real error through a macro-spliced type is reported once, as batch checking reports it" {
+	const dir = spliceDir("take");
+	const r = replay([initializeDrain(), writeSpliceTriple(dir, SPLICE_TAKE)]);
+	assert publishesOf(r, lspPathToUri(dir + "/user.ms")) == "[2:4 Argument type mismatch in 'take' arg 0: got Foo, expected string | null]";
+}
+
+test "editing the macro statement or the macro re-checks the importer of the spliced type" {
+	const dir = spliceDir("edit");
+	const lib = lspPathToUri(dir + "/lib.ms");
+	const mac = lspPathToUri(dir + "/mac.ms");
+	const r = replay([
+		initializeDrain(),
+		writeSpliceTriple(dir, SPLICE_USE),
+		frames([notification("textDocument/didChange", changeParams(lib, 2, spliceLib("")))]),
+		frames([notification("textDocument/didChange", changeParams(lib, 3, spliceLib("fooBody(0);")))]),
+		frames([notification("textDocument/didChange", changeParams(mac, 2, spliceMac("Bar")))]),
+		frames([notification("textDocument/didChange", changeParams(mac, 3, spliceMac("Foo")))]),
+	]);
+	const missing = "[0:0 Module './lib' has no export 'Foo']";
+	assert publishesOf(r, lspPathToUri(dir + "/user.ms")) == ["[]", missing, "[]", missing, "[]"].join(" ");
 }
