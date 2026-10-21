@@ -485,3 +485,20 @@ test "a value written as the variant's object type passes where the match type i
 	const v: { ok: true; value: string } = { ok: true, value: "w" };
 	assert variantTaker(v);
 }
+
+class Parsed { v: int32; constructor(v: int32) { this.v = v; } }
+
+interface Parser<V, E> { parse: (input: string) => Result<V, E>; }
+
+function parseLength(s: string): Result<Parsed, string> { return Result.ok(new Parsed(s.length)); }
+
+export function neverCalledParse(s: string): Result<Parsed, int32> {
+	if (s.length == 0) return Result.err(0);
+	return Result.ok(new Parsed(s.length));
+}
+
+test "a function used only as a value keeps its Result return" {
+	const p: Parser<Parsed, string> = { parse: parseLength };
+	const r = p.parse("abcd");
+	assert r.ok && r.value.v == 4;
+}

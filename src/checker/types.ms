@@ -319,7 +319,9 @@ export function createResult(okType: Type, errType: Type): Type {
 	base.typeExtra = booleanType();
 	base.typeNames = ["ok", "true", "false"];
 	base.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn).incl(TypeFlag.Spelled);
-	return createGenericInstance(base, [okType, errType]);
+	const gi = createGenericInstance(base, [okType, errType]);
+	instantiateGenericBody(gi, "T,E");
+	return gi;
 }
 
 export function createPromise(innerType: Type | null): Type {
@@ -5757,17 +5759,15 @@ test "a union substituted into a union is the flat union the resolver builds" {
 
 // Substitution keeps typeExtra un-substituted (walking it cost ~20× compile
 // time on self-host), so callers that need the substituted body
-// must invoke instantiateGenericBody themselves.
-test "instantiateGenericBody populates substituted Result body" {
+// must invoke instantiateGenericBody themselves. Built-in Result/Promise/Iterator
+// have no declaration — they get their param names from `builtinGenericParams`.
+test "a substituted Result carries its substituted body" {
 	const gp = createGenericParam("T");
 	const r = createResult(gp, stringType());
-	// Bare Result<T, string> — typeReturn is null (no eager body).
-	assert r.typeReturn == null;
+	assert r.typeReturn != null;
 	assert r.typeExtra != null;
 	const sub = substituteParams(r, [gp], [numberType()]);
 	assert sub.typeChildren[0].kind == TypeKind.Number;
-	assert sub.typeReturn == null;
-	instantiateGenericBody(sub, "T,E");
 	assert sub.typeReturn != null;
 	const body = peelToStructOrUnion(sub);
 	assert body != null && body.kind == TypeKind.Union;
