@@ -1,5 +1,31 @@
 # Build Performance — Roadmap
 
+## Measured 2026-10-22 — four more front-end fixes
+
+Same methods as 2026-10-21 below. All four leave emitted C of `src/index.ms` identical
+(0 of 376 files differ).
+
+| fix | workload (Mac, thin LTO) | rounds | instructions | user |
+|---|---|---|---|---|
+| 4 `std/fs/path.ms` `normalize` returns a path already in normal form; `relative` slices a descendant | emit-only | 3 | 335.1G → 318.9G (−4.8%) | noise |
+| 5 `ast/visitor.ms` `forEachChild` without a closure per call | emit-only, on top of 4 | 3 | 319.4G → 311.0G (−2.6%) | 31.84 → 30.15 s |
+| 6 `module/loader.ms` header-import scan by byte | `check src/index.ms`, on top of 5 | 5 | 62.96G → 62.00G (−1.5%) | 4.79 → 4.52 s |
+| 7 `transform/walker.ms` one closure per walk, not per node | emit-only, on top of 6 | 3 | 313.1G → 303.4G (−3.1%) | 37.82 → 36.68 s (load 45–115) |
+
+lc-1 (load 0.1–7), `main` = `301653fce`, `cand` = `main` + fixes 4–6, both built by one builder
+with `--gc=drc --danger`; same cells as the baseline, min user CPU, wall in brackets:
+
+| cell | rounds | main | cand |
+|---|---|---|---|
+| check | 5 / 5 | 13.00 s (13.9) | 13.05 s (14.0) |
+| emit-only | 5 / 5 | 59.70 s (54.4) | 57.30 s (53.2) |
+| rebuild 1 file | 3 / 3 | 59.70 s (54.4) | 57.72 s (52.4) |
+| cold | 2 / 2 | 595.2 s (2:31) | 591.2 s (2:29) |
+
+- Fixes 4–6 take 4.0% off emit-only and 3.3% off a one-file rebuild on lc-1; `check` does not
+  move there, so fix 6's Mac gain is below that host's noise.
+- Not verified: fix 7 on lc-1; Windows.
+
 ## Measured 2026-10-21 — self-host baseline, and three front-end fixes
 
 **Baseline, Linux x64 (lc-1, 8 cores, load 1.1–5.5).** Two stage-2 compilers, each built by
