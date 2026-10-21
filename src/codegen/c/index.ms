@@ -767,9 +767,9 @@ test "TypeInfo demands merge by canonical key and take the object's C name" {
 	body.sym.modulePath = "owner.ms";
 	const first = createAliveSet();
 	const second = createAliveSet();
-	const key = objectTypeInfoKey(body, "user.ms");
-	first.typeInfos.push({ kind: TypeInfoKind.Object, subject: body, key, owner: "owner.ms", cName: "", destroy: null, trace: null, baseKey: "", moduleLocal: false });
-	second.typeInfos.push({ kind: TypeInfoKind.Object, subject: body, key, owner: "other.ms", cName: "", destroy: null, trace: null, baseKey: "", moduleLocal: false });
+	const key = objectTypeInfoKey(body);
+	first.typeInfos.push({ kind: TypeInfoKind.Object, subject: body, key, owner: "owner.ms", cName: "", destroy: null, trace: null, baseKey: "" });
+	second.typeInfos.push({ kind: TypeInfoKind.Object, subject: body, key, owner: "other.ms", cName: "", destroy: null, trace: null, baseKey: "" });
 	const facts = new CEmissionFacts();
 	registerTypeInfoDemands(first, facts);
 	registerTypeInfoDemands(second, facts);

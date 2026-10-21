@@ -11,7 +11,7 @@ import { getDeclName } from "./collectPass";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { AliveSet, CTypeInfoDemand, TypeInfoKind, createAliveSet, aliveSetAddSym, aliveSetHasSym, aliveSetAddModule, aliveSetHasDecl, aliveSetHasModule, aliveSetModuleCount } from "../codegen/c/context";
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
-import { refArrayCellKey, refArrayCellOp, getOpByKey, typeInfoSubject, objectTypeInfoKey, isPrivateTypeInfoSubject, arcCellKey, promiseAllShape, PromiseAllShape, hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName } from "../codegen/c/types";
+import { refArrayCellKey, refArrayCellOp, getOpByKey, typeInfoSubject, objectTypeInfoKey, arcCellKey, promiseAllShape, PromiseAllShape, hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, makeSymbol } from "./symbol";
 import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, getProperty, peelToStructOrUnion } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
@@ -221,7 +221,7 @@ function markRefArrayCell(arrT: Type, modulePath: string): void {
 		if (trace != null) owner = trace.modulePath;
 	}
 	_aliveSet.typeInfoKeys.add(key);
-	const demand: CTypeInfoDemand = { kind: TypeInfoKind.RefArrayCell, subject: createRef(arrT), key, owner, cName: "", destroy, trace, baseKey: "", moduleLocal: false };
+	const demand: CTypeInfoDemand = { kind: TypeInfoKind.RefArrayCell, subject: createRef(arrT), key, owner, cName: "", destroy, trace, baseKey: "" };
 	_aliveSet.typeInfos.push(demand);
 	aliveSetAddModule(_aliveSet, owner);
 	markReferenced(destroy, owner);
@@ -234,7 +234,7 @@ function markArcCell(pointee: Type, modulePath: string): void {
 	const destroy = arrayElementNeedsCleanup(pointee) ? getOpByKey(pointee, AttachedOp.AttachedDestructor) : null;
 	const owner = _singleModule != "" ? _singleModule : modulePath;
 	_aliveSet.typeInfoKeys.add(key);
-	const demand: CTypeInfoDemand = { kind: TypeInfoKind.ArcCell, subject: pointee, key, owner, cName: "", destroy, trace: null, baseKey: "", moduleLocal: false };
+	const demand: CTypeInfoDemand = { kind: TypeInfoKind.ArcCell, subject: pointee, key, owner, cName: "", destroy, trace: null, baseKey: "" };
 	_aliveSet.typeInfos.push(demand);
 	aliveSetAddModule(_aliveSet, owner);
 	if (destroy != null) markReferenced(destroy, owner);
@@ -293,13 +293,12 @@ function markObjectTypeInfo(type: Type | null, modulePath: string): void {
 	const subject = typeInfoSubject(type);
 	if (subject == null) return;
 	if (subject.sym != null && hasFlag(subject.sym, SymbolFlag.ImportC)) return;
-	const key = objectTypeInfoKey(subject, modulePath);
+	const key = objectTypeInfoKey(subject);
 	if (_aliveSet.typeInfoKeys.has(key)) return;
-	const isPrivate = isPrivateTypeInfoSubject(subject);
 	const destroy = getOpByKey(subject, AttachedOp.AttachedDestructor);
 	const trace = getOpByKey(subject, AttachedOp.AttachedTrace);
 	let owner = _singleModule != "" ? _singleModule : modulePath;
-	if (!isPrivate && _singleModule == "") {
+	if (_singleModule == "") {
 		if (subject.sym != null && subject.sym.modulePath != "") owner = subject.sym.modulePath;
 		else owner = opOwner(destroy, modulePath);
 	}
@@ -308,9 +307,9 @@ function markObjectTypeInfo(type: Type | null, modulePath: string): void {
 	const base = classBaseOf(subject);
 	if (base != null) {
 		markObjectTypeInfo(base, modulePath);
-		baseKey = objectTypeInfoKey(typeInfoSubject(base)!, modulePath);
+		baseKey = objectTypeInfoKey(typeInfoSubject(base)!);
 	}
-	const demand: CTypeInfoDemand = { kind: TypeInfoKind.Object, subject, key, owner, cName: "", destroy, trace, baseKey, moduleLocal: isPrivate };
+	const demand: CTypeInfoDemand = { kind: TypeInfoKind.Object, subject, key, owner, cName: "", destroy, trace, baseKey };
 	_aliveSet.typeInfos.push(demand);
 	aliveSetAddModule(_aliveSet, owner);
 	if (destroy != null) markReferenced(destroy, owner);
@@ -912,7 +911,7 @@ test "a computed alive set keeps the side-effect imports of the entry and their 
 
 import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core";
-import { spelled, createStruct, createRef, createUnion, nullType, stringType } from "./types";
+import { createStruct, createRef, createUnion, nullType, stringType } from "./types";
 import { liftedOp, resetHookSyms, objectTypeInfoKey } from "../codegen/c/types";
 import { makeSymbol, setFlag } from "./symbol";
 
@@ -937,7 +936,7 @@ test "nullable reference allocation demands its concrete TypeInfo from the decla
 	allocation.nodeType = createUnion([createRef(body), nullType()]);
 	const alive = computeAliveSet([program], ["user.ms"], "user.ms", false, createModuleGraph());
 	assert alive.typeInfos.length == 1;
-	assert alive.typeInfos[0].key == objectTypeInfoKey(body, "user.ms");
+	assert alive.typeInfos[0].key == objectTypeInfoKey(body);
 	assert alive.typeInfos[0].owner == "owner.ms";
 }
 
@@ -954,20 +953,18 @@ test "an allocation demands its base class TypeInfo and names it" {
 		if (info.owner == "child.ms") childInfo = info;
 	}
 	assert childInfo != null;
-	assert childInfo!.baseKey == objectTypeInfoKey(parent, "user.ms");
+	assert childInfo!.baseKey == objectTypeInfoKey(parent);
 }
 
-test "a lambda environment class is local to the module that lifted it" {
+test "a lifted environment's TypeInfo has one key and is owned by its declaring module" {
 	const program = allocationOf("let value = { label: \"held\" };");
 	const allocation = ((program.data as ProgramData).programStmts[0].data as VariableDeclData).initializer;
-	const env = spelled(createStruct("$Env_run_shared", ["label"], [stringType()], true));
+	const env = declaredClass("$Env_run_shared", "owner.ms", ["label"], null);
 	allocation.nodeType = createRef(env);
 	const alive = computeAliveSet([program], ["user.ms"], "user.ms", false, createModuleGraph());
 	assert alive.typeInfos.length == 1;
-	assert alive.typeInfos[0].moduleLocal;
-	assert alive.typeInfos[0].owner == "user.ms";
-	assert alive.typeInfos[0].key == objectTypeInfoKey(env, "user.ms");
-	assert objectTypeInfoKey(env, "user.ms") != objectTypeInfoKey(env, "other.ms");
+	assert alive.typeInfos[0].owner == "owner.ms";
+	assert alive.typeInfos[0].key == objectTypeInfoKey(env);
 }
 
 function bindIdentifiers(node: Node, name: string, sym: Symbol): void {

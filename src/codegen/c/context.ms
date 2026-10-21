@@ -614,7 +614,6 @@ export class CTypeInfoDemand {
 	destroy: Symbol | null;
 	trace: Symbol | null = null;
 	baseKey: string = "";
-	moduleLocal: boolean = false;
 }
 
 export class AliveSet {
@@ -719,7 +718,7 @@ export function aliveSetFingerprint(aliveSet: AliveSet): string {
 	aliveSet._syms.forEach((sym: Symbol): void => { entries.push(aliveSymKey(sym)); });
 	entries.sort();
 	for (const info of aliveSet.typeInfos) {
-		entries.push(`t\t${info.key}\t${info.owner}\t${info.destroy != null ? aliveSymKey(info.destroy) : ""}\t${info.trace != null ? aliveSymKey(info.trace) : ""}\t${info.baseKey}\t${info.moduleLocal}`);
+		entries.push(`t\t${info.key}\t${info.owner}\t${info.destroy != null ? aliveSymKey(info.destroy) : ""}\t${info.trace != null ? aliveSymKey(info.trace) : ""}\t${info.baseKey}`);
 	}
 	const joined = entries.join("\n");
 	return `${hashToHex(djb2(joined))}${hashToHex(fingerprint(joined))}:${entries.length}:${aliveSet.computed}`;

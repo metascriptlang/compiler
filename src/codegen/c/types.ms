@@ -954,13 +954,8 @@ export function typeInfoCName(subject: Type): string {
 	return resolvedTypeCName(subject, true);
 }
 
-export function isPrivateTypeInfoSubject(subject: Type): boolean {
-	return subject.typeName.startsWith("$") || subject.typeName.startsWith("dollarEnv_");
-}
-
-export function objectTypeInfoKey(subject: Type, modulePath: string): string {
-	const cName = typeInfoCName(subject);
-	return isPrivateTypeInfoSubject(subject) ? `obj|${modulePath}|${cName}` : `obj|${cName}`;
+export function objectTypeInfoKey(subject: Type): string {
+	return `obj|${typeInfoCName(subject)}`;
 }
 
 export function arcCellKey(pointee: Type): string {
@@ -1011,11 +1006,11 @@ export function hasUnionEq(t: Type): boolean {
 }
 
 function typeInfoPointer(g: CGen, info: Readonly<CTypeInfoDemand>): string {
-	if (!info.moduleLocal && hcrTypeInfoRef(g, info.cName)) return `&${info.cName}TypeInfo`;
+	if (hcrTypeInfoRef(g, info.cName)) return `&${info.cName}TypeInfo`;
 	const forwKey = "typeInfo:" + info.cName;
 	if (!typeCacheHas(g.forwTypeCache, forwKey)) {
 		typeCacheSet(g.forwTypeCache, forwKey, info.cName);
-		addLine(sec(g, CSection.ForwardDecls), `${info.moduleLocal ? "static" : "extern"} msTypeInfo ${info.cName}TypeInfo;`);
+		addLine(sec(g, CSection.ForwardDecls), `extern msTypeInfo ${info.cName}TypeInfo;`);
 	}
 	return `&${info.cName}TypeInfo`;
 }
@@ -1036,7 +1031,7 @@ export function typeInfoRef(g: CGen, type: Type | null): string {
 		addCGenError(g, `internal: a TypeInfo was requested in ${g.modulePath} for a type that has none`, 0, 0);
 		return "NULL";
 	}
-	const info = demandedTypeInfo(g, objectTypeInfoKey(subject, g.modulePath), "object");
+	const info = demandedTypeInfo(g, objectTypeInfoKey(subject), "object");
 	return info == null ? "NULL" : typeInfoPointer(g, info);
 }
 
@@ -1136,12 +1131,12 @@ export function emitOwnedTypeInfos(g: CGen): void {
 		const fields = `.name = "${label}", .isCyclic = ${info.trace != null ? "MS_TRUE" : "MS_FALSE"}, `
 			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info.subject)}, .base = ${baseRef}`
 			+ (shown != "" && shown != label ? `, .displayName = "${escapeCString(shown)}"` : "");
-		if (viaRegistry && !info.moduleLocal && !hcrTypeInfoRef(g, info.cName)) {
+		if (viaRegistry && !hcrTypeInfoRef(g, info.cName)) {
 			addCGenError(g, `internal: HCR image ${g.modulePath} owns TypeInfo ${info.cName} but no image module registers it`, 0, 0);
 			continue;
 		}
-		if (viaRegistry && !info.moduleLocal) addLine(sec(g, CSection.DatInit), `  ${info.cName}TypeInfo = (msTypeInfo){ ${fields} };`);
-		else addLine(sec(g, CSection.GlobalVars), `${info.moduleLocal ? "static " : ""}msTypeInfo ${info.cName}TypeInfo = { ${fields} };`);
+		if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${info.cName}TypeInfo = (msTypeInfo){ ${fields} };`);
+		else addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${info.cName}TypeInfo = { ${fields} };`);
 		if (info.kind == TypeInfoKind.Object) emitTypeInfoDisplay(g, info);
 	}
 }
