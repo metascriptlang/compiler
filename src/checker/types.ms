@@ -3571,7 +3571,7 @@ export function isUncountedPtrElement(elem: Type | null): boolean {
 }
 
 export function propagateToOwner(parent: Type, child: Type): void {
-	if (child != null && child.typeFlags.has(TypeFlag.HasAsgn)) {
+	if (child != null && (child.typeFlags.has(TypeFlag.HasAsgn) || isAwaitable(child))) {
 		parent.typeFlags = parent.typeFlags.incl(TypeFlag.HasAsgn);
 	}
 	if (isDeclaredStruct(parent)) propagateGenericParam(parent, child);
@@ -5187,6 +5187,12 @@ test "createStruct" {
 	assert obj.typeNames.length == 1;
 	assert obj.typeChildren.length == 1;
 	assert obj.typeFlags.isEmpty();
+}
+
+test "a struct or tuple holding a Promise needs lifecycle hooks" {
+	assert hasAsgnFlag(createStruct("Entry", ["key"], [createPromise(int32Type())], false));
+	assert hasAsgnFlag(createStruct("Entry", ["key"], [createSpawnHandle(int32Type())], false));
+	assert hasAsgnFlag(createTuple([int32Type(), createPromise(int32Type())]));
 }
 
 test "createEnum" {
