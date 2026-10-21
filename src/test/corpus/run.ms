@@ -823,14 +823,14 @@ function firstLineContaining(text: string, needle: string): string {
 
 // LEDGER <Type> ... alloc=N ... destroy=M (stderr, one line per TypeInfo), then a
 // final "LEDGER TOTAL" line that always prints — liveness marker only (sums
-// include per-type imbalances excused by destroy==0 or slack, so TOTAL is
+// include per-type imbalances excused by slack or a fatal exit, so TOTAL is
 // exempt from the balance rule).
-// Balance rule: fail iff destroy > 0 and (alloc - destroy) differs from the
-// program's declared @ledger-slack for that type (default 0). Slack is
-// EXACT-match: values still alive at exit must be declared per type, and if
-// the compiler ever starts destroying them the unused slack goes red like an
-// XPASS. destroy==0 may be a NULL-destroyFn type (msFuture) — that
-// blind spot belongs to the RSS lane.
+// Balance rule: fail iff (alloc - destroy) differs from the program's declared
+// @ledger-slack for that type (default 0). Slack is EXACT-match: values still
+// alive at exit must be declared per type, and if the compiler ever starts
+// destroying them the unused slack goes red like an XPASS. A program with a
+// non-zero @exit stops through a fatal path that runs no destructors, so its
+// never-destroyed (destroy==0) rows are exempt.
 function ledgerSlackFor(spec: Spec, typeName: string): int32 {
 	for (let i = 0; i < spec.slackTypes.length; i = i + 1) {
 		if (spec.slackTypes[i] == typeName) { return spec.slackNs[i]; }
@@ -859,7 +859,7 @@ function parseLedgerFailure(err: string, spec: Spec): string {
 			i = i + 1;
 		}
 		if (typeName == "TOTAL") { continue; }
-		if (destroy <= 0) { continue; }
+		if (destroy <= 0 && spec.expectExit != 0) { continue; }
 		const slack = ledgerSlackFor(spec, typeName);
 		const diff = alloc - destroy;
 		if (diff == slack) { continue; }
