@@ -810,7 +810,82 @@ function utilityType(head: string, args: string[], ctx: CheckerContext, line: in
 	return settleMapped(ctx, evaluateMappedType(mapped), line, col);
 }
 
+enum AnnotationWrap {
+	RefArray,
+	Vec,
+	SizedArray,
+	Promise,
+	Iterator,
+	BitSet,
+	Span,
+	Borrow,
+	Ptr,
+	Cursor,
+	Ref,
+	Arc,
+	Locked,
+	Readonly,
+	Var,
+}
+
+struct AnnotationLayer { wrap: AnnotationWrap; size: int32; inner: string; }
+
+function peelAnnotation(layers: AnnotationLayer[], wrap: AnnotationWrap, inner: string, size: int32): Type | null {
+	layers.push({ wrap: wrap, size: size, inner: inner });
+	return null;
+}
+
+function readonlyAnnotationOf(viewed: Type): Type {
+	if (viewed.kind != TypeKind.GenericParam) return createReadonlyView(viewed);
+	const source = createGenericParam("$source");
+	const mods = (0 as BitSet<MappedModifier>).incl(MappedModifier.KeyOfDeclared).incl(MappedModifier.IncludeReadonly);
+	const key = createGenericParam("$key");
+	const homomorphic = createMappedType(key, createKeyOfType(source), createIndexedAccessType(source, key), null, source, mods);
+	return substituteParams(homomorphic, [source], [viewed]);
+}
+
+function bitSetAnnotationOf(ctx: CheckerContext, elem: Type, line: int32, col: int32): Type {
+	if (!bitSetElementAllowed(elem)) {
+		addError(ctx, "BitSet element must be an enum with ordinal members, got '" + typeDisplayName(elem) + "'", line, col);
+	}
+	return createBitSet(elem);
+}
+
+function wrapAnnotation(layer: AnnotationLayer, inner: Type, ctx: CheckerContext, line: int32, col: int32): Type {
+	return match (layer.wrap) {
+		AnnotationWrap.RefArray => createRef(createArray(inner)),
+		AnnotationWrap.Vec => createArray(inner),
+		AnnotationWrap.SizedArray => createSizedArray(inner, layer.size),
+		AnnotationWrap.Promise => promiseAnnotationOf(ctx, inner, line, col),
+		AnnotationWrap.Iterator => createIterator(inner),
+		AnnotationWrap.BitSet => bitSetAnnotationOf(ctx, inner, line, col),
+		AnnotationWrap.Span => createSpan(inner),
+		AnnotationWrap.Borrow => createBorrow(inner),
+		AnnotationWrap.Ptr => createPtr(inner),
+		AnnotationWrap.Cursor => createCursor(inner),
+		AnnotationWrap.Ref => createRef(inner),
+		AnnotationWrap.Arc => createArc(inner),
+		AnnotationWrap.Locked => createLocked(inner),
+		AnnotationWrap.Readonly => readonlyAnnotationOf(inner),
+		AnnotationWrap.Var => createVar(inner),
+	};
+}
+
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
+	const layers: AnnotationLayer[] = [];
+	let next = text;
+	while (true) {
+		const resolved = resolveLayer(next, ctx, line, col, layers);
+		if (resolved != null) {
+			let t: Type = resolved;
+			for (let i = layers.length - 1; i >= 0; i -= 1) t = wrapAnnotation(layers[i], t, ctx, line, col);
+			return t;
+		}
+		next = layers[layers.length - 1].inner;
+	}
+}
+
+function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32, layers: AnnotationLayer[]): Type | null {
 	let trimmed = text.trim();
 	if (trimmed == "") return inferredType();
 	// Strip outer parens that wrap the entire expression (not function type form `(...) => ...`).
@@ -1120,23 +1195,19 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 	// Check for array suffix [] or [ ] (token-joined form from captureOptionalType)
 	if (trimmed.endsWith("[ ]")) {
 		const inner = trimmed.slice(0, trimmed.length - 3).trim();
-		return createRef(createArray(resolveAnnotation(inner, ctx, line, col)));
+		return peelAnnotation(layers, AnnotationWrap.RefArray, inner, 0);
 	}
 	if (trimmed.endsWith("[]")) {
 		const inner = trimmed.slice(0, trimmed.length - 2);
-		return createRef(createArray(resolveAnnotation(inner, ctx, line, col)));
+		return peelAnnotation(layers, AnnotationWrap.RefArray, inner, 0);
 	}
 	if (trimmed.endsWith("]")) {
 		const openBracket = findChar(trimmed, "[");
 		if (openBracket > 0) {
 			const inner = trimmed.slice(0, openBracket).trim();
 			const sizeStr = trimmed.slice(openBracket + 1, trimmed.length - 1).trim();
-			if (sizeStr == "" || sizeStr == " ") {
-				return createRef(createArray(resolveAnnotation(inner, ctx, line, col)));
-			}
-			if (isAllDigits(sizeStr)) {
-				return createSizedArray(resolveAnnotation(inner, ctx, line, col), parseIntStr(sizeStr));
-			}
+			if (sizeStr == "" || sizeStr == " ") return peelAnnotation(layers, AnnotationWrap.RefArray, inner, 0);
+			if (isAllDigits(sizeStr)) return peelAnnotation(layers, AnnotationWrap.SizedArray, inner, parseIntStr(sizeStr));
 
 			const dim = constArrayDimension(sizeStr, ctx, line, col);
 			if (dim < 0) {
@@ -1146,9 +1217,9 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 					addError(ctx, `array size '${sizeStr}' must be a compile-time integer constant`, line, col);
 					return errorType();
 				}
-				return createSizedArray(resolveAnnotation(inner, ctx, line, col), 0);
+				return peelAnnotation(layers, AnnotationWrap.SizedArray, inner, 0);
 			}
-			return createSizedArray(resolveAnnotation(inner, ctx, line, col), dim);
+			return peelAnnotation(layers, AnnotationWrap.SizedArray, inner, dim);
 		}
 	}
 
@@ -1166,58 +1237,48 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			return createResult(resolveAnnotation(args[0], ctx, line, col), resolveAnnotation(args[1], ctx, line, col));
 		}
 		if (builtinHead == "Promise" && args.length == 1) {
-			return promiseAnnotationOf(ctx, resolveAnnotation(args[0], ctx, line, col), line, col);
+			return peelAnnotation(layers, AnnotationWrap.Promise, args[0], 0);
 		}
 		if (builtinHead == "Iterator" && args.length == 1) {
-			return createIterator(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Iterator, args[0], 0);
 		}
 		if (builtinHead == "Array" && args.length == 1) {
-			return createRef(createArray(resolveAnnotation(args[0], ctx, line, col)));
+			return peelAnnotation(layers, AnnotationWrap.RefArray, args[0], 0);
 		}
 		if (builtinHead == "Vec" && args.length == 1) {
-			return createArray(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Vec, args[0], 0);
 		}
 		if (builtinHead == "BitSet" && args.length == 1) {
-			const elem = resolveAnnotation(args[0], ctx, line, col);
-			if (!bitSetElementAllowed(elem)) {
-				addError(ctx, "BitSet element must be an enum with ordinal members, got '" + typeDisplayName(elem) + "'", line, col);
-			}
-			return createBitSet(elem);
+			return peelAnnotation(layers, AnnotationWrap.BitSet, args[0], 0);
 		}
 		if (builtinHead == "Span" && args.length == 1) {
-			return createSpan(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Span, args[0], 0);
 		}
 		if (builtinHead == "Borrow" && args.length == 1) {
-			return createBorrow(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Borrow, args[0], 0);
 		}
 		if (builtinHead == "Ptr" && args.length == 1) {
-			return createPtr(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Ptr, args[0], 0);
 		}
 		if (builtinHead == "Cursor" && args.length == 1) {
-			return createCursor(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Cursor, args[0], 0);
 		}
 		if (builtinHead == "Ref" && args.length == 1) {
-			return createRef(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Ref, args[0], 0);
 		}
 		if (builtinHead == "Arc" && args.length == 1) {
-			return createArc(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Arc, args[0], 0);
 		}
 		if (builtinHead == "Locked" && args.length == 1) {
-			return createLocked(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Locked, args[0], 0);
 		}
 		if (builtinHead == "Readonly" && args.length == 1) {
-			const viewed = resolveAnnotation(args[0], ctx, line, col);
-			if (viewed.kind != TypeKind.GenericParam) return createReadonlyView(viewed);
-			const source = createGenericParam("$source");
-			const mods = (0 as BitSet<MappedModifier>).incl(MappedModifier.KeyOfDeclared).incl(MappedModifier.IncludeReadonly);
-			const key = createGenericParam("$key");
-			const homomorphic = createMappedType(key, createKeyOfType(source), createIndexedAccessType(source, key), null, source, mods);
-			return substituteParams(homomorphic, [source], [viewed]);
+			return peelAnnotation(layers, AnnotationWrap.Readonly, args[0], 0);
 		}
 		const utility = utilityType(builtinHead, args, ctx, line, col);
 		if (utility != null) return utility;
 		if (builtinHead == "Var" && args.length == 1) {
-			return createVar(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Var, args[0], 0);
 		}
 		// Generic interface/class resolution (Map, Set, user-defined generics)
 		const genericSym = lookupTypeSym(ctx, writtenName);
