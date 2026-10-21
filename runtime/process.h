@@ -881,6 +881,23 @@ static inline msString msProcessSpawnSync(msString command) {
 #endif
 }
 
+#ifdef _WIN32
+#define _MS_EFTYPE 79
+static inline int32_t _msWinStartErrno(DWORD lastError, msString exe) {
+	if (lastError == ERROR_FILE_NOT_FOUND || lastError == ERROR_PATH_NOT_FOUND) return ENOENT;
+	if (lastError == ERROR_ACCESS_DENIED) {
+		wchar_t wide[MAX_PATH];
+		if (MultiByteToWideChar(CP_UTF8, 0, msStringToCString(exe), -1, wide, MAX_PATH) > 0) {
+			DWORD attrs = GetFileAttributesW(wide);
+			if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) return ENOENT;
+		}
+		return EACCES;
+	}
+	if (lastError == ERROR_BAD_EXE_FORMAT) return _MS_EFTYPE;
+	return 0;
+}
+#endif
+
 /**
  * Synchronous argv subprocess WITH capture — the no-shell counterpart of
  * msProcessSpawnSync. Spawns `exe` with `args` directly (no /bin/sh, no
@@ -1016,10 +1033,7 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 	ReleaseSRWLockExclusive(&_msSpawnCreateLock);
 	if (!ok) {
 		DWORD lastError = GetLastError();
-		_msProcSpawnErrno = lastError == ERROR_FILE_NOT_FOUND || lastError == ERROR_PATH_NOT_FOUND ? ENOENT
-			: lastError == ERROR_ACCESS_DENIED ? EACCES
-			: lastError == ERROR_BAD_EXE_FORMAT ? ENOEXEC
-			: 0;
+		_msProcSpawnErrno = _msWinStartErrno(lastError, exe);
 		CloseHandle(outRd); CloseHandle(errRd);
 		return MS_EMPTY_STRING;
 	}
@@ -1331,10 +1345,8 @@ static inline int64_t msProcChildSpawn(msString path, msStringArray* args, msStr
 		si.hStdError = mergeStderr ? outWr : errWr;
 		if (!CreateProcessW(NULL, wcmd, NULL, NULL, TRUE, 0, NULL, wcwd, &si, &pi)) {
 			DWORD e = GetLastError();
-			failed = e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND ? ENOENT
-				: e == ERROR_ACCESS_DENIED ? EACCES
-				: e == ERROR_BAD_EXE_FORMAT ? ENOEXEC
-				: EINVAL;
+			failed = _msWinStartErrno(e, path);
+			if (failed == 0) failed = EINVAL;
 		}
 	}
 	_msProcChildCloseHandle(&inRd);

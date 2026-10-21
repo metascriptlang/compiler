@@ -96,6 +96,7 @@ export function errnoName(errnum: int32): string {
 		12 => "ENOMEM",
 		13 => "EACCES",
 		20 => "ENOTDIR",
+		79 => "EFTYPE",
 		_ => `UNKNOWN (errno ${errnum})`,
 	};
 }
@@ -213,6 +214,7 @@ test "startFailed names the program and the start error" {
 	const denied = startFailed("/tmp", errnoName(13));
 	assert denied.kind == ProcessErrorKind.SpawnFailed && denied.exitCode == 126;
 	assert denied.message == "spawnSync /tmp EACCES";
+	assert errnoName(79) == "EFTYPE";
 	assert errnoName(99) == "UNKNOWN (errno 99)";
 }
 
