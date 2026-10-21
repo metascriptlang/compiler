@@ -8,7 +8,7 @@ import { methodOwnerClass } from "./visibility";
 import { isAsyncFunctionNode } from "./freestanding";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { isMaybeType, inferredType, isUnresolvedType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteParams, substituteBound, declaredTypeParams, UnifyBindings, bindParam, bindName, bindAt, boundSlot } from "./types";
+import { isMaybeType, createGenericParam, inferredType, isUnresolvedType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteParams, substituteBound, declaredTypeParams, UnifyBindings, bindParam, bindAt, boundSlot } from "./types";
 import { ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, globalScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
@@ -216,7 +216,7 @@ export function declaresUserHook(t: Type, ctx: CheckerContext): boolean {
 	return owner != null && declaresLifecycleHook(pickBodyCtx(owner.modulePath, ctx, owner), owner);
 }
 
-function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, instanceName: string, names: string[], types: Type[], ctx: CheckerContext, loc: SourceLocation): void {
+function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, instanceName: string, params: Type[], types: Type[], ctx: CheckerContext, loc: SourceLocation): void {
 	for (const raw of classData.classBody) {
 		const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
 		if (member == null || member.kind != NodeKind.MethodDecl) continue;
@@ -228,7 +228,7 @@ function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, insta
 			continue;
 		}
 		ensureShaped(hookSym, ctx);
-		const inst = instantiateGenericFunction(hookSym, names, types, ctx, loc);
+		const inst = instantiateGenericFunction(hookSym, params, types, ctx, loc);
 		if (inst != null) recordInstanceHook(owner, types, md.methodName, inst);
 	}
 }
@@ -265,7 +265,7 @@ function instantiateExtensionHooks(genericSym: Symbol, instType: Type, ctx: Chec
 			const bindings = createUnifyBindings();
 			unifyType(formal, instType, bindings);
 			if (bindings.names.length == 0) continue;
-			const inst = instantiateGenericFunction(hookSym, bindings.names, bindings.types, ctx, loc);
+			const inst = instantiateGenericFunction(hookSym, bindings.params, bindings.types, ctx, loc);
 			if (inst != null) recordInstanceHook(genericSym, instType.typeChildren, hookName, inst);
 			break;
 		}
@@ -619,20 +619,20 @@ function injectConcreteTypeSyms(t: Type | null, ctx: CheckerContext, callerCtx: 
 	}
 }
 
-function openInstanceScope(ctx: CheckerContext, names: string[], types: Type[], outer: int32 = -1, declScope: Scope | null = null): Scope {
+function openInstanceScope(ctx: CheckerContext, params: Type[], types: Type[], outer: int32 = -1, declScope: Scope | null = null): Scope {
 	const callerScope = ctx.table.current;
 	let top = callerScope;
 	while (top.scopeKind != ScopeKind.Module && top.parent != null) top = top.parent;
 	ctx.table.current = declScope ?? top;
 	openScope(ctx.table, ScopeKind.Block);
-	for (let i = 0; i < names.length && i < types.length; i += 1) {
+	for (let i = 0; i < params.length && i < types.length; i += 1) {
 		if (i == outer) openScope(ctx.table, ScopeKind.Block);
-		const sym = newSym(ctx, SymbolKind.TypeAlias, names[i].trim(), types[i]);
+		const sym = newSym(ctx, SymbolKind.TypeAlias, params[i].typeName, types[i]);
 		sym.state = SymbolState.Shaped;
 		sym.nameId = getIdentId(ctx.table.identCache, sym.name);
 		addSymbolToScope(ctx.table.current, sym);
 	}
-	if (outer >= names.length) openScope(ctx.table, ScopeKind.Block);
+	if (outer >= params.length) openScope(ctx.table, ScopeKind.Block);
 	return callerScope;
 }
 
@@ -663,12 +663,10 @@ function receiverTypeParams(t: Type | null, found: Type[]): void {
 	receiverTypeParams(t.typeReturn, found);
 }
 
-function routineBindings(ctx: CheckerContext, sym: Symbol, names: string[], params: (Type | null)[], types: Type[]): RoutineBindings {
+function routineBindings(ctx: CheckerContext, sym: Symbol, params: Type[], types: Type[]): RoutineBindings {
 	const given = createUnifyBindings();
-	for (let i = 0; i < names.length && i < types.length; i += 1) {
-		const param = i < params.length ? params[i] : null;
-		if (boundSlot(given, names[i], param) >= 0) continue;
-		if (param != null) bindParam(given, param, types[i]); else bindName(given, names[i], types[i]);
+	for (let i = 0; i < params.length && i < types.length; i += 1) {
+		if (boundSlot(given, params[i]) < 0) bindParam(given, params[i], types[i]);
 	}
 	const out = createUnifyBindings();
 	const taken: boolean[] = given.names.map((_n: string): boolean => false);
@@ -678,13 +676,13 @@ function routineBindings(ctx: CheckerContext, sym: Symbol, names: string[], para
 	for (const gp of sym.typeParams) takeBound(out, given, taken, gp);
 	const declared = owner.length + sym.typeParams.length > 0;
 	for (let i = 0; i < given.names.length; i += 1) {
-		if (!taken[i] && !(declared && given.params[i] != null)) bindAt(out, given, i);
+		if (!taken[i] && !declared) bindAt(out, given, i);
 	}
 	return { b: out, outer: outer };
 }
 
 function takeBound(out: UnifyBindings, given: UnifyBindings, taken: boolean[], gp: Type): void {
-	const at = boundSlot(given, gp.typeName, gp);
+	const at = boundSlot(given, gp);
 	if (at < 0 || taken[at]) return;
 	taken[at] = true;
 	bindAt(out, given, at);
@@ -843,14 +841,14 @@ function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[]): void 
 // new NodeKind cannot silently break generic instantiation.
 
 // Does NOT descend into children — that's forEachChild's job.
-function substNodeLocal(node: Node, paramNames: string[], params: (Type | null)[], concreteTypes: Type[]): void {
-	if (node.nodeType != null && paramNames.length > 0) node.nodeType = substituteParams(node.nodeType, paramNames, params, concreteTypes);
+function substNodeLocal(node: Node, params: Type[], concreteTypes: Type[]): void {
+	if (node.nodeType != null && params.length > 0) node.nodeType = substituteParams(node.nodeType, params, concreteTypes);
 }
 
-export function replaceTypeVars(node: Node, paramNames: string[], concreteTypes: Type[], params: (Type | null)[] = []): void {
+export function replaceTypeVars(node: Node, params: Type[], concreteTypes: Type[]): void {
 	if (node == null) return;
-	substNodeLocal(node, paramNames, params, concreteTypes);
-	forEachChild(node, (child: Node): void => { replaceTypeVars(child, paramNames, concreteTypes, params); });
+	substNodeLocal(node, params, concreteTypes);
+	forEachChild(node, (child: Node): void => { replaceTypeVars(child, params, concreteTypes); });
 }
 
 // ===== On-Demand Instantiation =====
@@ -875,7 +873,7 @@ function instantiateLocalGeneric(ctx: CheckerContext, sym: Symbol, name: string,
 	cd.fnFlags = stripGenFlag(cd.fnFlags);
 	clearCheckerState(cd.fnBody);
 	bindFunctionFlow(cloned, cd.fnBody);
-	const callerScope = openInstanceScope(ctx, routine.b.names, routine.b.types, routine.outer, declScope);
+	const callerScope = openInstanceScope(ctx, routine.b.params, routine.b.types, routine.outer, declScope);
 	const instSym = callCheckLocalInstance(ctx, cloned, (declared: Symbol): void => {
 		declared.instantiatedFrom = sym;
 		cacheInstance(host.procInstCache, sym, declared, routine.b.types);
@@ -898,7 +896,7 @@ export function instantiateTimings(): float64[] {
 	return [_igfTime, _igfBodyTime];
 }
 
-export function instantiateGenericFunction(sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation, params: (Type | null)[] = []): Symbol {
+export function instantiateGenericFunction(sym: Symbol, params: Type[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol {
 	if (ctx.genericInstDepth > 50) {
 		addError(ctx, "generic instantiation too nested: instantiating '" + sym.name + "' goes deeper than 50 nested instantiations", callLoc.line, callLoc.column);
 		return null as unknown as Symbol;
@@ -924,7 +922,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 
 	ctx.genericInstDepth = ctx.genericInstDepth + 1;
 
-	const routine = routineBindings(ctx, sym, paramNames, params, concreteTypes);
+	const routine = routineBindings(ctx, sym, params, concreteTypes);
 	const dedup = routine.b;
 	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
 	const existing = cachedInstance(host.procInstCache, sym, dedup.types);
@@ -971,7 +969,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	// (via substNodeLocal) and walks the body via forEachChild.
 	const cloned = monoCloneNode(fnNode);
 	const cd = cloned.data as FunctionDeclData;
-	replaceTypeVars(cloned, dedup.names, dedup.types, dedup.params);
+	replaceTypeVars(cloned, dedup.params, dedup.types);
 
 	// Rename + strip flags
 	cd.fnName = mangledName;
@@ -1015,7 +1013,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		// Reference parity (instantiateGenericParamList): inject concrete type
 		// symbols into scope so resolveAnnotation("Item") finds the user type during re-check.
 		// Without this, HashMap<string, Item[]> methods resolve "Item" to Unknown.
-		const callerScope = openInstanceScope(bodyCtx, dedup.names, dedup.types, routine.outer);
+		const callerScope = openInstanceScope(bodyCtx, dedup.params, dedup.types, routine.outer);
 		bodyCtx.table.current.friendModules.push(sym.modulePath);
 		bodyCtx.table.current.privateAccess = methodOwnerClass(bodyCtx, sym);
 		const injectedSyms: Symbol[] = [];
@@ -1098,7 +1096,7 @@ function instanceFieldType(instStruct: Type, fieldName: string): Type | null {
 	return null;
 }
 
-function instanceFieldInits(classData: ClassDeclData, names: string[], types: Type[], instStruct: Type, classSym: Symbol, ctx: CheckerContext, loc: SourceLocation): Node[] {
+function instanceFieldInits(classData: ClassDeclData, params: Type[], types: Type[], instStruct: Type, classSym: Symbol, ctx: CheckerContext, loc: SourceLocation): Node[] {
 	const fields: Node[] = [];
 	let initialized = 0;
 	for (const raw of classData.classBody) {
@@ -1112,7 +1110,7 @@ function instanceFieldInits(classData: ClassDeclData, names: string[], types: Ty
 			continue;
 		}
 		const field = monoCloneNode(member);
-		replaceTypeVars(field, names, types);
+		replaceTypeVars(field, params, types);
 		field.nodeType = fieldType;
 		fields.push(field);
 		if (pd.propInitializer != null) initialized += 1;
@@ -1121,7 +1119,7 @@ function instanceFieldInits(classData: ClassDeclData, names: string[], types: Ty
 	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx, classSym);
 	const savedModulePath = bodyCtx.modulePath;
 	bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
-	const callerScope = openInstanceScope(bodyCtx, names, types);
+	const callerScope = openInstanceScope(bodyCtx, params, types);
 	bodyCtx.table.current.privateAccess = classSym;
 	const injectedSyms: Symbol[] = [];
 	for (const ct of types) {
@@ -1196,23 +1194,23 @@ export function literalFieldInitializer(ctx: CheckerContext, classType: Type | n
 				addError(ctx, `field '${fieldName}' of '${classSym.name}' has an initializer that reads 'this', which an object literal cannot run — give '${fieldName}' a value in the literal`, loc.line, loc.column);
 				return null;
 			}
-			const names = body.kind == TypeKind.GenericInstance ? splitTopLevel(genericParamNamesOf(symGenericParams(classSym)), ",").map((n: string): string => n.trim()) : [];
+			const params = body.kind == TypeKind.GenericInstance ? classSym.typeParams : [];
 			const types = body.kind == TypeKind.GenericInstance ? body.typeChildren : [];
-			return checkFieldInitializerCopy(ctx, pd.propInitializer, fieldName, fieldType, classSym, names, types, loc);
+			return checkFieldInitializerCopy(ctx, pd.propInitializer, fieldName, fieldType, classSym, params, types, loc);
 		}
 		cur = classParentOf(body);
 	}
 	return null;
 }
 
-function checkFieldInitializerCopy(ctx: CheckerContext, init: Node, fieldName: string, fieldType: Type, classSym: Symbol, names: string[], types: Type[], loc: SourceLocation): Node {
+function checkFieldInitializerCopy(ctx: CheckerContext, init: Node, fieldName: string, fieldType: Type, classSym: Symbol, params: Type[], types: Type[], loc: SourceLocation): Node {
 	let copy = monoCloneNode(init);
 	clearCheckerState(copy);
-	if (names.length > 0) replaceTypeVars(copy, names, types);
+	if (params.length > 0) replaceTypeVars(copy, params, types);
 	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx, classSym);
 	const savedModulePath = bodyCtx.modulePath;
 	bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
-	const callerScope = openInstanceScope(bodyCtx, names, types);
+	const callerScope = openInstanceScope(bodyCtx, params, types);
 	bodyCtx.table.current.privateAccess = classSym;
 	const injectedSyms: Symbol[] = [];
 	for (const ct of types) injectConcreteTypeSyms(ct, bodyCtx, ctx, injectedSyms);
@@ -1243,6 +1241,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	}
 
 	const dedup = deduplicateBindings(paramNames, concreteTypes);
+	const params = declaredTypeParams(classSym, dedup.names.length);
 	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
 	const existing = cachedInstance(host.typeInstCache, classSym, dedup.types);
 	if (existing != null) return existing;
@@ -1263,7 +1262,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	const structBase = unwrapClassStruct(classSym);
 	const canonical = canonicalInstance(structBase, concreteTypes, classSym);
 	const parent = classParentOf(canonical);
-	const substStruct = instanceStruct(structBase, mangledClass, dedup.names, declaredTypeParams(classSym, dedup.names.length), dedup.types);
+	const substStruct = instanceStruct(structBase, mangledClass, params, dedup.types);
 	substStruct.typeExtra = parent;
 	const concreteClassType = createRef(substStruct);
 	const instSym = newSym(bodyCtx, SymbolKind.Class, mangledClass, concreteClassType);
@@ -1275,8 +1274,8 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	instSym.instantiatedFrom = classSym;
 	substStruct.sym = instSym;
 	cacheInstance(host.typeInstCache, classSym, instSym, dedup.types);
-	const classBody: Node[] = instanceFieldInits(classData, dedup.names, dedup.types, substStruct, classSym, ctx, loc);
-	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, instSym, dedup.names, dedup.types, mangledClass, createRef(canonical), ctx, loc));
+	const classBody: Node[] = instanceFieldInits(classData, params, dedup.types, substStruct, classSym, ctx, loc);
+	if (ctorNode != null) classBody.push(instanceCtorDecl(ctorNode, classSym, instSym, params, dedup.types, mangledClass, createRef(canonical), ctx, loc));
 	// Set classNode.nodeType to the concrete (instantiated) class type so the
 	// methodToFunction transform can pull the right receiver type when lifting
 	// the ctor — without it, `this` falls back to `void*` in the generated
@@ -1289,7 +1288,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	instSym.declNode = classNode;
 	addPendingInstance(host, classNode);
 	instantiateParentClass(parent, ctx);
-	instantiateInstanceHooks(structBase.sym != null ? structBase.sym : classSym, classData, mangledClass, dedup.names, dedup.types, ctx, loc);
+	instantiateInstanceHooks(structBase.sym != null ? structBase.sym : classSym, classData, mangledClass, params, dedup.types, ctx, loc);
 	const instType = createGenericInstance(structBase, dedup.types);
 	instType.typeName = classSym.name;
 	instantiateHooksInType(instType, ctx, loc, 0);
@@ -1313,9 +1312,8 @@ function unwrapClassStruct(classSym: Symbol): Type {
 // Mono receiver: Ref<Struct{substituted fields}> named `mangledClass`. genClassDecl
 // reads non-static fields from node.nodeType's struct (typeNames/typeChildren); a
 // Ref<GenericInstance> peels to type-args not fields → an empty struct in the ctor's TU.
-function instanceStruct(structBase: Type, mangledClass: string, names: string[], params: (Type | null)[], types: Type[]): Type {
-	const n = names.length < types.length ? names.length : types.length;
-	let substStruct: Type = substituteParams(structBase, names.slice(0, n).map((name: string): string => name.trim()), params.slice(0, n), types);
+function instanceStruct(structBase: Type, mangledClass: string, params: Type[], types: Type[]): Type {
+	let substStruct: Type = substituteParams(structBase, params, types);
 	if (substStruct == structBase) {
 		const newNames: string[] = [];
 		for (const n of substStruct.typeNames) newNames.push(n);
@@ -1327,7 +1325,7 @@ function instanceStruct(structBase: Type, mangledClass: string, names: string[],
 	return substStruct;
 }
 
-function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, names: string[], types: Type[], mangledClass: string, thisType: Type, ctx: CheckerContext, loc: SourceLocation): Node {
+function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, params: Type[], types: Type[], mangledClass: string, thisType: Type, ctx: CheckerContext, loc: SourceLocation): Node {
 	const ctorData = ctorNode.data as ConstructorDeclData;
 
 	// Clone the constructor body
@@ -1340,7 +1338,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, nam
 
 	// Substitute type vars in body
 	if (clonedBody != null) {
-		replaceTypeVars(clonedBody, names, types);
+		replaceTypeVars(clonedBody, params, types);
 	}
 
 	// Clone constructor defaults (for default-fill at call sites)
@@ -1357,8 +1355,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, nam
 	if (ctorNode.resolvedSym == null) throw new Error(`internal: generic constructor '${classSym.name}' has no routine symbol`);
 	const formals = ctorFormalTypes(ctorNode.resolvedSym);
 	if (formals == null) throw new Error(`internal: generic constructor '${classSym.name}' has no routine type`);
-	const declared = declaredTypeParams(classSym, names.length);
-	const resolvedParamTypes = formals.map((t: Type): Type => substituteParams(t, names, declared, types));
+	const resolvedParamTypes = formals.map((t: Type): Type => substituteParams(t, params, types));
 	ctorDeclNode.nodeType = createFunction(resolvedParamTypes, fnParams, null as unknown as Type);
 
 	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
@@ -1381,7 +1378,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, nam
 		bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
 		clearCheckerState(clonedBody);
 		bindFunctionFlow(clonedBody, clonedBody);
-		const callerScope = openInstanceScope(bodyCtx, names, types);
+		const callerScope = openInstanceScope(bodyCtx, params, types);
 		bodyCtx.table.current.privateAccess = classSym;
 		// Inject concrete type symbols (parity with instantiateGenericFunction).
 		const injectedSyms: Symbol[] = [];
@@ -1407,14 +1404,14 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, nam
 }
 
 // Register callback at module load time
-registerInstantiateGeneric((sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation, params: (Type | null)[]): Symbol => { return instantiateGenericFunction(sym, paramNames, concreteTypes, ctx, callLoc, params); });
+registerInstantiateGeneric((sym: Symbol, params: Type[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol => { return instantiateGenericFunction(sym, params, concreteTypes, ctx, callLoc); });
 registerTypeInstanceHooks((instType: Type, ctx: CheckerContext, line: int32, col: int32): void => { instantiateHooksInType(instType, ctx, makeLoc(line, col), 0); });
 
 test "an instantiation past the depth limit is an error naming the generic" {
 	const ctx = createContext();
 	ctx.genericInstDepth = 51;
 	const sym = makeSymbol("nest", SymbolKind.Function, voidType(), false);
-	const inst = instantiateGenericFunction(sym, ["T"], [voidType()], ctx, makeLoc(4, 17));
+	const inst = instantiateGenericFunction(sym, [createGenericParam("T")], [voidType()], ctx, makeLoc(4, 17));
 	assert inst == null;
 	assert ctx.errors.length == 1;
 	assert ctx.errors[0].message.indexOf("generic instantiation too nested: instantiating 'nest'") >= 0;
@@ -1425,7 +1422,7 @@ test "an instantiation at the depth limit is still attempted" {
 	const ctx = createContext();
 	ctx.genericInstDepth = 50;
 	const sym = makeSymbol("nest", SymbolKind.Function, voidType(), false);
-	instantiateGenericFunction(sym, ["T"], [voidType()], ctx, makeLoc(4, 17));
+	instantiateGenericFunction(sym, [createGenericParam("T")], [voidType()], ctx, makeLoc(4, 17));
 	assert ctx.errors.length == 0;
 	assert ctx.genericInstDepth == 50;
 }

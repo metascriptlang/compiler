@@ -9,7 +9,7 @@ type ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type | null
 type StmtCheckerFn = (ctx: CheckerContext, node: Node) => void;
 type BodyCheckerFn = (ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[] | null) => Symbol[];
 type LocalInstanceCheckerFn = (ctx: CheckerContext, node: Node, declared: (sym: Symbol) => void) => Symbol | null;
-type InstantiateGenericFn = (sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation, params: (Type | null)[]) => Symbol | null;
+type InstantiateGenericFn = (sym: Symbol, params: Type[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation) => Symbol | null;
 type EvalComptimeBlockFn = (node: Node, ctx: CheckerContext) => Node;
 type ExpandMacroInvocationFn = (node: Node, ctx: CheckerContext, depth: int32) => Node;
 type ApplyDecoratorsFn = (ctx: CheckerContext, program: Node) => void;
@@ -34,7 +34,7 @@ let localInstanceCheckerFn: LocalInstanceCheckerFn = (ctx: CheckerContext, node:
 	return null;
 };
 
-let instantiateGenericFn: InstantiateGenericFn = (sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation, params: (Type | null)[]): Symbol | null => {
+let instantiateGenericFn: InstantiateGenericFn = (sym: Symbol, params: Type[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol | null => {
 	return null;
 };
 
@@ -90,8 +90,8 @@ export function callCheckLocalInstance(ctx: CheckerContext, node: Node, declared
 	return localInstanceCheckerFn(ctx, node, declared);
 }
 
-export function callInstantiateGeneric(sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation, params: (Type | null)[] = []): Symbol | null {
-	return instantiateGenericFn(sym, paramNames, concreteTypes, ctx, callLoc, params);
+export function callInstantiateGeneric(sym: Symbol, params: Type[], concreteTypes: Type[], ctx: CheckerContext, callLoc: SourceLocation): Symbol | null {
+	return instantiateGenericFn(sym, params, concreteTypes, ctx, callLoc);
 }
 
 export function callEvalComptimeBlock(node: Node, ctx: CheckerContext): Node {

@@ -1046,15 +1046,15 @@ export function instantiateGenericFnValue(ctx: CheckerContext, expr: Node, forma
 	const raw = createUnifyBindings();
 	for (let i = 0; i < fnType.typeChildren.length && i < target.typeChildren.length; i += 1) unifyType(fnType.typeChildren[i], target.typeChildren[i], raw);
 	unifyType(fnType.typeReturn, target.typeReturn, raw);
-	const names: string[] = [];
+	const params: Type[] = [];
 	const types: Type[] = [];
-	for (let bi = 0; bi < raw.names.length; bi += 1) {
+	for (let bi = 0; bi < raw.params.length; bi += 1) {
 		if (hasGenericParams(raw.types[bi])) continue;
-		names.push(raw.names[bi]);
+		params.push(raw.params[bi]);
 		types.push(raw.types[bi]);
 	}
-	if (names.length == 0) return false;
-	const inst = callInstantiateGeneric(sym, names, types, ctx, expr.location);
+	if (params.length == 0) return false;
+	const inst = callInstantiateGeneric(sym, params, types, ctx, expr.location);
 	if (inst == null || inst.symbolType == null) return false;
 	expr.resolvedSym = inst;
 	expr.nodeType = inst.symbolType;

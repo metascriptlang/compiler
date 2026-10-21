@@ -13,7 +13,7 @@ import { createFileSystemProvider, provideSource, loadModule, moduleIdentity, So
 import { backendOfExtension, createDefaultConfig, resolveImportWithConfig, ResolverConfig } from "../module/resolver";
 import { preludePackStats } from "./preludePack";
 import { isAssignableProfile } from "./compat";
-import { TargetInfo, hostTargetInfo, unifyTypeProfile, substituteTypeProfile, typeNameOfProfile, typeDisplayNameProfile, getPropertyProfile, findVariantByFieldNameProfile } from "./types";
+import { TargetInfo, hostTargetInfo, unifyTypeProfile, substituteParamsProfile, typeNameOfProfile, typeDisplayNameProfile, getPropertyProfile, findVariantByFieldNameProfile } from "./types";
 import { findAllExtensionsByNameProfile } from "./context";
 import { checkCallExprProfile } from "./callResolve";
 import { instantiateProfile, instantiateTimings, lookupModuleCtx, resetInstantiationState } from "./instantiate";
@@ -225,11 +225,11 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		console.log(`    instantiate: calls=${ip[0]} hits=${ip[1]} misses=${ip[2]} totalTime=${it[0]}ms bodyCheck=${it[1]}ms`);
 		const isa = isAssignableProfile();
 		const uni = unifyTypeProfile();
-		const sub = substituteTypeProfile();
+		const sub = substituteParamsProfile();
 		const tno = typeNameOfProfile();
 		const tdn = typeDisplayNameProfile();
 		const cce = checkCallExprProfile();
-		console.log(`    isAssignable: n=${isa[0]} t=${isa[1]}ms | unifyType: n=${uni[0]} t=${uni[1]}ms | substituteType: n=${sub[0]} t=${sub[1]}ms`);
+		console.log(`    isAssignable: n=${isa[0]} t=${isa[1]}ms | unifyType: n=${uni[0]} t=${uni[1]}ms | substituteParams: n=${sub[0]} t=${sub[1]}ms`);
 		console.log(`    typeNameOf: n=${tno[0]} t=${tno[1]}ms | typeDisplayName: n=${tdn[0]} t=${tdn[1]}ms | checkCallExpr: n=${cce[0]} t=${cce[1]}ms`);
 		const gp = getPropertyProfile();
 		const fvb = findVariantByFieldNameProfile();
