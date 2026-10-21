@@ -1943,7 +1943,7 @@ function instanceBody(t: Type): Type | null {
 		names.push(paramNames[pi].trim());
 		args.push(t.typeChildren[pi]);
 	}
-	return substituteAllParams(base.typeReturn, names, args);
+	return substituteParams(base.typeReturn, names, declaredParamsOf(t, names.length), args);
 }
 
 export function distinctInstanceRepr(t: Type | null): Type | null {
@@ -2138,17 +2138,25 @@ export function symGenericParams(sym: Symbol | null): string {
 	return viaType != "" ? viaType : builtinGenericParams(sym.name);
 }
 
+function genericOwnerOf(cur: Type): Symbol | null {
+	if (cur.kind != TypeKind.GenericInstance) return cur.sym;
+	const base = cur.typeExtra != null ? unwrapRefBase(cur.typeExtra) : null;
+	return base != null ? base.sym : null;
+}
+
 export function genericParamsOf(t: Type | null): string {
 	if (t == null) return "";
 	let cur = t;
 	if ((cur.kind == TypeKind.Ref || cur.kind == TypeKind.Ptr) && cur.typeReturn != null) cur = cur.typeReturn;
-	let owner: Symbol | null = cur.sym;
-	if (cur.kind == TypeKind.GenericInstance) {
-		const base = cur.typeExtra != null ? unwrapRefBase(cur.typeExtra) : null;
-		owner = base != null ? base.sym : null;
-	}
+	const owner = genericOwnerOf(cur);
 	if (owner != null && owner.declNode != null) return genericParamNamesOf(declGenericParams(owner.declNode));
 	return builtinGenericParams(cur.typeName);
+}
+
+function declaredParamsOf(t: Type, count: int32): (Type | null)[] {
+	const cur = (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) && t.typeReturn != null ? t.typeReturn : t;
+	const owner = genericOwnerOf(cur);
+	return owner != null && owner.typeParams.length == count ? owner.typeParams.map((gp: Type): Type | null => gp) : [];
 }
 
 export function genericParamNamesOf(params: string): string {
@@ -2227,7 +2235,7 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 	}
 	const tracked = !_queryCachesReadOnly;
 	if (tracked) _instancesBuilding.push(gi);
-	const body = substituteAllParams(innerBase, names, args);
+	const body = substituteParams(innerBase, names, declaredParamsOf(gi, names.length), args);
 	if (tracked) _instancesBuilding.pop();
 	if (body == innerBase && bodyWouldShareTheDeclaration(innerBase, names, args)) return;
 	if (body != innerBase && body.kind == TypeKind.Union && isUnionAlias(innerBase)) body.typeInst = gi;
@@ -3317,7 +3325,7 @@ export function classParentOf(t: Type | null): Type | null {
 			names[i] = names[i].trim();
 			args.push(s.typeChildren[i]);
 		}
-		return substituteAllParams(cls.typeExtra, names, args);
+		return substituteParams(cls.typeExtra, names, declaredParamsOf(s, names.length), args);
 	}
 	return s.kind == TypeKind.Struct ? s.typeExtra : null;
 }
@@ -5142,7 +5150,7 @@ function instanceLayoutBody(t: Type): Type | null {
 		names.push(paramNames[pi].trim());
 		args.push(t.typeChildren[pi]);
 	}
-	return substituteAllParams(base, names, args);
+	return substituteParams(base, names, declaredParamsOf(t, names.length), args);
 }
 
 function unionTagType(t: Type): Type | null {
