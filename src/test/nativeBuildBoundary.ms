@@ -16,13 +16,7 @@ interface Ran {
 }
 
 function scriptArgs(): string[] {
-	const rest: string[] = [];
-	let seen = false;
-	for (const a of argv) {
-		if (seen && !a.startsWith("--")) rest.push(a);
-		if (a.endsWith("nativeBuildBoundary.ms")) seen = true;
-	}
-	return rest;
+	return argv.slice(1).filter((a: string): boolean => !a.startsWith("--"));
 }
 
 function absolute(path: string): string {
