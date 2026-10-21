@@ -116,3 +116,21 @@ const read: int32 = free.n;
 	assert !text.contains("Property 'n' does not exist"), "a free literal takes the instance's fields: " + text;
 	assert errors.length == 2, "only the two refusals: " + text;
 }
+
+test "a spread of a runtime collection is refused and a class instance spread copies its fields" {
+	const errors = checkOnly(`
+class Pt { x: int32 = 1; y: string = "p"; }
+interface H { x: int32; y: string; }
+const m = new Map<string, int32>();
+const s = new Set<int32>();
+const free = { ...m };
+const typed: H = { ...s, x: 1, y: "y" };
+const copied: H = { ...new Pt() };
+const loose = { ...new Pt() };
+const read: int32 = loose.x;
+`).errors;
+	const text = errors.join("\n");
+	assert text.contains("cannot spread a Map<string, int32> into an object literal: its contents are not fields; copy the entries with a loop"), "a Map spread: " + text;
+	assert text.contains("cannot spread a Set<int32> into an object literal: its contents are not fields; copy the entries with a loop"), "a Set spread: " + text;
+	assert errors.length == 2, "a class instance spread is accepted: " + text;
+}
