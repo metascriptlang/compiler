@@ -643,7 +643,24 @@ interface RoutineBindings {
 
 function ownerTypeParams(ctx: CheckerContext, sym: Symbol): Type[] {
 	const owner = methodOwnerClass(ctx, sym);
-	return owner != null ? owner.typeParams : [];
+	if (owner != null) return owner.typeParams;
+	const decl = sym.declNode != null && sym.declNode.kind == NodeKind.DecoratedDecl ? (sym.declNode.data as DecoratedDeclData).decoratedNode : sym.declNode;
+	if (decl == null || decl.kind != NodeKind.MethodDecl || sym.symbolType == null || sym.symbolType.typeChildren.length == 0) return [];
+	const md = decl.data as MethodDeclDataLocal;
+	if (md.methodParams.length == 0 || md.methodParams[0] != "this") return [];
+	const found: Type[] = [];
+	receiverTypeParams(sym.symbolType.typeChildren[0], found);
+	return found;
+}
+
+function receiverTypeParams(t: Type | null, found: Type[]): void {
+	if (t == null) return;
+	if (t.kind == TypeKind.GenericParam) {
+		if (t.sym != null && found.indexOf(t) < 0) found.push(t);
+		return;
+	}
+	for (const c of t.typeChildren) receiverTypeParams(c, found);
+	receiverTypeParams(t.typeReturn, found);
 }
 
 function routineBindings(ctx: CheckerContext, sym: Symbol, names: string[], params: (Type | null)[], types: Type[]): RoutineBindings {
