@@ -2264,7 +2264,7 @@ export function layoutOf(t: Type | null): string[] {
 	return shape != null && shape.kind == TypeKind.Struct && !isMaybeType(shape) ? shape.typeNames : [];
 }
 
-function fieldInst(t: Type | null, name: string, byName: RaiserOpcode, bySlot: RaiserOpcode, a: number, b: number, c: number): RaiserInstruction {
+export function fieldInst(t: Type | null, name: string, byName: RaiserOpcode, bySlot: RaiserOpcode, a: number, b: number, c: number): RaiserInstruction {
 	const slot = layoutOf(t).indexOf(name);
 	return slot >= 0 && slot <= MAX_SLOT ? slotInst(bySlot, a, b, c, slot) : raiserABC(byName, a, b, c);
 }
