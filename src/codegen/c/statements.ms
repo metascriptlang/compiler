@@ -17,7 +17,7 @@ import { genExpr, genExprInto, buildsInPlace, shimCallArg } from "./expressions"
 import { formatCNumber, formatCNumberLit, cBoolLiteral } from "./literals";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { ensureCrossModuleProto } from "./forward";
-import { safeName, mangledGlobalName, mangledFunctionName, isModuleGlobalVar, mangleFieldName } from "./names";
+import { safeName, mangledGlobalName, mangledFunctionName, isModuleGlobalVar, mangleFieldName, overloadAt } from "./names";
 import { isRuntimeProcSym } from "../../transform/util";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, callOverloadWinner, genClFullCastNrvo, genClHalfCastNrvo, zeroInit, returnsBorrow } from "./types";
 import { computedGotoSize, isComputedGotoMark } from "../../checker/computedGoto";
@@ -71,13 +71,14 @@ function isNumericCType(cType: string): boolean {
 
 function genNrvoCallExpr(g: CGen, p: CProc, callNode: Readonly<Node>, destVar: string): string {
 	const cd = callNode.data as CallExprData;
-	const winner = callOverloadWinner(callNode);
+	const winnerIdx = callOverloadWinner(callNode);
+	const winner = winnerIdx >= 0 && callNode.resolvedSym != null ? overloadAt(callNode.resolvedSym, winnerIdx) : null;
 	let callee = winner != null
-		? mangledFunctionName(winner.winnerSym, winner.winnerSym.name, winner.winnerIdx)
+		? mangledFunctionName(winner, winner.name, winnerIdx)
 		: genExpr(g, p, cd.callee);
 	// Resolve callee symbol + function type once (used for ABI shim + proto)
-	const nrvoSym = winner != null ? winner.winnerSym : (callNode.resolvedSym != null ? callNode.resolvedSym : cd.callee.resolvedSym);
-	let nrvoFnType = nrvoSym != null && nrvoSym.symbolType != null ? nrvoSym.symbolType : (cd.callee.nodeType != null ? cd.callee.nodeType : null as unknown as Type);
+	const nrvoSym = winner != null ? winner : (callNode.resolvedSym != null ? callNode.resolvedSym : cd.callee.resolvedSym);
+	let nrvoFnType: Readonly<Type | null> = nrvoSym != null && nrvoSym.symbolType != null ? nrvoSym.symbolType : cd.callee.nodeType;
 	if (nrvoFnType == null || nrvoFnType.kind != TypeKind.Function) {
 		const calleeFnType = getCalleeFuncType(callNode);
 		if (calleeFnType != null) nrvoFnType = calleeFnType;
@@ -224,7 +225,7 @@ export function emitCallRaiseCheck(p: CProc, exprNode: Readonly<Node>): void {
 	emitStmtsLine(p, `if (msErr) goto ${raiseTarget(p)};`);
 }
 
-function frameLocalRoot(p: CProc, n: Readonly<Node>): Symbol | null {
+function frameLocalRoot(p: CProc, n: Readonly<Node>): Readonly<Symbol | null> {
 	let cur = n;
 	while (cur != null) {
 		match (cur.kind) {
@@ -258,7 +259,7 @@ function frameLocalRoot(p: CProc, n: Readonly<Node>): Symbol | null {
 	return null;
 }
 
-function isValueKind(t: Type | null, kind: TypeKind): boolean {
+function isValueKind(t: Readonly<Type | null>, kind: TypeKind): boolean {
 	const peeled = t != null ? peelThrough(t, PEEL_ALL) : null;
 	return peeled != null && peeled.kind == kind;
 }
@@ -271,7 +272,7 @@ function isPureIndex(n: Readonly<Node>): boolean {
 	return cur.kind == NodeKind.NumberLiteral || cur.kind == NodeKind.Identifier;
 }
 
-function readsFrameLocal(p: CProc, root: Symbol, n: Readonly<Node>): boolean {
+function readsFrameLocal(p: CProc, root: Readonly<Symbol>, n: Readonly<Node>): boolean {
 	if (n == null) return false;
 	if (mayHoldAddress(n.nodeType)) return true;
 	return match (n.kind) {
@@ -302,7 +303,7 @@ function readsFrameLocal(p: CProc, root: Symbol, n: Readonly<Node>): boolean {
 	};
 }
 
-function anyReadsFrameLocal(p: CProc, root: Symbol, nodes: Readonly<Node[]>): boolean {
+function anyReadsFrameLocal(p: CProc, root: Readonly<Symbol>, nodes: Readonly<Node[]>): boolean {
 	for (const n of nodes) {
 		if (readsFrameLocal(p, root, n)) return true;
 	}
@@ -326,7 +327,7 @@ function assignsInPlace(g: CGen, p: CProc, d: Readonly<BinaryExprData>): boolean
 	return destCType != "" && buildsInPlace(g, d.right, destCType);
 }
 
-function isPlainStruct(t: Type | null): boolean {
+function isPlainStruct(t: Readonly<Type | null>): boolean {
 	const v = t != null ? peelThrough(t, PEEL_ALIAS) : null;
 	if (v != null && v.kind == TypeKind.GenericInstance) return isPlainStruct(v.typeReturn);
 	return v != null && v.kind == TypeKind.Struct && !hasAsgnFlag(v);
@@ -346,7 +347,7 @@ function storesAfterRaiseCheck(g: CGen, p: CProc, expr: Readonly<Node>): boolean
 	return bd.operator == "=" && isPlainStruct(left) && assignTargetCType(g, bd.left) == getTypeDesc(g, right);
 }
 
-function isArithmetic(t: Type): boolean {
+function isArithmetic(t: Readonly<Type>): boolean {
 	const v = peelThrough(t, PEEL_ALIAS);
 	return isIntegerType(v) || isFloatType(v) || v.kind == TypeKind.Boolean || v.kind == TypeKind.Char;
 }
@@ -464,7 +465,7 @@ function genNestedGlobalVar(g: CGen, p: CProc, node: Readonly<Node>, d: Readonly
 	emitStmtsLine(p, `${varName} = ${genExpr(g, p, d.initializer)};`);
 }
 
-export function readonlyDataBracedInit(init: Readonly<Node>, t: Type | null): string {
+export function readonlyDataBracedInit(init: Readonly<Node>, t: Readonly<Type | null>): string {
 	match (init.kind) {
 		NodeKind.NumberLiteral => {
 			return formatCNumberLit(init.data as NumberLiteralData, init.nodeType);

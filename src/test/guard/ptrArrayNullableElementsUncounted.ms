@@ -10,7 +10,7 @@
 //   `owners`.
 //
 // RED MEANS a Probe was destroyed while still owned (the count below, or the ledger's
-//   DOUBLE-DESTROY). Run /trace-nim on isUncountedPtrElement's union peel.
+//   DOUBLE-DESTROY). Run /trace-nim on isUncountedElement's union peel.
 //
 // Signalling via the exit code: an uncaught throw exits 0 on the C backend.
 //

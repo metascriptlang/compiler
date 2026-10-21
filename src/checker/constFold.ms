@@ -839,7 +839,7 @@ export function readonlyDataInitializer(init: Readonly<Node> | null, depth: int3
 	};
 }
 
-export function readonlyDataTypeShape(t: Type | null, depth: int32): boolean {
+export function readonlyDataTypeShape(t: Readonly<Type | null>, depth: int32): boolean {
 	if (t == null || depth > READONLY_DATA_DEPTH_LIMIT) return false;
 	if (isIntegerType(t) || isFloatType(t) || t.kind == TypeKind.Number || t.kind == TypeKind.Boolean) return true;
 	if (t.kind == TypeKind.SizedArray) return readonlyDataTypeShape(t.typeReturn, depth + 1);

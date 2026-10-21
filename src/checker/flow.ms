@@ -27,8 +27,8 @@ import {
 	findVariantByStringDiscriminant, findFieldInVariant,
 	isMaybeType, unwrapMaybeType, isDiscriminatedUnion, peelTransparentInstance, holdsFalsyValue,
 	nullableUnionOf, hasGenericParams, isNullableShape, symGenericParams, genericInstanceMembers,
-	isAtomicRef, peelToStructOrUnion, matchUnionBehindInstance, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
-	classAncestorInstance,
+	isAtomicRef, peelToStructOrUnion, instantiatedUnionBehind, isTypeofTag, isNumeric, isPrimitiveKindName, typeofNameMatches,
+	classAncestorInstance, isReadonlyView,
 } from "./types";
 import { typeRelation, TypeRelation, sameType, findVariantByEnumMember } from "./compat";
 import { parseNumberLiteral } from "../utils/string";
@@ -236,7 +236,7 @@ export function getFlowTypeOfReference(refNode: Node, declaredType: Type): Type 
 	if (declaredType == null) return declaredType;
 	const flow = refNode.flowNode;
 	if (flow == null) return declaredType;
-	const base = matchUnionBehindInstance(declaredType);
+	const base = instantiatedUnionBehind(declaredType);
 	const state = createFlowState(refNode, base);
 	if (endsInNeverCall(flow)) return declaredType;
 	const ft = getTypeAtFlowNode(state, flow);
@@ -1481,6 +1481,7 @@ function writesThrough(byAddress: Node, refNode: Node): boolean {
 function constrainToDeclared(rhs: Type, declared: Type): Type {
 	if (rhs == null) return declared;
 	if (declared == null) return rhs;
+	if (rhs.kind == TypeKind.Cursor && rhs.typeReturn != null) return constrainToDeclared(rhs.typeReturn, declared);
 	const union = peelTransparentInstance(declared);
 	if (union.kind != TypeKind.Union || union.typeChildren == null) {
 		return declared;
@@ -1492,7 +1493,7 @@ function constrainToDeclared(rhs: Type, declared: Type): Type {
 	for (const v of union.typeChildren) {
 		if (v == rhs) return rhs;
 		const rel = typeRelation(v, rhs);
-		if (rel != TypeRelation.None) return rhs;
+		if (rel != TypeRelation.None) return isReadonlyView(v) && !isReadonlyView(rhs) ? v : rhs;
 	}
 	return declared;
 }

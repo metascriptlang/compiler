@@ -393,7 +393,9 @@ export function distinctInstances(order: Node[]): Node[] {
 	return out;
 }
 
-export function placedInstanceOf(sym: Symbol): Symbol {
+export function placedInstanceOf(sym: Symbol): Symbol;
+export function placedInstanceOf(sym: Readonly<Symbol>): Readonly<Symbol>;
+export function placedInstanceOf(sym: Readonly<Symbol>): Readonly<Symbol> {
 	return _placedInstances.get(sym) ?? sym;
 }
 

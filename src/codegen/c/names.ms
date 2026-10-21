@@ -324,11 +324,11 @@ function symExternOrImportName(sym: Readonly<Symbol> | null, name: string): stri
 
 // A reference to a module-level symbol is named after its declaration: the text at the use site may be
 // an import alias.
-export function referenceName(sym: Symbol | null, text: string): string {
+export function referenceName(sym: Readonly<Symbol | null>, text: string): string {
 	return sym != null && sym.modulePath != "" ? sym.name : text;
 }
 
-export function mangledFunctionName(sym: Symbol | null, name: string, overloadIdx: number): string {
+export function mangledFunctionName(sym: Readonly<Symbol | null>, name: string, overloadIdx: number): string {
 	if (sym != null && sym.exportName != "") return sym.exportName;
 	const early = symExternOrImportName(sym, name);
 	if (early != "") return early;
@@ -352,35 +352,20 @@ export function mangledFunctionName(sym: Symbol | null, name: string, overloadId
 // body-bearing sym in the set. Keeping the redirect in codegen lets
 // check-time preserve the winner slot for LSP views (hover, sig help).
 
-export interface OverloadWinner {
-	winnerSym: Symbol;
-	winnerIdx: number;
+export function overloadAt(sym: Symbol, idx: number): Symbol;
+export function overloadAt(sym: Readonly<Symbol>, idx: number): Readonly<Symbol>;
+export function overloadAt(sym: Readonly<Symbol>, idx: number): Readonly<Symbol> {
+	return idx > 0 && idx - 1 < sym.overloads.length ? sym.overloads[idx - 1] : sym;
 }
 
-export function resolveOverloadWinner(sym: Symbol, rawIdx: number): OverloadWinner {
-	let winnerSym: Symbol = sym;
-	if (rawIdx > 0 && rawIdx - 1 < sym.overloads.length) {
-		winnerSym = sym.overloads[rawIdx - 1];
+export function resolveOverloadWinner(sym: Readonly<Symbol>, rawIdx: number): number {
+	if (!hasFlag(overloadAt(sym, rawIdx), SymbolFlag.OverloadSig)) return rawIdx < 0 ? 0 : rawIdx;
+	if (!hasFlag(sym, SymbolFlag.OverloadSig)) return 0;
+	for (let oi = 0; oi < sym.overloads.length; oi += 1) {
+		const cand = sym.overloads[oi];
+		if (cand != null && !hasFlag(cand, SymbolFlag.OverloadSig)) return oi + 1;
 	}
-	let emitIdx = rawIdx;
-	let emitSym = winnerSym;
-	if (winnerSym != null && hasFlag(winnerSym, SymbolFlag.OverloadSig)) {
-		if (!hasFlag(sym, SymbolFlag.OverloadSig)) {
-			emitSym = sym;
-			emitIdx = 0;
-		} else {
-			for (let oi = 0; oi < sym.overloads.length; oi += 1) {
-				const cand = sym.overloads[oi];
-				if (cand != null && !hasFlag(cand, SymbolFlag.OverloadSig)) {
-					emitSym = cand;
-					emitIdx = oi + 1;
-					break;
-				}
-			}
-		}
-	}
-	if (emitIdx < 0) emitIdx = 0;
-	return { winnerSym: emitSym, winnerIdx: emitIdx };
+	return rawIdx < 0 ? 0 : rawIdx;
 }
 
 // ===== Symbol-aware classification — is this a module-level global variable? =====
@@ -393,7 +378,7 @@ export function resolveOverloadWinner(sym: Symbol, rawIdx: number): OverloadWinn
 // collectPass on module-level declarations, and by the JS pipeline on bindings the
 // lowerings declare at module scope), and has a known defining module.
 
-export function isModuleGlobalVar(sym: Symbol | null): boolean {
+export function isModuleGlobalVar(sym: Readonly<Symbol | null>): boolean {
 	if (sym == null) return false;
 	if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Temp) return false;
 	// Flag set in two places: (1) collectPass for own-module top-level VariableDecl,
@@ -412,7 +397,7 @@ export function isModuleGlobalVar(sym: Symbol | null): boolean {
 // early-exit as functions; same module-qualifier pattern minus the overload ID
 // (module globals have no overloads).
 
-export function mangledGlobalName(sym: Symbol | null, name: string): string {
+export function mangledGlobalName(sym: Readonly<Symbol | null>, name: string): string {
 	const early = symExternOrImportName(sym, name);
 	if (early != "") return early;
 	const baseName = name;

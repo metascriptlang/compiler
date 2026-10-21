@@ -103,7 +103,7 @@ export interface CLoc {
 	storage: CStorageLoc;
 	snippet: string;       // C code fragment ("x", "a->b", "T1_")
 	isIndirect: boolean;   // Implementation parity: backend introduced a pointer
-	locType: Type | null;  // MetaScript type (for RC decisions, type mapping); null until populated
+	locType: Cursor<Readonly<Type>> | null;  // MetaScript type (for RC decisions, type mapping); null until populated
 }
 
 export function initLoc(kind: CLocKind, storage: CStorageLoc): CLoc {
@@ -172,7 +172,7 @@ export interface CTryEntry {
 
 export class CProc {
 	name: string;          // mangled C name
-	returnType: Type | null;      // MetaScript return type (null = void/inferred)
+	returnType: Cursor<Readonly<Type>> | null;      // MetaScript return type (null = void/inferred)
 	isNrvo: boolean;       // true if function uses NRVO (out-param calling convention)
 	labels: number;        // unique temp counter (T1_, T2_, ...)
 	blocks: CBlock[];      // nested block stack (blocks[0] = top-level)
@@ -181,12 +181,12 @@ export class CProc {
 	params: string[];      // parameter names (mangled)
 	hoistedTemps: string[];
 	indirectParams: string[];  // reference pointer introduction params — auto-deref as (*name) (Reference: indirect location parity)
-	indirectSyms: Cursor<Symbol>[];  // the symbols of indirectParams
+	indirectSyms: Cursor<Readonly<Symbol>>[];  // the symbols of indirectParams
 	nestedTryStmts: CTryEntry[];
 	beforeRetNeeded: boolean;
 	suppressRaiseCheck: boolean;
 	sigConflicts: string[];   // parallel arrays: [mangledName, count, ...]
-	localSyms: Cursor<Symbol>[];
+	localSyms: Cursor<Readonly<Symbol>>[];
 	localSymNames: string[];
 	// Fallback name map for DRC-generated identifiers without resolvedSym.
 	// When fillLocalName renames a VarDecl, the mapping originalName→uniqueName is stored
@@ -205,7 +205,7 @@ export function isIndirectParam(p: CProc, name: string): boolean {
 }
 
 // A reference that carries its symbol is indirect only when that binding is.
-export function isIndirectRef(p: CProc, sym: Symbol | null, name: string): boolean {
+export function isIndirectRef(p: CProc, sym: Readonly<Symbol | null>, name: string): boolean {
 	if (p == null) return false;
 	if (sym == null) return isIndirectParam(p, name);
 	for (const s of p.indirectSyms) {
@@ -214,7 +214,7 @@ export function isIndirectRef(p: CProc, sym: Symbol | null, name: string): boole
 	return false;
 }
 
-export function createProc(name: string, returnType: Type | null): CProc {
+export function createProc(name: string, returnType: Readonly<Type | null>): CProc {
 	const topBlock = createBlock(0, false);
 	const blocks: CBlock[] = [];
 	blocks.push(topBlock);
@@ -241,7 +241,7 @@ export function createProc(name: string, returnType: Type | null): CProc {
 	};
 }
 
-export function setLocalSymName(p: CProc, sym: Symbol, name: string): void {
+export function setLocalSymName(p: CProc, sym: Readonly<Symbol>, name: string): void {
 	for (let i = 0; i < p.localSyms.length; i += 1) {
 		if (p.localSyms[i] == sym) {
 			p.localSymNames[i] = name;
@@ -252,7 +252,7 @@ export function setLocalSymName(p: CProc, sym: Symbol, name: string): void {
 	p.localSymNames.push(name);
 }
 
-export function lookupLocalSymName(p: CProc, sym: Symbol | null): string {
+export function lookupLocalSymName(p: CProc, sym: Readonly<Symbol | null>): string {
 	if (p == null || sym == null) return "";
 	for (let i = p.localSyms.length - 1; i >= 0; i -= 1) {
 		if (p.localSyms[i] == sym) return p.localSymNames[i];
@@ -617,7 +617,7 @@ export function aliveSetHasSym(aliveSet: Readonly<AliveSet>, sym: Symbol): boole
 	return aliveSet._syms.has(sym);
 }
 
-export function aliveSetHasDecl(aliveSet: Readonly<AliveSet>, sym: Symbol | null, declName: string): boolean {
+export function aliveSetHasDecl(aliveSet: Readonly<AliveSet>, sym: Readonly<Symbol | null>, declName: string): boolean {
 	if (sym == null) throw new Error(`internal: declaration '${declName}' has no symbol, so its aliveness is unknown`);
 	return aliveSet._syms.has(sym);
 }
@@ -707,7 +707,7 @@ export interface DeferredStructDef {
 }
 
 export interface DeferredElement {
-	elem: Type;
+	elem: Cursor<Readonly<Type>>;
 	contentName: string;
 }
 
@@ -744,7 +744,7 @@ export class CGen {
 	typesBeingDefined: string[];
 	unionsInProgress: string[];
 	deferredStructs: DeferredStructDef[];
-	inlineCopies: Symbol[];
+	inlineCopies: Cursor<Readonly<Symbol>>[];
 	deferredElements: DeferredElement[];
 }
 
@@ -856,7 +856,7 @@ export function assembleOutput(g: CGen): string {
 // Moved from forward.ms to break circular import: types.ms ↔ forward.ms.
 // Only depends on CGen/CSection/Symbol — no type-mapping logic.
 
-export function useHeader(g: CGen, sym: Symbol): void {
+export function useHeader(g: CGen, sym: Readonly<Symbol>): void {
 	if (sym == null || sym.headerPath == "") return;
 	emitIncludeDirectives(g, sym.headerPath);
 }

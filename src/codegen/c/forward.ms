@@ -17,7 +17,7 @@ import { placedInstanceOf } from "../../checker/instantiate";
 
 // On-demand cross-module function prototype emission.
 // Called from genCallExpr when a cross-module function is referenced.
-export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type, sym: Symbol | null): void {
+export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Readonly<Type | null>, sym: Readonly<Symbol | null>): void {
 	// Recovery path: re-exported symbols imported via a hub module (e.g.,
 	// `export { X } from "./source"`) can end up with Unknown symbolType in the
 	// caller's scope when the hub's collectExport runs before the source module's
@@ -41,20 +41,22 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 	addLine(sec(g, CSection.ProcHeaders), procHeader(g, calleeName, fnType, null, mutBits, false) + ";");
 }
 
-export function copiesInline(g: CGen, sym: Symbol): boolean {
+export function copiesInline(g: CGen, sym: Readonly<Symbol>): boolean {
 	if (sym.symbolType == null || sym.symbolType.callConv != CallingConvention.CcInline) return false;
 	if (hasFlag(sym, SymbolFlag.ImportC)) return false;
 	return !g.emissionFacts.hcrModules.has(sym.modulePath);
 }
 
-export function inlineDeclOf(sym: Symbol): Node | null {
+export function inlineDeclOf(sym: Symbol): Node | null;
+export function inlineDeclOf(sym: Readonly<Symbol>): Readonly<Node | null>;
+export function inlineDeclOf(sym: Readonly<Symbol>): Readonly<Node | null> {
 	const decl = sym.declNode;
 	if (decl == null || decl.kind != NodeKind.FunctionDecl || decl.resolvedSym != sym || decl.nodeType == null) return null;
 	if ((decl.data as FunctionDeclData).fnBody == null) return null;
 	return decl;
 }
 
-function requestInlineCopy(g: CGen, calleeName: string, sym: Symbol): void {
+function requestInlineCopy(g: CGen, calleeName: string, sym: Readonly<Symbol>): void {
 	const key = "inline:" + calleeName;
 	if (nameSetHas(g.declaredProcs, key)) return;
 	nameSetAdd(g.declaredProcs, key);

@@ -120,7 +120,7 @@ export interface RaiserCompState {
 	locals: RaiserLocals;
 	loopStack: RaiserLoopStack;
 	funcMap: RaiserFuncMap;
-	copyTypes: Type[];
+	copyTypes: Cursor<Readonly<Type>>[];
 	copyPlans: RaiserCopyPlan[];
 	classTypes: RaiserClassType[];
 	globals: RaiserGlobalMap;

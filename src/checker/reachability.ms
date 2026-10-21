@@ -14,7 +14,7 @@ import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, cr
 import { isCHeaderPath } from "../module/loader";
 import { refArrayCellKey, refArrayCellOp, getOpByKey, typeInfoSubject, objectTypeInfoKey, arcCellKey, promiseAllShape, PromiseAllShape, hookBaseCName, anonTypeName, isAnonTypeName } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, makeSymbol } from "./symbol";
-import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, getProperty, peelToStructOrUnion } from "./types";
+import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, fieldTypeView, peelToStructOrUnion } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { ctorRoutineOf } from "./ctorRoutine";
@@ -827,7 +827,7 @@ export function isBakeableAggregateConst(node: Readonly<Node>): boolean {
 	for (let i = 0; i < od.properties.length; i += 1) {
 		const prop = od.properties[i];
 		if (prop == null) return false;
-		if (owner != null && owner.kind == TypeKind.Struct && storesNothing(owner, getProperty(owner, od.keys[i]))) {
+		if (owner != null && owner.kind == TypeKind.Struct && storesNothing(owner, fieldTypeView(owner, od.keys[i]))) {
 			if (prop.kind != NodeKind.BooleanLiteral) return false;
 			continue;
 		}

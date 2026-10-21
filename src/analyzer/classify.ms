@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedPtrElement, createPromise } from "../checker/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedElement, createPromise } from "../checker/types";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, createTransformContext } from "../transform/context";
 import { attachedOpSym } from "../transform/util";
@@ -142,7 +142,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		if (anonUnionOwnsRc(elem, ctx)) return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true);
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
-	if (isUncountedPtrElement(elem)) {
+	if (isUncountedElement(elem)) {
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
 	if (isAcyclicRefElement(elem, ctx.cyclicCache, ctx.acyclicCache)) {
@@ -327,7 +327,7 @@ export function classifyType(t: Type | null, ctx: TransformContext): RcInfo {
 				// Ptr<T> | null shares the bare-pointer C repr with Ref<T> | null,
 				// but Ptr is UNMANAGED — incref/decref on a raw pointer (e.g. a
 				// C-library allocation with no ms header) corrupts memory.
-				if (refInner.kind == TypeKind.Ptr) return noRcInfo();
+				if (refInner.kind == TypeKind.Ptr || refInner.kind == TypeKind.Cursor) return noRcInfo();
 				if (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor) return noRcInfo();
 				if (isAtomicRef(refInner)) return makeRcInfo(RcKind.Ref, "", "msAtomicDecref", "msAtomicIncref", "msPtrWasMoved", "", false);
 				if (canFormAcycle(t, ctx.cyclicCache, ctx.acyclicCache)) {

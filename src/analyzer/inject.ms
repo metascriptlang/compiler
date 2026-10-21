@@ -12,7 +12,7 @@
 import { bakesIntoStaticCell } from "../checker/reachability";
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { createPrimitive, typeDisplayName, unwrapRefNullUnion, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
+import { createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
 import { getOpByKey } from "../codegen/c/types";
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol, RoutineFlag, routineFlagSet } from "../checker/symbol";
 import { TransformContext, createTransformContext, freshTempSym } from "../transform/context";
@@ -485,6 +485,25 @@ function keepOperandOrder(kids: Node[], marks: Node[], dctx: DrcContext): void {
 	}
 }
 
+function boundElement(formals: Type[], i: int32, args: Node[]): Type | null {
+	const formal = formals[i].typeReturn;
+	if (formal == null || formal.kind != TypeKind.GenericParam) return null;
+	for (let j = 0; j < formals.length && j < args.length; j += 1) {
+		const f = peelSlot(formals[j]);
+		if (f == null || f.kind != TypeKind.Array || f.typeReturn == null || f.typeReturn.kind != TypeKind.GenericParam || f.typeReturn.typeName != formal.typeName) continue;
+		const arr = peelSlot(args[j].nodeType);
+		if (arr != null && arr.kind == TypeKind.Array) return arr.typeReturn;
+	}
+	return null;
+}
+
+function peelSlot(t: Type | null): Type | null {
+	let cur = t;
+	while (cur != null && cur.typeReturn != null
+		&& (cur.kind == TypeKind.Sink || cur.kind == TypeKind.Var || cur.kind == TypeKind.Lent || cur.kind == TypeKind.Ref)) cur = cur.typeReturn;
+	return cur;
+}
+
 function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const cd = node.data as CallExprData;
 	// Recurse on callee
@@ -515,7 +534,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const marks: Node[] = [];
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
-		if ((sinksAll && !isRestArg(calleeSym, i, cd.arguments.length)) || (sinkParams != null && i < sinkParams.length && sinkParams[i] != null && sinkParams[i].kind == TypeKind.Sink)) {
+		if ((sinksAll && !isRestArg(calleeSym, i, cd.arguments.length)) || (sinkParams != null && i < sinkParams.length && sinkParams[i] != null && sinkParams[i].kind == TypeKind.Sink && !isUncountedElement(boundElement(sinkParams, i, cd.arguments)))) {
 			argMode = DrcMode.SinkArg;
 		}
 		// actor SEND handoff: plain (non-atomic) ref args are consumed into the message
@@ -802,7 +821,8 @@ function isPtrField(objType: Type | null, fieldName: string): boolean {
 	if (fieldIdx < 0 || fieldIdx >= t.typeChildren.length) return false;
 	const ft = t.typeChildren[fieldIdx];
 	if (ft == null) return false;
-	return ft.kind == TypeKind.Ptr || ft.kind == TypeKind.Cursor;
+	const bare = ft.kind == TypeKind.Union ? unwrapRefNullUnion(ft) : ft;
+	return bare != null && (bare.kind == TypeKind.Ptr || bare.kind == TypeKind.Cursor);
 }
 
 function processObjectLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node {

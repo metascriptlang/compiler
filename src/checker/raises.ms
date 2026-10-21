@@ -12,7 +12,7 @@ interface RoutineInfo {
 }
 
 let _raisesNothing: HashSet<Symbol> = new HashSet<Symbol>();
-let _closureTargets: HashMap<Symbol, Symbol> = new HashMap<Symbol, Symbol>();
+let _closureTargets: HashMap<Symbol, Cursor<Readonly<Symbol>>> = new HashMap<Symbol, Cursor<Readonly<Symbol>>>();
 let _tempWrites: HashMap<Symbol, int32> = new HashMap<Symbol, int32>();
 let _routines: HashMap<Symbol, RoutineInfo> = new HashMap<Symbol, RoutineInfo>();
 let _order: RoutineInfo[] = [];
@@ -26,11 +26,11 @@ let _blindBroken = false;
 
 export function resetRaises(): void {
 	_raisesNothing = new HashSet<Symbol>();
-	_closureTargets = new HashMap<Symbol, Symbol>();
+	_closureTargets = new HashMap<Symbol, Cursor<Readonly<Symbol>>>();
 	_tempWrites = new HashMap<Symbol, int32>();
 }
 
-function closurePairTarget(value: Readonly<Node> | null): Symbol | null {
+function closurePairTarget(value: Readonly<Node> | null): Readonly<Symbol | null> {
 	if (value == null || value.kind != NodeKind.ObjectLiteral || !value.flags.has(NodeFlag.Closure)) return null;
 	const d = value.data as ObjectLiteralData;
 	for (let i = 0; i < d.keys.length; i += 1) {
@@ -74,7 +74,7 @@ function noteTempWrites(node: Node): void {
 	}
 }
 
-function calleeTarget(call: Readonly<Node>): Symbol | null {
+function calleeTarget(call: Readonly<Node>): Readonly<Symbol | null> {
 	const callee = (call.data as CallExprData).callee;
 	const sym = callee.resolvedSym;
 	if (sym == null) return closurePairTarget(callee);
@@ -83,11 +83,11 @@ function calleeTarget(call: Readonly<Node>): Symbol | null {
 	return bound != null && _tempWrites.get(sym) == 1 ? bound : sym;
 }
 
-function isOverloadSignature(sym: Symbol): boolean {
+function isOverloadSignature(sym: Readonly<Symbol>): boolean {
 	return hasFlag(sym, SymbolFlag.OverloadSig) && !hasFlag(sym, SymbolFlag.ImportC);
 }
 
-function implementationOf(call: Readonly<Node>): Symbol | null {
+function implementationOf(call: Readonly<Node>): Readonly<Symbol | null> {
 	const impl = call.resolvedSym;
 	return impl != null && !isOverloadSignature(impl) ? impl : null;
 }
@@ -101,7 +101,7 @@ function passesRoutine(args: Readonly<Node[]>): boolean {
 	return false;
 }
 
-function isDispatched(sym: Symbol): boolean {
+function isDispatched(sym: Readonly<Symbol>): boolean {
 	const entry = dispatchEntryFor(sym);
 	if (entry == null) return false;
 	return !entry.overloaded && dispatchOverridesFor(entry.classSym, entry.methodName).length > 0;
@@ -118,7 +118,7 @@ function classifyNew(node: Readonly<Node>): CallRaise {
 	return classifyTarget(sym, (node.data as NewExprData).newArguments);
 }
 
-function classifyTarget(sym: Symbol | null, args: Readonly<Node[]>): CallRaise {
+function classifyTarget(sym: Readonly<Symbol | null>, args: Readonly<Node[]>): CallRaise {
 	if (sym == null) return CallRaise.Can;
 	if (hasFlag(sym, SymbolFlag.Throws)) return CallRaise.Can;
 	if (hasFlag(sym, SymbolFlag.GeneratedOp) || hasFlag(sym, SymbolFlag.DestroyOp) || hasFlag(sym, SymbolFlag.WasMovedOp)) return CallRaise.Never;
@@ -136,10 +136,11 @@ function isNestedRoutine(node: Node): boolean {
 		|| node.kind == NodeKind.ActorDecl || node.kind == NodeKind.TestDecl;
 }
 
-function noteVerdict(verdict: CallRaise, callee: Symbol | null, info: RoutineInfo): void {
+function noteVerdict(verdict: CallRaise, callee: Readonly<Symbol | null>, info: RoutineInfo): void {
 	if (verdict == CallRaise.Can) info.raises = true;
 	else if (verdict == CallRaise.AsBody) {
-		if (_routines.has(callee!)) info.callees.push(callee!);
+		const target = _routines.get(callee!);
+		if (target != null) info.callees.push(target.sym);
 		else info.raises = true;
 	}
 }

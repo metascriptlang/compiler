@@ -2,32 +2,41 @@ import { Type, TypeKind } from "../ast/node";
 import { CEmissionFacts, CTypeInfoDemand, TypeInfoKind } from "../codegen/c/context";
 import { objectTypeInfoKey } from "../codegen/c/types";
 import { sameNominal } from "../checker/compat";
-import { classParentOf, hasGenericParams } from "../checker/types";
+import { hasGenericParams } from "../checker/types";
 import { HcrIndirectModule, HcrTypeLayout } from "../transform/native/hcrIndirect";
 
 const MAX_BASE_DEPTH = 64;
 
-function bodyOf(t: Type): Type {
+function bodyOf(t: Type): Type;
+function bodyOf(t: Readonly<Type>): Readonly<Type>;
+function bodyOf(t: Readonly<Type>): Readonly<Type> {
 	let body = t;
 	while (body.kind == TypeKind.Ref && body.typeReturn != null) body = body.typeReturn;
 	return body;
 }
 
-function ownNames(t: Type): string[] | null {
+function ownNames(t: Readonly<Type>): Readonly<string[] | null> {
 	if (t.kind == TypeKind.Struct) return t.typeNames;
 	if (t.kind != TypeKind.GenericInstance || t.typeExtra == null) return null;
 	const declared = bodyOf(t.typeExtra);
 	return declared.kind == TypeKind.Struct ? declared.typeNames : null;
 }
 
-function fieldNames(t: Type): string[] | null {
-	const chain: string[][] = [];
-	let cur: Type | null = bodyOf(t);
+function parentNamesOf(t: Readonly<Type>): Readonly<Type | null> {
+	if (t.kind == TypeKind.Struct) return t.typeExtra;
+	if (t.kind != TypeKind.GenericInstance || t.typeExtra == null) return null;
+	const declared = bodyOf(t.typeExtra);
+	return declared.kind == TypeKind.Struct ? declared.typeExtra : null;
+}
+
+function fieldNames(t: Readonly<Type>): string[] | null {
+	const chain: Readonly<string[]>[] = [];
+	let cur: Readonly<Type | null> = bodyOf(t);
 	while (cur != null) {
 		const names = ownNames(cur);
 		if (names == null || chain.length >= MAX_BASE_DEPTH) return null;
 		chain.push(names);
-		const parent = classParentOf(cur);
+		const parent = parentNamesOf(cur);
 		cur = parent == null ? null : bodyOf(parent);
 	}
 	const all: string[] = [];
@@ -56,7 +65,7 @@ function derivesFrom(other: Readonly<CTypeInfoDemand>, key: string, facts: Reado
 	return false;
 }
 
-function holdsVariant(union: Type, subject: Type): boolean {
+function holdsVariant(union: Readonly<Type>, subject: Type): boolean {
 	for (const child of union.typeChildren) {
 		if (child != null && sameNominal(bodyOf(child), subject)) return true;
 	}

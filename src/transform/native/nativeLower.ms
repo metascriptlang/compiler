@@ -237,7 +237,7 @@ function getArrayMacroName(elemType: Type | null, boundChecks: boolean): string 
 	if (isNumeric(elemType)) return value;
 	if (elemType.kind == TypeKind.String) return value;
 	// Pointer element types (classes, refs) use msRefArray — void* indirection
-	if (elemType.kind == TypeKind.Ref || elemType.kind == TypeKind.Ptr) return ref;
+	if (elemType.kind == TypeKind.Ref || elemType.kind == TypeKind.Ptr || elemType.kind == TypeKind.Cursor) return ref;
 	// Union(Ref<T>, Null) collapses to T* in C — same representation as Ref<T>.
 	if (elemType.kind == TypeKind.Union && unwrapRefNullUnion(elemType) != null) return ref;
 	// Value-type struct elements use per-type array typedefs

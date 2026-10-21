@@ -426,7 +426,7 @@ export function compilerFuncSym(procName: string): Symbol | null {
 	return _compilerFuncs.get(procName);
 }
 
-export function isRuntimeProcSym(sym: Symbol | null, procName: string): boolean {
+export function isRuntimeProcSym(sym: Readonly<Symbol | null>, procName: string): boolean {
 	if (sym == null) return false;
 	const declared = _compilerFuncs.get(procName);
 	if (declared != null) return sym == declared;

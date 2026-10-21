@@ -1,7 +1,7 @@
 // Raiser codegen — Expression compilation
 // AST expression nodes → typed bytecode instructions.
 
-import { resolveOverloadWinner } from "../c/names";
+import { resolveOverloadWinner, overloadAt } from "../c/names";
 import { monoInstanceName } from "../../monomorphize/registry";
 import {
 	Node, NodeKind, NodeFlag, TypeKind, Type, SymbolKind, Symbol,
@@ -22,7 +22,7 @@ import { resolveRuntimeDir } from "../../utils/path";
 import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, fieldInst, newArrayInst } from "./valueCopy";
 import { placedInstanceOf } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
-import { runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase } from "../../checker/types";
+import { runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView } from "../../checker/types";
 import { isSlotUnion } from "../../checker/fit";
 import { SymbolFlag, isViewBinding, classDeclNodeOf, hasFlag } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
@@ -1811,7 +1811,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		if (resolveGlobal(s, d.callee.resolvedSym) >= 0 || resolveLocal(s, d.callee.resolvedSym) >= 0) return compileClosureCall(s, node);
 		let calleeSym = d.callee.resolvedSym;
 		if (calleeSym != null && calleeSym.overloads != null && calleeSym.overloads.length > 0) {
-			calleeSym = resolveOverloadWinner(calleeSym, d.resolvedOverloadIdx).winnerSym;
+			calleeSym = overloadAt(calleeSym, resolveOverloadWinner(calleeSym, d.resolvedOverloadIdx));
 		}
 		const funcIdx = routineIndex(s, calleeSym);
 		if (funcIdx >= 0) {
@@ -2049,7 +2049,7 @@ function compileObjectLiteral(s: RaiserCompState, node: Node): int32 {
 	// Set each field
 	for (let i = 0; i < d.keys.length; i = i + 1) {
 		const fieldType = node.nodeType != null
-			? getProperty(node.nodeType, d.keys[i]) : d.properties[i].nodeType;
+			? fieldTypeView(node.nodeType, d.keys[i]) : d.properties[i].nodeType;
 		const valReg = emitValueCopy(s, compileExpr(s, d.properties[i]), fieldType);
 		const nameIdx = addConst(s, raiserConstString(d.keys[i]));
 		emitInst(s, fieldInst(s, node.nodeType, d.keys[i], RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, dest, nameIdx, valReg));

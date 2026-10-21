@@ -3740,7 +3740,7 @@ export function formatTypeBrief(t: Type | null): string {
 	// Generic-alias instance: show its resolved leaf body (U<Box<string>> → "string"),
 	// not the opaque alias name. Struct/Union-backed generics keep their own display.
 	if (t.kind == TypeKind.GenericInstance && t.typeReturn != null
-		&& t.typeReturn.kind != TypeKind.Struct && t.typeReturn.kind != TypeKind.Union) {
+		&& t.typeReturn.kind != TypeKind.Struct && t.typeReturn.kind != TypeKind.Union && t.typeReturn.kind != TypeKind.Distinct) {
 		return formatTypeBrief(t.typeReturn);
 	}
 	if (isResult(t)) {

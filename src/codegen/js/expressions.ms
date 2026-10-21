@@ -13,7 +13,7 @@ import {
 	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, createNodeAt,
 } from "../../ast/node";
 import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess, fileDeclaring } from "./emit";
-import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName, mangleQualified, mangleModuleName } from "../c/names";
+import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName, mangleQualified, mangleModuleName, overloadAt } from "../c/names";
 import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
 import { enumMemberName, hasFlag, SymbolFlag } from "../../checker/symbol";
@@ -561,8 +561,7 @@ export function emitCallExpr(gen: JSGenerator, node: Node): void {
 	const viaNamespace = qualified != null && qualified.object.resolvedSym != null && qualified.object.resolvedSym.symbolKind == SymbolKind.Module;
 	if ((d.callee.kind == NodeKind.Identifier || viaNamespace) && sym != null
 			&& sym.overloads != null && sym.overloads.length > 0) {
-		const w = resolveOverloadWinner(sym, d.resolvedOverloadIdx);
-		const ws = w.winnerSym;
+		const ws = overloadAt(sym, resolveOverloadWinner(sym, d.resolvedOverloadIdx));
 		const written = viaNamespace ? qualified!.property : (d.callee.data as IdentifierData).name;
 		if (ws != null && ws.nativeName != "" && isNativePattern(ws.nativeName)) {
 			markNamed(gen, d.callee, ws.name);

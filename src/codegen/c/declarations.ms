@@ -5,7 +5,7 @@
 
 import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ProgramData, PropertyDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ArrayLiteralData, HiddenStdConvData, DeclKind, TypeKind, Type, Symbol, SymbolKind, MethodDeclData } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
-import { hasGenericParams, isIntegerType, isNumeric, classParentOf, storesNothing, getProperty, peelToStructOrUnion, skipModifier } from "../../checker/types";
+import { hasGenericParams, isIntegerType, isNumeric, classParentOf, storesNothing, fieldTypeView, peelToStructOrUnion, skipModifier } from "../../checker/types";
 import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
@@ -210,7 +210,7 @@ export function emitInlineCopies(g: CGen): void {
 
 // The C name of a declared type comes from the same sym-aware helper the
 // Type-driven path (genObjectType/genEnumType) uses, so both spellings agree.
-function declTypeSym(node: Readonly<Node>): Symbol | null {
+function declTypeSym(node: Readonly<Node>): Readonly<Symbol | null> {
 	const t = node.nodeType;
 	if (t != null && t.sym != null) return t.sym;
 	return node.resolvedSym;
@@ -391,7 +391,9 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	}
 }
 
-function initializerLiteralType(literal: Readonly<Node>, declType: Type | null): Type | null {
+function initializerLiteralType(literal: Node, declType: Type | null): Type | null;
+function initializerLiteralType(literal: Readonly<Node>, declType: Readonly<Type | null>): Readonly<Type | null>;
+function initializerLiteralType(literal: Readonly<Node>, declType: Readonly<Type | null>): Readonly<Type | null> {
 	return literal.nodeType != null && literal.nodeType.kind == TypeKind.Float32 ? literal.nodeType : declType;
 }
 
@@ -663,7 +665,7 @@ function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, stati
 	const owner = peelToStructOrUnion(node.nodeType);
 	let i = 0;
 	for (const prop of od.properties) {
-		if (owner != null && owner.kind == TypeKind.Struct && storesNothing(owner, getProperty(owner, od.keys[i]))) {
+		if (owner != null && owner.kind == TypeKind.Struct && storesNothing(owner, fieldTypeView(owner, od.keys[i]))) {
 			i = i + 1;
 			continue;
 		}
@@ -705,7 +707,7 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	nameSetAdd(g.declaredGlobals, varName);
 }
 
-function readonlyDataBracedInit(g: CGen, init: Readonly<Node>, t: Type | null): string {
+function readonlyDataBracedInit(g: CGen, init: Readonly<Node>, t: Readonly<Type | null>): string {
 	match (init.kind) {
 		NodeKind.NumberLiteral => {
 			return formatCNumberLit(init.data as NumberLiteralData, init.nodeType);

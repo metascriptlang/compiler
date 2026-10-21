@@ -829,7 +829,7 @@ export function resetDispatchRegistry(): void {
 	_dispBySym = new HashMap<Symbol, DispMethodEntry>();
 }
 
-export function dispatchEntryFor(sym: Symbol): DispMethodEntry | null {
+export function dispatchEntryFor(sym: Readonly<Symbol>): DispMethodEntry | null {
 	return _dispBySym.get(sym) ?? null;
 }
 

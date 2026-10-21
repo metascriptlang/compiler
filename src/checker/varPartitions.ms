@@ -1602,7 +1602,7 @@ function borrowedRoot(node: Node | null): Node | null {
 	return null;
 }
 
-export function passedByValue(t: Type | null): boolean {
+export function passedByValue(t: Readonly<Type | null>): boolean {
 	if (t == null) return false;
 	if (t.kind == TypeKind.Alias || t.kind == TypeKind.Distinct) return passedByValue(t.typeReturn);
 	if (isPrimitiveKind(t.kind) || isStructType(t)) return true;

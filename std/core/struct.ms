@@ -97,7 +97,7 @@ export function hashWangYi1(x: uint64): int64 {
 }
 
 @builtin("PtrBits")
-extern function msPtrBits(p: Ptr<void>): uint64;
+extern function msPtrBits(p: Readonly<Ptr<void>>): uint64;
 @builtin("Float64Bits")
 extern function msFloat64Bits(d: number): uint64;
 
@@ -106,7 +106,7 @@ export function hashNumber(n: number): int64 {
 	return hashWangYi1(msFloat64Bits(n + 0.0));
 }
 
-export function hashPointer(p: Ptr<void>): int64 {
+export function hashPointer(p: Readonly<Ptr<void>>): int64 {
 	return hashWangYi1(msPtrBits(p));
 }
 
@@ -172,16 +172,16 @@ export function hash(this i: uint8): int64 { return hashWangYi1(i as uint64); }
 export function hash(this i: uint16): int64 { return hashWangYi1(i as uint64); }
 export function hash(this i: uint32): int64 { return hashWangYi1(i as uint64); }
 export function hash(this u: uint64): int64 { return hashWangYi1(u); }
-export function hash(this u: unknown): int64 { return hashPointer(u as Ptr<void>); }
+export function hash(this u: Readonly<unknown>): int64 { return hashPointer(u as Readonly<Ptr<void>>); }
 
-function sameKey<T>(a: T, b: T): boolean { return a == b; }
+function sameKey<T>(a: Readonly<T>, b: Readonly<T>): boolean { return a == b; }
 function sameKey(a: number, b: number): boolean { return a == b || (a != a && b != b); }
 function sameKey(a: float64, b: float64): boolean { return a == b || (a != a && b != b); }
 function sameKey(a: float32, b: float32): boolean { return a == b || (a != a && b != b); }
 
-function keyHash<K>(key: K): int64 {
+function keyHash<K>(key: Readonly<K>): int64 {
 	when (isArray<K>() && !needsCopy<K>()) {
-		return hashPointer(key as Ptr<void>);
+		return hashPointer(key as Readonly<Ptr<void>>);
 	} else {
 		return key.hash();
 	}
@@ -248,7 +248,7 @@ export class HashMap<K, V> {
 	writing: boolean;
 }
 
-function hashMapRawGet<K, V>(m: Readonly<HashMap<K, V>>, key: K): int32 {
+function hashMapRawGet<K, V>(m: Readonly<HashMap<K, V>>, key: Readonly<K>): int32 {
 	if (m.data.length == 0) return -1;
 	const hc = keyHash(key);
 	const mask: int32 = m.data.length - 1;
@@ -307,26 +307,26 @@ export function set<K, V>(this m: HashMap<K, V>, key: K, value: V): void {
 	}
 }
 
-export function get<K, V>(this m: HashMap<K, V>, key: K): V | null {
+export function get<K, V>(this m: HashMap<K, V>, key: Readonly<K>): V | null {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	const idx = hashMapRawGet(m, key);
 	if (idx >= 0) return m.data[idx].value;
 	return null;
 }
 
-export function readonlyGet<K, V>(this m: Readonly<HashMap<K, V>>, key: K): Readonly<V> | null {
+export function readonlyGet<K, V>(this m: Readonly<HashMap<K, V>>, key: Readonly<K>): Readonly<V> | null {
 	if (m.writing) { msMapFatal("map read during write"); }
 	const idx = hashMapRawGet(m, key);
 	if (idx < 0) return null;
 	return m.data[idx].value;
 }
 
-export function has<K, V>(this m: Readonly<HashMap<K, V>>, key: K): boolean {
+export function has<K, V>(this m: Readonly<HashMap<K, V>>, key: Readonly<K>): boolean {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	return hashMapRawGet(m, key) >= 0;
 }
 
-export function delete<K, V>(this m: HashMap<K, V>, key: K): boolean {
+export function delete<K, V>(this m: HashMap<K, V>, key: Readonly<K>): boolean {
 	if (m.writing) { msMapFatal("concurrent map writes"); }
 	m.writing = true;
 	defer hashMapEndWrite(m);
@@ -450,7 +450,7 @@ export class HashSet<T> {
 	}
 }
 
-function hashSetRawGet<T>(s: Readonly<HashSet<T>>, key: T): int32 {
+function hashSetRawGet<T>(s: Readonly<HashSet<T>>, key: Readonly<T>): int32 {
 	if (s.data.length == 0) return -1;
 	const hc = keyHash(key);
 	const mask: int32 = s.data.length - 1;
@@ -501,12 +501,12 @@ export function add<T>(this s: HashSet<T>, value: T): void {
 	s.size = s.size + 1;
 }
 
-export function has<T>(this s: Readonly<HashSet<T>>, value: T): boolean {
+export function has<T>(this s: Readonly<HashSet<T>>, value: Readonly<T>): boolean {
 	if (s.writing) { msMapFatal("concurrent map read and map write"); }
 	return hashSetRawGet(s, value) >= 0;
 }
 
-export function delete<T>(this s: HashSet<T>, value: T): boolean {
+export function delete<T>(this s: HashSet<T>, value: Readonly<T>): boolean {
 	if (s.writing) { msMapFatal("concurrent map writes"); }
 	s.writing = true;
 	defer hashSetEndWrite(s);
@@ -592,7 +592,7 @@ function orderedMapInitIndices<K, V>(m: Map<K, V>, cap: int32): void {
 	while (k < cap) { m.indices[k] = -1; k = k + 1; }
 }
 
-function orderedMapRawGet<K, V>(m: Map<K, V>, key: K, hc: int64): int32 {
+function orderedMapRawGet<K, V>(m: Map<K, V>, key: Readonly<K>, hc: int64): int32 {
 	if (m.indices.length == 0) return -1;
 	const mask: int32 = m.indices.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
@@ -689,7 +689,7 @@ export function set<K, V>(this m: Map<K, V>, key: K, value: V): void {
 	m.size = m.size + 1;
 }
 
-export function get<K, V>(this m: Map<K, V>, key: K): V | null {
+export function get<K, V>(this m: Map<K, V>, key: Readonly<K>): V | null {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	if (m.indices.length == 0) return null;
 	const hc = keyHash(key);
@@ -698,14 +698,14 @@ export function get<K, V>(this m: Map<K, V>, key: K): V | null {
 	return null;
 }
 
-export function has<K, V>(this m: Map<K, V>, key: K): boolean {
+export function has<K, V>(this m: Map<K, V>, key: Readonly<K>): boolean {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	if (m.indices.length == 0) return false;
 	const hc = keyHash(key);
 	return orderedMapRawGet(m, key, hc) >= 0;
 }
 
-export function delete<K, V>(this m: Map<K, V>, key: K): boolean {
+export function delete<K, V>(this m: Map<K, V>, key: Readonly<K>): boolean {
 	if (m.writing) { msMapFatal("concurrent map writes"); }
 	m.writing = true;
 	defer mapEndWrite(m);
@@ -837,7 +837,7 @@ function orderedSetInitIndices<T>(s: Set<T>, cap: int32): void {
 	while (k < cap) { s.indices[k] = -1; k = k + 1; }
 }
 
-function orderedSetRawGet<T>(s: Set<T>, key: T, hc: int64): int32 {
+function orderedSetRawGet<T>(s: Set<T>, key: Readonly<T>, hc: int64): int32 {
 	if (s.indices.length == 0) return -1;
 	const mask: int32 = s.indices.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
@@ -935,14 +935,14 @@ export function add<T>(this s: Set<T>, value: T): void {
 	s.size = s.size + 1;
 }
 
-export function has<T>(this s: Set<T>, value: T): boolean {
+export function has<T>(this s: Set<T>, value: Readonly<T>): boolean {
 	if (s.writing) { msMapFatal("concurrent map read and map write"); }
 	if (s.indices.length == 0) return false;
 	const hc = keyHash(value);
 	return orderedSetRawGet(s, value, hc) >= 0;
 }
 
-export function delete<T>(this s: Set<T>, value: T): boolean {
+export function delete<T>(this s: Set<T>, value: Readonly<T>): boolean {
 	if (s.writing) { msMapFatal("concurrent map writes"); }
 	s.writing = true;
 	defer setEndWrite(s);

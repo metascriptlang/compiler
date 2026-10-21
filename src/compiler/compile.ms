@@ -3064,7 +3064,7 @@ resetLiftedOps();
 		}
 		if (opts.isHcr && !hcrModulePaths.includes(p.modPath)) factCoreUnit(emissionFacts, p.modPath);
 	}
-	if (opts.isHcr) bindHcrUnits(hcrModules, processed, aliveSet, emissionFacts, gcModeOf(opts.gcMode) == GcMode.Drc || gcModeOf(opts.gcMode) == GcMode.Orc);
+	if (opts.isHcr) bindHcrUnits(hcrModules, processed, aliveSet, emissionFacts, gcModeOf(opts.gcMode) == GcMode.Drc);
 	const emissionJobs: ModuleEmissionJob[] = [];
 	for (const p of processed) {
 		if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
@@ -3089,6 +3089,7 @@ resetLiftedOps();
 		freshJobs.push({ slot: freshJobs.length as int32, program: job.program, ctx: job.ctx, modPath: job.modPath, weight: job.weight });
 	}
 	const freshResults = emitModulesBounded(freshJobs, aliveSet, emissionFacts, emitWidth, false, opts.isHcr ? entryPath : "");
+	setConcurrentTypeQueries(false);
 	const emissionResults: ModuleEmissionResult[] = [];
 	for (let ei = 0; ei < emissionJobs.length; ei += 1) {
 		const job = emissionJobs[ei];
@@ -3620,6 +3621,7 @@ resetLiftedOps();
 	for (const p of processed) emissionJobs.push({ slot: emissionJobs.length, program: p.program, ctx: p.ctx, modPath: p.modPath, weight: p.program.location.endLine });
 	const emitWidth: int32 = opts.emitJobs < 1 ? emissionJobs.length : opts.emitJobs;
 	const emissionResults = emitModulesBounded(emissionJobs, aliveSet, emissionFacts, emitWidth, true, opts.isHcr ? filePath : "");
+	setConcurrentTypeQueries(false);
 	if (opts.showTime) console.log(`    emit workers=${emitWidth} overlap=${emissionOverlapped(emissionResults)}`);
 	let emissionFailed = false;
 	for (let eri = 0; eri < emissionResults.length; eri += 1) {

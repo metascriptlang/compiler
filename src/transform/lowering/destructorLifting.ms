@@ -23,7 +23,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
-import { int32Type, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
+import { int32Type, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook } from "../../checker/instantiate";
@@ -493,7 +493,7 @@ function genShrinkLoop(elemType: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: N
 }
 
 function runtimeCellDestroy(elem: Type | null, canon: Type, lctx: LiftCtx): string {
-	if (elem == null || isUncountedPtrElement(elem)) return "msNumberArrayDestroy";
+	if (elem == null || isUncountedElement(elem)) return "msNumberArrayDestroy";
 	if (elem.kind == TypeKind.String) return "msStringArrayDestroy";
 	if (elem.kind == TypeKind.Function) return "msClosureArrayDestroy";
 	if (isAcyclicRefElement(elem, lctx.cyclicCache, lctx.nonCyclicCache)) return "msAcyclicRefArrayDestroy";
@@ -815,7 +815,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		TypeKind.Union => {
 			const refInner = unwrapRefNullUnion(fieldType);
 			if (refInner != null) {
-				if (refInner.kind == TypeKind.Ptr
+				if (refInner.kind == TypeKind.Ptr || refInner.kind == TypeKind.Cursor
 					|| (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor)) {
 					defaultOp(hook, xf, yf, buf, loc);
 				} else {
@@ -1962,7 +1962,7 @@ function generateArrayHooks(lctx: LiftCtx, loc: SourceLocation): void {
 
 function registerRefCellTrace(arrT: Type, lctx: LiftCtx): void {
 	const elem = arrayOpElement(arrT.typeReturn);
-	if (elem == null || hasGenericParams(arrT) || !elemNeedsLoop(elem) || !isCyclicType(elem, lctx, createNameSet())) return;
+	if (elem == null || isUncountedElement(elem) || hasGenericParams(arrT) || !elemNeedsLoop(elem) || !isCyclicType(elem, lctx, createNameSet())) return;
 	const canon = elem == arrT.typeReturn ? arrT : createArray(elem);
 	const cell = createRef(canon);
 	if (getOpByKey(cell, AttachedOp.AttachedTrace) != null) return;
