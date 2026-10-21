@@ -54,6 +54,9 @@ let hookless = new HashSet<Type>();
 let ownerHookCache = new HashMap<Symbol, Symbol[]>();
 let routineDecls = new HashMap<Symbol, Node>();
 let unitRoutines = new HashMap<string, Symbol[]>();
+let routineUnits = new HashMap<Symbol, string>();
+let reloadableUnits: string[] = [];
+let currentUnit = "";
 let stack: WriteSummary[] = [];
 let nextIndex: int32 = 0;
 let checker: CheckerContext | null = null;
@@ -70,9 +73,13 @@ export function resetWriteEffects(ctx: CheckerContext | null, classify: (t: Type
 }
 
 export function noteRoutineDecls(unit: string, program: Node): void {
+	currentUnit = unit;
 	const previous = unitRoutines.get(unit);
 	if (previous != null) {
-		for (const sym of previous) routineDecls.delete(sym);
+		for (const sym of previous) {
+			routineDecls.delete(sym);
+			routineUnits.delete(sym);
+		}
 	}
 	const syms: Symbol[] = [];
 	for (const stmt of (program.data as ProgramData).programStmts) {
@@ -80,6 +87,7 @@ export function noteRoutineDecls(unit: string, program: Node): void {
 		if (decl != null && decl.kind == NodeKind.ExportDecl) decl = unpackDecl((decl.data as ExportDeclData).exportedDecl);
 		if (decl == null || decl.resolvedSym == null || (decl.kind != NodeKind.FunctionDecl && decl.kind != NodeKind.ClassDecl)) continue;
 		routineDecls.set(decl.resolvedSym!, decl);
+		routineUnits.set(decl.resolvedSym!, unit);
 		syms.push(decl.resolvedSym!);
 	}
 	unitRoutines.set(unit, syms);
@@ -88,6 +96,24 @@ export function noteRoutineDecls(unit: string, program: Node): void {
 export function resetRoutineDecls(): void {
 	routineDecls = new HashMap<Symbol, Node>();
 	unitRoutines = new HashMap<string, Symbol[]>();
+	routineUnits = new HashMap<Symbol, string>();
+	reloadableUnits = [];
+	currentUnit = "";
+}
+
+export function noteReloadableUnits(units: string[]): void {
+	reloadableUnits = units;
+}
+
+function unitOf(s: WriteSummary): string {
+	if (s.kind == SummaryKind.Hooks) return "";
+	return s.sym != null ? (routineUnits.get(s.sym!) ?? currentUnit) : currentUnit;
+}
+
+function reloadsApart(caller: WriteSummary, callee: WriteSummary): boolean {
+	if (reloadableUnits.length == 0 || callee.sym == null) return false;
+	const unit = routineUnits.get(callee.sym!);
+	return unit != null && reloadableUnits.includes(unit) && unit != unitOf(caller);
 }
 
 export function clearWriteSummaries(): void {
@@ -405,6 +431,10 @@ function isAssign(op: string): boolean {
 }
 
 function link(s: WriteSummary, call: Node | null, callee: WriteSummary): void {
+	if (reloadsApart(s, callee)) {
+		markUnknown(s);
+		return;
+	}
 	s.edges.push({ call, callee });
 	if (callee.index < 0) {
 		visit(callee);
@@ -516,7 +546,8 @@ function callWrites(call: Node): WriteSummary {
 	if (call.kind == NodeKind.CallExpr && isLifecycleOp(call)) return s;
 	if (call.kind == NodeKind.CallExpr) addressWrites(s, (call.data as CallExprData).arguments, null, false);
 	for (const c of call.kind == NodeKind.NewExpr ? constructionsOf(call) : calleesOf(call, s)) {
-		absorb(s, { call: null, callee: settled(c) });
+		if (reloadsApart(s, c)) markUnknown(s);
+		else absorb(s, { call: null, callee: settled(c) });
 	}
 	return s;
 }

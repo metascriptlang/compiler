@@ -15,6 +15,7 @@ import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobal
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
+import { noteReloadableUnits } from "../analyzer/writeEffects";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait, bundleModuleEvaluator, JsModuleResult } from "../codegen/js/jsgen";
 import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
@@ -2748,6 +2749,7 @@ resetLiftedOps();
 		hcrModules = indirect.value;
 		for (const path of abi.value.modulePaths) hcrModulePaths.push(path);
 	}
+	noteReloadableUnits(hcrModulePaths);
 	const projectChanged = session.keep || projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 	const hcrBundleCurrent = hcrBuildAbi == null
 		|| (hcrBuildAbi.hadCurrent && hcrBundlesMatch(hcrBuildAbi.current, hcrBuildAbi.candidate));
@@ -3547,6 +3549,7 @@ resetLiftedOps();
 	placePendingInstances((path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, checkedModCtxs(checkedMods));
 
 	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
+	noteReloadableUnits(opts.isHcr ? [filePath] : []);
 	for (const cm of checkedMods) {
 		const program = cm.program;
 		const ctx = cm.ctx;
