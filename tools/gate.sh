@@ -20,7 +20,7 @@ RULES=(
   'corpus,san|^src/test/corpus/'
   'san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h|promise/|actor/)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
   'fmt|^src/(compiler/fmt|parser|lexer)/|^src/test/fmt/|^std/meta/'
-  'boundary|^src/compiler/(buildConfig|cache|cc|commands|compile|defines|options|toolchain)\.ms$|^src/compiler/(meta/hostTable\.ms$|package/)|^src/index\.ms$|^src/test/nativeBuildBoundary\.ms$|^(runtime|vendor)/|^std/(fs|process)/'
+  'boundary|^src/compiler/(buildConfig|cache|cc|commands|compile|defines|options|toolchain)\.ms$|^src/compiler/(meta/(hostTable|typeQuery)\.ms$|package/)|^src/index\.ms$|^src/test/nativeBuildBoundary\.ms$|^(runtime|vendor)/|^std/(fs|process)/'
 )
 DEFAULT_LANES="build suite"
 ORDER="tools build boundary suite lsp hcr tests fmt corpus san guard solana"
