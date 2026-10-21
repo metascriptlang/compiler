@@ -1059,6 +1059,11 @@ function buildWorker(jobs: Readonly<BuildJob[]>, first: int32, stride: int32): n
 	return built;
 }
 
+function workerCopy(j: Readonly<BuildJob>): BuildJob {
+	const spec: Spec = { ...j.spec, stdoutSubs: [...j.spec.stdoutSubs], xfailLanes: [...j.spec.xfailLanes], slackTypes: [...j.spec.slackTypes], slackNs: [...j.spec.slackNs] };
+	return { spec, lane: j.lane, cmd: j.cmd, cell: { ...j.cell, spec } };
+}
+
 function builtText(job: BuildJob): string {
 	if (!exists(builtMarker(job))) { return ""; }
 	const text = readFileOr(builtMarker(job), "");
@@ -1270,10 +1275,12 @@ function main(): void {
 	// a success, not a failure (unchanged reruns hit it on every native cell)
 	clearBuiltMarkers(jobs);
 	const slots: int32 = BUILD_SLOTS < jobs.length ? BUILD_SLOTS : jobs.length as int32;
+	const workerJobs: BuildJob[] = [];
+	for (const j of jobs) { workerJobs.push(workerCopy(j)); }
 	const workers: Promise<number>[] = [];
 	for (let w: int32 = 0; w < slots; w += 1) {
 		const first = w;
-		workers.push(spawn(() => buildWorker(jobs, first, slots)));
+		workers.push(spawn(() => buildWorker(workerJobs, first, slots)));
 	}
 	let ci = 0;
 	while (ci < jobs.length) {
