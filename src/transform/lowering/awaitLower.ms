@@ -194,15 +194,38 @@ export function getSpawnInfo(node: Node): { closure: Node | null, timeout: Node 
 
 // ===== Timeout Helper =====
 
-// Emits timeout handling stmts for AwaitGroup: compute deadline, timed wait,
-// check timedOut → free + throw. Returns the blocking call stmts (replaces
-// the single msAwaitGroupBlocking call). If no timeout, returns single blocking call.
-export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc: SourceLocation, ctx: TransformContext): Node[] {
+// A joined slot's result, read into an owned local of its type before the group can
+// raise, so a sibling's failure or a timeout destroys it with the scope. A failed or
+// skipped slot holds null, which reads as the type's default.
+export function readGroupSlot(ctx: TransformContext, agIdent: Node, slot: int32, innerType: Type | null, loc: SourceLocation): { stmts: Node[], value: Node } {
+	const raw = (): Node => {
+		const c = makeCall(runtimeRef("msAwaitGroupResult", loc), [agIdent, makeNumber(slot, loc)], loc);
+		c.nodeType = VOID_PTR_TYPE;
+		return c;
+	};
+	if (innerType == null || innerType.kind == TypeKind.Void) {
+		const t = makeTempDecl(ctx, "agr", raw(), VOID_PTR_TYPE, loc);
+		return { stmts: [t.decl], value: t.ident };
+	}
+	const sym = freshOwnedSym(ctx, "agr", innerType);
+	const decl = makeVarDecl(sym.name, makeDefaultValue(innerType, loc), DeclKind.Let, loc);
+	decl.nodeType = innerType;
+	decl.resolvedSym = sym;
+	const value = makeUnboxCall(raw(), innerType, loc);
+	value.nodeType = innerType;
+	const take = makeExprStmt(makeAssign(makeIdentResolved(sym, loc), value, loc), loc);
+	const present = makeBinary(raw(), "!=", makeDefaultValue(VOID_PTR_TYPE, loc), loc);
+	return { stmts: [decl, makeIf(present, makeBlock([take], loc), null, loc)], value: makeIdentResolved(sym, loc) };
+}
+
+// Waits for the group, then runs `reads` while every slot is still held: a timed
+// wait that expires joins the children first and throws only after the reads.
+export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc: SourceLocation, ctx: TransformContext, reads: Node[]): Node[] {
 	const stmts: Node[] = [];
 	if (timeoutExpr == null) {
-		// No timeout — simple blocking wait
 		stmts.push(makeExprStmt(
 			makeCall(runtimeRef("msAwaitGroupBlocking", loc), [agIdent], loc), loc));
+		for (const r of reads) stmts.push(r);
 		return stmts;
 	}
 	// Phase 3: timed wait — const $deadline = msMonoTimeMs() + timeoutExpr;
@@ -218,8 +241,8 @@ export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc:
 			agIdent, dl.ident,
 		], loc), loc));
 
-	// if (msAwaitGroupTimedOut($ag)) {
-	//   msAwaitGroupBlocking($ag); msAwaitGroupFree($ag); throw "await timeout"; }
+	// if (msAwaitGroupTimedOut($ag)) msAwaitGroupBlocking($ag);  reads;
+	// if (msAwaitGroupTimedOut($ag)) { msAwaitGroupFree($ag); throw "await timeout"; }
 	// The timed wait has already set the cancel flag (safe-points injected into
 	// the children see it and unwind); JOIN the children before freeing: msAwaitGroupFree's
 	// contract (awaitGroup.h) forbids freeing during an outstanding submission
@@ -227,17 +250,21 @@ export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc:
 	// free-while-in-flight hangs forever when a child is still blocked. The
 	// join is safe on the loop thread: the blocking wait pumps the event loop
 	// while waiting, which is exactly what unblocks a timer-parked child.
-	const timedOutCall = makeCall(runtimeRef("msAwaitGroupTimedOut", loc), [agIdent], loc);
-	timedOutCall.nodeType = booleanType();
+	// msAwaitGroupFree reports a child failure only that join observed.
+	const timedOut = (): Node => {
+		const c = makeCall(runtimeRef("msAwaitGroupTimedOut", loc), [agIdent], loc);
+		c.nodeType = booleanType();
+		return c;
+	};
 	const joinCall = makeExprStmt(
 		makeCall(runtimeRef("msAwaitGroupBlocking", loc), [agIdent], loc), loc);
+	stmts.push(makeIf(timedOut(), makeBlock([joinCall], loc), null, loc));
+	for (const r of reads) stmts.push(r);
 	const freeCall = makeExprStmt(
 		makeCall(runtimeRef("msAwaitGroupFree", loc), [agIdent], loc), loc);
 	const throwData: NodeData = { throwArg: makeString("await timeout", loc) };
 	const throwNode = createNodeAt(NodeKind.ThrowStmt, throwData, loc);
-	const ifBody = makeBlock([joinCall, freeCall, throwNode], loc);
-	const ifNode = makeIf(timedOutCall, ifBody, null, loc);
-	stmts.push(ifNode);
+	stmts.push(makeIf(timedOut(), makeBlock([freeCall, throwNode], loc), null, loc));
 
 	return stmts;
 }
@@ -248,12 +275,7 @@ export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc:
 // Emits: $as = msAwaitSlotCreate(1); msSpawnSlotSubmit($as, 0, closure);
 //        msAwaitSlotWait($as); result = msAwaitSlotResult($as); msAwaitSlotRelease();
 // Slow path (timeout): heap-allocated msAwaitGroup with mutex/condvar for timed wait.
-function expandFusedAwait(closureArg: Node, loc: SourceLocation, ctx: TransformContext, timeoutExpr: Node | null): { stmts: Node[], resultIdent: Node } {
-	// Timeout requires mutex+condvar → fall back to heap AwaitGroup
-	if (timeoutExpr != null) {
-		return expandFusedAwaitHeap(closureArg, loc, ctx, timeoutExpr);
-	}
-
+function expandFusedAwait(closureArg: Node, loc: SourceLocation, ctx: TransformContext): { stmts: Node[], resultIdent: Node } {
 	// Fast path: stack-allocated msAwaitSlot (Malebolgia parity)
 	const stmts: Node[] = [];
 
@@ -284,7 +306,8 @@ function expandFusedAwait(closureArg: Node, loc: SourceLocation, ctx: TransformC
 }
 
 // Heap-allocated AwaitGroup path — used when timeout is needed (mutex+condvar for timed wait).
-function expandFusedAwaitHeap(closureArg: Node, loc: SourceLocation, ctx: TransformContext, timeoutExpr: Node | null): { stmts: Node[], resultIdent: Node } {
+// The result comes back typed.
+function expandFusedAwaitHeap(closureArg: Node, loc: SourceLocation, ctx: TransformContext, timeoutExpr: Node, innerType: Type | null): { stmts: Node[], resultIdent: Node } {
 	const stmts: Node[] = [];
 
 	// 1. const $ag = msAwaitGroupInit(1);
@@ -306,21 +329,18 @@ function expandFusedAwaitHeap(closureArg: Node, loc: SourceLocation, ctx: Transf
 	stmts.push(makeExprStmt(
 		makeCall(runtimeRef("msSpawnTaskSubmit", loc), [ag.ident, makeNumber(0, loc), closureArg], loc), loc));
 
-	// 4. Blocking wait with deadline
-	const waitStmts = emitAwaitGroupWait(ag.ident, timeoutExpr, loc, ctx);
+	// 4. Blocking wait with deadline, the result read before any raise
+	const read = readGroupSlot(ctx, ag.ident, 0, innerType, loc);
+	const waitStmts = emitAwaitGroupWait(ag.ident, timeoutExpr, loc, ctx, read.stmts);
 	for (const ws of waitStmts) stmts.push(ws);
 	stmts.push(makeExprStmt(
 		makeCall(runtimeRef("msAwaitGroupCheckFailed", loc), [ag.ident], loc), loc));
 
-	// 5. const $agr = msAwaitGroupResult($ag, 0);
-	const agr = makeTempDecl(ctx, "agr", makeCall(runtimeRef("msAwaitGroupResult", loc), [ag.ident, makeNumber(0, loc)], loc), VOID_PTR_TYPE, loc);
-	stmts.push(agr.decl);
-
-	// 6. msAwaitGroupFree($ag);
+	// 5. msAwaitGroupFree($ag);
 	stmts.push(makeExprStmt(
 		makeCall(runtimeRef("msAwaitGroupFree", loc), [ag.ident], loc), loc));
 
-	return { stmts, resultIdent: agr.ident };
+	return { stmts, resultIdent: read.value };
 }
 
 // ===== Deferred Path: await handle → msFutureReadT(handle) or msWaitFor(handle) =====
@@ -410,8 +430,9 @@ function expandSingleAwait(awaitArg: Node, loc: SourceLocation, ctx: TransformCo
 	const spawnInfo = getSpawnInfo(awaitArg);
 	const innerType = getAwaitInnerType(awaitArg);
 	if (spawnInfo.closure != null) {
+		if (spawnInfo.timeout != null) return expandFusedAwaitHeap(spawnInfo.closure, loc, ctx, spawnInfo.timeout!, innerType);
 		// Fused path: AwaitGroup → void* results, needs unboxing
-		let expansion = expandFusedAwait(spawnInfo.closure, loc, ctx, spawnInfo.timeout);
+		let expansion = expandFusedAwait(spawnInfo.closure, loc, ctx);
 		if (innerType != null) {
 			expansion.resultIdent = makeUnboxCall(expansion.resultIdent, innerType, loc);
 		}

@@ -17,6 +17,7 @@
  * which satisfies the contract that msAwaitGroupBlocking's caller may
  * safely read results[] after the wait returns.
  */
+#include "runtime/core/system.h"  /* msDecref for a losing slot's error */
 #include "awaitGroup.h"
 #include "pool.h"    /* Phase 8: msPoolHelpOne for help-first scheduling */
 #include <stdlib.h>
@@ -83,6 +84,9 @@ void msAwaitGroupFree(msAwaitGroup* g) {
 	while (!atomic_load_explicit(&g->finishDone, memory_order_acquire)) {
 		/* yield to avoid burning CPU — sched_yield or just spin */
 	}
+	/* A failure no await consumed (a timed-out group's late child) is the exit
+	 * join's to report: an unhandled rejection at program end. */
+	if (g->error != NULL) msNoteOrphanError(g->error);
 
 #ifdef _WIN32
 	DeleteCriticalSection(&g->cs);
@@ -143,6 +147,7 @@ void msAwaitGroupCompleteSlot(msAwaitGroup* g, int32_t slot, void* value) {
 void msAwaitGroupCheckFailed(msAwaitGroup* g) {
 	if (g == NULL || !atomic_load_explicit(&g->failed, memory_order_acquire)) return;
 	void* err = g->error;
+	g->error = NULL;
 	msAwaitGroupFree(g);
 	msRaiseAwaitedError(err);
 }
@@ -152,7 +157,8 @@ void msAwaitGroupFailSlot(msAwaitGroup* g, int32_t slot, void* error) {
 	if (slot < 0 || slot >= g->size) return;
 
 	/* First failure wins. Use compare_exchange to atomically claim the
-	 * "failed" state; the loser drops its error payload silently. */
+	 * "failed" state; the loser's error is handled by the group, as a
+	 * second rejection is by Promise.all, so this task destroys it. */
 	bool expected = false;
 	if (atomic_compare_exchange_strong_explicit(
 			&g->failed, &expected, true,
@@ -166,6 +172,8 @@ void msAwaitGroupFailSlot(msAwaitGroup* g, int32_t slot, void* error) {
 		g->error = error;
 		pthread_mutex_unlock(&g->mutex);
 #endif
+	} else {
+		msDecref(error);
 	}
 
 	/* Still decrement pending so waiters unblock even on failure. */
