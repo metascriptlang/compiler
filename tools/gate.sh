@@ -16,7 +16,7 @@ RULES=(
   "solana|$SOLANA_SDK|$SOLANA_COMPILER"
   'guard|^(std|runtime)/solana/'
   'guard|^src/test/guard/'
-  'corpus|^src/test/corpus/'
+  'corpus,san|^src/test/corpus/'
   'san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h|promise/|actor/)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
   'fmt|^src/(compiler/fmt|parser|lexer)/|^src/test/fmt/|^std/meta/'
   'boundary|^src/compiler/(buildConfig|cache|cc|commands|compile|defines|options|toolchain)\.ms$|^src/compiler/(meta/hostTable\.ms$|package/)|^src/index\.ms$|^src/test/nativeBuildBoundary\.ms$|^(runtime|vendor)/|^std/(fs|process)/'
@@ -1608,7 +1608,9 @@ src/compiler/fmt/printer.ms|build fmt suite
 src/test/c/json.ms|build suite tests
 src/test/helpers.ms|build suite tests
 src/test/fmt/run.ms|build fmt suite tests
-src/test/corpus/programs/804-enumNegativeValue.ms|build corpus suite
+src/test/corpus/programs/804-enumNegativeValue.ms|build corpus san suite
+src/test/corpus/run.ms|build corpus san suite
+src/test/corpus/hammerAsan.sh|build corpus san suite
 src/test/guard/run.ms|build guard suite
 src/test/hcr/run.ms|build hcr suite
 src/test/native/programs/x.ms|build suite
