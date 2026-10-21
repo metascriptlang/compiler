@@ -31,7 +31,7 @@ import {
 	isLocalString,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
-	callRaiserStmtCompiler, emitTrapNil, layoutOperand, slotInst, resolveGlobal, raiserClassKey, classSymOfType, landResult, declaredSymbol,
+	callRaiserStmtCompiler, emitTrapNil, layoutOperand, CLOSURE_PAIR, slotInst, resolveGlobal, raiserClassKey, classSymOfType, landResult, declaredSymbol,
 } from "./context";
 import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros } from "./valueCopy";
 
@@ -1820,11 +1820,11 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	// Extract fn field (integer = function index) and env field
 	const fnIdxReg = allocWord(s);
 	const fnConstIdx = addConst(s, raiserConstString("fn"));
-	emitInst(s, raiserABC(RaiserOpcode.LoadField, fnIdxReg, closureReg, fnConstIdx));
+	emitInst(s, slotInst(RaiserOpcode.LoadSlot, fnIdxReg, closureReg, fnConstIdx, 0));
 
 	const envReg = allocRef(s);
 	const envConstIdx = addConst(s, raiserConstString("env"));
-	emitInst(s, raiserABC(RaiserOpcode.LoadField, envReg, closureReg, envConstIdx));
+	emitInst(s, slotInst(RaiserOpcode.LoadSlot, envReg, closureReg, envConstIdx, 1));
 
 	// Allocate dest + (argCount+1) slots (worst case: env + args) and compute each argument into its slot
 	let argCount = 0;
@@ -2255,8 +2255,11 @@ function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 
 // Every object of a struct, interface or class type holds its fields in the order
 // of `typeNames`, which puts a parent's fields first; a structural match is a prefix
-// of it. NewObject lays that order out, so the type fixes each field's slot.
+// of it. A function value is a closure pair. NewObject lays that order out, so the
+// type fixes each field's slot.
 export function layoutOf(t: Type | null): string[] {
+	const bare = skipModifier(t);
+	if (bare != null && bare.kind == TypeKind.Function) return CLOSURE_PAIR;
 	const shape = peelToStructOrUnion(t);
 	return shape != null && shape.kind == TypeKind.Struct && !isMaybeType(shape) ? shape.typeNames : [];
 }

@@ -540,6 +540,8 @@ export function layoutOperand(s: RaiserCompState, fields: string[]): int32 {
 	return s.classTypes.length;
 }
 
+export const CLOSURE_PAIR: string[] = ["fn", "env"];
+
 export function slotInst(op: RaiserOpcode, a: number, b: number, c: number, slot: number): RaiserInstruction {
 	const inst = raiserABC(op, a, b, c);
 	inst.slot = slot;
@@ -551,19 +553,19 @@ export function slotInst(op: RaiserOpcode, a: number, b: number, c: number, slot
 
 export function emitClosurePair(s: RaiserCompState, funcIdx: int32, envReg: int32): int32 {
 	const pairReg = allocRef(s);
-	emitInst(s, raiserABC(RaiserOpcode.NewObject, pairReg, 0, 0));
+	emitInst(s, raiserABC(RaiserOpcode.NewObject, pairReg, layoutOperand(s, CLOSURE_PAIR), 0));
 	const fnReg = allocWord(s);
 	emitLoadConst(s, fnReg, raiserInt(funcIdx));
 	const fnConst = addConst(s, raiserConstString("fn"));
-	emitInst(s, raiserABC(RaiserOpcode.StoreField, pairReg, fnConst, fnReg));
+	emitInst(s, slotInst(RaiserOpcode.StoreSlot, pairReg, fnConst, fnReg, 0));
 	const envConst = addConst(s, raiserConstString("env"));
 	if (envReg < 0) {
 		const nilReg = allocRef(s);
 		emitLoadConst(s, nilReg, raiserNil());
-		emitInst(s, raiserABC(RaiserOpcode.StoreField, pairReg, envConst, nilReg));
+		emitInst(s, slotInst(RaiserOpcode.StoreSlot, pairReg, envConst, nilReg, 1));
 	} else {
 		// Capturing: store actual env register
-		emitInst(s, raiserABC(RaiserOpcode.StoreField, pairReg, envConst, envReg));
+		emitInst(s, slotInst(RaiserOpcode.StoreSlot, pairReg, envConst, envReg, 1));
 	}
 	return pairReg;
 }
