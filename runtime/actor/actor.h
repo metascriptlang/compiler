@@ -999,7 +999,7 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
      * cycle-detector-only, so neither releases state — teardown frees it (Pony parity). */
     if (a->state != NULL) {
         const msTypeInfo* __st = msHeader(a->state)->type;
-        if (__st != NULL && __st->destroyFn != NULL) __st->destroyFn(a->state);
+        MS_DESTROY_DISPATCH(__st, a->state);
         msDestroyAndDispose(a->state);
         a->state = NULL;
     }
