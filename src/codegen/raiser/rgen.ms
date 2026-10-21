@@ -1655,6 +1655,21 @@ test "trap: unresolved identifier errors at runtime" {
 	assert ctx.lastError.indexOf("cannot evaluate 'mysteryVar'") >= 0;
 }
 
+test "an extern let or const is refused by its name in a bitwise, arithmetic or comparison operand of any width" {
+	const uses = [
+		"extern const K: uint32; function f(m: uint32): boolean { return (m & K) == 0; } return f(5);",
+		"extern const K: int32; function f(m: int32): int32 { return m + K; } return f(5);",
+		"extern const K: float64; function f(m: float64): boolean { return m < K; } return f(5.0);",
+		"extern let K: int32; function f(): int32 { let e: int32 = 0; e = K != 0 ? K : 1; return e; } return f();",
+		"extern const K: uint32; function f(m: uint32): uint32 { return m + K; } return f(5);",
+		"extern const K: float64; function f(m: float64): float64 { return m * K; } return f(5.0);",
+	];
+	for (const use of uses) {
+		const ctx = evalLowered(use);
+		assert ctx.lastError.indexOf("cannot read extern 'K'") >= 0, `${use}: ${ctx.lastError}`;
+	}
+}
+
 test "trap: unsupported node kind errors at runtime" {
 	const ctx = evalRaiser("return match (1) { _ => 2 };");
 	assert ctx.lastError.indexOf("cannot compile node kind") >= 0;

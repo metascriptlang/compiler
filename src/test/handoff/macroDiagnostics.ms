@@ -99,6 +99,23 @@ test "macro unsupported evaluation: unbridged externs identify the unavailable h
 	}
 }
 
+test "macro unsupported evaluation: a helper that reads an extern let or const is refused by its name" {
+	const helpers = [
+		{ decl: "extern let errno: int32;", body: "let err: int32 = 0; err = errno != 0 ? errno : 1; return `${err}`;", name: "errno" },
+		{ decl: "extern const MASK: uint32;", body: "const m: uint32 = 5; return `${m & MASK}`;", name: "MASK" },
+		{ decl: "extern const BASE: int32;", body: "const b: int32 = BASE + 1; return `${b}`;", name: "BASE" },
+		{ decl: "extern const LIMIT: float64;", body: "return 2.5 < LIMIT ? \"lt\" : \"ge\";", name: "LIMIT" },
+	];
+	for (const h of helpers) {
+		const result = compileToCWithStd('import { Node, NodeKind } from "std/meta"; ' + h.decl
+			+ " function code(): string { " + h.body + " }"
+			+ " macro lib(n: Node): Node { return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: code() }; }"
+			+ ' console.log(lib("x"));');
+		assert !result.ok, h.decl;
+		assert result.error.contains(`cannot read extern '${h.name}'`), result.error;
+	}
+}
+
 const objectCallMacro = `
 import { Node, NodeKind } from "std/meta";
 

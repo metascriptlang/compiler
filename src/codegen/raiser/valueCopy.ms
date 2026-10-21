@@ -4,7 +4,7 @@ import { distinctBody, enumMemberValue, isMaybeType, isStructType, needsValueCop
 import { RaiserOpcode, RaiserRegClass, raiserABC, raiserAx } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil } from "../../raiser/value";
 import { peelToRepr, unwrapRef } from "../../checker/types";
-import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrapNil, layoutOperand } from "./context";
+import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, layoutOperand } from "./context";
 
 function copyPlan(s: RaiserCompState, valueType: Type | null): int32 {
 	const base = distinctBody(valueType);
@@ -211,6 +211,11 @@ function emitZeroElements(s: RaiserCompState, array: int32, count: int32, elemen
 
 export function emitZeroValue(s: RaiserCompState, valueType: Type | null): int32 {
 	return emitZeroOf(s, valueType, []);
+}
+
+export function emitTrapValue(s: RaiserCompState, message: string, valueType: Type | null): int32 {
+	emitTrap(s, message);
+	return emitZeroValue(s, valueType);
 }
 
 export function emitZeroFill(s: RaiserCompState, array: int32, count: int32, elementType: Type | null): void {

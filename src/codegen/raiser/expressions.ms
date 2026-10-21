@@ -33,7 +33,7 @@ import {
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
 	callRaiserStmtCompiler, emitTrapNil, layoutOperand, CLOSURE_PAIR, slotInst, resolveGlobal, raiserClassKey, classSymOfType, landResult, declaredSymbol,
 } from "./context";
-import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros } from "./valueCopy";
+import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros, emitTrapValue } from "./valueCopy";
 
 // A CallHost the registry cannot serve would only fail at macro RUN time
 // ("Unknown host function"). The host table is loaded before bytecodegen
@@ -548,6 +548,12 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 					return compileExpr(s, vd.initializer);
 				}
 			}
+			if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Variable
+				&& node.resolvedSym.symFlags.has(SymbolFlag.ImportC)) {
+				const externMsg = `cannot read extern '${d.name}' in the Raiser VM: an extern let or const has no host value`;
+				queueRaiserCompileError(externMsg, node.location.line, node.location.column);
+				return emitTrapValue(s, externMsg, node.nodeType);
+			}
 			// Nothing the bytecode compiler can execute bound this name (module-
 			// level vars and other non-routine symbols land here). Report it
 			// instead of silently splicing nil into the macro's output.
@@ -560,7 +566,7 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 			else if ((node.resolvedSym.declNode.data as VariableDeclData).initializer == null) why = "declaration has no initializer";
 			const msg = `cannot evaluate '${d.name}' at comptime: ${why}`;
 			queueRaiserCompileError(msg, node.location.line, node.location.column);
-			return emitTrapNil(s, msg);
+			return emitTrapValue(s, msg, node.nodeType);
 		},
 		NodeKind.BinaryExpr => { return compileBinaryExpr(s, node); },
 		NodeKind.UnaryExpr => { return compileUnaryExpr(s, node); },
