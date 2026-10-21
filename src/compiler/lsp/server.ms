@@ -10,39 +10,17 @@ import {
 	lspGetField, lspGetNumberField, lspGetObjectField, lspJsonNumber, lspJsonString,
 	lspErrorResponse
 } from "./protocol";
-import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath } from "../transam/index";
-import { readLockfile, entryName } from "../package/lockfile";
-import { registrySrcPath, gitSrcPath } from "../package/cache";
+import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath, dbSetResolverConfig } from "../transam/index";
 import { findProjectRoot } from "../../utils/path";
-import { exists } from "std/fs";
-import { join } from "std/fs/path";
+import { ensureDir, realpath, writeFile } from "std/fs";
+import { registrySrcPath } from "../package/cache";
+import { env } from "std/process";
+import { newCliOptions, applyProjectConfig } from "../options";
+import { buildResolverConfig } from "../compile";
+import { defaultResolveSection } from "../buildConfig";
 import { resetCancel } from "../transam/cancel";
 import { CompletionCache, createCompletionCache } from "./handlers/shared";
 import { buildTransitiveDiagnosticsWire } from "./handlers/diagnostics";
-
-// Set up package aliases on the db's resolverConfig from the project's lockfile.
-// Uses findProjectRoot (walks up from filePath looking for build.ms).
-function setupPackageAliases(db: TransAmDb, filePath: string): void {
-	if (db.resolverConfig.aliasKeys.length > 0) return;
-	const projectRoot = findProjectRoot(filePath);
-	const lockPath = join(projectRoot, "msc.lock");
-	if (!exists(lockPath)) return;
-	const lock = readLockfile(lockPath);
-	if (!lock.valid) return;
-	for (const entry of lock.entries) {
-		const name = entryName(entry.key);
-		let srcPath = "";
-		if (entry.source == "git" && entry.url != "" && entry.commit != "") {
-			srcPath = gitSrcPath(entry.url, entry.commit);
-		} else if (entry.version != "") {
-			srcPath = registrySrcPath(name, entry.version);
-		}
-		if (srcPath != "") {
-			db.resolverConfig.aliasKeys.push(name);
-			db.resolverConfig.aliasValues.push(srcPath);
-		}
-	}
-}
 
 import {
 	lspDispatch, publishPendingDiagnostics,
@@ -63,6 +41,8 @@ export class LspServerState {
 	shutdownRequested: boolean;
 	watchFilesThroughClient: boolean;
 	db: TransAmDb;
+	root: string;
+	dbs: Map<string, TransAmDb>;
 	completionCache: CompletionCache;
 }
 
@@ -72,8 +52,41 @@ export function createServerState(): LspServerState {
 		shutdownRequested: false,
 		watchFilesThroughClient: false,
 		db: createTransAmDb(512),
+		root: "",
+		dbs: new Map<string, TransAmDb>(),
 		completionCache: createCompletionCache(),
 	};
+}
+
+// Applies root's build.ms as batch checking does and makes its db current. Diagnostics
+// still pending for the previous db are published first, by that db.
+function selectProject(state: LspServerState, root: string): string {
+	if (root == state.root) return "";
+	const flushed = publishPendingDiagnostics(state.db);
+	const opts = newCliOptions();
+	opts.command = "lsp";
+	const applied = applyProjectConfig(opts, root);
+	if (!applied.ok) lspLog("build.ms: " + applied.error);
+	let db = state.dbs.get(root);
+	if (db == null) {
+		db = createTransAmDb(512);
+		const resolve = applied.ok ? applied.value.resolve : defaultResolveSection();
+		dbSetResolverConfig(db, buildResolverConfig(opts.target, resolve, opts.targetOs, root));
+		if (state.initialized) dbEnsurePrelude(db);
+		state.dbs.set(root, db);
+	}
+	state.db = db;
+	state.root = root;
+	return flushed;
+}
+
+function refreshEveryProject(state: LspServerState, params: string): string {
+	let flushed = "";
+	for (const root of state.dbs) {
+		flushed += selectProject(state, root);
+		lspDispatch("workspace/didChangeWatchedFiles", "", params, state.db, state.completionCache);
+	}
+	return flushed;
 }
 
 // ===== Logging =====
@@ -330,13 +343,8 @@ export function processMessage(msg: string, state: LspServerState): string {
 		state.completionCache.line = -1;
 	}
 
-	// Set up package aliases BEFORE dispatch (so imports resolve during parse/check)
-	if (method == "textDocument/didOpen") {
-		const textDoc = lspGetObjectField(params, "textDocument");
-		const openUri = lspGetField(textDoc, "uri");
-		const openPath = lspUriToPath(openUri);
-		setupPackageAliases(state.db, openPath);
-	}
+	const documentUri = extractFileUri(params);
+	let flushed = documentUri != "" ? selectProject(state, findProjectRoot(lspUriToPath(documentUri))) : "";
 
 	// Log all requests for debugging
 	if (method == "textDocument/completion") {
@@ -347,7 +355,8 @@ export function processMessage(msg: string, state: LspServerState): string {
 	let json = "";
 	const t0 = performance.now();
 	try {
-		json = lspDispatch(method, idStr, params, state.db, state.completionCache);
+		if (method == "workspace/didChangeWatchedFiles") flushed += refreshEveryProject(state, params);
+		else json = lspDispatch(method, idStr, params, state.db, state.completionCache);
 	} catch (e) {
 		const errMsg = e != null ? "" + e : "unknown error";
 		writeStderr("LSP handler crash: " + method + " — " + errMsg + "\n");
@@ -364,14 +373,14 @@ export function processMessage(msg: string, state: LspServerState): string {
 		if (notifMs > 50) {
 			writeStderr("[LSP] " + method + " (notif) " + notifMs + "ms\n");
 		}
-		return "";
+		return flushed;
 	}
 
 	if (_isCompletion) {
 		const elapsed = t1 - t0;
 		writeStderr("[LSP] <<< completion id=" + idStr + " " + elapsed + "ms len=" + json.length + "\n");
 	}
-	let result = lspFormatMessage(json);
+	let result = flushed + lspFormatMessage(json);
 
 	// Append transitive diagnostics on didOpen (didChange handled in post-drain).
 	if (method == "textDocument/didOpen") {
@@ -536,6 +545,23 @@ test "wire completion: the server survives a file with an absent child slot" {
 	assert second.indexOf("\"id\":3", 0) > 0;
 	const hover = processMessage("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"" + KW_WIRE_URI + "\"},\"position\":{\"line\":0,\"character\":1}}}", state);
 	assert hover.length > 0;
+}
+
+// ===== Project config per opened file =====
+
+test "an opened file's msc.lock packages reach that project's resolver" {
+	const tmp = env.get("TMPDIR") != "" ? env.get("TMPDIR") : "/tmp";
+	const dir = `${tmp}/msc-lsplock`;
+	ensureDir(dir);
+	const root = realpath(dir);
+	writeFile(`${root}/build.ms`, "const config = {};\nexport default config;\n");
+	writeFile(`${root}/msc.lock`, "{\"version\":1,\"packages\":{\"pkg@1.2.3\":{\"version\":\"1.2.3\"}}}");
+	const state = createServerState();
+	const uri = lspJsonString(`file://${root}/main.ms`);
+	processMessage(`{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":${uri},"languageId":"metascript","version":1,"text":"export const v: int32 = 1;"}}}`, state);
+	const at = state.db.resolverConfig.aliasKeys.indexOf("pkg");
+	assert at >= 0;
+	assert state.db.resolverConfig.aliasValues[at] == registrySrcPath("pkg", "1.2.3");
 }
 
 // ===== Framed replay through lspServe =====
