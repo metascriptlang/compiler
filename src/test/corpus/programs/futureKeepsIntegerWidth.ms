@@ -8,6 +8,8 @@
 // @stdout: int32 -2147483648 -2147483648 -2147483648 -2147483648 -2147483648 -2147483648 -2147483648
 // @stdout: uint32 4000000000 4000000000 4000000000 4000000000 4000000000 4000000000 4000000000
 // @stdout: top 3000000001 5000000003
+// @ledger-slack(Holder) 1
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: an integer crosses a future at its own width on C, through an async return,
 //   Promise.resolve, new Promise, Promise.all, spawn, an actor call and a .then callback
 //   (int8/int16 leave out .then: inbox 2026-10-17-a-then-callback-gets-a-narrow-int-unextended).

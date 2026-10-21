@@ -2,6 +2,8 @@
 // @maxrss: 40
 // @stdout: sends 100000 ints 100000 strs 100000 pts 100000
 // @serial
+// @ledger-slack(Sink) 1
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: the bound sits between a dispatch whose future the resume releases (22 MB, macOS)
 //   and one that never releases it (59 MB): 112 B per suspending SEND or CALL.
 struct Pt {

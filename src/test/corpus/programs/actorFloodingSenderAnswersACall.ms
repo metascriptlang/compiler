@@ -1,6 +1,9 @@
 // @serial
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @stdout: took 600000
+// @ledger-slack(Sink) 10
+// @ledger-slack(Src) 10
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: the awaited-reply variant of actorFloodingSenderKeepsRunning: the flooding actor
 //   answers an awaited CALL after its burst. It hung 3 runs of 10 while senders could be
 //   paused.

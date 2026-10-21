@@ -1,6 +1,8 @@
 // @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // @stdout: one 6000000
 // @stdout: two 6000000 6000000
+// @ledger-slack(Counter) 3
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 
 actor Counter {
 	n: int32;

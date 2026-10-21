@@ -2,6 +2,8 @@
 // @maxrss: 22
 // @stdout: ints 100000 strs 100000
 // @serial
+// @ledger-slack(Pump) 2
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: the bound sits between a reply that drains (13 MB, macOS) and one that
 //   completes on the worker and never releases the reply's in-flight ref (31 MB).
 
