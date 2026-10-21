@@ -47,8 +47,8 @@ import {
 } from "./intern";
 
 import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
-import { preludeContextFor, bindModuleForCheck, finishModuleCheck, registerBoundModuleFn, BoundModule } from "../../checker/checkPass";
-import { registerModuleProgram, lookupModuleProgram, lookupModuleCtx, resetInstantiationState } from "../../checker/instantiate";
+import { preludeContextFor, bindModuleForCheck, finishModuleCheck, registerBoundModuleFn, BoundModule, sharedPreludeOwns } from "../../checker/checkPass";
+import { registerModuleProgram, registerModuleCtx, lookupModuleProgram, lookupModuleCtx, resetInstantiationState } from "../../checker/instantiate";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
 import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
@@ -608,9 +608,20 @@ function checkMacroDeps(db: TransAmDb, filePath: string, imports: ImportEntry[])
 		if (ie.sourcePath == "" || ie.sourcePath == filePath) continue;
 		if (db.checkInProgress.has(ie.sourcePath)) continue;
 		if (exportsMacro(db, ie.sourcePath)) dbTypeCheck(db, ie.sourcePath);
+		else if (db.graph == null) bindUncheckedModule(db, ie.sourcePath);
 	}
 }
 
+function bindUncheckedModule(db: TransAmDb, modulePath: string): void {
+	if (boundAtRevision(db, modulePath) != null || dbCheckIsCurrent(db, modulePath)) return;
+	const held = lookupModuleCtx(modulePath);
+	if (held != null && held.exportRegistry != db.exportRegistry || sharedPreludeOwns(db.preludeCtx, modulePath)) return;
+	const outerDb = _checkingDb;
+	_checkingDb = db;
+	const ctx = dbBoundModule(modulePath);
+	_checkingDb = outerDb;
+	if (ctx != null) registerModuleCtx(modulePath, ctx);
+}
 
 function importsMacro(db: TransAmDb, filePath: string, imports: ImportEntry[]): boolean {
 	for (const ie of imports) {
