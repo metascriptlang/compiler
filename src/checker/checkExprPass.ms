@@ -4468,14 +4468,15 @@ function extendsObjectType(t: Type, ancestor: Type): boolean {
 
 function objectViewOf(ctx: CheckerContext, operand: Node, srcType: Type, targetType: Type, line: int32, column: int32): Type | null {
 	if (operand.kind == NodeKind.ObjectLiteral || hasGenericParams(srcType) || hasGenericParams(targetType)) return null;
-	const own = viewedObject(srcType);
-	const source = own ?? viewedObjectBody(peelDistinct(srcType));
+	const own = viewedObjectBody(srcType);
+	const layout = own != null ? srcType : peelDistinct(srcType);
+	const source = own ?? viewedObjectBody(layout);
 	const target = viewedObject(targetType);
 	const targetBare = skipModifier(targetType);
 	if (source == null || target == null || targetBare == null || targetBare.kind != TypeKind.Ref || runtimeClassSym(target) != null) return null;
 	if (sameNominal(source, target) || isAssignable(srcType, targetType) || extendsObjectType(target, source)) return null;
 	const field = viewFieldNotHeld(source, target);
-	if (field == "") return own != null ? srcType : null;
+	if (field == "") return layout;
 	const at = source.typeNames.indexOf(field);
 	if (at < 0 && isNodeGraphType(srcType)) return null;
 	const cls = runtimeClassSym(source);

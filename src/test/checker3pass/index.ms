@@ -60,6 +60,7 @@ import "./scenarios/narrowedWriteTarget";
 import "./scenarios/nullableLiteralUnionTarget";
 import "./scenarios/castReadsValueOfLast";
 import "./scenarios/castBetweenDisjointTypes";
+import "./scenarios/structViewIsNotAReference";
 import "./scenarios/literalEqualityNarrowsNullable";
 import "./scenarios/matchStructEquality";
 import "./scenarios/objectOnlyAfterExtends";
