@@ -113,3 +113,4 @@ import "./cases/nestedTypeArgsWritten";
 import "./cases/structPrivateField";
 import "./cases/classImplements";
 import "./cases/typeModifiers";
+import "./cases/layoutOptions";
