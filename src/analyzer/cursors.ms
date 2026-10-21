@@ -7,7 +7,8 @@
 // A "cursor" is a variable that:
 //   - Does not own data (initialized from borrow, not constructor/call)
 //   - Is not explicitly prevented (not addr-taken, not passed to mutable param)
-//   - Is not conditionally reassigned in a loop
+//   - Is not conditionally reassigned in a loop, unless it is a read-only view that borrows only
+//     from parameters and from other view cursors: repointing a view releases nothing
 //   - Its graph is not mutated during its lifetime (dangerousMutation check)
 //
 // Safety: conservative — false negatives are fine (treated as owned),
@@ -36,6 +37,7 @@ import { ANY_HEAP_SLOT, mayWrite, resetWriteEffects, stepSlot } from "./writeEff
 import { createDrcContext, classifyRc } from "./scope";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo } from "./classify";
+import { isReadonlyView } from "../checker/types";
 
 // ===== VarFlag (per-variable analysis flags) =====
 
@@ -46,6 +48,7 @@ const VF_IS_COND_REASSIGNED: int32 = 8;
 const VF_IS_PARAM: int32 = 16;
 
 let borrowedSlots: string[][] = [];
+let viewSources: int32[][] = [];
 let writeSites: Node[] = [];
 let writeTimes: int32[] = [];
 
@@ -54,6 +57,11 @@ function registerVariable(p: Partitions, sym: Symbol | null, isParam: boolean): 
 }
 
 // ===== Helpers =====
+
+function isViewVar(p: Partitions, id: int32): boolean {
+	const sym = p.vars[id].sym;
+	return sym != null && isReadonlyView(sym.symbolType);
+}
 
 function getIdentSym(node: Node): Symbol | null {
 	if (node == null) return null;
@@ -168,6 +176,20 @@ function connectStore(p: Partitions, targets: Symbol[], destType: Type | null, s
 	for (const t of targets) {
 		for (const s of sources) { ufConnect(p, t, s); }
 	}
+}
+
+function callFormals(call: Node): Type[] | null {
+	const sym = call.resolvedSym;
+	return sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function ? sym.symbolType.typeChildren : null;
+}
+
+function readOnlyFormal(formals: Type[] | null, i: int32): boolean {
+	return formals != null && i < formals.length && isReadonlyView(formals[i]);
+}
+
+function isViewArg(arg: Node): boolean {
+	if (isReadonlyView(arg.nodeType)) return true;
+	return arg.kind == NodeKind.Identifier && arg.resolvedSym != null && isReadonlyView(arg.resolvedSym.symbolType);
 }
 
 function potentialMutationViaArg(p: Partitions, arg: Node): void {
@@ -432,6 +454,7 @@ function liveRanges(p: Partitions, node: Node | null): void {
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
 			liveRanges(p, d.tryBody);
+			if (d.catchBody != null) registerVariable(p, node.resolvedSym, false);
 			liveRanges(p, d.catchBody);
 			liveRanges(p, d.finallyBody);
 		},
@@ -502,6 +525,10 @@ function deps(p: Partitions, dest: Symbol | null, src: Node): void {
 			continue;
 		}
 		const srcId = variableId(p, srcSym);
+		if (srcId >= 0 && isViewVar(p, destId) && isViewVar(p, srcId)) {
+			if ((p.vars[srcId].flags & VF_IS_PARAM) == 0) viewSources[destId].push(srcId);
+			continue;
+		}
 		if (srcId >= 0) {
 			// Source lives shorter than dest → can't borrow
 			if ((p.vars[srcId].flags & VF_IS_PARAM) == 0 &&
@@ -545,10 +572,11 @@ function trav(p: Partitions, node: Node | null): void {
 				trav(p, d.right);
 				p.inAsgnSource -= 1;
 
-				// Assignment to variable → mutation on LHS graph
 				const lhsRoots: Symbol[] = [];
 				allRoots(p, d.left, lhsRoots);
-				for (const r of lhsRoots) { potentialMutation(p, r); }
+				if (d.left.kind != NodeKind.Identifier) {
+					for (const r of lhsRoots) { potentialMutation(p, r); }
+				}
 				connectStore(p, lhsRoots, d.left.nodeType, d.right);
 				recordWrite(p, node);
 
@@ -592,7 +620,10 @@ function trav(p: Partitions, node: Node | null): void {
 					}
 				}
 			}
-			for (const arg of d.arguments) { potentialMutationViaArg(p, arg); }
+			const formals = callFormals(node);
+			for (let ai = 0; ai < d.arguments.length; ai += 1) {
+				if (!readOnlyFormal(formals, ai) && !isViewArg(d.arguments[ai])) potentialMutationViaArg(p, d.arguments[ai]);
+			}
 			recordWrite(p, node);
 		},
 
@@ -743,7 +774,8 @@ function computeCursorDecisions(p: Partitions): Symbol[] {
 		// Skip params (handled separately in inject.ms)
 		if ((v.flags & VF_IS_PARAM) != 0) { i += 1; continue; }
 		// Must not own data, be prevented, or be conditionally reassigned
-		if ((v.flags & (VF_OWNS_DATA | VF_PREVENT_CURSOR | VF_IS_COND_REASSIGNED)) != 0) {
+		const condReassigned = isViewVar(p, i) ? 0 : VF_IS_COND_REASSIGNED;
+		if ((v.flags & (VF_OWNS_DATA | VF_PREVENT_CURSOR | condReassigned)) != 0) {
 			i += 1; continue;
 		}
 
@@ -758,7 +790,27 @@ function computeCursorDecisions(p: Partitions): Symbol[] {
 		result.push(v.sym);
 		i += 1;
 	}
-	return result;
+	return dropViewsOfOwners(p, result);
+}
+
+function dropViewsOfOwners(p: Partitions, chosen: Symbol[]): Symbol[] {
+	let kept = chosen;
+	let changed = true;
+	while (changed) {
+		changed = false;
+		const next: Symbol[] = [];
+		for (const sym of kept) {
+			const id = variableId(p, sym);
+			let borrowsOwner = false;
+			for (const src of viewSources[id]) {
+				if (kept.indexOf(p.vars[src].sym) < 0) borrowsOwner = true;
+			}
+			if (borrowsOwner) changed = true;
+			else next.push(sym);
+		}
+		kept = next;
+	}
+	return kept;
 }
 
 // ===== Public API =====
@@ -776,7 +828,11 @@ export function inferCursors(body: Node): void {
 	// Reset time for pass 2 (consistent abstractTime required)
 	p.abstractTime = 0;
 	borrowedSlots = [];
-	for (let i = 0; i < p.vars.length; i += 1) { borrowedSlots.push([]); }
+	viewSources = [];
+	for (let i = 0; i < p.vars.length; i += 1) {
+		borrowedSlots.push([]);
+		viewSources.push([]);
+	}
 	writeSites = [];
 	writeTimes = [];
 
@@ -936,10 +992,16 @@ test "source mutated BEFORE cursor: IS cursor" {
 	assert isCursorNamed(body, "x");
 }
 
-test "let reassigned variable is NOT cursor" {
+test "a variable reassigned unconditionally from a parameter is cursor" {
 	const body = getFuncBody("function f(arr: string[]) { let x = arr[0]; x = arr[1]; }");
 	inferCursors(body);
-	assert !isCursorNamed(body, "x");
+	assert isCursorNamed(body, "x");
+}
+
+test "a variable that outlives the catch binding it reads is NOT cursor" {
+	const body = getFuncBody("function f(): string { let m = \"\"; try { throw new Error(\"x\"); } catch (e) { m = e.message; } return m; }");
+	inferCursors(body);
+	assert !isCursorNamed(body, "m");
 }
 
 test "new expression result is NOT cursor" {
@@ -1063,4 +1125,27 @@ test "loop binding over an array nobody writes is cursor" {
 	const body = getFuncNamed(BOXES + "function f(boxes: Box[]): void { let i = 0; while (i < 2) { const b = boxes[i]; i = i + 1; show(b.v); } }", "f");
 	inferCursors(body);
 	assert isCursorNamed(body, "b");
+}
+
+const LINKS = "class Link { v: int32 = 0; next: Link | null = null; }\n"
+	+ "function use(n: int32): void { console.log(n); }\n";
+
+test "a walker reassigned from its own field is cursor" {
+	const body = getFuncNamed(LINKS + "function f(n: Link): void { let it: Link | null = n; while (it != null) { use(it.v); it = it.next; } }", "f");
+	inferCursors(body);
+	assert isCursorNamed(body, "it");
+}
+
+test "a read-only view repointed under a loop condition is cursor" {
+	const body = getFuncNamed(LINKS + "function f(n: Readonly<Link>): int32 { let cur: Readonly<Link> = n; while (cur.next != null) { const nx = cur.next; if (nx == null) break; cur = nx; } return cur.v; }", "f");
+	inferCursors(body);
+	assert isCursorNamed(body, "cur");
+	assert isCursorNamed(body, "nx");
+}
+
+test "a read-only view repointed at a local that owns its value is NOT cursor" {
+	const body = getFuncNamed(LINKS + "function f(k: int32): int32 { let keep: Readonly<Link> | null = null; for (let i = 0; i < k; i += 1) { const o: Readonly<Link> = new Link(); if (i == 1) keep = o; } return keep != null ? keep.v : -1; }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "o");
+	assert !isCursorNamed(body, "keep");
 }

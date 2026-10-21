@@ -325,6 +325,23 @@ function callsThroughSignatures(trail: string[], n: int32, s: string): int32 {
 	return a;
 }
 
+function messageAfterCatch(n: int32): string {
+	let message = "";
+	try { raiseAbove(n, 1); } catch (e) { message = e.message; }
+	return message;
+}
+
+function errorAfterCatch(n: int32): string {
+	let kept: Error | null = null;
+	try { raiseAbove(n, 1); } catch (e) { kept = e; }
+	return kept != null ? kept.message : "";
+}
+
+test "a value read from the catch binding outlives the handler" {
+	assert messageAfterCatch(2) == "above";
+	assert errorAfterCatch(2) == "above";
+}
+
 test "a raise from a function called through an overload signature stops its caller" {
 	const trail: string[] = [];
 	let caught = 0;
