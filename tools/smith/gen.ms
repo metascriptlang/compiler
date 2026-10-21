@@ -6888,9 +6888,18 @@ class Gen {
 		const s = isInt ? "I" : "F";
 		const ctor = isInt ? "(ixI(i, 2000) - 1000) as DsI" : "((ixI(i, 2000) - 1000) as float64 * 0.5) as DsF";
 		const tail = isInt ? "\treturn (x as int32) + n;\n" : "\treturn (((x as float64) * 2.0) as int32) + n;\n";
+		const base = isInt ? "int32" : "float64";
 		const cmp = "(this a: " + name + ", b: " + name + "): boolean;\n";
-		this.useHelper(name, "type " + name + " = distinct " + (isInt ? "int32" : "float64") + ";\n" +
+		const arith = (op: string): string => "export function `" + op + "`(a: " + name + ", b: " + name + "): " + name +
+			" { return ((a as " + base + ") " + op + " (b as " + base + ")) as " + name + "; }\n";
+		const fold = isInt ? "acc = acc + v; acc += v; acc = acc - x;" : "acc = acc + v * x;";
+		const keyed = isInt ?
+			"\tif (f == 5) {\n\t\tconst m = new Map<DsI, int32>();\n" +
+			"\t\tfor (const v of xs) { m.set(v, m.has(v) ? (m.get(v) as int32) + 1 : 1); }\n" +
+			"\t\treturn n + (m.has(x) ? (m.get(x) as int32) : 0) + (m.size as int32) * 10;\n\t}\n" : "";
+		this.useHelper(name, "type " + name + " = distinct " + base + ";\n" +
 			"@delegate export function `==`" + cmp + "@delegate export function `<`" + cmp + "@delegate export function `<=`" + cmp +
+			arith("+") + arith(isInt ? "-" : "*") +
 			"function ds" + s + "(i: int32): " + name + " { return " + ctor + "; }\n" +
 			"function dsRank" + s + "(xs: " + name + "[], x: " + name + ", f: int32): int32 {\n" +
 			"\tlet n: int32 = 0;\n" +
@@ -6899,7 +6908,8 @@ class Gen {
 			"\tif (f == 1) { return n + (xs.indexOf(x) as int32) * 100; }\n" +
 			"\tif (f == 2) { if (x == xs[0]) { return n + 1; } if (x != xs[xs.length - 1]) { return n + 2; } return n + 3; }\n" +
 			"\tif (f == 3) { if (x >= xs[0]) { return n + 4; } if (x > xs[0]) { return n + 5; } if (x <= xs[0]) { return n + 6; } return n + 7; }\n" +
-			tail + "}\n");
+			"\tif (f == 4) { let acc: " + name + " = x; for (const v of xs) { " + fold + " } return n + " + (isInt ? "(acc as int32)" : "(((acc as float64) * 2.0) as int32)") + "; }\n" +
+			keyed + tail + "}\n");
 		const et: ETy = { id: id, shape: EShape.Distinct, name: name, ann: name, n: variant, lits: [] };
 		this.eTypes.push(et);
 		return et;
@@ -7102,7 +7112,7 @@ class Gen {
 			let xs = "";
 			for (let j = 0; j < m; j++) { xs += (j == 0 ? "" : ", ") + this.eValue(et, depth + 1); }
 			const x = this.eValue(et, depth + 1);
-			return this.lift("dsRank" + s + "([" + xs + "], " + x + ", " + String(this.rng.below(5)) + ")", t);
+			return this.lift("dsRank" + s + "([" + xs + "], " + x + ", " + String(this.rng.below(7)) + ")", t);
 		}
 		if (shape == EShape.Literal) {
 			const d = this.eValue(et, depth + 1);
@@ -10111,7 +10121,7 @@ test "the enum family emits no shape a compiler card parks" {
 	const f = withWeights("fams=enum stmts=8 w.stmt.fam=80 w.expr.fam=40");
 	for (let seed = 1; seed < 41; seed++) {
 		const text = generate(seed as uint64, f);
-		assert !text.contains("distinct string") && !text.contains("Map<Ds") && !text.contains("Set<Ds");
+		assert !text.contains("distinct string") && !text.contains("Map<DsF") && !text.contains("Set<Ds");
 		assert !text.contains("Lt0[]") && !text.contains("Lt1[]") && !text.contains("Lt2[]");
 		assert !text.contains("assertNever") && countOf(text, ": never = ") == countOf(text, "const x: never = d;");
 		assert countOf(text, "const x: never = d;") <= countOf(text, "function nvDk0(d: Dk0)");
@@ -10121,10 +10131,13 @@ test "the enum family emits no shape a compiler card parks" {
 	g.rng = Rng.seeded(1 as uint64);
 	g.enumKit(EShape.Distinct, 0);
 	g.enumKit(EShape.Distinct, 1);
-	for (const line of g.helperText.split("\n")) {
-		const bare = line.replaceAll("(x as int32)", "").replaceAll("(x as float64)", "");
-		for (const op of [" + x", "x + ", " - x", "x - ", " * x", "x * ", " / x", "x / ", " % x", "x % "]) { assert !bare.contains(op); }
+	for (const name of ["DsI", "DsF"]) {
+		const base = name == "DsI" ? "int32" : "float64";
+		for (const op of name == "DsI" ? ["+", "-"] : ["+", "*"]) {
+			assert g.helperText.contains("export function `" + op + "`(a: " + name + ", b: " + name + "): " + name + " { return ((a as " + base + ") " + op + " (b as " + base + ")) as " + name + "; }");
+		}
 	}
+	assert !g.helperText.contains("`/`") && !g.helperText.contains("`%`") && !g.helperText.contains(" / ") && !g.helperText.contains(" % x");
 }
 
 test "a family at weight zero keeps the stream of the others" {
