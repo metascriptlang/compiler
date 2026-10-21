@@ -1,8 +1,8 @@
 import {
 	RaiserValue, RaiserValueKind, RaiserArrayHeap, RaiserObjectHeap,
-	raiserNil, handleIndex, raiserArray, raiserObject, copyValueInto,
+	raiserNil, handleIndex, raiserArray, raiserObject,
 	heapAllocArray, heapAllocObject, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectSetField, rcIncref,
-	createArrayHeap, createStructHeap, heapObjectGetField, raiserInt, rcDecref,
+	createArrayHeap, createStructHeap, heapObjectGetField, raiserInt, rcDecref, fieldNameAt, appendField
 } from "./value";
 
 export enum RaiserCopyKind {
@@ -27,9 +27,7 @@ export function copyTypedValue(
 	index: int32,
 ): RaiserValue {
 	if (index < 0) {
-		const copied = raiserNil();
-		copyValueInto(copied, value);
-		return copied;
+		return value;
 	}
 	const plan = plans[index];
 	if (plan.kind == RaiserCopyKind.Array && value.kind == RaiserValueKind.Array) {
@@ -45,17 +43,17 @@ export function copyTypedValue(
 	if (plan.kind == RaiserCopyKind.Object && value.kind == RaiserValueKind.Object) {
 		const handle = heapAllocObject(objects);
 		objects.objects[handleIndex(handle)].classType = objects.objects[handleIndex(value.intVal)].classType;
-		const fields = objects.objects[handleIndex(value.intVal)].fields;
-		for (const field of fields) {
-			let copied = raiserNil();
-			copyValueInto(copied, field.value);
+		const source = objects.objects[handleIndex(value.intVal)];
+		for (let f = 0; f < source.fields.length; f += 1) {
+			const name = fieldNameAt(source, f);
+			let copied = source.fields[f];
 			for (let i = 0; i < plan.names.length; i += 1) {
-				if (plan.names[i] == field.name) {
-					copied = copyTypedValue(arrays, objects, field.value, plans, plan.children[i]);
+				if (plan.names[i] == name) {
+					copied = copyTypedValue(arrays, objects, source.fields[f], plans, plan.children[i]);
 					break;
 				}
 			}
-			heapObjectSetField(objects, handle, field.name, copied);
+			appendField(objects.objects[handleIndex(handle)], name, copied);
 			rcIncref(arrays, objects, copied);
 		}
 		return raiserObject(handle);
@@ -71,9 +69,7 @@ export function copyTypedValue(
 		}
 		throw new Error(`internal: copy of a value union whose '${plan.names[0]}' matches no arm`);
 	}
-	const copied = raiserNil();
-	copyValueInto(copied, value);
-	return copied;
+	return value;
 }
 
 test "typed copy releases owned children and retained shared references" {

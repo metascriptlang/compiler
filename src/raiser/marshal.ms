@@ -17,7 +17,6 @@
 import {
 	RaiserValue, RaiserValueKind,
 	raiserNil, raiserBool, raiserInt, raiserFloat, raiserObject, raiserArray,
-	copyValueInto,
 	RaiserArrayHeap, RaiserObjectHeap, createArrayHeap, createStructHeap, copyGraph,
 	heapAllocObject, heapObjectSetField, heapObjectGetField,
 	heapAllocArray, heapArrayPush, heapArrayLen, heapArrayGet,
@@ -133,9 +132,7 @@ export function hostValue(v: RaiserValue): RaiserHostValue {
 		const arrayHeap = createArrayHeap();
 		return { root: heapAllocString(arrayHeap, unboxString(v)), arrayHeap, objectHeap: SCALAR_OBJECTS };
 	}
-	const root = raiserNil();
-	copyValueInto(root, v);
-	return { root, arrayHeap: SCALAR_ARRAYS, objectHeap: SCALAR_OBJECTS };
+	return { root: v, arrayHeap: SCALAR_ARRAYS, objectHeap: SCALAR_OBJECTS };
 }
 
 export function hostObject(names: string[], values: RaiserHostValue[]): RaiserHostValue {
@@ -165,9 +162,7 @@ export function hostArray(items: RaiserHostValue[]): RaiserHostValue {
 }
 
 function part(v: RaiserHostValue, slot: RaiserValue): RaiserHostValue {
-	const root = raiserNil();
-	copyValueInto(root, slot);
-	return { root, arrayHeap: v.arrayHeap, objectHeap: v.objectHeap };
+	return { root: slot, arrayHeap: v.arrayHeap, objectHeap: v.objectHeap };
 }
 
 export function field(this v: RaiserHostValue, name: string): RaiserHostValue {

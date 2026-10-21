@@ -71,7 +71,8 @@ function markGray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: Rai
 	} else {
 		const fields = objHeap.objects[handleIndex(v.intVal)].fields;
 		for (const f of fields) {
-			if (isRef(f.value)) { decRcRaw(arrHeap, objHeap, f.value); markGray(arrHeap, objHeap, f.value); }
+			const child = f;
+			if (isRef(child)) { decRcRaw(arrHeap, objHeap, child); markGray(arrHeap, objHeap, child); }
 		}
 	}
 }
@@ -92,9 +93,10 @@ function scanBlack(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: Ra
 	} else {
 		const fields = objHeap.objects[handleIndex(v.intVal)].fields;
 		for (const f of fields) {
-			if (isRef(f.value)) {
-				incRcRaw(arrHeap, objHeap, f.value);
-				if (colorOf(arrHeap, objHeap, f.value) != COL_BLACK) scanBlack(arrHeap, objHeap, f.value);
+			const child = f;
+			if (isRef(child)) {
+				incRcRaw(arrHeap, objHeap, child);
+				if (colorOf(arrHeap, objHeap, child) != COL_BLACK) scanBlack(arrHeap, objHeap, child);
 			}
 		}
 	}
@@ -114,7 +116,8 @@ function scan(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserV
 		}
 	} else {
 		for (const f of objHeap.objects[handleIndex(v.intVal)].fields) {
-			if (isRef(f.value)) scan(arrHeap, objHeap, f.value);
+			const child = f;
+			if (isRef(child)) scan(arrHeap, objHeap, child);
 		}
 	}
 }
@@ -142,12 +145,14 @@ function collectWhite(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held:
 	} else {
 		const data = objHeap.objects[handleIndex(v.intVal)];
 		for (const f of data.fields) {
-			if (isRef(f.value)) {
-				if (colorOf(arrHeap, objHeap, f.value) == COL_WHITE) freed = (freed + collectWhite(arrHeap, objHeap, f.value)) as int32;
-				else if (colorOf(arrHeap, objHeap, f.value) != COL_GRAY) rcDecref(arrHeap, objHeap, f.value);
-			} else if (f.value.kind == RaiserValueKind.String) rcDecref(arrHeap, objHeap, f.value);
+			const child = f;
+			if (isRef(child)) {
+				if (colorOf(arrHeap, objHeap, child) == COL_WHITE) freed = (freed + collectWhite(arrHeap, objHeap, child)) as int32;
+				else if (colorOf(arrHeap, objHeap, child) != COL_GRAY) rcDecref(arrHeap, objHeap, child);
+			} else if (child.kind == RaiserValueKind.String) rcDecref(arrHeap, objHeap, child);
 		}
 		data.fields.length = 0;
+		data.added.length = 0;
 		data.rc = 0;
 		data.color = COL_BLACK;
 		objHeap.freeList.push(handleIndex(v.intVal));

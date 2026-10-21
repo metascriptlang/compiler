@@ -73,7 +73,7 @@ import {
 	RaiserObjectHeap, RaiserArrayHeap, handleIndex,
 	heapArrayGet, heapArrayLen, raiserInt, raiserFloat, raiserBool, raiserNil, raiserObject, raiserArray,
 	heapAllocObject, heapObjectSetField, heapObjectGetField, heapAllocArray, heapArrayPush, heapStringText, heapAllocString, heapAllocStoredString,
-	createStructHeap, createArrayHeap,
+	createStructHeap, createArrayHeap, fieldNameAt
 } from "../../raiser/value";
 
 // ===== Synthetic location/token helpers =====
@@ -1686,9 +1686,10 @@ function deserializeObjectLiteral(handle: int64, shape: Type | null, objHeap: Ra
 	const record = materialType(shape);
 	const keys: string[] = [];
 	const values: Node[] = [];
-	for (const field of obj.fields) {
-		keys.push(field.name);
-		values.push(valueToTypedNode(field.value, record != null && record.kind == TypeKind.Struct ? fieldTypeIn(record, field.name) : null, objHeap, arrHeap, loc));
+	for (let i = 0; i < obj.fields.length; i += 1) {
+		const name = fieldNameAt(obj, i);
+		keys.push(name);
+		values.push(valueToTypedNode(obj.fields[i], record != null && record.kind == TypeKind.Struct ? fieldTypeIn(record, name) : null, objHeap, arrHeap, loc));
 	}
 	return createNodeAt(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, loc);
 }
