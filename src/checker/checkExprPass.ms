@@ -15,7 +15,7 @@ import {
 	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
 import { checkArcPointeeSendable } from "./sendable";
 import { keyedProxyAccess, readIndexThroughProxy, refuseProxyOperator, updateThroughProxy, writeThroughProxy } from "./proxy";
-import { distinctNumericBase, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral } from "./types";
+import { distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, indexedAccessOf, createStringLiteral } from "./types";
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, writeThroughGraphBackedge, WriteSite } from "./assignable";
 import { boundAnnotationType, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
@@ -2366,17 +2366,7 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 		return;
 	}
 	if (srcType != null && !reportedErrorSince(ctx, operandMark) && convertAsBetweenUnions(ctx, node, srcType, targetType, asLoc)) return;
-	if (srcType != null && !isUnresolvedType(srcType) && !isUnresolvedType(targetType)
-		&& !hasGenericParams(srcType) && !hasGenericParams(targetType) && !reportedErrorSince(ctx, operandMark)) {
-		const carried = assertIntoNullable(d.asExpr, srcType, targetType);
-		if (carried != null as unknown as Node) {
-			node.data = { asExpr: carried, asType: d.asType };
-			node.nodeType = targetType;
-			return;
-		}
-	}
-	if (srcType != null && !isUnresolvedType(targetType) && !isUnknownType(targetType)
-		&& !slotTakesValue(srcType, targetType) && !functionBaseCasts(srcType, targetType)) {
+	if (srcType != null && !castHolds(srcType, targetType)) {
 		const asCall = convertsWithoutRoutine(srcType, targetType) ? null : tryApplyConverter(ctx, d.asExpr, srcType, targetType);
 		if (asCall != null) {
 			viaConverter = true;
@@ -2385,6 +2375,21 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 			srcType = asCall.nodeType;
 		} else if (valueOfInPlace(ctx, d.asExpr, ReadNeed.Slot, targetType)) {
 			srcType = d.asExpr.nodeType;
+			if (srcType != null && !reportedErrorSince(ctx, operandMark) && !castHolds(srcType, targetType)) {
+				addError(ctx, "cannot convert " + typeDisplayName(operandType!) + " to " + typeDisplayName(targetType) + " — neither type overlaps the other, and its valueOf gives "
+					+ typeDisplayName(srcType) + ", which does not convert to " + typeDisplayName(targetType) + " either", asLoc.line, asLoc.column);
+				node.nodeType = targetType;
+				return;
+			}
+		}
+	}
+	if (srcType != null && !isUnresolvedType(srcType) && !isUnresolvedType(targetType)
+		&& !hasGenericParams(srcType) && !hasGenericParams(targetType) && !reportedErrorSince(ctx, operandMark)) {
+		const carried = assertIntoNullable(d.asExpr, srcType, targetType);
+		if (carried != null as unknown as Node) {
+			node.data = { asExpr: carried, asType: d.asType };
+			node.nodeType = targetType;
+			return;
 		}
 	}
 	if (srcType != null && srcType.kind != TypeKind.Union) {
@@ -4066,10 +4071,72 @@ const NOT_AN_OBJECT: TypeKind[] = [TypeKind.String, TypeKind.Boolean, TypeKind.C
 	TypeKind.Span, TypeKind.Function, TypeKind.Tuple, TypeKind.CString, TypeKind.Enum, TypeKind.StringLiteral, TypeKind.EnumLiteral,
 	TypeKind.BooleanLiteral, TypeKind.NumberLiteral, TypeKind.BigInt, TypeKind.Set];
 
-function functionBaseCasts(srcType: Type, targetType: Type): boolean {
-	const base = peelDistinct(srcType);
-	const target = skipModifier(targetType) ?? targetType;
-	return base != null && base.kind == TypeKind.Function && target.kind == TypeKind.Function && distinctBody(skipModifier(srcType) ?? srcType) != null;
+// `x as U` takes the base conversion whenever the two types overlap in either direction once
+// every distinct layer is peeled (TS comparability; a numeric, text, boolean, function or pointer
+// pair also converts), and only otherwise reads a converter or valueOf.
+function castHolds(src: Type, target: Type): boolean {
+	if (hasGenericParams(src) || hasGenericParams(target) || isUnresolvedType(src) || isUnresolvedType(target)
+		|| isUnknownType(src) || isUnknownType(target)) return true;
+	if (slotTakesValue(src, target)) return true;
+	const from: Type[] = [];
+	const to: Type[] = [];
+	castLeaves(src, from, 0);
+	castLeaves(target, to, 0);
+	const functionTarget = (skipModifier(target) ?? target).kind == TypeKind.Function;
+	for (const a of from) {
+		for (const b of to) {
+			if (leavesOverlap(a, b, functionTarget)) return true;
+		}
+	}
+	return false;
+}
+
+function castLeaves(t: Type | null, out: Type[], depth: int32): void {
+	if (t == null) return;
+	const bare = withoutReadonlyView(skipModifier(t) ?? t);
+	if (depth > PEEL_MAX_DEPTH) { out.push(bare); return; }
+	if (isMaybeType(bare) && bare.typeReturn != null) {
+		castLeaves(bare.typeReturn, out, depth + 1);
+		out.push(nullType());
+		return;
+	}
+	if (bare.kind == TypeKind.Union && bare.typeChildren != null) {
+		for (const member of bare.typeChildren) castLeaves(member, out, depth + 1);
+		return;
+	}
+	const body = distinctBody(bare);
+	if (body != null) { castLeaves(body, out, depth + 1); return; }
+	out.push(peelTransparentInstance(bare));
+}
+
+enum CastClass { Other, Number, Text, Truth, Function, Pointer, List }
+
+function castClass(t: Type): CastClass {
+	const k = t.kind;
+	if (isNumeric(widenNumberLiteralType(t)) || k == TypeKind.Enum || k == TypeKind.EnumLiteral || k == TypeKind.Char || k == TypeKind.BigInt) return CastClass.Number;
+	if (isStringLike(t) || k == TypeKind.CString) return CastClass.Text;
+	if (k == TypeKind.Boolean || k == TypeKind.BooleanLiteral) return CastClass.Truth;
+	if (isFunctionKind(t)) return CastClass.Function;
+	if (k == TypeKind.Ptr) return CastClass.Pointer;
+	if (isArrayShaped(t) || k == TypeKind.Span) return CastClass.List;
+	return CastClass.Other;
+}
+
+function leavesOverlap(a: Type, b: Type, functionTarget: boolean): boolean {
+	if (a.kind == TypeKind.Null || b.kind == TypeKind.Null) return a.kind == b.kind;
+	if (isAssignable(a, b) || isAssignable(b, a) || viewsAsInterface(a, b) || viewsAsInterface(b, a)) return true;
+	const ca = castClass(a);
+	return ca != CastClass.Other && ca == castClass(b) && (ca != CastClass.Function || functionTarget);
+}
+
+function interfaceOf(t: Type): Type | null {
+	const bare = skipModifier(t) ?? t;
+	const body = viewedObject(bare);
+	return bare.kind == TypeKind.Ref && body != null && runtimeClassSym(body) == null ? body : null;
+}
+
+function viewsAsInterface(source: Type, target: Type): boolean {
+	return interfaceOf(target) != null && viewedObjectBody(source) != null;
 }
 
 function peelDistinct(t: Type | null): Type | null {

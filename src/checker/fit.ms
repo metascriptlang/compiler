@@ -2200,10 +2200,6 @@ export function hasValueOfProtocol(ctx: CheckerContext, t: Type | null): boolean
 
 export function slotTakesValue(exprType: Type, formal: Type): boolean {
 	if (isAssignable(exprType, formal) && !isNominalMismatch(exprType, formal)) return true;
-	if (formal.kind == TypeKind.Function) {
-		const widened = distinctWidenBody(exprType);
-		if (widened != null && isAssignable(widened, formal)) return true;
-	}
 	if (isMaybeType(formal) && formal.typeReturn != null) return slotTakesValue(exprType, formal.typeReturn);
 	if (formal.kind == TypeKind.Union) {
 		for (const member of formal.typeChildren) {
