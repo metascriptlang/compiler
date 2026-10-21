@@ -78,8 +78,18 @@ function calleeTarget(call: Readonly<Node>): Symbol | null {
 	const callee = (call.data as CallExprData).callee;
 	const sym = callee.resolvedSym;
 	if (sym == null) return closurePairTarget(callee);
+	if (isOverloadSignature(sym)) return implementationOf(call);
 	const bound = _closureTargets.get(sym);
 	return bound != null && _tempWrites.get(sym) == 1 ? bound : sym;
+}
+
+function isOverloadSignature(sym: Symbol): boolean {
+	return hasFlag(sym, SymbolFlag.OverloadSig) && !hasFlag(sym, SymbolFlag.ImportC);
+}
+
+function implementationOf(call: Readonly<Node>): Symbol | null {
+	const impl = call.resolvedSym;
+	return impl != null && !isOverloadSignature(impl) ? impl : null;
 }
 
 // A routine value handed to an extern can be called from inside it.
@@ -147,6 +157,7 @@ function resetWalk(): void {
 function routineOf(node: Node): RoutineInfo | null {
 	if (node.kind != NodeKind.FunctionDecl || node.resolvedSym == null || (node.data as FunctionDeclData).fnBody == null) return null;
 	const sym = node.resolvedSym!;
+	if (isOverloadSignature(sym)) return null;
 	const seen = _routines.get(sym);
 	if (seen != null) {
 		seen.raises = true;
