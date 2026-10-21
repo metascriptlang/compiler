@@ -8,7 +8,7 @@ import { methodOwnerClass } from "./visibility";
 import { isAsyncFunctionNode } from "./freestanding";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { isMaybeType, inferredType, isUnresolvedType, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteAllParams, substituteParams, substituteBound, UnifyBindings, bindParam, bindName, bindAt, boundSlot } from "./types";
+import { isMaybeType, inferredType, isUnresolvedType, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteAllParams, substituteParams, substituteBound, declaredTypeParams, UnifyBindings, bindParam, bindName, bindAt, boundSlot } from "./types";
 import { ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, globalScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
@@ -1359,7 +1359,8 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, nam
 	if (ctorNode.resolvedSym == null) throw new Error(`internal: generic constructor '${classSym.name}' has no routine symbol`);
 	const formals = ctorFormalTypes(ctorNode.resolvedSym);
 	if (formals == null) throw new Error(`internal: generic constructor '${classSym.name}' has no routine type`);
-	const resolvedParamTypes = formals.map((t: Type): Type => substituteAllParams(t, names, types));
+	const declared = declaredTypeParams(classSym, names.length);
+	const resolvedParamTypes = formals.map((t: Type): Type => substituteParams(t, names, declared, types));
 	ctorDeclNode.nodeType = createFunction(resolvedParamTypes, fnParams, null as unknown as Type);
 
 	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;

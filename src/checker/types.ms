@@ -2153,10 +2153,14 @@ export function genericParamsOf(t: Type | null): string {
 	return builtinGenericParams(cur.typeName);
 }
 
+export function declaredTypeParams(sym: Symbol, count: int32): (Type | null)[] {
+	return sym.typeParams.length == count ? sym.typeParams.map((gp: Type): Type | null => gp) : [];
+}
+
 function declaredParamsOf(t: Type, count: int32): (Type | null)[] {
 	const cur = (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) && t.typeReturn != null ? t.typeReturn : t;
 	const owner = genericOwnerOf(cur);
-	return owner != null && owner.typeParams.length == count ? owner.typeParams.map((gp: Type): Type | null => gp) : [];
+	return owner != null ? declaredTypeParams(owner, count) : [];
 }
 
 export function genericParamNamesOf(params: string): string {

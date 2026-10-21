@@ -8,7 +8,7 @@
 
 import { firstPrivateField } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
-import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, instantiateGeneric, numberLiteralTypeOf, markDuVariant, bindParam, bindName } from "./types";
+import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, instantiateGeneric, numberLiteralTypeOf, markDuVariant, bindParam, bindName, declaredTypeParams, substituteBound } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem } from "./context";
@@ -475,10 +475,6 @@ function instanceOfAliasToNamedType(ctx: CheckerContext, alias: Symbol, baseName
 	return isRef ? createRef(inst) : inst;
 }
 
-function declaredTypeParams(sym: Symbol, count: int32): (Type | null)[] {
-	return sym.typeParams.length == count ? sym.typeParams.map((gp: Type): Type | null => gp) : [];
-}
-
 function resolveTypeTest(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
 	ctx.typeTestDepth = ctx.typeTestDepth + 1;
 	const tested = resolveAnnotation(text, ctx, line, col);
@@ -937,7 +933,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		}
 	}
 
-	// Check for generic types: Name<A, B> or Name < A , B > (token-joined form)
+	// Check for generic types: Name<A, B> or Name < A, B > (token-joined form)
 	const angleBracket = findChar(trimmed, "<");
 	if (angleBracket > 0 && trimmed.endsWith(">")) {
 		const writtenName = trimmed.slice(0, angleBracket).trim();
@@ -1401,7 +1397,7 @@ export function thenSignatureOf(ctx: CheckerContext, t: Type): Type | null {
 	if (method.kind != TypeKind.Function || method.typeChildren.length == 0) return null;
 	const bindings = createUnifyBindings();
 	unifyType(method.typeChildren[0], receiver, bindings);
-	return stripReceiverParam(bindings.names.length > 0 ? instantiateGeneric(method, bindings.names, bindings.types) : method);
+	return stripReceiverParam(bindings.names.length > 0 ? substituteBound(method, bindings) : method);
 }
 
 export function thenablePromised(ctx: CheckerContext, t: Type | null): Type | null {
@@ -2572,7 +2568,7 @@ function inheritConstructor(ctx: CheckerContext, node: Node, sym: Symbol, parent
 	const args: Node[] = [];
 	const locs: SourceLocation[] = [];
 	for (let i = 0; i < parentCtor.typeChildren.length; i += 1) {
-		const pt = names.length > 0 ? substituteAllParams(parentCtor.typeChildren[i], names, instance.typeChildren) : parentCtor.typeChildren[i];
+		const pt = names.length > 0 ? substituteParams(parentCtor.typeChildren[i], names, declaredTypeParams(parentSym, names.length), instance.typeChildren) : parentCtor.typeChildren[i];
 		const name = i < parentCtor.typeNames.length && parentCtor.typeNames[i] != "" ? parentCtor.typeNames[i] : "p" + i.toString();
 		params.push(name);
 		paramTypes.push(pt);
