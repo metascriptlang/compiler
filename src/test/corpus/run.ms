@@ -1166,7 +1166,7 @@ function failCellTimeout(c: Cell, t: Tally): void {
 function killCellTree(c: Cell): string {
 	if (c.pid == "") { return "no pid recorded, orphan process left running"; }
 	if (!IS_WIN) {
-		const k = runCapture("kill -KILL -- -" + c.pid);
+		const k = runCapture("kill -s KILL -- -" + c.pid);
 		if (k.exitCode != 0) { return "kill of process group " + c.pid + " failed: " + k.output.trim(); }
 		return "process group " + c.pid + " killed";
 	}
