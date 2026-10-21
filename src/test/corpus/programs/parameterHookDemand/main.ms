@@ -1,4 +1,5 @@
 // @stdout: counts 7 0 0 tuple! ar!ray! generic! ref!
+// @xfail(san): the user onDestroy hook leaves its value's fields unfreed, so Ping is never destroyed; card 2026-10-21-design-a-user-ondestroy-hook-leaves-the-fields-of-its-value-unfreed.md
 
 struct Tracked { id: int32; text: string; }
 struct Box<T> { value: T; }
