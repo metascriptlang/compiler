@@ -1410,12 +1410,6 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			ctx.results.push(newTmp);
 			return;
 		}
-		// Value-type new: struct/GenericInstance types → zero-initialized struct
-		if (node.nodeType != null && (node.nodeType.kind == TypeKind.Struct || node.nodeType.kind == TypeKind.GenericInstance) && d.newArguments.length == 0) {
-			const cType = getTypeDesc(g, node.nodeType);
-			ctx.results.push(`(${cType})${zeroInit(node.nodeType)}`);
-			return;
-		}
 		// Ref-type new: Ref<GenericInstance> → heap-allocate with monomorphized name
 		if (node.nodeType != null && node.nodeType.kind == TypeKind.Ref && node.nodeType.typeReturn != null) {
 			const innerType = node.nodeType.typeReturn;

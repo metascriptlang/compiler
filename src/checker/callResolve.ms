@@ -957,6 +957,19 @@ function checkPromiseConstruction(ctx: CheckerContext, node: Node, expected: Typ
 	return promise;
 }
 
+// `new S(a, b)` on a struct is its object constructor, the literal `{ f0: a, f1: b }`:
+// checked as that literal, an omitted field takes its zero value under the literal's rules.
+function checkStructConstruction(ctx: CheckerContext, node: Node, structType: Type): Type | null {
+	const d = node.data as NewExprData;
+	const fields = positionalFieldsOf(structType);
+	if (fields == null || d.newArguments.length > fields.typeNames.length) return null;
+	for (const arg of d.newArguments) { if (arg.kind == NodeKind.SpreadExpr) return null; }
+	node.kind = NodeKind.ObjectLiteral;
+	node.data = { properties: d.newArguments, keys: fields.typeNames.slice(0, d.newArguments.length), keyLocations: [] } as ObjectLiteralData;
+	callCheckExpr(ctx, node, structType);
+	return node.nodeType!;
+}
+
 export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | null): Type {
 	const d = node.data as NewExprData;
 	d.newArguments = expandTupleSpreads(ctx, inlineLiteralSpreads(d.newArguments));
@@ -1021,6 +1034,8 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		if (expected != null && (expected.kind == TypeKind.Struct || expected.kind == TypeKind.GenericInstance)
 				&& expected.typeName == id.name && (newSym == null || !hasFlag(newSym, SymbolFlag.HasConstructor))) {
 			typeNewCallee(ctx, d.newCallee);
+			const built = newSym != null ? checkStructConstruction(ctx, node, expected) : null;
+			if (built != null) return built;
 			node.nodeType = expected;
 			fitPositionalArgs(ctx, d.newArguments, newSym != null ? positionalFieldsOf(expected) : null);
 			return expected;
@@ -1099,6 +1114,11 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			}
 			if (!noExplicit) checkExplicitTypeArgArity(ctx, node, extractGenericNames("gen:" + genericParams2), calleeName2);
 		}
+	}
+	if (resolvedType != null && (resolvedType.kind == TypeKind.Struct || resolvedType.kind == TypeKind.GenericInstance)
+			&& d.newCallee.resolvedSym != null && !hasFlag(d.newCallee.resolvedSym, SymbolFlag.HasConstructor)) {
+		const built = checkStructConstruction(ctx, node, resolvedType);
+		if (built != null) return built;
 	}
 	// Resolve inner struct type for field type propagation
 	const innerType = (resolvedType != null && resolvedType.kind == TypeKind.Ref && resolvedType.typeReturn != null)
