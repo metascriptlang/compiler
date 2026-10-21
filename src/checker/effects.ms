@@ -3,7 +3,7 @@
 
 import { ArrowFunctionData, CallExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, PropertyDeclData, Symbol, SymbolKind, Type } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { CheckerContext, LIFECYCLE_HOOK_NAMES, addError, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName } from "./context";
+import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
 import { SymbolFlag, hasFlag, parentClassSymOf } from "./symbol";
 import { functionSlotOf, isAtomicRef, isSendableFunction, typeCarriesRef } from "./types";
@@ -43,6 +43,8 @@ interface DeferredCheck {
 }
 
 let deferred: DeferredCheck[] = [];
+let hookRegistry: ExtensionRegistry | null = null;
+const TASK_DROP_HOOKS: string[] = ["onDestroy", "onCopy", "onClone"];
 
 function tableFor(e: Effect): EffectTable {
 	return match (e) {
@@ -62,7 +64,9 @@ export function deferEffectCheck(site: Node, check: (ctx: CheckerContext) => voi
 export function runDeferredEffectChecks(ctx: CheckerContext): void {
 	const checks = deferred;
 	deferred = [];
+	hookRegistry = ctx.extensionRegistry;
 	for (const d of checks) d.check(ctx);
+	hookRegistry = null;
 	checkHookEffects(ctx);
 	sideTable = emptyTable();
 	spawnTable = emptyTable();
@@ -302,13 +306,29 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 	}
 	const own = through(call, "calls '" + name + "'", routineEffect(sym!, e));
 	if (own != null) return own;
-	return dispatchedEffect(call, sym!, e);
+	const dispatched = dispatchedEffect(call, sym!, e);
+	return dispatched != null ? dispatched : ownedValueHookEffect(call, e);
 }
 
 export function newEffect(newNode: Node, e: Effect): EffectCause | null {
 	const classSym = (newNode.data as NewExprData).newCallee.resolvedSym;
 	if (classSym == null || classSym.symbolKind != SymbolKind.Class) return null;
-	return through(newNode, "constructs '" + classSym.name + "'", constructionEffect(classSym, e));
+	const built = through(newNode, "constructs '" + classSym.name + "'", constructionEffect(classSym, e));
+	return built != null ? built : ownedValueHookEffect(newNode, e);
+}
+
+function ownedValueHookEffect(site: Node, e: Effect): EffectCause | null {
+	if (e != Effect.SpawnUnsafe || hookRegistry == null || site.nodeType == null) return null;
+	const typeSym = nominalTypeSym(site.nodeType!);
+	if (typeSym == null) return null;
+	for (const name of TASK_DROP_HOOKS) {
+		for (const m of findAllExtensionsByName(hookRegistry!, name)) {
+			if (m.isStatic || m.sym == null || extReceiverSym(m) != typeSym) continue;
+			const c = through(site, "owns a '" + typeSym.name + "' whose '" + name + "' runs here", routineEffect(m.sym!, e));
+			if (c != null) return c;
+		}
+	}
+	return null;
 }
 
 function useEffect(node: Node, e: Effect): EffectCause | null {
