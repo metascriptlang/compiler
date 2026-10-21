@@ -2595,6 +2595,16 @@ export function createConditionalType(check: Type, extendsType: Type, trueType: 
 	return t;
 }
 
+// The `infer` parameters a conditional's extends clause declares, kept as the elements of
+// typeReturn; every other parameter in the clause is an outer one, so the conditional defers.
+export function setInferParams(cond: Type, declared: Type[]): void {
+	if (declared.length > 0) cond.typeReturn = createTuple(declared);
+}
+
+function inferParamsOf(t: Type): Type[] {
+	return t.typeReturn != null ? t.typeReturn.typeChildren : [];
+}
+
 // Evaluate a conditional type if its check and extends types are concrete (no GenericParam).
 // Returns the true/false branch, or the original type if unevaluable.
 export function evaluateConditionalType(t: Type | null): Type {
@@ -2607,12 +2617,18 @@ export function evaluateConditionalType(t: Type | null): Type {
 	if (hasGenericParams(ext)) {
 		const bindings = createUnifyBindings();
 		unifyType(ext, check, bindings);
-		const inferParams: Type[] = [];
-		collectGenericParams(ext, inferParams, 0);
+		const inferParams = inferParamsOf(t);
+		for (let i = bindings.params.length - 1; i >= 0; i -= 1) {
+			if (inferParams.indexOf(bindings.params[i]) >= 0) continue;
+			bindings.names.splice(i, 1);
+			bindings.params.splice(i, 1);
+			bindings.types.splice(i, 1);
+		}
 		for (const gp of inferParams) {
 			if (boundSlot(bindings, gp) < 0) bindParam(bindings, gp, unknownType());
 		}
 		const inferredExt = substituteBound(ext, bindings);
+		if (hasGenericParams(inferredExt)) return t;
 		if (!isAssignableForConditional(check, inferredExt)) return t.typeChildren[3];
 		return substituteBound(t.typeChildren[2], bindings);
 	}
@@ -4124,6 +4140,11 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		unifyIntoUnionFormal(formal, concrete, bindings);
 		return;
 	}
+	if (formal.kind == TypeKind.Conditional && concrete.kind != TypeKind.Conditional && formal.typeChildren.length == 4) {
+		unifyType(formal.typeChildren[2], concrete, bindings);
+		unifyType(formal.typeChildren[3], concrete, bindings);
+		return;
+	}
 	// Structural match — same kind, recurse into children
 	if (formal.kind != concrete.kind) return;
 	if (formal.kind == TypeKind.Array || formal.kind == TypeKind.SizedArray || formal.kind == TypeKind.Span || formal.kind == TypeKind.Set) {
@@ -4656,7 +4677,10 @@ function typeDisplayNameInner(t: Type | null): string {
 	}
 	if (t.kind == TypeKind.Tuple && t.typeChildren.length > 0) {
 		const parts: string[] = [];
-		for (const c of t.typeChildren) parts.push(typeDisplayName(c));
+		const required = getMinArity(t);
+		for (let i = 0; i < t.typeChildren.length; i += 1) {
+			parts.push(typeDisplayName(t.typeChildren[i]) + (i >= required ? "?" : ""));
+		}
 		return "[" + parts.join(", ") + "]";
 	}
 	if (name != "") return name;

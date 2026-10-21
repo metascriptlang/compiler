@@ -8,7 +8,7 @@
 
 import { firstPrivateField } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
-import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound } from "./types";
+import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem } from "./context";
@@ -187,6 +187,29 @@ function bracketDepthStep(text: string, i: int32): int32 {
 	const arrowTail = c == ">" && i > 0 && text.charAt(i - 1) == "=";
 	if (c == ")" || c == "]" || c == "}" || (c == ">" && !arrowTail)) return -1;
 	return 0;
+}
+
+function tupleElementText(element: string): { text: string, optional: boolean } {
+	const e = element.trim();
+	const colon = findChar(e, ":");
+	if (colon > 0) {
+		let label = e.slice(0, colon).trim();
+		const optional = label.endsWith("?");
+		if (optional) label = label.slice(0, label.length - 1).trim();
+		if (isLabelText(label)) return { text: e.slice(colon + 1, e.length).trim(), optional };
+	}
+	if (e.endsWith("?")) return { text: e.slice(0, e.length - 1).trim(), optional: true };
+	return { text: e, optional: false };
+}
+
+function isLabelText(s: string): boolean {
+	if (s == "") return false;
+	for (let i = 0; i < s.length; i += 1) {
+		const c = s.charAt(i);
+		const letter = (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || c == "_" || c == "$";
+		if (!letter && !(i > 0 && c >= "0" && c <= "9")) return false;
+	}
+	return true;
 }
 
 // Tier 3: find a keyword string at top level (not inside brackets/parens/braces/angles).
@@ -705,6 +728,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				const falseType = resolveAnnotation(falsePart, ctx, line, col);
 				while (inferScope.length > inferSaved) { inferScope.pop(); }
 				const cond = createConditionalType(checkType, extendsType, trueType, falseType);
+				setInferParams(cond, declared);
 				return evaluateConditionalType(cond);
 			}
 		}
@@ -888,16 +912,31 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 	// This is checked BEFORE array suffixes because those forms have a base type before the `[`.
 	if (trimmed.charAt(0) == "[" && trimmed.endsWith("]")) {
 		const tupleInner = trimmed.slice(1, trimmed.length - 1).trim();
+		if (tupleInner == "" && line > 0) {
+			addError(ctx, "the empty tuple type '[]' has no value representation: drop the parameter or give the tuple an element", line, col);
+			return errorType();
+		}
 		if (tupleInner != "") {
 			const elements = splitTopLevel(tupleInner, ",");
 			// Single element with no comma is ambiguous with `[N]` size, but standalone
 			// `[N]` isn't valid TS — we treat it as a 1-element tuple. `[T]` works.
 			const tupleTypes: Type[] = [];
+			let firstOptional = -1;
 			for (const e of elements) {
-				const t = e.trim();
-				if (t != "") tupleTypes.push(resolveAnnotation(t, ctx, line, col));
+				const element = tupleElementText(e);
+				if (element.text == "") continue;
+				if (element.optional && firstOptional < 0) firstOptional = tupleTypes.length;
+				if (!element.optional && firstOptional >= 0 && line > 0) {
+					addError(ctx, "A required element cannot follow an optional element: '" + e.trim() + "' in '" + trimmed + "'", line, col);
+				}
+				const text = element.optional ? optionalizeTypeString(element.text) : element.text;
+				tupleTypes.push(resolveAnnotation(text, ctx, line, col));
 			}
-			if (tupleTypes.length > 0) return createTuple(tupleTypes);
+			if (tupleTypes.length > 0) {
+				const tuple = createTuple(tupleTypes);
+				if (firstOptional >= 0) setMinArity(tuple, firstOptional);
+				return tuple;
+			}
 		}
 	}
 
