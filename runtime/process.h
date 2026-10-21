@@ -882,7 +882,7 @@ static inline msString msProcessSpawnSync(msString command) {
 }
 
 #ifdef _WIN32
-#define _MS_EFTYPE 79
+#define _MS_EFTYPE 4028
 static inline int32_t _msWinStartErrno(DWORD lastError, msString exe) {
 	if (lastError == ERROR_FILE_NOT_FOUND || lastError == ERROR_PATH_NOT_FOUND) return ENOENT;
 	if (lastError == ERROR_ACCESS_DENIED) {
