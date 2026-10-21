@@ -267,6 +267,9 @@ test "fieldVisibility: a struct with a private field has no default value outsid
 		"function f(): uint64 { let b: Box<uint64>; return b.n; }\n",
 		"let sealed: Proof;\nfunction f(): uint64 { return needs(sealed); }\n",
 		"class Keeps { p: Proof; constructor() {} }\n",
+		"function f(): uint64 { return needs(new Proof()); }\n",
+		"function f(): uint64 { const w = new Wrap(1); return w.n; }\n",
+		"function f(): uint64 { const b = new Box<uint64>(); return 0; }\n",
 	];
 	for (const form of forms) assert reports(sealedLib, sealedUse + form, sealedWhy), form;
 }

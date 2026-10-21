@@ -98,6 +98,23 @@ test "new of a class without a constructor is refused when a field has no defaul
 	assert !hasLine(errors, "'init'", NEW_LEAVES), errors.join("\n");
 }
 
+test "new of a struct is refused when it leaves out a field whose type has no default value" {
+	const src = `
+struct Holds { tag: string; xs: int32[]; }
+struct Box<T> { v: T; items: T[]; }
+const a = new Holds();
+const b = new Holds("t");
+const c = new Box<int32>(1);
+const d = new Holds("t", [1]);
+`;
+	const errors = checkOnly(src).errors;
+	let refusals = 0;
+	for (const e of errors) if (e.contains("field 'xs'") && e.contains(LITERAL)) refusals += 1;
+	assert refusals == 2, errors.join("\n");
+	assert hasLine(errors, "field 'items'", LITERAL), errors.join("\n");
+	assert errors.length == 3, errors.join("\n");
+}
+
 test "new is accepted when every such field has an initializer or a constructor assigns it" {
 	const errors = checkOnly(SRC_NEW_ACCEPTED).errors;
 	assert errors.length == 0, errors.join("\n");
