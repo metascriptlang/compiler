@@ -1622,6 +1622,24 @@ function globalCell(): void {
 	]);
 }
 
+function borrowAcrossReload(): void {
+	const tag = "hcrBorrowAcrossReload";
+	const dir = freshDir(`${TMP}/borrowAcrossReload`);
+	for (const f of ["app.ms", "state.ms"]) copy(`${FIXTURES}/borrowAcrossReload/${f}`, `${dir}/${f}`);
+	copy(`${FIXTURES}/registrySupport.ms`, `${dir}/support.ms`);
+	const edits = ["logic.ms", "logicEdit.ms"];
+	for (let i = 0; i < edits.length; i += 1) {
+		copy(`${FIXTURES}/borrowAcrossReload/${edits[i]}`, `${dir}/logic.ms`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g${i + 1}/module${sharedLibraryExt()}`],
+			`generation ${i + 1} failed to build`);
+	}
+	runPrebuilt(tag, dir, ["logic", "state", "support"], "HCR-BORROW", [
+		"HCR-BORROW start: [label-1] [field-1]",
+		"HCR-BORROW g2: logic",
+		"HCR-BORROW after: [label-1]4 [field-2]4",
+	]);
+}
+
 function watchWarmDependency(): void {
 	const tag = "hcrWatchWarmDependency";
 	const root = freshDir(`${TMP}/watchWarmDependency`);
@@ -2065,6 +2083,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrCoreConstant", run: coreConstant },
 	{ name: "hcrCoreNative", run: coreNative },
 	{ name: "hcrGlobalCell", run: globalCell },
+	{ name: "hcrBorrowAcrossReload", run: borrowAcrossReload },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
 	{ name: "hcrTypeInfoLocality", run: typeInfoLocality },
 	{ name: "hcrWatchLink", run: watchLink },
