@@ -6878,7 +6878,9 @@ class Gen {
 		const s = isInt ? "I" : "F";
 		const ctor = isInt ? "(ixI(i, 2000) - 1000) as DsI" : "((ixI(i, 2000) - 1000) as float64 * 0.5) as DsF";
 		const tail = isInt ? "\treturn (x as int32) + n;\n" : "\treturn (((x as float64) * 2.0) as int32) + n;\n";
+		const cmp = "(this a: " + name + ", b: " + name + "): boolean;\n";
 		this.useHelper(name, "type " + name + " = distinct " + (isInt ? "int32" : "float64") + ";\n" +
+			"@delegate export function `==`" + cmp + "@delegate export function `<`" + cmp + "@delegate export function `<=`" + cmp +
 			"function ds" + s + "(i: int32): " + name + " { return " + ctor + "; }\n" +
 			"function dsRank" + s + "(xs: " + name + "[], x: " + name + ", f: int32): int32 {\n" +
 			"\tlet n: int32 = 0;\n" +
@@ -10001,6 +10003,22 @@ test "the enum family alone reaches each of its shapes" {
 		for (let i = 0; i < shapes.length; i++) { if (countOf(text, shapes[i]) >= floor[i]) { seen[i] = true; } }
 	}
 	for (let i = 0; i < shapes.length; i++) { assert seen[i]; }
+}
+
+test "every distinct exports the comparisons its rank helper and generic includes use" {
+	const f = withWeights("fams=enum types=int32,uint8,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40");
+	let kits = 0;
+	for (let seed = 1; seed < 61; seed++) {
+		const text = generate(seed as uint64, f);
+		for (const name of ["DsI", "DsF"]) {
+			if (!text.contains("type " + name + " = distinct")) { continue; }
+			kits++;
+			for (const op of ["==", "<", "<="]) {
+				assert text.contains("@delegate export function `" + op + "`(this a: " + name + ", b: " + name + "): boolean;");
+			}
+		}
+	}
+	assert kits > 5;
 }
 
 test "an enum never repeats a value, so no match repeats a case label" {
