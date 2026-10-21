@@ -832,3 +832,36 @@ test "a class from a macro-importing module keeps one identity for a generic che
 	assert publishesOf(r, gen) == "[]";
 	assert publishesOf(r, user) == "[]";
 }
+
+const DRIFT_LIB = 'import { k } from "./d";
+export class Home {
+  n: int32 = k;
+}
+export function mk(): Home {
+  return new Home();
+}
+';
+const DRIFT_MID = 'import { Home } from "./lib";
+export function take(h: Home): int32 {
+  return h.n;
+}
+';
+const DRIFT_USER = 'import { mk } from "./lib";
+import { take } from "./mid";
+console.log(take(mk()));
+';
+
+test "an upstream edit re-registers an unchanged module against its dependency's current class" {
+	const dir = spliceDir("drift");
+	const files = [["d.ms", "export const k: int32 = 1;\n"], ["lib.ms", DRIFT_LIB], ["mid.ms", DRIFT_MID], ["user.ms", DRIFT_USER]];
+	for (const f of files) writeFile(dir + "/" + f[0], f[1]);
+	const lib = lspPathToUri(dir + "/lib.ms");
+	const user = lspPathToUri(dir + "/user.ms");
+	const r = replay([
+		initializeDrain(),
+		frames([notification("textDocument/didOpen", openParams(lib, DRIFT_LIB))]),
+		frames([notification("textDocument/didOpen", openParams(user, DRIFT_USER))]),
+		frames([notification("textDocument/didChange", changeParams(lspPathToUri(dir + "/d.ms"), 2, "export const k: int32 = 2;\n"))]),
+	]);
+	assert publishesOf(r, user) == "[]";
+}
