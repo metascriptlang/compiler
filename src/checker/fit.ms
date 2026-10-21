@@ -8,7 +8,7 @@ import { Token, TokenKind, createToken } from "../lexer/token";
 import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal, arityAdapts, runtimeParams } from "./compat";
 import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, resolveUserOperator, extDeclaresReceiver, isGeneratorFlags } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { isVarargs, peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType, matchUnionBehindInstance, literalUnionBase, holdsNumberLiteral, widenNumberLiteralType } from "./types";
+import { isVarargs, peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType, matchUnionBehindInstance, literalUnionBase, holdsNumberLiteral, widenNumberLiteralType, numberLiteralSet } from "./types";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
@@ -2881,6 +2881,12 @@ export function widenNumberLiteral(node: Node): Node {
 	if (held == null) return node;
 	const widened = widenNumberLiteralType(held);
 	if (widened == held) return node;
+	if (node.flags.has(NodeFlag.ConvCheck)) {
+		const read = createNodeAt(NodeKind.TypeAssertion, { asExpr: node, asType: "" } as TypeAssertionData, node.location);
+		read.nodeType = widened;
+		read.flags = read.flags.incl(NodeFlag.Sem);
+		return read;
+	}
 	let read = node;
 	if (declaredTagUnionOf(node) != null) {
 		const projected = narrowUnionToVariant(node, held);
@@ -2980,7 +2986,26 @@ export function assertionNarrows(srcType: Type, target: Type): boolean {
 	const from = assertionPayload(srcType);
 	const to = assertionPayload(target);
 	if (isSlotUnion(from) && tagUnionMemberSlot(from, to) >= 0) return true;
-	return from.kind == TypeKind.String && isLiteralSet(to);
+	if (!isLiteralSet(to)) return false;
+	if (isStringLike(to)) return from.kind == TypeKind.String || (isStringLike(from) && !literalSetHolds(to, from));
+	return numberLiteralSet(to) != null && (isNumeric(from) || numberLiteralSet(from) != null) && !literalSetHolds(to, from);
+}
+
+function literalMembers(t: Type): Type[] {
+	if (t.kind == TypeKind.StringLiteral || t.kind == TypeKind.NumberLiteral) return [t];
+	return literalUnionBase(t) != null ? t.typeChildren : [];
+}
+
+function literalSetHolds(to: Type, from: Type): boolean {
+	const held = literalMembers(to);
+	const members = literalMembers(from);
+	if (members.length == 0) return false;
+	for (const m of members) {
+		let found = false;
+		for (const h of held) if (h.kind == m.kind && h.typeName == m.typeName) found = true;
+		if (!found) return false;
+	}
+	return true;
 }
 
 export function checkedAssertion(expr: Node, target: Type): Node {
@@ -3679,4 +3704,23 @@ test "a union whose members the value names keeps no tag" {
 	assert !storesUnionTag(createUnion([numberType(), stringType()]));
 	const p = declaredStruct("P", ["a"], [int32Type()], false);
 	assert !storesUnionTag(createUnion([p, stringType()]));
+}
+
+import { createNumberLiteral } from "./types";
+
+test "an as into a literal union is checked only when the source can hold a value outside it" {
+	const narrow = createUnion([createStringLiteral("a"), createStringLiteral("b")]);
+	const wide = createUnion([createStringLiteral("a"), createStringLiteral("b"), createStringLiteral("c")]);
+	assert assertionNarrows(wide, narrow);
+	assert assertionNarrows(stringType(), narrow);
+	assert !assertionNarrows(narrow, wide);
+	assert !assertionNarrows(createStringLiteral("a"), narrow);
+	const narrowN = createUnion([createNumberLiteral("1", int32Type()), createNumberLiteral("2", int32Type())]);
+	const wideN = createUnion([createNumberLiteral("1", int32Type()), createNumberLiteral("2", int32Type()), createNumberLiteral("3", int32Type())]);
+	assert assertionNarrows(wideN, narrowN);
+	assert assertionNarrows(int32Type(), narrowN);
+	assert !assertionNarrows(narrowN, wideN);
+	assert !assertionNarrows(createNumberLiteral("2", int32Type()), narrowN);
+	assert !assertionNarrows(createMaybeType(narrow), createMaybeType(wide));
+	assert assertionNarrows(createMaybeType(wide), createMaybeType(narrow));
 }

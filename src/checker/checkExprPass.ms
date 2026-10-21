@@ -2561,7 +2561,7 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 	if (distinctBase != null) {
 		const checked = createNodeAt(NodeKind.TypeAssertion, { asExpr: d.asExpr, asType: typeDisplayName(distinctBase) } as TypeAssertionData, d.asExpr.location);
 		checked.nodeType = distinctBase;
-		checked.flags = checked.flags.incl(NodeFlag.Sem).incl(NodeFlag.ObjCheck);
+		checked.flags = checked.flags.incl(NodeFlag.Sem).incl(isLiteralSet(distinctBase) ? NodeFlag.ConvCheck : NodeFlag.ObjCheck);
 		stampCheckedInstance(ctx, checked, distinctBase);
 		node.data = { asExpr: checked, asType: d.asType };
 		d = node.data as TypeAssertionData;
@@ -4115,7 +4115,7 @@ function checkedDistinctBase(srcType: Type, targetType: Type): Type | null {
 	const held = skipModifier(targetType) ?? targetType;
 	if (distinctBody(held) == null) return null;
 	const base = peelDistinct(held);
-	return base != null && objectConversion(srcType, base) == ObjConv.Checked ? base : null;
+	return base != null && (objectConversion(srcType, base) == ObjConv.Checked || (isLiteralSet(base) && assertionNarrows(srcType, base))) ? base : null;
 }
 
 function unionSliceMember(srcType: Type, member: Type): Type | null {
