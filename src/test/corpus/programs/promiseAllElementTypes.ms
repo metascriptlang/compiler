@@ -22,6 +22,7 @@ async function wordOrInt(n: int32): Promise<string | int32> {
 async function pair(n: int32): Promise<[Box, int32]> { const b = new Box(); b.v = n; return [b, n * 10]; }
 async function tag(n: int32): Promise<Tag> { return { name: `t${n}`, n }; }
 async function pairStruct(n: int32): Promise<Pair> { return { n, tag: `p${n}` }; }
+async function one(big: boolean): Promise<1 | 2> { return big ? 2 : 1; }
 async function row(n: int32): Promise<int32[]> { return [n, n + 1]; }
 
 function boxOrIntValue(u: Box | int32): int32 {
@@ -66,6 +67,8 @@ async function runValues(rounds: int32): Promise<string> {
 		sum += boxOrIntValue(lone);
 		const loneWord = await wordOrInt(i);
 		text = text + wordOrIntText(loneWord);
+		const literal = await one(i > 2);
+		sum += literal;
 		const rs = await Promise.all([row(i), row(i + 5)]);
 		sum += rs.length + rs[0][1] + rs[1][0];
 	}
