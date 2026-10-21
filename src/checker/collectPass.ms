@@ -842,6 +842,7 @@ function signatureNamesAny(routine: Node, names: string): boolean {
 function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: string, classGenerics: string, body: Node[], memberIdx: int32, isExternClass: boolean): void {
 	const member = body[memberIdx];
 	let builtinKind = "";
+	let throws = false;
 	let methodNode: Node | null = null;
 	if (member.kind == NodeKind.MethodDecl) {
 		methodNode = member;
@@ -851,6 +852,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 			methodNode = dd.decoratedNode;
 			const info = extractDecoratorInfo(member);
 			builtinKind = info.builtinKind;
+			throws = info.throws;
 			reportExportNameMisuse(ctx, dd);
 			acceptsInline(ctx, dd);
 		}
@@ -923,6 +925,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 	if (builtinKind != "") {
 		methodSym.builtinKind = builtinKind;
 	}
+	if (throws) setFlag(methodSym, SymbolFlag.Throws);
 	// Extern class methods → NativeMethod flag (don't set ExtCall, keep as native member call)
 	if (isExternClass) {
 		setFlag(methodSym, SymbolFlag.NativeMethod);

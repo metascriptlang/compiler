@@ -17,12 +17,6 @@
 double msTimeNow(void);
 
 /**
- * ECMAScript TimeClip: a finite time value within +-8.64e15 truncated toward
- * zero (negative zero becomes zero); anything else is NaN.
- */
-double msTimeClip(double t);
-
-/**
  * Monotonic time in milliseconds (fractional). Never goes backward.
  * Use for elapsed-time measurement. Origin is unspecified and not
  * comparable across processes. Not affected by wall-clock adjustments.
