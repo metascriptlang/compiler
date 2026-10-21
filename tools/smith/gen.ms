@@ -6253,6 +6253,7 @@ class Gen {
 
 	seqSpread(t: Ty, indent: string): string {
 		const T = tyName(t);
+		if (this.rng.below(4) == 0) { return this.spreadOther(t, indent); }
 		const vecs = this.entsOf(EntKind.VecVar, t);
 		if (vecs.length == 0) { return this.seqVec(t, indent); }
 		const a = this.pickEnt(vecs);
@@ -6276,6 +6277,59 @@ class Gen {
 		const name = this.entName("v");
 		this.newVec(name, t, joined);
 		return indent + "let " + name + ": Vec<" + T + "> = " + value + ";\n";
+	}
+
+	spreadOther(t: Ty, indent: string): string {
+		const T = tyName(t);
+		const X = tyTitle(t);
+		const tuples: Ent[] = [];
+		for (const e of this.tupleEnts(false)) {
+			let same = true;
+			for (const p of e.params) { if (p != t) { same = false; } }
+			if (same) { tuples.push(e); }
+		}
+		const sets = this.entsOf(EntKind.SetVar, t);
+		const maps = this.entsOf(EntKind.MapVar, t);
+		const forms: int32[] = [3];
+		if (tuples.length > 0) { forms.push(0); }
+		if (sets.length > 0) { forms.push(1); }
+		if (maps.length > 0) { forms.push(2); }
+		const form = forms[this.rng.below(forms.length)];
+		if (form == 0) {
+			const n = this.pickEnt(tuples).name;
+			if (this.rng.chance(50)) {
+				this.spanHelpers(t);
+				const d = this.expr(t, 0);
+				return indent + "let " + this.newLocal(t) + ": " + T + " = restV" + X + "(" + d + ", ..." + n + ");\n";
+			}
+			const tail = this.expr(t, 0);
+			const name = this.entName("a");
+			this.pushEnt(EntKind.ArrayVar, name, t, [], 0, 0 as int64);
+			return indent + "let " + name + ": " + T + "[] = [..." + n + ", " + tail + "];\n";
+		}
+		if (form == 1) {
+			const tail = this.expr(t, 0);
+			const name = this.entName("a");
+			this.pushEnt(EntKind.ArrayVar, name, t, [], 0, 0 as int64);
+			return indent + "let " + name + ": " + T + "[] = [..." + this.pickEnt(sets).name + ", " + tail + "];\n";
+		}
+		if (form == 2) {
+			const m = this.pickEnt(maps).name;
+			const name = this.entName("a");
+			this.pushEnt(EntKind.ArrayVar, name, t, [], 0, 0 as int64);
+			return indent + "let " + name + ": " + T + "[] = [..." + m + "].map((e: [int32, " + T + "]): " + T + " => e[1]);\n";
+		}
+		if (form == 3) {
+			this.useHelper("fixV" + X, "function fixV" + X + "(a: " + T + ", b: " + T + ", c: " + T + "): " + T + " { return b == c ? a : b; }\n");
+			const lead = this.rng.below(2);
+			let args = "";
+			for (let i = 0; i < 3; i++) {
+				const e = this.expr(t, 0);
+				args += i < lead ? e + ", " : (i == lead ? "...[" : ", ") + e;
+			}
+			return indent + "let " + this.newLocal(t) + ": " + T + " = fixV" + X + "(" + args + "]);\n";
+		}
+		unreachable;
 	}
 
 	seqDestruct(t: Ty, indent: string, rest: boolean): string {
@@ -9923,29 +9977,41 @@ test "no program nests a destructuring pattern, destructures an object or elides
 	for (const shape of ["let [[", ", [l", "let {", "const {", "let [,", "[,", ", ,", "] = {"]) { assert !text.contains(shape); }
 }
 
-test "no program spreads a tuple, a Set or a Map, and every spread operand is a Vec" {
-	const text = bothText();
+test "every spread operand is a Vec, a same-typed tuple, a Set, a Map or an array literal" {
+	const text = bothText() + textOver(withWeights("fams=seq,coll types=int32,float64 stmts=8 w.stmt.fam=80 w.expr.fam=40 w.seq.spread=40 w.seq.tuple=8"), 60);
 	let at = text.indexOf("...");
 	let spreads = 0;
+	let others = 0;
 	while (at >= 0) {
 		spreads++;
 		const next = text.slice(at + 3, at + 5);
 		const rest = text.slice(at + 3, at + 9) == "rest: ";
-		assert rest || next.startsWith("[") || next == "xs" || (next.startsWith("v") && text.charCodeAt(at + 4) >= 48 && text.charCodeAt(at + 4) <= 57);
+		const digit = text.charCodeAt(at + 4) >= 48 && text.charCodeAt(at + 4) <= 57;
+		if (digit && (next.startsWith("n") || next.startsWith("m"))) { others++; }
+		assert rest || next.startsWith("[") || next == "xs" || (digit && (next.startsWith("v") || next.startsWith("n") || next.startsWith("m") || next.startsWith("a") || next.startsWith("r")));
 		at = text.indexOf("...", at + 3);
 	}
-	assert spreads > 20;
+	assert spreads > 20 && others > 5;
+	assert text.contains("].map((e: [int32, ") && text.contains(" = fixV");
 }
 
-test "a spread argument always lands in the rest parameter of a variadic helper" {
+test "a spread argument lands in the rest parameter, or covers fixed parameters only as an array literal" {
 	const text = textOver(seqFeatures("w.seq.spread=8"), 30);
 	let calls = 0;
+	let fixed = 0;
 	for (const line of text.split("\n")) {
-		if (!line.contains(" = restV") || line.startsWith("function")) { continue; }
-		calls++;
-		assert countOf(line, "...") == 1 && line.endsWith(");");
+		if (line.startsWith("function")) { continue; }
+		if (line.contains(" = restV")) {
+			calls++;
+			assert countOf(line, "...") == 1 && line.endsWith(");");
+		}
+		if (line.contains(" = fixV")) {
+			fixed++;
+			assert line.contains("(...[") || line.contains(", ...[");
+			assert line.endsWith("]);");
+		}
 	}
-	assert calls > 5;
+	assert calls > 5 && fixed > 0;
 }
 
 test "a copied tuple is never written afterwards" {
