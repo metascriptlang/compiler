@@ -2629,9 +2629,12 @@ function refuseTextlessArgs(ctx: CheckerContext, args: Node[], hasReceiver: bool
 
 function restTupleOf(calleeType: Type): Type | null {
 	const n = calleeType.typeChildren.length;
-	const last = n > 0 ? calleeType.typeChildren[n - 1] : null;
-	if (last == null || last.kind != TypeKind.Varargs) return null;
-	const inner = peelTransparentInstance(unwrapVarargs(last));
+	return n > 0 ? tupleOfRest(calleeType.typeChildren[n - 1]) : null;
+}
+
+function tupleOfRest(rest: Type): Type | null {
+	if (rest.kind != TypeKind.Varargs) return null;
+	const inner = peelTransparentInstance(unwrapVarargs(rest));
 	return inner.kind == TypeKind.Tuple ? inner : null;
 }
 
@@ -3531,8 +3534,8 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	// Pass 1: unify args against params to derive bindings.
 	const restIdx = calleeType.typeChildren.length - 1;
 	const declRest = restIdx >= 0 ? calleeType.typeChildren[restIdx] : null;
-	const deferredRest = receiverBindings == null && declRest != null && declRest.kind == TypeKind.Varargs && restAwaitsInstance(declRest);
-	const tupleRest = receiverBindings == null && restTupleOf(calleeType) != null;
+	const deferredRest = declRest != null && declRest.kind == TypeKind.Varargs && restAwaitsInstance(declRest);
+	const tupleRest = restTupleOf(calleeType) != null;
 	const limit = tupleRest ? argTypes.length
 		: argTypes.length < calleeType.typeChildren.length ? argTypes.length : calleeType.typeChildren.length;
 	const candParams: Type[] = [];
@@ -3654,10 +3657,14 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			if (ei >= 0) eb.types[ei] = ib.types[ii]; else bindAt(eb, ib, ii);
 		}
 	}
-	for (let pi = 0; pi < reconcileLimit; pi += 1) {
+	const deferredTuple = deferredRest ? tupleOfRest(applySubstitutions(declRest!, eb)) : null;
+	const formalLimit = deferredTuple == null ? reconcileLimit
+		: cd.arguments.length < restIdx + deferredTuple.typeChildren.length ? cd.arguments.length : restIdx + deferredTuple.typeChildren.length;
+	for (let pi = 0; pi < formalLimit; pi += 1) {
 		const arg = cd.arguments[pi];
 		if (arg == null) continue;
-		const substituted = applySubstitutions(calleeType.typeChildren[pi], eb);
+		const rawFormal = deferredTuple != null && pi >= restIdx ? deferredTuple.typeChildren[pi - restIdx] : calleeType.typeChildren[pi];
+		const substituted = applySubstitutions(rawFormal, eb);
 		if (substituted == null) continue;
 		if (arg.nodeType != null && !hasGenericParams(substituted)) {
 			const thunkArg = synthClosureThunk(arg, substituted, arg.nodeType, ctx);
@@ -3680,7 +3687,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			for (const c of conflicted) { if (c == pi) skipConstruct = true; }
 			if (!skipConstruct) {
 				rearmUnfitProperties(ctx, arg, substitutedObject);
-				rearmLiteralForRecheck(arg, calleeType.typeChildren[pi]);
+				rearmLiteralForRecheck(arg, rawFormal);
 				callCheckExpr(ctx, arg, carried);
 			}
 			if (arg.nodeType == null) arg.nodeType = carried;
@@ -3777,8 +3784,10 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	node.resolvedSym = instSym;
 	cd.callee.resolvedSym = instSym;
 	cd.callee.nodeType = instSym.symbolType;
-	const instRest = deferredRest && instSym.symbolType != null ? restTupleOf(instSym.symbolType) : null;
-	if (instRest != null) fitRestTupleArgs(ctx, node, instSym.symbolType!, instRest, callMinArity(instSym.symbolType), argTypes.length);
+	const instCallee = deferredRest && instSym.symbolType != null
+		? (receiverBindings != null ? stripReceiverParam(instSym.symbolType) : instSym.symbolType) : null;
+	const instRest = instCallee != null ? restTupleOf(instCallee) : null;
+	if (instRest != null) fitRestTupleArgs(ctx, node, instCallee!, instRest, callMinArity(instCallee!), argTypes.length);
 	return instSym.symbolType;
 }
 
