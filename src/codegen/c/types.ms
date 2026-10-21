@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType } from "../../checker/types";
+import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType } from "../../checker/types";
 import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
@@ -1330,14 +1330,8 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 				// Substitute generic params in fields with concrete type args
 				const genericDecl = genericParamsOf(t);
 				if (genericDecl != "") {
-					const paramNames = splitTopLevel(genericDecl, ",");
-					let concType: Type = baseType;
-					for (let pi = 0; pi < paramNames.length; pi += 1) {
-						if (pi < t.typeChildren.length) {
-							concType = substituteType(concType, paramNames[pi].trim(), t.typeChildren[pi]);
-						}
-					}
-					// If substituteType returned the same object, clone to avoid mutating the shared base
+					let concType: Type = substituteInstanceArgs(t, baseType);
+					// If substitution returned the same object, clone to avoid mutating the shared base
 					if (concType == baseType) {
 						const newChildren: Type[] = [];
 						for (const c of concType.typeChildren) newChildren.push(c);
@@ -1358,13 +1352,7 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			if (baseType != null && baseType.kind == TypeKind.Union) {
 				const genericDecl = genericParamsOf(t);
 				if (genericDecl != "") {
-					const paramNames = splitTopLevel(genericDecl, ",");
-					let concType: Type = baseType;
-					for (let pi = 0; pi < paramNames.length; pi += 1) {
-						if (pi < t.typeChildren.length) {
-							concType = substituteType(concType, paramNames[pi].trim(), t.typeChildren[pi]);
-						}
-					}
+					let concType: Type = substituteInstanceArgs(t, baseType);
 					// Stamp instance name so genUnionType caches under it (Phase 1b emits typedef)
 					if (concType != baseType) {
 						concType.typeName = instName;

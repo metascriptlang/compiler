@@ -2183,13 +2183,13 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				if (_contextBindings.names.length > 0) paramExpected = substituteBound(paramExpected, _contextBindings);
 				refuseUnboundLiteralParam(ctx, d.arguments[ai], paramExpected);
 				const declParams = extractGenericNames(getGenericDeclFlags(node.resolvedSym.declNode));
-				for (const declParam of declParams) {
-					let alreadyBound = false;
-					for (const bn of _argBindings.names) { if (bn == declParam) { alreadyBound = true; break; } }
-					if (!alreadyBound) {
-						paramExpected = substituteType(paramExpected, declParam, inferredType());
-					}
+				const declared = declaredTypeParams(node.resolvedSym, declParams.length);
+				const unbound = createUnifyBindings();
+				for (let di = 0; di < declParams.length; di += 1) {
+					const gp = di < declared.length ? declared[di] : null;
+					if (gp != null && boundSlot(_argBindings, gp.typeName, gp) < 0) bindParam(unbound, gp, inferredType());
 				}
+				paramExpected = applySubstitutions(paramExpected, unbound);
 			}
 			// Non-empty array/object literal under a still-generic formal:
 			// drop the expected type so the literal infers bottom-up and the
@@ -2909,14 +2909,13 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 			sgRecordSym(ctx, node.location.line, typeArgCol, typeArgCol + explicitArg.length, resolvedSym, concreteType, symKind, explicitArg, "", false);
 		}
 	}
-	// Find first generic param name in the return type and substitute
-	const genericParamName = findFirstGenericParamName(returnType);
-	// Single type arg → bind to first generic param found
-	if (genericParamName != "") {
+	// Single type arg → bind to first generic param found in the return type
+	const firstParam = findFirstGenericParam(returnType);
+	if (firstParam != null) {
 		const single = createUnifyBindings();
-		bindName(single, genericParamName, concreteType);
+		bindParam(single, firstParam, concreteType);
 		fitArgsToBoundFormals(ctx, node, fnType, single);
-		returnType = substituteType(returnType, genericParamName, concreteType);
+		returnType = substituteBound(returnType, single);
 		// Reference parity: eagerly instantiate body for concrete GenericInstance
 		if (returnType.kind == TypeKind.GenericInstance && returnType.typeReturn == null) {
 			const declParams = genericParamsOf(returnType);
@@ -3009,26 +3008,23 @@ function computeTypeArgCol(node: Node): int32 {
 	return 0;
 }
 
-// Find the first GenericParam name in a type tree (non-recursive to avoid array-by-value bug)
+function findFirstGenericParam(t: Type | null): Type | null {
+	if (t == null) return null;
+	if (t.kind == TypeKind.GenericParam) return t;
+	const viaReturn = findFirstGenericParam(t.typeReturn);
+	if (viaReturn != null) return viaReturn;
+	const viaExtra = findFirstGenericParam(t.typeExtra);
+	if (viaExtra != null) return viaExtra;
+	for (const c of t.typeChildren) {
+		const found = findFirstGenericParam(c);
+		if (found != null) return found;
+	}
+	return null;
+}
+
 function findFirstGenericParamName(t: Type): string {
-	if (t == null) return "";
-	if (t.kind == TypeKind.GenericParam) return t.typeName;
-	// Check typeReturn (Result.okType, Array.elemType, Function.returnType, etc.)
-	if (t.typeReturn != null) {
-		const name = findFirstGenericParamName(t.typeReturn);
-		if (name != "") return name;
-	}
-	// Check typeExtra (Result.errType, Map.valueType, etc.)
-	if (t.typeExtra != null) {
-		const name = findFirstGenericParamName(t.typeExtra);
-		if (name != "") return name;
-	}
-	// Check typeChildren (Function params, Union members, etc.)
-	for (let i = 0; i < t.typeChildren.length; i += 1) {
-		const name = findFirstGenericParamName(t.typeChildren[i]);
-		if (name != "") return name;
-	}
-	return "";
+	const gp = findFirstGenericParam(t);
+	return gp != null ? gp.typeName : "";
 }
 
 // Apply assertion narrowing: `asserts paramName is TargetType`. Mutates the
@@ -3157,7 +3153,7 @@ function findBindingIndex(b: UnifyBindings, name: string): number {
 	return -1;
 }
 
-// Apply every binding in `b` to type `t` via substituteType. Used by callers
+// Apply every binding in `b` to type `t` by identity. Used by callers
 // that need to convert a formal type containing GenericParam(s) into its
 // concrete substituted form after Pass 1/2/3 binding.
 function applySubstitutions(t: Type, b: UnifyBindings): Type {

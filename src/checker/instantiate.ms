@@ -8,7 +8,7 @@ import { methodOwnerClass } from "./visibility";
 import { isAsyncFunctionNode } from "./freestanding";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { isMaybeType, inferredType, isUnresolvedType, substituteType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteParams, substituteBound, declaredTypeParams, UnifyBindings, bindParam, bindName, bindAt, boundSlot } from "./types";
+import { isMaybeType, inferredType, isUnresolvedType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteParams, substituteBound, declaredTypeParams, UnifyBindings, bindParam, bindName, bindAt, boundSlot } from "./types";
 import { ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, globalScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
@@ -1263,7 +1263,7 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 	const structBase = unwrapClassStruct(classSym);
 	const canonical = canonicalInstance(structBase, concreteTypes, classSym);
 	const parent = classParentOf(canonical);
-	const substStruct = instanceStruct(structBase, mangledClass, dedup.names, dedup.types);
+	const substStruct = instanceStruct(structBase, mangledClass, dedup.names, declaredTypeParams(classSym, dedup.names.length), dedup.types);
 	substStruct.typeExtra = parent;
 	const concreteClassType = createRef(substStruct);
 	const instSym = newSym(bodyCtx, SymbolKind.Class, mangledClass, concreteClassType);
@@ -1313,11 +1313,9 @@ function unwrapClassStruct(classSym: Symbol): Type {
 // Mono receiver: Ref<Struct{substituted fields}> named `mangledClass`. genClassDecl
 // reads non-static fields from node.nodeType's struct (typeNames/typeChildren); a
 // Ref<GenericInstance> peels to type-args not fields → an empty struct in the ctor's TU.
-function instanceStruct(structBase: Type, mangledClass: string, names: string[], types: Type[]): Type {
-	let substStruct: Type = structBase;
-	for (let si = 0; si < names.length; si += 1) {
-		if (si < types.length) substStruct = substituteType(substStruct, names[si].trim(), types[si]);
-	}
+function instanceStruct(structBase: Type, mangledClass: string, names: string[], params: (Type | null)[], types: Type[]): Type {
+	const n = names.length < types.length ? names.length : types.length;
+	let substStruct: Type = substituteParams(structBase, names.slice(0, n).map((name: string): string => name.trim()), params.slice(0, n), types);
 	if (substStruct == structBase) {
 		const newNames: string[] = [];
 		for (const n of substStruct.typeNames) newNames.push(n);
