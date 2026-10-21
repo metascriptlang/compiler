@@ -4269,7 +4269,9 @@ function spreadFieldsOf(t: Type | null): Type | null {
 	if (t == null) return null;
 	const base = unwrapRef(t);
 	const peeled = base == null ? null : peelThrough(base, PEEL_ALL);
-	const body = peeled == null ? base : peeled;
+	const view = peeled == null ? base : peeled;
+	if (view != null && view.kind == TypeKind.GenericInstance && !hasGenericParams(view) && view.typeReturn == null) instantiateGenericBody(view, genericParamsOf(view));
+	const body = view != null && view.kind == TypeKind.GenericInstance && view.typeReturn != null ? unwrapRef(view.typeReturn) : view;
 	if (body == null || body.kind != TypeKind.Struct || body.typeNames == null || body.typeChildren == null) return null;
 	if (body.sym != null && hasFlag(body.sym, SymbolFlag.ImportC)) return null;
 	return body;

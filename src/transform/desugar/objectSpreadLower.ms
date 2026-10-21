@@ -27,8 +27,8 @@ import { lowerImplicitConv } from "../coercion/implicitConvLower";
 export function spreadStructOf(t: Type | null): Type | null {
 	if (t == null) return null;
 	const peeled = peelThrough(unwrapRef(t), PEEL_ALL);
-	const s = peeled == null ? unwrapRef(t) : peeled;
-	if (s == null) return null;
+	const view = peeled == null ? unwrapRef(t) : peeled;
+	const s = view.kind == TypeKind.GenericInstance && view.typeReturn != null ? unwrapRef(view.typeReturn) : view;
 	if (s.kind != TypeKind.Struct) return null;
 	if (s.typeNames == null || s.typeChildren == null) return null;
 	if (s.sym != null && hasFlag(s.sym, SymbolFlag.ImportC)) return null;
