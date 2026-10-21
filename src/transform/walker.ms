@@ -500,13 +500,23 @@ export function mapChildren(node: Node, f: Visitor): void {
 
 // Recurse into all child nodes using bottom-up walkNode traversal
 export function walkChildren(node: Node, visitor: Visitor): void {
-	mapChildren(node, (child: Node): Node => walkNode(child, visitor));
+	const walk = (child: Node): Node => {
+		if (child == null) return null as unknown as Node;
+		mapChildren(child, walk);
+		return visitor(child);
+	};
+	mapChildren(node, walk);
 }
 
 export function walkWithinStatement(node: Node, visitor: Visitor): Node {
 	if (node == null) return null as unknown as Node;
 	if (opensStatementScope(node)) return node;
-	mapChildren(node, (child: Node): Node => walkWithinStatement(child, visitor));
+	const walk = (child: Node): Node => {
+		if (child == null || opensStatementScope(child)) return child;
+		mapChildren(child, walk);
+		return visitor(child);
+	};
+	mapChildren(node, walk);
 	return visitor(node);
 }
 
@@ -519,7 +529,12 @@ function opensStatementScope(node: Node): boolean {
 export function walkOutsideInstanceFieldInits(node: Node, visitor: Visitor): Node {
 	if (node == null) return null as unknown as Node;
 	if (isInstanceFieldInit(node)) return node;
-	mapChildren(node, (child: Node): Node => walkOutsideInstanceFieldInits(child, visitor));
+	const walk = (child: Node): Node => {
+		if (child == null || isInstanceFieldInit(child)) return child;
+		mapChildren(child, walk);
+		return visitor(child);
+	};
+	mapChildren(node, walk);
 	return visitor(node);
 }
 
