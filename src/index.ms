@@ -1,9 +1,8 @@
 // MetaScript Compiler CLI — Entry point (dispatch only)
 
 import { platform } from "std/process";
-import { CliOptions, Target, parseArgs, applyBuildTarget, seedOptionDefines, MODE_DEBUG, MODE_RELEASE } from "./compiler/options";
-import { setParserDefines } from "./parser/context";
-import { applyConfigDefines, defineSymbol, formatDefines, seedProjectDir } from "./compiler/defines";
+import { CliOptions, Target, parseArgs, applyProjectConfig } from "./compiler/options";
+import { defineSymbol, formatDefines } from "./compiler/defines";
 import { VERSION, printUsage } from "./compiler/usage";
 import { cmdBuildJS, cmdBuildC, cmdWatchC, cmdRunHcr, cmdRunJS, cmdRunRaiser, cmdTest, cmdTestJS } from "./compiler/compile";
 import { cmdCheck, cmdDumpTokens, cmdDumpAst, cmdPipeline, cmdRun, cmdFmt, cmdInit, cmdClean } from "./compiler/commands";
@@ -14,9 +13,8 @@ import { error, bold, green, cyan } from "./utils/color";
 import { findProjectRoot } from "./utils/path";
 import "./ast/childTableGuard";
 import "./ast/childSlotGuard";
-import { join, isAbsolute, normalize } from "std/fs/path";
+import { join } from "std/fs/path";
 import { exists } from "std/fs";
-import { setExtraGlobalImports, setModulePasses } from "./checker/prelude";
 // Import the package manager hub for test discovery. Individual commands
 // (msc add, install, publish, ...) are wired up from this module as they land.
 // NOTE: imported so test discovery finds these modules' inline tests; any link
@@ -35,12 +33,6 @@ function requireFile(opts: CliOptions): void {
 	}
 }
 
-function globalImportEntry(projectRoot: string, gi: string): string {
-	if (gi.length > 4 && gi.slice(0, 4) == "std/") return gi;
-	if (isAbsolute(gi)) return normalize(gi);
-	return normalize(join(projectRoot, gi));
-}
-
 export function main(): int32 {
 	// Windows-only: delete stale msc.exe.bak-* files left by previous upgrades.
 	// No-op on Unix. Must run before any network/heavy work.
@@ -51,59 +43,19 @@ export function main(): int32 {
 	const opts = parseArgs();
 	const cmd = opts.command;
 
-	// Hand the define table to the parser before any source is read: `when` chains
-	// resolve at parse (see parseWhenChain), so the flags must be in place first.
-	setParserDefines(opts.defines);
-
 	// Find project root by walking up from the entry file (or CWD) looking for
 	// build.ms. Go/Rust convention: the manifest defines the project root.
 	// All manifest operations (build.ms, msc.lock) are relative to this directory.
 	const projectRoot = findProjectRoot(opts.inputFile);
 	const buildMsPath = join(projectRoot, "build.ms");
-	opts.projectRoot = projectRoot;
-
-	// build.ms defines go in before any source is parsed, under the command line's -d: switches.
-	const projectConfig = projectRoot != "" ? loadBuildConfig(buildMsPath, false) : null;
-	if (projectConfig != null && projectConfig.valid) {
-		const targeted = applyBuildTarget(opts, projectConfig.build.target);
-		if (!targeted.ok) {
-			console.log(`${error("error")}: ${buildMsPath}: build.target: ${targeted.error}`);
-			process.exit(1);
-		}
-		if (cmd == "build" && opts.mode == MODE_DEBUG && projectConfig.build.optimize == "release") opts.mode = MODE_RELEASE;
-	}
-	seedOptionDefines(opts);
-	if (projectConfig != null && projectConfig.valid) seedProjectDir(opts.defines, projectRoot);
-	if (projectConfig != null && projectConfig.valid) {
-		if (projectConfig.defines.refused.length > 0) {
-			console.log(`${error("error")}: ${buildMsPath}: define '${projectConfig.defines.refused[0]}' must be a string, a number or a boolean`);
-			process.exit(1);
-		}
-		const reserved = applyConfigDefines(opts.defines, projectConfig.defines.keys, projectConfig.defines.values);
-		if (reserved != "") {
-			console.log(`${error("error")}: ${buildMsPath}: define '${reserved}' is a name msc sets from its own options (backend, --os, --cpu, --gc, the build mode); give the project's define another name`);
-			process.exit(1);
-		}
+	const applied = applyProjectConfig(opts, projectRoot);
+	if (!applied.ok) {
+		console.log(`${error("error")}: ${applied.error}`);
+		process.exit(1);
 	}
 	if (opts.showDefines) {
 		console.log(formatDefines(opts.defines));
 		process.exit(0);
-	}
-
-	// build.ms globalImports — every command that checks code must see them,
-	// so this runs before dispatch, not inside run/build. Entries are
-	// extension-less module paths: std/ specifiers pass through, project
-	// paths become absolute against projectRoot.
-	if (projectRoot != "") {
-		const giCfg = loadBuildConfig(buildMsPath, false);
-		if (giCfg.valid && giCfg.globalImports.length > 0) {
-			const extras: string[] = [];
-			for (const gi of giCfg.globalImports) extras.push(globalImportEntry(projectRoot, gi));
-			setExtraGlobalImports(extras, buildMsPath);
-			const passFrom: string[] = [];
-			for (const from of giCfg.modulePassFrom) passFrom.push(globalImportEntry(projectRoot, from));
-			setModulePasses(passFrom, giCfg.modulePassMacro);
-		}
 	}
 
 	match (cmd) {
