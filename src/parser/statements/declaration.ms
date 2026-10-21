@@ -2040,6 +2040,8 @@ function parseRuntimeConverterDecl(state: ParserState): NodeResult {
 }
 
 // ===== Tests =====
+
+import "./core"; // registers parser callbacks
 // Variable — const vs let
 test "const decl" { assert programOk("const x = 42;"); }
 

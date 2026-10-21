@@ -89,6 +89,8 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 }
 
 // ===== Tests =====
+
+import "./core"; // registers parser callbacks
 // Throw
 test "throw string" { assert programOk("throw \"error\";"); }
 
