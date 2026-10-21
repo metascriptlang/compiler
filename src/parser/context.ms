@@ -229,8 +229,14 @@ export function synchronize(state: ParserState): void {
 
 // Collect token text from a raw index range, skipping Comment tokens.
 // Used by type annotation capture, as-type, sizeof, alias, default value reconstruction.
+function isTypeOperatorKeyword(kind: TokenKind): boolean {
+	return kind == TokenKind.Extends || kind == TokenKind.Keyof || kind == TokenKind.Typeof
+		|| kind == TokenKind.Infer || kind == TokenKind.Distinct;
+}
+
 export function collectTokenText(state: ParserState, start: int32, end: int32): string {
 	let text = "";
+	let previous = TokenKind.Eof;
 	for (let i = start; i < end; i += 1) {
 		const tok = state.tokens[i];
 		if (tok.kind == TokenKind.Comment) continue;
@@ -244,8 +250,10 @@ export function collectTokenText(state: ParserState, start: int32, end: int32): 
 				|| v == "<" || v == "(";
 			const noSpaceAfter = lastCh == "[".code || lastCh == "<".code || lastCh == "(".code
 				|| lastCh == ".".code || lastCh == "?".code;
-			if (!noSpaceBefore && !noSpaceAfter) text = text + " ";
+			const operandOfKeyword = isTypeOperatorKeyword(previous) && (v == "(" || v == "[");
+			if (operandOfKeyword || (!noSpaceBefore && !noSpaceAfter)) text = text + " ";
 		}
+		previous = tok.kind;
 		// Preserve quotes on string literal tokens so resolveAnnotation can
 		// distinguish string literal union members ("r8unorm") from type names.
 		if (tok.kind == TokenKind.String) {

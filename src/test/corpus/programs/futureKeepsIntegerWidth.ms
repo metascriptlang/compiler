@@ -1,4 +1,4 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: msPromiseAll
+// @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table (and no host bridge for msFutureThen)
 // @serial
 // @stdout: int64 3000000001 3000000001 3000000001 3000000001 3000000001 3000000001 3000000001
 // @stdout: uint64 5000000003 5000000003 5000000003 5000000003 5000000003 5000000003 5000000003

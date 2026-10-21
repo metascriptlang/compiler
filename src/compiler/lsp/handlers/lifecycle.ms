@@ -1,8 +1,11 @@
 // LSP Lifecycle Handlers + Dispatch Router + Tests
 // handleInitialize, handleDidOpen, handleDidChange, handleDidClose, lspDispatch
 
-import { TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbForgetAllTypeChecks, getFileId, invalidateFile } from "../../transam/index";
-import { requestCancel } from "../../transam/cancel";
+import { TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbCheckIsCurrent, dbForgetAllTypeChecks, getFileId, invalidateFile } from "../../transam/index";
+import { requestCancel, resetCancel } from "../../transam/cancel";
+import { parseJson } from "std/serialize/json/parser";
+import { JsonKind, JsonValue } from "std/serialize/json/types";
+import { getDynamicField, asString, asInt32 } from "std/serialize/json/accessors";
 import { writeStderr } from "std/io";
 import { readFile, writeFile, mkdir, remove } from "std/fs";
 import { env } from "std/process";
@@ -10,7 +13,7 @@ import { normalize } from "std/fs/path";
 import {
 	lspJsonString, lspGetField, lspGetNumberField, lspGetObjectField,
 	lspResponse, lspNotification, lspFormatMessage, lspUriToPath,
-	lspPathToUri, lspGetArrayItems, lspGetBoolField, lspRequest,
+	lspPathToUri, lspGetArrayItems, lspGetBoolField, lspRequest, lspParseContentLength,
 } from "../protocol";
 import { lspFmtPublishDiagnostics } from "../format";
 import {
@@ -972,34 +975,236 @@ test "didChange publishes diagnostics post-drain" {
 	assert diag.indexOf(uri) >= 0;
 }
 
+function testDiagnosticItems(json: string, uri: string): JsonValue[] {
+	const parsed = parseJson(json);
+	if (!parsed.ok) throw new Error(parsed.error);
+	const message = parsed.value;
+	if (message.getDynamicField("jsonrpc").asString() != "2.0"
+		|| message.getDynamicField("method").asString() != "textDocument/publishDiagnostics") {
+		throw new Error("Expected publishDiagnostics: " + json);
+	}
+	const params = message.getDynamicField("params");
+	if (params.getDynamicField("uri").asString() != uri) throw new Error("Wrong diagnostics URI: " + json);
+	const diagnostics = params.getDynamicField("diagnostics");
+	if (diagnostics.kind != JsonKind.Array) throw new Error("Expected diagnostics array: " + json);
+	return diagnostics.items;
+}
+
+function testPublishedItems(wire: string, uri: string): JsonValue[] {
+	let remaining = wire;
+	let found = false;
+	let items: JsonValue[] = [];
+	while (remaining.byteLength > 0) {
+		const headerEnd = remaining.indexOf("\r\n\r\n");
+		if (headerEnd < 0) throw new Error("Missing diagnostics frame header");
+		const size = lspParseContentLength(remaining.byteSlice(0, headerEnd));
+		const bodyStart = headerEnd + 4;
+		if (size < 0 || bodyStart + size > remaining.byteLength) throw new Error("Invalid diagnostics frame length");
+		const json = remaining.byteSlice(bodyStart, bodyStart + size);
+		if (lspGetField(json, "uri") == uri) {
+			if (found) throw new Error("Duplicate diagnostics notification: " + uri);
+			items = testDiagnosticItems(json, uri);
+			found = true;
+		}
+		remaining = remaining.byteSlice(bodyStart + size, remaining.byteLength);
+	}
+	if (!found) throw new Error("Missing diagnostics notification: " + uri);
+	return items;
+}
+
 test "didChange with error then fix clears diagnostics" {
-	const uri = "file:///test.ms";
+	const uri = "file:///lsp-clear.ms";
 	const db = createTransAmDb(100);
-	handleDidOpen(didOpenParams(uri, "const x: number = \"wrong\";"), db);
-	// Edit to fix the error
-	handleDidChange(didChangeParams(uri, "const x: number = 42;"), db);
-	const diag = publishPendingDiagnostics(db);
-	assert diag.indexOf("diagnostics") >= 0;
+	const before = testDiagnosticItems(handleDidOpen(didOpenParams(uri, "export const value: int32 = \"wrong\";"), db), uri);
+	assert before.length == 1;
+	assert before[0].getDynamicField("message").asString() == "Type 'string' is not assignable to type 'int32'";
+	assert before[0].getDynamicField("severity").asInt32(-1) == 1;
+	assert before[0].getDynamicField("source").asString() == "metascript";
+	handleDidChange(didChangeParams(uri, "export const value: int32 = 42;"), db);
+	assert testPublishedItems(publishPendingDiagnostics(db), uri).length == 0;
+	assert publishPendingDiagnostics(db) == "";
+}
+
+test "didChange publishes a new error after clearing the previous one" {
+	const uri = "file:///lsp-clear-again.ms";
+	const db = createTransAmDb(100);
+	assert testDiagnosticItems(handleDidOpen(didOpenParams(uri, "export const value: int32 = true;"), db), uri).length == 1;
+	handleDidChange(didChangeParams(uri, "export const value: int32 = 42;"), db);
+	assert testPublishedItems(publishPendingDiagnostics(db), uri).length == 0;
+	handleDidChange(didChangeParams(uri, "export const value: int32 = \"wrong\";"), db);
+	const after = testPublishedItems(publishPendingDiagnostics(db), uri);
+	assert after.length == 1;
+	assert after[0].getDynamicField("message").asString() == "Type 'string' is not assignable to type 'int32'";
 }
 
 test "multi-file: edit B updates A diagnostics" {
 	const db = createTransAmDb(100);
-	dbSetFileText(db, "/src/b.ms", "export function foo(): number { return 1; }");
-	dbParse(db, "/src/b.ms");
-	dbSetFileText(db, "/src/a.ms", "import { foo } from \"./b\";\nconst x = foo();");
-	const progA = dbParse(db, "/src/a.ms");
-	recordImportsForFile(db, "/src/a.ms", progA);
-	const ctx = dbTypeCheck(db, "/src/a.ms");
-	assert ctx != null;
+	const depUri = "file:///lsp-import/b.ms";
+	const uri = "file:///lsp-import/a.ms";
+	const good = "export function foo(): int32 { return 1; }";
+	handleDidOpen(didOpenParams(depUri, good), db);
+	assert testDiagnosticItems(handleDidOpen(didOpenParams(uri, "import { foo } from \"./b\";\nexport const x: int32 = foo();"), db), uri).length == 0;
+	handleDidChange(didChangeParams(depUri, "export function foo(): string { return \"wrong\"; }"), db);
+	const after = testPublishedItems(publishPendingDiagnostics(db), uri);
+	assert after.length == 1;
+	assert after[0].getDynamicField("message").asString() == "Type 'string' is not assignable to type 'int32'";
+	assert after[0].getDynamicField("severity").asInt32(-1) == 1;
+	handleDidChange(didChangeParams(depUri, good), db);
+	assert testPublishedItems(publishPendingDiagnostics(db), uri).length == 0;
 }
 
-test "cancelled type check returns without crash" {
+test "cancelled type check is not cached and retry checks the same text" {
 	const db = createTransAmDb(100);
-	dbSetFileText(db, "/test.ms", "const x = 1;");
+	const path = "/lsp-cancel.ms";
+	const uri = "file:///lsp-cancel.ms";
+	dbSetFileText(db, path, "export const value: int32 = \"wrong\";");
 	requestCancel(db.cancelCtx);
-	const ctx = dbTypeCheck(db, "/test.ms");
-	// Should not crash — ctx may be null or partial
-	assert true;
+	dbTypeCheck(db, path);
+	assert !dbCheckIsCurrent(db, path);
+	assert db.depStack.frames.length == 0;
+	assert !db.checkInProgress.has(path);
+	resetCancel(db.cancelCtx);
+	const diagnostics = testDiagnosticItems(lspNotification("textDocument/publishDiagnostics", buildDiagnosticsJson(uri, db, path)), uri);
+	assert diagnostics.length == 1;
+	assert diagnostics[0].getDynamicField("message").asString() == "Type 'string' is not assignable to type 'int32'";
+	assert dbCheckIsCurrent(db, path);
+}
+
+test "position-only edits preserve UTF-16 diagnostic spans through undo" {
+	const db = createTransAmDb(100);
+	const uri = "file:///lsp-position.ms";
+	const source = "export const value: int32 = \"wrong\";";
+	assert testDiagnosticItems(handleDidOpen(didOpenParams(uri, source), db), uri).length == 1;
+	const prefixes = [
+		"\n", "\r\n\r\n", "\n// moved\n", "", "/*a*/ ", "/*é*/ ",
+		"/*😀*/ ", "\n/*é*/ ", "\r\n\r\n/*😀*/ ", "",
+	];
+	const lines = [1, 2, 2, 0, 0, 0, 0, 1, 2, 0];
+	const characters = [28, 28, 28, 28, 34, 34, 35, 34, 35, 28];
+	for (let i = 0; i < prefixes.length; i += 1) {
+		const text = prefixes[i] + source;
+		handleDidChange(didChangeParams(uri, text), db);
+		const warm = testPublishedItems(publishPendingDiagnostics(db), uri);
+		assert warm.length == 1;
+		const cold = testDiagnosticItems(handleDidOpen(didOpenParams(uri, text), createTransAmDb(100)), uri);
+		assert cold.length == 1;
+		for (const diagnostic of [warm[0], cold[0]]) {
+			assert diagnostic.getDynamicField("message").asString()
+				== "Type 'string' is not assignable to type 'int32'";
+			assert diagnostic.getDynamicField("severity").asInt32(-1) == 1;
+			assert diagnostic.getDynamicField("source").asString() == "metascript";
+			const range = diagnostic.getDynamicField("range");
+			const start = range.getDynamicField("start");
+			const end = range.getDynamicField("end");
+			assert start.getDynamicField("line").asInt32(-1) == lines[i];
+			assert start.getDynamicField("character").asInt32(-1) == characters[i];
+			assert end.getDynamicField("line").asInt32(-1) == lines[i];
+			assert end.getDynamicField("character").asInt32(-1) == characters[i] + 1;
+		}
+	}
+}
+
+function utf16Span(item: string): string {
+	const range = lspGetObjectField(item, "range");
+	const start = lspGetObjectField(range, "start");
+	const end = lspGetObjectField(range, "end");
+	if (lspGetNumberField(start, "line") != lspGetNumberField(end, "line")) return "multiline:" + range;
+	return (lspGetNumberField(start, "line") as int32) + ":" + (lspGetNumberField(start, "character") as int32)
+		+ "-" + (lspGetNumberField(end, "character") as int32);
+}
+
+function utf16SpansMatch(label: string, items: string[], expected: string[]): boolean {
+	const spans: string[] = [];
+	for (const item of items) spans.push(utf16Span(item));
+	let matched = spans.length == expected.length;
+	for (const span of expected) {
+		if (spans.indexOf(span) < 0) matched = false;
+	}
+	if (!matched) writeStderr(label + ": expected " + expected.join(",") + " got " + spans.join(",") + "\n");
+	return matched;
+}
+
+test "queries read and answer UTF-16 positions after non-ASCII text" {
+	const prefixes = ["", "/*é*/ ", "/*😀*/ ", "/*é*/\n/*😀*/ ", "/*é*/\r\n/*😀*/ ", ""];
+	const gaps = ["", "", "", "", "", "/*é😀*/ "];
+	const lines = [0, 0, 0, 1, 1, 0];
+	const declarations = [6, 12, 13, 13, 13, 6];
+	const uses = [23, 29, 30, 30, 30, 31];
+	const uri = "file:///query-utf16.ms";
+	for (let i = 0; i < prefixes.length; i++) {
+		const db = testDb(uri, prefixes[i] + "const s = 1; " + gaps[i] + "const t = s;");
+		const decl = lines[i] + ":" + declarations[i] + "-" + (declarations[i] + 1);
+		const use = lines[i] + ":" + uses[i] + "-" + (uses[i] + 1);
+		const params = "{\"textDocument\":{\"uri\":" + lspJsonString(uri) + "},\"position\":{\"line\":"
+			+ lines[i] + ",\"character\":" + uses[i] + "}";
+		const label = "utf16 case " + i;
+		assert utf16SpansMatch(label + " definition", lspGetArrayItems(lspGetObjectField(handleDefinition("80", params + "}", db), "result")), [decl]);
+		assert utf16SpansMatch(label + " hover", [lspGetObjectField(handleHover("81", params + "}", db), "result")], [use]);
+		assert utf16SpansMatch(label + " references", lspGetArrayItems(lspGetObjectField(handleReferences("82", params + "}", db), "result")), [decl, use]);
+		assert utf16SpansMatch(label + " highlight", lspGetArrayItems(lspGetObjectField(handleDocumentHighlight("83", params + "}", db), "result")), [decl, use]);
+		const rename = handleRename("84", params + ",\"newName\":\"v\"}", db);
+		const edits = lspGetArrayItems(lspGetObjectField(lspGetObjectField(lspGetObjectField(rename, "result"), "changes"), uri));
+		assert utf16SpansMatch(label + " rename", edits, [decl, use]);
+		for (const edit of edits) assert lspGetField(edit, "newText") == "v";
+	}
+}
+
+test "semantic UTF-16 deltas survive prefix and gap edits and undo" {
+	const initialized = parseJson(handleInitialize("71"));
+	assert initialized.ok;
+	if (initialized.ok) {
+		const legend = initialized.value.getDynamicField("result")
+			.getDynamicField("capabilities").getDynamicField("semanticTokensProvider")
+			.getDynamicField("legend");
+		const types = legend.getDynamicField("tokenTypes");
+		const modifiers = legend.getDynamicField("tokenModifiers");
+		if (types.kind != JsonKind.Array) throw new Error("Expected semantic token types");
+		if (modifiers.kind != JsonKind.Array) throw new Error("Expected semantic token modifiers");
+		assert types.items.length > 8;
+		assert modifiers.items.length > 2;
+		assert types.items[8].asString() == "variable";
+		assert modifiers.items[0].asString() == "declaration";
+		assert modifiers.items[2].asString() == "readonly";
+	}
+	const db = createTransAmDb(100);
+	const path = "/semantic-token-utf16.ms";
+	const uri = "file:///semantic-token-utf16.ms";
+	const params = "{\"textDocument\":{\"uri\":" + lspJsonString(uri) + "}}";
+	const prefixes = [
+		"", "/*a*/ ", "/*é*/ ", "/*😀*/ ", "\n/*é*/ ", "\r\n\r\n/*😀*/ ", "", "", "",
+	];
+	const gaps = ["", "", "", "", "", "", "/*é*/ ", "/*😀*/ ", ""];
+	const lines = [0, 0, 0, 0, 1, 2, 0, 0, 0];
+	const characters = [6, 12, 12, 13, 12, 13, 6, 6, 6];
+	const deltas = [17, 17, 17, 17, 17, 17, 23, 24, 17];
+	for (let i = 0; i < prefixes.length; i++) {
+		const source = prefixes[i] + "const first = 1; " + gaps[i] + "const second = first;";
+		assert dbSetFileText(db, path, source);
+		const response = handleSemanticTokensFull("71", params, db);
+		assert dbTypeCheck(db, path).errors.length == 0;
+		const parsed = parseJson(response);
+		assert parsed.ok;
+		if (parsed.ok) {
+			assert parsed.value.getDynamicField("jsonrpc").asString() == "2.0";
+			assert parsed.value.getDynamicField("id").asInt32(-1) == 71;
+			const data = parsed.value.getDynamicField("result").getDynamicField("data");
+			if (data.kind != JsonKind.Array) throw new Error("Expected semantic token data");
+			const expected = [
+				lines[i], characters[i], 5, 8, 5,
+				0, deltas[i], 6, 8, 5,
+				0, 9, 5, 8, 4,
+			];
+			assert data.items.length == expected.length;
+			for (let j = 0; j < expected.length; j++) {
+				assert data.items[j].asInt32(-1) == expected[j];
+			}
+		}
+		assert handleSemanticTokensFull("71", params, db) == response;
+		const revision = db.revision.value;
+		assert !dbSetFileText(db, path, source);
+		assert db.revision.value == revision;
+		assert handleSemanticTokensFull("71", params, db) == response;
+	}
 }
 
 test "first type check on a fresh db stays under 1500ms" {

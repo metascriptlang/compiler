@@ -19,16 +19,30 @@ function makeLocFromToken(token: Token): SourceLocation {
 
 // Shared specifier list parser for import/export: { name as alias, ... }
 // Assumes opening '{' already consumed. Consumes up to but not including '}'.
-interface SpecifierList { names: string[]; aliases: string[]; locations: SourceLocation[]; }
+interface SpecifierList { names: string[]; aliases: string[]; locations: SourceLocation[]; typeNames: string[]; }
+
+function writesTypeModifier(state: ParserState): boolean {
+	const next = peek(state, 1).kind;
+	return next != TokenKind.As && next != TokenKind.Comma && next != TokenKind.RBrace && next != TokenKind.From && next != TokenKind.Eof;
+}
+
+function withTypeModifier(node: Node, typeModifier: boolean): Node {
+	if (typeModifier) node.flags = node.flags.incl(NodeFlag.TypeModifier);
+	return node;
+}
 
 function parseSpecifierList(state: ParserState): SpecifierList {
 	const names: string[] = [];
 	const aliases: string[] = [];
 	const locations: SourceLocation[] = [];
+	const typeNames: string[] = [];
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
+		const typed = current(state).kind == TokenKind.Type && writesTypeModifier(state);
+		if (typed) advance(state);
 		const specifier = current(state);
 		if (!isIdentOrKeyword(specifier.kind)) { break; }
 		const specName = specifier.value;
+		if (typed) typeNames.push(specName);
 		locations.push(makeLoc(specifier.line, specifier.column));
 		advance(state);
 		if (!isAtEnd(state) && current(state).kind == TokenKind.As) {
@@ -45,7 +59,7 @@ function parseSpecifierList(state: ParserState): SpecifierList {
 			break;
 		}
 	}
-	return { names, aliases, locations };
+	return { names, aliases, locations, typeNames };
 }
 
 // ===== Variable Declaration =====
@@ -328,6 +342,9 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 export function parseImportDecl(state: ParserState): NodeResult {
 	const importToken = current(state);
 	advance(state);
+	const next = peek(state, 1).kind;
+	const typeModifier = current(state).kind == TokenKind.Type && (next == TokenKind.LBrace || next == TokenKind.Star || next == TokenKind.Ident);
+	if (typeModifier) advance(state);
 
 	// Side-effect import: import "module";
 	if (current(state).kind == TokenKind.String) {
@@ -339,6 +356,7 @@ export function parseImportDecl(state: ParserState): NodeResult {
 			importAliases: [],
 			importSource: source,
 			nameLocations: [],
+			importTypeNames: [],
 		}, importToken));
 	}
 
@@ -364,9 +382,9 @@ export function parseImportDecl(state: ParserState): NodeResult {
 		const source = current(state).value;
 		advance(state);
 		consumeSemicolon(state);
-		return Result.ok(createNode(NodeKind.ImportDecl, {
-			importNames: ["*"], importAliases: [nsName], importSource: source, nameLocations: [],
-		}, importToken));
+		return Result.ok(withTypeModifier(createNode(NodeKind.ImportDecl, {
+			importNames: ["*"], importAliases: [nsName], importSource: source, nameLocations: [], importTypeNames: [],
+		}, importToken), typeModifier));
 	}
 
 	if (current(state).kind != TokenKind.LBrace) {
@@ -396,12 +414,13 @@ export function parseImportDecl(state: ParserState): NodeResult {
 	advance(state);
 	consumeSemicolon(state);
 
-	return Result.ok(createNode(NodeKind.ImportDecl, {
+	return Result.ok(withTypeModifier(createNode(NodeKind.ImportDecl, {
 		importNames: names,
 		importAliases: aliases,
 		importSource: source,
 		nameLocations: specs.locations,
-	}, importToken));
+		importTypeNames: specs.typeNames,
+	}, importToken), typeModifier));
 }
 
 // ===== Export Declaration =====
@@ -424,6 +443,8 @@ export function parseExportDecl(state: ParserState): NodeResult {
 
 function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 	// Each branch uses const + immediate return to avoid DRC try aliasing bug
+	const typeModifier = current(state).kind == TokenKind.Type && (peek(state, 1).kind == TokenKind.LBrace || peek(state, 1).kind == TokenKind.Star);
+	if (typeModifier) advance(state);
 	const nextKind = current(state).kind;
 	// Star re-export: export * from "module";
 	if (nextKind == TokenKind.Star) {
@@ -438,9 +459,9 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 		const source = current(state).value;
 		advance(state);
 		consumeSemicolon(state);
-		const importNode = createNode(NodeKind.ImportDecl, {
-			importNames: ["*"], importAliases: ["*"], importSource: source, nameLocations: [],
-		}, exportToken);
+		const importNode = withTypeModifier(createNode(NodeKind.ImportDecl, {
+			importNames: ["*"], importAliases: ["*"], importSource: source, nameLocations: [], importTypeNames: [],
+		}, exportToken), typeModifier);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: importNode }, exportToken));
 	}
 	// Re-export: export { X, Y } from "module";
@@ -460,9 +481,9 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 		const source = current(state).value;
 		advance(state);
 		consumeSemicolon(state);
-		const importNode = createNode(NodeKind.ImportDecl, {
-			importNames: names, importAliases: aliases, importSource: source, nameLocations: specs.locations,
-		}, exportToken);
+		const importNode = withTypeModifier(createNode(NodeKind.ImportDecl, {
+			importNames: names, importAliases: aliases, importSource: source, nameLocations: specs.locations, importTypeNames: specs.typeNames,
+		}, exportToken), typeModifier);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: importNode }, exportToken));
 	}
 
@@ -877,6 +898,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 	const fieldLocations: SourceLocation[] = [];
 	const fieldVisibility: string[] = [];
 	const fieldDecorators: Node[][] = [];
+	const optionalFields: string[] = [];
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 		if (nodeKind == NodeKind.StructDecl && (current(state).kind == TokenKind.Get || current(state).kind == TokenKind.Set)
 				&& isIdentLike(peek(state, 1)) && peek(state, 2).kind == TokenKind.LParen) {
@@ -928,6 +950,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 				return Result.err(`Optional field '${field.value}?' in struct at line ${field.line}: '?' means '| null' and a struct field is a value type — write the nullable union type explicitly`);
 			}
 			fieldIsOptional = true;
+			optionalFields.push(field.value);
 			advance(state);
 		}
 
@@ -955,6 +978,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		nameLocation: nameLoc != null ? nameLoc : makeLocFromToken(token),
 		interfaceFieldVisibility: fieldVisibility,
 		interfaceFieldDecorators: fieldDecorators,
+		interfaceOptionalFields: optionalFields,
 	}, token);
 	ifaceNode.typeArg = genericNames;
 	ifaceNode.typeExprs = fieldTypeExprs;
@@ -1016,6 +1040,7 @@ function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: Node
 			nameLocation: nameLoc,
 			interfaceFieldVisibility: [],
 			interfaceFieldDecorators: [],
+			interfaceOptionalFields: [],
 		}, token);
 		aliasNode.typeArg = genericNames;
 		aliasNode.typeExprs = [];
@@ -1082,8 +1107,8 @@ export function parseClassDecl(state: ParserState): NodeResult {
 		}
 	}
 
-	// Optional implements: class Foo implements Bar, Baz<T> — kept as written for the formatter;
-	// the checker relates a class to an interface by shape, not by this list.
+	// Optional implements: class Foo implements Bar, Baz<T> — kept as written; the checker
+	// resolves each entry in the class's scope.
 	const implementsNames: string[] = [];
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Implements) {
 		advance(state);
@@ -1337,6 +1362,7 @@ function parseClassMember(state: ParserState): NodeResult {
 	}, nameToken);
 	propNode.typeExpr = propTypeExpr;
 	if (autoAccessor) propNode.flags = propNode.flags.incl(NodeFlag.AutoAccessor);
+	if (memberIsOptional) propNode.flags = propNode.flags.incl(NodeFlag.Optional);
 	return Result.ok(propNode);
 }
 

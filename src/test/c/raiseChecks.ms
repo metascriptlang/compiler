@@ -288,3 +288,42 @@ test "raiseChecks: a new of a constructor that raises frees the half-built objec
 	assert functionBody(result.value, "makeLoud").contains("if (msErr) { msDecrefCyclic(_new");
 	assert checksIn(result.value, "useLoud") == 1;
 }
+
+const THROWS_SRC = `
+@throws
+function freeQuiet(n: int32): int32 { return n + 1; }
+class Holder {
+	@throws
+	keep(n: int32): int32 { return n + 2; }
+	@throws
+	static skeep(n: int32): int32 { return n + 3; }
+	plain(n: int32): int32 { return n + 4; }
+}
+function useFree(n: int32): int32 {
+	const v = freeQuiet(n);
+	return v + 1;
+}
+function useKeep(h: Holder, n: int32): int32 {
+	const v = h.keep(n);
+	return v + 1;
+}
+function useStatic(n: int32): int32 {
+	const v = Holder.skeep(n);
+	return v + 1;
+}
+function usePlain(h: Holder, n: int32): int32 {
+	const v = h.plain(n);
+	return v + 1;
+}
+const h = new Holder();
+console.log(String(useFree(1) + useKeep(h, 2) + useStatic(3) + usePlain(h, 4)));
+`;
+
+test "raiseChecks: @throws on a method makes its callers check as it does on a free function" {
+	const result = compileToC(THROWS_SRC);
+	assert result.ok, result.error;
+	assert checksIn(result.value, "useFree") == 1;
+	assert checksIn(result.value, "useKeep") == 1;
+	assert checksIn(result.value, "useStatic") == 1;
+	assert checksIn(result.value, "usePlain") == 0;
+}

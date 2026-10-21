@@ -4,8 +4,8 @@
 // User-defined extension methods take priority.
 // Pipeline: checker accepts → stringConcatFlatten emits → builtinLower resolves
 
-import { compileToC, refusedOnEveryBackend } from "../helpers";
-import { checkSource } from "./helpers";
+import { compileToC, compileToJS, refusedOnEveryBackend } from "../helpers";
+import { checkSource, hasError } from "./helpers";
 import { hasErrors } from "../../checker/context";
 
 // ===== Checker accepts .toString() on all types =====
@@ -115,6 +115,25 @@ test "a distinct turned into text without a toString is refused on every backend
 		const name = refusedOnEveryBackend(`type Name = distinct string;\nconst s = "ann" as Name;\nconsole.log(${use});`, "cannot turn Name into text");
 		assert name == "", use + " → " + name;
 	}
+}
+
+test "a brand turns into text as its base" {
+	const uses = ["`t=${s}`", "String(s)", "\"c=\" + s", "s.toString()", "s"];
+	const bases = ["int8", "number", "string", "boolean"];
+	const values = ["5", "2.5", "\"ann\"", "true"];
+	for (const use of uses) {
+		for (let i = 0; i < bases.length; i += 1) {
+			const source = `type Tagged = ${bases[i]} & { __brand: "Tagged" };\nconst s = ${values[i]} as Tagged;\nconsole.log(${use});`;
+			const c = compileToC(source);
+			assert c.ok, bases[i] + " " + use + " → C: " + (c.ok ? "" : c.error);
+			const js = compileToJS(source);
+			assert js.ok, bases[i] + " " + use + " → JS: " + (js.ok ? "" : js.error);
+		}
+	}
+}
+
+test "a diagnostic names a brand by its alias" {
+	assert hasError("type Id = int32 & { __brand: \"Id\" };\ntype Age = int32 & { __brand: \"Age\" };\nconst a: Age = 5 as Id;", "Type 'Id' is not assignable to type 'Age'");
 }
 
 test "a distinct converted to its base still turns into text" {

@@ -371,8 +371,9 @@ export function emitUnaryExpr(gen: JSGenerator, node: Node): void {
 		emit(gen, "typeof ");
 		emitNode(gen, d.operand);
 	} else {
-		emit(gen, d.unaryOp);
+		emit(gen, d.unaryOp + "(");
 		emitNode(gen, d.operand);
+		emit(gen, ")");
 	}
 }
 

@@ -190,15 +190,23 @@ test "callableBoundaries: named functions fit closure signatures before adaptati
 	}
 }
 
-test "callableBoundaries: a spread argument fills only the rest parameter" {
+test "callableBoundaries: a spread argument fills the rest parameter or optional ones" {
 	const pre = "function sumRest(first: int32, ...rest: int32[]): int32 { return first + rest.length; }\nfunction two(a: int32, b: int32): int32 { return a + b; }\nfunction opt(a: int32, b?: int32): int32 { return a; }\nclass Acc { add(first: int32, ...more: int32[]): int32 { return first; } }\nconst arr: int32[] = [1, 2];\nconst t: [int32, int32] = [3, 4];\n";
-	assert strictErrorCount(pre + "const a = sumRest(1, ...arr);\nconst b = sumRest(...[1, 2, 3]);\nconst c = two(...[1, 2]);\nconst d = sumRest(0, ...t);\nconst e = new Acc().add(...[1, 2]);") == 0;
+	assert strictErrorCount(pre + "const a = sumRest(1, ...arr);\nconst b = sumRest(...[1, 2, 3]);\nconst c = two(...[1, 2]);\nconst d = sumRest(0, ...t);\nconst e = new Acc().add(...[1, 2]);\nconst g = opt(1, ...arr);\nconst h = two(...t);\nfunction optRest(a: int32, b?: int32, ...rest: int32[]): int32 { return a; }\nconst i = optRest(1, ...arr);\nclass Opt { constructor(a: int32, b?: int32) {} }\nconst j = new Opt(1, ...arr);\nfunction gen<T>(a: T, b?: T): int32 { return 0; }\nconst k = gen(1, ...arr);") == 0;
 	const tsRefusal = "A spread argument must either have a tuple type or be passed to a rest parameter";
 	assert hasError(pre + "const f = sumRest(...arr);", tsRefusal);
 	assert hasError(pre + "const f = two(...arr);", tsRefusal);
 	assert hasError(pre + "const f = new Acc().add(...arr);", tsRefusal);
-	assert hasError(pre + "const f = opt(1, ...arr);", "a spread argument can fill only the rest parameter");
-	assert hasError(pre + "const f = two(...t);", "a spread argument can fill only the rest parameter");
+	assert hasError(pre + "const f = two(1, ...arr);", tsRefusal);
+	assert hasError(pre + "class Two { constructor(a: int32, b: int32) {} }\nconst f = new Two(1, ...arr);", tsRefusal);
+	assert hasError(pre + "function ov(a: int32, b: int32): int32 { return a; }\nfunction ov(a: string): int32 { return 0; }\nconst f = ov(1, ...arr);", "No matching overload for 'ov'");
+	const notLast = "an array spread fills optional parameters only as the last argument and the only spread: the length of 'arr' is not known, so no later argument has a known parameter; pass the arguments one by one";
+	assert hasError(pre + "const f = opt(1, ...arr, 2);", notLast);
+	assert hasError(pre + "function optRest(a: int32, b?: int32, ...rest: int32[]): int32 { return a; }\nconst f = optRest(1, ...arr, ...arr);", notLast);
+	assert hasError(pre + "class Opt { constructor(a: int32, b?: int32, c?: int32) {} }\nconst f = new Opt(1, ...arr, 2);", notLast);
+	assert hasError(pre + "const s = new Set<int32>();\nconst f = opt(1, ...s);", "a spread argument fills optional parameters only from an array: 's' is Set<int32>; pass the arguments one by one");
+	assert hasError(pre + "function mix(a: int32, b?: int32, c?: string): int32 { return a; }\nconst f = mix(1, ...arr);", "is not assignable to type 'string | null'");
+	assert hasError(pre + "function reads(a: int32, b?: int32, c: string = `${b}`): int32 { return a; }\nconst f = reads(1, ...arr);", "the default value of parameter 'c' reads 'b', which the spread argument fills");
 	assert hasError(pre + "const f = sumRest(...[\"a\", 2]);", "Argument type mismatch in 'sumRest' arg 0: got string, expected int32");
 }
 

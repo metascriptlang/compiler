@@ -16,7 +16,7 @@ import { isAssignableProfile } from "./compat";
 import { TargetInfo, hostTargetInfo, unifyTypeProfile, substituteTypeProfile, typeNameOfProfile, typeDisplayNameProfile, getPropertyProfile, findVariantByFieldNameProfile } from "./types";
 import { findAllExtensionsByNameProfile } from "./context";
 import { checkCallExprProfile } from "./callResolve";
-import { instantiateProfile, instantiateTimings, lookupModuleCtx } from "./instantiate";
+import { instantiateProfile, instantiateTimings, lookupModuleCtx, resetInstantiationState } from "./instantiate";
 import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbTypeCheck, TransAmDb } from "../compiler/transam/index";
 import { opMark, opsFrom, replayOps, KeyedOp } from "../codegen/c/types";
 
@@ -892,6 +892,7 @@ function sharedPreludeShape(ctx: CheckerContext): string {
 }
 
 test "a graph check leaves the prelude every build shares as it found it" {
+	resetInstantiationState();
 	const shared = preludeContextFor("", ".cms");
 	const before = sharedPreludeShape(shared);
 	const entries: MapEntry[] = [];
@@ -901,4 +902,12 @@ test "a graph check leaves the prelude every build shares as it found it" {
 	assert findModule(graph, "/src/a.ms")!.errors.length == 0;
 	assert getPreludeContext().table == shared.table;
 	assert sharedPreludeShape(shared) == before;
+}
+
+test "a std module of the shared prelude reads the std modules it imports" {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/b.ms", entrySource: "interface Todo { title: string; }\nconst todo: Todo = { title: \"a\" };\nconsole.log(Reflect.has(todo, \"title\"), Reflect.has([1, 2], 0));\n" });
+	const graph = loadModuleGraph("/src/b.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	assert findModule(graph, "/src/b.ms")!.errors.length == 0;
 }

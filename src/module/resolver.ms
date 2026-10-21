@@ -182,7 +182,9 @@ function addExtensionCandidates(result: ResolveCandidates, base: string, extensi
 
 // For a specifier with an explicit extension, resolve it directly.
 function addDirectCandidates(result: ResolveCandidates, spec: string, fromFile: string, config: ResolverConfig): ResolveCandidates {
-	if (isRelative(spec)) {
+	if (isAbsolute(spec)) {
+		result.push(normalize(spec));
+	} else if (isRelative(spec)) {
 		const baseDir = dirname(fromFile);
 		result.push(join(baseDir, spec));
 	} else if (isStdImport(spec)) {
@@ -458,6 +460,44 @@ test "explicit .cms extension" {
 	const r = resolveImportWithConfig("std/core.cms", "/a/b.ms", cfg);
 	assert r.length == 1;
 	assert r[0] == "/std/core.cms";
+}
+
+test "absolute path with an explicit extension names that one file" {
+	const cfg = createDefaultConfig(Backend.C, "/std");
+	const r = resolveImportWithConfig("/x/lib/m.ms", "/proj/main.ms", cfg);
+	assert r.length == 1;
+	assert r[0] == "/x/lib/m.ms";
+}
+
+test "absolute path to a directory's index.ms names that one file" {
+	const cfg = createDefaultConfig(Backend.JS, "/std");
+	const r = resolveImportWithConfig("/x/lib/index.ms", "/proj/main.ms", cfg);
+	assert r.length == 1;
+	assert r[0] == "/x/lib/index.ms";
+}
+
+test "absolute path with an explicit extension is never joined onto a search path" {
+	const cfg = createDefaultConfig(Backend.C, "");
+	cfg.searchPaths.push("/proj/lib");
+	cfg.searchPaths.push("/proj/vendor");
+	const r = resolveImportWithConfig("/x/lib/m.ms", "/proj/main.ms", cfg);
+	assert r.length == 1;
+	assert r[0] == "/x/lib/m.ms";
+}
+
+test "drive-letter absolute path with an explicit extension names that one file" {
+	const cfg = createDefaultConfig(Backend.C, "");
+	const r = resolveImportWithConfig("C:\\x\\lib\\m.ms", "C:\\proj\\main.ms", cfg);
+	assert r.length == 1;
+	assert r[0] == "C:/x/lib/m.ms";
+}
+
+test "absolute path without an extension probes extensions and index files" {
+	const cfg = createDefaultConfig(Backend.C, "");
+	const r = resolveImportWithConfig("/x/lib/m", "/proj/main.ms", cfg);
+	assert r.length == 8;
+	assert r[1] == "/x/lib/m.ms";
+	assert r[5] == "/x/lib/m/index.ms";
 }
 
 test "explicit .h extension resolves directly" {

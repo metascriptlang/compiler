@@ -79,7 +79,7 @@ static inline void msCycleDetectorRun(void) {
             /* Destroy the actor */
             msActorDestroy(a);
         } else {
-            /* Not a confirmed cycle — clear the temporary MUTED flag */
+            /* Not a confirmed cycle — clear the temporary mark */
             msActorClearFlag(a, MS_ACTOR_CYCLE_MARKED);
         }
     }

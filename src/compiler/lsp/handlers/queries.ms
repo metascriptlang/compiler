@@ -28,12 +28,12 @@ import {
 import { CheckerContext } from "../../../checker/context";
 import { lookupSymbol } from "../../../checker/symbol";
 import { Symbol, SymbolKind, CallExprData, TypeKind } from "../../../ast/node";
-import { lspExtractPosition, dbGetSource, lspEnsureFileLoaded } from "./shared";
+import { lspExtractPosition, dbGetSource, lspEnsureFileLoaded, lspCharacter } from "./shared";
 
 // ===== Hover =====
 
 export function handleHover(id: string, params: string, db: TransAmDb): string {
-	const pos = lspExtractPosition(params);
+	const pos = lspExtractPosition(params, db);
 	const path = lspUriToPath(pos.uri);
 
 	const program = dbParse(db, path);
@@ -93,9 +93,10 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	}
 	const hoverDoc = sgFormatHoverDoc(suggest, docComment);
 	// Hover range: highlight the hovered token (0-based line/col for LSP)
+	const fileSource = dbGetSource(db, path);
 	const hoverLine = pos.line - 1;
-	const hoverCol = pos.col1 - 1;
-	const hoverEndCol = hoverCol + suggest.name.byteLength;
+	const hoverCol = lspCharacter(fileSource, pos.line, pos.col1);
+	const hoverEndCol = lspCharacter(fileSource, pos.line, pos.col1 + suggest.name.byteLength);
 	return lspResponse(id, lspFmtHoverResult(hoverText, hoverDoc, hoverLine, hoverCol, hoverEndCol));
 }
 
@@ -159,7 +160,7 @@ export function handleDocumentSymbol(id: string, params: string, db: TransAmDb):
 // ===== Signature Help =====
 
 export function handleSignatureHelp(id: string, params: string, db: TransAmDb): string {
-	const pos = lspExtractPosition(params);
+	const pos = lspExtractPosition(params, db);
 	const path = lspUriToPath(pos.uri);
 	const source = dbGetSource(db, path);
 	if (source == "") return lspResponse(id, "null");
@@ -240,6 +241,7 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 	if (program == null) return lspResponse(id, "[]");
 
 	const hintsList = sgCollectInlayHints(ctx, program, startLine, endLine);
+	const source = dbGetSource(db, path);
 
 	if (hintsList.length == 0) return lspResponse(id, "[]");
 
@@ -261,7 +263,7 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 		// following argument expression.
 		const padLeft = h.hintKind == SgInlayHintKind.Exception;
 		const padRight = h.hintKind == SgInlayHintKind.Parameter;
-		arr = arr + lspFmtInlayHint(h.line - 1, h.col - 1, h.label, lspKind, padLeft, padRight);
+		arr = arr + lspFmtInlayHint(h.line - 1, lspCharacter(source, h.line, h.col), h.label, lspKind, padLeft, padRight);
 	}
 	arr = arr + "]";
 	return lspResponse(id, arr);
@@ -270,7 +272,7 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 // ===== References =====
 
 export function handleReferences(id: string, params: string, db: TransAmDb): string {
-	const pos = lspExtractPosition(params);
+	const pos = lspExtractPosition(params, db);
 	const path = lspUriToPath(pos.uri);
 
 	const ctx = dbTypeCheck(db, path);
@@ -283,6 +285,7 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 	const seen: HashSet<string> = new HashSet<string>();
 
 	// Search current file via symbol identity (no false positives from shadowing)
+	const source = dbGetSource(db, path);
 	const refs = sgQueryBySym(ctx, suggest.sym);
 	for (let i = 0; i < refs.length; i = i + 1) {
 		const ref = refs[i];
@@ -290,7 +293,8 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 		if (seen.has(key)) continue;
 		seen.add(key);
 		const refLine = ref.line - 1;
-		items.push(lspFmtLocation(pos.uri, refLine, ref.col - 1, refLine, ref.col - 1 + ref.nameLen));
+		const refEnd = ref.col + (ref.nameLen as int32);
+		items.push(lspFmtLocation(pos.uri, refLine, lspCharacter(source, ref.line, ref.col), refLine, lspCharacter(source, ref.line, refEnd)));
 	}
 
 	// Search transitive dependents only (files that could import this symbol)
@@ -309,6 +313,7 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 		const otherCtx = dbTypeCheck(db, otherPath);
 		if (otherCtx == null) continue;
 		const otherUri = lspPathToUri(otherPath);
+		const otherSource = dbGetSource(db, otherPath);
 		const matched = sgQueryByDefiningModule(otherCtx, suggest.name, defModule);
 		let mi = 0;
 		while (mi < matched.length) {
@@ -318,7 +323,8 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 			if (seen.has(key)) continue;
 			seen.add(key);
 			const mrLine = mr.line - 1;
-			items.push(lspFmtLocation(otherUri, mrLine, mr.col - 1, mrLine, mr.col - 1 + mr.nameLen));
+			const mrEnd = mr.col + (mr.nameLen as int32);
+			items.push(lspFmtLocation(otherUri, mrLine, lspCharacter(otherSource, mr.line, mr.col), mrLine, lspCharacter(otherSource, mr.line, mrEnd)));
 		}
 	}
 
@@ -328,7 +334,7 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 // ===== Document Highlight =====
 
 export function handleDocumentHighlight(id: string, params: string, db: TransAmDb): string {
-	const pos = lspExtractPosition(params);
+	const pos = lspExtractPosition(params, db);
 	const path = lspUriToPath(pos.uri);
 
 	const ctx = dbTypeCheck(db, path);
@@ -337,13 +343,15 @@ export function handleDocumentHighlight(id: string, params: string, db: TransAmD
 	const suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
 	if (suggest == null) return lspResponse(id, "[]");
 
+	const source = dbGetSource(db, path);
 	const refs = sgQueryBySym(ctx, suggest.sym);
 	let arr = "[";
 	for (let i = 0; i < refs.length; i = i + 1) {
 		if (i > 0) arr = arr + ",";
 		const ref = refs[i];
 		const refLine = ref.line - 1;
-		arr = arr + lspFmtDocumentHighlight(refLine, ref.col - 1, ref.col - 1 + ref.nameLen, 1);
+		const refEnd = ref.col + (ref.nameLen as int32);
+		arr = arr + lspFmtDocumentHighlight(refLine, lspCharacter(source, ref.line, ref.col), lspCharacter(source, ref.line, refEnd), 1);
 	}
 	arr = arr + "]";
 	return lspResponse(id, arr);
@@ -352,7 +360,7 @@ export function handleDocumentHighlight(id: string, params: string, db: TransAmD
 // ===== Rename =====
 
 // Build TextEdit array for refs in a single file (sym identity for current file)
-function buildFileEditsBySym(ctx: CheckerContext, sym: Symbol | null, newName: string): string {
+function buildFileEditsBySym(ctx: CheckerContext, sym: Symbol | null, newName: string, source: string): string {
 	const refs = sgQueryBySym(ctx, sym);
 	if (refs.length == 0) return "";
 	const edits: string[] = [];
@@ -360,14 +368,15 @@ function buildFileEditsBySym(ctx: CheckerContext, sym: Symbol | null, newName: s
 	while (i < refs.length) {
 		const ref = refs[i];
 		const refLine = ref.line - 1;
-		edits.push(lspFmtTextEdit(refLine, ref.col - 1, ref.col - 1 + ref.nameLen, newName));
+		const refEnd = ref.col + (ref.nameLen as int32);
+		edits.push(lspFmtTextEdit(refLine, lspCharacter(source, ref.line, ref.col), lspCharacter(source, ref.line, refEnd), newName));
 		i = i + 1;
 	}
 	return "[" + edits.join(",") + "]";
 }
 
 // Build TextEdit array for refs in a cross-module file (name + modulePath fallback)
-function buildFileEdits(ctx: CheckerContext, name: string, modulePath: string, newName: string): string {
+function buildFileEdits(ctx: CheckerContext, name: string, modulePath: string, newName: string, source: string): string {
 	const refs = sgQueryByName(ctx, name, modulePath);
 	if (refs.length == 0) return "";
 	const edits: string[] = [];
@@ -375,14 +384,15 @@ function buildFileEdits(ctx: CheckerContext, name: string, modulePath: string, n
 	while (i < refs.length) {
 		const ref = refs[i];
 		const refLine = ref.line - 1;
-		edits.push(lspFmtTextEdit(refLine, ref.col - 1, ref.col - 1 + ref.nameLen, newName));
+		const refEnd = ref.col + (ref.nameLen as int32);
+		edits.push(lspFmtTextEdit(refLine, lspCharacter(source, ref.line, ref.col), lspCharacter(source, ref.line, refEnd), newName));
 		i = i + 1;
 	}
 	return "[" + edits.join(",") + "]";
 }
 
 export function handleRename(id: string, params: string, db: TransAmDb): string {
-	const pos = lspExtractPosition(params);
+	const pos = lspExtractPosition(params, db);
 	const path = lspUriToPath(pos.uri);
 
 	const newName = lspGetField(params, "newName");
@@ -399,7 +409,7 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 	let changeCount = 0;
 
 	// Current file — use sym identity
-	const curEdits = buildFileEditsBySym(ctx, suggest.sym, newName);
+	const curEdits = buildFileEditsBySym(ctx, suggest.sym, newName, dbGetSource(db, path));
 	if (curEdits.byteLength > 0) {
 		changes = lspJsonString(pos.uri) + ":" + curEdits;
 		changeCount = changeCount + 1;
@@ -414,7 +424,7 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 		if (otherPath == path) continue;
 		const otherCtx = dbTypeCheck(db, otherPath);
 		if (otherCtx == null) continue;
-		const otherEdits = buildFileEdits(otherCtx, suggest.name, suggest.modulePath, newName);
+		const otherEdits = buildFileEdits(otherCtx, suggest.name, suggest.modulePath, newName, dbGetSource(db, otherPath));
 		if (otherEdits.byteLength > 0) {
 			const otherUri = lspPathToUri(otherPath);
 			if (changeCount > 0) changes = changes + ",";

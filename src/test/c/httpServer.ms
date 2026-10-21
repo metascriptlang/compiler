@@ -8,7 +8,7 @@
 //   - Request/Response handler closure lifts correctly
 //   - sendText / sendJson / JSON.stringify code paths reachable
 
-import { compileToC } from "../helpers";
+import { compileToCWithStd } from "../helpers";
 
 test "E2E C: minimal HTTP server compiles" {
 	const src = `
@@ -23,7 +23,7 @@ function main(): void {
 	if (!lr.ok) { return; }
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
@@ -41,7 +41,7 @@ function main(): void {
 	if (!lr.ok) { return; }
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
@@ -60,7 +60,7 @@ function main(): void {
 	serveConcurrent(server, cpuCount());
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }
 
@@ -81,6 +81,6 @@ function main(): void {
 	serve(server);
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }

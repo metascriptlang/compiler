@@ -193,6 +193,14 @@ export enum RaiserOpcode {
 	BrGeI64Imm,       // ABC: if R[A] >= the immediate in B pc += branchOffset(C)
 	EqVal,            // ABC: if raiserEqual(R[A], R[B]) skip C: kind and payload, a string by text
 	NeVal,            // ABC: if !raiserEqual(R[A], R[B]) skip C
+	FutureCombine,    // ABC: R[A] = a future settled from the futures in array R[A+1] by RaiserCombine C; Any fails with R[A+2]
+}
+
+// How FutureCombine settles its result from its inputs (Promise.all, race, any).
+export enum RaiserCombine {
+	All,
+	Race,
+	Any,
 }
 
 export enum RaiserRegClass {

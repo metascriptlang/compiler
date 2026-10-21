@@ -428,7 +428,7 @@ export function emitImportDecl(gen: JSGenerator, node: Node): void {
 	if (d.importSource == "std/meta" || (d.importSource.length >= 9 && d.importSource.slice(0, 9) == "std/meta/")) return;
 	// Bundle: every module shares one flat scope and names carry module
 	// identity, so cross-module references need no binding statement.
-	if (gen.bundleMode) return;
+	if (gen.bundleMode || node.flags.has(NodeFlag.TypeOnlyImport)) return;
 	// Multi-file: named bindings are derived from actual references
 	// (recordNeededImport), so the source import contributes only module
 	// evaluation order — a bare side-effect import.
@@ -503,6 +503,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	const inner = d.exportedDecl;
 	// Star re-export: export * from "path"
 	if (inner.kind == NodeKind.ImportDecl) {
+		if (inner.flags.has(NodeFlag.TypeOnlyImport)) return;
 		const imp = inner.data as ImportDeclData;
 		// Multi-file: every re-export form emits as `export * from` — a named
 		// list can mix runtime values with types, and naming a type binding

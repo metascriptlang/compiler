@@ -16,7 +16,10 @@ import {
 	SwitchStmtData, SwitchCaseData, VariableDeclData, CallExprData,
 	UpdateExprData, NewExprData, OutExprData, HiddenDerefData,
 	ArrayLiteralData, ObjectLiteralData, SpreadExprData, SymbolFlag,
+	Symbol, SymbolKind, DestructuringDeclData, MoveExprData,
+	FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData,
 } from "../ast/node";
+import { forEachChild } from "../ast/visitor";
 import {
 	createUnion, createUnionInOrder, inferredType, nullType, neverType,
 	createStringLiteral, createNumberLiteral, integerLiteralName, fractionLiteralName, numberLiteralBase, isFloatType, float64Type, int32Type,
@@ -81,9 +84,6 @@ export interface FlowState {
 	//   - initialType: Type — distinguish declaredType (widened) from
 	//     initialType (usually equal, but differs for parameters with init
 	//     expressions). Needed when let-variable narrowing lands in Phase 6.
-	//   - flowContainer: Node — owning function/container, used by the Start
-	//     handler to implement the cross-container narrowing rule (`this.foo`
-	//     narrows across arrow boundaries; local identifiers do not). Phase 6.
 }
 
 function createFlowState(refNode: Node, declaredType: Type): FlowState {
@@ -411,6 +411,11 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 			break;
 		}
 		if (flags.has(FlowFlag.Start)) {
+			const created = capturedFlowAt(state.reference, current.node);
+			if (created != null) {
+				current = created;
+				continue;
+			}
 			result = flowType(state.declaredType, false);
 			break;
 		}
@@ -1366,15 +1371,19 @@ function patternWritesInto(target: Node, refNode: Node): boolean {
 	return holdsBelowTop(refNode, t);
 }
 
-function calleeParams(callee: Node | null): Type[] {
-	if (callee == null) return [];
+function calleeType(callee: Node | null): Type | null {
+	if (callee == null) return null;
 	let fnType = callee.nodeType;
 	if ((fnType == null || fnType.kind != TypeKind.Function)
 			&& callee.kind == NodeKind.Identifier && callee.resolvedSym != null) {
 		fnType = callee.resolvedSym.symbolType;
 	}
-	if (fnType == null || fnType.kind != TypeKind.Function) return [];
-	return fnType.typeChildren;
+	return fnType != null && fnType.kind == TypeKind.Function ? fnType : null;
+}
+
+function calleeParams(callee: Node | null): Type[] {
+	const fnType = calleeType(callee);
+	return fnType == null ? [] : fnType.typeChildren;
 }
 
 function callNeverReturns(call: Node | null): boolean {
@@ -1526,6 +1535,247 @@ function isConstBinding(refNode: Node): boolean {
 	const decl = top.resolvedSym.declNode;
 	return decl != null && decl.kind == NodeKind.VariableDecl
 		&& (decl.data as VariableDeclData).declKind == DeclKind.Const;
+}
+
+// ===== Captured bindings =====
+
+function capturedFlowAt(reference: Node, closure: Node | null): FlowNode | null {
+	if (closure == null || closure.flowNode == null) return null;
+	if (closure.kind != NodeKind.ArrowFunction && closure.kind != NodeKind.FunctionExpr) return null;
+	const top = stripHidden(reference);
+	if (top == null || top.kind != NodeKind.Identifier || top.resolvedSym == null) return null;
+	const sym = top.resolvedSym!;
+	if (declaresParam(closure, sym)) return null;
+	if (isConstantSymbol(sym)) return closure.flowNode;
+	if (isParameterOrMutableLocal(sym) && isPastLastAssignment(sym, closure)) return closure.flowNode;
+	return null;
+}
+
+function isConstantSymbol(sym: Symbol): boolean {
+	const decl = sym.declNode;
+	if (decl == null) return false;
+	if (decl.kind == NodeKind.VariableDecl) return (decl.data as VariableDeclData).declKind == DeclKind.Const;
+	return decl.kind == NodeKind.DestructuringDecl && (decl.data as DestructuringDeclData).destrIsConst;
+}
+
+function isParameterOrMutableLocal(sym: Symbol): boolean {
+	if (sym.symbolType != null && sym.symbolType.kind == TypeKind.Var) return false;
+	if (sym.symbolKind == SymbolKind.Parameter) return true;
+	const decl = sym.declNode;
+	if (decl == null || sym.symFlags.has(SymbolFlag.Exported)) return false;
+	if (decl.kind == NodeKind.VariableDecl) return (decl.data as VariableDeclData).declKind == DeclKind.Let;
+	return decl.kind == NodeKind.DestructuringDecl && !(decl.data as DestructuringDeclData).destrIsConst;
+}
+
+function declaresParam(container: Node, sym: Symbol): boolean {
+	if (sym.symbolKind != SymbolKind.Parameter) return false;
+	if (container.paramSyms != null && container.paramSyms!.includes(sym)) return true;
+	return paramNamesOf(container).includes(sym.name);
+}
+
+function paramNamesOf(container: Node): string[] {
+	if (container.kind == NodeKind.FunctionDecl) return (container.data as FunctionDeclData).params;
+	if (container.kind == NodeKind.ArrowFunction) return (container.data as ArrowFunctionData).arrowParams;
+	if (container.kind == NodeKind.FunctionExpr) return (container.data as FunctionExprData).funcExprParams;
+	if (container.kind == NodeKind.MethodDecl) return (container.data as MethodDeclData).methodParams;
+	if (container.kind == NodeKind.ConstructorDecl) return (container.data as ConstructorDeclData).ctorParams;
+	return [];
+}
+
+function isPastLastAssignment(sym: Symbol, closure: Node): boolean {
+	const [container, created] = declaringContainerOf(sym, closure);
+	if (container == null) return false;
+	const scan = assignmentsIn(container!);
+	return scan.ordinals.has(created) && lastAssignmentOf(sym, scan) < scan.ordinals.get(created)!;
+}
+
+function declaringContainerOf(sym: Symbol, closure: Node): [Node | null, Node] {
+	let inner = closure;
+	while (true) {
+		const container = enclosingContainer(inner);
+		if (container == null) break;
+		if (declaresParam(container!, sym) || (sym.declNode != null && assignmentsIn(container!).ordinals.has(sym.declNode))) return [container, inner];
+		if (container!.kind != NodeKind.ArrowFunction && container!.kind != NodeKind.FunctionExpr) break;
+		inner = container!;
+	}
+	return [null, inner];
+}
+
+function enclosingContainer(closure: Node): Node | null {
+	if (closureContainers.has(closure)) return closureContainers.get(closure)!;
+	if (closure.flowNode == null) return null;
+	const seen = new HashSet<FlowNode>();
+	const todo: FlowNode[] = [closure.flowNode!];
+	while (todo.length > 0) {
+		const flow = todo.pop();
+		if (flow == null || flow.flags.has(FlowFlag.Unreachable) || seen.has(flow)) continue;
+		seen.add(flow);
+		if (flow.flags.has(FlowFlag.Start)) {
+			if (flow.node == null) return null;
+			closureContainers.set(closure, flow.node!);
+			return flow.node;
+		}
+		if (flow.antecedent != null) todo.push(flow.antecedent);
+		let list: FlowList | null = flow.antecedents;
+		while (list != null) {
+			todo.push(list.flow);
+			list = list.next;
+		}
+	}
+	return null;
+}
+
+const WRITTEN_LATER: int32 = 2147483647;
+
+class AssignmentWrite {
+	name: string;
+	sym: Symbol | null;
+	at: int32;
+	nested: boolean;
+	open: int32[];
+
+	constructor(name: string, sym: Symbol | null, at: int32, nested: boolean, open: int32[]) {
+		this.name = name;
+		this.sym = sym;
+		this.at = at;
+		this.nested = nested;
+		this.open = open;
+	}
+}
+
+class ContainerAssignments {
+	ordinal: int32 = 0;
+	ordinals: HashMap<Node, int32> = new HashMap<Node, int32>();
+	writes: AssignmentWrite[] = [];
+	statementStart: int32[] = [];
+	statementEnd: int32[] = [];
+	open: int32[] = [];
+}
+
+let containerAssignments = new HashMap<Node, ContainerAssignments>();
+let lastAssignments = new HashMap<Symbol, int32>();
+let closureContainers = new HashMap<Node, Node>();
+
+export function resetCapturedAssignments(): void {
+	containerAssignments = new HashMap<Node, ContainerAssignments>();
+	lastAssignments = new HashMap<Symbol, int32>();
+	closureContainers = new HashMap<Node, Node>();
+}
+
+function assignmentsIn(container: Node): ContainerAssignments {
+	const known = containerAssignments.get(container);
+	if (known != null) return known;
+	const scan = new ContainerAssignments();
+	forEachChild(container, (child: Node): void => { scanAssignments(scan, child, false); });
+	containerAssignments.set(container, scan);
+	return scan;
+}
+
+function lastAssignmentOf(sym: Symbol, scan: ContainerAssignments): int32 {
+	if (lastAssignments.has(sym)) return lastAssignments.get(sym)!;
+	const declAt = sym.declNode != null && scan.ordinals.has(sym.declNode) ? scan.ordinals.get(sym.declNode)! : 0;
+	let last = 0;
+	for (const write of scan.writes) {
+		if (write.name != sym.name || (write.sym != null && write.sym != sym)) continue;
+		if (write.nested) {
+			last = WRITTEN_LATER;
+			break;
+		}
+		let at = write.at;
+		for (const i of write.open) {
+			if (scan.statementStart[i] > declAt) {
+				at = scan.statementEnd[i];
+				break;
+			}
+		}
+		if (at > last) last = at;
+	}
+	lastAssignments.set(sym, last);
+	return last;
+}
+
+function scanAssignments(scan: ContainerAssignments, node: Node, nested: boolean): void {
+	scan.ordinal += 1;
+	const at = scan.ordinal;
+	const k = node.kind;
+	if (!nested && (k == NodeKind.VariableDecl || k == NodeKind.DestructuringDecl || k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr)) {
+		scan.ordinals.set(node, at);
+	}
+	const written: Node[] = [];
+	writtenNames(node, written);
+	for (const n of written) {
+		scan.writes.push(new AssignmentWrite((n.data as IdentifierData).name, nested ? null : n.resolvedSym, at, nested, scan.open.slice(0)));
+	}
+	const later = nested || runsLater(node);
+	const extending = !later && extendsAssignment(node);
+	if (extending) {
+		scan.open.push(scan.statementStart.length);
+		scan.statementStart.push(at);
+		scan.statementEnd.push(0);
+	}
+	forEachChild(node, (child: Node): void => { scanAssignments(scan, child, later); });
+	if (extending) scan.statementEnd[scan.open.pop()] = scan.ordinal;
+}
+
+function runsLater(node: Node): boolean {
+	const k = node.kind;
+	return k == NodeKind.FunctionDecl || k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr
+		|| k == NodeKind.MethodDecl || k == NodeKind.ConstructorDecl || k == NodeKind.ClassDecl
+		|| k == NodeKind.ActorDecl || k == NodeKind.TestDecl || k == NodeKind.DeferStmt
+		|| k == NodeKind.MacroDecl || k == NodeKind.QuoteExpr || k == NodeKind.ComptimeBlock;
+}
+
+function extendsAssignment(node: Node): boolean {
+	const k = node.kind;
+	return k == NodeKind.VariableDecl || k == NodeKind.DestructuringDecl || k == NodeKind.ExprStmt
+		|| k == NodeKind.IfStmt || k == NodeKind.DoWhileStmt || k == NodeKind.WhileStmt
+		|| k == NodeKind.ForStmt || k == NodeKind.ForInStmt || k == NodeKind.ForOfStmt
+		|| k == NodeKind.SwitchStmt || k == NodeKind.MatchStmt || k == NodeKind.TryCatchStmt;
+}
+
+function writtenNames(node: Node, out: Node[]): void {
+	if (node.kind == NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		if (isAssignmentOperator(d.operator)) collectTargets(d.left, out);
+	} else if (node.kind == NodeKind.UpdateExpr) {
+		collectName((node.data as UpdateExprData).updateArg, out);
+	} else if (node.kind == NodeKind.OutExpr) {
+		collectName((node.data as OutExprData).outArg, out);
+	} else if (node.kind == NodeKind.MoveExpr) {
+		collectName((node.data as MoveExprData).moveArg, out);
+	} else if (node.kind == NodeKind.CallExpr) {
+		const cd = node.data as CallExprData;
+		const fnType = calleeType(cd.callee);
+		for (let i = 0; i < cd.arguments.length; i += 1) {
+			if (argumentMayBeRef(fnType, i)) collectName(cd.arguments[i], out);
+		}
+	}
+}
+
+function argumentMayBeRef(fnType: Type | null, i: int32): boolean {
+	if (fnType == null) return true;
+	return i < fnType.typeChildren.length && fnType.typeChildren[i] != null && fnType.typeChildren[i].kind == TypeKind.Var;
+}
+
+function isAssignmentOperator(op: string): boolean {
+	return op.endsWith("=") && op != "==" && op != "===" && op != "!=" && op != "!==" && op != "<=" && op != ">=";
+}
+
+function collectTargets(target: Node | null, out: Node[]): void {
+	const t = stripHidden(target);
+	if (t == null) return;
+	if (t.kind == NodeKind.ArrayLiteral || t.kind == NodeKind.ObjectLiteral) {
+		forEachChild(t, (part: Node): void => { collectTargets(part, out); });
+	} else if (t.kind == NodeKind.SpreadExpr) {
+		collectTargets((t.data as SpreadExprData).spreadArg, out);
+	} else {
+		collectName(t, out);
+	}
+}
+
+function collectName(node: Node | null, out: Node[]): void {
+	const n = stripHidden(node);
+	if (n != null && n.kind == NodeKind.Identifier) out.push(n);
 }
 
 function writesReference(node: Node | null, refNode: Node): boolean {

@@ -162,40 +162,30 @@ test "E2E C: struct with string fields has lifecycle hooks" {
 		}
 	`);
 	assert c.ok;
-	// Named struct with string fields should have destroy/copy hooks
-	assert c.value.contains("NamedDestroy") || c.value.contains("Named_destroy");
+	assert c.value.contains("Destroy(Named__");
+	assert c.value.contains("Copy(Named__");
 }
 
-// ===== KEY: Verify DRC generates destroy hooks for Symbol/Type =====
-// Reference: PNode/PSym/PType have NO =destroy hooks → no cascade.
-// Our compiler: Node/Symbol/Type ARE interfaces → =destroy hooks generated.
-// This is the fundamental gap that causes crash #3.
-
-test "E2E C: SymbolDestroy exists and cascades through symbolType" {
-	// Any program with functions creates Symbols. Check if SymbolDestroy
-	// is generated and what it decrefs.
+test "E2E C: a module-level interface value is released at module exit" {
 	const c = compileToC(`
 		interface Foo { x: number; name: string; }
 		function makeFoo(): Foo { return { x: 1, name: "test" }; }
 		const f = makeFoo();
 	`);
 	assert c.ok;
-	// Verify SymbolDestroy exists — this IS the cascade source.
-	// When this test FAILS (SymbolDestroy not found), crash #3 is fixed.
-	const hasSymbolDestroy = c.value.contains("SymbolDestroy");
-	// Document: SymbolDestroy currently EXISTS (causes cascade).
-	// TODO: Remove SymbolDestroy to match reference (no =destroy on PSym).
+	assert c.value.contains("Destroy(Foo__");
+	assert c.value.contains("msDecref(f__");
 }
 
-test "E2E C: TypeDestroy exists and cascades through sym/typeChildren" {
+test "E2E C: an array field is released by its owner's destroy hook" {
 	const c = compileToC(`
 		interface Bar { items: string[]; }
-		function test(): Bar { return { items: [] }; }
+		function makeBar(): Bar { return { items: [] }; }
+		const b = makeBar();
+		console.log(b.items.length);
 	`);
 	assert c.ok;
-	// Verify TypeDestroy exists — cascades through sym, typeChildren, etc.
-	const hasTypeDestroy = c.value.contains("TypeDestroy");
-	// Document: TypeDestroy currently EXISTS (causes cascade).
+	assert c.value.contains("msDecref((*self).items)");
 }
 
 test "E2E C: class with method compiles" {

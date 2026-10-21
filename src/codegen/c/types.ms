@@ -17,6 +17,7 @@ import { CheckerContext, newSym, GcMode, addError, createContext } from "../../c
 import { cStringLiteral, escapeCString } from "./literals";
 
 export function resolvedTypeCName(t: Type, hasCheckerCtx: boolean): string {
+	if (t.sym != null && t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(t.sym, t.typeName) + "_" + hashToBase36(nominalTypeKey(t));
 	if (t.sym != null) return mangledTypeName(t.sym, t.typeName);
 	if (hasCheckerCtx && t.typeName != "" && isNominalKind(t.kind)) nominalTypeKey(t);
 	return mangledTypeName(null, t.typeName);
@@ -47,7 +48,6 @@ export function hookBaseCName(typeName: string, t: Type | null, cc: Readonly<Che
 	if (typeName.indexOf("__", 0) >= 0) return typeName;
 	const named = t != null && t.typeName == typeName;
 	if (named && t.typeInst != null) return monoInstanceName(t.typeInst);
-	if (named && t.sym != null) return mangledTypeName(t.sym, typeName);
 	if (named) return resolvedTypeCName(t, cc != null);
 	return typeName;
 }
@@ -359,9 +359,9 @@ function anonFieldKey(t: Type | null, open: Type[]): string {
 	return match (t.kind) {
 		TypeKind.Struct => {
 			if (t.typeName.length == 0) return anonStructKeyIn(t, open);
-			return t.typeName;
+			return structKeyIdentity(t);
 		},
-		TypeKind.Enum => "enum:" + t.typeName,
+		TypeKind.Enum => "enum:" + mangledTypeName(t.sym, t.typeName),
 		TypeKind.GenericInstance => "ginst:" + monoInstanceName(t),
 		TypeKind.Array => "arr:" + anonFieldKey(t.typeReturn, open),
 		TypeKind.Function => {
@@ -513,9 +513,8 @@ export function annotationToC(annotation: string): string {
 // Generates a unique string key for a Type (used for cache lookups).
 
 function structKeyIdentity(t: Type): string {
-	if (t.sym != null) return mangledTypeName(t.sym, t.typeName);
-	nominalTypeKey(t);
-	return mangledTypeName(null, t.typeName);
+	if (t.sym != null && !t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(t.sym, t.typeName);
+	return mangledTypeName(null, nominalTypeKey(t));
 }
 
 export function anonUnionCName(t: Type): string {
@@ -1131,30 +1130,33 @@ function typeInfoLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 	};
 }
 
+function emitRttiHook(g: CGen, name: string, hook: Symbol, trace: boolean): string {
+	const hookName = opCName(hook);
+	ensureDrcProto(g, hookName, hook);
+	const params = trace ? "void* dest, void* env" : "void* dest";
+	addLine(sec(g, CSection.ProcHeaders), `static void ${name}(${params});`);
+	addLine(sec(g, CSection.Procs), `static void ${name}(${params}) { ${hookName}(dest${trace ? ", env" : ""}); }`);
+	return name;
+}
+
 export function emitOwnedTypeInfos(g: CGen): void {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
 	const viaRegistry = isHcrImageModule(g, g.modulePath);
 	for (const info of g.emissionFacts.typeInfoOrder) {
 		if (info.owner != g.modulePath) continue;
 		let destroyName = "NULL";
-		if (info.destroy != null) {
-			destroyName = opCName(info.destroy);
-			ensureDrcProto(g, destroyName, info.destroy);
-		}
+		if (info.destroy != null) destroyName = emitRttiHook(g, info.cName + "RttiDestroy", info.destroy, false);
 		let traceName = "NULL";
-		if (info.trace != null) {
-			traceName = opCName(info.trace);
-			ensureDrcProto(g, traceName, info.trace);
-		}
+		if (info.trace != null) traceName = emitRttiHook(g, info.cName + "RttiTrace", info.trace, true);
 		let baseRef = "NULL";
 		if (info.baseKey != "") {
 			const base = demandedTypeInfo(g, info.baseKey, "base class");
 			if (base != null) baseRef = typeInfoPointer(g, base);
 		}
 		const label = typeInfoLabel(g, info);
-		const shown = info.kind == TypeInfoKind.Object ? typeDisplayName(info.subject) : "";
+		const shown = info.kind != TypeInfoKind.Object ? "" : runtimeClassSym(info.subject) != null ? typeDisplayName(info.subject) : "Object";
 		const fields = `.name = "${label}", .isCyclic = ${info.trace != null ? "MS_TRUE" : "MS_FALSE"}, `
-			+ `.traceFn = (msTraceProc)${traceName}, .destroyFn = (msDestroyProc)${destroyName}, .flags = ${viaRegistry && !info.moduleLocal && info.kind == TypeInfoKind.Object ? "MS_TYPE_FLAG_HCR" : "0"}, .base = ${baseRef}`
+			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${viaRegistry && !info.moduleLocal && info.kind == TypeInfoKind.Object ? "MS_TYPE_FLAG_HCR" : "0"}, .base = ${baseRef}`
 			+ (shown != "" && shown != label ? `, .displayName = "${escapeCString(shown)}"` : "");
 		if (viaRegistry && !info.moduleLocal && !hcrTypeInfoRef(g, info.cName)) {
 			addCGenError(g, `internal: HCR image ${g.modulePath} owns TypeInfo ${info.cName} but no image module registers it`, 0, 0);

@@ -16,7 +16,7 @@
 #include "runtime/actor/mailbox.h"   /* msMsgPools extern definition */
 #include "runtime/actor/selector.h"  /* _msEvtBuf extern definition */
 
-/* Per-thread current actor — set inside msActorProcess for sender muting. */
+/* Per-thread current actor — set inside msActorProcess. */
 MS_THREAD_LOCAL msActor* msCurrentActor = NULL;
 MS_TLS_PUBLISH(msCurrentActor)
 

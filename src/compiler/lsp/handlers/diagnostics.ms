@@ -1,21 +1,23 @@
 // LSP Handlers — Diagnostics, format violations, dependency recording, transitive diagnostics.
 
 import {
-	TransAmDb, dbParse, dbTypeCheck, dbGetCheckedProgram, getFileId, getFilePath,
+	TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbGetCheckedProgram, getFileId, getFilePath,
 	clearImportsFor, getTransitiveDependents, recordModuleImport
 } from "../../transam/index";
 import { detectCycle } from "../../transam/moduleDeps";
 import { writeStderr } from "std/io";
 import { platform, env, cwd } from "std/process";
 import { mkdir, writeFile } from "std/fs";
-import { lspNotification, lspFormatMessage, lspPathToUri, dirname } from "../protocol";
+import { lspNotification, lspFormatMessage, lspPathToUri, lspGetField, lspGetObjectField, lspGetArrayItems, lspGetNumberField, dirname } from "../protocol";
+import { parseJson } from "std/serialize/json/parser";
 import { lspFmtDiagnostic, lspFmtDiagnosticRange, lspFmtPublishDiagnostics } from "../format";
 import { sgCollectDiagnostics } from "../../../checker/suggest";
+import { addErrorRange, addErrorFullRange } from "../../../checker/context";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../../../ast/node";
 import { FormatOptions, defaultFormatOptions, applyFmtSection } from "../../fmt/options";
 import { loadFmtSection, loadLspSection, validateBuildConfig, LspSection } from "../../buildConfig";
 import { collectFreestandingAsync, freestandingAsyncLoc, FREESTANDING_ASYNC_MSG } from "../../../checker/freestanding";
-import { dbGetSource, lspEnsureFileLoaded } from "./shared";
+import { dbGetSource, lspEnsureFileLoaded, lspCharacter } from "./shared";
 import { dbResolveImport } from "../../transam/index";
 import { findProjectRoot } from "../../../utils/path";
 
@@ -97,7 +99,8 @@ export function splitLines(s: string): string[] {
 	let start = 0;
 	for (let i = 0; i < s.byteLength; i = i + 1) {
 		if (s[i] == "\n") {
-			lines.push(s.slice(start, i));
+			const end = i > start && s[i - 1] == "\r" ? i - 1 : i;
+			lines.push(s.slice(start, end));
 			start = i + 1;
 		}
 	}
@@ -235,6 +238,7 @@ function lspBasename(path: string): string {
 
 export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): string {
 	const ctx = dbTypeCheck(db, path);
+	const source = dbGetSource(db, path);
 
 	let diagArray = "[";
 	let diagCount = 0;
@@ -245,10 +249,10 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 			if (diagCount > 0) diagArray = diagArray + ",";
 			const d = diags[i];
 			const line = d.line - 1;
-			// Convert 1-based checker columns to 0-based LSP columns
-			const col = d.column > 0 ? d.column - 1 : 0;
+			const col = lspCharacter(source, d.line, d.column);
 			const endLine = d.endLine > 0 ? d.endLine - 1 : line;
-			const endCol = d.endColumn > d.column ? d.endColumn - 1 : col + 1;
+			const hasEnd = d.endColumn > 0 && (endLine > line || d.endColumn > d.column);
+			const endCol = hasEnd ? lspCharacter(source, endLine + 1, d.endColumn) : col + 1;
 			diagArray = diagArray + lspFmtDiagnosticRange(
 				line, col, endLine, endCol, d.severity, d.message, "metascript", 0, d.tags
 			);
@@ -457,4 +461,82 @@ test "getLspTarget defaults to host + orc without section" {
 	const t = getLspTarget(dir + "/main.ms");
 	assert t.os == platform;
 	assert t.gc == "orc";
+}
+
+test "synthetic checker spans keep both UTF-16 endpoints" {
+	const sources = ["/*abcdef*/\n/*ghijkl*/", "/*é😀*/\n/*日😀*/", "/*é😀*/\r\n/*日😀*/"];
+	const characters = [8, 5, 5];
+	const messages = ["same-line boundary", "multiline boundary"];
+	const path = "/diagnostic-span-adapter.ms";
+	const uri = "file:///diagnostic-span-adapter.ms";
+	for (let i = 0; i < sources.length; i++) {
+		const db = createTransAmDb(8);
+		dbSetFileText(db, path, sources[i]);
+		const ctx = dbTypeCheck(db, path);
+		assert ctx.errors.length == 0;
+		addErrorRange(ctx, messages[0], 1, 3, 9);
+		addErrorFullRange(ctx, messages[1], 1, 9, 2, 3);
+		const response = buildDiagnosticsJson(uri, db, path);
+		assert parseJson(response).ok;
+		assert lspGetField(response, "uri") == uri;
+		const items = lspGetArrayItems(lspGetObjectField(response, "diagnostics"));
+		assert items.length == 2;
+		for (let j = 0; j < items.length; j++) {
+			assert lspGetField(items[j], "message") == messages[j];
+			assert lspGetField(items[j], "source") == "metascript";
+			assert lspGetNumberField(items[j], "severity") == 1;
+			const range = lspGetObjectField(items[j], "range");
+			const start = lspGetObjectField(range, "start");
+			const end = lspGetObjectField(range, "end");
+			const expectedStart = j == 0 ? 2 : characters[i];
+			const expectedEnd = j == 0 ? characters[i] : 2;
+			assert lspGetNumberField(start, "line") == 0;
+			assert lspGetNumberField(start, "character") == expectedStart;
+			assert lspGetNumberField(end, "line") == j;
+			assert lspGetNumberField(end, "character") == expectedEnd;
+		}
+	}
+}
+
+function assertTrailingWhitespaceDiagnostic(eol: string): void {
+	const path = "/fmt/diagnostic.ms";
+	const uri = "file:///fmt/diagnostic.ms";
+	const db = createTransAmDb(8);
+	dbSetFileText(db, path, "export const value = \"é😀\";   " + eol);
+	const response = buildDiagnosticsJson(uri, db, path);
+	if (!parseJson(response).ok || lspGetField(response, "uri") != uri) throw new Error("Invalid diagnostics envelope");
+	const items = lspGetArrayItems(lspGetObjectField(response, "diagnostics"));
+	if (items.length != 1) throw new Error("Expected one trailing-whitespace diagnostic: " + response);
+	const item = items[0];
+	if (lspGetField(item, "message") != "Remove trailing whitespace" || lspGetField(item, "source") != "metascript-fmt" || lspGetNumberField(item, "severity") != 4) throw new Error("Wrong formatting diagnostic: " + item);
+	const range = lspGetObjectField(item, "range");
+	const start = lspGetObjectField(range, "start");
+	const end = lspGetObjectField(range, "end");
+	if (lspGetNumberField(start, "line") != 0 || lspGetNumberField(start, "character") != 27 || lspGetNumberField(end, "line") != 0 || lspGetNumberField(end, "character") != 30) throw new Error("Wrong whitespace UTF-16 range: " + item);
+}
+
+test "LF line content preserves spaces and trailing blank lines" {
+	const lines = splitLines("é😀   \n日\n\n");
+	assert lines.length == 4;
+	assert lines[0] == "é😀   ";
+	assert lines[1] == "日";
+	assert lines[2] == "";
+	assert lines[3] == "";
+}
+
+test "CRLF line content excludes terminators but preserves spaces and blank lines" {
+	const lines = splitLines("é😀   \r\n日\r\n\r\n");
+	assert lines.length == 4;
+	assert lines[0] == "é😀   ";
+	assert lines[1] == "日";
+	assert lines[2] == "";
+	assert lines[3] == "";
+}
+
+test "LF trailing whitespace diagnostic excludes the line terminator" {
+	assertTrailingWhitespaceDiagnostic("\n");
+}
+
+test "CRLF trailing whitespace diagnostic excludes the line terminator" {
+	assertTrailingWhitespaceDiagnostic("\r\n");
 }

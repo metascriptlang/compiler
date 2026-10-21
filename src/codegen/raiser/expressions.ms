@@ -14,7 +14,7 @@ import {
 	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData, SpreadExprData,
 	createNodeAt
 } from "../../ast/node";
-import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, raiserABC, raiserABx, raiserAx, convOperand, fitsImm, immField, branchField } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, RaiserCombine, raiserABC, raiserABx, raiserAx, convOperand, fitsImm, immField, branchField } from "../../raiser/bytecode";
 import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserConstString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation } from "./valueCopy";
@@ -640,7 +640,7 @@ function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 
 	if (isRefParamTarget(left)) {
 		const pointeeType = left.resolvedSym!.symbolType.typeReturn;
 		const paramReg = resolveLocal(s, left.resolvedSym);
-		if (paramReg < 0 || !needsValueAssign(s, pointeeType)) return -1;
+		if (paramReg < 0 || heldByLocation(s, pointeeType)) return -1;
 		const srcReg = compileExpr(s, right);
 		return emitValueAssign(s, paramReg, srcReg, pointeeType);
 	}
@@ -648,7 +648,12 @@ function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 
 	if (left.kind == NodeKind.HiddenDeref) {
 		const srcReg = compileExpr(s, right);
 		const pointee = compileExpr(s, (left.data as HiddenDerefData).expr);
-		return emitValueAssign(s, pointee, srcReg, left.nodeType);
+		if (!heldByLocation(s, left.nodeType)) return emitValueAssign(s, pointee, srcReg, left.nodeType);
+		const held = allocFor(s, left.nodeType);
+		emitInst(s, raiserABC(RaiserOpcode.LoadDeref, held, pointee, 0));
+		const result = emitValueAssign(s, held, srcReg, left.nodeType);
+		emitInst(s, raiserABC(RaiserOpcode.StoreDeref, pointee, 0, result));
+		return result;
 	}
 	if (left.kind == NodeKind.Identifier) {
 		if (isViewBinding(left.resolvedSym)) return -1;
@@ -1529,9 +1534,10 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		return emitConvTo(s, compileExpr(s, d.arguments[0]), RaiserConvClass.HandleBits as int32, -1);
 	}
 
-	// spawn(fn) / sleepAsync(ms) / waitFor(h) / Promise.resolve(v) — the async
-	// surface the VM owns as opcodes. Keyed on builtinKind (set from the @builtin
-	// decorator in std/core/promise), never on the name.
+	// spawn(fn) / sleepAsync(ms) / waitFor(h) / Promise.resolve(v) and the
+	// Promise.all / race / any combinators — the async surface the VM owns as
+	// opcodes. Keyed on builtinKind (set from the @builtin decorator in
+	// std/core/promise), never on the name.
 	const asyncKind = builtinKind;
 	if (asyncKind == "PromiseSpawn" && d.arguments.length == 1) {
 		const closureReg = compileExpr(s, d.arguments[0]);
@@ -1574,6 +1580,14 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		}
 		emitInst(s, raiserABC(asyncKind == "PromiseSettle" ? RaiserOpcode.FutureSettle : RaiserOpcode.FutureFail, futReg, valueReg, 0));
 		return futReg;
+	}
+	const combine = combineOf(asyncKind);
+	const combineArity = combine == (RaiserCombine.Any as int32) ? 2 : 1;
+	if (combine >= 0 && d.arguments.length == combineArity) {
+		const dest = callBlock(s, node.nodeType, d.arguments, null);
+		emitCallArgs(s, dest, d.arguments);
+		emitInst(s, raiserABC(RaiserOpcode.FutureCombine, dest, 0, combine));
+		return dest;
 	}
 	if (asyncKind == "PromiseResolve" && d.arguments.length == 1) {
 		// Await reads a finished future as its value, so a future that starts
@@ -2291,6 +2305,13 @@ function compileMapFatalCall(s: RaiserCompState, node: Node): int32 {
 
 // spawn/waitFor/Promise.resolve carry @builtin on the extern; the kind lands
 // on the CallExpr for free functions and on the callee for the static method.
+function combineOf(builtinKind: string): int32 {
+	if (builtinKind == "PromiseAll") return RaiserCombine.All as int32;
+	if (builtinKind == "PromiseRace") return RaiserCombine.Race as int32;
+	if (builtinKind == "PromiseAny") return RaiserCombine.Any as int32;
+	return -1;
+}
+
 function callBuiltinKind(node: Node): string {
 	if (node.resolvedSym != null && node.resolvedSym.builtinKind != "") return node.resolvedSym.builtinKind;
 	const d = node.data as CallExprData;

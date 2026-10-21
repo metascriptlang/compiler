@@ -33,7 +33,7 @@ import { lowerBorrow } from "./lowering/borrowLower";
 import { lowerPointerAddresses } from "./lowering/pointerAddressLower";
 import { insertVarParamDerefs } from "./native/varParamDeref";
 import { lowerBitSet } from "./lowering/bitSetLower";
-import { lowerUserOperators } from "./lowering/operatorLower";
+import { lowerUserOperators, lowerClosureEqualities } from "./lowering/operatorLower";
 import { materializeMaybeReads } from "./coercion/maybeReadMaterialize";
 import { lowerUnionTags } from "./lowering/unionTagLower";
 import { lowerTypeof } from "./lowering/typeofLower";
@@ -91,6 +91,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext): Node {
 	result = lowerExtensionMethod(result, ctx);
 	result = lowerBitSet(result, ctx);
 	result = lowerUserOperators(result, ctx);
+	result = lowerClosureEqualities(result, ctx);
 	result = injectEnumRangeChecks(result, ctx);
 	result = lowerUnionConversions(result, ctx);
 	result = lowerUnionTags(result, ctx);

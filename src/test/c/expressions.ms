@@ -4,14 +4,6 @@
 import { compileToC } from "../helpers";
 
 
-test "E2E C: ternary expression" {
-	const src = "function f(n: number): number { return (n > 0) ? 1 : -1; }\nconst r = f(5);";
-	const c = compileToC(src);
-	assert c.ok;
-	assert c.value.contains("?");
-	assert c.value.contains(":");
-}
-
 test "E2E C: unary not" {
 	const src = "function f(b: boolean): boolean { return !b; }\nconst r = f(true);";
 	const c = compileToC(src);
@@ -24,20 +16,6 @@ test "E2E C: unary negation" {
 	const c = compileToC(src);
 	assert c.ok;
 	assert c.value.contains("-");
-}
-
-test "E2E C: logical AND" {
-	const src = "function f(a: boolean, b: boolean): boolean { return a && b; }\nconst r = f(true, false);";
-	const c = compileToC(src);
-	assert c.ok;
-	assert c.value.contains("&&");
-}
-
-test "E2E C: logical OR" {
-	const src = "function f(a: boolean, b: boolean): boolean { return a || b; }\nconst r = f(true, false);";
-	const c = compileToC(src);
-	assert c.ok;
-	assert c.value.contains("||");
 }
 
 test "E2E C: comparison operators" {

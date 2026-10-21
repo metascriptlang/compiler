@@ -104,6 +104,7 @@ export function assignType(target: Type, source: Type): void {
 	target.typeValue = source.typeValue;
 	target.callConv = source.callConv;
 	target.attachedOps = source.attachedOps;
+	target.optionalFields = source.optionalFields;
 }
 
 // ===== Constructors =====
@@ -530,7 +531,7 @@ export function nullableUnionOf(members: Type[]): Type {
 	for (const member of members) {
 		if (member == null) continue;
 		const nested = nestedUnionOf(member);
-		const m = nested != null ? nested : member;
+		const m = nested != null ? nested : peelTransparentInstance(member);
 		if (m.kind == TypeKind.Null) { sawNull = true; continue; }
 		if (isMaybeType(m) && m.typeReturn != null) {
 			sawNull = true;
@@ -607,7 +608,7 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 	// codegen falls back to a literal tagged union.
 	let needsFlatten = false;
 	for (const ut of types) {
-		if (nestedUnionOf(ut) != null) { needsFlatten = true; break; }
+		if (nestedUnionOf(ut) != null || (ut != null && peelTransparentInstance(ut) != ut)) { needsFlatten = true; break; }
 	}
 	let flat: Type[] = types;
 	if (needsFlatten) {
@@ -619,7 +620,7 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 					if (inner != null) flat.push(inner);
 				}
 			} else if (ut != null) {
-				flat.push(ut);
+				flat.push(peelTransparentInstance(ut));
 			}
 		}
 	}
@@ -1665,6 +1666,7 @@ export function copyTypeShallow(t: Type): Type {
 	c.callConv = t.callConv;
 	c.attachedOps = t.attachedOps;
 	c.sym = t.sym;
+	c.optionalFields = t.optionalFields;
 	return c;
 }
 
@@ -1677,7 +1679,7 @@ function isPodFieldType(t: Type | null, depth: int32): boolean {
 			| TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.Void | TypeKind.Null => true,
 		TypeKind.Distinct | TypeKind.SizedArray => isPodFieldType(t.typeReturn, depth + 1),
 		TypeKind.Ref => isAtomicRef(t),
-		TypeKind.Struct => !structCarriesRef(t, depth + 1),
+		TypeKind.Struct | TypeKind.Union => !structCarriesRef(t, depth + 1),
 		_ => false,
 	};
 }
@@ -2331,6 +2333,26 @@ export function isNonPrimitiveType(t: Type | null): boolean {
 		TypeKind.Distinct | TypeKind.Alias => isNonPrimitiveType(s.typeReturn),
 		_ => false,
 	};
+}
+
+export function isPlainObjectType(t: Type | null): boolean {
+	const s = skipModifier(t);
+	if (s == null) return false;
+	if (s.kind == TypeKind.Union) {
+		for (const member of s.typeChildren) {
+			if (!isPlainObjectType(member)) return false;
+		}
+		return s.typeChildren.length > 0;
+	}
+	if (s.kind == TypeKind.Distinct) return isPlainObjectType(s.typeReturn);
+	if (isArrayShaped(s) || s.kind == TypeKind.Tuple) return true;
+	const held = s.kind == TypeKind.Ref && s.typeReturn != null ? s.typeReturn : s;
+	if (held.kind == TypeKind.GenericInstance && (held.typeName == "Proxy" || distinctBody(held) != null)) {
+		return held.typeName != "Proxy" && isPlainObjectType(distinctBody(held));
+	}
+	if (held.kind == TypeKind.Ptr || runtimeClassSym(held) != null) return false;
+	const body = peelToStructOrUnion(held);
+	return body != null && body.kind == TypeKind.Struct && !isMaybeType(body) && (body.sym == null || body.sym.symbolKind != SymbolKind.Class);
 }
 
 export function isUnresolvedType(t: Type | null): boolean {
@@ -2993,10 +3015,21 @@ export function hasTypeIdentity(t: Type): boolean {
 
 export function nominalTypeKey(t: Type): string {
 	const sym = t.sym;
-	if (sym != null) return `${sym.modulePath}:${sym.name}:${sym.disamb}`;
+	if (sym != null) {
+		const declared = `${sym.modulePath}:${sym.name}:${sym.disamb}`;
+		return t.typeFlags.has(TypeFlag.DuVariant) ? duVariantKey(declared, t) : declared;
+	}
 	if (t.typeInst != null) return typeKey(t.typeInst);
 	if (!hasTypeIdentity(t)) throw new Error(`internal: named type '${t.typeName}' (kind ${t.kind as number}) has no declaring symbol`);
 	return t.typeName;
+}
+
+function duVariantKey(declared: string, t: Type): string {
+	let k = declared;
+	for (let i = 0; i < t.typeChildren.length; i += 1) {
+		k = k + "|" + (i < t.typeNames.length ? t.typeNames[i] : "") + ":" + typeKey(t.typeChildren[i]);
+	}
+	return k;
 }
 
 export function isNominalKind(k: TypeKind): boolean {
@@ -3038,7 +3071,7 @@ function typeKeyInner(t: Type, keying: Type[]): string {
 	if (t.kind == TypeKind.NumberLiteral) return "numlit:" + t.typeName;
 	if (t.kind == TypeKind.Alias && t.typeReturn != null) return typeKeyIn(t.typeReturn, keying);
 	if (t.typeName != "" && isNominalKind(t.kind)) return t.typeName + "_" + _stdHashToBase36(nominalTypeKey(t));
-	if (t.typeName != "" && t.kind != TypeKind.Tuple && t.kind != TypeKind.GenericInstance) return t.typeName;
+	if (t.typeName != "" && t.kind != TypeKind.Tuple && t.kind != TypeKind.Function && t.kind != TypeKind.GenericInstance) return t.typeName;
 	return match (t.kind) {
 		TypeKind.GenericInstance => {
 			let k = genericHeadKey(t) + "<";
@@ -3313,15 +3346,25 @@ export function classBodyOf(t: Type | null): Type | null {
 	return cls != null && cls.kind == TypeKind.Struct && cls.sym != null && cls.sym.symbolKind == SymbolKind.Class ? cls : null;
 }
 
+function classDepth(t: Type | null, cls: Symbol | null): int32 {
+	let cur = classBodyOf(t);
+	for (let depth = 0; cur != null && depth < PEEL_MAX_DEPTH; depth += 1) {
+		if (classOrigin(cur.sym) == classOrigin(cls)) return depth;
+		cur = classBodyOf(cur.typeExtra);
+	}
+	return -1;
+}
+
 // Whether a value of `t` is an instance of some instantiation of the class `cls`.
 export function derivesFromClass(t: Type | null, cls: Symbol): boolean {
 	if (isAwaitable(t)) return cls.builtinKind == "Promise";
-	let cur = classBodyOf(t);
-	for (let depth = 0; cur != null && depth < PEEL_MAX_DEPTH; depth += 1) {
-		if (classOrigin(cur.sym) == classOrigin(cls)) return true;
-		cur = classBodyOf(cur.typeExtra);
-	}
-	return false;
+	return classDepth(t, cls) >= 0;
+}
+
+// How many parent steps lead from the class of `t` to the class of `ancestor`; -1 when it is not one.
+export function classDistance(t: Type | null, ancestor: Type | null): int32 {
+	const target = classBodyOf(ancestor);
+	return target != null ? classDepth(t, target.sym) : -1;
 }
 
 // The members of a union that `x instanceof cls` selects, for a generic `cls`;
@@ -3397,7 +3440,8 @@ export function unwrapRef(t: Type): Type {
 }
 
 // If t is Union(Ref<T>, Null), Union(Ptr<T>, Null), Union(unknown, Null) or
-// Union(bigint, Null), return the pointer-shaped member. Otherwise return null.
+// Union(bigint, Null), or a distinct of one of them with Null, return the
+// pointer-shaped member. Otherwise return null.
 // Used by codegen to collapse nullable-pointer unions to bare pointer types (the
 // null pointer is the natural sentinel — no Maybe wrapper needed).
 export function unwrapRefNullUnion(t: Type): Type | null {
@@ -3406,12 +3450,13 @@ export function unwrapRefNullUnion(t: Type): Type | null {
 	const a = t.typeChildren[0];
 	const b = t.typeChildren[1];
 	if (a == null || b == null) return null;
-	if (isNullablePointerKind(a.kind) && b.kind == TypeKind.Null) return a;
-	if (isNullablePointerKind(b.kind) && a.kind == TypeKind.Null) return b;
+	if (isNullablePointer(a) && b.kind == TypeKind.Null) return a;
+	if (isNullablePointer(b) && a.kind == TypeKind.Null) return b;
 	return null;
 }
 
-function isNullablePointerKind(k: TypeKind): boolean {
+function isNullablePointer(t: Type): boolean {
+	const k = (peelToRepr(t) ?? t).kind;
 	return k == TypeKind.Ref || k == TypeKind.Ptr || k == TypeKind.Unknown || k == TypeKind.BigInt;
 }
 
@@ -3699,10 +3744,14 @@ function substituteStruct(t: Type, paramName: string, concrete: Type, seen: Curs
 	const result = createStruct(t.typeName, newNames, newFieldTypes, isStructType(t));
 	result.typeReturn = t.typeReturn;
 	result.typeExtra = t.typeExtra;
+	result.optionalFields = t.optionalFields;
 	// createStruct recomputes HasAsgn from substituted children; DuVariant is an
 	// identity bit (set at createUnion) that must survive the rebuild or mono'd
 	// generic-union payloads lose their DU ownership marker.
-	if (t.typeFlags.has(TypeFlag.DuVariant)) result.typeFlags = result.typeFlags.incl(TypeFlag.DuVariant);
+	if (t.typeFlags.has(TypeFlag.DuVariant)) {
+		result.typeFlags = result.typeFlags.incl(TypeFlag.DuVariant);
+		result.sym = t.sym;
+	}
 	if (t.typeFlags.has(TypeFlag.Spelled)) result.typeFlags = result.typeFlags.incl(TypeFlag.Spelled);
 	return result;
 }
@@ -4008,7 +4057,11 @@ function substituteStructAll(t: Type, names: string[], concretes: Type[], seen: 
 	const result = createStruct(t.typeName, newNames, newFieldTypes, isStructType(t));
 	result.typeReturn = t.typeReturn;
 	result.typeExtra = t.typeExtra;
-	if (t.typeFlags.has(TypeFlag.DuVariant)) result.typeFlags = result.typeFlags.incl(TypeFlag.DuVariant);
+	result.optionalFields = t.optionalFields;
+	if (t.typeFlags.has(TypeFlag.DuVariant)) {
+		result.typeFlags = result.typeFlags.incl(TypeFlag.DuVariant);
+		result.sym = t.sym;
+	}
 	if (t.typeFlags.has(TypeFlag.Spelled)) result.typeFlags = result.typeFlags.incl(TypeFlag.Spelled);
 	return result;
 }
@@ -4706,6 +4759,7 @@ export function typeDisplayName(t: Type | null): string {
 function typeDisplayNameInner(t: Type | null): string {
 	if (t == null) return "<null>";
 	if (t.typeInst != null) return typeDisplayName(t.typeInst);
+	if (isBrandDistinct(t) && t.sym != null) return t.sym.name;
 	if (t.kind == TypeKind.Function && t.callConv == CallingConvention.CcInline) return "@inline function";
 	if (t.kind == TypeKind.Varargs && t.typeChildren.length > 0) {
 		return "..." + typeDisplayName(t.typeChildren[0]);
@@ -5237,6 +5291,13 @@ test "a union of ref variants is viewable" {
 test "a pod union is not viewable" {
 	const podUnion = createUnion([int32Type(), stringType()]);
 	assert !isReadonlyView(createReadonlyView(podUnion));
+}
+
+test "a nullable pod union is not viewable" {
+	const literals = createUnion([createStringLiteral("alt"), createStringLiteral("~alt")]);
+	assert !isReadonlyView(createReadonlyView(createMaybeType(literals)));
+	const nested = createUnion([createUnion([int32Type(), stringType()]), createArray(int32Type())]);
+	assert isReadonlyView(createReadonlyView(nested));
 }
 
 test "substitute generic param" {

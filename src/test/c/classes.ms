@@ -27,8 +27,7 @@ test "E2E C: constructor allocates with msAllocTyped" {
 	const c = compileToC(src);
 	assert c.ok;
 	// Constructor uses heap allocation for class types
-	assert c.value.contains("msAllocTyped");
-	assert c.value.contains("Foo_typeInfo");
+	assert c.value.contains("msAllocTyped(sizeof(Foo__");
 }
 
 const DOWN_NODES = "class BaseNode { id: int32 = 0; }\n" +

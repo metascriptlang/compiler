@@ -17,8 +17,13 @@ export extern class Promise<T> {
 	static extern reject(error: Error): Promise<never>;
 
 	extern then(callback: (value: T) => void): Promise<void>;
+	extern then<U>(callback: (value: T) => Promise<U>): Promise<U>;
+	extern then<U>(callback: (value: T) => U): Promise<U>;
 	extern then(callback: (value: T) => void, onRejected: (error: Error) => void): Promise<void>;
+	extern then<U>(callback: (value: T) => U, onRejected: (error: Error) => U): Promise<U>;
 	extern catch(callback: (error: Error) => void): Promise<void>;
+	extern catch(callback: (error: Error) => T): Promise<T>;
+	extern finally(callback: () => void): Promise<T>;
 }
 
 // spawn on js is SCHEDULING, not parallelism — the documented Node-semantics

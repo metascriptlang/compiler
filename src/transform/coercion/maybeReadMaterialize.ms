@@ -63,7 +63,10 @@ function storeCompoundInCarrier(node: Node, d: BinaryExprData, read: Node): Node
 function declaredMaybeOf(node: Node): Type | null {
 	if (node.kind == NodeKind.Identifier) {
 		const sym = node.resolvedSym;
-		const st = sym != null && sym.symbolType != null ? peelTransparentInstance(sym.symbolType) : null;
+		let st = sym != null && sym.symbolType != null ? peelTransparentInstance(sym.symbolType) as Type | null : null;
+		if (st != null && (st.kind == TypeKind.Var || st.kind == TypeKind.Borrow) && st.typeReturn != null) {
+			st = peelTransparentInstance(st.typeReturn);
+		}
 		if (st != null && isMaybeType(st)) return st;
 		return null;
 	}

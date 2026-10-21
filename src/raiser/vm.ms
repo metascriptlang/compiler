@@ -2,7 +2,7 @@
 
 import {
 	RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, convClassBits, convClassSigned, convTarget, convSource, convOperand,
-	raiserABC, raiserABx, raiserAx,
+	raiserABC, raiserABx, raiserAx, RaiserCombine,
 	packedOp, packedA, packedBx, packedBranch, immValue, immField, branchField
 } from "./bytecode";
 import {
@@ -105,6 +105,12 @@ export interface RaiserFuture {
 	valueObjectHeap: RaiserObjectHeap;
 	waiters: number[];   // strand indices blocked on this future
 	record: int32;       // module record an import() future settles from; -1 for any other future
+	// The VM's msFutureAddCallback for combinators: the futures of FutureCombine
+	// results to step when this one settles. A result future keeps its inputs
+	// and its RaiserCombine; `combine` is -1 for any other future.
+	dependents: int64[];
+	inputs: int64[];
+	combine: int32;
 }
 
 export interface RaiserFutures {
@@ -112,7 +118,7 @@ export interface RaiserFutures {
 }
 
 export interface RaiserTimer {
-	dueMs: int64;
+	dueMs: number;
 	future: int64;
 }
 
@@ -612,7 +618,9 @@ function newFuture(vm: RaiserVM): int64 {
 	const waiters: number[] = [];
 	const valueArrayHeap = createArrayHeap();
 	const valueObjectHeap = createStructHeap();
-	const f: RaiserFuture = { finished: false, failed: false, errorMsg: "", errorObserved: false, value: raiserNil(), error: raiserNil(), valueArrayHeap, valueObjectHeap, waiters, record: -1 };
+	const dependents: int64[] = [];
+	const inputs: int64[] = [];
+	const f: RaiserFuture = { finished: false, failed: false, errorMsg: "", errorObserved: false, value: raiserNil(), error: raiserNil(), valueArrayHeap, valueObjectHeap, waiters, record: -1, dependents, inputs, combine: -1 };
 	vm.sched.futures.items.push(f);
 	return vm.sched.futures.items.length - 1;
 }
@@ -630,11 +638,154 @@ function futureComplete(vm: RaiserVM, handle: int64, value: RaiserValue): void {
 	const owned = copyGraphWith(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, value, strandCopyMap(vm));
 	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
 	copyValueInto(f.value, owned);
+	futureSettled(vm, handle);
+}
+
+function futureSettled(vm: RaiserVM, handle: int64): void {
+	const f = vm.sched.futures.items[handle];
 	for (const w of f.waiters) {
 		const s = vm.sched.strands.items[w];
 		if (s.status == RaiserStrandStatus.Blocked) s.status = RaiserStrandStatus.Ready;
 	}
 	f.waiters.length = 0;
+	const dependents = f.dependents;
+	f.dependents = [] as int64[];
+	for (const d of dependents) combineStep(vm, d, handle);
+}
+
+// --- Combinators: Promise.all, race and any (runtime/promise/combinator.c) ---
+
+function futureCompleteFrom(vm: RaiserVM, handle: int64, source: RaiserFuture): void {
+	const f = vm.sched.futures.items[handle];
+	f.finished = true;
+	const owned = copyGraph(source.valueArrayHeap, source.valueObjectHeap, f.valueArrayHeap, f.valueObjectHeap, source.value);
+	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
+	copyValueInto(f.value, owned);
+	futureSettled(vm, handle);
+}
+
+function futureFailFrom(vm: RaiserVM, handle: int64, source: RaiserFuture): void {
+	const f = vm.sched.futures.items[handle];
+	f.finished = true;
+	f.failed = true;
+	f.errorMsg = source.errorMsg;
+	f.record = source.record;
+	const owned = copyGraph(source.valueArrayHeap, source.valueObjectHeap, f.valueArrayHeap, f.valueObjectHeap, source.error);
+	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
+	copyValueInto(f.error, owned);
+	futureSettled(vm, handle);
+}
+
+function futureCompleteAll(vm: RaiserVM, handle: int64): void {
+	const f = vm.sched.futures.items[handle];
+	f.finished = true;
+	const arr = heapAllocArray(f.valueArrayHeap);
+	for (let i = 0; i < f.inputs.length; i += 1) {
+		let item = raiserNil();
+		const earlier = f.inputs.indexOf(f.inputs[i]);
+		if (earlier < i) {
+			copyValueInto(item, heapArrayGet(f.valueArrayHeap, arr, earlier as int64));
+		} else {
+			const input = vm.sched.futures.items[f.inputs[i]];
+			item = copyGraph(input.valueArrayHeap, input.valueObjectHeap, f.valueArrayHeap, f.valueObjectHeap, input.value);
+		}
+		heapArrayPush(f.valueArrayHeap, arr, item);
+		rcIncref(f.valueArrayHeap, f.valueObjectHeap, item);
+	}
+	const owned = raiserArray(arr);
+	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
+	copyValueInto(f.value, owned);
+	futureSettled(vm, handle);
+}
+
+// Every input finished, and each with the outcome `failed` names.
+function combineAllSettledAs(vm: RaiserVM, f: RaiserFuture, failed: boolean): boolean {
+	for (const at of f.inputs) {
+		const input = vm.sched.futures.items[at];
+		if (!input.finished || input.failed != failed) return false;
+	}
+	return true;
+}
+
+// One input of the combinator `handle` settled. A failed input counts as
+// handled, as a future with a callback does on C, even after the result settled.
+function combineStep(vm: RaiserVM, handle: int64, settled: int64): void {
+	const f = vm.sched.futures.items[handle];
+	const input = vm.sched.futures.items[settled];
+	if (input.failed) input.errorObserved = true;
+	if (f.finished) return;
+	if (f.combine == RaiserCombine.All as int32) {
+		if (input.failed) futureFailFrom(vm, handle, input);
+		else if (combineAllSettledAs(vm, f, false)) futureCompleteAll(vm, handle);
+	} else if (f.combine == RaiserCombine.Race as int32) {
+		if (input.failed) futureFailFrom(vm, handle, input);
+		else futureCompleteFrom(vm, handle, input);
+	} else if (f.combine == RaiserCombine.Any as int32) {
+		if (!input.failed) futureCompleteFrom(vm, handle, input);
+		else if (combineAllSettledAs(vm, f, true)) futureFailPrepared(vm, handle);
+	} else {
+		vmError(vm, `internal: FutureCombine kind ${f.combine}`);
+	}
+}
+
+// Promise.any's rejection when every input rejected: the error the call site
+// made, held in the result's storage until then.
+function futureFailPrepared(vm: RaiserVM, handle: int64): void {
+	const f = vm.sched.futures.items[handle];
+	f.finished = true;
+	f.failed = true;
+	futureSettled(vm, handle);
+}
+
+// A plain element (an eagerly finished async call, Promise.resolve) enters as
+// a future that is already complete, so every input is read the same way; one
+// value named twice enters once, so its slots keep sharing it.
+function vmHandleFutureCombine(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
+	const base = vm.baseReg + ia;
+	const arr = vmHeapOperand(vm, getReg(vm, base + 1), RaiserValueKind.Array, "an array of futures");
+	if (arr < 0) return;
+	const handle = newFuture(vm);
+	const f = vm.sched.futures.items[handle];
+	f.combine = ic;
+	if (ic == RaiserCombine.Any as int32) {
+		const rejection = getReg(vm, base + 2);
+		f.errorMsg = vmExceptionText(vm, rejection);
+		const owned = copyGraphWith(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, rejection, strandCopyMap(vm));
+		rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
+		copyValueInto(f.error, owned);
+	}
+	const len = heapArrayLen(vm.arrayHeap, arr);
+	for (let i = 0; i < len; i += 1) {
+		const item = heapArrayGet(vm.arrayHeap, arr, i);
+		if (item.kind == RaiserValueKind.Future) {
+			f.inputs.push(item.intVal);
+			continue;
+		}
+		let ready: int64 = -1;
+		if (item.kind == RaiserValueKind.Array || item.kind == RaiserValueKind.Object) {
+			for (let j = 0; j < i; j += 1) {
+				const earlier = heapArrayGet(vm.arrayHeap, arr, j);
+				if (earlier.kind == item.kind && earlier.intVal == item.intVal) ready = f.inputs[j];
+			}
+		}
+		if (ready < 0) {
+			ready = newFuture(vm);
+			futureComplete(vm, ready, item);
+		}
+		f.inputs.push(ready);
+	}
+	setRegRef(vm, base, RaiserValueKind.Future, handle);
+	if (f.inputs.length == 0) {
+		if (ic == RaiserCombine.All as int32) futureCompleteAll(vm, handle);
+		else if (ic == RaiserCombine.Any as int32) futureFailPrepared(vm, handle);
+		return;
+	}
+	for (const at of f.inputs) {
+		if (!vm.sched.futures.items[at].finished) vm.sched.futures.items[at].dependents.push(handle);
+	}
+	for (const at of f.inputs) {
+		if (vm.sched.futures.items[at].finished) combineStep(vm, handle, at);
+	}
 }
 
 // --- Timers ---
@@ -643,7 +794,7 @@ function vmArmTimer(vm: RaiserVM, delay: RaiserValue): int64 {
 	let ms: int64 = 0;
 	if (delay.kind == RaiserValueKind.Float && delay.floatVal > 0) ms = delay.floatVal as int64;
 	if (delay.kind == RaiserValueKind.Int && delay.intVal > 0) ms = delay.intVal;
-	const timer: RaiserTimer = { dueMs: msMonoTimeMs() + ms, future: newFuture(vm) };
+	const timer: RaiserTimer = { dueMs: performance.now() + (ms as number), future: newFuture(vm) };
 	const items = vm.sched.timers.items;
 	items.push(timer);
 	let at = items.length - 1;
@@ -657,7 +808,7 @@ function vmArmTimer(vm: RaiserVM, delay: RaiserValue): int64 {
 
 function vmFireDueTimer(vm: RaiserVM): void {
 	const items = vm.sched.timers.items;
-	if (items.length == 0 || items[0].dueMs > msMonoTimeMs()) return;
+	if (items.length == 0 || items[0].dueMs > performance.now()) return;
 	const timer = items[0];
 	for (let i = 1; i < items.length; i += 1) items[i - 1] = items[i];
 	items.shrink(items.length - 1);
@@ -665,9 +816,10 @@ function vmFireDueTimer(vm: RaiserVM): void {
 }
 
 function vmWaitForTimer(vm: RaiserVM): void {
-	const wait = vm.sched.timers.items[0].dueMs - msMonoTimeMs();
+	const wait = vm.sched.timers.items[0].dueMs - performance.now();
 	if (wait <= 0) return;
-	const capped: int64 = wait > 2147483647 ? 2147483647 : wait;
+	const wholeMs = (wait as int64) + 1;
+	const capped: int64 = wholeMs > 2147483647 ? 2147483647 : wholeMs;
 	msSleepMs(capped as int32);
 }
 
@@ -693,11 +845,7 @@ function futureFail(vm: RaiserVM, handle: int64, message: string, thrown: Raiser
 	const owned = copyGraphWith(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, thrown, strandCopyMap(vm));
 	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
 	copyValueInto(f.error, owned);
-	for (const w of f.waiters) {
-		const s = vm.sched.strands.items[w];
-		if (s.status == RaiserStrandStatus.Blocked) s.status = RaiserStrandStatus.Ready;
-	}
-	f.waiters.length = 0;
+	futureSettled(vm, handle);
 }
 
 // A future that failed and was never read is an unhandled rejection, the same
@@ -1777,7 +1925,7 @@ function runStrandSlice(vm: RaiserVM): void {
 				if (held.kind != RaiserValueKind.Nil) {
 					const classType = held.kind == RaiserValueKind.Object ? vm.objectHeap.objects[held.intVal].classType : RAISER_NO_CLASS;
 					if (!raiserIsInstance(classType, constStringText(getFuncConst(func, ib)))) {
-						vm.ip = ip; vmError(vm, "invalid object conversion: " + (classType.name != "" ? classType.name : "<untyped>") + " is not " + constStringText(getFuncConst(func, ic))); break;
+						vm.ip = ip; vmError(vm, "invalid object conversion: " + (classType.name != "" ? classType.name : held.kind == RaiserValueKind.Object ? "Object" : "<untyped>") + " is not " + constStringText(getFuncConst(func, ic))); break;
 					}
 				}
 			},
@@ -2082,6 +2230,9 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		},
 		RaiserOpcode.FutureFail => {
 			futureFail(vm, getReg(vm, base + ia).intVal, vmExceptionText(vm, getReg(vm, base + ib)), getReg(vm, base + ib));
+		},
+		RaiserOpcode.FutureCombine => {
+			vmHandleFutureCombine(vm, ia, ib, ic);
 		},
 		RaiserOpcode.Try => {
 			vm.safePoints.push(vm.ip - 1 + (ib * 256 + ic));

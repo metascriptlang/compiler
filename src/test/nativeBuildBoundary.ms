@@ -33,8 +33,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "wasi-platform" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, wasi-platform, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, or all");
 	exit(2);
 }
 
@@ -737,6 +737,45 @@ function runUpcastCast(): void {
 	record("a derived interface, a structural match and a class reach their base as a cast pointer", "1 1 5 4 4", value(dir));
 }
 
+function moduleNamesTree(parent: string): string {
+	const app = `${parent}/app`;
+	ensureDir(`${app}/sub`);
+	ensureDir(`${parent}/shared`);
+	put(`${app}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${app}/lib.ms`, "export class Point {\n\tx: number = 1;\n}\nexport function make(): Point { return new Point(); }\n");
+	put(`${app}/sub/lib.ms`, "export class Point {\n\tx: number = 2;\n}\nexport function make(): Point { return new Point(); }\n");
+	put(`${parent}/shared/lib.ms`, "export function shared(): string { return \"three\"; }\n");
+	put(`${app}/main.ms`, [
+		"import { make } from \"./lib\";",
+		"import { make as makeSub } from \"./sub/lib\";",
+		"import { shared } from \"../shared/lib\";",
+		"console.log(`${make().x.toString()} ${makeSub().x.toString()} ${shared()}`);",
+		"",
+	].join("\n"));
+	return app;
+}
+
+function builtText(path: string): string {
+	const r = readFile(path);
+	need(r.ok, `read ${path}`);
+	return r.ok ? r.value : "";
+}
+
+function runModuleNames(): void {
+	const short = moduleNamesTree(`${root}/a`);
+	const long = moduleNamesTree(`${root}/a-much-longer-directory-name`);
+	need(command(short, "js-short", compiler, ["build", "--target=js", "--output=out.js", "main.ms"]).code == 0, "module-names short js build");
+	need(command(long, "js-long", compiler, ["build", "--target=js", "--output=out.js", "main.ms"]).code == 0, "module-names long js build");
+	const shortJs = builtText(`${short}/out.js`);
+	recordTrue("one program builds to the same JS bytes in directories of different lengths", shortJs == builtText(`${long}/out.js`));
+	recordTrue("the JS bundle names no directory of the build machine", shortJs.indexOf("msc45native45boundary", 0) < 0 && shortJs.indexOf("msc-native-boundary", 0) < 0);
+	const ran = command(short, "js-run", "node", ["out.js"]);
+	record("same-basename modules and a module outside the project keep their own names on JS", "1 2 three", ran.code == 0 ? ran.stdout.trim() : `exit ${ran.code}`);
+	need(build(long, "c-long") == 0, "module-names c build");
+	recordTrue("the C binary's symbols name no directory of the build machine", builtText(`${long}/probe`).indexOf("msc45native45boundary", 0) < 0);
+	record("same-basename modules and a module outside the project keep their own names on C", "1 2 three", value(long));
+}
+
 function toolPresent(exe: string): boolean {
 	return execFileCapture(exe, ["--version"]).ok;
 }
@@ -908,6 +947,7 @@ if (group == "upcast-cast" || group == "all") runUpcastCast();
 if (group == "emcc-argv-fs" || group == "all") runEmccArgvFs();
 if (group == "emcc-watch-process" || group == "all") runEmccWatchProcess();
 if (group == "emcc-jspi" || group == "all") runEmccJspi();
+if (group == "module-names" || group == "all") runModuleNames();
 if (group == "wasi-platform" || group == "all") runWasiPlatform();
 
 let failures = 0;

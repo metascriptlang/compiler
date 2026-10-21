@@ -26,6 +26,10 @@ function numericReference(value: float64): VariantRef<float64, string> { return 
 
 function textError(error: string): VariantRef<float64, string> { return { kind: ReferenceKind.Err, error: error }; }
 
+function textReference(value: string): VariantRef<string, float64> { return { kind: ReferenceKind.Ok, value: value }; }
+
+function numericError(error: float64): VariantRef<string, float64> { return { kind: ReferenceKind.Err, error: error }; }
+
 struct PayloadBody<T, E> = match (kind: ReferenceKind) {
 	ReferenceKind.Ok => { value: T },
 	ReferenceKind.Err => { error: E },
@@ -73,6 +77,12 @@ function pickSecond<T>(a: T, b: T) { return b; }
 
 import "./fixtures/explicitTypeArguments";
 
+import { fixtureShapeValue } from "./fixtures/sameNamedShape";
+
+interface WireCircle { kind: "circle"; r: float64; }
+interface WireSquare { kind: "square"; side: float64; }
+type WireShape = WireCircle | WireSquare;
+
 interface ModuleArgumentsErr { msg: string; }
 
 function moduleArgumentsFail(): Result<string, ModuleArgumentsErr> {
@@ -100,10 +110,16 @@ test "nominalInstantiation: nominal unions with identical shapes preserve both a
 test "nominalInstantiation: reference-wrapped generic variants retain the substituted payload in each arm" {
 	const n = numericReference(99);
 	const e = textError("boom");
+	const s = textReference("hello-payload");
+	const f = numericError(42);
 	assert n.kind == ReferenceKind.Ok;
 	assert e.kind == ReferenceKind.Err;
+	assert s.kind == ReferenceKind.Ok;
+	assert f.kind == ReferenceKind.Err;
 	if (n.kind == ReferenceKind.Ok) assert n.value == 99;
 	if (e.kind == ReferenceKind.Err) assert e.error == "boom";
+	if (s.kind == ReferenceKind.Ok) assert s.value == "hello-payload";
+	if (f.kind == ReferenceKind.Err) assert f.error == 42;
 }
 
 test "nominalInstantiation: a reference-wrapped variant reads and destroys a string payload" {
@@ -222,4 +238,11 @@ test "nominalInstantiation: caller values and outer type parameters cannot captu
 	const ModulePayload = 3;
 	assert moduleMake(2 as int16).n == 7;
 	assert moduleOuter("nested") == 4;
+}
+
+test "nominalInstantiation: a std generic instance keeps a type named like another module's type" {
+	assert fixtureShapeValue() == 5;
+	const parsed = JSON.parse<WireShape>(`{"kind":"square","side":3.0}`);
+	assert parsed.ok;
+	assert parsed.value.kind == "square";
 }

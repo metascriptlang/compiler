@@ -8,7 +8,7 @@
 
 import { firstPrivateField } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
-import { spelled, peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, instantiateGeneric, numberLiteralTypeOf, markDuVariant } from "./types";
+import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteAllParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, instantiateGeneric, numberLiteralTypeOf, markDuVariant } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam } from "./context";
@@ -325,8 +325,11 @@ function tryBrandIntersection(operandTypes: Type[]): Type | null {
 // Collision policy: error on duplicate name (Nim-style). Operand label flows
 // into error message so user sees which parent / intersection operand introduced
 // the colliding field.
-function appendStructFields(operandStruct: Type, operandLabel: string, accumNames: string[], accumTypes: Type[], ctx: CheckerContext, line: int32, col: int32): void {
+function appendStructFields(operandStruct: Type, operandLabel: string, accumNames: string[], accumTypes: Type[], ctx: CheckerContext, line: int32, col: int32, accumOptional: string[] = []): void {
 	if (operandStruct.typeNames == null || operandStruct.typeChildren == null) return;
+	if (operandStruct.optionalFields != null) {
+		for (const name of operandStruct.optionalFields) accumOptional.push(name);
+	}
 	for (let pi = 0; pi < operandStruct.typeNames.length; pi += 1) {
 		const fname = operandStruct.typeNames[pi];
 		let collided = false;
@@ -589,11 +592,11 @@ function resolveKeyOf(operand: string, ctx: CheckerContext, line: int32, col: in
 	return keys;
 }
 
-// `T[K]` where K is a string literal type, a union of them or a type parameter;
-// null when the brackets hold something else, so the sized-array path reports it.
 function resolveIndexedAccess(objectText: string, indexText: string, ctx: CheckerContext, line: int32, col: int32): Type | null {
+	const indexSym = lookupSymbol(ctx.table, indexText.trim());
+	if (indexSym != null && !isTypeSymbol(indexSym)) return null;
 	const indexType = resolveAnnotation(indexText, ctx, 0, 0);
-	const isKey = indexType.kind == TypeKind.GenericParam || isKeyConstraint(indexType);
+	const isKey = indexType.kind == TypeKind.GenericParam || isKeyConstraint(indexType) || isNumeric(indexType);
 	if (!isKey) return null;
 	const objectType = resolveAnnotation(objectText, ctx, line, col);
 	if (objectType.kind == TypeKind.Error) return objectType;
@@ -726,10 +729,13 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		if (operandTypes.length >= 2 && allObjectLike) {
 			const mergedNames: string[] = [];
 			const mergedTypes: Type[] = [];
+			const mergedOptional: string[] = [];
 			for (let oi = 0; oi < operandTypes.length; oi += 1) {
-				appendStructFields(unwrapToStruct(operandTypes[oi]), operandLabels[oi], mergedNames, mergedTypes, ctx, line, col);
+				appendStructFields(unwrapToStruct(operandTypes[oi]), operandLabels[oi], mergedNames, mergedTypes, ctx, line, col, mergedOptional);
 			}
-			return createRef(createStruct("", mergedNames, mergedTypes, true));
+			const merged = createStruct("", mergedNames, mergedTypes, true);
+			if (mergedOptional.length > 0) merged.optionalFields = mergedOptional;
+			return createRef(merged);
 		}
 		if (operandTypes.length >= 2) {
 			const brand = tryBrandIntersection(operandTypes);
@@ -839,6 +845,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		const fields = splitTopLevel(inner, hasSemicolon ? ";" : ",");
 		const names: string[] = [];
 		const types: Type[] = [];
+		const optionalFields: string[] = [];
 		for (const f of fields) {
 			const field = f.trim();
 			if (field != "") {
@@ -851,13 +858,17 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 						fieldIsOptional = true;
 					}
 					let ftypeStr = field.slice(colonIdx + 1, field.length).trim();
-					if (fieldIsOptional) ftypeStr = optionalizeTypeString(ftypeStr);
+					if (fieldIsOptional) {
+						ftypeStr = optionalizeTypeString(ftypeStr);
+						optionalFields.push(fname);
+					}
 					names.push(fname);
 					types.push(resolveAnnotation(ftypeStr, ctx, line, col));
 				}
 			}
 		}
 		const objectType = createStruct("", names, types, true);
+		if (optionalFields.length > 0) objectType.optionalFields = optionalFields;
 		recordForwardFields(objectType, types);
 		return createRef(objectType);
 	}
@@ -1000,7 +1011,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 					let baseType = baseSym.symbolType;
 					if (isRefBase && baseType.typeReturn != null) baseType = baseType.typeReturn;
 					const gi1 = createGenericInstance(baseType, resolvedArgs);
-					gi1.typeName = baseName;
+					gi1.typeName = baseSym.name;
 					instantiateGenericBody(gi1, genericParams);
 					return isRefBase ? createRef(gi1) : gi1;
 				}
@@ -1024,7 +1035,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				}
 				checkTypeArgConstraints(ctx, baseSym2, baseName, resolvedArgs, line, col);
 				const gi2 = createGenericInstance(baseType2, resolvedArgs);
-				gi2.typeName = baseName;
+				gi2.typeName = baseSym2.name;
 				instantiateGenericBody(gi2, genericParams);
 				typeInstanceHooksFn(gi2, ctx, line, col);
 				return isRefBase2 ? createRef(gi2) : gi2;
@@ -2089,6 +2100,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	// algorithm at type resolution time.
 	const mergedNames: string[] = [];
 	const mergedTypes: Type[] = [];
+	const optionalFields: string[] = [];
 	for (let xi = 0; xi < d.interfaceExtends.length; xi += 1) {
 		const parentExpr = d.interfaceExtends[xi];
 		const pt = parentTypes[xi];
@@ -2102,7 +2114,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 			addError(ctx, "cannot extend non-object type '" + parentExpr + "'", node.location.line, node.location.column);
 			continue;
 		}
-		appendStructFields(parentStruct, parentExpr, mergedNames, mergedTypes, ctx, node.location.line, node.location.column);
+		appendStructFields(parentStruct, parentExpr, mergedNames, mergedTypes, ctx, node.location.line, node.location.column, optionalFields);
 		if (d.interfaceExtends.length > 1 && parentStruct.typeNames != null) {
 			const inherited = firstPrivateField(parentStruct.sym, parentStruct.typeNames);
 			if (inherited != "") {
@@ -2167,6 +2179,8 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	target.typeNames = mergedNames;
 	target.typeChildren = mergedTypes;
 	target.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct);
+	for (const name of d.interfaceOptionalFields) optionalFields.push(name);
+	target.optionalFields = optionalFields.length > 0 ? optionalFields : null;
 	if (sym.symbolType.kind == TypeKind.Struct && parentTypes.length == 1 && isValueStructDecl(parentTypes[0])) target.typeExtra = parentTypes[0];
 	for (const pt of mergedTypes) { propagateToOwner(target, pt); }
 	if (sym.symbolType.kind == TypeKind.Struct && declaresLifecycleHook(ctx, sym)) target.typeFlags = target.typeFlags.incl(TypeFlag.HasAsgn);
@@ -2241,7 +2255,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		// type parameters and field access returns Unknown.
 		const hasGenericAliasDU = d.aliasGenericParams != null && d.aliasGenericParams != "";
 		if (hasGenericAliasDU) defineTypeParams(ctx, sym, d.aliasGenericParams);
-		const resolved = resolveDiscriminatedUnion(ctx, d, node.flags.has(NodeFlag.ValueUnion));
+		const resolved = resolveDiscriminatedUnion(ctx, d, sym, node.flags.has(NodeFlag.ValueUnion));
 		if (hasGenericAliasDU) {
 			closeScope(ctx.table);
 		}
@@ -2338,7 +2352,7 @@ export function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 //   typeChildren = variant types, typeName = alias name,
 //   typeExtra = discriminant enum Type,
 //   typeNames = [discFieldName, variantKey0, variantKey1, ...]
-function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData, valueUnion: boolean): Type | null {
+function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData, aliasSym: Symbol, valueUnion: boolean): Type | null {
 	// Resolve discriminant type — must be an enum or boolean.
 	// Boolean disc is the natural fit for two-variant unions like
 	// `type Result<T,E> = match (ok: boolean) { true => {...}, false => {...} }`.
@@ -2399,7 +2413,7 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData, va
 			body.typeChildren = newChildren;
 			if (valueUnion && !isBooleanDisc) {
 				body.typeName = d.aliasName + "." + bareKey;
-				spelled(body);
+				body.sym = variantSymbol(aliasSym, body);
 				markDuVariant(body);
 			}
 		}
@@ -2420,6 +2434,15 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData, va
 	unionType.typeNames = names;
 	if (valueUnion) unionType.typeFlags = unionType.typeFlags.incl(TypeFlag.ValueUnion);
 	return unionType;
+}
+
+function variantSymbol(aliasSym: Symbol, body: Type): Symbol {
+	const v = makeSymbol(body.typeName, SymbolKind.TypeAlias, body, false);
+	v.modulePath = aliasSym.modulePath;
+	v.disamb = aliasSym.disamb;
+	v.location = aliasSym.location;
+	v.declNode = aliasSym.declNode;
+	return v;
 }
 
 function resolveVariable(ctx: CheckerContext, node: Node): void {
@@ -2574,6 +2597,8 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	// Build Object type — collect members inline
 	const memberNames: string[] = [];
 	const memberTypes: Type[] = [];
+	const ownOptional: string[] = [];
+	const optionalFields: string[] = [];
 	for (let mi = 0; mi < d.classBody.length; mi += 1) {
 		let member = d.classBody[mi];
 		// Unwrap DecoratedDecl to get the inner declaration
@@ -2645,6 +2670,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				}
 			} else {
 				memberNames.push(pd.propName);
+				if (member.flags.has(NodeFlag.Optional)) ownOptional.push(pd.propName);
 				if (pd.propType != "") {
 					const propType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 					resolveTypeExpr(member.typeExpr, ctx);
@@ -2744,7 +2770,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 			} else {
 				const newNames: string[] = [];
 				const newTypes: Type[] = [];
-				appendStructFields(parentStruct, parentExpr, newNames, newTypes, ctx, node.location.line, node.location.column);
+				appendStructFields(parentStruct, parentExpr, newNames, newTypes, ctx, node.location.line, node.location.column, optionalFields);
 				for (let oi = 0; oi < memberNames.length; oi += 1) {
 					const fname = memberNames[oi];
 					let collided = false;
@@ -2771,6 +2797,8 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	if (hasGenerics) closeScope(ctx.table);
 	inner.typeNames = mergedNames;
 	inner.typeChildren = mergedTypes;
+	for (const name of ownOptional) optionalFields.push(name);
+	inner.optionalFields = optionalFields.length > 0 ? optionalFields : null;
 	if (didMergeParent) {
 		inner.typeFlags = inner.typeFlags.incl(TypeFlag.HasInheritedFields);
 	}
@@ -2909,7 +2937,7 @@ function declareGeneric(ctx: CheckerContext, kind: NodeKind, name: string, param
 		}
 		decl = createNodeAt(NodeKind.ClassDecl, { className: name, classDisplayName: name, classExtends: "", classBody: body, nameLocation: zl, classImplements: [] }, zl);
 	} else {
-		decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: fields, interfaceFieldTypes: types, interfaceExtends: [], nameLocation: zl, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: noFieldDecorators(fields.length) }, zl);
+		decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: fields, interfaceFieldTypes: types, interfaceExtends: [], nameLocation: zl, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: noFieldDecorators(fields.length), interfaceOptionalFields: [] as string[] }, zl);
 	}
 	decl.typeArg = params;
 	const sym = makeSymbol(name, kind == NodeKind.ClassDecl ? SymbolKind.Class : SymbolKind.Interface, createStruct(name, fields, [], true), false);

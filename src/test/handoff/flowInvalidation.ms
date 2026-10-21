@@ -103,7 +103,7 @@ function strictWarnings(source: string, strictNil: boolean): int32 {
 }
 
 test "flow invalidation: strict policies reach dependencies and do not leak into later checks" {
-	const nullable = "class Box { x: int32 = 7; } function f(): int32 { let box: Box | null = new Box(); const read = (): int32 => box.x; return read(); }";
+	const nullable = "class Box { x: int32 = 7; } function f(): int32 { let box: Box | null = new Box(); const read = (): int32 => box.x; box = null; return read(); }";
 	const nonnull = "class Box { x: int32 = 7; } function f(box: Box): int32 { return box.x; }";
 	const relaxedNil = strictWarnings(nullable, false);
 	assert relaxedNil >= 0;

@@ -13,4 +13,5 @@ test "two nullable accessor fields keep their own payloads" {
 
 test "two nullable alias-instance fields keep their own payloads" {
 	assert strictErrorCount(ALIAS + NEEDS + "function f(r: R): string { if (r.b != null) { return r.b(); } return \"n\"; }\nfunction g(r: R): number { if (r.a != null) { return r.a() + 1; } return 0; }") == 0;
+	assert strictErrorCount("type Th<T> = () => T;\nfunction f(x: Th<string> | null): string { if (x != null) { return x(); } return \"n\"; }\nfunction g(x: Th<number> | null): number { if (x != null) { return x(); } return 0; }") == 0;
 }

@@ -9,19 +9,19 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, setConditionalAssignFn, hasGenericParams, createArray, substituteType, substituteAllParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols } from "./symbol";
-import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
-import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName } from "./collectPass";
+import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
+import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
-import { readFile } from "std/fs";
-import { env } from "std/process";
+import { readFile, writeFile, ensureDir } from "std/fs";
+import { env, cwd } from "std/process";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, normalize, isAbsolute } from "std/fs/path";
 import { translateCHeader } from "../module/cimport/emit";
 import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { defaultGlobalImports, extraGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
-import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers } from "./compat";
+import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
 setConditionalAssignFn(isAssignable);
 import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineGenericParam, refuseNestedView, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
@@ -1541,6 +1541,9 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 		ctx.ctorExitsNext = null;
 	}
 	refuseUnassignedFields(ctx, d.classBody, ctorExits);
+	for (const written of d.classImplements) {
+		refuseUnimplemented(ctx, node, sym.symbolType, written);
+	}
 	if (hasGenerics) {
 		ctx.inGenericContext -= 1;
 		closeScope(ctx.table);
@@ -1548,6 +1551,82 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	closeScope(ctx.table);
 
 	sym.state = SymbolState.Checked;
+}
+
+function refuseUnimplemented(ctx: CheckerContext, node: Node, classType: Type, written: string): void {
+	const d = node.data as ClassDeclData;
+	const at = d.nameLocation;
+	const implemented = resolveAnnotation(written, ctx, at.line, at.column);
+	if (isUnresolvedType(implemented) || implemented.kind == TypeKind.Error) return;
+	const shape = peelToStructOrUnion(implemented);
+	if (shape == null || shape.kind != TypeKind.Struct) {
+		addError(ctx, `Class '${d.className}' can only implement an object type, and '${written}' is not one`,
+			at.line, at.column);
+		return;
+	}
+	if (holdsMembersOf(classType, implemented)) return;
+	const role = shape.sym != null && shape.sym.symbolKind == SymbolKind.Class ? "class" : "interface";
+	const own = unwrapRef(classType);
+	let memberRefused = false;
+	for (const raw of d.classBody) {
+		const member = classMemberDecl(raw);
+		if (member.kind != NodeKind.PropertyDecl || (member.data as PropertyDeclData).propIsStatic) continue;
+		const name = (member.data as PropertyDeclData).propName;
+		const si = own.typeNames.indexOf(name);
+		const ti = shape.typeNames.indexOf(name);
+		if (si < 0 || ti < 0) continue;
+		const why = fieldRefusal(own.typeChildren[si], shape.typeChildren[ti]);
+		if (why == "") continue;
+		addError(ctx, `Property '${name}' in class '${d.className}' is not assignable to the same property`
+			+ ` in ${role} '${written}': ${why}`, member.location.line, member.location.column);
+		memberRefused = true;
+	}
+	if (memberRefused) return;
+	addError(ctx, `Class '${d.className}' incorrectly implements ${role} '${written}'`
+		+ unimplementedReason(d, own, shape, classType, implemented), at.line, at.column);
+}
+
+function fieldRefusal(held: Type, wanted: Type): string {
+	const reprDiffers = fieldReprMismatch(held, wanted);
+	if (!reprDiffers && isAssignable(held, wanted)) return "";
+	const heldText = typeDisplayName(held);
+	const wantedText = typeDisplayName(wanted);
+	const payload = isMaybeType(wanted) && !isMaybeType(held) ? wanted.typeReturn : null;
+	if (reprDiffers || (payload != null && isAssignable(held, payload))) {
+		return `'${heldText}' and '${wantedText}' are stored differently, and a structural match is a pointer cast`;
+	}
+	return `type '${heldText}' is not assignable to type '${wantedText}'`;
+}
+
+function unimplementedReason(d: ClassDeclData, own: Type, shape: Type, classType: Type, implemented: Type): string {
+	const missing: string[] = [];
+	for (let ti = 0; ti < shape.typeNames.length; ti += 1) {
+		const name = shape.typeNames[ti];
+		const si = own.typeNames.indexOf(name);
+		if (si < 0) {
+			missing.push(name);
+			continue;
+		}
+		const why = fieldRefusal(own.typeChildren[si], shape.typeChildren[ti]);
+		if (why != "") return `: property '${name}' of '${d.className}': ${why}`;
+	}
+	if (missing.length == 0) return explainMemberPrefix(classType, implemented);
+	const listed = "'" + missing.join("', '") + "'";
+	const routines: string[] = [];
+	for (const raw of d.classBody) {
+		const member = classMemberDecl(raw);
+		if (member.kind != NodeKind.MethodDecl) continue;
+		const routine = (member.data as MethodDeclData).methodName;
+		for (const name of missing) {
+			const named = routine == name || routine == "get_" + name || routine == "set_" + name;
+			if (named && !routines.includes(name)) routines.push(name);
+		}
+	}
+	const asRoutine = routines.length == 0 ? ""
+		: ` ('${routines.join("', '")}' is declared there as a method or accessor, which is not a field of the instance)`;
+	return missing.length == 1
+		? `: property ${listed} is missing in '${d.className}'${asRoutine}`
+		: `: properties ${listed} are missing in '${d.className}'${asRoutine}`;
 }
 
 function refuseUnassignedFields(ctx: CheckerContext, body: Node[], ctorExits: string[][] | null): void {
@@ -3504,8 +3583,8 @@ function defineBuiltinConstants(ctx: CheckerContext): void {
 
 // Resolution mirrors src/module/resolver.ms: backend-specific extension FIRST
 // so per-target preludes (e.g., struct.jms for JS) win over the generic .ms.
-function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: string, backendExt: string): void {
-	const base = stdPath.length > 0 ? stdPath + "/" + stdSpecifier.slice(4, stdSpecifier.length) : stdSpecifier;
+function preludeSource(stdSpecifier: string, stdPath: string, backendExt: string): { path: string, source: string } {
+	const base = stdPath + "/" + stdSpecifier.slice(4, stdSpecifier.length);
 	let src = try readFile(base + backendExt) catch "";
 	let resolvedPath = base + backendExt;
 	if (src.length == 0) {
@@ -3525,6 +3604,14 @@ function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: stri
 		src = try readFile(base + "/index.ms") catch "";
 		resolvedPath = base + "/index.ms";
 	}
+	return { path: resolvedPath, source: src };
+}
+
+function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: string, backendExt: string): void {
+	const found = preludeSource(stdSpecifier, stdPath, backendExt);
+	const resolvedPath = found.path;
+	let src = found.source;
+	if (ctx.ownModules.has(resolvedPath)) return;
 	if (src.length > 0) {
 		const fsProvider = createFileSystemProvider();
 		src = inlineHeaderImports(src, resolvedPath, fsProvider);
@@ -3543,6 +3630,10 @@ function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: stri
 			runThreePasses(ctx, pr.value);
 			ctx.preludeInterf.set(stdSpecifier, ctx.interf);
 			for (const exported of ctx.interf) ctx.preludeExports.add(exported);
+			const exports = collectExports(ctx, resolvedPath);
+			registerModuleExports(ctx.exportRegistry, resolvedPath, exports);
+			const bare = stripModuleExtension(resolvedPath);
+			if (bare != resolvedPath) registerModuleExports(ctx.exportRegistry, bare, exports);
 			ctx.modulePath = savedPath;
 			collectDirectives(ctx, pr.value);
 			stampHeaderPaths(ctx);
@@ -3583,8 +3674,7 @@ function resolvePreludeSubSource(specifier: string, indexDir: string, stdPath: s
 			rel = rel.slice(2, rel.length);
 		}
 		basePath = indexDir + "/" + rel;
-	} else if (specifier.length > 4 && specifier.slice(0, 4) == "std/" && stdPath != "") {
-		// Absolute std path: stdPath is the std/ root
+	} else if (specifier.length > 4 && specifier.slice(0, 4) == "std/") {
 		basePath = stdPath + "/" + specifier.slice(4, specifier.length);
 	} else {
 		return { path: "", source: "" };
@@ -3607,6 +3697,15 @@ function resolvePreludeSubSource(specifier: string, indexDir: string, stdPath: s
 		if (hSrc.length > 0) return { path: basePath, source: translateCHeader(hSrc, []) };
 	}
 	return { path: "", source: "" };
+}
+
+// The global import whose source is `path`, or "" when `path` is no prelude module.
+function preludeSpecifierOf(path: string, stdPath: string, backendExt: string): string {
+	for (const specifier of defaultGlobalImports()) {
+		if (!path.startsWith(normalize(stdPath + "/" + specifier.slice(4, specifier.length)))) continue;
+		if (normalize(preludeSource(specifier, stdPath, backendExt).path) == path) return specifier;
+	}
+	return "";
 }
 
 // Load prelude sub-modules referenced by:
@@ -3653,6 +3752,11 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		// can reference the same module via different paths (e.g., one prelude
 		// imports std/serialize/json/decode, another re-exports it relatively).
 		if (findModuleExports(ctx.exportRegistry, subResolved) != null) continue;
+		const preludeSpecifier = preludeSpecifierOf(subResolved, stdPath, backendExt);
+		if (preludeSpecifier != "") {
+			loadPreludeOne(ctx, preludeSpecifier, stdPath, backendExt);
+			continue;
+		}
 		// Inline .h imports in sub-module source before parsing
 		subSrc = inlineHeaderImports(subSrc, subResolved, createFileSystemProvider());
 		const subPr = parseSource(subSrc);
@@ -3750,7 +3854,8 @@ export function checkPreludeFromSource(stdPath: string, backendExt: string): Che
 	const outerGensym = beginGensymUnit();
 	const ctx = createContextWithCache(createIdentCache());
 	ctx.extensionRegistry = createExtensionRegistry();
-	for (const imp of imps) loadPreludeOne(ctx, imp, stdPath, backendExt);
+	const stdRoot = stdPath != "" ? stdPath : join(cwd(), "std");
+	for (const imp of imps) loadPreludeOne(ctx, imp, stdRoot, backendExt);
 	forgetInstances(ctx);
 	rewindTemplateGensym(outerGensym);
 	return ctx;
@@ -3983,7 +4088,7 @@ export function finishModuleCheck(bound: BoundModule): CheckerContext {
 	// Register this module's ctx so later cross-module generic instantiation can
 	// re-check cloned bodies in THIS module's scope (resolving private consts,
 	// helper functions, etc.). Reference parity: Nim's graph.ifaces[module].
-	if (!isEngineCheckMode()) registerModuleCtx(ctx.modulePath, ctx);
+	if (!isEngineCheckMode() && !sharedPreludeOwns(ctx.preludeCtx, ctx.modulePath)) registerModuleCtx(ctx.modulePath, ctx);
 	return ctx;
 }
 
@@ -3994,6 +4099,7 @@ interface SharedPrelude {
 	duVariants: Type[];
 	ctorRoutines: CtorRow[];
 	dispatch: DispatchRecords;
+	owned: HashSet<string> | null;
 }
 
 let _preludeCtxByKey: Map<string, SharedPrelude> = new Map<string, SharedPrelude>();
@@ -4025,6 +4131,7 @@ function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude 
 		duVariants: duVariantsFrom(duMark),
 		ctorRoutines: ctorRoutinesFrom(ctorMark),
 		dispatch: endDispatchCapture(outerDispatch),
+		owned: null,
 	};
 }
 
@@ -4032,6 +4139,32 @@ function replayPreludeContributions(shared: SharedPrelude): void {
 	replayDuVariants(shared.duVariants);
 	replayCtorRoutines(shared.ctorRoutines);
 	replayDispatchRecords(shared.dispatch);
+}
+
+// The modules the prelude every build shares loaded as default global imports, which a build
+// never checks on its own. Such a module checked on its own keeps its diagnostics, while
+// generics the prelude declares in it still instantiate against the prelude's copy. A module
+// those import is checked and registered by a build that imports it, so it is not owned here.
+export function sharedPreludeOwns(prelude: CheckerContext | null, modulePath: string): boolean {
+	if (prelude == null) return false;
+	for (const shared of _preludeCtxByKey.values()) {
+		if (shared.ctx.table != prelude.table) continue;
+		if (shared.owned == null) shared.owned = preludeModulePaths(shared.ctx);
+		return shared.owned!.has(modulePath);
+	}
+	return false;
+}
+
+function preludeModulePaths(prelude: CheckerContext): HashSet<string> {
+	const owned = new HashSet<string>();
+	for (const specifier of defaultGlobalImports()) {
+		const members = prelude.preludeInterf.get(specifier);
+		if (members == null) continue;
+		for (const sym of members) {
+			if (sym.modulePath != "" && !prelude.preludeModuleScopes.has(sym.modulePath)) owned.add(sym.modulePath);
+		}
+	}
+	return owned;
 }
 
 export function isSharedPrelude(ctx: CheckerContext): boolean {
@@ -6069,6 +6202,15 @@ test "buildPreludeContext: a fresh prelude check leaves the gensym counter and t
 	}
 }
 
+test "a prelude checked from the relative std root names its modules as the absolute root does" {
+	const relative = checkPreludeFromSource("", ".cms");
+	const absolute = checkPreludeFromSource(join(cwd(), "std"), ".cms");
+	assert relative.ownModules.size > 0 && relative.ownModules.size == absolute.ownModules.size;
+	for (const path of relative.ownModules) assert absolute.ownModules.has(path), path;
+	assert relative.preludeModuleScopes.size > 0 && relative.preludeModuleScopes.size == absolute.preludeModuleScopes.size;
+	for (const path of relative.preludeModuleScopes.keys()) assert absolute.preludeModuleScopes.has(path), path;
+}
+
 function pendingCountOfCheck(prelude: CheckerContext, src: string): int32 {
 	const pr = parseSource(src);
 	if (!pr.ok) return -1;
@@ -6093,4 +6235,51 @@ test "promoting a module into the prelude every build shares is an internal erro
 	promoteModuleIntoPrelude(preludeContextFor("", ".cms"), ctx);
 	assert hasErrors(ctx);
 	assert ctx.errors[0].message.startsWith("internal:");
+}
+
+function preludeOfModules(dir: string, sources: string[][]): CheckerContext {
+	const std = `/tmp/msc-prelude-order/${dir}/std`;
+	for (const s of sources) {
+		ensureDir(`${std}/core/${s[0]}`);
+		writeFile(`${std}/core/${s[0]}/index.cms`, s[1]);
+	}
+	return checkPreludeFromSource(std, ".cms");
+}
+
+function preludeExports(ctx: CheckerContext, name: string): boolean {
+	const sym = lookupSymbol(ctx.table, name);
+	return sym != null && isPreludeExport(ctx, sym);
+}
+
+const preludeMath = "export class Math {}\nexport extern function trunc(this typeof Math, x: float64): float64 from \"trunc\";\n";
+
+test "a prelude module that imports a later prelude module leaves that module's exports in the prelude" {
+	for (const date of [
+		"import { Math, trunc } from \"../math\";\nexport function clip(t: number): number { return Math.trunc(t); }\n",
+		"when (!bare) {\n\timport { Math } from \"../math\";\n\texport function clip(t: number): number { return Math.trunc(t); }\n}\n",
+	]) {
+		const ctx = preludeOfModules("later", [["date", date], ["math", preludeMath]]);
+		assert ctx.errors.length == 0, ctx.errors.length > 0 ? ctx.errors[0].message : "";
+		assert preludeExports(ctx, "Math") && preludeExports(ctx, "clip");
+	}
+}
+
+test "a prelude import two prelude modules deep leaves both modules' exports in the prelude" {
+	const ctx = preludeOfModules("deep", [
+		["date", "import { Math } from \"../math\";\nexport function clip(t: number): number { return Math.trunc(t); }\n"],
+		["math", "import { Number } from \"../number\";\n" + preludeMath + "export function nan(): number { return Number.NaN; }\n"],
+		["number", "export class Number {\n\tstatic NaN: number = 0.0 / 0.0;\n}\n"],
+	]);
+	assert ctx.errors.length == 0, ctx.errors.length > 0 ? ctx.errors[0].message : "";
+	assert preludeExports(ctx, "Math") && preludeExports(ctx, "Number");
+}
+
+test "a prelude module that imports an earlier prelude module checks it once" {
+	const ctx = preludeOfModules("earlier", [
+		["date", "export const DAY = 86400000.0;\n"],
+		["math", "import { DAY } from \"../date\";\nexport class Math {}\nexport function days(t: number): number { return t / DAY; }\n"],
+	]);
+	assert ctx.errors.length == 0, ctx.errors.length > 0 ? ctx.errors[0].message : "";
+	assert ctx.preludeModuleScopes.size == 0;
+	assert preludeExports(ctx, "DAY") && preludeExports(ctx, "days");
 }

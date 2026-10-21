@@ -58,6 +58,9 @@ export class SyntaxError extends Error {
 @builtin("compilerFunc")
 export extern function compilerFunc(): void;
 
+@builtin("throws")
+export extern function throws(): void;
+
 @builtin("delegate")
 export extern function delegate(): void;
 

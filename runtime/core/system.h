@@ -234,7 +234,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 } while(0)
 #define msArrayCopy_GET(_1, _2, NAME, ...) NAME
 #define msArrayCopy(...) msArrayCopy_GET(__VA_ARGS__, msArrayCopy2, msArrayCopy1)(__VA_ARGS__)
-#define msArraySetLen(d, s)            msArraySetLenGeneric(&(d), (s).len, sizeof((s).p->data[0]))
+#define msArraySetLen(d, s)            msGenericArraySetLen(&(d), (s).len)
 
 /* --- Legacy aliases (used by classify.ms for DRC injection layer) --- */
 #define msArrayNumberWasMoved(arr)     msArrayWasMoved(arr)
@@ -468,7 +468,6 @@ static inline msString msUnboxString(void* p) {
 #define msFuture_msString_DEFINED
 MS_FUTURE_STRUCT(msFuture_msString, msString);
 MS_DEFINE_FUTURE_THEN(msFutureThen_msString, msFuture_msString, msString, msString, MS_DROP_STRING_SLOT)
-MS_DEFINE_FUTURE_FINALLY(msFutureFinally_msString, msFuture_msString)
 
 /* Typed .catch — the error handler receives the Error the future failed with.
  * Success path propagates typed value via msFutureCompleteT. */

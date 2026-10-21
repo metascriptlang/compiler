@@ -1,6 +1,6 @@
 // @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms); the program pins the native sync-context await
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
-// @maxrss: 200
+// @maxrss: 60
 // @stdout: leak-send-moved-arg-async done
 // @serial
 // note: Sibling of 418 (sync void, FIXED). This pins the async half. History of
@@ -18,13 +18,12 @@
 //   steppers never fired, the actor suspended forever (repro: 30k sends, ~50%
 //   of runs hung at 0.05s-per-clean-run; post-fix 25/25 and 6/6 at 1.2M on
 //   both hosts).
-//   The @maxrss bound was measured after the hang fix made completion reachable
-//   at all: peak ≈ 133 MB (Windows) / 172 MB (Linux). Since a suspended actor
-//   parks (PARALOCK-runtime Amendment Q) only one take is in flight, and the
-//   peak (116–119 MB, macOS, 2026-10-17) is the per-dispatch `implFut` leak —
-//   96 B × 1.2M, open queue "implFut has no owner"; the ledger cannot see it
-//   (Box balances; `Sink 1/0` and `msFuture N/0` are the known blind patterns:
-//   runtime-freed actor shell, NULL destroyFn).
+//   (3) the per-dispatch `implFut` leak — FIXED 2026-10-20 (PARALOCK-runtime
+//   Amendment S). The @maxrss bound sits between a resume that releases the
+//   dispatch's future (10 MB, macOS) and one that never does (120 MB: 96 B ×
+//   1.2M). The ledger cannot see that leak (Box balances; `Sink 1/0` and
+//   `msFuture N/0` are the known blind patterns: runtime-freed actor shell,
+//   NULL destroyFn).
 //   RSS is the only assertion: the running total is NOT checked anywhere. The
 //   periodic `await s.get()` bounds the message backlog.
 //   RELATED: an `Arc<T>` param on an async actor method takes the SHARE release,

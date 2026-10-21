@@ -583,6 +583,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		if (d.typExprIndexValue != null) addNodeField(keys, values, "typExprIndexValue", d.typExprIndexValue, loc, false);
 		addNodeArrayArrayField(keys, values, "typExprFieldDecorators", d.typExprFieldDecorators, loc);
 		addStrField(keys, values, "typExprTypeName", d.typExprTypeName, loc);
+		addStrArrayField(keys, values, "typExprOptionalFields", d.typExprOptionalFields, loc);
 		return;
 	}
 	if (k == NodeKind.TypeArray) {
@@ -877,6 +878,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addStrArrayField(keys, values, "importNames", d.importNames, loc);
 		addStrArrayField(keys, values, "importAliases", d.importAliases, loc);
 		addStrField(keys, values, "importSource", d.importSource, loc);
+		addStrArrayField(keys, values, "importTypeNames", d.importTypeNames, loc);
 		return;
 	}
 	if (k == NodeKind.ExportDecl) {
@@ -903,6 +905,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addStrArrayField(keys, values, "interfaceFields", d.interfaceFields, loc);
 		addStrArrayField(keys, values, "interfaceFieldTypes", d.interfaceFieldTypes, loc);
 		addNodeArrayArrayField(keys, values, "interfaceFieldDecorators", d.interfaceFieldDecorators, loc);
+		addStrArrayField(keys, values, "interfaceOptionalFields", d.interfaceOptionalFields, loc);
 		return;
 	}
 	if (k == NodeKind.ClassDecl) {
@@ -2530,11 +2533,7 @@ test "nodeToASTLiteral builds ObjectLiteral for NumberLiteral" {
 	const literal = nodeToASTLiteral(numNode, loc);
 	assert literal.kind == NodeKind.ObjectLiteral;
 	const d = literal.data as ObjectLiteralData;
-	// Should have kind, line, column, endLine, endColumn, value
-	assert d.keys.length == 6;
-	assert d.keys[0] == "kind";
-	assert d.keys[5] == "value";
-	// Value at index 5 should be a NumberLiteral with the right value
+	assert d.keys.join(",") == "kind,line,column,endLine,endColumn,value";
 	const valueNode = d.properties[5];
 	assert valueNode.kind == NodeKind.NumberLiteral;
 	assert (valueNode.data as NumberLiteralData).value == 42;
@@ -2546,9 +2545,7 @@ test "nodeToASTLiteral builds ObjectLiteral for Identifier" {
 	const literal = nodeToASTLiteral(idNode, loc);
 	assert literal.kind == NodeKind.ObjectLiteral;
 	const d = literal.data as ObjectLiteralData;
-	// Should have kind, line, column, endLine, endColumn, name
-	assert d.keys.length == 6;
-	assert d.keys[5] == "name";
+	assert d.keys.join(",") == "kind,line,column,endLine,endColumn,name";
 }
 
 test "nodeToASTLiteral writes the explicit type arguments of a call" {
@@ -2646,7 +2643,7 @@ test "hasUserMacroInvocation detects macro in DecoratedDecl decorators" {
 	defineTestMacro(ctx, "myDeco", loc);
 	const inv = createNode(NodeKind.MacroInvocation, { macroName: "myDeco", macroArgs: [], macroHasParens: false }, synthToken(loc));
 	const inner = createNode(NodeKind.InterfaceDecl, {
-		interfaceName: "X", interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: [],
+		interfaceName: "X", interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: [], interfaceOptionalFields: [] as string[],
 	}, synthToken(loc));
 	const dec = createNode(NodeKind.DecoratedDecl, {
 		decorators: [inv], decoratedNode: inner,

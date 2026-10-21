@@ -1,7 +1,6 @@
 // @stdout: worker timers 10
 // @stdout: loop race 1
 // @serial
-// @xfail(raiser): raiser runtime error: Unknown host function: msPromiseRace (no host bridge registers it in hostTable.ms)
 
 // note: The timer heap keeps a sleep future alive until it has fired, and a worker's
 //   sleep future is released on the loop thread that fires it. A dropped sleepAsync

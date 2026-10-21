@@ -42,7 +42,8 @@ checker rejects it and names the alternative.
   cycle through an `unknown` field is collected under `--gc=orc`.
 - Reads need a cast. `u as C` for a class `C` is tested at run time on C and JS, and so is
   `base as Derived`: a wrong class stops the program with
-  `Error: invalid object conversion: <runtime class> is not C`, exit 1; `null` passes.
+  `Error: invalid object conversion: <runtime class> is not C`, exit 1, naming a value without a
+  class (an object literal) `Object` on C, JS and the Raiser; `null` passes.
   `--danger` drops this test, as it drops bound checks, and `--gc=manual` has no type
   header to test. `u as C` has no unchecked spelling and `--danger` is its only switch; a
   `Ptr<void>` read (`(u as Ptr<void>) as C`) is the one untested path, as below.
@@ -789,6 +790,8 @@ interface Handler { tag: int32; cb?: (x: int32) => int32; }
 const h: Handler = { tag: 1 };            // cb omitted → null
 if (h.cb !== null) { h.cb(7); }           // narrow, then call
 ```
+
+`JSON.stringify` leaves out an optional field that holds `null`, as TypeScript leaves out an absent property: `interface P { name: string; nick?: string; nul: string | null }` writes `{ name: "a", nul: null }` as `{"name":"a","nul":null}`. A field typed `T | null` without `?` still writes `null`, and `nick?: string | null` holding `null` is left out, because MS cannot tell it from absent. The mark reaches nested, array, class, inherited, generic, intersection, anonymous, union-variant and imported shapes; `JSON.parse` reads a missing optional key as `null` (measured 2026-10-21 on C, JS and the Raiser; corpus `jsonOptionalFieldOmitted`). Not measured: the CBOR encoder, which does not read the mark.
 
 **Fields without a default value** (measured 2026-10-06 on C, JS and the Raiser; checker3pass `constructionFieldInit`, corpus `constructionGivesEveryField`, `classFieldZeroValue`): a field whose type has no default — an array, a class instance, a `Map`, a function, or a struct holding one — must be given wherever the object is built. An object literal that omits one is an error (`field 'items' must be initialized: type 'int32[]' has no default value`) unless the class declares an initializer for it. `new C()` of a class without a constructor is an error when such a field, its own or a parent's, has no initializer (`'new Rec()' leaves 'items' without a value`). Value fields (numbers, `boolean`, `string`, a struct of those) keep their zero value; `?` and `| null` opt out, and a nullable function defaults to `null`. Before this rule the omitted field read as nil: `b.items.length` crashed on C, JS and the Raiser. `tsc` refuses every omitted non-optional property (TS2739/TS2741), value fields included; MS keeps the zero value for those. A class field without initializer, a struct-valued one included, reads its zero value after `new` on JS as on C (it read `undefined` before).
 
@@ -1669,6 +1672,12 @@ add an `as XxxData` cast if needed. Tier 3 generic aliases
 (`createNodeAt<K extends NodeKind>(kind: K, data: DataFor<K>, loc): Node`)
 will be the proper long-term solution.
 
+A callback argument whose parameter types come from the overload (an unannotated arrow) ranks
+the overloads once it is typed: a block that returns nothing takes a `(…) => void` overload over a
+generic `(…) => U` one in either declaration order, and a callback that returns a value takes the
+generic one, for functions, class methods and extension methods. Measured 2026-10-20 on the
+wt/root-sweep candidate, C (drc, orc, danger) and JS: corpus `overloadContextArgRanksByItsType`.
+
 ### Conditional Types
 
 Type-level if/else based on assignability (Tier 3).
@@ -2067,11 +2076,23 @@ fetchUser(42)
 | Method | Callback Signature | Returns | Behavior |
 |--------|-------------------|---------|----------|
 | `.then(fn)` | `(value: T) => void` | `Promise<void>` | Called on fulfillment, rejection propagates |
+| `.then(fn)` | `(value: T) => U` | `Promise<U>` | Resolves with what `fn` returns |
+| `.then(fn)` | `(value: T) => Promise<U>` | `Promise<U>` | Adopts the promise `fn` returns, one level as in TS |
 | `.then(fn, onRejected)` | `(value: T) => void`, `(error: Error) => void` | `Promise<void>` | `onRejected` is called on the input's rejection only; a throw from `fn` rejects the output |
-| `.catch(fn)` | `(error: Error) => void` | `Promise<T>` | Called on rejection, fulfillment passes through |
-| `.finally(fn)` | `() => void` | `Promise<T>` | Called always, original value/error preserved |
+| `.then(fn, onRejected)` | `(value: T) => U`, `(error: Error) => U` | `Promise<U>` | Resolves with the result of the callback that ran; a throw from `fn` skips `onRejected` and rejects the output |
+| `.catch(fn)` | `(error: Error) => void` | `Promise<void>` | Called on rejection |
+| `.catch(fn)` | `(error: Error) => T` | `Promise<T>` | Resolves with the input's value, or with `fn`'s on a rejection |
+| `.finally(fn)` | `() => void` | `Promise<T>` | Called always, original value/error preserved; a throw from `fn` rejects the output |
 
-All three return a new `Promise`, enabling chaining. Exceptions thrown inside callbacks are captured and propagate as rejections on the output promise.
+All of them return a new `Promise`, enabling chaining. Exceptions thrown inside callbacks are captured and propagate as rejections on the output promise.
+
+The callback picks the row: a block that returns nothing takes the `void` row, which the runtime
+calls directly, and a callback that returns a value takes the `U` (or `T`) row, an async method of
+`Promise`. Measured 2026-10-20 on the wt/root-sweep candidate, C (drc, orc, danger) and JS: corpus
+`promiseThenValue`, `promiseThenFlattens`, `promiseThenOverload`, `promiseThenNoValue`,
+`promiseThenStruct`, `promiseThenRegistersArguments`, `promiseThenValueOwned`,
+`promiseCatchFinallyValues`, `promiseRejectThroughThen` and `promiseFinallyHandlerThrowRejects`
+print their pinned lines; all but the last also under SAN. Not run: the Raiser.
 
 Every rejection reaches its reader as an `Error`: `try { await p } catch (e)`, `.catch` and the
 second callback of `.then` see the same object, a string reason having become an `Error` whose
@@ -2553,6 +2574,8 @@ actor Unsafe {
 ```
 
 Actors also support cooperative suspension — async actor methods (`CALL` pattern) suspend the actor while awaiting an internal future, freeing the scheduler to process other actors' mailboxes.
+
+The suspended actor's own mailbox waits: a send or CALL that reaches it while one of its methods awaits runs after that method has finished, so the actor's fields stay as the method left them across its await (measured 2026-10-20 on C and JS: an awaited CALL and a timer in corpus `actorCallsIntoASuspendedActorWaitForIt`, a spawn in corpus 1113). A mailbox is unbounded and a send never pauses its sender; a sender that awaits a CALL to its receiver after each burst has at most one burst queued there (measured 2026-10-20 on C: 1M sends to a busy actor peaked at 33.7 MB, and at 2.2 MB with a CALL after every 200).
 
 #### Supervision (Erlang OTP)
 
@@ -3765,11 +3788,9 @@ Refused, each at its site with the reason:
 - a `then` whose first parameter is not a callback, or whose `onRejected` takes something other than
   `Error` or a subclass (`unknown`, `string`), since a rejection is an `Error` as in `Promise.reject`;
 - `Promise<T>` with a thenable `T`, written or made by a call (`new Promise<Thenable>(…)`, a generic
-  instantiated with one): write `Promise<U>`;
+  instantiated with one, a `.then` callback returning one): write `Promise<U>`;
 - `return thenable` inside a `try` that has a catch or finally, since the catch would not see the
   rejection: write `return await`;
-- a `.then` callback whose expression body is a thenable, since `.then` gives `Promise<void>` and drops
-  what the callback returns;
 - an executor's `resolve(thenable)`: `resolve` takes a value of the promised type, as it refuses a
   promise; and a combinator over a `Thenable[]` variable: thenables are adopted from an array literal.
 
@@ -4298,6 +4319,33 @@ generic distinct whose base does not depend on its type parameter can delegate;
 the concrete base function is still not generic.
 
 The public spelling is `@delegate`; `@borrow` is not a compatibility alias.
+
+#### Comparing a distinct
+
+A distinct type does not inherit its base's comparisons. `==`, `!=`, `===`, `!==`, `<`, `<=`,
+`>` and `>=` on two values of `type UserId = distinct int32` are refused until the program
+declares or delegates one, and the refusal names the line to write:
+
+```ms
+type UserId = distinct int32;
+@delegate function `==`(this a: UserId, b: UserId): boolean;
+@delegate function `<`(this a: UserId, b: UserId): boolean;
+```
+
+`==` gives `!=`, `===` and `!==`; `<` gives `>`; `<=` gives `>=`. Delegating `!=`, `>` or `>=`
+itself is refused (`no !=(int32, int32) to delegate to`). A delegated comparison is the
+base's own: built in for numbers, strings, enums and structs, or the routine the base declares.
+A distinct compared with its base, a literal or another distinct is refused with or without a
+delegate (`a distinct type compares only with itself — convert one side with as`). A brand
+(`int32 & { __brand: "Id" }`) compares as its base. A struct with a distinct field compares
+that field through the field type's comparison; the std routine that folds the fields sees the
+delegate only when it is exported.
+
+Measured 2026-10-21 on C, JS and the Raiser with the candidate of `wt/trace-distinct-compare`:
+corpus `distinctDelegatedComparison` (string, int32, struct, enum, phantom generic, distinct of a
+distinct, struct field, a declared routine and a delegate to the base's routine) prints the same
+on all three, and handoff `distinctComparison` pins the refusals. Not measured: a distinct of a
+class or of a nullable type.
 This does not rename `Handle.borrow` or other ownership-borrowing APIs.
 
 The intrinsic symbol is exported by the system prelude:

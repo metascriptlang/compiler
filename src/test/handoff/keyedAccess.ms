@@ -35,6 +35,14 @@ test "keyof a type parameter is bound per instance and checked at the call" {
 	assert hasError(TODO + TRAPS + "s.get(t, \"owner\");", "Type '\"owner\"' does not satisfy constraint");
 }
 
+const AT = "function at<T, K extends keyof T>(x: T, key: K): T[K] { const got: T[K] = Reflect.get(x, key) as T[K]; return got; }\n";
+
+test "T[K] in a generic body is an indexed access in every instance, an array read by a number key too" {
+	assert strictErrorCount(TODO + AT + "const ts: Todo[] = [t];\nconst e: Todo = at(ts, 0);\nconst n: number = at(ts, \"length\");\nconst s: string = at(t, \"title\");") == 0;
+	assert hasError(TODO + AT + "const ts: Todo[] = [t];\nconst e: string = at(ts, 0);", "not assignable");
+	assert hasError("function f<T>(x: T): int32 { let k = 0; const a: T[k] = []; return 0; }\nf<int32>(1);", "array size 'k' must be a compile-time integer constant");
+}
+
 test "an element access with a literal key is the property it names" {
 	assert strictErrorCount(TODO + "const s: string = t[\"title\"];\nt[\"done\"] = true;") == 0;
 	assert hasError(TODO + "t[\"owner\"];", "'\"owner\"' is not a key of 'Todo'");

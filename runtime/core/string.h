@@ -242,6 +242,9 @@ bool msStringContains(msString s, msString sub);
 /* Find first occurrence, starting from `start`. Returns -1 if not found. */
 int64_t msStringIndexOf(msString s, msString sub, int64_t start);
 
+/* Byte offsets in and out; an empty `sub` answers `start`. */
+int64_t msStringByteIndexOf(msString s, msString sub, int64_t start);
+
 /* Find last occurrence. startIdx=-1 means search from end (JS parity). */
 int64_t msStringLastIndexOf(msString s, msString sub, int64_t startIdx);
 

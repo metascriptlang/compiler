@@ -273,6 +273,20 @@ const y = made(1);
 	assert atQuote.error.contains("made: refused"), atQuote.error;
 }
 
+test "macro reflection: a child node with no end position reads endLine and endColumn as numbers" {
+	const result = compileToCWithStd(`
+import { Node, NodeKind } from "std/meta";
+
+export macro ends(sheet: Node): Node {
+	const entry = sheet.properties[0];
+	return { kind: NodeKind.NumberLiteral, line: 1, column: 1, value: entry.endLine + entry.endColumn };
+}
+
+const v = ends({ box: { widht: 5.0 } });
+`);
+	assert result.ok, result.error;
+}
+
 test "macro reflection: unavailable named types are refused" {
 	const result = compileToCWithStd(`
 import { Node, NodeKind } from "std/meta";

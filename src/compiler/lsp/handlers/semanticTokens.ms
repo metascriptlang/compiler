@@ -3,17 +3,24 @@
 import { TransAmDb, dbParse, dbTypeCheck } from "../../transam/index";
 import { lspJsonNumber, lspGetField, lspGetObjectField, lspUriToPath, lspResponse } from "../protocol";
 import { SgSemanticToken, sgCollectSemanticTokens, sgSortTokens } from "../../../checker/suggest";
+import { dbGetSource } from "./shared";
 
-function encodeSemanticTokenDeltas(tokens: SgSemanticToken[]): string {
+function encodeSemanticTokenDeltas(source: string, tokens: SgSemanticToken[]): string {
 	sgSortTokens(tokens);
 	let prevLine = 0;
 	let prevCol = 0;
+	let lineStart = 0;
+	let lineNumber = 1;
 	let arr = "[";
 	let i = 0;
 	while (i < tokens.length) {
 		const t = tokens[i];
+		while (lineNumber < t.line && lineStart < source.byteLength) {
+			if (source.byteAt(lineStart) == "\n".code) lineNumber = lineNumber + 1;
+			lineStart = lineStart + 1;
+		}
 		const line = t.line - 1;
-		const col = t.col - 1;
+		const col = source.byteSlice(lineStart, lineStart + t.col - 1).length;
 		const deltaLine = line - prevLine;
 		let deltaStart = col;
 		if (deltaLine == 0) deltaStart = col - prevCol;
@@ -52,7 +59,7 @@ export function handleSemanticTokensFull(id: string, params: string, db: TransAm
 	if (ctx == null) return lspResponse(id, "{\"data\":[]}");
 
 	const tokens = sgCollectSemanticTokens(ctx, program);
-	const data = encodeSemanticTokenDeltas(tokens);
+	const data = encodeSemanticTokenDeltas(dbGetSource(db, path), tokens);
 
 	_semTokenCache.set(path, data);
 	_semTokenRevision.set(path, rev);
