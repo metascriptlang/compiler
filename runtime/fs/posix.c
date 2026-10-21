@@ -47,30 +47,11 @@ msString msFsReadFile(msString path) {
 	return result;
 }
 
-/* ===== Write ===== */
-
-double msFsWriteFileMode(msString path, msString content, msString mode) {
-	_msFsLastErrno = 0;
-	FILE* f = fopen(msStringToCString(path), msStringToCString(mode));
-	if (!f) { _msFsLastErrno = errno; return 0.0; }
-	size_t written = fwrite(msStringToCString(content), 1, content.len, f);
-	fclose(f);
-	return (written == (size_t)content.len) ? 1.0 : 0.0;
-}
-
 /* ===== Stat ===== */
 
 double msFsExists(msString path) {
 	struct stat st;
 	return (stat(msStringToCString(path), &st) == 0) ? 1.0 : 0.0;
-}
-
-msString msFsRealPath(msString path) {
-	char* resolved = realpath(msStringToCString(path), NULL);
-	if (!resolved) return MS_EMPTY_STRING;
-	msString result = msStringFromCStr(resolved);
-	free(resolved);
-	return result;
 }
 
 double msFsIsFile(msString path) {
@@ -83,18 +64,6 @@ double msFsIsDir(msString path) {
 	struct stat st;
 	if (stat(msStringToCString(path), &st) != 0) return 0.0;
 	return S_ISDIR(st.st_mode) ? 1.0 : 0.0;
-}
-
-double msFsIsExecutable(msString path) {
-	/* POSIX: access(X_OK) checks if current UID/GID has execute permission.
-	 * Matches Bun.which's isExecutableFilePath and shutil.which behaviour. */
-#if defined(__wasi__)
-	/* WASI has no execute permission: access(X_OK) only tests existence. */
-	(void)path;
-	return 0.0;
-#else
-	return (access(msStringToCString(path), X_OK) == 0) ? 1.0 : 0.0;
-#endif
 }
 
 double msFsFileSize(msString path) {

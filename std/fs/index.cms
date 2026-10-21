@@ -6,12 +6,9 @@ import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
 
 extern function msFsLastErrno(): int32;
 extern function msFsReadFile(path: string): string;
-extern function msFsWriteFileMode(path: string, content: string, mode: string): number;
 extern function msFsExists(path: string): number;
 extern function msFsIsFile(path: string): number;
 extern function msFsIsDir(path: string): number;
-extern function msFsIsExecutable(path: string): number;
-extern function msFsRealPath(path: string): string;
 extern function msFsReadDirEntries(path: string): string;
 
 const FAILED_WITHOUT_ERRNO: int32 = -1;
@@ -35,9 +32,18 @@ when (windows) {
 	function removeErrno(path: string): int32 { return lastErrnoOf(msFsRemove(path)); }
 	function renameErrno(oldPath: string, newPath: string): int32 { return lastErrnoOf(msFsRename(oldPath, newPath)); }
 	function symlinkErrno(target: string, path: string): int32 { return lastErrnoOf(msFsSymlink(target, path)); }
+
+	extern function msFsWriteFileMode(path: string, content: string, mode: string): number;
+	extern function msFsIsExecutable(path: string): number;
+	extern function msFsRealPath(path: string): string;
+
+	function writeFileErrno(path: string, content: string, mode: string): int32 { return lastErrnoOf(msFsWriteFileMode(path, content, mode)); }
+	function isExecutableKernel(path: string): boolean { return msFsIsExecutable(path) == 1; }
+	function realpathKernel(path: string): string { return msFsRealPath(path); }
 } else {
 	@include("errno.h");
 	@include("stdio.h");
+	@include("stdlib.h");
 	@include("unistd.h");
 	@include("sys/stat.h");
 
@@ -49,6 +55,15 @@ when (windows) {
 	extern function cUnlink(path: cstring): int32 from "unlink";
 	extern function cRename(oldPath: cstring, newPath: cstring): int32 from "rename";
 	extern function cSymlink(target: cstring, path: cstring): int32 from "symlink";
+	extern struct FILE;
+	extern function cFopen(path: cstring, mode: cstring): Ptr<FILE> from "fopen";
+	extern function cFwrite(data: cstring, size: uint64, count: uint64, file: Ptr<FILE>): uint64 from "fwrite";
+	extern function cFclose(file: Ptr<FILE>): int32 from "fclose";
+	extern const X_OK: int32;
+	extern function cAccess(path: cstring, mode: int32): int32 from "access";
+	extern function cRealpath(path: cstring, resolved: Ptr<uint8> | null): Ptr<uint8> from "realpath";
+	extern function cFree(p: Ptr<uint8>): void from "free";
+	extern function msStringFromCStr(s: cstring): string;
 
 	// POSIX lets any later libc call (free included) overwrite errno: read it straight
 	// after the syscall, before anything else runs.
@@ -73,6 +88,29 @@ when (windows) {
 	function symlinkErrno(target: string, path: string): int32 {
 		return cSymlink(target as cstring, path as cstring) == 0 ? 0 : errno;
 	}
+	function writeFileErrno(path: string, content: string, mode: string): int32 {
+		const file = cFopen(path as cstring, mode as cstring);
+		if (file == null) return errno;
+		const length = content.asBytes().length as uint64;
+		let err: int32 = 0;
+		if (cFwrite(content as cstring, 1, length, file) != length) err = errno != 0 ? errno : FAILED_WITHOUT_ERRNO;
+		if (cFclose(file) != 0 && err == 0) err = errno != 0 ? errno : FAILED_WITHOUT_ERRNO;
+		return err;
+	}
+	function isExecutableKernel(path: string): boolean {
+		when (wasm) {
+			return false;
+		} else {
+			return cAccess(path as cstring, X_OK) == 0;
+		}
+	}
+	function realpathKernel(path: string): string {
+		const resolved = cRealpath(path as cstring, null);
+		if (resolved == null) return "";
+		const result = msStringFromCStr(resolved as cstring);
+		cFree(resolved);
+		return result;
+	}
 }
 
 function errnoResult(err: int32, path: string, what: string): Result<void, IoError> {
@@ -94,23 +132,11 @@ export function readFile(path: string): Result<string, IoError> {
 }
 
 export function writeFile(path: string, content: string): Result<void, IoError> {
-	const ok = msFsWriteFileMode(path, content, "wb");
-	if (ok != 1) {
-		const err = msFsLastErrno();
-		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
-		return Result.err(writeFailed(path, "write failed"));
-	}
-	return Result.ok(null);
+	return errnoResult(writeFileErrno(path, content, "wb"), path, "write failed");
 }
 
 export function appendFile(path: string, content: string): Result<void, IoError> {
-	const ok = msFsWriteFileMode(path, content, "ab");
-	if (ok != 1) {
-		const err = msFsLastErrno();
-		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
-		return Result.err(writeFailed(path, "append failed"));
-	}
-	return Result.ok(null);
+	return errnoResult(writeFileErrno(path, content, "ab"), path, "append failed");
 }
 
 // Change POSIX permission bits on a path. Mode is passed as a decimal int32
@@ -165,10 +191,10 @@ export function rename(oldPath: string, newPath: string): Result<void, IoError> 
 // ===== Predicates (stay as boolean — not fallible) =====
 
 export function exists(path: string): boolean { return msFsExists(path) == 1; }
-export function realpath(path: string): string { return msFsRealPath(path); }
+export function realpath(path: string): string { return realpathKernel(path); }
 export function isFile(path: string): boolean { return msFsIsFile(path) == 1; }
 export function isDir(path: string): boolean { return msFsIsDir(path) == 1; }
-export function isExecutable(path: string): boolean { return msFsIsExecutable(path) == 1; }
+export function isExecutable(path: string): boolean { return isExecutableKernel(path); }
 export extern function fileSize(path: string): number from "msFsFileSize";
 export extern function modifiedTime(path: string): number from "msFsModifiedTime";
 export extern function changeStamp(path: string): string from "msFsChangeStamp";

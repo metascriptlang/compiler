@@ -33,21 +33,10 @@ int32_t msFsLastErrno(void);
  * Returns MS_EMPTY_STRING on failure. */
 msString msFsReadFile(msString path);
 
-/* Write string to file. mode = "wb" (truncate) or "ab" (append).
- * Returns 1.0 on success, 0.0 on failure. */
-double msFsWriteFileMode(msString path, msString content, msString mode);
-
 /* Stat predicates. Return 1.0 (true) or 0.0 (false). */
 double msFsExists(msString path);
 double msFsIsFile(msString path);
 double msFsIsDir(msString path);
-
-/* Executable bit check (POSIX: access(path, X_OK); Windows: file-exists-and-regular,
- * since Windows has no exec bit and delegates to PATHEXT/extension). Used by
- * findOnPath to match shutil.which / exec.LookPath / Bun.which semantics. */
-double msFsIsExecutable(msString path);
-
-msString msFsRealPath(msString path);
 
 /* File size in bytes. Returns -1.0 on error. */
 double msFsFileSize(msString path);
@@ -74,6 +63,11 @@ double msFsRmdir(msString path);
 double msFsRemove(msString path);
 double msFsRename(msString oldPath, msString newPath);
 double msFsSymlink(msString target, msString path);
+/* mode = "wb" (truncate) or "ab" (append). */
+double msFsWriteFileMode(msString path, msString content, msString mode);
+/* No exec bit on Windows: true for an existing regular file. */
+double msFsIsExecutable(msString path);
+msString msFsRealPath(msString path);
 #endif
 
 #ifdef __cplusplus
