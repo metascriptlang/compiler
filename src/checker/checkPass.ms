@@ -4138,9 +4138,10 @@ function replayPreludeContributions(shared: SharedPrelude): void {
 	replayDispatchRecords(shared.dispatch);
 }
 
-// The modules the prelude every build shares loaded from the default global imports. Such a
-// module checked on its own keeps its diagnostics, while generics the prelude declares in it
-// still instantiate against the prelude's copy, as a build that skips it does.
+// The modules the prelude every build shares loaded as default global imports, which a build
+// never checks on its own. Such a module checked on its own keeps its diagnostics, while
+// generics the prelude declares in it still instantiate against the prelude's copy. A module
+// those import is checked and registered by a build that imports it, so it is not owned here.
 export function sharedPreludeOwns(prelude: CheckerContext | null, modulePath: string): boolean {
 	if (prelude == null) return false;
 	for (const shared of _preludeCtxByKey.values()) {
@@ -4153,12 +4154,11 @@ export function sharedPreludeOwns(prelude: CheckerContext | null, modulePath: st
 
 function preludeModulePaths(prelude: CheckerContext): HashSet<string> {
 	const owned = new HashSet<string>();
-	for (const path of prelude.preludeModuleScopes.keys()) owned.add(path);
 	for (const specifier of defaultGlobalImports()) {
 		const members = prelude.preludeInterf.get(specifier);
 		if (members == null) continue;
 		for (const sym of members) {
-			if (sym.modulePath != "") owned.add(sym.modulePath);
+			if (sym.modulePath != "" && !prelude.preludeModuleScopes.has(sym.modulePath)) owned.add(sym.modulePath);
 		}
 	}
 	return owned;
