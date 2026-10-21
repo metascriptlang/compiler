@@ -13,26 +13,12 @@ import { parseObjectLiteral } from "./object";
 import { parseJsxRoot } from "./jsx";
 import { parseExprList, parseCallExpr, takeListEndComments } from "./call";
 import { parseTemplateLiteral } from "./template";
-import { registerParseExpr, parseOk, exprKind, exprNode, exprOp, binLeftKind, tryParseLiteralKeyword } from "./util";
+import { callBlockParser, registerParseExpr } from "../statements/callbacks";
+import { parseOk, exprKind, exprNode, exprOp, binLeftKind, tryParseLiteralKeyword } from "./util";
 import { parseNumberLiteral, parseIntegerLiteral, integerLiteralFits, integerLiteralIsBitPattern, numericLiteralIsFloat } from "../../utils/string";
 
 
 type ExprResult = Result<Expression, string>;
-
-// ===== Block Parser Callback =====
-// Arrow functions with block bodies need parseBlockStmt from statement.ms,
-// but importing from statement.ms would create a circular dependency.
-// statement.ms registers its block parser at module load time.
-
-type BlockParserFn = (state: ParserState) => ExprResult;
-
-let blockParser: BlockParserFn = (state: ParserState): ExprResult => {
-	return Result.err("Block parser not registered");
-};
-
-export function registerBlockParser(parser: BlockParserFn): void {
-	blockParser = parser;
-}
 
 // ===== Main Parse Functions =====
 
@@ -47,7 +33,6 @@ export function parseExpressionFromState(state: ParserState): ExprResult {
 	return result;
 }
 
-// Register parseExpression into util.ms for sub-module integration tests.
 // Wrap in lambda to ensure proper closure calling convention.
 registerParseExpr((tokens: Token[]): ExprResult => { return parseExpression(tokens); });
 
@@ -268,7 +253,7 @@ function parseFuncExprBody(state: ParserState, token: Token, feFlags: string): E
 	// Optional return type
 	const funcExprReturnType = captureOptionalType(state);
 	const funcExprRetTypeExpr = getLastTypeExpr();
-	const feBody = prependParamPatterns(try blockParser(state), fePatterns, feParamLocs);
+	const feBody = prependParamPatterns(try callBlockParser(state), fePatterns, feParamLocs);
 	const feNode = createNode(NodeKind.FunctionExpr, { funcExprParams, funcExprParamTypes, funcExprBody: feBody, funcExprFlags: feFlags, funcExprReturnType }, token);
 	feNode.typeExpr = funcExprRetTypeExpr;
 	feNode.typeExprs = feParamTypeExprs;
@@ -359,7 +344,7 @@ function parsePrimary(state: ParserState): ExprResult {
 	// trailing `=>` belongs to the match arm, so `2 when flag => 200` must parse
 	// the guard as `flag`, not as the arrow function `flag => 200`.
 	if (token.kind == TokenKind.Ident && peek(state, 1).kind == TokenKind.Arrow && state.noBareArrow == 0) {
-		return parseBareIdentArrow(state, parseExprWithPrec, blockParser, "", allowArrowReturnType);
+		return parseBareIdentArrow(state, parseExprWithPrec, callBlockParser, "", allowArrowReturnType);
 	}
 
 	if (token.kind == TokenKind.Import && peek(state, 1).kind == TokenKind.LParen) {
@@ -379,10 +364,10 @@ function parsePrimary(state: ParserState): ExprResult {
 	if (token.kind == TokenKind.LParen) {
 		const shape = arrowShape(state);
 		if (shape == ArrowShape.Yes) {
-			return parseArrowFunction(state, parseExprWithPrec, blockParser, "");
+			return parseArrowFunction(state, parseExprWithPrec, callBlockParser, "");
 		}
 		if (shape == ArrowShape.Maybe) {
-			const arrow = tryParseArrowFunction(state, parseExprWithPrec, blockParser, "", allowArrowReturnType);
+			const arrow = tryParseArrowFunction(state, parseExprWithPrec, callBlockParser, "", allowArrowReturnType);
 			if (!arrow.ok || arrow.value != null) return arrow;
 		}
 		advance(state);
@@ -413,7 +398,7 @@ function parsePrimary(state: ParserState): ExprResult {
 	// Only if '(' ... ')' is followed by '{' — otherwise 'match' is used as identifier
 	if (token.kind == TokenKind.Match) {
 		if (parenGroupThen(state, 1, TokenKind.LBrace)) {
-			return parseMatchExpr(state, parseExprWithPrec, blockParser);
+			return parseMatchExpr(state, parseExprWithPrec, callBlockParser);
 		}
 		advance(state);
 		return Result.ok(createNode(NodeKind.Identifier, { name: token.value }, token));
@@ -548,17 +533,17 @@ function parsePrimary(state: ParserState): ExprResult {
 		// as the plain bare-ident arrow above — match-guard `=>` ownership)
 		if (isIdentLike(peek(state, 1)) && peek(state, 2).kind == TokenKind.Arrow && state.noBareArrow == 0) {
 			advance(state); // consume 'async'
-			return parseBareIdentArrow(state, parseExprWithPrec, blockParser, "async", allowArrowReturnType);
+			return parseBareIdentArrow(state, parseExprWithPrec, callBlockParser, "async", allowArrowReturnType);
 		}
 		// async arrow: async () => ... or async (x) => ...; `async(x)` alone is a call
 		if (peek(state, 1).kind == TokenKind.LParen) {
 			advance(state); // consume 'async'
 			const shape = arrowShape(state);
 			if (shape == ArrowShape.Yes) {
-				return parseArrowFunction(state, parseExprWithPrec, blockParser, "async");
+				return parseArrowFunction(state, parseExprWithPrec, callBlockParser, "async");
 			}
 			if (shape == ArrowShape.Maybe) {
-				const arrow = tryParseArrowFunction(state, parseExprWithPrec, blockParser, "async", allowArrowReturnType);
+				const arrow = tryParseArrowFunction(state, parseExprWithPrec, callBlockParser, "async", allowArrowReturnType);
 				if (!arrow.ok || arrow.value != null) return arrow;
 			}
 			return Result.ok(createNode(NodeKind.Identifier, { name: token.value }, token));
@@ -585,7 +570,7 @@ function parsePrimary(state: ParserState): ExprResult {
 			state.tokens[state.position + 1].value == "comptime") {
 			advance(state); // consume '@'
 			advance(state); // consume 'comptime'
-			const comptimeBlock = try blockParser(state);
+			const comptimeBlock = try callBlockParser(state);
 			return Result.ok(createNode(NodeKind.ComptimeBlock, { comptimeBody: comptimeBlock }, token));
 		}
 	}
@@ -596,7 +581,7 @@ function parsePrimary(state: ParserState): ExprResult {
 		if (state.position + 1 < state.tokens.length &&
 			state.tokens[state.position + 1].kind == TokenKind.LBrace) {
 			advance(state);
-			const quoteBlock = try blockParser(state);
+			const quoteBlock = try callBlockParser(state);
 			return Result.ok(createNode(NodeKind.QuoteExpr, { quoteBody: quoteBlock }, token));
 		}
 		advance(state);
