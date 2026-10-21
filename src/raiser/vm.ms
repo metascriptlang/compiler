@@ -51,7 +51,7 @@ export interface RaiserCallFrame {
 // items[0..depth) are the live frames; a popped record stays for the next call to rewrite.
 export interface RaiserCallFrames {
 	items: RaiserCallFrame[];
-	depth: number;
+	depth: int32;
 }
 
 // A strand is one independent line of execution: its own register file, its
@@ -79,7 +79,7 @@ export interface RaiserStrand {
 	funcIdx: int32;
 	wordBase: int32;
 	refBase: int32;
-	loopCount: number;
+	loopCount: int64;
 	status: RaiserStrandStatus;
 	result: RaiserValue;
 	resultFuture: int64;   // future this strand completes when it finishes; -1 for main
@@ -213,8 +213,8 @@ export interface RaiserVM {
 	callStack: RaiserCallFrames;
 	arrayHeap: RaiserArrayHeap;
 	objectHeap: RaiserObjectHeap;
-	loopCount: number;   // backward jumps (loop iterations) since the last entry reset
-	loopLimit: number;   // max loop iterations before the VM refuses (reference: maxLoopIterationsVM)
+	loopCount: int64;    // backward jumps (loop iterations) since the last entry reset
+	loopLimit: int64;    // max loop iterations before the VM refuses (reference: maxLoopIterationsVM)
 	error: string;    // Non-empty when VM stopped due to error
 	gcMode: string;   // "arena" (default, no RC) | "orc" (refcount + cycle collector)
 	orc: boolean;     // gcMode == "orc", decided once in createVM
@@ -255,7 +255,7 @@ interface RaiserRun {
 	diagColumn: number;
 	diagEndLine: number;
 	diagEndColumn: number;
-	loopCount: number;
+	loopCount: int64;
 	globals: RaiserValue[];
 	regs: RaiserRegFile;
 	callStack: RaiserCallFrames;
@@ -292,10 +292,10 @@ export function ensureRefs(regs: RaiserRegFile, count: number): void {
 // on which tier supplied it (15x measured, 2026-09-04). CLI override:
 // --max-vm-iterations=<n> (options.ms calls setDefaultLoopLimit).
 const DEFAULT_LOOP_LIMIT = 10000000;
-let vmLoopLimitDefault: number = DEFAULT_LOOP_LIMIT;
+let vmLoopLimitDefault: int64 = DEFAULT_LOOP_LIMIT;
 
 export function setDefaultLoopLimit(n: number): void {
-	if (n > 0) vmLoopLimitDefault = n;
+	if (n > 0) vmLoopLimitDefault = n as int64;
 }
 
 export function createVM(mod: RaiserModule, gcMode: string = "arena"): RaiserVM {
