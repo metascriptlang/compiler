@@ -1296,15 +1296,15 @@ export enum TypeRelation {
 // branches may only collapse into one when their types are the same, or a
 // union variant is silently dropped.
 //
-// Structure mirrors the reference `sameType`/`sameTypeAux`: dispatch on kind,
-// nominal types compare by name, anonymous aggregates compare field names +
-// field types + repr flags, value-carrying types compare values, transparent
-// wrappers compare their inner type. Self-referential types (Node, Scope)
-// make the walk cyclic, so the reference bounds it with a recursion check and
-// assumes "same" once the budget is spent — the conservative answer for a
-// merge is to treat the pair as identical rather than to recurse forever.
+interface SameTypeClosure {
+	recCheck: int32;
+	left: Type[];
+	right: Type[];
+}
 
-let _sameTypeDepth = 0;
+function createSameTypeClosure(): SameTypeClosure {
+	return { recCheck: 0, left: [], right: [] };
+}
 
 export function dropsReadonlyView(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null) return false;
@@ -1326,25 +1326,31 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 		|| dst.kind == TypeKind.Unknown;
 }
 
-function sameDistinct(a: Type, b: Type): boolean {
+function sameDistinct(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
 	if (isBrandDistinct(a) || isBrandDistinct(b)) return a.typeName == b.typeName;
-	return sameNominal(a, b);
+	return sameNominalAux(a, b, c);
 }
 
 export function sameNominal(a: Type, b: Type): boolean {
 	if (a == b) return true;
-	if (isMaybeType(a) && isMaybeType(b)) return sameType(a.typeReturn, b.typeReturn);
+	return sameNominalAux(a, b, createSameTypeClosure());
+}
+
+function sameNominalAux(a: Type, b: Type, c: SameTypeClosure): boolean {
+	if (a == b) return true;
+	if (isMaybeType(a) && isMaybeType(b)) return sameTypeAux(a.typeReturn, b.typeReturn, c);
 	if (a.sym != null && b.sym != null) {
 		const declared = a.sym == b.sym || (a.sym.modulePath != "" && a.sym.modulePath == b.sym.modulePath
 			&& a.sym.name == b.sym.name && a.sym.symbolKind == b.sym.symbolKind
 			&& a.sym.location.line > 0
 			&& a.sym.location.line == b.sym.location.line
 			&& a.sym.location.column == b.sym.location.column);
-		return declared && (!a.typeFlags.has(TypeFlag.DuVariant) || sameTypeList(a.typeChildren, b.typeChildren));
+		return declared && (!a.typeFlags.has(TypeFlag.DuVariant)
+			|| sameTypeList(a.typeChildren, b.typeChildren, c));
 	}
 	return a.sym == null && b.sym == null && a.kind == b.kind
 		&& a.typeName != "" && a.typeName == b.typeName
-		&& sameNameList(a.typeNames, b.typeNames) && sameTypeList(a.typeChildren, b.typeChildren);
+		&& sameNameList(a.typeNames, b.typeNames) && sameTypeList(a.typeChildren, b.typeChildren, c);
 }
 
 // The variant of an enum-discriminated union whose key names the member `lit`
@@ -1365,8 +1371,10 @@ function isOwnGenericBase(base: Type, inst: Type): boolean {
 	return inst.kind == TypeKind.GenericInstance && inst.typeExtra != null && unwrapRefBase(inst.typeExtra) == base;
 }
 
-function sameGenericBase(a: Type, b: Type): boolean {
-	if (a.typeExtra != null && b.typeExtra != null) return sameNominal(unwrapRefBase(a.typeExtra), unwrapRefBase(b.typeExtra));
+function sameGenericBase(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
+	if (a.typeExtra != null && b.typeExtra != null) {
+		return sameNominalAux(unwrapRefBase(a.typeExtra), unwrapRefBase(b.typeExtra), c);
+	}
 	return a.typeName == b.typeName;
 }
 
@@ -1389,9 +1397,9 @@ function differentGenericsFit(source: Type, target: Type): boolean {
 	return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && objectLayoutFits(s, t);
 }
 
-function sameEnumMember(a: Type, b: Type): boolean {
+function sameEnumMember(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
 	if (a.typeNames.length == 0 || b.typeNames.length == 0 || a.typeNames[0] != b.typeNames[0]) return false;
-	if (a.typeReturn != null && b.typeReturn != null) return sameNominal(a.typeReturn, b.typeReturn);
+	if (a.typeReturn != null && b.typeReturn != null) return sameNominalAux(a.typeReturn, b.typeReturn, c);
 	return a.typeName == b.typeName;
 }
 
@@ -1405,19 +1413,31 @@ function skipAliasWrapper(t: Type): Type {
 export function sameType(a: Type | null, b: Type | null): boolean {
 	if (a == b) return true;
 	if (a == null || b == null) return false;
-	if (_sameTypeDepth > 12) return true;
-	_sameTypeDepth = _sameTypeDepth + 1;
-	const result = sameTypeInner(skipAliasWrapper(a), skipAliasWrapper(b));
-	_sameTypeDepth = _sameTypeDepth - 1;
-	return result;
+	return sameTypeAux(a, b, createSameTypeClosure());
 }
 
-function sameTypeList(a: Type[], b: Type[]): boolean {
+function sameTypeAux(a: Type | null, b: Type | null, c: SameTypeClosure): boolean {
+	if (a == b) return true;
+	if (a == null || b == null) return false;
+	const left = skipAliasWrapper(a);
+	const right = skipAliasWrapper(b);
+	if (left == right) return true;
+	if (c.recCheck < 3) {
+		c.recCheck += 1;
+	} else {
+		if (pairOnStack(c.left, c.right, left, right)) return true;
+		c.left.push(left);
+		c.right.push(right);
+	}
+	return sameTypeInner(left, right, c);
+}
+
+function sameTypeList(a: Type[], b: Type[], c: SameTypeClosure): boolean {
 	if (a == null && b == null) return true;
 	if (a == null || b == null) return false;
 	if (a.length != b.length) return false;
 	for (let i = 0; i < a.length; i += 1) {
-		if (!sameType(a[i], b[i])) return false;
+		if (!sameTypeAux(a[i], b[i], c)) return false;
 	}
 	return true;
 }
@@ -1432,42 +1452,42 @@ function sameNameList(a: string[], b: string[]): boolean {
 	return true;
 }
 
-function sameStructType(a: Type, b: Type): boolean {
-	if (isMaybeType(a) && isMaybeType(b)) return sameType(a.typeReturn, b.typeReturn);
-	if (a.typeName != "" || b.typeName != "") return sameNominal(a, b);
+function sameStructType(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
+	if (isMaybeType(a) && isMaybeType(b)) return sameTypeAux(a.typeReturn, b.typeReturn, c);
+	if (a.typeName != "" || b.typeName != "") return sameNominalAux(a, b, c);
 	if (a.typeFlags != b.typeFlags) return false;
 	if (!sameNameList(a.typeNames, b.typeNames)) return false;
-	return sameTypeList(a.typeChildren, b.typeChildren);
+	return sameTypeList(a.typeChildren, b.typeChildren, c);
 }
 
-function sameInnerType(a: Type, b: Type): boolean {
+function sameInnerType(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
 	if (a.typeReturn == null && b.typeReturn == null) return true;
 	if (a.typeReturn == null || b.typeReturn == null) return false;
-	return sameType(a.typeReturn, b.typeReturn);
+	return sameTypeAux(a.typeReturn, b.typeReturn, c);
 }
 
 function isDoubleKind(t: Type): boolean {
 	return t.kind == TypeKind.Number || t.kind == TypeKind.Float64;
 }
 
-function sameTypeInner(a: Type, b: Type): boolean {
+function sameTypeInner(a: Type, b: Type, c: SameTypeClosure): boolean {
 	if (a.kind != b.kind) return isDoubleKind(a) && isDoubleKind(b);
 	return match (a.kind) {
-		TypeKind.Struct => sameStructType(a, b),
-		TypeKind.Enum => sameNominal(a, b),
-		TypeKind.Distinct => sameDistinct(a, b),
+		TypeKind.Struct => sameStructType(a, b, c),
+		TypeKind.Enum => sameNominalAux(a, b, c),
+		TypeKind.Distinct => sameDistinct(a, b, c),
 		TypeKind.GenericParam | TypeKind.StringLiteral | TypeKind.BooleanLiteral | TypeKind.NumberLiteral
 			| TypeKind.TypeReference => a.typeName == b.typeName,
-		TypeKind.EnumLiteral => sameEnumMember(a, b),
-		TypeKind.GenericInstance => sameGenericBase(a, b) && sameTypeList(a.typeChildren, b.typeChildren),
+		TypeKind.EnumLiteral => sameEnumMember(a, b, c),
+		TypeKind.GenericInstance => sameGenericBase(a, b, c) && sameTypeList(a.typeChildren, b.typeChildren, c),
 		TypeKind.Union | TypeKind.Tuple | TypeKind.Varargs
-			| TypeKind.Conditional | TypeKind.IndexedAccess | TypeKind.KeyOf => sameTypeList(a.typeChildren, b.typeChildren),
-		TypeKind.Function => sameTypeList(a.typeChildren, b.typeChildren) && sameInnerType(a, b),
-		TypeKind.SizedArray => a.typeValue == b.typeValue && sameInnerType(a, b),
-		TypeKind.Set => sameInnerType(a, b),
+			| TypeKind.Conditional | TypeKind.IndexedAccess | TypeKind.KeyOf => sameTypeList(a.typeChildren, b.typeChildren, c),
+		TypeKind.Function => sameTypeList(a.typeChildren, b.typeChildren, c) && sameInnerType(a, b, c),
+		TypeKind.SizedArray => a.typeValue == b.typeValue && sameInnerType(a, b, c),
+		TypeKind.Set => sameInnerType(a, b, c),
 		TypeKind.Array | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr
 			| TypeKind.Borrow | TypeKind.Var | TypeKind.Sink
-			| TypeKind.Lent => sameInnerType(a, b),
+			| TypeKind.Lent => sameInnerType(a, b, c),
 		// Primitives and every remaining kind carry no payload — same kind is
 		// the whole answer.
 		_ => true,
