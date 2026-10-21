@@ -75,3 +75,4 @@ import "./scenarios/distinctCollectionKey";
 import "./scenarios/spreadLiteralFieldRefusals";
 import "./scenarios/restTupleArity";
 import "./scenarios/mappedTypeRefusals";
+import "./scenarios/literalLocalKeepsType";
