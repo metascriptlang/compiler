@@ -1,4 +1,5 @@
 // @exit: 1
+// @ledger-slack(msFuture) 1
 // @stdout: Error: unhandled exception: boom
 // @skip-js: node reports the uncaught error with its own stack trace on stderr, and parity compares merged stdout+stderr (sibling of 1020-moduleInitializerRaiseStops)
 // @skip-raiser: the raiser writes its uncaught-error report to a stderr its lane does not read, so its output cannot match C's merged stdout+stderr (sibling of 1020-moduleInitializerRaiseStops)
