@@ -1480,7 +1480,7 @@ export macro accounts(): Node {
 			let next = statement;
 			const converted: Node[] = [];
 			for (const child of statement.consequent.statements) { converted.push(constraintCode(child)); }
-			next.consequent = { ...statement.consequent, statements: converted };
+			next.consequent.statements = converted;
 			return next;
 		}
 		error("accounts<T>(): unexpected constraint statement", statement);
