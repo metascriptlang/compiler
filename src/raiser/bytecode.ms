@@ -196,8 +196,8 @@ export enum RaiserOpcode {
 	FutureCombine,    // ABC: R[A] = a future settled from the futures in array R[A+1] by RaiserCombine B; Any fails with R[A+2]; C arguments
 	Box,              // ABC: R[A] (a Dyn register) = a box holding R[B], or nil when R[B] is nil
 	Unbox,            // ABC: R[A] = the value in the box R[B]; a nil box reads as nil, fatal into a Word register
-	LoadSlot,         // ABC: LoadField where the static type of R[B] fixes the field's slot
-	StoreSlot,        // ABC: StoreField where the static type of R[A] fixes the field's slot
+	LoadSlot,         // ABC: LoadField; an object NewObject laid out holds the field at the instruction's slot
+	StoreSlot,        // ABC: StoreField; an object NewObject laid out holds the field at the instruction's slot
 	MoveW,            // ABC: words[A] = words[B]
 	MoveR,            // ABC: refs[A] = refs[B], counted
 	BeqR,             // ABC: if refs[A] == refs[B] skip C instructions
@@ -436,18 +436,19 @@ export interface RaiserInstruction {
 	b: number;
 	c: number;
 	line: number;       // Source line number for diagnostics (0 = unknown)
+	slot: number;       // LoadSlot/StoreSlot: the field's slot in the receiver type's layout, packed in the top byte
 }
 
 // --- Constructors ---
 
 export function raiserABC(op: RaiserOpcode, a: number, b: number, c: number): RaiserInstruction {
-	return { op, a, b, c, line: 0 };
+	return { op, a, b, c, line: 0, slot: 0 };
 }
 
 export function raiserABx(op: RaiserOpcode, a: number, bx: number): RaiserInstruction {
 	const bHigh: int32 = (bx as int32 / 256) | 0;
 	const bLow = bx - (bHigh as number) * 256;
-	return { op, a, b: bHigh as number, c: bLow, line: 0 };
+	return { op, a, b: bHigh as number, c: bLow, line: 0, slot: 0 };
 }
 
 export function raiserAx(op: RaiserOpcode, ax: number): RaiserInstruction {
@@ -459,7 +460,7 @@ export function raiserAx(op: RaiserOpcode, ax: number): RaiserInstruction {
 	const rem = raw - (aHigh as number) * 65536;
 	const bMid: int32 = (rem as int32 / 256) | 0;
 	const cLow = rem - (bMid as number) * 256;
-	return { op, a: aHigh as number, b: bMid as number, c: cLow, line: 0 };
+	return { op, a: aHigh as number, b: bMid as number, c: cLow, line: 0, slot: 0 };
 }
 
 // --- Decoders ---
@@ -515,8 +516,10 @@ export function branchOffset(field: number): int64 {
 	return (field as int64) - BRANCH_EXCESS;
 }
 
-// Packed word: opcode in bits 0-7, then a, b and c in 16 bits each; a branch's c takes the 24 bits from bit 40 up.
+// Packed word: opcode in bits 0-7, then a, b and c in 16 bits each; a branch's c takes the 24 bits from bit 40 up,
+// and a slot opcode's slot the top 8.
 const PACKED_FIELD_LIMIT = 65536;
+export const MAX_SLOT = 255;
 const PACKED_BRANCH_LIMIT = 16777216;
 
 function packedField(inst: RaiserInstruction, v: number, name: string, limit: int64, bits: int32): int64 {
@@ -551,7 +554,8 @@ export function packInstruction(inst: RaiserInstruction): int64 {
 	const op = inst.op as int64;
 	if (op < 0 || op > 255) throw new Error(`internal: opcode ${inst.op} does not fit the packed 8-bit field`);
 	const c = isBranchI64(inst.op) ? packedField(inst, inst.c, "c", PACKED_BRANCH_LIMIT, 24) : packedField(inst, inst.c, "c", PACKED_FIELD_LIMIT, 16);
-	return op | (packedField(inst, inst.a, "a", PACKED_FIELD_LIMIT, 16) << 8) | (packedField(inst, inst.b, "b", PACKED_FIELD_LIMIT, 16) << 24) | (c << 40);
+	const slot = inst.op == RaiserOpcode.LoadSlot || inst.op == RaiserOpcode.StoreSlot ? packedField(inst, inst.slot, "slot", MAX_SLOT + 1, 8) << 56 : 0;
+	return op | (packedField(inst, inst.a, "a", PACKED_FIELD_LIMIT, 16) << 8) | (packedField(inst, inst.b, "b", PACKED_FIELD_LIMIT, 16) << 24) | (c << 40) | slot;
 }
 
 // --- Tests ---

@@ -2445,8 +2445,8 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
 				const handle = refs[rb + ib];
-				const idx = func.fieldCache[pc];
-				if (idx >= 0 && handleTag(handle) == (RaiserHeapKind.Object as int64)) {
+				const idx = ((word >> 56) & 255) as int32;
+				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
 					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
 					const obj = vm.objectHeap.objects[handleIndex(handle)];
 					if (idx >= obj.classType.fields.length) { slow = true; break; }
@@ -2458,6 +2458,11 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 						words[wb + (ia >> 3)] = val.intVal;
 					} else if (cls == CLS_FLOAT && val.kind == RaiserValueKind.Float) {
 						words[wb + (ia >> 3)] = msFloat64Bits(val.floatVal);
+					} else if (cls == CLS_REF && (val.kind == RaiserValueKind.Nil || (val.kind >= RaiserValueKind.String && val.kind <= RaiserValueKind.Future))) {
+						const old = refs[rb + (ia >> 3)];
+						holdHandle(vm, val.intVal);
+						refs[rb + (ia >> 3)] = val.intVal;
+						releaseHandle(vm, old);
 					} else {
 						slow = true;
 					}
@@ -2471,8 +2476,8 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
 				const handle = refs[rb + ia];
-				const idx = func.fieldCache[pc];
-				if (idx >= 0 && handleTag(handle) == (RaiserHeapKind.Object as int64)) {
+				const idx = ((word >> 56) & 255) as int32;
+				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
 					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
 					const obj = vm.objectHeap.objects[handleIndex(handle)];
 					if (idx >= obj.classType.fields.length) { slow = true; break; }
@@ -2821,16 +2826,12 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			vmHandleStoreField(vm, func, pc, ia, ib, ic);
 		},
 		RaiserOpcode.LoadSlot => {
-			const slot = func.fieldCache[pc];
-			const laidOut = vmLaidOut(vm, ib);
+			when (mode != "danger") { vmCheckSlot(vm, func, pc, ib, ic); }
 			vmHandleLoadField(vm, func, pc, ia, ib, ic);
-			vmSettleSlot(vm, func, pc, slot, laidOut, ic);
 		},
 		RaiserOpcode.StoreSlot => {
-			const slot = func.fieldCache[pc];
-			const laidOut = vmLaidOut(vm, ia);
+			when (mode != "danger") { vmCheckSlot(vm, func, pc, ia, ib); }
 			vmHandleStoreField(vm, func, pc, ia, ib, ic);
-			vmSettleSlot(vm, func, pc, slot, laidOut, ib);
 		},
 		RaiserOpcode.ConcatStr => {
 			vmHandleConcatStr(vm, ia, ib, ic);
@@ -3390,22 +3391,16 @@ function vmHandleStoreField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: i
 	func.fieldCache[pc] = (fields.length - 1) as int32;
 }
 
-// A slot opcode trusts every object NewObject laid out at its site to share one
-// layout; the danger build reads the cached slot without comparing the name. An
-// object the host built keeps its own field order, so it is read by name and
-// leaves the site's slot alone.
-function vmLaidOut(vm: RaiserVM, reg: int32): boolean {
-	const held = getDyn(vm, reg);
-	return held.kind == RaiserValueKind.Object && handleIndex(held.intVal) < vm.objectHeap.objects.length
-		&& vm.objectHeap.objects[handleIndex(held.intVal)].classType.fields.length > 0;
-}
-
-function vmSettleSlot(vm: RaiserVM, func: RaiserFunction, pc: int32, slot: int32, laidOut: boolean, name: int32): void {
-	if (vm.halted) return;
-	if (!laidOut) {
-		func.fieldCache[pc] = slot;
-	} else if (slot >= 0 && func.fieldCache[pc] != slot) {
-		vmError(vm, `internal: ${func.name} holds '${func.names[name]}' at slot ${slot} for one object and ${func.fieldCache[pc]} for another, so its static type does not fix the layout`);
+// A slot opcode reads an object NewObject laid out at the slot its receiver's type
+// gives the field, and the danger build does so without comparing the name. An object
+// the host built keeps its own field order and is read by name.
+function vmCheckSlot(vm: RaiserVM, func: RaiserFunction, pc: int32, objReg: int32, name: int32): void {
+	const held = getDyn(vm, objReg);
+	if (held.kind != RaiserValueKind.Object || handleIndex(held.intVal) >= vm.objectHeap.objects.length) return;
+	const obj = vm.objectHeap.objects[handleIndex(held.intVal)];
+	const slot = ((func.packed[pc] >> 56) & 255) as int32;
+	if (slot < obj.classType.fields.length && obj.fields[slot].name != func.names[name]) {
+		vmError(vm, `internal: ${func.name} reads '${func.names[name]}' at slot ${slot} of a ${obj.classType.name != "" ? obj.classType.name : "typed object"} that holds '${obj.fields[slot].name}' there, so the receiver's type does not fix its layout`);
 	}
 }
 

@@ -540,6 +540,12 @@ export function layoutOperand(s: RaiserCompState, fields: string[]): int32 {
 	return s.classTypes.length;
 }
 
+export function slotInst(op: RaiserOpcode, a: number, b: number, c: number, slot: number): RaiserInstruction {
+	const inst = raiserABC(op, a, b, c);
+	inst.slot = slot;
+	return inst;
+}
+
 // Emit a closure pair object { fn: funcIdx, env: envReg | nil } into destReg.
 // A negative envReg means non-capturing (a nil env), otherwise envReg is the register holding the env.
 
