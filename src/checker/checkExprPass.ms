@@ -2389,6 +2389,16 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 				return;
 			}
 		}
+	} else if (srcType != null && !reportedErrorSince(ctx, operandMark)) {
+		const layer = baseLayerInUnion(srcType, targetType);
+		if (layer != null) {
+			const base = createNodeAt(NodeKind.TypeAssertion, { asExpr: d.asExpr, asType: typeDisplayName(layer) } as TypeAssertionData, d.asExpr.location);
+			base.nodeType = layer;
+			base.flags = base.flags.incl(NodeFlag.Sem);
+			node.data = { asExpr: base, asType: d.asType };
+			d = node.data as TypeAssertionData;
+			srcType = layer;
+		}
 	}
 	if (srcType != null && !isUnresolvedType(srcType) && !isUnresolvedType(targetType)
 		&& !hasGenericParams(srcType) && !hasGenericParams(targetType) && !reportedErrorSince(ctx, operandMark)) {
@@ -4185,6 +4195,32 @@ function disjointCastReason(src: Type, target: Type): string {
 	if (plainKind(fromValue) == PlainKind.List) return "an array is not a " + typeDisplayName(toValue) + "; read an element or its length";
 	if (plainKind(toValue) == PlainKind.List) return "only an array converts to an array; build one ([x])";
 	return "neither type overlaps the other";
+}
+
+// A distinct meets a union as its base does unless the union names one of its layers, so the
+// union receives the base value exactly as the plain cast of the base would.
+function baseLayerInUnion(src: Type, target: Type): Type | null {
+	if (target.kind != TypeKind.Union && !isMaybeType(target)) return null;
+	let cur = skipModifier(src) ?? src;
+	let body = distinctBody(cur);
+	if (body == null || unionNamesLayer(target, cur)) return null;
+	let depth = 0;
+	while (body != null && depth < PEEL_MAX_DEPTH) {
+		cur = skipModifier(body) ?? body;
+		body = distinctBody(cur);
+		if (body != null && unionNamesLayer(target, cur)) return cur;
+		depth += 1;
+	}
+	return cur;
+}
+
+function unionNamesLayer(target: Type, layer: Type): boolean {
+	const members = isMaybeType(target) && target.typeReturn != null ? [target.typeReturn] : target.typeChildren;
+	if (members == null) return false;
+	for (const member of members) {
+		if (sameType(member, layer)) return true;
+	}
+	return false;
 }
 
 function peelDistinct(t: Type | null): Type | null {
