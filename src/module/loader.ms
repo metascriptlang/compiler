@@ -172,13 +172,14 @@ function mayImportHeader(source: string): boolean {
 }
 
 function importsHeaderIn(source: string, quote: string): boolean {
-	let at = source.indexOf(`.h${quote}`);
+	const needle = `.h${quote}`;
+	let at = source.byteIndexOf(needle);
 	while (at >= 0) {
-		const open = source.lastIndexOf(quote, at);
+		const open = source.byteLastIndexOf(quote, at);
 		let k = open - 1;
-		while (k >= 0 && (source.charAt(k) == " " || source.charAt(k) == "\t" || source.charAt(k) == "\n" || source.charAt(k) == "\r")) k -= 1;
-		if (open >= 0 && k >= 3 && source.substring(k - 3, k + 1) == "from") return true;
-		at = source.indexOf(`.h${quote}`, at + 3);
+		while (k >= 0 && (source.byteAt(k) == " ".code || source.byteAt(k) == "\t".code || source.byteAt(k) == "\n".code || source.byteAt(k) == "\r".code)) k -= 1;
+		if (open >= 0 && k >= 3 && source.byteSlice(k - 3, k + 1) == "from") return true;
+		at = source.byteIndexOf(needle, at + 3);
 	}
 	return false;
 }
@@ -402,7 +403,7 @@ function inlineHeaderImportsInner(source: string, modulePath: string, provider: 
 
 function importStatementStarts(source: string): int32[] {
 	const starts: int32[] = [];
-	if (source.indexOf(".h\"", 0) < 0 && source.indexOf(".h'", 0) < 0) return starts;
+	if (source.byteIndexOf(".h\"") < 0 && source.byteIndexOf(".h'") < 0) return starts;
 	const lexed = lex(source);
 	if (!lexed.ok) return starts;
 	const lines = source.split("\n");
