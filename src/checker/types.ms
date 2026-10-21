@@ -1718,7 +1718,7 @@ export function isSharedGraphType(t: Type | null): boolean {
 	}
 	if (base.kind == TypeKind.Ref && base.typeReturn != null) base = base.typeReturn;
 	if (base.kind == TypeKind.Array) return isSharedGraphType(base.typeReturn);
-	return base.sym != null && (base.sym.name == "Type" || base.sym.name == "Symbol");
+	return isMetaGraphRoot(base, "Type") || isMetaGraphRoot(base, "Symbol");
 }
 
 export function isNodeGraphType(t: Type | null): boolean {
@@ -1732,7 +1732,11 @@ export function isNodeGraphType(t: Type | null): boolean {
 	}
 	if (base.kind == TypeKind.Array) return isNodeGraphType(base.typeReturn);
 	if (base.kind == TypeKind.Ref && base.typeReturn != null) base = base.typeReturn;
-	return base.sym != null && base.sym.name == "Node";
+	return isMetaGraphRoot(base, "Node");
+}
+
+function isMetaGraphRoot(t: Type, name: string): boolean {
+	return t.sym != null && t.sym.name == name && t.sym.modulePath.endsWith("std/meta/node.ms");
 }
 
 export function propagateReadonlyView(t: Type | null): Type {

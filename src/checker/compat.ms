@@ -2852,14 +2852,20 @@ test "a read-only view reaches a union only through a matching read-only member"
 test "readonly propagation stops at the shared type graph" {
 	const graph = createRef(createStruct("Type", [], [], false));
 	graph.typeReturn.sym = makeSymbol("Type", SymbolKind.Class, null, false);
+	graph.typeReturn.sym!.modulePath = "std/meta/node.ms";
 	const user = createRef(createStruct("Cart", [], [], false));
 	user.typeReturn.sym = makeSymbol("Cart", SymbolKind.Class, null, false);
+	const namesake = createRef(createStruct("Type", [], [], false));
+	namesake.typeReturn.sym = makeSymbol("Type", SymbolKind.Class, null, false);
+	namesake.typeReturn.sym!.modulePath = "app/model.ms";
 	const nullGraph = createUnion([graph, nullType()]);
 	const arrGraph = createArray(graph);
 	assert isSharedGraphType(graph);
 	assert isSharedGraphType(nullGraph);
 	assert isSharedGraphType(arrGraph);
 	assert !isSharedGraphType(user);
+	assert !isSharedGraphType(namesake);
+	assert isReadonlyView(propagateReadonlyView(namesake));
 	assert propagateReadonlyView(graph) == graph;
 	assert isReadonlyView(propagateReadonlyView(user));
 	assert isReadonlyView(createReadonlyView(graph));

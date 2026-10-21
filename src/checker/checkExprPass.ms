@@ -4703,8 +4703,10 @@ function refuseHiddenFieldInLiteral(ctx: CheckerContext, ownerSym: Symbol | null
 test "a write target crossing a graph back-edge is rejected" {
 	const graphT = createRef(createStruct("Symbol", [], [], false));
 	graphT.typeReturn.sym = makeSymbol("Symbol", SymbolKind.Class, null, false);
+	graphT.typeReturn.sym!.modulePath = "std/meta/node.ms";
 	const nodeT = createRef(createStruct("Node", [], [], false));
 	nodeT.typeReturn.sym = makeSymbol("Node", SymbolKind.Class, null, false);
+	nodeT.typeReturn.sym!.modulePath = "std/meta/node.ms";
 	assert isSharedGraphType(graphT);
 	assert isNodeGraphType(nodeT);
 	const tok = createToken(TokenKind.Ident, "", 1);
