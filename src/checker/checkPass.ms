@@ -4850,7 +4850,7 @@ test "an alias that recurses through an object, interface, class or named union 
 
 // ===== Tier 3: Generic Type Aliases =====
 
-test "declared struct answers generic queries from its members" {
+test "declared struct answers generic queries from its type parameters and members" {
 	const ctx = checkSource("class Box<T> { value: T; constructor(v: T) { this.value = v; } } interface Holder<U> { item: U; } class Plain { n: number = 0; next: Plain | null = null; } class Tagged<T> { id: number = 0; } type Pair<V> = { a: V, b: Plain }; function usePlain(p: Plain, h: Holder<number>): void {} function useBox<W>(b: Box<W>): void {}");
 	assert !hasErrors(ctx);
 	assert hasGenericParams(lookupSymbol(ctx.table, "Box").symbolType);
@@ -4859,7 +4859,7 @@ test "declared struct answers generic queries from its members" {
 	assert hasGenericParams(lookupSymbol(ctx.table, "Pair").symbolType);
 	assert hasGenericParams(lookupSymbol(ctx.table, "useBox").symbolType);
 	assert !hasGenericParams(lookupSymbol(ctx.table, "Plain").symbolType);
-	assert !hasGenericParams(lookupSymbol(ctx.table, "Tagged").symbolType);
+	assert hasGenericParams(lookupSymbol(ctx.table, "Tagged").symbolType);
 	assert !hasGenericParams(lookupSymbol(ctx.table, "usePlain").symbolType);
 }
 

@@ -1795,6 +1795,10 @@ export function defineTypeParams(ctx: CheckerContext, sym: Symbol, params: strin
 	sym.typeParams = declared;
 }
 
+function markTemplateType(owner: Type): void {
+	owner.typeFlags = owner.typeFlags.incl(TypeFlag.HasGenericParam);
+}
+
 function declaredMethodSym(ctx: CheckerContext, member: Node, written: Node): Symbol {
 	const sym = member.resolvedSym != null ? member.resolvedSym : written.resolvedSym;
 	if (sym == null) throw new Error(`internal: method at ${member.location.line}:${member.location.column} has no declaration symbol for its type parameters`);
@@ -2424,6 +2428,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	target.optionalFields = optionalFields.length > 0 ? optionalFields : null;
 	if (sym.symbolType.kind == TypeKind.Struct && parentTypes.length == 1 && isValueStructDecl(parentTypes[0])) target.typeExtra = parentTypes[0];
 	for (const pt of mergedTypes) { propagateToOwner(target, pt); }
+	if (hasGenerics) markTemplateType(target);
 	if (sym.symbolType.kind == TypeKind.Struct && declaresLifecycleHook(ctx, sym)) target.typeFlags = target.typeFlags.incl(TypeFlag.HasAsgn);
 	node.nodeType = sym.symbolType;
 	if (sym.symbolType.kind == TypeKind.Struct) refuseValueRecursion(ctx, node, target, d);
@@ -3046,6 +3051,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	}
 	// Propagate HasAsgn from any managed field (parent + own after merge)
 	for (const pt of mergedTypes) { propagateToOwner(inner, pt); }
+	if (hasGenerics) markTemplateType(inner);
 	node.nodeType = sym.symbolType;
 }
 
@@ -3153,6 +3159,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 	inner.typeChildren = memberTypes;
 	inner.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct);
 	for (const pt of memberTypes) { propagateToOwner(inner, pt); }
+	if (hasGenerics) markTemplateType(inner);
 	node.nodeType = sym.symbolType;
 }
 
