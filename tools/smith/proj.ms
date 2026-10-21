@@ -594,7 +594,6 @@ class Splitter {
 		for (const u of this.units) {
 			if (u.kind != "class" && u.kind != "interface") { continue; }
 			const line = u.text.split("\n")[0];
-			if (u.kind == "class" && line.contains(u.name + "<")) { this.fixed.add(u.name); }
 			for (const word of [" extends ", " implements "]) {
 				const at = line.indexOf(word);
 				if (at >= 0) { this.fixed.add(identAfter(line, at + word.length)); }
@@ -1730,9 +1729,10 @@ test "a function with a default parameter is never called through a namespace im
 	assert defaults > 0;
 }
 
-test "a generic class is never renamed on import, because an aliased generic class cannot be instantiated" {
+test "the alias shape renames a generic class on import too" {
 	let generics = 0;
 	let aliased = 0;
+	let genericAliased = 0;
 	for (const vector of ["fams=gcls", "fams=generic", "fams=gcls,generic,cls"]) {
 		for (let seed = 1; seed <= 20; seed++) {
 			const files = projectOf(seed as uint64, vector + " modules=4 modshapes=alias");
@@ -1751,11 +1751,11 @@ test "a generic class is never renamed on import, because an aliased generic cla
 					if (!line.startsWith("import {")) { continue; }
 					for (const name of importedNames(line)) {
 						if (name.contains(" as ")) { aliased++; }
-						for (const g of names) { assert !name.startsWith(g + " as "); }
+						for (const g of names) { if (name.startsWith(g + " as ")) { genericAliased++; } }
 					}
 				}
 			}
 		}
 	}
-	assert generics > 10 && aliased > 10;
+	assert generics > 10 && aliased > 10 && genericAliased > 0;
 }
