@@ -3,8 +3,10 @@
 // descriptors it held before. Covers a child still running and one that exited unreaped.
 //
 // GUARD-BALANCE ChildProcess
-// RED when onDestroy skips the kill/reap (pid still listed) or a pipe leaks (fd count grows).
+// RED when onDestroy skips the kill/reap (pid still listed) or a pipe leaks (descriptor count on POSIX, handle count on Windows, grows).
 // RED on a compiler without `spawn` in std/process.
+
+@include("runtime/process.h");
 
 import { spawn, exit } from "std/process";
 import { host, listed, onWindows } from "./fixtures/childHost";
@@ -17,8 +19,10 @@ function report(msg: string): void {
 	failed = failed + 1;
 }
 
+extern function msProcessHandleCount(): int32;
+
 function openFds(): int32 {
-	return onWindows ? 0 : readDir("/dev/fd").length as int32;
+	return onWindows ? msProcessHandleCount() : readDir("/dev/fd").length as int32;
 }
 
 function startAndDrop(program: string, args: string[]): int32 {
@@ -41,8 +45,7 @@ function exitedAndDropped(): int32 {
 	return child.pid;
 }
 
-const before = openFds();
-for (let round = 0; round < 5; round++) {
+function oneRound(): void {
 	const running = startAndDrop(host("sleep"), ["1000"]);
 	if (running != 0 && listed(`${running}`) != "") {
 		report(`running child ${running} survived its handle: '${listed(`${running}`)}'`);
@@ -52,6 +55,10 @@ for (let round = 0; round < 5; round++) {
 		report(`exited child ${zombie} left unreaped: '${listed(`${zombie}`)}'`);
 	}
 }
+
+oneRound();
+const before = openFds();
+for (let round = 0; round < 5; round++) oneRound();
 const after = openFds();
 if (after != before) report(`open descriptors ${before} before, ${after} after`);
 

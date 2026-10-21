@@ -1970,6 +1970,18 @@ static inline msString msProcessPlatform(void) {
 }
 
 /**
+ * Handles this process holds open on Windows, or -1 when the system cannot say; 0 elsewhere.
+ */
+static inline int32_t msProcessHandleCount(void) {
+#if defined(_WIN32)
+	DWORD n = 0;
+	return GetProcessHandleCount(GetCurrentProcess(), &n) ? (int32_t)n : -1;
+#else
+	return 0;
+#endif
+}
+
+/**
  * Return the CPU this program was compiled for, spelled as `--cpu` spells it:
  * "amd64", "arm64", "i386", "arm", "wasm32", "riscv64", or "other".
  * Resolved at compile time via CPU macros — no syscall cost.
