@@ -71,6 +71,22 @@ export function lookupModuleProgram(modulePath: string): Node | null {
 	return _moduleProgramMap.get(modulePath);
 }
 
+export interface ModuleCtxRegistry {
+	ctxs: HashMap<string, CheckerContext>;
+	programs: HashMap<string, Node>;
+}
+
+export function createModuleCtxRegistry(): ModuleCtxRegistry {
+	return { ctxs: new HashMap<string, CheckerContext>(), programs: new HashMap<string, Node>() };
+}
+
+export function swapModuleCtxRegistry(next: ModuleCtxRegistry): ModuleCtxRegistry {
+	const prev: ModuleCtxRegistry = { ctxs: _moduleCtxMap, programs: _moduleProgramMap };
+	_moduleCtxMap = next.ctxs;
+	_moduleProgramMap = next.programs;
+	return prev;
+}
+
 // Pick the right ctx for re-checking a body defined in `definingModulePath`:
 //   1. Self-module (caller is also the defining module) — use ctx directly. The
 //      module is currently being checked, so its scope is live but not yet in

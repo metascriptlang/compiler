@@ -852,6 +852,67 @@ function twoProjectsKeepTheirConfig(): LspScenario {
 	};
 }
 
+function globalImportMacroExpands(): LspScenario {
+	const uri = PROJECT_URI + "twice.ms";
+	const mac = "import { Node } from \"std/meta\";\nexport macro twice(n: Node): Node {\n\treturn quote { (${n} * 2) };\n}\n";
+	return {
+		name: "a macro from a build.ms global import expands in the editor",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, "const n: int32 = twice(3);\nconsole.log(n);\n"))]),
+		],
+		check: (r: LspReplay) => sameText("twice.ms publish 0", "[]", publishedAt(r, uri, 0)),
+		checkAnyBatching: null,
+		checkpoints: { afterDrains: [1], probes: [{ uri, line: 0, character: 18 }] },
+		project: [
+			{ path: "build.ms", text: "const config = { globalImports: [\"./mac\"] };\nexport default config;\n" },
+			{ path: "mac.ms", text: mac },
+		],
+	};
+}
+
+function sharedDepResolvesPerProject(): LspScenario {
+	const aPlain = PROJECT_URI + "a/plain.ms";
+	const aGeneric = PROJECT_URI + "a/generic.ms";
+	const bPlain = PROJECT_URI + "b/plain.ms";
+	const bGeneric = PROJECT_URI + "b/generic.ms";
+	const plain = "import { v } from \"lib/lib\";\nconst n: int32 = v;\nconsole.log(n);\n";
+	const generic = "import { pick } from \"lib/lib\";\nconst n: int32 = pick<int32>(3);\nconsole.log(n);\n";
+	const build = "const config = { deps: { \"lib\": \"file:../shared\", \"cfg\": \"file:./cfg\" } };\nexport default config;\n";
+	const lib = "import { confValue } from \"cfg/conf\";\nexport const v = confValue();\nexport function pick<T>(x: T): int32 {\n\treturn confValue();\n}\n";
+	return {
+		name: "a dependency shared by two projects resolves through each project's own deps",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(aPlain, plain)), notification("textDocument/didOpen", openParams(aGeneric, generic))]),
+			frames([notification("textDocument/didOpen", openParams(bPlain, plain)), notification("textDocument/didOpen", openParams(bGeneric, generic))]),
+			frames([
+				notification("textDocument/didChange", changeParams(aPlain, 2, plain + "// edited\n")),
+				notification("textDocument/didChange", changeParams(aGeneric, 2, generic + "// edited\n")),
+			]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("a/plain.ms publish 0", "[]", publishedAt(r, aPlain, 0)),
+			sameText("a/generic.ms publish 0", "[]", publishedAt(r, aGeneric, 0)),
+			publishedAt(r, bPlain, 0) == "[]" ? "b/plain.ms publish 0: expected b's string confValue to refuse int32, got []" : "",
+			publishedAt(r, bGeneric, 0) == "[]" ? "b/generic.ms publish 0: expected b's string confValue to refuse int32, got []" : "",
+			sameText("a/plain.ms last publish", "[]", lastPublished(r, aPlain)),
+			sameText("a/generic.ms last publish", "[]", lastPublished(r, aGeneric)),
+		]),
+		checkAnyBatching: null,
+		checkpoints: { afterDrains: [2, 3], probes: [{ uri: bPlain, line: 1, character: 17 }] },
+		project: [
+			{ path: "shared/lib.ms", text: lib },
+			{ path: "a/build.ms", text: build },
+			{ path: "a/cfg/conf.ms", text: "export function confValue(): int32 { return 1; }\n" },
+			{ path: "b/build.ms", text: build },
+			{ path: "b/cfg/conf.ms", text: "export function confValue(): string { return \"b\"; }\n" },
+		],
+	};
+}
+
 export function scenarioSlug(name: string): string {
 	let out = "";
 	for (let i = 0; i < name.byteLength; i++) {
@@ -886,6 +947,8 @@ export function lspScenarios(): LspScenario[] {
 		unusedImportWarnsInEditorAndBatch(),
 		buildConfigReachesEditor(),
 		twoProjectsKeepTheirConfig(),
+		sharedDepResolvesPerProject(),
+		globalImportMacroExpands(),
 	];
 }
 

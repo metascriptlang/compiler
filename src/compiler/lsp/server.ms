@@ -12,6 +12,7 @@ import {
 } from "./protocol";
 import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath, dbSetResolverConfig } from "../transam/index";
 import { findProjectRoot } from "../../utils/path";
+import { ModuleCtxRegistry, createModuleCtxRegistry, swapModuleCtxRegistry } from "../../checker/instantiate";
 import { ensureDir, mkdir, realpath, writeFile } from "std/fs";
 import { normalize } from "std/fs/path";
 import { registrySrcPath } from "../package/cache";
@@ -55,6 +56,7 @@ export class LspServerState {
 	db: TransAmDb;
 	root: string;
 	dbs: Map<string, TransAmDb>;
+	registries: Map<string, ModuleCtxRegistry>;
 	completionCache: CompletionCache;
 }
 
@@ -66,6 +68,7 @@ export function createServerState(): LspServerState {
 		db: createTransAmDb(512),
 		root: "",
 		dbs: new Map<string, TransAmDb>(),
+		registries: new Map<string, ModuleCtxRegistry>(),
 		completionCache: createCompletionCache(),
 	};
 }
@@ -79,6 +82,8 @@ function selectProject(state: LspServerState, root: string): string {
 	opts.command = "lsp";
 	const applied = applyProjectConfig(opts, root);
 	if (!applied.ok) lspLog("build.ms: " + applied.error);
+	const next = state.registries.get(root);
+	state.registries.set(state.root, swapModuleCtxRegistry(next != null ? next : createModuleCtxRegistry()));
 	let db = state.dbs.get(root);
 	if (db == null) {
 		db = createTransAmDb(512);
@@ -692,6 +697,14 @@ test "replay: build.ms config reaches the editor as it reaches batch checking" {
 
 test "replay: two projects in one session each keep their own build.ms" {
 	assert runMemoryScenario("two projects in one session each keep their own build.ms") == "";
+}
+
+test "replay: a macro from a build.ms global import expands in the editor" {
+	assert runMemoryScenario("a macro from a build.ms global import expands in the editor") == "";
+}
+
+test "replay: a dependency shared by two projects resolves through each project's own deps" {
+	assert runMemoryScenario("a dependency shared by two projects resolves through each project's own deps") == "";
 }
 
 // ===== Exports a top-level macro statement splices =====
