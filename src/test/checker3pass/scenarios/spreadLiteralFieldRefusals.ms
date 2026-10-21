@@ -97,3 +97,22 @@ const opt: DstOpt = { ...s };
 `).errors;
 	assert errors.length == 0, "every required field is given: " + errors.join("\n");
 }
+
+test "a spread of a generic instance is judged by its instantiated fields" {
+	const errors = checkOnly(`
+interface G<T> { a: T | null; n: int32; }
+class Box<T> { a: T | null = null; n: int32 = 1; }
+interface H { a: string; n: int32; }
+interface W { a: string | null; n: int32; }
+const g: G<string> = { a: null, n: 1 };
+const fromInterface: H = { ...g };
+const fromClass: H = { ...new Box<string>() };
+const fits: W = { ...g };
+const free = { ...g };
+const read: int32 = free.n;
+`).errors;
+	const text = errors.join("\n");
+	assert text.split("field 'a' from the spread does not fit the literal's 'a': Type 'string | null' is not assignable to type 'string'").length == 3, "a nullable field of G<string> and Box<string> into a string field: " + text;
+	assert !text.contains("Property 'n' does not exist"), "a free literal takes the instance's fields: " + text;
+	assert errors.length == 2, "only the two refusals: " + text;
+}
