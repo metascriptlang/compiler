@@ -8,6 +8,7 @@ import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
 import { SymbolFlag, hasFlag, parentClassSymOf } from "./symbol";
 import { functionSlotOf, isAtomicRef, isSendableFunction, typeCarriesRef } from "./types";
 import { constBindingInitializer } from "./constFold";
+import { DYNAMIC_IMPORT } from "./importCall";
 
 export enum Effect {
 	SideEffect,
@@ -278,6 +279,9 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 	const callee = (call.data as CallExprData).callee;
 	if (isSuperCall(callee)) return null;
 	if (e == Effect.Suspends && isSpawnCall(call)) return cause(call, "spawns");
+	if (callee != null && callee.resolvedSym != null && callee.resolvedSym.builtinKind == DYNAMIC_IMPORT) {
+		return e == Effect.SideEffect ? cause(call, "imports '" + callee.resolvedSym.modulePath + "'") : null;
+	}
 	const sym = call.resolvedSym;
 	if (!isRoutine(sym)) {
 		if (isOwnParam(callee)) return null;
