@@ -18,7 +18,7 @@ import { int64Bits } from "../utils/stdBackport";
 import { viewRefusal } from "./assignable";
 import { checkSendableSource } from "./sendable";
 import { forEachChild } from "../ast/visitor";
-import { isFrameValue } from "./symbol";
+import { hasFlag, isFrameValue } from "./symbol";
 
 // ===== Operator Inference =====
 
@@ -1071,6 +1071,7 @@ function livesThroughCall(ctx: CheckerContext, expr: Node): boolean {
 function unchangedDuringCall(ctx: CheckerContext, sym: Symbol | null): boolean {
 	if (sym == null) return false;
 	if (!isFrameValue(sym)) return true;
+	if (sym.symbolKind != SymbolKind.Parameter && !hasFlag(sym, SymbolFlag.Mutable)) return true;
 	const body = ctx.currentFunction != null ? ctx.currentFunction.declNode : null;
 	if (body == null || assignsName(body, sym.name)) return false;
 	return sym.symbolKind == SymbolKind.Parameter || contains(body, sym.declNode);

@@ -65,4 +65,7 @@ if (strlen(made(5)) != 6) { throw "GUARD RED: call result argument"; }
 if (renameThenMeasure(box.name) != 8) { throw "GUARD RED: field into author code"; }
 if (resetThenMeasure(current) != 7) { throw "GUARD RED: module variable into author code"; }
 if (strlen(names[0]) != 7) { throw "GUARD RED: element into an extern function"; }
+for (const name of [`top-${3}`, "level"]) {
+	if (strlen(name) != 5) { throw "GUARD RED: top-level loop const argument"; }
+}
 console.log("GUARD-OK");
