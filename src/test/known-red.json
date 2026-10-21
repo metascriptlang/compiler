@@ -27,8 +27,5 @@
   },
   "solana": {},
   "suite": {},
-  "tests": {
-    "src/test/handoff/classGeneric.ms > E2E C: generic class instantiation compiles": {"since":"32c76f96","note":"handoff tier compiles since 445248f6 (bug222 pins) and never ran before; red on main 39c2553d, recorded 2026-09-27; triage owed by nim-audit after the nim-integ land"},
-    "src/test/handoff/classGeneric.ms > E2E C: two-param generic compiles": {"since":"32c76f96","note":"handoff tier compiles since 445248f6 (bug222 pins) and never ran before; red on main 39c2553d, recorded 2026-09-27; triage owed by nim-audit after the nim-integ land"}
-  }
+  "tests": {}
 }
