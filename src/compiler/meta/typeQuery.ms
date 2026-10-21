@@ -13,6 +13,9 @@ import { definedValue } from "../defines";
 import { getParserDefines } from "../../parser/context";
 import { checkFunctionOnDemand } from "../../checker/checkPass";
 import { readFile } from "std/fs";
+import { resolve } from "std/fs/path";
+import { cwd } from "std/process";
+import { registerCompileTimeRead } from "../cache";
 
 export function stillDecoratedMessage(name: string): string {
 	return `'${name}' is still being decorated - its type is not available until its decorators finish`;
@@ -249,6 +252,7 @@ function hostDefine(args: RaiserValue[]): RaiserValue {
 function hostReadFile(args: RaiserValue[]): RaiserValue {
 	const path = unboxString(args[0]);
 	const read = readFile(path);
+	registerCompileTimeRead(resolve(path, cwd()));
 	if (!read.ok) {
 		raiseFromHost("cannot read file '" + path + "'", false);
 		return boxString("");
