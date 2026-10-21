@@ -2187,7 +2187,19 @@ fit, because a callback taking `Error` and one taking `string | Error` are calle
 `reject(42)` is refused as an argument mismatch (`got int32, expected Error | string`), not with
 throw's wording, because `reject` is an ordinary callback parameter.
 
-The executor runs **synchronously**. Only the first call to `resolve` or `reject` takes effect — subsequent calls are ignored (settled flag). The constructor is lowered to `msPromiseNew(executor)` by the compiler.
+An unannotated `(resolve, reject) =>` takes its types from the constructor, and `T` comes from
+`<T>` or from the type the expression is assigned or returned to: `const p: Promise<string> = new
+Promise((resolve, reject) => …)` and `return new Promise((resolve) => resolve(7))` in a function
+returning `Promise<int32>` both check. For `Promise<void>`, call `resolve()`.
+
+The executor runs **synchronously**, and a `throw` inside it rejects the promise. Only the first
+call to `resolve` or `reject` takes effect; later calls are ignored (settled flag). The constructor
+is lowered to `msPromiseNew(executor)` by the compiler.
+
+Measured 2026-10-21 with msc afcd22f19 on C, JS and the Raiser: `reject("failed")` and
+`reject(new Error("boom"))` are caught with those messages, a `throw` in the executor is caught,
+`resolve()` settles a `Promise<void>`, `resolve(1); resolve(2); reject("late")` awaits `1`, and
+both contextual-`T` forms above print their values.
 
 #### Promise.withResolvers (ES2024)
 
