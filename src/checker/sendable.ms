@@ -209,25 +209,12 @@ function walkForMutableCaptures(node: Node | null, params: string[], reported: s
 			const nested = routineParamsAndBody(node);
 			walkForMutableCaptures(nested.body, params.concat(nested.params), reported, ctx, by);
 		},
-		NodeKind.Identifier => {
-			const d = node.data as IdentifierData;
-			let skip = false;
-			for (const p of params) { if (p == d.name) skip = true; }
-			for (const r of reported) { if (r == d.name) skip = true; }
-			if (!skip) {
-				// The lookup is by NAME against the scope of the spawn call site —
-				// the thunk's own scopes are already popped by the time this runs.
-				// A local declared inside the thunk that shadows an outer mutable
-				// would resolve to the outer symbol here, so require the identifier
-				// to actually point at it (resolvedSym is set by the body check that
-				// ran just before; fall back to the name match when it is absent).
-				const sym = lookupSymbol(ctx.table, d.name);
-				const shadowed = node.resolvedSym != null && node.resolvedSym != sym;
-				if (!shadowed && sym != null && hasFlag(sym, SymbolFlag.Mutable)) {
-					addError(ctx, "mutable variable '" + d.name + "' cannot be captured by " + by + " — use const or move", node.location.line, node.location.column);
-					reported.push(d.name);
-				}
-			}
+		NodeKind.Identifier => { reportMutableCapture(node, false, params, reported, ctx, by); },
+		NodeKind.BinaryExpr | NodeKind.UpdateExpr => {
+			const target = node.kind == NodeKind.UpdateExpr ? (node.data as UpdateExprData).updateArg
+				: writesItsLeft((node.data as BinaryExprData).operator) ? (node.data as BinaryExprData).left : null;
+			if (target != null) reportMutableCapture(target, true, params, reported, ctx, by);
+			forEachChild(node, (child: Node): void => { walkForMutableCaptures(child, params, reported, ctx, by); });
 		},
 		// Binding positions: the identifiers under a pattern DECLARE names, they
 		// do not read the enclosing scope. Walking them would look the name up
@@ -240,6 +227,37 @@ function walkForMutableCaptures(node: Node | null, params: string[], reported: s
 		},
 		_ => { forEachChild(node, (child: Node): void => { walkForMutableCaptures(child, params, reported, ctx, by); }); },
 	};
+}
+
+// A parameter carries no Mutable flag, yet a thunk that assigns it rebinds the
+// parent's slot, so a written parameter is a mutable capture like a `let`.
+function reportMutableCapture(
+	node: Node,
+	written: boolean,
+	params: string[],
+	reported: string[],
+	ctx: CheckerContext,
+	by: string,
+): void {
+	if (node.kind != NodeKind.Identifier) return;
+	const d = node.data as IdentifierData;
+	for (const p of params) { if (p == d.name) return; }
+	for (const r of reported) { if (r == d.name) return; }
+	// The lookup is by NAME against the scope of the spawn call site —
+	// the thunk's own scopes are already popped by the time this runs.
+	// A local declared inside the thunk that shadows an outer mutable
+	// would resolve to the outer symbol here, so require the identifier
+	// to actually point at it (resolvedSym is set by the body check that
+	// ran just before; fall back to the name match when it is absent).
+	const sym = lookupSymbol(ctx.table, d.name);
+	if (sym == null || (node.resolvedSym != null && node.resolvedSym != sym)) return;
+	if (!hasFlag(sym, SymbolFlag.Mutable) && !(written && sym.symbolKind == SymbolKind.Parameter)) return;
+	addError(ctx, "mutable variable '" + d.name + "' cannot be captured by " + by + " — use const or move", node.location.line, node.location.column);
+	reported.push(d.name);
+}
+
+function writesItsLeft(op: string): boolean {
+	return op.endsWith("=") && op != "==" && op != "===" && op != "!=" && op != "!==" && op != "<=" && op != ">=";
 }
 
 export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawnNode: Node): void {
