@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedPtrElement } from "../checker/types";
+import { peelTransparentInstance, distinctBody, isPrimitiveKind, hasAsgnFlag, isAwaitable, isAtomicRef, createPrimitive, createStruct, createArray, createFunction, createPtr, createRef, createUnion, createStringLiteral, numberType, stringType, booleanType, voidType, nullType, unknownType, unwrapRefNullUnion, isAllStringLiteralUnion, tupleTypeName, duVariantRegistry, isCountedRef, isUncountedPtrElement, createPromise } from "../checker/types";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains, createTransformContext } from "../transform/context";
 import { attachedOpSym } from "../transform/util";
@@ -114,6 +114,9 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	// are needed. Reference parity: fillBody checks tfHasAsgn regardless of
 	// kind (Struct/Union/GenericInstance). GenericInstance whose base
 	// (typeExtra) is a Struct with fields also qualifies.
+	if (isAwaitable(elem)) {
+		return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefSink", true);
+	}
 	let structElem = elem;
 	if (elem.kind == TypeKind.GenericInstance && elem.typeExtra != null && elem.typeExtra.kind == TypeKind.Struct) {
 		structElem = elem.typeExtra;
@@ -597,6 +600,13 @@ test "array of Ptr to a counted ref → Ref hooks" {
 	const leaf = createStruct("PtrLeaf", ["x"], [numberType()], false);
 	const info = classifyType(createArray(createPtr(createRef(leaf))), ctx);
 	assert (info.destroyFn as Symbol).name == "msArrayRefDestroy";
+}
+
+test "array of Promise → Ref hooks" {
+	const ctx = createTransformContext();
+	const info = classifyType(createArray(createPromise(numberType())), ctx);
+	assert (info.destroyFn as Symbol).name == "msArrayRefDestroy";
+	assert (info.copyFn as Symbol).name == "msArrayRefCopy";
 }
 
 test "isCountedRef agrees with classifyType's Ref arms" {
