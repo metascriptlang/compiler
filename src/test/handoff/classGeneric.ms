@@ -106,7 +106,7 @@ test "E2E C: generic class instantiation compiles" {
 	const src = "class Box<T> { value: T; }\nconst b = new Box<number>(42);";
 	const result = compileToC(src);
 	assert result.ok;
-	assert result.value.indexOf("Box_") >= 0 && result.value.indexOf("__number") >= 0;
+	assert result.value.indexOf("Box_") >= 0 && result.value.indexOf("__float64") >= 0;
 }
 
 // ===== Regression: extension method receiver not dropped =====
