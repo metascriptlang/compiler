@@ -2,24 +2,22 @@
 //
 // INVARIANT (implicit cstring conversion): a cstring keeps no string alive, so
 //   the checker takes one implicitly only from a string literal, a const bound
-//   to one, or, as a call argument, a value that lives through the call.
+//   to one, or a call argument, which the call keeps alive unless it is a
+//   parameter or local the function assigns.
 //
 // WHAT IT CATCHES: a cstring taken from a local that is reassigned afterwards,
-//   from a temporary kept past its statement, from a parameter or local the
-//   body assigns, or from a field or module variable handed to any function,
-//   an extern included, because C can run MetaScript code during the call
-//   through the event loop; each read freed memory under ASan before the
-//   check (3/3, also through a spawn capture). A parameter
-//   lives only for its call, so returning it as a cstring dangles in the
-//   caller.
+//   from a temporary kept past its statement, or from a parameter or local the
+//   body assigns; each read freed memory under ASan before the check (3/3,
+//   also through a spawn capture). A parameter lives only for its call, so
+//   returning it as a cstring dangles in the caller. A field, element or
+//   module variable passed as an argument is kept alive by the call instead
+//   (corpus cstringArgumentKeptAcrossEventLoop).
 //
 // RED MEANS: one of the diagnostics stopped firing.
 //
 // GUARD-CHECK-FAIL cannot take a cstring from 's'
 // GUARD-CHECK-FAIL cannot take a cstring from 'p'
 // GUARD-CHECK-FAIL cannot take a cstring from 'moved'
-// GUARD-CHECK-FAIL cannot take a cstring from 'current'
-// GUARD-CHECK-FAIL cannot take a cstring from 'banner'
 // GUARD-CHECK-FAIL cannot take a cstring from 'kept'
 // GUARD-CHECK-FAIL cannot take a cstring from 'returned'
 // GUARD-CHECK-FAIL cannot take a cstring from this expression
@@ -45,35 +43,6 @@ function fromAssignedLocalArgument(n: int32): int64 {
 	return strlen(moved);
 }
 
-class Box { name: string = "box"; }
-const box = new Box();
-
-function renameThenMeasure(c: cstring): int64 {
-	box.name = "other";
-	return strlen(c);
-}
-
-function fromFieldIntoAuthorCode(): int64 {
-	return renameThenMeasure(box.name);
-}
-
-let current: string = "current";
-
-function resetThenMeasure(c: cstring): int64 {
-	current = "reset";
-	return strlen(c);
-}
-
-function fromModuleVariableIntoAuthorCode(): int64 {
-	return resetThenMeasure(current);
-}
-
-let banner: string = "banner";
-
-function fromModuleVariableIntoExtern(): int64 {
-	return strlen(banner) + strlen(box.name);
-}
-
 function fromParameterKeptInLocal(kept: string): int64 {
 	const c: cstring = kept;
 	return strlen(c);
@@ -88,4 +57,4 @@ function fromTemporary(n: int32): int64 {
 	return strlen(c);
 }
 
-console.log(fromReassignedLocal(1) + fromAssignedParameter("x") + fromAssignedLocalArgument(2) + fromFieldIntoAuthorCode() + fromModuleVariableIntoAuthorCode() + fromModuleVariableIntoExtern() + fromParameterKeptInLocal("y") + strlen(fromReturnedParameter("z" + "w")) + fromTemporary(3));
+console.log(fromReassignedLocal(1) + fromAssignedParameter("x") + fromAssignedLocalArgument(2) + fromParameterKeptInLocal("y") + strlen(fromReturnedParameter("z" + "w")) + fromTemporary(3));

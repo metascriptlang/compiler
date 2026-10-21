@@ -18,7 +18,7 @@ import { int64Bits } from "../utils/stdBackport";
 import { viewRefusal } from "./assignable";
 import { checkSendableSource } from "./sendable";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, hasFlag, isFrameValue } from "./symbol";
+import { isFrameValue } from "./symbol";
 
 // ===== Operator Inference =====
 
@@ -1061,7 +1061,7 @@ export function refuseDanglingCString(ctx: CheckerContext, expr: Node, livesForT
 
 function livesThroughCall(ctx: CheckerContext, expr: Node): boolean {
 	match (expr.kind) {
-		NodeKind.CallExpr | NodeKind.NewExpr => { return true; },
+		NodeKind.CallExpr | NodeKind.NewExpr | NodeKind.MemberExpr | NodeKind.ArrayAccess => { return true; },
 		NodeKind.BinaryExpr => { return (expr.data as BinaryExprData).operator == "+"; },
 		NodeKind.Identifier => { return unchangedDuringCall(ctx, expr.resolvedSym); },
 		_ => { return false; },
@@ -1070,8 +1070,7 @@ function livesThroughCall(ctx: CheckerContext, expr: Node): boolean {
 
 function unchangedDuringCall(ctx: CheckerContext, sym: Symbol | null): boolean {
 	if (sym == null) return false;
-	if (sym.symbolKind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Mutable)) return true;
-	if (!isFrameValue(sym)) return false;
+	if (!isFrameValue(sym)) return true;
 	const body = ctx.currentFunction != null ? ctx.currentFunction.declNode : null;
 	if (body == null || assignsName(body, sym.name)) return false;
 	return sym.symbolKind == SymbolKind.Parameter || contains(body, sym.declNode);
@@ -1108,7 +1107,7 @@ function writesItsLeft(op: string): boolean {
 
 function reportDanglingCString(ctx: CheckerContext, expr: Node): void {
 	const what = expr.kind == NodeKind.Identifier ? "'" + (expr.data as IdentifierData).name + "'" : "this expression";
-	addError(ctx, "cannot take a cstring from " + what + ": a cstring keeps no string alive, so it can only be taken from a string literal, a const bound to one, or, as a call argument, a value that lives through the call: a temporary, a const, or a parameter or local the function never assigns; this string can be freed or replaced while the cstring is in use. Copy it into a const first, or write 'as cstring' to take the address on your own responsibility",
+	addError(ctx, "cannot take a cstring from " + what + ": a cstring keeps no string alive, so it can only be taken from a string literal, a const bound to one, or a call argument, which the call keeps alive unless it is a parameter or local the function assigns; this string can be freed or replaced while the cstring is in use. Copy it into a const first, or write 'as cstring' to take the address on your own responsibility",
 		expr.location.line, expr.location.column);
 }
 

@@ -15,7 +15,7 @@ import { skipConvDfa } from "./alias";
 import { RcInfo, noRcInfo } from "./classify";
 import { makeNumber, makeString } from "../checker/literalNodes";
 import { createArray, createFunction, int32Type, stringType } from "../checker/types";
-import { generatedRef, makeAssign, makeCall, makeIdentResolved } from "../transform/util";
+import { generatedRef, isRuntimeProcSym, makeAssign, makeCall, makeIdentResolved } from "../transform/util";
 
 const ELEMENT_SLOT = "E";
 export const ANY_HEAP_SLOT = "*";
@@ -573,6 +573,12 @@ function pathSlots(n: Node, out: string[]): Symbol | null {
 	};
 }
 
+export function cstringSource(a: Node | null): Node | null {
+	if (a == null || a.kind != NodeKind.CallExpr) return null;
+	const cd = a.data as CallExprData;
+	return cd.arguments.length == 1 && isRuntimeProcSym(cd.callee.resolvedSym, "msStringToCString") ? cd.arguments[0] : null;
+}
+
 export function borrowedArgsToCopy(call: Node): boolean[] {
 	const args = (call.data as CallExprData).arguments;
 	const flags: boolean[] = [];
@@ -581,8 +587,13 @@ export function borrowedArgsToCopy(call: Node): boolean[] {
 	let any = false;
 	for (const a of args) {
 		const s: string[] = [];
-		roots.push(a != null ? pathSlots(a, s) : null);
+		const source = cstringSource(a);
+		roots.push(a != null ? pathSlots(source ?? a, s) : null);
 		slots.push(s);
+		if (source != null) {
+			flags.push(s.length > 0);
+			continue;
+		}
 		const borrowed = a != null && a.kind != NodeKind.HiddenAddr && rcOf(a.nodeType).needsCleanup;
 		flags.push(borrowed);
 		if (borrowed) any = true;
@@ -590,7 +601,7 @@ export function borrowedArgsToCopy(call: Node): boolean[] {
 	if (!any) return flags;
 	const writes = callWrites(call);
 	for (let i = 0; i < args.length; i += 1) {
-		if (!flags[i]) continue;
+		if (!flags[i] || cstringSource(args[i]) != null) continue;
 		let keep = false;
 		for (let j = 0; j < args.length && !keep; j += 1) {
 			if (j != i && args[j] != null && args[j].kind == NodeKind.HiddenAddr && roots[i] != null && roots[j] === roots[i]) keep = true;

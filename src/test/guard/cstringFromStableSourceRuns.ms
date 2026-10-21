@@ -2,9 +2,9 @@
 //
 // INVARIANT (implicit cstring conversion): a string literal and a const bound
 //   to one outlive any cstring taken from them; as a call argument, a
-//   temporary, a const, and a parameter or local the function never assigns
-//   all live through the call; `as cstring` stays the author's explicit
-//   conversion.
+//   temporary, a const, a parameter or local the function never assigns, and
+//   a field, element or module variable the call keeps alive all live through
+//   the call; `as cstring` stays the author's explicit conversion.
 //
 // WHAT IT CATCHES: the check refusing a source that outlives its cstring,
 //   which would break every FFI call that passes a string parameter through.
@@ -33,6 +33,21 @@ function made(n: int32): string {
 	return "made-" + n.toString();
 }
 
+class Box { name: string = "box-name"; }
+const box = new Box();
+const names: string[] = ["element"];
+let current: string = "current";
+
+function renameThenMeasure(c: cstring): int64 {
+	box.name = "other";
+	return strlen(c);
+}
+
+function resetThenMeasure(c: cstring): int64 {
+	current = "reset";
+	return strlen(c);
+}
+
 function explicitConversion(n: int32): int64 {
 	const s: string = "value-" + n.toString();
 	return strlen(s as cstring);
@@ -47,4 +62,7 @@ if (explicitConversion(7) != 7) { throw "GUARD RED: explicit conversion"; }
 if (fromLocalArgument(3) != 7) { throw "GUARD RED: local argument"; }
 if (fromTemporaryArgument(4) != 7) { throw "GUARD RED: temporary argument"; }
 if (strlen(made(5)) != 6) { throw "GUARD RED: call result argument"; }
+if (renameThenMeasure(box.name) != 8) { throw "GUARD RED: field into author code"; }
+if (resetThenMeasure(current) != 7) { throw "GUARD RED: module variable into author code"; }
+if (strlen(names[0]) != 7) { throw "GUARD RED: element into an extern function"; }
 console.log("GUARD-OK");
