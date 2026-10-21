@@ -33,6 +33,13 @@ int32_t msFsLastErrno(void);
  * Returns MS_EMPTY_STRING on failure. */
 msString msFsReadFile(msString path);
 
+/* List directory entries as "\n"-joined string.
+ * Directories have trailing "/". "." and ".." excluded.
+ * Returns MS_EMPTY_STRING on error (check msFsLastErrno). */
+msString msFsReadDirEntries(msString path);
+
+/* Windows only: std/fs calls the POSIX syscalls itself. */
+#ifdef _WIN32
 /* Stat predicates. Return 1.0 (true) or 0.0 (false). */
 double msFsExists(msString path);
 double msFsIsFile(msString path);
@@ -49,14 +56,8 @@ double msFsModifiedTime(msString path);
  * filesystem keeps no change time, so a caller must then read the file. */
 msString msFsChangeStamp(msString path);
 
-/* List directory entries as "\n"-joined string.
- * Directories have trailing "/". "." and ".." excluded.
- * Returns MS_EMPTY_STRING on error (check msFsLastErrno). */
-msString msFsReadDirEntries(msString path);
-
-/* Windows only: std/fs calls the POSIX syscalls itself. Each returns 1.0 on success,
- * 0.0 with the error in msFsLastErrno; mkdir also succeeds on EEXIST, chmod is a no-op. */
-#ifdef _WIN32
+/* Each returns 1.0 on success, 0.0 with the error in msFsLastErrno; mkdir also
+ * succeeds on EEXIST, chmod is a no-op. */
 double msFsChmod(msString path, int32_t mode);
 double msFsMkdir(msString path);
 double msFsRmdir(msString path);

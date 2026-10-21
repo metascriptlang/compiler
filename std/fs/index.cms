@@ -6,9 +6,8 @@ import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
 
 extern function msFsLastErrno(): int32;
 extern function msFsReadFile(path: string): string;
-extern function msFsExists(path: string): number;
-extern function msFsIsFile(path: string): number;
-extern function msFsIsDir(path: string): number;
+// Parked: readdir returns NULL at the end, and `Ptr<Dirent> | null` does not build yet
+// (inbox 2026-10-22-nullable-ptr-to-extern-tag-struct-emits-a-field-copy-hook.md).
 extern function msFsReadDirEntries(path: string): string;
 
 const FAILED_WITHOUT_ERRNO: int32 = -1;
@@ -40,6 +39,20 @@ when (windows) {
 	function writeFileErrno(path: string, content: string, mode: string): int32 { return lastErrnoOf(msFsWriteFileMode(path, content, mode)); }
 	function isExecutableKernel(path: string): boolean { return msFsIsExecutable(path) == 1; }
 	function realpathKernel(path: string): string { return msFsRealPath(path); }
+
+	extern function msFsExists(path: string): number;
+	extern function msFsIsFile(path: string): number;
+	extern function msFsIsDir(path: string): number;
+	extern function msFsFileSize(path: string): number;
+	extern function msFsModifiedTime(path: string): number;
+	extern function msFsChangeStamp(path: string): string;
+
+	function existsKernel(path: string): boolean { return exists(path); }
+	function isFileKernel(path: string): boolean { return msFsIsFile(path) == 1; }
+	function isDirKernel(path: string): boolean { return msFsIsDir(path) == 1; }
+	function fileSizeKernel(path: string): number { return msFsFileSize(path); }
+	function modifiedTimeKernel(path: string): number { return msFsModifiedTime(path); }
+	function changeStampKernel(path: string): string { return msFsChangeStamp(path); }
 } else {
 	@include("errno.h");
 	@include("stdio.h");
@@ -64,6 +77,27 @@ when (windows) {
 	extern function cRealpath(path: cstring, resolved: Ptr<uint8> | null): Ptr<uint8> from "realpath";
 	extern function cFree(p: Ptr<uint8>): void from "free";
 	extern function msStringFromCStr(s: cstring): string;
+
+	extern struct Timespec from "struct timespec" { tv_sec: int64; tv_nsec: int64; }
+	when (macos || ios) {
+		extern struct Stat from "struct stat" {
+			st_dev: uint64; st_ino: uint64; st_mode: uint32; st_size: int64;
+			st_mtimespec: Timespec; st_ctimespec: Timespec;
+		}
+		function mtimeOf(st: Stat): Timespec { return st.st_mtimespec; }
+		function ctimeOf(st: Stat): Timespec { return st.st_ctimespec; }
+	} else {
+		extern struct Stat from "struct stat" {
+			st_dev: uint64; st_ino: uint64; st_mode: uint32; st_size: int64;
+			st_mtim: Timespec; st_ctim: Timespec;
+		}
+		function mtimeOf(st: Stat): Timespec { return st.st_mtim; }
+		function ctimeOf(st: Stat): Timespec { return st.st_ctim; }
+	}
+	extern const S_IFMT: uint32;
+	extern const S_IFREG: uint32;
+	extern const S_IFDIR: uint32;
+	extern function cStat(path: cstring, ref buf: Stat): int32 from "stat";
 
 	// POSIX lets any later libc call (free included) overwrite errno: read it straight
 	// after the syscall, before anything else runs.
@@ -110,6 +144,37 @@ when (windows) {
 		const result = msStringFromCStr(resolved as cstring);
 		cFree(resolved);
 		return result;
+	}
+
+	function existsKernel(path: string): boolean {
+		let st: Stat = {};
+		return cStat(path as cstring, st) == 0;
+	}
+	function isFileKernel(path: string): boolean {
+		let st: Stat = {};
+		return cStat(path as cstring, st) == 0 && (st.st_mode & S_IFMT) == S_IFREG;
+	}
+	function isDirKernel(path: string): boolean {
+		let st: Stat = {};
+		return cStat(path as cstring, st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR;
+	}
+	function fileSizeKernel(path: string): number {
+		let st: Stat = {};
+		return cStat(path as cstring, st) == 0 ? st.st_size as number : -1;
+	}
+	function modifiedTimeKernel(path: string): number {
+		let st: Stat = {};
+		return cStat(path as cstring, st) == 0 ? mtimeOf(st).tv_sec as number : -1;
+	}
+	function nanos(t: Timespec): string {
+		return `${t.tv_sec}.${`${t.tv_nsec}`.padStart(9, "0")}`;
+	}
+	function changeStampKernel(path: string): string {
+		let st: Stat = {};
+		if (cStat(path as cstring, st) != 0) return "";
+		const changed = ctimeOf(st);
+		if (changed.tv_sec == 0 && changed.tv_nsec == 0) return "";
+		return `${st.st_dev}:${st.st_ino}:${st.st_size}:${nanos(mtimeOf(st))}:${nanos(changed)}`;
 	}
 }
 
@@ -190,25 +255,22 @@ export function rename(oldPath: string, newPath: string): Result<void, IoError> 
 
 // ===== Predicates (stay as boolean — not fallible) =====
 
-export function exists(path: string): boolean { return msFsExists(path) == 1; }
+export function exists(path: string): boolean { return existsKernel(path); }
 export function realpath(path: string): string { return realpathKernel(path); }
-export function isFile(path: string): boolean { return msFsIsFile(path) == 1; }
-export function isDir(path: string): boolean { return msFsIsDir(path) == 1; }
+export function isFile(path: string): boolean { return isFileKernel(path); }
+export function isDir(path: string): boolean { return isDirKernel(path); }
 export function isExecutable(path: string): boolean { return isExecutableKernel(path); }
-export extern function fileSize(path: string): number from "msFsFileSize";
-export extern function modifiedTime(path: string): number from "msFsModifiedTime";
-export extern function changeStamp(path: string): string from "msFsChangeStamp";
+export function fileSize(path: string): number { return fileSizeKernel(path); }
+export function modifiedTime(path: string): number { return modifiedTimeKernel(path); }
+export function changeStamp(path: string): string { return changeStampKernel(path); }
 
 // List directory entries. Directories have a trailing "/" marker.
 // "." and ".." are always excluded. Returns an empty list on error or
 // when the directory is empty — callers that need to distinguish should
 // check `exists(path) && isDir(path)` first.
 export function readDir(path: string): string[] {
-	const joined = msFsReadDirEntries(path);
 	const result: string[] = [];
-	if (joined == "") return result;
-	const lines = joined.split("\n");
-	for (const line of lines) {
+	for (const line of msFsReadDirEntries(path).split("\n")) {
 		if (line != "") result.push(line);
 	}
 	return result;
@@ -232,13 +294,13 @@ export function copyFile(src: string, dst: string): Result<void, IoError> {
 }
 
 export function ensureDir(path: string): Result<void, IoError> {
-	if (msFsExists(path) == 1) return Result.ok(null);
+	if (exists(path)) return Result.ok(null);
 	let i = 0;
 	while (i < path.length) {
 		if (path.charCodeAt(i) == "/".code) {
 			if (i > 0) {
 				const prefix = path.slice(0, i);
-				if (msFsExists(prefix) != 1) {
+				if (!exists(prefix)) {
 					const mkResult = mkdir(prefix);
 					if (!mkResult.ok) return mkResult;
 				}
@@ -246,7 +308,7 @@ export function ensureDir(path: string): Result<void, IoError> {
 		}
 		i = i + 1;
 	}
-	if (msFsExists(path) != 1) {
+	if (!exists(path)) {
 		return mkdir(path);
 	}
 	return Result.ok(null);
