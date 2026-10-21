@@ -576,6 +576,7 @@ class Gen {
 	arithInElse: int32 = 0;
 	blockId: int32 = 0;
 	blockCount: int32 = 0;
+	moduleBlock: int32 = -1;
 	directives: string[] = [];
 	classes: ClsDef[] = [];
 	ifaces: ClsIface[] = [];
@@ -1751,7 +1752,7 @@ class Gen {
 			}
 			if (k == 2) {
 				const movable: Ent[] = [];
-				for (const e of owns) { if (e.len == this.blockId) { movable.push(e); } }
+				for (const e of owns) { if (e.len == this.blockId && this.blockId != this.moduleBlock) { movable.push(e); } }
 				if (movable.length > 0) {
 					const m = this.pickEnt(movable).name;
 					this.dropEnt(m);
@@ -8066,6 +8067,7 @@ class Gen {
 		const savedBlock = this.blockId;
 		this.blockCount++;
 		this.blockId = this.blockCount;
+		if (this.atTop && depth == 0 && indent == "") { this.moduleBlock = this.blockId; }
 		let out = "";
 		for (let i = 0; i < n; i++) {
 			if (this.nodesLeft == 0 || this.cost + this.mult > this.costCap || !this.namesLeft()) { break; }
@@ -9486,7 +9488,7 @@ test "the ownership family alone reaches each of its shapes" {
 		".push(move o", "\tbumpO", "(out o", ": OwnInt32[] = [o", ".push(o", ".tag.length", "].v : ", ".v"];
 	const seen: boolean[] = shapes.map((x: string): boolean => false);
 	let reassign = false;
-	for (let seed = 1; seed < 41; seed++) {
+	for (let seed = 1; seed < 81; seed++) {
 		const text = generate(seed as uint64, f);
 		for (let i = 0; i < shapes.length; i++) { if (text.contains(shapes[i])) { seen[i] = true; } }
 		for (const line of text.split("\n")) {
@@ -10058,6 +10060,23 @@ test "a literal union holds integer, negative and fractional members (inbox nume
 		mixed += countOf(text, "type Lt2 = -1 | 0.5;");
 	}
 	assert ints > 0 && mixed > 0;
+}
+
+test "the own family never moves a module-level binding (C refuses a sinking move of a global)" {
+	let moves = 0;
+	for (const top of [0, 1, 2]) {
+		for (const globals of [1, 6]) {
+			const f = withWeights("types=int32,uint8 fams=own globals=" + String(globals) + " top=" + String(top) + " w.stmt.fam=80");
+			for (let seed = 1; seed < 31; seed++) {
+				for (const line of generate(seed as uint64, f).split("\n")) {
+					if (!line.contains("move ")) { continue; }
+					moves++;
+					assert line.startsWith("\t");
+				}
+			}
+		}
+	}
+	assert moves > 20;
 }
 
 test "the enum family emits no shape a compiler card parks" {
