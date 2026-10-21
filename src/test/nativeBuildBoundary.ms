@@ -33,8 +33,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, or all");
 	exit(2);
 }
 
@@ -953,6 +953,95 @@ function runEmccWatchProcess(): void {
 	record("the same program on the host watches and spawns", "watch ok|exec hi|execFile hi", ran.stdout.trim());
 }
 
+function sdkPath(sdk: string): string {
+	const r = execFileCapture("xcrun", ["--sdk", sdk, "--show-sdk-path"]);
+	return r.ok ? r.value.trim() : "";
+}
+
+function bootedSimulator(): string {
+	const r = execFileCapture("xcrun", ["simctl", "list", "devices", "booted"]);
+	if (!r.ok) return "";
+	for (const line of r.value.split("\n")) {
+		const state = line.indexOf(" (Booted)");
+		if (state < 0) continue;
+		const open = line.lastIndexOf("(", state - 1);
+		if (open >= 0) return line.slice(open + 1, state - 1);
+	}
+	return "";
+}
+
+function iosBuild(dir: string, label: string, target: string, sdk: string, output: string): number {
+	const clang = execFileCapture("xcrun", ["--find", "clang"]);
+	if (!clang.ok) {
+		need(false, "xcrun --find clang");
+		return -1;
+	}
+	const flags = `-target ${target} -isysroot ${sdk}`;
+	return command(dir, label, compiler, ["build", "main.ms", "--os=ios", "--cpu=arm64", `--cc=${clang.value.trim()}`, `--passC=${flags}`, `--passL=${flags} ${dir}/host.c`, `--output=${output}`]).code;
+}
+
+const IOS_PROCESS_EXPECTED = "echo hi|path echo hi|cwd ok|path cwd ok|missing program not started 2|missing cwd not started 2|missing program without cwd not started 2|spawn cwd ok 0|spawnSync /bin/echo ENOENT|exec hi|true true";
+
+function runIosProcess(): void {
+	const device = platform == "darwin" ? sdkPath("iphoneos") : "";
+	const simulator = platform == "darwin" ? sdkPath("iphonesimulator") : "";
+	if (device == "" || simulator == "") {
+		console.log("skip ios-process: xcrun with the iphoneos and iphonesimulator SDKs is required");
+		return;
+	}
+	const dir = `${root}/ios-process`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/host.c`, "void MsMain(void);\nvoid msDrainUntilIdle(void);\nint main(void) { MsMain(); msDrainUntilIdle(); return 0; }\n");
+	put(`${dir}/main.ms`, [
+		"import { argv, cwd, env, exec, execFileResult, spawn, ChildStream, ExecFileResult } from \"std/process\";",
+		"const here = argv[argv.length - 1];",
+		"env.set(\"PATH\", \"/usr/bin:/bin\");",
+		"function ran(label: string, r: ExecFileResult): string {",
+		"\treturn r.started ? `${label} ${r.output.trim()}` : `${label} not started ${r.startErrno}`;",
+		"}",
+		"function inHere(label: string, r: ExecFileResult): string {",
+		"\treturn r.started && r.output.trim().endsWith(\"/ios-process\") ? `${label} ok` : ran(label, r);",
+		"}",
+		"const child = spawn(\"/bin/pwd\", [\"-P\"], { cwd: here });",
+		"let childText = \"\";",
+		"if (child.ok) {",
+		"\tconst out = child.value.read(ChildStream.Stdout, 5000);",
+		"\tconst done = child.value.wait(5000);",
+		"\tchildText = `spawn cwd ${out.ok && out.value.data.trim().endsWith(\"/ios-process\") ? \"ok\" : \"elsewhere\"} ${done.ok ? done.value.code : -1}`;",
+		"} else childText = child.error.message;",
+		"const childMissing = spawn(\"/bin/echo\", [\"hi\"], { cwd: `${here}/no-such-dir` });",
+		"const shell = exec(\"echo hi\");",
+		"console.log([",
+		"\tran(\"echo\", execFileResult(\"/bin/echo\", [\"hi\"])),",
+		"\tran(\"path echo\", execFileResult(\"echo\", [\"hi\"])),",
+		"\tinHere(\"cwd\", execFileResult(\"/bin/pwd\", [\"-P\"], here)),",
+		"\tinHere(\"path cwd\", execFileResult(\"pwd\", [\"-P\"], here)),",
+		"\tran(\"missing program\", execFileResult(\"/no/such/program\", [], here)),",
+		"\tran(\"missing cwd\", execFileResult(\"/bin/echo\", [\"hi\"], `${here}/no-such-dir`)),",
+		"\tran(\"missing program without cwd\", execFileResult(\"/no/such/program\", [])),",
+		"\tchildText,",
+		"\tchildMissing.ok ? \"spawn missing cwd started\" : childMissing.error.message,",
+		"\tshell.ok ? `exec ${shell.value.trim()}` : shell.error.message,",
+		"\t`${cwd() != \"\"} ${env.get(\"HOME\") != \"\"}`,",
+		"].join(\"|\"));",
+		"",
+	].join("\n"));
+	record("an iOS device program that spawns, with and without a cwd, builds", "0", `${iosBuild(dir, "ios-device", "arm64-apple-ios15.0", device, "device")}`);
+	record("the same program builds for the iOS simulator", "0", `${iosBuild(dir, "ios-simulator", "arm64-apple-ios15.0-simulator", simulator, "simulator")}`);
+	const booted = bootedSimulator();
+	if (booted == "") {
+		console.log("skip ios-process simulator run: no booted simulator (xcrun simctl boot <device>)");
+	} else {
+		const ran = command(dir, "ios-simulator-run", "xcrun", ["simctl", "spawn", booted, `${dir}/simulator`, dir]);
+		record("on the iOS simulator a spawn runs in its cwd and a missing program or cwd reports its errno", IOS_PROCESS_EXPECTED, ran.stdout.trim());
+	}
+	need(command(dir, "ios-process-native", compiler, ["build", "main.ms", "--cc=clang", "--output=native"]).code == 0, "ios-process native build");
+	record("the same program on macOS through posix_spawn", IOS_PROCESS_EXPECTED, command(dir, "ios-process-native-run", `${dir}/native`, [dir]).stdout.trim());
+	need(command(dir, "ios-process-fork", compiler, ["build", "main.ms", "--cc=clang", "--passC=-DMS_TEST_SPAWN_FORK", "--output=fork"]).code == 0, "ios-process fork-shim build");
+	record("the same program on macOS through the fork shim iOS uses for a cwd", IOS_PROCESS_EXPECTED, command(dir, "ios-process-fork-run", `${dir}/fork`, [dir]).stdout.trim());
+}
+
 if (group == "argv" || group == "all") runArgv();
 if (group == "compile-cache" || group == "all") runCompileCache();
 if (group == "link-cache" || group == "all") runLinkCache();
@@ -968,6 +1057,7 @@ if (group == "emcc-watch-process" || group == "all") runEmccWatchProcess();
 if (group == "emcc-jspi" || group == "all") runEmccJspi();
 if (group == "module-names" || group == "all") runModuleNames();
 if (group == "wasi-platform" || group == "all") runWasiPlatform();
+if (group == "ios-process" || group == "all") runIosProcess();
 
 let failures = 0;
 console.log(`root ${root}`);
