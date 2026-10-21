@@ -703,9 +703,10 @@ export interface RaiserObjectField {
 export interface RaiserClassType {
 	name: string;
 	chain: string[];
+	fields: string[];   // the layout NewObject lays out, so a field sits at the slot its type gives it
 }
 
-export const RAISER_NO_CLASS: RaiserClassType = { name: "", chain: [] };
+export const RAISER_NO_CLASS: RaiserClassType = { name: "", chain: [], fields: [] };
 
 export interface RaiserObjectData {
 	fields: RaiserObjectField[];

@@ -51,6 +51,8 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.NewObject => "NewObject",
 		RaiserOpcode.LoadField => "LoadField",
 		RaiserOpcode.StoreField => "StoreField",
+		RaiserOpcode.LoadSlot => "LoadSlot",
+		RaiserOpcode.StoreSlot => "StoreSlot",
 		RaiserOpcode.ConcatStr => "ConcatStr",
 		RaiserOpcode.EqStr => "EqStr",
 		RaiserOpcode.NeStr => "NeStr",

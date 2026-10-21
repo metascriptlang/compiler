@@ -533,6 +533,13 @@ export function resolveClassInit(s: RaiserCompState, classSym: Symbol): int32 {
 // --- Builtin helpers ---
 
 // --- Closure pair helpers ---
+// The NewObject operand of a typed object that has no class: its layout alone.
+export function layoutOperand(s: RaiserCompState, fields: string[]): int32 {
+	if (fields.length == 0) return 0;
+	s.classTypes.push({ name: "", chain: [], fields });
+	return s.classTypes.length;
+}
+
 // Emit a closure pair object { fn: funcIdx, env: envReg | nil } into destReg.
 // A negative envReg means non-capturing (a nil env), otherwise envReg is the register holding the env.
 

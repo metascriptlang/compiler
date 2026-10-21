@@ -4,7 +4,7 @@ import { distinctBody, enumMemberValue, isMaybeType, isStructType, needsValueCop
 import { RaiserOpcode, RaiserRegClass, raiserABC, raiserAx } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil } from "../../raiser/value";
 import { peelToRepr, unwrapRef } from "../../checker/types";
-import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrapNil } from "./context";
+import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrapNil, layoutOperand } from "./context";
 
 function copyPlan(s: RaiserCompState, valueType: Type | null): int32 {
 	const base = distinctBody(valueType);
@@ -179,7 +179,7 @@ function emitZeroOf(s: RaiserCompState, valueType: Type | null, open: Type[]): i
 			}
 		}
 		const object = allocRef(s);
-		emitInst(s, raiserABC(RaiserOpcode.NewObject, object, 0, 0));
+		emitInst(s, raiserABC(RaiserOpcode.NewObject, object, layoutOperand(s, t.typeNames), 0));
 		open.push(t);
 		for (let i = 0; i < t.typeNames.length; i += 1) {
 			const field = emitZeroOf(s, i < t.typeChildren.length ? t.typeChildren[i] : null, open);

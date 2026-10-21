@@ -44,7 +44,7 @@ export enum RaiserOpcode {
 	ArraySetLen,      // ABC: R[A].setLength(R[B]) — truncate or nil-extend; C = 1 only checks R[B] is a valid array count (0..2^32-1)
 
 	// Object operations (3)
-	NewObject,        // ABC: R[A] = new empty object; B > 0 gives it class type B - 1 of the function
+	NewObject,        // ABC: R[A] = new object; B > 0 gives it class type B - 1 of the function, whose fields it lays out
 	LoadField,        // ABC: R[A] = R[B].field(constants[C].text)
 	StoreField,       // ABC: R[A].field(constants[B].text) = R[C]
 
@@ -196,6 +196,8 @@ export enum RaiserOpcode {
 	FutureCombine,    // ABC: R[A] = a future settled from the futures in array R[A+1] by RaiserCombine B; Any fails with R[A+2]; C arguments
 	Box,              // ABC: R[A] (a Dyn register) = a box holding R[B], or nil when R[B] is nil
 	Unbox,            // ABC: R[A] = the value in the box R[B]; a nil box reads as nil, fatal into a Word register
+	LoadSlot,         // ABC: LoadField where the static type of R[B] fixes the field's slot
+	StoreSlot,        // ABC: StoreField where the static type of R[A] fixes the field's slot
 	MoveW,            // ABC: words[A] = words[B]
 	MoveR,            // ABC: refs[A] = refs[B], counted
 	BeqR,             // ABC: if refs[A] == refs[B] skip C instructions
@@ -323,8 +325,8 @@ function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.ArrayPush => "rx-",
 		RaiserOpcode.ArraySetLen => "ri-",
 		RaiserOpcode.ArraySlice => "rrp",
-		RaiserOpcode.LoadField => "xr-",
-		RaiserOpcode.StoreField => "r-x",
+		RaiserOpcode.LoadField | RaiserOpcode.LoadSlot => "xr-",
+		RaiserOpcode.StoreField | RaiserOpcode.StoreSlot => "r-x",
 		RaiserOpcode.ConcatStr => "rxx",
 		RaiserOpcode.EqStr | RaiserOpcode.NeStr | RaiserOpcode.LtStr | RaiserOpcode.LeStr => "rr-",
 		RaiserOpcode.StrLen | RaiserOpcode.StrByteLen => "ir-",
