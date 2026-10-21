@@ -424,19 +424,17 @@ function releaseHandle(vm: RaiserVM, h: int64): void {
 // The counted store of a handle into the ref file: the new one is held before the old one is
 // released, so storing a register's own handle back into it is safe.
 function writeRef(vm: RaiserVM, abs: number, handle: int64): void {
-	const refs = vm.regs.refs;
-	const old = refs[abs];
+	const old = vm.regs.refs[abs];
 	holdHandle(vm, handle);
-	refs[abs] = handle;
+	vm.regs.refs[abs] = handle;
 	releaseHandle(vm, old);
 }
 
 function releaseFrameRefs(vm: RaiserVM, base: number, count: number): void {
-	const refs = vm.regs.refs;
 	for (let r = base; r < base + count; r += 1) {
-		const h = refs[r];
+		const h = vm.regs.refs[r];
 		if (h != 0) {
-			refs[r] = 0;
+			vm.regs.refs[r] = 0;
 			releaseHandle(vm, h);
 		}
 	}
