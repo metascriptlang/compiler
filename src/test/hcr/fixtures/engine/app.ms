@@ -89,7 +89,7 @@ show("after added global");
 place("g6", image("lifecycle"));
 place("g6", BUNDLE);
 report("class layout changed");
-show("after class layout rejection");
+show("after class layout change");
 
 place("g2", image("core"));
 place("g2", BUNDLE);

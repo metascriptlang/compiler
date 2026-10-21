@@ -1,5 +1,5 @@
 // @stdout: cell:a x=1 cell:c dyn:zzz
-// note: an extension and a getDynamicField declared on a union are reached by a receiver of that union and never by a variant narrowed out of it, which has its own fields and is not the union.
+// note: a getDynamicField declared on a union is reached by a receiver of that union and never by a variant narrowed out of it, which has its own fields and is not the union; a named extension is reached by both.
 import { Cell, describe, getDynamicField } from "./a";
 
 function show(c: Cell): string {

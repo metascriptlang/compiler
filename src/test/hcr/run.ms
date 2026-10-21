@@ -68,8 +68,43 @@ const PARKED: { name: string, card: string }[] = [
 	{ name: "hcrModulePassReload", card: "inbox card 2026-10-06-hcr-ref-array-cell-owned-by-user-image.md" },
 ];
 
+const SAN = env.get("MSHCR_SAN") == "1";
+const SAN_DLL = "clang_rt.asan_dynamic-x86_64.dll";
+let sanFlags = "";
+
+function sanSetup(): void {
+	if (sanFlags != "") return;
+	sanFlags = " ";
+	if (platform != "windows") return;
+	const resource = slashes(execFileResult("clang", ["-print-resource-dir"], ROOT).output.trim());
+	const shim = `${TMP}/asan-shim`;
+	const gnu = `${shim}/lib/x86_64-w64-windows-gnu`;
+	if (!exists(`${gnu}/libclang_rt.asan_dynamic.dll.a`)) {
+		ensureDir(TMP);
+		execFileResult("cmd", ["/c", "xcopy", "/E", "/I", "/Y", resource.replaceAll("/", "\\"), shim.replaceAll("/", "\\")], ROOT);
+		ensureDir(gnu);
+		copy(`${resource}/lib/windows/clang_rt.asan_dynamic-x86_64.lib`, `${gnu}/libclang_rt.asan_dynamic.a`);
+		copy(`${resource}/lib/windows/clang_rt.asan_dynamic-x86_64.lib`, `${gnu}/libclang_rt.asan_dynamic.dll.a`);
+		copy(`${resource}/lib/windows/clang_rt.asan_dynamic_runtime_thunk-x86_64.lib`, `${gnu}/libclang_rt.asan_dynamic_runtime_thunk.a`);
+	}
+	sanFlags = ` --target=x86_64-w64-mingw32 -resource-dir ${shim}`;
+}
+
+function sanRuntime(dir: string): void {
+	if (platform != "windows") return;
+	const resource = slashes(execFileResult("clang", ["-print-resource-dir"], ROOT).output.trim());
+	copy(`${resource}/lib/windows/${SAN_DLL}`, `${dir}/${SAN_DLL}`);
+}
+
 function msc(dir: string, args: string[]): ExecFileResult {
-	return execFileResult(MSC, args, dir);
+	if (!SAN || args[0] != "build") return execFileResult(MSC, args, dir);
+	sanSetup();
+	const full: string[] = [];
+	for (const arg of args) full.push(arg);
+	full.push("--cc=clang");
+	full.push(`--passC=-O0 -g -fsanitize=address -DMS_SLAB_MAX=0 -Wno-error=incompatible-pointer-types${sanFlags}`);
+	full.push(`--passL=-fsanitize=address -pthread${sanFlags}`);
+	return execFileResult(MSC, full, dir);
 }
 
 // Build that must succeed: its log is printed before the verdict when it does not.
@@ -761,8 +796,10 @@ function engine(): void {
 		"HCR-ENGINE lifecycle v1: after reload",
 		"HCR-ENGINE added global: reloaded logic",
 		"HCR-ENGINE after added global: value 10 tick 15 version 1",
-		"HCR-ENGINE class layout changed: restart required lifecycle",
-		"HCR-ENGINE after class layout rejection: value 10 tick 16 version 1",
+		"HCR-ENGINE lifecycle v1: before reload",
+		"HCR-ENGINE lifecycle v1: after reload",
+		"HCR-ENGINE class layout changed: reloaded lifecycle",
+		"HCR-ENGINE after class layout change: value 10 tick 16 version 1",
 		"HCR-ENGINE core changed: restart required",
 	];
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
@@ -993,7 +1030,7 @@ function genericIdentity(): void {
 		"IDENT 2 3 4x t v1 given 7 peek 1.5",
 		"IDENT 2 3 4x t v2 given 7 peek 1.5",
 		"IDENT 2 3 4x t v3 given 7 peek 1.5",
-		"IDENT layout restart required: the layout of type 'Box' in module 'box' changed",
+		"IDENT layout restart required names Box generic: true",
 	];
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
 		console.log(both(ran));
@@ -1063,6 +1100,7 @@ function runPrebuilt(tag: string, dir: string, modules: string[], prefix: string
 	const exe = platform == "windows" ? "host.exe" : "host";
 	copy(STD_HOST, `${dir}/host.cms`);
 	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
+	if (SAN) sanRuntime(dir);
 	ensureDir(`${dir}/run`);
 	for (const name of [`module${ext}`, `module.core${ext}`, `module${ext}.hcrabi`]) {
 		copy(`${dir}/g1/${name}`, `${dir}/run/${name}`);
@@ -1111,6 +1149,104 @@ function sharedVariable(): void {
 		"HCR-SHARED after title type rejection: 9 two 45 45",
 		"HCR-SHARED g5: reloaded logic",
 		"HCR-SHARED edited constants again: 11 three 56 56",
+	]);
+}
+
+function layoutHolder(variant: string, grown: boolean): string[] {
+	const more = grown ? "b: string; " : "";
+	const moreValue = grown ? "b: \"beta\", " : "";
+	return match (variant) {
+		"array" => ["let held: P[] = [];", "held.push(make());", "held = [];"],
+		"closure" => ["let held: (() => int32) | null = null;", "const p = make(); held = (): int32 => p.a;", "held = null;"],
+		"list" => ["class List<T> { items: T[] = []; }\nlet held: List<P> = new List<P>();", "held.items.push(make());", "held = new List<P>();"],
+		"map" => ["let held = new HashMap<string, P>();", "held.set(\"k\", make());", "held = new HashMap<string, P>();"],
+		"alias" => ["export interface Q { a: int32; " + more + "c: int32; }\nlet held: P | null = null;", "const q: Q = { a: 7, " + moreValue + "c: 1 }; held = q;", "held = null;"],
+		"subclass" => ["export class Q extends P { z: int32 = 1; }\nlet held: P | null = null;", "held = new Q();", "held = null;"],
+		_ => ["let held: P | null = null;", "held = make();", "held = null;"],
+	};
+}
+
+function layoutLogic(variant: string, generation: int32): string {
+	const grown = generation > 1;
+	const isClass = variant == "class" || variant == "subclass";
+	let declaration = grown ? "export interface P { a: int32; b: string; }" : "export interface P { a: int32; }";
+	let literal = grown ? "{ a: 7, b: \"beta\" }" : "{ a: 7 }";
+	if (isClass) {
+		declaration = grown ? "export class P { a: int32 = 7; b: string = \"beta\"; }" : "export class P { a: int32 = 7; }";
+		literal = "new P()";
+	}
+	const holder = layoutHolder(variant, grown);
+	const lines = [
+		declaration,
+		holder[0],
+		`function make(): P { return ${literal}; }`,
+		`export function hold(): void { ${holder[1]} }`,
+		`export function release(): void { ${holder[2]} }`,
+		"export function fresh(): string { const p = make(); return " + (grown ? "`${p.a} ${p.b}`" : "`${p.a}`") + "; }",
+	];
+	if (variant == "handler") lines.push("@beforeReload\nfunction drop(): void { held = null; }");
+	if (generation > 2) lines.push("export const SALT: int32 = 3;");
+	return lines.join("\n") + "\n";
+}
+
+function layoutStructLogic(generation: int32): string {
+	const grown = generation > 1;
+	return [
+		grown ? "export struct S { a: int32; b: string; }" : "export struct S { a: int32; }",
+		"export class Box { s: S; constructor() { this.s = " + (grown ? "{ a: 7, b: \"beta\" }" : "{ a: 7 }") + "; } }",
+		"let held: Box | null = null;",
+		"export function hold(): void { held = new Box(); }",
+		"export function release(): void { held = null; }",
+		"export function fresh(): string { const b = new Box(); return " + (grown ? "`${b.s.a} ${b.s.b}`" : "`${b.s.a}`") + "; }",
+		generation > 2 ? "export const SALT: int32 = 3;" : "",
+	].join("\n") + "\n";
+}
+
+function layoutVariant(variant: string, want: string[]): void {
+	const tag = `hcrLayout_${variant}`;
+	const dir = freshDir(`${TMP}/layout_${variant}`);
+	copy(`${FIXTURES}/layoutReload/app.ms`, `${dir}/app.ms`);
+	copy(`${FIXTURES}/registrySupport.ms`, `${dir}/support.ms`);
+	for (let g: int32 = 1; g <= 3; g += 1) {
+		put(`${dir}/logic.ms`, variant == "struct" ? layoutStructLogic(g) : layoutLogic(variant, g));
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g${g}/module${sharedLibraryExt()}`], `generation ${g} failed to build`);
+	}
+	runPrebuilt(tag, dir, ["logic", "support"], "HCR-LAYOUT", want);
+}
+
+const OWN_LIVE = "type 'P' in module 'logic' has 1 live values";
+
+function layoutHeld(reason: string): string[] {
+	return [
+		"HCR-LAYOUT before: 7",
+		`HCR-LAYOUT held: restart required logic | ${reason}`,
+		"HCR-LAYOUT after held: 7",
+		"HCR-LAYOUT released: reloaded logic | ",
+		"HCR-LAYOUT after released: 7 beta",
+	];
+}
+
+function layoutReload(): void {
+	layoutVariant("module", layoutHeld(OWN_LIVE));
+	layoutVariant("handler", [
+		"HCR-LAYOUT before: 7",
+		"HCR-LAYOUT held: reloaded logic | ",
+		"HCR-LAYOUT after held: 7 beta",
+		"HCR-LAYOUT released: reloaded logic | ",
+		"HCR-LAYOUT after released: 7 beta",
+	]);
+}
+
+function layoutVariants(): void {
+	for (const variant of ["class", "array", "closure", "list", "map"]) layoutVariant(variant, layoutHeld(OWN_LIVE));
+	layoutVariant("subclass", layoutHeld(`${OWN_LIVE}; type 'Q' in module 'logic' has 1 live values`));
+	layoutVariant("alias", layoutHeld(`${OWN_LIVE}; type 'Q' in module 'logic' has 1 live values`));
+	layoutVariant("struct", [
+		"HCR-LAYOUT before: 7",
+		"HCR-LAYOUT held: restart required logic | type 'S' in module 'logic' is held by value",
+		"HCR-LAYOUT after held: 7",
+		"HCR-LAYOUT released: restart required logic | type 'S' in module 'logic' is held by value",
+		"HCR-LAYOUT after released: 7",
 	]);
 }
 
@@ -1289,6 +1425,32 @@ function coreOp(): void {
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
 		console.log(both(ran));
 		failWith(tag, "lifted operations a project image needs first and a core module needs later did not link and reload");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function coreGenericInit(): void {
+	const tag = "hcrCoreGenericInit";
+	const dir = freshDir(`${TMP}/coreGenericInit`);
+	for (const sub of ["app", "lib"]) ensureDir(`${dir}/${sub}`);
+	for (const f of ["app/app.ms", "app/logic.ms", "lib/lib.ms", "logicEdit.ms"]) {
+		copy(`${FIXTURES}/coreGenericInit/${f}`, `${dir}/${f}`);
+	}
+	const ran = msc(`${dir}/app`, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-GI ")) seen.push(line);
+	}
+	const want = [
+		"HCR-GI start V6 42 applib app=4 lib=3",
+		"HCR-GI reloaded logic",
+		"HCR-GI after V6 357 applib app=4 lib=3",
+	];
+	if (!succeeded(ran) || seen.join("
+") != want.join("
+")) {
+		console.log(both(ran));
+		failWith(tag, "a generic class instance a project image and a core module both construct did not link and reload");
 	}
 	console.log(`ok   ${tag}`);
 }
@@ -1739,6 +1901,8 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrRetainReport", run: retainReport },
 	{ name: "hcrRegistryVariables", run: registryVariables },
 	{ name: "hcrModulePassReload", run: modulePassReload },
+	{ name: "hcrLayoutReload", run: layoutReload },
+	{ name: "hcrLayoutVariants", run: layoutVariants },
 	{ name: "hcrRegistryGeneric", run: registryGeneric },
 	{ name: "hcrModuleTdz", run: moduleTdz },
 	{ name: "hcrFunctionValues", run: functionValues },
@@ -1746,6 +1910,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrFileDependency", run: fileDependency },
 	{ name: "hcrCoreCell", run: coreCell },
 	{ name: "hcrCoreOp", run: coreOp },
+	{ name: "hcrCoreGenericInit", run: coreGenericInit },
 	{ name: "hcrCoreNative", run: coreNative },
 	{ name: "hcrGlobalCell", run: globalCell },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },

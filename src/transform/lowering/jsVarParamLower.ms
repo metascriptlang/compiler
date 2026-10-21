@@ -28,7 +28,7 @@ function isBorrowType(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Borrow;
 }
 
-function calleeFormals(d: CallExprData): Type[] | null {
+export function calleeFormals(d: CallExprData): Type[] | null {
 	let t = d.callee.nodeType;
 	if ((t == null || t.kind != TypeKind.Function)
 		&& d.callee.resolvedSym != null) {

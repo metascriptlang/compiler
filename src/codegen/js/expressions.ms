@@ -13,7 +13,7 @@ import {
 	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, createNodeAt,
 } from "../../ast/node";
 import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess, fileDeclaring } from "./emit";
-import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName } from "../c/names";
+import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName, mangleQualified, mangleModuleName } from "../c/names";
 import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
@@ -231,9 +231,19 @@ function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string, declared: 
 	if (emitted == "") return safeJsName(name);
 	const home = sym.modulePath != null && sym.modulePath != "" ? sym.modulePath : gen.currentModulePath;
 	if (home == gen.currentModulePath && hasFlag(sym, SymbolFlag.ImportC)) return emitted;
-	if (gen.ownFunctions.has(sym)) return emitted;
+	if (gen.ownFunctions.has(sym)) return ownBindingName(gen, sym, emitted);
 	const file = fileDeclaring(gen, home, emitted);
-	return file != gen.currentFile ? recordNeededImport(gen, file, emitted) : emitted;
+	return file != gen.currentFile ? recordNeededImport(gen, file, emitted) : ownBindingName(gen, sym, emitted);
+}
+
+export function jsExportedFunctionName(gen: JSGenerator, sym: Symbol, name: string): string {
+	const emitted = multiFileHomeName(gen, sym, name, name);
+	return emitted == "" ? safeJsName(name) : emitted;
+}
+
+export function ownBindingName(gen: JSGenerator, sym: Symbol, emitted: string): string {
+	if (sym.symbolKind != SymbolKind.Function || !gen.innerLocals.has(emitted)) return emitted;
+	return mangleQualified(emitted, mangleModuleName(gen.currentModulePath));
 }
 
 // The binding name the symbol's home module declares, or "" for a symbol no module

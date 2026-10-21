@@ -3,6 +3,7 @@
 #include "runtime/types.h"
 #include "runtime/hcrTls.h"
 #include <stddef.h>
+#include <stdatomic.h>
 #include <string.h>
 
 #if defined(_WIN32) && defined(MS_HCR_CORE)
@@ -62,6 +63,7 @@ typedef struct MsHcrTypeEntry {
 	int created;
 	int exposed;
 	int revertible;
+	_Atomic int64_t live;
 } MsHcrTypeEntry;
 
 static MsHcrModule* msHcrModules[256];
@@ -401,6 +403,27 @@ void* msHcrTypeInfo(const char* moduleId, const char* typeName) {
 	entry->next = msHcrTypes;
 	msHcrTypes = entry;
 	return &entry->info;
+}
+
+void msHcrCountAdd(const msTypeInfo* type, int32_t delta) {
+	MsHcrTypeEntry* entry = (MsHcrTypeEntry*)((char*)type - offsetof(MsHcrTypeEntry, info));
+	atomic_fetch_add_explicit(&entry->live, (int64_t)delta, memory_order_relaxed);
+}
+
+int64_t msHcrLiveCount(const char* moduleId, const char* typeName) {
+	MsHcrModule* module = msHcrModule(moduleId);
+	MsHcrTypeEntry* target = NULL;
+	for (MsHcrTypeEntry* entry = msHcrTypes; entry != NULL; entry = entry->next) {
+		if (entry->module == module && strcmp(entry->name, typeName) == 0) target = entry;
+	}
+	if (target == NULL) return 0;
+	int64_t total = 0;
+	for (MsHcrTypeEntry* entry = msHcrTypes; entry != NULL; entry = entry->next) {
+		const msTypeInfo* at = &entry->info;
+		while (at != NULL && at != &target->info) at = at->base;
+		if (at != NULL) total += atomic_load_explicit(&entry->live, memory_order_relaxed);
+	}
+	return total;
 }
 
 void msHcrRestoreTypeInfos(const char* moduleId) {

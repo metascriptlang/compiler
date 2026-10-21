@@ -628,12 +628,12 @@ function unionReceiverErrorsWith(mainSource: string): int32 {
 	return errors;
 }
 
-test "a union's extension and dynamic-field read reach only a receiver of that union, never a variant narrowed out of it" {
+test "a union's dynamic-field read reaches only a receiver of that union, while its named extension also reaches a variant narrowed out of it" {
 	assert unionReceiverErrorsWith("function r(c: Cell): number { return c.zzz; }") == 0;
 	assert unionReceiverErrorsWith("function d(c: Cell): string { return c.describe(); }") == 0;
 	assert unionReceiverErrorsWith("function n(c: Cell): number { if (c.kind === \"a\") { const v = c.y; return 0; } return 0; }") > 0;
 	assert unionReceiverErrorsWith("function n(c: Cell): void { match (c.kind) { \"a\" => { const v = c.y; }, _ => {} }; }") > 0;
-	assert unionReceiverErrorsWith("function n(c: Cell): string { if (c.kind === \"a\") { return c.describe(); } return \"\"; }") > 0;
+	assert unionReceiverErrorsWith("function n(c: Cell): string { if (c.kind === \"a\") { return c.describe(); } return \"\"; }") == 0;
 }
 
 function aliasReceiverErrorWith(mainSource: string): string {

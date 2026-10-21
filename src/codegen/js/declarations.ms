@@ -5,7 +5,7 @@ import {
 	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, ActorDeclData, ExprStmtData, createNodeAt, SymbolKind,
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync, escapeJSString, declareBinding } from "./emit";
-import { safeJsName, jsSymbolName, jsMethodMemberName } from "./expressions";
+import { safeJsName, jsSymbolName, jsMethodMemberName, jsExportedFunctionName } from "./expressions";
 import { useActorRuntime } from "./actorMailbox";
 import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
 import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/context";
@@ -555,6 +555,18 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	// Non-bundle: ES module export
 	if (inner.kind == NodeKind.ClassDecl && classEmitsNoJs(inner)) return;
 	if (inner.kind == NodeKind.ActorDecl && inner.flags.has(NodeFlag.ExternC)) return;
+	if (gen.multiFile && !isDefault && inner.kind == NodeKind.FunctionDecl && inner.resolvedSym != null) {
+		const fnName = (inner.data as FunctionDeclData).fnName;
+		const own = jsSymbolName(gen, inner.resolvedSym, fnName);
+		const exported = jsExportedFunctionName(gen, inner.resolvedSym, fnName);
+		if (own != exported) {
+			gen.exportedNames.push(exported);
+			gen.aliasedExports.push(`${own} as ${exported}`);
+			emitIndent(gen);
+			emitFunctionDeclInner(gen, inner);
+			return;
+		}
+	}
 	emitIndent(gen);
 	emit(gen, isDefault ? "export default " : "export ");
 	if (isDefault && inner.kind == NodeKind.ExprStmt) {

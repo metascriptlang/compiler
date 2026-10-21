@@ -36,7 +36,7 @@ const layoutDeadline = performance.now() + 60000;
 let verdict = "timed out";
 while (verdict == "timed out" && performance.now() < layoutDeadline) {
 	const kind = reload();
-	if (kind != ReloadKind.NoChange && kind != ReloadKind.Pending) verdict = reloadKindName(kind) + ": " + lastReload().reason;
+	if (kind != ReloadKind.NoChange && kind != ReloadKind.Pending) verdict = reloadKindName(kind) + " names Box generic: " + lastReload().reason.contains("type 'Box' in module 'box' is generic");
 	else await sleepAsync(20);
 }
 console.log("IDENT layout " + verdict);

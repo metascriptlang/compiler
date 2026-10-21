@@ -3,7 +3,7 @@
 // JSGenerator context, low-level emit functions.
 // emitNode delegates to registered callback (set by jsgen.ms) to break circular imports.
 
-import { Node, NodeKind, Symbol, TypeKind, BlockStmtData, VariableDeclData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ArrowFunctionData, FunctionExprData, FunctionDeclData, MethodDeclData, ConstructorDeclData, ClassDeclData, IdentifierData, ObjectPatternPropData, MatchCaseData, DestructuringDeclData } from "../../ast/node";
+import { Node, NodeKind, Symbol, TypeKind, BlockStmtData, VariableDeclData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ArrowFunctionData, FunctionExprData, FunctionDeclData, MethodDeclData, ConstructorDeclData, ClassDeclData, IdentifierData, ObjectPatternPropData, MatchCaseData, DestructuringDeclData, ProgramData, ExportDeclData } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { JsImportEntry, routineKindFlag } from "../../checker/context";
 import { SourceInfo, createSourceInfo, recordSegment, internFile, internName, shiftLines } from "./sourcemap";
@@ -57,6 +57,8 @@ export class JSGenerator {
 	neededNames: string[][];
 	neededLocals: string[][];   // the binding each needed name takes in this module
 	declaredLocals: HashSet<string>;   // every name this module binds below top level; an import binding never takes one
+	innerLocals: HashSet<string>;
+	aliasedExports: string[];
 	moduleRequests: string;     // source imports and re-exports, in source order, hoisted in front of the body
 	namespaceModules: string[]; // names read through a namespace object: exported by their home, never imported
 	namespaceNames: string[][];
@@ -94,7 +96,7 @@ export function createJsTreeLayout(): JsTreeLayout {
 
 export function createJSGenerator(): JSGenerator {
 	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, exportedNames: [], bundleExportLocals: [], importedNames: [], thisName: "this", staticSlots: [], helpers: createJSHelpers(),
-		multiFile: false, currentModulePath: "", currentFile: "", layout: createJsTreeLayout(), importSpecKeys: [], importSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [], declaredLocals: new HashSet<string>(), moduleRequests: "", namespaceModules: [], namespaceNames: [], declaredNames: [], ownFunctions: new HashSet<Symbol>(),
+		multiFile: false, currentModulePath: "", currentFile: "", layout: createJsTreeLayout(), importSpecKeys: [], importSpecVals: [], modExportKeys: [], modExportVals: [], modFunctionOwnerNames: [], neededModules: [], neededNames: [], neededLocals: [], declaredLocals: new HashSet<string>(), innerLocals: new HashSet<string>(), aliasedExports: [], moduleRequests: "", namespaceModules: [], namespaceNames: [], declaredNames: [], ownFunctions: new HashSet<Symbol>(),
 		isTestBuild: false, testNames: [], testFuncs: [],
 		smap: false, sourceFile: "", smapInfo: createSourceInfo(),
 		genLine: 0 as int32, genCol: 0 as int32,
@@ -598,4 +600,19 @@ test "convertImportPath" {
 	assert convertImportPath("./module.ms") == "./module.js";
 	assert convertImportPath("./module") == "./module";
 	assert convertImportPath("std/testing") == "std/testing";
+}
+
+export function collectInnerLocals(program: Node, out: HashSet<string>): void {
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		const decl = stmt.kind == NodeKind.ExportDecl ? (stmt.data as ExportDeclData).exportedDecl : stmt;
+		if (decl == null) continue;
+		const bindsTopLevel = decl.kind == NodeKind.FunctionDecl || decl.kind == NodeKind.VariableDecl
+			|| decl.kind == NodeKind.DestructuringDecl || decl.kind == NodeKind.ClassDecl;
+		if (!bindsTopLevel) {
+			collectDeclaredLocals(decl, out);
+			continue;
+		}
+		if (decl.kind == NodeKind.FunctionDecl) addNames((decl.data as FunctionDeclData).params, out);
+		forEachChild(decl, (c: Node): void => { if (c != null) collectDeclaredLocals(c, out); });
+	}
 }

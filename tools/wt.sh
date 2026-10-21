@@ -160,6 +160,9 @@ refresh_main_builder() {
   if cp "$src" "$tmp" 2>/dev/null && { [ ! -e "$dest" ] || { rm -f "$prev"; mv "$dest" "$prev" 2>/dev/null; }; } \
     && mv "$tmp" "$dest" 2>/dev/null && printf '%s\n' "$key" >"${dest%.exe}.key"; then
     say "land: main builder refreshed from $w (previous kept as ${prev##*/})"
+    if [ "$dest" != "$MAIN/msc" ] && [ -n "$(find "$MAIN" -maxdepth 1 -type f -name msc)" ]; then
+      cp "$dest" "$MAIN/msc.new" && mv -f "$MAIN/msc.new" "$MAIN/msc" || say "land: $MAIN/msc NOT REFRESHED beside $dest; builders picked from it stay stale"
+    fi
   else
     [ -e "$dest" ] || { [ ! -e "$prev" ] || mv "$prev" "$dest" 2>/dev/null; }
     rm -f "$tmp" 2>/dev/null

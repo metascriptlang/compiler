@@ -282,7 +282,7 @@ static HANDLE msFirstLoopIocp(void) {
  * any thread has a target") spelled in IOCP terms. Name kept because actor.h
  * declares one symbol for both platforms. */
 void msEnsureWakePipe(void) {
-	(void)msGetDispatcher();
+	if (!msIsPoolWorker) (void)msGetDispatcher();
 }
 
 /* Wake the event loop(s) from another thread — the IOCP twin of POSIX's 1-byte
@@ -752,11 +752,11 @@ bool msRunOnce(int timeoutMs) {
 				/* NULL = a cross-thread wake (msActorWakeEventLoop - the same
 				 * Amendment B IOCP-arm primitive msIoEngineWake uses). Nothing
 				 * to dispatch; engineIOCP.c's poll skips these identically.
-				 * Not counted as work: a wake-only batch leaves the loop free
-				 * to re-poll, exactly like POSIX draining wake-pipe bytes
-				 * without setting didWork. */
-				if (msg == NULL) continue;
+				 * Counted as work, as POSIX counts a ready wake pipe: wakes
+				 * share the port with completions and can fill a whole batch
+				 * ahead of them, so a wake-only batch is not an idle loop. */
 				didWork = true;
+				if (msg == NULL) continue;
 				if (msg->kind == -3) {
 					/* Deferred env release (Amendment H parity with the POSIX
 					 * kind=-3 drain): decref on the loop thread — the env's rc

@@ -1,7 +1,8 @@
 // @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // @stdout: one 6000000
 // @stdout: two 6000000 6000000
-// @ledger-slack(Counter) 3
+// @stdout: three 200000 200000 200000
+// @ledger-slack(Counter) 6
 // ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 
 actor Counter {
@@ -41,5 +42,18 @@ async function main(): Promise<void> {
 		y = await b.get();
 	}
 	console.log("two " + x.toString() + " " + y.toString());
+
+	const p = new Counter();
+	const q = new Counter();
+	const s = new Counter();
+	for (let i = 0; i < 200000; i = i + 1) {
+		p.add(1);
+		q.add(1);
+		s.add(1);
+	}
+	const pn = await p.get();
+	const qn = await q.get();
+	const sn = await s.get();
+	console.log("three " + pn.toString() + " " + qn.toString() + " " + sn.toString());
 }
 main();

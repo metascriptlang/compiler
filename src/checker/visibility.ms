@@ -1,7 +1,7 @@
 import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, HiddenStdConvData, IdentifierData } from "../ast/node";
 import { classDeclNodeOf, parentClassSymOf, Scope } from "./symbol";
 import { CheckerContext, addError, extReceiverSym } from "./context";
-import { skipModifier, isStructType, isMaybeType, typeDisplayName } from "./types";
+import { skipModifier, distinctBody, isStructType, isMaybeType, typeDisplayName } from "./types";
 import { markInitialized } from "./initTracker";
 
 function unwrapDecl(node: Node | null): Node | null {
@@ -291,9 +291,11 @@ export function requiresInit(ctx: CheckerContext, t: Type | null): boolean {
 function noDefaultAt(ctx: CheckerContext, t: Type | null, depth: int32): Type | null {
 	const inner = skipModifier(t);
 	if (inner == null || depth > 16 || isMaybeType(inner)) return null;
-	if (inner.kind == TypeKind.Function || inner.kind == TypeKind.Ref) return inner;
 	if (inner.kind == TypeKind.SizedArray) return inner.typeValue > 0 && noDefaultAt(ctx, inner.typeReturn, depth + 1) != null ? inner : null;
+	const wrapped = distinctBody(inner);
+	if (wrapped != null) return noDefaultAt(ctx, wrapped, depth + 1) != null ? inner : null;
 	const body = inner.kind == TypeKind.GenericInstance && inner.typeReturn != null ? inner.typeReturn : inner;
+	if (body.kind == TypeKind.Function || body.kind == TypeKind.Ref || (body.kind == TypeKind.Struct && !isStructType(body))) return inner;
 	if (!isStructType(body) || body.typeChildren == null) return null;
 	if (body.typeNames != null && hiddenPrivateField(ctx, declaringSymOf(inner), body.typeNames) != "") return inner;
 	for (const field of body.typeChildren) {

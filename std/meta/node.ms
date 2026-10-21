@@ -321,6 +321,7 @@ export enum NodeFlag {
 	TypeOnlyImport, // checker: every binding of this ImportDecl is used only as a type, so it does not evaluate its module
 	TypeModifier,   // parser: the declaration is spelled `import type` / `export type`; `importTypeNames` holds the specifiers spelled `type A`
 	Optional,      // parser: this class field was written `name?`
+	ContinuesList, // parser: this declarator follows a comma in the declaration list of the statement before it
 }
 
 // ===== Node Kind Enum =====

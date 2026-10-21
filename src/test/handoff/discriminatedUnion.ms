@@ -149,6 +149,18 @@ test "nonexistent field access on discriminated union" {
 	// Should either error on unknown field or produce type mismatch — either way, no crash
 }
 
+const NARROWED_HEAD = "enum Kind { A, B }\ntype Data = match (kind: Kind) {\n\tKind.A => { x: number },\n\tKind.B => { y: string },\n};\nfunction twice(this d: Data): number { return 2; }\n";
+
+test "a reference narrowed to one variant still calls the union's extensions" {
+	assert strictErrorCount(NARROWED_HEAD + "function viaIf(d: Data): number { if (d.kind == Kind.A) return d.twice(); return 0; }") == 0;
+	assert strictErrorCount(NARROWED_HEAD + "function viaInit(): number { const d: Data = { kind: Kind.A, x: 1 }; return d.twice(); }") == 0;
+}
+
+test "a reference narrowed to one variant refuses another variant's field and a name nothing declares" {
+	assert hasError(NARROWED_HEAD + "function other(d: Data): string { if (d.kind == Kind.A) return d.y; return \"\"; }", "'y' does not exist on type");
+	assert strictErrorCount(NARROWED_HEAD + "function none(d: Data): number { if (d.kind == Kind.A) return d.z; return 0; }") > 0;
+}
+
 test "construction of second variant" {
 	const src = "enum Kind { A, B }\ntype Data = match (kind: Kind) {\n\tKind.A => { x: number },\n\tKind.B => { y: string },\n};\nfunction makeB(): Data { return { kind: Kind.B, y: \"hello\" }; }";
 	const ctx = checkSource(src);

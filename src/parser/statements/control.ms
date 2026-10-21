@@ -3,7 +3,7 @@
 
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, StringLiteralData, SwitchCaseData, SwitchStmtData, createNode, makeLoc } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, consumeSemicolon, stampEnd, takePendingComments } from "../context";
+import { ParserState, current, advance, isAtEnd, consumeSemicolon, stampEnd, takePendingComments, takeTrailingDecls } from "../context";
 import { captureOptionalType, getLastTypeExpr, isIdentLike } from "../util";
 import { callBlockParser, callExprParser, callStmtParser } from "./callbacks";
 import { parseArrayPattern, parseObjectPattern } from "./declaration";
@@ -20,8 +20,10 @@ function parseBodyOrStmt(state: ParserState): NodeResult {
 		return callBlockParser(state);
 	}
 	const tok = current(state);
-	const stmt = try callStmtParser(state);
-	return Result.ok(createNode(NodeKind.BlockStmt, { statements: [stmt] }, tok));
+	const mark = state.trailingDecls.length;
+	const stmts = [try callStmtParser(state)];
+	for (const t of takeTrailingDecls(state, mark)) stmts.push(t);
+	return Result.ok(createNode(NodeKind.BlockStmt, { statements: stmts }, tok));
 }
 
 // ===== If Statement =====
@@ -459,8 +461,10 @@ function parseCaseBody(state: ParserState): NodesResult {
 		}
 		// Use callBlockParser for block statements, callExprParser for expressions
 		// But we need the full statement parser here. Use the registered stmt parser.
+		const mark = state.trailingDecls.length;
 		const stmt = try callStmtParser(state);
 		stmts.push(stmt);
+		for (const t of takeTrailingDecls(state, mark)) stmts.push(t);
 	}
 	return Result.ok(stmts);
 }

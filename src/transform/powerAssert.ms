@@ -20,6 +20,7 @@ import { isIntegerType } from "../checker/types";
 import { TransformContext, newLoweredSym } from "./context";
 import { makeIdentResolved, makeTypedIdentResolved, runtimeRef, makeString, makeNumber, makeBlock, makeVarDecl, makeExprStmt, makeIf, makeUnary, makeNull, syntheticToken } from "./util";
 import { createNode } from "../ast/node";
+import { calleeFormals } from "./lowering/jsVarParamLower";
 
 // ===== Type-based __paValue dispatch =====
 
@@ -224,9 +225,11 @@ function decomposeExpr(
 	// Call expression: decompose arguments, then capture the call result
 	if (expr.kind == NodeKind.CallExpr) {
 		const d = expr.data as CallExprData;
+		const formals = calleeFormals(d);
 		const newArgs: Node[] = [];
 		for (let i = 0; i < d.arguments.length; i += 1) {
-			newArgs.push(decomposeExpr(ctx, d.arguments[i], captures, baseCol, loc));
+			const writesThrough = formals != null && i < formals.length && formals[i].kind == TypeKind.Var;
+			newArgs.push(writesThrough ? d.arguments[i] : decomposeExpr(ctx, d.arguments[i], captures, baseCol, loc));
 		}
 		// A method callee is left intact — later passes lower it by matching on
 		// the original node (protocol methods have no property to read at all),

@@ -34,5 +34,6 @@ typedef struct msTypeInfo {
 #define MS_CYCLIC_FLAG true
 #define MS_TYPE_FLAG_FUTURE 1  /* Object is a future — msDecref routes to msFutureDeferredRelease */
 #define MS_TYPE_FLAG_ARITY_ADAPTER 2  /* Closure env whose first field is the closure it forwards to */
+#define MS_TYPE_FLAG_HCR 4
 
 #endif /* MS_TYPEINFO_H */

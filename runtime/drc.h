@@ -69,6 +69,16 @@ static inline bool msIsInstance(void* p, const msTypeInfo* target) {
  * destroyFn dispatch routes through MS_DESTROY_DISPATCH so the ledger sees
  * exactly one finalize per object; a second is the drift signal.
  * See src/test/guard/ and the /nim-guard skill. */
+#if defined(MS_HCR_CORE) || defined(MS_HCR_MODULE)
+void msHcrCountAdd(const msTypeInfo* type, int32_t delta);
+#define MS_HCR_COUNT(t, delta) do { \
+	const msTypeInfo* __ct = (t); \
+	if (__ct != NULL && (__ct->flags & MS_TYPE_FLAG_HCR)) msHcrCountAdd(__ct, (delta)); \
+} while (0)
+#else
+#define MS_HCR_COUNT(t, delta) ((void)0)
+#endif
+
 #ifdef MS_DRC_LEDGER
 void msLedgerAlloc(void* p, const msTypeInfo* type);
 void msLedgerDestroy(void* p, const msTypeInfo* type);
@@ -184,6 +194,7 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
 	msRefHeader* h = (msRefHeader*)msSlabAlloc(total);   /* full zero */
 	h->rootIdx = -1;
 	h->type = type;
+	MS_HCR_COUNT(type, 1);
 	h->allocSize = (uint32_t)total;
 	MS_LEDGER_ALLOC((void*)(h + 1), type);
 	return (void*)(h + 1);
@@ -226,6 +237,7 @@ static inline void* msAllocTypedUninit(size_t size, const msTypeInfo* type) {
 	h->rc = 0;
 	h->rootIdx = -1;
 	h->type = type;
+	MS_HCR_COUNT(type, 1);
 	h->allocSize = (uint32_t)total;
 	MS_LEDGER_ALLOC((void*)(h + 1), type);
 	return (void*)(h + 1);
@@ -296,6 +308,7 @@ static inline void msDestroyAndDispose(void* p) {
 		 * walks a dangling root (UAF in markGray/getColor). */
 		if (h->rootIdx >= 0) msUnregisterCycle(p);
 #endif
+		MS_HCR_COUNT(h->type, -1);
 		msSlabFree(h, h->allocSize);
 	}
 }

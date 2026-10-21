@@ -682,6 +682,8 @@ function setLocs(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: int64, 
 		const lh = heapAllocObject(objHeap);
 		heapObjectSetField(objHeap, lh, "line", raiserInt(l.line));
 		heapObjectSetField(objHeap, lh, "column", raiserInt(l.column));
+		heapObjectSetField(objHeap, lh, "endLine", raiserInt(l.endLine));
+		heapObjectSetField(objHeap, lh, "endColumn", raiserInt(l.endColumn));
 		heapArrayPush(arrHeap, outer, raiserObject(lh));
 	}
 	heapObjectSetField(objHeap, h, name, raiserArray(outer));
@@ -1693,7 +1695,7 @@ function deserializeObjectLiteral(handle: int64, shape: Type | null, objHeap: Ra
 	return createNodeAt(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, loc);
 }
 
-const PARSER_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.QuoteSplice | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.StaticStorage | NodeFlag.Parenthesized | NodeFlag.WhenPicked | NodeFlag.ExplicitDeref | NodeFlag.CommaWritten | NodeFlag.Accessor | NodeFlag.AutoAccessor;
+const PARSER_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.QuoteSplice | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.StaticStorage | NodeFlag.Parenthesized | NodeFlag.WhenPicked | NodeFlag.ExplicitDeref | NodeFlag.CommaWritten | NodeFlag.Accessor | NodeFlag.AutoAccessor | NodeFlag.ContinuesList;
 
 export interface WireRefusal {
 	message: string;

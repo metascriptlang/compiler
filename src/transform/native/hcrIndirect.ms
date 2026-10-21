@@ -13,11 +13,19 @@ import { functionDeclIsAlive } from "../../checker/reachability";
 import { hcrStorageDecl } from "./hcrLift";
 import { ctorRoutineOf } from "../../checker/ctorRoutine";
 
+export struct HcrTypeLayout {
+	name: string;
+	subject: Type;
+	byValue: boolean;
+}
+
 export struct HcrIndirectModule {
 	moduleId: string;
 	modulePath: string;
 	typeInfos: string[];
 	typeKeys: string[];
+	typeLayouts: HcrTypeLayout[];
+	typeCounts: string[];
 	imports: string[];
 	beforeReload: string[];
 	afterReload: string[];
@@ -292,7 +300,10 @@ function handlerFunction(entry: string, handlers: string[]): string {
 function typeKeysFunction(own: HcrIndirectModule): string {
 	let entries = "";
 	for (const entry of own.typeKeys) entries = entries + `${cString(entry)}, `;
-	return `MS_HCR_EXPORT const char* const* HcrTypeKeys000(void) { static const char* const keys[] = { ${entries}NULL }; return keys; }`;
+	let counts = "";
+	for (const entry of own.typeCounts) counts = counts + `${cString(entry)}, `;
+	return `MS_HCR_EXPORT const char* const* HcrTypeKeys000(void) { static const char* const keys[] = { ${entries}NULL }; return keys; } `
+		+ `MS_HCR_EXPORT const char* const* HcrTypeCounts000(void) { static const char* const counts[] = { ${counts}NULL }; return counts; }`;
 }
 
 function cString(value: string): string {

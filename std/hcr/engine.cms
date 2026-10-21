@@ -42,6 +42,8 @@ extern function msHcrGuardRun(body: () => void): int32;
 extern function msHcrGuardText(): string;
 extern function msHcrRestoreTypeInfos(moduleId: cstring): void;
 extern function msDrainUntilIdle(): void;
+extern function msOrcCollect(): void;
+extern function msHcrLiveCount(moduleId: cstring, typeName: cstring): int64;
 extern function msReportOrphanFailures(): int32;
 extern function msHcrCoreDeinit(): void;
 extern function msHcrDefer(moduleId: cstring, name: cstring, init: Ptr<void>, deinit: Ptr<void>): void;
@@ -62,6 +64,7 @@ interface HcrImage {
 	bindKeys: string[];
 	typeNames: string[];
 	typeKeys: string[];
+	typeCounts: string[];
 }
 
 interface HcrModule {
@@ -151,7 +154,7 @@ function symbolOf(image: Ptr<void>, name: string): Ptr<void> {
 
 function emptyImage(handle: Ptr<void>): HcrImage {
 	return { handle, moduleId: "", deferred: "", importIds: [], symbolNames: [], symbolKeys: [], variableSymbols: [], variableNames: [],
-		bindOwners: [], bindNames: [], bindKeys: [], typeNames: [], typeKeys: [] };
+		bindOwners: [], bindNames: [], bindKeys: [], typeNames: [], typeKeys: [], typeCounts: [] };
 }
 
 function describe(handle: Ptr<void>): HcrImage {
@@ -162,9 +165,10 @@ function describe(handle: Ptr<void>): HcrImage {
 	const bindingsRaw = symbolOf(handle, "HcrBindings000");
 	const importsRaw = symbolOf(handle, "HcrImports000");
 	const typeKeysRaw = symbolOf(handle, "HcrTypeKeys000");
+	const typeCountsRaw = symbolOf(handle, "HcrTypeCounts000");
 	const image = emptyImage(handle);
 	if (hcrIsNull(idRaw) != 0 || hcrIsNull(functionsRaw) != 0 || hcrIsNull(variablesRaw) != 0 || hcrIsNull(variableNamesRaw) != 0
-		|| hcrIsNull(bindingsRaw) != 0 || hcrIsNull(importsRaw) != 0 || hcrIsNull(typeKeysRaw) != 0) return image;
+		|| hcrIsNull(bindingsRaw) != 0 || hcrIsNull(importsRaw) != 0 || hcrIsNull(typeKeysRaw) != 0 || hcrIsNull(typeCountsRaw) != 0) return image;
 	image.moduleId = msHcrCallText(idRaw);
 	const deferredRaw = symbolOf(handle, "HcrDeferred000");
 	if (hcrIsNull(deferredRaw) == 0) image.deferred = msHcrCallText(deferredRaw);
@@ -190,6 +194,7 @@ function describe(handle: Ptr<void>): HcrImage {
 		image.typeNames.push(msHcrImportId(typeKeysRaw, i));
 		image.typeKeys.push(msHcrImportKey(typeKeysRaw, i));
 	}
+	for (let i: int32 = 0; i < msHcrImportCount(typeCountsRaw); i += 1) image.typeCounts.push(msHcrImportKey(typeCountsRaw, i));
 	return image;
 }
 
@@ -406,13 +411,52 @@ function initializationOrder(candidates: HcrCandidate[]): HcrCandidate[] {
 	return order;
 }
 
-function changedType(item: HcrCandidate): string {
-	const previous = item.module.image;
-	for (let i = 0; i < item.image.typeNames.length; i += 1) {
-		const at = previous.typeNames.indexOf(item.image.typeNames[i]);
-		if (at >= 0 && previous.typeKeys[at] != item.image.typeKeys[i]) return item.image.typeNames[i];
+interface TypeChange {
+	moduleId: string;
+	name: string;
+	spec: string;
+}
+
+function changedTypes(candidates: HcrCandidate[]): TypeChange[] {
+	const changes: TypeChange[] = [];
+	for (const item of candidates) {
+		if (item.isNew) continue;
+		const previous = item.module.image;
+		for (let i = 0; i < item.image.typeNames.length; i += 1) {
+			const at = previous.typeNames.indexOf(item.image.typeNames[i]);
+			if (at < 0 || previous.typeKeys[at] == item.image.typeKeys[i]) continue;
+			const spec = at < previous.typeCounts.length ? previous.typeCounts[at] : "!has no live count";
+			changes.push({ moduleId: item.module.moduleId, name: item.image.typeNames[i], spec });
+		}
 	}
-	return "";
+	return changes;
+}
+
+function liveValues(spec: string): int64 {
+	let total: int64 = 0;
+	if (spec == "") return total;
+	for (const entry of spec.split(",")) {
+		const colon = entry.indexOf(":");
+		total += msHcrLiveCount(entry.slice(0, colon), entry.slice(colon + 1, entry.length));
+	}
+	return total;
+}
+
+function layoutRefusal(changes: TypeChange[], refused: string[]): string {
+	const reasons: string[] = [];
+	for (const change of changes) {
+		let reason = "";
+		if (change.spec.startsWith("!")) {
+			reason = change.spec.slice(1, change.spec.length);
+		} else {
+			const live = liveValues(change.spec);
+			if (live > 0) reason = `has ${live} live values`;
+		}
+		if (reason == "") continue;
+		reasons.push(`type '${change.name}' in module '${change.moduleId}' ${reason}`);
+		if (!refused.includes(change.moduleId)) refused.push(change.moduleId);
+	}
+	return reasons.join("; ");
 }
 
 export function engineReload(): ReloadKind {
@@ -524,17 +568,7 @@ function performReload(): ReloadResult {
 		return result(ReloadKind.Rejected, [], mismatch);
 	}
 
-	for (const item of candidates) {
-		const changed = item.isNew ? "" : changedType(item);
-		if (changed != "") {
-			release(candidates);
-			forgetAfter(known);
-			bundleIdentity = bundle;
-			return result(ReloadKind.RestartRequired, [item.module.moduleId],
-				`the layout of type '${changed}' in module '${item.module.moduleId}' changed`);
-		}
-	}
-
+	const changes = changedTypes(candidates);
 
 	const quiesceFailed = failingHandler("HcrBeforeReload000", known);
 	if (quiesceFailed != "") {
@@ -542,6 +576,19 @@ function performReload(): ReloadResult {
 		forgetAfter(known);
 		bundleIdentity = bundle;
 		return result(ReloadKind.Rejected, [quiesceFailed], `the before-reload handler of module '${quiesceFailed}' threw`);
+	}
+
+	if (changes.length > 0) {
+		msDrainUntilIdle();
+		msOrcCollect();
+		const refused: string[] = [];
+		const refusal = layoutRefusal(changes, refused);
+		if (refusal != "") {
+			release(candidates);
+			forgetAfter(known);
+			bundleIdentity = bundle;
+			return result(ReloadKind.RestartRequired, refused, refusal);
+		}
 	}
 
 	const reset = resetVariables(candidates);
