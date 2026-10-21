@@ -180,6 +180,7 @@ class Unit {
 	pre: string = "";
 	text: string = "";
 	glue: boolean = false;
+	exported: boolean = false;
 	fragile: boolean = false;
 	ext: boolean = false;
 	lent: boolean = false;
@@ -253,6 +254,7 @@ function unitHead(line: string): Result<Unit, string> {
 		const word = identAfter(line, at);
 		if (word == "") { return Result.err("project mode does not understand the declaration '" + line.slice(0, 60) + "'"); }
 		at = skipSpaceForward(line, at) + word.byteLength;
+		if (word == "export") { u.exported = true; }
 		if (!MODIFIERS.includes(word)) { kind = word; }
 	}
 	if (kind == "function" && codeAt(line, at) == 42) { at++; }
@@ -1048,7 +1050,7 @@ class Splitter {
 		text += (m == k ? this.loadFirst() : "") + rw.imports + (m == k ? this.selectImport : "") + this.hubLines(m);
 		if (m < k && this.shapes.has(Mod.Init)) { text += "console.log(\"init m" + String(m) + "\");\n"; }
 		for (const u of this.units) {
-			if (u.module == m) { text += u.pre + (u.shown || u.glue || u.ext || u.kind == "converter" ? "export " : "") + rewrite(u.text, u.toks, rw.from, rw.to); }
+			if (u.module == m) { text += u.pre + (!u.exported && (u.shown || u.glue || u.ext || u.kind == "converter") ? "export " : "") + rewrite(u.text, u.toks, rw.from, rw.to); }
 		}
 		if (m == this.selectHost) { text += this.selectDecl; }
 		return m == k ? text + rewrite(this.mainText, this.mainToks, rw.from, rw.to) + this.selectUse : text;
@@ -1269,6 +1271,19 @@ test "modules=0 is the single-file program, byte for byte" {
 			assert files[0].text == generate(seed as uint64, f.value);
 		}
 	}
+}
+
+test "a declaration that is already exported is exported once, after its decorators" {
+	let operators = 0;
+	for (let seed = 1; seed <= 10; seed++) {
+		for (const f of projectOf(seed as uint64, "fams=enum stmts=8 w.stmt.fam=80 w.expr.fam=40 modules=3")) {
+			for (const line of f.text.split("\n")) {
+				assert !line.startsWith("export export ") && !line.startsWith("export @");
+				if (line.startsWith("@delegate export function `") || line.startsWith("export function `")) { operators++; }
+			}
+		}
+	}
+	assert operators > 10;
 }
 
 test "a split project is deterministic, holds every declaration once and imports only its own modules" {
