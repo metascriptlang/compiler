@@ -4,7 +4,7 @@
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
 import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, UnreachableStmtData, MacroInvocationData, StringLiteralData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, BinaryExprData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind, NewExprData, MemberExprData, ArrayAccessData, HiddenStdConvData, UnaryExprData, ConditionalExprData, ObjectLiteralData, SpreadExprData, MoveExprData, HiddenDerefData } from "../../ast/node";
-import { isStructType, unwrapRefNullUnion, isUnresolvedType, mayHoldAddress, peelThrough, PEEL_ALL, PEEL_ALIAS, hasAsgnFlag, isIntegerType, isFloatType } from "../../checker/types";
+import { isStructType, isUnresolvedType, mayHoldAddress, peelThrough, PEEL_ALL, PEEL_ALIAS, hasAsgnFlag, isIntegerType, isFloatType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { statementCanRaise, callCanRaise, finallyIsErrorBlind } from "../../checker/raises";
 import {
@@ -413,17 +413,6 @@ function genExprStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 
 // ===== Variable Declaration =====
 
-// Detect union narrowing: `expr as VariantType` where expr has Union nodeType
-function isUnionNarrowing(node: Readonly<Node>): boolean {
-	if (node.kind != NodeKind.TypeAssertion) return false;
-	const d = node.data as TypeAssertionData;
-	if (d.asExpr == null) return false;
-	const srcType = d.asExpr.nodeType;
-	if (srcType == null || srcType.kind != TypeKind.Union) return false;
-	if (unwrapRefNullUnion(srcType) != null) return false;
-	return true;
-}
-
 // Storage at module scope, initializer left in the frame — the split the
 // reference makes for a global declared inside a proc. The run-once guard is
 // composed on top for `const` only.
@@ -631,13 +620,6 @@ function genVarDecl(g: CGen, p: CProc, node: Readonly<Node>): void {
 		} else if (d.initializer.kind == NodeKind.ArrayLiteral && (d.initializer.data as ArrayLiteralData).elements.length == 0) {
 			if (hoistDecl) { declareLocal(p, reuse, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = (${cType})${zeroInit(varType)};`); }
 			else { emitStmtsLine(p, `${cType} ${varName} = (${cType})${zeroInit(varType)};`); }
-		} else if (d.initializer.kind == NodeKind.TypeAssertion && isUnionNarrowing(d.initializer)) {
-			const initSnippet = genExpr(g, p, d.initializer);
-			if (hoistDecl) { declareLocal(p, reuse, `${cType}* ${varName};`); }
-			else { emitStmtsLine(p, `${cType}* ${varName};`); }
-			emitStmtsLine(p, `${varName} = &(${initSnippet});`);
-			p.indirectLocals.push(d.declName);
-			if (node.resolvedSym != null) p.indirectSyms.push(node.resolvedSym);
 		} else if (hoistDecl && buildsInPlace(g, d.initializer, cType)) {
 			declareLocal(p, reuse, `${cType} ${varName};`);
 			const built = genExprInto(g, p, d.initializer, varName);

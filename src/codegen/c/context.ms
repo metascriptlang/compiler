@@ -180,8 +180,7 @@ export class CProc {
 	params: string[];      // parameter names (mangled)
 	hoistedTemps: string[];
 	indirectParams: string[];  // reference pointer introduction params — auto-deref as (*name) (Reference: indirect location parity)
-	indirectLocals: string[];  // locals pointing into union variant data — auto-deref as (*name)
-	indirectSyms: Cursor<Symbol>[];  // the symbols of indirectParams and indirectLocals
+	indirectSyms: Cursor<Symbol>[];  // the symbols of indirectParams
 	nestedTryStmts: CTryEntry[];
 	beforeRetNeeded: boolean;
 	suppressRaiseCheck: boolean;
@@ -204,19 +203,10 @@ export function isIndirectParam(p: CProc, name: string): boolean {
 	return false;
 }
 
-// Check if a local variable is an indirect union variant pointer — auto-deref as (*name)
-export function isIndirectLocal(p: CProc, name: string): boolean {
-	if (p == null) return false;
-	for (const local of p.indirectLocals) {
-		if (local == name) return true;
-	}
-	return false;
-}
-
 // A reference that carries its symbol is indirect only when that binding is.
 export function isIndirectRef(p: CProc, sym: Symbol | null, name: string): boolean {
 	if (p == null) return false;
-	if (sym == null) return isIndirectParam(p, name) || isIndirectLocal(p, name);
+	if (sym == null) return isIndirectParam(p, name);
 	for (const s of p.indirectSyms) {
 		if (s == sym) return true;
 	}
@@ -238,7 +228,6 @@ export function createProc(name: string, returnType: Type | null): CProc {
 		params: [],
 		hoistedTemps: [],
 		indirectParams: [],
-		indirectLocals: [],
 		indirectSyms: [],
 		nestedTryStmts: [],
 		beforeRetNeeded: false,
