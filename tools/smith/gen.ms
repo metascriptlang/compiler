@@ -1277,6 +1277,7 @@ class Gen {
 		const structs = this.entsOf(EntKind.StructVar, t);
 		const cells = this.entsOf(EntKind.ClassVar, t);
 		const picked = this.pickW(W.AggStruct, W.AggSpread);
+		if (picked == 7 && cells.length > 0 && (structs.length == 0 || this.rng.chance(30))) { return this.cellSpread(t, X, cells, indent); }
 		if (picked == 7 && structs.length > 0) { return this.aggSpread(t, X, structs, indent); }
 		const k = picked == 7 ? 0 : picked;
 		if (k >= 1 && k <= 3 && structs.length > 0) {
@@ -1319,6 +1320,15 @@ class Gen {
 		const text = indent + "let " + name + ": PtS" + X + " = mkS" + X + "(" + this.expr(t, 0) + ", " + this.expr(t, 0) + ", " + this.expr(t, 0) + ");\n";
 		this.ents.push({ kind: EntKind.StructVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
 		return text;
+	}
+
+	cellSpread(t: Ty, X: string, cells: Ent[], indent: string): string {
+		const c = this.pickEnt(cells).name;
+		const name = this.entName("k");
+		const form = this.rng.below(3);
+		const tail = form == 0 ? ", v: " + this.expr(t, 0) : form == 1 ? ", p: " + this.structValue(t, 0) : "";
+		this.ents.push({ kind: EntKind.ClassVar, name: name, ty: t, params: [], len: 0, cost: 0 as int64 });
+		return indent + "const " + name + ": CellC" + X + " = { ..." + c + tail + " };\n";
 	}
 
 	aggSpread(t: Ty, X: string, structs: Ent[], indent: string): string {
@@ -12704,9 +12714,9 @@ test "an override member and an abstract method are never generated (inbox 2026-
 
 test "the agg family reaches object spread and a zero weight removes it" {
 	const on = textOver(withWeights("fams=agg types=int32 w.agg.spread=8"), 30);
-	for (const shape of ["{ ...mkS", "n: { ...", ", ...s", "IvS", "const v"]) { assert on.contains(shape); }
+	for (const shape of ["{ ...mkS", "n: { ...", ", ...s", "IvS", "const v", ": CellCInt32 = { ...k"]) { assert on.contains(shape); }
 	const off = textOver(withWeights("fams=agg types=int32 w.agg.spread=0"), 30);
-	assert !off.contains("{ ...mkS") && !off.contains("n: { ...") && !off.contains(", ...s") && !off.contains("IvS");
+	assert !off.contains("{ ...mkS") && !off.contains("n: { ...") && !off.contains(", ...s") && !off.contains("IvS") && !off.contains(": CellCInt32 = { ...");
 }
 
 test "the enum family reaches intersection and conditional types and a zero weight removes them" {
