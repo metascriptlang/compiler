@@ -37,9 +37,6 @@ msString msFsReadFile(msString path);
  * Returns 1.0 on success, 0.0 on failure. */
 double msFsWriteFileMode(msString path, msString content, msString mode);
 
-/* chmod(path, mode). No-op on Windows. Returns 1.0/0.0. */
-double msFsChmod(msString path, int32_t mode);
-
 /* Stat predicates. Return 1.0 (true) or 0.0 (false). */
 double msFsExists(msString path);
 double msFsIsFile(msString path);
@@ -63,25 +60,21 @@ double msFsModifiedTime(msString path);
  * filesystem keeps no change time, so a caller must then read the file. */
 msString msFsChangeStamp(msString path);
 
-/* Create directory (0755 on POSIX). Returns 1.0 on success or EEXIST, 0.0 on failure. */
-double msFsMkdir(msString path);
-
-/* Remove empty directory. Returns 1.0/0.0. */
-double msFsRmdir(msString path);
-
 /* List directory entries as "\n"-joined string.
  * Directories have trailing "/". "." and ".." excluded.
  * Returns MS_EMPTY_STRING on error (check msFsLastErrno). */
 msString msFsReadDirEntries(msString path);
 
-/* Remove a file. Returns 1.0/0.0. */
+/* Windows only: std/fs calls the POSIX syscalls itself. Each returns 1.0 on success,
+ * 0.0 with the error in msFsLastErrno; mkdir also succeeds on EEXIST, chmod is a no-op. */
+#ifdef _WIN32
+double msFsChmod(msString path, int32_t mode);
+double msFsMkdir(msString path);
+double msFsRmdir(msString path);
 double msFsRemove(msString path);
-
-/* Rename/move a file or directory. Returns 1.0/0.0. */
 double msFsRename(msString oldPath, msString newPath);
-
-/* Create `path` as a symbolic link to `target`. Returns 1.0/0.0. */
 double msFsSymlink(msString target, msString path);
+#endif
 
 #ifdef __cplusplus
 }

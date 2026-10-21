@@ -58,17 +58,6 @@ double msFsWriteFileMode(msString path, msString content, msString mode) {
 	return (written == (size_t)content.len) ? 1.0 : 0.0;
 }
 
-/* ===== Permissions ===== */
-
-double msFsChmod(msString path, int32_t mode) {
-	_msFsLastErrno = 0;
-	if (chmod(msStringToCString(path), (mode_t)mode) != 0) {
-		_msFsLastErrno = errno;
-		return 0.0;
-	}
-	return 1.0;
-}
-
 /* ===== Stat ===== */
 
 double msFsExists(msString path) {
@@ -140,21 +129,6 @@ msString msFsChangeStamp(msString path) {
 
 /* ===== Directory ===== */
 
-double msFsMkdir(msString path) {
-	_msFsLastErrno = 0;
-	int r = mkdir(msStringToCString(path), 0755);
-	if (r == 0 || errno == EEXIST) return 1.0;
-	_msFsLastErrno = errno;
-	return 0.0;
-}
-
-double msFsRmdir(msString path) {
-	_msFsLastErrno = 0;
-	if (rmdir(msStringToCString(path)) == 0) return 1.0;
-	_msFsLastErrno = errno;
-	return 0.0;
-}
-
 msString msFsReadDirEntries(msString path) {
 	_msFsLastErrno = 0;
 	const char* cpath = msStringToCString(path);
@@ -225,29 +199,6 @@ msString msFsReadDirEntries(msString path) {
 	msString result = msStringNew(buf, (int64_t)len);
 	free(buf);
 	return result;
-}
-
-/* ===== Remove / Rename ===== */
-
-double msFsRemove(msString path) {
-	_msFsLastErrno = 0;
-	if (unlink(msStringToCString(path)) == 0) return 1.0;
-	_msFsLastErrno = errno;
-	return 0.0;
-}
-
-double msFsRename(msString oldPath, msString newPath) {
-	_msFsLastErrno = 0;
-	if (rename(msStringToCString(oldPath), msStringToCString(newPath)) == 0) return 1.0;
-	_msFsLastErrno = errno;
-	return 0.0;
-}
-
-double msFsSymlink(msString target, msString path) {
-	_msFsLastErrno = 0;
-	if (symlink(msStringToCString(target), msStringToCString(path)) == 0) return 1.0;
-	_msFsLastErrno = errno;
-	return 0.0;
 }
 
 /* end of posix.c */

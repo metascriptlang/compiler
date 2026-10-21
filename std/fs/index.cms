@@ -7,18 +7,79 @@ import { IoError, ioErrorFromErrno, writeFailed } from "../io/errors";
 extern function msFsLastErrno(): int32;
 extern function msFsReadFile(path: string): string;
 extern function msFsWriteFileMode(path: string, content: string, mode: string): number;
-extern function msFsChmod(path: string, mode: int32): number;
 extern function msFsExists(path: string): number;
 extern function msFsIsFile(path: string): number;
 extern function msFsIsDir(path: string): number;
 extern function msFsIsExecutable(path: string): number;
 extern function msFsRealPath(path: string): string;
-extern function msFsMkdir(path: string): number;
-extern function msFsRmdir(path: string): number;
 extern function msFsReadDirEntries(path: string): string;
-extern function msFsRemove(path: string): number;
-extern function msFsRename(oldPath: string, newPath: string): number;
-extern function msFsSymlink(target: string, path: string): number;
+
+const FAILED_WITHOUT_ERRNO: int32 = -1;
+
+when (windows) {
+	extern function msFsChmod(path: string, mode: int32): number;
+	extern function msFsMkdir(path: string): number;
+	extern function msFsRmdir(path: string): number;
+	extern function msFsRemove(path: string): number;
+	extern function msFsRename(oldPath: string, newPath: string): number;
+	extern function msFsSymlink(target: string, path: string): number;
+
+	function lastErrnoOf(ok: number): int32 {
+		if (ok == 1) return 0;
+		const err = msFsLastErrno();
+		return err != 0 ? err : FAILED_WITHOUT_ERRNO;
+	}
+	function chmodErrno(path: string, mode: int32): int32 { return lastErrnoOf(msFsChmod(path, mode)); }
+	function mkdirErrno(path: string): int32 { return lastErrnoOf(msFsMkdir(path)); }
+	function rmdirErrno(path: string): int32 { return lastErrnoOf(msFsRmdir(path)); }
+	function removeErrno(path: string): int32 { return lastErrnoOf(msFsRemove(path)); }
+	function renameErrno(oldPath: string, newPath: string): int32 { return lastErrnoOf(msFsRename(oldPath, newPath)); }
+	function symlinkErrno(target: string, path: string): int32 { return lastErrnoOf(msFsSymlink(target, path)); }
+} else {
+	@include("errno.h");
+	@include("stdio.h");
+	@include("unistd.h");
+	@include("sys/stat.h");
+
+	extern let errno: int32;
+	extern const EEXIST: int32;
+	extern function cChmod(path: cstring, mode: int32): int32 from "chmod";
+	extern function cMkdir(path: cstring, mode: int32): int32 from "mkdir";
+	extern function cRmdir(path: cstring): int32 from "rmdir";
+	extern function cUnlink(path: cstring): int32 from "unlink";
+	extern function cRename(oldPath: cstring, newPath: cstring): int32 from "rename";
+	extern function cSymlink(target: cstring, path: cstring): int32 from "symlink";
+
+	// POSIX lets any later libc call (free included) overwrite errno: read it straight
+	// after the syscall, before anything else runs.
+
+	function chmodErrno(path: string, mode: int32): int32 {
+		return cChmod(path as cstring, mode) == 0 ? 0 : errno;
+	}
+	function mkdirErrno(path: string): int32 {
+		if (cMkdir(path as cstring, 493) == 0) return 0;
+		const err = errno;
+		return err == EEXIST ? 0 : err;
+	}
+	function rmdirErrno(path: string): int32 {
+		return cRmdir(path as cstring) == 0 ? 0 : errno;
+	}
+	function removeErrno(path: string): int32 {
+		return cUnlink(path as cstring) == 0 ? 0 : errno;
+	}
+	function renameErrno(oldPath: string, newPath: string): int32 {
+		return cRename(oldPath as cstring, newPath as cstring) == 0 ? 0 : errno;
+	}
+	function symlinkErrno(target: string, path: string): int32 {
+		return cSymlink(target as cstring, path as cstring) == 0 ? 0 : errno;
+	}
+}
+
+function errnoResult(err: int32, path: string, what: string): Result<void, IoError> {
+	if (err == 0) return Result.ok(null);
+	if (err == FAILED_WITHOUT_ERRNO) return Result.err(writeFailed(path, what));
+	return Result.err(ioErrorFromErrno(err, path));
+}
 
 // Path utilities (pure MetaScript)
 export { dirname, basename, extname, join, resolve, isAbsolute, normalize } from "./path";
@@ -55,31 +116,19 @@ export function appendFile(path: string, content: string): Result<void, IoError>
 // Change POSIX permission bits on a path. Mode is passed as a decimal int32
 // (e.g. 384 for rw------- = 0600). No-op on Windows.
 export function chmod(path: string, mode: int32): Result<void, IoError> {
-	if (msFsChmod(path, mode) == 1) return Result.ok(null);
-	const err = msFsLastErrno();
-	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
-	return Result.err(writeFailed(path, "chmod failed"));
+	return errnoResult(chmodErrno(path, mode), path, "chmod failed");
 }
 
 export function mkdir(path: string): Result<void, IoError> {
-	if (msFsMkdir(path) == 1) return Result.ok(null);
-	const err = msFsLastErrno();
-	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
-	return Result.err(writeFailed(path, "mkdir failed"));
+	return errnoResult(mkdirErrno(path), path, "mkdir failed");
 }
 
 export function rmdir(path: string): Result<void, IoError> {
-	if (msFsRmdir(path) == 1) return Result.ok(null);
-	const err = msFsLastErrno();
-	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
-	return Result.err(writeFailed(path, "rmdir failed"));
+	return errnoResult(rmdirErrno(path), path, "rmdir failed");
 }
 
 export function remove(path: string): Result<void, IoError> {
-	if (msFsRemove(path) == 1) return Result.ok(null);
-	const err = msFsLastErrno();
-	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
-	return Result.err(writeFailed(path, "remove failed"));
+	return errnoResult(removeErrno(path), path, "remove failed");
 }
 
 // Recursively remove a file or directory tree, Go-style. Mirrors
@@ -106,17 +155,11 @@ export function removeAll(path: string): Result<void, IoError> {
 }
 
 export function symlink(target: string, path: string): Result<void, IoError> {
-	if (msFsSymlink(target, path) == 1) return Result.ok(null);
-	const err = msFsLastErrno();
-	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
-	return Result.err(writeFailed(path, "symlink failed"));
+	return errnoResult(symlinkErrno(target, path), path, "symlink failed");
 }
 
 export function rename(oldPath: string, newPath: string): Result<void, IoError> {
-	if (msFsRename(oldPath, newPath) == 1) return Result.ok(null);
-	const err = msFsLastErrno();
-	if (err != 0) return Result.err(ioErrorFromErrno(err, oldPath));
-	return Result.err(writeFailed(oldPath, "rename failed"));
+	return errnoResult(renameErrno(oldPath, newPath), oldPath, "rename failed");
 }
 
 // ===== Predicates (stay as boolean — not fallible) =====
