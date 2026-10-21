@@ -2081,9 +2081,9 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 					if (!found) {
 						if (d.keyLocations != null && ki < d.keyLocations.length) {
 							const kl = d.keyLocations[ki];
-							addErrorRange(ctx, "'" + key + "' does not exist in type '" + containerName + "'", kl.line, kl.column, kl.column + key.length);
+							addErrorRange(ctx, "'" + key + "' does not exist in type '" + (containerName != "" ? containerName : typeDisplayName(objE)) + "'", kl.line, kl.column, kl.column + key.length);
 						} else {
-							addError(ctx, "'" + key + "' does not exist in type '" + containerName + "'", node.location.line, node.location.column);
+							addError(ctx, "'" + key + "' does not exist in type '" + (containerName != "" ? containerName : typeDisplayName(objE)) + "'", node.location.line, node.location.column);
 						}
 					}
 					// Check duplicate: same key appeared earlier

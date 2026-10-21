@@ -8,7 +8,7 @@
 
 import { firstPrivateField } from "./visibility";
 import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
-import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound } from "./types";
+import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
 import { markUsedIn, noteImported, findExportedSymbol, CheckerContext, reportDuplicateConverter, getExtReceiverType, extractGenericNames, addError, addWarning, sgRecordSym, extractGenericParamDecls, getStaticExtTypeName, getExtReceiverText, isLifecycleHookName, declaresLifecycleHook, createContext, findDeclaredExt, findAllExtensionsByName, getExtFnType, stripReceiverParam, stampItem } from "./context";
@@ -636,6 +636,176 @@ function resolveIndexedAccess(objectText: string, indexText: string, ctx: Checke
 	return errorType();
 }
 
+function genericInstanceOf(ctx: CheckerContext, sym: Symbol, genericParams: string, args: Type[], line: int32, col: int32): Type {
+	const isRefBase = sym.symbolType.kind == TypeKind.Ref && refWrapsNominal(sym.symbolType);
+	let baseType = sym.symbolType;
+	if (isRefBase && baseType.typeReturn != null) baseType = baseType.typeReturn;
+	const gi = createGenericInstance(baseType, args);
+	gi.typeName = sym.name;
+	instantiateGenericBody(gi, genericParams);
+	typeInstanceHooksFn(gi, ctx, line, col);
+	return isRefBase ? createRef(gi) : gi;
+}
+
+// An instance whose body is a read-only view is that view, so no write reaches through the
+// alias. A mapped type with nothing generic left that did not become an object type: a Map
+// when its keys are all of `string` or of `number`, as `{ [key: K]: V }` is; refused otherwise.
+function settleMapped(ctx: CheckerContext, t: Type, line: int32, col: int32): Type {
+	let body: Type | null = t;
+	while (body != null && (body.kind == TypeKind.GenericInstance || body.kind == TypeKind.Ref)) body = body.typeReturn;
+	if (t.kind == TypeKind.GenericInstance && isReadonlyView(peelTransparentInstance(t))) return peelTransparentInstance(t);
+	if (body == null || body.kind != TypeKind.Mapped || mappedIsGeneric(body)) return t;
+	const index = mappedIndexKey(body);
+	const mapSym = index != null ? lookupTypeSym(ctx, "Map") : null;
+	if (mapSym != null) {
+		ensureShaped(mapSym, ctx);
+		return genericInstanceOf(ctx, mapSym, symGenericParams(mapSym), [index!, mappedValueAt(body, index!)], line, col);
+	}
+	if (line > 0) addError(ctx, `'${typeDisplayName(t)}' is no object type: ${mappedRefusal(body)}`, line, col);
+	return errorType();
+}
+
+interface MappedMember {
+	param: string;
+	constraint: string;
+	nameType: string;
+	template: string;
+	modifiers: BitSet<MappedModifier>;
+	trailing: string;
+}
+
+function skipBlanks(text: string, at: int32): int32 {
+	let i = at;
+	while (i < text.length && (text.charAt(i) == " " || text.charAt(i) == "\t" || text.charAt(i) == "\n")) i += 1;
+	return i;
+}
+
+interface ModifierScan { at: int32; mods: BitSet<MappedModifier>; }
+
+// A `+`/`-` sign before a modifier, then the modifier: the bit for adding or removing it.
+function modifierAt(text: string, scan: ModifierScan, word: string, add: MappedModifier, remove: MappedModifier): ModifierScan {
+	let i = skipBlanks(text, scan.at);
+	let sign = "";
+	if (i < text.length && (text.charAt(i) == "+" || text.charAt(i) == "-")) {
+		sign = text.charAt(i);
+		i = skipBlanks(text, i + 1);
+	}
+	if (!text.slice(i, text.length).startsWith(word)) return scan;
+	return { at: i + word.length, mods: scan.mods.incl(sign == "-" ? remove : add) };
+}
+
+// `[readonly] [P in C (as N)] (?): X`, the only member of a mapped type; null for any other member.
+function mappedMemberOf(inner: string): MappedMember | null {
+	const readonly = modifierAt(inner, { at: 0, mods: 0 as BitSet<MappedModifier> }, "readonly", MappedModifier.IncludeReadonly, MappedModifier.ExcludeReadonly);
+	const i = skipBlanks(inner, readonly.at);
+	if (i >= inner.length || inner.charAt(i) != "[") return null;
+	let depth = 0;
+	let close = -1;
+	for (let j = i; j < inner.length && close < 0; j += 1) {
+		depth = bracketDepthStep(inner, j) + depth;
+		if (depth == 0) close = j;
+	}
+	if (close < 0) return null;
+	const head = inner.slice(i + 1, close).trim();
+	const inAt = findTopLevelKeyword(head, " in ");
+	if (inAt <= 0 || !isValidTypeIdentifier(head.slice(0, inAt).trim())) return null;
+	const range = head.slice(inAt + 4, head.length).trim();
+	const asAt = findTopLevelKeyword(range, " as ");
+	const optional = modifierAt(inner, { at: close + 1, mods: readonly.mods }, "?", MappedModifier.IncludeOptional, MappedModifier.ExcludeOptional);
+	const rest = skipBlanks(inner, optional.at);
+	if (rest >= inner.length || inner.charAt(rest) != ":") return null;
+	const body = inner.slice(rest + 1, inner.length);
+	const members = splitTopLevel(body, body.indexOf(";") >= 0 ? ";" : ",");
+	let trailing = "";
+	for (let m = 1; m < members.length; m += 1) trailing = trailing + members[m].trim();
+	return {
+		param: head.slice(0, inAt).trim(),
+		constraint: asAt >= 0 ? range.slice(0, asAt).trim() : range,
+		nameType: asAt >= 0 ? range.slice(asAt + 4, range.length).trim() : "",
+		template: members.length > 0 ? members[0].trim() : "",
+		modifiers: optional.mods,
+		trailing,
+	};
+}
+
+// Reference: getTypeFromMappedTypeNode. The modifiers type is T of `keyof T`, or of the
+// `keyof T` a type parameter key is constrained by (getModifiersTypeFromMappedType).
+function resolveMappedMember(m: MappedMember, text: string, ctx: CheckerContext, line: int32, col: int32): Type {
+	if (m.trailing != "") {
+		if (line > 0) addError(ctx, `a mapped type may not declare properties or methods: '${text}'; write the other members in an intersection, '{ [${m.param} in ${m.constraint}]: ${m.template} } & { ... }'`, line, col);
+		return errorType();
+	}
+	let mods = m.modifiers;
+	let source: Type | null = null;
+	let constraint: Type;
+	if (m.constraint.startsWith("keyof ")) {
+		source = resolveAnnotation(m.constraint.slice(6, m.constraint.length), ctx, line, col);
+		if (source.kind == TypeKind.Error) return source;
+		mods = mods.incl(MappedModifier.KeyOfDeclared);
+		const keys = hasGenericParams(source) ? createKeyOfType(source) : keyOfType(source);
+		constraint = keys != null ? keys : neverType();
+	} else {
+		constraint = resolveAnnotation(m.constraint, ctx, line, col);
+		if (constraint.kind == TypeKind.Error) return constraint;
+		const bound = constraint.kind == TypeKind.GenericParam ? constraint.typeExtra : null;
+		if (bound != null && bound.kind == TypeKind.KeyOf && bound.typeChildren.length == 1) source = bound.typeChildren[0];
+	}
+	openScope(ctx.table, ScopeKind.Block);
+	const param = defineGenericParam(ctx, m.param);
+	param.typeExtra = constraint;
+	const nameType = m.nameType != "" ? resolveAnnotation(m.nameType, ctx, line, col) : null;
+	const template = resolveAnnotation(m.template, ctx, line, col);
+	closeScope(ctx.table);
+	return settleMapped(ctx, evaluateMappedType(createMappedType(param, constraint, template, nameType, source, mods)), line, col);
+}
+
+// `Exclude<T, U>` and `Extract<T, U>`: conditional types over T, distributive as the lib's
+// `T extends U ? never : T` is.
+function distributiveOver(check: Type, extendsType: Type, keep: boolean): Type {
+	const param = createGenericParam("$check");
+	const cond = createConditionalType(param, extendsType, keep ? param : neverType(), keep ? neverType() : param);
+	markDistributive(cond);
+	return substituteParams(cond, [param], [check]);
+}
+
+// TypeScript's lib utility types, as the lib declares them over mapped and conditional types:
+// `Partial<T> = { [P in keyof T]?: T[P] }` and the rest. Built here rather than declared in
+// the prelude, like `Readonly<T>`, so a builder that predates mapped types still reads std.
+function utilityType(head: string, args: string[], ctx: CheckerContext, line: int32, col: int32): Type | null {
+	const arity = match (head) {
+		"Partial" | "Required" => 1,
+		"Pick" | "Omit" | "Record" | "Exclude" | "Extract" => 2,
+		_ => 0,
+	};
+	if (arity == 0 || args.length != arity) return null;
+	const first = resolveAnnotation(args[0], ctx, line, col);
+	if (first.kind == TypeKind.Error) return first;
+	const second = arity == 2 ? resolveAnnotation(args[1], ctx, line, col) : null;
+	if (second != null && second.kind == TypeKind.Error) return second;
+	if (head == "Exclude" || head == "Extract") return distributiveOver(first, second!, head == "Extract");
+	const key = createGenericParam("$key");
+	if (head == "Record") {
+		return settleMapped(ctx, evaluateMappedType(createMappedType(key, first, second!, null, null, 0 as BitSet<MappedModifier>)), line, col);
+	}
+	if (head == "Partial" || head == "Required") {
+		const source = createGenericParam("$source");
+		const mods = (0 as BitSet<MappedModifier>).incl(MappedModifier.KeyOfDeclared)
+			.incl(head == "Partial" ? MappedModifier.IncludeOptional : MappedModifier.ExcludeOptional);
+		const homomorphic = createMappedType(key, createKeyOfType(source), createIndexedAccessType(source, key), null, source, mods);
+		return settleMapped(ctx, substituteParams(homomorphic, [source], [first]), line, col);
+	}
+	const keysOfFirst = hasGenericParams(first) ? createKeyOfType(first) : keyOfType(first);
+	const allKeys = keysOfFirst != null ? keysOfFirst : neverType();
+	if (head == "Pick" && !hasGenericParams(first) && !hasGenericParams(second!) && !isAssignableCheck(second!, allKeys)) {
+		if (line > 0) addError(ctx, `type '${typeDisplayName(second!)}' does not satisfy the constraint 'keyof ${typeDisplayName(first)}' of Pick: the keys are ${typeDisplayName(allKeys)}`, line, col);
+		return errorType();
+	}
+	const constraint = head == "Pick" ? second! : distributiveOver(allKeys, second!, false);
+	const template = indexedAccessOf(first, key);
+	const mapped = createMappedType(key, constraint, template != null ? template : createIndexedAccessType(first, key), null, first, 0 as BitSet<MappedModifier>);
+	return settleMapped(ctx, evaluateMappedType(mapped), line, col);
+}
+
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
 	let trimmed = text.trim();
 	if (trimmed == "") return inferredType();
@@ -729,6 +899,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 				while (inferScope.length > inferSaved) { inferScope.pop(); }
 				const cond = createConditionalType(checkType, extendsType, trueType, falseType);
 				setInferParams(cond, declared);
+				markDistributive(cond);
 				return evaluateConditionalType(cond);
 			}
 		}
@@ -832,6 +1003,8 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 	if (trimmed.charAt(0) == "{" && trimmed.endsWith("}")) {
 		const inner = trimmed.slice(1, trimmed.length - 1).trim();
 		if (inner == "") return createRef(createStruct("", [], [], true));
+		const mappedMember = mappedMemberOf(inner);
+		if (mappedMember != null) return resolveMappedMember(mappedMember, trimmed, ctx, line, col);
 
 		// Index signature: { [name: K]: V } is syntactic sugar for Map<K, V> (ordered).
 		// After normalization, both syntaxes produce identical Type structs.
@@ -1031,6 +1204,8 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 		if (builtinHead == "Readonly" && args.length == 1) {
 			return createReadonlyView(resolveAnnotation(args[0], ctx, line, col));
 		}
+		const utility = utilityType(builtinHead, args, ctx, line, col);
+		if (utility != null) return utility;
 		if (builtinHead == "Var" && args.length == 1) {
 			return createVar(resolveAnnotation(args[0], ctx, line, col));
 		}
@@ -1076,19 +1251,12 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			if (baseSym2 != null) {
 				markUsedIn(ctx, baseSym2);
 				ensureShaped(baseSym2, ctx);
-				const isRefBase2 = baseSym2.symbolType.kind == TypeKind.Ref && refWrapsNominal(baseSym2.symbolType);
-				let baseType2 = baseSym2.symbolType;
-				if (isRefBase2 && baseType2.typeReturn != null) baseType2 = baseType2.typeReturn;
 				const resolvedArgs: Type[] = [];
 				for (const a of args) {
 					resolvedArgs.push(resolveAnnotation(a.trim(), ctx, line, col));
 				}
 				checkTypeArgConstraints(ctx, baseSym2, baseName, resolvedArgs, line, col);
-				const gi2 = createGenericInstance(baseType2, resolvedArgs);
-				gi2.typeName = baseSym2.name;
-				instantiateGenericBody(gi2, genericParams);
-				typeInstanceHooksFn(gi2, ctx, line, col);
-				return isRefBase2 ? createRef(gi2) : gi2;
+				return settleMapped(ctx, genericInstanceOf(ctx, baseSym2, genericParams, resolvedArgs, line, col), line, col);
 			}
 			// Symbol not found — emit error + return TypeRef for recovery
 			const typeArgKey = buildTypeArgKey(args, ctx);

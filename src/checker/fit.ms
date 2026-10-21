@@ -1408,7 +1408,7 @@ function binaryOperandSkip(t: Type): boolean {
 	return k == TypeKind.Error || k == TypeKind.Null
 		|| k == TypeKind.GenericParam || k == TypeKind.GenericInstance
 		|| k == TypeKind.TypeReference || k == TypeKind.Inferred || k == TypeKind.None
-		|| k == TypeKind.Varargs || k == TypeKind.Alias || k == TypeKind.Conditional || k == TypeKind.IndexedAccess || k == TypeKind.KeyOf
+		|| k == TypeKind.Varargs || k == TypeKind.Alias || k == TypeKind.Conditional || k == TypeKind.IndexedAccess || k == TypeKind.KeyOf || k == TypeKind.Mapped
 		|| k == TypeKind.Result || k == TypeKind.BigInt;
 }
 

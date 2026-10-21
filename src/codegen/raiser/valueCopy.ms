@@ -300,7 +300,7 @@ function classOfType(s: RaiserCompState, t: Type | null, depth: int32): RaiserRe
 		TypeKind.Set => classOfType(s, setRepr(t), depth + 1),
 		TypeKind.Pending | TypeKind.GenericParam | TypeKind.TypeReference | TypeKind.Result | TypeKind.Error
 			| TypeKind.Conditional | TypeKind.Void | TypeKind.Unknown | TypeKind.Never | TypeKind.None | TypeKind.Inferred | TypeKind.BigInt
-			| TypeKind.Module | TypeKind.IndexedAccess | TypeKind.KeyOf => RaiserRegClass.Dyn,
+			| TypeKind.Module | TypeKind.IndexedAccess | TypeKind.KeyOf | TypeKind.Mapped => RaiserRegClass.Dyn,
 		_ => { throw new Error(`internal: type kind ${t.kind} has no register class`); },
 	};
 }

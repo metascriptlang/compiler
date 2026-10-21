@@ -56,6 +56,7 @@ export enum TypeKind {
 	KeyOf,
 	NumberLiteral,
 	NonPrimitive,
+	Mapped,
 }
 
 // ===== Calling Convention =====
