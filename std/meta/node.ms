@@ -91,6 +91,7 @@ export enum TypeFlag {
 	CompleteStruct,       // extern struct whose declared fields are all of C's, from a header translation: its layout is folded and asserted against C
 	CUnion,               // CompleteStruct translated from a C union: its members overlay at offset 0
 	IsSendable,           // Sendable<F>: a function value admitted only from a source whose captures may cross a thread
+	Acyclic,              // @acyclic class: canFormAcycle stops at it, so its references never register for cycle collection
 }
 
 // ===== Attached Lifecycle Ops =====
@@ -241,6 +242,7 @@ export enum SymbolFlag {
 	InitFlag, // a module binding's initialized flag (moduleTdz); HCR keeps it in step with the binding's state cell
 	Anon, // minted by a transform: its name is generated and positional, never one the author wrote
 	UnavailableOp, // a lifted hook no site may call: the analyzer refuses each copy that needs it (reference: sfError on a hook)
+	Acyclic, // @acyclic on a class: resolveClass stamps TypeFlag.Acyclic on its struct
 }
 
 // ===== Symbol =====

@@ -305,6 +305,10 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 		else if (hasFlag(sym, SymbolFlag.Inline)) addError(ctx, `'${declName}' cannot be both @inline and @noinline`, node.location.line, node.location.column);
 		else setFlag(sym, SymbolFlag.NoInline);
 	}
+	if (info.acyclic) {
+		if (sym.symbolKind != SymbolKind.Class) addError(ctx, `@acyclic applies to a class, not to '${declName}'`, node.location.line, node.location.column);
+		else setFlag(sym, SymbolFlag.Acyclic);
+	}
 }
 
 function acceptsInline(ctx: CheckerContext, dd: DecoratedDeclData): boolean {

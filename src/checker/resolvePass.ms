@@ -3060,6 +3060,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 	inner.kind = TypeKind.Struct;
 	inner.typeName = d.className;
 	inner.typeFlags = inner.typeFlags.incl(TypeFlag.IsStruct);
+	if (hasFlag(sym, SymbolFlag.Acyclic)) inner.typeFlags = inner.typeFlags.incl(TypeFlag.Acyclic);
 
 	// Phase 4: Class field flatten — merge parent fields into child's typeChildren.
 	// Mirrors interface/struct (Phases 1-3); for class we also keep typeExtra

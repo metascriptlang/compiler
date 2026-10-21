@@ -50,6 +50,7 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, marker: NameS
 			// subclassed into a back-edge, so it can form a cycle independent of its
 			// own declared fields. Independent of the typeExtra walk below (that covers
 			// field inheritance; BOTH apply).
+			if (t.typeFlags.has(TypeFlag.Acyclic)) return false;
 			if (t.typeFlags.has(TypeFlag.OpenClass)) return true;
 			const key = typeIdentity(t);
 			if (withRef && key != "" && key == origKey) return true;
@@ -122,6 +123,7 @@ function cfaInstanceBody(body: Type | null, origKey: string, withRef: boolean, m
 		return cfaInstanceBody(body.typeReturn, origKey, true, marker);
 	}
 	if (body.kind == TypeKind.Struct) {
+		if (body.typeFlags.has(TypeFlag.Acyclic)) return false;
 		if (body.typeFlags.has(TypeFlag.OpenClass)) return true;
 		return cfaStructFields(body, origKey, withRef, marker);
 	}
@@ -148,6 +150,7 @@ export function canFormAcycle(t: Type | null, cyclicCache: NameSet, acyclicCache
 		subject = subject.typeReturn;
 	}
 	if (subject == null) return false;
+	if (subject.typeFlags.has(TypeFlag.Acyclic)) return false;
 	const key = typeIdentity(subject);
 	if (key != "") {
 		if (nameSetContains(cyclicCache, key)) return true;

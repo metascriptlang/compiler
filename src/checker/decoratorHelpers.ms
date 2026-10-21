@@ -14,11 +14,12 @@ export interface DecoratorInfo {
 	borrow: boolean;
 	compileTime: boolean;
 	noInline: boolean;
+	acyclic: boolean;
 }
 
 const passThroughDirectives: string[] = [
 	"emit", "include", "compile", "link", "passC", "passL", "import",
-	"comptime", "builtin", "exportName", "beforeReload", "afterReload", "inline", "noinline", "computedGoto",
+	"comptime", "builtin", "exportName", "beforeReload", "afterReload", "inline", "noinline", "computedGoto", "acyclic",
 ];
 const intrinsicBuiltins: string[] = ["nonisolated", "compilerFunc", "throws", "delegate"];
 
@@ -193,6 +194,7 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 	let borrows = false;
 	let atCompileTime = false;
 	let keptOutOfLine = false;
+	let prunesCycles = false;
 	for (let i = 0; i < dd.decorators.length; i += 1) {
 		const dec = dd.decorators[i];
 		if (dec.kind != NodeKind.MacroInvocation) continue;
@@ -202,6 +204,7 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 		if (name == "delegate") borrows = true;
 		if (name == "comptime") atCompileTime = true;
 		if (name == "noinline") keptOutOfLine = true;
+		if (name == "acyclic") prunesCycles = true;
 	}
 	const exportDec = exportNameDecorator(dd.decorators);
 	const exportName = exportDec != null ? exportNameOf(exportDec, dd.decoratedNode) : "";
@@ -223,5 +226,6 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 		borrow: borrows,
 		compileTime: atCompileTime,
 		noInline: keptOutOfLine,
+		acyclic: prunesCycles,
 	};
 }
