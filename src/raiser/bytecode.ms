@@ -202,6 +202,7 @@ export enum RaiserOpcode {
 	BneR,             // ABC: if refs[A] != refs[B] skip C instructions
 	BrEqR,            // ABC: if refs[A] == refs[B] pc += branchOffset(C)
 	BrNeR,            // ABC: if refs[A] != refs[B] pc += branchOffset(C)
+	LitConv,          // ABC: fatal unless R[A] is nil or one of the literals listed in K[B] (`len:text` each), named K[C]
 }
 
 // How FutureCombine settles its result from its inputs (Promise.all, race, any).
@@ -287,7 +288,7 @@ function roleOf(letter: string): RaiserRole {
 function opRoleLetters(op: RaiserOpcode): string {
 	return match (op) {
 		RaiserOpcode.LoadConst | RaiserOpcode.LoadNil | RaiserOpcode.LoadGlobal | RaiserOpcode.StoreGlobal | RaiserOpcode.Halt | RaiserOpcode.Print
-			| RaiserOpcode.Ret | RaiserOpcode.Throw | RaiserOpcode.FutureNew | RaiserOpcode.ModuleImport | RaiserOpcode.Catch | RaiserOpcode.ObjConv => "x--",
+			| RaiserOpcode.Ret | RaiserOpcode.Throw | RaiserOpcode.FutureNew | RaiserOpcode.ModuleImport | RaiserOpcode.Catch | RaiserOpcode.ObjConv | RaiserOpcode.LitConv => "x--",
 		RaiserOpcode.Move => "xx-",
 		RaiserOpcode.MoveW => "ww-",
 		RaiserOpcode.MoveR => "yy-",

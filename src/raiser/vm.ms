@@ -826,6 +826,20 @@ function futureFailPrepared(vm: RaiserVM, handle: int64): void {
 	futureSettled(vm, handle);
 }
 
+function literalListHolds(arr: RaiserArrayHeap, list: string, held: RaiserValue): boolean {
+	const text = held.kind == RaiserValueKind.String ? heapStringText(arr, held) : "";
+	const num = held.kind == RaiserValueKind.Float ? held.floatVal : held.intVal as float64;
+	let i = 0;
+	while (i < list.length) {
+		const colon = list.indexOf(":", i);
+		const n = parseIntStr(list.substring(i, colon));
+		const member = list.substring(colon + 1, colon + 1 + n);
+		if (held.kind == RaiserValueKind.String ? member == text : member.parseFloat() == num) return true;
+		i = colon + 1 + n;
+	}
+	return false;
+}
+
 // A plain element (an eagerly finished async call, Promise.resolve) enters as
 // a future that is already complete, so every input is read the same way; one
 // value named twice enters once, so its slots keep sharing it.
@@ -1821,7 +1835,7 @@ function vmLoopLimitMessage(vm: RaiserVM): string {
 // What the retagging in the generic path needs per operand slot: OPERAND_* kinds from the opcode's roles.
 function buildOperandKinds(): int32[] {
 	const table: int32[] = [];
-	for (let op = 0; op <= (RaiserOpcode.BrNeR as int32); op += 1) {
+	for (let op = 0; op <= (RaiserOpcode.LitConv as int32); op += 1) {
 		for (let slot = 0; slot < 3; slot += 1) table.push(operandKind(op as RaiserOpcode, slot as int32));
 	}
 	return table;
@@ -2607,7 +2621,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				words[wb + ia] = raised >> imm;
 				break;
 			}
-			case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallIndirect: case RaiserOpcode.CallHost: case RaiserOpcode.IsKind: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: {
+			case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallIndirect: case RaiserOpcode.CallHost: case RaiserOpcode.IsKind: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: {
 				slow = true;
 				break;
 			}
@@ -2690,6 +2704,13 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 				if (!raiserIsInstance(classType, constStringText(getFuncConst(func, ib)))) {
 					vmError(vm, "invalid object conversion: " + (classType.name != "" ? classType.name : held.kind == RaiserValueKind.Object ? "Object" : "<untyped>") + " is not " + constStringText(getFuncConst(func, ic)));
 				}
+			}
+		},
+		RaiserOpcode.LitConv => {
+			const held = getDyn(vm, ia);
+			if (held.kind != RaiserValueKind.Nil && !literalListHolds(vm.arrayHeap, constStringText(getFuncConst(func, ib)), held)) {
+				const shown = held.kind == RaiserValueKind.String ? "\"" + heapStringText(vm.arrayHeap, held) + "\"" : raiserToString(vm.arrayHeap, held);
+				vmError(vm, "invalid union conversion: " + shown + " is not " + constStringText(getFuncConst(func, ic)));
 			}
 		},
 		RaiserOpcode.SameLoc => {
