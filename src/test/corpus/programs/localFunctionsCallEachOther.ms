@@ -1,4 +1,4 @@
-// @stdout: 3 | false 012eoeo | 6
+// @stdout: 3 | false 012eoeo | 6 | 3 yzxyzx
 // note: adjacent local function declarations see each other, so they can call each other however they are ordered; a local function without a return annotation returns what its body returns, and one that only recurses on itself infers void. Same output on C, JS and the Raiser.
 function counter(): () => number {
 	let n = 0;
@@ -19,9 +19,25 @@ function parity(): string {
 	return String(even(3)) + " " + log;
 }
 
+function returnsLater(): () => number {
+	let n = 0;
+	function a(): number { n += 1; return n < 3 ? b() : n; }
+	function b(): number { return a(); }
+	return b;
+}
+
+function ring(): string {
+	let out = "";
+	let n = 0;
+	function x(): string { out += "x"; n += 1; return n < 2 ? y() : out; }
+	function y(): string { out += "y"; return z(); }
+	function z(): string { out += "z"; return x(); }
+	return y();
+}
+
 function inferred() {
 	function inner() { return 5; }
 	return inner() + 1;
 }
 
-console.log(`${counter()()} | ${parity()} | ${inferred()}`);
+console.log(`${counter()()} | ${parity()} | ${inferred()} | ${returnsLater()()} ${ring()}`);
