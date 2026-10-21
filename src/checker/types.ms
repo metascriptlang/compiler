@@ -1266,6 +1266,13 @@ export function peelToStructOrUnion(t: Type | null): Type | null {
 	return cur;
 }
 
+export function positionalFieldsOf(t: Type | null): Type | null {
+	const gi = t != null && t.kind == TypeKind.Ref ? t.typeReturn : t;
+	if (gi != null && gi.kind == TypeKind.GenericInstance) instantiateGenericBody(gi, genericParamsOf(gi));
+	const body = peelToStructOrUnion(t);
+	return body != null && body.kind == TypeKind.Struct && body.typeNames != null ? body : null;
+}
+
 export function matchUnionBehindInstance(t: Type): Type {
 	if (t.kind != TypeKind.GenericInstance) return t;
 	instantiateGenericBody(t, genericParamsOf(t));

@@ -27,7 +27,7 @@ import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, moduleScopeNamed, enumMemberName } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, setMinArity, stringType, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindName, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams } from "./types";
+import { isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, substituteType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindName, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField } from "./sendable";
 import { callThroughProxy, checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
 
@@ -759,6 +759,14 @@ function checkNewArgs(ctx: CheckerContext, args: Node[]): void {
 	for (const arg of args) { callCheckExpr(ctx, arg, null); }
 }
 
+function fitPositionalArgs(ctx: CheckerContext, args: Node[], fields: Type | null): void {
+	for (let ai = 0; ai < args.length; ai += 1) {
+		const formal = fields != null && ai < fields.typeChildren.length ? fields.typeChildren[ai] : null;
+		callCheckExpr(ctx, args[ai], formal);
+		if (formal != null && args[ai].nodeType != null) args[ai] = fitNode(ctx, args[ai], formal, args[ai].nodeType);
+	}
+}
+
 function typeNewCallee(ctx: CheckerContext, callee: Node): void {
 	const sym = lookupSymbol(ctx.table, (callee.data as IdentifierData).name);
 	if (sym == null) return;
@@ -1013,7 +1021,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 				&& expected.typeName == id.name && (newSym == null || !hasFlag(newSym, SymbolFlag.HasConstructor))) {
 			typeNewCallee(ctx, d.newCallee);
 			node.nodeType = expected;
-			checkNewArgs(ctx, d.newArguments);
+			fitPositionalArgs(ctx, d.newArguments, newSym != null ? positionalFieldsOf(expected) : null);
 			return expected;
 		}
 		// Array with expected element type: new Array(32) in typed context.
@@ -1130,6 +1138,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			}
 		}
 	}
+	const fields = hasCtor ? null : positionalFieldsOf(innerType);
 	const ctorRestIdx = hasCtor && ctorFormals != null && ctorFormals.length > 0
 		&& ctorFormals[ctorFormals.length - 1].kind == TypeKind.Varargs ? ctorFormals.length - 1 : -1;
 	let ai = 0;
@@ -1141,13 +1150,13 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			argExpected = restElem.kind == TypeKind.Inferred || d.newArguments[ai].kind == NodeKind.SpreadExpr ? restArr : restElem;
 		} else if (hasCtor && ctorFormals != null && ai < ctorFormals.length) {
 			argExpected = ctorFormals[ai];
-		} else if (!hasCtor && innerType != null && innerType.typeChildren != null && ai < innerType.typeChildren.length) {
-			argExpected = innerType.typeChildren[ai];
+		} else if (fields != null && ai < fields.typeChildren.length) {
+			argExpected = fields.typeChildren[ai];
 		}
 		callCheckExpr(ctx, d.newArguments[ai], argExpected);
 		iterateSpreadSource(ctx, d.newArguments[ai]);
 		const argType = d.newArguments[ai].nodeType;
-		if (hasCtor && argExpected != null && argType != null) {
+		if (argExpected != null && argType != null) {
 			d.newArguments[ai] = fitNode(ctx, d.newArguments[ai], argExpected, argType);
 		}
 		ai = ai + 1;
@@ -1480,8 +1489,9 @@ function checkNewArity(ctx: CheckerContext, node: Node, classSym: Symbol, innerT
 	} else {
 		if (refuseMisplacedSpread(ctx, args, [], 0)) return;
 		if (classSym.symbolKind != SymbolKind.Class && classSym.symbolKind != SymbolKind.Struct) return;
-		if (innerType == null || innerType.kind != TypeKind.Struct) return;
-		allowed = innerType.typeNames.length;
+		const fields = positionalFieldsOf(innerType);
+		if (fields == null) return;
+		allowed = fields.typeNames.length;
 	}
 	if (args.length < required) {
 		addError(ctx, `Too few arguments to 'new ${classSym.name}': expected at least ${required}, got ${args.length}`, node.location.line, node.location.column);
