@@ -62,6 +62,7 @@ export function handleHeapKind(handle: int64): RaiserHeapKind {
 
 // The value kind a handle's heap kind implies; nil for the empty handle.
 export function handleKind(handle: int64): RaiserValueKind {
+	when (mode != "danger") { checkHeapKind(handle); }
 	return match (handleHeapKind(handle)) {
 		RaiserHeapKind.None => RaiserValueKind.Nil,
 		RaiserHeapKind.String | RaiserHeapKind.ConstString => RaiserValueKind.String,
@@ -69,8 +70,11 @@ export function handleKind(handle: int64): RaiserValueKind {
 		RaiserHeapKind.Object => RaiserValueKind.Object,
 		RaiserHeapKind.Future => RaiserValueKind.Future,
 		RaiserHeapKind.Box => RaiserValueKind.Box,
-		_ => { throw new Error(`internal: handle ${handle} names no heap kind`); },
 	};
+}
+
+function checkHeapKind(handle: int64): void {
+	if (handleTag(handle) > (RaiserHeapKind.Box as int64)) throw new Error(`internal: handle ${handle} names no heap kind`);
 }
 
 // The value a ref register's handle stands for.
@@ -824,42 +828,42 @@ export function rcDecref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, he
 }
 
 export function rcIncrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): void {
+	when (mode != "danger") { checkHeapKind(handle); }
 	const index = handleIndex(handle);
 	match (handleHeapKind(handle)) {
-		RaiserHeapKind.Array => { arrHeap.arrays[index].rc = arrHeap.arrays[index].rc + 1; },
-		RaiserHeapKind.Object => { objHeap.objects[index].rc = objHeap.objects[index].rc + 1; },
-		RaiserHeapKind.String => { arrHeap.strings.rc[index] = arrHeap.strings.rc[index] + 1; },
-		RaiserHeapKind.Box => { arrHeap.boxes.items[index].rc = arrHeap.boxes.items[index].rc + 1; },
+		RaiserHeapKind.Array => { const data: Cursor<RaiserArrayData> = arrHeap.arrays[index]; data.rc += 1; },
+		RaiserHeapKind.Object => { const data: Cursor<RaiserObjectData> = objHeap.objects[index]; data.rc += 1; },
+		RaiserHeapKind.String => { const strings: Cursor<RaiserStringHeap> = arrHeap.strings; strings.rc[index] += 1; },
+		RaiserHeapKind.Box => { const data: Cursor<RaiserBoxData> = arrHeap.boxes.items[index]; data.rc += 1; },
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
-		_ => { throw new Error(`internal: handle ${handle} names no heap kind`); },
 	}
 }
 
 export function rcDecrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): void {
+	when (mode != "danger") { checkHeapKind(handle); }
 	const index = handleIndex(handle);
 	match (handleHeapKind(handle)) {
 		RaiserHeapKind.Array => {
-			const data = arrHeap.arrays[index];
+			const data: Cursor<RaiserArrayData> = arrHeap.arrays[index];
 			data.rc = data.rc - 1;
 			if (data.rc <= 0) { rcDestroyArray(arrHeap, objHeap, index); }
 		},
 		RaiserHeapKind.Object => {
-			const data = objHeap.objects[index];
+			const data: Cursor<RaiserObjectData> = objHeap.objects[index];
 			data.rc = data.rc - 1;
 			if (data.rc <= 0) { rcDestroyObject(arrHeap, objHeap, index); }
 		},
 		RaiserHeapKind.String => {
-			const strings = arrHeap.strings;
+			const strings: Cursor<RaiserStringHeap> = arrHeap.strings;
 			strings.rc[index] = strings.rc[index] - 1;
 			if (strings.rc[index] <= 0) { strings.texts[index] = ""; strings.freeList.push(index); }
 		},
 		RaiserHeapKind.Box => {
-			const data = arrHeap.boxes.items[index];
+			const data: Cursor<RaiserBoxData> = arrHeap.boxes.items[index];
 			data.rc = data.rc - 1;
 			if (data.rc <= 0) { rcDestroyBox(arrHeap, objHeap, index); }
 		},
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
-		_ => { throw new Error(`internal: handle ${handle} names no heap kind`); },
 	}
 }
 
