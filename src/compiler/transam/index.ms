@@ -1619,6 +1619,35 @@ export const viaFar = farValue();');
 	}
 }
 
+test "a line shift in a dependency moves the declaration its importer resolves in either check order" {
+	const paths = ["/moved/dep.ms", "/moved/user.ms"];
+	const source = "export function one(): int32 { return 1; }";
+	const snapshots = [source, "\n\n" + source, source];
+	const lines: int32[] = [1, 3, 1];
+	for (const order of [[0, 1], [1, 0]]) {
+		const db = createTransAmDb(100);
+		dbSetFileText(db, paths[0], source);
+		dbSetFileText(db, paths[1], 'import { one } from "./dep";
+export const n = one();');
+		recordModuleImport(db.moduleDeps, getFileId(db.fileInput, paths[1]), getFileId(db.fileInput, paths[0]));
+		const counts: LowerCount[] = [{ n: 0 }, { n: 0 }];
+		for (let i = 0; i < snapshots.length; i++) {
+			dbSetFileText(db, paths[0], snapshots[i]);
+			for (const path of paths) dbParse(db, path);
+			for (const j of order) {
+				const ctx = dbTypeCheck(db, paths[j]);
+				assert ctx.errors.length == 0;
+				const one = lookupLocal(ctx.table, "one");
+				assert one != null;
+				assert one.location.line == lines[i];
+				assert one.declNode != null && one.declNode.location.line == lines[i];
+				dbLower(db, paths[j], countLowering, counts[j]);
+				assert counts[j].n == i + 1;
+			}
+		}
+	}
+}
+
 test "a line shift in a module rechecks it at the new positions" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "/shift/a.ms", "export function one(): int32 { return 1; }");
