@@ -3,7 +3,8 @@
 
 import { ArrowFunctionData, CallExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, PropertyDeclData, Symbol, SymbolKind, Type } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { CheckerContext, dispatchEntryFor, dispatchOverridesFor } from "./context";
+import { CheckerContext, LIFECYCLE_HOOK_NAMES, addError, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName } from "./context";
+import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
 import { SymbolFlag, hasFlag, parentClassSymOf } from "./symbol";
 import { functionSlotOf, isAtomicRef, isSendableFunction, typeCarriesRef } from "./types";
 import { constBindingInitializer } from "./constFold";
@@ -11,6 +12,7 @@ import { constBindingInitializer } from "./constFold";
 export enum Effect {
 	SideEffect,
 	SpawnUnsafe,
+	Suspends,
 }
 
 export interface EffectCause {
@@ -30,7 +32,9 @@ function emptyTable(): EffectTable {
 
 let sideTable: EffectTable = emptyTable();
 let spawnTable: EffectTable = emptyTable();
+let suspendTable: EffectTable = emptyTable();
 let assumedOpen = false;
+let inAsync = false;
 let ownParams: string[] = [];
 interface DeferredCheck {
 	site: Node;
@@ -40,7 +44,11 @@ interface DeferredCheck {
 let deferred: DeferredCheck[] = [];
 
 function tableFor(e: Effect): EffectTable {
-	return e == Effect.SideEffect ? sideTable : spawnTable;
+	return match (e) {
+		Effect.SideEffect => sideTable,
+		Effect.SpawnUnsafe => spawnTable,
+		Effect.Suspends => suspendTable,
+	};
 }
 
 export function deferEffectCheck(site: Node, check: (ctx: CheckerContext) => void): void {
@@ -54,8 +62,31 @@ export function runDeferredEffectChecks(ctx: CheckerContext): void {
 	const checks = deferred;
 	deferred = [];
 	for (const d of checks) d.check(ctx);
+	checkHookEffects(ctx);
 	sideTable = emptyTable();
 	spawnTable = emptyTable();
+	suspendTable = emptyTable();
+}
+
+function isUncheckedGeneric(sym: Symbol): boolean {
+	const decl = unpackDecl(sym.declNode);
+	return decl != null && decl.kind == NodeKind.FunctionDecl && isGenericFn((decl.data as FunctionDeclData).fnFlags);
+}
+
+function checkHookEffects(ctx: CheckerContext): void {
+	const registry = ctx.extensionRegistry;
+	if (registry == null) return;
+	for (const hook of LIFECYCLE_HOOK_NAMES) {
+		for (const m of findAllExtensionsByName(registry, hook)) {
+			if (m.isStatic || m.sym == null || m.sym!.modulePath != ctx.modulePath || isUncheckedGeneric(m.sym!)) continue;
+			const c = routineEffect(m.sym!, Effect.Suspends);
+			if (c == null) continue;
+			const owner = extReceiverSym(m);
+			const of = owner != null ? " of '" + owner.name + "'" : "";
+			const at = m.sym!.declNode != null ? m.sym!.declNode!.location : c.site.location;
+			addError(ctx, "lifecycle hook '" + hook + "'" + of + " must not spawn, await or call a function value, but it " + c.text, at.line, at.column);
+		}
+	}
 }
 
 function cause(site: Node, what: string): EffectCause {
@@ -93,17 +124,23 @@ function isRoutineNode(n: Node): boolean {
 function walkRoutine(decl: Node | null, e: Effect): EffectCause | null {
 	if (decl == null) return null;
 	const outer = ownParams;
+	const outerAsync = inAsync;
 	ownParams = routineParams(decl);
+	inAsync = isAsyncFunctionNode(decl);
 	const c = walkEffect(routineBody(decl), e);
 	ownParams = outer;
+	inAsync = outerAsync;
 	return c;
 }
 
 function walkNestedRoutine(decl: Node, e: Effect): EffectCause | null {
 	const outer = ownParams;
+	const outerAsync = inAsync;
 	ownParams = routineParams(decl);
+	inAsync = isAsyncFunctionNode(decl);
 	const c = walkChildren(decl, e);
 	ownParams = outer;
+	inAsync = outerAsync;
 	return c;
 }
 
@@ -240,6 +277,7 @@ function isSuperCall(callee: Node | null): boolean {
 export function callEffect(call: Node, e: Effect): EffectCause | null {
 	const callee = (call.data as CallExprData).callee;
 	if (isSuperCall(callee)) return null;
+	if (e == Effect.Suspends && isSpawnCall(call)) return cause(call, "spawns");
 	const sym = call.resolvedSym;
 	if (!isRoutine(sym)) {
 		if (isOwnParam(callee)) return null;
@@ -249,7 +287,7 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 	}
 	if (hasFlag(sym!, SymbolFlag.GeneratedOp)) return null;
 	if (routineBody(unpackDecl(sym!.declNode)) == null) {
-		if (e == Effect.SpawnUnsafe || receiverOf(call) != null) return null;
+		if (e != Effect.SideEffect || receiverOf(call) != null) return null;
 		return cause(call, "calls the external '" + sym!.name + "'");
 	}
 	const name = callee != null && callee.kind == NodeKind.Identifier ? (callee.data as IdentifierData).name
@@ -272,6 +310,7 @@ export function newEffect(newNode: Node, e: Effect): EffectCause | null {
 function useEffect(node: Node, e: Effect): EffectCause | null {
 	const sym = node.resolvedSym;
 	if (sym == null) return null;
+	if (e == Effect.Suspends && sym.symbolKind != SymbolKind.Function) return null;
 	if (isModuleState(sym)) return isConstantValue(sym, e) ? null : cause(node, "uses " + stateName(sym));
 	if (sym.symbolKind == SymbolKind.Function) return through(node, "refers to '" + sym.name + "'", routineEffect(sym, e));
 	return null;
@@ -284,6 +323,7 @@ export function walkEffect(node: Node | null, e: Effect): EffectCause | null {
 		NodeKind.Identifier | NodeKind.MemberExpr => useEffect(node, e),
 		NodeKind.CallExpr => callEffect(node, e),
 		NodeKind.NewExpr => newEffect(node, e),
+		NodeKind.AwaitExpr => e == Effect.Suspends && !inAsync ? cause(node, "awaits") : null,
 		_ => null,
 	};
 	if (here != null) return here;
