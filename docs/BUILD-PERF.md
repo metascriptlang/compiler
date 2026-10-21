@@ -1,5 +1,61 @@
 # Build Performance — Roadmap
 
+## Measured 2026-10-21 — self-host baseline, and three front-end fixes
+
+**Baseline, Linux x64 (lc-1, 8 cores, load 1.1–5.5).** Two stage-2 compilers, each built by
+its own stage 1 with `--gc=drc --danger --lto=off`: `main` = `d64faf905`, `cand` = `main` + the
+string-match label count (fix 1 below). Every command ran from a clone of `main` with
+`MSC_NO_GLOBAL_CACHE=1` and a private `out/`; rounds interleave the two binaries; the table
+gives min user CPU (`/usr/bin/time -v`), wall in brackets. `perf` is not permitted on that
+host, so there are no instruction counts.
+
+| cell | command | rounds | main | cand |
+|---|---|---|---|---|
+| check | `msc check src/index.ms` | 7 / 5 | 14.34 s (15.4) | 14.20 s (15.2) |
+| no-change | `build src/index.ms --gc=drc --danger --lto=off --output=… --time`, record settled | 5 / 5 | 14.80 s (16.1) | 14.83 s (16.1) |
+| rebuild 1 file | same, after appending a comment to `src/utils/string.ms` | 5 / 5 | 57.73 s (52.7) | 62.40 s (57.3) |
+| cold | same, `out/` moved aside | 3 / 3 | 604.3 s (2:35) | 602.5 s (2:34) |
+| test | `msc test src/index.ms` | 1 / 1 | 631.1 s (6:12) | 630.1 s (6:09) |
+
+- A no-change build costs one `check`: it stops at "Up to date" after graph load and check.
+- Rebuilding one file reruns the whole front end: phase A 31 s wall (`graph load+check` 15 s),
+  DCE 7 s; of a cold build's 2:35, phase C (codegen + clang) is 99 s.
+- Within one binary, rebuild-1-file rounds spread 57.7–69.0 s, so main vs cand there is noise.
+  Fix 1 shows no gain on this host in any cell; on the Mac it does (below).
+- `test` is red on both binaries in the same 11 cases (`preludePack`, the prelude seed tests of
+  `compile.ms`): they need the global cache that `MSC_NO_GLOBAL_CACHE=1` turns off.
+- A build started within the same second as the last source edit drops the project record
+  (`writeProjectCache`, the `modifiedTime(path) >= _buildStartedSeconds` guard), so the
+  next build reruns the whole front end: 57–69 s here instead of 15 s. A first battery that
+  rebuilt right after `git checkout` measured that, not a no-change build.
+
+**Fixes, macOS arm64 (load 8–44; min of interleaved rounds, `time -l` instructions retired as
+the load-independent number).** Binaries built by one builder with the same flags, A = before,
+B = after; emitted C of `src/index.ms` compared file by file.
+
+| fix | workload | rounds | instructions | user |
+|---|---|---|---|---|
+| 1 `matchLower.ms` counts string labels, not arms | emit-only, stage 2, `--lto=off` | 3 | 468.0G → 368.4G (−21%) | 45.37 → 30.80 s |
+| 1 | emit-only, stage 2, thin LTO (shipping config) | 3 | 349.2G → 342.4G (−1.9%) | 29.70 → 26.14 s |
+| 2 `loader.ms` line starts in one `split` | `check src/index.ms`, thin | 5 | 74.83G → 70.16G (−6.2%) | 4.77 → 4.52 s |
+| 3 `scanner.ms` identifier sliced once | `check src/index.ms`, thin, on top of 2 | 5 | 70.25G → 64.20G (−8.6%) | 4.37 → 4.13 s |
+
+- Fix 1 changes emitted C on purpose (15 of 375 modules gain `switch` on `msStringHash`); it
+  reaches the compiler binary only at stage 2, so a published binary carries it one sync later.
+  Thin LTO inlines `msStringEquals`, which hides most of the chain it removes.
+- Fixes 2 and 3 leave emitted C identical (0 of 375 files differ). Fix 2: on a non-ASCII source
+  `indexOf(s, from)` re-walks UTF-8 from the start, so the old newline loop was quadratic;
+  `inlineHeader` time over 404 modules fell 422 → 86 ms.
+- LTO axis, same source: thin vs off is −7.5% instructions on `check` (81.1G → 75.0G) and
+  −7.2% on emit-only (368.6G → 341.9G); user 5.75 → 5.34 s and 32.54 → 28.78 s at load
+  19–45. This contradicts the 2026-09-27 "within noise" below, which compared user time only.
+  Default cc vs clang at `--lto=off`: 81.9G vs 81.2G.
+
+Tried and dropped (no time gain): `memchr` in the non-ASCII `msStringIndexOf` path (−0.7%
+`check` instructions); caching disk reads per source provider plus one module identity per
+import edge (75.14G vs 75.27G). Not verified: Windows; fixes 2 and 3 on lc-1 (written after
+its battery started); `test` and cold builds with fixes 2 and 3.
+
 ## Measured 2026-10-05 — output identity inside the filesystem settle window (Windows x64)
 
 The link-cache rewrite invariant failed during integration on `e8bf07ba`; its
