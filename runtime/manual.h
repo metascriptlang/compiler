@@ -665,8 +665,9 @@ static inline void* msBoxStruct(const void* val, size_t size) {
 /* ===== Locked<T> stubs (--mm=manual has no threading: the lock is a no-op) =====
  * The cell itself is an ordinary allocation whose payload the backend reaches
  * through the generated struct's field, so only the lock ops need stubbing. */
-static inline void  msLockedAcquire(void* cell)              { (void)cell; }
-static inline void  msLockedRelease(void* cell)              { (void)cell; }
+static inline bool  msLockedHeldHere(void* cell)             { return ((int64_t*)cell)[1] != 0; }
+static inline void  msLockedAcquire(void* cell)              { ((int64_t*)cell)[1] = 1; }
+static inline void  msLockedRelease(void* cell)              { ((int64_t*)cell)[1] = 0; }
 
 /* ===== ORC stubs ===== */
 static inline void msOrcCollect(void) {}

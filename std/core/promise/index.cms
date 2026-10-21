@@ -141,6 +141,7 @@ export function asyncCheck(fut: Promise<void>): void {
 
 extern function msLockedAcquire<T>(cell: Locked<T>): void from "msLockedAcquire";
 extern function msLockedRelease<T>(cell: Locked<T>): void from "msLockedRelease";
+extern function msLockedHeldHere<T>(cell: Locked<T>): boolean from "msLockedHeldHere";
 // Payload load/store: rewritten by the C backend into a field access on the
 // generated cell struct, so the payload offset always comes from the struct
 // itself. They are deliberately private — a load outside the critical section
@@ -153,6 +154,7 @@ extern function msLockedStore<T>(cell: Locked<T>, value: T): void;
 // Read-modify-write under the lock. The callback IS the critical section, so it
 // must stay short and must never await or block (PARALOCK Amendment E).
 export function lockedUpdate<T>(cell: Locked<T>, fn: (value: T) => T): void {
+	if (msLockedHeldHere(cell)) throw new Error("lockedUpdate re-entered a Locked cell that this thread already holds");
 	msLockedAcquire(cell);
 	defer msLockedRelease(cell);
 	msLockedStore(cell, fn(msLockedLoad(cell)));
@@ -161,6 +163,7 @@ export function lockedUpdate<T>(cell: Locked<T>, fn: (value: T) => T): void {
 // Read under the lock. What leaves the cell is a copy of the payload (or a value
 // derived from it), never a reference into shared mutable state.
 export function lockedRead<T, R>(cell: Locked<T>, fn: (value: T) => R): R {
+	if (msLockedHeldHere(cell)) throw new Error("lockedRead re-entered a Locked cell that this thread already holds");
 	msLockedAcquire(cell);
 	defer msLockedRelease(cell);
 	return fn(msLockedLoad(cell));

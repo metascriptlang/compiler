@@ -320,6 +320,37 @@ function routineParamsAndBody(closure: Node): RoutineParts {
 	return { params: [], body: null };
 }
 
+function isLockedSection(sym: Symbol | null): boolean {
+	const origin = sym != null && sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
+	return origin != null && origin.symbolKind == SymbolKind.Function && (origin.name == "lockedUpdate" || origin.name == "lockedRead")
+		&& origin.modulePath.indexOf("std/core/promise/index.") >= 0;
+}
+
+function lockCallbackEffect(fn: Node): EffectCause | null {
+	if (fn.kind == NodeKind.ArrowFunction || fn.kind == NodeKind.FunctionExpr) return walkEffect(fn, Effect.Suspends);
+	const sym = fn.kind == NodeKind.Identifier ? fn.resolvedSym : null;
+	if (sym != null && sym.symbolKind == SymbolKind.Function) return routineEffect(sym, Effect.Suspends);
+	const bound = sym != null ? constBindingInitializer(sym) : null;
+	if (bound != null) {
+		const declared = peelHidden(bound);
+		if (declared.kind == NodeKind.ArrowFunction || declared.kind == NodeKind.FunctionExpr) return walkEffect(declared, Effect.Suspends);
+	}
+	return { site: fn, text: "is a function value at " + fn.location.line + ":" + fn.location.column };
+}
+
+export function refuseSuspendingLockCallback(ctx: CheckerContext, call: Node): void {
+	if (call.kind != NodeKind.CallExpr || !isLockedSection(call.resolvedSym)) return;
+	const args = (call.data as CallExprData).arguments;
+	if (args.length != 2) return;
+	const name = call.resolvedSym!.instantiatedFrom != null ? call.resolvedSym!.instantiatedFrom!.name : call.resolvedSym!.name;
+	deferEffectCheck(call, (ctx: CheckerContext): void => {
+		const c = lockCallbackEffect(peelHidden(args[1]));
+		if (c == null) return;
+		addError(ctx, "the callback of '" + name + "' runs while the Locked cell is held and must not spawn, await or call a function value, but it " + c.text, call.location.line, call.location.column);
+	});
+}
+
+
 function checkClosureCaptures(ctx: CheckerContext, closure: Node, by: string): void {
 	const parts = routineParamsAndBody(closure);
 	const body = parts.body;

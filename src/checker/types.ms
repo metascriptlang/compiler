@@ -1671,8 +1671,8 @@ export function lockedCellName(payload: Type | null): string {
 
 export function createLockedCell(payload: Type | null): Type {
 	return spelled(createStruct(lockedCellName(payload),
-		["lockNext", "lockServing", "value"],
-		[getSysType(TypeKind.Int32), getSysType(TypeKind.Int32), payload!], true));
+		["lockNext", "lockServing", "lockHolder", "value"],
+		[getSysType(TypeKind.Int32), getSysType(TypeKind.Int32), getSysType(TypeKind.Int64), payload!], true));
 }
 
 export function createLocked(payload: Type | null): Type {
@@ -1846,14 +1846,14 @@ export function ownedAlternativeOf(view: Type): string {
 	return view.kind == TypeKind.Span ? "an owning " + elem + "[] (copy it with [...x])" : "a " + elem + " value";
 }
 
-// The T of a Locked<T> — the cell's third field. Null for anything else.
+// The T of a Locked<T> — the cell's last field. Null for anything else.
 export function lockedPayloadType(t: Type | null): Type;
 export function lockedPayloadType(t: Readonly<Type | null>): Readonly<Type>;
 export function lockedPayloadType(t: Readonly<Type | null>): Readonly<Type> {
 	if (!isLockedRef(t) || t.typeReturn == null) return null as unknown as Type;
 	const cell = t.typeReturn;
-	if (cell.typeChildren == null || cell.typeChildren.length < 3) return null as unknown as Type;
-	return cell.typeChildren[2];
+	if (cell.typeChildren == null || cell.typeChildren.length < 4) return null as unknown as Type;
+	return cell.typeChildren[3];
 }
 
 // Walking a Ref for substitution needs two things the three Ref classes answer

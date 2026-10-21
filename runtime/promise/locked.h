@@ -24,6 +24,7 @@
 #define MS_LOCKED_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /* ===== Atomic primitives ===== */
 
@@ -138,6 +139,7 @@
 typedef struct {
 	int nextTicket;
 	int nowServing;
+	int64_t holder;
 } msTicketLock;
 
 #ifndef MS_LOCK_SPIN_BUDGET
@@ -167,14 +169,33 @@ static inline void msTicketLockRelease(msTicketLock* L) {
 		msFutexWakeAll(&L->nowServing);
 }
 
-/* ===== Locked<T> cell surface ===== */
+/* ===== Locked<T> cell surface =====
+ * `holder` names the thread inside the critical section, so a callback that
+ * enters its own cell again is refused instead of waiting on itself. Only the
+ * holder writes it, between acquire and release, so a relaxed store and load
+ * suffice: another thread can only ever read 0 or a foreign id. */
+
+#if defined(_WIN32)
+  static inline int64_t msLockedSelf(void) { return (int64_t)GetCurrentThreadId(); }
+#else
+  #include <pthread.h>
+  static inline int64_t msLockedSelf(void) { return (int64_t)(uintptr_t)pthread_self(); }
+#endif
+
+static inline bool msLockedHeldHere(void* cell) {
+	return __atomic_load_n(&((msTicketLock*)cell)->holder, __ATOMIC_RELAXED) == msLockedSelf();
+}
 
 static inline void msLockedAcquire(void* cell) {
-	msTicketLockAcquire((msTicketLock*)cell);
+	msTicketLock* L = (msTicketLock*)cell;
+	msTicketLockAcquire(L);
+	__atomic_store_n(&L->holder, msLockedSelf(), __ATOMIC_RELAXED);
 }
 
 static inline void msLockedRelease(void* cell) {
-	msTicketLockRelease((msTicketLock*)cell);
+	msTicketLock* L = (msTicketLock*)cell;
+	__atomic_store_n(&L->holder, 0, __ATOMIC_RELAXED);
+	msTicketLockRelease(L);
 }
 
 #endif /* MS_LOCKED_H */

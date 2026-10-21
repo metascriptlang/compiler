@@ -79,7 +79,7 @@ export enum TypeFlag {
 	DuVariant,            // INLINE (nameless) union-variant payload struct; lifecycle owned by the DU machinery, analyzer defers (classify → no RC)
 	OpenClass,            // class is extended (non-final): canFormAcycle returns true unconditionally, the tfFinal rule. Stamped on the PARENT struct in resolveClass; a CBase-typed field may point at a subclass that closes a back-edge
 	BrandWiden,           // TS branded primitive (`Prim & { __brand }`): Distinct that widens implicitly to its base; erased to base after check (brandErase)
-	IsLocked,             // Locked<T> marker, always set together with IsAtomic: the handle IS an atomic Ref whose pointee is the generated `{ lockNext, lockServing, value }` cell (PARALOCK I22)
+	IsLocked,             // Locked<T> marker, always set together with IsAtomic: the handle IS an atomic Ref whose pointee is the generated `{ lockNext, lockServing, lockHolder, value }` cell (PARALOCK I22)
 	IsReadonly,           // read-only view of a Ref or Array: no write reaches through it and it never converts back to the mutable type (PARALOCK E24)
 	PtrIntroduced,        // Ptr<T> introduced by pointer-param introduction, not user-declared
 	HasGenericParam,

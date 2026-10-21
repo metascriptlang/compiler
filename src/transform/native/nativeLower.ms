@@ -134,7 +134,7 @@ function declaresArrayReturn(sym: Symbol): boolean {
 function rewriteNewExpr(node: Node): Node {
 	const refType = node.nodeType;
 	// new Locked(value): the argument is the cell's PAYLOAD, not the pointee —
-	// the pointee is the generated `{ lockNext, lockServing, value }` cell. Checked
+	// the pointee is the generated `{ lockNext, lockServing, lockHolder, value }` cell. Checked
 	// before the Arc path, whose predicate (isAtomicRef) also matches a Locked
 	// handle and would box the payload as the whole pointee.
 	if (isLockedRef(refType)) {
