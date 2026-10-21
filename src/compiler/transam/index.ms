@@ -474,6 +474,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		dbRecordDepImports(db, depPath, depProgram);
 		// Recurse into transitive deps BEFORE resolving this dep
 		dbEnsureExportsRegistered(db, depPath, visited, startVersion);
+		if (getRegisteredAt(db.moduleDeps, depId) >= db.revision.value) continue;
 
 		// Wire db.exportRegistry + module imports so collectImport can resolve
 		// cross-module types (e.g., DrcContext.ctx: TransformContext).
@@ -494,6 +495,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		const earlyExports = collectExports(tmpCtx, depPath);
 		registerModuleExports(db.exportRegistry, depPath, earlyExports);
 		setRegisteredAt(db.moduleDeps, depId, db.revision.value);
+		dbRegisterMacroExpandedExports(db, depPath, depMod.imports, startVersion);
 	}
 }
 
@@ -524,6 +526,7 @@ export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
 	if (exports.length > 0) {
 		registerModuleExports(db.exportRegistry, filePath, exports);
 	}
+	dbRegisterMacroExpandedExports(db, filePath, depMod.imports, getCancelVersion(db.cancelCtx));
 }
 
 // Build ImportEntry[] from parsed program's import declarations + dep edge resolution
@@ -588,23 +591,38 @@ function earlyAdoptions(db: TransAmDb, filePath: string, parsed: Node, program: 
 	return adopted;
 }
 
+function exportsMacro(db: TransAmDb, modulePath: string): boolean {
+	const exports = findModuleExports(db.exportRegistry, modulePath);
+	if (exports == null) return false;
+	for (const es of exports.symbols) {
+		if (es.sym.symbolKind == SymbolKind.Macro) return true;
+	}
+	return false;
+}
+
 function checkMacroDeps(db: TransAmDb, filePath: string, imports: ImportEntry[]): void {
 	for (const ie of imports) {
 		if (ie.sourcePath == "" || ie.sourcePath == filePath) continue;
 		if (db.checkInProgress.has(ie.sourcePath)) continue;
-		const depExports = findModuleExports(db.exportRegistry, ie.sourcePath);
-		if (depExports == null) continue;
-		let depHasMacro = false;
-		for (const es of depExports.symbols) {
-			if (es.sym.symbolKind == SymbolKind.Macro) {
-				depHasMacro = true;
-				break;
-			}
-		}
-		if (depHasMacro) {
-			dbTypeCheck(db, ie.sourcePath);
-		}
+		if (exportsMacro(db, ie.sourcePath)) dbTypeCheck(db, ie.sourcePath);
 	}
+}
+
+function importsMacro(db: TransAmDb, filePath: string, imports: ImportEntry[]): boolean {
+	for (const ie of imports) {
+		if (ie.sourcePath != filePath && exportsMacro(db, ie.sourcePath)) return true;
+	}
+	return false;
+}
+
+function dbRegisterMacroExpandedExports(db: TransAmDb, filePath: string, imports: ImportEntry[], startVersion: int32): void {
+	if (!importsMacro(db, filePath, imports)) return;
+	const outerDb = _checkingDb;
+	_checkingDb = db;
+	const ctx = dbBoundModule(filePath);
+	_checkingDb = outerDb;
+	if (ctx == null || checkCancel(db.cancelCtx, startVersion)) return;
+	updateModuleExports(db.exportRegistry, filePath, collectExports(ctx, filePath));
 }
 
 function boundAtRevision(db: TransAmDb, filePath: string): BoundModule | null {
@@ -672,6 +690,12 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const cachedProgram = dbParse(db, filePath);
 	if (cachedProgram == null) return null as unknown as CheckerContext;
 
+	const startVersion = getCancelVersion(db.cancelCtx);
+
+	// Ensure cross-module exports are registered for all dependencies
+	const visitedPaths: HashSet<string> = new HashSet<string>();
+	dbEnsureExportsRegistered(db, filePath, visitedPaths, startVersion);
+
 	// Clone the parse tree before type-checking. The checker mutates nodeType/resolvedSym
 	// in-place; cloning keeps dbParse's cached tree immutable so other consumers
 	// (semantic tokens, syntax queries) see a clean AST. CloneMode.Check preserves
@@ -680,12 +704,6 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	// This replaces the previous double-parse (parseSourceLenient was called twice).
 	const bound = boundAtRevision(db, filePath);
 	const program = bound != null ? bound.program : cloneNodeForCheck(cachedProgram);
-
-	const startVersion = getCancelVersion(db.cancelCtx);
-
-	// Ensure cross-module exports are registered for all dependencies
-	const visitedPaths: HashSet<string> = new HashSet<string>();
-	dbEnsureExportsRegistered(db, filePath, visitedPaths, startVersion);
 
 	// Macro-declaring deps need a FULL check first: checkProgram registers their
 	// module ctx (registerModuleCtx), which the comptime engine seeds macro-body
