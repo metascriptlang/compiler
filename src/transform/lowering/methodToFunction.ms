@@ -28,7 +28,7 @@ function methodToFunctionDecl(methodNode: Node, classGenerics: string): Node {
 		params: md.methodParams,
 		fnParamTypes: md.methodParamTypes,
 		fnBody: md.methodBody,
-		fnFlags: templateFlags(md.methodFlags, classGenerics),
+		fnFlags: templateFlags(md.methodFlags, md.methodIsStatic ? "" : classGenerics),
 		fnReturnType: md.methodReturnType,
 		fnDefaults: md.methodDefaults != null ? md.methodDefaults : [],
 		nativeName: md.nativeName,
