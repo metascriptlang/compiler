@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, MacroInvocationData, InterfaceDeclData, FunctionDeclData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData, PropertyDeclData, DecoratedDeclData, NumberLiteralData, UnaryExprData } from "../../ast/node";
-import { takePendingComments, ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, collectTokenText } from "../context";
+import { takePendingComments, ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, collectTokenText, stampEnd } from "../context";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, isPropertyName } from "../util";
@@ -60,15 +60,30 @@ export function parseStaticVariableDecl(state: ParserState): NodeResult {
 	if (k != TokenKind.Const && k != TokenKind.Let && k != TokenKind.Var) {
 		return Result.err(`Expected 'const', 'let' or 'var' after 'static' at line ${current(state).line}`);
 	}
+	const mark = state.trailingDecls.length;
 	const decl = try parseVariableDecl(state);
 	decl.flags = decl.flags.incl(NodeFlag.StaticStorage);
+	for (let i = mark; i < state.trailingDecls.length; i += 1) {
+		state.trailingDecls[i].flags = state.trailingDecls[i].flags.incl(NodeFlag.StaticStorage);
+	}
 	return Result.ok(decl);
 }
 
 export function parseVariableDecl(state: ParserState): NodeResult {
 	const keyword = current(state);
 	advance(state);
+	const first = try parseDeclarator(state, keyword, keyword);
+	while (current(state).kind == TokenKind.Comma) {
+		advance(state);
+		const next = try parseDeclarator(state, keyword, current(state));
+		stampEnd(state, next);
+		state.trailingDecls.push(next);
+	}
+	consumeSemicolon(state);
+	return Result.ok(first);
+}
 
+function parseDeclarator(state: ParserState, keyword: Token, at: Token): NodeResult {
 	// Destructuring: const { a, b } = ... or const [ x, y ] = ...
 	if (current(state).kind == TokenKind.LBrace) {
 		const pattern = try parseObjectPattern(state);
@@ -78,12 +93,11 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 		}
 		advance(state);
 		const init = try callExprParser(state);
-		consumeSemicolon(state);
 		return Result.ok(createNode(NodeKind.DestructuringDecl, {
 			destrPattern: pattern,
 			destrInit: init,
 			destrIsConst: keyword.kind == TokenKind.Const,
-		}, keyword));
+		}, at));
 	}
 
 	if (current(state).kind == TokenKind.LBracket) {
@@ -94,12 +108,11 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 		}
 		advance(state);
 		const init = try callExprParser(state);
-		consumeSemicolon(state);
 		return Result.ok(createNode(NodeKind.DestructuringDecl, {
 			destrPattern: pattern,
 			destrInit: init,
 			destrIsConst: keyword.kind == TokenKind.Const,
-		}, keyword));
+		}, at));
 	}
 
 	const nameToken = current(state);
@@ -122,7 +135,6 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 	} else if (keyword.kind == TokenKind.Const) {
 		return Result.err(`'const' declaration must be initialized at line ${current(state).line}`);
 	}
-	consumeSemicolon(state);
 
 	const varNode = createNode(NodeKind.VariableDecl, {
 		declName: nameToken.value,
@@ -130,7 +142,7 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 		initializer: init as Node,
 		declKind: match (keyword.kind) { TokenKind.Const => DeclKind.Const, TokenKind.Var => DeclKind.Var, _ => DeclKind.Let },
 		nameLocation: makeLocFromToken(nameToken),
-	}, keyword);
+	}, at);
 	varNode.typeExpr = declTypeExpr;
 	return Result.ok(varNode);
 }
@@ -459,7 +471,11 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 	}
 
 	if (nextKind == TokenKind.Const || nextKind == TokenKind.Let) {
+		const mark = state.trailingDecls.length;
 		const decl = try parseVariableDecl(state);
+		for (let i = mark; i < state.trailingDecls.length; i += 1) {
+			state.trailingDecls[i] = createNode(NodeKind.ExportDecl, { exportedDecl: state.trailingDecls[i] }, exportToken);
+		}
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
