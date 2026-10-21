@@ -50,12 +50,26 @@ extern char **environ;
 #endif
 #endif
 
-#if defined(__ANDROID__) && __ANDROID_API__ < 34
-/* bionic has posix_spawn from API 28 and posix_spawn_file_actions_addchdir_np from API 34.
- * Below 34 the same calls run on fork + exec: the child touches only async-signal-safe
- * calls, and an exec that fails exits 127 instead of failing the spawn. */
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
+#if (defined(__ANDROID__) && __ANDROID_API__ < 34) || (defined(__APPLE__) && TARGET_OS_IPHONE) || defined(MS_TEST_SPAWN_FORK)
+/* bionic has posix_spawn from API 28 and posix_spawn_file_actions_addchdir_np from API 34;
+ * the iOS SDK has posix_spawn but no addchdir_np. Where it is missing the same calls run
+ * on fork + exec: the child touches only async-signal-safe calls, chdirs itself, and
+ * reports a failed step or exec over a close-on-exec pipe, so the parent sees the errno as
+ * posix_spawn would. On iOS a spawn without a cwd still takes posix_spawn.
+ * MS_TEST_SPAWN_FORK turns the shim on for a host build that tests it. */
+#if defined(__ANDROID__)
+#define MS_SPAWN_NATIVE 0
+#else
+#define MS_SPAWN_NATIVE 1
+#endif
+
 typedef struct {
 	int count;
+	int chdirs;
 	struct { int kind; int fd; int target; const char *path; } steps[16];
 } msSpawnActions;
 
@@ -68,7 +82,7 @@ static inline int msSpawnAttrInit(msSpawnAttr *attr) {
 	return 0;
 }
 
-static inline int msSpawnActionsInit(msSpawnActions *actions) { actions->count = 0; return 0; }
+static inline int msSpawnActionsInit(msSpawnActions *actions) { actions->count = 0; actions->chdirs = 0; return 0; }
 static inline int msSpawnActionsDestroy(msSpawnActions *actions) { (void)actions; return 0; }
 static inline int msSpawnActionsAdd(msSpawnActions *actions, int kind, int fd, int target, const char *path) {
 	if (actions->count == 16) return ENOMEM;
@@ -77,32 +91,96 @@ static inline int msSpawnActionsAdd(msSpawnActions *actions, int kind, int fd, i
 	actions->steps[actions->count].target = target;
 	actions->steps[actions->count].path = path;
 	actions->count += 1;
+	if (kind == 2) actions->chdirs += 1;
 	return 0;
 }
 
+#if MS_SPAWN_NATIVE
+static inline int msSpawnNative(pid_t *pid, const char *file, int searchPath, const msSpawnActions *actions, const msSpawnAttr *attr, char *const argv[], char *const envp[]) {
+	posix_spawn_file_actions_t fa;
+	posix_spawnattr_t at;
+	int err = posix_spawn_file_actions_init(&fa);
+	if (err != 0) return err;
+	err = posix_spawnattr_init(&at);
+	if (err != 0) {
+		posix_spawn_file_actions_destroy(&fa);
+		return err;
+	}
+	for (int i = 0; err == 0 && actions != NULL && i < actions->count; i++) {
+		if (actions->steps[i].kind == 0) err = posix_spawn_file_actions_addclose(&fa, actions->steps[i].fd);
+		else err = posix_spawn_file_actions_adddup2(&fa, actions->steps[i].fd, actions->steps[i].target);
+	}
+	if (err == 0 && attr != NULL) {
+		posix_spawnattr_setsigmask(&at, &attr->mask);
+		posix_spawnattr_setsigdefault(&at, &attr->defaults);
+		err = posix_spawnattr_setflags(&at, attr->flags);
+	}
+	if (err == 0) err = searchPath ? posix_spawnp(pid, file, &fa, &at, argv, envp) : posix_spawn(pid, file, &fa, &at, argv, envp);
+	posix_spawnattr_destroy(&at);
+	posix_spawn_file_actions_destroy(&fa);
+	return err;
+}
+#endif
+
+static inline void msSpawnChildFail(int reportFd) {
+	int err = errno;
+	ssize_t ignored = write(reportFd, &err, sizeof err);
+	(void)ignored;
+	_exit(127);
+}
+
 static inline int msSpawnFork(pid_t *pid, const char *file, int searchPath, const msSpawnActions *actions, const msSpawnAttr *attr, char *const argv[], char *const envp[]) {
+#if MS_SPAWN_NATIVE
+	if (actions == NULL || actions->chdirs == 0) return msSpawnNative(pid, file, searchPath, actions, attr, argv, envp);
+#endif
+	int report[2];
+	if (pipe(report) != 0) return errno;
+	fcntl(report[0], F_SETFD, FD_CLOEXEC);
+	fcntl(report[1], F_SETFD, FD_CLOEXEC);
 	pid_t child = fork();
-	if (child < 0) return errno;
+	if (child < 0) {
+		int err = errno;
+		close(report[0]);
+		close(report[1]);
+		return err;
+	}
 	if (child == 0) {
+		close(report[0]);
 		if (attr != NULL && (attr->flags & POSIX_SPAWN_SETSIGDEF)) {
 			struct sigaction dfl;
 			memset(&dfl, 0, sizeof dfl);
 			dfl.sa_handler = SIG_DFL;
 			for (int sig = 1; sig < NSIG; sig++) {
-				if (sigismember(&attr->defaults, sig) == 1 && sigaction(sig, &dfl, NULL) != 0) _exit(127);
+				if (sigismember(&attr->defaults, sig) == 1 && sigaction(sig, &dfl, NULL) != 0) msSpawnChildFail(report[1]);
 			}
 		}
-		if (attr != NULL && (attr->flags & POSIX_SPAWN_SETSIGMASK) && sigprocmask(SIG_SETMASK, &attr->mask, NULL) != 0) _exit(127);
+		if (attr != NULL && (attr->flags & POSIX_SPAWN_SETSIGMASK) && sigprocmask(SIG_SETMASK, &attr->mask, NULL) != 0) msSpawnChildFail(report[1]);
 		for (int i = 0; actions != NULL && i < actions->count; i++) {
 			int failed = 0;
 			if (actions->steps[i].kind == 0) failed = close(actions->steps[i].fd);
 			else if (actions->steps[i].kind == 1) failed = dup2(actions->steps[i].fd, actions->steps[i].target) < 0;
 			else failed = chdir(actions->steps[i].path);
-			if (failed) _exit(127);
+			if (failed) msSpawnChildFail(report[1]);
 		}
+#if defined(__APPLE__)
+		if (searchPath) {
+			*_NSGetEnviron() = (char **)envp;
+			execvp(file, argv);
+		}
+#else
 		if (searchPath) execvpe(file, argv, envp);
+#endif
 		else execve(file, argv, envp);
-		_exit(127);
+		msSpawnChildFail(report[1]);
+	}
+	close(report[1]);
+	int err = 0;
+	ssize_t got;
+	do got = read(report[0], &err, sizeof err); while (got < 0 && errno == EINTR);
+	close(report[0]);
+	if (got == (ssize_t)sizeof err) {
+		while (waitpid(child, NULL, 0) < 0 && errno == EINTR) {}
+		return err;
 	}
 	*pid = child;
 	return 0;
@@ -1078,11 +1156,13 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 	posix_spawn_file_actions_adddup2(&fa, errPipe[1], STDERR_FILENO);
 	posix_spawn_file_actions_addclose(&fa, outPipe[1]);
 	posix_spawn_file_actions_addclose(&fa, errPipe[1]);
-	if (cwd.len > 0) posix_spawn_file_actions_addchdir_np(&fa, msStringToCString(cwd));
+	int spawnErr = cwd.len > 0 ? posix_spawn_file_actions_addchdir_np(&fa, msStringToCString(cwd)) : 0;
 	pid_t pid = 0;
-	pthread_mutex_lock(&_msSpawnCreateLock);
-	int spawnErr = posix_spawnp(&pid, exeStr, &fa, NULL, argv, MS_SPAWN_ENVIRON);
-	pthread_mutex_unlock(&_msSpawnCreateLock);
+	if (spawnErr == 0) {
+		pthread_mutex_lock(&_msSpawnCreateLock);
+		spawnErr = posix_spawnp(&pid, exeStr, &fa, NULL, argv, MS_SPAWN_ENVIRON);
+		pthread_mutex_unlock(&_msSpawnCreateLock);
+	}
 	posix_spawn_file_actions_destroy(&fa);
 	for (int64_t j = 1; j <= argc; j++) free(argv[j]);
 	free(argv);
@@ -1315,7 +1395,7 @@ static inline int64_t msProcChildSpawn(msString path, msStringArray* args, msStr
 		if (cwd.len > 0) {
 			cwdCopy = strdup(msStringToCString(cwd));
 			if (!cwdCopy) failed = ENOMEM;
-			else posix_spawn_file_actions_addchdir_np(&fa, cwdCopy);
+			else failed = posix_spawn_file_actions_addchdir_np(&fa, cwdCopy);
 		}
 		if (!failed) {
 			pid_t pid = 0;
