@@ -63,8 +63,6 @@ typedef struct msSpawnCtx {
 } msSpawnCtx;
 
 
-/* Forward declarations — implemented in dispatch.c */
-extern void msCompletionQueuePush(void* fut, bool isFail, void* error);
 /* Amendment G: worker-side push that does NOT incref — the owner thread already
  * took the queue's completion ref at submit time (msSpawn / msSpawnInto). */
 extern void msCompletionQueuePushOwned(void* fut, bool isFail, void* error);
@@ -99,7 +97,7 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 		} else {
 			msAwaitGroupCompleteSlot(ctx->group, ctx->slot, result);
 		}
-	} else if (ctx->fut != NULL) {
+	} else {
 		/* Future path: split completion (Pony MPSC parity).
 		 * Step 1: Store value + mark finished directly from worker thread.
 		 *         Blocking waiters (msWaitForReady) see finished immediately.
@@ -135,9 +133,6 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 			msNotifyFutureComplete();
 			msCompletionQueuePushOwned(ctx->fut, false, NULL);
 		}
-	} else {
-		/* Defensive: no completion target — clear errors to prevent stale state. */
-		if (msErr) { msErr = false; msCurrException = NULL; }
 	}
 
 	/* Release worker's ownership of the env via deferred MPSC push.
@@ -187,7 +182,7 @@ static inline void* msSpawn(msClosure fn) {
 #ifdef _WIN32
 	/* Channel-exists-before-visible, Windows twin of the submit-time
 	 * discipline above: ensure the scheduler-0 loop's IOCP exists before the
-	 * worker can complete, so msPostCompletion routes to the loop instead of
+	 * worker can complete, so its completion post routes to the loop instead of
 	 * the I15-violating inline fallback. See msEnsureLoopChannel
 	 * (dispatchFull.c). */
 	{

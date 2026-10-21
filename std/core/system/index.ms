@@ -1033,9 +1033,6 @@ when (mscDeclaresRuntime) {
 	extern function msAwaitGroupBlocking(g: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msAwaitGroupCancel(g: Ptr<void>): void;
-
-	@compilerFunc
 	extern function msAwaitGroupFree(g: Ptr<void>): void;
 
 	@compilerFunc

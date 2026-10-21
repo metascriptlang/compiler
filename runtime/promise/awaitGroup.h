@@ -74,13 +74,12 @@ MS_TLS_EXTERN(bool, msErr);         /* slot-failure propagation (mirror future.h
  * compiled out and PushOwned degenerates to Push there.
  *
  * Windows history: the gate was 0 while msDispatcher (and its iocp) was
- * thread-local and pool workers never posted — msPostCompletion took the
- * in-flight ref at post time on the loop thread instead. That arrangement
- * became unsound the moment the IOCP went process-global (msFirstLoopIocp
- * routing, dispatchFull.c): workers post, so a post-time incref races the
- * owning thread's decref on the non-atomic rc field. With this gate now 1,
- * msPostCompletion's incref applies only to the public Push path, and the
- * Owned path carries the submit ref exactly like POSIX. */
+ * thread-local and pool workers never posted — the post took the in-flight
+ * ref on the loop thread instead. That arrangement became unsound the moment
+ * the IOCP went process-global (msFirstLoopIocp routing, dispatchFull.c):
+ * workers post, so a post-time incref races the owning thread's decref on the
+ * non-atomic rc field. The Owned path carries the submit ref exactly like
+ * POSIX. */
 #if !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)
 #define MS_FUTURE_SUBMIT_REF 1
 #else
@@ -149,7 +148,6 @@ typedef struct msAwaitGroup {
 	_Atomic(bool) finishDone;     /* set after the last worker exits finishSlot — msAwaitGroupFree must wait for this */
 	void* error;                  /* first error payload (protected by mutex) */
 	void** results;               /* size-length array of void* result values */
-	int64_t deadlineMs;           /* Phase 3: absolute monotonic deadline (0 = none) */
 	bool timedOut;                /* Phase 3: set when blocking returns due to timeout */
 	_Atomic(void*) doneFut;       /* Phase 4: msFuture_void* completed when all slots done (NULL = blocking path) */
 
@@ -221,33 +219,13 @@ void msAwaitGroupBlocking(msAwaitGroup* g);
  * all slots complete. Workers check cancelled at safe points to early-return. */
 void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs);
 
-/* Cancel all pending tasks. Sets the cancelled flag so workers can check at
- * safe points and early-return. Does NOT block or wait for workers to stop. */
-void msAwaitGroupCancel(msAwaitGroup* g);
-
 /* ===== Queries (non-blocking, for advanced use) ===== */
-
-/* Returns true if all slots have completed (successfully or failed). */
-static inline bool msAwaitGroupFinished(msAwaitGroup* g) {
-	return g != NULL && atomic_load_explicit(&g->pending, memory_order_acquire) == 0;
-}
-
-/* Returns true if any slot reported a failure. Only meaningful after
- * msAwaitGroupFinished returns true (or msAwaitGroupBlocking returns). */
-static inline bool msAwaitGroupFailed(msAwaitGroup* g) {
-	return g != NULL && atomic_load_explicit(&g->failed, memory_order_acquire);
-}
 
 /* Read the result for slot `i`. Only valid after the group has finished.
  * Returns NULL for failed slots. */
 static inline void* msAwaitGroupResult(msAwaitGroup* g, int32_t slot) {
 	if (g == NULL || slot < 0 || slot >= g->size) return NULL;
 	return g->results[slot];
-}
-
-/* Read the first error encountered. Returns NULL if no slot failed. */
-static inline void* msAwaitGroupError(msAwaitGroup* g) {
-	return g != NULL ? g->error : NULL;
 }
 
 /* Phase 3: Did the timed wait expire before all slots completed? */
@@ -271,7 +249,7 @@ static inline void msAwaitGroupSetDoneFut(msAwaitGroup* g, void* fut) {
 #ifdef _WIN32
 		/* Channel-exists-before-visible, same as the msSpawn/msSpawnInto submit
 		 * sites (thread.h): finishSlot's last worker completes doneFut via
-		 * msCompletionQueuePushOwned -> msPostCompletion, which needs the
+		 * msCompletionQueuePushOwned, which needs the
 		 * scheduler-0 loop's IOCP to exist or it falls back to the
 		 * I15-violating inline path. See msEnsureLoopChannel (dispatchFull.c). */
 		{

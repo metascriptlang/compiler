@@ -5,7 +5,7 @@
  * Scheduler polls actor mailboxes directly (no syscall, no pipe).
  * Scheduler 0 also runs msRunOnce() for I/O + timers + spawn.
  *
- * Lifecycle: msActorCreate → msActorSend/msActorCall → msActorProcess → msActorDestroy
+ * Lifecycle: msActorCreate → msActorSend → msActorProcess → msActorDestroy
  */
 
 #ifndef MS_ACTOR_H

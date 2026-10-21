@@ -29,7 +29,6 @@ extern int64_t msMonoTimeMs(void);
 /* Phase 4: route doneFut completion through MPSC queue to dispatcher thread.
  * Worker sets finished directly (for blocking waiters), then pushes to
  * the completion queue so callbacks fire on the dispatcher thread. */
-extern void msCompletionQueuePush(void* fut, bool isFail, void* error);
 extern void msCompletionQueuePushOwned(void* fut, bool isFail, void* error);
 extern void msNotifyFutureComplete(void);
 /* Minimal forward declaration: msFutureBase.finished is the first field (_Atomic(bool)).
@@ -49,7 +48,6 @@ msAwaitGroup* msAwaitGroupInit(int32_t n) {
 	atomic_store_explicit(&g->cancelled, false, memory_order_relaxed);
 	atomic_store_explicit(&g->finishDone, (n == 0), memory_order_relaxed);
 	g->error = NULL;
-	g->deadlineMs = 0;
 	g->timedOut = false;
 	atomic_store_explicit(&g->doneFut, NULL, memory_order_relaxed);
 
@@ -246,7 +244,6 @@ void msAwaitGroupBlocking(msAwaitGroup* g) {
 
 void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 	if (g == NULL) return;
-	g->deadlineMs = deadlineMs;
 
 	/* Fast path: already done. */
 	if (atomic_load_explicit(&g->pending, memory_order_acquire) == 0) {
@@ -334,11 +331,6 @@ void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 #endif
 	}
 	if (dec) msPoolBusyInc();  /* back to own work */
-}
-
-void msAwaitGroupCancel(msAwaitGroup* g) {
-	if (g == NULL) return;
-	atomic_store_explicit(&g->cancelled, true, memory_order_release);
 }
 
 /* ===== msAwaitSlot — Thread-Local Pool with Heap Fallback ===== */

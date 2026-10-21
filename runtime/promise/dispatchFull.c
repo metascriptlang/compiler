@@ -242,7 +242,7 @@ static void msDispatcherCallSoon(msClosure cb) {
  *
  * Registry entry 0 — the first loop created, scheduler 0 in every real
  * topology — doubles as the completion target for threads that own no
- * dispatcher (see msPostCompletion): the POSIX worker pushes to the
+ * dispatcher (see msCompletionQueuePushOwned): the POSIX worker pushes to the
  * process-global MPSC that the event loop drains; the IOCP analog is the
  * loop's own port.
  *
@@ -314,26 +314,37 @@ int32_t msGetWakePipeFd(void) { return -1; }
  * counterpart: its completion channel is the process-global MPSC, created
  * lazily by any thread's push. Worker-guarded: a nested spawn from a pool
  * worker must not mint a worker-local port nobody drains — its children's
- * completions route to registry entry 0 via msPostCompletion's fallback,
+ * completions route to registry entry 0 via msCompletionQueuePushOwned's fallback,
  * exactly like POSIX's global queue. */
 void msEnsureLoopChannel(void) {
 	if (!msIsPoolWorker) (void)msGetDispatcher();
 }
 
-/* Cross-thread completion core: takeRef=true takes the queue-side in-flight
- * ref (public Push contract); takeRef=false relies on the owner-thread submit
- * ref (Amendment G Owned path). Defined below, before the POSIX #else. */
-static void msPostCompletionCore(void* fut, void* value, bool isFail, void* error, bool takeRef);
-
-void msCompletionQueuePush(void* fut, bool isFail, void* error) {
-	msPostCompletion(fut, NULL, isFail, error);
-}
-
 /* Owned path: the owner-thread submit ref (Amendment G, MS_FUTURE_SUBMIT_REF)
- * already holds the future across the worker's publish and this post — a ref
- * here would double-count against the drain's single release. */
+ * already holds the future across the worker's publish and this post, and the
+ * IOCP drain in msRunOnce releases it right after msFutureFireCallbacks — a ref
+ * here would double-count against that single release.
+ *
+ * A thread that owns no dispatcher (a pool worker) posts to registry entry 0,
+ * the scheduler-0 main loop in every PARALOCK topology. Completing inline
+ * instead calls msFutureComplete/msFutureFail, which hit the finished-guard
+ * the worker's Step-1 publish already set: callbacks never fire and async
+ * steppers hang (Amendment A / I15). */
 void msCompletionQueuePushOwned(void* fut, bool isFail, void* error) {
-	msPostCompletionCore(fut, NULL, isFail, error, false);
+	HANDLE iocp = gDispatcher != NULL ? gDispatcher->iocp : NULL;
+	if (iocp == NULL) iocp = msFirstLoopIocp();
+	msCompletionMsg* msg = iocp != NULL ? (msCompletionMsg*)malloc(sizeof(msCompletionMsg)) : NULL;
+	if (msg == NULL) {
+		if (isFail) msFutureFail(fut, error);
+		else msFutureComplete(fut, NULL);
+		return;
+	}
+	msg->fut = fut;
+	msg->value = NULL;
+	msg->isFail = isFail;
+	msg->error = error;
+	msg->kind = 0;
+	PostQueuedCompletionStatus(iocp, 0, 0, (LPOVERLAPPED)msg);
 }
 
 /* Amendment H (Windows): deferred closure-env release — same kind=-3 message
@@ -421,30 +432,9 @@ static void msInitQueueOnce(void) {
 }
 void msEnsureWakePipe(void);
 
-/* Push a future completion to the MPSC queue + wake the selector.
- * Called from worker threads. Dispatcher drains the queue and fires callbacks. */
-void msCompletionQueuePush(void* fut, bool isFail, void* error) {
-    msEnsureWakePipe();
-    /* Queue owns a ref while the completion message is in flight: the future can
-     * finish (worker sets finished) and be freed by its owner before the drain pops
-     * this message, leaving a stale replyFuture → UAF in msFutureFireCallbacks.
-     * Non-atomic incref is safe — the MPSC push/pop barrier orders this worker incref
-     * before the dispatcher's matching decref; no other thread touches this rc. */
-    if (fut != NULL) msIncRef(fut);
-    msMessage* msg = msMsgAlloc(/*kind=*/isFail ? -1 : 0, /*replyFut=*/fut);
-    msMsgSetPtr(msg, 0, error);
-    msMpscPush(&gCompletionQueue, msg);
-    /* Always wake — no amortization. Two writers (actor send + spawn completion)
-     * sharing one flag caused missed wakes and 500ms selector stalls. The wake
-     * pipe absorbs duplicates (64KB buffer, 1 byte each, drained in bulk). */
-    if (gWakePipe[1] >= 0) {
-        char c = 1;
-        (void)write(gWakePipe[1], &c, 1);
-    }
-}
-
-/* Same as msCompletionQueuePush but WITHOUT the internal incref: the owner
- * thread already took the queue's in-flight ref at submit time (msSpawn /
+/* Push a future completion to the MPSC queue + wake the selector, from a
+ * worker thread; the dispatcher drains the queue and fires callbacks. No incref
+ * here: the owner thread already took the queue's in-flight ref at submit time (msSpawn /
  * msSpawnInto / msAwaitGroupSetDoneFut), before the future could become
  * visible-as-finished. That ordering closes the publish->push UAF window —
  * the worker publishes `finished` then pushes, and between those an owner
@@ -456,6 +446,9 @@ void msCompletionQueuePushOwned(void* fut, bool isFail, void* error) {
     msMessage* msg = msMsgAlloc(/*kind=*/isFail ? -1 : 0, /*replyFut=*/fut);
     msMsgSetPtr(msg, 0, error);
     msMpscPush(&gCompletionQueue, msg);
+    /* Always wake — no amortization. Two writers (actor send + spawn completion)
+     * sharing one flag caused missed wakes and 500ms selector stalls. The wake
+     * pipe absorbs duplicates (64KB buffer, 1 byte each, drained in bulk). */
     if (gWakePipe[1] >= 0) {
         char c = 1;
         (void)write(gWakePipe[1], &c, 1);
@@ -519,7 +512,7 @@ int32_t msGetWakePipeFd(void) {
 
 /* Wake event loop from another thread (Pony-style: unpark scheduler).
  * Used by actor subsystem when scheduling work on the main thread.
- * Always writes (no amortization) — same rationale as msCompletionQueuePush. */
+ * Always writes (no amortization) — same rationale as msCompletionQueuePushOwned. */
 void msActorWakeEventLoop(void) {
     if (gWakePipe[1] >= 0) {
         char c = 1;
@@ -919,77 +912,6 @@ void msRunForever(void) {
 	}
 }
 
-/* Post completion from pool thread to event loop. Thread-safe.
- * POSIX: MPSC queue push (lock-free, Pony parity).
- * Windows: PostQueuedCompletionStatus to IOCP (native MPSC).
- * Core: takeRef=true takes the queue-side in-flight ref (public Push
- * contract, both platforms); takeRef=false relies on the owner-thread
- * submit ref (Amendment G Owned path — Windows IOCP only). The forward
- * declaration lives OUTSIDE any #ifdef so the POSIX build sees it before
- * the definition (static-after-use is an error there). */
-static void msPostCompletionCore(void* fut, void* value, bool isFail, void* error, bool takeRef);
-
-void msPostCompletion(void* fut, void* value, bool isFail, void* error) {
-	msPostCompletionCore(fut, value, isFail, error, true);
-}
-
-static void msPostCompletionCore(void* fut, void* value, bool isFail, void* error, bool takeRef) {
-#ifdef _WIN32
-	HANDLE iocp = gDispatcher != NULL ? gDispatcher->iocp : NULL;
-	if (iocp == NULL) {
-		/* This thread owns no dispatcher — a pool worker (dual-path wait:
-		 * workers park on condvars, never create one). POSIX pushes to the
-		 * process-global MPSC that the event loop drains; the IOCP mirror is
-		 * the loop's own port, registry entry 0 — the scheduler-0 main loop in
-		 * every PARALOCK topology. Completing inline here instead (the old
-		 * fallback) calls msFutureComplete/msFutureFail, which hit the
-		 * finished-guard the worker's Step-1 publish already set: callbacks
-		 * never fire and async steppers hang — exactly the Amendment A / I15
-		 * violation the drain path exists to prevent. Route to the loop so
-		 * the drain — the one place that fires via msFutureFireCallbacks —
-		 * runs them. */
-		iocp = msFirstLoopIocp();
-	}
-	if (iocp != NULL) {
-		msCompletionMsg* msg = (msCompletionMsg*)malloc(sizeof(msCompletionMsg));
-		if (msg == NULL) {
-			/* No message to hand the loop — complete inline rather than
-			 * dereference NULL, matching the no-dispatcher branch below. */
-			if (isFail) msFutureFail(fut, error);
-			else msFutureComplete(fut, value);
-			return;
-		}
-		/* Queue-side in-flight ref, same contract as the POSIX
-		 * msCompletionQueuePush incref: PostQueuedCompletionStatus is
-		 * asynchronous — the dispatcher pops this message in a later msRunOnce
-		 * turn, and without a ref the future could be freed while this raw
-		 * pointer is still in flight. Released by the IOCP drain in msRunOnce
-		 * right after msFutureFireCallbacks.
-		 *
-		 * takeRef=false ONLY for the Owned path (msCompletionQueuePushOwned,
-		 * called by spawn workers): with MS_FUTURE_SUBMIT_REF=1 the
-		 * owner-thread submit incref (Amendment G) already holds the future
-		 * across publish and post — a second ref here would double-count
-		 * against the drain's single release. The incref must also not run on
-		 * the worker for the same reason the release must not: rc is
-		 * non-atomic and the owner thread decrefs concurrently. */
-		if (takeRef && fut != NULL) msIncRef(fut);
-		msg->fut = fut;
-		msg->value = value;
-		msg->isFail = isFail;
-		msg->error = error;
-		msg->kind = 0;
-		PostQueuedCompletionStatus(iocp, 0, 0, (LPOVERLAPPED)msg);
-	} else {
-		if (isFail) msFutureFail(fut, error);
-		else msFutureComplete(fut, value);
-	}
-#else
-	(void)takeRef; /* POSIX increfs inside msCompletionQueuePush */
-	msCompletionQueuePush(fut, isFail, error);
-#endif
-}
-
 /* Amendment H (Windows mirror of msCompletionQueuePushEnvRelease): deferred
  * closure-env release. Spawn workers must not decref the closure env on their
  * own thread — the env's rc field is non-atomic and races the owning thread's
@@ -1169,7 +1091,7 @@ void msAsyncStart(void* retFut, msClosure stepper) {
 	/* Main thread: ensure dispatcher exists (needs IOCP/pipe for cross-thread completion).
 	 * Worker threads: skip dispatcher creation — on Windows too. A worker-local
 	 * dispatcher is NOT acceptable: it registers the worker's own IOCP in the wake
-	 * registry, and msPostCompletionCore then routes that worker's completions to
+	 * registry, and msCompletionQueuePushOwned then routes that worker's completions to
 	 * the worker's port — which no thread ever drains (workers never run msRunOnce).
 	 * The steppers riding those completions never fire, and a spawn-inside-actor
 	 * program hangs with its actor suspended forever (proven 2026-09-05: the

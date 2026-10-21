@@ -29,7 +29,7 @@ static void* msOrphanErrors[MS_ORPHAN_MAX];
 static int msOrphanErrorCount = 0;
 
 /* Called from msFutureFireCallbacks when a future completes FAILED with no
- * callback attached. Cross-thread safe: msPostCompletion's no-dispatcher
+ * callback attached. Cross-thread safe: the Windows completion post's no-loop
  * fallback runs msFutureFail on pool threads. The incref keeps the entry
  * valid until the exit report; it is deliberately never released (the
  * process is exiting). */

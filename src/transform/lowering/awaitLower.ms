@@ -219,9 +219,9 @@ export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc:
 		], loc), loc));
 
 	// if (msAwaitGroupTimedOut($ag)) {
-	//   msAwaitGroupCancel($ag); msAwaitGroupBlocking($ag); msAwaitGroupFree($ag); throw "await timeout"; }
-	// Cancel first (safe-points injected into the children see the flag and
-	// unwind), then JOIN the children before freeing: msAwaitGroupFree's
+	//   msAwaitGroupBlocking($ag); msAwaitGroupFree($ag); throw "await timeout"; }
+	// The timed wait has already set the cancel flag (safe-points injected into
+	// the children see it and unwind); JOIN the children before freeing: msAwaitGroupFree's
 	// contract (awaitGroup.h) forbids freeing during an outstanding submission
 	// - it spins on finishDone, which only the last finishSlot sets, so a
 	// free-while-in-flight hangs forever when a child is still blocked. The
@@ -229,15 +229,13 @@ export function emitAwaitGroupWait(agIdent: Node, timeoutExpr: Node | null, loc:
 	// while waiting, which is exactly what unblocks a timer-parked child.
 	const timedOutCall = makeCall(runtimeRef("msAwaitGroupTimedOut", loc), [agIdent], loc);
 	timedOutCall.nodeType = booleanType();
-	const cancelCall = makeExprStmt(
-		makeCall(runtimeRef("msAwaitGroupCancel", loc), [agIdent], loc), loc);
 	const joinCall = makeExprStmt(
 		makeCall(runtimeRef("msAwaitGroupBlocking", loc), [agIdent], loc), loc);
 	const freeCall = makeExprStmt(
 		makeCall(runtimeRef("msAwaitGroupFree", loc), [agIdent], loc), loc);
 	const throwData: NodeData = { throwArg: makeString("await timeout", loc) };
 	const throwNode = createNodeAt(NodeKind.ThrowStmt, throwData, loc);
-	const ifBody = makeBlock([cancelCall, joinCall, freeCall, throwNode], loc);
+	const ifBody = makeBlock([joinCall, freeCall, throwNode], loc);
 	const ifNode = makeIf(timedOutCall, ifBody, null, loc);
 	stmts.push(ifNode);
 

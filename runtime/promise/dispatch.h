@@ -118,8 +118,6 @@ void* msWaitFor(void* fut);
 void msWaitForReady(void* fut);
 void msRunForever(void);
 
-/* Post completion from pool thread to event loop (libuv pattern) */
-void msPostCompletion(void* fut, void* value, bool isFail, void* error);
 void msPostEnvRelease(void* env);
 
 /* Standard reference sleepAsync(ms) — returns msFuture_void* */
