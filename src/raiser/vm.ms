@@ -1193,10 +1193,11 @@ function vmLedger(vm: RaiserVM, held: RaiserStrand[], extra: RaiserValue[], wher
 	if (!vm.orc || vm.error != "") return;
 	const roots: RaiserValue[] = [];
 	roots.push(vm.currentException);
+	const running = vm.sched.strands.items[vm.current];
 	for (const s of held) {
 		for (const h of s.regs.refs) if (h != 0) roots.push(handleValue(h));
 		if (s.globals != held[0].globals) for (const g of s.globals) roots.push(g);
-		if (s.currentException != vm.currentException) roots.push(s.currentException);
+		if (s != running) roots.push(s.currentException);
 	}
 	for (const g of held[0].globals) roots.push(g);
 	for (const e of extra) roots.push(e);
