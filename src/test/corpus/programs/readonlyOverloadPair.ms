@@ -15,13 +15,17 @@ function readFirst(t: Readonly<Node>): int32 {
 	return f == null ? -1 : f.n;
 }
 
-const root = new Node();
-const kid = new Node();
-kid.n = 7;
-root.kids.push(kid);
-const m = first(root);
-if (m != null) m.n = 8;
-const reader = spawn(() => readFirst(root));
-const viewed = await reader;
-const leaf = new Node();
-console.log(`mutable=${m == null ? -1 : m.n} view=${viewed} kid=${kid.n} empty=${readFirst(leaf)}`);
+async function main(): Promise<void> {
+	const root = new Node();
+	const kid = new Node();
+	kid.n = 7;
+	root.kids.push(kid);
+	const m = first(root);
+	if (m != null) m.n = 8;
+	const reader = spawn(() => readFirst(root));
+	const viewed = await reader;
+	const leaf = new Node();
+	console.log(`mutable=${m == null ? -1 : m.n} view=${viewed} kid=${kid.n} empty=${readFirst(leaf)}`);
+}
+
+await main();
