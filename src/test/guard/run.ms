@@ -683,6 +683,20 @@ function routineBody(text: string, name: string): string {
 	return text.slice(at, end < 0 ? text.length : end);
 }
 
+function destroyHelper(text: string, typeInfoLine: string): string {
+	const field = ".destroyFn = ";
+	const at = typeInfoLine.indexOf(field, 0);
+	if (at < 0) return "";
+	const start = at + field.length;
+	const end = typeInfoLine.indexOf(",", start);
+	const slot = typeInfoLine.slice(start, end < 0 ? typeInfoLine.length : end).replace("(msDestroyProc)", "");
+	const adapter = `${slot}(void* dest) { `;
+	const body = text.indexOf(adapter, 0);
+	if (body < 0) return slot;
+	const call = body + adapter.length;
+	return text.slice(call, text.indexOf("(", call));
+}
+
 function refArrayAcyclicEmitsPlainRelease(): void {
 	const tag = "refArrayAcyclicEmitsPlainRelease";
 	const dir = freshDir("refarrayfamily");
@@ -704,8 +718,9 @@ function refArrayAcyclicEmitsPlainRelease(): void {
 		if (linkOps == "") linkOps = routineBody(text, "linkOps");
 		for (const line of lines(text)) {
 			if (!line.contains("RefCellTypeInfo = {")) continue;
-			if (line.contains("(msDestroyProc)msAcyclicRefArrayDestroy,")) acyclicCell = true;
-			if (line.contains("(msDestroyProc)msRefArrayDestroy,")) {
+			const helper = destroyHelper(text, line);
+			if (helper == "msAcyclicRefArrayDestroy") acyclicCell = true;
+			if (helper == "msRefArrayDestroy") {
 				if (!line.contains(".isCyclic = MS_TRUE")) {
 					fail(tag, `an acyclic array cell is released by the cyclic helper: ${line.trim()}`);
 					return;
