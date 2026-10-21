@@ -9,14 +9,162 @@
 @include("runtime/io/streams.h");
 
 extern function msStdinDisableBuffering(): void;
-extern function msReadLine(): string;
 extern function msReadBytes(n: number): string;
 extern function msStdinHasData(): number;
 extern function msWriteStdout(s: string): void;
 extern function msWriteStderr(s: string): void;
 
+@include("errno.h");
+@include("stdio.h");
+@include("stdlib.h");
+@include("string.h");
+
+extern struct FILE;
+extern let errno: int32;
+extern const EINTR: int32;
+extern let stdin: Ptr<FILE>;
+extern function cFgets(s: Ptr<uint8>, size: int32, file: Ptr<FILE>): Ptr<uint8> | null from "fgets";
+extern function cClearerr(file: Ptr<FILE>): void from "clearerr";
+extern function cMemset(p: Ptr<uint8>, value: int32, size: uint64): Ptr<uint8> from "memset";
+extern function cMemcpy(to: Ptr<uint8>, from: Ptr<uint8>, size: uint64): Ptr<uint8> from "memcpy";
+extern function cMemchr(p: Ptr<uint8>, value: int32, size: uint64): Ptr<uint8> | null from "memchr";
+extern function cMalloc(size: uint64): Ptr<uint8> | null from "malloc";
+extern function cRealloc(p: Ptr<uint8>, size: uint64): Ptr<uint8> | null from "realloc";
+extern function cFree(p: Ptr<uint8>): void from "free";
+extern function cMemmove(to: Ptr<uint8>, from: Ptr<uint8>, size: uint64): Ptr<uint8> from "memmove";
+extern function cGetline(ref line: Ptr<uint8>, ref cap: uint64, file: Ptr<FILE>): int64 from "getline";
+extern function msStringNew(data: cstring, length: int64): string;
+
+const LF: uint8 = 10;
+const CR: uint8 = 13;
+const FIRST_HEAP: int32 = 4096;
+// pos + room stays under this, so the buffer size (pos + room) * 2 fits in int32.
+const MAX_LINE: int32 = 1073741823;
+const MAX_STRING: int64 = 2147483647;
+
+// Reads up to room - 1 bytes into base[pos..] and returns the line's length when the line
+// ended there, -1 when it continues. The area is filled with LF first, because fgets writes
+// a NUL after what it read and a NUL in the data cannot be told apart from it otherwise.
+// A read that hits EOF ends the line at pos with its last byte kept, even a CR or a NUL.
+// Inlined so the C compiler merges the stack chunk's zero fill into the LF fill.
+@inline function readChunk(file: Ptr<FILE>, base: Ptr<uint8>, pos: int32, room: int32): int32 {
+	const at = base + pos;
+	cMemset(at, LF as int32, room as uint64);
+	let read = cFgets(at, room, file) != null;
+	while (!read && errno == EINTR) {
+		errno = 0;
+		cClearerr(file);
+		read = cFgets(at, room, file) != null;
+	}
+	if (!read) return pos;
+	const found = cMemchr(at, LF as int32, room as uint64);
+	if (found == null) return -1;
+	const last = pos + (((found as Ptr<uint8>) - at) as int32);
+	if (last > 0 && base[last - 1] == CR) return last - 1;
+	if (last > 0 && base[last - 1] == 0 && (last >= pos + room - 1 || base[last + 1] != 0)) return last - 1;
+	return last;
+}
+
+// The stack chunk is sized so the C compiler fills it with inline stores: x86-64 Windows
+// calls the CRT memset above 256 bytes, which costs short lines more than the heap path
+// costs lines between 256 and 511 bytes.
+function readLineFrom(file: Ptr<FILE>): string {
+	when (windows) {
+		let first: uint8[256] = [];
+		return readLineAfter(file, (first as Span<uint8>) as Ptr<uint8>, 256);
+	} else {
+		let first: uint8[512] = [];
+		return readLineAfter(file, (first as Span<uint8>) as Ptr<uint8>, 512);
+	}
+}
+
+@inline function readLineAfter(file: Ptr<FILE>, firstAt: Ptr<uint8>, firstRoom: int32): string {
+	const firstEnd = readChunk(file, firstAt, 0, firstRoom);
+	if (firstEnd >= 0) return msStringNew(firstAt as cstring, firstEnd as int64);
+	when (windows) {
+		return readHeap(file, firstAt, firstRoom);
+	} else {
+		return readRest(file, firstAt, firstRoom - 1);
+	}
+}
+
+// Windows has no getline: the line continues in a malloc'd buffer that is never zero
+// filled; each read doubles its room, so the LF fill stays proportional to the line.
+function readHeap(file: Ptr<FILE>, firstAt: Ptr<uint8>, firstRoom: int32): string {
+	let size = FIRST_HEAP;
+	const fresh = cMalloc(size as uint64);
+	if (fresh == null) throw new Error("readLine: out of memory");
+	let buf: Ptr<uint8> = fresh;
+	let pos = firstRoom - 1;
+	let room = firstRoom;
+	cMemcpy(buf, firstAt, pos as uint64);
+	while (true) {
+		const end = readChunk(file, buf, pos, room);
+		if (end >= 0) {
+			const line = msStringNew(buf as cstring, end as int64);
+			cFree(buf);
+			return line;
+		}
+		pos += room - 1;
+		if (room > (MAX_LINE - pos) / 2) {
+			cFree(buf);
+			throw new Error("readLine: line longer than 1 GiB");
+		}
+		room *= 2;
+		if (pos + room > size) {
+			size = (pos + room) * 2;
+			const grown = cRealloc(buf, size as uint64);
+			if (grown == null) {
+				cFree(buf);
+				throw new Error("readLine: out of memory");
+			}
+			buf = grown;
+		}
+	}
+}
+
+// The rest of a line that outgrows the stack chunk comes from one getline call: it returns
+// the byte count, so NUL bytes need no LF fill to be told apart from the end.
+function readRest(file: Ptr<FILE>, firstAt: Ptr<uint8>, head: int32): string {
+	let cap = FIRST_HEAP as uint64;
+	const fresh = cMalloc(cap);
+	if (fresh == null) throw new Error("readLine: out of memory");
+	let rest: Ptr<uint8> = fresh;
+	let read = cGetline(rest, cap, file);
+	while (read < 0 && errno == EINTR) {
+		errno = 0;
+		cClearerr(file);
+		read = cGetline(rest, cap, file);
+	}
+	let length = read < 0 ? 0 as int64 : read;
+	let kept = head as int64;
+	if (length > 0 && rest[length - 1] == LF) {
+		length -= 1;
+		if (length > 0 && rest[length - 1] == CR) length -= 1;
+		else if (length == 0 && firstAt[head - 1] == CR) kept -= 1;
+	}
+	const total = kept + length;
+	if (total > MAX_STRING) {
+		cFree(rest);
+		throw new Error("readLine: line longer than 2 GiB");
+	}
+	if (cap < (total as uint64)) {
+		const grown = cRealloc(rest, total as uint64);
+		if (grown == null) {
+			cFree(rest);
+			throw new Error("readLine: out of memory");
+		}
+		rest = grown;
+	}
+	cMemmove(rest + kept, rest, length as uint64);
+	cMemcpy(rest, firstAt, kept as uint64);
+	const line = msStringNew(rest as cstring, total);
+	cFree(rest);
+	return line;
+}
+
 export function readLine(): string {
-	return msReadLine();
+	return readLineFrom(stdin);
 }
 
 export function readBytes(n: number): string {

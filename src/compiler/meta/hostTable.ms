@@ -488,7 +488,7 @@ function _bridgeMsProcChildFree(args: RaiserValue[]): RaiserValue {
 // --- std/io bridges (standard streams) ---
 // Same static-inline shims the C tier links from runtime/io/streams.h,
 // reached through msc's own std/io import — writeStdout/Stderr flush
-// immediately (LSP framing), readLine strips \r\n, caps 4 KiB.
+// immediately (LSP framing), readLine strips \n or \r\n.
 
 function _bridgeMsReadLine(args: RaiserValue[]): RaiserValue {
 	return boxString(readLine());
