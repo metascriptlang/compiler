@@ -2,7 +2,9 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, ClassDeclData, MethodDeclData, DecoratedDeclData } from "../ast/node";
 import { makeSymbol, classDeclNodeOf } from "./symbol";
-import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, peelToStructOrUnion, isVarargs, isVarargs, unwrapVarargs, UnifyBindings } from "./types";
+import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, peelToStructOrUnion, isVarargs, isVarargs, unwrapVarargs, UnifyBindings, substituteAllParams, typeParamConstraint } from "./types";
+import { resolveRuntimeDir } from "../utils/path";
+import { join } from "std/fs/path";
 
 
 function isOpenElement(t: Type): boolean {
@@ -2852,12 +2854,12 @@ test "a read-only view reaches a union only through a matching read-only member"
 test "readonly propagation stops at the shared type graph" {
 	const graph = createRef(createStruct("Type", [], [], false));
 	graph.typeReturn.sym = makeSymbol("Type", SymbolKind.Class, null, false);
-	graph.typeReturn.sym!.modulePath = "std/meta/node.ms";
+	graph.typeReturn.sym!.modulePath = join(resolveRuntimeDir(), "std/meta/node.ms");
 	const user = createRef(createStruct("Cart", [], [], false));
 	user.typeReturn.sym = makeSymbol("Cart", SymbolKind.Class, null, false);
 	const namesake = createRef(createStruct("Type", [], [], false));
 	namesake.typeReturn.sym = makeSymbol("Type", SymbolKind.Class, null, false);
-	namesake.typeReturn.sym!.modulePath = "app/model.ms";
+	namesake.typeReturn.sym!.modulePath = "/app/lib/std/meta/node.ms";
 	const nullGraph = createUnion([graph, nullType()]);
 	const arrGraph = createArray(graph);
 	assert isSharedGraphType(graph);

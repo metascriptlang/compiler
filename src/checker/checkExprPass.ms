@@ -21,7 +21,7 @@ import { boundAnnotationType, builtinTypeNamed, resolveAnnotation, resolveTypeEx
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, cloneNodeKeepSem, monoConcreteTypeName } from "../monomorphize/clone";
 import { findChar, splitTopLevel, fitsInt64Decimal, parseNumberLiteral } from "../utils/string";
-import { basename } from "std/fs/path";
+import { basename, join } from "std/fs/path";
 import { checkPointerAddress } from "./pointerAddress";
 import { findCallTypeArg } from "../parser/context";
 import { markConsumedName, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
@@ -32,6 +32,7 @@ import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, un
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
 import { storedTypeOfNullRead, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, branchContributesToJoin, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, isBitwiseCompoundOp, compoundBase, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, literalArmJoinsInto, fitLiteralArmInto, refuseDisjointStrings, fitComparedOperands, fitDistinctComparison, DistinctComparison, comparesAtBase, widenBrandOperands, typeofComparisonHint, UnionRead, readUnionOperand, integerLiteralText, convertedTo, wrapsIntoUnsignedTarget, rejectCharArith, rejectCharUnary, textlessValue, scalarConversionRefusal, scalarConversionReason, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns, widenNumberLiteral, isLiteralSet, declaredTypeOfLocation, refuseMatchStructEquality, widenEqualityOperand, replaceWithCall } from "./fit";
+import { resolveRuntimeDir } from "../utils/path";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -4703,10 +4704,10 @@ function refuseHiddenFieldInLiteral(ctx: CheckerContext, ownerSym: Symbol | null
 test "a write target crossing a graph back-edge is rejected" {
 	const graphT = createRef(createStruct("Symbol", [], [], false));
 	graphT.typeReturn.sym = makeSymbol("Symbol", SymbolKind.Class, null, false);
-	graphT.typeReturn.sym!.modulePath = "std/meta/node.ms";
+	graphT.typeReturn.sym!.modulePath = join(resolveRuntimeDir(), "std/meta/node.ms");
 	const nodeT = createRef(createStruct("Node", [], [], false));
 	nodeT.typeReturn.sym = makeSymbol("Node", SymbolKind.Class, null, false);
-	nodeT.typeReturn.sym!.modulePath = "std/meta/node.ms";
+	nodeT.typeReturn.sym!.modulePath = join(resolveRuntimeDir(), "std/meta/node.ms");
 	assert isSharedGraphType(graphT);
 	assert isNodeGraphType(nodeT);
 	const tok = createToken(TokenKind.Ident, "", 1);

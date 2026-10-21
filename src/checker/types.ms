@@ -4,6 +4,8 @@
 import { bareAfterDelim, splitTopLevel, numericLiteralIsFloat, parseNumberLiteral, parseIntegerLiteral, integerLiteralIsBitPattern, fitsInt64Decimal, int64ToDecimal } from "../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { mangleSeparatedProperty } from "../codegen/c/names";
+import { resolveRuntimeDir } from "../utils/path";
+import { join, normalize } from "std/fs/path";
 import { Type, TypeKind, TypeFlag, SymbolKind, SymbolFlag, CallingConvention, AttachedOp, Symbol, Node, NodeKind, TypeAliasDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData } from "../ast/node";
 
 // =====================================================================
@@ -1735,8 +1737,12 @@ export function isNodeGraphType(t: Type | null): boolean {
 	return isMetaGraphRoot(base, "Node");
 }
 
+let _metaGraphModule = "";
+
 function isMetaGraphRoot(t: Type, name: string): boolean {
-	return t.sym != null && t.sym.name == name && t.sym.modulePath.endsWith("std/meta/node.ms");
+	if (t.sym == null || t.sym.name != name) return false;
+	if (_metaGraphModule == "") _metaGraphModule = normalize(join(resolveRuntimeDir(), "std/meta/node.ms"));
+	return normalize(t.sym.modulePath) == _metaGraphModule;
 }
 
 export function propagateReadonlyView(t: Type | null): Type {
