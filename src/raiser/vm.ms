@@ -9,7 +9,7 @@ import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue,
 	raiserNil, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserArray, raiserToString, copyValueInto,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
-	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS,
+	RaiserObjectHeap, RaiserObjectData, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, heapBoxLive,
 	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, clearArrayHeap, clearObjectHeap,
 } from "./value";
@@ -1861,7 +1861,7 @@ function runStrandSlice(vm: RaiserVM): void {
 function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Span<int64>): void {
 	const mod = vm.mod;
 	let funcIdx = vm.funcIdx;
-	let func = getModuleFunc(mod, funcIdx);
+	let func: Cursor<RaiserFunction> = mod.functions[funcIdx];
 	let ip = vm.ip;
 	let wb = vm.wordBase;
 	let rb = vm.refBase;
@@ -1882,7 +1882,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				if (bx >= getFuncConstLen(func)) {
 					vm.ip = ip; vmError(vm, `constant index out of bounds: ${bx}`); return;
 				} else {
-					const val = getFuncConst(func, bx);
+					const val: Cursor<RaiserValue> = func.constants[bx];
 					const cls = ia & 7;
 					if (cls == CLS_WORD || cls == CLS_BOOL) {
 						words[wb + (ia >> 3)] = val.intVal;
@@ -1963,16 +1963,15 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				const blocks = func.blocks;
-				const argc = blocks[ic + 2];
-				const sig = blocks[ic + 3];
+				const argc = func.blocks[ic + 2];
+				const sig = func.blocks[ic + 3];
 				const depth = vm.callStack.depth;
-				const callee = ib < mod.functions.length ? mod.functions[ib] : func;
+				const callee: Cursor<RaiserFunction> = ib < mod.functions.length ? mod.functions[ib] : func;
 				if (ib < mod.functions.length && depth < MAX_CALL_DEPTH && sig >= 0 && argc < callee.sigs.length && callee.sigs[argc] == sig) {
 					if (depth == vm.callStack.items.length) {
 						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, wordBase: 0, refBase: 0, spBase: 0 });
 					}
-					const frame = vm.callStack.items[depth];
+					const frame: Cursor<RaiserCallFrame> = vm.callStack.items[depth];
 					frame.funcIdx = funcIdx;
 					frame.returnIp = ip;
 					frame.returnDest = ia;
@@ -1980,8 +1979,8 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 					frame.refBase = rb;
 					frame.spBase = vm.safePoints.length as int32;
 					vm.callStack.depth = depth + 1;
-					wb = wb + (blocks[ic] as int32);
-					rb = rb + (blocks[ic + 1] as int32);
+					wb = wb + (func.blocks[ic] as int32);
+					rb = rb + (func.blocks[ic + 1] as int32);
 					if (words.length < wb + callee.wordRegs) {
 						ensureWords(vm.regs, wb + callee.wordRegs);
 						words = vm.regs.words;
@@ -2007,7 +2006,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const depth = vm.callStack.depth;
 				if (depth > 0 && vm.safePoints.length == vm.callStack.items[depth - 1].spBase) {
-					const frame = vm.callStack.items[depth - 1];
+					const frame: Cursor<RaiserCallFrame> = vm.callStack.items[depth - 1];
 					const dest = frame.returnDest;
 					const cls = ia & 7;
 					if (cls == (dest & 7)) {
@@ -2448,20 +2447,19 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const idx = ((word >> 56) & 255) as int32;
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
 					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
-					const obj = vm.objectHeap.objects[handleIndex(handle)];
+					const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
 					if (idx >= obj.classType.fields.length) { slow = true; break; }
-					const fields = obj.fields;
-					when (mode != "danger") { if (fields[idx].name != func.names[ic]) { slow = true; break; } }
-					const val = fields[idx].value;
+					when (mode != "danger") { if (obj.fields[idx].name != func.names[ic]) { slow = true; break; } }
+					const val: Cursor<RaiserValue> = obj.fields[idx].value;
+					const kind = val.kind;
+					const bits = kind == RaiserValueKind.Float ? msFloat64Bits(val.floatVal) : val.intVal;
 					const cls = ia & 7;
-					if (cls == CLS_WORD && val.kind == RaiserValueKind.Int) {
-						words[wb + (ia >> 3)] = val.intVal;
-					} else if (cls == CLS_FLOAT && val.kind == RaiserValueKind.Float) {
-						words[wb + (ia >> 3)] = msFloat64Bits(val.floatVal);
-					} else if (cls == CLS_REF && (val.kind == RaiserValueKind.Nil || (val.kind >= RaiserValueKind.String && val.kind <= RaiserValueKind.Future))) {
+					if (cls == CLS_WORD && kind == RaiserValueKind.Int || cls == CLS_FLOAT && kind == RaiserValueKind.Float) {
+						words[wb + (ia >> 3)] = bits;
+					} else if (cls == CLS_REF && (kind == RaiserValueKind.Nil || (kind >= RaiserValueKind.String && kind <= RaiserValueKind.Future))) {
 						const old = refs[rb + (ia >> 3)];
-						holdHandle(vm, val.intVal);
-						refs[rb + (ia >> 3)] = val.intVal;
+						holdHandle(vm, bits);
+						refs[rb + (ia >> 3)] = bits;
 						releaseHandle(vm, old);
 					} else {
 						slow = true;
@@ -2479,11 +2477,10 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const idx = ((word >> 56) & 255) as int32;
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
 					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
-					const obj = vm.objectHeap.objects[handleIndex(handle)];
+					const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
 					if (idx >= obj.classType.fields.length) { slow = true; break; }
-					const fields = obj.fields;
-					when (mode != "danger") { if (fields[idx].name != func.names[ib]) { slow = true; break; } }
-					const slot = fields[idx].value;
+					when (mode != "danger") { if (obj.fields[idx].name != func.names[ib]) { slow = true; break; } }
+					const slot: Cursor<RaiserValue> = obj.fields[idx].value;
 					const cls = ic & 7;
 					if (cls == CLS_WORD && slot.kind == RaiserValueKind.Int) {
 						slot.intVal = words[wb + (ic >> 3)];
