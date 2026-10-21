@@ -707,6 +707,25 @@ function runDirectivePaths(): void {
 	put(`${abs}/main.ms`, "import { probeValue } from \"./api.h\";\n@link(\"" + abs + "/libnative.a\");\nconsole.log(probeValue());\n");
 	need(build(abs, "link-absolute") == 0, "link absolute build");
 	record("@link with absolute archive path", "61", value(abs));
+
+	const bare = fixture("user-bare-compile", "@compile(\"native.c\");", "int probeValue(void) { return 71; }\n");
+	need(build(bare, "user-bare-compile") == 0, "user bare @compile build");
+	record("a user module's bare @compile path still resolves in its project", "71", value(bare));
+
+	supportTreeOverDecoy("std @compile", "runtime/core/string.c", "console.log(\"ab\".includes(\"b\"));\n", "true");
+	supportTreeOverDecoy("platform runtime list", "runtime/promise/drain.c", "console.log(\"ab\".includes(\"b\"));\n", "true");
+	supportTreeOverDecoy("std @passC -I", "vendor/mbedtls/tf-psa-crypto/drivers/builtin/include/mbedtls/private/bignum.h", "console.log((12345678901234567890n * 3n).toString());\n", "37037036703703703670");
+}
+
+function supportTreeOverDecoy(site: string, decoy: string, program: string, expected: string): void {
+	const dir = `${root}/decoy-${decoy.split("/").join("-")}`;
+	const slash = decoy.lastIndexOf("/");
+	ensureDir(`${dir}/${decoy.slice(0, slash)}`);
+	put(`${dir}/${decoy}`, "#error the cwd checkout's support tree was compiled\n");
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, program);
+	const code = build(dir, "decoy", "probe", ["--passC=-DMSC_SUPPORT_DECOY"]);
+	record(`a ${site} path reads the support tree beside the compiler, not the cwd's ${decoy}`, expected, code == 0 ? value(dir) : `build exit ${code}`);
 }
 
 function runUpcastCast(): void {
