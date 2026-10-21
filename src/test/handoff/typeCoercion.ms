@@ -21,13 +21,11 @@ test "isAssignable: Struct → Struct (same type)" {
 	assert isAssignable(s, s);
 }
 
-// ===== Enum → number: NOT implicit =====
-// Standard reference: enums do NOT implicitly convert to integers.
-// Our hasFlag/setFlag should accept the enum type directly.
+// ===== Enum → number: implicit, as a TS numeric enum =====
 
-test "isAssignable: Enum → number is NOT allowed" {
+test "isAssignable: Enum → number is allowed" {
 	const e = createEnum("Color", ["Red", "Green", "Blue"]);
-	assert !isAssignable(e, numberType());
+	assert isAssignable(e, numberType());
 }
 
 test "isAssignable: Enum → Enum same name" {
@@ -71,8 +69,8 @@ test "isReinterpretUnsafe: scalar int32 → number is not a container" {
 	assert !isReinterpretUnsafe(int32Type(), numberType());
 }
 
-test "isReinterpretUnsafe: string[] → number[] is not a numeric reinterpret" {
-	assert !isReinterpretUnsafe(createArray(stringType()), createArray(numberType()));
+test "isReinterpretUnsafe: string[] → number[] is unsafe (element types differ)" {
+	assert isReinterpretUnsafe(createArray(stringType()), createArray(numberType()));
 }
 
 test "isReinterpretUnsafe: Ref<int32[]> → Ref<number[]> peels Ref" {
