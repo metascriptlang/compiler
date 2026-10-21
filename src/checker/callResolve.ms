@@ -1442,6 +1442,16 @@ function protocolCall(ctx: CheckerContext, object: Node, name: string): Node | n
 	return call.nodeType != null && !isUnresolvedType(call.nodeType) && call.nodeType.kind != TypeKind.Error ? call : null;
 }
 
+function spreadIntoOptionalRefusal(spread: Node): string {
+	const source = (spread.data as SpreadExprData).spreadArg;
+	const named = source.kind == NodeKind.Identifier ? `'${(source.data as IdentifierData).name}'` : "the spread value";
+	const bare = bareSpreadSource(source.nodeType);
+	if (bare != null && bare.kind != TypeKind.Array) {
+		return `a spread argument fills optional parameters only from an array: ${named} is ${typeDisplayName(source.nodeType!)}; pass the arguments one by one`;
+	}
+	return `an array spread fills optional parameters only as the last argument and the only spread: the length of ${named} is not known, so no later argument has a known parameter; pass the arguments one by one`;
+}
+
 function refuseMisplacedSpread(ctx: CheckerContext, args: Node[], formals: Type[], minArgs: number): boolean {
 	const restAt = formals.length > 0 && formals[formals.length - 1].kind == TypeKind.Varargs ? formals.length - 1 : -1;
 	for (let i = 0; i < args.length; i += 1) {
@@ -1451,6 +1461,7 @@ function refuseMisplacedSpread(ctx: CheckerContext, args: Node[], formals: Type[
 		const tuple = source != null && peelTransparentInstance(unwrapRef(source)).kind == TypeKind.Tuple;
 		const fixedOnly = i < minArgs || (restAt < 0 && i >= formals.length);
 		addError(ctx, !tuple && fixedOnly ? "A spread argument must either have a tuple type or be passed to a rest parameter"
+			: !tuple ? spreadIntoOptionalRefusal(a)
 			: "a spread argument can fill only the rest parameter: pass the arguments before the rest parameter one by one",
 			a.location.line, a.location.column);
 		return true;
