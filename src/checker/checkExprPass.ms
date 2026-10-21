@@ -24,7 +24,7 @@ import { findChar, splitTopLevel, fitsInt64Decimal, parseNumberLiteral } from ".
 import { basename, join } from "std/fs/path";
 import { checkPointerAddress } from "./pointerAddress";
 import { findCallTypeArg } from "../parser/context";
-import { markConsumedName, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
+import { markConsumedName, isConsumedName, reviveConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { forEachChild } from "../ast/visitor";
 import { markInitialized, isInitialized, getDeclBlock, saveInitState, restoreInitState, collectNewInits, mergeInitBranches, breaksBlock, BreakState } from "./initTracker";
 import { bindContainerNames, releaseNames, paramSymbol } from "./bindNames";
@@ -3170,14 +3170,14 @@ function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | n
 	// shadowed bindings don't false-positive. First-await is OK because the
 	// AwaitExpr handler marks the key AFTER its inner checkExpr returns.
 	if (sym.symbolType != null && isAffineAwaitable(sym.symbolType)
-		&& isConsumedName(ctx.affineTracker, symbolConsumeKey(sym))
-		&& ctx.initTracker.leftPartOfAsgn <= 0) {
-		addError(ctx,
+		&& isConsumedName(ctx.affineTracker, symbolConsumeKey(sym))) {
+		if (ctx.initTracker.leftPartOfAsgn > 0) reviveConsumedName(ctx.affineTracker, symbolConsumeKey(sym));
+		else addError(ctx,
 			"affine Promise '" + d.name + "' has already been awaited and cannot be reused (PARALOCK R2/E3)",
 			node.location.line, node.location.column);
 	}
 	if (isConsumedName(ctx.affineTracker, "mv:" + symbolConsumeKey(sym))) {
-		if (ctx.initTracker.leftPartOfAsgn > 0) removeConsumedName(ctx.affineTracker, "mv:" + symbolConsumeKey(sym));
+		if (ctx.initTracker.leftPartOfAsgn > 0) reviveConsumedName(ctx.affineTracker, "mv:" + symbolConsumeKey(sym));
 		else addError(ctx, "'" + d.name + "' was moved into a spawn thunk and cannot be used afterwards — spawn(fn, { move: [" + d.name + "] }) transferred it (PARALOCK E24)", node.location.line, node.location.column);
 	}
 	// Ref parity: useVar — only check vars declared in current scope (getDeclBlock >= 0).

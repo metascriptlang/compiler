@@ -6,8 +6,8 @@ import { requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, hidden
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, TypeAssertionData, SizeofExprData, TypeAnnotationData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, setConditionalAssignFn, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
-import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
+import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, setConditionalAssignFn, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam, substituteType, substituteAllParams } from "./types";
+import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey, leaveConsumeScope } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet } from "./symbol";
 import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl, declOfStatement } from "./collectPass";
@@ -2078,7 +2078,7 @@ function checkWhileStmt(ctx: CheckerContext, node: Node): void {
 	// PARALOCK Phase 1: detect outer-handle consumption (reuse on iteration N+1)
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.whileBody);
-	restoreConsumeState(ctx.affineTracker, affineSnap);
+	leaveConsumeScope(ctx.affineTracker, affineSnap);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 }
 
@@ -2107,7 +2107,7 @@ function checkForStmt(ctx: CheckerContext, node: Node): void {
 	restoreInitState(ctx.initTracker, oldState);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.forBody);
-	restoreConsumeState(ctx.affineTracker, affineSnap);
+	leaveConsumeScope(ctx.affineTracker, affineSnap);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 }
 
@@ -2189,7 +2189,7 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	restoreInitState(ctx.initTracker, oldInitState);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.forOfBody);
-	restoreConsumeState(ctx.affineTracker, affineSnap);
+	leaveConsumeScope(ctx.affineTracker, affineSnap);
 }
 
 function destructuresByPosition(t: Type): boolean {
@@ -2330,7 +2330,7 @@ function checkForInStmt(ctx: CheckerContext, node: Node): void {
 	restoreInitState(ctx.initTracker, oldInitState);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.forInBody);
-	restoreConsumeState(ctx.affineTracker, affineSnap);
+	leaveConsumeScope(ctx.affineTracker, affineSnap);
 }
 
 function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
@@ -2346,7 +2346,7 @@ function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
 	exitLoopScope(ctx, saved);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.doBody);
-	restoreConsumeState(ctx.affineTracker, affineSnap);
+	leaveConsumeScope(ctx.affineTracker, affineSnap);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 	ctx.condEvalDepth = ctx.condEvalDepth + 1;
 	checkExpr(ctx, d.doCondition, null);
@@ -3016,7 +3016,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	restoreInitState(ctx.initTracker, initSnap);
 	ctx.initTracker.outParams = savedOutParams;
 	// PARALOCK Phase 1: restore affine tracker (erases this function's consumed set)
-	restoreConsumeState(ctx.affineTracker, affineSnap);
+	leaveConsumeScope(ctx.affineTracker, affineSnap);
 	ctx.initTracker.currentBlock = savedBlock;
 	ctx.ctorExits = savedCtorExits;
 	ctx.currentFunction = savedFunction;

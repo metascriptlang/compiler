@@ -12,6 +12,7 @@
 //
 // GUARD-CHECK-FAIL affine Promise cannot be returned from a function
 // GUARD-CHECK-FAIL has already been awaited and cannot be reused
+// GUARD-CHECK-FAIL affine Promise 'reusedInBranch' has already been awaited
 
 class Child { v: int32; constructor(v: int32) { this.v = v; } }
 
@@ -33,5 +34,14 @@ function awaitedTwiceAnnotated(): int32 {
 	return (await f) + (await f);
 }
 
+function respawnedInOneBranch(c: boolean): int32 {
+	const k = new Child(3);
+	let reusedInBranch: Promise<int32> = spawn(() => work(k));
+	const first = await reusedInBranch;
+	if (c) reusedInBranch = spawn(() => work(k));
+	return first + await reusedInBranch;
+}
+
 console.log(awaitedTwiceAnnotated());
+console.log(respawnedInOneBranch(false));
 console.log(await returnedAnnotated());

@@ -27,12 +27,14 @@ export function symbolConsumeKey(sym: Symbol): string {
 // Reference shape: effects.consumed flat list (mirror of InitTracker.initialized)
 export interface AffineTracker {
 	consumed: string[];   // append-only list of consumed affine Promise binding keys
+	floor: int32;
+	floors: int32[];
 }
 
 // ===== Constructors =====
 
 export function createAffineTracker(): AffineTracker {
-	return { consumed: [] };
+	return { consumed: [], floor: 0, floors: [] };
 }
 
 // ===== Core Operations (delegate to branchSet) =====
@@ -49,12 +51,26 @@ export function isConsumedName(t: AffineTracker, name: string): boolean {
 
 // Save current consume state for branch rollback.
 export function saveConsumeState(t: AffineTracker): int32 {
+	t.floors.push(t.floor);
+	t.floor = t.consumed.length;
 	return t.consumed.length;
 }
 
 // Restore consume state.
 export function restoreConsumeState(t: AffineTracker, state: int32): void {
 	t.consumed.length = state;
+}
+
+export function leaveConsumeScope(t: AffineTracker, state: int32): void {
+	t.consumed.length = state;
+	t.floor = t.floors.pop()!;
+}
+
+export function reviveConsumedName(t: AffineTracker, key: string): void {
+	for (let i = 0; i < t.floor; i += 1) {
+		if (t.consumed[i] == key) return;
+	}
+	removeConsumedName(t, key);
 }
 
 // Collect names consumed between oldState and current state.
@@ -74,6 +90,7 @@ export function mergeConsumeBranches(
 	isExhaustive: boolean,
 ): void {
 	mergeBranches(t.consumed, oldState, branchConsumes, branchBreaks, isExhaustive);
+	t.floor = t.floors.pop()!;
 }
 
 // Remove a specific key from the consumed list. Stable order preserved.
@@ -178,4 +195,35 @@ test "collectNewConsumes" {
 	markConsumedName(t, "c");
 	const newCons = collectNewConsumes(t, snap);
 	assert newCons.length == 2;
+}
+
+test "a revive inside the branch that consumed clears the consume" {
+	const t = createAffineTracker();
+	const old = saveConsumeState(t);
+	markConsumedName(t, "h");
+	reviveConsumedName(t, "h");
+	assert !isConsumedName(t, "h");
+	mergeConsumeBranches(t, old, [collectNewConsumes(t, old)], [BreakState.BsNone], false);
+	assert t.floors.length == 0;
+}
+
+test "a revive in a branch keeps a consume made before the branch" {
+	const t = createAffineTracker();
+	markConsumedName(t, "h");
+	const old = saveConsumeState(t);
+	reviveConsumedName(t, "h");
+	assert isConsumedName(t, "h");
+	assert t.consumed.length == old;
+}
+
+test "a revive after a nested branch closes still clears the outer consume" {
+	const t = createAffineTracker();
+	const loop = saveConsumeState(t);
+	markConsumedName(t, "h");
+	const inner = saveConsumeState(t);
+	mergeConsumeBranches(t, inner, [collectNewConsumes(t, inner)], [BreakState.BsNone], false);
+	reviveConsumedName(t, "h");
+	assert !isConsumedName(t, "h");
+	leaveConsumeScope(t, loop);
+	assert t.floor == 0;
 }
