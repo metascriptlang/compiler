@@ -16,6 +16,7 @@
 // RED MEANS: one of the diagnostics stopped firing.
 //
 // GUARD-CHECK-FAIL cannot take a cstring from 's'
+// GUARD-CHECK-FAIL cannot take a cstring from 'captured'
 // GUARD-CHECK-FAIL cannot take a cstring from 'p'
 // GUARD-CHECK-FAIL cannot take a cstring from 'moved'
 // GUARD-CHECK-FAIL cannot take a cstring from 'kept'
@@ -30,6 +31,14 @@ function fromReassignedLocal(n: int32): int64 {
 	const c: cstring = s;
 	s = "other";
 	return strlen(c);
+}
+
+function fromReassignedLocalCapturedBySpawn(n: int32): int64 {
+	let captured: string = "value-" + n.toString();
+	const c: cstring = captured;
+	const f = spawn(() => strlen(c));
+	captured = "other";
+	return await f;
 }
 
 function fromAssignedParameter(p: string): int64 {
@@ -57,4 +66,4 @@ function fromTemporary(n: int32): int64 {
 	return strlen(c);
 }
 
-console.log(fromReassignedLocal(1) + fromAssignedParameter("x") + fromAssignedLocalArgument(2) + fromParameterKeptInLocal("y") + strlen(fromReturnedParameter("z" + "w")) + fromTemporary(3));
+console.log(fromReassignedLocal(1) + fromReassignedLocalCapturedBySpawn(4) + fromAssignedParameter("x") + fromAssignedLocalArgument(2) + fromParameterKeptInLocal("y") + strlen(fromReturnedParameter("z" + "w")) + fromTemporary(3));

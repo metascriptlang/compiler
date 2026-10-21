@@ -754,6 +754,54 @@ function refArrayAcyclicEmitsPlainRelease(): void {
 	ok(tag);
 }
 
+// M7: a value another thread can reach is counted before the call that publishes it. Over the
+// emitted C of the actorArcPublishRaceFree guard, every routine that sends an actor message sets
+// its Arc argument with msMsgSetPtrShared first, and every routine that submits a Promise.all task
+// has taken the group's future with msAwaitGroupSetDoneFut first.
+function publishCountsBeforeVisible(): void {
+	const tag = "publishCountsBeforeVisible";
+	const dir = freshDir("publishcount");
+	writeFile(`${dir}/main.ms`, readFileOr(`${GUARD_DIR}/actorArcPublishRaceFree.ms`, ""));
+	const b = execFileResult(MSC, ["build", "main.ms", "--emit=c"], dir);
+	writeFile(`${LOG_DIR}/${tag}.log`, both(b));
+	if (!succeeded(b)) {
+		fail(tag, "emit error");
+		return;
+	}
+	const pairs: string[][] = [["msMsgSetPtrShared(", "msActorSend("], ["msAwaitGroupSetDoneFut(", "msSpawnTaskSubmit("]];
+	const seen: int32[] = [0, 0];
+	for (const f of readDir(`${dir}/out/debug`)) {
+		if (!f.endsWith(".c")) continue;
+		const text = try readFile(`${dir}/out/debug/${f}`) catch "";
+		let name = "";
+		let body = "";
+		for (const line of lines(text)) {
+			if (name == "") {
+				if (line.endsWith(") {") && !line.startsWith(" ") && !line.startsWith("\t")) { name = line; body = ""; }
+				continue;
+			}
+			if (line != "}") { body = body + line + "\n"; continue; }
+			for (let k = 0; k < pairs.length; k += 1) {
+				const publish = body.indexOf(pairs[k][1], 0);
+				if (publish < 0) continue;
+				if (k == 0 && !name.contains("Sink_")) continue;
+				seen[k] += 1;
+				const count = body.indexOf(pairs[k][0], 0);
+				if (count < 0 || count > publish) {
+					fail(tag, `${name.trim()} calls ${pairs[k][1]}) before ${pairs[k][0]})`);
+					return;
+				}
+			}
+			name = "";
+		}
+	}
+	if (seen[0] < 2 || seen[1] < 1) {
+		fail(tag, `publication sites found: ${seen[0]} actor sends, ${seen[1]} group submits; expected 2 and 1`);
+		return;
+	}
+	ok(tag);
+}
+
 // `msc build` never runs a `test` block, so a globalImports loader check can
 // only be a gate: an inline guard test is green whatever the loader does.
 function preludeGate(tag: string, name: string, globalImport: string, probeCall: string, onMissing: string, onExit: string, link: string): void {
@@ -872,6 +920,7 @@ function main(): void {
 	deadFrameEmitsNoHooks();
 	fieldNameKeepsNoRoutine();
 	refArrayAcyclicEmitsPlainRelease();
+	publishCountsBeforeVisible();
 	buildMsTargetDecides();
 	preludeGate("preludeUserModule", "gi", `${GUARD_DIR}/fixtures/preludeUserModule`, "neonGuardPreludeProbe",
 		"globalImports symbol never reached the entry module", "", "");
