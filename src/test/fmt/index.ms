@@ -112,3 +112,4 @@ import "./cases/matchCaseCommas";
 import "./cases/nestedTypeArgsWritten";
 import "./cases/structPrivateField";
 import "./cases/classImplements";
+import "./cases/declarationList";
