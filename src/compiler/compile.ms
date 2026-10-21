@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — compile command
 
-import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd, env } from "std/process";
+import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd, env, ProcessError } from "std/process";
 import { watch, nextChanges, msIoRunOnce, writeSettled, writerCloseObservable, FsWatch, FsChanges } from "std/fs/watch";
 import { exists, readFile, writeFile, remove } from "std/fs";
 import { writeStderr, writeStdout, readLine, stdinHasData, stdinDisableBuffering } from "std/io";
@@ -75,7 +75,7 @@ import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
 import { flowStart, flowStop, flowAddMs, flowsEnabled, flowsWrite } from "./flows";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
+import { compileCFile, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
@@ -1180,14 +1180,21 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 	const startedSeconds = Date.now() / 1000;
 	const futures: Promise<number>[] = [];
 	for (const j of jobs) {
+		const parts = objectCompileArgs(ccOption, ccBinary, isCppFile(j.fullPath), mode, j.fileFlags);
+		if (!parts.ok) {
+			futures.push(spawn(() => unresolvedCompile(parts.error)));
+			continue;
+		}
+		const args = parts.value;
+		const plan = NO_PLAN;
 		futures.push(spawn(() => {
-			let r = compileCFile(j.fullPath, j.oFile, j.dependencyFile, j.fileFlags, mode, ccOption, ccBinary);
+			let r = compileCFile(j.fullPath, j.oFile, j.dependencyFile, args, plan);
 			if (!r.ok && r.error.exitCode == 0) {
 				// exitCode 0 with !ok = the process never ran (posix_spawn failure,
 				// e.g. transient EAGAIN under fork pressure from N parallel jobs).
 				// One retry absorbs it; a real compile error has a nonzero exitCode
 				// and is not retried.
-				r = compileCFile(j.fullPath, j.oFile, j.dependencyFile, j.fileFlags, mode, ccOption, ccBinary);
+				r = compileCFile(j.fullPath, j.oFile, j.dependencyFile, args, plan);
 			}
 			if (r.ok) return 0;
 			// Surface the failure reason — the parallel path otherwise discards
@@ -1293,20 +1300,29 @@ function ensurePchs(jobs: ModuleCompileJob[], mode: number, ccOption: number, cc
 	}
 }
 
+function unresolvedCompile(e: Readonly<ProcessError>): number {
+	printDiag(`${e.command}: ${e.message}`);
+	return e.exitCode != 0 ? e.exitCode : -1;
+}
+
 function dispatchCompileJobs(jobs: ModuleCompileJob[], mode: number, ccOption: number, ccBinary: string, usePlans: boolean): number[] {
-	// Warm lazy cc detection globals on the main thread so workers only read.
-	getCompilerName(ccOption, ccBinary);
 	const futures: Promise<number>[] = [];
 	for (const j of jobs) {
+		const parts = objectCompileArgs(ccOption, ccBinary, isCppFile(j.cFile), mode, j.flags);
+		if (!parts.ok) {
+			futures.push(spawn(() => unresolvedCompile(parts.error)));
+			continue;
+		}
+		const args = parts.value;
 		const plan = usePlans ? compilePlanFor(j.cFile, j.depFile != "", j.flags, mode, ccOption, ccBinary) : NO_PLAN;
 		const pch = usePlans ? existingPch(j.cFile, j.flags, mode, ccOption, ccBinary) : "";
 		futures.push(spawn(() => {
-			let r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary, plan, pch);
+			let r = compileCFile(j.cFile, j.oFile, j.depFile, args, plan, pch);
 			if (!r.ok && r.error.exitCode == 0) {
 				// exitCode 0 with !ok = the process never ran (posix_spawn EAGAIN
 				// under fork pressure). One retry absorbs it; real compile errors
 				// have a nonzero exitCode and are not retried.
-				r = compileCFile(j.cFile, j.oFile, j.depFile, j.flags, mode, ccOption, ccBinary, plan, pch);
+				r = compileCFile(j.cFile, j.oFile, j.depFile, args, plan, pch);
 			}
 			if (r.ok) return 0;
 			printDiag(r.error.errorOutput != "" ? r.error.errorOutput : `${r.error.command}: ${r.error.message}`);

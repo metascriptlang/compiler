@@ -798,7 +798,7 @@ export function reportsSbfFrameOverflow(err: ProcessError): boolean {
 	return err.errorOutput.contains("overflows the maximum allowed frame space");
 }
 
-function runCc(command: ToolCommand, args: string[]): Result<string, ProcessError> {
+function runCc(command: Readonly<ToolCommand>, args: string[]): Result<string, ProcessError> {
 	if (!args.includes(SBF_TARGET)) return execFileCapture(command.path, args);
 	const run = execFileResult(command.path, args);
 	if (!run.started) return Result.err(spawnFailed(command.path, "fork/exec failed"));
@@ -1070,6 +1070,7 @@ export function buildPch(header: string, pch: string, depFile: string, extraFlag
 export struct ObjectCompileArgs {
 	command: ToolCommand;
 	lead: string[];
+	quote: string;
 	trail: string[];
 }
 
@@ -1085,7 +1086,7 @@ export function objectCompileArgs(ccOption: number, ccBinary: string, isCpp: boo
 	const trail: string[] = [];
 	const flags = appendParsedFlags(command.path, trail, extraFlags);
 	if (!flags.ok) return Result.err(flags.error);
-	return Result.ok({ command, lead, trail });
+	return Result.ok({ command, lead, quote: runtimeQuoteDir(), trail });
 }
 
 export function objectCompileKey(ccOption: number, ccBinary: string, isCpp: boolean, mode: number, extraFlags: string): string {
@@ -1141,7 +1142,7 @@ export function objectSearchDirs(ccOption: number, ccBinary: string, isCpp: bool
 	if (!parts.ok) return quote;
 	const args: string[] = [];
 	for (const arg of parts.value.lead) args.push(arg);
-	if (runtimeQuoteDir() != "") args.push(`-iquote${runtimeQuoteDir()}`);
+	if (parts.value.quote != "") args.push(`-iquote${parts.value.quote}`);
 	for (const arg of parts.value.trail) args.push(arg);
 	for (let i = 0; i < args.length; i++) {
 		const kind = includeDirKind(args[i]);
@@ -1197,10 +1198,10 @@ export function compileC(cFile: string, outBinary: string, extraFlags: string, m
 
 // Compile a .c file to an object file only (-c flag, no linking).
 // Returns Result.ok on exit-code 0; Result.err carries gcc/clang stderr.
-function objectCompileArgv(parts: ObjectCompileArgs, cFile: string, oFile: string, depFile: string): string[] {
+function objectCompileArgv(parts: Readonly<ObjectCompileArgs>, cFile: string, oFile: string, depFile: string): string[] {
 	const args: string[] = [];
 	for (const arg of parts.lead) args.push(arg);
-	if (runtimeQuoteDir() != "") args.push(`-iquote${runtimeQuoteDir()}`);
+	if (parts.quote != "") args.push(`-iquote${parts.quote}`);
 	if (depFile != "") {
 		args.push("-MD");
 		args.push("-MF");
@@ -1216,18 +1217,16 @@ function objectCompileArgv(parts: ObjectCompileArgs, cFile: string, oFile: strin
 	return args;
 }
 
-export function compileCFile(cFile: string, oFile: string, dependencyFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string, plan: Readonly<CcPlan> = NO_PLAN, pch: string = ""): Result<void, ProcessError> {
+export function compileCFile(cFile: string, oFile: string, dependencyFile: string, parts: Readonly<ObjectCompileArgs>, plan: Readonly<CcPlan>, pch: string = ""): Result<void, ProcessError> {
 	ensureDir(dirname(oFile));
-	const parts = objectCompileArgs(ccOption, ccBinary, isCppFile(cFile), mode, extraFlags);
-	if (!parts.ok) return Result.err(parts.error);
-	const command = parts.value.command;
+	const command = parts.command;
 	const tmp = `${oFile}.tmp.${performance.now()}`;
 	let depTmp = "";
 	if (dependencyFile != "") {
 		ensureDir(dirname(dependencyFile));
 		depTmp = `${dependencyFile}.tmp.${performance.now()}`;
 	}
-	const args = objectCompileArgv(parts.value, cFile, tmp, depTmp);
+	const args = objectCompileArgv(parts, cFile, tmp, depTmp);
 	let r: Result<string, ProcessError> = Result.err(processError(ProcessErrorKind.Unknown, command.path, "not run"));
 	let planned = false;
 	if (plan.exe != "") {
