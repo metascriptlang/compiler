@@ -650,6 +650,8 @@ function parsePrimary(state: ParserState): ExprResult {
 
 // ===== Core Expression Tests =====
 
+import "../statements/core"; // registers parser callbacks
+
 // --- Structural: verify AST node kinds, operators, precedence tree shape ---
 // Kind verification
 test "number kind" { assert exprKind("42") == NodeKind.NumberLiteral; }

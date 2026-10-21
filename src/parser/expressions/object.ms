@@ -123,6 +123,8 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 
 // ===== Tests =====
 
+import "../statements/core"; // registers parser callbacks
+
 function objKeyCount(input: string): int32 {
 	const lr = lex(input);
 	if (!lr.ok) return -1;

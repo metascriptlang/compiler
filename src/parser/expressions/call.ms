@@ -67,6 +67,8 @@ export function parseCallExpr(state: ParserState, callee: Expression, exprParser
 
 // ===== Tests =====
 
+import "../statements/core"; // registers parser callbacks
+
 function callArgCount(input: string): int32 {
 	const lr = lex(`f${input}`);
 	if (!lr.ok) return -1;

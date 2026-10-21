@@ -454,6 +454,8 @@ export function extractParamTypes(raw: string[]): string[] {
 
 // ===== Tests =====
 
+import "./statements/core"; // registers parser callbacks
+
 function parseParams(input: string, fnName: string): string[] {
 	const lr = lex(input);
 	if (!lr.ok) return [];
