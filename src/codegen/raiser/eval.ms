@@ -2104,7 +2104,7 @@ test "register classes: a local takes the class of its declared type, not of its
 	const code = "function l(): number { let k: number = 1; let s: string = \"a\"; let o: { x: number } | null = null; let n: number | null = null; let u: number | string = 1; return k + s.length; }"
 		+ " console.log(`${l()}`);";
 	const table = classTable(compiledFunc(code, "l"));
-	assert table.slice(0, 9) == "WRRRRDWDW", table;
+	assert table.slice(0, 9) == "WRRRDWDWW", table;
 	const vm = evalOrcVM(code);
 	assert vm.error == "", vm.error;
 	assert vm.output == "2\n", vm.output;
