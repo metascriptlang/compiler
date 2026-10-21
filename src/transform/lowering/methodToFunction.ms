@@ -1,7 +1,7 @@
 import { Node, NodeKind, NodeData, createNodeAt, ProgramData, ClassDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ActorDeclData, SymbolKind, Type } from "../../ast/node";
 import { TransformContext } from "../context";
 import { setFlag, SymbolFlag, initFnName, makeSymbol } from "../../checker/symbol";
-import { newSym } from "../../checker/context";
+import { newSym, isGenericFn } from "../../checker/context";
 import { createFunction, voidType, noneType } from "../../checker/types";
 import { declGenericParams } from "../../checker/types";
 import { classInitCName, mangledTypeName } from "../../codegen/c/names";
@@ -14,7 +14,7 @@ import { classInitCName, mangledTypeName } from "../../codegen/c/names";
 // mutatedParams / defaultParams / nativeName / declNode / state already wired —
 // re-use it as-is on the synthesized FunctionDecl so codegen, default-fill,
 // and cross-module lookup all behave identically.
-function methodToFunctionDecl(methodNode: Node): Node {
+function methodToFunctionDecl(methodNode: Node, classGenerics: string): Node {
 	const md = methodNode.data as MethodDeclData;
 	// Method's resolvedSym already has the mangled name `<class>_<method>`.
 	// Caller side (after extensionMethodLower) issues `<class>_<method>(receiver, args)`;
@@ -28,7 +28,7 @@ function methodToFunctionDecl(methodNode: Node): Node {
 		params: md.methodParams,
 		fnParamTypes: md.methodParamTypes,
 		fnBody: md.methodBody,
-		fnFlags: md.methodFlags,
+		fnFlags: templateFlags(md.methodFlags, classGenerics),
 		fnReturnType: md.methodReturnType,
 		fnDefaults: md.methodDefaults != null ? md.methodDefaults : [],
 		nativeName: md.nativeName,
@@ -46,6 +46,11 @@ function methodToFunctionDecl(methodNode: Node): Node {
 	fnNode.typeExpr = methodNode.typeExpr;
 	fnNode.typeExprs = methodNode.typeExprs;
 	return fnNode;
+}
+
+function templateFlags(flags: string, classGenerics: string): string {
+	if (classGenerics == "" || isGenericFn(flags)) return flags;
+	return flags != "" ? `${flags}|gen:${classGenerics}` : `gen:${classGenerics}`;
 }
 
 // Synthesize a `<Class>_init(this, ...)` FunctionDecl from a ConstructorDecl.
@@ -72,7 +77,7 @@ function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: No
 		params: newParams,
 		fnParamTypes: newParamTypes,
 		fnBody: cd.ctorBody,
-		fnFlags: "",
+		fnFlags: templateFlags("", classGenerics),
 		fnReturnType: "void",
 		fnDefaults: defaults,
 		nativeName: "",
@@ -144,7 +149,7 @@ function liftMethodsFromClassBody(classNode: Node, body: Node[], ctx: TransformC
 	for (const member of body) {
 		match (member.kind) {
 			NodeKind.MethodDecl => {
-				lifted.push(methodToFunctionDecl(member));
+				lifted.push(methodToFunctionDecl(member, classGenerics));
 			},
 			NodeKind.ConstructorDecl => {
 				lifted.push(ctorToInitFunction(classNode, classGenerics, member, ctx));
@@ -153,7 +158,7 @@ function liftMethodsFromClassBody(classNode: Node, body: Node[], ctx: TransformC
 				const dd = member.data as DecoratedDeclData;
 				const inner = dd.decoratedNode;
 				if (inner != null && inner.kind == NodeKind.MethodDecl) {
-					lifted.push(rewrapDecorated(member, dd, methodToFunctionDecl(inner)));
+					lifted.push(rewrapDecorated(member, dd, methodToFunctionDecl(inner, classGenerics)));
 				} else if (inner != null && inner.kind == NodeKind.ConstructorDecl) {
 					lifted.push(rewrapDecorated(member, dd, ctorToInitFunction(classNode, classGenerics, inner, ctx)));
 				} else {
