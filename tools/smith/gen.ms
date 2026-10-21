@@ -6265,9 +6265,10 @@ class Gen {
 			return indent + "let " + name + ": " + T + " = restV" + X + "(" + d + ", ..." + a.name + ");\n";
 		}
 		if (form == 2) {
+			const tail = this.expr(t, 0);
 			const name = this.entName("a");
 			this.pushEnt(EntKind.ArrayVar, name, t, [], 0, 0 as int64);
-			return indent + "let " + name + ": " + T + "[] = [..." + a.name + ", " + this.expr(t, 0) + "];\n";
+			return indent + "let " + name + ": " + T + "[] = [..." + a.name + ", " + tail + "];\n";
 		}
 		const joined = form == 1 ? a.len + b.len + 1 : a.len + 1;
 		if (joined > SEQ_LEN_CAP) { return this.seqVec(t, indent); }
