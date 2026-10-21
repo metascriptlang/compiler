@@ -1701,8 +1701,8 @@ function typeInfoLocality(): void {
 	let logic = "";
 	for (const f of cFilesIn(`${debug}/watch0`)) {
 		if (f.startsWith("_")) continue;
-		if (f.endsWith("ZappOms.c")) app = f;
-		if (f.endsWith("ZlogicOms.c")) logic = f;
+		if (f.endsWith("appOms.c")) app = f;
+		if (f.endsWith("logicOms.c")) logic = f;
 	}
 	need(tag, app != "" && logic != "", "the watch replay emitted no C for app.ms or logic.ms");
 	const appFirst = read(`${debug}/watch0/${app}`);
