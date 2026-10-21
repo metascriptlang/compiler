@@ -261,6 +261,7 @@ function compileProgramIntoEngine(program: Node, seeds: Symbol[], exts: Extensio
 	// whose nested transformForEngine overwrites _lastEngineCheckErrors — restore this
 	// program's own check errors so the caller reads them, not the last helper's (bug053).
 	const ownErrors = _lastEngineCheckErrors;
+	for (const e of ownErrors) if (e.severity == Severity.Error) return -1;
 	const idx = appendProgramToImage(_engine.image, _engine.funcMap, transformed, wantFn, wantSym);
 	_lastEngineCheckErrors = ownErrors;
 	return idx;
