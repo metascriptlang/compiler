@@ -1820,7 +1820,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 	const program = createNode(NodeKind.Program, { programStmts: wrapperStmts }, synthToken(loc));
 
 	const result = callMacroEngineCompiler(program, ctx, "$macro:body", regCtx);
-	if (result == null as unknown as EngineMacroResult || result.funcIdx < 0) return null;
+	if (result == null as unknown as EngineMacroResult) return null;
 	let broken = false;
 	if (result.errors != null && result.errors.length > 0) {
 		for (const e of result.errors) {
@@ -1833,6 +1833,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 		builds.push({ typeArg, compiled: null });
 		return null;
 	}
+	if (result.funcIdx < 0) return null;
 
 	const cm: CompiledMacro = { vm: result.vm, funcIdx: result.funcIdx, typeArgInput: params.length > decl.macroDeclParams.length };
 	builds.push({ typeArg, compiled: cm });
