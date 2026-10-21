@@ -56,13 +56,22 @@ extern char **environ;
  * calls, and an exec that fails exits 127 instead of failing the spawn. */
 typedef struct {
 	int count;
-	struct { int kind; int fd; int target; const char *path; } steps[8];
+	struct { int kind; int fd; int target; const char *path; } steps[16];
 } msSpawnActions;
+
+typedef struct { short flags; sigset_t mask; sigset_t defaults; } msSpawnAttr;
+
+static inline int msSpawnAttrInit(msSpawnAttr *attr) {
+	attr->flags = 0;
+	sigemptyset(&attr->mask);
+	sigemptyset(&attr->defaults);
+	return 0;
+}
 
 static inline int msSpawnActionsInit(msSpawnActions *actions) { actions->count = 0; return 0; }
 static inline int msSpawnActionsDestroy(msSpawnActions *actions) { (void)actions; return 0; }
 static inline int msSpawnActionsAdd(msSpawnActions *actions, int kind, int fd, int target, const char *path) {
-	if (actions->count == 8) return ENOMEM;
+	if (actions->count == 16) return ENOMEM;
 	actions->steps[actions->count].kind = kind;
 	actions->steps[actions->count].fd = fd;
 	actions->steps[actions->count].target = target;
@@ -71,10 +80,19 @@ static inline int msSpawnActionsAdd(msSpawnActions *actions, int kind, int fd, i
 	return 0;
 }
 
-static inline int msSpawnFork(pid_t *pid, const char *file, int searchPath, const msSpawnActions *actions, char *const argv[], char *const envp[]) {
+static inline int msSpawnFork(pid_t *pid, const char *file, int searchPath, const msSpawnActions *actions, const msSpawnAttr *attr, char *const argv[], char *const envp[]) {
 	pid_t child = fork();
 	if (child < 0) return errno;
 	if (child == 0) {
+		if (attr != NULL && (attr->flags & POSIX_SPAWN_SETSIGDEF)) {
+			struct sigaction dfl;
+			memset(&dfl, 0, sizeof dfl);
+			dfl.sa_handler = SIG_DFL;
+			for (int sig = 1; sig < NSIG; sig++) {
+				if (sigismember(&attr->defaults, sig) == 1 && sigaction(sig, &dfl, NULL) != 0) _exit(127);
+			}
+		}
+		if (attr != NULL && (attr->flags & POSIX_SPAWN_SETSIGMASK) && sigprocmask(SIG_SETMASK, &attr->mask, NULL) != 0) _exit(127);
 		for (int i = 0; actions != NULL && i < actions->count; i++) {
 			int failed = 0;
 			if (actions->steps[i].kind == 0) failed = close(actions->steps[i].fd);
@@ -96,8 +114,14 @@ static inline int msSpawnFork(pid_t *pid, const char *file, int searchPath, cons
 #define posix_spawn_file_actions_addclose(actions, fd) msSpawnActionsAdd(actions, 0, fd, 0, NULL)
 #define posix_spawn_file_actions_adddup2(actions, fd, target) msSpawnActionsAdd(actions, 1, fd, target, NULL)
 #define posix_spawn_file_actions_addchdir_np(actions, path) msSpawnActionsAdd(actions, 2, 0, 0, path)
-#define posix_spawn(pid, file, actions, attr, argv, envp) msSpawnFork(pid, file, 0, actions, argv, envp)
-#define posix_spawnp(pid, file, actions, attr, argv, envp) msSpawnFork(pid, file, 1, actions, argv, envp)
+#define posix_spawnattr_t msSpawnAttr
+#define posix_spawnattr_init(attr) msSpawnAttrInit(attr)
+#define posix_spawnattr_destroy(attr) ((void)(attr), 0)
+#define posix_spawnattr_setsigmask(attr, set) ((attr)->mask = *(set), 0)
+#define posix_spawnattr_setsigdefault(attr, set) ((attr)->defaults = *(set), 0)
+#define posix_spawnattr_setflags(attr, f) ((attr)->flags = (short)(f), 0)
+#define posix_spawn(pid, file, actions, attr, argv, envp) msSpawnFork(pid, file, 0, actions, attr, argv, envp)
+#define posix_spawnp(pid, file, actions, attr, argv, envp) msSpawnFork(pid, file, 1, actions, attr, argv, envp)
 #endif
 
 #ifdef __cplusplus
