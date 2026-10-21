@@ -833,6 +833,32 @@ test "a class from a macro-importing module keeps one identity for a generic che
 	assert publishesOf(r, user) == "[]";
 }
 
+const BUILT_LIB = 'export class Home {
+  n: int32 = 1;
+}
+export function built(h: Home, f: string | null): int32 {
+  return f == null ? h.n : 0;
+}
+';
+const BUILT_GEN = 'import { Home, built } from "./lib";
+export function each<T>(x: T, h: Home): int32 {
+  return built(h, null);
+}
+';
+const BUILT_USER = 'import { each } from "./gen";
+import { Home } from "./lib";
+console.log(each<int32>(1, new Home()));
+';
+
+test "a generic from a module not checked yet resolves its own module's imports" {
+	const dir = spliceDir("built");
+	const files = [["lib.ms", BUILT_LIB], ["gen.ms", BUILT_GEN], ["user.ms", BUILT_USER]];
+	for (const f of files) writeFile(dir + "/" + f[0], f[1]);
+	const user = lspPathToUri(dir + "/user.ms");
+	const r = replay([initializeDrain(), frames([notification("textDocument/didOpen", openParams(user, BUILT_USER))])]);
+	assert publishesOf(r, user) == "[]";
+}
+
 const DRIFT_LIB = 'import { k } from "./d";
 export class Home {
   n: int32 = k;
