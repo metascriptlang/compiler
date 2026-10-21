@@ -1951,6 +1951,17 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				words[wb + ia] = immValue(ib);
 				break;
 			}
+			case RaiserOpcode.IsKind: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
+				if ((ib & 7) == CLS_REF) {
+					words[wb + ia] = (handleKind(refs[rb + (ib >> 3)]) as number) == ic ? 1 : 0;
+				} else {
+					slow = true;
+				}
+				break;
+			}
 			case RaiserOpcode.BTruthy: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
@@ -1959,15 +1970,17 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				if (truthy) ip = ip + (ic as int32);
 				break;
 			}
-			case RaiserOpcode.Call: {
+			case RaiserOpcode.Call: case RaiserOpcode.CallIndirect: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
+				const target = op == RaiserOpcode.Call ? ib : words[wb + ib];
 				const argc = func.blocks[ic + 2];
 				const sig = func.blocks[ic + 3];
 				const depth = vm.callStack.depth;
-				const callee: Cursor<RaiserFunction> = ib < mod.functions.length ? mod.functions[ib] : func;
-				if (ib < mod.functions.length && depth < MAX_CALL_DEPTH && sig >= 0 && argc < callee.sigs.length && callee.sigs[argc] == sig) {
+				const known = target >= 0 && target < mod.functions.length;
+				const callee: Cursor<RaiserFunction> = known ? mod.functions[target] : func;
+				if (known && depth < MAX_CALL_DEPTH && sig >= 0 && argc < callee.sigs.length && callee.sigs[argc] == sig) {
 					if (depth == vm.callStack.items.length) {
 						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, wordBase: 0, refBase: 0, spBase: 0 });
 					}
@@ -1989,7 +2002,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 						ensureRefs(vm.regs, rb + callee.refRegs);
 						refs = vm.regs.refs;
 					}
-					funcIdx = ib;
+					funcIdx = target as int32;
 					func = callee;
 					code = callee.packed;
 					if (code.length != func.code.length) assertPacked(func);
@@ -2675,7 +2688,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				words[wb + ia] = raised >> imm;
 				break;
 			}
-			case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallIndirect: case RaiserOpcode.CallHost: case RaiserOpcode.IsKind: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: {
+			case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: {
 				slow = true;
 				break;
 			}
