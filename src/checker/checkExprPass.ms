@@ -2376,7 +2376,7 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 		}
 	}
 	if (srcType != null && !isUnresolvedType(targetType) && !isUnknownType(targetType)
-		&& !slotTakesValue(srcType, targetType)) {
+		&& !slotTakesValue(srcType, targetType) && !functionBaseCasts(srcType, targetType)) {
 		const asCall = convertsWithoutRoutine(srcType, targetType) ? null : tryApplyConverter(ctx, d.asExpr, srcType, targetType);
 		if (asCall != null) {
 			viaConverter = true;
@@ -4065,6 +4065,12 @@ function distinctClassFromValue(srcType: Type, targetType: Type): boolean {
 const NOT_AN_OBJECT: TypeKind[] = [TypeKind.String, TypeKind.Boolean, TypeKind.Char, TypeKind.Array, TypeKind.SizedArray,
 	TypeKind.Span, TypeKind.Function, TypeKind.Tuple, TypeKind.CString, TypeKind.Enum, TypeKind.StringLiteral, TypeKind.EnumLiteral,
 	TypeKind.BooleanLiteral, TypeKind.NumberLiteral, TypeKind.BigInt, TypeKind.Set];
+
+function functionBaseCasts(srcType: Type, targetType: Type): boolean {
+	const base = peelDistinct(srcType);
+	const target = skipModifier(targetType) ?? targetType;
+	return base != null && base.kind == TypeKind.Function && target.kind == TypeKind.Function && distinctBody(skipModifier(srcType) ?? srcType) != null;
+}
 
 function peelDistinct(t: Type | null): Type | null {
 	let s = skipModifier(t) ?? t;
