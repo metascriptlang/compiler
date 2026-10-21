@@ -968,6 +968,12 @@ export function arityAdapts(source: Type | null, target: Type | null): boolean {
 	return isFunctionAssignable(leadingParams(source, shared), leadingParams(target, shared));
 }
 
+function adaptedRelation(formal: Type, actual: Type, formalParams: Type[], actualParams: Type[]): TypeRelation {
+	let shared = formalParams.length < actualParams.length ? formalParams.length : actualParams.length;
+	if (takesVarargs(actualParams)) shared = actualParams.length - 1 < shared ? actualParams.length - 1 : shared;
+	return typeRelation(leadingParams(formal, shared), leadingParams(actual, shared));
+}
+
 function restTakesSlot(source: Type, sourceParams: Type[], target: Type, targetParams: Type[]): boolean {
 	const fixed = sourceParams.length - 1;
 	if (!isVarargs(sourceParams[fixed])) return false;
@@ -1655,7 +1661,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				if (leavesInlineConv(actual, formal)) return TypeRelation.None;
 				const formalParams = runtimeParams(formal);
 				const actualParams = runtimeParams(actual);
-				if (formalParams.length != actualParams.length) return arityAdapts(actual, formal) ? TypeRelation.Convertible : TypeRelation.None;
+				if (formalParams.length != actualParams.length) return arityAdapts(actual, formal) ? adaptedRelation(formal, actual, formalParams, actualParams) : TypeRelation.None;
 				let worst = TypeRelation.Exact;
 				for (let pi = 0; pi < formalParams.length; pi += 1) {
 					if (sinkModeDiffers(formalParams[pi], actualParams[pi])) return TypeRelation.None;

@@ -3957,6 +3957,17 @@ function isHiddenImplementation(cand: Symbol, set: Symbol): boolean {
 	return false;
 }
 
+function takesAdaptedArg(cand: Type, argTypes: Type[], skipMask: boolean[]): boolean {
+	for (let ai = 0; ai < argTypes.length && ai < cand.typeChildren.length; ai += 1) {
+		if (!skipMask[ai] && arityAdapts(argTypes[ai], cand.typeChildren[ai])) return true;
+	}
+	return false;
+}
+
+function adapterTie(a: Type, b: Type, argTypes: Type[], skipMask: boolean[]): boolean {
+	return takesAdaptedArg(a, argTypes, skipMask) || takesAdaptedArg(b, argTypes, skipMask);
+}
+
 function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Node, expectedType: Type | null = null as unknown as Type): Type {
 	let sym = primary;
 	let impl = findOverloadImpl(sym);
@@ -4031,7 +4042,7 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 			bestIdx = ci;
 			bestScore = score;
 			ambiguous = false;
-		} else if (cmp == 0) {
+		} else if (cmp == 0 && !adapterTie(candType, candidates[bestIdx], argTypes, skipMask)) {
 			ambiguous = true;
 		}
 		ci = ci + 1;
@@ -4770,7 +4781,7 @@ function resolveExtensionOverloadIdx(ctx: CheckerContext, candidates: Type[], ar
 				bestIdx = i;
 				bestScore = score;
 				ambiguous = false;
-			} else if (cmp == 0 && !onlySkipped) {
+			} else if (cmp == 0 && !onlySkipped && !adapterTie(candidates[i], candidates[bestIdx], argTypes, skipMask)) {
 				ambiguous = true;
 			}
 		}

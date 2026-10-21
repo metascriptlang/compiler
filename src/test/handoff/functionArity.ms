@@ -34,6 +34,6 @@ test "a fixed parameter is refused in a slot that passes a rest parameter" {
 	assert hasError("function fixed(a: string): string { return a; }\nconst f: (...xs: string[]) => string = fixed;", "as a rest parameter, which can hold none");
 }
 
-test "two overloads that both need an adapter are ambiguous" {
-	assert hasError("function one(s: string): string { return s; }\nfunction run(f: (s: string, i: int32, j: int32) => string): string { return f(\"a\", 1, 2); }\nfunction run(f: (s: string, i: int32) => string): string { return f(\"b\", 1); }\nconst r = run(one);", "Ambiguous call to overloaded function 'run'");
+test "two overloads that both need an adapter take the first declared" {
+	assert strictErrorCount("function one(s: string): string { return s; }\nfunction run(f: (s: string, i: int32, j: int32) => string): string { return f(\"a\", 1, 2); }\nfunction run(f: (s: string, i: int32) => string): string { return f(\"b\", 1); }\nconst r = run(one);") == 0;
 }
