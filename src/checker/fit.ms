@@ -18,6 +18,7 @@ import { int64Bits } from "../utils/stdBackport";
 import { viewRefusal } from "./assignable";
 import { checkSendableSource } from "./sendable";
 import { forEachChild } from "../ast/visitor";
+import { SymbolFlag, hasFlag, isFrameValue } from "./symbol";
 
 // ===== Operator Inference =====
 
@@ -1055,13 +1056,33 @@ export function wrapInConv(expr: Node, targetType: Type): Node {
 // is inserted — mirrors an explicit `as cstring` cast, for implicit call args.
 export function refuseDanglingCString(ctx: CheckerContext, expr: Node, livesForTheCall: boolean): void {
 	if (outlivesItsCString(expr)) return;
-	const sym = expr.kind == NodeKind.Identifier ? expr.resolvedSym : null;
-	if (!livesForTheCall || sym == null || sym.symbolKind != SymbolKind.Parameter) {
-		reportDanglingCString(ctx, expr);
-		return;
-	}
+	if (!livesForTheCall || !livesThroughCall(ctx, expr)) reportDanglingCString(ctx, expr);
+}
+
+function livesThroughCall(ctx: CheckerContext, expr: Node): boolean {
+	match (expr.kind) {
+		NodeKind.CallExpr | NodeKind.NewExpr => { return true; },
+		NodeKind.BinaryExpr => { return (expr.data as BinaryExprData).operator == "+"; },
+		NodeKind.Identifier => { return unchangedDuringCall(ctx, expr.resolvedSym); },
+		_ => { return false; },
+	};
+}
+
+function unchangedDuringCall(ctx: CheckerContext, sym: Symbol | null): boolean {
+	if (sym == null) return false;
+	if (sym.symbolKind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Mutable)) return true;
+	if (!isFrameValue(sym)) return false;
 	const body = ctx.currentFunction != null ? ctx.currentFunction.declNode : null;
-	if (body == null || assignsName(body, sym.name)) reportDanglingCString(ctx, expr);
+	if (body == null || assignsName(body, sym.name)) return false;
+	return sym.symbolKind == SymbolKind.Parameter || contains(body, sym.declNode);
+}
+
+function contains(n: Node, target: Node | null): boolean {
+	if (target == null) return false;
+	if (n === target) return true;
+	let found = false;
+	forEachChild(n, (c: Node): void => { if (!found && contains(c, target)) found = true; });
+	return found;
 }
 
 function outlivesItsCString(expr: Node): boolean {
@@ -1087,7 +1108,7 @@ function writesItsLeft(op: string): boolean {
 
 function reportDanglingCString(ctx: CheckerContext, expr: Node): void {
 	const what = expr.kind == NodeKind.Identifier ? "'" + (expr.data as IdentifierData).name + "'" : "this expression";
-	addError(ctx, "cannot take a cstring from " + what + ": a cstring keeps no string alive, so it can only be taken from a string literal, a const bound to one, or, as a call argument, a parameter the function never assigns; this string can be freed or replaced while the cstring is in use. Pass the string to a function that takes it as a parameter, or write 'as cstring' to take the address on your own responsibility",
+	addError(ctx, "cannot take a cstring from " + what + ": a cstring keeps no string alive, so it can only be taken from a string literal, a const bound to one, or, as a call argument, a value that lives through the call: a temporary, a const, or a parameter or local the function never assigns; this string can be freed or replaced while the cstring is in use. Copy it into a const first, or write 'as cstring' to take the address on your own responsibility",
 		expr.location.line, expr.location.column);
 }
 
