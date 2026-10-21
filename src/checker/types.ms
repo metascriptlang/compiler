@@ -3594,7 +3594,7 @@ export function propagateToOwner(parent: Type, child: Type): void {
 	if (isDeclaredStruct(parent)) propagateGenericParam(parent, child);
 }
 
-function isDeclaredStruct(t: Type): boolean {
+export function isDeclaredStruct(t: Type): boolean {
 	if (t.kind != TypeKind.Struct || t.sym == null) return false;
 	const declared = t.sym.symbolKind;
 	return declared == SymbolKind.Class || declared == SymbolKind.Interface || declared == SymbolKind.Struct || declared == SymbolKind.Actor;
@@ -3705,7 +3705,7 @@ function typeVisitHas(seen: Cursor<Type>[], t: Type): boolean {
 	return false;
 }
 
-class TypeVisitSet {
+export class TypeVisitSet {
 	entries: Cursor<Type>[];
 	table: int32[];
 	constructor() {
@@ -3730,7 +3730,7 @@ function typeVisitGrow(visited: TypeVisitSet): void {
 	}
 }
 
-function typeVisitAdd(visited: TypeVisitSet, t: Cursor<Type>): boolean {
+export function typeVisitAdd(visited: TypeVisitSet, t: Cursor<Type>): boolean {
 	if (visited.table.length < (visited.entries.length + 1) * 2) typeVisitGrow(visited);
 	const h = typeVisitSlot(visited, t);
 	if (visited.table[h] != 0) return false;

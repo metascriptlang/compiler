@@ -8,7 +8,7 @@ import { methodOwnerClass } from "./visibility";
 import { isAsyncFunctionNode } from "./freestanding";
 import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { isMaybeType, createGenericParam, inferredType, isUnresolvedType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteParams, substituteBound, declaredTypeParams, UnifyBindings, bindParam, bindAt, boundSlot } from "./types";
+import { isMaybeType, createGenericParam, inferredType, isUnresolvedType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteParams, substituteBound, declaredTypeParams, TypeVisitSet, typeVisitAdd, isDeclaredStruct, UnifyBindings, bindParam, bindAt, boundSlot } from "./types";
 import { ensureShaped, registerTypeInstanceHooks, refuseHookInferredReturn } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, globalScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
 import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
@@ -649,18 +649,22 @@ function ownerTypeParams(ctx: CheckerContext, sym: Symbol): Type[] {
 	const md = decl.data as MethodDeclDataLocal;
 	if (md.methodParams.length == 0 || md.methodParams[0] != "this") return [];
 	const found: Type[] = [];
-	receiverTypeParams(sym.symbolType.typeChildren[0], found);
+	receiverTypeParams(sym.symbolType.typeChildren[0], found, new TypeVisitSet());
 	return found;
 }
 
-function receiverTypeParams(t: Type | null, found: Type[]): void {
-	if (t == null) return;
+function receiverTypeParams(t: Type | null, found: Type[], seen: TypeVisitSet): void {
+	if (t == null || !typeVisitAdd(seen, t)) return;
 	if (t.kind == TypeKind.GenericParam) {
-		if (t.sym != null && found.indexOf(t) < 0) found.push(t);
+		if (t.sym != null) found.push(t);
 		return;
 	}
-	for (const c of t.typeChildren) receiverTypeParams(c, found);
-	receiverTypeParams(t.typeReturn, found);
+	if (isDeclaredStruct(t)) {
+		for (const gp of t.sym!.typeParams) receiverTypeParams(gp, found, seen);
+		return;
+	}
+	for (const c of t.typeChildren) receiverTypeParams(c, found, seen);
+	receiverTypeParams(t.typeReturn, found, seen);
 }
 
 function routineBindings(ctx: CheckerContext, sym: Symbol, params: Type[], types: Type[]): RoutineBindings {
