@@ -315,6 +315,7 @@ export enum NodeFlag {
 	NoOverflowCheck, // transform: the step of a counter the compiler keeps below a length, which cannot overflow
 	ValueUnion,    // parser: this TypeAliasDecl is a discriminated union written `struct X = match`
 	QuoteSplice,   // parser: this call is a quote's `${ }` interpolation, a splice by syntax whatever `splice` names in scope
+	ContinuesList, // parser: this declarator follows a comma in the declaration list of the statement before it
 }
 
 // ===== Node Kind Enum =====

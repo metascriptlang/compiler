@@ -51,7 +51,7 @@ export function printProgram(node: Node, options: FormatOptions): Doc {
 				parts.push(docHardLine());
 			}
 		}
-		_structAccessors = structAccessorsAfter(d.programStmts, stmt);
+		noteFollowers(d.programStmts, stmt);
 		parts.push(callPrintNode(stmt, options));
 
 		// Emit inter-statement comments: blank line before first, single newline between
@@ -69,11 +69,28 @@ function lastLineOf(node: Node): int32 {
 }
 
 let _structAccessors: Node[] = [];
+let _listDeclarators: Node[] = [];
 
 export function takeStructAccessors(): Node[] {
 	const taken = _structAccessors;
 	_structAccessors = [];
 	return taken;
+}
+
+function takeListDeclarators(): Node[] {
+	const taken = _listDeclarators;
+	_listDeclarators = [];
+	return taken;
+}
+
+function noteFollowers(stmts: Node[], stmt: Node): void {
+	_structAccessors = followersAfter(stmts, stmt, structAccessorDecl);
+	_listDeclarators = followersAfter(stmts, stmt, listDeclarator);
+}
+
+function listDeclarator(s: Node): Node | null {
+	const inner = s.kind == NodeKind.ExportDecl ? (s.data as ExportDeclData).exportedDecl : s;
+	return inner != null && inner.flags.has(NodeFlag.ContinuesList) ? inner : null;
 }
 
 function structAccessorDecl(s: Node): Node | null {
@@ -83,13 +100,13 @@ function structAccessorDecl(s: Node): Node | null {
 	return fn != null && fn.kind == NodeKind.FunctionDecl && fn.flags.has(NodeFlag.Accessor) ? inner : null;
 }
 
-function structAccessorsAfter(stmts: Node[], stmt: Node): Node[] {
+function followersAfter(stmts: Node[], stmt: Node, follower: (s: Node) => Node | null): Node[] {
 	const out: Node[] = [];
 	let i = stmts.indexOf(stmt) + 1;
 	while (i > 0 && i < stmts.length) {
-		const acc = structAccessorDecl(stmts[i]);
-		if (acc == null) break;
-		out.push(acc);
+		const next = follower(stmts[i]);
+		if (next == null) break;
+		out.push(next);
 		i += 1;
 	}
 	return out;
@@ -98,7 +115,7 @@ function structAccessorsAfter(stmts: Node[], stmt: Node): Node[] {
 function unpicked(stmts: Node[]): Node[] {
 	const out: Node[] = [];
 	for (const s of stmts) {
-		if (!s.flags.has(NodeFlag.WhenPicked) && !isParamPatternDecl(s) && structAccessorDecl(s) == null) out.push(s);
+		if (!s.flags.has(NodeFlag.WhenPicked) && !isParamPatternDecl(s) && structAccessorDecl(s) == null && listDeclarator(s) == null) out.push(s);
 	}
 	return out;
 }
@@ -165,7 +182,7 @@ export function printBlock(node: Node, options: FormatOptions): Doc {
 	if (written.length == 0 && inner.length == 0) return docText("{}");
 	const stmts: Doc[] = [];
 	for (const s of written) {
-		_structAccessors = structAccessorsAfter(d.statements, s);
+		noteFollowers(d.statements, s);
 		stmts.push(callPrintNode(s, options));
 	}
 	for (const c of inner) {
@@ -211,7 +228,30 @@ export function printVariableDecl(node: Node, options: FormatOptions): Doc {
 	};
 
 	const storage = node.flags.has(NodeFlag.StaticStorage) ? "static " : "";
-	const parts: Doc[] = [docText(storage + kind + " " + d.declName)];
+	const rest = takeListDeclarators();
+	const parts: Doc[] = [docText(storage + kind + " ")];
+	pushDeclarator(parts, node, options);
+	for (const r of rest) {
+		parts.push(docText(", "));
+		pushDeclarator(parts, r, options);
+	}
+	if (options.semi) {
+		parts.push(docText(";"));
+	}
+
+	return docGroup(parts);
+}
+
+function pushDeclarator(parts: Doc[], node: Node, options: FormatOptions): void {
+	if (node.kind == NodeKind.DestructuringDecl) {
+		const dd = node.data as DestructuringDeclData;
+		parts.push(callPrintNode(dd.destrPattern, options));
+		parts.push(docText(" = "));
+		parts.push(callPrintNode(dd.destrInit, options));
+		return;
+	}
+	const d = node.data as VariableDeclData;
+	parts.push(docText(d.declName));
 	if (d.declType != "") {
 		parts.push(docText(": " + d.declType));
 	}
@@ -219,11 +259,6 @@ export function printVariableDecl(node: Node, options: FormatOptions): Doc {
 		parts.push(docText(" = "));
 		parts.push(callPrintNode(d.initializer, options));
 	}
-	if (options.semi) {
-		parts.push(docText(";"));
-	}
-
-	return docGroup(parts);
 }
 
 export function printExprStmt(node: Node, options: FormatOptions): Doc {
@@ -356,12 +391,13 @@ export function printForInStmt(node: Node, options: FormatOptions): Doc {
 export function printDestructuringDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as DestructuringDeclData;
 	const kind = d.destrIsConst ? "const" : "let";
-	const parts: Doc[] = [
-		docText(kind + " "),
-		callPrintNode(d.destrPattern, options),
-		docText(" = "),
-		callPrintNode(d.destrInit, options),
-	];
+	const rest = takeListDeclarators();
+	const parts: Doc[] = [docText(kind + " ")];
+	pushDeclarator(parts, node, options);
+	for (const r of rest) {
+		parts.push(docText(", "));
+		pushDeclarator(parts, r, options);
+	}
 	if (options.semi) parts.push(docText(";"));
 	return docGroup(parts);
 }
@@ -413,6 +449,8 @@ function printSwitchCase(node: Node, options: FormatOptions): Doc {
 	if (d.caseStmts.length > 0) {
 		const stmts: Doc[] = [];
 		for (const s of d.caseStmts) {
+			if (listDeclarator(s) != null) continue;
+			noteFollowers(d.caseStmts, s);
 			stmts.push(callPrintNode(s, options));
 		}
 		parts.push(docIndent([docHardLine(), docJoin(stmts, docHardLine())]));

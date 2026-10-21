@@ -77,6 +77,7 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 		advance(state);
 		const next = try parseDeclarator(state, keyword, current(state));
 		stampEnd(state, next);
+		next.flags = next.flags.incl(NodeFlag.ContinuesList);
 		state.trailingDecls.push(next);
 	}
 	consumeSemicolon(state);
