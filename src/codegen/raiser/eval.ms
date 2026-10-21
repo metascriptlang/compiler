@@ -10,6 +10,7 @@ import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMetho
 import { findModule } from "../../module/graph";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join } from "std/fs/path";
+import { platform } from "std/process";
 import { writeStderr } from "std/io";
 import { createTransformContextWithChecker } from "../../transform/context";
 import { transformForRaiser } from "../../transform/raiserLowering";
@@ -854,6 +855,8 @@ test "engine: sleepAsync is refused in compile-time evaluation" {
 	assert r.lastError.includes("sleepAsync is not available in compile-time evaluation");
 }
 
+const CHILD_SLEEP = platform == "windows" ? "sleep" : "/bin/sleep";
+
 const RAISER_TIER_CHILD = "extern function msProcChildSpawn(path: string, args: string[], cwd: string, mergeStderr: int32): int64; extern function msProcChildKill(h: int64): int32; extern function msProcChildFree(h: int64): void;";
 
 test "engine: spawning a child is refused in compile-time evaluation" {
@@ -863,7 +866,7 @@ test "engine: spawning a child is refused in compile-time evaluation" {
 
 test "engine: spawning a child runs at run time" {
 	const vm = evalOrcVM(RAISER_TIER_CHILD
-		+ " const h = msProcChildSpawn(\"/bin/sleep\", [\"5\"], \"\", 0); const killed = msProcChildKill(h); msProcChildFree(h); console.log(`${h > 0} ${killed}`);");
+		+ " const h = msProcChildSpawn(\"" + CHILD_SLEEP + "\", [\"5\"], \"\", 0); const killed = msProcChildKill(h); msProcChildFree(h); console.log(`${h > 0} ${killed}`);");
 	assert vm.error == "";
 	assert vm.output == "true 0\n";
 }

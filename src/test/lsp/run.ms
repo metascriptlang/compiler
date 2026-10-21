@@ -555,7 +555,7 @@ function compareCheckpoint(
 	const files: string[] = [];
 	const checks: Result<ChildProcess, ProcessError>[] = [];
 	for (let i = 0; i < snap.uris.length; i++) {
-		const file = inProject ? lspUriPath(snap.uris[i]) : `${realpath(dir)}/${basename(lspUriPath(snap.uris[i]))}`;
+		const file = inProject ? lspUriPath(snap.uris[i]) : `${slashes(realpath(dir))}/${basename(lspUriPath(snap.uris[i]))}`;
 		writeFile(file, snap.texts[i]);
 		files.push(file);
 	}
