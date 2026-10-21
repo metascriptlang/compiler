@@ -2869,6 +2869,16 @@ function mappedArrayLike(t: Type, source: Type, mods: BitSet<MappedModifier>): T
 
 // Reference: resolveMappedTypeMembers — one property per key of the constraint; `?` and
 // `readonly` from the modifiers, else inherited from the modifiers type's property.
+// `{ readonly [P in keyof T]: T[P] }` keeps T's members and only forbids writes: the read-only
+// view of T itself.
+function isReadonlyOnly(t: Type, source: Type, mods: BitSet<MappedModifier>): boolean {
+	if (!mods.has(MappedModifier.IncludeReadonly) || mods.has(MappedModifier.IncludeOptional) || mods.has(MappedModifier.ExcludeOptional)) return false;
+	const template = t.typeChildren[1];
+	return template.kind == TypeKind.IndexedAccess && template.typeChildren.length == 2
+		&& template.typeChildren[0] == source
+		&& template.typeChildren[1] == mappedParam(t);
+}
+
 export function evaluateMappedType(t: Type): Type {
 	if (t.kind != TypeKind.Mapped || t.typeChildren.length < 2) return t;
 	const mods = mappedModifiers(t);
@@ -2877,6 +2887,7 @@ export function evaluateMappedType(t: Type): Type {
 	if (mods.has(MappedModifier.KeyOfDeclared) && source != null && t.typeChildren.length == 2) {
 		if (!isObjectSource(source) && mappedSourceMembers(source).length == 0) return source;
 		if (arrayOf(source) != null || peelTransparentInstance(unwrapRef(source)).kind == TypeKind.Tuple) return mappedArrayLike(t, source, mods);
+		if (isReadonlyOnly(t, source, mods)) return createReadonlyView(source);
 	}
 	const constraint = t.typeChildren[0];
 	if (hasGenericParams(constraint)) return t;

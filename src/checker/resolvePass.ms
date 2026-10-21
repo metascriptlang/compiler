@@ -652,8 +652,12 @@ function genericInstanceOf(ctx: CheckerContext, sym: Symbol, genericParams: stri
 // when its keys are all of `string` or of `number`, as `{ [key: K]: V }` is; refused otherwise.
 function settleMapped(ctx: CheckerContext, t: Type, line: int32, col: int32): Type {
 	let body: Type | null = t;
-	while (body != null && (body.kind == TypeKind.GenericInstance || body.kind == TypeKind.Ref)) body = body.typeReturn;
-	if (t.kind == TypeKind.GenericInstance && isReadonlyView(peelTransparentInstance(t))) return peelTransparentInstance(t);
+	while (body != null && (body.kind == TypeKind.GenericInstance || body.kind == TypeKind.Ref)) {
+		if (body.kind == TypeKind.GenericInstance && body.typeReturn == null) instantiateGenericBody(body, genericParamsOf(body));
+		if (body != t && isReadonlyView(body)) return body;
+		body = body.typeReturn;
+	}
+	if (t.kind == TypeKind.GenericInstance && isReadonlyView(body)) return body!;
 	if (body == null || body.kind != TypeKind.Mapped || mappedIsGeneric(body)) return t;
 	const index = mappedIndexKey(body);
 	const mapSym = index != null ? lookupTypeSym(ctx, "Map") : null;
@@ -1202,7 +1206,13 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			return createLocked(resolveAnnotation(args[0], ctx, line, col));
 		}
 		if (builtinHead == "Readonly" && args.length == 1) {
-			return createReadonlyView(resolveAnnotation(args[0], ctx, line, col));
+			const viewed = resolveAnnotation(args[0], ctx, line, col);
+			if (viewed.kind != TypeKind.GenericParam) return createReadonlyView(viewed);
+			const source = createGenericParam("$source");
+			const mods = (0 as BitSet<MappedModifier>).incl(MappedModifier.KeyOfDeclared).incl(MappedModifier.IncludeReadonly);
+			const key = createGenericParam("$key");
+			const homomorphic = createMappedType(key, createKeyOfType(source), createIndexedAccessType(source, key), null, source, mods);
+			return substituteParams(homomorphic, [source], [viewed]);
 		}
 		const utility = utilityType(builtinHead, args, ctx, line, col);
 		if (utility != null) return utility;
