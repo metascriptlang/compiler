@@ -17,7 +17,7 @@ RULES=(
   'guard|^(std|runtime)/solana/'
   'guard|^src/test/guard/'
   'corpus|^src/test/corpus/'
-  'san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
+  'san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h|promise/|actor/)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
   'fmt|^src/(compiler/fmt|parser|lexer)/|^src/test/fmt/|^std/meta/'
   'boundary|^src/compiler/(buildConfig|cache|cc|commands|compile|defines|options|toolchain)\.ms$|^src/compiler/(meta/hostTable\.ms$|package/)|^src/index\.ms$|^src/test/nativeBuildBoundary\.ms$|^(runtime|vendor)/|^std/(fs|process)/'
 )
@@ -1591,6 +1591,8 @@ src/utils/path.ms|build corpus suite tests
 src/index.ms|boundary build corpus suite tests
 src/analyzer/inject.ms|build corpus guard san suite tests
 runtime/drc.h|boundary build corpus guard san suite tests
+runtime/promise/future.h|boundary build corpus guard san suite tests
+runtime/actor/actor.h|boundary build corpus guard san suite tests
 runtime/hcr.c|boundary build corpus hcr suite tests
 src/codegen/c/expressions.ms|build corpus solana suite tests
 src/transform/lowering/deferLower.ms|build corpus guard san suite tests
