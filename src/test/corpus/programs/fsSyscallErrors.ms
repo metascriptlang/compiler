@@ -1,5 +1,5 @@
 // Parity program — each single-syscall std/fs mutation (mkdir, rmdir, remove, rename,
-// symlink, chmod) on its success path and on every failure whose errno is the same on
+// symlink, chmod, writeFile, appendFile) and realpath on its success path and on every failure whose errno is the same on
 // macOS and Linux, printed as the IoErrorKind the caller sees. Axes: missing path,
 // missing parent, a file where a directory is expected, an existing target, an empty
 // path, and four spawn workers failing while the main thread succeeds, so an error
@@ -14,13 +14,15 @@
 // @stdout: rename replace=ok content=A missing=NotFound intoMissing=NotFound
 // @stdout: symlink new=ok read=A exists=AlreadyExists missingParent=NotFound remove=ok
 // @stdout: chmod 755=ok x=true 644=ok x=false missing=NotFound
+// @stdout: write new=ok append=ok content=xy missingParent=NotFound onDir=IsDirectory fullDevice=refused
+// @stdout: realpath viaLink=same missing=empty
 // @stdout: threads mainOk=2000 workerNotFound=8000
 // @exit: 0
 
 import { argv } from "std/process";
 import {
 	mkdir, rmdir, remove, rename, symlink, chmod, writeFile, readFile, removeAll,
-	isDir, isExecutable, basename, dirname,
+	isDir, isExecutable, exists, appendFile, realpath, basename, dirname,
 } from "std/fs";
 import { IoError, IoErrorKind } from "std/io/errors";
 
@@ -79,6 +81,17 @@ const exe = chmod(file, 493);
 const exeBit = isExecutable(file);
 const plain = chmod(file, 420);
 console.log(`chmod 755=${show(exe)} x=${exeBit} 644=${show(plain)} x=${isExecutable(file)} missing=${show(chmod(`${dir}/nope`, 420))}`);
+
+const out = `${dir}/w.txt`;
+const wrote = writeFile(out, "x");
+const appended = appendFile(out, "y");
+const written = readFile(out);
+// Linux /dev/full fails the flush at fclose; macOS has no such device and passes trivially.
+const fullDevice = !exists("/dev/full") || !writeFile("/dev/full", "x").ok;
+console.log(`write new=${show(wrote)} append=${show(appended)} content=${written.ok ? written.value : "?"} missingParent=${show(writeFile(`${dir}/no/w.txt`, "x"))} onDir=${show(writeFile(dir, "x"))} fullDevice=${fullDevice ? "refused" : "accepted"}`);
+
+symlink(out, `${dir}/wlink`);
+console.log(`realpath viaLink=${realpath(`${dir}/wlink`) == realpath(out) && realpath(out) != "" ? "same" : "differs"} missing=${realpath(`${dir}/nope`) == "" ? "empty" : "?"}`);
 
 const workers: Promise<number>[] = [];
 for (let w = 0; w < 4; w++) workers.push(spawn(() => failMkdirs(dir)));
