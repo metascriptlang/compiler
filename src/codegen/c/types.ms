@@ -1010,14 +1010,6 @@ export function hasUnionEq(t: Type): boolean {
 	return true;
 }
 
-export function promiseAllCellKey(arrT: Type): string {
-	return "pall|" + opTypeKey(arrT);
-}
-
-export function promiseAllCellName(arrT: Type): string {
-	return "msPromiseAllCell_" + hashToBase36(opTypeKey(arrT));
-}
-
 function typeInfoPointer(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 	if (!info.moduleLocal && hcrTypeInfoRef(g, info.cName)) return `&${info.cName}TypeInfo`;
 	const forwKey = "typeInfo:" + info.cName;
@@ -1051,12 +1043,6 @@ export function typeInfoRef(g: CGen, type: Type | null): string {
 export function ensureArcCellTypeInfo(g: CGen, pointeeType: Type): string {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
 	const info = demandedTypeInfo(g, arcCellKey(pointeeType), "Arc cell");
-	return info == null ? "NULL" : typeInfoPointer(g, info);
-}
-
-export function ensurePromiseAllCellTypeInfo(g: CGen, arrT: Type): string {
-	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
-	const info = demandedTypeInfo(g, promiseAllCellKey(arrT), "Promise.all cell");
 	return info == null ? "NULL" : typeInfoPointer(g, info);
 }
 
@@ -1108,13 +1094,6 @@ function refArrayCellLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 	return (bare != "" ? getArrayTypeName(bare) : arrCType) + "RefCell";
 }
 
-function promiseAllCellLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
-	const arrCType = getTypeDesc(g, info.subject);
-	const elemCName = arrCType.slice(0, arrCType.length - 5);
-	const bare = typeCacheGet(g.typeCache, "bare:" + elemCName);
-	return (bare != "" ? getArrayTypeName(bare) : arrCType) + "PallCell";
-}
-
 function objectTypeInfoLabel(info: Readonly<CTypeInfoDemand>): string {
 	const t = info.subject;
 	if (t.kind == TypeKind.GenericInstance || t.sym == null || t.typeName.indexOf("__", 0) >= 0 || isAnonTypeName(t.typeName)) return info.cName;
@@ -1126,7 +1105,6 @@ function typeInfoLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 		TypeInfoKind.RefArrayCell => refArrayCellLabel(g, info),
 		TypeInfoKind.Object => objectTypeInfoLabel(info),
 		TypeInfoKind.ArcCell => mangle(getTypeDesc(g, info.subject)) + "Arc",
-		TypeInfoKind.PromiseAllCell => promiseAllCellLabel(g, info),
 	};
 }
 
@@ -2036,7 +2014,7 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
 	if (shape == PromiseAllShape.None) return "";
 	const arrT = createArray(innerType);
 	genArrayType(g, arrT);
-	const arrTypeInfo = ensurePromiseAllCellTypeInfo(g, arrT);
+	const arrTypeInfo = ensureRefArrayCellTypeInfo(g, arrT);
 	if (shape == PromiseAllShape.Int32) {
 		emitPromiseAllInstance(g, "msFuture_int32", "int32_t", "int32_t", "int32_tArray", "int32_tArray__Content", "MS_COPY_SAME", arrTypeInfo);
 		return "msPromiseAllFor_msFuture_int32";

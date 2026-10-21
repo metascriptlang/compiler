@@ -603,7 +603,6 @@ export enum TypeInfoKind {
 	Object,
 	RefArrayCell,
 	ArcCell,
-	PromiseAllCell,
 }
 
 export class CTypeInfoDemand {
