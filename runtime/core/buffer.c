@@ -71,6 +71,7 @@ static int b64CharToInt(char c) {
 
 msBuffer msBufferAlloc(int64_t size) {
 	if (size <= 0) return MS_EMPTY_BUFFER;
+	if (size > MS_LEN_MAX) msRaiseRangeError(size, 0, MS_LEN_MAX);
 
 	msStrPayload* p = (msStrPayload*)calloc(1, sizeof(msStrPayload) + size + 1);
 	if (!p) return MS_EMPTY_BUFFER;
@@ -87,6 +88,7 @@ msBuffer msBufferAlloc(int64_t size) {
 
 msBuffer msBufferAllocUnsafe(int64_t size) {
 	if (size <= 0) return MS_EMPTY_BUFFER;
+	if (size > MS_LEN_MAX) msRaiseRangeError(size, 0, MS_LEN_MAX);
 
 	msStrPayload* p = (msStrPayload*)malloc(sizeof(msStrPayload) + size + 1);
 	if (!p) return MS_EMPTY_BUFFER;

@@ -73,7 +73,8 @@ typedef struct {
 static inline int64_t msArrayResizeCap(int64_t old) {
 	if (old <= 0) return 4;
 	if (old <= 32767) return old * 2;
-	return old + old / 2;
+	int64_t grown = old + old / 2;
+	return grown < MS_LEN_MAX ? grown : MS_LEN_MAX;
 }
 
 /* ===== Type-Erased Core ===== */

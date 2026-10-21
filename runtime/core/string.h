@@ -115,11 +115,16 @@ static inline int32_t msStringHash(msString s) {
 	return (int32_t)h;
 }
 
+/* `.length` is int32 on every backend, so no string, array or buffer grows past
+   it: the allocation sites refuse a larger count instead of wrapping the length. */
+#define MS_LEN_MAX INT32_MAX
+
 /* Capacity growth — Standard reference resize pattern */
 static inline int64_t msStringResizeCap(int64_t old) {
 	if (old <= 0) return 4;
 	if (old <= 32767) return old * 2;
-	return old + old / 2;  /* x3/2 for large strings */
+	int64_t grown = old + old / 2;  /* x3/2 for large strings */
+	return grown < MS_LEN_MAX ? grown : MS_LEN_MAX;
 }
 
 /* Content size including null terminator + payload header */

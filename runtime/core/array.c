@@ -13,12 +13,12 @@
 /* Reference parity: payloads are uniquely owned — no refcount field.
    DRC handles ownership (move vs deep copy) at compile time. */
 
-/* A count is a length: negative is a range error, and a payload size that does
-   not fit int64 is an overflow, both before any allocation, so no array reports
-   a length its block does not hold. */
+/* A count is a length: outside 0 .. MS_LEN_MAX is a range error, and a payload
+   size that does not fit int64 is an overflow, both before any allocation, so no
+   array reports a length its block does not hold. */
 static int64_t msArrayBytes(int64_t cap, int64_t elemSize) {
 	int64_t body, total;
-	if (cap < 0) msRaiseRangeError(cap, 0, INT64_MAX);
+	if (cap < 0 || cap > MS_LEN_MAX) msRaiseRangeError(cap, 0, MS_LEN_MAX);
 	if (__builtin_mul_overflow(cap, elemSize, &body)) msRaiseOverflow();
 	if (__builtin_add_overflow(body, (int64_t)sizeof(msArrayPayloadBase), &total)) msRaiseOverflow();
 	return total;

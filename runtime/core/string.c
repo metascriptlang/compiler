@@ -39,19 +39,26 @@ const msString msCharTable[128] = {
 
 /* ===== Internal Allocation Helpers ===== */
 
+static void checkCap(int64_t cap) {
+	if (cap < 0 || cap > MS_LEN_MAX) msRaiseRangeError(cap, 0, MS_LEN_MAX);
+}
+
 static msStrPayload* allocPayload(int64_t cap) {
+	checkCap(cap);
 	msStrPayload* p = (msStrPayload*)malloc(msStrContentSize(cap));
 	if (p) p->cap = cap;
 	return p;
 }
 
 static msStrPayload* allocPayload0(int64_t cap) {
+	checkCap(cap);
 	msStrPayload* p = (msStrPayload*)calloc(1, msStrContentSize(cap));
 	if (p) p->cap = cap;
 	return p;
 }
 
 static msStrPayload* reallocPayload(msStrPayload* old, int64_t oldCap, int64_t newCap) {
+	checkCap(newCap);
 	msStrPayload* p = (msStrPayload*)msRealloc(old, msStrContentSize(oldCap), msStrContentSize(newCap));
 	if (p) p->cap = newCap;
 	return p;
@@ -60,6 +67,7 @@ static msStrPayload* reallocPayload(msStrPayload* old, int64_t oldCap, int64_t n
 /* Zeroing realloc — zeros only [oldCap+1..newCap) region.
    Standard reference implementation: reallocPayload0(old, contentSize(oldLen), contentSize(newLen)) */
 static msStrPayload* reallocPayload0(msStrPayload* old, int64_t oldCap, int64_t newCap) {
+	checkCap(newCap);
 	msStrPayload* p = (msStrPayload*)msRealloc(old, msStrContentSize(oldCap), msStrContentSize(newCap));
 	if (p) {
 		p->cap = newCap;
