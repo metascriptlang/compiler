@@ -731,7 +731,7 @@ function futureComplete(vm: RaiserVM, handle: int64, value: RaiserValue): void {
 }
 
 function futureSettled(vm: RaiserVM, handle: int64): void {
-	const f = vm.sched.futures.items[handle];
+	const f = vm.sched.futures.items[handleIndex(handle)];
 	for (const w of f.waiters) {
 		const s = vm.sched.strands.items[w];
 		if (s.status == RaiserStrandStatus.Blocked) s.status = RaiserStrandStatus.Ready;
@@ -745,7 +745,7 @@ function futureSettled(vm: RaiserVM, handle: int64): void {
 // --- Combinators: Promise.all, race and any (runtime/promise/combinator.c) ---
 
 function futureCompleteFrom(vm: RaiserVM, handle: int64, source: RaiserFuture): void {
-	const f = vm.sched.futures.items[handle];
+	const f = vm.sched.futures.items[handleIndex(handle)];
 	f.finished = true;
 	const owned = copyGraph(source.valueArrayHeap, source.valueObjectHeap, f.valueArrayHeap, f.valueObjectHeap, source.value);
 	rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
@@ -754,7 +754,7 @@ function futureCompleteFrom(vm: RaiserVM, handle: int64, source: RaiserFuture): 
 }
 
 function futureFailFrom(vm: RaiserVM, handle: int64, source: RaiserFuture): void {
-	const f = vm.sched.futures.items[handle];
+	const f = vm.sched.futures.items[handleIndex(handle)];
 	f.finished = true;
 	f.failed = true;
 	f.errorMsg = source.errorMsg;
@@ -766,7 +766,7 @@ function futureFailFrom(vm: RaiserVM, handle: int64, source: RaiserFuture): void
 }
 
 function futureCompleteAll(vm: RaiserVM, handle: int64): void {
-	const f = vm.sched.futures.items[handle];
+	const f = vm.sched.futures.items[handleIndex(handle)];
 	f.finished = true;
 	const arr = heapAllocArray(f.valueArrayHeap);
 	for (let i = 0; i < f.inputs.length; i += 1) {
@@ -775,7 +775,7 @@ function futureCompleteAll(vm: RaiserVM, handle: int64): void {
 		if (earlier < i) {
 			copyValueInto(item, heapArrayGet(f.valueArrayHeap, arr, earlier as int64));
 		} else {
-			const input = vm.sched.futures.items[f.inputs[i]];
+			const input = vm.sched.futures.items[handleIndex(f.inputs[i])];
 			item = copyGraph(input.valueArrayHeap, input.valueObjectHeap, f.valueArrayHeap, f.valueObjectHeap, input.value);
 		}
 		heapArrayPush(f.valueArrayHeap, arr, item);
@@ -790,7 +790,7 @@ function futureCompleteAll(vm: RaiserVM, handle: int64): void {
 // Every input finished, and each with the outcome `failed` names.
 function combineAllSettledAs(vm: RaiserVM, f: RaiserFuture, failed: boolean): boolean {
 	for (const at of f.inputs) {
-		const input = vm.sched.futures.items[at];
+		const input = vm.sched.futures.items[handleIndex(at)];
 		if (!input.finished || input.failed != failed) return false;
 	}
 	return true;
@@ -799,8 +799,8 @@ function combineAllSettledAs(vm: RaiserVM, f: RaiserFuture, failed: boolean): bo
 // One input of the combinator `handle` settled. A failed input counts as
 // handled, as a future with a callback does on C, even after the result settled.
 function combineStep(vm: RaiserVM, handle: int64, settled: int64): void {
-	const f = vm.sched.futures.items[handle];
-	const input = vm.sched.futures.items[settled];
+	const f = vm.sched.futures.items[handleIndex(handle)];
+	const input = vm.sched.futures.items[handleIndex(settled)];
 	if (input.failed) input.errorObserved = true;
 	if (f.finished) return;
 	if (f.combine == RaiserCombine.All as int32) {
@@ -820,7 +820,7 @@ function combineStep(vm: RaiserVM, handle: int64, settled: int64): void {
 // Promise.any's rejection when every input rejected: the error the call site
 // made, held in the result's storage until then.
 function futureFailPrepared(vm: RaiserVM, handle: int64): void {
-	const f = vm.sched.futures.items[handle];
+	const f = vm.sched.futures.items[handleIndex(handle)];
 	f.finished = true;
 	f.failed = true;
 	futureSettled(vm, handle);
@@ -830,14 +830,14 @@ function futureFailPrepared(vm: RaiserVM, handle: int64): void {
 // a future that is already complete, so every input is read the same way; one
 // value named twice enters once, so its slots keep sharing it.
 function vmHandleFutureCombine(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const base = vm.baseReg + ia;
-	const arr = vmHeapOperand(vm, getReg(vm, base + 1), RaiserValueKind.Array, "an array of futures");
+	const func = getModuleFunc(vm.mod, vm.funcIdx);
+	const arr = vmHeapOperand(vm, getDyn(vm, func.blocks[ic + 4] as int32), RaiserValueKind.Array, "an array of futures");
 	if (arr < 0) return;
 	const handle = newFuture(vm);
-	const f = vm.sched.futures.items[handle];
-	f.combine = ic;
-	if (ic == RaiserCombine.Any as int32) {
-		const rejection = getReg(vm, base + 2);
+	const f = vm.sched.futures.items[handleIndex(handle)];
+	f.combine = ib;
+	if (ib == RaiserCombine.Any as int32) {
+		const rejection = getDyn(vm, func.blocks[ic + 5] as int32);
 		f.errorMsg = vmExceptionText(vm, rejection);
 		const owned = copyGraphWith(vm.arrayHeap, vm.objectHeap, f.valueArrayHeap, f.valueObjectHeap, rejection, strandCopyMap(vm));
 		rcIncref(f.valueArrayHeap, f.valueObjectHeap, owned);
@@ -863,17 +863,17 @@ function vmHandleFutureCombine(vm: RaiserVM, ia: int32, ib: int32, ic: int32): v
 		}
 		f.inputs.push(ready);
 	}
-	setRegRef(vm, base, RaiserValueKind.Future, handle);
+	setRegConform(vm, ia, raiserFuture(handle));
 	if (f.inputs.length == 0) {
-		if (ic == RaiserCombine.All as int32) futureCompleteAll(vm, handle);
-		else if (ic == RaiserCombine.Any as int32) futureFailPrepared(vm, handle);
+		if (ib == RaiserCombine.All as int32) futureCompleteAll(vm, handle);
+		else if (ib == RaiserCombine.Any as int32) futureFailPrepared(vm, handle);
 		return;
 	}
 	for (const at of f.inputs) {
-		if (!vm.sched.futures.items[at].finished) vm.sched.futures.items[at].dependents.push(handle);
+		if (!vm.sched.futures.items[handleIndex(at)].finished) vm.sched.futures.items[handleIndex(at)].dependents.push(handle);
 	}
 	for (const at of f.inputs) {
-		if (vm.sched.futures.items[at].finished) combineStep(vm, handle, at);
+		if (vm.sched.futures.items[handleIndex(at)].finished) combineStep(vm, handle, at);
 	}
 }
 
@@ -2607,7 +2607,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				words[wb + ia] = raised >> imm;
 				break;
 			}
-			case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallIndirect: case RaiserOpcode.CallHost: case RaiserOpcode.IsKind: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: {
+			case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallIndirect: case RaiserOpcode.CallHost: case RaiserOpcode.IsKind: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: {
 				slow = true;
 				break;
 			}

@@ -1615,7 +1615,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	if (combine >= 0 && d.arguments.length == combineArity) {
 		const dest = callBlock(s, node.nodeType, d.arguments, null);
 		emitCallArgs(s, dest, d.arguments);
-		emitInst(s, raiserABC(RaiserOpcode.FutureCombine, dest, 0, combine));
+		emitInst(s, raiserABC(RaiserOpcode.FutureCombine, dest, combine, d.arguments.length));
 		return dest;
 	}
 	if (asyncKind == "PromiseResolve" && d.arguments.length == 1) {

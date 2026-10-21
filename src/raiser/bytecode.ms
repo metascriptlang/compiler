@@ -193,7 +193,7 @@ export enum RaiserOpcode {
 	BrGeI64Imm,       // ABC: if R[A] >= the immediate in B pc += branchOffset(C)
 	EqVal,            // ABC: if raiserEqual(R[A], R[B]) skip C: kind and payload, a string by text
 	NeVal,            // ABC: if !raiserEqual(R[A], R[B]) skip C
-	FutureCombine,    // ABC: R[A] = a future settled from the futures in array R[A+1] by RaiserCombine C; Any fails with R[A+2]
+	FutureCombine,    // ABC: R[A] = a future settled from the futures in array R[A+1] by RaiserCombine B; Any fails with R[A+2]; C arguments
 	Box,              // ABC: R[A] (a Dyn register) = a box holding R[B], or nil when R[B] is nil
 	Unbox,            // ABC: R[A] = the value in the box R[B]; a nil box reads as nil, fatal into a Word register
 	MoveW,            // ABC: words[A] = words[B]
@@ -335,7 +335,7 @@ function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.AddrField => "dr-",
 		RaiserOpcode.LoadDeref => "xx-",
 		RaiserOpcode.StoreDeref => "x-x",
-		RaiserOpcode.Call | RaiserOpcode.CallHost => "x--",
+		RaiserOpcode.Call | RaiserOpcode.CallHost | RaiserOpcode.FutureCombine => "x--",
 		RaiserOpcode.CallIndirect => "xi-",
 		RaiserOpcode.Spawn | RaiserOpcode.Await | RaiserOpcode.FutureSettle | RaiserOpcode.FutureFail => "xx-",
 		RaiserOpcode.Sleep => "xx-",
@@ -369,7 +369,7 @@ export function operandKind(op: RaiserOpcode, slot: int32): int32 {
 }
 
 export function opHasSite(op: RaiserOpcode): boolean {
-	return op == RaiserOpcode.Call || op == RaiserOpcode.CallIndirect || op == RaiserOpcode.CallHost || op == RaiserOpcode.NewArray;
+	return op == RaiserOpcode.Call || op == RaiserOpcode.CallIndirect || op == RaiserOpcode.CallHost || op == RaiserOpcode.FutureCombine || op == RaiserOpcode.NewArray;
 }
 
 // How many registers follow A as the arguments of a site opcode: the count sits in C, or in B for NewArray.
