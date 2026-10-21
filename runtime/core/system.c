@@ -256,6 +256,21 @@ msString msStrLitConv(msString s, msString members, msString target) {
 	msRaiseStrLitError(s, target);
 }
 
+_Noreturn void msRaiseNumLitError(double v, msString target) {
+	msString shown = msNumberToString(v);
+	fprintf(stderr, "Error: invalid union conversion: %.*s is not %.*s\n", (int)shown.len, shown.p != NULL ? shown.p->data : "",
+		(int)target.len, target.p != NULL ? target.p->data : "");
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
+double msNumLitConv(double v, const double* members, int64_t n, msString target) {
+	for (int64_t i = 0; i < n; i += 1) {
+		if (members[i] == v) return v;
+	}
+	msRaiseNumLitError(v, target);
+}
+
 _Noreturn void msRaiseUnreachable(const char* text) {
 	fprintf(stderr, "Error: %s\n", text);
 	if (msFatalTrap != NULL) msFatalTrap();
