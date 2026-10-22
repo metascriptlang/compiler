@@ -99,25 +99,11 @@ function attachedOpName(op: AttachedOp): string {
 export function arrayOpElement(elem: Type | null): Type | null;
 export function arrayOpElement(elem: Readonly<Type | null>): Readonly<Type | null>;
 export function arrayOpElement(elem: Readonly<Type | null>): Readonly<Type | null> {
-	let e = elem;
-	while (e != null) {
-		const body = distinctBody(e);
-		if (body != null) {
-			e = body;
-			continue;
-		}
-		const peeled = peelTransparentInstance(e);
-		if (peeled != e) {
-			e = peeled;
-			continue;
-		}
-		if ((e.kind == TypeKind.Distinct || e.kind == TypeKind.Alias) && e.typeReturn != null) {
-			e = e.typeReturn;
-			continue;
-		}
-		return e;
-	}
-	return e;
+	if (elem == null) return null;
+	if (distinctBody(elem) != null) return arrayOpElement(distinctBody(elem));
+	if (peelTransparentInstance(elem) != elem) return arrayOpElement(peelTransparentInstance(elem));
+	if ((elem.kind == TypeKind.Distinct || elem.kind == TypeKind.Alias) && elem.typeReturn != null) return arrayOpElement(elem.typeReturn);
+	return elem;
 }
 
 export function opTypeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | null>): string {
@@ -834,7 +820,10 @@ export function shouldIndirectParam(tg: TargetInfo, declared: Readonly<Type>, is
 function paramAbiType(paramType: Type): Type | null;
 function paramAbiType(paramType: Readonly<Type>): Readonly<Type | null>;
 function paramAbiType(paramType: Readonly<Type>): Readonly<Type | null> {
-	const inner = skipModifier(paramType);
+	return abiTypeOf(skipModifier(paramType));
+}
+
+function abiTypeOf(inner: Readonly<Type | null>): Readonly<Type | null> {
 	if (inner == null) return null;
 	if (inner.kind == TypeKind.GenericInstance) return genericInstanceAbiRepr(inner);
 	if (inner.kind == TypeKind.Distinct && inner.typeReturn != null) return inner.typeReturn;
@@ -904,11 +893,11 @@ function closurePairFuncType(callee: Readonly<Node>): Readonly<Type | null> {
 	if (od.properties.length == 0) return null;
 	const fnProp = od.properties[0];
 	if (fnProp.nodeType != null && fnProp.nodeType.kind == TypeKind.Function) {
-		return fnProp.nodeType;
+		return (callee.data as ObjectLiteralData).properties[0].nodeType;
 	}
 	if (fnProp.resolvedSym != null && fnProp.resolvedSym.symbolType != null
 		&& fnProp.resolvedSym.symbolType.kind == TypeKind.Function) {
-		return fnProp.resolvedSym.symbolType;
+		return (callee.data as ObjectLiteralData).properties[0].resolvedSym.symbolType;
 	}
 	return null;
 }
@@ -923,42 +912,40 @@ export function callOverloadWinner(callNode: Readonly<Node>): number {
 function overloadWinnerFuncType(callNode: Readonly<Node>): Readonly<Type | null> {
 	const w = callOverloadWinner(callNode);
 	if (w < 0 || callNode.resolvedSym == null) return null;
-	const winner = overloadAt(callNode.resolvedSym, w);
+	return functionTypeOf(overloadAt(callNode.resolvedSym, w));
+}
+
+function functionTypeOf(winner: Readonly<Symbol>): Readonly<Type | null> {
 	if (winner.symbolType == null || winner.symbolType.kind != TypeKind.Function) return null;
 	return winner.symbolType;
 }
 
+function returnTypeOf(fn: Readonly<Type | null>): Readonly<Type | null> {
+	return fn != null ? fn.typeReturn : null;
+}
+
 export function getCalleeReturnType(callNode: Readonly<Node>): Readonly<Type | null> {
-	const winnerType = overloadWinnerFuncType(callNode);
-	if (winnerType != null) return winnerType.typeReturn;
+	if (overloadWinnerFuncType(callNode) != null) return returnTypeOf(overloadWinnerFuncType(callNode));
 	const cd = callNode.data as CallExprData;
 	if (cd.callee != null && cd.callee.nodeType != null && cd.callee.nodeType.kind == TypeKind.Function) {
-		return cd.callee.nodeType.typeReturn;
+		return (callNode.data as CallExprData).callee.nodeType.typeReturn;
 	}
-	if (callNode.resolvedSym != null && callNode.resolvedSym.symbolType != null) {
-		const st = callNode.resolvedSym.symbolType;
-		if (st.kind == TypeKind.Function) return st.typeReturn;
+	if (callNode.resolvedSym != null && callNode.resolvedSym.symbolType != null && callNode.resolvedSym.symbolType.kind == TypeKind.Function) {
+		return callNode.resolvedSym.symbolType.typeReturn;
 	}
-	const cpType = closurePairFuncType(cd.callee);
-	if (cpType != null) return cpType.typeReturn;
-	return null;
+	return returnTypeOf(closurePairFuncType((callNode.data as CallExprData).callee));
 }
 
 export function getCalleeFuncType(callNode: Readonly<Node>): Readonly<Type | null> {
-	const winnerType = overloadWinnerFuncType(callNode);
-	if (winnerType != null) return winnerType;
+	if (overloadWinnerFuncType(callNode) != null) return overloadWinnerFuncType(callNode);
 	const cd = callNode.data as CallExprData;
-	if (cd.callee != null && cd.callee.nodeType != null) {
-		const calleeType = peelTransparentInstance(cd.callee.nodeType);
-		if (calleeType.kind == TypeKind.Function) return calleeType;
+	if (cd.callee != null && cd.callee.nodeType != null && peelTransparentInstance(cd.callee.nodeType).kind == TypeKind.Function) {
+		return peelTransparentInstance((callNode.data as CallExprData).callee.nodeType as Readonly<Type>);
 	}
-	if (callNode.resolvedSym != null && callNode.resolvedSym.symbolType != null) {
-		const st = callNode.resolvedSym.symbolType;
-		if (st.kind == TypeKind.Function) return st;
+	if (callNode.resolvedSym != null && callNode.resolvedSym.symbolType != null && callNode.resolvedSym.symbolType.kind == TypeKind.Function) {
+		return callNode.resolvedSym.symbolType;
 	}
-	const cpType = closurePairFuncType(cd.callee);
-	if (cpType != null) return cpType;
-	return null;
+	return closurePairFuncType((callNode.data as CallExprData).callee);
 }
 
 // ===== Forward Declaration =====
@@ -1001,14 +988,24 @@ export function typeInfoSubject(type: Type | null): Type | null;
 export function typeInfoSubject(type: Readonly<Type | null>): Readonly<Type | null>;
 export function typeInfoSubject(type: Readonly<Type | null>): Readonly<Type | null> {
 	if (type == null) return null;
-	let t = peelTransparentInstance(type);
-	const nullableRef = unwrapRefNullUnion(t);
-	if (nullableRef != null) t = nullableRef;
+	return subjectBehindNullable(peelTransparentInstance(type));
+}
+
+function subjectBehindNullable(t: Readonly<Type>): Readonly<Type | null> {
+	return unwrapRefNullUnion(t) != null ? subjectBehindRef(unwrapRefNullUnion(t)) : subjectBehindRef(t);
+}
+
+function subjectBehindRef(t: Readonly<Type | null>): Readonly<Type | null> {
+	if (t == null) return null;
 	if (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) {
-		if (t.typeReturn != null) t = t.typeReturn;
-		else if (t.typeChildren.length > 0 && t.typeChildren[0] != null) t = t.typeChildren[0];
-		else return null;
+		if (t.typeReturn != null) return subjectBody(t.typeReturn);
+		if (t.typeChildren.length > 0 && t.typeChildren[0] != null) return subjectBody(t.typeChildren[0]);
+		return null;
 	}
+	return subjectBody(t);
+}
+
+function subjectBody(t: Readonly<Type>): Readonly<Type | null> {
 	if (t.kind == TypeKind.Alias && t.typeReturn != null) return typeInfoSubject(t.typeReturn);
 	if (t.kind == TypeKind.GenericInstance) return t.typeName != "" ? t : null;
 	if (t.kind != TypeKind.Struct && t.kind != TypeKind.Union) return null;
