@@ -5,8 +5,8 @@ import { ArrayLiteralData, ArrowFunctionData, CallExprData, HiddenDerefData, Hid
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
-import { SymbolFlag, hasFlag, parentClassSymOf } from "./symbol";
-import { functionSlotOf, isAtomicRef, isReadonlyView, isSendableFunction, typeCarriesRef } from "./types";
+import { SymbolFlag, findOverloadImpl, hasFlag, overloadWinner, parentClassSymOf } from "./symbol";
+import { functionSlotOf, hasGenericParams, isAtomicRef, isReadonlyView, isSendableFunction, typeCarriesRef } from "./types";
 import { constBindingInitializer } from "./constFold";
 import { DYNAMIC_IMPORT } from "./importCall";
 
@@ -184,6 +184,57 @@ function argumentEffect(arg: Node, e: Effect): EffectCause | null {
 		if (boundRoutine(a.resolvedSym) != null) return boundRoutineEffect(a.resolvedSym!, e);
 	}
 	return cause(arg, "passes a function value");
+}
+
+export function returnsView(t: Readonly<Type | null>): boolean {
+	if (t == null) return false;
+	if (t.kind == TypeKind.Borrow) return true;
+	if (t.kind == TypeKind.Union && !isReadonlyView(t)) {
+		let views = 0;
+		for (const m of t.typeChildren) {
+			if (m != null && m.kind == TypeKind.Null) continue;
+			if (!returnsView(m)) return false;
+			views += 1;
+		}
+		return views > 0;
+	}
+	return isReadonlyView(t) && t.kind != TypeKind.Span && t.kind != TypeKind.Ptr && typeCarriesRef(t);
+}
+
+// The routine type a call runs: the body the matched overload calls, because signatures share
+// their implementation's body, so a matched signature's result type does not decide.
+export function calledRoutineType(call: Node): Type | null {
+	const sym = call.resolvedSym;
+	if (sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function) {
+		const winner = overloadWinner(sym, (call.data as CallExprData).resolvedOverloadIdx);
+		const impl = hasFlag(winner, SymbolFlag.OverloadSig) ? findOverloadImpl(sym) : winner;
+		return impl != null && impl.symbolType != null ? impl.symbolType : sym.symbolType;
+	}
+	const callee = (call.data as CallExprData).callee;
+	return callee != null && callee.nodeType != null && callee.nodeType.kind == TypeKind.Function ? callee.nodeType : null;
+}
+
+export function isViewCall(call: Node): boolean {
+	if (call.kind != NodeKind.CallExpr) return false;
+	if (call.nodeType != null && call.nodeType.kind == TypeKind.Borrow) return true;
+	const t = calledRoutineType(call);
+	if (t == null || !returnsView(t.typeReturn)) return false;
+	return !hasGenericParams(t.typeReturn) || returnsView(call.nodeType);
+}
+
+export function viewCallSources(call: Node, out: Node[]): void {
+	const args = (call.data as CallExprData).arguments;
+	const t = calledRoutineType(call);
+	const formals = t != null ? t.typeChildren : null;
+	const shift = call.flags.has(NodeFlag.ExtCall) ? 1 : 0;
+	const recv = receiverOf(call);
+	const recvSink = shift == 1 && formals != null && formals.length > 0 && formals[0] != null && formals[0].kind == TypeKind.Sink;
+	if (recv != null && !recvSink) out.push(recv);
+	for (let i = 0; i < args.length; i += 1) {
+		const f = formals != null && i + shift < formals.length ? formals[i + shift] : null;
+		if (f != null && f.kind == TypeKind.Sink) continue;
+		if (args[i] != null) out.push(args[i]);
+	}
 }
 
 export function receiverOf(call: Node): Node | null {

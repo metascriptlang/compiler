@@ -32,7 +32,7 @@ import { setFlag, hasFlag, isCursorSym, SymbolFlag, findOverloadImpl } from "../
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
-import { receiverOf } from "../checker/effects";
+import { isViewCall, viewCallSources } from "../checker/effects";
 import { ANY_HEAP_SLOT, mayWrite, resetWriteEffects, stepSlot } from "./writeEffects";
 import { createDrcContext, classifyRc } from "./scope";
 import { makeCtx } from "../transform/testUtil";
@@ -69,14 +69,10 @@ function getIdentSym(node: Node): Symbol | null {
 	return null;
 }
 
-function lentSource(call: Node): Node | null {
-	const args = (call.data as CallExprData).arguments;
-	const recv = receiverOf(call);
-	return recv != null ? recv : (args.length > 0 ? args[0] : null);
-}
-
-function isLentCall(node: Node): boolean {
-	return node.kind == NodeKind.CallExpr && node.nodeType != null && node.nodeType.kind == TypeKind.Borrow;
+function lentSources(call: Node): Node[] {
+	const out: Node[] = [];
+	viewCallSources(call, out);
+	return out;
 }
 
 function lentTempInit(p: Partitions, sym: Symbol | null): Node | null {
@@ -109,9 +105,8 @@ function allRoots(p: Partitions, node: Node, result: Symbol[]): void {
 		NodeKind.SpreadExpr => allRoots(p, (node.data as SpreadExprData).spreadArg, result),
 		NodeKind.NewExpr => { for (const a of (node.data as NewExprData).newArguments) { allRoots(p, a, result); } },
 		NodeKind.CallExpr => {
-			if (isLentCall(node)) {
-				const first = lentSource(node);
-				if (first != null) allRoots(p, first, result);
+			if (isViewCall(node)) {
+				for (const a of lentSources(node)) { allRoots(p, a, result); }
 			} else if (containsPointer(node.nodeType, 0)) {
 				for (const a of (node.data as CallExprData).arguments) { allRoots(p, a, result); }
 			}
@@ -144,10 +139,9 @@ function sourceSlots(p: Partitions, node: Node, out: string[]): void {
 		NodeKind.SpreadExpr => sourceSlots(p, (node.data as SpreadExprData).spreadArg, out),
 		NodeKind.NewExpr => { for (const a of (node.data as NewExprData).newArguments) { sourceSlots(p, a, out); } },
 		NodeKind.CallExpr => {
-			if (isLentCall(node)) {
+			if (isViewCall(node)) {
 				out.push(ANY_HEAP_SLOT);
-				const first = lentSource(node);
-				if (first != null) sourceSlots(p, first, out);
+				for (const a of lentSources(node)) { sourceSlots(p, a, out); }
 			} else if (containsPointer(node.nodeType, 0)) {
 				for (const a of (node.data as CallExprData).arguments) { sourceSlots(p, a, out); }
 			}
@@ -286,9 +280,11 @@ function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
 
 		// Calls: return value is constructed → dest owns data
 		NodeKind.CallExpr | NodeKind.NewExpr => {
-			const first = isLentCall(src) ? lentSource(src) : null;
-			if (first != null) destMightOwn(p, destIdx, first);
-			else p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
+			if (isViewCall(src)) {
+				for (const a of lentSources(src)) { destMightOwn(p, destIdx, a); }
+			} else {
+				p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
+			}
 		},
 
 		// Move: explicit ownership transfer
@@ -327,7 +323,7 @@ function liveRanges(p: Partitions, node: Node | null): void {
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
 			liveRanges(p, d.initializer);
-			if (d.initializer != null && node.resolvedSym != null && isLentCall(d.initializer) && hasFlag(node.resolvedSym, SymbolFlag.HoistedCall)) {
+			if (d.initializer != null && node.resolvedSym != null && isViewCall(d.initializer) && hasFlag(node.resolvedSym, SymbolFlag.HoistedCall)) {
 				p.lentTemps.push(node.resolvedSym);
 				p.lentInits.push(d.initializer);
 			}

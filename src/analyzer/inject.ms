@@ -31,6 +31,7 @@ import {
 } from "./scope";
 import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym, skipConvDfa } from "./alias";
 import { inferCursors } from "./cursors";
+import { isViewCall, returnsView } from "../checker/effects";
 import { borrowedArgsToCopy } from "./writeEffects";
 import { cstringSource } from "../transform/native/cstringConvLower";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
@@ -298,6 +299,7 @@ function ensureDestructionIfNeeded(node: Node, dctx: DrcContext): Node {
 	// Literals are compile-time constants (no heap allocation in C).
 	const k = node.kind;
 	if (k != NodeKind.CallExpr && k != NodeKind.ObjectLiteral && k != NodeKind.ArrayLiteral && k != NodeKind.NewExpr) return node;
+	if (isViewCall(node)) return node;
 	const exprType = node.nodeType;
 	if (exprType == null) {
 		// Null type is benign for void/synthetic calls and bare-fn closure pairs (`{fn, env:null}` —
@@ -553,7 +555,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	keepOperandOrder(cd.arguments, marks, dctx);
 	// ensureDestruction on the call's return value is consolidated in processNode (Normal mode) —
 	// NOT applied to individual arguments (each nested call arg gets its own via the recursive walk).
-	if ((mode == DrcMode.SinkArg || mode == DrcMode.Consumed) && isCursorSlot(node.nodeType)) {
+	if ((mode == DrcMode.SinkArg || mode == DrcMode.Consumed) && (isCursorSlot(node.nodeType) || isViewCall(node))) {
 		return passCopyToSink(node, dctx, mode == DrcMode.SinkArg);
 	}
 	return node;
@@ -1930,7 +1932,7 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	const outerCache = dctx.cfgCache;
 	const outerResultIsCursor = dctx.resultIsCursor;
 	const fnType = ownerSym != null && ownerSym.symbolType != null && ownerSym.symbolType.kind == TypeKind.Function ? ownerSym.symbolType : funcNodeType;
-	dctx.resultIsCursor = fnType != null && fnType.kind == TypeKind.Function && isCursorSlot(fnType.typeReturn);
+	dctx.resultIsCursor = fnType != null && fnType.kind == TypeKind.Function && (isCursorSlot(fnType.typeReturn) || returnsView(fnType.typeReturn));
 
 	// Phase A: scan finally blocks for protected variables
 	dctx.finallyProtectedVars = collectFinallyVars(body);
