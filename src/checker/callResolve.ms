@@ -4053,11 +4053,12 @@ interface ContextPick {
 // candidate's own parameter, and every candidate it fits is ranked with the type it took
 // there, so the most specific fitting overload wins and a tie is an error.
 function rankContextFits(ctx: CheckerContext, callNode: Node, candSyms: Symbol[], candidates: Type[], scores: CandidateScore[],
-	args: Node[], argTypes: Type[], skipMask: boolean[], expectedType: Type | null): ContextPick {
+	args: Node[], argTypes: Type[], skipMask: boolean[], expectedType: Type | null, signatures: boolean): ContextPick {
 	let best: int32 = -1;
 	let bestScore = noMatchScore();
 	let tie = false;
 	const scored = allScored(skipMask);
+	const fitScores: CandidateScore[] = [];
 	for (let ci = 0; ci < candidates.length && ci < scores.length; ci += 1) {
 		if (isNoMatch(scores[ci])) continue;
 		const c = candidates[ci];
@@ -4065,6 +4066,8 @@ function rankContextFits(ctx: CheckerContext, callNode: Node, candSyms: Symbol[]
 		if (!contextArgsFit(ctx, args, skipMask, formals.checked)) continue;
 		const typed = typedContextArgs(args, argTypes, skipMask);
 		const score = scoreCandidateWithSkip(c.typeChildren, typed, getMinArity(c), scored, literalRelations(c.typeChildren, args, typed));
+		while (fitScores.length < ci) fitScores.push(noMatchScore());
+		fitScores.push(score);
 		if (isNoMatch(score)) continue;
 		const cmp = best < 0 ? 1 : cmpCandidates(score, bestScore, c, candidates[best]);
 		if (cmp > 0) {
@@ -4075,7 +4078,56 @@ function rankContextFits(ctx: CheckerContext, callNode: Node, candSyms: Symbol[]
 			tie = true;
 		}
 	}
+	if (signatures) {
+		const first = firstApplicable(fitScores, candidates);
+		if (first >= 0) return { index: first, tie: false };
+	}
 	return { index: best, tie };
+}
+
+function isSignatureSet(sym: Symbol): boolean {
+	if (hasFlag(sym, SymbolFlag.OverloadSig)) return true;
+	for (const o of sym.overloads) {
+		if (hasFlag(o, SymbolFlag.OverloadSig)) return true;
+	}
+	return false;
+}
+
+// TS overload signatures: the reference's `chooseOverload` takes the first signature the
+// arguments fit, first by subtype (no numeric or implicit conversion), then by
+// assignability; `reorderCandidates` moves a signature with a literal parameter type ahead
+// of the rest, each group keeping declaration order.
+function firstApplicable(scores: CandidateScore[], candidates: Type[]): int32 {
+	const order = literalSignaturesFirst(candidates, scores.length);
+	for (const ci of order) {
+		if (!isNoMatch(scores[ci]) && fitsWithoutConversion(scores[ci])) return ci;
+	}
+	for (const ci of order) {
+		if (!isNoMatch(scores[ci])) return ci;
+	}
+	return -1;
+}
+
+function literalSignaturesFirst(candidates: Type[], count: int32): int32[] {
+	const order: int32[] = [];
+	for (let ci = 0; ci < count; ci += 1) {
+		if (ci < candidates.length && hasLiteralParam(candidates[ci])) order.push(ci);
+	}
+	for (let ci = 0; ci < count; ci += 1) {
+		if (!(ci < candidates.length && hasLiteralParam(candidates[ci]))) order.push(ci);
+	}
+	return order;
+}
+
+function hasLiteralParam(fn: Type): boolean {
+	for (const p of fn.typeChildren) {
+		if (p.kind == TypeKind.StringLiteral || p.kind == TypeKind.NumberLiteral || p.kind == TypeKind.BooleanLiteral) return true;
+	}
+	return false;
+}
+
+function fitsWithoutConversion(score: CandidateScore): boolean {
+	return score.intConvMatches % 256 == 0 && score.signWideningMatches == 0 && score.convMatches == 0;
 }
 
 interface WinnerFormals {
@@ -4240,6 +4292,14 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 		}
 	}
 
+	const signatures = !implAsFallback && isSignatureSet(sym);
+	if (signatures && !skipMask.includes(true)) {
+		const first = firstApplicable(scores, candidates);
+		if (first >= 0) {
+			bestIdx = first;
+			ambiguous = false;
+		}
+	}
 	if (ambiguous) {
 		// A context-sensitive argument is typed against each overload below and
 		// decides the tie there.
@@ -4283,7 +4343,7 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	let formals = winnerFormals(ctx, callNode, candSyms[bestIdx], candidates[bestIdx], args, argTypes, skipMask, expectedType);
 	let settled = false;
 	if (skipMask.includes(true)) {
-		const pick = rankContextFits(ctx, callNode, candSyms, candidates, scores, args, argTypes, skipMask, expectedType);
+		const pick = rankContextFits(ctx, callNode, candSyms, candidates, scores, args, argTypes, skipMask, expectedType, signatures);
 		if (pick.tie) {
 			addError(ctx, `Ambiguous call to overloaded function '${sym.name}' — ${ANNOTATE_CONTEXT_ARG}`,
 				callNode.location.line, callNode.location.column);
@@ -4932,6 +4992,7 @@ function resolveExtensionOverloadIdx(ctx: CheckerContext, candidates: Type[], ar
 	let bestIdx = -1;
 	let bestScore = emptyCandidateScore();
 	let ambiguous = false;
+	const sigScores: CandidateScore[] = [];
 	const onlySkipped = skipMask.includes(true) && !skipMask.includes(false);
 	let i = 0;
 	while (i < candidates.length) {
@@ -4942,6 +5003,11 @@ function resolveExtensionOverloadIdx(ctx: CheckerContext, candidates: Type[], ar
 		if (i < recvRelations.length) countRelation(score, recvRelations[i]);
 		if (i < scopeDepths.length) {
 			score.calleeScope = scopeDepths[i];
+		}
+		const extSym = exts[i].sym;
+		if (extSym != null && hasFlag(extSym, SymbolFlag.OverloadSig)) {
+			while (sigScores.length < i) sigScores.push(noMatchScore());
+			sigScores.push(score);
 		}
 		if (bestIdx == -1) {
 			bestIdx = i;
@@ -4958,6 +5024,10 @@ function resolveExtensionOverloadIdx(ctx: CheckerContext, candidates: Type[], ar
 			}
 		}
 		i = i + 1;
+	}
+	if (sigScores.length > 0) {
+		const first = firstApplicable(sigScores, candidates);
+		if (first >= 0) return first;
 	}
 	if (ambiguous) return -2;
 	return bestIdx;
