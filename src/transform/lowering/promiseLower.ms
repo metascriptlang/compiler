@@ -25,7 +25,7 @@ import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprDa
 import { isAwaitable, awaitedType, unwrapRef, createFunction, typeDisplayName, literalBase } from "../../checker/types";
 import { TransformContext, mintSym } from "../context";
 import { promisePendingAlloc, makeRetFutAlloc, ownedCompletion } from "./asyncBridge";
-import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeRef, generatedProcSym, makeTypedIdentResolved, makeValueShareFn, makeLocalDecl, makeReturn, makeBlock, makeFnDecl, generatedFnCount, addGeneratedFn } from "../util";
+import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeRef, generatedProcSym, makeTypedIdentResolved, makeValueShareFn, makeLocalDecl, makeReturn, makeBlock, makeFnDecl, generatedFnCount, addGeneratedFn, ownedInFuture, makeFutureDropClosure } from "../util";
 
 // ===== Type-tag dispatch =====
 
@@ -209,6 +209,16 @@ function lowerPromiseSpawn(node: Node, loc: SourceLocation): Node {
 	return spawnCall;
 }
 
+// T4: a spawn future drops a result nobody took when the future is destroyed,
+// which the submit-time completion ref holds back until the task has settled.
+function dropUnreadResult(spawnCall: Node, ctx: TransformContext, loc: SourceLocation): Node {
+	const innerType = awaitedType(spawnCall.nodeType);
+	if (!ownedInFuture(innerType)) return spawnCall;
+	const call = makeCall(runtimeRef("msFutureDropUnread", loc), [spawnCall, makeFutureDropClosure(innerType, ctx, loc)], loc);
+	call.nodeType = spawnCall.nodeType;
+	return call;
+}
+
 // Promise.all(Promise<T>[]) — dispatch to typed variant per inner T.
 // Post typed-inline-storage refactor, the generic msPromiseAll reads f->value
 // as void* which truncates any struct value (msString, tuples, user structs).
@@ -253,7 +263,7 @@ export function tryLowerPromiseBuiltin(node: Node, builtinKind: string, ctx: Tra
 		return lowerPromiseThenCatchFinally(node, builtinKind, loc);
 	}
 	if (builtinKind == "PromiseResolve") return lowerPromiseResolve(node, loc, ctx);
-	if (builtinKind == "PromiseSpawn") return lowerPromiseSpawn(node, loc);
+	if (builtinKind == "PromiseSpawn") return dropUnreadResult(lowerPromiseSpawn(node, loc), ctx, loc);
 	if (builtinKind == "PromiseAll") return lowerPromiseAll(node, loc, ctx);
 	if (builtinKind == "PromisePending") return promisePendingAlloc(node);
 	if (builtinKind == "PromiseSettle" || builtinKind == "PromiseFail") return node;

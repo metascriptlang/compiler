@@ -98,10 +98,10 @@ typedef struct msFutureBase {
 	void* completionQueue;
 	void* error;          /* error payload (may be NULL even when failed) */
 	void (*valueDestructor)(void*); /* optional: frees value on destroy (combinators) */
-	/* Set by the async writer: the future owns its value, readers copy it out and
-	 * this drops whatever the slot still holds when the future is destroyed. NULL
-	 * on futures completed across threads (spawn, actor reply, doneFut): their
-	 * single reader takes the value. */
+	/* Drops whatever the slot still holds when the future is destroyed. Set by the
+	 * async writer, whose readers copy the value out, and by spawn, whose future
+	 * completes across threads: there every reader takes the value, so the drop
+	 * meets only a result nobody read. */
 	void (*valueDrop)(void* fut);
 	msFutureCb* callbacks;
 	msFutureCb* cbTail;   /* tail pointer for O(1) append */
@@ -499,10 +499,15 @@ static inline void* msFutureRead(void* fp) {
 /* Owning futures (valueDrop set). The drop routine takes the slot without the
  * finished/failed checks: an unfinished or failed future holds an empty slot. */
 static inline bool msFutureOwnsValue(void* fp) {
-	return ((msFutureBase*)fp)->valueDrop != NULL && !((msFutureBase*)fp)->failed;
+	msFutureBase* f = (msFutureBase*)fp;
+	return f->valueDrop != NULL && !f->failed && !f->crossThreadPublished;
 }
 static inline void msFutureSetValueDrop(void* fp, msClosure drop) {
 	((msFutureBase*)fp)->valueDrop = (void (*)(void*))drop.fn;
+}
+static inline void* msFutureDropUnread(void* fp, msClosure drop) {
+	((msFutureBase*)fp)->valueDrop = (void (*)(void*))drop.fn;
+	return fp;
 }
 static inline void* msFutureTakeRaw(void* fp) {
 	msFuture* f = (msFuture*)fp;

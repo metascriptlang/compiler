@@ -525,6 +525,7 @@ void msPoolShutdown(void) {
 	msFutureReleaseFlush();
 	extern bool msCompletionQueueDrainAll(void);
 	while (msCompletionQueueDrainAll()) {}
+	msOrcCollect();
 
 	free(gPool);
 	gPool = NULL;

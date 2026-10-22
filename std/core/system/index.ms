@@ -953,6 +953,9 @@ when (mscDeclaresRuntime) {
 	extern function msFutureSetValueDrop(fp: Ptr<void>, drop: () => void): void;
 
 	@compilerFunc
+	extern function msFutureDropUnread(sink fp: Ptr<void>, drop: () => void): Ptr<void>;
+
+	@compilerFunc
 	extern function msFutureTakeRaw(fp: Ptr<void>): Ptr<void>;
 
 	@compilerFunc

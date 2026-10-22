@@ -515,6 +515,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 				if (si.closure != null && isBuiltinSpawnCall(d.initializer)
 					&& stmt.resolvedSym != null
 					&& symSetContains(_awaitOnlyHandles, stmt.resolvedSym)
+					&& !symSetContains(_moduleLevelHandles, stmt.resolvedSym)
 					&& !_spawnSlotMap.has(stmt.resolvedSym)) {
 					const innerType = getAwaitInnerType(d.initializer);
 					const stmts: Node[] = [];
@@ -522,22 +523,18 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 					// const $slot = msAwaitSlotCreate(1);
 					const slot = makeTempDecl(ctx, "sl", makeCall(runtimeRef("msAwaitSlotCreate", loc), [makeNumber(1, loc)], loc), VOID_PTR_TYPE, loc);
 					stmts.push(slot.decl);
-					let joined: Symbol | null = null;
-					if (!symSetContains(_moduleLevelHandles, stmt.resolvedSym)) {
-						const flag = makeTempDecl(ctx, "joined", makeBool(false, loc), booleanType(), loc);
-						(flag.decl.data as VariableDeclData).declKind = DeclKind.Let;
-						stmts.push(flag.decl);
-						joined = flag.sym;
-					}
+					const flag = makeTempDecl(ctx, "joined", makeBool(false, loc), booleanType(), loc);
+					(flag.decl.data as VariableDeclData).declKind = DeclKind.Let;
+					stmts.push(flag.decl);
 					// msSpawnSlotSubmit($slot, 0, closure);
 					const task = bindTask(ctx, si.closure!, loc);
 					const taskSym = task != null ? task!.sym : null;
 					if (task != null) stmts.push(task!.decl);
 					stmts.push(makeExprStmt(
 						makeCall(runtimeRef("msSpawnSlotSubmit", loc), [slot.ident, makeNumber(0, loc), task != null ? task!.ident : si.closure!], loc), loc));
-					if (joined != null) stmts.push(settleOnExit(slot.sym, joined!, taskSym, loc));
+					stmts.push(settleOnExit(slot.sym, flag.sym, taskSym, loc));
 					// Register for later `await h` lookup
-					_spawnSlotMap.set(stmt.resolvedSym, { slotIdent: slot.ident, task: taskSym, innerType, joined });
+					_spawnSlotMap.set(stmt.resolvedSym, { slotIdent: slot.ident, task: taskSym, innerType, joined: flag.sym });
 					return stmts;  // Original VarDecl is eliminated (h is never emitted)
 				}
 			}
