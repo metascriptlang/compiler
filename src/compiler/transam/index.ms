@@ -159,6 +159,7 @@ export class TransAmDb {
 
 interface BoundCheck {
 	revision: int32;
+	inputHash: number;
 	unit: BoundModule;
 }
 
@@ -615,7 +616,7 @@ function checkMacroDeps(db: TransAmDb, filePath: string, imports: ImportEntry[])
 }
 
 function bindUncheckedModule(db: TransAmDb, modulePath: string): void {
-	if (boundAtRevision(db, modulePath) != null || dbCheckIsCurrent(db, modulePath)) return;
+	if (boundInputsUnchanged(db, modulePath) || dbCheckIsCurrent(db, modulePath)) return;
 	const held = lookupModuleCtx(modulePath);
 	if (held != null && held.exportRegistry != db.exportRegistry || sharedPreludeOwns(db.preludeCtx, modulePath)) return;
 	const outerDb = _checkingDb;
@@ -642,6 +643,30 @@ function dbRegisterMacroExpandedExports(db: TransAmDb, filePath: string, imports
 	updateModuleExports(db.exportRegistry, filePath, collectExports(ctx, filePath));
 }
 
+function boundInputsUnchanged(db: TransAmDb, filePath: string): boolean {
+	const entry = db.bound.get(filePath);
+	if (entry == null) return false;
+	return entry.revision == db.revision.value || entry.inputHash == bindInputHash(db, filePath);
+}
+
+function bindInputHash(db: TransAmDb, filePath: string): number {
+	let h: number = 0;
+	const seen = new HashSet<int32>();
+	const pending: int32[] = [getFileId(db.fileInput, filePath)];
+	while (pending.length > 0) {
+		const fileId = pending.pop()!;
+		if (fileId < 0 || seen.has(fileId)) continue;
+		seen.add(fileId);
+		for (const kind of [TaQueryKind.Parse, TaQueryKind.TypeCheck]) {
+			const entry = cacheGet(db.cache, createQueryKey(kind, fileId));
+			h = (h * 31 + fileId) % 2147483647;
+			h = (h * 31 + (entry != null ? entry.outputHash : 0)) % 2147483647;
+		}
+		for (const depId of getDirectImports(db.moduleDeps, fileId)) pending.push(depId);
+	}
+	return h;
+}
+
 function boundAtRevision(db: TransAmDb, filePath: string): BoundModule | null {
 	const entry = db.bound.get(filePath);
 	return entry != null && entry.revision == db.revision.value ? entry.unit : null;
@@ -664,7 +689,7 @@ function dbBindModule(db: TransAmDb, filePath: string, program: Node, imports: I
 		earlyAdoptions(db, filePath, program),
 		true
 	);
-	if (!checkCancel(db.cancelCtx, startVersion)) db.bound.set(filePath, { revision: db.revision.value, unit });
+	if (!checkCancel(db.cancelCtx, startVersion)) db.bound.set(filePath, { revision: db.revision.value, inputHash: bindInputHash(db, filePath), unit });
 	return unit;
 }
 
