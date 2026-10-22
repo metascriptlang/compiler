@@ -2083,6 +2083,8 @@ export function cmpCandidates(a: CandidateScore, b: CandidateScore,
 		// 8. complexDisambiguation — genericness depth (Phase 5, stubbed)
 		result = complexDisambiguation(candidateTypeA, candidateTypeB);
 		if (result != 0) return result;
+		result = checkUnionSpecialization(candidateTypeA, candidateTypeB);
+		if (result != 0) return result;
 	}
 	// 9. Scope depth (higher = inner scope = preferred)
 	result = a.calleeScope - b.calleeScope;
@@ -2115,6 +2117,30 @@ export function checkGenericSpecialization(typeA: Type, typeB: Type): number {
 	if (aWins > 0 && bWins == 0) return 1;
 	if (bWins > 0 && aWins == 0) return -1;
 	return 0; // contradiction or equal
+}
+
+// checkGeneric's cross-test for union formals, which the reference types as `A | B`
+// typeclasses: a union that fits inside the other candidate's formal, and not the
+// reverse, is the more specific overload (`"a" | "b"` over `string`).
+export function checkUnionSpecialization(typeA: Type, typeB: Type): number {
+	if (typeA.kind != TypeKind.Function || typeB.kind != TypeKind.Function) return 0;
+	if (typeA.typeChildren.length != typeB.typeChildren.length) return 0;
+	let winner = 0;
+	for (let i = 0; i < typeA.typeChildren.length; i += 1) {
+		const pA = typeA.typeChildren[i];
+		const pB = typeB.typeChildren[i];
+		if (pA == null || pB == null || (pA.kind != TypeKind.Union && pB.kind != TypeKind.Union)) continue;
+		const aFitsB = typeRelation(pB, pA) != TypeRelation.None;
+		const bFitsA = typeRelation(pA, pB) != TypeRelation.None;
+		if (aFitsB && !bFitsA) {
+			if (winner < 0) return 0;
+			winner = 1;
+		} else if (bFitsA && !aFitsB) {
+			if (winner > 0) return 0;
+			winner = -1;
+		}
+	}
+	return winner;
 }
 
 // Count generic nesting depth of a type (Standard reference implementation).
