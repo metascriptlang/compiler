@@ -4406,9 +4406,8 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 			unifyType(formal, ancestor, bindings);
 			return;
 		}
-		if (formal.typeExtra != null) {
-			unifyType(formal.typeExtra, concrete, bindings);
-		}
+		const members = positionalFieldsOf(formal);
+		if (members != null) unifyType(members, concrete, bindings);
 		return;
 	}
 	if (formal.kind == TypeKind.Struct && concrete.kind == TypeKind.GenericInstance) {
