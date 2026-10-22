@@ -85,19 +85,13 @@ export interface SgSignatureInfo {
 // Cost: O(nodes in the file). Acceptable at hover latency targets; the
 // cursor is a single position and the walker short-circuits on the first hit.
 
-let _callExprWalkDepth: int32 = 0;
-const CALL_EXPR_WALK_LIMIT: int32 = 200;
-
 export function sgFindCallExprByCalleeLocation(program: Node, line: int32, col: int32): Node | null {
 	if (program == null) return null;
-	_callExprWalkDepth = 0;
 	return findCallExprHelper(program, line, col);
 }
 
 function findCallExprHelper(node: Node, line: int32, col: int32): Node | null {
 	if (node == null) return null;
-	if (_callExprWalkDepth >= CALL_EXPR_WALK_LIMIT) return null;
-	_callExprWalkDepth = _callExprWalkDepth + 1;
 	if (node.kind == NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;
 		if (cd.callee != null && cd.callee.location != null
@@ -3881,4 +3875,16 @@ test "empty line inside NESTED ObjectLiteral triggers ObjectField" {
 	const obj = findEnclosingObjectLiteral(pr.value, 4, 1);
 	assert obj != null;
 	assert sgDetectCompletionContext(pr.value, 4, 1) == SgCompletionKind.ObjectField;
+}
+
+test "call lookup finds a callee after many visited nodes" {
+	let src = "";
+	for (let i = 0; i < 300; i++) {
+		src = src + "const v" + i.toString() + " = " + i.toString() + ";\n";
+	}
+	src = src + "area(1);";
+	const pr = parseSource(src);
+	if (!pr.ok) { assert false; return; }
+	const call = sgFindCallExprByCalleeLocation(pr.value, 301, 1);
+	assert call != null;
 }
