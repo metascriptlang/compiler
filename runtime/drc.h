@@ -42,9 +42,9 @@
 /* ===== Reference Header ===== */
 
 typedef struct {
-	_Atomic(int32_t) rc;     /* Reference count (0 = unique, >0 = shared). Atomic for thread safety. */
-	int32_t rootIdx;         /* ORC rootset index (-1 = not registered) */
+	_Atomic(intptr_t) rc;    /* Reference count (0 = unique, >0 = shared). Atomic for thread safety. */
 	const msTypeInfo* type;  /* RTTI (NULL for untyped allocs) */
+	int32_t rootIdx;         /* ORC rootset index (-1 = not registered) */
 	uint32_t allocSize;      /* Total allocation size (header + payload) — for slab recycling */
 } msRefHeader;
 
@@ -272,7 +272,7 @@ static inline bool msDecRefIsLast(void* p) {
 	 * rc starts at 0 from msAlloc. (rc & ~MS_RC_MASK)==0 means sole owner.
 	 * Under --gc=drc, MS_RC_MASK=0 so this reduces to h->rc==0. */
 	if ((h->rc & ~MS_RC_MASK) != 0) {
-		int32_t before = atomic_fetch_sub(&h->rc, MS_RC_INCREMENT);
+		intptr_t before = atomic_fetch_sub(&h->rc, MS_RC_INCREMENT);
 		bool concurrentDecrefLeftUsLast = (before & ~MS_RC_MASK) == 0;
 		if (!concurrentDecrefLeftUsLast) return false;
 		h->rc += MS_RC_INCREMENT;
@@ -290,7 +290,7 @@ static inline bool msDecRefIsLast(void* p) {
  * through the cycle collector even under --gc=orc. */
 static inline bool msAtomicDecRefIsLast(void* p) {
 	if (p == NULL) return false;
-	int32_t old = atomic_fetch_sub_explicit(&msHeader(p)->rc, MS_RC_INCREMENT, memory_order_release);
+	intptr_t old = atomic_fetch_sub_explicit(&msHeader(p)->rc, MS_RC_INCREMENT, memory_order_release);
 	if ((old & ~MS_RC_MASK) == MS_RC_INCREMENT) {
 		atomic_thread_fence(memory_order_acquire);
 		return true;
@@ -414,8 +414,8 @@ typedef struct {
 	msCellSeq toFree;
 	int32_t freed;
 	int32_t touched;
-	int32_t edges;
-	int32_t rcSum;
+	intptr_t edges;
+	intptr_t rcSum;
 	bool keepThreshold;
 } msGcEnv;
 
