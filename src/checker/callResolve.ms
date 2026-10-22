@@ -5873,7 +5873,7 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 				addError(ctx, "'" + d.property + "' mutates its receiver, and " + typeDisplayName(objType) + " is a read-only view (PARALOCK E24)", node.location.line, node.location.column);
 			}
 			if (!ext.isStatic && isReadonlyView(objType) && !arrayView
-					&& !(extFnT.typeChildren.length > 0 && isReadonlyView(extFnT.typeChildren[0]))) {
+					&& !(extFnT.typeChildren.length > 0 && (isReadonlyView(extFnT.typeChildren[0]) || extFnT.typeChildren[0].kind == TypeKind.GenericParam))) {
 				refuseReadonlyViewCall(ctx, node, d.property, objType, extReceiverDisplay(ext));
 			}
 			if (!ext.isStatic && extFnT.typeChildren.length > 0) {
