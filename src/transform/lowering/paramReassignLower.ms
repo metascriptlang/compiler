@@ -19,7 +19,7 @@ import {
 	Node, NodeKind, DeclKind, Symbol, SymbolKind, TypeKind,
 	FunctionDeclData, MethodDeclData, ConstructorDeclData,
 	ArrowFunctionData, FunctionExprData,
-	BinaryExprData, UpdateExprData, IdentifierData, HiddenDerefData, CallExprData, OutExprData,
+	BinaryExprData, UpdateExprData, IdentifierData, HiddenDerefData, CallExprData, OutExprData, ReturnStmtData,
 } from "../../ast/node";
 import { TransformContext, freshOwnedSym } from "../context";
 import { walkNode, mapChildren } from "../walker";
@@ -84,6 +84,13 @@ function collectAssigned(n: Node, params: string[], out: Symbol[]): void {
 	if (n.kind == NodeKind.ArrowFunction) {
 		const ad = n.data as ArrowFunctionData;
 		if (ad.arrowBody == null || ad.arrowBody.kind != NodeKind.BlockStmt) return;
+	}
+	if (n.kind == NodeKind.ReturnStmt) {
+		const arg = (n.data as ReturnStmtData).argument;
+		if (arg != null && arg.kind == NodeKind.HiddenAddr) {
+			collectAssigned((arg.data as HiddenDerefData).expr, params, out);
+			return;
+		}
 	}
 	if (n.kind == NodeKind.BinaryExpr) {
 		const bd = n.data as BinaryExprData;
