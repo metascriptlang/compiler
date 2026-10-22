@@ -4079,7 +4079,7 @@ function rankContextFits(ctx: CheckerContext, callNode: Node, candSyms: Symbol[]
 		}
 	}
 	if (signatures) {
-		const first = firstApplicable(fitScores, candidates);
+		const first = firstApplicable(fitScores, candSyms);
 		if (first >= 0) return { index: first, tie: false };
 	}
 	return { index: best, tie };
@@ -4095,10 +4095,10 @@ function isSignatureSet(sym: Symbol): boolean {
 
 // TS overload signatures: the reference's `chooseOverload` takes the first signature the
 // arguments fit, first by subtype (no numeric or implicit conversion), then by
-// assignability; `reorderCandidates` moves a signature with a literal parameter type ahead
-// of the rest, each group keeping declaration order.
-function firstApplicable(scores: CandidateScore[], candidates: Type[]): int32 {
-	const order = literalSignaturesFirst(candidates, scores.length);
+// assignability; `reorderCandidates` moves a signature with a parameter written as a
+// literal type ahead of the rest, each group keeping declaration order.
+function firstApplicable(scores: CandidateScore[], syms: Symbol[]): int32 {
+	const order = literalSignaturesFirst(syms, scores.length);
 	for (const ci of order) {
 		if (!isNoMatch(scores[ci]) && fitsWithoutConversion(scores[ci])) return ci;
 	}
@@ -4108,22 +4108,39 @@ function firstApplicable(scores: CandidateScore[], candidates: Type[]): int32 {
 	return -1;
 }
 
-function literalSignaturesFirst(candidates: Type[], count: int32): int32[] {
+function literalSignaturesFirst(syms: Symbol[], count: int32): int32[] {
 	const order: int32[] = [];
 	for (let ci = 0; ci < count; ci += 1) {
-		if (ci < candidates.length && hasLiteralParam(candidates[ci])) order.push(ci);
+		if (ci < syms.length && writesLiteralParam(syms[ci])) order.push(ci);
 	}
 	for (let ci = 0; ci < count; ci += 1) {
-		if (!(ci < candidates.length && hasLiteralParam(candidates[ci]))) order.push(ci);
+		if (!(ci < syms.length && writesLiteralParam(syms[ci]))) order.push(ci);
 	}
 	return order;
 }
 
-function hasLiteralParam(fn: Type): boolean {
-	for (const p of fn.typeChildren) {
-		if (p.kind == TypeKind.StringLiteral || p.kind == TypeKind.NumberLiteral || p.kind == TypeKind.BooleanLiteral) return true;
+// The reference reads the written annotation, so `x: "a"` counts and an alias of a
+// literal type does not.
+function writesLiteralParam(sym: Symbol): boolean {
+	if (sym.declNode == null || sym.declNode.kind != NodeKind.FunctionDecl) return false;
+	for (const text of (sym.declNode.data as FunctionDeclData).fnParamTypes) {
+		if (isLiteralTypeText(text.trim())) return true;
 	}
 	return false;
+}
+
+function isLiteralTypeText(t: string): boolean {
+	if (t.length == 0 || splitTopLevel(t, "|").length > 1 || splitTopLevel(t, "&").length > 1) return false;
+	if (t == "true" || t == "false" || t == "null") return true;
+	const first = t.charAt(0);
+	if (first == "\"" || first == "'" || first == "`") return t.length >= 2 && t.charAt(t.length - 1) == first && !t.includes("${");
+	const digits = first == "-" ? t.slice(1, t.length).trim() : t;
+	if (digits.length == 0 || digits.byteAt(0) < "0".code || digits.byteAt(0) > "9".code) return false;
+	for (let i = 0; i < digits.length; i += 1) {
+		const ch = digits.charAt(i);
+		if (!(ch >= "0" && ch <= "9") && !"._xXoObBeEnN+-abcdefABCDEF".includes(ch)) return false;
+	}
+	return true;
 }
 
 function fitsWithoutConversion(score: CandidateScore): boolean {
@@ -4294,7 +4311,7 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 
 	const signatures = !implAsFallback && isSignatureSet(sym);
 	if (signatures && !skipMask.includes(true)) {
-		const first = firstApplicable(scores, candidates);
+		const first = firstApplicable(scores, candSyms);
 		if (first >= 0) {
 			bestIdx = first;
 			ambiguous = false;
@@ -5027,7 +5044,13 @@ function resolveExtensionOverloadIdx(ctx: CheckerContext, candidates: Type[], ar
 		i = i + 1;
 	}
 	if (sigScores.length > 0) {
-		const first = firstApplicable(sigScores, candidates);
+		const extSyms: Symbol[] = [];
+		for (const e of exts) {
+			const es = e.sym;
+			if (es == null) break;
+			extSyms.push(es);
+		}
+		const first = firstApplicable(sigScores, extSyms);
 		if (first >= 0) return first;
 	}
 	if (ambiguous) return -2;
