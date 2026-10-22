@@ -1,7 +1,7 @@
 // Effects are read from checked bodies, and a callee later in the module is not
 // checked yet where its caller is: queue a check with deferEffectCheck.
 
-import { ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, PropertyDeclData, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, VariableDeclData } from "../ast/node";
+import { ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, PropertyDeclData, Symbol, SymbolKind, Type, TryExprData, TypeAssertionData, TypeKind, VariableDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
@@ -41,6 +41,11 @@ let paramStoreTables: EffectTable[] = [];
 let viewSyms: Symbol[] = [];
 let viewParams: string[] = [];
 let forOfSources = new HashMap<Symbol, Node>();
+let assignedSources = new HashMap<Symbol, Node[]>();
+let heldSources = new HashMap<Symbol, Node[]>();
+let flowScanned: Node[] = [];
+let resolving: Symbol[] = [];
+const UNFOLLOWED = "a value the checker cannot follow";
 let assumedOpen = false;
 let inAsync = false;
 let ownParams: string[] = [];
@@ -83,6 +88,9 @@ export function runDeferredEffectChecks(ctx: CheckerContext): void {
 	sharedConstTable = emptyTable();
 	paramStoreTables = [];
 	forOfSources = new HashMap<Symbol, Node>();
+	assignedSources = new HashMap<Symbol, Node[]>();
+	heldSources = new HashMap<Symbol, Node[]>();
+	flowScanned = [];
 }
 
 function isUncheckedGeneric(sym: Symbol): boolean {
@@ -148,6 +156,7 @@ function walkRoutine(decl: Node | null, e: Effect, views: string[] = []): Effect
 	inAsync = isAsyncFunctionNode(decl);
 	viewSyms = [];
 	viewParams = views;
+	if (e == Effect.StoresBorrowed) scanFlows(routineBody(decl));
 	const c = walkEffect(routineBody(decl), e);
 	ownParams = outer;
 	inAsync = outerAsync;
@@ -161,6 +170,7 @@ export function walkWithViews(node: Node, e: Effect, views: Symbol[]): EffectCau
 	const outerParams = viewParams;
 	viewSyms = views;
 	viewParams = [];
+	if (e == Effect.StoresBorrowed) scanFlows(node);
 	const c = walkEffect(node, e);
 	viewSyms = outerSyms;
 	viewParams = outerParams;
@@ -511,43 +521,178 @@ export function walkEffect(node: Node | null, e: Effect): EffectCause | null {
 // reads, a view call's sources and a local const or for-of binding: a module const every thread
 // shares, or a view of what the task borrows. Storing it into an owning slot takes a count on it.
 function borrowedOf(value: Node | null): string | null {
-	if (value == null || holdsNoCount(value.nodeType)) return null;
+	if (value == null) return null;
 	const n = peelConv(value);
 	if (!typeCarriesRef(n.nodeType) || isAtomicRef(n.nodeType)) return null;
 	return match (n.kind) {
 		NodeKind.ConditionalExpr => borrowedOf((n.data as ConditionalExprData).ternaryConsequent) ?? borrowedOf((n.data as ConditionalExprData).ternaryAlternate),
-		NodeKind.BinaryExpr => (n.data as BinaryExprData).operator == "??" ? borrowedOf((n.data as BinaryExprData).left) ?? borrowedOf((n.data as BinaryExprData).right) : null,
+		NodeKind.BinaryExpr => binaryBorrow(n),
 		NodeKind.TypeAssertion => borrowedOf((n.data as TypeAssertionData).asExpr),
-		NodeKind.MemberExpr => borrowedOf((n.data as MemberExprData).object),
-		NodeKind.ArrayAccess => borrowedOf((n.data as ArrayAccessData).array),
-		NodeKind.CallExpr => viewCallBorrow(n),
+		NodeKind.HiddenSubConv => borrowedOf((n.data as HiddenStdConvData).convExpr),
+		NodeKind.HiddenAddr => borrowedOf((n.data as HiddenDerefData).expr),
+		NodeKind.MoveExpr => borrowedOf((n.data as MoveExprData).moveArg),
+		NodeKind.TryExpr => borrowedOf((n.data as TryExprData).tryArg),
+		NodeKind.MatchExpr => matchBorrow(n),
+		NodeKind.MemberExpr => borrowedOf((n.data as MemberExprData).object) ?? heldBorrow((n.data as MemberExprData).object),
+		NodeKind.ArrayAccess => borrowedOf((n.data as ArrayAccessData).array) ?? heldBorrow((n.data as ArrayAccessData).array),
+		NodeKind.CallExpr => callBorrow(n),
 		NodeKind.Identifier => bindingBorrow(n, value),
-		_ => null,
+		NodeKind.ArrowFunction | NodeKind.FunctionExpr => capturedBorrow(n),
+		NodeKind.NewExpr | NodeKind.ArrayLiteral | NodeKind.ObjectLiteral | NodeKind.AwaitExpr | NodeKind.StringLiteral | NodeKind.NullLiteral
+			| NodeKind.NumberLiteral | NodeKind.BooleanLiteral | NodeKind.BigIntLiteral | NodeKind.RegexLiteral | NodeKind.UnaryExpr | NodeKind.UpdateExpr | NodeKind.SizeofExpr => null,
+		_ => unfollowed(),
 	};
 }
 
-function viewCallBorrow(call: Node): string | null {
-	if (!isViewCall(call)) return null;
-	const sources: Node[] = [];
-	viewCallSources(call, sources);
-	for (const s of sources) {
-		const b = borrowedOf(s);
+function viewsInScope(): boolean {
+	return viewSyms.length > 0 || viewParams.length > 0;
+}
+
+function unfollowed(): string | null {
+	return viewsInScope() ? UNFOLLOWED : null;
+}
+
+function binaryBorrow(n: Node): string | null {
+	const d = n.data as BinaryExprData;
+	if (d.operator == "??" || d.operator == "||" || d.operator == "&&") return borrowedOf(d.left) ?? borrowedOf(d.right);
+	return d.operator == "=" ? borrowedOf(d.right) : unfollowed();
+}
+
+function matchBorrow(n: Node): string | null {
+	for (const c of (n.data as MatchExprData).matchCases) {
+		const b = borrowedOf((c.data as MatchCaseData).caseBody);
 		if (b != null) return b;
 	}
 	return null;
+}
+
+// A call returns what the task borrows when it is a view call over a borrowed source, or when its
+// result does not own and a receiver, a local container it reads or an argument is borrowed; an
+// owning result is a fresh value whatever the call reads.
+function callBorrow(call: Node): string | null {
+	if (isViewCall(call)) {
+		const sources: Node[] = [];
+		viewCallSources(call, sources);
+		return firstBorrow(sources);
+	}
+	if (!isReadonlyView(call.nodeType) && !holdsNoCountResult(call.nodeType)) return null;
+	const recv = receiverOf(call);
+	const viewed = recv != null ? borrowedOf(recv) ?? heldBorrow(recv) : null;
+	return viewed ?? firstBorrow((call.data as CallExprData).arguments);
+}
+
+function holdsNoCountResult(t: Type | null): boolean {
+	if (t == null) return false;
+	if (holdsNoCount(t)) return true;
+	if (t.kind != TypeKind.Union) return false;
+	for (const m of t.typeChildren) {
+		if (holdsNoCount(m)) return true;
+	}
+	return false;
+}
+
+function capturedBorrow(fn: Node): string | null {
+	const hit: (string | null)[] = [null];
+	const visit = (node: Node): void => {
+		if (hit[0] != null) return;
+		if (node.kind == NodeKind.Identifier && node.resolvedSym != null && isViewRoot(node.resolvedSym!)) hit[0] = "the view '" + node.resolvedSym!.name + "'";
+		forEachChild(node, visit);
+	};
+	forEachChild(fn, visit);
+	return hit[0];
+}
+
+function isViewRoot(sym: Symbol): boolean {
+	return viewSyms.includes(sym) || (viewParams.includes(sym.name) && (sym.symbolKind == SymbolKind.Parameter || sym.name == "this"));
+}
+
+function isLocalBinding(sym: Symbol | null): boolean {
+	return sym != null && (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Parameter) && !hasFlag(sym, SymbolFlag.Global);
 }
 
 function bindingBorrow(n: Node, value: Node): string | null {
 	const sym = n.resolvedSym;
 	if (sym == null) return null;
 	if (isImmutableModuleConst(sym)) return "the module const '" + sym.name + "'";
-	if (viewSyms.includes(sym) || (sym.symbolKind == SymbolKind.Parameter && viewParams.includes(sym.name))) return "the view '" + sym.name + "'";
-	if (sym.symbolKind != SymbolKind.Variable || hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.Mutable)) return null;
+	if (isViewRoot(sym)) return "the view '" + sym.name + "'";
+	if (!isLocalBinding(sym) || resolving.includes(sym)) return null;
+	resolving.push(sym);
+	const b = localBorrow(sym, value);
+	resolving.pop();
+	return b;
+}
+
+function localBorrow(sym: Symbol, value: Node): string | null {
 	const iterated = forOfSources.get(sym);
-	if (iterated != null) return borrowedOf(iterated);
+	if (iterated != null) {
+		const b = borrowedOf(iterated) ?? heldBorrow(iterated);
+		if (b != null) return b;
+	}
 	const decl = sym.declNode;
 	const bound = decl != null && decl.kind == NodeKind.VariableDecl ? (decl.data as VariableDeclData).initializer : null;
-	return bound != null && bound != value ? borrowedOf(bound) : null;
+	if (bound != null && bound != value) {
+		const b = borrowedOf(bound);
+		if (b != null) return b;
+	}
+	return firstBorrow(assignedSources.get(sym));
+}
+
+// What a local container holds: every element store and every argument of a call on it.
+function heldBorrow(container: Node | null): string | null {
+	const root = container != null ? pathRoot(container) : null;
+	if (root == null || !isLocalBinding(root) || resolving.includes(root)) return null;
+	resolving.push(root);
+	const b = firstBorrow(heldSources.get(root));
+	resolving.pop();
+	return b;
+}
+
+function firstBorrow(sources: Node[] | null): string | null {
+	if (sources == null) return null;
+	for (const v of sources) {
+		const b = borrowedOf(v);
+		if (b != null) return b;
+	}
+	return null;
+}
+
+function pathRoot(n: Node): Symbol | null {
+	let cur = peelConv(n);
+	while (cur.kind == NodeKind.MemberExpr || cur.kind == NodeKind.ArrayAccess) {
+		cur = peelConv(cur.kind == NodeKind.MemberExpr ? (cur.data as MemberExprData).object : (cur.data as ArrayAccessData).array);
+	}
+	return cur.kind == NodeKind.Identifier ? cur.resolvedSym : null;
+}
+
+function addSource(table: HashMap<Symbol, Node[]>, sym: Symbol, value: Node): void {
+	const known = table.get(sym);
+	if (known != null) known.push(value);
+	else table.set(sym, [value]);
+}
+
+function scanFlows(node: Node | null): void {
+	if (node == null || flowScanned.includes(node)) return;
+	flowScanned.push(node);
+	const visit = (n: Node): void => {
+		if (n.kind == NodeKind.BinaryExpr && (n.data as BinaryExprData).operator == "=" && (n.data as BinaryExprData).left != null) {
+			const d = n.data as BinaryExprData;
+			const left = peelConv(d.left);
+			if (left.kind == NodeKind.Identifier && isLocalBinding(left.resolvedSym)) addSource(assignedSources, left.resolvedSym!, d.right);
+			else if (left.kind == NodeKind.ArrayAccess) {
+				const root = pathRoot(left);
+				if (isLocalBinding(root)) addSource(heldSources, root!, peelConv(d.right));
+			}
+		}
+		if (n.kind == NodeKind.CallExpr) {
+			const recv = receiverOf(n);
+			const root = recv != null ? pathRoot(recv) : null;
+			if (isLocalBinding(root)) {
+				for (const a of (n.data as CallExprData).arguments) addSource(heldSources, root!, peelConv(a));
+			}
+		}
+		forEachChild(n, visit);
+	};
+	visit(node);
 }
 
 function storeCause(site: Node, what: string, into: string): EffectCause {
@@ -601,22 +746,30 @@ function sinkStoreOf(call: Node): EffectCause | null {
 	return null;
 }
 
-// A callee reached with a borrowed argument stores it when its body stores that parameter, as the
-// task would store the argument itself.
+// A callee reached with a borrowed argument stores it when its body, or the body of an override
+// the call may dispatch to, stores that parameter, as the task would store the argument itself.
 function viewArgEffect(call: Node): EffectCause | null {
 	const sym = call.resolvedSym;
 	if (!isRoutine(sym)) return null;
-	const decl = unpackDecl(sym!.declNode);
-	if (decl == null || routineBody(decl) == null) return null;
-	const params = routineParams(decl);
 	const shift = call.flags.has(NodeFlag.ExtCall) ? 1 : 0;
 	const passed: (Node | null)[] = shift == 1 ? [receiverOf(call)] : [];
 	for (const a of (call.data as CallExprData).arguments) passed.push(a);
-	for (let i = 0; i < passed.length && i < params.length; i += 1) {
+	const callee = (call.data as CallExprData).callee;
+	const name = callee != null && callee.kind == NodeKind.MemberExpr ? (callee.data as MemberExprData).property : sym!.name;
+	const targets: Symbol[] = [sym!];
+	const entry = dispatchEntryFor(sym!);
+	if (entry != null && !entry.overloaded) {
+		for (const o of dispatchOverridesFor(entry.classSym, entry.methodName)) targets.push(o.sym);
+	}
+	for (let i = 0; i < passed.length; i += 1) {
 		const what = borrowedOf(passed[i]);
 		if (what == null) continue;
-		const c = paramStoreEffect(sym!, decl, i, params[i]);
-		if (c != null) return through(call, "passes " + what + " to '" + sym!.name + "'", c);
+		for (const t of targets) {
+			const decl = unpackDecl(t.declNode);
+			const params = decl != null && routineBody(decl) != null ? routineParams(decl) : [];
+			const c = i < params.length ? paramStoreEffect(t, decl!, i, params[i]) : null;
+			if (c != null) return through(call, "passes " + what + " to '" + name + "'", c);
+		}
 	}
 	return null;
 }

@@ -690,13 +690,19 @@ function spawnEffectOf(fn: Node, e: Effect, views: Symbol[] = []): EffectCause |
 	if (bound == null) return null;
 	const declared = peelHidden(bound);
 	const isRoutine = declared.kind == NodeKind.FunctionDecl || declared.kind == NodeKind.ArrowFunction || declared.kind == NodeKind.FunctionExpr;
-	return isRoutine ? walkEffect(declared, e) : null;
+	return isRoutine ? walkWithViews(declared, e, views) : null;
+}
+
+function spawnedClosure(fn: Node): Node {
+	if (fn.kind != NodeKind.Identifier || fn.resolvedSym == null || fn.resolvedSym!.symbolKind == SymbolKind.Function) return fn;
+	const bound = constBindingInitializer(fn.resolvedSym);
+	return bound != null ? peelHidden(bound) : fn;
 }
 
 function requireSpawnSafe(ctx: CheckerContext, fn: Node, runs: string, at: Node): void {
 	const views: Symbol[] = [];
 	const moved: Symbol[] = [];
-	collectBorrowCaptures(ctx, peelHidden(fn), views, moved);
+	collectBorrowCaptures(ctx, spawnedClosure(peelHidden(fn)), views, moved);
 	const borrowed = views.filter((v: Symbol): boolean => !moved.includes(v));
 	deferEffectCheck(at, "spawnSafe", (ctx: CheckerContext): void => {
 		const stored = spawnEffectOf(peelHidden(fn), Effect.StoresBorrowed, borrowed);
