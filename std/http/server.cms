@@ -667,7 +667,11 @@ function wireDispatcherWake(): void {
 	if (wakeFd >= 0) msIoEngineAddWakeFd_ms(wakeFd);
 }
 
-function driveWithSweep(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listenFd: int32, clients: ClientState[]): void {
+// The accept loop of one serving thread; it marks its own end so the thread drives the loop's
+// cancelled accept to completion before it returns.
+class AcceptLoop { ended: boolean = false; }
+
+function driveWithSweep(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listenFd: int32, clients: ClientState[], loop: AcceptLoop): void {
 	wireDispatcherWake();
 	let sweepTick: int32 = 0;
 	while (isRunning(run)) {
@@ -679,10 +683,11 @@ function driveWithSweep(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listen
 		}
 	}
 	// Stopped: end the accept, close the connections that wait for a next
-	// request, and keep driving until the ones mid-request have sent their
-	// response, so every connection task returns before the thread does.
+	// request, and keep driving until the accept loop has seen its cancelled
+	// accept and the ones mid-request have sent their response, so every task
+	// of this thread returns before the thread does.
 	msIoEngineCancelFd_ms(listenFd);
-	while (closeWaitingCountOpen(clients) > 0) {
+	while (closeWaitingCountOpen(clients) > 0 || !loop.ended) {
 		msIoRunOnce(DRIVER_POLL_MS);
 		sweepTick = sweepTick + 1;
 		if (sweepTick >= SWEEP_INTERVAL_TICKS) {
@@ -747,14 +752,15 @@ function serveThread(cfg: Readonly<LoopConfig>, run: Locked<RunState>, addr: str
 		eventLoopUring(cfg, run, fd, handler);
 	} else {
 		const clients = allocClients(cfg);
-		listenAsyncLoop(cfg, run, fd, handler, clients);
-		driveWithSweep(cfg, run, fd, clients);
+		const loop = new AcceptLoop();
+		listenAsyncLoop(cfg, run, fd, handler, clients, loop);
+		driveWithSweep(cfg, run, fd, clients, loop);
 	}
 	msNetClose(fd);
 	return null;
 }
 
-async function listenAsyncLoop(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listenFd: int32, handler: RequestHandler, clients: ClientState[]): Promise<void> {
+async function listenAsyncLoop(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listenFd: int32, handler: RequestHandler, clients: ClientState[], loop: AcceptLoop): Promise<void> {
 	while (isRunning(run)) {
 		const cfd = await acceptAsync(listenFd);
 		if (cfd >= 0 && cfd < MAX_CLIENT_FDS) {
@@ -768,6 +774,7 @@ async function listenAsyncLoop(cfg: Readonly<LoopConfig>, run: Locked<RunState>,
 		}
 		// cfd < 0: accept error, drop silently
 	}
+	loop.ended = true;
 }
 
 async function handleConnSync(cfg: Readonly<LoopConfig>, run: Locked<RunState>, client: ClientState, fd: int32, handler: RequestHandler): Promise<void> {
@@ -1072,8 +1079,9 @@ function eventLoopUring(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listen
 	if (msUringEvtInit() < 0) {
 		// Fallback to engine-based async event loop (kqueue / epoll / poll)
 		const clients = allocClients(cfg);
-		listenAsyncLoop(cfg, run, listenFd, handler, clients);
-		driveWithSweep(cfg, run, listenFd, clients);
+		const loop = new AcceptLoop();
+		listenAsyncLoop(cfg, run, listenFd, handler, clients, loop);
+		driveWithSweep(cfg, run, listenFd, clients, loop);
 		return;
 	}
 
@@ -1193,7 +1201,7 @@ export function createServerAsync(handler: AsyncRequestHandler): HttpServer {
 }
 
 
-async function listenAsyncLoopA(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listenFd: int32, handler: AsyncRequestHandler, clients: ClientState[]): Promise<void> {
+async function listenAsyncLoopA(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listenFd: int32, handler: AsyncRequestHandler, clients: ClientState[], loop: AcceptLoop): Promise<void> {
 	while (isRunning(run)) {
 		const cfd = await acceptAsync(listenFd);
 		if (cfd >= 0 && cfd < MAX_CLIENT_FDS) {
@@ -1206,6 +1214,7 @@ async function listenAsyncLoopA(cfg: Readonly<LoopConfig>, run: Locked<RunState>
 			msNetClose(cfd);
 		}
 	}
+	loop.ended = true;
 }
 
 async function handleConnAsync(cfg: Readonly<LoopConfig>, run: Locked<RunState>, client: ClientState, fd: int32, handler: AsyncRequestHandler): Promise<void> {
@@ -1321,8 +1330,9 @@ function serveThreadAsync(cfg: Readonly<LoopConfig>, run: Locked<RunState>, addr
 	if (msNetListen(fd, 1024) < 0) { msNetClose(fd); return null; }
 	msNetSetNonBlocking(fd);
 	const clients = allocClients(cfg);
-	listenAsyncLoopA(cfg, run, fd, handler, clients);
-	driveWithSweep(cfg, run, fd, clients);
+	const loop = new AcceptLoop();
+	listenAsyncLoopA(cfg, run, fd, handler, clients, loop);
+	driveWithSweep(cfg, run, fd, clients, loop);
 	msNetClose(fd);
 	return null;
 }
