@@ -32,3 +32,21 @@ test "a type parameter that no argument binds is refused by name" {
 	assert hasError(DECLS + "const w = watch(() => { needsStr(\"x\"); });", "cannot instantiate: 'T' — annotate the destination type or pass an explicit type argument");
 	assert strictErrorCount(DECLS + "const w = watch<string>(() => { needsStr(\"x\"); });") == 0;
 }
+
+const CYCLIC = "interface Host { attach: ((area: Area) => void) | null; }\n"
+	+ "interface Area { host: Host; }\n"
+	+ "class Tree { parent: Tree | null = null; }\n"
+	+ "type Mount = (host: Host) => void;\n"
+	+ "type Grow = () => Tree;\n"
+	+ "function register<E>(fn: (env: E) => Mount): void {}\n"
+	+ "function registerDeep<E>(fn: (env: E) => (depth: int32) => Mount): void {}\n"
+	+ "function registerTree<E>(fn: (env: E) => Grow): void {}\n"
+	+ "function build<X>(env: X): Mount { return (host: Host): void => {}; }\n"
+	+ "function buildDeep<X>(env: X): (depth: int32) => Mount { return (depth: int32): Mount => (host: Host): void => {}; }\n"
+	+ "function grow<X>(env: X): Grow { return (): Tree => new Tree(); }\n";
+
+test "an unbound type parameter is named past a type that reaches itself" {
+	assert hasError(CYCLIC + "register(build);", "cannot instantiate: 'X'");
+	assert hasError(CYCLIC + "registerDeep(buildDeep);", "cannot instantiate: 'X'");
+	assert hasError(CYCLIC + "registerTree(grow);", "cannot instantiate: 'X'");
+}
