@@ -808,18 +808,20 @@ test "parse error in dependency doesn't block dependent" {
 	assert modA.errors.length == 0;
 }
 
-test "C header import synthesizes exports" {
-	// .h imports are inlined into the consuming module (reference parity)
+test "C header import is a module of its exports" {
 	const entries: MapEntry[] = [];
 	entries.push({ entryPath: "/src/lib.h", entrySource: "void foo(int x);" });
 	entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo } from \"./lib.h\"; const x = foo;" });
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
-	// No separate .h module — declarations inlined into /src/a.ms
-	assert graph.modules.length == 1;
+	checkModuleGraph(graph, "");
+	assert graph.modules.length == 2;
 	const modA = findModule(graph, "/src/a.ms");
 	assert modA != null;
-	assert modA.source.indexOf("extern") >= 0;
+	assert modA.errors.length == 0;
+	const lib = findModule(graph, "/src/lib.h");
+	assert lib != null;
+	assert lib.source.indexOf("export extern function foo") >= 0;
 }
 
 // ===== Circular Import Tests =====

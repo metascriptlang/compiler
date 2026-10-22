@@ -17,8 +17,6 @@ import { readFile, writeFile, ensureDir } from "std/fs";
 import { env, cwd } from "std/process";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, normalize, isAbsolute } from "std/fs/path";
-import { translateCHeader } from "../module/cimport/emit";
-import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
 import { defaultGlobalImports, extraGlobalImports } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
 import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
@@ -3641,11 +3639,9 @@ function preludeSource(stdSpecifier: string, stdPath: string, backendExt: string
 function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: string, backendExt: string): void {
 	const found = preludeSource(stdSpecifier, stdPath, backendExt);
 	const resolvedPath = found.path;
-	let src = found.source;
+	const src = found.source;
 	if (ctx.ownModules.has(resolvedPath)) return;
 	if (src.length > 0) {
-		const fsProvider = createFileSystemProvider();
-		src = inlineHeaderImports(src, resolvedPath, fsProvider);
 		const pr = parseSource(src);
 		if (pr.ok) {
 			// modulePath must be set BEFORE sub-module loading so relative
@@ -3746,10 +3742,6 @@ function resolvePreludeSubSource(specifier: string, indexDir: string, stdPath: s
 		const src = try readFile(path) catch "";
 		if (src.length > 0) return { path, source: src };
 	}
-	if (basePath.endsWith(".h")) {
-		const hSrc = try readFile(basePath) catch "";
-		if (hSrc.length > 0) return { path: basePath, source: translateCHeader(hSrc, []) };
-	}
 	return { path: "", source: "" };
 }
 
@@ -3799,7 +3791,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		const id = importDeclNode.data as ImportDeclData;
 		const resolved = resolvePreludeSubSource(id.importSource, dir, stdPath, backendExt);
 		const subResolved = resolved.path;
-		let subSrc = resolved.source;
+		const subSrc = resolved.source;
 		if (subSrc.length == 0) continue;
 
 		// Dedup: if already loaded into the shared registry, skip. Preludes
@@ -3811,8 +3803,6 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 			loadPreludeOne(ctx, preludeSpecifier, stdPath, backendExt);
 			continue;
 		}
-		// Inline .h imports in sub-module source before parsing
-		subSrc = inlineHeaderImports(subSrc, subResolved, createFileSystemProvider());
 		const subPr = parseSource(subSrc);
 		if (!subPr.ok) continue;
 		// Recurse: pre-load THIS sub-module's own prelude-resolvable imports
@@ -3841,15 +3831,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		runThreePasses(subCtx, subPr.value);
 		ctx.preludeModuleScopes.set(subResolved, moduleScopeSymbols(subCtx.table));
 
-		// Stamp headerPath on .h-translated symbols so C codegen emits #include
 		const subScope = subCtx.table.current;
-		if (subResolved.endsWith(".h")) {
-			for (const sym of subScope.symbols.values()) {
-				if (hasFlag(sym, SymbolFlag.ImportC) && sym.headerPath == "") {
-					sym.headerPath = subResolved;
-				}
-			}
-		}
 
 		const subExports: ExportedSymInfo[] = [];
 		for (const sym of subScope.symbols.values()) {

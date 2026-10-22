@@ -13,7 +13,7 @@ import {
 } from "../format";
 import { sgGetPrefix, sgFindImportSource, sgFindExportedDecl, sgQueryAtPosition } from "../../../checker/suggest";
 import { SymbolFlag, hasFlag } from "../../../checker/symbol";
-import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData, SourceLocation, makeLoc, SymbolKind } from "../../../ast/node";
+import { SourceLocation, makeLoc, SymbolKind } from "../../../ast/node";
 import { lspExtractPosition, dbGetSource, lspEnsureFileLoaded, lspCharacter } from "./shared";
 import { dbResolveImport } from "../../transam/index";
 
@@ -155,29 +155,6 @@ function lspFindEnumMemberLine(src: string, containerName: string, memberName: s
 
 // ===== Extern -> Native Header Navigation =====
 
-// Collect .h import paths from the parsed AST (ImportDecl nodes with .h source)
-function lspCollectHeaderImports(program: Node): string {
-	if (program == null) return "";
-	const pd = program.data as ProgramData;
-	let result = "";
-	for (const stmt of pd.programStmts) {
-		let importNode = stmt;
-		if (importNode.kind == NodeKind.ExportDecl) {
-			const ed = importNode.data as ExportDeclData;
-			importNode = ed.exportedDecl;
-		}
-		if (importNode != null && importNode.kind == NodeKind.ImportDecl) {
-			const id = importNode.data as ImportDeclData;
-			if (id.importSource.length > 2
-				&& id.importSource.slice(id.importSource.length - 2, id.importSource.length) == ".h") {
-				if (result != "") { result = result + "\n"; }
-				result = result + id.importSource;
-			}
-		}
-	}
-	return result;
-}
-
 function lspFindNativeDefinition(nativeName: string, headerPath: string, modulePath: string): string {
 	// headerPath may contain multiple paths (newline-separated). Search each.
 	// Resolve relative to the MODULE that declares the extern, not the current file.
@@ -263,19 +240,13 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 		writeStderr("[LSP-DEF] id=" + id + " null: no sgQuery at " + pos.line + ":" + pos.col1 + " in " + path + "\n");
 	}
 	if (suggest != null) {
-		// Extern symbol -> navigate to C definition in the .h file
-		// The .h file is treated as a module: inlineHeaderImports synthesizes @include
-		// directives during preprocessing, stampHeaderPaths stamps the path on symbols,
-		// and we search the raw C source for the native name (since translated MetaScript
-		// positions don't map to original C positions).
+		// Extern symbol -> navigate to C definition: a header's declarations are the
+		// module of the header that writes them; a hand-written extern names its
+		// headers in @include. The raw C source is searched for the native name.
 		if (suggest.sym != null && hasFlag(suggest.sym, SymbolFlag.ImportC)
 			&& suggest.sym.nativeName != "") {
 			const externModPath = suggest.sym.modulePath != null && suggest.sym.modulePath != "" ? suggest.sym.modulePath : path;
-			// Prefer module's own .h imports (most specific), fall back to sym.headerPath
-			// which includes all @include directives (module + prelude).
-			const externProgram = dbParse(db, externModPath);
-			const moduleHdrs = lspCollectHeaderImports(externProgram);
-			const hdrPath = moduleHdrs != "" ? moduleHdrs : suggest.sym.headerPath;
+			const hdrPath = externModPath.endsWith(".h") ? externModPath : suggest.sym.headerPath;
 			if (hdrPath != "") {
 				const nativeResult = lspFindNativeDefinition(suggest.sym.nativeName, hdrPath, externModPath);
 				if (nativeResult != "") return lspResponse(id, "[" + nativeResult + "]");

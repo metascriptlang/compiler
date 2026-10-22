@@ -54,7 +54,7 @@ import { markTypeOnlyImports } from "../checker/importElision";
 import { createTransformContextWithChecker } from "../transform/context";
 import { resetLiftedOps, setJsProgramScope } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity, planDynamicModules } from "../module/graph";
-import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeInlineHeaderTimings, registerHeaderCache, inlineHeaderImports } from "../module/loader";
+import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeHeaderTimings, registerHeaderCache, headerModuleSource, isCHeaderPath } from "../module/loader";
 import { registerPreludeStampFn, preludePackKey, preludePackStamp, packRoot, tryLoadPreludeDeps, writePreludeDeps, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
 import { modulePassIdentity } from "../checker/prelude";
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
@@ -73,7 +73,7 @@ import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, i
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerInlineKey, lookupHeaderInline, storeHeaderInline, hashContent, toolchainStamp, objectStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, hashContent, toolchainStamp, objectStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
@@ -84,7 +84,7 @@ import { VERSION } from "./usage";
 // Header-inline disk cache injection (loader can't import ./cache directly —
 // checker/context → module/graph layering; callbacks pattern). Registered at
 // module load so every later build engages it without an init-order hazard.
-registerHeaderCache(headerInlineKey, lookupHeaderInline, storeHeaderInline);
+registerHeaderCache(headerModuleKey, lookupHeaderModule, storeHeaderModule);
 // Prelude pack shares the object cache's memoized toolchainStamp — one stamp
 // computation per process instead of two (the pack's local fallback would
 // re-hash the 30MB binary + runtime/ + vendor/ every process).
@@ -444,8 +444,8 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 	const _pl0 = performance.now();
 	const _r = loadModule(graph, entryPath, provider, config, 1);
 	if (graphLoadTiming) {
-		const ih = takeInlineHeaderTimings();
-		console.log(`    graphLoad: preludeMods=${performance.now() - _gl0}ms entryTree=${performance.now() - _pl0}ms modules=${graph.loadOrder.length} seed=${_preludeSeedHit ? 1 : 0} inlineHeader=${ih.ms}ms/${ih.n}mods hits=${ih.hits}`);
+		const ht = takeHeaderTimings();
+		console.log(`    graphLoad: preludeMods=${performance.now() - _gl0}ms entryTree=${performance.now() - _pl0}ms modules=${graph.loadOrder.length} seed=${_preludeSeedHit ? 1 : 0} headers=${ht.ms}ms/${ht.n} hits=${ht.hits}`);
 	}
 
 	reportGraphErrors(graph);
@@ -481,8 +481,8 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 // Extension resolved by the resolver based on target backend.
 //
 // BUILD-PERF Phase A2: on a warm key the graph is SEEDED from the deps pack
-// (<key>.deps, written next to the prelude pack). provideSource and
-// inlineHeaderImports still run per module — mod.source and header
+// (<key>.deps, written next to the prelude pack). provideSource and the
+// header translation still run per module — mod.source and header
 // diagnostics must stay byte-identical to the fresh path — only the
 // lex+parse+resolver-probe discovery of the std closure is skipped. Any
 // doubt (pack off, no snapshot, a source gone missing) falls back to the
@@ -511,7 +511,7 @@ function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config
 // Replay a deps snapshot into the graph. All sources are provided UP FRONT —
 // the seed either builds the whole closure or leaves the graph untouched
 // (a half-seeded graph would poison the fresh fallback: modules already in
-// loadOrder). Header-inline runs exactly like the fresh path; module state
+// loadOrder). A header translates exactly like the fresh path; module state
 // jumps straight to Ready (no importStack walk — no recursion happens).
 function seedPreludeModules(graph: ModuleGraph, provider: SourceProvider, deps: PreludeDepsSnapshot): boolean {
 	const sources: string[] = [];
@@ -526,10 +526,14 @@ function seedPreludeModules(graph: ModuleGraph, provider: SourceProvider, deps: 
 	while (mi < deps.mods.length) {
 		const row = deps.mods[mi];
 		const mod = createModule(row.path);
-		const headerErrors: ModuleError[] = [];
-		mod.rawSource = sources[mi];
-		mod.source = inlineHeaderImports(mod.rawSource, row.path, provider, true, headerErrors);
-		for (const he of headerErrors) mod.errors.push(he);
+		if (isCHeaderPath(row.path)) {
+			const headerErrors: ModuleError[] = [];
+			mod.rawSource = headerModuleSource(row.path, provider, graph, headerErrors);
+			for (const he of headerErrors) mod.errors.push(he);
+		} else {
+			mod.rawSource = sources[mi];
+		}
+		mod.source = mod.rawSource;
 		let ii = 0;
 		while (ii < row.imports.length) {
 			const imp = row.imports[ii];

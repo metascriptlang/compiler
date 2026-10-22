@@ -17,21 +17,22 @@ src/module/cimport/
 - `src/module/cparse/` depends on `std/` only. No compiler imports. No MetaScript knowledge. Pure chibicc port.
 - `src/module/cimport/index.ms` depends on cparse (calls tokenize → preprocess → parse).
 - `src/module/cimport/emit.ms` depends on cparse types (`Obj`, `CType`) and index.ms (parseHeader). Knows MetaScript type names.
-- All compiler files import `translateCHeader` from `src/module/cimport/emit`.
+- The loader (`headerModuleSource`) is the one caller of `translateHeaderModule`; checker, Trans-Am and LSP reach a header through it.
 
 ### Flow
 
+A C header is a module like any other; its source is translated, not read.
+
 ```
 import { foo } from "header.h"
-  → loader.ms inlineHeaderImports calls translateCHeader()
-    → cimport/emit.ms calls parseHeader()
-      → cimport/index.ms: tokenize → preprocess → parse (cparse/*.ms, chibicc port)
-      ← returns Obj[] + diagnostics (all three phases aggregated)
-    ← walks Obj[], maps C types → MS types; skips names already emitted by an
-      earlier import site of the same module (shared-typedef dedup)
-  ← returns MetaScript extern declaration source string + diagnostics
-→ loader surfaces diagnostics as module errors anchored at the .ms import line
-  (DiagSeverity.Error fails the build via exitOnModuleErrors; lesser severities
-  render as warnings)
-→ main compiler parses the MS source through normal pipeline
+  → resolver: header.h resolves beside the importer, then the search paths
+  → loader.ms headerModuleSource(path) → cimport/emit.ms translateHeaderModule()
+    → cimport/index.ms parseHeader: tokenize → preprocess → parse (cparse, chibicc port)
+    ← every declaration with the file that writes it
+  ← module source: @include/@compile, then
+      import { names } from "<abs path>"; export * from "<abs path>"   for each included header
+      export extern …                                                  for what this file writes
+→ a header two includers read differently (a macro defined before its #include) is a module error
+→ diagnostics are the header module's errors; the source is cached per header (cache.ms Layer 5)
+→ the module is parsed and checked like any .ms module
 ```

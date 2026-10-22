@@ -8,6 +8,7 @@ import { CheckerContext, CheckerError, Severity } from "../../checker/context";
 import { TargetInfo, hostTargetInfo } from "../../checker/types";
 import { djb2, fingerprint, hashToHex } from "std/hash";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { headerIncludes } from "../../module/cimport/emit";
 
 
 // ===== CSection — C file output sections (standard reference parity) =====
@@ -738,6 +739,7 @@ export class CGen {
 	stringPool: StringPool;    // interned string literals
 	declaredProcs: NameSet;    // prevents duplicate prototypes
 	declaredThings: NameSet;   // prevents duplicate declarations
+	includes: string[];
 	checkerCtx: Readonly<CheckerContext>;
 	target: TargetInfo;
 	modulePath: string;        // source file path (for module-qualified init names)
@@ -783,6 +785,7 @@ export function createCGen(ctx: Readonly<CheckerContext>, modulePath: string): C
 		stringPool: createStringPool(),
 		declaredProcs: createNameSet(),
 		declaredThings: createNameSet(),
+		includes: [],
 		checkerCtx: ctx,
 		target: ctx != null ? ctx.targetInfo : hostTargetInfo(),
 		modulePath,
@@ -893,7 +896,20 @@ export function emitIncludeDirectives(g: CGen, directives: string): void {
 function emitOneInclude(g: CGen, header: string): void {
 	if (nameSetHas(g.declaredThings, "inc:" + header)) return;
 	nameSetAdd(g.declaredThings, "inc:" + header);
-	addLine(sec(g, CSection.Headers), `#include "${header}"`);
+	g.includes.push(header);
+}
+
+// A header another included header already includes is not included again: a header without
+// an include guard would declare everything twice.
+export function emitIncludes(g: CGen): void {
+	for (const header of g.includes) {
+		let covered = false;
+		for (const other of g.includes) {
+			if (other != header && headerIncludes(other).includes(header) && !headerIncludes(header).includes(other)) covered = true;
+		}
+		if (!covered) addLine(sec(g, CSection.Headers), `#include "${header}"`);
+	}
+	g.includes = [];
 }
 
 const PLATFORM_MACROS = ["LANGUAGE_C", "MIPSEB", "MIPSEL", "PPC", "R3000", "R4000", "i386", "linux", "mips", "near", "far", "powerpc", "unix"];

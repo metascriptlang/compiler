@@ -21,7 +21,7 @@ import { genDecl, registerDeclCName, emitInlineCopies } from "./declarations";
 import { mangleModuleName, mangledFunctionName, mangledTypeName } from "./names";
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable } from "./test";
-import { emitIncludeDirectives } from "./context";
+import { emitIncludeDirectives, emitIncludes } from "./context";
 import { emitOwnedTypeInfos, refArrayCellName, arcCellName, typeInfoCName, defineDeferredElements, isHcrImageModule, objectTypeInfoKey } from "./types";
 import { collectModuleTypeInfoDemands } from "../../checker/reachability";
 import { DynamicModulePlan } from "../../module/graph";
@@ -203,6 +203,7 @@ export function generatePreparedCModuleOutput(program: Readonly<Node>, ctx: Read
 
 	defineDeferredElements(g);
 	emitStringPoolDecls(g.stringPool, sec(g, CSection.StringPool));
+	emitIncludes(g);
 	undefPlatformMacros(g);
 
 	output.code = assembleOutput(g);

@@ -8,7 +8,7 @@ import { CType, CTypeKind } from "../cparse/type";
 import { TargetInfo, hostTarget, targetFor } from "../cparse/target";
 import { Diagnostic } from "../cparse/error";
 import { parseHeader } from "./index";
-import { writeFile, ensureDir } from "std/fs";
+import { writeFile, ensureDir, readFile } from "std/fs";
 
 // ===== C Type → MetaScript Type Mapping =====
 
@@ -182,6 +182,17 @@ export function isCompleteUnion(key: string): boolean {
 	return completeStructKeys.has(key + UNION_KEY_MARK);
 }
 
+const includedByHeader = new HashMap<string, string[]>();
+
+export function registerHeaderIncludes(header: string, included: string[]): void {
+	includedByHeader.set(header, included);
+}
+
+// The headers whose declarations `header` brings in through its #includes.
+export function headerIncludes(header: string): string[] {
+	return includedByHeader.get(header) ?? [];
+}
+
 function mappedWidth(ms: string): int32 {
 	return match (ms) {
 		"int8" | "uint8" | "boolean" => 1,
@@ -282,122 +293,134 @@ function emitTypedef(obj: Obj, prefix: string): string {
 
 // ===== Main Entry Point =====
 
-export function translateCHeader(source: string, importedNames: string[], withExport: boolean = false, headerPath: string = "header.h", includePaths: string[] = [], outDiags: Diagnostic[] | null = null, emittedNames: HashSet<string> | null = null, readLog: string[] | null = null, target: TargetInfo = null as unknown as TargetInfo, outCompleteKeys: string[] | null = null): string {
-	const prefix = withExport ? "export " : "";
+export interface HeaderTranslation {
+	// Module source: an import of each name an included file declares and this header's own
+	// declarations use, an `export *` of each included file, then the header's own declarations.
+	source: string;
+	// The header's own declarations as text, and those of each file it includes as this header's
+	// translation unit read them; a file read two ways (another #define before its #include)
+	// is a different declaration under one name.
+	ownShape: string;
+	includedShapes: HashMap<string, string>;
+}
+
+// A header is a module of the declarations its own file writes, as a C translation unit sees
+// each declaration once however many headers include it.
+export function translateHeaderModule(source: string, headerPath: string = "header.h", includePaths: string[] = [], outDiags: Diagnostic[] | null = null, readLog: string[] | null = null, target: TargetInfo = null as unknown as TargetInfo, outCompleteKeys: string[] | null = null, canonical: ((path: string) => string) | null = null): HeaderTranslation {
 	const tg = target != null ? target : hostTarget();
 	const parsed = parseHeader(source, headerPath, { target: tg, includePaths, macroFlags: [], readLog });
 	if (outDiags != null) {
 		for (const d of parsed.diagnostics) outDiags.push(d);
 	}
+	const canonicalOf = new HashMap<string, string>();
+	const fileOf = (path: string): string => {
+		const known = canonicalOf.get(path);
+		if (known != null) return known;
+		const c = canonical != null ? canonical(path) : path;
+		canonicalOf.set(path, c);
+		return c;
+	};
+	const own = fileOf(headerPath);
 
-	const filterAll = importedNames.length == 0;
-
-	// Build "wanted" set: object names whose declaration must reach the
-	// emit pass. When filterAll, every parsed name is wanted. When the
-	// caller passed an import list, seed with that list and transitively
-	// close over type references so typedefs / struct tags / enum tags
-	// referenced by emitted functions/vars/typedefs also emit. Without
-	// this closure, `import { fn } from "x.h"` where `fn` takes a typedef
-	// param emits the function but drops the typedef → unresolved type.
-	const wantedNames = new HashSet<string>();
-	if (filterAll) {
-		for (const obj of parsed.objs) wantedNames.add(obj.name);
-	} else {
-		for (const name of importedNames) wantedNames.add(name);
-		const queue: string[] = [];
-		for (const name of importedNames) queue.push(name);
-		const processed = new HashSet<string>();
-		while (queue.length > 0) {
-			const name = queue.pop();
-			if (processed.has(name)) continue;
-			processed.add(name);
-			for (const obj of parsed.objs) {
-				if (obj.name != name) continue;
-				const refs = new HashSet<string>();
-				const seenTypes = new HashSet<string>();
-				collectTypeRefNames(obj.type, refs, seenTypes);
-				for (const r of refs) {
-					if (!wantedNames.has(r)) {
-						wantedNames.add(r);
-						queue.push(r);
-					}
-				}
-			}
-		}
-	}
-
-	// Track which enum types we've already emitted
 	const emittedEnums: string[] = [];
 	const declaredNames = new HashSet<string>();
+	const declaringFile = new HashMap<string, string>();
+	const seenInFile = new HashSet<string>();
+	const redeclared: string[] = [];
+	const includedFiles: string[] = [];
+	const includedShapes = new HashMap<string, string>();
 	const opaqueTags: CType[] = [];
-
-	let result = "";
+	const refs = new HashSet<string>();
+	let ownShape = "";
 	for (const obj of parsed.objs) {
-		if (!wantedNames.has(obj.name)) continue;
-		// Cross-import-site dedup: a name already emitted by an earlier import
-		// in the same module (shared typedefs between sibling headers) must not
-		// re-emit — the checker rejects program-wide duplicate extern decls.
-		if (emittedNames != null && obj.name != "" && emittedNames.has(obj.name)) continue;
-		const lenBefore = result.length;
-
-		match (obj.kind) {
-			ObjKind.Function => {
-				result = result + emitFunction(obj, prefix);
-			},
-			ObjKind.Variable => {
-				result = result + emitVariable(obj, prefix);
-			},
-			ObjKind.TypedefName => {
-				// Enum typedefs: emit the enum with its constants
-				if (obj.type.kind == CTypeKind.Enum) {
-					const enumKey = obj.name;
-					if (!arrayContains(emittedEnums, enumKey)) {
-						emittedEnums.push(enumKey);
-						result = result + emitEnum(parsed.objs, obj.type, obj.name, prefix);
-					}
-				} else {
-					result = result + emitTypedef(obj, prefix);
-					if (emitsStructBody(obj) && isCompleteTranslation(obj.type, parsed.objs, tg)) {
-						const key = translatedStructKey(obj.name, obj.type, tg);
-						registerCompleteStruct(key);
-						if (outCompleteKeys != null) outCompleteKeys.push(key);
-					}
-				}
-			},
-			ObjKind.EnumConstant => {
-				// Handled as part of enum emission
-			},
-			_ => {},
-		};
-		if (result.length > lenBefore) {
-			if (emittedNames != null && obj.name != "") emittedNames.add(obj.name);
+		if (obj.name == "" || obj.kind == ObjKind.EnumConstant) continue;
+		const file = fileOf(obj.file);
+		const mine = file == own;
+		if (mine ? declaredNames.has(obj.name) : seenInFile.has(`${file}\t${obj.name}`)) continue;
+		const text = emitObj(obj, parsed.objs, tg, emittedEnums, mine ? outCompleteKeys : null, mine);
+		if (text == "") continue;
+		if (mine) {
 			declaredNames.add(obj.name);
-			collectOpaqueTags(obj.type, opaqueTags, new HashSet<string>());
+			declaringFile.delete(obj.name);
+			ownShape = ownShape + text;
+			collectTypeRefNames(obj.type, refs, new HashSet<string>(), declaringFile);
+			collectOpaqueTags(obj.type, opaqueTags, new HashSet<string>(), declaringFile);
+			continue;
 		}
+		seenInFile.add(`${file}\t${obj.name}`);
+		const first = declaringFile.get(obj.name);
+		if (first == null) declaringFile.set(obj.name, file);
+		else if (first != file && !redeclared.includes(obj.name)) redeclared.push(obj.name);
+		const shape = includedShapes.get(file);
+		if (shape == null) includedFiles.push(file);
+		includedShapes.set(file, (shape ?? "") + text);
 	}
 
+	const importsFrom = new HashMap<string, string[]>();
+	for (const name of refs) {
+		if (declaredNames.has(name)) continue;
+		const file = declaringFile.get(name);
+		if (file == null) continue;
+		const names = importsFrom.get(file) ?? [];
+		names.push(name);
+		importsFrom.set(file, names);
+	}
+	let head = "";
+	for (const file of includedFiles) {
+		const names = importsFrom.get(file);
+		if (names != null) {
+			names.sort();
+			head = head + `import { ${names.join(", ")} } from "${file}";\n`;
+		}
+		head = head + `export * from "${file}";\n`;
+	}
+	redeclared.sort();
+	for (const name of redeclared) {
+		const file = declaringFile.get(name);
+		if (file != null && !declaredNames.has(name)) head = head + `export { ${name} } from "${file}";\n`;
+	}
+	let tags = "";
 	for (const tag of opaqueTags) {
-		if (declaredNames.has(tag.tagName)) continue;
-		if (emittedNames != null) {
-			if (emittedNames.has(tag.tagName)) continue;
-			emittedNames.add(tag.tagName);
-		}
+		if (declaredNames.has(tag.tagName) || declaringFile.has(tag.tagName)) continue;
 		declaredNames.add(tag.tagName);
-		result = result + emitOpaqueTag(tag, prefix);
+		tags = tags + emitOpaqueTag(tag, "export ");
 	}
+	return { source: head + ownShape + tags, ownShape, includedShapes };
+}
 
-	return result;
+// `complete`: the struct layout this translation registers as complete, for the header that
+// declares it; an included file's declarations register in that file's own translation.
+function emitObj(obj: Obj, objs: Obj[], tg: TargetInfo, emittedEnums: string[], outCompleteKeys: string[] | null, complete: boolean): string {
+	const prefix = "export ";
+	return match (obj.kind) {
+		ObjKind.Function => emitFunction(obj, prefix),
+		ObjKind.Variable => emitVariable(obj, prefix),
+		ObjKind.TypedefName => {
+			if (obj.type.kind == CTypeKind.Enum) {
+				if (arrayContains(emittedEnums, obj.name)) return "";
+				emittedEnums.push(obj.name);
+				return emitEnum(objs, obj.type, obj.name, prefix);
+			}
+			if (complete && emitsStructBody(obj) && isCompleteTranslation(obj.type, objs, tg)) {
+				const key = translatedStructKey(obj.name, obj.type, tg);
+				registerCompleteStruct(key);
+				if (outCompleteKeys != null) outCompleteKeys.push(key);
+			}
+			return emitTypedef(obj, prefix);
+		},
+		_ => "",
+	};
 }
 
 // Walk a CType tree and collect names of user-defined typedefs / tagged
-// struct/union/enum referenced anywhere inside. Used by translateCHeader
+// struct/union/enum referenced anywhere inside. Used by translateHeaderModule
 // to compute the transitive closure for the import-name filter so a
 // typedef referenced by an emitted function is not silently dropped.
 // Skips primitive-mapped typedef names (int32_t, size_t, ...) since those
 // resolve via mapRuntimeType and need no separate emit. Struct self-refs
 // via pointer-to-self are guarded by a string-keyed seen set so the walk
 // terminates.
-function collectTypeRefNames(t: CType, refs: HashSet<string>, seen: HashSet<string>): void {
+function collectTypeRefNames(t: CType, refs: HashSet<string>, seen: HashSet<string>, declaredElsewhere: HashMap<string, string>): void {
 	if (t == null) return;
 	if (t.typedefName != "") {
 		const mapped = mapRuntimeType(t.typedefName);
@@ -407,6 +430,7 @@ function collectTypeRefNames(t: CType, refs: HashSet<string>, seen: HashSet<stri
 		// into the emitted MS source and clash with other modules' externs.
 		if (mapped != "") return;
 		refs.add(t.typedefName);
+		if (declaredElsewhere.has(t.typedefName)) return;
 	}
 	const isAggregate = t.kind == CTypeKind.Struct
 		|| t.kind == CTypeKind.Union
@@ -417,15 +441,15 @@ function collectTypeRefNames(t: CType, refs: HashSet<string>, seen: HashSet<stri
 		if (seen.has(key)) return;
 		seen.add(key);
 	}
-	if (t.base != null) collectTypeRefNames(t.base, refs, seen);
-	if (t.returnType != null) collectTypeRefNames(t.returnType, refs, seen);
-	for (const p of t.params) collectTypeRefNames(p, refs, seen);
-	for (const m of t.members) collectTypeRefNames(m.type, refs, seen);
+	if (t.base != null) collectTypeRefNames(t.base, refs, seen, declaredElsewhere);
+	if (t.returnType != null) collectTypeRefNames(t.returnType, refs, seen, declaredElsewhere);
+	for (const p of t.params) collectTypeRefNames(p, refs, seen, declaredElsewhere);
+	for (const m of t.members) collectTypeRefNames(m.type, refs, seen, declaredElsewhere);
 }
 
-function collectOpaqueTags(t: CType, out: CType[], seen: HashSet<string>): void {
+function collectOpaqueTags(t: CType, out: CType[], seen: HashSet<string>, declaredElsewhere: HashMap<string, string>): void {
 	if (t == null) return;
-	if (t.typedefName != "" && mapRuntimeType(t.typedefName) != "") return;
+	if (t.typedefName != "" && (mapRuntimeType(t.typedefName) != "" || declaredElsewhere.has(t.typedefName))) return;
 	if (isOpaqueTag(t)) {
 		for (const o of out) {
 			if (o.tagName == t.tagName) return;
@@ -438,10 +462,10 @@ function collectOpaqueTags(t: CType, out: CType[], seen: HashSet<string>): void 
 		if (seen.has(key)) return;
 		seen.add(key);
 	}
-	if (t.base != null) collectOpaqueTags(t.base, out, seen);
-	if (t.returnType != null) collectOpaqueTags(t.returnType, out, seen);
-	for (const p of t.params) collectOpaqueTags(p, out, seen);
-	for (const m of t.members) collectOpaqueTags(m.type, out, seen);
+	if (t.base != null) collectOpaqueTags(t.base, out, seen, declaredElsewhere);
+	if (t.returnType != null) collectOpaqueTags(t.returnType, out, seen, declaredElsewhere);
+	for (const p of t.params) collectOpaqueTags(p, out, seen, declaredElsewhere);
+	for (const m of t.members) collectOpaqueTags(m.type, out, seen, declaredElsewhere);
 }
 
 function arrayContains(arr: string[], val: string): boolean {
@@ -454,7 +478,7 @@ function arrayContains(arr: string[], val: string): boolean {
 // ===== Tests =====
 
 test "emit extern function" {
-	const ms = translateCHeader("extern int add(int a, int b);", [], false);
+	const ms = translateHeaderModule("extern int add(int a, int b);").source;
 	assert ms.indexOf("extern function add") >= 0;
 	assert ms.indexOf("a: int32") >= 0;
 	assert ms.indexOf("b: int32") >= 0;
@@ -462,26 +486,26 @@ test "emit extern function" {
 }
 
 test "emit typedef struct" {
-	const ms = translateCHeader("typedef struct { int x; int y; } Point;", [], false);
+	const ms = translateHeaderModule("typedef struct { int x; int y; } Point;").source;
 	assert ms.indexOf("extern struct Point") >= 0;
 	assert ms.indexOf("x: int32") >= 0;
 	assert ms.indexOf("y: int32") >= 0;
 }
 
 test "emit typedef enum" {
-	const ms = translateCHeader("typedef enum { FLAG_READ = 1, FLAG_WRITE = 2 } Flags;", [], false);
+	const ms = translateHeaderModule("typedef enum { FLAG_READ = 1, FLAG_WRITE = 2 } Flags;").source;
 	assert ms.indexOf("extern enum Flags") >= 0;
 	assert ms.indexOf("FLAG_READ = 1") >= 0;
 	assert ms.indexOf("FLAG_WRITE = 2") >= 0;
 }
 
 test "emit extern variable" {
-	const ms = translateCHeader("extern int counter;", [], false);
+	const ms = translateHeaderModule("extern int counter;").source;
 	assert ms.indexOf("extern const counter: int32") >= 0;
 }
 
 test "a fixed C array imports as a sized array of its element" {
-	const ms = translateCHeader("typedef struct P { int x; } P; typedef int (*Op)(int); typedef struct V { int v[4]; P ps[2]; void (*fs[3])(void); } V; extern int table[8];", [], false);
+	const ms = translateHeaderModule("typedef struct P { int x; } P; typedef int (*Op)(int); typedef struct V { int v[4]; P ps[2]; void (*fs[3])(void); } V; extern int table[8];").source;
 	assert ms.indexOf("v: int32[4];") >= 0;
 	assert ms.indexOf("ps: P[2];") >= 0;
 	assert ms.indexOf("fs: (() => void)[3];") >= 0;
@@ -491,7 +515,7 @@ test "a fixed C array imports as a sized array of its element" {
 
 test "brace initializer does not derail declaration parse" {
 	const diags: Diagnostic[] = [];
-	const ms = translateCHeader("static const int arr[] = {32, 64, 96};\nint after(void);", ["after"], false, "init.h", [], diags);
+	const ms = translateHeaderModule("static const int arr[] = {32, 64, 96};\nint after(void);", "init.h", [], diags).source;
 	assert ms.indexOf("extern function after") >= 0;
 	assert diags.length == 0;
 }
@@ -499,54 +523,44 @@ test "brace initializer does not derail declaration parse" {
 test "designated initializer and _Static_assert skip clean" {
 	const diags: Diagnostic[] = [];
 	const src = "typedef struct T { int a; } T;\n_Static_assert(1 == 1, \"ok\");\nstatic const T t = { .a = 1 };\nint after2(void);";
-	const ms = translateCHeader(src, ["after2"], false, "init2.h", [], diags);
+	const ms = translateHeaderModule(src, "init2.h", [], diags).source;
 	assert ms.indexOf("extern function after2") >= 0;
 	assert diags.length == 0;
 }
 
 test "emit pointer types" {
-	const ms = translateCHeader("extern void *handle;\nextern const char *name;", [], false);
+	const ms = translateHeaderModule("extern void *handle;\nextern const char *name;").source;
 	assert ms.indexOf("handle: Ptr<void>") >= 0;
 	assert ms.indexOf("name: cstring") >= 0;
 }
 
 test "opaque struct-pointer typedef points at its tag declared under its C name" {
-	const ms = translateCHeader("typedef struct Opaque* OpaqueRef;\nOpaqueRef makeIt(void);", [], false);
+	const ms = translateHeaderModule("typedef struct Opaque* OpaqueRef;\nOpaqueRef makeIt(void);").source;
 	assert ms.indexOf("OpaqueRef = Ptr<Opaque>") >= 0;
 	assert ms.indexOf("extern struct Opaque from \"struct Opaque\";") >= 0;
 	assert ms.indexOf("unknown") < 0;
 }
 
 test "opaque union pointer is declared as a union" {
-	const ms = translateCHeader("union U;\nunion U* getU(void);", [], false);
+	const ms = translateHeaderModule("union U;\nunion U* getU(void);").source;
 	assert ms.indexOf("getU(): Ptr<U>") >= 0;
 	assert ms.indexOf("extern struct U from \"union U\";") >= 0;
 }
 
 test "opaque typedef named after its tag is declared once under the typedef name" {
-	const ms = translateCHeader("typedef struct X X;\nX* mkX(void);\nvoid useX(struct X* x);", [], false);
+	const ms = translateHeaderModule("typedef struct X X;\nX* mkX(void);\nvoid useX(struct X* x);").source;
 	assert ms.indexOf("extern struct X;") >= 0;
 	assert ms.indexOf("from \"struct X\"") < 0;
 	assert ms.indexOf("mkX(): Ptr<X>") >= 0;
 }
 
-test "name filter keeps the opaque tag behind an imported handle" {
-	const ms = translateCHeader("typedef struct Impl* H;\nstruct Other;\nint use(H h);\nint skip(struct Other* o);", ["use"], false);
-	assert ms.indexOf("extern struct Impl from \"struct Impl\";") >= 0;
-	assert ms.indexOf("Other") < 0;
-}
-
-test "opaque tag already declared by an earlier import site is not declared again" {
-	const seen = new HashSet<string>();
-	const first = translateCHeader("struct T;\nstruct T* a(void);", [], false, "header.h", [], null, seen);
-	const second = translateCHeader("struct T;\nstruct T* b(void);", [], false, "header.h", [], null, seen);
-	assert first.indexOf("extern struct T from") >= 0;
-	assert second.indexOf("extern struct T") < 0;
-	assert second.indexOf("b(): Ptr<T>") >= 0;
+test "the opaque tag behind a handle is declared" {
+	const ms = translateHeaderModule("typedef struct Impl* H;\nint use(H h);").source;
+	assert ms.indexOf("export extern struct Impl from \"struct Impl\";") >= 0;
 }
 
 test "handle written through a pointer param binds as out" {
-	const ms = translateCHeader("typedef struct Impl* H;\nstruct S;\nint mk(H* out);\nint mk2(struct S** out);\nint mk3(void** out);\nint argv(char** v);\nint ro(const H* h);", [], false);
+	const ms = translateHeaderModule("typedef struct Impl* H;\nstruct S;\nint mk(H* out);\nint mk2(struct S** out);\nint mk3(void** out);\nint argv(char** v);\nint ro(const H* h);").source;
 	assert ms.indexOf("mk(out out: H)") >= 0;
 	assert ms.indexOf("mk2(out out: Ptr<S>)") >= 0;
 	assert ms.indexOf("mk3(out out: Ptr<void>)") >= 0;
@@ -555,7 +569,7 @@ test "handle written through a pointer param binds as out" {
 }
 
 test "struct pointer param is a nullable Ptr, const or not" {
-	const ms = translateCHeader("typedef struct { int a; } A;\nstruct B { int b; };\nint f(const A* a, A* m, const struct B* b);\nint g(const float* v);", [], false);
+	const ms = translateHeaderModule("typedef struct { int a; } A;\nstruct B { int b; };\nint f(const A* a, A* m, const struct B* b);\nint g(const float* v);").source;
 	assert ms.indexOf("a: Ptr<A> | null") >= 0;
 	assert ms.indexOf("m: Ptr<A> | null") >= 0;
 	assert ms.indexOf("b: Ptr<B> | null") >= 0;
@@ -563,7 +577,7 @@ test "struct pointer param is a nullable Ptr, const or not" {
 }
 
 function emitFor(os: string, cpu: string, source: string): string {
-	return translateCHeader(source, [], false, "target.h", [], null, null, null, targetFor(os, cpu));
+	return translateHeaderModule(source, "target.h", [], null, null, targetFor(os, cpu)).source;
 }
 
 function plainCharPointersAreCString(os: string, cpu: string): boolean {
@@ -612,49 +626,37 @@ test "only plain char takes the target's signedness" {
 	assert signedChar.indexOf("function uc(): uint8") >= 0;
 }
 
-test "emit with name filter" {
-	const ms = translateCHeader("extern int foo(void);\nextern int bar(void);", ["foo"], false);
-	assert ms.indexOf("foo") >= 0;
-	assert ms.indexOf("bar") < 0;
-}
-
 test "emit with export prefix" {
-	const ms = translateCHeader("extern int add(int a, int b);", [], true);
+	const ms = translateHeaderModule("extern int add(int a, int b);").source;
 	assert ms.indexOf("export extern function add") >= 0;
 }
 
 test "emit variadic function" {
-	const ms = translateCHeader("extern void printf(const char *fmt, ...);", [], false);
+	const ms = translateHeaderModule("extern void printf(const char *fmt, ...);").source;
 	assert ms.indexOf("printf") >= 0;
 	assert ms.indexOf("fmt: cstring") >= 0;
 	assert ms.indexOf("...args") >= 0;
 }
 
 test "emit type alias" {
-	const ms = translateCHeader("typedef unsigned long size_t;", [], false);
+	const ms = translateHeaderModule("typedef unsigned long size_t;").source;
 	assert ms.indexOf("type size_t = uint64") >= 0;
 }
 
 test "emit function pointer param" {
-	const ms = translateCHeader("typedef int (*CompareFn)(const void *, const void *);", [], false);
+	const ms = translateHeaderModule("typedef int (*CompareFn)(const void *, const void *);").source;
 	assert ms.indexOf("CompareFn") >= 0;
 }
 
 test "user-defined typedef does not self-reference" {
-	const ms = translateCHeader("typedef int MyId;", [], false);
+	const ms = translateHeaderModule("typedef int MyId;").source;
 	assert ms.indexOf("type MyId = int32") >= 0;
 	assert ms.indexOf("type MyId = MyId") < 0;
 }
 
-test "name filter transitively keeps referenced typedef" {
-	const ms = translateCHeader("typedef int MyId;\nMyId doThing(MyId x);", ["doThing"], false);
-	assert ms.indexOf("extern function doThing") >= 0;
-	assert ms.indexOf("type MyId = int32") >= 0;
-}
-
 function completeOn(source: string, os: string, cpu: string): string[] {
 	const keys: string[] = [];
-	translateCHeader(source, [], false, "header.h", [], null, null, null, targetFor(os, cpu), keys);
+	translateHeaderModule(source, "header.h", [], null, null, targetFor(os, cpu), keys);
 	const names: string[] = [];
 	for (const k of keys) names.push(k.split("\t")[1]);
 	return names;
@@ -690,7 +692,7 @@ const UNION_SHAPES = "typedef union { int i; double d; } U;\n"
 
 test "a union whose members all translate exactly is complete and keyed as a union" {
 	const keys: string[] = [];
-	translateCHeader(UNION_SHAPES, [], false, "header.h", [], null, null, null, targetFor("linux", "x86_64"), keys);
+	translateHeaderModule(UNION_SHAPES, "header.h", [], null, null, targetFor("linux", "x86_64"), keys);
 	const unions: string[] = [];
 	const structs: string[] = [];
 	for (const k of keys) {
@@ -705,7 +707,7 @@ test "a union whose members all translate exactly is complete and keyed as a uni
 }
 
 test "a fixed C array is spelled T[N]" {
-	const ms = translateCHeader("typedef struct { char c[5]; int (*fns[2])(int); } Arr;\n", ["Arr"]);
+	const ms = translateHeaderModule("typedef struct { char c[5]; int (*fns[2])(int); } Arr;\n").source;
 	assert ms.contains("c: int8[5];"), ms;
 	assert ms.contains("fns: ((p0: int32) => int32)[2];"), ms;
 }
@@ -758,4 +760,38 @@ test "a declaration is located where its name is written" {
 	assert at("made") == "/tmp/mscparse-at/h.h:3", at("made");
 	assert at("Holder") == "/tmp/mscparse-at/h.h:4", at("Holder");
 	assert at("HOLD_A") == "/tmp/mscparse-at/h.h:5", at("HOLD_A");
+}
+
+test "a typedef declared again with the same type is one declaration" {
+	const t = translateHeaderModule("typedef struct Res* ResRef;\ntypedef struct Res* ResRef;\nResRef make(void);\ntypedef int Num;\ntypedef int Num;\n");
+	assert t.source.indexOf("export extern function make(): ResRef;") >= 0, t.source;
+	assert t.source.indexOf("ResRef =") == t.source.lastIndexOf("ResRef ="), t.source;
+	assert t.source.indexOf("Num =") == t.source.lastIndexOf("Num ="), t.source;
+}
+
+test "a name two included headers both declare is re-exported from the first" {
+	ensureDir("/tmp/mscparse-redecl");
+	writeFile("/tmp/mscparse-redecl/a.h", "#ifndef A_H\n#define A_H\ntypedef struct Res* ResRef;\nResRef makeRes(void);\n#endif\n");
+	writeFile("/tmp/mscparse-redecl/b.h", "#ifndef B_H\n#define B_H\ntypedef struct Res* ResRef;\nint readRes(ResRef r);\n#endif\n");
+	const t = translateHeaderModule("#include \"a.h\"\n#include \"b.h\"\n", "/tmp/mscparse-redecl/all.h");
+	assert t.source.indexOf("export { ResRef } from \"/tmp/mscparse-redecl/a.h\";") >= 0, t.source;
+	const b = try readFile("/tmp/mscparse-redecl/b.h") catch "";
+	assert (t.includedShapes.get("/tmp/mscparse-redecl/b.h") ?? "") == translateHeaderModule(b, "/tmp/mscparse-redecl/b.h").ownShape;
+}
+
+test "a header declares what its own file writes and imports and re-exports what it includes" {
+	ensureDir("/tmp/mscparse-split");
+	writeFile("/tmp/mscparse-split/common.h", "#ifndef COMMON_H\n#define COMMON_H\ntypedef struct { int a; } Pair;\ntypedef struct Hidden* HiddenRef;\nint common(void);\n#endif\n");
+	const src = "#include \"common.h\"\ntypedef struct { Pair first; } Maker;\nPair make(HiddenRef h);\n";
+	const t = translateHeaderModule(src, "/tmp/mscparse-split/maker.h");
+	assert t.source.indexOf("import { HiddenRef, Pair } from \"/tmp/mscparse-split/common.h\";") >= 0, t.source;
+	assert t.source.indexOf("export * from \"/tmp/mscparse-split/common.h\";") >= 0, t.source;
+	assert t.source.indexOf("export extern struct Maker") >= 0, t.source;
+	assert t.source.indexOf("export extern function make(h: HiddenRef): Pair;") >= 0, t.source;
+	assert t.source.indexOf("struct Pair") < 0, t.source;
+	assert t.source.indexOf("Hidden from") < 0, t.source;
+	assert t.source.indexOf("common(") < 0, t.source;
+	const shape = t.includedShapes.get("/tmp/mscparse-split/common.h") ?? "";
+	const common = try readFile("/tmp/mscparse-split/common.h") catch "";
+	assert shape == translateHeaderModule(common, "/tmp/mscparse-split/common.h").ownShape, shape;
 }

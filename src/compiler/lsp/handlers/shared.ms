@@ -5,7 +5,6 @@
 
 import { TransAmDb, dbSetFileText, getFileText, getFileId } from "../../transam/index";
 import { readFile } from "std/fs";
-import { translateCHeader } from "../../../module/cimport/emit";
 import { writeStderr } from "std/io";
 import {
 	lspGetField, lspGetNumberField, lspGetObjectField, lspUriToPath,
@@ -124,8 +123,7 @@ export function dbGetSource(db: TransAmDb, path: string): string {
 export function lspReadDiskSource(filePath: string): Result<string, string> {
 	const readResult = readFile(filePath);
 	if (!readResult.ok) { return Result.err(filePath); }
-	const isHeader = filePath.length >= 2 && filePath.slice(filePath.length - 2, filePath.length) == ".h";
-	return Result.ok(isHeader ? translateCHeader(readResult.value, []) : readResult.value);
+	return Result.ok(readResult.value);
 }
 
 export function lspEnsureFileLoaded(db: TransAmDb, filePath: string): void {

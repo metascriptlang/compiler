@@ -1097,6 +1097,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		// Cross-module global variable: emit extern declaration.
 		// isModuleGlobalVar already excludes enum members (SymbolKind.EnumMember).
 		const idSym = node.resolvedSym;
+		if (idSym != null && hasFlag(idSym, SymbolFlag.ImportC)) useHeader(g, idSym);
 		if (isModuleGlobalVar(idSym)
 			&& idSym.modulePath != g.modulePath
 			&& node.nodeType != null) {

@@ -62,8 +62,7 @@ import { openScope, ScopeKind } from "../../checker/symbol";
 import { ImportDeclData, ExportDeclData, ProgramData, ClassDeclData } from "../../ast/node";
 import { ModuleGraph, createModule, createModuleGraph, addModule, findModule, ImportEntry, createImportEntry } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
-import { translateCHeader } from "../../module/cimport/emit";
-import { inlineHeaderImports, createTaReadProvider, SourceProvider, MapEntry, createMapProvider, loadModuleGraph, collectImportCalls } from "../../module/loader";
+import { headerModuleSource, createTaReadProvider, SourceProvider, MapEntry, createMapProvider, loadModuleGraph, collectImportCalls } from "../../module/loader";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { resolveRuntimeDir } from "../../utils/path";
 import { errorCount as checkErrorCount } from "../../checker/context";
@@ -277,17 +276,15 @@ export function dbGetFilePathByIndex(db: TransAmDb, index: int32): string {
 // ===== Preprocess Query =====
 //
 // Produces preprocessed source for a file. Handles:
-//   - .h files: translate C declarations to MS extern source (via translateCHeader)
-//   - .ms/.cms/.jms/.wms: inline `import from "*.h"` into extern decls (via inlineHeaderImports)
+//   - .h files: the header's module source (via headerModuleSource)
 //   - other: pass through raw
 //
 // The query runs through Trans-Am's red-green mechanism, so:
 //   - Unchanged files return cached preprocessed text instantly
-//   - .h files imported by a .ms file are tracked as FileText deps
-//   - Editing a .h file invalidates the Preprocess query of every .ms file that imported it
+//   - a .h file's own text and its companion .c probe are tracked as FileText deps
 //     (via lazy tryMarkGreen verification — on next query, deps are re-checked)
 
-// Trans-Am-backed SourceProvider. When inlineHeaderImports reads a .h file through this
+// Trans-Am-backed SourceProvider. When headerModuleSource reads a file through this
 // provider, the read records a FileText dependency on the current query frame, so the
 // containing Preprocess query auto-invalidates when the .h file changes.
 function createTaSourceProvider(db: TransAmDb, currentFileId: int32): SourceProvider {
@@ -329,15 +326,7 @@ export function dbPreprocess(db: TransAmDb, filePath: string): string {
 	if (graphMod != null && graphMod.source != "") {
 		out = graphMod.source;
 	} else if (filePath.endsWith(".h")) {
-		// .h → translate C to MS extern decls
-		out = translateCHeader(raw, []);
-	} else if (filePath.endsWith(".ms") || filePath.endsWith(".cms") || filePath.endsWith(".jms") || filePath.endsWith(".wms")) {
-		// .ms-family → inline .h imports with dep-tracking provider.
-		// inlineHeaderImports preserves the original `import { ... } from "*.h";`
-		// statement and inserts the synthesized extern decls after it, so Phase B
-		// unused-import detection walks the ImportDecl naturally.
-		const provider = createTaSourceProvider(db, fileId);
-		out = inlineHeaderImports(raw, filePath, provider, true);
+		out = headerModuleSource(filePath, createTaSourceProvider(db, -1), null, []);
 	}
 
 	db.preprocessCache.set(fileId, out);
@@ -549,10 +538,6 @@ function buildImportEntries(db: TransAmDb, filePath: string, program: Node): Imp
 		}
 		if (stmt.kind != NodeKind.ImportDecl) continue;
 		const imp = stmt.data as ImportDeclData;
-		// .h imports are handled by inlineHeaderImports; their ImportDecl survives
-		// for unused-import detection only — don't create a module import entry.
-		if (imp.importSource.length >= 2 && imp.importSource.slice(imp.importSource.length - 2, imp.importSource.length) == ".h") continue;
-
 		// Resolve import specifier using the same resolver as everything else
 		const resolvedPath = dbResolveImport(db, filePath, imp.importSource);
 
