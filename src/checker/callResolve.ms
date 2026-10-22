@@ -2042,7 +2042,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			const objType = me.object.nodeType != null ? peelTransparentInstance(me.object.nodeType) : null;
 			const isNamespaceQualified = (me.object.resolvedSym != null && me.object.resolvedSym.symbolKind == SymbolKind.Module)
 				|| (objType != null && objType.kind == TypeKind.Module);
-			if (objType != null && !isNamespaceQualified) {
+			const callsOwnFunctionField = objType != null && getProperty(objType, me.property).kind == TypeKind.Function;
+			if (objType != null && !isNamespaceQualified && !callsOwnFunctionField) {
 				const allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
 				// Type-level access (e.g., Buffer.method()) — only static extensions apply.
 				const isStaticAccess = isTypeLevelAccess(ctx, me.object, me.property);
