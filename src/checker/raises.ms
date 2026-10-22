@@ -56,7 +56,7 @@ function closurePairTarget(value: Readonly<Node> | null): Readonly<Symbol | null
 		if (d.keys[i] != "fn") continue;
 		const fn = d.properties[i];
 		const sym = fn.resolvedSym;
-		if (fn.kind == NodeKind.Identifier && sym != null && sym.symbolKind == SymbolKind.Function) return sym;
+		if (fn.kind == NodeKind.Identifier && sym != null && sym.symbolKind == SymbolKind.Function) return (value.data as ObjectLiteralData).properties[i].resolvedSym;
 	}
 	return null;
 }
@@ -94,13 +94,12 @@ function noteTempWrites(node: Node): void {
 }
 
 function calleeTarget(tables: Readonly<RaiseTables>, call: Readonly<Node>): Readonly<Symbol | null> {
-	const callee = (call.data as CallExprData).callee;
-	const sym = callee.resolvedSym;
-	if (sym == null) return closurePairTarget(callee);
-	if (hasFlag(sym, SymbolFlag.DestroyOp)) return destroyRoutine(tables, sym, (call.data as CallExprData).arguments) ?? sym;
+	const sym = (call.data as CallExprData).callee.resolvedSym;
+	if (sym == null) return closurePairTarget((call.data as CallExprData).callee);
+	if (hasFlag(sym, SymbolFlag.DestroyOp)) return destroyRoutine(tables, sym, (call.data as CallExprData).arguments) ?? (call.data as CallExprData).callee.resolvedSym;
 	if (isOverloadSignature(sym)) return implementationOf(call);
 	const bound = tables.closureTargets.readonlyGet(sym);
-	return bound != null && tables.tempWrites.readonlyGet(sym) == 1 ? bound : sym;
+	return bound != null && tables.tempWrites.readonlyGet(sym) == 1 ? tables.closureTargets.readonlyGet(sym) : (call.data as CallExprData).callee.resolvedSym;
 }
 
 function isOverloadSignature(sym: Readonly<Symbol>): boolean {
@@ -108,8 +107,7 @@ function isOverloadSignature(sym: Readonly<Symbol>): boolean {
 }
 
 function implementationOf(call: Readonly<Node>): Readonly<Symbol | null> {
-	const impl = call.resolvedSym;
-	return impl != null && !isOverloadSignature(impl) ? impl : null;
+	return call.resolvedSym != null && !isOverloadSignature(call.resolvedSym) ? call.resolvedSym : null;
 }
 
 // A routine value handed to an extern can be called from inside it.
@@ -133,13 +131,12 @@ function destroyRoutine(tables: Readonly<RaiseTables>, sym: Readonly<Symbol>, ar
 	if (tables.bodies.has(sym) && !hasFlag(sym, SymbolFlag.ImportC)) return sym;
 	if (args.length == 0 || args[0].nodeType == null) return null;
 	const op = releasedTypeDestroy(tables.ops, tables.roots, args[0].nodeType!);
-	return op != null && tables.bodies.has(op) ? op : null;
+	return op != null && tables.bodies.has(op) ? releasedTypeDestroy(tables.ops, tables.roots, args[0].nodeType!) : null;
 }
 
 // A class value is a ref whose destroy is lifted for the object it points at.
 function releasedTypeDestroy(ops: Readonly<HashMap<string, Symbol>>, roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): Readonly<Symbol | null> {
-	const own = getOpByKeyIn(ops, roots, t, AttachedOp.AttachedDestructor);
-	if (own != null || t.kind != TypeKind.Ref || t.typeReturn == null) return own;
+	if (getOpByKeyIn(ops, roots, t, AttachedOp.AttachedDestructor) != null || t.kind != TypeKind.Ref || t.typeReturn == null) return getOpByKeyIn(ops, roots, t, AttachedOp.AttachedDestructor);
 	return getOpByKeyIn(ops, roots, t.typeReturn!, AttachedOp.AttachedDestructor);
 }
 
