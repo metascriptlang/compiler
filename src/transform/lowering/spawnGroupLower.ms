@@ -111,6 +111,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 	while (si < n) {
 		const slot = slots[si];
 		if (slot.closure.kind == NodeKind.Identifier && slot.innerType != null && mayHoldCycleRoot(slot.innerType, ctx)) slot.closure = callingThunk(slot.closure, slot.innerType);
+		const thunk = spawnThunk(slot.closure);
 		// Use first non-null timeout found
 		if (slot.timeout != null && groupTimeout == null) {
 			groupTimeout = slot.timeout;
@@ -118,10 +119,10 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 		// Inject safe-points into closure body when timeout
 		if (groupTimeout != null) {
 			let closureBody: Node | null = null;
-			if (slot.closure.kind == NodeKind.FunctionExpr) {
-				closureBody = (slot.closure.data as FunctionExprData).funcExprBody;
-			} else if (slot.closure.kind == NodeKind.ArrowFunction) {
-				closureBody = (slot.closure.data as ArrowFunctionData).arrowBody;
+			if (thunk.kind == NodeKind.FunctionExpr) {
+				closureBody = (thunk.data as FunctionExprData).funcExprBody;
+			} else if (thunk.kind == NodeKind.ArrowFunction) {
+				closureBody = (thunk.data as ArrowFunctionData).arrowBody;
 			}
 			if (closureBody != null) {
 				injectCancelSafePoints(closureBody, ag.ident, loc);
@@ -131,11 +132,11 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 		// so closures extracted here bypass spawnLower's boxing pass).
 		// Also update closure return type to void* so codegen emits correct signature.
 		if (slot.innerType != null) {
-			if (slot.closure.kind == NodeKind.FunctionExpr) {
-				const fd = slot.closure.data as FunctionExprData;
+			if (thunk.kind == NodeKind.FunctionExpr) {
+				const fd = thunk.data as FunctionExprData;
 				if (fd.funcExprBody != null) { boxReturns(fd.funcExprBody, slot.innerType); }
-			} else if (slot.closure.kind == NodeKind.ArrowFunction) {
-				const ad = slot.closure.data as ArrowFunctionData;
+			} else if (thunk.kind == NodeKind.ArrowFunction) {
+				const ad = thunk.data as ArrowFunctionData;
 				if (ad.arrowBody != null) {
 					if (ad.arrowBody.kind == NodeKind.BlockStmt) {
 						boxReturns(ad.arrowBody, slot.innerType);
@@ -144,11 +145,14 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 					}
 				}
 			}
+			if (thunk != slot.closure && thunk.nodeType != null && thunk.nodeType.kind == TypeKind.Function) {
+				thunk.nodeType.typeReturn = createPtr(voidType());
+			}
 			if (slot.closure.nodeType != null && slot.closure.nodeType.kind == TypeKind.Function) {
 				slot.closure.nodeType.typeReturn = createPtr(voidType());
 			}
 		}
-		disownResult(spawnThunk(slot.closure), slot.innerType, ctx);
+		disownResult(thunk, slot.innerType, ctx);
 		disownMovedCaptures(slot.closure, ctx);
 		// Wrap bare function reference as msClosure {fn, env: null}
 		let closure = slot.closure;
