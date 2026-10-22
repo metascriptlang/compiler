@@ -3228,7 +3228,7 @@ function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | n
 	if (node == ctx.initTracker.definiteTarget) {
 		node.nodeType = capturedView ? propagateReadonlyView(readType) : readType; return;
 	}
-	const flowType = getFlowTypeOfReference(node, readType);
+	const flowType = isCapturableValue(sym) || d.name == "this" ? getFlowTypeOfReference(node, readType) : readType;
 	node.nodeType = capturedView ? propagateReadonlyView(flowType) : flowType;
 	return;
 }

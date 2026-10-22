@@ -5985,6 +5985,38 @@ test "phase 6: assignment narrow respects declared upper bound" {
 	);
 }
 
+
+
+
+test "flow: a function, class or enum name reads as its declared type" {
+	assert checkOk(
+		"function g(v: number): number { return v + 1; }\n"
+		+ "class Box { static n: number = 3; }\n"
+		+ "enum Color { Red, Green }\n"
+		+ "function f(): number {\n"
+		+ "  const h: (v: number) => number = g;\n"
+		+ "  if (Box.n > 0) { const c: Color = Color.Green; return h(Box.n); }\n"
+		+ "  return 0;\n"
+		+ "}\n"
+	);
+}
+
+test "flow: a condition on a function name does not narrow it" {
+	assert !checkOk(
+		"function g(v: number): number { return v + 1; }\n"
+		+ "function f(): void {\n"
+		+ "  if (typeof g === \"string\") { const s: boolean = g; }\n"
+		+ "}\n"
+	);
+}
+
+test "flow: a variable of function type still narrows" {
+	assert checkOk("function f(cb: ((v: number) => number) | null): number { if (cb != null) return cb(1); return 0; }");
+}
+
+
+
+
 test "phase 6: type predicate narrows in truthy branch" {
 	// `isString(val)` true → val is string → return val is valid.
 	assert checkOk(
