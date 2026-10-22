@@ -6202,6 +6202,37 @@ test "ledger: a program that drops strings, arrays, objects and boxes ends with 
 	assert liveItems(vm) == 0;
 }
 
+const assignsToItself: RaiserInstruction[] = [
+	raiserABx(RaiserOpcode.LoadConst, 0, 0),
+	raiserABx(RaiserOpcode.LoadConst, 1, 1),
+	raiserABC(RaiserOpcode.ConcatStr, 2, 0, 1),
+	raiserABC(RaiserOpcode.NewObject, 3, 0, 0),
+	raiserABC(RaiserOpcode.StoreField, 3, 2, 2),
+	raiserABC(RaiserOpcode.NewObject, 4, 0, 0),
+	raiserABC(RaiserOpcode.Move, 2, 2, 0),
+	raiserABC(RaiserOpcode.Move, 3, 3, 0),
+	raiserABC(RaiserOpcode.LoadField, 5, 3, 2),
+	raiserABC(RaiserOpcode.StoreField, 3, 2, 5),
+	raiserABC(RaiserOpcode.LoadNil, 5, 0, 0),
+	raiserABC(RaiserOpcode.Move, 6, 3, 0),
+	raiserABC(RaiserOpcode.Move, 3, 4, 0),
+	raiserABC(RaiserOpcode.Move, 4, 6, 0),
+	raiserABC(RaiserOpcode.LoadNil, 6, 0, 0),
+	raiserABC(RaiserOpcode.LoadNil, 2, 0, 0),
+	raiserABC(RaiserOpcode.LoadField, 7, 4, 2),
+	raiserABx(RaiserOpcode.LoadConst, 8, 3),
+	raiserABC(RaiserOpcode.Halt, 8, 0, 0),
+];
+
+test "ledger: a register, a field and a swap assigned to themselves keep what they hold and free it with the last holder" {
+	const vm = execModule(makeTestModule(assignsToItself, [raiserConstString("ab"), raiserConstString("cd"), raiserConstString("s"), raiserInt(0)]), "orc");
+	assert vm.error == "", vm.error;
+	assert heapStringText(vm.arrayHeap, heapBoxValue(vm.arrayHeap, vm.regs.refs[7])) == "abcd";
+	assert heapStringLive(vm.arrayHeap) == 1 && vmLiveCount(vm) == 2;
+	releaseRoots(vm);
+	assert liveItems(vm) == 0;
+}
+
 test "ledger: an item no root reaches but still counted fails the program end" {
 	const vm = createVM(makeTestModule(dropsEverything, dropsEverythingConsts), "orc");
 	rcIncref(vm.arrayHeap, vm.objectHeap, heapAllocString(vm.arrayHeap, "leaked"));
