@@ -130,6 +130,9 @@ extern function msGenericArrayPush(arr: Ptr<void>, sink value: Ptr<void>): void 
 @compilerFunc @builtin("SpawnInto")
 extern function msSpawnInto(sink fut: Ptr<void>, fn: Ptr<void>): Ptr<void>;
 
+@compilerFunc @builtin("SpawnInto")
+extern function msSpawnIntoHeldSubmit(sink fut: Ptr<void>, fn: Ptr<void>, hp: Ptr<void>): Ptr<void>;
+
 @compilerFunc @builtin("FutureCreateInline")
 extern function msFutureCreateInline(): Ptr<void>;
 
@@ -1107,6 +1110,15 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msAwaitSlotSettle(sp: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msSpawnHeldCreate(): Ptr<void>;
+
+	@compilerFunc
+	extern function msSpawnHeldSubmit(hp: Ptr<void>, fn: () => void): Ptr<void>;
+
+	@compilerFunc
+	extern function msSpawnHeldSettle(hp: Ptr<void>): void;
 
 	@compilerFunc
 	extern function msActorCreatePid(state: Ptr<void>, dispatch: Ptr<void>): int64;

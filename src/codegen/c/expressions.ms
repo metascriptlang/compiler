@@ -3016,7 +3016,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		addLine(sec(g, CSection.Types), `#define ${futStructName}_DEFINED`);
 		addLine(sec(g, CSection.Types), `MS_FUTURE_STRUCT(${futStructName}, ${innerC});`);
 		addLine(sec(g, CSection.Types), `#endif`);
-		ctx.results.push(`msSpawnInto(${argsStr}, sizeof(${innerC}), offsetof(${futStructName}, value))`);
+		ctx.results.push(`${callee}(${argsStr}, sizeof(${innerC}), offsetof(${futStructName}, value))`);
 		return;
 	}
 

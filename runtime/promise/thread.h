@@ -164,9 +164,9 @@ void msPoolSubmit(msSpawnCtx* ctx);
 /* Spawn a closure on a worker pool thread. Returns void* (msFuture_ptr internally).
  * Reference parity: spawn result compatible with any Future[T] pointer.
  * Takes ownership of the closure env by incrementing its refcount. */
-static inline void* msSpawn(msClosure fn) {
+static inline void* msSpawnCancellable(msClosure fn, _Atomic(bool)* cancelFlag) {
 	msFuture_ptr* fut = msFutureCreateT(msFuture_ptr);
-	msSpawnCtx ctx = { .fn = (void*)fn.fn, .env = fn.env, .fut = fut };
+	msSpawnCtx ctx = { .fn = (void*)fn.fn, .env = fn.env, .fut = fut, .cancelFlag = cancelFlag };
 	if (fn.env != NULL) {
 		msIncRef(fn.env);
 	}
@@ -199,9 +199,9 @@ static inline void* msSpawn(msClosure fn) {
  * Worker runs the closure (still returns boxed void*), then memcpys inlineCopySize
  * bytes from the box into the fut's inline value slot and frees the box.
  * Downstream readers use msWaitForStruct (typed inline read). */
-static inline void* msSpawnInto(void* fut, msClosure fn, uint32_t copySize, uint32_t valueOffset) {
+static inline void* msSpawnIntoCancellable(void* fut, msClosure fn, uint32_t copySize, uint32_t valueOffset, _Atomic(bool)* cancelFlag) {
 	msSpawnCtx ctx = {
-		.fn = (void*)fn.fn, .env = fn.env, .fut = fut,
+		.fn = (void*)fn.fn, .env = fn.env, .fut = fut, .cancelFlag = cancelFlag,
 		.inlineCopySize = copySize, .inlineValueOffset = valueOffset,
 	};
 	if (fn.env != NULL) msAtomicIncRef(fn.env);
@@ -217,6 +217,14 @@ static inline void* msSpawnInto(void* fut, msClosure fn, uint32_t copySize, uint
 #endif
 	msPoolSubmit(&ctx);
 	return fut;
+}
+
+static inline void* msSpawn(msClosure fn) {
+	return msSpawnCancellable(fn, NULL);
+}
+
+static inline void* msSpawnInto(void* fut, msClosure fn, uint32_t copySize, uint32_t valueOffset) {
+	return msSpawnIntoCancellable(fut, fn, copySize, valueOffset, NULL);
 }
 
 /* Submit a spawn task whose completion targets a group slot instead of a future.
@@ -275,6 +283,74 @@ static inline void msAwaitSlotSettle(void* sp) {
 	msAwaitSlotWait(sp);
 	if (atomic_load_explicit(&s->failed, memory_order_acquire)) msNoteOrphanError(s->error);
 	msAwaitSlotRelease(sp);
+	msErr = err;
+	msCurrException = exc;
+}
+
+/* The futures of the spawns a routine keeps in a value (an array, a combinator
+ * argument), each held by one reference until the routine exits. */
+typedef struct msSpawnHeld {
+	void** futs;
+	int64_t len;
+	int64_t cap;
+	_Atomic(bool) cancelled;
+} msSpawnHeld;
+
+static inline void* msSpawnHeldCreate(void) {
+	return calloc(1, sizeof(msSpawnHeld));
+}
+
+static inline void msSpawnHeldKeep(void* hp, void* fut) {
+	msSpawnHeld* h = (msSpawnHeld*)hp;
+	if (h->len == h->cap) {
+		int64_t live = 0;
+		for (int64_t i = 0; i < h->len; i += 1) {
+			void* f = h->futs[i];
+			if (atomic_load_explicit(&((msFutureBase*)f)->finished, memory_order_acquire)) msDecref(f);
+			else h->futs[live++] = f;
+		}
+		h->len = live;
+		if (h->len == h->cap) {
+			h->cap = h->cap > 0 ? h->cap * 2 : 4;
+			h->futs = (void**)realloc(h->futs, (size_t)h->cap * sizeof(void*));
+			if (h->futs == NULL) abort();
+		}
+	}
+	msIncRef(fut);
+	h->futs[h->len] = fut;
+	h->len += 1;
+}
+
+/* The held spawns submit with the list's cancel flag, so the exit can skip the
+ * tasks no worker has admitted yet. */
+static inline void* msSpawnHeldSubmit(void* hp, msClosure fn) {
+	void* fut = msSpawnCancellable(fn, &((msSpawnHeld*)hp)->cancelled);
+	msSpawnHeldKeep(hp, fut);
+	return fut;
+}
+
+static inline void* msSpawnIntoHeldSubmit(void* fut, msClosure fn, void* hp, uint32_t copySize, uint32_t valueOffset) {
+	msSpawnIntoCancellable(fut, fn, copySize, valueOffset, &((msSpawnHeld*)hp)->cancelled);
+	msSpawnHeldKeep(hp, fut);
+	return fut;
+}
+
+/* Runs at every exit of the routine: cancel what is not admitted, then join
+ * every held task, with the same in-flight exception discipline as
+ * msAwaitSlotSettle. */
+static inline void msSpawnHeldSettle(void* hp) {
+	bool err = msErr;
+	msException* exc = msCurrException;
+	msErr = false;
+	msCurrException = NULL;
+	msSpawnHeld* h = (msSpawnHeld*)hp;
+	atomic_store_explicit(&h->cancelled, true, memory_order_release);
+	for (int64_t i = 0; i < h->len; i += 1) {
+		msWaitForReady(h->futs[i]);
+		msDecref(h->futs[i]);
+	}
+	free(h->futs);
+	free(h);
 	msErr = err;
 	msCurrException = exc;
 }

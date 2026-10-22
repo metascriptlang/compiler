@@ -28,6 +28,9 @@
 // REPROMISE T3 Stage A. See docs/PARALOCK.md §6.3 for the AwaitGroup lifecycle.
 
 import {
+	BlockStmtData, FunctionDeclData, MethodDeclData, ConstructorDeclData, TestDeclData,
+} from "../../ast/node";
+import {
 	Node, NodeKind, DeclKind, SourceLocation,
 	VariableDeclData, ExprStmtData, ReturnStmtData, AssertStmtData,
 	AwaitExprData, CallExprData, ObjectLiteralData, ExportDeclData, ProgramData,
@@ -637,5 +640,136 @@ export function lowerAwait(program: Node, ctx: TransformContext): Node {
 	_spawnSlotFrames = [];
 	walkExpandBlocksHooked(program, expandStmt, ctx, enterSpawnSlotFrame, exitSpawnSlotFrame);
 	if (_settleDeferred) lowerDefer(program, ctx);
+	return program;
+}
+
+// ===== Held spawns: joined when their routine exits =====
+// A spawn whose handle the routine keeps in a value (an array, a combinator
+// argument, a binding that is not only awaited) is not joined by the slot path.
+// Each such spawn receives the routine's held list as a second argument, so the
+// runtime submits it under the list's cancel flag and keeps one reference; a
+// scope-exit defer cancels what no worker has admitted and waits for the rest,
+// on every exit. Runs before asyncDesugar, so the defer of an async routine runs
+// when the routine ends, not at each suspension.
+
+interface HeldFrame { held: Symbol | null; awaitOnly: SymSet | null; }
+
+let _heldFrame: HeldFrame = { held: null, awaitOnly: null };
+let _heldUsed = false;
+
+function isSpawnNode(n: Node): boolean {
+	if (n.kind != NodeKind.CallExpr) return false;
+	const sym = n.resolvedSym != null ? n.resolvedSym : (n.data as CallExprData).callee.resolvedSym;
+	return sym != null && sym.builtinKind == "PromiseSpawn";
+}
+
+function isRoutineNode(n: Node): boolean {
+	return n.kind == NodeKind.FunctionDecl || n.kind == NodeKind.ArrowFunction || n.kind == NodeKind.FunctionExpr
+		|| n.kind == NodeKind.MethodDecl || n.kind == NodeKind.ConstructorDecl || n.kind == NodeKind.TestDecl;
+}
+
+function routineFlags(n: Node): string {
+	return match (n.kind) {
+		NodeKind.FunctionDecl => (n.data as FunctionDeclData).fnFlags,
+		NodeKind.MethodDecl => (n.data as MethodDeclData).methodFlags,
+		NodeKind.ArrowFunction => (n.data as ArrowFunctionData).arrowFlags,
+		NodeKind.FunctionExpr => (n.data as FunctionExprData).funcExprFlags,
+		_ => "",
+	};
+}
+
+function isSlotJoined(n: Node): boolean {
+	const awaitOnly = _heldFrame.awaitOnly;
+	if (n.kind == NodeKind.VariableDecl) {
+		const init = (n.data as VariableDeclData).initializer;
+		return init != null && isSpawnNode(init) && n.resolvedSym != null && awaitOnly != null && symSetContains(awaitOnly, n.resolvedSym);
+	}
+	if (n.kind == NodeKind.AwaitExpr) {
+		const arg = (n.data as AwaitExprData).awaitArg;
+		return arg != null && isSpawnNode(arg);
+	}
+	return false;
+}
+
+function holdSpawns(n: Node | null, ctx: TransformContext): void {
+	if (n == null) return;
+	if (isRoutineNode(n)) {
+		joinHeldInRoutine(n, ctx);
+		return;
+	}
+	if (_heldFrame.held != null && isSlotJoined(n)) {
+		const sp = n.kind == NodeKind.VariableDecl ? (n.data as VariableDeclData).initializer! : (n.data as AwaitExprData).awaitArg!;
+		forEachChild(sp, (c: Node): void => { holdSpawns(c, ctx); });
+		return;
+	}
+	forEachChild(n, (c: Node): void => { holdSpawns(c, ctx); });
+	if (_heldFrame.held != null && isSpawnNode(n)) {
+		const list = makeIdentResolved(_heldFrame.held!, n.location);
+		list.nodeType = VOID_PTR_TYPE;
+		(n.data as CallExprData).arguments.push(list);
+		_heldUsed = true;
+	}
+}
+
+function hasOwnSpawn(n: Node | null): boolean {
+	if (n == null || isRoutineNode(n)) return false;
+	if (isSpawnNode(n)) return true;
+	let found = false;
+	forEachChild(n, (c: Node): void => { if (!found && hasOwnSpawn(c)) found = true; });
+	return found;
+}
+
+function routineBodyBlock(n: Node): Node | null {
+	if (n.kind == NodeKind.ArrowFunction) {
+		const d = n.data as ArrowFunctionData;
+		if (d.arrowBody != null && d.arrowBody.kind != NodeKind.BlockStmt && hasOwnSpawn(d.arrowBody)) {
+			d.arrowBody = makeBlock([makeReturn(d.arrowBody, d.arrowBody.location)], d.arrowBody.location);
+		}
+		return d.arrowBody;
+	}
+	return match (n.kind) {
+		NodeKind.FunctionDecl => (n.data as FunctionDeclData).fnBody,
+		NodeKind.MethodDecl => (n.data as MethodDeclData).methodBody,
+		NodeKind.ConstructorDecl => (n.data as ConstructorDeclData).ctorBody,
+		NodeKind.TestDecl => (n.data as TestDeclData).testBody,
+		NodeKind.FunctionExpr => (n.data as FunctionExprData).funcExprBody,
+		_ => null,
+	};
+}
+
+function joinHeldInRoutine(fn: Node, ctx: TransformContext): void {
+	const body = routineBodyBlock(fn);
+	if (body == null || body.kind != NodeKind.BlockStmt) {
+		forEachChild(fn, (c: Node): void => { holdSpawns(c, ctx); });
+		return;
+	}
+	const saved = _heldFrame;
+	const savedUsed = _heldUsed;
+	const loc = body.location;
+	const isAsync = routineFlags(fn).indexOf("async") >= 0;
+	const held = freshTempSym(ctx, "held", VOID_PTR_TYPE);
+	_heldFrame = { held, awaitOnly: isAsync ? null : awaitOnlyHandles(fn) };
+	_heldUsed = false;
+	holdSpawns(body, ctx);
+	if (_heldUsed) {
+		const decl = makeVarDecl(held.name, makeCall(runtimeRef("msSpawnHeldCreate", loc), [], loc), DeclKind.Const, loc);
+		decl.resolvedSym = held;
+		decl.nodeType = VOID_PTR_TYPE;
+		const settle = makeExprStmt(makeCall(runtimeRef("msSpawnHeldSettle", loc), [makeIdentResolved(held, loc)], loc), loc);
+		const deferData: NodeData = { deferExpr: makeBlock([settle], loc) };
+		const bd = body.data as BlockStmtData;
+		const stmts: Node[] = [decl, createNodeAt(NodeKind.DeferStmt, deferData, loc)];
+		for (const s of bd.statements) stmts.push(s);
+		bd.statements = stmts;
+	}
+	_heldFrame = saved;
+	_heldUsed = savedUsed;
+}
+
+export function lowerHeldSpawns(program: Node, ctx: TransformContext): Node {
+	_heldFrame = { held: null, awaitOnly: null };
+	_heldUsed = false;
+	holdSpawns(program, ctx);
+	lowerDefer(program, ctx);
 	return program;
 }

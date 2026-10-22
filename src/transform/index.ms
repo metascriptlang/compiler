@@ -74,7 +74,7 @@ import { lowerGenerator } from "./lowering/generatorLower";
 import { lowerAsyncBridge } from "./lowering/asyncBridge";
 import { lowerSpawn } from "./lowering/spawnLower";
 import { lowerSpawnGroup } from "./lowering/spawnGroupLower";
-import { lowerAwait } from "./lowering/awaitLower";
+import { lowerAwait, lowerHeldSpawns } from "./lowering/awaitLower";
 import { lowerVarHoist } from "./lowering/varHoist";
 import { lowerLambda } from "./lowering/lambdaLifting";
 import { lowerCallHoist } from "./lowering/callHoist";
@@ -183,6 +183,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerNamespaceValues(result); flowLap("pass.lowerNamespaceValues"); }
 	if (!jsBackend) { result = lowerActorPre(result, ctx); flowLap("pass.lowerActorPre"); }
 	if (!jsBackend) { result = lowerSpawnGroup(result, ctx); flowLap("pass.lowerSpawnGroup"); }
+	if (!jsBackend) { result = lowerHeldSpawns(result, ctx); flowLap("pass.lowerHeldSpawns"); }
 	result = lowerPointerAddresses(result, ctx, !jsBackend);
 	flowLap("pass.lowerPointerAddresses");
 	if (!jsBackend) { result = lowerAsync(result, ctx); flowLap("pass.lowerAsync"); }

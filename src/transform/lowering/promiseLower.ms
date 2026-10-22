@@ -182,17 +182,29 @@ function lowerPromiseResolve(node: Node, loc: SourceLocation, ctx: TransformCont
 //   heap-box pointer — matching boxedInFuture readers (msUnboxStruct).
 // Each call's nodeType is its true result type (Promise<T>). Codegen extracts T via
 // awaitedType — no more abuse of nodeType as a sizeof-hint.
+// A spawn that lowerHeldSpawns gave its routine's held list submits through the
+// held variants, which run it under the list's cancel flag and keep a reference.
+// A timed spawn's options object is never such a list: the checker requires a
+// timed spawn to be awaited where it is written, and the await joins it.
 function lowerPromiseSpawn(node: Node, loc: SourceLocation): Node {
 	const cd = node.data as CallExprData;
 	const innerType = awaitedType(node.nodeType);
+	// The list is typed Ptr<void>; a generator frame or a closure env may have
+	// turned its identifier into a field read by now, so its type names it.
+	const last = cd.arguments.length == 2 ? cd.arguments[1] : null;
+	const held = last != null && last.nodeType != null && last.nodeType.kind == TypeKind.Ptr ? last : null;
 	if (inlineInFuture(innerType)) {
 		const futAlloc = makeCall(runtimeRef("msFutureCreateInline", loc), [], loc);
 		futAlloc.nodeType = node.nodeType;  // Promise<T>
-		const spawnInto = makeCall(runtimeRef("msSpawnInto", loc), [futAlloc, cd.arguments[0]], loc);
+		const spawnInto = held != null
+			? makeCall(runtimeRef("msSpawnIntoHeldSubmit", loc), [futAlloc, cd.arguments[0], held], loc)
+			: makeCall(runtimeRef("msSpawnInto", loc), [futAlloc, cd.arguments[0]], loc);
 		spawnInto.nodeType = node.nodeType;  // Promise<T>
 		return spawnInto;
 	}
-	const spawnCall = makeCall(runtimeRef("msSpawn", loc), cd.arguments, loc);
+	const spawnCall = held != null
+		? makeCall(runtimeRef("msSpawnHeldSubmit", loc), [held, cd.arguments[0]], loc)
+		: makeCall(runtimeRef("msSpawn", loc), cd.arguments, loc);
 	spawnCall.nodeType = node.nodeType;
 	return spawnCall;
 }
