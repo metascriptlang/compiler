@@ -1,5 +1,5 @@
 import { platform } from "std/process";
-import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf, declaredBasesOf } from "./types";
+import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf, declaredBasesOf, classDeclaredParentOf } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore, typeRelation, TypeRelation } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
@@ -736,7 +736,16 @@ function parentLevel(level: (Type | null)[]): (Type | null)[] {
 }
 
 function classBaseStruct(t: Type): Type | null {
-	const parent = classParentOf(t);
+	return baseStructOf(classParentOf(t));
+}
+
+// The base as the class declares it, its type arguments unbound: enough for a walk that only
+// names each class, and it creates no type, so emission may walk it.
+function classBaseOwner(t: Type): Type | null {
+	return baseStructOf(classDeclaredParentOf(t));
+}
+
+function baseStructOf(parent: Type | null): Type | null {
 	if (parent == null) return null;
 	let inner = parent;
 	if (inner.kind == TypeKind.Ref && inner.typeReturn != null) inner = inner.typeReturn;
@@ -849,7 +858,7 @@ export function dispatchMethodOf(classSym: Symbol, methodName: string): DispMeth
 		const own = classOwnSym(cur);
 		const entry = own != null ? dispatchDeclaredEntry(own, methodName) : null;
 		if (entry != null) return entry;
-		cur = classBaseStruct(cur);
+		cur = classBaseOwner(cur);
 		d += 1;
 	}
 	return null;
@@ -866,14 +875,14 @@ function dispDepthBelow(classSym: Symbol, root: Symbol): int32 {
 	let d = 0;
 	while (cur != null && d < 64) {
 		if (classOwnSym(cur) == root) return d;
-		cur = classBaseStruct(cur);
+		cur = classBaseOwner(cur);
 		d += 1;
 	}
 	return -1;
 }
 
 export function dispatchOverriddenEntry(classSym: Symbol, methodName: string): DispMethodEntry | null {
-	let cur = classSym.symbolType != null ? classBaseStruct(classSym.symbolType) : null;
+	let cur = classSym.symbolType != null ? classBaseOwner(classSym.symbolType) : null;
 	let d = 0;
 	while (cur != null && d < 64) {
 		const baseSym = classOwnSym(cur);
@@ -883,7 +892,7 @@ export function dispatchOverriddenEntry(classSym: Symbol, methodName: string): D
 				if (e.methodName == methodName) return e;
 			}
 		}
-		cur = classBaseStruct(cur);
+		cur = classBaseOwner(cur);
 		d += 1;
 	}
 	return null;

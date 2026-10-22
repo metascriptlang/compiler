@@ -9,7 +9,7 @@ import "../parser/statements/core";
 import { resetBuildState } from "../compiler/buildSession";
 import { checkModuleGraph, loadStdGlobalImportModules, loadExtraGlobalImportModules } from "../checker/orchestrator";
 import { hasExtraGlobalImports } from "../checker/prelude";
-import { TargetInfo, hostTargetInfo } from "../checker/types";
+import { TargetInfo, hostTargetInfo, duVariantMark, instantiatedBodyCount } from "../checker/types";
 import { computeAliveSet } from "../checker/reachability";
 import { inferRaises } from "../checker/raises";
 import { hasErrors, CheckerError, CheckerContext, GcMode, Severity, ExportRegistry } from "../checker/context";
@@ -371,6 +371,13 @@ function loadProjectGraph(entryPath: string, provider: SourceProvider, config: R
 	return graph;
 }
 
+let _emissionCreated: int32[] = [0, 0];
+
+// What the emission of the last compileProjectToC created: [union variants registered, generic bodies instantiated].
+export function lastEmissionCreated(): int32[] {
+	return _emissionCreated;
+}
+
 // Compile project to C — same pipeline as compile.ms:
 // checkModuleGraph (2-phase) → per-module transform → computeAliveSet (post-transform DCE) → codegen
 export function compileProjectToC(entries: MapEntry[], entryPath: string): string {
@@ -452,12 +459,15 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 	for (let i = 0; i < emissionPrograms.length; i += 1) {
 		prepareCModuleEmission(emissionPrograms[i], emissionContexts[i], emissionPaths[i], aliveSet, emissionFacts);
 	}
+	const variantsBefore = duVariantMark();
+	const bodiesBefore = instantiatedBodyCount();
 	for (let i = 0; i < emissionPrograms.length; i += 1) {
 		const output = generateCModuleOutput(emissionPrograms[i], emissionContexts[i], emissionPaths[i], aliveSet, false, false, emissionFacts);
 		combined = combined + output.code;
 		output.code = "";
 		moduleOutputs.push(output);
 	}
+	_emissionCreated = [duVariantMark() - variantsBefore, instantiatedBodyCount() - bodiesBefore];
 
 	const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, "", false, moduleOutputs);
 	return `${combined}\n${dispatcher}`;

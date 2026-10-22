@@ -3773,6 +3773,16 @@ export function declaredBasesOf(t: Type | null): Type[] {
 	return bases;
 }
 
+// The parent as the class declares it: an instance's parent keeps the class's own parameters.
+export function classDeclaredParentOf(t: Type | null): Type | null;
+export function classDeclaredParentOf(t: Readonly<Type | null>): Readonly<Type | null>;
+export function classDeclaredParentOf(t: Readonly<Type | null>): Readonly<Type | null> {
+	if (t == null) return null;
+	const s = t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
+	const cls = s.kind == TypeKind.GenericInstance ? genericInstanceClass(s) : s;
+	return cls != null && cls.kind == TypeKind.Struct ? cls.typeExtra : null;
+}
+
 export function classAncestorInstance(t: Type | null, target: Type): Type | null {
 	const tgt = target.kind == TypeKind.Ref && target.typeReturn != null ? target.typeReturn : target;
 	const tgtClass = tgt.kind == TypeKind.GenericInstance ? genericInstanceClass(tgt) : tgt;
