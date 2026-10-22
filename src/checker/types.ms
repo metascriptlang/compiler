@@ -4508,10 +4508,11 @@ export interface UnifyBindings {
 	params: Type[];
 	types: Type[];
 	fromMapped: Type[]; // the params bound through a homomorphic mapped type, outranked by a direct binding
+	depth: int32;
 }
 
 export function createUnifyBindings(): UnifyBindings {
-	return { names: [], params: [], types: [], fromMapped: [] };
+	return { names: [], params: [], types: [], fromMapped: [], depth: 0 };
 }
 
 export function bindParam(b: UnifyBindings, param: Type, t: Type): void {
@@ -4538,8 +4539,6 @@ export function mergeUnifyBindings(into: UnifyBindings, from: UnifyBindings): vo
 	}
 }
 
-let unifyDepth = 0;
-
 let _unifyCount: float64 = 0;
 export function unifyTypeProfile(): float64[] { return [_unifyCount]; }
 export function unifyType(formal: Type | null, concrete: Type | null, bindings: UnifyBindings): void {
@@ -4552,10 +4551,10 @@ function unifyTypeGuard(formal: Type | null, concrete: Type | null, bindings: Un
 	// Identity check — break circular type references (e.g., Doc → DocData → Doc)
 	if (formal == concrete) return;
 	// Depth guard — prevent infinite recursion on recursive types (e.g., JsonValue contains JsonValue[])
-	if (unifyDepth > 20) return;
-	unifyDepth = unifyDepth + 1;
+	if (bindings.depth > 20) return;
+	bindings.depth = bindings.depth + 1;
 	unifyTypeInner(formal, concrete, bindings);
-	unifyDepth = unifyDepth - 1;
+	bindings.depth = bindings.depth - 1;
 }
 
 function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: UnifyBindings): void {
