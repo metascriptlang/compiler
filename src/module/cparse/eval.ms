@@ -29,7 +29,7 @@ function next(es: CConstEvalState): void {
 
 // ===== Recursive descent (C operator precedence) =====
 
-function evalTernary(es: CConstEvalState): int32 {
+function evalTernary(es: CConstEvalState): int64 {
 	let val = evalOr(es);
 	if (es.tok.stringVal == "?") {
 		next(es);
@@ -42,7 +42,7 @@ function evalTernary(es: CConstEvalState): int32 {
 	return val;
 }
 
-function evalOr(es: CConstEvalState): int32 {
+function evalOr(es: CConstEvalState): int64 {
 	let val = evalAnd(es);
 	while (es.tok.stringVal == "||") {
 		next(es);
@@ -52,7 +52,7 @@ function evalOr(es: CConstEvalState): int32 {
 	return val;
 }
 
-function evalAnd(es: CConstEvalState): int32 {
+function evalAnd(es: CConstEvalState): int64 {
 	let val = evalBitOr(es);
 	while (es.tok.stringVal == "&&") {
 		next(es);
@@ -62,7 +62,7 @@ function evalAnd(es: CConstEvalState): int32 {
 	return val;
 }
 
-function evalBitOr(es: CConstEvalState): int32 {
+function evalBitOr(es: CConstEvalState): int64 {
 	let val = evalBitXor(es);
 	while (es.tok.stringVal == "|") {
 		next(es);
@@ -71,7 +71,7 @@ function evalBitOr(es: CConstEvalState): int32 {
 	return val;
 }
 
-function evalBitXor(es: CConstEvalState): int32 {
+function evalBitXor(es: CConstEvalState): int64 {
 	let val = evalBitAnd(es);
 	while (es.tok.stringVal == "^") {
 		next(es);
@@ -80,7 +80,7 @@ function evalBitXor(es: CConstEvalState): int32 {
 	return val;
 }
 
-function evalBitAnd(es: CConstEvalState): int32 {
+function evalBitAnd(es: CConstEvalState): int64 {
 	let val = evalEquality(es);
 	while (es.tok.stringVal == "&") {
 		next(es);
@@ -89,7 +89,7 @@ function evalBitAnd(es: CConstEvalState): int32 {
 	return val;
 }
 
-function evalEquality(es: CConstEvalState): int32 {
+function evalEquality(es: CConstEvalState): int64 {
 	let val = evalRelational(es);
 	while (es.tok.stringVal == "==" || es.tok.stringVal == "!=") {
 		const op = es.tok.stringVal;
@@ -101,7 +101,7 @@ function evalEquality(es: CConstEvalState): int32 {
 	return val;
 }
 
-function evalRelational(es: CConstEvalState): int32 {
+function evalRelational(es: CConstEvalState): int64 {
 	let val = evalShift(es);
 	while (es.tok.stringVal == "<" || es.tok.stringVal == ">" ||
 		   es.tok.stringVal == "<=" || es.tok.stringVal == ">=") {
@@ -118,7 +118,7 @@ function evalRelational(es: CConstEvalState): int32 {
 	return val;
 }
 
-function evalShift(es: CConstEvalState): int32 {
+function evalShift(es: CConstEvalState): int64 {
 	let val = evalAdd(es);
 	while (es.tok.stringVal == "<<" || es.tok.stringVal == ">>") {
 		const op = es.tok.stringVal;
@@ -130,7 +130,7 @@ function evalShift(es: CConstEvalState): int32 {
 	return val;
 }
 
-function evalAdd(es: CConstEvalState): int32 {
+function evalAdd(es: CConstEvalState): int64 {
 	let val = evalMul(es);
 	while (es.tok.stringVal == "+" || es.tok.stringVal == "-") {
 		const op = es.tok.stringVal;
@@ -142,20 +142,20 @@ function evalAdd(es: CConstEvalState): int32 {
 	return val;
 }
 
-function evalMul(es: CConstEvalState): int32 {
+function evalMul(es: CConstEvalState): int64 {
 	let val = evalUnary(es);
 	while (es.tok.stringVal == "*" || es.tok.stringVal == "/" || es.tok.stringVal == "%") {
 		const op = es.tok.stringVal;
 		next(es);
 		const rhs = evalUnary(es);
 		if (op == "*") val = val * rhs;
-		else if (op == "/" && rhs != 0) val = (val / rhs) | 0;
+		else if (op == "/" && rhs != 0) val = (val / rhs) as int64;
 		else if (op == "%" && rhs != 0) val = val % rhs;
 	}
 	return val;
 }
 
-function evalUnary(es: CConstEvalState): int32 {
+function evalUnary(es: CConstEvalState): int64 {
 	return match (es.tok.stringVal) {
 		"!" => { next(es); return evalUnary(es) == 0 ? 1 : 0; },
 		"~" => { next(es); return ~evalUnary(es); },
@@ -165,7 +165,7 @@ function evalUnary(es: CConstEvalState): int32 {
 	};
 }
 
-function evalPrimary(es: CConstEvalState): int32 {
+function evalPrimary(es: CConstEvalState): int64 {
 	const tok = es.tok;
 
 	// Parenthesized expression
@@ -178,7 +178,7 @@ function evalPrimary(es: CConstEvalState): int32 {
 
 	// Numeric literal
 	if (tok.kind == CTokenKind.Num) {
-		const val = tok.intVal as int32;
+		const val = tok.intVal;
 		next(es);
 		return val;
 	}
@@ -191,7 +191,7 @@ function evalPrimary(es: CConstEvalState): int32 {
 		const name = tok.stringVal;
 		next(es);
 		if (es.constants.has(name)) {
-			return es.constants.get(name)! as int32;
+			return es.constants.get(name)!;
 		}
 		// Unknown identifier in const expr context — not necessarily an error
 		// (could be a macro that expanded to nothing, or a forward ref)
@@ -220,7 +220,7 @@ export function evalConstExpr(
 	if (es.error != "") {
 		return { value: 0 as int64, tok: es.tok, ok: false, error: es.error };
 	}
-	return { value: val as int64, tok: es.tok, ok: true, error: "" };
+	return { value: val, tok: es.tok, ok: true, error: "" };
 }
 
 // ===== Tests =====
@@ -355,4 +355,10 @@ test "eval logical and/or" {
 	assert r1.value == 0 as int64;
 	const r2 = evalStr("1 || 0");
 	assert r2.value == 1 as int64;
+}
+
+test "eval keeps a value past 32 bits" {
+	const r = evalStr("0x100000000LL + (1LL << 40)");
+	assert r.ok == true;
+	assert r.value == 1103806595072 as int64;
 }
