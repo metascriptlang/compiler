@@ -140,7 +140,7 @@ export function appendFile(path: string, content: string): Result<void, IoError>
 }
 
 // Change POSIX permission bits on a path. Mode is passed as a decimal int32
-// (e.g. 384 for rw------- = 0600). No-op on Windows.
+// (e.g. 384 for rw------- = 0600).
 export function chmod(path: string, mode: int32): Result<void, IoError> {
 	return errnoResult(chmodErrno(path, mode), path, "chmod failed");
 }

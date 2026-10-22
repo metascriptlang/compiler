@@ -23,6 +23,26 @@
 #define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
 #endif
 
+static int msFsErrnoFromWin32(DWORD code) {
+	switch (code) {
+	case ERROR_FILE_NOT_FOUND:
+	case ERROR_PATH_NOT_FOUND:
+	case ERROR_DIRECTORY:
+		return ENOENT;
+	case ERROR_ACCESS_DENIED:
+		return EACCES;
+	case ERROR_ALREADY_EXISTS:
+	case ERROR_FILE_EXISTS:
+		return EEXIST;
+	case ERROR_INVALID_PARAMETER:
+		return EINVAL;
+	case ERROR_NOT_ENOUGH_MEMORY:
+		return ENOMEM;
+	default:
+		return EIO;
+	}
+}
+
 static _Thread_local int _msFsLastErrno = 0;
 
 int32_t msFsLastErrno(void) {
@@ -62,7 +82,10 @@ msString msFsReadFile(msString path) {
 double msFsWriteFileMode(msString path, msString content, msString mode) {
 	_msFsLastErrno = 0;
 	FILE* f = fopen(msStringToCString(path), msStringToCString(mode));
-	if (!f) { _msFsLastErrno = errno; return 0.0; }
+	if (!f) {
+		_msFsLastErrno = errno == EACCES && msFsIsDir(path) == 1.0 ? EISDIR : errno;
+		return 0.0;
+	}
 	size_t written = fwrite(msStringToCString(content), 1, content.len, f);
 	fclose(f);
 	return (written == (size_t)content.len) ? 1.0 : 0.0;
@@ -71,10 +94,10 @@ double msFsWriteFileMode(msString path, msString content, msString mode) {
 /* ===== Permissions ===== */
 
 double msFsChmod(msString path, int32_t mode) {
-	/* Windows ACL model — no-op, always succeed */
-	(void)path; (void)mode;
 	_msFsLastErrno = 0;
-	return 1.0;
+	if (_chmod(msStringToCString(path), mode) == 0) return 1.0;
+	_msFsLastErrno = errno;
+	return 0.0;
 }
 
 /* ===== Stat ===== */
@@ -198,8 +221,9 @@ double msFsMkdir(msString path) {
 
 double msFsRmdir(msString path) {
 	_msFsLastErrno = 0;
+	_doserrno = 0;
 	if (_rmdir(msStringToCString(path)) == 0) return 1.0;
-	_msFsLastErrno = errno;
+	_msFsLastErrno = _doserrno != 0 ? msFsErrnoFromWin32(_doserrno) : errno;
 	return 0.0;
 }
 
@@ -225,7 +249,7 @@ msString msFsReadDirEntries(msString path) {
 	HANDLE h = FindFirstFileA(pattern, &fd);
 	free(pattern);
 	if (h == INVALID_HANDLE_VALUE) {
-		_msFsLastErrno = (int)GetLastError();
+		_msFsLastErrno = msFsErrnoFromWin32(GetLastError());
 		return MS_EMPTY_STRING;
 	}
 
@@ -285,7 +309,7 @@ double msFsRename(msString oldPath, msString newPath) {
 	const int oldWLen = MultiByteToWideChar(CP_UTF8, 0, oldUtf8, -1, NULL, 0);
 	const int newWLen = MultiByteToWideChar(CP_UTF8, 0, newUtf8, -1, NULL, 0);
 	if (oldWLen <= 0 || newWLen <= 0) {
-		_msFsLastErrno = ERROR_INVALID_PARAMETER;
+		_msFsLastErrno = EINVAL;
 		return 0.0;
 	}
 	wchar_t* oldW = (wchar_t*)malloc((size_t)oldWLen * sizeof(wchar_t));
@@ -293,7 +317,7 @@ double msFsRename(msString oldPath, msString newPath) {
 	if (oldW == NULL || newW == NULL) {
 		if (oldW != NULL) free(oldW);
 		if (newW != NULL) free(newW);
-		_msFsLastErrno = ERROR_NOT_ENOUGH_MEMORY;
+		_msFsLastErrno = ENOMEM;
 		return 0.0;
 	}
 	MultiByteToWideChar(CP_UTF8, 0, oldUtf8, -1, oldW, oldWLen);
@@ -302,20 +326,7 @@ double msFsRename(msString oldPath, msString newPath) {
 	free(oldW);
 	free(newW);
 	if (moved) return 1.0;
-	const DWORD gle = GetLastError();
-	switch (gle) {
-	case ERROR_FILE_NOT_FOUND:
-	case ERROR_PATH_NOT_FOUND:
-		_msFsLastErrno = ENOENT; break;
-	case ERROR_ACCESS_DENIED:
-		_msFsLastErrno = EACCES; break;
-	case ERROR_INVALID_PARAMETER:
-		_msFsLastErrno = EINVAL; break;
-	case ERROR_NOT_ENOUGH_MEMORY:
-		_msFsLastErrno = ENOMEM; break;
-	default:
-		_msFsLastErrno = EIO; break;
-	}
+	_msFsLastErrno = msFsErrnoFromWin32(GetLastError());
 	return 0.0;
 }
 
@@ -328,7 +339,7 @@ double msFsSymlink(msString target, msString path) {
 	const int targetWLen = MultiByteToWideChar(CP_UTF8, 0, targetUtf8, -1, NULL, 0);
 	const int pathWLen = MultiByteToWideChar(CP_UTF8, 0, pathUtf8, -1, NULL, 0);
 	if (targetWLen <= 0 || pathWLen <= 0) {
-		_msFsLastErrno = ERROR_INVALID_PARAMETER;
+		_msFsLastErrno = EINVAL;
 		return 0.0;
 	}
 	wchar_t* targetW = (wchar_t*)malloc((size_t)targetWLen * sizeof(wchar_t));
@@ -336,7 +347,7 @@ double msFsSymlink(msString target, msString path) {
 	if (targetW == NULL || pathW == NULL) {
 		if (targetW != NULL) free(targetW);
 		if (pathW != NULL) free(pathW);
-		_msFsLastErrno = ERROR_NOT_ENOUGH_MEMORY;
+		_msFsLastErrno = ENOMEM;
 		return 0.0;
 	}
 	MultiByteToWideChar(CP_UTF8, 0, targetUtf8, -1, targetW, targetWLen);
@@ -351,7 +362,7 @@ double msFsSymlink(msString target, msString path) {
 		flags |= SYMBOLIC_LINK_FLAG_DIRECTORY;
 	}
 	BOOL ok = CreateSymbolicLinkW(pathW, targetW, flags);
-	if (!ok) _msFsLastErrno = (int)GetLastError();
+	if (!ok) _msFsLastErrno = msFsErrnoFromWin32(GetLastError());
 	free(targetW);
 	free(pathW);
 	return ok ? 1.0 : 0.0;
