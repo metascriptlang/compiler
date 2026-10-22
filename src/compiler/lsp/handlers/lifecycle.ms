@@ -1,7 +1,13 @@
 // LSP Lifecycle Handlers + Dispatch Router + Tests
 // handleInitialize, handleDidOpen, handleDidChange, handleDidClose, lspDispatch
 
-import { TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbCheckIsCurrent, dbForgetAllTypeChecks, getFileId, invalidateFile } from "../../transam/index";
+import {
+	TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbCheckIsCurrent,
+	dbForgetAllTypeChecks, getFileId, getFilePath, invalidateFile, recordModuleImport,
+	cacheGet, createQueryKey, TaQueryKind,
+} from "../../transam/index";
+import { lookupLocal } from "../../../checker/symbol";
+import { typeDisplayName } from "../../../checker/types";
 import { requestCancel, resetCancel } from "../../transam/cancel";
 import { parseJson } from "std/serialize/json/parser";
 import { JsonKind, JsonValue } from "std/serialize/json/types";
@@ -1216,23 +1222,95 @@ test "semantic UTF-16 deltas survive prefix and gap edits and undo" {
 	}
 }
 
-test "first type check on a fresh db stays under 1500ms" {
-	const db = testDb("file:///test.ms", "function foo(x: number): number { return x + 1; }\nconst y = foo(42);");
-	const t0 = performance.now();
-	dbTypeCheck(db, lspUriToPath("file:///test.ms"));
-	const elapsed = performance.now() - t0;
-	assert elapsed < 1500;
+const RECHECK_SOURCE = "import { Result } from \"std/core/system\";\n"
+	+ "import { bump } from \"./dep\";\n"
+	+ "function foo(x: number): number { return bump(x) + 1; }\nconst y = foo(42);";
+
+function recheckDb(): TransAmDb {
+	const db = testDb("file:///test.ms", RECHECK_SOURCE);
+	dbSetFileText(db, "/dep.ms", "export function bump(x: number): number { return x + 1; }");
+	const user = getFileId(db.fileInput, "/test.ms");
+	recordModuleImport(db.moduleDeps, user, getFileId(db.fileInput, "/dep.ms"));
+	return db;
 }
 
-test "re-checking an edited file stays under 50ms" {
-	const path = lspUriToPath("file:///test.ms");
-	const db = testDb("file:///test.ms", "function foo(x: number): number { return x + 1; }\nconst y = foo(42);");
-	dbTypeCheck(db, path);
-	dbSetFileText(db, path, "function foo(x: number): number { return x + 2; }\nconst y = foo(42);");
-	const t0 = performance.now();
-	dbTypeCheck(db, path);
-	const elapsed = performance.now() - t0;
-	assert elapsed < 50;
+function recomputedSince(db: TransAmDb, revision: int32): string[] {
+	const keys: string[] = [];
+	for (const entry of db.cache.entries) {
+		if (entry.computedAt < revision) continue;
+		const path = getFilePath(db.fileInput, entry.key.fileId);
+		keys.push(`${entry.key.queryKind.toString()} ${path}`);
+	}
+	return keys;
+}
+
+function recomputeCount(db: TransAmDb): int32 {
+	let total = 0;
+	for (const count of db.cache.recomputed) total += count;
+	return total;
+}
+
+function checkedType(db: TransAmDb, path: string, name: string): string {
+	const ctx = dbTypeCheck(db, path);
+	if (ctx.errors.length > 0) return `${ctx.errors.length} errors`;
+	const sym = lookupLocal(ctx.table, name);
+	return sym != null ? typeDisplayName(sym.symbolType) : "";
+}
+
+test "a fresh check computes each query of the file and its import once" {
+	const db = recheckDb();
+	assert checkedType(db, "/test.ms", "y") == "number";
+	const recomputed = recomputedSince(db, 0).join(",");
+	const expected = "Preprocess /test.ms,Parse /test.ms,Preprocess /dep.ms,Parse /dep.ms"
+		+ ",TypeCheck /test.ms";
+	assert recomputed == expected, recomputed;
+	assert recomputeCount(db) == 5;
+}
+
+test "re-checking a body edit recomputes only the edited file's parse and check" {
+	const path = "/test.ms";
+	const db = recheckDb();
+	assert checkedType(db, path, "y") == "number";
+	const entries = db.cache.entries.length;
+	assert dbSetFileText(db, path, RECHECK_SOURCE.replace("bump(x) + 1", "bump(x) + 2"));
+	const revision = db.revision.value;
+	const before = recomputeCount(db);
+	assert checkedType(db, path, "y") == "number";
+	const recomputed = recomputedSince(db, revision);
+	const expected = `Preprocess ${path},Parse ${path},TypeCheck ${path}`;
+	assert recomputed.join(",") == expected, recomputed.join(",");
+	assert recomputeCount(db) - before == 3;
+	assert db.cache.entries.length == entries;
+	const hits = db.cache.hits;
+	const ctx = dbTypeCheck(db, path);
+	assert dbTypeCheck(db, path) == ctx;
+	assert db.cache.hits - hits == 2;
+	assert recomputeCount(db) - before == 3;
+}
+
+test "re-checking an importer after a dependency body edit reuses the importer's parse" {
+	const dep = "/recheck/dep.ms";
+	const user = "/recheck/user.ms";
+	const db = createTransAmDb(100);
+	dbSetFileText(db, dep, "export function one(): int32 { return 1; }");
+	dbSetFileText(db, user, "import { one } from \"./dep\";\nexport const n = one();");
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, user), getFileId(db.fileInput, dep));
+	dbParse(db, dep);
+	assert checkedType(db, user, "n") == "int32";
+	const marked = db.cache.marked;
+	assert dbSetFileText(db, dep, "export function one(): int32 { return 2; }");
+	assert db.cache.marked - marked == 5;
+	const revision = db.revision.value;
+	const before = recomputeCount(db);
+	dbParse(db, dep);
+	assert checkedType(db, user, "n") == "int32";
+	const recomputed = recomputedSince(db, revision);
+	const expected = `Preprocess ${dep},Parse ${dep},TypeCheck ${user}`;
+	assert recomputed.join(",") == expected, recomputed.join(",");
+	assert recomputeCount(db) - before == 3;
+	const parseKey = createQueryKey(TaQueryKind.Parse, getFileId(db.fileInput, user));
+	const userParse = cacheGet(db.cache, parseKey);
+	assert userParse.computedAt < revision && userParse.verifiedAt == db.revision.value;
 }
 
 const DEP_WITH_PCT = "export struct Dice { seed: int32; }\nexport function pct(this dice: Dice, k: int32): int32 { return dice.seed + k; }\n";
