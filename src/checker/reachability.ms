@@ -11,6 +11,7 @@ import { getDeclName } from "./collectPass";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { AliveSet, CTypeInfoDemand, TypeInfoKind, createAliveSet, aliveSetAddSym, aliveSetHasSym, aliveSetAddModule, aliveSetHasDecl, aliveSetHasModule, aliveSetModuleCount } from "../codegen/c/context";
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
+import { isCHeaderPath } from "../module/loader";
 import { refArrayCellKey, refArrayCellOp, getOpByKey, typeInfoSubject, objectTypeInfoKey, arcCellKey, promiseAllShape, PromiseAllShape, hookBaseCName, anonTypeName, isAnonTypeName } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, makeSymbol } from "./symbol";
 import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, getProperty, peelToStructOrUnion } from "./types";
@@ -551,7 +552,7 @@ function markSideEffectImportsAlive(graph: ModuleGraph): void {
 		const mod = findModule(graph, pending.pop());
 		if (mod == null) continue;
 		for (const imp of mod.imports) {
-			if (imp.names.length > 0 || aliveSetHasModule(_aliveSet, imp.sourcePath)) continue;
+			if ((imp.names.length > 0 && !isCHeaderPath(imp.sourcePath)) || aliveSetHasModule(_aliveSet, imp.sourcePath)) continue;
 			aliveSetAddModule(_aliveSet, imp.sourcePath);
 			pending.push(imp.sourcePath);
 		}
