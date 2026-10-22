@@ -1950,7 +1950,45 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				if (truthy) ip = ip + (ic as int32);
 				break;
 			}
-			case RaiserOpcode.CallDirect: case RaiserOpcode.Call: case RaiserOpcode.CallIndirect: {
+			case RaiserOpcode.CallDirect: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
+				const depth = vm.callStack.depth;
+				if (depth < MAX_CALL_DEPTH) {
+					const callee: Cursor<RaiserFunction> = mod.functions[ib];
+					if (depth == vm.callStack.items.length) {
+						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, wordBase: 0, refBase: 0, spBase: 0 });
+					}
+					const frame: Cursor<RaiserCallFrame> = vm.callStack.items[depth];
+					frame.funcIdx = funcIdx;
+					frame.returnIp = ip;
+					frame.returnDest = ia;
+					frame.wordBase = wb;
+					frame.refBase = rb;
+					frame.spBase = vm.safePoints.length as int32;
+					vm.callStack.depth = depth + 1;
+					wb = wb + (func.blocks[ic] as int32);
+					rb = rb + (func.blocks[ic + 1] as int32);
+					if (words.length < wb + callee.wordRegs) {
+						ensureWords(vm.regs, wb + callee.wordRegs);
+						words = vm.regs.words;
+					}
+					if (refs.length < rb + callee.refRegs) {
+						ensureRefs(vm.regs, rb + callee.refRegs);
+						refs = vm.regs.refs;
+					}
+					funcIdx = ib;
+					func = callee;
+					code = callee.packed;
+					if (code.length != func.code.length) assertPacked(func);
+					ip = 0;
+				} else {
+					slow = true;
+				}
+				break;
+			}
+			case RaiserOpcode.Call: case RaiserOpcode.CallIndirect: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
@@ -1958,9 +1996,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const depth = vm.callStack.depth;
 				let ok = depth < MAX_CALL_DEPTH;
 				let callee: Cursor<RaiserFunction> = func;
-				if (op == RaiserOpcode.CallDirect) {
-					callee = mod.functions[target];
-				} else if (target >= 0 && target < mod.functions.length) {
+				if (target >= 0 && target < mod.functions.length) {
 					callee = mod.functions[target];
 					const argc = func.blocks[ic + 2];
 					const sig = func.blocks[ic + 3];
