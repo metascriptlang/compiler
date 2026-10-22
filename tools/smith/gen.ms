@@ -6945,7 +6945,7 @@ class Gen {
 		const tail = isInt ? "\treturn (x as int32) + n;\n" : "\treturn (((x as float64) * 2.0) as int32) + n;\n";
 		const base = isInt ? "int32" : "float64";
 		const cmp = "(this a: " + name + ", b: " + name + "): boolean;\n";
-		const arith = (op: string): string => "export function `" + op + "`(a: " + name + ", b: " + name + "): " + name +
+		const arith = (op: string): string => "function `" + op + "`(this a: " + name + ", b: " + name + "): " + name +
 			" { return ((a as " + base + ") " + op + " (b as " + base + ")) as " + name + "; }\n";
 		const fold = isInt ? "acc = acc + v; acc += v; acc = acc - x;" : "acc = acc + v * x;";
 		const keyed = isInt ?
@@ -10205,8 +10205,11 @@ test "the enum family emits no shape a compiler card parks" {
 	for (const name of ["DsI", "DsF"]) {
 		const base = name == "DsI" ? "int32" : "float64";
 		for (const op of name == "DsI" ? ["+", "-"] : ["+", "*"]) {
-			assert g.helperText.contains("export function `" + op + "`(a: " + name + ", b: " + name + "): " + name + " { return ((a as " + base + ") " + op + " (b as " + base + ")) as " + name + "; }");
+			assert g.helperText.contains("\nfunction `" + op + "`(this a: " + name + ", b: " + name + "): " + name + " { return ((a as " + base + ") " + op + " (b as " + base + ")) as " + name + "; }");
 		}
+	}
+	for (const line of g.helperText.split("\n")) {
+		assert !line.startsWith("export function `") || line.contains("(this a: ");
 	}
 	assert !g.helperText.contains("`/`") && !g.helperText.contains("`%`") && !g.helperText.contains(" / ") && !g.helperText.contains(" % x");
 }
