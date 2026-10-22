@@ -10,7 +10,8 @@ import {
 	lspGetField, lspGetNumberField, lspGetObjectField, lspJsonNumber, lspJsonString,
 	lspErrorResponse
 } from "./protocol";
-import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath, dbSetResolverConfig, dbStats } from "../transam/index";
+import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath, dbSetResolverConfig, dbSetGlobalImports, dbStats } from "../transam/index";
+import { extraGlobalImports, extraGlobalImportsBuildFile } from "../../checker/prelude";
 import { findProjectRoot } from "../../utils/path";
 import { ModuleCtxRegistry, createModuleCtxRegistry, swapModuleCtxRegistry } from "../../checker/instantiate";
 import { ensureDir, mkdir, realpath, writeFile } from "std/fs";
@@ -91,6 +92,9 @@ function selectProject(state: LspServerState, root: string): string {
 		dbSetResolverConfig(db, buildResolverConfig(opts.target, resolve, opts.targetOs, root));
 		if (state.initialized) dbEnsurePrelude(db);
 		state.dbs.set(root, db);
+	}
+	if (state.initialized) {
+		for (const entry of dbSetGlobalImports(db, extraGlobalImports())) lspLog(`globalImports entry '${entry}' in ${extraGlobalImportsBuildFile()} resolves to no module`);
 	}
 	state.db = db;
 	state.root = root;
@@ -711,6 +715,30 @@ test "replay: a macro from a build.ms global import expands in the editor" {
 
 test "replay: a dependency shared by two projects resolves through each project's own deps" {
 	assert runMemoryScenario("a dependency shared by two projects resolves through each project's own deps") == "";
+}
+
+test "replay: a class reached through a build.ms global import is the class its importer names" {
+	assert runMemoryScenario("a class reached through a build.ms global import is the class its importer names") == "";
+}
+
+test "replay: a generic class from a macro module reached through a build.ms global import keeps its identity" {
+	assert runMemoryScenario("a generic class from a macro module reached through a build.ms global import keeps its identity") == "";
+}
+
+test "replay: an edit to a build.ms global import reaches the modules that use its names" {
+	assert runMemoryScenario("an edit to a build.ms global import reaches the modules that use its names") == "";
+}
+
+test "replay: a module a build.ms global import reaches does not see the global import, as in batch checking" {
+	assert runMemoryScenario("a module a build.ms global import reaches does not see the global import, as in batch checking") == "";
+}
+
+test "replay: a module the second build.ms global import reaches sees the first one only" {
+	assert runMemoryScenario("a module the second build.ms global import reaches sees the first one only") == "";
+}
+
+test "replay: a build.ms module pass still applies after the session checked another project" {
+	assert runMemoryScenario("a build.ms module pass still applies after the session checked another project") == "";
 }
 
 // ===== Exports a top-level macro statement splices =====

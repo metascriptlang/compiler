@@ -913,6 +913,164 @@ function sharedDepResolvesPerProject(): LspScenario {
 	};
 }
 
+const SHAPES = "export class Box {\n\tv: int32;\n\tconstructor(v: int32) {\n\t\tthis.v = v;\n\t}\n}\nexport class Holder<T> {\n\titem: T;\n\tconstructor(item: T) {\n\t\tthis.item = item;\n\t}\n}\nexport function takeBox(b: Box): int32 {\n\treturn b.v;\n}\n";
+const SHAPE_MAKERS = "export function mkBox(): Box {\n\treturn new Box(4);\n}\nexport function mkHolder(): Holder<Box> {\n\treturn new Holder<Box>(new Box(5));\n}\nexport function readBox(b: Box): int32 {\n\treturn b.v;\n}\n";
+const SHAPE_USER = "import { Box, Holder, takeBox } from \"./shapes\";\nconst b: Box = mkBox();\nconst h: Holder<Box> = mkHolder();\nconsole.log(takeBox(b) + readBox(new Box(7)) + h.item.v);\n";
+
+function globalImportSharesClassIdentity(): LspScenario {
+	const uri = PROJECT_URI + "use.ms";
+	return {
+		name: "a class reached through a build.ms global import is the class its importer names",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, SHAPE_USER))]),
+			frames([notification("textDocument/didChange", changeParams(uri, 2, SHAPE_USER + "// edited\n"))]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("use.ms publish 0", "[]", publishedAt(r, uri, 0)),
+			sameText("use.ms last publish", "[]", lastPublished(r, uri)),
+		]),
+		checkAnyBatching: null,
+		checkpoints: { afterDrains: [1, 2], probes: [{ uri, line: 1, character: 16 }] },
+		project: [
+			{ path: "build.ms", text: "const config = { globalImports: [\"./makers\"] };\nexport default config;\n" },
+			{ path: "makers.ms", text: "import { Box, Holder } from \"./shapes\";\n" + SHAPE_MAKERS },
+			{ path: "shapes.ms", text: SHAPES },
+		],
+	};
+}
+
+function globalImportSharesMacroModuleIdentity(): LspScenario {
+	const uri = PROJECT_URI + "use.ms";
+	const twice = "import { Node } from \"std/meta\";\nexport macro twice(n: Node): Node {\n\treturn quote { (${n} * 2) };\n}\n";
+	const user = "import { Box, Holder, takeBox, twice } from \"./shapes\";\nconst h: Holder<Box> = mkHolder();\nconsole.log(takeBox(h.item) + readBox(mkBox()) + twice(1));\n";
+	return {
+		name: "a generic class from a macro module reached through a build.ms global import keeps its identity",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, user))]),
+		],
+		check: (r: LspReplay) => sameText("use.ms publish 0", "[]", publishedAt(r, uri, 0)),
+		checkAnyBatching: null,
+		checkpoints: { afterDrains: [1], probes: [{ uri, line: 1, character: 26 }] },
+		project: [
+			{ path: "build.ms", text: "const config = { globalImports: [\"./makers\"] };\nexport default config;\n" },
+			{ path: "makers.ms", text: "import { Box, Holder } from \"./shapes\";\n" + SHAPE_MAKERS },
+			{ path: "shapes.ms", text: twice + SHAPES },
+		],
+	};
+}
+
+function containsText(what: string, needle: string, got: string): string {
+	return got.includes(needle) ? "" : what + ": expected to contain " + needle + ", got " + got;
+}
+
+function lacksText(what: string, needle: string, got: string): string {
+	return got.includes(needle) ? what + ": expected no " + needle + ", got " + got : "";
+}
+
+const MAKERS_PROJECT: LspProjectFile[] = [
+	{ path: "build.ms", text: "const config = { globalImports: [\"./makers\"] };\nexport default config;\n" },
+	{ path: "makers.ms", text: "import { Box, Holder } from \"./shapes\";\n" + SHAPE_MAKERS },
+	{ path: "shapes.ms", text: SHAPES },
+];
+
+function globalImportEditReachesItsUsers(): LspScenario {
+	const uri = PROJECT_URI + "use.ms";
+	const makers = PROJECT_URI + "makers.ms";
+	const makersText = "import { Box, Holder } from \"./shapes\";\n" + SHAPE_MAKERS;
+	return {
+		name: "an edit to a build.ms global import reaches the modules that use its names",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, "console.log(readBox(mkBox()));\n"))]),
+			frames([notification("textDocument/didOpen", openParams(makers, makersText))]),
+			frames([notification("textDocument/didChange", changeParams(makers, 2, makersText.replace("function mkBox(", "function mkBoxRenamed(")))]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("use.ms publish 0", "[]", publishedAt(r, uri, 0)),
+			containsText("use.ms after makers.ms renames mkBox", "Undefined variable 'mkBox'", lastPublished(r, uri)),
+		]),
+		checkAnyBatching: null,
+		checkpoints: { afterDrains: [1, 3], probes: [{ uri, line: 0, character: 22 }] },
+		project: MAKERS_PROJECT,
+	};
+}
+
+function globalImportClosureSeesNoGlobals(): LspScenario {
+	const uri = PROJECT_URI + "shapes.ms";
+	return {
+		name: "a module a build.ms global import reaches does not see the global import, as in batch checking",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, SHAPES + "export function viaGlobal(): int32 {\n\treturn readBox(mkBox());\n}\n"))]),
+		],
+		check: (r: LspReplay) => containsText("shapes.ms publish 0", "Undefined variable 'readBox'", publishedAt(r, uri, 0)),
+		checkAnyBatching: null,
+		checkpoints: { afterDrains: [1], probes: [{ uri, line: 16, character: 10 }] },
+		project: MAKERS_PROJECT,
+	};
+}
+
+function globalImportsSeenInOrder(): LspScenario {
+	const uri = PROJECT_URI + "c2.ms";
+	const seesFirst = "export function d2(): int32 {\n\treturn f1();\n}\n";
+	return {
+		name: "a module the second build.ms global import reaches sees the first one only",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, seesFirst))]),
+			frames([notification("textDocument/didChange", changeParams(uri, 2, seesFirst.replace("f1()", "f2()")))]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			lacksText("c2.ms calling the first global import", "Undefined", publishedAt(r, uri, 0)),
+			containsText("c2.ms calling the second global import", "Undefined variable 'f2'", lastPublished(r, uri)),
+		]),
+		checkAnyBatching: null,
+		checkpoints: { afterDrains: [1], probes: [{ uri, line: 1, character: 9 }] },
+		project: [
+			{ path: "build.ms", text: "const config = { globalImports: [\"./g1\", \"./g2\"] };\nexport default config;\n" },
+			{ path: "g1.ms", text: "import { d1 } from \"./c1\";\nexport function f1(): int32 {\n\treturn d1();\n}\n" },
+			{ path: "c1.ms", text: "export function d1(): int32 {\n\treturn 1;\n}\n" },
+			{ path: "g2.ms", text: "import { d2 } from \"./c2\";\nexport function f2(): int32 {\n\treturn d2() + f1();\n}\n" },
+			{ path: "c2.ms", text: seesFirst },
+			{ path: "use.ms", text: "console.log(f1() + f2());\n" },
+		],
+	};
+}
+
+function modulePassSurvivesProjectSwitch(): LspScenario {
+	const use = PROJECT_URI + "a/use.ms";
+	const other = PROJECT_URI + "b/main.ms";
+	const pass = "import { Node } from \"std/meta\";\nexport macro keep(mod: Node): Node {\n\treturn mod;\n}\nexport function helper(): int32 {\n\treturn 2;\n}\n";
+	return {
+		name: "a build.ms module pass still applies after the session checked another project",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(use, "console.log(helper());\n"))]),
+			frames([notification("textDocument/didOpen", openParams(other, "console.log(1);\n"))]),
+			frames([notification("textDocument/didChange", changeParams(use, 2, "console.log(helper() + 1);\n"))]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("a/use.ms publish 0", "[]", publishedAt(r, use, 0)),
+			sameText("a/use.ms after b/main.ms", "[]", lastPublished(r, use)),
+		]),
+		checkAnyBatching: null,
+		checkpoints: { afterDrains: [1, 3], probes: [{ uri: use, line: 0, character: 14 }] },
+		project: [
+			{ path: "a/build.ms", text: "const config = { globalImports: [{ from: \"./pass\", modulePass: \"keep\" }] };\nexport default config;\n" },
+			{ path: "a/pass.ms", text: pass },
+			{ path: "b/build.ms", text: "const config = {};\nexport default config;\n" },
+		],
+	};
+}
+
 export function scenarioSlug(name: string): string {
 	let out = "";
 	for (let i = 0; i < name.byteLength; i++) {
@@ -949,6 +1107,12 @@ export function lspScenarios(): LspScenario[] {
 		twoProjectsKeepTheirConfig(),
 		sharedDepResolvesPerProject(),
 		globalImportMacroExpands(),
+		globalImportSharesClassIdentity(),
+		globalImportSharesMacroModuleIdentity(),
+		globalImportEditReachesItsUsers(),
+		globalImportClosureSeesNoGlobals(),
+		globalImportsSeenInOrder(),
+		modulePassSurvivesProjectSwitch(),
 	];
 }
 
