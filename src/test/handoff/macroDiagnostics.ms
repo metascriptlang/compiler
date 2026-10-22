@@ -1,5 +1,5 @@
 import { compileToCWithStd, compileToJSWithStd } from "../helpers";
-import { mkdir, readFile, remove, removeAll, exists } from "std/fs";
+import { mkdir, readFile, writeFile, remove, removeAll, exists, fileSize, modifiedTime, changeStamp } from "std/fs";
 import { join } from "std/fs/path";
 import { cwd } from "std/process";
 
@@ -178,6 +178,31 @@ test "macro std fs: ensureDir, mkdir on an existing dir, rename, readDir, remove
 		assert result.ok, result.ok ? "" : `${target}: ${result.error}`;
 		if (result.ok) assert result.value.contains(fsOpsExpected(base)), `${target}: ${result.value}`;
 		assert !exists(base + "/a"), target;
+	}
+}
+
+function statMacro(file: string, missing: string): string {
+	return 'import { Node, NodeKind } from "std/meta"; import { fileSize, modifiedTime, changeStamp } from "std/fs"; '
+		+ "macro probe(n: Node): Node { "
+		+ `const text = \`size=\${fileSize("${file}")} time=\${modifiedTime("${file}")} stamp=\${changeStamp("${file}")}`
+		+ ` missing=\${fileSize("${missing}")}|\${modifiedTime("${missing}")}|\${changeStamp("${missing}")}\`;`
+		+ " return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: text }; } console.log(probe(0));";
+}
+
+test "macro std fs: fileSize, modifiedTime and changeStamp run at comptime with the runtime's answers for a file and a missing path" {
+	const targets = ["c", "js"];
+	for (const target of targets) {
+		const base = join(cwd(), `out/test/macroStdFsStat-${target}`);
+		removeAll(base);
+		mkdir(base);
+		const file = `${base}/f.txt`;
+		const missing = `${base}/none`;
+		writeFile(file, "hello");
+		const expected = `size=5 time=${modifiedTime(file)} stamp=${changeStamp(file)} missing=${fileSize(missing)}|${modifiedTime(missing)}|${changeStamp(missing)}`;
+		const result = target == "c" ? compileToCWithStd(statMacro(file, missing)) : compileToJSWithStd(statMacro(file, missing));
+		assert result.ok, result.ok ? "" : `${target}: ${result.error}`;
+		if (result.ok) assert result.value.contains(expected), `${target}: ${expected} in ${result.value}`;
+		removeAll(base);
 	}
 }
 
