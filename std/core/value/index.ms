@@ -12,7 +12,7 @@ export function valueEquals<T>(a: T, b: T): boolean {
 
 // `T | null` over a value payload: equal when both are null or both hold equal payloads.
 @compilerFunc
-export function nullableEquals<T>(a: T | null, b: T | null): boolean {
+export function nullableEquals<T>(a: Readonly<T | null>, b: Readonly<T | null>): boolean {
 	if (a == null) return b == null;
 	if (b == null) return false;
 	return a == b;
@@ -29,7 +29,7 @@ export function resultEquals<T, E>(a: Result<T, E>, b: Result<T, E>): boolean {
 }
 
 @compilerFunc
-export function vecEquals<T>(a: Vec<T>, b: Vec<T>): boolean {
+export function vecEquals<T>(a: Readonly<Vec<T>>, b: Readonly<Vec<T>>): boolean {
 	if (a.length != b.length) return false;
 	for (let i = 0; i < a.length; i += 1) {
 		if (a[i] != b[i]) return false;
