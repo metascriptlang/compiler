@@ -1,59 +1,72 @@
-import { TypeKind } from "../../../std/meta/node";
+import { Type } from "../../../std/meta/node";
 import {
 	createArray, createGenericInstance, createGenericParam, createStruct, hasGenericParams,
 	instantiateGenericBody, numberType, setConcurrentTypeQueries, substituteParams,
+	typeDisplayNameUnprofiled, typeNameOfUnprofiled,
 } from "../../checker/types";
 
-class QueryResult {
-	ok: boolean;
-	checks: int32;
-	constructor(ok: boolean, checks: int32) {
-		this.ok = ok;
-		this.checks = checks;
-	}
+interface SharedGraph {
+	recursive: Type;
+	instance: Type;
+	held: Type;
+	fresh: Type;
 }
 
-const sharedT = createGenericParam("T");
-const shared = createStruct("SharedRecursive", ["value"], [sharedT], false);
-const box = createStruct("Box", ["value"], [createGenericParam("T")], false);
-const holderT = createGenericParam("T");
-const holder = createStruct("Holder", ["box"], [createGenericInstance(box, [holderT])], false);
+function buildGraph(): SharedGraph {
+	const recursiveT = createGenericParam("T");
+	const recursive = createStruct("SharedRecursive", ["value"], [recursiveT], false);
+	recursive.typeNames.push("next");
+	recursive.typeChildren.push(createArray(recursive));
+	const box = createStruct("Box", ["value"], [createGenericParam("T")], false);
+	const holderT = createGenericParam("T");
+	const holder = createStruct("Holder", ["box"], [createGenericInstance(box, [holderT])], false);
+	const fresh = createGenericInstance(box, [numberType()]);
+	instantiateGenericBody(fresh, "T");
+	return {
+		recursive: recursive,
+		instance: substituteParams(recursive, [recursiveT], [numberType()]),
+		held: substituteParams(holder, [holderT], [numberType()]),
+		fresh: fresh,
+	};
+}
 
-function query(rounds: int32): QueryResult {
-	let checks = 0;
+function answers(graph: Readonly<SharedGraph>): string {
+	const parts: string[] = [];
+	for (const t of [graph.recursive, graph.instance, graph.held, graph.fresh]) {
+		parts.push(`${hasGenericParams(t)}:${typeNameOfUnprofiled(t)}:${typeDisplayNameUnprofiled(t)}`);
+		for (const child of t.typeChildren) parts.push(typeDisplayNameUnprofiled(child));
+	}
+	return parts.join("|");
+}
+
+function query(graph: Readonly<SharedGraph>, expected: string, rounds: int32): int32 {
 	let i = 0;
 	while (i < rounds) {
-		if (!hasGenericParams(shared)) return new QueryResult(false, checks);
-		const all = substituteParams(shared, [sharedT], [numberType()]);
-		if (all.kind != TypeKind.Struct || all.typeChildren[0].kind != TypeKind.Number) return new QueryResult(false, checks);
-		const fresh = createGenericInstance(box, [numberType()]);
-		instantiateGenericBody(fresh, "T");
-		if (fresh.typeReturn == null || fresh.typeReturn.typeChildren[0].kind != TypeKind.Number) return new QueryResult(false, checks);
-		const held = substituteParams(holder, [holderT], [numberType()]);
-		if (held.kind != TypeKind.Struct || held.typeChildren[0].kind != TypeKind.GenericInstance) return new QueryResult(false, checks);
-		checks = checks + 4;
-		i = i + 1;
+		if (answers(graph) != expected) return -1;
+		i += 1;
 	}
-	return new QueryResult(true, checks);
+	return rounds;
 }
 
 function main(): void {
-	shared.typeNames.push("next");
-	shared.typeChildren.push(createArray(shared));
+	const graph = buildGraph();
+	const expected = answers(graph);
+	if (!expected.startsWith("true:")) throw `shared type graph lost its generic parameter: ${expected}`;
 	setConcurrentTypeQueries(true);
-	const futures: Promise<QueryResult>[] = [];
+	const futures: Promise<int32>[] = [];
 	let i = 0;
 	while (i < 8) {
-		futures.push(spawn(() => query(500)));
-		i = i + 1;
+		futures.push(spawn(() => query(graph, expected, 500)));
+		i += 1;
 	}
-	let checks = 0;
+	let rounds = 0;
 	for (const future of futures) {
-		const result = await future;
-		if (!result.ok) throw "shared type query mismatch";
-		checks = checks + result.checks;
+		const done = await future;
+		if (done < 0) throw "shared type query mismatch";
+		rounds += done;
 	}
-	if (checks != 16000) throw "shared type query count";
+	setConcurrentTypeQueries(false);
+	if (rounds != 4000) throw "shared type query count";
 	console.log("GUARD-OK");
 }
 
