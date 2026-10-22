@@ -2046,11 +2046,10 @@ function carriesBorrow(arg: Node): boolean {
 
 function viewRootFault(id: Node, routine: Node, stepped: boolean): string {
 	const sym = id.resolvedSym;
-	if (sym == null) return unboundParamFault(routine, (id.data as IdentifierData).name);
+	if (sym == null) return signatureParamFault(routine, (id.data as IdentifierData).name) ?? "cannot borrow from this expression, it is not a path expression";
 	if (sym.symbolKind == SymbolKind.Parameter) {
-		if (hasFlag(sym, SymbolFlag.Sink) || (sym.symbolType != null && sym.symbolType.kind == TypeKind.Sink)) return `'${sym.name}' is a sink parameter, owned by the routine`;
-		if (isOwnParam(routine, sym)) return "";
-		return `'${sym.name}' is not a parameter of this routine`;
+		if (!isOwnParam(routine, sym)) return `'${sym.name}' is not a parameter of this routine`;
+		return signatureParamFault(routine, sym.name) ?? "";
 	}
 	if (hasFlag(sym, SymbolFlag.Global) && !hasFlag(sym, SymbolFlag.StaticLocal)) {
 		if (hasFlag(sym, SymbolFlag.Mutable) || sym.symbolKind != SymbolKind.Variable || !isReadonlyView(sym.symbolType)) return `'${sym.name}' is not a Readonly module constant`;
@@ -2060,17 +2059,17 @@ function viewRootFault(id: Node, routine: Node, stepped: boolean): string {
 	return `'${sym.name}' escapes its stack frame`;
 }
 
-// A generic body leaves a parameter unbound until it is instantiated; its signature still names it.
-function unboundParamFault(routine: Node, name: string): string {
+// The signature carries a parameter's sink mode, and still names a parameter a generic body leaves
+// unbound until it is instantiated.
+function signatureParamFault(routine: Node, name: string): string | null {
 	const sig = routine.nodeType;
-	if (sig != null && sig.kind == TypeKind.Function && sig.typeNames != null) {
-		for (let i = 0; i < sig.typeNames.length; i += 1) {
-			if (sig.typeNames[i] != name) continue;
-			const t = i < sig.typeChildren.length ? sig.typeChildren[i] : null;
-			return t != null && t.kind == TypeKind.Sink ? `'${name}' is a sink parameter, owned by the routine` : "";
-		}
+	if (sig == null || sig.kind != TypeKind.Function || sig.typeNames == null) return null;
+	for (let i = 0; i < sig.typeNames.length; i += 1) {
+		if (sig.typeNames[i] != name) continue;
+		const t = i < sig.typeChildren.length ? sig.typeChildren[i] : null;
+		return t != null && t.kind == TypeKind.Sink ? `'${name}' is a sink parameter, owned by the routine` : "";
 	}
-	return "cannot borrow from this expression, it is not a path expression";
+	return null;
 }
 
 function isOwnParam(routine: Node, sym: Symbol): boolean {
