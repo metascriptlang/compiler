@@ -228,7 +228,7 @@ export function expandObjectSpread(node: Node, ctx: TransformContext): Node {
 		let fi = 0;
 		while (fi < src.typeNames.length) {
 			const fname = src.typeNames[fi];
-			if (!fname.startsWith("__") && structHasField(target, fname)) {
+			if (structHasField(target, fname)) {
 				const ref = makeIdentResolved(argSym, sp.location);
 				ref.nodeType = arg.nodeType;
 				const mem = makeMember(ref, fname, sp.location);

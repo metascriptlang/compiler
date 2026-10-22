@@ -706,7 +706,7 @@ function omittedFieldZeros(node: Node, d: ObjectLiteralData): string[] {
 	if (t == null) return out;
 	for (let i = 0; i < t.typeNames.length && i < t.typeChildren.length; i += 1) {
 		const name = t.typeNames[i];
-		if (name.startsWith("__") || d.keys.includes(name) || spreadMayProvide(d, name)) continue;
+		if (d.keys.includes(name) || spreadMayProvide(d, name)) continue;
 		const zero = jsDefaultValue(t.typeChildren[i]);
 		if (zero != "") out.push(`${jsPropertyKey(name)}: ${zero}`);
 	}

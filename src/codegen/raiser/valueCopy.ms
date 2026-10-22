@@ -232,7 +232,7 @@ export function emitOmittedFieldZeros(s: RaiserCompState, object: int32, literal
 	if (t == null || !isValueStruct(t) || keys.includes("...")) return;
 	for (let i = 0; i < t.typeNames.length; i += 1) {
 		const name = t.typeNames[i];
-		if (name.startsWith("__") || keys.includes(name)) continue;
+		if (keys.includes(name)) continue;
 		const field = emitZeroValue(s, i < t.typeChildren.length ? t.typeChildren[i] : null);
 		emitInst(s, raiserABC(RaiserOpcode.StoreField, object, addConst(s, raiserConstString(name)), field));
 	}

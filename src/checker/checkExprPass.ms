@@ -1779,7 +1779,7 @@ function literalFields(ctx: CheckerContext, d: ObjectLiteralData, names: string[
 			const fields = spreadFieldsOf((value.data as SpreadExprData).spreadArg.nodeType);
 			if (fields != null) {
 				for (let fi = 0; fi < fields.typeNames.length && fi < fields.typeChildren.length; fi += 1) {
-					if (!fields.typeNames[fi].startsWith("__")) putLiteralField(names, types, fields.typeNames[fi], fields.typeChildren[fi]);
+					putLiteralField(names, types, fields.typeNames[fi], fields.typeChildren[fi]);
 				}
 				continue;
 			}
@@ -1891,7 +1891,6 @@ function judgeSpreadFields(ctx: CheckerContext, d: ObjectLiteralData, target: Ty
 		if (fields == null) continue;
 		for (let fi = 0; fi < fields.typeNames.length && fi < fields.typeChildren.length; fi += 1) {
 			const name = fields.typeNames[fi];
-			if (name.startsWith("__")) continue;
 			const optional = fields.optionalFields != null && fields.optionalFields.indexOf(name) >= 0;
 			if (!optional) refuseOverwrittenKeys(ctx, d, i, name);
 			const at = target != null && target.typeNames != null ? target.typeNames.indexOf(name) : -1;
@@ -2144,7 +2143,7 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 			}
 			if (!hasDynamicKey && d.keys.length == d.properties.length) {
 				for (let oi = 0; oi < objNames.length && oi < objChildren.length; oi += 1) {
-					if (objNames[oi].startsWith("__") || d.keys.includes(objNames[oi])) continue;
+					if (d.keys.includes(objNames[oi])) continue;
 					const init = literalFieldInitializer(ctx, literalClassType, objNames[oi], objChildren[oi], node.location);
 					if (init == null) continue;
 					d.keys.push(objNames[oi]);
@@ -2295,7 +2294,7 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 				spreadSeen = true;
 				for (let fi = 0; fi < spreadFields.typeNames.length; fi += 1) {
 					const fname = spreadFields.typeNames[fi];
-					if (fname.startsWith("__") || fi >= spreadFields.typeChildren.length) continue;
+					if (fi >= spreadFields.typeChildren.length) continue;
 					const at = fieldNames.indexOf(fname);
 					const optional = spreadFields.optionalFields != null && spreadFields.optionalFields.indexOf(fname) >= 0;
 					if (at >= 0 && optional) fieldTypes[at] = keptOrSpread(fieldTypes[at], spreadFields.typeChildren[fi]);
