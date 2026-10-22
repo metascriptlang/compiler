@@ -3,7 +3,7 @@
 import { TransAmDb, dbParse, dbTypeCheck } from "../../transam/index";
 import { lspJsonNumber, lspGetField, lspGetObjectField, lspUriToPath, lspResponse } from "../protocol";
 import { SgSemanticToken, sgCollectSemanticTokens, sgSortTokens } from "../../../checker/suggest";
-import { dbGetSource } from "./shared";
+import { dbGetSource, lspDocumentUri } from "./shared";
 
 function encodeSemanticTokenDeltas(source: string, tokens: SgSemanticToken[]): string {
 	sgSortTokens(tokens);
@@ -11,10 +11,8 @@ function encodeSemanticTokenDeltas(source: string, tokens: SgSemanticToken[]): s
 	let prevCol = 0;
 	let lineStart = 0;
 	let lineNumber = 1;
-	let arr = "[";
-	let i = 0;
-	while (i < tokens.length) {
-		const t = tokens[i];
+	const fields: string[] = [];
+	for (const t of tokens) {
 		while (lineNumber < t.line && lineStart < source.byteLength) {
 			if (source.byteAt(lineStart) == "\n".code) lineNumber = lineNumber + 1;
 			lineStart = lineStart + 1;
@@ -22,34 +20,34 @@ function encodeSemanticTokenDeltas(source: string, tokens: SgSemanticToken[]): s
 		const line = t.line - 1;
 		const col = source.byteSlice(lineStart, lineStart + t.col - 1).length;
 		const deltaLine = line - prevLine;
-		let deltaStart = col;
-		if (deltaLine == 0) deltaStart = col - prevCol;
-		if (i > 0) arr = arr + ",";
-		arr = arr + lspJsonNumber(deltaLine) + "," + lspJsonNumber(deltaStart)
-			+ "," + lspJsonNumber(t.length)
-			+ "," + lspJsonNumber(t.tokenType)
-			+ "," + lspJsonNumber(t.modifiers);
+		const deltaStart = deltaLine == 0 ? col - prevCol : col;
+		fields.push(lspJsonNumber(deltaLine));
+		fields.push(lspJsonNumber(deltaStart));
+		fields.push(lspJsonNumber(t.length));
+		fields.push(lspJsonNumber(t.tokenType));
+		fields.push(lspJsonNumber(t.modifiers));
 		prevLine = line;
 		prevCol = col;
-		i = i + 1;
 	}
-	arr = arr + "]";
-	return arr;
+	return "[" + fields.join(",") + "]";
+}
+
+struct SemanticTokenEntry {
+	revision: int32;
+	data: string;
 }
 
 // Revision-based cache: if Trans-Am revision unchanged, tokens are identical.
-let _semTokenCache: HashMap<string, string> = new HashMap<string, string>();
-let _semTokenRevision: HashMap<string, number> = new HashMap<string, number>();
+let _semTokenCache: HashMap<string, SemanticTokenEntry> = new HashMap<string, SemanticTokenEntry>();
 
 export function handleSemanticTokensFull(id: string, params: string, db: TransAmDb): string {
-	const textDoc = lspGetObjectField(params, "textDocument");
-	const uri = lspGetField(textDoc, "uri");
+	const uri = lspDocumentUri(params);
 	const path = lspUriToPath(uri);
 
 	const rev = db.revision.value;
-	const cachedRev = _semTokenRevision.get(path);
-	if (cachedRev != null && cachedRev == rev) {
-		return lspResponse(id, "{\"data\":" + (_semTokenCache.get(path) ?? "") + "}");
+	const cached = _semTokenCache.get(path);
+	if (cached != null && cached.revision == rev) {
+		return lspResponse(id, "{\"data\":" + cached.data + "}");
 	}
 
 	const program = dbParse(db, path);
@@ -61,8 +59,7 @@ export function handleSemanticTokensFull(id: string, params: string, db: TransAm
 	const tokens = sgCollectSemanticTokens(ctx, program);
 	const data = encodeSemanticTokenDeltas(dbGetSource(db, path), tokens);
 
-	_semTokenCache.set(path, data);
-	_semTokenRevision.set(path, rev);
+	_semTokenCache.set(path, { revision: rev, data });
 
 	return lspResponse(id, "{\"data\":" + data + "}");
 }
