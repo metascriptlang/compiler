@@ -181,8 +181,8 @@ test "encoding output rejects negative lengths" {
 }
 
 when (c) {
-	test "encoding output rejects capacity metadata bits" {
-		for (const bit of [60, 61, 62]) {
+	test "encoding output rejects lengths past the string length limit" {
+		for (const bit of [31, 32, 60, 61, 62]) {
 			const length = (1 as int64) << (bit as int64);
 			let rejected = false;
 			try {

@@ -4,13 +4,10 @@
 extern function newString(length: int64): string from "msStringNewLen";
 extern function isUnallocatedOrLiteral(value: string): boolean from "msIsLiteral";
 extern function prepareStore(ref value: string): void from "msStringPrepareMutation";
-extern const nativeSizeMax: uint64 from "SIZE_MAX";
-extern const stringCapacityMask: uint64 from "MS_CAP_MASK";
+extern const stringLengthMax: uint64 from "MS_LEN_MAX";
 
 export type EncodingIndex = int64;
 export extern const emptyEncoding: string from "MS_EMPTY_STRING";
-
-const STRING_HEADER_AND_TERMINATOR_BYTES: uint64 = 9;
 
 @noinline
 function rejectEncodingLength(): void {
@@ -24,11 +21,7 @@ function rejectEncodingAllocation(): void {
 
 @inline
 export function newEncodingOutput(length: int64): string {
-	if (length < 0 ||
-		(length as uint64) > nativeSizeMax - STRING_HEADER_AND_TERMINATOR_BYTES ||
-		((length as uint64) & ~stringCapacityMask) != 0) {
-		rejectEncodingLength();
-	}
+	if ((length as uint64) > stringLengthMax) rejectEncodingLength();
 	const result = newString(length);
 	if (length > 0 && isUnallocatedOrLiteral(result)) rejectEncodingAllocation();
 	return result;
