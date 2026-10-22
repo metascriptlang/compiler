@@ -5985,8 +5985,18 @@ test "phase 6: assignment narrow respects declared upper bound" {
 	);
 }
 
+test "flow: a read after a loop narrows though a read inside it came first" {
+	assert checkOk("function f(): number { let x: number | string = 1; let i = 0; while (i < 3) { const y = x; x = 2; i = i + 1; } const z: number = x; return z; }");
+}
 
+test "flow: a narrowing before a loop holds after it" {
+	assert checkOk("function f(x: number | null, n: number): number { if (x == null) return 0; let i = 0; while (i < n) { i = i + 1; } return x + i; }");
+	assert checkOk("function f(x: number | string, n: number): number { let i: number = 0; if (typeof x === \"number\") { while (i < n) { let j = 0; while (j < n) { j = j + 1; } i = i + x; } return x; } return i; }");
+}
 
+test "flow: an assignment in a nested loop narrows after both loops" {
+	assert checkOk("function f(): number { let x: number | string = 1; let i = 0; while (i < 3) { let j = 0; while (j < 3) { x = 2; j = j + 1; } i = i + 1; } const z: number = x; return z; }");
+}
 
 test "flow: a function, class or enum name reads as its declared type" {
 	assert checkOk(
