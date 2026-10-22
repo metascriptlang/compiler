@@ -97,6 +97,12 @@ export interface HttpServer {
 	maxHeaderSize: int32;
 	maxBodySize: int32;
 	runState: Locked<RunState>;
+	abortSignal: AbortSignal | null;
+	onAbort: (() => void) | null;
+}
+
+export interface ListenOptions {
+	signal?: AbortSignal;
 }
 
 // The one value every event loop of a concurrent server shares: stop() clears it.
@@ -134,10 +140,11 @@ export function createServer(handler: RequestHandler): HttpServer {
 		keepAlive: true, keepAliveTimeout: 10000,
 		maxRequestsPerConnection: 0, maxHeaderSize: 8192, maxBodySize: 1048576,
 		runState: new Locked({ running: false }),
+		abortSignal: null, onAbort: null,
 	};
 }
 
-export function listen(this server: HttpServer, addr: string, port: int32): Result<void, HttpError> {
+export function listen(this server: HttpServer, addr: string, port: int32, options: ListenOptions | null = null): Result<void, HttpError> {
 	const fd = msNetSocket();
 	if (fd < 0) return Result.err(socketError("socket() failed"));
 	if (msNetBind(fd, addr, port) < 0) {
@@ -151,7 +158,31 @@ export function listen(this server: HttpServer, addr: string, port: int32): Resu
 	server.fd = fd;
 	server.address = addr;
 	server.port = port;
+	unwatchSignal(server);
+	server.abortSignal = null;
+	if (options != null && options.signal != null) watchSignal(server, options.signal!);
 	return Result.ok(null);
+}
+
+// An aborted signal stops the server as stop() does; its listener goes once the server closes.
+function watchSignal(server: HttpServer, signal: AbortSignal): void {
+	server.abortSignal = signal;
+	if (signal.aborted) {
+		closeStopped(server);
+		return;
+	}
+	const onAbort = (): void => { stop(server); };
+	server.onAbort = onAbort;
+	signal.addEventListener("abort", onAbort);
+}
+
+function unwatchSignal(server: HttpServer): void {
+	if (server.abortSignal != null && server.onAbort != null) server.abortSignal!.removeEventListener("abort", server.onAbort!);
+	server.onAbort = null;
+}
+
+function signalAborted(server: HttpServer): boolean {
+	return server.abortSignal != null && server.abortSignal!.aborted;
 }
 
 export function stop(server: HttpServer): void {
@@ -163,6 +194,7 @@ export function stop(server: HttpServer): void {
 }
 
 function closeStopped(server: HttpServer): void {
+	unwatchSignal(server);
 	server.running = false;
 	if (server.fd >= 0) { msNetClose(server.fd); server.fd = -1; }
 }
@@ -722,6 +754,7 @@ function allocClients(cfg: Readonly<LoopConfig>): ClientState[] {
 }
 
 export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
+	if (signalAborted(server)) { closeStopped(server); return; }
 	const n = threads > 0 ? threads : msOsCpuCount();
 	server.running = true;
 	setRunning(server.runState, true);
@@ -739,7 +772,7 @@ export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
 	}
 	serveThread(cfg, run, addr, port, handler);
 	for (const w of workers) await w;
-	server.running = false;
+	closeStopped(server);
 }
 
 function serveThread(cfg: Readonly<LoopConfig>, run: Locked<RunState>, addr: string, port: int32, handler: RequestHandler): null {
@@ -869,6 +902,7 @@ async function handleConnSync(cfg: Readonly<LoopConfig>, run: Locked<RunState>, 
 // ===== Blocking Mode (for simple use / testing) =====
 
 export function serve(server: HttpServer): void {
+	if (signalAborted(server)) { closeStopped(server); return; }
 	server.running = true;
 	setRunning(server.runState, true);
 	while (isRunning(server.runState)) {
@@ -890,6 +924,7 @@ export function serve(server: HttpServer): void {
 }
 
 export function serveN(server: HttpServer, count: int32): void {
+	if (signalAborted(server)) { closeStopped(server); return; }
 	server.running = true;
 	setRunning(server.runState, true);
 	let served = 0;
@@ -1197,6 +1232,7 @@ export function createServerAsync(handler: AsyncRequestHandler): HttpServer {
 		keepAlive: true, keepAliveTimeout: 10000,
 		maxRequestsPerConnection: 0, maxHeaderSize: 8192, maxBodySize: 1048576,
 		runState: new Locked({ running: false }),
+		abortSignal: null, onAbort: null,
 	};
 }
 
@@ -1304,6 +1340,7 @@ async function handleConnAsync(cfg: Readonly<LoopConfig>, run: Locked<RunState>,
 }
 
 export function serveConcurrentAsync(server: HttpServer, handler: AsyncRequestHandler, threads: int32 = 0): void {
+	if (signalAborted(server)) { closeStopped(server); return; }
 	const n = threads > 0 ? threads : msOsCpuCount();
 	server.running = true;
 	setRunning(server.runState, true);
@@ -1320,7 +1357,7 @@ export function serveConcurrentAsync(server: HttpServer, handler: AsyncRequestHa
 	}
 	serveThreadAsync(cfg, run, addr, port, handler);
 	for (const w of workers) await w;
-	server.running = false;
+	closeStopped(server);
 }
 
 function serveThreadAsync(cfg: Readonly<LoopConfig>, run: Locked<RunState>, addr: string, port: int32, handler: AsyncRequestHandler): null {
