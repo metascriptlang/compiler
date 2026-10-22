@@ -2239,14 +2239,29 @@ const handle = spawn(() => heavyComputation());  // returns Promise<T>
 const result = await handle;                      // block until complete
 ```
 
-`spawn` returns a `Promise<T>` tagged as **affine + scope-bound** under the hood — it must be awaited exactly once before its scope exits. Surface type is `Promise<T>`; the affine semantics are attached via internal flags so the compiler can enforce safety without forcing users to learn a second type name:
+`spawn` returns a `Promise<T>` tagged as **affine** under the hood — it is consumed exactly once: awaited, or handed on. Surface type is `Promise<T>`; the affine semantics are attached via internal flags so the compiler can enforce safety without forcing users to learn a second type name:
 
 ```ms
 const h = spawn(() => 42);
-// COMPILE ERROR if h is never awaited (PARALOCK R1/E2)
+// COMPILE ERROR if h is never awaited or handed on (PARALOCK R1/E2)
 // COMPILE ERROR if h is awaited twice (PARALOCK R2/E3)
-// COMPILE ERROR if h is returned from a function (PARALOCK R3/E4)
 ```
+
+What the thunk captures decides how far the handle may go:
+
+```ms
+function isolated(m: Map<int32, Promise<int32>>, k: int32): void {
+    m.set(k, spawn(() => work(k)));   // OK: captures a copy; the task outlives this call
+}
+
+function borrowing(d: Data): Promise<int32> {
+    const h = spawn(() => read(d));   // reads `d`, which this scope lends to the task
+    return h;                         // COMPILE ERROR: the handle stays in this scope
+}
+```
+
+- **Isolated** — the thunk captures only copies (numbers, strings, plain structs), moved values, `Arc<T>` or `Locked<T>`. Its handle is an ordinary promise: it may be stored, passed and returned, nothing joins or cancels the task when the scope exits, and the program does not end before the task finishes. A failure nobody awaited is reported as an unhandled rejection at exit, exit code 1.
+- **Borrowing** — the thunk reads a reference the parent lends it. Every exit of the scope cancels the tasks no worker has started and waits for the rest, so the handle stays in that scope: returning it, storing it in a field, a module variable or an object, or passing it to a function or a constructor is a compile error. Keeping it in a local array or `Map` and passing it to `Promise.all` stays inside the scope and is accepted.
 
 The same `Promise<T>` produced by `async function`s, actor CALLs, and `spawn(...)` all interoperate: you can mix them in arrays, pass them through generic code, etc. When a spawn-origin `Promise<T>` flows into a context that drops the affine guarantee (mixed array, generic parameter, explicit upcast), the compiler emits a lint so the safety loss is visible.
 
