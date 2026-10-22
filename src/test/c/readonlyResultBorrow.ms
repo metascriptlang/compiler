@@ -133,3 +133,25 @@ export function readField(): int32 { return ROOT.n + ROOT.kids.length; }
 `, ["pick", "readArg", "readRet", "readField"]);
 	assert fault == "", fault;
 }
+
+test "a local bound to a deep Readonly module const built in place borrows it" {
+	const fault = rcFault(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+const ROOT: Readonly<Node> = new Node();
+function look(t: Readonly<Node>): int32 { return t.n; }
+export function readLocal(): int32 { const r = ROOT; return r.n + r.kids.length; }
+`, ["readLocal", "look"]);
+	assert fault == "", fault;
+}
+
+test "a local bound to a module let or a mutable const still copies it" {
+	for (const decl of ["let ROOT: Readonly<Node> = new Node();", "const ROOT: Node = new Node();"]) {
+		const result = compileToC(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+${decl}
+export function readLocal(): int32 { const r = ROOT; return r.n; }
+`);
+		assert result.ok, result.ok ? "" : result.error;
+		assert rcOps(functionBody(result.value, "readLocal")) > 0, functionBody(result.value, "readLocal");
+	}
+}
