@@ -588,9 +588,18 @@ static int fsWatchComplete(msIoEngine* e, msIoRequest* req, int32_t res) {
 
 /* ===== Process Completions ===== */
 
-/* No-op: Linux 5.5+ emits -ECANCELED CQE on fd close. */
+/* close() does not end an in-flight io_uring op: the op holds its own file reference.
+ * Cancel every op on fd; each completes with -ECANCELED, the peer-close shape. */
 void msIoEngineCancelFd(msIoEngine* e, int fd) {
-	(void)e; (void)fd;
+	if (e == NULL || fd < 0) return;
+	struct io_uring_sqe* sqe = uringGetSqe(&e->ring);
+	if (sqe == NULL) return;
+	sqe->opcode = IORING_OP_ASYNC_CANCEL;
+	sqe->fd = fd;
+	sqe->cancel_flags = IORING_ASYNC_CANCEL_FD | IORING_ASYNC_CANCEL_ALL;
+	sqe->user_data = 0;
+	uringSubmitSqe(&e->ring);
+	uringSubmit(&e->ring);
 }
 
 void msIoEngineAddWakeFd(msIoEngine* e, int fd) {

@@ -58,6 +58,8 @@ static int __uring_enter(int fd, unsigned toSubmit, unsigned minComplete, unsign
 #define URING_OP_ACCEPT 0
 #define URING_OP_RECV   1
 #define URING_OP_SEND   2
+#define URING_OP_TIMEOUT 3
+#define URING_OP_CANCEL  4
 
 /* Per-thread io_uring ring for event loop */
 typedef struct {
@@ -199,9 +201,35 @@ static inline void msUringSubmitSend(int32_t fd, msString data, int32_t len) {
 	__uringSubmitSqe();
 }
 
-/* Submit all pending + wait for completions. Returns number of events. */
+/* Cancel the in-flight op of `op` kind on fd; the op completes with -ECANCELED. */
+static inline void msUringSubmitCancel(int32_t fd, int32_t op) {
+	struct io_uring_sqe* sqe = __uringGetSqe();
+	if (!sqe) return;
+	sqe->opcode = IORING_OP_ASYNC_CANCEL;
+	sqe->fd = -1;
+	sqe->addr = URING_TAG(fd, op);
+	sqe->user_data = URING_TAG(fd, URING_OP_CANCEL);
+	__uringSubmitSqe();
+}
+
+/* Submit all pending + wait for completions, at most timeoutMs when it is >= 0.
+ * Returns number of events; timer and cancel completions are not events. */
 static inline int32_t msUringWait(int32_t timeoutMs) {
 	msUringEvt* r = &_uringEvt;
+	struct { int64_t sec; long long nsec; } wait = { timeoutMs / 1000, (long long)(timeoutMs % 1000) * 1000000LL };
+	if (timeoutMs >= 0
+		&& atomic_load_explicit((_Atomic unsigned*)r->cqHead, memory_order_acquire)
+		== atomic_load_explicit((_Atomic unsigned*)r->cqTail, memory_order_acquire)) {
+		struct io_uring_sqe* timer = __uringGetSqe();
+		if (timer) {
+			timer->opcode = IORING_OP_TIMEOUT;
+			timer->fd = -1;
+			timer->addr = (uint64_t)(uintptr_t)&wait;
+			timer->len = 1;
+			timer->user_data = URING_TAG(-1, URING_OP_TIMEOUT);
+			__uringSubmitSqe();
+		}
+	}
 	int pending = r->pending;
 	r->pending = 0;
 
@@ -210,7 +238,6 @@ static inline int32_t msUringWait(int32_t timeoutMs) {
 		pending > 0 ? (unsigned)pending : 0,
 		1, IORING_ENTER_GETEVENTS);
 	if (ret < 0) return 0;
-	(void)timeoutMs;
 
 	unsigned cqHead = atomic_load_explicit((_Atomic unsigned*)r->cqHead, memory_order_acquire);
 	unsigned cqTail = atomic_load_explicit((_Atomic unsigned*)r->cqTail, memory_order_acquire);
@@ -218,6 +245,8 @@ static inline int32_t msUringWait(int32_t timeoutMs) {
 	int32_t count = 0;
 	while (cqHead != cqTail && count < URING_EVT_MAX) {
 		struct io_uring_cqe* cqe = &r->cqes[cqHead & *r->cqMask];
+		int32_t op = URING_TAG_OP(cqe->user_data);
+		if (op == URING_OP_TIMEOUT || op == URING_OP_CANCEL) { cqHead++; continue; }
 		_uringEvtBuf[count].fd = URING_TAG_FD(cqe->user_data);
 		_uringEvtBuf[count].op = URING_TAG_OP(cqe->user_data);
 		_uringEvtBuf[count].res = (int32_t)cqe->res;
@@ -279,6 +308,7 @@ static inline msString msUringBuildResponse(int32_t fd, int32_t st, msString stT
 }
 static inline int32_t msUringFastHeaderCheck(int32_t fd, int32_t n) { (void)fd; (void)n; return -1; }
 static inline int32_t msUringWait(int32_t t) { (void)t; return 0; }
+static inline void msUringSubmitCancel(int32_t fd, int32_t op) { (void)fd; (void)op; }
 static inline int32_t msUringEventFd(int32_t i) { (void)i; return -1; }
 static inline int32_t msUringEventOp(int32_t i) { (void)i; return -1; }
 static inline int32_t msUringEventRes(int32_t i) { (void)i; return -1; }
