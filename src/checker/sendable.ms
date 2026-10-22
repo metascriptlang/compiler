@@ -3,7 +3,7 @@
 import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, TryExprData, Type, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, addError, addWarning } from "./context";
-import { Effect, EffectCause, callEffect, deferEffectCheck, newEffect, routineEffect, walkEffect } from "./effects";
+import { Effect, EffectCause, callEffect, deferEffectCheck, newEffect, routineEffect, walkEffect, walkWithViews } from "./effects";
 import { constBindingInitializer } from "./constFold";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
 import { createArray, createGenericParam, createRef, createStruct, int32Type, isPrimitiveKind, isSendableFunction, isStructType, isAtomicRef, isReadonlyView, stringType, typeCarriesRef, typeDisplayName } from "./types";
@@ -453,7 +453,7 @@ export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawn
 		checkClosureCaptures(ctx, source, "spawn");
 		refuseViewResult(ctx, source);
 	}
-	requireSpawnSafe(closure, "spawn runs this thunk on another thread", spawnNode);
+	requireSpawnSafe(ctx, closure, "spawn runs this thunk on another thread", spawnNode);
 	if (isIsolatedThunk(ctx, source)) spawnNode.flags = spawnNode.flags.incl(NodeFlag.Isolated);
 	else spawnNode.flags = spawnNode.flags.excl(NodeFlag.Isolated);
 }
@@ -470,6 +470,21 @@ function isIsolatedThunk(ctx: CheckerContext, thunk: Node): boolean {
 function isModuleScoped(ctx: CheckerContext, sym: Symbol): boolean {
 	const home = scopeHolding(ctx.table, sym);
 	return home != null && (home.scopeKind == ScopeKind.Global || home.scopeKind == ScopeKind.Module);
+}
+
+// The BORROW captures of a thunk: a ref-carrying binding of the spawn site's frame that the
+// thunk neither moves in nor shares through an atomic count.
+function collectBorrowCaptures(ctx: CheckerContext, node: Node | null, views: Symbol[], moved: Symbol[]): void {
+	if (node == null || node.kind == NodeKind.ArrayPattern || node.kind == NodeKind.ObjectPattern || node.kind == NodeKind.ObjectPatternProp) return;
+	if (node.kind == NodeKind.MoveExpr) {
+		const arg = peelHidden((node.data as MoveExprData).moveArg);
+		if (arg.resolvedSym != null) moved.push(arg.resolvedSym!);
+	}
+	const sym = node.kind == NodeKind.Identifier ? node.resolvedSym : null;
+	if (sym != null && (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Parameter) && !views.includes(sym)
+		&& lookupSymbol(ctx.table, sym.name) == sym && !hasFlag(sym, SymbolFlag.Global) && !isModuleScoped(ctx, sym)
+		&& typeCarriesRef(sym.symbolType) && !isAtomicRef(sym.symbolType)) views.push(sym);
+	forEachChild(node, (child: Node): void => { collectBorrowCaptures(ctx, child, views, moved); });
 }
 
 function takesReferenceCapture(ctx: CheckerContext, node: Node | null): boolean {
@@ -666,8 +681,8 @@ function borrowedCapture(ctx: CheckerContext, node: Node): Node | null {
 	return hit[0];
 }
 
-function spawnEffectOf(fn: Node, e: Effect): EffectCause | null {
-	if (fn.kind != NodeKind.Identifier) return walkEffect(fn, e);
+function spawnEffectOf(fn: Node, e: Effect, views: Symbol[] = []): EffectCause | null {
+	if (fn.kind != NodeKind.Identifier) return walkWithViews(fn, e, views);
 	const sym = fn.resolvedSym;
 	if (sym == null) return null;
 	if (sym.symbolKind == SymbolKind.Function) return routineEffect(sym, e);
@@ -678,10 +693,14 @@ function spawnEffectOf(fn: Node, e: Effect): EffectCause | null {
 	return isRoutine ? walkEffect(declared, e) : null;
 }
 
-function requireSpawnSafe(fn: Node, runs: string, at: Node): void {
+function requireSpawnSafe(ctx: CheckerContext, fn: Node, runs: string, at: Node): void {
+	const views: Symbol[] = [];
+	const moved: Symbol[] = [];
+	collectBorrowCaptures(ctx, peelHidden(fn), views, moved);
+	const borrowed = views.filter((v: Symbol): boolean => !moved.includes(v));
 	deferEffectCheck(at, "spawnSafe", (ctx: CheckerContext): void => {
-		const stored = spawnEffectOf(peelHidden(fn), Effect.StoresSharedConst);
-		if (stored != null) addError(ctx, runs + ", but it " + stored.text + "; a module const every thread shares is only borrowed there, so store a copy of it or store it outside the spawned code", at.location.line, at.location.column);
+		const stored = spawnEffectOf(peelHidden(fn), Effect.StoresBorrowed, borrowed);
+		if (stored != null) addError(ctx, runs + ", but it " + stored.text + "; the task only borrows it and a borrow takes no count, so store an explicit copy of it (clone or spread) or store it outside the spawned code", at.location.line, at.location.column);
 		const c = spawnEffectOf(peelHidden(fn), Effect.SpawnUnsafe);
 		if (c == null) return;
 		addWarning(ctx, runs + ", but it " + c.text + "; module state crosses threads only as a const value, a Locked<T> or an Arc<T>", at.location.line, at.location.column);
@@ -754,7 +773,7 @@ export function checkSendableSource(ctx: CheckerContext, expr: Node): boolean {
 	const source = peelHidden(expr);
 	const mark = ctx.errors.length;
 	if (source.kind == NodeKind.ArrowFunction || source.kind == NodeKind.FunctionExpr || source.kind == NodeKind.Identifier) {
-		requireSpawnSafe(source, "a Sendable function may run on another thread", expr);
+		requireSpawnSafe(ctx, source, "a Sendable function may run on another thread", expr);
 	}
 	if (source.kind == NodeKind.ArrowFunction || source.kind == NodeKind.FunctionExpr) {
 		checkClosureCaptures(ctx, source, "a Sendable function");

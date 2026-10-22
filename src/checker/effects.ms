@@ -1,7 +1,7 @@
 // Effects are read from checked bodies, and a callee later in the module is not
 // checked yet where its caller is: queue a check with deferEffectCheck.
 
-import { ArrayLiteralData, ArrowFunctionData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, PropertyDeclData, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, VariableDeclData } from "../ast/node";
+import { ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, PropertyDeclData, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, VariableDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
@@ -14,7 +14,7 @@ export enum Effect {
 	SideEffect,
 	SpawnUnsafe,
 	Suspends,
-	StoresSharedConst,
+	StoresBorrowed,
 }
 
 export interface EffectCause {
@@ -37,6 +37,10 @@ let sideTable: EffectTable = emptyTable();
 let spawnTable: EffectTable = emptyTable();
 let suspendTable: EffectTable = emptyTable();
 let sharedConstTable: EffectTable = emptyTable();
+let paramStoreTables: EffectTable[] = [];
+let viewSyms: Symbol[] = [];
+let viewParams: string[] = [];
+let forOfSources = new HashMap<Symbol, Node>();
 let assumedOpen = false;
 let inAsync = false;
 let ownParams: string[] = [];
@@ -55,7 +59,7 @@ function tableFor(e: Effect): EffectTable {
 		Effect.SideEffect => sideTable,
 		Effect.SpawnUnsafe => spawnTable,
 		Effect.Suspends => suspendTable,
-		Effect.StoresSharedConst => sharedConstTable,
+		Effect.StoresBorrowed => sharedConstTable,
 	};
 }
 
@@ -77,6 +81,8 @@ export function runDeferredEffectChecks(ctx: CheckerContext): void {
 	spawnTable = emptyTable();
 	suspendTable = emptyTable();
 	sharedConstTable = emptyTable();
+	paramStoreTables = [];
+	forOfSources = new HashMap<Symbol, Node>();
 }
 
 function isUncheckedGeneric(sym: Symbol): boolean {
@@ -132,26 +138,46 @@ function isRoutineNode(n: Node): boolean {
 		|| n.kind == NodeKind.ArrowFunction || n.kind == NodeKind.FunctionExpr;
 }
 
-function walkRoutine(decl: Node | null, e: Effect): EffectCause | null {
+function walkRoutine(decl: Node | null, e: Effect, views: string[] = []): EffectCause | null {
 	if (decl == null) return null;
 	const outer = ownParams;
 	const outerAsync = inAsync;
+	const outerSyms = viewSyms;
+	const outerParams = viewParams;
 	ownParams = routineParams(decl);
 	inAsync = isAsyncFunctionNode(decl);
+	viewSyms = [];
+	viewParams = views;
 	const c = walkEffect(routineBody(decl), e);
 	ownParams = outer;
 	inAsync = outerAsync;
+	viewSyms = outerSyms;
+	viewParams = outerParams;
+	return c;
+}
+
+export function walkWithViews(node: Node, e: Effect, views: Symbol[]): EffectCause | null {
+	const outerSyms = viewSyms;
+	const outerParams = viewParams;
+	viewSyms = views;
+	viewParams = [];
+	const c = walkEffect(node, e);
+	viewSyms = outerSyms;
+	viewParams = outerParams;
 	return c;
 }
 
 function walkNestedRoutine(decl: Node, e: Effect): EffectCause | null {
 	const outer = ownParams;
 	const outerAsync = inAsync;
+	const outerParams = viewParams;
 	ownParams = routineParams(decl);
 	inAsync = isAsyncFunctionNode(decl);
+	viewParams = viewParams.filter((p: string): boolean => !ownParams.includes(p));
 	const c = walkChildren(decl, e);
 	ownParams = outer;
 	inAsync = outerAsync;
+	viewParams = outerParams;
 	return c;
 }
 
@@ -187,7 +213,7 @@ function argumentEffect(arg: Node, e: Effect): EffectCause | null {
 		if (isRoutine(a.resolvedSym)) return null;
 		if (boundRoutine(a.resolvedSym) != null) return boundRoutineEffect(a.resolvedSym!, e);
 	}
-	return e == Effect.StoresSharedConst ? null : cause(arg, "passes a function value");
+	return e == Effect.StoresBorrowed ? null : cause(arg, "passes a function value");
 }
 
 export function returnsView(t: Readonly<Type | null>): boolean {
@@ -330,7 +356,10 @@ function through(site: Node, what: string, inner: EffectCause | null): EffectCau
 }
 
 function memo(sym: Symbol, e: Effect, compute: () => EffectCause | null): EffectCause | null {
-	const t = tableFor(e);
+	return memoIn(tableFor(e), sym, compute);
+}
+
+function memoIn(t: EffectTable, sym: Symbol, compute: () => EffectCause | null): EffectCause | null {
 	const known = t.impure.get(sym);
 	if (known != null) return known;
 	if (t.pure.get(sym) != null) return null;
@@ -413,7 +442,7 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 		if (callee != null && callee.kind == NodeKind.Identifier && boundRoutine(callee.resolvedSym) != null) {
 			return through(call, "calls '" + (callee.data as IdentifierData).name + "'", boundRoutineEffect(callee.resolvedSym!, e));
 		}
-		return e == Effect.StoresSharedConst ? null : cause(call, "calls a function value");
+		return e == Effect.StoresBorrowed ? null : cause(call, "calls a function value");
 	}
 	if (hasFlag(sym!, SymbolFlag.GeneratedOp)) return null;
 	if (routineBody(unpackDecl(sym!.declNode)) == null) {
@@ -456,7 +485,7 @@ function ownedValueHookEffect(site: Node, e: Effect): EffectCause | null {
 function useEffect(node: Node, e: Effect): EffectCause | null {
 	const sym = node.resolvedSym;
 	if (sym == null) return null;
-	if ((e == Effect.Suspends || e == Effect.StoresSharedConst) && sym.symbolKind != SymbolKind.Function) return null;
+	if ((e == Effect.Suspends || e == Effect.StoresBorrowed) && sym.symbolKind != SymbolKind.Function) return null;
 	if (isModuleState(sym)) return isConstantValue(sym, e) ? null : cause(node, "uses " + stateName(sym));
 	if (sym.symbolKind == SymbolKind.Function) return through(node, "refers to '" + sym.name + "'", routineEffect(sym, e));
 	return null;
@@ -467,47 +496,86 @@ export function walkEffect(node: Node | null, e: Effect): EffectCause | null {
 	if (isRoutineNode(node)) return walkNestedRoutine(node, e);
 	const here: EffectCause | null = match (node.kind) {
 		NodeKind.Identifier | NodeKind.MemberExpr => useEffect(node, e),
-		NodeKind.CallExpr => e == Effect.StoresSharedConst ? sinkStoreOf(node) ?? callEffect(node, e) : callEffect(node, e),
+		NodeKind.CallExpr => e == Effect.StoresBorrowed ? sinkStoreOf(node) ?? viewArgEffect(node) ?? callEffect(node, e) : callEffect(node, e),
 		NodeKind.NewExpr => newEffect(node, e),
 		NodeKind.AwaitExpr => e == Effect.Suspends && !inAsync ? cause(node, "awaits") : null,
-		NodeKind.BinaryExpr | NodeKind.ArrayLiteral | NodeKind.ObjectLiteral => e == Effect.StoresSharedConst ? slotStoreOf(node) : null,
+		NodeKind.BinaryExpr | NodeKind.ArrayLiteral | NodeKind.ObjectLiteral => e == Effect.StoresBorrowed ? slotStoreOf(node) : null,
 		_ => null,
 	};
 	if (here != null) return here;
+	if (e == Effect.StoresBorrowed && node.kind == NodeKind.ForOfStmt && node.resolvedSym != null) forOfSources.set(node.resolvedSym!, (node.data as ForOfStmtData).forOfIterable);
 	return walkChildren(node, e);
 }
 
-// The module const a stored value is, seen through conversions, both arms of a choice and a local
-// const bound to it; a store of it takes a reference count on the one object every thread shares.
-function sharedConstOf(value: Node | null): Symbol | null {
-	if (value == null) return null;
+// What a stored value borrows, seen through conversions, both arms of a choice, field and element
+// reads, a view call's sources and a local const or for-of binding: a module const every thread
+// shares, or a view of what the task borrows. Storing it into an owning slot takes a count on it.
+function borrowedOf(value: Node | null): string | null {
+	if (value == null || holdsNoCount(value.nodeType)) return null;
 	const n = peelConv(value);
-	if (n.kind == NodeKind.ConditionalExpr) return sharedConstOf((n.data as ConditionalExprData).ternaryConsequent) ?? sharedConstOf((n.data as ConditionalExprData).ternaryAlternate);
-	if (n.kind == NodeKind.BinaryExpr && (n.data as BinaryExprData).operator == "??") return sharedConstOf((n.data as BinaryExprData).left) ?? sharedConstOf((n.data as BinaryExprData).right);
-	if (n.kind == NodeKind.TypeAssertion) return sharedConstOf((n.data as TypeAssertionData).asExpr);
-	if (n.kind != NodeKind.Identifier || n.resolvedSym == null) return null;
-	if (isImmutableModuleConst(n.resolvedSym!)) return n.resolvedSym;
-	const sym = n.resolvedSym!;
-	if (sym.symbolKind != SymbolKind.Variable || hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.Mutable)) return null;
-	const bound = sym.declNode != null && sym.declNode.kind == NodeKind.VariableDecl ? (sym.declNode.data as VariableDeclData).initializer : null;
-	return bound != null && bound != value ? sharedConstOf(bound) : null;
+	if (!typeCarriesRef(n.nodeType) || isAtomicRef(n.nodeType)) return null;
+	return match (n.kind) {
+		NodeKind.ConditionalExpr => borrowedOf((n.data as ConditionalExprData).ternaryConsequent) ?? borrowedOf((n.data as ConditionalExprData).ternaryAlternate),
+		NodeKind.BinaryExpr => (n.data as BinaryExprData).operator == "??" ? borrowedOf((n.data as BinaryExprData).left) ?? borrowedOf((n.data as BinaryExprData).right) : null,
+		NodeKind.TypeAssertion => borrowedOf((n.data as TypeAssertionData).asExpr),
+		NodeKind.MemberExpr => borrowedOf((n.data as MemberExprData).object),
+		NodeKind.ArrayAccess => borrowedOf((n.data as ArrayAccessData).array),
+		NodeKind.CallExpr => viewCallBorrow(n),
+		NodeKind.Identifier => bindingBorrow(n, value),
+		_ => null,
+	};
 }
 
-function storeCause(site: Node, sym: Symbol, into: string): EffectCause {
-	return cause(site, "stores the module const '" + sym.name + "' " + into);
+function viewCallBorrow(call: Node): string | null {
+	if (!isViewCall(call)) return null;
+	const sources: Node[] = [];
+	viewCallSources(call, sources);
+	for (const s of sources) {
+		const b = borrowedOf(s);
+		if (b != null) return b;
+	}
+	return null;
+}
+
+function bindingBorrow(n: Node, value: Node): string | null {
+	const sym = n.resolvedSym;
+	if (sym == null) return null;
+	if (isImmutableModuleConst(sym)) return "the module const '" + sym.name + "'";
+	if (viewSyms.includes(sym) || (sym.symbolKind == SymbolKind.Parameter && viewParams.includes(sym.name))) return "the view '" + sym.name + "'";
+	if (sym.symbolKind != SymbolKind.Variable || hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.Mutable)) return null;
+	const iterated = forOfSources.get(sym);
+	if (iterated != null) return borrowedOf(iterated);
+	const decl = sym.declNode;
+	const bound = decl != null && decl.kind == NodeKind.VariableDecl ? (decl.data as VariableDeclData).initializer : null;
+	return bound != null && bound != value ? borrowedOf(bound) : null;
+}
+
+function storeCause(site: Node, what: string, into: string): EffectCause {
+	return cause(site, "stores " + what + " " + into);
+}
+
+function holdsNoCount(slot: Type | null): boolean {
+	return slot != null && slot.kind == TypeKind.Cursor;
+}
+
+function elementHoldsNoCount(container: Type | null): boolean {
+	let t = container;
+	while (t != null && (t.kind == TypeKind.Ref || t.kind == TypeKind.Var) && t.typeReturn != null) t = t.typeReturn;
+	return t != null && t.kind == TypeKind.Array && holdsNoCount(t.typeReturn);
 }
 
 function slotStoreOf(node: Node): EffectCause | null {
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
-		if (d.operator != "=" || d.left == null || d.left.kind == NodeKind.Identifier) return null;
-		const sym = sharedConstOf(d.right);
-		return sym != null ? storeCause(node, sym, d.left.kind == NodeKind.ArrayAccess ? "into an array element" : "into a field") : null;
+		if (d.operator != "=" || d.left == null || d.left.kind == NodeKind.Identifier || holdsNoCount(d.left.nodeType)) return null;
+		const what = borrowedOf(d.right);
+		return what != null ? storeCause(node, what, d.left.kind == NodeKind.ArrayAccess ? "into an array element" : "into a field") : null;
 	}
+	if (node.kind == NodeKind.ArrayLiteral && elementHoldsNoCount(node.nodeType)) return null;
 	const items = node.kind == NodeKind.ArrayLiteral ? (node.data as ArrayLiteralData).elements : (node.data as ObjectLiteralData).properties;
 	for (const item of items) {
-		const sym = sharedConstOf(item);
-		if (sym != null) return storeCause(item, sym, node.kind == NodeKind.ArrayLiteral ? "into an array literal" : "into an object literal");
+		const what = borrowedOf(item);
+		if (what != null) return storeCause(item, what, node.kind == NodeKind.ArrayLiteral ? "into an array literal" : "into an object literal");
 	}
 	return null;
 }
@@ -519,16 +587,43 @@ function sinkStoreOf(call: Node): EffectCause | null {
 	const args = (call.data as CallExprData).arguments;
 	const receiver = shift == 1 ? receiverOf(call) : null;
 	if (receiver != null && sig.typeChildren.length > 0 && sig.typeChildren[0] != null && sig.typeChildren[0].kind == TypeKind.Sink) {
-		const sym = sharedConstOf(receiver);
-		if (sym != null) return storeCause(receiver, sym, "into a sink parameter");
+		const what = borrowedOf(receiver);
+		if (what != null) return storeCause(receiver, what, "into a sink parameter");
 	}
+	const into = receiver != null ? receiver : receiverOf(call);
+	if (into != null && elementHoldsNoCount(into.nodeType)) return null;
 	for (let i = 0; i < args.length; i += 1) {
 		const f = i + shift < sig.typeChildren.length ? sig.typeChildren[i + shift] : null;
-		if (f == null || f.kind != TypeKind.Sink) continue;
-		const sym = sharedConstOf(args[i]);
-		if (sym != null) return storeCause(args[i], sym, "into a sink parameter");
+		if (f == null || f.kind != TypeKind.Sink || holdsNoCount(f.typeReturn)) continue;
+		const what = borrowedOf(args[i]);
+		if (what != null) return storeCause(args[i], what, "into a sink parameter");
 	}
 	return null;
+}
+
+// A callee reached with a borrowed argument stores it when its body stores that parameter, as the
+// task would store the argument itself.
+function viewArgEffect(call: Node): EffectCause | null {
+	const sym = call.resolvedSym;
+	if (!isRoutine(sym)) return null;
+	const decl = unpackDecl(sym!.declNode);
+	if (decl == null || routineBody(decl) == null) return null;
+	const params = routineParams(decl);
+	const shift = call.flags.has(NodeFlag.ExtCall) ? 1 : 0;
+	const passed: (Node | null)[] = shift == 1 ? [receiverOf(call)] : [];
+	for (const a of (call.data as CallExprData).arguments) passed.push(a);
+	for (let i = 0; i < passed.length && i < params.length; i += 1) {
+		const what = borrowedOf(passed[i]);
+		if (what == null) continue;
+		const c = paramStoreEffect(sym!, decl, i, params[i]);
+		if (c != null) return through(call, "passes " + what + " to '" + sym!.name + "'", c);
+	}
+	return null;
+}
+
+function paramStoreEffect(sym: Symbol, decl: Node, index: int32, name: string): EffectCause | null {
+	while (paramStoreTables.length <= index) paramStoreTables.push(emptyTable());
+	return memoIn(paramStoreTables[index], sym, (): EffectCause | null => walkRoutine(decl, Effect.StoresBorrowed, [name]));
 }
 
 function walkChildren(node: Node, e: Effect): EffectCause | null {
