@@ -800,11 +800,14 @@ function laySlot(obj: RaiserObjectData): void {
 // Every slot of the object's class at its zero: zero bits, a nil handle, a nil value.
 export function layOutObject(obj: RaiserObjectData, classType: RaiserClassType): void {
 	obj.classType = classType;
-	const zero = classType.zeroSlots;
-	for (let i = 0; i < zero.length; i += 1) obj.slots.push(zero[i]);
+	const count = classType.zeroSlots.length;
+	obj.slots.length = count;
 	obj.wordSlots = classType.zeroWordSlots;
 	obj.refSlots = classType.zeroRefSlots;
-	for (let i: int32 = 0; i < classType.dynCount; i += 1) obj.values.push(raiserNil());
+	if (classType.dynCount > 0) {
+		for (let i = 0; i < count; i += 1) obj.slots[i] = classType.zeroSlots[i];
+		for (let i: int32 = 0; i < classType.dynCount; i += 1) obj.values.push(raiserNil());
+	}
 }
 
 // The register class slot `index` holds, which must be laid.
