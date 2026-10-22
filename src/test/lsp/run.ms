@@ -195,6 +195,9 @@ class Session {
 	stderrText: string;
 	samples: PerfSample[];
 	usage: ProcessUsage[];
+	rssBeforeEdits: number;
+	rssAfterEdits: number;
+	editDrains: int32;
 }
 
 function startSession(log: string, measured: boolean = false): Result<Session, string> {
@@ -218,6 +221,9 @@ function startSession(log: string, measured: boolean = false): Result<Session, s
 		stderrText: "",
 		samples: [],
 		usage: [],
+		rssBeforeEdits: -1,
+		rssAfterEdits: -1,
+		editDrains: 0,
 	});
 }
 
@@ -379,6 +385,11 @@ function drive(
 		const bytes = drains[i].join("");
 		s.log += `>>> drain ${i + 1} (${bytes.byteLength} bytes)\n${bytes}\n`;
 		s.drainsWritten++;
+		if (s.measured && s.editDrains == 0 && changesText(drains[i])) {
+			const usage = readUsage(s);
+			if (!usage.ok) return Result.err(`drain ${i + 1}: ${usage.error}`);
+			s.rssBeforeEdits = usage.value.rssKb;
+		}
 		const writtenAt = performance.now();
 		const sent = s.child.write(bytes, TIMEOUT_MS);
 		if (!sent.ok) {
@@ -714,6 +725,7 @@ function runScenario(scenario: LspScenario): ScenarioRun {
 	s.child.close();
 	s.log += `=== ${failure == "" ? "ok" : "FAIL " + failure}\n`;
 	writeFile(`${OUT}/${scenarioSlug(scenario.name)}.txt`, s.log);
+	for (const sample of editGrowth(s)) s.samples.push(sample);
 	return { failure, timedOut: s.timedOut, samples: s.samples, usage: s.usage };
 }
 
@@ -856,19 +868,39 @@ function sampleLogged(s: Session, metric: string, line: string, key: string): st
 }
 
 // Ps prints "<rss kB> <[hh:]mm:ss[.cc]>" for the server: its resident size and CPU so far.
-function sampleUsage(s: Session): string {
+function readUsage(s: Session): Result<ProcessUsage, string> {
 	const ps = execFileCapture("ps", ["-o", "rss=,time=", "-p", `${s.child.pid}`]);
-	if (!ps.ok) return `ps of the server: ${ps.error.message}`;
+	if (!ps.ok) return Result.err(`ps of the server: ${ps.error.message}`);
 	const fields: string[] = [];
 	for (const f of ps.value.trim().split(" ")) {
 		if (f != "") fields.push(f);
 	}
-	if (fields.length != 2) return `ps of the server printed ${lspJsonString(ps.value)}`;
+	if (fields.length != 2) return Result.err(`ps of the server printed ${lspJsonString(ps.value)}`);
 	let cpuSeconds: number = 0;
 	for (const part of fields[1].split(":")) cpuSeconds = cpuSeconds * 60 + part.parseFloat();
 	const rssKb = fields[0].parseFloat();
-	s.usage.push({ drain: s.drainsWritten, rssKb, cpuMs: cpuSeconds * 1000 });
+	return Result.ok({ drain: s.drainsWritten, rssKb, cpuMs: cpuSeconds * 1000 });
+}
+
+function sampleUsage(s: Session): string {
+	const usage = readUsage(s);
+	if (!usage.ok) return usage.error;
+	s.usage.push(usage.value);
 	return "";
+}
+
+function changesText(drain: string[]): boolean {
+	for (const m of bodiesOf(drain)) {
+		if (textField(m, "method") == "textDocument/didChange") return true;
+	}
+	return false;
+}
+
+// Growth across the warm edits: RSS before the first edit drain to after the last, per edit.
+function editGrowth(s: Session): PerfSample[] {
+	if (s.editDrains == 0) return [];
+	const growth = (s.rssAfterEdits - s.rssBeforeEdits) / s.editDrains;
+	return [{ metric: "rss-growth", value: growth }];
 }
 
 function measureDrain(
@@ -933,6 +965,12 @@ function measureDrain(
 	for (const uri of opens) {
 		if (s.opened.indexOf(uri) < 0) s.opened.push(uri);
 	}
+	if (changesText(drain) && !s.ended) {
+		const usage = readUsage(s);
+		if (!usage.ok) return usage.error;
+		s.editDrains++;
+		s.rssAfterEdits = usage.value.rssKb;
+	}
 	const due = s.drainsWritten == 1 || s.drainsWritten % USAGE_EVERY == 0;
 	return due && !plan.exits && !s.ended ? sampleUsage(s) : "";
 }
@@ -970,12 +1008,6 @@ function usageSamples(usage: ProcessUsage[]): PerfSample[] {
 		if (k == 0 || usage[k].drain == usage[k - 1].drain) continue;
 		const drains = usage[k].drain - usage[k - 1].drain;
 		out.push({ metric: "cpu", value: (usage[k].cpuMs - usage[k - 1].cpuMs) / drains });
-	}
-	if (usage.length >= 2 && usage[usage.length - 1].drain > usage[0].drain) {
-		const first = usage[0];
-		const last = usage[usage.length - 1];
-		const growth = (last.rssKb - first.rssKb) / (last.drain - first.drain);
-		out.push({ metric: "rss-growth", value: growth });
 	}
 	return out;
 }
