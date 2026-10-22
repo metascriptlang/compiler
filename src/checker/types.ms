@@ -3625,16 +3625,29 @@ export function classParentOf(t: Type | null): Type | null {
 	if (s.kind == TypeKind.GenericInstance) {
 		const cls = genericInstanceClass(s);
 		if (cls == null || cls.kind != TypeKind.Struct || cls.typeExtra == null) return null;
-		const names = splitTopLevel(genericParamsOf(s), ",");
-		if (names.length == 0 || names.length > s.typeChildren.length) return cls.typeExtra;
-		const args: Type[] = [];
-		for (let i = 0; i < names.length; i += 1) {
-			names[i] = names[i].trim();
-			args.push(s.typeChildren[i]);
-		}
-		return substituteParams(cls.typeExtra, declaredParamsOf(s, names.length), args);
+		return inInstance(s, cls.typeExtra);
 	}
 	return s.kind == TypeKind.Struct ? s.typeExtra : null;
+}
+
+function inInstance(instance: Type, declared: Type): Type {
+	const names = splitTopLevel(genericParamsOf(instance), ",");
+	if (names.length == 0 || names.length > instance.typeChildren.length) return declared;
+	return substituteParams(declared, declaredParamsOf(instance, names.length), instance.typeChildren.slice(0, names.length));
+}
+
+export function declaredBasesOf(t: Type | null): Type[] {
+	if (t == null) return [];
+	const s = t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
+	const body = s.kind == TypeKind.GenericInstance ? genericInstanceClass(s) : s;
+	const decl = body != null && body.sym != null ? body.sym.declNode : null;
+	if (decl == null || decl.baseExprs == null) return [];
+	const bases: Type[] = [];
+	for (const base of decl.baseExprs) {
+		if (base.nodeType == null || isUnresolvedType(base.nodeType) || base.nodeType.kind == TypeKind.Error) continue;
+		bases.push(s.kind == TypeKind.GenericInstance ? inInstance(s, base.nodeType) : base.nodeType);
+	}
+	return bases;
 }
 
 export function classAncestorInstance(t: Type | null, target: Type): Type | null {
