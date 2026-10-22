@@ -183,7 +183,8 @@ function keyHash<K>(key: Readonly<K>): int64 {
 	when (isArray<K>() && !needsCopy<K>()) {
 		return hashPointer(key as Readonly<Ptr<void>>);
 	} else {
-		return key.hash();
+		const h = key.hash();
+		return h == (0 as int64) ? 314159265 as int64 : h;
 	}
 }
 
