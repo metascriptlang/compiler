@@ -405,6 +405,7 @@ export function generatedProcSym(procName: string): Symbol {
 	if (_runtimeProcsSealed) throw new Error(`internal: generated proc '${procName}' first requested while C modules are emitted in parallel`);
 	const sym = makeSymbol(procName, SymbolKind.Function, null, false);
 	setFlag(sym, SymbolFlag.ImportC);
+	setFlag(sym, SymbolFlag.CompilerProc);
 	if (_runtimeIdentCache != null) sym.nameId = getIdentId(_runtimeIdentCache, procName);
 	_runtimeSyms.set(procName, sym);
 	return sym;
@@ -432,11 +433,9 @@ export function compilerFuncSym(procName: string): Symbol | null {
 	return _compilerFuncs.get(procName);
 }
 
+// Reads only the symbol, so emission on any thread may ask it.
 export function isRuntimeProcSym(sym: Readonly<Symbol | null>, procName: string): boolean {
-	if (sym == null) return false;
-	const declared = _compilerFuncs.get(procName);
-	if (declared != null) return sym == declared;
-	return sym == _runtimeSyms.get(procName);
+	return sym != null && hasFlag(sym, SymbolFlag.CompilerProc) && (sym.nativeName != "" ? sym.nativeName : sym.name) == procName;
 }
 
 export function isRuntimeProcCall(node: Node, procName: string): boolean {
@@ -906,6 +905,7 @@ test "a runtime proc is the declared symbol and an undeclared name is refused" {
 	const savedCache = _runtimeIdentCache;
 	const declared = new HashMap<string, Symbol>();
 	const probe = makeSymbol("msProbeAccess", SymbolKind.Function, null, false);
+	setFlag(probe, SymbolFlag.CompilerProc);
 	declared.set("msProbeAccess", probe);
 	bindCompilerFuncs(declared, createIdentCache());
 	const other = makeSymbol("msOther", SymbolKind.Function, null, false);

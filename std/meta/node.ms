@@ -243,6 +243,7 @@ export enum SymbolFlag {
 	Anon, // minted by a transform: its name is generated and positional, never one the author wrote
 	UnavailableOp, // a lifted hook no site may call: the analyzer refuses each copy that needs it (reference: sfError on a hook)
 	Acyclic, // @acyclic on a class: resolveClass stamps TypeFlag.Acyclic on its struct
+	CompilerProc, // a routine a synthesized call names: a @compilerFunc declaration or a generated runtime proc (reference: sfCompilerProc)
 }
 
 // ===== Symbol =====

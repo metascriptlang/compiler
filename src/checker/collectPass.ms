@@ -378,6 +378,7 @@ function registerCompilerFunc(ctx: CheckerContext, sym: Symbol): void {
 		addError(ctx, `@compilerFunc '${key}' is declared twice: a synthesized call would read whichever declaration came last, flags included`, sym.location.line, sym.location.column);
 		return;
 	}
+	setFlag(sym, SymbolFlag.CompilerProc);
 	ctx.compilerFuncs.set(key, sym);
 }
 
