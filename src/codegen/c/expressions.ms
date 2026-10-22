@@ -82,7 +82,10 @@ function variantSlotAccess(u: Readonly<Type>, vi: number): string {
 function strLitPayload(t: Type): Type | null;
 function strLitPayload(t: Readonly<Type>): Readonly<Type | null>;
 function strLitPayload(t: Readonly<Type>): Readonly<Type | null> {
-	const payload = isMaybeType(t) && t.typeReturn != null ? t.typeReturn : t;
+	return isMaybeType(t) && t.typeReturn != null ? strLitOrNull(t.typeReturn) : strLitOrNull(t);
+}
+
+function strLitOrNull(payload: Readonly<Type>): Readonly<Type | null> {
 	return payload.kind != TypeKind.String && isStringLike(payload) ? payload : null;
 }
 
@@ -207,20 +210,19 @@ function tagToLiteral(p: CProc, lits: string[], tagRead: string): string {
 // underlying reference and read its symbol's declared type. The object's own
 // nodeType may be flow-narrowed (variant struct / sub-union) — the declared union
 // is the authoritative v<N> index space for tagged-union routing.
-function duDeclaredUnionOfObject(objNode: Readonly<Node>): Readonly<Type | null> {
-	let walk: Readonly<Node> | null = objNode;
-	while (walk != null && walk.kind == NodeKind.HiddenDeref) {
-		walk = (walk.data as ExprStmtData).expr;
-	}
-	if (walk == null || walk.resolvedSym == null) return null;
-	if (walk.kind != NodeKind.Identifier && walk.kind != NodeKind.MemberExpr) return null;
-	let declTy: Readonly<Type | null> = walk.resolvedSym.symbolType;
-	while (declTy != null && declTy.kind == TypeKind.Ref && declTy.typeReturn != null) {
-		declTy = declTy.typeReturn;
-	}
-	declTy = peelToStructOrUnion(declTy);
-	if (declTy == null || declTy.kind != TypeKind.Union || !isRealDiscriminatedUnion(declTy)) return null;
-	return declTy;
+function duDeclaredUnionOfObject(objNode: Readonly<Node | null>): Readonly<Type | null> {
+	if (objNode != null && objNode.kind == NodeKind.HiddenDeref) return duDeclaredUnionOfObject((objNode.data as ExprStmtData).expr);
+	if (objNode == null || objNode.resolvedSym == null) return null;
+	if (objNode.kind != NodeKind.Identifier && objNode.kind != NodeKind.MemberExpr) return null;
+	return realDiscriminatedUnionOrNull(peelToStructOrUnion(refBaseType(objNode.resolvedSym.symbolType)));
+}
+
+function refBaseType(t: Readonly<Type | null>): Readonly<Type | null> {
+	return t != null && t.kind == TypeKind.Ref && t.typeReturn != null ? refBaseType(t.typeReturn) : t;
+}
+
+function realDiscriminatedUnionOrNull(t: Readonly<Type | null>): Readonly<Type | null> {
+	return t == null || t.kind != TypeKind.Union || !isRealDiscriminatedUnion(t) ? null : t;
 }
 
 // True if the Union should be lowered to a tagged union in C (`{_tag, v0, v1, ...}`)
@@ -2532,9 +2534,11 @@ function wrapPrimitiveUnion(g: CGen, u: Readonly<Type>, idx: number, valC: strin
 // — they must NOT wrap.
 function litFieldPrimitiveUnion(node: Readonly<Node>, key: string): Readonly<Type | null> {
 	if (node.nodeType == null) return null;
-	const ft = fieldTypeView(node.nodeType, key);
-	if (isTagCarriedUnion(ft)) return ft;
-	return null;
+	return tagCarriedOrNull(fieldTypeView(node.nodeType, key));
+}
+
+function tagCarriedOrNull(ft: Readonly<Type>): Readonly<Type | null> {
+	return isTagCarriedUnion(ft) ? ft : null;
 }
 
 // typeof runtime lowering. Primitive unions dispatch on _tag; Maybe adds a
@@ -2693,11 +2697,9 @@ enum CallMagic {
 
 function closureFunctionSym(node: Readonly<Node>): Readonly<Symbol | null> {
 	if (node.kind == NodeKind.ObjectLiteral && node.flags.has(NodeFlag.Closure)) {
-		const d = node.data as ObjectLiteralData;
-		return d.properties.length > 0 ? d.properties[0].resolvedSym : null;
+		return (node.data as ObjectLiteralData).properties.length > 0 ? (node.data as ObjectLiteralData).properties[0].resolvedSym : null;
 	}
-	const sym = node.resolvedSym;
-	return sym != null && sym.symbolKind == SymbolKind.Function ? sym : null;
+	return node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function ? node.resolvedSym : null;
 }
 
 function callMagicOf(sym: Readonly<Symbol | null>): CallMagic {
@@ -3270,8 +3272,15 @@ function hasAddrPrefix(nativeName: string): boolean {
 }
 
 function nativeRefArrayReceiver(receiver: Readonly<Node>): Readonly<Type | null> {
-	let t = receiver.nodeType != null ? peelTransparentInstance(receiver.nodeType) : null;
-	if (t != null && t.kind == TypeKind.Union) t = unwrapRefNullUnion(t);
+	if (receiver.nodeType == null) return null;
+	return refArrayBehindUnion(peelTransparentInstance(receiver.nodeType));
+}
+
+function refArrayBehindUnion(t: Readonly<Type>): Readonly<Type | null> {
+	return t.kind == TypeKind.Union ? refArrayOrNull(unwrapRefNullUnion(t)) : refArrayOrNull(t);
+}
+
+function refArrayOrNull(t: Readonly<Type | null>): Readonly<Type | null> {
 	return t != null && t.kind == TypeKind.Ref && t.typeReturn != null
 		&& t.typeReturn.kind == TypeKind.Array ? t : null;
 }
