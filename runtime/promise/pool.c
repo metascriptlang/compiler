@@ -148,6 +148,7 @@ void msOnThreadDestruction(void (*handler)(void)) {
 
 static void msAfterThreadRuns(void) {
     for (int32_t i = msThreadDestructionLen - 1; i >= 0; i--) msThreadDestructionFns[i]();
+    msRootsThreadTeardown();
     free(msThreadDestructionFns);
     msThreadDestructionFns = NULL;
     msThreadDestructionLen = 0;

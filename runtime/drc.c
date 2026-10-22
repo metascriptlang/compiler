@@ -503,6 +503,10 @@ void msRootsAdopt(msCellSeq* orphan) {
 	msCellSeqFree(orphan);
 }
 
+void msRootsThreadTeardown(void) {
+	msCellSeqFree(&msRoots);
+}
+
 /* ===== Color Helpers ===== */
 
 static inline int32_t getColor(msRefHeader* h) {

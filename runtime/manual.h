@@ -671,6 +671,7 @@ static inline void  msLockedRelease(void* cell)              { ((int64_t*)cell)[
 
 /* ===== ORC stubs ===== */
 static inline void msOrcCollect(void) {}
+static inline void msRootsThreadTeardown(void) {}
 static inline void msOrcTraceRef(void* child, void* env) { (void)child; (void)env; }
 
 /* ===== Async stubs ===== */
