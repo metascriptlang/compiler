@@ -27,7 +27,8 @@
 // completion from a drain holding only that request, sent at every checkpoint probe after the
 // checkpoint agreed. Queue delay and the server's own split come from its stderr, read after
 // every drain until its [LSP-STATS] line. A fixture whose scenario fails in any repetition
-// reports every cell as an error.
+// reports every cell as an error, and the run exits 1 when any cell errs or its p95 passes its
+// budget (BUDGETS).
 //
 // Env: MSC=<path to msc> (default: ./msc, else installed msc)
 //      LSP_REPLAY_TIMEOUT_MS=<deadline of each wait> (default 10000)
@@ -763,6 +764,24 @@ const METRICS = [
 	["rss-growth", "kB/drain"],
 	["cpu", "ms/drain"],
 ];
+// p95 ceilings in ms, chosen by the person on 2026-10-23 from the baseline; RSS waits for the
+// cycle collector.
+const BUDGETS = [
+	["startup-to-ready", "", "250"],
+	["open-to-diagnostics", "", "1200"],
+	["edit-to-diagnostics", "small", "20"],
+	["edit-to-diagnostics", "todoList", "300"],
+	["hover", "", "20"],
+	["completion", "", "20"],
+	["queue-delay", "", "10"],
+];
+
+function budgetOf(metric: string, fixture: string): number {
+	for (const b of BUDGETS) {
+		if (b[0] == metric && (b[1] == "" || b[1] == fixture)) return b[2].parseFloat();
+	}
+	return -1;
+}
 
 function perfRepetitions(): int32 {
 	const raw = env.get("LSP_PERF_REPS");
@@ -1249,6 +1268,18 @@ function nearestRank(sorted: number[], percent: int32): number {
 	return sorted[rank < 1 ? 0 : rank - 1];
 }
 
+function p95Of(cell: PerfCell): number {
+	const sorted: number[] = [];
+	for (const v of cell.values) sorted.push(v);
+	sorted.sort();
+	return nearestRank(sorted, 95);
+}
+
+function overBudget(cell: PerfCell): boolean {
+	const budget = budgetOf(cell.metric, cell.fixture);
+	return budget >= 0 && cell.values.length > 0 && p95Of(cell) > budget;
+}
+
 function cellLine(cell: PerfCell, uptimeStart: string, uptimeEnd: string, binary: string): string {
 	const n = cell.values.length;
 	let line = `{"cell":${lspJsonString(cell.metric)},"fixture":${lspJsonString(cell.fixture)}`
@@ -1262,6 +1293,8 @@ function cellLine(cell: PerfCell, uptimeStart: string, uptimeEnd: string, binary
 		line += `,"min":${sorted[0]},"p50":${nearestRank(sorted, 50)}`
 			+ `,"p95":${nearestRank(sorted, 95)}`;
 	}
+	const budget = budgetOf(cell.metric, cell.fixture);
+	if (budget >= 0) line += `,"budget":${budget},"overBudget":${overBudget(cell)}`;
 	return line + `,"timeouts":${cell.timeouts},"errors":${cell.errors}`
 		+ `,"uptimeStart":${lspJsonString(uptimeStart)},"uptimeEnd":${lspJsonString(uptimeEnd)}`
 		+ `,"binary":${lspJsonString(binary)},"revision":${lspJsonString(cell.revision)}}`;
@@ -1307,7 +1340,7 @@ function perfRun(): Result<boolean, string> {
 	let green = true;
 	for (const cell of cells) {
 		lines.push(cellLine(cell, uptimeStart, uptimeEnd, binary));
-		if (cell.error != "" || cell.values.length == 0) green = false;
+		if (cell.error != "" || cell.values.length == 0 || overBudget(cell)) green = false;
 	}
 	const target = env.get("LSP_PERF_OUT");
 	if (target == "") {
