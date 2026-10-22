@@ -211,8 +211,7 @@ export function emitInlineCopies(g: CGen): void {
 // The C name of a declared type comes from the same sym-aware helper the
 // Type-driven path (genObjectType/genEnumType) uses, so both spellings agree.
 function declTypeSym(node: Readonly<Node>): Readonly<Symbol | null> {
-	const t = node.nodeType;
-	if (t != null && t.sym != null) return t.sym;
+	if (node.nodeType != null && node.nodeType.sym != null) return node.nodeType.sym;
 	return node.resolvedSym;
 }
 
@@ -391,10 +390,8 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 	}
 }
 
-function initializerLiteralType(literal: Node, declType: Type | null): Type | null;
-function initializerLiteralType(literal: Readonly<Node>, declType: Readonly<Type | null>): Readonly<Type | null>;
-function initializerLiteralType(literal: Readonly<Node>, declType: Readonly<Type | null>): Readonly<Type | null> {
-	return literal.nodeType != null && literal.nodeType.kind == TypeKind.Float32 ? literal.nodeType : declType;
+function isFloat32Literal(literal: Readonly<Node>): boolean {
+	return literal.nodeType != null && literal.nodeType.kind == TypeKind.Float32;
 }
 
 // Static field globals + initializer emission for a class body. Shared by the
@@ -421,7 +418,7 @@ function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>): void {
 			match (pd.propInitializer.kind) {
 				NodeKind.NumberLiteral => {
 					const nd = pd.propInitializer.data as NumberLiteralData;
-					addLine(sec(g, CSection.DatInit), `${globalName} = ${formatCNumberLit(nd, initializerLiteralType(pd.propInitializer, member.nodeType))};`);
+					addLine(sec(g, CSection.DatInit), `${globalName} = ${formatCNumberLit(nd, isFloat32Literal(pd.propInitializer) ? pd.propInitializer.nodeType : member.nodeType)};`);
 				},
 				NodeKind.StringLiteral => {
 					const sv = (pd.propInitializer.data as StringLiteralData).value;
@@ -552,7 +549,7 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 		const init = d.initializer;
 		if (init.kind == NodeKind.NumberLiteral) {
 			const nd = init.data as NumberLiteralData;
-			const litStr = formatCNumberLit(nd, initializerLiteralType(init, node.nodeType));
+			const litStr = formatCNumberLit(nd, isFloat32Literal(init) ? init.nodeType : node.nodeType);
 			// Integer types: cast to suppress -Wimplicit-int-float-conversion.
 			const castedLit = (node.nodeType != null && isIntegerType(node.nodeType))
 				? `(${cType})${litStr}`
