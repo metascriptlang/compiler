@@ -2038,18 +2038,28 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			}
 			case RaiserOpcode.Ret: {
 				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				const depth = vm.callStack.depth;
-				if (depth > 0 && vm.safePoints.length == vm.callStack.items[depth - 1].spBase) {
+				if (depth > 0 && ((ic & 1) == 0 || vm.safePoints.length == vm.callStack.items[depth - 1].spBase)) {
 					const frame: Cursor<RaiserCallFrame> = vm.callStack.items[depth - 1];
 					const dest = frame.returnDest;
 					const cls = ia & 7;
 					if (cls == (dest & 7)) {
 						if (cls == CLS_REF || cls == CLS_DYN) {
-							writeRef(vm, frame.refBase + (dest >> 3), refs[rb + (ia >> 3)]);
+							const handle = refs[rb + (ia >> 3)];
+							if ((ia >> 3) >= ib) {
+								refs[rb + (ia >> 3)] = 0;
+								const old = refs[frame.refBase + (dest >> 3)];
+								refs[frame.refBase + (dest >> 3)] = handle;
+								releaseHandle(vm, old);
+							} else {
+								writeRef(vm, frame.refBase + (dest >> 3), handle);
+							}
 						} else {
 							words[frame.wordBase + (dest >> 3)] = words[wb + (ia >> 3)];
 						}
-						if (func.refRegs > func.paramRefs) releaseFrameRefs(vm, rb + func.paramRefs, func.refRegs - func.paramRefs);
+						if (ic > 1) releaseFrameRefs(vm, rb + ib, ic >> 1);
 						vm.callStack.depth = depth - 1;
 						wb = frame.wordBase;
 						rb = frame.refBase;
@@ -6339,6 +6349,30 @@ test "ledger: a returning call releases what its frame still holds, leaving only
 	const vm = execModule(createRaiserModule("m", [main, worker], 0), "orc");
 	assert vm.error == "", vm.error;
 	assert heapStringLive(vm.arrayHeap) == 0 && vmLiveCount(vm) == 0 && heapBoxLive(vm.arrayHeap) == 1, `${heapStringLive(vm.arrayHeap)} ${vmLiveCount(vm)} ${heapBoxLive(vm.arrayHeap)}`;
+}
+
+test "a packed Ret names the refs its frame owns and whether a handler can still be open there" {
+	const body = dropsEverything.slice(0, dropsEverything.length - 1);
+	body.push(raiserABC(RaiserOpcode.Ret, 7, 0, 0));
+	const guardedCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.Try, 0, 3),
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+		raiserABx(RaiserOpcode.Catch, 1, 2),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+		raiserABC(RaiserOpcode.Finally, 2, 0, 0),
+		raiserABC(RaiserOpcode.FinallyEnd, 2, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const worker = createRaiserFunction("worker", body, dropsEverythingConsts, 0, 0, 8);
+	const guarded = createRaiserFunction("guarded", guardedCode, [raiserInt(7)], 0, 0, 4);
+	createRaiserModule("m", [worker, guarded], 0);
+	const owned = worker.refRegs - worker.paramRefs;
+	const ret = worker.packed[worker.packed.length - 1];
+	assert owned > 0 && packedB(ret) == worker.paramRefs && ((ret >> 40) & 65535) == owned * 2, `${packedB(ret)} ${(ret >> 40) & 65535} ${owned}`;
+	for (let pc = 0; pc < guarded.code.length; pc += 1) {
+		if (guarded.code[pc].op == RaiserOpcode.Ret) assert ((guarded.packed[pc] >> 40) & 1) == 1;
+	}
 }
 
 test "ledger: ArraySetLen releases the strings it truncates" {

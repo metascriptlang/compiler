@@ -2296,3 +2296,18 @@ test "register classes: a borrowed class reference parameter reads through its a
 	assert vm.error == "", vm.error;
 	assert vm.output == "x\n", vm.output;
 }
+
+test "engine: a ref result leaves its callee once, whether the callee made it, was handed it or returns through a finally" {
+	const code = "class B { n: int64; constructor(n: int64) { this.n = n; } }"
+		+ " function make(n: int64): B { const b = new B(n); return b; }"
+		+ " function same(b: B): B { return b; }"
+		+ " function label(n: int64): string { return 'n' + `${n}`; }"
+		+ " function guarded(n: int64): B { try { if (n > 1) return make(n); return same(make(0)); } finally { label(n); } }"
+		+ " function deep(n: int64): B { return n == 0 ? make(7) : deep(n - 1); }"
+		+ " let t: int64 = 0; let s = '';"
+		+ " for (let i: int64 = 0; i < 3; i++) { const b = make(i); t = t + same(b).n + guarded(i).n + deep(i).n; s = s + label(i); }"
+		+ " console.log(`${t} ${s}`);";
+	const vm = evalOrcVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "26 n0n1n2\n", vm.output;
+}

@@ -79,7 +79,10 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 }
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {
-	for (const func of functions) bindDirectCalls(func, functions);
+	for (const func of functions) {
+		bindDirectCalls(func, functions);
+		bindReturns(func);
+	}
 	return { name, functions, entry, globalCount: 0, globalInit: [], records: [], exports: [] };
 }
 
@@ -93,6 +96,21 @@ function bindDirectCalls(func: RaiserFunction, functions: RaiserFunction[]): voi
 		if (argc >= callee.sigs.length || callee.sigs[argc as int32] != func.blocks[site + 3]) continue;
 		inst.op = RaiserOpcode.CallDirect;
 		func.packed[pc] = packInstruction(inst);
+	}
+}
+
+// A packed Ret carries what its frame releases: B the first owned ref, C the owned count times two,
+// plus one when the function opens a handler and the Ret must check for one still open.
+function bindReturns(func: RaiserFunction): void {
+	let opensHandler: int32 = 0;
+	for (const inst of func.code) {
+		if (inst.op == RaiserOpcode.Try) opensHandler = 1;
+	}
+	const owned = func.refRegs - func.paramRefs;
+	for (let pc = 0; pc < func.code.length; pc += 1) {
+		const inst = func.code[pc];
+		if (inst.op != RaiserOpcode.Ret) continue;
+		func.packed[pc] = packInstruction(raiserABC(RaiserOpcode.Ret, inst.a, func.paramRefs, owned * 2 + opensHandler));
 	}
 }
 
