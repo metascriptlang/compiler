@@ -2,6 +2,7 @@
 // Pattern: ~/projects/metascript/src/parser/context.zig
 
 import { Token, TokenKind } from "../lexer/token";
+import { lex } from "../lexer/lexer";
 import { Node } from "../ast/node";
 import { DefineTable, createDefineTable } from "../compiler/defines";
 // Local copy of util.ms:isIdentLike to avoid circular import with util.ms.
@@ -170,18 +171,29 @@ export function isAtEnd(state: ParserState): boolean {
 
 // ===== Lookahead =====
 
-export function peek(state: ParserState, offset: int32): Token {
-	let pos = state.position;
-	let count = 0;
-	while (pos < state.tokens.length) {
-		if (state.tokens[pos].kind != TokenKind.Comment) {
-			if (count == offset) return state.tokens[pos];
-			count += 1;
-		}
-		pos += 1;
-	}
+export function skipComments(state: ParserState, from: int32): int32 {
+	let pos = from;
+	while (pos < state.tokens.length && state.tokens[pos].kind == TokenKind.Comment) pos += 1;
+	return pos;
+}
+
+export function tokenAt(state: ParserState, pos: int32): Token {
+	if (pos < state.tokens.length) return state.tokens[pos];
 	if (state.tokens.length == 0) return { kind: TokenKind.Eof, value: "", line: 0, column: 0, rawValue: "" };
-	return state.tokens[state.tokens.length - 1]; // EOF
+	return state.tokens[state.tokens.length - 1];
+}
+
+// Raw token index of the offset-th non-comment token; a scanner steps on from it with skipComments(pos + 1).
+export function peekIndex(state: ParserState, offset: int32): int32 {
+	let pos = skipComments(state, state.position);
+	for (let n = 0; n < offset && pos < state.tokens.length; n += 1) {
+		pos = skipComments(state, pos + 1);
+	}
+	return pos;
+}
+
+export function peek(state: ParserState, offset: int32): Token {
+	return tokenAt(state, peekIndex(state, offset));
 }
 
 // ===== Error Recovery =====
@@ -453,14 +465,16 @@ function skipGenericParamRest(state: ParserState): void {
 export function parenGroupThen(state: ParserState, offset: int32, follow: TokenKind): boolean {
 	if (peek(state, offset).kind != TokenKind.LParen) return false;
 	let depth = 0;
-	for (let pos = offset; pos < state.tokens.length; pos += 1) {
-		const k = peek(state, pos).kind;
+	let pos = peekIndex(state, offset);
+	while (pos < state.tokens.length) {
+		const k = state.tokens[pos].kind;
 		if (k == TokenKind.Eof) return false;
 		if (k == TokenKind.LParen) depth += 1;
 		if (k == TokenKind.RParen) {
 			depth -= 1;
-			if (depth == 0) return peek(state, pos + 1).kind == follow;
+			if (depth == 0) return tokenAt(state, skipComments(state, pos + 1)).kind == follow;
 		}
+		pos = skipComments(state, pos + 1);
 	}
 	return false;
 }
@@ -474,8 +488,9 @@ export function genericCallParenOffset(state: ParserState): int32 {
 	let braceDepth = 0;
 	let bracketDepth = 0;
 	let parenDepth = 0;
+	let raw = peekIndex(state, 1);
 	for (let pos = 1; pos < 100; pos += 1) {
-		const tok = peek(state, pos);
+		const tok = tokenAt(state, raw);
 		if (tok.kind == TokenKind.Eof) return -1;
 		if (tok.kind == TokenKind.LBrace) { braceDepth += 1; }
 		if (tok.kind == TokenKind.RBrace) { braceDepth -= 1; if (braceDepth < 0) return -1; }
@@ -489,13 +504,14 @@ export function genericCallParenOffset(state: ParserState): int32 {
 			angleDepth -= angleCloserWidth(tok.kind);
 			if (angleDepth < 0) return -1;
 			if (angleDepth == 0) {
-				return peek(state, pos + 1).kind == TokenKind.LParen ? pos + 1 : -1;
+				return tokenAt(state, skipComments(state, raw + 1)).kind == TokenKind.LParen ? pos + 1 : -1;
 			}
 		}
 		// Bail on tokens that can't appear in type args
 		if (tok.kind == TokenKind.Semicolon) return -1;
 		if (tok.kind == TokenKind.Assign) return -1;
 		if (tok.kind == TokenKind.GtEq || tok.kind == TokenKind.GtGtEq || tok.kind == TokenKind.GtGtGtEq) return -1;
+		raw = skipComments(state, raw + 1);
 	}
 	return -1;
 }
@@ -600,3 +616,40 @@ export function setParserDefines(t: DefineTable): void { _parserDefines = t; }
 export function getParserDefines(): DefineTable { return _parserDefines; }
 
 export function resetParserDefines(): void { _parserDefines = createDefineTable(); }
+
+function stateOf(input: string): ParserState {
+	const lr = lex(input);
+	return createState(lr.ok ? lr.value : []);
+}
+
+test "peek skips comments at every offset" {
+	const state = stateOf("a /*1*/ /*2*/ ( /*3*/ b // 4\n ) c");
+	assert peek(state, 0).value == "a";
+	assert peek(state, 1).kind == TokenKind.LParen;
+	assert peek(state, 2).value == "b";
+	assert peek(state, 3).kind == TokenKind.RParen;
+	assert peek(state, 4).value == "c";
+	assert peek(state, 5).kind == TokenKind.Eof;
+	assert peek(state, 50).kind == TokenKind.Eof;
+}
+
+test "peek counts from the current position after advance" {
+	const state = stateOf("a /*1*/ b /*2*/ c");
+	advance(state);
+	assert peek(state, 0).value == "b";
+	assert peek(state, 1).value == "c";
+}
+
+test "parenGroupThen sees past nested parens and comments" {
+	const state = stateOf("x /*c*/ ( (a) /*d*/ , (b) ) /*e*/ => y");
+	assert parenGroupThen(state, 1, TokenKind.Arrow);
+	assert !parenGroupThen(state, 1, TokenKind.Colon);
+	assert !parenGroupThen(state, 0, TokenKind.Arrow);
+}
+
+test "genericCallParenOffset counts offsets without comments" {
+	const state = stateOf("< /*c*/ A<B> /*d*/ , C /*e*/ > /*f*/ ( )");
+	assert genericCallParenOffset(state) == 8;
+	const bad = stateOf("< A ; B > ( )");
+	assert genericCallParenOffset(bad) == -1;
+}

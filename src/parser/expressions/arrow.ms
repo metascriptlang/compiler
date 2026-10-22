@@ -3,7 +3,7 @@
 
 import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, ArrowFunctionData, ConditionalExprData, CallExprData, makeLoc } from "../../ast/node";
-import { ParserState, createState, current, advance, isAtEnd, peek, markState, rewindState, angleCloserWidth } from "../context";
+import { ParserState, createState, current, advance, isAtEnd, peek, peekIndex, skipComments, tokenAt, markState, rewindState, angleCloserWidth } from "../context";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, getLastParsedDefaults, getLastParamsClosed, isIdentLike } from "../util";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr, exprNode } from "./util";
@@ -27,9 +27,9 @@ function scanParenForArrow(state: ParserState): boolean {
 	// input from hanging the parser.
 	const limit = state.tokens.length;
 	let pDepth = 0;
-	let i = 0;
+	let i = peekIndex(state, 0);
 	while (i < limit) {
-		const t = peek(state, i);
+		const t = state.tokens[i];
 		if (t.kind == TokenKind.Eof) return false;
 		if (t.kind == TokenKind.LParen) {
 			pDepth = pDepth + 1;
@@ -37,13 +37,13 @@ function scanParenForArrow(state: ParserState): boolean {
 			pDepth = pDepth - 1;
 			if (pDepth == 0) {
 				// Closed the outermost paren. Look for '=>' (possibly past return type)
-				let j = i + 1;
-				if (peek(state, j).kind == TokenKind.Colon) {
+				let j = skipComments(state, i + 1);
+				if (tokenAt(state, j).kind == TokenKind.Colon) {
 					// Skip return type annotation: walk until top-level '=>' or terminator
-					j = j + 1;
+					j = skipComments(state, j + 1);
 					let tDepth = 0;
 					while (j < limit) {
-						const tt = peek(state, j);
+						const tt = state.tokens[j];
 						if (tt.kind == TokenKind.Arrow && tDepth == 0) return true;
 						if (tt.kind == TokenKind.LParen || tt.kind == TokenKind.LBrace ||
 							tt.kind == TokenKind.LBracket || tt.kind == TokenKind.Lt) {
@@ -56,14 +56,14 @@ function scanParenForArrow(state: ParserState): boolean {
 						if (tDepth == 0 &&
 							(tt.kind == TokenKind.Semicolon || tt.kind == TokenKind.Comma ||
 							 tt.kind == TokenKind.Eof)) return false;
-						j = j + 1;
+						j = skipComments(state, j + 1);
 					}
 					return false;
 				}
-				return peek(state, j).kind == TokenKind.Arrow;
+				return tokenAt(state, j).kind == TokenKind.Arrow;
 			}
 		}
-		i = i + 1;
+		i = skipComments(state, i + 1);
 	}
 	return false;
 }
@@ -323,6 +323,16 @@ test "detect typed" { assert checkArrow("(x: number) => x"); }
 test "reject paren expr" { assert !checkArrow("(a + b)"); }
 
 test "reject call" { assert !checkArrow("f(a)"); }
+test "detect arrow with comments between tokens" { assert checkArrow("(/*a*/ x /*b*/) /*c*/ => /*d*/ x"); }
+
+test "detect arrow past nested parens and comments" { assert checkArrow("(a = (1) /*c*/, b = (2)) => a"); }
+
+test "detect arrow past return type with comments" { assert checkArrow("(x) /*c*/ : /*d*/ (number) // e\n => x"); }
+
+test "reject nested paren expr with comments" { assert !checkArrow("((a) /*c*/ + (b)) /*d*/ * c"); }
+
+test "reject paren object literal with comments" { assert !checkArrow("({ a: 1, /*c*/ b: (2) })"); }
+
 // Param counts
 test "zero params" { assert arrowParamCount("() => 42") == 0; }
 
