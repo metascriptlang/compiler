@@ -914,6 +914,9 @@ when (mscDeclaresRuntime) {
 	extern function msUnboxInt32(p: Ptr<void>): int32;
 
 	@compilerFunc
+	extern function msUnboxInt64(p: Ptr<void>): int64;
+
+	@compilerFunc
 	extern function msUnboxBool(p: Ptr<void>): boolean;
 
 	@compilerFunc
