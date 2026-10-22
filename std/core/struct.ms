@@ -315,7 +315,7 @@ export function get<K, V>(this m: HashMap<K, V>, key: Readonly<K>): V | null {
 	return null;
 }
 
-export function readonlyGet<K, V>(this m: Readonly<HashMap<K, V>>, key: Readonly<K>): Readonly<V> | null {
+export function readonlyGet<K, V>(this m: Readonly<HashMap<K, V>>, key: Readonly<K>): Readonly<V | null> {
 	if (m.writing) { msMapFatal("map read during write"); }
 	const idx = hashMapRawGet(m, key);
 	if (idx < 0) return null;
