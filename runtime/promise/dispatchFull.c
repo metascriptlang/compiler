@@ -555,9 +555,21 @@ bool msCompletionQueueDrain(void) {
     return didWork;
 }
 
+/* Thread destruction: this thread's dispatcher. Process-wide state (timers, wake pipe,
+ * completion queue) stays for msDestroyDispatcher. Callbacks still queued keep it alive. */
+static void msDispatcherThreadDestroy(void) {
+	msDispatcher* d = gDispatcher;
+	if (d == NULL || msDequeLen(&d->callbacks) > 0) return;
+	free(d->callbacks.items);
+	if (d->selector != NULL) msSelectorDestroy(d->selector);
+	free(d);
+	gDispatcher = NULL;
+}
+
 msDispatcher* msGetDispatcher(void) {
 	if (gDispatcher == NULL) {
 		gDispatcher = (msDispatcher*)calloc(1, sizeof(msDispatcher));
+		msOnThreadDestruction(msDispatcherThreadDestroy);
 		gDispatcher->selector = msSelectorCreate();
 		msEnsureWakePipe();  /* wake pipe + MPSC queue (may already be initialized by actor init) */
 		if (gDispatcher->selector) {

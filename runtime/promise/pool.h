@@ -59,6 +59,10 @@ void msPoolSubmit(struct msSpawnCtx* ctx);
 /* Shutdown pool — drain queue, join all workers. Called at process exit. */
 void msPoolShutdown(void);
 
+/* Registers a handler local to the calling thread. A pool worker runs its handlers
+ * as it exits, last registered first. */
+void msOnThreadDestruction(void (*handler)(void));
+
 /* Phase 8: Help-first scheduling — try to dequeue one task from the global
  * queue and execute it inline. Returns true if a task was found and executed.
  * Called from all blocking wait points (msAwaitGroupBlocking, msWaitFor,

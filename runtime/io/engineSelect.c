@@ -8,6 +8,7 @@
  */
 
 #include "engine.h"
+#include "runtime/promise/pool.h"
 
 #if !MS_IO_HAS_ENGINE
 #elif defined(__linux__) && !defined(MS_USE_EPOLL)

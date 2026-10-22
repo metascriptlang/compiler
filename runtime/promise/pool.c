@@ -29,6 +29,7 @@ int32_t msPoolPendingPeek(void) { return 0; }
 #include "runtime/core/system.h"  /* pulls in thread.h + msDecref + msCurrException */
 #include "runtime/promise/pool.h"
 #include "runtime/io/engine.h"  /* msIoEngine, msIoEngineWake — Amendment B targeted wake */
+#include <stdio.h>
 #include <stdlib.h>
 #include <stdatomic.h>
 
@@ -127,6 +128,32 @@ void msPoolSetActorHooks(bool (*pollFn)(void), void (*idSetterFn)(int)) {
     msPoolSchedIdSetterFn = idSetterFn;
 }
 
+static _Thread_local void (**msThreadDestructionFns)(void) = NULL;
+static _Thread_local int32_t msThreadDestructionLen = 0;
+static _Thread_local int32_t msThreadDestructionCap = 0;
+
+void msOnThreadDestruction(void (*handler)(void)) {
+    if (msThreadDestructionLen == msThreadDestructionCap) {
+        int32_t cap = msThreadDestructionCap == 0 ? 4 : msThreadDestructionCap * 2;
+        void (**fns)(void) = realloc(msThreadDestructionFns, (size_t)cap * sizeof(*fns));
+        if (fns == NULL) {
+            fprintf(stderr, "msOnThreadDestruction: out of memory for %d handlers\n", cap);
+            abort();
+        }
+        msThreadDestructionFns = fns;
+        msThreadDestructionCap = cap;
+    }
+    msThreadDestructionFns[msThreadDestructionLen++] = handler;
+}
+
+static void msAfterThreadRuns(void) {
+    for (int32_t i = msThreadDestructionLen - 1; i >= 0; i--) msThreadDestructionFns[i]();
+    free(msThreadDestructionFns);
+    msThreadDestructionFns = NULL;
+    msThreadDestructionLen = 0;
+    msThreadDestructionCap = 0;
+}
+
 /* Decrement only after the run: the run posts the task's completion, which the exit
  * drain must be able to see once the count it reads reaches 0. */
 static void msPoolRunQueued(struct msSpawnCtx* task) {
@@ -170,6 +197,7 @@ static void* msPoolWorkerLoop(void* arg) {
 			 * MPSC queue so msPoolShutdown's final drain can process them.
 			 * Without this, the entries leak (LSan catches it on Linux). */
 			msFutureReleaseFlush();
+			msAfterThreadRuns();
 			break;
 		}
 		/* Dequeue spawn task if available — copy struct out (Malebolgia: zero alloc) */

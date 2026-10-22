@@ -97,9 +97,15 @@ void msIoEngineDestroy(msIoEngine* e) {
 
 static _Thread_local msIoEngine* _tlEngine = NULL;
 
+static void msIoEngineThreadDestroy(void) {
+	msIoEngineDestroy(_tlEngine);
+	_tlEngine = NULL;
+}
+
 msIoEngine* msGetIoEngine(void) {
 	if (_tlEngine == NULL) {
 		_tlEngine = msIoEngineCreate();
+		if (_tlEngine != NULL) msOnThreadDestruction(msIoEngineThreadDestroy);
 	}
 	return _tlEngine;
 }
