@@ -4983,9 +4983,6 @@ export function getProperty(t: Type | null, name: string): Type {
 	const r = getPropertyInner(t, name);
 	return r;
 }
-export function getPropertyUnprofiled(t: Type | null, name: string): Type {
-	return getPropertyInner(t, name);
-}
 function getPropertyInner(t: Type | null, name: string): Type {
 	if (t == null) return inferredType();
 	// Unwrap Ref/Ptr to access inner Object's properties (class types are Ref<Object>)
@@ -5066,16 +5063,18 @@ function getPropertyInner(t: Type | null, name: string): Type {
 // where getProperty merges the literals into a new union.
 const INFERRED_VIEW: Readonly<Type> = createPrimitive(TypeKind.Inferred);
 
-export function fieldTypeView(t: Readonly<Type | null>, name: string): Readonly<Type> {
-	if (t == null) return INFERRED_VIEW;
-	if ((t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) && t.typeReturn != null) return fieldTypeView(t.typeReturn, name);
+export function declaredFieldType(t: Type | null, name: string): Type | null;
+export function declaredFieldType(t: Readonly<Type | null>, name: string): Readonly<Type | null>;
+export function declaredFieldType(t: Readonly<Type | null>, name: string): Readonly<Type | null> {
+	if (t == null) return null;
+	if ((t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) && t.typeReturn != null) return declaredFieldType(t.typeReturn, name);
 	if (t.kind == TypeKind.GenericInstance) {
 		const body = t.typeReturn != null ? t.typeReturn : instanceLayoutBody(t);
-		return body != null && body != t ? fieldTypeView(body, name) : INFERRED_VIEW;
+		return body != null && body != t ? declaredFieldType(body, name) : null;
 	}
 	if (t.kind == TypeKind.Struct) {
 		const i = t.typeNames.indexOf(name);
-		return i >= 0 && i < t.typeChildren.length && t.typeChildren[i] != null ? t.typeChildren[i] : INFERRED_VIEW;
+		return i >= 0 && i < t.typeChildren.length && t.typeChildren[i] != null ? t.typeChildren[i] : null;
 	}
 	if (t.kind == TypeKind.Union && t.typeChildren != null) {
 		if (t.typeExtra != null && t.typeNames != null && t.typeNames.length > 0 && t.typeNames[0] == name) return t.typeExtra;
@@ -5085,7 +5084,11 @@ export function fieldTypeView(t: Readonly<Type | null>, name: string): Readonly<
 		}
 	}
 	if (t.kind == TypeKind.Enum && t.typeNames.indexOf(name) >= 0) return t;
-	return INFERRED_VIEW;
+	return null;
+}
+
+export function fieldTypeView(t: Readonly<Type | null>, name: string): Readonly<Type> {
+	return declaredFieldType(t, name) ?? INFERRED_VIEW;
 }
 
 export function isPrimitiveKind(kind: TypeKind): boolean {

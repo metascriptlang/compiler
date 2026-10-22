@@ -8,7 +8,7 @@
 //   main(argc, argv) → MsMain → MsPreMainInner (DatInit) → MsMainInner (Init)
 
 import { Node, NodeKind, ProgramData, SymbolKind, TypeKind, VariableDeclData, ObjectLiteralData } from "../../ast/node";
-import { getPropertyUnprofiled, createFunction, voidType, createStruct, createPrimitive } from "../../checker/types";
+import { declaredFieldType, createFunction, voidType, createStruct, createPrimitive } from "../../checker/types";
 import { forEachChild } from "../../ast/visitor";
 import { markErrorBlindFinallies } from "../../checker/raises";
 import { CheckerContext, CheckerError, GcMode, findExportedSymbol, createContext, dispatchOverrideTable } from "../../checker/context";
@@ -57,7 +57,7 @@ function prepareEmissionTypes(node: Node, ctx: CheckerContext): void {
 			let fi = 0;
 			while (fi < d.properties.length && fi < d.keys.length) {
 				if (d.properties[fi].nodeType == null) {
-					const fieldType = getPropertyUnprofiled(node.nodeType, d.keys[fi]);
+					const fieldType = declaredFieldType(node.nodeType, d.keys[fi]);
 					if (fieldType != null) {
 						d.properties[fi].nodeType = fieldType;
 				}
