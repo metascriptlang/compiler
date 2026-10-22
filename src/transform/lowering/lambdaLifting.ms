@@ -28,7 +28,7 @@ import { forEachChild, initializerHoldsClosure } from "../../ast/visitor";
 import {
 	makeTypedIdentResolved, makeMember, makeMoveExpr, makeReturn, makeBlock, makeVarDecl,
 	makeFnDecl, makeInterfaceDeclFromTypes, makeObjectLiteral, makeHiddenDeref,
-	makeNull, makeAssign, makeExprStmt, syntheticToken, resolveSimpleTypeStr, extractBodyStmts,
+	makeNull, makeDefaultValue, makeAssign, makeExprStmt, syntheticToken, resolveSimpleTypeStr, extractBodyStmts,
 } from "../util";
 import { createPtr, createRef, voidType, isUnresolvedType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
@@ -1694,7 +1694,7 @@ function walkLiftStmtList(stmts: Node[], state: LiftState, isTopLevel: boolean):
 				}
 				const lhs = makeMember(envAccess, envFieldName(state, state.sharedEnvStructType, declSym), stmtLoc);
 				if (stmts[si].nodeType != null) lhs.nodeType = stmts[si].nodeType;
-				const init = (vd.initializer != null) ? vd.initializer : makeNull(stmtLoc);
+				const init = (vd.initializer != null) ? vd.initializer : makeDefaultValue(declSym.symbolType, stmtLoc);
 				stmts[si] = makeExprStmt(makeAssign(lhs, init, stmtLoc), stmtLoc);
 			}
 		}
