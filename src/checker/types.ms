@@ -404,7 +404,7 @@ export function getIteratorYieldType(t: Readonly<Type>): Readonly<Type | null> {
 		if (nextFnType != null && nextFnType.typeReturn != null) {
 			const resultType = nextFnType.typeReturn; // IteratorResult<T>
 			if (resultType.typeChildren != null && resultType.typeChildren.length > 0) {
-				return resultType.typeChildren[0]; // T (the value field)
+				return t.typeChildren[0].typeReturn.typeChildren[0]; // T (the value field)
 			}
 		}
 	}
@@ -471,26 +471,20 @@ export function peelThrough(t: Type, mask: int32): Type | null;
 export function peelThrough(t: Readonly<Type>, mask: int32): Readonly<Type | null>;
 export function peelThrough(t: Readonly<Type>, mask: int32): Readonly<Type | null> {
 	if (t == null) return null;
-	let cur = t;
-	let _g = 0;
-	// Fixed-point loop — keep peeling until no layer matches the mask.
-	// Bounded by PEEL_MAX_DEPTH: a cyclic Alias/Distinct chain never reaches a
-	// fixpoint (next always differs from cur), so an unbounded loop would spin.
-	while (_g < PEEL_MAX_DEPTH) {
-		_g = _g + 1;
-		let next: Readonly<Type> = cur;
-		if (cur.kind == TypeKind.Alias && (mask & PEEL_ALIAS) != 0
-			&& cur.typeReturn != null) {
-			next = cur.typeReturn;
-		} else if (cur.kind == TypeKind.Distinct && (mask & PEEL_DISTINCT) != 0
-			&& cur.typeChildren != null && cur.typeChildren.length > 0
-			&& cur.typeChildren[0] != null) {
-			next = cur.typeChildren[0];
-		}
-		if (next == cur) return cur;
-		cur = next;
+	return peelThroughFrom(t, mask, 0);
+}
+
+// Bounded by PEEL_MAX_DEPTH: a cyclic Alias/Distinct chain never reaches a fixpoint.
+function peelThroughFrom(t: Readonly<Type>, mask: int32, depth: int32): Readonly<Type> {
+	if (depth >= PEEL_MAX_DEPTH) return t;
+	if (t.kind == TypeKind.Alias && (mask & PEEL_ALIAS) != 0 && t.typeReturn != null && t.typeReturn != t) {
+		return peelThroughFrom(t.typeReturn, mask, depth + 1);
 	}
-	return cur;
+	if (t.kind == TypeKind.Distinct && (mask & PEEL_DISTINCT) != 0 && t.typeChildren != null && t.typeChildren.length > 0
+		&& t.typeChildren[0] != null && t.typeChildren[0] != t) {
+		return peelThroughFrom(t.typeChildren[0], mask, depth + 1);
+	}
+	return t;
 }
 
 // isAwaitable — the canonical "can we await this?" question.
@@ -513,7 +507,10 @@ export function awaitedType(t: Type | null): Type | null;
 export function awaitedType(t: Readonly<Type | null>): Readonly<Type | null>;
 export function awaitedType(t: Readonly<Type | null>): Readonly<Type | null> {
 	if (t == null) return null;
-	const p = peelThrough(t, PEEL_ALIAS);
+	return awaitedOf(peelThrough(t, PEEL_ALIAS));
+}
+
+function awaitedOf(p: Readonly<Type | null>): Readonly<Type | null> {
 	if (p == null || !isAwaitable(p)) return null;
 	if (p.typeChildren != null && p.typeChildren.length > 0) return p.typeChildren[0];
 	// Fallback for edge cases where a stub awaitable has no type arg recorded yet.
@@ -931,16 +928,13 @@ export function findFieldInVariant(variant: Type, fieldName: string): Type | nul
 export function findFieldInVariant(variant: Readonly<Type>, fieldName: string): Readonly<Type | null>;
 export function findFieldInVariant(variant: Readonly<Type>, fieldName: string): Readonly<Type | null> {
 	// Peel Ref/Ptr — interface-typed variants are Ref<Struct> in the C backend.
-	const v = peelToStruct(variant);
+	return fieldOfStruct(peelToStruct(variant), fieldName);
+}
+
+function fieldOfStruct(v: Readonly<Type | null>, fieldName: string): Readonly<Type | null> {
 	if (v == null || v.typeNames == null) return null;
-	let i = 0;
-	while (i < v.typeNames.length) {
-		if (v.typeNames[i] == fieldName && i < v.typeChildren.length) {
-			return v.typeChildren[i];
-		}
-		i = i + 1;
-	}
-	return null;
+	const i = v.typeNames.indexOf(fieldName);
+	return i >= 0 && i < v.typeChildren.length ? v.typeChildren[i] : null;
 }
 
 export function unionVariantHasProperty(t: Type | null, name: string): boolean {
@@ -1231,30 +1225,27 @@ export function peelToStruct(t: Type | null): Type | null;
 export function peelToStruct(t: Readonly<Type | null>): Readonly<Type | null>;
 export function peelToStruct(t: Readonly<Type | null>): Readonly<Type | null> {
 	if (t == null) return null;
-	let cur: Readonly<Type> = t;
-	let _g = 0;
-	while (cur != null && _g < PEEL_MAX_DEPTH) {
-		_g = _g + 1;
-		if (cur.kind == TypeKind.Struct) return cur;
-		if ((cur.kind == TypeKind.Ref || cur.kind == TypeKind.Ptr || cur.kind == TypeKind.Alias) && cur.typeReturn != null) {
-			cur = cur.typeReturn;
-			continue;
-		}
-		break;
+	return peelToStructFrom(t, 0);
+}
+
+function peelToStructFrom(t: Readonly<Type>, depth: int32): Readonly<Type> {
+	if (depth >= PEEL_MAX_DEPTH || t.kind == TypeKind.Struct) return t;
+	if ((t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr || t.kind == TypeKind.Alias) && t.typeReturn != null) {
+		return peelToStructFrom(t.typeReturn, depth + 1);
 	}
-	return cur;
+	return t;
 }
 
 export function inlineVariantStruct(member: Type | null): Type | null;
 export function inlineVariantStruct(member: Readonly<Type | null>): Readonly<Type | null>;
 export function inlineVariantStruct(member: Readonly<Type | null>): Readonly<Type | null> {
-	let cur = member;
-	let _g = 0;
-	while (cur != null && cur.kind == TypeKind.Alias && cur.typeReturn != null && _g < PEEL_MAX_DEPTH) {
-		_g = _g + 1;
-		cur = cur.typeReturn;
-	}
-	return cur != null && cur.kind == TypeKind.Struct ? cur : null;
+	return inlineVariantStructFrom(member, 0);
+}
+
+function inlineVariantStructFrom(t: Readonly<Type | null>, depth: int32): Readonly<Type | null> {
+	if (t == null) return null;
+	if (t.kind == TypeKind.Alias && t.typeReturn != null && depth < PEEL_MAX_DEPTH) return inlineVariantStructFrom(t.typeReturn, depth + 1);
+	return t.kind == TypeKind.Struct ? t : null;
 }
 
 export function storesNothing(owner: Readonly<Type>, field: Readonly<Type | null>): boolean {
@@ -1273,28 +1264,19 @@ export function peelToStructOrUnion(t: Type | null): Type | null;
 export function peelToStructOrUnion(t: Readonly<Type | null>): Readonly<Type | null>;
 export function peelToStructOrUnion(t: Readonly<Type | null>): Readonly<Type | null> {
 	if (t == null) return null;
-	let cur: Readonly<Type> = t;
-	let _g = 0;
-	while (cur != null && _g < PEEL_MAX_DEPTH) {
-		_g = _g + 1;
-		if (cur.kind == TypeKind.Struct || cur.kind == TypeKind.Union) return cur;
-		if ((cur.kind == TypeKind.Ref || cur.kind == TypeKind.Ptr || cur.kind == TypeKind.Cursor || cur.kind == TypeKind.Alias) && cur.typeReturn != null) {
-			cur = cur.typeReturn;
-			continue;
-		}
-		if (cur.kind == TypeKind.GenericInstance) {
-			if (cur.typeReturn != null) {
-				cur = cur.typeReturn;
-				continue;
-			}
-			if (cur.typeExtra != null) {
-				cur = cur.typeExtra;
-				continue;
-			}
-		}
-		break;
+	return peelToStructOrUnionFrom(t, 0);
+}
+
+function peelToStructOrUnionFrom(t: Readonly<Type>, depth: int32): Readonly<Type> {
+	if (depth >= PEEL_MAX_DEPTH || t.kind == TypeKind.Struct || t.kind == TypeKind.Union) return t;
+	if ((t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr || t.kind == TypeKind.Cursor || t.kind == TypeKind.Alias) && t.typeReturn != null) {
+		return peelToStructOrUnionFrom(t.typeReturn, depth + 1);
 	}
-	return cur;
+	if (t.kind == TypeKind.GenericInstance) {
+		if (t.typeReturn != null) return peelToStructOrUnionFrom(t.typeReturn, depth + 1);
+		if (t.typeExtra != null) return peelToStructOrUnionFrom(t.typeExtra, depth + 1);
+	}
+	return t;
 }
 
 export function positionalFieldsOf(t: Type | null): Type | null {
@@ -1317,8 +1299,11 @@ export function matchUnionBehindInstance(t: Readonly<Type>): Readonly<Type> {
 		if (_queryCachesReadOnly && pendingBody(t, genericParamsOf(t))) throw new Error(`internal: generic instance '${typeDisplayName(t)}' reached emission without its body`);
 		return t;
 	}
-	const u = peelToStructOrUnion(t);
-	return u != null && u.kind == TypeKind.Union ? u : t;
+	return isUnionType(peelToStructOrUnionFrom(t, 0)) ? peelToStructOrUnionFrom(t, 0) : t;
+}
+
+function isUnionType(u: Readonly<Type | null>): boolean {
+	return u != null && u.kind == TypeKind.Union;
 }
 
 // A generic instantiation whose body has no nominal Struct/Union carries no
@@ -1337,24 +1322,22 @@ function aliasesUnion(gi: Readonly<Type>): boolean {
 export function peelTransparentInstance(t: Type): Type;
 export function peelTransparentInstance(t: Readonly<Type>): Readonly<Type>;
 export function peelTransparentInstance(t: Readonly<Type>): Readonly<Type> {
-	let cur: Readonly<Type> = t;
-	let _g = 0;
-	while (_g < PEEL_MAX_DEPTH) {
-		_g = _g + 1;
-		if (cur.kind != TypeKind.GenericInstance) return cur;
-		if (cur.typeReturn == null) {
-			if (_queryCachesReadOnly && pendingBody(cur, genericParamsOf(cur))) throw new Error(`internal: generic instance '${typeDisplayName(cur)}' reached emission without its body`);
-			return cur;
-		}
-		if (cur.typeExtra != null && cur.typeExtra.kind == TypeKind.Distinct) return cur;
-		const nominal = peelToStructOrUnion(cur.typeExtra);
-		if (aliasesUnion(cur)
-			&& ((cur.typeReturn.kind == TypeKind.Union && hasTypeIdentity(cur.typeReturn)) || isMaybeType(cur.typeReturn))) return cur.typeReturn;
-		if (nominal != null
-			&& (nominal.kind == TypeKind.Struct || nominal.kind == TypeKind.Union)) return cur;
-		cur = cur.typeReturn;
+	return peelTransparentFrom(t, 0);
+}
+
+function peelTransparentFrom(t: Readonly<Type>, depth: int32): Readonly<Type> {
+	if (depth >= PEEL_MAX_DEPTH || t.kind != TypeKind.GenericInstance) return t;
+	if (t.typeReturn == null) {
+		if (_queryCachesReadOnly && pendingBody(t, genericParamsOf(t))) throw new Error(`internal: generic instance '${typeDisplayName(t)}' reached emission without its body`);
+		return t;
 	}
-	return cur;
+	if (t.typeExtra != null && t.typeExtra.kind == TypeKind.Distinct) return t;
+	if (aliasesUnion(t)
+		&& ((t.typeReturn.kind == TypeKind.Union && hasTypeIdentity(t.typeReturn)) || isMaybeType(t.typeReturn))) return t.typeReturn;
+	const nominal = peelToStructOrUnion(t.typeExtra);
+	if (nominal != null
+		&& (nominal.kind == TypeKind.Struct || nominal.kind == TypeKind.Union)) return t;
+	return peelTransparentFrom(t.typeReturn, depth + 1);
 }
 
 // Detect a literal-typed discriminant field shared by every variant. Variants
@@ -1863,9 +1846,8 @@ export function lockedPayloadType(t: Type | null): Type;
 export function lockedPayloadType(t: Readonly<Type | null>): Readonly<Type>;
 export function lockedPayloadType(t: Readonly<Type | null>): Readonly<Type> {
 	if (!isLockedRef(t) || t.typeReturn == null) return null as unknown as Type;
-	const cell = t.typeReturn;
-	if (cell.typeChildren == null || cell.typeChildren.length < 4) return null as unknown as Type;
-	return cell.typeChildren[3];
+	if (t.typeReturn.typeChildren == null || t.typeReturn.typeChildren.length < 4) return null as unknown as Type;
+	return t.typeReturn.typeChildren[3];
 }
 
 // Walking a Ref for substitution needs two things the three Ref classes answer
@@ -1994,10 +1976,9 @@ export function isOrdinalEnum(t: Type | null): boolean {
 // representation is the substituted body. Backends that switch on width need
 // that body, not the instance.
 function instanceBody(t: Readonly<Type>): Readonly<Type | null> {
-	const base = t.typeExtra;
-	if (base == null || base.typeReturn == null) return null;
-	if (t.typeReturn == null) return missingBody(t) ? null : base.typeReturn;
-	return base.kind == TypeKind.Distinct && t.typeReturn.kind == TypeKind.Distinct ? t.typeReturn.typeReturn : t.typeReturn;
+	if (t.typeExtra == null || t.typeExtra.typeReturn == null) return null;
+	if (t.typeReturn == null) return missingBody(t) ? null : t.typeExtra.typeReturn;
+	return t.typeExtra.kind == TypeKind.Distinct && t.typeReturn.kind == TypeKind.Distinct ? t.typeReturn.typeReturn : t.typeReturn;
 }
 
 export function substituteInstanceArgs(gi: Type, target: Type): Type {
@@ -2026,10 +2007,9 @@ export function distinctInstanceRepr(t: Readonly<Type | null>): Readonly<Type | 
 export function genericInstanceAbiRepr(t: Type): Type;
 export function genericInstanceAbiRepr(t: Readonly<Type>): Readonly<Type>;
 export function genericInstanceAbiRepr(t: Readonly<Type>): Readonly<Type> {
-	const transparent = peelTransparentInstance(t);
-	if (transparent != t) return transparent;
+	if (peelTransparentInstance(t) != t) return peelTransparentInstance(t);
 	const distinctRepr = distinctInstanceRepr(t);
-	if (distinctRepr != null && distinctRepr.kind != TypeKind.Struct && distinctRepr.kind != TypeKind.Union) return distinctRepr;
+	if (distinctRepr != null && distinctRepr.kind != TypeKind.Struct && distinctRepr.kind != TypeKind.Union) return distinctInstanceRepr(t) as Readonly<Type>;
 	return t;
 }
 
@@ -2066,14 +2046,9 @@ export function peelToRepr(t: Readonly<Type | null>): Readonly<Type | null>;
 export function peelToRepr(t: Readonly<Type | null>): Readonly<Type | null> {
 	if (t == null) return null;
 	if (t.kind == TypeKind.Distinct) return peelToRepr(t.typeReturn);
-	const widened = widenNumberLiteralType(t);
-	if (widened != t) return widened;
-	if (t.kind == TypeKind.Set) {
-		const sr = setRepr(t);
-		return sr != null ? peelToRepr(sr) : t;
-	}
-	const repr = distinctInstanceRepr(t);
-	if (repr != null) return peelToRepr(repr);
+	if (widenNumberLiteralType(t) != t) return widenNumberLiteralType(t);
+	if (t.kind == TypeKind.Set) return setRepr(t) != null ? peelToRepr(setRepr(t)) : t;
+	if (distinctInstanceRepr(t) != null) return peelToRepr(distinctInstanceRepr(t));
 	return t;
 }
 
@@ -2182,15 +2157,14 @@ export function builtinGenericParams(name: string): string {
 function peelDeclWrapper(decl: Node | null): Node | null;
 function peelDeclWrapper(decl: Readonly<Node | null>): Readonly<Node | null>;
 function peelDeclWrapper(decl: Readonly<Node | null>): Readonly<Node | null> {
-	let cur = decl;
-	let guard = 0;
-	while (cur != null && guard < 8) {
-		guard = guard + 1;
-		if (cur.kind == NodeKind.DecoratedDecl) { cur = (cur.data as DecoratedDeclData).decoratedNode; continue; }
-		if (cur.kind == NodeKind.ExportDecl) { cur = (cur.data as ExportDeclData).exportedDecl; continue; }
-		return cur;
-	}
-	return cur;
+	return peelDeclWrapperFrom(decl, 0);
+}
+
+function peelDeclWrapperFrom(decl: Readonly<Node | null>, depth: int32): Readonly<Node | null> {
+	if (decl == null || depth >= 8) return decl;
+	if (decl.kind == NodeKind.DecoratedDecl) return peelDeclWrapperFrom((decl.data as DecoratedDeclData).decoratedNode, depth + 1);
+	if (decl.kind == NodeKind.ExportDecl) return peelDeclWrapperFrom((decl.data as ExportDeclData).exportedDecl, depth + 1);
+	return decl;
 }
 
 export function declGenericParams(decl: Readonly<Node | null>): string {
@@ -2433,8 +2407,7 @@ export function widenNumberLiteralType(t: Type): Type;
 export function widenNumberLiteralType(t: Readonly<Type>): Readonly<Type>;
 export function widenNumberLiteralType(t: Readonly<Type>): Readonly<Type> {
 	if (t.kind == TypeKind.NumberLiteral) return numberLiteralBase(t);
-	const carried = literalUnionBase(t);
-	return carried != null && carried.kind != TypeKind.String ? carried : t;
+	return literalUnionBase(t) != null && literalUnionBase(t)!.kind != TypeKind.String ? literalUnionBase(t) as Readonly<Type> : t;
 }
 export function stringType(): Type { return getSysType(TypeKind.String); }
 export function booleanType(): Type { return getSysType(TypeKind.Boolean); }
@@ -3369,14 +3342,12 @@ export function setAttachedOp(t: Type | null, op: AttachedOp, sym: Symbol | null
 export function valueCopyRepr(t: Type | null): Type | null;
 export function valueCopyRepr(t: Readonly<Type | null>): Readonly<Type | null>;
 export function valueCopyRepr(t: Readonly<Type | null>): Readonly<Type | null> {
-	const base = distinctBody(t);
-	if (base != null) return valueCopyRepr(base);
+	if (distinctBody(t) != null) return valueCopyRepr(distinctBody(t));
 	if (t != null && t.kind == TypeKind.Struct && t.typeFlags.has(TypeFlag.IsMaybe)) {
 		return valueCopyRepr(t.typeReturn);
 	}
 	if (t != null && t.kind == TypeKind.Set) {
-		const repr = setRepr(t);
-		if (repr != null) return repr;
+		if (setRepr(t) != null) return setRepr(t);
 	}
 	if (t != null && t.kind == TypeKind.GenericInstance && (isStructType(t.typeReturn) || (t.typeReturn != null && t.typeReturn.kind == TypeKind.Union && t.typeReturn.typeFlags.has(TypeFlag.ValueUnion)))) return t.typeReturn;
 	return t;
@@ -3742,8 +3713,10 @@ export function runtimeClassSym(body: Type | null): Symbol | null;
 export function runtimeClassSym(body: Readonly<Type | null>): Readonly<Symbol | null>;
 export function runtimeClassSym(body: Readonly<Type | null>): Readonly<Symbol | null> {
 	if (body == null) return null;
-	const instance = body.kind == TypeKind.GenericInstance;
-	const cls = instance ? genericInstanceClass(body) : body;
+	return body.kind == TypeKind.GenericInstance ? runtimeClassSymOf(genericInstanceClass(body), true) : runtimeClassSymOf(body, false);
+}
+
+function runtimeClassSymOf(cls: Readonly<Type | null>, instance: boolean): Readonly<Symbol | null> {
 	if (cls == null || cls.kind != TypeKind.Struct || cls.sym == null || cls.sym.symbolKind != SymbolKind.Class) return null;
 	return instance && cls.sym.symFlags.has(SymbolFlag.ImportC) ? null : cls.sym;
 }
@@ -3751,8 +3724,7 @@ export function runtimeClassSym(body: Readonly<Type | null>): Readonly<Symbol | 
 function genericInstanceClass(gi: Type): Type | null;
 function genericInstanceClass(gi: Readonly<Type>): Readonly<Type | null>;
 function genericInstanceClass(gi: Readonly<Type>): Readonly<Type | null> {
-	const base: Readonly<Type | null> = gi.typeExtra;
-	return base != null && base.kind == TypeKind.Ref ? base.typeReturn : base;
+	return gi.typeExtra != null && gi.typeExtra.kind == TypeKind.Ref ? gi.typeExtra.typeReturn : gi.typeExtra;
 }
 
 export function classParentOf(t: Type | null): Type | null {
@@ -3944,8 +3916,8 @@ export function unwrapRefNullUnion(t: Readonly<Type>): Readonly<Type | null> {
 	const a = t.typeChildren[0];
 	const b = t.typeChildren[1];
 	if (a == null || b == null) return null;
-	if (isNullablePointer(a) && b.kind == TypeKind.Null) return a;
-	if (isNullablePointer(b) && a.kind == TypeKind.Null) return b;
+	if (isNullablePointer(a) && b.kind == TypeKind.Null) return t.typeChildren[0];
+	if (isNullablePointer(b) && a.kind == TypeKind.Null) return t.typeChildren[1];
 	return null;
 }
 
@@ -4107,12 +4079,9 @@ export function propagateGenericParam(owner: Type, member: Type | null): void {
 export function skipModifier(t: Type | null): Type | null;
 export function skipModifier(t: Readonly<Type | null>): Readonly<Type | null>;
 export function skipModifier(t: Readonly<Type | null>): Readonly<Type | null> {
-	let cur = t;
-	while (cur != null && (cur.kind == TypeKind.Sink || cur.kind == TypeKind.Lent || cur.kind == TypeKind.Var
-			|| cur.kind == TypeKind.Cursor || cur.kind == TypeKind.Alias)) {
-		cur = cur.typeReturn;
-	}
-	return cur;
+	if (t != null && (t.kind == TypeKind.Sink || t.kind == TypeKind.Lent || t.kind == TypeKind.Var
+			|| t.kind == TypeKind.Cursor || t.kind == TypeKind.Alias)) return skipModifier(t.typeReturn);
+	return t;
 }
 
 export function peelSink(t: Type): Type {
@@ -5080,6 +5049,13 @@ function getPropertyInner(t: Type | null, name: string): Type {
 // where getProperty merges the literals into a new union.
 const INFERRED_VIEW: Readonly<Type> = createPrimitive(TypeKind.Inferred);
 
+function variantWithField(t: Readonly<Type>, name: string, from: int32): int32 {
+	for (let i = from; i < t.typeChildren.length; i += 1) {
+		if (t.typeChildren[i] != null && findFieldInVariant(t.typeChildren[i], name) != null) return i;
+	}
+	return -1;
+}
+
 export function declaredFieldType(t: Type | null, name: string): Type | null;
 export function declaredFieldType(t: Readonly<Type | null>, name: string): Readonly<Type | null>;
 export function declaredFieldType(t: Readonly<Type | null>, name: string): Readonly<Type | null> {
@@ -5095,10 +5071,8 @@ export function declaredFieldType(t: Readonly<Type | null>, name: string): Reado
 	}
 	if (t.kind == TypeKind.Union && t.typeChildren != null) {
 		if (t.typeExtra != null && t.typeNames != null && t.typeNames.length > 0 && t.typeNames[0] == name) return t.typeExtra;
-		for (const variant of t.typeChildren) {
-			const ft = variant != null ? findFieldInVariant(variant, name) : null;
-			if (ft != null) return ft;
-		}
+		const vi = variantWithField(t, name, 0);
+		if (vi >= 0) return findFieldInVariant(t.typeChildren[vi], name) as Readonly<Type>;
 	}
 	if (t.kind == TypeKind.Enum && t.typeNames.indexOf(name) >= 0) return t;
 	return null;
@@ -5635,7 +5609,7 @@ function instanceLayoutBody(t: Readonly<Type>): Readonly<Type | null> {
 	if (t.typeReturn != null) return t.typeReturn;
 	const base = peelToStructOrUnion(t.typeExtra);
 	if (base == null || (base.kind != TypeKind.Struct && base.kind != TypeKind.Union)) return null;
-	return missingBody(t) ? null : base;
+	return missingBody(t) ? null : peelToStructOrUnion(t.typeExtra);
 }
 
 function unionTagType(t: Type): Type | null;
