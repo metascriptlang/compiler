@@ -1219,9 +1219,9 @@ function reportBitSetMismatch(ctx: CheckerContext, op: string, leftType: Type, r
 		addError(ctx, "BitSet holds at most " + BITSET_MAX_MEMBERS.toString() + " members; enum '" + sizedElem.typeName + "' has " + sizedElem.typeNames.length.toString(), node.location.line, node.location.column);
 		return true;
 	}
-	const leftName = leftElem != null ? leftElem.typeName : (leftType != null && leftType.kind == TypeKind.Enum ? leftType.typeName : "");
-	const rightName = rightElem != null ? rightElem.typeName : (rightType != null && rightType.kind == TypeKind.Enum ? rightType.typeName : "");
-	if (leftName != "" && leftName == rightName) return false;
+	const leftEnum = leftElem != null ? leftElem : (leftType != null && leftType.kind == TypeKind.Enum ? leftType : null);
+	const rightEnum = rightElem != null ? rightElem : (rightType != null && rightType.kind == TypeKind.Enum ? rightType : null);
+	if (leftEnum != null && rightEnum != null && sameNominal(leftEnum, rightEnum)) return false;
 	addError(ctx, "bitwise operator '" + op + "' on '" + typeDisplayName(leftType) + "' and '" + typeDisplayName(rightType) + "' mixes different enum sets", node.location.line, node.location.column);
 	return true;
 }

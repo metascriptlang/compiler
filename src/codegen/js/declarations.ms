@@ -5,14 +5,14 @@ import {
 	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, ActorDeclData, ExprStmtData, createNodeAt, SymbolKind,
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync, escapeJSString, declareBinding } from "./emit";
-import { safeJsName, jsSymbolName, jsMethodMemberName, jsExportedFunctionName } from "./expressions";
+import { safeJsName, jsSymbolName, jsMethodMemberName, jsExportedFunctionName, jsEnumMemberName } from "./expressions";
 import { useActorRuntime } from "./actorMailbox";
 import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
 import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/context";
 import { jsDefaultValue, emitCopyOnRead } from "./valueCopy";
 import { mangleQualified, mangleModuleName } from "../c/names";
 import { monoInstanceName } from "../../monomorphize/registry";
-import { enumMemberName, hasFlag, SymbolFlag } from "../../checker/symbol";
+import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
 // ===== Function Declaration =====
 
@@ -115,7 +115,7 @@ function emitEnumDeclInner(gen: JSGenerator, node: Node, linePrefix: string): vo
 	// already spent its own `export ` on member zero.
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
 		if (i > 0) { emitIndent(gen); emit(gen, linePrefix); }
-		const member = enumMemberName(node.resolvedSym, safeJsName(d.enumName), d.enumMembers[i]);
+		const member = jsEnumMemberName(gen, node.resolvedSym, d.enumName, d.enumMembers[i]);
 		declareBinding(gen, member);
 		emit(gen, `var ${member} = ${enumMemberValue(d, i)};\n`);
 	}
@@ -597,7 +597,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 		NodeKind.EnumDecl => {
 			const ed = inner.data as EnumDeclData;
 			if (gen.multiFile) {
-				for (const m of ed.enumMembers) { gen.exportedNames.push(enumMemberName(inner.resolvedSym, safeJsName(ed.enumName), m)); }
+				for (const m of ed.enumMembers) { gen.exportedNames.push(jsEnumMemberName(gen, inner.resolvedSym, ed.enumName, m)); }
 			}
 			emitEnumDeclInner(gen, inner, gen.multiFile ? "export " : "");
 			if (gen.multiFile) {
