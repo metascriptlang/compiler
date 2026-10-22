@@ -17,7 +17,7 @@ import { readFile, writeFile, ensureDir } from "std/fs";
 import { env, cwd } from "std/process";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, normalize, isAbsolute } from "std/fs/path";
-import { defaultGlobalImports, extraGlobalImports } from "./prelude";
+import { defaultGlobalImports, modulePasses, ModulePassState } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
 import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
 setConditionalAssignFn(isAssignable);
@@ -3906,11 +3906,7 @@ export function getSharedIdentCache(ctx: CheckerContext): IdentCache {
 // NOTE: Uses while loops (not for-of) so DRC properly increfs shared symbols.
 // for-of creates cursor bindings that skip RC — pushing cursors into another
 // container creates dangling pointers when the source is destroyed.
-export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): void {
-	// A `@compilerFunc` routine is reachable by name from every module a
-	// synthesized call lands in, whether or not the declaring module exported it —
-	// so the table travels whole, like the reference keeps it on the module graph.
-	ctx.compilerFuncs = preludeCtx.compilerFuncs;
+function injectPreludeExports(ctx: CheckerContext, preludeCtx: CheckerContext): void {
 	// With shared IdentCache, nameIds are already consistent across all contexts
 	// in the same compilation. Map iteration preserves insertion order.
 	for (const sym of globalScope(preludeCtx.table).symbols.values()) {
@@ -3939,6 +3935,14 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 			ei = ei + 1;
 		}
 	}
+}
+
+export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): void {
+	// A `@compilerFunc` routine is reachable by name from every module a
+	// synthesized call lands in, whether or not the declaring module exported it —
+	// so the table travels whole, like the reference keeps it on the module graph.
+	ctx.compilerFuncs = preludeCtx.compilerFuncs;
+	injectPreludeExports(ctx, preludeCtx);
 	if (preludeCtx.includeDirectives != "") {
 		if (ctx.includeDirectives != "") ctx.includeDirectives = ctx.includeDirectives + "\n";
 		ctx.includeDirectives = ctx.includeDirectives + preludeCtx.includeDirectives;
@@ -3983,6 +3987,28 @@ export function promoteModuleIntoPrelude(preludeCtx: CheckerContext, ctx: Checke
 		}
 		ei = ei + 1;
 	}
+}
+
+export function buildGlobalImportsLayer(identCache: IdentCache, checked: CheckerContext[]): CheckerContext {
+	const layer = createContextWithCache(identCache);
+	layer.extensionRegistry = createExtensionRegistry();
+	for (const ctx of checked) promoteModuleIntoPrelude(layer, ctx);
+	return layer;
+}
+
+export function bindModulePassesFrom(modulePath: string, ctx: CheckerContext): string[] {
+	const refused: string[] = [];
+	for (const pass of modulePasses()) {
+		if (pass.modulePath != modulePath) continue;
+		let found: Symbol | null = null;
+		for (const e of collectExports(ctx, modulePath)) {
+			if (e.name == pass.macro && e.sym.symbolKind == SymbolKind.Macro) found = e.sym;
+		}
+		pass.sym = found;
+		pass.state = found != null ? ModulePassState.Bound : ModulePassState.Broken;
+		if (found == null) refused.push(`globalImports names modulePass '${pass.macro}', but this module exports no macro '${pass.macro}'`);
+	}
+	return refused;
 }
 
 export function promoteStdModuleIntoPrelude(preludeCtx: CheckerContext, ctx: CheckerContext, specifier: string, injectedIncludes: string, injectedFlags: string): void {
@@ -4074,6 +4100,7 @@ export function bindModuleForCheck(
 	cancelVersion: int32,
 	adoptedDecls: HashMap<Node, Symbol> | null,
 	applyModulePasses: boolean,
+	globalImports: CheckerContext | null = null,
 ): BoundModule {
 	// Use shared IdentCache from prelude (one cache per compilation)
 	const sharedCache = preludeCtx.table.identCache;
@@ -4083,7 +4110,9 @@ export function bindModuleForCheck(
 	if (cancelCtx != null) { ctx.cancelCtx = cancelCtx; ctx.cancelVersion = cancelVersion; }
 	if (adoptedDecls != null) ctx.adoptedDecls = adoptedDecls;
 	injectPrelude(ctx, preludeCtx);
+	if (globalImports != null) injectPreludeExports(ctx, globalImports);
 	ctx.preludeCtx = preludeCtx;  // friend modules — access private prelude symbols during instantiation
+	ctx.globalImportsCtx = globalImports;
 	const consoleClass = lookupSymbol(ctx.table, "console");
 	if (consoleClass != null) {
 		const consoleGlobal = makeSymbol("console", SymbolKind.Variable, consoleClass.symbolType, false);
@@ -4139,14 +4168,9 @@ interface SharedPrelude {
 }
 
 let _preludeCtxByKey: Map<string, SharedPrelude> = new Map<string, SharedPrelude>();
-let _graphPreludeFn: (stdPath: string, backendExt: string) => CheckerContext = null as unknown as (stdPath: string, backendExt: string) => CheckerContext;
-
-export function registerGraphPreludeFn(fn: (stdPath: string, backendExt: string) => CheckerContext): void {
-	_graphPreludeFn = fn;
-}
 
 export function preludeContextFor(stdPath: string, backendExt: string): CheckerContext {
-	const key = backendExt + "|" + stdPath + "|" + extraGlobalImports().join("|");
+	const key = backendExt + "|" + stdPath;
 	let shared = _preludeCtxByKey.get(key);
 	if (shared == null) {
 		shared = buildSharedPrelude(stdPath, backendExt);
@@ -4160,7 +4184,7 @@ function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude 
 	const duMark = duVariantMark();
 	const ctorMark = ctorRoutineMark();
 	const outerDispatch = startDispatchCapture();
-	const ctx = _graphPreludeFn != null ? _graphPreludeFn(stdPath, backendExt) : buildPreludeContext(stdPath, backendExt);
+	const ctx = buildPreludeContext(stdPath, backendExt);
 	return {
 		ctx,
 

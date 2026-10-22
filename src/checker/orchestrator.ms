@@ -2,12 +2,12 @@
 // Reference parallel implementation
 
 import { platform } from "std/process";
-import { Node, NodeKind, VariableDeclData, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, VariableDeclData, Symbol } from "../ast/node";
 import { CheckerContext, Severity, GcMode, ExportRegistry, collectExports, isStaticExtensionSym } from "./context";
 import { lookupLocal } from "./symbol";
 import { ModuleGraph, Module, findModule, createModuleError, ErrorSeverity } from "../module/graph";
-import { threePassTimings, buildPreludeContext, preludeContextFor, createGraphPreludeContext, promoteModuleIntoPrelude, promoteStdModuleIntoPrelude, registerGraphPreludeFn, setSlowTrace } from "./checkPass";
-import { defaultGlobalImports, extraGlobalImports, extraGlobalImportsBuildFile, hasExtraGlobalImports, setExtraGlobalImports, modulePasses, setModulePassExempt, ModulePassState } from "./prelude";
+import { threePassTimings, buildPreludeContext, preludeContextFor, createGraphPreludeContext, promoteModuleIntoPrelude, promoteStdModuleIntoPrelude, bindModulePassesFrom, setSlowTrace } from "./checkPass";
+import { defaultGlobalImports, extraGlobalImports, extraGlobalImportsBuildFile, hasExtraGlobalImports, setExtraGlobalImports, modulePasses, setModulePassExempt } from "./prelude";
 import { createModuleGraph } from "../module/graph";
 import { createFileSystemProvider, provideSource, loadModule, moduleIdentity, SourceProvider } from "../module/loader";
 import { backendOfExtension, createDefaultConfig, resolveImportWithConfig, ResolverConfig } from "../module/resolver";
@@ -113,19 +113,6 @@ export function noteStdGlobalImportModules(graph: ModuleGraph, provider: SourceP
 export function loadExtraGlobalImportModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig): void {
 	for (const entry of extraGlobalImports()) loadGlobalImportModule(graph, provider, config, entry, true);
 }
-
-export function preludeGraphContext(stdPath: string, backendExt: string): CheckerContext {
-	if (!hasExtraGlobalImports()) return buildPreludeContext(stdPath, backendExt);
-	const config = createDefaultConfig(backendOfExtension(backendExt), stdPath);
-	const graph = createModuleGraph();
-	const provider = createFileSystemProvider();
-	loadStdGlobalImportModules(graph, provider, config);
-	loadExtraGlobalImportModules(graph, provider, config);
-	const _registry = checkModuleGraph(graph, stdPath, backendExt);
-	return lastPreludeCtx;
-}
-
-registerGraphPreludeFn(preludeGraphContext);
 
 // Sub-phase timing for the graph check, mirroring cmdBuildC's phase timers.
 // Off unless the caller asked for -t, so a normal build pays nothing.
@@ -259,21 +246,7 @@ function globalImportClosure(graph: ModuleGraph): HashSet<string> {
 }
 
 function bindModulePasses(mod: Module, ctx: CheckerContext): void {
-	for (const pass of modulePasses()) {
-		if (pass.modulePath != mod.path) continue;
-		let found: Symbol | null = null;
-		for (const e of collectExports(ctx, mod.path)) {
-			if (e.name == pass.macro && e.sym.symbolKind == SymbolKind.Macro) found = e.sym;
-		}
-		if (found != null) {
-			pass.sym = found;
-			pass.state = ModulePassState.Bound;
-		} else {
-			pass.sym = null;
-			pass.state = ModulePassState.Broken;
-			mod.errors.push(createModuleError(`globalImports names modulePass '${pass.macro}', but this module exports no macro '${pass.macro}'`, 1, 1, ErrorSeverity.Error));
-		}
-	}
+	for (const message of bindModulePassesFrom(mod.path, ctx)) mod.errors.push(createModuleError(message, 1, 1, ErrorSeverity.Error));
 }
 
 function mirrorModuleErrors(mod: Module, ctx: CheckerContext): void {

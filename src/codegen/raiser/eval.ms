@@ -160,8 +160,9 @@ function seedExtensionsOf(mc: CheckerContext, skip: Symbol | null): ExtensionMet
 	if (mc.extensionRegistry == null) return out;
 	if (mc.currentModule != null && mc.currentModule.stdPrelude) return out;
 	const fromPrelude = new HashSet<Symbol>();
-	if (mc.preludeCtx != null && mc.preludeCtx.extensionRegistry != null) {
-		for (const p of mc.preludeCtx.extensionRegistry.methods) {
+	for (const layer of [mc.preludeCtx, mc.globalImportsCtx]) {
+		if (layer == null || layer.extensionRegistry == null) continue;
+		for (const p of layer.extensionRegistry.methods) {
 			if (p.sym != null) fromPrelude.add(p.sym);
 		}
 	}

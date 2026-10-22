@@ -47,7 +47,7 @@ import {
 } from "./intern";
 
 import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
-import { preludeContextFor, bindModuleForCheck, finishModuleCheck, registerBoundModuleFn, BoundModule, sharedPreludeOwns } from "../../checker/checkPass";
+import { preludeContextFor, bindModuleForCheck, finishModuleCheck, registerBoundModuleFn, BoundModule, sharedPreludeOwns, buildGlobalImportsLayer, bindModulePassesFrom } from "../../checker/checkPass";
 import { registerModuleProgram, registerModuleCtx, lookupModuleProgram, lookupModuleCtx, resetInstantiationState } from "../../checker/instantiate";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
@@ -65,8 +65,8 @@ import { getDirectImports } from "./moduleDeps";
 import { headerModuleSource, createTaReadProvider, SourceProvider, MapEntry, createMapProvider, loadModuleGraph, collectImportCalls } from "../../module/loader";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { resolveRuntimeDir } from "../../utils/path";
-import { errorCount as checkErrorCount } from "../../checker/context";
-import { modulePasses, modulePassExempt } from "../../checker/prelude";
+import { errorCount as checkErrorCount, addError } from "../../checker/context";
+import { modulePasses, modulePassExempt, setModulePassExempt, ModulePass } from "../../checker/prelude";
 
 // ===== Stdlib Detection =====
 
@@ -154,6 +154,28 @@ export class TransAmDb {
 	trees: HashMap<int32, Node>;               // tree key → parsed, checked, transformed or analyzed tree
 	contexts: HashMap<int32, CheckerContext>;  // check key → checker context
 	bound: HashMap<string, BoundCheck>;         // bound and not finished: in progress, or bound on demand from an import cycle
+	globalImports: TaGlobalImport[];            // the project's build.ms globalImports, resolved, in build.ms order
+	globalClosures: TaGlobalImportClosures;
+	globalLayers: TaGlobalImportsLayer[];       // [k - 1]: the names of the first k global imports
+	passModules: HashMap<string, CheckerContext>; // global import → the check its module passes were bound from
+	passesExemptFor: ModulePass[] | null;
+	exemptFrom: TaGlobalImportClosures | null;
+}
+
+interface TaGlobalImport {
+	entry: string;
+	path: string;
+}
+
+interface TaGlobalImportClosures {
+	revision: int32;
+	closures: HashSet<string>[];
+	modules: string[];
+}
+
+interface TaGlobalImportsLayer {
+	checked: CheckerContext[];
+	layer: CheckerContext;
 }
 
 interface BoundCheck {
@@ -189,6 +211,12 @@ export function createTransAmDb(cacheCapacity: int32): TransAmDb {
 		trees: new HashMap<int32, Node>(),
 		contexts: new HashMap<int32, CheckerContext>(),
 		bound: new HashMap<string, BoundCheck>(),
+		globalImports: [],
+		globalClosures: { revision: -1, closures: [], modules: [] },
+		globalLayers: [],
+		passModules: new HashMap<string, CheckerContext>(),
+		passesExemptFor: null,
+		exemptFrom: null,
 	};
 }
 
@@ -228,6 +256,133 @@ export function dbForgetAllTypeChecks(db: TransAmDb): void {
 		if (path == "" || isStdPathFor(db, path)) continue;
 		cacheRemove(db.cache, createQueryKey(TaQueryKind.TypeCheck, getFileId(db.fileInput, path)));
 	}
+}
+
+// Resolves build.ms globalImports as the project's implicit imports and returns the entries
+// that resolve to no module.
+export function dbSetGlobalImports(db: TransAmDb, entries: string[]): string[] {
+	const unresolved: string[] = [];
+	const resolved: TaGlobalImport[] = [];
+	for (const entry of entries) {
+		const path = dbResolveImport(db, "virtual:prelude", entry);
+		if (path == "") unresolved.push(entry);
+		else resolved.push({ entry, path });
+	}
+	if (sameGlobalImports(db.globalImports, resolved)) return unresolved;
+	db.globalImports = resolved;
+	db.globalClosures = { revision: -1, closures: [], modules: [] };
+	db.globalLayers = [];
+	db.passModules = new HashMap<string, CheckerContext>();
+	db.passesExemptFor = null;
+	db.exemptFrom = null;
+	dbForgetAllTypeChecks(db);
+	return unresolved;
+}
+
+function sameGlobalImports(a: TaGlobalImport[], b: TaGlobalImport[]): boolean {
+	if (a.length != b.length) return false;
+	for (let i = 0; i < a.length; i += 1) {
+		if (a[i].entry != b[i].entry || a[i].path != b[i].path) return false;
+	}
+	return true;
+}
+
+function globalImportClosures(db: TransAmDb): TaGlobalImportClosures {
+	if (db.globalClosures.revision == db.revision.value) return db.globalClosures;
+	const closures: HashSet<string>[] = [];
+	const modules: string[] = [];
+	const walked = new HashSet<string>();
+	for (const global of db.globalImports) {
+		const owned = new HashSet<string>();
+		const pending: string[] = [global.path];
+		while (pending.length > 0) {
+			const path = pending.pop()!;
+			if (path == "" || owned.has(path) || isStdPathFor(db, path)) continue;
+			owned.add(path);
+			if (!walked.has(path)) {
+				walked.add(path);
+				modules.push(path);
+			}
+			for (const ie of buildImportEntries(db, path, dbParse(db, path))) pending.push(ie.sourcePath);
+		}
+		closures.push(owned);
+	}
+	db.globalClosures = { revision: db.revision.value, closures, modules };
+	return db.globalClosures;
+}
+
+// A module sees the global imports listed before the first one whose import closure holds it,
+// as batch checking promotes them in build.ms order.
+function visibleGlobalImports(db: TransAmDb, filePath: string): TaGlobalImport[] {
+	const visible: TaGlobalImport[] = [];
+	if (db.globalImports.length == 0 || isStdPathFor(db, filePath)) return visible;
+	const closures = globalImportClosures(db).closures;
+	for (let i = 0; i < db.globalImports.length; i += 1) {
+		if (closures[i].has(filePath)) break;
+		visible.push(db.globalImports[i]);
+	}
+	return visible;
+}
+
+function recordGlobalImportEdges(db: TransAmDb, filePath: string, fileId: int32): void {
+	for (const global of visibleGlobalImports(db, filePath)) recordModuleImport(db.moduleDeps, fileId, getFileId(db.fileInput, global.path));
+}
+
+function checkGlobalImports(db: TransAmDb, filePath: string, unchecked: string[]): CheckerContext[] {
+	const checked: CheckerContext[] = [];
+	for (const global of visibleGlobalImports(db, filePath)) {
+		if (db.checkInProgress.has(global.path)) {
+			unchecked.push(`internal: global import ${global.path} is still being checked when ${filePath} needs it`);
+			continue;
+		}
+		dbRecordDepImports(db, global.path, dbParse(db, global.path));
+		const ctx = dbTypeCheck(db, global.path);
+		if (ctx == null) continue;
+		bindGlobalImportPasses(db, global, ctx);
+		checked.push(ctx);
+	}
+	syncModulePassExempt(db);
+	return checked;
+}
+
+function bindGlobalImportPasses(db: TransAmDb, global: TaGlobalImport, ctx: CheckerContext): void {
+	const fresh = db.passModules.get(global.path) != ctx;
+	if (!fresh && db.passesExemptFor == modulePasses()) return;
+	for (const pass of modulePasses()) {
+		if (pass.entry == global.entry) pass.modulePath = global.path;
+	}
+	const refused = bindModulePassesFrom(global.path, ctx);
+	if (fresh) for (const message of refused) addError(ctx, message, 1, 1);
+	db.passModules.set(global.path, ctx);
+}
+
+function syncModulePassExempt(db: TransAmDb): void {
+	if (db.globalImports.length == 0 || modulePasses().length == 0) return;
+	const closures = globalImportClosures(db);
+	if (db.passesExemptFor == modulePasses() && db.exemptFrom == closures) return;
+	const exempt = new HashSet<string>();
+	for (const path of closures.modules) exempt.add(path);
+	setModulePassExempt(exempt, db.stdPath);
+	db.passesExemptFor = modulePasses();
+	db.exemptFrom = closures;
+}
+
+function globalImportsLayer(db: TransAmDb, checked: CheckerContext[]): CheckerContext | null {
+	if (checked.length == 0) return null;
+	while (db.globalLayers.length < checked.length) db.globalLayers.push({ checked: [], layer: null as unknown as CheckerContext });
+	const held = db.globalLayers[checked.length - 1];
+	if (sameContexts(held.checked, checked)) return held.layer;
+	const layer = buildGlobalImportsLayer(db.preludeCtx!.table.identCache, checked);
+	db.globalLayers[checked.length - 1] = { checked, layer };
+	return layer;
+}
+
+function sameContexts(a: CheckerContext[], b: CheckerContext[]): boolean {
+	if (a.length != b.length) return false;
+	for (let i = 0; i < a.length; i += 1) {
+		if (a[i] != b[i]) return false;
+	}
+	return true;
 }
 
 // Remove ExportRegistry entries for a file and its transitive dependents
@@ -661,7 +816,7 @@ function boundAtRevision(db: TransAmDb, filePath: string): BoundModule | null {
 	return entry != null && entry.revision == db.revision.value ? entry.unit : null;
 }
 
-function dbBindModule(db: TransAmDb, filePath: string, program: Node, imports: ImportEntry[], startVersion: int32): BoundModule {
+function dbBindModule(db: TransAmDb, filePath: string, program: Node, imports: ImportEntry[], globals: CheckerContext[], startVersion: int32): BoundModule {
 	const graphMod = db.graph != null ? findModule(db.graph, filePath) : null;
 	const graph: ModuleGraph = graphMod != null ? db.graph! : createModuleGraph();
 	const mod = graphMod != null ? graphMod : createModule(filePath);
@@ -676,7 +831,8 @@ function dbBindModule(db: TransAmDb, filePath: string, program: Node, imports: I
 		program, db.exportRegistry, graph, mod,
 		db.preludeCtx, db.cancelCtx, startVersion,
 		earlyAdoptions(db, filePath, program),
-		true
+		true,
+		globalImportsLayer(db, globals)
 	);
 	if (!checkCancel(db.cancelCtx, startVersion)) db.bound.set(filePath, { revision: db.revision.value, inputHash: bindInputHash(db, filePath), unit });
 	return unit;
@@ -693,6 +849,8 @@ function dbBoundModule(modulePath: string): CheckerContext | null {
 	const bound = boundAtRevision(db, filePath);
 	if (bound != null) return bound.ctx;
 	if (db.checkInProgress.has(filePath)) return null;
+	const unchecked: string[] = [];
+	const globals = checkGlobalImports(db, filePath, unchecked);
 	const cachedProgram = dbParse(db, filePath);
 	if (cachedProgram == null) return null;
 	const program = cloneNodeForCheck(cachedProgram);
@@ -701,7 +859,8 @@ function dbBoundModule(modulePath: string): CheckerContext | null {
 	const imports = buildImportEntries(db, filePath, program);
 	db.checkInProgress.add(filePath);
 	checkMacroDeps(db, filePath, imports);
-	const unit = dbBindModule(db, filePath, program, imports, startVersion);
+	const unit = dbBindModule(db, filePath, program, imports, globals, startVersion);
+	for (const message of unchecked) addError(unit.ctx, message, 1, 1);
 	db.checkInProgress.delete(filePath);
 	return unit.ctx;
 }
@@ -713,10 +872,13 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return null as unknown as CheckerContext;
 	const key = createQueryKey(TaQueryKind.TypeCheck, fileId);
+	recordGlobalImportEdges(db, filePath, fileId);
 
 	if (tryMarkGreen(db.cache, db.fileInput, key, db.revision.value)) {
 		return dbContext(db, checkCtxKey(fileId));
 	}
+	const unchecked: string[] = [];
+	const globals = checkGlobalImports(db, filePath, unchecked);
 
 	// Get the cached parse tree (needed for dependency hash tracking + to source the clone).
 	const cachedProgram = dbParse(db, filePath);
@@ -787,8 +949,9 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 
 	const outerDb = _checkingDb;
 	_checkingDb = db;
-	const unit = bound != null ? bound : dbBindModule(db, filePath, program, imports, startVersion);
+	const unit = bound != null ? bound : dbBindModule(db, filePath, program, imports, globals, startVersion);
 	const checkerCtx = finishModuleCheck(unit);
+	for (const message of unchecked) addError(checkerCtx, message, 1, 1);
 	_checkingDb = outerDb;
 	db.bound.delete(filePath);
 
