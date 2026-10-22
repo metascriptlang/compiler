@@ -717,7 +717,7 @@ function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[] | null
 function fillNullableTail(ctx: CheckerContext, args: Node[], paramTypes: Type[], loc: SourceLocation): void {
 	while (args.length < paramTypes.length) {
 		const expected = paramTypes[args.length];
-		if (!isMaybeType(expected) && !unionHasMemberOfKind(expected, TypeKind.Null)) return;
+		if (expected.kind != TypeKind.Null && !isMaybeType(expected) && !unionHasMemberOfKind(expected, TypeKind.Null)) return;
 		const lit = createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, loc);
 		callCheckExpr(ctx, lit, expected);
 		args.push(fitNode(ctx, lit, expected, lit.nodeType));
@@ -2319,10 +2319,13 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		const extMinArDeclared = callMinArity(calleeType);
 		const extMinAr = extHasRest && extMinArDeclared >= calleeType.typeChildren.length
 			? calleeType.typeChildren.length - 1 : extMinArDeclared;
+		const extRestTuple = restTupleOf(calleeType!);
 		if (extSpread.taken) {
 			fillTakenSpread(ctx, d.arguments, argTypes, extSpread, calleeType.typeChildren);
 		} else if (extSpread.spread != null) {
 		} else if (refuseMisplacedSpread(ctx, d.arguments, calleeType.typeChildren, extMinAr)) {
+		} else if (extRestTuple != null) {
+			fitRestTupleArgs(ctx, node, calleeType!, extRestTuple, extMinArDeclared, d.arguments.length);
 		} else if (d.arguments.length < extMinAr) {
 			const me = d.callee.data as MemberExprData;
 			addError(ctx, `Too few arguments to '${me.property}': expected at least ${extMinAr}, got ${d.arguments.length}`, node.location.line, node.location.column);
