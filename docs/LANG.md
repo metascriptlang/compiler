@@ -4341,6 +4341,32 @@ of a 24-byte typedef struct declaring one `int32` to `4`. On JS and raiser an ex
 `@include` fails in the C compiler (`struct stat` is incomplete). Not measured: a field whose name
 is a C keyword.
 
+A struct imported from a C header (`import { S } from "./s.h"`) is an extern struct with every C
+field, and on the C backend its layout is MetaScript's when every field translates exactly: an
+integer, float or `bool` of the same width, an enum of `int` size, a data pointer, a fixed array
+of such fields, or a nested struct of the same kind. Then `sizeof S` is a constant that fits a
+`size_t` field with no cast (`const o: S = { size: sizeof S, … }`, the versioned-struct idiom),
+the struct can be embedded in a MetaScript struct, and the build asserts its size, alignment and
+each field offset against C (`_Static_assert`), so a wrong translation stops the C compile. A
+header struct that is or holds a union, a bitfield, an anonymous member, a flexible array, a
+`packed` or `aligned` attribute, `_Alignas`, a `#pragma pack` other than the default, a function
+pointer, or a field whose C width has no exact MetaScript type keeps C's layout: `sizeof S` is
+C's `sizeof`, an `int32` that is not a constant, and storing it in a `uint64` field needs
+`sizeof S as uint64`; the refusal names the `sizeof`. Only 64-bit targets fold. JS and raiser
+refuse `sizeof` of any header struct.
+
+Measured 2026-10-22 on `wt/fix-header-sizeof`: corpus `1141-headerStructSizeof` prints
+`24 true 7 true | 64 true` and `152 152 | 32 3 | 8 true` (a module-level and a local versioned
+initializer whose `size` is `24ULL` in the emitted C, a 64-byte struct nesting it passed by value
+to C and through a MetaScript function, an embedding MetaScript struct of 32 bytes, and a union
+through `as uint64`) on C drc, C orc, `--danger` and under ASan; the compiler before the change
+refused both initializers. Haro's libghostty-vt imports fold 9 of their 10 `size: sizeof …`
+sites; `GhosttyStyle` holds a union and needs `as uint64` (msc 0.3.3 folded it to 96, C says 72).
+The per-shape decision (sizes measured with clang for arm64 macOS and x86_64 Linux) is pinned by
+the tests in `src/module/cimport/emit.ms`. Not
+measured: a 32-bit target, Windows, and system structs such as `struct stat`, which cparse does
+not translate (its include stubs declare no fields), so they stay opaque or hand-written.
+
 ### Distinct Types
 ```typescript
 type UserId = distinct number;    // Nominal typing wrapper
