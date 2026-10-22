@@ -5072,16 +5072,18 @@ function getPropertyInner(t: Type | null, name: string): Type {
 // isPrimitiveKind — used by destructorLifting, analyzer/classify, and other DRC code
 // A field of a variant union that differs only by literal answers with the first variant's literal,
 // where getProperty merges the literals into a new union.
+const INFERRED_VIEW: Readonly<Type> = createPrimitive(TypeKind.Inferred);
+
 export function fieldTypeView(t: Readonly<Type | null>, name: string): Readonly<Type> {
-	if (t == null) return inferredType();
+	if (t == null) return INFERRED_VIEW;
 	if ((t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) && t.typeReturn != null) return fieldTypeView(t.typeReturn, name);
 	if (t.kind == TypeKind.GenericInstance) {
 		const body = t.typeReturn != null ? t.typeReturn : instanceLayoutBody(t);
-		return body != null && body != t ? fieldTypeView(body, name) : inferredType();
+		return body != null && body != t ? fieldTypeView(body, name) : INFERRED_VIEW;
 	}
 	if (t.kind == TypeKind.Struct) {
 		const i = t.typeNames.indexOf(name);
-		return i >= 0 && i < t.typeChildren.length && t.typeChildren[i] != null ? t.typeChildren[i] : inferredType();
+		return i >= 0 && i < t.typeChildren.length && t.typeChildren[i] != null ? t.typeChildren[i] : INFERRED_VIEW;
 	}
 	if (t.kind == TypeKind.Union && t.typeChildren != null) {
 		if (t.typeExtra != null && t.typeNames != null && t.typeNames.length > 0 && t.typeNames[0] == name) return t.typeExtra;
@@ -5091,7 +5093,7 @@ export function fieldTypeView(t: Readonly<Type | null>, name: string): Readonly<
 		}
 	}
 	if (t.kind == TypeKind.Enum && t.typeNames.indexOf(name) >= 0) return t;
-	return inferredType();
+	return INFERRED_VIEW;
 }
 
 export function isPrimitiveKind(kind: TypeKind): boolean {
