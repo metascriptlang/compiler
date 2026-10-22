@@ -81,7 +81,7 @@ function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
 		CTypeKind.Array => {
 			if (t.base == null) return "unknown";
 			const elem = cTypeToMs(t.base);
-			if (t.arrayLen >= 0) return `SizedArray<${elem}, ${t.arrayLen}>`;
+			if (t.arrayLen >= 0) return elem.includes("=>") ? `(${elem})[${t.arrayLen}]` : `${elem}[${t.arrayLen}]`;
 			return `Span<${elem}>`;
 		},
 		CTypeKind.Func => emitFuncType(t),
@@ -660,6 +660,12 @@ test "a struct whose fields all translate exactly is complete" {
 		assert arrayContains(names, n), n;
 	}
 	assert !arrayContains(names, "Pragma1");
+}
+
+test "a fixed C array is spelled T[N]" {
+	const ms = translateCHeader("typedef struct { char c[5]; int (*fns[2])(int); } Arr;\n", ["Arr"]);
+	assert ms.contains("c: int8[5];"), ms;
+	assert ms.contains("fns: ((p0: int32) => int32)[2];"), ms;
 }
 
 test "a C layout msc does not reproduce leaves the struct incomplete" {
