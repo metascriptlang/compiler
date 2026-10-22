@@ -22,6 +22,8 @@ export class TaCacheStore {
 	recomputed: int32[];
 	marked: int32;
 	evicted: int32;
+	bound: int32;
+	collected: int32;
 }
 
 export function createCacheStore(capacity: int32): TaCacheStore {
@@ -36,6 +38,8 @@ export function createCacheStore(capacity: int32): TaCacheStore {
 		recomputed: [],
 		marked: 0,
 		evicted: 0,
+		bound: 0,
+		collected: 0,
 	};
 }
 

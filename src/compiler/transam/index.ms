@@ -487,6 +487,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		const collected = cloneNodeForCheck(depProgram);
 		tmpCtx.adoptedDecls = earlyAdoptions(db, depPath, collected);
 		collectTopLevel(tmpCtx, collected);
+		db.cache.collected += 1;
 		resolveDeclarations(tmpCtx, collected);
 		db.trees.set(exportNodeKey(depId), collected);
 
@@ -520,6 +521,7 @@ export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
 	tmpCtx.currentModule = depMod;
 	const collected = cloneNodeForCheck(program);
 	collectTopLevel(tmpCtx, collected);
+	db.cache.collected += 1;
 	resolveDeclarations(tmpCtx, collected);
 	db.trees.set(exportNodeKey(getFileId(db.fileInput, filePath)), collected);
 	const exports = collectExports(tmpCtx, filePath);
@@ -655,6 +657,7 @@ function dbBindModule(db: TransAmDb, filePath: string, program: Node, imports: I
 	}
 	if (db.preludeCtx == null) db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
 	registerModuleProgram(filePath, program);
+	db.cache.bound += 1;
 	const unit = bindModuleForCheck(
 		program, db.exportRegistry, graph, mod,
 		db.preludeCtx, db.cancelCtx, startVersion,
@@ -918,7 +921,8 @@ export function dbStats(db: TransAmDb): string {
 		if (count > 0) recomputed += ` ${(kind as TaQueryKind).toString()}=${count}`;
 	}
 	return `entries=${cache.entries.length} hits=${cache.hits} misses=${cache.misses}`
-		+ ` marked=${cache.marked} evicted=${cache.evicted} recomputed:${recomputed}`;
+		+ ` marked=${cache.marked} evicted=${cache.evicted} bound=${cache.bound} collected=${cache.collected}`
+		+ ` recomputed:${recomputed}`;
 }
 
 // ===== Re-exports =====
