@@ -104,8 +104,8 @@ export function registerEngineBodyCtxFn(fn: (definingModulePath: string, owner: 
 }
 
 // The checked scope a routine declared in another module is compiled against: the module's own
-// context, or the prelude's for a module the prelude holds (its modules share one table and keep
-// no context of their own). `null` when neither holds it; the caller's scope is never a substitute.
+// context, or a view of the prelude module that declares it, its private names over the prelude's
+// exports. `null` when neither holds it; the caller's scope is never a substitute.
 export function declaringModuleCtx(ctx: CheckerContext, sym: Symbol): CheckerContext | null {
 	if (sym.modulePath == "" || sym.modulePath == ctx.modulePath) return ctx;
 	const defining = lookupModuleCtx(sym.modulePath);
@@ -148,8 +148,23 @@ export function pickBodyCtx(definingModulePath: string, ctx: CheckerContext, own
 	}
 	const defining = lookupModuleCtx(definingModulePath);
 	if (defining != null) return defining;
-	if (ctx.preludeCtx != null) return ctx.preludeCtx;
+	if (ctx.preludeCtx != null) return preludeBodyCtx(ctx.preludeCtx, definingModulePath);
 	return ctx;
+}
+
+const _preludeBodyCtxs = new HashMap<CheckerContext, HashMap<string, CheckerContext>>();
+
+export function preludeBodyCtx(prelude: CheckerContext, modulePath: string): CheckerContext {
+	let views = _preludeBodyCtxs.get(prelude);
+	if (views == null) {
+		views = new HashMap<string, CheckerContext>();
+		_preludeBodyCtxs.set(prelude, views);
+	}
+	const known = views.get(modulePath);
+	if (known != null) return known;
+	const own = preludeModuleCtx(prelude, modulePath) ?? prelude;
+	views.set(modulePath, own);
+	return own;
 }
 
 export function resetInstantiationState(): void {

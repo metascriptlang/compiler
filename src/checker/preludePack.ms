@@ -810,6 +810,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		for (const m of members) idx.push(idxSym(m));
 		lines.push(`M\t${escapeP(path)}\t${intsCsv(idx)}`);
 	}
+	for (const path of ctx.ownModules) lines.push(`O\t${escapeP(path)}`);
 
 	lines.push(`D\t${escapeP(ctx.includeDirectives)}`);
 	lines.push(`F\t${escapeP(ctx.compilerFlags)}`);
@@ -1151,6 +1152,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const compilerFuncRows: string[][] = [];
 	const interfRows: string[][] = [];
 	const moduleScopeRows: string[][] = [];
+	const ownModules: string[] = [];
 	const aliasRows: string[][] = [];
 	let importRow = "";
 	let exportRow = "";
@@ -1242,6 +1244,8 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			interfRows.push(f);
 		} else if (f[0] == "M") {
 			moduleScopeRows.push(f);
+		} else if (f[0] == "O") {
+			ownModules.push(unescapeP(f[1]));
 		} else if (f[0] == "K") {
 			aliasRows.push(f);
 		} else if (f[0] == "Y") {
@@ -1379,6 +1383,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		}
 		ctx.preludeModuleScopes.set(unescapeP(f[1]), members);
 	}
+	for (const path of ownModules) ctx.ownModules.add(path);
 
 	ctx.includeDirectives = includeDirectives;
 	ctx.compilerFlags = compilerFlags;

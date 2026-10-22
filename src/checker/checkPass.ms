@@ -3658,6 +3658,7 @@ function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: stri
 			loadPreludeSubModules(ctx, pr.value, resolvedPath, stdPath, backendExt);
 			ctx.interf = [];
 			ctx.interfSet = new HashSet<Symbol>();
+			openScope(ctx.table, ScopeKind.Module);
 			runThreePasses(ctx, pr.value);
 			ctx.preludeInterf.set(stdSpecifier, ctx.interf);
 			for (const exported of ctx.interf) ctx.preludeExports.add(exported);
@@ -3676,6 +3677,28 @@ function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: stri
 					ensureShaped(ov, ctx);
 				}
 			}
+			ctx.preludeModuleScopes.set(resolvedPath, moduleScopeSymbols(ctx.table));
+			closeScope(ctx.table);
+			publishPreludeModuleExports(ctx, scope);
+		}
+	}
+}
+
+function publishPreludeModuleExports(ctx: CheckerContext, moduleScope: Scope): void {
+	const global = ctx.table.current;
+	for (const entry of moduleScope.symbols.entries) {
+		const sym = entry.value;
+		if (!isExportedBy(ctx, sym)) continue;
+		const existing = global.symbols.get(entry.key);
+		if (existing == null) {
+			global.symbols.set(entry.key, sym);
+		} else if (existing != sym && existing.symbolKind == SymbolKind.Function && sym.symbolKind == SymbolKind.Function) {
+			for (const ov of [sym, ...sym.overloads]) {
+				if (ov != existing && !existing.overloads.includes(ov)) existing.overloads.push(ov);
+			}
+		} else if (existing != sym) {
+			const at = sym.declNode != null ? sym.declNode.location : null;
+			addError(ctx, `Duplicate symbol '${sym.name}' exported by two prelude modules`, at != null ? at.line : 0, at != null ? at.column : 0);
 		}
 	}
 }
@@ -6311,6 +6334,27 @@ test "a prelude module that imports an earlier prelude module checks it once" {
 		["math", "import { DAY } from \"../date\";\nexport class Math {}\nexport function days(t: number): number { return t / DAY; }\n"],
 	]);
 	assert ctx.errors.length == 0, ctx.errors.length > 0 ? ctx.errors[0].message : "";
-	assert ctx.preludeModuleScopes.size == 0;
+	for (const path of ctx.preludeModuleScopes.keys()) assert ctx.ownModules.has(path), path;
 	assert preludeExports(ctx, "DAY") && preludeExports(ctx, "days");
+}
+
+test "a prelude checked from source reports no errors" {
+	const ctx = checkPreludeFromSource(join(resolveRuntimeDir(), "std"), ".cms");
+	assert ctx.errors.length == 0, ctx.errors.length > 0 ? `${ctx.errors[0].line}:${ctx.errors[0].column} ${ctx.errors[0].message}` : "";
+}
+
+test "a prelude module's unexported declaration resolves only inside that module, whatever another prelude module declares under its name" {
+	const ctx = preludeOfModules("private", [
+		["date", "function pick(): string { return \"d\"; }\nextern function msPick(x: int32): int32;\nexport function fromDate(): string { return pick(); }\nexport function rawDate(): int32 { return msPick(1); }\n"],
+		["math", "function pick(): number { return 1.0; }\nextern function msPick(x: int32): number;\nexport function fromMath(): number { return pick(); }\nexport function rawMath(): number { return msPick(1); }\n"],
+		["number", "function pick(): boolean { return true; }\nexport function fromNumber(): boolean { return pick(); }\n"],
+	]);
+	assert ctx.errors.length == 0, ctx.errors.length > 0 ? ctx.errors[0].message : "";
+	assert preludeExports(ctx, "fromDate") && preludeExports(ctx, "fromMath") && preludeExports(ctx, "fromNumber");
+	assert lookupSymbol(ctx.table, "pick") == null && lookupSymbol(ctx.table, "msPick") == null;
+	const outside = preludeOfModules("outside", [
+		["date", "function pick(): string { return \"d\"; }\nexport function fromDate(): string { return pick(); }\n"],
+		["math", "export function fromMath(): string { return pick(); }\n"],
+	]);
+	assert outside.errors.length == 1 && outside.errors[0].message.includes("pick"), outside.errors.length > 0 ? outside.errors[0].message : "";
 }
