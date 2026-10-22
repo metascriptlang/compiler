@@ -649,8 +649,23 @@ function verdict(scenario: LspScenario, r: LspReplay): string {
 	return invariant(r);
 }
 
+// The probes of a project scenario, moved off PROJECT_URI as its drains are.
+function movedCheckpoints(
+	checkpoints: LspCheckpoints | null,
+	projectDir: string,
+): LspCheckpoints | null {
+	if (checkpoints == null || projectDir == "") return checkpoints;
+	const probes: LspProbe[] = [];
+	for (const p of checkpoints.probes) {
+		const uri = p.uri.replaceAll(PROJECT_URI, projectUri(projectDir));
+		probes.push({ uri, line: p.line, character: p.character });
+	}
+	return { afterDrains: checkpoints.afterDrains, probes };
+}
+
 function replayOnProcess(s: Session, scenario: LspScenario, drains: string[][], projectDir: string): string {
-	const driven = drive(s, drains, scenario.name, scenario.checkpoints, projectDir != "");
+	const checkpoints = movedCheckpoints(scenario.checkpoints, projectDir);
+	const driven = drive(s, drains, scenario.name, checkpoints, projectDir != "");
 	if (!driven.ok) return driven.error;
 	if (s.measured && !s.ended) {
 		const sampled = sampleUsage(s);
@@ -922,14 +937,12 @@ function measureDrain(
 	return due && !plan.exits && !s.ended ? sampleUsage(s) : "";
 }
 
-// Asks hover and completion alone at every probe in an open document once the checkpoint
-// agreed: the hover must answer what the checkpoint's hover answered, the completion must
-// answer a result.
+// Asks hover and completion alone at every probe once the checkpoint agreed: the hover must
+// answer what the checkpoint's hover answered, the completion must answer a result.
 function timeProbes(s: Session, checkpoints: LspCheckpoints, taken: int32): string {
 	for (let round = 0; round < PROBE_ROUNDS; round++) {
 		for (let k = 0; k < checkpoints.probes.length; k++) {
 			const p = checkpoints.probes[k];
-			if (s.opened.indexOf(p.uri) < 0) continue;
 			const at = positionParams(p.uri, p.line, p.character);
 			const hoverId = `${QUERY_PREFIX}${taken}-hover-${round}-${k}`;
 			const where = `${p.line}:${p.character}`;
@@ -999,17 +1012,13 @@ function publishedWithoutErrors(r: LspReplay, uri: string, publishes: int32): st
 	return `${uri} published ${n} times, expected ${publishes < 0 ? "some" : `${publishes}`}`;
 }
 
-const CHAIN_NAME = "perf: a body edit at the root of a 3-module chain";
-
-// The scenario's project directory. Its probes name documents there, because a checkpoint asks
-// a probe as written while only the drains are moved off PROJECT_URI.
 function projectDirOf(name: string): Result<string, string> {
 	const dir = `${NEUTRAL}/${scenarioSlug(name)}`;
 	if (!ensureDir(dir).ok) return Result.err(`cannot create ${dir}`);
 	return Result.ok(realpath(dir));
 }
 
-function chainEditLoop(dir: string): LspScenario {
+function chainEditLoop(): LspScenario {
 	const logic = PROJECT_URI + "chain/logic.ms";
 	const mid = PROJECT_URI + "chain/mid.ms";
 	const far = PROJECT_URI + "chain/far.ms";
@@ -1029,7 +1038,7 @@ function chainEditLoop(dir: string): LspScenario {
 		drains.push(changeDrain(logic, (k + 2) as int32, k % 2 == 0 ? two : one));
 	}
 	return {
-		name: CHAIN_NAME,
+		name: "perf: a body edit at the root of a 3-module chain",
 		batching: "any",
 		drains,
 		check: (r: LspReplay) => {
@@ -1041,10 +1050,7 @@ function chainEditLoop(dir: string): LspScenario {
 		checkAnyBatching: null,
 		checkpoints: {
 			afterDrains: [3, (drains.length - 1) as int32],
-			probes: [
-				{ uri: projectUri(dir) + "chain/mid.ms", line: 1, character: 36 },
-				{ uri: projectUri(dir) + "chain/far.ms", line: 1, character: 30 },
-			],
+			probes: [{ uri: mid, line: 1, character: 36 }, { uri: far, line: 1, character: 30 }],
 		},
 		project: [
 			{ path: "chain/logic.ms", text: one },
@@ -1063,12 +1069,12 @@ function probeAt(uri: string, text: string, marker: string): Result<LspProbe, st
 	return Result.err(`no ${marker} in ${TODO_LIST}`);
 }
 
-function todoListEditLoop(name: string, text: string, dir: string): Result<LspScenario, string> {
+function todoListEditLoop(name: string, text: string): Result<LspScenario, string> {
 	const uri = PROJECT_URI + TODO_LIST;
 	const edited = text.replaceAll("\"ship the starter\"", "\"ship the starter now\"");
 	if (edited == text) return Result.err(`${TODO_LIST} has no "ship the starter" to edit`);
-	const signal = try probeAt(projectUri(dir) + TODO_LIST, text, "createSignal<Todo[]>");
-	const setter = try probeAt(projectUri(dir) + TODO_LIST, text, "setTodos(next);");
+	const signal = try probeAt(uri, text, "createSignal<Todo[]>");
+	const setter = try probeAt(uri, text, "setTodos(next);");
 	const drains = [initializeDrain(), openDrain(uri, text)];
 	for (let k = 0; k < EDITS; k++) {
 		drains.push(changeDrain(uri, (k + 2) as int32, k % 2 == 0 ? edited : text));
@@ -1147,15 +1153,14 @@ function perfEntries(): Result<PerfEntry[], string> {
 	const read = readFile(`${editDir}/${TODO_LIST}`);
 	if (!read.ok) return Result.err(`cannot read ${TODO_LIST} under ${editDir}`);
 	const editLoop: PerfEntry = {
-		scenario: try todoListEditLoop(editName, read.value, editDir),
+		scenario: try todoListEditLoop(editName, read.value),
 		fixture: "todoList",
 	};
 	const coldOpen: PerfEntry = {
 		scenario: todoListColdOpen(openName, read.value),
 		fixture: "todoList",
 	};
-	const chainDir = try projectDirOf(CHAIN_NAME);
-	const small: PerfEntry[] = [{ scenario: chainEditLoop(chainDir), fixture: "small" }];
+	const small: PerfEntry[] = [{ scenario: chainEditLoop(), fixture: "small" }];
 	for (const scenario of lspScenarios()) small.push({ scenario, fixture: "small" });
 	const entries: PerfEntry[] = [];
 	let opens = 0;
