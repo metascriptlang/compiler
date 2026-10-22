@@ -28,7 +28,7 @@ import {
 	TypeAssertionData, HiddenStdConvData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { setFlag, hasFlag, isCursorSym, SymbolFlag } from "../checker/symbol";
+import { setFlag, hasFlag, isCursorSym, SymbolFlag, findOverloadImpl } from "../checker/symbol";
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
@@ -179,7 +179,11 @@ function connectStore(p: Partitions, targets: Symbol[], destType: Type | null, s
 }
 
 function callFormals(call: Node): Type[] | null {
-	const sym = call.resolvedSym;
+	let sym = call.resolvedSym;
+	if (sym != null) {
+		const impl = findOverloadImpl(sym);
+		if (impl != null) sym = impl;
+	}
 	return sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function ? sym.symbolType.typeChildren : null;
 }
 
@@ -1089,6 +1093,18 @@ test "passing the borrow to a sink parameter keeps it a cursor" {
 	const body = getFuncNamed(BOXES + "function keep(sink b: Box): void { show(b.v); }\nfunction f(h: Holder): void { const c = h.child; keep(c); show(c.v); }", "f");
 	inferCursors(body);
 	assert isCursorNamed(body, "c");
+}
+
+test "passing the borrow through an overload whose implementation takes Readonly keeps it a cursor" {
+	const body = getFuncNamed(BOXES + "function look(b: Box): void;\nfunction look(b: Readonly<Box>): void;\nfunction look(b: Readonly<Box>): void { show(b.v); }\nfunction f(h: Holder): void { const c = h.child; look(c); show(c.v); }", "f");
+	inferCursors(body);
+	assert isCursorNamed(body, "c");
+}
+
+test "passing the owner through an overload whose implementation mutates it ends the cursor" {
+	const body = getFuncNamed(BOXES + "function grab(h: Holder): void;\nfunction grab(h: Holder): void { replaceChild(h); }\nfunction f(h: Holder): void { const c = h.child; grab(h); show(c.v); }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "c");
 }
 
 test "pushing the borrow into the array it came from ends the cursor" {

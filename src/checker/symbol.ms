@@ -130,6 +130,16 @@ function decodeRoutineFlags(text: string): BitSet<RoutineFlag> {
 	return set;
 }
 
+// The implementation is the unique member of an overload set without the OverloadSig flag;
+// null when every member is a signature.
+export function findOverloadImpl(sym: Symbol): Symbol {
+	if (!hasFlag(sym, SymbolFlag.OverloadSig)) return sym;
+	for (const o of sym.overloads) {
+		if (!hasFlag(o, SymbolFlag.OverloadSig)) return o;
+	}
+	return null as unknown as Symbol;
+}
+
 export function overloadWinner(set: Symbol, idx: number): Symbol {
 	return idx > 0 && idx - 1 < set.overloads.length ? set.overloads[idx - 1] : set;
 }

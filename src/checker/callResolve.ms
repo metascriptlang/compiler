@@ -24,7 +24,7 @@ import { bindFromExplicitTypeArgs, explicitTypeArgs, builtinTypeHead, checkExpli
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive, isLiteralTree } from "./speculate";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, moduleScopeNamed, enumMemberName } from "./symbol";
+import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, moduleScopeNamed, enumMemberName } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
 import { TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase } from "./types";
@@ -3908,14 +3908,6 @@ function fitCallToImplementation(callNode: Node, impl: Symbol, takesReceiver: bo
 		const fitted = widenVariantToUnion(d.arguments[ai], implParams[ai + offset], argType);
 		if (fitted != null as unknown as Node) d.arguments[ai] = fitted;
 	}
-}
-
-function findOverloadImpl(sym: Symbol): Symbol {
-	if (!hasFlag(sym, SymbolFlag.OverloadSig)) return sym;
-	for (const o of sym.overloads) {
-		if (!hasFlag(o, SymbolFlag.OverloadSig)) return o;
-	}
-	return null as unknown as Symbol;
 }
 
 // Validate every overload sig against the implementation. Runs once per
