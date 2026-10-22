@@ -2000,6 +2000,12 @@ function instanceBody(t: Readonly<Type>): Readonly<Type | null> {
 	return base.kind == TypeKind.Distinct && t.typeReturn.kind == TypeKind.Distinct ? t.typeReturn.typeReturn : t.typeReturn;
 }
 
+export function substituteInstanceArgs(gi: Type, target: Type): Type {
+	const names = splitTopLevel(genericParamsOf(gi), ",").map((n: string): string => n.trim());
+	if (names.length == 0 || names.length > gi.typeChildren.length) return target;
+	return substituteParams(target, declaredParamsOf(gi, names.length), gi.typeChildren);
+}
+
 function missingBody(t: Readonly<Type>): boolean {
 	if (!pendingBody(t, genericParamsOf(t))) return false;
 	if (_queryCachesReadOnly) throw new Error(`internal: generic instance '${typeDisplayName(t)}' reached emission without its body`);
@@ -4325,23 +4331,18 @@ export function substituteParams(t: Type | null, params: Type[], concretes: Type
 	const r = substituteAllParamsInner(t, params, concretes, seen);
 	return r;
 }
-function substituteTypeInner(t: Type | null, paramName: string, concrete: Type, seen: Cursor<Type>[]): Type {
-	if (t == null) return inferredType();
-	if (t.kind == TypeKind.GenericParam && t.typeName == paramName) return isReadonlyView(t) ? createReadonlyView(concrete) : concrete;
-	if (typeVisitHas(seen, t)) return t;
-	seen.push(t);
-	const result = substituteTypeWalk(t, paramName, concrete, seen);
-	seen.pop();
-	return result;
+
+export function substituteBound(t: Type | null, b: UnifyBindings): Type {
+	if (b.params.length == 0) return t != null ? t : inferredType();
+	return substituteParams(t, b.params, b.types);
 }
 
 function substituteAllParamsInner(t: Type | null, params: Type[], concretes: Type[], seen: Cursor<Type>[]): Type {
 	if (t == null) return inferredType();
 	if (t.kind == TypeKind.GenericParam) {
-		for (let ni = 0; ni < names.length; ni += 1) {
-			if (t.typeName == names[ni]) return isReadonlyView(t) ? createReadonlyView(concretes[ni]) : concretes[ni];
-		}
-		return t;
+		const slot = params.indexOf(withoutReadonlyView(t));
+		if (slot < 0) return t;
+		return isReadonlyView(t) ? createReadonlyView(concretes[slot]) : concretes[slot];
 	}
 	if (typeVisitHas(seen, t)) return t;
 	seen.push(t);
@@ -4375,14 +4376,14 @@ function substituteAllParamsWalk(t: Type, params: Type[], concretes: Type[], act
 				substituteChildrenInPlaceAll(copy, params, concretes, active);
 				return t.kind == TypeKind.Union ? canonicalSubstitutedUnion(copy) : copy;
 			},
-			TypeKind.Ref => rebuildRefLike(t, substituteAllParamsInner(refSubstInner(t), names, concretes, active)),
-			TypeKind.Ptr => createPtr(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
-			TypeKind.Borrow => createBorrow(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
-			TypeKind.Var => substitutedVar(t, substituteAllParamsInner(t.typeReturn, names, concretes, active)),
-			TypeKind.Sink => createSink(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
-			TypeKind.Cursor => createCursor(substituteAllParamsInner(t.typeReturn, names, concretes, active)),
-			TypeKind.Distinct => substitutedDistinct(t, substituteAllParamsInner(t.typeReturn, names, concretes, active)),
-			TypeKind.Struct => substituteStructAll(t, names, concretes, active),
+			TypeKind.Ref => rebuildRefLike(t, substituteAllParamsInner(refSubstInner(t), params, concretes, active)),
+			TypeKind.Ptr => createPtr(substituteAllParamsInner(t.typeReturn, params, concretes, active)),
+			TypeKind.Borrow => createBorrow(substituteAllParamsInner(t.typeReturn, params, concretes, active)),
+			TypeKind.Var => substitutedVar(t, substituteAllParamsInner(t.typeReturn, params, concretes, active)),
+			TypeKind.Sink => createSink(substituteAllParamsInner(t.typeReturn, params, concretes, active)),
+			TypeKind.Cursor => createCursor(substituteAllParamsInner(t.typeReturn, params, concretes, active)),
+			TypeKind.Distinct => substitutedDistinct(t, substituteAllParamsInner(t.typeReturn, params, concretes, active)),
+			TypeKind.Struct => substituteStructAll(t, params, concretes, active),
 			TypeKind.GenericInstance => {
 				// typeExtra intentionally NOT walked (walking it cost ~20× compile time).
 				const gi = copyTypeForSubst(t);
@@ -4421,7 +4422,7 @@ function substitutedDistinct(t: Type, inner: Type): Type {
 	return copy;
 }
 
-function substituteChildrenInPlaceAll(copy: Type, names: string[], concretes: Type[], seen: Cursor<Type>[]): void {
+function substituteChildrenInPlaceAll(copy: Type, params: Type[], concretes: Type[], seen: Cursor<Type>[]): void {
 	for (let ci = 0; ci < copy.typeChildren.length; ci += 1) {
 		copy.typeChildren[ci] = substituteAllParamsInner(copy.typeChildren[ci], params, concretes, seen);
 	}
@@ -4519,8 +4520,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	if (concrete == null) return;
 	// Direct generic param match
 	if (formal.kind == TypeKind.GenericParam) {
-		bindings.names.push(formal.typeName);
-		bindings.types.push(closureStorageType(isReadonlyView(formal) ? withoutReadonlyView(concrete) : concrete));
+		bindParam(bindings, withoutReadonlyView(formal), closureStorageType(isReadonlyView(formal) ? withoutReadonlyView(concrete) : concrete));
 		return;
 	}
 	if ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Borrow || formal.kind == TypeKind.Cursor || formal.kind == TypeKind.Sink) && formal.typeReturn != null) {
@@ -4845,33 +4845,11 @@ export function getElementType(t: Type): Type {
 	return inferredType();
 }
 
-export function typeParamConstraint(t: Type | null, name: string, depth: int32): Type | null {
-	return constraintScan(t, name, depth, new TypeVisitSet());
-}
-
-function constraintScan(t: Type | null, name: string, depth: int32, visited: TypeVisitSet): Type | null {
-	if (t == null || depth > 20) return null;
-	if (t.kind == TypeKind.GenericParam) return t.typeName == name ? t.typeExtra : null;
-	if (isDeclaredStruct(t) && !t.typeFlags.has(TypeFlag.HasGenericParam)) return null;
-	if (!typeVisitAdd(visited, t)) return null;
-	const fromReturn = constraintScan(t.typeReturn, name, depth + 1, visited);
-	if (fromReturn != null) return fromReturn;
-	const fromExtra = constraintScan(t.typeExtra, name, depth + 1, visited);
-	if (fromExtra != null) return fromExtra;
-	for (const c of t.typeChildren) {
-		const fromChild = constraintScan(c, name, depth + 1, visited);
-		if (fromChild != null) return fromChild;
-	}
-	return null;
-}
-
-// Collect unique GenericParam names from a type tree (used by getProperty for GenericInstance substitution)
-function collectGenericParamNames(t: Readonly<Type | null>, names: string[], depth: int32): void {
-	if (t == null) return;
-	if (t == null) return;
-	if (depth > 20) return;
+function collectGenericParams(t: Type | null, found: Type[], depth: int32): void {
+	if (t == null || depth > 20) return;
 	if (t.kind == TypeKind.GenericParam) {
-		if (found.indexOf(t) < 0) found.push(t);
+		const declared = withoutReadonlyView(t);
+		if (found.indexOf(declared) < 0) found.push(declared);
 		return;
 	}
 	collectGenericParams(t.typeReturn, found, depth + 1);
