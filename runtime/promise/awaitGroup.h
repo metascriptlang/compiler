@@ -273,7 +273,7 @@ static inline bool msSpawnCheckCancel(msAwaitGroup* g) {
  * no mutex, no condvar. Its waiter runs its own task when still queued, else spins.
  * Replaces heap-allocated msAwaitGroup for the common `await spawn(fn)` pattern. */
 
-extern bool msPoolRunEdge(const void* awaited, bool follow);  /* pool.h — avoid circular include */
+extern bool msPoolRunEdge(const void* awaited, bool follow, bool descend);  /* pool.h — avoid circular include */
 extern bool msPoolBusyDec(void);  /* true only when it actually decremented */
 extern void msPoolBusyInc(void);
 
@@ -284,6 +284,8 @@ extern void msPoolBusyInc(void);
 #define MS_SLOT_COUNT 0x1fffffff
 /* The cap on one loop wait, as msWaitFor's: a completion or a loop event ends it sooner. */
 #define MS_SLOT_LOOP_WAIT_MS 5
+#define MS_SLOT_PARK_MIN_US 50
+#define MS_SLOT_PARK_MAX_US 1000
 
 typedef struct msAwaitSlot {
     _Atomic(int32_t) pending;     /* starts at N, decremented per completion; | MS_SLOT_PARKED */
@@ -346,17 +348,21 @@ static inline void msAwaitSlotWait(void* sp) {
      * nested wait chain reaches it routinely, so an unconditional Inc
      * adds a count nobody removed. */
     bool dec = msIsPoolWorker && msPoolBusyDec();  /* available to help while waiting */
-    bool queued = true;  /* its task is submitted before the wait: once not queued, never again */
+    uint32_t parkUs = MS_SLOT_PARK_MIN_US;
     while ((atomic_load_explicit(&s->pending, memory_order_acquire) & MS_SLOT_COUNT) > 0) {
-        if (queued && msPoolRunEdge(sp, false)) continue;
-        queued = false;
+        if (msPoolRunEdge(sp, false, true)) { parkUs = MS_SLOT_PARK_MIN_US; continue; }
         /* Its task runs on another thread. The loop thread waits in its loop, which
-         * the completion wakes as it wakes for a loop event; a worker parks. */
+         * the completion wakes as it wakes for a loop event; a worker parks, waking
+         * to run the descendants the task queues meanwhile. */
         int32_t flag = msIsPoolWorker ? MS_SLOT_PARKED : MS_SLOT_LOOP;
         int32_t v = atomic_fetch_or_explicit(&s->pending, flag, memory_order_acq_rel) | flag;
         if ((v & MS_SLOT_COUNT) == 0) break;
-        if (msIsPoolWorker) msFutexWait((int*)&s->pending, v);
-        else msRunOnce(MS_SLOT_LOOP_WAIT_MS);
+        if (!msIsPoolWorker) {
+            msRunOnce(MS_SLOT_LOOP_WAIT_MS);
+            continue;
+        }
+        msFutexWaitUs((int*)&s->pending, v, parkUs);
+        if (parkUs < MS_SLOT_PARK_MAX_US) parkUs *= 2;
     }
     if (dec) msPoolBusyInc();  /* back to own work */
 }

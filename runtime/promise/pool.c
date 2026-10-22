@@ -9,9 +9,10 @@ _Thread_local int msPoolWorkerSchedId = 0;
 MS_TLS_PUBLISH(msIsPoolWorker)
 
 void msPoolSubmit(struct msSpawnCtx* ctx) { msSpawnWorkerRun(ctx); }
-bool msPoolRunEdge(const void* awaited, bool follow) { (void)awaited; (void)follow; return false; }
+bool msPoolRunEdge(const void* awaited, bool follow, bool descend) { (void)awaited; (void)follow; (void)descend; return false; }
 bool msPoolCompensate(const void* awaited, const char* wait) { (void)awaited; (void)wait; return false; }
 void msPoolCompensateEnd(void) {}
+const msTaskFrame* msPoolFrameSwap(const msTaskFrame* frame) { (void)frame; return NULL; }
 void msFutureEdgeAll(void* result, void* const* inputs, int32_t count) { (void)result; (void)inputs; (void)count; }
 void msFutureEdgeSettle(void* result, int32_t index) { (void)result; (void)index; }
 void msFutureEdgeAwait(void* retFut, void* awaited) { (void)retFut; (void)awaited; }
@@ -200,10 +201,25 @@ static void msAfterThreadRuns(void) {
     msThreadDestructionCap = 0;
 }
 
+static _Thread_local const msTaskFrame* msPoolFrame = NULL;
+
+const msTaskFrame* msPoolFrameSwap(const msTaskFrame* frame) {
+	const msTaskFrame* outer = msPoolFrame;
+	msPoolFrame = frame;
+	return outer;
+}
+
 /* Decrement only after the run: the run posts the task's completion, which the exit
  * drain must be able to see once the count it reads reaches 0. */
 static void msPoolRunQueued(struct msSpawnCtx* task) {
+	msTaskFrame frame = {
+		task->fut != NULL ? task->fut : task->slotGroup != NULL ? task->slotGroup : (const void*)task->group,
+		task->parent,
+	};
+	const msTaskFrame* outer = msPoolFrame;
+	msPoolFrame = &frame;
 	msSpawnWorkerRun(task);
+	msPoolFrame = outer;
 	atomic_fetch_sub_explicit(&msPoolPendingCount, 1, memory_order_release);
 }
 
@@ -470,6 +486,9 @@ void msPoolSubmit(struct msSpawnCtx* ctx) {
 
 	/* Enqueue — copy struct into slot (Malebolgia: zero alloc, no pointer) */
 	pool->queue[pool->tail] = *ctx;
+	/* A held or isolated spawn's future may outlive the task that made it: only a slot
+	 * or a group is joined by its parent. */
+	pool->queue[pool->tail].parent = ctx->slotGroup != NULL || ctx->group != NULL ? msPoolFrame : NULL;
 	pool->tail = (pool->tail + 1) % pool->cap;
 	atomic_fetch_add_explicit(&msPoolPendingCount, 1, memory_order_relaxed);
 	/* Signal one IDLE worker (find via bitmask — guaranteed to be sleeping) */
@@ -551,15 +570,22 @@ static int msEdgeCollect(const void** set) {
 	return n;
 }
 
-static inline bool msPoolTaskIn(const struct msSpawnCtx* task, const void** set, int n) {
+#define MS_FRAME_WALK_MAX 16
+
+static inline bool msPoolTaskIn(const struct msSpawnCtx* task, const void** set, int n, bool descend) {
 	for (int i = 0; i < n; i++) {
 		const void* a = set[i];
 		if (task->fut == a || (const void*)task->group == a || task->slotGroup == a) return true;
+		if (!descend) continue;
+		const msTaskFrame* f = task->parent;
+		for (int d = 0; f != NULL && d < MS_FRAME_WALK_MAX; d++, f = f->parent) {
+			if (f->target == a) return true;
+		}
 	}
 	return false;
 }
 
-bool msPoolRunEdge(const void* awaited, bool follow) {
+bool msPoolRunEdge(const void* awaited, bool follow, bool descend) {
 	msThreadPool* pool = msPoolGet();
 	const void* set[MS_EDGE_WALK_MAX];
 	set[0] = awaited;
@@ -576,7 +602,7 @@ bool msPoolRunEdge(const void* awaited, bool follow) {
 	for (int i = pool->tail; i != pool->head && !found; ) {
 		i = (i - 1 + pool->cap) % pool->cap;
 		struct msSpawnCtx* queued = &pool->queue[i];
-		if (queued->claimed || !msPoolTaskIn(queued, set, n)) continue;
+		if (queued->claimed || !msPoolTaskIn(queued, set, n, descend)) continue;
 		task = *queued;
 		queued->claimed = true;
 		msPoolSkipClaimed(pool);

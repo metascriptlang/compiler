@@ -63,11 +63,23 @@ void msPoolShutdown(void);
  * as it exits, last registered first. */
 void msOnThreadDestruction(void (*handler)(void));
 
+/* A queued task's running ancestor that joins it: a task running on some thread,
+ * kept on that thread's stack until it returns, so after its joined descendants. */
+typedef struct msTaskFrame {
+	const void* target;                 /* the future, slot or group the task completes */
+	const struct msTaskFrame* parent;   /* the running task that joins this one, or NULL */
+} msTaskFrame;
+
 /* A blocked waiter runs one queued task its awaited target depends on and returns
  * true, or returns false when none is queued. `awaited` is a future, an
  * msAwaitGroup or an msAwaitSlot; with `follow`, a future's wait edges are followed
- * (Promise.all / allSettled inputs, the future an async function is suspended on). */
-bool msPoolRunEdge(const void* awaited, bool follow);
+ * (Promise.all / allSettled inputs, the future an async function is suspended on);
+ * with `descend`, a queued task a running task of the closure joins counts too. */
+bool msPoolRunEdge(const void* awaited, bool follow, bool descend);
+
+/* Sets the running task of this thread and returns the previous one. A callback runs
+ * under NULL: what it spawns has no joining ancestor. */
+const msTaskFrame* msPoolFrameSwap(const msTaskFrame* frame);
 
 /* Called where a waiter on the future `awaited` would park. When its closure holds a
  * leaf no spawn completes, tasks stay queued, no worker is idle and fewer than

@@ -653,6 +653,7 @@ bool msWorkerLoopPending(void) {
 
 bool msWorkerLoopPump(void) {
     if (tlWorkerChannel == NULL) return false;
+    const msTaskFrame* frame = msPoolFrameSwap(NULL);
     char buf[64];
     while (read(tlWorkerChannel->wake[0], buf, sizeof(buf)) > 0) {}
     bool didWork = msChannelDrain(tlWorkerChannel);
@@ -660,6 +661,7 @@ bool msWorkerLoopPump(void) {
     if (gDispatcher != NULL) msProcessCallbacks(gDispatcher, &didWork);
     msFutureReleaseFlush();
     msSettleWorkerWork();
+    msPoolFrameSwap(frame);
     return didWork;
 }
 
@@ -869,7 +871,16 @@ int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs) {
 }
 
 /* Standard reference runOnce pattern */
+static bool msRunOnceIn(int timeoutMs);
+
 bool msRunOnce(int timeoutMs) {
+	const msTaskFrame* frame = msPoolFrameSwap(NULL);
+	bool didWork = msRunOnceIn(timeoutMs);
+	msPoolFrameSwap(frame);
+	return didWork;
+}
+
+static bool msRunOnceIn(int timeoutMs) {
 	msDispatcher* d = msGetDispatcher();
 	bool didWork = false;
 
@@ -1019,7 +1030,7 @@ void* msWaitFor(void* fp) {
 	bool spare = false;
 	bool queued = true;
 	while (!atomic_load_explicit(&fut->finished, memory_order_acquire)) {
-		if (queued && msPoolRunEdge(fp, true)) continue;
+		if (queued && msPoolRunEdge(fp, true, true)) continue;
 		queued = msFutureHasEdge(fut);
 		if (!worker) {
 			if (!spare) spare = msPoolCompensate(fp, "an await of a promise");
@@ -1045,7 +1056,7 @@ void msWaitForReady(void* fp) {
 	bool spare = false;
 	bool queued = true;
 	while (!atomic_load_explicit(&fut->finished, memory_order_acquire)) {
-		if (queued && msPoolRunEdge(fp, true)) { spins = 0; helped = true; continue; }
+		if (queued && msPoolRunEdge(fp, true, true)) { spins = 0; helped = true; continue; }
 		queued = msFutureHasEdge(fut);
 		if (!worker) {
 			if (!spare) spare = msPoolCompensate(fp, "an await of a promise");
@@ -1206,8 +1217,17 @@ void msClearInterval(double id) { msCancelTimer((int64_t)id); }
 
 /* ===== Async Stepper Callback (createCb pattern) ===== */
 
+static void msAsyncStep(msAsyncCbEnv* e);
+
+/* A step that suspends returns while the tasks it submitted are still queued, so no
+ * frame of the thread it runs on joins them: they are submitted with no ancestor. */
 void msAsyncCb(void* raw) {
-	msAsyncCbEnv* e = (msAsyncCbEnv*)raw;
+	const msTaskFrame* frame = msPoolFrameSwap(NULL);
+	msAsyncStep((msAsyncCbEnv*)raw);
+	msPoolFrameSwap(frame);
+}
+
+static void msAsyncStep(msAsyncCbEnv* e) {
 	msFutureEdgeAwait(e->retFut, NULL);
 
 	/* Call stepper — returns next msFutureBase* to wait on, or NULL when done.
@@ -1256,7 +1276,7 @@ void msAsyncCb(void* raw) {
 	/* Not resolved — register ourselves as callback on the yielded future,
 	 * then drop our +1 ref (env field keeps the future alive while suspended). */
 	msFutureEdgeAwait(e->retFut, next);
-	msFutureAddCallback(next, (msClosure){ .fn = (msClosureFn)msAsyncCb, .env = raw });
+	msFutureAddCallback(next, (msClosure){ .fn = (msClosureFn)msAsyncCb, .env = e });
 	msFutureDrcDestroy(next);
 }
 

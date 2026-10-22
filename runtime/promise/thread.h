@@ -62,6 +62,7 @@ typedef struct msSpawnCtx {
 	                               alignment but msFutureBase is 20 bytes → 4 bytes padding). */
 	void* ownerQueue;           /* the submitting loop's completion queue: the env release runs there */
 	bool claimed;               /* queue slot only, under the pool lock: a waiter took it to run */
+	const struct msTaskFrame* parent;  /* queue slot only: the running task that joins this one, or NULL */
 } msSpawnCtx;
 
 

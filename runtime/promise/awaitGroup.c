@@ -204,7 +204,7 @@ void msAwaitGroupBlocking(msAwaitGroup* g) {
 	bool queued = true;  /* every task is submitted before the wait: once none is queued, none will be */
 	if (!worker) {
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-			if (queued && msPoolRunEdge(g, false)) continue;
+			if (queued && msPoolRunEdge(g, false, true)) continue;
 			queued = false;
 			/* Same 5ms active-wait cadence as msWaitFor (MS_ACTIVE_WAIT_MS) -
 			 * bounded slice so the deadline variant re-checks on time. */
@@ -218,7 +218,7 @@ void msAwaitGroupBlocking(msAwaitGroup* g) {
 		EnterCriticalSection(&g->cs);
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
 			LeaveCriticalSection(&g->cs);
-			if (queued && msPoolRunEdge(g, false)) {
+			if (queued && msPoolRunEdge(g, false, true)) {
 				EnterCriticalSection(&g->cs);
 				continue;
 			}
@@ -233,7 +233,7 @@ void msAwaitGroupBlocking(msAwaitGroup* g) {
 		pthread_mutex_lock(&g->mutex);
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
 			pthread_mutex_unlock(&g->mutex);
-			if (queued && msPoolRunEdge(g, false)) {
+			if (queued && msPoolRunEdge(g, false, true)) {
 				pthread_mutex_lock(&g->mutex);
 				continue;
 			}
@@ -277,7 +277,7 @@ void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 			 * deadline returned its value instead of throwing whenever help
 			 * won the race and ran the child itself. */
 			if (msAwaitGroupExpired(g, deadlineMs)) break;
-			if (queued && msPoolRunEdge(g, false)) {
+			if (queued && msPoolRunEdge(g, false, false)) {
 				if (msAwaitGroupExpired(g, deadlineMs)) break;
 				continue;
 			}
@@ -294,7 +294,7 @@ void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
 			if (msAwaitGroupExpired(g, deadlineMs)) break;
 			LeaveCriticalSection(&g->cs);
-			if (queued && msPoolRunEdge(g, false)) {
+			if (queued && msPoolRunEdge(g, false, false)) {
 				EnterCriticalSection(&g->cs);
 				if (msAwaitGroupExpired(g, deadlineMs)) break;
 				continue;
@@ -312,7 +312,7 @@ void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
 			if (msAwaitGroupExpired(g, deadlineMs)) break;
 			pthread_mutex_unlock(&g->mutex);
-			if (queued && msPoolRunEdge(g, false)) {
+			if (queued && msPoolRunEdge(g, false, false)) {
 				pthread_mutex_lock(&g->mutex);
 				if (msAwaitGroupExpired(g, deadlineMs)) break;
 				continue;

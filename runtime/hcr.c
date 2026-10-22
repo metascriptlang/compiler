@@ -713,7 +713,12 @@ static void msHcrGuardInvoke(MsHcrGuardCall* call) {
 	else call->status = ((int32_t (*)(void))call->fn)();
 }
 
+struct msTaskFrame;
+const struct msTaskFrame* msPoolFrameSwap(const struct msTaskFrame* frame);
+
 static int32_t msHcrGuarded(MsHcrGuardCall* call) {
+	/* A fault unwinds past the task frames the call pushed: restore the thread's own. */
+	const struct msTaskFrame* volatile frame = msPoolFrameSwap(NULL);
 	MsHcrGuard guard;
 	guard.kind = MS_HCR_GUARD_OK;
 	guard.code = 0;
@@ -734,12 +739,14 @@ static int32_t msHcrGuarded(MsHcrGuardCall* call) {
 		msHcrGuardInvoke(call);
 		msHcrGuardActive = outer;
 		msHcrGuardOwner = outerOwner;
+		msPoolFrameSwap(frame);
 		if (!msErr) return MS_HCR_GUARD_OK;
 		if (call->keepThrow) return MS_HCR_GUARD_THREW;
 		guard.kind = MS_HCR_GUARD_THREW;
 	}
 	msHcrGuardActive = outer;
 	msHcrGuardOwner = outerOwner;
+	msPoolFrameSwap(frame);
 	const int kind = guard.kind;
 	const unsigned long code = guard.code;
 	const uintptr_t address = guard.address;

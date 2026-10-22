@@ -65,16 +65,24 @@
   static inline void msFutexWakeAll(int* addr) {
     __ulock_wake(MS_ULOCK_CMP_WAIT | MS_ULOCK_WAKE_ALL, (void*)addr, 0);
   }
+  static inline void msFutexWaitUs(int* addr, int expected, uint32_t us) {
+    __ulock_wait(MS_ULOCK_CMP_WAIT, (void*)addr, (uint32_t)expected, us);
+  }
 #elif defined(__linux__)
   #include <limits.h>
   #include <unistd.h>
   #include <sys/syscall.h>
   #include <linux/futex.h>
+  #include <time.h>
   static inline void msFutexWait(int* addr, int expected) {
     syscall(SYS_futex, addr, FUTEX_WAIT_PRIVATE, expected, (void*)0, (void*)0, 0);
   }
   static inline void msFutexWakeAll(int* addr) {
     syscall(SYS_futex, addr, FUTEX_WAKE_PRIVATE, INT_MAX, (void*)0, (void*)0, 0);
+  }
+  static inline void msFutexWaitUs(int* addr, int expected, uint32_t us) {
+    struct timespec ts = { (time_t)(us / 1000000u), (long)(us % 1000000u) * 1000L };
+    syscall(SYS_futex, addr, FUTEX_WAIT_PRIVATE, expected, &ts, (void*)0, 0);
   }
 #elif defined(_WIN32)
   /* WaitOnAddress/WakeByAddressAll (Amendment E Tier 1's Windows arm) live in
@@ -125,9 +133,16 @@
   static inline void msFutexWakeAll(int* addr) {
     if (msWakeByAddressAllP != NULL) msWakeByAddressAllP((void*)addr);
   }
+  static inline void msFutexWaitUs(int* addr, int expected, uint32_t us) {
+    msFutexResolve();
+    int cmp = expected;
+    if (msWaitOnAddressP != NULL) msWaitOnAddressP((volatile void*)addr, &cmp, sizeof(int), (DWORD)((us + 999u) / 1000u));
+    else msCpuRelax();
+  }
 #else
   static inline void msFutexWait(int* addr, int expected) { (void)addr; (void)expected; msCpuRelax(); }
   static inline void msFutexWakeAll(int* addr) { (void)addr; }
+  static inline void msFutexWaitUs(int* addr, int expected, uint32_t us) { (void)addr; (void)expected; (void)us; msCpuRelax(); }
 #endif
 
 /* ===== Ticket lock =====
