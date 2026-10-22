@@ -407,20 +407,20 @@ export function fill(this buf: Buffer, value: number, start: number, end: number
 
 // --- Single-byte search (by value, not by string needle) ---
 
-// Out of line so the `number` conversion stays in the caller: inlined, clang held -1.0 in a
-// callee-saved float register across memchr, measured 2-3x slower than C on short buffers.
-@noinline function byteIndex(buf: Buffer, value: number, byteOffset: number): int64 {
-	const length = byteCount(buf);
+// A miss returns through memchr's null, never an early `return -1`: sharing that constant with the
+// one after the call, clang held -1.0 in a callee-saved float register across memchr, measured
+// 2-3x slower than C on short buffers.
+function byteSearchIndex(buf: Buffer, value: number, byteOffset: number): int64 {
 	const offset = byteOffset as int64;
 	const start = offset < 0 ? 0 : offset;
-	if (start >= length) return -1;
+	const length = byteCount(buf);
 	const bytes = bytesOf(buf);
-	const found = cMemchr(bytes + start, ((value as int64) as uint8) as int32, (length - start) as uint64);
+	const found = start < length ? cMemchr(bytes + start, ((value as int64) as uint8) as int32, (length - start) as uint64) : null;
 	return found == null ? -1 : (found as Ptr<uint8>) - bytes;
 }
 
 export function indexOf(this buf: Buffer, value: number, byteOffset: number): number {
-	return byteIndex(buf, value, byteOffset) as number;
+	return byteSearchIndex(buf, value, byteOffset) as number;
 }
 
 export function lastIndexOf(this buf: Buffer, value: number, byteOffset: number): number {
@@ -434,7 +434,7 @@ export function lastIndexOf(this buf: Buffer, value: number, byteOffset: number)
 }
 
 export function includes(this buf: Buffer, value: number, byteOffset: number): boolean {
-	return byteIndex(buf, value, byteOffset) != -1;
+	return byteSearchIndex(buf, value, byteOffset) != -1;
 }
 
 // --- Buffer-in-buffer search ---
