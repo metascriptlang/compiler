@@ -1487,7 +1487,7 @@ function walk(u: BorrowUnit, node: Node | null): void {
 			if (u.pass == 2 && isSpawnCall(node) && d.arguments.length > 0) u.thunks.push(thunkOf(d.arguments[0]));
 			for (const a of d.arguments) { walk(u, a); }
 			if (u.pass == 1 && isSpawnCall(node) && d.arguments.length > 0) openLend(u, node, d.arguments[0]);
-			if (u.pass == 2) callEffects(u, node);
+			if (u.pass == 2 && !isSpawnCall(node)) callEffects(u, node);
 		},
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
