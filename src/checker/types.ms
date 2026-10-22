@@ -2683,11 +2683,9 @@ export function enumStorageKind(t: Readonly<Type>): TypeKind {
 	return TypeKind.Int32;
 }
 
-function enumStorageOf(t: Type): Type;
-function enumStorageOf(t: Readonly<Type>): Readonly<Type>;
-function enumStorageOf(t: Readonly<Type>): Readonly<Type> {
+function enumStorageOf(t: Readonly<Type>): TypeKind {
 	const e = t.kind == TypeKind.EnumLiteral && t.typeReturn != null ? t.typeReturn : t;
-	return createPrimitive(e.kind == TypeKind.Enum ? enumStorageKind(e) : TypeKind.Int32);
+	return e.kind == TypeKind.Enum ? enumStorageKind(e) : TypeKind.Int32;
 }
 
 export function createEnumLiteral(enumType: Type, memberName: string): Type {
@@ -5452,9 +5450,8 @@ function alignOfTypeInner(tg: TargetInfo, t: Readonly<Type>, depth: int32): int3
 	if (t.kind == TypeKind.Varargs && t.typeChildren.length > 0) {
 		return alignOfTypeAt(tg, t.typeChildren[0], depth);
 	}
-	if (t.kind == TypeKind.Enum || t.kind == TypeKind.EnumLiteral) return alignOfTypeAt(tg, enumStorageOf(t), depth);
 	if (t.kind == TypeKind.NumberLiteral) return alignOfTypeAt(tg, numberLiteralBase(t), depth);
-	return match (t.kind) {
+	return match (t.kind == TypeKind.Enum || t.kind == TypeKind.EnumLiteral ? enumStorageOf(t) : t.kind) {
 		TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
 		TypeKind.Int16 | TypeKind.Uint16 => 2,
 		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 => 4,
@@ -5524,9 +5521,8 @@ function sizeOfTypeInner(tg: TargetInfo, t: Readonly<Type>, depth: int32): int32
 	if (t.kind == TypeKind.Varargs && t.typeChildren.length > 0) {
 		return sizeOfTypeAt(tg, t.typeChildren[0], depth);
 	}
-	if (t.kind == TypeKind.Enum || t.kind == TypeKind.EnumLiteral) return sizeOfTypeAt(tg, enumStorageOf(t), depth);
 	if (t.kind == TypeKind.NumberLiteral) return sizeOfTypeAt(tg, numberLiteralBase(t), depth);
-	return match (t.kind) {
+	return match (t.kind == TypeKind.Enum || t.kind == TypeKind.EnumLiteral ? enumStorageOf(t) : t.kind) {
 		TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
 		TypeKind.Int16 | TypeKind.Uint16 => 2,
 		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 => 4,
