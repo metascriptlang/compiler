@@ -165,9 +165,7 @@ export function hasLiftedOp(t: Type, op: AttachedOp): boolean {
 	return sym != null && sym.state == SymbolState.Checked;
 }
 
-export function getOpByKey(t: Type, op: AttachedOp): Symbol | null;
-export function getOpByKey(t: Readonly<Type>, op: AttachedOp): Readonly<Symbol | null>;
-export function getOpByKey(t: Readonly<Type>, op: AttachedOp): Readonly<Symbol | null> {
+export function getOpByKey(t: Readonly<Type>, op: AttachedOp): Symbol | null {
 	return _opSyms.get(opKey(t, op));
 }
 
@@ -1093,12 +1091,11 @@ function typeInfoPointer(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 }
 
 function demandedTypeInfo(g: CGen, key: string, what: string): Readonly<CTypeInfoDemand> | null {
-	const info = g.emissionFacts.typeInfos.readonlyGet(key);
-	if (info == null) {
+	if (!g.emissionFacts.typeInfos.has(key)) {
 		addCGenError(g, `internal: ${what} TypeInfo ${key} demanded in ${g.modulePath} without a reachability edge`, 0, 0);
 		return null;
 	}
-	return info;
+	return g.emissionFacts.typeInfos.readonlyGet(key);
 }
 
 export function typeInfoRef(g: CGen, type: Readonly<Type | null>): string {
@@ -1126,9 +1123,7 @@ export function refArrayCellKey(arrT: Readonly<Type>): string {
 	return refArrayCellKeyIn(buildModuleNameRoots(), arrT);
 }
 
-export function refArrayCellOp(arrT: Type, op: AttachedOp): Symbol | null;
-export function refArrayCellOp(arrT: Readonly<Type>, op: AttachedOp): Readonly<Symbol | null>;
-export function refArrayCellOp(arrT: Readonly<Type>, op: AttachedOp): Readonly<Symbol | null> {
+export function refArrayCellOp(arrT: Readonly<Type>, op: AttachedOp): Symbol | null {
 	return _opSyms.get(attachedOpName(op) + "|" + refArrayCellKey(arrT));
 }
 
