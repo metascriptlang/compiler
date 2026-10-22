@@ -113,7 +113,13 @@ export function assignType(target: Type, source: Type): void {
 
 // ===== Constructors =====
 
+let _queryCachesReadOnly = false;
+function refuseTypeDuringEmission(): void {
+	if (_queryCachesReadOnly) throw new Error(`internal: a type is created during emission, which reads only the types the checker built`);
+}
+
 export function emptyType(): Type {
+	refuseTypeDuringEmission();
 	return {
 		kind: TypeKind.None,
 		typeName: "",
@@ -175,6 +181,7 @@ export function anonStructName(fieldNames: string[], fieldTypes: Type[]): string
 }
 
 export function createArray(element: Type | null): Type {
+	refuseTypeDuringEmission();
 	return {
 		kind: TypeKind.Array, typeName: "", typeNames: [], typeChildren: [],
 		typeReturn: element, typeExtra: null, typeFlags: (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn),
@@ -186,6 +193,7 @@ export function createArray(element: Type | null): Type {
 // type. Used only on Function.typeChildren[last] when the corresponding param
 // is rest. Transparent to most type code via unwrapVarargs / isVarargs.
 export function createVarargs(arrayType: Type): Type {
+	refuseTypeDuringEmission();
 	return {
 		kind: TypeKind.Varargs, typeName: "", typeNames: [], typeChildren: [arrayType],
 		typeReturn: null, typeExtra: null, typeFlags: (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn),
@@ -223,6 +231,7 @@ export function createSpan(element: Type): Type {
 }
 
 export function createFunction(paramTypes: Type[], paramNames: string[], returnType: Type | null): Type {
+	refuseTypeDuringEmission();
 	// Clone caller's arrays — Function type owns its typeNames/typeChildren and
 	// must not share mutable references with FunctionDeclData.params. Without
 	// this, FunctionDecl traversal that strips a "..." prefix would silently
@@ -987,7 +996,6 @@ export function detectUnionDiscriminant(unionType: Type | null, fieldName: strin
 // after `peelToStructOrUnion`. Without that gate, calling on `T | null`
 // (nullable) patterns would erroneously match the Ref variant's fields.
 let _fvbCount: float64 = 0;
-let _queryCachesReadOnly = false;
 export function setConcurrentTypeQueries(enabled: boolean): void {
 	_queryCachesReadOnly = enabled;
 }
@@ -2244,6 +2252,7 @@ export function genericParamNamesOf(params: string): string {
 }
 
 export function createGenericInstance(baseType: Type, typeArgs: Type[]): Type {
+	refuseTypeDuringEmission();
 	const innerBase = unwrapRefBase(baseType);
 	return {
 		kind: TypeKind.GenericInstance,

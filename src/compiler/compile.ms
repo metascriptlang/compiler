@@ -3061,26 +3061,31 @@ resetLiftedOps();
 	for (const oFile of rtObjs) oFiles.push(oFile);
 
 	// Phase C: Codegen + compile each module
-	setConcurrentTypeQueries(true);
 	const emissionFacts = new CEmissionFacts();
 	const aliveKey = session.keep ? aliveSetFingerprint(aliveSet) : "";
-	for (const p of processed) {
-		if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
-		const prepared = session.keep ? session.prepareMemos.get(p.modPath) : null;
-		if (prepared != null && prepared.program == p.program && prepared.alive == aliveKey && prepared.before == emissionFacts.trace) {
-			replayCModuleEmission(aliveSet, emissionFacts, prepared.writes);
-		} else {
-			const before = emissionFacts.trace;
-			emissionFacts.writes = [];
-			prepareCModuleEmission(p.program, p.ctx, p.modPath, aliveSet, emissionFacts);
-			const recorded = emissionFacts.writes;
-			const writes: string[] = recorded != null ? recorded : [];
-			emissionFacts.writes = null;
-			if (session.keep) session.prepareMemos.set(p.modPath, { program: p.program, alive: aliveKey, before, writes });
+	setConcurrentTypeQueries(true);
+	try {
+		for (const p of processed) {
+			if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
+			const prepared = session.keep ? session.prepareMemos.get(p.modPath) : null;
+			if (prepared != null && prepared.program == p.program && prepared.alive == aliveKey && prepared.before == emissionFacts.trace) {
+				replayCModuleEmission(aliveSet, emissionFacts, prepared.writes);
+			} else {
+				const before = emissionFacts.trace;
+				emissionFacts.writes = [];
+				prepareCModuleEmission(p.program, p.ctx, p.modPath, aliveSet, emissionFacts);
+				const recorded = emissionFacts.writes;
+				const writes: string[] = recorded != null ? recorded : [];
+				emissionFacts.writes = null;
+				if (session.keep) session.prepareMemos.set(p.modPath, { program: p.program, alive: aliveKey, before, writes });
+			}
+			if (opts.isHcr && !hcrModulePaths.includes(p.modPath)) factCoreUnit(emissionFacts, p.modPath);
 		}
-		if (opts.isHcr && !hcrModulePaths.includes(p.modPath)) factCoreUnit(emissionFacts, p.modPath);
+		if (opts.isHcr) bindHcrUnits(hcrModules, processed, aliveSet, emissionFacts, gcModeOf(opts.gcMode) == GcMode.Drc);
+	} catch (e) {
+		setConcurrentTypeQueries(false);
+		throw e;
 	}
-	if (opts.isHcr) bindHcrUnits(hcrModules, processed, aliveSet, emissionFacts, gcModeOf(opts.gcMode) == GcMode.Drc);
 	const emissionJobs: ModuleEmissionJob[] = [];
 	for (const p of processed) {
 		if (!aliveSetHasModule(aliveSet, p.modPath)) continue;
@@ -3104,8 +3109,12 @@ resetLiftedOps();
 		freshSlots.push(freshJobs.length as int32);
 		freshJobs.push({ slot: freshJobs.length as int32, program: job.program, ctx: job.ctx, modPath: job.modPath, weight: job.weight });
 	}
-	const freshResults = emitModulesBounded(freshJobs, aliveSet, emissionFacts, emitWidth, false, opts.isHcr ? entryPath : "");
-	setConcurrentTypeQueries(false);
+	let freshResults: ModuleEmissionResult[] = [];
+	try {
+		freshResults = emitModulesBounded(freshJobs, aliveSet, emissionFacts, emitWidth, false, opts.isHcr ? entryPath : "");
+	} finally {
+		setConcurrentTypeQueries(false);
+	}
 	const emissionResults: ModuleEmissionResult[] = [];
 	for (let ei = 0; ei < emissionJobs.length; ei += 1) {
 		const job = emissionJobs[ei];
@@ -3628,16 +3637,20 @@ resetLiftedOps();
 	for (const oFile of rtObjs) oFiles.push(oFile);
 
 	// Phase C: Codegen + compile each module (per-module .c cache)
-	setConcurrentTypeQueries(true);
 	const emissionFacts = new CEmissionFacts();
-	for (const p of processed) {
-		prepareCModuleEmission(p.program, p.ctx, p.modPath, aliveSet, emissionFacts);
-	}
 	const emissionJobs: ModuleEmissionJob[] = [];
 	for (const p of processed) emissionJobs.push({ slot: emissionJobs.length, program: p.program, ctx: p.ctx, modPath: p.modPath, weight: p.program.location.endLine });
 	const emitWidth: int32 = opts.emitJobs < 1 ? emissionJobs.length : opts.emitJobs;
-	const emissionResults = emitModulesBounded(emissionJobs, aliveSet, emissionFacts, emitWidth, true, opts.isHcr ? filePath : "");
-	setConcurrentTypeQueries(false);
+	let emissionResults: ModuleEmissionResult[] = [];
+	setConcurrentTypeQueries(true);
+	try {
+		for (const p of processed) {
+			prepareCModuleEmission(p.program, p.ctx, p.modPath, aliveSet, emissionFacts);
+		}
+		emissionResults = emitModulesBounded(emissionJobs, aliveSet, emissionFacts, emitWidth, true, opts.isHcr ? filePath : "");
+	} finally {
+		setConcurrentTypeQueries(false);
+	}
 	if (opts.showTime) console.log(`    emit workers=${emitWidth} overlap=${emissionOverlapped(emissionResults)}`);
 	let emissionFailed = false;
 	for (let eri = 0; eri < emissionResults.length; eri += 1) {
