@@ -4327,6 +4327,12 @@ export function substituteBound(t: Type | null, b: UnifyBindings): Type {
 	return substituteParams(t, b.params, b.types);
 }
 
+// Reference: the substitution cache of a recursive instantiation; a generic instance whose
+// body is being substituted maps to the copy under construction, so a field that links back
+// to it reaches the substituted instance instead of the one that still names the parameter.
+const _substitutingFrom: Type[] = [];
+const _substitutingTo: Type[] = [];
+
 function substituteAllParamsInner(t: Type | null, params: Type[], concretes: Type[], seen: Cursor<Type>[]): Type {
 	if (t == null) return inferredType();
 	if (t.kind == TypeKind.GenericParam) {
@@ -4334,7 +4340,10 @@ function substituteAllParamsInner(t: Type | null, params: Type[], concretes: Typ
 		if (slot < 0) return t;
 		return isReadonlyView(t) ? createReadonlyView(concretes[slot]) : concretes[slot];
 	}
-	if (typeVisitHas(seen, t)) return t;
+	if (typeVisitHas(seen, t)) {
+		const at = _substitutingFrom.lastIndexOf(t);
+		return at >= 0 ? _substitutingTo[at] : t;
+	}
 	seen.push(t);
 	const result = substituteAllParamsWalk(t, params, concretes, seen);
 	seen.pop();
@@ -4382,8 +4391,13 @@ function substituteAllParamsWalk(t: Type, params: Type[], concretes: Type[], act
 				if (building != null) return building;
 				if (gi.typeReturn != null && typeVisitHas(active, gi.typeReturn)) {
 					gi.typeReturn = null as unknown as Type;
+					instantiateGenericBody(gi, genericParamsOf(gi));
 				} else if (gi.typeReturn != null) {
+					_substitutingFrom.push(t);
+					_substitutingTo.push(gi);
 					gi.typeReturn = substituteAllParamsInner(gi.typeReturn, params, concretes, active);
+					_substitutingFrom.pop();
+					_substitutingTo.pop();
 					nameInstanceBody(gi, t);
 				}
 				return gi;
