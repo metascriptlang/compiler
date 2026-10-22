@@ -1309,11 +1309,12 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	// alternative traversal ... or to avoid deep recursions"). This is load-bearing:
 	// the default destroy recurses per field, so a deep/self-referential structure
 	// overflows the stack (see resolvePass owning-self-referential-field warning) —
-	// a user hook lets the author traverse iteratively instead. A class's onDestroy
-	// still has its fields released after it, so such a hook detaches what it walked.
+	// a user hook lets the author traverse iteratively instead. An onDestroy, of a
+	// struct or a class, still has its fields released after it, so such a hook
+	// detaches what it walked.
 	const hookSym = getUserDefinedHookSym(subject, attachedOpOf(hook), lctx);
-	const releasesAfterHook = hookSym != null && hook == "destroy" && classType != null;
-	const held = releasesAfterHook ? heldCount(s1, lctx, buf, loc) : null;
+	const releasesAfterHook = hookSym != null && hook == "destroy";
+	const held = releasesAfterHook && classType != null ? heldCount(s1, lctx, buf, loc) : null;
 	const outerDropOwner = lctx.dropOwner;
 	lctx.dropOwner = hook == "destroy" && hookSym == null && classType != null && !lctx.jsBackend ? s1 : null;
 	if (hookSym != null) {
