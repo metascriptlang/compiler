@@ -13,7 +13,7 @@ import {
 import { RaiserOpcode, RaiserRegClass, raiserABC, raiserAx } from "../../raiser/bytecode";
 import { raiserNil, raiserInt, raiserConstString } from "../../raiser/value";
 import {
-	RaiserCompState, emitInst, allocReg, allocBlock, allocWord, allocRef, allocDyn, classOfReg, emitLoadConst, emitRet,
+	RaiserCompState, emitInst, allocReg, allocBlock, allocWord, allocRef, allocDyn, classOfReg, emitLoadConst, emitRet, emitReturnNothing,
 	declareLocal, declaredSymbol, regIsFixedLocal,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	emitAbxPlaceholder, patchAbxTo,
@@ -33,12 +33,8 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 			if (d.argument != null) {
 				const reg = emitValueCopy(s, compileExpr(s, d.argument), d.argument.nodeType);
 				emitRet(s, reg);
-			} else if (s.receiverReg >= 0) {
-				emitRet(s, s.receiverReg);
 			} else {
-				const reg = allocRef(s);
-				emitLoadConst(s, reg, raiserNil());
-				emitRet(s, reg);
+				emitReturnNothing(s);
 			}
 		},
 		NodeKind.ExprStmt => {

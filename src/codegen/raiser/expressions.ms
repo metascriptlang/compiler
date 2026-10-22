@@ -1789,7 +1789,7 @@ function compileSuperCall(s: RaiserCompState, node: Node, superSym: Symbol): int
 		queueRaiserCompileError(msg, node.location.line, node.location.column);
 		return emitTrapNil(s, msg);
 	}
-	const superClasses: RaiserRegClass[] = [regClassOf(s, node.nodeType), RaiserRegClass.Ref];
+	const superClasses: RaiserRegClass[] = [RaiserRegClass.Ref, RaiserRegClass.Ref];
 	for (const a of d.arguments) superClasses.push(regClassOf(s, a.nodeType));
 	const dest = allocBlock(s, superClasses);
 	emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1, thisReg, 0));

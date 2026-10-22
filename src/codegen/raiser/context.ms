@@ -746,7 +746,16 @@ function endIsUnreachable(s: RaiserCompState): boolean {
 
 export function emitImplicitReturn(s: RaiserCompState): void {
 	if (endIsUnreachable(s)) return;
-	const nilReg = allocRef(s);
+	emitReturnNothing(s);
+}
+
+// A void call's destination is Dyn, and a class initializer's is its receiver's Ref.
+export function emitReturnNothing(s: RaiserCompState): void {
+	if (s.receiverReg >= 0) {
+		emitRet(s, s.receiverReg);
+		return;
+	}
+	const nilReg = allocDyn(s);
 	emitLoadConst(s, nilReg, raiserNil());
 	emitRet(s, nilReg);
 }
