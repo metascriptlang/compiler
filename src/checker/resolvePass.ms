@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { firstPrivateField } from "./visibility";
-import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, MacroDeclData, IdentifierData, MemberExprData, TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState, NumberLiteralData, StringLiteralData, BooleanLiteralData, BigIntLiteralData, noFieldDecorators, SourceLocation, CallingConvention, BinaryExprData, UnaryExprData } from "../ast/node";
 import { peelToStructOrUnion, skipModifier, unwrapRefNullUnion, isUnknownType, isOrdinalEnum, hasGenericParams, UnifyBindings, symGenericParams, builtinGenericParams, declGenericParams, genericParamNamesOf, genericParamsOf, substituteParams, createUnifyBindings, inferredType, errorType, noneType, isUnresolvedType, createReadonlyView, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createBooleanLiteral, createEnumLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createCursor, createRef, createArc, createLocked, createVar, createSink, setMinArity, assignType, isStructType, isNumeric, unwrapRef, propagateToOwner, propagateGenericParam, createConditionalType, setInferParams, evaluateConditionalType, typeDisplayName, emptyType, createTuple, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, enumDiscriminantTypeOf, collectEnumDiscriminantValues, unknownType, createBrandDistinct, nonPrimitiveType, createBitSet, nullableUnionOf, isNullableShape, withoutReadonlyView, isReadonlyView, isMaybeType, isAwaitable, awaitedType, isSysType, createUnionInOrder, nestedViewType, ownedAlternativeOf, findViewType, createOutVar, keyOfType, indexedAccessOf, createKeyOfType, isKeyConstraint, functionSlotOf, getProperty, isPrimitiveKind, isStringLike, unifyType, numberLiteralTypeOf, markDuVariant, bindParam, declaredTypeParams, substituteBound, markDistributive, createIndexedAccessType, createMappedType, evaluateMappedType, mappedRefusal, MappedModifier, mappedIsGeneric, mappedIndexKey, mappedValueAt, peelTransparentInstance } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, isTypeSymbol, SymbolFlag, setFlag, parentClassSymOf } from "./symbol";
 import { refuseAliasCycle } from "./aliasCycle";
@@ -2817,10 +2817,15 @@ export function resolveExtern(ctx: CheckerContext, node: Node): void {
 		const resolved = resolveAnnotation(d.externType, ctx, node.location.line, node.location.column);
 		if (!isUnresolvedType(resolved)) {
 			sym.symbolType = resolved;
-			resolved.sym = sym;
+			if (!declaresValue(d.externKind)) resolved.sym = sym;
 			node.nodeType = resolved;
 		}
 	}
+}
+
+// A variable's annotation names the type it holds, a type declared elsewhere, not a type it owns.
+function declaresValue(kind: ExternKind): boolean {
+	return kind == ExternKind.Const || kind == ExternKind.Var || kind == ExternKind.Let;
 }
 
 function resolveConstructorType(member: Node, sym: Symbol, ctx: CheckerContext): void {
