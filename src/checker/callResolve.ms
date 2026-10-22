@@ -1013,7 +1013,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		// allocation — atomic-rc header + inline ticket lock + typed payload —
 		// so the handle is an atomic Ref like Arc and rides every mechanism Arc
 		// already drives. nativeLower boxes it via msBoxLocked.
-		if (id.name == "Proxy" && checkNewProxy(ctx, node, expected)) return node.nodeType!;
+		if (checkNewProxy(ctx, node, expected)) return node.nodeType!;
 		if (head == "Locked" && d.newArguments.length == 1) {
 			const ltCol = d.newCallee.location.column + id.name.length;
 			const typeArgStr = node.typeArg;

@@ -2366,8 +2366,8 @@ export function isPlainObjectType(t: Type | null): boolean {
 	if (s.kind == TypeKind.Distinct) return isPlainObjectType(s.typeReturn);
 	if (isArrayShaped(s) || s.kind == TypeKind.Tuple) return true;
 	const held = s.kind == TypeKind.Ref && s.typeReturn != null ? s.typeReturn : s;
-	if (held.kind == TypeKind.GenericInstance && (held.typeName == "Proxy" || distinctBody(held) != null)) {
-		return held.typeName != "Proxy" && isPlainObjectType(distinctBody(held));
+	if (held.kind == TypeKind.GenericInstance && distinctBody(held) != null) {
+		return getBuiltinKind(held.typeExtra) != "Proxy" && isPlainObjectType(distinctBody(held));
 	}
 	if (held.kind == TypeKind.Ptr || runtimeClassSym(held) != null) return false;
 	const body = peelToStructOrUnion(held);
