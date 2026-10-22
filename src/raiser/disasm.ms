@@ -40,6 +40,8 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.Jump => "Jump",
 		RaiserOpcode.Call => "Call",
 		RaiserOpcode.CallDirect => "CallDirect",
+		RaiserOpcode.ForLtI64 => "ForLtI64",
+		RaiserOpcode.ForLtI64Imm => "ForLtI64Imm",
 		RaiserOpcode.Ret => "Ret",
 		RaiserOpcode.Halt => "Halt",
 		RaiserOpcode.Print => "Print",
@@ -162,7 +164,7 @@ function isImmCompare(op: RaiserOpcode): boolean {
 
 function isBranchImm(op: RaiserOpcode): boolean {
 	return op == RaiserOpcode.BrEqI64Imm || op == RaiserOpcode.BrNeI64Imm || op == RaiserOpcode.BrLtI64Imm
-		|| op == RaiserOpcode.BrLeI64Imm || op == RaiserOpcode.BrGtI64Imm || op == RaiserOpcode.BrGeI64Imm;
+		|| op == RaiserOpcode.BrLeI64Imm || op == RaiserOpcode.BrGtI64Imm || op == RaiserOpcode.BrGeI64Imm || op == RaiserOpcode.ForLtI64Imm;
 }
 
 function isAxOp(op: RaiserOpcode): boolean {

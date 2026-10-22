@@ -1637,14 +1637,58 @@ function backJumpSpan(f: RaiserFunction): number {
 test "engine: a for loop tests its bound with one compare-and-skip and keeps no old value of i++" {
 	const sum = compiledFunc("function sum(n: int64): int64 { let s: int64 = 0; for (let i: int64 = 0; i < n; i++) { s += i; } return s; } console.log(`${sum(10)}`);", "sum");
 	const text = disasmFunc(sum);
-	assert backJumpSpan(sum) == 4, text;
+	assert backJumpSpan(sum) == 0 && countNamed(sum, "ForLtI64") == 1 && countNamed(sum, "AddI64Imm") == 0, text;
 	assert !text.includes("; true") && !text.includes("; false"), text;
 	const fl = compiledFunc("function sum(n: float64): float64 { let s: float64 = 0.0; for (let i: float64 = 0.0; i < n; i++) { s += i; } return s; } console.log(`${sum(10.0)}`);", "sum");
 	assert backJumpSpan(fl) == 6, disasmFunc(fl);
 	const wh = compiledFunc("function f(n: int64): int64 { let i: int64 = 0; while (i < n) { i++; } return i; } console.log(`${f(3)}`);", "f");
-	assert backJumpSpan(wh) == 3, disasmFunc(wh);
+	assert backJumpSpan(wh) == 0 && countNamed(wh, "ForLtI64") == 1, disasmFunc(wh);
 	const st = compiledFunc("function f(a: string, b: string): int64 { let i: int64 = 0; while (a < b && i < 3) { i++; } return i; } console.log(`${f('a', 'b')}`);", "f");
 	assert !disasmFunc(st).includes("; true"), disasmFunc(st);
+}
+
+test "engine: a counted for loop steps, counts and tests its bound in one instruction at the bottom" {
+	const big = compiledFunc("function f(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 50000000; i = i + 1) { s = s + i; } return s; } console.log(`${f()}`);", "f");
+	assert big.code.length == 7 && opName(big.code[2].op) == "LoadConst" && opName(big.code[3].op) == "BrGeI64" && opName(big.code[5].op) == "ForLtI64", disasmFunc(big);
+	assert branchOffset(big.code[5].c) == -2 && countNamed(big, "Jump") == 0, disasmFunc(big);
+	const imm = compiledFunc("function f(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 10; ++i) { s += i; } return s; } console.log(`${f()}`);", "f");
+	assert countNamed(imm, "ForLtI64Imm") == 1 && countNamed(imm, "Jump") == 0, disasmFunc(imm);
+	const kept = [
+		"function f(): int32 { let s: int32 = 0; for (let i: int32 = 0; i < 10; i++) { s += i; } return s; } console.log(`${f()}`);",
+		"function f(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 10; i += 2) { s += i; } return s; } console.log(`${f()}`);",
+		"function f(): int64 { let s: int64 = 0; for (let i: int64 = 0; i <= 10; i++) { s += i; } return s; } console.log(`${f()}`);",
+		"function f(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 10; s++) { i++; } return s; } console.log(`${f()}`);",
+		"function f(): int64 { let i: int64 = 0; let s: int64 = 0; while (i < 10) { s += 1; if (s % 3 == 0) i++; } return s; } console.log(`${f()}`);",
+		"function f(): int64 { let i: int64 = 0; let s: int64 = 0; while (i < 10) { s += 1; if (i == 3) { i += 2; continue; } i++; } return s; } console.log(`${f()}`);",
+		"function f(): int64 { let i: int64 = 0; let s: int64 = 0; while (i < 10) { try { s += i; } catch (e) { s = 0; } i++; } return s; } console.log(`${f()}`);",
+	];
+	for (const program of kept) {
+		const f = compiledFunc(program, "f");
+		assert countNamed(f, "ForLtI64") + countNamed(f, "ForLtI64Imm") == 0 && backJumpSpan(f) > 0, disasmFunc(f);
+	}
+	const ctx = evalOrcVM("function sum(n: int64): int64 { let s: int64 = 0; for (let i: int64 = 0; i < n; i++) { s += i; } return s; }"
+		+ " function grow(): int64 { let n: int64 = 3; let s: int64 = 0; for (let i: int64 = 0; i < n; i++) { if (i == 1) n = 6; s += i; } return s; }"
+		+ " function skip(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 10; i++) { if (i % 2 == 0) continue; if (i > 7) break; s += i; } return s; }"
+		+ " function nest(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 4; i++) { for (let j: int64 = 0; j < 100000; j++) { if (j > i) break; s += 10 * i + j; } } return s; }"
+		+ " function neg(): int64 { let s: int64 = 0; for (let i: int64 = -5; i < -2; i++) { s += i; } for (let i: int64 = 4; i < 2; i++) { s += 100; } return s; }"
+		+ " function jumpy(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 20; i++) { s += 1; i = i + 4; } return s; }"
+		+ " function partial(): int64 { let i: int64 = 0; let s: int64 = 0; while (i < 10) { s += 1; if (s % 3 == 0) i++; } return s; }"
+		+ " function cont(): int64 { let i: int64 = 0; let s: int64 = 0; while (i < 10) { s += 1; if (i == 3) { i += 2; continue; } i++; } return s; }"
+		+ " console.log(`${sum(0)} ${sum(1)} ${sum(10)} ${grow()} ${skip()} ${nest()} ${neg()} ${jumpy()} ${partial()} ${cont()}`);");
+	assert ctx.error == "" && ctx.output == "0 0 45 15 16 210 -12 4 30 9\n", `${ctx.error} ${ctx.output}`;
+	const over = evalOrcVM("function f(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 10; i++) { s += 1; i = 9223372036854775807; } return s; } console.log(`${f()}`);");
+	assert over.error.indexOf("over- or underflow") >= 0 && over.output == "", over.error;
+	const top = evalOrcVM("let t: int64 = 0; for (let i: int64 = 0; i < 70000; i++) { t += i; } console.log(`${t}`);");
+	assert top.error == "" && top.output == "2449965000\n", `${top.error} ${top.output}`;
+	const program = "function f(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 100; i++) { s += 1; } return s; } console.log(`${f()}`);";
+	const fits = createVM(compileForOrc(program), "orc");
+	fits.loopLimit = 100;
+	execLoop(fits);
+	assert fits.error == "" && fits.output == "100\n", `${fits.error} ${fits.output}`;
+	const short = createVM(compileForOrc(program), "orc");
+	short.loopLimit = 99;
+	execLoop(short);
+	assert short.error.indexOf("too many iterations (limit 99)") >= 0 && short.loopCount == 100 && short.output == "", short.error;
 }
 
 test "engine: an if on a comparison emits no bool constant and no compare against zero" {
@@ -1885,7 +1929,7 @@ test "engine: fib, a counting loop and a while on zero use the immediate forms" 
 	assert countNamed(fib, "LoadConst") == 0 && countNamed(fib, "BrGeI64Imm") == 1 && countNamed(fib, "SubI64Imm") == 2, disasmFunc(fib);
 	assert fib.code.length == 8, disasmFunc(fib);
 	const run = compiledFunc("function run(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 5000000; i = i + 1) { s = s + i; } return s; } console.log(`${run()}`);", "run");
-	assert countNamed(run, "LoadInt") == 2 && countNamed(run, "AddI64Imm") == 1, disasmFunc(run);
+	assert countNamed(run, "LoadInt") == 2 && countNamed(run, "ForLtI64") == 1, disasmFunc(run);
 	assert countNamed(run, "LoadConst") == 1 && countNamed(run, "BrGeI64") == 1, disasmFunc(run);
 	const wh = compiledFunc("function w(x: int64): int64 { let n: int64 = 0; while (x != 0) { x = x - 1; n++; } return n; } console.log(`${w(3)}`);", "w");
 	assert countNamed(wh, "LoadConst") == 0 && countNamed(wh, "BrEqI64Imm") == 1 && countNamed(wh, "SubI64Imm") == 1 && countNamed(wh, "AddI64Imm") == 1, disasmFunc(wh);

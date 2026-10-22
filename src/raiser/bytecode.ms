@@ -206,9 +206,11 @@ export enum RaiserOpcode {
 	BrNeR,            // ABC: if refs[A] != refs[B] pc += branchOffset(C)
 	LitConv,          // ABC: fatal unless R[A] is nil or one of the literals listed in K[B] (`len:text` each), named K[C]
 	CallDirect,       // ABC: Call whose target and signature createRaiserModule checked
+	ForLtI64,         // ABC: R[A] += 1 (stops on overflow), one budgeted iteration, then if R[A] < R[B] pc += branchOffset(C)
+	ForLtI64Imm,      // ABC: ForLtI64 against the immediate in B
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.CallDirect;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.ForLtI64Imm;
 
 // How FutureCombine settles its result from its inputs (Promise.all, race, any).
 export enum RaiserCombine {
@@ -310,6 +312,8 @@ function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.BeqI64Imm | RaiserOpcode.BneI64Imm | RaiserOpcode.BltI64Imm | RaiserOpcode.BleI64Imm | RaiserOpcode.BgtI64Imm | RaiserOpcode.BgeI64Imm
 			| RaiserOpcode.BrEqI64Imm | RaiserOpcode.BrNeI64Imm | RaiserOpcode.BrLtI64Imm | RaiserOpcode.BrLeI64Imm | RaiserOpcode.BrGtI64Imm | RaiserOpcode.BrGeI64Imm => "l--",
 		RaiserOpcode.BeqR | RaiserOpcode.BneR | RaiserOpcode.BrEqR | RaiserOpcode.BrNeR => "rr-",
+		RaiserOpcode.ForLtI64 => "il-",
+		RaiserOpcode.ForLtI64Imm => "i--",
 		RaiserOpcode.AddF64 | RaiserOpcode.SubF64 | RaiserOpcode.MulF64 | RaiserOpcode.DivF64 => "fff",
 		RaiserOpcode.NegF64 => "ff-",
 		RaiserOpcode.BeqF64 | RaiserOpcode.BneF64 | RaiserOpcode.BltF64 | RaiserOpcode.BleF64 | RaiserOpcode.BgtF64 | RaiserOpcode.BgeF64 => "ff-",
@@ -505,7 +509,8 @@ export function isBranchI64(op: RaiserOpcode): boolean {
 	return match (op) {
 		RaiserOpcode.BrEqI64 | RaiserOpcode.BrNeI64 | RaiserOpcode.BrLtI64 | RaiserOpcode.BrLeI64 | RaiserOpcode.BrGtI64 | RaiserOpcode.BrGeI64
 			| RaiserOpcode.BrEqI64Imm | RaiserOpcode.BrNeI64Imm | RaiserOpcode.BrLtI64Imm | RaiserOpcode.BrLeI64Imm
-			| RaiserOpcode.BrGtI64Imm | RaiserOpcode.BrGeI64Imm | RaiserOpcode.BrEqR | RaiserOpcode.BrNeR => true,
+			| RaiserOpcode.BrGtI64Imm | RaiserOpcode.BrGeI64Imm | RaiserOpcode.BrEqR | RaiserOpcode.BrNeR
+			| RaiserOpcode.ForLtI64 | RaiserOpcode.ForLtI64Imm => true,
 		_ => false,
 	};
 }

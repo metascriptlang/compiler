@@ -537,6 +537,7 @@ function vmError(vm: RaiserVM, msg: string): void {
 
 const MAX_CALL_DEPTH = 1024;
 const INT64_LOW: int64 = -9223372036854775807 - 1;
+const INT64_HIGH: int64 = 9223372036854775807;
 
 function mulOverflowsI64(a: int64, b: int64): boolean {
 	if (a == 0 || b == 0) return false;
@@ -2167,6 +2168,28 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
+				break;
+			}
+			case RaiserOpcode.ForLtI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const lhs = words[wb + ia];
+				if (lhs == INT64_HIGH) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
+				words[wb + ia] = lhs + 1;
+				budget -= 1;
+				if (budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+				if (lhs + 1 < words[wb + ib]) ip = ip + packedBranch(word);
+				break;
+			}
+			case RaiserOpcode.ForLtI64Imm: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const lhs = words[wb + ia];
+				if (lhs == INT64_HIGH) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
+				words[wb + ia] = lhs + 1;
+				budget -= 1;
+				if (budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+				if (lhs + 1 < immValue(ib)) ip = ip + packedBranch(word);
 				break;
 			}
 			case RaiserOpcode.BeqR: {

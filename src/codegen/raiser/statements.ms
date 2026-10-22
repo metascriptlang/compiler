@@ -10,14 +10,14 @@ import {
 	SwitchStmtData, SwitchCaseData,
 	TryCatchStmtData, ThrowStmtData,
 } from "../../ast/node";
-import { RaiserOpcode, RaiserRegClass, raiserABC, raiserAx } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserRegClass, RaiserRole, RaiserInstruction, raiserABC, raiserAx, immValue, branchField, opRole, opHasSite, siteArgCount } from "../../raiser/bytecode";
 import { raiserNil, raiserInt, raiserConstString } from "../../raiser/value";
 import {
 	RaiserCompState, emitInst, allocReg, allocBlock, allocWord, allocRef, allocDyn, classOfReg, emitLoadConst, emitRet, emitReturnNothing,
 	declareLocal, declaredSymbol, regIsFixedLocal,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	emitAbxPlaceholder, patchAbxTo,
-	pushLoop, jumpTarget, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
+	pushLoop, jumpTarget, currentLoop, landsPast, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
 	emitClosurePair,
 	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, resolveRoutine, addConst, isScalarClass,
 } from "./context";
@@ -234,18 +234,60 @@ function compileWhileStmt(s: RaiserCompState, node: Node): void {
 	pushLoop(s, loopStart, d.whileLabel);
 
 	const exitJumps = condJumps(s, d.whileCondition, false);
+	const bodyStart = codeLen(s);
 
 	compileStmt(s, d.whileBody);
 
+	const continued = currentLoop(s).continuePatches.items.length > 0;
 	patchLoopContinues(s);
 
-	// Jump back to loop start
-	const backOffset = loopStart - codeLen(s) - 1;
-	emitInst(s, raiserAx(RaiserOpcode.Jump, backOffset));
+	// Jump back to loop start, or step and test in one instruction
+	if (continued || !fuseCountedStep(s, loopStart, exitJumps, bodyStart)) {
+		const backOffset = loopStart - codeLen(s) - 1;
+		emitInst(s, raiserAx(RaiserOpcode.Jump, backOffset));
+	}
 
 	// Patch exit + break jumps
 	patchJumpsTo(s, exitJumps, codeLen(s));
 	patchLoopBreaks(s);
+}
+
+// A loop whose condition is one `i >= bound` exit branch, after at most a constant load of the bound, and
+// whose body ends in `i += 1` that every path of the body reaches, turns that step into one ForLtI64: it steps
+// i, counts the iteration and branches back to the body while i < bound, reading the bound register as the
+// condition would.
+function fuseCountedStep(s: RaiserCompState, loopStart: int32, exitJumps: int32[], bodyStart: int32): boolean {
+	const stepPc = codeLen(s) - 1;
+	if (exitJumps.length != 1 || exitJumps[0] != bodyStart - 1 || stepPc < bodyStart) return false;
+	const test = s.code[bodyStart - 1];
+	const step = s.code[stepPc];
+	if (test.op != RaiserOpcode.BrGeI64 && test.op != RaiserOpcode.BrGeI64Imm) return false;
+	if (step.op != RaiserOpcode.AddI64Imm || step.a != test.a || step.b != test.a || immValue(step.c) != 1) return false;
+	const prefix = bodyStart - 1 - loopStart;
+	if (prefix > 1) return false;
+	const load = s.code[loopStart];
+	if (prefix == 1) {
+		if (test.op != RaiserOpcode.BrGeI64 || load.a != test.b || regIsFixedLocal(s, test.b as int32)) return false;
+		if (load.op != RaiserOpcode.LoadInt && load.op != RaiserOpcode.LoadConst) return false;
+	}
+	for (let pc = bodyStart; pc < stepPc; pc += 1) {
+		const inst = s.code[pc];
+		if (landsPast(inst, pc, stepPc + 1) || inst.op == RaiserOpcode.Try || inst.op == RaiserOpcode.Catch || inst.op == RaiserOpcode.Finally || inst.op == RaiserOpcode.FinallyEnd) return false;
+		if (prefix == 1 && namesRegister(inst, load.a)) return false;
+	}
+	const op = test.op == RaiserOpcode.BrGeI64 ? RaiserOpcode.ForLtI64 : RaiserOpcode.ForLtI64Imm;
+	s.code[stepPc] = raiserABC(op, test.a, test.b, branchField(bodyStart - stepPc - 1));
+	return true;
+}
+
+function namesRegister(inst: RaiserInstruction, reg: number): boolean {
+	const fields = [inst.a, inst.b, inst.c];
+	for (let slot = 0; slot < 3; slot += 1) {
+		const role = opRole(inst.op, slot as int32);
+		if (role == RaiserRole.None) continue;
+		if (fields[slot] == reg || ((role == RaiserRole.IntPair || role == RaiserRole.Route) && fields[slot] + 1 == reg)) return true;
+	}
+	return opHasSite(inst.op) && reg > inst.a && reg <= inst.a + siteArgCount(inst);
 }
 
 // --- For Statement ---
