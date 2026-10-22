@@ -17,7 +17,7 @@ import { platform } from "std/process";
 import { writeStderr } from "std/io";
 import { createTransformContextWithChecker } from "../../transform/context";
 import { transformForRaiser } from "../../transform/raiserLowering";
-import { RaiserValueKind, RaiserValue, RaiserObjectHeap, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapArrayLen, heapArrayGet, raiserConstString, handleIndex, handleValue } from "../../raiser/value";
+import { RaiserValueKind, RaiserValue, RaiserObjectHeap, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapArrayLen, heapArrayGet, raiserConstString, handleIndex, handleValue, RaiserClassType } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
 import { RaiserInstruction, raiserABC, RaiserOpcode, RaiserRegClass, getSignedAx, branchOffset, regClassLetter, carriesSlot } from "../../raiser/bytecode";
 import { disasmFunc, opName } from "../../raiser/disasm";
@@ -583,6 +583,68 @@ test "engine: an object keeps its class, which instanceof and a checked conversi
 		+ " console.log((x as B).b, (n as B | null) == null); console.log((d as B).b);");
 	assert ctx.error == "invalid object conversion: D is not B", ctx.error;
 	assert ctx.output == "true true false true false true false\n2 true\n", ctx.output;
+}
+
+test "engine: instanceof reads the class display through a 3-level chain, a sibling, an unrelated class and an object literal" {
+	const ctx = evalOrcVM("class A { a: int32 = 1; } class B extends A { } class C extends B { } class D extends A { } class E { } class F extends C { }"
+		+ " const f: A = new F(); const c: A = new C(); const d: A = new D(); const a: A = new A(); const e: unknown = new E(); const lit: unknown = { a: 1 }; const w: unknown = 5;"
+		+ " console.log(f instanceof A, f instanceof B, f instanceof C, f instanceof F, f instanceof D, f instanceof E);"
+		+ " console.log(c instanceof F, c instanceof C, c instanceof B, d instanceof B, d instanceof A, a instanceof D, a instanceof A);"
+		+ " console.log(e instanceof A, e instanceof E, lit instanceof A, lit instanceof E, w instanceof A);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "true true true true false false\nfalse true true false true false true\nfalse true false false false\n", ctx.output;
+}
+
+test "engine: a class's display holds the ids of its ancestors by depth, and a layout without a class holds none" {
+	const ctx = evalOrcVM("class A { a: int32 = 1; } class B extends A { } class C extends B { } const c = new C(); const b = new B(); const o = { a: 1 }; console.log('ok');");
+	assert ctx.error == "", ctx.error;
+	let seenC = false;
+	let seenB = false;
+	for (const obj of ctx.objectHeap.objects) {
+		const t = obj.classType;
+		if (t.name == "C") {
+			seenC = true;
+			assert t.depth == 2 && t.display.length == 3, `${t.depth} ${t.display.length}`;
+		}
+		if (t.name == "B") {
+			seenB = true;
+			assert t.depth == 1 && t.display.length == 2, `${t.depth} ${t.display.length}`;
+		}
+		if (t.name == "") assert t.depth == -1 && t.display.length == 0;
+	}
+	assert seenC && seenB;
+	let c: RaiserClassType | null = null;
+	let b: RaiserClassType | null = null;
+	for (const obj of ctx.objectHeap.objects) {
+		if (obj.classType.name == "C") c = obj.classType;
+		if (obj.classType.name == "B") b = obj.classType;
+	}
+	assert c!.display[0] == b!.display[0] && c!.display[1] == b!.display[1] && c!.display[2] != b!.display[1];
+}
+
+test "engine: a class appended to the live image after its ancestors keeps their ids" {
+	const outerPr = parseSource("class A { a: int32 = 1; } class B extends A { } class C extends B { } class D extends A { }");
+	assert outerPr.ok;
+	const outerCtx = checkProgram(outerPr.value);
+	const first = parseSource("export function __first(): number { const b: A = new B(); return (b instanceof A ? 1 : 0) + (b instanceof C ? 2 : 0); }");
+	assert first.ok;
+	const r1 = compileMacroIntoEngine(first.value, outerCtx, "__first", outerCtx);
+	assert r1.errors.length == 0, r1.errors.length > 0 ? r1.errors[0].message : "";
+	const later = parseSource("export function __later(): number { const c: A = new C(); const d: A = new D(); return (c instanceof A ? 1 : 0) + (c instanceof B ? 2 : 0) + (c instanceof D ? 4 : 0) + (d instanceof B ? 8 : 0) + (d instanceof A ? 16 : 0); }");
+	assert later.ok;
+	const r2 = compileMacroIntoEngine(later.value, outerCtx, "__later", outerCtx);
+	assert r2.errors.length == 0, r2.errors.length > 0 ? r2.errors[0].message : "";
+	const noArgs: RaiserValue[] = [];
+	assert callWithComptimeHostPolicy(r2.vm, r1.funcIdx, noArgs, "").intVal == 1;
+	assert callWithComptimeHostPolicy(r2.vm, r2.funcIdx, noArgs, "").intVal == 19;
+	let b: RaiserClassType | null = null;
+	let c: RaiserClassType | null = null;
+	for (const obj of r2.vm.objectHeap.objects) {
+		if (obj.classType.name == "B") b = obj.classType;
+		if (obj.classType.name == "C") c = obj.classType;
+	}
+	assert b != null && c != null;
+	assert c!.display[0] == b!.display[0] && c!.display[1] == b!.display[1];
 }
 
 test "engine: an as into a narrower literal union stops on a value outside it" {
