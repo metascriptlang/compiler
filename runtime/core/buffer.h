@@ -101,21 +101,6 @@ int64_t msBufferWriteInt64BE(msBuffer buf, int64_t value, int64_t offset);
 int64_t msBufferIndexOf(msBuffer buf, int64_t value, int64_t byteOffset);
 int64_t msBufferLastIndexOf(msBuffer buf, int64_t value, int64_t byteOffset);
 
-/* ===== Byte Swap ===== */
-
-void msBufferSwap16(msBuffer buf);
-void msBufferSwap32(msBuffer buf);
-void msBufferSwap64(msBuffer buf);
-
-/* ===== Reverse (in-place mutation) ===== */
-
-void msBufferReverse(msBuffer buf);
-
-/* ===== Validation ===== */
-
-int64_t msBufferIsAscii(msBuffer buf);
-int64_t msBufferIsUtf8(msBuffer buf);
-
 /* ===== Advanced Search (Boyer-Moore Horspool) ===== */
 
 int64_t msBufferIndexOfBuffer(msBuffer buf, msBuffer needle, int64_t byteOffset);

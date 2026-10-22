@@ -21,18 +21,13 @@
 #endif
 
 #if defined(__GNUC__) || defined(__clang__)
-  #define BSWAP16(x) __builtin_bswap16(x)
   #define BSWAP32(x) __builtin_bswap32(x)
   #define BSWAP64(x) __builtin_bswap64(x)
 #elif defined(_MSC_VER)
   #include <intrin.h>
-  #define BSWAP16(x) _byteswap_ushort(x)
   #define BSWAP32(x) _byteswap_ulong(x)
   #define BSWAP64(x) _byteswap_uint64(x)
 #else
-  static inline uint16_t BSWAP16(uint16_t x) {
-    return (x >> 8) | (x << 8);
-  }
   static inline uint32_t BSWAP32(uint32_t x) {
     return ((x >> 24) & 0xFF) | ((x >> 8) & 0xFF00) |
            ((x << 8) & 0xFF0000) | ((x << 24) & 0xFF000000);
@@ -557,97 +552,6 @@ int64_t msBufferLastIndexOf(msBuffer buf, int64_t value, int64_t byteOffset) {
 		if ((unsigned char)buf.p->data[i] == needle) return i;
 	}
 	return -1;
-}
-
-/* ===== Byte Swap ===== */
-
-void msBufferSwap16(msBuffer buf) {
-	if (!buf.p || buf.len % 2 != 0) return;
-	uint16_t* data = (uint16_t*)buf.p->data;
-	int64_t count = buf.len / 2;
-	for (int64_t i = 0; i < count; i++) {
-		data[i] = BSWAP16(data[i]);
-	}
-	return;
-}
-
-void msBufferSwap32(msBuffer buf) {
-	if (!buf.p || buf.len % 4 != 0) return;
-	uint32_t* data = (uint32_t*)buf.p->data;
-	int64_t count = buf.len / 4;
-	for (int64_t i = 0; i < count; i++) {
-		data[i] = BSWAP32(data[i]);
-	}
-	return;
-}
-
-void msBufferSwap64(msBuffer buf) {
-	if (!buf.p || buf.len % 8 != 0) return;
-	uint64_t* data = (uint64_t*)buf.p->data;
-	int64_t count = buf.len / 8;
-	for (int64_t i = 0; i < count; i++) {
-		data[i] = BSWAP64(data[i]);
-	}
-	return;
-}
-
-/* ===== Reverse ===== */
-
-void msBufferReverse(msBuffer buf) {
-	if (!buf.p || buf.len <= 1) return;
-	char* data = buf.p->data;
-	int64_t left = 0;
-	int64_t right = buf.len - 1;
-	while (left < right) {
-		char tmp = data[left];
-		data[left] = data[right];
-		data[right] = tmp;
-		left++;
-		right--;
-	}
-	return;
-}
-
-/* ===== Validation ===== */
-
-int64_t msBufferIsAscii(msBuffer buf) {
-	if (!buf.p || buf.len == 0) return 1;
-	const unsigned char* data = (const unsigned char*)buf.p->data;
-	for (int64_t i = 0; i < buf.len; i++) {
-		if (data[i] > 127) return 0;
-	}
-	return 1;
-}
-
-int64_t msBufferIsUtf8(msBuffer buf) {
-	if (!buf.p || buf.len == 0) return 1;
-	const unsigned char* data = (const unsigned char*)buf.p->data;
-	int64_t i = 0;
-	while (i < buf.len) {
-		unsigned char c = data[i];
-		if (c <= 0x7F) {
-			i++;
-		} else if ((c & 0xE0) == 0xC0) {
-			if (i + 1 >= buf.len || (data[i + 1] & 0xC0) != 0x80) return 0;
-			if (c < 0xC2) return 0;
-			i += 2;
-		} else if ((c & 0xF0) == 0xE0) {
-			if (i + 2 >= buf.len) return 0;
-			if ((data[i + 1] & 0xC0) != 0x80 || (data[i + 2] & 0xC0) != 0x80) return 0;
-			uint32_t cp = ((c & 0x0F) << 12) | ((data[i + 1] & 0x3F) << 6) | (data[i + 2] & 0x3F);
-			if (cp < 0x800 || (cp >= 0xD800 && cp <= 0xDFFF)) return 0;
-			i += 3;
-		} else if ((c & 0xF8) == 0xF0) {
-			if (i + 3 >= buf.len) return 0;
-			if ((data[i + 1] & 0xC0) != 0x80 || (data[i + 2] & 0xC0) != 0x80 || (data[i + 3] & 0xC0) != 0x80) return 0;
-			uint32_t cp = ((c & 0x07) << 18) | ((data[i + 1] & 0x3F) << 12) | ((data[i + 2] & 0x3F) << 6) | (data[i + 3] & 0x3F);
-			if (cp < 0x10000 || cp > 0x10FFFF) return 0;
-			i += 4;
-		} else {
-			return 0;
-		}
-	}
-	return 1;
 }
 
 /* ===== Encoding Helper ===== */
