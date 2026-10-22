@@ -19,6 +19,7 @@ import { TransformContext, freshTempSym, mintSym } from "../context";
 import { canFormAcycle } from "../cycles";
 import { containsExprKind } from "../walker";
 import { setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
+import { mayHoldCycleRoot, disownStmt } from "./spawnLower";
 import {
 	syntheticToken, makeIdentResolved, makeTypedIdentResolved, makeCall, makeExprStmt, makeReturn,
 	makeVarDecl, makeMember, makeNumber, makeNull, makeBlock, makeBinary,
@@ -206,6 +207,9 @@ function buildSendProxy(kind: number, params: Symbol[], paramTypes: Type[], ctx:
 	msgDecl.resolvedSym = msgSym;
 	msgDecl.nodeType = VOID_PTR;
 	const stmts: Node[] = [msgDecl];
+	for (let ai = 1; ai < params.length; ai += 1) {
+		if (paramMsgKind(paramTypes, ai) == "ptr" && mayHoldCycleRoot(paramTypes[ai], ctx)) stmts.push(disownStmt(makeTypedIdentResolved(params[ai], paramTypes[ai], loc), loc));
+	}
 	packArgsIntoMsg(stmts, msgSym, params, paramTypes, loc);
 	const thisPid = makeMember(makeTypedIdentResolved(params[0], null, loc), "pid", loc);
 	thisPid.nodeType = getSysType(TypeKind.Int64);

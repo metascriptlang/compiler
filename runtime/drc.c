@@ -756,4 +756,37 @@ void msOrcCollect(void) {
 	}
 }
 
+void msOrcDisown(void* p) {
+	if (p == NULL || msRoots.len == 0) return;
+	msRefHeader* h = msHeader(p);
+	msGcEnv j;
+	msCellSeqInit(&j.traceStack);
+	setColor(h, MS_COL_GRAY);
+	if (h->rootIdx >= 0) msUnregisterCycle(p);
+	msTrace(p, h->type, &j);
+	while (j.traceStack.len > 0 && msRoots.len > 0) {
+		msCell entry = j.traceStack.data[--j.traceStack.len];
+		void* child = *(void**)entry.ptr;
+		if (child == NULL) continue;
+		msRefHeader* ch = msHeader(child);
+		if (getColor(ch) == MS_COL_GRAY) continue;
+		setColor(ch, MS_COL_GRAY);
+		if (ch->rootIdx >= 0) msUnregisterCycle(child);
+		msTrace(child, entry.type, &j);
+	}
+	j.traceStack.len = 0;
+	setColor(h, MS_COL_BLACK);
+	msTrace(p, h->type, &j);
+	while (j.traceStack.len > 0) {
+		msCell entry = j.traceStack.data[--j.traceStack.len];
+		void* child = *(void**)entry.ptr;
+		if (child == NULL) continue;
+		msRefHeader* ch = msHeader(child);
+		if (getColor(ch) != MS_COL_GRAY) continue;
+		setColor(ch, MS_COL_BLACK);
+		msTrace(child, entry.type, &j);
+	}
+	msCellSeqFree(&j.traceStack);
+}
+
 #endif /* MSGC_MANUAL */

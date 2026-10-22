@@ -5,11 +5,14 @@
 // Wraps return values in msBoxDouble/msBoxBool/msBoxInt32 so the
 // C runtime can store them as void* in msFuture.value.
 
-import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ObjectLiteralData, Type, TypeKind, createNode } from "../../ast/node";
-import { createFunction, createPtr, voidType, isAwaitable, awaitedType, literalBase } from "../../checker/types";
-import { TransformContext } from "../context";
+import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ObjectLiteralData, Type, TypeKind, SymbolKind, DeclKind, createNode } from "../../ast/node";
+import { createFunction, createPtr, voidType, isAwaitable, awaitedType, literalBase, skipModifier, unwrapRefNullUnion, isAtomicRef } from "../../checker/types";
+import { GcMode } from "../../checker/context";
+import { TransformContext, freshOwnedSym } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeNull, makeObjectLiteral, syntheticToken, runtimeRef, isRuntimeProcSym, boxedInFuture } from "../util";
+import { canFormAcycle } from "../cycles";
+import { lowerDefer } from "./deferLower";
+import { makeCall, makeNull, makeObjectLiteral, syntheticToken, runtimeRef, isRuntimeProcSym, boxedInFuture, makeBlock, makeExprStmt, makeIdentResolved, makeReturn, makeVarDecl } from "../util";
 
 function needsBoxing(t: Type): boolean {
 	if (t == null) return false;
@@ -93,6 +96,123 @@ export function boxReturns(node: Node, retType: Type): void {
 	};
 }
 
+export function spawnThunk(closure: Node): Node {
+	if (closure.kind != NodeKind.CallExpr) return closure;
+	const iife = (closure.data as CallExprData).callee;
+	if (iife.kind != NodeKind.ArrowFunction) return closure;
+	const inner = (iife.data as ArrowFunctionData).arrowBody;
+	return inner != null && (inner.kind == NodeKind.ArrowFunction || inner.kind == NodeKind.FunctionExpr) ? inner : closure;
+}
+
+export function mayHoldCycleRoot(t: Type | null, ctx: TransformContext): boolean {
+	if (ctx.checkerCtx == null || ctx.checkerCtx.gcMode != GcMode.Drc) return false;
+	const bare = skipModifier(t);
+	if (bare == null) return false;
+	const ref = bare.kind == TypeKind.Ref ? bare : unwrapRefNullUnion(bare);
+	if (ref == null || ref.kind != TypeKind.Ref || isAtomicRef(ref)) return false;
+	if (ref.sym != null && ref.sym.symbolKind == SymbolKind.Actor) return false;
+	return canFormAcycle(ref, ctx.cyclicCache, ctx.acyclicCache);
+}
+
+export function disownStmt(value: Node, loc: SourceLocation): Node {
+	return makeExprStmt(makeCall(runtimeRef("msOrcDisown", loc), [value], loc), loc);
+}
+
+function prependStmts(fn: Node, stmts: Node[], loc: SourceLocation): void {
+	if (fn.kind == NodeKind.FunctionExpr) {
+		const bd = (fn.data as FunctionExprData).funcExprBody.data as BlockStmtData;
+		bd.statements = stmts.concat(bd.statements);
+		return;
+	}
+	const ad = fn.data as ArrowFunctionData;
+	if (ad.arrowBody.kind == NodeKind.BlockStmt) {
+		const bd = ad.arrowBody.data as BlockStmtData;
+		bd.statements = stmts.concat(bd.statements);
+	} else {
+		ad.arrowBody = makeBlock(stmts.concat([makeReturn(ad.arrowBody, loc)]), loc);
+	}
+}
+
+// ULTRALOCK V3: a moved capture leaves the sender's cycle roots before the task is submitted,
+// and the worker's when the task settles, since its env is released on the sender's loop.
+export function disownMovedCaptures(closure: Node, ctx: TransformContext): void {
+	if (closure.kind != NodeKind.CallExpr) return;
+	const cd = closure.data as CallExprData;
+	const iife = cd.callee;
+	if (iife.kind != NodeKind.ArrowFunction || iife.paramSyms == null) return;
+	const params = iife.paramSyms!;
+	const loc = iife.location;
+	const atSubmit: Node[] = [];
+	const atSettle: Node[] = [];
+	for (let i = 0; i < params.length && i < cd.arguments.length; i += 1) {
+		if (cd.arguments[i].kind == NodeKind.MoveExpr && mayHoldCycleRoot(params[i].symbolType, ctx)) {
+			atSubmit.push(disownStmt(makeIdentResolved(params[i], loc), loc));
+			atSettle.push(disownStmt(makeIdentResolved(params[i], loc), loc));
+		}
+	}
+	if (atSubmit.length == 0) return;
+	const thunk = spawnThunk(closure);
+	if (thunk != closure) {
+		prependStmts(thunk, [createNode(NodeKind.DeferStmt, { deferExpr: makeBlock(atSettle, loc) }, syntheticToken(loc))], loc);
+		lowerDefer(thunk, ctx);
+	}
+	prependStmts(iife, atSubmit, loc);
+}
+
+function disownedReturn(arg: Node, retType: Type, ctx: TransformContext, loc: SourceLocation): Node {
+	const tmp = freshOwnedSym(ctx, "result", retType);
+	const decl = makeVarDecl(tmp.name, arg, DeclKind.Const, loc);
+	decl.resolvedSym = tmp;
+	decl.nodeType = retType;
+	return makeBlock([decl, disownStmt(makeIdentResolved(tmp, loc), loc), makeReturn(makeIdentResolved(tmp, loc), loc)], loc);
+}
+
+function disownReturnsIn(node: Node | null, retType: Type, ctx: TransformContext): Node | null {
+	if (node == null) return node;
+	if (node.kind == NodeKind.ReturnStmt) {
+		const arg = (node.data as ReturnStmtData).argument;
+		return arg != null ? disownedReturn(arg, retType, ctx, node.location) : node;
+	}
+	if (node.kind == NodeKind.BlockStmt) {
+		const d = node.data as BlockStmtData;
+		d.statements = d.statements.map((s: Node): Node => disownReturnsIn(s, retType, ctx)!);
+	} else if (node.kind == NodeKind.IfStmt) {
+		const d = node.data as IfStmtData;
+		d.consequent = disownReturnsIn(d.consequent, retType, ctx)!;
+		d.alternate = disownReturnsIn(d.alternate, retType, ctx) as Node;
+	} else if (node.kind == NodeKind.WhileStmt) {
+		const d = node.data as WhileStmtData;
+		d.whileBody = disownReturnsIn(d.whileBody, retType, ctx)!;
+	} else if (node.kind == NodeKind.ForOfStmt) {
+		const d = node.data as ForOfStmtData;
+		d.forOfBody = disownReturnsIn(d.forOfBody, retType, ctx)!;
+	} else if (node.kind == NodeKind.TryCatchStmt) {
+		const d = node.data as TryCatchStmtData;
+		d.tryBody = disownReturnsIn(d.tryBody, retType, ctx)!;
+		d.catchBody = disownReturnsIn(d.catchBody, retType, ctx) as Node;
+		d.finallyBody = disownReturnsIn(d.finallyBody, retType, ctx) as Node;
+	} else if (node.kind == NodeKind.SwitchStmt) {
+		for (const caseNode of (node.data as SwitchStmtData).switchCases) {
+			const sc = caseNode.data as SwitchCaseData;
+			sc.caseStmts = sc.caseStmts.map((s: Node): Node => disownReturnsIn(s, retType, ctx)!);
+		}
+	}
+	return node;
+}
+
+// ULTRALOCK V3: a task result moved back to the awaiter leaves the worker's cycle roots before it is stored.
+export function disownResult(thunk: Node, retType: Type | null, ctx: TransformContext): void {
+	if (retType == null || !mayHoldCycleRoot(retType, ctx)) return;
+	if (thunk.kind == NodeKind.ArrowFunction) {
+		const ad = thunk.data as ArrowFunctionData;
+		if (ad.arrowBody == null) return;
+		if (ad.arrowBody.kind == NodeKind.BlockStmt) disownReturnsIn(ad.arrowBody, retType, ctx);
+		else ad.arrowBody = disownedReturn(ad.arrowBody, retType, ctx, ad.arrowBody.location);
+	} else if (thunk.kind == NodeKind.FunctionExpr) {
+		disownReturnsIn((thunk.data as FunctionExprData).funcExprBody, retType, ctx);
+	}
+}
+
 export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 	return walkNode(program, (node: Node): Node => {
 		if (node.kind != NodeKind.CallExpr) return node;
@@ -114,14 +234,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 			closureArg = pair;
 		}
 		// Get return type from Promise<T> on the CallExpr (set by checker's Spawn inference)
-		let boxTarget = closureArg;
-		if (closureArg.kind == NodeKind.CallExpr) {
-			const iife = (closureArg.data as CallExprData).callee;
-			if (iife.kind == NodeKind.ArrowFunction) {
-				const inner = (iife.data as ArrowFunctionData).arrowBody;
-				if (inner != null && (inner.kind == NodeKind.ArrowFunction || inner.kind == NodeKind.FunctionExpr)) boxTarget = inner;
-			}
-		}
+		const boxTarget = spawnThunk(closureArg);
 		let closureRetType: Type | null = null;
 		if (node.nodeType != null && isAwaitable(node.nodeType)) {
 			closureRetType = awaitedType(node.nodeType);
@@ -175,6 +288,8 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 				closureArg.nodeType.typeReturn = createPtr(voidType());
 			}
 		}
+		disownResult(boxTarget, closureRetType, ctx);
+		disownMovedCaptures(closureArg, ctx);
 
 		return node;
 	});

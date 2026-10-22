@@ -338,6 +338,9 @@ when (mscDeclaresRuntime) {
 	extern function msDropDefer(owner: Ptr<void>, fn: Ptr<void>, resume: int32): void;
 
 	@compilerFunc
+	extern function msOrcDisown(p: Ptr<void>): void;
+
+	@compilerFunc
 	extern function msAtomicIncref(p: Ptr<void>): void;
 
 	@compilerFunc

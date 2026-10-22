@@ -35,7 +35,7 @@ test "the C prelude declares every runtime routine the lowerings synthesize" {
 	"msBigIntToFloat64", "msBigIntToInt64", "msBigIntToString", "msBigIntXor", "msBoolToString", "msBoxDouble",
 	"msBoxInt32", "msBoxInt64", "msCheckRangeI16", "msCheckRangeI32", "msCheckRangeI64", "msCheckRangeI8",
 	"msClosureArrayDestroy", "msClosureCopy", "msClosureDestroy", "msClosureSink", "msClosureTrace",
-	"msClosureWasMoved", "msDecref", "msDecrefCyclic", "msDivAssignI32", "msDivI32", "msDivI64", "msDivU32",
+	"msClosureWasMoved", "msDecref", "msDecrefCyclic", "msOrcDisown", "msDivAssignI32", "msDivI32", "msDivI64", "msDivU32",
 	"msDivU64", "msFutureCheckErr", "msFutureComplete", "msFutureCompleteVoid", "msFutureCreate",
 	"msFutureDrcDestroy", "msFutureFail", "msFutureFinished", "msFutureRead", "msFutureReadBool",
 	"msFutureReadDouble", "msFutureReadInt32", "msFutureReadString", "msFutureThenTypedWithRejected", "msFutureThen_double",

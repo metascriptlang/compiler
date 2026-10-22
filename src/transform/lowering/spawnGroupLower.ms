@@ -36,7 +36,7 @@ import { makeCall, makeExprStmt, makeNumber, makeNull, makeObjectLiteral, runtim
 import { awaitedType, createPromise, createPtr, voidType } from "../../checker/types";
 import { getSpawnInfo, makeTempDecl, emitAwaitGroupWait, readGroupSlot, VOID_PTR_TYPE } from "./awaitLower";
 import { injectCancelSafePoints } from "./cancelSafePoints";
-import { boxReturns, boxForType } from "./spawnLower";
+import { boxReturns, boxForType, disownResult, disownMovedCaptures, spawnThunk } from "./spawnLower";
 
 // ===== Async Context Tracking =====
 
@@ -147,6 +147,8 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 				slot.closure.nodeType.typeReturn = createPtr(voidType());
 			}
 		}
+		disownResult(spawnThunk(slot.closure), slot.innerType, ctx);
+		disownMovedCaptures(slot.closure, ctx);
 		// Wrap bare function reference as msClosure {fn, env: null}
 		let closure = slot.closure;
 		if (closure.kind == NodeKind.Identifier) {

@@ -1,9 +1,6 @@
 // @stdout: moved 512
 // @stdout: churn 1024
 // @serial
-// @xfail(c): the sending thread keeps the moved ring in its own cycle roots after the worker frees it; its next collection reads freed headers (signed-overflow panic in markGray or a trap, 40/40 runs, 2026-10-20) until the thread-safe collector lands (YRC S5)
-// @xfail(danger): the same stale roots trap the danger build (SIGTRAP, 40/40 runs, 2026-10-20) until YRC S5
-// @xfail(san): heap-use-after-free writing the freed cell's rootIdx in msCellSeqRemoveAt (20/20 runs, 2026-10-20) until YRC S5
 // note: a ring built on the main thread is moved into a spawn and freed there; the main thread then keeps building and dropping rings. No thread may keep a root that points at a cell another thread freed.
 
 class Node {
