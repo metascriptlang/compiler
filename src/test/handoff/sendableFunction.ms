@@ -102,6 +102,8 @@ test "sendableFunction: a callback a routine calls is judged where it is passed"
 		{ name: "a pure callback to lockedUpdate", body: "lockedUpdate(cell, (v: int32): int32 => v + 1); return 0;" },
 		{ name: "a pure callback to a helper", body: "return apply((v: int32): int32 => v * 2, 1);" },
 		{ name: "a pure callback forwarded twice", body: "return forward((v: int32): int32 => v * 2, 1);" },
+		{ name: "a pure const-bound closure called", body: "const inner = (v: int32): int32 => v * 2; return inner(1);" },
+		{ name: "a const-bound closure calling itself", body: "const down = (v: int32): int32 => v > 0 ? down(v - 1) : 0; return down(3);" },
 	];
 	for (const row of quiet) {
 		const source = HELPERS + "async function f(): Promise<int32> { return await spawn(() => { " + row.body + " }); }";
@@ -112,6 +114,7 @@ test "sendableFunction: a callback a routine calls is judged where it is passed"
 		{ name: "a writing callback to lockedUpdate", body: "lockedUpdate(cell, " + writes + "); return 0;" },
 		{ name: "a writing callback to a helper", body: "return apply(" + writes + ", 1);" },
 		{ name: "a writing callback forwarded twice", body: "return forward(" + writes + ", 1);" },
+		{ name: "a writing const-bound closure called", body: "const inner = " + writes + "; return inner(1);" },
 	];
 	for (const row of warned) {
 		const source = HELPERS + "async function f(): Promise<int32> { return await spawn(() => { " + row.body + " }); }";

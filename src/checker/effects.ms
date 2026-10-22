@@ -165,6 +165,15 @@ function peelConv(n: Node): Node {
 	return cur;
 }
 
+function boundRoutine(sym: Symbol | null): Node | null {
+	const bound = constBindingInitializer(sym);
+	return bound != null && isRoutineNode(peelConv(bound)) ? peelConv(bound) : null;
+}
+
+function boundRoutineEffect(sym: Symbol, e: Effect): EffectCause | null {
+	return memo(sym, e, (): EffectCause | null => walkEffect(boundRoutine(sym), e));
+}
+
 function argumentEffect(arg: Node, e: Effect): EffectCause | null {
 	if (functionSlotOf(arg.nodeType) == null) return null;
 	if (e == Effect.SpawnUnsafe && isSendableFunction(arg.nodeType)) return null;
@@ -172,8 +181,7 @@ function argumentEffect(arg: Node, e: Effect): EffectCause | null {
 	if (isRoutineNode(a) || isOwnParam(a)) return null;
 	if (a.kind == NodeKind.Identifier && a.resolvedSym != null) {
 		if (isRoutine(a.resolvedSym)) return null;
-		const bound = constBindingInitializer(a.resolvedSym);
-		if (bound != null && isRoutineNode(peelConv(bound))) return walkEffect(peelConv(bound), e);
+		if (boundRoutine(a.resolvedSym) != null) return boundRoutineEffect(a.resolvedSym!, e);
 	}
 	return cause(arg, "passes a function value");
 }
@@ -302,6 +310,9 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 		if (isOwnParam(callee)) return null;
 		const valueType: Type | null = callee != null ? callee.nodeType : null;
 		if (e == Effect.SpawnUnsafe && isSendableFunction(valueType)) return null;
+		if (callee != null && callee.kind == NodeKind.Identifier && boundRoutine(callee.resolvedSym) != null) {
+			return through(call, "calls '" + (callee.data as IdentifierData).name + "'", boundRoutineEffect(callee.resolvedSym!, e));
+		}
 		return cause(call, "calls a function value");
 	}
 	if (hasFlag(sym!, SymbolFlag.GeneratedOp)) return null;
