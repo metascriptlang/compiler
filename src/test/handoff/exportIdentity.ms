@@ -185,3 +185,20 @@ test "export identity: a same-shaped generic interface of another module fits st
 		`const m: Box<string> = mkA();\nconsole.log(m.v);\n`;
 	assert fitsOnBothBackends(libSource, mainSource);
 }
+
+test "export identity: a bitwise set mixes only members of one declared enum, whatever its name" {
+	const libSource = `export enum Flag { A, B, C }\n`;
+	const mixes = [
+		`const m = (Lib.A | Lib.B) | Flag.Y;\n`,
+		`const m = Flag.Y | (Lib.A | Lib.B);\n`,
+		`const m = (Lib.A | Lib.B) | (Flag.X | Flag.Y);\n`,
+		`const m = Lib.A | Flag.Y;\n`,
+	];
+	for (const mix of mixes) {
+		const mainSource = `import { Flag as Lib } from "./lib";\nenum Flag { X, Y, Z }\n${mix}console.log(m);\n`;
+		const cCode = compileProjectToC(identityEntries(libSource, mainSource), IDENTITY_MAIN_PATH);
+		assert cCode.startsWith("ERROR: check [") && cCode.contains("mixes different enum sets"), mix;
+	}
+	const sameEnum = `import { Flag, Flag as Lib } from "./lib";\nconst m = (Flag.A | Lib.B) | Flag.C;\nconsole.log(m);\n`;
+	assert fitsOnBothBackends(libSource, sameEnum);
+}
