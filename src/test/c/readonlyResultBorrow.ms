@@ -155,3 +155,30 @@ export function readLocal(): int32 { const r = ROOT; return r.n; }
 		assert rcOps(functionBody(result.value, "readLocal")) > 0, functionBody(result.value, "readLocal");
 	}
 }
+
+test "an argument path stays borrowed across a call that writes only holders of other types" {
+	const fault = rcFault(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+class Seen { entries: Cursor<Readonly<Node>>[] = []; marks: int32[] = []; }
+function note(s: Seen, t: Readonly<Node>): void { s.entries.push(t); s.marks.push(t.n); s.marks[0] = 1; }
+export function scan(t: Readonly<Node>, seen: Seen): int32 {
+	note(seen, t);
+	let sum = t.n;
+	for (let i = 0; i < t.kids.length; i += 1) sum += scan(t.kids[i], seen);
+	return sum;
+}
+`, ["scan"]);
+	assert fault == "", fault;
+}
+
+test "an argument path is kept alive across a call that may write a holder of its type" {
+	for (const write of ["o.kids[0] = new Node();", "o.kids.length = 0;", "o.kids = [];"]) {
+		const result = compileToC(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+function hit(o: Node, t: Readonly<Node>): int32 { ${write} return t.n; }
+export function scan(t: Node, o: Node): int32 { return hit(o, t.kids[0]); }
+`);
+		assert result.ok, result.ok ? "" : result.error;
+		assert rcOps(functionBody(result.value, "scan")) > 0, write + "\n" + functionBody(result.value, "scan");
+	}
+}
