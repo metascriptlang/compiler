@@ -32,7 +32,7 @@ import { setFlag, hasFlag, isCursorSym, SymbolFlag, findOverloadImpl } from "../
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
-import { isViewCall, viewCallSources } from "../checker/effects";
+import { isImmutableModuleConst, isViewCall, viewCallSources } from "../checker/effects";
 import { ANY_HEAP_SLOT, mayWrite, resetWriteEffects, stepSlot } from "./writeEffects";
 import { createDrcContext, classifyRc } from "./scope";
 import { makeCtx } from "../transform/testUtil";
@@ -232,7 +232,7 @@ function destMightOwn(p: Partitions, destIdx: int32, src: Node): void {
 			const srcId = variableId(p, src.resolvedSym);
 			if (srcId < 0) {
 				// Unknown variable (module-level, imported) — unsafe to alias
-				p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
+				if (src.resolvedSym == null || !isImmutableModuleConst(src.resolvedSym)) p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
 			} else {
 				ufConnect(p, p.vars[destIdx].sym, p.vars[srcId].sym);
 				// [x] or {field: x} context — container owns a copy
@@ -525,7 +525,7 @@ function deps(p: Partitions, dest: Symbol | null, src: Node): void {
 	for (const srcSym of srcRoots) {
 		if (srcSym == dest) continue; // self-assign ok (it = it.next)
 		if (hasFlag(srcSym, SymbolFlag.Global)) {
-			p.vars[destId].flags = p.vars[destId].flags | VF_PREVENT_CURSOR;
+			if (!isImmutableModuleConst(srcSym)) p.vars[destId].flags = p.vars[destId].flags | VF_PREVENT_CURSOR;
 			continue;
 		}
 		const srcId = variableId(p, srcSym);

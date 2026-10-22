@@ -254,6 +254,14 @@ function isModuleState(sym: Symbol): boolean {
 	return hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.StaticLocal) || sym.staticOwner != null;
 }
 
+// A deep Readonly module const built in its own initializer is never written and lives as long as
+// the program, so a borrow of it cannot outlive or race a write.
+export function isImmutableModuleConst(sym: Symbol): boolean {
+	if (!hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.StaticLocal) || hasFlag(sym, SymbolFlag.Mutable)) return false;
+	const t = sym.symbolType;
+	return sym.symbolKind == SymbolKind.Variable && t != null && t.kind != TypeKind.Ptr && isReadonlyView(t) && builtInPlace(constBindingInitializer(sym));
+}
+
 function isConstantValue(sym: Symbol, e: Effect): boolean {
 	const t = sym.symbolType;
 	if (hasFlag(sym, SymbolFlag.Mutable)) return false;
