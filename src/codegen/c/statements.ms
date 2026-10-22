@@ -218,7 +218,7 @@ export function resolveEmitArgs(g: CGen, mi: Readonly<MacroInvocationData>, p: C
 // the nearest enclosing error target when the exception flag is set — so
 // statements after a raising call do not run on the raise path (double-exec).
 // Inside a try → nearest error target; no enclosing try → BeforeRet_ epilogue
-// (raiseExit L==0). DRC lifecycle hooks are no-raise ABI — never checked.
+// (raiseExit L==0). A destroy is checked only when the hook it runs can raise.
 export function emitCallRaiseCheck(p: CProc, exprNode: Readonly<Node>): void {
 	if (p.suppressRaiseCheck) return;
 	if (!statementCanRaise(exprNode)) return;
