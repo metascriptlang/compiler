@@ -1511,9 +1511,11 @@ const DEP_WITH_PCT = "export struct Dice { seed: int32; }\nexport function pct(t
 const DEP_WITH_PERCENT = "export struct Dice { seed: int32; }\nexport function percent(this dice: Dice, k: int32): int32 { return dice.seed + k; }\n";
 const USE_PERCENT = "import { Dice } from \"./dep\";\nexport function rollOnce(dice: Dice): int32 { return dice.percent(1); }\n";
 
+const syncRunTag = String(Math.floor(Math.random() * 1000000000));
+
 function syncTmpDir(name: string): string {
 	const tmp = env.get("TMPDIR") != "" ? env.get("TMPDIR") : "/tmp";
-	const dir = normalize(tmp + "/msc-lspsync-" + name);
+	const dir = normalize(tmp + "/msc-lspsync-" + name + "-" + syncRunTag);
 	mkdir(dir);
 	return dir;
 }

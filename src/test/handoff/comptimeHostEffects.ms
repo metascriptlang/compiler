@@ -14,8 +14,10 @@ function comptimeTempDir(): string {
 	return "/tmp";
 }
 
+const runTag = String(Math.floor(Math.random() * 1000000000));
+
 function freshComptimePath(name: string): string {
-	const p = join(comptimeTempDir(), name);
+	const p = join(comptimeTempDir(), name + "-" + runTag);
 	removeAll(p);
 	return p;
 }
