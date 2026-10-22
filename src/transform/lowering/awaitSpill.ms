@@ -11,7 +11,7 @@ import { booleanType } from "../../checker/types";
 import { TransformContext } from "../context";
 import {
 	makeExprStmt, makeAssign,
-	makeIf, makeBlock, makeWhile, makeBreak, makeBool, makeUnary, makeDefaultValue, extractBodyStmts,
+	makeIf, makeBlock, makeWhile, makeBreak, makeBool, makeUnary, makeDefaultValue, extractBodyStmts, isActorCall,
 } from "../util";
 import { cloneIfPure } from "../coercion/intArithJS";
 import { isNamespaceTyped } from "./namespaceValueLower";
@@ -22,7 +22,8 @@ import { shortCircuitLeftShare, shortCircuitRightRuns } from "../../checker/fit"
 import { shortCircuitShareArm, fitShortCircuitArm } from "./conditionalExprLower";
 import { foldedNullOperand, isNullExpr } from "./operatorLower";
 import { walkExpandBlocks, isFuncBoundary, anyDeep, DEEP_DESCEND, DEEP_HIT, DEEP_SKIP } from "../walker";
-import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
+import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts, checkedCtx } from "../testUtil";
+import { checkProgram } from "../../checker/checkPass";
 
 let _sp: Spiller = { ctx: null as unknown as TransformContext, has: needsSpill, lower: lowerAwaitExpr };
 
@@ -113,12 +114,23 @@ function lowerFoldedNullOperand(e: Node, pre: Node[]): Node {
 	return e;
 }
 
+function lowerAwaitedArgKeepingLentArgsInFrame(d: AwaitExprData, pre: Node[]): void {
+	d.awaitArg = lowerAwaitExpr(d.awaitArg, pre);
+	if (!isActorCall(d.awaitArg)) return;
+	const args = (d.awaitArg.data as CallExprData).arguments;
+	for (let i = 0; i < args.length; i += 1) {
+		const a = args[i];
+		if (isInert(a) || a.kind == NodeKind.MoveExpr) continue;
+		args[i] = tempRef(bindTemp(_sp, a, DeclKind.Const, a.nodeType, pre, a.location), a.location);
+	}
+}
+
 function lowerAwaitExpr(e: Node, pre: Node[]): Node {
 	if (e == null || !needsSpill(e)) return e;
 	const k = e.kind;
 	if (k == NodeKind.AwaitExpr) {
 		const d = e.data as AwaitExprData;
-		d.awaitArg = lowerAwaitExpr(d.awaitArg, pre);
+		lowerAwaitedArgKeepingLentArgsInFrame(d, pre);
 		if (isVoidType(e.nodeType)) return e;
 		if (isNeverType(e.nodeType)) {
 			pre.push(makeExprStmt(e, e.location));
@@ -218,7 +230,7 @@ function lowerAwaitStmt(s: Node): Node[] {
 		const d = s.data as ExprStmtData;
 		if (d.expr.kind == NodeKind.AwaitExpr) {
 			const ad = d.expr.data as AwaitExprData;
-			ad.awaitArg = lowerAwaitExpr(ad.awaitArg, pre);
+			lowerAwaitedArgKeepingLentArgsInFrame(ad, pre);
 		} else if (d.expr.kind == NodeKind.ConditionalExpr) {
 			const cd = d.expr.data as ConditionalExprData;
 			const cond = lowerAwaitExpr(cd.ternaryCondition, pre);
@@ -235,7 +247,7 @@ function lowerAwaitStmt(s: Node): Node[] {
 		const d = s.data as VariableDeclData;
 		if (d.initializer.kind == NodeKind.AwaitExpr) {
 			const ad = d.initializer.data as AwaitExprData;
-			ad.awaitArg = lowerAwaitExpr(ad.awaitArg, pre);
+			lowerAwaitedArgKeepingLentArgsInFrame(ad, pre);
 		} else {
 			d.initializer = lowerAwaitExpr(d.initializer, pre);
 		}
@@ -244,7 +256,7 @@ function lowerAwaitStmt(s: Node): Node[] {
 		const arg = d.argument!;
 		if (arg.kind == NodeKind.AwaitExpr && isVoidType(arg.nodeType)) {
 			const ad = arg.data as AwaitExprData;
-			ad.awaitArg = lowerAwaitExpr(ad.awaitArg, pre);
+			lowerAwaitedArgKeepingLentArgsInFrame(ad, pre);
 			pre.push(makeExprStmt(arg, loc));
 			d.argument = null;
 		} else {
@@ -262,7 +274,7 @@ function lowerAwaitStmt(s: Node): Node[] {
 			const d = ed.exportedDecl.data as VariableDeclData;
 			if (d.initializer != null && d.initializer.kind == NodeKind.AwaitExpr) {
 				const ad = d.initializer.data as AwaitExprData;
-				ad.awaitArg = lowerAwaitExpr(ad.awaitArg, pre);
+				lowerAwaitedArgKeepingLentArgsInFrame(ad, pre);
 			} else {
 				d.initializer = lowerAwaitExpr(d.initializer, pre);
 			}
@@ -417,4 +429,23 @@ test "a spill temp is minted with its module's identity" {
 	assert first.kind == NodeKind.VariableDecl;
 	assert first.resolvedSym != null && first.resolvedSym.name.startsWith("__ord_");
 	assert first.resolvedSym.item > 0;
+}
+
+function checkedBodyKinds(src: string, fnIndex: int32): string {
+	const parsed = parseInput(src);
+	if (!parsed.ok) return "PARSE_ERROR";
+	const fn = getStmts(lowerAwaitSpill(parsed.value, checkedCtx(checkProgram(parsed.value))))[fnIndex];
+	let out = "";
+	for (const s of ((fn.data as FunctionDeclData).fnBody.data as BlockStmtData).statements) out = out + s.kind.toString() + ";";
+	return out;
+}
+
+const lendingActor = "class S { n: int32 = 0; } function mk(): S { return new S(); } actor A { take(a: S, b: S): int32 { return a.n + b.n; } } ";
+
+test "an argument computed in place for an awaited actor call is bound ahead of the await" {
+	assert checkedBodyKinds(lendingActor + "async function f(w: A) { const k = await w.take(new S(), mk()); }", 3) == "VariableDecl;VariableDecl;VariableDecl;";
+}
+
+test "a named or moved argument of an awaited actor call stays in place" {
+	assert checkedBodyKinds(lendingActor + "async function f(w: A) { const s = new S(); let t = new S(); const k = await w.take(s, move t); }", 3) == "VariableDecl;VariableDecl;VariableDecl;";
 }

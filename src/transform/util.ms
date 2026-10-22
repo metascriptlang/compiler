@@ -78,6 +78,12 @@ export function isSoleFutureRead(e: Node | null): boolean {
 	const callee = (e.data as CallExprData).callee;
 	const sym = e.resolvedSym != null ? e.resolvedSym : callee.resolvedSym;
 	if (sym != null && sym.declNode != null && sym.declNode.flags.has(NodeFlag.WasAsync)) return true;
+	return isActorCall(e);
+}
+
+export function isActorCall(e: Node): boolean {
+	if (e.kind != NodeKind.CallExpr) return false;
+	const callee = (e.data as CallExprData).callee;
 	if (callee.kind != NodeKind.MemberExpr) return false;
 	let recv = (callee.data as MemberExprData).object.nodeType;
 	if (recv != null && recv.kind == TypeKind.Ref && recv.typeReturn != null) recv = recv.typeReturn;
