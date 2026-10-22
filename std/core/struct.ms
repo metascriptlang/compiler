@@ -263,7 +263,7 @@ function hashMapRawGet<K, V>(m: Readonly<HashMap<K, V>>, key: Readonly<K>): int3
 }
 
 function hashMapEnlarge<K, V>(m: HashMap<K, V>): void {
-	const oldData = m.data;
+	let oldData = move m.data;
 	const newCap = oldData.length * 2;
 	const newData: Vec<HashMapEntry<K, V>> = new Array(newCap);
 	m.data = newData;
@@ -274,8 +274,8 @@ function hashMapEnlarge<K, V>(m: HashMap<K, V>): void {
 			let j: int32 = (oldData[i].hcode & (mask as int64)) as int32;
 			while (m.data[j].hcode != 0) { j = (j + 1) & mask; }
 			m.data[j].hcode = oldData[i].hcode;
-			m.data[j].key = oldData[i].key;
-			m.data[j].value = oldData[i].value;
+			m.data[j].key = move oldData[i].key;
+			m.data[j].value = move oldData[i].value;
 		}
 		i = i + 1;
 	}
@@ -465,7 +465,7 @@ function hashSetRawGet<T>(s: Readonly<HashSet<T>>, key: Readonly<T>): int32 {
 }
 
 function hashSetEnlarge<T>(s: HashSet<T>): void {
-	const oldData = s.data;
+	let oldData = move s.data;
 	const newCap = oldData.length * 2;
 	const newData: Vec<HashSetEntry<T>> = new Array(newCap);
 	s.data = newData;
@@ -476,7 +476,7 @@ function hashSetEnlarge<T>(s: HashSet<T>): void {
 			let j: int32 = (oldData[i].hcode & (mask as int64)) as int32;
 			while (s.data[j].hcode != 0) { j = (j + 1) & mask; }
 			s.data[j].hcode = oldData[i].hcode;
-			s.data[j].key = oldData[i].key;
+			s.data[j].key = move oldData[i].key;
 		}
 		i = i + 1;
 	}
