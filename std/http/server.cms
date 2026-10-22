@@ -36,6 +36,7 @@ extern function msRunOnce(timeoutMs: int32): boolean;
 extern function msHasUringEventLoop(): int32;
 extern function msUringEvtInit(): int32;
 extern function msUringSubmitAccept(listenFd: int32): void;
+extern function msUringSubmitCancel(fd: int32, op: int32): void;
 extern function msUringSubmitRecv(fd: int32, buf: string, len: int32): void;
 extern function msUringSubmitSend(fd: int32, buf: string, len: int32): void;
 extern function msUringWait(timeoutMs: int32): int32;
@@ -74,6 +75,7 @@ import { HttpError, socketError } from "./errors";
 import * as hdrs from "./headers";
 import { frameRequest, FrameResult } from "./parser";
 import { acceptAsync, recvAsync, sendAsync } from "std/net";
+import { lockedUpdate, lockedRead } from "std/core/promise";
 extern function msIoRunOnce(timeoutMs: int32): int32;
 extern function msIoEngineCancelFd_ms(fd: int32): void;
 extern function msIoEngineAddWakeFd_ms(fd: int32): void;
@@ -94,6 +96,35 @@ export interface HttpServer {
 	maxRequestsPerConnection: int32;
 	maxHeaderSize: int32;
 	maxBodySize: int32;
+	runState: Locked<RunState>;
+}
+
+// The one value every event loop of a concurrent server shares: stop() clears it.
+struct RunState { running: boolean; }
+
+// The settings one event loop reads; each loop gets its own copy.
+struct LoopConfig {
+	keepAlive: boolean;
+	keepAliveTimeout: int32;
+	maxRequestsPerConnection: int32;
+	maxHeaderSize: int32;
+	maxBodySize: int32;
+}
+
+function loopConfig(server: Readonly<HttpServer>): LoopConfig {
+	return {
+		keepAlive: server.keepAlive, keepAliveTimeout: server.keepAliveTimeout,
+		maxRequestsPerConnection: server.maxRequestsPerConnection,
+		maxHeaderSize: server.maxHeaderSize, maxBodySize: server.maxBodySize,
+	};
+}
+
+function setRunning(run: Locked<RunState>, on: boolean): void {
+	lockedUpdate(run, (r: RunState): RunState => { return { running: on }; });
+}
+
+function isRunning(run: Locked<RunState>): boolean {
+	return lockedRead(run, (r: RunState): boolean => { return r.running; });
 }
 
 export function createServer(handler: RequestHandler): HttpServer {
@@ -102,6 +133,7 @@ export function createServer(handler: RequestHandler): HttpServer {
 		address: "0.0.0.0", port: 0,
 		keepAlive: true, keepAliveTimeout: 10000,
 		maxRequestsPerConnection: 0, maxHeaderSize: 8192, maxBodySize: 1048576,
+		runState: new Locked({ running: false }),
 	};
 }
 
@@ -123,6 +155,14 @@ export function listen(this server: HttpServer, addr: string, port: int32): Resu
 }
 
 export function stop(server: HttpServer): void {
+	if (isRunning(server.runState)) {
+		setRunning(server.runState, false);
+		return;
+	}
+	closeStopped(server);
+}
+
+function closeStopped(server: HttpServer): void {
 	server.running = false;
 	if (server.fd >= 0) { msNetClose(server.fd); server.fd = -1; }
 }
@@ -143,13 +183,7 @@ function sendBody(res: ServerResponse, contentType: string, body: string): void 
 	endResponse(res, body);
 }
 
-// Module-level mirror of the server's current keep-alive timeout, in seconds.
-// Set by serve()/serveConcurrent() before the event loop starts; read by
-// endResponse to emit the `Keep-Alive: timeout=N` header. Without this,
-// browsers default to ~300s (Chrome) or longer pool TTL — they reuse sockets
-// long after the server closes them, causing a multi-second stall on the
-// first request that lands on a dead pooled socket.
-let kaTimeoutSeconds: int32 = 60;
+const DEFAULT_KEEPALIVE_SECONDS: int32 = 60;
 
 // Pre-built status-line literals for common codes (Bun/uWebSockets pattern).
 // Returns full "HTTP/1.1 <code> <text>\r\n" string from a single match-table lookup —
@@ -235,7 +269,7 @@ function endResponse(res: ServerResponse, data: string): void {
 		hdrs.setHeader(res.headers, "content-length", data.byteLength().toString());
 	}
 	if (!hdrs.hasHeader(res.headers, "keep-alive") && !hdrs.hasHeader(res.headers, "connection")) {
-		hdrs.setHeader(res.headers, "keep-alive", "timeout=" + kaTimeoutSeconds.toString());
+		hdrs.setHeader(res.headers, "keep-alive", "timeout=" + (res._keepAliveSeconds ?? DEFAULT_KEEPALIVE_SECONDS).toString());
 	}
 	// Build response in-place into _responseData (pre-allocated 4KB cap via initClient).
 	// Zero alloc for responses that fit in cap — buffer is reused across requests
@@ -464,7 +498,7 @@ interface ClientState {
 // (~300 bytes) instead of the worst-case 4 KB. This makes a single
 // MetaScript HTTP process behave like Rust/C wrt resident memory: ~7 MB
 // pre-alloc instead of ~70 MB across 8 worker threads + 1024 fd slots.
-function initClient(fd: int32): ClientState {
+function initClient(fd: int32, keepAliveSeconds: int32): ClientState {
 	return {
 		data: msStringNewCap(0), sendQueue: "", bytesSent: 0, headersEndPos: -1, asyncPending: false,
 		lastActivityMs: 0 as int64,
@@ -479,6 +513,7 @@ function initClient(fd: int32): ClientState {
 			headersSent: false, _finished: false, _chunked: false,
 			_responseData: msStringNewCap(0),
 			_upgraded: false,
+			_keepAliveSeconds: keepAliveSeconds,
 		},
 	};
 }
@@ -604,10 +639,10 @@ const SWEEP_INTERVAL_TICKS: int32 = 100;
 // peer-close shape; msNetClose triggers engine cleanup on uring/IOCP.
 // Opt-out via keepAliveTimeout <= 0 (e.g. WS servers that drive their
 // own ping/pong).
-function idleSweep(clients: ClientState[], server: Readonly<HttpServer>): void {
-	if (server.keepAliveTimeout <= 0) return;
+function idleSweep(clients: ClientState[], cfg: Readonly<LoopConfig>): void {
+	if (cfg.keepAliveTimeout <= 0) return;
 	const now = msMonoTimeMs();
-	const threshold = now - (server.keepAliveTimeout as int64);
+	const threshold = now - (cfg.keepAliveTimeout as int64);
 	let i: int32 = 0;
 	while (i < MAX_CLIENT_FDS) {
 		const c = clients[i];
@@ -632,24 +667,50 @@ function wireDispatcherWake(): void {
 	if (wakeFd >= 0) msIoEngineAddWakeFd_ms(wakeFd);
 }
 
-function driveWithSweep(server: Readonly<HttpServer>, clients: ClientState[]): void {
+function driveWithSweep(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listenFd: int32, clients: ClientState[]): void {
 	wireDispatcherWake();
 	let sweepTick: int32 = 0;
-	while (server.running) {
+	while (isRunning(run)) {
 		msIoRunOnce(DRIVER_POLL_MS);
 		sweepTick = sweepTick + 1;
 		if (sweepTick >= SWEEP_INTERVAL_TICKS) {
 			sweepTick = 0;
-			idleSweep(clients, server);
+			idleSweep(clients, cfg);
+		}
+	}
+	// Stopped: end the accept, close the connections that wait for a next
+	// request, and keep driving until the ones mid-request have sent their
+	// response, so every connection task returns before the thread does.
+	msIoEngineCancelFd_ms(listenFd);
+	while (closeWaitingCountOpen(clients) > 0) {
+		msIoRunOnce(DRIVER_POLL_MS);
+		sweepTick = sweepTick + 1;
+		if (sweepTick >= SWEEP_INTERVAL_TICKS) {
+			sweepTick = 0;
+			idleSweep(clients, cfg);
 		}
 	}
 }
 
-function allocClients(): ClientState[] {
+function closeWaitingCountOpen(clients: ClientState[]): int32 {
+	let open: int32 = 0;
+	let i: int32 = 0;
+	while (i < MAX_CLIENT_FDS) {
+		const c = clients[i];
+		if (c.lastActivityMs != (0 as int64) && !c.response._upgraded) {
+			if (c.data.length == 0) msIoEngineCancelFd_ms(i);
+			open = open + 1;
+		}
+		i = i + 1;
+	}
+	return open;
+}
+
+function allocClients(cfg: Readonly<LoopConfig>): ClientState[] {
 	const clients: ClientState[] = new Array(MAX_CLIENT_FDS);
 	let ci: int32 = 0;
 	while (ci < MAX_CLIENT_FDS) {
-		clients[ci] = initClient(ci);
+		clients[ci] = initClient(ci, cfg.keepAliveTimeout / 1000);
 		ci = ci + 1;
 	}
 	return clients;
@@ -658,58 +719,50 @@ function allocClients(): ClientState[] {
 export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
 	const n = threads > 0 ? threads : msOsCpuCount();
 	server.running = true;
-	kaTimeoutSeconds = server.keepAliveTimeout / 1000;
+	setRunning(server.runState, true);
 	if (server.fd >= 0) { msNetClose(server.fd); server.fd = -1; }
 
+	const cfg = loopConfig(server);
+	const run = server.runState;
 	const addr = server.address;
 	const port = server.port;
 	const handler = server.handler;
 
-	const useUring = msHasUringEventLoop() == 1;
-
+	const workers: Promise<null>[] = [];
 	for (let i = 0; i < n - 1; i += 1) {
-		spawn(() => {
-			const fd = msNetSocket();
-			if (fd < 0) return null;
-			if (msNetBindShared(fd, addr, port) < 0) { msNetClose(fd); return null; }
-			if (msNetListen(fd, 1024) < 0) { msNetClose(fd); return null; }
-			msNetSetNonBlocking(fd);
-			if (useUring) {
-				eventLoopUring(server, fd, handler);
-			} else {
-				const clients = allocClients();
-				listenAsyncLoop(server, fd, handler, clients);
-				driveWithSweep(server, clients);
-			}
-			msNetClose(fd);
-			return null;
-		});
+		workers.push(spawn(() => serveThread(cfg, run, addr, port, handler)));
 	}
-
-	const fd = msNetSocket();
-	if (fd < 0) return;
-	if (msNetBindShared(fd, addr, port) < 0) { msNetClose(fd); return; }
-	if (msNetListen(fd, 1024) < 0) { msNetClose(fd); return; }
-	msNetSetNonBlocking(fd);
-	if (useUring) {
-		eventLoopUring(server, fd, handler);
-	} else {
-		const clients = allocClients();
-		listenAsyncLoop(server, fd, handler, clients);
-		driveWithSweep(server, clients);
-	}
-	msNetClose(fd);
+	serveThread(cfg, run, addr, port, handler);
+	for (const w of workers) await w;
+	server.running = false;
 }
 
-async function listenAsyncLoop(server: Readonly<HttpServer>, listenFd: int32, handler: RequestHandler, clients: ClientState[]): Promise<void> {
-	while (server.running) {
+function serveThread(cfg: Readonly<LoopConfig>, run: Locked<RunState>, addr: string, port: int32, handler: RequestHandler): null {
+	const fd = msNetSocket();
+	if (fd < 0) return null;
+	if (msNetBindShared(fd, addr, port) < 0) { msNetClose(fd); return null; }
+	if (msNetListen(fd, 1024) < 0) { msNetClose(fd); return null; }
+	msNetSetNonBlocking(fd);
+	if (msHasUringEventLoop() == 1) {
+		eventLoopUring(cfg, run, fd, handler);
+	} else {
+		const clients = allocClients(cfg);
+		listenAsyncLoop(cfg, run, fd, handler, clients);
+		driveWithSweep(cfg, run, fd, clients);
+	}
+	msNetClose(fd);
+	return null;
+}
+
+async function listenAsyncLoop(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listenFd: int32, handler: RequestHandler, clients: ClientState[]): Promise<void> {
+	while (isRunning(run)) {
 		const cfd = await acceptAsync(listenFd);
 		if (cfd >= 0 && cfd < MAX_CLIENT_FDS) {
 			msNetSetTcpNoDelay(cfd);
 			msNetSetNoSigpipe(cfd);
 			msNetSetNonBlocking(cfd);
 			resetClient(clients[cfd], cfd);
-			handleConnSync(server, clients[cfd], cfd, handler);
+			handleConnSync(cfg, run, clients[cfd], cfd, handler);
 		} else if (cfd >= MAX_CLIENT_FDS) {
 			msNetClose(cfd);
 		}
@@ -717,18 +770,18 @@ async function listenAsyncLoop(server: Readonly<HttpServer>, listenFd: int32, ha
 	}
 }
 
-async function handleConnSync(server: Readonly<HttpServer>, client: ClientState, fd: int32, handler: RequestHandler): Promise<void> {
+async function handleConnSync(cfg: Readonly<LoopConfig>, run: Locked<RunState>, client: ClientState, fd: int32, handler: RequestHandler): Promise<void> {
 	let alive: boolean = true;
 	let requestCount: int32 = 0;
-	while (alive && server.running) {
+	while (alive && isRunning(run)) {
 		// 1) Drain headers until findHeaderEnd succeeds
 		let endPos: int32 = findHeaderEnd(client.data);
 		while (alive && endPos < 0) {
-			if ((client.data.byteLength() as int32) > server.maxHeaderSize) {
+			if ((client.data.byteLength() as int32) > cfg.maxHeaderSize) {
 				msNetSend(fd, buildErrorResponse(431));
 				alive = false;
 			} else {
-				const chunk = await recvAsync(fd, server.maxHeaderSize);
+				const chunk = await recvAsync(fd, cfg.maxHeaderSize);
 				if (chunk.length == 0) {
 					alive = false;
 				} else {
@@ -751,19 +804,19 @@ async function handleConnSync(server: Readonly<HttpServer>, client: ClientState,
 
 		// 3) Frame body — recv more until ready / reject
 		let bufferAfter = client.data.slice(endPos, client.data.length);
-		let frame: FrameResult = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, server.maxBodySize);
+		let frame: FrameResult = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, cfg.maxBodySize);
 		while (alive && frame.kind == "needMore") {
-			if ((bufferAfter.byteLength() as int32) > server.maxBodySize) {
+			if ((bufferAfter.byteLength() as int32) > cfg.maxBodySize) {
 				msNetSend(fd, buildErrorResponse(413));
 				alive = false;
 			} else {
-				const more = await recvAsync(fd, server.maxHeaderSize);
+				const more = await recvAsync(fd, cfg.maxHeaderSize);
 				if (more.length == 0) {
 					alive = false;
 				} else {
 					client.data += more; client.lastActivityMs = msMonoTimeMs();
 					bufferAfter = client.data.slice(endPos, client.data.length);
-					frame = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, server.maxBodySize);
+					frame = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, cfg.maxBodySize);
 				}
 			}
 		}
@@ -795,9 +848,9 @@ async function handleConnSync(server: Readonly<HttpServer>, client: ClientState,
 
 		// 7) Protocol switch / keep-alive
 		if (client.response._upgraded) return;  // fd ownership handed off
-		if (!server.keepAlive) break;
+		if (!cfg.keepAlive) break;
 		requestCount = requestCount + 1;
-		if (server.maxRequestsPerConnection > 0 && requestCount >= server.maxRequestsPerConnection) break;
+		if (cfg.maxRequestsPerConnection > 0 && requestCount >= cfg.maxRequestsPerConnection) break;
 	}
 	// Multi-worker SO_REUSEPORT: fd numbers reused across workers; without
 	// this reset a stale lastActivityMs could trigger one worker to kill
@@ -810,8 +863,8 @@ async function handleConnSync(server: Readonly<HttpServer>, client: ClientState,
 
 export function serve(server: HttpServer): void {
 	server.running = true;
-	kaTimeoutSeconds = server.keepAliveTimeout / 1000;
-	while (server.running) {
+	setRunning(server.runState, true);
+	while (isRunning(server.runState)) {
 		const clientFd = msNetAccept(server.fd);
 		if (clientFd < 0) continue;
 		// Match eventLoop / async / io_uring paths — Mac doesn't get MSG_NOSIGNAL
@@ -826,19 +879,26 @@ export function serve(server: HttpServer): void {
 		// caller's protocol layer (e.g. a WebSocket recv loop) — don't close.
 		if (!upgraded) msNetClose(clientFd);
 	}
+	closeStopped(server);
 }
 
 export function serveN(server: HttpServer, count: int32): void {
 	server.running = true;
+	setRunning(server.runState, true);
 	let served = 0;
-	while (server.running && served < count) {
+	while (isRunning(server.runState) && served < count) {
 		const clientFd = msNetAccept(server.fd);
 		if (clientFd < 0) continue;
 		const upgraded = handleBlocking(server, clientFd);
 		if (!upgraded) msNetClose(clientFd);
 		served = served + 1;
 	}
-	server.running = false;
+	if (isRunning(server.runState)) {
+		setRunning(server.runState, false);
+		server.running = false;
+	} else {
+		closeStopped(server);
+	}
 }
 
 // Returns true iff the handler upgraded the connection (called res.detach());
@@ -846,7 +906,7 @@ export function serveN(server: HttpServer, count: int32): void {
 function handleBlocking(server: HttpServer, fd: int32): boolean {
 	let requestCount = 0;
 	let keepGoing = true;
-	const client = initClient(fd);
+	const client = initClient(fd, server.keepAliveTimeout / 1000);
 	while (keepGoing) {
 		// 1. Drain headers: recv until findHeaderEnd locates the real \r\n\r\n
 		// terminator. (findHeaderEnd validates fast/slow internally — see its
@@ -925,49 +985,57 @@ function handleBlocking(server: HttpServer, fd: int32): boolean {
 // frame body, dispatch handler. Submits the next uring op (recv / send / close)
 // based on framer state. Mirrors `dispatch()` (selector path) but with uring
 // submission instead of msSelectorModify.
-function dispatchUringRecv(server: Readonly<HttpServer>, client: ClientState, fd: int32, handler: RequestHandler): void {
+const URING_ACCEPT: int32 = 0;
+const URING_RECV: int32 = 1;
+
+const CONN_CLOSED: int32 = 0;
+const CONN_RECV: int32 = 1;
+const CONN_SEND: int32 = 2;
+const CONN_CANCELLING: int32 = 3;
+
+function dispatchUringRecv(cfg: Readonly<LoopConfig>, client: ClientState, fd: int32, handler: RequestHandler): int32 {
 	// Find header end if not yet known. client.data is the accumulated buffer
 	// across multiple recvs — required for split headers/body or large headers.
 	if (client.headersEndPos < 0) {
 		const endPos = findHeaderEnd(client.data);
 		if (endPos < 0) {
 			// Headers incomplete — wait for more bytes.
-			if ((client.data.byteLength() as int32) > server.maxHeaderSize) {
+			if ((client.data.byteLength() as int32) > cfg.maxHeaderSize) {
 				msNetSend(fd, buildErrorResponse(431));
 				msNetClose(fd);
-				return;
+				return CONN_CLOSED;
 			}
 			msUringSubmitRecv(fd, "", 4096);
-			return;
+			return CONN_RECV;
 		}
 		client.headersEndPos = endPos;
 	}
 
 	const methodInt = msFastParseMethod(client.data);
-	if (methodInt < 0) { msNetClose(fd); return; }
+	if (methodInt < 0) { msNetClose(fd); return CONN_CLOSED; }
 
 	client.request.path.parsePathInto(client.data);
-	if (client.request.path.length == 0) { msNetClose(fd); return; }
+	if (client.request.path.length == 0) { msNetClose(fd); return CONN_CLOSED; }
 
 	resetRequest(client, fd, methodInt);
 	resetResponse(client, fd);
 	parseHeadersInline(client.data, client.headersEndPos, client.request.headers);
 
 	const bufferAfter = client.data.slice(client.headersEndPos, client.data.length);
-	const frame = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, server.maxBodySize);
+	const frame = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, cfg.maxBodySize);
 	if (frame.kind == "needMore") {
-		if ((bufferAfter.byteLength() as int32) > server.maxBodySize) {
+		if ((bufferAfter.byteLength() as int32) > cfg.maxBodySize) {
 			msNetSend(fd, buildErrorResponse(413));
 			msNetClose(fd);
-			return;
+			return CONN_CLOSED;
 		}
 		msUringSubmitRecv(fd, "", 4096);
-		return;
+		return CONN_RECV;
 	}
 	if (frame.kind == "reject") {
 		msNetSend(fd, buildErrorResponse(frame.rejectStatus));
 		msNetClose(fd);
-		return;
+		return CONN_CLOSED;
 	}
 
 	client.request.body = frame.body;
@@ -986,24 +1054,26 @@ function dispatchUringRecv(server: Readonly<HttpServer>, client: ClientState, fd
 	if (client.response._upgraded) {
 		if (client.response._finished && client.response._responseData.length > 0) {
 			msUringSubmitSend(fd, client.response._responseData, client.response._responseData.length);
+			return CONN_SEND;
 		}
 		// else: fd silently detached, no further uring ops
-		return;
+		return CONN_CLOSED;
 	}
 
 	if (client.response._finished && client.response._responseData.length > 0) {
 		msUringSubmitSend(fd, client.response._responseData, client.response._responseData.length);
-	} else {
-		msUringSubmitRecv(fd, "", 4096);
+		return CONN_SEND;
 	}
+	msUringSubmitRecv(fd, "", 4096);
+	return CONN_RECV;
 }
 
-function eventLoopUring(server: Readonly<HttpServer>, listenFd: int32, handler: RequestHandler): void {
+function eventLoopUring(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listenFd: int32, handler: RequestHandler): void {
 	if (msUringEvtInit() < 0) {
 		// Fallback to engine-based async event loop (kqueue / epoll / poll)
-		const clients = allocClients();
-		listenAsyncLoop(server, listenFd, handler, clients);
-		driveWithSweep(server, clients);
+		const clients = allocClients(cfg);
+		listenAsyncLoop(cfg, run, listenFd, handler, clients);
+		driveWithSweep(cfg, run, listenFd, clients);
 		return;
 	}
 
@@ -1015,10 +1085,19 @@ function eventLoopUring(server: Readonly<HttpServer>, listenFd: int32, handler: 
 	// would inflate baseline by ~2 MB per worker thread for no gain.
 	const clients: ClientState[] = new Array(maxFds);
 
+	const conns: int32[] = new Array(maxFds);
+	for (let k = 0; k < maxFds; k += 1) conns[k] = CONN_CLOSED;
+	let stopping = false;
+	let accepting = true;
+
 	msUringSubmitAccept(listenFd);
 
-	while (server.running) {
-		const count = msUringWait(-1);
+	while (!stopping || accepting || uringOpenCount(conns, clients) > 0) {
+		if (!stopping && !isRunning(run)) {
+			stopping = true;
+			msUringSubmitCancel(listenFd, URING_ACCEPT);
+		}
+		const count = msUringWait(DRIVER_POLL_MS);
 		let i = 0;
 		while (i < count) {
 			const evFd = msUringEventFd(i);
@@ -1027,31 +1106,37 @@ function eventLoopUring(server: Readonly<HttpServer>, listenFd: int32, handler: 
 
 			if (op == 0) {
 				// ACCEPT — set socket opts, start recv
-				if (res >= 0 && res < maxFds) {
+				if (res >= 0 && res < maxFds && !stopping) {
 					msNetSetTcpNoDelay(res);
 					msNetSetNoSigpipe(res);
 					msNetSetNonBlocking(res);
 					if (clients[res] == null as unknown as ClientState) {
-						clients[res] = initClient(res);
+						clients[res] = initClient(res, cfg.keepAliveTimeout / 1000);
 					} else {
 						resetClient(clients[res], res);
 					}
 					msUringSubmitRecv(res, "", 4096);
+					conns[res] = CONN_RECV;
 				} else if (res >= 0) {
 					msNetClose(res);
 				}
-				msUringSubmitAccept(listenFd);
+				if (stopping) {
+					accepting = false;
+				} else {
+					msUringSubmitAccept(listenFd);
+				}
 			} else if (op == 1) {
 				// RECV — accumulate bytes into client.data, then dispatch via helper.
 				// dispatchUringRecv handles header-end detection, body framing
 				// (Content-Length / chunked), and submitting the next uring op.
 				if (res <= 0) {
 					msNetClose(evFd);
+					if (evFd >= 0 && evFd < maxFds) conns[evFd] = CONN_CLOSED;
 				} else if (evFd >= 0 && evFd < maxFds) {
 					const client = clients[evFd];
 					if (client != null as unknown as ClientState) {
 						client.data += msUringRecvData(evFd, res);
-						dispatchUringRecv(server, client, evFd, handler);
+						conns[evFd] = dispatchUringRecv(cfg, client, evFd, handler);
 					}
 				}
 			} else if (op == 2) {
@@ -1061,8 +1146,14 @@ function eventLoopUring(server: Readonly<HttpServer>, listenFd: int32, handler: 
 				// don't resubmit a recv that would steal frames from it.
 				if (evFd >= 0 && evFd < maxFds) {
 					clients[evFd].sendQueue = "";
-					if (!clients[evFd].response._upgraded) {
+					if (clients[evFd].response._upgraded) {
+						conns[evFd] = CONN_CLOSED;
+					} else if (stopping) {
+						msNetClose(evFd);
+						conns[evFd] = CONN_CLOSED;
+					} else {
 						msUringSubmitRecv(evFd, "", 4096);
+						conns[evFd] = CONN_RECV;
 					}
 				}
 			}
@@ -1070,6 +1161,20 @@ function eventLoopUring(server: Readonly<HttpServer>, listenFd: int32, handler: 
 		}
 		msRunOnce(0);
 	}
+}
+
+function uringOpenCount(conns: int32[], clients: ClientState[]): int32 {
+	let open: int32 = 0;
+	let fd: int32 = 0;
+	while (fd < conns.length) {
+		if (conns[fd] == CONN_RECV && clients[fd].data.length == 0) {
+			msUringSubmitCancel(fd, URING_RECV);
+			conns[fd] = CONN_CANCELLING;
+		}
+		if (conns[fd] != CONN_CLOSED) open = open + 1;
+		fd = fd + 1;
+	}
+	return open;
 }
 
 // ===== Async Handler Support =====
@@ -1083,37 +1188,38 @@ export function createServerAsync(handler: AsyncRequestHandler): HttpServer {
 		address: "0.0.0.0", port: 0,
 		keepAlive: true, keepAliveTimeout: 10000,
 		maxRequestsPerConnection: 0, maxHeaderSize: 8192, maxBodySize: 1048576,
+		runState: new Locked({ running: false }),
 	};
 }
 
 
-async function listenAsyncLoopA(server: Readonly<HttpServer>, listenFd: int32, handler: AsyncRequestHandler, clients: ClientState[]): Promise<void> {
-	while (server.running) {
+async function listenAsyncLoopA(cfg: Readonly<LoopConfig>, run: Locked<RunState>, listenFd: int32, handler: AsyncRequestHandler, clients: ClientState[]): Promise<void> {
+	while (isRunning(run)) {
 		const cfd = await acceptAsync(listenFd);
 		if (cfd >= 0 && cfd < MAX_CLIENT_FDS) {
 			msNetSetTcpNoDelay(cfd);
 			msNetSetNoSigpipe(cfd);
 			msNetSetNonBlocking(cfd);
 			resetClient(clients[cfd], cfd);
-			handleConnAsync(server, clients[cfd], cfd, handler);
+			handleConnAsync(cfg, run, clients[cfd], cfd, handler);
 		} else if (cfd >= MAX_CLIENT_FDS) {
 			msNetClose(cfd);
 		}
 	}
 }
 
-async function handleConnAsync(server: Readonly<HttpServer>, client: ClientState, fd: int32, handler: AsyncRequestHandler): Promise<void> {
+async function handleConnAsync(cfg: Readonly<LoopConfig>, run: Locked<RunState>, client: ClientState, fd: int32, handler: AsyncRequestHandler): Promise<void> {
 	let alive: boolean = true;
 	let requestCount: int32 = 0;
-	while (alive && server.running) {
+	while (alive && isRunning(run)) {
 		// 1) Drain headers
 		let endPos: int32 = findHeaderEnd(client.data);
 		while (alive && endPos < 0) {
-			if ((client.data.byteLength() as int32) > server.maxHeaderSize) {
+			if ((client.data.byteLength() as int32) > cfg.maxHeaderSize) {
 				msNetSend(fd, buildErrorResponse(431));
 				alive = false;
 			} else {
-				const chunk = await recvAsync(fd, server.maxHeaderSize);
+				const chunk = await recvAsync(fd, cfg.maxHeaderSize);
 				if (chunk.length == 0) {
 					alive = false;
 				} else {
@@ -1136,19 +1242,19 @@ async function handleConnAsync(server: Readonly<HttpServer>, client: ClientState
 
 		// 3) Frame body
 		let bufferAfter = client.data.slice(endPos, client.data.length);
-		let frame: FrameResult = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, server.maxBodySize);
+		let frame: FrameResult = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, cfg.maxBodySize);
 		while (alive && frame.kind == "needMore") {
-			if ((bufferAfter.byteLength() as int32) > server.maxBodySize) {
+			if ((bufferAfter.byteLength() as int32) > cfg.maxBodySize) {
 				msNetSend(fd, buildErrorResponse(413));
 				alive = false;
 			} else {
-				const more = await recvAsync(fd, server.maxHeaderSize);
+				const more = await recvAsync(fd, cfg.maxHeaderSize);
 				if (more.length == 0) {
 					alive = false;
 				} else {
 					client.data += more; client.lastActivityMs = msMonoTimeMs();
 					bufferAfter = client.data.slice(endPos, client.data.length);
-					frame = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, server.maxBodySize);
+					frame = frameRequest(client.request.headers, methodInt as HttpMethod, bufferAfter, cfg.maxBodySize);
 				}
 			}
 		}
@@ -1180,9 +1286,9 @@ async function handleConnAsync(server: Readonly<HttpServer>, client: ClientState
 
 		// 7) Protocol switch / keep-alive
 		if (client.response._upgraded) return;
-		if (!server.keepAlive) break;
+		if (!cfg.keepAlive) break;
 		requestCount = requestCount + 1;
-		if (server.maxRequestsPerConnection > 0 && requestCount >= server.maxRequestsPerConnection) break;
+		if (cfg.maxRequestsPerConnection > 0 && requestCount >= cfg.maxRequestsPerConnection) break;
 	}
 	client.lastActivityMs = 0 as int64;  // see handleConnSync above
 	msNetClose(fd);
@@ -1191,34 +1297,32 @@ async function handleConnAsync(server: Readonly<HttpServer>, client: ClientState
 export function serveConcurrentAsync(server: HttpServer, handler: AsyncRequestHandler, threads: int32 = 0): void {
 	const n = threads > 0 ? threads : msOsCpuCount();
 	server.running = true;
-	kaTimeoutSeconds = server.keepAliveTimeout / 1000;
+	setRunning(server.runState, true);
 	if (server.fd >= 0) { msNetClose(server.fd); server.fd = -1; }
 
+	const cfg = loopConfig(server);
+	const run = server.runState;
 	const addr = server.address;
 	const port = server.port;
 
+	const workers: Promise<null>[] = [];
 	for (let i = 0; i < n - 1; i += 1) {
-		spawn(() => {
-			const fd = msNetSocket();
-			if (fd < 0) return null;
-			if (msNetBindShared(fd, addr, port) < 0) { msNetClose(fd); return null; }
-			if (msNetListen(fd, 1024) < 0) { msNetClose(fd); return null; }
-			msNetSetNonBlocking(fd);
-			const clients = allocClients();
-			listenAsyncLoopA(server, fd, handler, clients);
-			driveWithSweep(server, clients);
-			msNetClose(fd);
-			return null;
-		});
+		workers.push(spawn(() => serveThreadAsync(cfg, run, addr, port, handler)));
 	}
+	serveThreadAsync(cfg, run, addr, port, handler);
+	for (const w of workers) await w;
+	server.running = false;
+}
 
+function serveThreadAsync(cfg: Readonly<LoopConfig>, run: Locked<RunState>, addr: string, port: int32, handler: AsyncRequestHandler): null {
 	const fd = msNetSocket();
-	if (fd < 0) return;
-	if (msNetBindShared(fd, addr, port) < 0) { msNetClose(fd); return; }
-	if (msNetListen(fd, 1024) < 0) { msNetClose(fd); return; }
+	if (fd < 0) return null;
+	if (msNetBindShared(fd, addr, port) < 0) { msNetClose(fd); return null; }
+	if (msNetListen(fd, 1024) < 0) { msNetClose(fd); return null; }
 	msNetSetNonBlocking(fd);
-	const clients = allocClients();
-	listenAsyncLoopA(server, fd, handler, clients);
-	driveWithSweep(server, clients);
+	const clients = allocClients(cfg);
+	listenAsyncLoopA(cfg, run, fd, handler, clients);
+	driveWithSweep(cfg, run, fd, clients);
 	msNetClose(fd);
+	return null;
 }
