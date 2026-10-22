@@ -29,7 +29,7 @@ import { callStateProgramParser } from "../parser/statements/callbacks";
 import "../parser/statements/core";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData, CallExprData, IdentifierData, StringLiteralData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { readFile, writeFile, ensureDir, realpath, readDir } from "std/fs";
+import { readFile, writeFile, ensureDir, realpath, readDir, removeAll } from "std/fs";
 import { translateHeaderModule, HeaderTranslation, registerCompleteStruct, completeStructKey, registerHeaderIncludes } from "./cimport/emit";
 import { Diagnostic, DiagSeverity } from "./cparse/error";
 import { TargetInfo, targetFor, hostTarget } from "./cparse/target";
@@ -923,9 +923,11 @@ function unregisterHeaderCacheForTest(): void {
 	registerHeaderCache(null as unknown as HeaderCacheKeyFn, null as unknown as HeaderCacheLookupFn, null as unknown as HeaderCacheStoreFn);
 }
 
+const hcwDir = "/tmp/mshcw-" + String(Math.floor(Math.random() * 1000000000));
+
 test "header cache wrapper: miss stores deps+output, hit short-circuits" {
-	ensureDir("/tmp/mshcw");
-	writeFile("/tmp/mshcw/a.h", "extern int hcwA(void);\n");
+	ensureDir(hcwDir);
+	writeFile(hcwDir + "/a.h", "extern int hcwA(void);\n");
 	let storedKey = "";
 	let storedDeps: string[] = [];
 	let storedOut = "";
@@ -935,16 +937,16 @@ test "header cache wrapper: miss stores deps+output, hit short-circuits" {
 		(k: string, d: string[], o: string) => { storedKey = k; storedDeps = d; storedOut = o; }
 	);
 	takeHeaderTimings();
-	const out1 = headerModuleSource("/tmp/mshcw/a.h", createFileSystemProvider(), null, []);
+	const out1 = headerModuleSource(hcwDir + "/a.h", createFileSystemProvider(), null, []);
 	assert storedKey == "KHCW";
 	assert storedOut.endsWith("\n" + out1), storedOut;
 	assert out1.indexOf("export extern function hcwA") >= 0;
 	let sawCompanionProbe = false;
 	for (const d of storedDeps) {
-		if (d == "/tmp/mshcw/a.c\t-") sawCompanionProbe = true;
+		if (d == hcwDir + "/a.c\t-") sawCompanionProbe = true;
 	}
 	assert sawCompanionProbe, storedDeps.join(",");
-	const out2 = headerModuleSource("/tmp/mshcw/a.h", createFileSystemProvider(), null, []);
+	const out2 = headerModuleSource(hcwDir + "/a.h", createFileSystemProvider(), null, []);
 	assert out2 == out1;
 	const t = takeHeaderTimings();
 	assert t.hits == 1;
@@ -953,25 +955,25 @@ test "header cache wrapper: miss stores deps+output, hit short-circuits" {
 }
 
 test "header cache wrapper: an entry carries the complete structs of its header" {
-	ensureDir("/tmp/mshcw");
-	writeFile("/tmp/mshcw/s.h", "typedef struct { long size; int v; } HcwS;\n");
+	ensureDir(hcwDir);
+	writeFile(hcwDir + "/s.h", "typedef struct { long size; int v; } HcwS;\n");
 	let storedOut = "";
 	registerHeaderCache(
 		(_s: string, _h: string, _t: string) => "KHCWS",
 		(k: string) => { return k == "KHCWS" && storedOut != "" ? storedOut : ""; },
 		(_k: string, _d: string[], o: string) => { storedOut = o; }
 	);
-	const out1 = headerModuleSource("/tmp/mshcw/s.h", createFileSystemProvider(), null, []);
+	const out1 = headerModuleSource(hcwDir + "/s.h", createFileSystemProvider(), null, []);
 	const t = headerTarget();
 	const key = completeStructKey(`${t.os}-${t.cpu}`, "HcwS", ["size", "v"], [t.longSize == 4 ? "int32" : "int64", "int32"]);
 	assert storedOut.startsWith("1\n" + key + "\n"), storedOut;
-	assert headerModuleSource("/tmp/mshcw/s.h", createFileSystemProvider(), null, []) == out1;
+	assert headerModuleSource(hcwDir + "/s.h", createFileSystemProvider(), null, []) == out1;
 	unregisterHeaderCacheForTest();
 }
 
 test "header cache wrapper: diagnostics-producing runs are not stored" {
-	ensureDir("/tmp/mshcw");
-	writeFile("/tmp/mshcw/bad.h", "#include <nope/nada.h>\nint hcwBad(void);\n");
+	ensureDir(hcwDir);
+	writeFile(hcwDir + "/bad.h", "#include <nope/nada.h>\nint hcwBad(void);\n");
 	let storeCalls = 0;
 	registerHeaderCache(
 		(_s: string, _h: string, _t: string) => "KERR",
@@ -979,10 +981,11 @@ test "header cache wrapper: diagnostics-producing runs are not stored" {
 		(_k: string, _d: string[], _o: string) => { storeCalls = storeCalls + 1; }
 	);
 	const errs: ModuleError[] = [];
-	headerModuleSource("/tmp/mshcw/bad.h", createFileSystemProvider(), null, errs);
+	headerModuleSource(hcwDir + "/bad.h", createFileSystemProvider(), null, errs);
 	assert errs.length > 0;
 	assert storeCalls == 0;
 	unregisterHeaderCacheForTest();
+	removeAll(hcwDir);
 }
 
 test "header cache wrapper: map providers bypass the cache" {

@@ -13,7 +13,7 @@ import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensio
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl, declOfStatement } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
-import { readFile, writeFile, ensureDir, isFile } from "std/fs";
+import { readFile, writeFile, ensureDir, isFile, removeAll } from "std/fs";
 import { env, cwd } from "std/process";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, normalize, isAbsolute } from "std/fs/path";
@@ -6394,13 +6394,17 @@ test "promoting a module into the prelude every build shares is an internal erro
 	assert ctx.errors[0].message.startsWith("internal:");
 }
 
+const preludeOrderRoot = "/tmp/msc-prelude-order-" + String(Math.floor(Math.random() * 1000000000));
+
 function preludeOfModules(dir: string, sources: string[][]): CheckerContext {
-	const std = `/tmp/msc-prelude-order/${dir}/std`;
+	const std = `${preludeOrderRoot}/${dir}/std`;
 	for (const s of sources) {
 		ensureDir(`${std}/core/${s[0]}`);
 		writeFile(`${std}/core/${s[0]}/index.cms`, s[1]);
 	}
-	return checkPreludeFromSource(std, ".cms");
+	const ctx = checkPreludeFromSource(std, ".cms");
+	removeAll(preludeOrderRoot);
+	return ctx;
 }
 
 function preludeExports(ctx: CheckerContext, name: string): boolean {
