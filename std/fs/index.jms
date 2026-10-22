@@ -114,7 +114,7 @@ export function chmod(path: string, mode: int32): Result<void, IoError> {
 	}
 }
 
-// Same contract as the C runtime's msFsMkdir: an already-existing directory
+// Same contract as mkdir on the C backend: an already-existing directory
 // is success, not an error.
 export function mkdir(path: string): Result<void, IoError> {
 	try {
