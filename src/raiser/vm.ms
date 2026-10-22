@@ -1866,10 +1866,10 @@ function runStrandSlice(vm: RaiserVM): void {
 	if (vm.halted || vm.yielded) return;
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
 	assertPacked(func);
-	dispatch(vm, func.packed, vm.regs.words, vm.regs.refs);
+	dispatch(vm, func.packed, vm.regs.words, vm.regs.refs, vm.objectHeap.objects);
 }
 
-function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Span<int64>): void {
+function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Span<int64>, objects: Span<RaiserObjectData>): void {
 	const mod = vm.mod;
 	let funcIdx = vm.funcIdx;
 	let func: Cursor<RaiserFunction> = mod.functions[funcIdx];
@@ -2628,7 +2628,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const idx = ((word >> 56) & 255) as int32;
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
 					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
-					const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
+					const obj: Cursor<RaiserObjectData> = objects[handleIndex(handle)];
 					if (idx >= obj.classType.fields.length) { slow = true; break; }
 					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 40) & 65535) as int32]) { slow = true; break; } }
 					if (obj.fields[idx].kind == RaiserValueKind.Int) {
@@ -2648,7 +2648,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const idx = ((word >> 56) & 255) as int32;
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
 					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
-					const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
+					const obj: Cursor<RaiserObjectData> = objects[handleIndex(handle)];
 					if (idx >= obj.classType.fields.length) { slow = true; break; }
 					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 40) & 65535) as int32]) { slow = true; break; } }
 					const kind = obj.fields[idx].kind;
@@ -2669,7 +2669,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const idx = ((word >> 56) & 255) as int32;
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
 					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
-					const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
+					const obj: Cursor<RaiserObjectData> = objects[handleIndex(handle)];
 					if (idx >= obj.classType.fields.length) { slow = true; break; }
 					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 24) & 65535) as int32]) { slow = true; break; } }
 					const kind = obj.fields[idx].kind;
@@ -2691,7 +2691,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const idx = ((word >> 56) & 255) as int32;
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
 					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
-					const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
+					const obj: Cursor<RaiserObjectData> = objects[handleIndex(handle)];
 					if (idx >= obj.classType.fields.length) { slow = true; break; }
 					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 24) & 65535) as int32]) { slow = true; break; } }
 					const kind = obj.fields[idx].kind;
@@ -2910,6 +2910,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				if (vm.halted) break;
 				words = vm.regs.words;
 				refs = vm.regs.refs;
+				objects = vm.objectHeap.objects;
 			} else {
 				vmStepSlow(vm, op, ta, tb, tc, func);
 				if (vm.halted || vm.yielded) break;
@@ -2924,6 +2925,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				}
 				words = vm.regs.words;
 				refs = vm.regs.refs;
+				objects = vm.objectHeap.objects;
 			}
 			budget = vm.loopLimit - vm.loopCount;
 		}

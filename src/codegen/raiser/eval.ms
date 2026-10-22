@@ -1645,6 +1645,12 @@ test "engine: a field of a receiver whose type fixes its layout is read and writ
 	assert slots.join(",") == "1,1,0", `${slots.join(",")}\n${text}`;
 }
 
+test "a slot read after the object table grew sees the new objects" {
+	const vm = evalOrcVM("class P { x: int64 = 0; next: P | null = null; } function run(): int64 { let head = new P(); let t: int64 = 0; for (let i: int64 = 1; i <= 300; i++) { const p = new P(); p.x = i; p.next = head; head = p; t = t + head.x; } return t; } console.log(`${run()}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "45150\n", vm.output;
+}
+
 test "engine: a slot of a word or ref register is read and written by the typed slot opcodes" {
 	const code = "class N { v: int64 = 0; name: string = ''; next: N | null = null; f: float64 = 0.5; }"
 		+ " function step(a: N, b: N): string { a.v = a.v + b.v; a.name = b.name + '!'; a.next = b; b.next = null; a.f = a.f + 1.0; return `${a.v} ${a.name} ${a.f} ${a.next == null ? 0 : 1}`; }"
