@@ -53,7 +53,7 @@ export function inlineDeclOf(sym: Readonly<Symbol>): Readonly<Node | null> {
 	const decl = sym.declNode;
 	if (decl == null || decl.kind != NodeKind.FunctionDecl || decl.resolvedSym != sym || decl.nodeType == null) return null;
 	if ((decl.data as FunctionDeclData).fnBody == null) return null;
-	return decl;
+	return sym.declNode;
 }
 
 function requestInlineCopy(g: CGen, calleeName: string, sym: Readonly<Symbol>): void {
