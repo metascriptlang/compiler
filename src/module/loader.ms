@@ -153,12 +153,12 @@ function headerDepHash(s: string): string {
 
 // "" when the disk cache does not apply: cache unregistered, MSC_NO_HEADER_CACHE=1, or a
 // provider whose entries may not mirror disk (Trans-Am, map providers).
-function headerCacheKey(source: string, headerPath: string, provider: SourceProvider): string {
+function headerCacheKey(source: string, headerPath: string, search: string[], provider: SourceProvider): string {
 	if (_hcLookupFn == null) return "";
 	if (provider.taReadFn != null || !provider.useFileSystem) return "";
 	if (env.get("MSC_NO_HEADER_CACHE") != "") return "";
 	const t = headerTarget();
-	return _hcKeyFn(source, headerPath, t != null ? `${t.os}-${t.cpu}` : "");
+	return _hcKeyFn(source, headerPath, `${t != null ? `${t.os}-${t.cpu}` : ""}\t${search.join("\t")}`);
 }
 
 export function headerTarget(): TargetInfo {
@@ -182,6 +182,22 @@ function headerDirectives(path: string, provider: SourceProvider): string {
 	return `@include("${path}");\n${compile}`;
 }
 
+// A header another header includes is read with the search paths of the header that included it
+// as well as its own, as one C translation unit reads every header it includes.
+const _inheritedSearch = new HashMap<string, string[]>();
+
+function headerSearchPaths(path: string): string[] {
+	const headerDir = dirname(path);
+	const root = resolveRuntimeDir();
+	const search = root != ""
+		? [builtinIncludeDir(), root, headerDir, dirname(headerDir)]
+		: [builtinIncludeDir(), headerDir, dirname(headerDir)];
+	for (const p of _inheritedSearch.get(path) ?? []) {
+		if (!search.includes(p)) search.push(p);
+	}
+	return search;
+}
+
 // The module source of the header at `path` (canonical). `graph`, when given, holds what each
 // header's declarations looked like to the first header that read it.
 export function headerModuleSource(path: string, provider: SourceProvider, graph: ModuleGraph | null, outErrors: ModuleError[]): string {
@@ -197,7 +213,8 @@ export function headerModuleSource(path: string, provider: SourceProvider, graph
 		outErrors.push(createModuleError(`C header '${path}': no C target model for --os=${definedValue(getParserDefines(), "os")} --cpu=${definedValue(getParserDefines(), "cpu")}`, 0, 0, ErrorSeverity.Error));
 		return "";
 	}
-	const key = headerCacheKey(raw.value, path, provider);
+	const search = headerSearchPaths(path);
+	const key = headerCacheKey(raw.value, path, search, provider);
 	let entry = key != "" ? _hcLookupFn(key) : "";
 	if (entry != "") {
 		_headerHits = _headerHits + 1;
@@ -208,12 +225,7 @@ export function headerModuleSource(path: string, provider: SourceProvider, graph
 		const diags: Diagnostic[] = [];
 		const reads: string[] = [];
 		const completeKeys: string[] = [];
-		const headerDir = dirname(path);
-		const root = resolveRuntimeDir();
-		const includePaths = root != ""
-			? [builtinIncludeDir(), root, headerDir, dirname(headerDir)]
-			: [builtinIncludeDir(), headerDir, dirname(headerDir)];
-		const translated = translateHeaderModule(raw.value, path, includePaths, diags, reads, target, completeKeys, canonicalModulePath);
+		const translated = translateHeaderModule(raw.value, path, search, diags, reads, target, completeKeys, canonicalModulePath);
 		entry = packHeaderEntry(completeKeys, translated, headerDirectives(path, provider) + translated.source);
 		provider.readLog = prevLog;
 		for (const d of diags) {
@@ -230,7 +242,7 @@ export function headerModuleSource(path: string, provider: SourceProvider, graph
 			_hcStoreFn(key, deps, entry);
 		}
 	}
-	const source = unpackHeaderEntry(entry, path, graph, outErrors);
+	const source = unpackHeaderEntry(entry, path, search, graph, outErrors);
 	_headerMs = _headerMs + (performance.now() - t0);
 	return source;
 }
@@ -245,7 +257,7 @@ function packHeaderEntry(keys: string[], t: HeaderTranslation, source: string): 
 	return packed + source;
 }
 
-function unpackHeaderEntry(entry: string, path: string, graph: ModuleGraph | null, outErrors: ModuleError[]): string {
+function unpackHeaderEntry(entry: string, path: string, search: string[], graph: ModuleGraph | null, outErrors: ModuleError[]): string {
 	const lines = entry.split("\n");
 	let at = 0;
 	const keyCount = lines[at].parseInt();
@@ -266,6 +278,9 @@ function unpackHeaderEntry(entry: string, path: string, graph: ModuleGraph | nul
 		at = at + 1;
 	}
 	registerHeaderIncludes(path, included);
+	for (const file of included) {
+		if (!_inheritedSearch.has(file)) _inheritedSearch.set(file, search);
+	}
 	return lines.slice(at, lines.length).join("\n");
 }
 
@@ -630,6 +645,19 @@ test "a header two includers read differently is an error" {
 	const all = wide.errors.concat(cfg.errors);
 	assert all.length == 1, `${all.length}`;
 	assert all[0].message.indexOf(`C header '${dir}/cfg.h' declares something different`) == 0, all[0].message;
+}
+
+test "a header another header includes is read with the search paths of its includer" {
+	ensureDir("/tmp/mssearch/include/lib/sub");
+	writeFile("/tmp/mssearch/include/lib/types.h", "#ifndef LT_H\n#define LT_H\ntypedef int Handle;\n#endif\n");
+	writeFile("/tmp/mssearch/include/lib/sub/use.h", "#ifndef LU_H\n#define LU_H\n#include <lib/types.h>\nHandle useHandle(void);\n#endif\n");
+	writeFile("/tmp/mssearch/include/lib/top.h", "#include <lib/types.h>\n#include <lib/sub/use.h>\n");
+	writeFile("/tmp/mssearch/main.ms", "import { useHandle } from " + "\"./include/lib/top.h\";\n");
+	const dir = canonicalModulePath("/tmp/mssearch");
+	const graph = loadModuleGraph(dir + "/main.ms", createFileSystemProvider());
+	const use = findModule(graph, dir + "/include/lib/sub/use.h");
+	assert use != null && use.errors.length == 0, use != null ? use.errors[0].message : "use.h not loaded";
+	assert use.source.indexOf("export extern function useHandle(): Handle;") >= 0, use.source;
 }
 
 function platHeaderFor(os: string, cpu: string, errs: ModuleError[]): string {
