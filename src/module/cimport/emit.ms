@@ -479,6 +479,15 @@ test "emit extern variable" {
 	assert ms.indexOf("extern const counter: int32") >= 0;
 }
 
+test "a fixed C array imports as a sized array of its element" {
+	const ms = translateCHeader("typedef struct P { int x; } P; typedef int (*Op)(int); typedef struct V { int v[4]; P ps[2]; void (*fs[3])(void); } V; extern int table[8];", [], false);
+	assert ms.indexOf("v: int32[4];") >= 0;
+	assert ms.indexOf("ps: P[2];") >= 0;
+	assert ms.indexOf("fs: (() => void)[3];") >= 0;
+	assert ms.indexOf("extern const table: int32[8];") >= 0;
+	assert ms.indexOf("SizedArray") < 0;
+}
+
 test "brace initializer does not derail declaration parse" {
 	const diags: Diagnostic[] = [];
 	const ms = translateCHeader("static const int arr[] = {32, 64, 96};\nint after(void);", ["after"], false, "init.h", [], diags);

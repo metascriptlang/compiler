@@ -972,12 +972,31 @@ function runExpr(g: CGen, p: CProc, node: Readonly<Node>, dest: string): string 
 		ctx.workStack.pop();
 		if (item.phase == 0) {
 			discoverExpr(g, p, item.node, ctx);
+			if (item.node != null && item.node.kind == NodeKind.Identifier) viewImportedCArray(g, item.node, ctx);
 		} else {
 			emitExpr(g, p, item, ctx);
+			if (item.node.kind == NodeKind.MemberExpr) viewImportedCArray(g, item.node, ctx);
 		}
 	}
 	if (ctx.results.length == 0) return "MS_NIL";
 	return ctx.results[ctx.results.length - 1];
+}
+
+function holdsImportedCArray(node: Readonly<Node>): boolean {
+	if (node.nodeType == null || node.nodeType.kind != TypeKind.SizedArray) return false;
+	if (node.kind == NodeKind.Identifier) {
+		const sym = node.resolvedSym;
+		return sym != null && hasFlag(sym, SymbolFlag.ImportC) && sym.symbolKind == SymbolKind.Variable;
+	}
+	let owner = (node.data as MemberExprData).object.nodeType;
+	if (owner != null && (owner.kind == TypeKind.Ptr || owner.kind == TypeKind.Ref)) owner = owner.typeReturn;
+	return owner != null && owner.sym != null && hasFlag(owner.sym, SymbolFlag.ImportC);
+}
+
+function viewImportedCArray(g: CGen, node: Readonly<Node>, ctx: ExprEvalCtx): void {
+	if (ctx.results.length == 0 || !holdsImportedCArray(node)) return;
+	const at = ctx.results.length - 1;
+	ctx.results[at] = `(*(${getTypeDesc(g, node.nodeType)}*)(${ctx.results[at]}))`;
 }
 
 // ===== Discover phase: push leaf results or Emit + children =====
