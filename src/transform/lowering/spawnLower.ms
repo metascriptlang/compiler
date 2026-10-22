@@ -96,6 +96,28 @@ export function boxReturns(node: Node, retType: Type): void {
 	};
 }
 
+function adapterThunk(body: Node, retType: Type, loc: SourceLocation): Node {
+	const thunk = createNode(NodeKind.ArrowFunction, {
+		arrowParams: [] as string[],
+		arrowParamTypes: [] as string[],
+		arrowBody: body,
+		arrowFlags: "",
+		arrowReturnType: "",
+		arrowDefaults: [] as Node[],
+	}, syntheticToken(loc));
+	thunk.nodeType = createFunction([], [], retType);
+	thunk.paramSyms = [];
+	return thunk;
+}
+
+// A bare function reference whose result needs work on the worker gets a thunk that calls it,
+// so the result passes through the same thunk body as an arrow's.
+export function callingThunk(fnIdent: Node, retType: Type): Node {
+	const call = makeCall(fnIdent, [], fnIdent.location);
+	call.nodeType = retType;
+	return adapterThunk(call, retType, fnIdent.location);
+}
+
 export function spawnThunk(closure: Node): Node {
 	if (closure.kind != NodeKind.CallExpr) return closure;
 	const iife = (closure.data as CallExprData).callee;
@@ -231,6 +253,11 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 
 		let closureArg = cd.arguments[0];
 
+		const bareRetType = closureArg.nodeType != null && closureArg.nodeType.kind == TypeKind.Function ? closureArg.nodeType.typeReturn : null;
+		if (closureArg.kind == NodeKind.Identifier && bareRetType != null && !needsBoxing(bareRetType) && mayHoldCycleRoot(bareRetType, ctx)) {
+			closureArg = callingThunk(closureArg, bareRetType);
+			cd.arguments[0] = closureArg;
+		}
 		// Bare function reference (Identifier): wrap as msClosure {fn, env=null}
 		// so codegen emits the struct literal expected by msSpawn/msSpawnTaskSubmit.
 		if (closureArg.kind == NodeKind.Identifier) {
@@ -258,18 +285,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 				const fnIdent = (closureArg.data as ObjectLiteralData).properties[0];
 				const innerCall = makeCall(fnIdent, [], loc);
 				innerCall.nodeType = closureRetType;
-				const boxed = boxForType(innerCall, closureRetType, loc);
-				const wrapper = createNode(NodeKind.ArrowFunction, {
-					arrowParams: [] as string[],
-					arrowParamTypes: [] as string[],
-					arrowBody: boxed,
-					arrowFlags: "",
-					arrowReturnType: "",
-					arrowDefaults: [] as Node[],
-				}, syntheticToken(loc));
-				wrapper.nodeType = createFunction([], [], createPtr(voidType()));
-				wrapper.paramSyms = [];
-				cd.arguments[0] = wrapper;
+				cd.arguments[0] = adapterThunk(boxForType(innerCall, closureRetType, loc), createPtr(voidType()), loc);
 				return node;
 			}
 			// Box return values inside the closure body

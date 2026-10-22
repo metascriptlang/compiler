@@ -36,7 +36,7 @@ import { makeCall, makeExprStmt, makeNumber, makeNull, makeObjectLiteral, runtim
 import { awaitedType, createPromise, createPtr, voidType } from "../../checker/types";
 import { getSpawnInfo, makeTempDecl, emitAwaitGroupWait, readGroupSlot, VOID_PTR_TYPE } from "./awaitLower";
 import { injectCancelSafePoints } from "./cancelSafePoints";
-import { boxReturns, boxForType, disownResult, disownMovedCaptures, spawnThunk } from "./spawnLower";
+import { boxReturns, boxForType, disownResult, disownMovedCaptures, spawnThunk, mayHoldCycleRoot, callingThunk } from "./spawnLower";
 
 // ===== Async Context Tracking =====
 
@@ -110,6 +110,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 	let si = 0;
 	while (si < n) {
 		const slot = slots[si];
+		if (slot.closure.kind == NodeKind.Identifier && slot.innerType != null && mayHoldCycleRoot(slot.innerType, ctx)) slot.closure = callingThunk(slot.closure, slot.innerType);
 		// Use first non-null timeout found
 		if (slot.timeout != null && groupTimeout == null) {
 			groupTimeout = slot.timeout;
