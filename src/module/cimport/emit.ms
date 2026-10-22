@@ -193,9 +193,11 @@ export function headerIncludeTable(): HashMap<string, string[]> {
 	return includedByHeader;
 }
 
+const NO_INCLUDES: Readonly<string[]> = [];
+
 // The headers whose declarations `header` brings in through its #includes.
 export function headerIncludes(table: Readonly<HashMap<string, string[]>>, header: string): Readonly<string[]> {
-	return table.readonlyGet(header) ?? [];
+	return table.readonlyGet(header) ?? NO_INCLUDES;
 }
 
 function mappedWidth(ms: string): int32 {
