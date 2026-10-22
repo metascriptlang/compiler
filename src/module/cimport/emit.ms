@@ -8,6 +8,7 @@ import { CType, CTypeKind } from "../cparse/type";
 import { TargetInfo, hostTarget, targetFor } from "../cparse/target";
 import { Diagnostic } from "../cparse/error";
 import { parseHeader } from "./index";
+import { writeFile, ensureDir } from "std/fs";
 
 // ===== C Type → MetaScript Type Mapping =====
 
@@ -742,4 +743,19 @@ test "long double is complete only where msc maps it to its width" {
 
 test "no struct is complete on a 32-bit target" {
 	assert completeOn("typedef struct { int a; int b; } Pair;\n", "linux", "i386").length == 0;
+}
+
+test "a declaration is located where its name is written" {
+	ensureDir("/tmp/mscparse-at");
+	writeFile("/tmp/mscparse-at/common.h", "typedef int Common;\nint lastProto(void);\n");
+	const src = "#include \"common.h\"\n#define DECL(n) int n(void);\nDECL(made)\ntypedef struct { Common c; } Holder;\nenum { HOLD_A };\n";
+	const parsed = parseHeader(src, "/tmp/mscparse-at/h.h", { target: hostTarget(), includePaths: [], macroFlags: [], readLog: null });
+	const located = new HashMap<string, string>();
+	for (const o of parsed.objs) located.set(o.name, `${o.file}:${o.line}`);
+	const at = (name: string): string => located.get(name) ?? "missing";
+	assert at("Common") == "/tmp/mscparse-at/common.h:1", at("Common");
+	assert at("lastProto") == "/tmp/mscparse-at/common.h:2", at("lastProto");
+	assert at("made") == "/tmp/mscparse-at/h.h:3", at("made");
+	assert at("Holder") == "/tmp/mscparse-at/h.h:4", at("Holder");
+	assert at("HOLD_A") == "/tmp/mscparse-at/h.h:5", at("HOLD_A");
 }
