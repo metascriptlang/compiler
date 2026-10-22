@@ -285,13 +285,12 @@ export function lookupSymbol(table: SymbolTable, name: string): Symbol {
 export function lookupSymbolReadonly(table: Readonly<SymbolTable>, name: string): Readonly<Symbol> {
 	const nameId = findIdentId(table.identCache, name);
 	if (nameId == 0) return null as unknown as Readonly<Symbol>;
-	let scope = table.current;
-	while (scope != null) {
-		const sym = scope.symbols.get(nameId);
-		if (sym != null) return sym;
-		scope = scope.parent;
-	}
-	return null as unknown as Readonly<Symbol>;
+	return scopeSymbol(table.current, nameId);
+}
+
+function scopeSymbol(scope: Readonly<Scope | null>, nameId: int32): Readonly<Symbol> {
+	if (scope == null) return null as unknown as Readonly<Symbol>;
+	return scope.symbols.readonlyGet(nameId) ?? scopeSymbol(scope.parent, nameId);
 }
 
 // Check current scope only, O(1) via symbols.

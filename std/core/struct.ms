@@ -593,7 +593,7 @@ function orderedMapInitIndices<K, V>(m: Map<K, V>, cap: int32): void {
 	while (k < cap) { m.indices[k] = -1; k = k + 1; }
 }
 
-function orderedMapRawGet<K, V>(m: Map<K, V>, key: Readonly<K>, hc: int64): int32 {
+function orderedMapRawGet<K, V>(m: Readonly<Map<K, V>>, key: Readonly<K>, hc: int64): int32 {
 	if (m.indices.length == 0) return -1;
 	const mask: int32 = m.indices.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
@@ -700,6 +700,14 @@ export function get<K, V>(this m: Map<K, V>, key: Readonly<K>): V | null {
 	const slot = orderedMapRawGet(m, key, hc);
 	if (slot >= 0) return m.entries[m.indices[slot]].value;
 	return null;
+}
+
+export function readonlyGet<K, V>(this m: Readonly<Map<K, V>>, key: Readonly<K>): Readonly<V | null> {
+	if (m.writing) { msMapFatal("map read during write"); }
+	if (m.indices.length == 0) return null;
+	const slot = orderedMapRawGet(m, key, keyHash<K>(key));
+	if (slot < 0) return null;
+	return m.entries[m.indices[slot]].value;
 }
 
 export function has<K, V>(this m: Map<K, V>, key: Readonly<K>): boolean {
