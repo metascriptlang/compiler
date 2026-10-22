@@ -733,6 +733,10 @@ test "replay: a module a build.ms global import reaches does not see the global 
 	assert runMemoryScenario("a module a build.ms global import reaches does not see the global import, as in batch checking") == "";
 }
 
+test "replay: a generic instantiated from an importer reads its module's inferred const" {
+	assert runMemoryScenario("a generic instantiated from an importer reads its module's inferred const") == "";
+}
+
 test "replay: a module the second build.ms global import reaches sees the first one only" {
 	assert runMemoryScenario("a module the second build.ms global import reaches sees the first one only") == "";
 }

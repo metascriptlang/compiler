@@ -1239,7 +1239,7 @@ export function registerBoundModuleFn(fn: (modulePath: string) => CheckerContext
 }
 
 function enterOwnerModule(ctx: CheckerContext, sym: Symbol): CheckerContext | null {
-	if (!isForeign(ctx, sym)) return ctx;
+	if (!isForeign(ctx, sym) || lookupModuleCtx(sym.modulePath) == ctx) return ctx;
 	const owner = pickBodyCtx(sym.modulePath, ctx, sym);
 	if (owner.modulePath == sym.modulePath) return owner;
 	const bound = isEngineCheckMode() ? null : _boundModuleFn(sym.modulePath);

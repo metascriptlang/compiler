@@ -1016,6 +1016,27 @@ function globalImportClosureSeesNoGlobals(): LspScenario {
 	};
 }
 
+function genericReadsItsModuleConst(): LspScenario {
+	const uri = PROJECT_URI + "use.ms";
+	const user = "import { capped, nested, cappedByConsts } from \"./rows\";\nconsole.log(capped<int32>([1, 2]) + nested<string>([\"a\"]) + cappedByConsts<int32>([3]));\n";
+	const rows = "import { otherLimit } from \"./consts\";\nconst limit = 32;\nexport function capped<T>(items: T[]): number {\n\treturn Math.min(limit, items.length);\n}\nexport function nested<T>(items: T[]): number {\n\treturn capped<T>(items);\n}\nexport function cappedByConsts<T>(items: T[]): number {\n\treturn Math.min(otherLimit, items.length);\n}\n";
+	return {
+		name: "a generic instantiated from an importer reads its module's inferred const",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, user))]),
+		],
+		check: (r: LspReplay) => lacksText("use.ms publish 0", "instantiation", publishedAt(r, uri, 0)),
+		checkAnyBatching: null,
+		checkpoints: { afterDrains: [1], probes: [{ uri, line: 1, character: 14 }] },
+		project: [
+			{ path: "rows.ms", text: rows },
+			{ path: "consts.ms", text: "export const otherLimit = 16;\n" },
+		],
+	};
+}
+
 function globalImportsSeenInOrder(): LspScenario {
 	const uri = PROJECT_URI + "c2.ms";
 	const seesFirst = "export function d2(): int32 {\n\treturn f1();\n}\n";
@@ -1112,6 +1133,7 @@ export function lspScenarios(): LspScenario[] {
 		globalImportEditReachesItsUsers(),
 		globalImportClosureSeesNoGlobals(),
 		globalImportsSeenInOrder(),
+		genericReadsItsModuleConst(),
 		modulePassSurvivesProjectSwitch(),
 	];
 }
