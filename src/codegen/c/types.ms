@@ -65,7 +65,6 @@ export interface KeyedOp {
 let _opSyms: HashMap<string, Symbol> = new HashMap<string, Symbol>();
 let _opKeyOfSym: HashMap<Symbol, string> = new HashMap<Symbol, string>();
 let _opOrder: KeyedOp[] = [];
-let _canonOps: HashSet<Symbol> = new HashSet<Symbol>();
 
 export function sealHookSyms(sealed: boolean): void {
 	_hookSymsSealed = sealed;
@@ -75,7 +74,6 @@ export function resetHookSyms(): void {
 	_opSyms = new HashMap<string, Symbol>();
 	_opKeyOfSym = new HashMap<Symbol, string>();
 	_opOrder = [];
-	_canonOps = new HashSet<Symbol>();
 }
 
 function attachedOpName(op: AttachedOp): string {
@@ -144,7 +142,7 @@ function recordOp(key: string, sym: Symbol, canon: boolean): void {
 			throw new Error(`internal: generated op '${sym.name}' serves two types: ${heldKey} and ${key}`);
 		}
 		if (heldKey == null) _opKeyOfSym.set(sym, key);
-		_canonOps.add(sym);
+		setFlag(sym, SymbolFlag.TypeBoundOp);
 	}
 	if (held == sym) return;
 	_opSyms.set(key, sym);
@@ -160,7 +158,7 @@ export function bindOpByKey(t: Type, op: AttachedOp, sym: Symbol): void {
 }
 
 export function isTypeBoundOp(sym: Readonly<Symbol>): boolean {
-	return _canonOps.has(sym);
+	return hasFlag(sym, SymbolFlag.TypeBoundOp);
 }
 
 export function hasLiftedOp(t: Type, op: AttachedOp): boolean {
