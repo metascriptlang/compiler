@@ -2046,18 +2046,11 @@ function bitSetReprForMembers(members: int32): Type | null {
 	return null;
 }
 
-export function bitSetRepr(elem: Type | null): Type | null;
-export function bitSetRepr(elem: Readonly<Type | null>): Readonly<Type | null>;
-export function bitSetRepr(elem: Readonly<Type | null>): Readonly<Type | null> {
-	if (elem == null) return null;
-	return bitSetReprForMembers(bitSetMemberCount(elem));
-}
-
 export function setRepr(t: Type | null): Type | null;
 export function setRepr(t: Readonly<Type | null>): Readonly<Type | null>;
 export function setRepr(t: Readonly<Type | null>): Readonly<Type | null> {
 	if (t == null || t.kind != TypeKind.Set) return null;
-	return t.typeValue > 0 ? bitSetReprForMembers(t.typeValue) : bitSetRepr(t.typeReturn);
+	return t.typeExtra;
 }
 
 export function peelToRepr(t: Type | null): Type | null;
@@ -2087,6 +2080,7 @@ export function createBitSet(elem: Type): Type {
 	t.typeName = "BitSet";
 	t.typeReturn = elem;
 	t.typeValue = bitSetMemberCount(elem);
+	t.typeExtra = bitSetReprForMembers(t.typeValue);
 	return spelled(t);
 }
 
