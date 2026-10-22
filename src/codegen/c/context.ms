@@ -658,6 +658,7 @@ export class CEmissionFacts {
 	hcrTypeInfoOwners: HashMap<string, string> = new HashMap<string, string>();
 	trace: string = "";
 	writes: string[] | null = null;
+	hookOps: HashMap<string, Symbol> | null = null;
 }
 
 function noteFactWrite(facts: CEmissionFacts, write: string): void {

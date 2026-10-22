@@ -22,7 +22,7 @@ import { mangleModuleName, mangledFunctionName, mangledTypeName } from "./names"
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable } from "./test";
 import { emitIncludeDirectives, emitIncludes } from "./context";
-import { emitOwnedTypeInfos, refArrayCellName, arcCellName, typeInfoCName, defineDeferredElements, isHcrImageModule, objectTypeInfoKey } from "./types";
+import { emitOwnedTypeInfos, refArrayCellName, arcCellName, typeInfoCName, defineDeferredElements, isHcrImageModule, objectTypeInfoKey, hookOps } from "./types";
 import { collectModuleTypeInfoDemands } from "../../checker/reachability";
 import { DynamicModulePlan } from "../../module/graph";
 
@@ -76,6 +76,7 @@ export function prepareCModuleEmission(program: Node, ctx: CheckerContext, modul
 	g.emissionFacts = facts;
 	g.preparationFacts = facts;
 	g.preparingDeclarations = true;
+	bindRegistryFacts(facts);
 	const pd = program.data as ProgramData;
 	for (const stmt of pd.programStmts) registerDeclCName(g, stmt);
 	for (const stmt of pd.programStmts) genDecl(g, stmt, false);
@@ -84,7 +85,12 @@ export function prepareCModuleEmission(program: Node, ctx: CheckerContext, modul
 
 export function replayCModuleEmission(aliveSet: AliveSet, facts: CEmissionFacts, writes: string[]): void {
 	replayFactWrites(facts, writes);
+	bindRegistryFacts(facts);
 	registerTypeInfoDemands(aliveSet, facts);
+}
+
+function bindRegistryFacts(facts: CEmissionFacts): void {
+	if (facts.hookOps == null) facts.hookOps = hookOps();
 }
 
 function registerTypeInfoDemands(demands: AliveSet, facts: CEmissionFacts): void {
