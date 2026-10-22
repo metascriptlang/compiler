@@ -173,3 +173,41 @@ test "assign null to mutable Maybe<T> variable" {
 	x = null;
 	assert x == null;
 }
+
+// ===== A read narrowed to null reads the slot, which a call may have filled =====
+
+struct Cam { x: float32; }
+interface CamHolder { cam: Cam | null; n: number | null; }
+
+function fillHolder(h: CamHolder): void {
+	h.cam = { x: 1.0 };
+	h.n = 0;
+}
+
+test "struct and number fields narrowed to null, refilled through a call" {
+	const h: CamHolder = { cam: null, n: null };
+	if (h.cam != null || h.n !== null) { assert false; return; }
+	fillHolder(h);
+	assert h.cam !== null;
+	assert !(h.n == null);
+	assert `${h.n}` == "0";
+}
+
+test "an int32 local narrowed to null, refilled with 0 by a closure" {
+	let v: int32 | null = null;
+	const fill = (): void => { v = 0; };
+	if (v !== null) { assert false; return; }
+	fill();
+	assert v != null;
+	assert !(v === null);
+}
+
+test "a number local narrowed to null, refilled by a closure, read as a value" {
+	let v: number | null = null;
+	const fill = (): void => { v = 7; };
+	if (v === null) {
+		fill();
+		assert (v ? "truthy" : "falsy") == "truthy";
+		assert `${v}` == "7";
+	}
+}
