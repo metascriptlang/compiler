@@ -476,6 +476,12 @@ export function write(this buf: Buffer, str: string, offset: number, length: num
 
 // --- Fill with pattern ---
 
+// An empty decode falls back to the raw text.
+function fillDecoded(buf: Buffer, from: int64, to: int64, text: string, decoded: Buffer): void {
+	if (byteCount(decoded) > 0) fillRepeated(buf, from, to, bytesOf(decoded), byteCount(decoded));
+	else fillRepeated(buf, from, to, bytesOf(text), byteCount(text));
+}
+
 export function fillString(this buf: Buffer, value: string, start: number, end: number, encoding: string): void {
 	if (byteCount(value) == 0) return;
 	const length = byteCount(buf);
@@ -484,15 +490,11 @@ export function fillString(this buf: Buffer, value: string, start: number, end: 
 	const from = first < 0 ? 0 : first;
 	const to = last > length ? length : last;
 	if (from >= to) return;
-	let pattern = value;
-	if (encodingIs(encoding, "hex")) {
-		const decoded = msBufferFromHex(value);
-		if (byteCount(decoded) > 0) pattern = decoded;
-	} else if (encodingIs(encoding, "base64")) {
-		const decoded = msBufferFromBase64(value);
-		if (byteCount(decoded) > 0) pattern = decoded;
-	}
-	fillRepeated(buf, from, to, bytesOf(pattern), byteCount(pattern));
+	// The plain path holds no string temporary: binding the text to a `let` copied a literal to the
+	// heap, and a temporary costs a destroy call on every fill.
+	if (encodingIs(encoding, "hex")) fillDecoded(buf, from, to, value, msBufferFromHex(value));
+	else if (encodingIs(encoding, "base64")) fillDecoded(buf, from, to, value, msBufferFromBase64(value));
+	else fillRepeated(buf, from, to, bytesOf(value), byteCount(value));
 }
 
 export function fillBuffer(this buf: Buffer, value: Buffer, start: number, end: number): void {
