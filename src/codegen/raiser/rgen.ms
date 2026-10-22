@@ -1709,7 +1709,7 @@ function directCallReturnMismatches(code: string): int32 {
 	let mismatches: int32 = 0;
 	for (const func of mod.functions) {
 		for (const call of func.code) {
-			if (call.op != RaiserOpcode.Call || call.b < 0 || call.b >= mod.functions.length) continue;
+			if ((call.op != RaiserOpcode.Call && call.op != RaiserOpcode.CallDirect) || call.b < 0 || call.b >= mod.functions.length) continue;
 			for (const ret of mod.functions[call.b].code) {
 				if (ret.op == RaiserOpcode.Ret && ((ret.a as int32) & 7) != ((call.a as int32) & 7)) mismatches += 1;
 			}

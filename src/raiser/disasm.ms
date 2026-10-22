@@ -39,6 +39,7 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.BgeI64 => "BgeI64",
 		RaiserOpcode.Jump => "Jump",
 		RaiserOpcode.Call => "Call",
+		RaiserOpcode.CallDirect => "CallDirect",
 		RaiserOpcode.Ret => "Ret",
 		RaiserOpcode.Halt => "Halt",
 		RaiserOpcode.Print => "Print",

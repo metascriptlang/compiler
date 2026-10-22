@@ -3,7 +3,7 @@
 import {
 	RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, convClassBits, convClassSigned, convTarget, convSource, convOperand,
 	raiserABC, raiserABx, raiserAx, RaiserCombine, regClassLetter, operandKind, OPERAND_TAGGED, OPERAND_RAW, OPERAND_BARE, operandTagged,
-	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField
+	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue,
@@ -1817,7 +1817,7 @@ function vmLoopLimitMessage(vm: RaiserVM): string {
 // What the retagging in the generic path needs per operand slot: OPERAND_* kinds from the opcode's roles.
 function buildOperandKinds(): int32[] {
 	const table: int32[] = [];
-	for (let op = 0; op <= (RaiserOpcode.LitConv as int32); op += 1) {
+	for (let op = 0; op <= (LAST_RAISER_OPCODE as int32); op += 1) {
 		for (let slot = 0; slot < 3; slot += 1) table.push(operandKind(op as RaiserOpcode, slot as int32));
 	}
 	return table;
@@ -1952,17 +1952,25 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				if (truthy) ip = ip + (ic as int32);
 				break;
 			}
-			case RaiserOpcode.Call: case RaiserOpcode.CallIndirect: {
+			case RaiserOpcode.CallDirect: case RaiserOpcode.Call: case RaiserOpcode.CallIndirect: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				const target = op == RaiserOpcode.Call ? ib : words[wb + ib];
-				const argc = func.blocks[ic + 2];
-				const sig = func.blocks[ic + 3];
+				const target = op == RaiserOpcode.CallIndirect ? words[wb + ib] : ib;
 				const depth = vm.callStack.depth;
-				const known = target >= 0 && target < mod.functions.length;
-				const callee: Cursor<RaiserFunction> = known ? mod.functions[target] : func;
-				if (known && depth < MAX_CALL_DEPTH && sig >= 0 && argc < callee.sigs.length && callee.sigs[argc] == sig) {
+				let ok = depth < MAX_CALL_DEPTH;
+				let callee: Cursor<RaiserFunction> = func;
+				if (op == RaiserOpcode.CallDirect) {
+					callee = mod.functions[target];
+				} else if (target >= 0 && target < mod.functions.length) {
+					callee = mod.functions[target];
+					const argc = func.blocks[ic + 2];
+					const sig = func.blocks[ic + 3];
+					ok = ok && sig >= 0 && argc < callee.sigs.length && callee.sigs[argc] == sig;
+				} else {
+					ok = false;
+				}
+				if (ok) {
 					if (depth == vm.callStack.items.length) {
 						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, wordBase: 0, refBase: 0, spBase: 0 });
 					}
@@ -2881,7 +2889,7 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			const sink = vm.printSink;
 			if (sink != null) sink(s);
 		},
-		RaiserOpcode.Call => {
+		RaiserOpcode.Call | RaiserOpcode.CallDirect => {
 			vmHandleCall(vm, ia, ib, ic);
 		},
 		RaiserOpcode.CallIndirect => {
@@ -5161,6 +5169,7 @@ test "call depth overflow" {
 	const f0 = createRaiserFunction("recurse", func0Code, func0Consts, 0, 0, 2);
 	const funcs: RaiserFunction[] = [f0];
 	const mod = createRaiserModule("test", funcs, 0);
+	assert f0.code[0].op == RaiserOpcode.CallDirect;
 	const vm = execModule(mod);
 	assert vm.error.length > 0;
 	assert vm.halted;
