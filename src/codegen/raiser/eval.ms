@@ -14,9 +14,9 @@ import { platform } from "std/process";
 import { writeStderr } from "std/io";
 import { createTransformContextWithChecker } from "../../transform/context";
 import { transformForRaiser } from "../../transform/raiserLowering";
-import { RaiserValueKind, RaiserValue, RaiserObjectHeap, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapArrayLen, heapArrayGet, raiserConstString, handleIndex } from "../../raiser/value";
+import { RaiserValueKind, RaiserValue, RaiserObjectHeap, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapArrayLen, heapArrayGet, raiserConstString, handleIndex, handleValue } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
-import { RaiserInstruction, raiserABC, RaiserOpcode, getSignedAx, branchOffset, regClassLetter, carriesSlot } from "../../raiser/bytecode";
+import { RaiserInstruction, raiserABC, RaiserOpcode, RaiserRegClass, getSignedAx, branchOffset, regClassLetter, carriesSlot } from "../../raiser/bytecode";
 import { disasmFunc, opName } from "../../raiser/disasm";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { RaiserVM, execModule, execLoop, createVM, vmReleaseHeaps } from "../../raiser/vm";
@@ -1161,6 +1161,50 @@ test "orc: shared ref survives (stored in array)" {
 	const vm = evalOrcVM("const a: number[] = []; let i = 0; while (i < 5) { a.push(i); i = i + 1; } let sum = 0; for (const v of a) { sum = sum + v; } return sum;");
 	assert vm.error == "";
 	assert unboxFloat(vm.exitValue) == 10;
+}
+
+test "untag: an object holds its scalar fields as raw words, a reference as its handle and a union as a value" {
+	const vm = evalOrcVM("class P { n: int32 = 0; f: float64 = 0.0; b: boolean = false; s: string = ''; u: int32 | string | null = null; }"
+		+ " const p = new P(); p.n = 7; p.f = 2.5; p.b = true; p.s = 'x' + p.n.toString(); p.u = 9;"
+		+ " console.log(`${p.n} ${p.f} ${p.b} ${p.s} ${p.u}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "7 2.5 true x7 9\n", vm.output;
+	let found = 0;
+	for (const obj of vm.objectHeap.objects) {
+		if (obj.classType.name != "P" || obj.slots.length != 5) continue;
+		found += 1;
+		const kinds = obj.classType.kinds;
+		assert kinds[0] == RaiserRegClass.Word && kinds[1] == RaiserRegClass.Float && kinds[2] == RaiserRegClass.Bool && kinds[3] == RaiserRegClass.Ref && kinds[4] == RaiserRegClass.Dyn;
+		assert obj.slots[0] == 7 && obj.slots[1] == 4612811918334230528 && obj.slots[2] == 1;
+		assert heapStringText(vm.arrayHeap, handleValue(obj.slots[3])) == "x7";
+		assert obj.values.length == 1 && obj.values[obj.slots[4]].kind == RaiserValueKind.Int && obj.values[obj.slots[4]].intVal == 9;
+	}
+	assert found == 1;
+}
+
+test "untag: a typed slot opcode reads a slot of another class by name" {
+	const vm = evalOrcVM("function add(x: int32, e: { n: int32 }): int32 { return e.n + x; } function env(n) { return { n: n }; } console.log(add(3, env(5)));");
+	assert vm.error == "", vm.error;
+	assert vm.output == "8\n", vm.output;
+}
+
+test "ledger: a reference field and a union field count what they hold through stores, overwrites and self-stores" {
+	const vm = evalOrcVM("class N { s: string = ''; u: int32 | string | null = null; next: N | null = null; }"
+		+ " const a = new N(); for (let i = 0; i < 3; i++) { a.s = 'v' + i.toString(); a.u = 'w' + i.toString(); a.u = i; a.u = 'z' + i.toString(); }"
+		+ " a.s = a.s; a.u = a.u; const b = new N(); b.s = 'b'; b.next = a; a.next = b; a.next = a.next; b.next = null;"
+		+ " console.log(`${a.s} ${a.u} ${a.next!.s} ${b.next == null}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "v2 z2 b true\n", vm.output;
+}
+
+test "orc: a cycle through a reference field and one through a union field are collected" {
+	const vm = evalOrcVM("class C { next: C | null = null; other: C | int32 | null = null; }"
+		+ " function ring(): void { const a = new C(); const b = new C(); a.next = b; b.next = a; const c = new C(); const d = new C(); c.other = d; d.other = c; }"
+		+ " for (let i = 0; i < 300; i++) ring(); console.log('ok');");
+	assert vm.error == "", vm.error;
+	assert vm.output == "ok\n", vm.output;
+	assert vm.objectHeap.objects.length < 600, `${vm.objectHeap.objects.length}`;
+	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
 }
 
 // --- Phase 3 Integration Tests ---
