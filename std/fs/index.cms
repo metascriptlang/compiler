@@ -50,13 +50,15 @@ when (windows) {
 
 	// The narrow CRT calls take the path in the ANSI code page, as the C kernels did;
 	// rename, symlink and the final path of realpath convert it from UTF-8 to UTF-16.
-	extern struct Stat from "struct _stat" { st_mode: uint16; st_size: int32; st_mtime: int64; }
-	extern function cStat(path: cstring, ref buf: Stat): int32 from "_stat";
+	extern struct Stat from "struct _stat64" { st_mode: uint16; st_size: int64; st_mtime: int64; }
+	extern function cStat(path: cstring, ref buf: Stat): int32 from "_stat64";
 	extern const S_IFMT: uint16;
 	extern const S_IFREG: uint16;
 	extern const S_IFDIR: uint16;
 
 	extern const CP_UTF8: uint32;
+	const UNIX_EPOCH_IN_FILETIME: int64 = 116444736000000000;
+	const FILETIME_PER_SECOND: int64 = 10000000;
 	extern const MOVEFILE_REPLACE_EXISTING: uint32;
 	extern const SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE: uint32;
 	extern const SYMBOLIC_LINK_FLAG_DIRECTORY: uint32;
@@ -83,7 +85,9 @@ when (windows) {
 	extern function CreateFileW(path: Ptr<uint16>, access: uint32, share: uint32, security: Ptr<void> | null, disposition: uint32, flags: uint32, template: Ptr<void> | null): Ptr<void>;
 	extern function GetFinalPathNameByHandleW(handle: Ptr<void>, path: Ptr<uint16> | null, room: uint32, flags: uint32): uint32;
 	extern struct LargeInteger from "LARGE_INTEGER" { QuadPart: int64; }
+	extern struct FileTime from "FILETIME" { dwLowDateTime: uint32; dwHighDateTime: uint32; }
 	extern struct HandleInformation from "BY_HANDLE_FILE_INFORMATION" {
+		dwFileAttributes: uint32; ftLastWriteTime: FileTime;
 		dwVolumeSerialNumber: uint32; nFileSizeHigh: uint32; nFileSizeLow: uint32;
 		nFileIndexHigh: uint32; nFileIndexLow: uint32;
 	}
@@ -214,9 +218,23 @@ when (windows) {
 		return text;
 	}
 
+	function statOf(path: string, ref st: Stat): boolean {
+		const file = CreateFileA(path as cstring, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+			null, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, null);
+		if (file == INVALID_HANDLE_VALUE) return false;
+		let info: HandleInformation = {};
+		const ok = GetFileInformationByHandle(file, info) != 0;
+		CloseHandle(file);
+		if (!ok) return false;
+		st.st_mode = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ? S_IFDIR : S_IFREG;
+		st.st_size = (((info.nFileSizeHigh as uint64) << 32) | (info.nFileSizeLow as uint64)) as int64;
+		const written = (((info.ftLastWriteTime.dwHighDateTime as uint64) << 32) | (info.ftLastWriteTime.dwLowDateTime as uint64)) as int64;
+		st.st_mtime = (written - UNIX_EPOCH_IN_FILETIME) / FILETIME_PER_SECOND;
+		return true;
+	}
 	function modifiedTimeKernel(path: string): number {
 		let st: Stat = {};
-		return cStat(path as cstring, st) == 0 ? st.st_mtime as number : -1;
+		return statOf(path, st) ? st.st_mtime as number : -1;
 	}
 	function changeStampKernel(path: string): string {
 		const file = CreateFileA(path as cstring, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -232,8 +250,7 @@ when (windows) {
 		let n = putDigits(buf, 0, info.dwVolumeSerialNumber as uint64, 1);
 		buf[n] = 58; n = putDigits(buf, n + 1, info.nFileIndexHigh as uint64, 1);
 		buf[n] = 46; n = putDigits(buf, n + 1, info.nFileIndexLow as uint64, 1);
-		buf[n] = 58; n = putDigits(buf, n + 1, info.nFileSizeHigh as uint64, 1);
-		buf[n] = 46; n = putDigits(buf, n + 1, info.nFileSizeLow as uint64, 1);
+		buf[n] = 58; n = putDigits(buf, n + 1, ((info.nFileSizeHigh as uint64) << 32) | (info.nFileSizeLow as uint64), 1);
 		buf[n] = 58; n = putSigned(buf, n + 1, basic.LastWriteTime.QuadPart);
 		buf[n] = 58; n = putSigned(buf, n + 1, basic.ChangeTime.QuadPart);
 		return msStringNew(((buf as Span<uint8>) as Ptr<uint8>) as cstring, n as int64);
@@ -268,6 +285,7 @@ when (windows) {
 		function ctimeOf(st: Stat): Timespec { return st.st_ctim; }
 	}
 	extern function cStat(path: cstring, ref buf: Stat): int32 from "stat";
+	function statOf(path: string, ref st: Stat): boolean { return cStat(path as cstring, st) == 0; }
 	extern const S_IFMT: uint32;
 	extern const S_IFREG: uint32;
 	extern const S_IFDIR: uint32;
@@ -354,19 +372,19 @@ function writeFileErrno(path: string, content: string, mode: string): int32 {
 
 function existsKernel(path: string): boolean {
 	let st: Stat = {};
-	return cStat(path as cstring, st) == 0;
+	return statOf(path, st);
 }
 function isFileKernel(path: string): boolean {
 	let st: Stat = {};
-	return cStat(path as cstring, st) == 0 && (st.st_mode & S_IFMT) == S_IFREG;
+	return statOf(path, st) && (st.st_mode & S_IFMT) == S_IFREG;
 }
 function isDirKernel(path: string): boolean {
 	let st: Stat = {};
-	return cStat(path as cstring, st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR;
+	return statOf(path, st) && (st.st_mode & S_IFMT) == S_IFDIR;
 }
 function fileSizeKernel(path: string): number {
 	let st: Stat = {};
-	return cStat(path as cstring, st) == 0 ? st.st_size as number : -1;
+	return statOf(path, st) ? st.st_size as number : -1;
 }
 
 // changeStamp runs once per cached source file, so it formats into one stack buffer
