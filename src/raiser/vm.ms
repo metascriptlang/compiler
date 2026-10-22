@@ -1831,8 +1831,8 @@ function retag(kind: int32, raw: int32): int32 {
 
 // The hot opcodes run here on the two files and the frame's bases; every other opcode takes its
 // operands retagged (each register operand carries its class) into vmStepHeap or vmStepSlow.
-// vm.funcIdx, vm.wordBase and vm.refBase always hold the running frame; vm.ip is written back
-// before any call that reads it.
+// vm.ip, vm.funcIdx, vm.wordBase and vm.refBase are written back before any call that reads
+// them; between calls the running frame lives in dispatch's locals.
 function runStrandSlice(vm: RaiserVM): void {
 	if (vm.halted || vm.yielded) return;
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
@@ -1862,7 +1862,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ic = ((word >> 40) & 65535) as int32;
 				const bx = (ib * 256 + ic);
 				if (bx >= getFuncConstLen(func)) {
-					vm.ip = ip; vmError(vm, `constant index out of bounds: ${bx}`); return;
+					vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, `constant index out of bounds: ${bx}`); return;
 				} else {
 					const val: Cursor<RaiserValue> = func.constants[bx];
 					const cls = ia & 7;
@@ -1894,20 +1894,20 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				if (cls == CLS_REF || cls == CLS_DYN) {
 					writeRef(vm, rb + (ia >> 3), 0);
 				} else {
-					vm.ip = ip; vmError(vm, `internal: register R${ia >> 3} of ${func.name} is ${cls as RaiserRegClass}, got Nil`); return;
+					vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, `internal: register R${ia >> 3} of ${func.name} is ${cls as RaiserRegClass}, got Nil`); return;
 				}
 				break;
 			}
 			case RaiserOpcode.LoadGlobal: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				setRegConform(vm, ia, vm.globals[ib]);
+				vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; setRegConform(vm, ia, vm.globals[ib]);
 				break;
 			}
 			case RaiserOpcode.StoreGlobal: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
-				storeRegGlobal(vm, ia, ib);
+				vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; storeRegGlobal(vm, ia, ib);
 				break;
 			}
 			case RaiserOpcode.Jump: {
@@ -1922,7 +1922,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 					// MAX_CALL_DEPTH, so back-edges are the only unbounded source
 					// worth budgeting (reference: handleJmpBack decrements
 					// loopIterations only on backward jumps).
-					if (vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
 				}
 				ip = ip + (offset as int32);
 				break;
@@ -1948,7 +1948,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
 				const cls = ia & 7;
-				const truthy = cls == CLS_WORD || cls == CLS_BOOL ? words[wb + (ia >> 3)] != 0 : raiserToBool(vm.arrayHeap, getReg(vm, ia));
+				const truthy = cls == CLS_WORD || cls == CLS_BOOL ? words[wb + (ia >> 3)] != 0 : raiserToBool(vm.arrayHeap, readAbs(vm, cls, (ia >> 3) + (cls == CLS_REF || cls == CLS_DYN ? rb : wb)));
 				if (truthy) ip = ip + (ic as int32);
 				break;
 			}
@@ -1996,9 +1996,6 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 					func = callee;
 					code = callee.packed;
 					if (code.length != func.code.length) assertPacked(func);
-					vm.funcIdx = funcIdx;
-					vm.wordBase = wb;
-					vm.refBase = rb;
 					ip = 0;
 				} else {
 					slow = true;
@@ -2026,9 +2023,6 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 						func = mod.functions[funcIdx];
 						code = func.packed;
 						if (code.length != func.code.length) assertPacked(func);
-						vm.funcIdx = funcIdx;
-						vm.wordBase = wb;
-						vm.refBase = rb;
 						ip = frame.returnIp;
 					} else {
 						slow = true;
@@ -2043,7 +2037,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] == words[wb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2053,7 +2047,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] != words[wb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2063,7 +2057,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] < words[wb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2073,7 +2067,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] <= words[wb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2083,7 +2077,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] > words[wb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2093,7 +2087,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] >= words[wb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2103,7 +2097,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] == immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2113,7 +2107,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] != immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2123,7 +2117,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] < immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2133,7 +2127,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] <= immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2143,7 +2137,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] > immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2153,7 +2147,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] >= immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2163,7 +2157,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (refs[rb + ia] == refs[rb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2173,7 +2167,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (refs[rb + ia] != refs[rb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2374,7 +2368,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const imm = immValue(ic);
 				const sum = int64Bits((lhs as uint64) + (imm as uint64));
 				if ((sum ^ lhs) >= 0 || (sum ^ imm) >= 0) { words[wb + ia] = sum;
-				} else { vm.ip = ip; vmError(vm, "over- or underflow"); return; }
+				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "over- or underflow"); return; }
 				break;
 			}
 			case RaiserOpcode.SubI64Imm: {
@@ -2385,7 +2379,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const imm = immValue(ic);
 				const diff = int64Bits((lhs as uint64) - (imm as uint64));
 				if ((diff ^ lhs) >= 0 || (diff ^ ~imm) >= 0) { words[wb + ia] = diff;
-				} else { vm.ip = ip; vmError(vm, "over- or underflow"); return; }
+				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "over- or underflow"); return; }
 				break;
 			}
 			case RaiserOpcode.LoadField: {
@@ -2504,7 +2498,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const rhs = words[wb + ic];
 				const sum = int64Bits((lhs as uint64) + (rhs as uint64));
 				if ((sum ^ lhs) >= 0 || (sum ^ rhs) >= 0) { words[wb + ia] = sum;
-				} else { vm.ip = ip; vmError(vm, "over- or underflow"); return; }
+				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "over- or underflow"); return; }
 				break;
 			}
 			case RaiserOpcode.SubI64: {
@@ -2515,7 +2509,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const rhs = words[wb + ic];
 				const diff = int64Bits((lhs as uint64) - (rhs as uint64));
 				if ((diff ^ lhs) >= 0 || (diff ^ ~rhs) >= 0) { words[wb + ia] = diff;
-				} else { vm.ip = ip; vmError(vm, "over- or underflow"); return; }
+				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "over- or underflow"); return; }
 				break;
 			}
 			case RaiserOpcode.MulI64: {
@@ -2524,7 +2518,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ic = ((word >> 40) & 65535) as int32;
 				const lhs = words[wb + ib];
 				const rhs = words[wb + ic];
-				if (mulOverflowsI64(lhs, rhs)) { vm.ip = ip; vmError(vm, "over- or underflow"); return;
+				if (mulOverflowsI64(lhs, rhs)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "over- or underflow"); return;
 				} else { words[wb + ia] = int64Bits((lhs as uint64) * (rhs as uint64)); }
 				break;
 			}
@@ -2534,9 +2528,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ic = ((word >> 40) & 65535) as int32;
 				const lhs = words[wb + ib];
 				const rhs = words[wb + ic];
-				if (rhs == 0) { vm.ip = ip; vmError(vm, "integer division by zero"); return;
+				if (rhs == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "integer division by zero"); return;
 				} else if (rhs == -1) {
-					if (lhs == INT64_LOW) { vm.ip = ip; vmError(vm, "over- or underflow"); return;
+					if (lhs == INT64_LOW) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "over- or underflow"); return;
 					} else { words[wb + ia] = -lhs; }
 				} else {
 					words[wb + ia] = lhs / rhs;
@@ -2547,7 +2541,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ic] == 0) { vm.ip = ip; vmError(vm, "integer modulo by zero"); return;
+				if (words[wb + ic] == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "integer modulo by zero"); return;
 				} else {
 					words[wb + ia] = words[wb + ic] == -1 ? 0 : words[wb + ib] % words[wb + ic];
 				}
@@ -2557,7 +2551,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ic] == 0) { vm.ip = ip; vmError(vm, "integer division by zero"); return;
+				if (words[wb + ic] == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "integer division by zero"); return;
 				} else {
 					words[wb + ia] = int64Bits((words[wb + ib] as uint64) / (words[wb + ic] as uint64));
 				}
@@ -2567,7 +2561,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ic] == 0) { vm.ip = ip; vmError(vm, "integer modulo by zero"); return;
+				if (words[wb + ic] == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "integer modulo by zero"); return;
 				} else {
 					words[wb + ia] = int64Bits((words[wb + ib] as uint64) % (words[wb + ic] as uint64));
 				}
@@ -2598,7 +2592,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const val = words[wb + ib];
-				if (val == INT64_LOW) { vm.ip = ip; vmError(vm, "over- or underflow"); return;
+				if (val == INT64_LOW) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "over- or underflow"); return;
 				} else { words[wb + ia] = -val; }
 				break;
 			}
@@ -2666,7 +2660,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const val = words[wb + ia];
 				const half = (1 as int64) << ((ib as int64) - 1);
 				const low = ic == 1 ? 0 : -half;
-				if (val < low || val >= low + 2 * half) { vm.ip = ip; vmError(vm, "over- or underflow"); return; }
+				if (val < low || val >= low + 2 * half) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "over- or underflow"); return; }
 				break;
 			}
 			case RaiserOpcode.SignExtend: {
@@ -2684,6 +2678,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 		}
 		if (slow) {
 			vm.ip = ip;
+			vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb;
 			const ia = ((word >> 8) & 65535) as int32;
 			const ib = ((word >> 24) & 65535) as int32;
 			const ic = ((word >> 40) & 65535) as int32;
@@ -6039,6 +6034,26 @@ test "a runtime error after a call reports the caller's line and the caller's re
 	const vm = execModule(createRaiserModule("test", funcs, 1));
 	assert vm.error == "integer division by zero";
 	assert vmDumpStack(vm).endsWith("line 12 in main (current)");
+}
+
+test "a runtime error inside a direct callee reports the callee as the current frame" {
+	const calleeCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 9999),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	calleeCode[0].line = 7;
+	const callee = createRaiserFunction("boom", calleeCode, [raiserInt(0)], 0, 0, 1);
+	const mainCode: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.Call, 1, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+	];
+	const main = createRaiserFunction("main", mainCode, [], 0, 0, 2);
+	const funcs: RaiserFunction[] = [callee, main];
+	const mod = createRaiserModule("test", funcs, 1);
+	assert main.code[0].op == RaiserOpcode.CallDirect;
+	const vm = execModule(mod);
+	assert vm.error.indexOf("constant index out of bounds") >= 0, vm.error;
+	assert vmDumpStack(vm).endsWith("line 7 in boom (current)"), vmDumpStack(vm);
 }
 
 function execImmArith(op: RaiserOpcode, a: int64, imm: int64): RaiserVM {
