@@ -737,6 +737,11 @@ test "replay: a generic instantiated from an importer reads its module's inferre
 	assert runMemoryScenario("a generic instantiated from an importer reads its module's inferred const") == "";
 }
 
+test "replay: a generic from a module that imports a macro reads that module's imports" {
+	assert runMemoryScenario("a generic from a module that imports a macro reads that module's imports") == "";
+	assert runMemoryScenario("a generic from a module that imports a macro reached through a build.ms global import reads that module's imports") == "";
+}
+
 test "replay: a module the second build.ms global import reaches sees the first one only" {
 	assert runMemoryScenario("a module the second build.ms global import reaches sees the first one only") == "";
 }

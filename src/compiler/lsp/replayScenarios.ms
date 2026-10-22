@@ -1037,6 +1037,43 @@ function genericReadsItsModuleConst(): LspScenario {
 	};
 }
 
+const EACH_MODULE = "import { helper } from \"./node\";\nimport { twice } from \"./mac\";\nexport function each<T>(x: T): number {\n\treturn helper(twice(1));\n}\n";
+const EACH_MACRO = "import { Node } from \"std/meta\";\nexport macro twice(n: Node): Node {\n\treturn quote { (${n} * 2) };\n}\n";
+const EACH_HELPER = "export function helper(n: number): number {\n\treturn n;\n}\n";
+
+// each.ms imports a macro module, so the editor binds it apart from the check that imports it.
+function genericFromMacroImporterReadsItsImports(throughGlobal: boolean): LspScenario {
+	const uri = PROJECT_URI + "use.ms";
+	const from = throughGlobal ? "./g" : "./each";
+	const user = `import { each } from "${from}";\nconst n = each<string>("a");\nconsole.log(n);\n`;
+	const project: LspProjectFile[] = [
+		{ path: "each.ms", text: EACH_MODULE },
+		{ path: "node.ms", text: EACH_HELPER },
+		{ path: "mac.ms", text: EACH_MACRO },
+	];
+	if (throughGlobal) {
+		project.push({ path: "g.ms", text: "export { each } from \"./each\";\n" });
+		project.push({ path: "build.ms", text: "const config = { globalImports: [\"./g\"] };\nexport default config;\n" });
+	}
+	const reached = throughGlobal ? " reached through a build.ms global import" : "";
+	return {
+		name: `a generic from a module that imports a macro${reached} reads that module's imports`,
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, user))]),
+			frames([notification("textDocument/didChange", changeParams(uri, 2, user.replace("\"a\"", "\"b\"")))]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			lacksText("use.ms publish 0", "instantiation", publishedAt(r, uri, 0)),
+			lacksText("use.ms last publish", "instantiation", lastPublished(r, uri)),
+		]),
+		checkAnyBatching: null,
+		checkpoints: { afterDrains: [1, 2], probes: [{ uri, line: 1, character: 10 }] },
+		project,
+	};
+}
+
 function globalImportsSeenInOrder(): LspScenario {
 	const uri = PROJECT_URI + "c2.ms";
 	const seesFirst = "export function d2(): int32 {\n\treturn f1();\n}\n";
@@ -1134,6 +1171,8 @@ export function lspScenarios(): LspScenario[] {
 		globalImportClosureSeesNoGlobals(),
 		globalImportsSeenInOrder(),
 		genericReadsItsModuleConst(),
+		genericFromMacroImporterReadsItsImports(false),
+		genericFromMacroImporterReadsItsImports(true),
 		modulePassSurvivesProjectSwitch(),
 	];
 }
