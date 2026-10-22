@@ -17,7 +17,7 @@ import { parseSourceSpec, SourceKind } from "./version";
 import { parseGitSpec } from "./version";
 import { LockEntry } from "./lockfile";
 import { fetchPackageInfo, findVersion, latestVersion, RegistryVersion, RegistryPackage } from "./registry";
-import { downloadPackage } from "./download";
+import { downloadPackage, packageErrorMessage } from "./download";
 
 // Parse "name@version" into { name, version }.
 // Handles scoped names:
@@ -299,7 +299,9 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 
 	// Download the package archive
 	if (entry.source == "registry" && entry.url != "") {
-		if (!downloadPackage(parsed.name, parsed.version, entry.url, entry.integrity)) {
+		const downloaded = downloadPackage(parsed.name, parsed.version, entry.url, entry.integrity);
+		if (!downloaded.ok) {
+			console.log(`  error: ${parsed.name}@${parsed.version}: ${packageErrorMessage(downloaded.error)}`);
 			console.log("warning: added to lockfile but download failed — run `msc install` to retry");
 		}
 	}

@@ -9,7 +9,7 @@ import { loadBuildConfig } from "../buildConfig";
 import { readLockfile, entryName } from "./lockfile";
 import { registrySrcPath, isCached } from "./cache";
 import { fetchPackageInfo, findVersion } from "./registry";
-import { downloadPackage } from "./download";
+import { downloadPackage, packageErrorMessage } from "./download";
 
 export function cmdInstall(projectRoot: string): boolean {
 	const buildPath = join(projectRoot, "build.ms");
@@ -97,7 +97,13 @@ export function cmdInstall(projectRoot: string): boolean {
 							}
 						}
 					}
-					if (archiveUrl != "" && downloadPackage(name, entry.version, archiveUrl, integrity)) {
+					let downloadedOk = false;
+					if (archiveUrl != "") {
+						const downloaded = downloadPackage(name, entry.version, archiveUrl, integrity);
+						downloadedOk = downloaded.ok;
+						if (!downloaded.ok) console.log(`  error: ${name}@${entry.version}: ${packageErrorMessage(downloaded.error)}`);
+					}
+					if (downloadedOk) {
 						installed = installed + 1;
 					} else {
 						console.log(`missing: ${name}@${entry.version} (download failed)`);
