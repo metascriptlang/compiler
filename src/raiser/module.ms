@@ -75,14 +75,15 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 	for (const c of constants) names.push(c.kind == RaiserValueKind.String ? constStringText(c) : "");
 	let paramRefs: int32 = 0;
 	for (let r = 0; r < arity && r < layout.regOps.length; r += 1) if (inRefFile((layout.regOps[r] & 7) as RaiserRegClass)) paramRefs += 1;
-	return { name, code: layout.code, packed, lines, fieldCache, constants, names, arity, localsCount, wordRegs: layout.wordRegs, refRegs: layout.refRegs, paramRefs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: layout.sigs, copyPlans: [], classTypes: [] };
+	const func: RaiserFunction = { name, code: layout.code, packed, lines, fieldCache, constants, names, arity, localsCount, wordRegs: layout.wordRegs, refRegs: layout.refRegs, paramRefs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: layout.sigs, copyPlans: [], classTypes: [] };
+	bindReturns(func);
+	return func;
 }
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {
 	for (const func of functions) {
 		assertPacked(func);
 		bindDirectCalls(func, functions);
-		bindReturns(func);
 	}
 	return { name, functions, entry, globalCount: 0, globalInit: [], records: [], exports: [] };
 }

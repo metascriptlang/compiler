@@ -6349,7 +6349,7 @@ test "ledger: a returning call releases what its frame still holds, leaving only
 	assert heapStringLive(vm.arrayHeap) == 0 && vmLiveCount(vm) == 0 && heapBoxLive(vm.arrayHeap) == 1, `${heapStringLive(vm.arrayHeap)} ${vmLiveCount(vm)} ${heapBoxLive(vm.arrayHeap)}`;
 }
 
-test "a packed Ret names the refs its frame owns and whether a handler can still be open there" {
+test "a packed Ret names the refs its frame owns and whether a handler can still be open there, before any module holds it" {
 	const body = dropsEverything.slice(0, dropsEverything.length - 1);
 	body.push(raiserABC(RaiserOpcode.Ret, 7, 0, 0));
 	const guardedCode: RaiserInstruction[] = [
@@ -6364,7 +6364,6 @@ test "a packed Ret names the refs its frame owns and whether a handler can still
 	];
 	const worker = createRaiserFunction("worker", body, dropsEverythingConsts, 0, 0, 8);
 	const guarded = createRaiserFunction("guarded", guardedCode, [raiserInt(7)], 0, 0, 4);
-	createRaiserModule("m", [worker, guarded], 0);
 	const owned = worker.refRegs - worker.paramRefs;
 	const ret = worker.packed[worker.packed.length - 1];
 	assert owned > 0 && packedB(ret) == worker.paramRefs && ((ret >> 40) & 65535) == owned * 2, `${packedB(ret)} ${(ret >> 40) & 65535} ${owned}`;
