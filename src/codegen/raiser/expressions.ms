@@ -16,7 +16,7 @@ import {
 	createNodeAt
 } from "../../ast/node";
 import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, RaiserCombine, raiserABC, raiserABx, raiserAx, convOperand, fitsImm, immField, branchField, inRefFile, MAX_SLOT } from "../../raiser/bytecode";
-import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserConstString } from "../../raiser/value";
+import { RaiserValueKind, createClassType, raiserInt, raiserFloat, raiserNil, raiserBool, raiserConstString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { resolveRuntimeDir } from "../../utils/path";
 import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf } from "./valueCopy";
@@ -2491,7 +2491,7 @@ export function classTypeOperand(s: RaiserCompState, className: string, classSym
 	}
 	const display: int64[] = [];
 	for (let i = chain.length - 1; i >= 0; i -= 1) display.push(raiserClassId(chain[i]));
-	s.classTypes.push({ name: className, depth: chain.length - 1, display, fields: layoutOf(classSym.symbolType), kinds: slotKindsOf(s, classSym.symbolType) });
+	s.classTypes.push(createClassType(className, chain.length - 1, display, layoutOf(classSym.symbolType), slotKindsOf(s, classSym.symbolType)));
 	return s.classTypes.length;
 }
 

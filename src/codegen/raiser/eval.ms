@@ -1248,6 +1248,49 @@ test "untag: an object holds its scalar fields as raw words, a reference as its 
 	assert found == 1;
 }
 
+function classNamed(vm: RaiserVM, name: string): RaiserClassType {
+	for (const obj of vm.objectHeap.objects) {
+		if (obj.classType.name == name) return obj.classType;
+	}
+	throw new Error(`internal: no object of class ${name}`);
+}
+
+test "template: an object of word fields starts from the class's zero slots and word mask" {
+	const vm = evalOrcVM("class W { a: int32 = 0; b: int64 = 0; c: boolean = false; d: float64 = 0.0; } const w = new W(); w.b = 5; w.d = 1.5; console.log(`${w.a} ${w.b} ${w.c} ${w.d}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "0 5 false 1.5\n", vm.output;
+	const t = classNamed(vm, "W");
+	assert t.zeroSlots.length == 4 && t.zeroWordSlots == 3 && t.zeroRefSlots == 0 && t.dynCount == 0;
+}
+
+test "template: a mixed object numbers its Dyn slots in order and masks its Word and Ref slots" {
+	const vm = evalOrcVM("class M { n: int32 = 0; u: int32 | string | null = null; s: string = ''; v: int32 | null = null; f: float64 = 0.0; }"
+		+ " const m = new M(); m.u = 'a'; m.v = 3; m.n = 4; m.s = 'q'; console.log(`${m.n} ${m.u} ${m.s} ${m.v} ${m.f}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "4 a q 3 0\n", vm.output;
+	const t = classNamed(vm, "M");
+	assert t.zeroSlots.join(",") == "0,0,0,1,0", t.zeroSlots.join(",");
+	assert t.zeroWordSlots == 1 && t.zeroRefSlots == 4 && t.dynCount == 2, `${t.zeroWordSlots} ${t.zeroRefSlots} ${t.dynCount}`;
+}
+
+test "template: a subclass lays its parent's fields first, and a subclass of a parent with a union starts both from nil" {
+	const vm = evalOrcVM("class A { x: int32 = 1; u: int32 | string | null = null; } class B extends A { y: string = ''; z: int32 | null = null; }"
+		+ " const b = new B(); console.log(`${b.x} ${b.u == null} [${b.y}] ${b.z == null}`); b.z = 8; b.u = 'k'; console.log(`${b.z} ${b.u}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "1 true [] true\n8 k\n", vm.output;
+	const t = classNamed(vm, "B");
+	assert t.fields.join(",") == "x,u,y,z" && t.zeroSlots.join(",") == "0,0,0,1" && t.zeroWordSlots == 1 && t.zeroRefSlots == 4, `${t.fields.join(",")} ${t.zeroSlots.join(",")}`;
+}
+
+test "template: an object reused from the free list holds no field of its last life" {
+	const vm = evalOrcVM("class R { n: int32 = 0; s: string = ''; u: int32 | string | null = null; }"
+		+ " function churn(i: int32): int32 { const r = new R(); const seen = r.n + r.s.length + (r.u == null ? 0 : 1); r.n = i + 1; r.s = 'x' + i.toString(); r.u = i; return seen; }"
+		+ " let total = 0; for (let i = 0; i < 50; i++) total += churn(i); console.log(total);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "0\n", vm.output;
+	assert vm.objectHeap.objects.length < 10, `${vm.objectHeap.objects.length}`;
+}
+
 test "untag: a typed slot opcode reads a slot of another class by name" {
 	const vm = evalOrcVM("function add(x: int32, e: { n: int32 }): int32 { return e.n + x; } function env(n) { return { n: n }; } console.log(add(3, env(5)));");
 	assert vm.error == "", vm.error;

@@ -701,9 +701,34 @@ export interface RaiserClassType {
 	display: int64[];   // the ids of the class and its ancestors, indexed by depth, so display[depth] is the class's own
 	fields: string[];   // the layout NewObject lays out, so a field sits at the slot its type gives it
 	kinds: RaiserRegClass[];
+	zeroSlots: int64[];   // the slots of a fresh object: zero bits, a nil handle, the index of each Dyn slot's value in order
+	zeroWordSlots: int64;
+	zeroRefSlots: int64;
+	dynCount: int32;   // the nil values a fresh object holds, one per Dyn slot
 }
 
-export const RAISER_NO_CLASS: RaiserClassType = { name: "", depth: -1, display: [], fields: [], kinds: [] };
+// A class type with its zero object computed once, so NewObject copies it instead of laying out each slot.
+export function createClassType(name: string, depth: int32, display: int64[], fields: string[], kinds: RaiserRegClass[]): RaiserClassType {
+	const zeroSlots: int64[] = [];
+	let zeroWordSlots: int64 = 0;
+	let zeroRefSlots: int64 = 0;
+	let dynCount: int32 = 0;
+	for (let i = 0; i < fields.length; i += 1) {
+		const cls = kinds[i];
+		const bit: int64 = i < TYPED_SLOTS ? (1 as int64) << (i as int64) : 0;
+		if (cls == RaiserRegClass.Word) zeroWordSlots = zeroWordSlots | bit;
+		if (cls == RaiserRegClass.Ref) zeroRefSlots = zeroRefSlots | bit;
+		if (cls == RaiserRegClass.Dyn) {
+			zeroSlots.push(dynCount as int64);
+			dynCount += 1;
+		} else {
+			zeroSlots.push(0);
+		}
+	}
+	return { name, depth, display, fields, kinds, zeroSlots, zeroWordSlots, zeroRefSlots, dynCount };
+}
+
+export const RAISER_NO_CLASS: RaiserClassType = createClassType("", -1, [], [], []);
 
 export interface RaiserObjectData {
 	slots: int64[];
@@ -775,7 +800,11 @@ function laySlot(obj: RaiserObjectData): void {
 // Every slot of the object's class at its zero: zero bits, a nil handle, a nil value.
 export function layOutObject(obj: RaiserObjectData, classType: RaiserClassType): void {
 	obj.classType = classType;
-	while (obj.slots.length < classType.fields.length) laySlot(obj);
+	const zero = classType.zeroSlots;
+	for (let i = 0; i < zero.length; i += 1) obj.slots.push(zero[i]);
+	obj.wordSlots = classType.zeroWordSlots;
+	obj.refSlots = classType.zeroRefSlots;
+	for (let i: int32 = 0; i < classType.dynCount; i += 1) obj.values.push(raiserNil());
 }
 
 // The register class slot `index` holds, which must be laid.

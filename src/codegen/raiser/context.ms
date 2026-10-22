@@ -5,7 +5,7 @@ import {
 	RaiserOpcode, RaiserInstruction, RaiserRegClass, RaiserRole, RaiserConvClass, opRole, convOperand,
 	raiserABC, raiserABx, raiserAx, getSignedAx, fitsImm, immField, isBranchI64, branchField, branchOffset
 } from "../../raiser/bytecode";
-import { RaiserValue, RaiserValueKind, RaiserClassType, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserNil } from "../../raiser/value";
+import { RaiserValue, RaiserValueKind, RaiserClassType, createClassType, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserNil } from "../../raiser/value";
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind } from "../../ast/node";
 import { RaiserCopyPlan } from "../../raiser/valueCopy";
 import { CheckerError, Severity } from "../../checker/context";
@@ -548,7 +548,7 @@ export function resolveClassInit(s: RaiserCompState, classSym: Symbol): int32 {
 // The NewObject operand of a typed object that has no class: its layout alone.
 export function layoutOperand(s: RaiserCompState, fields: string[], kinds: RaiserRegClass[]): int32 {
 	if (fields.length == 0) return 0;
-	s.classTypes.push({ name: "", depth: -1, display: [], fields, kinds });
+	s.classTypes.push(createClassType("", -1, [], fields, kinds));
 	return s.classTypes.length;
 }
 
