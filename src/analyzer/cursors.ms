@@ -15,7 +15,7 @@
 // false positives would be unsound (dangling pointer).
 
 import {
-	Node, NodeKind, Symbol, Type, TypeKind,
+	Node, NodeFlag, NodeKind, Symbol, Type, TypeKind,
 	VariableDeclData, MemberExprData, ArrayAccessData,
 	BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData,
 	WhileStmtData, ForStmtData, DoWhileStmtData,
@@ -185,6 +185,10 @@ function callFormals(call: Node): Type[] | null {
 
 function readOnlyFormal(formals: Type[] | null, i: int32): boolean {
 	return formals != null && i < formals.length && isReadonlyView(formals[i]);
+}
+
+function sinkFormal(formals: Type[] | null, i: int32): boolean {
+	return formals != null && i < formals.length && formals[i] != null && formals[i].kind == TypeKind.Sink;
 }
 
 function isViewArg(arg: Node): boolean {
@@ -621,8 +625,10 @@ function trav(p: Partitions, node: Node | null): void {
 				}
 			}
 			const formals = callFormals(node);
+			const receiverFormals = node.flags.has(NodeFlag.ExtCall) ? 1 : 0;
 			for (let ai = 0; ai < d.arguments.length; ai += 1) {
-				if (!readOnlyFormal(formals, ai) && !isViewArg(d.arguments[ai])) potentialMutationViaArg(p, d.arguments[ai]);
+				const fi = ai + receiverFormals;
+				if (!readOnlyFormal(formals, fi) && !sinkFormal(formals, fi) && !isViewArg(d.arguments[ai])) potentialMutationViaArg(p, d.arguments[ai]);
 			}
 			recordWrite(p, node);
 		},
@@ -1071,6 +1077,24 @@ test "passing a value without references keeps the borrow a cursor" {
 	const body = getFuncNamed(BOXES + "function f(h: Holder): void { const c = h.child; show(\"x\"); show(c.v); }", "f");
 	inferCursors(body);
 	assert isCursorNamed(body, "c");
+}
+
+test "pushing the borrow into another array keeps it a cursor" {
+	const body = getFuncNamed(BOXES + "function f(src: Box[], dst: Box[]): void { const b = src[0]; dst.push(b); show(b.v); }", "f");
+	inferCursors(body);
+	assert isCursorNamed(body, "b");
+}
+
+test "passing the borrow to a sink parameter keeps it a cursor" {
+	const body = getFuncNamed(BOXES + "function keep(sink b: Box): void { show(b.v); }\nfunction f(h: Holder): void { const c = h.child; keep(c); show(c.v); }", "f");
+	inferCursors(body);
+	assert isCursorNamed(body, "c");
+}
+
+test "pushing the borrow into the array it came from ends the cursor" {
+	const body = getFuncNamed(BOXES + "function f(src: Box[]): void { const b = src[0]; src.push(b); show(b.v); }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "b");
 }
 
 test "a callee that writes the borrowed field through another path ends the cursor" {
