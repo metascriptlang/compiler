@@ -16,9 +16,15 @@ import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangl
 import { CheckerContext, newSym, GcMode, addError, createContext } from "../../checker/context";
 import { cStringLiteral, escapeCString } from "./literals";
 
+function namingSym(t: Type): Symbol | null {
+	if (t.sym != null && hasFlag(t.sym, SymbolFlag.Anon)) return t.sym;
+	return t.typeFlags.has(TypeFlag.Spelled) ? null : t.sym;
+}
+
 export function resolvedTypeCName(t: Type, hasCheckerCtx: boolean): string {
-	if (t.sym != null && t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(t.sym, t.typeName) + "_" + hashToBase36(nominalTypeKey(t));
-	if (t.sym != null) return mangledTypeName(t.sym, t.typeName);
+	const owner = namingSym(t);
+	if (owner != null && t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(owner, t.typeName) + "_" + hashToBase36(nominalTypeKey(t));
+	if (owner != null) return mangledTypeName(owner, t.typeName);
 	if (hasCheckerCtx && t.typeName != "" && isNominalKind(t.kind)) nominalTypeKey(t);
 	return mangledTypeName(null, t.typeName);
 }
@@ -31,21 +37,9 @@ function typeIdentityName(g: CGen, t: Type): string {
 // definitions + ownership keys) and the analyzer (call sites). Both must spell a
 // type the way codegen spells its struct, or one module's hooks answer for
 // another module's same-named type.
-export function hookBaseCNameOfSym(typeName: string, sym: Symbol | null): string {
-	if (typeName == "") return "";
-	// Compiler-generated spellings ($Env_*, msAnon_*, monomorphized "__") are already
-	// unique and get mangled once at emission; mangling them here too would spell the
-	// definition and its references differently.
-	if (typeName.slice(0, 1) == "$") return ownedGeneratedName(sym) ? mangledTypeName(sym, typeName) : typeName;
-	if (typeName.indexOf("__", 0) >= 0) return typeName;
-	if (sym != null) return mangledTypeName(sym, typeName);
-	return typeName;
-}
-
 export function hookBaseCName(typeName: string, t: Type | null, cc: Readonly<CheckerContext> | null): string {
 	if (typeName == "") return "";
 	if (typeName.slice(0, 1) == "$") return t != null && t.typeName == typeName && ownedGeneratedName(t.sym) ? mangledTypeName(t.sym, typeName) : typeName;
-	if (typeName.indexOf("__", 0) >= 0) return typeName;
 	const named = t != null && t.typeName == typeName;
 	if (named && t.typeInst != null) return monoInstanceName(t.typeInst);
 	if (named) return resolvedTypeCName(t, cc != null);
@@ -513,7 +507,9 @@ export function annotationToC(annotation: string): string {
 // Generates a unique string key for a Type (used for cache lookups).
 
 function structKeyIdentity(t: Type): string {
-	if (t.sym != null && !t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(t.sym, t.typeName);
+	const owner = namingSym(t);
+	if (owner == null && t.typeFlags.has(TypeFlag.Spelled)) return mangledTypeName(null, t.typeName);
+	if (owner != null && !t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(owner, t.typeName);
 	return mangledTypeName(null, nominalTypeKey(t));
 }
 
@@ -1094,7 +1090,7 @@ function refArrayCellLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 
 function objectTypeInfoLabel(info: Readonly<CTypeInfoDemand>): string {
 	const t = info.subject;
-	if (t.kind == TypeKind.GenericInstance || t.sym == null || t.typeName.indexOf("__", 0) >= 0 || isAnonTypeName(t.typeName)) return info.cName;
+	if (t.kind == TypeKind.GenericInstance || t.sym == null || t.sym.instantiatedFrom != null || isAnonTypeName(t.typeName)) return info.cName;
 	return mangle(t.typeName);
 }
 
@@ -2525,15 +2521,13 @@ test "a TypeInfo requested for a type that has none is an error" {
 	assert g.errors.length == 1;
 }
 
-test "a generated $ type is spelled by its module-owned symbol in both hook base names" {
+test "a generated $ type is spelled by its module-owned symbol in its hook base name" {
 	const owned = declaredHere(createStruct("$Env_probe_1", ["v"], [createPrimitive(TypeKind.String)], false));
 	owned.sym.modulePath = "/m/owner.ms";
 	const want = mangledTypeName(owned.sym, "$Env_probe_1");
 	assert hookBaseCName("$Env_probe_1", owned, null) == want;
-	assert hookBaseCNameOfSym("$Env_probe_1", owned.sym) == want;
 	const ownerless = declaredHere(createStruct("$Env_probe_2", ["v"], [createPrimitive(TypeKind.String)], false));
 	assert hookBaseCName("$Env_probe_2", ownerless, null) == "$Env_probe_2";
-	assert hookBaseCNameOfSym("$Env_probe_2", ownerless.sym) == "$Env_probe_2";
 }
 
 test "a hook base name comes from the type's own symbol, not from a table lookup by name" {

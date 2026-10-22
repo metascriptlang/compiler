@@ -281,19 +281,9 @@ export function mangleProcName(name: string, moduleName: string, id: number): st
 // Reference parity: Nim getTypeName — the C type name carries the declaring
 // symbol's identity (Nim appends sigHash; here the module qualifier, matching
 // the proc/global convention). extern/ImportC types keep the raw C name
-// (Nim sfImportc/sfExportc rule). Monomorphized instances ("__") and
-// compiler-generated ("$") names keep their existing spelling.
-
-// One globally cached object per shape, shared by every module, name already
-// encoding its content — so the sym it happens to carry is whichever module
-// created it first, not an owner. Same carve-out as "$" and mono "__" above.
-export function isSharedStructuralName(name: string): boolean {
-	if (name.length > 6 && name.slice(0, 6) == "Maybe_") return true;
-	if (name.length > 8 && name.slice(0, 8) == "msTuple_") return true;
-	if (name.length > 7 && name.slice(0, 7) == "msAnon_") return true;
-	if (name.length > 8 && name.slice(0, 8) == "msUnion_") return true;
-	return false;
-}
+// (Nim sfImportc/sfExportc rule). An instance symbol's name already carries the
+// generic's owner, and a type without a declaring symbol is named by the
+// compiler from its content, so both keep their spelling.
 
 export function ownedGeneratedName(sym: Readonly<Symbol> | null): boolean {
 	return sym != null && sym.modulePath != "";
@@ -305,9 +295,7 @@ export function mangledTypeName(sym: Readonly<Symbol> | null, name: string): str
 		if (early != "") return early;
 	}
 	if (name.length > 0 && name.slice(0, 1) == "$") return ownedGeneratedName(sym) ? mangleQualified(name, mangleModuleName(sym!.modulePath)) : mangle(name);
-	if (name.indexOf("__", 0) >= 0) return mangle(name);
-	if (isSharedStructuralName(name)) return mangle(name);
-	if (sym != null && sym.modulePath != "") {
+	if (sym != null && sym.modulePath != "" && sym.instantiatedFrom == null) {
 		return mangleQualified(name, mangleModuleName(sym.modulePath));
 	}
 	return mangle(name);
