@@ -187,7 +187,7 @@ function declspec(ctx: ParseCtx, attr: VarAttr): CType {
 				"struct" => { advance(ctx); ty = structDecl(ctx); },
 				"union" => { advance(ctx); ty = unionDecl(ctx); },
 				"enum" => { advance(ctx); ty = enumSpecifier(ctx); },
-				_ => { const td = ctx.typedefs.get(s); if (td != null) { ty = td; ty.typedefName = s; } advance(ctx); },
+				_ => { const td = ctx.typedefs.get(s); if (td != null) ty = spelledAs(td, s); advance(ctx); },
 			};
 			counter = counter + SPEC_OTHER;
 			continue;
@@ -465,6 +465,20 @@ function arrayDimensions(ctx: ParseCtx, ty: CType): CType {
 	expect(ctx, "]");
 	ty = typeSuffix(ctx, ty);
 	return makeArray(ty, size);
+}
+
+// A struct, union or enum is one type however it is named, so it is spelled by the typedef
+// that first names it; any other type a typedef names is spelled at each use by the name written
+// there, without renaming the declarations that wrote the type before.
+function spelledAs(td: CType, name: string): CType {
+	if (isTagType(td)) return td;
+	const t = copyType(td);
+	t.typedefName = name;
+	return t;
+}
+
+function isTagType(t: CType): boolean {
+	return t.kind == CTypeKind.Struct || t.kind == CTypeKind.Union || t.kind == CTypeKind.Enum;
 }
 
 // ===== Declarator =====
@@ -969,6 +983,7 @@ function parseTypedef(ctx: ParseCtx, baseTy: CType): void {
 		}
 
 		if (name != "") {
+			if (isTagType(ty) && ty.typedefName == "") ty.typedefName = name;
 			ctx.typedefs.set(name, ty);
 			ctx.objs.push({
 				kind: ObjKind.TypedefName,

@@ -35,8 +35,8 @@ function mapRuntimeType(name: string): string {
 // `skipTypedef=false` (default): USE-site — preserves typedef alias names so a
 // MyId parameter emits as `x: MyId`. `skipTypedef=true`: DEFINE-site — used by
 // emitTypedef so `type MyId = ...` resolves to the underlying type, not back
-// to itself (chibicc parse.ms:192 mutates typedefName on lookup, so the type
-// behind a self-named typedef has typedefName === obj.name).
+// to itself (a struct, union or enum carries the name of the typedef that
+// first names it, so its typedefName === obj.name).
 function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
 	if (!skipTypedef && t.typedefName != "") {
 		const mapped = mapRuntimeType(t.typedefName);
@@ -777,6 +777,18 @@ test "a name two included headers both declare is re-exported from the first" {
 	assert t.source.indexOf("export { ResRef } from \"/tmp/mscparse-redecl/a.h\";") >= 0, t.source;
 	const b = try readFile("/tmp/mscparse-redecl/b.h") catch "";
 	assert (t.includedShapes.get("/tmp/mscparse-redecl/b.h") ?? "") == translateHeaderModule(b, "/tmp/mscparse-redecl/b.h").ownShape;
+}
+
+test "an alias an includer declares leaves the declarations of the header it includes as they read alone" {
+	ensureDir("/tmp/mscparse-alias");
+	writeFile("/tmp/mscparse-alias/s.h", "#ifndef S_H\n#define S_H\ntypedef int Num;\ntypedef struct S { Num a; } S;\ntypedef enum { EA, EB } E;\ntypedef struct { Num b; } Anon;\nNum n(Num x);\nS mk(Anon a);\nE ek(void);\n#endif\n");
+	const t = translateHeaderModule("#include \"s.h\"\ntypedef Num Id;\ntypedef S T;\ntypedef E F;\ntypedef Anon A2;\nId g(T t, F f, A2 a);\n", "/tmp/mscparse-alias/w.h");
+	const s = try readFile("/tmp/mscparse-alias/s.h") catch "";
+	const alone = translateHeaderModule(s, "/tmp/mscparse-alias/s.h").ownShape;
+	assert (t.includedShapes.get("/tmp/mscparse-alias/s.h") ?? "") == alone, alone;
+	assert alone.indexOf("export extern function n(x: Num): Num;") >= 0, alone;
+	assert alone.indexOf("export extern function mk(a: Anon): S;") >= 0, alone;
+	assert t.source.indexOf("export extern function g(t: S, f: E, a: Anon): Id;") >= 0, t.source;
 }
 
 test "a header declares what its own file writes and imports and re-exports what it includes" {
