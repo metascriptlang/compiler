@@ -117,6 +117,20 @@ function settleForwardTypes(): void {
 // Function.typeNames so downstream consumers (codegen, scope binding, LSP) see
 // clean names. Returns true if the function has a rest param, so callers can
 // adjust minArity in one branch.
+// Rest-ness is the type-level Varargs marker that createFunction installed.
+// AST params still carry the legacy "..." prefix from the parser; strip it
+// in-place so downstream consumers (codegen, suggest, LSP) see clean names.
+function setDeclaredMinArity(fnType: Type, params: string[], defaults: Node[] | null): void {
+	let defCount = 0;
+	if (defaults != null) {
+		for (const def of defaults) {
+			if (def != null) defCount = defCount + 1;
+		}
+	}
+	const hasRestParam = stripRestParamPrefix(params);
+	if (defCount > 0 || hasRestParam) setMinArity(fnType, params.length - defCount - (hasRestParam ? 1 : 0));
+}
+
 function stripRestParamPrefix(params: string[]): boolean {
 	const last = params.length - 1;
 	if (last < 0) return false;
@@ -2099,21 +2113,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	const proxySpot = d.fnFlags.indexOf("extern", 0) >= 0 ? proxyAtExtern(ctx, paramTypes, returnType) : "";
 	if (proxySpot != "") addError(ctx, "extern '" + d.fnName + "' " + proxySpot + ": a Proxy crosses into foreign code, which reads it without its traps — " + (proxySpot == "return type" ? "return the target and wrap it here" : "pass proxyTarget(p)"), node.location.line, node.location.column);
 
-	// Set minArity for functions with default parameters (Reference parity: count non-null defaults)
-	let defCount = 0;
-	if (d.fnDefaults != null) {
-		for (const def of d.fnDefaults) {
-			if (def != null) defCount = defCount + 1;
-		}
-	}
-	// Rest-ness is the type-level Varargs marker that createFunction installed.
-	// AST params still carry the legacy "..." prefix from the parser; strip it
-	// in-place so downstream consumers (codegen, suggest, LSP) see clean names.
-	const hasRestParam = stripRestParamPrefix(d.params);
-	if (defCount > 0 || hasRestParam) {
-		const restReduction = hasRestParam ? 1 : 0;
-		setMinArity(fnType, d.params.length - defCount - restReduction);
-	}
+	setDeclaredMinArity(fnType, d.params, d.fnDefaults);
 
 	if (genericNames.length > 0) {
 		closeScope(ctx.table);
@@ -2949,7 +2949,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				refuseHookSignature(ctx, md.methodName, md.nameLocation, paramTypes, md.methodReturnType != "" ? returnType : null);
 			}
 			const fnType = createFunction(paramTypes, md.methodParams, returnType);
-			stripRestParamPrefix(md.methodParams);
+			setDeclaredMinArity(fnType, md.methodParams, md.methodDefaults);
 			// Use resolvedSym set by collectClassMethod — avoids overload ambiguity with lookupSymbol
 			// DecoratedDecl wraps MethodDecl — resolvedSym is on the inner node
 			const methodSym = member.resolvedSym != null ? member.resolvedSym : d.classBody[mi].resolvedSym;
@@ -3161,7 +3161,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 				closeScope(ctx.table);
 			}
 			const fnType = createFunction(paramTypes, md.methodParams, returnType);
-			stripRestParamPrefix(md.methodParams);
+			setDeclaredMinArity(fnType, md.methodParams, md.methodDefaults);
 			const methodSym = member.resolvedSym != null ? member.resolvedSym : d.actorBody[mi].resolvedSym;
 			if (methodSym != null && methodSym.symbolType != null && methodSym.symbolType.typeName != "") {
 				fnType.typeName = methodSym.symbolType.typeName;
