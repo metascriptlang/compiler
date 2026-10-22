@@ -40,6 +40,10 @@ interface ParseCtx {
 	tags: HashMap<string, CType>;
 	// Enum constant values for const expr evaluation (e.g., B = A | 2)
 	enumConstants: HashMap<string, int64>;
+	layoutAttrSeen: boolean;
+	pack: int32;
+	packStack: int32[];
+	packUnknown: boolean;
 }
 
 // ===== Token Consumption Helpers =====
@@ -162,15 +166,14 @@ function declspec(ctx: ParseCtx, attr: VarAttr): CType {
 			continue;
 		}
 
-		// _Alignas — skip
 		if (s == "_Alignas") {
+			ctx.layoutAttrSeen = true;
 			advance(ctx);
 			expect(ctx, "(");
 			skipParens(ctx, 1);
 			continue;
 		}
 
-		// __attribute__ — skip
 		if (s == "__attribute__") {
 			skipAttribute(ctx);
 			continue;
@@ -272,13 +275,88 @@ function skipParens(ctx: ParseCtx, startDepth: int32): void {
 
 // ===== Skip __attribute__((...)) =====
 
+const LAYOUT_ATTRIBUTES: string[] = [
+	"packed", "aligned", "mode", "vector_size", "ext_vector_type", "ms_struct", "gcc_struct", "transparent_union",
+];
+
+function isLayoutAttribute(name: string): boolean {
+	const bare = name.startsWith("__") && name.endsWith("__") && name.length > 4 ? name.slice(2, name.length - 2) : name;
+	for (const a of LAYOUT_ATTRIBUTES) {
+		if (a == bare) return true;
+	}
+	return false;
+}
+
 function skipAttribute(ctx: ParseCtx): void {
 	advance(ctx); // skip __attribute__
 	if (!eq(ctx, "(")) return;
 	advance(ctx); // skip (
 	if (!eq(ctx, "(")) return;
 	advance(ctx); // skip (
-	skipParens(ctx, 2);
+	let depth = 2;
+	while (!isEnd(ctx) && depth > 0) {
+		if (eq(ctx, "(")) depth = depth + 1;
+		if (eq(ctx, ")")) depth = depth - 1;
+		if (ctx.tok.kind == CTokenKind.Ident && isLayoutAttribute(ctx.tok.stringVal)) ctx.layoutAttrSeen = true;
+		advance(ctx);
+	}
+}
+
+function skipAttributes(ctx: ParseCtx): void {
+	while (eq(ctx, "__attribute__")) skipAttribute(ctx);
+}
+
+// `#pragma pack` reaches the parser as a `#pragma` token followed by the
+// directive's own tokens (see preprocess.ms). Forms other than (), (N), (push),
+// (push, N), (pop) and (show) leave the packing unknown for the rest of the unit.
+function pragmaPack(ctx: ParseCtx): void {
+	advance(ctx);
+	advance(ctx);
+	if (!consume(ctx, "(")) { ctx.packUnknown = true; return; }
+	const args: CToken[] = [];
+	while (!isEnd(ctx) && !eq(ctx, ")")) {
+		if (!eq(ctx, ",")) args.push(ctx.tok);
+		advance(ctx);
+	}
+	consume(ctx, ")");
+	if (args.length == 0) { ctx.pack = 0; return; }
+	const head = args[0];
+	if (args.length == 1 && head.kind == CTokenKind.Num) { ctx.pack = head.intVal as int32; return; }
+	if (head.stringVal == "show" && args.length == 1) return;
+	if (head.stringVal == "push" && args.length == 1) { ctx.packStack.push(ctx.pack); return; }
+	if (head.stringVal == "push" && args.length == 2 && args[1].kind == CTokenKind.Num) {
+		ctx.packStack.push(ctx.pack);
+		ctx.pack = args[1].intVal as int32;
+		return;
+	}
+	if (head.stringVal == "pop" && args.length == 1 && ctx.packStack.length > 0) { ctx.pack = ctx.packStack.pop(); return; }
+	ctx.packUnknown = true;
+}
+
+// `_Pragma("...")`: a pack pragma in operator form leaves the packing unknown.
+function skipPragmaOperator(ctx: ParseCtx): void {
+	advance(ctx);
+	if (!consume(ctx, "(")) return;
+	if (ctx.tok.kind == CTokenKind.Str && ctx.tok.stringVal.trim().startsWith("pack")) ctx.packUnknown = true;
+	skipParens(ctx, 1);
+}
+
+function skipPragmas(ctx: ParseCtx): boolean {
+	if (eq(ctx, "#pragma")) { pragmaPack(ctx); return true; }
+	if (eq(ctx, "_Pragma")) { skipPragmaOperator(ctx); return true; }
+	return false;
+}
+
+function layoutKnownType(t: CType): boolean {
+	if (t.kind == CTypeKind.Array && t.base != null) return layoutKnownType(t.base);
+	return t.layoutKnown;
+}
+
+function membersLayoutKnown(members: CMember[]): boolean {
+	for (const m of members) {
+		if (m.name == "" || m.bitWidth >= 0 || !layoutKnownType(m.type)) return false;
+	}
+	return true;
 }
 
 // ===== Pointers =====
@@ -481,7 +559,15 @@ function typename(ctx: ParseCtx): CType {
 // ===== Struct / Union =====
 
 function structOrUnionDecl(ctx: ParseCtx, isUnion: boolean): CType {
-	while (eq(ctx, "__attribute__")) skipAttribute(ctx);
+	const outerAttrSeen = ctx.layoutAttrSeen;
+	ctx.layoutAttrSeen = false;
+	const ty = structOrUnionBody(ctx, isUnion);
+	ctx.layoutAttrSeen = outerAttrSeen || ctx.layoutAttrSeen;
+	return ty;
+}
+
+function structOrUnionBody(ctx: ParseCtx, isUnion: boolean): CType {
+	skipAttributes(ctx);
 
 	// Optional tag name
 	let tagName = "";
@@ -508,14 +594,16 @@ function structOrUnionDecl(ctx: ParseCtx, isUnion: boolean): CType {
 	ty.tagName = tagName;
 	if (tagName != "") ctx.tags.set(tagName, ty);
 
+	const packed = ctx.pack != 0 || ctx.packUnknown;
 	advance(ctx); // skip {
 	ty.members = structMembers(ctx);
 	expect(ctx, "}");
 
-	while (eq(ctx, "__attribute__")) skipAttribute(ctx);
+	skipAttributes(ctx);
 
 	if (isUnion) computeUnionLayout(ty);
 	else computeStructLayout(ty);
+	ty.layoutKnown = !packed && !ctx.layoutAttrSeen && membersLayoutKnown(ty.members);
 	return ty;
 }
 
@@ -531,7 +619,8 @@ function structMembers(ctx: ParseCtx): CMember[] {
 	const members: CMember[] = [];
 
 	while (!eq(ctx, "}") && !isEnd(ctx)) {
-		while (eq(ctx, "__attribute__")) skipAttribute(ctx);
+		if (skipPragmas(ctx)) continue;
+		skipAttributes(ctx);
 
 		const beforeDecl = ctx.tok;
 		const dummyAttr = newVarAttr();
@@ -545,6 +634,12 @@ function structMembers(ctx: ParseCtx): CMember[] {
 			continue;
 		}
 
+		if (eq(ctx, ";") && (baseTy.kind == CTypeKind.Struct || baseTy.kind == CTypeKind.Union)) {
+			members.push(makeMember("", baseTy));
+			advance(ctx);
+			continue;
+		}
+
 		// Handle multiple declarators: int a, b, c;
 		let first = true;
 		while (!eq(ctx, ";") && !isEnd(ctx)) {
@@ -555,6 +650,7 @@ function structMembers(ctx: ParseCtx): CMember[] {
 			const declResult = declarator(ctx, baseTy);
 			let memTy = declResult.type;
 			const memName = declResult.name;
+			skipAttributes(ctx);
 
 			// Bitfield: int x : 3;
 			let bitWidth = -1;
@@ -563,6 +659,7 @@ function structMembers(ctx: ParseCtx): CMember[] {
 					bitWidth = ctx.tok.intVal as int32;
 					advance(ctx);
 				}
+				skipAttributes(ctx);
 			}
 
 			const mem = makeMember(memName, memTy);
@@ -669,12 +766,17 @@ export function parseTranslationUnit(head: CToken, target: TargetInfo): ParseRes
 		typedefs: new HashMap<string, CType>(),
 		tags: new HashMap<string, CType>(),
 		enumConstants: new HashMap<string, int64>(),
+		layoutAttrSeen: false,
+		pack: 0,
+		packStack: [],
+		packUnknown: false,
 	};
 
 	while (!isEnd(ctx)) {
 		// Skip stray semicolons and braces
 		if (consume(ctx, ";")) continue;
 		if (consume(ctx, "}")) continue;
+		if (skipPragmas(ctx)) continue;
 		// Top-level { is always a function body (struct/union/enum bodies are
 		// consumed by declspec). Skip via brace matching.
 		if (eq(ctx, "{")) {
@@ -713,6 +815,7 @@ export function parseTranslationUnit(head: CToken, target: TargetInfo): ParseRes
 		const iterStart = ctx.tok;
 
 		const attr = newVarAttr();
+		ctx.layoutAttrSeen = false;
 		const baseTy = declspec(ctx, attr);
 
 		// typedef
@@ -838,14 +941,21 @@ export function parseTranslationUnit(head: CToken, target: TargetInfo): ParseRes
 // ===== Typedef =====
 
 function parseTypedef(ctx: ParseCtx, baseTy: CType): void {
+	const specAttrSeen = ctx.layoutAttrSeen;
 	let first = true;
 	while (!eq(ctx, ";") && !isEnd(ctx)) {
 		if (!first) expect(ctx, ",");
 		first = false;
 
 		const declResult = declarator(ctx, baseTy);
-		const ty = declResult.type;
 		const name = declResult.name;
+		ctx.layoutAttrSeen = false;
+		skipAttributes(ctx);
+		let ty = declResult.type;
+		if ((specAttrSeen || ctx.layoutAttrSeen) && ty.layoutKnown) {
+			ty = copyType(ty);
+			ty.layoutKnown = false;
+		}
 
 		if (name != "") {
 			ctx.typedefs.set(name, ty);

@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType } from "../../checker/types";
+import { TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType } from "../../checker/types";
 import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
@@ -1478,6 +1478,21 @@ function genObjectType(g: CGen, t: Type): string {
 function layoutAssert(g: CGen, t: Type, cType: string): string {
 	const size = sizeOfType(g.target, t);
 	return size < 0 ? "" : `_Static_assert(sizeof(${cType}) == ${size}, "${cType} layout");\n`;
+}
+
+export function assertExternLayout(g: CGen, t: Type): void {
+	if (t.sym == null || !t.typeFlags.has(TypeFlag.CompleteStruct)) return;
+	const cType = t.sym.nativeName;
+	const size = sizeOfType(g.target, t);
+	if (size < 0 || nameSetHas(g.declaredThings, "layout:" + cType)) return;
+	nameSetAdd(g.declaredThings, "layout:" + cType);
+	useImportedTypeHeader(g, t);
+	let asserts = layoutAssert(g, t, cType)
+		+ `_Static_assert(_Alignof(${cType}) == ${alignOfType(g.target, t)}, "${cType} alignment");\n`;
+	for (const field of t.typeNames) {
+		asserts = asserts + `_Static_assert(offsetof(${cType}, ${field}) == ${offsetOfField(g.target, t, field)}, "${cType}.${field} offset");\n`;
+	}
+	add(sec(g, CSection.Types), asserts);
 }
 
 // ===== Union Type Generation =====

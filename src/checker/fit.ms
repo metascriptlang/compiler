@@ -2,7 +2,7 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, TypeFlag, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, ObjectLiteralData, SymbolKind, SymbolFlag } from "../ast/node";
+import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, TypeFlag, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, ObjectLiteralData, SymbolKind, SymbolFlag, SizeofExprData } from "../ast/node";
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal, arityAdapts, runtimeParams } from "./compat";
@@ -3639,7 +3639,7 @@ function declaredConstantName(expr: Node): string {
 function constantRefusal(expr: Node, from: Type, target: Type): string {
 	const asTarget = "an explicit 'as " + typeDisplayName(target) + "'";
 	const folded = foldedNumber(expr);
-	if (folded == null) return "";
+	if (folded == null) return cLayoutSizeofRefusal(expr, asTarget);
 	if (constHoldsFloat(folded)) {
 		const v = constFloatValue(folded);
 		const text = floatValueText(v);
@@ -3665,6 +3665,14 @@ function constantRefusal(expr: Node, from: Type, target: Type): string {
 		return "cannot hold " + text + " exactly (" + mantissaText(target) + ") — write " + asTarget;
 	}
 	return typedConstantRefusal(expr, from, target, text);
+}
+
+function cLayoutSizeofRefusal(expr: Node, asTarget: string): string {
+	if (expr.kind != NodeKind.SizeofExpr) return "";
+	const d = expr.data as SizeofExprData;
+	if (d.sizeofResolved == null || !layoutFromC(d.sizeofResolved)) return "";
+	return "takes 'sizeof " + d.sizeofType + "', which is not a constant: '" + d.sizeofType + "' has C's layout, which msc folds only on the C backend "
+		+ "for a header struct whose every field translates exactly (no union, bitfield, packed or aligned member), so only the C compiler knows its size — write " + asTarget;
 }
 
 function typedConstantRefusal(expr: Node, from: Type, target: Type, text: string): string {
@@ -3734,7 +3742,7 @@ test "a union whose members the value names keeps no tag" {
 	assert !storesUnionTag(createUnion([p, stringType()]));
 }
 
-import { createNumberLiteral } from "./types";
+import { createNumberLiteral, layoutFromC } from "./types";
 
 test "an as into a literal union is checked only when the source can hold a value outside it" {
 	const narrow = createUnion([createStringLiteral("a"), createStringLiteral("b")]);

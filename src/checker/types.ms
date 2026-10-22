@@ -5170,6 +5170,7 @@ function alignOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 }
 
 function alignOfStruct(tg: TargetInfo, t: Type, depth: int32): int32 {
+	if (layoutFromC(t)) return 0;
 	let maxAlign = 1;
 	if (t.typeChildren != null) {
 		let i = 0;
@@ -5244,9 +5245,13 @@ function sizeOfStruct(tg: TargetInfo, t: Type, depth: int32): int32 {
 	return structLayoutAt(tg, t, depth, -1);
 }
 
+export function layoutFromC(t: Type): boolean {
+	return t.sym != null && t.sym.symFlags.has(SymbolFlag.ImportC) && !t.typeFlags.has(TypeFlag.CompleteStruct);
+}
+
 // Size and field offsets share one traversal, including padding and erased fields.
 function structLayoutAt(tg: TargetInfo, t: Type, depth: int32, fieldIndex: int32): int32 {
-	if (t.sym != null && t.sym.symFlags.has(SymbolFlag.ImportC)) return SIZE_NOT_COMPUTABLE;
+	if (layoutFromC(t)) return SIZE_NOT_COMPUTABLE;
 	let offset = 0;
 	let maxAlign = 1;
 	if (t.typeChildren != null) {

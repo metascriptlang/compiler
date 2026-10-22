@@ -1145,6 +1145,22 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 			continue;
 		}
 
+		if (dir.stringVal == "pragma" && dir.next.stringVal == "pack" && !dir.next.atBol) {
+			const marker = copyToken(ctx, dir);
+			marker.stringVal = "#pragma";
+			cur.next = marker;
+			cur = marker;
+			let t = dir.next;
+			while (t.kind != CTokenKind.Eof && !t.atBol) {
+				const c = copyToken(ctx, t);
+				cur.next = c;
+				cur = c;
+				t = t.next;
+			}
+			tok = t;
+			continue;
+		}
+
 		// #pragma (other) — skip
 		if (dir.stringVal == "pragma") {
 			tok = skipLine(dir.next);
