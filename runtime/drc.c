@@ -247,6 +247,10 @@ static inline void incCount(msRefHeader* h) {
 	h->rc += MS_RC_INCREMENT;
 }
 
+static inline void setLastRefCount(msRefHeader* h) {
+	h->rc &= MS_RC_MASK;
+}
+
 /* ===== Trace Ref (reference ORC parity) ===== */
 /* Called by generated trace hooks. Receives ADDRESS of pointer slot, not the value.
  * This enables collectColor to null out slots (entry[] = nil) so destructors
@@ -416,6 +420,7 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 	for (int32_t i = 0; i < j->toFree.len; i++) {
 		void* p = j->toFree.data[i].ptr;
 		const msTypeInfo* type = j->toFree.data[i].type;
+		setLastRefCount(msHeader(p));
 		MS_DESTROY_DISPATCH(type, p);
 		msDestroyAndDispose(p);
 	}
