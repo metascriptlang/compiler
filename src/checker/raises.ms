@@ -3,6 +3,7 @@ import { forEachChild } from "../ast/visitor";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { dispatchEntryFor, dispatchOverridesFor } from "./context";
 import { getOpByKeyIn, hookOps } from "../codegen/c/types";
+import { buildModuleNameRoots, ModuleNameRoots } from "../codegen/c/names";
 
 enum CallRaise { Never, Can, AsBody }
 
@@ -18,19 +19,21 @@ interface RaiseTables {
 	tempWrites: HashMap<Symbol, int32>;
 	bodies: HashSet<Symbol>;
 	ops: HashMap<string, Symbol>;
+	roots: ModuleNameRoots;
 }
 
-function freshRaiseTables(ops: HashMap<string, Symbol>): RaiseTables {
+function freshRaiseTables(ops: HashMap<string, Symbol>, roots: ModuleNameRoots): RaiseTables {
 	return {
 		raisesNothing: new HashSet<Symbol>(),
 		closureTargets: new HashMap<Symbol, Cursor<Readonly<Symbol>>>(),
 		tempWrites: new HashMap<Symbol, int32>(),
 		bodies: new HashSet<Symbol>(),
 		ops: ops,
+		roots: roots,
 	};
 }
 
-let _tables: RaiseTables = freshRaiseTables(new HashMap<string, Symbol>());
+let _tables: RaiseTables = freshRaiseTables(new HashMap<string, Symbol>(), { compiler: "", packages: "", project: "" });
 let _routines: HashMap<Symbol, RoutineInfo> = new HashMap<Symbol, RoutineInfo>();
 let _order: RoutineInfo[] = [];
 let _siteInfos: RoutineInfo[] = [];
@@ -43,7 +46,7 @@ let _holdFound = false;
 let _blindBroken = false;
 
 export function resetRaises(): void {
-	_tables = freshRaiseTables(hookOps());
+	_tables = freshRaiseTables(hookOps(), buildModuleNameRoots());
 }
 
 function closurePairTarget(value: Readonly<Node> | null): Readonly<Symbol | null> {
@@ -129,15 +132,15 @@ function isDispatched(sym: Readonly<Symbol>): boolean {
 function destroyRoutine(tables: Readonly<RaiseTables>, sym: Readonly<Symbol>, args: Readonly<Node[]>): Readonly<Symbol | null> {
 	if (tables.bodies.has(sym) && !hasFlag(sym, SymbolFlag.ImportC)) return sym;
 	if (args.length == 0 || args[0].nodeType == null) return null;
-	const op = releasedTypeDestroy(tables.ops, args[0].nodeType!);
+	const op = releasedTypeDestroy(tables.ops, tables.roots, args[0].nodeType!);
 	return op != null && tables.bodies.has(op) ? op : null;
 }
 
 // A class value is a ref whose destroy is lifted for the object it points at.
-function releasedTypeDestroy(ops: Readonly<HashMap<string, Symbol>>, t: Readonly<Type>): Readonly<Symbol | null> {
-	const own = getOpByKeyIn(ops, t, AttachedOp.AttachedDestructor);
+function releasedTypeDestroy(ops: Readonly<HashMap<string, Symbol>>, roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): Readonly<Symbol | null> {
+	const own = getOpByKeyIn(ops, roots, t, AttachedOp.AttachedDestructor);
 	if (own != null || t.kind != TypeKind.Ref || t.typeReturn == null) return own;
-	return getOpByKeyIn(ops, t.typeReturn!, AttachedOp.AttachedDestructor);
+	return getOpByKeyIn(ops, roots, t.typeReturn!, AttachedOp.AttachedDestructor);
 }
 
 function classifyCall(call: Readonly<Node>): CallRaise {

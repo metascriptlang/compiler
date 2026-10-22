@@ -189,10 +189,10 @@ export function hookOps(): HashMap<string, Symbol> {
 	return _opSyms;
 }
 
-export function getOpByKeyIn(ops: HashMap<string, Symbol>, t: Type, op: AttachedOp): Symbol | null;
-export function getOpByKeyIn(ops: Readonly<HashMap<string, Symbol>>, t: Readonly<Type>, op: AttachedOp): Readonly<Symbol | null>;
-export function getOpByKeyIn(ops: Readonly<HashMap<string, Symbol>>, t: Readonly<Type>, op: AttachedOp): Readonly<Symbol | null> {
-	return ops.readonlyGet(opKey(t, op));
+export function getOpByKeyIn(ops: HashMap<string, Symbol>, roots: ModuleNameRoots, t: Type, op: AttachedOp): Symbol | null;
+export function getOpByKeyIn(ops: Readonly<HashMap<string, Symbol>>, roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, op: AttachedOp): Readonly<Symbol | null>;
+export function getOpByKeyIn(ops: Readonly<HashMap<string, Symbol>>, roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, op: AttachedOp): Readonly<Symbol | null> {
+	return ops.readonlyGet(opKeyIn(roots, t, op));
 }
 
 export function requireOpByKey(t: Type, op: AttachedOp): Symbol {
@@ -1134,10 +1134,10 @@ export function refArrayCellOp(arrT: Readonly<Type>, op: AttachedOp): Readonly<S
 	return _opSyms.get(attachedOpName(op) + "|" + refArrayCellKey(arrT));
 }
 
-export function refArrayCellOpIn(ops: HashMap<string, Symbol>, arrT: Type, op: AttachedOp): Symbol | null;
-export function refArrayCellOpIn(ops: Readonly<HashMap<string, Symbol>>, arrT: Readonly<Type>, op: AttachedOp): Readonly<Symbol | null>;
-export function refArrayCellOpIn(ops: Readonly<HashMap<string, Symbol>>, arrT: Readonly<Type>, op: AttachedOp): Readonly<Symbol | null> {
-	return ops.readonlyGet(attachedOpName(op) + "|" + refArrayCellKey(arrT));
+export function refArrayCellOpIn(ops: HashMap<string, Symbol>, roots: ModuleNameRoots, arrT: Type, op: AttachedOp): Symbol | null;
+export function refArrayCellOpIn(ops: Readonly<HashMap<string, Symbol>>, roots: Readonly<ModuleNameRoots>, arrT: Readonly<Type>, op: AttachedOp): Readonly<Symbol | null>;
+export function refArrayCellOpIn(ops: Readonly<HashMap<string, Symbol>>, roots: Readonly<ModuleNameRoots>, arrT: Readonly<Type>, op: AttachedOp): Readonly<Symbol | null> {
+	return ops.readonlyGet(attachedOpName(op) + "|" + refArrayCellKeyIn(roots, arrT));
 }
 
 export function isHcrImageModule(g: CGen, modulePath: string): boolean {
@@ -2130,7 +2130,7 @@ export function ensureFutureThenBoxedInstance(g: CGen, innerType: Readonly<Type>
 	const name = (byRef ? "msFutureThenBoxedRef_" : "msFutureThenBoxed_") + mangle(innerDesc);
 	let drop = "MS_NO_DROP";
 	if (hasAsgnFlag(innerType)) {
-		const hook = getOpByKeyIn(g.emissionFacts.hookOps!, innerType, AttachedOp.AttachedDestructor);
+		const hook = getOpByKeyIn(g.emissionFacts.hookOps!, g.emissionFacts.moduleNameRoots!, innerType, AttachedOp.AttachedDestructor);
 		if (hook != null) {
 			drop = opCNameIn(g.emissionFacts.moduleNameRoots!, hook);
 			ensureDrcProto(g, drop, hook);
