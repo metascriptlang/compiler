@@ -4185,12 +4185,23 @@ function winnerFormals(ctx: CheckerContext, callNode: Node, winnerSym: Symbol, w
 	let explicit = winnerType;
 	const bindings = deriveCallBindings(ctx, callNode, winnerSym, winnerType, null);
 	if (bindings.names.length > 0) explicit = substituteBound(winnerType, bindings);
+	const perArg: UnifyBindings[] = [];
+	const candParams: Type[] = [];
+	const candTypes: Type[] = [];
+	const candFrom: int32[] = [];
+	const candSkip: boolean[] = [];
+	const candLiteral: boolean[] = [];
+	const candMapped: boolean[] = [];
 	for (const ai of genericArgOrder(ctx, args, true)) {
 		if (skipMask[ai] || argTypes[ai] == null || ai >= winnerType.typeChildren.length) continue;
 		const fwd = createUnifyBindings();
 		unifyType(winnerType.typeChildren[ai], argTypes[ai], fwd);
-		mergeUnifyBindings(bindings, fwd);
+		collectArgCandidates(bindings, fwd, ai, args[ai], candParams, candTypes, candFrom, candSkip, candLiteral, candMapped);
+		perArg.push(fwd);
 	}
+	const fold = foldTypeParamCandidates(candParams, candTypes, candSkip, createUnifyBindings(), candLiteral, candMapped);
+	for (let k = 0; k < fold.params.length; k += 1) bindParam(bindings, fold.params[k], fold.types[k]);
+	for (const fwd of perArg) mergeUnifyBindings(bindings, fwd);
 	mergeUnifyBindings(bindings, bindFromExpectedReturn(winnerType, expectedType));
 	const checked = bindings.names.length > 0 ? substituteBound(winnerType, bindings) : winnerType;
 	return { checked, explicit };
