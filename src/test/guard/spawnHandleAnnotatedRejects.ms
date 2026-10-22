@@ -10,7 +10,7 @@
 //
 // RED MEANS: one of the diagnostics stopped firing.
 //
-// GUARD-CHECK-FAIL affine Promise cannot be returned from a function
+// GUARD-CHECK-FAIL returning it would let the handle outlive that join
 // GUARD-CHECK-FAIL has already been awaited and cannot be reused
 // GUARD-CHECK-FAIL affine Promise 'reusedInBranch' has already been awaited
 

@@ -15,6 +15,7 @@ import { isAddressTaking, checkPointerEscapesIn } from "./pointerAddress";
 import { isMutatingArrayMethod } from "./paramMutationAnalysis";
 import { sameUpToDistinct } from "./checkExprPass";
 import { isSpawnCall } from "./freestanding";
+import { refuseBorrowingHandleEscapes } from "./sendable";
 
 export const MAX_TIME: int32 = 999999;
 export const MIN_TIME: int32 = -1;
@@ -1809,6 +1810,7 @@ function runPass(u: BorrowUnit, body: Node, pass: int32): void {
 
 function checkUnit(ctx: CheckerContext, body: Node | null): void {
 	if (body == null || (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program)) return;
+	if (spawnsIn(body)) refuseBorrowingHandleEscapes(ctx, body);
 	const pointers: Symbol[] = [];
 	collectPointers(body, pointers);
 	if (pointers.length == 0 && !declaresView(body, new TypeVisitSet()) && !spawnsIn(body)) return;

@@ -7,7 +7,7 @@ import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprS
 import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, setConditionalAssignFn, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam, substituteType, substituteAllParams } from "./types";
-import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey, leaveConsumeScope } from "./spawnAffinity";
+import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey, leaveConsumeScope, markConsumedName } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet } from "./symbol";
 import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl, declOfStatement } from "./collectPass";
@@ -2638,15 +2638,9 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		if (ctx.matchExprDepth == 0 && returnsFromAsyncBody(ctx)) d.argument = awaitReturnedThenable(ctx, awaitReturnedPromise(ctx, d.argument, returnExpected));
 	}
 	const retType = d.argument != null ? d.argument.nodeType : null;
-	// PARALOCK Phase 1 R3/E4: affine Promise<T> cannot escape its creating scope.
-	// Returning a affine Promise from a function lets its lifetime leak past the await,
-	// which breaks the borrow-safety guarantee that spawn children stay pinned to
-	// their parent's frame. Existing callers that need to pass around a promise
-	// should explicitly upcast: `return spawn(...) as Promise<T>` (Phase 2+ may forbid).
-	if (retType != null && isAffineAwaitable(retType)) {
-		addError(ctx,
-			"affine Promise cannot be returned from a function; every spawn result must be awaited in its creating scope (PARALOCK R3/E4)",
-			d.argument.location.line, d.argument.location.column);
+	if (retType != null && isAffineAwaitable(retType) && d.argument.kind == NodeKind.Identifier && d.argument.resolvedSym != null) {
+		markConsumedName(ctx.affineTracker, symbolConsumeKey(d.argument.resolvedSym!));
+		markConsumed(d.argument.resolvedSym!);
 	}
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing return,
 	// or a call to the runtime converter for the return type.
