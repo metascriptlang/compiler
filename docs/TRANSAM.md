@@ -42,7 +42,7 @@ Trans-Am is a **demand-driven incremental computation framework**: it caches com
 
 `TransAmDb` (`index.ms`) is a thin facade over one store per concern: revision, file input, dependency stack, cache, module dep graph, cancel context, interner, plus the checker's `ExportRegistry`, the resolver config, the prelude context and a preprocess cache.
 
-`Node` and `CheckerContext` values are not held in the Trans-Am cache. Each db keeps them in its own maps (`TransAmDb` `trees`, `contexts`), keyed by `fileId` plus a per-query offset (`index.ms`, the `*Key` helpers). They are per db because file ids are per db: while they lived in process-wide caches, a db built inside another (the LSP prelude with extra `globalImports`) overwrote the outer db's entries for the same id. The Trans-Am cache holds the verification record: state, revisions, output hash, dependencies, durability.
+`Node` and `CheckerContext` values are not held in the Trans-Am cache. Each db keeps them in its own maps (`TransAmDb` `trees`, `contexts`), keyed by `fileId` plus a per-query offset (`index.ms`, the `*Key` helpers). They are per db because file ids are per db: while they lived in process-wide caches, a db built inside another (the LSP prelude db) overwrote the outer db's entries for the same id. The Trans-Am cache holds the verification record: state, revisions, output hash, dependencies, durability.
 
 ## 3. Red-Green
 
