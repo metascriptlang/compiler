@@ -245,6 +245,25 @@ function rearmLiteral(lit: Node): void {
 	}
 }
 
+export function literalArmJoinsInto(literal: Node, other: Type | null): boolean {
+	if (literal == null || literal.kind != NodeKind.ObjectLiteral || other == null) return false;
+	const lit = anonLiteralStruct(literal.nodeType);
+	if (lit == null || anonLiteralStruct(other) != null || hasGenericParams(other)) return false;
+	const named = peelToStructOrUnion(other);
+	if (named == null || named.kind != TypeKind.Struct || named.typeName == "" || isMaybeType(other)) return false;
+	if (named.typeNames.length != lit.typeNames.length) return false;
+	for (let i = 0; i < lit.typeNames.length; i++) {
+		const at = named.typeNames.indexOf(lit.typeNames[i]);
+		if (at < 0 || at >= named.typeChildren.length || slotRefuses(lit.typeChildren[i], named.typeChildren[at])) return false;
+	}
+	return true;
+}
+
+export function fitLiteralArmInto(ctx: CheckerContext, literal: Node, named: Type): void {
+	rearmLiteral(literal);
+	callCheckExpr(ctx, literal, named);
+}
+
 export function fitJoinedBranch(ctx: CheckerContext, expr: Node, joined: Type | null): Node {
 	if (expr == null || joined == null || isUnresolvedType(joined)) return expr;
 	const bt = expr.nodeType;
