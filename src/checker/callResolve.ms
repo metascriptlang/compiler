@@ -4425,7 +4425,8 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	// per-variant sigs (`data: TypeUnionData`) all redirect to one impl taking
 	// the union (`data: NodeData`), and handing it a bare variant struct
 	// corrupts memory — clang only warns on the pointer mismatch.
-	if (impl != null) fitCallToImplementation(callNode, impl, false);
+	const emitted = hasFlag(winnerSymFinal, SymbolFlag.OverloadSig) ? impl : winnerSymFinal;
+	if (emitted != null) fitCallToImplementation(callNode, emitted, false);
 	if (d.callee != null && d.callee.kind == NodeKind.Identifier) {
 		d.callee.resolvedSym = sym;
 		if (sym.symbolType != null) d.callee.nodeType = sym.symbolType;
