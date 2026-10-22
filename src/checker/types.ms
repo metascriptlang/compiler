@@ -5252,6 +5252,7 @@ export function layoutFromC(t: Type): boolean {
 // Size and field offsets share one traversal, including padding and erased fields.
 function structLayoutAt(tg: TargetInfo, t: Type, depth: int32, fieldIndex: int32): int32 {
 	if (layoutFromC(t)) return SIZE_NOT_COMPUTABLE;
+	if (t.typeFlags.has(TypeFlag.CUnion)) return unionLayoutAt(tg, t, depth, fieldIndex);
 	let offset = 0;
 	let maxAlign = 1;
 	if (t.typeChildren != null) {
@@ -5273,6 +5274,22 @@ function structLayoutAt(tg: TargetInfo, t: Type, depth: int32, fieldIndex: int32
 	}
 	if (offset == 0) return 0;
 	return alignTo(offset, maxAlign);
+}
+
+// Every member at offset 0; the size is the largest member rounded up to the strictest alignment.
+function unionLayoutAt(tg: TargetInfo, t: Type, depth: int32, fieldIndex: int32): int32 {
+	let size = 0;
+	let maxAlign = 1;
+	for (let i = 0; i < t.typeChildren.length; i += 1) {
+		const field = t.typeChildren[i];
+		const fieldSize = sizeOfTypeAt(tg, field, depth);
+		if (fieldSize < 0) return fieldSize;
+		if (i == fieldIndex) return 0;
+		const fieldAlign = alignOfTypeAt(tg, field, depth);
+		if (fieldAlign > maxAlign) maxAlign = fieldAlign;
+		if (fieldSize > size) size = fieldSize;
+	}
+	return alignTo(size, maxAlign);
 }
 
 export function structLayoutType(t: Type): Type | null {

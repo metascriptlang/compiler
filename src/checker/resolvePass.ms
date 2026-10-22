@@ -19,7 +19,7 @@ import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeSt
 import { findCallTypeArg, createState, isAtEnd, getParserDefines } from "../parser/context";
 import { definedValue } from "../compiler/defines";
 import { headerTarget } from "../module/loader";
-import { completeStructKey, isCompleteStruct } from "../module/cimport/emit";
+import { completeStructKey, isCompleteStruct, isCompleteUnion } from "../module/cimport/emit";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
 import { mintCtorRoutine, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
@@ -2484,7 +2484,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	target.typeNames = mergedNames;
 	target.typeChildren = mergedTypes;
 	target.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct);
-	if (hasFlag(sym, SymbolFlag.ImportC) && translatedComplete(sym.nativeName, d)) target.typeFlags = target.typeFlags.incl(TypeFlag.CompleteStruct);
+	if (hasFlag(sym, SymbolFlag.ImportC)) target.typeFlags = target.typeFlags.union(translatedLayout(sym.nativeName, d));
 	for (const name of d.interfaceOptionalFields) optionalFields.push(name);
 	target.optionalFields = optionalFields.length > 0 ? optionalFields : null;
 	if (sym.symbolType.kind == TypeKind.Struct && parentTypes.length == 1 && isValueStructDecl(parentTypes[0])) target.typeExtra = parentTypes[0];
@@ -2509,10 +2509,15 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	}
 }
 
-function translatedComplete(cName: string, d: InterfaceDeclData): boolean {
-	if (d.interfaceFields.length == 0 || definedValue(getParserDefines(), "backend") != "c") return false;
+function translatedLayout(cName: string, d: InterfaceDeclData): BitSet<TypeFlag> {
+	const none = 0 as BitSet<TypeFlag>;
+	if (d.interfaceFields.length == 0 || definedValue(getParserDefines(), "backend") != "c") return none;
 	const t = headerTarget();
-	return t != null && isCompleteStruct(completeStructKey(`${t.os}-${t.cpu}`, cName, d.interfaceFields, d.interfaceFieldTypes));
+	if (t == null) return none;
+	const key = completeStructKey(`${t.os}-${t.cpu}`, cName, d.interfaceFields, d.interfaceFieldTypes);
+	if (isCompleteStruct(key)) return none.incl(TypeFlag.CompleteStruct);
+	if (isCompleteUnion(key)) return none.incl(TypeFlag.CompleteStruct).incl(TypeFlag.CUnion);
+	return none;
 }
 
 function refuseValueRecursion(ctx: CheckerContext, node: Node, self: Type, d: InterfaceDeclData): void {

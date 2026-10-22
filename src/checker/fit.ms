@@ -3672,7 +3672,7 @@ function cLayoutSizeofRefusal(expr: Node, asTarget: string): string {
 	const d = expr.data as SizeofExprData;
 	if (d.sizeofResolved == null || !layoutFromC(d.sizeofResolved)) return "";
 	return "takes 'sizeof " + d.sizeofType + "', which is not a constant: '" + d.sizeofType + "' has C's layout, which msc folds only on the C backend "
-		+ "for a header struct whose every field translates exactly (no union, bitfield, packed or aligned member), so only the C compiler knows its size — write " + asTarget;
+		+ "for a header struct whose every field translates exactly (no bitfield, anonymous, packed or aligned member), so only the C compiler knows its size — write " + asTarget;
 }
 
 function typedConstantRefusal(expr: Node, from: Type, target: Type, text: string): string {

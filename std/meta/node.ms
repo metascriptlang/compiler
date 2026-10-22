@@ -89,6 +89,7 @@ export enum TypeFlag {
 	ValueUnion,           // a discriminated union declared `struct X = match`: a value, copied where a `type X = match` union is shared
 	ArityAdapter,         // env of a closure that drops the slot's trailing arguments: identity compares its adaptee
 	CompleteStruct,       // extern struct whose declared fields are all of C's, from a header translation: its layout is folded and asserted against C
+	CUnion,               // CompleteStruct translated from a C union: its members overlay at offset 0
 }
 
 // ===== Attached Lifecycle Ops =====
