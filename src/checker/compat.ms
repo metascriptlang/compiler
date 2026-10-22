@@ -2012,7 +2012,7 @@ export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], min
 		}
 		const rel = literalRels != null && i < literalRels.length && literalRels[i] >= 0
 			? literalRels[i] as TypeRelation
-			: typeRelation(paramTypes[i], argTypes[i]);
+			: argRelation(paramTypes[i], argTypes[i]);
 		if (rel == TypeRelation.None) {
 			score.exactMatches = -1;
 			return score;
@@ -2021,6 +2021,17 @@ export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], min
 		if (rel == TypeRelation.Exact || rel == TypeRelation.Subtype) addInheritancePenalty(score, classDistance(argTypes[i], paramTypes[i]));
 	}
 	return score;
+}
+
+// An argument that lands on one member of a wider union parameter is a subtype
+// match, so `f(x: int32)` outranks `f(x: int32 | string)` for an int32, as the
+// reference ranks a nullable widening; a literal into a literal set stays exact.
+function argRelation(formal: Type, actual: Type): TypeRelation {
+	const rel = typeRelation(formal, actual);
+	if (rel != TypeRelation.Exact) return rel;
+	const slot = skipModifier(formal);
+	if (slot == null || slot.kind != TypeKind.Union || literalUnionBase(slot) != null) return rel;
+	return sameType(slot, actual) ? rel : TypeRelation.Subtype;
 }
 
 function addInheritancePenalty(score: CandidateScore, depth: int32): void {

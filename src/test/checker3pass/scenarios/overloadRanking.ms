@@ -71,3 +71,16 @@ const n = new Box().size() + new Box().grow("x");
 	assert imported.contains("Dog already has method speak(); an extension with the same name and parameters would shadow it @3"), "inherited method: " + imported;
 	assert !imported.contains("grow"), "a new parameter type is an overload: " + imported;
 }
+
+test "an overload that differs only by a defaulted parameter stays ambiguous" {
+	const src = `
+function o(x: int32): string { return "one"; }
+function o(x: int32, y: int32 = 0): string { return "two"; }
+const a = o(1);
+const b = o(1, 2);
+`;
+	const errors = checkOnly(src).errors;
+	const text = errors.join("\n");
+	assert text.contains("Ambiguous call to overloaded function 'o'"), "one argument: " + text;
+	assert errors.length == 1, "two arguments pick the second: " + text;
+}
