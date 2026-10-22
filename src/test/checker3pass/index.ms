@@ -24,6 +24,7 @@ import "./scenarios/genericConstructor";
 import "./scenarios/nestedGeneric";
 import "./scenarios/recursive";
 import "./scenarios/overloadXGeneric";
+import "./scenarios/overloadRanking";
 import "./scenarios/limitations";
 import "./scenarios/resultCarrierConversions";
 import "./scenarios/textConversions";

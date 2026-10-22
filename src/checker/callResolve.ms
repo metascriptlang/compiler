@@ -4042,13 +4042,40 @@ function noMatchScore(): CandidateScore {
 	return score;
 }
 
-function nextRanked(scores: CandidateScore[], candidates: Type[], rejected: boolean[]): int32 {
+const ANNOTATE_CONTEXT_ARG = "a callback or object literal argument fits more than one overload; annotate its parameter types";
+
+interface ContextPick {
+	index: int32;
+	tie: boolean;
+}
+
+// The reference's `chooseOverload`: a context-sensitive argument is checked against each
+// candidate's own parameter, and every candidate it fits is ranked with the type it took
+// there, so the most specific fitting overload wins and a tie is an error.
+function rankContextFits(ctx: CheckerContext, callNode: Node, candSyms: Symbol[], candidates: Type[], scores: CandidateScore[],
+	args: Node[], argTypes: Type[], skipMask: boolean[], expectedType: Type | null): ContextPick {
 	let best: int32 = -1;
-	for (let ci = 0; ci < scores.length; ci += 1) {
-		if (rejected[ci] || isNoMatch(scores[ci])) continue;
-		if (best < 0 || cmpCandidates(scores[ci], scores[best], candidates[ci], candidates[best]) > 0) best = ci;
+	let bestScore = noMatchScore();
+	let tie = false;
+	const scored = allScored(skipMask);
+	for (let ci = 0; ci < candidates.length && ci < scores.length; ci += 1) {
+		if (isNoMatch(scores[ci])) continue;
+		const c = candidates[ci];
+		const formals = winnerFormals(ctx, callNode, candSyms[ci], c, args, argTypes, skipMask, expectedType);
+		if (!contextArgsFit(ctx, args, skipMask, formals.checked)) continue;
+		const typed = typedContextArgs(args, argTypes, skipMask);
+		const score = scoreCandidateWithSkip(c.typeChildren, typed, getMinArity(c), scored, literalRelations(c.typeChildren, args, typed));
+		if (isNoMatch(score)) continue;
+		const cmp = best < 0 ? 1 : cmpCandidates(score, bestScore, c, candidates[best]);
+		if (cmp > 0) {
+			best = ci;
+			bestScore = score;
+			tie = false;
+		} else if (cmp == 0 && !adapterTie(c, candidates[best], typed, scored)) {
+			tie = true;
+		}
 	}
-	return best;
+	return { index: best, tie };
 }
 
 interface WinnerFormals {
@@ -4214,18 +4241,9 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	}
 
 	if (ambiguous) {
-		// When ALL args are context-sensitive (skipMask all-true), every
-		// candidate gets the same score (N subtypeMatches). This is not a
-		// real ambiguity — it's the degenerate "no discriminating args" case.
-		// Fall through to Pass 2 with the first matching candidate (ref parity:
-		// `chooseOverload` picks the first applicable candidate when scores
-		// are tied). Only report ambiguity when at least one non-skipped arg
-		// actually discriminates but two candidates still tie.
-		let allSkipped = true;
-		for (const s of skipMask) {
-			if (!s) { allSkipped = false; break; }
-		}
-		if (!allSkipped) {
+		// A context-sensitive argument is typed against each overload below and
+		// decides the tie there.
+		if (!skipMask.includes(true)) {
 			let hasJsxArg = false;
 			for (const a of args) {
 				if (a.kind == NodeKind.JSXElement || a.kind == NodeKind.JSXFragment) { hasJsxArg = true; break; }
@@ -4265,34 +4283,16 @@ function resolveOverloadCall(ctx: CheckerContext, primary: Symbol, callNode: Nod
 	let formals = winnerFormals(ctx, callNode, candSyms[bestIdx], candidates[bestIdx], args, argTypes, skipMask, expectedType);
 	let settled = false;
 	if (skipMask.includes(true)) {
-		const rejected: boolean[] = [];
-		for (let ri = 0; ri < candidates.length; ri += 1) rejected.push(false);
-		let tryIdx = bestIdx;
-		let tried = formals;
-		while (tryIdx >= 0 && !contextArgsFit(ctx, args, skipMask, tried.checked)) {
-			rejected[tryIdx] = true;
-			tryIdx = nextRanked(scores, candidates, rejected);
-			if (tryIdx >= 0) tried = winnerFormals(ctx, callNode, candSyms[tryIdx], candidates[tryIdx], args, argTypes, skipMask, expectedType);
+		const pick = rankContextFits(ctx, callNode, candSyms, candidates, scores, args, argTypes, skipMask, expectedType);
+		if (pick.tie) {
+			addError(ctx, `Ambiguous call to overloaded function '${sym.name}' — ${ANNOTATE_CONTEXT_ARG}`,
+				callNode.location.line, callNode.location.column);
+			return getReturnType(sym.symbolType);
 		}
-		if (tryIdx >= 0) {
-			const typed = typedContextArgs(args, argTypes, skipMask);
-			const rescored: CandidateScore[] = [];
-			for (let si = 0; si < candidates.length; si += 1) {
-				const c = candidates[si];
-				rescored.push(isNoMatch(scores[si]) ? scores[si] : scoreCandidateWithSkip(c.typeChildren, typed, getMinArity(c), allScored(skipMask), literalRelations(c.typeChildren, args, typed)));
-			}
-			const best = nextRanked(rescored, candidates, rejected);
-			if (best >= 0 && best != tryIdx) {
-				const bestFormals = winnerFormals(ctx, callNode, candSyms[best], candidates[best], args, argTypes, skipMask, expectedType);
-				if (contextArgsFit(ctx, args, skipMask, bestFormals.checked)) {
-					tryIdx = best;
-					tried = bestFormals;
-				} else {
-					contextArgsFit(ctx, args, skipMask, tried.checked);
-				}
-			}
-			bestIdx = tryIdx;
-			formals = tried;
+		if (pick.index >= 0) {
+			bestIdx = pick.index;
+			formals = winnerFormals(ctx, callNode, candSyms[bestIdx], candidates[bestIdx], args, argTypes, skipMask, expectedType);
+			contextArgsFit(ctx, args, skipMask, formals.checked);
 			settled = true;
 		}
 	}
@@ -4602,8 +4602,8 @@ function mostSpecificGenericExt(exts: ExtensionMethod[]): int32 {
 }
 
 function rankExtensionOverloads(ctx: CheckerContext, exts: ExtensionMethod[], candidates: Type[], args: Node[], argTypes: Type[],
-	scopeDepths: number[], recvRelations: TypeRelation[], objType: Type | null, skipMask: boolean[], rejected: boolean[]): number {
-	let idx = resolveExtensionOverloadIdx(ctx, candidates, args, argTypes, scopeDepths, recvRelations, exts, skipMask, rejected);
+	scopeDepths: number[], recvRelations: TypeRelation[], objType: Type | null, skipMask: boolean[], rejected: boolean[], typedPer: Type[][] | null = null): number {
+	let idx = resolveExtensionOverloadIdx(ctx, candidates, args, argTypes, scopeDepths, recvRelations, exts, skipMask, rejected, typedPer);
 	if (idx == -2) {
 		// Tiebreaker: an exact receiver beats a widening one — `this uint8[]`
 		// wins over `this number[]` on a uint8[] object instead of tying.
@@ -4728,23 +4728,30 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		rejected.push(spreadAt >= 0 && !spreadFitsCandidate(candidates[ci], spreadAt, argTypes[spreadAt], minArgs));
 	}
 	let idx = rankExtensionOverloads(ctx, exts, candidates, args, argTypes, scopeDepths, recvRelations, objType, skipMask, rejected);
-	if (idx == -2) {
-		addError(ctx, "Ambiguous call to overloaded extension method '" + methodName + "'", callNode.location.line, callNode.location.column);
-		return getReturnType(candidates[0]);
-	}
 	const contextFormals: Type[] = [];
 	for (const c of candidates) contextFormals.push(boundByExpectedReturn(c, expectedType));
 	let settled = false;
-	if (idx >= 0 && skipMask.includes(true)) {
-		let tryIdx = idx;
-		while (tryIdx >= 0 && !contextArgsFit(ctx, args, skipMask, contextFormals[tryIdx])) {
-			rejected[tryIdx] = true;
-			tryIdx = rankExtensionOverloads(ctx, exts, candidates, args, argTypes, scopeDepths, recvRelations, objType, skipMask, rejected);
+	if (idx != -1 && skipMask.includes(true)) {
+		const typedPer: Type[][] = [];
+		const unfit = rejected.slice(0);
+		for (let ci = 0; ci < candidates.length; ci += 1) {
+			if (!unfit[ci] && contextArgsFit(ctx, args, skipMask, contextFormals[ci])) typedPer.push(typedContextArgs(args, argTypes, skipMask));
+			else { unfit[ci] = true; typedPer.push(argTypes); }
 		}
-		if (tryIdx >= 0) {
-			idx = rankWithContextArgs(ctx, exts, candidates, contextFormals, args, argTypes, scopeDepths, recvRelations, objType, skipMask, rejected, tryIdx);
+		const fitIdx = rankExtensionOverloads(ctx, exts, candidates, args, argTypes, scopeDepths, recvRelations, objType, allScored(skipMask), unfit, typedPer);
+		if (fitIdx == -2) {
+			addError(ctx, "Ambiguous call to overloaded extension method '" + methodName + "' — " + ANNOTATE_CONTEXT_ARG, callNode.location.line, callNode.location.column);
+			return getReturnType(candidates[0]);
+		}
+		if (fitIdx >= 0) {
+			idx = fitIdx;
+			contextArgsFit(ctx, args, skipMask, contextFormals[idx]);
 			settled = true;
 		}
+	}
+	if (idx == -2) {
+		addError(ctx, "Ambiguous call to overloaded extension method '" + methodName + "'", callNode.location.line, callNode.location.column);
+		return getReturnType(candidates[0]);
 	}
 	if (idx == -1) {
 		let msg = "No matching overload for extension method '" + methodName + "'\n  Expected one of:";
@@ -4842,22 +4849,25 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 function typedContextArgs(args: Node[], argTypes: Type[], skipMask: boolean[]): Type[] {
 	const typed = argTypes.slice(0);
 	for (let ai = 0; ai < skipMask.length; ai += 1) {
-		if (skipMask[ai]) typed[ai] = args[ai].nodeType!;
+		if (skipMask[ai]) typed[ai] = withBodyReturn(args[ai], args[ai].nodeType!);
 	}
 	return typed;
 }
 
-function allScored(skipMask: boolean[]): boolean[] {
-	return skipMask.map((s) => false);
+// An expression-bodied arrow checked against a `void` callback drops its value; it ranks
+// with the type its body gives, so `(v) => v + 1` relates to `(v) => U` and not to `(v) => void`.
+function withBodyReturn(arg: Node, typed: Type): Type {
+	if (arg.kind != NodeKind.ArrowFunction || typed == null || typed.kind != TypeKind.Function) return typed;
+	const ret = typed.typeReturn;
+	const body = (arg.data as ArrowFunctionData).arrowBody;
+	if (ret == null || ret.kind != TypeKind.Void || body == null || body.kind == NodeKind.BlockStmt) return typed;
+	const value = body.nodeType;
+	if (value == null || value.kind == TypeKind.Void || isUnresolvedType(value)) return typed;
+	return createFunction(typed.typeChildren, typed.typeNames, value);
 }
 
-function rankWithContextArgs(ctx: CheckerContext, exts: ExtensionMethod[], candidates: Type[], contextFormals: Type[], args: Node[], argTypes: Type[],
-	scopeDepths: number[], recvRelations: TypeRelation[], objType: Type | null, skipMask: boolean[], rejected: boolean[], settled: number): number {
-	const best = rankExtensionOverloads(ctx, exts, candidates, args, typedContextArgs(args, argTypes, skipMask), scopeDepths, recvRelations, objType, allScored(skipMask), rejected);
-	if (best < 0 || best == settled) return settled;
-	if (contextArgsFit(ctx, args, skipMask, contextFormals[best])) return best;
-	contextArgsFit(ctx, args, skipMask, contextFormals[settled]);
-	return settled;
+function allScored(skipMask: boolean[]): boolean[] {
+	return skipMask.map((s) => false);
 }
 
 function boundByExpectedReturn(candidate: Type, expectedType: Type | null): Type {
@@ -4918,7 +4928,7 @@ function receiverRelation(formal: Type, objType: Type | null): TypeRelation {
 }
 
 function resolveExtensionOverloadIdx(ctx: CheckerContext, candidates: Type[], args: Node[],
-	argTypes: Type[], scopeDepths: number[], recvRelations: TypeRelation[], exts: ExtensionMethod[], skipMask: boolean[], rejected: boolean[]): number {
+	argTypes: Type[], scopeDepths: number[], recvRelations: TypeRelation[], exts: ExtensionMethod[], skipMask: boolean[], rejected: boolean[], typedPer: Type[][] | null = null): number {
 	let bestIdx = -1;
 	let bestScore = emptyCandidateScore();
 	let ambiguous = false;
@@ -4926,7 +4936,8 @@ function resolveExtensionOverloadIdx(ctx: CheckerContext, candidates: Type[], ar
 	let i = 0;
 	while (i < candidates.length) {
 		if (candidates[i].kind != TypeKind.Function || rejected[i]) { i = i + 1; continue; }
-		const score = scoreCandidateWithSkip(candidates[i].typeChildren, argTypes, getMinArity(candidates[i]), skipMask, literalRelations(candidates[i].typeChildren, args, argTypes));
+		const at = typedPer != null ? typedPer[i] : argTypes;
+		const score = scoreCandidateWithSkip(candidates[i].typeChildren, at, getMinArity(candidates[i]), skipMask, literalRelations(candidates[i].typeChildren, args, at));
 		if (isNoMatch(score)) { i = i + 1; continue; }
 		if (i < recvRelations.length) countRelation(score, recvRelations[i]);
 		if (i < scopeDepths.length) {
@@ -4942,7 +4953,7 @@ function resolveExtensionOverloadIdx(ctx: CheckerContext, candidates: Type[], ar
 				bestIdx = i;
 				bestScore = score;
 				ambiguous = false;
-			} else if (cmp == 0 && !onlySkipped && !adapterTie(candidates[i], candidates[bestIdx], argTypes, skipMask)) {
+			} else if (cmp == 0 && !onlySkipped && !adapterTie(candidates[i], candidates[bestIdx], at, skipMask)) {
 				ambiguous = true;
 			}
 		}
