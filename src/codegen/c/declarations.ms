@@ -98,7 +98,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	// Module-qualified name (Standard reference implementation parity)
 	const isExternFn = (sym != null && hasFlag(sym, SymbolFlag.ImportC)) || routineFlagSet(d.fnFlags).has(RoutineFlag.Extern);
 	const ovIdx = sym != null ? sym.overloadIdx : 0;
-	let name = mangledFunctionName(sym, d.fnName, ovIdx);
+	let name = mangledFunctionName(g.emissionFacts.moduleNameRoots!, sym, d.fnName, ovIdx);
 
 	// Track whether we already emitted the proto or the body
 	const alreadyDeclared = nameSetHas(g.declaredProcs, name);
@@ -235,7 +235,7 @@ export function registerDeclCName(g: CGen, node: Readonly<Node>): void {
 	if (n.flags.has(NodeFlag.ExternC)) return;
 	const sym = declTypeSym(n);
 	if (sym == null) return;
-	const cn = mangledTypeName(sym, sym.name);
+	const cn = mangledTypeName(g.emissionFacts.moduleNameRoots!, sym, sym.name);
 	typeCacheSet(g.typeCache, "decl:" + cn, cn);
 	typeCacheSet(g.typeCache, "bare:" + cn, sym.name);
 }
@@ -246,7 +246,7 @@ function genEnumDecl(g: CGen, node: Readonly<Node>): void {
 	// Extern enum: defined in C header — skip emission entirely.
 	if (node.flags.has(NodeFlag.ExternC)) return;
 
-	const name = mangledTypeName(declTypeSym(node), d.enumName);
+	const name = mangledTypeName(g.emissionFacts.moduleNameRoots!, declTypeSym(node), d.enumName);
 
 	// Skip if already declared (check both declaration set and type cache)
 	const key = "enum:" + name;
@@ -284,7 +284,7 @@ function genInterfaceDecl(g: CGen, node: Readonly<Node>): void {
 	const declType = node.nodeType;
 	if (declType != null && hasGenericParams(declType)) return;
 
-	const name = mangledTypeName(declTypeSym(node), d.interfaceName);
+	const name = mangledTypeName(g.emissionFacts.moduleNameRoots!, declTypeSym(node), d.interfaceName);
 
 	// Skip if already declared (check both declaration set and type cache)
 	const ifaceKey = "object:" + name;
@@ -348,7 +348,7 @@ function genClassDecl(g: CGen, node: Readonly<Node>): void {
 		return;
 	}
 
-	const name = mangledTypeName(declTypeSym(node), d.className);
+	const name = mangledTypeName(g.emissionFacts.moduleNameRoots!, declTypeSym(node), d.className);
 
 	// Check if struct type already declared (by genObjectType for generic instances)
 	const classKey = "object:" + name;
@@ -415,7 +415,7 @@ function genStaticFieldGlobals(g: CGen, d: Readonly<ClassDeclData>): void {
 			addCGenError(g, `internal: static field '${d.className}.${pd.propName}' has no declaration symbol`, member.location.line, member.location.column);
 			return;
 		}
-		const globalName = staticFieldCName(fieldSym);
+		const globalName = staticFieldCName(g.emissionFacts.moduleNameRoots!, fieldSym);
 		addLine(sec(g, CSection.GlobalVars), `${cType} ${globalName};`);
 		if (pd.propInitializer != null) {
 			match (pd.propInitializer.kind) {
@@ -528,7 +528,7 @@ function isInitProcLocal(node: Readonly<Node>): boolean {
 function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 	const d = node.data as VariableDeclData;
 	const isModuleSlot = isModuleGlobalVar(node.resolvedSym);
-	const varName = !isModuleSlot ? safeName(d.declName) : mangledGlobalName(node.resolvedSym, d.declName);
+	const varName = !isModuleSlot ? safeName(d.declName) : mangledGlobalName(g.emissionFacts.moduleNameRoots!, node.resolvedSym, d.declName);
 	// Identifier references recompute the mangled name on demand via mangledGlobalName
 	// (see expressions.ms isModuleGlobalVar branch). We deliberately DO NOT write to
 	// sym.nativeName here: that field is an extern/FFI marker — codegen uses

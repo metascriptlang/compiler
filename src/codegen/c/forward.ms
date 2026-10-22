@@ -66,7 +66,7 @@ function requestInlineCopy(g: CGen, calleeName: string, sym: Readonly<Symbol>): 
 		return;
 	}
 	const d = decl.data as FunctionDeclData;
-	if (mangledFunctionName(sym, d.fnName, sym.overloadIdx) != calleeName) {
+	if (mangledFunctionName(g.emissionFacts.moduleNameRoots!, sym, d.fnName, sym.overloadIdx) != calleeName) {
 		addCGenError(g, `internal: @inline function '${sym.name}' is called as '${calleeName}' in ${g.modulePath}`, 0, 0);
 		return;
 	}

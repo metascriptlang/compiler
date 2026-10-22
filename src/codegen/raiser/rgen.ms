@@ -20,7 +20,7 @@ import {
 	createRaiserFunction, createRaiserModule
 } from "../../raiser/module";
 import { DynamicModulePlan } from "../../module/graph";
-import { mangleModuleName } from "../c/names";
+import { mangleModuleName, buildModuleNameRoots } from "../c/names";
 import { forEachChild } from "../../ast/visitor";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import {
@@ -550,7 +550,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 			}
 			if (init < 0) throw new Error(`internal: module ${path}, reached only through import(), has no Raiser init function`);
 		}
-		compiled.records.push({ name: mangleModuleName(path), init, requested: plan.requested[ri], hasTLA });
+		compiled.records.push({ name: mangleModuleName(buildModuleNameRoots(), path), init, requested: plan.requested[ri], hasTLA });
 	}
 	return compiled;
 }

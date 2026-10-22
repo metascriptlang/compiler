@@ -3,7 +3,7 @@ import { exportedFunctionOf } from "../../checker/decoratorHelpers";
 import { hasGenericParams, createPtr, createStruct, spelled, voidType } from "../../checker/types";
 import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { isGenericFn } from "../../checker/context";
-import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName, OverloadWinner } from "../../codegen/c/names";
+import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName, buildModuleNameRoots, OverloadWinner } from "../../codegen/c/names";
 import { isNrvoReturnType, opCName, callOverloadWinner } from "../../codegen/c/types";
 import { hcrSignatureKey } from "../../compiler/hcrAbi";
 import { walkNode } from "../walker";
@@ -48,7 +48,7 @@ export function hcrFunctions(program: Node, aliveSet: Readonly<AliveSet>, module
 		const sym = fn.resolvedSym;
 		if (d.fnBody == null || routineFlagSet(d.fnFlags).has(RoutineFlag.Extern) || fn.nodeType == null || hasGenericParams(fn.nodeType) || isGenericFn(d.fnFlags)) continue;
 		if (sym != null && (hasFlag(sym, SymbolFlag.ImportC) || hasFlag(sym, SymbolFlag.OverloadSig) || hasFlag(sym, SymbolFlag.CompileTime))) continue;
-		const symbol = mangledFunctionName(sym, d.fnName, sym != null ? sym.overloadIdx : 0);
+		const symbol = mangledFunctionName(buildModuleNameRoots(), sym, d.fnName, sym != null ? sym.overloadIdx : 0);
 		if (facts.genericOwners.has(symbol) && facts.genericOwners.readonlyGet(symbol) != modulePath) continue;
 		if (seen.has(symbol)) continue;
 		seen.add(symbol);
@@ -107,7 +107,7 @@ export function lowerHcrIndirection(
 			registrations.push(makeEmitStmt(`/*DATINITSECTION*/  ${register};`, loc));
 			continue;
 		}
-		const cell = `_ms_hcr_self_${mangleModuleName(own.modulePath)}_${selfSlot}`;
+		const cell = `_ms_hcr_self_${mangleModuleName(buildModuleNameRoots(), own.modulePath)}_${selfSlot}`;
 		selfSlot += 1;
 		selfCells.set(fn.symbol, cell);
 		emitted.push(makeEmitStmt(`/*VARSECTION*/static MsHcrCell* ${cell};`, loc));
@@ -136,7 +136,7 @@ export function lowerHcrIndirection(
 		const key = "f:" + hcrSignatureKey(op.symbolType);
 		const id = owner + "\n" + symbol + "\n" + key;
 		if (bound.has(id)) continue;
-		const pointer = `_ms_hcr_bind_${mangleModuleName(own.modulePath)}_${bindSlot}`;
+		const pointer = `_ms_hcr_bind_${mangleModuleName(buildModuleNameRoots(), own.modulePath)}_${bindSlot}`;
 		bindSlot += 1;
 		bound.set(id, pointer);
 		bindings = bindings + `${cString(owner)}, ${cString(symbol)}, ${cString(key)}, `;
@@ -152,7 +152,7 @@ export function lowerHcrIndirection(
 		if (fn != null) {
 			const sym = fn.resolvedSym;
 			const data = fn.data as FunctionDeclData;
-			const symbol = mangledFunctionName(sym, data.fnName, sym != null ? sym.overloadIdx : 0);
+			const symbol = mangledFunctionName(buildModuleNameRoots(), sym, data.fnName, sym != null ? sym.overloadIdx : 0);
 			if (!ownFunctions.has(symbol)) continue;
 			const cell = selfCells.get(symbol);
 			if (cell != null) forwardToCurrent(fn, symbol, cell);
@@ -169,7 +169,7 @@ export function lowerHcrIndirection(
 				const target = closureFunction(n);
 				if (target == null) return n;
 				const sym = target.resolvedSym;
-				const symbol = mangledFunctionName(sym, referenceName(sym, referenceText(target)), sym.overloadIdx);
+				const symbol = mangledFunctionName(buildModuleNameRoots(), sym, referenceName(sym, referenceText(target)), sym.overloadIdx);
 				let cell = selfCells.get(symbol);
 				if (cell == null) {
 					const owner = owners.get(symbol);
@@ -197,8 +197,8 @@ export function lowerHcrIndirection(
 			const isVariable = constructed == null && isModuleGlobalVar(sym);
 			const text = constructed != null ? sym.name : referenceText(n);
 			const symbol = isVariable
-				? mangledGlobalName(sym, referenceName(sym, text))
-				: mangledFunctionName(sym, referenceName(sym, text), winner != null ? winner.winnerIdx : sym.overloadIdx);
+				? mangledGlobalName(buildModuleNameRoots(), sym, referenceName(sym, text))
+				: mangledFunctionName(buildModuleNameRoots(), sym, referenceName(sym, text), winner != null ? winner.winnerIdx : sym.overloadIdx);
 			let targetId = "";
 			if (isVariable) {
 				const target = moduleForPath(modules, sym.modulePath);
@@ -213,7 +213,7 @@ export function lowerHcrIndirection(
 			const key = (isVariable ? "v:" : "f:") + hcrSignatureKey(sym.symbolType);
 			const id = targetId + "\n" + symbol + "\n" + key;
 			const cachedPointer = bound.get(id);
-			const pointer = cachedPointer != null ? cachedPointer : `_ms_hcr_bind_${mangleModuleName(own.modulePath)}_${bindSlot}`;
+			const pointer = cachedPointer != null ? cachedPointer : `_ms_hcr_bind_${mangleModuleName(buildModuleNameRoots(), own.modulePath)}_${bindSlot}`;
 			if (cachedPointer == null) {
 				bindSlot += 1;
 				bound.set(id, pointer);

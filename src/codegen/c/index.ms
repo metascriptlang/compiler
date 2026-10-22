@@ -18,7 +18,7 @@ import {
 	replayFactWrites,
 } from "./context";
 import { genDecl, registerDeclCName, emitInlineCopies } from "./declarations";
-import { mangleModuleName, mangledFunctionName, mangledTypeName } from "./names";
+import { mangleModuleName, mangledFunctionName, mangledTypeName, buildModuleNameRoots } from "./names";
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable } from "./test";
 import { emitIncludeDirectives, emitIncludes } from "./context";
@@ -92,6 +92,7 @@ export function replayCModuleEmission(aliveSet: AliveSet, facts: CEmissionFacts,
 
 function bindRegistryFacts(facts: CEmissionFacts): void {
 	if (facts.dispatchOverrides == null) facts.dispatchOverrides = dispatchOverrideTable();
+	if (facts.moduleNameRoots == null) facts.moduleNameRoots = buildModuleNameRoots();
 	if (facts.hookOps == null) facts.hookOps = hookOps();
 	if (facts.placedInstances == null) facts.placedInstances = placedInstances();
 }
@@ -226,7 +227,7 @@ export function generatePreparedCModuleOutput(program: Readonly<Node>, ctx: Read
 // Non-static so other modules' dispatchers can call them.
 
 function genModuleInitFns(g: CGen, output: CModuleOutput): void {
-	const modName = mangleModuleName(g.modulePath);
+	const modName = mangleModuleName(g.emissionFacts.moduleNameRoots!, g.modulePath);
 	const datInitName = `${modName}__DatInit000`;
 	const initName = `${modName}__Init000`;
 
@@ -333,7 +334,7 @@ export function genProjectDispatcher(
 
 	// Forward declarations for all module init functions
 	for (const mp of modulePaths) {
-		const modName = mangleModuleName(mp);
+		const modName = mangleModuleName(buildModuleNameRoots(), mp);
 		if (!emptyDatInits.has(mp)) addLine(b, `void ${modName}__DatInit000(void);`);
 		if (!emptyInits.has(mp) || mp == entryPath) addLine(b, `void ${modName}__Init000(void);`);
 		if (deinits.has(mp)) addLine(b, `void ${modName}__Deinit000(void);`);
@@ -357,7 +358,7 @@ export function genProjectDispatcher(
 	b.indent += 1;
 	if (plan.records.length > 0) addLine(b, `msModuleTableRegister(msModuleRecords, ${plan.records.length});`);
 	for (const mp of modulePaths) {
-		if (!emptyDatInits.has(mp)) addLine(b, `${mangleModuleName(mp)}__DatInit000();`);
+		if (!emptyDatInits.has(mp)) addLine(b, `${mangleModuleName(buildModuleNameRoots(), mp)}__DatInit000();`);
 	}
 	b.indent -= 1;
 	addLine(b, "}");
@@ -368,10 +369,10 @@ export function genProjectDispatcher(
 	b.indent += 1;
 	for (const mp of modulePaths) {
 		if (mp != entryPath && !emptyInits.has(mp) && !plan.lazy.has(mp)) {
-			addLine(b, `${mangleModuleName(mp)}__Init000();`);
+			addLine(b, `${mangleModuleName(buildModuleNameRoots(), mp)}__Init000();`);
 		}
 	}
-	addLine(b, `${mangleModuleName(entryPath)}__Init000();`);
+	addLine(b, `${mangleModuleName(buildModuleNameRoots(), entryPath)}__Init000();`);
 	b.indent -= 1;
 	addLine(b, "}");
 	addNewline(b);
@@ -389,12 +390,12 @@ export function genProjectDispatcher(
 	addLine(b, "void MsDestroyGlobals(void) {");
 	b.indent += 1;
 	if (plan.records.length > 0) addLine(b, "msModuleDeinitLazy();");
-	if (deinits.has(entryPath)) addLine(b, `${mangleModuleName(entryPath)}__Deinit000();`);
+	if (deinits.has(entryPath)) addLine(b, `${mangleModuleName(buildModuleNameRoots(), entryPath)}__Deinit000();`);
 	let di = modulePaths.length;
 	while (di > 0) {
 		di -= 1;
 		const mp = modulePaths[di];
-		if (mp != entryPath && deinits.has(mp) && !plan.lazy.has(mp)) addLine(b, `${mangleModuleName(mp)}__Deinit000();`);
+		if (mp != entryPath && deinits.has(mp) && !plan.lazy.has(mp)) addLine(b, `${mangleModuleName(buildModuleNameRoots(), mp)}__Deinit000();`);
 	}
 	addLine(b, "msOrcCollect();");
 	b.indent -= 1;
@@ -466,7 +467,7 @@ function emitModuleRecords(b: Builder, plan: DynamicModulePlan, emptyInits: Hash
 	b.indent += 1;
 	for (let i = 0; i < plan.records.length; i += 1) {
 		const mp = plan.records[i];
-		const modName = mangleModuleName(mp);
+		const modName = mangleModuleName(buildModuleNameRoots(), mp);
 		if (!plan.lazy.has(mp)) {
 			addLine(b, `{ .name = "${modName}", .status = MS_MODULE_EVALUATED },`);
 			continue;
@@ -498,9 +499,9 @@ export function genHcrCoreDispatcher(modulePaths: string[], outputs: CModuleOutp
 	addLine(b, "#include \"runtime/hcr.h\"");
 	addNewline(b);
 	for (const mp of modulePaths) {
-		if (datInits.has(mp)) addLine(b, `void ${mangleModuleName(mp)}__DatInit000(void);`);
-		if (inits.has(mp)) addLine(b, `void ${mangleModuleName(mp)}__Init000(void);`);
-		if (deinits.has(mp)) addLine(b, `void ${mangleModuleName(mp)}__Deinit000(void);`);
+		if (datInits.has(mp)) addLine(b, `void ${mangleModuleName(buildModuleNameRoots(), mp)}__DatInit000(void);`);
+		if (inits.has(mp)) addLine(b, `void ${mangleModuleName(buildModuleNameRoots(), mp)}__Init000(void);`);
+		if (deinits.has(mp)) addLine(b, `void ${mangleModuleName(buildModuleNameRoots(), mp)}__Deinit000(void);`);
 	}
 	addNewline(b);
 	addLine(b, "int cmdCount;");
@@ -524,10 +525,10 @@ export function genHcrCoreDispatcher(modulePaths: string[], outputs: CModuleOutp
 	addLine(b, "done = 1;");
 	if (plan.records.length > 0) addLine(b, `msModuleTableRegister(msModuleRecords, ${plan.records.length});`);
 	for (const mp of modulePaths) {
-		if (datInits.has(mp)) addLine(b, `${mangleModuleName(mp)}__DatInit000();`);
+		if (datInits.has(mp)) addLine(b, `${mangleModuleName(buildModuleNameRoots(), mp)}__DatInit000();`);
 	}
 	for (const mp of modulePaths) {
-		if (inits.has(mp) && !plan.lazy.has(mp)) addLine(b, `${mangleModuleName(mp)}__Init000();`);
+		if (inits.has(mp) && !plan.lazy.has(mp)) addLine(b, `${mangleModuleName(buildModuleNameRoots(), mp)}__Init000();`);
 	}
 	b.indent -= 1;
 	addLine(b, "}");
@@ -540,7 +541,7 @@ export function genHcrCoreDispatcher(modulePaths: string[], outputs: CModuleOutp
 	let di = modulePaths.length;
 	while (di > 0) {
 		di -= 1;
-		if (deinits.has(modulePaths[di]) && !plan.lazy.has(modulePaths[di])) addLine(b, `${mangleModuleName(modulePaths[di])}__Deinit000();`);
+		if (deinits.has(modulePaths[di]) && !plan.lazy.has(modulePaths[di])) addLine(b, `${mangleModuleName(buildModuleNameRoots(), modulePaths[di])}__Deinit000();`);
 	}
 	addLine(b, "msOrcCollect();");
 	b.indent -= 1;
@@ -550,7 +551,7 @@ export function genHcrCoreDispatcher(modulePaths: string[], outputs: CModuleOutp
 
 export function genHcrImageDispatcher(output: CModuleOutput, isEntry: boolean, deferred: boolean): string {
 	const b = createBuilder();
-	const modName = mangleModuleName(output.modulePath);
+	const modName = mangleModuleName(buildModuleNameRoots(), output.modulePath);
 	addLine(b, "#include \"runtime/hcr.h\"");
 	addNewline(b);
 	if (output.hasDatInit) addLine(b, `void ${modName}__DatInit000(void);`);
@@ -632,9 +633,9 @@ test "dispatcher follows dependency order regardless of result order" {
 	assert original == genProjectDispatcher(paths, entry.modulePath, "", false, [entry, empty, dep]);
 	assert original == genProjectDispatcher(paths, entry.modulePath, "", false, [empty, dep, entry]);
 	assert original == genProjectDispatcher(paths, entry.modulePath, "", false, [dep, empty, entry]);
-	const depName = mangleModuleName(dep.modulePath);
-	const emptyName = mangleModuleName(empty.modulePath);
-	const entryName = mangleModuleName(entry.modulePath);
+	const depName = mangleModuleName(buildModuleNameRoots(), dep.modulePath);
+	const emptyName = mangleModuleName(buildModuleNameRoots(), empty.modulePath);
+	const entryName = mangleModuleName(buildModuleNameRoots(), entry.modulePath);
 	assert original.indexOf(`${emptyName}__DatInit000`) < 0;
 	assert original.indexOf(`${emptyName}__Init000`) < 0;
 	assert original.indexOf(`${entryName}__DatInit000`) < 0;
@@ -661,11 +662,11 @@ test "dispatcher destroys globals after the drain, entry module first then depen
 	entry.hasDeinit = true;
 	const paths = [dep.modulePath, mid.modulePath, quiet.modulePath, entry.modulePath];
 	const out = genProjectDispatcher(paths, entry.modulePath, "", false, [dep, mid, quiet, entry]);
-	const entryCall = out.indexOf(`${mangleModuleName(entry.modulePath)}__Deinit000();`);
-	const midCall = out.indexOf(`${mangleModuleName(mid.modulePath)}__Deinit000();`);
-	const depCall = out.indexOf(`${mangleModuleName(dep.modulePath)}__Deinit000();`);
+	const entryCall = out.indexOf(`${mangleModuleName(buildModuleNameRoots(), entry.modulePath)}__Deinit000();`);
+	const midCall = out.indexOf(`${mangleModuleName(buildModuleNameRoots(), mid.modulePath)}__Deinit000();`);
+	const depCall = out.indexOf(`${mangleModuleName(buildModuleNameRoots(), dep.modulePath)}__Deinit000();`);
 	assert entryCall >= 0 && entryCall < midCall && midCall < depCall;
-	assert out.indexOf(`${mangleModuleName(quiet.modulePath)}__Deinit000`) < 0;
+	assert out.indexOf(`${mangleModuleName(buildModuleNameRoots(), quiet.modulePath)}__Deinit000`) < 0;
 	assert out.indexOf("msReportOrphanFailures()") < out.indexOf("  MsDestroyGlobals();");
 	const lib = genProjectDispatcher(paths, entry.modulePath, "", true, [dep, mid, quiet, entry]);
 	assert lib.indexOf("void MsDestroyGlobals(void) {") >= 0 && lib.indexOf("int main") < 0;
@@ -752,7 +753,7 @@ test "generic module emission preserves defining owner under permutations" {
 	const facts = new CEmissionFacts();
 	const paths = ["user.ms", "owner.ms", "other.ms"];
 	for (const path of paths) prepareCModuleEmission(program, ctx, path, alive, facts);
-	const name = mangledFunctionName(node.resolvedSym, "generic__i32", 0);
+	const name = mangledFunctionName(buildModuleNameRoots(), node.resolvedSym, "generic__i32", 0);
 	assert facts.genericOwners.get(name) == "owner.ms";
 	const original: CModuleOutput[] = [];
 	for (const path of paths) original.push(generateCModuleOutput(program, ctx, path, alive, false, false, facts));

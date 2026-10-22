@@ -12,7 +12,7 @@ import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError, NameSet, createNameSet, useHeader, createCGen } from "./context";
 import { passedByValue } from "../../checker/varPartitions";
 import { SymbolFlag, hasFlag, makeSymbol, setFlag, lookupSymbolReadonly } from "../../checker/symbol";
-import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName, resolveOverloadWinner, overloadAt, mangleQualified, mangleModuleName } from "./names";
+import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName, resolveOverloadWinner, overloadAt, mangleQualified, mangleModuleName, buildModuleNameRoots, ModuleNameRoots } from "./names";
 import { CheckerContext, newSym, GcMode, addError, createContext } from "../../checker/context";
 import { cStringLiteral, escapeCString } from "./literals";
 
@@ -21,16 +21,20 @@ function namingSym(t: Readonly<Type>): Readonly<Symbol | null> {
 	return t.typeFlags.has(TypeFlag.Spelled) ? null : t.sym;
 }
 
-export function resolvedTypeCName(t: Readonly<Type>, hasCheckerCtx: boolean): string {
+export function resolvedTypeCNameIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, hasCheckerCtx: boolean): string {
 	const owner = namingSym(t);
-	if (owner != null && t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(owner, t.typeName) + "_" + hashToBase36(nominalTypeKey(t));
-	if (owner != null) return mangledTypeName(owner, t.typeName);
+	if (owner != null && t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(roots, owner, t.typeName) + "_" + hashToBase36(nominalTypeKey(t));
+	if (owner != null) return mangledTypeName(roots, owner, t.typeName);
 	if (hasCheckerCtx && t.typeName != "" && isNominalKind(t.kind)) nominalTypeKey(t);
-	return mangledTypeName(null, t.typeName);
+	return mangledTypeName(roots, null, t.typeName);
+}
+
+export function resolvedTypeCName(t: Readonly<Type>, hasCheckerCtx: boolean): string {
+	return resolvedTypeCNameIn(buildModuleNameRoots(), t, hasCheckerCtx);
 }
 
 function typeIdentityName(g: CGen, t: Readonly<Type>): string {
-	return resolvedTypeCName(t, g.checkerCtx != null);
+	return resolvedTypeCNameIn(g.emissionFacts.moduleNameRoots!, t, g.checkerCtx != null);
 }
 
 // The single oracle for a lifecycle hook's base name, shared by the lifter (hook
@@ -39,7 +43,7 @@ function typeIdentityName(g: CGen, t: Readonly<Type>): string {
 // another module's same-named type.
 export function hookBaseCName(typeName: string, t: Type | null, cc: Readonly<CheckerContext> | null): string {
 	if (typeName == "") return "";
-	if (typeName.slice(0, 1) == "$") return t != null && t.typeName == typeName && ownedGeneratedName(t.sym) ? mangledTypeName(t.sym, typeName) : typeName;
+	if (typeName.slice(0, 1) == "$") return t != null && t.typeName == typeName && ownedGeneratedName(t.sym) ? mangledTypeName(buildModuleNameRoots(), t.sym, typeName) : typeName;
 	const named = t != null && t.typeName == typeName;
 	if (named && t.typeInst != null) return monoInstanceName(t.typeInst);
 	if (named) return resolvedTypeCName(t, cc != null);
@@ -47,7 +51,7 @@ export function hookBaseCName(typeName: string, t: Type | null, cc: Readonly<Che
 }
 
 function structIdentityName(g: CGen, t: Readonly<Type>): string {
-	if (isAnonTypeName(t.typeName)) return anonTypeName(t);
+	if (isAnonTypeName(t.typeName)) return anonTypeNameIn(g.emissionFacts.moduleNameRoots!, t);
 	return typeIdentityName(g, t);
 }
 
@@ -115,20 +119,28 @@ export function arrayOpElement(elem: Readonly<Type | null>): Readonly<Type | nul
 	return e;
 }
 
-export function opTypeKey(t: Readonly<Type | null>): string {
+export function opTypeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | null>): string {
 	if (t == null) return "null";
-	if (t.kind == TypeKind.Alias && t.typeReturn != null) return opTypeKey(t.typeReturn);
-	if (t.kind == TypeKind.Array) return "array:" + opTypeKey(arrayOpElement(t.typeReturn));
+	if (t.kind == TypeKind.Alias && t.typeReturn != null) return opTypeKeyIn(roots, t.typeReturn);
+	if (t.kind == TypeKind.Array) return "array:" + opTypeKeyIn(roots, arrayOpElement(t.typeReturn));
 	if (t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) {
 		const counting = isAtomicRef(t) ? "atomic:" : "";
-		return (t.kind == TypeKind.Ref ? "ref:" : "ptr:") + counting + opTypeKey(t.typeReturn);
+		return (t.kind == TypeKind.Ref ? "ref:" : "ptr:") + counting + opTypeKeyIn(roots, t.typeReturn);
 	}
-	if (t.kind == TypeKind.Cursor) return "cursor:" + opTypeKey(t.typeReturn);
-	return typeKey(t);
+	if (t.kind == TypeKind.Cursor) return "cursor:" + opTypeKeyIn(roots, t.typeReturn);
+	return typeKeyIn(roots, t);
+}
+
+export function opTypeKey(t: Readonly<Type | null>): string {
+	return opTypeKeyIn(buildModuleNameRoots(), t);
+}
+
+export function opKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, op: AttachedOp): string {
+	return attachedOpName(op) + "|" + opTypeKeyIn(roots, t);
 }
 
 export function opKey(t: Readonly<Type>, op: AttachedOp): string {
-	return attachedOpName(op) + "|" + opTypeKey(t);
+	return opKeyIn(buildModuleNameRoots(), t, op);
 }
 
 function recordOp(key: string, sym: Symbol, canon: boolean): void {
@@ -286,14 +298,18 @@ export function ensureDrcProto(g: CGen, callee: string, sym: Readonly<Symbol | n
 	if (hook == null || !hasFlag(hook, SymbolFlag.GeneratedOp)) return;
 	const fnType = hook.symbolType;
 	if (fnType == null || fnType.kind != TypeKind.Function) return;
-	const cName = hook.modulePath != "" ? mangledFunctionName(hook, hook.name, hook.overloadIdx) : callee;
+	const cName = hook.modulePath != "" ? mangledFunctionName(g.emissionFacts.moduleNameRoots!, hook, hook.name, hook.overloadIdx) : callee;
 	if (nameSetHas(g.declaredProcs, cName)) return;
 	nameSetAdd(g.declaredProcs, cName);
 	addLine(sec(g, CSection.ProcHeaders), procHeader(g, cName, fnType, null, 0, true) + ";");
 }
 
+export function opCNameIn(roots: Readonly<ModuleNameRoots>, op: Readonly<Symbol>): string {
+	return mangledFunctionName(roots, op, op.name, op.overloadIdx);
+}
+
 export function opCName(op: Readonly<Symbol>): string {
-	return mangledFunctionName(op, op.name, op.overloadIdx);
+	return opCNameIn(buildModuleNameRoots(), op);
 }
 
 
@@ -362,36 +378,36 @@ function flushDeferredStructs(g: CGen): void {
 // Generates deterministic C struct names for anonymous interfaces (typeName === "").
 // Uses a structural key (field names + types) hashed to a short hex-like string.
 
-function anonFieldKey(t: Readonly<Type | null>, open: Cursor<Readonly<Type>>[]): string {
+function anonFieldKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | null>, open: Cursor<Readonly<Type>>[]): string {
 	if (t == null) return "null";
 	return match (t.kind) {
 		TypeKind.Struct => {
-			if (t.typeName.length == 0) return anonStructKeyIn(t, open);
-			return structKeyIdentity(t);
+			if (t.typeName.length == 0) return anonStructKeyRooted(roots, t, open);
+			return structKeyIdentityIn(roots, t);
 		},
-		TypeKind.Enum => "enum:" + mangledTypeName(t.sym, t.typeName),
+		TypeKind.Enum => "enum:" + mangledTypeName(roots, t.sym, t.typeName),
 		TypeKind.GenericInstance => "ginst:" + monoInstanceName(t),
-		TypeKind.Array => "arr:" + anonFieldKey(t.typeReturn, open),
+		TypeKind.Array => "arr:" + anonFieldKeyIn(roots, t.typeReturn, open),
 		TypeKind.Function => {
 			let k = "fn(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
-				k = k + anonFieldKey(t.typeChildren[i], open);
+				k = k + anonFieldKeyIn(roots, t.typeChildren[i], open);
 				i += 1;
 			}
-			return k + "):" + anonFieldKey(t.typeReturn, open);
+			return k + "):" + anonFieldKeyIn(roots, t.typeReturn, open);
 		},
-		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKey(t.typeReturn, open),
-		TypeKind.Varargs => t.typeChildren.length > 0 ? anonFieldKey(t.typeChildren[0], open) : "varargs:empty",
+		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKeyIn(roots, t.typeReturn, open),
+		TypeKind.Varargs => t.typeChildren.length > 0 ? anonFieldKeyIn(roots, t.typeChildren[0], open) : "varargs:empty",
 		TypeKind.Union => {
-			if (t.typeInst != null) return anonFieldKey(t.typeInst, open);
-			if (t.typeName.length > 0) return "union:" + structKeyIdentity(t);
+			if (t.typeInst != null) return anonFieldKeyIn(roots, t.typeInst, open);
+			if (t.typeName.length > 0) return "union:" + structKeyIdentityIn(roots, t);
 			let k = "union(";
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + "|";
-				k = k + anonFieldKey(t.typeChildren[i], open);
+				k = k + anonFieldKeyIn(roots, t.typeChildren[i], open);
 				i += 1;
 			}
 			return k + ")";
@@ -401,7 +417,7 @@ function anonFieldKey(t: Readonly<Type | null>, open: Cursor<Readonly<Type>>[]):
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) k = k + ",";
-				k = k + anonFieldKey(t.typeChildren[i], open);
+				k = k + anonFieldKeyIn(roots, t.typeChildren[i], open);
 				i += 1;
 			}
 			return k + ")";
@@ -413,26 +429,34 @@ function anonFieldKey(t: Readonly<Type | null>, open: Cursor<Readonly<Type>>[]):
 			const simple = getSimpleTypeDesc(t);
 			if (simple != "") return simple;
 			let k = "k" + (t.kind as number).toString() + ":" + t.typeName;
-			if (t.typeReturn != null) k = k + "<" + anonFieldKey(t.typeReturn, open) + ">";
-			for (const child of t.typeChildren) k = k + "," + anonFieldKey(child, open);
+			if (t.typeReturn != null) k = k + "<" + anonFieldKeyIn(roots, t.typeReturn, open) + ">";
+			for (const child of t.typeChildren) k = k + "," + anonFieldKeyIn(roots, child, open);
 			return k;
 		},
 	};
 }
 
-function anonStructKeyIn(t: Readonly<Type>, open: Cursor<Readonly<Type>>[]): string {
+function anonFieldKey(t: Readonly<Type | null>, open: Cursor<Readonly<Type>>[]): string {
+	return anonFieldKeyIn(buildModuleNameRoots(), t, open);
+}
+
+function anonStructKeyRooted(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, open: Cursor<Readonly<Type>>[]): string {
 	let depth = open.length - 1;
 	while (depth >= 0) {
 		if (open[depth] == t) return `rec(${open.length - 1 - depth})`;
 		depth -= 1;
 	}
 	open.push(t);
-	const key = `anon(${anonFieldsKey(t, open)})`;
+	const key = `anon(${anonFieldsKeyIn(roots, t, open)})`;
 	open.pop();
 	return key;
 }
 
-function anonFieldsKey(t: Readonly<Type>, open: Cursor<Readonly<Type>>[]): string {
+function anonStructKeyIn(t: Readonly<Type>, open: Cursor<Readonly<Type>>[]): string {
+	return anonStructKeyRooted(buildModuleNameRoots(), t, open);
+}
+
+function anonFieldsKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>, open: Cursor<Readonly<Type>>[]): string {
 	let key = "";
 	let i = 0;
 	while (i < t.typeNames.length) {
@@ -441,7 +465,7 @@ function anonFieldsKey(t: Readonly<Type>, open: Cursor<Readonly<Type>>[]): strin
 		if (i < t.typeChildren.length && storesNothing(t, t.typeChildren[i])) {
 			key = key + "none";
 		} else if (i < t.typeChildren.length && t.typeChildren[i] != null) {
-			key = key + anonFieldKey(t.typeChildren[i], open);
+			key = key + anonFieldKeyIn(roots, t.typeChildren[i], open);
 		} else {
 			key = key + "void";
 		}
@@ -450,8 +474,16 @@ function anonFieldsKey(t: Readonly<Type>, open: Cursor<Readonly<Type>>[]): strin
 	return key;
 }
 
+function anonFieldsKey(t: Readonly<Type>, open: Cursor<Readonly<Type>>[]): string {
+	return anonFieldsKeyIn(buildModuleNameRoots(), t, open);
+}
+
+function anonStructuralKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): string {
+	return anonFieldsKeyIn(roots, t, [t]);
+}
+
 function anonStructuralKey(t: Readonly<Type>): string {
-	return anonFieldsKey(t, [t]);
+	return anonStructuralKeyIn(buildModuleNameRoots(), t);
 }
 
 // DJB2 hash → base-36 string for short C identifiers
@@ -469,10 +501,14 @@ export function isAnonTypeName(name: string): boolean {
 	return false;
 }
 
-export function anonTypeName(t: Readonly<Type>): string {
+export function anonTypeNameIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): string {
 	if (t.typeNames.length == 0) return "msAnon_empty";
-	const key = anonStructuralKey(t);
+	const key = anonStructuralKeyIn(roots, t);
 	return "msAnon_" + hashToBase36(key);
+}
+
+export function anonTypeName(t: Readonly<Type>): string {
+	return anonTypeNameIn(buildModuleNameRoots(), t);
 }
 
 // ===== Annotation-to-C Mapping (Single Source of Truth) =====
@@ -520,21 +556,29 @@ export function annotationToC(annotation: string): string {
 // ===== Type Signature Key =====
 // Generates a unique string key for a Type (used for cache lookups).
 
-function structKeyIdentity(t: Readonly<Type>): string {
+function structKeyIdentityIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): string {
 	const owner = namingSym(t);
-	if (owner == null && t.typeFlags.has(TypeFlag.Spelled)) return mangledTypeName(null, t.typeName);
-	if (owner != null && !t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(owner, t.typeName);
-	return mangledTypeName(null, nominalTypeKey(t));
+	if (owner == null && t.typeFlags.has(TypeFlag.Spelled)) return mangledTypeName(roots, null, t.typeName);
+	if (owner != null && !t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(roots, owner, t.typeName);
+	return mangledTypeName(roots, null, nominalTypeKey(t));
+}
+
+function structKeyIdentity(t: Readonly<Type>): string {
+	return structKeyIdentityIn(buildModuleNameRoots(), t);
+}
+
+export function anonUnionCNameIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): string {
+	return "msUnion_" + hashToBase36(typeKeyIn(roots, t));
 }
 
 export function anonUnionCName(t: Readonly<Type>): string {
-	return "msUnion_" + hashToBase36(typeKey(t));
+	return anonUnionCNameIn(buildModuleNameRoots(), t);
 }
 
-export function typeKey(t: Readonly<Type | null>): string {
+export function typeKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type | null>): string {
 	if (t == null) return "null";
 	return match (t.kind) {
-		TypeKind.Alias => typeKey(t.typeReturn),
+		TypeKind.Alias => typeKeyIn(roots, t.typeReturn),
 		TypeKind.Number | TypeKind.Float64 => "float64",
 		TypeKind.Float32 => "float32",
 		TypeKind.Int8 => "int8",
@@ -555,32 +599,32 @@ export function typeKey(t: Readonly<Type | null>): string {
 		TypeKind.NumberLiteral => "numlit:" + t.typeName,
 		TypeKind.Void => "void",
 		TypeKind.Null => "null",
-		TypeKind.Enum => { return "enum:" + mangledTypeName(t.sym, t.typeName); },
+		TypeKind.Enum => { return "enum:" + mangledTypeName(roots, t.sym, t.typeName); },
 		TypeKind.EnumLiteral => {
 			const e = t.typeReturn != null && t.typeReturn.kind == TypeKind.Enum ? t.typeReturn : t;
-			return "enum:" + mangledTypeName(e.sym, e.typeName);
+			return "enum:" + mangledTypeName(roots, e.sym, e.typeName);
 		},
 		TypeKind.Struct => {
 			// Anonymous/structural types: use structural key to distinguish
 			if (isAnonTypeName(t.typeName)) {
-				return `anon(${anonStructuralKey(t)})`;
+				return `anon(${anonStructuralKeyIn(roots, t)})`;
 			}
-			return "object:" + structKeyIdentity(t);
+			return "object:" + structKeyIdentityIn(roots, t);
 		},
 		TypeKind.Array => {
-			const elemKey = typeKey(t.typeReturn);
+			const elemKey = typeKeyIn(roots, t.typeReturn);
 			return "array:" + elemKey;
 		},
 		TypeKind.SizedArray => {
-			const elemKey = typeKey(t.typeReturn);
+			const elemKey = typeKeyIn(roots, t.typeReturn);
 			return `sizedArray:${elemKey}[${t.typeValue}]`;
 		},
 		TypeKind.Span => {
-			const elemKey = typeKey(t.typeReturn);
+			const elemKey = typeKeyIn(roots, t.typeReturn);
 			return "span:" + elemKey;
 		},
 		TypeKind.Set => {
-			const elemKey = typeKey(t.typeReturn);
+			const elemKey = typeKeyIn(roots, t.typeReturn);
 			return "set:" + elemKey;
 		},
 		TypeKind.Function => {
@@ -588,36 +632,36 @@ export function typeKey(t: Readonly<Type | null>): string {
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) key = key + ",";
-				key = key + typeKey(t.typeChildren[i]);
+				key = key + typeKeyIn(roots, t.typeChildren[i]);
 				i += 1;
 			}
-			key = key + "):" + typeKey(t.typeReturn);
+			key = key + "):" + typeKeyIn(roots, t.typeReturn);
 			return key;
 		},
-		TypeKind.Ref => { return "ref:" + typeKey(t.typeReturn); },
-		TypeKind.Ptr => { return "ptr:" + typeKey(t.typeReturn); },
-		TypeKind.Cursor => { return typeKey(t.typeReturn); },
-		TypeKind.Var => { return "var:" + typeKey(t.typeReturn); },
-		TypeKind.Borrow => { return "borrow:" + typeKey(t.typeReturn); },
+		TypeKind.Ref => { return "ref:" + typeKeyIn(roots, t.typeReturn); },
+		TypeKind.Ptr => { return "ptr:" + typeKeyIn(roots, t.typeReturn); },
+		TypeKind.Cursor => { return typeKeyIn(roots, t.typeReturn); },
+		TypeKind.Var => { return "var:" + typeKeyIn(roots, t.typeReturn); },
+		TypeKind.Borrow => { return "borrow:" + typeKeyIn(roots, t.typeReturn); },
 		TypeKind.GenericInstance => {
 			const seen = peelTransparentInstance(t);
-			if (seen != t && seen.kind == TypeKind.Union && seen.typeInst == null) return typeKey(seen);
+			if (seen != t && seen.kind == TypeKind.Union && seen.typeInst == null) return typeKeyIn(roots, seen);
 			let giKey = `ginst:${monoInstanceName(t)}`;
-			for (const arg of t.typeChildren) giKey = `${giKey}:${typeKey(arg)}`;
+			for (const arg of t.typeChildren) giKey = `${giKey}:${typeKeyIn(roots, arg)}`;
 			return giKey;
 		},
 		TypeKind.TypeReference => { return "typeref:" + nominalTypeKey(t); },
 		TypeKind.Distinct => { return "distinct:" + nominalTypeKey(t); },
 		TypeKind.Union => {
-			if (t.typeInst != null) return typeKey(t.typeInst);
+			if (t.typeInst != null) return typeKeyIn(roots, t.typeInst);
 			if (t.typeName.length > 0) {
-				return "union:" + structKeyIdentity(t);
+				return "union:" + structKeyIdentityIn(roots, t);
 			} else {
 				let key = "union(";
 				let ui = 0;
 				while (ui < t.typeChildren.length) {
 					if (ui > 0) key = key + "|";
-					key = key + typeKey(t.typeChildren[ui]);
+					key = key + typeKeyIn(roots, t.typeChildren[ui]);
 					ui += 1;
 				}
 				return key + ")";
@@ -628,22 +672,26 @@ export function typeKey(t: Readonly<Type | null>): string {
 			let i = 0;
 			while (i < t.typeChildren.length) {
 				if (i > 0) key = key + ",";
-				key = key + typeKey(t.typeChildren[i]);
+				key = key + typeKeyIn(roots, t.typeChildren[i]);
 				i += 1;
 			}
 			return key;
 		},
-		TypeKind.Varargs => t.typeChildren.length > 0 ? typeKey(t.typeChildren[0]) : "varargs:empty",
+		TypeKind.Varargs => t.typeChildren.length > 0 ? typeKeyIn(roots, t.typeChildren[0]) : "varargs:empty",
 		// Total catch-all: the key feeds typeCache, so collapsing two types onto one
 		// string hands out a typedef built for the other one. Named types key by name
 		// (recursing there would not terminate on `type Rec = { next: Rec | null }`).
 		_ => {
 			let key = "k" + (t.kind as number).toString() + ":" + t.typeName;
-			if (t.typeReturn != null) key = key + "<" + typeKey(t.typeReturn) + ">";
-			for (const child of t.typeChildren) key = key + "," + typeKey(child);
+			if (t.typeReturn != null) key = key + "<" + typeKeyIn(roots, t.typeReturn) + ">";
+			for (const child of t.typeChildren) key = key + "," + typeKeyIn(roots, child);
 			return key;
 		},
 	};
+}
+
+export function typeKey(t: Readonly<Type | null>): string {
+	return typeKeyIn(buildModuleNameRoots(), t);
 }
 
 
@@ -923,7 +971,7 @@ export function getTypeForward(g: CGen, t: Readonly<Type | null>): string {
 	const simple = getSimpleTypeDesc(t);
 	if (simple != "") return simple;
 	// Check cache — if already fully resolved, just return
-	const key = typeKey(t);
+	const key = typeKeyIn(g.emissionFacts.moduleNameRoots!, t);
 	const cached = typeCacheGet(g.typeCache, key);
 	if (cached != "") return cached;
 	if (t.kind == TypeKind.Struct && isImportedType(t)) return genObjectType(g, t);
@@ -966,19 +1014,31 @@ export function typeInfoSubject(type: Readonly<Type | null>): Readonly<Type | nu
 	return t;
 }
 
-export function typeInfoCName(subject: Readonly<Type>): string {
+export function typeInfoCNameIn(roots: Readonly<ModuleNameRoots>, subject: Readonly<Type>): string {
 	if (subject.kind == TypeKind.GenericInstance) return mangle(monoInstanceName(subject));
-	if (subject.kind == TypeKind.Union && subject.typeName == "") return anonUnionCName(subject);
-	if (isAnonTypeName(subject.typeName)) return anonTypeName(subject);
-	return resolvedTypeCName(subject, true);
+	if (subject.kind == TypeKind.Union && subject.typeName == "") return anonUnionCNameIn(roots, subject);
+	if (isAnonTypeName(subject.typeName)) return anonTypeNameIn(roots, subject);
+	return resolvedTypeCNameIn(roots, subject, true);
+}
+
+export function typeInfoCName(subject: Readonly<Type>): string {
+	return typeInfoCNameIn(buildModuleNameRoots(), subject);
+}
+
+export function objectTypeInfoKeyIn(roots: Readonly<ModuleNameRoots>, subject: Readonly<Type>): string {
+	return `obj|${typeInfoCNameIn(roots, subject)}`;
 }
 
 export function objectTypeInfoKey(subject: Readonly<Type>): string {
-	return `obj|${typeInfoCName(subject)}`;
+	return objectTypeInfoKeyIn(buildModuleNameRoots(), subject);
+}
+
+export function arcCellKeyIn(roots: Readonly<ModuleNameRoots>, pointee: Readonly<Type>): string {
+	return "arc|" + opTypeKeyIn(roots, pointee);
 }
 
 export function arcCellKey(pointee: Readonly<Type>): string {
-	return "arc|" + opTypeKey(pointee);
+	return arcCellKeyIn(buildModuleNameRoots(), pointee);
 }
 
 export function arcCellName(pointee: Type): string {
@@ -1050,18 +1110,22 @@ export function typeInfoRef(g: CGen, type: Readonly<Type | null>): string {
 		addCGenError(g, `internal: a TypeInfo was requested in ${g.modulePath} for a type that has none`, 0, 0);
 		return "NULL";
 	}
-	const info = demandedTypeInfo(g, objectTypeInfoKey(subject), "object");
+	const info = demandedTypeInfo(g, objectTypeInfoKeyIn(g.emissionFacts.moduleNameRoots!, subject), "object");
 	return info == null ? "NULL" : typeInfoPointer(g, info);
 }
 
 export function ensureArcCellTypeInfo(g: CGen, pointeeType: Readonly<Type>): string {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
-	const info = demandedTypeInfo(g, arcCellKey(pointeeType), "Arc cell");
+	const info = demandedTypeInfo(g, arcCellKeyIn(g.emissionFacts.moduleNameRoots!, pointeeType), "Arc cell");
 	return info == null ? "NULL" : typeInfoPointer(g, info);
 }
 
+export function refArrayCellKeyIn(roots: Readonly<ModuleNameRoots>, arrT: Readonly<Type>): string {
+	return "ref:" + opTypeKeyIn(roots, arrT);
+}
+
 export function refArrayCellKey(arrT: Readonly<Type>): string {
-	return "ref:" + opTypeKey(arrT);
+	return refArrayCellKeyIn(buildModuleNameRoots(), arrT);
 }
 
 export function refArrayCellOp(arrT: Type, op: AttachedOp): Symbol | null;
@@ -1096,7 +1160,7 @@ export function hcrTypeInfoRef(g: CGen, cName: string): boolean {
 
 export function ensureRefArrayCellTypeInfo(g: CGen, arrT: Readonly<Type>): string {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
-	const key = refArrayCellKey(arrT);
+	const key = refArrayCellKeyIn(g.emissionFacts.moduleNameRoots!, arrT);
 	const info = demandedTypeInfo(g, key, "ref-array cell");
 	return info == null ? "NULL" : typeInfoPointer(g, info);
 }
@@ -1131,7 +1195,7 @@ function typeInfoLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 }
 
 function emitRttiHook(g: CGen, name: string, hook: Readonly<Symbol>, trace: boolean): string {
-	const hookName = opCName(hook);
+	const hookName = opCNameIn(g.emissionFacts.moduleNameRoots!, hook);
 	ensureDrcProto(g, hookName, hook);
 	const params = trace ? "void* dest, void* env" : "void* dest";
 	addLine(sec(g, CSection.ProcHeaders), `static void ${name}(${params});`);
@@ -1236,7 +1300,7 @@ export function getTypeDesc(g: CGen, t: Readonly<Type | null>): string {
 	}
 
 	// Check full cache
-	const key = typeKey(t);
+	const key = typeKeyIn(g.emissionFacts.moduleNameRoots!, t);
 	const cached = typeCacheGet(g.typeCache, key);
 	if (cached != "") return cached;
 
@@ -1339,7 +1403,7 @@ export function getTypeDesc(g: CGen, t: Readonly<Type | null>): string {
 			// `Result<T, E> = Ref<ResultData<T, E>>` chains GI→Ref→GI→Union before the body.
 			const body: Readonly<Type | null> = t.typeReturn != null ? peelToStructOrUnion(t.typeReturn) : declBody;
 			if (body == null || (genericParamsOf(t) == "" && t.typeReturn == null)) return instName;
-			const instCName = mangledTypeName(null, instName);
+			const instCName = mangledTypeName(g.emissionFacts.moduleNameRoots!, null, instName);
 			if (body.kind == TypeKind.Struct) return genObjectTypeAs(g, body, instCName, "object:" + instCName, instName);
 			if (body.kind != TypeKind.Union) return instName;
 			if (body == declBody) return genUnionType(g, body);
@@ -1362,7 +1426,7 @@ export function enumCTypeName(t: Readonly<Type | null>): string {
 
 function genEnumType(g: CGen, t: Readonly<Type>): string {
 	const name = typeIdentityName(g, t);
-	const key = typeKey(t);
+	const key = typeKeyIn(g.emissionFacts.moduleNameRoots!, t);
 	typeCacheSet(g.typeCache, key, name);
 	if (t.typeName != "") {
 		typeCacheSet(g.typeCache, "decl:" + name, name);
@@ -1393,7 +1457,7 @@ function genEnumType(g: CGen, t: Readonly<Type>): string {
 function genObjectType(g: CGen, t: Readonly<Type>): string {
 	// Anonymous/structural types get hash-based names; named types get mangled names
 	const name = structIdentityName(g, t);
-	const key = typeKey(t);
+	const key = typeKeyIn(g.emissionFacts.moduleNameRoots!, t);
 
 	if (isImportedType(t)) {
 		useImportedTypeHeader(g, t);
@@ -1495,12 +1559,12 @@ function genInstanceUnion(g: CGen, gi: Readonly<Type>, body: Readonly<Type>): st
 	const cached = typeCacheGet(g.typeCache, cacheKey);
 	if (cached != "") return cached;
 	typeCacheSet(g.typeCache, cacheKey, instName);
-	return genUnionTypeAs(g, body, typeKey(body), mangledTypeName(body.sym, instName), instName);
+	return genUnionTypeAs(g, body, typeKeyIn(g.emissionFacts.moduleNameRoots!, body), mangledTypeName(g.emissionFacts.moduleNameRoots!, body.sym, instName), instName);
 }
 
 function genUnionType(g: CGen, t: Readonly<Type>): string {
 	const named = t.typeName.length > 0;
-	return genUnionTypeAs(g, t, typeKey(t), named ? typeIdentityName(g, t) : "", named ? t.typeName : "");
+	return genUnionTypeAs(g, t, typeKeyIn(g.emissionFacts.moduleNameRoots!, t), named ? typeIdentityName(g, t) : "", named ? t.typeName : "");
 }
 
 // Identity as in genObjectTypeAs; an empty name means a structural union named by its shape.
@@ -1526,7 +1590,7 @@ function genUnionTypeAs(g: CGen, t: Readonly<Type>, key: string, identity: strin
 	const cached = typeCacheGet(g.typeCache, key);
 	if (cached != "") return cached;
 
-	const name = identity != "" ? identity : anonUnionCName(t);
+	const name = identity != "" ? identity : anonUnionCNameIn(g.emissionFacts.moduleNameRoots!, t);
 	typeCacheSet(g.typeCache, key, name);
 	if (bareName != "") {
 		typeCacheSet(g.typeCache, "decl:" + name, name);
@@ -1578,7 +1642,7 @@ function genUnionTypeAs(g: CGen, t: Readonly<Type>, key: string, identity: strin
 		// variants keep the structural sharing this cache was designed for.
 		let canonical = varName;
 		if (variant != null && variant.kind == TypeKind.Struct) {
-			const varKey = typeKey(variant);
+			const varKey = typeKeyIn(g.emissionFacts.moduleNameRoots!, variant);
 			const existing = typeCacheGet(g.typeCache, varKey);
 			if (existing != "") {
 				canonical = existing;
@@ -1682,21 +1746,21 @@ function genUnionTypeAs(g: CGen, t: Readonly<Type>, key: string, identity: strin
 // Struct/interface elements use per-type MS_ARRAY(T) typedefs.
 
 function genArrayType(g: CGen, t: Readonly<Type>): string {
-	const key = typeKey(t);
+	const key = typeKeyIn(g.emissionFacts.moduleNameRoots!, t);
 
 	// Resolve element key for cycle detection and pointer classification.
 	const resolvedElem = t.typeReturn;
-	const elemKey = (resolvedElem != null) ? typeKey(resolvedElem) : "";
+	const elemKey = (resolvedElem != null) ? typeKeyIn(g.emissionFacts.moduleNameRoots!, resolvedElem) : "";
 	const selfRef = elemKey != "" && isBeingDefined(g, elemKey);
 
 	const byValue = !selfRef && resolvedElem != null && holdsStructByValue(resolvedElem);
 	const elemType = selfRef ? getTypeForward(g, t.typeReturn) : (byValue ? "" : getTypeDesc(g, t.typeReturn));
 
-	const arrTypeName = arrayCTypeName(t);
+	const arrTypeName = arrayCTypeNameIn(g.emissionFacts.moduleNameRoots!, t);
 	typeCacheSet(g.typeCache, key, arrTypeName);
 
 	// Built-in array families are runtime-provided — no per-type typedef.
-	if (isRuntimeArrayFamily(t)) return arrTypeName;
+	if (isRuntimeArrayFamilyIn(g.emissionFacts.moduleNameRoots!, t)) return arrTypeName;
 
 	// Emit typedef if not already done
 	const fwdKey = "arrtd:" + arrTypeName;
@@ -1757,54 +1821,66 @@ export function getArrayTypeName(elemType: string): string {
 // Element's C type NAME (no emission) — mirrors EVERY name-producing branch of getTypeDesc
 // using the SAME building blocks (getSimpleTypeDesc / mangle / monoTypeKey / tupleTypeName),
 // so arrayCTypeName agrees with getTypeDesc for any element that appears in a value array.
-function elemArrayCName(elem: Readonly<Type>): string {
+function elemArrayCNameIn(roots: Readonly<ModuleNameRoots>, elem: Readonly<Type>): string {
 	const simple = getSimpleTypeDesc(elem);
 	if (simple != "") return simple;
 	const transparent = peelTransparentInstance(elem);
-	if (transparent != elem) return elemArrayCName(transparent);
-	if ((elem.kind == TypeKind.Distinct || elem.kind == TypeKind.Alias) && elem.typeReturn != null) return elemArrayCName(elem.typeReturn);
+	if (transparent != elem) return elemArrayCNameIn(roots, transparent);
+	if ((elem.kind == TypeKind.Distinct || elem.kind == TypeKind.Alias) && elem.typeReturn != null) return elemArrayCNameIn(roots, elem.typeReturn);
 	if (elem.kind == TypeKind.Set) {
 		const sr = setRepr(elem);
-		if (sr != null) return elemArrayCName(sr);
+		if (sr != null) return elemArrayCNameIn(roots, sr);
 	}
-	if (elem.kind == TypeKind.Enum) return resolvedTypeCName(elem, true);
-	if (elem.kind == TypeKind.EnumLiteral) return (elem.typeReturn != null && elem.typeReturn.kind == TypeKind.Enum) ? resolvedTypeCName(elem.typeReturn, true) : "int32_t";
+	if (elem.kind == TypeKind.Enum) return resolvedTypeCNameIn(roots, elem, true);
+	if (elem.kind == TypeKind.EnumLiteral) return (elem.typeReturn != null && elem.typeReturn.kind == TypeKind.Enum) ? resolvedTypeCNameIn(roots, elem.typeReturn, true) : "int32_t";
 	if (elem.kind == TypeKind.Tuple) return tupleTypeName(elem);
-	if (elem.kind == TypeKind.SizedArray) return sizedArrayCTypeName(elem);
-	if (elem.kind == TypeKind.Array) return arrayCTypeName(elem);
-	if ((elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr || elem.kind == TypeKind.Var) && elem.typeReturn != null) return elemArrayCName(elem.typeReturn) + "*";
+	if (elem.kind == TypeKind.SizedArray) return sizedArrayCTypeNameIn(roots, elem);
+	if (elem.kind == TypeKind.Array) return arrayCTypeNameIn(roots, elem);
+	if ((elem.kind == TypeKind.Ref || elem.kind == TypeKind.Ptr || elem.kind == TypeKind.Var) && elem.typeReturn != null) return elemArrayCNameIn(roots, elem.typeReturn) + "*";
 	if (elem.kind == TypeKind.Function) return "msClosure";
 	if (elem.kind == TypeKind.Union) {
 		const rm = unwrapRefNullUnion(elem);
-		if (rm != null) return elemArrayCName(rm);
-		return isAnonTypeName(elem.typeName) ? anonUnionCName(elem) : resolvedTypeCName(elem, true);
+		if (rm != null) return elemArrayCNameIn(roots, rm);
+		return isAnonTypeName(elem.typeName) ? anonUnionCNameIn(roots, elem) : resolvedTypeCNameIn(roots, elem, true);
 	}
 	if (elem.kind == TypeKind.GenericInstance) return monoInstanceName(elem);
 	if (elem.kind == TypeKind.Struct) {
-		return isAnonTypeName(elem.typeName) ? anonTypeName(elem) : resolvedTypeCName(elem, true);
+		return isAnonTypeName(elem.typeName) ? anonTypeNameIn(roots, elem) : resolvedTypeCNameIn(roots, elem, true);
 	}
 	return "void*";
+}
+
+function elemArrayCName(elem: Readonly<Type>): string {
+	return elemArrayCNameIn(buildModuleNameRoots(), elem);
 }
 
 // Single source for an array's C type name (structural arrays/tuples carry no
 // stored identity, so this is the one place the name is derived). genArrayType (codegen)
 // and destructorLifting (transform) both route through here — no parallel naming.
-export function arrayCTypeName(t: Readonly<Type>): string {
+export function arrayCTypeNameIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): string {
 	const elem = t.typeReturn;
 	if (elem == null) return "msRefArray";
 	// Awaitable element → getTypeDesc emits msFuture_X* (pointer) → msRefArray.
 	if (isAwaitable(elem)) return "msRefArray";
-	const ecn = elemArrayCName(elem);
+	const ecn = elemArrayCNameIn(roots, elem);
 	const elemIsRefArray = elem.kind == TypeKind.Ref && elem.typeReturn != null && elem.typeReturn.kind == TypeKind.Array;
 	const elemIsClass = elem.sym != null && elem.sym.symbolKind == SymbolKind.Class;
 	if (!elemIsRefArray && (ecn == "void*" || ecn.endsWith("*") || elemIsClass || isPointerType(elem))) return "msRefArray";
 	return getArrayTypeName(ecn);
 }
 
-export function isRuntimeArrayFamily(t: Readonly<Type>): boolean {
-	const name = arrayCTypeName(t);
+export function arrayCTypeName(t: Readonly<Type>): string {
+	return arrayCTypeNameIn(buildModuleNameRoots(), t);
+}
+
+export function isRuntimeArrayFamilyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): boolean {
+	const name = arrayCTypeNameIn(roots, t);
 	return name == "msNumberArray" || name == "msStringArray" || name == "msUint8Array"
 		|| name == "msClosureArray" || name == "msRefArray";
+}
+
+export function isRuntimeArrayFamily(t: Readonly<Type>): boolean {
+	return isRuntimeArrayFamilyIn(buildModuleNameRoots(), t);
 }
 
 export function refArrayCellName(t: Type): string {
@@ -1843,16 +1919,20 @@ function leadsWithEmptyAggregate(t: Readonly<Type | null>, depth: int32): boolea
 	return false;
 }
 
-function sizedArrayCTypeName(t: Readonly<Type>): string {
-	const elemType = t.typeReturn != null ? elemArrayCName(t.typeReturn) : "void*";
+function sizedArrayCTypeNameIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): string {
+	const elemType = t.typeReturn != null ? elemArrayCNameIn(roots, t.typeReturn) : "void*";
 	return `msSizedArray_${mangle(elemType)}_${t.typeValue}`;
+}
+
+function sizedArrayCTypeName(t: Readonly<Type>): string {
+	return sizedArrayCTypeNameIn(buildModuleNameRoots(), t);
 }
 
 function genSizedArrayType(g: CGen, t: Readonly<Type>): string {
 	const elemType = getTypeDesc(g, t.typeReturn);
 	const size = t.typeValue;
-	const key = typeKey(t);
-	const name = sizedArrayCTypeName(t);
+	const key = typeKeyIn(g.emissionFacts.moduleNameRoots!, t);
+	const name = sizedArrayCTypeNameIn(g.emissionFacts.moduleNameRoots!, t);
 
 	if (typeCacheHas(g.typeCache, key)) return typeCacheGet(g.typeCache, key);
 	typeCacheSet(g.typeCache, key, name);
@@ -1871,7 +1951,7 @@ function genSizedArrayType(g: CGen, t: Readonly<Type>): string {
 
 function genSpanType(g: CGen, t: Readonly<Type>): string {
 	const elemType = getTypeDesc(g, t.typeReturn);
-	const key = typeKey(t);
+	const key = typeKeyIn(g.emissionFacts.moduleNameRoots!, t);
 	const name = "msSpan_" + mangle(elemType);
 
 	if (typeCacheHas(g.typeCache, key)) return typeCacheGet(g.typeCache, key);
@@ -1895,7 +1975,7 @@ function genSpanType(g: CGen, t: Readonly<Type>): string {
 // Closure: msClosure { .fn, .env }. Raw function pointer for non-capturing.
 
 function genFunctionType(g: CGen, t: Readonly<Type>): string {
-	const key = typeKey(t);
+	const key = typeKeyIn(g.emissionFacts.moduleNameRoots!, t);
 	// Default to closure type
 	const cType = "msClosure";
 	typeCacheSet(g.typeCache, key, cType);
@@ -2018,7 +2098,7 @@ export function ensurePromiseAllInstance(g: CGen, arrT: Readonly<Type>): string 
 		return "msPromiseAllFor_msFuture_int64";
 	}
 	const futName = "msFuture_" + mangle(innerDesc);
-	const arrName = arrayCTypeName(arrT);
+	const arrName = arrayCTypeNameIn(g.emissionFacts.moduleNameRoots!, arrT);
 	const payloadName = getArrayContentType(arrName);
 	const copyStmt = shape == PromiseAllShape.Integer ? "MS_COPY_SAME" : "MS_COPY_BOXED_MOVE";
 	emitPromiseAllInstance(g, futName, innerDesc, innerDesc, arrName, payloadName, copyStmt, arrTypeInfo);
@@ -2052,7 +2132,7 @@ export function ensureFutureThenBoxedInstance(g: CGen, innerType: Readonly<Type>
 	if (hasAsgnFlag(innerType)) {
 		const hook = getOpByKeyIn(g.emissionFacts.hookOps!, innerType, AttachedOp.AttachedDestructor);
 		if (hook != null) {
-			drop = opCName(hook);
+			drop = opCNameIn(g.emissionFacts.moduleNameRoots!, hook);
 			ensureDrcProto(g, drop, hook);
 		}
 	}
@@ -2069,7 +2149,7 @@ export function ensureFutureThenBoxedInstance(g: CGen, innerType: Readonly<Type>
 
 export function genFutureType(g: CGen, t: Readonly<Type>): string {
 	const innerType = awaitedType(t);
-	const key = typeKey(t);
+	const key = typeKeyIn(g.emissionFacts.moduleNameRoots!, t);
 
 	// Promise<void> and Promise<never> → msFuture_void* (typedef of msFutureBase, predefined in future.h)
 	if (innerType == null || innerType.kind == TypeKind.Void || innerType.kind == TypeKind.Never) {
@@ -2115,7 +2195,7 @@ export function genFutureType(g: CGen, t: Readonly<Type>): string {
 // ===== Tuple Type Generation =====
 
 function genTupleType(g: CGen, t: Readonly<Type>): string {
-	const key = typeKey(t);
+	const key = typeKeyIn(g.emissionFacts.moduleNameRoots!, t);
 	if (typeCacheHas(g.typeCache, key)) return typeCacheGet(g.typeCache, key);
 
 	// tupleTypeName is the single source of the msTuple_<hash> name (analyzer, lifted
@@ -2516,7 +2596,7 @@ test "a TypeInfo requested for a type that has none is an error" {
 test "a generated $ type is spelled by its module-owned symbol in its hook base name" {
 	const owned = declaredHere(createStruct("$Env_probe_1", ["v"], [createPrimitive(TypeKind.String)], false));
 	owned.sym.modulePath = "/m/owner.ms";
-	const want = mangledTypeName(owned.sym, "$Env_probe_1");
+	const want = mangledTypeName(buildModuleNameRoots(), owned.sym, "$Env_probe_1");
 	assert hookBaseCName("$Env_probe_1", owned, null) == want;
 	const ownerless = declaredHere(createStruct("$Env_probe_2", ["v"], [createPrimitive(TypeKind.String)], false));
 	assert hookBaseCName("$Env_probe_2", ownerless, null) == "$Env_probe_2";
@@ -2526,7 +2606,7 @@ test "a hook base name comes from the type's own symbol, not from a table lookup
 	const cc = createContext();
 	const declared = declaredHere(createStruct("HookOwner", ["v"], [createPrimitive(TypeKind.String)], false));
 	declared.sym.modulePath = "/m/owner.ms";
-	assert hookBaseCName("HookOwner", declared, cc) == mangledTypeName(declared.sym, "HookOwner");
+	assert hookBaseCName("HookOwner", declared, cc) == mangledTypeName(buildModuleNameRoots(), declared.sym, "HookOwner");
 	let refused = "";
 	try {
 		hookBaseCName("Stray", createStruct("Stray", ["v"], [createPrimitive(TypeKind.String)], false), cc);

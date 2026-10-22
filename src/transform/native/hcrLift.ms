@@ -9,7 +9,7 @@ import { initFlagName } from "../lowering/moduleTdz";
 import { constantLiteralOf } from "../../checker/constFold";
 import { skipConvDfa } from "../../analyzer/alias";
 import { hcrSignatureKey } from "../../compiler/hcrAbi";
-import { mangledGlobalName } from "../../codegen/c/names";
+import { mangledGlobalName, buildModuleNameRoots } from "../../codegen/c/names";
 import { cStringLiteral } from "../../codegen/c/literals";
 import { TransformContext, reportTransformError } from "../context";
 import { walkNode } from "../walker";
@@ -174,7 +174,7 @@ function extractGlobal(stmt: Node, ctx: TransformContext, index: int32): HcrGlob
 	const fresh = makeHcrSymbol(`_ms_hcr_new${index}`, booleanType());
 	return {
 		sym, declType: t, storageType, initNode: d.initializer,
-		cName: mangledGlobalName(sym, d.declName),
+		cName: mangledGlobalName(buildModuleNameRoots(), sym, d.declName),
 		sourceName: d.declName,
 		key: "v:" + hcrSignatureKey(sym.symbolType),
 		pointer, fresh,

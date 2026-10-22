@@ -19,7 +19,7 @@ import { declGenericParams } from "./types";
 import { forEachChild } from "../ast/visitor";
 import { callDecoratorDefers, callCheckExpr } from "./checkerCallbacks";
 import { refuseComputedGotoDecorator } from "./computedGoto";
-import { mangleModuleName } from "../codegen/c/names";
+import { mangleModuleName, buildModuleNameRoots } from "../codegen/c/names";
 import { setOpByKey, getOpByKey } from "../codegen/c/types";
 
 // ===== Top-Level Collector =====
@@ -393,7 +393,7 @@ function reloadHandlerExportName(ctx: CheckerContext, dd: DecoratedDeclData, sym
 	}
 	const before = md.macroName == "beforeReload";
 	setFlag(sym, before ? SymbolFlag.BeforeReload : SymbolFlag.AfterReload);
-	return `${mangleModuleName(sym.modulePath)}__hcr${before ? "Before" : "After"}Reload__${declName}`;
+	return `${mangleModuleName(buildModuleNameRoots(), sym.modulePath)}__hcr${before ? "Before" : "After"}Reload__${declName}`;
 }
 
 function reloadHandlerMisuse(md: MacroInvocationData, dd: DecoratedDeclData, sym: Symbol): string {

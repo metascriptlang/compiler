@@ -9,6 +9,7 @@ import { TargetInfo, hostTargetInfo } from "../../checker/types";
 import { djb2, fingerprint, hashToHex } from "std/hash";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { headerIncludes } from "../../module/cimport/emit";
+import { ModuleNameRoots } from "./names";
 
 
 // ===== CSection — C file output sections (standard reference parity) =====
@@ -659,6 +660,7 @@ export class CEmissionFacts {
 	trace: string = "";
 	writes: string[] | null = null;
 	dispatchOverrides: HashMap<Symbol, Symbol[]> | null = null;
+	moduleNameRoots: ModuleNameRoots | null = null;
 	hookOps: HashMap<string, Symbol> | null = null;
 	placedInstances: HashMap<Symbol, Symbol> | null = null;
 }

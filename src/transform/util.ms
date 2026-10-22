@@ -7,7 +7,7 @@ import { literalBase, createFunction, createStruct, createArray, createPtr, numb
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
 import { requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
-import { mangleQualified, mangleModuleName } from "../codegen/c/names";
+import { mangleQualified, mangleModuleName, buildModuleNameRoots } from "../codegen/c/names";
 import { IdentCache, getIdentId, createIdentCache } from "../checker/idents";
 import { syntheticToken, makeNumber, makeIntNumber, makeString, makeBool } from "../checker/literalNodes";
 export { syntheticToken, makeNumber, makeIntNumber, makeString, makeBool } from "../checker/literalNodes";
@@ -322,7 +322,7 @@ export function receiverKind(t: Type | null): TypeKind {
 // without a declaring symbol (synthetic, test-only) keeps the bare name.
 export function typeHelperName(t: Type, bare: string): string {
 	if (t != null && t.sym != null && t.sym.modulePath != "") {
-		return mangleQualified(bare, mangleModuleName(t.sym.modulePath));
+		return mangleQualified(bare, mangleModuleName(buildModuleNameRoots(), t.sym.modulePath));
 	}
 	return bare;
 }

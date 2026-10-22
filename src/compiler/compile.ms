@@ -27,7 +27,7 @@ import { RaiserModule } from "../raiser/module";
 import { RaiserPrintSink } from "../raiser/marshal";
 import { RaiserValueKind } from "../raiser/value";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission, replayCModuleEmission } from "../codegen/c/index";
-import { isModuleGlobalVar, mangledFunctionName, mangledGlobalName, mangleModuleName, mangleProcName, mangleQualified, safeName, setModuleNameRoots, moduleDisplayPath } from "../codegen/c/names";
+import { isModuleGlobalVar, mangledFunctionName, mangledGlobalName, mangleModuleName, mangleProcName, mangleQualified, safeName, setModuleNameRoots, moduleDisplayPath, buildModuleNameRoots } from "../codegen/c/names";
 import { aliveSetHasDecl, aliveSetHasModule, aliveSetHasNamed, aliveSetImportsC, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
@@ -1442,7 +1442,7 @@ function bundleExportList(names: string[], locals: string[], extra: BundleExport
 			continue;
 		}
 		if (r.sym.declNode == null || r.sym.declNode.kind != NodeKind.EnumDecl) throw new Error(`internal: exported enum '${r.name}' has no declaration`);
-		const local = mangledGlobalName(r.sym, r.sym.name);
+		const local = mangledGlobalName(buildModuleNameRoots(), r.sym, r.sym.name);
 		if (!madeObjects.has(local)) {
 			madeObjects.add(local);
 			enumObjects = enumObjects + jsEnumObject(local, r.sym.declNode.data as EnumDeclData);
@@ -1733,7 +1733,7 @@ function hcrFunctionSymbol(fn: Symbol): string {
 	if (fn.exportName != "") return fn.exportName;
 	if (fn.nativeName != "") return fn.nativeName;
 	if (hasFlag(fn, SymbolFlag.ImportC)) return safeName(fn.name);
-	return mangleProcName(fn.name, mangleModuleName(fn.modulePath), fn.disamb);
+	return mangleProcName(fn.name, mangleModuleName(buildModuleNameRoots(), fn.modulePath), fn.disamb);
 }
 function hcrFunctionSlot(fn: Symbol): string {
 	if (fn.exportName != "") return fn.exportName;
@@ -3198,7 +3198,7 @@ resetLiftedOps();
 			// filename is free to be flat.
 			const emitDir = emitDirOf(opts);
 			ensureDir(emitDir);
-			const emitPath = `${emitDir}/${mangleModuleName(p.modPath)}.c`;
+			const emitPath = `${emitDir}/${mangleModuleName(buildModuleNameRoots(), p.modPath)}.c`;
 			writeOutput(emitPath, cCode);
 			printDiag(`${green("  Wrote")} ${bold(emitPath)}`);
 		} else {
@@ -3276,7 +3276,7 @@ resetLiftedOps();
 		for (const mp of hcrModulePaths) {
 			const output = moduleOutputFor(moduleOutputs, mp);
 			if (output == null) continue;
-			const imagePath = `${emitDir}/_hcrimage_${mangleModuleName(mp)}.c`;
+			const imagePath = `${emitDir}/_hcrimage_${mangleModuleName(buildModuleNameRoots(), mp)}.c`;
 			writeOutput(imagePath, genHcrImageDispatcher(output, mp == entryPath, dynamicPlan.lazy.has(mp)));
 			printDiag(`${green("  Wrote")} ${bold(imagePath)}`);
 		}
@@ -3330,7 +3330,7 @@ resetLiftedOps();
 				console.log(`${error("error")}: internal: HCR module '${mp}' produced no C output`);
 				throw new Error(BUILD_STOPPED);
 			}
-			pushDispatcherJob(cJobs, oSlots, `_hcrimage_${mangleModuleName(mp)}`, genHcrImageDispatcher(output, mp == entryPath, dynamicPlan.lazy.has(mp)), imageFlags, opts);
+			pushDispatcherJob(cJobs, oSlots, `_hcrimage_${mangleModuleName(buildModuleNameRoots(), mp)}`, genHcrImageDispatcher(output, mp == entryPath, dynamicPlan.lazy.has(mp)), imageFlags, opts);
 			hcrImageSlots.push(oSlots.length - 1);
 		}
 	} else {
@@ -3786,7 +3786,7 @@ function outRelForModule(modPath: string, projectRoot: string, stdRoot: string):
 	if (modPath.startsWith(rootPrefix)) {
 		return replaceExt(modPath.slice(rootPrefix.length, modPath.length), ".js");
 	}
-	return `_ext/${mangleModuleName(modPath)}.js`;
+	return `_ext/${mangleModuleName(buildModuleNameRoots(), modPath)}.js`;
 }
 
 interface JsInstanceFile {
@@ -3799,9 +3799,9 @@ function jsInstanceBindingName(node: Node): string {
 	const sym = node.resolvedSym;
 	if (sym == null || sym.instantiatedFrom == null || sym.modulePath == "") return "";
 	if (node.kind == NodeKind.FunctionDecl) {
-		return mangledFunctionName(sym, (node.data as FunctionDeclData).fnName, sym.overloadIdx);
+		return mangledFunctionName(buildModuleNameRoots(), sym, (node.data as FunctionDeclData).fnName, sym.overloadIdx);
 	}
-	if (node.kind == NodeKind.ClassDecl) return mangledGlobalName(sym, (node.data as ClassDeclData).className);
+	if (node.kind == NodeKind.ClassDecl) return mangledGlobalName(buildModuleNameRoots(), sym, (node.data as ClassDeclData).className);
 	return "";
 }
 

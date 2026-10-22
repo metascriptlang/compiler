@@ -74,7 +74,7 @@ function genNrvoCallExpr(g: CGen, p: CProc, callNode: Readonly<Node>, destVar: s
 	const winnerIdx = callOverloadWinner(callNode);
 	const winner = winnerIdx >= 0 && callNode.resolvedSym != null ? overloadAt(callNode.resolvedSym, winnerIdx) : null;
 	let callee = winner != null
-		? mangledFunctionName(winner, winner.name, winnerIdx)
+		? mangledFunctionName(g.emissionFacts.moduleNameRoots!, winner, winner.name, winnerIdx)
 		: genExpr(g, p, cd.callee);
 	// Resolve callee symbol + function type once (used for ABI shim + proto)
 	const nrvoSym = winner != null ? winner : (callNode.resolvedSym != null ? callNode.resolvedSym : cd.callee.resolvedSym);
@@ -422,7 +422,7 @@ function genExprStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 // opened BEFORE the initializer is generated: otherwise that preparation would
 // run on every call while only the store was guarded.
 function genStaticStorageVar(g: CGen, p: CProc, node: Readonly<Node>, d: Readonly<VariableDeclData>): void {
-	const slot = mangledGlobalName(node.resolvedSym, d.declName);
+	const slot = mangledGlobalName(g.emissionFacts.moduleNameRoots!, node.resolvedSym, d.declName);
 	let cType = "";
 	if (node.nodeType != null) {
 		cType = getTypeDesc(g, node.nodeType);
@@ -456,7 +456,7 @@ export function isComptimeOnlyVarDecl(node: Readonly<Node>): boolean {
 }
 
 function genNestedGlobalVar(g: CGen, p: CProc, node: Readonly<Node>, d: Readonly<VariableDeclData>): void {
-	const varName = mangledGlobalName(node.resolvedSym, d.declName);
+	const varName = mangledGlobalName(g.emissionFacts.moduleNameRoots!, node.resolvedSym, d.declName);
 	if (!nameSetHas(g.declaredGlobals, varName)) {
 		addLine(sec(g, CSection.GlobalVars), `${getTypeDesc(g, node.nodeType)} ${varName};`);
 		nameSetAdd(g.declaredGlobals, varName);

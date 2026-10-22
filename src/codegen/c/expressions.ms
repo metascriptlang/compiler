@@ -18,7 +18,7 @@ import {
 	isIndirectRef,
 } from "./context";
 import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, overloadAt, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit } from "./types";
+import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit, typeKeyIn } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
 import { ensureCrossModuleProto, copiesInline } from "./forward";
@@ -297,7 +297,7 @@ function variantStructCName(g: CGen, unionType: Readonly<Type>, varIdx: number, 
 			v = v.typeReturn;
 		}
 		if (v != null && v.kind == TypeKind.Struct) {
-			const cached = typeCacheGet(g.typeCache, typeKey(v));
+			const cached = typeCacheGet(g.typeCache, typeKeyIn(g.emissionFacts.moduleNameRoots!, v));
 			if (cached != "") return cached;
 		}
 	}
@@ -1106,7 +1106,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			&& node.nodeType != null) {
 			// Use the module-qualified name so the extern matches the defining
 			// module's declaration at link time (both sides emit the same C symbol).
-			const sName = mangledGlobalName(idSym, referenceName(idSym, d.name));
+			const sName = mangledGlobalName(g.emissionFacts.moduleNameRoots!, idSym, referenceName(idSym, d.name));
 			if (!nameSetHas(g.declaredGlobals, sName)) {
 				const cType = getTypeDesc(g, node.nodeType);
 				// The defining module emits a Solana rodata const as C `const`;
@@ -1123,7 +1123,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		} else if (idSym != null && idSym.symbolKind == SymbolKind.Function) {
 			// Ensure cross-module function has a forward declaration (needed for function
 			// pointers in closure literals — direct calls go through ensureCrossModuleProto)
-			const calleeName = mangledFunctionName(idSym, referenceName(idSym, d.name), idSym.overloadIdx);
+			const calleeName = mangledFunctionName(g.emissionFacts.moduleNameRoots!, idSym, referenceName(idSym, d.name), idSym.overloadIdx);
 			if (idSym.symbolType != null && idSym.modulePath != null && idSym.modulePath != ""
 					&& (idSym.modulePath != g.modulePath || copiesInline(g, idSym))) {
 				ensureCrossModuleProto(g, calleeName, idSym.symbolType, idSym);
@@ -1159,7 +1159,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 					: (nt.kind == TypeKind.EnumLiteral && nt.typeReturn != null && nt.typeReturn.kind == TypeKind.Enum ? nt.typeReturn : null);
 				if (enumT != null && d.name.startsWith(enumT.typeName + "_")) {
 					const member = d.name.slice(enumT.typeName.length + 1, d.name.length);
-					cName = mangledTypeName(enumT.sym, enumT.typeName) + "_" + mangle(member);
+					cName = mangledTypeName(g.emissionFacts.moduleNameRoots!, enumT.sym, enumT.typeName) + "_" + mangle(member);
 				} else {
 					cName = safe;
 				}
@@ -1169,7 +1169,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 				// cross-module extern block emits. isModuleGlobalVar already excludes
 				// enum members (they are SymbolKind.EnumMember, not Variable), so we
 				// don't need a nodeType-based guard here.
-				cName = mangledGlobalName(idSym, referenceName(idSym, d.name));
+				cName = mangledGlobalName(g.emissionFacts.moduleNameRoots!, idSym, referenceName(idSym, d.name));
 				if (idSym != null && hasFlag(idSym, SymbolFlag.StaticLocal) && node.nodeType != null && !nameSetHas(g.declaredGlobals, cName)) {
 					addLine(sec(g, CSection.GlobalVars), `static ${getTypeDesc(g, node.nodeType)} ${cName};`);
 					nameSetAdd(g.declaredGlobals, cName);
@@ -1763,16 +1763,16 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		if (d.object.resolvedSym != null && d.object.resolvedSym.symbolKind == SymbolKind.Module) {
 			const nsSym = node.resolvedSym;
 			if (nsSym != null && nsSym.symbolKind == SymbolKind.Function) {
-				const fnName = mangledFunctionName(nsSym, referenceName(nsSym, d.property), nsSym.overloadIdx);
+				const fnName = mangledFunctionName(g.emissionFacts.moduleNameRoots!, nsSym, referenceName(nsSym, d.property), nsSym.overloadIdx);
 				ensureCrossModuleProto(g, fnName, nsSym.symbolType, nsSym);
 				ctx.results.push(fnName);
 			} else if (nsSym != null && isTypeSymbol(nsSym)) {
-				ctx.results.push(mangledGlobalName(nsSym, referenceName(nsSym, d.property)));
+				ctx.results.push(mangledGlobalName(g.emissionFacts.moduleNameRoots!, nsSym, referenceName(nsSym, d.property)));
 			} else if (nsSym != null) {
 				// Constants/variables: module-qualified name so the extern matches
 				// the defining module's declaration. Property name is the original
 				// identifier post-alias-unwrap (handled inside mangledGlobalName).
-				const sName = mangledGlobalName(nsSym, referenceName(nsSym, d.property));
+				const sName = mangledGlobalName(g.emissionFacts.moduleNameRoots!, nsSym, referenceName(nsSym, d.property));
 				if (node.nodeType != null && !nameSetHas(g.declaredGlobals, sName)) {
 					const cType = getTypeDesc(g, node.nodeType);
 					addLine(sec(g, CSection.GlobalVars), `extern ${cType} ${sName};`);
@@ -1787,7 +1787,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 
 		// Static property access: emit global variable name (ClassName.prop → ClassName__prop)
 		if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.Static)) {
-			const staticCName = staticFieldCName(node.resolvedSym);
+			const staticCName = staticFieldCName(g.emissionFacts.moduleNameRoots!, node.resolvedSym);
 			// Declared in every module that reads it. The owning module also defines
 			// it, and an extern next to the definition is legal C — so this needs no
 			// knowledge of which module we are in, which a prelude symbol cannot give.
@@ -1956,7 +1956,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					} else if (idSym != null && idSym.nativeName != "") {
 						cName = idSym.nativeName;
 					} else if (isModuleGlobalVar(idSym)) {
-						cName = mangledGlobalName(idSym, referenceName(idSym, rawName));
+						cName = mangledGlobalName(g.emissionFacts.moduleNameRoots!, idSym, referenceName(idSym, rawName));
 					} else {
 						const mapped = lookupLocalName(p, safe);
 						cName = mapped != "" ? mapped : safe;
@@ -2770,7 +2770,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 			return;
 		}
 		const ovIdx = emitIdx >= 0 ? emitIdx : 0;
-		const ovCalleeName = mangledFunctionName(emitSym, emitSym.name, ovIdx);
+		const ovCalleeName = mangledFunctionName(g.emissionFacts.moduleNameRoots!, emitSym, emitSym.name, ovIdx);
 		// On-demand cross-module prototype (reference parity: genProcPrototype)
 		ensureCrossModuleProto(g, ovCalleeName, ovType, emitSym != null ? emitSym : sym);
 		const ovRet = (ovType != null && ovType.kind == TypeKind.Function) ? ovType.typeReturn : null;
@@ -3109,7 +3109,7 @@ function ensureMethodDispatcher(g: CGen, baseSym: Readonly<Symbol>, calleeName: 
 	addLine(s, `static ${retC} ${dispName}(${params}) {`);
 	for (const ov of overrides) {
 		if (ov.symbolType == null || ov.symbolType.typeChildren.length == 0) continue;
-		const ovName = mangledFunctionName(ov, ov.name, ov.overloadIdx);
+		const ovName = mangledFunctionName(g.emissionFacts.moduleNameRoots!, ov, ov.name, ov.overloadIdx);
 		if (ov.modulePath != null && ov.modulePath != "" && ov.modulePath != g.modulePath) {
 			ensureCrossModuleProto(g, ovName, ov.symbolType, ov);
 		}
