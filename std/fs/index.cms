@@ -47,7 +47,7 @@ when (windows) {
 	extern function msFsModifiedTime(path: string): number;
 	extern function msFsChangeStamp(path: string): string;
 
-	function existsKernel(path: string): boolean { return exists(path); }
+	function existsKernel(path: string): boolean { return msFsExists(path) == 1; }
 	function isFileKernel(path: string): boolean { return msFsIsFile(path) == 1; }
 	function isDirKernel(path: string): boolean { return msFsIsDir(path) == 1; }
 	function fileSizeKernel(path: string): number { return msFsFileSize(path); }
