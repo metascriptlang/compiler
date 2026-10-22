@@ -1,7 +1,7 @@
 import {
 	RaiserValue, RaiserValueKind, RaiserArrayHeap, RaiserObjectHeap,
 	raiserNil, handleIndex, raiserArray, raiserObject,
-	heapAllocArray, heapAllocObject, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectSetField, rcIncref,
+	heapAllocArray, heapAllocArrayOf, arrayBaseOf, heapAllocObject, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectSetField, rcIncref,
 	createArrayHeap, createStructHeap, heapObjectGetField, raiserInt, rcDecref, fieldNameAt, appendField, objectFieldCount, fieldValueAt,
 	RaiserClassType, RaiserObjectData, RAISER_NO_CLASS, createClassType, layOutObject, fieldStoreAt, heapAllocBox, raiserFloat, raiserBool
 } from "./value";
@@ -74,7 +74,7 @@ export function copyTypedValue(
 	}
 	const plan = plans[index];
 	if (plan.kind == RaiserCopyKind.Array && value.kind == RaiserValueKind.Array) {
-		const handle = heapAllocArray(arrays);
+		const handle = heapAllocArrayOf(arrays, arrayBaseOf(arrays, arrays.arrays[handleIndex(value.intVal)]).elemClass);
 		const count = heapArrayLen(arrays, value.intVal);
 		for (let i = 0; i < count; i = i + 1) {
 			const copied = copyTypedValue(arrays, objects, heapArrayGet(arrays, value.intVal, i), plans, plan.children[0]);

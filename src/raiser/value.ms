@@ -544,8 +544,13 @@ test "array" { assert raiserToString(createArrayHeap(), raiserArray(0)) == "[arr
 // Arrays live on a side heap. RaiserValue with kind=Array stores an integer handle
 // in intVal that indexes into the heap. Reference semantics (shared handle).
 
+// An array holds its elements in the class its NewArray names: a Word, Float or Bool element as raw
+// bits and a Ref element as its handle (0 is nil), both in `words`, or any other element as a value in
+// `items`. A view holds only the array it stands on, as the one value of `items`.
 export interface RaiserArrayData {
 	items: RaiserValue[];
+	words: int64[];
+	elemClass: RaiserRegClass;
 	rc: int32;
 	color: int32;
 	viewOff: int64;
@@ -566,11 +571,17 @@ export function createArrayHeap(): RaiserArrayHeap {
 }
 
 export function heapAllocArray(heap: RaiserArrayHeap): int64 {
+	return heapAllocArrayOf(heap, RaiserRegClass.Dyn);
+}
+
+export function heapAllocArrayOf(heap: RaiserArrayHeap, elemClass: RaiserRegClass): int64 {
 	if (heap.freeList.length > 0) {
 		const reused = heap.freeList[heap.freeList.length - 1];
 		heap.freeList.length = heap.freeList.length - 1;
 		const data = heap.arrays[reused];
 		data.items.length = 0;
+		data.words.length = 0;
+		data.elemClass = elemClass;
 		data.rc = 0;
 		data.color = 0;
 		data.viewOff = -1;
@@ -579,7 +590,8 @@ export function heapAllocArray(heap: RaiserArrayHeap): int64 {
 	}
 	const idx = heap.arrays.length;
 	const items: RaiserValue[] = [];
-	const data: RaiserArrayData = { items, rc: 0, color: 0, viewOff: -1, viewLen: 0 };
+	const words: int64[] = [];
+	const data: RaiserArrayData = { items, words, elemClass, rc: 0, color: 0, viewOff: -1, viewLen: 0 };
 	heap.arrays.push(data);
 	return makeHandle(idx, RaiserHeapKind.Array);
 }
@@ -598,43 +610,100 @@ export function heapArrayIsView(heap: RaiserArrayHeap, handle: int64): boolean {
 	return heap.arrays[handleIndex(handle)].viewOff >= 0;
 }
 
+// The number of values the array holds: its elements, or the one array a view stands on.
+export function arrayHeldCount(data: RaiserArrayData): number {
+	return data.elemClass == RaiserRegClass.Dyn ? data.items.length : data.words.length;
+}
+
+// Whether any held value can be a heap reference.
+export function arrayHoldsHandles(data: RaiserArrayData): boolean {
+	return data.elemClass == RaiserRegClass.Dyn || data.elemClass == RaiserRegClass.Ref;
+}
+
+// The value held at `index`, read in the array's element class.
+export function arrayHeldAt(data: RaiserArrayData, index: number): RaiserValue {
+	return match (data.elemClass) {
+		RaiserRegClass.Dyn => data.items[index],
+		RaiserRegClass.Word => raiserInt(data.words[index]),
+		RaiserRegClass.Float => raiserFloat(msBitsFloat64(data.words[index])),
+		RaiserRegClass.Bool => raiserBool(data.words[index] != 0),
+		RaiserRegClass.Ref => handleValue(data.words[index]),
+	};
+}
+
+// "" when the array can hold the value, otherwise why it cannot.
+export function arrayRefusal(data: RaiserArrayData, val: RaiserValue): string {
+	if (slotFits(data.elemClass, val)) return "";
+	return `internal: an array of ${regClassLetter(data.elemClass)} elements got a value of kind ${val.kind}`;
+}
+
+// Stores a value at `index` without counting: the array takes over the caller's count of it.
+export function arrayHeldStore(data: RaiserArrayData, index: number, val: RaiserValue): void {
+	if (data.elemClass == RaiserRegClass.Dyn) {
+		data.items[index] = val;
+		return;
+	}
+	const refused = arrayRefusal(data, val);
+	if (refused != "") throw new Error(refused);
+	data.words[index] = slotWord(data.elemClass, val);
+}
+
+function arrayHeldPush(data: RaiserArrayData, val: RaiserValue): void {
+	if (data.elemClass == RaiserRegClass.Dyn) {
+		const copy: RaiserValue = { kind: val.kind, intVal: val.intVal, floatVal: val.floatVal };
+		data.items.push(copy);
+		return;
+	}
+	const refused = arrayRefusal(data, val);
+	if (refused != "") throw new Error(refused);
+	data.words.push(slotWord(data.elemClass, val));
+}
+
+// The array a view stands on, or the array itself.
+export function arrayBaseOf(heap: RaiserArrayHeap, data: RaiserArrayData): RaiserArrayData {
+	return data.viewOff >= 0 ? heap.arrays[handleIndex(data.items[0].intVal)] : data;
+}
+
 export function heapArrayLen(heap: RaiserArrayHeap, handle: int64): int32 {
 	const data = heap.arrays[handleIndex(handle)];
-	return data.viewOff >= 0 ? data.viewLen : data.items.length;
+	return data.viewOff >= 0 ? data.viewLen : arrayHeldCount(data) as int32;
 }
 
 export function heapArrayGet(heap: RaiserArrayHeap, handle: int64, index: int64): RaiserValue {
 	const data = heap.arrays[handleIndex(handle)];
-	if (data.viewOff >= 0) return heap.arrays[handleIndex(data.items[0].intVal)].items[data.viewOff + index];
-	return data.items[index];
+	if (data.viewOff >= 0) return arrayHeldAt(arrayBaseOf(heap, data), (data.viewOff + index) as number);
+	return arrayHeldAt(data, index as number);
 }
 
 export function heapArraySet(heap: RaiserArrayHeap, handle: int64, index: int64, val: RaiserValue): void {
 	const data = heap.arrays[handleIndex(handle)];
 	if (data.viewOff >= 0) {
-		heap.arrays[handleIndex(data.items[0].intVal)].items[data.viewOff + index] = val;
+		arrayHeldStore(arrayBaseOf(heap, data), (data.viewOff + index) as number, val);
 		return;
 	}
-	// Deep copy to avoid pointer aliasing
-	data.items[index] = val;
+	arrayHeldStore(data, index as number, val);
 }
 
 export function heapArrayPush(heap: RaiserArrayHeap, handle: int64, val: RaiserValue): void {
-	// Deep copy to avoid pointer aliasing (register values are shared objects)
-	const copy: RaiserValue = { kind: val.kind, intVal: val.intVal, floatVal: val.floatVal };
-	heap.arrays[handleIndex(handle)].items.push(copy);
+	arrayHeldPush(heap.arrays[handleIndex(handle)], val);
 }
 
 // The only shrink primitive on the heap: truncate drops references (arena
-// regime — no per-value RC), extend pads with nil copies.
+// regime — no per-value RC), extend pads with the zero of the element class.
 export function heapArraySetLen(heap: RaiserArrayHeap, handle: int64, newLen: int64): void {
-	const items = heap.arrays[handleIndex(handle)].items;
-	if (newLen < items.length) {
-		items.shrink(newLen < 0 ? 0 : newLen);
+	const data = heap.arrays[handleIndex(handle)];
+	const target = newLen < 0 ? 0 : newLen;
+	if (data.elemClass != RaiserRegClass.Dyn) {
+		if (target < data.words.length) data.words.shrink(target);
+		while (data.words.length < target) data.words.push(0);
+		return;
+	}
+	if (newLen < data.items.length) {
+		data.items.shrink(target);
 	} else {
-		while (items.length < newLen) {
+		while (data.items.length < newLen) {
 			const nilCopy: RaiserValue = { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0 };
-			items.push(nilCopy);
+			data.items.push(nilCopy);
 		}
 	}
 }
@@ -1050,10 +1119,16 @@ function rcDestroyString(arrHeap: RaiserArrayHeap, index: int64): void {
 @noinline
 function rcDestroyArray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, index: int64): void {
 	const data = arrHeap.arrays[index];
+	if (data.elemClass == RaiserRegClass.Ref) {
+		for (const handle of data.words) {
+			if (handle != 0) rcDecrefHandle(arrHeap, objHeap, handle);
+		}
+	}
 	for (const item of data.items) {
 		rcDecref(arrHeap, objHeap, item);
 	}
 	data.items.length = 0;
+	data.words.length = 0;
 	arrHeap.freeList.push(index);
 }
 
@@ -1175,7 +1250,7 @@ function copyArrayShell(srcArr: RaiserArrayHeap, dstArr: RaiserArrayHeap, val: R
 		if (!isArray) throw new Error("internal: a copied element address must have an array owner");
 		return raiserNil();
 	}
-	const dstHandle = heapAllocArray(dstArr);
+	const dstHandle = heapAllocArrayOf(dstArr, srcArr.arrays[handleIndex(val.intVal)].elemClass);
 	map.arrays.set(val.intVal, dstHandle);
 	map.jobs.push({ kind: RaiserCopyKind.Array, source: raiserArray(val.intVal), dst: dstHandle });
 	return isArray ? raiserArray(dstHandle) : raiserElemAddr(dstHandle, val.floatVal as int64);
@@ -1215,9 +1290,9 @@ function copyShell(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: Ra
 
 function fillArray(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, job: RaiserCopyJob, map: RaiserCopyMap): void {
 	const source = srcArr.arrays[handleIndex(job.source.intVal)];
-	const items = source.items;
-	for (let i = 0; i < items.length; i = i + 1) {
-		const copied = copyShell(srcArr, srcObj, dstArr, dstObj, items[i], map);
+	const held = arrayHeldCount(source);
+	for (let i = 0; i < held; i = i + 1) {
+		const copied = copyShell(srcArr, srcObj, dstArr, dstObj, arrayHeldAt(source, i), map);
 		heapArrayPush(dstArr, job.dst, copied);
 		rcIncref(dstArr, dstObj, copied);
 	}

@@ -1,7 +1,7 @@
 import { Type, TypeKind, TypeFlag } from "../../ast/node";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
 import { distinctBody, enumMemberValue, isMaybeType, isStructType, needsValueCopy, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase } from "../../checker/types";
-import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
 import { isMetaWireSym } from "../../compiler/meta/nodeSym";
 import { peelToRepr, unwrapRef } from "../../checker/types";
@@ -164,7 +164,7 @@ function emitZeroOf(s: RaiserCompState, valueType: Type | null, open: Type[]): i
 	const t = zeroShape(valueType);
 	if (t != null && (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray)) {
 		const array = allocRef(s);
-		emitInst(s, raiserABC(RaiserOpcode.NewArray, array, 0, 0));
+		emitInst(s, newArrayInst(s, array, 0, t.typeReturn));
 		if (t.kind == TypeKind.SizedArray) {
 			const count = allocWord(s);
 			emitLoadConst(s, count, raiserInt(t.typeValue as int64));
@@ -296,6 +296,11 @@ export function fieldInst(s: RaiserCompState, t: Type | null, name: string, byNa
 	if (slot < 0 || slot > MAX_SLOT) return raiserABC(byName, a, b, c);
 	const value = bySlot == RaiserOpcode.LoadSlot ? a : c;
 	return classOfReg(s, value as int32) == slotKindsOf(s, t)[slot] ? slotInst(bySlot, a, b, c, slot) : raiserABC(byName, a, b, c);
+}
+
+// An array holds its elements in the register class of their type.
+export function newArrayInst(s: RaiserCompState, dest: number, count: number, elementType: Type | null): RaiserInstruction {
+	return slotInst(RaiserOpcode.NewArray, dest, count, 0, arrayClassSlot(regClassOf(s, elementType)));
 }
 
 export function allocFor(s: RaiserCompState, t: Type | null): int32 {

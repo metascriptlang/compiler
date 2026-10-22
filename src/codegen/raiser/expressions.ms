@@ -19,7 +19,7 @@ import { RaiserValueKind, createClassType, raiserInt, raiserFloat, raiserNil, ra
 import { lookupHost } from "../../raiser/hostRegistry";
 import { opName } from "../../raiser/disasm";
 import { resolveRuntimeDir } from "../../utils/path";
-import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, fieldInst } from "./valueCopy";
+import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, fieldInst, newArrayInst } from "./valueCopy";
 import { placedInstanceOf } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
 import { runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase } from "../../checker/types";
@@ -2030,7 +2030,7 @@ function compileObjectLiteral(s: RaiserCompState, node: Node): int32 {
 function compileNewArray(s: RaiserCompState, node: Node, arrayType: Type): int32 {
 	const d = node.data as NewExprData;
 	const array = allocRef(s);
-	emitInst(s, raiserABC(RaiserOpcode.NewArray, array, 0, 0));
+	emitInst(s, newArrayInst(s, array, 0, arrayType.typeReturn));
 	if (d.newArguments.length == 1) {
 		const count = allocWord(s);
 		emitInst(s, raiserABC(RaiserOpcode.Conv, count, compileExpr(s, d.newArguments[0]), RaiserConvClass.I64));
@@ -2102,7 +2102,7 @@ function compileArrayLiteral(s: RaiserCompState, node: Node): int32 {
 		}
 	}
 
-	emitInst(s, raiserABC(RaiserOpcode.NewArray, dest, elemCount, 0));
+	emitInst(s, newArrayInst(s, dest, elemCount, node.nodeType != null ? getElementType(unwrapRef(node.nodeType)) : null));
 	const sized = node.nodeType != null ? unwrapRef(node.nodeType) : null;
 	if (sized != null && sized.kind == TypeKind.SizedArray && sized.typeValue > elemCount) {
 		const tail = allocWord(s);
@@ -2116,7 +2116,7 @@ function compileSpreadArrayLiteral(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as ArrayLiteralData;
 	const elementType = node.nodeType != null ? getElementType(unwrapRef(node.nodeType)) : null;
 	const dest = allocRef(s);
-	emitInst(s, raiserABC(RaiserOpcode.NewArray, dest, 0, 0));
+	emitInst(s, newArrayInst(s, dest, 0, elementType));
 	for (const e of d.elements) {
 		if (e.kind == NodeKind.SpreadExpr) {
 			appendSpreadSource(s, dest, (e.data as SpreadExprData).spreadArg, elementType);

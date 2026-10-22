@@ -3,12 +3,12 @@
 import {
 	RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, convClassBits, convClassSigned, convTarget, convSource, convOperand,
 	raiserABC, raiserABx, raiserAx, RaiserCombine, regClassLetter, operandKind, OPERAND_TAGGED, OPERAND_RAW, OPERAND_BARE, operandTagged,
-	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE
+	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE, slotArrayClass
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue,
 	raiserNil, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserArray, raiserToString,
-	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
+	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayBaseOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectData, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, heapBoxLive,
 	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap,
@@ -2980,7 +2980,7 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			vmHandleConv(vm, ia, ib, ic);
 		},
 		RaiserOpcode.NewArray => {
-			vmHandleNewArray(vm, func, ia, ib, ic);
+			vmHandleNewArray(vm, func, pc, ia, ib, ic);
 		},
 		RaiserOpcode.LoadIndex => {
 			vmHandleLoadIndex(vm, ia, ib, ic);
@@ -3307,11 +3307,12 @@ function vmHandleCallClosure(vm: RaiserVM, ia: int32, ib: int32, ic: int32): voi
 
 // --- Array opcode handlers ---
 
-function vmHandleNewArray(vm: RaiserVM, func: RaiserFunction, ia: int32, ib: int32, ic: int32): void {
-	const handle = heapAllocArray(vm.arrayHeap);
+function vmHandleNewArray(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: int32, ib: int32, ic: int32): void {
+	const handle = heapAllocArrayOf(vm.arrayHeap, slotArrayClass(((func.packed[pc] >> 56) & 255) as number));
 	const elemCount = ib;
 	for (let i = 0; i < elemCount; i = i + 1) {
 		const elem = getDyn(vm, func.blocks[ic + 4 + i] as int32);
+		if (vmElemRefused(vm, handle, elem)) return;
 		heapArrayPush(vm.arrayHeap, handle, elem);
 		vmIncref(vm, elem);
 	}
@@ -3327,6 +3328,14 @@ function vmHeapOperand(vm: RaiserVM, v: RaiserValue, kind: RaiserValueKind, expe
 		vmError(vm, `expected ${expected}, got value kind ${v.kind}`);
 	}
 	return -1;
+}
+
+// Whether the array cannot hold the value; the run stops with the reason. A view holds what the array it stands on does.
+function vmElemRefused(vm: RaiserVM, handle: int64, val: RaiserValue): boolean {
+	const refused = arrayRefusal(arrayBaseOf(vm.arrayHeap, vm.arrayHeap.arrays[handleIndex(handle)]), val);
+	if (refused == "") return false;
+	vmError(vm, refused);
+	return true;
 }
 
 function vmElemIndex(vm: RaiserVM, handle: int64, idx: int64): boolean {
@@ -3386,6 +3395,7 @@ function vmHandleStoreDeref(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 	} else if (ptr.kind == RaiserValueKind.ElemAddr) {
 		const idx = ptr.floatVal as int64;
 		if (!vmElemIndex(vm, ptr.intVal, idx)) return;
+		if (vmElemRefused(vm, ptr.intVal, val)) return;
 		vmIncref(vm, val);
 		vmDecref(vm, heapArrayGet(vm.arrayHeap, ptr.intVal, idx));
 		heapArraySet(vm.arrayHeap, ptr.intVal, idx, val);
@@ -3435,6 +3445,7 @@ function vmHandleStoreIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void
 	if (idx < 0 || idx >= arrLen) {
 		vmError(vm, `array index out of bounds: ${idx} (length ${arrLen})`); return;
 	}
+	if (vmElemRefused(vm, handle, val)) return;
 	vmIncref(vm, val);
 	vmDecref(vm, heapArrayGet(vm.arrayHeap, handle, idx));
 	heapArraySet(vm.arrayHeap, handle, idx, val);
@@ -3462,6 +3473,7 @@ function vmHandleArrayPush(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 	if (heapArrayIsView(vm.arrayHeap, handle)) {
 		vmError(vm, "cannot push to a slice"); return;
 	}
+	if (vmElemRefused(vm, handle, val)) return;
 	heapArrayPush(vm.arrayHeap, handle, val);
 	vmIncref(vm, val);
 }
@@ -3484,8 +3496,10 @@ function vmHandleArraySetLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): voi
 	if (heapArrayIsView(vm.arrayHeap, handle)) {
 		vmError(vm, "cannot set the length of a slice"); return;
 	}
-	const held = vm.arrayHeap.arrays[handleIndex(handle)].items;
-	for (let i = lenVal.intVal < 0 ? 0 : lenVal.intVal; i < held.length; i += 1) vmDecref(vm, held[i]);
+	const held = vm.arrayHeap.arrays[handleIndex(handle)];
+	if (arrayHoldsHandles(held)) {
+		for (let i = (lenVal.intVal < 0 ? 0 : lenVal.intVal) as number; i < arrayHeldCount(held); i += 1) vmDecref(vm, arrayHeldAt(held, i));
+	}
 	heapArraySetLen(vm.arrayHeap, handle, lenVal.intVal);
 }
 

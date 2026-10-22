@@ -1381,6 +1381,73 @@ test "orc: a ring through three plain array fields frees each array once" {
 	assert vm.arrayHeap.freeList.length <= vm.arrayHeap.arrays.length, `${vm.arrayHeap.freeList.length} free of ${vm.arrayHeap.arrays.length}`;
 }
 
+test "untag: an array holds scalar elements as raw words, references as handles and a union as values" {
+	const vm = evalOrcVM("const n: int32[] = [1, 2, 3]; const f: float64[] = [1.5, 2.5]; const b: boolean[] = [true, false]; const s: string[] = ['x' + n.length.toString()]; const u: (int32 | string | null)[] = [7, 'y', null];"
+		+ " n.push(4); f[1] = 3.5; const sl = n[1..3];"
+		+ " console.log(`${n[3]} ${f[1]} ${b[0]} ${s[0]} ${u[0]} ${u[1]} ${u[2]} ${sl.length} ${sl[0]} ${sl[1]}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "4 3.5 true x3 7 y null 2 2 3\n", vm.output;
+	let words = 0;
+	let floats = 0;
+	let bools = 0;
+	let refs = 0;
+	let dyns = 0;
+	for (const a of vm.arrayHeap.arrays) {
+		if (a.rc == 0) continue;
+		if (a.viewOff >= 0) {
+			assert a.elemClass == RaiserRegClass.Dyn && a.items.length == 1 && a.words.length == 0;
+		} else if (a.elemClass == RaiserRegClass.Word && a.words.length == 4) {
+			words += 1;
+			assert a.words[0] == 1 && a.words[3] == 4 && a.items.length == 0;
+		} else if (a.elemClass == RaiserRegClass.Float && a.words.length == 2) {
+			floats += 1;
+			assert a.words[0] == 4609434218613702656 && a.words[1] == 4615063718147915776;
+		} else if (a.elemClass == RaiserRegClass.Bool && a.words.length == 2) {
+			bools += 1;
+			assert a.words[0] == 1 && a.words[1] == 0;
+		} else if (a.elemClass == RaiserRegClass.Ref && a.words.length == 1) {
+			refs += 1;
+			assert heapStringText(vm.arrayHeap, handleValue(a.words[0])) == "x3" && a.items.length == 0;
+		} else if (a.elemClass == RaiserRegClass.Dyn && a.items.length == 3) {
+			dyns += 1;
+			assert a.items[0].kind == RaiserValueKind.Int && a.items[1].kind == RaiserValueKind.String && a.items[2].kind == RaiserValueKind.Nil && a.words.length == 0;
+		}
+	}
+	assert words == 1 && floats == 1 && bools == 1 && refs == 1 && dyns == 1, `${words} ${floats} ${bools} ${refs} ${dyns}`;
+}
+
+test "untag: a store the element class cannot hold through a wider alias stops the run naming the class" {
+	const vm = evalOrcVM("const n: int32[] = [1, 2]; const wide: (int32 | string)[] = n as (int32 | string)[]; wide.push('late'); console.log('unreachable');");
+	assert vm.error.indexOf("an array of W elements got a value of kind") >= 0, vm.error;
+}
+
+test "ledger: reference elements count what they hold through push, store, self-store, truncation, a view and a copy" {
+	const vm = evalOrcVM("class N { s: string = ''; }"
+		+ " const a: string[] = []; for (let i = 0; i < 4; i++) a.push('v' + i.toString());"
+		+ " a[1] = 'w' + a.length.toString(); a[0] = a[0]; a[2] = a[3]; const v = a[1..3]; const vs = `${v[0]} ${v[1]}`; a.setLength(2);"
+		+ " const objs: N[] = []; for (let i = 0; i < 3; i++) { const n = new N(); n.s = 'o' + i.toString(); objs.push(n); }"
+		+ " objs[0] = objs[2]; const keep = objs[1]; const copy = [...a, 'tail'];"
+		+ " console.log(`${a.length} ${a[1]} ${vs} ${objs[0].s} ${keep.s} ${copy.length} ${copy[2]}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "2 w4 w4 v3 o2 o1 3 tail\n", vm.output;
+}
+
+test "orc: a cycle through a reference array and one through a union array are collected, and a word array is not traced" {
+	const vm = evalOrcVM("class C { kids: C[] = []; }"
+		+ " const lookalike: int64[] = [3, 4, 11, 12, 19, 20, 27, 28];"
+		+ " class M { mixed: (M | int32 | null)[] = []; } function ring(): void { const a = new C(); const b = new C(); a.kids.push(b); b.kids.push(a); const c = new M(); const d = new M(); c.mixed.push(d); c.mixed.push(5); d.mixed.push(c); d.mixed.push(null); }"
+		+ " for (let i = 0; i < 300; i++) ring(); console.log(`ok ${lookalike[3]}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "ok 12\n", vm.output;
+	assert vm.objectHeap.objects.length < 600, `${vm.objectHeap.objects.length}`;
+	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
+	let live = 0;
+	for (let i = 0; i < vm.arrayHeap.arrays.length; i += 1) {
+		if (vm.arrayHeap.arrays[i].rc > 0) live += 1;
+	}
+	assert live == 1, `${live}`;
+}
+
 // --- Phase 3 Integration Tests ---
 // These tests verify features that require transforms to work.
 test "match expression returns value" {

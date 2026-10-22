@@ -15,7 +15,7 @@ import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, makeHandle, handleIndex, raiserArray, raiserObject,
 	RaiserArrayHeap, RaiserObjectHeap, rcDecref,
 	createArrayHeap, createStructHeap, heapAllocArray, heapAllocObject,
-	heapObjectSetField, heapArrayPush, rcIncref, heldHandle, objectFieldCount, fieldValueAt
+	heapObjectSetField, heapArrayPush, rcIncref, heldHandle, objectFieldCount, fieldValueAt, arrayHoldsHandles, arrayHeldCount, arrayHeldAt
 } from "./value";
 
 const COL_BLACK = 0;   // in use / alive (alloc default)
@@ -62,7 +62,11 @@ function incRcRaw(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: Rai
 
 function pushChildren(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue, work: RaiserValue[]): void {
 	if (v.kind == RaiserValueKind.Array) {
-		for (const child of arrHeap.arrays[handleIndex(v.intVal)].items) {
+		const data = arrHeap.arrays[handleIndex(v.intVal)];
+		if (!arrayHoldsHandles(data)) return;
+		const count = arrayHeldCount(data);
+		for (let i = 0; i < count; i += 1) {
+			const child = arrayHeldAt(data, i);
 			if (isRef(child)) work.push(heldHandle(child));
 		}
 	} else {
@@ -144,7 +148,11 @@ function collectWhite(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held:
 		setColorOf(arrHeap, objHeap, v, COL_GRAY);
 		toFree.push(v);
 		if (v.kind == RaiserValueKind.Array) {
-			for (const child of arrHeap.arrays[handleIndex(v.intVal)].items) releaseWhiteChild(arrHeap, objHeap, child, work);
+			const data = arrHeap.arrays[handleIndex(v.intVal)];
+			if (arrayHoldsHandles(data)) {
+				const count = arrayHeldCount(data);
+				for (let i = 0; i < count; i += 1) releaseWhiteChild(arrHeap, objHeap, arrayHeldAt(data, i), work);
+			}
 		} else {
 			const obj = objHeap.objects[handleIndex(v.intVal)];
 			const count = objectFieldCount(obj);
@@ -158,6 +166,7 @@ function freeCollected(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, toFr
 		if (v.kind == RaiserValueKind.Array) {
 			const data = arrHeap.arrays[handleIndex(v.intVal)];
 			data.items.length = 0;
+			data.words.length = 0;
 			data.rc = 0;
 			data.color = COL_BLACK;
 			arrHeap.freeList.push(handleIndex(v.intVal));

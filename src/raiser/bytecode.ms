@@ -36,7 +36,7 @@ export enum RaiserOpcode {
 	Print,            // ABC: debug print R[A]
 
 	// Array operations (5)
-	NewArray,         // ABC: R[A] = new array from R[A+1..A+B]
+	NewArray,         // ABC: R[A] = new array from R[A+1..A+B], holding elements of the class the instruction's slot names (arrayClassSlot)
 	LoadIndex,        // ABC: R[A] = R[B][R[C]]
 	StoreIndex,       // ABC: R[A][R[B]] = R[C]
 	ArrayLen,         // ABC: R[A] = len(R[B])
@@ -551,8 +551,20 @@ export function branchOffset(field: number): int64 {
 	return (field as int64) - BRANCH_EXCESS;
 }
 
+// A NewArray's slot is 0 for an array of tagged values and the element class plus one otherwise, so
+// an instruction built without a slot makes the array that holds anything.
+export function arrayClassSlot(cls: RaiserRegClass): number {
+	return cls == RaiserRegClass.Dyn ? 0 : (cls as number) + 1;
+}
+
+export function slotArrayClass(slot: number): RaiserRegClass {
+	if (slot < 0 || slot > 5) throw new Error(`internal: NewArray slot ${slot} names no element class`);
+	return slot == 0 ? RaiserRegClass.Dyn : (slot - 1) as RaiserRegClass;
+}
+
 export function carriesSlot(op: RaiserOpcode): boolean {
 	return match (op) {
+		RaiserOpcode.NewArray => true,
 		RaiserOpcode.LoadSlot | RaiserOpcode.StoreSlot | RaiserOpcode.LoadSlotW | RaiserOpcode.LoadSlotR | RaiserOpcode.StoreSlotW | RaiserOpcode.StoreSlotR => true,
 		_ => false,
 	};
