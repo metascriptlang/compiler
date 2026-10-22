@@ -10,6 +10,7 @@ import { isGlobalImport } from "./prelude";
 import { getParserDefines } from "../parser/context";
 import { definedValue } from "../compiler/defines";
 import { ModuleGraph } from "../module/graph";
+import { isCHeaderPath } from "../module/loader";
 import { getModuleDir, appendFlag, findChar } from "../utils/string";
 import { isDigit } from "../lexer/chars";
 import { normalize } from "std/fs/path";
@@ -1377,6 +1378,13 @@ function stripModuleExtension(path: string): string {
 	return path;
 }
 
+// Importing a C header includes it in the importer's C, as `@include` does, so a C declaration
+// the importer writes itself (an `extern function`) sees the header's types and prototypes.
+function includeHeader(ctx: CheckerContext, path: string): void {
+	if (ctx.includeDirectives.split("\n").includes(path)) return;
+	ctx.includeDirectives = ctx.includeDirectives == "" ? path : `${ctx.includeDirectives}\n${path}`;
+}
+
 function collectImport(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ImportDeclData;
 
@@ -1390,6 +1398,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 
 	// Resolve types from ExportRegistry
 	const sourcePath = resolveImportSourcePath(ctx, d.importSource);
+	if (isCHeaderPath(sourcePath)) includeHeader(ctx, sourcePath);
 
 	// Namespace import: import * as ns from "path"
 	// Create a Module symbol only. Individual exports are resolved on demand
