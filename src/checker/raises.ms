@@ -2,7 +2,7 @@ import { AttachedOp, Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, Ca
 import { forEachChild } from "../ast/visitor";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { dispatchEntryFor, dispatchOverridesFor } from "./context";
-import { getOpByKey } from "../codegen/c/types";
+import { getOpByKeyIn, hookOps } from "../codegen/c/types";
 
 enum CallRaise { Never, Can, AsBody }
 
@@ -12,9 +12,25 @@ interface RoutineInfo {
 	callees: Symbol[];
 }
 
-let _raisesNothing: HashSet<Symbol> = new HashSet<Symbol>();
-let _closureTargets: HashMap<Symbol, Cursor<Readonly<Symbol>>> = new HashMap<Symbol, Cursor<Readonly<Symbol>>>();
-let _tempWrites: HashMap<Symbol, int32> = new HashMap<Symbol, int32>();
+interface RaiseTables {
+	raisesNothing: HashSet<Symbol>;
+	closureTargets: HashMap<Symbol, Cursor<Readonly<Symbol>>>;
+	tempWrites: HashMap<Symbol, int32>;
+	bodies: HashSet<Symbol>;
+	ops: HashMap<string, Symbol>;
+}
+
+function freshRaiseTables(ops: HashMap<string, Symbol>): RaiseTables {
+	return {
+		raisesNothing: new HashSet<Symbol>(),
+		closureTargets: new HashMap<Symbol, Cursor<Readonly<Symbol>>>(),
+		tempWrites: new HashMap<Symbol, int32>(),
+		bodies: new HashSet<Symbol>(),
+		ops: ops,
+	};
+}
+
+let _tables: RaiseTables = freshRaiseTables(new HashMap<string, Symbol>());
 let _routines: HashMap<Symbol, RoutineInfo> = new HashMap<Symbol, RoutineInfo>();
 let _order: RoutineInfo[] = [];
 let _siteInfos: RoutineInfo[] = [];
@@ -24,13 +40,9 @@ let _walkInfo: RoutineInfo | null = null;
 let _walkCaught = false;
 let _holdFound = false;
 let _blindBroken = false;
-let _bodies: HashSet<Symbol> = new HashSet<Symbol>();
 
 export function resetRaises(): void {
-	_raisesNothing = new HashSet<Symbol>();
-	_closureTargets = new HashMap<Symbol, Cursor<Readonly<Symbol>>>();
-	_tempWrites = new HashMap<Symbol, int32>();
-	_bodies = new HashSet<Symbol>();
+	_tables = freshRaiseTables(hookOps());
 }
 
 function closurePairTarget(value: Readonly<Node> | null): Readonly<Symbol | null> {
@@ -52,10 +64,10 @@ function tempOf(target: Node | null): Symbol | null {
 }
 
 function noteTempWrite(sym: Symbol, value: Node | null): void {
-	const seen = _tempWrites.get(sym);
-	_tempWrites.set(sym, seen == null ? 1 : seen + 1);
+	const seen = _tables.tempWrites.get(sym);
+	_tables.tempWrites.set(sym, seen == null ? 1 : seen + 1);
 	const target = closurePairTarget(value);
-	if (target != null) _closureTargets.set(sym, target);
+	if (target != null) _tables.closureTargets.set(sym, target);
 }
 
 function noteTempWrites(node: Node): void {
@@ -77,14 +89,14 @@ function noteTempWrites(node: Node): void {
 	}
 }
 
-function calleeTarget(call: Readonly<Node>): Readonly<Symbol | null> {
+function calleeTarget(tables: Readonly<RaiseTables>, call: Readonly<Node>): Readonly<Symbol | null> {
 	const callee = (call.data as CallExprData).callee;
 	const sym = callee.resolvedSym;
 	if (sym == null) return closurePairTarget(callee);
-	if (hasFlag(sym, SymbolFlag.DestroyOp)) return destroyRoutine(sym, (call.data as CallExprData).arguments) ?? sym;
+	if (hasFlag(sym, SymbolFlag.DestroyOp)) return destroyRoutine(tables, sym, (call.data as CallExprData).arguments) ?? sym;
 	if (isOverloadSignature(sym)) return implementationOf(call);
-	const bound = _closureTargets.get(sym);
-	return bound != null && _tempWrites.get(sym) == 1 ? bound : sym;
+	const bound = tables.closureTargets.readonlyGet(sym);
+	return bound != null && tables.tempWrites.readonlyGet(sym) == 1 ? bound : sym;
 }
 
 function isOverloadSignature(sym: Readonly<Symbol>): boolean {
@@ -113,22 +125,22 @@ function isDispatched(sym: Readonly<Symbol>): boolean {
 
 // A destroy raises as the routine it runs: a lifted or user destroy by its own body, a runtime
 // release by the destroy lifted for the released type. One with no body to read never raises.
-function destroyRoutine(sym: Readonly<Symbol>, args: Readonly<Node[]>): Readonly<Symbol | null> {
-	if (_bodies.has(sym) && !hasFlag(sym, SymbolFlag.ImportC)) return sym;
+function destroyRoutine(tables: Readonly<RaiseTables>, sym: Readonly<Symbol>, args: Readonly<Node[]>): Readonly<Symbol | null> {
+	if (tables.bodies.has(sym) && !hasFlag(sym, SymbolFlag.ImportC)) return sym;
 	if (args.length == 0 || args[0].nodeType == null) return null;
-	const op = releasedTypeDestroy(args[0].nodeType!);
-	return op != null && _bodies.has(op) ? op : null;
+	const op = releasedTypeDestroy(tables.ops, args[0].nodeType!);
+	return op != null && tables.bodies.has(op) ? op : null;
 }
 
 // A class value is a ref whose destroy is lifted for the object it points at.
-function releasedTypeDestroy(t: Readonly<Type>): Readonly<Symbol | null> {
-	const own = getOpByKey(t, AttachedOp.AttachedDestructor);
+function releasedTypeDestroy(ops: Readonly<HashMap<string, Symbol>>, t: Readonly<Type>): Readonly<Symbol | null> {
+	const own = getOpByKeyIn(ops, t, AttachedOp.AttachedDestructor);
 	if (own != null || t.kind != TypeKind.Ref || t.typeReturn == null) return own;
-	return getOpByKey(t.typeReturn!, AttachedOp.AttachedDestructor);
+	return getOpByKeyIn(ops, t.typeReturn!, AttachedOp.AttachedDestructor);
 }
 
 function classifyCall(call: Readonly<Node>): CallRaise {
-	return classifyTarget(calleeTarget(call), (call.data as CallExprData).arguments);
+	return classifyTarget(calleeTarget(_tables, call), (call.data as CallExprData).arguments);
 }
 
 // A `new` runs the constructor routine, so it raises as that routine does; one with no routine symbol keeps the check.
@@ -141,7 +153,7 @@ function classifyNew(node: Readonly<Node>): CallRaise {
 function classifyTarget(sym: Readonly<Symbol | null>, args: Readonly<Node[]>): CallRaise {
 	if (sym == null) return CallRaise.Can;
 	if (hasFlag(sym, SymbolFlag.Throws)) return CallRaise.Can;
-	if (hasFlag(sym, SymbolFlag.DestroyOp)) return destroyRoutine(sym, args) != null ? CallRaise.AsBody : CallRaise.Never;
+	if (hasFlag(sym, SymbolFlag.DestroyOp)) return destroyRoutine(_tables, sym, args) != null ? CallRaise.AsBody : CallRaise.Never;
 	if (hasFlag(sym, SymbolFlag.GeneratedOp) || hasFlag(sym, SymbolFlag.WasMovedOp)) return CallRaise.Never;
 	if (hasFlag(sym, SymbolFlag.ImportC)) return passesRoutine(args) ? CallRaise.Can : CallRaise.Never;
 	if (hasFlag(sym, SymbolFlag.NeverRaises)) return CallRaise.Never;
@@ -254,7 +266,7 @@ function noteSiteVerdict(node: Node, info: RoutineInfo): void {
 		noteVerdict(classifyNew(node), node.resolvedSym, info);
 		return;
 	}
-	const callee = calleeTarget(node);
+	const callee = calleeTarget(_tables, node);
 	noteVerdict(classifyTarget(callee, (node.data as CallExprData).arguments), callee, info);
 }
 
@@ -265,7 +277,7 @@ export function inferRaises(programs: Node[]): void {
 		if (program == null) continue;
 		for (const stmt of (program.data as ProgramData).programStmts) walkProgram(stmt);
 	}
-	for (const info of _order) _bodies.add(info.sym);
+	for (const info of _order) _tables.bodies.add(info.sym);
 	for (let i = 0; i < _siteNodes.length; i += 1) noteSiteVerdict(_siteNodes[i], _siteInfos[i]);
 	const callers = new HashMap<Symbol, RoutineInfo[]>();
 	for (const info of _order) {
@@ -290,7 +302,7 @@ export function inferRaises(programs: Node[]): void {
 		}
 	}
 	for (const info of _order) {
-		if (!info.raises) _raisesNothing.add(info.sym);
+		if (!info.raises) _tables.raisesNothing.add(info.sym);
 	}
 	for (const value of _statementValues) markValue(value);
 	resetWalk();
@@ -314,13 +326,13 @@ function markValue(value: Node): void {
 
 export function callCanRaise(call: Readonly<Node>): boolean {
 	const verdict = classifyCall(call);
-	if (verdict == CallRaise.AsBody) return !_raisesNothing.has(calleeTarget(call)!);
+	if (verdict == CallRaise.AsBody) return !_tables.raisesNothing.has(calleeTarget(_tables, call)!);
 	return verdict == CallRaise.Can;
 }
 
 export function newCanRaise(node: Readonly<Node>): boolean {
 	const verdict = classifyNew(node);
-	if (verdict == CallRaise.AsBody) return !_raisesNothing.has(node.resolvedSym!);
+	if (verdict == CallRaise.AsBody) return !_tables.raisesNothing.has(node.resolvedSym!);
 	return verdict == CallRaise.Can;
 }
 
@@ -358,7 +370,7 @@ function blindStep(node: Node | null): void {
 
 function destroyRaisesNothing(call: Readonly<Node>): boolean {
 	const sym = (call.data as CallExprData).callee.resolvedSym;
-	return sym != null && hasFlag(sym, SymbolFlag.DestroyOp) && _raisesNothing.has(calleeTarget(call)!);
+	return sym != null && hasFlag(sym, SymbolFlag.DestroyOp) && _tables.raisesNothing.has(calleeTarget(_tables, call)!);
 }
 
 // Marks each finally block that runs without touching the error flag, so codegen reads the verdict
