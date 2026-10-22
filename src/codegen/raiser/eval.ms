@@ -1554,7 +1554,17 @@ test "closure pair multi-field env (no transforms)" {
 test "engine: a call through a closure is one CallClosure that reads the pair itself" {
 	const f = compiledFunc("function apply(f: (x: int64) => int64, n: int64): int64 { return f(n); } console.log(`${apply((x: int64): int64 => x + 1, 2)}`);", "apply");
 	const text = disasmFunc(f);
-	assert countNamed(f, "CallClosure") == 1 && countNamed(f, "CallIndirect") == 0 && countNamed(f, "IsKind") == 0 && !text.includes("LoadSlot"), text;
+	assert countNamed(f, "CallClosureTyped") == 1 && countNamed(f, "CallClosure") == 0 && countNamed(f, "CallIndirect") == 0 && countNamed(f, "IsKind") == 0 && !text.includes("LoadSlot"), text;
+}
+
+test "engine: a call through a function-typed value takes the typed site for any parameter class, with and without an env" {
+	const code = "class P { v: int64 = 4; } function twice(f: (p: P, y: float64, s: string) => string, p: P): string { return f(p, 1.5, 'a') + f(p, 2.5, 'b'); }"
+		+ " const k = 7; console.log(twice((p: P, y: float64, s: string): string => s + `${p.v + k} ${y}`, new P()) + twice((p: P, y: float64, s: string): string => s + `${p.v} ${y}`, new P()));";
+	const f = compiledFunc(code, "twice");
+	assert countNamed(f, "CallClosureTyped") == 2 && countNamed(f, "CallClosure") == 0, disasmFunc(f);
+	const vm = evalOrcVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "a11 1.5b11 2.5a4 1.5b4 2.5\n", vm.output;
 }
 
 test "a closure call passes its env or none, reads its callee before the arguments, and lets a throw through" {

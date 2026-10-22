@@ -213,9 +213,10 @@ export enum RaiserOpcode {
 	LoadSlotR,        // ABC: LoadSlot into a Ref register
 	StoreSlotW,       // ABC: StoreSlot from a Word register
 	StoreSlotR,       // ABC: StoreSlot from a Ref register
+	CallClosureTyped, // ABC: CallClosure at a site whose callee has a declared function type, which the checker only lets hold a pair of that signature; a danger build trusts the pair and the signature
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.StoreSlotR;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.CallClosureTyped;
 
 // How FutureCombine settles its result from its inputs (Promise.all, race, any).
 export enum RaiserCombine {
@@ -356,7 +357,7 @@ function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.StoreDeref => "x-x",
 		RaiserOpcode.Call | RaiserOpcode.CallDirect | RaiserOpcode.CallHost | RaiserOpcode.FutureCombine => "x--",
 		RaiserOpcode.CallIndirect => "xi-",
-		RaiserOpcode.CallClosure => "xr-",
+		RaiserOpcode.CallClosure | RaiserOpcode.CallClosureTyped => "xr-",
 		RaiserOpcode.Spawn | RaiserOpcode.Await | RaiserOpcode.FutureSettle | RaiserOpcode.FutureFail => "xx-",
 		RaiserOpcode.Sleep => "xx-",
 		RaiserOpcode.Finally | RaiserOpcode.FinallyEnd => "e--",
@@ -389,7 +390,7 @@ export function operandKind(op: RaiserOpcode, slot: int32): int32 {
 }
 
 export function opHasSite(op: RaiserOpcode): boolean {
-	return op == RaiserOpcode.Call || op == RaiserOpcode.CallDirect || op == RaiserOpcode.CallIndirect || op == RaiserOpcode.CallClosure || op == RaiserOpcode.CallHost || op == RaiserOpcode.FutureCombine || op == RaiserOpcode.NewArray;
+	return op == RaiserOpcode.Call || op == RaiserOpcode.CallDirect || op == RaiserOpcode.CallIndirect || op == RaiserOpcode.CallClosure || op == RaiserOpcode.CallClosureTyped || op == RaiserOpcode.CallHost || op == RaiserOpcode.FutureCombine || op == RaiserOpcode.NewArray;
 }
 
 // How many registers follow A as the arguments of a site opcode: the count sits in C, or in B for NewArray.

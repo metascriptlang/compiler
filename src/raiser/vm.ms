@@ -1845,14 +1845,16 @@ function sigPrefix(sig: int64, count: int64): int64 {
 
 // The function a closure pair laid out as `fn`, `env` calls when its signature matches the site's,
 // with a non-nil env written into the site's last register; -1 sends the call to vmHandleCallClosure.
-function closureTarget(vm: RaiserVM, func: RaiserFunction, handle: int64, rb: int32, site: int32): int64 {
+function closureTarget(vm: RaiserVM, func: RaiserFunction, handle: int64, rb: int32, site: int32, typed: boolean): int64 {
 	if (handleTag(handle) != (RaiserHeapKind.Object as int64)) return -1;
 	when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) return -1; }
 	const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
-	if (obj.slots.length != 2 || slotKind(obj, 0) != RaiserRegClass.Word || slotKind(obj, 1) != RaiserRegClass.Ref) return -1;
+	let trusted = false;
+	when (mode == "danger") { trusted = typed; }
+	if (!trusted && (obj.slots.length != 2 || slotKind(obj, 0) != RaiserRegClass.Word || slotKind(obj, 1) != RaiserRegClass.Ref)) return -1;
 	when (mode != "danger") { if (obj.classType.fields[0] != "fn" || obj.classType.fields[1] != "env") return -1; }
 	const target = obj.slots[0];
-	if (target < 0 || target >= vm.mod.functions.length) return -1;
+	if (!trusted && (target < 0 || target >= vm.mod.functions.length)) return -1;
 	const env = obj.slots[1];
 	let argc = func.blocks[site + 2];
 	let sig = func.blocks[site + 3];
@@ -1860,8 +1862,10 @@ function closureTarget(vm: RaiserVM, func: RaiserFunction, handle: int64, rb: in
 		argc = argc - 1;
 		sig = sigPrefix(sig, argc);
 	}
-	const callee: Cursor<RaiserFunction> = vm.mod.functions[target];
-	if (sig < 0 || argc >= callee.sigs.length || callee.sigs[argc] != sig) return -1;
+	if (!trusted) {
+		const callee: Cursor<RaiserFunction> = vm.mod.functions[target];
+		if (sig < 0 || argc >= callee.sigs.length || callee.sigs[argc] != sig) return -1;
+	}
 	if (env != 0) writeRef(vm, rb + ((func.blocks[site + 3 + argc] as int32) >> 3), env);
 	return target;
 }
@@ -2024,12 +2028,12 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				}
 				break;
 			}
-			case RaiserOpcode.CallClosure: {
+			case RaiserOpcode.CallClosure: case RaiserOpcode.CallClosureTyped: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
 				const depth = vm.callStack.depth;
-				const target = depth < MAX_CALL_DEPTH ? closureTarget(vm, func, refs[rb + ib], rb, ic) : -1;
+				const target = depth < MAX_CALL_DEPTH ? closureTarget(vm, func, refs[rb + ib], rb, ic, op == RaiserOpcode.CallClosureTyped) : -1;
 				if (target >= 0) {
 					const callee: Cursor<RaiserFunction> = mod.functions[target];
 					if (depth == vm.callStack.items.length) {
@@ -3078,7 +3082,7 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		RaiserOpcode.CallIndirect => {
 			vmHandleCallIndirect(vm, ia, ib, ic);
 		},
-		RaiserOpcode.CallClosure => {
+		RaiserOpcode.CallClosure | RaiserOpcode.CallClosureTyped => {
 			vmHandleCallClosure(vm, ia, ib, ic);
 		},
 		RaiserOpcode.Ret => {

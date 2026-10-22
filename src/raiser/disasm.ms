@@ -71,6 +71,7 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.ArraySlice => "ArraySlice",
 		RaiserOpcode.CallIndirect => "CallIndirect",
 		RaiserOpcode.CallClosure => "CallClosure",
+		RaiserOpcode.CallClosureTyped => "CallClosureTyped",
 		RaiserOpcode.AddF64 => "AddF64",
 		RaiserOpcode.SubF64 => "SubF64",
 		RaiserOpcode.MulF64 => "MulF64",

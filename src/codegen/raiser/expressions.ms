@@ -1862,7 +1862,7 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 		compileExprInto(s, d.arguments[i], dest + 1 + slot);
 		slot = slot + 1;
 	}
-	emitInst(s, raiserABC(RaiserOpcode.CallClosure, dest, closureReg, argCount + 1));
+	emitInst(s, raiserABC(declaredParams != null ? RaiserOpcode.CallClosureTyped : RaiserOpcode.CallClosure, dest, closureReg, argCount + 1));
 	return dest;
 }
 
