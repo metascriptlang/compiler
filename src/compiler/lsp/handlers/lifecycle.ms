@@ -1226,12 +1226,16 @@ const RECHECK_SOURCE = "import { Result } from \"std/core/system\";\n"
 	+ "import { bump } from \"./dep\";\n"
 	+ "function foo(x: number): number { return bump(x) + 1; }\nconst y = foo(42);";
 
-function recheckDb(): TransAmDb {
-	const db = testDb("file:///test.ms", RECHECK_SOURCE);
-	dbSetFileText(db, "/dep.ms", "export function bump(x: number): number { return x + 1; }");
-	const user = getFileId(db.fileInput, "/test.ms");
-	recordModuleImport(db.moduleDeps, user, getFileId(db.fileInput, "/dep.ms"));
+function recheckDb(dir: string): TransAmDb {
+	const db = testDb(`file://${dir}/test.ms`, RECHECK_SOURCE);
+	dbSetFileText(db, `${dir}/dep.ms`, "export function bump(x: number): number { return x + 1; }");
+	const user = getFileId(db.fileInput, `${dir}/test.ms`);
+	recordModuleImport(db.moduleDeps, user, getFileId(db.fileInput, `${dir}/dep.ms`));
 	return db;
+}
+
+function bindWork(db: TransAmDb): string {
+	return `bound=${db.cache.bound} collected=${db.cache.collected}`;
 }
 
 function recomputedSince(db: TransAmDb, revision: int32): string[] {
@@ -1258,20 +1262,23 @@ function checkedType(db: TransAmDb, path: string, name: string): string {
 }
 
 test "a fresh check computes each query of the file and its import once" {
-	const db = recheckDb();
-	assert checkedType(db, "/test.ms", "y") == "number";
+	const db = recheckDb("/fresh");
+	assert checkedType(db, "/fresh/test.ms", "y") == "number";
 	const recomputed = recomputedSince(db, 0).join(",");
-	const expected = "Preprocess /test.ms,Parse /test.ms,Preprocess /dep.ms,Parse /dep.ms"
-		+ ",TypeCheck /test.ms";
+	const expected = "Preprocess /fresh/test.ms,Parse /fresh/test.ms,Preprocess /fresh/dep.ms,Parse /fresh/dep.ms"
+		+ ",TypeCheck /fresh/test.ms";
 	assert recomputed == expected, recomputed;
 	assert recomputeCount(db) == 5;
+	assert bindWork(db) == "bound=2 collected=1", bindWork(db);
 }
 
 test "re-checking a body edit recomputes only the edited file's parse and check" {
-	const path = "/test.ms";
-	const db = recheckDb();
+	const path = "/body/test.ms";
+	const db = recheckDb("/body");
 	assert checkedType(db, path, "y") == "number";
 	const entries = db.cache.entries.length;
+	const bound = db.cache.bound;
+	const collected = db.cache.collected;
 	assert dbSetFileText(db, path, RECHECK_SOURCE.replace("bump(x) + 1", "bump(x) + 2"));
 	const revision = db.revision.value;
 	const before = recomputeCount(db);
@@ -1281,11 +1288,13 @@ test "re-checking a body edit recomputes only the edited file's parse and check"
 	assert recomputed.join(",") == expected, recomputed.join(",");
 	assert recomputeCount(db) - before == 3;
 	assert db.cache.entries.length == entries;
+	assert db.cache.bound - bound == 2 && db.cache.collected - collected == 0, bindWork(db);
 	const hits = db.cache.hits;
 	const ctx = dbTypeCheck(db, path);
 	assert dbTypeCheck(db, path) == ctx;
 	assert db.cache.hits - hits == 2;
 	assert recomputeCount(db) - before == 3;
+	assert db.cache.bound - bound == 2 && db.cache.collected - collected == 0, bindWork(db);
 }
 
 test "re-checking an importer after a dependency body edit reuses the importer's parse" {
@@ -1297,6 +1306,7 @@ test "re-checking an importer after a dependency body edit reuses the importer's
 	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, user), getFileId(db.fileInput, dep));
 	dbParse(db, dep);
 	assert checkedType(db, user, "n") == "int32";
+	assert bindWork(db) == "bound=2 collected=1", bindWork(db);
 	const marked = db.cache.marked;
 	assert dbSetFileText(db, dep, "export function one(): int32 { return 2; }");
 	assert db.cache.marked - marked == 5;
@@ -1311,6 +1321,7 @@ test "re-checking an importer after a dependency body edit reuses the importer's
 	const parseKey = createQueryKey(TaQueryKind.Parse, getFileId(db.fileInput, user));
 	const userParse = cacheGet(db.cache, parseKey);
 	assert userParse.computedAt < revision && userParse.verifiedAt == db.revision.value;
+	assert bindWork(db) == "bound=4 collected=2", bindWork(db);
 }
 
 const DEP_WITH_PCT = "export struct Dice { seed: int32; }\nexport function pct(this dice: Dice, k: int32): int32 { return dice.seed + k; }\n";
