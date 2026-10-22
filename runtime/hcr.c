@@ -720,6 +720,7 @@ static int32_t msHcrGuarded(MsHcrGuardCall* call) {
 	guard.address = 0;
 	MsHcrGuard* volatile outer = msHcrGuardActive;
 	volatile unsigned long outerOwner = msHcrGuardOwner;
+	const msDropState drop = msSlabTLS.drop;
 	msHcrGuardReason[0] = 0;
 	msHcrGuardInstall();
 #if defined(_WIN32)
@@ -745,6 +746,7 @@ static int32_t msHcrGuarded(MsHcrGuardCall* call) {
 #if defined(_WIN32)
 	if (kind == MS_HCR_GUARD_FAULT && code == EXCEPTION_STACK_OVERFLOW) _resetstkoflw();
 #endif
+	if (kind == MS_HCR_GUARD_FAULT || kind == MS_HCR_GUARD_FATAL) msDropRestore(&drop);
 	if (kind == MS_HCR_GUARD_FAULT) {
 		snprintf(msHcrGuardReason, sizeof(msHcrGuardReason), "%s at %p", msHcrGuardFaultName(code), (void*)address);
 	} else if (kind == MS_HCR_GUARD_FATAL) {

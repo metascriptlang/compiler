@@ -110,9 +110,22 @@ void msLedgerDestroy(void* p, const msTypeInfo* type);
 #define MS_SLAB_BUCKETS 4
 #define MS_SLAB_LIMIT 256      /* max cached entries per bucket (prevents unbounded growth) */
 
+/* Keep the range test: a stack pointer above floor + span (an alternate signal stack, a
+ * stack the thread did not report) has no known headroom and must drain, never recurse. */
+typedef struct {
+	uintptr_t floor;
+	uintptr_t span;
+	void* cur;
+	void** data;
+	int32_t len;
+	int32_t cap;
+	int32_t base;
+} msDropState;
+
 typedef struct msSlab {
 	void* free[MS_SLAB_BUCKETS];       /* free-list heads per bucket */
 	int32_t count[MS_SLAB_BUCKETS];    /* entries per bucket */
+	msDropState drop;
 } msSlab;
 
 MS_TLS_EXTERN(msSlab, msSlabTLS);
@@ -311,6 +324,50 @@ static inline void msDestroyAndDispose(void* p) {
 		MS_HCR_COUNT(h->type, -1);
 		msSlabFree(h, h->allocSize);
 	}
+}
+
+static inline void msDropDispose(msSlab* slab, void* p) {
+	msRefHeader* h = msHeader(p);
+#ifdef MSGC_ORC
+	if (h->rootIdx >= 0) msUnregisterCycle(p);
+#endif
+	MS_HCR_COUNT(h->type, -1);
+	int b = msSlabBucket(h->allocSize);
+	if (b >= 0 && slab->count[b] < MS_SLAB_LIMIT) {
+		*(void**)h = slab->free[b];
+		slab->free[b] = h;
+		slab->count[b]++;
+		return;
+	}
+	free(h);
+}
+
+static inline __attribute__((always_inline)) uintptr_t msStackPointer(void) {
+	uintptr_t sp;
+#if defined(__aarch64__)
+	__asm__("mov %0, sp" : "=r"(sp));
+#elif defined(__x86_64__)
+	__asm__("mov %%rsp, %0" : "=r"(sp));
+#else
+	sp = (uintptr_t)__builtin_frame_address(0);
+#endif
+	return sp;
+}
+
+typedef void (*msDropCont)(void* owner, void* arg);
+
+bool msDropEdgeSlow(void* owner, void* p);
+void msDropDefer(void* owner, void* fn, void* arg);
+void msDropRestore(const msDropState* saved);
+
+static inline bool msDropEdgeLast(void* owner, void* p) {
+	msSlab* s = &msSlabTLS;
+	if (msStackPointer() - s->drop.floor < s->drop.span) {
+		MS_DESTROY_DISPATCH(msHeader(p)->type, p);
+		msDropDispose(s, p);
+		return false;
+	}
+	return msDropEdgeSlow(owner, p);
 }
 
 #define msWasMoved(p) ((p) = NULL)

@@ -479,6 +479,9 @@ static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 #define msPtrWasMoved(p)      do { (p) = (void*)0; } while(0)
 #define msIncrefCyclic(p)     ((void)0)
 #define msDecrefCyclic(p)     ((void)0)
+#define msDecrefEdge(o, p)    ((void)(o), false)
+#define msDecrefCyclicEdge(o, p) ((void)(o), false)
+#define msDropDefer(o, f, a)  ((void)(o), (void)(f), (void)(a))
 #define msAtomicIncref(p)     ((void)0)
 #define msAtomicDecref(p)     ((void)0)
 

@@ -414,6 +414,26 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msDecrefCyclic(p)     msDecref(p)
 #endif
 
+#define MS_DECREF_EDGE(owner, p, isLast) ({ \
+	void* __msEdgeP = (void*)(p); \
+	bool __msEdgeQueued = false; \
+	if (__msEdgeP != NULL) { \
+		const msTypeInfo* __t = msHeader(__msEdgeP)->type; \
+		if (__t != NULL && (__t->flags & MS_TYPE_FLAG_FUTURE)) { \
+			msFutureDeferredRelease(__msEdgeP); \
+		} else if (isLast(__msEdgeP)) { \
+			__msEdgeQueued = msDropEdgeLast((void*)(owner), __msEdgeP); \
+		} \
+	} \
+	__msEdgeQueued; \
+})
+#define msDecrefEdge(owner, p) MS_DECREF_EDGE(owner, p, msDecRefIsLast)
+#ifdef MSGC_ORC
+#define msDecrefCyclicEdge(owner, p) MS_DECREF_EDGE(owner, p, msOrcDecRefIsLast)
+#else
+#define msDecrefCyclicEdge(owner, p) MS_DECREF_EDGE(owner, p, msDecRefIsLast)
+#endif
+
 /* --- Cyclic ref =copy: incref new, assign, decref old AFTER assign (Nim attachedAsgn
  * isCyclic order — old's destroy may collect; dest must already hold the new value) --- */
 #define msRefCopyCyclic(d, s) do { \
