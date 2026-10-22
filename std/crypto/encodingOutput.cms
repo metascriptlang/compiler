@@ -2,29 +2,47 @@
 @include("stdint.h");
 
 extern function newString(length: int64): string from "msStringNewLen";
-extern function stringCapacity(value: string): int64 from "msStringCapacity";
+extern function isUnallocatedOrLiteral(value: string): boolean from "msIsLiteral";
 extern function prepareStore(ref value: string): void from "msStringPrepareMutation";
 extern const nativeSizeMax: uint64 from "SIZE_MAX";
 extern const stringCapacityMask: uint64 from "MS_CAP_MASK";
 
 export type EncodingIndex = int64;
+export extern const emptyEncoding: string from "MS_EMPTY_STRING";
 
 const STRING_HEADER_AND_TERMINATOR_BYTES: uint64 = 9;
 
+@noinline
+function rejectEncodingLength(): void {
+	throw new RangeError("encoding output length exceeds native string capacity");
+}
+
+@noinline
+function rejectEncodingAllocation(): void {
+	throw new Error("encoding output allocation failed");
+}
+
+@inline
 export function newEncodingOutput(length: int64): string {
 	if (length < 0 ||
 		(length as uint64) > nativeSizeMax - STRING_HEADER_AND_TERMINATOR_BYTES ||
 		((length as uint64) & ~stringCapacityMask) != 0) {
-		throw new RangeError("encoding output length exceeds native string capacity");
+		rejectEncodingLength();
 	}
 	const result = newString(length);
-	if (stringCapacity(result) < length) throw new Error("encoding output allocation failed");
+	if (length > 0 && isUnallocatedOrLiteral(result)) rejectEncodingAllocation();
 	return result;
 }
 
+@inline
 export function newDecodingOutput(length: int64): uint8[] {
 	if (length < 0) throw new RangeError("decoding output length is negative");
 	return new Array<uint8>(length);
+}
+
+@inline
+export function freshEncodingOutputBytes(value: string): Ptr<uint8> {
+	return (value as cstring) as Ptr<uint8>;
 }
 
 @inline

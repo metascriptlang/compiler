@@ -284,12 +284,29 @@ export function isHashSupported(algorithm: string): boolean {
 
 // ===== Encoding =====
 
-import { encodeHex, decodeHex, encodeBase64, decodeBase64 } from "./encoding";
+import { encodeHex, decodeHexString, encodeBase64, decodeBase64String } from "./encoding";
+import { emptyEncoding } from "./encodingOutput";
 
-export function toHex(data: string): string { return encodeHex(data.asBytes()); }
-export function fromHex(hex: string): string { return decodeHex(hex).asString(); }
-export function toBase64(data: string): string { return encodeBase64(data.asBytes()); }
-export function fromBase64(b64: string): string { return decodeBase64(b64).asString(); }
+@inline
+export function toHex(data: string): string {
+	if (data.asBytes().length == 0) return emptyEncoding;
+	return encodeHex(data.asBytes());
+}
+@inline
+export function fromHex(hex: string): string {
+	if (hex.asBytes().length == 0) return emptyEncoding;
+	return decodeHexString(hex);
+}
+@inline
+export function toBase64(data: string): string {
+	if (data.asBytes().length == 0) return emptyEncoding;
+	return encodeBase64(data.asBytes());
+}
+@inline
+export function fromBase64(b64: string): string {
+	if (b64.asBytes().length == 0) return emptyEncoding;
+	return decodeBase64String(b64);
+}
 
 // ===== Key Derivation =====
 
