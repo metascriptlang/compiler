@@ -1,4 +1,7 @@
 import { compileToCWithStd } from "../helpers";
+import { mkdir, readFile, remove } from "std/fs";
+import { join } from "std/fs/path";
+import { cwd } from "std/process";
 
 test "macro diagnostics: rejection crosses frames once and cannot be caught" {
 	const bodies = [
@@ -114,6 +117,36 @@ test "macro unsupported evaluation: a helper that reads an extern let or const i
 		assert !result.ok, h.decl;
 		assert result.error.contains(`cannot read extern '${h.name}'`), result.error;
 	}
+}
+
+const stdFsMacroHead = 'import { Node, NodeKind } from "std/meta"; import { writeFile, appendFile, readFile, chmod } from "std/fs"; ';
+
+function stringMacro(body: string): string {
+	return stdFsMacroHead + "macro probe(n: Node): Node { " + body + " return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: text }; } console.log(probe(0));";
+}
+
+test "macro std fs: writeFile and appendFile run at comptime through their host routine and leave their file" {
+	const dir = join(cwd(), "out/test");
+	mkdir(dir);
+	const path = join(dir, "macroStdFsCallback.txt");
+	remove(path);
+	const result = compileToCWithStd(stringMacro(`const first = writeFile("${path}", "one;"); const second = appendFile("${path}", "two;"); const back = readFile("${path}"); const text = (first.ok && second.ok ? "wrote:" : "failed:") + (back.ok ? back.value : "unread");`));
+	assert result.ok, result.ok ? "" : result.error;
+	if (result.ok) assert result.value.contains("wrote:one;two;"), result.value;
+	const file = readFile(path);
+	assert file.ok && file.value == "one;two;";
+}
+
+test "macro std fs: a failed writeFile at comptime returns its IoError with path and kind" {
+	const result = compileToCWithStd(stringMacro('const r = writeFile("/nonexistent-dir-of-a-macro/f.txt", "x"); const text = r.ok ? "wrote" : `refused:${r.error.path}:${r.error.kind}`;'));
+	assert result.ok, result.ok ? "" : result.error;
+	if (result.ok) assert result.value.contains("refused:/nonexistent-dir-of-a-macro/f.txt:"), result.value;
+}
+
+test "macro std fs: a std routine whose body calls C and has no host routine is refused by its C name" {
+	const result = compileToCWithStd(stringMacro('const r = chmod("/nonexistent-dir-of-a-macro/f.txt", 420); const text = r.ok ? "changed" : "kept";'));
+	assert !result.ok;
+	if (!result.ok) assert result.error.contains("no host bridge for 'chmod'"), result.error;
 }
 
 const objectCallMacro = `

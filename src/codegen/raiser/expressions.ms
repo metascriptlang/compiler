@@ -17,6 +17,7 @@ import {
 import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, RaiserCombine, raiserABC, raiserABx, raiserAx, convOperand, fitsImm, immField, branchField, inRefFile, MAX_SLOT } from "../../raiser/bytecode";
 import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserConstString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
+import { resolveRuntimeDir } from "../../utils/path";
 import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation } from "./valueCopy";
 import { placedInstanceOf } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
@@ -48,8 +49,23 @@ function checkHostBridgeCoverage(sym: Symbol, callee: Node): void {
 	}
 }
 
+let _stdRoot = "";
+
+function stdRoutineName(sym: Symbol): string {
+	if (sym.symbolKind != SymbolKind.Function || sym.modulePath == "") return "";
+	if (_stdRoot == "") _stdRoot = resolveRuntimeDir() + "/std/";
+	if (!sym.modulePath.startsWith(_stdRoot)) return "";
+	let module = sym.modulePath.slice(_stdRoot.length);
+	const dot = module.lastIndexOf(".");
+	if (dot > module.lastIndexOf("/")) module = module.slice(0, dot);
+	if (module.endsWith("/index")) module = module.slice(0, module.length - "/index".length);
+	return `std/${module}.${sym.name}`;
+}
+
 function runtimeHostName(sym: Symbol): string {
 	if (sym.nativeName != "") return sym.nativeName;
+	const routine = stdRoutineName(sym);
+	if (routine != "" && lookupHostFn(routine) != null) return routine;
 	if (sym.declNode != null || !sym.symFlags.has(SymbolFlag.ImportC)) return "";
 	return lookupHostFn(sym.name) != null ? sym.name : "";
 }

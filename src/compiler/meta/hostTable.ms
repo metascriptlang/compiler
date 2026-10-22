@@ -50,6 +50,7 @@ import {
 import {
 	unboxString, unboxInt, unboxFloat,
 	boxString, boxInt, boxFloat, boxBool,
+	RaiserHostValue, hostValue, hostObject, copyToVm,
 } from "../../raiser/marshal";
 import { isNodeWireMetaField } from "./wire";
 import { wireLiteralIsFloat, wireLiteralInteger, wireLiteralIntegerRefusal, wireLiteralFloat, boundTypeOfObject, boundSymOfObject } from "./bridge";
@@ -69,7 +70,7 @@ import { fromCodePoint } from "std/core/string";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join, resolve } from "std/fs/path";
 import { registerCompileTimeRead } from "../cache";
-import { IoErrorKind } from "std/io/errors";
+import { IoError, IoErrorKind } from "std/io/errors";
 import { ProcessErrorKind } from "std/process/errors";
 import "std/compress/zip";
 import "std/crypto";
@@ -102,6 +103,30 @@ function _fsResultToInt(ok: boolean, errKind: IoErrorKind): RaiserValue {
 	if (ok) { _lastFsErrno = 0; return boxInt(1); }
 	_setFsErrno(errKind);
 	return boxInt(0);
+}
+
+// --- Std routines the VM runs through their host implementation ---
+
+function _vmIoError(e: IoError): RaiserHostValue {
+	return hostObject(["kind", "path", "message"], [hostValue(boxInt(e.kind as number)), hostValue(boxString(e.path)), hostValue(boxString(e.message))]);
+}
+
+function _vmVoidResult(r: Result<void, IoError>): RaiserValue {
+	const arrays = activeHostArrayHeap();
+	const objects = activeHostObjectHeap();
+	if (arrays == null || objects == null) throw new Error("internal: a std routine callback ran with no active VM heaps");
+	const v = r.ok
+		? hostObject(["ok"], [hostValue(boxBool(true))])
+		: hostObject(["ok", "error"], [hostValue(boxBool(false)), _vmIoError(r.error)]);
+	return copyToVm(arrays, objects, v);
+}
+
+function _stdFsWriteFile(args: RaiserValue[]): RaiserValue {
+	return _vmVoidResult(writeFile(unboxString(args[0]), unboxString(args[1])));
+}
+
+function _stdFsAppendFile(args: RaiserValue[]): RaiserValue {
+	return _vmVoidResult(appendFile(unboxString(args[0]), unboxString(args[1])));
 }
 
 // --- File system bridges ---
@@ -1084,6 +1109,8 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msFsReadFile",       _bridgeMsFsReadFile, HostCapability.FileRead);
 	registerHostFn("msFsLastErrno",      _bridgeMsFsLastErrno, HostCapability.FileRead);
 	registerHostFn("msFsWriteFileMode",  _bridgeMsFsWriteFileMode);
+	registerHostFn("std/fs.writeFile",   _stdFsWriteFile);
+	registerHostFn("std/fs.appendFile",  _stdFsAppendFile);
 	registerHostFn("msFsChmod",          _bridgeMsFsChmod);
 	registerHostFn("msFsMkdir",          _bridgeMsFsMkdir);
 	registerHostFn("msFsRmdir",          _bridgeMsFsRmdir);
