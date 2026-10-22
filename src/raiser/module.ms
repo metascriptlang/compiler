@@ -80,6 +80,7 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {
 	for (const func of functions) {
+		assertPacked(func);
 		bindDirectCalls(func, functions);
 		bindReturns(func);
 	}

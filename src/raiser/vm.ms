@@ -1981,7 +1981,6 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 					funcIdx = ib;
 					func = callee;
 					code = callee.packed;
-					if (code.length != func.code.length) assertPacked(func);
 					ip = 0;
 				} else {
 					slow = true;
@@ -2066,7 +2065,6 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 						funcIdx = frame.funcIdx;
 						func = mod.functions[funcIdx];
 						code = func.packed;
-						if (code.length != func.code.length) assertPacked(func);
 						ip = frame.returnIp;
 					} else {
 						slow = true;
