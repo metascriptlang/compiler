@@ -591,7 +591,7 @@ export function isNullableShape(members: Type[]): boolean {
 	return false;
 }
 
-function hasNullMember(t: Type): boolean {
+function hasNullMember(t: Readonly<Type>): boolean {
 	if (t.kind != TypeKind.Union || t.typeChildren == null) return false;
 	for (const c of t.typeChildren) {
 		if (c != null && c.kind == TypeKind.Null) return true;
@@ -753,9 +753,9 @@ export function sortUnionMembers(members: Type[]): void {
 	}
 }
 
-function unionMemberKey(t: Type): string {
+function unionMemberKey(t: Readonly<Type>): string {
 	if (t.kind == TypeKind.Null) return "~null";
-	let owner: Type | null = t;
+	let owner: Readonly<Type | null> = t;
 	let depth = 0;
 	while (owner != null && owner.sym == null && owner.typeReturn != null && depth < PEEL_MAX_DEPTH) {
 		owner = owner.typeReturn;
@@ -1722,7 +1722,7 @@ export function copyTypeShallow(t: Type): Type {
 	return c;
 }
 
-function isPodFieldType(t: Type | null, depth: int32): boolean {
+function isPodFieldType(t: Readonly<Type | null>, depth: int32): boolean {
 	if (t == null) return true;
 	if (isNumeric(t)) return true;
 	return match (t.kind) {
@@ -1736,7 +1736,7 @@ function isPodFieldType(t: Type | null, depth: int32): boolean {
 	};
 }
 
-function structCarriesRef(t: Type, depth: int32): boolean {
+function structCarriesRef(t: Readonly<Type>, depth: int32): boolean {
 	if (depth > 8 || t.typeChildren == null) return false;
 	for (const ft of t.typeChildren) {
 		if (!isPodFieldType(ft, depth)) return true;
@@ -4777,7 +4777,7 @@ function unifyIntoUnionFormal(formal: Type, concrete: Type, bindings: UnifyBindi
 	if (nakedCount == 1 && naked != null) unifyType(naked, concrete, bindings);
 }
 
-function isMemberItself(member: Type, value: Type): boolean {
+function isMemberItself(member: Readonly<Type>, value: Readonly<Type>): boolean {
 	if (member == value) return true;
 	if (isPrimitiveKind(member.kind)) return member.kind == value.kind;
 	return member.sym != null && member.sym == value.sym;
