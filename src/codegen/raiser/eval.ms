@@ -13,7 +13,7 @@ import { join } from "std/fs/path";
 import { writeStderr } from "std/io";
 import { createTransformContextWithChecker } from "../../transform/context";
 import { transformForRaiser } from "../../transform/raiserLowering";
-import { RaiserValueKind, RaiserValue, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapArrayLen, heapArrayGet, raiserConstString, handleIndex } from "../../raiser/value";
+import { RaiserValueKind, RaiserValue, RaiserObjectHeap, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapArrayLen, heapArrayGet, raiserConstString, handleIndex } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
 import { RaiserInstruction, raiserABC, RaiserOpcode, getSignedAx, branchOffset, regClassLetter } from "../../raiser/bytecode";
 import { disasmFunc, opName } from "../../raiser/disasm";
@@ -587,19 +587,25 @@ test "engine: an as into a narrower literal union stops on a value outside it" {
 	assert numbers.output == "2\n", numbers.output;
 }
 
+function fieldNames(heap: RaiserObjectHeap, handle: int64): string[] {
+	const names: string[] = [];
+	for (let i = 0; i < heapObjectFieldCount(heap, handle); i += 1) names.push(heapObjectFieldNameAt(heap, handle, i));
+	return names;
+}
+
 test "engine: an instance holds its declared fields only, and the receiver's class picks the override" {
 	const ctx = evalFull("class A { x: int32 = 1; get(): int32 { return this.x; } tag(): int32 { return 1; } }"
 		+ " class B extends A { y: int32 = 2; tag(): int32 { return 2; } } class C extends B { tag(): int32 { return 3; } }"
 		+ " function who(a: A): int32 { return a.tag() * 10 + a.get(); }"
 		+ " const b = new B(); b.y = who(new A()) * 10000 + who(b) * 100 + who(new C()); return b;");
-	const names = ctx.objectHeap.objects[handleIndex(ctx.lastResult.intVal)].fields.map((f) => f.name);
+	const names = fieldNames(ctx.objectHeap, ctx.lastResult.intVal);
 	assert names.length == 2 && names.includes("x") && names.includes("y"), names.join(",");
 	assert heapObjectGetField(ctx.objectHeap, ctx.lastResult.intVal, "y").intVal == 112131;
 }
 
 test "engine: a subclass with no constructor holds its parent's fields first, as its type lays them out" {
 	const ctx = evalFull("class A { x: int32 = 1; } class B extends A { y: int32 = 2; } return new B();");
-	const names = ctx.objectHeap.objects[handleIndex(ctx.lastResult.intVal)].fields.map((f) => f.name);
+	const names = fieldNames(ctx.objectHeap, ctx.lastResult.intVal);
 	assert names.join(",") == "x,y", names.join(",");
 }
 

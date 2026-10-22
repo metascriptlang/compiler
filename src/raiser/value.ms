@@ -62,6 +62,7 @@ export function handleHeapKind(handle: int64): RaiserHeapKind {
 
 // The value kind a handle's heap kind implies; nil for the empty handle.
 export function handleKind(handle: int64): RaiserValueKind {
+	when (mode != "danger") { checkHeapKind(handle); }
 	return match (handleHeapKind(handle)) {
 		RaiserHeapKind.None => RaiserValueKind.Nil,
 		RaiserHeapKind.String | RaiserHeapKind.ConstString => RaiserValueKind.String,
@@ -69,8 +70,11 @@ export function handleKind(handle: int64): RaiserValueKind {
 		RaiserHeapKind.Object => RaiserValueKind.Object,
 		RaiserHeapKind.Future => RaiserValueKind.Future,
 		RaiserHeapKind.Box => RaiserValueKind.Box,
-		_ => { throw new Error(`internal: handle ${handle} names no heap kind`); },
 	};
+}
+
+function checkHeapKind(handle: int64): void {
+	if (handleTag(handle) > (RaiserHeapKind.Box as int64)) throw new Error(`internal: handle ${handle} names no heap kind`);
 }
 
 // The value a ref register's handle stands for.
@@ -97,7 +101,7 @@ export function handleAgrees(kind: RaiserValueKind, handle: int64): boolean {
 // Matches project convention (see checker/types.ms Type interface).
 // A String's text lives on a string heap: a String handle indexes the running
 // strand's heap, a ConstString handle names a constant (see "String Heap" below).
-export interface RaiserValue {
+export struct RaiserValue {
 	kind: RaiserValueKind;
 	intVal: int64;
 	floatVal: number;
@@ -348,14 +352,6 @@ export function heapStringLive(arr: RaiserArrayHeap): number {
 	return arr.strings.texts.length - arr.strings.freeList.length;
 }
 
-// --- Deep copy (avoids pointer aliasing) ---
-
-export function copyValueInto(dst: RaiserValue, src: RaiserValue): void {
-	dst.kind = src.kind;
-	dst.intVal = src.intVal;
-	dst.floatVal = src.floatVal;
-}
-
 // --- Accessors ---
 
 export function raiserToInt(v: RaiserValue): number {
@@ -571,11 +567,11 @@ export function heapArrayGet(heap: RaiserArrayHeap, handle: int64, index: int64)
 export function heapArraySet(heap: RaiserArrayHeap, handle: int64, index: int64, val: RaiserValue): void {
 	const data = heap.arrays[handleIndex(handle)];
 	if (data.viewOff >= 0) {
-		copyValueInto(heap.arrays[handleIndex(data.items[0].intVal)].items[data.viewOff + index], val);
+		heap.arrays[handleIndex(data.items[0].intVal)].items[data.viewOff + index] = val;
 		return;
 	}
 	// Deep copy to avoid pointer aliasing
-	copyValueInto(data.items[index], val);
+	data.items[index] = val;
 }
 
 export function heapArrayPush(heap: RaiserArrayHeap, handle: int64, val: RaiserValue): void {
@@ -692,13 +688,9 @@ export function heapBoxLive(heap: RaiserArrayHeap): number {
 }
 
 // --- Object Heap ---
-// Objects live on a side heap like arrays. Fields stored as name-value pairs.
+// Objects live on a side heap like arrays, their values inline. A slot inside the class
+// layout is named by the class; only a field added past it carries its name on the object.
 // Linear scan for field lookup (fast for typical <20 field objects).
-
-export interface RaiserObjectField {
-	name: string;
-	value: RaiserValue;
-}
 
 export interface RaiserClassType {
 	name: string;
@@ -709,15 +701,19 @@ export interface RaiserClassType {
 export const RAISER_NO_CLASS: RaiserClassType = { name: "", chain: [], fields: [] };
 
 export interface RaiserObjectData {
-	fields: RaiserObjectField[];
+	fields: RaiserValue[];
+	added: string[];   // the names of fields[layout length..], in insertion order
 	rc: int32;
 	color: int32;
 	classType: RaiserClassType;
 }
 
-export function raiserIsInstance(classType: RaiserClassType, key: string): boolean {
-	for (const k of classType.chain) {
-		if (k == key) return true;
+// Whether a class is, or extends, the one a module constant names; the constant is read in place.
+export function raiserIsInstance(classType: RaiserClassType, key: RaiserValue): boolean {
+	when (mode != "danger") { if (key.kind != RaiserValueKind.String || !isConstHandle(key.intVal)) throw new Error("internal: a class key must be an interned string"); }
+	const at = handleIndex(key.intVal) as number;
+	for (let i = 0; i < classType.chain.length; i += 1) {
+		if (classType.chain[i] == constTexts[at]) return true;
 	}
 	return false;
 }
@@ -737,16 +733,18 @@ export function heapAllocObject(heap: RaiserObjectHeap): int64 {
 	if (heap.freeList.length > 0) {
 		const reused = heap.freeList[heap.freeList.length - 1];
 		heap.freeList.length = heap.freeList.length - 1;
-		const data = heap.objects[reused];
+		const data: Cursor<RaiserObjectData> = heap.objects[reused];
 		data.fields.length = 0;
+		data.added.length = 0;
 		data.rc = 0;
 		data.color = 0;
 		data.classType = RAISER_NO_CLASS;
 		return makeHandle(reused, RaiserHeapKind.Object);
 	}
 	const idx = heap.objects.length;
-	const fields: RaiserObjectField[] = [];
-	const data: RaiserObjectData = { fields, rc: 0, color: 0, classType: RAISER_NO_CLASS };
+	const fields: RaiserValue[] = [];
+	const added: string[] = [];
+	const data: RaiserObjectData = { fields, added, rc: 0, color: 0, classType: RAISER_NO_CLASS };
 	heap.objects.push(data);
 	return makeHandle(idx, RaiserHeapKind.Object);
 }
@@ -756,10 +754,32 @@ export function heapObjectFieldCount(heap: RaiserObjectHeap, handle: int64): int
 	return obj.fields.length;
 }
 
+export function fieldNameAt(obj: RaiserObjectData, index: number): string {
+	const laid = obj.classType.fields.length;
+	return index < laid ? obj.classType.fields[index] : obj.added[index - laid];
+}
+
+export function fieldNameIs(obj: RaiserObjectData, index: number, name: string): boolean {
+	const laid = obj.classType.fields.length;
+	return index < laid ? obj.classType.fields[index] == name : obj.added[index - laid] == name;
+}
+
+export function fieldIndex(obj: RaiserObjectData, name: string): number {
+	for (let i = 0; i < obj.fields.length; i += 1) {
+		if (fieldNameIs(obj, i, name)) return i;
+	}
+	return -1;
+}
+
+export function appendField(obj: RaiserObjectData, name: string, val: RaiserValue): void {
+	if (obj.fields.length >= obj.classType.fields.length) obj.added.push(name);
+	obj.fields.push(val);
+}
+
 export function heapObjectFieldNameAt(heap: RaiserObjectHeap, handle: int64, index: int64): string {
 	const obj = heap.objects[handleIndex(handle)];
 	if (index < 0 || index >= obj.fields.length) return "";
-	return obj.fields[index].name;
+	return fieldNameAt(obj, index as number);
 }
 
 test "heapObjectFieldNameAt/ValueAt follow insertion order" {
@@ -777,34 +797,20 @@ test "heapObjectFieldNameAt/ValueAt follow insertion order" {
 export function heapObjectFieldValueAt(heap: RaiserObjectHeap, handle: int64, index: int64): RaiserValue {
 	const obj = heap.objects[handleIndex(handle)];
 	if (index < 0 || index >= obj.fields.length) return { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0 };
-	return obj.fields[index].value;
+	return obj.fields[index];
 }
 
 export function heapObjectGetField(heap: RaiserObjectHeap, handle: int64, name: string): RaiserValue {
 	const obj = heap.objects[handleIndex(handle)];
-	for (const field of obj.fields) {
-		if (field.name == name) {
-			return field.value;
-		}
-	}
-	// Field not found — return nil
-	return { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0 };
+	const i = fieldIndex(obj, name);
+	return i >= 0 ? obj.fields[i] : raiserNil();
 }
 
 export function heapObjectSetField(heap: RaiserObjectHeap, handle: int64, name: string, val: RaiserValue): void {
 	const obj = heap.objects[handleIndex(handle)];
-	// Check if field already exists
-	for (const field of obj.fields) {
-		if (field.name == name) {
-			// Update existing field (deep copy)
-			copyValueInto(field.value, val);
-			return;
-		}
-	}
-	// Add new field (deep copy value)
-	const copy: RaiserValue = { kind: val.kind, intVal: val.intVal, floatVal: val.floatVal };
-	const field: RaiserObjectField = { name, value: copy };
-	obj.fields.push(field);
+	const i = fieldIndex(obj, name);
+	if (i >= 0) obj.fields[i] = val;
+	else appendField(obj, name, val);
 }
 
 // --- ORC refcount primitives ---
@@ -821,42 +827,42 @@ export function rcDecref(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, he
 }
 
 export function rcIncrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): void {
+	when (mode != "danger") { checkHeapKind(handle); }
 	const index = handleIndex(handle);
 	match (handleHeapKind(handle)) {
-		RaiserHeapKind.Array => { arrHeap.arrays[index].rc = arrHeap.arrays[index].rc + 1; },
-		RaiserHeapKind.Object => { objHeap.objects[index].rc = objHeap.objects[index].rc + 1; },
-		RaiserHeapKind.String => { arrHeap.strings.rc[index] = arrHeap.strings.rc[index] + 1; },
-		RaiserHeapKind.Box => { arrHeap.boxes.items[index].rc = arrHeap.boxes.items[index].rc + 1; },
+		RaiserHeapKind.Array => { const data: Cursor<RaiserArrayData> = arrHeap.arrays[index]; data.rc += 1; },
+		RaiserHeapKind.Object => { const data: Cursor<RaiserObjectData> = objHeap.objects[index]; data.rc += 1; },
+		RaiserHeapKind.String => { const strings: Cursor<RaiserStringHeap> = arrHeap.strings; strings.rc[index] += 1; },
+		RaiserHeapKind.Box => { const data: Cursor<RaiserBoxData> = arrHeap.boxes.items[index]; data.rc += 1; },
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
-		_ => { throw new Error(`internal: handle ${handle} names no heap kind`); },
 	}
 }
 
 export function rcDecrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64): void {
+	when (mode != "danger") { checkHeapKind(handle); }
 	const index = handleIndex(handle);
 	match (handleHeapKind(handle)) {
 		RaiserHeapKind.Array => {
-			const data = arrHeap.arrays[index];
+			const data: Cursor<RaiserArrayData> = arrHeap.arrays[index];
 			data.rc = data.rc - 1;
 			if (data.rc <= 0) { rcDestroyArray(arrHeap, objHeap, index); }
 		},
 		RaiserHeapKind.Object => {
-			const data = objHeap.objects[index];
+			const data: Cursor<RaiserObjectData> = objHeap.objects[index];
 			data.rc = data.rc - 1;
 			if (data.rc <= 0) { rcDestroyObject(arrHeap, objHeap, index); }
 		},
 		RaiserHeapKind.String => {
-			const strings = arrHeap.strings;
+			const strings: Cursor<RaiserStringHeap> = arrHeap.strings;
 			strings.rc[index] = strings.rc[index] - 1;
 			if (strings.rc[index] <= 0) { strings.texts[index] = ""; strings.freeList.push(index); }
 		},
 		RaiserHeapKind.Box => {
-			const data = arrHeap.boxes.items[index];
+			const data: Cursor<RaiserBoxData> = arrHeap.boxes.items[index];
 			data.rc = data.rc - 1;
 			if (data.rc <= 0) { rcDestroyBox(arrHeap, objHeap, index); }
 		},
 		RaiserHeapKind.None | RaiserHeapKind.ConstString | RaiserHeapKind.Future => {},
-		_ => { throw new Error(`internal: handle ${handle} names no heap kind`); },
 	}
 }
 
@@ -870,11 +876,12 @@ function rcDestroyArray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, ind
 }
 
 function rcDestroyObject(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, index: int64): void {
-	const data = objHeap.objects[index];
-	for (const field of data.fields) {
-		rcDecref(arrHeap, objHeap, field.value);
+	const data: Cursor<RaiserObjectData> = objHeap.objects[index];
+	for (let i = 0; i < data.fields.length; i += 1) {
+		if (data.fields[i].kind >= RaiserValueKind.String) rcDecrefHandle(arrHeap, objHeap, data.fields[i].intVal);
 	}
 	data.fields.length = 0;
+	data.added.length = 0;
 	objHeap.freeList.push(index);
 }
 
@@ -1001,10 +1008,10 @@ export function copyGraphWith(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap,
 		dstObj.objects[handleIndex(dstHandle)].classType = srcObj.objects[handleIndex(val.intVal)].classType;
 		map.objSrc.push(val.intVal);
 		map.objDst.push(dstHandle);
-		const fields = srcObj.objects[handleIndex(val.intVal)].fields;
-		for (let i = 0; i < fields.length; i = i + 1) {
-			const copied = copyGraphWith(srcArr, srcObj, dstArr, dstObj, fields[i].value, map);
-			heapObjectSetField(dstObj, dstHandle, fields[i].name, copied);
+		const source = srcObj.objects[handleIndex(val.intVal)];
+		for (let i = 0; i < source.fields.length; i = i + 1) {
+			const copied = copyGraphWith(srcArr, srcObj, dstArr, dstObj, source.fields[i], map);
+			appendField(dstObj.objects[handleIndex(dstHandle)], fieldNameAt(source, i), copied);
 			rcIncref(dstArr, dstObj, copied);
 		}
 		return val.kind == RaiserValueKind.Object ? raiserObject(dstHandle) : raiserFieldAddrAt(dstHandle, val.floatVal as int64);
@@ -1016,9 +1023,7 @@ export function copyGraphWith(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap,
 		rcIncref(dstArr, dstObj, inner);
 		return { kind: RaiserValueKind.Box, intVal: copy, floatVal: 0.0 };
 	}
-	const out = raiserNil();
-	copyValueInto(out, val);
-	return out;
+	return val;
 }
 
 test "copyGraph relocates a field address that points into its own owner" {
@@ -1410,7 +1415,7 @@ test "a handle names its heap kind: the kind recomputed from the handle equals t
 	const array = raiserArray(heapAllocArray(arr));
 	const object = raiserObject(heapAllocObject(obj));
 	const future = raiserFuture(makeHandle(3, RaiserHeapKind.Future));
-	const box = { kind: RaiserValueKind.Box, intVal: heapAllocBox(arr, raiserInt(5)), floatVal: 0.0 };
+	const box: RaiserValue = { kind: RaiserValueKind.Box, intVal: heapAllocBox(arr, raiserInt(5)), floatVal: 0.0 };
 	for (const v of [strand, constant, array, object, future, box]) {
 		assert v.intVal != 0;
 		assert handleKind(v.intVal) == v.kind, `${v.kind}`;

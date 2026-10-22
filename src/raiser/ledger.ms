@@ -58,7 +58,7 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 		if (!freeArrays[i]) for (const item of arr.arrays[i].items) tallyRef(tally, item);
 	}
 	for (let i = 0; i < obj.objects.length; i += 1) {
-		if (!freeObjects[i]) for (const field of obj.objects[i].fields) tallyRef(tally, field.value);
+		if (!freeObjects[i]) for (const field of obj.objects[i].fields) tallyRef(tally, field);
 	}
 	for (let i = 0; i < arr.boxes.items.length; i += 1) {
 		if (!freeBoxes[i]) tallyRef(tally, arr.boxes.items[i].value);

@@ -33,7 +33,7 @@ import {
 	isScalarClass
 } from "./context";
 import { compileStmt } from "./statements";
-import { compileExpr, classTargetKey, emitsRoutine, classTypeOperand } from "./expressions";
+import { compileExpr, classTargetKey, emitsRoutine, classTypeOperand, fieldInst } from "./expressions";
 import { emitZeroValue, allocFor, regClassOf, zeroScalar } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { checkProgram } from "../../checker/checkPass";
@@ -150,13 +150,13 @@ export function compileFuncBody(funcMap: RaiserFuncMap, fnName: string, paramSym
 
 
 
-function storeZeroFields(s: RaiserCompState, thisReg: int32, classBody: Node[]): void {
+function storeZeroFields(s: RaiserCompState, thisReg: int32, thisType: Type | null, classBody: Node[]): void {
 	for (let ci = 0; ci < classBody.length; ci += 1) {
 		if (classBody[ci].kind == NodeKind.PropertyDecl) {
 			const pd = classBody[ci].data as PropertyDeclData;
 			const fieldReg = pd.propIsStatic ? emitZeroValue(s, null) : emitZeroValue(s, classBody[ci].nodeType);
 			const nameIdx = addConst(s, raiserConstString(pd.propName));
-			emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, nameIdx, fieldReg));
+			emitInst(s, fieldInst(thisType, pd.propName, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, thisReg, nameIdx, fieldReg));
 		}
 	}
 }
@@ -174,7 +174,7 @@ function compileClassInit(
 	for (let i = 0; i < ctorSyms.length; i += 1) {
 		declareLocal(s, ctorSyms[i], i == 0 ? thisReg : allocFor(s, ctorSyms[i].symbolType));
 	}
-	storeZeroFields(s, thisReg, classBody);
+	storeZeroFields(s, thisReg, ctorSyms.length > 0 ? ctorSyms[0].symbolType : null, classBody);
 	if (ctorBody != null) {
 		compileStmt(s, ctorBody);
 	}
@@ -208,7 +208,7 @@ function compileClassConstructor(
 	s.receiverReg = thisReg;
 	if (ctorSyms.length > 0) declareLocal(s, ctorSyms[0], thisReg);
 
-	storeZeroFields(s, thisReg, classBody);
+	storeZeroFields(s, thisReg, ctorSyms.length > 0 ? ctorSyms[0].symbolType : null, classBody);
 
 	// Execute constructor body
 	if (ctorBody != null) {
