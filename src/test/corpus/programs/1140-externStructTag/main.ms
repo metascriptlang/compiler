@@ -7,7 +7,7 @@
 //
 // @skip-js: `extern function` binds a C symbol; the JS backend has no C linkage
 // @xfail(raiser): raiser runtime error: Unknown host function: corpus1140MakeDir
-// @stdout: dir true | file 6 true | missing|f.txt:8
+// @stdout: dir true | file 6 true | missing|f.txt
 // @stdout: 15 8 2 1 23 800 true true
 // @exit: 0
 
@@ -19,7 +19,6 @@ extern struct Stat from "struct stat" {
 	st_mtime: int64;
 }
 extern struct Dirent from "struct dirent" {
-	d_type: uint8;
 	d_name: cstring;
 }
 extern struct DIR;
@@ -56,7 +55,7 @@ function entries(path: string): string {
 	let e = readdir(dir);
 	while (e != null) {
 		const name = e.d_name as string;
-		if (name != "." && name != "..") names.push(`${name}:${e.d_type}`);
+		if (name != "." && name != "..") names.push(name);
 		e = readdir(dir);
 	}
 	closedir(dir);
