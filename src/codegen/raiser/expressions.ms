@@ -21,7 +21,7 @@ import { resolveRuntimeDir } from "../../utils/path";
 import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation } from "./valueCopy";
 import { placedInstanceOf } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
-import { runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike } from "../../checker/types";
+import { runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase } from "../../checker/types";
 import { isSlotUnion } from "../../checker/fit";
 import { SymbolFlag, isViewBinding, classDeclNodeOf, hasFlag } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
@@ -437,8 +437,7 @@ export function exprIsString(s: RaiserCompState, node: Node): boolean {
 	// cannot know) answer false, so `s.length` emitted ArrayLen against a string
 	// handle and `s.charAt` missed its fast path entirely.
 	if (node.nodeType != null) {
-		const tk = node.nodeType.kind;
-		if (tk == TypeKind.String || tk == TypeKind.StringLiteral) return true;
+		if (literalBase(node.nodeType).kind == TypeKind.String) return true;
 	}
 	const k = node.kind;
 	if (k == NodeKind.StringLiteral) return true;
