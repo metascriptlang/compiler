@@ -8,9 +8,7 @@
     "genericDeclarationEmitsOnlyInstances [raiser]": {"since":"ea7ae4d17","note":"card 2026-10-12-raiser-static-member-in-generic-constructor.md; red on main 80207ca9c as well, the raiser lane never ran when ae964f7b3 landed it; recorded for release 0.3.2, 2026-10-12"}
   },
   "flaky": {
-    "405-lockedSharedCounter": {"since":"3a5b991e","note":"hangs at random: green on [danger] and [san] while [drc] hit cell TIMEOUT after 300s in the same run, 2026-09-21"},
-    "src/codegen/raiser/eval.ms > engine: a float32 rounds after every operation that produces one": {"since":"e3f842ce","note":"fails at random, card 2026-10-03-raiser-eval-tests-flake.md; one binary of main e3f842ce + wt/std-solana went 3 green / 2 red over 5 runs of eval.ms at load 30-60, 2026-10-03"},
-    "src/codegen/raiser/eval.ms > engine: two sleepers wake in deadline order, not spawn order": {"since":"e3f842ce","note":"fails at random, card 2026-10-03-raiser-eval-tests-flake.md; same 5 runs as the float32 case, wall-clock deadlines under load 30-60, 2026-10-03"}
+    "405-lockedSharedCounter": {"since":"3a5b991e","note":"hangs at random: green on [danger] and [san] while [drc] hit cell TIMEOUT after 300s in the same run, 2026-09-21"}
   },
   "fmt": {},
   "guard": {},
