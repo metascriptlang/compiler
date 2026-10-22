@@ -486,8 +486,8 @@ function freshAnswers(snap: Snapshot, query: string[], name: string): Result<str
 		const drained = readToEnd(fresh);
 		if (!drained.ok) failure = drained.error;
 	}
-	fresh.child.close();
 	fresh.log += `<<< stderr\n${fresh.child.takeStderr()}\n`;
+	fresh.child.close();
 	writeFile(`${OUT}/${name}-fresh.txt`, fresh.log);
 	if (failure != "") return Result.err(`fresh server: ${failure}`);
 	const out: string[] = [];
@@ -695,8 +695,8 @@ function runScenario(scenario: LspScenario): ScenarioRun {
 	if (!started.ok) return { failure: started.error, timedOut: false, samples: [], usage: [] };
 	const s = started.value;
 	const failure = replayOnProcess(s, scenario, drains, projectDir);
-	s.child.close();
 	s.log += `<<< stderr\n${s.child.takeStderr()}\n`;
+	s.child.close();
 	s.log += `=== ${failure == "" ? "ok" : "FAIL " + failure}\n`;
 	writeFile(`${OUT}/${scenarioSlug(scenario.name)}.txt`, s.log);
 	return { failure, timedOut: s.timedOut, samples: s.samples, usage: s.usage };
