@@ -820,4 +820,15 @@ void msOrcDisown(void* p) {
 	msCellSeqFree(&j.traceStack);
 }
 
+void msOrcDisownValue(void* p, msTraceProc custody) {
+	if (p == NULL || custody == NULL || msRoots.len == 0) return;
+	msGcEnv j;
+	msCellSeqInit(&j.traceStack);
+	custody(p, &j);
+	msDisownGray(&j);
+	custody(p, &j);
+	msDisownBlack(&j);
+	msCellSeqFree(&j.traceStack);
+}
+
 #endif /* MSGC_MANUAL */

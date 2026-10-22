@@ -340,6 +340,9 @@ when (mscDeclaresRuntime) {
 	@compilerFunc
 	extern function msOrcDisown(p: Ptr<void>): void;
 
+	@compilerFunc @builtin("OrcDisownValue")
+	extern function msOrcDisownValue(value: Ptr<void>): void;
+
 	@compilerFunc
 	extern function msAtomicIncref(p: Ptr<void>): void;
 

@@ -18,7 +18,7 @@ import {
 	isIndirectRef,
 } from "./context";
 import { mangle, classInitCName, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, overloadAt, safeName, staticFieldCName, referenceName } from "./names";
-import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit, typeKeyIn } from "./types";
+import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, isOpenArrayParam, returnsBorrow, ccgIntroducedPtr, typeInfoRef, ensureForwardDecl, ensureRefArrayCellTypeInfo, ensureArcCellTypeInfo, valueCustodyRef, getArrayContentType, ensurePromiseAllInstance, ensureFutureThenBoxedInstance, typeKey, ensureDrcProto, procHeader, zeroInit, typeKeyIn } from "./types";
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
 import { ensureCrossModuleProto, copiesInline } from "./forward";
@@ -2688,6 +2688,7 @@ enum CallMagic {
 	BoxStruct, SinkBoxStruct, UnboxStruct, BoxRefArray, BoxArc,
 	BoxLocked, LockedLoad, LockedStore,
 	FutureCreateInline, SpawnInto, WaitForStruct, FutureThenBoxed,
+	OrcDisownValue,
 }
 
 function closureFunctionSym(node: Readonly<Node>): Readonly<Symbol | null> {
@@ -2717,6 +2718,7 @@ function callMagicOf(sym: Readonly<Symbol | null>): CallMagic {
 		"SpawnInto" => CallMagic.SpawnInto,
 		"WaitForStruct" => CallMagic.WaitForStruct,
 		"FutureThenBoxed" => CallMagic.FutureThenBoxed,
+		"OrcDisownValue" => CallMagic.OrcDisownValue,
 		_ => CallMagic.None,
 	};
 }
@@ -2902,6 +2904,12 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// Ref<Array<T>> reference semantics. The cell's TypeInfo.destroyFn frees the
 	// array payload when rc hits 0; the DRC then frees the cell. The source value
 	// is neutralized (move) so the boxed payload has a single owner.
+	if (magic == CallMagic.OrcDisownValue && cd.arguments.length >= 1) {
+		const addrArg = argsStr.length > 0 && argsStr.charAt(0) == "&" ? argsStr : "&(" + argsStr + ")";
+		ctx.results.push(`msOrcDisownValue(${addrArg}, ${valueCustodyRef(g, cd.arguments[0].nodeType)})`);
+		return;
+	}
+
 	if (magic == CallMagic.BoxRefArray && cd.arguments.length >= 1 && cd.arguments[0].nodeType != null && node.nodeType != null) {
 		const arrCType = getTypeDesc(g, cd.arguments[0].nodeType);
 		const cellCType = getTypeDesc(g, node.nodeType);

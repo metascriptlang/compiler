@@ -486,6 +486,7 @@ static inline void msMarkMaybeCycle(void* p) {
 /* GC_runOrc / GC_enableOrc / GC_disableOrc parity */
 void msOrcCollect(void);
 void msOrcDisown(void* p);
+void msOrcDisownValue(void* p, msTraceProc custody);
 
 static inline void msOrcEnable(void) { msRootsThreshold = 0; }
 static inline void msOrcDisable(void) { msRootsThreshold = INT32_MAX; }

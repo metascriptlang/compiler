@@ -12,7 +12,7 @@ import { isBuiltinDirective } from "./decoratorHelpers";
 import { AliveSet, CTypeInfoDemand, TypeInfoKind, createAliveSet, aliveSetAddSym, aliveSetHasSym, aliveSetAddModule, aliveSetHasDecl, aliveSetHasModule, aliveSetModuleCount } from "../codegen/c/context";
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
 import { isCHeaderPath } from "../module/loader";
-import { refArrayCellKey, refArrayCellOp, getOpByKey, typeInfoSubject, objectTypeInfoKey, arcCellKey, promiseAllShape, PromiseAllShape, hookBaseCName, anonTypeName, isAnonTypeName } from "../codegen/c/types";
+import { refArrayCellKey, refArrayCellOp, getOpByKey, typeInfoSubject, objectTypeInfoKey, arcCellKey, promiseAllShape, PromiseAllShape, hookBaseCName, anonTypeName, isAnonTypeName, valueCustodyOp } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, makeSymbol } from "./symbol";
 import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, fieldTypeView, peelToStructOrUnion } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
@@ -131,6 +131,9 @@ function walkBody(node: Node, modulePath: string): void {
 			markArcCell(node.nodeType.typeReturn, modulePath);
 		} else if (magic == "PromiseAllFor" && node.nodeType != null) {
 			markPromiseAllResult(node.nodeType, modulePath);
+		} else if (magic == "OrcDisownValue" && cd.arguments.length > 0) {
+			const custody = valueCustodyOp(cd.arguments[0].nodeType);
+			if (custody != null) markReferenced(custody, modulePath);
 		}
 		walkBody(cd.callee, modulePath);
 		for (const arg of cd.arguments) {

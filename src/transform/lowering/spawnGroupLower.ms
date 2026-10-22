@@ -128,6 +128,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 				injectCancelSafePoints(closureBody, ag.ident, loc);
 			}
 		}
+		disownResult(thunk, slot.innerType, ctx);
 		// Box return values in closure body (spawnGroupLower runs before spawnLower,
 		// so closures extracted here bypass spawnLower's boxing pass).
 		// Also update closure return type to void* so codegen emits correct signature.
@@ -152,7 +153,6 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 				slot.closure.nodeType.typeReturn = createPtr(voidType());
 			}
 		}
-		disownResult(thunk, slot.innerType, ctx);
 		disownMovedCaptures(slot.closure, ctx);
 		// Wrap bare function reference as msClosure {fn, env: null}
 		let closure = slot.closure;

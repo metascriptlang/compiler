@@ -132,8 +132,13 @@ export function mayHoldCycleRoot(t: Type | null, ctx: TransformContext): boolean
 	if (bare == null) return false;
 	if (bare.kind == TypeKind.Function) return true;
 	if (bare.kind == TypeKind.Array) return isCountedRefTo(bare.typeReturn) && custodyReaches(bare.typeReturn, ctx.cyclicCache, ctx.acyclicCache);
-	if (!isCountedRefTo(bare)) return false;
-	return custodyReaches(bare.kind == TypeKind.Ref ? bare : unwrapRefNullUnion(bare), ctx.cyclicCache, ctx.acyclicCache);
+	if (isCountedRefTo(bare)) return custodyReaches(bare.kind == TypeKind.Ref ? bare : unwrapRefNullUnion(bare), ctx.cyclicCache, ctx.acyclicCache);
+	return isHeldInline(bare) && custodyReaches(bare, ctx.cyclicCache, ctx.acyclicCache);
+}
+
+function isHeldInline(t: Type): boolean {
+	if (t.kind == TypeKind.GenericInstance) return !isAwaitable(t);
+	return t.kind == TypeKind.Struct || t.kind == TypeKind.Union || t.kind == TypeKind.Tuple || t.kind == TypeKind.SizedArray;
 }
 
 function isCountedRefTo(t: Type | null): boolean {
@@ -144,7 +149,9 @@ function isCountedRefTo(t: Type | null): boolean {
 
 export function disownStmt(value: Node, t: Type | null, loc: SourceLocation): Node {
 	const bare = skipModifier(t);
-	const proc = bare != null && bare.kind == TypeKind.Function ? "msClosureDisown" : "msOrcDisown";
+	const proc = bare != null && bare.kind == TypeKind.Function ? "msClosureDisown"
+		: bare != null && isHeldInline(bare) && !isCountedRefTo(bare) ? "msOrcDisownValue"
+		: "msOrcDisown";
 	return makeExprStmt(makeCall(runtimeRef(proc, loc), [value], loc), loc);
 }
 
@@ -254,7 +261,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 		let closureArg = cd.arguments[0];
 
 		const bareRetType = closureArg.nodeType != null && closureArg.nodeType.kind == TypeKind.Function ? closureArg.nodeType.typeReturn : null;
-		if (closureArg.kind == NodeKind.Identifier && bareRetType != null && !needsBoxing(bareRetType) && mayHoldCycleRoot(bareRetType, ctx)) {
+		if (closureArg.kind == NodeKind.Identifier && bareRetType != null && mayHoldCycleRoot(bareRetType, ctx)) {
 			closureArg = callingThunk(closureArg, bareRetType);
 			cd.arguments[0] = closureArg;
 		}
@@ -277,6 +284,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 			closureRetType = closureArg.nodeType.typeReturn;
 		}
 
+		disownResult(boxTarget, closureRetType, ctx);
 		if (closureRetType != null && needsBoxing(closureRetType)) {
 			// Bare function reference (already wrapped as ObjectLiteral closure pair):
 			// can't modify the function body. Wrap in an adapter arrow: () => box(fn())
@@ -312,7 +320,6 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 				closureArg.nodeType.typeReturn = createPtr(voidType());
 			}
 		}
-		disownResult(boxTarget, closureRetType, ctx);
 		disownMovedCaptures(closureArg, ctx);
 
 		return node;
