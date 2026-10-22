@@ -414,24 +414,28 @@ function isStringHandle(h: int64): boolean {
 	return tag == (RaiserHeapKind.String as int64) || tag == (RaiserHeapKind.ConstString as int64);
 }
 
+@inline
 function holdHandle(vm: RaiserVM, h: int64): void {
 	if (h != 0 && (vm.orc || isStringHandle(h))) rcIncrefHandle(vm.arrayHeap, vm.objectHeap, h);
 }
 
+@inline
 function releaseHandle(vm: RaiserVM, h: int64): void {
 	if (h != 0 && (vm.orc || isStringHandle(h))) rcDecrefHandle(vm.arrayHeap, vm.objectHeap, h);
 }
 
-// The counted store of a handle into the ref file: the new one is held before the old one is
-// released, so storing a register's own handle back into it is safe.
-function writeRef(vm: RaiserVM, abs: number, handle: int64): void {
+// The counted store of a handle into the ref file: storing the handle a register already holds
+// changes no count, and otherwise the new one is held before the old one is released.
+@inline
+function writeRef(vm: RaiserVM, abs: int64, handle: int64): void {
 	const old = vm.regs.refs[abs];
+	if (old == handle) return;
 	holdHandle(vm, handle);
 	vm.regs.refs[abs] = handle;
 	releaseHandle(vm, old);
 }
 
-function releaseFrameRefs(vm: RaiserVM, base: number, count: number): void {
+function releaseFrameRefs(vm: RaiserVM, base: int64, count: int64): void {
 	for (let r = base; r < base + count; r += 1) {
 		const h = vm.regs.refs[r];
 		if (h != 0) {
@@ -453,10 +457,10 @@ function writeAbs(vm: RaiserVM, cls: int32, abs: number, value: RaiserValue): vo
 	let val = value;
 	if (val.kind == RaiserValueKind.Box && cls != CLS_DYN) val = heapBoxValue(vm.arrayHeap, val.intVal);
 	if (cls == CLS_DYN) {
-		if (val.kind == RaiserValueKind.Nil) { writeRef(vm, abs, 0); return; }
-		if (val.kind == RaiserValueKind.Box) { writeRef(vm, abs, val.intVal); return; }
+		if (val.kind == RaiserValueKind.Nil) { writeRef(vm, abs as int64, 0); return; }
+		if (val.kind == RaiserValueKind.Box) { writeRef(vm, abs as int64, val.intVal); return; }
 		vmIncref(vm, val);
-		writeRef(vm, abs, heapAllocBox(vm.arrayHeap, val));
+		writeRef(vm, abs as int64, heapAllocBox(vm.arrayHeap, val));
 		return;
 	}
 	if (cls == CLS_FLOAT && val.kind == RaiserValueKind.Int) {
@@ -470,7 +474,7 @@ function writeAbs(vm: RaiserVM, cls: int32, abs: number, value: RaiserValue): vo
 			return;
 		}
 	}
-	if (cls == CLS_REF) { writeRef(vm, abs, val.kind == RaiserValueKind.Nil ? 0 : val.intVal); return; }
+	if (cls == CLS_REF) { writeRef(vm, abs as int64, val.kind == RaiserValueKind.Nil ? 0 : val.intVal); return; }
 	if (cls == CLS_WORD || cls == CLS_BOOL) { vm.regs.words[abs] = val.intVal; return; }
 	vm.regs.words[abs] = msFloat64Bits(val.floatVal);
 }
