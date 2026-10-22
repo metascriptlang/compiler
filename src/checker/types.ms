@@ -4455,10 +4455,11 @@ export interface UnifyBindings {
 	names: string[];
 	params: Type[];
 	types: Type[];
+	fromMapped: Type[]; // the params bound through a homomorphic mapped type, outranked by a direct binding
 }
 
 export function createUnifyBindings(): UnifyBindings {
-	return { names: [], params: [], types: [] };
+	return { names: [], params: [], types: [], fromMapped: [] };
 }
 
 export function bindParam(b: UnifyBindings, param: Type, t: Type): void {
@@ -4620,6 +4621,15 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		unifyIntoUnionFormal(formal, concrete, bindings);
 		return;
 	}
+	if (formal.kind == TypeKind.Mapped && formal.typeChildren.length == 2) {
+		if (concrete.kind == TypeKind.Mapped && concrete.typeChildren.length >= 2) {
+			unifyType(formal.typeChildren[0], concrete.typeChildren[0], bindings);
+			unifyType(formal.typeChildren[1], concrete.typeChildren[1], bindings);
+			return;
+		}
+		unifyToMapped(formal, concrete, formal.typeChildren[0], bindings);
+		return;
+	}
 	if (formal.kind == TypeKind.Conditional && concrete.kind != TypeKind.Conditional && formal.typeChildren.length == 4) {
 		unifyType(formal.typeChildren[2], concrete, bindings);
 		unifyType(formal.typeChildren[3], concrete, bindings);
@@ -4669,6 +4679,55 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		}
 		return;
 	}
+}
+
+// Reference: inferToMappedType. A homomorphic `{ [P in keyof T]: X }` formal infers T from
+// the source mapped back through X; keys that are a union infer through each member.
+function unifyToMapped(formal: Type, concrete: Type, keys: Type, bindings: UnifyBindings): boolean {
+	if (keys.kind == TypeKind.Union) {
+		let inferred = false;
+		for (const k of keys.typeChildren) inferred = unifyToMapped(formal, concrete, k, bindings) || inferred;
+		return inferred;
+	}
+	if (keys.kind != TypeKind.KeyOf || keys.typeChildren.length != 1 || keys.typeChildren[0].kind != TypeKind.GenericParam) return false;
+	const param = withoutReadonlyView(keys.typeChildren[0]);
+	const source = homomorphicMappedSource(concrete, formal, param);
+	if (source == null) return true;
+	bindParam(bindings, param, closureStorageType(source));
+	bindings.fromMapped.push(param);
+	return true;
+}
+
+// Reference: inferTypeForHomomorphicMappedType and createReverseMappedType, for the template
+// `T[P]` that maps each member to itself: an array or tuple of the same elements, else an
+// object type with the source's fields, read-only only where the source was and the modifiers
+// did not add it. A primitive is its own inverse, because the mapped type maps it to itself.
+// A union, another template or an optional modifier has no inverse here and infers nothing.
+function homomorphicMappedSource(source: Type, target: Type, param: Type): Type | null {
+	const mods = mappedModifiers(target);
+	if (mods.has(MappedModifier.IncludeOptional) || mods.has(MappedModifier.ExcludeOptional)) return null;
+	const template = target.typeChildren[1];
+	if (template.kind != TypeKind.IndexedAccess || template.typeChildren.length != 2
+		|| withoutReadonlyView(template.typeChildren[0]) != param || template.typeChildren[1] != mappedParam(target)) return null;
+	if (source.kind != TypeKind.GenericParam && !isObjectSource(source) && mappedSourceMembers(source).length == 0) return source;
+	const array = arrayOf(source);
+	if (array != null) {
+		const reversed = createRef(createArray(array.typeReturn));
+		return isReadonlyView(source) ? createReadonlyView(reversed) : reversed;
+	}
+	const keepView = !mods.has(MappedModifier.IncludeReadonly) && isReadonlyView(source);
+	const peeled = peelTransparentInstance(unwrapRef(source));
+	if (peeled.kind == TypeKind.Tuple) {
+		const tuple = createTuple([...peeled.typeChildren]);
+		if (getMinArity(peeled) < peeled.typeChildren.length) setMinArity(tuple, getMinArity(peeled));
+		return isReadonlyView(source) ? createReadonlyView(tuple) : tuple;
+	}
+	const fields = peelToStruct(peeled.kind == TypeKind.GenericInstance ? peeled.typeReturn : peeled);
+	if (fields == null || isMaybeType(fields) || fields.typeNames.length == 0) return null;
+	const struct = createStruct("", [...fields.typeNames], [...fields.typeChildren], true);
+	if (fields.optionalFields != null) struct.optionalFields = [...fields.optionalFields];
+	const reversed = createRef(struct);
+	return keepView ? createReadonlyView(reversed) : reversed;
 }
 
 // One value into a union formal: a member it already is binds nothing, a generic member
@@ -5749,6 +5808,23 @@ test "a union substituted into a union is the flat union the resolver builds" {
 // time on self-host), so callers that need the substituted body
 // must invoke instantiateGenericBody themselves. Built-in Result/Promise/Iterator
 // have no declaration — they get their param names from `builtinGenericParams`.
+test "a readonly mapped formal infers its type parameter through the reverse mapping" {
+	const t = createGenericParam("T");
+	const key = createGenericParam("$key");
+	const mods = (0 as BitSet<MappedModifier>).incl(MappedModifier.KeyOfDeclared).incl(MappedModifier.IncludeReadonly);
+	const formal = createMappedType(key, createKeyOfType(t), createIndexedAccessType(t, key), null, t, mods);
+	const prim = createUnifyBindings();
+	unifyType(formal, stringType(), prim);
+	assert prim.types.length == 1 && prim.types[0].kind == TypeKind.String && prim.fromMapped.length == 1;
+	const obj = createUnifyBindings();
+	unifyType(formal, createReadonlyView(createRef(createStruct("Sym", ["id"], [int32Type()], false))), obj);
+	const reversed = peelToStruct(obj.types[0]);
+	assert reversed != null && reversed.typeName == "" && reversed.typeNames[0] == "id" && !isReadonlyView(obj.types[0]);
+	const arr = createUnifyBindings();
+	unifyType(formal, createRef(createArray(int32Type())), arr);
+	assert arrayOf(arr.types[0]) != null && arrayOf(arr.types[0])!.typeReturn!.kind == TypeKind.Int32;
+}
+
 test "a substituted Result carries its substituted body" {
 	const gp = createGenericParam("T");
 	const r = createResult(gp, stringType());

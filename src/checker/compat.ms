@@ -2,7 +2,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, ClassDeclData, MethodDeclData, DecoratedDeclData } from "../ast/node";
 import { makeSymbol, classDeclNodeOf } from "./symbol";
-import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, isVarargs, unwrapVarargs, UnifyBindings, instantiatedUnionBehind } from "./types";
+import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, isVarargs, unwrapVarargs, UnifyBindings, instantiatedUnionBehind, createUnifyBindings } from "./types";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 
@@ -1922,11 +1922,12 @@ export interface TypeParamFold {
 	misfits: int32[];
 }
 
-export function foldTypeParamCandidates(candParams: Type[], candTypes: Type[], skip: boolean[], fixed: UnifyBindings, literal: boolean[] = []): TypeParamFold {
+export function foldTypeParamCandidates(candParams: Type[], candTypes: Type[], skip: boolean[], fixed: UnifyBindings, literal: boolean[] = [], fromMapped: boolean[] = []): TypeParamFold {
 	const out: TypeParamFold = { names: [], params: [], types: [], chosen: [], misfits: [] };
 	const order: int32[] = [];
-	for (let ci = 0; ci < candParams.length; ci += 1) { if (!isLiteralCandidate(literal, ci)) order.push(ci); }
-	for (let ci = 0; ci < candParams.length; ci += 1) { if (isLiteralCandidate(literal, ci)) order.push(ci); }
+	for (let ci = 0; ci < candParams.length; ci += 1) { if (!isLiteralCandidate(literal, ci) && !isLiteralCandidate(fromMapped, ci)) order.push(ci); }
+	for (let ci = 0; ci < candParams.length; ci += 1) { if (isLiteralCandidate(literal, ci) && !isLiteralCandidate(fromMapped, ci)) order.push(ci); }
+	for (let ci = 0; ci < candParams.length; ci += 1) { if (isLiteralCandidate(fromMapped, ci)) order.push(ci); }
 	const firsts: Type[] = [];
 	for (let oi = 0; oi < order.length; oi += 1) {
 		const ci = order[oi];
@@ -1940,7 +1941,7 @@ export function foldTypeParamCandidates(candParams: Type[], candTypes: Type[], s
 			chosen = ci;
 			for (let oj = oi + 1; oj < order.length; oj += 1) {
 				const cj = order[oj];
-				if (candParams[cj] != param || skip[cj]) continue;
+				if (candParams[cj] != param || skip[cj] || outranked(fromMapped, cj, ci)) continue;
 				if (isAssignable(bound, candTypes[cj]) && !candidateFits(candTypes[cj], isLiteralCandidate(literal, cj), bound)) { bound = candTypes[cj]; chosen = cj; }
 			}
 		}
@@ -1950,11 +1951,17 @@ export function foldTypeParamCandidates(candParams: Type[], candTypes: Type[], s
 		out.chosen.push(chosen);
 		for (let oj = oi; oj < order.length; oj += 1) {
 			const cj = order[oj];
-			if (candParams[cj] != param || cj == chosen || skip[cj]) continue;
+			if (candParams[cj] != param || cj == chosen || skip[cj] || outranked(fromMapped, cj, ci)) continue;
 			if (!candidateFits(candTypes[cj], isLiteralCandidate(literal, cj), bound)) out.misfits.push(cj);
 		}
 	}
 	return out;
+}
+
+// Reference: inferWithPriority — a candidate inferred through a homomorphic mapped type is
+// dropped when the parameter also has a direct one.
+function outranked(fromMapped: boolean[], candidate: int32, first: int32): boolean {
+	return isLiteralCandidate(fromMapped, candidate) && !isLiteralCandidate(fromMapped, first);
 }
 
 function isLiteralCandidate(literal: boolean[], ci: int32): boolean {
@@ -2992,4 +2999,13 @@ export function variantIndexInUnion(formal: Type, exprType: Type): int32 {
 		vi += 1;
 	}
 	return found;
+}
+
+test "a candidate inferred through a mapped type yields to a direct one" {
+	const t = createGenericParam("T");
+	const viaMapped = createRef(createStruct("", ["id"], [int32Type()], true));
+	const fold = foldTypeParamCandidates([t, t], [viaMapped, stringType()], [false, false], createUnifyBindings(), [], [true, false]);
+	assert fold.types.length == 1 && fold.types[0].kind == TypeKind.String && fold.misfits.length == 0;
+	const alone = foldTypeParamCandidates([t], [viaMapped], [false], createUnifyBindings(), [], [true]);
+	assert alone.types[0] == viaMapped;
 }
