@@ -18,6 +18,7 @@
  * normalization. Runs before main via the constructor the runtime already
  * relies on elsewhere. */
 __attribute__((constructor)) static void msStdStreamsBinaryMode(void) {
+	_setmode(_fileno(stdin), _O_BINARY);
 	_setmode(_fileno(stdout), _O_BINARY);
 	_setmode(_fileno(stderr), _O_BINARY);
 }
