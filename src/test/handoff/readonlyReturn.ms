@@ -60,3 +60,24 @@ test "readonlyReturn: spawned code that stores a shared module const is refused"
 test "readonlyReturn: the same stores outside spawned code, and borrows inside it, compile" {
 	assert errors(shared + "const h = new Holder(); h.f = ROOT;\nconst xs: Readonly<Node>[] = []; xs.push(ROOT);\nconst k = take(ROOT);\nconst w = spawn(() => { const r = ROOT; return r.n + ROOT.n; });", "stores the module const") == 0;
 }
+
+const lent = node + "class Holder { f: Readonly<Node> | null = null; n: int32 = 0; }\nfunction keep(h: Holder, v: Readonly<Node>): void { h.f = v; }\nfunction relay(h: Holder, v: Readonly<Node>): void { keep(h, v); }\nfunction main(k: boolean): void {\n\tconst shared: Readonly<Node> = new Node();\n\tconst w = spawn(() => { const h = new Holder(); ";
+const done = " return 0; });\n}\n";
+
+test "readonlyReturn: spawned code that stores a view of what the task borrows is refused" {
+	assert errors(lent + "h.f = shared;" + done, "stores the view 'shared' into a field") == 1;
+	assert errors(lent + "keep(h, shared);" + done, "passes the view 'shared' to 'keep'") == 1;
+	assert errors(lent + "keep(h, shared);" + done, "which stores the view 'v' into a field") == 1;
+	assert errors(lent + "relay(h, shared);" + done, "passes the view 'v' to 'keep'") == 1;
+	assert errors(lent + "h.f = k ? shared : null;" + done, "stores the view 'shared' into a field") == 1;
+	assert errors(lent + "h.f = h.f ?? shared;" + done, "stores the view 'shared' into a field") == 1;
+	assert errors(lent + "const xs: Readonly<Node>[] = []; xs.push(shared.kids[0]);" + done, "stores the view 'shared' into a sink parameter") == 1;
+	assert errors(lent + "for (const c of shared.kids) h.f = c;" + done, "stores the view 'shared' into a field") == 1;
+	assert errors(lent + "h.f = shared;" + done, "store an explicit copy of it") == 1;
+}
+
+test "readonlyReturn: a view kept in the task, a scalar or a copy of a borrowed view compiles" {
+	assert errors(lent + "h.n = shared.n; const c = new Node(); c.n = shared.n; h.f = c;" + done, "stores the view") == 0;
+	assert errors(lent + "const r = shared.kids; const xs: Cursor<Readonly<Node>>[] = []; xs.push(shared); return r.length + xs.length;" + done, "stores the view") == 0;
+	assert errors(node + "class Holder { f: Readonly<Node> | null = null; }\nfunction keep(h: Holder, v: Readonly<Node>): void { h.f = v; }\nconst shared: Readonly<Node> = new Node();\nconst h = new Holder(); h.f = shared; keep(h, shared);\nconst w = spawn(() => { keep(new Holder(), new Node()); return 0; });", "stores the view") == 0;
+}
