@@ -18,7 +18,7 @@
 // @stdout: threads mainOk=2000 workerNotFound=8000
 // @exit: 0
 
-import { argv } from "std/process";
+import { argv, platform } from "std/process";
 import {
 	mkdir, rmdir, remove, rename, symlink, chmod, writeFile, readFile, removeAll,
 	isDir, isExecutable, exists, appendFile, realpath, basename, dirname,
@@ -41,6 +41,14 @@ function show(r: Result<void, IoError>): string {
 	return r.ok ? "ok" : kindName(r.error);
 }
 
+const windows = platform == "windows";
+
+function fileAsDir(r: Result<void, IoError>): string {
+	const kind = show(r);
+	if (!windows) return kind;
+	return kind == "NotFound" ? "NotDirectory" : `windows:${kind}`;
+}
+
 function failMkdirs(dir: string): number {
 	let notFound = 0;
 	for (let i = 0; i < 2000; i++) {
@@ -56,14 +64,14 @@ const file = `${dir}/f.txt`;
 
 console.log(`mkdir new=${show(mkdir(dir))} again=${show(mkdir(dir))} missingParent=${show(mkdir(`${dir}/no/sub`))} empty=${show(mkdir(""))}`);
 writeFile(file, "x");
-console.log(`mkdir overFile=${show(mkdir(file))} underFile=${show(mkdir(`${file}/sub`))}`);
+console.log(`mkdir overFile=${show(mkdir(file))} underFile=${fileAsDir(mkdir(`${file}/sub`))}`);
 
 mkdir(`${dir}/full`);
 writeFile(`${dir}/full/x`, "x");
 mkdir(`${dir}/empty`);
-console.log(`rmdir missing=${show(rmdir(`${dir}/nope`))} file=${show(rmdir(file))} full=${rmdir(`${dir}/full`).ok ? "ok" : "err"} empty=${show(rmdir(`${dir}/empty`))} gone=${isDir(`${dir}/empty`)}`);
+console.log(`rmdir missing=${show(rmdir(`${dir}/nope`))} file=${fileAsDir(rmdir(file))} full=${rmdir(`${dir}/full`).ok ? "ok" : "err"} empty=${show(rmdir(`${dir}/empty`))} gone=${isDir(`${dir}/empty`)}`);
 
-console.log(`remove missing=${show(remove(`${dir}/nope`))} underFile=${show(remove(`${file}/x`))} empty=${show(remove(""))}`);
+console.log(`remove missing=${show(remove(`${dir}/nope`))} underFile=${fileAsDir(remove(`${file}/x`))} empty=${show(remove(""))}`);
 
 writeFile(`${dir}/a`, "A");
 writeFile(`${dir}/b`, "B");
@@ -79,7 +87,7 @@ console.log(`symlink new=${show(made)} read=${viaLink.ok ? viaLink.value : "?"} 
 const exe = chmod(file, 493);
 const exeBit = isExecutable(file);
 const plain = chmod(file, 420);
-console.log(`chmod 755=${show(exe)} x=${exeBit} 644=${show(plain)} x=${isExecutable(file)} missing=${show(chmod(`${dir}/nope`, 420))}`);
+console.log(`chmod 755=${show(exe)} x=${exeBit} 644=${show(plain)} x=${windows ? false : isExecutable(file)} missing=${show(chmod(`${dir}/nope`, 420))}`);
 
 const out = `${dir}/w.txt`;
 const wrote = writeFile(out, "x");
