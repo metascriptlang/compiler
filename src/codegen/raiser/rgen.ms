@@ -1213,63 +1213,63 @@ test "a catch binding ends with its clause" {
 }
 
 test "non-capturing closure" {
-	const ctx = evalRaiser("function lifted(_e: { k: number }) { return 42; } const f = { fn: lifted, env: { k: 0 } }; return f();");
+	const ctx = evalRaiser("function lifted(_e: { k: number }) { return 42; } const f = { fn: lifted as unknown, env: { k: 0 } }; return f();");
 	assert ctx.lastResult.intVal == 42;
 }
 
 // Reference parity: environment parameter is LAST
 test "closure with capture" {
-	const ctx = evalRaiser("function lifted(y, _e: { x: int32 }) { return _e.x + y; } const e = { x: 5 }; const f = { fn: lifted, env: e }; return f(3);");
+	const ctx = evalRaiser("function lifted(y, _e: { x: int32 }) { return _e.x + y; } const e = { x: 5 }; const f = { fn: lifted as unknown, env: e }; return f(3);");
 	assert ctx.lastResult.intVal == 8;
 }
 
 test "higher-order: makeAdder" {
-	const ctx = evalRaiser("function liftedAdd(x, _e: { n: int32 }) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd, env: { n: n } }; } const add5 = makeAdder(5); return add5(3);");
+	const ctx = evalRaiser("function liftedAdd(x, _e: { n: int32 }) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd as unknown, env: { n: n } }; } const add5 = makeAdder(5); return add5(3);");
 	assert ctx.lastResult.intVal == 8;
 }
 
 test "multiple captures" {
-	const ctx = evalRaiser("function lifted(_e: { a: number; b: number }) { return _e.a + _e.b; } const f = { fn: lifted, env: { a: 3, b: 7 } }; return f();");
+	const ctx = evalRaiser("function lifted(_e: { a: number; b: number }) { return _e.a + _e.b; } const f = { fn: lifted as unknown, env: { a: 3, b: 7 } }; return f();");
 	assert unboxFloat(ctx.lastResult) == 10;
 }
 
 test "chained call: makeAdder(5)(3)" {
-	const ctx = evalRaiser("function liftedAdd(x, _e: { n: int32 }) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd, env: { n: n } }; } return makeAdder(5)(3);");
+	const ctx = evalRaiser("function liftedAdd(x, _e: { n: int32 }) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd as unknown, env: { n: n } }; } return makeAdder(5)(3);");
 	assert ctx.lastResult.intVal == 8;
 }
 
 test "closure in loop" {
-	const ctx = evalRaiser("function lifted(_e: { i: int32 }) { return _e.i; } let sum = 0; let i = 0; while (i < 5) { const f = { fn: lifted, env: { i: i } }; sum = sum + f(); i = i + 1; } return sum;");
+	const ctx = evalRaiser("function lifted(_e: { i: int32 }) { return _e.i; } let sum = 0; let i = 0; while (i < 5) { const f = { fn: lifted as unknown, env: { i: i } }; sum = sum + f(); i = i + 1; } return sum;");
 	assert ctx.lastResult.intVal == 10;
 }
 
 test "closure returning closure" {
-	const ctx = evalRaiser("function inner(_e2) { return _e2.x + _e2.y; } function outer(_e1) { return { fn: inner, env: { x: _e1.a, y: _e1.b } }; } const f = { fn: outer, env: { a: 3, b: 7 } }; const g = f(); return g();");
+	const ctx = evalRaiser("function inner(_e2) { return _e2.x + _e2.y; } function outer(_e1) { return { fn: inner as unknown, env: { x: _e1.a, y: _e1.b } }; } const f = { fn: outer as unknown, env: { a: 3, b: 7 } }; const g = f(); return g();");
 	assert ctx.lastResult.intVal == 10;
 }
 
 test "lambda-lifted capture pattern" {
-	const ctx = evalRaiser("function lifted1(_envP: { x: int32 }) { return _envP.x; } const x = 99; const f = { fn: lifted1, env: { x: x } }; return f();");
+	const ctx = evalRaiser("function lifted1(_envP: { x: int32 }) { return _envP.x; } const x = 99; const f = { fn: lifted1 as unknown, env: { x: x } }; return f();");
 	assert ctx.lastResult.intVal == 99;
 }
 
 test "lambda-lifted capture with args" {
-	const ctx = evalRaiser("function lifted1(y, _envP: { x: int32 }) { return _envP.x + y; } const x = 10; const f = { fn: lifted1, env: { x: x } }; return f(32);");
+	const ctx = evalRaiser("function lifted1(y, _envP: { x: int32 }) { return _envP.x + y; } const x = 10; const f = { fn: lifted1 as unknown, env: { x: x } }; return f(32);");
 	assert ctx.lastResult.intVal == 42;
 }
 
 test "lambda-lifted capture inside function" {
-	const ctx = evalRaiser("function lifted1(_envP: { x: int32 }) { return _envP.x; } function make() { const x = 42; const f = { fn: lifted1, env: { x: x } }; return f(); } return make();");
+	const ctx = evalRaiser("function lifted1(_envP: { x: int32 }) { return _envP.x; } function make() { const x = 42; const f = { fn: lifted1 as unknown, env: { x: x } }; return f(); } return make();");
 	assert ctx.lastResult.intVal == 42;
 }
 
 test "lambda-lifted multiple captures" {
-	const ctx = evalRaiser("function lifted1(_envP: { a: int32; b: int32; c: int32 }): int32 { return _envP.a * _envP.b + _envP.c; } const a: int32 = 3; const b: int32 = 4; const c: int32 = 5; const f = { fn: lifted1, env: { a: a, b: b, c: c } }; return f();");
+	const ctx = evalRaiser("function lifted1(_envP: { a: int32; b: int32; c: int32 }): int32 { return _envP.a * _envP.b + _envP.c; } const a: int32 = 3; const b: int32 = 4; const c: int32 = 5; const f = { fn: lifted1 as unknown, env: { a: a, b: b, c: c } }; return f();");
 	assert ctx.lastResult.intVal == 17;
 }
 
 test "non-capturing closure pair with a nil env" {
-	const ctx = evalRaiser("function add(a, b) { return a + b; } const f = { fn: add, env: null }; return f(10, 20);");
+	const ctx = evalRaiser("function add(a, b) { return a + b; } const f = { fn: add as unknown, env: null }; return f(10, 20);");
 	assert ctx.lastResult.intVal == 30;
 }
 
@@ -1523,7 +1523,7 @@ test "method with params" {
 }
 
 test "closure env mutation" {
-	const ctx = evalRaiser("function inc(_e: { n: int32 }) { _e.n = _e.n + 1; } const obj = { n: 0 }; const f = { fn: inc, env: obj }; f(); return obj.n;");
+	const ctx = evalRaiser("function inc(_e: { n: int32 }) { _e.n = _e.n + 1; } const obj = { n: 0 }; const f = { fn: inc as unknown, env: obj }; f(); return obj.n;");
 	assert ctx.lastResult.intVal == 1;
 }
 

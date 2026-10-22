@@ -1384,17 +1384,17 @@ test "a function reads the global a module-level destructuring declares" {
 }
 
 test "hand-written closure pair (no transforms)" {
-	const ctx = evalRaiserDirect("function lifted(_envP: unknown): number { return _envP.x; } const x = 99; const f = { fn: lifted, env: { x: x } }; return f();");
+	const ctx = evalRaiserDirect("function lifted(_envP: unknown): number { return _envP.x; } const x = 99; const f = { fn: lifted as unknown, env: { x: x } }; return f();");
 	assert ctx.lastResult.intVal == 99;
 }
 
 test "closure pair nested fn (no transforms)" {
-	const ctx = evalRaiserDirect("function liftedFn(_envP: unknown): number { return _envP.x; } function make(): int32 { const x = 42; const f = { fn: liftedFn, env: { x: x } }; return f(); } return make();");
+	const ctx = evalRaiserDirect("function liftedFn(_envP: unknown): number { return _envP.x; } function make(): int32 { const x = 42; const f = { fn: liftedFn as unknown, env: { x: x } }; return f(); } return make();");
 	assert ctx.lastResult.intVal == 42;
 }
 
 test "closure pair multi-field env (no transforms)" {
-	const ctx = evalRaiserDirect("function liftedFn(_envP: unknown): number { return _envP.a + _envP.b; } const a = 10; const b = 32; const f = { fn: liftedFn, env: { a: a, b: b } }; return f();");
+	const ctx = evalRaiserDirect("function liftedFn(_envP: unknown): number { return _envP.a + _envP.b; } const a = 10; const b = 32; const f = { fn: liftedFn as unknown, env: { a: a, b: b } }; return f();");
 	assert ctx.lastResult.intVal == 42;
 }
 
