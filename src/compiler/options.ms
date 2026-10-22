@@ -284,18 +284,16 @@ function isPackageCommand(command: string): boolean {
 	return command == "add" || command == "remove" || command == "install" || command == "update" || command == "publish" || command == "login" || command == "logout" || command == "whoami" || command == "org";
 }
 
-function isMscOption(arg: string): boolean {
-	return arg.startsWith("-") && applyArgs(newCliOptions(), [arg], 0).ok;
-}
-
 export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Result<void, string> {
 	let positionalIdx = 0;
 	let i = argStart;
 	while (i < args.length) {
 		const arg = args[i];
 		if (opts.command == "run" && opts.inputFile != "") {
-			if (opts.extraArgs.length == 0 && isMscOption(arg)) {
-				return Result.err(`'${arg}' after ${opts.inputFile} is an msc option; put it before the file: msc run ${arg} ${opts.inputFile}`);
+			if (opts.extraArgs.length == 0 && arg.startsWith("-")) {
+				const own = applyArgs(newCliOptions(), [arg], 0);
+				if (own.ok) return Result.err(`'${arg}' after ${opts.inputFile} is an msc option; put it before the file: msc run ${arg} ${opts.inputFile}`);
+				if (own.error != `unknown option '${arg}'`) return own;
 			}
 			opts.extraArgs.push(arg);
 			i += 1;
@@ -588,6 +586,15 @@ test "build and test refuse --target=raiser instead of building C, whichever ord
 	}
 	assert applyArgs(newCliOptions(), ["run", "--target=raiser", "a.ms"], 0).ok;
 	assert applyArgs(newCliOptions(), ["check", "--target=raiser", "a.ms"], 0).ok;
+}
+
+test "run: a refused msc option right after the file reports its own error instead of reaching the program" {
+	const opts = newCliOptions();
+	const r = applyArgs(opts, ["run", "cli.ms", "--gc=drc"], 0);
+	assert !r.ok;
+	if (!r.ok) { assert r.error == "'--gc=drc' is gone: memory management is --mm=drc|manual|none, and drc always collects cycles"; }
+	assert opts.extraArgs.length == 0;
+	assert applyArgs(newCliOptions(), ["run", "cli.ms", "--foo"], 0).ok;
 }
 
 test "run: -d: right after the file is an msc option too" {
