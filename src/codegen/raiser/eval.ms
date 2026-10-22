@@ -1709,6 +1709,10 @@ test "engine: a macro wire class has no layout, so its fields are read by name, 
 	wire.builtinKind = "";
 	wire.modulePath = "std/meta/node.ms";
 	assert layoutOf(wire.symbolType).length == 0;
+	const opaque = lookupSymbol(ctx.table, "Opaque");
+	assert layoutOf(opaque.symbolType).join(",") == "kind";
+	opaque.modulePath = "std/meta/node.ms";
+	assert layoutOf(opaque.symbolType).length == 0;
 }
 
 test "a slot read after the object table grew sees the new objects" {
