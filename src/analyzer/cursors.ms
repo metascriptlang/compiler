@@ -1091,6 +1091,37 @@ test "a store to another field keeps the cursor" {
 	assert isCursorNamed(body, "c");
 }
 
+test "a callee that writes only an object it allocated keeps the cursor" {
+	const body = getFuncNamed(BOXES + "function fill(): Holder { const m = new Holder(\"o\"); m.child = new Box(\"n\"); return m; }\n"
+		+ "function f(h: Holder): void { const c = h.child; fill(); show(c.v); }", "f");
+	inferCursors(body);
+	assert isCursorNamed(body, "c");
+}
+
+test "a callee that writes an object a fresh routine returned keeps the cursor" {
+	const body = getFuncNamed(BOXES + "function mk(): Holder { return new Holder(\"o\"); }\n"
+		+ "function fill(): void { const m = mk(); m.child = new Box(\"n\"); }\n"
+		+ "function f(h: Holder): void { const c = h.child; fill(); show(c.v); }", "f");
+	inferCursors(body);
+	assert isCursorNamed(body, "c");
+}
+
+test "a callee that writes an object a routine returned from module state ends the cursor" {
+	const body = getFuncNamed(BOXES + "let held = new Holder(\"g\");\n"
+		+ "function shared(): Holder { return held; }\n"
+		+ "function fill(): void { const m = shared(); m.child = new Box(\"n\"); }\n"
+		+ "function f(h: Holder): void { const c = h.child; fill(); show(c.v); }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "c");
+}
+
+test "a callee that writes through a field of an object it allocated ends the cursor" {
+	const body = getFuncNamed(BOXES + "function fill(h: Holder): void { const m = new Top(); m.mid = h; m.mid.child = new Box(\"n\"); }\n"
+		+ "function f(h: Holder): void { const c = h.child; fill(h); show(c.v); }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "c");
+}
+
 test "a field store joins the stored object to the target's graph" {
 	const body = getFuncNamed(BOXES + "function f(t: Top): void { const m = new Holder(\"o\"); t.mid = m; const z = m.child; t.mid.child = new Box(\"n\"); show(z.v); show(m.child.v); }", "f");
 	inferCursors(body);
@@ -1113,6 +1144,38 @@ test "storing an array literal joins its elements to the target's graph" {
 	const body = getFuncNamed(BOXES + "function f(t: Top): void { const m = new Holder(\"o\"); t.mids = [m]; const z = m.child; t.mids[0].child = new Box(\"n\"); show(z.v); show(m.child.v); }", "f");
 	inferCursors(body);
 	assert !isCursorNamed(body, "z");
+}
+
+const APPLY = "function noop(h: Holder): void { show(\"x\"); }\n"
+	+ "function apply(h: Holder, fn: (h: Holder) => void): void { fn(h); }\n"
+	+ "function forward(h: Holder, fn: (h: Holder) => void): void { apply(h, fn); }\n"
+	+ "function rebind(h: Holder, fn: (h: Holder) => void): void { fn = replaceChild; fn(h); }\n";
+
+test "a routine calling its function parameter writes what the passed routine writes" {
+	const body = getFuncNamed(BOXES + APPLY + "function f(h: Holder, g: Holder): void { const c = h.child; apply(g, replaceChild); show(c.v); }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "c");
+}
+
+test "a routine calling its function parameter with a pure routine keeps the cursor" {
+	const body = getFuncNamed(BOXES + APPLY + "function f(h: Holder, g: Holder): void { const c = h.child; apply(g, noop); show(c.v); }", "f");
+	inferCursors(body);
+	assert isCursorNamed(body, "c");
+}
+
+test "a function parameter forwarded one call deeper still carries the passed routine's writes" {
+	const pure = getFuncNamed(BOXES + APPLY + "function f(h: Holder, g: Holder): void { const c = h.child; forward(g, noop); show(c.v); }", "f");
+	inferCursors(pure);
+	assert isCursorNamed(pure, "c");
+	const writes = getFuncNamed(BOXES + APPLY + "function f(h: Holder, g: Holder): void { const c = h.child; forward(g, replaceChild); show(c.v); }", "f");
+	inferCursors(writes);
+	assert !isCursorNamed(writes, "c");
+}
+
+test "a function parameter reassigned before the call ends the cursor whatever the caller passes" {
+	const body = getFuncNamed(BOXES + APPLY + "function f(h: Holder, g: Holder): void { const c = h.child; rebind(g, noop); show(c.v); }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "c");
 }
 
 test "loop binding over an array written in the loop is NOT cursor" {
