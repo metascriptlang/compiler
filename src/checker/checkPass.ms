@@ -4215,7 +4215,7 @@ function preludeModulePaths(prelude: CheckerContext): HashSet<string> {
 		const members = prelude.preludeInterf.get(specifier);
 		if (members == null) continue;
 		for (const sym of members) {
-			if (sym.modulePath != "" && !prelude.preludeModuleScopes.has(sym.modulePath)) owned.add(sym.modulePath);
+			if (sym.modulePath != "" && (prelude.ownModules.has(sym.modulePath) || !prelude.preludeModuleScopes.has(sym.modulePath))) owned.add(sym.modulePath);
 		}
 	}
 	return owned;
