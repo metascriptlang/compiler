@@ -18,7 +18,7 @@ import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, Raise
 import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserConstString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
 import { resolveRuntimeDir } from "../../utils/path";
-import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation } from "./valueCopy";
+import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf } from "./valueCopy";
 import { placedInstanceOf } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
 import { runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase } from "../../checker/types";
@@ -32,7 +32,7 @@ import {
 	isLocalString,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
-	callRaiserStmtCompiler, emitTrapNil, layoutOperand, CLOSURE_PAIR, slotInst, resolveGlobal, raiserClassKey, classSymOfType, landResult, declaredSymbol,
+	callRaiserStmtCompiler, emitTrapNil, layoutOperand, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, classSymOfType, landResult, declaredSymbol,
 } from "./context";
 import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros, emitTrapValue } from "./valueCopy";
 
@@ -739,9 +739,9 @@ function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 
 		const objReg = compileExpr(s, md.object);
 		const nameIdx = addConst(s, raiserConstString(md.property));
 		const held = allocFor(s, left.nodeType);
-		emitInst(s, fieldInst(md.object.nodeType, md.property, RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, held, objReg, nameIdx));
+		emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, held, objReg, nameIdx));
 		const result = emitValueAssign(s, held, srcReg, left.nodeType);
-		emitInst(s, fieldInst(md.object.nodeType, md.property, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, objReg, nameIdx, result));
+		emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, objReg, nameIdx, result));
 		return result;
 	}
 	return -1;
@@ -1080,7 +1080,7 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 			const md = d.left.data as MemberExprData;
 			const objReg = compileExpr(s, md.object);
 			const nameIdx = addConst(s, raiserConstString(md.property));
-			emitInst(s, fieldInst(md.object.nodeType, md.property, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, objReg, nameIdx, srcReg));
+			emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, objReg, nameIdx, srcReg));
 			return srcReg;
 		}
 		return srcReg;
@@ -1368,7 +1368,7 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 		const objReg = compileExpr(s, md.object);
 		const nameIdx = addConst(s, raiserConstString(md.property));
 		const tmpReg = allocFor(s, d.left.nodeType);
-		emitInst(s, fieldInst(md.object.nodeType, md.property, RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, tmpReg, objReg, nameIdx));
+		emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, tmpReg, objReg, nameIdx));
 		const strConcat = op == "+=" && (exprIsString(s, d.left) || exprIsString(s, d.right));
 		const rhsReg = strConcat ? compileStringPart(s, d.right) : compileCompoundOperand(s, op, d.right);
 		if (strConcat) {
@@ -1376,7 +1376,7 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 		} else {
 			emitCompoundArith(s, op, tmpReg, tmpReg, rhsReg, d.left);
 		}
-		emitInst(s, fieldInst(md.object.nodeType, md.property, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, objReg, nameIdx, tmpReg));
+		emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, objReg, nameIdx, tmpReg));
 		return tmpReg;
 	}
 
@@ -1951,9 +1951,9 @@ function compileUpdateExpr(s: RaiserCompState, node: Node, resultUnused: boolean
 		const objReg = compileExpr(s, md.object);
 		const nameIdx = addConst(s, raiserConstString(md.property));
 		const oldReg = allocFor(s, d.updateArg.nodeType);
-		emitInst(s, fieldInst(md.object.nodeType, md.property, RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, oldReg, objReg, nameIdx));
+		emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, oldReg, objReg, nameIdx));
 		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg);
-		emitInst(s, fieldInst(md.object.nodeType, md.property, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, objReg, nameIdx, newReg));
+		emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, objReg, nameIdx, newReg));
 		return d.isPrefix ? newReg : oldReg;
 	}
 
@@ -1988,7 +1988,7 @@ function compileObjectLiteral(s: RaiserCompState, node: Node): int32 {
 			? getProperty(node.nodeType, d.keys[i]) : d.properties[i].nodeType;
 		const valReg = emitValueCopy(s, compileExpr(s, d.properties[i]), fieldType);
 		const nameIdx = addConst(s, raiserConstString(d.keys[i]));
-		emitInst(s, fieldInst(node.nodeType, d.keys[i], RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, dest, nameIdx, valReg));
+		emitInst(s, fieldInst(s, node.nodeType, d.keys[i], RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, dest, nameIdx, valReg));
 	}
 	if (d.keys.length == d.properties.length) emitOmittedFieldZeros(s, dest, node.nodeType, d.keys);
 
@@ -2242,7 +2242,7 @@ function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 	const objReg = compileExpr(s, d.object);
 	const nameIdx = addConst(s, raiserConstString(d.property));
 	const dest = allocFor(s, node.nodeType);
-	emitInst(s, fieldInst(d.object.nodeType, d.property, RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, dest, objReg, nameIdx));
+	emitInst(s, fieldInst(s, d.object.nodeType, d.property, RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, dest, objReg, nameIdx));
 	return dest;
 }
 
@@ -2257,9 +2257,21 @@ export function layoutOf(t: Type | null): string[] {
 	return shape != null && shape.kind == TypeKind.Struct && !isMaybeType(shape) ? shape.typeNames : [];
 }
 
-export function fieldInst(t: Type | null, name: string, byName: RaiserOpcode, bySlot: RaiserOpcode, a: number, b: number, c: number): RaiserInstruction {
+// The register class each slot of layoutOf(t) holds.
+export function slotKindsOf(s: RaiserCompState, t: Type | null): RaiserRegClass[] {
+	const bare = skipModifier(t);
+	if (bare != null && bare.kind == TypeKind.Function) return CLOSURE_PAIR_KINDS;
+	const shape = peelToStructOrUnion(t);
+	return shape != null && shape.kind == TypeKind.Struct && !isMaybeType(shape) ? slotClassesOf(s, shape) : [];
+}
+
+// A slot opcode moves the slot's word as it is, so a field goes by slot only when the value's
+// register is of the class its slot holds; any other register converts by name.
+export function fieldInst(s: RaiserCompState, t: Type | null, name: string, byName: RaiserOpcode, bySlot: RaiserOpcode, a: number, b: number, c: number): RaiserInstruction {
 	const slot = layoutOf(t).indexOf(name);
-	return slot >= 0 && slot <= MAX_SLOT ? slotInst(bySlot, a, b, c, slot) : raiserABC(byName, a, b, c);
+	if (slot < 0 || slot > MAX_SLOT) return raiserABC(byName, a, b, c);
+	const value = bySlot == RaiserOpcode.LoadSlot ? a : c;
+	return classOfReg(s, value as int32) == slotKindsOf(s, t)[slot] ? slotInst(bySlot, a, b, c, slot) : raiserABC(byName, a, b, c);
 }
 
 function isRecordOperand(node: Node): boolean {
@@ -2472,7 +2484,7 @@ export function classTypeOperand(s: RaiserCompState, className: string, classSym
 		chain.push(classTargetKey(up));
 		up = classParentOf(up);
 	}
-	s.classTypes.push({ name: className, chain, fields: layoutOf(classSym.symbolType) });
+	s.classTypes.push({ name: className, chain, fields: layoutOf(classSym.symbolType), kinds: slotKindsOf(s, classSym.symbolType) });
 	return s.classTypes.length;
 }
 
@@ -2487,6 +2499,6 @@ function emitObjectShell(s: RaiserCompState, dest: int32, t: Type | null): void 
 	const classSym = literalClass(t);
 	const decl = classSym != null ? classDeclNodeOf(classSym) : null;
 	const className = decl != null && decl.kind == NodeKind.ClassDecl ? (decl.data as ClassDeclData).className : "";
-	const shape = classSym != null ? classTypeOperand(s, className != "" ? className : classSym.name, classSym) : layoutOperand(s, layoutOf(t));
+	const shape = classSym != null ? classTypeOperand(s, className != "" ? className : classSym.name, classSym) : layoutOperand(s, layoutOf(t), slotKindsOf(s, t));
 	emitInst(s, raiserABC(RaiserOpcode.NewObject, dest, shape, 0));
 }

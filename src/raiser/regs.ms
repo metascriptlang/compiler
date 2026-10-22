@@ -2,7 +2,7 @@
 // from one number per register to a rank in the word file or the ref file.
 
 import {
-	RaiserOpcode, RaiserInstruction, RaiserRegClass, RaiserRole, RaiserConvClass, regClassLetter, inRefFile, operandTagged,
+	RaiserOpcode, RaiserInstruction, TYPED_SLOTS, RaiserRegClass, RaiserRole, RaiserConvClass, regClassLetter, inRefFile, operandTagged,
 	opRole, opHasSite, siteArgCount, convTarget, raiserABC
 } from "./bytecode";
 import { RaiserValue, RaiserValueKind } from "./value";
@@ -185,8 +185,8 @@ export function layoutRegisters(name: string, code: RaiserInstruction[], constan
 			if (inst.a >= regCount || inst.b >= regCount || ca != cb) throw new Error(`internal: Move at instruction ${pc} of ${name} copies R${inst.b} (${inst.b < regCount ? regClassLetter(cb) : "none"}) to R${inst.a} (${inst.a < regCount ? regClassLetter(ca) : "none"}) across register classes`);
 			op = inRefFile(ca) ? RaiserOpcode.MoveR : RaiserOpcode.MoveW;
 		}
-		if (op == RaiserOpcode.LoadSlot && inst.a < regCount) op = typedSlot(op, classes[inst.a as int32]);
-		if (op == RaiserOpcode.StoreSlot && inst.c < regCount) op = typedSlot(op, classes[inst.c as int32]);
+		if (op == RaiserOpcode.LoadSlot && inst.a < regCount && inst.slot < TYPED_SLOTS) op = typedSlot(op, classes[inst.a as int32]);
+		if (op == RaiserOpcode.StoreSlot && inst.c < regCount && inst.slot < TYPED_SLOTS) op = typedSlot(op, classes[inst.c as int32]);
 		if (inst.a < regCount && (op == RaiserOpcode.BeqI64 || op == RaiserOpcode.BneI64 || op == RaiserOpcode.BrEqI64 || op == RaiserOpcode.BrNeI64)) op = ranked(op, classes[inst.a as int32]);
 		const fields: int32[] = [inst.a as int32, inst.b as int32, inst.c as int32];
 		for (let slot = 0; slot < 3; slot += 1) {

@@ -179,7 +179,7 @@ function emitZeroOf(s: RaiserCompState, valueType: Type | null, open: Type[]): i
 			}
 		}
 		const object = allocRef(s);
-		emitInst(s, raiserABC(RaiserOpcode.NewObject, object, layoutOperand(s, t.typeNames), 0));
+		emitInst(s, raiserABC(RaiserOpcode.NewObject, object, layoutOperand(s, t.typeNames, slotClassesOf(s, t)), 0));
 		open.push(t);
 		for (let i = 0; i < t.typeNames.length; i += 1) {
 			const field = emitZeroOf(s, i < t.typeChildren.length ? t.typeChildren[i] : null, open);
@@ -257,6 +257,13 @@ export function joinClass(a: RaiserRegClass, b: RaiserRegClass): RaiserRegClass 
 
 export function regClassOf(s: RaiserCompState, t: Type | null): RaiserRegClass {
 	return classOfType(s, t, 0);
+}
+
+// The register class of each field of a struct shape, in the order of its names: the class its slot holds.
+export function slotClassesOf(s: RaiserCompState, shape: Type): RaiserRegClass[] {
+	const kinds: RaiserRegClass[] = [];
+	for (let i = 0; i < shape.typeNames.length; i += 1) kinds.push(i < shape.typeChildren.length ? regClassOf(s, shape.typeChildren[i]) : RaiserRegClass.Dyn);
+	return kinds;
 }
 
 export function allocFor(s: RaiserCompState, t: Type | null): int32 {

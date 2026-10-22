@@ -6,7 +6,7 @@
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, handleIndex, handleHeapKind, raiserArray, raiserObject,
 	RaiserArrayHeap, RaiserObjectHeap, createArrayHeap, createStructHeap, heapAllocString, heapAllocArray, heapAllocObject, heapAllocBox,
-	heapArrayPush, rcIncref, rcDecref
+	heapArrayPush, rcIncref, rcDecref, objectFieldCount, fieldValueAt
 } from "./value";
 
 interface LedgerTally {
@@ -58,7 +58,9 @@ export function ledgerAudit(arr: RaiserArrayHeap, obj: RaiserObjectHeap, roots: 
 		if (!freeArrays[i]) for (const item of arr.arrays[i].items) tallyRef(tally, item);
 	}
 	for (let i = 0; i < obj.objects.length; i += 1) {
-		if (!freeObjects[i]) for (const field of obj.objects[i].fields) tallyRef(tally, field);
+		if (freeObjects[i]) continue;
+		const count = objectFieldCount(obj.objects[i]);
+		for (let f = 0; f < count; f += 1) tallyRef(tally, fieldValueAt(obj.objects[i], f));
 	}
 	for (let i = 0; i < arr.boxes.items.length; i += 1) {
 		if (!freeBoxes[i]) tallyRef(tally, arr.boxes.items[i].value);

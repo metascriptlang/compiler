@@ -545,6 +545,7 @@ export function carriesSlot(op: RaiserOpcode): boolean {
 // from bit 40 up as a signed field, and a slot opcode's slot the top 8.
 const PACKED_FIELD_LIMIT = 65536;
 export const MAX_SLOT = 255;
+export const TYPED_SLOTS = 64;   // a typed slot opcode names a slot below this, one bit of an object's slot masks
 const PACKED_BRANCH_LIMIT = 16777216;
 
 function packedField(inst: RaiserInstruction, v: number, name: string, limit: int64, bits: int32): int64 {

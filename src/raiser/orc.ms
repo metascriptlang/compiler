@@ -15,7 +15,7 @@ import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, makeHandle, handleIndex, raiserArray, raiserObject,
 	RaiserArrayHeap, RaiserObjectHeap, rcDecref,
 	createArrayHeap, createStructHeap, heapAllocArray, heapAllocObject,
-	heapObjectSetField, heapArrayPush, rcIncref, heldHandle
+	heapObjectSetField, heapArrayPush, rcIncref, heldHandle, objectFieldCount, fieldValueAt
 } from "./value";
 
 const COL_BLACK = 0;   // in use / alive (alloc default)
@@ -66,7 +66,10 @@ function pushChildren(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: Ra
 			if (isRef(child)) work.push(heldHandle(child));
 		}
 	} else {
-		for (const child of objHeap.objects[handleIndex(v.intVal)].fields) {
+		const obj = objHeap.objects[handleIndex(v.intVal)];
+		const count = objectFieldCount(obj);
+		for (let i = 0; i < count; i += 1) {
+			const child = fieldValueAt(obj, i);
 			if (isRef(child)) work.push(heldHandle(child));
 		}
 	}
@@ -121,6 +124,13 @@ function scan(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserV
 	}
 }
 
+function releaseWhiteChild(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, child: RaiserValue, work: RaiserValue[]): void {
+	if (isRef(child)) {
+		if (colorOf(arrHeap, objHeap, child) == COL_WHITE) work.push(heldHandle(child));
+		else if (colorOf(arrHeap, objHeap, child) != COL_GRAY) rcDecref(arrHeap, objHeap, child);
+	} else if (child.kind == RaiserValueKind.String) rcDecref(arrHeap, objHeap, child);
+}
+
 // --- Phase 3: collect white — recycle the garbage cycle, release external refs ---
 // White → mark GRAY (in-collect-set) to disambiguate from external BLACK refs.
 
@@ -132,12 +142,12 @@ function collectWhite(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held:
 		if (colorOf(arrHeap, objHeap, v) != COL_WHITE) continue;
 		setColorOf(arrHeap, objHeap, v, COL_GRAY);
 		toFree.push(v);
-		const children = v.kind == RaiserValueKind.Array ? arrHeap.arrays[handleIndex(v.intVal)].items : objHeap.objects[handleIndex(v.intVal)].fields;
-		for (const child of children) {
-			if (isRef(child)) {
-				if (colorOf(arrHeap, objHeap, child) == COL_WHITE) work.push(heldHandle(child));
-				else if (colorOf(arrHeap, objHeap, child) != COL_GRAY) rcDecref(arrHeap, objHeap, child);
-			} else if (child.kind == RaiserValueKind.String) rcDecref(arrHeap, objHeap, child);
+		if (v.kind == RaiserValueKind.Array) {
+			for (const child of arrHeap.arrays[handleIndex(v.intVal)].items) releaseWhiteChild(arrHeap, objHeap, child, work);
+		} else {
+			const obj = objHeap.objects[handleIndex(v.intVal)];
+			const count = objectFieldCount(obj);
+			for (let i = 0; i < count; i += 1) releaseWhiteChild(arrHeap, objHeap, fieldValueAt(obj, i), work);
 		}
 	}
 	for (const v of toFree) {
@@ -149,7 +159,10 @@ function collectWhite(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held:
 			arrHeap.freeList.push(handleIndex(v.intVal));
 		} else {
 			const data = objHeap.objects[handleIndex(v.intVal)];
-			data.fields.length = 0;
+			data.slots.length = 0;
+			data.wordSlots = 0;
+			data.refSlots = 0;
+			data.values.length = 0;
 			data.added.length = 0;
 			data.rc = 0;
 			data.color = COL_BLACK;

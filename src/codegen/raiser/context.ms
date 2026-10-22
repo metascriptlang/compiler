@@ -534,13 +534,14 @@ export function resolveClassInit(s: RaiserCompState, classSym: Symbol): int32 {
 
 // --- Closure pair helpers ---
 // The NewObject operand of a typed object that has no class: its layout alone.
-export function layoutOperand(s: RaiserCompState, fields: string[]): int32 {
+export function layoutOperand(s: RaiserCompState, fields: string[], kinds: RaiserRegClass[]): int32 {
 	if (fields.length == 0) return 0;
-	s.classTypes.push({ name: "", chain: [], fields });
+	s.classTypes.push({ name: "", chain: [], fields, kinds });
 	return s.classTypes.length;
 }
 
 export const CLOSURE_PAIR: string[] = ["fn", "env"];
+export const CLOSURE_PAIR_KINDS: RaiserRegClass[] = [RaiserRegClass.Word, RaiserRegClass.Ref];
 
 export function slotInst(op: RaiserOpcode, a: number, b: number, c: number, slot: number): RaiserInstruction {
 	const inst = raiserABC(op, a, b, c);
@@ -553,7 +554,7 @@ export function slotInst(op: RaiserOpcode, a: number, b: number, c: number, slot
 
 export function emitClosurePair(s: RaiserCompState, funcIdx: int32, envReg: int32): int32 {
 	const pairReg = allocRef(s);
-	emitInst(s, raiserABC(RaiserOpcode.NewObject, pairReg, layoutOperand(s, CLOSURE_PAIR), 0));
+	emitInst(s, raiserABC(RaiserOpcode.NewObject, pairReg, layoutOperand(s, CLOSURE_PAIR, CLOSURE_PAIR_KINDS), 0));
 	const fnReg = allocWord(s);
 	emitLoadConst(s, fnReg, raiserInt(funcIdx));
 	const fnConst = addConst(s, raiserConstString("fn"));

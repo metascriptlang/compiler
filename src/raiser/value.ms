@@ -2,10 +2,11 @@
 // Day-1: flat tagged interface. No NaN-boxing.
 // Bool stored as intVal (0/1) to keep the interface simple.
 
-import { RaiserRegClass } from "./bytecode";
+import { RaiserRegClass, regClassLetter, TYPED_SLOTS } from "./bytecode";
 
 @include("runtime/core/hashBits.h");
 extern function msBitsFloat64(u: int64): float64;
+extern function msFloat64Bits(d: float64): int64;
 
 
 // A kind from String up holds one heap handle in intVal; the kinds below it hold no reference.
@@ -688,21 +689,27 @@ export function heapBoxLive(heap: RaiserArrayHeap): number {
 }
 
 // --- Object Heap ---
-// Objects live on a side heap like arrays, their values inline. A slot inside the class
-// layout is named by the class; only a field added past it carries its name on the object.
+// Objects live on a side heap like arrays. A slot inside the class layout is named by the
+// class and holds one word in its register class: a Word, Float or Bool slot its raw bits, a
+// Ref slot its handle (0 is nil), a Dyn slot the index of its value in `values`. A field added
+// past the layout carries its name on the object and its value in `values`, after the Dyn slots'.
 // Linear scan for field lookup (fast for typical <20 field objects).
 
 export interface RaiserClassType {
 	name: string;
 	chain: string[];
 	fields: string[];   // the layout NewObject lays out, so a field sits at the slot its type gives it
+	kinds: RaiserRegClass[];
 }
 
-export const RAISER_NO_CLASS: RaiserClassType = { name: "", chain: [], fields: [] };
+export const RAISER_NO_CLASS: RaiserClassType = { name: "", chain: [], fields: [], kinds: [] };
 
 export interface RaiserObjectData {
-	fields: RaiserValue[];
-	added: string[];   // the names of fields[layout length..], in insertion order
+	slots: int64[];
+	wordSlots: int64;   // bit i set when slot i (below TYPED_SLOTS) is a Word slot, so a typed slot opcode checks its slot in one load
+	refSlots: int64;    // the same for Ref slots
+	values: RaiserValue[];
+	added: string[];   // the names of the fields past the layout, in insertion order
 	rc: int32;
 	color: int32;
 	classType: RaiserClassType;
@@ -734,7 +741,10 @@ export function heapAllocObject(heap: RaiserObjectHeap): int64 {
 		const reused = heap.freeList[heap.freeList.length - 1];
 		heap.freeList.length = heap.freeList.length - 1;
 		const data: Cursor<RaiserObjectData> = heap.objects[reused];
-		data.fields.length = 0;
+		data.slots.length = 0;
+		data.wordSlots = 0;
+		data.refSlots = 0;
+		data.values.length = 0;
 		data.added.length = 0;
 		data.rc = 0;
 		data.color = 0;
@@ -742,43 +752,130 @@ export function heapAllocObject(heap: RaiserObjectHeap): int64 {
 		return makeHandle(reused, RaiserHeapKind.Object);
 	}
 	const idx = heap.objects.length;
-	const fields: RaiserValue[] = [];
+	const slots: int64[] = [];
+	const values: RaiserValue[] = [];
 	const added: string[] = [];
-	const data: RaiserObjectData = { fields, added, rc: 0, color: 0, classType: RAISER_NO_CLASS };
+	const data: RaiserObjectData = { slots, wordSlots: 0, refSlots: 0, values, added, rc: 0, color: 0, classType: RAISER_NO_CLASS };
 	heap.objects.push(data);
 	return makeHandle(idx, RaiserHeapKind.Object);
 }
 
+function laySlot(obj: RaiserObjectData): void {
+	const cls = obj.classType.kinds[obj.slots.length];
+	const bit: int64 = obj.slots.length < TYPED_SLOTS ? (1 as int64) << (obj.slots.length as int64) : 0;
+	if (cls == RaiserRegClass.Word) obj.wordSlots = obj.wordSlots | bit;
+	if (cls == RaiserRegClass.Ref) obj.refSlots = obj.refSlots | bit;
+	if (cls == RaiserRegClass.Dyn) {
+		obj.slots.push(obj.values.length as int64);
+		obj.values.push(raiserNil());
+	} else {
+		obj.slots.push(0);
+	}
+}
+
+// Every slot of the object's class at its zero: zero bits, a nil handle, a nil value.
+export function layOutObject(obj: RaiserObjectData, classType: RaiserClassType): void {
+	obj.classType = classType;
+	while (obj.slots.length < classType.fields.length) laySlot(obj);
+}
+
+// The register class slot `index` holds, which must be laid.
+@inline
+export function slotKind(obj: RaiserObjectData, index: int32): RaiserRegClass {
+	return obj.classType.kinds[index];
+}
+
+export function objectFieldCount(obj: RaiserObjectData): int32 {
+	return (obj.slots.length + obj.added.length) as int32;
+}
+
 export function heapObjectFieldCount(heap: RaiserObjectHeap, handle: int64): int32 {
-	const obj = heap.objects[handleIndex(handle)];
-	return obj.fields.length;
+	return objectFieldCount(heap.objects[handleIndex(handle)]);
 }
 
 export function fieldNameAt(obj: RaiserObjectData, index: number): string {
-	const laid = obj.classType.fields.length;
+	const laid = obj.slots.length;
 	return index < laid ? obj.classType.fields[index] : obj.added[index - laid];
 }
 
 export function fieldNameIs(obj: RaiserObjectData, index: number, name: string): boolean {
-	const laid = obj.classType.fields.length;
+	const laid = obj.slots.length;
 	return index < laid ? obj.classType.fields[index] == name : obj.added[index - laid] == name;
 }
 
 export function fieldIndex(obj: RaiserObjectData, name: string): number {
-	for (let i = 0; i < obj.fields.length; i += 1) {
+	const count = objectFieldCount(obj);
+	for (let i = 0; i < count; i += 1) {
 		if (fieldNameIs(obj, i, name)) return i;
 	}
 	return -1;
 }
 
+// The value a field holds, read in its slot's class.
+export function fieldValueAt(obj: RaiserObjectData, index: number): RaiserValue {
+	const laid = obj.slots.length;
+	if (index >= laid) return obj.values[obj.values.length - obj.added.length + index - laid];
+	const bits = obj.slots[index];
+	return match (obj.classType.kinds[index]) {
+		RaiserRegClass.Word => raiserInt(bits),
+		RaiserRegClass.Float => raiserFloat(msBitsFloat64(bits)),
+		RaiserRegClass.Bool => raiserBool(bits != 0),
+		RaiserRegClass.Ref => handleValue(bits),
+		RaiserRegClass.Dyn => obj.values[bits],
+	};
+}
+
+// Whether a value fits a slot of class `cls`; an Int widens into a Float slot as it does into a Float register.
+export function slotFits(cls: RaiserRegClass, val: RaiserValue): boolean {
+	if (cls == RaiserRegClass.Float) return val.kind == RaiserValueKind.Float || val.kind == RaiserValueKind.Int;
+	if (cls == RaiserRegClass.Dyn) return true;
+	return kindFitsClass(val.kind, cls);
+}
+
+// The word a slot of class `cls` holds for a value that fits it.
+export function slotWord(cls: RaiserRegClass, val: RaiserValue): int64 {
+	if (cls == RaiserRegClass.Float) return val.kind == RaiserValueKind.Int ? msFloat64Bits(val.intVal as number) : msFloat64Bits(val.floatVal);
+	return val.kind == RaiserValueKind.Nil ? 0 : val.intVal;
+}
+
+// "" when field `index` can hold the value, otherwise why it cannot.
+export function fieldRefusal(obj: RaiserObjectData, index: number, val: RaiserValue): string {
+	if (index >= obj.slots.length) return "";
+	const cls = obj.classType.kinds[index];
+	if (slotFits(cls, val)) return "";
+	return `internal: field '${obj.classType.fields[index]}' of ${obj.classType.name != "" ? obj.classType.name : "a typed object"} is a ${regClassLetter(cls)} slot, got a value of kind ${val.kind}`;
+}
+
+// Stores a value into a field without counting: the field takes over the caller's count of it.
+export function fieldStoreAt(obj: RaiserObjectData, index: number, val: RaiserValue): void {
+	const laid = obj.slots.length;
+	if (index >= laid) {
+		obj.values[obj.values.length - obj.added.length + index - laid] = val;
+		return;
+	}
+	const cls = obj.classType.kinds[index];
+	if (cls == RaiserRegClass.Dyn) {
+		obj.values[obj.slots[index]] = val;
+		return;
+	}
+	const refused = fieldRefusal(obj, index, val);
+	if (refused != "") throw new Error(refused);
+	obj.slots[index] = slotWord(cls, val);
+}
+
 export function appendField(obj: RaiserObjectData, name: string, val: RaiserValue): void {
-	if (obj.fields.length >= obj.classType.fields.length) obj.added.push(name);
-	obj.fields.push(val);
+	if (obj.slots.length < obj.classType.fields.length) {
+		laySlot(obj);
+		fieldStoreAt(obj, obj.slots.length - 1, val);
+		return;
+	}
+	obj.added.push(name);
+	obj.values.push(val);
 }
 
 export function heapObjectFieldNameAt(heap: RaiserObjectHeap, handle: int64, index: int64): string {
 	const obj = heap.objects[handleIndex(handle)];
-	if (index < 0 || index >= obj.fields.length) return "";
+	if (index < 0 || index >= objectFieldCount(obj)) return "";
 	return fieldNameAt(obj, index as number);
 }
 
@@ -796,20 +893,20 @@ test "heapObjectFieldNameAt/ValueAt follow insertion order" {
 
 export function heapObjectFieldValueAt(heap: RaiserObjectHeap, handle: int64, index: int64): RaiserValue {
 	const obj = heap.objects[handleIndex(handle)];
-	if (index < 0 || index >= obj.fields.length) return { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0 };
-	return obj.fields[index];
+	if (index < 0 || index >= objectFieldCount(obj)) return { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0 };
+	return fieldValueAt(obj, index as number);
 }
 
 export function heapObjectGetField(heap: RaiserObjectHeap, handle: int64, name: string): RaiserValue {
 	const obj = heap.objects[handleIndex(handle)];
 	const i = fieldIndex(obj, name);
-	return i >= 0 ? obj.fields[i] : raiserNil();
+	return i >= 0 ? fieldValueAt(obj, i) : raiserNil();
 }
 
 export function heapObjectSetField(heap: RaiserObjectHeap, handle: int64, name: string, val: RaiserValue): void {
 	const obj = heap.objects[handleIndex(handle)];
 	const i = fieldIndex(obj, name);
-	if (i >= 0) obj.fields[i] = val;
+	if (i >= 0) fieldStoreAt(obj, i, val);
 	else appendField(obj, name, val);
 }
 
@@ -887,10 +984,17 @@ function rcDestroyArray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, ind
 @noinline
 function rcDestroyObject(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, index: int64): void {
 	const data: Cursor<RaiserObjectData> = objHeap.objects[index];
-	for (let i = 0; i < data.fields.length; i += 1) {
-		if (data.fields[i].kind >= RaiserValueKind.String) rcDecrefHandle(arrHeap, objHeap, data.fields[i].intVal);
+	const kinds = data.classType.kinds;
+	for (let i = 0; i < data.slots.length; i += 1) {
+		if (kinds[i] == RaiserRegClass.Ref && data.slots[i] != 0) rcDecrefHandle(arrHeap, objHeap, data.slots[i]);
 	}
-	data.fields.length = 0;
+	for (let i = 0; i < data.values.length; i += 1) {
+		if (data.values[i].kind >= RaiserValueKind.String) rcDecrefHandle(arrHeap, objHeap, data.values[i].intVal);
+	}
+	data.slots.length = 0;
+	data.wordSlots = 0;
+	data.refSlots = 0;
+	data.values.length = 0;
 	data.added.length = 0;
 	objHeap.freeList.push(index);
 }
@@ -1020,8 +1124,9 @@ export function copyGraphWith(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap,
 		map.objSrc.push(val.intVal);
 		map.objDst.push(dstHandle);
 		const source = srcObj.objects[handleIndex(val.intVal)];
-		for (let i = 0; i < source.fields.length; i = i + 1) {
-			const copied = copyGraphWith(srcArr, srcObj, dstArr, dstObj, source.fields[i], map);
+		const count = objectFieldCount(source);
+		for (let i = 0; i < count; i = i + 1) {
+			const copied = copyGraphWith(srcArr, srcObj, dstArr, dstObj, fieldValueAt(source, i), map);
 			appendField(dstObj.objects[handleIndex(dstHandle)], fieldNameAt(source, i), copied);
 			rcIncref(dstArr, dstObj, copied);
 		}

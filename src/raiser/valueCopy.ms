@@ -2,7 +2,7 @@ import {
 	RaiserValue, RaiserValueKind, RaiserArrayHeap, RaiserObjectHeap,
 	raiserNil, handleIndex, raiserArray, raiserObject,
 	heapAllocArray, heapAllocObject, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectSetField, rcIncref,
-	createArrayHeap, createStructHeap, heapObjectGetField, raiserInt, rcDecref, fieldNameAt, appendField
+	createArrayHeap, createStructHeap, heapObjectGetField, raiserInt, rcDecref, fieldNameAt, appendField, objectFieldCount, fieldValueAt
 } from "./value";
 
 export enum RaiserCopyKind {
@@ -44,12 +44,13 @@ export function copyTypedValue(
 		const handle = heapAllocObject(objects);
 		objects.objects[handleIndex(handle)].classType = objects.objects[handleIndex(value.intVal)].classType;
 		const source = objects.objects[handleIndex(value.intVal)];
-		for (let f = 0; f < source.fields.length; f += 1) {
+		const count = objectFieldCount(source);
+		for (let f = 0; f < count; f += 1) {
 			const name = fieldNameAt(source, f);
-			let copied = source.fields[f];
+			let copied = fieldValueAt(source, f);
 			for (let i = 0; i < plan.names.length; i += 1) {
 				if (plan.names[i] == name) {
-					copied = copyTypedValue(arrays, objects, source.fields[f], plans, plan.children[i]);
+					copied = copyTypedValue(arrays, objects, copied, plans, plan.children[i]);
 					break;
 				}
 			}
