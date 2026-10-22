@@ -4,12 +4,12 @@
 // @exit: 0
 // @serial
 // @skip-js: std/http/server is a .cms module, C backend only
-// note: serveConcurrentAsync with 1 and then 4 thread(s), each handler awaiting a spawn: the spawn's completion returns to the serving thread that awaits it while the main loop runs beside it (old runtime: every loop drained one process-wide completion queue, so the main loop and a serving thread destroyed the same completion twice under ASan)
+// note: serveConcurrentAsync with 1 and then 4 thread(s), each handler awaiting a spawn or a timer: the spawn's completion returns to the serving thread that awaits it while the main loop runs beside it, and the timer fires on the serving thread that armed it (old runtime: every loop drained one process-wide completion queue and one timer heap, so two threads destroyed the same completion or resumed the same handler under ASan)
 
 import { HttpRequest, ServerResponse } from "std/http";
 import { createServerAsync, sendText, serveConcurrentAsync, stop } from "std/http/server";
 import { createSocket, bind, connect, send, recv, close } from "std/net";
-import { lockedRead, lockedUpdate } from "std/core/promise";
+import { lockedRead, lockedUpdate, sleepAsync } from "std/core/promise";
 
 function freePort(): int32 {
 	let port = (20000 + Date.now() % 20000) as int32;
@@ -66,7 +66,13 @@ function twicePlusOne(n: int32): int32 { return n * 2 + 1; }
 
 async function handle(req: HttpRequest, res: ServerResponse): Promise<void> {
 	const n = parseInt(req.path.slice(1, req.path.length)) as int32;
-	const v = await spawn(() => twicePlusOne(n));
+	let v: int32 = 0;
+	if (n % 2 == 0) {
+		v = await spawn(() => twicePlusOne(n));
+	} else {
+		await sleepAsync(1);
+		v = twicePlusOne(n);
+	}
 	sendText(res, `${v};`);
 	lockedUpdate(served, (s: Served): Served => { return { n: s.n + 1 }; });
 }

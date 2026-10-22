@@ -173,16 +173,23 @@ static MS_THREAD_LOCAL msDispatcher* gDispatcher = NULL;
 extern _Thread_local bool msIsPoolWorker;  /* pool.c — true only on pool worker threads */
 extern _Thread_local int msPoolWorkerSchedId;
 extern void msPoolWakeWorker(int schedulerID);
+extern void msPoolPendingAdd(int32_t delta);
 
-/* Timers live on ONE process-global heap, not in the per-thread dispatcher.
- *
- * The thread that arms a timer is not always the thread that can service it: a
- * pool worker running a spawn task has no event loop (it parks on the
- * completion condvar and never calls msRunOnce), so a timer pushed onto its own
- * dispatcher's heap is never popped and its future never completes — the
- * program hangs. Making the heap global removes the question entirely: whoever
- * runs a loop services every armed timer, exactly like the process-global MPSC
- * completion queue on POSIX and wake-registry entry 0 on Windows.
+/* Work a worker took out of its channel or timer heap stays pending until the
+ * callbacks it queued have run, so the exit drain never sees an idle pool while
+ * a worker is about to resume a routine. */
+static MS_THREAD_LOCAL int32_t gWorkerTakenWork = 0;
+
+static void msSettleWorkerWork(void) {
+	if (gWorkerTakenWork == 0) return;
+	msPoolPendingAdd(-gWorkerTakenWork);
+	gWorkerTakenWork = 0;
+}
+
+/* A timer fires on the thread that armed it (ULTRALOCK A1). gTimers is the main
+ * thread's heap; on POSIX a pool worker arms onto the heap of its own loop
+ * channel and services it in msWorkerLoopPump, which every worker wait runs. On
+ * Windows a worker still arms onto gTimers, which the loop thread services.
  *
  * `msDispatcher.timers` is consequently NOT COMPILED on this target — the
  * field is gated to the single-threaded dispatchers (wasm/emcc/bare) in
@@ -414,6 +421,8 @@ bool msCompletionQueueDrain(void) {
 bool msCompletionQueueDrainAll(void) { return msCompletionQueueDrain(); }
 void* msLoopCompletionQueue(void) { return NULL; }
 bool msWorkerLoopPump(void) { return false; }
+int msWorkerTimerDelayMs(void) { return -1; }
+static msTimerHeap* msThreadTimers(void) { return &gTimers; }
 
 #else
 /* POSIX: MPSC queue for cross-thread completion + wake-only self-pipe.
@@ -429,6 +438,7 @@ bool msWorkerLoopPump(void) { return false; }
 typedef struct msLoopChannel {
 	msMpscQueue queue;
 	int wake[2];
+	msTimerHeap timers;
 	int workerSchedId;
 	struct msLoopChannel* nextWorker;
 } msLoopChannel;
@@ -486,9 +496,17 @@ void* msLoopCompletionQueue(void) {
 	return msIsPoolWorker ? msThreadChannel() : NULL;
 }
 
+static msTimerHeap* msThreadTimers(void) {
+	return msIsPoolWorker ? &msThreadChannel()->timers : &gTimers;
+}
+
 static msLoopChannel* msChannelOf(void* queue) {
 	msEnsureWakePipe();
 	return queue != NULL ? (msLoopChannel*)queue : &gMainChannel;
+}
+
+static void msChannelCount(msLoopChannel* c, int32_t messages) {
+	if (c != &gMainChannel) msPoolPendingAdd(messages);
 }
 
 static void msChannelWake(msLoopChannel* c) {
@@ -512,6 +530,7 @@ void msCompletionQueuePushOwned(void* fut, bool isFail, void* error) {
     msLoopChannel* c = msChannelOf(((msFutureBase*)fut)->completionQueue);
     msMessage* msg = msMsgAlloc(/*kind=*/isFail ? -1 : 0, /*replyFut=*/fut);
     msMsgSetPtr(msg, 0, error);
+    msChannelCount(c, 1);
     msMpscPush(&c->queue, msg);
     /* Always wake — no amortization. Two writers (actor send + spawn completion)
      * sharing one flag caused missed wakes and 500ms selector stalls. The wake
@@ -531,9 +550,11 @@ void msCompletionQueuePushReleaseBatch(void** futs, int count) {
         void* queue = ((msFutureBase*)futs[i])->completionQueue;
         msMessage* first = NULL;
         msMessage* last = NULL;
+        int32_t messages = 0;
         for (; i < count && (futs[i] == NULL || ((msFutureBase*)futs[i])->completionQueue == queue); i++) {
             if (futs[i] == NULL) continue;
             msMessage* msg = msMsgAlloc(/*kind=*/-2, /*replyFut=*/futs[i]);
+            messages++;
             if (last != NULL) {
                 atomic_store_explicit(&last->next, msg, memory_order_relaxed);
             } else {
@@ -542,6 +563,7 @@ void msCompletionQueuePushReleaseBatch(void** futs, int count) {
             last = msg;
         }
         msLoopChannel* c = msChannelOf(queue);
+        msChannelCount(c, messages);
         msMpscPushChain(&c->queue, first, last);
         msChannelWake(c);
     }
@@ -551,6 +573,7 @@ void msCompletionQueuePushEnvRelease(void* env, void* ownerQueue) {
     if (env == NULL) return;
     msLoopChannel* c = msChannelOf(ownerQueue);
     msMessage* msg = msMsgAlloc(/*kind=*/-3, /*replyFut=*/env);
+    msChannelCount(c, 1);
     msMpscPush(&c->queue, msg);
     msChannelWake(c);
 }
@@ -583,6 +606,7 @@ static bool msChannelDrain(msLoopChannel* c) {
     bool didWork = false;
     msMessage* msg;
     while ((msg = msMpscPop(&c->queue)) != NULL) {
+        if (c != &gMainChannel) gWorkerTakenWork++;
         void* fut = msg->replyFuture;
         /* Don't free msg — it's the queue's new tail/stub (Vyukov MPSC invariant).
          * It gets freed on the NEXT pop when a newer message takes its place. */
@@ -624,9 +648,16 @@ bool msWorkerLoopPump(void) {
     char buf[64];
     while (read(tlWorkerChannel->wake[0], buf, sizeof(buf)) > 0) {}
     bool didWork = msChannelDrain(tlWorkerChannel);
+    if (tlWorkerChannel->timers.len > 0) (void)msProcessTimers(msGetDispatcher(), &didWork);
     if (gDispatcher != NULL) msProcessCallbacks(gDispatcher, &didWork);
     msFutureReleaseFlush();
+    msSettleWorkerWork();
     return didWork;
+}
+
+int msWorkerTimerDelayMs(void) {
+    if (tlWorkerChannel == NULL || tlWorkerChannel->timers.len == 0) return -1;
+    return msNextTimerDelayMs();
 }
 
 /* Pool shutdown, after every worker has joined: the main thread is the only
@@ -746,8 +777,9 @@ static msTimer msTimerPop(msTimerHeap* h) {
  * Pop expired timers, complete their futures.
  * Returns ms until next timer (+1 margin like standard reference), or -1 if no timers. */
 static int msTimerDelayFrom(int64_t now) {
+	msTimerHeap* heap = msThreadTimers();
 	msTimerLock();
-	int64_t nextAt = gTimers.len > 0 ? gTimers.data[0].finishAtMs : -1;
+	int64_t nextAt = heap->len > 0 ? heap->data[0].finishAtMs : -1;
 	msTimerUnlock();
 	if (nextAt >= 0) {
 		int64_t diff = nextAt - now;
@@ -757,16 +789,17 @@ static int msTimerDelayFrom(int64_t now) {
 }
 
 int msProcessTimers(msDispatcher* d, bool* didWork) {
-	/* timers are process-global here — see gTimers; `d` is the caller's
+	/* the calling thread's heap — see gTimers; `d` is the caller's
 	 * callback queue, drained after every fired timer */
 	int64_t now = msMonoTimeMs();
+	msTimerHeap* heap = msThreadTimers();
 	for (;;) {
 		msTimerLock();
-		if (gTimers.len == 0 || gTimers.data[0].finishAtMs > now) {
+		if (heap->len == 0 || heap->data[0].finishAtMs > now) {
 			msTimerUnlock();
 			break;
 		}
-		msTimer t = msTimerPop(&gTimers);
+		msTimer t = msTimerPop(heap);
 		/* Re-arm an interval BEFORE releasing the lock so a callback calling
 		 * clearInterval(id) finds the next entry in the heap and can cancel it;
 		 * the re-armed entry inherits the env reference, so no extra
@@ -774,7 +807,9 @@ int msProcessTimers(msDispatcher* d, bool* didWork) {
 		if (t.periodMs > 0 && !t.cancelled && t.cb.fn != NULL) {
 			msTimer next = t;
 			next.finishAtMs = now + t.periodMs;
-			msTimerPush(&gTimers, next);
+			msTimerPush(heap, next);
+		} else if (heap != &gTimers) {
+			gWorkerTakenWork++;
 		}
 		msTimerUnlock();
 		*didWork = true;
@@ -925,6 +960,7 @@ bool msRunOnce(int timeoutMs) {
 	 * during actor processing / async stepper execution. Pushes them as a
 	 * chain to the completion queue for the drain to process single-threaded. */
 	msFutureReleaseFlush();
+	msSettleWorkerWork();
 
 	return didWork;
 }
@@ -1044,24 +1080,26 @@ void msPostEnvRelease(void* env) {
 }
 #endif
 
-/* Arm one timer on the process-global heap.
+/* Arm one timer on the calling thread's heap.
  *
  * A non-worker caller also ENSURES the loop exists: it is the thread that will
  * run it, and the exit drain bails out early when the calling thread owns no
  * dispatcher (msDrainUntilIdle's msHasDispatcher guard), so a top-level
  * `await sleepAsync(...)` needs the dispatcher created here as before.
  *
- * A pool worker must NOT create one — a worker-local dispatcher registers a
- * port nobody drains (the 2026-09-05 spawn-inside-actor hang). It arms onto the
- * shared heap and wakes the loop instead, so the loop recomputes its poll
- * timeout against a deadline that may now be sooner than the one it slept on. */
+ * A POSIX pool worker's timer counts as pending pool work until it is popped,
+ * so the exit drain waits for it as it waits for a running task. On Windows a
+ * worker arms onto the loop thread's heap and wakes that loop, so it recomputes
+ * its poll timeout against a deadline that may now be sooner. */
 static void msTimerArm(msTimer t) {
 	bool worker = msIsPoolWorker;
 	if (!worker) (void)msGetDispatcher();
+	msTimerHeap* heap = msThreadTimers();
+	if (heap != &gTimers) msPoolPendingAdd(1);
 	msTimerLock();
-	msTimerPush(&gTimers, t);
+	msTimerPush(heap, t);
 	msTimerUnlock();
-	if (worker) msActorWakeEventLoop();
+	if (worker && heap == &gTimers) msActorWakeEventLoop();
 }
 
 /* Standard reference sleepAsync pattern
@@ -1069,8 +1107,10 @@ static void msTimerArm(msTimer t) {
 msFuture_void* msSleepAsync(int ms) {
 	msFuture_void* fut = (msFuture_void*)msFutureCreate();
 	msIncRef(fut);
+#ifdef _WIN32
 	/* The loop thread completes and releases a worker-armed timer: PARALOCK I16/I17. */
 	if (msIsPoolWorker) fut->crossThreadPublished = true;
+#endif
 	int64_t finishAt = msMonoTimeMs() + ms;
 	msTimer t = { .finishAtMs = finishAt, .fut = fut };
 	msTimerArm(t);
@@ -1104,15 +1144,25 @@ static int64_t msArmTimer(msClosure cb, double ms, int64_t periodMs) {
 	return id;
 }
 
-static void msCancelTimer(int64_t id) {
-	msTimerLock();
-	for (int i = 0; i < gTimers.len; i += 1) {
-		if (gTimers.data[i].id == id) {
-			gTimers.data[i].cancelled = true;
-			gTimers.data[i].periodMs = 0;
-			break;
+static bool msCancelTimerIn(msTimerHeap* heap, int64_t id) {
+	for (int i = 0; i < heap->len; i += 1) {
+		if (heap->data[i].id == id) {
+			heap->data[i].cancelled = true;
+			heap->data[i].periodMs = 0;
+			return true;
 		}
 	}
+	return false;
+}
+
+static void msCancelTimer(int64_t id) {
+	msTimerLock();
+	bool found = msCancelTimerIn(&gTimers, id);
+#ifndef _WIN32
+	for (msLoopChannel* c = atomic_load_explicit(&gWorkerChannels, memory_order_acquire); c != NULL && !found; c = c->nextWorker) {
+		found = msCancelTimerIn(&c->timers, id);
+	}
+#endif
 	msTimerUnlock();
 }
 
@@ -1213,7 +1263,7 @@ void msAsyncStart(void* retFut, msClosure stepper) {
 void msDestroyDispatcher(void) {
 	msDispatcher* d = gDispatcher;
 	if (d == NULL) return;
-	/* Cancel all pending timers. The heap is process-global (see gTimers) and is
+	/* Cancel all pending timers. The main thread's heap (see gTimers) is
 	 * torn down here unconditionally — the same treatment the other two
 	 * process-global resources in this function get (the main channel's wake pipe and queue
 	 * below). Under the lock, so a pool worker arming concurrently either lands

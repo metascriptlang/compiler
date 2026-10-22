@@ -13,6 +13,7 @@ bool msPoolHelpOne(void) { return false; }
 bool msPoolBusyDec(void) { return false; }
 void msPoolBusyInc(void) {}
 int32_t msPoolPendingPeek(void) { return 0; }
+void msPoolPendingAdd(int32_t delta) { (void)delta; }
 
 #elif !defined(MSOS_BARE)
 /*
@@ -49,6 +50,7 @@ static inline int msCtz64(uint64_t x) { unsigned long idx; _BitScanForward64(&id
 #define MS_LOCK(pool)       EnterCriticalSection(&(pool)->cs)
 #define MS_UNLOCK(pool)     LeaveCriticalSection(&(pool)->cs)
 #define MS_WAIT(cv, pool)   SleepConditionVariableCS(&(cv), &(pool)->cs, INFINITE)
+#define MS_WAIT_MS(cv, pool, ms) SleepConditionVariableCS(&(cv), &(pool)->cs, (DWORD)(ms))
 #define MS_SIGNAL(cv)       WakeConditionVariable(&(cv))
 #define MS_BROADCAST(cv)    WakeAllConditionVariable(&(cv))
 
@@ -58,6 +60,15 @@ static inline int msCtz64(uint64_t x) { unsigned long idx; _BitScanForward64(&id
 #define MS_LOCK(pool)       pthread_mutex_lock(&(pool)->mutex)
 #define MS_UNLOCK(pool)     pthread_mutex_unlock(&(pool)->mutex)
 #define MS_WAIT(cv, pool)   pthread_cond_wait(&(cv), &(pool)->mutex)
+#define MS_WAIT_MS(cv, pool, ms) msCondWaitMs(&(cv), &(pool)->mutex, (ms))
+static void msCondWaitMs(pthread_cond_t* cv, pthread_mutex_t* m, int ms) {
+	struct timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	ts.tv_sec += ms / 1000;
+	ts.tv_nsec += (long)(ms % 1000) * 1000000L;
+	if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+	pthread_cond_timedwait(cv, m, &ts);
+}
 #define MS_SIGNAL(cv)       pthread_cond_signal(&(cv))
 #define MS_BROADCAST(cv)    pthread_cond_broadcast(&(cv))
 
@@ -74,6 +85,10 @@ static _Atomic(int32_t) msPoolPendingCount = 0;
 
 int32_t msPoolPendingPeek(void) {
 	return atomic_load_explicit(&msPoolPendingCount, memory_order_acquire);
+}
+
+void msPoolPendingAdd(int32_t delta) {
+	atomic_fetch_add_explicit(&msPoolPendingCount, delta, memory_order_acq_rel);
 }
 
 /* Thread-local: true when current thread is a pool worker executing a task.
@@ -179,7 +194,9 @@ static void* msPoolWorkerLoop(void* arg) {
 	msPoolWorkerSchedId = mySchedID;
 	if (msPoolSchedIdSetterFn != NULL) msPoolSchedIdSetterFn(mySchedID);
 
+	extern int msWorkerTimerDelayMs(void);
 	while (1) {
+		int timerMs = msWorkerTimerDelayMs();
 		MS_LOCK(pool);
 		/* Wait on OWN condvar — targeted wake, no spurious wakeups.
 		 * Check spawn queue AND actor wake flag: prevents lost-wake race where
@@ -188,7 +205,8 @@ static void* msPoolWorkerLoop(void* arg) {
 			!atomic_load_explicit(&msPoolActorWake[myWorkerIdx], memory_order_acquire) &&
 			!pool->shutdown) {
 			atomic_fetch_or_explicit(&pool->idleMask, (uint64_t)1 << myWorkerIdx, memory_order_release);
-			MS_WAIT(pool->workerConds[myWorkerIdx], pool);
+			if (timerMs >= 0) MS_WAIT_MS(pool->workerConds[myWorkerIdx], pool, timerMs);
+			else MS_WAIT(pool->workerConds[myWorkerIdx], pool);
 			atomic_fetch_and_explicit(&pool->idleMask, ~((uint64_t)1 << myWorkerIdx), memory_order_acquire);
 		}
 		/* Clear actor wake flag after waking (inside lock, before poll) */
