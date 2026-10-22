@@ -174,7 +174,7 @@ export function hash(this i: uint32): int64 { return hashWangYi1(i as uint64); }
 export function hash(this u: uint64): int64 { return hashWangYi1(u); }
 export function hash(this u: Readonly<unknown>): int64 { return hashPointer(u as Readonly<Ptr<void>>); }
 
-function sameKey<T>(a: Readonly<T>, b: Readonly<T>): boolean { return a == b; }
+function sameKey<T>(a: T, b: T): boolean { return a == b; }
 function sameKey(a: number, b: number): boolean { return a == b || (a != a && b != b); }
 function sameKey(a: float64, b: float64): boolean { return a == b || (a != a && b != b); }
 function sameKey(a: float32, b: float32): boolean { return a == b || (a != a && b != b); }
@@ -250,7 +250,7 @@ export class HashMap<K, V> {
 
 function hashMapRawGet<K, V>(m: Readonly<HashMap<K, V>>, key: Readonly<K>): int32 {
 	if (m.data.length == 0) return -1;
-	const hc = keyHash(key);
+	const hc = keyHash<K>(key);
 	const mask: int32 = m.data.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
 	while (m.data[h].hcode != 0) {
@@ -289,7 +289,7 @@ export function set<K, V>(this m: HashMap<K, V>, key: K, value: V): void {
 		const init: Vec<HashMapEntry<K, V>> = new Array(INITIAL_CAPACITY);
 		m.data = init;
 	}
-	const hc = keyHash(key);
+	const hc = keyHash<K>(key);
 	const idx = hashMapRawGet(m, key);
 	if (idx >= 0) {
 		m.data[idx].value = value;
@@ -452,7 +452,7 @@ export class HashSet<T> {
 
 function hashSetRawGet<T>(s: Readonly<HashSet<T>>, key: Readonly<T>): int32 {
 	if (s.data.length == 0) return -1;
-	const hc = keyHash(key);
+	const hc = keyHash<T>(key);
 	const mask: int32 = s.data.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
 	while (s.data[h].hcode != 0) {
@@ -489,7 +489,7 @@ export function add<T>(this s: HashSet<T>, value: T): void {
 	if (s.data.length == 0) { s.data = new Array(INITIAL_CAPACITY); }
 	const idx = hashSetRawGet(s, value);
 	if (idx >= 0) return;
-	const hc = keyHash(value);
+	const hc = keyHash<T>(value);
 	if (s.data.length < (s.size + s.size / 2) || (s.data.length - s.size) < MIN_EMPTY_SLOTS) {
 		hashSetEnlarge(s);
 	}
@@ -661,7 +661,7 @@ export function set<K, V>(this m: Map<K, V>, key: K, value: V): void {
 	m.writing = true;
 	defer mapEndWrite(m);
 	if (m.indices.length == 0) { orderedMapInitIndices(m, INITIAL_CAPACITY); }
-	const hc = keyHash(key);
+	const hc = keyHash<K>(key);
 	const slot = orderedMapRawGet(m, key, hc);
 	if (slot >= 0) {
 		const entryIdx = m.indices[slot];
@@ -692,7 +692,7 @@ export function set<K, V>(this m: Map<K, V>, key: K, value: V): void {
 export function get<K, V>(this m: Map<K, V>, key: Readonly<K>): V | null {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	if (m.indices.length == 0) return null;
-	const hc = keyHash(key);
+	const hc = keyHash<K>(key);
 	const slot = orderedMapRawGet(m, key, hc);
 	if (slot >= 0) return m.entries[m.indices[slot]].value;
 	return null;
@@ -701,7 +701,7 @@ export function get<K, V>(this m: Map<K, V>, key: Readonly<K>): V | null {
 export function has<K, V>(this m: Map<K, V>, key: Readonly<K>): boolean {
 	if (m.writing) { msMapFatal("concurrent map read and map write"); }
 	if (m.indices.length == 0) return false;
-	const hc = keyHash(key);
+	const hc = keyHash<K>(key);
 	return orderedMapRawGet(m, key, hc) >= 0;
 }
 
@@ -710,7 +710,7 @@ export function delete<K, V>(this m: Map<K, V>, key: Readonly<K>): boolean {
 	m.writing = true;
 	defer mapEndWrite(m);
 	if (m.indices.length == 0) return false;
-	const hc = keyHash(key);
+	const hc = keyHash<K>(key);
 	const slot = orderedMapRawGet(m, key, hc);
 	if (slot < 0) return false;
 	const entryIdx = m.indices[slot];
@@ -911,7 +911,7 @@ export function add<T>(this s: Set<T>, value: T): void {
 	s.writing = true;
 	defer setEndWrite(s);
 	if (s.indices.length == 0) { orderedSetInitIndices(s, INITIAL_CAPACITY); }
-	const hc = keyHash(value);
+	const hc = keyHash<T>(value);
 	const slot = orderedSetRawGet(s, value, hc);
 	if (slot >= 0) return;
 	if (s.indices.length < (s.size + s.size / 2) || (s.indices.length - s.size - s.tombstones) < MIN_EMPTY_SLOTS) {
@@ -938,7 +938,7 @@ export function add<T>(this s: Set<T>, value: T): void {
 export function has<T>(this s: Set<T>, value: Readonly<T>): boolean {
 	if (s.writing) { msMapFatal("concurrent map read and map write"); }
 	if (s.indices.length == 0) return false;
-	const hc = keyHash(value);
+	const hc = keyHash<T>(value);
 	return orderedSetRawGet(s, value, hc) >= 0;
 }
 
@@ -947,7 +947,7 @@ export function delete<T>(this s: Set<T>, value: Readonly<T>): boolean {
 	s.writing = true;
 	defer setEndWrite(s);
 	if (s.indices.length == 0) return false;
-	const hc = keyHash(value);
+	const hc = keyHash<T>(value);
 	const slot = orderedSetRawGet(s, value, hc);
 	if (slot < 0) return false;
 	const entryIdx = s.indices[slot];

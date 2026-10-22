@@ -26,7 +26,7 @@ export class Object {
 	}
 }
 
-export function hash<T>(this x: Readonly<T>): int64 {
+export function hash<T>(this x: T): int64 {
 	return hashOf(x);
 }
 
