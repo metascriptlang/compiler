@@ -56,6 +56,7 @@
 
 #include "runtime/drc.h"  /* msIncRef for the Amendment-G submit-time completion ref */
 #include "runtime/promise/future.h"  /* msFutureBase + msFutureDrcDestroy for Amendment H */
+#include "runtime/promise/locked.h"  /* msFutexWait for a parked slot waiter */
 #ifndef MS_THREAD_LOCAL
 #define MS_THREAD_LOCAL _Thread_local
 #endif
@@ -276,8 +277,16 @@ extern bool msPoolRunEdge(const void* awaited, bool follow);  /* pool.h — avoi
 extern bool msPoolBusyDec(void);  /* true only when it actually decremented */
 extern void msPoolBusyInc(void);
 
+/* Set in pending by a waiter that parks on it (PARKED) or waits in its loop (LOOP):
+ * the completion that takes the count to 0 wakes it. */
+#define MS_SLOT_PARKED 0x40000000
+#define MS_SLOT_LOOP 0x20000000
+#define MS_SLOT_COUNT 0x1fffffff
+/* The cap on one loop wait, as msWaitFor's: a completion or a loop event ends it sooner. */
+#define MS_SLOT_LOOP_WAIT_MS 5
+
 typedef struct msAwaitSlot {
-    _Atomic(int32_t) pending;     /* starts at N, decremented per completion */
+    _Atomic(int32_t) pending;     /* starts at N, decremented per completion; | MS_SLOT_PARKED */
     _Atomic(bool) failed;
     _Atomic(bool) cancelled;      /* a task not yet started is skipped */
     void* error;
@@ -291,17 +300,26 @@ typedef struct msAwaitSlot {
 void* msAwaitSlotCreate(int32_t n);
 void msAwaitSlotRelease(void* sp);
 
+void msActorWakeEventLoop(void);  /* dispatchFull.c: wakes the loop thread's poll */
+
+static inline void msAwaitSlotDone(msAwaitSlot* s) {
+    int32_t prev = atomic_fetch_sub_explicit(&s->pending, 1, memory_order_acq_rel);
+    if ((prev & MS_SLOT_COUNT) != 1) return;
+    if (prev & MS_SLOT_PARKED) msFutexWakeAll((int*)&s->pending);
+    if (prev & MS_SLOT_LOOP) msActorWakeEventLoop();
+}
+
 static inline void msAwaitSlotComplete(void* sp, int32_t idx, void* value) {
     msAwaitSlot* s = (msAwaitSlot*)sp;
     if (idx == 0) s->result = value;
-    atomic_fetch_sub_explicit(&s->pending, 1, memory_order_acq_rel);
+    msAwaitSlotDone(s);
 }
 
 static inline void msAwaitSlotFail(void* sp, void* error) {
     msAwaitSlot* s = (msAwaitSlot*)sp;
     atomic_store_explicit(&s->failed, true, memory_order_release);
     s->error = error;
-    atomic_fetch_sub_explicit(&s->pending, 1, memory_order_acq_rel);
+    msAwaitSlotDone(s);
 }
 
 /* msIsPoolWorker declared in pool.c — true only for pool worker threads */
@@ -329,11 +347,16 @@ static inline void msAwaitSlotWait(void* sp) {
      * adds a count nobody removed. */
     bool dec = msIsPoolWorker && msPoolBusyDec();  /* available to help while waiting */
     bool queued = true;  /* its task is submitted before the wait: once not queued, never again */
-    while (atomic_load_explicit(&s->pending, memory_order_acquire) > 0) {
+    while ((atomic_load_explicit(&s->pending, memory_order_acquire) & MS_SLOT_COUNT) > 0) {
         if (queued && msPoolRunEdge(sp, false)) continue;
         queued = false;
-        if (!msIsPoolWorker) msRunOnce(0);
-        msYield();
+        /* Its task runs on another thread. The loop thread waits in its loop, which
+         * the completion wakes as it wakes for a loop event; a worker parks. */
+        int32_t flag = msIsPoolWorker ? MS_SLOT_PARKED : MS_SLOT_LOOP;
+        int32_t v = atomic_fetch_or_explicit(&s->pending, flag, memory_order_acq_rel) | flag;
+        if ((v & MS_SLOT_COUNT) == 0) break;
+        if (msIsPoolWorker) msFutexWait((int*)&s->pending, v);
+        else msRunOnce(MS_SLOT_LOOP_WAIT_MS);
     }
     if (dec) msPoolBusyInc();  /* back to own work */
 }
