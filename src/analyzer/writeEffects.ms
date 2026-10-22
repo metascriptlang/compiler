@@ -857,8 +857,11 @@ export function borrowedArgsToCopy(call: Node): boolean[] {
 	const flags: boolean[] = [];
 	const roots: (Symbol | null)[] = [];
 	const slots: string[][] = [];
+	const byAddress: boolean[] = [];
+	const receiverByAddress = call.resolvedSym != null && call.resolvedSym!.nativeName.startsWith("&");
 	let any = false;
 	for (const a of args) {
+		byAddress.push(a != null && (a.kind == NodeKind.HiddenAddr || (byAddress.length == 0 && receiverByAddress)));
 		const s: string[] = [];
 		const source = cstringSource(a);
 		roots.push(a != null ? pathSlots(source ?? a, s) : null);
@@ -867,7 +870,7 @@ export function borrowedArgsToCopy(call: Node): boolean[] {
 			flags.push(s.length > 0);
 			continue;
 		}
-		const borrowed = a != null && a.kind != NodeKind.HiddenAddr && rcOf(a.nodeType).needsCleanup;
+		const borrowed = a != null && !byAddress[byAddress.length - 1] && rcOf(a.nodeType).needsCleanup;
 		flags.push(borrowed);
 		if (borrowed) any = true;
 	}
@@ -877,7 +880,7 @@ export function borrowedArgsToCopy(call: Node): boolean[] {
 		if (!flags[i] || cstringSource(args[i]) != null) continue;
 		let keep = false;
 		for (let j = 0; j < args.length && !keep; j += 1) {
-			if (j != i && args[j] != null && args[j].kind == NodeKind.HiddenAddr && roots[i] != null && roots[j] === roots[i]) keep = true;
+			if (j != i && byAddress[j] && roots[i] != null && roots[j] === roots[i]) keep = true;
 		}
 		if (!keep && slots[i].length > 0) keep = mayWriteAny(writes, slots[i]);
 		flags[i] = keep;
