@@ -225,36 +225,30 @@ export function emitCallRaiseCheck(p: CProc, exprNode: Readonly<Node>): void {
 	emitStmtsLine(p, `if (msErr) goto ${raiseTarget(p)};`);
 }
 
-function frameLocalRoot(p: CProc, n: Readonly<Node>): Readonly<Symbol | null> {
-	let cur = n;
-	while (cur != null) {
-		match (cur.kind) {
-			NodeKind.Identifier => {
-				const sym = cur.resolvedSym;
-				if (sym == null || sym.symbolKind != SymbolKind.Variable) return null;
-				if (hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.StaticLocal) || hasFlag(sym, SymbolFlag.ForVar)) return null;
-				if (isIndirectRef(p, sym, (cur.data as IdentifierData).name)) return null;
-				return sym;
-			},
-			NodeKind.MemberExpr => {
-				const obj = (cur.data as MemberExprData).object;
-				if (!isValueKind(obj.nodeType, TypeKind.Struct)) return null;
-				cur = obj;
-			},
-			NodeKind.ArrayAccess => {
-				const ad = cur.data as ArrayAccessData;
-				if (!isValueKind(ad.array.nodeType, TypeKind.SizedArray) || !isPureIndex(ad.index)) return null;
-				cur = ad.array;
-			},
-			NodeKind.CallExpr => {
-				const cd = cur.data as CallExprData;
-				const sym = cd.callee.resolvedSym;
-				if (!isRuntimeProcSym(sym, "msSizedArrayAccess") && !isRuntimeProcSym(sym, "msSizedArrayAccessUnchecked")) return null;
-				if (cd.arguments.length != 3 || !isPureIndex(cd.arguments[1])) return null;
-				cur = cd.arguments[0];
-			},
-			_ => { return null; },
-		};
+function frameLocalRoot(n: Readonly<Node | null>, p: CProc): Readonly<Symbol | null> {
+	if (n == null) return null;
+	if (n.kind == NodeKind.Identifier) {
+		const sym = n.resolvedSym;
+		if (sym == null || sym.symbolKind != SymbolKind.Variable) return null;
+		if (hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.StaticLocal) || hasFlag(sym, SymbolFlag.ForVar)) return null;
+		if (isIndirectRef(p, sym, (n.data as IdentifierData).name)) return null;
+		return n.resolvedSym;
+	}
+	if (n.kind == NodeKind.MemberExpr) {
+		if (!isValueKind((n.data as MemberExprData).object.nodeType, TypeKind.Struct)) return null;
+		return frameLocalRoot((n.data as MemberExprData).object, p);
+	}
+	if (n.kind == NodeKind.ArrayAccess) {
+		const ad = n.data as ArrayAccessData;
+		if (!isValueKind(ad.array.nodeType, TypeKind.SizedArray) || !isPureIndex(ad.index)) return null;
+		return frameLocalRoot((n.data as ArrayAccessData).array, p);
+	}
+	if (n.kind == NodeKind.CallExpr) {
+		const cd = n.data as CallExprData;
+		const sym = cd.callee.resolvedSym;
+		if (!isRuntimeProcSym(sym, "msSizedArrayAccess") && !isRuntimeProcSym(sym, "msSizedArrayAccessUnchecked")) return null;
+		if (cd.arguments.length != 3 || !isPureIndex(cd.arguments[1])) return null;
+		return frameLocalRoot((n.data as CallExprData).arguments[0], p);
 	}
 	return null;
 }
@@ -320,7 +314,7 @@ function assignTargetCType(g: CGen, left: Readonly<Node>): string {
 
 function assignsInPlace(g: CGen, p: CProc, d: Readonly<BinaryExprData>): boolean {
 	if (d.operator != "=" || (d.right.kind != NodeKind.ObjectLiteral && d.right.kind != NodeKind.CallExpr)) return false;
-	const root = frameLocalRoot(p, d.left);
+	const root = frameLocalRoot(d.left, p);
 	if (root == null || readsFrameLocal(p, root, d.right)) return false;
 	if (d.right.kind == NodeKind.CallExpr && !(isPlainStruct(d.left.nodeType) && storeIsUnobservable(p, d.right))) return false;
 	const destCType = assignTargetCType(g, d.left);
@@ -336,7 +330,7 @@ function isPlainStruct(t: Readonly<Type | null>): boolean {
 function storesAfterRaiseCheck(g: CGen, p: CProc, expr: Readonly<Node>): boolean {
 	const bd = expr.data as BinaryExprData;
 	if (p.suppressRaiseCheck || !statementCanRaise(expr)) return false;
-	if (p.nestedTryStmts.length == 0 && frameLocalRoot(p, bd.left) != null) return false;
+	if (p.nestedTryStmts.length == 0 && frameLocalRoot(bd.left, p) != null) return false;
 	const left = bd.left.nodeType;
 	const right = bd.right.nodeType;
 	if (left == null || right == null) return false;
