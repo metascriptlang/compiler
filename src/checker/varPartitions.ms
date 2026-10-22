@@ -1,6 +1,6 @@
 import {
 	Node, NodeKind, NodeFlag, Symbol, SymbolKind, Type, TypeKind,
-	VariableDeclData, MemberExprData, ArrayAccessData, BlockStmtData, BinaryExprData, UpdateExprData,
+	IdentifierData, VariableDeclData, MemberExprData, ArrayAccessData, BlockStmtData, BinaryExprData, UpdateExprData,
 	WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, CallExprData,
 	ObjectLiteralData, ArrayLiteralData, NewExprData, MoveExprData, OutExprData, DeferStmtData,
 	TypeAssertionData, HiddenStdConvData, ConditionalExprData, FunctionDeclData, MethodDeclData, ConstructorDeclData,
@@ -2046,7 +2046,7 @@ function carriesBorrow(arg: Node): boolean {
 
 function viewRootFault(id: Node, routine: Node, stepped: boolean): string {
 	const sym = id.resolvedSym;
-	if (sym == null) return "cannot borrow from this expression, it is not a path expression";
+	if (sym == null) return unboundParamFault(routine, (id.data as IdentifierData).name);
 	if (sym.symbolKind == SymbolKind.Parameter) {
 		if (hasFlag(sym, SymbolFlag.Sink) || (sym.symbolType != null && sym.symbolType.kind == TypeKind.Sink)) return `'${sym.name}' is a sink parameter, owned by the routine`;
 		if (isOwnParam(routine, sym)) return "";
@@ -2058,6 +2058,19 @@ function viewRootFault(id: Node, routine: Node, stepped: boolean): string {
 		return "";
 	}
 	return `'${sym.name}' escapes its stack frame`;
+}
+
+// A generic body leaves a parameter unbound until it is instantiated; its signature still names it.
+function unboundParamFault(routine: Node, name: string): string {
+	const sig = routine.nodeType;
+	if (sig != null && sig.kind == TypeKind.Function && sig.typeNames != null) {
+		for (let i = 0; i < sig.typeNames.length; i += 1) {
+			if (sig.typeNames[i] != name) continue;
+			const t = i < sig.typeChildren.length ? sig.typeChildren[i] : null;
+			return t != null && t.kind == TypeKind.Sink ? `'${name}' is a sink parameter, owned by the routine` : "";
+		}
+	}
+	return "cannot borrow from this expression, it is not a path expression";
 }
 
 function isOwnParam(routine: Node, sym: Symbol): boolean {
