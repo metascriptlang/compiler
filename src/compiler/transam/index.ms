@@ -760,9 +760,8 @@ function bindUncheckedModule(db: TransAmDb, modulePath: string): void {
 	if (checkedElsewhere(db, modulePath)) return;
 	const outerDb = _checkingDb;
 	_checkingDb = db;
-	const ctx = dbBoundModule(modulePath);
+	dbBoundModule(modulePath);
 	_checkingDb = outerDb;
-	if (ctx != null) registerModuleCtx(modulePath, ctx);
 }
 
 function checkedElsewhere(db: TransAmDb, modulePath: string): boolean {
@@ -862,6 +861,7 @@ function dbBoundModule(modulePath: string): CheckerContext | null {
 	const unit = dbBindModule(db, filePath, program, imports, globals, startVersion);
 	for (const message of unchecked) addError(unit.ctx, message, 1, 1);
 	db.checkInProgress.delete(filePath);
+	if (!checkedElsewhere(db, filePath)) registerModuleCtx(filePath, unit.ctx);
 	return unit.ctx;
 }
 
