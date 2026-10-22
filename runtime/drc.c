@@ -467,9 +467,23 @@ _Thread_local int32_t msOrcCollections = 0;
 MS_TLS_PUBLISH(msOrcCollections)
 #endif
 
+#ifdef MS_DRC_LEDGER
+static void msRootOwnerCheck(void* p, const char* site) {
+	int32_t idx = msHeader(p)->rootIdx;
+	if (idx < 0 || (idx < msRoots.len && msRoots.data[idx].ptr == p)) return;
+	fprintf(stderr, "msc: M1 owner violation at %s: cell %p has root entry %d outside the running executor's root set (len %d)\n",
+		site, p, idx, msRoots.len);
+	abort();
+}
+#define MS_ROOT_OWNER_CHECK(p, site) msRootOwnerCheck((p), (site))
+#else
+#define MS_ROOT_OWNER_CHECK(p, site) ((void)0)
+#endif
+
 void msRegisterCycle(void* p, const msTypeInfo* type) {
 	if (p == NULL) return;
 	msRefHeader* h = msHeader(p);
+	MS_ROOT_OWNER_CHECK(p, "register");
 	/* Already registered? */
 	if (h->rootIdx >= 0) return;
 	h->rootIdx = msRoots.len;
@@ -485,6 +499,7 @@ void msUnregisterCycle(void* p) {
 	if (p == NULL) return;
 	msRefHeader* h = msHeader(p);
 	if (h->rootIdx < 0) return;
+	MS_ROOT_OWNER_CHECK(p, "free");
 	msCellSeqRemoveAt(&msRoots, h->rootIdx);
 	h->rootIdx = -1;
 }
@@ -573,6 +588,7 @@ static void markGray(msGcEnv* j, void* p, const msTypeInfo* type) {
 		msCell entry = j->traceStack.data[--j->traceStack.len];
 		void* child = *(void**)entry.ptr;  /* dereference slot address */
 		if (child == NULL) continue;
+		MS_ROOT_OWNER_CHECK(child, "collect");
 		msRefHeader* ch = msHeader(child);
 		decCount(ch);
 		j->edges++;
@@ -669,6 +685,7 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 
 	/* Phase 1: Mark all roots gray, tentatively decrement children */
 	for (int32_t i = last; i >= lowMark; i--) {
+		MS_ROOT_OWNER_CHECK(msRoots.data[i].ptr, "collect");
 		markGray(j, msRoots.data[i].ptr, msRoots.data[i].type);
 	}
 
