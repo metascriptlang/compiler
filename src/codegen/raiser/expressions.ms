@@ -33,7 +33,7 @@ import {
 	isLocalString,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
-	callRaiserStmtCompiler, emitTrapNil, layoutOperand, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, classSymOfType, landResult, declaredSymbol,
+	callRaiserStmtCompiler, emitTrapNil, layoutOperand, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol,
 } from "./context";
 import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros, emitTrapValue } from "./valueCopy";
 
@@ -870,7 +870,7 @@ function emitObjConv(s: RaiserCompState, node: Node, reg: int32): int32 {
 		queueRaiserCompileError(msg, node.location.line, node.location.column);
 		return emitTrapNil(s, msg);
 	}
-	emitInst(s, raiserABC(RaiserOpcode.ObjConv, reg, addConst(s, raiserConstString(key)), addConst(s, raiserConstString(classTargetDisplay(node.nodeType, key)))));
+	emitInst(s, raiserABC(RaiserOpcode.ObjConv, reg, classTargetOperand(s, node.nodeType, key), addConst(s, raiserConstString(classTargetDisplay(node.nodeType, key)))));
 	return reg;
 }
 
@@ -890,6 +890,7 @@ function emitLitConv(s: RaiserCompState, node: Node, reg: int32): void {
 
 function compileInstanceOf(s: RaiserCompState, node: Node, d: BinaryExprData): int32 {
 	const named = d.right.resolvedSym;
+	const target = named != null && named.symbolKind == SymbolKind.Class ? named.symbolType : d.right.nodeType;
 	const key = named != null && named.symbolKind == SymbolKind.Class ? raiserClassKey(named) : classTargetKey(d.right.nodeType);
 	if (key == "") {
 		const msg = "internal: the right side of instanceof did not resolve to a class";
@@ -898,7 +899,7 @@ function compileInstanceOf(s: RaiserCompState, node: Node, d: BinaryExprData): i
 	}
 	const held = compileExpr(s, d.left);
 	const dest = allocBool(s);
-	emitInst(s, raiserABC(RaiserOpcode.InstanceOf, dest, held, addConst(s, raiserConstString(key))));
+	emitInst(s, raiserABC(RaiserOpcode.InstanceOf, dest, held, classTargetOperand(s, target, key)));
 	return dest;
 }
 
@@ -1817,14 +1818,15 @@ function emitOverrideCalls(s: RaiserCompState, node: Node, dest: int32, override
 	const ends: int32[] = [];
 	for (const ov of overrides) {
 		const ft = ov.symbolType;
-		const key = ft != null && ft.typeChildren.length > 0 ? classTargetKey(ft.typeChildren[0]) : "";
+		const receiver = ft != null && ft.typeChildren.length > 0 ? ft.typeChildren[0] : null;
+		const key = classTargetKey(receiver);
 		const funcIdx = routineIndex(s, ov);
 		if (key == "" || funcIdx < 0) {
 			queueRaiserCompileError(`internal: the override '${ov.name}' has no ${key == "" ? "receiver class" : "Raiser routine"}`, node.location.line, node.location.column);
 			continue;
 		}
 		const isOv = allocBool(s);
-		emitInst(s, raiserABC(RaiserOpcode.InstanceOf, isOv, dest + 1, addConst(s, raiserConstString(key))));
+		emitInst(s, raiserABC(RaiserOpcode.InstanceOf, isOv, dest + 1, classTargetOperand(s, receiver, key)));
 		const next = emitBranchIfFalsy(s, isOv);
 		emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, argCount));
 		ends.push(emitJumpPlaceholder(s));
@@ -2487,8 +2489,22 @@ export function classTypeOperand(s: RaiserCompState, className: string, classSym
 		chain.push(classTargetKey(up));
 		up = classParentOf(up);
 	}
-	s.classTypes.push({ name: className, chain, fields: layoutOf(classSym.symbolType), kinds: slotKindsOf(s, classSym.symbolType) });
+	const display: int64[] = [];
+	for (let i = chain.length - 1; i >= 0; i -= 1) display.push(raiserClassId(chain[i]));
+	s.classTypes.push({ name: className, depth: chain.length - 1, display, fields: layoutOf(classSym.symbolType), kinds: slotKindsOf(s, classSym.symbolType) });
 	return s.classTypes.length;
+}
+
+// The operand InstanceOf and ObjConv carry: the id of the class `t` names and its depth, packed.
+function classTargetOperand(s: RaiserCompState, t: Type | null, key: string): int32 {
+	let up = classParentOf(t != null && t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t);
+	let depth = 0;
+	while (up != null && classTargetKey(up) != "") {
+		depth += 1;
+		if (depth == 64) throw new Error(`internal: the class chain of '${key}' is deeper than 64`);
+		up = classParentOf(up);
+	}
+	return addConst(s, raiserInt(raiserClassId(key) * 64 + depth));
 }
 
 function literalClass(t: Type | null): Symbol | null {

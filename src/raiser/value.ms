@@ -697,12 +697,13 @@ export function heapBoxLive(heap: RaiserArrayHeap): number {
 
 export interface RaiserClassType {
 	name: string;
-	chain: string[];
+	depth: int32;       // the number of ancestors; -1 for a layout that is no class
+	display: int64[];   // the ids of the class and its ancestors, indexed by depth, so display[depth] is the class's own
 	fields: string[];   // the layout NewObject lays out, so a field sits at the slot its type gives it
 	kinds: RaiserRegClass[];
 }
 
-export const RAISER_NO_CLASS: RaiserClassType = { name: "", chain: [], fields: [], kinds: [] };
+export const RAISER_NO_CLASS: RaiserClassType = { name: "", depth: -1, display: [], fields: [], kinds: [] };
 
 export interface RaiserObjectData {
 	slots: int64[];
@@ -715,14 +716,12 @@ export interface RaiserObjectData {
 	classType: RaiserClassType;
 }
 
-// Whether a class is, or extends, the one a module constant names; the constant is read in place.
+// Whether a class is, or extends, the one a module constant names: the constant packs the target's
+// id and depth (id * 64 + depth), and an ancestor at the target's depth must carry its id.
 export function raiserIsInstance(classType: RaiserClassType, key: RaiserValue): boolean {
-	when (mode != "danger") { if (key.kind != RaiserValueKind.String || !isConstHandle(key.intVal)) throw new Error("internal: a class key must be an interned string"); }
-	const at = handleIndex(key.intVal) as number;
-	for (let i = 0; i < classType.chain.length; i += 1) {
-		if (classType.chain[i] == constTexts[at]) return true;
-	}
-	return false;
+	when (mode != "danger") { if (key.kind != RaiserValueKind.Int) throw new Error("internal: a class key must be a packed class id"); }
+	const depth = (key.intVal & 63) as int32;
+	return depth <= classType.depth && classType.display[depth] == (key.intVal >> 6);
 }
 
 export interface RaiserObjectHeap {

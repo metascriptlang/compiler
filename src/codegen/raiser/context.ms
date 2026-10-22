@@ -151,6 +151,18 @@ export function classSymOfType(t: Type | null): Symbol | null {
 	return cur.sym;
 }
 
+const _classIds = new Map<string, int64>();
+
+// A class key keeps one id for the life of the process, so a class compiled into a live image
+// after its ancestors carries the ancestors' ids.
+export function raiserClassId(key: string): int64 {
+	const known = _classIds.get(key);
+	if (known != null) return known;
+	const id = _classIds.size + 1;
+	_classIds.set(key, id);
+	return id;
+}
+
 export function raiserClassKey(classSym: Symbol): string {
 	const own = classSymOfType(classSym.symbolType);
 	const sym = own != null ? own : classSym;
@@ -536,7 +548,7 @@ export function resolveClassInit(s: RaiserCompState, classSym: Symbol): int32 {
 // The NewObject operand of a typed object that has no class: its layout alone.
 export function layoutOperand(s: RaiserCompState, fields: string[], kinds: RaiserRegClass[]): int32 {
 	if (fields.length == 0) return 0;
-	s.classTypes.push({ name: "", chain: [], fields, kinds });
+	s.classTypes.push({ name: "", depth: -1, display: [], fields, kinds });
 	return s.classTypes.length;
 }
 
