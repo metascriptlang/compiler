@@ -28,7 +28,7 @@ import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBas
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
-import { canFormAcycle, isAcyclicRefElement, traceReachesCycle } from "../cycles";
+import { canFormAcycle, isAcyclicRefElement, traceReachesCycle, custodyReaches, custodyAddsEdge } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { CheckerContext, newSym, addError } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
@@ -63,6 +63,7 @@ class LiftCtx {
 	nonCyclicCache: NameSet;  // types confirmed non-cyclic
 	seqTypes: Type[];
 	refCellTraces: Type[];
+	refCellCustodies: Type[];
 	scannedTypes: HashSet<Type>;
 	arrayRootEpochs: HashMap<Type, int32>;
 	refusedArrayElems: HashSet<Type>;
@@ -164,6 +165,7 @@ function hookSuffix(hook: string): string {
 		"copy" => "Copy",
 		"sink" => "Sink",
 		"trace" => "Trace",
+		"custody" => "Custody",
 		_ => "WasMoved",
 	};
 }
@@ -198,6 +200,7 @@ function aliasLiftedOps(orig: Type, canon: Type): void {
 	aliasOpByKey(orig, canon, AttachedOp.AttachedSink);
 	aliasOpByKey(orig, canon, AttachedOp.AttachedWasMoved);
 	aliasOpByKey(orig, canon, AttachedOp.AttachedTrace);
+	aliasOpByKey(orig, canon, AttachedOp.AttachedCustody);
 	aliasOpByKey(orig, canon, AttachedOp.AttachedDup);
 }
 
@@ -273,8 +276,35 @@ function attachedOpOf(hook: string): AttachedOp {
 		"wasMoved" => AttachedOp.AttachedWasMoved,
 		"dup" => AttachedOp.AttachedDup,
 		"trace" => AttachedOp.AttachedTrace,
+		"custody" => AttachedOp.AttachedCustody,
 		_ => { throw new Error(`internal: '${hook}' names no type-bound operation`); },
 	};
+}
+
+// The trace and the custody walk share one shape: (self, callback), pushing the cells they reach.
+function walksCells(hook: string): boolean {
+	return hook == "trace" || hook == "custody";
+}
+
+// Whether a cell-walking hook enters a value of type `t`: the trace when it reaches a cell that
+// can form a cycle, the custody walk also through refs to acyclic cells.
+function walksValue(hook: string, t: Type | null, lctx: LiftCtx): boolean {
+	if (hook == "trace") return traceReachesCycle(t, lctx.cyclicCache, lctx.nonCyclicCache);
+	if (hook == "custody") return custodyReaches(t, lctx.cyclicCache, lctx.nonCyclicCache);
+	return true;
+}
+
+// The op a custody walk calls for a value of type `t`: its own when it differs from the trace.
+function custodyOpOf(t: Type): Symbol | null {
+	const own = getOpByKey(t, AttachedOp.AttachedCustody);
+	return own != null ? own : getOpByKey(t, AttachedOp.AttachedTrace);
+}
+
+function requireWalkOp(t: Type, hook: string): Symbol {
+	if (hook != "custody") return requireOpByKey(t, attachedOpOf(hook));
+	const op = custodyOpOf(t);
+	if (op == null) throw new Error(`internal: custody walk reached ${opTypeKey(t)} with neither a custody nor a trace op`);
+	return op;
 }
 
 // Emit runtime call — unary (destroy/wasMoved) or binary (copy/sink)
@@ -446,7 +476,7 @@ function genElementLoop(hook: string, elemType: Type, bound: Node | null, xf: No
 	const dropOwner = lctx.dropOwner;
 	lctx.dropOwner = null;
 
-	if (hook == "trace") {
+	if (walksCells(hook)) {
 		// Reference: trace passes raw callback (y), not y[i]
 		fillBody(hook, xi, yf, "", elemType, lctx, bodyBuf, visited, loc);
 	} else if (hook == "copy" || hook == "sink") {
@@ -585,6 +615,11 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 				}
 			}
 		},
+		"custody" => {
+			if (needsElemLoop && elem != null && custodyReaches(elem, lctx.cyclicCache, lctx.nonCyclicCache)) {
+				genArrayLoop("custody", elem, xf, yf, lctx, buf, loc);
+			}
+		},
 		_ => {},
 	};
 }
@@ -628,6 +663,11 @@ function refOp(hook: string, xf: Node, yf: Node, empties: boolean, heldType: Typ
 				buf.items.push(makeExprStmt(makeCall(runtimeRef("msOrcTraceRef", loc), [makeHiddenAddr(xf, loc), yf], loc), loc));
 			}
 		},
+		"custody" => {
+			if (!atomic && (isCyclic || custodyReaches(heldType, lctx.cyclicCache, lctx.nonCyclicCache))) {
+				buf.items.push(makeExprStmt(makeCall(runtimeRef("msOrcTraceRef", loc), [makeHiddenAddr(xf, loc), yf], loc), loc));
+			}
+		},
 		_ => {},
 	};
 }
@@ -652,13 +692,13 @@ function namedObjOp(hook: string, t: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(requireOpByKey(t, AttachedOp.AttachedDestructor), null, loc), [makeHiddenAddr(old, loc)], loc), loc));
 		return;
 	}
-	const op = requireOpByKey(t, attachedOpOf(hook));
+	const op = requireWalkOp(t, hook);
 	if (hook == "copy" && hasFlag(op, SymbolFlag.UnavailableOp)) lctx.callsUnavailableCopy = true;
 	// Named-type hooks expect pointers — wrap in HiddenAddr
 	const ax = makeHiddenAddr(xf, loc);
 	if (hook == "destroy" || hook == "wasMoved") {
 		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(op, null, loc), [ax], loc), loc));
-	} else if (hook == "trace") {
+	} else if (walksCells(hook)) {
 		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(op, null, loc), [ax, yf], loc), loc));
 	} else {
 		const ay = makeHiddenAddr(yf, loc);
@@ -673,7 +713,7 @@ function runtimeOp(prefix: string, destroyName: string, copySuffix: string, wasM
 		"copy" => { genCall(prefix + copySuffix, hook, xf, yf, buf, loc); },
 		"sink" => { genInlineSink(destroyName, xf, yf, buf, loc); },
 		"wasMoved" => { genCall(prefix + wasMovedSuffix, hook, xf, yf, buf, loc); },
-		"trace" => { if (hasTrace) genCall(prefix + traceSuffix, hook, xf, yf, buf, loc); },
+		"trace" | "custody" => { if (hasTrace) genCall(prefix + traceSuffix, "trace", xf, yf, buf, loc); },
 		_ => {},
 	};
 }
@@ -692,10 +732,10 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		: x;
 	if (fieldName != "") { xf.nodeType = fieldType; }
 	// reference parity: trace keeps y as raw callback, not y.field
-	let yf = (fieldName != "" && hook != "trace")
+	let yf = (fieldName != "" && !walksCells(hook))
 		? makeMember(y, fieldName, loc)
 		: y;
-	if (fieldName != "" && hook != "trace") { yf.nodeType = fieldType; }
+	if (fieldName != "" && !walksCells(hook)) { yf.nodeType = fieldType; }
 	const empties = emptiesSlot(hook, x, fieldName);
 
 	// Tuple case extracted from match (MetaScript match arm limitation with block-scoped vars)
@@ -721,7 +761,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			const elem = fieldType.typeReturn;
 			if (elem != null && sizedArrayNeedsHooks(fieldType, lctx, loc)) {
 				ensureSizedArrayHooks(fieldType, lctx, loc);
-				if (hook != "trace" || traceReachesCycle(elem, lctx.cyclicCache, lctx.nonCyclicCache)) {
+				if (walksValue(hook, elem, lctx)) {
 					genElementLoop(hook, elem, makeNumber(fieldType.typeValue as number, loc), xf, yf, lctx, buf, loc);
 				}
 			} else {
@@ -737,7 +777,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				: (fieldType.typeNames.length > 0 ? anonTypeName(fieldType) : "");
 			if (resolvedName != "") {
 				// A value field is traced inline whenever its own trace reaches a cell (defaultOp is a no-op for trace)
-				if (hook != "trace" || traceReachesCycle(fieldType, lctx.cyclicCache, lctx.nonCyclicCache)) {
+				if (walksValue(hook, fieldType, lctx)) {
 					ensureHooks(resolvedName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					if (namedTypeHasHooks(fieldType, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
@@ -800,7 +840,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 			const unwrapped = unwrapGenericInstance(fieldType);
 			if (unwrapped.mangledName != "") {
-				if (hook != "trace" || traceReachesCycle(fieldType, lctx.cyclicCache, lctx.nonCyclicCache)) {
+				if (walksValue(hook, fieldType, lctx)) {
 					ensureHooks(unwrapped.mangledName, unwrapped.body, null as unknown as Type, fieldType, false, lctx, loc);
 					if (namedTypeHasHooks(unwrapped.body, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
@@ -829,7 +869,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			if (isStringLike(fieldType)) {
 				stringOp(hook, xf, yf, fieldName, empties, buf, loc);
 			} else if (fieldType.typeName != "") {
-				if (hook != "trace" || traceReachesCycle(fieldType, lctx.cyclicCache, lctx.nonCyclicCache)) {
+				if (walksValue(hook, fieldType, lctx)) {
 					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					if (namedTypeHasHooks(fieldType, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
@@ -847,7 +887,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		},
 		TypeKind.Distinct | TypeKind.Alias => {
 			if (fieldType.kind == TypeKind.Distinct && hasAnyUserHook(fieldType, lctx)) {
-				if (hook != "trace") {
+				if (!walksCells(hook)) {
 					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
 				}
@@ -1053,7 +1093,7 @@ function baseHookOwner(t: Type, hook: string, lctx: LiftCtx): Type | null {
 			? own
 			: own || hasUserDefinedHook(a, "destroy", lctx);
 		if (takes) {
-			if (hook != "trace") return a;
+			if (!walksCells(hook)) return a;
 			return isCyclicType(a, lctx, createNameSet()) ? a : null;
 		}
 		a = baseClassOf(a);
@@ -1066,12 +1106,12 @@ function callBaseHook(owner: Type, hook: string, s1: Symbol, s2: Symbol, lctx: L
 	const ownerRef = baseSymOf(owner).symbolType;
 	const a1 = makeHiddenSubConv(makeIdentResolved(s1, loc), ownerRef, loc);
 	const args: Node[] = [a1];
-	if (hook == "trace") {
+	if (walksCells(hook)) {
 		args.push(makeIdentResolved(s2, loc));
 	} else if (hook == "copy" || hook == "sink") {
 		args.push(makeHiddenSubConv(makeIdentResolved(s2, loc), ownerRef, loc));
 	}
-	const op = requireOpByKey(owner, attachedOpOf(hook));
+	const op = requireWalkOp(owner, hook);
 	buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(op, null, loc), args, loc), loc));
 }
 
@@ -1101,7 +1141,7 @@ function emitTagCopy(buf: NodeBuf, dest: Symbol, src: Symbol, loc: SourceLocatio
 }
 
 function generateUnionArms(hook: string, typeName: string, objType: Type, s1: Symbol, s2: Symbol, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
-	const isUnary = hook == "destroy" || hook == "wasMoved" || hook == "trace";
+	const isUnary = hook == "destroy" || hook == "wasMoved" || walksCells(hook);
 
 	if (hook == "sink") {
 		storeThenDestroyWhole(objType, s1, s2, lctx, buf, loc);
@@ -1158,7 +1198,7 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 			const armBuf = newBuf();
 			const vName = "v" + vi.toString();
 			const h1 = liftSym(lctx, SymbolKind.Variable, s1.name, s1.symbolType);
-			const h2 = hook == "trace"
+			const h2 = walksCells(hook)
 				? liftSym(lctx, SymbolKind.Variable, s2.name, createPtr(voidType()))
 				: (s2.name == s1.name ? h1 : liftSym(lctx, SymbolKind.Variable, s2.name, s2.symbolType));
 			if (scalar) {
@@ -1173,7 +1213,7 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 				const suffix = hookSuffix(hook);
 				const helperName = `${typeName}_${vName}${suffix}`;
 				if (!lctx.helperOps.has(helperName)) {
-					const isTrace = hook == "trace";
+					const isTrace = walksCells(hook);
 					let helperFn: Node | null = null;
 					if (isTrace) {
 						// Trace: (self, callback) — self is union type, callback is void*
@@ -1194,7 +1234,7 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, s1:
 			const cond = makeBinary(tagAccess, "===", makeNumber(vi, loc), loc);
 			const a1 = makeIdentResolved(s1, loc);
 			const a2 = makeIdentResolved(s2, loc);
-			const callArgs: Node[] = (isUnary && hook != "trace")
+			const callArgs: Node[] = (isUnary && !walksCells(hook))
 				? [a1]
 				: [a1, a2];
 				const helperSym = lctx.helperOps.get(helperName);
@@ -1219,7 +1259,7 @@ function isScalarVariant(member: Type | null, variant: Type | null): boolean {
 
 function buildScalarArmBody(hook: string, s1: Symbol, s2: Symbol, vName: string, member: Type, lctx: LiftCtx, armBuf: NodeBuf, loc: SourceLocation): void {
 	const x = hookParamDeref(s1, loc);
-	const y = hook == "trace" ? makeIdentResolved(s2, loc)
+	const y = walksCells(hook) ? makeIdentResolved(s2, loc)
 		: (hook == "destroy" || hook == "wasMoved") ? hookParamDeref(s1, loc)
 		: hookParamDeref(s2, loc);
 	const visited: NameSet = createNameSet();
@@ -1243,7 +1283,7 @@ function buildVariantArmBody(hook: string, objType: Type, s1: Symbol, s2: Symbol
 		while (fi < variant.typeNames.length) {
 			if (!fieldStored(variant, fi)) { fi += 1; continue; }
 			const xBase = makeMember(hookParamDeref(s1, loc), vName, loc);
-			const yBase = (hook == "trace") ? makeIdentResolved(s2, loc)
+			const yBase = walksCells(hook) ? makeIdentResolved(s2, loc)
 				: isUnary ? makeMember(hookParamDeref(s1, loc), vName, loc)
 				: makeMember(hookParamDeref(s2, loc), vName, loc);
 			const visited: NameSet = createNameSet();
@@ -1277,12 +1317,12 @@ function buildVariantArmBody(hook: string, objType: Type, s1: Symbol, s2: Symbol
 function generateHook(hook: string, typeName: string, cName: string, objType: Type, subject: Type, classType: Type | null, lctx: LiftCtx, loc: SourceLocation): Symbol {
 	const outerLift = beginHookLift(lctx);
 	const buf = newBuf();
-	const isTrace = hook == "trace";
+	const isTrace = walksCells(hook);
 	const isUnary = hook == "destroy" || hook == "wasMoved" || isTrace;
 	const hookParamT = classType != null ? classType : createVar(objType);
 	const s1 = liftSym(lctx, SymbolKind.Variable, isUnary ? "self" : "dest", hookParamT);
 	const n2 = match (hook) {
-		"trace" => "callback",
+		"trace" | "custody" => "callback",
 		"destroy" | "wasMoved" => "self",
 		_ => "src",
 	};
@@ -1373,7 +1413,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 			if (owner != null) {
 				callBaseHook(owner, hook, s1, s2, lctx, buf, loc);
 			} else if (!fieldsFlattened && base != null && namedTypeHasHooks(base, lctx)) {
-				genOpCall(requireOpByKey(base, attachedOpOf(hook)), hook, x1, x2, buf, loc);
+				genOpCall(requireWalkOp(base, hook), hook, x1, x2, buf, loc);
 			}
 			for (let i = firstOwn; i < objType.typeNames.length; i += 1) {
 				if (!fieldStored(objType, i)) continue;
@@ -1592,6 +1632,10 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 		const traceSym = generateHook("trace", typeName, cName, objType, orig, classType, lctx, loc);
 		if (!hasCycles) setFlag(traceSym, SymbolFlag.Acyclic);
 		setOpByKey(objType, AttachedOp.AttachedTrace, traceSym);
+	}
+	if (!hasUserDefinedHook(orig, "trace", lctx) && custodyAddsEdge(objType, lctx.cyclicCache, lctx.nonCyclicCache)) {
+		const custodySym = generateHook("custody", typeName, cName, objType, orig, classType, lctx, loc);
+		setOpByKey(objType, AttachedOp.AttachedCustody, custodySym);
 	}
 
 	const userDup = getUserDefinedHookSym(orig, AttachedOp.AttachedDup, lctx);
@@ -1884,7 +1928,7 @@ function generateTupleLe(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 function generateArrayHook(hook: string, arrayType: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const elemType = arrayType.typeReturn!;
 	const isUnary = hook == "destroy" || hook == "wasMoved";
-	const isTrace = hook == "trace";
+	const isTrace = walksCells(hook);
 	const sym = requireOpByKey(isTrace ? createRef(arrayType) : arrayType, attachedOpOf(hook));
 	const outerLift = beginHookLift(lctx);
 	const buf = newBuf();
@@ -1947,11 +1991,17 @@ function generateArrayHook(hook: string, arrayType: Type, lctx: LiftCtx, loc: So
 
 function generateArrayHooks(lctx: LiftCtx, loc: SourceLocation): void {
 	let ti = 0;
+	let ci = 0;
 	let wi = 0;
-	while (ti < lctx.refCellTraces.length || wi < lctx.seqTypes.length) {
+	while (ti < lctx.refCellTraces.length || ci < lctx.refCellCustodies.length || wi < lctx.seqTypes.length) {
 		if (ti < lctx.refCellTraces.length) {
 			generateArrayHook("trace", lctx.refCellTraces[ti], lctx, loc);
 			ti += 1;
+			continue;
+		}
+		if (ci < lctx.refCellCustodies.length) {
+			generateArrayHook("custody", lctx.refCellCustodies[ci], lctx, loc);
+			ci += 1;
 			continue;
 		}
 		const arrT = lctx.seqTypes[wi];
@@ -1972,11 +2022,23 @@ function registerRefCellTrace(arrT: Type, lctx: LiftCtx): void {
 	lctx.refCellTraces.push(canon);
 }
 
+function registerRefCellCustody(arrT: Type, lctx: LiftCtx): void {
+	const elem = arrayOpElement(arrT.typeReturn);
+	if (elem == null || isUncountedElement(elem) || hasGenericParams(arrT) || !elemNeedsLoop(elem)) return;
+	const canon = elem == arrT.typeReturn ? arrT : createArray(elem);
+	if (!custodyAddsEdge(canon, lctx.cyclicCache, lctx.nonCyclicCache)) return;
+	const cell = createRef(canon);
+	if (getOpByKey(cell, AttachedOp.AttachedCustody) != null) return;
+	opPrototype(cell, AttachedOp.AttachedCustody, refArrayCellName(canon) + "Custody", lctx.checkerCtx);
+	lctx.refCellCustodies.push(canon);
+}
+
 function scanTypeForArrays(t: Type, lctx: LiftCtx, visited: HashSet<Type>): void {
 	if (t == null || visited.has(t)) return;
 	visited.add(t);
 	if (t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array) {
 		registerRefCellTrace(t.typeReturn, lctx);
+		registerRefCellCustody(t.typeReturn, lctx);
 	}
 	if (t.kind == TypeKind.Array) {
 		if (t.typeReturn != null) registerArrayOps(t, lctx);
@@ -2265,6 +2327,7 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		nonCyclicCache: createNameSet(),
 		seqTypes: [],
 		refCellTraces: [],
+		refCellCustodies: [],
 		scannedTypes: new HashSet<Type>(),
 		arrayRootEpochs: new HashMap<Type, int32>(),
 		refusedArrayElems: new HashSet<Type>(),

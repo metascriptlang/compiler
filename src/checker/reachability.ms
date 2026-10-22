@@ -202,6 +202,7 @@ function moveTypeInfoOwnerIntoCore(key: string, demander: string): void {
 		aliveSetAddModule(_aliveSet, demander);
 		if (demand.destroy != null) markReferenced(demand.destroy, demander);
 		if (demand.trace != null) markReferenced(demand.trace, demander);
+		if (demand.custody != null) markReferenced(demand.custody, demander);
 		return;
 	}
 }
@@ -215,18 +216,21 @@ function markRefArrayCell(arrT: Type, modulePath: string): void {
 	const destroy = refArrayCellOp(arrT, AttachedOp.AttachedDestructor);
 	if (destroy == null) throw new Error(`internal: ref-array cell ${key} is boxed in ${modulePath} before its destroy op was lifted`);
 	const trace = refArrayCellOp(arrT, AttachedOp.AttachedTrace);
+	const custody = refArrayCellOp(arrT, AttachedOp.AttachedCustody);
 	let owner = _singleModule != "" ? _singleModule : modulePath;
 	if (_singleModule == "") {
 		const destroyHome = hasFlag(destroy, SymbolFlag.ImportC) ? "" : destroy.modulePath;
 		if (destroyHome != "") owner = destroyHome;
 		if (trace != null) owner = trace.modulePath;
+		else if (custody != null) owner = custody.modulePath;
 	}
 	_aliveSet.typeInfoKeys.add(key);
-	const demand: CTypeInfoDemand = { kind: TypeInfoKind.RefArrayCell, subject: createRef(arrT), key, owner, cName: "", destroy, trace, baseKey: "" };
+	const demand: CTypeInfoDemand = { kind: TypeInfoKind.RefArrayCell, subject: createRef(arrT), key, owner, cName: "", destroy, trace, baseKey: "", custody };
 	_aliveSet.typeInfos.push(demand);
 	aliveSetAddModule(_aliveSet, owner);
 	markReferenced(destroy, owner);
 	if (trace != null) markReferenced(trace, owner);
+	if (custody != null) markReferenced(custody, owner);
 }
 
 function markArcCell(pointee: Type, modulePath: string): void {
@@ -301,6 +305,7 @@ function markObjectTypeInfo(type: Type | null, modulePath: string): void {
 	}
 	const destroy = getOpByKey(subject, AttachedOp.AttachedDestructor);
 	const trace = getOpByKey(subject, AttachedOp.AttachedTrace);
+	const custody = getOpByKey(subject, AttachedOp.AttachedCustody);
 	let owner = _singleModule != "" ? _singleModule : modulePath;
 	if (_singleModule == "") {
 		if (subject.sym != null && subject.sym.modulePath != "") owner = subject.sym.modulePath;
@@ -314,11 +319,12 @@ function markObjectTypeInfo(type: Type | null, modulePath: string): void {
 		markObjectTypeInfo(base, modulePath);
 		baseKey = objectTypeInfoKey(typeInfoSubject(base)!);
 	}
-	const demand: CTypeInfoDemand = { kind: TypeInfoKind.Object, subject, key, owner, cName: "", destroy, trace, baseKey };
+	const demand: CTypeInfoDemand = { kind: TypeInfoKind.Object, subject, key, owner, cName: "", destroy, trace, baseKey, custody };
 	_aliveSet.typeInfos.push(demand);
 	aliveSetAddModule(_aliveSet, owner);
 	if (destroy != null) markReferenced(destroy, owner);
 	if (trace != null) markReferenced(trace, owner);
+	if (custody != null) markReferenced(custody, owner);
 }
 
 function classBaseOf(subject: Type): Type | null {

@@ -10,7 +10,7 @@ import { createFunction, createPtr, voidType, isAwaitable, awaitedType, literalB
 import { GcMode } from "../../checker/context";
 import { TransformContext, freshOwnedSym } from "../context";
 import { walkNode } from "../walker";
-import { canFormAcycle, traceReachesCycle } from "../cycles";
+import { custodyReaches } from "../cycles";
 import { lowerDefer } from "./deferLower";
 import { makeCall, makeNull, makeObjectLiteral, syntheticToken, runtimeRef, isRuntimeProcSym, boxedInFuture, makeBlock, makeExprStmt, makeIdentResolved, makeReturn, makeVarDecl } from "../util";
 
@@ -131,9 +131,9 @@ export function mayHoldCycleRoot(t: Type | null, ctx: TransformContext): boolean
 	const bare = skipModifier(t);
 	if (bare == null) return false;
 	if (bare.kind == TypeKind.Function) return true;
-	if (bare.kind == TypeKind.Array) return isCountedRefTo(bare.typeReturn) && canFormAcycle(bare.typeReturn, ctx.cyclicCache, ctx.acyclicCache);
+	if (bare.kind == TypeKind.Array) return isCountedRefTo(bare.typeReturn) && custodyReaches(bare.typeReturn, ctx.cyclicCache, ctx.acyclicCache);
 	if (!isCountedRefTo(bare)) return false;
-	return traceReachesCycle(bare.kind == TypeKind.Ref ? bare : unwrapRefNullUnion(bare), ctx.cyclicCache, ctx.acyclicCache);
+	return custodyReaches(bare.kind == TypeKind.Ref ? bare : unwrapRefNullUnion(bare), ctx.cyclicCache, ctx.acyclicCache);
 }
 
 function isCountedRefTo(t: Type | null): boolean {

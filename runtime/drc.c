@@ -773,6 +773,38 @@ void msOrcCollect(void) {
 	}
 }
 
+static inline void msCustody(void* p, const msTypeInfo* type, msGcEnv* j) {
+	if (type != NULL && type->custodyFn != NULL) {
+		type->custodyFn(p, j);
+	}
+}
+
+static void msDisownGray(msGcEnv* j) {
+	while (j->traceStack.len > 0 && msRoots.len > 0) {
+		msCell entry = j->traceStack.data[--j->traceStack.len];
+		void* child = *(void**)entry.ptr;
+		if (child == NULL) continue;
+		msRefHeader* ch = msHeader(child);
+		if (getColor(ch) == MS_COL_GRAY) continue;
+		setColor(ch, MS_COL_GRAY);
+		if (ch->rootIdx >= 0) msUnregisterCycle(child);
+		msCustody(child, entry.type, j);
+	}
+	j->traceStack.len = 0;
+}
+
+static void msDisownBlack(msGcEnv* j) {
+	while (j->traceStack.len > 0) {
+		msCell entry = j->traceStack.data[--j->traceStack.len];
+		void* child = *(void**)entry.ptr;
+		if (child == NULL) continue;
+		msRefHeader* ch = msHeader(child);
+		if (getColor(ch) != MS_COL_GRAY) continue;
+		setColor(ch, MS_COL_BLACK);
+		msCustody(child, entry.type, j);
+	}
+}
+
 void msOrcDisown(void* p) {
 	if (p == NULL || msRoots.len == 0) return;
 	msRefHeader* h = msHeader(p);
@@ -780,29 +812,11 @@ void msOrcDisown(void* p) {
 	msCellSeqInit(&j.traceStack);
 	setColor(h, MS_COL_GRAY);
 	if (h->rootIdx >= 0) msUnregisterCycle(p);
-	msTrace(p, h->type, &j);
-	while (j.traceStack.len > 0 && msRoots.len > 0) {
-		msCell entry = j.traceStack.data[--j.traceStack.len];
-		void* child = *(void**)entry.ptr;
-		if (child == NULL) continue;
-		msRefHeader* ch = msHeader(child);
-		if (getColor(ch) == MS_COL_GRAY) continue;
-		setColor(ch, MS_COL_GRAY);
-		if (ch->rootIdx >= 0) msUnregisterCycle(child);
-		msTrace(child, entry.type, &j);
-	}
-	j.traceStack.len = 0;
+	msCustody(p, h->type, &j);
+	msDisownGray(&j);
 	setColor(h, MS_COL_BLACK);
-	msTrace(p, h->type, &j);
-	while (j.traceStack.len > 0) {
-		msCell entry = j.traceStack.data[--j.traceStack.len];
-		void* child = *(void**)entry.ptr;
-		if (child == NULL) continue;
-		msRefHeader* ch = msHeader(child);
-		if (getColor(ch) != MS_COL_GRAY) continue;
-		setColor(ch, MS_COL_BLACK);
-		msTrace(child, entry.type, &j);
-	}
+	msCustody(p, h->type, &j);
+	msDisownBlack(&j);
 	msCellSeqFree(&j.traceStack);
 }
 

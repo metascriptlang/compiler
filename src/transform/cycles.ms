@@ -16,7 +16,7 @@
 // The reference non-final rule (types.nim:436-438) is implemented via the
 // OpenClass bit on the Struct arm below — a class that is extended is cyclic.
 
-import { Type, TypeKind, TypeFlag } from "../ast/node";
+import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { NameSet, createNameSet, nameSetAdd, nameSetContains } from "./context";
 import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef } from "../checker/types";
 import { anonTypeName, isAnonTypeName, typeKey } from "../codegen/c/types";
@@ -221,6 +221,128 @@ function traceEdgeFields(t: Type, cyclicCache: NameSet, acyclicCache: NameSet, m
 	if (t.kind == TypeKind.Struct && traceEdgeAux(base, true, cyclicCache, acyclicCache, marker)) return true;
 	for (const child of t.typeChildren) {
 		if (traceEdgeAux(child, false, cyclicCache, acyclicCache, marker)) return true;
+	}
+	return false;
+}
+
+// Whether the walk that takes a cell's graph out of its thread's cycle roots reaches a cell
+// that can form a cycle. Unlike the trace it goes on through a ref to an acyclic pointee:
+// such a cell is never a root, but a cyclic cell behind it can be one.
+export function custodyReaches(t: Type | null, cyclicCache: NameSet, acyclicCache: NameSet): boolean {
+	if (canFormAcycle(t, cyclicCache, acyclicCache)) return true;
+	if (t == null) return false;
+	const subject = t.kind == TypeKind.Ref ? t.typeReturn : t;
+	return custodyEdgeAux(subject, true, cyclicCache, acyclicCache, createNameSet());
+}
+
+function countedRefOf(t: Type): Type | null {
+	const ref = t.kind == TypeKind.Ref ? t : unwrapRefNullUnion(t);
+	if (ref == null || ref.kind != TypeKind.Ref || isAtomicRef(ref)) return null;
+	return ref;
+}
+
+function isRefLike(t: Type): boolean {
+	return t.kind == TypeKind.Ref || unwrapRefNullUnion(t) != null;
+}
+
+function custodyEdgeAux(t: Type | null, top: boolean, cyclicCache: NameSet, acyclicCache: NameSet, marker: NameSet): boolean {
+	if (t == null) return false;
+	if (!top && isRefLike(t)) {
+		const ref = countedRefOf(t);
+		if (ref == null || isActorRef(ref)) return false;
+		if (canFormAcycle(ref, cyclicCache, acyclicCache)) return true;
+		return custodyEdgeAux(ref.typeReturn, true, cyclicCache, acyclicCache, marker);
+	}
+	return match (t.kind) {
+		TypeKind.Function | TypeKind.Unknown => true,
+		TypeKind.Struct | TypeKind.Union | TypeKind.Tuple => firstVisit(typeIdentity(t), marker) && custodyEdgeFields(t, cyclicCache, acyclicCache, marker),
+		TypeKind.GenericInstance => {
+			const body = instanceBody(t);
+			if (body == null || !firstVisit(typeIdentity(t), marker)) return false;
+			if (body.kind == TypeKind.Struct || body.kind == TypeKind.Union || body.kind == TypeKind.Tuple) return custodyEdgeFields(body, cyclicCache, acyclicCache, marker);
+			return custodyEdgeAux(body, top, cyclicCache, acyclicCache, marker);
+		},
+		TypeKind.Array | TypeKind.SizedArray => custodyEdgeAux(t.typeReturn, false, cyclicCache, acyclicCache, marker),
+		TypeKind.Distinct | TypeKind.Alias => custodyEdgeAux(t.typeReturn, top, cyclicCache, acyclicCache, marker),
+		_ => false,
+	};
+}
+
+function custodyEdgeFields(t: Type, cyclicCache: NameSet, acyclicCache: NameSet, marker: NameSet): boolean {
+	const base = t.kind == TypeKind.Struct && t.typeExtra != null && t.typeExtra.kind == TypeKind.Ref ? t.typeExtra.typeReturn : t.typeExtra;
+	if (t.kind == TypeKind.Struct && custodyEdgeAux(base, true, cyclicCache, acyclicCache, marker)) return true;
+	for (const child of t.typeChildren) {
+		if (custodyEdgeAux(child, false, cyclicCache, acyclicCache, marker)) return true;
+	}
+	return false;
+}
+
+function instanceBody(t: Type): Type | null {
+	if (isAwaitable(t)) return null;
+	if (t.typeReturn == null) {
+		const params = genericParamsOf(t);
+		if (params != "") instantiateGenericBody(t, params);
+	}
+	return t.typeReturn;
+}
+
+function isActorRef(ref: Type): boolean {
+	return ref.sym != null && ref.sym.symbolKind == SymbolKind.Actor;
+}
+
+// Whether the lifted custody walk of a value of type `t` differs from its trace: some edge of
+// it is walked by custody and skipped by the trace. Mirrors the gates of the lifted bodies —
+// a ref field or element pushed when its pointee is cyclic or reaches a cycle, a value field
+// walked when it reaches one, an array element looped when it can form a cycle — so a type
+// without a difference keeps its trace as its custody walk.
+export function custodyAddsEdge(t: Type | null, cyclicCache: NameSet, acyclicCache: NameSet): boolean {
+	return addsAux(t, true, cyclicCache, acyclicCache, createNameSet());
+}
+
+function addsAux(t: Type | null, top: boolean, cyclicCache: NameSet, acyclicCache: NameSet, marker: NameSet): boolean {
+	if (t == null) return false;
+	if (!top && isRefLike(t)) {
+		const ref = countedRefOf(t);
+		if (ref == null || isActorRef(ref) || canFormAcycle(ref, cyclicCache, acyclicCache)) return false;
+		return custodyReaches(ref.typeReturn, cyclicCache, acyclicCache);
+	}
+	return match (t.kind) {
+		TypeKind.Struct | TypeKind.Union | TypeKind.Tuple => {
+			if (!top && !custodyReaches(t, cyclicCache, acyclicCache)) return false;
+			if (!top && !traceReachesCycle(t, cyclicCache, acyclicCache)) return true;
+			return firstVisit(typeIdentity(t), marker) && addsFields(t, cyclicCache, acyclicCache, marker);
+		},
+		TypeKind.GenericInstance => {
+			const body = instanceBody(t);
+			if (body == null) return false;
+			if (!top && !custodyReaches(t, cyclicCache, acyclicCache)) return false;
+			if (!top && !traceReachesCycle(t, cyclicCache, acyclicCache)) return true;
+			if (!firstVisit(typeIdentity(t), marker)) return false;
+			if (body.kind == TypeKind.Struct || body.kind == TypeKind.Union || body.kind == TypeKind.Tuple) return addsFields(body, cyclicCache, acyclicCache, marker);
+			return addsAux(body, top, cyclicCache, acyclicCache, marker);
+		},
+		TypeKind.Array => {
+			const elem = t.typeReturn;
+			if (!custodyReaches(elem, cyclicCache, acyclicCache)) return false;
+			if (!canFormAcycle(elem, cyclicCache, acyclicCache)) return true;
+			return addsAux(elem, false, cyclicCache, acyclicCache, marker);
+		},
+		TypeKind.SizedArray => {
+			const elem = t.typeReturn;
+			if (!custodyReaches(elem, cyclicCache, acyclicCache)) return false;
+			if (!traceReachesCycle(elem, cyclicCache, acyclicCache)) return true;
+			return addsAux(elem, false, cyclicCache, acyclicCache, marker);
+		},
+		TypeKind.Distinct | TypeKind.Alias => addsAux(t.typeReturn, top, cyclicCache, acyclicCache, marker),
+		_ => false,
+	};
+}
+
+function addsFields(t: Type, cyclicCache: NameSet, acyclicCache: NameSet, marker: NameSet): boolean {
+	const base = t.kind == TypeKind.Struct && t.typeExtra != null && t.typeExtra.kind == TypeKind.Ref ? t.typeExtra.typeReturn : t.typeExtra;
+	if (t.kind == TypeKind.Struct && addsAux(base, true, cyclicCache, acyclicCache, marker)) return true;
+	for (const child of t.typeChildren) {
+		if (addsAux(child, false, cyclicCache, acyclicCache, marker)) return true;
 	}
 	return false;
 }

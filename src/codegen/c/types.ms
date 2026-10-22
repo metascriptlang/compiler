@@ -92,6 +92,7 @@ function attachedOpName(op: AttachedOp): string {
 		AttachedOp.AttachedLt => "lt",
 		AttachedOp.AttachedLe => "le",
 		AttachedOp.AttachedToString => "toString",
+		AttachedOp.AttachedCustody => "custody",
 	};
 }
 
@@ -1212,6 +1213,7 @@ export function emitOwnedTypeInfos(g: CGen): void {
 		if (info.destroy != null) destroyName = emitRttiHook(g, info.cName + "RttiDestroy", info.destroy, false);
 		let traceName = "NULL";
 		if (info.trace != null) traceName = emitRttiHook(g, info.cName + "RttiTrace", info.trace, true);
+		const custodyName = info.custody != null ? emitRttiHook(g, info.cName + "RttiCustody", info.custody, true) : traceName;
 		let baseRef = "NULL";
 		if (info.baseKey != "") {
 			const base = demandedTypeInfo(g, info.baseKey, "base class");
@@ -1220,7 +1222,7 @@ export function emitOwnedTypeInfos(g: CGen): void {
 		const label = typeInfoLabel(g, info);
 		const shown = info.kind != TypeInfoKind.Object ? "" : runtimeClassSym(info.subject) != null ? typeDisplayNameUnprofiled(info.subject) : "Object";
 		const fields = `.name = "${label}", .isCyclic = ${info.trace != null && !hasFlag(info.trace, SymbolFlag.Acyclic) ? "MS_TRUE" : "MS_FALSE"}, `
-			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info.subject)}${viaRegistry && info.kind == TypeInfoKind.Object ? " | MS_TYPE_FLAG_HCR" : ""}, .base = ${baseRef}`
+			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info.subject)}${viaRegistry && info.kind == TypeInfoKind.Object ? " | MS_TYPE_FLAG_HCR" : ""}, .base = ${baseRef}, .custodyFn = ${custodyName}`
 			+ (shown != "" && shown != label ? `, .displayName = "${escapeCString(shown)}"` : "");
 		if (viaRegistry && !hcrTypeInfoRef(g, info.cName)) {
 			addCGenError(g, `internal: HCR image ${g.modulePath} owns TypeInfo ${info.cName} but no image module registers it`, 0, 0);

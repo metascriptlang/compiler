@@ -106,6 +106,7 @@ export enum AttachedOp {
 	AttachedLt,
 	AttachedLe,
 	AttachedToString,
+	AttachedCustody,
 }
 
 // ===== Type =====
