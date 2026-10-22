@@ -1395,6 +1395,24 @@ test "closure pair multi-field env (no transforms)" {
 	assert ctx.lastResult.intVal == 42;
 }
 
+test "engine: a call through a closure is one CallClosure that reads the pair itself" {
+	const f = compiledFunc("function apply(f: (x: int64) => int64, n: int64): int64 { return f(n); } console.log(`${apply((x: int64): int64 => x + 1, 2)}`);", "apply");
+	const text = disasmFunc(f);
+	assert countNamed(f, "CallClosure") == 1 && countNamed(f, "CallIndirect") == 0 && countNamed(f, "IsKind") == 0 && countNamed(f, "LoadSlot") == 0, text;
+}
+
+test "a closure call passes its env or none, reads its callee before the arguments, and lets a throw through" {
+	const vm = evalOrcVM("class Boom { n: int64 = 1; } function run(): string { let k: int64 = 3; k = k + 1; let f = (x: int64): int64 => x * k; const g = (x: int64): int64 => x + 100;"
+		+ " let out = `${f(2)} ${g(2)}`; out = out + ` ${f(((): int64 => { f = g; return 1; })())} ${f(1)}`;"
+		+ " const h = (s: string, y: float64): string => s + `${y}`; out = out + ` ${h('a', 1.5)}`;"
+		+ " const boom = (x: int64): int64 => { if (x > 0) { throw new Boom(); } return x; };"
+		+ " try { boom(1); } catch (e) { out = out + ' caught'; } return out; } console.log(run());");
+	assert vm.error == "", vm.error;
+	assert vm.output == "8 102 4 101 a1.5 caught\n", vm.output;
+	const deep = evalOrcVM("let rec: (x: int64) => int64 = (x: int64): int64 => x; rec = (x: int64): int64 => rec(x + 1); console.log(`${rec(0)}`);");
+	assert deep.error.includes("call stack overflow"), deep.error;
+}
+
 // Regression: chained MemberExpr through nested ObjectLiteral.
 // Was broken because Raiser's resetTemps used locals.length, assuming locals
 // pack at R[0..length-1] — but chained `t.nodeType.kind` allocates an

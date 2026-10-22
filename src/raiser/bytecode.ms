@@ -208,9 +208,10 @@ export enum RaiserOpcode {
 	CallDirect,       // ABC: Call whose target and signature createRaiserModule checked
 	ForLtI64,         // ABC: R[A] += 1 (stops on overflow), one budgeted iteration, then if R[A] < R[B] pc += branchOffset(C)
 	ForLtI64Imm,      // ABC: ForLtI64 against the immediate in B
+	CallClosure,      // ABC: R[A] = call the closure pair R[B] with R[A+1]..R[A+n], its env as R[A+n] unless nil; the site counts the env
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.ForLtI64Imm;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.CallClosure;
 
 // How FutureCombine settles its result from its inputs (Promise.all, race, any).
 export enum RaiserCombine {
@@ -347,6 +348,7 @@ function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.StoreDeref => "x-x",
 		RaiserOpcode.Call | RaiserOpcode.CallDirect | RaiserOpcode.CallHost | RaiserOpcode.FutureCombine => "x--",
 		RaiserOpcode.CallIndirect => "xi-",
+		RaiserOpcode.CallClosure => "xr-",
 		RaiserOpcode.Spawn | RaiserOpcode.Await | RaiserOpcode.FutureSettle | RaiserOpcode.FutureFail => "xx-",
 		RaiserOpcode.Sleep => "xx-",
 		RaiserOpcode.Finally | RaiserOpcode.FinallyEnd => "e--",
@@ -379,7 +381,7 @@ export function operandKind(op: RaiserOpcode, slot: int32): int32 {
 }
 
 export function opHasSite(op: RaiserOpcode): boolean {
-	return op == RaiserOpcode.Call || op == RaiserOpcode.CallDirect || op == RaiserOpcode.CallIndirect || op == RaiserOpcode.CallHost || op == RaiserOpcode.FutureCombine || op == RaiserOpcode.NewArray;
+	return op == RaiserOpcode.Call || op == RaiserOpcode.CallDirect || op == RaiserOpcode.CallIndirect || op == RaiserOpcode.CallClosure || op == RaiserOpcode.CallHost || op == RaiserOpcode.FutureCombine || op == RaiserOpcode.NewArray;
 }
 
 // How many registers follow A as the arguments of a site opcode: the count sits in C, or in B for NewArray.

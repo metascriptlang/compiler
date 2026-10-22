@@ -1829,6 +1829,35 @@ function retag(kind: int32, raw: int32): int32 {
 	return kind <= CLS_BOOL ? (raw << 3) | kind : raw;
 }
 
+function sigPrefix(sig: int64, count: int64): int64 {
+	return sig < 0 ? sig : sig & (((1 as int64) << (3 * count)) - 1);
+}
+
+// The function a closure pair laid out as `fn`, `env` calls when its signature matches the site's,
+// with a non-nil env written into the site's last register; -1 sends the call to vmHandleCallClosure.
+function closureTarget(vm: RaiserVM, func: RaiserFunction, handle: int64, rb: int32, site: int32): int64 {
+	if (handleTag(handle) != (RaiserHeapKind.Object as int64)) return -1;
+	when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) return -1; }
+	const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
+	if (obj.classType.fields.length != 2 || obj.fields[0].kind != RaiserValueKind.Int) return -1;
+	when (mode != "danger") { if (obj.classType.fields[0] != "fn" || obj.classType.fields[1] != "env") return -1; }
+	const target = obj.fields[0].intVal;
+	if (target < 0 || target >= vm.mod.functions.length) return -1;
+	const envKind = obj.fields[1].kind;
+	let argc = func.blocks[site + 2];
+	let sig = func.blocks[site + 3];
+	if (envKind == RaiserValueKind.Nil) {
+		argc = argc - 1;
+		sig = sigPrefix(sig, argc);
+	} else if (envKind < RaiserValueKind.String || envKind > RaiserValueKind.Future) {
+		return -1;
+	}
+	const callee: Cursor<RaiserFunction> = vm.mod.functions[target];
+	if (sig < 0 || argc >= callee.sigs.length || callee.sigs[argc] != sig) return -1;
+	if (envKind != RaiserValueKind.Nil) writeRef(vm, rb + ((func.blocks[site + 3 + argc] as int32) >> 3), obj.fields[1].intVal);
+	return target;
+}
+
 // The hot opcodes run here on the two files and the frame's bases; every other opcode takes its
 // operands retagged (each register operand carries its class) into vmStepHeap or vmStepSlow.
 // vm.ip, vm.funcIdx, vm.wordBase and vm.refBase are written back before any call that reads
@@ -1979,6 +2008,44 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 						refs = vm.regs.refs;
 					}
 					funcIdx = ib;
+					func = callee;
+					code = callee.packed;
+					ip = 0;
+				} else {
+					slow = true;
+				}
+				break;
+			}
+			case RaiserOpcode.CallClosure: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
+				const depth = vm.callStack.depth;
+				const target = depth < MAX_CALL_DEPTH ? closureTarget(vm, func, refs[rb + ib], rb, ic) : -1;
+				if (target >= 0) {
+					const callee: Cursor<RaiserFunction> = mod.functions[target];
+					if (depth == vm.callStack.items.length) {
+						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, wordBase: 0, refBase: 0, spBase: 0 });
+					}
+					const frame: Cursor<RaiserCallFrame> = vm.callStack.items[depth];
+					frame.funcIdx = funcIdx;
+					frame.returnIp = ip;
+					frame.returnDest = ia;
+					frame.wordBase = wb;
+					frame.refBase = rb;
+					frame.spBase = vm.safePoints.length as int32;
+					vm.callStack.depth = depth + 1;
+					wb = wb + (func.blocks[ic] as int32);
+					rb = rb + (func.blocks[ic + 1] as int32);
+					if (words.length < wb + callee.wordRegs) {
+						ensureWords(vm.regs, wb + callee.wordRegs);
+						words = vm.regs.words;
+					}
+					if (refs.length < rb + callee.refRegs) {
+						ensureRefs(vm.regs, rb + callee.refRegs);
+						refs = vm.regs.refs;
+					}
+					funcIdx = target as int32;
 					func = callee;
 					code = callee.packed;
 					ip = 0;
@@ -2955,6 +3022,9 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		RaiserOpcode.CallIndirect => {
 			vmHandleCallIndirect(vm, ia, ib, ic);
 		},
+		RaiserOpcode.CallClosure => {
+			vmHandleCallClosure(vm, ia, ib, ic);
+		},
 		RaiserOpcode.Ret => {
 			vmHandleRet(vm, ia, ib, ic);
 		},
@@ -3031,12 +3101,12 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 // The frame of the callee begins at the first word and the first ref the call site names, so an
 // argument whose class matches its parameter is already in place; one that differs is read out as a value
 // first and then written into the callee's own class, because the two layouts overlap.
-function enterCallee(vm: RaiserVM, dest: int32, calleeFuncIdx: number, site: int32): void {
+function enterCallee(vm: RaiserVM, dest: int32, calleeFuncIdx: number, site: int32, withoutLast: boolean = false): void {
 	const caller = getModuleFunc(vm.mod, vm.funcIdx);
 	const callee = vm.mod.functions[calleeFuncIdx];
 	const blocks = caller.blocks;
-	const argc = blocks[site + 2] as int32;
-	const sig = blocks[site + 3];
+	const argc = (blocks[site + 2] as int32) - (withoutLast ? 1 : 0);
+	const sig = withoutLast ? sigPrefix(blocks[site + 3], argc) : blocks[site + 3];
 	let args: RaiserValue[] | null = null;
 	if (sig < 0 || argc >= callee.sigs.length || callee.sigs[argc] != sig) {
 		args = [];
@@ -3149,6 +3219,22 @@ function vmHandleCallIndirect(vm: RaiserVM, ia: int32, ib: int32, ic: int32): vo
 		vmError(vm, `function index out of bounds: ${calleeFuncIdx}`); return;
 	}
 	enterCallee(vm, ia, calleeFuncIdx as number, ic);
+}
+
+function vmHandleCallClosure(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
+	if (vm.callStack.depth >= MAX_CALL_DEPTH) {
+		vmError(vm, `call stack overflow (depth ${MAX_CALL_DEPTH})`); return;
+	}
+	const handle = vmHeapOperand(vm, getDyn(vm, ib), RaiserValueKind.Object, "an object");
+	if (vm.halted) return;
+	const fn = heapObjectGetField(vm.objectHeap, handle, "fn");
+	if (fn.kind != RaiserValueKind.Int || fn.intVal < 0 || fn.intVal >= vm.mod.functions.length) {
+		vmError(vm, `function index out of bounds: ${fn.intVal}`); return;
+	}
+	const env = heapObjectGetField(vm.objectHeap, handle, "env");
+	const caller = getModuleFunc(vm.mod, vm.funcIdx);
+	if (env.kind != RaiserValueKind.Nil) setRegConform(vm, caller.blocks[ic + 3 + caller.blocks[ic + 2]] as int32, env);
+	enterCallee(vm, ia, fn.intVal as number, ic, env.kind == RaiserValueKind.Nil);
 }
 
 // --- Array opcode handlers ---
@@ -5549,6 +5635,45 @@ function closurePairCode(): RaiserInstruction[] {
 		raiserABx(RaiserOpcode.LoadConst, 2, 2),
 		raiserABC(RaiserOpcode.StoreField, 1, 3, 2),
 	];
+}
+
+test "a closure pair built by name is called through CallClosure with and without its env" {
+	const mainCode: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.NewObject, 1, 0, 0),
+		raiserABx(RaiserOpcode.LoadConst, 2, 0),
+		raiserABC(RaiserOpcode.StoreField, 1, 1, 2),
+		raiserABx(RaiserOpcode.LoadConst, 3, 2),
+		raiserABC(RaiserOpcode.StoreField, 1, 3, 3),
+		raiserABx(RaiserOpcode.LoadConst, 5, 4),
+		raiserABC(RaiserOpcode.CallClosure, 4, 1, 2),
+		raiserABC(RaiserOpcode.Print, 4, 0, 0),
+		raiserABC(RaiserOpcode.NewObject, 7, 0, 0),
+		raiserABx(RaiserOpcode.LoadConst, 2, 5),
+		raiserABC(RaiserOpcode.StoreField, 7, 1, 2),
+		raiserABC(RaiserOpcode.StoreField, 7, 3, 1),
+		raiserABx(RaiserOpcode.LoadConst, 9, 6),
+		raiserABC(RaiserOpcode.CallClosure, 8, 7, 2),
+		raiserABC(RaiserOpcode.Print, 8, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 8, 0, 0),
+	];
+	const mainConsts: RaiserValue[] = [raiserInt(1), raiserConstString("fn"), raiserNil(), raiserConstString("env"), raiserInt(41), raiserInt(2), raiserInt(42)];
+	const plusOne: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.AddI64Imm, 1, 0, immField(1)),
+		raiserABC(RaiserOpcode.Ret, 1, 0, 0),
+	];
+	const viaEnv: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.LoadField, 2, 1, 0),
+		raiserABC(RaiserOpcode.AddI64, 3, 0, 2),
+		raiserABC(RaiserOpcode.Ret, 3, 0, 0),
+	];
+	const word = RaiserRegClass.Word;
+	const ref = RaiserRegClass.Ref;
+	const fMain = createRaiserFunction("main", mainCode, mainConsts, 0, 0, 11, [ref, ref, word, ref, word, word, ref, ref, word, word, ref]);
+	const fPlusOne = createRaiserFunction("plusOne", plusOne, [], 1, 1, 2, [word, word]);
+	const fViaEnv = createRaiserFunction("viaEnv", viaEnv, [raiserConstString("fn")], 2, 2, 4, [word, ref, word, word]);
+	const vm = execModule(createRaiserModule("t", [fMain, fPlusOne, fViaEnv], 0), "orc");
+	assert vm.error == "", vm.error;
+	assert vm.output == "42\n43\n", vm.output;
 }
 
 test "spawn returns a future the strand completes, await reads it" {
