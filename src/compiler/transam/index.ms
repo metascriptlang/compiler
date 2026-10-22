@@ -910,6 +910,17 @@ export function dbCompileToJS(db: TransAmDb, source: string): Node {
 	return dbTransform(db, filePath);
 }
 
+export function dbStats(db: TransAmDb): string {
+	const cache = db.cache;
+	let recomputed = "";
+	for (let kind = 0; kind < cache.recomputed.length; kind++) {
+		const count = cache.recomputed[kind];
+		if (count > 0) recomputed += ` ${(kind as TaQueryKind).toString()}=${count}`;
+	}
+	return `entries=${cache.entries.length} hits=${cache.hits} misses=${cache.misses}`
+		+ ` marked=${cache.marked} evicted=${cache.evicted} recomputed:${recomputed}`;
+}
+
 // ===== Re-exports =====
 
 export {
