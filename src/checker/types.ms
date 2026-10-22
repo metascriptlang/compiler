@@ -987,18 +987,22 @@ export function detectUnionDiscriminant(unionType: Type | null, fieldName: strin
 // after `peelToStructOrUnion`. Without that gate, calling on `T | null`
 // (nullable) patterns would erroneously match the Ref variant's fields.
 let _fvbCount: float64 = 0;
-let _queryProfilingEnabled = true;
 let _queryCachesReadOnly = false;
 export function setConcurrentTypeQueries(enabled: boolean): void {
-	_queryProfilingEnabled = !enabled;
 	_queryCachesReadOnly = enabled;
+}
+function refuseProfiledQueryUnderSeal(query: string): void {
+	if (_queryCachesReadOnly) throw new Error(`internal: '${query}' counts into the checker profile and ran while C modules are emitted in parallel; emission calls '${query}Unprofiled'`);
 }
 export function findVariantByFieldNameProfile(): float64[] { return [_fvbCount]; }
 export function findVariantByFieldName(unionType: Readonly<Type | null>, fieldName: string): int32 {
-	if (!_queryProfilingEnabled) return findVariantByFieldNameInner(unionType, fieldName);
+	refuseProfiledQueryUnderSeal("findVariantByFieldName");
 	_fvbCount = _fvbCount + 1;
 	const r = findVariantByFieldNameInner(unionType, fieldName);
 	return r;
+}
+export function findVariantByFieldNameUnprofiled(unionType: Readonly<Type | null>, fieldName: string): int32 {
+	return findVariantByFieldNameInner(unionType, fieldName);
 }
 function findVariantByFieldNameInner(unionType: Readonly<Type | null>, fieldName: string): int32 {
 	if (unionType == null || unionType.typeChildren == null) return -1;
@@ -3094,9 +3098,9 @@ function mappedDisplay(t: Readonly<Type>): string {
 	const mods = mappedModifiers(t);
 	const readonly = mods.has(MappedModifier.IncludeReadonly) ? "readonly " : mods.has(MappedModifier.ExcludeReadonly) ? "-readonly " : "";
 	const optional = mods.has(MappedModifier.IncludeOptional) ? "?" : mods.has(MappedModifier.ExcludeOptional) ? "-?" : "";
-	const constraint = mods.has(MappedModifier.KeyOfDeclared) && t.typeExtra != null ? "keyof " + typeDisplayName(t.typeExtra) : typeDisplayName(t.typeChildren[0]);
-	const remap = t.typeChildren.length > 2 ? " as " + typeDisplayName(t.typeChildren[2]) : "";
-	return "{ " + readonly + "[" + t.typeNames[0] + " in " + constraint + remap + "]" + optional + ": " + typeDisplayName(t.typeChildren[1]) + " }";
+	const constraint = mods.has(MappedModifier.KeyOfDeclared) && t.typeExtra != null ? "keyof " + typeDisplayNameUnprofiled(t.typeExtra) : typeDisplayNameUnprofiled(t.typeChildren[0]);
+	const remap = t.typeChildren.length > 2 ? " as " + typeDisplayNameUnprofiled(t.typeChildren[2]) : "";
+	return "{ " + readonly + "[" + t.typeNames[0] + " in " + constraint + remap + "]" + optional + ": " + typeDisplayNameUnprofiled(t.typeChildren[1]) + " }";
 }
 
 // A constraint that holds only property names: a string literal, a union of them, or keyof T.
@@ -3722,7 +3726,7 @@ function isRuntimeCheckedClass(t: Type): boolean {
 
 export function unionMemberDisplay(m: Readonly<Type>): string {
 	const body = m.kind == TypeKind.Ref ? m.typeReturn : null;
-	return body != null && (body.kind == TypeKind.Struct || body.kind == TypeKind.GenericInstance) ? typeDisplayName(body) : typeDisplayName(m);
+	return body != null && (body.kind == TypeKind.Struct || body.kind == TypeKind.GenericInstance) ? typeDisplayNameUnprofiled(body) : typeDisplayNameUnprofiled(m);
 }
 
 export function runtimeClassSym(body: Type | null): Symbol | null;
@@ -4358,7 +4362,7 @@ export function substituteParamsProfile(): float64[] { return [_substCount]; }
 // bindings per call site, and a walk per binding cost ~56s on self-host.
 export function substituteParams(t: Type | null, params: Type[], concretes: Type[]): Type {
 	const seen: Cursor<Type>[] = [];
-	if (!_queryProfilingEnabled) return substituteAllParamsInner(t, params, concretes, seen);
+	refuseProfiledQueryUnderSeal("substituteParams");
 	_substCount = _substCount + 1;
 	const r = substituteAllParamsInner(t, params, concretes, seen);
 	return r;
@@ -4552,8 +4556,11 @@ export function mergeUnifyBindings(into: UnifyBindings, from: UnifyBindings): vo
 let _unifyCount: float64 = 0;
 export function unifyTypeProfile(): float64[] { return [_unifyCount]; }
 export function unifyType(formal: Type | null, concrete: Type | null, bindings: UnifyBindings): void {
-	if (!_queryProfilingEnabled) { unifyTypeGuard(formal, concrete, bindings); return; }
+	refuseProfiledQueryUnderSeal("unifyType");
 	_unifyCount = _unifyCount + 1;
+	unifyTypeGuard(formal, concrete, bindings);
+}
+export function unifyTypeUnprofiled(formal: Type | null, concrete: Type | null, bindings: UnifyBindings): void {
 	unifyTypeGuard(formal, concrete, bindings);
 }
 function unifyTypeGuard(formal: Type | null, concrete: Type | null, bindings: UnifyBindings): void {
@@ -4576,18 +4583,18 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		return;
 	}
 	if ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Borrow || formal.kind == TypeKind.Cursor || formal.kind == TypeKind.Sink) && formal.typeReturn != null) {
-		unifyType(formal.typeReturn, concrete.kind == formal.kind && concrete.typeReturn != null ? concrete.typeReturn : concrete, bindings);
+		unifyTypeGuard(formal.typeReturn, concrete.kind == formal.kind && concrete.typeReturn != null ? concrete.typeReturn : concrete, bindings);
 		return;
 	}
 	if (formal.kind == TypeKind.Span) {
 		const source = unwrapRef(concrete);
 		if (source.kind == TypeKind.Array || source.kind == TypeKind.SizedArray
 				|| source.kind == TypeKind.Span) {
-			unifyType(formal.typeReturn, source.typeReturn, bindings);
+			unifyTypeGuard(formal.typeReturn, source.typeReturn, bindings);
 			return;
 		}
 		if (source.kind == TypeKind.String || source.kind == TypeKind.StringLiteral) {
-			unifyType(formal.typeReturn, charType(), bindings);
+			unifyTypeGuard(formal.typeReturn, charType(), bindings);
 			return;
 		}
 	}
@@ -4596,13 +4603,13 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		&& (formal.kind == TypeKind.Array || formal.kind == TypeKind.SizedArray
 			|| formal.kind == TypeKind.Span || formal.kind == TypeKind.Set || formal.kind == TypeKind.Ref || formal.kind == TypeKind.Ptr)) {
 		if (formal.typeReturn != null && concrete.typeReturn != null) {
-			unifyType(formal.typeReturn, concrete.typeReturn, bindings);
+			unifyTypeGuard(formal.typeReturn, concrete.typeReturn, bindings);
 		}
 		return;
 	}
 	if (concrete.kind == TypeKind.Struct && isMaybeType(concrete) && concrete.typeReturn != null
 			&& formal.kind != TypeKind.Union && !isMaybeType(formal)) {
-		unifyType(formal, concrete.typeReturn, bindings);
+		unifyTypeGuard(formal, concrete.typeReturn, bindings);
 		return;
 	}
 	// GenericInstance: structural unification of type arguments
@@ -4615,16 +4622,16 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		if (!namesMatch) {
 			const aliased = peelTransparentInstance(concrete);
 			if (aliased != concrete) {
-				unifyType(formal, aliased, bindings);
+				unifyTypeGuard(formal, aliased, bindings);
 				return;
 			}
 			const ancestor = classAncestorInstance(concrete, formal) ?? declaredAncestorInstance(concrete, formal);
-			if (ancestor != null) unifyType(formal, ancestor, bindings);
+			if (ancestor != null) unifyTypeGuard(formal, ancestor, bindings);
 			return;
 		}
 		const limit = formal.typeChildren.length < concrete.typeChildren.length ? formal.typeChildren.length : concrete.typeChildren.length;
 		for (let gi = 0; gi < limit; gi += 1) {
-			unifyType(formal.typeChildren[gi], concrete.typeChildren[gi], bindings);
+			unifyTypeGuard(formal.typeChildren[gi], concrete.typeChildren[gi], bindings);
 		}
 		return;
 	}
@@ -4632,11 +4639,11 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	if (formal.kind == TypeKind.GenericInstance && concrete.kind == TypeKind.Struct) {
 		const ancestor = classAncestorInstance(concrete, formal) ?? declaredAncestorInstance(concrete, formal);
 		if (ancestor != null) {
-			unifyType(formal, ancestor, bindings);
+			unifyTypeGuard(formal, ancestor, bindings);
 			return;
 		}
 		const members = positionalFieldsOf(formal);
-		if (members != null) unifyType(members, concrete, bindings);
+		if (members != null) unifyTypeGuard(members, concrete, bindings);
 		return;
 	}
 	if (formal.kind == TypeKind.Struct && concrete.kind == TypeKind.GenericInstance) {
@@ -4647,7 +4654,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 			if (body.kind == TypeKind.Struct) {
 				const limit = formal.typeChildren.length < body.typeChildren.length ? formal.typeChildren.length : body.typeChildren.length;
 				for (let i = 0; i < limit; i += 1) {
-					unifyType(formal.typeChildren[i], body.typeChildren[i], bindings);
+					unifyTypeGuard(formal.typeChildren[i], body.typeChildren[i], bindings);
 				}
 			}
 		}
@@ -4664,8 +4671,8 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		const fa = formal.typeChildren[0];
 		const fb = formal.typeChildren[1];
 		if (fa != null && fb != null) {
-			if (fb.kind == TypeKind.Null) { unifyType(fa, concrete.typeReturn, bindings); return; }
-			if (fa.kind == TypeKind.Null) { unifyType(fb, concrete.typeReturn, bindings); return; }
+			if (fb.kind == TypeKind.Null) { unifyTypeGuard(fa, concrete.typeReturn, bindings); return; }
+			if (fa.kind == TypeKind.Null) { unifyTypeGuard(fb, concrete.typeReturn, bindings); return; }
 		}
 	}
 	if (formal.kind == TypeKind.Struct && concrete.kind == TypeKind.Union
@@ -4674,8 +4681,8 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		const ca = concrete.typeChildren[0];
 		const cb = concrete.typeChildren[1];
 		if (ca != null && cb != null) {
-			if (cb.kind == TypeKind.Null) { unifyType(formal.typeReturn, ca, bindings); return; }
-			if (ca.kind == TypeKind.Null) { unifyType(formal.typeReturn, cb, bindings); return; }
+			if (cb.kind == TypeKind.Null) { unifyTypeGuard(formal.typeReturn, ca, bindings); return; }
+			if (ca.kind == TypeKind.Null) { unifyTypeGuard(formal.typeReturn, cb, bindings); return; }
 		}
 	}
 	if (formal.kind == TypeKind.Union && concrete.kind != TypeKind.Union && !isMaybeType(concrete)) {
@@ -4684,35 +4691,35 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	}
 	if (formal.kind == TypeKind.Mapped && formal.typeChildren.length == 2) {
 		if (concrete.kind == TypeKind.Mapped && concrete.typeChildren.length >= 2) {
-			unifyType(formal.typeChildren[0], concrete.typeChildren[0], bindings);
-			unifyType(formal.typeChildren[1], concrete.typeChildren[1], bindings);
+			unifyTypeGuard(formal.typeChildren[0], concrete.typeChildren[0], bindings);
+			unifyTypeGuard(formal.typeChildren[1], concrete.typeChildren[1], bindings);
 			return;
 		}
 		unifyToMapped(formal, concrete, formal.typeChildren[0], bindings);
 		return;
 	}
 	if (formal.kind == TypeKind.Conditional && concrete.kind != TypeKind.Conditional && formal.typeChildren.length == 4) {
-		unifyType(formal.typeChildren[2], concrete, bindings);
-		unifyType(formal.typeChildren[3], concrete, bindings);
+		unifyTypeGuard(formal.typeChildren[2], concrete, bindings);
+		unifyTypeGuard(formal.typeChildren[3], concrete, bindings);
 		return;
 	}
 	// Structural match — same kind, recurse into children
 	if (formal.kind != concrete.kind) return;
 	if (formal.kind == TypeKind.Array || formal.kind == TypeKind.SizedArray || formal.kind == TypeKind.Span || formal.kind == TypeKind.Set) {
-		unifyType(formal.typeReturn, concrete.typeReturn, bindings);
+		unifyTypeGuard(formal.typeReturn, concrete.typeReturn, bindings);
 		return;
 	}
 	// Result and Promise are now GenericInstance — handled above
 	if (formal.kind == TypeKind.Function) {
 		const fnLimit = formal.typeChildren.length < concrete.typeChildren.length ? formal.typeChildren.length : concrete.typeChildren.length;
 		for (let i = 0; i < fnLimit; i += 1) {
-			unifyType(formal.typeChildren[i], concrete.typeChildren[i], bindings);
+			unifyTypeGuard(formal.typeChildren[i], concrete.typeChildren[i], bindings);
 		}
-		unifyType(formal.typeReturn, concrete.typeReturn, bindings);
+		unifyTypeGuard(formal.typeReturn, concrete.typeReturn, bindings);
 		return;
 	}
 	if (formal.kind == TypeKind.Ref || formal.kind == TypeKind.Ptr) {
-		unifyType(formal.typeReturn, concrete.typeReturn, bindings);
+		unifyTypeGuard(formal.typeReturn, concrete.typeReturn, bindings);
 		return;
 	}
 	if (formal.kind == TypeKind.Union || formal.kind == TypeKind.Struct || formal.kind == TypeKind.Tuple) {
@@ -4727,7 +4734,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 			for (let i = 0; i < fLimit; i += 1) {
 				for (let j = 0; j < cLimit; j += 1) {
 					if (concrete.typeNames[j] == formal.typeNames[i]) {
-						unifyType(formal.typeChildren[i], concrete.typeChildren[j], bindings);
+						unifyTypeGuard(formal.typeChildren[i], concrete.typeChildren[j], bindings);
 						break;
 					}
 				}
@@ -4736,7 +4743,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 		}
 		const uoLimit = formal.typeChildren.length < concrete.typeChildren.length ? formal.typeChildren.length : concrete.typeChildren.length;
 		for (let i = 0; i < uoLimit; i += 1) {
-			unifyType(formal.typeChildren[i], concrete.typeChildren[i], bindings);
+			unifyTypeGuard(formal.typeChildren[i], concrete.typeChildren[i], bindings);
 		}
 		return;
 	}
@@ -4979,10 +4986,13 @@ function collectGenericParams(t: Type | null, found: Type[], depth: int32): void
 let _gpCount: float64 = 0;
 export function getPropertyProfile(): float64[] { return [_gpCount]; }
 export function getProperty(t: Type | null, name: string): Type {
-	if (!_queryProfilingEnabled) return getPropertyInner(t, name);
+	refuseProfiledQueryUnderSeal("getProperty");
 	_gpCount = _gpCount + 1;
 	const r = getPropertyInner(t, name);
 	return r;
+}
+export function getPropertyUnprofiled(t: Type | null, name: string): Type {
+	return getPropertyInner(t, name);
 }
 function getPropertyInner(t: Type | null, name: string): Type {
 	if (t == null) return inferredType();
@@ -5126,10 +5136,13 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 let _tnoCount: float64 = 0;
 export function typeNameOfProfile(): float64[] { return [_tnoCount]; }
 export function typeNameOf(t: Readonly<Type | null>): string {
-	if (!_queryProfilingEnabled) return typeNameOfInner(t, [], 0);
+	refuseProfiledQueryUnderSeal("typeNameOf");
 	_tnoCount = _tnoCount + 1;
 	const r = typeNameOfInner(t, [], 0);
 	return r;
+}
+export function typeNameOfUnprofiled(t: Readonly<Type | null>): string {
+	return typeNameOfInner(t, [], 0);
 }
 
 function isDisplaying(open: Readonly<Cursor<Readonly<Type>>[]>, t: Readonly<Type>): boolean {
@@ -5234,10 +5247,13 @@ function typeNameOfInner(t: Readonly<Type | null>, open: Cursor<Readonly<Type>>[
 let _tdnCount: float64 = 0;
 export function typeDisplayNameProfile(): float64[] { return [_tdnCount]; }
 export function typeDisplayName(t: Readonly<Type | null>): string {
-	if (!_queryProfilingEnabled) return typeDisplayNameInner(t, 0 as BitSet<TypeFlag>, [], 0);
+	refuseProfiledQueryUnderSeal("typeDisplayName");
 	_tdnCount = _tdnCount + 1;
 	const r = typeDisplayNameInner(t, 0 as BitSet<TypeFlag>, [], 0);
 	return r;
+}
+export function typeDisplayNameUnprofiled(t: Readonly<Type | null>): string {
+	return typeDisplayNameInner(t, 0 as BitSet<TypeFlag>, [], 0);
 }
 function typeDisplayNameInner(t: Readonly<Type | null>, shown: BitSet<TypeFlag>, open: Cursor<Readonly<Type>>[], shapes: int32): string {
 	if (t == null) return "<null>";

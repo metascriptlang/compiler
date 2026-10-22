@@ -14,7 +14,7 @@
 import { Type, TypeKind } from "../../../std/meta/node";
 import {
 	createArray, createGenericParam, createUnifyBindings, numberType, setConcurrentTypeQueries,
-	unifyType,
+	unifyTypeUnprofiled,
 } from "../../checker/types";
 
 function nested(leaf: Type, depth: int32): Type {
@@ -30,7 +30,7 @@ function unifyRounds(rounds: int32): int32 {
 	let bound = 0;
 	for (let i = 0; i < rounds; i += 1) {
 		const b = createUnifyBindings();
-		unifyType(formal, concrete, b);
+		unifyTypeUnprofiled(formal, concrete, b);
 		if (b.names.length == 1 && b.types[0].kind == TypeKind.Number) bound += 1;
 	}
 	return bound;

@@ -9,7 +9,7 @@
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, VariableDeclData, DeclKind, Type, TypeKind, Symbol, SymbolKind, ProgramData } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { duVariantIndexOfType } from "../../checker/compat";
-import { skipModifier, numberLiteralSet, isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayName, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing, matchUnionBehindInstance, fieldTypeView } from "../../checker/types";
+import { skipModifier, numberLiteralSet, isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldNameUnprofiled, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayNameUnprofiled, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing, matchUnionBehindInstance, fieldTypeView } from "../../checker/types";
 import { SymbolFlag, hasFlag, isTypeSymbol } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -109,7 +109,7 @@ function litConvCall(g: CGen, value: string, set: Readonly<Type>): string {
 	const members = numberLiteralSet(set)!;
 	const values: string[] = [];
 	for (const m of members) values.push(m.typeName);
-	const name = set.sym != null && set.sym.name != "" ? set.sym.name : typeDisplayName(set);
+	const name = set.sym != null && set.sym.name != "" ? set.sym.name : typeDisplayNameUnprofiled(set);
 	return `((${getTypeDesc(g, set)})msNumLitConv((double)(${value}), (const double[]){${values.join(", ")}}, ${members.length}, ${msStringPoolRef(internString(g.stringPool, name), cStringByteLen(name))}))`;
 }
 
@@ -117,7 +117,7 @@ function strLitConvArgs(g: CGen, set: Readonly<Type>): string {
 	let members = "";
 	if (set.kind == TypeKind.StringLiteral) members = `${set.typeName.byteLength}:${set.typeName}`;
 	else for (const lit of set.typeChildren) members += `${lit.typeName.byteLength}:${lit.typeName}`;
-	const name = set.sym != null && set.sym.name != "" ? set.sym.name : typeDisplayName(set);
+	const name = set.sym != null && set.sym.name != "" ? set.sym.name : typeDisplayNameUnprofiled(set);
 	return `${msStringPoolRef(internString(g.stringPool, members), cStringByteLen(members))}, ${msStringPoolRef(internString(g.stringPool, name), cStringByteLen(name))}`;
 }
 
@@ -141,7 +141,7 @@ function unstoredLiteral(g: CGen, object: Readonly<Node>, property: string): str
 	if (ft.kind != TypeKind.EnumLiteral) return "";
 	const enumT = ft.typeReturn;
 	const member = enumT != null && ft.typeNames.length > 0 ? variantKeyMember(enumT, ft.typeNames[0]) : -1;
-	if (enumT == null || member < 0) throw new Error(`internal: unstored enum literal '${property}' of '${typeDisplayName(owner)}' names no member of its enum`);
+	if (enumT == null || member < 0) throw new Error(`internal: unstored enum literal '${property}' of '${typeDisplayNameUnprofiled(owner)}' names no member of its enum`);
 	return `${getTypeDesc(g, enumT)}_${mangle(enumT.typeNames[member])}`;
 }
 
@@ -151,7 +151,7 @@ function discriminantFromTag(g: CGen, p: CProc, node: Readonly<Node>, u: Readonl
 		const lt = findFieldInVariant(u.typeChildren[vi], disc);
 		const enumMember = lt != null && lt.kind == TypeKind.EnumLiteral && lt.typeReturn != null && lt.typeNames.length > 0 ? variantKeyMember(lt.typeReturn, lt.typeNames[0]) : -1;
 		if (lt == null || (lt.kind != TypeKind.StringLiteral && lt.kind != TypeKind.BooleanLiteral && enumMember < 0)) {
-			addCGenError(g, `internal: discriminant '${disc}' has no literal on variant ${vi} of '${typeDisplayName(u)}' at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+			addCGenError(g, `internal: discriminant '${disc}' has no literal on variant ${vi} of '${typeDisplayNameUnprofiled(u)}' at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			return tagRead;
 		}
 		if (enumMember >= 0) {
@@ -173,7 +173,7 @@ function enumTagMembers(g: CGen, node: Readonly<Node>, u: Readonly<Type>): strin
 		const key = vi + 1 < u.typeNames.length ? u.typeNames[vi + 1] : "";
 		const mi = variantKeyMember(enumT, key);
 		if (mi < 0) {
-			addCGenError(g, `internal: variant ${vi} of '${typeDisplayName(u)}' has no member of enum '${enumT.typeName}' (key '${key}') at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+			addCGenError(g, `internal: variant ${vi} of '${typeDisplayNameUnprofiled(u)}' has no member of enum '${enumT.typeName}' (key '${key}') at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			return [];
 		}
 		const mt = enumT.typeChildren != null && mi < enumT.typeChildren.length ? enumT.typeChildren[mi] : null;
@@ -1606,7 +1606,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			const isEnumDiscWrite = ut != null && ut.kind == TypeKind.Union && isDiscriminatedUnion(ut) && getDiscriminantName(ut) == md.property
 				&& enumTagMembers(g, node, ut).length > 0;
 			if (ut != null && ut.kind == TypeKind.Union && isRealDiscriminatedUnion(ut) && (literalDiscriminantOf(ut) == md.property || isEnumDiscWrite)) {
-				addCGenError(g, `internal: write to the discriminant '${md.property}' of '${typeDisplayName(ut)}' reached codegen at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+				addCGenError(g, `internal: write to the discriminant '${md.property}' of '${typeDisplayNameUnprofiled(ut)}' reached codegen at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 			}
 		}
 		if (d.operator == "=" && d.left.kind == NodeKind.MemberExpr) {
@@ -1886,13 +1886,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			// unique / same-offset shared fields, which the checker now enforces).
 			let varIdx = -1;
 			if (mainDeclTy != null && mainDeclTy != objType) {
-				const subIdx = findVariantByFieldName(objType, d.property);
+				const subIdx = findVariantByFieldNameUnprofiled(objType, d.property);
 				if (subIdx >= 0) varIdx = duVariantIndexOfType(mainDeclTy, objType.typeChildren[subIdx]);
 			}
 			if (varIdx < 0 && node.resolvedSym != null && node.resolvedSym.duVariantSlot > 0) {
 				varIdx = node.resolvedSym.duVariantSlot - 1;
 			}
-			if (varIdx < 0) varIdx = findVariantByFieldName(objType, d.property);
+			if (varIdx < 0) varIdx = findVariantByFieldNameUnprofiled(objType, d.property);
 			if (varIdx >= 0) {
 				ctx.results.push(`${obj}${acc}v${varIdx}${variantSlotAccess(mainDeclTy != null ? mainDeclTy : objType, varIdx)}${field}`);
 				return;
@@ -1929,9 +1929,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					declVarIdx = node.resolvedSym.duVariantSlot - 1;
 				}
 				if (declVarIdx < 0 && isLitDisc) {
-					addCGenError(g, `internal: discriminant '${d.property}' of '${typeDisplayName(declTy)}' read through a narrowed variant with no slot at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+					addCGenError(g, `internal: discriminant '${d.property}' of '${typeDisplayNameUnprofiled(declTy)}' read through a narrowed variant with no slot at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
 				}
-				if (declVarIdx < 0 && !isLitDisc) declVarIdx = findVariantByFieldName(declTy, d.property);
+				if (declVarIdx < 0 && !isLitDisc) declVarIdx = findVariantByFieldNameUnprofiled(declTy, d.property);
 				if (declVarIdx >= 0 && walkObj.kind == NodeKind.MemberExpr) {
 					// Chained access (m.lifecycle.condition): the object snippet is already
 					// emitted correctly — just route through the variant slot.
@@ -2054,7 +2054,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				ctx.results.push(`(${tmp}.present ? (${targetC}){.value=${litConvCall(g, `${tmp}.value`, litTarget)}, .present=true} : (${targetC}){0})`);
 				return;
 			}
-			addCGenError(g, "internal: checked `as " + d.asType + "` into a string-literal union reached codegen from " + (from != null ? typeDisplayName(from) : "an untyped value") + " at " + g.modulePath + ":" + node.location.line.toString(), node.location.line, node.location.column);
+			addCGenError(g, "internal: checked `as " + d.asType + "` into a string-literal union reached codegen from " + (from != null ? typeDisplayNameUnprofiled(from) : "an untyped value") + " at " + g.modulePath + ":" + node.location.line.toString(), node.location.line, node.location.column);
 			ctx.results.push("MS_NIL");
 			return;
 		}
@@ -2146,7 +2146,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			const fromCarrier = d.asExpr.nodeType;
 			if (isMaybeType(node.nodeType) && isMaybeType(fromCarrier) && node.nodeType.typeReturn != null && fromCarrier.typeReturn != null
 				&& getTypeDesc(g, node.nodeType.typeReturn) != getTypeDesc(g, fromCarrier.typeReturn)) {
-				addCGenError(g, "internal: `as " + d.asType + "` from " + typeDisplayName(fromCarrier) + " to " + typeDisplayName(node.nodeType) + " reached codegen as a reinterpret of one carrier as another at " + g.modulePath + ":" + node.location.line.toString(), node.location.line, node.location.column);
+				addCGenError(g, "internal: `as " + d.asType + "` from " + typeDisplayNameUnprofiled(fromCarrier) + " to " + typeDisplayNameUnprofiled(node.nodeType) + " reached codegen as a reinterpret of one carrier as another at " + g.modulePath + ":" + node.location.line.toString(), node.location.line, node.location.column);
 				ctx.results.push("MS_NIL");
 				return;
 			}
@@ -3066,7 +3066,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		&& cd.callee.resolvedSym != null && cd.callee.resolvedSym.builtinKind == "PromiseAllFor") {
 		let resultArr = node.nodeType != null ? awaitedType(node.nodeType) : null;
 		if (resultArr != null && resultArr.kind == TypeKind.Ref) resultArr = resultArr.typeReturn;
-		if (resultArr == null || resultArr.kind != TypeKind.Array) throw new Error(`internal: typed Promise.all call does not resolve to an array: ${typeDisplayName(node.nodeType)}`);
+		if (resultArr == null || resultArr.kind != TypeKind.Array) throw new Error(`internal: typed Promise.all call does not resolve to an array: ${typeDisplayNameUnprofiled(node.nodeType)}`);
 		const typedName = ensurePromiseAllInstance(g, resultArr);
 		if (typedName != "") finalCallee = typedName;
 	}
