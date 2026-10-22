@@ -49,10 +49,18 @@ export function publishPendingDiagnostics(db: TransAmDb): string {
 		const path = entry[0];
 		const uri = entry[1];
 		try {
+			const t0 = performance.now();
+			dbTypeCheck(db, path);
+			const t1 = performance.now();
 			prebuildCompletionCache(db, path, uri);
+			const t2 = performance.now();
 			const diagParams = recordPublishedDiagnostics(path, buildDiagnosticsJson(uri, db, path));
 			result = result + lspFormatMessage(lspNotification("textDocument/publishDiagnostics", diagParams));
+			const t3 = performance.now();
 			result = result + buildTransitiveDiagnosticsWire(db, path);
+			const t4 = performance.now();
+			writeStderr(`[LSP-CHANGE] ${path} check=${t1 - t0}ms cache=${t2 - t1}ms`
+				+ ` diag=${t3 - t2}ms dependents=${t4 - t3}ms total=${t4 - t0}ms\n`);
 		} catch (e) {
 			const fileId = getFileId(db.fileInput, path);
 			if (fileId >= 0) invalidateFile(db.cache, db.moduleDeps, fileId);

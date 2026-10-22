@@ -10,7 +10,7 @@ import {
 	lspGetField, lspGetNumberField, lspGetObjectField, lspJsonNumber, lspJsonString,
 	lspErrorResponse
 } from "./protocol";
-import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath, dbSetResolverConfig } from "../transam/index";
+import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath, dbSetResolverConfig, dbStats } from "../transam/index";
 import { findProjectRoot } from "../../utils/path";
 import { ModuleCtxRegistry, createModuleCtxRegistry, swapModuleCtxRegistry } from "../../checker/instantiate";
 import { ensureDir, mkdir, realpath, writeFile } from "std/fs";
@@ -311,6 +311,7 @@ export function lspServe(io: LspTransport): int32 {
 		if (pendingDiag.length > 0) {
 			io.write(pendingDiag);
 		}
+		writeStderr(`[LSP-STATS] ${dbStats(state.db)}\n`);
 		if (!streamOpen) return streamExitCode(streamEnd);
 	}
 	return 0;
