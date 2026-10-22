@@ -46,3 +46,17 @@ test "readonlyReturn: a function value with a Readonly result follows the same r
 	assert errors(node + "const f = (t: Readonly<Node>): Readonly<Node> => new Node();", owning) == 1;
 	assert errors(node + "const f = (t: Readonly<Node>): Readonly<Node> => t.kids[0];", "") == 0;
 }
+
+const shared = node + "class Holder { f: Readonly<Node> | null = null; }\nconst ROOT: Readonly<Node> = new Node();\nfunction take(sink t: Readonly<Node>): int32 { return t.n; }\n";
+
+test "readonlyReturn: spawned code that stores a shared module const is refused" {
+	assert errors(shared + "const w = spawn(() => { const h = new Holder(); h.f = ROOT; return 0; });", "stores the module const 'ROOT' into a field") == 1;
+	assert errors(shared + "const w = spawn(() => { const xs: (Readonly<Node> | null)[] = [null]; xs[0] = ROOT; return 0; });", "stores the module const 'ROOT' into an array element") == 1;
+	assert errors(shared + "const w = spawn(() => { const xs: Readonly<Node>[] = []; xs.push(ROOT); return 0; });", "stores the module const 'ROOT' into a sink parameter") == 1;
+	assert errors(shared + "const w = spawn(() => take(ROOT));", "stores the module const 'ROOT' into a sink parameter") == 1;
+	assert errors(shared + "function store(h: Holder): void { h.f = ROOT; }\nconst w = spawn(() => { store(new Holder()); return 0; });", "which stores the module const 'ROOT' into a field") == 1;
+}
+
+test "readonlyReturn: the same stores outside spawned code, and borrows inside it, compile" {
+	assert errors(shared + "const h = new Holder(); h.f = ROOT;\nconst xs: Readonly<Node>[] = []; xs.push(ROOT);\nconst k = take(ROOT);\nconst w = spawn(() => { const r = ROOT; return r.n + ROOT.n; });", "stores the module const") == 0;
+}
