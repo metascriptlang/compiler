@@ -2120,8 +2120,9 @@ export function checkGenericSpecialization(typeA: Type, typeB: Type): number {
 }
 
 // checkGeneric's cross-test for union formals, which the reference types as `A | B`
-// typeclasses: a union that fits inside the other candidate's formal, and not the
-// reverse, is the more specific overload (`"a" | "b"` over `string`).
+// typeclasses, and for a lone string literal, a one-member set: a formal that fits inside
+// the other candidate's formal, and not the reverse, is the more specific overload
+// (`"a" | "b"` and `"a"` over `string`).
 export function checkUnionSpecialization(typeA: Type, typeB: Type): number {
 	if (typeA.kind != TypeKind.Function || typeB.kind != TypeKind.Function) return 0;
 	if (typeA.typeChildren.length != typeB.typeChildren.length) return 0;
@@ -2129,7 +2130,7 @@ export function checkUnionSpecialization(typeA: Type, typeB: Type): number {
 	for (let i = 0; i < typeA.typeChildren.length; i += 1) {
 		const pA = typeA.typeChildren[i];
 		const pB = typeB.typeChildren[i];
-		if (pA == null || pB == null || (pA.kind != TypeKind.Union && pB.kind != TypeKind.Union)) continue;
+		if (pA == null || pB == null || (!isLiteralSetFormal(pA) && !isLiteralSetFormal(pB))) continue;
 		const aFitsB = typeRelation(pB, pA) != TypeRelation.None;
 		const bFitsA = typeRelation(pA, pB) != TypeRelation.None;
 		if (aFitsB && !bFitsA) {
@@ -2141,6 +2142,10 @@ export function checkUnionSpecialization(typeA: Type, typeB: Type): number {
 		}
 	}
 	return winner;
+}
+
+function isLiteralSetFormal(t: Type): boolean {
+	return t.kind == TypeKind.Union || t.kind == TypeKind.StringLiteral;
 }
 
 // Count generic nesting depth of a type (Standard reference implementation).
