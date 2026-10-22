@@ -3397,7 +3397,9 @@ function isGenericInstanceMethod(sym: Symbol): boolean {
 	return !md.methodIsStatic && isGenericFn(md.methodFlags);
 }
 
-function collectArgCandidates(bound: UnifyBindings, raw: UnifyBindings, argIdx: int32, arg: Node, candParams: Type[], candTypes: Type[], candFrom: int32[], candSkip: boolean[]): void {
+function collectArgCandidates(bound: UnifyBindings, raw: UnifyBindings, argIdx: int32, arg: Node, candParams: Type[], candTypes: Type[], candFrom: int32[], candSkip: boolean[], candLiteral: boolean[]): void {
+	const literalTypes: Type[] = [];
+	if (arg != null && arg.kind == NodeKind.ObjectLiteral) collectLiteralTypes(arg, literalTypes);
 	for (let bi = 0; bi < raw.params.length; bi += 1) {
 		const t = raw.types[bi];
 		if (hasGenericParams(t) || boundSlot(bound, raw.params[bi]) != -1) continue;
@@ -3405,6 +3407,17 @@ function collectArgCandidates(bound: UnifyBindings, raw: UnifyBindings, argIdx: 
 		candTypes.push(t);
 		candFrom.push(argIdx);
 		candSkip.push(bindingConflictSkipArg(arg) || isUnresolvedType(t));
+		candLiteral.push(literalTypes.indexOf(t) >= 0);
+	}
+}
+
+function collectLiteralTypes(n: Node, out: Type[]): void {
+	if (n.kind == NodeKind.ObjectLiteral) {
+		if (n.nodeType != null) out.push(n.nodeType);
+		for (const v of (n.data as ObjectLiteralData).properties) { if (v != null) collectLiteralTypes(v, out); }
+	} else if (n.kind == NodeKind.ArrayLiteral) {
+		if (n.nodeType != null) out.push(n.nodeType);
+		for (const e of (n.data as ArrayLiteralData).elements) { if (e != null) collectLiteralTypes(e, out); }
 	}
 }
 
@@ -3542,17 +3555,18 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 	const candTypes: Type[] = [];
 	const candFrom: int32[] = [];
 	const candSkip: boolean[] = [];
+	const candLiteral: boolean[] = [];
 	for (let i = 0; i < limit; i += 1) {
 		if (deferredRest && i == restIdx) {
 			const ab = createUnifyBindings();
 			unifyType(unwrapVarargs(declRest!), restArgsTuple(argTypes, restIdx), ab);
-			collectArgCandidates(eb, ab, i, cd.arguments[i], candParams, candTypes, candFrom, candSkip);
+			collectArgCandidates(eb, ab, i, cd.arguments[i], candParams, candTypes, candFrom, candSkip, candLiteral);
 		} else if (tupleRest && i >= restIdx) {
 			const element = formalAtPosition(calleeType, i);
 			if (element == null || argTypes[i] == null) continue;
 			const ab = createUnifyBindings();
 			unifyType(element, argTypes[i], ab);
-			collectArgCandidates(eb, ab, i, cd.arguments[i], candParams, candTypes, candFrom, candSkip);
+			collectArgCandidates(eb, ab, i, cd.arguments[i], candParams, candTypes, candFrom, candSkip, candLiteral);
 		} else if (argTypes[i] != null) {
 			// Per-arg filter: a binding whose bound type still CONTAINS generic
 			// params is unusable (instantiateGenericFunction refuses it) but under
@@ -3562,10 +3576,10 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 			// concrete object literal.
 			const ab = createUnifyBindings();
 			unifyType(calleeType.typeChildren[i], argTypes[i], ab);
-			collectArgCandidates(eb, ab, i, cd.arguments[i], candParams, candTypes, candFrom, candSkip);
+			collectArgCandidates(eb, ab, i, cd.arguments[i], candParams, candTypes, candFrom, candSkip, candLiteral);
 		}
 	}
-	const fold = foldTypeParamCandidates(candParams, candTypes, candSkip, createUnifyBindings());
+	const fold = foldTypeParamCandidates(candParams, candTypes, candSkip, createUnifyBindings(), candLiteral);
 	for (let k = 0; k < fold.params.length; k += 1) {
 		bindParam(eb, fold.params[k], fold.types[k]);
 		ebFrom.push(candFrom[fold.chosen[k]]);
@@ -3640,7 +3654,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		const gTypes: Type[] = [];
 		const gFrom: int32[] = [];
 		const gSkip: boolean[] = [];
-		collectArgCandidates(createUnifyBindings(), gbRaw, ai, argN, gParams, gTypes, gFrom, gSkip);
+		collectArgCandidates(createUnifyBindings(), gbRaw, ai, argN, gParams, gTypes, gFrom, gSkip, []);
 		const gFold = foldTypeParamCandidates(gParams, gTypes, gSkip, createUnifyBindings());
 		if (gFold.misfits.length > 0) { reportTypeParamMisfits(ctx, gFold, gParams, gTypes, gFrom, cd, conflicted); continue; }
 		if (gFold.names.length == 0) continue;

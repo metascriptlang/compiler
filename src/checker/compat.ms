@@ -1844,10 +1844,14 @@ export interface TypeParamFold {
 	misfits: int32[];
 }
 
-export function foldTypeParamCandidates(candParams: Type[], candTypes: Type[], skip: boolean[], fixed: UnifyBindings): TypeParamFold {
+export function foldTypeParamCandidates(candParams: Type[], candTypes: Type[], skip: boolean[], fixed: UnifyBindings, literal: boolean[] = []): TypeParamFold {
 	const out: TypeParamFold = { names: [], params: [], types: [], chosen: [], misfits: [] };
+	const order: int32[] = [];
+	for (let ci = 0; ci < candParams.length; ci += 1) { if (!isLiteralCandidate(literal, ci)) order.push(ci); }
+	for (let ci = 0; ci < candParams.length; ci += 1) { if (isLiteralCandidate(literal, ci)) order.push(ci); }
 	const firsts: Type[] = [];
-	for (let ci = 0; ci < candParams.length; ci += 1) {
+	for (let oi = 0; oi < order.length; oi += 1) {
+		const ci = order[oi];
 		const param = candParams[ci];
 		if (firsts.indexOf(param) >= 0) continue;
 		firsts.push(param);
@@ -1856,21 +1860,49 @@ export function foldTypeParamCandidates(candParams: Type[], candTypes: Type[], s
 		let bound = fixedIdx >= 0 ? fixed.types[fixedIdx] : candTypes[ci];
 		if (fixedIdx < 0) {
 			chosen = ci;
-			for (let cj = ci + 1; cj < candParams.length; cj += 1) {
+			for (let oj = oi + 1; oj < order.length; oj += 1) {
+				const cj = order[oj];
 				if (candParams[cj] != param || skip[cj]) continue;
-				if (isAssignable(bound, candTypes[cj]) && !isAssignable(candTypes[cj], bound)) { bound = candTypes[cj]; chosen = cj; }
+				if (isAssignable(bound, candTypes[cj]) && !candidateFits(candTypes[cj], isLiteralCandidate(literal, cj), bound)) { bound = candTypes[cj]; chosen = cj; }
 			}
 		}
 		out.names.push(param.typeName);
 		out.params.push(param);
 		out.types.push(bound);
 		out.chosen.push(chosen);
-		for (let cj = ci; cj < candParams.length; cj += 1) {
+		for (let oj = oi; oj < order.length; oj += 1) {
+			const cj = order[oj];
 			if (candParams[cj] != param || cj == chosen || skip[cj]) continue;
-			if (!isAssignable(candTypes[cj], bound)) out.misfits.push(cj);
+			if (!candidateFits(candTypes[cj], isLiteralCandidate(literal, cj), bound)) out.misfits.push(cj);
 		}
 	}
 	return out;
+}
+
+function isLiteralCandidate(literal: boolean[], ci: int32): boolean {
+	return ci < literal.length && literal[ci];
+}
+
+function candidateFits(candidate: Type, fromLiteral: boolean, bound: Type): boolean {
+	return fromLiteral ? literalShapeFits(candidate, bound) : isAssignable(candidate, bound);
+}
+
+// An object literal's own type against a declared type: the literal is retyped by the
+// declared type once inference ends, so it fits when every property it writes is a field
+// of that type with a fitting value and every required field is written.
+function literalShapeFits(literal: Type, target: Type): boolean {
+	if (isAssignable(literal, target)) return true;
+	const s = peelToStructOrUnion(literal);
+	const t = peelToStructOrUnion(target);
+	if (s == null || t == null || s.kind != TypeKind.Struct || t.kind != TypeKind.Struct || isMaybeType(t)) return false;
+	for (let i = 0; i < s.typeNames.length && i < s.typeChildren.length; i += 1) {
+		const j = t.typeNames.indexOf(s.typeNames[i]);
+		if (j < 0 || j >= t.typeChildren.length || !literalShapeFits(s.typeChildren[i], t.typeChildren[j])) return false;
+	}
+	for (const name of t.typeNames) {
+		if (s.typeNames.indexOf(name) < 0 && (t.optionalFields == null || t.optionalFields.indexOf(name) < 0)) return false;
+	}
+	return true;
 }
 
 // ===== Standard-Aligned Overload Resolution (Priority-Based) =====
