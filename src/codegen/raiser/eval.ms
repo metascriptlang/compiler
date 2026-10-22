@@ -587,6 +587,17 @@ test "engine: an as into a narrower literal union stops on a value outside it" {
 	assert numbers.output == "2\n", numbers.output;
 }
 
+test "engine: a value of a literal union is a value of its base type, as on C" {
+	const ops = evalOrcVM("type L = 'ab' | 'c'; function cat(x: L, y: L): string { return x + y; } function lt(x: L, y: L): boolean { return x < y; }"
+		+ " console.log(cat('ab', 'c'), lt('c', 'ab'), lt('ab', 'c'));");
+	assert ops.error == "", ops.error;
+	assert ops.output == "abc false true\n", ops.output;
+	const zero = evalOrcVM("type L = 'a' | 'b'; type D = 1 | 2; const ls = new Array<L>(1); const ds = new Array<D>(1);"
+		+ " console.log(`[${ls[0]}] ${ls[0].length} ${ds[0] + 0}`);");
+	assert zero.error == "", zero.error;
+	assert zero.output == "[] 0 0\n", zero.output;
+}
+
 function fieldNames(heap: RaiserObjectHeap, handle: int64): string[] {
 	const names: string[] = [];
 	for (let i = 0; i < heapObjectFieldCount(heap, handle); i += 1) names.push(heapObjectFieldNameAt(heap, handle, i));
