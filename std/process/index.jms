@@ -24,7 +24,7 @@ extern function readdirSync(path: string): string[];
 interface SpawnOpts { stdio: string; }
 interface SpawnResult { status: number; }
 
-import { ProcessError, spawnFailed, startFailed, notFound, nonZeroExit, signalTerminated, pipeError } from "./errors";
+import { ProcessError, spawnFailed, startFailed, nonZeroExit, signalTerminated, pipeError } from "./errors";
 
 export { ProcessError, ProcessErrorKind } from "./errors";
 export { processError, spawnFailed, startFailed, notFound, nonZeroExit, signalTerminated, pipeError, isNotFound, isNonZeroExit, isRetryable } from "./errors";
@@ -58,7 +58,6 @@ export function exec(command: string): Result<string, ProcessError> {
 	if (r.pipeError != "") return Result.err(pipeError(command, r.pipeError));
 	if (r.signal != 0) return Result.err(signalTerminated(command, r.signal, r.output, r.errorOutput));
 	if (r.exitCode != 0) {
-		if (r.exitCode == 127) return Result.err(notFound(command));
 		return Result.err(nonZeroExit(command, r.exitCode, r.output, r.errorOutput));
 	}
 	return Result.ok(r.output);
