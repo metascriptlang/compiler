@@ -23,7 +23,7 @@ import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPo
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
 import { ensureCrossModuleProto, copiesInline } from "./forward";
 import { useHeader, createCGen, createProc, sec, CSection, readProcStmts, raiseTarget } from "./context";
-import { newCanRaise } from "../../checker/raises";
+import { inferredCallRaises } from "../../checker/raises";
 import { GcMode, dispatchOverridesFor, dispatchEntryFor, CheckerContext } from "../../checker/context";
 import { monoBaseName } from "../../monomorphize/registry";
 import { isRuntimeProcSym } from "../../transform/util";
@@ -1422,7 +1422,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			emitStmtsLine(p, `${newTmp} = ${genAllocTyped(g, cName, infoType)};`);
 			initArgs = newTmp + initArgs;
 			emitStmtsLine(p, `${initName}(${initArgs});`);
-			if (!p.suppressRaiseCheck && newCanRaise(node)) {
+			if (!p.suppressRaiseCheck && inferredCallRaises(node)) {
 				emitStmtsLine(p, `if (msErr) { msDecrefCyclic(${newTmp}); goto ${raiseTarget(p)}; }`);
 			}
 			ctx.results.push(newTmp);

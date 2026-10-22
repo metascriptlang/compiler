@@ -6,7 +6,7 @@
 import { Node, NodeKind, DeclKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BreakStmtData, ContinueStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, UnreachableStmtData, MacroInvocationData, StringLiteralData, BooleanLiteralData, TypeAssertionData, NumberLiteralData, BinaryExprData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind, NewExprData, MemberExprData, ArrayAccessData, HiddenStdConvData, UnaryExprData, ConditionalExprData, ObjectLiteralData, SpreadExprData, MoveExprData, HiddenDerefData } from "../../ast/node";
 import { isStructType, isUnresolvedType, mayHoldAddress, peelThrough, PEEL_ALL, PEEL_ALIAS, hasAsgnFlag, isIntegerType, isFloatType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { statementCanRaise, callCanRaise, finallyIsErrorBlind } from "../../checker/raises";
+import { statementCanRaise, inferredCallRaises, finallyIsErrorBlind } from "../../checker/raises";
 import {
 	CGen, CProc, CTryEntry,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
@@ -357,7 +357,7 @@ function returnsInto(value: Readonly<Node>): boolean {
 }
 
 function storeIsUnobservable(p: CProc, call: Readonly<Node>): boolean {
-	return p.nestedTryStmts.length == 0 || !callCanRaise(call);
+	return p.nestedTryStmts.length == 0 || !inferredCallRaises(call);
 }
 
 function genExprStmt(g: CGen, p: CProc, node: Readonly<Node>): void {

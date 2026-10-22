@@ -36,6 +36,7 @@ let _order: RoutineInfo[] = [];
 let _siteInfos: RoutineInfo[] = [];
 let _siteNodes: Node[] = [];
 let _statementValues: Node[] = [];
+let _calls: Node[] = [];
 let _walkInfo: RoutineInfo | null = null;
 let _walkCaught = false;
 let _holdFound = false;
@@ -184,6 +185,7 @@ function resetWalk(): void {
 	_siteInfos = [];
 	_siteNodes = [];
 	_statementValues = [];
+	_calls = [];
 	_walkInfo = null;
 	_walkCaught = false;
 }
@@ -209,6 +211,10 @@ function noteStatementValue(node: Node): void {
 	else if (node.kind == NodeKind.VariableDecl) value = (node.data as VariableDeclData).initializer;
 	else if (node.kind == NodeKind.ReturnStmt) value = (node.data as ReturnStmtData).argument;
 	if (value != null) _statementValues.push(value);
+}
+
+function noteCall(node: Node): void {
+	if (node.kind == NodeKind.CallExpr || node.kind == NodeKind.NewExpr) _calls.push(node);
 }
 
 function walkTry(node: Node, info: RoutineInfo): void {
@@ -241,6 +247,7 @@ function walkProgram(node: Node): void {
 	if (node == null) return;
 	noteTempWrites(node);
 	noteStatementValue(node);
+	noteCall(node);
 	const info = _walkInfo;
 	if (isNestedRoutine(node)) {
 		const caught = _walkCaught;
@@ -304,6 +311,7 @@ export function inferRaises(programs: Node[]): void {
 	for (const info of _order) {
 		if (!info.raises) _tables.raisesNothing.add(info.sym);
 	}
+	for (const call of _calls) markCall(call);
 	for (const value of _statementValues) markValue(value);
 	resetWalk();
 }
@@ -324,6 +332,11 @@ function markValue(value: Node): void {
 	value.flags = value.flags.excl(raises ? NodeFlag.CannotRaise : NodeFlag.CanRaise).incl(raises ? NodeFlag.CanRaise : NodeFlag.CannotRaise);
 }
 
+function markCall(call: Node): void {
+	const raises = call.kind == NodeKind.CallExpr ? callCanRaise(call) : newCanRaise(call);
+	call.flags = call.flags.incl(raises ? NodeFlag.RaisingCall : NodeFlag.NonRaisingCall);
+}
+
 export function callCanRaise(call: Readonly<Node>): boolean {
 	const verdict = classifyCall(call);
 	if (verdict == CallRaise.AsBody) return !_tables.raisesNothing.has(calleeTarget(_tables, call)!);
@@ -334,6 +347,13 @@ export function newCanRaise(node: Readonly<Node>): boolean {
 	const verdict = classifyNew(node);
 	if (verdict == CallRaise.AsBody) return !_tables.raisesNothing.has(node.resolvedSym!);
 	return verdict == CallRaise.Can;
+}
+
+// The verdict the inference left on a call or `new`, so emission reads it instead of asking again.
+export function inferredCallRaises(call: Readonly<Node>): boolean {
+	if (call.flags.has(NodeFlag.RaisingCall)) return true;
+	if (call.flags.has(NodeFlag.NonRaisingCall)) return false;
+	throw new Error(`internal: a call at ${call.location.line}:${call.location.column} reached emission without a raises verdict`);
 }
 
 // A value the inference never saw keeps the check after a top-level call.

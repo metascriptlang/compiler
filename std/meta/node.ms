@@ -317,6 +317,8 @@ export enum NodeFlag {
 	ObjectSlot,    // checker: this union projection reads whichever slot holds an object, the conversion above it checks the class
 	CanRaise,      // raises inference: this statement's value holds a call that can raise
 	CannotRaise,   // raises inference: no call in this statement's value can raise
+	RaisingCall,   // raises inference: this call or `new` can raise
+	NonRaisingCall, // raises inference: this call or `new` cannot raise
 	WhenDeferred,  // parser: a `when` chain kept as nested IfStmt because a condition asks a type trait; the checker picks the branch per instance
 	Folded,        // checker: literal a @comptime call folded to; a macro that hands it back gets it re-checked as the call's type
 	Accessor,      // parser: this routine is a `get`/`set` accessor — `o.x` reads call it, `o.x = v` writes call it
