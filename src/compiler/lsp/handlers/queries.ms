@@ -23,12 +23,15 @@ import {
 	sgFindCallExprByCalleeLocation,
 	SgDocumentSymbol,
 	SgSignatureInfo,
+	SgSymbolRef,
 	SgInlayHintKind,
 } from "../../../checker/suggest";
 import { CheckerContext } from "../../../checker/context";
 import { lookupSymbol } from "../../../checker/symbol";
 import { Symbol, SymbolKind, CallExprData, TypeKind } from "../../../ast/node";
-import { lspExtractPosition, dbGetSource, lspEnsureFileLoaded, lspCharacter } from "./shared";
+import {
+	lspExtractPosition, lspDocumentUri, dbGetSource, lspEnsureFileLoaded, lspCharacter,
+} from "./shared";
 
 // ===== Hover =====
 
@@ -102,13 +105,10 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 
 // ===== Document Symbol =====
 
-function lspDocumentSymbolKind(kind: SymbolKind, isMutable: boolean): number {
-	// Const variables -> Constant (14), let/var -> Variable (13)
-	if (kind == SymbolKind.Variable) {
-		if (isMutable) return 13;
-		return 14;
-	}
+function lspDocumentSymbolKind(kind: SymbolKind, isMutable: boolean): int32 {
 	return match (kind) {
+		SymbolKind.Variable when isMutable => 13,
+		SymbolKind.Variable => 14,
 		SymbolKind.Function => 12,
 		SymbolKind.Class => 5,
 		SymbolKind.Actor => 5,
@@ -124,10 +124,8 @@ function lspDocumentSymbolKind(kind: SymbolKind, isMutable: boolean): number {
 }
 
 function formatDocumentSymbolArray(symbols: SgDocumentSymbol[]): string {
-	let items = "[";
-	for (let i = 0; i < symbols.length; i = i + 1) {
-		if (i > 0) items = items + ",";
-		const sym = symbols[i];
+	const items: string[] = [];
+	for (const sym of symbols) {
 		const kindNum = lspDocumentSymbolKind(sym.kind, sym.isMutable);
 		const symLine = sym.location.line - 1;
 		const symCol = sym.location.column;
@@ -136,15 +134,13 @@ function formatDocumentSymbolArray(symbols: SgDocumentSymbol[]): string {
 		if (sym.children.length > 0) {
 			childrenJson = formatDocumentSymbolArray(sym.children);
 		}
-		items = items + lspFmtDocumentSymbol(sym.name, kindNum, sym.detail, symLine, symCol, endCol, childrenJson);
+		items.push(lspFmtDocumentSymbol(sym.name, kindNum, sym.detail, symLine, symCol, endCol, childrenJson));
 	}
-	items = items + "]";
-	return items;
+	return "[" + items.join(",") + "]";
 }
 
 export function handleDocumentSymbol(id: string, params: string, db: TransAmDb): string {
-	const textDoc = lspGetObjectField(params, "textDocument");
-	const uri = lspGetField(textDoc, "uri");
+	const uri = lspDocumentUri(params);
 	const path = lspUriToPath(uri);
 
 	const program = dbParse(db, path);
@@ -202,28 +198,22 @@ export function handleSignatureHelp(id: string, params: string, db: TransAmDb): 
 	}
 	if (sigs.length == 0) return lspResponse(id, "null");
 
-	let sigArray = "[";
-	for (let i = 0; i < sigs.length; i = i + 1) {
-		if (i > 0) sigArray = sigArray + ",";
-		const sig = sigs[i];
-		let paramArray = "[";
-		for (let j = 0; j < sig.paramLabels.length; j = j + 1) {
-			if (j > 0) paramArray = paramArray + ",";
-			paramArray = paramArray + lspFmtSignatureParam(sig.paramLabels[j]);
+	const sigItems: string[] = [];
+	for (const sig of sigs) {
+		const params: string[] = [];
+		for (const label of sig.paramLabels) {
+			params.push(lspFmtSignatureParam(label));
 		}
-		paramArray = paramArray + "]";
-		sigArray = sigArray + lspFmtSignature(sig.label, paramArray);
+		sigItems.push(lspFmtSignature(sig.label, "[" + params.join(",") + "]"));
 	}
-	sigArray = sigArray + "]";
 
-	return lspResponse(id, lspFmtSignatureHelp(sigArray, activeSignature, sigCtx.activeParam));
+	return lspResponse(id, lspFmtSignatureHelp("[" + sigItems.join(",") + "]", activeSignature, sigCtx.activeParam));
 }
 
 // ===== Inlay Hints =====
 
 export function handleInlayHint(id: string, params: string, db: TransAmDb): string {
-	const textDoc = lspGetObjectField(params, "textDocument");
-	const uri = lspGetField(textDoc, "uri");
+	const uri = lspDocumentUri(params);
 	const path = lspUriToPath(uri);
 
 	const range = lspGetObjectField(params, "range");
@@ -245,10 +235,8 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 
 	if (hintsList.length == 0) return lspResponse(id, "[]");
 
-	let arr = "[";
-	for (let i = 0; i < hintsList.length; i = i + 1) {
-		if (i > 0) arr = arr + ",";
-		const h = hintsList[i];
+	const hints: string[] = [];
+	for (const h of hintsList) {
 		// LSP InlayHintKind: 1 = Type, 2 = Parameter
 		// Exception hints map to Type kind (1) with paddingLeft
 		let lspKind = 2;
@@ -263,13 +251,34 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 		// following argument expression.
 		const padLeft = h.hintKind == SgInlayHintKind.Exception;
 		const padRight = h.hintKind == SgInlayHintKind.Parameter;
-		arr = arr + lspFmtInlayHint(h.line - 1, lspCharacter(source, h.line, h.col), h.label, lspKind, padLeft, padRight);
+		hints.push(lspFmtInlayHint(h.line - 1, lspCharacter(source, h.line, h.col), h.label, lspKind, padLeft, padRight));
 	}
-	arr = arr + "]";
-	return lspResponse(id, arr);
+	return lspResponse(id, "[" + hints.join(",") + "]");
 }
 
 // ===== References =====
+
+function lspRefEnd(ref: SgSymbolRef): int32 {
+	return ref.col + (ref.nameLen as int32);
+}
+
+// Reference positions are unique per file; line and column pack into one key without collisions.
+function lspRefKey(ref: SgSymbolRef): int64 {
+	return ((ref.line as int64) << 32) | (ref.col as int64);
+}
+
+function pushUniqueLocations(items: string[], uri: string, source: string, refs: SgSymbolRef[]): void {
+	const seen: HashSet<int64> = new HashSet<int64>();
+	for (const ref of refs) {
+		const key = lspRefKey(ref);
+		if (seen.has(key)) continue;
+		seen.add(key);
+		items.push(lspFmtLocation(
+			uri, ref.line - 1, lspCharacter(source, ref.line, ref.col),
+			ref.line - 1, lspCharacter(source, ref.line, lspRefEnd(ref)),
+		));
+	}
+}
 
 export function handleReferences(id: string, params: string, db: TransAmDb): string {
 	const pos = lspExtractPosition(params, db);
@@ -282,20 +291,9 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 	if (suggest == null) return lspResponse(id, "[]");
 
 	const items: string[] = [];
-	const seen: HashSet<string> = new HashSet<string>();
 
 	// Search current file via symbol identity (no false positives from shadowing)
-	const source = dbGetSource(db, path);
-	const refs = sgQueryBySym(ctx, suggest.sym);
-	for (let i = 0; i < refs.length; i = i + 1) {
-		const ref = refs[i];
-		const key = pos.uri + ":" + ref.line + ":" + ref.col;
-		if (seen.has(key)) continue;
-		seen.add(key);
-		const refLine = ref.line - 1;
-		const refEnd = ref.col + (ref.nameLen as int32);
-		items.push(lspFmtLocation(pos.uri, refLine, lspCharacter(source, ref.line, ref.col), refLine, lspCharacter(source, ref.line, refEnd)));
-	}
+	pushUniqueLocations(items, pos.uri, dbGetSource(db, path), sgQueryBySym(ctx, suggest.sym));
 
 	// Search transitive dependents only (files that could import this symbol)
 	const defModule = suggest.modulePath != null && suggest.modulePath != "" ? suggest.modulePath : path;
@@ -304,28 +302,15 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 	if (targetFileId >= 0) {
 		depIds = getTransitiveDependents(db.moduleDeps, targetFileId);
 	}
-	let fi = 0;
-	while (fi < depIds.length) {
-		const depId = depIds[fi];
-		fi = fi + 1;
+	for (const depId of depIds) {
 		const otherPath = getFilePath(db.fileInput, depId);
 		if (otherPath == "" || otherPath == path) continue;
 		const otherCtx = dbTypeCheck(db, otherPath);
 		if (otherCtx == null) continue;
-		const otherUri = lspPathToUri(otherPath);
-		const otherSource = dbGetSource(db, otherPath);
-		const matched = sgQueryByDefiningModule(otherCtx, suggest.name, defModule);
-		let mi = 0;
-		while (mi < matched.length) {
-			const mr = matched[mi];
-			mi = mi + 1;
-			const key = otherUri + ":" + mr.line + ":" + mr.col;
-			if (seen.has(key)) continue;
-			seen.add(key);
-			const mrLine = mr.line - 1;
-			const mrEnd = mr.col + (mr.nameLen as int32);
-			items.push(lspFmtLocation(otherUri, mrLine, lspCharacter(otherSource, mr.line, mr.col), mrLine, lspCharacter(otherSource, mr.line, mrEnd)));
-		}
+		pushUniqueLocations(
+			items, lspPathToUri(otherPath), dbGetSource(db, otherPath),
+			sgQueryByDefiningModule(otherCtx, suggest.name, defModule),
+		);
 	}
 
 	return lspResponse(id, "[" + items.join(",") + "]");
@@ -345,50 +330,38 @@ export function handleDocumentHighlight(id: string, params: string, db: TransAmD
 
 	const source = dbGetSource(db, path);
 	const refs = sgQueryBySym(ctx, suggest.sym);
-	let arr = "[";
-	for (let i = 0; i < refs.length; i = i + 1) {
-		if (i > 0) arr = arr + ",";
-		const ref = refs[i];
-		const refLine = ref.line - 1;
-		const refEnd = ref.col + (ref.nameLen as int32);
-		arr = arr + lspFmtDocumentHighlight(refLine, lspCharacter(source, ref.line, ref.col), lspCharacter(source, ref.line, refEnd), 1);
+	const highlights: string[] = [];
+	for (const ref of refs) {
+		highlights.push(lspFmtDocumentHighlight(
+			ref.line - 1, lspCharacter(source, ref.line, ref.col),
+			lspCharacter(source, ref.line, lspRefEnd(ref)), 1,
+		));
 	}
-	arr = arr + "]";
-	return lspResponse(id, arr);
+	return lspResponse(id, "[" + highlights.join(",") + "]");
 }
 
 // ===== Rename =====
 
-// Build TextEdit array for refs in a single file (sym identity for current file)
-function buildFileEditsBySym(ctx: CheckerContext, sym: Symbol | null, newName: string, source: string): string {
-	const refs = sgQueryBySym(ctx, sym);
+function buildTextEdits(refs: SgSymbolRef[], newName: string, source: string): string {
 	if (refs.length == 0) return "";
 	const edits: string[] = [];
-	let i = 0;
-	while (i < refs.length) {
-		const ref = refs[i];
-		const refLine = ref.line - 1;
-		const refEnd = ref.col + (ref.nameLen as int32);
-		edits.push(lspFmtTextEdit(refLine, lspCharacter(source, ref.line, ref.col), lspCharacter(source, ref.line, refEnd), newName));
-		i = i + 1;
+	for (const ref of refs) {
+		edits.push(lspFmtTextEdit(
+			ref.line - 1, lspCharacter(source, ref.line, ref.col),
+			lspCharacter(source, ref.line, lspRefEnd(ref)), newName,
+		));
 	}
 	return "[" + edits.join(",") + "]";
 }
 
+// Build TextEdit array for refs in a single file (sym identity for current file)
+function buildFileEditsBySym(ctx: CheckerContext, sym: Symbol | null, newName: string, source: string): string {
+	return buildTextEdits(sgQueryBySym(ctx, sym), newName, source);
+}
+
 // Build TextEdit array for refs in a cross-module file (name + modulePath fallback)
 function buildFileEdits(ctx: CheckerContext, name: string, modulePath: string, newName: string, source: string): string {
-	const refs = sgQueryByName(ctx, name, modulePath);
-	if (refs.length == 0) return "";
-	const edits: string[] = [];
-	let i = 0;
-	while (i < refs.length) {
-		const ref = refs[i];
-		const refLine = ref.line - 1;
-		const refEnd = ref.col + (ref.nameLen as int32);
-		edits.push(lspFmtTextEdit(refLine, lspCharacter(source, ref.line, ref.col), lspCharacter(source, ref.line, refEnd), newName));
-		i = i + 1;
-	}
-	return "[" + edits.join(",") + "]";
+	return buildTextEdits(sgQueryByName(ctx, name, modulePath), newName, source);
 }
 
 export function handleRename(id: string, params: string, db: TransAmDb): string {
@@ -405,37 +378,29 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 	if (suggest == null) return lspResponse(id, "null");
 
 	// Collect edits across all files
-	let changes = "";
-	let changeCount = 0;
+	const changes: string[] = [];
 
 	// Current file — use sym identity
 	const curEdits = buildFileEditsBySym(ctx, suggest.sym, newName, dbGetSource(db, path));
 	if (curEdits.byteLength > 0) {
-		changes = lspJsonString(pos.uri) + ":" + curEdits;
-		changeCount = changeCount + 1;
+		changes.push(lspJsonString(pos.uri) + ":" + curEdits);
 	}
 
 	// Other open files in workspace
 	const fileCount = dbGetFileCount(db);
-	let fi = 0;
-	while (fi < fileCount) {
+	for (let fi: int32 = 0; fi < fileCount; fi++) {
 		const otherPath = dbGetFilePathByIndex(db, fi);
-		fi = fi + 1;
 		if (otherPath == path) continue;
 		const otherCtx = dbTypeCheck(db, otherPath);
 		if (otherCtx == null) continue;
 		const otherEdits = buildFileEdits(otherCtx, suggest.name, suggest.modulePath, newName, dbGetSource(db, otherPath));
 		if (otherEdits.byteLength > 0) {
-			const otherUri = lspPathToUri(otherPath);
-			if (changeCount > 0) changes = changes + ",";
-			changes = changes + lspJsonString(otherUri) + ":" + otherEdits;
-			changeCount = changeCount + 1;
+			changes.push(lspJsonString(lspPathToUri(otherPath)) + ":" + otherEdits);
 		}
 	}
 
-	if (changeCount == 0) return lspResponse(id, "null");
+	if (changes.length == 0) return lspResponse(id, "null");
 
-	const result = "{\"changes\":{" + changes + "}}";
-	return lspResponse(id, result);
+	return lspResponse(id, "{\"changes\":{" + changes.join(",") + "}}");
 }
 
