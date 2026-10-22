@@ -8,23 +8,16 @@
 
 
 
-// ===== Types =====
-
-export interface TaDepEdge {
-	importerFileId: int32;
-	importedFileId: int32;
-}
-
 // ===== Module Dependency Graph =====
 
 export class TaModuleDepGraph {
-	edges: TaDepEdge[];
+	forwardAdj: int32[][];  // importerFileId → [importedFileId, ...] in import order
 	reverseAdj: int32[][];  // importedFileId → [importerFileId, ...] for O(1) reverse lookup
 	registeredAt: int32[];  // fileId → revision when exports registered (-1 = never)
 }
 
 export function createModuleDepGraph(): TaModuleDepGraph {
-	return { edges: [], reverseAdj: [], registeredAt: [] };
+	return { forwardAdj: [], reverseAdj: [], registeredAt: [] };
 }
 
 // ===== Export Registration Revision =====
@@ -54,56 +47,44 @@ export function resetRegisteredAt(deps: TaModuleDepGraph, fileId: int32): void {
 // ===== Edge Operations =====
 
 function edgeExists(deps: TaModuleDepGraph, importer: int32, imported: int32): boolean {
-	// Use reverse index for O(degree) check instead of O(E) edge scan
 	if (imported >= deps.reverseAdj.length) return false;
-	const rev = deps.reverseAdj[imported];
-	for (let i = 0; i < rev.length; i = i + 1) {
-		if (rev[i] == importer) return true;
+	for (const existing of deps.reverseAdj[imported]) {
+		if (existing == importer) return true;
 	}
 	return false;
 }
 
-export function recordModuleImport(deps: TaModuleDepGraph, importerFileId: int32, importedFileId: int32): void {
-	if (edgeExists(deps, importerFileId, importedFileId)) return;
-	const edge: TaDepEdge = { importerFileId, importedFileId };
-	deps.edges.push(edge);
-	// Maintain reverse adjacency index
-	while (deps.reverseAdj.length <= importedFileId) {
+function ensureAdjacency(adj: int32[][], fileId: int32): void {
+	while (adj.length <= fileId) {
 		const empty: int32[] = [];
-		deps.reverseAdj.push(empty);
+		adj.push(empty);
 	}
+}
+
+export function recordModuleImport(
+	deps: TaModuleDepGraph,
+	importerFileId: int32,
+	importedFileId: int32,
+): void {
+	if (edgeExists(deps, importerFileId, importedFileId)) return;
+	ensureAdjacency(deps.forwardAdj, importerFileId);
+	ensureAdjacency(deps.reverseAdj, importedFileId);
+	deps.forwardAdj[importerFileId].push(importedFileId);
 	deps.reverseAdj[importedFileId].push(importerFileId);
 }
 
 export function clearImportsFor(deps: TaModuleDepGraph, fileId: int32): void {
-	// Remove all edges where fileId is the importer + update reverse index
-	let i = deps.edges.length;
-	while (i > 0) {
-		i = i - 1;
-		if (deps.edges[i].importerFileId == fileId) {
-			const imported = deps.edges[i].importedFileId;
-			// Remove from reverse adjacency
-			if (imported < deps.reverseAdj.length) {
-				const rev = deps.reverseAdj[imported];
-				let ri = rev.length;
-				while (ri > 0) {
-					ri = ri - 1;
-					if (rev[ri] == fileId) {
-						for (let rj = ri; rj < rev.length - 1; rj = rj + 1) {
-							rev[rj] = rev[rj + 1];
-						}
-						rev.pop();
-						break;
-					}
-				}
-			}
-			// Shift left and pop forward edge
-			for (let j = i; j < deps.edges.length - 1; j = j + 1) {
-				deps.edges[j] = deps.edges[j + 1];
-			}
-			deps.edges.pop();
+	if (fileId < 0 || fileId >= deps.forwardAdj.length) return;
+	const imports = deps.forwardAdj[fileId];
+	for (const imported of imports) {
+		const rev = deps.reverseAdj[imported];
+		const at = rev.indexOf(fileId);
+		for (let j = at; j < rev.length - 1; j++) {
+			rev[j] = rev[j + 1];
 		}
+		rev.pop();
 	}
+	imports.length = 0;
 }
 
 // ===== Queries =====
@@ -112,8 +93,8 @@ export function getDirectImporters(deps: TaModuleDepGraph, fileId: int32): int32
 	if (fileId < 0 || fileId >= deps.reverseAdj.length) return [];
 	const rev = deps.reverseAdj[fileId];
 	const result: int32[] = [];
-	for (let i = 0; i < rev.length; i = i + 1) {
-		result.push(rev[i]);
+	for (const importer of rev) {
+		result.push(importer);
 	}
 	return result;
 }
@@ -142,13 +123,12 @@ export function getTransitiveDependents(deps: TaModuleDepGraph, fileId: int32): 
 
 // ===== Forward Edge Queries =====
 
-// Get all fileIds that `fileId` imports (forward edges)
+// Get all fileIds that `fileId` imports (forward edges), in import order
 export function getDirectImports(deps: TaModuleDepGraph, fileId: int32): int32[] {
 	const result: int32[] = [];
-	for (const edge of deps.edges) {
-		if (edge.importerFileId == fileId) {
-			result.push(edge.importedFileId);
-		}
+	if (fileId < 0 || fileId >= deps.forwardAdj.length) return result;
+	for (const imported of deps.forwardAdj[fileId]) {
+		result.push(imported);
 	}
 	return result;
 }
@@ -158,29 +138,17 @@ export function getDirectImports(deps: TaModuleDepGraph, fileId: int32): int32[]
 export function detectCycle(deps: TaModuleDepGraph, sourceId: int32, targetId: int32): int32[] {
 	if (sourceId == targetId) return [sourceId];
 	const visited: int32[] = [];
-	const stack: int32[] = [];
-	const parent: int32[] = [];
-	stack.push(targetId);
-	parent.push(-1);
+	const stack: int32[] = [targetId];
 
 	while (stack.length > 0) {
 		const current = stack.pop();
-		const _parent = parent.pop();
 		if (int32ListContains(visited, current)) continue;
 		visited.push(current);
 
-		if (current == sourceId) {
-			// Found cycle — reconstruct path
-			const path: int32[] = [sourceId, targetId];
-			return path;
-		}
+		if (current == sourceId) return [sourceId, targetId];
 
-		const imports = getDirectImports(deps, current);
-		for (let i = 0; i < imports.length; i = i + 1) {
-			if (!int32ListContains(visited, imports[i])) {
-				stack.push(imports[i]);
-				parent.push(current);
-			}
+		for (const imported of getDirectImports(deps, current)) {
+			if (!int32ListContains(visited, imported)) stack.push(imported);
 		}
 	}
 	return [];
@@ -189,29 +157,33 @@ export function detectCycle(deps: TaModuleDepGraph, sourceId: int32, targetId: i
 // ===== Helpers =====
 
 function int32ListContains(list: int32[], val: int32): boolean {
-	for (let i = 0; i < list.length; i = i + 1) {
-		if (list[i] == val) return true;
+	for (const item of list) {
+		if (item == val) return true;
 	}
 	return false;
 }
 
 // ===== Tests =====
-test "empty graph" {
+test "empty graph has no imports or importers" {
 	const deps = createModuleDepGraph();
-	assert deps.edges.length == 0;
+	assert getDirectImports(deps, 0).length == 0;
+	assert getDirectImporters(deps, 0).length == 0;
 }
 
-test "record import" {
+test "record import is visible both ways" {
 	const deps = createModuleDepGraph();
 	recordModuleImport(deps, 0, 1);
-	assert deps.edges.length == 1;
+	assert getDirectImports(deps, 0).length == 1;
+	assert getDirectImports(deps, 0)[0] == 1;
+	assert getDirectImporters(deps, 1)[0] == 0;
 }
 
 test "no duplicate edges" {
 	const deps = createModuleDepGraph();
 	recordModuleImport(deps, 0, 1);
 	recordModuleImport(deps, 0, 1);
-	assert deps.edges.length == 1;
+	assert getDirectImports(deps, 0).length == 1;
+	assert getDirectImporters(deps, 1).length == 1;
 }
 
 test "direct importers" {
@@ -268,9 +240,39 @@ test "clear removes edges for file" {
 	recordModuleImport(deps, 0, 2);
 	recordModuleImport(deps, 1, 2);
 	clearImportsFor(deps, 0);
-	assert deps.edges.length == 1;
-	// Only edge 1->2 remains
-	assert deps.edges[0].importerFileId == 1;
+	assert getDirectImports(deps, 0).length == 0;
+	assert getDirectImports(deps, 1).length == 1;
+	assert getDirectImports(deps, 1)[0] == 2;
+	assert getDirectImporters(deps, 2).length == 1;
+}
+
+test "direct imports keep import order on a diamond across record and clear" {
+	const deps = createModuleDepGraph();
+	recordModuleImport(deps, 0, 2);
+	recordModuleImport(deps, 0, 1);
+	recordModuleImport(deps, 1, 3);
+	recordModuleImport(deps, 2, 3);
+	let imports = getDirectImports(deps, 0);
+	assert imports.length == 2 && imports[0] == 2 && imports[1] == 1;
+	assert getDirectImporters(deps, 3).length == 2;
+	clearImportsFor(deps, 0);
+	assert getDirectImports(deps, 0).length == 0;
+	recordModuleImport(deps, 0, 3);
+	recordModuleImport(deps, 0, 1);
+	imports = getDirectImports(deps, 0);
+	assert imports.length == 2 && imports[0] == 3 && imports[1] == 1;
+	clearImportsFor(deps, 1);
+	assert getDirectImporters(deps, 3).length == 2;
+	assert getDirectImporters(deps, 3)[0] == 2 && getDirectImporters(deps, 3)[1] == 0;
+}
+
+test "direct imports of an unknown file are empty" {
+	const deps = createModuleDepGraph();
+	recordModuleImport(deps, 0, 1);
+	assert getDirectImports(deps, 7).length == 0;
+	assert getDirectImports(deps, -1).length == 0;
+	clearImportsFor(deps, 7);
+	assert getDirectImports(deps, 0).length == 1;
 }
 
 test "reverse index after clear" {
