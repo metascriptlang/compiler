@@ -619,9 +619,8 @@ function orderedMapEnlarge<K, V>(m: Map<K, V>): void {
 	const mask: int32 = newCap - 1;
 	let i: int32 = 0;
 	while (i < m.entries.length) {
-		const e = m.entries[i];
-		if (e.hcode != 0) {
-			let h: int32 = (e.hcode & (mask as int64)) as int32;
+		if (m.entries[i].hcode != 0) {
+			let h: int32 = (m.entries[i].hcode & (mask as int64)) as int32;
 			while (m.indices[h] != -1) { h = (h + 1) & mask; }
 			m.indices[h] = i;
 		}
@@ -863,9 +862,8 @@ function orderedSetEnlarge<T>(s: Set<T>): void {
 	const mask: int32 = newCap - 1;
 	let i: int32 = 0;
 	while (i < s.entries.length) {
-		const e = s.entries[i];
-		if (e.hcode != 0) {
-			let h: int32 = (e.hcode & (mask as int64)) as int32;
+		if (s.entries[i].hcode != 0) {
+			let h: int32 = (s.entries[i].hcode & (mask as int64)) as int32;
 			while (s.indices[h] != -1) { h = (h + 1) & mask; }
 			s.indices[h] = i;
 		}
