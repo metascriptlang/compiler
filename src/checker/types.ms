@@ -3664,6 +3664,24 @@ export function classAncestorInstance(t: Type | null, target: Type): Type | null
 	return null;
 }
 
+export function declaredAncestorInstance(t: Type | null, target: Type): Type | null {
+	const tgt = target.kind == TypeKind.Ref && target.typeReturn != null ? target.typeReturn : target;
+	const origin = tgt.kind == TypeKind.GenericInstance ? genericInstanceClass(tgt) : null;
+	if (origin == null || origin.sym == null) return null;
+	let level = declaredBasesOf(t);
+	for (let depth = 0; level.length > 0 && depth < PEEL_MAX_DEPTH; depth += 1) {
+		const next: Type[] = [];
+		for (const cur of level) {
+			const body = cur.kind == TypeKind.Ref && cur.typeReturn != null ? cur.typeReturn : cur;
+			const base = body.kind == TypeKind.GenericInstance ? genericInstanceClass(body) : null;
+			if (base != null && base.sym == origin.sym) return body;
+			for (const parent of declaredBasesOf(body)) next.push(parent);
+		}
+		level = next;
+	}
+	return null;
+}
+
 function classOrigin(sym: Symbol | null): Symbol | null {
 	return sym != null && sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
 }
@@ -4402,7 +4420,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 				unifyType(formal, aliased, bindings);
 				return;
 			}
-			const ancestor = classAncestorInstance(concrete, formal);
+			const ancestor = classAncestorInstance(concrete, formal) ?? declaredAncestorInstance(concrete, formal);
 			if (ancestor != null) unifyType(formal, ancestor, bindings);
 			return;
 		}
@@ -4414,7 +4432,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	}
 	// GenericInstance vs Struct (either direction) — try base type matching
 	if (formal.kind == TypeKind.GenericInstance && concrete.kind == TypeKind.Struct) {
-		const ancestor = classAncestorInstance(concrete, formal);
+		const ancestor = classAncestorInstance(concrete, formal) ?? declaredAncestorInstance(concrete, formal);
 		if (ancestor != null) {
 			unifyType(formal, ancestor, bindings);
 			return;
