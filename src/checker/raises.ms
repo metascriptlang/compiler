@@ -96,10 +96,10 @@ function noteTempWrites(node: Node): void {
 function calleeTarget(tables: Readonly<RaiseTables>, call: Readonly<Node>): Readonly<Symbol | null> {
 	const sym = (call.data as CallExprData).callee.resolvedSym;
 	if (sym == null) return closurePairTarget((call.data as CallExprData).callee);
-	if (hasFlag(sym, SymbolFlag.DestroyOp)) return destroyRoutine(tables, sym, (call.data as CallExprData).arguments) ?? (call.data as CallExprData).callee.resolvedSym;
+	if (hasFlag(sym, SymbolFlag.DestroyOp)) return destroyRoutine(tables, (call.data as CallExprData).callee.resolvedSym!, (call.data as CallExprData).arguments) ?? (call.data as CallExprData).callee.resolvedSym;
 	if (isOverloadSignature(sym)) return implementationOf(call);
 	const bound = tables.closureTargets.readonlyGet(sym);
-	return bound != null && tables.tempWrites.readonlyGet(sym) == 1 ? tables.closureTargets.readonlyGet(sym) : (call.data as CallExprData).callee.resolvedSym;
+	return bound != null && tables.tempWrites.readonlyGet(sym) == 1 ? tables.closureTargets.readonlyGet((call.data as CallExprData).callee.resolvedSym!) : (call.data as CallExprData).callee.resolvedSym;
 }
 
 function isOverloadSignature(sym: Readonly<Symbol>): boolean {
