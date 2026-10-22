@@ -635,9 +635,12 @@ export function callRaiserStmtCompiler(s: RaiserCompState, stmt: Node): void {
 	_raiserStmtCompiler(s, stmt);
 }
 
+export function emitTrap(s: RaiserCompState, message: string): void {
+	emitInst(s, raiserABx(RaiserOpcode.Trap, 0, addConst(s, raiserConstString(message))));
+}
+
 export function emitTrapNil(s: RaiserCompState, message: string): int32 {
-	const cIdx = addConst(s, raiserConstString(message));
-	emitInst(s, raiserABx(RaiserOpcode.Trap, 0, cIdx));
+	emitTrap(s, message);
 	const reg = allocRef(s);
 	emitLoadConst(s, reg, raiserNil());
 	return reg;
@@ -743,7 +746,16 @@ function endIsUnreachable(s: RaiserCompState): boolean {
 
 export function emitImplicitReturn(s: RaiserCompState): void {
 	if (endIsUnreachable(s)) return;
-	const nilReg = allocRef(s);
+	emitReturnNothing(s);
+}
+
+// A void call's destination is Dyn, and a class initializer's is its receiver's Ref.
+export function emitReturnNothing(s: RaiserCompState): void {
+	if (s.receiverReg >= 0) {
+		emitRet(s, s.receiverReg);
+		return;
+	}
+	const nilReg = allocDyn(s);
 	emitLoadConst(s, nilReg, raiserNil());
 	emitRet(s, nilReg);
 }

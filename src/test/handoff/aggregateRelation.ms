@@ -153,6 +153,25 @@ test "aggregate relation: finite nesting is not a relation cycle" {
 	assert strictErrorCount(recursive) == 0;
 }
 
+function nestedWrappers(depth: int32): string {
+	let typeName = "int32";
+	for (let i = 0; i < depth; i += 1) {
+		typeName = match (i % 3) {
+			0 => "Array<" + typeName + ">",
+			1 => "(" + typeName + ")[]",
+			_ => "Vec<" + typeName + ">",
+		};
+	}
+	return typeName;
+}
+
+test "aggregate relation: annotation nesting depth costs no checker stack per level" {
+	for (const typeName of [nestedArray(400), nestedWrappers(400)]) {
+		assert strictErrorCount("function f(x: " + typeName + "): int32 { return 0; }") == 0, typeName.slice(0, 40);
+		assert strictErrorCount("function f(x: " + typeName + "): int32 { return x; }") == 1, typeName.slice(0, 40);
+	}
+}
+
 test "aggregate relation: equivalent nested object shapes reach overload consumers" {
 	const pre = "enum Kind { A, B } type Data = { a: int32, x: { q: string } } | { b: string }; type AData = { a: int32, x: { q: string } }; type BData = { b: string }; function make(k: Kind.A, d: AData): string; function make(k: Kind.B, d: BData): string; function make(k: Kind, d: Data): string { return \"ok\"; }\n";
 	for (const body of [

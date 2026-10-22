@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, SourceLocation, NodeFlag, SymbolKind, Symbol, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, BooleanLiteralData, ObjectLiteralData, ArrayLiteralData, TestDeclData, Type, TypeKind } from "../../ast/node";
 import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, mintSym, newLoweredSym } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
-import { forEachChild } from "../../ast/visitor";
+import { forEachChild, initializerHoldsClosure } from "../../ast/visitor";
 import {
 	makeTypedIdentResolved, makeMember, makeMoveExpr, makeReturn, makeBlock, makeVarDecl,
 	makeFnDecl, makeInterfaceDeclFromTypes, makeObjectLiteral, makeHiddenDeref,
@@ -665,9 +665,7 @@ function rewriteOuterRef(state: LiftState, node: Node, rewrite: PendingEnvRewrit
 		}
 		return node;
 	}
-	// Don't enter nested function bodies or already-lifted closure pairs
 	if (isFuncBoundary(node)) return node;
-	if (node.flags.has(NodeFlag.Closure)) return node;
 	mapChildren(node, (child: Node): Node => {
 		const rewritten = rewriteOuterRef(state, child, rewrite);
 		return rewritten == null ? child : rewritten;
@@ -1638,9 +1636,9 @@ function walkLiftStmtList(stmts: Node[], state: LiftState, isTopLevel: boolean):
 	let si = 0;
 	while (si < stmts.length) {
 		state.currentStmtIdx = si;
-		// Apply active rewrites BEFORE walk — rewriteOuterRef skips closure pairs
-		// (NF_CLOSURE flag) and function bodies (isFuncBoundary), so capture detection
-		// in subsequent closures isn't confused by rewritten refs.
+		// Apply active rewrites BEFORE walk — rewriteOuterRef skips function bodies
+		// (isFuncBoundary), so capture detection in subsequent closures isn't confused
+		// by rewritten refs.
 		if (state.activeEnvRewrites.length > 0) {
 			stmts[si] = applyActiveRewrites(state, stmts[si], state.activeEnvRewrites);
 		}
@@ -1814,14 +1812,12 @@ function walkLift(node: Node, state: LiftState): void {
 		},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			const isSelfRefClosureInit = d.initializer != null
-				&& (d.initializer.kind == NodeKind.ArrowFunction
-					|| d.initializer.kind == NodeKind.FunctionExpr);
-			if (isSelfRefClosureInit) defineVar(state.ss, node.resolvedSym, d.declName);
+			const boundBeforeInitializer = initializerHoldsClosure(d.initializer);
+			if (boundBeforeInitializer) defineVar(state.ss, node.resolvedSym, d.declName);
 			state.pendingRoutine = routineBindingSym(node);
 			d.initializer = walkOrLift(d.initializer, state);
 			state.pendingRoutine = null;
-			if (!isSelfRefClosureInit) defineVar(state.ss, node.resolvedSym, d.declName);
+			if (!boundBeforeInitializer) defineVar(state.ss, node.resolvedSym, d.declName);
 			if (d.declType != "") {
 				registerVarType(state, node.resolvedSym, d.declType);
 			} else if (node.nodeType != null) {

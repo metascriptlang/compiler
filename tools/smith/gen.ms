@@ -6945,7 +6945,7 @@ class Gen {
 		const tail = isInt ? "\treturn (x as int32) + n;\n" : "\treturn (((x as float64) * 2.0) as int32) + n;\n";
 		const base = isInt ? "int32" : "float64";
 		const cmp = "(this a: " + name + ", b: " + name + "): boolean;\n";
-		const arith = (op: string): string => "export function `" + op + "`(a: " + name + ", b: " + name + "): " + name +
+		const arith = (op: string): string => "function `" + op + "`(this a: " + name + ", b: " + name + "): " + name +
 			" { return ((a as " + base + ") " + op + " (b as " + base + ")) as " + name + "; }\n";
 		const fold = isInt ? "acc = acc + v; acc += v; acc = acc - x;" : "acc = acc + v * x;";
 		const keyed = isInt ?
@@ -7867,6 +7867,10 @@ class Gen {
 		if (this.rng.chance(40)) {
 			body += "\tn = null;\n" +
 				"\tif (n != null) { tr += \"never\"; }\n";
+			body += this.rng.chance(50) ?
+				"\tconst fill = (): void => { n = " + nul + "(m + 2, v); };\n\tfill();\n" :
+				"\tn = " + nul + "(m + 2, v);\n";
+			body += "\tif (n != null) { if (n != null) { tr += (n == v ? \"E\" : \"F\") + String(n); acc = n; } }\n";
 			live++;
 		}
 		if (this.rng.chance(60) || live == 0) {
@@ -10201,8 +10205,11 @@ test "the enum family emits no shape a compiler card parks" {
 	for (const name of ["DsI", "DsF"]) {
 		const base = name == "DsI" ? "int32" : "float64";
 		for (const op of name == "DsI" ? ["+", "-"] : ["+", "*"]) {
-			assert g.helperText.contains("export function `" + op + "`(a: " + name + ", b: " + name + "): " + name + " { return ((a as " + base + ") " + op + " (b as " + base + ")) as " + name + "; }");
+			assert g.helperText.contains("\nfunction `" + op + "`(this a: " + name + ", b: " + name + "): " + name + " { return ((a as " + base + ") " + op + " (b as " + base + ")) as " + name + "; }");
 		}
+	}
+	for (const line of g.helperText.split("\n")) {
+		assert !line.startsWith("export function `") || line.contains("(this a: ");
 	}
 	assert !g.helperText.contains("`/`") && !g.helperText.contains("`%`") && !g.helperText.contains(" / ") && !g.helperText.contains(" % x");
 }
@@ -10290,6 +10297,15 @@ test "the exc family alone reaches each of its shapes" {
 		}
 		assert seen;
 	}
+}
+
+test "the narrowing shape refills a null-narrowed nullable by a call or a closure and compares it with null twice" {
+	const f = excOnly("narrow");
+	let all = "";
+	for (let seed = 1; seed <= 40; seed++) { all += generate(seed as uint64, f); }
+	const twice = "\tif (n != null) { if (n != null) { tr += (n == v ? ";
+	assert all.contains("\tfill();\n" + twice) && all.contains("(m + 2, v);\n" + twice);
+	assert countOf(all, "\tn = null;\n\tif (n != null) { tr += \"never\"; }\n") == countOf(all, twice);
 }
 
 test "a zero exc family weight removes its helpers and its printed log" {
@@ -12193,7 +12209,7 @@ test "each gap shape is reached and its weight at 0 removes it" {
 
 test "the gap shapes at weight 0 keep the stream of the generator without them" {
 	const vectors = ["", "fams=none", "fams=closure", "fams=coll", "fams=str", "fams=iter", "types=int8,uint8,uint32,uint64,float64 fams=none", "types=int32,float32,char,bigint,boolean fams=none depth=2"];
-	const pins: int64[] = [257223024, 894288676, 618606438, 20400678, 673454545, 306495436, 460419808, 71688025, 659951096, 797917457, 172228344, 445957813, 145030451, 656332730, 47405754, 455897030];
+	const pins: int64[] = [662231885, 99953726, 618606438, 20400678, 673454545, 306495436, 460419808, 71688025, 659951096, 797917457, 172228344, 445957813, 145030451, 656332730, 47405754, 455897030];
 	for (let v = 0; v < vectors.length; v++) {
 		const f = withWeights((vectors[v] == "" ? "" : vectors[v] + " ") + GAP_OFF + " " + TYPE_OFF + " w.meta.spread=0 w.async.result=0");
 		for (let s = 0; s < 2; s++) {
@@ -12357,9 +12373,9 @@ function digest(text: string): int64 {
 test "core weights at 0 keep the stream of the generator without core" {
 	const vectors = ["", "fams=none", "fams=closure", "fams=union", "fams=generic", "fams=agg", "fams=coll", "fams=str", "fams=own", "fams=iter", "types=int8,uint32,float64", "types=int64 fams=none", "types=float64,int32 depth=2", "types=int32 stmts=12 expr=4 trips=16"];
 	const pins: int64[] = [
-		425906650, 196104457, 87231079, 497882655, 686987382, 514565319, 391752332, 107266103, 723415936, 861497373,
+		752188117, 379408049, 87231079, 497882655, 686987382, 514565319, 391752332, 107266103, 723415936, 861497373,
 		412924459, 288809904, 959089982, 370177479, 603192299, 217576910, 718724068, 606921276, 651104178, 2913754,
-		553907640, 178907495, 247101655, 884432220, 496853735, 892738952, 45689216, 457281935,
+		553907640, 178907495, 247101655, 884432220, 664363292, 540711712, 45689216, 97053995,
 	];
 	for (let v = 0; v < vectors.length; v++) {
 		const f = withWeights((vectors[v] == "" ? "" : vectors[v] + " ") + CORE_OFF + " " + TYPE_OFF);
@@ -12737,8 +12753,8 @@ const GAP_VECTORS = [
 
 test "the gap weights at 0 keep the stream of the generator without them" {
 	const pins: int64[] = [
-		257223024, 894288676, 709567793, 430927381, 467908320, 469491598, 984630127, 284861944,
-		449176796, 656840684, 649565891, 801577426, 546248524, 513190738, 664821975, 734707509,
+		662231885, 99953726, 709567793, 430927381, 467908320, 469491598, 653145569, 470528323,
+		449176796, 656840684, 649565891, 801577426, 546248524, 513190738, 665383442, 97852660,
 	];
 	for (let v = 0; v < GAP_VECTORS.length; v++) {
 		const f = withWeights(GAP_VECTORS[v] + " " + TYPE_OFF + " " + GAP_OFF + " w.meta.spread=0 w.async.result=0");

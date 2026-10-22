@@ -56,7 +56,7 @@ export function hcrFunctions(program: Node, aliveSet: Readonly<AliveSet>, module
 			symbol,
 			key: "f:" + hcrSignatureKey(sym != null ? sym.symbolType : fn.nodeType),
 			sourcePath: sym != null ? sym.modulePath : "",
-			forwards: sym != null && !d.fnName.startsWith("$"),
+			forwards: sym != null && !hasFlag(sym, SymbolFlag.Anon),
 		});
 	}
 	for (const stmt of (program.data as ProgramData).programStmts) {
@@ -69,7 +69,7 @@ export function hcrFunctions(program: Node, aliveSet: Readonly<AliveSet>, module
 			symbol,
 			key: "f:" + hcrSignatureKey(op.symbolType != null ? op.symbolType : stmt.nodeType),
 			sourcePath: modulePath,
-			forwards: !(stmt.data as FunctionDeclData).fnName.startsWith("$"),
+			forwards: true,
 		});
 	}
 	return functions;

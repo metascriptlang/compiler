@@ -31,7 +31,7 @@ import { bindContainerNames, releaseNames, paramSymbol } from "./bindNames";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt, isEndOfBodyReachable, unionOfTypes } from "./flow";
 import { isContextSensitive } from "./speculate";
 import { isTemplateSym, expandTemplate } from "./template";
-import { storedTypeOfNullRead, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, branchContributesToJoin, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, isBitwiseCompoundOp, compoundBase, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, refuseDisjointStrings, fitComparedOperands, fitDistinctComparison, DistinctComparison, comparesAtBase, widenBrandOperands, typeofComparisonHint, UnionRead, readUnionOperand, integerLiteralText, convertedTo, wrapsIntoUnsignedTarget, rejectCharArith, rejectCharUnary, textlessValue, scalarConversionRefusal, scalarConversionReason, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns, widenNumberLiteral, isLiteralSet, declaredTypeOfLocation, refuseMatchStructEquality, widenEqualityOperand } from "./fit";
+import { storedTypeOfNullRead, branchFitsSlot, checkBitwiseOperands, checkNegatedIntLiteral, reportConstIndexBound, reportConstCast, tupleIndexType, checkRelationalOperands, checkBinaryOperands, fitJoinedBranch, fitNode, reportReadonlyDrop, inferBinaryOp, inferUnaryOp, isBitwiseAllowed, isBitwiseBinaryOp, isNodeIntLit, joinBranchTypes, branchContributesToJoin, literalFitsInType, narrowUnionToVariant, assertIntoNullable, checkedProjection, assertionNarrows, rejectBigIntMix, reportLiteralRange, synthCStringConv, synthMaybeWrap, synthStringify, tryAdoptAnonStruct, tryApplyConverter, convertsWithoutRoutine, operandConverter, slotTakesValue, reportedErrorSince, valueOfInPlace, ReadNeed, operandReadsValue, refuseFunctionTruthiness, isFunctionShaped, unaryArithFails, arrayIndexFails, widenVariantToUnion, wrapInConv, tagUnionMemberSlot, projectTagUnionMember, isSlotUnion, constantOperandAs, nullishPayloadType, exactConstantType, untypedIntegerLiteralType, wideOperandLiteralSlot, rejectLossyIntFloatMix, literalAdoptsFloat32, intLiteralExactInFloat, reportFloat32LiteralRange, constantAdoptsFloat32, compoundOperandRefuses, reportCompoundOperand, synthValueEquality, synthExplicitDump, objectPathHolders, isPayloadCarrier, isScalarPrimitive, narrowsToMember, isFittingNumericConstant, declaredTagUnionOf, isSyncGeneratorFlags, settleYields, isBitwiseCompoundOp, compoundBase, refuseMixedSignedCompare, convertsBetweenUnions, unionConversionRefusal, convertUnionToUnion, nullableUnionPayloads, convertStoredUnionRead, heldInTarget, unionsOverlap, adoptLiteralArms, literalArmJoinsInto, fitLiteralArmInto, refuseDisjointStrings, fitComparedOperands, fitDistinctComparison, DistinctComparison, comparesAtBase, widenBrandOperands, typeofComparisonHint, UnionRead, readUnionOperand, integerLiteralText, convertedTo, wrapsIntoUnsignedTarget, rejectCharArith, rejectCharUnary, textlessValue, scalarConversionRefusal, scalarConversionReason, adoptLiteralTo, shortCircuitLeftShare, shortCircuitRightRuns, widenNumberLiteral, isLiteralSet, declaredTypeOfLocation, refuseMatchStructEquality, widenEqualityOperand } from "./fit";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -1779,7 +1779,7 @@ function literalFields(ctx: CheckerContext, d: ObjectLiteralData, names: string[
 			const fields = spreadFieldsOf((value.data as SpreadExprData).spreadArg.nodeType);
 			if (fields != null) {
 				for (let fi = 0; fi < fields.typeNames.length && fi < fields.typeChildren.length; fi += 1) {
-					if (!fields.typeNames[fi].startsWith("__")) putLiteralField(names, types, fields.typeNames[fi], fields.typeChildren[fi]);
+					putLiteralField(names, types, fields.typeNames[fi], fields.typeChildren[fi]);
 				}
 				continue;
 			}
@@ -1866,6 +1866,12 @@ function fitSpreadField(ctx: CheckerContext, entry: Node, name: string, held: Ty
 		entry.location.line, entry.location.column);
 }
 
+function spreadsUnionOfObjects(operand: Type | null): boolean {
+	const bare = skipModifier(operand);
+	return bare != null && bare.kind == TypeKind.Union && !isMaybeType(bare)
+		&& unwrapRefNullUnion(bare) == null && !hasGenericParams(bare);
+}
+
 function judgeSpreadFields(ctx: CheckerContext, d: ObjectLiteralData, target: Type | null): void {
 	for (let i = 0; i < d.keys.length && i < d.properties.length; i += 1) {
 		const entry = d.properties[i];
@@ -1877,10 +1883,14 @@ function judgeSpreadFields(ctx: CheckerContext, d: ObjectLiteralData, target: Ty
 			continue;
 		}
 		const fields = spreadFieldsOf(operand);
+		if (fields == null && spreadsUnionOfObjects(operand)) {
+			addError(ctx, `cannot spread a value of '${typeDisplayName(operand!)}' into an object literal: a union has no single set of fields; narrow it to one member first`,
+				entry.location.line, entry.location.column);
+			continue;
+		}
 		if (fields == null) continue;
 		for (let fi = 0; fi < fields.typeNames.length && fi < fields.typeChildren.length; fi += 1) {
 			const name = fields.typeNames[fi];
-			if (name.startsWith("__")) continue;
 			const optional = fields.optionalFields != null && fields.optionalFields.indexOf(name) >= 0;
 			if (!optional) refuseOverwrittenKeys(ctx, d, i, name);
 			const at = target != null && target.typeNames != null ? target.typeNames.indexOf(name) : -1;
@@ -2133,7 +2143,7 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 			}
 			if (!hasDynamicKey && d.keys.length == d.properties.length) {
 				for (let oi = 0; oi < objNames.length && oi < objChildren.length; oi += 1) {
-					if (objNames[oi].startsWith("__") || d.keys.includes(objNames[oi])) continue;
+					if (d.keys.includes(objNames[oi])) continue;
 					const init = literalFieldInitializer(ctx, literalClassType, objNames[oi], objChildren[oi], node.location);
 					if (init == null) continue;
 					d.keys.push(objNames[oi]);
@@ -2284,7 +2294,7 @@ function checkObjectLiteral(ctx: CheckerContext, node: Node, expectedType: Type 
 				spreadSeen = true;
 				for (let fi = 0; fi < spreadFields.typeNames.length; fi += 1) {
 					const fname = spreadFields.typeNames[fi];
-					if (fname.startsWith("__") || fi >= spreadFields.typeChildren.length) continue;
+					if (fi >= spreadFields.typeChildren.length) continue;
 					const at = fieldNames.indexOf(fname);
 					const optional = spreadFields.optionalFields != null && spreadFields.optionalFields.indexOf(fname) >= 0;
 					if (at >= 0 && optional) fieldTypes[at] = keptOrSpread(fieldTypes[at], spreadFields.typeChildren[fi]);
@@ -3001,6 +3011,56 @@ export function usedBeforeDeclaration(name: string): string {
 	return `Block-scoped variable '${name}' used before its declaration`;
 }
 
+interface OwnInitializer {
+	sym: Symbol;
+	scope: Cursor<Scope>;
+	held: Node[];
+	annotated: boolean;
+}
+
+let _ownInitializers: OwnInitializer[] = [];
+let _heldScopes: Cursor<Scope>[] = [];
+
+export function enterOwnInitializer(ctx: CheckerContext, sym: Symbol, held: Node[], annotated: boolean): void {
+	_ownInitializers.push({ sym, scope: ctx.table.current, held, annotated });
+}
+
+export function exitOwnInitializer(): void {
+	_ownInitializers.pop();
+}
+
+function heldByOwnInitializer(fnNode: Node): boolean {
+	for (const o of _ownInitializers) {
+		for (const h of o.held) {
+			if (h == fnNode || (h.location.line > 0 && h.location.line == fnNode.location.line && h.location.column == fnNode.location.column)) return true;
+		}
+	}
+	return false;
+}
+
+function refuseOwnInitializerRead(ctx: CheckerContext, sym: Symbol, read: Node): boolean {
+	for (const o of _ownInitializers) {
+		if (o.sym != sym) continue;
+		const name = sym.name;
+		if (!o.annotated) {
+			addError(ctx, `cannot infer the type of '${name}': its own initializer reads it; annotate the type of '${name}'`, read.location.line, read.location.column);
+			return true;
+		}
+		let scope = ctx.table.current;
+		while (scope != null && scope != o.scope) {
+			if (_heldScopes.indexOf(scope) >= 0) return false;
+			scope = scope.parent;
+		}
+		if (!readIsDeferred(ctx, o.scope)) {
+			addError(ctx, usedBeforeDeclaration(name), read.location.line, read.location.column);
+		} else {
+			addError(ctx, `'${name}' is read by a function that can run while '${name}' is still being initialized: only a function stored in an object or array literal of the initializer runs after it; give '${name}' its value first, or assign the function after`, read.location.line, read.location.column);
+		}
+		return true;
+	}
+	return false;
+}
+
 function refuseModuleReadBeforeDeclaration(ctx: CheckerContext, sym: Symbol, read: Node): void {
 	const decl = sym.declNode;
 	if (decl == null || decl.kind != NodeKind.VariableDecl || sym.modulePath != ctx.modulePath || hasFlag(sym, SymbolFlag.StaticLocal)) return;
@@ -3053,6 +3113,7 @@ function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | n
 	ensureShaped(sym, ctx);
 	node.resolvedSym = sym;
 	markUsedIn(ctx, sym);
+	if (_ownInitializers.length > 0 && refuseOwnInitializerRead(ctx, sym, node)) { node.nodeType = errorType(); return; }
 	if (sym.symbolKind == SymbolKind.Function || (sym.symbolKind == SymbolKind.Variable && sym.symbolType != null
 			&& sym.symbolType.kind == TypeKind.Function && isUnresolvedType(sym.symbolType.typeReturn))) callDemandReturn(ctx, sym, node);
 	if (sym.symbolKind == SymbolKind.Variable && hasFlag(sym, SymbolFlag.Global)) refuseModuleReadBeforeDeclaration(ctx, sym, node);
@@ -3291,6 +3352,14 @@ function fitConditionalArms(ctx: CheckerContext, d: ConditionalExprData, expecte
 	retypeEmptyArrayBranch(d.ternaryConsequent, d.ternaryAlternate.nodeType);
 	retypeEmptyArrayBranch(d.ternaryAlternate, d.ternaryConsequent.nodeType);
 	adoptLiteralArms(ctx, [d.ternaryConsequent, d.ternaryAlternate]);
+	if (literalArmJoinsInto(d.ternaryAlternate, d.ternaryConsequent.nodeType)) {
+		fitLiteralArmInto(ctx, d.ternaryAlternate, d.ternaryConsequent.nodeType!);
+		return d.ternaryConsequent.nodeType;
+	}
+	if (literalArmJoinsInto(d.ternaryConsequent, d.ternaryAlternate.nodeType)) {
+		fitLiteralArmInto(ctx, d.ternaryConsequent, d.ternaryAlternate.nodeType!);
+		return d.ternaryAlternate.nodeType;
+	}
 	const branchTypes: Type[] = [];
 	if (d.ternaryConsequent.nodeType != null) { branchTypes.push(d.ternaryConsequent.nodeType); }
 	if (d.ternaryAlternate.nodeType != null) { branchTypes.push(d.ternaryAlternate.nodeType); }
@@ -3341,6 +3410,10 @@ function shortCircuitType(ctx: CheckerContext, d: BinaryExprData, leftType: Type
 	if (leftType == null || d.right.nodeType == null || !shortCircuitRightRuns(d.operator, leftType)) return null;
 	const share = shortCircuitLeftShare(d.operator, leftType);
 	if (share == null) return d.right.nodeType;
+	if (literalArmJoinsInto(d.right, share)) {
+		fitLiteralArmInto(ctx, d.right, share);
+		return share;
+	}
 	retypeEmptyArrayBranch(d.right, share);
 	if (isNumeric(share)) adoptLiteralTo(ctx, d.right, share);
 	const joined = joinBranchTypes([share, d.right.nodeType]);
@@ -3735,8 +3808,10 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	const savedCtorExits = ctx.ctorExits;
 	ctx.ctorExits = null;
 	const invoked = ctx.calleeExpr == fnNode;
+	const held = !invoked && _ownInitializers.length > 0 && heldByOwnInitializer(fnNode);
 	openScope(ctx.table, ScopeKind.Function);
 	if (invoked) _invokedScopes.push(ctx.table.current);
+	if (held) _heldScopes.push(ctx.table.current);
 	const savedBoundary = ctx.readonlyBoundary;
 	if (ctx.pendingSpawnThunk) {
 		ctx.pendingSpawnThunk = false;
@@ -3792,6 +3867,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		if (temps.length > 0) bodyIntoBlock(result, temps);
 	}
 	if (suspends) refuseUsedSuspendingViewParams(ctx, paramSyms, paramValueTypes, paramLocs, fnNode.location);
+	if (held) _heldScopes.pop();
 	if (invoked) _invokedScopes.pop();
 	closeScope(ctx.table);
 	releaseNames(ctx, boundNames);

@@ -2,7 +2,7 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, TypeFlag, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, ObjectLiteralData, SymbolKind, SymbolFlag } from "../ast/node";
+import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, TypeFlag, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, ObjectLiteralData, SymbolKind, SymbolFlag, SizeofExprData } from "../ast/node";
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal, arityAdapts, runtimeParams } from "./compat";
@@ -243,6 +243,25 @@ function rearmLiteral(lit: Node): void {
 		if (p.kind == NodeKind.ObjectLiteral && anonLiteralStruct(p.nodeType) != null) rearmLiteral(p);
 		else if (p.kind == NodeKind.ArrayLiteral && arrayShape(p.nodeType) != null) rearmLiteral(p);
 	}
+}
+
+export function literalArmJoinsInto(literal: Node, other: Type | null): boolean {
+	if (literal == null || literal.kind != NodeKind.ObjectLiteral || other == null) return false;
+	const lit = anonLiteralStruct(literal.nodeType);
+	if (lit == null || anonLiteralStruct(other) != null || hasGenericParams(other)) return false;
+	const named = peelToStructOrUnion(other);
+	if (named == null || named.kind != TypeKind.Struct || named.typeName == "" || isMaybeType(other)) return false;
+	if (named.typeNames.length != lit.typeNames.length) return false;
+	for (let i = 0; i < lit.typeNames.length; i++) {
+		const at = named.typeNames.indexOf(lit.typeNames[i]);
+		if (at < 0 || at >= named.typeChildren.length || slotRefuses(lit.typeChildren[i], named.typeChildren[at])) return false;
+	}
+	return true;
+}
+
+export function fitLiteralArmInto(ctx: CheckerContext, literal: Node, named: Type): void {
+	rearmLiteral(literal);
+	callCheckExpr(ctx, literal, named);
 }
 
 export function fitJoinedBranch(ctx: CheckerContext, expr: Node, joined: Type | null): Node {
@@ -1200,9 +1219,9 @@ function reportBitSetMismatch(ctx: CheckerContext, op: string, leftType: Type, r
 		addError(ctx, "BitSet holds at most " + BITSET_MAX_MEMBERS.toString() + " members; enum '" + sizedElem.typeName + "' has " + sizedElem.typeNames.length.toString(), node.location.line, node.location.column);
 		return true;
 	}
-	const leftName = leftElem != null ? leftElem.typeName : (leftType != null && leftType.kind == TypeKind.Enum ? leftType.typeName : "");
-	const rightName = rightElem != null ? rightElem.typeName : (rightType != null && rightType.kind == TypeKind.Enum ? rightType.typeName : "");
-	if (leftName != "" && leftName == rightName) return false;
+	const leftEnum = leftElem != null ? leftElem : (leftType != null && leftType.kind == TypeKind.Enum ? leftType : null);
+	const rightEnum = rightElem != null ? rightElem : (rightType != null && rightType.kind == TypeKind.Enum ? rightType : null);
+	if (leftEnum != null && rightEnum != null && sameNominal(leftEnum, rightEnum)) return false;
 	addError(ctx, "bitwise operator '" + op + "' on '" + typeDisplayName(leftType) + "' and '" + typeDisplayName(rightType) + "' mixes different enum sets", node.location.line, node.location.column);
 	return true;
 }
@@ -2891,13 +2910,18 @@ export function widenNumberLiteral(node: Node): Node {
 		read.flags = read.flags.incl(NodeFlag.Sem);
 		return read;
 	}
-	let read = node;
-	if (declaredTagUnionOf(node) != null) {
-		const projected = narrowUnionToVariant(node, held);
-		if (projected != null as unknown as Node) read = projected;
-	}
+	const read = projectNarrowedRead(node);
 	read.nodeType = widened;
 	return read;
+}
+
+export function projectNarrowedRead(node: Node): Node {
+	const held = node.nodeType;
+	if (held == null || widenNumberLiteralType(held) == held || declaredTagUnionOf(node) == null) return node;
+	const projected = narrowUnionToVariant(node, held);
+	if (projected == null as unknown as Node) return node;
+	projected.nodeType = held;
+	return projected;
 }
 
 export function tagUnionMemberSlot(declared: Type, exprType: Type): int32 {
@@ -3615,7 +3639,7 @@ function declaredConstantName(expr: Node): string {
 function constantRefusal(expr: Node, from: Type, target: Type): string {
 	const asTarget = "an explicit 'as " + typeDisplayName(target) + "'";
 	const folded = foldedNumber(expr);
-	if (folded == null) return "";
+	if (folded == null) return cLayoutSizeofRefusal(expr, asTarget);
 	if (constHoldsFloat(folded)) {
 		const v = constFloatValue(folded);
 		const text = floatValueText(v);
@@ -3641,6 +3665,14 @@ function constantRefusal(expr: Node, from: Type, target: Type): string {
 		return "cannot hold " + text + " exactly (" + mantissaText(target) + ") — write " + asTarget;
 	}
 	return typedConstantRefusal(expr, from, target, text);
+}
+
+function cLayoutSizeofRefusal(expr: Node, asTarget: string): string {
+	if (expr.kind != NodeKind.SizeofExpr) return "";
+	const d = expr.data as SizeofExprData;
+	if (d.sizeofResolved == null || !layoutFromC(d.sizeofResolved)) return "";
+	return "takes 'sizeof " + d.sizeofType + "', which is not a constant: '" + d.sizeofType + "' has C's layout, which msc folds only on the C backend "
+		+ "for a header struct whose every field translates exactly (no union, bitfield, packed or aligned member), so only the C compiler knows its size — write " + asTarget;
 }
 
 function typedConstantRefusal(expr: Node, from: Type, target: Type, text: string): string {
@@ -3710,7 +3742,7 @@ test "a union whose members the value names keeps no tag" {
 	assert !storesUnionTag(createUnion([p, stringType()]));
 }
 
-import { createNumberLiteral } from "./types";
+import { createNumberLiteral, layoutFromC } from "./types";
 
 test "an as into a literal union is checked only when the source can hold a value outside it" {
 	const narrow = createUnion([createStringLiteral("a"), createStringLiteral("b")]);

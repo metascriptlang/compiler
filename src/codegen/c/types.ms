@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType } from "../../checker/types";
+import { TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType } from "../../checker/types";
 import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
@@ -16,9 +16,15 @@ import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangl
 import { CheckerContext, newSym, GcMode, addError, createContext } from "../../checker/context";
 import { cStringLiteral, escapeCString } from "./literals";
 
+function namingSym(t: Type): Symbol | null {
+	if (t.sym != null && hasFlag(t.sym, SymbolFlag.Anon)) return t.sym;
+	return t.typeFlags.has(TypeFlag.Spelled) ? null : t.sym;
+}
+
 export function resolvedTypeCName(t: Type, hasCheckerCtx: boolean): string {
-	if (t.sym != null && t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(t.sym, t.typeName) + "_" + hashToBase36(nominalTypeKey(t));
-	if (t.sym != null) return mangledTypeName(t.sym, t.typeName);
+	const owner = namingSym(t);
+	if (owner != null && t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(owner, t.typeName) + "_" + hashToBase36(nominalTypeKey(t));
+	if (owner != null) return mangledTypeName(owner, t.typeName);
 	if (hasCheckerCtx && t.typeName != "" && isNominalKind(t.kind)) nominalTypeKey(t);
 	return mangledTypeName(null, t.typeName);
 }
@@ -31,21 +37,9 @@ function typeIdentityName(g: CGen, t: Type): string {
 // definitions + ownership keys) and the analyzer (call sites). Both must spell a
 // type the way codegen spells its struct, or one module's hooks answer for
 // another module's same-named type.
-export function hookBaseCNameOfSym(typeName: string, sym: Symbol | null): string {
-	if (typeName == "") return "";
-	// Compiler-generated spellings ($Env_*, msAnon_*, monomorphized "__") are already
-	// unique and get mangled once at emission; mangling them here too would spell the
-	// definition and its references differently.
-	if (typeName.slice(0, 1) == "$") return ownedGeneratedName(sym) ? mangledTypeName(sym, typeName) : typeName;
-	if (typeName.indexOf("__", 0) >= 0) return typeName;
-	if (sym != null) return mangledTypeName(sym, typeName);
-	return typeName;
-}
-
 export function hookBaseCName(typeName: string, t: Type | null, cc: Readonly<CheckerContext> | null): string {
 	if (typeName == "") return "";
 	if (typeName.slice(0, 1) == "$") return t != null && t.typeName == typeName && ownedGeneratedName(t.sym) ? mangledTypeName(t.sym, typeName) : typeName;
-	if (typeName.indexOf("__", 0) >= 0) return typeName;
 	const named = t != null && t.typeName == typeName;
 	if (named && t.typeInst != null) return monoInstanceName(t.typeInst);
 	if (named) return resolvedTypeCName(t, cc != null);
@@ -513,7 +507,9 @@ export function annotationToC(annotation: string): string {
 // Generates a unique string key for a Type (used for cache lookups).
 
 function structKeyIdentity(t: Type): string {
-	if (t.sym != null && !t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(t.sym, t.typeName);
+	const owner = namingSym(t);
+	if (owner == null && t.typeFlags.has(TypeFlag.Spelled)) return mangledTypeName(null, t.typeName);
+	if (owner != null && !t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(owner, t.typeName);
 	return mangledTypeName(null, nominalTypeKey(t));
 }
 
@@ -725,6 +721,8 @@ export function ccgIntroducedPtr(tg: TargetInfo, t: Type): boolean {
 	if (isStructType(inner)) return sizeOfType(tg, inner) > ptrThreshold(tg);
 	// Union(Ref<T>, Null) collapses to T* in C — the pointer IS the value, no struct-via-pointer.
 	if (inner.kind == TypeKind.Union && unwrapRefNullUnion(inner) != null) return false;
+	const carried = literalUnionBase(inner);
+	if (carried != null) return ccgIntroducedPtr(tg, carried);
 	return match (inner.kind) {
 		TypeKind.Tuple => sizeOfType(tg, inner) > ptrThreshold(tg),
 		TypeKind.Array => true,  // arrays always by pointer: mutable by default, realloc invalidates caller copy
@@ -1092,7 +1090,7 @@ function refArrayCellLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 
 function objectTypeInfoLabel(info: Readonly<CTypeInfoDemand>): string {
 	const t = info.subject;
-	if (t.kind == TypeKind.GenericInstance || t.sym == null || t.typeName.indexOf("__", 0) >= 0 || isAnonTypeName(t.typeName)) return info.cName;
+	if (t.kind == TypeKind.GenericInstance || t.sym == null || t.sym.instantiatedFrom != null || isAnonTypeName(t.typeName)) return info.cName;
 	return mangle(t.typeName);
 }
 
@@ -1476,6 +1474,21 @@ function genObjectType(g: CGen, t: Type): string {
 function layoutAssert(g: CGen, t: Type, cType: string): string {
 	const size = sizeOfType(g.target, t);
 	return size < 0 ? "" : `_Static_assert(sizeof(${cType}) == ${size}, "${cType} layout");\n`;
+}
+
+export function assertExternLayout(g: CGen, t: Type): void {
+	if (t.sym == null || !t.typeFlags.has(TypeFlag.CompleteStruct)) return;
+	const cType = t.sym.nativeName;
+	const size = sizeOfType(g.target, t);
+	if (size < 0 || nameSetHas(g.declaredThings, "layout:" + cType)) return;
+	nameSetAdd(g.declaredThings, "layout:" + cType);
+	useImportedTypeHeader(g, t);
+	let asserts = layoutAssert(g, t, cType)
+		+ `_Static_assert(_Alignof(${cType}) == ${alignOfType(g.target, t)}, "${cType} alignment");\n`;
+	for (const field of t.typeNames) {
+		asserts = asserts + `_Static_assert(offsetof(${cType}, ${field}) == ${offsetOfField(g.target, t, field)}, "${cType}.${field} offset");\n`;
+	}
+	add(sec(g, CSection.Types), asserts);
 }
 
 // ===== Union Type Generation =====
@@ -2508,15 +2521,13 @@ test "a TypeInfo requested for a type that has none is an error" {
 	assert g.errors.length == 1;
 }
 
-test "a generated $ type is spelled by its module-owned symbol in both hook base names" {
+test "a generated $ type is spelled by its module-owned symbol in its hook base name" {
 	const owned = declaredHere(createStruct("$Env_probe_1", ["v"], [createPrimitive(TypeKind.String)], false));
 	owned.sym.modulePath = "/m/owner.ms";
 	const want = mangledTypeName(owned.sym, "$Env_probe_1");
 	assert hookBaseCName("$Env_probe_1", owned, null) == want;
-	assert hookBaseCNameOfSym("$Env_probe_1", owned.sym) == want;
 	const ownerless = declaredHere(createStruct("$Env_probe_2", ["v"], [createPrimitive(TypeKind.String)], false));
 	assert hookBaseCName("$Env_probe_2", ownerless, null) == "$Env_probe_2";
-	assert hookBaseCNameOfSym("$Env_probe_2", ownerless.sym) == "$Env_probe_2";
 }
 
 test "a hook base name comes from the type's own symbol, not from a table lookup by name" {

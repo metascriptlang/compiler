@@ -191,3 +191,4 @@ import "./literalTypeAssign";
 import "./proxyRefusals";
 import "./importAssign";
 import "./externMutability";
+import "./literalArmJoin";

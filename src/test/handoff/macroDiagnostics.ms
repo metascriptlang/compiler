@@ -1,4 +1,7 @@
-import { compileToCWithStd } from "../helpers";
+import { compileToCWithStd, compileToJSWithStd } from "../helpers";
+import { mkdir, readFile, remove, removeAll, exists } from "std/fs";
+import { join } from "std/fs/path";
+import { cwd } from "std/process";
 
 test "macro diagnostics: rejection crosses frames once and cannot be caught" {
 	const bodies = [
@@ -97,6 +100,92 @@ test "macro unsupported evaluation: unbridged externs identify the unavailable h
 	if (!c.ok) {
 		assert c.error.contains("msSetTimeout");
 	}
+}
+
+test "macro unsupported evaluation: a helper that reads an extern let or const is refused by its name" {
+	const helpers = [
+		{ decl: "extern let errno: int32;", body: "let err: int32 = 0; err = errno != 0 ? errno : 1; return `${err}`;", name: "errno" },
+		{ decl: "extern const MASK: uint32;", body: "const m: uint32 = 5; return `${m & MASK}`;", name: "MASK" },
+		{ decl: "extern const BASE: int32;", body: "const b: int32 = BASE + 1; return `${b}`;", name: "BASE" },
+		{ decl: "extern const LIMIT: float64;", body: "return 2.5 < LIMIT ? \"lt\" : \"ge\";", name: "LIMIT" },
+	];
+	for (const h of helpers) {
+		const result = compileToCWithStd('import { Node, NodeKind } from "std/meta"; ' + h.decl
+			+ " function code(): string { " + h.body + " }"
+			+ " macro lib(n: Node): Node { return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: code() }; }"
+			+ ' console.log(lib("x"));');
+		assert !result.ok, h.decl;
+		assert result.error.contains(`cannot read extern '${h.name}'`), result.error;
+	}
+}
+
+const stdFsMacroHead = 'import { Node, NodeKind } from "std/meta"; import { writeFile, appendFile, readFile } from "std/fs"; ';
+
+function stringMacro(body: string): string {
+	return stdFsMacroHead + "macro probe(n: Node): Node { " + body + " return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: text }; } console.log(probe(0));";
+}
+
+test "macro std fs: writeFile and appendFile run at comptime through their host routine and leave their file" {
+	const dir = join(cwd(), "out/test");
+	mkdir(dir);
+	const path = join(dir, "macroStdFsCallback.txt");
+	remove(path);
+	const result = compileToCWithStd(stringMacro(`const first = writeFile("${path}", "one;"); const second = appendFile("${path}", "two;"); const back = readFile("${path}"); const text = (first.ok && second.ok ? "wrote:" : "failed:") + (back.ok ? back.value : "unread");`));
+	assert result.ok, result.ok ? "" : result.error;
+	if (result.ok) assert result.value.contains("wrote:one;two;"), result.value;
+	const file = readFile(path);
+	assert file.ok && file.value == "one;two;";
+}
+
+test "macro std fs: a failed writeFile at comptime returns its IoError with path and kind" {
+	const result = compileToCWithStd(stringMacro('const r = writeFile("/nonexistent-dir-of-a-macro/f.txt", "x"); const text = r.ok ? "wrote" : `refused:${r.error.path}:${r.error.kind}`;'));
+	assert result.ok, result.ok ? "" : result.error;
+	if (result.ok) assert result.value.contains("refused:/nonexistent-dir-of-a-macro/f.txt:"), result.value;
+}
+
+const stdFsOpsHead = 'import { Node, NodeKind } from "std/meta"; import { IoErrorKind } from "std/io/errors"; '
+	+ 'import { ensureDir, mkdir, rmdir, remove, removeAll, rename, writeFile, writeLines, readLines, copyFile, readDir, exists, isDir } from "std/fs"; ';
+
+function fsOpsMacro(base: string): string {
+	const dir = `${base}/a/b`;
+	return stdFsOpsHead + "macro probe(n: Node): Node { "
+		+ `const made = ensureDir("${dir}"); const again = ensureDir("${dir}"); const twice = mkdir("${dir}");`
+		+ ` const wrote = writeFile("${dir}/f.txt", "x"); const moved = rename("${dir}/f.txt", "${dir}/g.txt");`
+		+ ` const listed = readDir("${dir}").join(","); const there = exists("${dir}/g.txt") && isDir("${dir}");`
+		+ ` const removed = remove("${dir}/g.txt"); const gone = !exists("${dir}/g.txt"); const missing = remove("${dir}/g.txt");`
+		+ ` const blocked = rmdir("${base}/a"); const cleared = removeAll("${base}/a").ok && !exists("${base}/a");`
+		+ ` const copied = writeLines("${base}/l.txt", ["p", "q"]).ok && copyFile("${base}/l.txt", "${base}/m.txt").ok; const lines = readLines("${base}/m.txt");`
+		+ ' const linesText = lines.ok ? lines.value.join("+") : "unread";'
+		+ " const missed = missing.ok ? \"ok\" : `${missing.error.kind == IoErrorKind.NotFound}|${missing.error.path}|${missing.error.message}`;"
+		+ " const text = `made=${made.ok} again=${again.ok} twice=${twice.ok} wrote=${wrote.ok} moved=${moved.ok} listed=${listed} there=${there}"
+		+ " removed=${removed.ok} gone=${gone} missing=${missed} blocked=${!blocked.ok} cleared=${cleared} copied=${copied} lines=${linesText}`;"
+		+ " return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: text }; } console.log(probe(0));";
+}
+
+function fsOpsExpected(base: string): string {
+	const missingPath = `${base}/a/b/g.txt`;
+	const missing = remove(missingPath);
+	const message = missing.ok ? "removed a path that should be missing" : missing.error.message;
+	return `made=true again=true twice=true wrote=true moved=true listed=g.txt there=true removed=true gone=true missing=true|${missingPath}|${message} blocked=true cleared=true copied=true lines=p+q`;
+}
+
+test "macro std fs: ensureDir, mkdir on an existing dir, rename, readDir, remove, rmdir, removeAll, writeLines, copyFile and readLines run at comptime with the runtime's results and errors" {
+	const targets = ["c", "js"];
+	for (const target of targets) {
+		const base = join(cwd(), `out/test/macroStdFsOps-${target}`);
+		removeAll(base);
+		const result = target == "c" ? compileToCWithStd(fsOpsMacro(base)) : compileToJSWithStd(fsOpsMacro(base));
+		assert result.ok, result.ok ? "" : `${target}: ${result.error}`;
+		if (result.ok) assert result.value.contains(fsOpsExpected(base)), `${target}: ${result.value}`;
+		assert !exists(base + "/a"), target;
+	}
+}
+
+test "macro std fs: a std routine whose body calls C and has no host routine is refused by its C name" {
+	const result = compileToCWithStd('import { Node, NodeKind } from "std/meta"; import { cpus } from "std/os"; '
+		+ "macro probe(n: Node): Node { const text = `${cpus().length}`; return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: text }; } console.log(probe(0));");
+	assert !result.ok;
+	if (!result.ok) assert result.error.contains("no host bridge for 'msOsCpus'"), result.error;
 }
 
 const objectCallMacro = `

@@ -16,7 +16,7 @@ import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoine
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName, mangleQualified, mangleModuleName } from "../c/names";
 import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { enumMemberName, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym, isNativePattern } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
@@ -145,6 +145,17 @@ export function jsBundleReferenceName(sym: Symbol, text: string): string {
 	return jsReferenceName(gen, sym, text);
 }
 
+function enumOfMember(sym: Symbol): Type | null {
+	const t = sym.symbolType;
+	if (t != null && t.kind == TypeKind.Enum) return t;
+	return t != null && t.kind == TypeKind.EnumLiteral && t.typeReturn != null && t.typeReturn.kind == TypeKind.Enum ? t.typeReturn : null;
+}
+
+export function jsEnumMemberName(gen: JSGenerator, enumSym: Symbol | null, enumName: string, member: string): string {
+	if (gen.bundleMode && enumSym != null && enumSym.modulePath != "" && !hasFlag(enumSym, SymbolFlag.ImportC)) return `${mangledGlobalName(enumSym, enumName)}_${member}`;
+	return enumMemberName(enumSym, safeJsName(enumName), member);
+}
+
 function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: string): string {
 	if (sym == null) return safeJsName(name);
 	if (sym.symbolKind == SymbolKind.Variable && sym.instantiatedFrom != null) return safeJsName(sym.name);
@@ -155,6 +166,10 @@ function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: 
 		return hasFlag(sym, SymbolFlag.ImportC) && !isNativePattern(sym.nativeName) ? sym.nativeName : safeJsName(name);
 	}
 	if (gen.multiFile) return jsMultiFileName(gen, sym, name, declared);
+	if (sym.symbolKind == SymbolKind.EnumMember) {
+		const owner = enumOfMember(sym);
+		if (owner != null) return jsEnumMemberName(gen, owner.sym, owner.typeName, sym.name);
+	}
 	if (!gen.bundleMode && hasFlag(sym, SymbolFlag.Exported)) return safeJsName(name);
 	if (sym.symbolKind == SymbolKind.Function && sym.modulePath != null && sym.modulePath != "") {
 		return mangledFunctionName(sym, declared, sym.overloadIdx);
@@ -706,7 +721,7 @@ function omittedFieldZeros(node: Node, d: ObjectLiteralData): string[] {
 	if (t == null) return out;
 	for (let i = 0; i < t.typeNames.length && i < t.typeChildren.length; i += 1) {
 		const name = t.typeNames[i];
-		if (name.startsWith("__") || d.keys.includes(name) || spreadMayProvide(d, name)) continue;
+		if (d.keys.includes(name) || spreadMayProvide(d, name)) continue;
 		const zero = jsDefaultValue(t.typeChildren[i]);
 		if (zero != "") out.push(`${jsPropertyKey(name)}: ${zero}`);
 	}

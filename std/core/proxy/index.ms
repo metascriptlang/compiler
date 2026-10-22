@@ -13,29 +13,37 @@ export class ProxyCell<T, H> {
 	constructor(target: T, handler: H) { this.target = target; this.handler = handler; }
 }
 
+@builtin("Proxy")
 export type Proxy<T, H> = distinct ProxyCell<T, H>;
 
+@compilerFunc
 export function newProxy<T, H>(target: T, handler: H): Proxy<T, H> {
 	return new ProxyCell<T, H>(target, handler) as Proxy<T, H>;
 }
 
+@compilerFunc
 export function proxyTarget<T, H>(p: Proxy<T, H>): T { return (p as ProxyCell<T, H>).target; }
 
+@compilerFunc
 export function proxyHandler<T, H>(p: Proxy<T, H>): H { return (p as ProxyCell<T, H>).handler; }
 
 // Calls `f` with `p`, so a trap call built at the use site reads a receiver with effects once.
+@compilerFunc
 export function proxyWith<T, H, R>(p: Proxy<T, H>, f: (p: Proxy<T, H>) => R): R { return f(p); }
 
 // Calls `f` with `p` and `key`, so a compound write evaluates both once.
+@compilerFunc
 export function proxyWithKey<T, H, K, R>(p: Proxy<T, H>, key: K, f: (p: Proxy<T, H>, key: K) => R): R { return f(p, key); }
 
 // A `set` or `deleteProperty` trap that returns false fails the write, as in strict-mode JavaScript.
+@compilerFunc
 export function proxyChecked<K>(ok: boolean, trap: string, key: K): void {
 	if (!ok) throw new Error(`'${trap}' on a Proxy returned false for the key '${key}'`);
 }
 
 // ===== Reflect — what each trap does when the handler leaves it out =====
 
+@compilerFunc
 export class Reflect {
 	static get<T, K extends keyof T>(target: T, key: K): T[K] { return target[key]; }
 	static set<T, K extends keyof T>(target: T, key: K, value: T[K]): boolean {
@@ -92,12 +100,14 @@ export type ProxySetLen<E, H> = (p: Proxy<E[], H>, length: number) => void;
 export type ProxyHas<E, H> = (p: Proxy<E[], H>, key: number) => boolean;
 export type ProxyDelete<E, H> = (p: Proxy<E[], H>, key: number) => void;
 
+@compilerFunc
 export function proxyPush<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, set: ProxySet<E, H>, setLen: ProxySetLen<E, H>, value: E): void {
 	const n = len(p);
 	set(p, n, value);
 	setLen(p, n + 1);
 }
 
+@compilerFunc
 export function proxyPop<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: ProxyGet<E, H>, del: ProxyDelete<E, H>, setLen: ProxySetLen<E, H>): E {
 	const n = len(p);
 	const last = get(p, n - 1);
@@ -112,6 +122,7 @@ function moveElement<E, H>(p: Proxy<E[], H>, from: number, to: number, get: Prox
 	else del(p, to);
 }
 
+@compilerFunc
 export function proxyShift<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: ProxyGet<E, H>, set: ProxySet<E, H>, has: ProxyHas<E, H>, del: ProxyDelete<E, H>, setLen: ProxySetLen<E, H>): E {
 	const n = len(p);
 	const first = get(p, 0);
@@ -122,6 +133,7 @@ export function proxyShift<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: Pro
 }
 
 // The plain array's splice: a start outside the array or a count below one changes nothing.
+@compilerFunc
 export function proxySplice<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: ProxyGet<E, H>, set: ProxySet<E, H>, has: ProxyHas<E, H>, del: ProxyDelete<E, H>, setLen: ProxySetLen<E, H>, start: number, deleteCount: number): void {
 	const n = len(p);
 	if (start < 0 || start >= n || deleteCount <= 0) return;
@@ -135,6 +147,7 @@ export function proxySplice<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: Pr
 }
 
 // A missing element on either side would leave a hole where the specification moves one.
+@compilerFunc
 export function proxyReverse<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: ProxyGet<E, H>, set: ProxySet<E, H>, has: ProxyHas<E, H>): void {
 	const n = len(p);
 	for (let lower = 0; lower < Math.floor(n / 2); lower += 1) {
@@ -148,6 +161,7 @@ export function proxyReverse<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: P
 	}
 }
 
+@compilerFunc
 export function proxyFill<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, set: ProxySet<E, H>, value: E): void {
 	const n = len(p);
 	for (let k = 0; k < n; k += 1) set(p, k, value);
@@ -167,18 +181,21 @@ function writeBack<E, H>(p: Proxy<E[], H>, items: E[], set: ProxySet<E, H>): voi
 	for (let j = 0; j < items.length; j += 1) set(p, j, items[j]);
 }
 
+@compilerFunc
 export function proxySort<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: ProxyGet<E, H>, set: ProxySet<E, H>, has: ProxyHas<E, H>, cmp: (a: E, b: E) => number): void {
 	const items = sortedItems(p, len, get, has);
 	items.sort(cmp);
 	writeBack(p, items, set);
 }
 
+@compilerFunc
 export function proxySortDefault<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: ProxyGet<E, H>, set: ProxySet<E, H>, has: ProxyHas<E, H>): void {
 	const items = sortedItems(p, len, get, has);
 	items.sort();
 	writeBack(p, items, set);
 }
 
+@compilerFunc
 export function proxyMap<E, H, U>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: ProxyGet<E, H>, has: ProxyHas<E, H>, fn: (x: E, i: number) => U): U[] {
 	const n = len(p);
 	const out: U[] = [];
@@ -189,6 +206,7 @@ export function proxyMap<E, H, U>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: Pr
 	return out;
 }
 
+@compilerFunc
 export function proxyFilter<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: ProxyGet<E, H>, has: ProxyHas<E, H>, fn: (x: E, i: number) => boolean): E[] {
 	const n = len(p);
 	const out: E[] = [];
@@ -200,6 +218,7 @@ export function proxyFilter<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: Pr
 	return out;
 }
 
+@compilerFunc
 export function proxySome<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: ProxyGet<E, H>, has: ProxyHas<E, H>, fn: (x: E, i: number) => boolean): boolean {
 	const n = len(p);
 	for (let k = 0; k < n; k += 1) {
@@ -208,6 +227,7 @@ export function proxySome<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: Prox
 	return false;
 }
 
+@compilerFunc
 export function proxyFind<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: ProxyGet<E, H>, fn: (x: E, i: number) => boolean): E | null {
 	const n = len(p);
 	for (let k = 0; k < n; k += 1) {
@@ -217,6 +237,7 @@ export function proxyFind<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: Prox
 	return null;
 }
 
+@compilerFunc
 export function proxyFindIndex<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: ProxyGet<E, H>, fn: (x: E, i: number) => boolean): number {
 	const n = len(p);
 	for (let k = 0; k < n; k += 1) {
@@ -225,6 +246,7 @@ export function proxyFindIndex<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get:
 	return -1;
 }
 
+@compilerFunc
 export function proxyFindLastIndex<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: ProxyGet<E, H>, fn: (x: E, i: number) => boolean): number {
 	for (let k = len(p) - 1; k >= 0; k -= 1) {
 		if (fn(get(p, k), k)) return k;
@@ -232,6 +254,7 @@ export function proxyFindLastIndex<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, 
 	return -1;
 }
 
+@compilerFunc
 export function proxyIndexOf<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: ProxyGet<E, H>, has: ProxyHas<E, H>, value: E): number {
 	const n = len(p);
 	for (let k = 0; k < n; k += 1) {
@@ -240,6 +263,7 @@ export function proxyIndexOf<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: P
 	return -1;
 }
 
+@compilerFunc
 export function proxyLastIndexOf<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: ProxyGet<E, H>, has: ProxyHas<E, H>, value: E, fromIndex: number = -1): number {
 	const n = len(p);
 	for (let k = fromIndex < 0 ? n + fromIndex : Math.min(fromIndex, n - 1); k >= 0; k -= 1) {
@@ -248,6 +272,7 @@ export function proxyLastIndexOf<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, ge
 	return -1;
 }
 
+@compilerFunc
 export function proxyIncludes<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: ProxyGet<E, H>, value: E): boolean {
 	const n = len(p);
 	for (let k = 0; k < n; k += 1) {
@@ -256,6 +281,7 @@ export function proxyIncludes<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: 
 	return false;
 }
 
+@compilerFunc
 export function proxyJoin<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: ProxyGet<E, H>, sep: string): string {
 	const n = len(p);
 	let out = "";
@@ -266,6 +292,7 @@ export function proxyJoin<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: Prox
 	return out;
 }
 
+@compilerFunc
 export function proxySlice<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: ProxyGet<E, H>, has: ProxyHas<E, H>, start: number, end: number = 9007199254740991): E[] {
 	const n = len(p);
 	const from = start < 0 ? Math.max(n + start, 0) : Math.min(start, n);
@@ -277,6 +304,7 @@ export function proxySlice<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: Pro
 	return out;
 }
 
+@compilerFunc
 export function proxyAt<E, H>(p: Proxy<E[], H>, len: ProxyLen<E, H>, get: ProxyGet<E, H>, index: number): E {
 	const n = len(p);
 	const i = Math.trunc(index);

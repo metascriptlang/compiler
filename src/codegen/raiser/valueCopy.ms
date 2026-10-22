@@ -1,10 +1,10 @@
 import { Type, TypeKind, TypeFlag } from "../../ast/node";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
-import { distinctBody, enumMemberValue, isMaybeType, isStructType, needsValueCopy, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase } from "../../checker/types";
+import { distinctBody, enumMemberValue, isMaybeType, isStructType, needsValueCopy, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase } from "../../checker/types";
 import { RaiserOpcode, RaiserRegClass, raiserABC, raiserAx } from "../../raiser/bytecode";
 import { RaiserValue, RaiserValueKind, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil } from "../../raiser/value";
 import { peelToRepr, unwrapRef } from "../../checker/types";
-import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrapNil, layoutOperand } from "./context";
+import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, layoutOperand } from "./context";
 
 function copyPlan(s: RaiserCompState, valueType: Type | null): int32 {
 	const base = distinctBody(valueType);
@@ -145,7 +145,7 @@ function zeroShape(t: Type | null): Type | null {
 
 export function zeroScalar(t: Type | null): RaiserValue {
 	if (t == null) return raiserNil();
-	return match (t.kind) {
+	return match (literalBase(t).kind) {
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 | TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 | TypeKind.Enum | TypeKind.Char => raiserInt(0),
 		TypeKind.Number | TypeKind.Float32 | TypeKind.Float64 => raiserFloat(0),
 		TypeKind.Boolean => raiserBool(false),
@@ -213,6 +213,11 @@ export function emitZeroValue(s: RaiserCompState, valueType: Type | null): int32
 	return emitZeroOf(s, valueType, []);
 }
 
+export function emitTrapValue(s: RaiserCompState, message: string, valueType: Type | null): int32 {
+	emitTrap(s, message);
+	return emitZeroValue(s, valueType);
+}
+
 export function emitZeroFill(s: RaiserCompState, array: int32, count: int32, elementType: Type | null): void {
 	emitZeroElements(s, array, count, elementType, []);
 }
@@ -227,7 +232,7 @@ export function emitOmittedFieldZeros(s: RaiserCompState, object: int32, literal
 	if (t == null || !isValueStruct(t) || keys.includes("...")) return;
 	for (let i = 0; i < t.typeNames.length; i += 1) {
 		const name = t.typeNames[i];
-		if (name.startsWith("__") || keys.includes(name)) continue;
+		if (keys.includes(name)) continue;
 		const field = emitZeroValue(s, i < t.typeChildren.length ? t.typeChildren[i] : null);
 		emitInst(s, raiserABC(RaiserOpcode.StoreField, object, addConst(s, raiserConstString(name)), field));
 	}

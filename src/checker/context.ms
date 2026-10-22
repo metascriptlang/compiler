@@ -1,5 +1,5 @@
 import { platform } from "std/process";
-import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf } from "./types";
+import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf, declaredBasesOf } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore, typeRelation, TypeRelation } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
@@ -643,20 +643,15 @@ export function extReceiverDisplay(ext: ExtensionMethod): string {
 
 export function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type | null): ExtensionMethod[] {
 	const results: ExtensionMethod[] = [];
-	let cur: Type | null = objType;
-	let depth = 0;
-	while (depth < 64) {
-		let i = 0;
-		while (i < exts.length) {
-			if (isReceiverMatch(exts[i], cur)) {
-				results.push(exts[i]);
+	let level: (Type | null)[] = [objType];
+	for (let depth = 0; level.length > 0 && depth < 64; depth += 1) {
+		for (const cur of level) {
+			for (const ext of exts) {
+				if (results.indexOf(ext) < 0 && isReceiverMatch(ext, cur)) results.push(ext);
 			}
-			i = i + 1;
 		}
-		if (results.length > 0 || cur == null) return results;
-		cur = classBaseStruct(cur);
-		if (cur == null) return results;
-		depth += 1;
+		if (results.length > 0) return results;
+		level = parentLevel(level);
 	}
 	return results;
 }
@@ -687,33 +682,47 @@ export function declaredKeyHash(registry: ExtensionRegistry, keyType: Type): Sym
 }
 
 export function findFirstMatchingExt(exts: ExtensionMethod[], objType: Type): ExtensionMethod {
-	let cur: Type | null = objType;
-	let depth = 0;
-	while (cur != null && depth < 64) {
+	let level: (Type | null)[] = [objType];
+	for (let depth = 0; level.length > 0 && depth < 64; depth += 1) {
 		let catchAll: ExtensionMethod | null = null;
-		for (const ext of exts) {
-			if (!isReceiverMatch(ext, cur)) continue;
-			if (hasConcreteReceiver(ext)) return ext;
-			if (catchAll == null) catchAll = ext;
+		for (const cur of level) {
+			for (const ext of exts) {
+				if (!isReceiverMatch(ext, cur)) continue;
+				if (hasConcreteReceiver(ext)) return ext;
+				if (catchAll == null) catchAll = ext;
+			}
 		}
 		if (catchAll != null) return catchAll;
-		cur = classBaseStruct(cur);
-		depth += 1;
+		level = parentLevel(level);
 	}
 	return null as unknown as ExtensionMethod;
 }
 
 export function findDeclaredExt(exts: ExtensionMethod[], objType: Type): ExtensionMethod {
-	let cur: Type | null = objType;
-	let depth = 0;
-	while (cur != null && depth < 64) {
-		for (const ext of exts) {
-			if (extDeclaresReceiver(ext, cur) && isReceiverMatch(ext, cur)) return ext;
+	let level: (Type | null)[] = [objType];
+	for (let depth = 0; level.length > 0 && depth < 64; depth += 1) {
+		for (const cur of level) {
+			for (const ext of exts) {
+				if (cur != null && extDeclaresReceiver(ext, cur) && isReceiverMatch(ext, cur)) return ext;
+			}
 		}
-		cur = classBaseStruct(cur);
-		depth += 1;
+		level = parentLevel(level);
 	}
 	return null as unknown as ExtensionMethod;
+}
+
+function parentLevel(level: (Type | null)[]): (Type | null)[] {
+	const parents: (Type | null)[] = [];
+	for (const t of level) {
+		if (t == null) continue;
+		const parent = classBaseStruct(t);
+		if (parent != null) {
+			parents.push(parent);
+			continue;
+		}
+		for (const base of declaredBasesOf(t)) parents.push(base);
+	}
+	return parents;
 }
 
 function classBaseStruct(t: Type): Type | null {

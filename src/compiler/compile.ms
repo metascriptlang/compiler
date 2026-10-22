@@ -1998,7 +1998,7 @@ function hcrTypeLayouts(program: Node | null): HcrTypeLayout[] {
 		if (decl.kind == NodeKind.ClassDecl) name = (decl.data as ClassDeclData).className;
 		else if (decl.kind == NodeKind.InterfaceDecl) name = (decl.data as InterfaceDeclData).interfaceName;
 		else if (decl.kind == NodeKind.StructDecl) name = (decl.data as StructDeclData).interfaceName;
-		if (name == "" || name.startsWith("$") || decl.resolvedSym == null) continue;
+		if (name == "" || decl.resolvedSym == null || hasFlag(decl.resolvedSym, SymbolFlag.Anon)) continue;
 		layouts.push({ name, subject: decl.resolvedSym.symbolType, byValue: decl.kind == NodeKind.StructDecl });
 	}
 	return layouts;

@@ -501,7 +501,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 			}
 		}
 
-		const nilReg = allocRef(s);
+		const nilReg = allocDyn(s);
 		emitLoadConst(s, nilReg, raiserNil());
 		emitRet(s, nilReg);
 
@@ -1655,6 +1655,21 @@ test "trap: unresolved identifier errors at runtime" {
 	assert ctx.lastError.indexOf("cannot evaluate 'mysteryVar'") >= 0;
 }
 
+test "an extern let or const is refused by its name in a bitwise, arithmetic or comparison operand of any width" {
+	const uses = [
+		"extern const K: uint32; function f(m: uint32): boolean { return (m & K) == 0; } return f(5);",
+		"extern const K: int32; function f(m: int32): int32 { return m + K; } return f(5);",
+		"extern const K: float64; function f(m: float64): boolean { return m < K; } return f(5.0);",
+		"extern let K: int32; function f(): int32 { let e: int32 = 0; e = K != 0 ? K : 1; return e; } return f();",
+		"extern const K: uint32; function f(m: uint32): uint32 { return m + K; } return f(5);",
+		"extern const K: float64; function f(m: float64): float64 { return m * K; } return f(5.0);",
+	];
+	for (const use of uses) {
+		const ctx = evalLowered(use);
+		assert ctx.lastError.indexOf("cannot read extern 'K'") >= 0, `${use}: ${ctx.lastError}`;
+	}
+}
+
 test "trap: unsupported node kind errors at runtime" {
 	const ctx = evalRaiser("return match (1) { _ => 2 };");
 	assert ctx.lastError.indexOf("cannot compile node kind") >= 0;
@@ -1681,4 +1696,31 @@ test "update on a member target stores through the object" {
 test "trap: new without constructor errors at runtime" {
 	const ctx = evalRaiser("return new Mystery(1);");
 	assert ctx.lastError.indexOf("no matching constructor") >= 0;
+}
+
+function directCallReturnMismatches(code: string): int32 {
+	const parseResult = parseSource(code);
+	if (!parseResult.ok) {
+		unreachable;
+		return -1;
+	}
+	checkProgram(parseResult.value);
+	const mod = generateRaiser(parseResult.value);
+	let mismatches: int32 = 0;
+	for (const func of mod.functions) {
+		for (const call of func.code) {
+			if ((call.op != RaiserOpcode.Call && call.op != RaiserOpcode.CallDirect) || call.b < 0 || call.b >= mod.functions.length) continue;
+			for (const ret of mod.functions[call.b].code) {
+				if (ret.op == RaiserOpcode.Ret && ((ret.a as int32) & 7) != ((call.a as int32) & 7)) mismatches += 1;
+			}
+		}
+	}
+	return mismatches;
+}
+
+test "every Ret of a direct callee returns the class its call site allocates" {
+	assert directCallReturnMismatches("let n = 0; function bump(): void { n = n + 1; } function early(x: number): void { if (x > 0) return; n = 2; } bump(); early(1); console.log(n);") == 0;
+	assert directCallReturnMismatches("class A { x: number; constructor(x: number) { this.x = x; } } class B extends A { constructor() { super(3); } } console.log(new B().x);") == 0;
+	assert directCallReturnMismatches("class A { x: number = 0; constructor(x: number) { if (x < 0) return; this.x = x; } } class B extends A { constructor() { super(3); } } console.log(new B().x);") == 0;
+	assert directCallReturnMismatches("function n(x: number): number { return x + 1; } function s(): string { return 'a'; } console.log(n(1) + s().length);") == 0;
 }

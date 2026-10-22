@@ -70,6 +70,7 @@ import "./moduleBindingTdz";
 import "./copiedBodyHeader";
 import "./solanaVaultHost";
 import "./externPattern";
+import "./headerSizeof";
 import "./notCallable";
 import "./callResultInPlace";
 import "./websocket";

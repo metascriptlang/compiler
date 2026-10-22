@@ -39,6 +39,7 @@ msString msFsReadFile(msString path) {
 	__int64 sz = _ftelli64(f);
 	if (sz < 0 || _fseeki64(f, 0, SEEK_SET) != 0) { _msFsLastErrno = errno; fclose(f); return MS_EMPTY_STRING; }
 	if (sz == 0) { fclose(f); return MS_EMPTY_STRING; }
+	if (sz > MS_LEN_MAX) { _msFsLastErrno = EFBIG; fclose(f); return MS_EMPTY_STRING; }
 	char* buf = (char*)malloc((size_t)sz + 1);
 	if (!buf) { _msFsLastErrno = ENOMEM; fclose(f); return MS_EMPTY_STRING; }
 	errno = 0;

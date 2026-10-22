@@ -18,7 +18,7 @@ import {
 } from "../../ast/node";
 import { SymSet, createSymSet, symSetAdd, symSetContains } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
-import { forEachChild } from "../../ast/visitor";
+import { forEachChild, initializerHoldsClosure } from "../../ast/visitor";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	ScopeStack, createScopeStack, cloneScopeStack, pushFuncBoundary,
@@ -265,14 +265,12 @@ function detectAllWalk(node: Node | null): void {
 	// Track variable definitions for scope awareness
 	if (node.kind == NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
-		const isSelfRefClosureInit = d.initializer != null
-			&& (d.initializer.kind == NodeKind.ArrowFunction
-				|| d.initializer.kind == NodeKind.FunctionExpr);
-		if (isSelfRefClosureInit) defineVar(_detectAllSS, node.resolvedSym, d.declName);
+		const boundBeforeInitializer = initializerHoldsClosure(d.initializer);
+		if (boundBeforeInitializer) defineVar(_detectAllSS, node.resolvedSym, d.declName);
 		_detectPendingRoutine = routineBindingSym(node);
 		detectAllWalk(d.initializer);
 		_detectPendingRoutine = null;
-		if (!isSelfRefClosureInit) defineVar(_detectAllSS, node.resolvedSym, d.declName);
+		if (!boundBeforeInitializer) defineVar(_detectAllSS, node.resolvedSym, d.declName);
 		return;
 	}
 	// Generic: recurse children via explicit dispatch (avoid deep mapChildren stack)
@@ -446,12 +444,10 @@ function detectPassWalk(node: Node, state: DetectionState, ss: ScopeStack, enclo
 	}
 	if (node.kind == NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
-		const isSelfRefClosureInit = d.initializer != null
-			&& (d.initializer.kind == NodeKind.ArrowFunction
-				|| d.initializer.kind == NodeKind.FunctionExpr);
-		if (isSelfRefClosureInit) defineVar(ss, node.resolvedSym, d.declName);
+		const boundBeforeInitializer = initializerHoldsClosure(d.initializer);
+		if (boundBeforeInitializer) defineVar(ss, node.resolvedSym, d.declName);
 		detectPassWalk(d.initializer, state, ss, enclosingFn);
-		if (!isSelfRefClosureInit) defineVar(ss, node.resolvedSym, d.declName);
+		if (!boundBeforeInitializer) defineVar(ss, node.resolvedSym, d.declName);
 		return;
 	}
 	if (node.kind == NodeKind.BlockStmt) defineLocalRoutines(ss, (node.data as BlockStmtData).statements);

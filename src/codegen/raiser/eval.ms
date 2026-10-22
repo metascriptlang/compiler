@@ -24,7 +24,7 @@ import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction,
 import { RaiserFuncMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
 import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState, globalScope } from "../../checker/symbol";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
-import { lookupModuleCtx, preludeModuleCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
+import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { generateRaiser, appendProgramToImage } from "./rgen";
 import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer, registerMacroEvaluator, registerMacroCompiler, enterEngineCompile, leaveEngineCompile, engineCompiling } from "../../compiler/meta/callbacks";
@@ -184,7 +184,11 @@ function isVmPreludeSym(sym: Symbol): boolean {
 	if (_raiserPreludeBuilding) return false;
 	if (_vmPreludeSyms == null) {
 		const own = new HashSet<Symbol>();
-		for (const s of globalScope(raiserPreludeCtx().table).symbols.values()) addWithOverloads(own, s);
+		const prelude = raiserPreludeCtx();
+		for (const s of globalScope(prelude.table).symbols.values()) addWithOverloads(own, s);
+		for (const path of prelude.ownModules) {
+			for (const s of prelude.preludeModuleScopes.get(path) ?? []) addWithOverloads(own, s);
+		}
 		const exts = raiserPreludeCtx().extensionRegistry;
 		if (exts != null) {
 			for (const e of exts.methods) if (e.sym != null) own.add(e.sym);
@@ -220,7 +224,7 @@ function engineBodyCtx(definingModulePath: string, owner: Symbol | null): Checke
 	if (outer == null || outer.registry == null || outer.graph == null) return null;
 	const mod = findModule(outer.graph, definingModulePath);
 	if (mod == null) return null;
-	if (mod.stdPrelude) return owner != null && isVmPreludeSym(owner) ? raiserPreludeCtx() : null;
+	if (mod.stdPrelude) return owner != null && isVmPreludeSym(owner) ? preludeBodyCtx(raiserPreludeCtx(), definingModulePath) : null;
 	const declCtx = lookupModuleCtx(definingModulePath);
 	if (declCtx == null) return null;
 	const known = _engine.bodyCtxs.get(declCtx);
@@ -586,6 +590,17 @@ test "engine: an as into a narrower literal union stops on a value outside it" {
 		+ " const k: Narrow = r(2) as Narrow; console.log(k); const w: Narrow = r(3) as Narrow; console.log(w);");
 	assert numbers.error.startsWith("invalid union conversion: 3 is not "), numbers.error;
 	assert numbers.output == "2\n", numbers.output;
+}
+
+test "engine: a value of a literal union is a value of its base type, as on C" {
+	const ops = evalOrcVM("type L = 'ab' | 'c'; function cat(x: L, y: L): string { return x + y; } function lt(x: L, y: L): boolean { return x < y; }"
+		+ " console.log(cat('ab', 'c'), lt('c', 'ab'), lt('ab', 'c'));");
+	assert ops.error == "", ops.error;
+	assert ops.output == "abc false true\n", ops.output;
+	const zero = evalOrcVM("type L = 'a' | 'b'; type D = 1 | 2; const ls = new Array<L>(1); const ds = new Array<D>(1);"
+		+ " console.log(`[${ls[0]}] ${ls[0].length} ${ds[0] + 0}`);");
+	assert zero.error == "", zero.error;
+	assert zero.output == "[] 0 0\n", zero.output;
 }
 
 function fieldNames(heap: RaiserObjectHeap, handle: int64): string[] {

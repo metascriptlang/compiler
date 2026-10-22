@@ -25,7 +25,7 @@ import {
 	isValueLayoutType, makeHiddenAddr, makeTryFinally, runtimeRef,
 } from "../util";
 import { voidType, noneType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, getSysType, isStructType, isAtomicRef, instantiateGenericBody, typeDisplayName } from "../../checker/types";
-import { genericParamsOf } from "../../checker/types";
+import { genericParamsOf, literalBase } from "../../checker/types";
 import { ctorRoutineFor } from "../../checker/ctorRoutine";
 
 // msMessage.data[56] holds 7 pointer-sized slots (56 / 8 on 64-bit).
@@ -49,6 +49,7 @@ function typeMsgKind(t: Type | null): string {
 	ensureGIBody(t);
 	if (isValueLayoutType(t)) return "struct";
 	if (t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias) return typeMsgKind(t.typeReturn);
+	if (literalBase(t) != t) return typeMsgKind(literalBase(t));
 	const result = match (t.kind) {
 		TypeKind.String => "string",
 		TypeKind.Array => "array",
@@ -222,7 +223,7 @@ function buildCallProxy(kind: number, params: Symbol[], paramTypes: Type[], retT
 	// Only String needs typed-sized future (msMsgCompleteString writes the
 	// 16-byte payload inline). Struct/Tuple/value-GI returns are heap-boxed
 	// in the dispatch body, so they fit the generic 8-byte msFutureCreate.
-	const isStringReturn = retType != null && retType.kind == TypeKind.String;
+	const isStringReturn = retType != null && literalBase(retType).kind == TypeKind.String;
 	let futCreate: Node;
 	if (isStringReturn) {
 		futCreate = makeCall(runtimeRef("msFutureCreateInline", loc), [], loc);

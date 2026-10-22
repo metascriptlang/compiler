@@ -16,7 +16,10 @@ import { checkFieldDecoratorNames } from "./decoratorHelpers";
 import { getIdentId } from "./idents";
 import { proxyAtExtern } from "./proxy";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim, optionalizeTypeString } from "../utils/string";
-import { findCallTypeArg, createState, isAtEnd } from "../parser/context";
+import { findCallTypeArg, createState, isAtEnd, getParserDefines } from "../parser/context";
+import { definedValue } from "../compiler/defines";
+import { headerTarget } from "../module/loader";
+import { completeStructKey, isCompleteStruct } from "../module/cimport/emit";
 import { getDeclName, staticExtSymOf, fillClass, fillActor, markDeclMethodsExported } from "./collectPass";
 import { isAssignable as isAssignableCheck, isValueStructDecl, sameType } from "./compat";
 import { mintCtorRoutine, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
@@ -114,6 +117,20 @@ function settleForwardTypes(): void {
 // Function.typeNames so downstream consumers (codegen, scope binding, LSP) see
 // clean names. Returns true if the function has a rest param, so callers can
 // adjust minArity in one branch.
+// Rest-ness is the type-level Varargs marker that createFunction installed.
+// AST params still carry the legacy "..." prefix from the parser; strip it
+// in-place so downstream consumers (codegen, suggest, LSP) see clean names.
+function setDeclaredMinArity(fnType: Type, params: string[], defaults: Node[] | null): void {
+	let defCount = 0;
+	if (defaults != null) {
+		for (const def of defaults) {
+			if (def != null) defCount = defCount + 1;
+		}
+	}
+	const hasRestParam = stripRestParamPrefix(params);
+	if (defCount > 0 || hasRestParam) setMinArity(fnType, params.length - defCount - (hasRestParam ? 1 : 0));
+}
+
 function stripRestParamPrefix(params: string[]): boolean {
 	const last = params.length - 1;
 	if (last < 0) return false;
@@ -810,7 +827,82 @@ function utilityType(head: string, args: string[], ctx: CheckerContext, line: in
 	return settleMapped(ctx, evaluateMappedType(mapped), line, col);
 }
 
+enum AnnotationWrap {
+	RefArray,
+	Vec,
+	SizedArray,
+	Promise,
+	Iterator,
+	BitSet,
+	Span,
+	Borrow,
+	Ptr,
+	Cursor,
+	Ref,
+	Arc,
+	Locked,
+	Readonly,
+	Var,
+}
+
+struct AnnotationLayer { wrap: AnnotationWrap; size: int32; inner: string; }
+
+function peelAnnotation(layers: AnnotationLayer[], wrap: AnnotationWrap, inner: string, size: int32): Type | null {
+	layers.push({ wrap: wrap, size: size, inner: inner });
+	return null;
+}
+
+function readonlyAnnotationOf(viewed: Type): Type {
+	if (viewed.kind != TypeKind.GenericParam) return createReadonlyView(viewed);
+	const source = createGenericParam("$source");
+	const mods = (0 as BitSet<MappedModifier>).incl(MappedModifier.KeyOfDeclared).incl(MappedModifier.IncludeReadonly);
+	const key = createGenericParam("$key");
+	const homomorphic = createMappedType(key, createKeyOfType(source), createIndexedAccessType(source, key), null, source, mods);
+	return substituteParams(homomorphic, [source], [viewed]);
+}
+
+function bitSetAnnotationOf(ctx: CheckerContext, elem: Type, line: int32, col: int32): Type {
+	if (!bitSetElementAllowed(elem)) {
+		addError(ctx, "BitSet element must be an enum with ordinal members, got '" + typeDisplayName(elem) + "'", line, col);
+	}
+	return createBitSet(elem);
+}
+
+function wrapAnnotation(layer: AnnotationLayer, inner: Type, ctx: CheckerContext, line: int32, col: int32): Type {
+	return match (layer.wrap) {
+		AnnotationWrap.RefArray => createRef(createArray(inner)),
+		AnnotationWrap.Vec => createArray(inner),
+		AnnotationWrap.SizedArray => createSizedArray(inner, layer.size),
+		AnnotationWrap.Promise => promiseAnnotationOf(ctx, inner, line, col),
+		AnnotationWrap.Iterator => createIterator(inner),
+		AnnotationWrap.BitSet => bitSetAnnotationOf(ctx, inner, line, col),
+		AnnotationWrap.Span => createSpan(inner),
+		AnnotationWrap.Borrow => createBorrow(inner),
+		AnnotationWrap.Ptr => createPtr(inner),
+		AnnotationWrap.Cursor => createCursor(inner),
+		AnnotationWrap.Ref => createRef(inner),
+		AnnotationWrap.Arc => createArc(inner),
+		AnnotationWrap.Locked => createLocked(inner),
+		AnnotationWrap.Readonly => readonlyAnnotationOf(inner),
+		AnnotationWrap.Var => createVar(inner),
+	};
+}
+
 export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32, col: int32): Type {
+	const layers: AnnotationLayer[] = [];
+	let next = text;
+	while (true) {
+		const resolved = resolveLayer(next, ctx, line, col, layers);
+		if (resolved != null) {
+			let t: Type = resolved;
+			for (let i = layers.length - 1; i >= 0; i -= 1) t = wrapAnnotation(layers[i], t, ctx, line, col);
+			return t;
+		}
+		next = layers[layers.length - 1].inner;
+	}
+}
+
+function resolveLayer(text: string, ctx: CheckerContext, line: int32, col: int32, layers: AnnotationLayer[]): Type | null {
 	let trimmed = text.trim();
 	if (trimmed == "") return inferredType();
 	// Strip outer parens that wrap the entire expression (not function type form `(...) => ...`).
@@ -1120,23 +1212,19 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 	// Check for array suffix [] or [ ] (token-joined form from captureOptionalType)
 	if (trimmed.endsWith("[ ]")) {
 		const inner = trimmed.slice(0, trimmed.length - 3).trim();
-		return createRef(createArray(resolveAnnotation(inner, ctx, line, col)));
+		return peelAnnotation(layers, AnnotationWrap.RefArray, inner, 0);
 	}
 	if (trimmed.endsWith("[]")) {
 		const inner = trimmed.slice(0, trimmed.length - 2);
-		return createRef(createArray(resolveAnnotation(inner, ctx, line, col)));
+		return peelAnnotation(layers, AnnotationWrap.RefArray, inner, 0);
 	}
 	if (trimmed.endsWith("]")) {
 		const openBracket = findChar(trimmed, "[");
 		if (openBracket > 0) {
 			const inner = trimmed.slice(0, openBracket).trim();
 			const sizeStr = trimmed.slice(openBracket + 1, trimmed.length - 1).trim();
-			if (sizeStr == "" || sizeStr == " ") {
-				return createRef(createArray(resolveAnnotation(inner, ctx, line, col)));
-			}
-			if (isAllDigits(sizeStr)) {
-				return createSizedArray(resolveAnnotation(inner, ctx, line, col), parseIntStr(sizeStr));
-			}
+			if (sizeStr == "" || sizeStr == " ") return peelAnnotation(layers, AnnotationWrap.RefArray, inner, 0);
+			if (isAllDigits(sizeStr)) return peelAnnotation(layers, AnnotationWrap.SizedArray, inner, parseIntStr(sizeStr));
 
 			const dim = constArrayDimension(sizeStr, ctx, line, col);
 			if (dim < 0) {
@@ -1146,9 +1234,9 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 					addError(ctx, `array size '${sizeStr}' must be a compile-time integer constant`, line, col);
 					return errorType();
 				}
-				return createSizedArray(resolveAnnotation(inner, ctx, line, col), 0);
+				return peelAnnotation(layers, AnnotationWrap.SizedArray, inner, 0);
 			}
-			return createSizedArray(resolveAnnotation(inner, ctx, line, col), dim);
+			return peelAnnotation(layers, AnnotationWrap.SizedArray, inner, dim);
 		}
 	}
 
@@ -1166,58 +1254,48 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: int32
 			return createResult(resolveAnnotation(args[0], ctx, line, col), resolveAnnotation(args[1], ctx, line, col));
 		}
 		if (builtinHead == "Promise" && args.length == 1) {
-			return promiseAnnotationOf(ctx, resolveAnnotation(args[0], ctx, line, col), line, col);
+			return peelAnnotation(layers, AnnotationWrap.Promise, args[0], 0);
 		}
 		if (builtinHead == "Iterator" && args.length == 1) {
-			return createIterator(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Iterator, args[0], 0);
 		}
 		if (builtinHead == "Array" && args.length == 1) {
-			return createRef(createArray(resolveAnnotation(args[0], ctx, line, col)));
+			return peelAnnotation(layers, AnnotationWrap.RefArray, args[0], 0);
 		}
 		if (builtinHead == "Vec" && args.length == 1) {
-			return createArray(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Vec, args[0], 0);
 		}
 		if (builtinHead == "BitSet" && args.length == 1) {
-			const elem = resolveAnnotation(args[0], ctx, line, col);
-			if (!bitSetElementAllowed(elem)) {
-				addError(ctx, "BitSet element must be an enum with ordinal members, got '" + typeDisplayName(elem) + "'", line, col);
-			}
-			return createBitSet(elem);
+			return peelAnnotation(layers, AnnotationWrap.BitSet, args[0], 0);
 		}
 		if (builtinHead == "Span" && args.length == 1) {
-			return createSpan(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Span, args[0], 0);
 		}
 		if (builtinHead == "Borrow" && args.length == 1) {
-			return createBorrow(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Borrow, args[0], 0);
 		}
 		if (builtinHead == "Ptr" && args.length == 1) {
-			return createPtr(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Ptr, args[0], 0);
 		}
 		if (builtinHead == "Cursor" && args.length == 1) {
-			return createCursor(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Cursor, args[0], 0);
 		}
 		if (builtinHead == "Ref" && args.length == 1) {
-			return createRef(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Ref, args[0], 0);
 		}
 		if (builtinHead == "Arc" && args.length == 1) {
-			return createArc(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Arc, args[0], 0);
 		}
 		if (builtinHead == "Locked" && args.length == 1) {
-			return createLocked(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Locked, args[0], 0);
 		}
 		if (builtinHead == "Readonly" && args.length == 1) {
-			const viewed = resolveAnnotation(args[0], ctx, line, col);
-			if (viewed.kind != TypeKind.GenericParam) return createReadonlyView(viewed);
-			const source = createGenericParam("$source");
-			const mods = (0 as BitSet<MappedModifier>).incl(MappedModifier.KeyOfDeclared).incl(MappedModifier.IncludeReadonly);
-			const key = createGenericParam("$key");
-			const homomorphic = createMappedType(key, createKeyOfType(source), createIndexedAccessType(source, key), null, source, mods);
-			return substituteParams(homomorphic, [source], [viewed]);
+			return peelAnnotation(layers, AnnotationWrap.Readonly, args[0], 0);
 		}
 		const utility = utilityType(builtinHead, args, ctx, line, col);
 		if (utility != null) return utility;
 		if (builtinHead == "Var" && args.length == 1) {
-			return createVar(resolveAnnotation(args[0], ctx, line, col));
+			return peelAnnotation(layers, AnnotationWrap.Var, args[0], 0);
 		}
 		// Generic interface/class resolution (Map, Set, user-defined generics)
 		const genericSym = lookupTypeSym(ctx, writtenName);
@@ -2035,21 +2113,7 @@ export function resolveFunction(ctx: CheckerContext, node: Node): void {
 	const proxySpot = d.fnFlags.indexOf("extern", 0) >= 0 ? proxyAtExtern(ctx, paramTypes, returnType) : "";
 	if (proxySpot != "") addError(ctx, "extern '" + d.fnName + "' " + proxySpot + ": a Proxy crosses into foreign code, which reads it without its traps — " + (proxySpot == "return type" ? "return the target and wrap it here" : "pass proxyTarget(p)"), node.location.line, node.location.column);
 
-	// Set minArity for functions with default parameters (Reference parity: count non-null defaults)
-	let defCount = 0;
-	if (d.fnDefaults != null) {
-		for (const def of d.fnDefaults) {
-			if (def != null) defCount = defCount + 1;
-		}
-	}
-	// Rest-ness is the type-level Varargs marker that createFunction installed.
-	// AST params still carry the legacy "..." prefix from the parser; strip it
-	// in-place so downstream consumers (codegen, suggest, LSP) see clean names.
-	const hasRestParam = stripRestParamPrefix(d.params);
-	if (defCount > 0 || hasRestParam) {
-		const restReduction = hasRestParam ? 1 : 0;
-		setMinArity(fnType, d.params.length - defCount - restReduction);
-	}
+	setDeclaredMinArity(fnType, d.params, d.fnDefaults);
 
 	if (genericNames.length > 0) {
 		closeScope(ctx.table);
@@ -2420,6 +2484,7 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 	target.typeNames = mergedNames;
 	target.typeChildren = mergedTypes;
 	target.typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.IsStruct);
+	if (hasFlag(sym, SymbolFlag.ImportC) && translatedComplete(sym.nativeName, d)) target.typeFlags = target.typeFlags.incl(TypeFlag.CompleteStruct);
 	for (const name of d.interfaceOptionalFields) optionalFields.push(name);
 	target.optionalFields = optionalFields.length > 0 ? optionalFields : null;
 	if (sym.symbolType.kind == TypeKind.Struct && parentTypes.length == 1 && isValueStructDecl(parentTypes[0])) target.typeExtra = parentTypes[0];
@@ -2442,6 +2507,12 @@ export function resolveInterface(ctx: CheckerContext, node: Node): void {
 		}
 		sgRecordSym(ctx, fieldLine, fieldCol, fieldCol + d.interfaceFields[ri].length, fieldSym, fieldTypes[ri], SymbolKind.Property, d.interfaceFields[ri], d.interfaceName, true);
 	}
+}
+
+function translatedComplete(cName: string, d: InterfaceDeclData): boolean {
+	if (d.interfaceFields.length == 0 || definedValue(getParserDefines(), "backend") != "c") return false;
+	const t = headerTarget();
+	return t != null && isCompleteStruct(completeStructKey(`${t.os}-${t.cpu}`, cName, d.interfaceFields, d.interfaceFieldTypes));
 }
 
 function refuseValueRecursion(ctx: CheckerContext, node: Node, self: Type, d: InterfaceDeclData): void {
@@ -2878,7 +2949,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				refuseHookSignature(ctx, md.methodName, md.nameLocation, paramTypes, md.methodReturnType != "" ? returnType : null);
 			}
 			const fnType = createFunction(paramTypes, md.methodParams, returnType);
-			stripRestParamPrefix(md.methodParams);
+			setDeclaredMinArity(fnType, md.methodParams, md.methodDefaults);
 			// Use resolvedSym set by collectClassMethod — avoids overload ambiguity with lookupSymbol
 			// DecoratedDecl wraps MethodDecl — resolvedSym is on the inner node
 			const methodSym = member.resolvedSym != null ? member.resolvedSym : d.classBody[mi].resolvedSym;
@@ -3090,7 +3161,7 @@ export function resolveActor(ctx: CheckerContext, node: Node): void {
 				closeScope(ctx.table);
 			}
 			const fnType = createFunction(paramTypes, md.methodParams, returnType);
-			stripRestParamPrefix(md.methodParams);
+			setDeclaredMinArity(fnType, md.methodParams, md.methodDefaults);
 			const methodSym = member.resolvedSym != null ? member.resolvedSym : d.actorBody[mi].resolvedSym;
 			if (methodSym != null && methodSym.symbolType != null && methodSym.symbolType.typeName != "") {
 				fnType.typeName = methodSym.symbolType.typeName;

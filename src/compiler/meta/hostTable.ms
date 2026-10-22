@@ -50,6 +50,7 @@ import {
 import {
 	unboxString, unboxInt, unboxFloat,
 	boxString, boxInt, boxFloat, boxBool,
+	RaiserHostValue, hostValue, hostObject, hostArray, copyToVm, copyToHost,
 } from "../../raiser/marshal";
 import { isNodeWireMetaField } from "./wire";
 import { wireLiteralIsFloat, wireLiteralInteger, wireLiteralIntegerRefusal, wireLiteralFloat, boundTypeOfObject, boundSymOfObject } from "./bridge";
@@ -59,8 +60,9 @@ import { distinctNumericBase, enumMemberValue } from "../../checker/types";
 
 import {
 	exists, isFile, isDir, isExecutable, fileSize, modifiedTime, realpath,
-	readFile, writeFile, appendFile, chmod,
+	readFile, writeFile, appendFile, chmod, changeStamp,
 	mkdir, rmdir, remove, rename, symlink, readDir,
+	ensureDir, removeAll, readLines, writeLines, copyFile,
 } from "std/fs";
 import { cwd, platform, arch, env, exec, argv, execFile, execFileResult } from "std/process";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
@@ -69,7 +71,7 @@ import { fromCodePoint } from "std/core/string";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join, resolve } from "std/fs/path";
 import { registerCompileTimeRead } from "../cache";
-import { IoErrorKind } from "std/io/errors";
+import { IoError, IoErrorKind } from "std/io/errors";
 import { ProcessErrorKind } from "std/process/errors";
 import "std/compress/zip";
 import "std/crypto";
@@ -102,6 +104,138 @@ function _fsResultToInt(ok: boolean, errKind: IoErrorKind): RaiserValue {
 	if (ok) { _lastFsErrno = 0; return boxInt(1); }
 	_setFsErrno(errKind);
 	return boxInt(0);
+}
+
+// --- Std routines the VM runs through their host implementation ---
+
+function _vmIoError(e: IoError): RaiserHostValue {
+	return hostObject(["kind", "path", "message"], [hostValue(boxInt(e.kind as number)), hostValue(boxString(e.path)), hostValue(boxString(e.message))]);
+}
+
+function _toVm(v: RaiserHostValue): RaiserValue {
+	const arrays = activeHostArrayHeap();
+	const objects = activeHostObjectHeap();
+	if (arrays == null || objects == null) throw new Error("internal: a std routine callback ran with no active VM heaps");
+	return copyToVm(arrays, objects, v);
+}
+
+function _vmFailure(e: IoError): RaiserHostValue {
+	return hostObject(["ok", "error"], [hostValue(boxBool(false)), _vmIoError(e)]);
+}
+
+function _vmSuccess(value: RaiserHostValue): RaiserHostValue {
+	return hostObject(["ok", "value"], [hostValue(boxBool(true)), value]);
+}
+
+function _vmStrings(items: string[]): RaiserHostValue {
+	return hostArray(items.map((item: string): RaiserHostValue => hostValue(boxString(item))));
+}
+
+function _vmVoidResult(r: Result<void, IoError>): RaiserValue {
+	return _toVm(r.ok ? hostObject(["ok"], [hostValue(boxBool(true))]) : _vmFailure(r.error));
+}
+
+function _vmStringResult(r: Result<string, IoError>): RaiserValue {
+	return _toVm(r.ok ? _vmSuccess(hostValue(boxString(r.value))) : _vmFailure(r.error));
+}
+
+function _vmStringsResult(r: Result<string[], IoError>): RaiserValue {
+	return _toVm(r.ok ? _vmSuccess(_vmStrings(r.value)) : _vmFailure(r.error));
+}
+
+function _hostStrings(v: RaiserValue): string[] {
+	const arrays = activeHostArrayHeap();
+	const objects = activeHostObjectHeap();
+	if (arrays == null || objects == null) throw new Error("internal: a std routine callback ran with no active VM heaps");
+	const items = copyToHost(arrays, objects, v);
+	const result: string[] = [];
+	for (let i: int32 = 0; i < items.length(); i += 1) result.push(items.at(i).text());
+	return result;
+}
+
+function _readForBuild(path: string): string {
+	registerCompileTimeRead(resolve(path, cwd()));
+	return path;
+}
+
+function _stdFsReadFile(args: RaiserValue[]): RaiserValue {
+	return _vmStringResult(readFile(_readForBuild(unboxString(args[0]))));
+}
+
+function _stdFsReadLines(args: RaiserValue[]): RaiserValue {
+	return _vmStringsResult(readLines(_readForBuild(unboxString(args[0]))));
+}
+
+function _stdFsReadDir(args: RaiserValue[]): RaiserValue {
+	return _toVm(_vmStrings(readDir(unboxString(args[0]))));
+}
+
+function _stdFsWriteFile(args: RaiserValue[]): RaiserValue {
+	return _vmVoidResult(writeFile(unboxString(args[0]), unboxString(args[1])));
+}
+
+function _stdFsAppendFile(args: RaiserValue[]): RaiserValue {
+	return _vmVoidResult(appendFile(unboxString(args[0]), unboxString(args[1])));
+}
+
+function _stdFsWriteLines(args: RaiserValue[]): RaiserValue {
+	return _vmVoidResult(writeLines(unboxString(args[0]), _hostStrings(args[1])));
+}
+
+function _stdFsCopyFile(args: RaiserValue[]): RaiserValue {
+	return _vmVoidResult(copyFile(_readForBuild(unboxString(args[0])), unboxString(args[1])));
+}
+
+function _stdFsChmod(args: RaiserValue[]): RaiserValue {
+	return _vmVoidResult(chmod(unboxString(args[0]), unboxInt(args[1]) as int32));
+}
+
+function _stdFsMkdir(args: RaiserValue[]): RaiserValue {
+	return _vmVoidResult(mkdir(unboxString(args[0])));
+}
+
+function _stdFsEnsureDir(args: RaiserValue[]): RaiserValue {
+	return _vmVoidResult(ensureDir(unboxString(args[0])));
+}
+
+function _stdFsRmdir(args: RaiserValue[]): RaiserValue {
+	return _vmVoidResult(rmdir(unboxString(args[0])));
+}
+
+function _stdFsRemove(args: RaiserValue[]): RaiserValue {
+	return _vmVoidResult(remove(unboxString(args[0])));
+}
+
+function _stdFsRemoveAll(args: RaiserValue[]): RaiserValue {
+	return _vmVoidResult(removeAll(unboxString(args[0])));
+}
+
+function _stdFsRename(args: RaiserValue[]): RaiserValue {
+	return _vmVoidResult(rename(unboxString(args[0]), unboxString(args[1])));
+}
+
+function _stdFsSymlink(args: RaiserValue[]): RaiserValue {
+	return _vmVoidResult(symlink(unboxString(args[0]), unboxString(args[1])));
+}
+
+function _stdFsExists(args: RaiserValue[]): RaiserValue {
+	return boxBool(exists(unboxString(args[0])));
+}
+
+function _stdFsIsFile(args: RaiserValue[]): RaiserValue {
+	return boxBool(isFile(unboxString(args[0])));
+}
+
+function _stdFsIsDir(args: RaiserValue[]): RaiserValue {
+	return boxBool(isDir(unboxString(args[0])));
+}
+
+function _stdFsIsExecutable(args: RaiserValue[]): RaiserValue {
+	return boxBool(isExecutable(unboxString(args[0])));
+}
+
+function _stdFsRealpath(args: RaiserValue[]): RaiserValue {
+	return boxString(realpath(unboxString(args[0])));
 }
 
 // --- File system bridges ---
@@ -137,6 +271,10 @@ function _bridgeMsFsModifiedTime(args: RaiserValue[]): RaiserValue {
 function _bridgeMsFsChmod(args: RaiserValue[]): RaiserValue {
 	const r = chmod(unboxString(args[0]), unboxInt(args[1]) as int32);
 	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
+}
+
+function _bridgeMsFsChangeStamp(args: RaiserValue[]): RaiserValue {
+	return boxString(changeStamp(unboxString(args[0])));
 }
 
 function _bridgeMsFsReadFile(args: RaiserValue[]): RaiserValue {
@@ -1084,6 +1222,27 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msFsReadFile",       _bridgeMsFsReadFile, HostCapability.FileRead);
 	registerHostFn("msFsLastErrno",      _bridgeMsFsLastErrno, HostCapability.FileRead);
 	registerHostFn("msFsWriteFileMode",  _bridgeMsFsWriteFileMode);
+	registerHostFn("msFsChangeStamp",    _bridgeMsFsChangeStamp, HostCapability.FileRead);
+	registerHostFn("std/fs.readFile",    _stdFsReadFile, HostCapability.FileRead);
+	registerHostFn("std/fs.readLines",   _stdFsReadLines, HostCapability.FileRead);
+	registerHostFn("std/fs.readDir",     _stdFsReadDir, HostCapability.FileRead);
+	registerHostFn("std/fs.exists",      _stdFsExists, HostCapability.FileRead);
+	registerHostFn("std/fs.isFile",      _stdFsIsFile, HostCapability.FileRead);
+	registerHostFn("std/fs.isDir",       _stdFsIsDir, HostCapability.FileRead);
+	registerHostFn("std/fs.isExecutable", _stdFsIsExecutable, HostCapability.FileRead);
+	registerHostFn("std/fs.realpath",    _stdFsRealpath, HostCapability.FileRead);
+	registerHostFn("std/fs.writeFile",   _stdFsWriteFile);
+	registerHostFn("std/fs.appendFile",  _stdFsAppendFile);
+	registerHostFn("std/fs.writeLines",  _stdFsWriteLines);
+	registerHostFn("std/fs.copyFile",    _stdFsCopyFile);
+	registerHostFn("std/fs.chmod",       _stdFsChmod);
+	registerHostFn("std/fs.mkdir",       _stdFsMkdir);
+	registerHostFn("std/fs.ensureDir",   _stdFsEnsureDir);
+	registerHostFn("std/fs.rmdir",       _stdFsRmdir);
+	registerHostFn("std/fs.remove",      _stdFsRemove);
+	registerHostFn("std/fs.removeAll",   _stdFsRemoveAll);
+	registerHostFn("std/fs.rename",      _stdFsRename);
+	registerHostFn("std/fs.symlink",     _stdFsSymlink);
 	registerHostFn("msFsChmod",          _bridgeMsFsChmod);
 	registerHostFn("msFsMkdir",          _bridgeMsFsMkdir);
 	registerHostFn("msFsRmdir",          _bridgeMsFsRmdir);

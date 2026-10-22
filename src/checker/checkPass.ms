@@ -37,18 +37,18 @@ import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { checkViewBorrows } from "./varPartitions";
 import { checkPointerEscapes } from "./pointerAddress";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
-import { checkExpr, checkComptimeStmt, refuseFallingOffEnd, awaitReturnedPromise, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, jsxComponentSym, returnsFromAsyncBody } from "./checkExprPass";
+import { checkExpr, checkComptimeStmt, refuseFallingOffEnd, awaitReturnedPromise, refuseGeneratorReturnValue, checkBareReturn, giveBareReturnsNull, refuseReturnedPromise, readIsDeferred, usedBeforeDeclaration, enterOwnInitializer, exitOwnInitializer, jsxComponentSym, returnsFromAsyncBody } from "./checkExprPass";
 import { resolveBorrow, checkEnumExhaustiveness, checkDuplicatePatterns, engineIsCompileErrorSentinel, engineReturnMarshalsToNode, estimateExprEndCol, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, rewriteCallAsMacroInvocation, stampCallSite, spliceEndsInValue, unwrapSpliceManyAtExpr, hoistedPrefixSyms, bindRefsTo, coversEveryLiteral, mustCoverEveryValue, reportUncoveredMatch, checkPropagatedErrorAgainst, invokedMacroSym, isDirectiveInvocation, macroDeclOf, markNamesUsed, adoptExpansionResult, foldUserOperatorConstant, typeTraitOf, takeDefaultArgTemps, refusesTypeArm, refuseUnwrittenOut, awaitReturnedThenable, raisedOperand } from "./callResolve";
 import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
-import { convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, comparedUnion, widenToSlotUnion } from "./fit";
+import { convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, projectNarrowedRead, comparedUnion, widenToSlotUnion } from "./fit";
 import { checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerCheckLocalInstance, registerDemandReturn, registerDemandBinding, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { isLetter, isAlphanumeric } from "../lexer/chars";
-import { forEachChild } from "../ast/visitor";
+import { forEachChild, literalHeldClosures } from "../ast/visitor";
 import { reportConverterCycles } from "./converterCycle";
 import { parseSource } from "../parser/statements/validation";
 import { BreakState, InitTracker, createInitTracker, markInitialized, saveInitState, restoreInitState, breaksBlock, mergeInitBranches, collectNewInits, isAlwaysTrue, varDecl, isOutParamName } from "./initTracker";
@@ -755,6 +755,17 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 			typedBySignature = true;
 		}
 	}
+	const heldClosures: Node[] = [];
+	if (preRegisteredSelfRefSym == null && d.initializer != null
+			&& (d.initializer.kind == NodeKind.ObjectLiteral || d.initializer.kind == NodeKind.ArrayLiteral)
+			&& lookupLocal(ctx.table, d.declName) == null) {
+		literalHeldClosures(d.initializer, heldClosures);
+		if (heldClosures.length > 0) {
+			const ownSym = declSymbol(ctx, node, d.declName, SymbolKind.Variable, declType ?? inferredType(), d.declKind != DeclKind.Const);
+			defineOrError(ctx, ownSym, node);
+			enterOwnInitializer(ctx, ownSym, heldClosures, declType != null);
+		}
+	}
 	const forward = lookupLocal(ctx.table, d.declName);
 	const forwardLocal = forward != null && forward.declNode == node && _forwardLocals.has(forward) ? forward : null;
 	const binding = forward != null && forward.declNode == node && hasFlag(forward, SymbolFlag.Global) ? forward : null;
@@ -764,12 +775,13 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	if (typing != null) _routinesInFlight.push(typing);
 	checkExpr(ctx, d.initializer, declType);
 	if (typing != null) _routinesInFlight.pop();
+	if (heldClosures.length > 0) exitOwnInitializer();
 	if (forwardLocal != null) _forwardLocals.delete(forwardLocal);
 	if (ctx.targetOs == "solana" && d.declKind == DeclKind.Const && d.initializer != null
 			&& (ctx.table.current.scopeKind == ScopeKind.Module || ctx.table.current.scopeKind == ScopeKind.Global)) {
 		foldUserOperatorConstant(ctx, d.initializer, declType);
 	}
-	if (declType == null && d.initializer != null) d.initializer = widenNumberLiteral(d.initializer);
+	if (declType == null && d.initializer != null) d.initializer = projectNarrowedRead(d.initializer);
 	const initType = declType == null && d.initializer != null && d.initializer.nodeType != null
 		? storedTypeOfNullRead(d.initializer, d.initializer.nodeType, d.initializer.nodeType)
 		: d.initializer != null ? d.initializer.nodeType : null;
@@ -3646,6 +3658,7 @@ function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: stri
 			loadPreludeSubModules(ctx, pr.value, resolvedPath, stdPath, backendExt);
 			ctx.interf = [];
 			ctx.interfSet = new HashSet<Symbol>();
+			openScope(ctx.table, ScopeKind.Module);
 			runThreePasses(ctx, pr.value);
 			ctx.preludeInterf.set(stdSpecifier, ctx.interf);
 			for (const exported of ctx.interf) ctx.preludeExports.add(exported);
@@ -3664,6 +3677,28 @@ function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: stri
 					ensureShaped(ov, ctx);
 				}
 			}
+			ctx.preludeModuleScopes.set(resolvedPath, moduleScopeSymbols(ctx.table));
+			closeScope(ctx.table);
+			publishPreludeModuleExports(ctx, scope);
+		}
+	}
+}
+
+function publishPreludeModuleExports(ctx: CheckerContext, moduleScope: Scope): void {
+	const global = ctx.table.current;
+	for (const entry of moduleScope.symbols.entries) {
+		const sym = entry.value;
+		if (!isExportedBy(ctx, sym)) continue;
+		const existing = global.symbols.get(entry.key);
+		if (existing == null) {
+			global.symbols.set(entry.key, sym);
+		} else if (existing != sym && existing.symbolKind == SymbolKind.Function && sym.symbolKind == SymbolKind.Function) {
+			for (const ov of [sym, ...sym.overloads]) {
+				if (ov != existing && !existing.overloads.includes(ov)) existing.overloads.push(ov);
+			}
+		} else if (existing != sym) {
+			const at = sym.declNode != null ? sym.declNode.location : null;
+			addError(ctx, `Duplicate symbol '${sym.name}' exported by two prelude modules`, at != null ? at.line : 0, at != null ? at.column : 0);
 		}
 	}
 }
@@ -4180,7 +4215,7 @@ function preludeModulePaths(prelude: CheckerContext): HashSet<string> {
 		const members = prelude.preludeInterf.get(specifier);
 		if (members == null) continue;
 		for (const sym of members) {
-			if (sym.modulePath != "" && !prelude.preludeModuleScopes.has(sym.modulePath)) owned.add(sym.modulePath);
+			if (sym.modulePath != "" && (prelude.ownModules.has(sym.modulePath) || !prelude.preludeModuleScopes.has(sym.modulePath))) owned.add(sym.modulePath);
 		}
 	}
 	return owned;
@@ -6299,6 +6334,27 @@ test "a prelude module that imports an earlier prelude module checks it once" {
 		["math", "import { DAY } from \"../date\";\nexport class Math {}\nexport function days(t: number): number { return t / DAY; }\n"],
 	]);
 	assert ctx.errors.length == 0, ctx.errors.length > 0 ? ctx.errors[0].message : "";
-	assert ctx.preludeModuleScopes.size == 0;
+	for (const path of ctx.preludeModuleScopes.keys()) assert ctx.ownModules.has(path), path;
 	assert preludeExports(ctx, "DAY") && preludeExports(ctx, "days");
+}
+
+test "a prelude checked from source reports no errors" {
+	const ctx = checkPreludeFromSource(join(resolveRuntimeDir(), "std"), ".cms");
+	assert ctx.errors.length == 0, ctx.errors.length > 0 ? `${ctx.errors[0].line}:${ctx.errors[0].column} ${ctx.errors[0].message}` : "";
+}
+
+test "a prelude module's unexported declaration resolves only inside that module, whatever another prelude module declares under its name" {
+	const ctx = preludeOfModules("private", [
+		["date", "function pick(): string { return \"d\"; }\nextern function msPick(x: int32): int32;\nexport function fromDate(): string { return pick(); }\nexport function rawDate(): int32 { return msPick(1); }\n"],
+		["math", "function pick(): number { return 1.0; }\nextern function msPick(x: int32): number;\nexport function fromMath(): number { return pick(); }\nexport function rawMath(): number { return msPick(1); }\n"],
+		["number", "function pick(): boolean { return true; }\nexport function fromNumber(): boolean { return pick(); }\n"],
+	]);
+	assert ctx.errors.length == 0, ctx.errors.length > 0 ? ctx.errors[0].message : "";
+	assert preludeExports(ctx, "fromDate") && preludeExports(ctx, "fromMath") && preludeExports(ctx, "fromNumber");
+	assert lookupSymbol(ctx.table, "pick") == null && lookupSymbol(ctx.table, "msPick") == null;
+	const outside = preludeOfModules("outside", [
+		["date", "function pick(): string { return \"d\"; }\nexport function fromDate(): string { return pick(); }\n"],
+		["math", "export function fromMath(): string { return pick(); }\n"],
+	]);
+	assert outside.errors.length == 1 && outside.errors[0].message.includes("pick"), outside.errors.length > 0 ? outside.errors[0].message : "";
 }

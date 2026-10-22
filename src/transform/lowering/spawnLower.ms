@@ -6,14 +6,14 @@
 // C runtime can store them as void* in msFuture.value.
 
 import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ObjectLiteralData, Type, TypeKind, createNode } from "../../ast/node";
-import { createFunction, createPtr, voidType, isAwaitable, awaitedType } from "../../checker/types";
+import { createFunction, createPtr, voidType, isAwaitable, awaitedType, literalBase } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeNull, makeObjectLiteral, syntheticToken, runtimeRef, isRuntimeProcSym, boxedInFuture } from "../util";
 
 function needsBoxing(t: Type): boolean {
 	if (t == null) return false;
-	return match (t.kind) {
+	return match (literalBase(t).kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => true,
 		TypeKind.Boolean => true,
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
@@ -26,7 +26,7 @@ function needsBoxing(t: Type): boolean {
 // Build the boxing call for a given type (doesn't rely on retVal.nodeType)
 export function boxForType(retVal: Node, retType: Type, loc: SourceLocation): Node {
 	if (retVal == null || retType == null) return retVal;
-	return match (retType.kind) {
+	return match (literalBase(retType).kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => makeCall(runtimeRef("msBoxDouble", loc), [retVal], loc),
 		TypeKind.Boolean => makeCall(runtimeRef("msBoxBool", loc), [retVal], loc),
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32

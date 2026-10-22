@@ -2366,8 +2366,8 @@ export function isPlainObjectType(t: Type | null): boolean {
 	if (s.kind == TypeKind.Distinct) return isPlainObjectType(s.typeReturn);
 	if (isArrayShaped(s) || s.kind == TypeKind.Tuple) return true;
 	const held = s.kind == TypeKind.Ref && s.typeReturn != null ? s.typeReturn : s;
-	if (held.kind == TypeKind.GenericInstance && (held.typeName == "Proxy" || distinctBody(held) != null)) {
-		return held.typeName != "Proxy" && isPlainObjectType(distinctBody(held));
+	if (held.kind == TypeKind.GenericInstance && distinctBody(held) != null) {
+		return getBuiltinKind(held.typeExtra) != "Proxy" && isPlainObjectType(distinctBody(held));
 	}
 	if (held.kind == TypeKind.Ptr || runtimeClassSym(held) != null) return false;
 	const body = peelToStructOrUnion(held);
@@ -3625,16 +3625,29 @@ export function classParentOf(t: Type | null): Type | null {
 	if (s.kind == TypeKind.GenericInstance) {
 		const cls = genericInstanceClass(s);
 		if (cls == null || cls.kind != TypeKind.Struct || cls.typeExtra == null) return null;
-		const names = splitTopLevel(genericParamsOf(s), ",");
-		if (names.length == 0 || names.length > s.typeChildren.length) return cls.typeExtra;
-		const args: Type[] = [];
-		for (let i = 0; i < names.length; i += 1) {
-			names[i] = names[i].trim();
-			args.push(s.typeChildren[i]);
-		}
-		return substituteParams(cls.typeExtra, declaredParamsOf(s, names.length), args);
+		return inInstance(s, cls.typeExtra);
 	}
 	return s.kind == TypeKind.Struct ? s.typeExtra : null;
+}
+
+function inInstance(instance: Type, declared: Type): Type {
+	const names = splitTopLevel(genericParamsOf(instance), ",");
+	if (names.length == 0 || names.length > instance.typeChildren.length) return declared;
+	return substituteParams(declared, declaredParamsOf(instance, names.length), instance.typeChildren.slice(0, names.length));
+}
+
+export function declaredBasesOf(t: Type | null): Type[] {
+	if (t == null) return [];
+	const s = t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
+	const body = s.kind == TypeKind.GenericInstance ? genericInstanceClass(s) : s;
+	const decl = body != null && body.sym != null ? body.sym.declNode : null;
+	if (decl == null || decl.baseExprs == null) return [];
+	const bases: Type[] = [];
+	for (const base of decl.baseExprs) {
+		if (base.nodeType == null || isUnresolvedType(base.nodeType) || base.nodeType.kind == TypeKind.Error) continue;
+		bases.push(s.kind == TypeKind.GenericInstance ? inInstance(s, base.nodeType) : base.nodeType);
+	}
+	return bases;
 }
 
 export function classAncestorInstance(t: Type | null, target: Type): Type | null {
@@ -3647,6 +3660,24 @@ export function classAncestorInstance(t: Type | null, target: Type): Type | null
 		const cls = body.kind == TypeKind.GenericInstance ? genericInstanceClass(body) : body;
 		if (cls != null && cls.sym == tgtClass.sym && (body.kind == TypeKind.GenericInstance) == (tgt.kind == TypeKind.GenericInstance)) return body;
 		cur = classParentOf(body);
+	}
+	return null;
+}
+
+export function declaredAncestorInstance(t: Type | null, target: Type): Type | null {
+	const tgt = target.kind == TypeKind.Ref && target.typeReturn != null ? target.typeReturn : target;
+	const origin = tgt.kind == TypeKind.GenericInstance ? genericInstanceClass(tgt) : null;
+	if (origin == null || origin.sym == null) return null;
+	let level = declaredBasesOf(t);
+	for (let depth = 0; level.length > 0 && depth < PEEL_MAX_DEPTH; depth += 1) {
+		const next: Type[] = [];
+		for (const cur of level) {
+			const body = cur.kind == TypeKind.Ref && cur.typeReturn != null ? cur.typeReturn : cur;
+			const base = body.kind == TypeKind.GenericInstance ? genericInstanceClass(body) : null;
+			if (base != null && base.sym == origin.sym) return body;
+			for (const parent of declaredBasesOf(body)) next.push(parent);
+		}
+		level = next;
 	}
 	return null;
 }
@@ -4389,7 +4420,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 				unifyType(formal, aliased, bindings);
 				return;
 			}
-			const ancestor = classAncestorInstance(concrete, formal);
+			const ancestor = classAncestorInstance(concrete, formal) ?? declaredAncestorInstance(concrete, formal);
 			if (ancestor != null) unifyType(formal, ancestor, bindings);
 			return;
 		}
@@ -4401,14 +4432,13 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	}
 	// GenericInstance vs Struct (either direction) — try base type matching
 	if (formal.kind == TypeKind.GenericInstance && concrete.kind == TypeKind.Struct) {
-		const ancestor = classAncestorInstance(concrete, formal);
+		const ancestor = classAncestorInstance(concrete, formal) ?? declaredAncestorInstance(concrete, formal);
 		if (ancestor != null) {
 			unifyType(formal, ancestor, bindings);
 			return;
 		}
-		if (formal.typeExtra != null) {
-			unifyType(formal.typeExtra, concrete, bindings);
-		}
+		const members = positionalFieldsOf(formal);
+		if (members != null) unifyType(members, concrete, bindings);
 		return;
 	}
 	if (formal.kind == TypeKind.Struct && concrete.kind == TypeKind.GenericInstance) {
@@ -5140,6 +5170,7 @@ function alignOfTypeInner(tg: TargetInfo, t: Type, depth: int32): int32 {
 }
 
 function alignOfStruct(tg: TargetInfo, t: Type, depth: int32): int32 {
+	if (layoutFromC(t)) return 0;
 	let maxAlign = 1;
 	if (t.typeChildren != null) {
 		let i = 0;
@@ -5214,9 +5245,13 @@ function sizeOfStruct(tg: TargetInfo, t: Type, depth: int32): int32 {
 	return structLayoutAt(tg, t, depth, -1);
 }
 
+export function layoutFromC(t: Type): boolean {
+	return t.sym != null && t.sym.symFlags.has(SymbolFlag.ImportC) && !t.typeFlags.has(TypeFlag.CompleteStruct);
+}
+
 // Size and field offsets share one traversal, including padding and erased fields.
 function structLayoutAt(tg: TargetInfo, t: Type, depth: int32, fieldIndex: int32): int32 {
-	if (t.sym != null && t.sym.symFlags.has(SymbolFlag.ImportC)) return SIZE_NOT_COMPUTABLE;
+	if (layoutFromC(t)) return SIZE_NOT_COMPUTABLE;
 	let offset = 0;
 	let maxAlign = 1;
 	if (t.typeChildren != null) {

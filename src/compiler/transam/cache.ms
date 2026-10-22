@@ -17,6 +17,13 @@ export class TaCacheStore {
 	accessClock: int32;            // monotonic clock, incremented on each access
 	capacity: int32;
 	fileIndex: HashMap<int32, TaCacheEntry[]>;  // fileId → entries for O(1) invalidation
+	hits: int32;
+	misses: int32;
+	recomputed: int32[];
+	marked: int32;
+	evicted: int32;
+	bound: int32;
+	collected: int32;
 }
 
 export function createCacheStore(capacity: int32): TaCacheStore {
@@ -26,6 +33,13 @@ export function createCacheStore(capacity: int32): TaCacheStore {
 		accessClock: 0,
 		capacity,
 		fileIndex: new HashMap<int32, TaCacheEntry[]>(),
+		hits: 0,
+		misses: 0,
+		recomputed: [],
+		marked: 0,
+		evicted: 0,
+		bound: 0,
+		collected: 0,
 	};
 }
 
@@ -113,6 +127,7 @@ export function cachePut(cache: TaCacheStore, entry: TaCacheEntry): void {
 	if (cache.entries.length >= cache.capacity) {
 		const evictIdx = findEvictIndex(cache);
 		evictAt(cache, evictIdx);
+		cache.evicted += 1;
 	}
 	// Insert
 	cache.accessClock = cache.accessClock + 1;
@@ -156,6 +171,7 @@ export function markQueriesRedForFile(cache: TaCacheStore, fileId: int32): void 
 	for (const entry of indexed) {
 		entry.state = TaQueryState.Red;
 	}
+	cache.marked += indexed.length;
 }
 
 // ===== Tests =====
@@ -203,8 +219,10 @@ test "evicts at capacity" {
 	cachePut(cache, e1);
 	cachePut(cache, e2);
 	assert cache.entries.length == 2;
+	assert cache.evicted == 0;
 	cachePut(cache, e3);
 	assert cache.entries.length == 2;
+	assert cache.evicted == 1;
 	// k1 was least recently used, should be evicted
 	assert !cacheContains(cache, k1);
 	assert cacheContains(cache, k2);
@@ -284,6 +302,7 @@ test "markQueriesRedForFile targets specific file" {
 	cachePut(cache, e1);
 	cachePut(cache, e2);
 	markQueriesRedForFile(cache, 1);
+	assert cache.marked == 1;
 	assert cacheGet(cache, k1).state == TaQueryState.Red;
 	assert cacheGet(cache, k2).state == TaQueryState.Green;
 }

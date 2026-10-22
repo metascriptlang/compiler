@@ -152,6 +152,84 @@ function emitStructBody(name: string, t: CType, prefix: string): string {
 	return result;
 }
 
+// ===== Complete extern structs =====
+// Complete: the declared fields are all of C's, in C's order, each mapped to a type of C's
+// size and alignment; the checker folds that layout and the C backend asserts it.
+
+const completeStructKeys = new HashSet<string>();
+
+export function completeStructKey(targetName: string, cName: string, fieldNames: string[], fieldTypes: string[]): string {
+	let key = `${targetName}\t${cName}`;
+	for (let i = 0; i < fieldNames.length && i < fieldTypes.length; i += 1) {
+		key = key + `\t${fieldNames[i]}:${fieldTypes[i].replaceAll(" ", "").replaceAll("\t", "")}`;
+	}
+	return key;
+}
+
+export function registerCompleteStruct(key: string): void {
+	completeStructKeys.add(key);
+}
+
+export function isCompleteStruct(key: string): boolean {
+	return completeStructKeys.has(key);
+}
+
+function mappedWidth(ms: string): int32 {
+	return match (ms) {
+		"int8" | "uint8" | "boolean" => 1,
+		"int16" | "uint16" => 2,
+		"int32" | "uint32" | "float32" => 4,
+		"int64" | "uint64" | "number" => 8,
+		_ => -1,
+	};
+}
+
+function enumFitsInt(t: CType, objs: Obj[]): boolean {
+	const lo = -2147483648 as int64;
+	const hi = 4294967295 as int64;
+	for (const o of objs) {
+		if (o.kind != ObjKind.EnumConstant || (o.type != t && o.type != t.origin)) continue;
+		if (o.enumValue < lo || o.enumValue > hi) return false;
+	}
+	return true;
+}
+
+function exactField(t: CType, objs: Obj[], target: TargetInfo): boolean {
+	if (t.typedefName != "") {
+		const mapped = mapRuntimeType(t.typedefName);
+		if (mapped != "") return mappedWidth(mapped) == t.size;
+		if (!t.isComplete) return false;
+	}
+	return match (t.kind) {
+		CTypeKind.Bool | CTypeKind.Char | CTypeKind.Short | CTypeKind.Int | CTypeKind.Long | CTypeKind.LongLong
+			| CTypeKind.Float | CTypeKind.Double | CTypeKind.LongDouble => mappedWidth(cTypeToMs(t, true)) == t.size,
+		CTypeKind.Enum => t.size == 4 && enumFitsInt(t, objs),
+		CTypeKind.Ptr => t.base == null || t.base.kind != CTypeKind.Func,
+		CTypeKind.Array => t.arrayLen > 0 && t.base != null && exactField(t.base, objs, target),
+		CTypeKind.Struct => cTypeToMs(t) != "unknown" && isCompleteTranslation(t, objs, target),
+		_ => false,
+	};
+}
+
+function isCompleteTranslation(t: CType, objs: Obj[], target: TargetInfo): boolean {
+	if (t.kind != CTypeKind.Struct || !t.layoutKnown || t.isFlexible || t.members.length == 0) return false;
+	if (target.pointerSize != 8) return false;
+	for (const m of t.members) {
+		if (!exactField(m.type, objs, target)) return false;
+	}
+	return true;
+}
+
+function translatedStructKey(name: string, t: CType, target: TargetInfo): string {
+	const names: string[] = [];
+	const types: string[] = [];
+	for (const m of t.members) {
+		names.push(m.name);
+		types.push(cTypeToMs(m.type));
+	}
+	return completeStructKey(`${target.os}-${target.cpu}`, name, names, types);
+}
+
 function emitEnum(objs: Obj[], enumType: CType, enumName: string, prefix: string): string {
 	let result = `${prefix}extern enum ${enumName} {\n`;
 	for (const obj of objs) {
@@ -172,13 +250,16 @@ function emitOpaqueTag(t: CType, prefix: string): string {
 	return `${prefix}extern struct ${t.tagName} from "${keyword} ${t.tagName}";\n`;
 }
 
+function emitsStructBody(obj: Obj): boolean {
+	const t = obj.type;
+	if (isOpaqueTag(t) && t.tagName == obj.name) return false;
+	return (t.kind == CTypeKind.Struct || t.kind == CTypeKind.Union) && t.members.length > 0;
+}
+
 function emitTypedef(obj: Obj, prefix: string): string {
 	const t = obj.type;
 	if (isOpaqueTag(t) && t.tagName == obj.name) return `${prefix}extern struct ${obj.name};\n`;
-	// Struct/union typedef → emit as extern struct
-	if ((t.kind == CTypeKind.Struct || t.kind == CTypeKind.Union) && t.members.length > 0) {
-		return emitStructBody(obj.name, t, prefix);
-	}
+	if (emitsStructBody(obj)) return emitStructBody(obj.name, t, prefix);
 	// Enum typedef → handled separately via emitEnum
 	if (t.kind == CTypeKind.Enum) return "";
 	// Skip cTypeToMs's typedefName short-circuit — it would return obj.name
@@ -192,9 +273,10 @@ function emitTypedef(obj: Obj, prefix: string): string {
 
 // ===== Main Entry Point =====
 
-export function translateCHeader(source: string, importedNames: string[], withExport: boolean = false, headerPath: string = "header.h", includePaths: string[] = [], outDiags: Diagnostic[] | null = null, emittedNames: HashSet<string> | null = null, readLog: string[] | null = null, target: TargetInfo = null as unknown as TargetInfo): string {
+export function translateCHeader(source: string, importedNames: string[], withExport: boolean = false, headerPath: string = "header.h", includePaths: string[] = [], outDiags: Diagnostic[] | null = null, emittedNames: HashSet<string> | null = null, readLog: string[] | null = null, target: TargetInfo = null as unknown as TargetInfo, outCompleteKeys: string[] | null = null): string {
 	const prefix = withExport ? "export " : "";
-	const parsed = parseHeader(source, headerPath, { target: target != null ? target : hostTarget(), includePaths, macroFlags: [], readLog });
+	const tg = target != null ? target : hostTarget();
+	const parsed = parseHeader(source, headerPath, { target: tg, includePaths, macroFlags: [], readLog });
 	if (outDiags != null) {
 		for (const d of parsed.diagnostics) outDiags.push(d);
 	}
@@ -266,6 +348,11 @@ export function translateCHeader(source: string, importedNames: string[], withEx
 					}
 				} else {
 					result = result + emitTypedef(obj, prefix);
+					if (emitsStructBody(obj) && isCompleteTranslation(obj.type, parsed.objs, tg)) {
+						const key = translatedStructKey(obj.name, obj.type, tg);
+						registerCompleteStruct(key);
+						if (outCompleteKeys != null) outCompleteKeys.push(key);
+					}
 				}
 			},
 			ObjKind.EnumConstant => {
@@ -545,4 +632,67 @@ test "name filter transitively keeps referenced typedef" {
 	const ms = translateCHeader("typedef int MyId;\nMyId doThing(MyId x);", ["doThing"], false);
 	assert ms.indexOf("extern function doThing") >= 0;
 	assert ms.indexOf("type MyId = int32") >= 0;
+}
+
+function completeOn(source: string, os: string, cpu: string): string[] {
+	const keys: string[] = [];
+	translateCHeader(source, [], false, "header.h", [], null, null, null, targetFor(os, cpu), keys);
+	const names: string[] = [];
+	for (const k of keys) names.push(k.split("\t")[1]);
+	return names;
+}
+
+const EXACT_SHAPES = "typedef struct { unsigned long size; int value; } Plain;\n"
+	+ "typedef struct { Plain p; char c; } Nested;\n"
+	+ "typedef struct { Plain arr[3]; } ArrOfStruct;\n"
+	+ "typedef enum { E_A = 1, E_B = 2 } SmallE;\n"
+	+ "typedef struct { SmallE e; char c; } WithEnum;\n"
+	+ "typedef struct { char name[13]; int x; } CharArr;\n"
+	+ "struct OpaqueT;\ntypedef struct { struct OpaqueT* o; int x; } RefOpaque;\n"
+	+ "typedef Plain PlainAlias;\n"
+	+ "typedef struct { _Bool b; short s; long long q; float f; double d; } Scalars;\n"
+	+ "#pragma pack(push, 1)\ntypedef struct { char a; int b; } Pragma1;\n#pragma pack(pop)\n"
+	+ "typedef struct { char a; int b; } AfterPop;\n";
+
+test "a struct whose fields all translate exactly is complete" {
+	const names = completeOn(EXACT_SHAPES, "linux", "x86_64");
+	for (const n of ["Plain", "Nested", "ArrOfStruct", "WithEnum", "CharArr", "RefOpaque", "PlainAlias", "Scalars", "AfterPop"]) {
+		assert arrayContains(names, n), n;
+	}
+	assert !arrayContains(names, "Pragma1");
+}
+
+test "a C layout msc does not reproduce leaves the struct incomplete" {
+	const src = "typedef union { int i; double d; } U;\n"
+		+ "typedef struct { int tag; union { int i; double d; }; } AnonU;\n"
+		+ "typedef struct { int a; struct { int b; int c; }; } AnonS;\n"
+		+ "typedef struct { unsigned a : 3; unsigned b : 5; int c; } Bits;\n"
+		+ "typedef struct __attribute__((packed)) { char a; int b; } Packed;\n"
+		+ "typedef struct { char a; int b; } __attribute__((packed)) PackedAfter;\n"
+		+ "typedef struct { char a; int b __attribute__((aligned(16))); } FieldAligned;\n"
+		+ "typedef struct __attribute__((aligned(32))) { int a; } StructAligned;\n"
+		+ "typedef struct { _Alignas(16) int a; } AlignasF;\n"
+		+ "typedef struct { int len; char data[]; } Flex;\n"
+		+ "typedef struct { void* p; int (*fn)(int); } FnPtr;\n"
+		+ "typedef enum { BIG_A = 1, BIG_B = 0x100000000LL } BigE;\n"
+		+ "typedef struct { BigE e; int x; } WithBigEnum;\n"
+		+ "typedef struct { int tag; U value; } HoldsUnion;\n"
+		+ "typedef struct { unsigned long size; HoldsUnion color; } HoldsUnionDeep;\n"
+		+ "#pragma pack(4)\ntypedef struct { char a; long b; } Pack4;\n";
+	assert completeOn(src, "linux", "x86_64").length == 0, completeOn(src, "linux", "x86_64").join(",");
+}
+
+test "an unrecognised pack pragma leaves every later struct incomplete" {
+	const src = "#pragma pack(push, tag, 2)\n#pragma pack(pop)\ntypedef struct { char a; int b; } After;\n";
+	assert completeOn(src, "linux", "x86_64").length == 0;
+}
+
+test "long double is complete only where msc maps it to its width" {
+	const src = "typedef struct { long l; long double ld; } LongD;\n";
+	assert arrayContains(completeOn(src, "macos", "aarch64"), "LongD");
+	assert !arrayContains(completeOn(src, "linux", "x86_64"), "LongD");
+}
+
+test "no struct is complete on a 32-bit target" {
+	assert completeOn("typedef struct { int a; int b; } Pair;\n", "linux", "i386").length == 0;
 }

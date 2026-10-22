@@ -17,10 +17,11 @@ import {
 import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, RaiserCombine, raiserABC, raiserABx, raiserAx, convOperand, fitsImm, immField, branchField, inRefFile, MAX_SLOT } from "../../raiser/bytecode";
 import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserConstString } from "../../raiser/value";
 import { lookupHostFn } from "../../raiser/hostRegistry";
+import { resolveRuntimeDir } from "../../utils/path";
 import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation } from "./valueCopy";
 import { placedInstanceOf } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
-import { runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike } from "../../checker/types";
+import { runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase } from "../../checker/types";
 import { isSlotUnion } from "../../checker/fit";
 import { SymbolFlag, isViewBinding, classDeclNodeOf, hasFlag } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
@@ -33,7 +34,7 @@ import {
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
 	callRaiserStmtCompiler, emitTrapNil, layoutOperand, CLOSURE_PAIR, slotInst, resolveGlobal, raiserClassKey, classSymOfType, landResult, declaredSymbol,
 } from "./context";
-import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros } from "./valueCopy";
+import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros, emitTrapValue } from "./valueCopy";
 
 // A CallHost the registry cannot serve would only fail at macro RUN time
 // ("Unknown host function"). The host table is loaded before bytecodegen
@@ -48,8 +49,23 @@ function checkHostBridgeCoverage(sym: Symbol, callee: Node): void {
 	}
 }
 
+let _stdRoot = "";
+
+function stdRoutineName(sym: Symbol): string {
+	if (sym.symbolKind != SymbolKind.Function || sym.modulePath == "") return "";
+	if (_stdRoot == "") _stdRoot = resolveRuntimeDir() + "/std/";
+	if (!sym.modulePath.startsWith(_stdRoot)) return "";
+	let module = sym.modulePath.slice(_stdRoot.length);
+	const dot = module.lastIndexOf(".");
+	if (dot > module.lastIndexOf("/")) module = module.slice(0, dot);
+	if (module.endsWith("/index")) module = module.slice(0, module.length - "/index".length);
+	return `std/${module}.${sym.name}`;
+}
+
 function runtimeHostName(sym: Symbol): string {
 	if (sym.nativeName != "") return sym.nativeName;
+	const routine = stdRoutineName(sym);
+	if (routine != "" && lookupHostFn(routine) != null) return routine;
 	if (sym.declNode != null || !sym.symFlags.has(SymbolFlag.ImportC)) return "";
 	return lookupHostFn(sym.name) != null ? sym.name : "";
 }
@@ -421,8 +437,7 @@ export function exprIsString(s: RaiserCompState, node: Node): boolean {
 	// cannot know) answer false, so `s.length` emitted ArrayLen against a string
 	// handle and `s.charAt` missed its fast path entirely.
 	if (node.nodeType != null) {
-		const tk = node.nodeType.kind;
-		if (tk == TypeKind.String || tk == TypeKind.StringLiteral) return true;
+		if (literalBase(node.nodeType).kind == TypeKind.String) return true;
 	}
 	const k = node.kind;
 	if (k == NodeKind.StringLiteral) return true;
@@ -548,6 +563,12 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 					return compileExpr(s, vd.initializer);
 				}
 			}
+			if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Variable
+				&& node.resolvedSym.symFlags.has(SymbolFlag.ImportC)) {
+				const externMsg = `cannot read extern '${d.name}' in the Raiser VM: an extern let or const has no host value`;
+				queueRaiserCompileError(externMsg, node.location.line, node.location.column);
+				return emitTrapValue(s, externMsg, node.nodeType);
+			}
 			// Nothing the bytecode compiler can execute bound this name (module-
 			// level vars and other non-routine symbols land here). Report it
 			// instead of silently splicing nil into the macro's output.
@@ -560,7 +581,7 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 			else if ((node.resolvedSym.declNode.data as VariableDeclData).initializer == null) why = "declaration has no initializer";
 			const msg = `cannot evaluate '${d.name}' at comptime: ${why}`;
 			queueRaiserCompileError(msg, node.location.line, node.location.column);
-			return emitTrapNil(s, msg);
+			return emitTrapValue(s, msg, node.nodeType);
 		},
 		NodeKind.BinaryExpr => { return compileBinaryExpr(s, node); },
 		NodeKind.UnaryExpr => { return compileUnaryExpr(s, node); },
@@ -1768,7 +1789,7 @@ function compileSuperCall(s: RaiserCompState, node: Node, superSym: Symbol): int
 		queueRaiserCompileError(msg, node.location.line, node.location.column);
 		return emitTrapNil(s, msg);
 	}
-	const superClasses: RaiserRegClass[] = [regClassOf(s, node.nodeType), RaiserRegClass.Ref];
+	const superClasses: RaiserRegClass[] = [RaiserRegClass.Ref, RaiserRegClass.Ref];
 	for (const a of d.arguments) superClasses.push(regClassOf(s, a.nodeType));
 	const dest = allocBlock(s, superClasses);
 	emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1, thisReg, 0));

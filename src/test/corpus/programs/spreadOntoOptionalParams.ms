@@ -17,7 +17,7 @@
 // @stdout: tuple-new=2x tuple-rest=7|
 // @stdout: generic=1 2 null|a y z|1 null null|
 // @stdout: overload=n 1 2|s x y z|n 1 null|
-// @stdout: method-overload=n 1 2|
+// @stdout: method-overload=n 1 2|s a x|
 // @stdout: ctor=1 y z|1 null d|
 // @stdout: rest=1 null []|1 2 []|1 5 [6,7,8]|calls=2|
 // @stdout: loop=< null z;< a z;< b c;< d e;|
@@ -120,7 +120,7 @@ function main(): void {
 	console.log(`generic=${gen(1, ...short)}|${gen("a", ...yz)}|${gen(1, ...empty)}|`);
 	console.log(`overload=${ov(1, ...short)}|${ov("x", ...yz)}|${ov(1, ...empty)}|`);
 	const hi = new Hi();
-	console.log(`method-overload=${hi.hi(1, ...short)}|`);
+	console.log(`method-overload=${hi.hi(1, ...short)}|${hi.hi("a", ...strs)}|`);
 	console.log(`ctor=${new Made(1, ...yz).s}|${new Made(1, ...none).s}|`);
 	console.log(`rest=${optRest(1, ...empty)}|${optRest(1, ...short)}|${optRest(1, ...make())}|calls=${calls}|`);
 	console.log(`loop=${inLoop([[], ["a"], ["b", "c"], ["d", "e", "f"]])}|`);

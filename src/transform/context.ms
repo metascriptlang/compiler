@@ -121,6 +121,7 @@ export function freshTemp(ctx: TransformContext, prefix: string): string {
 export function mintSym(ctx: TransformContext, kind: SymbolKind, name: string, t: Type | null): Symbol {
 	const sym = newSym(mintingChecker(ctx, name), kind, name, t);
 	sym.state = SymbolState.Checked;
+	setFlag(sym, SymbolFlag.Anon);
 	return sym;
 }
 

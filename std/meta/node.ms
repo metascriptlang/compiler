@@ -88,6 +88,7 @@ export enum TypeFlag {
 	OutParam,             // a Var parameter type written `out`: the callee fills it, so an unassigned variable may be passed
 	ValueUnion,           // a discriminated union declared `struct X = match`: a value, copied where a `type X = match` union is shared
 	ArityAdapter,         // env of a closure that drops the slot's trailing arguments: identity compares its adaptee
+	CompleteStruct,       // extern struct whose declared fields are all of C's, from a header translation: its layout is folded and asserted against C
 }
 
 // ===== Attached Lifecycle Ops =====
@@ -236,6 +237,7 @@ export enum SymbolFlag {
 	NoInline,
 	HoistedCall, // a `__call_N_` temp the conditional lowering binds to a raising call: the value is the call and nothing else
 	InitFlag, // a module binding's initialized flag (moduleTdz); HCR keeps it in step with the binding's state cell
+	Anon, // minted by a transform: its name is generated and positional, never one the author wrote
 }
 
 // ===== Symbol =====

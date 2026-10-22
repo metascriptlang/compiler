@@ -36,7 +36,7 @@ import "../parser/statements/core";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData, CallExprData, IdentifierData, StringLiteralData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { readFile, writeFile, ensureDir, realpath, readDir } from "std/fs";
-import { translateCHeader } from "./cimport/emit";
+import { translateCHeader, registerCompleteStruct, completeStructKey } from "./cimport/emit";
 import { Diagnostic, DiagSeverity } from "./cparse/error";
 import { TargetInfo, targetFor, hostTarget } from "./cparse/target";
 import { resolveRuntimeDir } from "../utils/path";
@@ -212,18 +212,19 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 		if (hit != "") {
 			_inlineHits = _inlineHits + 1;
 			_inlineMs = _inlineMs + (performance.now() - _ih0);
-			return hit;
+			return unpackCompleteStructs(hit);
 		}
 	}
 	const errLen0 = outErrors != null ? outErrors.length : 0;
 	const prevLog = provider.readLog;
 	const probeLog: string[] = [];
 	const cparseReads: string[] = [];
+	const completeKeys: string[] = [];
 	if (key != "") provider.readLog = probeLog;
 	let deps: string[] | null = null;
 	let output = "";
 	try {
-		output = inlineHeaderImportsInner(source, modulePath, provider, compactReplacement, outErrors, cparseReads);
+		output = inlineHeaderImportsInner(source, modulePath, provider, compactReplacement, outErrors, cparseReads, completeKeys);
 	} finally {
 		if (key != "") {
 			const seen = new HashSet<string>();
@@ -241,13 +242,31 @@ export function inlineHeaderImports(source: string, modulePath: string, provider
 	// next time so the diagnostics re-surface. Output equal to source means
 	// nothing was inlined — recomputing that is as cheap as a hit.
 	if (key != "" && deps != null && output != source && (outErrors == null || outErrors.length == errLen0)) {
-		_hcStoreFn(key, deps, output);
+		_hcStoreFn(key, deps, packCompleteStructs(completeKeys, output));
 	}
 	_inlineMs = _inlineMs + (performance.now() - _ih0);
 	return output;
 }
 
-function inlineHeaderImportsInner(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean, outErrors: ModuleError[] | null, cparseReads: string[]): string {
+function packCompleteStructs(keys: string[], output: string): string {
+	let packed = `${keys.length}\n`;
+	for (const k of keys) packed = packed + k + "\n";
+	return packed + output;
+}
+
+function unpackCompleteStructs(entry: string): string {
+	let pos = entry.indexOf("\n");
+	const count = pos > 0 ? entry.slice(0, pos).parseInt() : 0;
+	pos = pos + 1;
+	for (let i = 0; i < count; i += 1) {
+		const nl = entry.indexOf("\n", pos);
+		registerCompleteStruct(entry.slice(pos, nl));
+		pos = nl + 1;
+	}
+	return entry.slice(pos, entry.length);
+}
+
+function inlineHeaderImportsInner(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean, outErrors: ModuleError[] | null, cparseReads: string[], completeKeys: string[]): string {
 	let result = source;
 	let insertedLines = 0;
 	const emittedHeaderDecls = new HashSet<string>();
@@ -342,7 +361,7 @@ function inlineHeaderImportsInner(source: string, modulePath: string, provider: 
 			continue;
 		}
 		const headerDiags: Diagnostic[] = [];
-		let translated = translateCHeader(headerSource.value, importedNames, false, headerPath, includePaths, headerDiags, emittedHeaderDecls, cparseReads, target);
+		let translated = translateCHeader(headerSource.value, importedNames, false, headerPath, includePaths, headerDiags, emittedHeaderDecls, cparseReads, target, completeKeys);
 		if (outErrors != null && headerDiags.length > 0) {
 			const importLine = countLinesBefore(result, importIdx) - insertedLines;
 			for (const hd of headerDiags) {
@@ -1225,7 +1244,7 @@ test "header cache wrapper: miss stores deps+output, hit short-circuits" {
 	takeInlineHeaderTimings();
 	const out1 = inlineHeaderImports(src, "/tmp/mshcw/main.ms", createFileSystemProvider());
 	assert storedKey == "KHCW";
-	assert storedOut == out1;
+	assert storedOut == "0\n" + out1, storedOut;
 	assert out1.indexOf("extern function hcwA") >= 0;
 	let sawHeader = false;
 	for (const d of storedDeps) {
@@ -1237,6 +1256,24 @@ test "header cache wrapper: miss stores deps+output, hit short-circuits" {
 	const t = takeInlineHeaderTimings();
 	assert t.hits == 1;
 	assert t.n == 2;
+	unregisterHeaderCacheForTest();
+}
+
+test "header cache wrapper: an entry carries the complete structs of its header" {
+	ensureDir("/tmp/mshcw");
+	writeFile("/tmp/mshcw/s.h", "typedef struct { long size; int v; } HcwS;\n");
+	const src = "import { HcwS } from " + "\"./s.h\";\n";
+	let storedOut = "";
+	registerHeaderCache(
+		(_s: string, _m: string, _c: boolean) => "KHCWS",
+		(k: string) => { return k == "KHCWS" && storedOut != "" ? storedOut : ""; },
+		(_k: string, _d: string[], o: string) => { storedOut = o; }
+	);
+	const out1 = inlineHeaderImports(src, "/tmp/mshcw/mainS.ms", createFileSystemProvider());
+	const t = headerTarget();
+	const key = completeStructKey(`${t.os}-${t.cpu}`, "HcwS", ["size", "v"], ["int64", "int32"]);
+	assert storedOut == "1\n" + key + "\n" + out1, storedOut;
+	assert inlineHeaderImports(src, "/tmp/mshcw/mainS.ms", createFileSystemProvider()) == out1;
 	unregisterHeaderCacheForTest();
 }
 

@@ -79,7 +79,21 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 }
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {
+	for (const func of functions) bindDirectCalls(func, functions);
 	return { name, functions, entry, globalCount: 0, globalInit: [], records: [], exports: [] };
+}
+
+function bindDirectCalls(func: RaiserFunction, functions: RaiserFunction[]): void {
+	for (let pc = 0; pc < func.code.length; pc += 1) {
+		const inst = func.code[pc];
+		if (inst.op != RaiserOpcode.Call || inst.b < 0 || inst.b >= functions.length) continue;
+		const callee = functions[inst.b];
+		const site = inst.c as int32;
+		const argc = func.blocks[site + 2];
+		if (argc >= callee.sigs.length || callee.sigs[argc as int32] != func.blocks[site + 3]) continue;
+		inst.op = RaiserOpcode.CallDirect;
+		func.packed[pc] = packInstruction(inst);
+	}
 }
 
 // --- Test Helper ---

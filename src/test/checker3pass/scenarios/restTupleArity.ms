@@ -83,3 +83,60 @@ test "the empty tuple is refused where it is written" {
 	const text = checkOnly(SRC_EMPTY).errors.join("\n");
 	assert text.contains("the empty tuple type '[]' has no value representation"), "'[]' must be refused: " + text;
 }
+
+const SRC_METHOD = SRC_PARAMS + `
+class Nav {
+	navigate<K extends keyof ParamList>(...args: Args<K>): string { return args[0]; }
+}
+class Typed<PL> {
+	navigate<K extends keyof PL>(...args: null extends PL[K] ? [name: K, params?: PL[K]] : [name: K, params: PL[K]]): string { return args[0] as string; }
+}
+const nav = new Nav();
+const typed = new Typed<ParamList>();
+`;
+
+test "a method infers its type parameter from the selected rest tuple as a function does" {
+	const errors = checkOnly(SRC_METHOD + `
+const a = nav.navigate("Home");
+const b = nav.navigate("Detail", { id: "a", tab: null });
+const c = typed.navigate("Home");
+const d = typed.navigate("Detail", { id: "a", tab: null });
+`).errors;
+	assert errors.length == 0, "the method calls must check: " + errors.join("\n");
+}
+
+test "a method refuses a missing argument and a name outside the list as a function does" {
+	const text = checkOnly(SRC_METHOD + `
+const c = nav.navigate("Detail");
+const d = typed.navigate("Typo");
+`).errors.join("\n");
+	assert text.contains("Too few arguments: expected at least 2, got 1"), "nav.navigate(\"Detail\") must be refused: " + text;
+	assert text.contains("does not satisfy constraint"), "typed.navigate(\"Typo\") must be refused: " + text;
+}
+
+test "an excess property is refused through the selected rest tuple as through a written one" {
+	const text = checkOnly(SRC_METHOD + `
+function direct(...args: [name: "Detail", params: ParamList["Detail"]]): string { return args[0]; }
+const e = direct("Detail", { id: "a", tab: null, written: 1 });
+const f = go("Detail", { id: "a", tab: null, selected: 1 });
+const g = nav.navigate("Detail", { id: "a", tab: null, method: 1 });
+`).errors.join("\n");
+	assert text.contains("'written' does not exist in type"), "the written tuple must refuse the excess property: " + text;
+	assert text.contains("'selected' does not exist in type"), "the selected tuple must refuse the excess property: " + text;
+	assert text.contains("'method' does not exist in type"), "the method's selected tuple must refuse the excess property: " + text;
+}
+
+test "a method's written tuple rest bounds the argument count as a function's does" {
+	const text = checkOnly(`
+class Box {
+	opt(...args: [name: string, n?: int32]): string { return args[0]; }
+}
+const box = new Box();
+const e = box.opt();
+const f = box.opt("a", 1, 2);
+const g = box.opt("a");
+`).errors.join("\n");
+	assert text.contains("Too few arguments: expected at least 1, got 0"), "box.opt() must be refused: " + text;
+	assert text.contains("Too many arguments: expected at most 2, got 3"), "box.opt(a, 1, 2) must be refused: " + text;
+	assert !text.contains("got 1"), "box.opt(a) must check: " + text;
+}

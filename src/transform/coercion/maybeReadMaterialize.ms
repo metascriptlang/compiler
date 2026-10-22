@@ -145,6 +145,14 @@ function qualifiesForTagged(node: Node): boolean {
 	return carriesTaggedUnion(declaredMaybeOf(node));
 }
 
+// Narrowed to null, the read still holds whatever the carrier holds: a call or a closure
+// may have filled it since the check.
+function readNullAsCarrier(node: Node): Node {
+	const carrier = declaredMaybeOf(node);
+	if (carrier != null) node.nodeType = carrier;
+	return node;
+}
+
 function visitMaybeRead(node: Node, projectAll: boolean): Node {
 	const project = projectAll || qualifiesForTagged(node);
 	if (node.kind == NodeKind.BinaryExpr) {
@@ -164,7 +172,8 @@ function visitMaybeRead(node: Node, projectAll: boolean): Node {
 	if (node.kind != NodeKind.Identifier && node.kind != NodeKind.MemberExpr && node.kind != NodeKind.ArrayAccess) return node;
 	const ntRaw = node.nodeType;
 	const nt = ntRaw != null ? peelTransparentInstance(ntRaw) : null;
-	if (nt == null || nt.kind == TypeKind.Null) return node;
+	if (nt == null) return node;
+	if (nt.kind == TypeKind.Null) return readNullAsCarrier(node);
 	if (isMaybeType(nt)) {
 		if (!project) return node;
 		const declared = declaredMaybeOf(node);

@@ -205,7 +205,10 @@ export enum RaiserOpcode {
 	BrEqR,            // ABC: if refs[A] == refs[B] pc += branchOffset(C)
 	BrNeR,            // ABC: if refs[A] != refs[B] pc += branchOffset(C)
 	LitConv,          // ABC: fatal unless R[A] is nil or one of the literals listed in K[B] (`len:text` each), named K[C]
+	CallDirect,       // ABC: Call whose target and signature createRaiserModule checked
 }
+
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.CallDirect;
 
 // How FutureCombine settles its result from its inputs (Promise.all, race, any).
 export enum RaiserCombine {
@@ -338,7 +341,7 @@ function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.AddrField => "dr-",
 		RaiserOpcode.LoadDeref => "xx-",
 		RaiserOpcode.StoreDeref => "x-x",
-		RaiserOpcode.Call | RaiserOpcode.CallHost | RaiserOpcode.FutureCombine => "x--",
+		RaiserOpcode.Call | RaiserOpcode.CallDirect | RaiserOpcode.CallHost | RaiserOpcode.FutureCombine => "x--",
 		RaiserOpcode.CallIndirect => "xi-",
 		RaiserOpcode.Spawn | RaiserOpcode.Await | RaiserOpcode.FutureSettle | RaiserOpcode.FutureFail => "xx-",
 		RaiserOpcode.Sleep => "xx-",
@@ -372,7 +375,7 @@ export function operandKind(op: RaiserOpcode, slot: int32): int32 {
 }
 
 export function opHasSite(op: RaiserOpcode): boolean {
-	return op == RaiserOpcode.Call || op == RaiserOpcode.CallIndirect || op == RaiserOpcode.CallHost || op == RaiserOpcode.FutureCombine || op == RaiserOpcode.NewArray;
+	return op == RaiserOpcode.Call || op == RaiserOpcode.CallDirect || op == RaiserOpcode.CallIndirect || op == RaiserOpcode.CallHost || op == RaiserOpcode.FutureCombine || op == RaiserOpcode.NewArray;
 }
 
 // How many registers follow A as the arguments of a site opcode: the count sits in C, or in B for NewArray.

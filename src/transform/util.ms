@@ -3,7 +3,7 @@
 
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
-import { createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar, unwrapRefNullUnion, literalUnionBase } from "../checker/types";
+import { literalBase, createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar, unwrapRefNullUnion, literalUnionBase } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
 import { requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
@@ -49,7 +49,7 @@ export function isCSwitchableType(t: Type | null): boolean {
 // and so is a union C holds as a tagged struct: neither a nullable reference nor
 // a union of literals, which C holds as their base type.
 export function inlineInFuture(t: Type | null): boolean {
-	return t != null && t.kind == TypeKind.String;
+	return t != null && literalBase(t).kind == TypeKind.String;
 }
 
 export function boxedInFuture(t: Type | null): boolean {
@@ -226,7 +226,7 @@ export function isValueLayoutType(t: Type | null): boolean {
 // passthrough based on storage shape.
 export function unboxFnNameForType(t: Type | null): string {
 	if (t == null) return "";
-	return match (t.kind) {
+	return match (literalBase(t).kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msUnboxDouble",
 		TypeKind.Boolean => "msUnboxBool",
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32
@@ -243,7 +243,7 @@ export function unboxFnNameForType(t: Type | null): string {
 // storage; no boxed path exists.
 export function typedFutureReadFn(t: Type | null): string {
 	if (t == null) return "";
-	return match (t.kind) {
+	return match (literalBase(t).kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msFutureReadDouble",
 		TypeKind.Boolean => "msFutureReadBool",
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32

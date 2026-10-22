@@ -46,3 +46,15 @@ test "readonlyViewRefArgument: the JS backend refuses the same binding" {
 	` }], "test/main.ms");
 	assert out.includes(REFUSED697), out.slice(0, 300);
 }
+
+function vecError(source: string): string {
+	const c = compileToCWithStd(source);
+	return c.ok ? "compiled" : c.error;
+}
+
+test "readonlyViewRefArgument: a read-only Vec compares by value yet still never reaches a parameter that writes" {
+	const ro = "const ro: Readonly<Vec<int32>> = [1];";
+	assert vecError(`${ro} const mv: Vec<int32> = [1]; console.log(ro == mv, mv != ro);`) == "compiled";
+	assert vecError(`function bump(ref v: Vec<int32>): void { v[0] = 9; } ${ro} bump(ro);`).includes(REFUSED697);
+	assert vecError(`function keep(v: Vec<int32>): int32 { return v[0]; } ${ro} console.log(keep(ro));`).includes(REFUSED697);
+}

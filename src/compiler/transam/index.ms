@@ -47,8 +47,8 @@ import {
 } from "./intern";
 
 import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
-import { preludeContextFor, bindModuleForCheck, finishModuleCheck, registerBoundModuleFn, BoundModule } from "../../checker/checkPass";
-import { registerModuleProgram, lookupModuleProgram, lookupModuleCtx, resetInstantiationState } from "../../checker/instantiate";
+import { preludeContextFor, bindModuleForCheck, finishModuleCheck, registerBoundModuleFn, BoundModule, sharedPreludeOwns } from "../../checker/checkPass";
+import { registerModuleProgram, registerModuleCtx, lookupModuleProgram, lookupModuleCtx, resetInstantiationState } from "../../checker/instantiate";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
 import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
@@ -159,6 +159,7 @@ export class TransAmDb {
 
 interface BoundCheck {
 	revision: int32;
+	inputHash: number;
 	unit: BoundModule;
 }
 
@@ -199,6 +200,7 @@ function checkNodeKey(fileId: int32): int32 { return fileId + 15000; }
 function transformNodeKey(fileId: int32): int32 { return fileId + 20000; }
 function analyzeNodeKey(fileId: int32): int32 { return fileId + 30000; }
 function lowerNodeKey(fileId: int32): int32 { return fileId + 40000; }
+function exportNodeKey(fileId: int32): int32 { return fileId + 50000; }
 
 // ===== Public API =====
 
@@ -474,6 +476,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		dbRecordDepImports(db, depPath, depProgram);
 		// Recurse into transitive deps BEFORE resolving this dep
 		dbEnsureExportsRegistered(db, depPath, visited, startVersion);
+		if (getRegisteredAt(db.moduleDeps, depId) >= db.revision.value) continue;
 
 		// Wire db.exportRegistry + module imports so collectImport can resolve
 		// cross-module types (e.g., DrcContext.ctx: TransformContext).
@@ -482,18 +485,17 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		const depMod = createModule(depPath);
 		depMod.imports = buildImportEntries(db, depPath, depProgram);
 		tmpCtx.currentModule = depMod;
-		const priorEntry = findModuleExports(db.exportRegistry, depPath);
-		if (priorEntry != null) {
-			for (const info of priorEntry.symbols) {
-				if (info.sym.declNode != null && info.sym.modulePath == depPath) tmpCtx.adoptedDecls.set(info.sym.declNode, info.sym);
-			}
-		}
-		collectTopLevel(tmpCtx, depProgram);
-		resolveDeclarations(tmpCtx, depProgram);
+		const collected = cloneNodeForCheck(depProgram);
+		tmpCtx.adoptedDecls = earlyAdoptions(db, depPath, collected);
+		collectTopLevel(tmpCtx, collected);
+		db.cache.collected += 1;
+		resolveDeclarations(tmpCtx, collected);
+		db.trees.set(exportNodeKey(depId), collected);
 
 		const earlyExports = collectExports(tmpCtx, depPath);
 		registerModuleExports(db.exportRegistry, depPath, earlyExports);
 		setRegisteredAt(db.moduleDeps, depId, db.revision.value);
+		dbRegisterMacroExpandedExports(db, depPath, depMod.imports, startVersion);
 	}
 }
 
@@ -518,12 +520,16 @@ export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
 	const depMod = createModule(filePath);
 	depMod.imports = buildImportEntries(db, filePath, program);
 	tmpCtx.currentModule = depMod;
-	collectTopLevel(tmpCtx, program);
-	resolveDeclarations(tmpCtx, program);
+	const collected = cloneNodeForCheck(program);
+	collectTopLevel(tmpCtx, collected);
+	db.cache.collected += 1;
+	resolveDeclarations(tmpCtx, collected);
+	db.trees.set(exportNodeKey(getFileId(db.fileInput, filePath)), collected);
 	const exports = collectExports(tmpCtx, filePath);
 	if (exports.length > 0) {
 		registerModuleExports(db.exportRegistry, filePath, exports);
 	}
+	dbRegisterMacroExpandedExports(db, filePath, depMod.imports, getCancelVersion(db.cancelCtx));
 }
 
 // Build ImportEntry[] from parsed program's import declarations + dep edge resolution
@@ -562,24 +568,27 @@ function checkOutputHash(ctx: CheckerContext, inputHashes: number[]): number {
 	return h;
 }
 
-function earlyAdoptions(db: TransAmDb, filePath: string, parsed: Node, program: Node): HashMap<Node, Symbol> {
+function earlyAdoptions(db: TransAmDb, filePath: string, program: Node): HashMap<Node, Symbol> {
 	const adopted = new HashMap<Node, Symbol>();
 	const entry = findModuleExports(db.exportRegistry, filePath);
-	if (entry == null) return adopted;
+	const parsed = dbTree(db, exportNodeKey(getFileId(db.fileInput, filePath)));
+	if (entry == null || parsed == null) return adopted;
 	const early = new HashMap<Node, Symbol>();
 	for (const info of entry.symbols) {
 		if (info.sym.declNode != null && info.sym.modulePath == filePath) early.set(info.sym.declNode, info.sym);
 	}
 	const parsedStmts = (parsed.data as ProgramData).programStmts;
 	const stmts = (program.data as ProgramData).programStmts;
+	if (parsedStmts.length != stmts.length) return adopted;
 	for (let i = 0; i < stmts.length; i += 1) {
 		const parsedDecl = declOfStatement(parsedStmts[i]);
 		const decl = declOfStatement(stmts[i]);
 		const sym = early.get(parsedDecl);
 		if (sym != null) adopted.set(decl, sym);
-		if (decl.kind != NodeKind.ClassDecl) continue;
+		if (decl.kind != NodeKind.ClassDecl || parsedDecl.kind != NodeKind.ClassDecl) continue;
 		const parsedBody = (parsedDecl.data as ClassDeclData).classBody;
 		const body = (decl.data as ClassDeclData).classBody;
+		if (parsedBody.length != body.length) continue;
 		for (let m = 0; m < body.length; m += 1) {
 			const method = early.get(parsedBody[m]);
 			if (method != null) adopted.set(body[m], method);
@@ -588,23 +597,78 @@ function earlyAdoptions(db: TransAmDb, filePath: string, parsed: Node, program: 
 	return adopted;
 }
 
+function exportsMacro(db: TransAmDb, modulePath: string): boolean {
+	const exports = findModuleExports(db.exportRegistry, modulePath);
+	if (exports == null) return false;
+	for (const es of exports.symbols) {
+		if (es.sym.symbolKind == SymbolKind.Macro) return true;
+	}
+	return false;
+}
+
 function checkMacroDeps(db: TransAmDb, filePath: string, imports: ImportEntry[]): void {
 	for (const ie of imports) {
 		if (ie.sourcePath == "" || ie.sourcePath == filePath) continue;
 		if (db.checkInProgress.has(ie.sourcePath)) continue;
-		const depExports = findModuleExports(db.exportRegistry, ie.sourcePath);
-		if (depExports == null) continue;
-		let depHasMacro = false;
-		for (const es of depExports.symbols) {
-			if (es.sym.symbolKind == SymbolKind.Macro) {
-				depHasMacro = true;
-				break;
-			}
-		}
-		if (depHasMacro) {
-			dbTypeCheck(db, ie.sourcePath);
-		}
+		if (exportsMacro(db, ie.sourcePath)) dbTypeCheck(db, ie.sourcePath);
+		else if (db.graph == null) bindUncheckedModule(db, ie.sourcePath);
 	}
+}
+
+function bindUncheckedModule(db: TransAmDb, modulePath: string): void {
+	if (boundInputsUnchanged(db, modulePath) || dbCheckIsCurrent(db, modulePath)) return;
+	if (checkedElsewhere(db, modulePath)) return;
+	const outerDb = _checkingDb;
+	_checkingDb = db;
+	const ctx = dbBoundModule(modulePath);
+	_checkingDb = outerDb;
+	if (ctx != null) registerModuleCtx(modulePath, ctx);
+}
+
+function checkedElsewhere(db: TransAmDb, modulePath: string): boolean {
+	const held = lookupModuleCtx(modulePath);
+	return held != null && held.exportRegistry != db.exportRegistry || sharedPreludeOwns(db.preludeCtx, modulePath);
+}
+
+function importsMacro(db: TransAmDb, filePath: string, imports: ImportEntry[]): boolean {
+	for (const ie of imports) {
+		if (ie.sourcePath != filePath && exportsMacro(db, ie.sourcePath)) return true;
+	}
+	return false;
+}
+
+function dbRegisterMacroExpandedExports(db: TransAmDb, filePath: string, imports: ImportEntry[], startVersion: int32): void {
+	if (!importsMacro(db, filePath, imports)) return;
+	const outerDb = _checkingDb;
+	_checkingDb = db;
+	const ctx = dbBoundModule(filePath);
+	_checkingDb = outerDb;
+	if (ctx == null || checkCancel(db.cancelCtx, startVersion)) return;
+	updateModuleExports(db.exportRegistry, filePath, collectExports(ctx, filePath));
+}
+
+function boundInputsUnchanged(db: TransAmDb, filePath: string): boolean {
+	const entry = db.bound.get(filePath);
+	if (entry == null) return false;
+	return entry.revision == db.revision.value || entry.inputHash == bindInputHash(db, filePath);
+}
+
+function bindInputHash(db: TransAmDb, filePath: string): number {
+	let h: number = 0;
+	const seen = new HashSet<int32>();
+	const pending: int32[] = [getFileId(db.fileInput, filePath)];
+	while (pending.length > 0) {
+		const fileId = pending.pop()!;
+		if (fileId < 0 || seen.has(fileId)) continue;
+		seen.add(fileId);
+		for (const kind of [TaQueryKind.Parse, TaQueryKind.TypeCheck]) {
+			const entry = cacheGet(db.cache, createQueryKey(kind, fileId));
+			h = (h * 31 + fileId) % 2147483647;
+			h = (h * 31 + (entry != null ? entry.outputHash : 0)) % 2147483647;
+		}
+		for (const depId of getDirectImports(db.moduleDeps, fileId)) pending.push(depId);
+	}
+	return h;
 }
 
 function boundAtRevision(db: TransAmDb, filePath: string): BoundModule | null {
@@ -612,7 +676,7 @@ function boundAtRevision(db: TransAmDb, filePath: string): BoundModule | null {
 	return entry != null && entry.revision == db.revision.value ? entry.unit : null;
 }
 
-function dbBindModule(db: TransAmDb, filePath: string, cachedProgram: Node, program: Node, imports: ImportEntry[], startVersion: int32): BoundModule {
+function dbBindModule(db: TransAmDb, filePath: string, program: Node, imports: ImportEntry[], startVersion: int32): BoundModule {
 	const graphMod = db.graph != null ? findModule(db.graph, filePath) : null;
 	const graph: ModuleGraph = graphMod != null ? db.graph! : createModuleGraph();
 	const mod = graphMod != null ? graphMod : createModule(filePath);
@@ -622,13 +686,14 @@ function dbBindModule(db: TransAmDb, filePath: string, cachedProgram: Node, prog
 	}
 	if (db.preludeCtx == null) db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
 	registerModuleProgram(filePath, program);
+	db.cache.bound += 1;
 	const unit = bindModuleForCheck(
 		program, db.exportRegistry, graph, mod,
 		db.preludeCtx, db.cancelCtx, startVersion,
-		earlyAdoptions(db, filePath, cachedProgram, program),
+		earlyAdoptions(db, filePath, program),
 		true
 	);
-	if (!checkCancel(db.cancelCtx, startVersion)) db.bound.set(filePath, { revision: db.revision.value, unit });
+	if (!checkCancel(db.cancelCtx, startVersion)) db.bound.set(filePath, { revision: db.revision.value, inputHash: bindInputHash(db, filePath), unit });
 	return unit;
 }
 
@@ -651,7 +716,7 @@ function dbBoundModule(modulePath: string): CheckerContext | null {
 	const imports = buildImportEntries(db, filePath, program);
 	db.checkInProgress.add(filePath);
 	checkMacroDeps(db, filePath, imports);
-	const unit = dbBindModule(db, filePath, cachedProgram, program, imports, startVersion);
+	const unit = dbBindModule(db, filePath, program, imports, startVersion);
 	db.checkInProgress.delete(filePath);
 	return unit.ctx;
 }
@@ -672,6 +737,12 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const cachedProgram = dbParse(db, filePath);
 	if (cachedProgram == null) return null as unknown as CheckerContext;
 
+	const startVersion = getCancelVersion(db.cancelCtx);
+
+	// Ensure cross-module exports are registered for all dependencies
+	const visitedPaths: HashSet<string> = new HashSet<string>();
+	dbEnsureExportsRegistered(db, filePath, visitedPaths, startVersion);
+
 	// Clone the parse tree before type-checking. The checker mutates nodeType/resolvedSym
 	// in-place; cloning keeps dbParse's cached tree immutable so other consumers
 	// (semantic tokens, syntax queries) see a clean AST. CloneMode.Check preserves
@@ -680,12 +751,6 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	// This replaces the previous double-parse (parseSourceLenient was called twice).
 	const bound = boundAtRevision(db, filePath);
 	const program = bound != null ? bound.program : cloneNodeForCheck(cachedProgram);
-
-	const startVersion = getCancelVersion(db.cancelCtx);
-
-	// Ensure cross-module exports are registered for all dependencies
-	const visitedPaths: HashSet<string> = new HashSet<string>();
-	dbEnsureExportsRegistered(db, filePath, visitedPaths, startVersion);
 
 	// Macro-declaring deps need a FULL check first: checkProgram registers their
 	// module ctx (registerModuleCtx), which the comptime engine seeds macro-body
@@ -715,11 +780,12 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		const depParseEntry = cacheGet(db.cache, depParseKey);
 		const depParseHash = depParseEntry != null ? depParseEntry.outputHash : 0;
 		recordDependency(db.depStack, depParseKey, depParseHash);
+		inputHashes.push(depParseHash);
+		if (checkedElsewhere(db, getFilePath(db.fileInput, depId))) continue;
 		const depCheckKey = createQueryKey(TaQueryKind.TypeCheck, depId);
 		const depCheckEntry = cacheGet(db.cache, depCheckKey);
 		const depCheckHash = depCheckEntry != null ? depCheckEntry.outputHash : 0;
 		recordDependency(db.depStack, depCheckKey, depCheckHash);
-		inputHashes.push(depParseHash);
 		inputHashes.push(depCheckHash);
 	}
 
@@ -736,7 +802,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 
 	const outerDb = _checkingDb;
 	_checkingDb = db;
-	const unit = bound != null ? bound : dbBindModule(db, filePath, cachedProgram, program, imports, startVersion);
+	const unit = bound != null ? bound : dbBindModule(db, filePath, program, imports, startVersion);
 	const checkerCtx = finishModuleCheck(unit);
 	_checkingDb = outerDb;
 	db.bound.delete(filePath);
@@ -875,6 +941,18 @@ export function dbCompileToJS(db: TransAmDb, source: string): Node {
 	const filePath = "__inline__.ms";
 	dbSetFileText(db, filePath, source);
 	return dbTransform(db, filePath);
+}
+
+export function dbStats(db: TransAmDb): string {
+	const cache = db.cache;
+	let recomputed = "";
+	for (let kind = 0; kind < cache.recomputed.length; kind++) {
+		const count = cache.recomputed[kind];
+		if (count > 0) recomputed += ` ${(kind as TaQueryKind).toString()}=${count}`;
+	}
+	return `entries=${cache.entries.length} hits=${cache.hits} misses=${cache.misses}`
+		+ ` marked=${cache.marked} evicted=${cache.evicted} bound=${cache.bound} collected=${cache.collected}`
+		+ ` recomputed:${recomputed}`;
 }
 
 // ===== Re-exports =====

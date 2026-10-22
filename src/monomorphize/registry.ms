@@ -51,7 +51,6 @@ function monoGenericOwner(gi: Type): string {
 // that are never declared) keeps the bare spelling.
 export function monoBaseName(baseName: string, ownerPath: string): string {
 	if (baseName == "" || ownerPath == "") return baseName;
-	if (baseName.indexOf("__", 0) >= 0) return baseName;
 	return baseName + "_" + hashToBase36(ownerPath);
 }
 
