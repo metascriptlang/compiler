@@ -6,7 +6,6 @@
 // code read from the wrong thread or after a later call shows up as a wrong kind.
 // Workdir derives from argv[0] so concurrent lane cells never collide.
 //
-// @xfail(raiser): every failure prints Other, the Raiser fs bridges store IoErrorKind+1 where index.rms expects an errno (inbox 2026-10-21-raiser-fs-errors-lose-their-kind.md)
 // @stdout: mkdir new=ok again=ok missingParent=NotFound empty=NotFound
 // @stdout: mkdir overFile=ok underFile=NotDirectory
 // @stdout: rmdir missing=NotFound file=NotDirectory full=err empty=ok gone=false

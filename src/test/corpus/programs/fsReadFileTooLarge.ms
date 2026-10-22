@@ -3,7 +3,6 @@
 // the 2^31-1 length cap, one past 2^32 so a size truncated to 32 bits would look small,
 // and a 3-byte file that must still read.
 //
-// @xfail(raiser): the message reads "I/O error (errno 9)", the Raiser fs bridges store IoErrorKind+1 where index.rms expects an errno (inbox 2026-10-21-raiser-fs-errors-lose-their-kind.md)
 // @stdout: over2G=err kind=Unknown message=file too large
 // @stdout: over4G=err kind=Unknown message=file too large
 // @stdout: small=abc

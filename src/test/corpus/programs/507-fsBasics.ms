@@ -1,4 +1,3 @@
-// @xfail(raiser): error: Property 'sort' does not exist on type 'Array'
 // Parity program — std fs I/O floor: write → stat → read roundtrip, append,
 // copy, lines roundtrip, dir tree (ensureDir/readDir/rename/remove/removeAll),
 // and the Result error path (readFile of a missing path → IoErrorKind).
