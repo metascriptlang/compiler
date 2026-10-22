@@ -1,7 +1,7 @@
 // Effects are read from checked bodies, and a callee later in the module is not
 // checked yet where its caller is: queue a check with deferEffectCheck.
 
-import { ArrayLiteralData, ArrowFunctionData, CallExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, PropertyDeclData, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind } from "../ast/node";
+import { ArrayLiteralData, ArrowFunctionData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, PropertyDeclData, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind, VariableDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
@@ -14,6 +14,7 @@ export enum Effect {
 	SideEffect,
 	SpawnUnsafe,
 	Suspends,
+	StoresSharedConst,
 }
 
 export interface EffectCause {
@@ -35,6 +36,7 @@ function emptyTable(): EffectTable {
 let sideTable: EffectTable = emptyTable();
 let spawnTable: EffectTable = emptyTable();
 let suspendTable: EffectTable = emptyTable();
+let sharedConstTable: EffectTable = emptyTable();
 let assumedOpen = false;
 let inAsync = false;
 let ownParams: string[] = [];
@@ -53,6 +55,7 @@ function tableFor(e: Effect): EffectTable {
 		Effect.SideEffect => sideTable,
 		Effect.SpawnUnsafe => spawnTable,
 		Effect.Suspends => suspendTable,
+		Effect.StoresSharedConst => sharedConstTable,
 	};
 }
 
@@ -73,6 +76,7 @@ export function runDeferredEffectChecks(ctx: CheckerContext): void {
 	sideTable = emptyTable();
 	spawnTable = emptyTable();
 	suspendTable = emptyTable();
+	sharedConstTable = emptyTable();
 }
 
 function isUncheckedGeneric(sym: Symbol): boolean {
@@ -183,7 +187,7 @@ function argumentEffect(arg: Node, e: Effect): EffectCause | null {
 		if (isRoutine(a.resolvedSym)) return null;
 		if (boundRoutine(a.resolvedSym) != null) return boundRoutineEffect(a.resolvedSym!, e);
 	}
-	return cause(arg, "passes a function value");
+	return e == Effect.StoresSharedConst ? null : cause(arg, "passes a function value");
 }
 
 export function returnsView(t: Readonly<Type | null>): boolean {
@@ -409,7 +413,7 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 		if (callee != null && callee.kind == NodeKind.Identifier && boundRoutine(callee.resolvedSym) != null) {
 			return through(call, "calls '" + (callee.data as IdentifierData).name + "'", boundRoutineEffect(callee.resolvedSym!, e));
 		}
-		return cause(call, "calls a function value");
+		return e == Effect.StoresSharedConst ? null : cause(call, "calls a function value");
 	}
 	if (hasFlag(sym!, SymbolFlag.GeneratedOp)) return null;
 	if (routineBody(unpackDecl(sym!.declNode)) == null) {
@@ -452,7 +456,7 @@ function ownedValueHookEffect(site: Node, e: Effect): EffectCause | null {
 function useEffect(node: Node, e: Effect): EffectCause | null {
 	const sym = node.resolvedSym;
 	if (sym == null) return null;
-	if (e == Effect.Suspends && sym.symbolKind != SymbolKind.Function) return null;
+	if ((e == Effect.Suspends || e == Effect.StoresSharedConst) && sym.symbolKind != SymbolKind.Function) return null;
 	if (isModuleState(sym)) return isConstantValue(sym, e) ? null : cause(node, "uses " + stateName(sym));
 	if (sym.symbolKind == SymbolKind.Function) return through(node, "refers to '" + sym.name + "'", routineEffect(sym, e));
 	return null;
@@ -463,13 +467,68 @@ export function walkEffect(node: Node | null, e: Effect): EffectCause | null {
 	if (isRoutineNode(node)) return walkNestedRoutine(node, e);
 	const here: EffectCause | null = match (node.kind) {
 		NodeKind.Identifier | NodeKind.MemberExpr => useEffect(node, e),
-		NodeKind.CallExpr => callEffect(node, e),
+		NodeKind.CallExpr => e == Effect.StoresSharedConst ? sinkStoreOf(node) ?? callEffect(node, e) : callEffect(node, e),
 		NodeKind.NewExpr => newEffect(node, e),
 		NodeKind.AwaitExpr => e == Effect.Suspends && !inAsync ? cause(node, "awaits") : null,
+		NodeKind.BinaryExpr | NodeKind.ArrayLiteral | NodeKind.ObjectLiteral => e == Effect.StoresSharedConst ? slotStoreOf(node) : null,
 		_ => null,
 	};
 	if (here != null) return here;
 	return walkChildren(node, e);
+}
+
+// The module const a stored value is, seen through conversions, both arms of a choice and a local
+// const bound to it; a store of it takes a reference count on the one object every thread shares.
+function sharedConstOf(value: Node | null): Symbol | null {
+	if (value == null) return null;
+	const n = peelConv(value);
+	if (n.kind == NodeKind.ConditionalExpr) return sharedConstOf((n.data as ConditionalExprData).ternaryConsequent) ?? sharedConstOf((n.data as ConditionalExprData).ternaryAlternate);
+	if (n.kind == NodeKind.BinaryExpr && (n.data as BinaryExprData).operator == "??") return sharedConstOf((n.data as BinaryExprData).left) ?? sharedConstOf((n.data as BinaryExprData).right);
+	if (n.kind == NodeKind.TypeAssertion) return sharedConstOf((n.data as TypeAssertionData).asExpr);
+	if (n.kind != NodeKind.Identifier || n.resolvedSym == null) return null;
+	if (isImmutableModuleConst(n.resolvedSym!)) return n.resolvedSym;
+	const sym = n.resolvedSym!;
+	if (sym.symbolKind != SymbolKind.Variable || hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.Mutable)) return null;
+	const bound = sym.declNode != null && sym.declNode.kind == NodeKind.VariableDecl ? (sym.declNode.data as VariableDeclData).initializer : null;
+	return bound != null && bound != value ? sharedConstOf(bound) : null;
+}
+
+function storeCause(site: Node, sym: Symbol, into: string): EffectCause {
+	return cause(site, "stores the module const '" + sym.name + "' " + into);
+}
+
+function slotStoreOf(node: Node): EffectCause | null {
+	if (node.kind == NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		if (d.operator != "=" || d.left == null || d.left.kind == NodeKind.Identifier) return null;
+		const sym = sharedConstOf(d.right);
+		return sym != null ? storeCause(node, sym, d.left.kind == NodeKind.ArrayAccess ? "into an array element" : "into a field") : null;
+	}
+	const items = node.kind == NodeKind.ArrayLiteral ? (node.data as ArrayLiteralData).elements : (node.data as ObjectLiteralData).properties;
+	for (const item of items) {
+		const sym = sharedConstOf(item);
+		if (sym != null) return storeCause(item, sym, node.kind == NodeKind.ArrayLiteral ? "into an array literal" : "into an object literal");
+	}
+	return null;
+}
+
+function sinkStoreOf(call: Node): EffectCause | null {
+	const sig = calledRoutineType(call);
+	if (sig == null) return null;
+	const shift = call.flags.has(NodeFlag.ExtCall) ? 1 : 0;
+	const args = (call.data as CallExprData).arguments;
+	const receiver = shift == 1 ? receiverOf(call) : null;
+	if (receiver != null && sig.typeChildren.length > 0 && sig.typeChildren[0] != null && sig.typeChildren[0].kind == TypeKind.Sink) {
+		const sym = sharedConstOf(receiver);
+		if (sym != null) return storeCause(receiver, sym, "into a sink parameter");
+	}
+	for (let i = 0; i < args.length; i += 1) {
+		const f = i + shift < sig.typeChildren.length ? sig.typeChildren[i + shift] : null;
+		if (f == null || f.kind != TypeKind.Sink) continue;
+		const sym = sharedConstOf(args[i]);
+		if (sym != null) return storeCause(args[i], sym, "into a sink parameter");
+	}
+	return null;
 }
 
 function walkChildren(node: Node, e: Effect): EffectCause | null {

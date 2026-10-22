@@ -666,21 +666,23 @@ function borrowedCapture(ctx: CheckerContext, node: Node): Node | null {
 	return hit[0];
 }
 
-function spawnEffectOf(fn: Node): EffectCause | null {
-	if (fn.kind != NodeKind.Identifier) return walkEffect(fn, Effect.SpawnUnsafe);
+function spawnEffectOf(fn: Node, e: Effect): EffectCause | null {
+	if (fn.kind != NodeKind.Identifier) return walkEffect(fn, e);
 	const sym = fn.resolvedSym;
 	if (sym == null) return null;
-	if (sym.symbolKind == SymbolKind.Function) return routineEffect(sym, Effect.SpawnUnsafe);
+	if (sym.symbolKind == SymbolKind.Function) return routineEffect(sym, e);
 	const bound = constBindingInitializer(sym);
 	if (bound == null) return null;
 	const declared = peelHidden(bound);
 	const isRoutine = declared.kind == NodeKind.FunctionDecl || declared.kind == NodeKind.ArrowFunction || declared.kind == NodeKind.FunctionExpr;
-	return isRoutine ? walkEffect(declared, Effect.SpawnUnsafe) : null;
+	return isRoutine ? walkEffect(declared, e) : null;
 }
 
 function requireSpawnSafe(fn: Node, runs: string, at: Node): void {
 	deferEffectCheck(at, "spawnSafe", (ctx: CheckerContext): void => {
-		const c = spawnEffectOf(peelHidden(fn));
+		const stored = spawnEffectOf(peelHidden(fn), Effect.StoresSharedConst);
+		if (stored != null) addError(ctx, runs + ", but it " + stored.text + "; a module const every thread shares is only borrowed there, so store a copy of it or store it outside the spawned code", at.location.line, at.location.column);
+		const c = spawnEffectOf(peelHidden(fn), Effect.SpawnUnsafe);
 		if (c == null) return;
 		addWarning(ctx, runs + ", but it " + c.text + "; module state crosses threads only as a const value, a Locked<T> or an Arc<T>", at.location.line, at.location.column);
 	});
