@@ -24,11 +24,12 @@ export interface EffectCause {
 interface EffectTable {
 	impure: HashMap<Symbol, EffectCause>;
 	pure: HashMap<Symbol, boolean>;
+	pureIfOpenArePure: HashMap<Symbol, boolean>;
 	open: Symbol[];
 }
 
 function emptyTable(): EffectTable {
-	return { impure: new HashMap<Symbol, EffectCause>(), pure: new HashMap<Symbol, boolean>(), open: [] };
+	return { impure: new HashMap<Symbol, EffectCause>(), pure: new HashMap<Symbol, boolean>(), pureIfOpenArePure: new HashMap<Symbol, boolean>(), open: [] };
 }
 
 let sideTable: EffectTable = emptyTable();
@@ -224,7 +225,7 @@ function memo(sym: Symbol, e: Effect, compute: () => EffectCause | null): Effect
 	const known = t.impure.get(sym);
 	if (known != null) return known;
 	if (t.pure.get(sym) != null) return null;
-	if (t.open.includes(sym)) {
+	if (t.open.includes(sym) || t.pureIfOpenArePure.get(sym) != null) {
 		assumedOpen = true;
 		return null;
 	}
@@ -235,8 +236,17 @@ function memo(sym: Symbol, e: Effect, compute: () => EffectCause | null): Effect
 	t.open.pop();
 	if (c != null) t.impure.set(sym, c);
 	else if (!assumedOpen) t.pure.set(sym, true);
+	else t.pureIfOpenArePure.set(sym, true);
+	if (t.open.length == 0) settleOpenRegion(t, c == null);
 	assumedOpen = outer || assumedOpen;
 	return c;
+}
+
+function settleOpenRegion(t: EffectTable, pure: boolean): void {
+	if (pure) {
+		for (const sym of t.pureIfOpenArePure.keys()) t.pure.set(sym, true);
+	}
+	t.pureIfOpenArePure = new HashMap<Symbol, boolean>();
 }
 
 export function routineEffect(sym: Symbol, e: Effect): EffectCause | null {
