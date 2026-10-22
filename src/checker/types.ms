@@ -3765,8 +3765,14 @@ export function classDeclaredParentOf(t: Type | null): Type | null;
 export function classDeclaredParentOf(t: Readonly<Type | null>): Readonly<Type | null>;
 export function classDeclaredParentOf(t: Readonly<Type | null>): Readonly<Type | null> {
 	if (t == null) return null;
-	const s = t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
-	const cls = s.kind == TypeKind.GenericInstance ? genericInstanceClass(s) : s;
+	return declaredStructParent(t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t);
+}
+
+function declaredStructParent(s: Readonly<Type>): Readonly<Type | null> {
+	return structParent(s.kind == TypeKind.GenericInstance ? genericInstanceClass(s) : s);
+}
+
+function structParent(cls: Readonly<Type | null>): Readonly<Type | null> {
 	return cls != null && cls.kind == TypeKind.Struct ? cls.typeExtra : null;
 }
 
