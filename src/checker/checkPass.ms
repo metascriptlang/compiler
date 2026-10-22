@@ -588,9 +588,8 @@ function checkStmtNode(ctx: CheckerContext, node: Node): void {
 			// with no binding and no await) is a compile error. Borrowed captures would
 			// dangle and the result would be silently dropped. For fire-and-forget,
 			// users should bind and await. For fire-and-forget, use actor SEND.
-			// Suppress inside loops: legacy fire-and-forget pattern (to be migrated later).
 			if (d.expr.kind == NodeKind.CallExpr && d.expr.resolvedSym != null
-				&& d.expr.resolvedSym.builtinKind == "PromiseSpawn" && !ctx.inLoop) {
+				&& d.expr.resolvedSym.builtinKind == "PromiseSpawn") {
 				addError(ctx, "spawn result is discarded — every affine Promise must be awaited before its scope exits (PARALOCK R1/E1)", d.expr.location.line, d.expr.location.column);
 			}
 		},

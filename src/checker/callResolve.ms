@@ -2178,7 +2178,12 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	for (let ai = 0; ai < d.arguments.length; ai += 1) { argTypes.push(null as unknown as Type); }
 		const spawnCalleeSym = node.resolvedSym != null ? node.resolvedSym : d.callee.resolvedSym;
 		let spawnMoveKeys: string[] = [];
-		if (spawnCalleeSym != null && spawnCalleeSym.builtinKind == "PromiseSpawn") spawnMoveKeys = desugarSpawnMoveList(ctx, d);
+		if (spawnCalleeSym != null && spawnCalleeSym.builtinKind == "PromiseSpawn") {
+			spawnMoveKeys = desugarSpawnMoveList(ctx, d);
+			if (d.arguments.length >= 2 && !awaitedWhereWritten(ctx, node)) {
+				addError(ctx, "a spawn with { timeout } must be awaited where it is written, because its deadline is taken at that await; bind the result of 'await spawn(..., { timeout })' instead of the handle", node.location.line, node.location.column);
+			}
+		}
 	const argOrder = genericArgOrder(ctx, d.arguments, _isGenericCall);
 	const literalArgs: boolean[] = [];
 	for (const arg of d.arguments) literalArgs.push(isLiteralTree(arg));
@@ -5184,6 +5189,24 @@ export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, 
 function hasThisParam(sym: Symbol): boolean {
 	return sym.symbolType != null && sym.symbolType.typeNames != null
 		&& sym.symbolType.typeNames.length > 0 && sym.symbolType.typeNames[0] == "this";
+}
+
+// A timed spawn's deadline is taken at the await written around it: the spawn is
+// that await's operand, or an element of the array literal of the Promise.all it
+// awaits, which the group lowering waits on with the deadline.
+function awaitedWhereWritten(ctx: CheckerContext, spawnCall: Node): boolean {
+	const a = ctx.awaitedCall;
+	if (a === spawnCall) return true;
+	if (a == null || a.kind != NodeKind.CallExpr) return false;
+	const ad = a.data as CallExprData;
+	if (ad.arguments.length != 1 || ad.arguments[0].kind != NodeKind.ArrayLiteral) return false;
+	if (ad.callee.kind != NodeKind.MemberExpr) return false;
+	const md = ad.callee.data as MemberExprData;
+	if (md.property != "all" || md.object.kind != NodeKind.Identifier || (md.object.data as IdentifierData).name != "Promise") return false;
+	for (const el of (ad.arguments[0].data as ArrayLiteralData).elements) {
+		if (el === spawnCall) return true;
+	}
+	return false;
 }
 
 function desugarSpawnMoveList(ctx: CheckerContext, d: CallExprData): string[] {

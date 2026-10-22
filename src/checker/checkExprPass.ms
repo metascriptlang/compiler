@@ -1080,9 +1080,38 @@ function checkConditionalExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 	node.nodeType = fitConditionalArms(ctx, d, expectedType, node == ctx.conversionOperand); return;
 }
 
+function isSpawnCall(n: Node): boolean {
+	return n.kind == NodeKind.CallExpr && n.resolvedSym != null && n.resolvedSym.builtinKind == "PromiseSpawn";
+}
+
+// `await Promise.all([...])` waits with a timed spawn's deadline only when every
+// element is a spawn, because only then does the group lowering take the wait.
+function refuseMixedTimedGroup(ctx: CheckerContext, arg: Node): void {
+	if (arg.kind != NodeKind.CallExpr) return;
+	const cd = arg.data as CallExprData;
+	const sym = arg.resolvedSym != null ? arg.resolvedSym : cd.callee.resolvedSym;
+	if (sym == null || sym.builtinKind != "PromiseAll") return;
+	const args = cd.arguments;
+	if (args.length != 1 || args[0].kind != NodeKind.ArrayLiteral) return;
+	const els = (args[0].data as ArrayLiteralData).elements;
+	let timed: Node | null = null;
+	let allSpawns = els.length >= 2;
+	for (const el of els) {
+		if (!isSpawnCall(el)) allSpawns = false;
+		else if (timed == null && (el.data as CallExprData).arguments.length >= 2) timed = el;
+	}
+	if (timed != null && !allSpawns) {
+		addError(ctx, "a spawn with { timeout } in 'await Promise.all([...])' needs every element of the array to be a spawn, at least two of them, because only that group waits with the deadline; await the timed spawn on its own", timed.location.line, timed.location.column);
+	}
+}
+
 function checkAwaitExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const d = node.data as AwaitExprData;
+	const savedAwaited = ctx.awaitedCall;
+	ctx.awaitedCall = d.awaitArg;
 	checkExpr(ctx, d.awaitArg, null);
+	ctx.awaitedCall = savedAwaited;
+	refuseMixedTimedGroup(ctx, d.awaitArg);
 	adoptAwaitedThenable(ctx, d);
 	const argType = d.awaitArg.nodeType;
 	if (argType != null && isAwaitable(argType)) {
