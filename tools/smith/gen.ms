@@ -7867,6 +7867,10 @@ class Gen {
 		if (this.rng.chance(40)) {
 			body += "\tn = null;\n" +
 				"\tif (n != null) { tr += \"never\"; }\n";
+			body += this.rng.chance(50) ?
+				"\tconst fill = (): void => { n = " + nul + "(m + 2, v); };\n\tfill();\n" :
+				"\tn = " + nul + "(m + 2, v);\n";
+			body += "\tif (n != null) { if (n != null) { tr += (n == v ? \"E\" : \"F\") + String(n); acc = n; } }\n";
 			live++;
 		}
 		if (this.rng.chance(60) || live == 0) {
@@ -10290,6 +10294,15 @@ test "the exc family alone reaches each of its shapes" {
 		}
 		assert seen;
 	}
+}
+
+test "the narrowing shape refills a null-narrowed nullable by a call or a closure and compares it with null twice" {
+	const f = excOnly("narrow");
+	let all = "";
+	for (let seed = 1; seed <= 40; seed++) { all += generate(seed as uint64, f); }
+	const twice = "\tif (n != null) { if (n != null) { tr += (n == v ? ";
+	assert all.contains("\tfill();\n" + twice) && all.contains("(m + 2, v);\n" + twice);
+	assert countOf(all, "\tn = null;\n\tif (n != null) { tr += \"never\"; }\n") == countOf(all, twice);
 }
 
 test "a zero exc family weight removes its helpers and its printed log" {
