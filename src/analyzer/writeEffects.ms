@@ -15,7 +15,8 @@ import { containsPointer } from "../checker/varPartitions";
 import { skipConvDfa } from "./alias";
 import { RcInfo, noRcInfo } from "./classify";
 import { makeNumber, makeString } from "../checker/literalNodes";
-import { createArray, createFunction, int32Type, stringType } from "../checker/types";
+import { classDistance, createArray, createFunction, int32Type, isReadonlyView, stringType, withoutReadonlyView } from "../checker/types";
+import { sameType } from "../checker/compat";
 import { generatedRef, makeAssign, makeCall, makeIdentResolved } from "../transform/util";
 import { cstringSource } from "../transform/native/cstringConvLower";
 
@@ -175,6 +176,88 @@ function fieldSlot(property: string): string {
 	return "F:" + property;
 }
 
+// A field or element slot names the type of the object that holds it, because a location can be
+// part of another only when its holder's type can be the other's: the same type, a class and its
+// ancestor, or arrays whose elements can be. A holder of unknown or generic type keeps the bare
+// slot, which every write to that field or element may hit.
+const HOLDER_MARK = "@";
+const slotHolders: Type[] = [];
+const slotHolderIds = new HashMap<Type, int32>();
+
+function holderType(t: Type | null): Type | null {
+	let cur = t;
+	for (let depth = 0; cur != null && depth < 16; depth += 1) {
+		if ((cur.kind == TypeKind.Ref || cur.kind == TypeKind.Var || cur.kind == TypeKind.Sink || cur.kind == TypeKind.Lent
+				|| cur.kind == TypeKind.Alias || cur.kind == TypeKind.Distinct) && cur.typeReturn != null) {
+			cur = cur.typeReturn;
+			continue;
+		}
+		if (isReadonlyView(cur)) {
+			cur = withoutReadonlyView(cur);
+			continue;
+		}
+		return cur.kind == TypeKind.Struct || cur.kind == TypeKind.Array ? cur : null;
+	}
+	return null;
+}
+
+function heldSlot(slot: string, holder: Type | null): string {
+	const t = holderType(holder);
+	if (t == null) return slot;
+	const known = slotHolderIds.get(t);
+	if (known != null) return slot + HOLDER_MARK + known;
+	const id = slotHolders.length as int32;
+	slotHolders.push(t);
+	slotHolderIds.set(t, id);
+	return slot + HOLDER_MARK + id;
+}
+
+function bareSlot(slot: string): string {
+	const at = slot.indexOf(HOLDER_MARK);
+	return at < 0 ? slot : slot.slice(0, at);
+}
+
+function slotHolder(slot: string): Type | null {
+	const at = slot.indexOf(HOLDER_MARK);
+	return at < 0 ? null : slotHolders[parseInt(slot.slice(at + 1)) as int32];
+}
+
+function mayBePartOf(a: Type | null, b: Type | null, depth: int32): boolean {
+	if (a == null || b == null || a === b || depth > 8) return true;
+	if (a.kind == TypeKind.Array && b.kind == TypeKind.Array) return elementsMayAlias(a.typeReturn, b.typeReturn, depth + 1);
+	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) {
+		if (!isClassType(a) || !isClassType(b)) return true;
+		return sameType(a, b) || classDistance(a, b) >= 0 || classDistance(b, a) >= 0;
+	}
+	return false;
+}
+
+function isClassType(t: Type): boolean {
+	return t.sym != null && t.sym.symbolKind == SymbolKind.Class;
+}
+
+function elementsMayAlias(a: Type | null, b: Type | null, depth: int32): boolean {
+	if (a == null || b == null || a === b) return true;
+	if (a.kind == TypeKind.Cursor || b.kind == TypeKind.Cursor) return a.kind == b.kind && elementsMayAlias(a.typeReturn, b.typeReturn, depth + 1);
+	const ha = holderType(a);
+	const hb = holderType(b);
+	if (ha != null && hb != null) return mayBePartOf(ha, hb, depth);
+	if (ha != null || hb != null) return isOpenType(ha != null ? b : a);
+	return isOpenType(a) || isOpenType(b) || sameType(a, b);
+}
+
+function isOpenType(t: Type): boolean {
+	return t.kind == TypeKind.GenericParam || t.kind == TypeKind.GenericInstance || t.kind == TypeKind.Unknown || t.kind == TypeKind.Inferred
+		|| t.kind == TypeKind.Union || t.kind == TypeKind.TypeReference || t.kind == TypeKind.Error;
+}
+
+function slotMayHit(write: string, read: string): boolean {
+	if (bareSlot(write) != bareSlot(read)) return false;
+	const w = slotHolder(write);
+	const r = slotHolder(read);
+	return w == null || r == null || mayBePartOf(w, r, 0);
+}
+
 function paramIndex(params: Symbol[] | null, sym: Symbol): int32 {
 	if (params == null) return -1;
 	for (let i = 0; i < params.length; i += 1) {
@@ -202,11 +285,11 @@ function writeTarget(s: WriteSummary, target: Node | null, params: Symbol[] | nu
 		NodeKind.MemberExpr => {
 			const md = t.data as MemberExprData;
 			if ((inCtor && isThis(md.object)) || freshBase(md.object, fresh)) return false;
-			const field = addSlot(s, fieldSlot(md.property));
-			const elements = md.property == "length" && addSlot(s, ELEMENT_SLOT);
+			const field = addSlot(s, heldSlot(fieldSlot(md.property), md.object.nodeType));
+			const elements = md.property == "length" && addSlot(s, heldSlot(ELEMENT_SLOT, md.object.nodeType));
 			return field || elements;
 		},
-		NodeKind.ArrayAccess => { return !freshBase((t.data as ArrayAccessData).array, fresh) && addSlot(s, ELEMENT_SLOT); },
+		NodeKind.ArrayAccess => { return !freshBase((t.data as ArrayAccessData).array, fresh) && addSlot(s, heldSlot(ELEMENT_SLOT, (t.data as ArrayAccessData).array.nodeType)); },
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { return writeTarget(s, (t.data as HiddenDerefData).expr, params, inCtor, fresh); },
 		_ => {
 			let changed = isGeneratedProc(t.resolvedSym) && addSlot(s, ELEMENT_SLOT);
@@ -246,7 +329,7 @@ function runsNativeOnC(sym: Symbol): boolean {
 
 function elementWrite(s: WriteSummary, base: Node, stores: Node[] | null): void {
 	if (stores != null) stores.push(base);
-	else addSlot(s, ELEMENT_SLOT);
+	else addSlot(s, heldSlot(ELEMENT_SLOT, base.nodeType));
 }
 
 function nativeEffect(s: WriteSummary, call: Node, sym: Symbol, stores: Node[] | null, argsLinked: boolean): void {
@@ -441,7 +524,7 @@ function walkBody(s: WriteSummary, body: Node | null, params: Symbol[] | null, i
 	const fresh = freshLocals(s, d);
 	for (const t of targets) writeTarget(s, t, params, inCtor, fresh);
 	for (const b of stores) {
-		if (!freshBase(b, fresh)) addSlot(s, ELEMENT_SLOT);
+		if (!freshBase(b, fresh)) addSlot(s, heldSlot(ELEMENT_SLOT, b.nodeType));
 	}
 	return fresh;
 }
@@ -651,7 +734,7 @@ function addressWrites(s: WriteSummary, args: Node[], params: Symbol[] | null, i
 	for (const a of args) {
 		if (a == null || a.kind != NodeKind.HiddenAddr) continue;
 		writeTarget(s, a, params, inCtor, null);
-		if (isArrayStorage((a.data as HiddenDerefData).expr.nodeType)) addSlot(s, ELEMENT_SLOT);
+		if (isArrayStorage((a.data as HiddenDerefData).expr.nodeType)) addSlot(s, heldSlot(ELEMENT_SLOT, (a.data as HiddenDerefData).expr.nodeType));
 	}
 }
 
@@ -803,8 +886,8 @@ function callWrites(call: Node): WriteSummary {
 export function stepSlot(n: Node): string | null {
 	match (n.kind) {
 		NodeKind.Identifier => { return n.resolvedSym != null && isModuleState(n.resolvedSym!) ? globalSlot(n.resolvedSym!) : null; },
-		NodeKind.MemberExpr => { return fieldSlot((n.data as MemberExprData).property); },
-		NodeKind.ArrayAccess => { return ELEMENT_SLOT; },
+		NodeKind.MemberExpr => { return heldSlot(fieldSlot((n.data as MemberExprData).property), (n.data as MemberExprData).object.nodeType); },
+		NodeKind.ArrayAccess => { return heldSlot(ELEMENT_SLOT, (n.data as ArrayAccessData).array.nodeType); },
 		_ => { return null; },
 	};
 }
@@ -824,6 +907,10 @@ function mayWriteAny(writes: WriteSummary, slots: string[]): boolean {
 	if (writes.unknown) return true;
 	for (const slot of slots) {
 		if (slot == ANY_HEAP_SLOT ? writes.slots.length > 0 : writes.slotSet.has(slot)) return true;
+		if (slot == ANY_HEAP_SLOT) continue;
+		for (const w of writes.slots) {
+			if (slotMayHit(w, slot)) return true;
+		}
 	}
 	return false;
 }
@@ -839,12 +926,12 @@ function pathSlots(n: Node, out: string[]): Symbol | null {
 		NodeKind.MemberExpr => {
 			const md = t.data as MemberExprData;
 			const root = pathSlots(md.object, out);
-			out.push(fieldSlot(md.property));
+			out.push(heldSlot(fieldSlot(md.property), md.object.nodeType));
 			return root;
 		},
 		NodeKind.ArrayAccess => {
 			const root = pathSlots((t.data as ArrayAccessData).array, out);
-			out.push(ELEMENT_SLOT);
+			out.push(heldSlot(ELEMENT_SLOT, (t.data as ArrayAccessData).array.nodeType));
 			return root;
 		},
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { return pathSlots((t.data as HiddenDerefData).expr, out); },
