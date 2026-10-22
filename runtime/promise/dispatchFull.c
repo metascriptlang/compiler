@@ -12,7 +12,7 @@
 #define MS_EVENT_READ 1
 #endif
 #include "dispatch.h"
-#include "pool.h"    /* Phase 8: msPoolHelpOne for help-first in msWaitForReady */
+#include "pool.h"
 #include "locked.h"  /* msTicketLock — the runtime's one lock primitive (Amendment E) */
 #include <stdlib.h>
 #include <string.h>
@@ -1004,20 +1004,32 @@ static void msResumeBehindQueuedCallbacks(void* fp) {
 	}
 }
 
+/* A spawn's task is submitted before its future is returned: once it is not queued,
+ * it never will be. A future with edges gains tasks as its inputs and awaits run. */
+static inline bool msFutureHasEdge(msFutureBase* f) {
+	return atomic_load_explicit(&f->edge, memory_order_acquire) != NULL;
+}
+
 void* msWaitFor(void* fp) {
 	msFutureBase* fut = (msFutureBase*)fp;
 	bool worker = msIsWorkerWait();
 	if (!worker) msGetDispatcher(); /* ensure event loop exists on main thread */
 	/* Re-increment ONLY if the decrement took — see msPoolBusyDec (pool.c). */
 	bool dec = worker && msPoolBusyDec();
+	bool spare = false;
+	bool queued = true;
 	while (!atomic_load_explicit(&fut->finished, memory_order_acquire)) {
-		if (msPoolHelpOne()) continue;
+		if (queued && msPoolRunEdge(fp, true)) continue;
+		queued = msFutureHasEdge(fut);
 		if (!worker) {
+			if (!spare) spare = msPoolCompensate(fp, "an await of a promise");
 			msRunOnce(MS_ACTIVE_WAIT_MS);
 		} else if (!msWorkerLoopPump()) {
+			if (!spare) spare = msPoolCompensate(fp, "an await of a promise");
 			msWorkerWaitOnFuture(fp);
 		}
 	}
+	if (spare) msPoolCompensateEnd();
 	if (dec) msPoolBusyInc();  /* back to own work */
 	if (!worker) msResumeBehindQueuedCallbacks(fp);
 	return msFutureRead(fp);
@@ -1030,9 +1042,13 @@ void msWaitForReady(void* fp) {
 	bool dec = worker && msPoolBusyDec();  /* see msWaitFor */
 	int spins = 0;
 	bool helped = false;
+	bool spare = false;
+	bool queued = true;
 	while (!atomic_load_explicit(&fut->finished, memory_order_acquire)) {
-		if (msPoolHelpOne()) { spins = 0; helped = true; continue; }
+		if (queued && msPoolRunEdge(fp, true)) { spins = 0; helped = true; continue; }
+		queued = msFutureHasEdge(fut);
 		if (!worker) {
+			if (!spare) spare = msPoolCompensate(fp, "an await of a promise");
 			msRunOnce(MS_ACTIVE_WAIT_MS);
 		} else if (msWorkerLoopPump()) {
 			spins = 0;
@@ -1040,11 +1056,13 @@ void msWaitForReady(void* fp) {
 			spins++;
 			msYield();
 		} else {
+			if (!spare) spare = msPoolCompensate(fp, "an await of a promise");
 			msWorkerWaitOnFuture(fp);
 			spins = 0;
 			helped = false;
 		}
 	}
+	if (spare) msPoolCompensateEnd();
 	if (dec) msPoolBusyInc();  /* back to own work */
 	if (!worker) msResumeBehindQueuedCallbacks(fp);
 }
@@ -1190,6 +1208,7 @@ void msClearInterval(double id) { msCancelTimer((int64_t)id); }
 
 void msAsyncCb(void* raw) {
 	msAsyncCbEnv* e = (msAsyncCbEnv*)raw;
+	msFutureEdgeAwait(e->retFut, NULL);
 
 	/* Call stepper — returns next msFutureBase* to wait on, or NULL when done.
 	 * Stepper returns msFutureBase* (any typed future cast to base).
@@ -1236,6 +1255,7 @@ void msAsyncCb(void* raw) {
 
 	/* Not resolved — register ourselves as callback on the yielded future,
 	 * then drop our +1 ref (env field keeps the future alive while suspended). */
+	msFutureEdgeAwait(e->retFut, next);
 	msFutureAddCallback(next, (msClosure){ .fn = (msClosureFn)msAsyncCb, .env = raw });
 	msFutureDrcDestroy(next);
 }
@@ -1245,7 +1265,6 @@ void msEnsureOwnerDispatcher(void) {
 }
 
 void msAsyncStart(void* retFut, msClosure stepper) {
-	(void)retFut;
 	/* Main thread: ensure dispatcher exists (needs IOCP/pipe for cross-thread completion).
 	 * Worker threads: skip dispatcher creation — on Windows too. A worker-local
 	 * dispatcher is NOT acceptable: it registers the worker's own IOCP in the wake
@@ -1262,6 +1281,7 @@ void msAsyncStart(void* retFut, msClosure stepper) {
 	}
 	msAsyncCbEnv* env = (msAsyncCbEnv*)malloc(sizeof(msAsyncCbEnv));
 	env->stepper = stepper;
+	env->retFut = retFut;
 	if (stepper.env) msIncRef(stepper.env);
 	msAsyncCb(env);
 }

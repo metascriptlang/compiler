@@ -408,6 +408,7 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
         /* Release the setup-loop incref — the input array's owner may drop its
          * refs the moment the combinator returns; without our own share the
          * callback reads a freed future. */ \
+        msFutureEdgeSettle(s->result, idx); \
         msDecref(f); \
         /* Decrement remaining and let the final decrementer (rem == 1 before sub) run cleanup.
          * acq_rel: acquire the copy-writes from peer threads; release our own writes. */ \
@@ -453,6 +454,7 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
         state->count = count; \
         atomic_store_explicit(&state->remaining, count, memory_order_relaxed); \
         atomic_store_explicit(&state->failed, false, memory_order_relaxed); \
+        msFutureEdgeAll(result, (void* const*)inputsCopy, count); \
         for (int i = 0; i < count; i++) { \
             elemFutType##_allCbEnv* cbEnv = (elemFutType##_allCbEnv*)malloc(sizeof(elemFutType##_allCbEnv)); \
             cbEnv->state = state; \

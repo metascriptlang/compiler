@@ -63,12 +63,19 @@ void msPoolShutdown(void);
  * as it exits, last registered first. */
 void msOnThreadDestruction(void (*handler)(void));
 
-/* Phase 8: Help-first scheduling — try to dequeue one task from the global
- * queue and execute it inline. Returns true if a task was found and executed.
- * Called from all blocking wait points (msAwaitGroupBlocking, msWaitFor,
- * msWaitForReady) to let blocked workers drain queued work instead of parking.
- * Self-contained: caller needs no access to msSpawnCtx. */
-bool msPoolHelpOne(void);
+/* A blocked waiter runs one queued task its awaited target depends on and returns
+ * true, or returns false when none is queued. `awaited` is a future, an
+ * msAwaitGroup or an msAwaitSlot; with `follow`, a future's wait edges are followed
+ * (Promise.all / allSettled inputs, the future an async function is suspended on). */
+bool msPoolRunEdge(const void* awaited, bool follow);
+
+/* Called where a waiter on the future `awaited` would park. When its closure holds a
+ * leaf no spawn completes, tasks stay queued, no worker is idle and fewer than
+ * workerCount threads run, it wakes a spare or starts one (true: pair with
+ * msPoolCompensateEnd when the wait ends). At the thread limit it fails loud, naming
+ * `wait`. A group or slot wait never compensates: its own tasks are queued or running. */
+bool msPoolCompensate(const void* awaited, const char* wait);
+void msPoolCompensateEnd(void);
 
 /* busyCount signaling for wait paths. Workers decrement on entering wait
  * (msAwaitSlotWait, msWaitForReady) so shouldSend sees available capacity.

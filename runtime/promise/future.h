@@ -83,6 +83,13 @@ typedef struct msFutureCb {
 	struct msFutureCb* next;
 } msFutureCb;
 
+/* The futures a combinator's or an async function's result waits on, so a blocked
+ * waiter can run the queued tasks behind them. Owned by the result future. */
+typedef struct msFutureEdge {
+	int32_t count;
+	void* to[];  /* NULL once that input settled or the function resumed */
+} msFutureEdge;
+
 /* ===== Future Base (shared fields — used by event loop, callbacks, dispatch) ===== */
 
 typedef struct msFutureBase {
@@ -95,6 +102,7 @@ typedef struct msFutureBase {
 	                            * race because no drain decref can exist for a future
 	                            * that never crossed threads. When true, defer to TLS
 	                            * to serialize with the dispatcher drain. */
+	bool spawned;         /* completed by a spawned task: a waiter on it waits on that task */
 	void* completionQueue;
 	void* error;          /* error payload (may be NULL even when failed) */
 	void (*valueDestructor)(void*); /* optional: frees value on destroy (combinators) */
@@ -111,6 +119,7 @@ typedef struct msFutureBase {
 	 * Atomic because poll-style readers (waitFor) may run on worker threads
 	 * while the dispatcher fires callbacks on the main thread. */
 	_Atomic(bool) errorObserved;
+	_Atomic(msFutureEdge*) edge;
 } msFutureBase;
 
 /* Verify: finished is the first field. awaitGroup.c uses msFutureBaseMinimal
@@ -233,6 +242,7 @@ static inline void msFutureDestroyInner(void* fp) {
 		free(cb);
 		cb = next;
 	}
+	free(atomic_load_explicit(&f->edge, memory_order_relaxed));
 	msDestroyAndDispose(f);
 }
 
@@ -547,7 +557,14 @@ static inline void* msFutureBoxAt(void* fp) {
 
 typedef struct {
 	msClosure stepper;
+	void* retFut;
 } msAsyncCbEnv;
+
+/* Wait edges (pool.c): an input of a Promise.all / allSettled result, and the
+ * future an async function's body is suspended on. */
+void msFutureEdgeAll(void* result, void* const* inputs, int32_t count);
+void msFutureEdgeSettle(void* result, int32_t index);
+void msFutureEdgeAwait(void* retFut, void* awaited);
 
 void msAsyncCb(void* raw);
 void msAsyncStart(void* retFut, msClosure stepper);

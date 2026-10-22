@@ -61,6 +61,7 @@ typedef struct msSpawnCtx {
 	                               may differ due to alignment padding (e.g., double needs 8-byte
 	                               alignment but msFutureBase is 20 bytes → 4 bytes padding). */
 	void* ownerQueue;           /* the submitting loop's completion queue: the env release runs there */
+	bool claimed;               /* queue slot only, under the pool lock: a waiter took it to run */
 } msSpawnCtx;
 
 
@@ -78,8 +79,7 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 	}
 
 	if (ctx->slotGroup != NULL) {
-		/* Stack-allocated fast path: atomic decrement, no condvar, no pipe.
-		 * Waiter spins via msPoolHelpOne + sched_yield (Malebolgia parity). */
+		/* Stack-allocated fast path: atomic decrement, no condvar, no pipe. */
 		if (msErr) {
 			msAwaitSlotFail(ctx->slotGroup, (void*)msCurrException);
 			msErr = false;
@@ -167,6 +167,7 @@ void msPoolSubmit(msSpawnCtx* ctx);
  * Takes ownership of the closure env by incrementing its refcount. */
 static inline void* msSpawnCancellable(msClosure fn, _Atomic(bool)* cancelFlag) {
 	msFuture_ptr* fut = msFutureCreateT(msFuture_ptr);
+	fut->base.spawned = true;
 	msSpawnCtx ctx = { .fn = (void*)fn.fn, .env = fn.env, .fut = fut, .cancelFlag = cancelFlag, .ownerQueue = msLoopCompletionQueue() };
 	if (fn.env != NULL) {
 		msIncRef(fn.env);
@@ -205,6 +206,7 @@ static inline void* msSpawnIntoCancellable(void* fut, msClosure fn, uint32_t cop
 		.fn = (void*)fn.fn, .env = fn.env, .fut = fut, .cancelFlag = cancelFlag, .ownerQueue = msLoopCompletionQueue(),
 		.inlineCopySize = copySize, .inlineValueOffset = valueOffset,
 	};
+	((msFutureBase*)fut)->spawned = true;
 	if (fn.env != NULL) msAtomicIncRef(fn.env);
 #if MS_FUTURE_SUBMIT_REF
 	msIncRef(fut);  /* Amendment G: owner-side queue completion ref (see msSpawn) */
@@ -273,7 +275,7 @@ static inline void msSpawnSlotSubmit(void* s, int32_t slot, msClosure fn) {
 	msPoolSubmit(&ctx);
 }
 
-/* msPoolHelpOne runs queued tasks on this thread and msSpawnWorkerRun reads msErr as
+/* msPoolRunEdge runs queued tasks on this thread and msSpawnWorkerRun reads msErr as
  * the task's own: keep the caller's in-flight exception out of the wait. */
 static inline void msAwaitSlotSettle(void* sp) {
 	bool err = msErr;

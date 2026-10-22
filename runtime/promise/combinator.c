@@ -24,6 +24,7 @@ static void msPromiseAllCb(void* env) {
 			s->values[idx] = f->value;
 		}
 	}
+	msFutureEdgeSettle(s->result, idx);
 	msDecref(f);
 
 	/* Always decrement. Last callback frees state. */
@@ -62,6 +63,7 @@ void* msPromiseAll(msRefArray* arr) {
 	state->values = (void**)calloc(count, sizeof(void*));
 	state->count = count;
 	state->remaining = count;
+	msFutureEdgeAll(result, (void* const*)inputsCopy, count);
 
 	for (int i = 0; i < count; i++) {
 		msPromiseAllCbEnv* env = (msPromiseAllCbEnv*)malloc(sizeof(msPromiseAllCbEnv));
@@ -135,6 +137,7 @@ static void msPromiseAllSettledCb(void* env) {
 	msPromiseAllSettledState* s = e->state;
 	int idx = e->index;
 	free(e);
+	msFutureEdgeSettle(s->result, idx);
 	msDecref(s->inputs[idx]);
 
 	/* Always decrement. Last callback completes (never fails). */
@@ -167,6 +170,7 @@ void* msPromiseAllSettled(msRefArray* arr) {
 	state->inputs = inputsCopy;
 	state->count = count;
 	state->remaining = count;
+	msFutureEdgeAll(result, (void* const*)inputsCopy, count);
 
 	for (int i = 0; i < count; i++) {
 		msPromiseAllSettledCbEnv* env = (msPromiseAllSettledCbEnv*)malloc(sizeof(msPromiseAllSettledCbEnv));

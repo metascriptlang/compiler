@@ -207,10 +207,8 @@ void msAwaitGroupFailSlot(msAwaitGroup* g, int32_t slot, void* error);
  * SYNC CONTEXT ONLY. This is the Phase 2 variant. Phase 4 will add an async
  * variant that registers a callback instead of blocking.
  *
- * Deadlock caveat: if the calling thread is itself a pool worker and all
- * pool workers end up blocked in msAwaitGroupBlocking on groups whose
- * tasks are queued behind them, the pool deadlocks. Phase 8 adds help-first
- * scheduling (waiting workers steal tasks from the queue) to prevent this. */
+ * The waiter runs the group's own queued tasks (msPoolRunEdge), so nested
+ * groups cannot leave every worker blocked on tasks queued behind them. */
 void msAwaitGroupBlocking(msAwaitGroup* g);
 
 /* Block until all slots done OR deadline expires (Phase 3).
@@ -271,10 +269,10 @@ static inline bool msSpawnCheckCancel(msAwaitGroup* g) {
 /* ===== msAwaitSlot — Stack-Allocated Fast Path (Malebolgia parity) ===== */
 
 /* Minimal completion target for fused await-spawn. Stack-allocated (24 bytes),
- * no mutex, no condvar. Waiter spins via help-first (msPoolHelpOne).
+ * no mutex, no condvar. Its waiter runs its own task when still queued, else spins.
  * Replaces heap-allocated msAwaitGroup for the common `await spawn(fn)` pattern. */
 
-extern bool msPoolHelpOne(void);  /* pool.h — avoid circular include */
+extern bool msPoolRunEdge(const void* awaited, bool follow);  /* pool.h — avoid circular include */
 extern bool msPoolBusyDec(void);  /* true only when it actually decremented */
 extern void msPoolBusyInc(void);
 
@@ -312,8 +310,8 @@ MS_TLS_EXTERN(bool, msIsPoolWorker);
 extern bool msRunOnce(int timeoutMs);  /* dispatch.h — avoid circular include */
 
 /* Dual-path wait, same split msWaitFor uses (dispatchFull.c): a pool worker
- * helps and yields, but the LOOP thread must keep pumping its loop while it
- * waits. Helping alone is not enough — a spawn child can be blocked on
+ * runs its queued task or yields, but the LOOP thread must keep pumping its loop while it
+ * waits. Running the task is not enough — a spawn child can be blocked on
  * something only the loop can complete (a timer armed by sleepAsync, a
  * cross-thread completion posted to the loop's port), and nobody else will
  * ever run it while the loop thread spins here. Proven 2026-09-05 by corpus
@@ -327,11 +325,13 @@ extern bool msRunOnce(int timeoutMs);  /* dispatch.h — avoid circular include 
 static inline void msAwaitSlotWait(void* sp) {
     msAwaitSlot* s = (msAwaitSlot*)sp;
     /* Re-increment ONLY if the decrement took: the count saturates at 0 and a
-     * nested help-first chain reaches it routinely, so an unconditional Inc
+     * nested wait chain reaches it routinely, so an unconditional Inc
      * adds a count nobody removed. */
     bool dec = msIsPoolWorker && msPoolBusyDec();  /* available to help while waiting */
+    bool queued = true;  /* its task is submitted before the wait: once not queued, never again */
     while (atomic_load_explicit(&s->pending, memory_order_acquire) > 0) {
-        if (msPoolHelpOne()) continue;
+        if (queued && msPoolRunEdge(sp, false)) continue;
+        queued = false;
         if (!msIsPoolWorker) msRunOnce(0);
         msYield();
     }

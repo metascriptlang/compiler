@@ -9,7 +9,12 @@ _Thread_local int msPoolWorkerSchedId = 0;
 MS_TLS_PUBLISH(msIsPoolWorker)
 
 void msPoolSubmit(struct msSpawnCtx* ctx) { msSpawnWorkerRun(ctx); }
-bool msPoolHelpOne(void) { return false; }
+bool msPoolRunEdge(const void* awaited, bool follow) { (void)awaited; (void)follow; return false; }
+bool msPoolCompensate(const void* awaited, const char* wait) { (void)awaited; (void)wait; return false; }
+void msPoolCompensateEnd(void) {}
+void msFutureEdgeAll(void* result, void* const* inputs, int32_t count) { (void)result; (void)inputs; (void)count; }
+void msFutureEdgeSettle(void* result, int32_t index) { (void)result; (void)index; }
+void msFutureEdgeAwait(void* retFut, void* awaited) { (void)retFut; (void)awaited; }
 bool msPoolBusyDec(void) { return false; }
 void msPoolBusyInc(void) {}
 int32_t msPoolPendingPeek(void) { return 0; }
@@ -31,6 +36,7 @@ void msPoolPendingAdd(int32_t delta) { (void)delta; }
 #include "runtime/core/system.h"  /* pulls in thread.h + msDecref + msCurrException */
 #include "runtime/promise/pool.h"
 #include "runtime/io/engine.h"  /* msIoEngine, msIoEngineWake — Amendment B targeted wake */
+#include "runtime/promise/locked.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdatomic.h>
@@ -120,6 +126,30 @@ static inline int msPoolQueueLen(msThreadPool* pool) {
 	return (pool->tail - pool->head + pool->cap) % pool->cap;
 }
 
+/* A waiter that runs a queued task marks its slot claimed and leaves it in place. */
+static inline void msPoolSkipClaimed(msThreadPool* pool) {
+	while (pool->head != pool->tail && pool->queue[pool->head].claimed) {
+		pool->head = (pool->head + 1) % pool->cap;
+	}
+}
+
+static inline bool msPoolHasUnclaimed(msThreadPool* pool) {
+	for (int i = pool->head; i != pool->tail; i = (i + 1) % pool->cap) {
+		if (!pool->queue[i].claimed) return true;
+	}
+	return false;
+}
+
+/* Threads past workerCount are spares: started by a waiter that would park while
+ * tasks stay queued, retired once the waiters that asked for them resume. A retired
+ * spare keeps serving its own loop channel, so it parks instead of exiting. */
+enum { MS_THREAD_WORKER = 0, MS_THREAD_SPARE = 1, MS_THREAD_RETIRED = 2 };
+static uint8_t msPoolThreadState[MS_POOL_MAX_WORKERS];  /* under the pool lock */
+static _Atomic(int) msPoolThreadCount = 0;
+static int msPoolSparesActive = 0;  /* under the pool lock */
+static int msPoolSparesWanted = 0;  /* under the pool lock */
+static msThreadPool* gPool = NULL;
+
 /* ===== Actor polling from worker threads (Phase 5: Parallel Actors) =====
  * Pool doesn't include actor.h to avoid static-in-header duplication.
  * Instead, actor.h registers a poll function + scheduler ID setter via hooks. */
@@ -130,8 +160,6 @@ static bool (*msPoolActorPollFn)(void) = NULL;
 /* Scheduler ID setter: called once per worker to assign scheduler ID */
 static void (*msPoolSchedIdSetterFn)(int id) = NULL;
 
-/* Scheduler ID assignment counter (workers get 1..N-1, main thread gets 0) */
-static _Atomic(int) msWorkerSchedIdx = 0;
 
 /* Per-worker actor wake flag: set by msPoolWakeWorker, checked in sleep predicate.
  * Prevents lost-wake race: if the condvar signal arrives while the worker is
@@ -186,35 +214,44 @@ static DWORD WINAPI msPoolWorkerLoop(LPVOID arg) {
 #else
 static void* msPoolWorkerLoop(void* arg) {
 #endif
-	msThreadPool* pool = (msThreadPool*)arg;
+	msThreadPool* pool = gPool;
+	int myWorkerIdx = (int)(intptr_t)arg;  /* index into workerConds[] */
+	int mySchedID = myWorkerIdx + 1;       /* workers are 1..N, main thread is 0 */
+	bool spare = myWorkerIdx >= pool->workerCount;
 	msIsPoolWorker = true;
-	/* Assign scheduler ID: workers are 1..N-1 (main thread is 0) */
-	int mySchedID = atomic_fetch_add(&msWorkerSchedIdx, 1) + 1;
-	int myWorkerIdx = mySchedID - 1;  /* 0-based index into workerConds[] */
 	msPoolWorkerSchedId = mySchedID;
-	if (msPoolSchedIdSetterFn != NULL) msPoolSchedIdSetterFn(mySchedID);
+	/* A spare takes no actor: its id stays past msSchedulerCount. */
+	if (!spare && msPoolSchedIdSetterFn != NULL) msPoolSchedIdSetterFn(mySchedID);
 
 	extern int msWorkerTimerDelayMs(void);
 	extern bool msWorkerLoopPending(void);
 	while (1) {
 		int timerMs = msWorkerTimerDelayMs();
 		MS_LOCK(pool);
+		if (spare && msPoolThreadState[myWorkerIdx] == MS_THREAD_SPARE && msPoolSparesActive > msPoolSparesWanted) {
+			msPoolThreadState[myWorkerIdx] = MS_THREAD_RETIRED;
+			msPoolSparesActive--;
+		}
+		bool retired = spare && msPoolThreadState[myWorkerIdx] == MS_THREAD_RETIRED;
+		msPoolSkipClaimed(pool);
 		/* Wait on OWN condvar — targeted wake, no spurious wakeups.
 		 * Check spawn queue AND actor wake flag: prevents lost-wake race where
 		 * msPoolWakeWorker signals while we're still running (signal lost). */
-		if (pool->head == pool->tail &&
+		if ((retired || pool->head == pool->tail) &&
 			!atomic_load_explicit(&msPoolActorWake[myWorkerIdx], memory_order_acquire) &&
 			!msWorkerLoopPending() &&
 			!pool->shutdown) {
-			atomic_fetch_or_explicit(&pool->idleMask, (uint64_t)1 << myWorkerIdx, memory_order_release);
+			if (!retired) atomic_fetch_or_explicit(&pool->idleMask, (uint64_t)1 << myWorkerIdx, memory_order_release);
 			if (timerMs >= 0) MS_WAIT_MS(pool->workerConds[myWorkerIdx], pool, timerMs);
 			else MS_WAIT(pool->workerConds[myWorkerIdx], pool);
-			atomic_fetch_and_explicit(&pool->idleMask, ~((uint64_t)1 << myWorkerIdx), memory_order_acquire);
+			if (!retired) atomic_fetch_and_explicit(&pool->idleMask, ~((uint64_t)1 << myWorkerIdx), memory_order_acquire);
 		}
 		/* Clear actor wake flag after waking (inside lock, before poll) */
 		atomic_store_explicit(&msPoolActorWake[myWorkerIdx], false, memory_order_relaxed);
+		retired = spare && msPoolThreadState[myWorkerIdx] == MS_THREAD_RETIRED;
+		msPoolSkipClaimed(pool);
 		/* Check shutdown with empty queue — exit cleanly */
-		if (pool->shutdown && pool->head == pool->tail) {
+		if (pool->shutdown && (retired || pool->head == pool->tail)) {
 			MS_UNLOCK(pool);
 			/* Amendment H: final TLS flush before worker exit — any deferred
 			 * releases accumulated during the last task must be pushed to the
@@ -227,9 +264,10 @@ static void* msPoolWorkerLoop(void* arg) {
 		/* Dequeue spawn task if available — copy struct out (Malebolgia: zero alloc) */
 		struct msSpawnCtx item = {0};
 		bool hasTask = false;
-		if (pool->head != pool->tail) {
+		if (!retired && pool->head != pool->tail) {
 			item = pool->queue[pool->head];
 			pool->head = (pool->head + 1) % pool->cap;
+			msPoolSkipClaimed(pool);
 			pool->busyCount++;
 			atomic_fetch_add_explicit(&msPoolBusyCount, 1, memory_order_relaxed);
 			hasTask = true;
@@ -262,7 +300,7 @@ static void* msPoolWorkerLoop(void* arg) {
 		/* Poll local actors (opportunistic between spawn tasks).
 		 * If actor work was found, loop back immediately to check for more
 		 * (actor re-enqueue may have added new work during processing). */
-		if (msPoolActorPollFn != NULL) {
+		if (!spare && msPoolActorPollFn != NULL) {
 			if (msPoolSchedIdSetterFn != NULL) msPoolSchedIdSetterFn(mySchedID);
 			atomic_fetch_add_explicit(&msPoolPendingCount, 1, memory_order_relaxed);
 			bool polled = msPoolActorPollFn();
@@ -303,7 +341,7 @@ void msPoolWakeWorker(int schedulerID) {
 	msThreadPool* pool = msPoolGet();
 	if (pool == NULL) return;
 	int idx = schedulerID - 1;  /* scheduler 1 → workerConds[0] */
-	if (idx < 0 || idx >= pool->workerCount) return;
+	if (idx < 0 || idx >= atomic_load_explicit(&msPoolThreadCount, memory_order_acquire)) return;
 	/* Set wake flag BEFORE signaling — survives if worker hasn't entered wait yet */
 	atomic_store_explicit(&msPoolActorWake[idx], true, memory_order_release);
 	MS_LOCK(pool);
@@ -324,7 +362,8 @@ void msPoolWakeWorkers(void) {
 	msThreadPool* pool = msPoolGet();
 	if (pool == NULL) return;
 	MS_LOCK(pool);
-	for (int i = 0; i < pool->workerCount; i++) {
+	int count = atomic_load_explicit(&msPoolThreadCount, memory_order_relaxed);
+	for (int i = 0; i < count; i++) {
 		MS_SIGNAL(pool->workerConds[i]);
 	}
 	MS_UNLOCK(pool);
@@ -332,40 +371,17 @@ void msPoolWakeWorkers(void) {
 
 /* ===== Singleton Init ===== */
 
-static msThreadPool* gPool = NULL;
-
 #ifdef _WIN32
 static LONG gPoolInitFlag = 0;
 #else
 static pthread_once_t gPoolOnce = PTHREAD_ONCE_INIT;
 #endif
 
-static void msPoolInit(void) {
-	gPool = (msThreadPool*)calloc(1, sizeof(msThreadPool));
-	gPool->workerCount = msDetectCPUs();
-	msPoolWorkerCount = gPool->workerCount;  /* init lock-free shouldSend threshold */
-	gPool->cap = MS_POOL_MAX_QUEUE;
-	gPool->queue = (msSpawnCtx*)calloc(gPool->cap, sizeof(msSpawnCtx));
-
+static bool msPoolStartThread(msThreadPool* pool, int idx) {
 #ifdef _WIN32
-	InitializeCriticalSection(&gPool->cs);
-	for (int i = 0; i < gPool->workerCount && i < MS_POOL_MAX_WORKERS; i++) {
-		InitializeConditionVariable(&gPool->workerConds[i]);
-	}
-	InitializeConditionVariable(&gPool->space);
-	gPool->workers = (HANDLE*)calloc(gPool->workerCount, sizeof(HANDLE));
-	int created = 0;
-	for (int i = 0; i < gPool->workerCount; i++) {
-		gPool->workers[i] = CreateThread(NULL, 0, msPoolWorkerLoop, gPool, 0, NULL);
-		if (gPool->workers[i] != NULL) created++;
-	}
+	pool->workers[idx] = CreateThread(NULL, 0, msPoolWorkerLoop, (LPVOID)(intptr_t)idx, 0, NULL);
+	return pool->workers[idx] != NULL;
 #else
-	pthread_mutex_init(&gPool->mutex, NULL);
-	for (int i = 0; i < gPool->workerCount && i < MS_POOL_MAX_WORKERS; i++) {
-		pthread_cond_init(&gPool->workerConds[i], NULL);
-	}
-	pthread_cond_init(&gPool->space, NULL);
-	gPool->workers = (pthread_t*)calloc(gPool->workerCount, sizeof(pthread_t));
 	/* 4MB stack per worker — inline fallback (shouldSend) can create deep
 	 * recursion chains (fib: spawn→submit→inline→fib→spawn...). Default
 	 * 512KB overflows at moderate depth. Matches Malebolgia's assumption
@@ -373,18 +389,42 @@ static void msPoolInit(void) {
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
 	pthread_attr_setstacksize(&attr, 4 * 1024 * 1024);
-	int created = 0;
-	for (int i = 0; i < gPool->workerCount; i++) {
-		if (pthread_create(&gPool->workers[i], &attr, msPoolWorkerLoop, gPool) == 0) {
-			created++;
-		}
-	}
+	bool ok = pthread_create(&pool->workers[idx], &attr, msPoolWorkerLoop, (void*)(intptr_t)idx) == 0;
 	pthread_attr_destroy(&attr);
+	return ok;
 #endif
+}
 
-	if (created < gPool->workerCount) {
-		gPool->workerCount = created;
+static void msPoolInit(void) {
+	gPool = (msThreadPool*)calloc(1, sizeof(msThreadPool));
+	int cpus = msDetectCPUs();
+	gPool->workerCount = cpus < MS_POOL_MAX_WORKERS ? cpus : MS_POOL_MAX_WORKERS;
+	gPool->cap = MS_POOL_MAX_QUEUE;
+	gPool->queue = (msSpawnCtx*)calloc(gPool->cap, sizeof(msSpawnCtx));
+
+#ifdef _WIN32
+	InitializeCriticalSection(&gPool->cs);
+	for (int i = 0; i < MS_POOL_MAX_WORKERS; i++) {
+		InitializeConditionVariable(&gPool->workerConds[i]);
 	}
+	InitializeConditionVariable(&gPool->space);
+	gPool->workers = (HANDLE*)calloc(MS_POOL_MAX_WORKERS, sizeof(HANDLE));
+#else
+	pthread_mutex_init(&gPool->mutex, NULL);
+	for (int i = 0; i < MS_POOL_MAX_WORKERS; i++) {
+		pthread_cond_init(&gPool->workerConds[i], NULL);
+	}
+	pthread_cond_init(&gPool->space, NULL);
+	gPool->workers = (pthread_t*)calloc(MS_POOL_MAX_WORKERS, sizeof(pthread_t));
+#endif
+	/* Held across the starts: a started worker reads workerCount before it takes work. */
+	MS_LOCK(gPool);
+	int created = 0;
+	while (created < gPool->workerCount && msPoolStartThread(gPool, created)) created++;
+	gPool->workerCount = created;
+	msPoolWorkerCount = created;  /* init lock-free shouldSend threshold */
+	atomic_store_explicit(&msPoolThreadCount, created, memory_order_release);
+	MS_UNLOCK(gPool);
 	atexit(msPoolShutdown);
 }
 
@@ -442,21 +482,190 @@ void msPoolSubmit(struct msSpawnCtx* ctx) {
 	MS_UNLOCK(pool);
 }
 
-/* ===== Phase 8: Help-First Scheduling ===== */
+/* ===== Waits run only what they depend on ===== */
 
-bool msPoolHelpOne(void) {
+/* Guards every msFutureEdge slot and is held while a waiter walks them: a target
+ * stays alive while its slot is set, because its owner drops the target only after
+ * clearing the slot under this lock. */
+static msTicketLock gEdgeLock = { 0, 0 };
+
+void msFutureEdgeAll(void* result, void* const* inputs, int32_t count) {
+	msFutureEdge* e = (msFutureEdge*)malloc(sizeof(msFutureEdge) + (size_t)count * sizeof(void*));
+	if (e == NULL) {
+		fprintf(stderr, "msFutureEdgeAll: out of memory for %d inputs\n", count);
+		abort();
+	}
+	e->count = count;
+	for (int32_t i = 0; i < count; i++) e->to[i] = inputs[i];
+	atomic_store_explicit(&((msFutureBase*)result)->edge, e, memory_order_release);
+}
+
+void msFutureEdgeSettle(void* result, int32_t index) {
+	msFutureEdge* e = atomic_load_explicit(&((msFutureBase*)result)->edge, memory_order_relaxed);
+	if (e == NULL) return;
+	msTicketLockAcquire(&gEdgeLock);
+	e->to[index] = NULL;
+	msTicketLockRelease(&gEdgeLock);
+}
+
+/* `awaited` NULL: the function resumed. */
+void msFutureEdgeAwait(void* retFut, void* awaited) {
+	if (retFut == NULL) return;
+	msFutureBase* r = (msFutureBase*)retFut;
+	msFutureEdge* e = atomic_load_explicit(&r->edge, memory_order_relaxed);
+	if (e == NULL) {
+		if (awaited == NULL) return;
+		e = (msFutureEdge*)malloc(sizeof(msFutureEdge) + sizeof(void*));
+		if (e == NULL) {
+			fprintf(stderr, "msFutureEdgeAwait: out of memory\n");
+			abort();
+		}
+		e->count = 1;
+		e->to[0] = awaited;
+		msTicketLockAcquire(&gEdgeLock);
+		atomic_store_explicit(&r->edge, e, memory_order_release);
+		msTicketLockRelease(&gEdgeLock);
+		return;
+	}
+	msTicketLockAcquire(&gEdgeLock);
+	e->to[0] = awaited;
+	msTicketLockRelease(&gEdgeLock);
+}
+
+#define MS_EDGE_WALK_MAX 64
+
+/* The unsettled futures `root` transitively waits on, root first; under gEdgeLock. */
+static int msEdgeCollect(const void** set) {
+	int n = 1;
+	for (int i = 0; i < n; i++) {
+		msFutureEdge* e = atomic_load_explicit(&((msFutureBase*)set[i])->edge, memory_order_acquire);
+		if (e == NULL) continue;
+		for (int32_t k = 0; k < e->count && n < MS_EDGE_WALK_MAX; k++) {
+			void* t = e->to[k];
+			if (t == NULL || atomic_load_explicit(&((msFutureBase*)t)->finished, memory_order_acquire)) continue;
+			bool seen = false;
+			for (int j = 0; j < n && !seen; j++) seen = set[j] == t;
+			if (!seen) set[n++] = t;
+		}
+	}
+	return n;
+}
+
+static inline bool msPoolTaskIn(const struct msSpawnCtx* task, const void** set, int n) {
+	for (int i = 0; i < n; i++) {
+		const void* a = set[i];
+		if (task->fut == a || (const void*)task->group == a || task->slotGroup == a) return true;
+	}
+	return false;
+}
+
+bool msPoolRunEdge(const void* awaited, bool follow) {
+	msThreadPool* pool = msPoolGet();
+	const void* set[MS_EDGE_WALK_MAX];
+	set[0] = awaited;
+	int n = 1;
+	bool walk = follow && atomic_load_explicit(&((const msFutureBase*)awaited)->edge, memory_order_acquire) != NULL;
+	if (walk) {
+		msTicketLockAcquire(&gEdgeLock);
+		n = msEdgeCollect(set);
+	}
+	struct msSpawnCtx task;
+	bool found = false;
+	MS_LOCK(pool);
+	/* Newest first: the deepest task, and a fused await's child is the last submit. */
+	for (int i = pool->tail; i != pool->head && !found; ) {
+		i = (i - 1 + pool->cap) % pool->cap;
+		struct msSpawnCtx* queued = &pool->queue[i];
+		if (queued->claimed || !msPoolTaskIn(queued, set, n)) continue;
+		task = *queued;
+		queued->claimed = true;
+		msPoolSkipClaimed(pool);
+		found = true;
+	}
+	MS_UNLOCK(pool);
+	if (walk) msTicketLockRelease(&gEdgeLock);
+	if (!found) return false;
+	msPoolRunQueued(&task);
+	return true;
+}
+
+/* True when `awaited` may wait on something no queued or running task of its own
+ * closure produces: an unsettled future with no edge that no spawn completes (a
+ * resolver, an actor reply, a timer, a race), or a closure past the walk bound. */
+static bool msEdgeLessLeaf(const void* awaited) {
+	const void* set[MS_EDGE_WALK_MAX];
+	set[0] = awaited;
+	msTicketLockAcquire(&gEdgeLock);
+	int n = msEdgeCollect(set);
+	bool edgeLess = n == MS_EDGE_WALK_MAX;
+	for (int i = 0; i < n && !edgeLess; i++) {
+		const msFutureBase* f = (const msFutureBase*)set[i];
+		edgeLess = !atomic_load_explicit(&f->finished, memory_order_acquire)
+			&& atomic_load_explicit(&f->edge, memory_order_acquire) == NULL && !f->spawned;
+	}
+	msTicketLockRelease(&gEdgeLock);
+	return edgeLess;
+}
+
+extern void (*msFatalTrap)(void);
+extern void msSleepMs(int ms);
+
+bool msPoolCompensate(const void* awaited, const char* wait) {
+	if (atomic_load_explicit(&msPoolBusyCount, memory_order_relaxed) >= msPoolWorkerCount) return false;
+	if (!msEdgeLessLeaf(awaited)) return false;
 	msThreadPool* pool = msPoolGet();
 	MS_LOCK(pool);
-	if (pool->head == pool->tail) {
+	if (!msPoolHasUnclaimed(pool)) {
 		MS_UNLOCK(pool);
 		return false;
 	}
-	struct msSpawnCtx task = pool->queue[pool->head];
-	pool->head = (pool->head + 1) % pool->cap;
-	MS_SIGNAL(pool->space);  /* wake any backpressured submitter */
+	uint64_t idle = atomic_load_explicit(&pool->idleMask, memory_order_acquire);
+	if (idle != 0) {
+		MS_SIGNAL(pool->workerConds[msCtz64(idle)]);
+		MS_UNLOCK(pool);
+		return false;
+	}
+	int count = atomic_load_explicit(&msPoolThreadCount, memory_order_relaxed);
+	for (int i = pool->workerCount; i < count; i++) {
+		if (msPoolThreadState[i] != MS_THREAD_RETIRED) continue;
+		msPoolThreadState[i] = MS_THREAD_SPARE;
+		msPoolSparesActive++;
+		msPoolSparesWanted++;
+		atomic_store_explicit(&msPoolActorWake[i], true, memory_order_release);
+		MS_SIGNAL(pool->workerConds[i]);
+		MS_UNLOCK(pool);
+		return true;
+	}
+	if (count < MS_POOL_MAX_WORKERS) {
+		msPoolThreadState[count] = MS_THREAD_SPARE;
+		if (msPoolStartThread(pool, count)) {
+			atomic_store_explicit(&msPoolThreadCount, count + 1, memory_order_release);
+			msPoolSparesActive++;
+			msPoolSparesWanted++;
+			MS_UNLOCK(pool);
+			return true;
+		}
+		msPoolThreadState[count] = MS_THREAD_WORKER;
+	}
 	MS_UNLOCK(pool);
-	msPoolRunQueued(&task);
-	return true;
+	/* One report: a second waiter reaching the limit waits for the first to exit. */
+	static atomic_flag reported = ATOMIC_FLAG_INIT;
+	if (atomic_flag_test_and_set(&reported)) for (;;) msSleepMs(1000);
+	fprintf(stderr, "Error: %s blocks while spawned tasks stay queued, and none of the %d pool threads is free to run them (%s)\n",
+		wait, count, count < MS_POOL_MAX_WORKERS ? "a thread could not be started" : "thread limit reached");
+	if (msFatalTrap != NULL) msFatalTrap();
+	/* Not exit(): its pool shutdown joins the threads this wait starves. */
+	_exit(1);
+}
+
+void msPoolCompensateEnd(void) {
+	msThreadPool* pool = msPoolGet();
+	MS_LOCK(pool);
+	msPoolSparesWanted--;
+	/* An idle spare retires at its next turn. */
+	uint64_t idle = atomic_load_explicit(&pool->idleMask, memory_order_acquire) >> pool->workerCount;
+	if (pool->workerCount < MS_POOL_MAX_WORKERS && idle != 0) MS_SIGNAL(pool->workerConds[pool->workerCount + msCtz64(idle)]);
+	MS_UNLOCK(pool);
 }
 
 /* ===== Busy Signaling (for wait paths) ===== */
@@ -490,14 +699,15 @@ void msPoolShutdown(void) {
 	if (gPool == NULL || msIsPoolWorker) return;
 	MS_LOCK(gPool);
 	gPool->shutdown = true;
-	for (int i = 0; i < gPool->workerCount; i++) {
+	int threads = atomic_load_explicit(&msPoolThreadCount, memory_order_relaxed);
+	for (int i = 0; i < threads; i++) {
 		MS_SIGNAL(gPool->workerConds[i]);
 	}
 	MS_BROADCAST(gPool->space);
 	MS_UNLOCK(gPool);
 
 #ifdef _WIN32
-	for (int i = 0; i < gPool->workerCount; i++) {
+	for (int i = 0; i < threads; i++) {
 		if (GetThreadId(gPool->workers[i]) != GetCurrentThreadId()) WaitForSingleObject(gPool->workers[i], INFINITE);
 		CloseHandle(gPool->workers[i]);
 	}
@@ -505,13 +715,13 @@ void msPoolShutdown(void) {
 	free(gPool->queue);
 	DeleteCriticalSection(&gPool->cs);
 #else
-	for (int i = 0; i < gPool->workerCount; i++) {
+	for (int i = 0; i < threads; i++) {
 		if (!pthread_equal(gPool->workers[i], pthread_self())) pthread_join(gPool->workers[i], NULL);
 	}
 	free(gPool->workers);
 	free(gPool->queue);
 	pthread_mutex_destroy(&gPool->mutex);
-	for (int i = 0; i < gPool->workerCount && i < MS_POOL_MAX_WORKERS; i++) {
+	for (int i = 0; i < MS_POOL_MAX_WORKERS; i++) {
 		pthread_cond_destroy(&gPool->workerConds[i]);
 	}
 	pthread_cond_destroy(&gPool->space);

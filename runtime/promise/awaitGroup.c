@@ -19,7 +19,7 @@
  */
 #include "runtime/core/system.h"  /* msDecref for a losing slot's error */
 #include "awaitGroup.h"
-#include "pool.h"    /* Phase 8: msPoolHelpOne for help-first scheduling */
+#include "pool.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -190,9 +190,9 @@ void msAwaitGroupBlocking(msAwaitGroup* g) {
 	}
 
 	/* Dual-path wait, same split as msWaitFor / msAwaitSlotWait (dispatchFull.c,
-	 * awaitGroup.h): a pool worker helps and parks on the group condvar; the
-	 * LOOP thread must keep pumping its event loop while it waits. Helping
-	 * alone is not enough - a spawn child can be blocked on something only the
+	 * awaitGroup.h): a pool worker runs the group's queued tasks and parks on the
+	 * group condvar; the LOOP thread must keep pumping its event loop while it
+	 * waits. Running them is not enough - a spawn child can be blocked on something only the
 	 * loop can complete (a timer armed by sleepAsync, a cross-thread
 	 * completion posted to the loop's port), and nobody else will ever run it
 	 * while the loop thread waits here. Proven 2026-09-05 by corpus 422.
@@ -201,30 +201,28 @@ void msAwaitGroupBlocking(msAwaitGroup* g) {
 	 * the count saturates at 0 and an unconditional Inc drifts it upward. */
 	bool worker = msIsPoolWorker;
 	bool dec = worker && msPoolBusyDec();  /* available to help while waiting */
+	bool queued = true;  /* every task is submitted before the wait: once none is queued, none will be */
 	if (!worker) {
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-			if (msPoolHelpOne()) continue;
+			if (queued && msPoolRunEdge(g, false)) continue;
+			queued = false;
 			/* Same 5ms active-wait cadence as msWaitFor (MS_ACTIVE_WAIT_MS) -
 			 * bounded slice so the deadline variant re-checks on time. */
 			msRunOnce(5);
 		}
 	} else {
-	/* Phase 8: Help-first scheduling - before parking on the condvar, try
-	 * to dequeue and execute tasks from the global pool queue inline. This
-	 * prevents deadlock when all pool workers are blocked in await groups
-	 * while their child tasks sit in the global queue.
-	 *
-	 * Lock ordering: we never hold both group mutex and pool mutex at once.
-	 * Drop group lock, msPoolHelpOne (acquires/releases pool lock internally),
+	/* Lock ordering: we never hold both group mutex and pool mutex at once.
+	 * Drop group lock, msPoolRunEdge (it takes the pool lock),
 	 * re-acquire group lock. */
 #ifdef _WIN32
 		EnterCriticalSection(&g->cs);
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
 			LeaveCriticalSection(&g->cs);
-			if (msPoolHelpOne()) {
+			if (queued && msPoolRunEdge(g, false)) {
 				EnterCriticalSection(&g->cs);
 				continue;
 			}
+			queued = false;
 			EnterCriticalSection(&g->cs);
 			if (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
 				SleepConditionVariableCS(&g->cv, &g->cs, INFINITE);
@@ -235,10 +233,11 @@ void msAwaitGroupBlocking(msAwaitGroup* g) {
 		pthread_mutex_lock(&g->mutex);
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
 			pthread_mutex_unlock(&g->mutex);
-			if (msPoolHelpOne()) {
+			if (queued && msPoolRunEdge(g, false)) {
 				pthread_mutex_lock(&g->mutex);
 				continue;
 			}
+			queued = false;
 			pthread_mutex_lock(&g->mutex);
 			if (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
 				pthread_cond_wait(&g->cv, &g->mutex);
@@ -269,35 +268,38 @@ void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 	 * there): loop thread pumps, worker parks on the group condvar. */
 	bool worker = msIsPoolWorker;
 	bool dec = worker && msPoolBusyDec();  /* available to help while waiting */
+	bool queued = true;  /* every task is submitted before the wait: once none is queued, none will be */
 	if (!worker) {
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-			/* Deadline before and after help: msPoolHelpOne executes a whole
+			/* Deadline before and after help: msPoolRunEdge executes a whole
 			 * child inline, and a deadline must not be pushed past that.
 			 * Measured 2026-09-05 (corpus 422): a 300ms task under a 60ms
 			 * deadline returned its value instead of throwing whenever help
 			 * won the race and ran the child itself. */
 			if (msAwaitGroupExpired(g, deadlineMs)) break;
-			if (msPoolHelpOne()) {
+			if (queued && msPoolRunEdge(g, false)) {
 				if (msAwaitGroupExpired(g, deadlineMs)) break;
 				continue;
 			}
+			queued = false;
 			int64_t remain = deadlineMs - msMonoTimeMs();
 			msRunOnce(remain > 5 ? 5 : (int)remain);
 		}
 	} else {
-	/* Phase 8: same help-first pattern as msAwaitGroupBlocking, with
-	 * deadline check at the top of every iteration (see the non-worker arm
-	 * for why the check must precede help). */
+	/* Same pattern as msAwaitGroupBlocking, with the deadline checked at the
+	 * top of every iteration (see the non-worker arm for why the check must
+	 * precede running a task). */
 #ifdef _WIN32
 		EnterCriticalSection(&g->cs);
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
 			if (msAwaitGroupExpired(g, deadlineMs)) break;
 			LeaveCriticalSection(&g->cs);
-			if (msPoolHelpOne()) {
+			if (queued && msPoolRunEdge(g, false)) {
 				EnterCriticalSection(&g->cs);
 				if (msAwaitGroupExpired(g, deadlineMs)) break;
 				continue;
 			}
+			queued = false;
 			EnterCriticalSection(&g->cs);
 			if (atomic_load_explicit(&g->pending, memory_order_acquire) <= 0) break;
 			int64_t remainMs = deadlineMs - msMonoTimeMs();
@@ -310,11 +312,12 @@ void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
 			if (msAwaitGroupExpired(g, deadlineMs)) break;
 			pthread_mutex_unlock(&g->mutex);
-			if (msPoolHelpOne()) {
+			if (queued && msPoolRunEdge(g, false)) {
 				pthread_mutex_lock(&g->mutex);
 				if (msAwaitGroupExpired(g, deadlineMs)) break;
 				continue;
 			}
+			queued = false;
 			pthread_mutex_lock(&g->mutex);
 			if (atomic_load_explicit(&g->pending, memory_order_acquire) <= 0) break;
 			/* Convert remaining time to absolute CLOCK_REALTIME timespec.
