@@ -1330,6 +1330,35 @@ test "an edit elsewhere leaves verified the importer of a module whose import an
 	assert dbCheckIsCurrent(db, "/held/top.ms");
 }
 
+// mid.ms imports dep.ms, which this db only binds, and dep.ms imports leaf.ms.
+function boundImportDb(root: string): TransAmDb {
+	const db = testDb(`file://${root}/main.ms`, "const z = 1;");
+	dbSetFileText(db, `${root}/leaf.ms`, "export function base(x: number): number { return x; }");
+	dbSetFileText(db, `${root}/dep.ms`, "import { base } from \"./leaf\";\nexport function bump(x: number) { return base(x); }");
+	dbSetFileText(db, `${root}/mid.ms`, "import { bump } from \"./dep\";\nexport const y = bump(1);");
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, `${root}/mid.ms`), getFileId(db.fileInput, `${root}/dep.ms`));
+	return db;
+}
+
+test "an edit elsewhere leaves verified a module whose import this db only binds" {
+	const root = "/boundElsewhere";
+	const db = boundImportDb(root);
+	assert checkedType(db, `${root}/mid.ms`, "y") == "number";
+	assert dbSetFileText(db, `${root}/main.ms`, "const z = 2;");
+	const before = recomputeCount(db);
+	assert dbCheckIsCurrent(db, `${root}/mid.ms`);
+	assert recomputeCount(db) == before;
+}
+
+test "an edit below a bound import re-checks the module that reads it" {
+	const root = "/boundBelow";
+	const db = boundImportDb(root);
+	assert checkedType(db, `${root}/mid.ms`, "y") == "number";
+	assert dbSetFileText(db, `${root}/leaf.ms`, "export function base(x: number): string { return \"s\"; }");
+	assert !dbCheckIsCurrent(db, `${root}/mid.ms`);
+	assert checkedType(db, `${root}/mid.ms`, "y") == "string", checkedType(db, `${root}/mid.ms`, "y");
+}
+
 test "re-checking after an edit two imports down rebinds the unchanged import between" {
 	const path = "/chain/test.ms";
 	const db = testDb(`file://${path}`, "import { bump } from \"./dep\";\nconst y = bump(1);");
