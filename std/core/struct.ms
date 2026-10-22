@@ -629,12 +629,17 @@ function orderedMapEnlarge<K, V>(m: Map<K, V>): void {
 }
 
 function orderedMapCompact<K, V>(m: Map<K, V>): void {
-	const oldEntries = m.entries;
+	let oldEntries = move m.entries;
 	let newEntries: Vec<OrderedMapEntry<K, V>> = [];
 	let i: int32 = 0;
 	while (i < oldEntries.length) {
 		if (oldEntries[i].hcode != 0) {
-			newEntries.push(oldEntries[i]);
+			const e: OrderedMapEntry<K, V> = {
+				hcode: oldEntries[i].hcode,
+				key: move oldEntries[i].key,
+				value: move oldEntries[i].value,
+			};
+			newEntries.push(e);
 		}
 		i = i + 1;
 	}
@@ -872,15 +877,14 @@ function orderedSetEnlarge<T>(s: Set<T>): void {
 }
 
 function orderedSetCompact<T>(s: Set<T>): void {
-	const oldEntries = s.entries;
+	let oldEntries = move s.entries;
 	let newEntries: Vec<OrderedSetEntry<T>> = [];
 	let i: int32 = 0;
 	while (i < oldEntries.length) {
 		if (oldEntries[i].hcode != 0) {
-			// See orderedMapCompact comment: explicit field copy so DRC incref correctly.
 			const e: OrderedSetEntry<T> = {
 				hcode: oldEntries[i].hcode,
-				key: oldEntries[i].key,
+				key: move oldEntries[i].key,
 			};
 			newEntries.push(e);
 		}
