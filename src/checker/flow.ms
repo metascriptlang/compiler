@@ -429,8 +429,7 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 			// count (the declNode IS the assignment source).
 			const narrowed = narrowByAssignment(current.node, state.reference, state.declaredType);
 			if (narrowed != null) {
-				const parent = getTypeAtFlowNode(state, current.antecedent);
-				result = flowType(narrowed, parent.incomplete);
+				result = flowType(narrowed, false);
 				break;
 			}
 			current = current.antecedent;

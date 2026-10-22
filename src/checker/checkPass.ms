@@ -6014,8 +6014,19 @@ test "flow: a variable of function type still narrows" {
 	assert checkOk("function f(cb: ((v: number) => number) | null): number { if (cb != null) return cb(1); return 0; }");
 }
 
+test "flow: a compound assignment keeps the type read before it" {
+	assert checkOk("function f(): number { let x: number | string = 1; x += 1; const n: number = x; return n; }");
+	assert checkOk("function f(): string { let s: number | string = \"a\"; s += \"b\"; const t: string = s; return t; }");
+}
 
+test "flow: a destructuring assignment widens to the declared type" {
+	assert checkOk("function f(): number { let x: number | string = \"a\"; let y: number | string = 1; [x, y] = [y, x]; const u: number | string = x; return 0; }");
+}
 
+test "flow: an assignment in a loop joins with the type before the loop" {
+	assert !checkOk("function f(): number { let x: number | string = \"a\"; let i = 0; while (i < 3) { x = 2; i = i + 1; } const z: number = x; return z; }");
+	assert !checkOk("function f(): number { let x: number | string = 1; let i = 0; while (i < 3) { if (i == 1) { x = \"s\"; } i = i + 1; } const z: number = x; return 0; }");
+}
 
 test "phase 6: type predicate narrows in truthy branch" {
 	// `isString(val)` true → val is string → return val is valid.
