@@ -1,12 +1,12 @@
 // Effects are read from checked bodies, and a callee later in the module is not
 // checked yet where its caller is: queue a check with deferEffectCheck.
 
-import { ArrowFunctionData, CallExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, PropertyDeclData, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind } from "../ast/node";
+import { ArrayLiteralData, ArrowFunctionData, CallExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, PropertyDeclData, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
 import { SymbolFlag, hasFlag, parentClassSymOf } from "./symbol";
-import { functionSlotOf, isAtomicRef, isSendableFunction, typeCarriesRef } from "./types";
+import { functionSlotOf, isAtomicRef, isReadonlyView, isSendableFunction, typeCarriesRef } from "./types";
 import { constBindingInitializer } from "./constFold";
 import { DYNAMIC_IMPORT } from "./importCall";
 
@@ -206,8 +206,36 @@ function isModuleState(sym: Symbol): boolean {
 function isConstantValue(sym: Symbol, e: Effect): boolean {
 	const t = sym.symbolType;
 	if (hasFlag(sym, SymbolFlag.Mutable)) return false;
-	if (typeCarriesRef(t)) return t != null && t.kind == TypeKind.Ptr && pointsAtConstantState(sym, e);
+	if (typeCarriesRef(t)) {
+		if (t != null && t.kind == TypeKind.Ptr) return pointsAtConstantState(sym, e);
+		return e == Effect.SpawnUnsafe && isReadonlyView(t) && builtInPlace(constBindingInitializer(sym));
+	}
 	return e == Effect.SpawnUnsafe || !isAtomicRef(t);
+}
+
+// No other binding holds a part of a value built from literals, `new` and calls of routines that
+// reach no module state, over arguments built the same way; a deep Readonly binding of it is then
+// never written.
+function builtInPlace(node: Node | null): boolean {
+	if (node == null) return false;
+	const n = peelConv(node);
+	if (n.kind == NodeKind.StringLiteral || !typeCarriesRef(n.nodeType)) return true;
+	if (n.kind == NodeKind.ObjectLiteral) return !n.flags.has(NodeFlag.Closure) && allBuiltInPlace((n.data as ObjectLiteralData).properties);
+	if (n.kind == NodeKind.ArrayLiteral) return allBuiltInPlace((n.data as ArrayLiteralData).elements);
+	if (n.kind == NodeKind.NewExpr) return reachesNoState(n.resolvedSym) && allBuiltInPlace((n.data as NewExprData).newArguments);
+	if (n.kind == NodeKind.CallExpr) return reachesNoState(n.resolvedSym) && allBuiltInPlace((n.data as CallExprData).arguments);
+	return false;
+}
+
+function allBuiltInPlace(nodes: Node[]): boolean {
+	for (const n of nodes) {
+		if (!builtInPlace(n)) return false;
+	}
+	return true;
+}
+
+function reachesNoState(sym: Symbol | null): boolean {
+	return isRoutine(sym) && routineEffect(sym!, Effect.SpawnUnsafe) == null;
 }
 
 function pointsAtConstantState(sym: Symbol, e: Effect): boolean {
