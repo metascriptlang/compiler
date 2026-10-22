@@ -10,23 +10,19 @@ const MAX_BASE_DEPTH = 64;
 function bodyOf(t: Type): Type;
 function bodyOf(t: Readonly<Type>): Readonly<Type>;
 function bodyOf(t: Readonly<Type>): Readonly<Type> {
-	let body = t;
-	while (body.kind == TypeKind.Ref && body.typeReturn != null) body = body.typeReturn;
-	return body;
+	return t.kind == TypeKind.Ref && t.typeReturn != null ? bodyOf(t.typeReturn) : t;
 }
 
 function ownNames(t: Readonly<Type>): Readonly<string[] | null> {
 	if (t.kind == TypeKind.Struct) return t.typeNames;
 	if (t.kind != TypeKind.GenericInstance || t.typeExtra == null) return null;
-	const declared = bodyOf(t.typeExtra);
-	return declared.kind == TypeKind.Struct ? declared.typeNames : null;
+	return bodyOf(t.typeExtra).kind == TypeKind.Struct ? bodyOf(t.typeExtra).typeNames : null;
 }
 
 function parentNamesOf(t: Readonly<Type>): Readonly<Type | null> {
 	if (t.kind == TypeKind.Struct) return t.typeExtra;
 	if (t.kind != TypeKind.GenericInstance || t.typeExtra == null) return null;
-	const declared = bodyOf(t.typeExtra);
-	return declared.kind == TypeKind.Struct ? declared.typeExtra : null;
+	return bodyOf(t.typeExtra).kind == TypeKind.Struct ? bodyOf(t.typeExtra).typeExtra : null;
 }
 
 function fieldNames(t: Readonly<Type>): string[] | null {

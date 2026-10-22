@@ -80,15 +80,18 @@ export function literalUnionBase(t: Type | null): Type | null;
 export function literalUnionBase(t: Readonly<Type | null>): Readonly<Type | null>;
 export function literalUnionBase(t: Readonly<Type | null>): Readonly<Type | null> {
 	if (t == null || t.kind != TypeKind.Union || t.typeChildren.length == 0) return null;
-	let base: Type | null = null;
+	const kind = literalMemberBase(t.typeChildren[0]);
 	for (const child of t.typeChildren) {
-		if (child == null) return null;
-		const own = child.kind == TypeKind.StringLiteral ? stringType()
-			: (child.kind == TypeKind.NumberLiteral ? numberLiteralBase(child) : null);
-		if (own == null || (base != null && base.kind != own.kind)) return null;
-		base = own;
+		const own = literalMemberBase(child);
+		if (own == null || kind == null || kind.kind != own.kind) return null;
 	}
-	return base;
+	return literalMemberBase(t.typeChildren[t.typeChildren.length - 1]);
+}
+
+function literalMemberBase(child: Readonly<Type | null>): Readonly<Type | null> {
+	if (child == null) return null;
+	if (child.kind == TypeKind.StringLiteral) return STRING_TYPE_VIEW;
+	return child.kind == TypeKind.NumberLiteral ? numberLiteralBase(child) : null;
 }
 
 // ===== In-Place Type Upgrade (reference parity: assignType) =====
@@ -408,7 +411,7 @@ export function getIteratorYieldType(t: Readonly<Type>): Readonly<Type | null> {
 			}
 		}
 	}
-	return inferredType();
+	return INFERRED_VIEW;
 }
 
 export function isResult(t: Readonly<Type | null>): boolean {
@@ -1569,7 +1572,7 @@ function maybeCacheKey(inner: Type): string {
 export function representedPayload(inner: Type): Type;
 export function representedPayload(inner: Readonly<Type>): Readonly<Type>;
 export function representedPayload(inner: Readonly<Type>): Readonly<Type> {
-	if (inner.kind == TypeKind.StringLiteral) return stringType();
+	if (inner.kind == TypeKind.StringLiteral) return STRING_TYPE_VIEW;
 	if (inner.kind == TypeKind.NumberLiteral) return numberLiteralBase(inner);
 	return literalUnionBase(inner) ?? inner;
 }
@@ -2192,8 +2195,7 @@ function genericOwnerOf(cur: Type): Symbol | null;
 function genericOwnerOf(cur: Readonly<Type>): Readonly<Symbol | null>;
 function genericOwnerOf(cur: Readonly<Type>): Readonly<Symbol | null> {
 	if (cur.kind != TypeKind.GenericInstance) return cur.sym;
-	const base = cur.typeExtra != null ? unwrapRefBase(cur.typeExtra) : null;
-	return base != null ? base.sym : null;
+	return cur.typeExtra != null ? unwrapRefBase(cur.typeExtra).sym : null;
 }
 
 export function genericParamsOf(t: Readonly<Type | null>): string {
@@ -2362,6 +2364,9 @@ function initSysTypes(): void {
 }
 const _sealedSysTypes: Type[] = [];
 initSysTypes();
+
+const STRING_TYPE_VIEW: Readonly<Type> = getSysType(TypeKind.String);
+const INT32_TYPE_VIEW: Readonly<Type> = getSysType(TypeKind.Int32);
 
 export function getSysType(kind: TypeKind): Type {
 	const idx = kind as number;
@@ -2596,7 +2601,7 @@ export function createNumberLiteral(name: string, base: Type): Type {
 export function numberLiteralBase(t: Type): Type;
 export function numberLiteralBase(t: Readonly<Type>): Readonly<Type>;
 export function numberLiteralBase(t: Readonly<Type>): Readonly<Type> {
-	return t.typeReturn != null ? t.typeReturn : int32Type();
+	return t.typeReturn != null ? t.typeReturn : INT32_TYPE_VIEW;
 }
 
 export function integerLiteralName(v: int64): string { return int64ToDecimal(v); }
@@ -3119,12 +3124,9 @@ export function isAllStringLiteralUnion(t: Readonly<Type | null>): boolean {
 	return true;
 }
 
-export function numberLiteralSet(t: Type | null): Type[] | null;
-export function numberLiteralSet(t: Readonly<Type | null>): Readonly<Type[] | null>;
-export function numberLiteralSet(t: Readonly<Type | null>): Readonly<Type[] | null> {
+export function numberLiteralSet(t: Readonly<Type | null>): Readonly<Type>[] | null {
 	if (t == null) return null;
-	const single: Readonly<Type>[] = [t];
-	const members: Readonly<Type[]> = t.kind == TypeKind.NumberLiteral ? single : literalUnionBase(t) != null && literalUnionBase(t)!.kind != TypeKind.String ? t.typeChildren : [];
+	const members: Readonly<Type>[] = t.kind == TypeKind.NumberLiteral ? [t] : literalUnionBase(t) != null && literalUnionBase(t)!.kind != TypeKind.String ? [...t.typeChildren] : [];
 	if (members.length == 0) return null;
 	for (const m of members) if (!isNumeric(numberLiteralBase(m))) return null;
 	return members;
@@ -5577,19 +5579,17 @@ function unionLayoutAt(tg: TargetInfo, t: Readonly<Type>, depth: int32, fieldInd
 export function structLayoutType(t: Type): Type | null;
 export function structLayoutType(t: Readonly<Type>): Readonly<Type | null>;
 export function structLayoutType(t: Readonly<Type>): Readonly<Type | null> {
-	let cur = t;
-	for (let depth = 0; depth <= 16; depth += 1) {
-		if (cur.kind == TypeKind.Struct) return cur;
-		if (cur.kind == TypeKind.GenericInstance) {
-			const body = instanceLayoutBody(cur);
-			if (body == null || body == cur) return null;
-			cur = body;
-		} else if ((cur.kind == TypeKind.Alias || cur.kind == TypeKind.Distinct || cur.kind == TypeKind.Sink || cur.kind == TypeKind.Lent) && cur.typeReturn != null) {
-			cur = cur.typeReturn;
-		} else {
-			return null;
-		}
+	return layoutStructAt(t, 0);
+}
+
+function layoutStructAt(cur: Readonly<Type>, depth: int32): Readonly<Type | null> {
+	if (depth > 16) return null;
+	if (cur.kind == TypeKind.Struct) return cur;
+	if (cur.kind == TypeKind.GenericInstance) {
+		const body = instanceLayoutBody(cur);
+		return body == null || body == cur ? null : layoutStructAt(instanceLayoutBody(cur)!, depth + 1);
 	}
+	if ((cur.kind == TypeKind.Alias || cur.kind == TypeKind.Distinct || cur.kind == TypeKind.Sink || cur.kind == TypeKind.Lent) && cur.typeReturn != null) return layoutStructAt(cur.typeReturn, depth + 1);
 	return null;
 }
 

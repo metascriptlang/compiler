@@ -99,8 +99,11 @@ function variantFailArgs(g: CGen, u: Readonly<Type>, slot: int32): string {
 }
 
 function litSetPayload(t: Readonly<Type>): Readonly<Type | null> {
-	const payload = isMaybeType(t) && t.typeReturn != null ? t.typeReturn : t;
-	return strLitPayload(payload) ?? (numberLiteralSet(payload) != null ? payload : null);
+	return strLitPayload(maybePayload(t)) ?? (numberLiteralSet(maybePayload(t)) != null ? maybePayload(t) : null);
+}
+
+function maybePayload(t: Readonly<Type>): Readonly<Type> {
+	return isMaybeType(t) && t.typeReturn != null ? t.typeReturn : t;
 }
 
 function litSourceFits(from: Readonly<Type>, set: Readonly<Type>): boolean {

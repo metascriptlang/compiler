@@ -744,7 +744,7 @@ function dispatchSwitchOf(stmt: Readonly<Node>): Readonly<Node> | null {
 	const body = (stmt.data as DoWhileStmtData).doBody;
 	if (body.kind != NodeKind.BlockStmt) return null;
 	const inner = (body.data as BlockStmtData).statements;
-	return inner.length == 1 && inner[0].kind == NodeKind.SwitchStmt ? inner[0] : null;
+	return inner.length == 1 && inner[0].kind == NodeKind.SwitchStmt ? ((stmt.data as DoWhileStmtData).doBody.data as BlockStmtData).statements[0] : null;
 }
 
 function holdsLabel(node: Readonly<Node>): boolean {
