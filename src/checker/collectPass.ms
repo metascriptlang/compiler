@@ -1131,6 +1131,14 @@ export function collectExtern(ctx: CheckerContext, node: Node): void {
 		ExternKind.Type => SymbolKind.TypeAlias,
 		_ => SymbolKind.Variable,
 	};
+	const cTag = d.externKind == ExternKind.Struct && ctx.exportRegistry != null && isCTagSpelling(d.nativeName) ? d.nativeName : "";
+	const shared = cTag != "" ? ctx.exportRegistry.cTags.get(cTag) : null;
+	if (shared != null && shared.name == d.externName) {
+		const result = defineSymbol(ctx.table, shared);
+		if (!result.ok) addError(ctx, result.error, node.location.line, node.location.column);
+		node.resolvedSym = shared;
+		return;
+	}
 	const symType = d.externKind == ExternKind.Struct ? retainedType(ctx, node, createStruct(d.externName, [], [], true)) : inferredType();
 	const mutable = d.externKind == ExternKind.Var || d.externKind == ExternKind.Let;
 	const sym = declSymbol(ctx, node, d.externName, kind, symType, mutable);
@@ -1144,6 +1152,11 @@ export function collectExtern(ctx: CheckerContext, node: Node): void {
 		sym.nativeName = d.externName;
 	}
 	defineOrError(ctx, sym, node);
+	if (cTag != "") ctx.exportRegistry.cTags.set(cTag, sym);
+}
+
+function isCTagSpelling(nativeName: string | null): boolean {
+	return nativeName != null && (nativeName.startsWith("struct ") || nativeName.startsWith("union "));
 }
 
 export function collectMacro(ctx: CheckerContext, node: Node): void {

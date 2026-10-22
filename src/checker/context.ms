@@ -38,10 +38,13 @@ export interface ModuleExports {
 export interface ExportRegistry {
 	entries: ModuleExports[];
 	moduleIndex: HashMap<string, number>;  // modulePath → index in entries[]
+	// An incomplete C struct or union is one type per tag across every translation unit
+	// (C11 6.2.7), so every header that names it declares the same symbol.
+	cTags: HashMap<string, Symbol>;
 }
 
 export function createExportRegistry(): ExportRegistry {
-	return { entries: [], moduleIndex: new HashMap<string, number>() };
+	return { entries: [], moduleIndex: new HashMap<string, number>(), cTags: new HashMap<string, Symbol>() };
 }
 
 export function registerModuleExports(registry: ExportRegistry, modulePath: string, exports: ExportedSymInfo[]): void {
