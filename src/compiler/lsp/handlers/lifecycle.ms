@@ -1288,13 +1288,26 @@ test "re-checking a body edit recomputes only the edited file's parse and check"
 	assert recomputed.join(",") == expected, recomputed.join(",");
 	assert recomputeCount(db) - before == 3;
 	assert db.cache.entries.length == entries;
-	assert db.cache.bound - bound == 2 && db.cache.collected - collected == 0, bindWork(db);
+	assert db.cache.bound - bound == 1 && db.cache.collected - collected == 0, bindWork(db);
 	const hits = db.cache.hits;
 	const ctx = dbTypeCheck(db, path);
 	assert dbTypeCheck(db, path) == ctx;
 	assert db.cache.hits - hits == 2;
 	assert recomputeCount(db) - before == 3;
-	assert db.cache.bound - bound == 2 && db.cache.collected - collected == 0, bindWork(db);
+	assert db.cache.bound - bound == 1 && db.cache.collected - collected == 0, bindWork(db);
+}
+
+test "re-checking after an edit two imports down rebinds the unchanged import between" {
+	const path = "/chain/test.ms";
+	const db = testDb(`file://${path}`, "import { bump } from \"./dep\";\nconst y = bump(1);");
+	dbSetFileText(db, "/chain/dep.ms", "import { base } from \"./leaf\";\nexport function bump(x: number) { return base(x); }");
+	dbSetFileText(db, "/chain/leaf.ms", "export function base(x: number): number { return x; }");
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, path), getFileId(db.fileInput, "/chain/dep.ms"));
+	assert checkedType(db, path, "y") == "number";
+	assert dbSetFileText(db, path, "import { bump } from \"./dep\";\nconst y = bump(2);");
+	assert checkedType(db, path, "y") == "number";
+	assert dbSetFileText(db, "/chain/leaf.ms", "export function base(x: number): string { return \"s\"; }");
+	assert checkedType(db, path, "y") == "string", checkedType(db, path, "y");
 }
 
 test "re-checking an importer after a dependency body edit reuses the importer's parse" {
