@@ -230,12 +230,6 @@ msString msStringNewLen(int64_t len) {
 	return (msString){ .len = len, .p = p };
 }
 
-void msStringDestroy(msString s) {
-	if (!msIsLiteral(s)) {
-		free(s.p);
-	}
-}
-
 void msStringPrepareMutation(msString* s) {
 	if (s->p != NULL && (s->p->cap & MS_STRLIT_FLAG) != 0) {
 		msStrPayload* oldP = s->p;

@@ -150,7 +150,11 @@ msString msStringNewCap(int64_t cap);
 msString msStringNewLen(int64_t len);
 
 /* Free if not literal */
-void msStringDestroy(msString s);
+static inline void msStringDestroy(msString s) {
+	if (!msIsLiteral(s)) {
+		free(s.p);
+	}
+}
 
 /* Force-free a cache-owned msString that has MS_STRLIT_FLAG set.
  * Caches (e.g. static response cache in net/socket.h) flag their entries as
