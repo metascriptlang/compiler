@@ -725,6 +725,8 @@ export function ccgIntroducedPtr(tg: TargetInfo, t: Type): boolean {
 	if (isStructType(inner)) return sizeOfType(tg, inner) > ptrThreshold(tg);
 	// Union(Ref<T>, Null) collapses to T* in C — the pointer IS the value, no struct-via-pointer.
 	if (inner.kind == TypeKind.Union && unwrapRefNullUnion(inner) != null) return false;
+	const carried = literalUnionBase(inner);
+	if (carried != null) return ccgIntroducedPtr(tg, carried);
 	return match (inner.kind) {
 		TypeKind.Tuple => sizeOfType(tg, inner) > ptrThreshold(tg),
 		TypeKind.Array => true,  // arrays always by pointer: mutable by default, realloc invalidates caller copy
