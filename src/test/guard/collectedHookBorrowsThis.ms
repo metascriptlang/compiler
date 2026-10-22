@@ -1,33 +1,31 @@
 // nim-guard: a destroy hook on a collected cycle may borrow `this` and run once
 //
-// INVARIANT (ULTRALOCK M6): a hook that only borrows `this` (a closure, a callee, a spawn
-//   thunk) runs once and frees nothing twice, whether the cell dies by its last decref or
-//   in the collector's free loop. The free loop hands each cell to its hook with the
+// INVARIANT (ULTRALOCK M6): a hook that only borrows `this` (a closure or a callee) runs once
+//   and frees nothing twice, whether the cell dies by its last decref or in the collector's
+//   free loop. The free loop hands each cell to its hook with the
 //   sole-owner count, the count a last decref leaves, so the borrow's incref/decref pair
 //   cannot reach "last" again.
 //
 // WHAT IT CATCHES: a collected cell keeping its trial-decremented count into the hook —
 //   the borrow's decref then reads "last" and destroys the cell a second time
-//   (DOUBLE-DESTROY of Tri / Solo / Pair / Lent).
+//   (DOUBLE-DESTROY of Tri / Solo / Pair).
 //
-// AXES: cycle length 3 / 1 / 2; the borrow through a local closure, a closure argument,
-//   and a spawn thunk. Seed's hook builds a fresh cycle, so roots arrive while the free
-//   loop runs and must not start a collection over cells it is still freeing.
+// AXES: cycle length 3 / 1 / 2; the borrow through a local closure and a closure argument.
+//   Seed's hook builds a fresh cycle, so roots arrive while the free loop runs and must not start a collection over cells it is still freeing.
+//   The spawn-thunk axis is refused at compile time by the hook law (T7, 7b93f92bf); collectedHookSpawnRejects pins that refusal.
 //   DRC is NOT asserted: DRC does not collect cycles by design.
 //
 // RED MEANS: the collector's free loop runs a hook on a cell whose count is not the
 //   sole-owner count, or lets a hook re-enter the collector. Run /trace-ref on
 //   collectCyclesBacon (runtime/drc.c).
-// GUARD-BALANCE-ORC Tri
-// GUARD-BALANCE-ORC Solo
-// GUARD-BALANCE-ORC Pair
-// GUARD-BALANCE-ORC Lent
-// GUARD-BALANCE-ORC Seed
+// GUARD-BALANCE Tri
+// GUARD-BALANCE Solo
+// GUARD-BALANCE Pair
+// GUARD-BALANCE Seed
 
 class Tri { next: Tri | null = null; tag: int32 = 1; }
 class Solo { next: Solo | null = null; tag: int32 = 1; }
 class Pair { next: Pair | null = null; tag: int32 = 1; }
-class Lent { next: Lent | null = null; tag: int32 = 1; }
 class Seed { next: Seed | null = null; tag: int32 = 1; }
 class Sprout { next: Sprout | null = null; }
 
@@ -54,12 +52,6 @@ function onDestroy(this x: Pair): void {
 	hooks += 1;
 }
 
-function onDestroy(this x: Lent): void {
-	const h = spawn(() => work(x.tag));
-	seen += await h;
-	hooks += 1;
-}
-
 function onDestroy(this x: Seed): void {
 	const a = new Sprout();
 	const b = new Sprout();
@@ -83,10 +75,6 @@ function churn(): void {
 		const q = new Pair();
 		p.next = q;
 		q.next = p;
-		const l = new Lent();
-		const m = new Lent();
-		l.next = m;
-		m.next = l;
 		const e = new Seed();
 		const f = new Seed();
 		e.next = f;
