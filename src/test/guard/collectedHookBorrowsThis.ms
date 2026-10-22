@@ -11,19 +11,25 @@
 //   (DOUBLE-DESTROY of Tri / Solo / Pair / Lent).
 //
 // AXES: cycle length 3 / 1 / 2; the borrow through a local closure, a closure argument,
-//   and a spawn thunk. DRC is NOT asserted: DRC does not collect cycles by design.
+//   and a spawn thunk. Seed's hook builds a fresh cycle, so roots arrive while the free
+//   loop runs and must not start a collection over cells it is still freeing.
+//   DRC is NOT asserted: DRC does not collect cycles by design.
 //
 // RED MEANS: the collector's free loop runs a hook on a cell whose count is not the
-//   sole-owner count. Run /trace-ref on collectCyclesBacon (runtime/drc.c).
+//   sole-owner count, or lets a hook re-enter the collector. Run /trace-ref on
+//   collectCyclesBacon (runtime/drc.c).
 // GUARD-BALANCE-ORC Tri
 // GUARD-BALANCE-ORC Solo
 // GUARD-BALANCE-ORC Pair
 // GUARD-BALANCE-ORC Lent
+// GUARD-BALANCE-ORC Seed
 
 class Tri { next: Tri | null = null; tag: int32 = 1; }
 class Solo { next: Solo | null = null; tag: int32 = 1; }
 class Pair { next: Pair | null = null; tag: int32 = 1; }
 class Lent { next: Lent | null = null; tag: int32 = 1; }
+class Seed { next: Seed | null = null; tag: int32 = 1; }
+class Sprout { next: Sprout | null = null; }
 
 let hooks: int32 = 0;
 let seen: int32 = 0;
@@ -54,6 +60,15 @@ function onDestroy(this x: Lent): void {
 	hooks += 1;
 }
 
+function onDestroy(this x: Seed): void {
+	const a = new Sprout();
+	const b = new Sprout();
+	a.next = b;
+	b.next = a;
+	seen += x.tag;
+	hooks += 1;
+}
+
 function churn(): void {
 	for (let i: int32 = 0; i < 2000; i += 1) {
 		const a = new Tri();
@@ -72,6 +87,10 @@ function churn(): void {
 		const m = new Lent();
 		l.next = m;
 		m.next = l;
+		const e = new Seed();
+		const f = new Seed();
+		e.next = f;
+		f.next = e;
 	}
 }
 
