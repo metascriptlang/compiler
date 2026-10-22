@@ -2373,13 +2373,21 @@ function initSysTypes(): void {
 	}
 	// Managed primitives get TypeFlag.HasAsgn (Reference parity: managed types have tfHasAsgn)
 	_sysTypes[TypeKind.String as number].typeFlags = (0 as BitSet<TypeFlag>).incl(TypeFlag.HasAsgn);
+	for (const kind of [TypeKind.Unknown, TypeKind.NonPrimitive, TypeKind.None, TypeKind.Inferred]) {
+		_sealedSysTypes.push(createPrimitive(kind));
+	}
 }
+const _sealedSysTypes: Type[] = [];
 initSysTypes();
 
 export function getSysType(kind: TypeKind): Type {
 	const idx = kind as number;
 	if (idx >= 0 && idx < _sysTypes.length) return _sysTypes[idx];
-	return createPrimitive(kind);
+	if (!_queryCachesReadOnly) return createPrimitive(kind);
+	for (const t of _sealedSysTypes) {
+		if (t.kind == kind) return t;
+	}
+	throw new Error(`internal: emission asked for the sys type ${kind.toString()}, which was not built before the seal`);
 }
 
 export function isSysType(t: Type): boolean {
@@ -5668,6 +5676,21 @@ test "primitive kinds" {
 	assert nullType().kind == TypeKind.Null;
 	assert neverType().kind == TypeKind.Never;
 	assert errorType().kind == TypeKind.Error;
+}
+
+test "a sys type not built before the seal is refused under it, naming the kind" {
+	setConcurrentTypeQueries(true);
+	let refused = "";
+	try {
+		getSysType(TypeKind.Mapped);
+	} catch (e) {
+		refused = e.message;
+	}
+	const inferred = inferredType();
+	setConcurrentTypeQueries(false);
+	assert refused.contains("Mapped");
+	assert inferred.kind == TypeKind.Inferred;
+	assert inferredType() != inferred;
 }
 
 test "createArray" {
