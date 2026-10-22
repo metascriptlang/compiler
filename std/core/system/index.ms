@@ -599,6 +599,9 @@ when (mscDeclaresRuntime) {
 	extern function msClosureTrace(c: () => void, env: Ptr<void>): void;
 
 	@compilerFunc
+	extern function msClosureDisown(c: () => void): void;
+
+	@compilerFunc
 	extern function msSetCard32(v: uint32): int32;
 
 	@compilerFunc

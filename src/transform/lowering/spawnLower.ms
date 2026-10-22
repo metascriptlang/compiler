@@ -108,6 +108,7 @@ export function mayHoldCycleRoot(t: Type | null, ctx: TransformContext): boolean
 	if (ctx.checkerCtx == null || ctx.checkerCtx.gcMode != GcMode.Drc) return false;
 	const bare = skipModifier(t);
 	if (bare == null) return false;
+	if (bare.kind == TypeKind.Function) return true;
 	if (bare.kind == TypeKind.Array) return isCountedRefTo(bare.typeReturn) && canFormAcycle(bare.typeReturn, ctx.cyclicCache, ctx.acyclicCache);
 	if (!isCountedRefTo(bare)) return false;
 	return traceReachesCycle(bare.kind == TypeKind.Ref ? bare : unwrapRefNullUnion(bare), ctx.cyclicCache, ctx.acyclicCache);
@@ -120,7 +121,9 @@ function isCountedRefTo(t: Type | null): boolean {
 }
 
 export function disownStmt(value: Node, t: Type | null, loc: SourceLocation): Node {
-	return makeExprStmt(makeCall(runtimeRef("msOrcDisown", loc), [value], loc), loc);
+	const bare = skipModifier(t);
+	const proc = bare != null && bare.kind == TypeKind.Function ? "msClosureDisown" : "msOrcDisown";
+	return makeExprStmt(makeCall(runtimeRef(proc, loc), [value], loc), loc);
 }
 
 function prependStmts(fn: Node, stmts: Node[], loc: SourceLocation): void {

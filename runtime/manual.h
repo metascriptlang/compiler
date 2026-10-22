@@ -512,6 +512,7 @@ static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 #define msClosureWasMoved(c)  do { (c).fn = (msClosureFn)0; (c).env = (void*)0; } while(0)
 #define msClosureSink(d, ...) do { (d) = (__VA_ARGS__); } while(0)
 #define msClosureTrace(c, e)  ((void)0)
+#define msClosureDisown(c)  ((void)0)
 
 /* Cyclic ref =copy - system.h:347 without the refcount traffic. */
 #define msRefCopyCyclic(d, s) do { (d) = (s); } while(0)

@@ -451,6 +451,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msClosureWasMoved(c)  do { (c).fn = NULL; (c).env = NULL; } while(0)
 #define msClosureSink(d, ...) do { msClosure __clold = (d); (d) = (__VA_ARGS__); msClosureDestroy(__clold); } while(0)
 #define msClosureTrace(c, _env) do { if ((c).env != NULL) msOrcTraceRef(&(c).env, (_env)); } while(0)
+#define msClosureDisown(c) msOrcDisown((c).env)
 
 /* --- Map lifecycle --- */
 /* DRC emits these as fn(varName) — macros handle address-of */
