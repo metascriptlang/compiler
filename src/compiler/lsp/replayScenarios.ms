@@ -1,7 +1,7 @@
 // LSP replay scenarios as data: each names its drains and checks a transcript,
 // so the in-memory driver and a real-process driver run the same cases.
 
-import { lspFormatMessage, lspJsonString } from "./protocol";
+import { lspFormatMessage, lspJsonString, lspPathToUri } from "./protocol";
 import { lspSplitFrames } from "./transport";
 import { parseJson } from "std/serialize/json/parser";
 import { JsonKind, JsonValue } from "std/serialize/json/types";
@@ -52,7 +52,7 @@ export interface LspScenario {
 export const PROJECT_URI = "file:///lspwire/";
 
 export function projectUri(dir: string): string {
-	return `file://${dir}/`;
+	return `${lspPathToUri(dir)}/`;
 }
 
 // Every frame of `wire` with `from` replaced by `to`, framed again.
