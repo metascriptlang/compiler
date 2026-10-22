@@ -62,6 +62,9 @@ function errnoOf(e: Error): number {
 		"EEXIST" => 17,
 		"ENOTDIR" => 20,
 		"EISDIR" => 21,
+		"EFBIG" => 27,
+		"ERR_FS_FILE_TOO_LARGE" => 27,
+		"ERR_STRING_TOO_LONG" => 27,
 		_ => 0,
 	};
 }
