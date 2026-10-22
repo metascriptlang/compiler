@@ -123,7 +123,7 @@ int msReportOrphanFailures(void) {
 }
 
 void msDrainUntilIdle(void) {
-	if (!msHasDispatcher()) return;
+	if (!msHasDispatcher() && msPoolPendingPeek() == 0) return;
 	msDispatcher* d = msGetDispatcher();
 	int idleSweeps = 0;
 	while (idleSweeps < 2) {

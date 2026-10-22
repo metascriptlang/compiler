@@ -332,6 +332,7 @@ export enum NodeFlag {
 	Optional,      // parser: this class field was written `name?`
 	ContinuesList, // parser: this declarator follows a comma in the declaration list of the statement before it
 	NoDispatch,    // transform: this identifier calls the routine it names, never the dispatcher of its overrides (reference: procCall)
+	Isolated,      // checker: this spawn's thunk captures no reference from its parent, so no scope exit joins it
 }
 
 // ===== Node Kind Enum =====

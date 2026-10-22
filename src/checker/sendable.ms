@@ -1,6 +1,6 @@
 // Actor sendability + this-write isolation rules.
 
-import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeKind, ObjectLiteralData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, TryExprData, Type, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
+import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, TryExprData, Type, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, addError, addWarning } from "./context";
 import { Effect, EffectCause, callEffect, deferEffectCheck, newEffect, routineEffect, walkEffect } from "./effects";
@@ -419,6 +419,115 @@ export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawn
 		refuseViewResult(ctx, source);
 	}
 	requireSpawnSafe(closure, "spawn runs this thunk on another thread", spawnNode);
+	if (isIsolatedThunk(ctx, source)) spawnNode.flags = spawnNode.flags.incl(NodeFlag.Isolated);
+	else spawnNode.flags = spawnNode.flags.excl(NodeFlag.Isolated);
+}
+
+function isIsolatedThunk(ctx: CheckerContext, thunk: Node): boolean {
+	if (thunk.kind == NodeKind.Identifier) {
+		const sym = thunk.resolvedSym;
+		return sym != null && sym.symbolKind == SymbolKind.Function && isModuleScoped(ctx, sym);
+	}
+	if (thunk.kind != NodeKind.ArrowFunction && thunk.kind != NodeKind.FunctionExpr) return false;
+	return !takesReferenceCapture(ctx, routineParamsAndBody(thunk).body);
+}
+
+function isModuleScoped(ctx: CheckerContext, sym: Symbol): boolean {
+	const home = scopeHolding(ctx.table, sym);
+	return home != null && (home.scopeKind == ScopeKind.Global || home.scopeKind == ScopeKind.Module);
+}
+
+function takesReferenceCapture(ctx: CheckerContext, node: Node | null): boolean {
+	if (node == null || node.kind == NodeKind.ArrayPattern || node.kind == NodeKind.ObjectPattern || node.kind == NodeKind.ObjectPatternProp) return false;
+	const sym = node.kind == NodeKind.Identifier ? node.resolvedSym : null;
+	if (sym != null && lookupSymbol(ctx.table, sym.name) == sym && !hasFlag(sym, SymbolFlag.Global) && !isModuleScoped(ctx, sym)) {
+		if (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Parameter) return typeCarriesRef(sym.symbolType);
+		return sym.symbolKind == SymbolKind.Function;
+	}
+	let found = false;
+	forEachChild(node, (child: Node): void => { if (!found) found = takesReferenceCapture(ctx, child); });
+	return found;
+}
+
+export function refuseBorrowingHandleEscapes(ctx: CheckerContext, body: Node): void {
+	const locals: Symbol[] = [];
+	collectFrameLocals(body, locals);
+	walkHandleUses(ctx, body, locals, []);
+}
+
+function isNestedRoutine(n: Node): boolean {
+	return n.kind == NodeKind.FunctionDecl || n.kind == NodeKind.ArrowFunction || n.kind == NodeKind.FunctionExpr
+		|| n.kind == NodeKind.ClassDecl || n.kind == NodeKind.MethodDecl || n.kind == NodeKind.ConstructorDecl;
+}
+
+function collectFrameLocals(node: Node, out: Symbol[]): void {
+	if (isNestedRoutine(node)) return;
+	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null && !hasFlag(node.resolvedSym!, SymbolFlag.Global)) out.push(node.resolvedSym!);
+	forEachChild(node, (child: Node): void => { collectFrameLocals(child, out); });
+}
+
+function isBorrowingHandle(n: Node | null, handles: Symbol[]): boolean {
+	const p = n != null ? peelHidden(n) : null;
+	if (p == null) return false;
+	if (p.kind == NodeKind.CallExpr && p.resolvedSym != null && p.resolvedSym.builtinKind == "PromiseSpawn") return !p.flags.has(NodeFlag.Isolated);
+	return p.kind == NodeKind.Identifier && p.resolvedSym != null && handles.includes(p.resolvedSym!);
+}
+
+function isFrameLocal(n: Node, locals: Symbol[]): boolean {
+	const p = peelHidden(n);
+	if (p.kind == NodeKind.ArrayAccess) return isFrameLocal((p.data as ArrayAccessData).array, locals);
+	return p.kind == NodeKind.Identifier && p.resolvedSym != null && locals.includes(p.resolvedSym!);
+}
+
+function keepsHandleInFrame(call: Node, locals: Symbol[]): boolean {
+	const kind = call.resolvedSym != null ? call.resolvedSym.builtinKind : "";
+	if (kind.startsWith("Promise")) return true;
+	const callee = (call.data as CallExprData).callee;
+	return callee.kind == NodeKind.MemberExpr && isFrameLocal((callee.data as MemberExprData).object, locals);
+}
+
+function refuseHandleEscape(ctx: CheckerContext, at: Node, how: string): void {
+	addError(ctx, `a spawn whose task borrows from this scope is joined when the scope exits, so its handle stays here: ${how} would let the handle outlive that join; await it in this scope, or let the task capture only copies, moved values, Arc<T> or Locked<T> so its handle is an ordinary promise`,
+		at.location.line, at.location.column);
+}
+
+function walkHandleUses(ctx: CheckerContext, node: Node | null, locals: Symbol[], handles: Symbol[]): void {
+	if (node == null || isNestedRoutine(node)) return;
+	match (node.kind) {
+		NodeKind.VariableDecl => {
+			if (node.resolvedSym != null && locals.includes(node.resolvedSym!) && isBorrowingHandle((node.data as VariableDeclData).initializer, handles)) handles.push(node.resolvedSym!);
+		},
+		NodeKind.ReturnStmt => {
+			const arg = (node.data as ReturnStmtData).argument;
+			if (isBorrowingHandle(arg, handles)) refuseHandleEscape(ctx, arg!, "returning it");
+		},
+		NodeKind.BinaryExpr => {
+			const d = node.data as BinaryExprData;
+			if (d.operator == "=" && isBorrowingHandle(d.right, handles)) {
+				if (!isFrameLocal(d.left, locals)) refuseHandleEscape(ctx, d.right, "storing it in '" + describeExpr(d.left) + "'");
+				else if (peelHidden(d.left).kind == NodeKind.Identifier) handles.push(peelHidden(d.left).resolvedSym!);
+			}
+		},
+		NodeKind.CallExpr => {
+			if (!keepsHandleInFrame(node, locals)) {
+				for (const a of (node.data as CallExprData).arguments) {
+					if (isBorrowingHandle(a, handles)) refuseHandleEscape(ctx, a, "passing it to '" + describeExpr((node.data as CallExprData).callee) + "'");
+				}
+			}
+		},
+		NodeKind.NewExpr => {
+			for (const a of (node.data as NewExprData).newArguments) {
+				if (isBorrowingHandle(a, handles)) refuseHandleEscape(ctx, a, "passing it to a constructor");
+			}
+		},
+		NodeKind.ObjectLiteral => {
+			for (const p of (node.data as ObjectLiteralData).properties) {
+				if (isBorrowingHandle(p, handles)) refuseHandleEscape(ctx, p, "storing it in an object");
+			}
+		},
+		_ => {},
+	};
+	forEachChild(node, (child: Node): void => { walkHandleUses(ctx, child, locals, handles); });
 }
 
 function holdsView(t: Type | null, seen: Type[]): boolean {

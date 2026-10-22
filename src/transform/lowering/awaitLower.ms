@@ -31,7 +31,7 @@ import {
 	BlockStmtData, FunctionDeclData, MethodDeclData, ConstructorDeclData, TestDeclData,
 } from "../../ast/node";
 import {
-	Node, NodeKind, DeclKind, SourceLocation,
+	Node, NodeKind, NodeFlag, DeclKind, SourceLocation,
 	VariableDeclData, ExprStmtData, ReturnStmtData, AssertStmtData,
 	AwaitExprData, CallExprData, ObjectLiteralData, ExportDeclData, ProgramData,
 	Type, NodeData, createNodeAt,
@@ -703,7 +703,7 @@ function holdSpawns(n: Node | null, ctx: TransformContext): void {
 		return;
 	}
 	forEachChild(n, (c: Node): void => { holdSpawns(c, ctx); });
-	if (_heldFrame.held != null && isSpawnNode(n)) {
+	if (_heldFrame.held != null && isSpawnNode(n) && !n.flags.has(NodeFlag.Isolated)) {
 		const list = makeIdentResolved(_heldFrame.held!, n.location);
 		list.nodeType = VOID_PTR_TYPE;
 		(n.data as CallExprData).arguments.push(list);
