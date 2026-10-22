@@ -1866,6 +1866,12 @@ function fitSpreadField(ctx: CheckerContext, entry: Node, name: string, held: Ty
 		entry.location.line, entry.location.column);
 }
 
+function spreadsUnionOfObjects(operand: Type | null): boolean {
+	const bare = skipModifier(operand);
+	return bare != null && bare.kind == TypeKind.Union && !isMaybeType(bare)
+		&& unwrapRefNullUnion(bare) == null && !hasGenericParams(bare);
+}
+
 function judgeSpreadFields(ctx: CheckerContext, d: ObjectLiteralData, target: Type | null): void {
 	for (let i = 0; i < d.keys.length && i < d.properties.length; i += 1) {
 		const entry = d.properties[i];
@@ -1877,6 +1883,11 @@ function judgeSpreadFields(ctx: CheckerContext, d: ObjectLiteralData, target: Ty
 			continue;
 		}
 		const fields = spreadFieldsOf(operand);
+		if (fields == null && spreadsUnionOfObjects(operand)) {
+			addError(ctx, `cannot spread a value of '${typeDisplayName(operand!)}' into an object literal: a union has no single set of fields; narrow it to one member first`,
+				entry.location.line, entry.location.column);
+			continue;
+		}
 		if (fields == null) continue;
 		for (let fi = 0; fi < fields.typeNames.length && fi < fields.typeChildren.length; fi += 1) {
 			const name = fields.typeNames[fi];
