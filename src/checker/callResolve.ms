@@ -2405,7 +2405,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 				|| calleeType.typeReturn.kind == TypeKind.Void;
 			let borrowed = false;
 			for (let pi = 0; pi < d.arguments.length; pi += 1) {
-				if (checkActorArgSendable(ctx, d.arguments[pi], pi, sendClass)) borrowed = true;
+				if (checkActorArgSendable(ctx, node, d.arguments[pi], pi, sendClass)) borrowed = true;
 			}
 			if (borrowed && node == ctx.stmtPosExpr) {
 				addError(ctx, "discarded actor call borrows a plain reference — the reply is what keeps it alive\nawait the call, or pass `move` / `Arc<T>` (PARALOCK I21)",
@@ -2953,7 +2953,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 			if (isActorMethodCall && pi < args.length) {
 				const sendClass = calleeType == null || calleeType.typeReturn == null
 					|| calleeType.typeReturn.kind == TypeKind.Void;
-				const borrowed = checkActorArgSendable(ctx, args[pi], pi, sendClass);
+				const borrowed = checkActorArgSendable(ctx, node, args[pi], pi, sendClass);
 				if (borrowed && !actorBorrowReported && node == ctx.stmtPosExpr) {
 					actorBorrowReported = true;
 					addError(ctx, "discarded actor call borrows a plain reference — the reply is what keeps it alive\nawait the call, or pass `move` / `Arc<T>` (PARALOCK I21)",

@@ -1,12 +1,12 @@
 // Actor sendability + this-write isolation rules.
 
-import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeKind, ObjectLiteralData, OutExprData, PropertyDeclData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, TryExprData, Type, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
+import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeKind, ObjectLiteralData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, TryExprData, Type, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, addError, addWarning } from "./context";
 import { Effect, EffectCause, callEffect, deferEffectCheck, newEffect, routineEffect, walkEffect } from "./effects";
 import { constBindingInitializer } from "./constFold";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
-import { createArray, createGenericParam, createRef, createStruct, int32Type, isPrimitiveKind, isSendableFunction, isStructType, isAtomicRef, stringType, typeCarriesRef, typeDisplayName } from "./types";
+import { createArray, createGenericParam, createRef, createStruct, int32Type, isPrimitiveKind, isSendableFunction, isStructType, isAtomicRef, isReadonlyView, stringType, typeCarriesRef, typeDisplayName } from "./types";
 
 export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
 	for (const n of actorSym.nonisolatedFields) {
@@ -163,12 +163,15 @@ function isSendable(t: Type, argNode: Node, sendClass: boolean): boolean {
 
 // Returns true when this arg is a plain-ref BORROW the caller must not discard
 // (the discard itself is diagnosed at the call site via ctx.stmtPosExpr).
-export function checkActorArgSendable(ctx: CheckerContext, argNode: Node, pi: number, sendClass: boolean): boolean {
+export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: Node, pi: number, sendClass: boolean): boolean {
 	const t = argNode.nodeType;
 	if (t == null) return false;
 	const isPlainRefBorrow = !sendClass && t.kind == TypeKind.Ref && !isAtomicRef(t)
 		&& argNode.kind != NodeKind.MoveExpr;
-	if (isSendable(t, argNode, sendClass)) return isPlainRefBorrow;
+	if (isSendable(t, argNode, sendClass)) {
+		if (isPlainRefBorrow && (t.sym == null || t.sym.symbolKind != SymbolKind.Actor)) refuseKeptBorrow(call, argNode, pi);
+		return isPlainRefBorrow;
+	}
 	const argLabel = argNode.kind == NodeKind.Identifier
 		? "'" + (argNode.data as IdentifierData).name + "'"
 		: `arg ${pi}`;
@@ -189,6 +192,141 @@ export function checkActorArgSendable(ctx: CheckerContext, argNode: Node, pi: nu
 	addError(ctx, `actor methods only accept value types, \`move\`, or \`const\` references\n${typedesc} ${argLabel} is a mutable reference${hint}`,
 		argNode.location.line, argNode.location.column);
 	return false;
+}
+
+function routineParts(sym: Symbol | null): Node | null {
+	if (sym == null) return null;
+	let dn = sym.declNode;
+	if (dn != null && dn.kind == NodeKind.DecoratedDecl) dn = (dn.data as DecoratedDeclData).decoratedNode;
+	return dn != null && (dn.kind == NodeKind.MethodDecl || dn.kind == NodeKind.FunctionDecl) ? dn : null;
+}
+
+function firstArgParam(dn: Node): int32 {
+	return dn.paramSyms!.length > 0 && dn.paramSyms![0].name == "this" ? 1 : 0;
+}
+
+function routineBody(dn: Node): Node | null {
+	return dn.kind == NodeKind.MethodDecl ? (dn.data as MethodDeclData).methodBody : (dn.data as FunctionDeclData).fnBody;
+}
+
+function rootOfPath(n: Node): Node | null {
+	let cur = peelView(n);
+	while (cur != null) {
+		if (cur.kind == NodeKind.MemberExpr) { cur = peelView((cur.data as MemberExprData).object); continue; }
+		if (cur.kind == NodeKind.ArrayAccess) { cur = peelView((cur.data as ArrayAccessData).array); continue; }
+		if (cur.kind == NodeKind.CallExpr) {
+			const callee = peelView((cur.data as CallExprData).callee);
+			if (callee == null || callee.kind != NodeKind.MemberExpr) return null;
+			cur = peelView((callee.data as MemberExprData).object);
+			continue;
+		}
+		break;
+	}
+	return cur;
+}
+
+// lent: the parameter and every local that still reaches it; held: locals that alias the
+// actor's own state or module state, so a value stored through them outlives the call.
+interface KeptWalk { lent: Symbol[]; held: Symbol[]; seen: Node[]; }
+
+function outlivesCall(n: Node, w: KeptWalk): boolean {
+	const root = rootOfPath(n);
+	if (root == null || root.kind != NodeKind.Identifier) return false;
+	if (isThisIdent(root)) return true;
+	const sym = root.resolvedSym;
+	return sym != null && (hasFlag(sym, SymbolFlag.Global) || w.held.includes(sym));
+}
+
+function capturesLent(node: Node, lent: Symbol[]): boolean {
+	if (node.kind == NodeKind.Identifier) return node.resolvedSym != null && lent.includes(node.resolvedSym);
+	const hit: boolean[] = [false];
+	forEachChild(node, (child: Node): void => { if (!hit[0] && capturesLent(child, lent)) hit[0] = true; });
+	return hit[0];
+}
+
+function reachesLent(n: Node | null, lent: Symbol[]): boolean {
+	if (n == null) return false;
+	const p = peelView(n);
+	if (p == null) return false;
+	if (p.kind == NodeKind.ArrowFunction || p.kind == NodeKind.FunctionExpr) return capturesLent(p, lent);
+	if (p.kind == NodeKind.ConditionalExpr) {
+		const d = p.data as ConditionalExprData;
+		return reachesLent(d.ternaryConsequent, lent) || reachesLent(d.ternaryAlternate, lent);
+	}
+	if (p.kind == NodeKind.MatchExpr) {
+		for (const c of (p.data as MatchExprData).matchCases) {
+			if (reachesLent((c.data as MatchCaseData).caseBody, lent)) return true;
+		}
+		return false;
+	}
+	if (p.kind == NodeKind.ObjectLiteral) {
+		for (const v of (p.data as ObjectLiteralData).properties) { if (reachesLent(v, lent)) return true; }
+		return false;
+	}
+	if (p.kind == NodeKind.ArrayLiteral) {
+		for (const e of (p.data as ArrayLiteralData).elements) { if (reachesLent(e, lent)) return true; }
+		return false;
+	}
+	const root = rootOfPath(p);
+	if (root == null || root.kind != NodeKind.Identifier || root.resolvedSym == null || !lent.includes(root.resolvedSym)) return false;
+	return p.nodeType == null || typeCarriesRef(p.nodeType);
+}
+
+function findKeptSite(node: Node | null, w: KeptWalk): Node | null {
+	if (node == null) return null;
+	if (node.kind == NodeKind.VariableDecl) {
+		const d = node.data as VariableDeclData;
+		const sym = node.resolvedSym;
+		if (sym != null && reachesLent(d.initializer, w.lent)) w.lent.push(sym);
+		else if (sym != null && d.initializer != null && typeCarriesRef(sym.symbolType) && outlivesCall(d.initializer, w)) w.held.push(sym);
+	} else if (node.kind == NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		if (d.operator == "=" && outlivesCall(d.left, w) && reachesLent(d.right, w.lent)) return node;
+	} else if (node.kind == NodeKind.CallExpr) {
+		const d = node.data as CallExprData;
+		const callee = peelView(d.callee);
+		const recv = callee != null && callee.kind == NodeKind.MemberExpr ? (callee.data as MemberExprData).object : null;
+		if (recv == null) {
+			const routine = routineParts(node.resolvedSym != null ? node.resolvedSym : (callee != null ? callee.resolvedSym : null));
+			if (routine != null && keptThrough(routine, d.arguments, w)) return node;
+		} else if (!isThisIdent(recv) && outlivesCall(recv, w)) {
+			for (const a of d.arguments) { if (reachesLent(a, w.lent)) return node; }
+		}
+	}
+	const hit: (Node | null)[] = [null];
+	forEachChild(node, (child: Node): void => { if (hit[0] == null) hit[0] = findKeptSite(child, w); });
+	return hit[0];
+}
+
+function keptThrough(routine: Node, args: Node[], w: KeptWalk): boolean {
+	if (routine.paramSyms == null || w.seen.includes(routine)) return false;
+	const inner: Symbol[] = [];
+	const first = firstArgParam(routine);
+	for (let i = 0; i < args.length && first + i < routine.paramSyms!.length; i += 1) {
+		if (reachesLent(args[i], w.lent)) inner.push(routine.paramSyms![first + i]);
+	}
+	if (inner.length == 0) return false;
+	w.seen.push(routine);
+	return findKeptSite(routineBody(routine), { lent: inner, held: [], seen: w.seen }) != null;
+}
+
+// The receiving parameter of an awaited CALL is lent for the call only, so the
+// actor must not keep it in its own state or in module state.
+function refuseKeptBorrow(call: Node, argNode: Node, pi: number): void {
+	const method = routineParts(call.resolvedSym);
+	if (method == null || method.kind != NodeKind.MethodDecl) return;
+	deferEffectCheck(argNode, "keptBorrow", (ctx: CheckerContext): void => {
+		if (method.paramSyms == null || firstArgParam(method) + pi >= method.paramSyms!.length) return;
+		const param = method.paramSyms![firstArgParam(method) + pi];
+		const site = findKeptSite(routineBody(method), { lent: [param], held: [], seen: [method] });
+		if (site == null) return;
+		const what = site.kind == NodeKind.BinaryExpr
+			? "stores it in '" + describeExpr((site.data as BinaryExprData).left) + "'"
+			: "passes it to '" + describeExpr((site.data as CallExprData).callee) + "'";
+		const arg = argNode.kind == NodeKind.Identifier ? (argNode.data as IdentifierData).name : "the argument";
+		addError(ctx, `actor method '${(method.data as MethodDeclData).methodName}' keeps its parameter '${param.name}': it ${what} at ${site.location.line}:${site.location.column}, but '${arg}' is only lent for the awaited call\nsend ownership with \`move ${arg}\`, or copy the scalar fields it needs into the actor's state (PARALOCK I21)`,
+			argNode.location.line, argNode.location.column);
+	});
 }
 
 // A spawn thunk BORROWS the enclosing env (the lifted closure is handed
@@ -278,8 +416,110 @@ export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawn
 		}
 	} else {
 		checkClosureCaptures(ctx, source, "spawn");
+		refuseViewResult(ctx, source);
 	}
 	requireSpawnSafe(closure, "spawn runs this thunk on another thread", spawnNode);
+}
+
+function holdsView(t: Type | null, seen: Type[]): boolean {
+	if (t == null || seen.includes(t) || t.kind == TypeKind.Ptr) return false;
+	if (isReadonlyView(t)) return true;
+	seen.push(t);
+	return match (t.kind) {
+		TypeKind.Ref | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Distinct => holdsView(t.typeReturn, seen),
+		TypeKind.Union | TypeKind.Tuple | TypeKind.Struct | TypeKind.GenericInstance => {
+			for (const c of t.typeChildren) { if (holdsView(c, seen)) return true; }
+			return false;
+		},
+		_ => false,
+	};
+}
+
+function refuseViewResult(ctx: CheckerContext, thunk: Node): void {
+	const fn = thunk.nodeType;
+	if (fn != null && fn.kind == TypeKind.Function && holdsView(fn.typeReturn, [])) {
+		addError(ctx, `spawn thunk returns ${typeDisplayName(fn.typeReturn)}, which reaches a value the parent only lends to the task; a borrowed view never leaves the task as its result — return a copy, or a scalar or string read out of it (PARALOCK E24)`,
+			thunk.location.line, thunk.location.column);
+		return;
+	}
+	const body = routineParamsAndBody(thunk).body;
+	if (body == null) return;
+	const results: Node[] = [];
+	if (body.kind == NodeKind.BlockStmt) collectResults(body, results);
+	else results.push(body);
+	for (const r of results) {
+		const captured = closureCaptureIn(ctx, r, []);
+		if (captured == null) continue;
+		const name = (captured.data as IdentifierData).name;
+		addError(ctx, `spawn thunk returns a closure that captures '${name}', which the parent only lends to the task; a closure never carries a borrowed capture out of the task — return a scalar or string read out of '${name}', or build the closure after the await (PARALOCK E24)`,
+			captured.location.line, captured.location.column);
+		return;
+	}
+}
+
+function collectResults(node: Node, out: Node[]): void {
+	if (node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.FunctionDecl) return;
+	if (node.kind == NodeKind.ReturnStmt) {
+		const a = (node.data as ReturnStmtData).argument;
+		if (a != null) out.push(a);
+		return;
+	}
+	forEachChild(node, (child: Node): void => { collectResults(child, out); });
+}
+
+// The closure value a thunk result carries: a closure literal, one inside an object or array
+// literal or a branch, or a thunk-local binding initialized to one.
+function closureCaptureIn(ctx: CheckerContext, n: Node | null, seen: Symbol[]): Node | null {
+	if (n == null) return null;
+	const p = peelView(n);
+	if (p == null) return null;
+	return match (p.kind) {
+		NodeKind.ArrowFunction | NodeKind.FunctionExpr => borrowedCapture(ctx, p),
+		NodeKind.ObjectLiteral => firstCapture(ctx, (p.data as ObjectLiteralData).properties, seen),
+		NodeKind.ArrayLiteral => firstCapture(ctx, (p.data as ArrayLiteralData).elements, seen),
+		NodeKind.ConditionalExpr => {
+			const d = p.data as ConditionalExprData;
+			const a = closureCaptureIn(ctx, d.ternaryConsequent, seen);
+			return a != null ? a : closureCaptureIn(ctx, d.ternaryAlternate, seen);
+		},
+		NodeKind.MatchExpr => {
+			const bodies: Node[] = [];
+			for (const c of (p.data as MatchExprData).matchCases) bodies.push((c.data as MatchCaseData).caseBody);
+			return firstCapture(ctx, bodies, seen);
+		},
+		NodeKind.Identifier => {
+			const sym = p.resolvedSym;
+			if (sym == null || seen.includes(sym) || lookupSymbol(ctx.table, sym.name) == sym) return null;
+			const decl = sym.declNode;
+			if (decl == null || decl.kind != NodeKind.VariableDecl) return null;
+			seen.push(sym);
+			return closureCaptureIn(ctx, (decl.data as VariableDeclData).initializer, seen);
+		},
+		_ => null,
+	};
+}
+
+function firstCapture(ctx: CheckerContext, nodes: Node[], seen: Symbol[]): Node | null {
+	for (const n of nodes) {
+		const c = closureCaptureIn(ctx, n, seen);
+		if (c != null) return c;
+	}
+	return null;
+}
+
+// A binding the closure reads from outside the thunk lives in the env the parent lends,
+// at any nesting depth: the scope at the spawn site still resolves it to the same symbol.
+function borrowedCapture(ctx: CheckerContext, node: Node): Node | null {
+	if (node.kind == NodeKind.Identifier) {
+		const sym = node.resolvedSym;
+		if (sym == null || sym.name == "this" || hasFlag(sym, SymbolFlag.Global)) return null;
+		if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Parameter) return null;
+		return lookupSymbol(ctx.table, sym.name) == sym ? node : null;
+	}
+	if (node.kind == NodeKind.ArrayPattern || node.kind == NodeKind.ObjectPattern || node.kind == NodeKind.ObjectPatternProp) return null;
+	const hit: (Node | null)[] = [null];
+	forEachChild(node, (child: Node): void => { if (hit[0] == null) hit[0] = borrowedCapture(ctx, child); });
+	return hit[0];
 }
 
 function spawnEffectOf(fn: Node): EffectCause | null {
@@ -295,7 +535,7 @@ function spawnEffectOf(fn: Node): EffectCause | null {
 }
 
 function requireSpawnSafe(fn: Node, runs: string, at: Node): void {
-	deferEffectCheck(at, (ctx: CheckerContext): void => {
+	deferEffectCheck(at, "spawnSafe", (ctx: CheckerContext): void => {
 		const c = spawnEffectOf(peelHidden(fn));
 		if (c == null) return;
 		addWarning(ctx, runs + ", but it " + c.text + "; module state crosses threads only as a const value, a Locked<T> or an Arc<T>", at.location.line, at.location.column);
@@ -343,7 +583,7 @@ export function refuseSuspendingLockCallback(ctx: CheckerContext, call: Node): v
 	const args = (call.data as CallExprData).arguments;
 	if (args.length != 2) return;
 	const name = call.resolvedSym!.instantiatedFrom != null ? call.resolvedSym!.instantiatedFrom!.name : call.resolvedSym!.name;
-	deferEffectCheck(call, (ctx: CheckerContext): void => {
+	deferEffectCheck(call, "lockCallback", (ctx: CheckerContext): void => {
 		const c = lockCallbackEffect(peelHidden(args[1]));
 		if (c == null) return;
 		addError(ctx, "the callback of '" + name + "' runs while the Locked cell is held and must not spawn, await or call a function value, but it " + c.text, call.location.line, call.location.column);
@@ -689,7 +929,7 @@ function requireFresh(rhs: Node | null, what: string, w: OwnerWalk): void {
 }
 
 function requireNoSideEffect(site: Node, w: OwnerWalk): void {
-	deferEffectCheck(site, (ctx: CheckerContext): void => {
+	deferEffectCheck(site, "noSideEffect", (ctx: CheckerContext): void => {
 		if (w.reported) return;
 		const c = site.kind == NodeKind.NewExpr ? newEffect(site, Effect.SideEffect) : callEffect(site, Effect.SideEffect);
 		if (c != null) reportNotSoleOwner(w, "a call with side effects may keep an alias of it: " + c.text);

@@ -40,6 +40,7 @@ let inAsync = false;
 let ownParams: string[] = [];
 interface DeferredCheck {
 	site: Node;
+	rule: string;
 	check: (ctx: CheckerContext) => void;
 }
 
@@ -55,11 +56,11 @@ function tableFor(e: Effect): EffectTable {
 	};
 }
 
-export function deferEffectCheck(site: Node, check: (ctx: CheckerContext) => void): void {
+export function deferEffectCheck(site: Node, rule: string, check: (ctx: CheckerContext) => void): void {
 	for (const d of deferred) {
-		if (d.site.kind == site.kind && d.site.location.line == site.location.line && d.site.location.column == site.location.column) return;
+		if (d.site == site && d.rule == rule) return;
 	}
-	deferred.push({ site, check });
+	deferred.push({ site, rule, check });
 }
 
 export function runDeferredEffectChecks(ctx: CheckerContext): void {
