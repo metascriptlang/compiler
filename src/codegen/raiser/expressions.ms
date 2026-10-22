@@ -1,6 +1,7 @@
 // Raiser codegen — Expression compilation
 // AST expression nodes → typed bytecode instructions.
 
+import { isMetaWireSym } from "../../compiler/meta/nodeSym";
 import { resolveOverloadWinner } from "../c/names";
 import { monoInstanceName } from "../../monomorphize/registry";
 import {
@@ -2251,6 +2252,7 @@ function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 // of it. A function value is a closure pair. NewObject lays that order out, so the
 // type fixes each field's slot.
 export function layoutOf(t: Type | null): string[] {
+	if (isMetaWireSym(classSymOfType(skipModifier(t)))) return [];
 	const bare = skipModifier(t);
 	if (bare != null && bare.kind == TypeKind.Function) return CLOSURE_PAIR;
 	const shape = peelToStructOrUnion(t);
@@ -2259,6 +2261,7 @@ export function layoutOf(t: Type | null): string[] {
 
 // The register class each slot of layoutOf(t) holds.
 export function slotKindsOf(s: RaiserCompState, t: Type | null): RaiserRegClass[] {
+	if (isMetaWireSym(classSymOfType(skipModifier(t)))) return [];
 	const bare = skipModifier(t);
 	if (bare != null && bare.kind == TypeKind.Function) return CLOSURE_PAIR_KINDS;
 	const shape = peelToStructOrUnion(t);

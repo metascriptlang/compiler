@@ -7,6 +7,9 @@ import { createUnifyBindings, unifyType } from "../../checker/types";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
 import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport } from "../../checker/context";
+import { lookupSymbol } from "../../checker/symbol";
+import { layoutOf, slotKindsOf } from "./expressions";
+import { createCompState } from "./context";
 import { findModule } from "../../module/graph";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join } from "std/fs/path";
@@ -1691,6 +1694,21 @@ test "engine: a field of a receiver whose type fixes its layout is read and writ
 		if (carriesSlot(inst.op)) slots.push(inst.slot);
 	}
 	assert slots.join(",") == "1,1,0", `${slots.join(",")}\n${text}`;
+}
+
+test "engine: a macro wire class has no layout, so its fields are read by name, and a user class keeps its own" {
+	const pr = parseSource("class Wire { kind: int32 = 0; name: string = ''; } class Plain { kind: int32 = 0; } export interface Opaque { kind: int32; }");
+	assert pr.ok;
+	const ctx = checkProgram(pr.value);
+	const wire = lookupSymbol(ctx.table, "Wire");
+	const plain = lookupSymbol(ctx.table, "Plain");
+	assert layoutOf(wire.symbolType).join(",") == "kind,name" && layoutOf(plain.symbolType).join(",") == "kind";
+	wire.builtinKind = "MetaNode";
+	assert layoutOf(wire.symbolType).length == 0 && slotKindsOf(createCompState(), wire.symbolType).length == 0;
+	assert layoutOf(plain.symbolType).join(",") == "kind";
+	wire.builtinKind = "";
+	wire.modulePath = "std/meta/node.ms";
+	assert layoutOf(wire.symbolType).length == 0;
 }
 
 test "a slot read after the object table grew sees the new objects" {
