@@ -250,6 +250,13 @@ void msAwaitGroupBlocking(msAwaitGroup* g) {
 	if (dec) msPoolBusyInc();  /* back to own work */
 }
 
+static bool msAwaitGroupExpired(msAwaitGroup* g, int64_t deadlineMs) {
+	if (msMonoTimeMs() < deadlineMs) return false;
+	g->timedOut = true;
+	atomic_store_explicit(&g->cancelled, true, memory_order_release);
+	return true;
+}
+
 void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 	if (g == NULL) return;
 
@@ -264,17 +271,16 @@ void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 	bool dec = worker && msPoolBusyDec();  /* available to help while waiting */
 	if (!worker) {
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-			/* Deadline BEFORE help: msPoolHelpOne executes a whole child
-			 * inline, and a deadline must not be pushed past that. Measured
-			 * 2026-09-05 (corpus 422): a 300ms task under a 60ms deadline
-			 * returned its value instead of throwing whenever help won the
-			 * race and ran the child itself. */
-			if (msMonoTimeMs() >= deadlineMs) {
-				g->timedOut = true;
-				atomic_store_explicit(&g->cancelled, true, memory_order_release);
-				break;
+			/* Deadline before and after help: msPoolHelpOne executes a whole
+			 * child inline, and a deadline must not be pushed past that.
+			 * Measured 2026-09-05 (corpus 422): a 300ms task under a 60ms
+			 * deadline returned its value instead of throwing whenever help
+			 * won the race and ran the child itself. */
+			if (msAwaitGroupExpired(g, deadlineMs)) break;
+			if (msPoolHelpOne()) {
+				if (msAwaitGroupExpired(g, deadlineMs)) break;
+				continue;
 			}
-			if (msPoolHelpOne()) continue;
 			int64_t remain = deadlineMs - msMonoTimeMs();
 			msRunOnce(remain > 5 ? 5 : (int)remain);
 		}
@@ -285,14 +291,11 @@ void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 #ifdef _WIN32
 		EnterCriticalSection(&g->cs);
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-			if (msMonoTimeMs() >= deadlineMs) {
-				g->timedOut = true;
-				atomic_store_explicit(&g->cancelled, true, memory_order_release);
-				break;
-			}
+			if (msAwaitGroupExpired(g, deadlineMs)) break;
 			LeaveCriticalSection(&g->cs);
 			if (msPoolHelpOne()) {
 				EnterCriticalSection(&g->cs);
+				if (msAwaitGroupExpired(g, deadlineMs)) break;
 				continue;
 			}
 			EnterCriticalSection(&g->cs);
@@ -305,14 +308,11 @@ void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
 #else
 		pthread_mutex_lock(&g->mutex);
 		while (atomic_load_explicit(&g->pending, memory_order_acquire) > 0) {
-			if (msMonoTimeMs() >= deadlineMs) {
-				g->timedOut = true;
-				atomic_store_explicit(&g->cancelled, true, memory_order_release);
-				break;
-			}
+			if (msAwaitGroupExpired(g, deadlineMs)) break;
 			pthread_mutex_unlock(&g->mutex);
 			if (msPoolHelpOne()) {
 				pthread_mutex_lock(&g->mutex);
+				if (msAwaitGroupExpired(g, deadlineMs)) break;
 				continue;
 			}
 			pthread_mutex_lock(&g->mutex);
