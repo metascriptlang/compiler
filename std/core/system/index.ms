@@ -219,13 +219,65 @@ extern function msMaybeGet(v: Ptr<void>, head: string, labels: string): Ptr<void
 @compilerFunc
 extern function msClosureSame(a: () => void, b: () => void): boolean;
 
+class AbortListener {
+	fn: () => void;
+	next: AbortListener | null = null;
+	constructor(fn: () => void) { this.fn = fn; }
+}
+
 export class AbortSignal {
 	aborted: boolean;
 	reason: string;
+	private abortListeners: AbortListener | null;
 
 	constructor() {
 		this.aborted = false;
 		this.reason = "";
+		this.abortListeners = null;
+	}
+
+	addEventListener(type: string, listener: () => void): void {
+		if (!msStringEquals(type, "abort")) return;
+		if (this.abortListeners == null) {
+			this.abortListeners = new AbortListener(listener);
+			return;
+		}
+		let at = this.abortListeners!;
+		while (true) {
+			if (at.fn === listener) return;
+			if (at.next == null) break;
+			at = at.next!;
+		}
+		at.next = new AbortListener(listener);
+	}
+
+	removeEventListener(type: string, listener: () => void): void {
+		if (!msStringEquals(type, "abort") || this.abortListeners == null) return;
+		if (this.abortListeners!.fn === listener) {
+			this.abortListeners = this.abortListeners!.next;
+			return;
+		}
+		let at = this.abortListeners!;
+		while (at.next != null) {
+			if (at.next!.fn === listener) {
+				at.next = at.next!.next;
+				return;
+			}
+			at = at.next!;
+		}
+	}
+
+	dispatchAbort(reason: string): void {
+		if (this.aborted) return;
+		this.aborted = true;
+		this.reason = reason;
+		let at = this.abortListeners;
+		this.abortListeners = null;
+		while (at != null) {
+			const fn = at.fn;
+			at = at.next;
+			fn();
+		}
 	}
 
 	throwIfAborted(): void {
@@ -250,10 +302,7 @@ export class AbortController {
 	}
 
 	abort(reason: string): void {
-		if (!this.signal.aborted) {
-			this.signal.aborted = true;
-			this.signal.reason = reason;
-		}
+		this.signal.dispatchAbort(reason);
 	}
 }
 
