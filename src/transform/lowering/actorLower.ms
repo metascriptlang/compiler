@@ -13,19 +13,19 @@ import { Node, NodeKind, NodeFlag, SourceLocation, DeclKind, Type, TypeKind,
 	VariableDeclData, IfStmtData,
 	WhileStmtData, ForOfStmtData, ForStmtData, BlockStmtData,
 	DoWhileStmtData, TryCatchStmtData,
-	ExprStmtData, ReturnStmtData,
+	ExprStmtData, ReturnStmtData, MemberExprData, HiddenDerefData, BinaryExprData,
 	Symbol, SymbolKind, createNode } from "../../ast/node";
 import { TransformContext, freshTempSym, mintSym } from "../context";
 import { canFormAcycle } from "../cycles";
-import { containsExprKind } from "../walker";
+import { containsExprKind, mapChildren } from "../walker";
 import { setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { mayHoldCycleRoot, disownStmt } from "./spawnLower";
 import {
 	syntheticToken, makeIdentResolved, makeTypedIdentResolved, makeCall, makeExprStmt, makeReturn,
-	makeVarDecl, makeMember, makeNumber, makeNull, makeBlock, makeBinary,
-	isValueLayoutType, makeHiddenAddr, makeTryFinally, runtimeRef,
+	makeVarDecl, makeMember, makeNumber, makeNull, makeAbsent, makeBlock, makeBinary,
+	isValueLayoutType, makeHiddenAddr, makeHiddenStdConv, makeTryFinally, runtimeRef,
 } from "../util";
-import { voidType, noneType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, getSysType, isStructType, isAtomicRef, instantiateGenericBody, typeDisplayName } from "../../checker/types";
+import { voidType, noneType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, copyTypeShallow, unwrapRefNullUnion, getSysType, isStructType, isAtomicRef, instantiateGenericBody, typeDisplayName } from "../../checker/types";
 import { genericParamsOf, literalBase } from "../../checker/types";
 import { ctorRoutineFor } from "../../checker/ctorRoutine";
 
@@ -211,9 +211,7 @@ function buildSendProxy(kind: number, params: Symbol[], paramTypes: Type[], ctx:
 		if (paramMsgKind(paramTypes, ai) == "ptr" && mayHoldCycleRoot(paramTypes[ai], ctx)) stmts.push(disownStmt(makeTypedIdentResolved(params[ai], paramTypes[ai], loc), loc));
 	}
 	packArgsIntoMsg(stmts, msgSym, params, paramTypes, loc);
-	const thisPid = makeMember(makeTypedIdentResolved(params[0], null, loc), "pid", loc);
-	thisPid.nodeType = getSysType(TypeKind.Int64);
-	const actorPtr = makeCall(runtimeRef("msActorFromPid", loc), [thisPid], loc);
+	const actorPtr = makeCall(runtimeRef("msActorFromPid", loc), [makeTypedIdentResolved(params[0], null, loc)], loc);
 	const sendCall = makeCall(runtimeRef("msActorSend", loc), [actorPtr, makeIdentResolved(msgSym, loc)], loc);
 	stmts.push(makeExprStmt(sendCall, loc));
 	return makeBlock(stmts, loc);
@@ -253,14 +251,21 @@ function buildCallProxy(kind: number, params: Symbol[], paramTypes: Type[], retT
 	msgDecl.nodeType = VOID_PTR;
 	const stmts: Node[] = [futDecl, msgDecl];
 	packArgsIntoMsg(stmts, msgSym, params, paramTypes, loc);
-	const thisPid2 = makeMember(makeTypedIdentResolved(params[0], null, loc), "pid", loc);
-	thisPid2.nodeType = getSysType(TypeKind.Int64);
-	const actorPtr2 = makeCall(runtimeRef("msActorFromPid", loc), [thisPid2], loc);
+	const actorPtr2 = makeCall(runtimeRef("msActorFromPid", loc), [makeTypedIdentResolved(params[0], null, loc)], loc);
 	const sendCall = makeCall(runtimeRef("msActorSend", loc), [actorPtr2, makeIdentResolved(msgSym, loc)], loc);
 	stmts.push(makeExprStmt(sendCall, loc));
 	const retFut = makeReturn(makeIdentResolved(futSym, loc), loc);
 	stmts.push(retFut);
 	return makeBlock(stmts, loc);
+}
+
+function stateReceiverType(method: Node): Type | null {
+	const t = method.nodeType;
+	if (t == null || t.kind != TypeKind.Function || method.paramSyms == null || method.paramSyms.length == 0) return t;
+	const own = copyTypeShallow(t);
+	own.typeChildren = [method.paramSyms[0].symbolType];
+	for (let i = 1; i < t.typeChildren.length; i += 1) own.typeChildren.push(t.typeChildren[i]);
+	return own;
 }
 
 function recordActorImpl(ctx: TransformContext, method: Node, implSym: Symbol): void {
@@ -559,11 +564,11 @@ function emitActorMethods(d: ActorDeclData, name: string, lowered: ActorLowered,
 					nativeName: "",
 					nameLocation: md.nameLocation,
 				}, syntheticToken(loc));
-				implNode.nodeType = m.nodeType;
+				implNode.nodeType = stateReceiverType(m);
 				implNode.typeExprs = m.typeExprs;
 				implNode.paramLocations = m.paramLocations;
 				implNode.paramSyms = m.paramSyms;
-				const implSym = mintSym(ctx, SymbolKind.Function, implName, m.nodeType != null ? m.nodeType : noneType());
+				const implSym = mintSym(ctx, SymbolKind.Function, implName, implNode.nodeType != null ? implNode.nodeType : noneType());
 				implNode.resolvedSym = implSym;
 				recordActorImpl(ctx, m, implSym);
 				result.push(implNode);
@@ -597,11 +602,11 @@ function emitActorMethods(d: ActorDeclData, name: string, lowered: ActorLowered,
 					nativeName: "",
 					nameLocation: md.nameLocation,
 				}, syntheticToken(loc));
-				implNode.nodeType = m.nodeType;
+				implNode.nodeType = stateReceiverType(m);
 				implNode.typeExprs = m.typeExprs;
 				implNode.paramLocations = m.paramLocations;
 				implNode.paramSyms = m.paramSyms;
-				const implSym = mintSym(ctx, SymbolKind.Function, implName, m.nodeType != null ? m.nodeType : noneType());
+				const implSym = mintSym(ctx, SymbolKind.Function, implName, implNode.nodeType != null ? implNode.nodeType : noneType());
 				implNode.resolvedSym = implSym;
 				if (m.nodeType != null) markValueLayoutParamsAsMutated(implSym, m.nodeType.typeChildren);
 				recordActorImpl(ctx, m, implSym);
@@ -900,15 +905,14 @@ function expandActorDecls(program: Node, actors: ActorLowered[], ctx: TransformC
 
 	pd.programStmts = newStmts;
 
-	// Inject @include for actor.h if actors were found
-	if (actors.length > 0 && ctx.checkerCtx != null) {
-		if (ctx.checkerCtx.includeDirectives != "") {
-			ctx.checkerCtx.includeDirectives = ctx.checkerCtx.includeDirectives + "\n";
-		}
-		ctx.checkerCtx.includeDirectives = ctx.checkerCtx.includeDirectives + "runtime/actor/actor.h";
-	}
-
+	if (actors.length > 0) includeActorRuntime(ctx);
 	return program;
+}
+
+function includeActorRuntime(ctx: TransformContext): void {
+	if (ctx.checkerCtx == null || ctx.checkerCtx.includeDirectives.indexOf("runtime/actor/actor.h") >= 0) return;
+	if (ctx.checkerCtx.includeDirectives != "") ctx.checkerCtx.includeDirectives = ctx.checkerCtx.includeDirectives + "\n";
+	ctx.checkerCtx.includeDirectives = ctx.checkerCtx.includeDirectives + "runtime/actor/actor.h";
 }
 
 // The routines lowering emitted for one actor of this module; the actor's constructor wires them.
@@ -1124,7 +1128,7 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 			}, syntheticToken(actorNode.location));
 			// Wrap return type in Promise<T> so asyncBridge can extract the inner type.
 			// The method's original type is (self, args) → T; we need (self, args) → Promise<T>.
-			let implType = m.nodeType;
+			let implType = stateReceiverType(m);
 			if (implType != null && implType.kind == TypeKind.Function && implType.typeReturn != null) {
 				const promiseRet = createPromise(implType.typeReturn);
 				implType = createFunction(
@@ -1157,6 +1161,180 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 		}
 	}
 	return program;
+}
+
+interface ActorHandles {
+	ctx: TransformContext;
+	handles: HashMap<Symbol, Type>;
+	states: HashMap<Symbol, Type>;
+	stateTypes: HashSet<Type>;
+	receivers: HashMap<Symbol, Symbol>;
+	seen: HashSet<Type>;
+}
+
+function referencedActor(t: Type): Symbol | null {
+	if (t.kind != TypeKind.Ref || isAtomicRef(t)) return null;
+	if (t.sym != null && t.sym.symbolKind == SymbolKind.Actor) return t.sym;
+	const inner = t.typeReturn;
+	if (inner != null && inner.kind == TypeKind.Struct && inner.sym != null && inner.sym.symbolKind == SymbolKind.Actor) return inner.sym;
+	return null;
+}
+
+function handleOf(h: ActorHandles, actor: Symbol): Type {
+	const known = h.handles.get(actor);
+	if (known != null) return known;
+	const handle = createPrimitive(TypeKind.Int64);
+	handle.sym = actor;
+	h.handles.set(actor, handle);
+	return handle;
+}
+
+function stateOf(h: ActorHandles, actor: Symbol): Type {
+	const known = h.states.get(actor);
+	if (known != null) return known;
+	const state = copyTypeShallow(actor.symbolType);
+	h.states.set(actor, state);
+	h.stateTypes.add(state);
+	return state;
+}
+
+function handleType(h: ActorHandles, t: Type | null): Type | null {
+	if (t == null || h.stateTypes.has(t)) return t;
+	const nullable = unwrapRefNullUnion(t);
+	const actor = referencedActor(nullable != null ? nullable : t);
+	if (actor != null) return handleOf(h, actor);
+	if (h.seen.has(t)) return t;
+	h.seen.add(t);
+	for (let i = 0; i < t.typeChildren.length; i += 1) t.typeChildren[i] = handleType(h, t.typeChildren[i]) as Type;
+	t.typeReturn = handleType(h, t.typeReturn);
+	t.typeExtra = handleType(h, t.typeExtra);
+	t.typeInst = handleType(h, t.typeInst);
+	return t;
+}
+
+function isHandle(h: ActorHandles, t: Type | null): boolean {
+	return t != null && t.sym != null && h.handles.get(t.sym) == t;
+}
+
+function handleSymbol(h: ActorHandles, sym: Symbol | null): void {
+	if (sym == null || h.receivers.has(sym)) return;
+	if (sym.symbolKind == SymbolKind.Actor) {
+		handleType(h, sym.symbolType.typeReturn);
+		return;
+	}
+	sym.symbolType = handleType(h, sym.symbolType) as Type;
+}
+
+function bindReceivers(h: ActorHandles, actor: Symbol, members: Node[]): void {
+	for (const member of members) {
+		let m = member;
+		if (m.kind == NodeKind.DecoratedDecl) m = (m.data as DecoratedDeclData).decoratedNode;
+		if (m.kind != NodeKind.MethodDecl && m.kind != NodeKind.ConstructorDecl) continue;
+		if (m.kind == NodeKind.MethodDecl && (m.data as MethodDeclData).methodIsStatic) continue;
+		const params = m.paramSyms;
+		if (params == null || params.length == 0 || params[0].name != "this") throw new Error(`internal: a member of actor '${actor.name}' reached handle lowering without its receiver symbol`);
+		params[0].symbolType = stateOf(h, actor);
+		h.receivers.set(params[0], actor);
+	}
+}
+
+function isStateField(actor: Symbol, property: string): boolean {
+	const state = actor.symbolType.typeReturn;
+	return state != null && state.typeNames.indexOf(property) >= 0;
+}
+
+function compareHandleWithNull(h: ActorHandles, d: BinaryExprData): void {
+	if (d.operator != "==" && d.operator != "!=" && d.operator != "===" && d.operator != "!==") return;
+	if (d.right.kind == NodeKind.NullLiteral && isHandle(h, d.left.nodeType)) d.right = makeAbsent(d.left.nodeType, d.right.location);
+	else if (d.left.kind == NodeKind.NullLiteral && isHandle(h, d.right.nodeType)) d.left = makeAbsent(d.right.nodeType, d.left.location);
+}
+
+function derefTarget(node: Node): Node {
+	return node.kind == NodeKind.HiddenDeref ? (node.data as HiddenDerefData).expr : node;
+}
+
+function receiverHandle(h: ActorHandles, receiver: Node, actor: Symbol): Node {
+	const pid = makeMember(receiver, "pid", receiver.location);
+	pid.nodeType = handleOf(h, actor);
+	return pid;
+}
+
+function lowerHandleNode(h: ActorHandles, node: Node): Node {
+	if (node == null) return node;
+	if (node.kind == NodeKind.Identifier) {
+		const sym = node.resolvedSym;
+		const actor = sym != null ? h.receivers.get(sym) : null;
+		if (actor != null) {
+			node.nodeType = stateOf(h, actor);
+			return receiverHandle(h, node, actor);
+		}
+		if (sym != null && sym.symbolKind == SymbolKind.Actor) return node;
+		node.nodeType = handleType(h, node.nodeType);
+		handleSymbol(h, sym);
+		return node;
+	}
+	if (node.kind == NodeKind.MemberExpr) {
+		const md = node.data as MemberExprData;
+		const base = derefTarget(md.object);
+		const actor = base.kind == NodeKind.Identifier && base.resolvedSym != null ? h.receivers.get(base.resolvedSym) : null;
+		if (actor != null && isStateField(actor, md.property)) base.nodeType = stateOf(h, actor);
+		else if (md.object.kind == NodeKind.HiddenDeref) {
+			const deref = md.object.data as HiddenDerefData;
+			deref.expr = lowerHandleNode(h, deref.expr);
+		} else md.object = lowerHandleNode(h, md.object);
+		node.nodeType = handleType(h, node.nodeType);
+		handleSymbol(h, node.resolvedSym);
+		const handle = derefTarget(md.object);
+		if (md.isOptional || !isHandle(h, handle.nodeType)) return node;
+		if (md.property == "pid") return makeHiddenStdConv(handle, getSysType(TypeKind.Int64), node.location);
+		const owner = handle.nodeType!.sym!;
+		if (!isStateField(owner, md.property)) {
+		md.object = handle;
+		return node;
+	}
+		const state = makeHiddenStdConv(makeCall(runtimeRef("msActorStateOf", node.location), [handle], node.location), stateOf(h, owner), node.location);
+		if (md.object.kind == NodeKind.HiddenDeref) (md.object.data as HiddenDerefData).expr = state;
+		else md.object = state;
+		includeActorRuntime(h.ctx);
+		return node;
+	}
+	if (node.kind == NodeKind.ActorDecl) {
+		const actor = node.resolvedSym;
+		if (actor == null) throw new Error(`internal: actor '${(node.data as ActorDeclData).actorName}' reached handle lowering without a symbol`);
+		bindReceivers(h, actor, (node.data as ActorDeclData).actorBody);
+		handleSymbol(h, actor);
+		mapChildren(node, (child: Node): Node => lowerHandleNode(h, child));
+		return node;
+	}
+	mapChildren(node, (child: Node): Node => lowerHandleNode(h, child));
+	if (node.kind == NodeKind.NewExpr && node.nodeType != null) {
+		const actor = referencedActor(node.nodeType);
+		if (actor != null) {
+			node.nodeType = stateOf(h, actor);
+			return receiverHandle(h, node, actor);
+		}
+	}
+	if (node.kind == NodeKind.HiddenDeref && isHandle(h, (node.data as HiddenDerefData).expr.nodeType)) return (node.data as HiddenDerefData).expr;
+	node.nodeType = handleType(h, node.nodeType);
+	if (node.kind == NodeKind.NullLiteral && isHandle(h, node.nodeType)) return makeAbsent(node.nodeType, node.location);
+	if (node.kind == NodeKind.BinaryExpr) compareHandleWithNull(h, node.data as BinaryExprData);
+	handleSymbol(h, node.resolvedSym);
+	if (node.paramSyms != null) {
+		for (const p of node.paramSyms) handleSymbol(h, p);
+	}
+	return node;
+}
+
+export function lowerActorHandles(program: Node, ctx: TransformContext): Node {
+	const h: ActorHandles = {
+		ctx,
+		handles: new HashMap<Symbol, Type>(),
+		states: new HashMap<Symbol, Type>(),
+		stateTypes: new HashSet<Type>(),
+		receivers: new HashMap<Symbol, Symbol>(),
+		seen: new HashSet<Type>(),
+	};
+	return lowerHandleNode(h, program);
 }
 
 // ===== Entry Point =====

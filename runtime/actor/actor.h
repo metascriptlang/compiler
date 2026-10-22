@@ -375,6 +375,18 @@ static inline void msActorCtorLeave(int64_t pid) {
     msHazardClear(a);
 }
 
+static inline void* msActorStateOf(int64_t pid) {
+    msActor* a = msActorFromPid(pid);
+    if (a == NULL) {
+        fprintf(stderr, "Error: actor %lld has stopped, so its nonisolated field cannot be read\n", (long long)pid);
+        if (msFatalTrap != NULL) msFatalTrap();
+        exit(1);
+    }
+    void* state = a->state;
+    msHazardClear(a);
+    return state;
+}
+
 /* Create actor and return its pid (for the typed pid field in the actor struct) */
 static inline int64_t msActorCreatePid(void* state, msActorDispatchFn dispatch) {
     return msActorCreate(state, dispatch)->pid;

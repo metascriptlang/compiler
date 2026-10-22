@@ -1136,6 +1136,9 @@ when (mscDeclaresRuntime) {
 	extern function msActorFromPid(pid: int64): Ptr<void>;
 
 	@compilerFunc
+	extern function msActorStateOf(pid: int64): Ptr<void>;
+
+	@compilerFunc
 	extern function msActorPollAll(): boolean;
 
 	@compilerFunc

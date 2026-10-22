@@ -474,6 +474,17 @@ export function makeNull(loc: SourceLocation): Node {
 	return n;
 }
 
+export function isActorHandle(t: Type | null): boolean {
+	return t != null && t.kind == TypeKind.Int64 && t.sym != null && t.sym.symbolKind == SymbolKind.Actor;
+}
+
+export function makeAbsent(t: Type | null, loc: SourceLocation): Node {
+	if (!isActorHandle(t)) return makeNull(loc);
+	const zero = makeNumber(0, loc);
+	zero.nodeType = t;
+	return zero;
+}
+
 // Reference parity (resetLoc): produce type-appropriate default/zero value.
 // Primitives → 0, booleans → false, refs/closures → null, strings → "".
 // Used by async/generator transforms to initialize state vars correctly.

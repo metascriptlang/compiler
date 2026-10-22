@@ -106,7 +106,7 @@ import { liftDestructors } from "./lowering/destructorLifting";
 import { lowerPowerAssert } from "./powerAssert";
 import { lowerAssert } from "./native/assertLower";
 import { lowerRestParams } from "./lowering/restParamLower";
-import { lowerActorPre, lowerActor } from "./lowering/actorLower";
+import { lowerActorPre, lowerActor, lowerActorHandles } from "./lowering/actorLower";
 import { lowerEnumToString } from "./native/enumToStringLower";
 
 // An instance field initializer is evaluated by the constructor, so its `?.`, `??` and
@@ -127,6 +127,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	flowMark();
 	let result = eraseBrandTypes(program);
 	flowLap("pass.eraseBrandTypes");
+	if (!jsBackend) { result = lowerActorHandles(result, ctx); flowLap("pass.lowerActorHandles"); }
 	if (!jsBackend) { result = planModuleTdz(result, ctx); flowLap("pass.planModuleTdz"); }
 	result = lowerBorrow(result, ctx);
 	flowLap("pass.lowerBorrow");

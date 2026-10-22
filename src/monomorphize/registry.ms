@@ -93,7 +93,7 @@ function monoTypeKeyBody(t: Readonly<Type>): string {
 		TypeKind.Int8 => "int8",
 		TypeKind.Int16 => "int16",
 		TypeKind.Int32 => "int32",
-		TypeKind.Int64 => "int64",
+		TypeKind.Int64 => t.sym != null && t.sym.symbolKind == SymbolKind.Actor ? monoTypeKey(t.sym.symbolType) : "int64",
 		TypeKind.Uint8 => "uint8",
 		TypeKind.Uint16 => "uint16",
 		TypeKind.Uint32 => "uint32",

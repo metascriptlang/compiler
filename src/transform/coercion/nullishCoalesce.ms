@@ -9,7 +9,7 @@ import { fitJoinedBranch, nullishPayloadType } from "../../checker/fit";
 import { TransformContext, freshOwnedSym } from "../context";
 import { walkNode, walkExpandBlocks, walkWithinStatement, walkOutsideInstanceFieldInits, isFuncBoundary } from "../walker";
 import { forEachChild } from "../../ast/visitor";
-import { makeNull, makeBinary, makeConditional, makeMember, makeVarDecl, makeAssign, makeIdentResolved, makeBlock, makeReturn } from "../util";
+import { makeNull, makeAbsent, isActorHandle, makeBinary, makeConditional, makeMember, makeVarDecl, makeAssign, makeIdentResolved, makeBlock, makeReturn } from "../util";
 import { firstExprKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 import { cloneIfPure } from "./intArithJS";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
@@ -59,7 +59,7 @@ function containsInRoutine(node: Node, test: (node: Node) => boolean): boolean {
 
 export function bindOnce(read: Node, ctx: TransformContext, temps: Node[], loc: SourceLocation): Node {
 	const sym = freshOwnedSym(ctx, "once", read.nodeType);
-	const decl = makeVarDecl(sym.name, makeNull(loc), DeclKind.Let, loc);
+	const decl = makeVarDecl(sym.name, makeAbsent(read.nodeType, loc), DeclKind.Let, loc);
 	decl.resolvedSym = sym;
 	decl.nodeType = sym.symbolType;
 	temps.push(decl);
@@ -85,7 +85,7 @@ function nullishPresence(left: Node, loc: SourceLocation, ctx: TransformContext)
 	if (ctx.jsBackend) {
 		checked = asUnknown(left, loc);
 	}
-	return makeBinary(checked, "!==", makeNull(loc), loc);
+	return makeBinary(checked, "!==", makeAbsent(left.nodeType, loc), loc);
 }
 
 export function nullishLowered(left: Node, right: Node, loc: SourceLocation, resultType: Type | null, ctx: TransformContext): Node {
@@ -96,7 +96,7 @@ function lowerNullish(left: Node, right: Node, loc: SourceLocation, resultType: 
 	// A scalar or string left operand carries no null outside JS: TS keeps the
 	// expression legal and its value is the left operand.
 	const leftType = left.nodeType != null ? peelTransparentInstance(left.nodeType) : null;
-	if (leftType != null && !isMaybeType(leftType)
+	if (leftType != null && !isMaybeType(leftType) && !isActorHandle(leftType)
 		&& (isNumeric(leftType) || isBoolType(leftType) || (!ctx.jsBackend && isStringLike(leftType)))) {
 		return left;
 	}
