@@ -1549,10 +1549,8 @@ function sameEnumMember(a: Readonly<Type>, b: Readonly<Type>, c: SameTypeClosure
 function skipAliasWrapper(t: Type): Type;
 function skipAliasWrapper(t: Readonly<Type>): Readonly<Type>;
 function skipAliasWrapper(t: Readonly<Type>): Readonly<Type> {
-	let cur = t;
-	while (cur.kind == TypeKind.Alias && cur.typeReturn != null) cur = cur.typeReturn;
-	const seen = peelTransparentInstance(cur);
-	return seen != cur ? skipAliasWrapper(seen) : cur;
+	if (t.kind == TypeKind.Alias && t.typeReturn != null) return skipAliasWrapper(t.typeReturn);
+	return peelTransparentInstance(t) != t ? skipAliasWrapper(peelTransparentInstance(t)) : t;
 }
 
 export function sameType(a: Readonly<Type | null>, b: Readonly<Type | null>): boolean {
