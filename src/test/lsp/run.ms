@@ -615,7 +615,7 @@ function runScenario(scenario: LspScenario): string {
 	const project = scenario.project;
 	if (project != null) {
 		ensureDir(`${NEUTRAL}/${scenarioSlug(scenario.name)}`);
-		projectDir = realpath(`${NEUTRAL}/${scenarioSlug(scenario.name)}`);
+		projectDir = slashes(realpath(`${NEUTRAL}/${scenarioSlug(scenario.name)}`));
 		const moved = materialiseProject(project, drains, projectDir);
 		if (!moved.ok) return moved.error;
 		drains = moved.value;
