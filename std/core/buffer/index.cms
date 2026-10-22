@@ -180,10 +180,11 @@ function findBytes(hay: Ptr<uint8>, hayLength: int64, needle: Ptr<uint8>, needle
 		}
 		return at < end ? at : -1;
 	}
-	let skip: int32[256] = [];
-	const table = (skip as Span<int32>) as Ptr<int32>;
-	for (let i: int64 = 0; i < 256; i++) table[i] = needleLength as int32;
-	for (let i: int64 = 0; i < needleLength - 1; i++) table[needle[i]] = (needleLength - 1 - i) as int32;
+	// Holds one past the last position of each byte in needle[0 .. needleLength - 2], 0 when absent,
+	// so the zero fill is the table's default and the shift is needleLength minus the entry.
+	let seen: int32[256] = [];
+	const table = (seen as Span<int32>) as Ptr<int32>;
+	for (let i: int64 = 0; i < needleLength - 1; i++) table[needle[i]] = (i + 1) as int32;
 	let i = needleLength - 1;
 	let found: int64 = -1;
 	while (found < 0 && i < hayLength) {
@@ -194,7 +195,7 @@ function findBytes(hay: Ptr<uint8>, hayLength: int64, needle: Ptr<uint8>, needle
 			j -= 1;
 		}
 		if (j == 0 && hay[k] == needle[0]) found = k;
-		else i += table[hay[i]] as int64;
+		else i += needleLength - table[hay[i]] as int64;
 	}
 	return found;
 }
@@ -385,14 +386,20 @@ export function fill(this buf: Buffer, value: number, start: number, end: number
 
 // --- Single-byte search (by value, not by string needle) ---
 
-export function indexOf(this buf: Buffer, value: number, byteOffset: number): number {
+// Out of line so the `number` conversion stays in the caller: inlined, clang held -1.0 in a
+// callee-saved float register across memchr, measured 2-3x slower than C on short buffers.
+@noinline function byteIndex(buf: Buffer, value: number, byteOffset: number): int64 {
 	const length = byteCount(buf);
 	const offset = byteOffset as int64;
 	const start = offset < 0 ? 0 : offset;
 	if (start >= length) return -1;
 	const bytes = bytesOf(buf);
 	const found = cMemchr(bytes + start, ((value as int64) as uint8) as int32, (length - start) as uint64);
-	return found == null ? -1 : ((found as Ptr<uint8>) - bytes) as number;
+	return found == null ? -1 : (found as Ptr<uint8>) - bytes;
+}
+
+export function indexOf(this buf: Buffer, value: number, byteOffset: number): number {
+	return byteIndex(buf, value, byteOffset) as number;
 }
 
 export function lastIndexOf(this buf: Buffer, value: number, byteOffset: number): number {
@@ -406,21 +413,25 @@ export function lastIndexOf(this buf: Buffer, value: number, byteOffset: number)
 }
 
 export function includes(this buf: Buffer, value: number, byteOffset: number): boolean {
-	return buf.indexOf(value, byteOffset) != -1;
+	return byteIndex(buf, value, byteOffset) != -1;
 }
 
 // --- Buffer-in-buffer search ---
 
-export function indexOfBuffer(this buf: Buffer, needle: Buffer, byteOffset: number): number {
+function bufferIndex(buf: Buffer, needle: Buffer, byteOffset: number): int64 {
 	const length = byteCount(buf);
 	if (length == 0) return -1;
 	const offset = byteOffset as int64;
 	const start = offset < 0 ? 0 : offset;
 	const needleLength = byteCount(needle);
-	if (needleLength == 0) return start as number;
+	if (needleLength == 0) return start;
 	if (start >= length || needleLength > length - start) return -1;
 	const found = findBytes(bytesOf(buf) + start, length - start, bytesOf(needle), needleLength);
-	return found < 0 ? -1 : (start + found) as number;
+	return found < 0 ? -1 : start + found;
+}
+
+export function indexOfBuffer(this buf: Buffer, needle: Buffer, byteOffset: number): number {
+	return bufferIndex(buf, needle, byteOffset) as number;
 }
 
 export function lastIndexOfBuffer(this buf: Buffer, needle: Buffer, byteOffset: number): number {
@@ -439,7 +450,7 @@ export function lastIndexOfBuffer(this buf: Buffer, needle: Buffer, byteOffset: 
 }
 
 export function includesBuffer(this buf: Buffer, needle: Buffer, byteOffset: number): boolean {
-	return buf.indexOfBuffer(needle, byteOffset) != -1;
+	return bufferIndex(buf, needle, byteOffset) != -1;
 }
 
 // --- Encoding-aware write ---
