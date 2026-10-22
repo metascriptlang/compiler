@@ -30,6 +30,23 @@ import {
 
 type ChildVisitor = (child: Node) => void;
 
+export function literalHeldClosures(init: Node, out: Node[]): void {
+	if (init.kind == NodeKind.ArrowFunction || init.kind == NodeKind.FunctionExpr) {
+		out.push(init);
+	} else if (init.kind == NodeKind.ObjectLiteral) {
+		for (const p of (init.data as ObjectLiteralData).properties) literalHeldClosures(p, out);
+	} else if (init.kind == NodeKind.ArrayLiteral) {
+		for (const e of (init.data as ArrayLiteralData).elements) literalHeldClosures(e, out);
+	}
+}
+
+export function initializerHoldsClosure(init: Node | null): boolean {
+	if (init == null) return false;
+	const held: Node[] = [];
+	literalHeldClosures(init, held);
+	return held.length > 0;
+}
+
 // Visit all child nodes of a given node (read-only, no mutation).
 function visitChild(cb: ChildVisitor, n: Node): void {
 	if (n != null) cb(n);

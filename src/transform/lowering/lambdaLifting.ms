@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, SourceLocation, NodeFlag, SymbolKind, Symbol, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, BooleanLiteralData, ObjectLiteralData, ArrayLiteralData, TestDeclData, Type, TypeKind } from "../../ast/node";
 import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, mintSym, newLoweredSym } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
-import { forEachChild } from "../../ast/visitor";
+import { forEachChild, initializerHoldsClosure } from "../../ast/visitor";
 import {
 	makeTypedIdentResolved, makeMember, makeMoveExpr, makeReturn, makeBlock, makeVarDecl,
 	makeFnDecl, makeInterfaceDeclFromTypes, makeObjectLiteral, makeHiddenDeref,
@@ -1812,14 +1812,12 @@ function walkLift(node: Node, state: LiftState): void {
 		},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			const isSelfRefClosureInit = d.initializer != null
-				&& (d.initializer.kind == NodeKind.ArrowFunction
-					|| d.initializer.kind == NodeKind.FunctionExpr);
-			if (isSelfRefClosureInit) defineVar(state.ss, node.resolvedSym, d.declName);
+			const boundBeforeInitializer = initializerHoldsClosure(d.initializer);
+			if (boundBeforeInitializer) defineVar(state.ss, node.resolvedSym, d.declName);
 			state.pendingRoutine = routineBindingSym(node);
 			d.initializer = walkOrLift(d.initializer, state);
 			state.pendingRoutine = null;
-			if (!isSelfRefClosureInit) defineVar(state.ss, node.resolvedSym, d.declName);
+			if (!boundBeforeInitializer) defineVar(state.ss, node.resolvedSym, d.declName);
 			if (d.declType != "") {
 				registerVarType(state, node.resolvedSym, d.declType);
 			} else if (node.nodeType != null) {

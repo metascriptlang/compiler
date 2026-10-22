@@ -3012,6 +3012,56 @@ export function usedBeforeDeclaration(name: string): string {
 	return `Block-scoped variable '${name}' used before its declaration`;
 }
 
+interface OwnInitializer {
+	sym: Symbol;
+	scope: Cursor<Scope>;
+	held: Node[];
+	annotated: boolean;
+}
+
+let _ownInitializers: OwnInitializer[] = [];
+let _heldScopes: Cursor<Scope>[] = [];
+
+export function enterOwnInitializer(ctx: CheckerContext, sym: Symbol, held: Node[], annotated: boolean): void {
+	_ownInitializers.push({ sym, scope: ctx.table.current, held, annotated });
+}
+
+export function exitOwnInitializer(): void {
+	_ownInitializers.pop();
+}
+
+function heldByOwnInitializer(fnNode: Node): boolean {
+	for (const o of _ownInitializers) {
+		for (const h of o.held) {
+			if (h == fnNode || (h.location.line > 0 && h.location.line == fnNode.location.line && h.location.column == fnNode.location.column)) return true;
+		}
+	}
+	return false;
+}
+
+function refuseOwnInitializerRead(ctx: CheckerContext, sym: Symbol, read: Node): boolean {
+	for (const o of _ownInitializers) {
+		if (o.sym != sym) continue;
+		const name = sym.name;
+		if (!o.annotated) {
+			addError(ctx, `cannot infer the type of '${name}': its own initializer reads it; annotate the type of '${name}'`, read.location.line, read.location.column);
+			return true;
+		}
+		let scope = ctx.table.current;
+		while (scope != null && scope != o.scope) {
+			if (_heldScopes.indexOf(scope) >= 0) return false;
+			scope = scope.parent;
+		}
+		if (!readIsDeferred(ctx, o.scope)) {
+			addError(ctx, usedBeforeDeclaration(name), read.location.line, read.location.column);
+		} else {
+			addError(ctx, `'${name}' is read by a function that can run while '${name}' is still being initialized: only a function stored in an object or array literal of the initializer runs after it; give '${name}' its value first, or assign the function after`, read.location.line, read.location.column);
+		}
+		return true;
+	}
+	return false;
+}
+
 function refuseModuleReadBeforeDeclaration(ctx: CheckerContext, sym: Symbol, read: Node): void {
 	const decl = sym.declNode;
 	if (decl == null || decl.kind != NodeKind.VariableDecl || sym.modulePath != ctx.modulePath || hasFlag(sym, SymbolFlag.StaticLocal)) return;
@@ -3064,6 +3114,7 @@ function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | n
 	ensureShaped(sym, ctx);
 	node.resolvedSym = sym;
 	markUsedIn(ctx, sym);
+	if (_ownInitializers.length > 0 && refuseOwnInitializerRead(ctx, sym, node)) { node.nodeType = errorType(); return; }
 	if (sym.symbolKind == SymbolKind.Function || (sym.symbolKind == SymbolKind.Variable && sym.symbolType != null
 			&& sym.symbolType.kind == TypeKind.Function && isUnresolvedType(sym.symbolType.typeReturn))) callDemandReturn(ctx, sym, node);
 	if (sym.symbolKind == SymbolKind.Variable && hasFlag(sym, SymbolFlag.Global)) refuseModuleReadBeforeDeclaration(ctx, sym, node);
@@ -3758,8 +3809,10 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	const savedCtorExits = ctx.ctorExits;
 	ctx.ctorExits = null;
 	const invoked = ctx.calleeExpr == fnNode;
+	const held = !invoked && _ownInitializers.length > 0 && heldByOwnInitializer(fnNode);
 	openScope(ctx.table, ScopeKind.Function);
 	if (invoked) _invokedScopes.push(ctx.table.current);
+	if (held) _heldScopes.push(ctx.table.current);
 	const savedBoundary = ctx.readonlyBoundary;
 	if (ctx.pendingSpawnThunk) {
 		ctx.pendingSpawnThunk = false;
@@ -3815,6 +3868,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		if (temps.length > 0) bodyIntoBlock(result, temps);
 	}
 	if (suspends) refuseUsedSuspendingViewParams(ctx, paramSyms, paramValueTypes, paramLocs, fnNode.location);
+	if (held) _heldScopes.pop();
 	if (invoked) _invokedScopes.pop();
 	closeScope(ctx.table);
 	releaseNames(ctx, boundNames);
