@@ -519,8 +519,8 @@ export function branchOffset(field: number): int64 {
 	return (field as int64) - BRANCH_EXCESS;
 }
 
-// Packed word: opcode in bits 0-7, then a, b and c in 16 bits each; a branch's c takes the 24 bits from bit 40 up,
-// and a slot opcode's slot the top 8.
+// Packed word: opcode in bits 0-7, then a, b and c in 16 bits each; a branch's offset and a jump's take the 24 bits
+// from bit 40 up as a signed field, and a slot opcode's slot the top 8.
 const PACKED_FIELD_LIMIT = 65536;
 export const MAX_SLOT = 255;
 const PACKED_BRANCH_LIMIT = 16777216;
@@ -550,15 +550,20 @@ export function packedBx(word: int64): number {
 }
 
 export function packedBranch(word: int64): int32 {
-	return (((word >> 40) & 16777215) - BRANCH_EXCESS) as int32;
+	return (word >> 40) as int32;
 }
 
 export function packInstruction(inst: RaiserInstruction): int64 {
 	const op = inst.op as int64;
 	if (op < 0 || op > 255) throw new Error(`internal: opcode ${inst.op} does not fit the packed 8-bit field`);
-	const c = isBranchI64(inst.op) ? packedField(inst, inst.c, "c", PACKED_BRANCH_LIMIT, 24) : packedField(inst, inst.c, "c", PACKED_FIELD_LIMIT, 16);
+	if (inst.op == RaiserOpcode.Jump) {
+		const offset = getSignedAx(inst) as int64;
+		if (inst.a >= 256 || offset < -BRANCH_EXCESS || offset >= BRANCH_EXCESS) throw new Error(`internal: jump offset ${offset} does not fit the packed 24-bit field`);
+		return op | (offset << 40);
+	}
+	const c = isBranchI64(inst.op) ? branchOffset(packedField(inst, inst.c, "c", PACKED_BRANCH_LIMIT, 24) as number) << 40 : packedField(inst, inst.c, "c", PACKED_FIELD_LIMIT, 16) << 40;
 	const slot = inst.op == RaiserOpcode.LoadSlot || inst.op == RaiserOpcode.StoreSlot ? packedField(inst, inst.slot, "slot", MAX_SLOT + 1, 8) << 56 : 0;
-	return op | (packedField(inst, inst.a, "a", PACKED_FIELD_LIMIT, 16) << 8) | (packedField(inst, inst.b, "b", PACKED_FIELD_LIMIT, 16) << 24) | (c << 40) | slot;
+	return op | (packedField(inst, inst.a, "a", PACKED_FIELD_LIMIT, 16) << 8) | (packedField(inst, inst.b, "b", PACKED_FIELD_LIMIT, 16) << 24) | c | slot;
 }
 
 // --- Tests ---
@@ -641,20 +646,18 @@ test "CallHost zero args" {
 }
 
 test "packed word holds op, a, b and c" {
-	const w = packInstruction(raiserABC(RaiserOpcode.Jump, 65535, 1000, 7));
-	assert (w & 255) == (RaiserOpcode.Jump as int64);
+	const w = packInstruction(raiserABC(RaiserOpcode.AddI64, 65535, 1000, 7));
+	assert (w & 255) == (RaiserOpcode.AddI64 as int64);
 	assert ((w >> 8) & 65535) == 65535;
 	assert ((w >> 24) & 65535) == 1000;
 	assert ((w >> 40) & 65535) == 7;
 }
 
-test "packed word keeps a negative jump's three bytes" {
-	const inst = raiserAx(RaiserOpcode.Jump, -5);
-	const w = packInstruction(inst);
-	const a = ((w >> 8) & 65535) as int32;
-	const b = ((w >> 24) & 65535) as int32;
-	const c = ((w >> 40) & 65535) as int32;
-	assert a * 65536 + b * 256 + c == 16777211;
+test "packed word keeps a jump's signed offset in one field" {
+	for (const offset of [0, 1, -1, -5, 32768, -32769, 8388607, -8388608]) {
+		const w = packInstruction(raiserAx(RaiserOpcode.Jump, offset));
+		assert packedOp(w) == RaiserOpcode.Jump && packedBranch(w) == offset;
+	}
 }
 
 test "an operand outside 16 bits stops the pack" {

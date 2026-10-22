@@ -1915,11 +1915,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				break;
 			}
 			case RaiserOpcode.Jump: {
-				const ia = ((word >> 8) & 65535) as int32;
-				const ib = ((word >> 24) & 65535) as int32;
-				const ic = ((word >> 40) & 65535) as int32;
-				const rawAx = ia * 65536 + ib * 256 + ic;
-				const offset = rawAx >= 8388608 ? rawAx - 16777216 : rawAx;
+				const offset = packedBranch(word);
 				if (offset < 0) {
 					// Loop back-edge: this is ONE iteration. Straight-line code is
 					// finite by construction and recursion is bounded by
@@ -1928,7 +1924,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 					// loopIterations only on backward jumps).
 					if (vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
 				}
-				ip = ip + (offset as int32);
+				ip = ip + offset;
 				break;
 			}
 			case RaiserOpcode.LoadInt: {
