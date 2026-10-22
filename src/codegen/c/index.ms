@@ -22,6 +22,7 @@ import { mangleModuleName, mangledFunctionName, mangledTypeName } from "./names"
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable } from "./test";
 import { emitIncludeDirectives, emitIncludes } from "./context";
+import { placedInstances } from "../../checker/instantiate";
 import { emitOwnedTypeInfos, refArrayCellName, arcCellName, typeInfoCName, defineDeferredElements, isHcrImageModule, objectTypeInfoKey, hookOps } from "./types";
 import { collectModuleTypeInfoDemands } from "../../checker/reachability";
 import { DynamicModulePlan } from "../../module/graph";
@@ -91,6 +92,7 @@ export function replayCModuleEmission(aliveSet: AliveSet, facts: CEmissionFacts,
 
 function bindRegistryFacts(facts: CEmissionFacts): void {
 	if (facts.hookOps == null) facts.hookOps = hookOps();
+	if (facts.placedInstances == null) facts.placedInstances = placedInstances();
 }
 
 function registerTypeInfoDemands(demands: AliveSet, facts: CEmissionFacts): void {

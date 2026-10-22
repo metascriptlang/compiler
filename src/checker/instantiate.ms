@@ -398,10 +398,15 @@ export function distinctInstances(order: Node[]): Node[] {
 	return out;
 }
 
-export function placedInstanceOf(sym: Symbol): Symbol;
-export function placedInstanceOf(sym: Readonly<Symbol>): Readonly<Symbol>;
-export function placedInstanceOf(sym: Readonly<Symbol>): Readonly<Symbol> {
-	return _placedInstances.get(sym) ?? sym;
+// The placement table, handed to emission through its facts.
+export function placedInstances(): HashMap<Symbol, Symbol> {
+	return _placedInstances;
+}
+
+export function placedInstanceOf(placed: HashMap<Symbol, Symbol>, sym: Symbol): Symbol;
+export function placedInstanceOf(placed: Readonly<HashMap<Symbol, Symbol>>, sym: Readonly<Symbol>): Readonly<Symbol>;
+export function placedInstanceOf(placed: Readonly<HashMap<Symbol, Symbol>>, sym: Readonly<Symbol>): Readonly<Symbol> {
+	return placed.readonlyGet(sym) ?? sym;
 }
 
 function declaredClass(stmt: Node): Node | null {

@@ -20,7 +20,7 @@ import { lookupHost } from "../../raiser/hostRegistry";
 import { opName } from "../../raiser/disasm";
 import { resolveRuntimeDir } from "../../utils/path";
 import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, fieldInst, newArrayInst } from "./valueCopy";
-import { placedInstanceOf } from "../../checker/instantiate";
+import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
 import { runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase, fieldTypeView } from "../../checker/types";
 import { isSlotUnion } from "../../checker/fit";
@@ -1480,7 +1480,7 @@ function callBlock(s: RaiserCompState, resultType: Type | null, args: Node[], pa
 
 function calleeParamTypes(sym: Symbol | null): Type[] | null {
 	if (sym == null) return null;
-	const declared = placedInstanceOf(sym).symbolType;
+	const declared = placedInstanceOf(placedInstances(), sym).symbolType;
 	return declared != null && declared.kind == TypeKind.Function ? declared.typeChildren : null;
 }
 
@@ -2559,7 +2559,7 @@ function literalClass(t: Type | null): Symbol | null {
 	const bare = t != null && t.kind == TypeKind.Ref ? t.typeReturn : t;
 	if (runtimeClassSym(bare) == null) return null;
 	const sym = classSymOfType(bare);
-	return sym != null ? placedInstanceOf(sym) : null;
+	return sym != null ? placedInstanceOf(placedInstances(), sym) : null;
 }
 
 function emitObjectShell(s: RaiserCompState, dest: int32, t: Type | null): void {

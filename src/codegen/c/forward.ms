@@ -30,7 +30,7 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Read
 		return;
 	}
 	if (sym != null && copiesInline(g, sym)) {
-		requestInlineCopy(g, calleeName, placedInstanceOf(sym));
+		requestInlineCopy(g, calleeName, placedInstanceOf(g.emissionFacts.placedInstances!, sym));
 		return;
 	}
 	if (sym != null && sym.modulePath != "" && sym.modulePath == g.modulePath) return;

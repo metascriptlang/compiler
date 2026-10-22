@@ -659,6 +659,7 @@ export class CEmissionFacts {
 	trace: string = "";
 	writes: string[] | null = null;
 	hookOps: HashMap<string, Symbol> | null = null;
+	placedInstances: HashMap<Symbol, Symbol> | null = null;
 }
 
 function noteFactWrite(facts: CEmissionFacts, write: string): void {
