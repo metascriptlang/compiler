@@ -9,7 +9,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, setConditionalAssignFn, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols } from "./symbol";
-import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
+import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
@@ -1016,6 +1016,7 @@ function checkFunctionDeclBody(ctx: CheckerContext, node: Node, sym: Symbol): vo
 	node.nodeType = fnType;
 	if (fnType != null && fnType.kind == TypeKind.Function && fnType.typeChildren.length > 0) {
 		refuseAccessorOverField(ctx, node, fnType.typeChildren[0], d.fnName, d.nameLocation);
+		refuseExtensionOverMethod(ctx, sym, fnType, d.fnName, d.nameLocation);
 	}
 	if (hasFlag(sym, SymbolFlag.Borrow)) {
 		resolveBorrow(ctx, sym, d.fnName, d.nameLocation);
@@ -1500,6 +1501,41 @@ function refuseAccessorOverField(ctx: CheckerContext, node: Node, receiver: Type
 	const prop = routineName.slice(4, routineName.length);
 	if (isUnresolvedType(getProperty(receiver, prop))) return;
 	addError(ctx, `Duplicate identifier '${prop}': '${typeDisplayName(receiver)}' has a field and an accessor of that name`, at.line, at.column);
+}
+
+// The reference refuses a second routine with equal parameters in one scope (wrongRedefinition);
+// a class's methods are the routines of its type, so an extension that repeats one is refused
+// where it is written instead of shadowing the method at every call.
+function refuseExtensionOverMethod(ctx: CheckerContext, sym: Symbol, fnType: Type, name: string, at: SourceLocation): void {
+	if (ctx.extensionRegistry == null || sym.symbolKind != SymbolKind.Function || !isInstanceExtension(sym)) return;
+	const receiver = unwrapRef(fnType.typeChildren[0]);
+	for (const ext of findAllExtensionsByName(ctx.extensionRegistry, name)) {
+		const method = ext.sym;
+		if (method == null || method == sym || ext.isStatic || method.declNode == null || method.declNode.kind != NodeKind.MethodDecl) continue;
+		ensureShaped(method, ctx);
+		const methodType = getExtFnType(ext);
+		if (methodType.kind != TypeKind.Function || methodType.typeChildren.length != fnType.typeChildren.length || hasGenericParams(methodType)) continue;
+		const owner = unwrapRef(methodType.typeChildren[0]);
+		if (!(sameType(owner, receiver) || isAssignable(receiver, owner)) || !sameParamsAfterReceiver(methodType, fnType)) continue;
+		const params: string[] = [];
+		for (let i = 1; i < fnType.typeChildren.length; i += 1) params.push(typeDisplayName(fnType.typeChildren[i]));
+		addError(ctx, `${typeDisplayName(receiver)} already has method ${name}(${params.join(", ")}); an extension with the same name and parameters would shadow it`, at.line, at.column);
+		return;
+	}
+}
+
+function isInstanceExtension(sym: Symbol): boolean {
+	const decl = sym.declNode;
+	if (decl == null || decl.kind != NodeKind.FunctionDecl) return false;
+	const flags = (decl.data as FunctionDeclData).fnFlags;
+	return getExtTypeName(flags) != "" && !isStaticExtensionFlag(flags);
+}
+
+function sameParamsAfterReceiver(a: Type, b: Type): boolean {
+	for (let i = 1; i < a.typeChildren.length; i += 1) {
+		if (!sameType(a.typeChildren[i], b.typeChildren[i])) return false;
+	}
+	return true;
 }
 
 export function checkFunctionOnDemand(ctx: CheckerContext, sym: Symbol): void {
