@@ -15,7 +15,7 @@ class Witness {
 	onDestroy(): void {
 		if (watching) {
 			watching = false;
-			seen = reader();
+			seen = readWatched(reading);
 		}
 	}
 }
@@ -42,7 +42,7 @@ struct Outer {
 let watching = false;
 let seen: int32 = 0;
 let failures = "";
-let reader: () => int32 = (): int32 => 0;
+let reading = "";
 
 function tagOf(w: Witness | null): int32 {
 	return w == null ? -2 : w.tag;
@@ -53,8 +53,8 @@ function eitherTag(e: Witness | string): int32 {
 	return e.tag;
 }
 
-function watch(read: () => int32): void {
-	reader = read;
+function watch(what: string): void {
+	reading = what;
 	seen = 0;
 	watching = true;
 }
@@ -90,9 +90,19 @@ function makePair(tag: int32): [Witness | null, int32] {
 	return [new Witness(tag), tag];
 }
 
+function readWatched(what: string): int32 {
+	if (what == "holder") return tagOf(holder.w);
+	if (what == "link") return tagOf(link.w);
+	if (what == "maybe") return tagOf(maybe);
+	if (what == "slot") return tagOf(slot.w);
+	if (what == "outer") return tagOf(outer.inner.w);
+	if (what == "either") return eitherTag(either);
+	return tagOf(pair[0]);
+}
+
 function classRefSink(): void {
 	holder = new Holder(new Witness(1));
-	watch((): int32 => tagOf(holder.w));
+	watch("holder");
 	holder = new Holder(new Witness(2));
 	check("class ref sink");
 }
@@ -100,28 +110,28 @@ function classRefSink(): void {
 function classRefCopy(): void {
 	holder = new Holder(new Witness(1));
 	spareHolder = new Holder(new Witness(2));
-	watch((): int32 => tagOf(holder.w));
+	watch("holder");
 	holder = spareHolder;
 	check("class ref copy");
 }
 
 function cyclicRefSink(): void {
 	link = new Link(new Witness(1));
-	watch((): int32 => tagOf(link.w));
+	watch("link");
 	link = new Link(new Witness(2));
 	check("cyclic class ref sink");
 }
 
 function nullableRefSink(): void {
 	maybe = new Witness(1);
-	watch((): int32 => tagOf(maybe));
+	watch("maybe");
 	maybe = new Witness(2);
 	check("nullable ref sink");
 }
 
 function structFieldSink(): void {
 	slot = makeSlot(1);
-	watch((): int32 => tagOf(slot.w));
+	watch("slot");
 	slot = makeSlot(2);
 	check("struct ref field sink");
 }
@@ -129,28 +139,28 @@ function structFieldSink(): void {
 function structFieldCopy(): void {
 	slot = makeSlot(1);
 	spareSlot = makeSlot(2);
-	watch((): int32 => tagOf(slot.w));
+	watch("slot");
 	slot = spareSlot;
 	check("struct ref field copy");
 }
 
 function nestedStructSink(): void {
 	outer = makeOuter(1);
-	watch((): int32 => tagOf(outer.inner.w));
+	watch("outer");
 	outer = makeOuter(2);
 	check("nested struct sink");
 }
 
 function unionSink(): void {
 	either = makeEither(1);
-	watch((): int32 => eitherTag(either));
+	watch("either");
 	either = makeEither(2);
 	check("union sink");
 }
 
 function tupleSink(): void {
 	pair = makePair(1);
-	watch((): int32 => tagOf(pair[0]));
+	watch("pair");
 	pair = makePair(2);
 	check("tuple sink");
 }

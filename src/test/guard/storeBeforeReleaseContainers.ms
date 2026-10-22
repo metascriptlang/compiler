@@ -9,6 +9,8 @@
 //
 // RED MEANS an overwrite of that container shape releases the old elements while the variable
 // still names them: the hook read its own tag (1) instead of the new element's (2), or crashed.
+// A closure array is read through its length (old 1, new 2), because a hook may not call a
+// function value.
 
 class Witness {
 	tag: int32;
@@ -16,7 +18,7 @@ class Witness {
 	onDestroy(): void {
 		if (watching) {
 			watching = false;
-			seen = reader();
+			seen = readWatched(reading);
 		}
 	}
 }
@@ -28,10 +30,10 @@ struct Slot {
 let watching = false;
 let seen: int32 = 0;
 let failures = "";
-let reader: () => int32 = (): int32 => 0;
+let reading = "";
 
-function watch(read: () => int32): void {
-	reader = read;
+function watch(what: string): void {
+	reading = what;
 	seen = 0;
 	watching = true;
 }
@@ -72,9 +74,16 @@ function firstSlot(): int32 {
 	return slots.length == 0 ? -2 : tagOf(slots[0].w);
 }
 
+function readWatched(what: string): int32 {
+	if (what == "ws") return firstWitness();
+	if (what == "fns") return fns.length as int32;
+	if (what == "slots") return firstSlot();
+	return tagOf(byKey.get(0));
+}
+
 function refArraySink(): void {
 	ws = [new Witness(1)];
-	watch(firstWitness);
+	watch("ws");
 	ws = [new Witness(2)];
 	check("ref array sink");
 }
@@ -82,29 +91,29 @@ function refArraySink(): void {
 function refArrayCopy(): void {
 	ws = [new Witness(1)];
 	spareWs = [new Witness(2)];
-	watch(firstWitness);
+	watch("ws");
 	ws = spareWs;
 	check("ref array copy");
 }
 
 function closureArraySink(): void {
 	fns = [witnessed(1)];
-	watch((): int32 => fns.length == 0 ? -2 : fns[0]());
-	fns = [witnessed(2)];
+	watch("fns");
+	fns = [witnessed(2), witnessed(2)];
 	check("closure array sink");
 }
 
 function closureArrayCopy(): void {
 	fns = [witnessed(1)];
-	spareFns = [witnessed(2)];
-	watch((): int32 => fns.length == 0 ? -2 : fns[0]());
+	spareFns = [witnessed(2), witnessed(2)];
+	watch("fns");
 	fns = spareFns;
 	check("closure array copy");
 }
 
 function structArraySink(): void {
 	slots = [{ w: new Witness(1) }];
-	watch(firstSlot);
+	watch("slots");
 	slots = [{ w: new Witness(2) }];
 	check("struct array sink");
 }
@@ -112,14 +121,14 @@ function structArraySink(): void {
 function structArrayCopy(): void {
 	slots = [{ w: new Witness(1) }];
 	spareSlots = [{ w: new Witness(2) }];
-	watch(firstSlot);
+	watch("slots");
 	slots = spareSlots;
 	check("struct array copy");
 }
 
 function mapSink(): void {
 	byKey = mapOf(1);
-	watch((): int32 => tagOf(byKey.get(0)));
+	watch("byKey");
 	byKey = mapOf(2);
 	check("map sink");
 }

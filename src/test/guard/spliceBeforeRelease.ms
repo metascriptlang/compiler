@@ -15,7 +15,7 @@ class Witness {
 	constructor(tag: int32) { this.tag = tag; }
 	onDestroy(): void {
 		if (!watching) return;
-		const seen = viewer();
+		const seen = viewing == "ws" ? tagsOf(ws) : maybeTagsOf(maybeWs);
 		if (seen != want) failures = `${failures}${what}: the hook of ${this.tag} saw [${seen}], want [${want}]; `;
 		released = released + 1;
 	}
@@ -26,7 +26,7 @@ let what = "";
 let want = "";
 let released: int32 = 0;
 let failures = "";
-let viewer: () => string = (): string => "";
+let viewing = "ws";
 
 let ws: Witness[] = [];
 let maybeWs: (Witness | null)[] = [];
@@ -68,8 +68,6 @@ function replaceAt<T>(a: T[], i: number, x: T): void {
 	a.splice(i, 1, x);
 }
 
-viewer = (): string => tagsOf(ws);
-
 ws = witnesses(3);
 start("one replaced", "1,9,3");
 ws.splice(1, 1, new Witness(9));
@@ -96,7 +94,7 @@ replaceAt(ws, 0, new Witness(9));
 expectReleased(1);
 
 ws = [];
-viewer = (): string => maybeTagsOf(maybeWs);
+viewing = "maybeWs";
 maybeWs = [new Witness(1), null, new Witness(3)];
 start("nullable elements", "null,3");
 maybeWs.splice(0, 2, null);

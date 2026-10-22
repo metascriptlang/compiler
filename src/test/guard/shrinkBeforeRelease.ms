@@ -13,7 +13,7 @@ class Witness {
 	tag: int32;
 	constructor(tag: int32) { this.tag = tag; }
 	onDestroy(): void {
-		if (finder(this.tag)) failures = `${failures}${what}: the hook of ${this.tag} found itself in the array; `;
+		if (findsItself(this.tag)) failures = `${failures}${what}: the hook of ${this.tag} found itself in the array; `;
 		released = released + 1;
 	}
 }
@@ -21,15 +21,24 @@ class Witness {
 let what = "";
 let released: int32 = 0;
 let failures = "";
-let finder: (tag: int32) => boolean = (tag: int32): boolean => false;
+let searching = "";
 
 function expectReleased(n: int32): void {
 	if (released != n) failures = `${failures}${what}: released ${released}, want ${n}; `;
-	finder = (tag: int32): boolean => false;
+	searching = "";
 }
 
 let ws: Witness[] = [];
 let maybeWs: (Witness | null)[] = [];
+
+function findsItself(tag: int32): boolean {
+	if (searching == "ws") {
+		for (const w of ws) if (w.tag == tag) return true;
+	} else if (searching == "maybeWs") {
+		for (const w of maybeWs) if (w != null && w.tag == tag) return true;
+	}
+	return false;
+}
 
 function start(name: string): void {
 	what = name;
@@ -39,10 +48,7 @@ function start(name: string): void {
 function refArrayEmpty(): void {
 	ws = [new Witness(1), new Witness(2)];
 	start("ref array emptied");
-	finder = (tag: int32): boolean => {
-		for (const w of ws) if (w.tag == tag) return true;
-		return false;
-	};
+	searching = "ws";
 	ws.length = 0;
 	expectReleased(2);
 }
@@ -50,10 +56,7 @@ function refArrayEmpty(): void {
 function nullableRefArrayCut(): void {
 	maybeWs = [new Witness(1), new Witness(2), new Witness(3)];
 	start("nullable ref array cut");
-	finder = (tag: int32): boolean => {
-		for (const w of maybeWs) if (w != null && w.tag == tag) return true;
-		return false;
-	};
+	searching = "maybeWs";
 	maybeWs.length = 1;
 	expectReleased(2);
 	maybeWs.length = 0;
