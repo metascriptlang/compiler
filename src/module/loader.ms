@@ -1271,7 +1271,7 @@ test "header cache wrapper: an entry carries the complete structs of its header"
 	);
 	const out1 = inlineHeaderImports(src, "/tmp/mshcw/mainS.ms", createFileSystemProvider());
 	const t = headerTarget();
-	const key = completeStructKey(`${t.os}-${t.cpu}`, "HcwS", ["size", "v"], ["int64", "int32"]);
+	const key = completeStructKey(`${t.os}-${t.cpu}`, "HcwS", ["size", "v"], [t.longSize == 4 ? "int32" : "int64", "int32"]);
 	assert storedOut == "1\n" + key + "\n" + out1, storedOut;
 	assert inlineHeaderImports(src, "/tmp/mshcw/mainS.ms", createFileSystemProvider()) == out1;
 	unregisterHeaderCacheForTest();
