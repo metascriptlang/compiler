@@ -359,10 +359,10 @@ when (mscDeclaresRuntime) {
 	extern function msOrcTraceRef(child: Ptr<void>, env: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msHeldCount(p: Ptr<void>): int32;
+	extern function msHeldCount(p: Ptr<void>): int64;
 
 	@compilerFunc
-	extern function msDestroyLeftNoRef(p: Ptr<void>, held: int32): void;
+	extern function msDestroyLeftNoRef(p: Ptr<void>, held: int64): void;
 
 	@compilerFunc
 	extern function msStringDecref(s: string): void;

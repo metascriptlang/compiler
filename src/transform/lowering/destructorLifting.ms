@@ -379,7 +379,7 @@ function heldCount(self: Symbol, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocatio
 	const ctr = lctx.tempCounter;
 	lctx.tempCounter = ctr + 1;
 	const name = "$held_" + ctr.toString();
-	const t = int32Type();
+	const t = createPrimitive(TypeKind.Int64);
 	const read = makeCall(runtimeRef("msHeldCount", loc), [makeIdentResolved(self, loc)], loc);
 	read.nodeType = t;
 	const sym = liftTempSym(lctx, name, t);
