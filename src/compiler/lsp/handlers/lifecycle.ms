@@ -22,10 +22,11 @@ import {
 	lspPathToUri, lspGetArrayItems, lspGetBoolField, lspRequest, lspParseContentLength,
 } from "../protocol";
 import { lspFmtPublishDiagnostics } from "../format";
+import { lineOffset } from "../../fmt/edit";
 import {
 	CompletionCache, createCompletionCache, markFileChanged, drainChangedFiles,
 	markDocumentOpen, markDocumentClosed, isDocumentOpen, openDocuments,
-	markDependentsStale, drainStaleDependents, lspReloadFromDisk, dbGetSource,
+	markDependentsStale, drainStaleDependents, lspReloadFromDisk, dbGetSource, lspDocumentUri,
 } from "./shared";
 import {
 	buildDiagnosticsJson, buildTransitiveDiagnosticsWire, recordImportsForFile,
@@ -52,8 +53,8 @@ export function publishPendingDiagnostics(db: TransAmDb): string {
 	const changed = drainChangedFiles();
 	let result = "";
 	for (const entry of changed) {
-		const path = entry[0];
-		const uri = entry[1];
+		const path = entry.path;
+		const uri = entry.uri;
 		try {
 			const t0 = performance.now();
 			dbTypeCheck(db, path);
@@ -124,9 +125,8 @@ export function handleShutdown(id: string): string {
 
 export function handleDidOpen(params: string, db: TransAmDb): string {
 	const t0 = performance.now();
-	const textDoc = lspGetObjectField(params, "textDocument");
-	const uri = lspGetField(textDoc, "uri");
-	const text = lspGetField(textDoc, "text");
+	const uri = lspDocumentUri(params);
+	const text = lspGetField(lspGetObjectField(params, "textDocument"), "text");
 	const path = lspUriToPath(uri);
 	markDocumentOpen(path);
 
@@ -149,8 +149,7 @@ export function handleDidOpen(params: string, db: TransAmDb): string {
 // ===== Did Change =====
 
 export function handleDidChange(params: string, db: TransAmDb): string {
-	const textDoc = lspGetObjectField(params, "textDocument");
-	const uri = lspGetField(textDoc, "uri");
+	const uri = lspDocumentUri(params);
 	// Two-step extraction: scope search to contentChanges array (avoids matching "text" elsewhere)
 	const contentChanges = lspGetObjectField(params, "contentChanges");
 	const changes = lspGetField(contentChanges, "text");
@@ -167,8 +166,7 @@ export function handleDidChange(params: string, db: TransAmDb): string {
 // ===== Did Close =====
 
 export function handleDidClose(params: string, db: TransAmDb): string {
-	const textDoc = lspGetObjectField(params, "textDocument");
-	const uri = lspGetField(textDoc, "uri");
+	const uri = lspDocumentUri(params);
 	const path = lspUriToPath(uri);
 	markDocumentClosed(path);
 	forgetPublishedDiagnostics(path);
@@ -242,8 +240,7 @@ export function watchedFilesRegistration(): string {
 // ===== Did Save =====
 
 export function handleDidSave(params: string, db: TransAmDb): string {
-	const textDoc = lspGetObjectField(params, "textDocument");
-	const uri = lspGetField(textDoc, "uri");
+	const uri = lspDocumentUri(params);
 	const path = lspUriToPath(uri);
 	// Reload format config when build.ms or msc.json is saved
 	if (path.endsWith("/build.ms") || path.endsWith("/msc.json")) {
@@ -1551,16 +1548,6 @@ test "watched files are registered only for clients that support it" {
 	assert request.indexOf("workspace/didChangeWatchedFiles") >= 0;
 }
 
-function lineStartOffset(source: string, line: int32): int32 {
-	let current: int32 = 0;
-	let pos: int32 = 0;
-	while (pos < source.byteLength && current < line) {
-		if (source.byteAt(pos) == "\n".code) current = current + 1;
-		pos = pos + 1;
-	}
-	return pos;
-}
-
 function applyRangeFormatting(source: string, line: number, character: number): string {
 	const db = testDb("file:///rangefmt.ms", source);
 	const pos = `{"line":${line},"character":${character}}`;
@@ -1575,8 +1562,8 @@ function applyRangeFormatting(source: string, line: number, character: number): 
 		const range = lspGetObjectField(items[i], "range");
 		const s = lspGetObjectField(range, "start");
 		const e = lspGetObjectField(range, "end");
-		const from = lineStartOffset(out, lspGetNumberField(s, "line") as int32) + (lspGetNumberField(s, "character") as int32);
-		const to = lineStartOffset(out, lspGetNumberField(e, "line") as int32) + (lspGetNumberField(e, "character") as int32);
+		const from = lineOffset(out, (lspGetNumberField(s, "line") as int32) + 1) + (lspGetNumberField(s, "character") as int32);
+		const to = lineOffset(out, (lspGetNumberField(e, "line") as int32) + 1) + (lspGetNumberField(e, "character") as int32);
 		out = out.byteSlice(0, from) + lspGetField(items[i], "newText") + out.byteSlice(to, out.byteLength);
 		i = i - 1;
 	}
