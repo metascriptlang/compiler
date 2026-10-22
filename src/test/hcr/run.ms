@@ -1362,8 +1362,8 @@ function dollarNames(): void {
 		"HCR-DOLLAR g1: $step 1 step 1 boxes 1 1",
 		"HCR-DOLLAR g2: reloaded logic []",
 		"HCR-DOLLAR after g2: $step 2 step 2 direct 2 2",
-		"HCR-DOLLAR g3: restart required logic [the layout of type '$Box' in module 'logic' changed]",
-		"HCR-DOLLAR g4: restart required logic [the layout of type 'Box' in module 'logic' changed]",
+		"HCR-DOLLAR g3: restart required logic [type '$Box' in module 'logic' has 2 live values]",
+		"HCR-DOLLAR g4: restart required logic [type 'Box' in module 'logic' has 2 live values]",
 	]);
 }
 
