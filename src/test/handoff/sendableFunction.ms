@@ -91,6 +91,10 @@ test "sendableFunction: a const scalar or a Locked<T> module binding reaches ano
 		"function peek(c: Locked<int32>): int32 { return LIMIT; }\n";
 	const spawned = shared + "async function f(): Promise<int32> { return await spawn(() => peek(cell) + LIMIT); }";
 	assert warningCount(spawned) == warningCount(shared), "spawn over a const scalar and a Locked<T>";
+	const reads = "async function f(): Promise<void> { const p = await spawn(() => at); console.log(p[]); }";
+	const pointed = "const name = \"global\";\nconst at = name as Ptr<string>;\n";
+	assert warningCount(pointed + reads) == warningCount(pointed), "spawn over a const pointer to a const string";
+	assert hasWarning("let name = \"global\";\nconst at = name as Ptr<string>;\n" + reads, "uses module-level 'at'"), "a const pointer to a mutable string";
 }
 
 test "sendableFunction: a callback a routine calls is judged where it is passed" {

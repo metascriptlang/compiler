@@ -1,7 +1,7 @@
 // Effects are read from checked bodies, and a callee later in the module is not
 // checked yet where its caller is: queue a check with deferEffectCheck.
 
-import { ArrowFunctionData, CallExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, PropertyDeclData, Symbol, SymbolKind, Type } from "../ast/node";
+import { ArrowFunctionData, CallExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, PropertyDeclData, Symbol, SymbolKind, Type, TypeAssertionData, TypeKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
@@ -205,8 +205,17 @@ function isModuleState(sym: Symbol): boolean {
 
 function isConstantValue(sym: Symbol, e: Effect): boolean {
 	const t = sym.symbolType;
-	if (hasFlag(sym, SymbolFlag.Mutable) || typeCarriesRef(t)) return false;
+	if (hasFlag(sym, SymbolFlag.Mutable)) return false;
+	if (typeCarriesRef(t)) return t != null && t.kind == TypeKind.Ptr && pointsAtConstantState(sym, e);
 	return e == Effect.SpawnUnsafe || !isAtomicRef(t);
+}
+
+function pointsAtConstantState(sym: Symbol, e: Effect): boolean {
+	const init = constBindingInitializer(sym);
+	if (init == null || init.kind != NodeKind.TypeAssertion) return false;
+	const target = peelConv((init.data as TypeAssertionData).asExpr);
+	const pointee = target.kind == NodeKind.Identifier ? target.resolvedSym : null;
+	return pointee != null && pointee != sym && isModuleState(pointee) && isConstantValue(pointee, e);
 }
 
 function stateName(sym: Symbol): string {
