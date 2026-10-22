@@ -120,3 +120,16 @@ export function readAt(t: Readonly<Node>): int32 { return at(t).n + at(t, 0).n; 
 `, ["readAt"]);
 	assert fault == "", fault;
 }
+
+test "a Readonly module const read as a result, an argument or a field path takes no rc op" {
+	const fault = rcFault(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+const ROOT: Readonly<Node> = new Node();
+function pick(t: Readonly<Node> | null): Readonly<Node> { return t != null ? t : ROOT; }
+function look(t: Readonly<Node>): int32 { return t.n; }
+export function readArg(): int32 { return look(ROOT); }
+export function readRet(): int32 { const p = pick(null); return p.n; }
+export function readField(): int32 { return ROOT.n + ROOT.kids.length; }
+`, ["pick", "readArg", "readRet", "readField"]);
+	assert fault == "", fault;
+}
