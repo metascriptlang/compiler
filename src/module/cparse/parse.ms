@@ -513,7 +513,7 @@ function declarator(ctx: ParseCtx, ty: CType): DeclResult {
 	// Identifier
 	let name = "";
 	let at = writtenAt(ctx.tok);
-	if (ctx.tok.kind == CTokenKind.Ident && !ctx.typedefs.has(ctx.tok.stringVal)) {
+	if (ctx.tok.kind == CTokenKind.Ident) {
 		name = ctx.tok.stringVal;
 		advance(ctx);
 	}
