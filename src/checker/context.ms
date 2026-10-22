@@ -1279,6 +1279,7 @@ export function sgSortRecords(records: SgSymRecord[]): void {
 
 export interface CheckedInstantiation {
 	sym: Symbol;
+	params: Type[];
 	concreteTypes: Type[];
 }
 

@@ -3,7 +3,6 @@
 
 
 import { Node, Symbol, SymbolKind, SymbolState, createNode, NodeKind, ProgramData, FunctionDeclData, makeLoc } from "../../ast/node";
-import { createUnifyBindings, unifyType } from "../../checker/types";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
 import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport } from "../../checker/context";
@@ -28,7 +27,7 @@ import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction,
 import { RaiserFuncMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
 import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState, globalScope } from "../../checker/symbol";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
-import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
+import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn, instanceArgsOf, instanceParamsOf } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { generateRaiser, appendProgramToImage } from "./rgen";
 import { getComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer, registerMacroEvaluator, registerMacroCompiler, enterEngineCompile, leaveEngineCompile, engineCompiling } from "../../compiler/meta/callbacks";
@@ -381,11 +380,11 @@ function seedCtxForSym(sym: Symbol): CheckerContext {
 function instanceTypeParamSeeds(sym: Symbol): Symbol[] {
 	const seeds: Symbol[] = [];
 	const generic = sym.instantiatedFrom;
-	if (generic == null || generic.symbolType == null || sym.symbolType == null) return seeds;
-	const bindings = createUnifyBindings();
-	unifyType(generic.symbolType, sym.symbolType, bindings);
-	for (let i = 0; i < bindings.names.length && i < bindings.types.length; i += 1) {
-		seeds.push(makeSymbolState(bindings.names[i], SymbolKind.TypeAlias, bindings.types[i], false, SymbolState.Shaped));
+	if (generic == null) return seeds;
+	const params = instanceParamsOf(sym);
+	const args = instanceArgsOf(sym);
+	for (let i = 0; i < params.length; i += 1) {
+		seeds.push(makeSymbolState(params[i].typeName, SymbolKind.TypeAlias, args[i], false, SymbolState.Shaped));
 	}
 	return seeds;
 }

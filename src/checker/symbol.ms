@@ -442,6 +442,7 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | 
 		item: 0,
 		instantiatedFrom: null,
 		instanceArgs: null,
+		instanceParams: null,
 		ctorRoutine: null,
 		borrowedFrom: null,
 		typeParams: [],

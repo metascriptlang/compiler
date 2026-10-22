@@ -278,6 +278,7 @@ export class Symbol {
 	item: int32;
 	instantiatedFrom: Symbol | null;
 	instanceArgs: Type[] | null;
+	instanceParams: Type[] | null;
 	ctorRoutine: Symbol | null;
 	borrowedFrom: Symbol | null;
 	staticOwner: Symbol | null;
