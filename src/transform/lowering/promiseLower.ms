@@ -22,7 +22,7 @@
 // of them would create a circular import.
 
 import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprData, Type, TypeKind, SymbolKind } from "../../ast/node";
-import { isAwaitable, awaitedType, unwrapRef, createFunction, typeDisplayName } from "../../checker/types";
+import { isAwaitable, awaitedType, unwrapRef, createFunction, typeDisplayName, literalBase } from "../../checker/types";
 import { TransformContext, mintSym } from "../context";
 import { promisePendingAlloc, makeRetFutAlloc, ownedCompletion } from "./asyncBridge";
 import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeRef, generatedProcSym, makeTypedIdentResolved, makeValueShareFn, makeLocalDecl, makeReturn, makeBlock, makeFnDecl, generatedFnCount, addGeneratedFn } from "../util";
@@ -33,7 +33,7 @@ import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeR
 // MS_TYPETAG_* in runtime/promise/combinator.h (0=ptr, 1=int, 2=double, 3=string, 4=void).
 function typeTagFor(t: Type | null): number {
 	if (t == null) return 0;
-	return match (t.kind) {
+	return match (literalBase(t).kind) {
 		TypeKind.Void => 4,
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => 2,
 		TypeKind.String => 3,
@@ -50,7 +50,7 @@ function typeTagFor(t: Type | null): number {
 // Correct for futures with inline typed storage (populated via msFutureCompleteT).
 function futureTypedSuffix(t: Type | null): string {
 	if (t == null) return "";
-	return match (t.kind) {
+	return match (literalBase(t).kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "double",
 		TypeKind.Int32 | TypeKind.Int16 | TypeKind.Int8
 			| TypeKind.Uint32 | TypeKind.Uint16 | TypeKind.Uint8
