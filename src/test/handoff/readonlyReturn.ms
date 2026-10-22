@@ -81,3 +81,21 @@ test "readonlyReturn: a view kept in the task, a scalar or a copy of a borrowed 
 	assert errors(lent + "const r = shared.kids; const xs: Cursor<Readonly<Node>>[] = []; xs.push(shared); return r.length + xs.length;" + done, "stores the view") == 0;
 	assert errors(node + "class Holder { f: Readonly<Node> | null = null; }\nfunction keep(h: Holder, v: Readonly<Node>): void { h.f = v; }\nconst shared: Readonly<Node> = new Node();\nconst h = new Holder(); h.f = shared; keep(h, shared);\nconst w = spawn(() => { keep(new Holder(), new Node()); return 0; });", "stores the view") == 0;
 }
+
+const leaf = "class Leaf { n: int32 = 0; park(this: Readonly<Leaf>, b: Bin): void { b.l = this; } count(this: Readonly<Leaf>): int32 { return this.n; } }\nclass Bin { l: Readonly<Leaf> | null = null; }\nfunction main(): void {\n\tconst shared: Readonly<Leaf> = new Leaf();\n\tconst w = spawn(() => { const b = new Bin(); ";
+
+test "readonlyReturn: a view kept in a let, a local container, a receiver or a closure spawned by name is still a view" {
+	assert errors(lent + "let v: Readonly<Node> | null = null; v = shared; h.f = v;" + done, "stores the view 'shared' into a field") == 1;
+	assert errors(lent + "let v = shared.kids[0]; h.f = v;" + done, "stores the view 'shared' into a field") == 1;
+	assert errors(lent + "const xs: Cursor<Readonly<Node>>[] = []; xs.push(shared); h.f = xs[0];" + done, "stores the view 'shared' into a field") == 1;
+	assert errors(leaf + "shared.park(b);" + done, "passes the view 'shared' to 'park'") == 1;
+	assert errors(leaf + "shared.park(b);" + done, "which stores the view 'this' into a field") == 1;
+	assert errors(lent.replace("const w = spawn(() => { const h = new Holder(); ", "const f = (): int32 => { const h = new Holder(); h.f = shared; return 0; };\n\tconst w = spawn(f);\n\tconst u = spawn(() => { ") + done, "stores the view 'shared' into a field") == 1;
+}
+
+test "readonlyReturn: the neighbours of a let, a container, a receiver and a named closure compile" {
+	assert errors(lent + "let v: Readonly<Node> | null = shared; v = new Node(); const own = new Node(); h.f = own; return v.n;" + done, "stores") == 0;
+	assert errors(lent + "const xs: Cursor<Readonly<Node>>[] = []; xs.push(shared); h.n = xs[0].n; const ys: Node[] = []; ys.push(new Node()); h.f = ys[0];" + done, "stores") == 0;
+	assert errors(leaf + "const k = shared.count(); new Leaf().park(b); return k;" + done, "stores") == 0;
+	assert errors(lent.replace("const w = spawn(() => { const h = new Holder(); ", "const f = (): int32 => { const h = new Holder(); h.n = shared.n; return h.n; };\n\tconst w = spawn(f);\n\tconst u = spawn(() => { ") + done, "stores") == 0;
+}
