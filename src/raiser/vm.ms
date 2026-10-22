@@ -1843,18 +1843,17 @@ function sigPrefix(sig: int64, count: int64): int64 {
 	return sig < 0 ? sig : sig & (((1 as int64) << (3 * count)) - 1);
 }
 
-// The function a closure pair laid out as `fn`, `env` calls when its signature matches the site's,
+// The function a closure pair laid out as `fn`, `env` calls at a CallClosureTyped site, whose callee type the checker
+// holds to the site's signature, so a danger build skips the checks of the pair and the signature,
 // with a non-nil env written into the site's last register; -1 sends the call to vmHandleCallClosure.
-function closureTarget(vm: RaiserVM, func: RaiserFunction, handle: int64, rb: int32, site: int32, typed: boolean): int64 {
+function closureTarget(vm: RaiserVM, func: RaiserFunction, handle: int64, rb: int32, site: int32): int64 {
 	if (handleTag(handle) != (RaiserHeapKind.Object as int64)) return -1;
 	when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) return -1; }
 	const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
-	let trusted = false;
-	when (mode == "danger") { trusted = typed; }
-	if (!trusted && (obj.slots.length != 2 || slotKind(obj, 0) != RaiserRegClass.Word || slotKind(obj, 1) != RaiserRegClass.Ref)) return -1;
+	when (mode != "danger") { if (obj.slots.length != 2 || slotKind(obj, 0) != RaiserRegClass.Word || slotKind(obj, 1) != RaiserRegClass.Ref) return -1; }
 	when (mode != "danger") { if (obj.classType.fields[0] != "fn" || obj.classType.fields[1] != "env") return -1; }
 	const target = obj.slots[0];
-	if (!trusted && (target < 0 || target >= vm.mod.functions.length)) return -1;
+	when (mode != "danger") { if (target < 0 || target >= vm.mod.functions.length) return -1; }
 	const env = obj.slots[1];
 	let argc = func.blocks[site + 2];
 	let sig = func.blocks[site + 3];
@@ -1862,7 +1861,7 @@ function closureTarget(vm: RaiserVM, func: RaiserFunction, handle: int64, rb: in
 		argc = argc - 1;
 		sig = sigPrefix(sig, argc);
 	}
-	if (!trusted) {
+	when (mode != "danger") {
 		const callee: Cursor<RaiserFunction> = vm.mod.functions[target];
 		if (sig < 0 || argc >= callee.sigs.length || callee.sigs[argc] != sig) return -1;
 	}
@@ -2028,12 +2027,12 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				}
 				break;
 			}
-			case RaiserOpcode.CallClosure: case RaiserOpcode.CallClosureTyped: {
+			case RaiserOpcode.CallClosureTyped: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
 				const depth = vm.callStack.depth;
-				const target = depth < MAX_CALL_DEPTH ? closureTarget(vm, func, refs[rb + ib], rb, ic, op == RaiserOpcode.CallClosureTyped) : -1;
+				const target = depth < MAX_CALL_DEPTH ? closureTarget(vm, func, refs[rb + ib], rb, ic) : -1;
 				if (target >= 0) {
 					const callee: Cursor<RaiserFunction> = mod.functions[target];
 					if (depth == vm.callStack.items.length) {
@@ -2860,7 +2859,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				words[wb + ia] = raised >> imm;
 				break;
 			}
-			case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: {
+			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: {
 				slow = true;
 				break;
 			}
