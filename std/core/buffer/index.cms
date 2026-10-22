@@ -477,12 +477,12 @@ export function includesBuffer(this buf: Buffer, needle: Buffer, byteOffset: num
 // --- Encoding-aware write ---
 
 export function write(this buf: Buffer, str: string, offset: number, length: number, encoding: string): number {
-	if (encodingIs(encoding, "hex") || encodingIs(encoding, "base64")) return msBufferWriteString(buf, str, offset, length, encoding);
 	const total = byteCount(buf);
 	const size = byteCount(str);
 	const at = offset as int64;
-	const limit = length as int64;
 	if (size == 0 || at < 0 || at >= total) return 0;
+	if (encodingIs(encoding, "hex") || encodingIs(encoding, "base64")) return msBufferWriteString(buf, str, offset, length, encoding);
+	const limit = length as int64;
 	const room = limit < 0 || limit > total - at ? total - at : limit;
 	const count = size < room ? size : room;
 	const to = bytesOf(buf) + at;
