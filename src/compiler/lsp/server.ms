@@ -118,6 +118,7 @@ interface QueuedMessage {
 	body: string;
 	method: string;
 	fileUri: string;
+	receivedAt: float64;
 }
 
 function extractFileUri(params: string): string {
@@ -130,7 +131,7 @@ function extractFileUri(params: string): string {
 function parseQueuedMessage(body: string): QueuedMessage {
 	const method = lspGetField(body, "method");
 	const params = lspGetObjectField(body, "params");
-	return { body, method, fileUri: extractFileUri(params) };
+	return { body, method, fileUri: extractFileUri(params), receivedAt: performance.now() };
 }
 
 // Auto-fired methods that can be safely deduplicated per-file.
@@ -291,6 +292,10 @@ export function lspServe(io: LspTransport): int32 {
 			if (id != "" && isCancelled(id, coalesced, qi + 1)) {
 				io.write(lspFormatMessage(lspErrorResponse(id, REQUEST_CANCELLED, "RequestCancelled")));
 				continue;
+			}
+			if (id != "") {
+				const delay = performance.now() - qm.receivedAt;
+				writeStderr(`[LSP-QUEUE] ${qm.method} id=${id} delay=${delay}ms\n`);
 			}
 			try {
 				const response = processMessage(qm.body, state);
@@ -467,16 +472,16 @@ test "coalesce empty queue" {
 
 test "coalesce single message" {
 	const q: QueuedMessage[] = [];
-	q.push({ body: "", method: "textDocument/hover", fileUri: "file:///a.ms" });
+	q.push({ body: "", method: "textDocument/hover", fileUri: "file:///a.ms", receivedAt: 0 });
 	const r = coalesceQueue(q);
 	assert r.length == 1;
 }
 
 test "coalesce deduplicates auto-fired same file" {
 	const q: QueuedMessage[] = [];
-	q.push({ body: "1", method: "textDocument/inlayHint", fileUri: "file:///a.ms" });
-	q.push({ body: "2", method: "textDocument/hover", fileUri: "file:///a.ms" });
-	q.push({ body: "3", method: "textDocument/inlayHint", fileUri: "file:///a.ms" });
+	q.push({ body: "1", method: "textDocument/inlayHint", fileUri: "file:///a.ms", receivedAt: 0 });
+	q.push({ body: "2", method: "textDocument/hover", fileUri: "file:///a.ms", receivedAt: 0 });
+	q.push({ body: "3", method: "textDocument/inlayHint", fileUri: "file:///a.ms", receivedAt: 0 });
 	const r = coalesceQueue(q);
 	// First inlayHint deduped, hover kept, second inlayHint kept
 	assert r.length == 2;
@@ -486,16 +491,16 @@ test "coalesce deduplicates auto-fired same file" {
 
 test "coalesce keeps different files" {
 	const q: QueuedMessage[] = [];
-	q.push({ body: "1", method: "textDocument/inlayHint", fileUri: "file:///a.ms" });
-	q.push({ body: "2", method: "textDocument/inlayHint", fileUri: "file:///b.ms" });
+	q.push({ body: "1", method: "textDocument/inlayHint", fileUri: "file:///a.ms", receivedAt: 0 });
+	q.push({ body: "2", method: "textDocument/inlayHint", fileUri: "file:///b.ms", receivedAt: 0 });
 	const r = coalesceQueue(q);
 	assert r.length == 2;
 }
 
 test "coalesce deduplicates didChange same file" {
 	const q: QueuedMessage[] = [];
-	q.push({ body: "1", method: "textDocument/didChange", fileUri: "file:///a.ms" });
-	q.push({ body: "2", method: "textDocument/didChange", fileUri: "file:///a.ms" });
+	q.push({ body: "1", method: "textDocument/didChange", fileUri: "file:///a.ms", receivedAt: 0 });
+	q.push({ body: "2", method: "textDocument/didChange", fileUri: "file:///a.ms", receivedAt: 0 });
 	const r = coalesceQueue(q);
 	assert r.length == 1;
 	assert r[0].body == "2";
@@ -503,16 +508,16 @@ test "coalesce deduplicates didChange same file" {
 
 test "isSuperseded by later didChange" {
 	const q: QueuedMessage[] = [];
-	q.push({ body: "1", method: "textDocument/inlayHint", fileUri: "file:///a.ms" });
-	q.push({ body: "2", method: "textDocument/didChange", fileUri: "file:///a.ms" });
+	q.push({ body: "1", method: "textDocument/inlayHint", fileUri: "file:///a.ms", receivedAt: 0 });
+	q.push({ body: "2", method: "textDocument/didChange", fileUri: "file:///a.ms", receivedAt: 0 });
 	assert isSuperseded(q[0], q, 1);
 	assert !isSuperseded(q[1], q, 2);
 }
 
 test "isSuperseded not by different file" {
 	const q: QueuedMessage[] = [];
-	q.push({ body: "1", method: "textDocument/inlayHint", fileUri: "file:///a.ms" });
-	q.push({ body: "2", method: "textDocument/didChange", fileUri: "file:///b.ms" });
+	q.push({ body: "1", method: "textDocument/inlayHint", fileUri: "file:///a.ms", receivedAt: 0 });
+	q.push({ body: "2", method: "textDocument/didChange", fileUri: "file:///b.ms", receivedAt: 0 });
 	assert !isSuperseded(q[0], q, 1);
 }
 
