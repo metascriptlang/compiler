@@ -10,7 +10,7 @@ import { createFunction, createPtr, voidType, isAwaitable, awaitedType, literalB
 import { GcMode } from "../../checker/context";
 import { TransformContext, freshOwnedSym } from "../context";
 import { walkNode } from "../walker";
-import { canFormAcycle } from "../cycles";
+import { canFormAcycle, traceReachesCycle } from "../cycles";
 import { lowerDefer } from "./deferLower";
 import { makeCall, makeNull, makeObjectLiteral, syntheticToken, runtimeRef, isRuntimeProcSym, boxedInFuture, makeBlock, makeExprStmt, makeIdentResolved, makeReturn, makeVarDecl } from "../util";
 
@@ -108,13 +108,17 @@ export function mayHoldCycleRoot(t: Type | null, ctx: TransformContext): boolean
 	if (ctx.checkerCtx == null || ctx.checkerCtx.gcMode != GcMode.Drc) return false;
 	const bare = skipModifier(t);
 	if (bare == null) return false;
-	const ref = bare.kind == TypeKind.Ref ? bare : unwrapRefNullUnion(bare);
-	if (ref == null || ref.kind != TypeKind.Ref || isAtomicRef(ref)) return false;
-	if (ref.sym != null && ref.sym.symbolKind == SymbolKind.Actor) return false;
-	return canFormAcycle(ref, ctx.cyclicCache, ctx.acyclicCache);
+	if (!isCountedRefTo(bare)) return false;
+	return traceReachesCycle(bare.kind == TypeKind.Ref ? bare : unwrapRefNullUnion(bare), ctx.cyclicCache, ctx.acyclicCache);
 }
 
-export function disownStmt(value: Node, loc: SourceLocation): Node {
+function isCountedRefTo(t: Type | null): boolean {
+	if (t == null) return false;
+	const ref = t.kind == TypeKind.Ref ? t : unwrapRefNullUnion(t);
+	return ref != null && ref.kind == TypeKind.Ref && !isAtomicRef(ref) && !(ref.sym != null && ref.sym.symbolKind == SymbolKind.Actor);
+}
+
+export function disownStmt(value: Node, t: Type | null, loc: SourceLocation): Node {
 	return makeExprStmt(makeCall(runtimeRef("msOrcDisown", loc), [value], loc), loc);
 }
 
@@ -146,8 +150,8 @@ export function disownMovedCaptures(closure: Node, ctx: TransformContext): void 
 	const atSettle: Node[] = [];
 	for (let i = 0; i < params.length && i < cd.arguments.length; i += 1) {
 		if (cd.arguments[i].kind == NodeKind.MoveExpr && mayHoldCycleRoot(params[i].symbolType, ctx)) {
-			atSubmit.push(disownStmt(makeIdentResolved(params[i], loc), loc));
-			atSettle.push(disownStmt(makeIdentResolved(params[i], loc), loc));
+			atSubmit.push(disownStmt(makeIdentResolved(params[i], loc), params[i].symbolType, loc));
+			atSettle.push(disownStmt(makeIdentResolved(params[i], loc), params[i].symbolType, loc));
 		}
 	}
 	if (atSubmit.length == 0) return;
@@ -164,7 +168,7 @@ function disownedReturn(arg: Node, retType: Type, ctx: TransformContext, loc: So
 	const decl = makeVarDecl(tmp.name, arg, DeclKind.Const, loc);
 	decl.resolvedSym = tmp;
 	decl.nodeType = retType;
-	return makeBlock([decl, disownStmt(makeIdentResolved(tmp, loc), loc), makeReturn(makeIdentResolved(tmp, loc), loc)], loc);
+	return makeBlock([decl, disownStmt(makeIdentResolved(tmp, loc), retType, loc), makeReturn(makeIdentResolved(tmp, loc), loc)], loc);
 }
 
 function disownReturnsIn(node: Node | null, retType: Type, ctx: TransformContext): Node | null {

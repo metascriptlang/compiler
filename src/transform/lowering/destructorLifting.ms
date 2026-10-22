@@ -28,7 +28,7 @@ import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBas
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
-import { canFormAcycle, isAcyclicRefElement } from "../cycles";
+import { canFormAcycle, isAcyclicRefElement, traceReachesCycle } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { CheckerContext, newSym, addError } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
@@ -1588,8 +1588,9 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 
 	const visited: NameSet = createNameSet();
 	hasCycles = isCyclicType(objType, lctx, visited);
-	if (hasCycles) {
+	if (traceReachesCycle(objType, lctx.cyclicCache, lctx.nonCyclicCache)) {
 		const traceSym = generateHook("trace", typeName, cName, objType, orig, classType, lctx, loc);
+		if (!hasCycles) setFlag(traceSym, SymbolFlag.Acyclic);
 		setOpByKey(objType, AttachedOp.AttachedTrace, traceSym);
 	}
 

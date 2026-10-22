@@ -168,3 +168,59 @@ export function isAcyclicRefElement(elem: Type | null, cyclicCache: NameSet, acy
 	const bare = countedEvictElement(elem);
 	return bare != null && bare.kind == TypeKind.Ref && !isAtomicRef(bare) && !canFormAcycle(bare, cyclicCache, acyclicCache);
 }
+
+// Whether the lifted trace of a cell of type `t` reaches any cell: the reference lifts a
+// trace for every type and it is non-trivial when the type can form a cycle itself, or when
+// a field held by value (through structs, tuples, unions and arrays) is a closure or a ref
+// whose pointee can form a cycle (liftdestructors.nim fillBodyObj, atomicRefOp attachedTrace).
+// A ref to an acyclic pointee ends the walk, as its trace does.
+export function traceReachesCycle(t: Type | null, cyclicCache: NameSet, acyclicCache: NameSet): boolean {
+	if (canFormAcycle(t, cyclicCache, acyclicCache)) return true;
+	if (t == null) return false;
+	const subject = t.kind == TypeKind.Ref ? t.typeReturn : t;
+	return traceEdgeAux(subject, true, cyclicCache, acyclicCache, createNameSet());
+}
+
+function traceEdgeAux(t: Type | null, top: boolean, cyclicCache: NameSet, acyclicCache: NameSet, marker: NameSet): boolean {
+	if (t == null) return false;
+	if (!top && (t.kind == TypeKind.Ref || unwrapRefNullUnion(t) != null)) {
+		const ref = t.kind == TypeKind.Ref ? t : unwrapRefNullUnion(t)!;
+		if (ref.kind != TypeKind.Ref || isAtomicRef(ref)) return false;
+		return canFormAcycle(ref, cyclicCache, acyclicCache);
+	}
+	return match (t.kind) {
+		TypeKind.Function | TypeKind.Unknown => true,
+		TypeKind.Struct | TypeKind.Union | TypeKind.Tuple => firstVisit(typeIdentity(t), marker) && traceEdgeFields(t, cyclicCache, acyclicCache, marker),
+		TypeKind.GenericInstance => {
+			if (isAwaitable(t)) return false;
+			if (t.typeReturn == null) {
+				const params = genericParamsOf(t);
+				if (params != "") instantiateGenericBody(t, params);
+			}
+			if (!firstVisit(typeIdentity(t), marker)) return false;
+			const body = t.typeReturn;
+			if (body == null) return false;
+			if (body.kind == TypeKind.Struct || body.kind == TypeKind.Union || body.kind == TypeKind.Tuple) return traceEdgeFields(body, cyclicCache, acyclicCache, marker);
+			return traceEdgeAux(body, top, cyclicCache, acyclicCache, marker);
+		},
+		TypeKind.Array | TypeKind.SizedArray => traceEdgeAux(t.typeReturn, false, cyclicCache, acyclicCache, marker),
+		TypeKind.Distinct | TypeKind.Alias => traceEdgeAux(t.typeReturn, top, cyclicCache, acyclicCache, marker),
+		_ => false,
+	};
+}
+
+function firstVisit(key: string, marker: NameSet): boolean {
+	if (key == "") return true;
+	if (nameSetContains(marker, key)) return false;
+	nameSetAdd(marker, key);
+	return true;
+}
+
+function traceEdgeFields(t: Type, cyclicCache: NameSet, acyclicCache: NameSet, marker: NameSet): boolean {
+	const base = t.kind == TypeKind.Struct && t.typeExtra != null && t.typeExtra.kind == TypeKind.Ref ? t.typeExtra.typeReturn : t.typeExtra;
+	if (t.kind == TypeKind.Struct && traceEdgeAux(base, true, cyclicCache, acyclicCache, marker)) return true;
+	for (const child of t.typeChildren) {
+		if (traceEdgeAux(child, false, cyclicCache, acyclicCache, marker)) return true;
+	}
+	return false;
+}

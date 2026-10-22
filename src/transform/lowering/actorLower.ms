@@ -208,7 +208,7 @@ function buildSendProxy(kind: number, params: Symbol[], paramTypes: Type[], ctx:
 	msgDecl.nodeType = VOID_PTR;
 	const stmts: Node[] = [msgDecl];
 	for (let ai = 1; ai < params.length; ai += 1) {
-		if (paramMsgKind(paramTypes, ai) == "ptr" && mayHoldCycleRoot(paramTypes[ai], ctx)) stmts.push(disownStmt(makeTypedIdentResolved(params[ai], paramTypes[ai], loc), loc));
+		if (paramMsgKind(paramTypes, ai) == "ptr" && mayHoldCycleRoot(paramTypes[ai], ctx)) stmts.push(disownStmt(makeTypedIdentResolved(params[ai], paramTypes[ai], loc), paramTypes[ai], loc));
 	}
 	packArgsIntoMsg(stmts, msgSym, params, paramTypes, loc);
 	const actorPtr = makeCall(runtimeRef("msActorFromPid", loc), [makeTypedIdentResolved(params[0], null, loc)], loc);
