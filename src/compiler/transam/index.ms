@@ -867,6 +867,32 @@ function dbBoundModule(modulePath: string): CheckerContext | null {
 
 registerBoundModuleFn(dbBoundModule);
 
+// An import this db only binds has no TypeCheck entry to depend on: its bound exports read the
+// parses of its own imports, down to the modules this db checks.
+function recordBoundImportReads(db: TransAmDb, boundId: int32, reached: HashSet<int32>, inputHashes: number[]): void {
+	const pending: int32[] = [];
+	for (const depId of getDirectImports(db.moduleDeps, boundId)) pending.push(depId);
+	while (pending.length > 0) {
+		const depId = pending.pop()!;
+		if (reached.has(depId)) continue;
+		reached.add(depId);
+		const parseKey = createQueryKey(TaQueryKind.Parse, depId);
+		const parseEntry = cacheGet(db.cache, parseKey);
+		if (parseEntry == null) continue;
+		recordDependency(db.depStack, parseKey, parseEntry.outputHash);
+		inputHashes.push(parseEntry.outputHash);
+		if (checkedElsewhere(db, getFilePath(db.fileInput, depId))) continue;
+		const checkKey = createQueryKey(TaQueryKind.TypeCheck, depId);
+		const checkEntry = cacheGet(db.cache, checkKey);
+		if (checkEntry != null) {
+			recordDependency(db.depStack, checkKey, checkEntry.outputHash);
+			inputHashes.push(checkEntry.outputHash);
+			continue;
+		}
+		for (const next of getDirectImports(db.moduleDeps, depId)) pending.push(next);
+	}
+}
+
 // Execute type check query. Returns CheckerContext.
 export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const fileId = getFileId(db.fileInput, filePath);
@@ -921,6 +947,9 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	// TypeCheck dep: semantic changes (export type signatures, error state).
 	// Without TypeCheck dep, changing an export's type in B wouldn't invalidate A if AST shape is same.
 	const importDepIds = getDirectImports(db.moduleDeps, fileId);
+	const reached = new HashSet<int32>();
+	reached.add(fileId);
+	for (const depId of importDepIds) reached.add(depId);
 	for (let di = 0; di < importDepIds.length; di = di + 1) {
 		const depId = importDepIds[di];
 		const depParseKey = createQueryKey(TaQueryKind.Parse, depId);
@@ -931,9 +960,12 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		if (checkedElsewhere(db, getFilePath(db.fileInput, depId))) continue;
 		const depCheckKey = createQueryKey(TaQueryKind.TypeCheck, depId);
 		const depCheckEntry = cacheGet(db.cache, depCheckKey);
-		const depCheckHash = depCheckEntry != null ? depCheckEntry.outputHash : 0;
-		recordDependency(db.depStack, depCheckKey, depCheckHash);
-		inputHashes.push(depCheckHash);
+		if (depCheckEntry != null) {
+			recordDependency(db.depStack, depCheckKey, depCheckEntry.outputHash);
+			inputHashes.push(depCheckEntry.outputHash);
+		} else {
+			recordBoundImportReads(db, depId, reached, inputHashes);
+		}
 	}
 
 	if (!modulePassExempt(filePath)) {
