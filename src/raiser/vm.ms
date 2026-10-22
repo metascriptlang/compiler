@@ -2621,6 +2621,94 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				}
 				break;
 			}
+			case RaiserOpcode.LoadSlotW: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const handle = refs[rb + ib];
+				const idx = ((word >> 56) & 255) as int32;
+				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
+					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
+					const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
+					if (idx >= obj.classType.fields.length) { slow = true; break; }
+					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 40) & 65535) as int32]) { slow = true; break; } }
+					if (obj.fields[idx].kind == RaiserValueKind.Int) {
+						words[wb + ia] = obj.fields[idx].intVal;
+					} else {
+						slow = true;
+					}
+				} else {
+					slow = true;
+				}
+				break;
+			}
+			case RaiserOpcode.LoadSlotR: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const handle = refs[rb + ib];
+				const idx = ((word >> 56) & 255) as int32;
+				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
+					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
+					const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
+					if (idx >= obj.classType.fields.length) { slow = true; break; }
+					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 40) & 65535) as int32]) { slow = true; break; } }
+					const kind = obj.fields[idx].kind;
+					if (kind == RaiserValueKind.Nil || (kind >= RaiserValueKind.String && kind <= RaiserValueKind.Future)) {
+						writeRef(vm, rb + ia, obj.fields[idx].intVal);
+					} else {
+						slow = true;
+					}
+				} else {
+					slow = true;
+				}
+				break;
+			}
+			case RaiserOpcode.StoreSlotW: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
+				const handle = refs[rb + ia];
+				const idx = ((word >> 56) & 255) as int32;
+				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
+					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
+					const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
+					if (idx >= obj.classType.fields.length) { slow = true; break; }
+					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 24) & 65535) as int32]) { slow = true; break; } }
+					const kind = obj.fields[idx].kind;
+					if (kind == RaiserValueKind.Int || kind == RaiserValueKind.Nil) {
+						obj.fields[idx].kind = RaiserValueKind.Int;
+						obj.fields[idx].intVal = words[wb + ic];
+					} else {
+						slow = true;
+					}
+				} else {
+					slow = true;
+				}
+				break;
+			}
+			case RaiserOpcode.StoreSlotR: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
+				const handle = refs[rb + ia];
+				const idx = ((word >> 56) & 255) as int32;
+				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
+					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
+					const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
+					if (idx >= obj.classType.fields.length) { slow = true; break; }
+					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 24) & 65535) as int32]) { slow = true; break; } }
+					const kind = obj.fields[idx].kind;
+					if (kind == RaiserValueKind.Nil || (kind >= RaiserValueKind.String && kind <= RaiserValueKind.Future)) {
+						const old = obj.fields[idx].intVal;
+						const held = refs[rb + ic];
+						holdHandle(vm, held);
+						obj.fields[idx] = handleValue(held);
+						if (kind != RaiserValueKind.Nil) releaseHandle(vm, old);
+					} else {
+						slow = true;
+					}
+				} else {
+					slow = true;
+				}
+				break;
+			}
 			case RaiserOpcode.AddI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
@@ -2950,11 +3038,11 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		RaiserOpcode.StoreField => {
 			vmHandleStoreField(vm, func, pc, ia, ib, ic);
 		},
-		RaiserOpcode.LoadSlot => {
+		RaiserOpcode.LoadSlot | RaiserOpcode.LoadSlotW | RaiserOpcode.LoadSlotR => {
 			when (mode != "danger") { vmCheckSlot(vm, func, pc, ib, ic); }
 			vmHandleLoadField(vm, func, pc, ia, ib, ic);
 		},
-		RaiserOpcode.StoreSlot => {
+		RaiserOpcode.StoreSlot | RaiserOpcode.StoreSlotW | RaiserOpcode.StoreSlotR => {
 			when (mode != "danger") { vmCheckSlot(vm, func, pc, ia, ib); }
 			vmHandleStoreField(vm, func, pc, ia, ib, ic);
 		},

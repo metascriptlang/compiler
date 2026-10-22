@@ -15,7 +15,7 @@ import { createTransformContextWithChecker } from "../../transform/context";
 import { transformForRaiser } from "../../transform/raiserLowering";
 import { RaiserValueKind, RaiserValue, RaiserObjectHeap, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapArrayLen, heapArrayGet, raiserConstString, handleIndex } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
-import { RaiserInstruction, raiserABC, RaiserOpcode, getSignedAx, branchOffset, regClassLetter } from "../../raiser/bytecode";
+import { RaiserInstruction, raiserABC, RaiserOpcode, getSignedAx, branchOffset, regClassLetter, carriesSlot } from "../../raiser/bytecode";
 import { disasmFunc, opName } from "../../raiser/disasm";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { RaiserVM, execModule, execLoop, createVM, vmReleaseHeaps } from "../../raiser/vm";
@@ -1398,7 +1398,7 @@ test "closure pair multi-field env (no transforms)" {
 test "engine: a call through a closure is one CallClosure that reads the pair itself" {
 	const f = compiledFunc("function apply(f: (x: int64) => int64, n: int64): int64 { return f(n); } console.log(`${apply((x: int64): int64 => x + 1, 2)}`);", "apply");
 	const text = disasmFunc(f);
-	assert countNamed(f, "CallClosure") == 1 && countNamed(f, "CallIndirect") == 0 && countNamed(f, "IsKind") == 0 && countNamed(f, "LoadSlot") == 0, text;
+	assert countNamed(f, "CallClosure") == 1 && countNamed(f, "CallIndirect") == 0 && countNamed(f, "IsKind") == 0 && !text.includes("LoadSlot"), text;
 }
 
 test "a closure call passes its env or none, reads its callee before the arguments, and lets a throw through" {
@@ -1640,9 +1640,21 @@ test "engine: a field of a receiver whose type fixes its layout is read and writ
 	assert text.includes("LoadSlot") && text.includes("StoreSlot") && !text.includes("Field"), text;
 	const slots: number[] = [];
 	for (const inst of step.code) {
-		if (inst.op == RaiserOpcode.LoadSlot || inst.op == RaiserOpcode.StoreSlot) slots.push(inst.slot);
+		if (carriesSlot(inst.op)) slots.push(inst.slot);
 	}
 	assert slots.join(",") == "1,1,0", `${slots.join(",")}\n${text}`;
+}
+
+test "engine: a slot of a word or ref register is read and written by the typed slot opcodes" {
+	const code = "class N { v: int64 = 0; name: string = ''; next: N | null = null; f: float64 = 0.5; }"
+		+ " function step(a: N, b: N): string { a.v = a.v + b.v; a.name = b.name + '!'; a.next = b; b.next = null; a.f = a.f + 1.0; return `${a.v} ${a.name} ${a.f} ${a.next == null ? 0 : 1}`; }"
+		+ " const a = new N(); const b = new N(); b.v = 5; b.name = 'b'; let out = ''; for (let i = 0; i < 3; i++) { out = out + step(a, b) + ';'; } a.next = a; a.next = null; console.log(out);";
+	const step = compiledFunc(code, "step");
+	const text = disasmFunc(step);
+	assert countNamed(step, "LoadSlotW") == 3 && countNamed(step, "StoreSlotW") == 1 && countNamed(step, "LoadSlotR") == 3 && countNamed(step, "StoreSlotR") == 3, text;
+	const vm = evalOrcVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "5 b! 1.5 1;10 b! 2.5 1;15 b! 3.5 1;\n", vm.output;
 }
 
 function backJumpSpan(f: RaiserFunction): number {

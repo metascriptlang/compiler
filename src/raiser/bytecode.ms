@@ -209,9 +209,13 @@ export enum RaiserOpcode {
 	ForLtI64,         // ABC: R[A] += 1 (stops on overflow), one budgeted iteration, then if R[A] < R[B] pc += branchOffset(C)
 	ForLtI64Imm,      // ABC: ForLtI64 against the immediate in B
 	CallClosure,      // ABC: R[A] = call the closure pair R[B] with R[A+1]..R[A+n], its env as R[A+n] unless nil; the site counts the env
+	LoadSlotW,        // ABC: LoadSlot into a Word register
+	LoadSlotR,        // ABC: LoadSlot into a Ref register
+	StoreSlotW,       // ABC: StoreSlot from a Word register
+	StoreSlotR,       // ABC: StoreSlot from a Ref register
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.CallClosure;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.StoreSlotR;
 
 // How FutureCombine settles its result from its inputs (Promise.all, race, any).
 export enum RaiserCombine {
@@ -335,6 +339,10 @@ function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.ArraySlice => "rrp",
 		RaiserOpcode.LoadField | RaiserOpcode.LoadSlot => "xr-",
 		RaiserOpcode.StoreField | RaiserOpcode.StoreSlot => "r-x",
+		RaiserOpcode.LoadSlotW => "ir-",
+		RaiserOpcode.LoadSlotR => "rr-",
+		RaiserOpcode.StoreSlotW => "r-i",
+		RaiserOpcode.StoreSlotR => "r-r",
 		RaiserOpcode.ConcatStr => "rxx",
 		RaiserOpcode.EqStr | RaiserOpcode.NeStr | RaiserOpcode.LtStr | RaiserOpcode.LeStr => "rr-",
 		RaiserOpcode.StrLen | RaiserOpcode.StrByteLen => "ir-",
@@ -526,6 +534,13 @@ export function branchOffset(field: number): int64 {
 	return (field as int64) - BRANCH_EXCESS;
 }
 
+export function carriesSlot(op: RaiserOpcode): boolean {
+	return match (op) {
+		RaiserOpcode.LoadSlot | RaiserOpcode.StoreSlot | RaiserOpcode.LoadSlotW | RaiserOpcode.LoadSlotR | RaiserOpcode.StoreSlotW | RaiserOpcode.StoreSlotR => true,
+		_ => false,
+	};
+}
+
 // Packed word: opcode in bits 0-7, then a, b and c in 16 bits each; a branch's offset and a jump's take the 24 bits
 // from bit 40 up as a signed field, and a slot opcode's slot the top 8.
 const PACKED_FIELD_LIMIT = 65536;
@@ -569,7 +584,7 @@ export function packInstruction(inst: RaiserInstruction): int64 {
 		return op | (offset << 40);
 	}
 	const c = isBranchI64(inst.op) ? branchOffset(packedField(inst, inst.c, "c", PACKED_BRANCH_LIMIT, 24) as number) << 40 : packedField(inst, inst.c, "c", PACKED_FIELD_LIMIT, 16) << 40;
-	const slot = inst.op == RaiserOpcode.LoadSlot || inst.op == RaiserOpcode.StoreSlot ? packedField(inst, inst.slot, "slot", MAX_SLOT + 1, 8) << 56 : 0;
+	const slot = carriesSlot(inst.op) ? packedField(inst, inst.slot, "slot", MAX_SLOT + 1, 8) << 56 : 0;
 	return op | (packedField(inst, inst.a, "a", PACKED_FIELD_LIMIT, 16) << 8) | (packedField(inst, inst.b, "b", PACKED_FIELD_LIMIT, 16) << 24) | c | slot;
 }
 
