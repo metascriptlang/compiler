@@ -605,9 +605,8 @@ function orderedMapRawGet<K, V>(m: Map<K, V>, key: Readonly<K>, hc: int64): int3
 		}
 		if (slot == -2) {
 			if (firstOpen < 0) firstOpen = h;
-		} else {
-			const e = m.entries[slot];
-			if (e.hcode == hc && sameKey(e.key, key)) return h;
+		} else if (m.entries[slot].hcode == hc && sameKey(m.entries[slot].key, key)) {
+			return h;
 		}
 		h = (h + 1) & mask;
 	}
@@ -850,9 +849,8 @@ function orderedSetRawGet<T>(s: Set<T>, key: Readonly<T>, hc: int64): int32 {
 		}
 		if (slot == -2) {
 			if (firstOpen < 0) firstOpen = h;
-		} else {
-			const e = s.entries[slot];
-			if (e.hcode == hc && sameKey(e.key, key)) return h;
+		} else if (s.entries[slot].hcode == hc && sameKey(s.entries[slot].key, key)) {
+			return h;
 		}
 		h = (h + 1) & mask;
 	}
