@@ -12,4 +12,4 @@ class Holder<T extends int32[]> {
 	constructor(inner: Box<T>) { this.inner = inner; }
 }
 const h = new Holder<int32[]>(new Box<int32[]>([1, 2]));
-console.log(h.inner.show<string>("s"), h.inner.show(true), h.inner.count(["a"]), new Box<int32[]>([4, 5, 6]).v.length);
+console.log(h.inner.show<string>("s"), h.inner.show<boolean>(true), h.inner.count(["a"]), new Box<int32[]>([4, 5, 6]).v.length);

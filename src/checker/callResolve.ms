@@ -27,7 +27,7 @@ import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, moduleScopeNamed, enumMemberName } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, literalUnionBase } from "./types";
+import { TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase } from "./types";
 import { checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField, refuseSuspendingLockCallback } from "./sendable";
 import { callThroughProxy, checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
 
@@ -3252,6 +3252,8 @@ export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: 
 			const fSub = applySubstitutions(fFormal, argBindings);
 			if (hasGenericParams(fSub)) {
 				if (callNode != null && callNode.kind == NodeKind.CallExpr && argTypes[fi] != null
+						&& refusedThroughMapped(ctx, callNode.data as CallExprData, fi, fFormal, argTypes[fi])) return errorType();
+				if (callNode != null && callNode.kind == NodeKind.CallExpr && argTypes[fi] != null
 						&& !isAssignable(argTypes[fi], fFormal)
 						&& !(fi < (callNode.data as CallExprData).arguments.length && literalShortOfSlot((callNode.data as CallExprData).arguments[fi], fFormal))) {
 					const mcd = callNode.data as CallExprData;
@@ -3429,6 +3431,32 @@ function collectArgCandidates(bound: UnifyBindings, raw: UnifyBindings, argIdx: 
 	}
 }
 
+// A type parameter read only through `Readonly<T>` (or another homomorphic mapped type) has
+// nothing to infer from a primitive argument; the call names the type argument to write.
+function refusePrimitiveThroughMapped(ctx: CheckerContext, cd: CallExprData, calleeType: Type, argTypes: Type[], limit: int32, eb: UnifyBindings, typeParamCount: int32): boolean {
+	for (let i = 0; i < limit && i < calleeType.typeChildren.length; i += 1) {
+		if (argTypes[i] == null) continue;
+		const formal = calleeType.typeChildren[i];
+		const param = primitiveThroughMapped(formal, argTypes[i]);
+		if (param == null || boundSlot(eb, param) >= 0) continue;
+		const given = typeDisplayName(literalBase(argTypes[i]));
+		const through = mappedModifiers(formal).has(MappedModifier.IncludeReadonly) ? `Readonly<${param.typeName}>` : typeDisplayName(formal);
+		const spelled = typeParamCount == 1 ? `${getCalleeName(cd.callee)}<${given}>(…)` : `${getCalleeName(cd.callee)}<…> with ${param.typeName} = ${given}`;
+		addError(ctx, `cannot infer ${param.typeName} from a ${given} through ${through}; write ${spelled}`, cd.arguments[i].location.line, cd.arguments[i].location.column);
+		return true;
+	}
+	return false;
+}
+
+function refusedThroughMapped(ctx: CheckerContext, cd: CallExprData, argIdx: int32, formal: Type, arg: Type): boolean {
+	if (argIdx >= cd.arguments.length || cd.arguments[argIdx] == null || primitiveThroughMapped(formal, arg) == null) return false;
+	const at = cd.arguments[argIdx].location;
+	for (const e of ctx.errors) {
+		if (e.line == at.line && e.column == at.column && e.message.startsWith("cannot infer ")) return true;
+	}
+	return false;
+}
+
 function collectLiteralTypes(n: Node, out: Type[]): void {
 	if (n.kind == NodeKind.ObjectLiteral) {
 		if (n.nodeType != null) out.push(n.nodeType);
@@ -3603,6 +3631,7 @@ function tryInstantiateGenericCallee(ctx: CheckerContext, node: Node, calleeType
 		bindParam(eb, fold.params[k], fold.types[k]);
 		ebFrom.push(candFrom[fold.chosen[k]]);
 	}
+	if (refusePrimitiveThroughMapped(ctx, cd, calleeType, argTypes, limit, eb, genericNames.length)) return null as unknown as Type;
 	reportTypeParamMisfits(ctx, fold, candParams, candTypes, candFrom, cd, conflicted);
 	const fixedNames: string[] = [];
 	for (let bi = 0; bi < eb.names.length; bi += 1) {

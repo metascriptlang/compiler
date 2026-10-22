@@ -4701,15 +4701,14 @@ function unifyToMapped(formal: Type, concrete: Type, keys: Type, bindings: Unify
 // Reference: inferTypeForHomomorphicMappedType and createReverseMappedType, for the template
 // `T[P]` that maps each member to itself: an array or tuple of the same elements, else an
 // object type with the source's fields, read-only only where the source was and the modifiers
-// did not add it. A primitive is its own inverse, because the mapped type maps it to itself.
-// A union, another template or an optional modifier has no inverse here and infers nothing.
+// did not add it. A primitive, a union, a type parameter, another template or an optional
+// modifier has no inverse here and infers nothing.
 function homomorphicMappedSource(source: Type, target: Type, param: Type): Type | null {
 	const mods = mappedModifiers(target);
 	if (mods.has(MappedModifier.IncludeOptional) || mods.has(MappedModifier.ExcludeOptional)) return null;
 	const template = target.typeChildren[1];
 	if (template.kind != TypeKind.IndexedAccess || template.typeChildren.length != 2
 		|| withoutReadonlyView(template.typeChildren[0]) != param || template.typeChildren[1] != mappedParam(target)) return null;
-	if (source.kind != TypeKind.GenericParam && !isObjectSource(source) && mappedSourceMembers(source).length == 0) return source;
 	const array = arrayOf(source);
 	if (array != null) {
 		const reversed = createRef(createArray(array.typeReturn));
@@ -4728,6 +4727,16 @@ function homomorphicMappedSource(source: Type, target: Type, param: Type): Type 
 	if (fields.optionalFields != null) struct.optionalFields = [...fields.optionalFields];
 	const reversed = createRef(struct);
 	return keepView ? createReadonlyView(reversed) : reversed;
+}
+
+// The type parameter a homomorphic mapped formal cannot infer from a primitive argument, which
+// has no members to map back; null when the formal is no such type or the argument has members.
+export function primitiveThroughMapped(formal: Type, arg: Type): Type | null {
+	if (formal.kind != TypeKind.Mapped || formal.typeChildren.length != 2) return null;
+	const keys = formal.typeChildren[0];
+	if (keys.kind != TypeKind.KeyOf || keys.typeChildren.length != 1 || keys.typeChildren[0].kind != TypeKind.GenericParam) return null;
+	if (arg.kind == TypeKind.GenericParam || isObjectSource(arg) || mappedSourceMembers(arg).length > 0) return null;
+	return withoutReadonlyView(keys.typeChildren[0]);
 }
 
 // One value into a union formal: a member it already is binds nothing, a generic member
@@ -5815,7 +5824,7 @@ test "a readonly mapped formal infers its type parameter through the reverse map
 	const formal = createMappedType(key, createKeyOfType(t), createIndexedAccessType(t, key), null, t, mods);
 	const prim = createUnifyBindings();
 	unifyType(formal, stringType(), prim);
-	assert prim.types.length == 1 && prim.types[0].kind == TypeKind.String && prim.fromMapped.length == 1;
+	assert prim.types.length == 0 && primitiveThroughMapped(formal, stringType()) == t;
 	const obj = createUnifyBindings();
 	unifyType(formal, createReadonlyView(createRef(createStruct("Sym", ["id"], [int32Type()], false))), obj);
 	const reversed = peelToStruct(obj.types[0]);
