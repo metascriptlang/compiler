@@ -227,7 +227,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 	if ((arr).p != NULL) { \
 		size_t _ac1_esz = sizeof((arr).p->data[0]); \
 		size_t _ac1_sz = sizeof(msArrayPayloadBase) + (size_t)(arr).p->cap * _ac1_esz; \
-		__typeof__((arr).p) _ac1_newp = (__typeof__((arr).p))malloc(_ac1_sz); \
+		__typeof__((arr).p) _ac1_newp = (__typeof__((arr).p))msMemAlloc(_ac1_sz); \
 		_ac1_newp->cap = (arr).p->cap; \
 		memcpy(_ac1_newp->data, (arr).p->data, (size_t)(arr).len * _ac1_esz); \
 		(arr).p = _ac1_newp; \
@@ -237,7 +237,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 	if ((s).p != NULL) { \
 		size_t _ac_esz = sizeof((s).p->data[0]); \
 		size_t _ac_sz = sizeof(msArrayPayloadBase) + (size_t)(s).p->cap * _ac_esz; \
-		(d).p = (__typeof__((s).p))malloc(_ac_sz); \
+		(d).p = (__typeof__((s).p))msMemAlloc(_ac_sz); \
 		(d).p->cap = (s).p->cap; \
 		memcpy((d).p->data, (s).p->data, (size_t)(s).len * _ac_esz); \
 	} else { \
@@ -262,7 +262,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 	msStringPayload* _asc_newp = NULL; \
 	if (_asc_sp) { \
 		size_t _asc_sz = sizeof(msStringPayload) + (size_t)_asc_sp->cap * sizeof(msString); \
-		_asc_newp = (msStringPayload*)calloc(1, _asc_sz); \
+		_asc_newp = (msStringPayload*)msMemAlloc0(_asc_sz); \
 		_asc_newp->cap = _asc_sp->cap; \
 		for (int64_t _asc_i = 0; _asc_i < _asc_len; _asc_i++) { \
 			_asc_newp->data[_asc_i] = _asc_sp->data[_asc_i]; \
@@ -295,7 +295,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 	msRefPayload* _arc_newp = NULL; \
 	if (_arc_sp) { \
 		size_t _arc_sz = sizeof(msRefPayload) + (size_t)_arc_sp->cap * sizeof(void*); \
-		_arc_newp = (msRefPayload*)calloc(1, _arc_sz); \
+		_arc_newp = (msRefPayload*)msMemAlloc0(_arc_sz); \
 		_arc_newp->cap = _arc_sp->cap; \
 		for (int64_t _arc_i = 0; _arc_i < _arc_len; _arc_i++) { \
 			_arc_newp->data[_arc_i] = _arc_sp->data[_arc_i]; \
@@ -330,7 +330,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 	msRefPayload* _aarc_newp = NULL; \
 	if (_aarc_sp) { \
 		size_t _aarc_sz = sizeof(msRefPayload) + (size_t)_aarc_sp->cap * sizeof(void*); \
-		_aarc_newp = (msRefPayload*)calloc(1, _aarc_sz); \
+		_aarc_newp = (msRefPayload*)msMemAlloc0(_aarc_sz); \
 		_aarc_newp->cap = _aarc_sp->cap; \
 		for (int64_t _aarc_i = 0; _aarc_i < _aarc_len; _aarc_i++) { \
 			_aarc_newp->data[_aarc_i] = _aarc_sp->data[_aarc_i]; \
@@ -488,7 +488,7 @@ static inline void msStringCopy(msString* dest, msString src) {
  * reason; this function stays for direct callers, which must copy first if
  * they need to keep the source alive. */
 static inline void* msBoxString(msString v) {
-	msString* p = (msString*)malloc(sizeof(msString));
+	msString* p = (msString*)msMemAlloc(sizeof(msString));
 	*p = v;
 	return p;
 }
@@ -540,8 +540,8 @@ static inline msString msFutureTakeStringRaw(void* fp) {
  * Caller passes &value and sizeof(Type). Box allocates heap copy.
  * Unbox: cast void* to Type*, dereference, free. */
 static inline void* msBoxStruct(const void* val, size_t size) {
-	void* p = malloc(size);
-	if (p) memcpy(p, val, size);
+	void* p = msMemAlloc(size);
+	memcpy(p, val, size);
 	return p;
 }
 

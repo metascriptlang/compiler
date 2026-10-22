@@ -33,16 +33,16 @@ static int64_t msArrayCountAdd(int64_t len, int64_t addLen) {
 void* msArrayPayloadNew(int64_t cap, int64_t elemSize) {
 	if (cap == 0) return NULL;
 	int64_t totalSize = msArrayBytes(cap, elemSize);
-	msArrayPayloadBase* p = (msArrayPayloadBase*)calloc(1, totalSize);
-	if (p) { p->cap = cap; }
+	msArrayPayloadBase* p = (msArrayPayloadBase*)msMemAlloc0(totalSize);
+	p->cap = cap;
 	return p;
 }
 
 void* msArrayPayloadNewUninit(int64_t cap, int64_t elemSize) {
 	if (cap == 0) return NULL;
 	int64_t totalSize = msArrayBytes(cap, elemSize);
-	msArrayPayloadBase* p = (msArrayPayloadBase*)malloc(totalSize);
-	if (p) { p->cap = cap; }
+	msArrayPayloadBase* p = (msArrayPayloadBase*)msMemAlloc(totalSize);
+	p->cap = cap;
 	return p;
 }
 
@@ -57,14 +57,12 @@ static void* msArrayPayloadCopyFlagged(int64_t len, void* p, int64_t needed, int
 	int64_t newCap = msArrayResizeCap(oldCap);
 	if (newCap < needed) newCap = needed;
 	int64_t newSize = msArrayBytes(newCap, elemSize);
-	msArrayPayloadBase* q = (msArrayPayloadBase*)malloc(newSize);
-	if (q) {
-		memcpy((char*)q + headerSize, (char*)p + headerSize, len * elemSize);
-		if (zeroTail) {
-			memset((char*)q + headerSize + len * elemSize, 0, newSize - headerSize - len * elemSize);
-		}
-		q->cap = newCap;
+	msArrayPayloadBase* q = (msArrayPayloadBase*)msMemAlloc(newSize);
+	memcpy((char*)q + headerSize, (char*)p + headerSize, len * elemSize);
+	if (zeroTail) {
+		memset((char*)q + headerSize + len * elemSize, 0, newSize - headerSize - len * elemSize);
 	}
+	q->cap = newCap;
 	return q;
 }
 
@@ -258,8 +256,8 @@ void* msArrayPrepareAddUninit(int64_t len, void* p, int64_t addLen, int64_t elem
 	if (p == NULL) {
 		int64_t cap = msArrayCountAdd(len, addLen);
 		int64_t totalSize = msArrayBytes(cap, elemSize);
-		msArrayPayloadBase* q = (msArrayPayloadBase*)malloc(totalSize);
-		if (q) q->cap = cap;
+		msArrayPayloadBase* q = (msArrayPayloadBase*)msMemAlloc(totalSize);
+		q->cap = cap;
 		return q;
 	}
 	msArrayPayloadBase* base = (msArrayPayloadBase*)p;
@@ -277,7 +275,7 @@ void* msArrayPrepareAddUninit(int64_t len, void* p, int64_t addLen, int64_t elem
 	int64_t oldSize = headerSize + oldCap * elemSize;
 	int64_t newSize = msArrayBytes(newCap, elemSize);
 	msArrayPayloadBase* q = (msArrayPayloadBase*)msRealloc(p, oldSize, newSize);
-	if (q) q->cap = newCap;
+	q->cap = newCap;
 	return q;
 }
 
@@ -879,8 +877,7 @@ static void msRefArraySpliceThenRelease(msRefArray* arr, int64_t start, int64_t 
 	int64_t removedLen = 0;
 	if (deleteCount > 0 && arr->p != NULL && start < arr->len) {
 		removedLen = start + deleteCount > arr->len ? arr->len - start : deleteCount;
-		if (removedLen > 8) removed = (void**)malloc(removedLen * sizeof(void*));
-		if (removed == NULL) abort();
+		if (removedLen > 8) removed = (void**)msMemAlloc(removedLen * sizeof(void*));
 		memcpy(removed, arr->p->data + start, removedLen * sizeof(void*));
 		int64_t remaining = arr->len - start - removedLen;
 		if (remaining > 0) {
@@ -968,7 +965,7 @@ void msClosureArrayCopy(msClosureArray* dest, const msClosureArray* src) {
 	msClosurePayload* newp = NULL;
 	if (src->p != NULL) {
 		const size_t sz = sizeof(msClosurePayload) + (size_t)cap * sizeof(msClosure);
-		newp = (msClosurePayload*)calloc(1, sz);
+		newp = (msClosurePayload*)msMemAlloc0(sz);
 		newp->cap = cap;
 		for (int64_t i = 0; i < len; i++) {
 			newp->data[i] = src->p->data[i];

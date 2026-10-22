@@ -61,6 +61,10 @@ typedef struct {
 
 /* ===== Allocation ===== */
 
+_Noreturn static inline void msRaiseOutOfMemory(void) {
+    __builtin_trap();
+}
+
 #ifdef MSOS_BARE
 
 #if defined(MS_FREESTANDING_LIBC)
@@ -166,7 +170,7 @@ static size_t _ms_arena_pos = 0;
 
 static inline void* msArenaAlloc(size_t size) {
     size = (size + 7) & ~(size_t)7;
-    if (_ms_arena_pos + size > MS_ARENA_SIZE) return (void*)0;
+    if (_ms_arena_pos + size > MS_ARENA_SIZE) msRaiseOutOfMemory();
     void* p = &_ms_arena[_ms_arena_pos];
     _ms_arena_pos += size;
     __builtin_memset(p, 0, size);
@@ -214,6 +218,7 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
 
 static inline void* msAlloc(size_t size) {
     msRefHeader* h = (msRefHeader*)calloc(1, sizeof(msRefHeader) + size);
+    if (h == NULL) msRaiseOutOfMemory();
     h->rc = 0;
     h->rootIdx = -1;
     h->type = NULL;
@@ -223,6 +228,7 @@ static inline void* msAlloc(size_t size) {
 
 static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
     msRefHeader* h = (msRefHeader*)calloc(1, sizeof(msRefHeader) + size);
+    if (h == NULL) msRaiseOutOfMemory();
     h->rc = 0;
     h->rootIdx = -1;
     h->type = type;
@@ -353,6 +359,18 @@ void* msReallocNeedsOldSize(void* old, size_t size)
 #include <math.h>
 
 #endif
+
+static inline void* msMemAlloc(size_t size) {
+    void* p = malloc(size);
+    if (p == (void*)0 && size != 0) msRaiseOutOfMemory();
+    return p;
+}
+
+static inline void* msMemAlloc0(size_t size) {
+    void* p = calloc(1, size);
+    if (p == (void*)0 && size != 0) msRaiseOutOfMemory();
+    return p;
+}
 
 /* ===== String runtime ===== */
 #include "runtime/core/string.h"

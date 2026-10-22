@@ -45,22 +45,22 @@ static void checkCap(int64_t cap) {
 
 static msStrPayload* allocPayload(int64_t cap) {
 	checkCap(cap);
-	msStrPayload* p = (msStrPayload*)malloc(msStrContentSize(cap));
-	if (p) p->cap = cap;
+	msStrPayload* p = (msStrPayload*)msMemAlloc(msStrContentSize(cap));
+	p->cap = cap;
 	return p;
 }
 
 static msStrPayload* allocPayload0(int64_t cap) {
 	checkCap(cap);
-	msStrPayload* p = (msStrPayload*)calloc(1, msStrContentSize(cap));
-	if (p) p->cap = cap;
+	msStrPayload* p = (msStrPayload*)msMemAlloc0(msStrContentSize(cap));
+	p->cap = cap;
 	return p;
 }
 
 static msStrPayload* reallocPayload(msStrPayload* old, int64_t oldCap, int64_t newCap) {
 	checkCap(newCap);
 	msStrPayload* p = (msStrPayload*)msRealloc(old, msStrContentSize(oldCap), msStrContentSize(newCap));
-	if (p) p->cap = newCap;
+	p->cap = newCap;
 	return p;
 }
 
@@ -69,11 +69,9 @@ static msStrPayload* reallocPayload(msStrPayload* old, int64_t oldCap, int64_t n
 static msStrPayload* reallocPayload0(msStrPayload* old, int64_t oldCap, int64_t newCap) {
 	checkCap(newCap);
 	msStrPayload* p = (msStrPayload*)msRealloc(old, msStrContentSize(oldCap), msStrContentSize(newCap));
-	if (p) {
-		p->cap = newCap;
-		if (newCap > oldCap) {
-			memset(p->data + oldCap + 1, 0, newCap - oldCap);
-		}
+	p->cap = newCap;
+	if (newCap > oldCap) {
+		memset(p->data + oldCap + 1, 0, newCap - oldCap);
 	}
 	return p;
 }

@@ -156,6 +156,23 @@ static inline int msSlabBucket(size_t totalSize) {
 /* Round up to bucket max so any request in the bucket range fits a reused entry. */
 static const size_t msSlabBucketSize[] = {32, 64, 96, 128};
 
+/* Every runtime allocation that holds a value goes through these: a failed
+ * allocation stops the program at the allocator, so no string, array or object
+ * ever carries a NULL payload. */
+_Noreturn void msRaiseOutOfMemory(void);
+
+static inline void* msMemAlloc(size_t size) {
+	void* p = malloc(size);
+	if (p == NULL && size != 0) msRaiseOutOfMemory();
+	return p;
+}
+
+static inline void* msMemAlloc0(size_t size) {
+	void* p = calloc(1, size);
+	if (p == NULL && size != 0) msRaiseOutOfMemory();
+	return p;
+}
+
 /* Slab primitive WITHOUT any zeroing — caller owns the memory state.
  * Returns dirty memory on cache hit; malloc'd (dirty) memory on cache miss.
  * Used by the Uninit alloc variants whose callers guarantee full field coverage. */
@@ -168,7 +185,7 @@ static inline void* msSlabAllocRaw(size_t totalSize) {
 		return p;
 	}
 	/* Allocate bucket max, not exact size — slab reuses by bucket, not by exact size */
-	return malloc(b >= 0 ? msSlabBucketSize[b] : totalSize);
+	return msMemAlloc(b >= 0 ? msSlabBucketSize[b] : totalSize);
 }
 
 /* Safe slab primitive: zero-initialises the caller's requested range on both
@@ -186,7 +203,7 @@ static inline void* msSlabAlloc(size_t totalSize) {
 		memset(p, 0, totalSize);
 		return p;
 	}
-	return calloc(1, b >= 0 ? msSlabBucketSize[b] : totalSize);
+	return msMemAlloc0(b >= 0 ? msSlabBucketSize[b] : totalSize);
 }
 
 static inline void msSlabFree(void* p, size_t totalSize) {
@@ -231,7 +248,9 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
 
 static inline void* msRealloc(void* old, size_t oldSize, size_t newSize) {
 	(void)oldSize;
-	return realloc(old, newSize);
+	void* p = realloc(old, newSize);
+	if (p == NULL && newSize != 0) msRaiseOutOfMemory();
+	return p;
 }
 
 /* Arc<T> box: msAllocTyped, but starts at rc = MS_RC_INCREMENT (sole owner).

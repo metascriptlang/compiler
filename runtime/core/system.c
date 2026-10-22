@@ -161,6 +161,12 @@ void msFutureDropError(msFutureBase* f) {
 
 void (*msFatalTrap)(void) = NULL;
 
+_Noreturn void msRaiseOutOfMemory(void) {
+	fputs("Error: out of memory\n", stderr);
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
 _Noreturn void msRaiseIndexError(int64_t idx, int64_t len) {
 	fprintf(stderr, "Error: index %lld out of bounds (length %lld)\n",
 		(long long)idx, (long long)len);
