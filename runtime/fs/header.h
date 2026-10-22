@@ -38,39 +38,6 @@ msString msFsReadFile(msString path);
  * Returns MS_EMPTY_STRING on error (check msFsLastErrno). */
 msString msFsReadDirEntries(msString path);
 
-/* Windows only: std/fs calls the POSIX syscalls itself. */
-#ifdef _WIN32
-/* Stat predicates. Return 1.0 (true) or 0.0 (false). */
-double msFsExists(msString path);
-double msFsIsFile(msString path);
-double msFsIsDir(msString path);
-
-/* File size in bytes. Returns -1.0 on error. */
-double msFsFileSize(msString path);
-
-/* Last modification time in seconds since the epoch, or -1.0. */
-double msFsModifiedTime(msString path);
-
-/* Identity of a file's current content generation: device, file id, size, last-write and
- * change time at the filesystem's full resolution. Empty when the file is absent or the
- * filesystem keeps no change time, so a caller must then read the file. */
-msString msFsChangeStamp(msString path);
-
-/* Each returns 1.0 on success, 0.0 with the error in msFsLastErrno; mkdir also
- * succeeds on EEXIST, chmod is a no-op. */
-double msFsChmod(msString path, int32_t mode);
-double msFsMkdir(msString path);
-double msFsRmdir(msString path);
-double msFsRemove(msString path);
-double msFsRename(msString oldPath, msString newPath);
-double msFsSymlink(msString target, msString path);
-/* mode = "wb" (truncate) or "ab" (append). */
-double msFsWriteFileMode(msString path, msString content, msString mode);
-/* No exec bit on Windows: true for an existing regular file. */
-double msFsIsExecutable(msString path);
-msString msFsRealPath(msString path);
-#endif
-
 #ifdef __cplusplus
 }
 #endif
