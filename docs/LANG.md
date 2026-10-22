@@ -1576,10 +1576,10 @@ In each branch the compiler narrows the union to a single variant, so accessing 
 
 #### C Backend
 
-All three forms lower to a wrapper struct with a numeric `_tag` plus an anonymous union with one slot per variant. A slot holds its variant in the variant's own representation: a `match`-type arm payload is a value, so it sits inline; a TS-style variant written as `{ ... }` or as an interface is a reference, so its slot holds the pointer (`msAnon_<hash>* v0;`, `Circle* v0;`). The `match`-type form:
+All three forms lower to a wrapper struct with a numeric `_tag` plus an anonymous union with one slot per variant. A slot holds its variant in the variant's own representation. An arm of `type X = match` is an anonymous object type, a reference like a TS-style variant written as `{ ... }` or as an interface, so its slot holds the pointer (`msAnon_<hash>* v0;`, `Circle* v0;`) and a copy of the union shares the arm with the original. Declared as `struct X = match`, each arm is a value: its slot holds the payload inline and a copy is independent. Measured 2026-10-22 with installed `msc` 682604d01 on C and `--target=js`, an enum and a boolean discriminator each: copying the union, narrowing the copy and writing `2.5` into its arm leaves the original reading `2.5` for `type` and `1.5` for `struct`, and the emitted slots are `msAnon_…* v0` for `type` and `X_v0 v0` for `struct`, 16 bytes in all four. Not measured: a generic match union. The `struct X = match` form:
 
 ```c
-// Generated C for NodeData (enum-disc match-type):
+// Generated C for `struct NodeData = match (kind: NodeKind) { ... }`:
 typedef struct {
     NodeKind _tag;          // enum type for match-type with enum disc
     union {
@@ -2187,7 +2187,19 @@ fit, because a callback taking `Error` and one taking `string | Error` are calle
 `reject(42)` is refused as an argument mismatch (`got int32, expected Error | string`), not with
 throw's wording, because `reject` is an ordinary callback parameter.
 
-The executor runs **synchronously**. Only the first call to `resolve` or `reject` takes effect — subsequent calls are ignored (settled flag). The constructor is lowered to `msPromiseNew(executor)` by the compiler.
+An unannotated `(resolve, reject) =>` takes its types from the constructor, and `T` comes from
+`<T>` or from the type the expression is assigned or returned to: `const p: Promise<string> = new
+Promise((resolve, reject) => …)` and `return new Promise((resolve) => resolve(7))` in a function
+returning `Promise<int32>` both check. For `Promise<void>`, call `resolve()`.
+
+The executor runs **synchronously**, and a `throw` inside it rejects the promise. Only the first
+call to `resolve` or `reject` takes effect; later calls are ignored (settled flag). The constructor
+is lowered to `msPromiseNew(executor)` by the compiler.
+
+Measured 2026-10-21 with msc afcd22f19 on C, JS and the Raiser: `reject("failed")` and
+`reject(new Error("boom"))` are caught with those messages, a `throw` in the executor is caught,
+`resolve()` settles a `Promise<void>`, `resolve(1); resolve(2); reject("late")` awaits `1`, and
+both contextual-`T` forms above print their values.
 
 #### Promise.withResolvers (ES2024)
 

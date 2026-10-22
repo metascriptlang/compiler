@@ -13,7 +13,7 @@
 import { isExecutable } from "../fs";
 import {
 	ProcessError, ProcessErrorKind,
-	spawnFailed, startFailed, errnoName, notFound, nonZeroExit, signalTerminated, pipeError,
+	spawnFailed, startFailed, errnoName, nonZeroExit, signalTerminated, pipeError,
 } from "./errors";
 
 // Re-export error types so callers do `import { exec, ProcessError } from "std/process"`.
@@ -109,11 +109,6 @@ export function exec(command: string): Result<string, ProcessError> {
 		return Result.err(signalTerminated(command, signal, stdoutText, stderrText));
 	}
 	if (exitCode != 0) {
-		// Heuristic: exit-code 127 from /bin/sh -c "name ..." means command not found.
-		// Match shell convention so callers can pattern-match isNotFound() cleanly.
-		if (exitCode == 127) {
-			return Result.err(notFound(command));
-		}
 		return Result.err(nonZeroExit(command, exitCode, stdoutText, stderrText));
 	}
 	return Result.ok(stdoutText);
@@ -133,8 +128,7 @@ extern function msProcessSpawnSyncArgv(path: string, args: string[], cwd: string
 // Direct-argv counterpart of exec(): spawn `path` with `args` — no /bin/sh, no
 // cmd.exe — capturing stdout/stderr/exit/signal exactly like exec(). Same
 // Result<string, ProcessError> shape, so callers can swap exec() for this one
-// token at a time. The one difference: no exit-127 not-found heuristic (that
-// is a shell convention; here a missing binary reports as SpawnFailed).
+// token at a time.
 //
 // Prefer this over exec() whenever the command is assembled from tokens
 // (compilers, build tools) rather than written as a shell one-liner: without

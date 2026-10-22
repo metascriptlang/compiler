@@ -365,6 +365,8 @@ export function lspUriToPath(uri: string): string {
 }
 
 export function lspPathToUri(path: string): string {
+	const drive = path.length >= 2 && path.charAt(1) == ":" ? path.charAt(0).toLowerCase() : "";
+	if (drive != "" && "abcdefghijklmnopqrstuvwxyz".includes(drive)) return `file:///${drive}%3A${path.slice(2, path.length)}`;
 	return "file://" + path;
 }
 
@@ -428,6 +430,12 @@ export function lspResolveImportCandidates(basePath: string, importSpec: string)
 test "uri to path" { assert lspUriToPath("file:///Users/foo/bar.ms") == "/Users/foo/bar.ms"; }
 
 test "path to uri" { assert lspPathToUri("/a/b.ms") == "file:///a/b.ms"; }
+
+test "path to uri gives a windows drive as the escaped lower-case volume a client sends" {
+	assert lspPathToUri("C:/Users/foo/bar.ms") == "file:///c%3A/Users/foo/bar.ms";
+	assert lspPathToUri("d:/x.ms") == "file:///d%3A/x.ms";
+	assert lspUriToPath(lspPathToUri("C:/x/y.ms")) == "c:/x/y.ms";
+}
 
 test "non-file uri unchanged" { assert lspUriToPath("http://example.com") == "http://example.com"; }
 

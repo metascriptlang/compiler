@@ -16,13 +16,7 @@ interface Ran {
 }
 
 function scriptArgs(): string[] {
-	const rest: string[] = [];
-	let seen = false;
-	for (const a of argv) {
-		if (seen && !a.startsWith("--")) rest.push(a);
-		if (a.endsWith("nativeBuildBoundary.ms")) seen = true;
-	}
-	return rest;
+	return argv.slice(1).filter((a: string): boolean => !a.startsWith("--"));
 }
 
 function absolute(path: string): string {
@@ -558,6 +552,21 @@ function runComptimeCache(): void {
 	record("compile-time read of a removed file", "missingd", builtValue(reads, build(reads, "read-removed")));
 	put(`${reads}/first.txt`, "");
 	record("compile-time read of a file created empty", "d", builtValue(reads, build(reads, "read-created-empty")));
+
+	const meta = `${root}/comptime-meta`;
+	ensureDir(meta);
+	put(`${meta}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${meta}/lib.ms`, "import { Node, NodeKind, readFile } from \"std/meta\";\n\nexport macro third(): Node {\n\treturn { kind: NodeKind.StringLiteral, line: 1, column: 1, value: readFile(\"third.txt\") };\n}\n");
+	put(`${meta}/main.ms`, "import { readFile } from \"std/meta\";\nimport { third } from \"./lib\";\n\nconst FIRST: string = @comptime { return readFile(\"first.txt\"); };\n\nconsole.log(FIRST + third());\n");
+	put(`${meta}/first.txt`, "a");
+	put(`${meta}/third.txt`, "b");
+	need(build(meta, "meta-baseline") == 0, "std/meta baseline");
+	need(build(meta, "meta-unchanged") == 0, "std/meta unchanged rebuild");
+	need(value(meta) == "ab", "std/meta baseline value");
+	put(`${meta}/first.txt`, "c");
+	record("std/meta readFile edit read by a compile-time block", "cb", builtValue(meta, build(meta, "meta-block-change")));
+	put(`${meta}/third.txt`, "d");
+	record("std/meta readFile edit read by a macro declared in another module", "cd", builtValue(meta, build(meta, "meta-macro-change")));
 
 	const outside = `${root}/comptime-outside`;
 	comptimeFixture(`${outside}/app`);

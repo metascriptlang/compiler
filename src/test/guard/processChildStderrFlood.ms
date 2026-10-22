@@ -5,6 +5,7 @@
 // stdout read times out. RED on a compiler without `spawn` in std/process.
 
 import { spawn, ChildStream, exit } from "std/process";
+import { host } from "./fixtures/childHost";
 
 let failed = 0;
 
@@ -13,7 +14,7 @@ function report(msg: string): void {
 	failed = failed + 1;
 }
 
-const started = spawn("/bin/sh", ["-c", "head -c 1048576 /dev/zero >&2; echo done"]);
+const started = spawn(host("sh"), ["-c", "head -c 1048576 /dev/zero >&2; echo done"]);
 if (!started.ok) {
 	report(`spawn: ${started.error.message}`);
 } else {

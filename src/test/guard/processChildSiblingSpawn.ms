@@ -6,6 +6,7 @@
 // open and the read for EOF times out. RED on a compiler without `spawn` in std/process.
 
 import { spawn as spawnChild, ChildProcess, ChildStream, exit } from "std/process";
+import { host } from "./fixtures/childHost";
 
 let failed = 0;
 
@@ -26,9 +27,9 @@ function drainToEnd(child: ChildProcess): Result<string, string> {
 }
 
 function echoBesideSibling(k: int32): int32 {
-	const first = spawnChild("/bin/cat", []);
+	const first = spawnChild(host("cat"), []);
 	if (!first.ok) return 1;
-	const sibling = spawnChild("/bin/cat", []);
+	const sibling = spawnChild(host("cat"), []);
 	if (!sibling.ok) return 2;
 	const child = first.value;
 	const sent = child.write(`frame ${k}`, 3000);

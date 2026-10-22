@@ -54,9 +54,6 @@ export function exec(command: string): Result<string, ProcessError> {
 		return Result.err(signalTerminated(command, signal, stdoutText, stderrText));
 	}
 	if (exitCode != 0) {
-		if (exitCode == 127) {
-			return Result.err(notFound(command));
-		}
 		return Result.err(nonZeroExit(command, exitCode, stdoutText, stderrText));
 	}
 	return Result.ok(stdoutText);

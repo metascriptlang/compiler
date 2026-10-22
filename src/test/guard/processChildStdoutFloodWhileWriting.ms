@@ -6,6 +6,7 @@
 // RED on a compiler without `spawn` in std/process.
 
 import { spawn, ChildStream, exit } from "std/process";
+import { host } from "./fixtures/childHost";
 
 let failed = 0;
 
@@ -18,7 +19,7 @@ const block = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/"
 let payload = "";
 for (let i = 0; i < 16384; i++) payload += `${i} ${block}\n`;
 
-const started = spawn("/bin/cat", []);
+const started = spawn(host("cat"), []);
 if (!started.ok) {
 	report(`spawn: ${started.error.message}`);
 } else {

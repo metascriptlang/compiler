@@ -6,6 +6,7 @@
 // RED on a compiler without `spawn` in std/process.
 
 import { spawn, ProcessErrorKind, exit } from "std/process";
+import { host, onWindows } from "./fixtures/childHost";
 
 let failed = 0;
 
@@ -14,7 +15,7 @@ function report(msg: string): void {
 	failed = failed + 1;
 }
 
-const exited = spawn("/bin/sh", ["-c", "exit 3"]);
+const exited = spawn(host("sh"), ["-c", "exit 3"]);
 if (!exited.ok) {
 	report(`spawn: ${exited.error.message}`);
 } else {
@@ -28,7 +29,9 @@ if (!exited.ok) {
 	child.close();
 }
 
-const deaf = spawn("/bin/sh", ["-c", "exec 0<&-; exec sleep 1000"]);
+const deaf = onWindows
+	? spawn("powershell", ["-NoProfile", "-Command", "Add-Type -MemberDefinition '[DllImport(\"kernel32\")] public static extern IntPtr GetStdHandle(int n); [DllImport(\"kernel32\")] public static extern bool CloseHandle(IntPtr h);' -Name K -Namespace W; [W.K]::CloseHandle([W.K]::GetStdHandle(-10)); Start-Sleep -Seconds 1000"])
+	: spawn("/bin/sh", ["-c", "exec 0<&-; exec sleep 1000"]);
 if (!deaf.ok) {
 	report(`spawn: ${deaf.error.message}`);
 } else {

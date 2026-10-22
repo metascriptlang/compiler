@@ -20,7 +20,7 @@ RULES=(
   'corpus,san|^src/test/corpus/'
   'san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h|promise/|actor/)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
   'fmt|^src/(compiler/fmt|parser|lexer)/|^src/test/fmt/|^std/meta/'
-  'boundary|^src/compiler/(buildConfig|cache|cc|commands|compile|defines|options|toolchain)\.ms$|^src/compiler/(meta/hostTable\.ms$|package/)|^src/index\.ms$|^src/test/nativeBuildBoundary\.ms$|^(runtime|vendor)/|^std/(fs|process)/'
+  'boundary|^src/compiler/(buildConfig|cache|cc|commands|compile|defines|options|toolchain)\.ms$|^src/compiler/(meta/(hostTable|typeQuery)\.ms$|package/)|^src/index\.ms$|^src/test/nativeBuildBoundary\.ms$|^(runtime|vendor)/|^std/(fs|process)/'
 )
 DEFAULT_LANES="build suite"
 ORDER="tools build boundary suite lsp hcr tests fmt corpus san guard solana"
@@ -1338,7 +1338,7 @@ stable_emit_self_test() (
 )
 
 support_cache_self_test() (
-  local d old new copied before after bad=0 CONTROL_SUPPORT TOP CTL_WORK platform expected fail_copy=0
+  local d old new copied before after bad=0 CONTROL_SUPPORT TOP CTL_WORK platform expected fail_copy=0 has_mode=0 has_link=0
   local real_os=$OSTYPE OSTYPE=$OSTYPE
   d=$(mktemp -d) || return 1
   TOP="$d/a" CTL_WORK="$d/b"
@@ -1349,6 +1349,8 @@ support_cache_self_test() (
   printf '#define RUNTIME_VALUE 1\n' >"$TOP/runtime/core.h"
   printf '#define VENDOR_VALUE 1\n' >"$d/shared.h"
   ln -s "$d/shared.h" "$TOP/vendor/lib/shared.h"
+  [ ! -x "$TOP/src/a.ms" ] || has_mode=1
+  [ ! -L "$TOP/vendor/lib/shared.h" ] || has_link=1
   (cd "$TOP" && git init -q && git -c user.name=t -c user.email=t@t add src std runtime vendor \
     && git -c user.name=t -c user.email=t@t commit -qm inputs) >"$d/git.log" 2>&1 || { rm -rf "$d"; return 1; }
   cp() {
@@ -1367,8 +1369,8 @@ support_cache_self_test() (
     prepare_emit_workspace || { printf 'FAIL shared support: %s snapshot failed\n' "$platform"; bad=1; break; }
     [ "$(grep -c "^$expected$" "$d/copies")" = 4 ] \
       || { printf 'FAIL shared support: %s used the wrong copy route\n' "$platform"; bad=1; }
-    cmp -s "$TOP/src/a.ms" "$CTL_WORK/src/a.ms" && [ -x "$CTL_WORK/src/a.ms" ] \
-      && [ -d "$CTL_WORK/src/empty dir" ] && [ ! -L "$CTL_WORK/vendor/lib/shared.h" ] \
+    cmp -s "$TOP/src/a.ms" "$CTL_WORK/src/a.ms" && { [ "$has_mode" = 0 ] || [ -x "$CTL_WORK/src/a.ms" ]; } \
+      && [ -d "$CTL_WORK/src/empty dir" ] && { [ "$has_link" = 0 ] || [ ! -L "$CTL_WORK/vendor/lib/shared.h" ]; } \
       || { printf 'FAIL shared support: %s changed source bytes/mode or retained a link\n' "$platform"; bad=1; }
   done
   old=$(control_support "$d/a")

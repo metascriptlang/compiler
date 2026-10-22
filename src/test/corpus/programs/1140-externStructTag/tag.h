@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <unistd.h>
@@ -9,18 +10,27 @@ static inline void corpus1140RecFill(struct Corpus1140Rec* r, int32_t k) { r->he
 static inline int64_t corpus1140RecHead(const struct Corpus1140Rec* r) { return r->head; }
 static inline int64_t corpus1140RecSize(void) { return (int64_t)sizeof(struct Corpus1140Rec); }
 
-static char corpus1140Dir[64];
+static char corpus1140Dir[260];
 static inline const char* corpus1140MakeDir(void) {
-	snprintf(corpus1140Dir, sizeof corpus1140Dir, "/tmp/corpus1140-%d", (int)getpid());
+#ifdef _WIN32
+	const char* base = getenv("TEMP");
+#else
+	const char* base = "/tmp";
+#endif
+	snprintf(corpus1140Dir, sizeof corpus1140Dir, "%s/corpus1140-%d", base, (int)getpid());
+#ifdef _WIN32
+	mkdir(corpus1140Dir);
+#else
 	mkdir(corpus1140Dir, 0700);
-	char path[96];
+#endif
+	char path[300];
 	snprintf(path, sizeof path, "%s/f.txt", corpus1140Dir);
-	FILE* f = fopen(path, "w");
+	FILE* f = fopen(path, "wb");
 	if (f) { fputs("hello\n", f); fclose(f); }
 	return corpus1140Dir;
 }
 static inline void corpus1140RemoveDir(void) {
-	char path[96];
+	char path[300];
 	snprintf(path, sizeof path, "%s/f.txt", corpus1140Dir);
 	unlink(path);
 	rmdir(corpus1140Dir);

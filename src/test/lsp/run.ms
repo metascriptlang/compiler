@@ -555,7 +555,7 @@ function compareCheckpoint(
 	const files: string[] = [];
 	const checks: Result<ChildProcess, ProcessError>[] = [];
 	for (let i = 0; i < snap.uris.length; i++) {
-		const file = inProject ? lspUriPath(snap.uris[i]) : `${realpath(dir)}/${basename(lspUriPath(snap.uris[i]))}`;
+		const file = inProject ? lspUriPath(snap.uris[i]) : `${slashes(realpath(dir))}/${basename(lspUriPath(snap.uris[i]))}`;
 		writeFile(file, snap.texts[i]);
 		files.push(file);
 	}
@@ -615,7 +615,7 @@ function runScenario(scenario: LspScenario): string {
 	const project = scenario.project;
 	if (project != null) {
 		ensureDir(`${NEUTRAL}/${scenarioSlug(scenario.name)}`);
-		projectDir = realpath(`${NEUTRAL}/${scenarioSlug(scenario.name)}`);
+		projectDir = slashes(realpath(`${NEUTRAL}/${scenarioSlug(scenario.name)}`));
 		const moved = materialiseProject(project, drains, projectDir);
 		if (!moved.ok) return moved.error;
 		drains = moved.value;

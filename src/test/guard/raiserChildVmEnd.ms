@@ -9,6 +9,7 @@
 // RED on a compiler without `spawn` in the Raiser tier of std/process (the fixture fails to build).
 
 import { execFileResult, cwd, env, exit } from "std/process";
+import { listed, forceKill } from "./fixtures/childHost";
 
 const root = cwd();
 const mscEnv = env.get("MSC");
@@ -20,10 +21,6 @@ let failed = 0;
 function report(msg: string): void {
 	console.log(`GUARD-FAIL ${msg}`);
 	failed = failed + 1;
-}
-
-function listed(pid: string): string {
-	return execFileResult("/bin/ps", ["-o", "stat=", "-p", pid]).output.trim();
 }
 
 for (const how of ["throw", "exit", "end"]) {
@@ -38,7 +35,7 @@ for (const how of ["throw", "exit", "end"]) {
 	const state = listed(pid);
 	if (state != "") {
 		report(`${how}: child ${pid} outlived the run: '${state}'`);
-		execFileResult("/bin/kill", ["-9", pid]);
+		forceKill(pid);
 	}
 }
 

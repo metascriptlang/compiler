@@ -369,7 +369,33 @@ void msCompletionQueuePushReleaseBatch(void** futs, int count) {
 	}
 }
 
-bool msCompletionQueueDrain(void) { return false; }
+static void msIocpDispatchMsg(msCompletionMsg* msg) {
+	if (msg->kind == -3) {
+		msReleaseEnvOnLoop(msg->value);
+	} else if (msg->kind == -2) {
+		if (msg->value != NULL) msFutureDrcDestroy(msg->value);
+	} else if (msg->fut != NULL) {
+		msFutureFireCallbacks((msFutureBase*)msg->fut);
+		msFutureDrcDestroy(msg->fut);
+	}
+	free(msg);
+}
+
+bool msCompletionQueueDrain(void) {
+	if (gDispatcher == NULL || gDispatcher->iocp == NULL) return false;
+	bool didWork = false;
+	OVERLAPPED_ENTRY entries[64];
+	ULONG count = 0;
+	while (GetQueuedCompletionStatusEx(gDispatcher->iocp, entries, 64, &count, 0, FALSE)) {
+		for (ULONG i = 0; i < count; i++) {
+			msCompletionMsg* msg = (msCompletionMsg*)entries[i].lpOverlapped;
+			if (msg == NULL) continue;
+			didWork = true;
+			msIocpDispatchMsg(msg);
+		}
+	}
+	return didWork;
+}
 
 #else
 /* POSIX: MPSC queue for cross-thread completion + wake-only self-pipe.
@@ -757,31 +783,7 @@ bool msRunOnce(int timeoutMs) {
 				 * ahead of them, so a wake-only batch is not an idle loop. */
 				didWork = true;
 				if (msg == NULL) continue;
-				if (msg->kind == -3) {
-					/* Deferred env release (Amendment H parity with the POSIX
-					 * kind=-3 drain): decref on the loop thread — the env's rc
-					 * field is non-atomic. Same destroy sequence as the POSIX
-					 * branch in msCompletionQueueDrain. */
-					msReleaseEnvOnLoop(msg->value);
-					free(msg);
-					continue;
-				}
-				if (msg->kind == -2) {
-					/* Deferred future release (Amendment H parity with the
-					 * POSIX kind=-2 drain): the owner thread's deferred decref
-					 * pushed by msCompletionQueuePushReleaseBatch. Runs here,
-					 * serialized with the drain's own decref — never racy. */
-					if (msg->value != NULL) msFutureDrcDestroy(msg->value);
-					free(msg);
-					continue;
-				}
-				if (msg->fut != NULL) {
-					msFutureFireCallbacks((msFutureBase*)msg->fut);
-					/* Release the queue's in-flight ref, paired with the incref in
-					 * msPostCompletion - same contract as the POSIX drain above. */
-					msFutureDrcDestroy(msg->fut);
-				}
-				free(msg);
+				msIocpDispatchMsg(msg);
 			}
 		}
 	} else if (adj > 0 && msDequeLen(&d->callbacks) == 0) {

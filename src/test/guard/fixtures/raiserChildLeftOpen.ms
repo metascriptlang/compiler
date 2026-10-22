@@ -2,8 +2,9 @@
 // prints its pid and leaves its handle open, then ends the run the way argv[1] names.
 
 import { spawn, argv, exit } from "std/process";
+import { host } from "./childHost";
 
-const started = spawn("/bin/sleep", ["1000"]);
+const started = spawn(host("sleep"), ["1000"]);
 if (!started.ok) {
 	console.log(`SPAWN-FAILED ${started.error.message}`);
 	exit(2);

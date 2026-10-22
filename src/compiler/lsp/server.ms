@@ -598,7 +598,7 @@ function memoryProjectDir(name: string): string {
 	const tmp = env.get("TMPDIR") != "" ? env.get("TMPDIR") : "/tmp";
 	const dir = `${tmp}/mscLspMemory/${scenarioSlug(name)}`;
 	ensureDir(dir);
-	return realpath(dir);
+	return realpath(dir).replaceAll("\\", "/");
 }
 
 function runMemoryScenario(name: string): string {

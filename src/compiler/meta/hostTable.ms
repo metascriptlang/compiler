@@ -1649,7 +1649,7 @@ test "closeHostChildren ends every child left open and the table refuses handles
 	const heap = activeHostArrayHeap()!;
 	const argv = heapAllocArray(heap);
 	heapArrayPush(heap, argv, heapAllocStoredString(heap, "1000"));
-	const id = spawnFn([raiserConstString("/bin/sleep"), raiserArray(argv), raiserConstString(""), raiserInt(0)]);
+	const id = spawnFn([raiserConstString(platform == "windows" ? "sleep" : "/bin/sleep"), raiserArray(argv), raiserConstString(""), raiserInt(0)]);
 	assert id.intVal == _children.length;
 	const pid = pidFn([id]).intVal;
 	assert pid > 0;
@@ -1657,7 +1657,10 @@ test "closeHostChildren ends every child left open and the table refuses handles
 	pidFn([raiserInt(id.intVal + 1)]);
 	assert takeHostRaise()!.contains("is not a live child");
 	closeHostChildren();
-	assert execFileResult("/bin/ps", ["-o", "stat=", "-p", `${pid}`]).output.trim() == "";
+	const listing = platform == "windows"
+		? execFileResult("tasklist", ["/FI", `PID eq ${pid}`, "/NH", "/FO", "CSV"]).output.contains(`","${pid}",`) ? "running" : ""
+		: execFileResult("/bin/ps", ["-o", "stat=", "-p", `${pid}`]).output.trim();
+	assert listing == "";
 	pidFn([id]);
 	assert takeHostRaise()!.contains("is not a live child");
 }

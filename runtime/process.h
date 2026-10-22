@@ -959,6 +959,23 @@ static inline msString msProcessSpawnSync(msString command) {
 #endif
 }
 
+#ifdef _WIN32
+#define _MS_EFTYPE 4028
+static inline int32_t _msWinStartErrno(DWORD lastError, msString exe) {
+	if (lastError == ERROR_FILE_NOT_FOUND || lastError == ERROR_PATH_NOT_FOUND) return ENOENT;
+	if (lastError == ERROR_ACCESS_DENIED) {
+		wchar_t wide[MAX_PATH];
+		if (MultiByteToWideChar(CP_UTF8, 0, msStringToCString(exe), -1, wide, MAX_PATH) > 0) {
+			DWORD attrs = GetFileAttributesW(wide);
+			if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) return ENOENT;
+		}
+		return EACCES;
+	}
+	if (lastError == ERROR_BAD_EXE_FORMAT) return _MS_EFTYPE;
+	return 0;
+}
+#endif
+
 /**
  * Synchronous argv subprocess WITH capture — the no-shell counterpart of
  * msProcessSpawnSync. Spawns `exe` with `args` directly (no /bin/sh, no
@@ -1094,10 +1111,7 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 	ReleaseSRWLockExclusive(&_msSpawnCreateLock);
 	if (!ok) {
 		DWORD lastError = GetLastError();
-		_msProcSpawnErrno = lastError == ERROR_FILE_NOT_FOUND || lastError == ERROR_PATH_NOT_FOUND ? ENOENT
-			: lastError == ERROR_ACCESS_DENIED ? EACCES
-			: lastError == ERROR_BAD_EXE_FORMAT ? ENOEXEC
-			: 0;
+		_msProcSpawnErrno = _msWinStartErrno(lastError, exe);
 		CloseHandle(outRd); CloseHandle(errRd);
 		return MS_EMPTY_STRING;
 	}
@@ -1201,7 +1215,372 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 
 static inline int32_t msProcChildIsUnsupported(int64_t spawnResult) { return spawnResult == -(int64_t)ENOSYS; }
 
-#if !defined(_WIN32) && !MS_NO_SPAWN
+#if defined(_WIN32)
+typedef struct {
+	HANDLE h;
+	char* data;
+	size_t len;
+	size_t cap;
+	int overflow;
+} msProcChildStream;
+
+typedef struct {
+	DWORD pid;
+	HANDLE proc;
+	HANDLE in;
+	msProcChildStream out;
+	msProcChildStream err;
+	int reaped;
+	int32_t exitCode;
+	int32_t signal;
+	int closed;
+	int lastErrno;
+	int64_t written;
+} msProcChild;
+
+#define MS_PROC_CHILD_WRITE_CHUNK 1024
+#define MS_PROC_CHILD_WRITE_ROUND ((size_t)65536)
+
+static inline double _msProcChildNowMs(void) {
+	LARGE_INTEGER freq, now;
+	QueryPerformanceFrequency(&freq);
+	QueryPerformanceCounter(&now);
+	return (double)now.QuadPart * 1000.0 / (double)freq.QuadPart;
+}
+
+static inline int _msProcChildRemainingMs(double deadline) {
+	double left = deadline - _msProcChildNowMs();
+	if (left <= 0) return 0;
+	if (left >= 2147483647.0) return 2147483647;
+	return (int)(left + 0.999);
+}
+
+static inline void _msProcChildCloseHandle(HANDLE* h) {
+	if (*h != NULL) {
+		CloseHandle(*h);
+		*h = NULL;
+	}
+}
+
+/* One non-blocking read into the stream's buffer; 1 when bytes arrived or the stream ended.
+ * A pipe whose every write end closed reports ERROR_BROKEN_PIPE, which is EOF, not an error. */
+static inline int _msProcChildFill(msProcChild* c, msProcChildStream* s) {
+	DWORD avail = 0;
+	if (!PeekNamedPipe(s->h, NULL, 0, NULL, &avail, NULL)) {
+		if (GetLastError() != ERROR_BROKEN_PIPE) c->lastErrno = EIO;
+		_msProcChildCloseHandle(&s->h);
+		return 1;
+	}
+	if (avail == 0) return 0;
+	size_t room = MS_PROC_CHILD_BUFFER_CAP - s->len;
+	size_t want = room < 65536 ? room : 65536;
+	if ((size_t)avail < want) want = (size_t)avail;
+	if (s->len + want > s->cap) {
+		size_t newCap = s->cap == 0 ? 65536 : s->cap;
+		while (newCap < s->len + want) newCap *= 2;
+		char* grown = (char*)realloc(s->data, newCap);
+		if (!grown) {
+			c->lastErrno = ENOMEM;
+			return 1;
+		}
+		s->data = grown;
+		s->cap = newCap;
+	}
+	DWORD n = 0;
+	if (!ReadFile(s->h, s->data + s->len, (DWORD)want, &n, NULL)) {
+		if (GetLastError() != ERROR_BROKEN_PIPE) c->lastErrno = EIO;
+		_msProcChildCloseHandle(&s->h);
+		return 1;
+	}
+	s->len += (size_t)n;
+	return 1;
+}
+
+/* One pump over the open pipes, bounded by timeoutMs; 1 when it moved a byte or a stream
+ * ended. The stdin end is non-blocking (PIPE_NOWAIT): a byte-mode write that does not fit
+ * the free space returns 0 bytes, so the pending write goes in small chunks, and readable
+ * bytes are taken first so a child that floods stdout while the parent writes keeps flowing. */
+static inline int _msProcChildPump(msProcChild* c, const char* data, size_t len, size_t* done, int timeoutMs) {
+	double deadline = _msProcChildNowMs() + (double)timeoutMs;
+	for (;;) {
+		int progress = 0;
+		if (c->out.h != NULL && c->out.len < MS_PROC_CHILD_BUFFER_CAP) {
+			if (_msProcChildFill(c, &c->out)) progress = 1;
+		} else if (c->out.h != NULL && !c->out.overflow) {
+			c->out.overflow = 1;
+			progress = 1;
+		}
+		if (c->err.h != NULL && c->err.len < MS_PROC_CHILD_BUFFER_CAP) {
+			if (_msProcChildFill(c, &c->err)) progress = 1;
+		} else if (c->err.h != NULL && !c->err.overflow) {
+			c->err.overflow = 1;
+			progress = 1;
+		}
+		if (data != NULL && c->in != NULL && *done < len) {
+			size_t round = 0;
+			while (*done < len && round < MS_PROC_CHILD_WRITE_ROUND) {
+				size_t left = len - *done;
+				DWORD want = left < MS_PROC_CHILD_WRITE_CHUNK ? (DWORD)left : MS_PROC_CHILD_WRITE_CHUNK;
+				DWORD n = 0;
+				if (!WriteFile(c->in, data + *done, want, &n, NULL)) {
+					DWORD e = GetLastError();
+					c->lastErrno = (e == ERROR_NO_DATA || e == ERROR_BROKEN_PIPE || e == ERROR_PIPE_NOT_CONNECTED) ? EPIPE : EIO;
+					progress = 1;
+					break;
+				}
+				if (n == 0) break;
+				*done += (size_t)n;
+				round += (size_t)n;
+				progress = 1;
+			}
+		}
+		if (progress) return 1;
+		if (_msProcChildRemainingMs(deadline) == 0) return 0;
+		Sleep(1);
+	}
+}
+
+static inline msProcChild* _msProcChildOf(int64_t h) { return (msProcChild*)(intptr_t)h; }
+
+static inline wchar_t* _msProcChildWide(const char* utf8, int backslashes) {
+	int n = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+	if (n <= 0) return NULL;
+	wchar_t* w = (wchar_t*)malloc(sizeof(wchar_t) * (size_t)n);
+	if (w == NULL) return NULL;
+	if (MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w, n) == 0) {
+		free(w);
+		return NULL;
+	}
+	if (backslashes) {
+		for (wchar_t* p = w; *p; p++) {
+			if (*p == L'/') *p = L'\\';
+		}
+	}
+	return w;
+}
+
+/* The command line msProcessSpawnSyncArgv builds: the exe token with backslashes, every
+ * token CRT-quoted by _msAppendWinArg. */
+static inline wchar_t* _msProcChildCommandLine(msString path, msStringArray* args) {
+	const char* exeStr = msStringToCString(path);
+	size_t exeLen = strlen(exeStr);
+	char* exeNorm = (char*)malloc(exeLen + 1);
+	if (!exeNorm) return NULL;
+	memcpy(exeNorm, exeStr, exeLen + 1);
+	for (char* p = exeNorm; *p; p++) {
+		if (*p == '/') *p = '\\';
+	}
+	size_t cap = 256, len = 0;
+	char* cmdLine = (char*)malloc(cap);
+	if (!cmdLine) {
+		free(exeNorm);
+		return NULL;
+	}
+	_msAppendWinArg(&cmdLine, &len, &cap, exeNorm);
+	free(exeNorm);
+	if (args != NULL && args->p != NULL) {
+		for (int64_t i = 0; i < args->len; i++) {
+			if (len + 2 > cap) { cap *= 2; cmdLine = (char*)realloc(cmdLine, cap); }
+			cmdLine[len++] = ' ';
+			_msAppendWinArg(&cmdLine, &len, &cap, msStringToCString(args->p->data[i]));
+		}
+	}
+	cmdLine[len] = '\0';
+	wchar_t* wide = _msProcChildWide(cmdLine, 0);
+	free(cmdLine);
+	return wide;
+}
+
+static inline int64_t msProcChildSpawn(msString path, msStringArray* args, msString cwd, int32_t mergeStderr) {
+	wchar_t* wcmd = _msProcChildCommandLine(path, args);
+	wchar_t* wcwd = cwd.len > 0 ? _msProcChildWide(msStringToCString(cwd), 1) : NULL;
+	msProcChild* c = (msProcChild*)calloc(1, sizeof(msProcChild));
+	if (wcmd == NULL || (cwd.len > 0 && wcwd == NULL) || c == NULL) {
+		free(wcmd); free(wcwd); free(c);
+		return -(int64_t)ENOMEM;
+	}
+
+	HANDLE inRd = NULL, inWr = NULL, outRd = NULL, outWr = NULL, errRd = NULL, errWr = NULL;
+	SECURITY_ATTRIBUTES sa;
+	sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+	sa.bInheritHandle = TRUE;
+	sa.lpSecurityDescriptor = NULL;
+	int failed = 0;
+	DWORD nowait = PIPE_NOWAIT;
+	PROCESS_INFORMATION pi;
+	ZeroMemory(&pi, sizeof(pi));
+
+	AcquireSRWLockExclusive(&_msSpawnCreateLock);
+	if (!CreatePipe(&inRd, &inWr, &sa, 64 * 1024) || !SetHandleInformation(inWr, HANDLE_FLAG_INHERIT, 0)) failed = EMFILE;
+	if (!failed && (!CreatePipe(&outRd, &outWr, &sa, 64 * 1024) || !SetHandleInformation(outRd, HANDLE_FLAG_INHERIT, 0))) failed = EMFILE;
+	if (!failed && !mergeStderr && (!CreatePipe(&errRd, &errWr, &sa, 64 * 1024) || !SetHandleInformation(errRd, HANDLE_FLAG_INHERIT, 0))) failed = EMFILE;
+	if (!failed && !SetNamedPipeHandleState(inWr, &nowait, NULL, NULL)) failed = EIO;
+	if (!failed) {
+		STARTUPINFOW si;
+		ZeroMemory(&si, sizeof(si));
+		si.cb = sizeof(si);
+		si.dwFlags = STARTF_USESTDHANDLES;
+		si.hStdInput = inRd;
+		si.hStdOutput = outWr;
+		si.hStdError = mergeStderr ? outWr : errWr;
+		if (!CreateProcessW(NULL, wcmd, NULL, NULL, TRUE, 0, NULL, wcwd, &si, &pi)) {
+			DWORD e = GetLastError();
+			failed = _msWinStartErrno(e, path);
+			if (failed == 0) failed = EINVAL;
+		}
+	}
+	_msProcChildCloseHandle(&inRd);
+	_msProcChildCloseHandle(&outWr);
+	_msProcChildCloseHandle(&errWr);
+	ReleaseSRWLockExclusive(&_msSpawnCreateLock);
+	free(wcmd);
+	free(wcwd);
+	if (failed) {
+		_msProcChildCloseHandle(&inWr);
+		_msProcChildCloseHandle(&outRd);
+		_msProcChildCloseHandle(&errRd);
+		free(c);
+		return -(int64_t)failed;
+	}
+	CloseHandle(pi.hThread);
+	c->pid = pi.dwProcessId;
+	c->proc = pi.hProcess;
+	c->in = inWr;
+	c->out.h = outRd;
+	c->err.h = errRd;
+	return (int64_t)(intptr_t)c;
+}
+
+static inline int32_t msProcChildPid(int64_t h) { return (int32_t)_msProcChildOf(h)->pid; }
+static inline int32_t msProcChildErrno(int64_t h) { return (int32_t)_msProcChildOf(h)->lastErrno; }
+static inline int64_t msProcChildWritten(int64_t h) { return _msProcChildOf(h)->written; }
+
+/* Sends every byte of `data` (its length, not a NUL-terminated view) or reports how far it got. */
+static inline int32_t msProcChildWrite(int64_t h, msString data, int64_t timeoutMs) {
+	msProcChild* c = _msProcChildOf(h);
+	c->written = 0;
+	if (c->closed || c->in == NULL) return MS_PROC_CHILD_PIPE_CLOSED;
+	const char* bytes = data.len > 0 ? data.p->data : "";
+	size_t len = (size_t)data.len;
+	size_t done = 0;
+	double deadline = _msProcChildNowMs() + (double)timeoutMs;
+	c->lastErrno = 0;
+	do {
+		_msProcChildPump(c, bytes, len, &done, _msProcChildRemainingMs(deadline));
+		c->written = (int64_t)done;
+		if (c->lastErrno == EPIPE) return MS_PROC_CHILD_PIPE_CLOSED;
+		if (c->lastErrno != 0) return MS_PROC_CHILD_ERROR;
+		if (done == len) return MS_PROC_CHILD_OK;
+	} while (_msProcChildNowMs() < deadline);
+	return MS_PROC_CHILD_TIMEOUT;
+}
+
+static inline void msProcChildCloseStdin(int64_t h) {
+	_msProcChildCloseHandle(&_msProcChildOf(h)->in);
+}
+
+/* OK when the stream buffer holds at least one byte (take it with msProcChildTake),
+ * ENDED at EOF with nothing buffered, OVERFLOW once after the buffer filled. */
+static inline int32_t msProcChildRead(int64_t h, int32_t stream, int64_t timeoutMs) {
+	msProcChild* c = _msProcChildOf(h);
+	if (c->closed) return MS_PROC_CHILD_PIPE_CLOSED;
+	msProcChildStream* s = stream == 0 ? &c->out : &c->err;
+	double deadline = _msProcChildNowMs() + (double)timeoutMs;
+	c->lastErrno = 0;
+	for (int polled = 0; ; polled = 1) {
+		if (s->overflow) {
+			s->overflow = 0;
+			return MS_PROC_CHILD_OVERFLOW;
+		}
+		if (s->len > 0) return MS_PROC_CHILD_OK;
+		if (c->lastErrno != 0) return MS_PROC_CHILD_ERROR;
+		if (s->h == NULL) return MS_PROC_CHILD_ENDED;
+		if (polled && _msProcChildNowMs() >= deadline) return MS_PROC_CHILD_TIMEOUT;
+		_msProcChildPump(c, NULL, 0, NULL, _msProcChildRemainingMs(deadline));
+	}
+}
+
+static inline msString msProcChildTake(int64_t h, int32_t stream) {
+	msProcChild* c = _msProcChildOf(h);
+	msProcChildStream* s = stream == 0 ? &c->out : &c->err;
+	if (s->len == 0) return MS_EMPTY_STRING;
+	msString taken = msStringNew(s->data, (int64_t)s->len);
+	s->len = 0;
+	return taken;
+}
+
+/* A kill we sent reads as POSIX SIGKILL: exit 0, signal 9. */
+static inline void _msProcChildRecordStatus(msProcChild* c, int killed) {
+	DWORD code = 0;
+	GetExitCodeProcess(c->proc, &code);
+	c->reaped = 1;
+	c->exitCode = killed ? 0 : (int32_t)code;
+	c->signal = killed ? 9 : 0;
+}
+
+/* The deadline leaves the child running; the pump runs between process polls. */
+static inline int32_t msProcChildWait(int64_t h, int64_t timeoutMs) {
+	msProcChild* c = _msProcChildOf(h);
+	double deadline = _msProcChildNowMs() + (double)timeoutMs;
+	int delayMs = 1;
+	while (!c->reaped) {
+		DWORD got = WaitForSingleObject(c->proc, 0);
+		if (got == WAIT_OBJECT_0) {
+			_msProcChildRecordStatus(c, 0);
+			break;
+		}
+		if (got != WAIT_TIMEOUT) {
+			c->lastErrno = EIO;
+			return MS_PROC_CHILD_ERROR;
+		}
+		if (_msProcChildPump(c, NULL, 0, NULL, 0)) continue;
+		int left = _msProcChildRemainingMs(deadline);
+		if (left == 0) return MS_PROC_CHILD_TIMEOUT;
+		WaitForSingleObject(c->proc, (DWORD)(delayMs < left ? delayMs : left));
+		delayMs = delayMs * 2 < 8 ? delayMs * 2 : 8;
+	}
+	return MS_PROC_CHILD_OK;
+}
+
+/* TerminateProcess, then a blocking wait. A child that exited first keeps its own status. */
+static inline int32_t msProcChildKill(int64_t h) {
+	msProcChild* c = _msProcChildOf(h);
+	if (c->reaped) return MS_PROC_CHILD_OK;
+	int alreadyGone = WaitForSingleObject(c->proc, 0) == WAIT_OBJECT_0;
+	if (!alreadyGone) TerminateProcess(c->proc, 1);
+	if (WaitForSingleObject(c->proc, INFINITE) != WAIT_OBJECT_0) {
+		c->lastErrno = EIO;
+		return MS_PROC_CHILD_ERROR;
+	}
+	_msProcChildRecordStatus(c, !alreadyGone);
+	return MS_PROC_CHILD_OK;
+}
+
+static inline int32_t msProcChildExitCode(int64_t h) { return _msProcChildOf(h)->exitCode; }
+static inline int32_t msProcChildSignal(int64_t h) { return _msProcChildOf(h)->signal; }
+
+/* Idempotent: kills and reaps a child still running, closes every pipe, drops the buffers.
+ * The exit status stays readable until msProcChildFree. */
+static inline void msProcChildClose(int64_t h) {
+	msProcChild* c = _msProcChildOf(h);
+	if (c->closed) return;
+	msProcChildKill(h);
+	_msProcChildCloseHandle(&c->in);
+	_msProcChildCloseHandle(&c->out.h);
+	_msProcChildCloseHandle(&c->err.h);
+	_msProcChildCloseHandle(&c->proc);
+	free(c->out.data);
+	free(c->err.data);
+	c->out.data = NULL; c->out.len = 0; c->out.cap = 0;
+	c->err.data = NULL; c->err.len = 0; c->err.cap = 0;
+	c->closed = 1;
+}
+
+static inline void msProcChildFree(int64_t h) {
+	msProcChildClose(h);
+	free(_msProcChildOf(h));
+}
+#elif !MS_NO_SPAWN
 typedef struct {
 	int fd;
 	char* data;
@@ -1667,6 +2046,18 @@ static inline msString msProcessPlatform(void) {
 	return msStringFromCStr("linux");
 #else
 	return msStringFromCStr("other");
+#endif
+}
+
+/**
+ * Handles this process holds open on Windows, or -1 when the system cannot say; 0 elsewhere.
+ */
+static inline int32_t msProcessHandleCount(void) {
+#if defined(_WIN32)
+	DWORD n = 0;
+	return GetProcessHandleCount(GetCurrentProcess(), &n) ? (int32_t)n : -1;
+#else
+	return 0;
 #endif
 }
 
