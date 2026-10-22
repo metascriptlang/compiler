@@ -2292,6 +2292,28 @@ function instanceBeingBuilt(gi: Type): Type | null {
 	return null;
 }
 
+// Past this many bodies built inside one outermost build, an instance met again at the same spot of a
+// declaration reuses the one last made there, so arguments that grow on every level (P<T> holding
+// Q<T[]> holding P<T>) stop expanding.
+const INSTANCE_BUILD_LIMIT = 100;
+let _sessionBuilds = 0;
+const _sessionSpots: Type[] = [];
+const _sessionInstances: Type[] = [];
+
+function noteSessionInstance(spot: Type, gi: Type): void {
+	if (_instancesBuilding.length == 0) return;
+	_sessionSpots.push(spot);
+	_sessionInstances.push(gi);
+}
+
+function reusedPastLimit(spot: Type): Type | null {
+	if (_sessionBuilds <= INSTANCE_BUILD_LIMIT) return null;
+	for (let i = _sessionSpots.length - 1; i >= 0; i -= 1) {
+		if (_sessionSpots[i] == spot) return _sessionInstances[i];
+	}
+	return null;
+}
+
 function pendingBody(gi: Readonly<Type>, declaredParams: string): boolean {
 	if (gi.kind != TypeKind.GenericInstance || gi.typeReturn != null || declaredParams == "") return false;
 	const baseType = gi.typeExtra;
@@ -2321,9 +2343,19 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 		pi = pi + 1;
 	}
 	const tracked = !_queryCachesReadOnly;
-	if (tracked) _instancesBuilding.push(gi);
+	if (tracked) {
+		_instancesBuilding.push(gi);
+		_sessionBuilds = _sessionBuilds + 1;
+	}
 	const body = substituteParams(innerBase, declaredParamsOf(gi, names.length), args);
-	if (tracked) _instancesBuilding.pop();
+	if (tracked) {
+		_instancesBuilding.pop();
+		if (_instancesBuilding.length == 0) {
+			_sessionBuilds = 0;
+			_sessionSpots.length = 0;
+			_sessionInstances.length = 0;
+		}
+	}
 	if (body == innerBase && bodyWouldShareTheDeclaration(innerBase, names, args)) return;
 	if (body != innerBase && body.kind == TypeKind.Union && isUnionAlias(innerBase)) body.typeInst = gi;
 	// Re-wrap in Ref if the base was Ref<Struct>
@@ -4385,11 +4417,15 @@ function substituteAllParamsWalk(t: Type, params: Type[], concretes: Type[], act
 			TypeKind.Struct => substituteStructAll(t, params, concretes, active),
 			TypeKind.GenericInstance => {
 				// typeExtra intentionally NOT walked (walking it cost ~20× compile time).
+				const reused = reusedPastLimit(t);
+				if (reused != null) return reused;
 				const gi = copyTypeForSubst(t);
+				noteSessionInstance(t, gi);
 				substituteChildrenInPlaceAll(gi, params, concretes, active);
 				const building = instanceBeingBuilt(gi);
 				if (building != null) return building;
 				if (gi.typeReturn != null && typeVisitHas(active, gi.typeReturn)) {
+					if (_queryCachesReadOnly) throw new Error(`internal: generic instance '${typeDisplayName(gi)}' would reach emission without its body`);
 					gi.typeReturn = null as unknown as Type;
 					instantiateGenericBody(gi, genericParamsOf(gi));
 				} else if (gi.typeReturn != null) {
@@ -4399,6 +4435,8 @@ function substituteAllParamsWalk(t: Type, params: Type[], concretes: Type[], act
 					_substitutingFrom.pop();
 					_substitutingTo.pop();
 					nameInstanceBody(gi, t);
+				} else if (!_queryCachesReadOnly) {
+					instantiateGenericBody(gi, genericParamsOf(gi));
 				}
 				return gi;
 			},
