@@ -59,8 +59,8 @@ export function readFirst(t: Readonly<Node>): int32 {
 	assert fault == "", fault;
 }
 
-test "the mutable signature of a Readonly overload pair still borrows" {
-	const fault = rcFault(`
+test "the mutable signature of a Readonly overload pair yields the path its body returns" {
+	const result = compileToC(`
 class Node { kids: Node[] = []; n: int32 = 0; }
 function first(t: Node): Node | null;
 function first(t: Readonly<Node>): Readonly<Node> | null;
@@ -72,8 +72,14 @@ export function writeFirst(t: Node): void {
 	const m = first(t);
 	if (m != null) m.n = 8;
 }
-`, ["first", "writeFirst"]);
-	assert fault == "", fault;
+export function writePath(t: Node): void {
+	const m = t.kids[0];
+	m.n = 8;
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	assert rcOps(functionBody(result.value, "first")) == 0, functionBody(result.value, "first");
+	assert rcOps(functionBody(result.value, "writeFirst")) == rcOps(functionBody(result.value, "writePath")), functionBody(result.value, "writeFirst");
 }
 
 test "a Readonly result read as a temporary takes no rc op" {
