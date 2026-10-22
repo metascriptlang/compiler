@@ -617,13 +617,17 @@ function checkMacroDeps(db: TransAmDb, filePath: string, imports: ImportEntry[])
 
 function bindUncheckedModule(db: TransAmDb, modulePath: string): void {
 	if (boundInputsUnchanged(db, modulePath) || dbCheckIsCurrent(db, modulePath)) return;
-	const held = lookupModuleCtx(modulePath);
-	if (held != null && held.exportRegistry != db.exportRegistry || sharedPreludeOwns(db.preludeCtx, modulePath)) return;
+	if (checkedElsewhere(db, modulePath)) return;
 	const outerDb = _checkingDb;
 	_checkingDb = db;
 	const ctx = dbBoundModule(modulePath);
 	_checkingDb = outerDb;
 	if (ctx != null) registerModuleCtx(modulePath, ctx);
+}
+
+function checkedElsewhere(db: TransAmDb, modulePath: string): boolean {
+	const held = lookupModuleCtx(modulePath);
+	return held != null && held.exportRegistry != db.exportRegistry || sharedPreludeOwns(db.preludeCtx, modulePath);
 }
 
 function importsMacro(db: TransAmDb, filePath: string, imports: ImportEntry[]): boolean {
@@ -776,11 +780,12 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		const depParseEntry = cacheGet(db.cache, depParseKey);
 		const depParseHash = depParseEntry != null ? depParseEntry.outputHash : 0;
 		recordDependency(db.depStack, depParseKey, depParseHash);
+		inputHashes.push(depParseHash);
+		if (checkedElsewhere(db, getFilePath(db.fileInput, depId))) continue;
 		const depCheckKey = createQueryKey(TaQueryKind.TypeCheck, depId);
 		const depCheckEntry = cacheGet(db.cache, depCheckKey);
 		const depCheckHash = depCheckEntry != null ? depCheckEntry.outputHash : 0;
 		recordDependency(db.depStack, depCheckKey, depCheckHash);
-		inputHashes.push(depParseHash);
 		inputHashes.push(depCheckHash);
 	}
 
