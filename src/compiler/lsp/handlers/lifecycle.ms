@@ -1297,6 +1297,39 @@ test "re-checking a body edit recomputes only the edited file's parse and check"
 	assert db.cache.bound - bound == 1 && db.cache.collected - collected == 0, bindWork(db);
 }
 
+// util.ms is checked by another db, as the prelude db checks a build.ms global import;
+// mid.ms imports it, and an edit elsewhere must leave mid.ms and its importer verified.
+function heldImportDb(): TransAmDb {
+	const util = "export function ut(x: number): number { return x; }";
+	const other = createTransAmDb(100);
+	dbSetFileText(other, "/held/util.ms", util);
+	dbTypeCheck(other, "/held/util.ms");
+	const db = testDb("file:///held/main.ms", "const z = 1;");
+	dbSetFileText(db, "/held/util.ms", util);
+	dbSetFileText(db, "/held/mid.ms", "import { ut } from \"./util\";\nexport const y = ut(1);");
+	dbSetFileText(db, "/held/top.ms", "import { y } from \"./mid\";\nconst w = y;");
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, "/held/mid.ms"), getFileId(db.fileInput, "/held/util.ms"));
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, "/held/top.ms"), getFileId(db.fileInput, "/held/mid.ms"));
+	return db;
+}
+
+test "an edit elsewhere leaves verified a module whose import another db checked" {
+	const db = heldImportDb();
+	assert checkedType(db, "/held/mid.ms", "y") == "number";
+	assert dbSetFileText(db, "/held/main.ms", "const z = 2;");
+	const before = recomputeCount(db);
+	assert dbCheckIsCurrent(db, "/held/mid.ms");
+	assert recomputeCount(db) == before;
+}
+
+test "an edit elsewhere leaves verified the importer of a module whose import another db checked" {
+	const db = heldImportDb();
+	assert checkedType(db, "/held/mid.ms", "y") == "number";
+	assert checkedType(db, "/held/top.ms", "w") == "number";
+	assert dbSetFileText(db, "/held/main.ms", "const z = 2;");
+	assert dbCheckIsCurrent(db, "/held/top.ms");
+}
+
 test "re-checking after an edit two imports down rebinds the unchanged import between" {
 	const path = "/chain/test.ms";
 	const db = testDb(`file://${path}`, "import { bump } from \"./dep\";\nconst y = bump(1);");
