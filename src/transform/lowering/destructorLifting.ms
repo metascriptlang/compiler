@@ -721,7 +721,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			const elem = fieldType.typeReturn;
 			if (elem != null && sizedArrayNeedsHooks(fieldType, lctx, loc)) {
 				ensureSizedArrayHooks(fieldType, lctx, loc);
-				if (hook != "trace" || isCyclicType(elem, lctx, visited)) {
+				if (hook != "trace" || traceReachesCycle(elem, lctx.cyclicCache, lctx.nonCyclicCache)) {
 					genElementLoop(hook, elem, makeNumber(fieldType.typeValue as number, loc), xf, yf, lctx, buf, loc);
 				}
 			} else {
@@ -736,8 +736,8 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				? fieldType.typeName
 				: (fieldType.typeNames.length > 0 ? anonTypeName(fieldType) : "");
 			if (resolvedName != "") {
-				// Reference parity: trace only emits for cyclic field types (defaultOp is no-op for trace)
-				if (hook != "trace" || isCyclicType(fieldType, lctx, visited)) {
+				// A value field is traced inline whenever its own trace reaches a cell (defaultOp is a no-op for trace)
+				if (hook != "trace" || traceReachesCycle(fieldType, lctx.cyclicCache, lctx.nonCyclicCache)) {
 					ensureHooks(resolvedName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					if (namedTypeHasHooks(fieldType, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
@@ -800,7 +800,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 			const unwrapped = unwrapGenericInstance(fieldType);
 			if (unwrapped.mangledName != "") {
-				if (hook != "trace" || isCyclicType(unwrapped.body, lctx, visited)) {
+				if (hook != "trace" || traceReachesCycle(fieldType, lctx.cyclicCache, lctx.nonCyclicCache)) {
 					ensureHooks(unwrapped.mangledName, unwrapped.body, null as unknown as Type, fieldType, false, lctx, loc);
 					if (namedTypeHasHooks(unwrapped.body, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
@@ -829,7 +829,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			if (isStringLike(fieldType)) {
 				stringOp(hook, xf, yf, fieldName, empties, buf, loc);
 			} else if (fieldType.typeName != "") {
-				if (hook != "trace" || isCyclicType(fieldType, lctx, visited)) {
+				if (hook != "trace" || traceReachesCycle(fieldType, lctx.cyclicCache, lctx.nonCyclicCache)) {
 					ensureHooks(fieldType.typeName, fieldType, null as unknown as Type, fieldType, false, lctx, loc);
 					if (namedTypeHasHooks(fieldType, lctx)) {
 						namedObjOp(hook, fieldType, xf, yf, lctx, buf, loc);
