@@ -24,7 +24,7 @@ import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/strin
 import { ensureCrossModuleProto, copiesInline } from "./forward";
 import { useHeader, createCGen, createProc, sec, CSection, readProcStmts, raiseTarget } from "./context";
 import { inferredCallRaises } from "../../checker/raises";
-import { GcMode, dispatchOverridesFor, dispatchEntryFor, CheckerContext } from "../../checker/context";
+import { GcMode, CheckerContext } from "../../checker/context";
 import { monoBaseName } from "../../monomorphize/registry";
 import { isRuntimeProcSym } from "../../transform/util";
 
@@ -1130,15 +1130,12 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			}
 			let emitted = calleeName;
 			if (g.checkerCtx != null && g.checkerCtx.gcMode != GcMode.Manual && !node.flags.has(NodeFlag.NoDispatch)) {
-				const de = dispatchEntryFor(idSym);
-				if (de != null && !de.overloaded) {
-					const ovs = dispatchOverridesFor(de.classSym, de.methodName);
-					if (ovs.length > 0) {
-						const ovSyms: Symbol[] = [];
-						for (const oe of ovs) { ovSyms.push(oe.sym); }
-						const dn = ensureMethodDispatcher(g, idSym, calleeName, ovSyms);
-						if (dn != "") emitted = dn;
-					}
+				const dispatched = g.emissionFacts.dispatchOverrides;
+				if (dispatched == null) throw new Error(`internal: '${idSym.name}' is emitted before the dispatch table reached emission`);
+				const ovSyms = dispatched.readonlyGet(idSym);
+				if (ovSyms != null) {
+					const dn = ensureMethodDispatcher(g, idSym, calleeName, ovSyms);
+					if (dn != "") emitted = dn;
 				}
 			}
 			ctx.results.push(emitted);
@@ -3089,7 +3086,7 @@ export function genExprAssign(g: CGen, p: CProc, node: Node, destSnippet: string
 // if-chain, most-derived-first, falling through to the base implementation.
 // C emission is whole-program-fresh every build, so the chain always reflects
 // the complete override set even across modules.
-function ensureMethodDispatcher(g: CGen, baseSym: Readonly<Symbol>, calleeName: string, overrides: Symbol[]): string {
+function ensureMethodDispatcher(g: CGen, baseSym: Readonly<Symbol>, calleeName: string, overrides: Readonly<Symbol[]>): string {
 	const ft = baseSym.symbolType;
 	if (ft == null || ft.kind != TypeKind.Function || ft.typeChildren.length == 0) return "";
 	const dispName = "msDisp_" + calleeName;

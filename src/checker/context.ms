@@ -899,9 +899,33 @@ export function dispatchOverriddenEntry(classSym: Symbol, methodName: string): D
 }
 
 export function dispatchOverridesFor(classSym: Symbol, methodName: string): DispMethodEntry[] {
+	return overridesAmong(_dispEntries, classSym, methodName);
+}
+
+// Every dispatched method with the overrides its dispatcher tries, deepest first, read once before emission.
+export function dispatchOverrideTable(): HashMap<Symbol, Symbol[]> {
+	const byName = new HashMap<string, DispMethodEntry[]>();
+	for (const e of _dispEntries) {
+		const named = byName.get(e.methodName);
+		if (named != null) named.push(e);
+		else byName.set(e.methodName, [e]);
+	}
+	const table = new HashMap<Symbol, Symbol[]>();
+	_dispBySym.forEach((e: DispMethodEntry, sym: Symbol): void => {
+		if (e.overloaded) return;
+		const overrides = overridesAmong(byName.get(e.methodName)!, e.classSym, e.methodName);
+		if (overrides.length == 0) return;
+		const syms: Symbol[] = [];
+		for (const o of overrides) syms.push(o.sym);
+		table.set(sym, syms);
+	});
+	return table;
+}
+
+function overridesAmong(entries: DispMethodEntry[], classSym: Symbol, methodName: string): DispMethodEntry[] {
 	const ents: DispMethodEntry[] = [];
 	const depths: int32[] = [];
-	for (const e of _dispEntries) {
+	for (const e of entries) {
 		if (e.methodName != methodName) continue;
 		const dd = dispDepthBelow(e.classSym, classSym);
 		if (dd < 0) continue;

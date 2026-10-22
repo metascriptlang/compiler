@@ -11,7 +11,7 @@ import { Node, NodeKind, ProgramData, SymbolKind, TypeKind, VariableDeclData, Ob
 import { getProperty, createFunction, voidType, createStruct, createPrimitive } from "../../checker/types";
 import { forEachChild } from "../../ast/visitor";
 import { markErrorBlindFinallies } from "../../checker/raises";
-import { CheckerContext, CheckerError, GcMode, findExportedSymbol, createContext } from "../../checker/context";
+import { CheckerContext, CheckerError, GcMode, findExportedSymbol, createContext, dispatchOverrideTable } from "../../checker/context";
 import {
 	CGen, CSection, AliveSet, CEmissionFacts, TypeInfoKind, Builder,
 	createCGen, createAliveSet, createBuilder, sec, add, addLine, addNewline, assembleOutput, extract, nameSetAdd, undefPlatformMacros,
@@ -91,6 +91,7 @@ export function replayCModuleEmission(aliveSet: AliveSet, facts: CEmissionFacts,
 }
 
 function bindRegistryFacts(facts: CEmissionFacts): void {
+	if (facts.dispatchOverrides == null) facts.dispatchOverrides = dispatchOverrideTable();
 	if (facts.hookOps == null) facts.hookOps = hookOps();
 	if (facts.placedInstances == null) facts.placedInstances = placedInstances();
 }

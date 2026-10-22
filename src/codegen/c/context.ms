@@ -658,6 +658,7 @@ export class CEmissionFacts {
 	hcrTypeInfoOwners: HashMap<string, string> = new HashMap<string, string>();
 	trace: string = "";
 	writes: string[] | null = null;
+	dispatchOverrides: HashMap<Symbol, Symbol[]> | null = null;
 	hookOps: HashMap<string, Symbol> | null = null;
 	placedInstances: HashMap<Symbol, Symbol> | null = null;
 }
