@@ -125,3 +125,18 @@ const g = nav.navigate("Detail", { id: "a", tab: null, method: 1 });
 	assert text.contains("'selected' does not exist in type"), "the selected tuple must refuse the excess property: " + text;
 	assert text.contains("'method' does not exist in type"), "the method's selected tuple must refuse the excess property: " + text;
 }
+
+test "a method's written tuple rest bounds the argument count as a function's does" {
+	const text = checkOnly(`
+class Box {
+	opt(...args: [name: string, n?: int32]): string { return args[0]; }
+}
+const box = new Box();
+const e = box.opt();
+const f = box.opt("a", 1, 2);
+const g = box.opt("a");
+`).errors.join("\n");
+	assert text.contains("Too few arguments: expected at least 1, got 0"), "box.opt() must be refused: " + text;
+	assert text.contains("Too many arguments: expected at most 2, got 3"), "box.opt(a, 1, 2) must be refused: " + text;
+	assert !text.contains("got 1"), "box.opt(a) must check: " + text;
+}
