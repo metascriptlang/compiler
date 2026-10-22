@@ -4776,11 +4776,12 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		argTypes[ai] = args[ai].nodeType!;
 	}
 	const ovDefaultOffset: int32 = (idx >= 0 && idx < exts.length && exts[idx].isStatic) ? 0 : 1;
+	const defaultsOwner = extWinnerSym != null && hasFlag(extWinnerSym, SymbolFlag.OverloadSig) && declaredDefaults(extWinnerSym) == null ? callNode.resolvedSym : extWinnerSym;
 	const ovSpread = spreadAt >= 0 && winnerType.kind == TypeKind.Function
-		? takeOptionalSpread(ctx, args, argTypes, calleeDefaults(callNode, null, ovDefaultOffset), winnerType.typeChildren, spreadAt)
+		? takeOptionalSpread(ctx, args, argTypes, calleeDefaults(callNode, defaultsOwner, ovDefaultOffset), winnerType.typeChildren, spreadAt)
 		: { spread: null, at: -1, taken: false } as SpreadTake;
 	if (winnerType.kind == TypeKind.Function && argTypes.length < winnerType.typeChildren.length) {
-		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset);
+		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset, defaultsOwner);
 	}
 	if (winnerType.kind == TypeKind.Function) fillTakenSpread(ctx, args, argTypes, ovSpread, winnerType.typeChildren);
 	if (winnerType.kind == TypeKind.Function) {
