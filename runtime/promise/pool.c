@@ -195,6 +195,7 @@ static void* msPoolWorkerLoop(void* arg) {
 	if (msPoolSchedIdSetterFn != NULL) msPoolSchedIdSetterFn(mySchedID);
 
 	extern int msWorkerTimerDelayMs(void);
+	extern bool msWorkerLoopPending(void);
 	while (1) {
 		int timerMs = msWorkerTimerDelayMs();
 		MS_LOCK(pool);
@@ -203,6 +204,7 @@ static void* msPoolWorkerLoop(void* arg) {
 		 * msPoolWakeWorker signals while we're still running (signal lost). */
 		if (pool->head == pool->tail &&
 			!atomic_load_explicit(&msPoolActorWake[myWorkerIdx], memory_order_acquire) &&
+			!msWorkerLoopPending() &&
 			!pool->shutdown) {
 			atomic_fetch_or_explicit(&pool->idleMask, (uint64_t)1 << myWorkerIdx, memory_order_release);
 			if (timerMs >= 0) MS_WAIT_MS(pool->workerConds[myWorkerIdx], pool, timerMs);

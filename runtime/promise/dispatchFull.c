@@ -421,6 +421,7 @@ bool msCompletionQueueDrain(void) {
 bool msCompletionQueueDrainAll(void) { return msCompletionQueueDrain(); }
 void* msLoopCompletionQueue(void) { return NULL; }
 bool msWorkerLoopPump(void) { return false; }
+bool msWorkerLoopPending(void) { return false; }
 int msWorkerTimerDelayMs(void) { return -1; }
 static msTimerHeap* msThreadTimers(void) { return &gTimers; }
 
@@ -641,6 +642,13 @@ bool msCompletionQueueDrain(void) {
     msEnsureWakePipe();
     if (msIsPoolWorker) return tlWorkerChannel != NULL && msChannelDrain(tlWorkerChannel);
     return msChannelDrain(&gMainChannel);
+}
+
+/* A push into the thread's own channel sends no wake (msChannelWake), so a worker
+ * reads its channel before it parks. */
+bool msWorkerLoopPending(void) {
+    return tlWorkerChannel != NULL
+        && atomic_load_explicit(&tlWorkerChannel->queue.tail->next, memory_order_acquire) != NULL;
 }
 
 bool msWorkerLoopPump(void) {
