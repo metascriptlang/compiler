@@ -238,6 +238,18 @@ function _stdFsRealpath(args: RaiserValue[]): RaiserValue {
 	return boxString(realpath(unboxString(args[0])));
 }
 
+function _stdFsFileSize(args: RaiserValue[]): RaiserValue {
+	return boxInt(fileSize(unboxString(args[0])));
+}
+
+function _stdFsModifiedTime(args: RaiserValue[]): RaiserValue {
+	return boxInt(modifiedTime(unboxString(args[0])));
+}
+
+function _stdFsChangeStamp(args: RaiserValue[]): RaiserValue {
+	return boxString(changeStamp(unboxString(args[0])));
+}
+
 // --- File system bridges ---
 
 function _bridgeMsFsExists(args: RaiserValue[]): RaiserValue {
@@ -1231,6 +1243,9 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("std/fs.isDir",       _stdFsIsDir, HostCapability.FileRead);
 	registerHostFn("std/fs.isExecutable", _stdFsIsExecutable, HostCapability.FileRead);
 	registerHostFn("std/fs.realpath",    _stdFsRealpath, HostCapability.FileRead);
+	registerHostFn("std/fs.fileSize",    _stdFsFileSize, HostCapability.FileRead);
+	registerHostFn("std/fs.modifiedTime", _stdFsModifiedTime, HostCapability.FileRead);
+	registerHostFn("std/fs.changeStamp", _stdFsChangeStamp, HostCapability.FileRead);
 	registerHostFn("std/fs.writeFile",   _stdFsWriteFile);
 	registerHostFn("std/fs.appendFile",  _stdFsAppendFile);
 	registerHostFn("std/fs.writeLines",  _stdFsWriteLines);
