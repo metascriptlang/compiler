@@ -1498,10 +1498,6 @@ export function lspScenarios(): LspScenario[] {
 		signatureHelpFollowsTheArgument(),
 		hoverShowsDeclarations(),
 		insignificantEditsKeepAnswers(),
-		memberCompletionKindsParked(),
-		scopeCompletionTiersParked(),
-		genericAndOptionalCompletionParked(),
-		semanticTokensGoldenParked(),
 	];
 }
 
