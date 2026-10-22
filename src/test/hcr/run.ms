@@ -1355,6 +1355,18 @@ function functionValues(): void {
 	]);
 }
 
+function dollarNames(): void {
+	const tag = "hcrDollarNames";
+	const dir = buildLogicGenerations(tag, "dollarNames", ["logic.ms", "logicEdit.ms", "logicDollarLayout.ms", "logicLayout.ms"]);
+	runPrebuilt(tag, dir, ["logic", "support"], "HCR-DOLLAR", [
+		"HCR-DOLLAR g1: $step 1 step 1 boxes 1 1",
+		"HCR-DOLLAR g2: reloaded logic []",
+		"HCR-DOLLAR after g2: $step 2 step 2 direct 2 2",
+		"HCR-DOLLAR g3: restart required logic [the layout of type '$Box' in module 'logic' changed]",
+		"HCR-DOLLAR g4: restart required logic [the layout of type 'Box' in module 'logic' changed]",
+	]);
+}
+
 function inlineFunctions(): void {
 	const tag = "hcrInlineFunctions";
 	const dir = buildLogicGenerations(tag, "inlineFunctions", ["logic.ms", "logicEdit.ms"]);
@@ -1906,6 +1918,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrRegistryGeneric", run: registryGeneric },
 	{ name: "hcrModuleTdz", run: moduleTdz },
 	{ name: "hcrFunctionValues", run: functionValues },
+	{ name: "hcrDollarNames", run: dollarNames },
 	{ name: "hcrInlineFunctions", run: inlineFunctions },
 	{ name: "hcrFileDependency", run: fileDependency },
 	{ name: "hcrCoreCell", run: coreCell },
