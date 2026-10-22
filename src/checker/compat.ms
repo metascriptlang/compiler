@@ -447,7 +447,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 					&& (sameNominal(source.typeReturn, target.typeReturn) || isOwnGenericBase(source.typeReturn, target.typeReturn))) {
 					return true;
 				}
-				return isAssignable(source.typeReturn, target.typeReturn);
+				return isAssignable(source.typeReturn, isReadonlyView(target) ? createReadonlyView(target.typeReturn) : target.typeReturn);
 			},
 			TypeKind.Function => isFunctionAssignable(source, target),
 			TypeKind.Struct => isObjectAssignable(source, target),
@@ -482,7 +482,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		if (ancestor != null) return isAssignable(ancestor, target);
 		const sBody = structBodyOf(source);
 		const tBody = structBodyOf(target);
-		if (sBody != null && tBody != null) return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && objectLayoutFits(unwrapRefBase(sBody), unwrapRefBase(tBody));
+		if (sBody != null && tBody != null) return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && objectLayoutFits(unwrapRefBase(sBody), unwrapRefBase(tBody), isReadonlyView(target));
 	}
 
 	if (target.kind == TypeKind.GenericInstance && source.kind != TypeKind.GenericInstance && source.kind != TypeKind.Union) {
@@ -1097,10 +1097,62 @@ function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	if (source == target) return true;
 	if (source == null || target == null) return false;
 	if (sameNominal(source, target)) return true;
-	return objectLayoutFits(source, target);
+	return objectLayoutFits(source, target, isReadonlyView(target));
 }
 
-function objectLayoutFits(source: Type, target: Type): boolean {
+// A writable target field aliases the source's slot, so it must hold the same type
+// (a field read through the view may be widened only when nothing can write it back).
+function invariantFieldFits(sField: Type | null, tField: Type | null, readonlyTarget: boolean): boolean {
+	if (readonlyTarget || sField == null || tField == null || isOpenSlot(sField) || isOpenSlot(tField)) return true;
+	return slotWritesFit(sField, tField);
+}
+
+// A write of any value the target admits fits the source slot: strings, booleans, enum
+// members and numbers of one representation (fieldReprMismatch refuses the widths that
+// differ), and objects whose every field is such a slot.
+function isUnnamedShape(t: Type): boolean {
+	return t.typeName == "" || isAnonLiteralName(t.typeName);
+}
+
+function slotWritesFit(a: Type, b: Type): boolean {
+	if (sameType(a, b)) return true;
+	if (isStringRepr(a) && isStringRepr(b)) return true;
+	const aBool = a.kind == TypeKind.Boolean || a.kind == TypeKind.BooleanLiteral;
+	const bBool = b.kind == TypeKind.Boolean || b.kind == TypeKind.BooleanLiteral;
+	if (aBool && bBool) return true;
+	if ((isNumeric(a) || a.kind == TypeKind.NumberLiteral) && (isNumeric(b) || b.kind == TypeKind.NumberLiteral)) return true;
+	if ((a.kind == TypeKind.EnumLiteral || a.kind == TypeKind.Enum) && (b.kind == TypeKind.EnumLiteral || b.kind == TypeKind.Enum)) return true;
+	const sa = unwrapRefBase(a);
+	const sb = unwrapRefBase(b);
+	if (sa.kind != TypeKind.Struct || sb.kind != TypeKind.Struct || (a.kind == TypeKind.Ref) != (b.kind == TypeKind.Ref)) return false;
+	if (!isUnnamedShape(sa) || !isUnnamedShape(sb)) return false;
+	if (sb.typeNames.length > sa.typeNames.length || sa.typeChildren.length < sb.typeChildren.length) return false;
+	for (let i = 0; i < sb.typeNames.length; i += 1) {
+		if (sa.typeNames[i] != sb.typeNames[i] || !slotWritesFit(sa.typeChildren[i], sb.typeChildren[i])) return false;
+	}
+	return true;
+}
+
+// The first field a view would widen while it can still write it, or empty.
+function writableFieldHint(source: Type | null, target: Type | null): string {
+	if (source == null || target == null || isReadonlyView(target)) return "";
+	const s = unwrapRefBase(skipModifier(source) as Type);
+	const t = unwrapRefBase(skipModifier(objectShapeTarget(source, target)) as Type);
+	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct || t.typeNames.length > s.typeNames.length) return "";
+	for (let i = 0; i < t.typeNames.length; i += 1) {
+		if (s.typeNames[i] != t.typeNames[i]) return "";
+		if (i >= s.typeChildren.length || i >= t.typeChildren.length) return "";
+		if (!sameType(s.typeChildren[i], t.typeChildren[i]) && isAssignable(s.typeChildren[i], createReadonlyView(t.typeChildren[i]))) {
+			return " — field '" + t.typeNames[i] + "' is " + typeDisplayName(s.typeChildren[i]) + " here but " + typeDisplayName(t.typeChildren[i])
+				+ " in the target, and the target can write it back: declare the parameter "
+				+ typeDisplayName(createReadonlyView(target)) + " to only read it, or give the field its exact type "
+				+ typeDisplayName(s.typeChildren[i]);
+		}
+	}
+	return "";
+}
+
+function objectLayoutFits(source: Type, target: Type, readonlyTarget: boolean): boolean {
 	// Exact-field anon→named pairs are assignable; fitNode materializes the
 	// member-wise re-construction. Every other anon→named pair stays rejected:
 	// no lowering exists, so C emits two distinct types (clang error) while js
@@ -1129,6 +1181,7 @@ function objectLayoutFits(source: Type, target: Type): boolean {
 		if (sNames[idx] != targetProp) return false;
 		if (idx < sChildren.length && idx < tChildren.length) {
 			if (!isAssignable(sChildren[idx], tChildren[idx])) return false;
+			if (!invariantFieldFits(sChildren[idx], tChildren[idx], readonlyTarget)) return false;
 			// Shared fields whose union/numeric repr differs would reinterpret
 			// (mirror of the sameElementRepr gate on Array/Span/Ptr elements above).
 			if (fieldReprMismatch(sChildren[idx], tChildren[idx])) return false;
@@ -1251,6 +1304,8 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 		return " — a read-only view never converts back to the mutable type: declare the parameter "
 			+ typeDisplayName(createReadonlyView(target)) + ", or copy it with [...x]";
 	}
+	const writable = writableFieldHint(source, target);
+	if (writable != "") return writable;
 	const order = unionOrderHint(source, target);
 	if (order != "") return order;
 	const lineage = classLineageHint(skipModifier(source), skipModifier(objectShapeTarget(source, target)));
@@ -1465,7 +1520,7 @@ function differentGenericsFit(source: Type, target: Type): boolean {
 	const s = unwrapRefBase(sBody);
 	const t = unwrapRefBase(tBody);
 	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct) return isAssignable(sBody, tBody);
-	return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && objectLayoutFits(s, t);
+	return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && objectLayoutFits(s, t, isReadonlyView(target));
 }
 
 function sameEnumMember(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {

@@ -129,6 +129,7 @@ import "./slotRelation";
 import "./storageMutability";
 import "./tupleIndex";
 import "./unknownAdmission";
+import "./writableViewInvariant";
 import "./nullishUnionJoin";
 import "./genericAliasConsumers";
 import "./readonlyPtrView";
