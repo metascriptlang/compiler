@@ -663,6 +663,7 @@ export class CEmissionFacts {
 	moduleNameRoots: ModuleNameRoots | null = null;
 	hookOps: HashMap<string, Symbol> | null = null;
 	placedInstances: HashMap<Symbol, Symbol> | null = null;
+	headerIncludes: HashMap<string, string[]> | null = null;
 }
 
 function noteFactWrite(facts: CEmissionFacts, write: string): void {
@@ -897,7 +898,7 @@ export function emitIncludes(g: CGen): void {
 	for (const header of g.includes) {
 		let covered = false;
 		for (const other of g.includes) {
-			if (other != header && headerIncludes(other).includes(header) && !headerIncludes(header).includes(other)) covered = true;
+			if (other != header && headerIncludes(g.emissionFacts.headerIncludes!, other).includes(header) && !headerIncludes(g.emissionFacts.headerIncludes!, header).includes(other)) covered = true;
 		}
 		if (!covered) addLine(sec(g, CSection.Headers), `#include "${header}"`);
 	}

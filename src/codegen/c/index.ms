@@ -23,6 +23,7 @@ import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable } from "./test";
 import { emitIncludeDirectives, emitIncludes } from "./context";
 import { placedInstances } from "../../checker/instantiate";
+import { headerIncludeTable } from "../../module/cimport/emit";
 import { emitOwnedTypeInfos, refArrayCellName, arcCellName, typeInfoCName, defineDeferredElements, isHcrImageModule, objectTypeInfoKey, hookOps } from "./types";
 import { collectModuleTypeInfoDemands } from "../../checker/reachability";
 import { DynamicModulePlan } from "../../module/graph";
@@ -95,6 +96,7 @@ function bindRegistryFacts(facts: CEmissionFacts): void {
 	if (facts.moduleNameRoots == null) facts.moduleNameRoots = buildModuleNameRoots();
 	if (facts.hookOps == null) facts.hookOps = hookOps();
 	if (facts.placedInstances == null) facts.placedInstances = placedInstances();
+	if (facts.headerIncludes == null) facts.headerIncludes = headerIncludeTable();
 }
 
 function registerTypeInfoDemands(demands: AliveSet, facts: CEmissionFacts): void {
