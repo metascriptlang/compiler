@@ -4,13 +4,14 @@
 // run; borrowedArgsToCopy picks the arguments the caller must keep alive, and mayWrite tells
 // cursor inference which statements end a borrow.
 
-import { Node, NodeKind, Symbol, SymbolKind, SourceLocation, Type, TypeKind, makeLoc, BinaryExprData, CallExprData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, NewExprData, PropertyDeclData, ArrayAccessData, IdentifierData, ProgramData, ExportDeclData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, ObjectLiteralData, Symbol, SymbolKind, SourceLocation, Type, TypeKind, makeLoc, BinaryExprData, CallExprData, ClassDeclData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, MoveExprData, NewExprData, OutExprData, PropertyDeclData, ArrayAccessData, IdentifierData, ProgramData, ExportDeclData, ReturnStmtData, VariableDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, hasFlag, makeSymbol, parentClassSymOf } from "../checker/symbol";
 import { CheckerContext, LIFECYCLE_HOOK_NAMES, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "../checker/context";
 import { routineBody, receiverOf } from "../checker/effects";
 import { lookupInstanceHook, pickBodyCtx } from "../checker/instantiate";
 import { isMutatingArrayMethod } from "../checker/paramMutationAnalysis";
+import { containsPointer } from "../checker/varPartitions";
 import { skipConvDfa } from "./alias";
 import { RcInfo, noRcInfo } from "./classify";
 import { makeNumber, makeString } from "../checker/literalNodes";
@@ -39,6 +40,7 @@ class WriteSummary {
 	slots: string[];
 	slotSet: HashSet<string>;
 	refParamWrites: int32;
+	returnsFresh: boolean;
 	unknown: boolean;
 	edges: Edge[];
 	linked: HashSet<WriteSummary>;
@@ -129,7 +131,7 @@ export function clearWriteSummaries(): void {
 
 function newSummary(kind: SummaryKind, sym: Symbol | null, hooks: Symbol[]): WriteSummary {
 	return {
-		kind, sym, hooks, slots: [], slotSet: new HashSet<string>(), refParamWrites: 0, unknown: false,
+		kind, sym, hooks, slots: [], slotSet: new HashSet<string>(), refParamWrites: 0, returnsFresh: false, unknown: false,
 		edges: [], linked: new HashSet<WriteSummary>(), index: -1, low: -1, onStack: false, done: false,
 	};
 }
@@ -181,7 +183,7 @@ function paramIndex(params: Symbol[] | null, sym: Symbol): int32 {
 	return -1;
 }
 
-function writeTarget(s: WriteSummary, target: Node | null, params: Symbol[] | null, inCtor: boolean): boolean {
+function writeTarget(s: WriteSummary, target: Node | null, params: Symbol[] | null, inCtor: boolean, fresh: HashSet<Symbol> | null): boolean {
 	if (target == null) return false;
 	const t = skipConvDfa(target);
 	match (t.kind) {
@@ -191,22 +193,24 @@ function writeTarget(s: WriteSummary, target: Node | null, params: Symbol[] | nu
 			if (isModuleState(sym)) return addSlot(s, globalSlot(sym));
 			const k = paramIndex(params, sym);
 			if (sym.symbolType == null || sym.symbolType.kind != TypeKind.Var) return false;
-			if (k < 0 || k >= 31 || (s.refParamWrites & (1 << k)) != 0) return false;
+			if (k < 0) return false;
+			if (k >= 31) return markUnknown(s);
+			if ((s.refParamWrites & (1 << k)) != 0) return false;
 			s.refParamWrites = s.refParamWrites | (1 << k);
 			return true;
 		},
 		NodeKind.MemberExpr => {
 			const md = t.data as MemberExprData;
-			if (inCtor && isThis(md.object)) return false;
+			if ((inCtor && isThis(md.object)) || freshBase(md.object, fresh)) return false;
 			const field = addSlot(s, fieldSlot(md.property));
 			const elements = md.property == "length" && addSlot(s, ELEMENT_SLOT);
 			return field || elements;
 		},
-		NodeKind.ArrayAccess => { return addSlot(s, ELEMENT_SLOT); },
-		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { return writeTarget(s, (t.data as HiddenDerefData).expr, params, inCtor); },
+		NodeKind.ArrayAccess => { return !freshBase((t.data as ArrayAccessData).array, fresh) && addSlot(s, ELEMENT_SLOT); },
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { return writeTarget(s, (t.data as HiddenDerefData).expr, params, inCtor, fresh); },
 		_ => {
 			let changed = isGeneratedProc(t.resolvedSym) && addSlot(s, ELEMENT_SLOT);
-			forEachChild(t, (child: Node): void => { if (writeTarget(s, child, params, inCtor)) changed = true; });
+			forEachChild(t, (child: Node): void => { if (writeTarget(s, child, params, inCtor, fresh)) changed = true; });
 			return changed;
 		},
 	};
@@ -227,13 +231,9 @@ function passesFunctionValue(call: Node): boolean {
 	return false;
 }
 
-function takesFunctionValue(sym: Symbol): boolean {
+function hasKnownSignature(sym: Symbol): boolean {
 	const t = sym.symbolType;
-	if (t == null || t.kind != TypeKind.Function) return true;
-	for (const formal of t.typeChildren) {
-		if (mayBeFunctionValue(formal)) return true;
-	}
-	return false;
+	return t != null && t.kind == TypeKind.Function;
 }
 
 function isGeneratedProc(sym: Symbol | null): boolean {
@@ -244,25 +244,30 @@ function runsNativeOnC(sym: Symbol): boolean {
 	return hasFlag(sym, SymbolFlag.ImportC) || routineBody(routineDecl(sym)) == null;
 }
 
-function nativeEffect(s: WriteSummary, call: Node, sym: Symbol): void {
+function elementWrite(s: WriteSummary, base: Node, stores: Node[] | null): void {
+	if (stores != null) stores.push(base);
+	else addSlot(s, ELEMENT_SLOT);
+}
+
+function nativeEffect(s: WriteSummary, call: Node, sym: Symbol, stores: Node[] | null, argsLinked: boolean): void {
 	if (isGeneratedProc(sym)) {
-		if (passesFunctionValue(call)) markUnknown(s);
+		if (!argsLinked && passesFunctionValue(call)) markUnknown(s);
 		return;
 	}
 	const recv = receiverOf(call);
 	for (const a of (call.data as CallExprData).arguments) {
-		if (a != null && isArrayStorage(a.nodeType)) addSlot(s, ELEMENT_SLOT);
+		if (a != null && isArrayStorage(a.nodeType)) elementWrite(s, a, stores);
 	}
 	if (recv != null && !hasFlag(sym, SymbolFlag.ImportC)) {
 		const name = sym.name;
-		if (isMutatingArrayMethod(name) || name == "set" || name == "delete" || name == "clear" || name == "add") addSlot(s, ELEMENT_SLOT);
+		if (isMutatingArrayMethod(name) || name == "set" || name == "delete" || name == "clear" || name == "add") elementWrite(s, recv, stores);
 		return;
 	}
 	if (sym.symbolKind == SymbolKind.Method && !hasFlag(sym, SymbolFlag.NativeMethod)) {
 		markUnknown(s);
 		return;
 	}
-	if (takesFunctionValue(sym)) markUnknown(s);
+	if (!hasKnownSignature(sym) || (!argsLinked && passesFunctionValue(call))) markUnknown(s);
 }
 
 // A lifecycle op the analyzer inserted writes its first argument: the destination of a copy
@@ -287,7 +292,7 @@ function constructionsOf(n: Node): WriteSummary[] {
 	return out;
 }
 
-function calleesOf(call: Node, s: WriteSummary): WriteSummary[] {
+function calleesOf(call: Node, s: WriteSummary, stores: Node[] | null, own: OwnCalls | null): WriteSummary[] {
 	const sym = call.resolvedSym;
 	if (!isRoutineSym(sym)) {
 		const callee = (call.data as CallExprData).callee;
@@ -295,11 +300,15 @@ function calleesOf(call: Node, s: WriteSummary): WriteSummary[] {
 			const cls = sym != null && sym.symbolKind == SymbolKind.Class ? sym : null;
 			return cls != null ? [constructionSummary(cls)] : [];
 		}
+		if (own != null && sym != null && paramIndex(own.params, sym) >= 0) {
+			own.called.push(sym);
+			return [];
+		}
 		markUnknown(s);
 		return [];
 	}
 	const out: WriteSummary[] = [];
-	if (runsNativeOnC(sym!)) nativeEffect(s, call, sym!);
+	if (runsNativeOnC(sym!)) nativeEffect(s, call, sym!, stores, own != null);
 	else out.push(routineSummary(sym!));
 	const entry = dispatchEntryFor(sym!);
 	if (entry != null) {
@@ -371,8 +380,20 @@ function hookSummary(t: Type): WriteSummary | null {
 	return s;
 }
 
-function walkBody(s: WriteSummary, body: Node | null, params: Symbol[] | null, inCtor: boolean): void {
-	if (body == null) return;
+// A field or element write is resolved after the walk, once the callees' summaries say which
+// calls return a new object: a write into an object this call allocated frees nothing a
+// caller borrowed before the call.
+function walkBody(s: WriteSummary, body: Node | null, params: Symbol[] | null, inCtor: boolean): HashSet<Symbol> | null {
+	if (body == null) return null;
+	const targets: Node[] = [];
+	const stores: Node[] = [];
+	const fnArgs: Node[] = [];
+	const own: OwnCalls = { params, called: [] };
+	const passFunctions = (args: Node[]): void => {
+		for (const a of args) {
+			if (a != null && mayBeFunctionValue(a.nodeType)) fnArgs.push(a);
+		}
+	};
 	const step = (n: Node): void => {
 		if (isRoutineNode(n)) return;
 		if (n.nodeType != null) {
@@ -385,18 +406,25 @@ function walkBody(s: WriteSummary, body: Node | null, params: Symbol[] | null, i
 		match (n.kind) {
 			NodeKind.BinaryExpr => {
 				const bd = n.data as BinaryExprData;
-				if (isAssign(bd.operator)) writeTarget(s, bd.left, params, inCtor);
+				if (isAssign(bd.operator)) targets.push(bd.left);
 			},
 			NodeKind.CallExpr => {
 				const args = (n.data as CallExprData).arguments;
 				if (isLifecycleOp(n)) {
-					writeTarget(s, args[0], params, inCtor);
+					targets.push(args[0]);
 				} else {
-					addressWrites(s, args, params, inCtor);
-					for (const c of calleesOf(n, s)) link(s, n, c);
+					for (const a of args) {
+						if (a == null || a.kind != NodeKind.HiddenAddr) continue;
+						targets.push(a);
+						const inner = (a.data as HiddenDerefData).expr;
+						if (isArrayStorage(inner.nodeType)) stores.push(inner);
+					}
+					passFunctions(args);
+					for (const c of calleesOf(n, s, stores, own)) link(s, n, c);
 				}
 			},
 			NodeKind.NewExpr => {
+				passFunctions((n.data as NewExprData).newArguments);
 				for (const c of constructionsOf(n)) link(s, null, c);
 			},
 			_ => {},
@@ -404,12 +432,225 @@ function walkBody(s: WriteSummary, body: Node | null, params: Symbol[] | null, i
 		forEachChild(n, step);
 	};
 	step(body);
+	const d = localDefs(body);
+	const assigned = assignedParams(targets, params);
+	for (const p of own.called) {
+		if (assigned.has(p)) markUnknown(s);
+	}
+	for (const a of fnArgs) linkFunctionValue(s, a, params, assigned, d);
+	const fresh = freshLocals(s, d);
+	for (const t of targets) writeTarget(s, t, params, inCtor, fresh);
+	for (const b of stores) {
+		if (!freshBase(b, fresh)) addSlot(s, ELEMENT_SLOT);
+	}
+	return fresh;
+}
+
+class OwnCalls {
+	params: Symbol[] | null;
+	called: Symbol[];
+}
+
+function assignedParams(targets: Node[], params: Symbol[] | null): HashSet<Symbol> {
+	const out = new HashSet<Symbol>();
+	for (const t of targets) {
+		const b = baseLocal(t);
+		if (b.kind == NodeKind.Identifier && b.resolvedSym != null && paramIndex(params, b.resolvedSym!) >= 0) out.add(b.resolvedSym!);
+	}
+	return out;
+}
+
+function closureRoutine(n: Node): Node | null {
+	if (n.kind != NodeKind.ObjectLiteral || !n.flags.has(NodeFlag.Closure)) return null;
+	const od = n.data as ObjectLiteralData;
+	const k = od.keys.indexOf("fn");
+	return k >= 0 ? od.properties[k] : null;
+}
+
+function routinesOf(value: Node, params: Symbol[] | null, assigned: HashSet<Symbol> | null, d: LocalDefs | null, depth: int32, out: WriteSummary[]): boolean {
+	const t = skipConvDfa(value);
+	if (t.kind == NodeKind.NullLiteral) return true;
+	const fn = closureRoutine(t);
+	if (fn != null) return routinesOf(fn, params, assigned, d, depth, out);
+	const sym = t.kind == NodeKind.Identifier ? t.resolvedSym : null;
+	if (sym == null) return false;
+	if (isRoutineSym(sym) && !runsNativeOnC(sym)) {
+		out.push(routineSummary(sym));
+		return true;
+	}
+	if (assigned != null && paramIndex(params, sym) >= 0 && !assigned.has(sym)) return true;
+	if (d == null || depth >= 8 || !isLocal(sym) || d.spoiled.has(sym)) return false;
+	const k = d.syms.indexOf(sym);
+	if (k < 0) return false;
+	for (const src of d.sources[k]) {
+		if (!routinesOf(src, params, assigned, d, depth + 1, out)) return false;
+	}
+	return true;
+}
+
+function linkFunctionValue(s: WriteSummary, value: Node, params: Symbol[] | null, assigned: HashSet<Symbol>, d: LocalDefs): void {
+	const out: WriteSummary[] = [];
+	if (!routinesOf(value, params, assigned, d, 0, out)) {
+		markUnknown(s);
+		return;
+	}
+	for (const callee of out) {
+		if (callee !== s) link(s, null, callee);
+	}
+}
+
+function isLocal(sym: Symbol | null): boolean {
+	return sym != null && (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Temp) && !isModuleState(sym);
+}
+
+function baseLocal(n: Node): Node {
+	let t = skipConvDfa(n);
+	while (t.kind == NodeKind.HiddenDeref || t.kind == NodeKind.HiddenAddr) t = skipConvDfa((t.data as HiddenDerefData).expr);
+	return t;
+}
+
+function freshBase(n: Node, fresh: HashSet<Symbol> | null): boolean {
+	if (fresh == null) return false;
+	const t = baseLocal(n);
+	return t.kind == NodeKind.Identifier && t.resolvedSym != null && fresh.has(t.resolvedSym!);
+}
+
+class LocalDefs {
+	syms: Symbol[];
+	sources: Node[][];
+	spoiled: HashSet<Symbol>;
+}
+
+function addDef(d: LocalDefs, target: Node | null, source: Node): void {
+	if (target == null) return;
+	const t = skipConvDfa(target);
+	const sym = t.kind == NodeKind.Identifier || t.kind == NodeKind.VariableDecl ? t.resolvedSym : null;
+	if (!isLocal(sym)) return;
+	let k = d.syms.indexOf(sym!);
+	if (k < 0) {
+		d.syms.push(sym!);
+		d.sources.push([]);
+		k = d.syms.length - 1;
+	}
+	d.sources[k].push(source);
+}
+
+function spoilLocal(d: LocalDefs, n: Node | null): void {
+	if (n == null) return;
+	const t = baseLocal(n);
+	if (t.kind == NodeKind.Identifier && isLocal(t.resolvedSym)) d.spoiled.add(t.resolvedSym!);
+}
+
+// A local a nested routine names, a local passed by address and a local given a compound
+// assignment can change behind the definitions this walk sees, so none of them is fresh.
+function collectDefs(d: LocalDefs, n: Node, nested: boolean): void {
+	if (nested || isRoutineNode(n)) {
+		if (n.kind == NodeKind.Identifier) spoilLocal(d, n);
+		forEachChild(n, (c: Node): void => { collectDefs(d, c, true); });
+		return;
+	}
+	match (n.kind) {
+		NodeKind.VariableDecl => {
+			const init = (n.data as VariableDeclData).initializer;
+			if (init != null) addDef(d, n, init);
+		},
+		NodeKind.BinaryExpr => {
+			const bd = n.data as BinaryExprData;
+			if (bd.operator == "=") addDef(d, bd.left, bd.right);
+			else if (isAssign(bd.operator)) spoilLocal(d, bd.left);
+		},
+		NodeKind.CallExpr => {
+			const args = (n.data as CallExprData).arguments;
+			if (isLifecycleOp(n) && args.length > 0 && args[0] != null && args[0].kind == NodeKind.HiddenAddr) {
+				if (args.length > 1 && args[1] != null) addDef(d, (args[0].data as HiddenDerefData).expr, args[1]);
+				for (let i = 1; i < args.length; i += 1) {
+					if (args[i] != null) collectDefs(d, args[i], false);
+				}
+				return;
+			}
+		},
+		NodeKind.HiddenAddr => spoilLocal(d, n),
+		NodeKind.OutExpr => spoilLocal(d, (n.data as OutExprData).outArg),
+		_ => {},
+	};
+	forEachChild(n, (c: Node): void => { collectDefs(d, c, false); });
+}
+
+function returnsNewObject(s: WriteSummary, call: Node): boolean {
+	const sym = call.resolvedSym;
+	if (!isRoutineSym(sym) || runsNativeOnC(sym!) || dispatchEntryFor(sym!) != null) return false;
+	const callee = routineSummaries.get(sym!);
+	return callee != null && callee.done && callee.returnsFresh && !reloadsApart(s, callee);
+}
+
+function isFreshExpr(s: WriteSummary, e: Node | null, fresh: HashSet<Symbol>): boolean {
+	if (e == null) return false;
+	const t = skipConvDfa(e);
+	match (t.kind) {
+		NodeKind.NewExpr | NodeKind.ObjectLiteral | NodeKind.ArrayLiteral | NodeKind.NullLiteral => { return true; },
+		NodeKind.Identifier => { return t.resolvedSym != null && fresh.has(t.resolvedSym!); },
+		NodeKind.ConditionalExpr => {
+			const cd = t.data as ConditionalExprData;
+			return isFreshExpr(s, cd.ternaryConsequent, fresh) && isFreshExpr(s, cd.ternaryAlternate, fresh);
+		},
+		NodeKind.MoveExpr => { return isFreshExpr(s, (t.data as MoveExprData).moveArg, fresh); },
+		NodeKind.CallExpr => { return returnsNewObject(s, t); },
+		_ => { return false; },
+	};
+}
+
+// A local is fresh when every value it is given is an object allocated during this call:
+// a construction, a literal, a call that returns a new object, or another fresh local.
+function localDefs(body: Node): LocalDefs {
+	const d: LocalDefs = { syms: [], sources: [], spoiled: new HashSet<Symbol>() };
+	collectDefs(d, body, false);
+	return d;
+}
+
+function freshLocals(s: WriteSummary, d: LocalDefs): HashSet<Symbol> {
+	const fresh = new HashSet<Symbol>();
+	for (const sym of d.syms) {
+		if (!d.spoiled.has(sym)) fresh.add(sym);
+	}
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (let k = 0; k < d.syms.length; k += 1) {
+			if (!fresh.has(d.syms[k])) continue;
+			for (const src of d.sources[k]) {
+				if (!isFreshExpr(s, src, fresh)) {
+					fresh.delete(d.syms[k]);
+					changed = true;
+					break;
+				}
+			}
+		}
+	}
+	return fresh;
+}
+
+function returnsFreshObject(s: WriteSummary, body: Node, fresh: HashSet<Symbol>): boolean {
+	let sawFresh = false;
+	let allFresh = true;
+	const step = (n: Node): void => {
+		if (!allFresh || isRoutineNode(n)) return;
+		if (n.kind == NodeKind.ReturnStmt) {
+			const arg = (n.data as ReturnStmtData).argument;
+			if (arg != null && containsPointer(arg.nodeType, 0)) {
+				if (isFreshExpr(s, arg, fresh)) sawFresh = true;
+				else allFresh = false;
+			}
+		}
+		forEachChild(n, step);
+	};
+	step(body);
+	return sawFresh && allFresh;
 }
 
 function addressWrites(s: WriteSummary, args: Node[], params: Symbol[] | null, inCtor: boolean): void {
 	for (const a of args) {
 		if (a == null || a.kind != NodeKind.HiddenAddr) continue;
-		writeTarget(s, a, params, inCtor);
+		writeTarget(s, a, params, inCtor, null);
 		if (isArrayStorage((a.data as HiddenDerefData).expr.nodeType)) addSlot(s, ELEMENT_SLOT);
 	}
 }
@@ -449,7 +690,9 @@ function walkSummary(s: WriteSummary): void {
 	match (s.kind) {
 		SummaryKind.Routine => {
 			const decl = routineDecl(s.sym!);
-			walkBody(s, routineBody(decl), decl != null ? decl.paramSyms : null, (decl != null && decl.kind == NodeKind.ConstructorDecl) || hasFlag(s.sym!, SymbolFlag.ClassInit));
+			const body = routineBody(decl);
+			const fresh = walkBody(s, body, decl != null ? decl.paramSyms : null, (decl != null && decl.kind == NodeKind.ConstructorDecl) || hasFlag(s.sym!, SymbolFlag.ClassInit));
+			if (body != null && fresh != null) s.returnsFresh = returnsFreshObject(s, body, fresh);
 		},
 		SummaryKind.Construction => {
 			const decl = routineDecl(s.sym!);
@@ -515,7 +758,7 @@ function absorb(s: WriteSummary, e: Edge): boolean {
 		const params = decl != null ? decl.paramSyms : null;
 		const args = (e.call.data as CallExprData).arguments;
 		for (let i = 0; i < args.length && i < 31; i += 1) {
-			if ((c.refParamWrites & (1 << i)) != 0 && writeTarget(s, args[i], params, false)) changed = true;
+			if ((c.refParamWrites & (1 << i)) != 0 && writeTarget(s, args[i], params, false, null)) changed = true;
 		}
 	}
 	return changed;
@@ -546,7 +789,11 @@ function callWrites(call: Node): WriteSummary {
 	const s = newSummary(SummaryKind.Routine, null, []);
 	if (call.kind == NodeKind.CallExpr && isLifecycleOp(call)) return s;
 	if (call.kind == NodeKind.CallExpr) addressWrites(s, (call.data as CallExprData).arguments, null, false);
-	for (const c of call.kind == NodeKind.NewExpr ? constructionsOf(call) : calleesOf(call, s)) {
+	const callees = call.kind == NodeKind.NewExpr ? constructionsOf(call) : calleesOf(call, s, null, null);
+	for (const a of call.kind == NodeKind.NewExpr ? (call.data as NewExprData).newArguments : (call.data as CallExprData).arguments) {
+		if (a != null && mayBeFunctionValue(a.nodeType) && !routinesOf(a, null, null, null, 0, callees)) markUnknown(s);
+	}
+	for (const c of callees) {
 		if (reloadsApart(s, c)) markUnknown(s);
 		else absorb(s, { call: null, callee: settled(c) });
 	}
@@ -567,7 +814,7 @@ export function mayWrite(n: Node, slots: string[]): boolean {
 	if (!isAssign((n.data as BinaryExprData).operator)) return false;
 	const writes = newSummary(SummaryKind.Routine, null, []);
 	const target = (n.data as BinaryExprData).left;
-	writeTarget(writes, target, null, false);
+	writeTarget(writes, target, null, false, null);
 	const hooks = target.nodeType != null ? hookSummary(target.nodeType!) : null;
 	if (hooks != null) absorb(writes, { call: null, callee: settled(hooks) });
 	return mayWriteAny(writes, slots);
