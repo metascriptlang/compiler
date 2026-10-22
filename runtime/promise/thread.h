@@ -60,13 +60,14 @@ typedef struct msSpawnCtx {
 	                               On 64-bit, always == sizeof(msFutureBase). On 32-bit WASM,
 	                               may differ due to alignment padding (e.g., double needs 8-byte
 	                               alignment but msFutureBase is 20 bytes → 4 bytes padding). */
+	void* ownerQueue;           /* the submitting loop's completion queue: the env release runs there */
 } msSpawnCtx;
 
 
 /* Amendment G: worker-side push that does NOT incref — the owner thread already
  * took the queue's completion ref at submit time (msSpawn / msSpawnInto). */
 extern void msCompletionQueuePushOwned(void* fut, bool isFail, void* error);
-extern void msCompletionQueuePushEnvRelease(void* env);
+extern void msCompletionQueuePushEnvRelease(void* env, void* ownerQueue);
 
 static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 	void* result = NULL;
@@ -143,7 +144,7 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 	 * avoiding cross-thread rc races on the env's non-atomic rc field. */
 	if (ctx->slotGroup == NULL && ctx->env != NULL) {
 #if MS_FUTURE_SUBMIT_REF
-		msCompletionQueuePushEnvRelease(ctx->env);
+		msCompletionQueuePushEnvRelease(ctx->env, ctx->ownerQueue);
 #elif defined(_WIN32)
 		/* Amendment H parity: MS_FUTURE_SUBMIT_REF is 0 on Windows, but an
 		 * inline worker-thread msDecref still races the owning thread on the
@@ -166,7 +167,7 @@ void msPoolSubmit(msSpawnCtx* ctx);
  * Takes ownership of the closure env by incrementing its refcount. */
 static inline void* msSpawnCancellable(msClosure fn, _Atomic(bool)* cancelFlag) {
 	msFuture_ptr* fut = msFutureCreateT(msFuture_ptr);
-	msSpawnCtx ctx = { .fn = (void*)fn.fn, .env = fn.env, .fut = fut, .cancelFlag = cancelFlag };
+	msSpawnCtx ctx = { .fn = (void*)fn.fn, .env = fn.env, .fut = fut, .cancelFlag = cancelFlag, .ownerQueue = msLoopCompletionQueue() };
 	if (fn.env != NULL) {
 		msIncRef(fn.env);
 	}
@@ -177,7 +178,7 @@ static inline void* msSpawnCancellable(msClosure fn, _Atomic(bool)* cancelFlag) 
 	 * Amendment H: mark the future crossThreadPublished so msFutureDeferredRelease
 	 * defers its decref to serialize with the drain. */
 	msIncRef(fut);
-	((msFutureBase*)fut)->crossThreadPublished = true;
+	msFuturePublishCrossThread(fut);
 #endif
 #ifdef _WIN32
 	/* Channel-exists-before-visible, Windows twin of the submit-time
@@ -201,13 +202,13 @@ static inline void* msSpawnCancellable(msClosure fn, _Atomic(bool)* cancelFlag) 
  * Downstream readers use msWaitForStruct (typed inline read). */
 static inline void* msSpawnIntoCancellable(void* fut, msClosure fn, uint32_t copySize, uint32_t valueOffset, _Atomic(bool)* cancelFlag) {
 	msSpawnCtx ctx = {
-		.fn = (void*)fn.fn, .env = fn.env, .fut = fut, .cancelFlag = cancelFlag,
+		.fn = (void*)fn.fn, .env = fn.env, .fut = fut, .cancelFlag = cancelFlag, .ownerQueue = msLoopCompletionQueue(),
 		.inlineCopySize = copySize, .inlineValueOffset = valueOffset,
 	};
 	if (fn.env != NULL) msAtomicIncRef(fn.env);
 #if MS_FUTURE_SUBMIT_REF
 	msIncRef(fut);  /* Amendment G: owner-side queue completion ref (see msSpawn) */
-	((msFutureBase*)fut)->crossThreadPublished = true;  /* Amendment H */
+	msFuturePublishCrossThread(fut);  /* Amendment H */
 #endif
 #ifdef _WIN32
 	{
@@ -248,6 +249,7 @@ static inline void msSpawnTaskSubmit(msAwaitGroup* group, int32_t slot, msClosur
 		.group = group,
 		.slot = slot,
 		.cancelFlag = group ? &group->cancelled : NULL,
+		.ownerQueue = msLoopCompletionQueue(),
 	};
 	if (fn.env != NULL) {
 		msIncRef(fn.env);

@@ -640,7 +640,7 @@ static inline void msActorSend(msActor* a, msMessage* msg) {
 #if MS_FUTURE_SUBMIT_REF
     if (msg->replyFuture != NULL) {
         msIncRef(msg->replyFuture);
-        ((msFutureBase*)msg->replyFuture)->crossThreadPublished = true;
+        msFuturePublishCrossThread(msg->replyFuture);
     }
 #endif
     bool wasEmpty = msMpscPush(&a->mailbox, msg);

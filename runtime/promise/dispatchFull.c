@@ -171,6 +171,8 @@ static msClosure msDequePop(msCallbackDeque* d) {
 static MS_THREAD_LOCAL msDispatcher* gDispatcher = NULL;
 
 extern _Thread_local bool msIsPoolWorker;  /* pool.c — true only on pool worker threads */
+extern _Thread_local int msPoolWorkerSchedId;
+extern void msPoolWakeWorker(int schedulerID);
 
 /* Timers live on ONE process-global heap, not in the per-thread dispatcher.
  *
@@ -259,7 +261,7 @@ msDispatcher* msGetDispatcher(void) {
 		gDispatcher = (msDispatcher*)calloc(1, sizeof(msDispatcher));
 		gDispatcher->iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
 		/* Register in the wake registry — the IOCP mirror of POSIX's
-		 * msSelectorRegister(gDispatcher->selector, gWakePipe[0], …) in the
+		 * msSelectorRegister(gDispatcher->selector, <main channel wake fd>, …) in the
 		 * #else branch below. */
 		LONG idx = InterlockedIncrement(&gWakeIocpCount) - 1;
 		if (idx >= 0 && idx < MS_WAKE_IOCP_MAX) {
@@ -350,7 +352,8 @@ void msCompletionQueuePushOwned(void* fut, bool isFail, void* error) {
 /* Amendment H (Windows): deferred closure-env release — same kind=-3 message
  * msPostEnvRelease posts, reached through the queue-named API thread.h calls
  * under MS_FUTURE_SUBMIT_REF. */
-void msCompletionQueuePushEnvRelease(void* env) {
+void msCompletionQueuePushEnvRelease(void* env, void* ownerQueue) {
+	(void)ownerQueue;
 	msPostEnvRelease(env);
 }
 
@@ -408,6 +411,10 @@ bool msCompletionQueueDrain(void) {
 	return didWork;
 }
 
+bool msCompletionQueueDrainAll(void) { return msCompletionQueueDrain(); }
+void* msLoopCompletionQueue(void) { return NULL; }
+bool msWorkerLoopPump(void) { return false; }
+
 #else
 /* POSIX: MPSC queue for cross-thread completion + wake-only self-pipe.
  * Pony parity: lock-free queue replaces pipe for data delivery (100x faster).
@@ -415,22 +422,82 @@ bool msCompletionQueueDrain(void) {
 
 #include "runtime/actor/mailbox.h"
 
-static int gWakePipe[2] = {-1, -1};           /* wake-only self-pipe (1-byte signals) */
-static msMpscQueue gCompletionQueue;           /* lock-free MPSC for future completions */
+/* A loop's completion channel: the MPSC its drain pops and the wake-only
+ * self-pipe its selector watches. The main thread owns gMainChannel and every
+ * pool worker that publishes a future owns one of its own, so a future's
+ * callbacks run on the thread whose code published it (ULTRALOCK A1). */
+typedef struct msLoopChannel {
+	msMpscQueue queue;
+	int wake[2];
+	int workerSchedId;
+	struct msLoopChannel* nextWorker;
+} msLoopChannel;
+
+static msLoopChannel gMainChannel = { .wake = {-1, -1} };
 static bool gCompletionQueueInited = false;
 static pthread_once_t gQueueOnce = PTHREAD_ONCE_INIT;
+static _Thread_local msLoopChannel* tlWorkerChannel = NULL;
+static _Atomic(msLoopChannel*) gWorkerChannels = NULL;
 
-static void msInitQueueOnce(void) {
-	if (gWakePipe[0] < 0) {
-		pipe(gWakePipe);
+static void msLoopChannelOpen(msLoopChannel* c) {
+	if (c->wake[0] < 0) {
+		pipe(c->wake);
 		for (int i = 0; i < 2; i++) {
-			fcntl(gWakePipe[i], F_SETFL, fcntl(gWakePipe[i], F_GETFL) | O_NONBLOCK);
+			fcntl(c->wake[i], F_SETFL, fcntl(c->wake[i], F_GETFL) | O_NONBLOCK);
 		}
 	}
-	msMpscInit(&gCompletionQueue);
+	msMpscInit(&c->queue);
+}
+
+static void msInitQueueOnce(void) {
+	msLoopChannelOpen(&gMainChannel);
 	gCompletionQueueInited = true;
 }
 void msEnsureWakePipe(void);
+
+/* The channel of the calling thread's loop. A pool worker opens its own the
+ * first time it publishes a future or runs a loop, and pumps it in every wait
+ * (msWorkerLoopPump).
+ *
+ * Worker channels are never freed: a future a serving thread published may be
+ * released into its channel from any thread at any time, so the channel lives
+ * as long as the process, reachable from gWorkerChannels for the shutdown drain. */
+static msLoopChannel* msThreadChannel(void) {
+	msEnsureWakePipe();
+	if (!msIsPoolWorker) return &gMainChannel;
+	if (tlWorkerChannel == NULL) {
+		msLoopChannel* c = (msLoopChannel*)calloc(1, sizeof(msLoopChannel));
+		c->wake[0] = c->wake[1] = -1;
+		c->workerSchedId = msPoolWorkerSchedId;
+		msLoopChannelOpen(c);
+		msLoopChannel* head = atomic_load_explicit(&gWorkerChannels, memory_order_relaxed);
+		do {
+			c->nextWorker = head;
+		} while (!atomic_compare_exchange_weak_explicit(&gWorkerChannels, &head, c, memory_order_release, memory_order_relaxed));
+		tlWorkerChannel = c;
+		if (gDispatcher != NULL && gDispatcher->selector != NULL) {
+			msSelectorRegister(gDispatcher->selector, c->wake[0], MS_EVENT_READ, NULL);
+		}
+	}
+	return tlWorkerChannel;
+}
+
+void* msLoopCompletionQueue(void) {
+	return msIsPoolWorker ? msThreadChannel() : NULL;
+}
+
+static msLoopChannel* msChannelOf(void* queue) {
+	msEnsureWakePipe();
+	return queue != NULL ? (msLoopChannel*)queue : &gMainChannel;
+}
+
+static void msChannelWake(msLoopChannel* c) {
+	if (c->wake[1] >= 0) {
+		char b = 1;
+		(void)write(c->wake[1], &b, 1);
+	}
+	if (c != &gMainChannel && c != tlWorkerChannel) msPoolWakeWorker(c->workerSchedId);
+}
 
 /* Push a future completion to the MPSC queue + wake the selector, from a
  * worker thread; the dispatcher drains the queue and fires callbacks. No incref
@@ -442,17 +509,14 @@ void msEnsureWakePipe(void);
  * The submit-time ref makes the owner's msDecRefIsLast see rc>=1 (not last),
  * so it can't free until the dispatcher drain's msFutureDrcDestroy runs. */
 void msCompletionQueuePushOwned(void* fut, bool isFail, void* error) {
-    msEnsureWakePipe();
+    msLoopChannel* c = msChannelOf(((msFutureBase*)fut)->completionQueue);
     msMessage* msg = msMsgAlloc(/*kind=*/isFail ? -1 : 0, /*replyFut=*/fut);
     msMsgSetPtr(msg, 0, error);
-    msMpscPush(&gCompletionQueue, msg);
+    msMpscPush(&c->queue, msg);
     /* Always wake — no amortization. Two writers (actor send + spawn completion)
      * sharing one flag caused missed wakes and 500ms selector stalls. The wake
      * pipe absorbs duplicates (64KB buffer, 1 byte each, drained in bulk). */
-    if (gWakePipe[1] >= 0) {
-        char c = 1;
-        (void)write(gWakePipe[1], &c, 1);
-    }
+    msChannelWake(c);
 }
 
 /* Amendment H: batch release — push N deferred decrefs as a chain with one
@@ -461,37 +525,34 @@ void msCompletionQueuePushOwned(void* fut, bool isFail, void* error) {
  * The dispatcher drain processes them single-threaded, serializing with the
  * drain decref — no race on the rc field, no atomic needed. */
 void msCompletionQueuePushReleaseBatch(void** futs, int count) {
-    if (count <= 0) return;
-    msEnsureWakePipe();
-    msMessage* first = NULL;
-    msMessage* last = NULL;
-    for (int i = 0; i < count; i++) {
-        if (futs[i] == NULL) continue;
-        msMessage* msg = msMsgAlloc(/*kind=*/-2, /*replyFut=*/futs[i]);
-        if (last != NULL) {
-            atomic_store_explicit(&last->next, msg, memory_order_relaxed);
-        } else {
-            first = msg;
+    int i = 0;
+    while (i < count) {
+        if (futs[i] == NULL) { i++; continue; }
+        void* queue = ((msFutureBase*)futs[i])->completionQueue;
+        msMessage* first = NULL;
+        msMessage* last = NULL;
+        for (; i < count && (futs[i] == NULL || ((msFutureBase*)futs[i])->completionQueue == queue); i++) {
+            if (futs[i] == NULL) continue;
+            msMessage* msg = msMsgAlloc(/*kind=*/-2, /*replyFut=*/futs[i]);
+            if (last != NULL) {
+                atomic_store_explicit(&last->next, msg, memory_order_relaxed);
+            } else {
+                first = msg;
+            }
+            last = msg;
         }
-        last = msg;
-    }
-    if (first == NULL) return;
-    msMpscPushChain(&gCompletionQueue, first, last);
-    if (gWakePipe[1] >= 0) {
-        char c = 1;
-        (void)write(gWakePipe[1], &c, 1);
+        msLoopChannel* c = msChannelOf(queue);
+        msMpscPushChain(&c->queue, first, last);
+        msChannelWake(c);
     }
 }
 
-void msCompletionQueuePushEnvRelease(void* env) {
+void msCompletionQueuePushEnvRelease(void* env, void* ownerQueue) {
     if (env == NULL) return;
-    msEnsureWakePipe();
+    msLoopChannel* c = msChannelOf(ownerQueue);
     msMessage* msg = msMsgAlloc(/*kind=*/-3, /*replyFut=*/env);
-    msMpscPush(&gCompletionQueue, msg);
-    if (gWakePipe[1] >= 0) {
-        char c = 1;
-        (void)write(gWakePipe[1], &c, 1);
-    }
+    msMpscPush(&c->queue, msg);
+    msChannelWake(c);
 }
 
 /* Ensure wake pipe + MPSC queue are initialized (called by actor init).
@@ -506,27 +567,22 @@ void msEnsureWakePipe(void) {
  * Used by HTTP async event loops to register with their own selector,
  * so spawn completions can wake the HTTP selector (not just the dispatcher's). */
 int32_t msGetWakePipeFd(void) {
-    msEnsureWakePipe();
-    return gWakePipe[0];
+    return msThreadChannel()->wake[0];
 }
 
 /* Wake event loop from another thread (Pony-style: unpark scheduler).
  * Used by actor subsystem when scheduling work on the main thread.
  * Always writes (no amortization) — same rationale as msCompletionQueuePushOwned. */
 void msActorWakeEventLoop(void) {
-    if (gWakePipe[1] >= 0) {
-        char c = 1;
-        (void)write(gWakePipe[1], &c, 1);
-    }
+    msChannelWake(&gMainChannel);
 }
 
 /* Drain all pending completions from the MPSC queue.
  * Fires callbacks on the dispatcher thread (correct thread for async steppers). */
-bool msCompletionQueueDrain(void) {
+static bool msChannelDrain(msLoopChannel* c) {
     bool didWork = false;
-    msEnsureWakePipe();
     msMessage* msg;
-    while ((msg = msMpscPop(&gCompletionQueue)) != NULL) {
+    while ((msg = msMpscPop(&c->queue)) != NULL) {
         void* fut = msg->replyFuture;
         /* Don't free msg — it's the queue's new tail/stub (Vyukov MPSC invariant).
          * It gets freed on the NEXT pop when a newer message takes its place. */
@@ -555,6 +611,34 @@ bool msCompletionQueueDrain(void) {
     return didWork;
 }
 
+/* Each channel has one consumer, its owner: a pool worker never pops the main
+ * channel beside the main thread. */
+bool msCompletionQueueDrain(void) {
+    msEnsureWakePipe();
+    if (msIsPoolWorker) return tlWorkerChannel != NULL && msChannelDrain(tlWorkerChannel);
+    return msChannelDrain(&gMainChannel);
+}
+
+bool msWorkerLoopPump(void) {
+    if (tlWorkerChannel == NULL) return false;
+    char buf[64];
+    while (read(tlWorkerChannel->wake[0], buf, sizeof(buf)) > 0) {}
+    bool didWork = msChannelDrain(tlWorkerChannel);
+    if (gDispatcher != NULL) msProcessCallbacks(gDispatcher, &didWork);
+    msFutureReleaseFlush();
+    return didWork;
+}
+
+/* Pool shutdown, after every worker has joined: the main thread is the only
+ * thread left, so it drains what was still queued for a serving thread's loop. */
+bool msCompletionQueueDrainAll(void) {
+    bool didWork = msCompletionQueueDrain();
+    for (msLoopChannel* c = atomic_load_explicit(&gWorkerChannels, memory_order_acquire); c != NULL; c = c->nextWorker) {
+        if (msChannelDrain(c)) didWork = true;
+    }
+    return didWork;
+}
+
 /* Thread destruction: this thread's dispatcher. Process-wide state (timers, wake pipe,
  * completion queue) stays for msDestroyDispatcher. Callbacks still queued keep it alive. */
 static void msDispatcherThreadDestroy(void) {
@@ -571,9 +655,10 @@ msDispatcher* msGetDispatcher(void) {
 		gDispatcher = (msDispatcher*)calloc(1, sizeof(msDispatcher));
 		msOnThreadDestruction(msDispatcherThreadDestroy);
 		gDispatcher->selector = msSelectorCreate();
-		msEnsureWakePipe();  /* wake pipe + MPSC queue (may already be initialized by actor init) */
-		if (gDispatcher->selector) {
-			msSelectorRegister(gDispatcher->selector, gWakePipe[0], MS_EVENT_READ, NULL);
+		msEnsureWakePipe();
+		msLoopChannel* c = msIsPoolWorker ? tlWorkerChannel : &gMainChannel;
+		if (gDispatcher->selector && c != NULL) {
+			msSelectorRegister(gDispatcher->selector, c->wake[0], MS_EVENT_READ, NULL);
 		}
 		msCallSoonProc = msDispatcherCallSoon;
 	}
@@ -798,6 +883,7 @@ bool msRunOnce(int timeoutMs) {
 	/* POSIX: pre-poll MPSC drain + selector poll + post-poll drain.
 	 * Completions arrive via lock-free MPSC queue (not pipe). The wake pipe
 	 * only carries 1-byte signals to unblock the selector. */
+	int wakeFd = msThreadChannel()->wake[0];
 	if (msCompletionQueueDrain()) didWork = true;  /* pre-poll: process without blocking */
 	if (d->selector != NULL) {
 		msReadyEvent readyBuf[64];
@@ -805,9 +891,9 @@ bool msRunOnce(int timeoutMs) {
 		for (int i = 0; i < nready; i++) {
 			didWork = true;
 			/* Wake pipe: drain bytes, actual data is in MPSC queue */
-			if (readyBuf[i].fd == gWakePipe[0]) {
+			if (readyBuf[i].fd == wakeFd) {
 				char buf[64];
-				(void)read(gWakePipe[0], buf, sizeof(buf));
+				(void)read(wakeFd, buf, sizeof(buf));
 				continue;
 			}
 			/* I/O events (unchanged) */
@@ -884,7 +970,7 @@ void* msWaitFor(void* fp) {
 		if (msPoolHelpOne()) continue;
 		if (!worker) {
 			msRunOnce(MS_ACTIVE_WAIT_MS);
-		} else {
+		} else if (!msWorkerLoopPump()) {
 			msWorkerWaitOnFuture(fp);
 		}
 	}
@@ -904,6 +990,8 @@ void msWaitForReady(void* fp) {
 		if (msPoolHelpOne()) { spins = 0; helped = true; continue; }
 		if (!worker) {
 			msRunOnce(MS_ACTIVE_WAIT_MS);
+		} else if (msWorkerLoopPump()) {
+			spins = 0;
 		} else if (helped && spins < 32) {
 			spins++;
 			msYield();
@@ -952,7 +1040,7 @@ void msPostEnvRelease(void* env) {
 }
 #else
 void msPostEnvRelease(void* env) {
-	msCompletionQueuePushEnvRelease(env);
+	msCompletionQueuePushEnvRelease(env, NULL);
 }
 #endif
 
@@ -1127,7 +1215,7 @@ void msDestroyDispatcher(void) {
 	if (d == NULL) return;
 	/* Cancel all pending timers. The heap is process-global (see gTimers) and is
 	 * torn down here unconditionally — the same treatment the other two
-	 * process-global resources in this function get (gWakePipe, gCompletionQueue
+	 * process-global resources in this function get (the main channel's wake pipe and queue
 	 * below). Under the lock, so a pool worker arming concurrently either lands
 	 * its timer before the drain or finds a NULL heap after it, never a half-freed
 	 * one. */
@@ -1154,9 +1242,9 @@ void msDestroyDispatcher(void) {
 	if (d->iocp != NULL) { CloseHandle(d->iocp); d->iocp = NULL; }
 #else
 	if (d->selector != NULL) msSelectorDestroy(d->selector);
-	if (gWakePipe[0] >= 0) { close(gWakePipe[0]); gWakePipe[0] = -1; }
-	if (gWakePipe[1] >= 0) { close(gWakePipe[1]); gWakePipe[1] = -1; }
-	if (gCompletionQueueInited) { msMpscDestroy(&gCompletionQueue); gCompletionQueueInited = false; }
+	if (gMainChannel.wake[0] >= 0) { close(gMainChannel.wake[0]); gMainChannel.wake[0] = -1; }
+	if (gMainChannel.wake[1] >= 0) { close(gMainChannel.wake[1]); gMainChannel.wake[1] = -1; }
+	if (gCompletionQueueInited) { msMpscDestroy(&gMainChannel.queue); gCompletionQueueInited = false; }
 #endif
 	/* Reset globals */
 	msCallSoonProc = NULL;

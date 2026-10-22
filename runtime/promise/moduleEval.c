@@ -369,7 +369,7 @@ void* msModuleImport(msString name) {
 	void* fut = msFutureCreate();
 	msIncRef(fut);
 #if MS_FUTURE_SUBMIT_REF
-	((msFutureBase*)fut)->crossThreadPublished = true;
+	msFuturePublishCrossThread(fut);
 #endif
 #ifdef _WIN32
 	extern void msEnsureLoopChannel(void);

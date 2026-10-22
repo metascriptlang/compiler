@@ -5,6 +5,7 @@
 /* No worker thread exists on this target: every spawn runs on the spawning thread, so its
  * future is complete before anything awaits it and nothing ever helps or waits on a pool. */
 _Thread_local bool msIsPoolWorker = false;
+_Thread_local int msPoolWorkerSchedId = 0;
 MS_TLS_PUBLISH(msIsPoolWorker)
 
 void msPoolSubmit(struct msSpawnCtx* ctx) { msSpawnWorkerRun(ctx); }
@@ -80,6 +81,7 @@ int32_t msPoolPendingPeek(void) {
  * Main thread always queues to ensure initial fan-out reaches workers.
  * Matches Malebolgia's activeProducer flag. */
 _Thread_local bool msIsPoolWorker = false;
+_Thread_local int msPoolWorkerSchedId = 0;
 MS_TLS_PUBLISH(msIsPoolWorker)
 
 /* ===== CPU Detection ===== */
@@ -174,6 +176,7 @@ static void* msPoolWorkerLoop(void* arg) {
 	/* Assign scheduler ID: workers are 1..N-1 (main thread is 0) */
 	int mySchedID = atomic_fetch_add(&msWorkerSchedIdx, 1) + 1;
 	int myWorkerIdx = mySchedID - 1;  /* 0-based index into workerConds[] */
+	msPoolWorkerSchedId = mySchedID;
 	if (msPoolSchedIdSetterFn != NULL) msPoolSchedIdSetterFn(mySchedID);
 
 	while (1) {
@@ -233,6 +236,8 @@ static void* msPoolWorkerLoop(void* arg) {
 			MS_UNLOCK(pool);
 			msFutureReleaseFlush();
 		}
+		extern bool msWorkerLoopPump(void);
+		if (msWorkerLoopPump()) continue;
 
 		/* Poll local actors (opportunistic between spawn tasks).
 		 * If actor work was found, loop back immediately to check for more
@@ -500,8 +505,8 @@ void msPoolShutdown(void) {
 	 * Linux catches this; macOS ASAN has no LSan by default so it's invisible
 	 * there. */
 	msFutureReleaseFlush();
-	extern bool msCompletionQueueDrain(void);
-	while (msCompletionQueueDrain()) {}
+	extern bool msCompletionQueueDrainAll(void);
+	while (msCompletionQueueDrainAll()) {}
 
 	free(gPool);
 	gPool = NULL;

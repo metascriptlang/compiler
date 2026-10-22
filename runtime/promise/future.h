@@ -95,6 +95,7 @@ typedef struct msFutureBase {
 	                            * race because no drain decref can exist for a future
 	                            * that never crossed threads. When true, defer to TLS
 	                            * to serialize with the dispatcher drain. */
+	void* completionQueue;
 	void* error;          /* error payload (may be NULL even when failed) */
 	void (*valueDestructor)(void*); /* optional: frees value on destroy (combinators) */
 	/* Set by the async writer: the future owns its value, readers copy it out and
@@ -253,6 +254,13 @@ static inline bool msFutureFinished(void* fp) {
 /* Global completion notification — wakes worker threads blocking on futures.
  * Implemented in dispatch.c (Change 4: global completion condvar). */
 extern void msNotifyFutureComplete(void);
+
+void* msLoopCompletionQueue(void);
+
+static inline void msFuturePublishCrossThread(void* fp) {
+	((msFutureBase*)fp)->crossThreadPublished = true;
+	((msFutureBase*)fp)->completionQueue = msLoopCompletionQueue();
+}
 
 /* Fire all registered callbacks via callSoon (reference parity).
  * Deferred execution prevents reentrancy during msProcessTimers/msFutureComplete. */

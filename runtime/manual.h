@@ -698,6 +698,7 @@ typedef struct msFutureBase {
     bool failed;
     bool cancelled;
     bool crossThreadPublished;
+    void* completionQueue;
     void* error;
     void (*valueDestructor)(void*);
     void (*valueDrop)(void*);

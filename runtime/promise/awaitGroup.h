@@ -243,7 +243,7 @@ static inline void msAwaitGroupSetDoneFut(msAwaitGroup* g, void* fut) {
 		 * dispatcher drain's msFutureDrcDestroy; finishSlot pushes via PushOwned. */
 		if (fut != NULL) {
 			msIncRef(fut);
-			((msFutureBase*)fut)->crossThreadPublished = true;
+			msFuturePublishCrossThread(fut);
 		}
 #endif
 #ifdef _WIN32

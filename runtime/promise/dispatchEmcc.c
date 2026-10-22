@@ -247,6 +247,7 @@ void msDestroyDispatcher(void) {
 /* No-ops for emcc (no threads, no actors) */
 bool (*msActorPollHook)(void) = NULL;
 bool msCompletionQueueDrain(void) { return false; }
+void* msLoopCompletionQueue(void) { return NULL; }
 /* The producer has already stored the value or error and set finished, as on the
  * threaded drain: fire the callbacks, never overwrite the stored result. */
 void msCompletionQueuePush(void* fut, bool isFail, void* error) {
