@@ -236,27 +236,6 @@ void msStringDestroy(msString s) {
 	}
 }
 
-void msStringAssign(msString* a, msString b) {
-	if (a->p == b.p && a->len == b.len) return;
-	if (msIsLiteral(b)) {
-		/* Shallow copy for literals */
-		if (!msIsLiteral(*a)) free(a->p);
-		a->len = b.len;
-		a->p = b.p;
-	} else {
-		if (msIsLiteral(*a) || (a->p->cap & MS_CAP_MASK) < b.len) {
-			if (!msIsLiteral(*a)) free(a->p);
-			a->p = allocPayload(b.len);
-			a->p->cap = b.len;
-		}
-		a->len = b.len;
-		memcpy(a->p->data, b.p->data, b.len + 1);
-		msStrInvalidateAscii(a->p);
-		if (msStrKnownAscii(b.p)) msStrMarkAscii(a->p);
-		else if (b.p != NULL && (msStrCapLoad(b.p) & MS_ASCII_CHECKED) != 0) msStrMarkNonAscii(a->p);
-	}
-}
-
 void msStringPrepareMutation(msString* s) {
 	if (s->p != NULL && (s->p->cap & MS_STRLIT_FLAG) != 0) {
 		msStrPayload* oldP = s->p;
@@ -368,17 +347,6 @@ bool msStringEquals(msString a, msString b) {
 	if (a.len == 0) return true;
 	if (a.p == b.p) return true;
 	return memcmp(a.p->data, b.p->data, a.len) == 0;
-}
-
-bool msStringEqualsIgnoreCase(msString a, msString b) {
-	if (a.len != b.len) return false;
-	if (a.len == 0) return true;
-	if (a.p == b.p) return true;
-	for (int64_t i = 0; i < a.len; i++) {
-		if (tolower((unsigned char)a.p->data[i]) != tolower((unsigned char)b.p->data[i]))
-			return false;
-	}
-	return true;
 }
 
 int msStringCompare(msString a, msString b) {
@@ -574,15 +542,6 @@ int64_t msStringCount(msString s, msString sub) {
 int64_t msStringByteAt(msString s, int64_t idx) {
 	if (idx < 0 || idx >= s.len || s.p == NULL) return -1;
 	return (int64_t)(unsigned char)s.p->data[idx];
-}
-
-msString msStringByteCharAt(msString s, int64_t idx) {
-	if (idx < 0 || idx >= s.len || s.p == NULL) return MS_EMPTY_STRING;
-	unsigned char byte = (unsigned char)s.p->data[idx];
-	if (byte < 128) {
-		return msCharTable[byte];  /* interned — zero alloc */
-	}
-	return msStringNew(s.p->data + idx, 1);
 }
 
 /* ---- Character-level access (TypeScript parity, UTF-16 code unit indexed) ---- */
@@ -874,20 +833,6 @@ msString msStringTrimEnd(msString s) {
 	while (end > 0 && isspace((unsigned char)s.p->data[end - 1])) end--;
 	if (end <= 0) return MS_EMPTY_STRING;
 	return msStringNew(s.p->data, end);
-}
-
-msString msStringRepeat(msString s, int64_t count) {
-	if (count <= 0 || s.len == 0) return MS_EMPTY_STRING;
-	if (count == 1) return msStringNew(s.p->data, s.len);
-
-	int64_t totalLen = s.len * count;
-	msString result = msStringNewCap(totalLen);
-	for (int64_t i = 0; i < count; i++) {
-		memcpy(result.p->data + i * s.len, s.p->data, s.len);
-	}
-	result.len = totalLen;
-	result.p->data[totalLen] = '\0';
-	return result;
 }
 
 msString msStringReplace(msString s, msString search, msString replacement) {

@@ -414,24 +414,28 @@ function isStringHandle(h: int64): boolean {
 	return tag == (RaiserHeapKind.String as int64) || tag == (RaiserHeapKind.ConstString as int64);
 }
 
+@inline
 function holdHandle(vm: RaiserVM, h: int64): void {
 	if (h != 0 && (vm.orc || isStringHandle(h))) rcIncrefHandle(vm.arrayHeap, vm.objectHeap, h);
 }
 
+@inline
 function releaseHandle(vm: RaiserVM, h: int64): void {
 	if (h != 0 && (vm.orc || isStringHandle(h))) rcDecrefHandle(vm.arrayHeap, vm.objectHeap, h);
 }
 
-// The counted store of a handle into the ref file: the new one is held before the old one is
-// released, so storing a register's own handle back into it is safe.
-function writeRef(vm: RaiserVM, abs: number, handle: int64): void {
+// The counted store of a handle into the ref file: storing the handle a register already holds
+// changes no count, and otherwise the new one is held before the old one is released.
+@inline
+function writeRef(vm: RaiserVM, abs: int64, handle: int64): void {
 	const old = vm.regs.refs[abs];
+	if (old == handle) return;
 	holdHandle(vm, handle);
 	vm.regs.refs[abs] = handle;
 	releaseHandle(vm, old);
 }
 
-function releaseFrameRefs(vm: RaiserVM, base: number, count: number): void {
+function releaseFrameRefs(vm: RaiserVM, base: int64, count: int64): void {
 	for (let r = base; r < base + count; r += 1) {
 		const h = vm.regs.refs[r];
 		if (h != 0) {
@@ -453,10 +457,10 @@ function writeAbs(vm: RaiserVM, cls: int32, abs: number, value: RaiserValue): vo
 	let val = value;
 	if (val.kind == RaiserValueKind.Box && cls != CLS_DYN) val = heapBoxValue(vm.arrayHeap, val.intVal);
 	if (cls == CLS_DYN) {
-		if (val.kind == RaiserValueKind.Nil) { writeRef(vm, abs, 0); return; }
-		if (val.kind == RaiserValueKind.Box) { writeRef(vm, abs, val.intVal); return; }
+		if (val.kind == RaiserValueKind.Nil) { writeRef(vm, abs as int64, 0); return; }
+		if (val.kind == RaiserValueKind.Box) { writeRef(vm, abs as int64, val.intVal); return; }
 		vmIncref(vm, val);
-		writeRef(vm, abs, heapAllocBox(vm.arrayHeap, val));
+		writeRef(vm, abs as int64, heapAllocBox(vm.arrayHeap, val));
 		return;
 	}
 	if (cls == CLS_FLOAT && val.kind == RaiserValueKind.Int) {
@@ -470,7 +474,7 @@ function writeAbs(vm: RaiserVM, cls: int32, abs: number, value: RaiserValue): vo
 			return;
 		}
 	}
-	if (cls == CLS_REF) { writeRef(vm, abs, val.kind == RaiserValueKind.Nil ? 0 : val.intVal); return; }
+	if (cls == CLS_REF) { writeRef(vm, abs as int64, val.kind == RaiserValueKind.Nil ? 0 : val.intVal); return; }
 	if (cls == CLS_WORD || cls == CLS_BOOL) { vm.regs.words[abs] = val.intVal; return; }
 	vm.regs.words[abs] = msFloat64Bits(val.floatVal);
 }
@@ -533,6 +537,7 @@ function vmError(vm: RaiserVM, msg: string): void {
 
 const MAX_CALL_DEPTH = 1024;
 const INT64_LOW: int64 = -9223372036854775807 - 1;
+const INT64_HIGH: int64 = 9223372036854775807;
 
 function mulOverflowsI64(a: int64, b: int64): boolean {
 	if (a == 0 || b == 0) return false;
@@ -1805,11 +1810,6 @@ function execStrandLoop(vm: RaiserVM): void {
 	}
 }
 
-function vmBackEdgeOverBudget(vm: RaiserVM): boolean {
-	vm.loopCount = vm.loopCount + 1;
-	return vm.loopCount > vm.loopLimit;
-}
-
 function vmLoopLimitMessage(vm: RaiserVM): string {
 	return `interpretation requires too many iterations (limit ${vm.loopLimit}); if you are sure this is not a bug in your code, raise it with --max-vm-iterations=<n>`;
 }
@@ -1829,6 +1829,35 @@ function retag(kind: int32, raw: int32): int32 {
 	return kind <= CLS_BOOL ? (raw << 3) | kind : raw;
 }
 
+function sigPrefix(sig: int64, count: int64): int64 {
+	return sig < 0 ? sig : sig & (((1 as int64) << (3 * count)) - 1);
+}
+
+// The function a closure pair laid out as `fn`, `env` calls when its signature matches the site's,
+// with a non-nil env written into the site's last register; -1 sends the call to vmHandleCallClosure.
+function closureTarget(vm: RaiserVM, func: RaiserFunction, handle: int64, rb: int32, site: int32): int64 {
+	if (handleTag(handle) != (RaiserHeapKind.Object as int64)) return -1;
+	when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) return -1; }
+	const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
+	if (obj.classType.fields.length != 2 || obj.fields[0].kind != RaiserValueKind.Int) return -1;
+	when (mode != "danger") { if (obj.classType.fields[0] != "fn" || obj.classType.fields[1] != "env") return -1; }
+	const target = obj.fields[0].intVal;
+	if (target < 0 || target >= vm.mod.functions.length) return -1;
+	const envKind = obj.fields[1].kind;
+	let argc = func.blocks[site + 2];
+	let sig = func.blocks[site + 3];
+	if (envKind == RaiserValueKind.Nil) {
+		argc = argc - 1;
+		sig = sigPrefix(sig, argc);
+	} else if (envKind < RaiserValueKind.String || envKind > RaiserValueKind.Future) {
+		return -1;
+	}
+	const callee: Cursor<RaiserFunction> = vm.mod.functions[target];
+	if (sig < 0 || argc >= callee.sigs.length || callee.sigs[argc] != sig) return -1;
+	if (envKind != RaiserValueKind.Nil) writeRef(vm, rb + ((func.blocks[site + 3 + argc] as int32) >> 3), obj.fields[1].intVal);
+	return target;
+}
+
 // The hot opcodes run here on the two files and the frame's bases; every other opcode takes its
 // operands retagged (each register operand carries its class) into vmStepHeap or vmStepSlow.
 // vm.ip, vm.funcIdx, vm.wordBase and vm.refBase are written back before any call that reads
@@ -1837,16 +1866,17 @@ function runStrandSlice(vm: RaiserVM): void {
 	if (vm.halted || vm.yielded) return;
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
 	assertPacked(func);
-	dispatch(vm, func.packed, vm.regs.words, vm.regs.refs);
+	dispatch(vm, func.packed, vm.regs.words, vm.regs.refs, vm.objectHeap.objects);
 }
 
-function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Span<int64>): void {
+function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Span<int64>, objects: Span<RaiserObjectData>): void {
 	const mod = vm.mod;
 	let funcIdx = vm.funcIdx;
 	let func: Cursor<RaiserFunction> = mod.functions[funcIdx];
 	let ip = vm.ip;
 	let wb = vm.wordBase;
 	let rb = vm.refBase;
+	let budget = vm.loopLimit - vm.loopCount;
 	while (true) {
 		@computedGoto;
 		const pc = ip;
@@ -1862,7 +1892,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ic = ((word >> 40) & 65535) as int32;
 				const bx = (ib * 256 + ic);
 				if (bx >= getFuncConstLen(func)) {
-					vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, `constant index out of bounds: ${bx}`); return;
+					vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, `constant index out of bounds: ${bx}`); return;
 				} else {
 					const val: Cursor<RaiserValue> = func.constants[bx];
 					const cls = ia & 7;
@@ -1894,7 +1924,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				if (cls == CLS_REF || cls == CLS_DYN) {
 					writeRef(vm, rb + (ia >> 3), 0);
 				} else {
-					vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, `internal: register R${ia >> 3} of ${func.name} is ${cls as RaiserRegClass}, got Nil`); return;
+					vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, `internal: register R${ia >> 3} of ${func.name} is ${cls as RaiserRegClass}, got Nil`); return;
 				}
 				break;
 			}
@@ -1911,20 +1941,17 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				break;
 			}
 			case RaiserOpcode.Jump: {
-				const ia = ((word >> 8) & 65535) as int32;
-				const ib = ((word >> 24) & 65535) as int32;
-				const ic = ((word >> 40) & 65535) as int32;
-				const rawAx = ia * 65536 + ib * 256 + ic;
-				const offset = rawAx >= 8388608 ? rawAx - 16777216 : rawAx;
+				const offset = packedBranch(word);
 				if (offset < 0) {
 					// Loop back-edge: this is ONE iteration. Straight-line code is
 					// finite by construction and recursion is bounded by
 					// MAX_CALL_DEPTH, so back-edges are the only unbounded source
 					// worth budgeting (reference: handleJmpBack decrements
 					// loopIterations only on backward jumps).
-					if (vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					budget -= 1;
+					if (budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 				}
-				ip = ip + (offset as int32);
+				ip = ip + offset;
 				break;
 			}
 			case RaiserOpcode.LoadInt: {
@@ -1952,7 +1979,82 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				if (truthy) ip = ip + (ic as int32);
 				break;
 			}
-			case RaiserOpcode.CallDirect: case RaiserOpcode.Call: case RaiserOpcode.CallIndirect: {
+			case RaiserOpcode.CallDirect: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
+				const depth = vm.callStack.depth;
+				if (depth < MAX_CALL_DEPTH) {
+					const callee: Cursor<RaiserFunction> = mod.functions[ib];
+					if (depth == vm.callStack.items.length) {
+						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, wordBase: 0, refBase: 0, spBase: 0 });
+					}
+					const frame: Cursor<RaiserCallFrame> = vm.callStack.items[depth];
+					frame.funcIdx = funcIdx;
+					frame.returnIp = ip;
+					frame.returnDest = ia;
+					frame.wordBase = wb;
+					frame.refBase = rb;
+					frame.spBase = vm.safePoints.length as int32;
+					vm.callStack.depth = depth + 1;
+					wb = wb + (func.blocks[ic] as int32);
+					rb = rb + (func.blocks[ic + 1] as int32);
+					if (words.length < wb + callee.wordRegs) {
+						ensureWords(vm.regs, wb + callee.wordRegs);
+						words = vm.regs.words;
+					}
+					if (refs.length < rb + callee.refRegs) {
+						ensureRefs(vm.regs, rb + callee.refRegs);
+						refs = vm.regs.refs;
+					}
+					funcIdx = ib;
+					func = callee;
+					code = callee.packed;
+					ip = 0;
+				} else {
+					slow = true;
+				}
+				break;
+			}
+			case RaiserOpcode.CallClosure: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
+				const depth = vm.callStack.depth;
+				const target = depth < MAX_CALL_DEPTH ? closureTarget(vm, func, refs[rb + ib], rb, ic) : -1;
+				if (target >= 0) {
+					const callee: Cursor<RaiserFunction> = mod.functions[target];
+					if (depth == vm.callStack.items.length) {
+						vm.callStack.items.push({ funcIdx: 0, returnIp: 0, returnDest: 0, wordBase: 0, refBase: 0, spBase: 0 });
+					}
+					const frame: Cursor<RaiserCallFrame> = vm.callStack.items[depth];
+					frame.funcIdx = funcIdx;
+					frame.returnIp = ip;
+					frame.returnDest = ia;
+					frame.wordBase = wb;
+					frame.refBase = rb;
+					frame.spBase = vm.safePoints.length as int32;
+					vm.callStack.depth = depth + 1;
+					wb = wb + (func.blocks[ic] as int32);
+					rb = rb + (func.blocks[ic + 1] as int32);
+					if (words.length < wb + callee.wordRegs) {
+						ensureWords(vm.regs, wb + callee.wordRegs);
+						words = vm.regs.words;
+					}
+					if (refs.length < rb + callee.refRegs) {
+						ensureRefs(vm.regs, rb + callee.refRegs);
+						refs = vm.regs.refs;
+					}
+					funcIdx = target as int32;
+					func = callee;
+					code = callee.packed;
+					ip = 0;
+				} else {
+					slow = true;
+				}
+				break;
+			}
+			case RaiserOpcode.Call: case RaiserOpcode.CallIndirect: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
@@ -1960,9 +2062,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const depth = vm.callStack.depth;
 				let ok = depth < MAX_CALL_DEPTH;
 				let callee: Cursor<RaiserFunction> = func;
-				if (op == RaiserOpcode.CallDirect) {
-					callee = mod.functions[target];
-				} else if (target >= 0 && target < mod.functions.length) {
+				if (target >= 0 && target < mod.functions.length) {
 					callee = mod.functions[target];
 					const argc = func.blocks[ic + 2];
 					const sig = func.blocks[ic + 3];
@@ -2004,25 +2104,34 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 			}
 			case RaiserOpcode.Ret: {
 				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
 				const depth = vm.callStack.depth;
-				if (depth > 0 && vm.safePoints.length == vm.callStack.items[depth - 1].spBase) {
+				if (depth > 0 && ((ic & 1) == 0 || vm.safePoints.length == vm.callStack.items[depth - 1].spBase)) {
 					const frame: Cursor<RaiserCallFrame> = vm.callStack.items[depth - 1];
 					const dest = frame.returnDest;
 					const cls = ia & 7;
 					if (cls == (dest & 7)) {
 						if (cls == CLS_REF || cls == CLS_DYN) {
-							writeRef(vm, frame.refBase + (dest >> 3), refs[rb + (ia >> 3)]);
+							const handle = refs[rb + (ia >> 3)];
+							if ((ia >> 3) >= ib) {
+								refs[rb + (ia >> 3)] = 0;
+								const old = refs[frame.refBase + (dest >> 3)];
+								refs[frame.refBase + (dest >> 3)] = handle;
+								releaseHandle(vm, old);
+							} else {
+								writeRef(vm, frame.refBase + (dest >> 3), handle);
+							}
 						} else {
 							words[frame.wordBase + (dest >> 3)] = words[wb + (ia >> 3)];
 						}
-						if (func.refRegs > func.paramRefs) releaseFrameRefs(vm, rb + func.paramRefs, func.refRegs - func.paramRefs);
+						if (ic > 1) releaseFrameRefs(vm, rb + ib, ic >> 1);
 						vm.callStack.depth = depth - 1;
 						wb = frame.wordBase;
 						rb = frame.refBase;
 						funcIdx = frame.funcIdx;
 						func = mod.functions[funcIdx];
 						code = func.packed;
-						if (code.length != func.code.length) assertPacked(func);
 						ip = frame.returnIp;
 					} else {
 						slow = true;
@@ -2037,7 +2146,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] == words[wb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2047,7 +2156,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] != words[wb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2057,7 +2166,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] < words[wb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2067,7 +2176,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] <= words[wb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2077,7 +2186,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] > words[wb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2087,7 +2196,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] >= words[wb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2097,7 +2206,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] == immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2107,7 +2216,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] != immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2117,7 +2226,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] < immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2127,7 +2236,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] <= immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2137,7 +2246,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] > immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2147,7 +2256,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (words[wb + ia] >= immValue(ib)) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2157,7 +2266,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (refs[rb + ia] == refs[rb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
 				break;
@@ -2167,9 +2276,31 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ib = ((word >> 24) & 65535) as int32;
 				if (refs[rb + ia] != refs[rb + ib]) {
 					const offset = packedBranch(word);
-					if (offset < 0 && vmBackEdgeOverBudget(vm)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
 					ip = ip + offset;
 				}
+				break;
+			}
+			case RaiserOpcode.ForLtI64: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const lhs = words[wb + ia];
+				if (lhs == INT64_HIGH) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
+				words[wb + ia] = lhs + 1;
+				budget -= 1;
+				if (budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+				if (lhs + 1 < words[wb + ib]) ip = ip + packedBranch(word);
+				break;
+			}
+			case RaiserOpcode.ForLtI64Imm: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const lhs = words[wb + ia];
+				if (lhs == INT64_HIGH) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
+				words[wb + ia] = lhs + 1;
+				budget -= 1;
+				if (budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+				if (lhs + 1 < immValue(ib)) ip = ip + packedBranch(word);
 				break;
 			}
 			case RaiserOpcode.BeqR: {
@@ -2368,7 +2499,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const imm = immValue(ic);
 				const sum = int64Bits((lhs as uint64) + (imm as uint64));
 				if ((sum ^ lhs) >= 0 || (sum ^ imm) >= 0) { words[wb + ia] = sum;
-				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "over- or underflow"); return; }
+				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
 				break;
 			}
 			case RaiserOpcode.SubI64Imm: {
@@ -2379,7 +2510,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const imm = immValue(ic);
 				const diff = int64Bits((lhs as uint64) - (imm as uint64));
 				if ((diff ^ lhs) >= 0 || (diff ^ ~imm) >= 0) { words[wb + ia] = diff;
-				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "over- or underflow"); return; }
+				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
 				break;
 			}
 			case RaiserOpcode.LoadField: {
@@ -2490,6 +2621,94 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				}
 				break;
 			}
+			case RaiserOpcode.LoadSlotW: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const handle = refs[rb + ib];
+				const idx = ((word >> 56) & 255) as int32;
+				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
+					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
+					const obj: Cursor<RaiserObjectData> = objects[handleIndex(handle)];
+					if (idx >= obj.classType.fields.length) { slow = true; break; }
+					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 40) & 65535) as int32]) { slow = true; break; } }
+					if (obj.fields[idx].kind == RaiserValueKind.Int) {
+						words[wb + ia] = obj.fields[idx].intVal;
+					} else {
+						slow = true;
+					}
+				} else {
+					slow = true;
+				}
+				break;
+			}
+			case RaiserOpcode.LoadSlotR: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const handle = refs[rb + ib];
+				const idx = ((word >> 56) & 255) as int32;
+				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
+					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
+					const obj: Cursor<RaiserObjectData> = objects[handleIndex(handle)];
+					if (idx >= obj.classType.fields.length) { slow = true; break; }
+					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 40) & 65535) as int32]) { slow = true; break; } }
+					const kind = obj.fields[idx].kind;
+					if (kind == RaiserValueKind.Nil || (kind >= RaiserValueKind.String && kind <= RaiserValueKind.Future)) {
+						writeRef(vm, rb + ia, obj.fields[idx].intVal);
+					} else {
+						slow = true;
+					}
+				} else {
+					slow = true;
+				}
+				break;
+			}
+			case RaiserOpcode.StoreSlotW: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
+				const handle = refs[rb + ia];
+				const idx = ((word >> 56) & 255) as int32;
+				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
+					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
+					const obj: Cursor<RaiserObjectData> = objects[handleIndex(handle)];
+					if (idx >= obj.classType.fields.length) { slow = true; break; }
+					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 24) & 65535) as int32]) { slow = true; break; } }
+					const kind = obj.fields[idx].kind;
+					if (kind == RaiserValueKind.Int || kind == RaiserValueKind.Nil) {
+						obj.fields[idx].kind = RaiserValueKind.Int;
+						obj.fields[idx].intVal = words[wb + ic];
+					} else {
+						slow = true;
+					}
+				} else {
+					slow = true;
+				}
+				break;
+			}
+			case RaiserOpcode.StoreSlotR: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
+				const handle = refs[rb + ia];
+				const idx = ((word >> 56) & 255) as int32;
+				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
+					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
+					const obj: Cursor<RaiserObjectData> = objects[handleIndex(handle)];
+					if (idx >= obj.classType.fields.length) { slow = true; break; }
+					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 24) & 65535) as int32]) { slow = true; break; } }
+					const kind = obj.fields[idx].kind;
+					if (kind == RaiserValueKind.Nil || (kind >= RaiserValueKind.String && kind <= RaiserValueKind.Future)) {
+						const old = obj.fields[idx].intVal;
+						const held = refs[rb + ic];
+						holdHandle(vm, held);
+						obj.fields[idx] = handleValue(held);
+						if (kind != RaiserValueKind.Nil) releaseHandle(vm, old);
+					} else {
+						slow = true;
+					}
+				} else {
+					slow = true;
+				}
+				break;
+			}
 			case RaiserOpcode.AddI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
@@ -2498,7 +2717,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const rhs = words[wb + ic];
 				const sum = int64Bits((lhs as uint64) + (rhs as uint64));
 				if ((sum ^ lhs) >= 0 || (sum ^ rhs) >= 0) { words[wb + ia] = sum;
-				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "over- or underflow"); return; }
+				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
 				break;
 			}
 			case RaiserOpcode.SubI64: {
@@ -2509,7 +2728,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const rhs = words[wb + ic];
 				const diff = int64Bits((lhs as uint64) - (rhs as uint64));
 				if ((diff ^ lhs) >= 0 || (diff ^ ~rhs) >= 0) { words[wb + ia] = diff;
-				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "over- or underflow"); return; }
+				} else { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
 				break;
 			}
 			case RaiserOpcode.MulI64: {
@@ -2518,7 +2737,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ic = ((word >> 40) & 65535) as int32;
 				const lhs = words[wb + ib];
 				const rhs = words[wb + ic];
-				if (mulOverflowsI64(lhs, rhs)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "over- or underflow"); return;
+				if (mulOverflowsI64(lhs, rhs)) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return;
 				} else { words[wb + ia] = int64Bits((lhs as uint64) * (rhs as uint64)); }
 				break;
 			}
@@ -2528,9 +2747,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ic = ((word >> 40) & 65535) as int32;
 				const lhs = words[wb + ib];
 				const rhs = words[wb + ic];
-				if (rhs == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "integer division by zero"); return;
+				if (rhs == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "integer division by zero"); return;
 				} else if (rhs == -1) {
-					if (lhs == INT64_LOW) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "over- or underflow"); return;
+					if (lhs == INT64_LOW) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return;
 					} else { words[wb + ia] = -lhs; }
 				} else {
 					words[wb + ia] = lhs / rhs;
@@ -2541,7 +2760,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ic] == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "integer modulo by zero"); return;
+				if (words[wb + ic] == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "integer modulo by zero"); return;
 				} else {
 					words[wb + ia] = words[wb + ic] == -1 ? 0 : words[wb + ib] % words[wb + ic];
 				}
@@ -2551,7 +2770,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ic] == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "integer division by zero"); return;
+				if (words[wb + ic] == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "integer division by zero"); return;
 				} else {
 					words[wb + ia] = int64Bits((words[wb + ib] as uint64) / (words[wb + ic] as uint64));
 				}
@@ -2561,7 +2780,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
-				if (words[wb + ic] == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "integer modulo by zero"); return;
+				if (words[wb + ic] == 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "integer modulo by zero"); return;
 				} else {
 					words[wb + ia] = int64Bits((words[wb + ib] as uint64) % (words[wb + ic] as uint64));
 				}
@@ -2592,7 +2811,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
 				const val = words[wb + ib];
-				if (val == INT64_LOW) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "over- or underflow"); return;
+				if (val == INT64_LOW) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return;
 				} else { words[wb + ia] = -val; }
 				break;
 			}
@@ -2660,7 +2879,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				const val = words[wb + ia];
 				const half = (1 as int64) << ((ib as int64) - 1);
 				const low = ic == 1 ? 0 : -half;
-				if (val < low || val >= low + 2 * half) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vmError(vm, "over- or underflow"); return; }
+				if (val < low || val >= low + 2 * half) { vm.ip = ip; vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget; vmError(vm, "over- or underflow"); return; }
 				break;
 			}
 			case RaiserOpcode.SignExtend: {
@@ -2678,7 +2897,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 		}
 		if (slow) {
 			vm.ip = ip;
-			vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb;
+			vm.funcIdx = funcIdx; vm.wordBase = wb; vm.refBase = rb; vm.loopCount = vm.loopLimit - budget;
 			const ia = ((word >> 8) & 65535) as int32;
 			const ib = ((word >> 24) & 65535) as int32;
 			const ic = ((word >> 40) & 65535) as int32;
@@ -2691,6 +2910,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				if (vm.halted) break;
 				words = vm.regs.words;
 				refs = vm.regs.refs;
+				objects = vm.objectHeap.objects;
 			} else {
 				vmStepSlow(vm, op, ta, tb, tc, func);
 				if (vm.halted || vm.yielded) break;
@@ -2705,7 +2925,9 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				}
 				words = vm.regs.words;
 				refs = vm.regs.refs;
+				objects = vm.objectHeap.objects;
 			}
+			budget = vm.loopLimit - vm.loopCount;
 		}
 	}
 }
@@ -2818,11 +3040,11 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		RaiserOpcode.StoreField => {
 			vmHandleStoreField(vm, func, pc, ia, ib, ic);
 		},
-		RaiserOpcode.LoadSlot => {
+		RaiserOpcode.LoadSlot | RaiserOpcode.LoadSlotW | RaiserOpcode.LoadSlotR => {
 			when (mode != "danger") { vmCheckSlot(vm, func, pc, ib, ic); }
 			vmHandleLoadField(vm, func, pc, ia, ib, ic);
 		},
-		RaiserOpcode.StoreSlot => {
+		RaiserOpcode.StoreSlot | RaiserOpcode.StoreSlotW | RaiserOpcode.StoreSlotR => {
 			when (mode != "danger") { vmCheckSlot(vm, func, pc, ia, ib); }
 			vmHandleStoreField(vm, func, pc, ia, ib, ic);
 		},
@@ -2889,6 +3111,9 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		},
 		RaiserOpcode.CallIndirect => {
 			vmHandleCallIndirect(vm, ia, ib, ic);
+		},
+		RaiserOpcode.CallClosure => {
+			vmHandleCallClosure(vm, ia, ib, ic);
 		},
 		RaiserOpcode.Ret => {
 			vmHandleRet(vm, ia, ib, ic);
@@ -2966,12 +3191,12 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 // The frame of the callee begins at the first word and the first ref the call site names, so an
 // argument whose class matches its parameter is already in place; one that differs is read out as a value
 // first and then written into the callee's own class, because the two layouts overlap.
-function enterCallee(vm: RaiserVM, dest: int32, calleeFuncIdx: number, site: int32): void {
+function enterCallee(vm: RaiserVM, dest: int32, calleeFuncIdx: number, site: int32, withoutLast: boolean = false): void {
 	const caller = getModuleFunc(vm.mod, vm.funcIdx);
 	const callee = vm.mod.functions[calleeFuncIdx];
 	const blocks = caller.blocks;
-	const argc = blocks[site + 2] as int32;
-	const sig = blocks[site + 3];
+	const argc = (blocks[site + 2] as int32) - (withoutLast ? 1 : 0);
+	const sig = withoutLast ? sigPrefix(blocks[site + 3], argc) : blocks[site + 3];
 	let args: RaiserValue[] | null = null;
 	if (sig < 0 || argc >= callee.sigs.length || callee.sigs[argc] != sig) {
 		args = [];
@@ -3084,6 +3309,22 @@ function vmHandleCallIndirect(vm: RaiserVM, ia: int32, ib: int32, ic: int32): vo
 		vmError(vm, `function index out of bounds: ${calleeFuncIdx}`); return;
 	}
 	enterCallee(vm, ia, calleeFuncIdx as number, ic);
+}
+
+function vmHandleCallClosure(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
+	if (vm.callStack.depth >= MAX_CALL_DEPTH) {
+		vmError(vm, `call stack overflow (depth ${MAX_CALL_DEPTH})`); return;
+	}
+	const handle = vmHeapOperand(vm, getDyn(vm, ib), RaiserValueKind.Object, "an object");
+	if (vm.halted) return;
+	const fn = heapObjectGetField(vm.objectHeap, handle, "fn");
+	if (fn.kind != RaiserValueKind.Int || fn.intVal < 0 || fn.intVal >= vm.mod.functions.length) {
+		vmError(vm, `function index out of bounds: ${fn.intVal}`); return;
+	}
+	const env = heapObjectGetField(vm.objectHeap, handle, "env");
+	const caller = getModuleFunc(vm.mod, vm.funcIdx);
+	if (env.kind != RaiserValueKind.Nil) setRegConform(vm, caller.blocks[ic + 3 + caller.blocks[ic + 2]] as int32, env);
+	enterCallee(vm, ia, fn.intVal as number, ic, env.kind == RaiserValueKind.Nil);
 }
 
 // --- Array opcode handlers ---
@@ -4714,6 +4955,21 @@ test "iteration budget counts loop back-edges, not instructions" {
 	assert vm.loopCount == 101;
 }
 
+test "the budget carries across an opcode that leaves the dispatch loop's fast path" {
+	const code: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.LoadInt, 0, immField(7), 0),
+		raiserABC(RaiserOpcode.Print, 0, 0, 0),
+		raiserAx(RaiserOpcode.Jump, -2),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	];
+	const vm = createVM(makeTestModule(code, []));
+	vm.loopLimit = 5;
+	execLoop(vm);
+	assert vm.error.indexOf("too many iterations (limit 5)") >= 0, vm.error;
+	assert vm.loopCount == 6;
+	assert vm.output == "7\n7\n7\n7\n7\n7\n", vm.output;
+}
+
 test "forward jumps are free; only back-edges consume the budget" {
 	// Countdown K=3: the back-edge executes exactly 3 times; the forward
 	// Beq exit and all straight-line instructions cost nothing. Pre-fix
@@ -5471,6 +5727,45 @@ function closurePairCode(): RaiserInstruction[] {
 	];
 }
 
+test "a closure pair built by name is called through CallClosure with and without its env" {
+	const mainCode: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.NewObject, 1, 0, 0),
+		raiserABx(RaiserOpcode.LoadConst, 2, 0),
+		raiserABC(RaiserOpcode.StoreField, 1, 1, 2),
+		raiserABx(RaiserOpcode.LoadConst, 3, 2),
+		raiserABC(RaiserOpcode.StoreField, 1, 3, 3),
+		raiserABx(RaiserOpcode.LoadConst, 5, 4),
+		raiserABC(RaiserOpcode.CallClosure, 4, 1, 2),
+		raiserABC(RaiserOpcode.Print, 4, 0, 0),
+		raiserABC(RaiserOpcode.NewObject, 7, 0, 0),
+		raiserABx(RaiserOpcode.LoadConst, 2, 5),
+		raiserABC(RaiserOpcode.StoreField, 7, 1, 2),
+		raiserABC(RaiserOpcode.StoreField, 7, 3, 1),
+		raiserABx(RaiserOpcode.LoadConst, 9, 6),
+		raiserABC(RaiserOpcode.CallClosure, 8, 7, 2),
+		raiserABC(RaiserOpcode.Print, 8, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 8, 0, 0),
+	];
+	const mainConsts: RaiserValue[] = [raiserInt(1), raiserConstString("fn"), raiserNil(), raiserConstString("env"), raiserInt(41), raiserInt(2), raiserInt(42)];
+	const plusOne: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.AddI64Imm, 1, 0, immField(1)),
+		raiserABC(RaiserOpcode.Ret, 1, 0, 0),
+	];
+	const viaEnv: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.LoadField, 2, 1, 0),
+		raiserABC(RaiserOpcode.AddI64, 3, 0, 2),
+		raiserABC(RaiserOpcode.Ret, 3, 0, 0),
+	];
+	const word = RaiserRegClass.Word;
+	const ref = RaiserRegClass.Ref;
+	const fMain = createRaiserFunction("main", mainCode, mainConsts, 0, 0, 11, [ref, ref, word, ref, word, word, ref, ref, word, word, ref]);
+	const fPlusOne = createRaiserFunction("plusOne", plusOne, [], 1, 1, 2, [word, word]);
+	const fViaEnv = createRaiserFunction("viaEnv", viaEnv, [raiserConstString("fn")], 2, 2, 4, [word, ref, word, word]);
+	const vm = execModule(createRaiserModule("t", [fMain, fPlusOne, fViaEnv], 0), "orc");
+	assert vm.error == "", vm.error;
+	assert vm.output == "42\n43\n", vm.output;
+}
+
 test "spawn returns a future the strand completes, await reads it" {
 	const mainCode = closurePairCode();
 	mainCode.push(raiserABC(RaiserOpcode.Spawn, 3, 1, 0));
@@ -6198,6 +6493,37 @@ test "ledger: a program that drops strings, arrays, objects and boxes ends with 
 	assert liveItems(vm) == 0;
 }
 
+const assignsToItself: RaiserInstruction[] = [
+	raiserABx(RaiserOpcode.LoadConst, 0, 0),
+	raiserABx(RaiserOpcode.LoadConst, 1, 1),
+	raiserABC(RaiserOpcode.ConcatStr, 2, 0, 1),
+	raiserABC(RaiserOpcode.NewObject, 3, 0, 0),
+	raiserABC(RaiserOpcode.StoreField, 3, 2, 2),
+	raiserABC(RaiserOpcode.NewObject, 4, 0, 0),
+	raiserABC(RaiserOpcode.Move, 2, 2, 0),
+	raiserABC(RaiserOpcode.Move, 3, 3, 0),
+	raiserABC(RaiserOpcode.LoadField, 5, 3, 2),
+	raiserABC(RaiserOpcode.StoreField, 3, 2, 5),
+	raiserABC(RaiserOpcode.LoadNil, 5, 0, 0),
+	raiserABC(RaiserOpcode.Move, 6, 3, 0),
+	raiserABC(RaiserOpcode.Move, 3, 4, 0),
+	raiserABC(RaiserOpcode.Move, 4, 6, 0),
+	raiserABC(RaiserOpcode.LoadNil, 6, 0, 0),
+	raiserABC(RaiserOpcode.LoadNil, 2, 0, 0),
+	raiserABC(RaiserOpcode.LoadField, 7, 4, 2),
+	raiserABx(RaiserOpcode.LoadConst, 8, 3),
+	raiserABC(RaiserOpcode.Halt, 8, 0, 0),
+];
+
+test "ledger: a register, a field and a swap assigned to themselves keep what they hold and free it with the last holder" {
+	const vm = execModule(makeTestModule(assignsToItself, [raiserConstString("ab"), raiserConstString("cd"), raiserConstString("s"), raiserInt(0)]), "orc");
+	assert vm.error == "", vm.error;
+	assert heapStringText(vm.arrayHeap, heapBoxValue(vm.arrayHeap, vm.regs.refs[7])) == "abcd";
+	assert heapStringLive(vm.arrayHeap) == 1 && vmLiveCount(vm) == 2;
+	releaseRoots(vm);
+	assert liveItems(vm) == 0;
+}
+
 test "ledger: an item no root reaches but still counted fails the program end" {
 	const vm = createVM(makeTestModule(dropsEverything, dropsEverythingConsts), "orc");
 	rcIncref(vm.arrayHeap, vm.objectHeap, heapAllocString(vm.arrayHeap, "leaked"));
@@ -6236,6 +6562,29 @@ test "ledger: a returning call releases what its frame still holds, leaving only
 	const vm = execModule(createRaiserModule("m", [main, worker], 0), "orc");
 	assert vm.error == "", vm.error;
 	assert heapStringLive(vm.arrayHeap) == 0 && vmLiveCount(vm) == 0 && heapBoxLive(vm.arrayHeap) == 1, `${heapStringLive(vm.arrayHeap)} ${vmLiveCount(vm)} ${heapBoxLive(vm.arrayHeap)}`;
+}
+
+test "a packed Ret names the refs its frame owns and whether a handler can still be open there, before any module holds it" {
+	const body = dropsEverything.slice(0, dropsEverything.length - 1);
+	body.push(raiserABC(RaiserOpcode.Ret, 7, 0, 0));
+	const guardedCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.Try, 0, 3),
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+		raiserABx(RaiserOpcode.Catch, 1, 2),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+		raiserABC(RaiserOpcode.Finally, 2, 0, 0),
+		raiserABC(RaiserOpcode.FinallyEnd, 2, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const worker = createRaiserFunction("worker", body, dropsEverythingConsts, 0, 0, 8);
+	const guarded = createRaiserFunction("guarded", guardedCode, [raiserInt(7)], 0, 0, 4);
+	const owned = worker.refRegs - worker.paramRefs;
+	const ret = worker.packed[worker.packed.length - 1];
+	assert owned > 0 && packedB(ret) == worker.paramRefs && ((ret >> 40) & 65535) == owned * 2, `${packedB(ret)} ${(ret >> 40) & 65535} ${owned}`;
+	for (let pc = 0; pc < guarded.code.length; pc += 1) {
+		if (guarded.code[pc].op == RaiserOpcode.Ret) assert ((guarded.packed[pc] >> 40) & 1) == 1;
+	}
 }
 
 test "ledger: ArraySetLen releases the strings it truncates" {

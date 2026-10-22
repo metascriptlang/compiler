@@ -206,9 +206,16 @@ export enum RaiserOpcode {
 	BrNeR,            // ABC: if refs[A] != refs[B] pc += branchOffset(C)
 	LitConv,          // ABC: fatal unless R[A] is nil or one of the literals listed in K[B] (`len:text` each), named K[C]
 	CallDirect,       // ABC: Call whose target and signature createRaiserModule checked
+	ForLtI64,         // ABC: R[A] += 1 (stops on overflow), one budgeted iteration, then if R[A] < R[B] pc += branchOffset(C)
+	ForLtI64Imm,      // ABC: ForLtI64 against the immediate in B
+	CallClosure,      // ABC: R[A] = call the closure pair R[B] with R[A+1]..R[A+n], its env as R[A+n] unless nil; the site counts the env
+	LoadSlotW,        // ABC: LoadSlot into a Word register
+	LoadSlotR,        // ABC: LoadSlot into a Ref register
+	StoreSlotW,       // ABC: StoreSlot from a Word register
+	StoreSlotR,       // ABC: StoreSlot from a Ref register
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.CallDirect;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.StoreSlotR;
 
 // How FutureCombine settles its result from its inputs (Promise.all, race, any).
 export enum RaiserCombine {
@@ -310,6 +317,8 @@ function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.BeqI64Imm | RaiserOpcode.BneI64Imm | RaiserOpcode.BltI64Imm | RaiserOpcode.BleI64Imm | RaiserOpcode.BgtI64Imm | RaiserOpcode.BgeI64Imm
 			| RaiserOpcode.BrEqI64Imm | RaiserOpcode.BrNeI64Imm | RaiserOpcode.BrLtI64Imm | RaiserOpcode.BrLeI64Imm | RaiserOpcode.BrGtI64Imm | RaiserOpcode.BrGeI64Imm => "l--",
 		RaiserOpcode.BeqR | RaiserOpcode.BneR | RaiserOpcode.BrEqR | RaiserOpcode.BrNeR => "rr-",
+		RaiserOpcode.ForLtI64 => "il-",
+		RaiserOpcode.ForLtI64Imm => "i--",
 		RaiserOpcode.AddF64 | RaiserOpcode.SubF64 | RaiserOpcode.MulF64 | RaiserOpcode.DivF64 => "fff",
 		RaiserOpcode.NegF64 => "ff-",
 		RaiserOpcode.BeqF64 | RaiserOpcode.BneF64 | RaiserOpcode.BltF64 | RaiserOpcode.BleF64 | RaiserOpcode.BgtF64 | RaiserOpcode.BgeF64 => "ff-",
@@ -330,6 +339,10 @@ function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.ArraySlice => "rrp",
 		RaiserOpcode.LoadField | RaiserOpcode.LoadSlot => "xr-",
 		RaiserOpcode.StoreField | RaiserOpcode.StoreSlot => "r-x",
+		RaiserOpcode.LoadSlotW => "ir-",
+		RaiserOpcode.LoadSlotR => "rr-",
+		RaiserOpcode.StoreSlotW => "r-i",
+		RaiserOpcode.StoreSlotR => "r-r",
 		RaiserOpcode.ConcatStr => "rxx",
 		RaiserOpcode.EqStr | RaiserOpcode.NeStr | RaiserOpcode.LtStr | RaiserOpcode.LeStr => "rr-",
 		RaiserOpcode.StrLen | RaiserOpcode.StrByteLen => "ir-",
@@ -343,6 +356,7 @@ function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.StoreDeref => "x-x",
 		RaiserOpcode.Call | RaiserOpcode.CallDirect | RaiserOpcode.CallHost | RaiserOpcode.FutureCombine => "x--",
 		RaiserOpcode.CallIndirect => "xi-",
+		RaiserOpcode.CallClosure => "xr-",
 		RaiserOpcode.Spawn | RaiserOpcode.Await | RaiserOpcode.FutureSettle | RaiserOpcode.FutureFail => "xx-",
 		RaiserOpcode.Sleep => "xx-",
 		RaiserOpcode.Finally | RaiserOpcode.FinallyEnd => "e--",
@@ -375,7 +389,7 @@ export function operandKind(op: RaiserOpcode, slot: int32): int32 {
 }
 
 export function opHasSite(op: RaiserOpcode): boolean {
-	return op == RaiserOpcode.Call || op == RaiserOpcode.CallDirect || op == RaiserOpcode.CallIndirect || op == RaiserOpcode.CallHost || op == RaiserOpcode.FutureCombine || op == RaiserOpcode.NewArray;
+	return op == RaiserOpcode.Call || op == RaiserOpcode.CallDirect || op == RaiserOpcode.CallIndirect || op == RaiserOpcode.CallClosure || op == RaiserOpcode.CallHost || op == RaiserOpcode.FutureCombine || op == RaiserOpcode.NewArray;
 }
 
 // How many registers follow A as the arguments of a site opcode: the count sits in C, or in B for NewArray.
@@ -505,7 +519,8 @@ export function isBranchI64(op: RaiserOpcode): boolean {
 	return match (op) {
 		RaiserOpcode.BrEqI64 | RaiserOpcode.BrNeI64 | RaiserOpcode.BrLtI64 | RaiserOpcode.BrLeI64 | RaiserOpcode.BrGtI64 | RaiserOpcode.BrGeI64
 			| RaiserOpcode.BrEqI64Imm | RaiserOpcode.BrNeI64Imm | RaiserOpcode.BrLtI64Imm | RaiserOpcode.BrLeI64Imm
-			| RaiserOpcode.BrGtI64Imm | RaiserOpcode.BrGeI64Imm | RaiserOpcode.BrEqR | RaiserOpcode.BrNeR => true,
+			| RaiserOpcode.BrGtI64Imm | RaiserOpcode.BrGeI64Imm | RaiserOpcode.BrEqR | RaiserOpcode.BrNeR
+			| RaiserOpcode.ForLtI64 | RaiserOpcode.ForLtI64Imm => true,
 		_ => false,
 	};
 }
@@ -519,8 +534,15 @@ export function branchOffset(field: number): int64 {
 	return (field as int64) - BRANCH_EXCESS;
 }
 
-// Packed word: opcode in bits 0-7, then a, b and c in 16 bits each; a branch's c takes the 24 bits from bit 40 up,
-// and a slot opcode's slot the top 8.
+export function carriesSlot(op: RaiserOpcode): boolean {
+	return match (op) {
+		RaiserOpcode.LoadSlot | RaiserOpcode.StoreSlot | RaiserOpcode.LoadSlotW | RaiserOpcode.LoadSlotR | RaiserOpcode.StoreSlotW | RaiserOpcode.StoreSlotR => true,
+		_ => false,
+	};
+}
+
+// Packed word: opcode in bits 0-7, then a, b and c in 16 bits each; a branch's offset and a jump's take the 24 bits
+// from bit 40 up as a signed field, and a slot opcode's slot the top 8.
 const PACKED_FIELD_LIMIT = 65536;
 export const MAX_SLOT = 255;
 const PACKED_BRANCH_LIMIT = 16777216;
@@ -550,15 +572,20 @@ export function packedBx(word: int64): number {
 }
 
 export function packedBranch(word: int64): int32 {
-	return (((word >> 40) & 16777215) - BRANCH_EXCESS) as int32;
+	return (word >> 40) as int32;
 }
 
 export function packInstruction(inst: RaiserInstruction): int64 {
 	const op = inst.op as int64;
 	if (op < 0 || op > 255) throw new Error(`internal: opcode ${inst.op} does not fit the packed 8-bit field`);
-	const c = isBranchI64(inst.op) ? packedField(inst, inst.c, "c", PACKED_BRANCH_LIMIT, 24) : packedField(inst, inst.c, "c", PACKED_FIELD_LIMIT, 16);
-	const slot = inst.op == RaiserOpcode.LoadSlot || inst.op == RaiserOpcode.StoreSlot ? packedField(inst, inst.slot, "slot", MAX_SLOT + 1, 8) << 56 : 0;
-	return op | (packedField(inst, inst.a, "a", PACKED_FIELD_LIMIT, 16) << 8) | (packedField(inst, inst.b, "b", PACKED_FIELD_LIMIT, 16) << 24) | (c << 40) | slot;
+	if (inst.op == RaiserOpcode.Jump) {
+		const offset = getSignedAx(inst) as int64;
+		if (inst.a >= 256 || offset < -BRANCH_EXCESS || offset >= BRANCH_EXCESS) throw new Error(`internal: jump offset ${offset} does not fit the packed 24-bit field`);
+		return op | (offset << 40);
+	}
+	const c = isBranchI64(inst.op) ? branchOffset(packedField(inst, inst.c, "c", PACKED_BRANCH_LIMIT, 24) as number) << 40 : packedField(inst, inst.c, "c", PACKED_FIELD_LIMIT, 16) << 40;
+	const slot = carriesSlot(inst.op) ? packedField(inst, inst.slot, "slot", MAX_SLOT + 1, 8) << 56 : 0;
+	return op | (packedField(inst, inst.a, "a", PACKED_FIELD_LIMIT, 16) << 8) | (packedField(inst, inst.b, "b", PACKED_FIELD_LIMIT, 16) << 24) | c | slot;
 }
 
 // --- Tests ---
@@ -641,20 +668,18 @@ test "CallHost zero args" {
 }
 
 test "packed word holds op, a, b and c" {
-	const w = packInstruction(raiserABC(RaiserOpcode.Jump, 65535, 1000, 7));
-	assert (w & 255) == (RaiserOpcode.Jump as int64);
+	const w = packInstruction(raiserABC(RaiserOpcode.AddI64, 65535, 1000, 7));
+	assert (w & 255) == (RaiserOpcode.AddI64 as int64);
 	assert ((w >> 8) & 65535) == 65535;
 	assert ((w >> 24) & 65535) == 1000;
 	assert ((w >> 40) & 65535) == 7;
 }
 
-test "packed word keeps a negative jump's three bytes" {
-	const inst = raiserAx(RaiserOpcode.Jump, -5);
-	const w = packInstruction(inst);
-	const a = ((w >> 8) & 65535) as int32;
-	const b = ((w >> 24) & 65535) as int32;
-	const c = ((w >> 40) & 65535) as int32;
-	assert a * 65536 + b * 256 + c == 16777211;
+test "packed word keeps a jump's signed offset in one field" {
+	for (const offset of [0, 1, -1, -5, 32768, -32769, 8388607, -8388608]) {
+		const w = packInstruction(raiserAx(RaiserOpcode.Jump, offset));
+		assert packedOp(w) == RaiserOpcode.Jump && packedBranch(w) == offset;
+	}
 }
 
 test "an operand outside 16 bits stops the pack" {

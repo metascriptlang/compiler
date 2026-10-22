@@ -75,11 +75,16 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 	for (const c of constants) names.push(c.kind == RaiserValueKind.String ? constStringText(c) : "");
 	let paramRefs: int32 = 0;
 	for (let r = 0; r < arity && r < layout.regOps.length; r += 1) if (inRefFile((layout.regOps[r] & 7) as RaiserRegClass)) paramRefs += 1;
-	return { name, code: layout.code, packed, lines, fieldCache, constants, names, arity, localsCount, wordRegs: layout.wordRegs, refRegs: layout.refRegs, paramRefs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: layout.sigs, copyPlans: [], classTypes: [] };
+	const func: RaiserFunction = { name, code: layout.code, packed, lines, fieldCache, constants, names, arity, localsCount, wordRegs: layout.wordRegs, refRegs: layout.refRegs, paramRefs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: layout.sigs, copyPlans: [], classTypes: [] };
+	bindReturns(func);
+	return func;
 }
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {
-	for (const func of functions) bindDirectCalls(func, functions);
+	for (const func of functions) {
+		assertPacked(func);
+		bindDirectCalls(func, functions);
+	}
 	return { name, functions, entry, globalCount: 0, globalInit: [], records: [], exports: [] };
 }
 
@@ -93,6 +98,21 @@ function bindDirectCalls(func: RaiserFunction, functions: RaiserFunction[]): voi
 		if (argc >= callee.sigs.length || callee.sigs[argc as int32] != func.blocks[site + 3]) continue;
 		inst.op = RaiserOpcode.CallDirect;
 		func.packed[pc] = packInstruction(inst);
+	}
+}
+
+// A packed Ret carries what its frame releases: B the first owned ref, C the owned count times two,
+// plus one when the function opens a handler and the Ret must check for one still open.
+function bindReturns(func: RaiserFunction): void {
+	let opensHandler: int32 = 0;
+	for (const inst of func.code) {
+		if (inst.op == RaiserOpcode.Try) opensHandler = 1;
+	}
+	const owned = func.refRegs - func.paramRefs;
+	for (let pc = 0; pc < func.code.length; pc += 1) {
+		const inst = func.code[pc];
+		if (inst.op != RaiserOpcode.Ret) continue;
+		func.packed[pc] = packInstruction(raiserABC(RaiserOpcode.Ret, inst.a, func.paramRefs, owned * 2 + opensHandler));
 	}
 }
 

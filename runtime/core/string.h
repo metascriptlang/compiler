@@ -162,9 +162,6 @@ static inline void msStringDestroyForce(msString s) {
 	if (s.p != NULL) free(s.p);
 }
 
-/* Deep copy assignment */
-void msStringAssign(msString* a, msString b);
-
 /* COW: copy literal before mutation */
 void msStringPrepareMutation(msString* s);
 
@@ -223,9 +220,6 @@ static inline void msStringAppendChar(msString* dest, char c) {
 /* Byte-equal comparison */
 bool msStringEquals(msString a, msString b);
 
-/* Case-insensitive equality */
-bool msStringEqualsIgnoreCase(msString a, msString b);
-
 /* Lexicographic compare (< 0, 0, > 0) */
 int msStringCompare(msString a, msString b);
 
@@ -282,9 +276,6 @@ int64_t msStringCharCodeAt(msString s, int64_t idx);
 /* Raw byte at byte offset. Returns -1 if out of range. */
 int64_t msStringByteAt(msString s, int64_t idx);
 
-/* Single byte as new string (byte-level, for lexer/scanner). */
-msString msStringByteCharAt(msString s, int64_t idx);
-
 /* Create a string from a Unicode codepoint (UTF-8 encoded). */
 msString msStringFromCodePoint(int64_t cp);
 void msStringAppendCodePoint(msString* dest, int64_t cp);
@@ -302,7 +293,6 @@ msString msStringToUpper(msString s);
 msString msStringTrim(msString s);
 msString msStringTrimStart(msString s);
 msString msStringTrimEnd(msString s);
-msString msStringRepeat(msString s, int64_t count);
 msString msStringReplace(msString s, msString search, msString replacement);
 msString msStringReplaceAll(msString s, msString search, msString replacement);
 msString msStringReverse(msString s);

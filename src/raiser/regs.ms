@@ -149,6 +149,12 @@ function ranked(op: RaiserOpcode, a: RaiserRegClass): RaiserOpcode {
 	};
 }
 
+function typedSlot(op: RaiserOpcode, value: RaiserRegClass): RaiserOpcode {
+	if (value == RaiserRegClass.Word) return op == RaiserOpcode.LoadSlot ? RaiserOpcode.LoadSlotW : RaiserOpcode.StoreSlotW;
+	if (value == RaiserRegClass.Ref) return op == RaiserOpcode.LoadSlot ? RaiserOpcode.LoadSlotR : RaiserOpcode.StoreSlotR;
+	return op;
+}
+
 // Checks every operand of every instruction against its role and renumbers the registers; a function that
 // breaks a role stops here, with the instruction and the register named.
 export function layoutRegisters(name: string, code: RaiserInstruction[], constants: RaiserValue[], regCount: int32, declared: RaiserRegClass[] | null): RaiserRegLayout {
@@ -179,6 +185,8 @@ export function layoutRegisters(name: string, code: RaiserInstruction[], constan
 			if (inst.a >= regCount || inst.b >= regCount || ca != cb) throw new Error(`internal: Move at instruction ${pc} of ${name} copies R${inst.b} (${inst.b < regCount ? regClassLetter(cb) : "none"}) to R${inst.a} (${inst.a < regCount ? regClassLetter(ca) : "none"}) across register classes`);
 			op = inRefFile(ca) ? RaiserOpcode.MoveR : RaiserOpcode.MoveW;
 		}
+		if (op == RaiserOpcode.LoadSlot && inst.a < regCount) op = typedSlot(op, classes[inst.a as int32]);
+		if (op == RaiserOpcode.StoreSlot && inst.c < regCount) op = typedSlot(op, classes[inst.c as int32]);
 		if (inst.a < regCount && (op == RaiserOpcode.BeqI64 || op == RaiserOpcode.BneI64 || op == RaiserOpcode.BrEqI64 || op == RaiserOpcode.BrNeI64)) op = ranked(op, classes[inst.a as int32]);
 		const fields: int32[] = [inst.a as int32, inst.b as int32, inst.c as int32];
 		for (let slot = 0; slot < 3; slot += 1) {

@@ -3339,8 +3339,8 @@ export function rearmLiteralForRecheck(lit: Node, formal: Type | null): void {
 		if (ft != null && !hasGenericParams(ft)) continue;
 		if (v.kind != NodeKind.ObjectLiteral) { clearCheckerState(v); continue; }
 		const st = ft == null ? null : peelToStructOrUnion(ft);
-		if (st == null || st.kind != TypeKind.Struct) continue;
-		rearmLiteralForRecheck(v, ft);
+		if (st != null && st.kind == TypeKind.Struct) rearmLiteralForRecheck(v, ft);
+		else if (ft != null) clearCheckerState(v);
 	}
 }
 

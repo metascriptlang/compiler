@@ -26,7 +26,7 @@ DEFAULT_LANES="build suite"
 ORDER="tools build boundary suite lsp hcr tests fmt corpus san guard solana"
 LADDER="build boundary suite lsp hcr tests fmt corpus san guard solana"
 KNOWN_LANES="boundary suite lsp hcr tests fmt corpus san guard solana"
-RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|\.rms$|^src/test/corpus/run\.ms$'
+RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|\.rms$|^src/test/corpus/run\.ms$'
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
 SELECT_STD='^std/.*\.(ms|cms|jms)$'
 
@@ -1673,6 +1673,7 @@ src/codegen/raiser/emit.ms|raiser
 src/transform/raiserLowering.ms|raiser
 std/core/date/index.rms|raiser
 src/test/corpus/run.ms|raiser
+src/compiler/meta/hostTable.ms|raiser
 src/checker/checkPass.ms|
 src/codegen/c/expressions.ms|
 std/core/date/index.cms|

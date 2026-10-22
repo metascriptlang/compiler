@@ -81,7 +81,7 @@ function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
 		CTypeKind.Array => {
 			if (t.base == null) return "unknown";
 			const elem = cTypeToMs(t.base);
-			if (t.arrayLen >= 0) return `SizedArray<${elem}, ${t.arrayLen}>`;
+			if (t.arrayLen >= 0) return elem.includes("=>") ? `(${elem})[${t.arrayLen}]` : `${elem}[${t.arrayLen}]`;
 			return `Span<${elem}>`;
 		},
 		CTypeKind.Func => emitFuncType(t),
@@ -154,7 +154,8 @@ function emitStructBody(name: string, t: CType, prefix: string): string {
 
 // ===== Complete extern structs =====
 // Complete: the declared fields are all of C's, in C's order, each mapped to a type of C's
-// size and alignment; the checker folds that layout and the C backend asserts it.
+// size and alignment; the checker folds that layout and the C backend asserts it. A union's
+// key carries UNION_KEY_MARK, so the checker lays its members over each other.
 
 const completeStructKeys = new HashSet<string>();
 
@@ -172,6 +173,12 @@ export function registerCompleteStruct(key: string): void {
 
 export function isCompleteStruct(key: string): boolean {
 	return completeStructKeys.has(key);
+}
+
+const UNION_KEY_MARK = "\tunion";
+
+export function isCompleteUnion(key: string): boolean {
+	return completeStructKeys.has(key + UNION_KEY_MARK);
 }
 
 function mappedWidth(ms: string): int32 {
@@ -206,13 +213,13 @@ function exactField(t: CType, objs: Obj[], target: TargetInfo): boolean {
 		CTypeKind.Enum => t.size == 4 && enumFitsInt(t, objs),
 		CTypeKind.Ptr => t.base == null || t.base.kind != CTypeKind.Func,
 		CTypeKind.Array => t.arrayLen > 0 && t.base != null && exactField(t.base, objs, target),
-		CTypeKind.Struct => cTypeToMs(t) != "unknown" && isCompleteTranslation(t, objs, target),
+		CTypeKind.Struct | CTypeKind.Union => cTypeToMs(t) != "unknown" && isCompleteTranslation(t, objs, target),
 		_ => false,
 	};
 }
 
 function isCompleteTranslation(t: CType, objs: Obj[], target: TargetInfo): boolean {
-	if (t.kind != CTypeKind.Struct || !t.layoutKnown || t.isFlexible || t.members.length == 0) return false;
+	if ((t.kind != CTypeKind.Struct && t.kind != CTypeKind.Union) || !t.layoutKnown || t.isFlexible || t.members.length == 0) return false;
 	if (target.pointerSize != 8) return false;
 	for (const m of t.members) {
 		if (!exactField(m.type, objs, target)) return false;
@@ -227,7 +234,8 @@ function translatedStructKey(name: string, t: CType, target: TargetInfo): string
 		names.push(m.name);
 		types.push(cTypeToMs(m.type));
 	}
-	return completeStructKey(`${target.os}-${target.cpu}`, name, names, types);
+	const key = completeStructKey(`${target.os}-${target.cpu}`, name, names, types);
+	return t.kind == CTypeKind.Union ? key + UNION_KEY_MARK : key;
 }
 
 function emitEnum(objs: Obj[], enumType: CType, enumName: string, prefix: string): string {
@@ -672,9 +680,41 @@ test "a struct whose fields all translate exactly is complete" {
 	assert !arrayContains(names, "Pragma1");
 }
 
+const UNION_SHAPES = "typedef union { int i; double d; } U;\n"
+	+ "typedef struct { int tag; U value; } HoldsUnion;\n"
+	+ "typedef struct { unsigned long size; HoldsUnion color; } HoldsUnionDeep;\n"
+	+ "typedef struct { char c; long q; char d; } Padded;\n"
+	+ "typedef union { Padded p; int i; } PadUnion;\n"
+	+ "typedef union { char c[5]; long long q; } Mixed;\n"
+	+ "typedef union { PadUnion p; Mixed m; char c; } Nest;\n";
+
+test "a union whose members all translate exactly is complete and keyed as a union" {
+	const keys: string[] = [];
+	translateCHeader(UNION_SHAPES, [], false, "header.h", [], null, null, null, targetFor("linux", "x86_64"), keys);
+	const unions: string[] = [];
+	const structs: string[] = [];
+	for (const k of keys) {
+		const name = k.split("\t")[1];
+		if (k.endsWith(UNION_KEY_MARK)) unions.push(name);
+		else structs.push(name);
+	}
+	assert unions.join(",") == "U,PadUnion,Mixed,Nest", unions.join(",");
+	assert structs.join(",") == "HoldsUnion,HoldsUnionDeep,Padded", structs.join(",");
+	assert isCompleteUnion(completeStructKey("linux-x86_64", "Mixed", ["c", "q"], ["int8[5]", "int64"]));
+	assert !isCompleteStruct(completeStructKey("linux-x86_64", "Mixed", ["c", "q"], ["int8[5]", "int64"]));
+}
+
+test "a fixed C array is spelled T[N]" {
+	const ms = translateCHeader("typedef struct { char c[5]; int (*fns[2])(int); } Arr;\n", ["Arr"]);
+	assert ms.contains("c: int8[5];"), ms;
+	assert ms.contains("fns: ((p0: int32) => int32)[2];"), ms;
+}
+
 test "a C layout msc does not reproduce leaves the struct incomplete" {
-	const src = "typedef union { int i; double d; } U;\n"
-		+ "typedef struct { int tag; union { int i; double d; }; } AnonU;\n"
+	const src = "typedef struct { int tag; union { int i; double d; }; } AnonU;\n"
+		+ "typedef struct { int tag; union { int i; double d; } v; } UntaggedU;\n"
+		+ "typedef union { unsigned a : 3; int b; } BitsU;\n"
+		+ "typedef union __attribute__((packed)) { char a; int b; } PackedU;\n"
 		+ "typedef struct { int a; struct { int b; int c; }; } AnonS;\n"
 		+ "typedef struct { unsigned a : 3; unsigned b : 5; int c; } Bits;\n"
 		+ "typedef struct __attribute__((packed)) { char a; int b; } Packed;\n"
@@ -686,8 +726,6 @@ test "a C layout msc does not reproduce leaves the struct incomplete" {
 		+ "typedef struct { void* p; int (*fn)(int); } FnPtr;\n"
 		+ "typedef enum { BIG_A = 1, BIG_B = 0x100000000LL } BigE;\n"
 		+ "typedef struct { BigE e; int x; } WithBigEnum;\n"
-		+ "typedef struct { int tag; U value; } HoldsUnion;\n"
-		+ "typedef struct { unsigned long size; HoldsUnion color; } HoldsUnionDeep;\n"
 		+ "#pragma pack(4)\ntypedef struct { char a; long b; } Pack4;\n";
 	assert completeOn(src, "linux", "x86_64").length == 0, completeOn(src, "linux", "x86_64").join(",");
 }

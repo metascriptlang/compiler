@@ -113,6 +113,7 @@ export function isDir(path: string): boolean { return msFsIsDir(path) == 1; }
 export function isExecutable(path: string): boolean { return msFsIsExecutable(path) == 1; }
 export extern function fileSize(path: string): number from "msFsFileSize";
 export extern function modifiedTime(path: string): number from "msFsModifiedTime";
+export extern function changeStamp(path: string): string from "msFsChangeStamp";
 
 // readDir: entries are newline-joined by the bridge; directories carry a
 // trailing "/" marker, "." and ".." are excluded. Empty list on error or

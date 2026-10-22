@@ -854,8 +854,9 @@ export function rcDecrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHe
 		},
 		RaiserHeapKind.String => {
 			const strings: Cursor<RaiserStringHeap> = arrHeap.strings;
-			strings.rc[index] = strings.rc[index] - 1;
-			if (strings.rc[index] <= 0) { strings.texts[index] = ""; strings.freeList.push(index); }
+			const left = strings.rc[index] - 1;
+			strings.rc[index] = left;
+			if (left <= 0) { rcDestroyString(arrHeap, index); }
 		},
 		RaiserHeapKind.Box => {
 			const data: Cursor<RaiserBoxData> = arrHeap.boxes.items[index];
@@ -866,6 +867,14 @@ export function rcDecrefHandle(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHe
 	}
 }
 
+@noinline
+function rcDestroyString(arrHeap: RaiserArrayHeap, index: int64): void {
+	const strings: Cursor<RaiserStringHeap> = arrHeap.strings;
+	strings.texts[index] = "";
+	strings.freeList.push(index);
+}
+
+@noinline
 function rcDestroyArray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, index: int64): void {
 	const data = arrHeap.arrays[index];
 	for (const item of data.items) {
@@ -875,6 +884,7 @@ function rcDestroyArray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, ind
 	arrHeap.freeList.push(index);
 }
 
+@noinline
 function rcDestroyObject(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, index: int64): void {
 	const data: Cursor<RaiserObjectData> = objHeap.objects[index];
 	for (let i = 0; i < data.fields.length; i += 1) {
@@ -885,6 +895,7 @@ function rcDestroyObject(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, in
 	objHeap.freeList.push(index);
 }
 
+@noinline
 function rcDestroyBox(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, index: int64): void {
 	const data = arrHeap.boxes.items[index];
 	rcDecref(arrHeap, objHeap, data.value);

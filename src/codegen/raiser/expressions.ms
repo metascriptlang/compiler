@@ -1834,25 +1834,12 @@ function emitOverrideCalls(s: RaiserCompState, node: Node, dest: int32, override
 
 function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
-
-	// Compile callee expression → register holding the closure pair object
 	const closureReg = compileExpr(s, d.callee);
 
-	// Extract fn field (integer = function index) and env field
-	const fnIdxReg = allocWord(s);
-	const fnConstIdx = addConst(s, raiserConstString("fn"));
-	emitInst(s, slotInst(RaiserOpcode.LoadSlot, fnIdxReg, closureReg, fnConstIdx, 0));
-
-	const envReg = allocRef(s);
-	const envConstIdx = addConst(s, raiserConstString("env"));
-	emitInst(s, slotInst(RaiserOpcode.LoadSlot, envReg, closureReg, envConstIdx, 1));
-
-	// Allocate dest + (argCount+1) slots (worst case: env + args) and compute each argument into its slot
 	let argCount = 0;
 	for (const a of d.arguments) {
 		if (a.nodeType == null || a.nodeType.kind != TypeKind.Void) argCount = argCount + 1;
 	}
-	const totalArgs = argCount + 1;
 	const calleeType = skipModifier(d.callee.nodeType);
 	const declaredParams = calleeType != null && calleeType.kind == TypeKind.Function ? calleeType.typeChildren : null;
 	const closureClasses: RaiserRegClass[] = [regClassOf(s, node.nodeType)];
@@ -1872,22 +1859,7 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 		compileExprInto(s, d.arguments[i], dest + 1 + slot);
 		slot = slot + 1;
 	}
-
-	const envNilReg = allocBool(s);
-	emitInst(s, raiserABC(RaiserOpcode.IsKind, envNilReg, envReg, RaiserValueKind.Nil as number));
-	emitInst(s, raiserABC(RaiserOpcode.BeqI64Imm, envNilReg, immField(0), 1));
-	const jumpNilToNoEnv = emitJumpPlaceholder(s);
-
-	// WITH ENV path: real args first, then env LAST (Standard reference parity: closure calling convention)
-	emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1 + argCount, envReg, 0));
-	emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, fnIdxReg, totalArgs));
-	const jumpPastNoEnv = emitJumpPlaceholder(s);
-
-	// NO ENV path: just real args, no env
-	patchJumpTo(s, jumpNilToNoEnv, codeLen(s));
-	emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, fnIdxReg, argCount));
-
-	patchJumpTo(s, jumpPastNoEnv, codeLen(s));
+	emitInst(s, raiserABC(RaiserOpcode.CallClosure, dest, closureReg, argCount + 1));
 	return dest;
 }
 

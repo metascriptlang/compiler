@@ -57,22 +57,35 @@ function incRcRaw(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: Rai
 	else { objHeap.objects[handleIndex(v.intVal)].rc = objHeap.objects[handleIndex(v.intVal)].rc + 1; }
 }
 
+// Each phase walks the heap with its own work list rather than native recursion, so a chain as long as the heap
+// itself costs list space, not stack frames.
+
+function pushChildren(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, v: RaiserValue, work: RaiserValue[]): void {
+	if (v.kind == RaiserValueKind.Array) {
+		for (const child of arrHeap.arrays[handleIndex(v.intVal)].items) {
+			if (isRef(child)) work.push(heldHandle(child));
+		}
+	} else {
+		for (const child of objHeap.objects[handleIndex(v.intVal)].fields) {
+			if (isRef(child)) work.push(heldHandle(child));
+		}
+	}
+}
+
 // --- Phase 1: mark gray + trial-delete internal edges ---
 
 function markGray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): void {
 	const v = heldHandle(held);
 	if (colorOf(arrHeap, objHeap, v) == COL_GRAY) return;
 	setColorOf(arrHeap, objHeap, v, COL_GRAY);
-	if (v.kind == RaiserValueKind.Array) {
-		const items = arrHeap.arrays[handleIndex(v.intVal)].items;
-		for (const child of items) {
-			if (isRef(child)) { decRcRaw(arrHeap, objHeap, child); markGray(arrHeap, objHeap, child); }
-		}
-	} else {
-		const fields = objHeap.objects[handleIndex(v.intVal)].fields;
-		for (const f of fields) {
-			const child = f;
-			if (isRef(child)) { decRcRaw(arrHeap, objHeap, child); markGray(arrHeap, objHeap, child); }
+	const work: RaiserValue[] = [];
+	pushChildren(arrHeap, objHeap, v, work);
+	while (work.length > 0) {
+		const t = work.pop()!;
+		decRcRaw(arrHeap, objHeap, t);
+		if (colorOf(arrHeap, objHeap, t) != COL_GRAY) {
+			setColorOf(arrHeap, objHeap, t, COL_GRAY);
+			pushChildren(arrHeap, objHeap, t, work);
 		}
 	}
 }
@@ -82,42 +95,28 @@ function markGray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: Rai
 function scanBlack(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): void {
 	const v = heldHandle(held);
 	setColorOf(arrHeap, objHeap, v, COL_BLACK);
-	if (v.kind == RaiserValueKind.Array) {
-		const items = arrHeap.arrays[handleIndex(v.intVal)].items;
-		for (const child of items) {
-			if (isRef(child)) {
-				incRcRaw(arrHeap, objHeap, child);
-				if (colorOf(arrHeap, objHeap, child) != COL_BLACK) scanBlack(arrHeap, objHeap, child);
-			}
-		}
-	} else {
-		const fields = objHeap.objects[handleIndex(v.intVal)].fields;
-		for (const f of fields) {
-			const child = f;
-			if (isRef(child)) {
-				incRcRaw(arrHeap, objHeap, child);
-				if (colorOf(arrHeap, objHeap, child) != COL_BLACK) scanBlack(arrHeap, objHeap, child);
-			}
+	const work: RaiserValue[] = [];
+	pushChildren(arrHeap, objHeap, v, work);
+	while (work.length > 0) {
+		const t = work.pop()!;
+		incRcRaw(arrHeap, objHeap, t);
+		if (colorOf(arrHeap, objHeap, t) != COL_BLACK) {
+			setColorOf(arrHeap, objHeap, t, COL_BLACK);
+			pushChildren(arrHeap, objHeap, t, work);
 		}
 	}
 }
 
 function scan(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): void {
-	const v = heldHandle(held);
-	if (colorOf(arrHeap, objHeap, v) != COL_GRAY) return;
-	if (rcOf(arrHeap, objHeap, v) > 0) {
-		scanBlack(arrHeap, objHeap, v);
-		return;
-	}
-	setColorOf(arrHeap, objHeap, v, COL_WHITE);
-	if (v.kind == RaiserValueKind.Array) {
-		for (const child of arrHeap.arrays[handleIndex(v.intVal)].items) {
-			if (isRef(child)) scan(arrHeap, objHeap, child);
-		}
-	} else {
-		for (const f of objHeap.objects[handleIndex(v.intVal)].fields) {
-			const child = f;
-			if (isRef(child)) scan(arrHeap, objHeap, child);
+	const work: RaiserValue[] = [heldHandle(held)];
+	while (work.length > 0) {
+		const t = work.pop()!;
+		if (colorOf(arrHeap, objHeap, t) != COL_GRAY) continue;
+		if (rcOf(arrHeap, objHeap, t) > 0) {
+			scanBlack(arrHeap, objHeap, t);
+		} else {
+			setColorOf(arrHeap, objHeap, t, COL_WHITE);
+			pushChildren(arrHeap, objHeap, t, work);
 		}
 	}
 }
@@ -126,38 +125,38 @@ function scan(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserV
 // White → mark GRAY (in-collect-set) to disambiguate from external BLACK refs.
 
 function collectWhite(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): int32 {
-	const v = heldHandle(held);
-	if (colorOf(arrHeap, objHeap, v) != COL_WHITE) return 0;
-	setColorOf(arrHeap, objHeap, v, COL_GRAY);
-	let freed = 1;
-	if (v.kind == RaiserValueKind.Array) {
-		const data = arrHeap.arrays[handleIndex(v.intVal)];
-		for (const child of data.items) {
+	const toFree: RaiserValue[] = [];
+	const work: RaiserValue[] = [heldHandle(held)];
+	while (work.length > 0) {
+		const v = work.pop()!;
+		if (colorOf(arrHeap, objHeap, v) != COL_WHITE) continue;
+		setColorOf(arrHeap, objHeap, v, COL_GRAY);
+		toFree.push(v);
+		const children = v.kind == RaiserValueKind.Array ? arrHeap.arrays[handleIndex(v.intVal)].items : objHeap.objects[handleIndex(v.intVal)].fields;
+		for (const child of children) {
 			if (isRef(child)) {
-				if (colorOf(arrHeap, objHeap, child) == COL_WHITE) freed = (freed + collectWhite(arrHeap, objHeap, child)) as int32;
+				if (colorOf(arrHeap, objHeap, child) == COL_WHITE) work.push(heldHandle(child));
 				else if (colorOf(arrHeap, objHeap, child) != COL_GRAY) rcDecref(arrHeap, objHeap, child);
 			} else if (child.kind == RaiserValueKind.String) rcDecref(arrHeap, objHeap, child);
 		}
-		data.items.length = 0;
-		data.rc = 0;
-		data.color = COL_BLACK;
-		arrHeap.freeList.push(handleIndex(v.intVal));
-	} else {
-		const data = objHeap.objects[handleIndex(v.intVal)];
-		for (const f of data.fields) {
-			const child = f;
-			if (isRef(child)) {
-				if (colorOf(arrHeap, objHeap, child) == COL_WHITE) freed = (freed + collectWhite(arrHeap, objHeap, child)) as int32;
-				else if (colorOf(arrHeap, objHeap, child) != COL_GRAY) rcDecref(arrHeap, objHeap, child);
-			} else if (child.kind == RaiserValueKind.String) rcDecref(arrHeap, objHeap, child);
-		}
-		data.fields.length = 0;
-		data.added.length = 0;
-		data.rc = 0;
-		data.color = COL_BLACK;
-		objHeap.freeList.push(handleIndex(v.intVal));
 	}
-	return freed;
+	for (const v of toFree) {
+		if (v.kind == RaiserValueKind.Array) {
+			const data = arrHeap.arrays[handleIndex(v.intVal)];
+			data.items.length = 0;
+			data.rc = 0;
+			data.color = COL_BLACK;
+			arrHeap.freeList.push(handleIndex(v.intVal));
+		} else {
+			const data = objHeap.objects[handleIndex(v.intVal)];
+			data.fields.length = 0;
+			data.added.length = 0;
+			data.rc = 0;
+			data.color = COL_BLACK;
+			objHeap.freeList.push(handleIndex(v.intVal));
+		}
+	}
+	return toFree.length as int32;
 }
 
 // --- Driver: full-heap trial-deletion collect. Returns count of freed objects. ---
@@ -245,4 +244,26 @@ test "orc collects array cycle, leaves acyclic" {
 	const freed = orcCollectCycles(arr, obj);
 	assert freed == 2;
 	assert arr.arrays[handleIndex(live)].rc == 1;   // untouched
+}
+
+test "orc walks a chain as long as the heap without native recursion, kept and collected" {
+	const arr = createArrayHeap();
+	const obj = createStructHeap();
+	const count = 300000;
+	const first = heapAllocObject(obj);
+	let prev = first;
+	for (let i = 1; i < count; i += 1) {
+		const next = heapAllocObject(obj);
+		rcIncref(arr, obj, raiserObject(next));
+		heapObjectSetField(obj, prev, "next", raiserObject(next));
+		prev = next;
+	}
+	rcIncref(arr, obj, raiserObject(first));
+	heapObjectSetField(obj, prev, "next", raiserObject(first));
+	rcIncref(arr, obj, raiserObject(first));
+	assert orcCollectCycles(arr, obj) == 0;
+	assert obj.objects[handleIndex(first)].rc == 2 && obj.objects[handleIndex(prev)].rc == 1;
+	rcDecref(arr, obj, raiserObject(first));
+	assert orcCollectCycles(arr, obj) == count;
+	assert obj.freeList.length == count;
 }

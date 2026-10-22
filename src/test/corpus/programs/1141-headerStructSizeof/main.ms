@@ -1,7 +1,7 @@
 // Parity program — a struct imported from a C header whose every field translates exactly takes
 // its size from MetaScript: `sizeof T` is a constant that fits a `size_t` field with no cast (the
 // versioned-struct idiom), equals C's `sizeof`, and the struct is passed by value and embedded in
-// a MetaScript struct with C's layout. A union keeps C's size and needs `as uint64`.
+// a MetaScript struct with C's layout. A union's sizeof also takes an explicit `as uint64`.
 // Axes: a module-level and a local versioned initializer, a struct nesting the complete one passed
 // by value to C and through a MetaScript function, an embedding MetaScript struct, and a union.
 //

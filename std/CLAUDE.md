@@ -24,7 +24,7 @@
 - **A `.cms` never imports from a `.h`** — `import { … } from "x.h"` runs the header parser, which is the user FFI path; std has to build for every `--os` without it. `std/os` and `std/compress` imported headers until 2026-09-26 and failed on every host.
 - **C names are `ms` + PascalCase module + method** — `msFsReadFile`, `msStringIndexOf`, `msProcessCwd`.
 - **`&` in the `from` string marks a C function that mutates its receiver** — `extern function push(this arr: number[], sink value: number): void from "&msNumberArrayPush"`; `this` on the first parameter makes it an extension method.
-- **The `.cms` wrapper converts the C return into the MS type** — `export function exists(path: string): boolean { return msFsExists(path) == 1; }`.
+- **The `.cms` wrapper converts the C return into the MS type** — `function existsKernel(path: string): boolean { return msFsExists(path) == 1; }`.
 
 | MS return | C return | On failure |
 |-----------|----------|------------|

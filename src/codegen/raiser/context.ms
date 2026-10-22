@@ -677,7 +677,7 @@ function skipsInstructions(op: RaiserOpcode): boolean {
 	};
 }
 
-function landsPast(inst: RaiserInstruction, at: int32, limit: int32): boolean {
+export function landsPast(inst: RaiserInstruction, at: int32, limit: int32): boolean {
 	if (inst.op == RaiserOpcode.Jump) return at + 1 + getSignedAx(inst) >= limit;
 	if (isBranchI64(inst.op)) return at + 1 + (branchOffset(inst.c) as int32) >= limit;
 	return skipsInstructions(inst.op) && at + 1 + inst.c >= limit;

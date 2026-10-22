@@ -4356,11 +4356,13 @@ is a C keyword.
 A struct imported from a C header (`import { S } from "./s.h"`) is an extern struct with every C
 field, and on the C backend its layout is MetaScript's when every field translates exactly: an
 integer, float or `bool` of the same width, an enum of `int` size, a data pointer, a fixed array
-of such fields, or a nested struct of the same kind. Then `sizeof S` is a constant that fits a
+of such fields (`char c[5]` is `int8[5]`), or a nested struct or union of the same kind. A header
+union of such members is laid out as C lays it out: every member at offset 0, its size the largest
+member rounded up to the strictest member alignment. Then `sizeof S` is a constant that fits a
 `size_t` field with no cast (`const o: S = { size: sizeof S, … }`, the versioned-struct idiom),
 the struct can be embedded in a MetaScript struct, and the build asserts its size, alignment and
 each field offset against C (`_Static_assert`), so a wrong translation stops the C compile. A
-header struct that is or holds a union, a bitfield, an anonymous member, a flexible array, a
+header struct that is or holds a bitfield, an anonymous member (an unnamed `union { … };` too), a flexible array, a
 `packed` or `aligned` attribute, `_Alignas`, a `#pragma pack` other than the default, a function
 pointer, or a field whose C width has no exact MetaScript type keeps C's layout: `sizeof S` is
 C's `sizeof`, an `int32` that is not a constant, and storing it in a `uint64` field needs
@@ -4373,7 +4375,15 @@ initializer whose `size` is `24ULL` in the emitted C, a 64-byte struct nesting i
 to C and through a MetaScript function, an embedding MetaScript struct of 32 bytes, and a union
 through `as uint64`) on C drc, C orc, `--danger` and under ASan; the compiler before the change
 refused both initializers. Haro's libghostty-vt imports fold 9 of their 10 `size: sizeof …`
-sites; `GhosttyStyle` holds a union and needs `as uint64` (msc 0.3.3 folded it to 96, C says 72).
+sites; `GhosttyStyle` held a union and needed `as uint64` (msc 0.3.3 folded it to 96, C says 72).
+
+Measured 2026-10-22 on `wt/fix-header-union-sizeof`: corpus `1143-headerUnionSizeof` prints
+`8 true | 48 true 6` and `24 true | 8 true | 12 true | 24 true | 88 true`, each equal to clang's
+`sizeof` on arm64 macOS: a top-level union, a struct holding a union of a 3-byte struct (the
+`GhosttyStyle` shape, passed to C), a union of a padded struct, `char[5]` + `int64`, `char[9]` +
+`int32` rounded to 12, a union nested in a union, and a struct holding them all, every one stored
+into a `size_t` or `uint64` slot with no cast, on C drc, C orc, `--danger` and under ASan; the
+compiler before the change refused them. A /tmp copy of `GhosttyStyle` folds to `72`.
 The per-shape decision (sizes measured with clang for arm64 macOS and x86_64 Linux) is pinned by
 the tests in `src/module/cimport/emit.ms`. Not
 measured: a 32-bit target, Windows, and system structs such as `struct stat`, which cparse does
