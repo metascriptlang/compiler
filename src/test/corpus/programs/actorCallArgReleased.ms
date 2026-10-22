@@ -12,6 +12,8 @@
 // @exit: 0
 // @skip-js: onDestroy runs where the DRC runs; JS has no destructors
 // @xfail(raiser): raiser runs no user lifecycle hooks and has no actors
+// @ledger-slack(Tally) 1
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: an object lent to an awaited actor CALL from an async function is released once, by its owner, after the reply (old compiler: the caller increfed it into the message and nothing released it, one object leaked per call)
 
 class State { count: int32 = 0; }

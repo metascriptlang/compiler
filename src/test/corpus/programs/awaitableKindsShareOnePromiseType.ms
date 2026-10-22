@@ -3,6 +3,8 @@
 // @stdout: all 10
 // @stdout: spawn 2
 // @stdout: sum 17
+// @ledger-slack(Other) 1
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // An async call, an actor CALL, Promise.all and a spawn all type as Promise<T>:
 // each binds to an annotated Promise and is awaited through one async helper.
 
