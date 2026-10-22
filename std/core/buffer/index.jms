@@ -360,7 +360,7 @@ function bufFind(hay: Buffer, needle: Buffer, from: number, reverse: boolean): n
 	const n = needle.length;
 	if (n == 0) return from;
 	let i = from;
-	while (i <= hay.length - n) {
+	while (i >= 0 && i <= hay.length - n) {
 		let k = 0;
 		while (k < n && hay.byteAt(i + k) == needle.byteAt(k)) { k += 1; }
 		if (k == n) return i;
@@ -372,7 +372,10 @@ export function indexOfBuffer(this b: Buffer, needle: Buffer, byteOffset: number
 	return bufFind(b, needle, byteOffset < 0 ? 0 : byteOffset, false);
 }
 export function lastIndexOfBuffer(this b: Buffer, needle: Buffer, byteOffset: number): number {
-	return bufFind(b, needle, byteOffset < 0 ? b.length : byteOffset, true);
+	if (b.length == 0) return -1;
+	if (needle.length == 0) return byteOffset < 0 || byteOffset >= b.length ? b.length : byteOffset;
+	const last = b.length - needle.length;
+	return bufFind(b, needle, byteOffset < 0 || byteOffset > last ? last : byteOffset, true);
 }
 export function includesBuffer(this b: Buffer, needle: Buffer, byteOffset: number): boolean {
 	return indexOfBuffer(b, needle, byteOffset) != -1;
