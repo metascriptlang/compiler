@@ -283,6 +283,9 @@ int64_t msStringCharCodeAt(msString s, int64_t idx);
 /* Raw byte at byte offset. Returns -1 if out of range. */
 int64_t msStringByteAt(msString s, int64_t idx);
 
+/* Farmhash64 of the string's bytes, as the signed bits std's Map/Set hash starts from. */
+int64_t msStringHashFarm(msString s);
+
 /* Create a string from a Unicode codepoint (UTF-8 encoded). */
 msString msStringFromCodePoint(int64_t cp);
 void msStringAppendCodePoint(msString* dest, int64_t cp);

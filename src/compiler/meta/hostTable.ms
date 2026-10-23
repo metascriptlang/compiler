@@ -1086,6 +1086,10 @@ function _bridgeMsStringByteAt(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).byteAt(unboxInt(args[1]) as int32));
 }
 
+function _bridgeMsStringHashFarm(args: RaiserValue[]): RaiserValue {
+	return raiserInt(hashFarm(unboxString(args[0])));
+}
+
 function _bridgeMsStringByteSlice(args: RaiserValue[]): RaiserValue {
 	return boxString(unboxString(args[0]).byteSlice(unboxInt(args[1]) as int32, unboxInt(args[2]) as int32));
 }
@@ -1352,6 +1356,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStringReplaceAll",    _bridgeMsStringReplaceAll, HostCapability.Pure);
 	registerHostFn("msStringByteLength",    _bridgeMsStringByteLength, HostCapability.Pure);
 	registerHostFn("msStringByteAt",        _bridgeMsStringByteAt, HostCapability.Pure);
+	registerHostFn("msStringHashFarm",      _bridgeMsStringHashFarm, HostCapability.Pure);
 	registerHostFn("msStringByteSlice",     _bridgeMsStringByteSlice, HostCapability.Pure);
 	registerHostFn("msStringByteIndexOf",   _bridgeMsStringByteIndexOf, HostCapability.Pure);
 	registerHostFn("msStringByteLastIndexOf", _bridgeMsStringByteLastIndexOf, HostCapability.Pure);
