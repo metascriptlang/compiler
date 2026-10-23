@@ -1133,6 +1133,10 @@ export function mayWrite(n: Node, slots: string[]): boolean {
 	return mayWriteAny(writes, slots);
 }
 
+export function runsHooks(target: Node): boolean {
+	return target.nodeType != null && hookSummary(target.nodeType!) != null;
+}
+
 function mayWriteAny(writes: WriteSummary, slots: string[]): boolean {
 	if (writes.unknown) return true;
 	for (const slot of slots) {

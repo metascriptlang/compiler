@@ -33,7 +33,7 @@ import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
 import { calledRoutineType, isImmutableModuleConst, isViewCall, receiverOf, viewCallSources } from "../checker/effects";
-import { ANY_HEAP_SLOT, addressSlots, canAlias, mayWrite, resetWriteEffects, stepSlot, viewReturnSlots } from "./writeEffects";
+import { ANY_HEAP_SLOT, addressSlots, canAlias, mayWrite, resetWriteEffects, runsHooks, stepSlot, viewReturnSlots } from "./writeEffects";
 import { createDrcContext } from "./scope";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
@@ -176,10 +176,26 @@ function holdsAddress(sym: Symbol | null): boolean {
 	return t == null || t.kind == TypeKind.Borrow || t.kind == TypeKind.Lent || t.kind == TypeKind.Var || t.kind == TypeKind.Ptr;
 }
 
-function writtenWhileAlive(slots: string[], start: int32, end: int32): boolean {
+function writesOtherPartition(p: Partitions, site: Node, viewRoot: int32): boolean {
+	if (site.kind != NodeKind.BinaryExpr) return false;
+	const target = (site.data as BinaryExprData).left;
+	if (runsHooks(target)) return false;
+	const roots: Symbol[] = [];
+	allRoots(p, target, roots);
+	if (roots.length == 0) return false;
+	for (const r of roots) {
+		const id = variableId(p, r);
+		if (id < 0 || (p.vars[id].flags & (VF_IS_PARAM | VF_PREVENT_CURSOR)) != 0 || ufRoot(p, id) == viewRoot) return false;
+	}
+	return true;
+}
+
+function writtenWhileAlive(p: Partitions, vid: int32, slots: string[]): boolean {
 	if (slots.length == 0) return false;
+	const v = p.vars[vid];
+	const viewRoot = ufRoot(p, vid);
 	for (let k = 0; k < writeSites.length; k += 1) {
-		if (writeTimes[k] >= start && writeTimes[k] <= end && mayWrite(writeSites[k], slots)) return true;
+		if (writeTimes[k] >= v.aliveStart && writeTimes[k] <= v.aliveEnd && mayWrite(writeSites[k], slots) && !writesOtherPartition(p, writeSites[k], viewRoot)) return true;
 	}
 	return false;
 }
@@ -818,7 +834,7 @@ function computeCursorDecisions(p: Partitions): Symbol[] {
 			if (dangerousMutation(g, v)) { i += 1; continue; }
 		}
 		const slots = holdsAddress(v.sym) ? addressSlots(borrowedSlots[i]) : borrowedSlots[i];
-		if (writtenWhileAlive(slots, v.aliveStart, v.aliveEnd)) { i += 1; continue; }
+		if (writtenWhileAlive(p, i, slots)) { i += 1; continue; }
 
 		result.push(v.sym);
 		i += 1;
@@ -1274,4 +1290,40 @@ test "a read-only view repointed at a local that owns its value is NOT cursor" {
 	inferCursors(body);
 	assert !isCursorNamed(body, "o");
 	assert !isCursorNamed(body, "keep");
+}
+
+test "a store to the same field of a local in another partition keeps a view cursor" {
+	const body = getFuncNamed(LINKS + "function f(n: Link): int32 { const v = n.next; const own = new Link(); own.next = new Link(); return v != null ? v.v : 0; }", "f");
+	inferCursors(body);
+	assert isCursorNamed(body, "v");
+}
+
+test "a store into a generic holder of another partition keeps a view cursor" {
+	const body = getFuncNamed(LINKS + "class Cell<T> { v: int32 = 0; next: T | null = null; }\nfunction f(n: Cell<Link>): int32 { const v = n.next; const own = new Cell<Link>(); own.next = new Link(); return v != null ? v.v : 0; }", "f");
+	inferCursors(body);
+	assert isCursorNamed(body, "v");
+}
+
+test "a store through a local aliasing the view's source ends the view" {
+	const body = getFuncNamed(LINKS + "function f(n: Link): int32 { const v = n.next; const alias = n; alias.next = new Link(); return v != null ? v.v : 0; }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "v");
+}
+
+test "a store that links a local to the view's source joins their partitions and ends the view" {
+	const body = getFuncNamed(LINKS + "function f(n: Link): int32 { const v = n.next; const own = new Link(); own.next = n.next; own.next = new Link(); return v != null ? v.v : 0; }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "v");
+}
+
+test "a store through a local read from module state ends the view" {
+	const body = getFuncNamed(LINKS + "let head = new Link();\nfunction f(n: Link): int32 { const v = n.next; const x = head; x.next = new Link(); return v != null ? v.v : 0; }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "v");
+}
+
+test "a store through a parameter of the same class ends the view" {
+	const body = getFuncNamed(LINKS + "function f(n: Link, m: Link): int32 { const v = n.next; m.next = new Link(); return v != null ? v.v : 0; }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "v");
 }
