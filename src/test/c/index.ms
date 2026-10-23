@@ -87,3 +87,4 @@ import "./typeInfoHookAdapters";
 import "./flowsRecorder";
 import "./awaitWaitPath";
 import "./acyclicDecorator";
+import "./spawnViewCursor";
