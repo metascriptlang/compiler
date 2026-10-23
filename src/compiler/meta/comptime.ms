@@ -68,7 +68,7 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 	}
 
 	// Engine path (checkerCtx present): seeds + on-demand compile via the
-	// shared comptime image (NIM-REF CT-3). Standalone fallback
+	// shared comptime image. Standalone fallback
 	// (no ctx, e.g. evaluateComptimeBlocks): top-level statements, body
 	// must be self-contained.
 	let ctx: RaiserContext | null;
@@ -452,7 +452,7 @@ test "comptime smoke harness pure MS" {
 // provide, exercising the full chain: extern decl → MS wrapper body
 // (compiled to bytecode) → CallHost → bridge → host shim → return.
 //
-// Demonstrates the "Nim trick": Raiser compiles pure-MS wrapper bodies
+// Demonstrates that Raiser compiles pure-MS wrapper bodies
 // to bytecode and executes them in-VM, with C natives bridged out via
 // CallHost. The Result-style return object is built by NewObject opcodes
 // inside the VM — no heap-aware bridge needed.

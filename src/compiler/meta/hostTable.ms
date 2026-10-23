@@ -446,10 +446,9 @@ function _bridgeMsProcSpawnGetStderr(args: RaiserValue[]): RaiserValue {
 	return boxString(_spawnStderr);
 }
 
-// --- Process bridges (Nim vmops parity: envvars get/exists/put/del all
-// registered; osproc.execCmdEx registered behind the danger flag; quit is
-// deliberately NOT an op in Nim's VM — exit is handled at the codegen tier
-// here, see the Halt intercept) ---
+// --- Process bridges (envvars get/exists/put/del all registered; execCmdEx
+// registered behind the danger flag; quit is deliberately NOT an op — exit is
+// handled at the codegen tier, see the Halt intercept) ---
 
 function _bridgeMsProcessArgv(args: RaiserValue[]): RaiserValue {
 	const heapOrNull = activeHostArrayHeap();
@@ -757,7 +756,7 @@ function _bridgeMsCryptoHashString(args: RaiserValue[]): RaiserValue {
 
 // --- Macro Node child accessors ---
 // childCount/childAt (std/meta) traverse a Node's children BY INDEX on the
-// macro VM's flat wire (the Nim n[i]/n.len analog), so a top-level helper
+// macro VM's flat wire, so a top-level helper
 // shared between macros can walk nodes without engine-mode flat-field reads.
 // A child slot is any Object field carrying a numeric "kind" (a Node), or
 // each such element of an Array field (recursively, so Node[][] fields like
