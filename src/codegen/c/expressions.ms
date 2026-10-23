@@ -22,7 +22,7 @@ import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, g
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
 import { ensureCrossModuleProto, copiesInline } from "./forward";
-import { useHeader, createCGen, createProc, sec, CSection, readProcStmts, raiseTarget } from "./context";
+import { CEmissionFacts, useHeader, createCGen, createProc, sec, CSection, readProcStmts, raiseTarget } from "./context";
 import { inferredCallRaises } from "../../checker/raises";
 import { GcMode, CheckerContext } from "../../checker/context";
 import { monoBaseName } from "../../monomorphize/registry";
@@ -1009,6 +1009,15 @@ function viewImportedCArray(g: CGen, node: Readonly<Node>, ctx: ExprEvalCtx): vo
 
 // ===== Discover phase: push leaf results or Emit + children =====
 
+function dispatchedName(g: CGen, facts: Readonly<CEmissionFacts>, idSym: Readonly<Symbol>, calleeName: string): string {
+	const dispatched = facts.dispatchOverrides;
+	if (dispatched == null) throw new Error(`internal: '${idSym.name}' is emitted before the dispatch table reached emission`);
+	const ovSyms = dispatched.readonlyGet(idSym);
+	if (ovSyms == null) return calleeName;
+	const dn = ensureMethodDispatcher(g, idSym, calleeName, ovSyms);
+	return dn != "" ? dn : calleeName;
+}
+
 function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx): void {
 	if (node == null) {
 		ctx.results.push("MS_NIL");
@@ -1133,17 +1142,8 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 					&& (idSym.modulePath != g.modulePath || copiesInline(g, idSym))) {
 				ensureCrossModuleProto(g, calleeName, idSym.symbolType, idSym);
 			}
-			let emitted = calleeName;
-			if (g.checkerCtx != null && g.checkerCtx.gcMode != GcMode.Manual && !node.flags.has(NodeFlag.NoDispatch)) {
-				const dispatched = g.emissionFacts.dispatchOverrides;
-				if (dispatched == null) throw new Error(`internal: '${idSym.name}' is emitted before the dispatch table reached emission`);
-				const ovSyms = dispatched.readonlyGet(idSym);
-				if (ovSyms != null) {
-					const dn = ensureMethodDispatcher(g, idSym, calleeName, ovSyms);
-					if (dn != "") emitted = dn;
-				}
-			}
-			ctx.results.push(emitted);
+			const dispatches = g.checkerCtx != null && g.checkerCtx.gcMode != GcMode.Manual && !node.flags.has(NodeFlag.NoDispatch);
+			ctx.results.push(dispatches ? dispatchedName(g, g.emissionFacts, idSym, calleeName) : calleeName);
 		} else {
 			// Reference parity (sym.loc.snippet): symbol-based resolution first.
 			// localNameMap fallback for DRC cleanup identifiers with noSym (avoids cascade).
