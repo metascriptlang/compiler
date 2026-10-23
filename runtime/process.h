@@ -480,8 +480,7 @@ static inline void _msAppendWinArg(char** buf, size_t* len, size_t* cap, const c
  * more failure paths (every std handle must itself be valid and inheritable).
  * Spawn is ~1-3 ms against ~500 ms compiles, so serializing it does not show up
  * in a build; only the spawn is serialized, the compiles still run in parallel. */
-/* weak, not static: std/process/index and std/process/child each include this header, and two static locks serialize nothing against each other. */
-__attribute__((weak)) SRWLOCK _msSpawnCreateLock = SRWLOCK_INIT;
+extern SRWLOCK _msSpawnCreateLock;
 
 static inline double msProcessExecFile(msString path, msStringArray* args) {
 	const char* pathStr = msStringToCString(path);
@@ -547,8 +546,7 @@ static inline double msProcessExecFile(msString path, msStringArray* args) {
 /* posix_spawn hands the child every descriptor without FD_CLOEXEC, and macOS has no
  * pipe2: a spawn that lands between pipe() and the FD_CLOEXEC below leaks the pipe
  * the way the Windows _msSpawnCreateLock describes, so creation and spawn share it. */
-/* weak, not static: see the Windows lock. */
-__attribute__((weak)) pthread_mutex_t _msSpawnCreateLock = PTHREAD_MUTEX_INITIALIZER;
+extern pthread_mutex_t _msSpawnCreateLock;
 
 static inline int _msSpawnPipe(int fds[2]) {
 	pthread_mutex_lock(&_msSpawnCreateLock);
