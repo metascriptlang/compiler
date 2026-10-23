@@ -464,7 +464,9 @@ function anonFieldsKey(t: Readonly<Type>, open: Cursor<Readonly<Type>>[]): strin
 }
 
 function anonStructuralKeyIn(roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): string {
-	return anonFieldsKeyIn(roots, t, [t]);
+	const open: Cursor<Readonly<Type>>[] = [];
+	open.push(t);
+	return anonFieldsKeyIn(roots, t, open);
 }
 
 function anonStructuralKey(t: Readonly<Type>): string {
