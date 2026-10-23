@@ -63,6 +63,7 @@ let constructionSummaries = new HashMap<Symbol, WriteSummary>();
 let hookSummaries = new HashMap<Type, WriteSummary>();
 let hookless = new HashSet<Type>();
 let ownerHookCache = new HashMap<Symbol, Symbol[]>();
+let callerDefs: LocalDefs | null = null;
 let routineDecls = new HashMap<Symbol, Node>();
 let unitRoutines = new HashMap<string, Symbol[]>();
 let routineUnits = new HashMap<Symbol, string>();
@@ -128,6 +129,7 @@ function reloadsApart(caller: WriteSummary, callee: WriteSummary): boolean {
 }
 
 export function clearWriteSummaries(): void {
+	callerDefs = null;
 	ownerHookCache = new HashMap<Symbol, Symbol[]>();
 	routineSummaries = new HashMap<Symbol, WriteSummary>();
 	viewReturns = new HashMap<Symbol, string[]>();
@@ -484,7 +486,7 @@ function constructionsOf(n: Node): WriteSummary[] {
 	return out;
 }
 
-function calleesOf(call: Node, s: WriteSummary, stores: Node[] | null, own: OwnCalls | null): WriteSummary[] {
+function calleesOf(call: Node, s: WriteSummary, stores: Node[] | null, own: OwnCalls | null, defs: LocalDefs | null): WriteSummary[] {
 	const sym = call.resolvedSym;
 	if (!isRoutineSym(sym)) {
 		const callee = (call.data as CallExprData).callee;
@@ -496,6 +498,8 @@ function calleesOf(call: Node, s: WriteSummary, stores: Node[] | null, own: OwnC
 			own.called.push(sym);
 			return [];
 		}
+		const known: WriteSummary[] = [];
+		if (defs != null && callee != null && routinesOf(callee, null, null, defs, 0, known)) return known;
 		markUnknown(s);
 		return [];
 	}
@@ -615,7 +619,7 @@ function walkBody(s: WriteSummary, body: Node | null, params: Symbol[] | null, i
 						else stores.push(inner);
 					}
 					passFunctions(args);
-					for (const c of calleesOf(n, s, stores, own)) link(s, n, c);
+					for (const c of calleesOf(n, s, stores, own, null)) link(s, n, c);
 				}
 			},
 			NodeKind.NewExpr => {
@@ -993,7 +997,7 @@ function callWrites(call: Node): WriteSummary {
 	const s = newSummary(SummaryKind.Routine, null, []);
 	if (call.kind == NodeKind.CallExpr && isLifecycleOp(call)) return s;
 	if (call.kind == NodeKind.CallExpr) addressWrites(s, call, null, false);
-	const callees = call.kind == NodeKind.NewExpr ? constructionsOf(call) : calleesOf(call, s, null, null);
+	const callees = call.kind == NodeKind.NewExpr ? constructionsOf(call) : calleesOf(call, s, null, null, callerDefs);
 	for (const a of call.kind == NodeKind.NewExpr ? (call.data as NewExprData).newArguments : (call.data as CallExprData).arguments) {
 		if (a != null && mayBeFunctionValue(a.nodeType) && !routinesOf(a, null, null, null, 0, callees)) markUnknown(s);
 	}
@@ -1131,6 +1135,10 @@ export function mayWrite(n: Node, slots: string[]): boolean {
 	const hooks = target.nodeType != null ? hookSummary(target.nodeType!) : null;
 	if (hooks != null) absorb(writes, { call: null, callee: settled(hooks) });
 	return mayWriteAny(writes, slots);
+}
+
+export function bindCallerBody(body: Node): void {
+	callerDefs = localDefs(body);
 }
 
 export function runsHooks(target: Node): boolean {

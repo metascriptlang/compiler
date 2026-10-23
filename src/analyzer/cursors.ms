@@ -33,7 +33,7 @@ import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
 import { calledRoutineType, isImmutableModuleConst, isViewCall, receiverOf, viewCallSources } from "../checker/effects";
-import { ANY_HEAP_SLOT, addressSlots, canAlias, mayWrite, resetWriteEffects, runsHooks, stepSlot, viewReturnSlots } from "./writeEffects";
+import { ANY_HEAP_SLOT, addressSlots, bindCallerBody, canAlias, mayWrite, resetWriteEffects, runsHooks, stepSlot, viewReturnSlots } from "./writeEffects";
 import { createDrcContext } from "./scope";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
@@ -869,6 +869,7 @@ export function inferCursors(body: Node): void {
 	if (body == null) return;
 	if (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program) return;
 
+	bindCallerBody(body);
 	const p = createPartitions();
 
 	// Pass 1: compute live ranges and register variables
@@ -1326,4 +1327,33 @@ test "a store through a parameter of the same class ends the view" {
 	const body = getFuncNamed(LINKS + "function f(n: Link, m: Link): int32 { const v = n.next; m.next = new Link(); return v != null ? v.v : 0; }", "f");
 	inferCursors(body);
 	assert !isCursorNamed(body, "v");
+}
+
+const FN_VALUES = LINKS + "function nextOf(x: Readonly<Link>): Readonly<Link> | null { return x.next; }\n"
+	+ "function clearNext(x: Readonly<Link>): Readonly<Link> | null { head.next = null; return x.next; }\n"
+	+ "let head = new Link();\n";
+
+test "a view through a function value bound to a reading routine keeps the cursor" {
+	const body = getFuncNamed(FN_VALUES + "function f(n: Link): int32 { const pick = nextOf; const a = pick(n); const b = pick(n); return a != null && b != null ? a.v + b.v : 0; }", "f");
+	inferCursors(body);
+	assert isCursorNamed(body, "a");
+	assert isCursorNamed(body, "b");
+}
+
+test "a view through a function value bound to a writing routine ends the cursor" {
+	const body = getFuncNamed(FN_VALUES + "function f(n: Link): int32 { const pick = clearNext; const a = pick(n); const b = pick(n); return a != null && b != null ? a.v + b.v : 0; }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "a");
+}
+
+test "a view through a function parameter ends the cursor, as its routine is unknown" {
+	const body = getFuncNamed(FN_VALUES + "function f(n: Link, pick: (x: Readonly<Link>) => Readonly<Link> | null): int32 { const a = pick(n); const b = pick(n); return a != null && b != null ? a.v + b.v : 0; }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "a");
+}
+
+test "a view through a function value reassigned between calls ends the cursor" {
+	const body = getFuncNamed(FN_VALUES + "function f(n: Link): int32 { let pick = nextOf; const a = pick(n); pick = clearNext; const b = pick(n); return a != null && b != null ? a.v + b.v : 0; }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "a");
 }
