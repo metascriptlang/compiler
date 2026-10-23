@@ -363,6 +363,10 @@ bool msDropEdgeSlow(void* owner, void* p);
 void msDropDefer(void* owner, msDropCont fn, int32_t resume);
 void msDropRestore(const msDropState* saved);
 
+static inline bool msDropHasRoom(void) {
+	return msStackPointer() - msSlabTLS.drop.floor < msSlabTLS.drop.span;
+}
+
 static inline bool msDropEdgeLast(void* owner, void* p) {
 	msSlab* s = &msSlabTLS;
 	if (msStackPointer() - s->drop.floor < s->drop.span) {
