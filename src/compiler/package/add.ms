@@ -118,6 +118,42 @@ export function parseNameVersion(arg: string): { name: string, version: string }
 	return { name: arg, version: "" };
 }
 
+function gitLockEntry(name: string, version: string, url: string, gitRef: string): LockEntry {
+	return {
+		key: name + "@" + version,
+		source: SourceKind.Git,
+		version: "",
+		integrity: "",
+		url,
+		gitRef,
+		commit: "",
+		depKeys: [],
+		depValues: [],
+	};
+}
+
+function registryLockEntry(name: string, version: string, found: RegistryVersion | null): LockEntry {
+	return {
+		key: name + "@" + version,
+		source: SourceKind.Registry,
+		version,
+		integrity: found != null ? found.integrity : "",
+		url: found != null ? found.archiveUrl : "",
+		gitRef: "",
+		commit: "",
+		depKeys: found != null ? found.depKeys : [],
+		depValues: found != null ? found.depValues : [],
+	};
+}
+
+// Version details from registry (archiveUrl + integrity + deps); fetches the package when not yet known.
+function registryVersionOf(name: string, version: string, known: RegistryPackage | null): RegistryVersion | null {
+	if (known != null) return findVersion(known, version);
+	const info = fetchPackageInfo(name);
+	if (!info.ok) return null;
+	return findVersion(info.value, version);
+}
+
 // Execute `msc add <args>`.
 // projectRoot: directory containing build.ms
 // args: remaining CLI arguments after "add"
@@ -158,7 +194,7 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 		return false;
 	}
 	// Fetch registry metadata (reused for latest-resolve + lockfile population)
-	let registryPkg: RegistryPackage = null as unknown as RegistryPackage;
+	let registryPkg: RegistryPackage | null = null;
 
 	if (parsed.version == "") {
 		// Resolve latest version from registry.
@@ -169,7 +205,7 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 			return false;
 		}
 		registryPkg = infoResult.value;
-		const latest = latestVersion(registryPkg);
+		const latest = latestVersion(infoResult.value);
 		if (latest == null) {
 			console.log("error: no published versions for " + parsed.name);
 			return false;
@@ -231,51 +267,9 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 		return false;
 	}
 
-	// Build the lock entry
-	let lockKey = "";
-	let entry: LockEntry = null as unknown as LockEntry;
-
-	if (kind == SourceKind.Git) {
-		lockKey = parsed.name + "@" + parsed.version;
-		const emptyKeys: string[] = [];
-		const emptyVals: string[] = [];
-		entry = {
-			key: lockKey,
-			source: SourceKind.Git,
-			version: "",
-			integrity: "",
-			url: gitUrl,
-			gitRef,
-			commit: "",
-			depKeys: emptyKeys,
-			depValues: emptyVals,
-		};
-	} else {
-		// Get version details from registry (archiveUrl + integrity + deps)
-		let regVersion: RegistryVersion = null as unknown as RegistryVersion;
-		if (registryPkg == null) {
-			const infoResult = fetchPackageInfo(parsed.name);
-			if (infoResult.ok) registryPkg = infoResult.value;
-		}
-		if (registryPkg != null) {
-			regVersion = findVersion(registryPkg, parsed.version);
-		}
-
-		lockKey = parsed.name + "@" + parsed.version;
-		const depKeys: string[] = regVersion != null ? regVersion.depKeys : [];
-		const depValues: string[] = regVersion != null ? regVersion.depValues : [];
-		entry = {
-			key: lockKey,
-			source: SourceKind.Registry,
-			version: parsed.version,
-			integrity: regVersion != null ? regVersion.integrity : "",
-			url: regVersion != null ? regVersion.archiveUrl : "",
-			gitRef: "",
-			commit: "",
-			depKeys,
-			depValues,
-		};
-	}
+	const entry = kind == SourceKind.Git
+		? gitLockEntry(parsed.name, parsed.version, gitUrl, gitRef)
+		: registryLockEntry(parsed.name, parsed.version, registryVersionOf(parsed.name, parsed.version, registryPkg));
 
 	// Check if already in lockfile — match by package name (not full key,
 	// since the key includes the version and we're updating to a new version)
@@ -341,4 +335,38 @@ test "a plain name@version is unchanged" {
 	const p = parseNameVersion("cool-json@1.2.3");
 	assert p.name == "cool-json";
 	assert p.version == "1.2.3";
+}
+
+test "a registry lock entry without registry details has no integrity or url" {
+	const entry = registryLockEntry("cool-json", "1.2.3", null);
+	assert entry.key == "cool-json@1.2.3";
+	assert entry.source == SourceKind.Registry;
+	assert entry.integrity == "";
+	assert entry.url == "";
+	assert entry.depKeys.length == 0;
+}
+
+test "a registry lock entry takes integrity, url and deps from the registry record" {
+	const found: RegistryVersion = {
+		version: "1.2.3",
+		integrity: "sha256-abc",
+		archiveUrl: "https://example.test/cool-json.zip",
+		publishedAt: "",
+		depKeys: ["dep"],
+		depValues: ["0.1.0"],
+	};
+	const entry = registryLockEntry("cool-json", "1.2.3", found);
+	assert entry.integrity == "sha256-abc";
+	assert entry.url == "https://example.test/cool-json.zip";
+	assert entry.depKeys[0] == "dep";
+	assert entry.depValues[0] == "0.1.0";
+}
+
+test "a git lock entry keeps the url and ref and has no commit yet" {
+	const entry = gitLockEntry("foo", "git:github.com/me/foo@v1.0.0", "github.com/me/foo", "v1.0.0");
+	assert entry.key == "foo@git:github.com/me/foo@v1.0.0";
+	assert entry.source == SourceKind.Git;
+	assert entry.url == "github.com/me/foo";
+	assert entry.gitRef == "v1.0.0";
+	assert entry.commit == "";
 }

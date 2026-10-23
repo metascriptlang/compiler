@@ -167,17 +167,38 @@ export function fetchPackageInfo(name: string): Result<RegistryPackage, HttpErro
 }
 
 // Find a specific version in a RegistryPackage. Returns null if not found.
-export function findVersion(pkg: RegistryPackage, version: string): RegistryVersion {
-	let i = 0;
-	while (i < pkg.versions.length) {
-		if (pkg.versions[i].version == version) return pkg.versions[i];
-		i = i + 1;
+export function findVersion(pkg: RegistryPackage, version: string): RegistryVersion | null {
+	for (const v of pkg.versions) {
+		if (v.version == version) return v;
 	}
-	return null as unknown as RegistryVersion;
+	return null;
 }
 
 // Get the latest version (first in the versions array — server orders by publishedAt DESC).
-export function latestVersion(pkg: RegistryPackage): RegistryVersion {
-	if (pkg.versions.length == 0) return null as unknown as RegistryVersion;
+export function latestVersion(pkg: RegistryPackage): RegistryVersion | null {
+	if (pkg.versions.length == 0) return null;
 	return pkg.versions[0];
+}
+
+function testPackage(versions: string[]): RegistryPackage {
+	const records: RegistryVersion[] = [];
+	for (const v of versions) {
+		records.push({ version: v, integrity: "", archiveUrl: "", publishedAt: "", depKeys: [], depValues: [] });
+	}
+	return { name: "demo", description: "", license: "", repository: "", homepage: "", versions: records };
+}
+
+test "findVersion returns the matching record or null" {
+	const pkg = testPackage(["2.0.0", "1.0.0"]);
+	const hit = findVersion(pkg, "1.0.0");
+	assert hit != null;
+	if (hit != null) assert hit.version == "1.0.0";
+	assert findVersion(pkg, "3.0.0") == null;
+}
+
+test "latestVersion is the first record, or null for a package with none" {
+	const latest = latestVersion(testPackage(["2.0.0", "1.0.0"]));
+	assert latest != null;
+	if (latest != null) assert latest.version == "2.0.0";
+	assert latestVersion(testPackage([])) == null;
 }
