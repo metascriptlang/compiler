@@ -1481,6 +1481,28 @@ function coreGenericInit(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function overloadCall(): void {
+	const tag = "hcrOverloadCall";
+	const dir = freshDir(`${TMP}/overloadCall`);
+	for (const f of ["app.ms", "caller.ms", "shapes.ms", "shapesEdit.ms"]) copy(`${FIXTURES}/overloadCall/${f}`, `${dir}/${f}`);
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=img/module${sharedLibraryExt()}`], "calls into another image's overloads did not link");
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-OV ")) seen.push(line);
+	}
+	const want = [
+		"HCR-OV start s x n 2 ns 2 n 3 n 7",
+		"HCR-OV reloaded shapes",
+		"HCR-OV after s x n2 4 ns 2 n2 6 n2 14",
+	];
+	if (!succeeded(ran) || seen.join("|") != want.join("|")) {
+		console.log(both(ran));
+		failWith(tag, "a call into another image's second or later overload did not bind through the registry and follow a reload");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function macroHelper(): void {
 	const tag = "hcrMacroHelper";
 	for (const variant of ["base", "second"]) {
@@ -1966,6 +1988,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrCoreOp", run: coreOp },
 	{ name: "hcrCoreGenericInit", run: coreGenericInit },
 	{ name: "hcrMacroHelper", run: macroHelper },
+	{ name: "hcrOverloadCall", run: overloadCall },
 	{ name: "hcrCoreNative", run: coreNative },
 	{ name: "hcrGlobalCell", run: globalCell },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
