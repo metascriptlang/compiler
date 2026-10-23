@@ -19,12 +19,11 @@ Demand-driven cache of compilation results with red-green invalidation and outpu
 |------|-------------|
 | `revision.ms` | `TaQueryKind`, `TaQueryState`, `TaDurability`, `TaRevision`, `TaQueryKey`, `createQueryKey`, `queryKeysEqual` |
 | `query.ms` | `TaCacheEntry`, `TaDependencyEntry`, `TaDependencyStack`, `pushFrame`, `popFrame`, `recordDependency`, `recordDurability` |
-| `cache.ms` | `TaCacheStore`, `cacheGet`, `cachePut`, `cacheRemove`, `markAllRed`, `markQueriesRedForFile` |
+| `cache.ms` | `TaCacheStore`, `cacheGet`, `cachePut`, `cacheRemove`, `markQueriesRedForFile` |
 | `redGreen.ms` | `tryMarkGreen`, `executeQueryWith`, `invalidateFile` |
 | `fileInput.ms` | `TaFileInputStore`, `setFileText`, `getFileText`, `getFileHash`, `getFileId`, `getFileDurability`, `setFileDurability` |
 | `moduleDeps.ms` | `TaModuleDepGraph`, `recordModuleImport`, `clearImportsFor`, `getTransitiveDependents`, `detectCycle` |
 | `hash.ms` | `taHashString`, `taHashKey`, `transAmHashNode` |
-| `intern.ms` | `TaStringInterner`, `internString`, `lookupInterned` |
 | `cancel.ms` | `getCancelVersion`, `checkCancel`, `requestCancel`, `resetCancel` (`CancelCtx` lives in `src/checker/context.ms`) |
 | `index.ms` | `TransAmDb`, `createTransAmDb`, `dbSetFileText`, `dbPreprocess`, `dbParse`, `dbTypeCheck`, `dbCheckIsCurrent`, `dbLower`, `dbTransform`, `dbAnalyze`, `dbResolveImport`, `dbEnsureModuleExports` |
 

@@ -41,10 +41,6 @@ import {
 	createCancelContext,
 	getCancelVersion, checkCancel, requestCancel, resetCancel
 } from "./cancel";
-import {
-	TaStringInterner, createStringInterner,
-	internString, lookupInterned, internedCount
-} from "./intern";
 
 import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
 import { preludeContextFor, bindModuleForCheck, finishModuleCheck, registerBoundModuleFn, BoundModule, sharedPreludeOwns, buildGlobalImportsLayer, bindModulePassesFrom } from "../../checker/checkPass";
@@ -143,7 +139,6 @@ export class TransAmDb {
 	cache: TaCacheStore;
 	moduleDeps: TaModuleDepGraph;
 	cancelCtx: CancelCtx;
-	interner: TaStringInterner;
 	exportRegistry: ExportRegistry;
 	stdPath: string;
 	resolverConfig: ResolverConfig;
@@ -200,7 +195,6 @@ export function createTransAmDb(cacheCapacity: int32): TransAmDb {
 		cache: createCacheStore(cacheCapacity),
 		moduleDeps: createModuleDepGraph(),
 		cancelCtx: createCancelContext(),
-		interner: createStringInterner(),
 		exportRegistry: createExportRegistry(),
 		stdPath: "",
 		resolverConfig: createDefaultConfig(Backend.C, ""),
@@ -1163,10 +1157,6 @@ export {
 	createCancelContext,
 	getCancelVersion, checkCancel, requestCancel, resetCancel
 } from "./cancel";
-export {
-	TaStringInterner, createStringInterner,
-	internString, lookupInterned, internedCount
-} from "./intern";
 
 // ===== Integration Tests =====
 
@@ -1308,13 +1298,6 @@ test "db has cancel context" {
 	const db = createTransAmDb(100);
 	assert db.cancelCtx.version == 0;
 	assert !db.cancelCtx.cancelled;
-}
-
-test "db has string interner" {
-	const db = createTransAmDb(100);
-	const id = internString(db.interner, "hello");
-	assert id == 0;
-	assert lookupInterned(db.interner, id) == "hello";
 }
 
 test "unused .h import identifier gets warning via Phase B" {

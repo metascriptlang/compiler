@@ -40,7 +40,7 @@ Trans-Am is a **demand-driven incremental computation framework**: it caches com
                         +---- dependencies recorded by frame ----+
 ```
 
-`TransAmDb` (`index.ms`) is a thin facade over one store per concern: revision, file input, dependency stack, cache, module dep graph, cancel context, interner, plus the checker's `ExportRegistry`, the resolver config, the prelude context and a preprocess cache.
+`TransAmDb` (`index.ms`) is a thin facade over one store per concern: revision, file input, dependency stack, cache, module dep graph, cancel context, plus the checker's `ExportRegistry`, the resolver config, the prelude context and a preprocess cache.
 
 `Node` and `CheckerContext` values are not held in the Trans-Am cache. Each db keeps them in its own maps (`TransAmDb` `trees`, `contexts`), keyed by `fileId` plus a per-query offset (`index.ms`, the `*Key` helpers). They are per db because file ids are per db: while they lived in process-wide caches, a db built inside another (the LSP prelude db) overwrote the outer db's entries for the same id. The Trans-Am cache holds the verification record: state, revisions, output hash, dependencies, durability.
 
@@ -152,13 +152,12 @@ The reference Zig implementation of this engine keeps 40+ fields in one `TransAm
 | BFS transitive invalidation | `module_graph.zig` | Correct propagation, cycle-safe |
 | Dependency stack with push / pop frames | `types.zig` | Automatic dependency tracking |
 | Version-based cancellation | `cancellation.zig` | Responsive LSP without boolean-flag races |
-| String interner | `intern.zig` | Present as a module; the hub exercises it only in tests |
 
 ### Changed from the reference
 
 | Change | Reference | Here | Why |
 |--------|-----------|------|-----|
-| Module per concern | god struct | 10 files | DRC safety, testability |
+| Module per concern | god struct | 9 files | DRC safety, testability |
 | Dependency tracking | manual `recordDependency()` at each site | frame-based scope | Cannot be forgotten |
 | Cache | pointer-based doubly-linked LRU | one `TaCacheStore`: access-counter LRU with linear-scan eviction, plus a `fileId` index for invalidation | DRC does not manage arbitrary graph pointers; an O(1) list is an upgrade to make when a profile asks for it |
 | Query results | `*anyopaque` + type id | typed value caches beside `Node` and `CheckerContext` | Type safety, destructors resolve in the owning module |
@@ -174,6 +173,7 @@ The reference Zig implementation of this engine keeps 40+ fields in one `TransAm
 | Parallel / async expansion | `cancellation.zig` (atomics) | The engine runs single-threaded |
 | Highlight, completion, format caches | `highlight.zig`, `completion.zig`, `format.zig` | LSP-side concerns, outside the engine |
 | AST arena management | `transam.zig` | DRC owns the trees |
+| String interner | `intern.zig` | Query keys are sequential file ids; nothing reads an interned id |
 
 ## 7. File cross-reference
 
@@ -185,7 +185,6 @@ The reference Zig implementation of this engine keeps 40+ fields in one `TransAm
 | `redGreen.ms` | `red_green.zig` | `salsa::tryMarkGreen` (internal) |
 | `fileInput.ms` | `input_queries.zig` | `base-db/src/lib.rs` |
 | `moduleDeps.ms` | `module_graph.zig` | `hir-def/src/db.rs` (import tracking) |
-| `intern.ms` | `intern.zig` | `#[salsa::interned]` |
 | `cancel.ms` | `cancellation.zig` | `ide-db/src/apply_change.rs` |
 
 ## Not verified here
