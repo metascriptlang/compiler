@@ -269,9 +269,9 @@ static DWORD WINAPI msPoolWorkerLoop(LPVOID arg) {
 static void* msPoolWorkerLoop(void* arg) {
 #endif
 	msThreadPool* pool = gPool;
-	int myWorkerIdx = (int)(intptr_t)arg;  /* index into workerConds[] */
-	int mySchedID = myWorkerIdx + 1;       /* workers are 1..N, main thread is 0 */
-	bool spare = myWorkerIdx >= pool->workerCount;
+	int myWorkerIdx = (int)((intptr_t)arg >> 1);  /* index into workerConds[] */
+	int mySchedID = myWorkerIdx + 1;              /* workers are 1..N, main thread is 0 */
+	bool spare = ((intptr_t)arg & 1) != 0;
 	msIsPoolWorker = true;
 	msPoolWorkerSchedId = mySchedID;
 	/* A spare takes no actor: its id stays past msSchedulerCount. */
@@ -431,9 +431,10 @@ static LONG gPoolInitFlag = 0;
 static pthread_once_t gPoolOnce = PTHREAD_ONCE_INIT;
 #endif
 
-static bool msPoolStartThread(msThreadPool* pool, int idx) {
+static bool msPoolStartThread(msThreadPool* pool, int idx, bool spare) {
+	intptr_t start = ((intptr_t)idx << 1) | (spare ? 1 : 0);
 #ifdef _WIN32
-	pool->workers[idx] = CreateThread(NULL, 0, msPoolWorkerLoop, (LPVOID)(intptr_t)idx, 0, NULL);
+	pool->workers[idx] = CreateThread(NULL, 0, msPoolWorkerLoop, (LPVOID)start, 0, NULL);
 	return pool->workers[idx] != NULL;
 #else
 	/* 4MB stack per worker — inline fallback (shouldSend) can create deep
@@ -443,7 +444,7 @@ static bool msPoolStartThread(msThreadPool* pool, int idx) {
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
 	pthread_attr_setstacksize(&attr, 4 * 1024 * 1024);
-	bool ok = pthread_create(&pool->workers[idx], &attr, msPoolWorkerLoop, (void*)(intptr_t)idx) == 0;
+	bool ok = pthread_create(&pool->workers[idx], &attr, msPoolWorkerLoop, (void*)start) == 0;
 	pthread_attr_destroy(&attr);
 	return ok;
 #endif
@@ -471,14 +472,11 @@ static void msPoolInit(void) {
 	pthread_cond_init(&gPool->space, NULL);
 	gPool->workers = (pthread_t*)calloc(MS_POOL_MAX_WORKERS, sizeof(pthread_t));
 #endif
-	/* Held across the starts: a started worker reads workerCount before it takes work. */
-	MS_LOCK(gPool);
 	int created = 0;
-	while (created < gPool->workerCount && msPoolStartThread(gPool, created)) created++;
+	while (created < gPool->workerCount && msPoolStartThread(gPool, created, false)) created++;
 	gPool->workerCount = created;
 	msPoolWorkerCount = created;  /* init lock-free shouldSend threshold */
 	atomic_store_explicit(&msPoolThreadCount, created, memory_order_release);
-	MS_UNLOCK(gPool);
 	atexit(msPoolShutdown);
 }
 
@@ -703,7 +701,7 @@ bool msPoolCompensate(const void* awaited, const char* wait) {
 	}
 	if (count < MS_POOL_MAX_WORKERS) {
 		msPoolThreadState[count] = MS_THREAD_SPARE;
-		if (msPoolStartThread(pool, count)) {
+		if (msPoolStartThread(pool, count, true)) {
 			atomic_store_explicit(&msPoolThreadCount, count + 1, memory_order_release);
 			msPoolSparesActive++;
 			msPoolSparesWanted++;
