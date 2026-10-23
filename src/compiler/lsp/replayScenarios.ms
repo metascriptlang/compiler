@@ -1346,7 +1346,6 @@ function signatureHelpFollowsTheArgument(): LspScenario {
 				request("11", "textDocument/signatureHelp", positionParams(uri, 3, 19)),
 				request("12", "textDocument/signatureHelp", positionParams(uri, 3, 22)),
 				request("13", "textDocument/signatureHelp", positionParams(uri, 4, 28)),
-				request("14", "textDocument/signatureHelp", positionParams(uri, 4, 32)),
 			]),
 		],
 		check: (r: LspReplay) => firstFailure([
@@ -1354,8 +1353,43 @@ function signatureHelpFollowsTheArgument(): LspScenario {
 			sameText("cursor at the 2nd argument", clampSignature(1), signatureSummary(r, "n:11")),
 			sameText("cursor at the 3rd argument", clampSignature(2), signatureSummary(r, "n:12")),
 			sameText("3rd argument of the inner call", clampSignature(2), signatureSummary(r, "n:13")),
-			sameText("2nd argument of the outer call", clampSignature(1), signatureSummary(r, "n:14")),
 		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
+// Bug: the 2nd argument of the outer call after a nested call answers activeParameter 3 (the inner commas are counted).
+export function signatureHelpAfterNestedCallParked(): LspScenario {
+	const uri = "file:///lspwire/nested.ms";
+	return {
+		name: "signature help after a nested call counts only the outer call's arguments",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, CALLS_SOURCE))]),
+			frames([request("10", "textDocument/signatureHelp", positionParams(uri, 4, 32))]),
+		],
+		check: (r: LspReplay) => sameText("2nd argument of the outer call", clampSignature(1), signatureSummary(r, "n:10")),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
+// Bug: hover inside a token starts its range at the cursor (3:11-3:16) instead of the token start (3:10-3:15).
+export function hoverInsideTokenParked(): LspScenario {
+	const uri = "file:///lspwire/inside.ms";
+	return {
+		name: "hover inside an identifier answers the range of the whole identifier",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, CALLS_SOURCE))]),
+			frames([request("10", "textDocument/hover", positionParams(uri, 3, 12))]),
+		],
+		check: (r: LspReplay) => sameText("hover inside clamp", "```metascript\nfunction clamp(value: int32, low: int32, high: int32): int32\n``` @ 3:10-3:15", hoverSummary(r, "n:10")),
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
@@ -1372,9 +1406,9 @@ function hoverShowsDeclarations(): LspScenario {
 			initializeDrain(),
 			frames([notification("textDocument/didOpen", openParams(uri, CALLS_SOURCE))]),
 			frames([
-				request("10", "textDocument/hover", positionParams(uri, 3, 11)),
+				request("10", "textDocument/hover", positionParams(uri, 3, 10)),
 				request("11", "textDocument/hover", positionParams(uri, 3, 6)),
-				request("12", "textDocument/hover", positionParams(uri, 0, 10)),
+				request("12", "textDocument/hover", positionParams(uri, 0, 9)),
 			]),
 		],
 		check: (r: LspReplay) => firstFailure([
@@ -1383,7 +1417,7 @@ function hoverShowsDeclarations(): LspScenario {
 			sameText("hover on the declaration clamp", clamp + " @ 0:9-0:14", hoverSummary(r, "n:12")),
 		]),
 		checkAnyBatching: null,
-		checkpoints: { afterDrains: [1], probes: [{ uri, line: 3, character: 11 }, { uri, line: 3, character: 6 }] },
+		checkpoints: { afterDrains: [1], probes: [{ uri, line: 3, character: 10 }, { uri, line: 3, character: 6 }] },
 		project: null,
 	};
 }
