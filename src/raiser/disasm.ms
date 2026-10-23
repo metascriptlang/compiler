@@ -61,6 +61,8 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.StoreSlotW => "StoreSlotW",
 		RaiserOpcode.StoreSlotR => "StoreSlotR",
 		RaiserOpcode.ConcatStr => "ConcatStr",
+		RaiserOpcode.ConcatStrR => "ConcatStrR",
+		RaiserOpcode.StrByteAt => "StrByteAt",
 		RaiserOpcode.EqStr => "EqStr",
 		RaiserOpcode.NeStr => "NeStr",
 		RaiserOpcode.LtStr => "LtStr",

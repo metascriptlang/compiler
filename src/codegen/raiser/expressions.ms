@@ -1102,7 +1102,9 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		const lReg = compileStringPart(s, d.left);
 		const rReg = compileStringPart(s, d.right);
 		const dest = allocRef(s);
-		emitInst(s, raiserABC(RaiserOpcode.ConcatStr, dest, lReg, rReg));
+		const typed = hasStringType(d.left) && hasStringType(d.right)
+			&& classOfReg(s, lReg) == RaiserRegClass.Ref && classOfReg(s, rReg) == RaiserRegClass.Ref;
+		emitInst(s, raiserABC(typed ? RaiserOpcode.ConcatStrR : RaiserOpcode.ConcatStr, dest, lReg, rReg));
 		return dest;
 	}
 
@@ -1724,6 +1726,10 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	// as the inline-opcode shortcut for hot methods.
 	if (d.callee.kind == NodeKind.MemberExpr && d.callee.resolvedSym != null) {
 		const sym = d.callee.resolvedSym;
+		if (sym.nativeName == "msStringByteAt" && !node.flags.has(NodeFlag.ExtStatic) && d.arguments.length == 1
+				&& hasStringType((d.callee.data as MemberExprData).object)) {
+			return compileStrByteAt(s, node);
+		}
 		if (sym.nativeName != "") {
 			checkHostBridgeCoverage(sym, d.callee);
 			const isStatic = node.flags.has(NodeFlag.ExtStatic);
@@ -2368,6 +2374,23 @@ function isStringMethod(s: RaiserCompState, node: Node, method: string): boolean
 	const d = node.data as MemberExprData;
 	if (d.property != method) return false;
 	return exprIsString(s, d.object);
+}
+
+function hasStringType(node: Node): boolean {
+	return node.nodeType != null && literalBase(node.nodeType).kind == TypeKind.String;
+}
+
+function compileStrByteAt(s: RaiserCompState, node: Node): int32 {
+	const d = node.data as CallExprData;
+	const md = d.callee.data as MemberExprData;
+	const strReg = compileExpr(s, md.object);
+	const idxReg = compileExpr(s, d.arguments[0]);
+	if (classOfReg(s, strReg) != RaiserRegClass.Ref || classOfReg(s, idxReg) != RaiserRegClass.Word) {
+		throw new Error(`internal: byteAt reads a ${classOfReg(s, strReg)} receiver and a ${classOfReg(s, idxReg)} index, not a Ref string and a Word index`);
+	}
+	const dest = allocWord(s);
+	emitInst(s, raiserABC(RaiserOpcode.StrByteAt, dest, strReg, idxReg));
+	return dest;
 }
 
 function compileStrCharAt(s: RaiserCompState, node: Node): int32 {

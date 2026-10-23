@@ -355,6 +355,37 @@ export function heapStringHeldOnce(arr: RaiserArrayHeap, v: RaiserValue): boolea
 	return handleHeapKind(v.intVal) == RaiserHeapKind.String && arr.strings.rc[handleIndex(v.intVal)] == 1;
 }
 
+// The handle forms of the readers above, for an operand a typed Ref register holds: the heap kind
+// in the handle picks the table, and a handle that names no string reads as "" like a non-String value.
+function handleTexts(arr: RaiserArrayHeap, h: int64): string[] {
+	return handleHeapKind(h) == RaiserHeapKind.String ? arr.strings.texts : constTexts;
+}
+
+function handleTextIndex(h: int64): number {
+	const kind = handleHeapKind(h);
+	return kind == RaiserHeapKind.String || kind == RaiserHeapKind.ConstString ? handleIndex(h) as number : 0;
+}
+
+export function heapConcatHandles(arr: RaiserArrayHeap, a: int64, b: int64): int64 {
+	return heapAllocString(arr, handleTexts(arr, a)[handleTextIndex(a)] + handleTexts(arr, b)[handleTextIndex(b)]).intVal;
+}
+
+export function heapAppendHandle(arr: RaiserArrayHeap, dst: int64, suffix: int64): void {
+	arr.strings.texts[handleIndex(dst) as number] += handleTexts(arr, suffix)[handleTextIndex(suffix)];
+}
+
+export function heapHandleHeldOnce(arr: RaiserArrayHeap, h: int64): boolean {
+	return handleHeapKind(h) == RaiserHeapKind.String && arr.strings.rc[handleIndex(h)] == 1;
+}
+
+// -1 outside the text, the way msStringByteAt answers.
+export function heapHandleByteAt(arr: RaiserArrayHeap, h: int64, idx: int64): int64 {
+	const t = handleTexts(arr, h);
+	const i = handleTextIndex(h);
+	if (idx < 0 || idx >= (t[i].byteLength as int64)) return -1;
+	return t[i].byteAt(idx as int32) as int64;
+}
+
 export function heapStringLive(arr: RaiserArrayHeap): number {
 	return arr.strings.texts.length - arr.strings.freeList.length;
 }

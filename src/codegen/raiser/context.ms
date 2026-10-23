@@ -196,7 +196,7 @@ function writesA(op: RaiserOpcode): boolean {
 			| RaiserOpcode.ShiftLeft | RaiserOpcode.ShiftRight | RaiserOpcode.ShiftRightU | RaiserOpcode.AddI64Imm | RaiserOpcode.SubI64Imm
 			| RaiserOpcode.Conv | RaiserOpcode.ArrayLen | RaiserOpcode.StrLen | RaiserOpcode.StrByteLen
 			| RaiserOpcode.IsKind | RaiserOpcode.InstanceOf | RaiserOpcode.SameLoc
-			| RaiserOpcode.ConcatStr | RaiserOpcode.StrCharAt | RaiserOpcode.StrSlice | RaiserOpcode.NewObject | RaiserOpcode.ArraySlice | RaiserOpcode.NewArray => true,
+			| RaiserOpcode.ConcatStr | RaiserOpcode.ConcatStrR | RaiserOpcode.StrByteAt | RaiserOpcode.StrCharAt | RaiserOpcode.StrSlice | RaiserOpcode.NewObject | RaiserOpcode.ArraySlice | RaiserOpcode.NewArray => true,
 		_ => false,
 	};
 }
@@ -670,7 +670,7 @@ function writesResultAfterReading(op: RaiserOpcode): boolean {
 			| RaiserOpcode.AddF64 | RaiserOpcode.SubF64 | RaiserOpcode.MulF64 | RaiserOpcode.DivF64 | RaiserOpcode.NegF64
 			| RaiserOpcode.BitAnd | RaiserOpcode.BitOr | RaiserOpcode.BitXor | RaiserOpcode.BitNot
 			| RaiserOpcode.ShiftLeft | RaiserOpcode.ShiftRight | RaiserOpcode.ShiftRightU
-			| RaiserOpcode.Conv | RaiserOpcode.ArrayLen | RaiserOpcode.StrLen | RaiserOpcode.StrCharAt | RaiserOpcode.ConcatStr
+			| RaiserOpcode.Conv | RaiserOpcode.ArrayLen | RaiserOpcode.StrLen | RaiserOpcode.StrCharAt | RaiserOpcode.ConcatStr | RaiserOpcode.ConcatStrR | RaiserOpcode.StrByteAt
 			| RaiserOpcode.IsKind => true,
 		_ => false,
 	};
