@@ -109,6 +109,15 @@ export function classifyRc(t: Type | null, dctx: DrcContext): RcInfo {
 	return info;
 }
 
+export function classifyRcBeforeLift(t: Type | null, dctx: DrcContext): RcInfo {
+	if (t == null) return noRcInfo();
+	const hit = dctx.rcMemo.get(t);
+	if (hit != null) return hit;
+	const info = classifyType(t, dctx.ctx, false);
+	if (!info.needsCleanup || info.destroyFn != null) dctx.rcMemo.set(t, info);
+	return info;
+}
+
 function createScope(isLoop: boolean, isFunction: boolean): DrcScope {
 	return {
 		varsToCleanup: [],

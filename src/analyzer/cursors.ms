@@ -34,7 +34,7 @@ import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
 import { isImmutableModuleConst, isViewCall, viewCallSources } from "../checker/effects";
 import { ANY_HEAP_SLOT, addressSlots, canAlias, mayWrite, resetWriteEffects, stepSlot, viewReturnSlots } from "./writeEffects";
-import { createDrcContext, classifyRc } from "./scope";
+import { createDrcContext } from "./scope";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
 import { isReadonlyView } from "../checker/types";

@@ -10,7 +10,7 @@ import { flowLap, flowMark } from "../compiler/flows";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { CheckerContext, GcMode } from "../checker/context";
 import { createTransformContextWithChecker } from "../transform/context";
-import { createDrcContext, pushScope, popScope } from "./scope";
+import { createDrcContext, pushScope, popScope, classifyRcBeforeLift } from "./scope";
 import { injectProgram } from "./inject";
 import { optimizeDrc } from "./optimize";
 import { bindWriteEffects, noteRoutineDecls } from "./writeEffects";
@@ -28,7 +28,7 @@ export function analyzeProgram(program: Node, checkerCtx: CheckerContext): Node 
 	flowMark();
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const dctx = createDrcContext(ctx);
-	bindWriteEffects(checkerCtx, (t: Type | null): RcInfo => classifyType(t, ctx, false));
+	bindWriteEffects(checkerCtx, (t: Type | null): RcInfo => classifyRcBeforeLift(t, dctx));
 	noteRoutineDecls(checkerCtx.modulePath, program);
 	flowLap("analyze.context");
 	const injected = injectProgram(program, dctx);
