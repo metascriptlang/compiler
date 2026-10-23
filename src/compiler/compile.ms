@@ -51,6 +51,7 @@ import { hcrTypeCounts } from "./hcrCount";
 import { lookupModuleCtx, lookupModuleProgram, drainPendingInstances, distinctInstances, placeInstance, retainCheckedInstances } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { markTypeOnlyImports } from "../checker/importElision";
+import { markVmOnlyRoutines } from "../checker/vmOnly";
 import { createTransformContextWithChecker } from "../transform/context";
 import { resetLiftedOps, setJsProgramScope } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity, planDynamicModules } from "../module/graph";
@@ -459,6 +460,7 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 	// windows build's linkFlags().
 	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, opts.targetOs, targetInfo, gcMode, config, session, opts.strictNullChecks, opts.appMode);
 	graphPreludeCtx = getPreludeContext();
+	if (opts.isHcr) markVmOnlyRoutines(graph, config.stdPath);
 	reportModuleErrors(graph, "type error");
 	// Standard reference parity (main.nim: `if conf.errorCounter > 0: return` before
 	// cgenWriteModules): the gate lives in the shared funnel, so no command can reach

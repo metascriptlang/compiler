@@ -606,6 +606,7 @@ export function computeAliveSet(
 	_visitedSyms = new HashSet<Symbol>();
 	declIndexBuild(programs, paths);
 	aliveSetAddModule(_aliveSet, entryPath);
+	for (const path of imageModules) aliveSetAddModule(_aliveSet, path);
 	const globalDestroys: GlobalDestroysBlock[] = [];
 	const initModules = new HashSet<string>();
 
@@ -629,7 +630,7 @@ export function computeAliveSet(
 
 			if (bare.kind == NodeKind.FunctionDecl) {
 				if (bare.resolvedSym != null && rootFunctions.has(bare.resolvedSym)) {
-					markSymAndWalk(bare.resolvedSym, modulePath);
+					if (!hasFlag(bare.resolvedSym, SymbolFlag.CompileTime)) markSymAndWalk(bare.resolvedSym, modulePath);
 					continue;
 				}
 			}
@@ -667,7 +668,7 @@ export function computeAliveSet(
 			if ((modulePath == entryPath || exportRootModules.includes(modulePath)) && isExportedDecl(bare)) {
 				const decl = topDecl(bare);
 				if (decl != null) {
-					markRootDecl(decl, modulePath);
+					if (decl.resolvedSym == null || !hasFlag(decl.resolvedSym, SymbolFlag.CompileTime)) markRootDecl(decl, modulePath);
 				} else {
 					const name = getDeclName(bare);
 					if (name != "") walkNamedDecls(modulePath, name);
