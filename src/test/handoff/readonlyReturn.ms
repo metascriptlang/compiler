@@ -76,6 +76,16 @@ test "readonlyReturn: spawned code that stores a view of what the task borrows i
 	assert errors(lent + "h.f = shared;" + done, "store an explicit copy of it") == 1;
 }
 
+test "readonlyReturn: a view stored into a literal in spawned code names the store, the view and the borrow form" {
+	const inArray = lent + "const parts = [shared.kids, shared.kids]; h.n = parts.length;" + done;
+	assert errors(inArray, "stores the view 'shared' into an array literal at 7:") == 1;
+	assert errors(inArray, "'shared.kids' is a view the task does not own") == 1;
+	assert errors(inArray, "pass it to a routine whose parameters are Readonly (the borrow form), or store an explicit copy of it (clone or spread) when the container must own its elements") == 1;
+	const inField = lent + "const box = { first: shared.kids, n: 1 }; h.n = box.n + box.first.length;" + done;
+	assert errors(inField, "stores the view 'shared' into the field 'first' of an object literal at 7:") == 1;
+	assert errors(inField, "'shared.kids' is a view the task does not own") == 1;
+}
+
 test "readonlyReturn: a view kept in the task, a scalar or a copy of a borrowed view compiles" {
 	assert errors(lent + "h.n = shared.n; const c = new Node(); c.n = shared.n; h.f = c;" + done, "stores the view") == 0;
 	assert errors(lent + "const r = shared.kids; const xs: Cursor<Readonly<Node>>[] = []; xs.push(shared); return r.length + xs.length;" + done, "stores the view") == 0;
