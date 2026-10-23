@@ -1453,10 +1453,11 @@ static inline void msActorRegister(msActor* a) {
         msEnsureWakePipe();  /* wake pipe must exist before any actor send */
         msActorClaimEventLoopScheduler();
         msSetActorPollHook(msActorPollEventLoop);
-        msPoolSetActorHooks(msActorPollLocal, msSetSchedulerID);
         msThreadPool* p = msPoolGet();
         msSchedulerCount = (p != NULL ? p->workerCount : 0) + 1;
         if (msSchedulerCount > MS_MAX_SCHEDULERS) msSchedulerCount = MS_MAX_SCHEDULERS;
+        /* After the count: a worker that sees the hooks reads msSchedulerCount next. */
+        msPoolSetActorHooks(msActorPollLocal, msSetSchedulerID);
         /* Create async cycle detector actor on scheduler 0 */
         msCDInit();
     }

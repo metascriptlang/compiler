@@ -158,11 +158,15 @@ static msThreadPool* gPool = NULL;
  * Pool doesn't include actor.h to avoid static-in-header duplication.
  * Instead, actor.h registers a poll function + scheduler ID setter via hooks. */
 
+/* Set once by the first actor, possibly while workers already run: atomic, the setter
+ * published before the poll function a worker checks first. */
+typedef bool (*msPoolActorPollHook)(void);
+typedef void (*msPoolSchedIdHook)(int id);
 /* Actor poll hook: called by workers to drain their local actor queues */
-static bool (*msPoolActorPollFn)(void) = NULL;
+static _Atomic(msPoolActorPollHook) msPoolActorPollFn = NULL;
 
 /* Scheduler ID setter: called once per worker to assign scheduler ID */
-static void (*msPoolSchedIdSetterFn)(int id) = NULL;
+static _Atomic(msPoolSchedIdHook) msPoolSchedIdSetterFn = NULL;
 
 
 /* Per-worker actor wake flag: set by msPoolWakeWorker, checked in sleep predicate.
@@ -173,8 +177,8 @@ static _Atomic(bool) msPoolActorWake[MS_POOL_MAX_WORKERS] = {false};
 
 /* Called by actor.h to register the poll + ID setter functions */
 void msPoolSetActorHooks(bool (*pollFn)(void), void (*idSetterFn)(int)) {
-    msPoolActorPollFn = pollFn;
-    msPoolSchedIdSetterFn = idSetterFn;
+    atomic_store_explicit(&msPoolSchedIdSetterFn, idSetterFn, memory_order_release);
+    atomic_store_explicit(&msPoolActorPollFn, pollFn, memory_order_release);
 }
 
 static _Thread_local void (**msThreadDestructionFns)(void) = NULL;
@@ -275,7 +279,8 @@ static void* msPoolWorkerLoop(void* arg) {
 	msIsPoolWorker = true;
 	msPoolWorkerSchedId = mySchedID;
 	/* A spare takes no actor: its id stays past msSchedulerCount. */
-	if (!spare && msPoolSchedIdSetterFn != NULL) msPoolSchedIdSetterFn(mySchedID);
+	msPoolSchedIdHook setSchedId = atomic_load_explicit(&msPoolSchedIdSetterFn, memory_order_acquire);
+	if (!spare && setSchedId != NULL) setSchedId(mySchedID);
 
 	extern int msWorkerTimerDelayMs(void);
 	extern bool msWorkerLoopPending(void);
@@ -354,10 +359,11 @@ static void* msPoolWorkerLoop(void* arg) {
 		/* Poll local actors (opportunistic between spawn tasks).
 		 * If actor work was found, loop back immediately to check for more
 		 * (actor re-enqueue may have added new work during processing). */
-		if (!spare && msPoolActorPollFn != NULL) {
-			if (msPoolSchedIdSetterFn != NULL) msPoolSchedIdSetterFn(mySchedID);
+		msPoolActorPollHook poll = spare ? NULL : atomic_load_explicit(&msPoolActorPollFn, memory_order_acquire);
+		if (poll != NULL) {
+			atomic_load_explicit(&msPoolSchedIdSetterFn, memory_order_relaxed)(mySchedID);
 			atomic_fetch_add_explicit(&msPoolPendingCount, 1, memory_order_relaxed);
-			bool polled = msPoolActorPollFn();
+			bool polled = poll();
 			atomic_fetch_sub_explicit(&msPoolPendingCount, 1, memory_order_release);
 			if (polled) continue;
 		}
