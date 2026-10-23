@@ -5081,8 +5081,9 @@ export function declaredFieldType(t: Readonly<Type | null>, name: string): Reado
 	if (t == null) return null;
 	if ((t.kind == TypeKind.Ref || t.kind == TypeKind.Ptr) && t.typeReturn != null) return declaredFieldType(t.typeReturn, name);
 	if (t.kind == TypeKind.GenericInstance) {
-		const body = t.typeReturn != null ? t.typeReturn : instanceLayoutBody(t);
-		return body != null && body != t ? declaredFieldType(body, name) : null;
+		if (t.typeReturn != null) return t.typeReturn != t ? declaredFieldType(t.typeReturn, name) : null;
+		const body = instanceLayoutBody(t);
+		return body != null && body != t ? declaredFieldType(instanceLayoutBody(t), name) : null;
 	}
 	if (t.kind == TypeKind.Struct) {
 		const i = t.typeNames.indexOf(name);

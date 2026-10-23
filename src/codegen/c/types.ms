@@ -1188,24 +1188,23 @@ function typeInfoLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 }
 
 // The walk msOrcDisownValue takes over a value held inline: its custody op, else its trace.
-export function valueCustodyOp(t: Type | null): Symbol | null;
-export function valueCustodyOp(t: Readonly<Type | null>): Readonly<Symbol | null>;
-export function valueCustodyOp(t: Readonly<Type | null>): Readonly<Symbol | null> {
+export function valueCustodyOp(t: Readonly<Type | null>): Symbol | null {
 	const bare = skipModifier(t);
 	if (bare == null) return null;
 	const own = getOpByKey(bare, AttachedOp.AttachedCustody);
 	return own != null ? own : getOpByKey(bare, AttachedOp.AttachedTrace);
 }
 
-function valueCustodyOpIn(g: CGen, t: Readonly<Type | null>): Readonly<Symbol | null> {
+function valueCustodyOpIn(ops: Readonly<HashMap<string, Symbol>>, roots: Readonly<ModuleNameRoots>, t: Readonly<Type | null>): Readonly<Symbol | null> {
 	const bare = skipModifier(t);
 	if (bare == null) return null;
-	const own = getOpByKeyIn(g.emissionFacts.hookOps!, g.emissionFacts.moduleNameRoots!, bare, AttachedOp.AttachedCustody);
-	return own != null ? own : getOpByKeyIn(g.emissionFacts.hookOps!, g.emissionFacts.moduleNameRoots!, bare, AttachedOp.AttachedTrace);
+	const custody = opKeyIn(roots, bare, AttachedOp.AttachedCustody);
+	if (ops.has(custody)) return ops.readonlyGet(custody);
+	return ops.readonlyGet(opKeyIn(roots, bare, AttachedOp.AttachedTrace));
 }
 
 export function valueCustodyRef(g: CGen, t: Readonly<Type | null>): string {
-	const op = valueCustodyOpIn(g, t);
+	const op = valueCustodyOpIn(g.emissionFacts.hookOps!, g.emissionFacts.moduleNameRoots!, t);
 	if (op == null) {
 		addCGenError(g, `internal: a value disowned from its thread's cycle roots has neither a custody nor a trace op: ${opTypeKeyIn(g.emissionFacts.moduleNameRoots!, t)}`, 0, 0);
 		return "NULL";
