@@ -893,6 +893,9 @@ FAKE
   printf 'compile error\n' >"$d/log"
   got=$(reds_of build "$d/log" 1 | paste -sd'|' -)
   [ "$got" = "build" ] || { printf 'FAIL boot: reds_of plain build failure: got "%s"\n' "$got"; bad=1; }
+  printf 'FAIL self-host: emit-reached rc op on a Type in genX__m_u0 at src/codegen/c/x.ms:9\n  msIncrefCyclic(t_1_);\n' >"$d/log"
+  got=$(reds_of build "$d/log" 1 | paste -sd'|' -)
+  [ "$got" = "self-host: emit-reached rc op on a Type in genX__m_u0 at src/codegen/c/x.ms:9" ] || { printf 'FAIL boot: reds_of emit rc scan: got "%s"\n' "$got"; bad=1; }
   rm -rf "$d"
   return $bad
 }
@@ -2282,7 +2285,8 @@ build_lane() {
     rm -f "$CAND" "${CAND%.exe}.pdb"
     env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd build)" || return $?
   fi
-  self_host_boot "$CAND" "$CC_FLAG"
+  self_host_boot "$CAND" "$CC_FLAG" || return $?
+  env -u NO_COLOR -u FORCE_COLOR "$CAND" run $CC_FLAG src/test/emitRcScan.ms "$CAND" $CC_FLAG
 }
 
 lane_body() {
