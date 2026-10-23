@@ -32,8 +32,8 @@ import { setFlag, hasFlag, isCursorSym, SymbolFlag, findOverloadImpl } from "../
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
-import { isImmutableModuleConst, isViewCall } from "../checker/effects";
-import { ANY_HEAP_SLOT, addressSlots, canAlias, mayWrite, resetWriteEffects, stepSlot, viewReturnRoots, viewReturnSlots } from "./writeEffects";
+import { calledRoutineType, isImmutableModuleConst, isViewCall, receiverOf, viewCallSources } from "../checker/effects";
+import { ANY_HEAP_SLOT, addressSlots, canAlias, mayWrite, resetWriteEffects, stepSlot, viewReturnSlots } from "./writeEffects";
 import { createDrcContext } from "./scope";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
@@ -69,9 +69,22 @@ function getIdentSym(node: Node): Symbol | null {
 	return null;
 }
 
+function graphCanHold(holder: Type | null, part: Type | null): boolean {
+	return canAlias(part, holder);
+}
+
 function lentSources(call: Node): Node[] {
+	const sources: Node[] = [];
+	viewCallSources(call, sources);
+	const formals = calledRoutineType(call)?.typeChildren ?? null;
+	const args = (call.data as CallExprData).arguments;
+	const shift = call.flags.has(NodeFlag.ExtCall) ? 1 : 0;
+	const recv = receiverOf(call);
 	const out: Node[] = [];
-	viewReturnRoots(call, out);
+	for (const a of sources) {
+		const fi = a === recv ? shift - 1 : args.indexOf(a) + shift;
+		if (formals == null || fi < 0 || fi >= formals.length || graphCanHold(formals[fi], call.nodeType)) out.push(a);
+	}
 	return out;
 }
 
