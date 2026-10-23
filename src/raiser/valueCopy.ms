@@ -3,7 +3,7 @@ import {
 	raiserNil, handleIndex, raiserArray, raiserObject,
 	heapAllocArray, heapAllocObject, heapArrayPush, heapArrayLen, heapArrayGet, heapObjectSetField, rcIncref,
 	createArrayHeap, createStructHeap, heapObjectGetField, raiserInt, rcDecref, fieldNameAt, appendField, objectFieldCount, fieldValueAt,
-	RaiserClassType, RaiserObjectData, RAISER_NO_CLASS, layOutObject, fieldStoreAt, heapAllocBox, raiserFloat, raiserBool
+	RaiserClassType, RaiserObjectData, RAISER_NO_CLASS, createClassType, layOutObject, fieldStoreAt, heapAllocBox, raiserFloat, raiserBool
 } from "./value";
 import { RaiserRegClass } from "./bytecode";
 
@@ -176,12 +176,12 @@ test "laid struct copies word, float, bool, ref and dyn slots, and a nested stru
 	const arrays = createArrayHeap();
 	const objects = createStructHeap();
 	const inner = raiserObject(heapAllocObject(objects));
-	const innerClass: RaiserClassType = { name: "Inner", chain: [], fields: ["n"], kinds: [RaiserRegClass.Word] };
+	const innerClass: RaiserClassType = createClassType("Inner", -1, [], ["n"], [RaiserRegClass.Word]);
 	layOutObject(objects.objects[handleIndex(inner.intVal)], innerClass);
 	objects.objects[handleIndex(inner.intVal)].slots[0] = 7;
 	rcIncref(arrays, objects, inner);
 	const source = raiserObject(heapAllocObject(objects));
-	const outerClass: RaiserClassType = { name: "Outer", chain: [], fields: ["w", "f", "b", "next", "any"], kinds: [RaiserRegClass.Word, RaiserRegClass.Float, RaiserRegClass.Bool, RaiserRegClass.Ref, RaiserRegClass.Dyn] };
+	const outerClass: RaiserClassType = createClassType("Outer", -1, [], ["w", "f", "b", "next", "any"], [RaiserRegClass.Word, RaiserRegClass.Float, RaiserRegClass.Bool, RaiserRegClass.Ref, RaiserRegClass.Dyn]);
 	layOutObject(objects.objects[handleIndex(source.intVal)], outerClass);
 	const box: RaiserValue = { kind: RaiserValueKind.Box, intVal: heapAllocBox(arrays, raiserInt(5)), floatVal: 0.0 };
 	const at = handleIndex(source.intVal);

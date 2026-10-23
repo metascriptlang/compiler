@@ -8,7 +8,7 @@ import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
 import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
-import { layoutOf, slotKindsOf } from "./expressions";
+import { layoutOf, slotKindsOf } from "./valueCopy";
 import { createCompState } from "./context";
 import { findModule } from "../../module/graph";
 import { resolveRuntimeDir } from "../../utils/path";
