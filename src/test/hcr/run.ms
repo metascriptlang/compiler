@@ -1467,6 +1467,33 @@ function coreGenericInit(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function macroHelper(): void {
+	const tag = "hcrMacroHelper";
+	for (const variant of ["base", "second"]) {
+		const dir = freshDir(`${TMP}/macroHelper${variant}`);
+		const files = variant == "base" ? ["app.ms", "tools.ms"] : ["app.ms", "tools.ms", "helpers.ms"];
+		for (const f of files) copy(`${FIXTURES}/macroHelper/${variant}/${f}`, `${dir}/${f}`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=img/module${sharedLibraryExt()}`], `an exported helper only a macro calls (${variant}) did not build`);
+		const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+		const seen: string[] = [];
+		for (const line of lines(both(ran))) {
+			if (line.startsWith("HCR-MH ")) seen.push(line);
+		}
+		if (!succeeded(ran) || seen.length != 1 || seen[0] != "HCR-MH B2 0") {
+			console.log(both(ran));
+			failWith(tag, `an exported helper only a macro calls (${variant}) reached the core image or left the project module without an image`);
+		}
+	}
+	const dir = freshDir(`${TMP}/macroHelperRuntime`);
+	for (const f of ["runtimeCall.ms", "tools.ms"]) copy(`${FIXTURES}/macroHelper/base/${f}`, `${dir}/${f}`);
+	const refused = msc(dir, ["build", "runtimeCall.ms", "--hcr", `--output=img/module${sharedLibraryExt()}`]);
+	if (succeeded(refused) || both(refused).indexOf("'arity' calls 'childCount'", 0) < 0) {
+		console.log(both(refused));
+		failWith(tag, "a run-time call to a helper only the macro VM can run was not refused by name");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function rewriteCoreNativeHeader(dir: string, include: string): void {
 	const revision = `${performance.now()}`.replaceAll(".", "");
 	put(`${dir}/box/shared.h`, `${include}#define HCR_NATIVE_REV ${revision}\n`);
@@ -1924,6 +1951,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrCoreCell", run: coreCell },
 	{ name: "hcrCoreOp", run: coreOp },
 	{ name: "hcrCoreGenericInit", run: coreGenericInit },
+	{ name: "hcrMacroHelper", run: macroHelper },
 	{ name: "hcrCoreNative", run: coreNative },
 	{ name: "hcrGlobalCell", run: globalCell },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
