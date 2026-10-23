@@ -2615,7 +2615,8 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
 					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
 					const obj: Cursor<RaiserObjectData> = objects[handleIndex(handle)];
-					if (((obj.wordSlots >> (idx as int64)) & 1) == 0) { slow = true; break; }
+					when (mode != "danger") { if (((obj.wordSlots >> (idx as int64)) & 1) == 0) { slow = true; break; } }
+					when (mode == "danger") { if (idx >= obj.slots.length) { slow = true; break; } }
 					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 40) & 65535) as int32]) { slow = true; break; } }
 					words[wb + ia] = obj.slots[idx];
 				} else {
@@ -2631,7 +2632,8 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
 					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
 					const obj: Cursor<RaiserObjectData> = objects[handleIndex(handle)];
-					if (((obj.refSlots >> (idx as int64)) & 1) == 0) { slow = true; break; }
+					when (mode != "danger") { if (((obj.refSlots >> (idx as int64)) & 1) == 0) { slow = true; break; } }
+					when (mode == "danger") { if (idx >= obj.slots.length) { slow = true; break; } }
 					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 40) & 65535) as int32]) { slow = true; break; } }
 					writeRef(vm, rb + ia, obj.slots[idx]);
 				} else {
@@ -2647,7 +2649,8 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
 					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
 					const obj: Cursor<RaiserObjectData> = objects[handleIndex(handle)];
-					if (((obj.wordSlots >> (idx as int64)) & 1) == 0) { slow = true; break; }
+					when (mode != "danger") { if (((obj.wordSlots >> (idx as int64)) & 1) == 0) { slow = true; break; } }
+					when (mode == "danger") { if (idx >= obj.slots.length) { slow = true; break; } }
 					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 24) & 65535) as int32]) { slow = true; break; } }
 					obj.slots[idx] = words[wb + ic];
 				} else {
@@ -2663,7 +2666,8 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64)) {
 					when (mode != "danger") { if (handleIndex(handle) >= vm.objectHeap.objects.length) { slow = true; break; } }
 					const obj: Cursor<RaiserObjectData> = objects[handleIndex(handle)];
-					if (((obj.refSlots >> (idx as int64)) & 1) == 0) { slow = true; break; }
+					when (mode != "danger") { if (((obj.refSlots >> (idx as int64)) & 1) == 0) { slow = true; break; } }
+					when (mode == "danger") { if (idx >= obj.slots.length) { slow = true; break; } }
 					when (mode != "danger") { if (obj.classType.fields[idx] != func.names[((word >> 24) & 65535) as int32]) { slow = true; break; } }
 					storeSlotRef(vm, obj, idx, refs[rb + ic]);
 				} else {
