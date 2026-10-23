@@ -238,3 +238,35 @@ export function scan(t: Node, log: Log): int32 { return hit(log, t.kids[0]); }
 		assert rcOps(functionBody(result.value, "scan")) > 0, decls + "\n" + functionBody(result.value, "scan");
 	}
 }
+
+test "a view call's result stays borrowed across writes that miss the path its callee returns" {
+	const fault = rcFault(`
+class Node { kids: Node[] = []; next: Node | null = null; n: int32 = 0; }
+class Out { lines: string[] = []; }
+function last(t: Readonly<Node>): Readonly<Node> { return t.next != null ? last(t.next) : t; }
+export function count(t: Readonly<Node>, out: Out): int32 {
+	const p = last(t);
+	out.lines.push("x");
+	out.lines[0] = "y";
+	return p.n;
+}
+`, ["count"]);
+	assert fault == "", fault;
+}
+
+test "a view call's result is owned across a write to a slot its callee returns through" {
+	for (const write of ["out.node.next = null;", "out.node.kids[0] = new Node();"]) {
+		const result = compileToC(`
+class Node { kids: Node[] = []; next: Node | null = null; n: int32 = 0; }
+class Out { node: Node = new Node(); }
+function last(t: Readonly<Node>): Readonly<Node> { return t.next != null ? last(t.next) : t.kids.length > 0 ? t.kids[0] : t; }
+export function count(t: Readonly<Node>, out: Out): int32 {
+	const p = last(t);
+	${write}
+	return p.n;
+}
+`);
+		assert result.ok, result.ok ? "" : result.error;
+		assert rcOps(functionBody(result.value, "count")) > 0, write + "\n" + functionBody(result.value, "count");
+	}
+}
