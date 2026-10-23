@@ -17,6 +17,7 @@ import {
 import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, RaiserCombine, raiserABC, raiserABx, raiserAx, convOperand, fitsImm, immField, branchField, inRefFile, MAX_SLOT } from "../../raiser/bytecode";
 import { RaiserValueKind, createClassType, raiserInt, raiserFloat, raiserNil, raiserBool, raiserConstString } from "../../raiser/value";
 import { lookupHost } from "../../raiser/hostRegistry";
+import { opName } from "../../raiser/disasm";
 import { resolveRuntimeDir } from "../../utils/path";
 import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, fieldInst } from "./valueCopy";
 import { placedInstanceOf } from "../../checker/instantiate";
@@ -1726,9 +1727,9 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	// as the inline-opcode shortcut for hot methods.
 	if (d.callee.kind == NodeKind.MemberExpr && d.callee.resolvedSym != null) {
 		const sym = d.callee.resolvedSym;
-		if (sym.nativeName == "msStringByteAt" && !node.flags.has(NodeFlag.ExtStatic) && d.arguments.length == 1
+		if ((sym.nativeName == "msStringByteAt" || sym.nativeName == "msStringCharCodeAt") && !node.flags.has(NodeFlag.ExtStatic) && d.arguments.length == 1
 				&& hasStringType((d.callee.data as MemberExprData).object)) {
-			return compileStrByteAt(s, node);
+			return compileStrIndexRead(s, node, sym.nativeName == "msStringByteAt" ? RaiserOpcode.StrByteAt : RaiserOpcode.StrCharCodeAt);
 		}
 		if (sym.nativeName != "") {
 			checkHostBridgeCoverage(sym, d.callee);
@@ -2380,16 +2381,16 @@ function hasStringType(node: Node): boolean {
 	return node.nodeType != null && literalBase(node.nodeType).kind == TypeKind.String;
 }
 
-function compileStrByteAt(s: RaiserCompState, node: Node): int32 {
+function compileStrIndexRead(s: RaiserCompState, node: Node, op: RaiserOpcode): int32 {
 	const d = node.data as CallExprData;
 	const md = d.callee.data as MemberExprData;
 	const strReg = compileExpr(s, md.object);
 	const idxReg = compileExpr(s, d.arguments[0]);
 	if (classOfReg(s, strReg) != RaiserRegClass.Ref || classOfReg(s, idxReg) != RaiserRegClass.Word) {
-		throw new Error(`internal: byteAt reads a ${classOfReg(s, strReg)} receiver and a ${classOfReg(s, idxReg)} index, not a Ref string and a Word index`);
+		throw new Error(`internal: ${opName(op)} reads a ${classOfReg(s, strReg)} receiver and a ${classOfReg(s, idxReg)} index, not a Ref string and a Word index`);
 	}
 	const dest = allocWord(s);
-	emitInst(s, raiserABC(RaiserOpcode.StrByteAt, dest, strReg, idxReg));
+	emitInst(s, raiserABC(op, dest, strReg, idxReg));
 	return dest;
 }
 

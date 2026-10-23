@@ -11,7 +11,7 @@ const root = cwd();
 const mscEnv = env.get("MSC");
 const msc = mscEnv != "" ? mscEnv : `${root}/msc`;
 const fixture = `${root}/src/test/guard/fixtures/raiserStringOps.ms`;
-const expected = "xy a1 a1 64 abab t7u\n104 195 169 -1 -1 -1\n1 12 true true false\n";
+const expected = "xy a1 a1 64 abab t7u\n104 195 169 -1 -1 -1\n104 233 -1 -1 -1 55357\n1 12 true true false\n";
 
 let failed = 0;
 

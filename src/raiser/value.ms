@@ -379,6 +379,13 @@ export function heapHandleHeldOnce(arr: RaiserArrayHeap, h: int64): boolean {
 }
 
 // -1 outside the text, the way msStringByteAt answers.
+export function heapHandleCharCodeAt(arr: RaiserArrayHeap, h: int64, idx: int64): int64 {
+	const t = handleTexts(arr, h);
+	const i = handleTextIndex(h);
+	if (idx < 0 || idx >= (t[i].length as int64)) return -1;
+	return t[i].charCodeAt(idx as int32) as int64;
+}
+
 export function heapHandleByteAt(arr: RaiserArrayHeap, h: int64, idx: int64): int64 {
 	const t = handleTexts(arr, h);
 	const i = handleTextIndex(h);

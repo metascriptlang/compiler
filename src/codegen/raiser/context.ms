@@ -196,7 +196,7 @@ function writesA(op: RaiserOpcode): boolean {
 			| RaiserOpcode.ShiftLeft | RaiserOpcode.ShiftRight | RaiserOpcode.ShiftRightU | RaiserOpcode.AddI64Imm | RaiserOpcode.SubI64Imm
 			| RaiserOpcode.Conv | RaiserOpcode.ArrayLen | RaiserOpcode.StrLen | RaiserOpcode.StrByteLen
 			| RaiserOpcode.IsKind | RaiserOpcode.InstanceOf | RaiserOpcode.SameLoc
-			| RaiserOpcode.ConcatStr | RaiserOpcode.ConcatStrR | RaiserOpcode.StrByteAt | RaiserOpcode.StrCharAt | RaiserOpcode.StrSlice | RaiserOpcode.NewObject | RaiserOpcode.ArraySlice | RaiserOpcode.NewArray => true,
+			| RaiserOpcode.ConcatStr | RaiserOpcode.ConcatStrR | RaiserOpcode.StrByteAt | RaiserOpcode.StrCharCodeAt | RaiserOpcode.StrCharAt | RaiserOpcode.StrSlice | RaiserOpcode.NewObject | RaiserOpcode.ArraySlice | RaiserOpcode.NewArray => true,
 		_ => false,
 	};
 }

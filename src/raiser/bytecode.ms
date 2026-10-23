@@ -216,9 +216,10 @@ export enum RaiserOpcode {
 	CallClosureTyped, // ABC: CallClosure at a site whose callee has a declared function type, which the checker only lets hold a pair of that signature; a danger build trusts the pair and the signature
 	ConcatStrR,       // ABC: refs[A] = refs[B] ++ refs[C], both statically strings
 	StrByteAt,        // ABC: words[A] = byte R[C] of the string refs[B], -1 outside it
+	StrCharCodeAt,    // ABC: words[A] = UTF-16 code unit R[C] of the string refs[B], -1 outside it
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.StrByteAt;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.StrCharCodeAt;
 
 // How FutureCombine settles its result from its inputs (Promise.all, race, any).
 export enum RaiserCombine {
@@ -348,7 +349,7 @@ export function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.StoreSlotR => "r-r",
 		RaiserOpcode.ConcatStr => "rxx",
 		RaiserOpcode.ConcatStrR => "rrr",
-		RaiserOpcode.StrByteAt => "iri",
+		RaiserOpcode.StrByteAt | RaiserOpcode.StrCharCodeAt => "iri",
 		RaiserOpcode.EqStr | RaiserOpcode.NeStr | RaiserOpcode.LtStr | RaiserOpcode.LeStr => "rr-",
 		RaiserOpcode.StrLen | RaiserOpcode.StrByteLen => "ir-",
 		RaiserOpcode.StrCharAt => "rri",
