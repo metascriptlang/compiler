@@ -21,6 +21,7 @@ import { generatedRef, makeAssign, makeBlock, makeCall, makeFnDecl, makeIdentRes
 import { cstringSource } from "../transform/native/cstringConvLower";
 
 const ELEMENT_SLOT = "E";
+const THIS_PARAM: int32 = -1;
 // An append moves the elements a value borrow copied out, so it can only strand a borrow that
 // holds an element's address; such a borrow reads APPEND_SLOT besides ELEMENT_SLOT.
 export const APPEND_SLOT = "+E";
@@ -57,6 +58,7 @@ class WriteSummary {
 let routineSummaries = new HashMap<Symbol, WriteSummary>();
 let viewReturns = new HashMap<Symbol, string[]>();
 let viewReturnsUnknown = new HashSet<Symbol>();
+let viewReturnParams = new HashMap<Symbol, int32[]>();
 let viewReturnsOpen: Symbol[] = [];
 let viewReturnsReach: int32 = 0;
 let constructionSummaries = new HashMap<Symbol, WriteSummary>();
@@ -132,6 +134,7 @@ export function clearWriteSummaries(): void {
 	routineSummaries = new HashMap<Symbol, WriteSummary>();
 	viewReturns = new HashMap<Symbol, string[]>();
 	viewReturnsUnknown = new HashSet<Symbol>();
+	viewReturnParams = new HashMap<Symbol, int32[]>();
 	constructionSummaries = new HashMap<Symbol, WriteSummary>();
 	hookSummaries = new HashMap<Type, WriteSummary>();
 	hookless = new HashSet<Type>();
@@ -1014,6 +1017,26 @@ export function viewReturnSlots(call: Node): string[] | null {
 	return routineReturnSlots(sym);
 }
 
+export function viewReturnRoots(call: Node, out: Node[]): void {
+	const sources: Node[] = [];
+	viewCallSources(call, sources);
+	const sym = calledRoutine(call);
+	const reached = sym != null && viewReturnSlots(call) != null ? viewReturnParams.get(sym) : null;
+	const formals = sym != null ? routineDecl(sym)?.paramSyms ?? null : null;
+	if (reached == null || formals == null) {
+		for (const a of sources) out.push(a);
+		return;
+	}
+	const args = (call.data as CallExprData).arguments;
+	const shift = call.flags.has(NodeFlag.ExtCall) ? 1 : 0;
+	const recv = receiverOf(call);
+	const lastFormal = args.length + shift > formals.length ? formals.length - 1 : formals.length;
+	for (const a of sources) {
+		const fi = a === recv ? (shift == 1 ? 0 : THIS_PARAM) : args.indexOf(a) + shift;
+		if (fi >= lastFormal || reached.includes(fi as int32)) out.push(a);
+	}
+}
+
 function routineReturnSlots(sym: Symbol): string[] | null {
 	const known = viewReturns.get(sym);
 	if (known != null) return known;
@@ -1031,54 +1054,57 @@ function routineReturnSlots(sym: Symbol): string[] | null {
 	viewReturnsReach = depth;
 	viewReturnsOpen.push(sym);
 	const out: string[] = [];
-	const ok = returnArmsSlots(body, decl.paramSyms, localDefs(body), out);
+	const reached: int32[] = [];
+	const ok = returnArmsSlots(body, decl.paramSyms, localDefs(body), out, reached);
 	viewReturnsOpen.pop();
 	if (viewReturnsReach >= depth) {
-		if (ok) viewReturns.set(sym, out);
-		else viewReturnsUnknown.add(sym);
+		if (ok) {
+			viewReturns.set(sym, out);
+			viewReturnParams.set(sym, reached);
+		} else viewReturnsUnknown.add(sym);
 	}
 	viewReturnsReach = viewReturnsReach < outerReach ? viewReturnsReach : outerReach;
 	return ok ? out : null;
 }
 
-function returnArmsSlots(n: Node, params: Symbol[] | null, d: LocalDefs, out: string[]): boolean {
+function returnArmsSlots(n: Node, params: Symbol[] | null, d: LocalDefs, out: string[], reached: int32[]): boolean {
 	if (isRoutineNode(n)) return true;
 	if (n.kind == NodeKind.ReturnStmt) {
 		const arg = (n.data as ReturnStmtData).argument;
-		return arg == null || pathFromParams(arg, params, d, new HashSet<Symbol>(), out);
+		return arg == null || pathFromParams(arg, params, d, new HashSet<Symbol>(), out, reached);
 	}
 	let ok = true;
-	forEachChild(n, (c: Node): void => { if (ok && !returnArmsSlots(c, params, d, out)) ok = false; });
+	forEachChild(n, (c: Node): void => { if (ok && !returnArmsSlots(c, params, d, out, reached)) ok = false; });
 	return ok;
 }
 
-function pathFromParams(n: Node, params: Symbol[] | null, d: LocalDefs, seen: HashSet<Symbol>, out: string[]): boolean {
+function pathFromParams(n: Node, params: Symbol[] | null, d: LocalDefs, seen: HashSet<Symbol>, out: string[], reached: int32[]): boolean {
 	const t = skipConvDfa(n);
 	match (t.kind) {
 		NodeKind.NullLiteral => { return true; },
 		NodeKind.ConditionalExpr => {
 			const cd = t.data as ConditionalExprData;
-			return pathFromParams(cd.ternaryConsequent, params, d, seen, out) && pathFromParams(cd.ternaryAlternate, params, d, seen, out);
+			return pathFromParams(cd.ternaryConsequent, params, d, seen, out, reached) && pathFromParams(cd.ternaryAlternate, params, d, seen, out, reached);
 		},
 		NodeKind.BinaryExpr => {
 			const bd = t.data as BinaryExprData;
-			return bd.operator == "??" && pathFromParams(bd.left, params, d, seen, out) && pathFromParams(bd.right, params, d, seen, out);
+			return bd.operator == "??" && pathFromParams(bd.left, params, d, seen, out, reached) && pathFromParams(bd.right, params, d, seen, out, reached);
 		},
 		NodeKind.MemberExpr => {
 			out.push(stepSlot(t)!);
-			return pathFromParams((t.data as MemberExprData).object, params, d, seen, out);
+			return pathFromParams((t.data as MemberExprData).object, params, d, seen, out, reached);
 		},
 		NodeKind.ArrayAccess => {
 			out.push(stepSlot(t)!);
-			return pathFromParams((t.data as ArrayAccessData).array, params, d, seen, out);
+			return pathFromParams((t.data as ArrayAccessData).array, params, d, seen, out, reached);
 		},
-		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { return pathFromParams((t.data as HiddenDerefData).expr, params, d, seen, out); },
-		NodeKind.MoveExpr => { return pathFromParams((t.data as MoveExprData).moveArg, params, d, seen, out); },
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { return pathFromParams((t.data as HiddenDerefData).expr, params, d, seen, out, reached); },
+		NodeKind.MoveExpr => { return pathFromParams((t.data as MoveExprData).moveArg, params, d, seen, out, reached); },
 		NodeKind.CallExpr => {
 			const projected = loweredAccessStep(t);
 			if (projected != null) {
 				if (projected == ELEMENT_SLOT) out.push(heldSlot(ELEMENT_SLOT, (t.data as CallExprData).arguments[0].nodeType));
-				return pathFromParams((t.data as CallExprData).arguments[0], params, d, seen, out);
+				return pathFromParams((t.data as CallExprData).arguments[0], params, d, seen, out, reached);
 			}
 			if (!isViewCall(t)) return false;
 			const inner = viewReturnSlots(t);
@@ -1087,14 +1113,18 @@ function pathFromParams(n: Node, params: Symbol[] | null, d: LocalDefs, seen: Ha
 			const sources: Node[] = [];
 			viewCallSources(t, sources);
 			for (const a of sources) {
-				if (containsPointer(a.nodeType, 0) && !pathFromParams(a, params, d, seen, out)) return false;
+				if (containsPointer(a.nodeType, 0) && !pathFromParams(a, params, d, seen, out, reached)) return false;
 			}
 			return true;
 		},
 		NodeKind.Identifier => {
 			const sym = t.resolvedSym;
-			if (sym == null) return (t.data as IdentifierData).name == "this";
-			if (paramIndex(params, sym) >= 0 || (t.data as IdentifierData).name == "this") return true;
+			const pi = sym != null ? paramIndex(params, sym) : THIS_PARAM;
+			if (sym == null || pi >= 0 || (t.data as IdentifierData).name == "this") {
+				if (pi < 0 && (t.data as IdentifierData).name != "this") return false;
+				if (!reached.includes(pi)) reached.push(pi);
+				return true;
+			}
 			if (isModuleState(sym)) {
 				out.push(globalSlot(sym));
 				return true;
@@ -1105,7 +1135,7 @@ function pathFromParams(n: Node, params: Symbol[] | null, d: LocalDefs, seen: Ha
 			const k = d.syms.indexOf(sym);
 			if (k < 0) return false;
 			for (const src of d.sources[k]) {
-				if (!pathFromParams(src, params, d, seen, out)) return false;
+				if (!pathFromParams(src, params, d, seen, out, reached)) return false;
 			}
 			return true;
 		},
