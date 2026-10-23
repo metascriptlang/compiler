@@ -197,7 +197,7 @@ export class CProc {
 }
 
 // reference parity: check if an identifier is a pointer introduction param (indirect location)
-export function isIndirectParam(p: CProc, name: string): boolean {
+export function isIndirectParam(p: Readonly<CProc>, name: string): boolean {
 	if (p == null) return false;
 	for (const param of p.indirectParams) {
 		if (param == name) return true;
@@ -206,7 +206,7 @@ export function isIndirectParam(p: CProc, name: string): boolean {
 }
 
 // A reference that carries its symbol is indirect only when that binding is.
-export function isIndirectRef(p: CProc, sym: Readonly<Symbol | null>, name: string): boolean {
+export function isIndirectRef(p: Readonly<CProc>, sym: Readonly<Symbol | null>, name: string): boolean {
 	if (p == null) return false;
 	if (sym == null) return isIndirectParam(p, name);
 	for (const s of p.indirectSyms) {
@@ -253,7 +253,7 @@ export function setLocalSymName(p: CProc, sym: Readonly<Symbol>, name: string): 
 	p.localSymNames.push(name);
 }
 
-export function lookupLocalSymName(p: CProc, sym: Readonly<Symbol | null>): string {
+export function lookupLocalSymName(p: Readonly<CProc>, sym: Readonly<Symbol | null>): string {
 	if (p == null || sym == null) return "";
 	for (let i = p.localSyms.length - 1; i >= 0; i -= 1) {
 		if (p.localSyms[i] == sym) return p.localSymNames[i];

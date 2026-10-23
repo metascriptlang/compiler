@@ -225,7 +225,7 @@ export function emitCallRaiseCheck(p: CProc, exprNode: Readonly<Node>): void {
 	emitStmtsLine(p, `if (msErr) goto ${raiseTarget(p)};`);
 }
 
-function frameLocalRoot(n: Readonly<Node | null>, p: CProc): Readonly<Symbol | null> {
+function frameLocalRoot(n: Readonly<Node | null>, p: Readonly<CProc>): Readonly<Symbol | null> {
 	if (n == null) return null;
 	if (n.kind == NodeKind.Identifier) {
 		const sym = n.resolvedSym;
@@ -266,7 +266,7 @@ function isPureIndex(n: Readonly<Node>): boolean {
 	return cur.kind == NodeKind.NumberLiteral || cur.kind == NodeKind.Identifier;
 }
 
-function readsFrameLocal(p: CProc, root: Readonly<Symbol>, n: Readonly<Node>): boolean {
+function readsFrameLocal(p: Readonly<CProc>, root: Readonly<Symbol>, n: Readonly<Node>): boolean {
 	if (n == null) return false;
 	if (mayHoldAddress(n.nodeType)) return true;
 	return match (n.kind) {
@@ -297,7 +297,7 @@ function readsFrameLocal(p: CProc, root: Readonly<Symbol>, n: Readonly<Node>): b
 	};
 }
 
-function anyReadsFrameLocal(p: CProc, root: Readonly<Symbol>, nodes: Readonly<Node[]>): boolean {
+function anyReadsFrameLocal(p: Readonly<CProc>, root: Readonly<Symbol>, nodes: Readonly<Node[]>): boolean {
 	for (const n of nodes) {
 		if (readsFrameLocal(p, root, n)) return true;
 	}
@@ -350,7 +350,7 @@ function returnsInto(value: Readonly<Node>): boolean {
 	return value.kind == NodeKind.CallExpr && isNrvoReturnType(getCalleeReturnType(value), getCalleeFuncType(value));
 }
 
-function storeIsUnobservable(p: CProc, call: Readonly<Node>): boolean {
+function storeIsUnobservable(p: Readonly<CProc>, call: Readonly<Node>): boolean {
 	return p.nestedTryStmts.length == 0 || !inferredCallRaises(call);
 }
 
