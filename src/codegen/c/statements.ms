@@ -782,40 +782,46 @@ function endsInJump(stmts: Readonly<Node[]>): boolean {
 }
 
 interface DispatchTail {
-	pre: Readonly<Node>[];
-	post: Readonly<Node>[];
-	disc: Readonly<Node>;
+	at: int32;
 	table: string;
 	wrapper: string;
 	emitted: int32;
 }
 
-function genDispatchTail(g: CGen, p: CProc, t: DispatchTail): void {
+function genLoopSide(g: CGen, p: CProc, loop: Readonly<Node>, at: int32, before: boolean): void {
+	const stmts = ((loop.data as WhileStmtData).whileBody.data as BlockStmtData).statements;
+	const end = before ? at : stmts.length;
+	for (let i = before ? 0 : at + 1; i < end; i += 1) {
+		if (!isComputedGotoMark(stmts[i])) genStmt(g, p, stmts[i]);
+	}
+}
+
+function genDispatchTail(g: CGen, p: CProc, t: DispatchTail, loop: Readonly<Node>, sw: Readonly<Node>): void {
 	const wasReemitting = p.reemitting;
 	p.reemitting = t.emitted > 0;
-	genStmts(g, p, t.post);
+	genLoopSide(g, p, loop, t.at, false);
 	p.reemitting = true;
-	genStmts(g, p, t.pre);
+	genLoopSide(g, p, loop, t.at, true);
 	p.reemitting = wasReemitting;
-	emitStmtsLine(p, `goto *${t.table}[${genExpr(g, p, t.disc)}];`);
+	emitStmtsLine(p, `goto *${t.table}[${genExpr(g, p, (sw.data as SwitchStmtData).switchDisc)}];`);
 	t.emitted += 1;
 }
 
-function genBlockWithTail(g: CGen, p: CProc, node: Readonly<Node>, t: DispatchTail): void {
+function genBlockWithTail(g: CGen, p: CProc, node: Readonly<Node>, t: DispatchTail, loop: Readonly<Node>, sw: Readonly<Node>): void {
 	emitStmts(p, "{\n");
 	const oldIndent = getStmtsIndent(p);
 	setStmtsIndent(p, oldIndent + 1);
 	if (node.kind == NodeKind.BlockStmt) {
-		genStmtsWithTail(g, p, (node.data as BlockStmtData).statements, t);
+		genStmtsWithTail(g, p, (node.data as BlockStmtData).statements, t, loop, sw);
 	} else {
 		const one: Readonly<Node>[] = [node];
-		genStmtsWithTail(g, p, one, t);
+		genStmtsWithTail(g, p, one, t, loop, sw);
 	}
 	setStmtsIndent(p, oldIndent);
 	emitStmtsLine(p, "}");
 }
 
-function genTailIf(g: CGen, p: CProc, node: Readonly<Node>, t: DispatchTail): void {
+function genTailIf(g: CGen, p: CProc, node: Readonly<Node>, t: DispatchTail, loop: Readonly<Node>, sw: Readonly<Node>): void {
 	const conds: Readonly<Node>[] = [];
 	const bodies: Readonly<Node>[] = [];
 	let elseBody: Readonly<Node> | null = null;
@@ -840,15 +846,15 @@ function genTailIf(g: CGen, p: CProc, node: Readonly<Node>, t: DispatchTail): vo
 		const lnext = `__L${p.labels}`;
 		emitStmtsLine(p, "{");
 		emitStmtsLine(p, `if (!(${genExpr(g, p, conds[i])})) goto ${lnext};`);
-		genBlockWithTail(g, p, bodies[i], t);
+		genBlockWithTail(g, p, bodies[i], t, loop, sw);
 		emitStmtsLine(p, `} goto ${lend};`);
 		emitStmtsLine(p, lnext + ":;");
 	}
 	if (elseBody != null) {
-		genBlockWithTail(g, p, elseBody, t);
+		genBlockWithTail(g, p, elseBody, t, loop, sw);
 		emitStmtsNl(p);
 	} else {
-		genDispatchTail(g, p, t);
+		genDispatchTail(g, p, t, loop, sw);
 	}
 	emitStmtsLine(p, lend + ":;");
 }
@@ -857,7 +863,7 @@ function endsCase(stmt: Readonly<Node>, t: DispatchTail): boolean {
 	return t.wrapper != "" && stmt.kind == NodeKind.BreakStmt && (stmt.data as BreakStmtData).breakLabel == t.wrapper;
 }
 
-function genStmtsWithTail(g: CGen, p: CProc, stmts: Readonly<Node[]>, t: DispatchTail): void {
+function genStmtsWithTail(g: CGen, p: CProc, stmts: Readonly<Node[]>, t: DispatchTail, loop: Readonly<Node>, sw: Readonly<Node>): void {
 	let n = stmts.length;
 	if (n > 0 && endsCase(stmts[n - 1], t)) {
 		n -= 1;
@@ -868,15 +874,19 @@ function genStmtsWithTail(g: CGen, p: CProc, stmts: Readonly<Node[]>, t: Dispatc
 	const last = n - 1;
 	for (let i = 0; i < last; i += 1) genStmt(g, p, stmts[i]);
 	if (last >= 0 && stmts[last].kind == NodeKind.IfStmt) {
-		genTailIf(g, p, stmts[last], t);
+		genTailIf(g, p, stmts[last], t, loop, sw);
 		return;
 	}
 	if (last >= 0 && stmts[last].kind == NodeKind.BlockStmt) {
-		genBlockWithTail(g, p, stmts[last], t);
+		genBlockWithTail(g, p, stmts[last], t, loop, sw);
 		return;
 	}
 	if (last >= 0) genStmt(g, p, stmts[last]);
-	genDispatchTail(g, p, t);
+	genDispatchTail(g, p, t, loop, sw);
+}
+
+function whileLabelOf(loop: Readonly<Node>): string {
+	return (loop.data as WhileStmtData).whileLabel;
 }
 
 function genComputedGotoLoop(g: CGen, p: CProc, node: Readonly<Node>, sw: Readonly<Node>, at: int32): void {
@@ -884,16 +894,12 @@ function genComputedGotoLoop(g: CGen, p: CProc, node: Readonly<Node>, sw: Readon
 	const stmts = (d.whileBody.data as BlockStmtData).statements;
 	const sd = sw.data as SwitchStmtData;
 	const size = computedGotoSize(sd.switchDisc.nodeType);
-	const pre: Readonly<Node>[] = [];
-	const post: Readonly<Node>[] = [];
 	for (let i = 0; i < stmts.length; i += 1) {
 		if (i == at || isComputedGotoMark(stmts[i])) continue;
 		if (holdsLabel(stmts[i])) {
 			addCGenError(g, "computed goto repeats the statements around the switch, and one of them holds a label", stmts[i].location.line, stmts[i].location.column);
 			return;
 		}
-		if (i < at) pre.push(stmts[i]);
-		else post.push(stmts[i]);
 	}
 	if (size == 0) {
 		addCGenError(g, "internal: computed goto reached C codegen without a table size", sw.location.line, sw.location.column);
@@ -911,7 +917,7 @@ function genComputedGotoLoop(g: CGen, p: CProc, node: Readonly<Node>, sw: Readon
 	if (d.whileLabel != "") { whileBlk.label = d.whileLabel; }
 	setStmtsIndent(p, oldIndent + 1);
 
-	genStmts(g, p, pre);
+	genLoopSide(g, p, node, at, true);
 	let entries = "";
 	for (let k = 0; k < sd.switchCases.length; k += 1) {
 		const cd = sd.switchCases[k].data as SwitchCaseData;
@@ -929,7 +935,7 @@ function genComputedGotoLoop(g: CGen, p: CProc, node: Readonly<Node>, sw: Readon
 	emitStmtsLine(p, `static void* const ${table}[${size}] = { ${entries} };`);
 	emitStmtsLine(p, `goto *${table}[${genExpr(g, p, sd.switchDisc)}];`);
 
-	const tail: DispatchTail = { pre: pre, post: post, disc: sd.switchDisc, table: table, wrapper: wrapperLabel, emitted: 0 };
+	const tail: DispatchTail = { at: at, table: table, wrapper: wrapperLabel, emitted: 0 };
 	for (let k = 0; k < sd.switchCases.length; k += 1) {
 		const cd = sd.switchCases[k].data as SwitchCaseData;
 		emitStmtsLine(p, `__cg${id}_${k}: ;`);
@@ -938,20 +944,21 @@ function genComputedGotoLoop(g: CGen, p: CProc, node: Readonly<Node>, sw: Readon
 			p.blocks[p.blocks.length - 1].label = wrapperLabel;
 			p.blocks[p.blocks.length - 1].landing = `__cg${id}_${k}_end`;
 		}
-		genStmtsWithTail(g, p, cd.caseStmts, tail);
+		genStmtsWithTail(g, p, cd.caseStmts, tail, node, sw);
 		if (wrapperLabel != "") {
 			const landed = p.blocks[p.blocks.length - 1].breakUsed;
 			popBlock(p);
 			if (landed) {
 				emitStmtsLine(p, `__cg${id}_${k}_end: ;`);
-				if (!endsInJump(cd.caseStmts)) genDispatchTail(g, p, tail);
+				if (!endsInJump(cd.caseStmts)) genDispatchTail(g, p, tail, node, sw);
 			}
 		}
 	}
-	if (d.whileLabel != "" && whileBlk.continueUsed) { emitStmtsLine(p, `${d.whileLabel}: ;`); }
+	const whileLabel = whileLabelOf(node);
+	if (whileLabel != "" && whileBlk.continueUsed) { emitStmtsLine(p, `${whileLabel}: ;`); }
 	popBlock(p);
 	emitStmtsLine(p, "}");
-	if (d.whileLabel != "" && whileBlk.breakUsed) { emitStmtsLine(p, `${d.whileLabel}_x_: ;`); }
+	if (whileLabel != "" && whileBlk.breakUsed) { emitStmtsLine(p, `${whileLabel}_x_: ;`); }
 }
 
 // ===== While Statement =====
