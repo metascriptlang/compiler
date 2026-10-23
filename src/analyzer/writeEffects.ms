@@ -1139,6 +1139,15 @@ export function callerDefsOf(body: Node): LocalDefs {
 	return localDefs(body);
 }
 
+export function reachesModuleState(call: Node, defs: LocalDefs | null): boolean {
+	const writes = callWrites(call, defs);
+	if (writes.unknown) return true;
+	for (const slot of writes.slots) {
+		if (slot.startsWith("G:")) return true;
+	}
+	return false;
+}
+
 export function runsHooks(target: Node): boolean {
 	return target.nodeType != null && hookSummary(target.nodeType!) != null;
 }

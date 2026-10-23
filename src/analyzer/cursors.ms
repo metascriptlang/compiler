@@ -33,7 +33,7 @@ import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
 import { calledRoutineType, isImmutableModuleConst, isViewCall, receiverOf, viewCallSources } from "../checker/effects";
-import { ANY_HEAP_SLOT, addressSlots, callerDefsOf, canAlias, LocalDefs, mayWrite, resetWriteEffects, runsHooks, stepSlot, viewReturnSlots } from "./writeEffects";
+import { ANY_HEAP_SLOT, addressSlots, callerDefsOf, canAlias, LocalDefs, mayWrite, reachesModuleState, resetWriteEffects, runsHooks, stepSlot, viewReturnSlots } from "./writeEffects";
 import { createDrcContext } from "./scope";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
@@ -176,12 +176,7 @@ function holdsAddress(sym: Symbol | null): boolean {
 	return t == null || t.kind == TypeKind.Borrow || t.kind == TypeKind.Lent || t.kind == TypeKind.Var || t.kind == TypeKind.Ptr;
 }
 
-function writesOtherPartition(p: Partitions, site: Node, viewRoot: int32): boolean {
-	if (site.kind != NodeKind.BinaryExpr) return false;
-	const target = (site.data as BinaryExprData).left;
-	if (runsHooks(target)) return false;
-	const roots: Symbol[] = [];
-	allRoots(p, target, roots);
+function onlyOtherPartitions(p: Partitions, roots: Symbol[], viewRoot: int32): boolean {
 	if (roots.length == 0) return false;
 	for (const r of roots) {
 		const id = variableId(p, r);
@@ -190,12 +185,37 @@ function writesOtherPartition(p: Partitions, site: Node, viewRoot: int32): boole
 	return true;
 }
 
+function callArgumentRoots(p: Partitions, call: Node, roots: Symbol[]): boolean {
+	const recv = receiverOf(call);
+	const operands: Node[] = recv != null ? [recv] : [];
+	for (const a of (call.data as CallExprData).arguments) { operands.push(a); }
+	for (const a of operands) {
+		if (a == null) continue;
+		if (runsHooks(a)) return false;
+		if (containsPointer(a.nodeType, 0)) allRoots(p, a, roots);
+	}
+	return true;
+}
+
+function writesOtherPartition(p: Partitions, site: Node, viewRoot: int32, defs: LocalDefs): boolean {
+	const roots: Symbol[] = [];
+	if (site.kind == NodeKind.CallExpr) {
+		if (reachesModuleState(site, defs) || !callArgumentRoots(p, site, roots)) return false;
+		return onlyOtherPartitions(p, roots, viewRoot);
+	}
+	if (site.kind != NodeKind.BinaryExpr) return false;
+	const target = (site.data as BinaryExprData).left;
+	if (runsHooks(target)) return false;
+	allRoots(p, target, roots);
+	return onlyOtherPartitions(p, roots, viewRoot);
+}
+
 function writtenWhileAlive(p: Partitions, vid: int32, slots: string[], defs: LocalDefs): boolean {
 	if (slots.length == 0) return false;
 	const v = p.vars[vid];
 	const viewRoot = ufRoot(p, vid);
 	for (let k = 0; k < writeSites.length; k += 1) {
-		if (writeTimes[k] >= v.aliveStart && writeTimes[k] <= v.aliveEnd && mayWrite(writeSites[k], slots, defs) && !writesOtherPartition(p, writeSites[k], viewRoot)) return true;
+		if (writeTimes[k] >= v.aliveStart && writeTimes[k] <= v.aliveEnd && mayWrite(writeSites[k], slots, defs) && !writesOtherPartition(p, writeSites[k], viewRoot, defs)) return true;
 	}
 	return false;
 }
@@ -1355,4 +1375,38 @@ test "a view through a function value reassigned between calls ends the cursor" 
 	const body = getFuncNamed(FN_VALUES + "function f(n: Link): int32 { let pick = nextOf; const a = pick(n); pick = clearNext; const b = pick(n); return a != null && b != null ? a.v + b.v : 0; }", "f");
 	inferCursors(body);
 	assert !isCursorNamed(body, "a");
+}
+
+const SETTERS = "class LinkM { v: int32 = 0; next: LinkM | null = null; setNext(x: LinkM): void { this.next = x; } }\n"
+	+ "let shared = new LinkM();\n"
+	+ "class Spill { v: int32 = 0; next: LinkM | null = null; setNext(x: LinkM): void { shared.next = x; } }\n";
+
+test "a call on a local of another partition keeps a view cursor" {
+	const body = getFuncNamed(SETTERS + "function f(n: LinkM): int32 { const v = n.next; const own = new LinkM(); own.setNext(new LinkM()); return v != null ? v.v : 0; }", "f");
+	inferCursors(body);
+	assert isCursorNamed(body, "v");
+}
+
+test "a call with an argument rooted in the view's partition ends the view" {
+	const body = getFuncNamed(SETTERS + "function f(n: LinkM): int32 { const v = n.next; const own = new LinkM(); own.setNext(n); return v != null ? v.v : 0; }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "v");
+}
+
+test "a call on a parameter ends the view" {
+	const body = getFuncNamed(SETTERS + "function f(n: LinkM, m: LinkM): int32 { const v = n.next; m.setNext(new LinkM()); return v != null ? v.v : 0; }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "v");
+}
+
+test "a call on a local aliasing the view's source ends the view" {
+	const body = getFuncNamed(SETTERS + "function f(n: LinkM): int32 { const v = n.next; const alias = n; alias.setNext(new LinkM()); return v != null ? v.v : 0; }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "v");
+}
+
+test "a call whose routine writes module state ends the view whatever it is called on" {
+	const body = getFuncNamed(SETTERS + "function f(n: LinkM): int32 { const v = shared.next; const own = new Spill(); own.setNext(new LinkM()); return v != null ? v.v : 0; }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "v");
 }
