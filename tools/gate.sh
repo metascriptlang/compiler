@@ -26,6 +26,7 @@ DEFAULT_LANES="build suite"
 ORDER="tools build boundary suite lsp hcr tests fmt corpus san guard solana"
 LADDER="build boundary suite lsp hcr tests fmt corpus san guard solana"
 KNOWN_LANES="boundary suite lsp hcr tests fmt corpus san guard solana"
+RC_SCAN_PATHS='^(src|std|runtime)/'
 RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|\.rms$|^src/test/corpus/run\.ms$'
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
 SELECT_STD='^std/.*\.(ms|cms|jms)$'
@@ -1668,6 +1669,18 @@ runtime/drc.h|blind
 src/test/corpus/run.ms|blind
 src/test/corpus/programs/804-enumNegativeValue.ms|
 CASES
+  INERT_RE=$INERT SCAN_RE=$RC_SCAN_PATHS awk -F'|' '
+    { got = ($1 !~ ENVIRON["INERT_RE"] && $1 ~ ENVIRON["SCAN_RE"]) ? "rcscan" : "" }
+    got != $2 { printf "FAIL emit rc scan %s: want \"%s\", got \"%s\"\n", $1, $2, got; bad = 1 }
+    END { exit bad }' <<'CASES' || bad=1
+src/codegen/c/statements.ms|rcscan
+src/analyzer/inject.ms|rcscan
+std/core/string/index.ms|rcscan
+runtime/drc.h|rcscan
+docs/TESTING.md|
+paper/ULTRALOCK.md|
+tools/gate.sh|
+CASES
   INERT_RE=$INERT RAISER_RE=$RAISER_PATHS awk -F'|' '
     { got = ($1 !~ ENVIRON["INERT_RE"] && $1 ~ ENVIRON["RAISER_RE"]) ? "raiser" : "" }
     got != $2 { printf "FAIL raiser lane %s: want \"%s\", got \"%s\"\n", $1, $2, got; bad = 1 }
@@ -1902,6 +1915,13 @@ case " $lanes " in *" corpus "*|*" san "*)
   fi ;;
 esac
 
+rcscan_on=0 rcscan_why=""
+if [ "$release" -eq 1 ] || [ "$record" -eq 1 ]; then rcscan_on=1 rcscan_why="the full ladder"
+else
+  rcscan_why=$(printf '%s\n' "$paths" | grep -Ev "$INERT" | grep -E "$RC_SCAN_PATHS" | head -1)
+  [ -z "$rcscan_why" ] || rcscan_on=1
+fi
+
 raiser_on=0 raiser_why=""
 if [ "$release" -eq 1 ] || [ "$record" -eq 1 ]; then raiser_on=1 raiser_why="the full ladder"
 else
@@ -1920,6 +1940,9 @@ explain() {
   elif [ -n "$select_why" ] && [ -z "$lanes_arg" ] && [ "$release" -eq 0 ] && [ "$record" -eq 0 ]; then
     say "gate: no narrowing for $select_label ($select_why)"
   fi
+  case " $lanes " in *" build "*)
+    if [ "$rcscan_on" -eq 1 ]; then say "gate: build runs the emit rc scan <- $rcscan_why"; else say "gate: build without the emit rc scan (no change under src/, std/ or runtime/)"; fi ;;
+  esac
   case " $lanes " in *" corpus "*)
     if [ "$raiser_on" -eq 1 ]; then say "gate: corpus runs the raiser lane <- $raiser_why"; else say "gate: corpus without the raiser lane (no change reaches the Raiser VM)"; fi ;;
   esac
@@ -2286,6 +2309,7 @@ build_lane() {
     env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd build)" || return $?
   fi
   self_host_boot "$CAND" "$CC_FLAG" || return $?
+  [ "$rcscan_on" -eq 1 ] || return 0
   env -u NO_COLOR -u FORCE_COLOR "$CAND" run $CC_FLAG src/test/emitRcScan.ms "$CAND" $CC_FLAG
 }
 
