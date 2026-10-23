@@ -165,3 +165,32 @@ console.log(\`\${run()}\`);
 	assert r.ok;
 	assert (r.ok ? r.value : "").contains("msDecrefCyclic(a_");
 }
+
+const SETS = (call: string) => `
+class N { v: int32 = 1; next: N | null = null; setNext(x: N): void { this.next = x; } }
+async function main(): Promise<int32> {
+	const g = new N();
+	g.next = new N();
+	const make = () => spawn(() => {
+		let sum = 0;
+		const own = new N();
+		for (let i = 0; i < 10; i += 1) {
+			const view = g.next;
+			${call}
+			if (view != null) sum += view.v;
+		}
+		return sum;
+	});
+	const t = make();
+	const u = make();
+	return (await t) + (await u);
+}
+console.log(\`\${await main()}\`);
+`;
+
+test "E2E C: a task view of a lent graph takes no rc op beside a method call on its own object" {
+	const body = compiledThunks(SETS("own.setNext(new N());"));
+	assert body.length > 0;
+	assert !body.contains("msIncrefCyclic(view");
+	assert !body.contains("msDecrefCyclic(view");
+}
