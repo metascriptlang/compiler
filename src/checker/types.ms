@@ -663,6 +663,7 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 		if (!dup) seen.push(k);
 	}
 	if (foldBooleanLiterals(seen) && seen.length == 1) return seen[0];
+	if (onlyViewsAndNull(seen)) return createReadonlyView(buildUnion(seen.map((m: Type): Type => withoutReadonlyView(m)), canonical));
 	if (canonical && !extendsDeclaredSum(types)) sortUnionMembers(seen);
 	const t = emptyType();
 	t.kind = TypeKind.Union;
@@ -710,6 +711,16 @@ function buildUnion(types: Type[], canonical: boolean): Type {
 		}
 	}
 	return t;
+}
+
+// `Readonly<A> | null` is `Readonly<A | null>`: a view stays a view when null joins it.
+function onlyViewsAndNull(members: Type[]): boolean {
+	let views = 0;
+	for (const m of members) {
+		if (isReadonlyView(m)) views += 1;
+		else if (m.kind != TypeKind.Null) return false;
+	}
+	return views > 0 && members.length > 1;
 }
 
 // `true | false` is `boolean`: both literal members, and a `boolean` beside them, become one
