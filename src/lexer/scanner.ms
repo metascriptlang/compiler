@@ -1,5 +1,4 @@
 // Scanner — Tokenization of numbers, strings, identifiers, operators, comments
-// Pattern: ~/projects/metascript/src/lexer/lexer.zig
 
 import { TokenKind, identToKeyword } from "./token";
 import { LexerState, JsxMode, peek, peekAt, advanceChar, skip, addToken, addComment, allowsRegexAfter, setLexError } from "./state";

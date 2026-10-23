@@ -1,5 +1,4 @@
 // Parser Context - Shared parser state and helpers
-// Pattern: ~/projects/metascript/src/parser/context.zig
 
 import { Token, TokenKind } from "../lexer/token";
 import { lex } from "../lexer/lexer";
@@ -197,7 +196,6 @@ export function peek(state: ParserState, offset: int32): Token {
 }
 
 // ===== Error Recovery =====
-// Pattern: ~/projects/metascript/src/parser/parser.zig reportError + synchronize
 
 // Record a parse error. In panic mode, suppress cascading errors.
 export function addError(state: ParserState, msg: string): void {

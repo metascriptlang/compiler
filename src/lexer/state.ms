@@ -1,5 +1,4 @@
 // Lexer State — Token accumulation and source navigation
-// Pattern: ~/projects/metascript/src/lexer/lexer.zig (LexerState)
 
 import { Token, TokenKind } from "./token";
 
