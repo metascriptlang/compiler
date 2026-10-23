@@ -28,31 +28,6 @@ function isCKeyword(name: string): boolean {
 	};
 }
 
-// ===== Character Classification (string-based, single char) =====
-
-function isAlphaChar(ch: string): boolean {
-	return match (ch) {
-		"a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" => true,
-		"k" | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" => true,
-		"u" | "v" | "w" | "x" | "y" | "z" => true,
-		"A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" => true,
-		"K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" => true,
-		"U" | "V" | "W" | "X" | "Y" | "Z" => true,
-		_ => false,
-	};
-}
-
-function isDigitChar(ch: string): boolean {
-	return match (ch) {
-		"0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => true,
-		_ => false,
-	};
-}
-
-function isAlnumChar(ch: string): boolean {
-	return isAlphaChar(ch) || isDigitChar(ch);
-}
-
 // ===== Special Character Replacement =====
 
 function specialCharName(ch: string): string {
@@ -87,23 +62,22 @@ function specialCharName(ch: string): string {
 
 export function mangle(name: string): string {
 	if (name.length == 0) return "empty_";
+	const leadingDigit = isAsciiDigit(name.byteAt(0));
+	if (!leadingDigit && isAsciiWord(name)) return name;
 	let result = "";
 	let start = 0;
 	let requiresUnderscore = false;
 
 	// Leading digit: prefix with X
-	const first = name.charAt(0);
-	if (isDigitChar(first)) {
-		result = "X" + first;
+	if (leadingDigit) {
+		result = "X" + name.charAt(0);
 		start = 1;
 	}
 
 	for (let i = start; i < name.byteLength; i += 1) {
 		const ch = name.charAt(i);
-		if (isAlnumChar(ch)) {
+		if (isAsciiWordChar(ch)) {
 			result = result + ch;
-		} else if (ch == "_") {
-			result = result + "_";
 		} else {
 			result = result + specialCharName(ch);
 			requiresUnderscore = true;
@@ -118,8 +92,24 @@ export function mangle(name: string): string {
 
 const ESCAPED_PREFIX = "X_";
 
+function isAsciiDigit(b: int32): boolean {
+	return b >= "0".code && b <= "9".code;
+}
+
 function isAsciiAlnum(b: int32): boolean {
-	return (b >= "a".code && b <= "z".code) || (b >= "A".code && b <= "Z".code) || (b >= "0".code && b <= "9".code);
+	return (b >= "a".code && b <= "z".code) || (b >= "A".code && b <= "Z".code) || isAsciiDigit(b);
+}
+
+function isAsciiWordChar(ch: string): boolean {
+	return ch.byteLength == 1 && (isAsciiAlnum(ch.byteAt(0)) || ch.byteAt(0) == "_".code);
+}
+
+function isAsciiWord(name: string): boolean {
+	for (let i = 0; i < name.byteLength; i += 1) {
+		const b = name.byteAt(i);
+		if (!(isAsciiAlnum(b) || b == "_".code)) return false;
+	}
+	return true;
 }
 
 function keepsMangledSpelling(name: string): boolean {
@@ -502,6 +492,13 @@ test "simple names pass through" {
 }
 
 test "leading digit" { assert mangle("3d") == "X3d"; }
+
+test "a name of letters, digits and underscores keeps its spelling unless a digit leads" {
+	assert mangle("_x9_") == "_x9_";
+	assert mangle("A1_b") == "A1_b";
+	assert mangle("9a_") == "X9a_";
+	assert mangle("9a+") == "X9aplus_";
+}
 
 test "special chars get word replacements" {
 	assert mangle("a+b") == "aplusb_";
