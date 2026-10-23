@@ -871,7 +871,7 @@ function destOf(ctx: ExprEvalCtx, node: Readonly<Node>): string {
 	return "";
 }
 
-function objLitTarget(dest: string, shape: ObjLitShape): string {
+function objLitTarget(dest: string, shape: Readonly<ObjLitShape>): string {
 	return shape.unionWrapIdx >= 0 ? `${dest}.v${shape.unionWrapIdx}` : dest;
 }
 
@@ -1593,7 +1593,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 
 // ===== Emit phase: combine child results =====
 
-function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): void {
+function emitExpr(g: CGen, p: CProc, item: Readonly<ExprStackItem>, ctx: ExprEvalCtx): void {
 	const node = item.node;
 	const kind = node.kind;
 	const cc = item.childCount;
@@ -2728,7 +2728,7 @@ function callMagicOf(sym: Readonly<Symbol | null>): CallMagic {
 	};
 }
 
-function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): void {
+function emitCallExpr(g: CGen, p: CProc, item: Readonly<ExprStackItem>, ctx: ExprEvalCtx): void {
 	const node = item.node;
 	const cd = node.data as CallExprData;
 	const cc = item.childCount;
