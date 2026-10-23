@@ -30,12 +30,17 @@ function buildGraph(): SharedGraph {
 	};
 }
 
+function describe(parts: string[], t: Readonly<Type>): void {
+	parts.push(`${hasGenericParams(t)}:${typeNameOfUnprofiled(t)}:${typeDisplayNameUnprofiled(t)}`);
+	for (const child of t.typeChildren) parts.push(typeDisplayNameUnprofiled(child));
+}
+
 function answers(graph: Readonly<SharedGraph>): string {
 	const parts: string[] = [];
-	for (const t of [graph.recursive, graph.instance, graph.held, graph.fresh]) {
-		parts.push(`${hasGenericParams(t)}:${typeNameOfUnprofiled(t)}:${typeDisplayNameUnprofiled(t)}`);
-		for (const child of t.typeChildren) parts.push(typeDisplayNameUnprofiled(child));
-	}
+	describe(parts, graph.recursive);
+	describe(parts, graph.instance);
+	describe(parts, graph.held);
+	describe(parts, graph.fresh);
 	return parts.join("|");
 }
 
