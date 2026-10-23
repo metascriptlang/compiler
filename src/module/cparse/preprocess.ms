@@ -10,7 +10,7 @@ import { tokenizeFile, convertPPTokens } from "./tokenize";
 import { evalConstExpr } from "./eval";
 import { readFile } from "std/fs";
 import { dirname } from "std/fs/path";
-import { djb2, fingerprint, hashToHex } from "std/hash";
+import { hashContent } from "../../utils/contentHash";
 
 export interface PreprocessResult {
 	head: CToken;
@@ -66,11 +66,6 @@ interface PPContext {
 	counter: int32;           // for __COUNTER__
 	arena: CToken[];          // owns all tokens this preprocess session creates
 	readLog: string[] | null;        // null normally; when set, every file probe/read is recorded as "<path>\t<hash>" / "<path>\t-" for the caller's dep cache
-}
-
-// Same dual-hash as compiler/cache.ms hashContent — dep-cache entries keyed by it.
-function headerDepHash(s: string): string {
-	return `${hashToHex(djb2(s))}_${hashToHex(fingerprint(s))}`;
 }
 
 // ===== Token Utilities =====
@@ -695,7 +690,7 @@ function preprocessTokens(tok: CToken, ctx: PPContext): CToken {
 function probeReadFile(path: string, ctx: PPContext): string {
 	const content = try readFile(path) catch "";
 	if (ctx.readLog != null) {
-		ctx.readLog.push(content != "" ? `${path}\t${headerDepHash(content)}` : `${path}\t-`);
+		ctx.readLog.push(content != "" ? `${path}\t${hashContent(content)}` : `${path}\t-`);
 	}
 	return content;
 }

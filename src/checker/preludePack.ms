@@ -38,7 +38,7 @@ import { defaultGlobalImports, setExtraGlobalImports } from "./prelude";
 import { readFile, writeFile, exists, remove, removeAll, ensureDir, rename } from "std/fs";
 import { env, argv } from "std/process";
 import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
-import { hashContent, collectFilesSorted } from "../compiler/cache";
+import { hashContent, collectFilesSorted } from "../utils/contentHash";
 
 const PACK_MAGIC = "MSPK5";
 

@@ -41,7 +41,7 @@ import { TargetInfo, targetFor, hostTarget } from "./cparse/target";
 import { resolveRuntimeDir } from "../utils/path";
 import { isAbsolute, dirname, join, normalize } from "std/fs/path";
 import { cwd, env, platform } from "std/process";
-import { djb2, fingerprint, hashToHex } from "std/hash";
+import { hashContent } from "../utils/contentHash";
 // (utils/string imports removed — using native .slice)
 
 // ===== Source Provider =====
@@ -85,14 +85,14 @@ export function provideSource(provider: SourceProvider, path: string): Result<st
 	}
 	for (const e of provider.entries) {
 		if (e.entryPath == path) {
-			if (provider.readLog != null) provider.readLog.push(`${path}\t${headerDepHash(e.entrySource)}`);
+			if (provider.readLog != null) provider.readLog.push(`${path}\t${hashContent(e.entrySource)}`);
 			return Result.ok(e.entrySource);
 		}
 	}
 	if (provider.useFileSystem) {
 		const content = try readFile(path) catch "";
 		if (content.length > 0) {
-			if (provider.readLog != null) provider.readLog.push(`${path}\t${headerDepHash(content)}`);
+			if (provider.readLog != null) provider.readLog.push(`${path}\t${hashContent(content)}`);
 			const cached: MapEntry = { entryPath: path, entrySource: content };
 			provider.entries.push(cached);
 			return Result.ok(content);
@@ -144,11 +144,6 @@ export function registerHeaderCache(keyFn: HeaderCacheKeyFn, lookupFn: HeaderCac
 	_hcKeyFn = keyFn;
 	_hcLookupFn = lookupFn;
 	_hcStoreFn = storeFn;
-}
-
-// Same dual-hash as compiler/cache.ms hashContent — dep lines are keyed by it.
-function headerDepHash(s: string): string {
-	return `${hashToHex(djb2(s))}_${hashToHex(fingerprint(s))}`;
 }
 
 // "" when the disk cache does not apply: cache unregistered, MSC_NO_HEADER_CACHE=1, or a
@@ -252,8 +247,8 @@ export function headerModuleSource(path: string, provider: SourceProvider, graph
 function packHeaderEntry(keys: string[], t: HeaderTranslation, source: string): string {
 	let packed = `${keys.length}\n`;
 	for (const k of keys) packed = packed + k + "\n";
-	packed = packed + headerDepHash(t.ownShape) + "\n" + `${t.includedShapes.size}\n`;
-	for (const [file, shape] of t.includedShapes) packed = packed + `${file}\t${headerDepHash(shape)}\n`;
+	packed = packed + hashContent(t.ownShape) + "\n" + `${t.includedShapes.size}\n`;
+	for (const [file, shape] of t.includedShapes) packed = packed + `${file}\t${hashContent(shape)}\n`;
 	return packed + source;
 }
 

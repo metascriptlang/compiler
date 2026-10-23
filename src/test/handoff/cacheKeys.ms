@@ -1,9 +1,11 @@
-// The prelude pack's std stamp is a content key: a changed byte, an added file or a removed file
-// in a sub-directory changes it, while rewriting identical bytes later does not.
+// Content keys written by one phase and verified by another: the prelude pack's std stamp
+// (checker -> fs tree) and the header-inline cache's dep lines (module loader -> compiler cache).
 import { writeFile, removeAll, ensureDir, remove } from "std/fs";
 import { join, dirname } from "std/fs/path";
 import { cwd } from "std/process";
-import { hashContent } from "../../compiler/cache";
+import { hashContent } from "../../utils/contentHash";
+import { headerModuleSource, createFileSystemProvider, registerHeaderCache, takeHeaderTimings } from "../../module/loader";
+import { headerModuleKey, lookupHeaderModule, storeHeaderModule } from "../../compiler/cache";
 import { preludePackStamp } from "../../checker/preludePack";
 
 function treeDir(tag: string): string {
@@ -51,4 +53,30 @@ test "a file added or removed in a sub-directory changes the stamp" {
 	assert base != added;
 	assert base != removed;
 	assert added != removed;
+}
+
+// Header names unique to this run, so an entry stored by an earlier run cannot serve the first load.
+const RUN_TAG = hashContent(`${Date.now()}`).slice(0, 16);
+
+function headerHitsOfTwoLoads(path: string, between: () => void): int32 {
+	registerHeaderCache(headerModuleKey, lookupHeaderModule, storeHeaderModule);
+	takeHeaderTimings();
+	headerModuleSource(path, createFileSystemProvider(), null, []);
+	between();
+	headerModuleSource(path, createFileSystemProvider(), null, []);
+	return takeHeaderTimings().hits;
+}
+
+test "a header the loader translated is served from the disk cache on the next load" {
+	const dir = treeDir("HeaderHit");
+	put(dir, "inc.h", `extern int hkInc${RUN_TAG}(void);\n`);
+	put(dir, "top.h", `#include "inc.h"\nextern int hkTop${RUN_TAG}(void);\n`);
+	assert headerHitsOfTwoLoads(join(dir, "top.h"), () => {}) == 1;
+}
+
+test "a changed header that another header includes misses the disk cache" {
+	const dir = treeDir("HeaderMiss");
+	put(dir, "inc.h", `extern int hmInc${RUN_TAG}(void);\n`);
+	put(dir, "top.h", `#include "inc.h"\nextern int hmTop${RUN_TAG}(void);\n`);
+	assert headerHitsOfTwoLoads(join(dir, "top.h"), () => put(dir, "inc.h", "extern int hmChanged(void);\n")) == 0;
 }

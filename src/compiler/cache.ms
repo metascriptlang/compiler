@@ -20,20 +20,10 @@ import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
 import { ensureDir, atomicWriteFile, renameReplace } from "./io";
 import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey, buildPch } from "./cc";
-import { hashFarm } from "std/core/struct";
+import { hashContent, collectFilesSorted } from "../utils/contentHash";
 import { VERSION } from "./usage";
 
 // ===== Hash Functions =====
-
-const HEX_DIGITS = "0123456789abcdef";
-
-// 64-bit hashFarm over the bytes, run in C, plus the byte length → "hex16_length".
-export function hashContent(s: string): string {
-	const h = hashFarm(s);
-	let hex = "";
-	for (let shift: int64 = 60; shift >= 0; shift -= 4) hex += HEX_DIGITS.charAt(((h >> shift) & 15) as int32);
-	return `${hex}_${s.byteLength}`;
-}
 
 // Hash a file's content. Returns "hash:byteLength" string.
 function hashFileContent(path: string): string {
@@ -78,21 +68,6 @@ function hashFile(path: string): string {
 // x25519 → monocypher.h) and std modules @compile vendor .c directly.
 let _toolchainStamp = "";
 let _objectStamp = "";
-
-// readDir order is filesystem-dependent; the stamp must be stable across runs.
-export function collectFilesSorted(dir: string, prefix: string, outPaths: string[]): void {
-	const entries = readDir(dir);
-	entries.sort();
-	for (const e of entries) {
-		if (e.length == 0) continue;
-		if (e.charAt(e.length - 1) == "/") {
-			const name = e.slice(0, e.length - 1);
-			collectFilesSorted(join(dir, name), `${prefix}${name}/`, outPaths);
-		} else {
-			outPaths.push(`${prefix}${e}`);
-		}
-	}
-}
 
 // Content-hash every file under one support tree into the stamp accumulator.
 // Keys are prefixed with the tree name so runtime/x.h and vendor/x.h can never
