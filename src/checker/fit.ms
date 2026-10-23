@@ -6,7 +6,7 @@ import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, I
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal, arityAdapts, runtimeParams } from "./compat";
-import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, resolveUserOperator, extDeclaresReceiver } from "./context";
+import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, resolveUserOperator, extDeclaresReceiver, newSym } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
 import { isVarargs, peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType, matchUnionBehindInstance, literalUnionBase, holdsNumberLiteral, widenNumberLiteralType, numberLiteralSet, functionSlotOf, isSendableFunction, createSendable, instantiatedUnionBehind } from "./types";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
@@ -788,7 +788,7 @@ function textedSlotUnion(t: Type): Type | null {
 }
 
 function unionTextCall(ctx: CheckerContext, expr: Node, ut: Type, debug: boolean, loc: SourceLocation): Node {
-	const holder = makeSymbol("u", SymbolKind.Parameter, ut, false);
+	const holder = newSym(ctx, SymbolKind.Parameter, "u", ut);
 	const args: Node[] = [expr, holderRead(holder, ut, loc)];
 	for (const member of ut.typeChildren) {
 		const value = projectTagUnionMember(holderRead(holder, ut, loc), ut, member);
@@ -1170,7 +1170,7 @@ function arityAdapterConv(ctx: CheckerContext | null, expr: Node, formal: Type, 
 	const params: Symbol[] = [];
 	const args: Node[] = [];
 	for (let i = 0; i < slotParams.length; i += 1) {
-		const sym = makeSymbol("a" + String(i), SymbolKind.Parameter, slotParams[i], false);
+		const sym = newSym(ctx, SymbolKind.Parameter, "a" + String(i), slotParams[i]);
 		params.push(sym);
 		if (i < sourceCount || takesRest) args.push(boundParamRead(sym, expr.location));
 	}

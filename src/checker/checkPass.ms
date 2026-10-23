@@ -2478,7 +2478,7 @@ function forwardDeclareLocal(ctx: CheckerContext, node: Node): void {
 		paramTypes.push(resolveAnnotation(pt, ctx, d.nameLocation.line, d.nameLocation.column));
 	}
 	const declared = d.declType != "" ? resolveAnnotation(d.declType, ctx, d.nameLocation.line, d.nameLocation.column) : null;
-	const sym = makeSymbol(d.declName, SymbolKind.Variable, declared != null ? declared : createClosureType(paramTypes, fd.funcExprParams, inferredType()), false);
+	const sym = declSymbol(ctx, node, d.declName, SymbolKind.Variable, declared != null ? declared : createClosureType(paramTypes, fd.funcExprParams, inferredType()), false);
 	sym.declNode = node;
 	defineOrError(ctx, sym, node);
 	_forwardLocals.add(sym);
