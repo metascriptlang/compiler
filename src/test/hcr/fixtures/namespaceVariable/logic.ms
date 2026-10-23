@@ -1,0 +1,7 @@
+export interface Pair { a: int32; b: string; }
+export let items: int32[] = [1, 2];
+export let pair: Pair = { a: 1, b: "x" };
+export function grow(): void {
+	items.push(items.length + 1);
+	pair.a += 1;
+}

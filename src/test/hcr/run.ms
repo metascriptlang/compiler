@@ -1197,6 +1197,16 @@ function sharedVariable(): void {
 	]);
 }
 
+function namespaceVariable(): void {
+	const tag = "hcrNamespaceVariable";
+	const dir = buildLogicGenerations(tag, "namespaceVariable", ["logic.ms", "logicEdit.ms"]);
+	runPrebuilt(tag, dir, ["logic", "support"], "HCR-NS", [
+		"HCR-NS start: 3 3 2 x",
+		"HCR-NS g2: reloaded logic",
+		"HCR-NS edited: 4 10 12 x",
+	]);
+}
+
 function layoutHolder(variant: string, grown: boolean): string[] {
 	const more = grown ? "b: string; " : "";
 	const moreValue = grown ? "b: \"beta\", " : "";
@@ -2098,6 +2108,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrCoreLinkClang", run: coreLinkClang },
 	{ name: "hcrIndirect", run: indirect },
 	{ name: "hcrSharedVariable", run: sharedVariable },
+	{ name: "hcrNamespaceVariable", run: namespaceVariable },
 	{ name: "hcrEngine", run: engine },
 	{ name: "hcrAsyncLoop", run: asyncLoop },
 	{ name: "hcrLiftNames", run: liftNames },
