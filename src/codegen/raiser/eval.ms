@@ -1448,6 +1448,17 @@ test "orc: a cycle through a reference array and one through a union array are c
 	assert live == 1, `${live}`;
 }
 
+test "untag: the indexed fast paths keep length, bounds, view and reference counts exact in every element class" {
+	const vm = evalOrcVM("const w: int64[] = []; const f: float64[] = []; const b: boolean[] = []; const s: string[] = [];"
+		+ " for (let i = 0; i < 5; i++) { w.push(i * 3); f.push(i + 0.5); b.push(i % 2 == 0); s.push('s' + i.toString()); }"
+		+ " let sum = 0; let fsum = 0.0; let t = 0; for (let i = 0; i < w.length; i++) { w[i] = w[i] + 1; f[i] = f[i] * 2.0; b[i] = !b[i]; s[i] = s[i] + '!'; sum += w[i]; fsum += f[i]; if (b[i]) t++; }"
+		+ " s[0] = s[4]; s[4] = s[4]; const v = w[1..4];"
+		+ " console.log(`${w.length} ${sum} ${fsum} ${t} ${s[0]} ${s[3]} ${v.length} ${v[2]} ${s.length}`);"
+		+ " console.log(w[5]);");
+	assert vm.output == "5 35 25 2 s4! s3! 3 10 5\n", vm.output;
+	assert vm.error.indexOf("array index out of bounds: 5 (length 5)") >= 0, vm.error;
+}
+
 // --- Phase 3 Integration Tests ---
 // These tests verify features that require transforms to work.
 test "match expression returns value" {

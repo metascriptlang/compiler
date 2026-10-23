@@ -8,7 +8,7 @@ import {
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue,
 	raiserNil, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserArray, raiserToString,
-	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayBaseOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
+	RaiserArrayHeap, RaiserArrayData, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayBaseOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, heapAllocView, heapArrayIsView, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectData, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, heapBoxLive,
 	rcIncref, rcDecref, rcIncrefHandle, rcDecrefHandle, copyGraph, copyGraphWith, createCopyMap, RaiserCopyMap, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, clearArrayHeap, clearObjectHeap,
@@ -1873,6 +1873,8 @@ function closureTarget(vm: RaiserVM, func: RaiserFunction, handle: int64, rb: in
 // operands retagged (each register operand carries its class) into vmStepHeap or vmStepSlow.
 // vm.ip, vm.funcIdx, vm.wordBase and vm.refBase are written back before any call that reads
 // them; between calls the running frame lives in dispatch's locals.
+// Any edit to dispatch re-allocates the registers of its hot locals (words, refs, code, ip): one added case measured
+// +1..4% on call-heavy programs, so a new opcode's fast path goes into vmStepHeap and leaves dispatch's code as it is.
 function runStrandSlice(vm: RaiserVM): void {
 	if (vm.halted || vm.yielded) return;
 	const func = getModuleFunc(vm.mod, vm.funcIdx);
@@ -2901,6 +2903,70 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 	}
 }
 
+// The indexed array opcodes on an array of the register's own element class, straight on the files; false leaves the
+// instruction to the general handler.
+function fastLoadIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean {
+	const handle = vm.regs.refs[vm.refBase + (ib >> 3)];
+	const idx = vm.regs.words[vm.wordBase + (ic >> 3)];
+	if (handleTag(handle) != (RaiserHeapKind.Array as int64)) return false;
+	when (mode != "danger") { if (handleIndex(handle) >= vm.arrayHeap.arrays.length) return false; }
+	const arr: Cursor<RaiserArrayData> = vm.arrayHeap.arrays[handleIndex(handle)];
+	const cls = ia & 7;
+	if (arr.viewOff >= 0 || (arr.elemClass as int32) != cls || cls == CLS_DYN || idx < 0 || idx >= arr.words.length) return false;
+	if (cls == CLS_REF) writeRef(vm, vm.refBase + (ia >> 3), arr.words[idx as number]);
+	else vm.regs.words[vm.wordBase + (ia >> 3)] = arr.words[idx as number];
+	return true;
+}
+
+function fastStoreIndex(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean {
+	const handle = vm.regs.refs[vm.refBase + (ia >> 3)];
+	const idx = vm.regs.words[vm.wordBase + (ib >> 3)];
+	if (handleTag(handle) != (RaiserHeapKind.Array as int64)) return false;
+	when (mode != "danger") { if (handleIndex(handle) >= vm.arrayHeap.arrays.length) return false; }
+	const arr: Cursor<RaiserArrayData> = vm.arrayHeap.arrays[handleIndex(handle)];
+	const cls = ic & 7;
+	if (arr.viewOff >= 0 || (arr.elemClass as int32) != cls || cls == CLS_DYN || idx < 0 || idx >= arr.words.length) return false;
+	if (cls == CLS_REF) {
+		const held = vm.regs.refs[vm.refBase + (ic >> 3)];
+		const old = arr.words[idx as number];
+		if (old != held) {
+			holdHandle(vm, held);
+			arr.words[idx as number] = held;
+			releaseHandle(vm, old);
+		}
+	} else {
+		arr.words[idx as number] = vm.regs.words[vm.wordBase + (ic >> 3)];
+	}
+	return true;
+}
+
+function fastArrayLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean {
+	const handle = vm.regs.refs[vm.refBase + (ib >> 3)];
+	if (handleTag(handle) != (RaiserHeapKind.Array as int64)) return false;
+	when (mode != "danger") { if (handleIndex(handle) >= vm.arrayHeap.arrays.length) return false; }
+	const arr: Cursor<RaiserArrayData> = vm.arrayHeap.arrays[handleIndex(handle)];
+	if (arr.viewOff >= 0) return false;
+	vm.regs.words[vm.wordBase + (ia >> 3)] = arrayHeldCount(arr) as int64;
+	return true;
+}
+
+function fastArrayPush(vm: RaiserVM, ia: int32, ib: int32, ic: int32): boolean {
+	const handle = vm.regs.refs[vm.refBase + (ia >> 3)];
+	if (handleTag(handle) != (RaiserHeapKind.Array as int64)) return false;
+	when (mode != "danger") { if (handleIndex(handle) >= vm.arrayHeap.arrays.length) return false; }
+	const arr: Cursor<RaiserArrayData> = vm.arrayHeap.arrays[handleIndex(handle)];
+	const cls = ib & 7;
+	if (arr.viewOff >= 0 || (arr.elemClass as int32) != cls || cls == CLS_DYN) return false;
+	if (cls == CLS_REF) {
+		const held = vm.regs.refs[vm.refBase + (ib >> 3)];
+		arr.words.push(held);
+		holdHandle(vm, held);
+	} else {
+		arr.words.push(vm.regs.words[vm.wordBase + (ib >> 3)]);
+	}
+	return true;
+}
+
 // A generic opcode, its register operands retagged. Heap opcodes answer true when handled here.
 function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: int32, func: RaiserFunction, pc: int32): boolean {
 	match (op) {
@@ -2983,16 +3049,16 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			vmHandleNewArray(vm, func, pc, ia, ib, ic);
 		},
 		RaiserOpcode.LoadIndex => {
-			vmHandleLoadIndex(vm, ia, ib, ic);
+			if (!fastLoadIndex(vm, ia, ib, ic)) vmHandleLoadIndex(vm, ia, ib, ic);
 		},
 		RaiserOpcode.StoreIndex => {
-			vmHandleStoreIndex(vm, ia, ib, ic);
+			if (!fastStoreIndex(vm, ia, ib, ic)) vmHandleStoreIndex(vm, ia, ib, ic);
 		},
 		RaiserOpcode.ArrayLen => {
-			vmHandleArrayLen(vm, ia, ib, ic);
+			if (!fastArrayLen(vm, ia, ib, ic)) vmHandleArrayLen(vm, ia, ib, ic);
 		},
 		RaiserOpcode.ArrayPush => {
-			vmHandleArrayPush(vm, ia, ib, ic);
+			if (!fastArrayPush(vm, ia, ib, ic)) vmHandleArrayPush(vm, ia, ib, ic);
 		},
 		RaiserOpcode.ArraySetLen => {
 			vmHandleArraySetLen(vm, ia, ib, ic);
