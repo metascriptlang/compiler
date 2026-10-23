@@ -872,6 +872,11 @@ function processObjectLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node
 	return node;
 }
 
+function holdsUncountedElements(literalType: Type | null): boolean {
+	const arrayType = literalType != null && literalType.kind == TypeKind.Ref ? literalType.typeReturn : literalType;
+	return arrayType != null && arrayType.kind == TypeKind.Array && isUncountedElement(arrayType.typeReturn);
+}
+
 function processArrayLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// MS arrays are reference types (heap, ref-counted): a fresh array literal OWNS its elements, so
 	// they always sink in (SinkArg) — and in a Normal (non-consumed) position the literal is itself an
@@ -883,8 +888,9 @@ function processArrayLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node 
 	// (binding RHS, sink param, field, return) already owned the shell upstream → skip the capture.
 	const ad = node.data as ArrayLiteralData;
 	const marks: Node[] = [];
+	const elemMode = holdsUncountedElements(node.nodeType) ? DrcMode.Normal : DrcMode.SinkArg;
 	for (let i = 0; i < ad.elements.length; i += 1) {
-		ad.elements[i] = processNode(ad.elements[i], dctx, DrcMode.SinkArg);
+		ad.elements[i] = processNode(ad.elements[i], dctx, elemMode);
 		marks.push(markOperandEnd(dctx, node.location));
 	}
 	keepOperandOrder(ad.elements, marks, dctx);
