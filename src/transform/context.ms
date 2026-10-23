@@ -1,6 +1,6 @@
 // Transform Context — shared state across all transforms
 
-import { CheckerContext, addError, newSym, createContext } from "../checker/context";
+import { CheckerContext, addError, newSym, stampItem, createContext } from "../checker/context";
 import { Type, Symbol, SymbolKind, SymbolState, SourceLocation } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
 import { noneType } from "../checker/types";
@@ -144,6 +144,11 @@ export function freshOwnedSym(ctx: TransformContext, prefix: string, t: Type | n
 export function newLoweredSym(ctx: TransformContext, kind: SymbolKind, name: string, t: Type | null, mutable: boolean = false): Symbol {
 	const sym = newSym(mintingChecker(ctx, name), kind, name, t);
 	if (mutable) setFlag(sym, SymbolFlag.Mutable);
+	return sym;
+}
+
+export function stampLoweredSym(ctx: TransformContext, sym: Symbol): Symbol {
+	stampItem(mintingChecker(ctx, sym.name), sym);
 	return sym;
 }
 

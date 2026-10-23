@@ -4,11 +4,10 @@
 // We inject a synthetic FunctionDecl with a SwitchStmt body into the program statements.
 // Codegen then sees a normal FunctionDecl and emits it.
 //
-// Primary path: extract enum info from checker's symbol table (post-DCE safe).
-// Fallback path: walk AST programStmts (for tests without checker context).
+// Enum info comes from the checker's symbol table (post-DCE safe).
 
-import { Node, NodeKind, ProgramData, EnumDeclData, ExportDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { TransformContext } from "../context";
+import { Node, NodeKind, ProgramData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { TransformContext, stampLoweredSym, createTransformContextWithChecker } from "../context";
 import {
 	makeSwitch, makeSwitchCase, makeReturn, makeString, makeNumber,
 	makeTypedIdentResolved, makeBlock, makeFnDecl, declaredEnums,
@@ -31,7 +30,7 @@ function concatStmts(a: Node[], b: Node[]): Node[] {
 //     switch (v) { case 0: return "Member0"; ... default: return "<unknown>"; }
 //   }
 
-function makeEnumToString(fnSym: Symbol | null, fnName: string, enumType: Type, loc: SourceLocation): Node {
+function makeEnumToString(ctx: TransformContext, fnSym: Symbol | null, fnName: string, enumType: Type, loc: SourceLocation): Node {
 	const members = enumType.typeNames;
 	const values = enumType.typeChildren;
 	const cases: Node[] = [];
@@ -45,7 +44,7 @@ function makeEnumToString(fnSym: Symbol | null, fnName: string, enumType: Type, 
 	// Default case: return "<unknown>"
 	cases.push(makeSwitchCase([], [makeReturn(makeString("<unknown>", loc), loc)], true, loc));
 
-	const valueSym = makeSymbol("v", SymbolKind.Parameter, enumType, false);
+	const valueSym = stampLoweredSym(ctx, makeSymbol("v", SymbolKind.Parameter, enumType, false));
 	const switchStmt = makeSwitch(makeTypedIdentResolved(valueSym, null, loc), cases, loc);
 	const body = makeBlock([switchStmt], loc);
 	const fn = makeFnDecl(fnSym != null ? fnSym.name : fnName, [valueSym], ["int32"], body, "", "string", loc);
@@ -55,59 +54,28 @@ function makeEnumToString(fnSym: Symbol | null, fnName: string, enumType: Type, 
 	return fn;
 }
 
-function getEnumFromStmt(stmt: Node): Node {
-	if (stmt == null) return null as unknown as Node;
-	if (stmt.kind == NodeKind.EnumDecl) return stmt;
-	if (stmt.kind == NodeKind.ExportDecl) {
-		const d = stmt.data as ExportDeclData;
-		if (d.exportedDecl != null && d.exportedDecl.kind == NodeKind.EnumDecl) {
-			return d.exportedDecl;
-		}
-	}
-	return null as unknown as Node;
-}
-
 // ===== Tests =====
 
 
-import { createNode } from "../../ast/node";
-import { createToken, TokenKind } from "../../lexer/token";
+import { checkProgram } from "../../checker/checkPass";
 
-function makeTestEnum(name: string, members: string[]): Node {
-	const tok = createToken(TokenKind.Ident, name, 1);
-	return createNode(NodeKind.EnumDecl, { enumName: name, enumMembers: members, enumValues: [] as number[], nameLocation: makeLoc(1, 1), memberLocations: [], enumInits: [] as Node[] }, tok);
+function loweredEnums(source: string): { program: Node, checker: CheckerContext } {
+	const pr = parseSource(source);
+	if (!pr.ok) throw new Error(`enum test source failed to parse: ${source}`);
+	const checker = checkProgram(pr.value);
+	return { program: lowerEnumToString(pr.value, createTransformContextWithChecker(checker)), checker };
 }
 
-function makeTestProgram(stmts: Node[]): Node {
-	const tok = createToken(TokenKind.Ident, "test", 1);
-	return createNode(NodeKind.Program, { programStmts: stmts }, tok);
-}
-
-test "enum toString injects FunctionDecl" {
-	const enumNode = makeTestEnum("Color", ["Red", "Green", "Blue"]);
-	const prog = makeTestProgram([enumNode]);
-	const pd = prog.data as ProgramData;
-	assert pd.programStmts.length == 1;
-	const result = lowerEnumToString(prog, null as unknown as TransformContext);
-	const rd = result.data as ProgramData;
+test "enum toString injects a typed FunctionDecl after the enum" {
+	const rd = loweredEnums("enum Color { Red, Green, Blue }").program.data as ProgramData;
 	assert rd.programStmts.length == 2;
-	assert rd.programStmts[1].kind == NodeKind.FunctionDecl;
-}
-
-test "enum toString body has switch" {
-	const enumNode = makeTestEnum("Dir", ["N", "S"]);
-	const prog = makeTestProgram([enumNode]);
-	const result = lowerEnumToString(prog, null as unknown as TransformContext);
-	const rd = result.data as ProgramData;
-	const fn = rd.programStmts[1];
-	assert fn.kind == NodeKind.FunctionDecl;
-	assert fn.nodeType != null;
+	assert rd.programStmts[1].kind == NodeKind.FunctionDecl && rd.programStmts[1].nodeType != null;
 }
 
 import { BlockStmtData, SwitchStmtData, SwitchCaseData, NumberLiteralData } from "../../ast/node";
 
 test "enum toString labels each case with the member's value" {
-	const fn = makeEnumToString(null, "Code_toString", createEnum("Code", ["Ok", "Bad"], [5, 9]), makeLoc(1, 1));
+	const fn = makeEnumToString(createTransformContextWithChecker(createContext()), null, "Code_toString", createEnum("Code", ["Ok", "Bad"], [5, 9]), makeLoc(1, 1));
 	const body = (fn.data as FunctionDeclData).fnBody.data as BlockStmtData;
 	const cases = (body.statements[0].data as SwitchStmtData).switchCases;
 	assert ((cases[0].data as SwitchCaseData).caseTests[0].data as NumberLiteralData).value == 5;
@@ -117,24 +85,18 @@ test "enum toString labels each case with the member's value" {
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 import { generateCModule } from "../../codegen/c/index";
-import { CheckerContext } from "../../checker/context";
+import { CheckerContext, createContext } from "../../checker/context";
 import { createAliveSet } from "../../codegen/c/context";
 import { FunctionDeclData } from "../../ast/node";
 
-test "enum toString E2E: parse → transform → codegen" {
-	const pr = parseSource("enum Color { Red, Green, Blue }");
-	assert pr.ok;
-	const transformed = lowerEnumToString(pr.value, null as unknown as TransformContext);
-	const td = transformed.data as ProgramData;
-	// Verify transform injected FunctionDecl
+test "enum toString E2E: parse → check → transform → codegen" {
+	const lowered = loweredEnums("enum Color { Red, Green, Blue }");
+	const td = lowered.program.data as ProgramData;
 	assert td.programStmts.length == 2;
 	assert td.programStmts[0].kind == NodeKind.EnumDecl;
 	assert td.programStmts[1].kind == NodeKind.FunctionDecl;
-	const fd = td.programStmts[1].data as FunctionDeclData;
-	assert fd.fnName == "Color_toString";
-	// Generate C — should include the toString function
-	const cCode = generateCModule(transformed, null as unknown as CheckerContext, "test/input", createAliveSet(), true, false);
-	assert cCode.length > 50;
+	const cCode = generateCModule(lowered.program, lowered.checker, "test/input", createAliveSet(), true, false);
+	assert cCode.includes("Color"), cCode;
 }
 
 export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
@@ -146,7 +108,7 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 		if (!ctx.jsBackend) {
 			for (const t of declaredEnums(program)) {
 				const op = requireOpByKey(t, AttachedOp.AttachedToString);
-				toStringFns.push(makeEnumToString(op, op.name, t, program.location));
+				toStringFns.push(makeEnumToString(ctx, op, op.name, t, program.location));
 			}
 		} else {
 			const injected = new HashSet<Symbol>();
@@ -156,7 +118,7 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 				if (t.sym == null) throw new Error(`internal: enum '${t.typeName}' reached toString lowering without its declaration`);
 				if (injected.has(t.sym)) continue;
 				injected.add(t.sym);
-				toStringFns.push(makeEnumToString(req.fnSym, req.fnSym.name, t, program.location));
+				toStringFns.push(makeEnumToString(ctx, req.fnSym, req.fnSym.name, t, program.location));
 			}
 			ctx.jsEnumToStrings = [];
 		}
@@ -165,23 +127,5 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 		return program;
 	}
 
-	// Fallback: walk programStmts (test mode without checker context)
-	const newStmts: Node[] = [];
-	let i = 0;
-	while (i < pd.programStmts.length) {
-		const stmt = pd.programStmts[i];
-		newStmts.push(stmt);
-
-		const enumNode = getEnumFromStmt(stmt);
-		if (enumNode != null) {
-			const d = enumNode.data as EnumDeclData;
-			const loc = enumNode.location;
-			const toStringFn = makeEnumToString(null, d.enumName + "_toString", createEnum(d.enumName, d.enumMembers), loc);
-			newStmts.push(toStringFn);
-		}
-		i = i + 1;
-	}
-
-	program.data = { programStmts: newStmts };
-	return program;
+	throw new Error("internal: enum toString lowering runs without a checker context");
 }

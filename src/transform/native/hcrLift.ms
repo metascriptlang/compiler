@@ -11,7 +11,7 @@ import { skipConvDfa } from "../../analyzer/alias";
 import { hcrSignatureKey } from "../../compiler/hcrAbi";
 import { mangledGlobalName, buildModuleNameRoots } from "../../codegen/c/names";
 import { cStringLiteral } from "../../codegen/c/literals";
-import { TransformContext, reportTransformError } from "../context";
+import { TransformContext, reportTransformError, stampLoweredSym } from "../context";
 import { walkNode } from "../walker";
 import {
 	makeIdentResolved, makeHiddenDeref, makeMember, makeBinary, makeUnary, makeExprStmt,
@@ -37,7 +37,7 @@ export function liftHcrState(program: Node, ctx: TransformContext, moduleId: str
 	const loc = program.location;
 	const globals: HcrGlobal[] = [];
 	const bySymbol = new HashMap<Symbol, HcrGlobal>();
-	const first = makeHcrSymbol("_ms_hcr_first", booleanType());
+	const first = makeHcrSymbol(ctx, "_ms_hcr_first", booleanType());
 	const firstDecl = makeHcrVariableDecl(first, loc);
 	const result: Node[] = [
 		makeEmitStmt("/*INCLUDESECTION*/#include \"runtime/hcr.h\"", loc),
@@ -169,9 +169,9 @@ function extractGlobal(stmt: Node, ctx: TransformContext, index: int32): HcrGlob
 		return null as unknown as HcrGlobal;
 	}
 	const storageType = spelled(createStruct(`_ms_hcr_value${index}`, ["value"], [t], true));
-	const pointer = makeHcrSymbol(`_ms_hcr_v${index}`, createPtr(storageType));
+	const pointer = makeHcrSymbol(ctx, `_ms_hcr_v${index}`, createPtr(storageType));
 	setFlag(pointer, SymbolFlag.HcrCell);
-	const fresh = makeHcrSymbol(`_ms_hcr_new${index}`, booleanType());
+	const fresh = makeHcrSymbol(ctx, `_ms_hcr_new${index}`, booleanType());
 	return {
 		sym, declType: t, storageType, initNode: d.initializer,
 		cName: mangledGlobalName(buildModuleNameRoots(), sym, d.declName),
@@ -199,8 +199,8 @@ function isStringLiteralAlias(initializer: Node, depth: int32): boolean {
 	return d.declKind == DeclKind.Const && isStringLiteralAlias(d.initializer, depth + 1);
 }
 
-function makeHcrSymbol(name: string, t: Type): Symbol {
-	const sym = makeSymbol(name, SymbolKind.Variable, t, true);
+function makeHcrSymbol(ctx: TransformContext, name: string, t: Type): Symbol {
+	const sym = stampLoweredSym(ctx, makeSymbol(name, SymbolKind.Variable, t, true));
 	sym.nativeName = name;
 	setFlag(sym, SymbolFlag.Global);
 	setFlag(sym, SymbolFlag.Used);

@@ -437,10 +437,13 @@ function exportNameMisuse(md: MacroInvocationData, decorated: Node): string {
 
 export function declSymbol(ctx: CheckerContext, node: Node, name: string, kind: SymbolKind, symType: Type | null, mutable: boolean): Symbol {
 	const adopted = ctx.adoptedDecls.get(node);
-	if (adopted == null) return makeSymbol(name, kind, symType, mutable);
-	ctx.adoptedDecls.delete(node);
-	initSymbol(adopted, name, kind, symType, mutable, SymbolState.Hollow);
-	return adopted;
+	const sym = adopted ?? makeSymbol(name, kind, symType, mutable);
+	if (adopted != null) {
+		ctx.adoptedDecls.delete(node);
+		initSymbol(adopted, name, kind, symType, mutable, SymbolState.Hollow);
+	}
+	stampItem(ctx, sym);
+	return sym;
 }
 
 function retainedType(ctx: CheckerContext, node: Node, fresh: Type): Type {
