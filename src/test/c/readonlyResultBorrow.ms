@@ -270,3 +270,107 @@ export function count(t: Readonly<Node>, out: Out): int32 {
 		assert rcOps(functionBody(result.value, "count")) > 0, write + "\n" + functionBody(result.value, "count");
 	}
 }
+
+function borrowedOps(body: string, local: string): int32 {
+	let n = 0;
+	for (const line of body.split("\n")) {
+		if ((line.includes("msIncref") || line.includes("msDecref")) && (line.includes(local + "_") || line.includes("dollarborrow"))) n += 1;
+	}
+	return n as int32;
+}
+
+test "a view call's result stays borrowed across an append to the array it was read from" {
+	const result = compileToC(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+function first(t: Readonly<Node>): Readonly<Node> { return t.kids[0]; }
+export function grow(t: Node, o: Node): int32 {
+	const k = first(t);
+	o.kids.push(new Node());
+	o.kids.push(new Node());
+	return k.n;
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	const body = functionBody(result.value, "grow");
+	assert borrowedOps(body, "k") == 0, body;
+}
+
+test "a view call's result is owned across a removal or overwrite of the elements it was read from" {
+	for (const write of ["o.kids.pop();", "o.kids.splice(0, 1);", "o.kids.shift();", "o.kids[0] = new Node();", "o.kids.length = 0;"]) {
+		const result = compileToC(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+function first(t: Readonly<Node>): Readonly<Node> { return t.kids[0]; }
+export function grow(t: Node, o: Node): int32 {
+	const k = first(t);
+	${write}
+	return k.n;
+}
+`);
+		assert result.ok, result.ok ? "" : result.error;
+		assert rcOps(functionBody(result.value, "grow")) > 0, write + "\n" + functionBody(result.value, "grow");
+	}
+}
+
+test "a view call's result stays borrowed across an overwrite of elements that need no cleanup" {
+	const fault = rcFault(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+class Marks { flags: (int32 | boolean)[] = [0]; }
+function first(t: Readonly<Node>): Readonly<Node> { return t.kids[0]; }
+export function mark(t: Node, m: Marks): int32 {
+	const k = first(t);
+	m.flags[0] = true;
+	return k.n;
+}
+`, ["mark"]);
+	assert fault == "", fault;
+}
+
+test "an argument path is kept alive across an append the callee makes to its array" {
+	const result = compileToC(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+function hit(o: Node, t: Readonly<Node>): int32 { o.kids.push(new Node()); return t.n; }
+export function scan(t: Node, o: Node): int32 { return hit(o, t.kids[0]); }
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	assert rcOps(functionBody(result.value, "scan")) > 0, functionBody(result.value, "scan");
+}
+
+test "a heap cell read from an array stays borrowed across pushes that reallocate the array" {
+	const result = compileToC(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+function firstKid(t: Readonly<Node>): Readonly<Node> { return t.kids[0]; }
+function grow(o: Node): void { for (let i = 0; i < 4096; i += 1) o.kids.push(new Node()); }
+export function look(t: Readonly<Node>, o: Node): int32 {
+	const k = firstKid(t);
+	grow(o);
+	o.kids.push(new Node());
+	return k.n;
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	assert borrowedOps(functionBody(result.value, "look"), "k") == 0, functionBody(result.value, "look");
+}
+
+test "an address into an array is refused across a push to an array a caller can pass for it" {
+	const sources = [`
+class Node { kids: Node[] = []; n: int32 = 0; }
+export function look(t: Node, o: Node): int32 {
+	const b: Borrow<Node> = t.kids[0];
+	GROW for (let i = 0; i < 4096; i += 1) o.kids.push(new Node());
+	return b.n;
+}
+`, `
+struct Pt { n: int32; s: string; }
+export function look(xs: Pt[], ys: Pt[]): int32 {
+	const b: Borrow<Pt> = xs[0];
+	GROW for (let i = 0; i < 4096; i += 1) ys.push({ n: i, s: "x" });
+	return b.n;
+}
+`];
+	for (const source of sources) {
+		const refused = compileToC(source.replace("GROW", ""));
+		assert !refused.ok && refused.error.includes("cannot borrow 'b'"), refused.ok ? source : refused.error;
+		const accepted = compileToC(source.replace("GROW", "//"));
+		assert accepted.ok, accepted.ok ? "" : accepted.error;
+	}
+}
