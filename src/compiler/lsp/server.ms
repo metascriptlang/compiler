@@ -8,6 +8,7 @@ import {
 	lspGetField, lspGetObjectField, lspJsonString, lspIdOf, lspErrorResponse,
 } from "./protocol";
 import { parseJson } from "std/serialize/json/parser";
+import { JsonKind } from "std/serialize/json/types";
 import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath, dbSetResolverConfig, dbSetGlobalImports, dbStats } from "../transam/index";
 import { extraGlobalImports, extraGlobalImportsBuildFile } from "../../checker/prelude";
 import { findProjectRoot } from "../../utils/path";
@@ -118,6 +119,7 @@ function lspLog(msg: string): void {
 
 struct QueuedMessage {
 	body: string;
+	malformed: boolean;
 	method: string;
 	id: string;
 	cancelTarget: string;
@@ -128,16 +130,18 @@ struct QueuedMessage {
 const DID_CHANGE = "textDocument/didChange";
 const CANCEL_REQUEST = "$/cancelRequest";
 
-// A body that is not JSON queues as a message with no method and no id, which no handler answers.
 function parseQueuedMessage(body: string): QueuedMessage {
 	const receivedAt = performance.now();
 	const parsed = parseJson(body);
-	if (!parsed.ok) return { body, method: "", id: "", cancelTarget: "", fileUri: "", receivedAt };
+	if (!parsed.ok || parsed.value.kind != JsonKind.Object) {
+		return { body, malformed: true, method: "", id: "", cancelTarget: "", fileUri: "", receivedAt };
+	}
 	const root = parsed.value;
 	const method = root.getDynamicField("method").asString();
 	const params = root.getDynamicField("params");
 	return {
 		body,
+		malformed: false,
 		method,
 		id: lspIdOf(root.getDynamicField("id")),
 		cancelTarget: method == CANCEL_REQUEST ? lspIdOf(params.getDynamicField("id")) : "",
@@ -188,6 +192,7 @@ function coalesceQueue(queue: QueuedMessage[]): QueuedMessage[] {
 
 const REQUEST_CANCELLED: int32 = -32800;
 const CONTENT_MODIFIED: int32 = -32801;
+const PARSE_ERROR: int32 = -32700;
 const INVALID_REQUEST: int32 = -32600;
 const INTERNAL_ERROR: int32 = -32603;
 
@@ -320,6 +325,7 @@ export function processMessage(msg: string, state: LspServerState): string {
 }
 
 function processQueued(qm: QueuedMessage, state: LspServerState): string {
+	if (qm.malformed) return lspFormatMessage(lspErrorResponse("null", PARSE_ERROR, "ParseError"));
 	const method = qm.method;
 	const idStr = qm.id;
 	if (state.shutdownRequested) {
@@ -493,6 +499,14 @@ test "a nested method in params does not replace the dispatched method" {
 	const response = processMessage("{\"params\":{\"method\":\"workspace/other\",\"id\":7," + HOVER_PARAMS + "},\"method\":\"textDocument/hover\",\"id\":1}", state);
 	assert response.indexOf("\"id\":1,", 0) > 0;
 	assert response.indexOf("\"id\":7", 0) < 0;
+}
+
+test "a body that is not a JSON object answers ParseError with a null id" {
+	const state = createServerState();
+	for (const body of ["{\"id\":1,\"method\":\"textDocument/hover\"", "[1,2]"]) {
+		const response = processMessage(body, state);
+		assert response.indexOf("\"id\":null,\"error\":{\"code\":-32700", 0) > 0;
+	}
 }
 
 // ===== Wire-level completion =====
