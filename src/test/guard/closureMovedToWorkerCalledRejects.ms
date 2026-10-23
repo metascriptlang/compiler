@@ -1,7 +1,15 @@
-// @stdout: moved 512
-// @stdout: churn 1024
-// @serial
-// note: a closure whose env holds a ring is moved into a spawn and cuts the ring there; the main thread then keeps building and dropping rings. No thread may keep a root that points at a cell another thread freed.
+// A closure moved into a spawn is refused when the thunk calls it
+//
+// INVARIANT (ULTRALOCK V0): a callee the checker cannot see counts as reaching module state, so a
+//   call through a function value inside a crossing is a compile error naming the call. A closure
+//   built by a factory and moved into the thunk is such a value.
+//
+// WHAT IT CATCHES: a factory-built closure whose env holds a ring, moved into a spawn and called there.
+//
+// RED MEANS: the thunk check in checkSpawnCaptures (sendable.ms) or callEffect (effects.ms) lets a
+//   call through a moved function value cross.
+//
+// GUARD-CHECK-FAIL spawn runs this thunk on another thread, but it calls a function value at 57:27
 
 class Node {
 	next: Node | null = null;

@@ -1,7 +1,15 @@
-// @stdout: moved 512
-// @stdout: churn 1024
-// @serial
-// note: a closure whose env holds a holder of a ring, which cannot form a cycle, is moved into a spawn and cuts the ring there; the main thread then keeps building and dropping rings. No thread may keep a root that points at a cell another thread freed.
+// A closure moved into a spawn is refused when the thunk calls it
+//
+// INVARIANT (ULTRALOCK V0): a callee the checker cannot see counts as reaching module state, so a
+//   call through a function value inside a crossing is a compile error naming the call. A closure
+//   built by a factory and moved into the thunk is such a value.
+//
+// WHAT IT CATCHES: an object whose field is a factory-built closure, moved into a spawn and called through the field.
+//
+// RED MEANS: the thunk check in checkSpawnCaptures (sendable.ms) or callEffect (effects.ms) lets a
+//   call through a moved function value cross.
+//
+// GUARD-CHECK-FAIL spawn runs this thunk on another thread, but it calls a function value at 62:31
 
 class Node {
 	next: Node | null = null;
@@ -35,22 +43,23 @@ function churn(rounds: int32): int32 {
 	}
 	return made;
 }
-class Holder {
-	ring: Node;
-	constructor(ring: Node) { this.ring = ring; }
+
+class Job {
+	run: () => int32;
+	constructor(run: () => int32) { this.run = run; }
 }
 
 function cutter(n: int32): () => int32 {
-	const holder = new Holder(makeRing(n));
+	const head = makeRing(n);
 	return (): int32 => {
-		holder.ring.next = null;
+		head.next = null;
 		return n;
 	};
 }
 
 async function dropOnWorker(n: int32): Promise<int32> {
-	const cut = cutter(n);
-	const f = spawn(() => cut(), { move: [cut] });
+	const job = new Job(cutter(n));
+	const f = spawn(() => job.run(), { move: [job] });
 	const s = spin(1000000);
 	return await f + s * 0;
 }
