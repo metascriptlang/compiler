@@ -14,7 +14,7 @@ import {
 	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData, SpreadExprData, ClassDeclData, MethodDeclData,
 	createNodeAt
 } from "../../ast/node";
-import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, RaiserCombine, raiserABC, raiserABx, raiserAx, convOperand, fitsImm, immField, branchField, inRefFile, MAX_SLOT } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, RaiserCombine, raiserABC, raiserABx, raiserAx, convOperand, convClassBits, convClassSigned, fitsImm, immField, branchField, inRefFile, MAX_SLOT } from "../../raiser/bytecode";
 import { RaiserValueKind, createClassType, raiserInt, raiserFloat, raiserNil, raiserBool, raiserConstString } from "../../raiser/value";
 import { lookupHost } from "../../raiser/hostRegistry";
 import { opName } from "../../raiser/disasm";
@@ -277,10 +277,26 @@ function compileIndex(s: RaiserCompState, index: Node): int32 {
 	return emitConvTo(s, reg, RaiserConvClass.I64 as int32, RaiserConvClass.F64 as int32);
 }
 
+function isIntegerConvClass(cls: int32): boolean {
+	return cls >= (RaiserConvClass.I64 as int32) && cls <= (RaiserConvClass.U8 as int32);
+}
+
+// An integer register holds the value sign-extended (or zero-extended, for an unsigned class) into
+// 64 bits, so a conversion to a class that holds every value of the source class changes no bit.
+function widensLosslessly(fromCls: int32, toCls: int32): boolean {
+	if (!isIntegerConvClass(fromCls) || !isIntegerConvClass(toCls)) return false;
+	const from = fromCls as RaiserConvClass;
+	const to = toCls as RaiserConvClass;
+	const fromBits = convClassBits(from);
+	const toBits = convClassBits(to);
+	if (convClassSigned(from)) return convClassSigned(to) && toBits >= fromBits;
+	return convClassSigned(to) ? toBits > fromBits : toBits >= fromBits;
+}
+
 function emitNumericConv(s: RaiserCompState, reg: int32, from: Type | null, to: Type | null): int32 {
 	const fromCls = convClassOf(from);
 	const toCls = convClassOf(to);
-	if (fromCls < 0 || toCls < 0 || fromCls == toCls) return reg;
+	if (fromCls < 0 || toCls < 0 || fromCls == toCls || widensLosslessly(fromCls, toCls)) return reg;
 	return emitConvTo(s, reg, toCls, fromCls);
 }
 
@@ -307,6 +323,10 @@ function bitwiseOpcode(op: string): RaiserOpcode {
 		">>>" => RaiserOpcode.ShiftRightU,
 		_ => RaiserOpcode.BitAnd,
 	};
+}
+
+export function isAssignOp(op: string): boolean {
+	return op == "=" || isCompoundAssignOp(op);
 }
 
 function isCompoundAssignOp(op: string): boolean {
@@ -1151,7 +1171,7 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		const lhs = compileExpr(s, d.left);
 		const result = allocWord(s);
 		emitInst(s, raiserABC(op == "+" ? RaiserOpcode.AddI64Imm : RaiserOpcode.SubI64Imm, result, lhs, immField(immLiteralValue(d.right))));
-		emitAtWidth(s, result, node.nodeType);
+		if (!node.flags.has(NodeFlag.NoOverflowCheck)) emitAtWidth(s, result, node.nodeType);
 		return result;
 	}
 
@@ -1189,7 +1209,7 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		} else {
 			emitInst(s, raiserABC(unsignedOpcode(arithmeticOpcode(op), node.nodeType), dest, lReg, rReg));
 		}
-		emitAtWidth(s, dest, node.nodeType);
+		if (!node.flags.has(NodeFlag.NoOverflowCheck)) emitAtWidth(s, dest, node.nodeType);
 		return dest;
 	}
 
@@ -1894,10 +1914,10 @@ function compileConditionalExpr(s: RaiserCompState, node: Node): int32 {
 
 // --- Update (i++, ++i, i--, --i) ---
 
-function emitStep(s: RaiserCompState, dest: int32, fromReg: int32, updateOp: string, target: Node): void {
+function emitStep(s: RaiserCompState, dest: int32, fromReg: int32, updateOp: string, target: Node, inRange: boolean): void {
 	if (!isFloatExpr(target) && !isUnsignedBand(target.nodeType)) {
 		emitInst(s, raiserABC(updateOp == "++" ? RaiserOpcode.AddI64Imm : RaiserOpcode.SubI64Imm, dest, fromReg, immField(1)));
-		emitAtWidth(s, dest, target.nodeType);
+		if (!inRange) emitAtWidth(s, dest, target.nodeType);
 	} else {
 		const oneReg = isFloatExpr(target) ? allocFloat(s) : allocWord(s);
 		emitLoadConst(s, oneReg, isFloatExpr(target) ? raiserFloat(1.0) : raiserInt(1));
@@ -1906,9 +1926,9 @@ function emitStep(s: RaiserCompState, dest: int32, fromReg: int32, updateOp: str
 	if (target.nodeType != null && peelDistinct(target.nodeType).kind == TypeKind.Char) emitInst(s, raiserABC(RaiserOpcode.NarrowS, dest, 8, 1));
 }
 
-function emitStepped(s: RaiserCompState, fromReg: int32, updateOp: string, target: Node): int32 {
+function emitStepped(s: RaiserCompState, fromReg: int32, updateOp: string, target: Node, inRange: boolean): int32 {
 	const outReg = isFloatExpr(target) ? allocFloat(s) : allocWord(s);
-	emitStep(s, outReg, fromReg, updateOp, target);
+	emitStep(s, outReg, fromReg, updateOp, target, inRange);
 	return outReg;
 }
 
@@ -1922,6 +1942,7 @@ function compileUpdateExpr(s: RaiserCompState, node: Node, resultUnused: boolean
 	const refusedOp = refusePointerOp(s, node);
 	if (refusedOp >= 0) return refusedOp;
 	const d = node.data as UpdateExprData;
+	const inRange = node.flags.has(NodeFlag.NoOverflowCheck);
 
 	const refusedTarget = refusePointerOp(s, d.updateArg);
 	if (refusedTarget >= 0) return refusedTarget;
@@ -1930,7 +1951,7 @@ function compileUpdateExpr(s: RaiserCompState, node: Node, resultUnused: boolean
 		const ptrReg = compileExpr(s, through);
 		const oldReg = allocFor(s, d.updateArg.nodeType);
 		emitInst(s, raiserABC(RaiserOpcode.LoadDeref, oldReg, ptrReg, 0));
-		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg);
+		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg, inRange);
 		emitInst(s, raiserABC(RaiserOpcode.StoreDeref, ptrReg, 0, newReg));
 		return d.isPrefix ? newReg : oldReg;
 	}
@@ -1941,14 +1962,14 @@ function compileUpdateExpr(s: RaiserCompState, node: Node, resultUnused: boolean
 		if (varReg >= 0) {
 			if (d.isPrefix || resultUnused) {
 				// ++i / --i: modify first, return modified
-				emitStep(s, varReg, varReg, d.updateOp, d.updateArg);
+				emitStep(s, varReg, varReg, d.updateOp, d.updateArg, inRange);
 				if (global >= 0) emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, varReg, global, 0));
 				return varReg;
 			} else {
 				// i++ / i--: save old value, then modify
 				const oldReg = allocReg(s, classOfReg(s, varReg));
 				emitInst(s, raiserABC(RaiserOpcode.Move, oldReg, varReg, 0));
-				emitStep(s, varReg, varReg, d.updateOp, d.updateArg);
+				emitStep(s, varReg, varReg, d.updateOp, d.updateArg, inRange);
 				if (global >= 0) emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, varReg, global, 0));
 				return oldReg;
 			}
@@ -1961,7 +1982,7 @@ function compileUpdateExpr(s: RaiserCompState, node: Node, resultUnused: boolean
 		const nameIdx = addConst(s, raiserConstString(md.property));
 		const oldReg = allocFor(s, d.updateArg.nodeType);
 		emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, oldReg, objReg, nameIdx));
-		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg);
+		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg, inRange);
 		emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, objReg, nameIdx, newReg));
 		return d.isPrefix ? newReg : oldReg;
 	}
@@ -1972,7 +1993,7 @@ function compileUpdateExpr(s: RaiserCompState, node: Node, resultUnused: boolean
 		const idxReg = compileIndex(s, ad.index);
 		const oldReg = allocFor(s, d.updateArg.nodeType);
 		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, oldReg, arrReg, idxReg));
-		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg);
+		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg, inRange);
 		emitInst(s, raiserABC(RaiserOpcode.StoreIndex, arrReg, idxReg, newReg));
 		return d.isPrefix ? newReg : oldReg;
 	}
