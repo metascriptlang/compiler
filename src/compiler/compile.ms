@@ -15,7 +15,7 @@ import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobal
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
-import { noteReloadableUnits } from "../analyzer/writeEffects";
+import { WriteSummaries, createRoutineDecls, createWriteSummaries } from "../analyzer/writeEffects";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait, bundleModuleEvaluator, JsModuleResult } from "../codegen/js/jsgen";
 import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
@@ -630,6 +630,7 @@ interface A2Job {
 	ran: boolean;
 	claims: LowerClaims;
 	asyncModuleBody: boolean;
+	writeTables: WriteSummaries;
 }
 
 function hasErrorsFrom(ctx: CheckerContext, base: int32): boolean {
@@ -735,7 +736,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const _ta0 = performance.now();
 	const _fa0 = flowStart();
 	const preAnErrors = ctx.errors.length;
-	const analyzed = analyzeProgram(hcrLifted, ctx);
+	const analyzed = analyzeProgram(hcrLifted, ctx, job.writeTables);
 	if (ctx.errors.length > preAnErrors) {
 		for (let ei = preAnErrors; ei < ctx.errors.length; ei += 1) {
 			const e = ctx.errors[ei];
@@ -2765,7 +2766,7 @@ resetLiftedOps();
 		hcrModules = indirect.value;
 		for (const path of abi.value.modulePaths) hcrModulePaths.push(path);
 	}
-	noteReloadableUnits(hcrModulePaths);
+	const writeTables = createWriteSummaries(session.check.db != null ? session.check.db!.routineDecls : createRoutineDecls(), hcrModulePaths);
 	const projectChanged = session.keep || projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 	const hcrBundleCurrent = hcrBuildAbi == null
 		|| (hcrBuildAbi.hadCurrent && hcrBundlesMatch(hcrBuildAbi.current, hcrBuildAbi.candidate));
@@ -2913,6 +2914,7 @@ resetLiftedOps();
 			ran: false,
 			claims: { ops: [] },
 			asyncModuleBody: asyncBodies.has(modPath),
+			writeTables,
 		};
 		let nativeLowered: Node;
 		if (session.keep) {
@@ -3583,7 +3585,7 @@ resetLiftedOps();
 	placePendingInstances((path: string): Node | null => programByPath.has(path) ? programByPath.get(path) : null, checkedModCtxs(checkedMods));
 
 	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
-	noteReloadableUnits(opts.isHcr ? [filePath] : []);
+	const writeTables = createWriteSummaries(createRoutineDecls(), opts.isHcr ? [filePath] : []);
 	for (const cm of checkedMods) {
 		const program = cm.program;
 		const ctx = cm.ctx;
@@ -3611,7 +3613,7 @@ resetLiftedOps();
 		ctx.targetInfo = opts.targetInfo;
 
 		const preAnErrors = ctx.errors.length;
-		const analyzed = analyzeProgram(hcrResult, ctx);
+		const analyzed = analyzeProgram(hcrResult, ctx, writeTables);
 		if (ctx.errors.length > preAnErrors) {
 			for (let ei = preAnErrors; ei < ctx.errors.length; ei += 1) {
 				const e = ctx.errors[ei];

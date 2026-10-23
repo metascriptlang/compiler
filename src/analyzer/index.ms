@@ -4,17 +4,17 @@
 //
 // analyzeProgram is the main entry point called from src/index.ms.
 
-import { Node, NodeKind, NodeFlag, ProgramData, BlockStmtData, Type } from "../ast/node";
+import { Node, NodeKind, NodeFlag, ProgramData, BlockStmtData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { flowLap, flowMark } from "../compiler/flows";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { CheckerContext, GcMode } from "../checker/context";
 import { createTransformContextWithChecker } from "../transform/context";
-import { createDrcContext, pushScope, popScope, classifyRcBeforeLift } from "./scope";
+import { createDrcContext, pushScope, popScope } from "./scope";
 import { injectProgram } from "./inject";
 import { optimizeDrc } from "./optimize";
-import { bindWriteEffects, noteRoutineDecls } from "./writeEffects";
-import { classifyType, RcKind, RcInfo, noRcInfo } from "./classify";
+import { WriteSummaries, createRoutineDecls, createWriteSummaries, noteRoutineDecls } from "./writeEffects";
+import { classifyType, RcKind, noRcInfo } from "./classify";
 
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
@@ -22,14 +22,13 @@ import { transformProgram } from "../transform/index";
 
 // ===== Public Entry Point =====
 
-export function analyzeProgram(program: Node, checkerCtx: CheckerContext): Node {
+export function analyzeProgram(program: Node, checkerCtx: CheckerContext, tables: WriteSummaries): Node {
 	if (checkerCtx == null) return program;  // test mode — skip analysis
 	if (checkerCtx.gcMode == GcMode.None || checkerCtx.gcMode == GcMode.Manual) return program;
 	flowMark();
 	const ctx = createTransformContextWithChecker(checkerCtx);
-	const dctx = createDrcContext(ctx);
-	bindWriteEffects(checkerCtx, (t: Type | null): RcInfo => classifyRcBeforeLift(t, dctx));
-	noteRoutineDecls(checkerCtx.modulePath, program);
+	const dctx = createDrcContext(ctx, tables);
+	noteRoutineDecls(dctx.writes, program);
 	flowLap("analyze.context");
 	const injected = injectProgram(program, dctx);
 	flowLap("analyze.inject");
@@ -46,7 +45,7 @@ function analyzePipeline(input: string): Node {
 	const program = parseResult.value;
 	const checkerCtx = checkProgram(program);
 	const transformed = transformProgram(program, checkerCtx, false);
-	return analyzeProgram(transformed, checkerCtx);
+	return analyzeProgram(transformed, checkerCtx, createWriteSummaries(createRoutineDecls(), []));
 }
 
 function getStmtCount(program: Node): number {
@@ -70,7 +69,7 @@ test "null checker skips analysis" {
 		return;
 	}
 	const program = parseResult.value;
-	const result = analyzeProgram(program, null as unknown as CheckerContext);
+	const result = analyzeProgram(program, null as unknown as CheckerContext, createWriteSummaries(createRoutineDecls(), []));
 	assert result != null;
 	// Should return program unchanged
 	assert getStmtCount(result) == 1;

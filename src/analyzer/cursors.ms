@@ -33,8 +33,7 @@ import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
 import { calledRoutineType, isImmutableModuleConst, isViewCall, receiverOf, viewCallSources } from "../checker/effects";
-import { ANY_HEAP_SLOT, addressSlots, callerDefsOf, callsPlainRoutine, canAlias, LocalDefs, mayWrite, reachesModuleState, resetWriteEffects, runsHooks, stepSlot, viewReturnSlots } from "./writeEffects";
-import { createDrcContext } from "./scope";
+import { ANY_HEAP_SLOT, addressSlots, callerDefsOf, callsPlainRoutine, canAlias, createRoutineDecls, createWriteSummaries, LocalDefs, mayWrite, reachesModuleState, runsHooks, stepSlot, viewReturnSlots, WriteEffects } from "./writeEffects";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
 import { isReadonlyView } from "../checker/types";
@@ -134,37 +133,37 @@ function allRoots(p: Partitions, node: Node, result: Symbol[]): void {
 	};
 }
 
-function sourceSlots(p: Partitions, node: Node, out: string[]): void {
+function sourceSlots(w: WriteEffects, p: Partitions, node: Node, out: string[]): void {
 	if (node == null) return;
-	const slot = stepSlot(node);
+	const slot = stepSlot(w, node);
 	if (slot != null) out.push(slot!);
 	match (node.kind) {
 		NodeKind.Identifier => {
 			const lent = lentTempInit(p, node.resolvedSym);
-			if (lent != null) sourceSlots(p, lent, out);
+			if (lent != null) sourceSlots(w, p, lent, out);
 		},
-		NodeKind.MemberExpr => sourceSlots(p, (node.data as MemberExprData).object, out),
-		NodeKind.ArrayAccess => sourceSlots(p, (node.data as ArrayAccessData).array, out),
-		NodeKind.HiddenDeref | NodeKind.HiddenAddr => sourceSlots(p, (node.data as { expr: Node }).expr, out),
-		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => sourceSlots(p, (node.data as HiddenStdConvData).convExpr, out),
-		NodeKind.TypeAssertion => sourceSlots(p, (node.data as TypeAssertionData).asExpr, out),
+		NodeKind.MemberExpr => sourceSlots(w, p, (node.data as MemberExprData).object, out),
+		NodeKind.ArrayAccess => sourceSlots(w, p, (node.data as ArrayAccessData).array, out),
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => sourceSlots(w, p, (node.data as { expr: Node }).expr, out),
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => sourceSlots(w, p, (node.data as HiddenStdConvData).convExpr, out),
+		NodeKind.TypeAssertion => sourceSlots(w, p, (node.data as TypeAssertionData).asExpr, out),
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
-			sourceSlots(p, d.ternaryConsequent, out);
-			sourceSlots(p, d.ternaryAlternate, out);
+			sourceSlots(w, p, d.ternaryConsequent, out);
+			sourceSlots(w, p, d.ternaryAlternate, out);
 		},
-		NodeKind.ArrayLiteral => { for (const e of (node.data as ArrayLiteralData).elements) { sourceSlots(p, e, out); } },
-		NodeKind.ObjectLiteral => { for (const e of (node.data as ObjectLiteralData).properties) { sourceSlots(p, e, out); } },
-		NodeKind.SpreadExpr => sourceSlots(p, (node.data as SpreadExprData).spreadArg, out),
-		NodeKind.NewExpr => { for (const a of (node.data as NewExprData).newArguments) { sourceSlots(p, a, out); } },
+		NodeKind.ArrayLiteral => { for (const e of (node.data as ArrayLiteralData).elements) { sourceSlots(w, p, e, out); } },
+		NodeKind.ObjectLiteral => { for (const e of (node.data as ObjectLiteralData).properties) { sourceSlots(w, p, e, out); } },
+		NodeKind.SpreadExpr => sourceSlots(w, p, (node.data as SpreadExprData).spreadArg, out),
+		NodeKind.NewExpr => { for (const a of (node.data as NewExprData).newArguments) { sourceSlots(w, p, a, out); } },
 		NodeKind.CallExpr => {
 			if (isViewCall(node)) {
-				const inner = viewReturnSlots(node);
+				const inner = viewReturnSlots(w, node);
 				if (inner == null) out.push(ANY_HEAP_SLOT);
 				else for (const slot of inner) out.push(slot);
-				for (const a of lentSources(node)) { sourceSlots(p, a, out); }
+				for (const a of lentSources(node)) { sourceSlots(w, p, a, out); }
 			} else if (containsPointer(node.nodeType, 0)) {
-				for (const a of (node.data as CallExprData).arguments) { sourceSlots(p, a, out); }
+				for (const a of (node.data as CallExprData).arguments) { sourceSlots(w, p, a, out); }
 			}
 		},
 		_ => {},
@@ -185,37 +184,37 @@ function onlyOtherPartitions(p: Partitions, roots: Symbol[], viewRoot: int32): b
 	return true;
 }
 
-function callArgumentRoots(p: Partitions, call: Node, roots: Symbol[]): boolean {
+function callArgumentRoots(w: WriteEffects, p: Partitions, call: Node, roots: Symbol[]): boolean {
 	const recv = receiverOf(call);
 	const operands: Node[] = recv != null ? [recv] : [];
 	for (const a of (call.data as CallExprData).arguments) { operands.push(a); }
 	for (const a of operands) {
 		if (a == null) continue;
-		if (runsHooks(a) || (a.nodeType != null && a.nodeType.kind == TypeKind.Function)) return false;
+		if (runsHooks(w, a) || (a.nodeType != null && a.nodeType.kind == TypeKind.Function)) return false;
 		if (containsPointer(a.nodeType, 0)) allRoots(p, a, roots);
 	}
 	return true;
 }
 
-function writesOtherPartition(p: Partitions, site: Node, viewRoot: int32, defs: LocalDefs): boolean {
+function writesOtherPartition(w: WriteEffects, p: Partitions, site: Node, viewRoot: int32, defs: LocalDefs): boolean {
 	const roots: Symbol[] = [];
 	if (site.kind == NodeKind.CallExpr) {
-		if (!callsPlainRoutine(site) || reachesModuleState(site, defs) || !callArgumentRoots(p, site, roots)) return false;
+		if (!callsPlainRoutine(site) || reachesModuleState(w, site, defs) || !callArgumentRoots(w, p, site, roots)) return false;
 		return onlyOtherPartitions(p, roots, viewRoot);
 	}
 	if (site.kind != NodeKind.BinaryExpr) return false;
 	const target = (site.data as BinaryExprData).left;
-	if (runsHooks(target)) return false;
+	if (runsHooks(w, target)) return false;
 	allRoots(p, target, roots);
 	return onlyOtherPartitions(p, roots, viewRoot);
 }
 
-function writtenWhileAlive(p: Partitions, vid: int32, slots: string[], defs: LocalDefs): boolean {
+function writtenWhileAlive(w: WriteEffects, p: Partitions, vid: int32, slots: string[], defs: LocalDefs): boolean {
 	if (slots.length == 0) return false;
 	const v = p.vars[vid];
 	const viewRoot = ufRoot(p, vid);
 	for (let k = 0; k < writeSites.length; k += 1) {
-		if (writeTimes[k] >= v.aliveStart && writeTimes[k] <= v.aliveEnd && mayWrite(writeSites[k], slots, defs) && !writesOtherPartition(p, writeSites[k], viewRoot, defs)) return true;
+		if (writeTimes[k] >= v.aliveStart && writeTimes[k] <= v.aliveEnd && mayWrite(w, writeSites[k], slots, defs) && !writesOtherPartition(w, p, writeSites[k], viewRoot, defs)) return true;
 	}
 	return false;
 }
@@ -572,14 +571,14 @@ function liveRanges(p: Partitions, node: Node | null): void {
 
 // ===== Pass 2: traverse (build graphs) =====
 
-function deps(p: Partitions, dest: Symbol | null, src: Node): void {
+function deps(w: WriteEffects, p: Partitions, dest: Symbol | null, src: Node): void {
 	const destId = variableId(p, dest);
 	if (destId < 0) return;
 	if (src == null) return;
 
 	// Classify: does dest own data or borrow?
 	destMightOwn(p, destId, src);
-	sourceSlots(p, src, borrowedSlots[destId]);
+	sourceSlots(w, p, src, borrowedSlots[destId]);
 
 	// Source checks: prevent cursor when borrowing from unsafe sources
 	const srcRoots: Symbol[] = [];
@@ -613,7 +612,7 @@ function deps(p: Partitions, dest: Symbol | null, src: Node): void {
 	}
 }
 
-function trav(p: Partitions, node: Node | null): void {
+function trav(w: WriteEffects, p: Partitions, node: Node | null): void {
 	if (node == null) return;
 	p.abstractTime += 1;
 
@@ -622,20 +621,20 @@ function trav(p: Partitions, node: Node | null): void {
 			const d = node.data as VariableDeclData;
 			// Initializer is an assignment source (for pretendOwnsData on [x], {x})
 			p.inAsgnSource += 1;
-			trav(p, d.initializer);
+			trav(w, p, d.initializer);
 			p.inAsgnSource -= 1;
 			if (node.resolvedSym != null && d.initializer != null) {
 				connectStore(p, [node.resolvedSym], node.resolvedSym.symbolType, d.initializer);
 			}
-			deps(p, node.resolvedSym, d.initializer);
+			deps(w, p, node.resolvedSym, d.initializer);
 		},
 
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
-			trav(p, d.left);
+			trav(w, p, d.left);
 			if (d.operator == "=") {
 				p.inAsgnSource += 1;
-				trav(p, d.right);
+				trav(w, p, d.right);
 				p.inAsgnSource -= 1;
 
 				const lhsRoots: Symbol[] = [];
@@ -648,9 +647,9 @@ function trav(p: Partitions, node: Node | null): void {
 
 				// Cursor deps for assignment
 				const lhs = getIdentSym(d.left);
-				if (lhs != null) deps(p, lhs, d.right);
+				if (lhs != null) deps(w, p, lhs, d.right);
 			} else {
-				trav(p, d.right);
+				trav(w, p, d.right);
 				recordWrite(p, node);
 			}
 		},
@@ -661,8 +660,8 @@ function trav(p: Partitions, node: Node | null): void {
 
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
-			trav(p, d.callee);
-			for (const arg of d.arguments) { trav(p, arg); }
+			trav(w, p, d.callee);
+			for (const arg of d.arguments) { trav(w, p, arg); }
 
 			// Method call (obj.method(...)) → obj is potentially mutated
 			if (d.callee != null && d.callee.kind == NodeKind.MemberExpr) {
@@ -698,35 +697,35 @@ function trav(p: Partitions, node: Node | null): void {
 		// Loops: double traverse for soundness
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
-			trav(p, d.whileCondition);
-			trav(p, d.whileBody);
-			trav(p, d.whileCondition);
-			trav(p, d.whileBody);
-			trav(p, d.whileCondition);
+			trav(w, p, d.whileCondition);
+			trav(w, p, d.whileBody);
+			trav(w, p, d.whileCondition);
+			trav(w, p, d.whileBody);
+			trav(w, p, d.whileCondition);
 		},
 		NodeKind.ForStmt => {
 			const d = node.data as ForStmtData;
-			trav(p, d.forInit);
-			trav(p, d.forCondition);
-			trav(p, d.forUpdate);
-			trav(p, d.forBody);
-			trav(p, d.forInit);
-			trav(p, d.forCondition);
-			trav(p, d.forUpdate);
-			trav(p, d.forBody);
+			trav(w, p, d.forInit);
+			trav(w, p, d.forCondition);
+			trav(w, p, d.forUpdate);
+			trav(w, p, d.forBody);
+			trav(w, p, d.forInit);
+			trav(w, p, d.forCondition);
+			trav(w, p, d.forUpdate);
+			trav(w, p, d.forBody);
 		},
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
-			trav(p, d.doBody);
-			trav(p, d.doCondition);
-			trav(p, d.doBody);
-			trav(p, d.doCondition);
+			trav(w, p, d.doBody);
+			trav(w, p, d.doCondition);
+			trav(w, p, d.doBody);
+			trav(w, p, d.doCondition);
 		},
 
 		// Object/array in assignment source → elements pretend to own data
 		NodeKind.ArrayLiteral => {
 			const d = node.data as ArrayLiteralData;
-			for (const elem of d.elements) { trav(p, elem); }
+			for (const elem of d.elements) { trav(w, p, elem); }
 			if (p.inAsgnSource > 0) {
 				for (const elem of d.elements) {
 					const eid = variableId(p, getIdentSym(elem));
@@ -736,7 +735,7 @@ function trav(p: Partitions, node: Node | null): void {
 		},
 		NodeKind.ObjectLiteral => {
 			const d = node.data as ObjectLiteralData;
-			for (const prop of d.properties) { trav(p, prop); }
+			for (const prop of d.properties) { trav(w, p, prop); }
 			if (p.inAsgnSource > 0) {
 				for (const prop of d.properties) {
 					const pid = variableId(p, getIdentSym(prop));
@@ -747,7 +746,7 @@ function trav(p: Partitions, node: Node | null): void {
 
 		// Move prevents cursoring of source
 		NodeKind.MoveExpr => {
-			trav(p, (node.data as MoveExprData).moveArg);
+			trav(w, p, (node.data as MoveExprData).moveArg);
 			const mid = variableId(p, getIdentSym((node.data as MoveExprData).moveArg));
 			if (mid >= 0) p.vars[mid].flags = p.vars[mid].flags | VF_PREVENT_CURSOR;
 		},
@@ -760,81 +759,81 @@ function trav(p: Partitions, node: Node | null): void {
 
 		// Compound traversal (must match liveRanges order exactly)
 		NodeKind.BlockStmt => {
-			for (const s of (node.data as BlockStmtData).statements) { trav(p, s); }
+			for (const s of (node.data as BlockStmtData).statements) { trav(w, p, s); }
 		},
 		NodeKind.Program => {
-			for (const s of (node.data as ProgramData).programStmts) { trav(p, s); }
+			for (const s of (node.data as ProgramData).programStmts) { trav(w, p, s); }
 		},
-		NodeKind.ExprStmt => trav(p, (node.data as ExprStmtData).expr),
-		NodeKind.ReturnStmt => trav(p, (node.data as ReturnStmtData).argument),
-		NodeKind.ThrowStmt => trav(p, (node.data as ThrowStmtData).throwArg),
+		NodeKind.ExprStmt => trav(w, p, (node.data as ExprStmtData).expr),
+		NodeKind.ReturnStmt => trav(w, p, (node.data as ReturnStmtData).argument),
+		NodeKind.ThrowStmt => trav(w, p, (node.data as ThrowStmtData).throwArg),
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
-			trav(p, d.tryBody);
-			trav(p, d.catchBody);
-			trav(p, d.finallyBody);
+			trav(w, p, d.tryBody);
+			trav(w, p, d.catchBody);
+			trav(w, p, d.finallyBody);
 		},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			trav(p, d.condition);
-			trav(p, d.consequent);
-			trav(p, d.alternate);
+			trav(w, p, d.condition);
+			trav(w, p, d.consequent);
+			trav(w, p, d.alternate);
 		},
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
-			trav(p, d.switchDisc);
-			for (const c of d.switchCases) { trav(p, c); }
+			trav(w, p, d.switchDisc);
+			for (const c of d.switchCases) { trav(w, p, c); }
 		},
 		NodeKind.SwitchCase => {
 			const d = node.data as SwitchCaseData;
-			for (const t of d.caseTests) { trav(p, t); }
-			for (const s of d.caseStmts) { trav(p, s); }
+			for (const t of d.caseTests) { trav(w, p, t); }
+			for (const s of d.caseStmts) { trav(w, p, s); }
 		},
-		NodeKind.MemberExpr => trav(p, (node.data as MemberExprData).object),
+		NodeKind.MemberExpr => trav(w, p, (node.data as MemberExprData).object),
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
-			trav(p, d.array);
-			trav(p, d.index);
+			trav(w, p, d.array);
+			trav(w, p, d.index);
 		},
-		NodeKind.UnaryExpr => trav(p, (node.data as { unaryOp: string, operand: Node }).operand),
-		NodeKind.SpreadExpr => trav(p, (node.data as SpreadExprData).spreadArg),
+		NodeKind.UnaryExpr => trav(w, p, (node.data as { unaryOp: string, operand: Node }).operand),
+		NodeKind.SpreadExpr => trav(w, p, (node.data as SpreadExprData).spreadArg),
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
-			trav(p, d.newCallee);
-			for (const a of d.newArguments) { trav(p, a); }
+			trav(w, p, d.newCallee);
+			for (const a of d.newArguments) { trav(w, p, a); }
 			for (const a of d.newArguments) { potentialMutationViaArg(p, a); }
 			recordWrite(p, node);
 		},
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
-			trav(p, (node.data as HiddenStdConvData).convExpr);
+			trav(w, p, (node.data as HiddenStdConvData).convExpr);
 		},
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
-			trav(p, (node.data as { expr: Node }).expr);
+			trav(w, p, (node.data as { expr: Node }).expr);
 		},
 		NodeKind.TypeAssertion => {
-			trav(p, (node.data as TypeAssertionData).asExpr);
+			trav(w, p, (node.data as TypeAssertionData).asExpr);
 		},
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
-			trav(p, d.ternaryCondition);
-			trav(p, d.ternaryConsequent);
-			trav(p, d.ternaryAlternate);
+			trav(w, p, d.ternaryCondition);
+			trav(w, p, d.ternaryConsequent);
+			trav(w, p, d.ternaryAlternate);
 		},
 		NodeKind.ExportDecl => {
-			trav(p, (node.data as ExportDeclData).exportedDecl);
+			trav(w, p, (node.data as ExportDeclData).exportedDecl);
 		},
 		// Default: descend via canonical walker so graph edges are built for
 		// variables referenced inside unknown kinds. Keeps cursor inference
 		// conservative: any use we miss defaults to "not a cursor" (owned),
 		// which is always safe. Inner functions re-enter the match above and
 		// hit the explicit skip branch.
-		_ => { forEachChild(node, (child: Node): void => { trav(p, child); }); },
+		_ => { forEachChild(node, (child: Node): void => { trav(w, p, child); }); },
 	};
 }
 
 // ===== Cursor Decision =====
 
-function computeCursorDecisions(p: Partitions, defs: LocalDefs): Symbol[] {
+function computeCursorDecisions(w: WriteEffects, p: Partitions, defs: LocalDefs): Symbol[] {
 	const result: Symbol[] = [];
 	let i = 0;
 	while (i < p.vars.length) {
@@ -854,7 +853,7 @@ function computeCursorDecisions(p: Partitions, defs: LocalDefs): Symbol[] {
 			if (dangerousMutation(g, v)) { i += 1; continue; }
 		}
 		const slots = holdsAddress(v.sym) ? addressSlots(borrowedSlots[i]) : borrowedSlots[i];
-		if (writtenWhileAlive(p, i, slots, defs)) { i += 1; continue; }
+		if (writtenWhileAlive(w, p, i, slots, defs)) { i += 1; continue; }
 
 		result.push(v.sym);
 		i += 1;
@@ -885,7 +884,7 @@ function dropViewsOfOwners(p: Partitions, chosen: Symbol[]): Symbol[] {
 // ===== Public API =====
 
 // Main entry point — called once per function body, before DRC injection.
-export function inferCursors(body: Node): void {
+export function inferCursors(w: WriteEffects, body: Node): void {
 	if (body == null) return;
 	if (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program) return;
 
@@ -906,42 +905,42 @@ export function inferCursors(body: Node): void {
 	writeTimes = [];
 
 	// Pass 2: build union-find graphs and track mutations
-	trav(p, body);
+	trav(w, p, body);
 
 	// Decision: which variables can safely be cursors?
-	for (const sym of computeCursorDecisions(p, callerDefsOf(body))) { setFlag(sym, SymbolFlag.Cursor); }
+	for (const sym of computeCursorDecisions(w, p, callerDefsOf(w, body))) { setFlag(sym, SymbolFlag.Cursor); }
 }
 
 // ===== Tests =====
 
-function getStmts(input: string): Node[] {
+function inferredIn(input: string, pick: (stmts: Node[]) => Node): Node {
 	const result = parseSource(input);
-	if (!result.ok) return [];
+	if (!result.ok) return null as unknown as Node;
 	const prog = result.value;
 	const checker = checkProgram(prog);
-	const dctx = createDrcContext(makeCtx());
-	resetWriteEffects(checker, (t: Type | null): RcInfo => classifyType(t, dctx.ctx, false));
-	const d = prog.data as ProgramData;
-	return d.programStmts;
+	const ctx = makeCtx();
+	const writes: WriteEffects = { tables: createWriteSummaries(createRoutineDecls(), []), checker, unit: "", rcOf: (t: Type | null): RcInfo => classifyType(t, ctx, false) };
+	const body = pick((prog.data as ProgramData).programStmts);
+	inferCursors(writes, body);
+	return body;
 }
 
-function getFuncBody(input: string): Node {
-	const stmts = getStmts(input);
-	if (stmts.length == 0) return null as unknown as Node;
-	const stmt = stmts[0];
-	if (stmt.kind == NodeKind.FunctionDecl) return (stmt.data as FunctionDeclData).fnBody;
-	return null as unknown as Node;
+function inferredBody(input: string): Node {
+	return inferredIn(input, (stmts: Node[]): Node => {
+		if (stmts.length == 0 || stmts[0].kind != NodeKind.FunctionDecl) return null as unknown as Node;
+		return (stmts[0].data as FunctionDeclData).fnBody;
+	});
 }
 
-function getFuncNamed(input: string, name: string): Node {
-	for (const stmt of getStmts(input)) {
-		let decl = stmt;
-		if (decl.kind == NodeKind.ExportDecl) decl = (decl.data as ExportDeclData).exportedDecl;
-		if (decl.kind == NodeKind.FunctionDecl && (decl.data as FunctionDeclData).fnName == name) {
-			return (decl.data as FunctionDeclData).fnBody;
+function inferredNamed(input: string, name: string): Node {
+	return inferredIn(input, (stmts: Node[]): Node => {
+		for (const stmt of stmts) {
+			let decl = stmt;
+			if (decl.kind == NodeKind.ExportDecl) decl = (decl.data as ExportDeclData).exportedDecl;
+			if (decl.kind == NodeKind.FunctionDecl && (decl.data as FunctionDeclData).fnName == name) return (decl.data as FunctionDeclData).fnBody;
 		}
-	}
-	return null as unknown as Node;
+		return null as unknown as Node;
+	});
 }
 
 const BOXES = "class Box { v: string; constructor(v: string) { this.v = v; } }\n"
@@ -964,84 +963,72 @@ function isCursorNamed(node: Node | null, name: string): boolean {
 // --- Retained tests (adapted for union-find) ---
 
 test "local read-only borrow is cursor" {
-	const body = getFuncBody("function f(arr: string[]) { const x = arr.length; }");
-	inferCursors(body);
+	const body = inferredBody("function f(arr: string[]) { const x = arr.length; }");
 	assert isCursorNamed(body, "x");
 }
 
 test "returned variable is cursor (return copies, safe)" {
 	// With union-find: x borrows from arr, no ownership, no mutation.
 	// DRC handles return via copy (isLastReadSafe returns false for cursors).
-	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; return x; }");
-	inferCursors(body);
+	const body = inferredBody("function f(arr: string[]) { const x = arr[0]; return x; }");
 	assert isCursorNamed(body, "x");
 }
 
 test "call argument is cursor (call copies, safe)" {
 	// x borrows from arr[0]. Passing to call: inject.ms copies (incref).
 	// No mutation on arr's graph → cursor is safe.
-	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; take(x); }\nfunction take(s: string): void {}");
-	inferCursors(body);
+	const body = inferredBody("function f(arr: string[]) { const x = arr[0]; take(x); }\nfunction take(s: string): void {}");
 	assert isCursorNamed(body, "x");
 }
 
 test "assigned to another var: source is cursor, dest connects" {
 	// x borrows from arr[0]. y = x → y connects to x's graph.
 	// Both can be cursors if neither owns data.
-	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; const y = x; }");
-	inferCursors(body);
+	const body = inferredBody("function f(arr: string[]) { const x = arr[0]; const y = x; }");
 	assert isCursorNamed(body, "x");
 	assert isCursorNamed(body, "y");
 }
 
 test "let variable without reassignment is cursor" {
 	// let is fine if never reassigned — union-find tracks reassignment, not declKind.
-	const body = getFuncBody("function f(arr: string[]) { let x = arr[0]; }");
-	inferCursors(body);
+	const body = inferredBody("function f(arr: string[]) { let x = arr[0]; }");
 	assert isCursorNamed(body, "x");
 }
 
 test "index-write through alias is not cursor even when alias is never read" {
-	const body = getFuncBody("function f() { const vn: Vec<number> = [1, 2]; const cn = vn; cn[0] = 7; console.log(vn[0]); }");
-	inferCursors(body);
+	const body = inferredBody("function f() { const vn: Vec<number> = [1, 2]; const cn = vn; cn[0] = 7; console.log(vn[0]); }");
 	assert !isCursorNamed(body, "cn");
 }
 
 test "call result is NOT cursor (owns data)" {
-	const body = getFuncBody("function f() { const x = getValue(); }");
-	inferCursors(body);
+	const body = inferredBody("function f() { const x = getValue(); }");
 	assert !isCursorNamed(body, "x");
 }
 
 test "member access with only read use is cursor" {
-	const body = getFuncBody("function f(obj: { name: string }) { const name = obj.name; if (name) {} }");
-	inferCursors(body);
+	const body = inferredBody("function f(obj: { name: string }) { const name = obj.name; if (name) {} }");
 	assert isCursorNamed(body, "name");
 }
 
 test "thrown variable is cursor (throw copies, safe)" {
-	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; throw x; }");
-	inferCursors(body);
+	const body = inferredBody("function f(arr: string[]) { const x = arr[0]; throw x; }");
 	assert isCursorNamed(body, "x");
 }
 
 test "stored in object is NOT cursor (constructor context)" {
-	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; const obj = { val: x }; }");
-	inferCursors(body);
+	const body = inferredBody("function f(arr: string[]) { const x = arr[0]; const obj = { val: x }; }");
 	// x appears in ObjectLiteral — pretendOwnsData in inAsgnSource context
 	// obj owns data (ObjectLiteral constructor), x gets ownsData via constructor context
 	assert !isCursorNamed(body, "x");
 }
 
 test "DRC temp is inferred like any local" {
-	const body = getFuncBody("function f(arr: string[]) { const $tmp = arr[0]; }");
-	inferCursors(body);
+	const body = inferredBody("function f(arr: string[]) { const $tmp = arr[0]; }");
 	assert isCursorNamed(body, "$tmp");
 }
 
 test "nested block cursor" {
-	const body = getFuncBody("function f(obj: { name: string }) { if (true) { const x = obj.name; } }");
-	inferCursors(body);
+	const body = inferredBody("function f(obj: { name: string }) { if (true) { const x = obj.name; } }");
 	assert isCursorNamed(body, "x");
 }
 
@@ -1049,199 +1036,168 @@ test "nested block cursor" {
 
 test "source mutated during cursor lifetime: NOT cursor" {
 	// x borrows from arr[0]. arr.push() mutates arr while x is alive → dangerousMutation.
-	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; arr.push(\"new\"); process(x); }");
-	inferCursors(body);
+	const body = inferredBody("function f(arr: string[]) { const x = arr[0]; arr.push(\"new\"); process(x); }");
 	assert !isCursorNamed(body, "x");
 }
 
 test "source mutated BEFORE cursor: IS cursor" {
 	// arr.push() happens before x borrows → mutation not in cursor lifetime.
-	const body = getFuncBody("function f(arr: string[]) { arr.push(\"new\"); const x = arr[0]; take(x); }\nfunction take(s: string): void {}");
-	inferCursors(body);
+	const body = inferredBody("function f(arr: string[]) { arr.push(\"new\"); const x = arr[0]; take(x); }\nfunction take(s: string): void {}");
 	assert isCursorNamed(body, "x");
 }
 
 test "a variable reassigned unconditionally from a parameter is cursor" {
-	const body = getFuncBody("function f(arr: string[]) { let x = arr[0]; x = arr[1]; }");
-	inferCursors(body);
+	const body = inferredBody("function f(arr: string[]) { let x = arr[0]; x = arr[1]; }");
 	assert isCursorNamed(body, "x");
 }
 
 test "a variable that outlives the catch binding it reads is NOT cursor" {
-	const body = getFuncBody("function f(): string { let m = \"\"; try { throw new Error(\"x\"); } catch (e) { m = e.message; } return m; }");
-	inferCursors(body);
+	const body = inferredBody("function f(): string { let m = \"\"; try { throw new Error(\"x\"); } catch (e) { m = e.message; } return m; }");
 	assert !isCursorNamed(body, "m");
 }
 
 test "new expression result is NOT cursor" {
-	const body = getFuncBody("function f() { const x = new Foo(); }");
-	inferCursors(body);
+	const body = inferredBody("function f() { const x = new Foo(); }");
 	assert !isCursorNamed(body, "x");
 }
 
 test "object literal result is NOT cursor" {
-	const body = getFuncBody("function f() { const x = { a: 1, b: 2 }; }");
-	inferCursors(body);
+	const body = inferredBody("function f() { const x = { a: 1, b: 2 }; }");
 	assert !isCursorNamed(body, "x");
 }
 
 test "array literal result is NOT cursor" {
-	const body = getFuncBody("function f() { const x = [1, 2, 3]; }");
-	inferCursors(body);
+	const body = inferredBody("function f() { const x = [1, 2, 3]; }");
 	assert !isCursorNamed(body, "x");
 }
 
 test "move expression prevents cursor" {
-	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; const y = move x; }");
-	inferCursors(body);
+	const body = inferredBody("function f(arr: string[]) { const x = arr[0]; const y = move x; }");
 	assert !isCursorNamed(body, "x");
 }
 
 test "connected variables share mutation graph" {
 	// a borrows from arr. b borrows from a (connected).
 	// arr.push mutates arr's graph → both a and b see it while they're alive.
-	const body = getFuncBody("function f(arr: string[]) { const a = arr[0]; const b = a; arr.push(\"x\"); process(a); process(b); }");
-	inferCursors(body);
+	const body = inferredBody("function f(arr: string[]) { const a = arr[0]; const b = a; arr.push(\"x\"); process(a); process(b); }");
 	assert !isCursorNamed(body, "a");
 	assert !isCursorNamed(body, "b");
 }
 
 test "same-named declarations in sibling scopes are separate variables" {
-	const body = getFuncBody("function f(arr: string[]) { if (true) { const x = arr[0]; take(x); } else { const x = getValue(); } }\nfunction take(s: string): void {}\nfunction getValue(): string { return \"v\"; }");
-	inferCursors(body);
+	const body = inferredBody("function f(arr: string[]) { if (true) { const x = arr[0]; take(x); } else { const x = getValue(); } }\nfunction take(s: string): void {}\nfunction getValue(): string { return \"v\"; }");
 	assert isCursorNamed(body, "x");
 }
 
 test "borrow from a module global is NOT cursor" {
-	const body = getFuncNamed(BOXES + "let g = new Holder(\"a\");\nfunction f(): void { const c = g.child; show(c.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "let g = new Holder(\"a\");\nfunction f(): void { const c = g.child; show(c.v); }", "f");
 	assert !isCursorNamed(body, "c");
 }
 
 test "borrow from an exported module global is NOT cursor" {
-	const body = getFuncNamed(BOXES + "export let g = new Holder(\"a\");\nfunction f(): void { const c = g.child; show(c.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "export let g = new Holder(\"a\");\nfunction f(): void { const c = g.child; show(c.v); }", "f");
 	assert !isCursorNamed(body, "c");
 }
 
 test "passing the borrowed-from object to a function mutates its graph" {
-	const body = getFuncNamed(BOXES + "function f(h: Holder): void { const c = h.child; replaceChild(h); show(c.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "function f(h: Holder): void { const c = h.child; replaceChild(h); show(c.v); }", "f");
 	assert !isCursorNamed(body, "c");
 }
 
 test "passing the array an element was borrowed from mutates its graph" {
-	const body = getFuncNamed(BOXES + "function f(boxes: Box[]): void { const b = boxes[0]; replaceFirst(boxes); show(b.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "function f(boxes: Box[]): void { const b = boxes[0]; replaceFirst(boxes); show(b.v); }", "f");
 	assert !isCursorNamed(body, "b");
 }
 
 test "passing a value without references keeps the borrow a cursor" {
-	const body = getFuncNamed(BOXES + "function f(h: Holder): void { const c = h.child; show(\"x\"); show(c.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "function f(h: Holder): void { const c = h.child; show(\"x\"); show(c.v); }", "f");
 	assert isCursorNamed(body, "c");
 }
 
 test "pushing the borrow into another array keeps it a cursor" {
-	const body = getFuncNamed(BOXES + "function f(src: Box[], dst: Box[]): void { const b = src[0]; dst.push(b); show(b.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "function f(src: Box[], dst: Box[]): void { const b = src[0]; dst.push(b); show(b.v); }", "f");
 	assert isCursorNamed(body, "b");
 }
 
 test "passing the borrow to a sink parameter keeps it a cursor" {
-	const body = getFuncNamed(BOXES + "function keep(sink b: Box): void { show(b.v); }\nfunction f(h: Holder): void { const c = h.child; keep(c); show(c.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "function keep(sink b: Box): void { show(b.v); }\nfunction f(h: Holder): void { const c = h.child; keep(c); show(c.v); }", "f");
 	assert isCursorNamed(body, "c");
 }
 
 test "passing the borrow through an overload whose implementation takes Readonly keeps it a cursor" {
-	const body = getFuncNamed(BOXES + "function look(b: Box): void;\nfunction look(b: Readonly<Box>): void;\nfunction look(b: Readonly<Box>): void { show(b.v); }\nfunction f(h: Holder): void { const c = h.child; look(c); show(c.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "function look(b: Box): void;\nfunction look(b: Readonly<Box>): void;\nfunction look(b: Readonly<Box>): void { show(b.v); }\nfunction f(h: Holder): void { const c = h.child; look(c); show(c.v); }", "f");
 	assert isCursorNamed(body, "c");
 }
 
 test "passing the owner through an overload whose implementation mutates it ends the cursor" {
-	const body = getFuncNamed(BOXES + "function grab(h: Holder): void;\nfunction grab(h: Holder): void { replaceChild(h); }\nfunction f(h: Holder): void { const c = h.child; grab(h); show(c.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "function grab(h: Holder): void;\nfunction grab(h: Holder): void { replaceChild(h); }\nfunction f(h: Holder): void { const c = h.child; grab(h); show(c.v); }", "f");
 	assert !isCursorNamed(body, "c");
 }
 
 test "pushing the borrow into the array it came from ends the cursor" {
-	const body = getFuncNamed(BOXES + "function f(src: Box[]): void { const b = src[0]; src.push(b); show(b.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "function f(src: Box[]): void { const b = src[0]; src.push(b); show(b.v); }", "f");
 	assert !isCursorNamed(body, "b");
 }
 
 test "a callee that writes the borrowed field through another path ends the cursor" {
-	const body = getFuncNamed(BOXES + "function f(h: Holder, g: Holder): void { const c = h.child; replaceChild(g); show(c.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "function f(h: Holder, g: Holder): void { const c = h.child; replaceChild(g); show(c.v); }", "f");
 	assert !isCursorNamed(body, "c");
 }
 
 test "a store to the borrowed field through another path ends the cursor" {
-	const body = getFuncNamed(BOXES + "function f(h: Holder, g: Holder): void { const c = h.child; g.child = new Box(\"n\"); show(c.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "function f(h: Holder, g: Holder): void { const c = h.child; g.child = new Box(\"n\"); show(c.v); }", "f");
 	assert !isCursorNamed(body, "c");
 }
 
 test "a store to another field keeps the cursor" {
-	const body = getFuncNamed(BOXES + "function f(h: Holder, t: Top): void { const c = h.child; t.mid = new Holder(\"m\"); show(c.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "function f(h: Holder, t: Top): void { const c = h.child; t.mid = new Holder(\"m\"); show(c.v); }", "f");
 	assert isCursorNamed(body, "c");
 }
 
 test "a callee that writes only an object it allocated keeps the cursor" {
-	const body = getFuncNamed(BOXES + "function fill(): Holder { const m = new Holder(\"o\"); m.child = new Box(\"n\"); return m; }\n"
+	const body = inferredNamed(BOXES + "function fill(): Holder { const m = new Holder(\"o\"); m.child = new Box(\"n\"); return m; }\n"
 		+ "function f(h: Holder): void { const c = h.child; fill(); show(c.v); }", "f");
-	inferCursors(body);
 	assert isCursorNamed(body, "c");
 }
 
 test "a callee that writes an object a fresh routine returned keeps the cursor" {
-	const body = getFuncNamed(BOXES + "function mk(): Holder { return new Holder(\"o\"); }\n"
+	const body = inferredNamed(BOXES + "function mk(): Holder { return new Holder(\"o\"); }\n"
 		+ "function fill(): void { const m = mk(); m.child = new Box(\"n\"); }\n"
 		+ "function f(h: Holder): void { const c = h.child; fill(); show(c.v); }", "f");
-	inferCursors(body);
 	assert isCursorNamed(body, "c");
 }
 
 test "a callee that writes an object a routine returned from module state ends the cursor" {
-	const body = getFuncNamed(BOXES + "let held = new Holder(\"g\");\n"
+	const body = inferredNamed(BOXES + "let held = new Holder(\"g\");\n"
 		+ "function shared(): Holder { return held; }\n"
 		+ "function fill(): void { const m = shared(); m.child = new Box(\"n\"); }\n"
 		+ "function f(h: Holder): void { const c = h.child; fill(); show(c.v); }", "f");
-	inferCursors(body);
 	assert !isCursorNamed(body, "c");
 }
 
 test "a callee that writes through a field of an object it allocated ends the cursor" {
-	const body = getFuncNamed(BOXES + "function fill(h: Holder): void { const m = new Top(); m.mid = h; m.mid.child = new Box(\"n\"); }\n"
+	const body = inferredNamed(BOXES + "function fill(h: Holder): void { const m = new Top(); m.mid = h; m.mid.child = new Box(\"n\"); }\n"
 		+ "function f(h: Holder): void { const c = h.child; fill(h); show(c.v); }", "f");
-	inferCursors(body);
 	assert !isCursorNamed(body, "c");
 }
 
 test "a field store joins the stored object to the target's graph" {
-	const body = getFuncNamed(BOXES + "function f(t: Top): void { const m = new Holder(\"o\"); t.mid = m; const z = m.child; t.mid.child = new Box(\"n\"); show(z.v); show(m.child.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "function f(t: Top): void { const m = new Holder(\"o\"); t.mid = m; const z = m.child; t.mid.child = new Box(\"n\"); show(z.v); show(m.child.v); }", "f");
 	assert !isCursorNamed(body, "z");
 }
 
 test "an element store joins the stored object to the array's graph" {
-	const body = getFuncNamed(BOXES + "function f(arr: Holder[]): void { const m = new Holder(\"o\"); arr[0] = m; const z = m.child; arr[0].child = new Box(\"n\"); show(z.v); show(m.child.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "function f(arr: Holder[]): void { const m = new Holder(\"o\"); arr[0] = m; const z = m.child; arr[0].child = new Box(\"n\"); show(z.v); show(m.child.v); }", "f");
 	assert !isCursorNamed(body, "z");
 }
 
 test "a declaration holding a local joins the local to its graph" {
-	const body = getFuncNamed(BOXES + "class Wrap { h: Holder; constructor(h: Holder) { this.h = h; } }\nfunction f(): void { const m = new Holder(\"o\"); const w = new Wrap(m); const z = m.child; w.h.child = new Box(\"n\"); show(z.v); show(m.child.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "class Wrap { h: Holder; constructor(h: Holder) { this.h = h; } }\nfunction f(): void { const m = new Holder(\"o\"); const w = new Wrap(m); const z = m.child; w.h.child = new Box(\"n\"); show(z.v); show(m.child.v); }", "f");
 	assert !isCursorNamed(body, "z");
 }
 
 test "storing an array literal joins its elements to the target's graph" {
-	const body = getFuncNamed(BOXES + "function f(t: Top): void { const m = new Holder(\"o\"); t.mids = [m]; const z = m.child; t.mids[0].child = new Box(\"n\"); show(z.v); show(m.child.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "function f(t: Top): void { const m = new Holder(\"o\"); t.mids = [m]; const z = m.child; t.mids[0].child = new Box(\"n\"); show(z.v); show(m.child.v); }", "f");
 	assert !isCursorNamed(body, "z");
 }
 
@@ -1251,41 +1207,34 @@ const APPLY = "function noop(h: Holder): void { show(\"x\"); }\n"
 	+ "function rebind(h: Holder, fn: (h: Holder) => void): void { fn = replaceChild; fn(h); }\n";
 
 test "a routine calling its function parameter writes what the passed routine writes" {
-	const body = getFuncNamed(BOXES + APPLY + "function f(h: Holder, g: Holder): void { const c = h.child; apply(g, replaceChild); show(c.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + APPLY + "function f(h: Holder, g: Holder): void { const c = h.child; apply(g, replaceChild); show(c.v); }", "f");
 	assert !isCursorNamed(body, "c");
 }
 
 test "a routine calling its function parameter with a pure routine keeps the cursor" {
-	const body = getFuncNamed(BOXES + APPLY + "function f(h: Holder, g: Holder): void { const c = h.child; apply(g, noop); show(c.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + APPLY + "function f(h: Holder, g: Holder): void { const c = h.child; apply(g, noop); show(c.v); }", "f");
 	assert isCursorNamed(body, "c");
 }
 
 test "a function parameter forwarded one call deeper still carries the passed routine's writes" {
-	const pure = getFuncNamed(BOXES + APPLY + "function f(h: Holder, g: Holder): void { const c = h.child; forward(g, noop); show(c.v); }", "f");
-	inferCursors(pure);
+	const pure = inferredNamed(BOXES + APPLY + "function f(h: Holder, g: Holder): void { const c = h.child; forward(g, noop); show(c.v); }", "f");
 	assert isCursorNamed(pure, "c");
-	const writes = getFuncNamed(BOXES + APPLY + "function f(h: Holder, g: Holder): void { const c = h.child; forward(g, replaceChild); show(c.v); }", "f");
-	inferCursors(writes);
+	const writes = inferredNamed(BOXES + APPLY + "function f(h: Holder, g: Holder): void { const c = h.child; forward(g, replaceChild); show(c.v); }", "f");
 	assert !isCursorNamed(writes, "c");
 }
 
 test "a function parameter reassigned before the call ends the cursor whatever the caller passes" {
-	const body = getFuncNamed(BOXES + APPLY + "function f(h: Holder, g: Holder): void { const c = h.child; rebind(g, noop); show(c.v); }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + APPLY + "function f(h: Holder, g: Holder): void { const c = h.child; rebind(g, noop); show(c.v); }", "f");
 	assert !isCursorNamed(body, "c");
 }
 
 test "loop binding over an array written in the loop is NOT cursor" {
-	const body = getFuncNamed(BOXES + "function f(boxes: Box[]): void { let i = 0; while (i < 2) { const b = boxes[i]; i = i + 1; boxes[0] = new Box(\"n\"); show(b.v); } }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "function f(boxes: Box[]): void { let i = 0; while (i < 2) { const b = boxes[i]; i = i + 1; boxes[0] = new Box(\"n\"); show(b.v); } }", "f");
 	assert !isCursorNamed(body, "b");
 }
 
 test "loop binding over an array nobody writes is cursor" {
-	const body = getFuncNamed(BOXES + "function f(boxes: Box[]): void { let i = 0; while (i < 2) { const b = boxes[i]; i = i + 1; show(b.v); } }", "f");
-	inferCursors(body);
+	const body = inferredNamed(BOXES + "function f(boxes: Box[]): void { let i = 0; while (i < 2) { const b = boxes[i]; i = i + 1; show(b.v); } }", "f");
 	assert isCursorNamed(body, "b");
 }
 
@@ -1293,58 +1242,49 @@ const LINKS = "class Link { v: int32 = 0; next: Link | null = null; }\n"
 	+ "function use(n: int32): void { console.log(n); }\n";
 
 test "a walker reassigned from its own field is cursor" {
-	const body = getFuncNamed(LINKS + "function f(n: Link): void { let it: Link | null = n; while (it != null) { use(it.v); it = it.next; } }", "f");
-	inferCursors(body);
+	const body = inferredNamed(LINKS + "function f(n: Link): void { let it: Link | null = n; while (it != null) { use(it.v); it = it.next; } }", "f");
 	assert isCursorNamed(body, "it");
 }
 
 test "a read-only view repointed under a loop condition is cursor" {
-	const body = getFuncNamed(LINKS + "function f(n: Readonly<Link>): int32 { let cur: Readonly<Link> = n; while (cur.next != null) { const nx = cur.next; if (nx == null) break; cur = nx; } return cur.v; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(LINKS + "function f(n: Readonly<Link>): int32 { let cur: Readonly<Link> = n; while (cur.next != null) { const nx = cur.next; if (nx == null) break; cur = nx; } return cur.v; }", "f");
 	assert isCursorNamed(body, "cur");
 	assert isCursorNamed(body, "nx");
 }
 
 test "a read-only view repointed at a local that owns its value is NOT cursor" {
-	const body = getFuncNamed(LINKS + "function f(k: int32): int32 { let keep: Readonly<Link> | null = null; for (let i = 0; i < k; i += 1) { const o: Readonly<Link> = new Link(); if (i == 1) keep = o; } return keep != null ? keep.v : -1; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(LINKS + "function f(k: int32): int32 { let keep: Readonly<Link> | null = null; for (let i = 0; i < k; i += 1) { const o: Readonly<Link> = new Link(); if (i == 1) keep = o; } return keep != null ? keep.v : -1; }", "f");
 	assert !isCursorNamed(body, "o");
 	assert !isCursorNamed(body, "keep");
 }
 
 test "a store to the same field of a local in another partition keeps a view cursor" {
-	const body = getFuncNamed(LINKS + "function f(n: Link): int32 { const v = n.next; const own = new Link(); own.next = new Link(); return v != null ? v.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(LINKS + "function f(n: Link): int32 { const v = n.next; const own = new Link(); own.next = new Link(); return v != null ? v.v : 0; }", "f");
 	assert isCursorNamed(body, "v");
 }
 
 test "a store into a generic holder of another partition keeps a view cursor" {
-	const body = getFuncNamed(LINKS + "class Cell<T> { v: int32 = 0; next: T | null = null; }\nfunction f(n: Cell<Link>): int32 { const v = n.next; const own = new Cell<Link>(); own.next = new Link(); return v != null ? v.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(LINKS + "class Cell<T> { v: int32 = 0; next: T | null = null; }\nfunction f(n: Cell<Link>): int32 { const v = n.next; const own = new Cell<Link>(); own.next = new Link(); return v != null ? v.v : 0; }", "f");
 	assert isCursorNamed(body, "v");
 }
 
 test "a store through a local aliasing the view's source ends the view" {
-	const body = getFuncNamed(LINKS + "function f(n: Link): int32 { const v = n.next; const alias = n; alias.next = new Link(); return v != null ? v.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(LINKS + "function f(n: Link): int32 { const v = n.next; const alias = n; alias.next = new Link(); return v != null ? v.v : 0; }", "f");
 	assert !isCursorNamed(body, "v");
 }
 
 test "a store that links a local to the view's source joins their partitions and ends the view" {
-	const body = getFuncNamed(LINKS + "function f(n: Link): int32 { const v = n.next; const own = new Link(); own.next = n.next; own.next = new Link(); return v != null ? v.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(LINKS + "function f(n: Link): int32 { const v = n.next; const own = new Link(); own.next = n.next; own.next = new Link(); return v != null ? v.v : 0; }", "f");
 	assert !isCursorNamed(body, "v");
 }
 
 test "a store through a local read from module state ends the view" {
-	const body = getFuncNamed(LINKS + "let head = new Link();\nfunction f(n: Link): int32 { const v = n.next; const x = head; x.next = new Link(); return v != null ? v.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(LINKS + "let head = new Link();\nfunction f(n: Link): int32 { const v = n.next; const x = head; x.next = new Link(); return v != null ? v.v : 0; }", "f");
 	assert !isCursorNamed(body, "v");
 }
 
 test "a store through a parameter of the same class ends the view" {
-	const body = getFuncNamed(LINKS + "function f(n: Link, m: Link): int32 { const v = n.next; m.next = new Link(); return v != null ? v.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(LINKS + "function f(n: Link, m: Link): int32 { const v = n.next; m.next = new Link(); return v != null ? v.v : 0; }", "f");
 	assert !isCursorNamed(body, "v");
 }
 
@@ -1353,27 +1293,23 @@ const FN_VALUES = LINKS + "function nextOf(x: Readonly<Link>): Readonly<Link> | 
 	+ "let head = new Link();\n";
 
 test "a view through a function value bound to a reading routine keeps the cursor" {
-	const body = getFuncNamed(FN_VALUES + "function f(n: Link): int32 { const pick = nextOf; const a = pick(n); const b = pick(n); return a != null && b != null ? a.v + b.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(FN_VALUES + "function f(n: Link): int32 { const pick = nextOf; const a = pick(n); const b = pick(n); return a != null && b != null ? a.v + b.v : 0; }", "f");
 	assert isCursorNamed(body, "a");
 	assert isCursorNamed(body, "b");
 }
 
 test "a view through a function value bound to a writing routine ends the cursor" {
-	const body = getFuncNamed(FN_VALUES + "function f(n: Link): int32 { const pick = clearNext; const a = pick(n); const b = pick(n); return a != null && b != null ? a.v + b.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(FN_VALUES + "function f(n: Link): int32 { const pick = clearNext; const a = pick(n); const b = pick(n); return a != null && b != null ? a.v + b.v : 0; }", "f");
 	assert !isCursorNamed(body, "a");
 }
 
 test "a view through a function parameter ends the cursor, as its routine is unknown" {
-	const body = getFuncNamed(FN_VALUES + "function f(n: Link, pick: (x: Readonly<Link>) => Readonly<Link> | null): int32 { const a = pick(n); const b = pick(n); return a != null && b != null ? a.v + b.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(FN_VALUES + "function f(n: Link, pick: (x: Readonly<Link>) => Readonly<Link> | null): int32 { const a = pick(n); const b = pick(n); return a != null && b != null ? a.v + b.v : 0; }", "f");
 	assert !isCursorNamed(body, "a");
 }
 
 test "a view through a function value reassigned between calls ends the cursor" {
-	const body = getFuncNamed(FN_VALUES + "function f(n: Link): int32 { let pick = nextOf; const a = pick(n); pick = clearNext; const b = pick(n); return a != null && b != null ? a.v + b.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(FN_VALUES + "function f(n: Link): int32 { let pick = nextOf; const a = pick(n); pick = clearNext; const b = pick(n); return a != null && b != null ? a.v + b.v : 0; }", "f");
 	assert !isCursorNamed(body, "a");
 }
 
@@ -1382,55 +1318,46 @@ const SETTERS = "class LinkM { v: int32 = 0; next: LinkM | null = null; setNext(
 	+ "class Spill { v: int32 = 0; next: LinkM | null = null; setNext(x: LinkM): void { shared.next = x; } }\n";
 
 test "a call on a local of another partition keeps a view cursor" {
-	const body = getFuncNamed(SETTERS + "function f(n: LinkM): int32 { const v = n.next; const own = new LinkM(); own.setNext(new LinkM()); return v != null ? v.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(SETTERS + "function f(n: LinkM): int32 { const v = n.next; const own = new LinkM(); own.setNext(new LinkM()); return v != null ? v.v : 0; }", "f");
 	assert isCursorNamed(body, "v");
 }
 
 test "a call with an argument rooted in the view's partition ends the view" {
-	const body = getFuncNamed(SETTERS + "function f(n: LinkM): int32 { const v = n.next; const own = new LinkM(); own.setNext(n); return v != null ? v.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(SETTERS + "function f(n: LinkM): int32 { const v = n.next; const own = new LinkM(); own.setNext(n); return v != null ? v.v : 0; }", "f");
 	assert !isCursorNamed(body, "v");
 }
 
 test "a call on a parameter ends the view" {
-	const body = getFuncNamed(SETTERS + "function f(n: LinkM, m: LinkM): int32 { const v = n.next; m.setNext(new LinkM()); return v != null ? v.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(SETTERS + "function f(n: LinkM, m: LinkM): int32 { const v = n.next; m.setNext(new LinkM()); return v != null ? v.v : 0; }", "f");
 	assert !isCursorNamed(body, "v");
 }
 
 test "a call on a local aliasing the view's source ends the view" {
-	const body = getFuncNamed(SETTERS + "function f(n: LinkM): int32 { const v = n.next; const alias = n; alias.setNext(new LinkM()); return v != null ? v.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(SETTERS + "function f(n: LinkM): int32 { const v = n.next; const alias = n; alias.setNext(new LinkM()); return v != null ? v.v : 0; }", "f");
 	assert !isCursorNamed(body, "v");
 }
 
 test "a call whose routine writes module state ends the view whatever it is called on" {
-	const body = getFuncNamed(SETTERS + "function f(n: LinkM): int32 { const v = shared.next; const own = new Spill(); own.setNext(new LinkM()); return v != null ? v.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(SETTERS + "function f(n: LinkM): int32 { const v = shared.next; const own = new Spill(); own.setNext(new LinkM()); return v != null ? v.v : 0; }", "f");
 	assert !isCursorNamed(body, "v");
 }
 
 test "a call through a local closure that writes the view's source through a capture ends the view" {
-	const body = getFuncNamed(SETTERS + "function f(n: LinkM): int32 { const v = n.next; const own = new LinkM(); const clear = (o: LinkM): void => { o.next = null; n.next = null; }; clear(own); return v != null ? v.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(SETTERS + "function f(n: LinkM): int32 { const v = n.next; const own = new LinkM(); const clear = (o: LinkM): void => { o.next = null; n.next = null; }; clear(own); return v != null ? v.v : 0; }", "f");
 	assert !isCursorNamed(body, "v");
 }
 
 test "a call through a function parameter ends the view" {
-	const body = getFuncNamed(SETTERS + "function f(n: LinkM, clear: (o: LinkM) => void): int32 { const v = n.next; const own = new LinkM(); clear(own); return v != null ? v.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(SETTERS + "function f(n: LinkM, clear: (o: LinkM) => void): int32 { const v = n.next; const own = new LinkM(); clear(own); return v != null ? v.v : 0; }", "f");
 	assert !isCursorNamed(body, "v");
 }
 
 test "a call passing a closure that writes through a capture ends the view" {
-	const body = getFuncNamed(SETTERS + "function run(o: LinkM, cb: (o: LinkM) => void): void { cb(o); }\nfunction f(n: LinkM): int32 { const v = n.next; const own = new LinkM(); run(own, (o: LinkM): void => { n.next = null; }); return v != null ? v.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(SETTERS + "function run(o: LinkM, cb: (o: LinkM) => void): void { cb(o); }\nfunction f(n: LinkM): int32 { const v = n.next; const own = new LinkM(); run(own, (o: LinkM): void => { n.next = null; }); return v != null ? v.v : 0; }", "f");
 	assert !isCursorNamed(body, "v");
 }
 
 test "a call to a nested function that writes the view's source through a capture ends the view" {
-	const body = getFuncNamed(SETTERS + "function f(n: LinkM): int32 { const v = n.next; const own = new LinkM(); function clear(o: LinkM): void { o.next = null; n.next = null; } clear(own); return v != null ? v.v : 0; }", "f");
-	inferCursors(body);
+	const body = inferredNamed(SETTERS + "function f(n: LinkM): int32 { const v = n.next; const own = new LinkM(); function clear(o: LinkM): void { o.next = null; n.next = null; } clear(own); return v != null ? v.v : 0; }", "f");
 	assert !isCursorNamed(body, "v");
 }

@@ -12,7 +12,7 @@ import { Node, NodeKind, makeLoc, ExprStmtData, CallExprData, IdentifierData, Sy
 import { RcInfo, RcKind, noRcInfo, classifyType } from "./classify";
 import { hasFlag, makeSymbol, SymbolFlag } from "../checker/symbol";
 import { CfgCache, createCfgCache } from "./cfg";
-import { LocalDefs } from "./writeEffects";
+import { LocalDefs, WriteEffects, WriteSummaries, createRoutineDecls, createWriteSummaries } from "./writeEffects";
 import { TransformContext } from "../transform/context";
 import { makeCtx } from "../transform/testUtil";
 import { makeExprStmt, makeNull, attachedOpSym } from "../transform/util";
@@ -59,6 +59,7 @@ export interface DrcContext {
 	finallyProtectedVars: Symbol[];   // vars in enclosing finally blocks — never last-read (Phase A); identity by Symbol
 	cfgCache: CfgCache;             // CFG cache per variable — Phase C
 	callerDefs: LocalDefs | null;   // function-value definitions of the body being processed
+	writes: WriteEffects;
 	currentFuncBody: Node | null;   // current function body for CFG building — Phase C
 	stmtBorrowReads: BorrowRead[];  // Normal-mode inline reads of RC vars in the current statement
 	                                // — retro-hoisted to borrow temps if the var moves later in it
@@ -81,7 +82,9 @@ export interface DrcContext {
 
 // ===== Constructors =====
 
-export function createDrcContext(ctx: TransformContext): DrcContext {
+export function createDrcContext(ctx: TransformContext, tables: WriteSummaries): DrcContext {
+	const rcMemo = new HashMap<Type, RcInfo>();
+	const checker = ctx.checkerCtx;
 	return {
 		ctx,
 		scopes: [],
@@ -90,6 +93,7 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 		finallyProtectedVars: [],
 		cfgCache: createCfgCache(),
 		callerDefs: null,
+		writes: { tables, checker, unit: checker.modulePath, rcOf: (t: Type | null): RcInfo => classifyBeforeLift(t, ctx, rcMemo) },
 		currentFuncBody: null,
 		stmtBorrowReads: [],
 		inEnsureMove: 0,
@@ -97,7 +101,7 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 		parkedInitDepth: 0,
 		capturedNodes: [],
 		capturedSyms: [],
-		rcMemo: new HashMap<Type, RcInfo>(),
+		rcMemo,
 		globalsToDestroy: [],
 		resultIsCursor: false,
 	};
@@ -112,12 +116,12 @@ export function classifyRc(t: Type | null, dctx: DrcContext): RcInfo {
 	return info;
 }
 
-export function classifyRcBeforeLift(t: Type | null, dctx: DrcContext): RcInfo {
+function classifyBeforeLift(t: Type | null, ctx: TransformContext, memo: HashMap<Type, RcInfo>): RcInfo {
 	if (t == null) return noRcInfo();
-	const hit = dctx.rcMemo.get(t);
+	const hit = memo.get(t);
 	if (hit != null) return hit;
-	const info = classifyType(t, dctx.ctx, false);
-	if (!info.needsCleanup || info.destroyFn != null) dctx.rcMemo.set(t, info);
+	const info = classifyType(t, ctx, false);
+	if (!info.needsCleanup || info.destroyFn != null) memo.set(t, info);
 	return info;
 }
 
@@ -353,7 +357,7 @@ export function symListAdd(list: Symbol[], sym: Symbol): void {
 
 function testDrcCtx(): DrcContext {
 	const ctx = makeCtx();
-	return createDrcContext(ctx);
+	return createDrcContext(ctx, createWriteSummaries(createRoutineDecls(), []));
 }
 
 export function testStringRc(): RcInfo {

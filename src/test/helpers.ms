@@ -24,6 +24,7 @@ import { transformForNative } from "../transform/native/index";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { createTransformContextWithChecker } from "../transform/context";
 import { analyzeProgram } from "../analyzer/index";
+import { createRoutineDecls, createWriteSummaries } from "../analyzer/writeEffects";
 import { CModuleOutput, generateCModule, generateCModuleOutput, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
 import { AliveSet, createAliveSet, CEmissionFacts } from "../codegen/c/context";
 import { generateJS, generateJSModule } from "../codegen/js/jsgen";
@@ -140,7 +141,7 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 	}
 	const nativeTransformed = transformForNative(transformed, nativeCtx);
 	const preAnErrors = checkerCtx.errors.length;
-	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
+	const analyzed = analyzeProgram(nativeTransformed, checkerCtx, createWriteSummaries(createRoutineDecls(), []));
 	if (checkerCtx.errors.length > preAnErrors) return Result.err(collectErrors(checkerCtx.errors, "analyze:"));
 	inferRaises([analyzed]);
 	const lowered = lowerAccess ? lowerNativeAccess(analyzed, nativeCtx) : analyzed;
@@ -192,7 +193,7 @@ export function compileToCWithStd(source: string): CompileResult {
 	const nativeCtx = createTransformContextWithChecker(checkerCtx);
 	const nativeTransformed = transformForNative(transformed, nativeCtx);
 	const preAnErrors = checkerCtx.errors.length;
-	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
+	const analyzed = analyzeProgram(nativeTransformed, checkerCtx, createWriteSummaries(createRoutineDecls(), []));
 	if (checkerCtx.errors.length > preAnErrors) return Result.err(collectErrors(checkerCtx.errors, "analyze:"));
 	inferRaises([analyzed]);
 	const aliveSet = createAliveSet();
@@ -436,6 +437,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 	const emissionPrograms: Node[] = [];
 	const emissionContexts: CheckerContext[] = [];
 	const emissionPaths: string[] = [];
+	const writeTables = createWriteSummaries(createRoutineDecls(), []);
 	for (let ui = 0; ui < units.length; ui += 1) {
 		const modPath = units[ui].path;
 		const ctx = units[ui].ctx;
@@ -448,7 +450,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 		const transformed = transformProgram(monoed, ctx, false);
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		const nativeTransformed = transformForNative(transformed, nativeCtx);
-		const analyzed = analyzeProgram(nativeTransformed, ctx);
+		const analyzed = analyzeProgram(nativeTransformed, ctx, writeTables);
 		emissionPrograms.push(analyzed);
 		emissionContexts.push(ctx);
 		emissionPaths.push(modPath);
@@ -592,6 +594,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 	const emissionPrograms: Node[] = [];
 	const emissionContexts: CheckerContext[] = [];
 	const emissionPaths: string[] = [];
+	const writeTables = createWriteSummaries(createRoutineDecls(), []);
 	for (let ui = 0; ui < units.length; ui += 1) {
 		const modPath = units[ui].path;
 		const ctx = units[ui].ctx;
@@ -604,7 +607,7 @@ export function compileProjectToCWithStd(entries: MapEntry[], entryPath: string)
 		const transformed = transformProgram(macroExpanded, ctx, false);
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		const nativeTransformed = transformForNative(transformed, nativeCtx);
-		const analyzed = analyzeProgram(nativeTransformed, ctx);
+		const analyzed = analyzeProgram(nativeTransformed, ctx, writeTables);
 		emissionPrograms.push(analyzed);
 		emissionContexts.push(ctx);
 		emissionPaths.push(modPath);

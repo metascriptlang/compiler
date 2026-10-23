@@ -32,7 +32,7 @@ import {
 import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym, skipConvDfa } from "./alias";
 import { inferCursors } from "./cursors";
 import { isViewCall, returnsView } from "../checker/effects";
-import { LocalDefs, borrowedArgsToCopy, callerDefsOf } from "./writeEffects";
+import { LocalDefs, borrowedArgsToCopy, callerDefsOf, createRoutineDecls, createWriteSummaries } from "./writeEffects";
 import { cstringSource } from "../transform/native/cstringConvLower";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
 import { checkSource } from "../checker/checkPass";
@@ -534,7 +534,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		isActorSendHandoff = true;
 	}
 
-	const keepAlive = borrowedArgsToCopy(node, dctx.callerDefs);
+	const keepAlive = borrowedArgsToCopy(dctx.writes, node, dctx.callerDefs);
 	const marks: Node[] = [];
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
@@ -1945,8 +1945,8 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	dctx.finallyProtectedVars = collectFinallyVars(body);
 
 	// Phase B: infer cursor (borrowed) variables for this function
-	inferCursors(body);
-	dctx.callerDefs = callerDefsOf(body);
+	inferCursors(dctx.writes, body);
+	dctx.callerDefs = callerDefsOf(dctx.writes, body);
 
 	// Phase C: set function body for CFG-based last-read analysis
 	dctx.currentFuncBody = body;
@@ -2746,8 +2746,8 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	}
 	pushScope(dctx, false, false);
 	dctx.finallyProtectedVars = collectFinallyVars(program);
-	inferCursors(program);
-	dctx.callerDefs = callerDefsOf(program);
+	inferCursors(dctx.writes, program);
+	dctx.callerDefs = callerDefsOf(dctx.writes, program);
 	dctx.currentFuncBody = program;
 	clearCfgCache(dctx.cfgCache);
 	d.programStmts = processStmtList(d.programStmts, dctx, program.location);
@@ -2771,7 +2771,7 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 function testDrcContext(input: string): DrcContext {
 	const ctx = checkSource(input);
 	const tctx = checkedCtx(ctx);
-	return createDrcContext(tctx);
+	return createDrcContext(tctx, createWriteSummaries(createRoutineDecls(), []));
 }
 
 export function testLoc(): SourceLocation {
