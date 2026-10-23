@@ -33,8 +33,8 @@ import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
 import { isImmutableModuleConst, isViewCall, viewCallSources } from "../checker/effects";
-import { ANY_HEAP_SLOT, mayWrite, resetWriteEffects, stepSlot } from "./writeEffects";
-import { createDrcContext } from "./scope";
+import { ANY_HEAP_SLOT, mayWrite, resetWriteEffects, stepSlot, viewReturnSlots } from "./writeEffects";
+import { createDrcContext, classifyRc } from "./scope";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
 import { isReadonlyView } from "../checker/types";
@@ -140,7 +140,9 @@ function sourceSlots(p: Partitions, node: Node, out: string[]): void {
 		NodeKind.NewExpr => { for (const a of (node.data as NewExprData).newArguments) { sourceSlots(p, a, out); } },
 		NodeKind.CallExpr => {
 			if (isViewCall(node)) {
-				out.push(ANY_HEAP_SLOT);
+				const inner = viewReturnSlots(node);
+				if (inner == null) out.push(ANY_HEAP_SLOT);
+				else for (const slot of inner) out.push(slot);
 				for (const a of lentSources(node)) { sourceSlots(p, a, out); }
 			} else if (containsPointer(node.nodeType, 0)) {
 				for (const a of (node.data as CallExprData).arguments) { sourceSlots(p, a, out); }

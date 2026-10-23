@@ -8,7 +8,7 @@ import { Node, NodeKind, NodeFlag, ObjectLiteralData, Symbol, SymbolKind, Source
 import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, hasFlag, makeSymbol, parentClassSymOf } from "../checker/symbol";
 import { CheckerContext, LIFECYCLE_HOOK_NAMES, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "../checker/context";
-import { routineBody, receiverOf } from "../checker/effects";
+import { calledRoutine, isViewCall, routineBody, receiverOf, viewCallSources } from "../checker/effects";
 import { lookupInstanceHook, pickBodyCtx } from "../checker/instantiate";
 import { isMutatingArrayMethod } from "../checker/paramMutationAnalysis";
 import { containsPointer } from "../checker/varPartitions";
@@ -52,6 +52,10 @@ class WriteSummary {
 }
 
 let routineSummaries = new HashMap<Symbol, WriteSummary>();
+let viewReturns = new HashMap<Symbol, string[]>();
+let viewReturnsUnknown = new HashSet<Symbol>();
+let viewReturnsOpen: Symbol[] = [];
+let viewReturnsReach: int32 = 0;
 let constructionSummaries = new HashMap<Symbol, WriteSummary>();
 let hookSummaries = new HashMap<Type, WriteSummary>();
 let hookless = new HashSet<Type>();
@@ -123,6 +127,8 @@ function reloadsApart(caller: WriteSummary, callee: WriteSummary): boolean {
 export function clearWriteSummaries(): void {
 	ownerHookCache = new HashMap<Symbol, Symbol[]>();
 	routineSummaries = new HashMap<Symbol, WriteSummary>();
+	viewReturns = new HashMap<Symbol, string[]>();
+	viewReturnsUnknown = new HashSet<Symbol>();
 	constructionSummaries = new HashMap<Symbol, WriteSummary>();
 	hookSummaries = new HashMap<Type, WriteSummary>();
 	hookless = new HashSet<Type>();
@@ -892,6 +898,110 @@ function callWrites(call: Node): WriteSummary {
 		else absorb(s, { call: null, callee: settled(c) });
 	}
 	return s;
+}
+
+// The slots a view call's result is reached through below its arguments: the steps every
+// return of the callee takes from a parameter or a Readonly module constant, closed over the
+// view calls it returns through. Null when a return is not such a path or the callee's body
+// is unknown, so the caller keeps treating the result as reachable from any heap slot.
+export function viewReturnSlots(call: Node): string[] | null {
+	const sym = calledRoutine(call);
+	if (sym == null || runsNativeOnC(sym) || dispatchEntryFor(sym) != null) return null;
+	return routineReturnSlots(sym);
+}
+
+function routineReturnSlots(sym: Symbol): string[] | null {
+	const known = viewReturns.get(sym);
+	if (known != null) return known;
+	if (viewReturnsUnknown.has(sym)) return null;
+	const open = viewReturnsOpen.indexOf(sym);
+	if (open >= 0) {
+		if (open < viewReturnsReach) viewReturnsReach = open as int32;
+		return [];
+	}
+	const decl = routineDecl(sym);
+	const body = routineBody(decl);
+	if (decl == null || body == null) return null;
+	const depth = viewReturnsOpen.length as int32;
+	const outerReach = viewReturnsReach;
+	viewReturnsReach = depth;
+	viewReturnsOpen.push(sym);
+	const out: string[] = [];
+	const ok = returnArmsSlots(body, decl.paramSyms, localDefs(body), out);
+	viewReturnsOpen.pop();
+	if (viewReturnsReach >= depth) {
+		if (ok) viewReturns.set(sym, out);
+		else viewReturnsUnknown.add(sym);
+	}
+	viewReturnsReach = viewReturnsReach < outerReach ? viewReturnsReach : outerReach;
+	return ok ? out : null;
+}
+
+function returnArmsSlots(n: Node, params: Symbol[] | null, d: LocalDefs, out: string[]): boolean {
+	if (isRoutineNode(n)) return true;
+	if (n.kind == NodeKind.ReturnStmt) {
+		const arg = (n.data as ReturnStmtData).argument;
+		return arg == null || pathFromParams(arg, params, d, new HashSet<Symbol>(), out);
+	}
+	let ok = true;
+	forEachChild(n, (c: Node): void => { if (ok && !returnArmsSlots(c, params, d, out)) ok = false; });
+	return ok;
+}
+
+function pathFromParams(n: Node, params: Symbol[] | null, d: LocalDefs, seen: HashSet<Symbol>, out: string[]): boolean {
+	const t = skipConvDfa(n);
+	match (t.kind) {
+		NodeKind.NullLiteral => { return true; },
+		NodeKind.ConditionalExpr => {
+			const cd = t.data as ConditionalExprData;
+			return pathFromParams(cd.ternaryConsequent, params, d, seen, out) && pathFromParams(cd.ternaryAlternate, params, d, seen, out);
+		},
+		NodeKind.BinaryExpr => {
+			const bd = t.data as BinaryExprData;
+			return bd.operator == "??" && pathFromParams(bd.left, params, d, seen, out) && pathFromParams(bd.right, params, d, seen, out);
+		},
+		NodeKind.MemberExpr => {
+			out.push(stepSlot(t)!);
+			return pathFromParams((t.data as MemberExprData).object, params, d, seen, out);
+		},
+		NodeKind.ArrayAccess => {
+			out.push(stepSlot(t)!);
+			return pathFromParams((t.data as ArrayAccessData).array, params, d, seen, out);
+		},
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { return pathFromParams((t.data as HiddenDerefData).expr, params, d, seen, out); },
+		NodeKind.MoveExpr => { return pathFromParams((t.data as MoveExprData).moveArg, params, d, seen, out); },
+		NodeKind.CallExpr => {
+			if (!isViewCall(t)) return false;
+			const inner = viewReturnSlots(t);
+			if (inner == null) return false;
+			for (const slot of inner) out.push(slot);
+			const sources: Node[] = [];
+			viewCallSources(t, sources);
+			for (const a of sources) {
+				if (containsPointer(a.nodeType, 0) && !pathFromParams(a, params, d, seen, out)) return false;
+			}
+			return true;
+		},
+		NodeKind.Identifier => {
+			const sym = t.resolvedSym;
+			if (sym == null) return (t.data as IdentifierData).name == "this";
+			if (paramIndex(params, sym) >= 0 || (t.data as IdentifierData).name == "this") return true;
+			if (isModuleState(sym)) {
+				out.push(globalSlot(sym));
+				return true;
+			}
+			if (!isLocal(sym) || d.spoiled.has(sym)) return false;
+			if (seen.has(sym)) return true;
+			seen.add(sym);
+			const k = d.syms.indexOf(sym);
+			if (k < 0) return false;
+			for (const src of d.sources[k]) {
+				if (!pathFromParams(src, params, d, seen, out)) return false;
+			}
+			return true;
+		},
+		_ => { return false; },
+	};
 }
 
 export function stepSlot(n: Node): string | null {

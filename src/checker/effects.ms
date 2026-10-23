@@ -246,12 +246,18 @@ export function returnsView(t: Readonly<Type | null>): boolean {
 export function calledRoutineType(call: Node): Type | null {
 	const sym = call.resolvedSym;
 	if (sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function) {
-		const winner = overloadWinner(sym, (call.data as CallExprData).resolvedOverloadIdx);
-		const impl = hasFlag(winner, SymbolFlag.OverloadSig) ? findOverloadImpl(sym) : winner;
+		const impl = calledRoutine(call);
 		return impl != null && impl.symbolType != null ? impl.symbolType : sym.symbolType;
 	}
 	const callee = (call.data as CallExprData).callee;
 	return callee != null && callee.nodeType != null && callee.nodeType.kind == TypeKind.Function ? callee.nodeType : null;
+}
+
+export function calledRoutine(call: Node): Symbol | null {
+	const sym = call.resolvedSym;
+	if (sym == null || sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return null;
+	const winner = overloadWinner(sym, (call.data as CallExprData).resolvedOverloadIdx);
+	return hasFlag(winner, SymbolFlag.OverloadSig) ? findOverloadImpl(sym) : winner;
 }
 
 export function isViewCall(call: Node): boolean {
