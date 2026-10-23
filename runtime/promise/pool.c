@@ -688,9 +688,14 @@ void msPoolCompensateEnd(void) {
 	msThreadPool* pool = msPoolGet();
 	MS_LOCK(pool);
 	msPoolSparesWanted--;
-	/* An idle spare retires at its next turn. */
-	uint64_t idle = atomic_load_explicit(&pool->idleMask, memory_order_acquire) >> pool->workerCount;
-	if (pool->workerCount < MS_POOL_MAX_WORKERS && idle != 0) MS_SIGNAL(pool->workerConds[pool->workerCount + msCtz64(idle)]);
+	/* Every idle spare retires at its next turn while more are active than wanted. One
+	 * signal per end is not enough: ends that come before the signalled spare runs
+	 * would all signal that same spare. */
+	if (pool->workerCount < MS_POOL_MAX_WORKERS) {
+		for (uint64_t idle = atomic_load_explicit(&pool->idleMask, memory_order_acquire) >> pool->workerCount; idle != 0; idle &= idle - 1) {
+			MS_SIGNAL(pool->workerConds[pool->workerCount + msCtz64(idle)]);
+		}
+	}
 	MS_UNLOCK(pool);
 }
 
