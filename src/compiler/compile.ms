@@ -49,7 +49,7 @@ import { transformForNative } from "../transform/native/index";
 import { transformForRaiser } from "../transform/raiserLowering";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
-import { HcrIndirectModule, HcrTypeLayout, hcrFunctions, lowerHcrIndirection } from "../transform/native/hcrIndirect";
+import { HcrIndirectModule, HcrTypeLayout, HcrStorageTable, hcrFunctions, lowerHcrIndirection, createHcrStorageTable, buildHcrStorage } from "../transform/native/hcrIndirect";
 import { hcrTypeCounts } from "./hcrCount";
 import { lookupModuleCtx, lookupModuleProgram, drainPendingInstances, distinctInstances, placeInstance, retainCheckedInstances } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
@@ -2075,7 +2075,7 @@ function refuseCoreCallsIntoImageOps(unit: ProcessedModule, imagePaths: string[]
 	}
 }
 
-function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[], aliveSet: Readonly<AliveSet>, facts: CEmissionFacts, counted: boolean): void {
+function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[], aliveSet: Readonly<AliveSet>, facts: CEmissionFacts, counted: boolean, storage: HcrStorageTable): void {
 	const imagePaths: string[] = [];
 	for (const module of modules) {
 		imagePaths.push(module.modulePath);
@@ -2110,7 +2110,7 @@ function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[]
 	for (const module of modules) {
 		for (const unit of processed) {
 			if (unit.modPath != module.modulePath) continue;
-			unit.program = lowerHcrIndirection(cloneNodeKeepSem(unit.program), module, modules, owners, aliveSet, facts);
+			unit.program = lowerHcrIndirection(cloneNodeKeepSem(unit.program), module, modules, owners, aliveSet, facts, storage);
 		}
 	}
 }
@@ -3063,6 +3063,14 @@ resetLiftedOps();
 	// Phase C: Codegen + compile each module
 	const emissionFacts = new CEmissionFacts();
 	const aliveKey = session.keep ? aliveSetFingerprint(aliveSet) : "";
+	const hcrStorage = createHcrStorageTable();
+	if (opts.isHcr) {
+		for (const module of hcrModules) {
+			for (const p of processed) {
+				if (p.modPath == module.modulePath) buildHcrStorage(hcrStorage, p.program, module, hcrModules);
+			}
+		}
+	}
 	setConcurrentTypeQueries(true);
 	try {
 		for (const p of processed) {
@@ -3081,7 +3089,7 @@ resetLiftedOps();
 			}
 			if (opts.isHcr && !hcrModulePaths.includes(p.modPath)) factCoreUnit(emissionFacts, p.modPath);
 		}
-		if (opts.isHcr) bindHcrUnits(hcrModules, processed, aliveSet, emissionFacts, gcModeOf(opts.gcMode) == GcMode.Drc);
+		if (opts.isHcr) bindHcrUnits(hcrModules, processed, aliveSet, emissionFacts, gcModeOf(opts.gcMode) == GcMode.Drc, hcrStorage);
 	} catch (e) {
 		setConcurrentTypeQueries(false);
 		throw e;

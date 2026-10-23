@@ -31,6 +31,49 @@ export struct HcrIndirectModule {
 	afterReload: string[];
 }
 
+export struct HcrVariableStorage {
+	value: Type;
+	pointer: Type;
+}
+
+export struct HcrStorageTable {
+	voidPointer: Type;
+	byBinding: HashMap<string, HcrVariableStorage>;
+}
+
+export function createHcrStorageTable(): HcrStorageTable {
+	return { voidPointer: createPtr(voidType()), byBinding: new HashMap<string, HcrVariableStorage>() };
+}
+
+function importedVariableId(n: Node, own: HcrIndirectModule, modules: HcrIndirectModule[]): string | null {
+	if (n.kind != NodeKind.Identifier && n.kind != NodeKind.MemberExpr) return null;
+	const sym = n.resolvedSym;
+	if (sym == null || !isModuleGlobalVar(sym)) return null;
+	if (n.kind == NodeKind.MemberExpr) {
+		const baseSym = (n.data as MemberExprData).object.resolvedSym;
+		if (baseSym == null || baseSym.symbolKind != SymbolKind.Module) return null;
+	}
+	const target = moduleForPath(modules, sym.modulePath);
+	if (target == null || target.moduleId == own.moduleId) return null;
+	const symbol = mangledGlobalName(buildModuleNameRoots(), sym, referenceName(sym, referenceText(n)));
+	return own.modulePath + "\n" + target.moduleId + "\n" + symbol + "\nv:" + hcrSignatureKey(sym.symbolType);
+}
+
+export function buildHcrStorage(table: HcrStorageTable, program: Node, own: HcrIndirectModule, modules: HcrIndirectModule[]): void {
+	if (program == null || program.kind != NodeKind.Program) return;
+	let slot: int32 = 0;
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		walkNode(stmt, (n: Node): Node => {
+			const id = importedVariableId(n, own, modules);
+			if (id == null || table.byBinding.has(id)) return n;
+			slot += 1;
+			const value = spelled(createStruct(`_ms_hcr_import_value${slot}`, ["value"], [n.resolvedSym!.symbolType], true));
+			table.byBinding.set(id, { value, pointer: createPtr(value) });
+			return n;
+		});
+	}
+}
+
 export struct HcrFunction {
 	symbol: string;
 	key: string;
@@ -87,6 +130,7 @@ export function lowerHcrIndirection(
 	owners: HashMap<string, string>,
 	aliveSet: Readonly<AliveSet>,
 	facts: Readonly<CEmissionFacts>,
+	storageTable: HcrStorageTable,
 ): Node {
 	if (program == null || program.kind != NodeKind.Program) return program;
 	const pd = program.data as ProgramData;
@@ -123,7 +167,7 @@ export function lowerHcrIndirection(
 	if (own.afterReload.length > 0) emitted.push(makeEmitStmt(handlerFunction("HcrAfterReload000", own.afterReload), loc));
 
 	const bound = new HashMap<string, string>();
-	const storageTypes = new HashMap<string, Type>();
+	const storageTypes = new HashMap<string, HcrVariableStorage>();
 	let bindings = "";
 	let bindSlot: int32 = 0;
 	for (const entry of aliveSet.foreignOps.data) {
@@ -219,9 +263,10 @@ export function lowerHcrIndirection(
 				bound.set(id, pointer);
 				bindings = bindings + `${cString(targetId)}, ${cString(symbol)}, ${cString(key)}, `;
 				if (isVariable) {
-					const storageType = spelled(createStruct(`_ms_hcr_import_value${bindSlot}`, ["value"], [sym.symbolType], true));
-					storageTypes.set(id, storageType);
-					emitted.push(hcrStorageDecl(storageType, loc));
+					const storage = storageTable.byBinding.get(importedVariableId(n, own, modules) ?? "");
+					if (storage == null) throw new Error(`internal: HCR bind slot ${bindSlot} for '${targetId}::${symbol}' has no storage type built before emission`);
+					storageTypes.set(id, storage);
+					emitted.push(hcrStorageDecl(storage.value, loc));
 					emitted.push(makeEmitStmt(`/*VARSECTION*/static MsHcrCell* ${pointer};`, loc));
 					emitted.push(makeEmitStmt(
 						`/*DATINITSECTION*/  ${pointer} = msHcrBind(${cString(targetId)}, ${cString(symbol)}, ${cString(key)});`,
@@ -237,12 +282,12 @@ export function lowerHcrIndirection(
 				}
 			}
 			if (!isVariable) return n;
-			const storageType = storageTypes.get(id);
-			if (storageType == null) throw new Error(`internal: missing HCR storage type for '${targetId}::${symbol}'`);
-			const raw = makeCall(runtimeRef("msHcrVariableStorage", n.location), [makeTypedIdent(pointer, createPtr(voidType()), n.location)], n.location);
-			raw.nodeType = createPtr(voidType());
-			const cast = createNode(NodeKind.TypeAssertion, { asExpr: raw, asType: storageType.typeName }, syntheticToken(n.location));
-			cast.nodeType = createPtr(storageType);
+			const storage = storageTypes.get(id);
+			if (storage == null) throw new Error(`internal: missing HCR storage type for '${targetId}::${symbol}'`);
+			const raw = makeCall(runtimeRef("msHcrVariableStorage", n.location), [makeTypedIdent(pointer, storageTable.voidPointer, n.location)], n.location);
+			raw.nodeType = storageTable.voidPointer;
+			const cast = createNode(NodeKind.TypeAssertion, { asExpr: raw, asType: storage.value.typeName }, syntheticToken(n.location));
+			cast.nodeType = storage.pointer;
 			const value = makeMember(makeHiddenDeref(cast, n.location), "value", n.location);
 			value.nodeType = n.nodeType != null ? n.nodeType : sym.symbolType;
 			return value;
