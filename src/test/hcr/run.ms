@@ -953,11 +953,55 @@ function stepCrash(): void {
 		"STEP rolled back logic fault then 2 frame=0",
 		"STEP rolled back logic exception then 2 frame=0",
 		"STEP rolled back logic fatal then 2 frame=0",
+		"STEP rolled back logic fatal then 2 frame=0",
 		"STEP reloaded 3",
 	];
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
 		console.log(both(ran));
 		failWith(tag, "a crash inside step() did not roll back to the previous generation and keep running");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function stepJoinCrash(): void {
+	const tag = "hcrStepJoinCrash";
+	const dir = freshDir(`${TMP}/stepJoinCrash`);
+	for (const f of ["hold.h", "logic.ms", "fixed.txt"]) copy(`${FIXTURES}/step/${f}`, `${dir}/${f}`);
+	for (const f of readDir(`${FIXTURES}/stepJoin`)) copy(`${FIXTURES}/stepJoin/${f}`, `${dir}/${f}`);
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("STEP ")) seen.push(line);
+	}
+	const want = [
+		"STEP start 2",
+		"STEP rolled back fatal then 2 frame=0",
+		"STEP join rejected fatal",
+		"STEP rolled back fatal then 2 frame=0",
+		"STEP all rejected fatal",
+		"STEP reloaded 3",
+	];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "a task that crashed under step() and that the program awaits again did not reject with the crash");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function stepSpareCrash(): void {
+	const tag = "hcrStepSpareCrash";
+	const dir = freshDir(`${TMP}/stepSpareCrash`);
+	for (const f of ["hold.h", "logic.ms", "fixed.txt"]) copy(`${FIXTURES}/step/${f}`, `${dir}/${f}`);
+	for (const f of readDir(`${FIXTURES}/stepSpare`)) copy(`${FIXTURES}/stepSpare/${f}`, `${dir}/${f}`);
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("STEP ")) seen.push(line);
+	}
+	const want = ["STEP start 2 extra=0", "STEP rolled back then 2 queued ran 2 extra=0", "STEP reloaded 3"];
+	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
+		console.log(both(ran));
+		failWith(tag, "a crash under step() inside a wait that started a spare left the spare wanted");
 	}
 	console.log(`ok   ${tag}`);
 }
@@ -2060,6 +2104,8 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrLiftKinds", run: liftKinds },
 	{ name: "hcrRun", run: runCommand },
 	{ name: "hcrStepCrash", run: stepCrash },
+	{ name: "hcrStepJoinCrash", run: stepJoinCrash },
+	{ name: "hcrStepSpareCrash", run: stepSpareCrash },
 	{ name: "hcrCrossImageNew", run: crossImageNew },
 	{ name: "hcrGenericCtor", run: genericCtor },
 	{ name: "hcrGenericOps", run: genericOps },

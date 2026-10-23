@@ -8,6 +8,8 @@ extern function holdWorker(): int32;
 extern function holdWaitAll(n: int32): void;
 extern function holdReleaseAll(): void;
 extern function holdFrameLeft(): int32;
+extern function holdHangAfter(seconds: int32): void;
+extern function holdRearm(): void;
 
 function category(reason: string): string {
 	if (reason.contains("fatal runtime error")) return "fatal";
@@ -29,10 +31,13 @@ function mustNotThrow(n: int32): int32 {
 	return n;
 }
 
-const edits = ["crashIndex.txt", "crashRecurse.txt", "crashThrow.txt", "crashInTask.txt", "fixed.txt"];
-// crashInTask crashes inside a spawned task that the loop thread runs itself, because every worker is held.
+const edits = ["crashIndex.txt", "crashRecurse.txt", "crashThrow.txt", "crashInTask.txt", "crashNested.txt", "fixed.txt"];
+// crashInTask crashes inside a spawned task that the loop thread runs itself, because every worker is held;
+// crashNested one task deeper.
+const heldEdits = ["crashInTask.txt", "crashNested.txt"];
 let held: Promise<int32>[] = [];
 let next = 0;
+holdHangAfter(240);
 console.log(`STEP start ${work(mustNotThrow(1))}`);
 install(edits[next]);
 const deadline = performance.now() + 180000;
@@ -50,7 +55,8 @@ while (!done && performance.now() < deadline) {
 		console.log(`STEP rolled back ${lastReload().modules.join(",")} ${category(lastReload().reason)} then ${work(1)} frame=${frameLeft}`);
 		next += 1;
 		install(edits[next]);
-		if (edits[next] == "crashInTask.txt") {
+		if (heldEdits.includes(edits[next])) {
+			holdRearm();
 			for (let i = 0; i < cpuCount(); i++) held.push(spawn(() => holdWorker()));
 			holdWaitAll(cpuCount());
 		}
