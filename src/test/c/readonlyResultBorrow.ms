@@ -405,3 +405,33 @@ export function look(b: Box<Node>, o: Box<Node>): int32 {
 	assert result.ok, result.ok ? "" : result.error;
 	assert borrowedOps(functionBody(result.value, "look"), "d") > 0, functionBody(result.value, "look");
 }
+
+test "a view stays borrowed across a callee's element write to an array of an unrelated class" {
+	const fault = rcFault(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+class Other { n: int32 = 0; }
+function refill(others: Other[]): void { others[0] = new Other(); }
+function firstKid(t: Readonly<Node>): Readonly<Node> { return t.kids[0]; }
+export function look(t: Readonly<Node>, others: Other[]): int32 {
+	const k = firstKid(t);
+	refill(others);
+	return k.n;
+}
+`, ["look"]);
+	assert fault == "", fault;
+}
+
+test "a view is owned across a callee's element write to an array of its own class" {
+	const result = compileToC(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+function refill(kids: Node[]): void { kids[0] = new Node(); }
+function firstKid(t: Readonly<Node>): Readonly<Node> { return t.kids[0]; }
+export function look(t: Readonly<Node>, o: Node): int32 {
+	const k = firstKid(t);
+	refill(o.kids);
+	return k.n;
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	assert borrowedOps(functionBody(result.value, "look"), "k") > 0, functionBody(result.value, "look");
+}
