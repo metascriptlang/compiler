@@ -4,7 +4,7 @@
 // run; borrowedArgsToCopy picks the arguments the caller must keep alive, and mayWrite tells
 // cursor inference which statements end a borrow.
 
-import { Node, NodeKind, NodeFlag, ObjectLiteralData, Symbol, SymbolKind, SourceLocation, Type, TypeKind, makeLoc, BinaryExprData, CallExprData, ClassDeclData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, MoveExprData, NewExprData, OutExprData, PropertyDeclData, ArrayAccessData, IdentifierData, ProgramData, ExportDeclData, ReturnStmtData, VariableDeclData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, ObjectLiteralData, Symbol, SymbolKind, SourceLocation, Type, TypeFlag, TypeKind, makeLoc, BinaryExprData, CallExprData, ClassDeclData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, MoveExprData, NewExprData, OutExprData, PropertyDeclData, ArrayAccessData, IdentifierData, ProgramData, ExportDeclData, ReturnStmtData, VariableDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, hasFlag, makeSymbol, parentClassSymOf } from "../checker/symbol";
 import { CheckerContext, LIFECYCLE_HOOK_NAMES, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "../checker/context";
@@ -16,7 +16,7 @@ import { skipConvDfa } from "./alias";
 import { RcInfo, noRcInfo } from "./classify";
 import { makeNumber, makeString } from "../checker/literalNodes";
 import { classDistance, createArray, createFunction, int32Type, isReadonlyView, stringType, withoutReadonlyView } from "../checker/types";
-import { sameType } from "../checker/compat";
+import { isAssignable, sameType } from "../checker/compat";
 import { generatedRef, makeAssign, makeCall, makeIdentResolved } from "../transform/util";
 import { cstringSource } from "../transform/native/cstringConvLower";
 
@@ -226,10 +226,21 @@ function mayBePartOf(a: Type | null, b: Type | null, depth: int32): boolean {
 	if (a == null || b == null || a === b || depth > 8) return true;
 	if (a.kind == TypeKind.Array && b.kind == TypeKind.Array) return elementsMayAlias(a.typeReturn, b.typeReturn, depth + 1);
 	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) {
-		if (!isClassType(a) || !isClassType(b)) return true;
-		return sameType(a, b) || classDistance(a, b) >= 0 || classDistance(b, a) >= 0;
+		if (isClassType(a) && isClassType(b)) return sameType(a, b) || classDistance(a, b) >= 0 || classDistance(b, a) >= 0;
+		return mayHoldEither(a, b);
 	}
 	return false;
+}
+
+// A structural holder can be an object of the other type exactly when one is assignable to the
+// other; a class that is extended may hide a subclass that is, and an open type may be anything.
+function mayHoldEither(a: Type, b: Type): boolean {
+	if (isExtendedClass(a) || isExtendedClass(b) || a.typeFlags.has(TypeFlag.HasGenericParam) || b.typeFlags.has(TypeFlag.HasGenericParam)) return true;
+	return isAssignable(a, b) || isAssignable(b, a);
+}
+
+function isExtendedClass(t: Type): boolean {
+	return isClassType(t) && t.typeFlags.has(TypeFlag.OpenClass);
 }
 
 function isClassType(t: Type): boolean {
