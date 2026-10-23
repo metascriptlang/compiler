@@ -491,20 +491,56 @@ export function look(g: Gen, t: Node): int32 {
 	assert borrowedOps(functionBody(result.value, "look"), "k") > 0, functionBody(result.value, "look");
 }
 
-test "a view call's result is rooted only in the arguments its callee returns through" {
+test "a view call's result is no root of an argument whose type cannot hold it" {
 	const result = compileToC(`
 class Node { kids: Node[] = []; n: int32 = 0; }
-class Gen { nodes: Node[] = []; count: int32 = 0; }
-function pick(g: Readonly<Gen>, t: Readonly<Node>): Readonly<Node> { return t.kids[0]; }
-function bump(g: Gen): void { g.count += 1; }
-export function look(g: Gen, t: Node): int32 {
-	const k = pick(g, t);
-	bump(g);
+class Tally { names: string[] = []; count: int32 = 0; }
+function pick(c: Readonly<Tally>, t: Readonly<Node>): Readonly<Node> { return t.kids[0]; }
+function reset(c: Tally): void { c.names = []; }
+export function look(c: Tally, t: Node): int32 {
+	const k = pick(c, t);
+	reset(c);
 	return k.n;
 }
 `);
 	assert result.ok, result.ok ? "" : result.error;
 	assert borrowedOps(functionBody(result.value, "look"), "k") == 0, functionBody(result.value, "look");
+}
+
+test "a view call's result is rooted in every argument its signature lets it alias, whatever the body returns" {
+	const result = compileToC(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+function first(a: Readonly<Node>, b: Readonly<Node>): Readonly<Node> { return a; }
+function drop(b: Node): void { b.kids = []; }
+export function look(a: Node, b: Node): int32 {
+	const k = first(a, b);
+	drop(b);
+	return k.n;
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	assert borrowedOps(functionBody(result.value, "look"), "k") > 0, functionBody(result.value, "look");
+}
+
+test "a view call into a body the analyzer cannot read is reachable from any heap slot" {
+	for (const writer of ["clearShelf()", "bump()"]) {
+		const result = compileToC(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+class Holder { kids: Node[] = []; }
+let shelf = new Holder();
+let ticks: int32 = 0;
+extern function first(t: Readonly<Node>): Readonly<Node>;
+function clearShelf(): void { shelf.kids = []; }
+function bump(): void { ticks += 1; }
+export function look(t: Node): int32 {
+	const k = first(t);
+	${writer};
+	return k.n;
+}
+`);
+		assert result.ok, result.ok ? "" : result.error;
+		assert (borrowedOps(functionBody(result.value, "look"), "k") > 0) == (writer == "clearShelf()"), writer + ": " + functionBody(result.value, "look");
+	}
 }
 
 test "a view call's result stays rooted in the argument its callee returns through" {
