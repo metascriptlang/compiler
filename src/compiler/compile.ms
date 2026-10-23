@@ -707,7 +707,9 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	}
 	const hcrSlot = job.hcrSlot;
 	const _tx0 = performance.now();
-	const transformed = transformProgram(comptimeResolved, ctx, false, hcrSlot >= 0, job.asyncModuleBody);
+	const reloadable: string[] = [];
+	if (hcrSlot >= 0) for (const module of job.hcrModules) reloadable.push(module.modulePath);
+	const transformed = transformProgram(comptimeResolved, ctx, false, reloadable, job.asyncModuleBody);
 	job.timers.xform = job.timers.xform + (performance.now() - _tx0);
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
 	const nativeCtx = createTransformContextWithChecker(ctx);
@@ -3404,7 +3406,7 @@ resetLiftedOps();
 		const macroExpanded = expandMacros(monoed, ctx);
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
-		const transformed = transformProgram(comptimeResolved, ctx, false, opts.isHcr && modPath == filePath);
+		const transformed = transformProgram(comptimeResolved, ctx, false, opts.isHcr && modPath == filePath ? [filePath] : []);
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		nativeCtx.rangeChecks = opts.mode != MODE_DANGER;

@@ -118,10 +118,10 @@ function lowerFieldInitializers(program: Node, ctx: TransformContext): Node {
 	return ctx.jsBackend ? result : lowerAwaitSpill(result, ctx);
 }
 
-export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, preserveModuleConstants: boolean = false, asyncModuleBody: boolean = false): Node {
+export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, reloadableModules: string[] = [], asyncModuleBody: boolean = false): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.jsBackend = jsBackend;
-	ctx.preserveModuleConstants = preserveModuleConstants;
+	ctx.reloadableModules = reloadableModules;
 	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	let result = eraseBrandTypes(program);
 	if (!jsBackend) { result = planModuleTdz(result, ctx); }
