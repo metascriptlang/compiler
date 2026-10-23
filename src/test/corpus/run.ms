@@ -311,6 +311,7 @@ interface Cell {
 	finished: boolean;
 	pass: boolean;
 	detail: string;
+	sanLibs: string;
 }
 
 interface RunOut { exitCode: int32; signal: int32; output: string; }
@@ -577,7 +578,7 @@ function discoverSpecs(): Spec[] {
 
 function makeCell(spec: Spec, lane: string, bin: string): Cell {
 	const dir = OUT_DIR + "cells/" + spec.name + "." + lane + "/";
-	return { spec, lane, bin, dir, launched: false, launchedAtMs: 0.0, pid: "", finished: false, pass: false, detail: "" };
+	return { spec, lane, bin, dir, launched: false, launchedAtMs: 0.0, pid: "", finished: false, pass: false, detail: "", sanLibs: SAN_WIN_LIBS };
 }
 
 function isXfail(c: Cell): boolean {
@@ -643,7 +644,7 @@ function cellInner(c: Readonly<Cell>, q: (p: string) => string): string {
 		// Windows: `VAR=v cmd` is sh syntax — inside the cell .bat it must be a
 		// `set` line, else cmd.exe treats ASAN_OPTIONS as the command (exit 9009).
 		if (IS_WIN) {
-			return (SAN_WIN_LIBS == "" ? "" : "set \"PATH=" + winPath(SAN_WIN_LIBS) + ";%PATH%\"\r\n") + "set \"ASAN_OPTIONS=detect_leaks=0\"\r\n" + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
+			return (c.sanLibs == "" ? "" : "set \"PATH=" + winPath(c.sanLibs) + ";%PATH%\"\r\n") + "set \"ASAN_OPTIONS=detect_leaks=0\"\r\n" + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
 		}
 		return "ASAN_OPTIONS=detect_leaks=0 " + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
 	}
