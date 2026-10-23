@@ -15,14 +15,13 @@ export interface LexerState {
 	line: int32;
 	column: int32;
 	tokens: Token[];
-	comments: Token[]; // Added for comment preservation
 	lastToken: TokenKind;
 	jsxStack: JsxMode[];
 	lexError: string;
 }
 
 export function createLexerState(source: string): LexerState {
-	return { source, pos: 0, line: 1, column: 1, tokens: [], comments: [], lastToken: TokenKind.Eof, jsxStack: [], lexError: "" };
+	return { source, pos: 0, line: 1, column: 1, tokens: [], lastToken: TokenKind.Eof, jsxStack: [], lexError: "" };
 }
 
 export function setLexError(s: LexerState, message: string): void {
@@ -69,9 +68,6 @@ export function addToken(s: LexerState, kind: TokenKind, value: string, line: in
 }
 
 // Comment preservation: push to tokens array (parser skips via TokenKind.Comment check).
-// Note: do NOT also push to s.comments — that creates shared string ownership between
-// two arrays. When lex() moves s.tokens out, LexerState_destroy frees s.comments,
-// which frees the shared string buffers still referenced by the moved tokens (UAF).
 export function addComment(s: LexerState, value: string, line: int32, column: int32): void {
 	const tok: Token = { kind: TokenKind.Comment, value, line, column };
 	s.tokens.push(tok);
@@ -110,7 +106,6 @@ test "createLexerState" {
 	assert s.line == 1;
 	assert s.column == 1;
 	assert s.tokens.length == 0;
-	assert s.comments.length == 0;
 }
 
 test "peek at start" {
