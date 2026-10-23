@@ -2084,7 +2084,7 @@ function emitExpr(g: CGen, p: CProc, item: Readonly<ExprStackItem>, ctx: ExprEva
 			const unionName = getTypeDesc(g, unionType);
 			let varIdx = -1;
 			if (srcType != null && srcType.kind == TypeKind.Struct && srcType.typeNames != null) {
-				varIdx = findUnionVariant(unionType, srcType.typeNames, srcType.typeChildren != null ? srcType.typeChildren : []);
+				varIdx = srcType.typeChildren != null ? findUnionVariant(unionType, srcType.typeNames, srcType.typeChildren) : findUnionVariant(unionType, srcType.typeNames, []);
 			}
 			if (varIdx < 0 && d.asExpr != null && d.asExpr.kind == NodeKind.ObjectLiteral) {
 				const litData = d.asExpr.data as ObjectLiteralData;
