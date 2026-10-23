@@ -33,7 +33,7 @@ import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
 import { isImmutableModuleConst, isViewCall, viewCallSources } from "../checker/effects";
-import { ANY_HEAP_SLOT, mayWrite, resetWriteEffects, stepSlot, viewReturnSlots } from "./writeEffects";
+import { ANY_HEAP_SLOT, addressSlots, mayWrite, resetWriteEffects, stepSlot, viewReturnSlots } from "./writeEffects";
 import { createDrcContext, classifyRc } from "./scope";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
@@ -150,6 +150,11 @@ function sourceSlots(p: Partitions, node: Node, out: string[]): void {
 		},
 		_ => {},
 	};
+}
+
+function holdsAddress(sym: Symbol | null): boolean {
+	const t = sym != null ? sym.symbolType : null;
+	return t == null || t.kind == TypeKind.Borrow || t.kind == TypeKind.Lent || t.kind == TypeKind.Var || t.kind == TypeKind.Ptr;
 }
 
 function writtenWhileAlive(slots: string[], start: int32, end: int32): boolean {
@@ -793,7 +798,8 @@ function computeCursorDecisions(p: Partitions): Symbol[] {
 			const g = p.graphs[p.vars[r].con.target];
 			if (dangerousMutation(g, v)) { i += 1; continue; }
 		}
-		if (writtenWhileAlive(borrowedSlots[i], v.aliveStart, v.aliveEnd)) { i += 1; continue; }
+		const slots = holdsAddress(v.sym) ? addressSlots(borrowedSlots[i]) : borrowedSlots[i];
+		if (writtenWhileAlive(slots, v.aliveStart, v.aliveEnd)) { i += 1; continue; }
 
 		result.push(v.sym);
 		i += 1;

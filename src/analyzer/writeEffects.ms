@@ -21,6 +21,9 @@ import { generatedRef, makeAssign, makeCall, makeIdentResolved } from "../transf
 import { cstringSource } from "../transform/native/cstringConvLower";
 
 const ELEMENT_SLOT = "E";
+// An append moves the elements a value borrow copied out, so it can only strand a borrow that
+// holds an element's address; such a borrow reads APPEND_SLOT besides ELEMENT_SLOT.
+export const APPEND_SLOT = "+E";
 export const ANY_HEAP_SLOT = "*";
 
 enum SummaryKind {
@@ -302,11 +305,11 @@ function writeTarget(s: WriteSummary, target: Node | null, params: Symbol[] | nu
 		NodeKind.MemberExpr => {
 			const md = t.data as MemberExprData;
 			if ((inCtor && isThis(md.object)) || freshBase(md.object, fresh)) return false;
-			const field = addSlot(s, heldSlot(fieldSlot(md.property), md.object.nodeType));
+			const field = !freesNothing(t.nodeType) && addSlot(s, heldSlot(fieldSlot(md.property), md.object.nodeType));
 			const elements = md.property == "length" && addSlot(s, heldSlot(ELEMENT_SLOT, md.object.nodeType));
 			return field || elements;
 		},
-		NodeKind.ArrayAccess => { return !freshBase((t.data as ArrayAccessData).array, fresh) && addSlot(s, heldSlot(ELEMENT_SLOT, (t.data as ArrayAccessData).array.nodeType)); },
+		NodeKind.ArrayAccess => { return !freshBase((t.data as ArrayAccessData).array, fresh) && !freesNothing(t.nodeType) && addSlot(s, heldSlot(ELEMENT_SLOT, (t.data as ArrayAccessData).array.nodeType)); },
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { return writeTarget(s, (t.data as HiddenDerefData).expr, params, inCtor, fresh); },
 		_ => {
 			let changed = isGeneratedProc(t.resolvedSym) && addSlot(s, ELEMENT_SLOT);
@@ -345,8 +348,36 @@ function runsNativeOnC(sym: Symbol): boolean {
 }
 
 function elementWrite(s: WriteSummary, base: Node, stores: Node[] | null): void {
+	if (freesNothing(arrayElementType(base.nodeType))) return;
 	if (stores != null) stores.push(base);
 	else addSlot(s, heldSlot(ELEMENT_SLOT, base.nodeType));
+}
+
+function isAppend(name: string): boolean {
+	return name == "push" || name == "unshift" || name == "append";
+}
+
+// A slot whose value needs no cleanup frees nothing when it is overwritten or removed.
+function freesNothing(t: Type | null): boolean {
+	if (t == null || t.typeFlags.has(TypeFlag.HasGenericParam)) return false;
+	if (t.kind == TypeKind.GenericParam || t.kind == TypeKind.Unknown || t.kind == TypeKind.Inferred || t.kind == TypeKind.TypeReference || t.kind == TypeKind.Error) return false;
+	return !rcOf(t).needsCleanup;
+}
+
+// A slot list read through an element's address: the borrow also reads what an append moves.
+export function addressSlots(slots: string[]): string[] {
+	const out: string[] = [];
+	for (const slot of slots) {
+		out.push(slot);
+		if (bareSlot(slot) == ELEMENT_SLOT) out.push(APPEND_SLOT + slot.slice(ELEMENT_SLOT.length));
+	}
+	return out;
+}
+
+function arrayElementType(t: Type | null): Type | null {
+	let at = t;
+	while (at != null && (at.kind == TypeKind.Var || at.kind == TypeKind.Ref || at.kind == TypeKind.Ptr) && at.typeReturn != null) at = at.typeReturn;
+	return at != null && at.kind == TypeKind.Array ? at.typeReturn : null;
 }
 
 function nativeEffect(s: WriteSummary, call: Node, sym: Symbol, stores: Node[] | null, argsLinked: boolean): void {
@@ -355,12 +386,16 @@ function nativeEffect(s: WriteSummary, call: Node, sym: Symbol, stores: Node[] |
 		return;
 	}
 	const recv = receiverOf(call);
-	for (const a of (call.data as CallExprData).arguments) {
-		if (a != null && isArrayStorage(a.nodeType)) elementWrite(s, a, stores);
+	const args = (call.data as CallExprData).arguments;
+	for (let i = 0; i < args.length; i += 1) {
+		if (args[i] == null || !isArrayStorage(args[i].nodeType)) continue;
+		if (i == 0 && appendsTo(call)) addSlot(s, heldSlot(APPEND_SLOT, args[i].nodeType));
+		else elementWrite(s, args[i], stores);
 	}
 	if (recv != null && !hasFlag(sym, SymbolFlag.ImportC)) {
 		const name = sym.name;
-		if (isMutatingArrayMethod(name) || name == "set" || name == "delete" || name == "clear" || name == "add") elementWrite(s, recv, stores);
+		if (isAppend(name) && isArrayStorage(recv.nodeType)) addSlot(s, heldSlot(APPEND_SLOT, recv.nodeType));
+		else if (isMutatingArrayMethod(name) || name == "set" || name == "delete" || name == "clear" || name == "add") elementWrite(s, recv, stores);
 		return;
 	}
 	if (sym.symbolKind == SymbolKind.Method && !hasFlag(sym, SymbolFlag.NativeMethod)) {
@@ -513,11 +548,14 @@ function walkBody(s: WriteSummary, body: Node | null, params: Symbol[] | null, i
 				if (isLifecycleOp(n)) {
 					targets.push(args[0]);
 				} else {
-					for (const a of args) {
+					for (let i = 0; i < args.length; i += 1) {
+						const a = args[i];
 						if (a == null || a.kind != NodeKind.HiddenAddr) continue;
 						targets.push(a);
 						const inner = (a.data as HiddenDerefData).expr;
-						if (isArrayStorage(inner.nodeType)) stores.push(inner);
+						if (!isArrayStorage(inner.nodeType)) continue;
+						if (i == 0 && appendsTo(n)) addSlot(s, heldSlot(APPEND_SLOT, inner.nodeType));
+						else stores.push(inner);
 					}
 					passFunctions(args);
 					for (const c of calleesOf(n, s, stores, own)) link(s, n, c);
@@ -541,7 +579,7 @@ function walkBody(s: WriteSummary, body: Node | null, params: Symbol[] | null, i
 	const fresh = freshLocals(s, d);
 	for (const t of targets) writeTarget(s, t, params, inCtor, fresh);
 	for (const b of stores) {
-		if (!freshBase(b, fresh)) addSlot(s, heldSlot(ELEMENT_SLOT, b.nodeType));
+		if (!freshBase(b, fresh) && !freesNothing(arrayElementType(b.nodeType))) addSlot(s, heldSlot(ELEMENT_SLOT, b.nodeType));
 	}
 	return fresh;
 }
@@ -747,12 +785,21 @@ function returnsFreshObject(s: WriteSummary, body: Node, fresh: HashSet<Symbol>)
 	return sawFresh && allFresh;
 }
 
-function addressWrites(s: WriteSummary, args: Node[], params: Symbol[] | null, inCtor: boolean): void {
-	for (const a of args) {
+function addressWrites(s: WriteSummary, call: Node, params: Symbol[] | null, inCtor: boolean): void {
+	const args = (call.data as CallExprData).arguments;
+	for (let i = 0; i < args.length; i += 1) {
+		const a = args[i];
 		if (a == null || a.kind != NodeKind.HiddenAddr) continue;
 		writeTarget(s, a, params, inCtor, null);
-		if (isArrayStorage((a.data as HiddenDerefData).expr.nodeType)) addSlot(s, heldSlot(ELEMENT_SLOT, (a.data as HiddenDerefData).expr.nodeType));
+		const storage = (a.data as HiddenDerefData).expr.nodeType;
+		if (isArrayStorage(storage)) addSlot(s, heldSlot(i == 0 && appendsTo(call) ? APPEND_SLOT : ELEMENT_SLOT, storage));
 	}
+}
+
+// The runtime's array push grows the storage in place and leaves every element it held alive.
+function appendsTo(call: Node): boolean {
+	const sym = call.resolvedSym;
+	return sym != null && sym.nativeName.startsWith("&ms") && sym.nativeName.endsWith("ArrayPush");
 }
 
 function isThis(n: Node): boolean {
@@ -888,7 +935,7 @@ function settled(s: WriteSummary): WriteSummary {
 function callWrites(call: Node): WriteSummary {
 	const s = newSummary(SummaryKind.Routine, null, []);
 	if (call.kind == NodeKind.CallExpr && isLifecycleOp(call)) return s;
-	if (call.kind == NodeKind.CallExpr) addressWrites(s, (call.data as CallExprData).arguments, null, false);
+	if (call.kind == NodeKind.CallExpr) addressWrites(s, call, null, false);
 	const callees = call.kind == NodeKind.NewExpr ? constructionsOf(call) : calleesOf(call, s, null, null);
 	for (const a of call.kind == NodeKind.NewExpr ? (call.data as NewExprData).newArguments : (call.data as CallExprData).arguments) {
 		if (a != null && mayBeFunctionValue(a.nodeType) && !routinesOf(a, null, null, null, 0, callees)) markUnknown(s);
@@ -1090,7 +1137,7 @@ export function borrowedArgsToCopy(call: Node): boolean[] {
 		for (let j = 0; j < args.length && !keep; j += 1) {
 			if (j != i && byAddress[j] && roots[i] != null && roots[j] === roots[i]) keep = true;
 		}
-		if (!keep && slots[i].length > 0) keep = mayWriteAny(writes, slots[i]);
+		if (!keep && slots[i].length > 0) keep = mayWriteAny(writes, addressSlots(slots[i]));
 		flags[i] = keep;
 	}
 	return flags;
