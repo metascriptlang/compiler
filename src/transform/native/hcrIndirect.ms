@@ -1,10 +1,10 @@
-import { Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, BlockStmtData, IdentifierData, MemberExprData, NewExprData, ObjectLiteralData, Symbol, createNode, SourceLocation, SymbolKind, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, BlockStmtData, IdentifierData, MemberExprData, NewExprData, ObjectLiteralData, CallExprData, Symbol, createNode, SourceLocation, SymbolKind, Type, TypeKind } from "../../ast/node";
 import { exportedFunctionOf } from "../../checker/decoratorHelpers";
 import { hasGenericParams, createPtr, createStruct, spelled, voidType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isGenericFn } from "../../checker/context";
-import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName } from "../../codegen/c/names";
-import { isNrvoReturnType, opCName } from "../../codegen/c/types";
+import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName, OverloadWinner } from "../../codegen/c/names";
+import { isNrvoReturnType, opCName, callOverloadWinner } from "../../codegen/c/types";
 import { hcrSignatureKey } from "../../compiler/hcrAbi";
 import { walkNode } from "../walker";
 import { syntheticToken, makeHiddenDeref, makeTypedIdent, makeMember, makeCall, runtimeRef } from "../util";
@@ -157,6 +157,13 @@ export function lowerHcrIndirection(
 			const cell = selfCells.get(symbol);
 			if (cell != null) forwardToCurrent(fn, symbol, cell);
 		}
+		const overloadCallees = new HashMap<Node, OverloadWinner>();
+		walkNode(pd.programStmts[i], (n: Node): Node => {
+			if (n.kind != NodeKind.CallExpr) return n;
+			const winner = callOverloadWinner(n);
+			if (winner != null) overloadCallees.set((n.data as CallExprData).callee, winner);
+			return n;
+		});
 		pd.programStmts[i] = walkNode(pd.programStmts[i], (n: Node): Node => {
 			if (n.kind == NodeKind.ObjectLiteral) {
 				const target = closureFunction(n);
@@ -180,7 +187,8 @@ export function lowerHcrIndirection(
 			}
 			if (n.kind != NodeKind.Identifier && n.kind != NodeKind.MemberExpr && n.kind != NodeKind.NewExpr) return n;
 			const constructed = n.kind == NodeKind.NewExpr ? (n.data as NewExprData).newCallee.resolvedSym : null;
-			const sym = n.kind == NodeKind.NewExpr ? constructorInitOf(constructed) : n.resolvedSym;
+			const winner = overloadCallees.get(n);
+			const sym = winner != null ? winner.winnerSym : n.kind == NodeKind.NewExpr ? constructorInitOf(constructed) : n.resolvedSym;
 			if (sym == null) return n;
 			if (n.kind == NodeKind.MemberExpr) {
 				const baseSym = (n.data as MemberExprData).object.resolvedSym;
@@ -190,7 +198,7 @@ export function lowerHcrIndirection(
 			const text = constructed != null ? sym.name : referenceText(n);
 			const symbol = isVariable
 				? mangledGlobalName(sym, referenceName(sym, text))
-				: mangledFunctionName(sym, referenceName(sym, text), sym.overloadIdx);
+				: mangledFunctionName(sym, referenceName(sym, text), winner != null ? winner.winnerIdx : sym.overloadIdx);
 			let targetId = "";
 			if (isVariable) {
 				const target = moduleForPath(modules, sym.modulePath);
