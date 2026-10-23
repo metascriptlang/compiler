@@ -62,19 +62,158 @@ export function* toItems<T>(this arr: Vec<T>): Iterator<T> {
 }
 
 // ===== Hash Functions =====
-// DJB2 algorithm matches std/hash.hashString, except:
-// - Returns 314159265 for empty strings (Map/Set "empty slot" sentinel)
-// - Returns 314159265 if hash computes to 0 (same sentinel reason)
-// Kept inline because struct.ms is a prelude module loaded before std/hash.
+// hashFarm over the string's bytes. An empty Map/Set slot holds hcode 0, so a key
+// that hashes to 0 takes the 314159265 sentinel.
+
+const FARM_K0: uint64 = 0xc3a5c85c97cb3127 as uint64;
+const FARM_K1: uint64 = 0xb492b66fbe98f273 as uint64;
+const FARM_K2: uint64 = 0x9ae16a3b2f90404f as uint64;
+
+struct FarmPair {
+	first: uint64;
+	second: uint64;
+}
+
+function farmLoad4(b: Readonly<Span<uint8>>, o: int32): uint64 {
+	return (b[o] as uint64) | ((b[o + 1] as uint64) << (8 as uint64))
+		| ((b[o + 2] as uint64) << (16 as uint64)) | ((b[o + 3] as uint64) << (24 as uint64));
+}
+
+function farmLoad8(b: Readonly<Span<uint8>>, o: int32): uint64 {
+	return farmLoad4(b, o) | (farmLoad4(b, o + 4) << (32 as uint64));
+}
+
+function farmRotR(v: uint64, bits: uint64): uint64 {
+	return (v >> bits) | (v << ((64 as uint64) - bits));
+}
+
+function farmShiftMix(v: uint64): uint64 {
+	return v ^ (v >> (47 as uint64));
+}
+
+function farmLen16(u: uint64, v: uint64, mul: uint64): uint64 {
+	let a = (u ^ v) * mul;
+	a = a ^ (a >> (47 as uint64));
+	let c = (v ^ a) * mul;
+	c = c ^ (c >> (47 as uint64));
+	return c * mul;
+}
+
+function farmLen0To16(b: Readonly<Span<uint8>>, n: int32): uint64 {
+	const len = n as uint64;
+	if (n >= 8) {
+		const mul = FARM_K2 + (2 as uint64) * len;
+		const a = farmLoad8(b, 0) + FARM_K2;
+		const c8 = farmLoad8(b, n - 8);
+		const c = farmRotR(c8, 37 as uint64) * mul + a;
+		const d = (farmRotR(a, 25 as uint64) + c8) * mul;
+		return farmLen16(c, d, mul);
+	}
+	if (n >= 4) {
+		const mul = FARM_K2 + (2 as uint64) * len;
+		const a = farmLoad4(b, 0);
+		return farmLen16(len + (a << (3 as uint64)), farmLoad4(b, n - 4), mul);
+	}
+	if (n > 0) {
+		const a = b[0] as uint64;
+		const m = b[n >> 1] as uint64;
+		const c = b[n - 1] as uint64;
+		const y = a + (m << (8 as uint64));
+		const z = len + (c << (2 as uint64));
+		return farmShiftMix((y * FARM_K2) ^ (z * FARM_K0)) * FARM_K2;
+	}
+	return FARM_K2;
+}
+
+function farmLen17To32(b: Readonly<Span<uint8>>, n: int32): uint64 {
+	const mul = FARM_K2 + (2 as uint64) * (n as uint64);
+	const a = farmLoad8(b, 0) * FARM_K1;
+	const c8 = farmLoad8(b, 8);
+	const c = farmLoad8(b, n - 8) * mul;
+	const d = farmLoad8(b, n - 16) * FARM_K2;
+	return farmLen16(farmRotR(a + c8, 43 as uint64) + farmRotR(c, 30 as uint64) + d,
+		a + farmRotR(c8 + FARM_K2, 18 as uint64) + c, mul);
+}
+
+function farmLen33To64(b: Readonly<Span<uint8>>, n: int32): uint64 {
+	const mul = FARM_K2 + (2 as uint64) * (n as uint64);
+	const a = farmLoad8(b, 0) * FARM_K2;
+	const c8 = farmLoad8(b, 8);
+	const c = farmLoad8(b, n - 8) * mul;
+	const d = farmLoad8(b, n - 16) * FARM_K2;
+	const y = farmRotR(a + c8, 43 as uint64) + farmRotR(c, 30 as uint64) + d;
+	const z = farmLen16(y, a + farmRotR(c8 + FARM_K2, 18 as uint64) + c, mul);
+	const e = farmLoad8(b, 16) * mul;
+	const f = farmLoad8(b, 24);
+	const g = (y + farmLoad8(b, n - 32)) * mul;
+	const h = (z + farmLoad8(b, n - 24)) * mul;
+	return farmLen16(farmRotR(e + f, 43 as uint64) + farmRotR(g, 30 as uint64) + h,
+		e + farmRotR(f + a, 18 as uint64) + g, mul);
+}
+
+function farmWeakLen32(b: Readonly<Span<uint8>>, o: int32, seedA: uint64, seedB: uint64): FarmPair {
+	let a = seedA + farmLoad8(b, o);
+	let c = farmRotR(seedB + a + farmLoad8(b, o + 24), 21 as uint64);
+	const keep = a;
+	a = a + farmLoad8(b, o + 8) + farmLoad8(b, o + 16);
+	c = c + farmRotR(a, 44 as uint64);
+	return { first: a + farmLoad8(b, o + 24), second: c + keep };
+}
+
+function farmLong(b: Readonly<Span<uint8>>, n: int32): uint64 {
+	let x: uint64 = 81 as uint64;
+	let y: uint64 = (81 as uint64) * FARM_K1 + (113 as uint64);
+	let z: uint64 = farmShiftMix(y * FARM_K2 + (113 as uint64)) * FARM_K2;
+	let v: FarmPair = { first: 0 as uint64, second: 0 as uint64 };
+	let w: FarmPair = { first: 0 as uint64, second: 0 as uint64 };
+	x = x * FARM_K2 + farmLoad8(b, 0);
+	const eos = ((n - 1) / 64) * 64;
+	const last64 = eos + ((n - 1) & 63) - 63;
+	let o: int32 = 0;
+	while (true) {
+		x = farmRotR(x + y + v.first + farmLoad8(b, o + 8), 37 as uint64) * FARM_K1;
+		y = farmRotR(y + v.second + farmLoad8(b, o + 48), 42 as uint64) * FARM_K1;
+		x = x ^ w.second;
+		y = y + v.first + farmLoad8(b, o + 40);
+		z = farmRotR(z + w.first, 33 as uint64) * FARM_K1;
+		v = farmWeakLen32(b, o, v.second * FARM_K1, x + w.first);
+		w = farmWeakLen32(b, o + 32, z + w.second, y + farmLoad8(b, o + 16));
+		const t = z;
+		z = x;
+		x = t;
+		o = o + 64;
+		if (o == eos) break;
+	}
+	const mul = FARM_K1 + ((z & (0xff as uint64)) << (1 as uint64));
+	o = last64;
+	w.first = w.first + (((n as uint64) - (1 as uint64)) & (63 as uint64));
+	v.first = v.first + w.first;
+	w.first = w.first + v.first;
+	x = farmRotR(x + y + v.first + farmLoad8(b, o + 8), 37 as uint64) * mul;
+	y = farmRotR(y + v.second + farmLoad8(b, o + 48), 42 as uint64) * mul;
+	x = x ^ (w.second * (9 as uint64));
+	y = y + v.first * (9 as uint64) + farmLoad8(b, o + 40);
+	z = farmRotR(z + w.first, 33 as uint64) * mul;
+	v = farmWeakLen32(b, o, v.second * mul, x + w.first);
+	w = farmWeakLen32(b, o + 32, z + w.second, y + farmLoad8(b, o + 16));
+	const t2 = z;
+	z = x;
+	x = t2;
+	return farmLen16(farmLen16(v.first, w.first, mul) + farmShiftMix(y) * FARM_K0 + z,
+		farmLen16(v.second, w.second, mul) + x, mul);
+}
+
+export function hashFarm(s: string): uint64 {
+	const b = s.asBytes();
+	const n = b.length;
+	if (n <= 16) return farmLen0To16(b, n);
+	if (n <= 32) return farmLen17To32(b, n);
+	if (n <= 64) return farmLen33To64(b, n);
+	return farmLong(b, n);
+}
 
 export function hashString(s: string): int64 {
-	if (s.byteLength == 0) return 314159265 as int64;
-	let h: int64 = 5381;
-	let i: int64 = 0;
-	while (i < s.byteLength) {
-		h = (h * (33 as int64) + (s.byteAt(i as int32) as int64)) & (0xFFFFFFFF as int64);
-		i = i + (1 as int64);
-	}
+	const h = int64Bits(hashFarm(s));
 	if (h == (0 as int64)) return 314159265 as int64;
 	return h;
 }
