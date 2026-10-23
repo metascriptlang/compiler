@@ -182,3 +182,30 @@ export function scan(t: Node, o: Node): int32 { return hit(o, t.kids[0]); }
 		assert rcOps(functionBody(result.value, "scan")) > 0, write + "\n" + functionBody(result.value, "scan");
 	}
 }
+
+test "a tail-recursive walk over a nullable view keeps the loop local a view" {
+	for (const param of ["Readonly<Node> | null", "Readonly<Node | null>", "null | Readonly<Node>"]) {
+		const fault = rcFault(`
+class Node { kids: Node[] = []; n: int32 = 0; next: Node | null = null; }
+export function walk(t: ${param}, acc: int32): int32 {
+	if (t == null) return acc;
+	if (t.n > 2) return walk(t.kids.length > 0 ? t.kids[0] : null, acc + 1);
+	return walk(t.next, acc + t.n);
+}
+`, ["walk"]);
+		assert fault == "", param + ": " + fault;
+	}
+}
+
+test "a tail call that hands its view parameter an owned value still owns it" {
+	const result = compileToC(`
+class Node { kids: Node[] = []; n: int32 = 0; next: Node | null = null; }
+export function walk(t: Readonly<Node> | null, acc: int32): int32 {
+	if (t == null) return acc;
+	if (acc > 3) return acc;
+	return walk(new Node(), acc + 1);
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	assert rcOps(functionBody(result.value, "walk")) > 0, functionBody(result.value, "walk");
+}

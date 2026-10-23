@@ -99,3 +99,8 @@ test "readonlyReturn: the neighbours of a let, a container, a receiver and a nam
 	assert errors(leaf + "const k = shared.count(); new Leaf().park(b); return k;" + done, "stores") == 0;
 	assert errors(lent.replace("const w = spawn(() => { const h = new Holder(); ", "const f = (): int32 => { const h = new Holder(); h.n = shared.n; return h.n; };\n\tconst w = spawn(f);\n\tconst u = spawn(() => { ") + done, "stores") == 0;
 }
+
+test "readonlyReturn: a nullable view stays read-only whichever way it is written" {
+	assert errors(node + "function f(t: Readonly<Node> | null): Readonly<Node | null> { return t; }\nfunction g(t: Readonly<Node | null>): Readonly<Node> | null { return t; }", "") == 0;
+	assert errors(node + "function f(t: Readonly<Node> | null): void { if (t != null) t.n = 1; }", "cannot write through Readonly<Node>") == 1;
+}
