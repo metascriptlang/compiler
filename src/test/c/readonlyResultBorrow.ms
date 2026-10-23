@@ -374,3 +374,34 @@ export function look(xs: Pt[], ys: Pt[]): int32 {
 		assert accepted.ok, accepted.ok ? "" : accepted.error;
 	}
 }
+
+test "a view stays borrowed across a write to a same-named field of an unrelated generic class" {
+	const fault = rcFault(`
+class Node { data: Node | null = null; n: int32 = 0; }
+class Box<T> { data: T[] = []; }
+function reset<T>(b: Box<T>): void { b.data = []; }
+function inner(t: Readonly<Node>): Readonly<Node> | null { return t.data; }
+export function look(t: Readonly<Node>, b: Box<string>): int32 {
+	const d = inner(t);
+	reset(b);
+	return d == null ? 0 : d.n;
+}
+`, ["look"]);
+	assert fault == "", fault;
+}
+
+test "a view is owned across a write to the generic class field it was read through" {
+	const result = compileToC(`
+class Node { n: int32 = 0; }
+class Box<T> { data: T[] = []; }
+function reset<T>(b: Box<T>): void { b.data = []; }
+function firstOf(b: Readonly<Box<Node>>): Readonly<Node> { return b.data[0]; }
+export function look(b: Box<Node>, o: Box<Node>): int32 {
+	const d = firstOf(b);
+	reset(o);
+	return d.n;
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	assert borrowedOps(functionBody(result.value, "look"), "d") > 0, functionBody(result.value, "look");
+}
