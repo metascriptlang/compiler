@@ -11,7 +11,7 @@
 
 import { exists } from "std/fs";
 import { join } from "std/fs/path";
-import { addDepToManifest } from "./manifest";
+import { addDepToManifest, manifestErrorMessage } from "./manifest";
 import { readLockfile, writeLockfile, entryName, lockfileErrorMessage, Lockfile, LockfileError } from "./lockfile";
 import { parseSourceSpec, SourceKind } from "./version";
 import { parseGitSpec } from "./version";
@@ -191,8 +191,8 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	if (isFileSource) {
 		const scope = isDev ? "devDeps" : "deps";
 		const added = addDepToManifest(buildPath, parsed.name, parsed.version, scope);
-		if (!added) {
-			console.log("error: failed to update build.ms");
+		if (!added.ok) {
+			console.log("error: failed to update build.ms: " + manifestErrorMessage(added.error));
 			return false;
 		}
 		const devTag = isDev ? " (dev)" : "";
@@ -228,8 +228,8 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	// Add to build.ms
 	const scope = isDev ? "devDeps" : "deps";
 	const added = addDepToManifest(buildPath, parsed.name, parsed.version, scope);
-	if (!added) {
-		console.log("error: failed to update build.ms");
+	if (!added.ok) {
+		console.log("error: failed to update build.ms: " + manifestErrorMessage(added.error));
 		return false;
 	}
 

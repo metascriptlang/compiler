@@ -63,4 +63,4 @@ export { cmdLogin, cmdLogout, cmdWhoami } from "./login";
 export { cmdPublish } from "./publish";
 export { cmdOrg } from "./org";
 export { downloadPackage, packageErrorMessage, PackageError } from "./download";
-export { addDepToManifest, removeDepFromManifest, readManifest } from "./manifest";
+export { addDepToManifest, removeDepFromManifest, readManifest, ManifestError, manifestErrorMessage } from "./manifest";

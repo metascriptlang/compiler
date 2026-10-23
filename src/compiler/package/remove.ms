@@ -2,7 +2,7 @@
 
 import { exists } from "std/fs";
 import { join } from "std/fs/path";
-import { removeDepFromManifest } from "./manifest";
+import { removeDepFromManifest, manifestErrorMessage, ManifestError } from "./manifest";
 import { readLockfile, writeLockfile, entryName, lockfileErrorMessage, LockEntry, LockfileError } from "./lockfile";
 
 export function cmdRemove(projectRoot: string, args: string[]): boolean {
@@ -22,8 +22,12 @@ export function cmdRemove(projectRoot: string, args: string[]): boolean {
 
 	// Remove from build.ms
 	const removed = removeDepFromManifest(buildPath, name);
-	if (!removed) {
-		console.log("error: '" + name + "' not found in build.ms");
+	if (!removed.ok) {
+		if (removed.error == ManifestError.NotFound) {
+			console.log("error: '" + name + "' not found in build.ms");
+		} else {
+			console.log("error: failed to update build.ms: " + manifestErrorMessage(removed.error));
+		}
 		return false;
 	}
 
