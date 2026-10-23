@@ -1918,6 +1918,21 @@ test "engine: a macro wire class has no layout, so its fields are read by name, 
 	assert layoutOf(opaque.symbolType).length == 0;
 }
 
+test "engine: concat of two string operands uses the typed opcode and a mixed one the Dyn opcode" {
+	const code = "function both(a: string, b: string): string { return a + b; } function mixed(a: string, n: int64): string { return a + n; }"
+		+ " class O { n: int64 = 7; } const o = new O(); let s = 'ab'; for (let i = 0; i < 5; i++) { s = s + s; }"
+		+ " console.log(`${both('x', 'y')} ${mixed('a', 1)} ${'a' + 1} ${s.length} ${s.slice(0, 4)} t${o.n}u`);";
+	const both = compiledFunc(code, "both");
+	assert countNamed(both, "ConcatStrR") == 1 && countNamed(both, "ConcatStr") == 0, disasmFunc(both);
+	const mixed = compiledFunc(code, "mixed");
+	assert countNamed(mixed, "ConcatStr") == 1 && countNamed(mixed, "ConcatStrR") == 0, disasmFunc(mixed);
+	for (const gc of ["orc", "arena"]) {
+		const vm = execModule(compileForOrc(code), gc);
+		assert vm.error == "", vm.error;
+		assert vm.output == "xy a1 a1 64 abab t7u\n", vm.output;
+	}
+}
+
 test "a slot read after the object table grew sees the new objects" {
 	const vm = evalOrcVM("class P { x: int64 = 0; next: P | null = null; } function run(): int64 { let head = new P(); let t: int64 = 0; for (let i: int64 = 1; i <= 300; i++) { const p = new P(); p.x = i; p.next = head; head = p; t = t + head.x; } return t; } console.log(`${run()}`);");
 	assert vm.error == "", vm.error;
