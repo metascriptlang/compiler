@@ -2678,33 +2678,6 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				}
 				break;
 			}
-			case RaiserOpcode.StrByteAt: {
-				const ia = ((word >> 8) & 65535) as int32;
-				const ib = ((word >> 24) & 65535) as int32;
-				const ic = ((word >> 40) & 65535) as int32;
-				words[wb + ia] = heapHandleByteAt(vm.arrayHeap, refs[rb + ib], words[wb + ic]);
-				break;
-			}
-			case RaiserOpcode.StrCharCodeAt: {
-				const ia = ((word >> 8) & 65535) as int32;
-				const ib = ((word >> 24) & 65535) as int32;
-				const ic = ((word >> 40) & 65535) as int32;
-				words[wb + ia] = heapHandleCharCodeAt(vm.arrayHeap, refs[rb + ib], words[wb + ic]);
-				break;
-			}
-			case RaiserOpcode.ConcatStrR: {
-				const ia = ((word >> 8) & 65535) as int32;
-				const ib = ((word >> 24) & 65535) as int32;
-				const ic = ((word >> 40) & 65535) as int32;
-				const lhs = refs[rb + ib];
-				const rhs = refs[rb + ic];
-				if (ia == ib && heapHandleHeldOnce(vm.arrayHeap, lhs) && rhs != lhs) {
-					heapAppendHandle(vm.arrayHeap, lhs, rhs);
-				} else {
-					writeRef(vm, rb + ia, heapConcatHandles(vm.arrayHeap, lhs, rhs));
-				}
-				break;
-			}
 			case RaiserOpcode.AddI64: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;
@@ -2886,7 +2859,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				words[wb + ia] = raised >> imm;
 				break;
 			}
-			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: {
+			case RaiserOpcode.CallClosure: case RaiserOpcode.Move: case RaiserOpcode.Halt: case RaiserOpcode.Print: case RaiserOpcode.NewArray: case RaiserOpcode.LoadIndex: case RaiserOpcode.StoreIndex: case RaiserOpcode.ArrayLen: case RaiserOpcode.ArrayPush: case RaiserOpcode.ArraySetLen: case RaiserOpcode.NewObject: case RaiserOpcode.ConcatStr: case RaiserOpcode.EqStr: case RaiserOpcode.NeStr: case RaiserOpcode.StrLen: case RaiserOpcode.StrCharAt: case RaiserOpcode.StrSlice: case RaiserOpcode.CallHost: case RaiserOpcode.LtStr: case RaiserOpcode.LeStr: case RaiserOpcode.Yield: case RaiserOpcode.Spawn: case RaiserOpcode.Await: case RaiserOpcode.Try: case RaiserOpcode.Catch: case RaiserOpcode.Finally: case RaiserOpcode.FinallyEnd: case RaiserOpcode.Throw: case RaiserOpcode.Trap: case RaiserOpcode.Conv: case RaiserOpcode.CopyValue: case RaiserOpcode.StrByteLen: case RaiserOpcode.Sleep: case RaiserOpcode.ArraySlice: case RaiserOpcode.AddrReg: case RaiserOpcode.AddrGlobal: case RaiserOpcode.AddrIndex: case RaiserOpcode.AddrField: case RaiserOpcode.LoadDeref: case RaiserOpcode.StoreDeref: case RaiserOpcode.SameLoc: case RaiserOpcode.InstanceOf: case RaiserOpcode.ObjConv: case RaiserOpcode.ModuleImport: case RaiserOpcode.FutureNew: case RaiserOpcode.FutureSettle: case RaiserOpcode.FutureFail: case RaiserOpcode.FutureCombine: case RaiserOpcode.EqVal: case RaiserOpcode.NeVal: case RaiserOpcode.Box: case RaiserOpcode.Unbox: case RaiserOpcode.LitConv: case RaiserOpcode.ConcatStrR: case RaiserOpcode.StrByteAt: case RaiserOpcode.StrCharCodeAt: {
 				slow = true;
 				break;
 			}
@@ -3074,6 +3047,15 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		},
 		RaiserOpcode.StrCharAt => {
 			vmHandleStrCharAt(vm, ia, ib, ic);
+		},
+		RaiserOpcode.ConcatStrR => {
+			vmHandleConcatStrR(vm, ia, ib, ic);
+		},
+		RaiserOpcode.StrByteAt => {
+			setRegInt(vm, ia, heapHandleByteAt(vm.arrayHeap, vm.regs.refs[(ib >> 3) + vm.refBase], getReg(vm, ic).intVal));
+		},
+		RaiserOpcode.StrCharCodeAt => {
+			setRegInt(vm, ia, heapHandleCharCodeAt(vm.arrayHeap, vm.regs.refs[(ib >> 3) + vm.refBase], getReg(vm, ic).intVal));
 		},
 		RaiserOpcode.StrSlice => {
 			vmHandleStrSlice(vm, ia, ib, ic);
@@ -3631,6 +3613,16 @@ function vmHandleConcatStr(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void 
 		return;
 	}
 	setRegString(vm, ia, raiserToString(vm.arrayHeap, lhs) + raiserToString(vm.arrayHeap, rhs));
+}
+
+function vmHandleConcatStrR(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
+	const lhs = vm.regs.refs[(ib >> 3) + vm.refBase];
+	const rhs = vm.regs.refs[(ic >> 3) + vm.refBase];
+	if (ia == ib && heapHandleHeldOnce(vm.arrayHeap, lhs) && rhs != lhs) {
+		heapAppendHandle(vm.arrayHeap, lhs, rhs);
+		return;
+	}
+	writeRef(vm, (ia >> 3) + vm.refBase, heapConcatHandles(vm.arrayHeap, lhs, rhs));
 }
 
 function vmHandleEqVal(vm: RaiserVM, ia: int32, ib: int32, ic: int32, wanted: boolean): void {
