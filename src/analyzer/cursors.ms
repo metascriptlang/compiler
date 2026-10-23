@@ -70,7 +70,7 @@ function getIdentSym(node: Node): Symbol | null {
 }
 
 function graphCanHold(holder: Type | null, part: Type | null): boolean {
-	return canAlias(part, holder);
+	return containsPointer(holder, 0) && canAlias(part, holder);
 }
 
 function lentSources(call: Node): Node[] {

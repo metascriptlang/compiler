@@ -507,6 +507,25 @@ export function look(c: Tally, t: Node): int32 {
 	assert borrowedOps(functionBody(result.value, "look"), "k") == 0, functionBody(result.value, "look");
 }
 
+test "a view call's result is no root of a pointer-free argument, whatever the result type" {
+	for (const ret of ["Readonly<Node>", "Readonly<Node | null>"]) {
+		const result = compileToC(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+class Shape { idx: number = 0; }
+function shapeOf(t: Readonly<Node>): Shape { return new Shape(); }
+function pick(t: Readonly<Node>, idx: number): ${ret} { return t.kids[0]; }
+function count(k: ${ret}): int32 { return k != null ? k.n : 0; }
+export function look(t: Node): int32 {
+	const s = shapeOf(t);
+	const k = pick(t, s.idx);
+	return count(k);
+}
+`);
+		assert result.ok, result.ok ? "" : result.error;
+		assert borrowedOps(functionBody(result.value, "look"), "k") == 0, ret + "\n" + functionBody(result.value, "look");
+	}
+}
+
 test "a view call's result is rooted in every argument its signature lets it alias, whatever the body returns" {
 	const result = compileToC(`
 class Node { kids: Node[] = []; n: int32 = 0; }
