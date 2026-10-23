@@ -275,6 +275,41 @@ function isOpenType(t: Type): boolean {
 		|| t.kind == TypeKind.Union || t.kind == TypeKind.TypeReference || t.kind == TypeKind.Error;
 }
 
+export function canAlias(arg: Type | null, ret: Type | null): boolean {
+	return canAliasIn(arg, ret, new HashSet<Type>());
+}
+
+function canAliasIn(arg: Type | null, ret: Type | null, seen: HashSet<Type>): boolean {
+	if (arg == null || ret == null) return true;
+	if (seen.has(ret)) return false;
+	seen.add(ret);
+	if (ret.kind == TypeKind.Ptr) return false;
+	const a = holderType(arg);
+	if (a == null) return true;
+	const r = holderType(ret);
+	if (r != null && mayBePartOf(a, r, 0)) return true;
+	const t = r ?? ret;
+	match (t.kind) {
+		TypeKind.Struct => {
+			if (isExtendedClass(t) || t.typeFlags.has(TypeFlag.HasGenericParam)) return true;
+			for (const field of t.typeChildren) {
+				if (canAliasIn(arg, field, seen)) return true;
+			}
+			return t.typeExtra != null && canAliasIn(arg, t.typeExtra, seen);
+		},
+		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Borrow | TypeKind.Cursor => { return canAliasIn(arg, t.typeReturn, seen); },
+		TypeKind.Union | TypeKind.Tuple => {
+			for (const member of t.typeChildren) {
+				if (canAliasIn(arg, member, seen)) return true;
+			}
+			return false;
+		},
+		TypeKind.GenericInstance => { return t.typeReturn == null || canAliasIn(arg, t.typeReturn, seen); },
+		TypeKind.Function | TypeKind.GenericParam | TypeKind.Unknown | TypeKind.Inferred | TypeKind.TypeReference | TypeKind.Error => { return true; },
+		_ => { return false; },
+	};
+}
+
 function slotMayHit(write: string, read: string): boolean {
 	if (bareSlot(write) != bareSlot(read)) return false;
 	const w = slotHolder(write);

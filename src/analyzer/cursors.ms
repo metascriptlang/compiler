@@ -33,7 +33,7 @@ import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
 import { isImmutableModuleConst, isViewCall, viewCallSources } from "../checker/effects";
-import { ANY_HEAP_SLOT, addressSlots, mayWrite, resetWriteEffects, stepSlot, viewReturnSlots } from "./writeEffects";
+import { ANY_HEAP_SLOT, addressSlots, canAlias, mayWrite, resetWriteEffects, stepSlot, viewReturnSlots } from "./writeEffects";
 import { createDrcContext, classifyRc } from "./scope";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
@@ -108,7 +108,13 @@ function allRoots(p: Partitions, node: Node, result: Symbol[]): void {
 			if (isViewCall(node)) {
 				for (const a of lentSources(node)) { allRoots(p, a, result); }
 			} else if (containsPointer(node.nodeType, 0)) {
-				for (const a of (node.data as CallExprData).arguments) { allRoots(p, a, result); }
+				const formals = callFormals(node);
+				const receiverFormals = node.flags.has(NodeFlag.ExtCall) ? 1 : 0;
+				const args = (node.data as CallExprData).arguments;
+				for (let ai = 0; ai < args.length; ai += 1) {
+					const fi = ai + receiverFormals;
+					if (formals == null || fi >= formals.length || canAlias(formals[fi], node.nodeType)) allRoots(p, args[ai], result);
+				}
 			}
 		},
 		_ => {},
