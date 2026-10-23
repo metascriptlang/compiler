@@ -657,9 +657,13 @@ bool msPoolRunEdge(const void* awaited, bool follow, bool descend) {
 	return true;
 }
 
+extern bool msTimerFiresHere(const void* fut);
+
 /* True when `awaited` may wait on something no queued or running task of its own
- * closure produces: an unsettled future with no edge that no spawn completes (a
- * resolver, an actor reply, a timer, a race), or a closure past the walk bound. */
+ * closure produces and that this thread does not settle itself: an unsettled future
+ * with no edge that no spawn completes (a resolver, an actor reply, a timer another
+ * thread fires, a race), or a closure past the walk bound. A timer this thread's own
+ * loop fires settles while the waiter pumps that loop, so it needs no spare. */
 static bool msEdgeLessLeaf(const void* awaited) {
 	const void* set[MS_EDGE_WALK_MAX];
 	set[0] = awaited;
@@ -669,7 +673,8 @@ static bool msEdgeLessLeaf(const void* awaited) {
 	for (int i = 0; i < n && !edgeLess; i++) {
 		const msFutureBase* f = (const msFutureBase*)set[i];
 		edgeLess = !atomic_load_explicit(&f->finished, memory_order_acquire)
-			&& atomic_load_explicit(&f->edge, memory_order_acquire) == NULL && !f->spawned;
+			&& atomic_load_explicit(&f->edge, memory_order_acquire) == NULL && !f->spawned
+			&& !msTimerFiresHere(f);
 	}
 	msTicketLockRelease(&gEdgeLock);
 	return edgeLess;

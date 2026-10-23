@@ -1139,6 +1139,21 @@ static void msTimerArm(msTimer t) {
 	if (worker && heap == &gTimers) msActorWakeEventLoop();
 }
 
+/* True when `fut` is a timer on the heap this thread's own loop fires: a wait on it
+ * settles on this thread, whatever the pool does. A Windows worker arms onto the loop
+ * thread's heap, which the loop thread fires. */
+bool msTimerFiresHere(const void* fut) {
+#ifdef _WIN32
+	if (msIsPoolWorker) return false;
+#endif
+	msTimerHeap* heap = msThreadTimers();
+	bool found = false;
+	msTimerLock();
+	for (int i = 0; i < heap->len && !found; i++) found = heap->data[i].fut == fut;
+	msTimerUnlock();
+	return found;
+}
+
 /* Standard reference sleepAsync pattern
  * Create timer future, push to heap, return future */
 msFuture_void* msSleepAsync(int ms) {
