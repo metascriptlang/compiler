@@ -471,3 +471,22 @@ export function look(g: Gen): int32 {
 	assert result.ok, result.ok ? "" : result.error;
 	assert borrowedOps(functionBody(result.value, "look"), "k") > 0, functionBody(result.value, "look");
 }
+
+test "a call result typed as an interface the argument's class satisfies keeps the argument in its graph" {
+	const result = compileToC(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+interface Holder { kids: Node[]; }
+class Gen { kids: Node[] = []; count: int32 = 0; }
+function asHolder(g: Gen, t: Node): Holder { t.n += 1; return g; }
+function firstKid(h: Readonly<Holder>): Readonly<Node> { return h.kids[0]; }
+function bump(g: Gen): void { g.count += 1; }
+export function look(g: Gen, t: Node): int32 {
+	const r = asHolder(g, t);
+	const k = firstKid(r);
+	bump(g);
+	return k.n + r.kids.length;
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	assert borrowedOps(functionBody(result.value, "look"), "k") > 0, functionBody(result.value, "look");
+}
