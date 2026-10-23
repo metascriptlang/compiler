@@ -1835,6 +1835,9 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 	match (node.kind) {
 		NodeKind.PropertyDecl => {
 			const pd = node.data as PropertyDeclData;
+			const fieldSym = makeSymbol(pd.propName, SymbolKind.Property, node.nodeType, false);
+			fieldSym.state = SymbolState.Shaped;
+			sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + pd.propName.length, fieldSym, node.nodeType, SymbolKind.Property, pd.propName, className, true);
 			if (pd.propInitializer != null) {
 				const savedBoundary = ctx.staticInitBoundary;
 				if (pd.propIsStatic) {

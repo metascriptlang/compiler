@@ -88,10 +88,15 @@ function tokenRows(source: string): string {
 
 test "a read of a parameter or a local takes the token of the symbol the checker bound it to" {
 	const rows = tokenRows("class Box {\n\tv: int32;\n\tconstructor(v: int32) {\n\t\tthis.v = v;\n\t}\n}\nfunction add(a: int32): int32 {\n\tconst k = 2;\n\treturn a + k;\n}\n");
-	assert rows == "0:6+3 class declaration, 2:13+1 parameter declaration, 3:7+1 property, 3:11+1 parameter, 6:9+3 function declaration, 6:13+1 parameter declaration, 7:7+1 variable declaration+readonly, 8:8+1 parameter, 8:12+1 variable readonly", rows;
+	assert rows == "0:6+3 class declaration, 1:1+1 property declaration, 2:13+1 parameter declaration, 3:7+1 property, 3:11+1 parameter, 6:9+3 function declaration, 6:13+1 parameter declaration, 7:7+1 variable declaration+readonly, 8:8+1 parameter, 8:12+1 variable readonly", rows;
 }
 
 test "a read inside a nested function or a loop block takes the token of its own binding" {
 	const rows = tokenRows("function outer(a: int32): int32 {\n\tlet s = a;\n\tconst twice = (n: int32): int32 => n + n;\n\tfor (let i = 0; i < 2; i += 1) s = s + twice(i);\n\treturn s;\n}\n");
 	assert rows == "0:9+5 function declaration, 0:15+1 parameter declaration, 1:5+1 variable declaration, 1:9+1 parameter, 2:7+5 variable declaration+readonly, 2:16+1 parameter declaration, 2:36+1 parameter, 2:40+1 parameter, 3:10+1 variable declaration, 3:17+1 variable, 3:24+1 variable, 3:32+1 variable, 3:36+1 variable, 3:40+5 variable readonly, 3:46+1 variable, 4:8+1 variable", rows;
+}
+
+test "a field declaration takes a property token whatever its modifiers or initializer" {
+	const rows = tokenRows("class C {\n\tstatic readonly s = 1;\n\tprivate w: int32 = 0;\n\tq?: string;\n}\n");
+	assert rows == "0:6+1 class declaration, 1:17+1 property declaration, 2:9+1 property declaration, 3:1+1 property declaration", rows;
 }

@@ -1425,10 +1425,9 @@ function hoverShowsDeclarations(): LspScenario {
 const TOKENS_SOURCE = "class Box {\n\tv: int32;\n\tconstructor(v: int32) {\n\t\tthis.v = v;\n\t}\n}\nfunction add(a: int32): int32 {\n\tconst k = 2;\n\treturn a + k;\n}\n";
 
 const TOKENS_URI = "file:///lspwire/tokens.ms";
-const TOKENS_FIELD_DECLARATION = "1:1+1 property declaration";
 const TOKENS_ROWS = [
 	"0:6+3 class declaration",
-	TOKENS_FIELD_DECLARATION,
+	"1:1+1 property declaration",
 	"2:13+1 parameter declaration",
 	"3:7+1 property",
 	"3:11+1 parameter",
@@ -1456,18 +1455,8 @@ function tokensScenario(name: string, check: (r: LspReplay) => string): LspScena
 }
 
 function semanticTokensClassifyReadsAndDeclarations(): LspScenario {
-	const isFieldDeclaration = (row: string) => row == TOKENS_FIELD_DECLARATION;
 	return tokensScenario(
-		"semantic tokens classify every declaration and read of a class, function, parameter and const",
-		(r: LspReplay) => sameRows("tokens", TOKENS_ROWS.filter((row) => !isFieldDeclaration(row)),
-			semanticRows(r, "n:10").filter((row) => !isFieldDeclaration(row))),
-	);
-}
-
-// Bug: a field declaration gets no token; PropertyDeclData carries no name location.
-export function semanticTokensFieldDeclarationParked(): LspScenario {
-	return tokensScenario(
-		"semantic tokens classify a field declaration",
+		"semantic tokens classify every declaration and read of a class, field, function, parameter and const",
 		(r: LspReplay) => sameRows("tokens", TOKENS_ROWS, semanticRows(r, "n:10")),
 	);
 }
