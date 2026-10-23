@@ -143,26 +143,6 @@ export function isPropertyName(token: Token): boolean {
 	return (k as number) >= (TokenKind.Break as number) && k != TokenKind.Comment && k != TokenKind.Eof && (k as number) < (TokenKind.JsxTagStart as number);
 }
 
-// ===== Initializer/Default Value Skip =====
-// Skips an expression value (consumed but not stored, Phase 1)
-// Tracks balanced parens, brackets, braces; stops at comma, semicolon, or unbalanced closer
-// Used for: default param values, enum member values, class property initializers
-
-export function skipDefaultValue(state: ParserState): void {
-	let depth = 0;
-	while (!isAtEnd(state)) {
-		if (current(state).kind == TokenKind.LParen || current(state).kind == TokenKind.LBracket || current(state).kind == TokenKind.LBrace) {
-			depth += 1;
-		}
-		if (current(state).kind == TokenKind.RParen || current(state).kind == TokenKind.RBracket || current(state).kind == TokenKind.RBrace) {
-			if (depth == 0) { break; }
-			depth -= 1;
-		}
-		if ((current(state).kind == TokenKind.Comma || current(state).kind == TokenKind.Semicolon) && depth == 0) { break; }
-		advance(state);
-	}
-}
-
 // ===== Parameter List Parser =====
 // Parses (param1, param2: Type, ...rest) including destructured params
 // Consumes opening '(' through closing ')'.

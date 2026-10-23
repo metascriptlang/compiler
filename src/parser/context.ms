@@ -567,26 +567,6 @@ export function captureGenericTypeArgs(state: ParserState): string {
 	return result;
 }
 
-// ===== Pattern Helpers =====
-
-// Skip a destructuring pattern: { ... } or [ ... ] including nesting.
-// Used when we need to consume but not store the pattern (param lists, for-of bindings).
-export function skipDestructurePattern(state: ParserState): void {
-	let depth = 0;
-	while (!isAtEnd(state)) {
-		if (current(state).kind == TokenKind.LBrace || current(state).kind == TokenKind.LBracket) {
-			depth += 1;
-		}
-		if (current(state).kind == TokenKind.RBrace || current(state).kind == TokenKind.RBracket) {
-			depth -= 1;
-			advance(state);
-			if (depth == 0) { return; }
-			continue;
-		}
-		advance(state);
-	}
-}
-
 // ===== Explicit Type Args =====
 
 export function findCallTypeArg(node: Node): string {

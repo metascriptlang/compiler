@@ -9,12 +9,9 @@
 // Every node carries .location from the token it was parsed from, enabling LSP symbol recording.
 
 import { Token, TokenKind } from "../lexer/token";
-import { Node, NodeKind, createNode, createNodeAt, TypeAnnotationData, IdentifierData, TypeGenericData, TypeObjectData } from "../ast/node";
+import { Node, NodeKind, createNode, createNodeAt, IdentifierData, TypeGenericData, TypeObjectData } from "../ast/node";
 import { ParserState, createState, current, advance, peek, isAtEnd, skipBalanced, skipGenericParams, splitAngleAssign, collectTokenText, addError, genericCallParenOffset } from "./context";
 import { lex } from "../lexer/lexer";
-
-
-type NodeResult = Result<Node, string>;
 
 export function distinctMisplacedMessage(line: int32): string {
 	return `'distinct' is only allowed at the start of a type alias right-hand side (type X = distinct Y) at line ${line}`;
@@ -56,18 +53,6 @@ export function skipTypeAnnotation(state: ParserState): void {
 			}
 		}
 	}
-}
-
-// ===== Type Annotation Parsing =====
-// Captures the type text and returns a TypeAnnotation node.
-
-export function parseTypeAnnotation(state: ParserState): NodeResult {
-	const startToken = current(state);
-	const startPos = state.position;
-	skipTypeAnnotation(state);
-	const endPos = state.position;
-	const typeText = collectTokenText(state, startPos, endPos);
-	return Result.ok(createNode(NodeKind.TypeAnnotation, { annotationType: typeText }, startToken));
 }
 
 // ===== Positioned Type Expression Parser =====
@@ -724,28 +709,16 @@ test "a conditional type's check and extends types are unions" {
 	assert skipsType("V | null extends string ? 1 : 2");
 }
 
-// ===== TypeAnnotation Node Tests =====
-
-function annotationKind(typeStr: string): NodeKind {
-	const lr = lex(typeStr + " = x");
-	if (!lr.ok) return NodeKind.ExprStmt;
-	const state = createState(lr.value);
-	const result = parseTypeAnnotation(state);
-	if (!result.ok) return NodeKind.ExprStmt;
-	return result.value.kind;
-}
+// ===== Type Annotation Text Tests =====
 
 function annotationText(typeStr: string): string {
 	const lr = lex(typeStr + " = x");
 	if (!lr.ok) return "";
 	const state = createState(lr.value);
-	const result = parseTypeAnnotation(state);
-	if (!result.ok) return "";
-	const data = result.value.data as TypeAnnotationData;
-	return data.annotationType;
+	const startPos = state.position;
+	skipTypeAnnotation(state);
+	return collectTokenText(state, startPos, state.position);
 }
-
-test "kind is TypeAnnotation" { assert annotationKind("number") == NodeKind.TypeAnnotation; }
 
 test "simple type text" { assert annotationText("number") == "number"; }
 
