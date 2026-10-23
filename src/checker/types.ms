@@ -5698,6 +5698,25 @@ test "a sys type not built before the seal is refused under it, naming the kind"
 	assert inferredType() != inferred;
 }
 
+test "under the seal a read-only view converts only through views built before it" {
+	const mutable = createArray(createArray(numberType()));
+	const view = createReadonlyView(mutable);
+	const copied = copyTypeShallow(view);
+	setConcurrentTypeQueries(true);
+	let refused = "";
+	const back = withoutReadonlyView(view);
+	const again = createReadonlyView(mutable);
+	try {
+		withoutReadonlyView(copied);
+	} catch (e) {
+		refused = e.message;
+	}
+	setConcurrentTypeQueries(false);
+	assert back === mutable && again === view;
+	assert refused.contains("a type is created during emission"), refused;
+	assert copied.mutableView == null;
+}
+
 test "createArray" {
 	const arrType = createArray(numberType());
 	assert arrType.kind == TypeKind.Array;
