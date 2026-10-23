@@ -5,16 +5,26 @@
 // @stdout: middle caught middle destroyed=40
 // @stdout: boxed caught boxed destroyed=40
 // @stdout: async caught async destroyed=20
-// note: when one child of `await Promise.all([spawn(...), ...])` fails, the results of the children that succeeded are destroyed with the awaiting scope, on the sync and the async join and for a ref and a boxed struct result (old compiler: destroyed=0, the results stayed in the group's slots and leaked). Every result is destroyed on the awaiting thread, so a plain counter in the hook is exact; the hook makes no call, because a call made while the exception is in flight returns before it runs.
+// note: when one child of `await Promise.all([spawn(...), ...])` fails, the results of the children that succeeded are destroyed with the awaiting scope, on the sync and the async join and for a ref and a boxed struct result (old compiler: destroyed=0, the results stayed in the group's slots and leaked). A result may be destroyed on the worker or the awaiting thread, so the hook counts through a Locked cell.
 
-let dead: int32 = 0;
+struct Count { n: int32; }
+
+const dead: Locked<Count> = new Locked({ n: 0 });
+
+function deadCount(): int32 {
+	return lockedRead(dead, (c: Count): int32 => { return c.n; });
+}
+
+function resetDead(): void {
+	lockedUpdate(dead, (c: Count): Count => { return { n: 0 }; });
+}
 
 class Obj {
 	v: int32;
 	constructor(v: int32) { this.v = v; }
 }
 
-function onDestroy(this x: Obj): void { dead = dead + 1; }
+function onDestroy(this x: Obj): void { lockedUpdate(dead, (c: Count): Count => { return { n: c.n + 1 }; }); }
 
 struct Pair { o: Obj; tag: string; }
 
@@ -51,13 +61,13 @@ async function asyncPair(): Promise<string> {
 
 let last = "";
 for (let i = 0; i < 20; i += 1) last = pair();
-console.log(`pair ${last} destroyed=${dead}`);
-dead = 0;
+console.log(`pair ${last} destroyed=${deadCount()}`);
+resetDead();
 for (let i = 0; i < 20; i += 1) last = middle();
-console.log(`middle ${last} destroyed=${dead}`);
-dead = 0;
+console.log(`middle ${last} destroyed=${deadCount()}`);
+resetDead();
 for (let i = 0; i < 20; i += 1) last = boxed();
-console.log(`boxed ${last} destroyed=${dead}`);
-dead = 0;
+console.log(`boxed ${last} destroyed=${deadCount()}`);
+resetDead();
 for (let i = 0; i < 20; i += 1) last = await asyncPair();
-console.log(`async ${last} destroyed=${dead}`);
+console.log(`async ${last} destroyed=${deadCount()}`);

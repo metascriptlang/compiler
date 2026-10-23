@@ -1,4 +1,4 @@
-import { hasError, hasWarning, strictErrorCount, warningCount } from "./helpers";
+import { hasError, strictErrorCount } from "./helpers";
 
 const HANDLER = `
 type Handler = (n: int32) => int32;
@@ -76,25 +76,26 @@ test "sendableFunction: a Sendable<F> crosses spawn and actor calls where a plai
 	assert hasError(plainArg, "take a Sendable<F> instead");
 }
 
-test "sendableFunction: code that may run on another thread is warned when it reaches mutable module state" {
+test "sendableFunction: code that may run on another thread is refused when it reaches mutable module state" {
 	const bump = "let hits: int32 = 0;\nfunction bump(): int32 { hits = hits + 1; return hits; }\n";
 	const spawned = bump + "async function f(): Promise<int32> { return await spawn(() => bump()); }";
-	assert hasWarning(spawned, "spawn runs this thunk on another thread, but it calls 'bump'");
+	assert hasError(spawned, "spawn runs this thunk on another thread, but it calls 'bump'") && strictErrorCount(spawned) > 0;
 	const sendable = HANDLER + bump + "const r = run((n: int32): int32 => n + bump(), 1);";
-	assert hasWarning(sendable, "a Sendable function may run on another thread, but it calls 'bump'");
+	assert hasError(sendable, "a Sendable function may run on another thread, but it calls 'bump'") && strictErrorCount(sendable) > 0;
 	const sendableDecl = HANDLER + bump + "function addHits(n: int32): int32 { return n + bump(); }\nconst r = run(addHits, 1);";
-	assert hasWarning(sendableDecl, "a Sendable function may run on another thread, but it calls 'bump'");
+	assert hasError(sendableDecl, "a Sendable function may run on another thread, but it calls 'bump'") && strictErrorCount(sendableDecl) > 0;
 }
 
-test "sendableFunction: a const scalar or a Locked<T> module binding reaches another thread without a warning" {
+test "sendableFunction: a const scalar or a Locked<T> module binding reaches another thread without an error" {
 	const shared = "const LIMIT: int32 = 3;\nconst cell: Locked<int32> = new Locked<int32>(0);\n" +
 		"function peek(c: Locked<int32>): int32 { return LIMIT; }\n";
 	const spawned = shared + "async function f(): Promise<int32> { return await spawn(() => peek(cell) + LIMIT); }";
-	assert warningCount(spawned) == warningCount(shared), "spawn over a const scalar and a Locked<T>";
+	assert strictErrorCount(spawned) == strictErrorCount(shared), "spawn over a const scalar and a Locked<T>";
 	const reads = "async function f(): Promise<void> { const p = await spawn(() => at); console.log(p[]); }";
 	const pointed = "const name = \"global\";\nconst at = name as Ptr<string>;\n";
-	assert warningCount(pointed + reads) == warningCount(pointed), "spawn over a const pointer to a const string";
-	assert hasWarning("let name = \"global\";\nconst at = name as Ptr<string>;\n" + reads, "uses module-level 'at'"), "a const pointer to a mutable string";
+	assert strictErrorCount(pointed + reads) == strictErrorCount(pointed), "spawn over a const pointer to a const string";
+	const mutablePointed = "let name = \"global\";\nconst at = name as Ptr<string>;\n" + reads;
+	assert hasError(mutablePointed, "uses module-level 'at'") && strictErrorCount(mutablePointed) > 0, "a const pointer to a mutable string";
 }
 
 test "sendableFunction: a callback a routine calls is judged where it is passed" {
@@ -111,7 +112,7 @@ test "sendableFunction: a callback a routine calls is judged where it is passed"
 	];
 	for (const row of quiet) {
 		const source = HELPERS + "async function f(): Promise<int32> { return await spawn(() => { " + row.body + " }); }";
-		assert warningCount(source) == warningCount(HELPERS), row.name;
+		assert strictErrorCount(source) == strictErrorCount(HELPERS), row.name;
 	}
 	const writes = "(v: int32): int32 => { hits = hits + 1; return v; }";
 	const warned = [
@@ -122,12 +123,12 @@ test "sendableFunction: a callback a routine calls is judged where it is passed"
 	];
 	for (const row of warned) {
 		const source = HELPERS + "async function f(): Promise<int32> { return await spawn(() => { " + row.body + " }); }";
-		assert hasWarning(source, "uses module-level 'hits'"), row.name;
+		assert hasError(source, "uses module-level 'hits'") && strictErrorCount(source) > 0, row.name;
 	}
 	const escaped = HELPERS + "function later(f: (v: int32) => int32): () => int32 { return (): int32 => f(1); }\n" +
 		"async function g(): Promise<int32> { return await spawn(() => later((v: int32): int32 => v)()); }";
-	assert hasWarning(escaped, "calls a function value"), "a callback called from a closure it escapes into";
+	assert hasError(escaped, "calls a function value") && strictErrorCount(escaped) > 0, "a callback called from a closure it escapes into";
 	const opaque = HELPERS + "function pick(): (v: int32) => int32 { return (v: int32): int32 => v; }\n" +
 		"async function g(): Promise<int32> { const h = pick(); return await spawn(() => apply(h, 1)); }";
-	assert hasWarning(opaque, "passes a function value"), "a function value whose body is not visible";
+	assert hasError(opaque, "passes a function value") && strictErrorCount(opaque) > 0, "a function value whose body is not visible";
 }

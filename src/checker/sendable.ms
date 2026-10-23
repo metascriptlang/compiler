@@ -709,7 +709,7 @@ function requireSpawnSafe(ctx: CheckerContext, fn: Node, runs: string, at: Node)
 		if (stored != null) addError(ctx, runs + ", but it " + stored.text + "; the task only borrows it and a borrow takes no count, so store an explicit copy of it (clone or spread) or store it outside the spawned code", at.location.line, at.location.column);
 		const c = spawnEffectOf(peelHidden(fn), Effect.SpawnUnsafe);
 		if (c == null) return;
-		addWarning(ctx, runs + ", but it " + c.text + "; module state crosses threads only as a const value, a Locked<T> or an Arc<T>", at.location.line, at.location.column);
+		addError(ctx, runs + ", but it " + c.text + "; module state crosses threads only as a const value, a Locked<T> or an Arc<T>", at.location.line, at.location.column);
 	});
 }
 

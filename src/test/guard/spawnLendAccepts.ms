@@ -54,11 +54,7 @@ async function eachIteration(hs: Holder[]): Promise<int32> {
 	return t;
 }
 
-const xs: Child[] = [new Child(1)];
-const top = await spawn(() => xs[0].v);
-xs.push(new Child(top));
-
 const r = await readInWindow() + await assignAfterJoin() + await joinAll() + await thunkOwnArray()
-	+ await eachIteration([new Holder(new Child(1)), new Holder(new Child(2))]) + xs.length;
-if (r == 28) console.log("GUARD-OK");
+	+ await eachIteration([new Holder(new Child(1)), new Holder(new Child(2))]);
+if (r == 26) console.log("GUARD-OK");
 else console.log(`unexpected r=${r}`);
