@@ -164,25 +164,6 @@ export function popImportStack(graph: ModuleGraph): void {
 	}
 }
 
-// ===== Circular Dependency Queries =====
-
-export function isCircularImport(graph: ModuleGraph, path: string): boolean {
-	for (const dep of graph.circularDeps) {
-		if (dep.fromPath == path || dep.toPath == path) return true;
-	}
-	return false;
-}
-
-export function getCircularDepsFor(graph: ModuleGraph, path: string): CircularDep[] {
-	const result: CircularDep[] = [];
-	for (const dep of graph.circularDeps) {
-		if (dep.fromPath == path || dep.toPath == path) {
-			result.push(dep);
-		}
-	}
-	return result;
-}
-
 // ===== Export Name Lookup =====
 
 export function hasExportName(mod: Module, name: string): boolean {
