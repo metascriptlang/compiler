@@ -344,7 +344,9 @@ static inline void msDropDispose(msSlab* slab, void* p) {
 
 static inline __attribute__((always_inline)) uintptr_t msStackPointer(void) {
 	uintptr_t sp;
-#if defined(__aarch64__)
+#if defined(__APPLE__) && defined(__aarch64__)
+	sp = (uintptr_t)__builtin_frame_address(0);
+#elif defined(__aarch64__)
 	__asm__("mov %0, sp" : "=r"(sp));
 #elif defined(__x86_64__)
 	__asm__("mov %%rsp, %0" : "=r"(sp));
