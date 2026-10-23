@@ -122,8 +122,14 @@ int msReportOrphanFailures(void) {
 	return reported;
 }
 
+/* The pending count rises when a task is submitted and falls after its worker
+ * has published it and posted its completion, so with none pending every posted
+ * completion is already in the queue and one drain takes it, noting a failure
+ * even when nothing created a dispatcher. */
+extern bool msCompletionQueueDrain(void);
+
 void msDrainUntilIdle(void) {
-	if (!msHasDispatcher() && msPoolPendingPeek() == 0) return;
+	if (!msHasDispatcher() && msPoolPendingPeek() == 0 && !msCompletionQueueDrain()) return;
 	msDispatcher* d = msGetDispatcher();
 	int idleSweeps = 0;
 	while (idleSweeps < 2) {
