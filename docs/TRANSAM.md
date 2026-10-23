@@ -159,7 +159,7 @@ The reference Zig implementation of this engine keeps 40+ fields in one `TransAm
 |--------|-----------|------|-----|
 | Module per concern | god struct | 9 files | DRC safety, testability |
 | Dependency tracking | manual `recordDependency()` at each site | frame-based scope | Cannot be forgotten |
-| Cache | pointer-based doubly-linked LRU | one `TaCacheStore`: access-counter LRU with linear-scan eviction, plus a `fileId` index for invalidation | DRC does not manage arbitrary graph pointers; an O(1) list is an upgrade to make when a profile asks for it |
+| Cache | pointer-based doubly-linked LRU | one `TaCacheStore`: lookup and invalidation through a `fileId` index, access-clock LRU with linear-scan eviction | DRC does not manage arbitrary graph pointers; an O(1) eviction list is an upgrade to make when a profile asks for it |
 | Query results | `*anyopaque` + type id | typed value caches beside `Node` and `CheckerContext` | Type safety, destructors resolve in the owning module |
 | Trivial derivations | all cached | `dbResolveImport` is a plain function | Less memory, less eviction |
 

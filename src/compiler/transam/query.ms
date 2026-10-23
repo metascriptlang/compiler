@@ -11,7 +11,7 @@ import { TaQueryKey, TaQueryKind, TaQueryState, TaDurability, createQueryKey, qu
 
 // ===== Dependency Entry — "I depended on query X and saw output hash Y" =====
 
-export interface TaDependencyEntry {
+export struct TaDependencyEntry {
 	depKey: TaQueryKey;
 	expectedHash: number;
 }
@@ -21,6 +21,7 @@ export interface TaDependencyEntry {
 export class TaCacheEntry {
 	key: TaQueryKey;
 	state: TaQueryState;
+	accessedAt: int32;      // cache clock at last get or put, for LRU eviction
 	computedAt: int32;      // revision when last computed
 	verifiedAt: int32;      // revision when last verified green
 	durability: TaDurability;
@@ -32,6 +33,7 @@ export function createCacheEntry(key: TaQueryKey): TaCacheEntry {
 	return {
 		key,
 		state: TaQueryState.Red,
+		accessedAt: 0,
 		computedAt: 0,
 		verifiedAt: 0,
 		durability: TaDurability.Low,
