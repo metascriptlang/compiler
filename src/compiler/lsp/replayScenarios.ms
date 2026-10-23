@@ -1424,34 +1424,52 @@ function hoverShowsDeclarations(): LspScenario {
 
 const TOKENS_SOURCE = "class Box {\n\tv: int32;\n\tconstructor(v: int32) {\n\t\tthis.v = v;\n\t}\n}\nfunction add(a: int32): int32 {\n\tconst k = 2;\n\treturn a + k;\n}\n";
 
-// Bug: only the class, `this.v`, the function and the const declaration are tokens; the field
-// declaration, both parameter declarations and every parameter or const read are missing.
-export function semanticTokensGoldenParked(): LspScenario {
-	const uri = "file:///lspwire/tokens.ms";
+const TOKENS_URI = "file:///lspwire/tokens.ms";
+const TOKENS_FIELD_DECLARATION = "1:1+1 property declaration";
+const TOKENS_ROWS = [
+	"0:6+3 class declaration",
+	TOKENS_FIELD_DECLARATION,
+	"2:13+1 parameter declaration",
+	"3:7+1 property",
+	"3:11+1 parameter",
+	"6:9+3 function declaration",
+	"6:13+1 parameter declaration",
+	"7:7+1 variable declaration+readonly",
+	"8:8+1 parameter",
+	"8:12+1 variable readonly",
+];
+
+function tokensScenario(name: string, check: (r: LspReplay) => string): LspScenario {
 	return {
-		name: "semantic tokens classify every declaration and reference of a class, function, parameter and const",
+		name,
 		batching: "any",
 		drains: [
 			initializeDrain(),
-			frames([notification("textDocument/didOpen", openParams(uri, TOKENS_SOURCE))]),
-			frames([request("10", "textDocument/semanticTokens/full", `{"textDocument":{"uri":${lspJsonString(uri)}}}`)]),
+			frames([notification("textDocument/didOpen", openParams(TOKENS_URI, TOKENS_SOURCE))]),
+			frames([request("10", "textDocument/semanticTokens/full", `{"textDocument":{"uri":${lspJsonString(TOKENS_URI)}}}`)]),
 		],
-		check: (r: LspReplay) => sameRows("tokens", [
-			"0:6+3 class declaration",
-			"1:1+1 property declaration",
-			"2:13+1 parameter declaration",
-			"3:7+1 property",
-			"3:11+1 parameter",
-			"6:9+3 function declaration",
-			"6:13+1 parameter declaration",
-			"7:7+1 variable declaration+readonly",
-			"8:8+1 parameter",
-			"8:12+1 variable readonly",
-		], semanticRows(r, "n:10")),
+		check,
 		checkAnyBatching: null,
 		checkpoints: null,
 		project: null,
 	};
+}
+
+function semanticTokensClassifyReadsAndDeclarations(): LspScenario {
+	const isFieldDeclaration = (row: string) => row == TOKENS_FIELD_DECLARATION;
+	return tokensScenario(
+		"semantic tokens classify every declaration and read of a class, function, parameter and const",
+		(r: LspReplay) => sameRows("tokens", TOKENS_ROWS.filter((row) => !isFieldDeclaration(row)),
+			semanticRows(r, "n:10").filter((row) => !isFieldDeclaration(row))),
+	);
+}
+
+// Bug: a field declaration gets no token; PropertyDeclData carries no name location.
+export function semanticTokensFieldDeclarationParked(): LspScenario {
+	return tokensScenario(
+		"semantic tokens classify a field declaration",
+		(r: LspReplay) => sameRows("tokens", TOKENS_ROWS, semanticRows(r, "n:10")),
+	);
 }
 
 function insignificantEditsKeepAnswers(): LspScenario {
@@ -1532,6 +1550,7 @@ export function lspScenarios(): LspScenario[] {
 		signatureHelpFollowsTheArgument(),
 		hoverShowsDeclarations(),
 		insignificantEditsKeepAnswers(),
+		semanticTokensClassifyReadsAndDeclarations(),
 	];
 }
 
