@@ -10,6 +10,8 @@
 
 export {
 	ParsedVersion,
+	VersionError,
+	versionErrorMessage,
 	parseVersion,
 	isValidVersion,
 	compareVersions,
@@ -17,8 +19,10 @@ export {
 	maxVersion,
 	SourceKind,
 	ParsedGitSpec,
+	GitSpecError,
+	gitSpecErrorMessage,
 	parseGitSpec,
-	parseSourceSpec,
+	sourceKindOf,
 } from "./version";
 
 export {

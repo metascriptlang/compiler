@@ -13,8 +13,7 @@ import { exists } from "std/fs";
 import { join } from "std/fs/path";
 import { addDepToManifest, manifestErrorMessage } from "./manifest";
 import { readLockfile, writeLockfile, entryName, lockfileErrorMessage, Lockfile, LockfileError } from "./lockfile";
-import { parseSourceSpec, SourceKind } from "./version";
-import { parseGitSpec } from "./version";
+import { parseVersion, parseGitSpec, sourceKindOf, SourceKind } from "./version";
 import { LockEntry } from "./lockfile";
 import { fetchPackageInfo, findVersion, latestVersion, RegistryVersion, RegistryPackage } from "./registry";
 import { downloadPackage, packageErrorMessage } from "./download";
@@ -32,15 +31,8 @@ export function parseNameVersion(arg: string): { name: string, version: string }
 	if (arg.length >= 4 && arg.slice(0, 4) == "git:") {
 		// Extract alias from the repo name (last path segment before @)
 		const spec = parseGitSpec(arg);
-		if (spec.isValid) {
-			// Extract repo name as alias
-			let lastSlash = -1;
-			let i = 0;
-			while (i < spec.url.length) {
-				if (spec.url.charAt(i) == "/") lastSlash = i;
-				i = i + 1;
-			}
-			const alias = lastSlash >= 0 ? spec.url.slice(lastSlash + 1, spec.url.length) : spec.url;
+		if (spec.ok) {
+			const alias = spec.value.url.slice(spec.value.url.lastIndexOf("/") + 1, spec.value.url.length);
 			return { name: alias, version: arg };
 		}
 		return { name: "", version: "" };
@@ -201,15 +193,21 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	}
 
 	// Validate version
-	const spec = parseSourceSpec(parsed.version);
-	if (spec.kind == SourceKind.Registry && !spec.version.isValid) {
+	const kind = sourceKindOf(parsed.version);
+	let gitUrl = "";
+	let gitRef = "";
+	if (kind == SourceKind.Git) {
+		const git = parseGitSpec(parsed.version);
+		if (!git.ok) {
+			console.log("error: invalid git source '" + parsed.version + "'");
+			console.log("expected format: git:<host>/<path>@<tag-or-sha>");
+			return false;
+		}
+		gitUrl = git.value.url;
+		gitRef = git.value.ref;
+	} else if (!parseVersion(parsed.version).ok) {
 		console.log("error: invalid version '" + parsed.version + "'");
 		console.log("expected format: <major>.<minor>.<patch> (e.g. 1.2.3)");
-		return false;
-	}
-	if (spec.kind == SourceKind.Git && !spec.git.isValid) {
-		console.log("error: invalid git source '" + parsed.version + "'");
-		console.log("expected format: git:<host>/<path>@<tag-or-sha>");
 		return false;
 	}
 
@@ -237,7 +235,7 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	let lockKey = "";
 	let entry: LockEntry = null as unknown as LockEntry;
 
-	if (spec.kind == SourceKind.Git) {
+	if (kind == SourceKind.Git) {
 		lockKey = parsed.name + "@" + parsed.version;
 		const emptyKeys: string[] = [];
 		const emptyVals: string[] = [];
@@ -246,8 +244,8 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 			source: SourceKind.Git,
 			version: "",
 			integrity: "",
-			url: spec.git.url,
-			gitRef: spec.git.ref,
+			url: gitUrl,
+			gitRef,
 			commit: "",
 			depKeys: emptyKeys,
 			depValues: emptyVals,

@@ -102,8 +102,8 @@ export function mvsResolve(rootDeps: DepEntry[], loadDeps: LoadDepsFn): BuildLis
 		if (existingIdx >= 0) {
 			// Already have this package — keep the higher version
 			const cmp = compareVersionStrings(ver, reqVersions[existingIdx]);
-			if (cmp == -2) continue; // invalid version string — skip silently (validated at extractDeps time)
-			if (cmp <= 0) continue;   // existing is same or higher, skip
+			if (!cmp.ok) continue; // invalid version string — skip silently (validated at extractDeps time)
+			if (cmp.value <= 0) continue;   // existing is same or higher, skip
 			reqVersions[existingIdx] = ver;
 		} else {
 			reqNames.push(name);
