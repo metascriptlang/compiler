@@ -435,3 +435,39 @@ export function look(t: Readonly<Node>, o: Node): int32 {
 	assert result.ok, result.ok ? "" : result.error;
 	assert borrowedOps(functionBody(result.value, "look"), "k") > 0, functionBody(result.value, "look");
 }
+
+test "a view of an owned call result stays borrowed across a change to an argument the result cannot alias" {
+	const result = compileToC(`
+class Gen { count: int32 = 0; names: string[] = []; }
+class Node { kids: Node[] = []; n: int32 = 0; }
+function pick(g: Gen, t: Node): Node { g.count += 1; return t.kids[0]; }
+function firstKid(t: Readonly<Node>): Readonly<Node> { return t.kids[0]; }
+function bump(g: Gen): void { g.count += 1; g.names.push("x"); }
+export function look(g: Gen, t: Node): int32 {
+	const r = pick(g, t);
+	const k = firstKid(r);
+	bump(g);
+	return k.n + r.n;
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	assert borrowedOps(functionBody(result.value, "look"), "k") == 0, functionBody(result.value, "look");
+}
+
+test "a view of an owned call result is owned across a write to a slot it reads through an argument" {
+	const result = compileToC(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+class Gen { node: Node = new Node(); }
+function take(g: Gen): Node { return g.node; }
+function firstKid(t: Readonly<Node>): Readonly<Node> { return t.kids[0]; }
+function cut(g: Gen): void { g.node.kids = []; }
+export function look(g: Gen): int32 {
+	const r = take(g);
+	const k = firstKid(r);
+	cut(g);
+	return k.n + r.n;
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	assert borrowedOps(functionBody(result.value, "look"), "k") > 0, functionBody(result.value, "look");
+}
