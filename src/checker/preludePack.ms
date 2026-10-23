@@ -35,55 +35,24 @@ import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { getParserDefines, setParserDefines } from "../parser/context";
 import { defineIdentity, createDefineTable, defineSymbol } from "../compiler/defines";
 import { defaultGlobalImports, setExtraGlobalImports } from "./prelude";
-import { readFile, writeFile, exists, readDir, remove, removeAll, ensureDir, rename } from "std/fs";
+import { readFile, writeFile, exists, remove, removeAll, ensureDir, rename } from "std/fs";
 import { env, argv } from "std/process";
 import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
-import { djb2, fingerprint, hashToHex } from "std/hash";
+import { hashContent, collectFilesSorted } from "../compiler/cache";
 
 const PACK_MAGIC = "MSPK5";
 
-// Same dual-hash formula as compiler/cache.ms hashContent — keys are written
-// and read by this module only, so the formula just has to be self-consistent.
-function packHash(s: string): string {
-	return `${hashToHex(djb2(s))}_${hashToHex(fingerprint(s))}`;
-}
-
-function packHashFile(path: string): string {
+function hashFile(path: string): string {
 	const src = try readFile(path) catch "";
-	return `${packHash(src)}:${src.byteLength}`;
-}
-
-// readDir order is filesystem-dependent; the stamp must be stable across runs.
-function collectFilesSortedPack(dir: string, prefix: string, outPaths: string[]): void {
-	const entries = readDir(dir);
-	let i = 1;
-	while (i < entries.length) {
-		const key = entries[i];
-		let j = i - 1;
-		while (j >= 0 && entries[j] > key) {
-			entries[j + 1] = entries[j];
-			j = j - 1;
-		}
-		entries[j + 1] = key;
-		i = i + 1;
-	}
-	for (const e of entries) {
-		if (e.length == 0) continue;
-		if (e.charAt(e.length - 1) == "/") {
-			const name = e.slice(0, e.length - 1);
-			collectFilesSortedPack(join(dir, name), `${prefix}${name}/`, outPaths);
-		} else {
-			outPaths.push(`${prefix}${e}`);
-		}
-	}
+	return hashContent(src);
 }
 
 function stampTreePack(acc: string, dir: string, prefix: string): string {
 	if (!exists(dir)) return acc;
 	const files: string[] = [];
-	collectFilesSortedPack(dir, "", files);
+	collectFilesSorted(dir, "", files);
 	for (const f of files) {
-		acc = `${acc}\n${prefix}${f}:${packHashFile(join(dir, f))}`;
+		acc = `${acc}\n${prefix}${f}:${hashFile(join(dir, f))}`;
 	}
 	return acc;
 }
@@ -108,13 +77,13 @@ function toolStamp(): string {
 		_toolStamp = _toolStampFn();
 		return _toolStamp;
 	}
-	let acc = packHashFile(resolveArgv0(argv[0]));
+	let acc = hashFile(resolveArgv0(argv[0]));
 	const root = resolveRuntimeDir();
 	if (root != "") {
 		acc = stampTreePack(acc, join(root, "runtime"), "runtime/");
 		acc = stampTreePack(acc, join(root, "vendor"), "vendor/");
 	}
-	_toolStamp = packHash(acc);
+	_toolStamp = hashContent(acc);
 	return _toolStamp;
 }
 
@@ -124,14 +93,14 @@ function stdTreeHash(stdPath: string): string {
 	if (_stdTreeHash != "" && _stdTreeHashPath == stdPath) return _stdTreeHash;
 	let acc = "";
 	if (stdPath != "") acc = stampTreePack("", stdPath, "std/");
-	_stdTreeHash = packHash(acc);
+	_stdTreeHash = hashContent(acc);
 	_stdTreeHashPath = stdPath;
 	return _stdTreeHash;
 }
 
 export function preludePackKey(stdPath: string, backendExt: string): string {
 	const _k0 = performance.now();
-	const k = packHash(`${stdPath}|${backendExt}|${defaultGlobalImports().join("|")}|${defineIdentity(getParserDefines())}|${toolStamp()}`);
+	const k = hashContent(`${stdPath}|${backendExt}|${defaultGlobalImports().join("|")}|${defineIdentity(getParserDefines())}|${toolStamp()}`);
 	_keyMs = _keyMs + (performance.now() - _k0);
 	return k;
 }

@@ -20,13 +20,19 @@ import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
 import { ensureDir, atomicWriteFile, renameReplace } from "./io";
 import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey, buildPch } from "./cc";
-import { djb2, fingerprint, hashToHex } from "std/hash";
+import { hashFarm } from "std/core/struct";
 import { VERSION } from "./usage";
 
 // ===== Hash Functions =====
 
-// Dual hash of string content → "hexHash_hexFingerprint" (stable, 64-bit effective).
-export function hashContent(s: string): string {	return `${hashToHex(djb2(s))}_${hashToHex(fingerprint(s))}`;
+const HEX_DIGITS = "0123456789abcdef";
+
+// 64-bit hashFarm over the bytes, run in C, plus the byte length → "hex16_length".
+export function hashContent(s: string): string {
+	const h = hashFarm(s);
+	let hex = "";
+	for (let shift: int64 = 60; shift >= 0; shift -= 4) hex += HEX_DIGITS.charAt(((h >> shift) & 15) as int32);
+	return `${hex}_${s.byteLength}`;
 }
 
 // Hash a file's content. Returns "hash:byteLength" string.
@@ -74,19 +80,9 @@ let _toolchainStamp = "";
 let _objectStamp = "";
 
 // readDir order is filesystem-dependent; the stamp must be stable across runs.
-function collectFilesSorted(dir: string, prefix: string, outPaths: string[]): void {
+export function collectFilesSorted(dir: string, prefix: string, outPaths: string[]): void {
 	const entries = readDir(dir);
-	let i = 1;
-	while (i < entries.length) {
-		const key = entries[i];
-		let j = i - 1;
-		while (j >= 0 && entries[j] > key) {
-			entries[j + 1] = entries[j];
-			j = j - 1;
-		}
-		entries[j + 1] = key;
-		i = i + 1;
-	}
+	entries.sort();
 	for (const e of entries) {
 		if (e.length == 0) continue;
 		if (e.charAt(e.length - 1) == "/") {
