@@ -3140,11 +3140,17 @@ export function isAllStringLiteralUnion(t: Readonly<Type | null>): boolean {
 }
 
 export function numberLiteralSet(t: Readonly<Type | null>): Readonly<Type>[] | null {
-	if (t == null) return null;
-	const members: Readonly<Type>[] = t.kind == TypeKind.NumberLiteral ? [t] : literalUnionBase(t) != null && literalUnionBase(t)!.kind != TypeKind.String ? [...t.typeChildren] : [];
-	if (members.length == 0) return null;
-	for (const m of members) if (!isNumeric(numberLiteralBase(m))) return null;
-	return members;
+	if (t == null || !isNumberLiteralSet(t)) return null;
+	return t.kind == TypeKind.NumberLiteral ? [t] : [...t.typeChildren];
+}
+
+export function isNumberLiteralSet(t: Readonly<Type | null>): boolean {
+	if (t == null) return false;
+	if (t.kind == TypeKind.NumberLiteral) return isNumeric(numberLiteralBase(t));
+	const base = literalUnionBase(t);
+	if (base == null || base.kind == TypeKind.String || t.typeChildren.length == 0) return false;
+	for (const m of t.typeChildren) if (!isNumeric(numberLiteralBase(m))) return false;
+	return true;
 }
 
 // isStringLike — true for String, StringLiteral, and Union<StringLiteral...>.
