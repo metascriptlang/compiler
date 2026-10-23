@@ -760,7 +760,7 @@ export interface TestEntry {
 	funcName: string;   // C function name (__ms_test_0, __ms_test_1, ...)
 }
 
-export function createCGen(ctx: Readonly<CheckerContext>, modulePath: string): CGen {
+export function createCGen(ctx: Readonly<CheckerContext>, modulePath: string, aliveSet: Readonly<AliveSet> = createAliveSet()): CGen {
 	const sections: Builder[] = [];
 	for (let i = 0; i < 11; i += 1) {
 		const b = createBuilder();
@@ -786,7 +786,7 @@ export function createCGen(ctx: Readonly<CheckerContext>, modulePath: string): C
 		labels: 0,
 		initProc: createProc("__init000", null),
 		deinitProc: createProc("__deinit000", null),
-		aliveSet: createAliveSet(),
+		aliveSet,
 		isTestBuild: false,
 		isHcr: false,
 		testEntries: [],
