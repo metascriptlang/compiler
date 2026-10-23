@@ -26,7 +26,12 @@
 // edit from a drain holding only that document's notifications to its next publish, hover and
 // completion from a drain holding only that request, sent at every checkpoint probe after the
 // checkpoint agreed. Queue delay and the server's own split come from its stderr, read after
-// every drain until its [LSP-STATS] line. A fixture whose scenario fails in any repetition
+// every drain until its [LSP-STATS] line. On the real app a second kind of round overlaps two
+// writes: an edit and a hover H1 go in one write, and once the server logs H1 as dispatched (its
+// check has started) a second write carries a newer edit and a hover H2, led by a cancel of H1 in
+// one variant. hover-behind-check is H2's write to its answer, cancel-to-answer is the same write
+// to H1's answer, and the h1-* counts say how H1 ended. H2 must answer what a fresh server
+// answers on the same text. A fixture whose scenario fails in any repetition
 // reports every cell as an error, and the run exits 1 when any cell errs or its p95 passes its
 // budget (BUDGETS).
 //
@@ -751,6 +756,18 @@ const NEON_REV = "5b2c634a23646ce3796797ec4d79e2d4c2360969";
 const VOID_REV = "a29845a0fd75c3fd6c0c8d0d0205882965a31d25";
 const YOGA_REV = "f92ae144a943eab59ad9ea375de65f3bf131635f";
 const TODO_LIST = "neon/examples/components/todoList.ms";
+const OVERLAP_ROUNDS = 3;
+const OVERLAP_METRICS = [
+	["hover-behind-check", "ms"],
+	["hover-behind-check-nocancel", "ms"],
+	["cancel-to-answer", "ms"],
+	["h1-result", "count"],
+	["h1-cancelled", "count"],
+	["h1-modified", "count"],
+];
+const REQUEST_CANCELLED = -32800;
+const CONTENT_MODIFIED = -32801;
+const EDIT_NAME = `perf: todoList at neon ${NEON_REV.byteSlice(0, 8)}, an edit loop`;
 const METRICS = [
 	["startup-to-ready", "ms"],
 	["open-to-diagnostics", "ms"],
@@ -1195,16 +1212,15 @@ function recompilerRevision(): Result<string, string> {
 }
 
 function perfEntries(): Result<PerfEntry[], string> {
-	const editName = `perf: todoList at neon ${NEON_REV.byteSlice(0, 8)}, an edit loop`;
 	const openName = `perf: todoList at neon ${NEON_REV.byteSlice(0, 8)}, a cold open`;
-	const editDir = try projectDirOf(editName);
+	const editDir = try projectDirOf(EDIT_NAME);
 	const openDir = try projectDirOf(openName);
 	try extractTodoList(editDir);
 	try extractTodoList(openDir);
 	const read = readFile(`${editDir}/${TODO_LIST}`);
 	if (!read.ok) return Result.err(`cannot read ${TODO_LIST} under ${editDir}`);
 	const editLoop: PerfEntry = {
-		scenario: try todoListEditLoop(editName, read.value),
+		scenario: try todoListEditLoop(EDIT_NAME, read.value),
 		fixture: "todoList",
 	};
 	const coldOpen: PerfEntry = {
@@ -1230,6 +1246,171 @@ function perfEntries(): Result<PerfEntry[], string> {
 	return Result.ok(entries);
 }
 
+// ===== Overlapping arrival =====
+
+interface OverlapFixture {
+	uri: string;
+	texts: string[];
+	expected: string[];
+	probe: LspProbe;
+}
+
+// A hover answered by a fresh server that holds only text.
+function freshHover(uri: string, probe: LspProbe, text: string): Result<string, string> {
+	const id = `${QUERY_PREFIX}ovlx`;
+	const at = positionParams(uri, probe.line, probe.character);
+	const query = frames([request(lspJsonString(id), "textDocument/hover", at)]);
+	const answers = try freshAnswers({ uris: [uri], texts: [text] }, query, "overlap-expected");
+	const marker = `textDocument/hover s:${id} => `;
+	for (const a of answers) {
+		if (!a.startsWith(marker)) continue;
+		const parsed = parseJson(a.byteSlice(marker.byteLength, a.byteLength));
+		if (!parsed.ok || !hasKey(parsed.value, "result")) return Result.err(`fresh hover is no result: ${a}`);
+		return Result.ok(stringify(parsed.value.getDynamicField("result")));
+	}
+	return Result.err("fresh server did not answer the hover");
+}
+
+function overlapFixture(): Result<OverlapFixture, string> {
+	const dir = try projectDirOf(EDIT_NAME);
+	const uri = projectUri(dir) + TODO_LIST;
+	const read = readFile(`${dir}/${TODO_LIST}`);
+	if (!read.ok) return Result.err(`cannot read ${TODO_LIST} under ${dir}`);
+	const original = read.value;
+	const first = original.replaceAll("\"ship the starter\"", "\"ship the starter now\"");
+	const second = original.replaceAll("\"ship the starter\"", "\"ship the starter later\"");
+	if (first == original) return Result.err(`${TODO_LIST} has no "ship the starter" to edit`);
+	const probe = try probeAt(uri, original, "createSignal<Todo[]>");
+	const texts = [original, first, second];
+	const expected: string[] = [];
+	for (const text of texts) expected.push(try freshHover(uri, probe, text));
+	return Result.ok({ uri, texts, expected, probe });
+}
+
+class Overlap {
+	s: Session;
+	fixture: OverlapFixture;
+	state: int32;
+	version: int32;
+	rounds: int32;
+}
+
+// Waits until the server logs hover `id` as dispatched, which is when its check starts.
+function awaitDispatch(s: Session, id: string): string {
+	const deadline = performance.now() + TIMEOUT_MS;
+	const lines: string[] = [];
+	while (true) {
+		s.stderrText += s.child.takeStderr();
+		takeLines(s, lines);
+		for (const line of lines) {
+			if (line.startsWith("[LSP-QUEUE] textDocument/hover") && line.byteIndexOf(id, 0) >= 0) return "";
+		}
+		const left = deadline - performance.now();
+		if (left <= 0) return `no dispatch of ${id} within ${TIMEOUT_MS} ms`;
+		const got = s.child.read(ChildStream.Stderr, left as int32);
+		if (!got.ok) return `no dispatch of ${id}: ${got.error.message}`;
+		if (got.value.ended) return `stderr ended with no dispatch of ${id}`;
+		s.stderrText += got.value.data;
+	}
+	return "";
+}
+
+function writeDrain(s: Session, drain: string[]): string {
+	const bytes = drain.join("");
+	s.log += `>>> overlap write (${bytes.byteLength} bytes)\n${bytes}\n`;
+	const sent = s.child.write(bytes, TIMEOUT_MS);
+	return sent.ok ? "" : `write failed: ${sent.error.message}`;
+}
+
+// One overlap: edit and hover H1, then, once H1's check runs, [cancel H1,] a newer edit and hover H2.
+function overlapRound(o: Overlap, cancel: boolean): string {
+	const s = o.s;
+	const f = o.fixture;
+	o.rounds++;
+	const h1 = `ovl${o.rounds}h1`;
+	const h2 = `${QUERY_PREFIX}ovl${o.rounds}h2`;
+	const barrier = `${QUERY_PREFIX}ovl${o.rounds}sync`;
+	const midText = (o.state + 1) % 3;
+	const lastText = (o.state + 2) % 3;
+	const at = positionParams(f.uri, f.probe.line, f.probe.character);
+	const hover = (id: string): string => request(lspJsonString(id), "textDocument/hover", at);
+	const edit = (version: int32, text: string): string => {
+		return notification("textDocument/didChange", changeParams(f.uri, version, text));
+	};
+	const first = frames([edit(o.version + 1, f.texts[midText]), hover(h1)]);
+	const secondBodies: string[] = [];
+	if (cancel) secondBodies.push(notification("$/cancelRequest", `{"id":${lspJsonString(h1)}}`));
+	secondBodies.push(edit(o.version + 2, f.texts[lastText]));
+	secondBodies.push(hover(h2));
+	const second = frames(secondBodies);
+	o.version += 2;
+	o.state = lastText;
+	const all: string[] = [];
+	for (const frame of first) all.push(frame);
+	for (const frame of second) all.push(frame);
+	const plan = planDrain(all, false);
+	const before = publishCounts(s, plan.documents);
+	const sentFirst = writeDrain(s, first);
+	if (sentFirst != "") return sentFirst;
+	const dispatched = awaitDispatch(s, h1);
+	if (dispatched != "") return dispatched;
+	const writtenAt = performance.now();
+	const sentSecond = writeDrain(s, second);
+	if (sentSecond != "") return sentSecond;
+	const waited = awaitPlan(s, plan, before);
+	if (!waited.ok) return waited.error;
+	const k1 = answerIndex(s, `s:${h1}`);
+	const k2 = answerIndex(s, `s:${h2}`);
+	const m1 = s.messages[k1];
+	const m2 = s.messages[k2];
+	if (!hasKey(m2, "result")) return `${h2} is no result: ${stringify(m2)}`;
+	const got = stringify(m2.getDynamicField("result"));
+	if (got != f.expected[lastText]) return `${h2}: fresh server ${f.expected[lastText]}, got ${got}`;
+	const failed = hasKey(m1, "error");
+	const code = failed ? m1.getDynamicField("error").getDynamicField("code").asInt32(0) : 0;
+	if (failed && code != REQUEST_CANCELLED && code != CONTENT_MODIFIED) return `${h1} answered ${stringify(m1)}`;
+	const behind = cancel ? "hover-behind-check" : "hover-behind-check-nocancel";
+	s.samples.push({ metric: behind, value: s.arrivals[k2] - writtenAt });
+	if (cancel) {
+		s.samples.push({ metric: "cancel-to-answer", value: s.arrivals[k1] - writtenAt });
+		s.samples.push({ metric: "h1-result", value: code == 0 ? 1 : 0 });
+		s.samples.push({ metric: "h1-cancelled", value: code == REQUEST_CANCELLED ? 1 : 0 });
+		s.samples.push({ metric: "h1-modified", value: code == CONTENT_MODIFIED ? 1 : 0 });
+	}
+	// A later request is answered after the publishes of the batch that answered H2.
+	const settle = frames([hover(barrier)]);
+	const sentSettle = writeDrain(s, settle);
+	if (sentSettle != "") return sentSettle;
+	const done = awaitPlan(s, planDrain(settle, false), []);
+	return done.ok ? "" : done.error;
+}
+
+function runOverlap(f: OverlapFixture): ScenarioRun {
+	const name = "overlap";
+	const started = startSession(`scenario: ${name}\ncompiler: ${MSC}\n`);
+	if (!started.ok) return { failure: started.error, timedOut: false, samples: [], usage: [] };
+	const s = started.value;
+	let failure = "";
+	const opened = drive(s, [initializeDrain(), openDrain(f.uri, f.texts[0])]);
+	if (!opened.ok) failure = opened.error;
+	const o: Overlap = { s, fixture: f, state: 0, version: 1, rounds: 0 };
+	for (const cancel of [true, false]) {
+		for (let k = 0; k < OVERLAP_ROUNDS && failure == ""; k++) {
+			const failed = overlapRound(o, cancel);
+			if (failed != "") failure = `round ${o.rounds}: ${failed}`;
+		}
+	}
+	if (failure == "") {
+		s.child.closeStdin();
+		const drained = readToEnd(s);
+		if (!drained.ok) failure = drained.error;
+	}
+	s.log += `<<< stderr\n${s.child.takeStderr()}\n=== ${failure == "" ? "ok" : "FAIL " + failure}\n`;
+	s.child.close();
+	writeFile(`${OUT}/${name}.txt`, s.log);
+	return { failure, timedOut: s.timedOut, samples: s.samples, usage: [] };
+}
+
 // ===== Perf cells =====
 
 class PerfCell {
@@ -1244,15 +1425,15 @@ class PerfCell {
 	error: string;
 }
 
-function record(cells: PerfCell[], entry: PerfEntry, run: ScenarioRun, repetition: int32): void {
+function record(cells: PerfCell[], fixture: string, name: string, run: ScenarioRun, repetition: int32): void {
 	const samples = run.samples;
 	for (const sample of usageSamples(run.usage)) samples.push(sample);
 	for (const cell of cells) {
-		if (cell.fixture != entry.fixture) continue;
+		if (cell.fixture != fixture) continue;
 		if (run.failure != "") {
 			cell.errors++;
 			if (run.timedOut) cell.timeouts++;
-			if (cell.error == "") cell.error = `${entry.scenario.name}: ${run.failure}`;
+			if (cell.error == "") cell.error = `${name}: ${run.failure}`;
 			continue;
 		}
 		for (const sample of samples) {
@@ -1290,8 +1471,11 @@ function cellLine(cell: PerfCell, uptimeStart: string, uptimeEnd: string, binary
 		const sorted: number[] = [];
 		for (const v of cell.values) sorted.push(v);
 		sorted.sort();
-		line += `,"min":${sorted[0]},"p50":${nearestRank(sorted, 50)}`
-			+ `,"p95":${nearestRank(sorted, 95)}`;
+			line += `,"min":${sorted[0]},"p50":${nearestRank(sorted, 50)}`
+				+ `,"p95":${nearestRank(sorted, 95)}`;
+		let sum: number = 0;
+		for (const v of cell.values) sum += v;
+		if (cell.unit == "count") line += `,"sum":${sum}`;
 	}
 	const budget = budgetOf(cell.metric, cell.fixture);
 	if (budget >= 0) line += `,"budget":${budget},"overBudget":${overBudget(cell)}`;
@@ -1328,12 +1512,27 @@ function perfRun(): Result<boolean, string> {
 			});
 		}
 	}
+	for (const metric of OVERLAP_METRICS) {
+		cells.push({
+			metric: metric[0],
+			unit: metric[1],
+			fixture: "todoList",
+			revision: app,
+			values: [],
+			repetitions: [],
+			timeouts: 0,
+			errors: 0,
+			error: "",
+		});
+	}
+	const overlap = try overlapFixture();
 	const repetitions = perfRepetitions();
 	for (let repetition = 0; repetition < repetitions; repetition++) {
 		for (let k = 0; k < entries.length; k++) {
 			const entry = entries[repetition % 2 == 0 ? k : entries.length - 1 - k];
-			record(cells, entry, runScenario(entry.scenario), repetition as int32);
+			record(cells, entry.fixture, entry.scenario.name, runScenario(entry.scenario), repetition as int32);
 		}
+		record(cells, "todoList", "overlap", runOverlap(overlap), repetition as int32);
 	}
 	const uptimeEnd = try commandOutput("uptime", []);
 	const lines: string[] = [];
