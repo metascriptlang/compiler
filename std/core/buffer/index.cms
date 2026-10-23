@@ -522,12 +522,16 @@ export function fillString(this buf: Buffer, value: string, start: number, end: 
 	else fillRepeated(buf, from, to, bytesOf(value), byteCount(value));
 }
 
+// The range converts in the caller, where it inlines and a loop hoists it: converted in the out-of-line
+// fill, two float conversions and their reloads cost an empty fill 1.14x of C on x86.
 export function fillBuffer(this buf: Buffer, value: Buffer, start: number, end: number): void {
+	fillPattern(buf, value, start as int64, end as int64);
+}
+
+function fillPattern(buf: Buffer, value: Buffer, first: int64, last: int64): void {
 	const patternLength = byteCount(value);
 	if (patternLength == 0) return;
 	const length = byteCount(buf);
-	const first = start as int64;
-	const last = end as int64;
 	const from = first < 0 ? 0 : first;
 	const to = last > length ? length : last;
 	if (from < to) fillRepeated(buf, from, to, bytesOf(value), patternLength);
