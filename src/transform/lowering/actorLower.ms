@@ -19,7 +19,7 @@ import { TransformContext, freshTempSym, mintSym } from "../context";
 import { canFormAcycle } from "../cycles";
 import { containsExprKind, mapChildren } from "../walker";
 import { setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
-import { mayHoldCycleRoot, disownStmt } from "./spawnLower";
+import { mayHoldCycleRoot, disownStmt, disownReturns } from "./spawnLower";
 import {
 	syntheticToken, makeIdentResolved, makeTypedIdentResolved, makeCall, makeExprStmt, makeReturn,
 	makeVarDecl, makeMember, makeNumber, makeNull, makeAbsent, makeBlock, makeBinary,
@@ -595,7 +595,7 @@ function emitActorMethods(d: ActorDeclData, name: string, lowered: ActorLowered,
 					fnName: implName,
 					params: md.methodParams,
 					fnParamTypes: md.methodParamTypes,
-					fnBody: wrapImplBodyWithShareRelease(md.methodBody, m, m.nodeType != null ? m.nodeType.typeChildren : null, isVoid, ctx, loc),
+					fnBody: wrapImplBodyWithShareRelease(disownReturns(md.methodBody, m.nodeType != null ? m.nodeType.typeReturn : null, ctx), m, m.nodeType != null ? m.nodeType.typeChildren : null, isVoid, ctx, loc),
 					fnFlags: md.methodFlags,
 					fnReturnType: md.methodReturnType,
 					fnDefaults: [],
@@ -1119,7 +1119,7 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 				fnName: implName,
 				params: md.methodParams,
 				fnParamTypes: md.methodParamTypes,
-				fnBody: wrapImplBodyWithShareRelease(md.methodBody, m, m.nodeType != null ? m.nodeType.typeChildren : null, implVoid, ctx, actorNode.location),
+				fnBody: wrapImplBodyWithShareRelease(disownReturns(md.methodBody, m.nodeType != null ? m.nodeType.typeReturn : null, ctx), m, m.nodeType != null ? m.nodeType.typeChildren : null, implVoid, ctx, actorNode.location),
 				fnFlags: "async",
 				fnReturnType: md.methodReturnType,
 				fnDefaults: [],

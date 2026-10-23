@@ -237,6 +237,13 @@ function disownReturnsIn(node: Node | null, retType: Type, ctx: TransformContext
 	return node;
 }
 
+// A routine whose result moves to another executor (an actor CALL reply) disowns it at each return.
+export function disownReturns(body: Node, retType: Type | null, ctx: TransformContext): Node {
+	const t = retType != null && isAwaitable(retType) ? awaitedType(retType) : retType;
+	if (t != null && mayHoldCycleRoot(t, ctx)) disownReturnsIn(body, t, ctx);
+	return body;
+}
+
 // ULTRALOCK V3: a task result moved back to the awaiter leaves the worker's cycle roots before it is stored.
 export function disownResult(thunk: Node, retType: Type | null, ctx: TransformContext): void {
 	if (retType == null || !mayHoldCycleRoot(retType, ctx)) return;
