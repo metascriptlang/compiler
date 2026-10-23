@@ -13,7 +13,7 @@ import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endD
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
-import { readFile, writeFile, ensureDir } from "std/fs";
+import { readFile, writeFile, ensureDir, isFile } from "std/fs";
 import { env, cwd } from "std/process";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, normalize, isAbsolute } from "std/fs/path";
@@ -3456,6 +3456,12 @@ function resolveModuleRelativeIncludes(flags: string, modDir: string): string {
 	return result;
 }
 
+function moduleRelativeHeader(header: string, modDir: string): string {
+	if (modDir == "" || isAbsolute(header)) return header;
+	const beside = normalize(modDir + "/" + header);
+	return isFile(beside) ? beside : header;
+}
+
 // Process a single MacroInvocation node as a directive (@include/@link/@passC/@passL).
 export function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 	if (mi.kind != NodeKind.MacroInvocation) return;
@@ -3473,9 +3479,9 @@ export function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 	if (arg0Kind == NodeKind.Identifier && arg0Str == "") return;
 	const name = md.macroName;
 	if (name == "include") {
-		if (ctx.includeDirectives != "") ctx.includeDirectives = ctx.includeDirectives + "\n";
-		ctx.includeDirectives = ctx.includeDirectives + arg0Str;
 		const modDir = getModuleDir(ctx.modulePath);
+		if (ctx.includeDirectives != "") ctx.includeDirectives = ctx.includeDirectives + "\n";
+		ctx.includeDirectives = ctx.includeDirectives + moduleRelativeHeader(arg0Str, modDir);
 		if (modDir != "") ctx.compilerFlags = appendFlag(ctx.compilerFlags, quoteCcArg("-iquote" + modDir));
 	} else if (name == "compile") {
 		if (ctx.compileDirectives != "") ctx.compileDirectives = ctx.compileDirectives + "\n";
