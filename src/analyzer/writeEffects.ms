@@ -316,11 +316,17 @@ function writeTarget(s: WriteSummary, target: Node | null, params: Symbol[] | nu
 		NodeKind.ArrayAccess => { return !freshBase((t.data as ArrayAccessData).array, fresh) && !freesNothing(t.nodeType) && addSlot(s, heldSlot(ELEMENT_SLOT, (t.data as ArrayAccessData).array.nodeType)); },
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { return writeTarget(s, (t.data as HiddenDerefData).expr, params, inCtor, fresh); },
 		_ => {
-			let changed = isGeneratedProc(t.resolvedSym) && addSlot(s, ELEMENT_SLOT);
+			let changed = isGeneratedProc(t.resolvedSym) && loweredElementWrite(s, t);
 			forEachChild(t, (child: Node): void => { if (writeTarget(s, child, params, inCtor, fresh)) changed = true; });
 			return changed;
 		},
 	};
+}
+
+function loweredElementWrite(s: WriteSummary, access: Node): boolean {
+	const args = access.kind == NodeKind.CallExpr ? (access.data as CallExprData).arguments : [];
+	if (args.length == 0) return addSlot(s, ELEMENT_SLOT);
+	return !freesNothing(access.nodeType) && addSlot(s, heldSlot(ELEMENT_SLOT, args[0].nodeType));
 }
 
 function isRoutineSym(sym: Symbol | null): boolean {
@@ -1180,4 +1186,11 @@ test "a generated macro handed a function value may write anything" {
 	const loc = writeProbe();
 	const callback = localOf("cb", createFunction([], [], int32Type()), loc);
 	assert mayWrite(makeCall(generatedRef("msSpanAccess", loc), [callback, makeNumber(0, loc)], loc), [fieldSlot("a")]);
+}
+
+test "a store through a generated access macro writes only elements of its array's type" {
+	const loc = writeProbe();
+	const store = makeAssign(elementRead(loc), makeString("s", loc), loc);
+	assert mayWrite(store, [heldSlot(ELEMENT_SLOT, createArray(stringType()))]);
+	assert !mayWrite(store, [heldSlot(ELEMENT_SLOT, createArray(createArray(int32Type())))]);
 }
