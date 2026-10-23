@@ -6434,3 +6434,20 @@ test "an anonymous struct name keeps key boundaries when a key holds a double un
 	assert anonStructName(["p", "n__q", "r"], [numberType(), numberType(), numberType()]) != anonStructName(["pn__", "q", "r"], [numberType(), numberType(), numberType()]);
 	assert anonStructName(["_id", "x"], [numberType(), numberType()]) == "__anon2___idn__xn";
 }
+
+test "a unification bounds its depth by the bindings it is given, not by another unification's" {
+	let formal = createGenericParam("T");
+	let concrete = numberType();
+	for (let i = 0; i < 18; i += 1) {
+		formal = createArray(formal);
+		concrete = createArray(concrete);
+	}
+	const deep = createUnifyBindings();
+	deep.depth = 3;
+	unifyTypeUnprofiled(formal, concrete, deep);
+	assert deep.names.length == 0, "18 levels under a depth of 3 pass the bound of 20";
+	const fresh = createUnifyBindings();
+	unifyTypeUnprofiled(formal, concrete, fresh);
+	assert fresh.names.length == 1 && fresh.types[0].kind == TypeKind.Number, "a fresh unification beside a deep one binds T";
+	assert fresh.depth == 0 && deep.depth == 3, "each unification leaves its own depth where it found it";
+}
