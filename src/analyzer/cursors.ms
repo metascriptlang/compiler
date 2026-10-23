@@ -34,9 +34,9 @@ import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
 import { isImmutableModuleConst, isViewCall, viewCallSources } from "../checker/effects";
 import { ANY_HEAP_SLOT, mayWrite, resetWriteEffects, stepSlot } from "./writeEffects";
-import { createDrcContext, classifyRc } from "./scope";
+import { createDrcContext } from "./scope";
 import { makeCtx } from "../transform/testUtil";
-import { RcInfo } from "./classify";
+import { RcInfo, classifyType } from "./classify";
 import { isReadonlyView } from "../checker/types";
 
 // ===== VarFlag (per-variable analysis flags) =====
@@ -857,7 +857,7 @@ function getStmts(input: string): Node[] {
 	const prog = result.value;
 	const checker = checkProgram(prog);
 	const dctx = createDrcContext(makeCtx());
-	resetWriteEffects(checker, (t: Type | null): RcInfo => classifyRc(t, dctx));
+	resetWriteEffects(checker, (t: Type | null): RcInfo => classifyType(t, dctx.ctx, false));
 	const d = prog.data as ProgramData;
 	return d.programStmts;
 }
