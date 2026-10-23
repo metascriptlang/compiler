@@ -72,7 +72,7 @@ function deliverChunk(wire: MemoryWire): boolean {
 	if (wire.nextChunk >= wire.chunks.length) return false;
 	wire.input = wire.input.byteSlice(wire.pos, wire.input.byteLength) + wire.chunks[wire.nextChunk];
 	wire.pos = 0;
-	wire.nextChunk = wire.nextChunk + 1;
+	wire.nextChunk++;
 	return true;
 }
 
@@ -87,7 +87,7 @@ function wireReadLine(wire: MemoryWire): string {
 		newline = wire.input.byteIndexOf("\n", wire.pos);
 	}
 	let end = newline;
-	if (end > wire.pos && wire.input.byteAt(end - 1) == 13) end = end - 1;
+	if (end > wire.pos && wire.input.byteAt(end - 1) == 13) end--;
 	const line = wire.input.byteSlice(wire.pos, end);
 	wire.pos = newline + 1;
 	return line;
@@ -106,7 +106,7 @@ export function memoryTransport(wire: MemoryWire): LspTransport {
 		readLine: () => wireReadLine(wire),
 		readBytes: (count: int32) => wireReadBytes(wire, count),
 		hasBufferedData: () => wire.pos < wire.input.byteLength,
-		write: (frames: string) => { wire.output = wire.output + frames; },
+		write: (frames: string) => { wire.output += frames; },
 	};
 }
 
