@@ -513,34 +513,23 @@ export interface TypeCacheEntry {
 }
 
 export class TypeCache {
-	keys: string[];
-	values: string[];
+	entries: HashMap<string, string> = new HashMap<string, string>();
 }
 
 export function createTypeCache(): TypeCache {
-	return { keys: [], values: [] };
+	return new TypeCache();
 }
 
 export function typeCacheGet(cache: TypeCache, key: string): string {
-	for (let i = 0; i < cache.keys.length; i += 1) {
-		if (cache.keys[i] == key) return cache.values[i];
-	}
-	return "";
+	return cache.entries.get(key) ?? "";
 }
 
 export function typeCacheSet(cache: TypeCache, key: string, cTypeName: string): void {
-	for (let i = 0; i < cache.keys.length; i += 1) {
-		if (cache.keys[i] == key) {
-			cache.values[i] = cTypeName;
-			return;
-		}
-	}
-	cache.keys.push(key);
-	cache.values.push(cTypeName);
+	cache.entries.set(key, cTypeName);
 }
 
 export function typeCacheHas(cache: TypeCache, key: string): boolean {
-	return typeCacheGet(cache, key) != "";
+	return cache.entries.has(key);
 }
 
 // ===== StringPoolEntry — interned string literals =====
@@ -551,23 +540,21 @@ export class StringPoolEntry {
 }
 
 export class StringPool {
-	entries: StringPoolEntry[];
-	counter: number;
+	entries: StringPoolEntry[] = [];
+	cNames: HashMap<string, string> = new HashMap<string, string>();
 }
 
 export function createStringPool(): StringPool {
-	return { entries: [], counter: 0 };
+	return new StringPool();
 }
 
 // Intern a string — returns C name. Deduplicates.
 export function internString(pool: StringPool, value: string): string {
-	for (let i = 0; i < pool.entries.length; i += 1) {
-		if (pool.entries[i].value == value) return pool.entries[i].cName;
-	}
-	pool.counter += 1;
-	const cName = "TMP_STR_" + pool.counter;
-	const entry: StringPoolEntry = { value, cName };
-	pool.entries.push(entry);
+	const known = pool.cNames.get(value);
+	if (known != null) return known;
+	const cName = `TMP_STR_${pool.entries.length + 1}`;
+	pool.cNames.set(value, cName);
+	pool.entries.push({ value, cName });
 	return cName;
 }
 
@@ -1098,4 +1085,25 @@ test "moduleTemp" {
 	const t2 = moduleTemp(g);
 	assert t1 == "TM1_";
 	assert t2 == "TM2_";
+}
+
+test "a type cache holds a key whose value is empty" {
+	const cache = createTypeCache();
+	typeCacheSet(cache, "void", "");
+	assert typeCacheHas(cache, "void");
+	assert !typeCacheHas(cache, "int");
+	typeCacheSet(cache, "int", "int32_t");
+	typeCacheSet(cache, "int", "int64_t");
+	assert typeCacheGet(cache, "int") == "int64_t";
+	assert typeCacheGet(cache, "missing") == "";
+}
+
+test "a string pool names each literal once and numbers them in first-use order" {
+	const pool = createStringPool();
+	assert internString(pool, "a") == "TMP_STR_1";
+	assert internString(pool, "b") == "TMP_STR_2";
+	assert internString(pool, "a") == "TMP_STR_1";
+	assert internString(pool, "") == "TMP_STR_3";
+	assert pool.entries.length == 3;
+	assert pool.entries[2].value == "";
 }
