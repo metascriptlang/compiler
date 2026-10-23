@@ -1207,6 +1207,28 @@ function namespaceVariable(): void {
 	]);
 }
 
+function namespaceShift(): void {
+	const tag = "hcrNamespaceShift";
+	const fixture = `${FIXTURES}/namespaceShift`;
+	const dir = freshDir(`${TMP}/namespaceShift`);
+	copy(`${fixture}/app.ms`, `${dir}/app.ms`);
+	copy(`${FIXTURES}/registrySupport.ms`, `${dir}/support.ms`);
+	const generations = [["reader.ms", "state.ms"], ["readerEdit.ms", "state.ms"], ["readerEdit.ms", "stateEdit.ms"]];
+	for (let i = 0; i < generations.length; i += 1) {
+		copy(`${fixture}/${generations[i][0]}`, `${dir}/reader.ms`);
+		copy(`${fixture}/${generations[i][1]}`, `${dir}/state.ms`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g${i + 1}/module${sharedLibraryExt()}`],
+			`generation ${i + 1} failed to build`);
+	}
+	runPrebuilt(tag, dir, ["state", "reader", "support"], "HCR-SHIFT", [
+		"HCR-SHIFT start: 2 2",
+		"HCR-SHIFT g2: reloaded reader",
+		"HCR-SHIFT reader: 3 3 n3",
+		"HCR-SHIFT g3: reloaded state",
+		"HCR-SHIFT state: 4 4 n4",
+	]);
+}
+
 function layoutHolder(variant: string, grown: boolean): string[] {
 	const more = grown ? "b: string; " : "";
 	const moreValue = grown ? "b: \"beta\", " : "";
@@ -2109,6 +2131,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrIndirect", run: indirect },
 	{ name: "hcrSharedVariable", run: sharedVariable },
 	{ name: "hcrNamespaceVariable", run: namespaceVariable },
+	{ name: "hcrNamespaceShift", run: namespaceShift },
 	{ name: "hcrEngine", run: engine },
 	{ name: "hcrAsyncLoop", run: asyncLoop },
 	{ name: "hcrLiftNames", run: liftNames },
