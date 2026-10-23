@@ -6,7 +6,7 @@ import { CheckerContext, addError, addWarning } from "./context";
 import { Effect, EffectCause, callEffect, deferEffectCheck, newEffect, routineEffect, walkEffect, walkWithViews } from "./effects";
 import { constBindingInitializer } from "./constFold";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
-import { createArray, createGenericParam, createRef, createStruct, int32Type, isPrimitiveKind, isSendableFunction, isStructType, isAtomicRef, isReadonlyView, stringType, typeCarriesRef, typeDisplayName } from "./types";
+import { createArray, createGenericParam, createRef, createStruct, int32Type, isPrimitiveKind, isSendableFunction, isStructType, isAtomicRef, isNumeric, isReadonlyView, stringType, typeCarriesRef, typeDisplayName } from "./types";
 
 export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
 	for (const n of actorSym.nonisolatedFields) {
@@ -105,6 +105,28 @@ export function checkActorStaticField(ctx: CheckerContext, raw: Node): void {
 	if (t == null || t.kind == TypeKind.Inferred || t.kind == TypeKind.Error) return;
 	if (isArcPointeeSendable(t) || isAtomicRef(t)) return;
 	addError(ctx, `'${typeDisplayName(t)}' can still be mutated through the readonly static '${pd.propName}', and its refcount is not atomic — an actor's static must be plain data, Arc<T> or Locked<T> (PARALOCK I22)`,
+		member.location.line, member.location.column);
+}
+
+function isNonisolatedValueType(t: Type): boolean {
+	return isNumeric(t) || match (t.kind) {
+		TypeKind.BigInt | TypeKind.Boolean | TypeKind.BooleanLiteral | TypeKind.NumberLiteral
+			| TypeKind.Enum | TypeKind.EnumLiteral | TypeKind.String | TypeKind.StringLiteral => true,
+		_ => false,
+	};
+}
+
+export function checkActorNonisolatedField(ctx: CheckerContext, actorSym: Symbol, raw: Node): void {
+	let member = raw;
+	if (member.kind == NodeKind.DecoratedDecl) member = (member.data as DecoratedDeclData).decoratedNode;
+	if (member == null || member.kind != NodeKind.PropertyDecl) return;
+	const pd = member.data as PropertyDeclData;
+	if (pd.propIsStatic || !hasNonisolatedField(actorSym, pd.propName)) return;
+	let t = member.nodeType;
+	if ((t == null || t.kind == TypeKind.Inferred) && pd.propInitializer != null) t = pd.propInitializer.nodeType;
+	if (t != null && t.kind == TypeKind.Error) return;
+	if (pd.propIsReadonly && t != null && isNonisolatedValueType(t)) return;
+	addError(ctx, "a nonisolated field is read from other threads, so it must be readonly and of a value type (number, bigint, boolean, string, enum)",
 		member.location.line, member.location.column);
 }
 
