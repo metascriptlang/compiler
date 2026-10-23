@@ -123,8 +123,12 @@ function refuseTypeDuringEmission(): void {
 
 export function emptyType(): Type {
 	refuseTypeDuringEmission();
+	return typeOfKind(TypeKind.None);
+}
+
+function typeOfKind(kind: TypeKind): Type {
 	return {
-		kind: TypeKind.None,
+		kind: kind,
 		typeName: "",
 		typeNames: [],
 		typeChildren: [],
@@ -5066,7 +5070,7 @@ function getPropertyInner(t: Type | null, name: string): Type {
 // isPrimitiveKind — used by destructorLifting, analyzer/classify, and other DRC code
 // A field of a variant union that differs only by literal answers with the first variant's literal,
 // where getProperty merges the literals into a new union.
-const INFERRED_VIEW: Readonly<Type> = createPrimitive(TypeKind.Inferred);
+const INFERRED_VIEW: Readonly<Type> = typeOfKind(TypeKind.Inferred);
 
 function variantWithField(t: Readonly<Type>, name: string, from: int32): int32 {
 	for (let i = from; i < t.typeChildren.length; i += 1) {
