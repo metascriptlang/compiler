@@ -1869,6 +1869,22 @@ test "engine: a slot of a word or ref register is read and written by the typed 
 	assert vm.output == "5 b! 1.5 1;10 b! 2.5 1;15 b! 3.5 1;\n", vm.output;
 }
 
+test "engine: a struct is copied into a held struct and zeroed through typed slots, nested and inside an array" {
+	const decl = "struct V { x: int64; y: int64; z: int64; } struct B { a: V; n: int64; }";
+	const flat = decl + " function f(): string { let p: V = { x: 1, y: 2, z: 3 }; let q: V = { x: 0, y: 0, z: 0 }; q = p; p.x = 9; let zz: V; return `${q.x} ${q.y} ${q.z} ${p.x} ${zz.x}`; } console.log(f());";
+	const nested = decl + " function f(): string { let b: B = { a: { x: 1, y: 2, z: 3 }, n: 4 }; let c: B = { a: { x: 0, y: 0, z: 0 }, n: 0 }; c = b; b.a.x = 9; const arr: V[] = [{ x: 5, y: 6, z: 7 }]; let w: V = { x: 0, y: 0, z: 0 }; arr[0] = w; w.y = 1; let zb: B; return `${c.a.x} ${c.n} ${b.a.x} ${arr[0].x} ${arr[0].y} ${zb.a.z} ${zb.n}`; } console.log(f());";
+	const out = ["1 2 3 9 0\n", "1 4 9 0 0 0 0\n"];
+	const sources = [flat, nested];
+	for (let i = 0; i < sources.length; i += 1) {
+		const f = compiledFunc(sources[i], "f");
+		assert countNamed(f, "LoadField") == 0 && countNamed(f, "StoreField") == 0, disasmFunc(f);
+		assert countNamed(f, "StoreSlotW") + countNamed(f, "LoadSlotW") > 0, disasmFunc(f);
+		const vm = evalOrcVM(sources[i]);
+		assert vm.error == "", vm.error;
+		assert vm.output == out[i], vm.output;
+	}
+}
+
 function backJumpSpan(f: RaiserFunction): number {
 	for (let i = 0; i < f.code.length; i = i + 1) {
 		if (f.code[i].op == RaiserOpcode.Jump && getSignedAx(f.code[i]) < 0) return -getSignedAx(f.code[i]);
