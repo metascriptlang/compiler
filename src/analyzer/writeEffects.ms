@@ -63,7 +63,6 @@ let constructionSummaries = new HashMap<Symbol, WriteSummary>();
 let hookSummaries = new HashMap<Type, WriteSummary>();
 let hookless = new HashSet<Type>();
 let ownerHookCache = new HashMap<Symbol, Symbol[]>();
-let callerDefs: LocalDefs | null = null;
 let routineDecls = new HashMap<Symbol, Node>();
 let unitRoutines = new HashMap<string, Symbol[]>();
 let routineUnits = new HashMap<Symbol, string>();
@@ -129,7 +128,6 @@ function reloadsApart(caller: WriteSummary, callee: WriteSummary): boolean {
 }
 
 export function clearWriteSummaries(): void {
-	callerDefs = null;
 	ownerHookCache = new HashMap<Symbol, Symbol[]>();
 	routineSummaries = new HashMap<Symbol, WriteSummary>();
 	viewReturns = new HashMap<Symbol, string[]>();
@@ -714,7 +712,7 @@ function freshBase(n: Node, fresh: HashSet<Symbol> | null): boolean {
 	return t.kind == NodeKind.Identifier && t.resolvedSym != null && fresh.has(t.resolvedSym!);
 }
 
-class LocalDefs {
+export class LocalDefs {
 	syms: Symbol[];
 	sources: Node[][];
 	spoiled: HashSet<Symbol>;
@@ -993,11 +991,11 @@ function settled(s: WriteSummary): WriteSummary {
 	return s;
 }
 
-function callWrites(call: Node): WriteSummary {
+function callWrites(call: Node, defs: LocalDefs | null): WriteSummary {
 	const s = newSummary(SummaryKind.Routine, null, []);
 	if (call.kind == NodeKind.CallExpr && isLifecycleOp(call)) return s;
 	if (call.kind == NodeKind.CallExpr) addressWrites(s, call, null, false);
-	const callees = call.kind == NodeKind.NewExpr ? constructionsOf(call) : calleesOf(call, s, null, null, callerDefs);
+	const callees = call.kind == NodeKind.NewExpr ? constructionsOf(call) : calleesOf(call, s, null, null, defs);
 	for (const a of call.kind == NodeKind.NewExpr ? (call.data as NewExprData).newArguments : (call.data as CallExprData).arguments) {
 		if (a != null && mayBeFunctionValue(a.nodeType) && !routinesOf(a, null, null, null, 0, callees)) markUnknown(s);
 	}
@@ -1126,8 +1124,8 @@ export function stepSlot(n: Node): string | null {
 	};
 }
 
-export function mayWrite(n: Node, slots: string[]): boolean {
-	if (n.kind != NodeKind.BinaryExpr) return mayWriteAny(callWrites(n), slots);
+export function mayWrite(n: Node, slots: string[], defs: LocalDefs | null): boolean {
+	if (n.kind != NodeKind.BinaryExpr) return mayWriteAny(callWrites(n, defs), slots);
 	if (!isAssign((n.data as BinaryExprData).operator)) return false;
 	const writes = newSummary(SummaryKind.Routine, null, []);
 	const target = (n.data as BinaryExprData).left;
@@ -1137,8 +1135,8 @@ export function mayWrite(n: Node, slots: string[]): boolean {
 	return mayWriteAny(writes, slots);
 }
 
-export function bindCallerBody(body: Node): void {
-	callerDefs = localDefs(body);
+export function callerDefsOf(body: Node): LocalDefs {
+	return localDefs(body);
 }
 
 export function runsHooks(target: Node): boolean {
@@ -1181,7 +1179,7 @@ function pathSlots(n: Node, out: string[]): Symbol | null {
 	};
 }
 
-export function borrowedArgsToCopy(call: Node): boolean[] {
+export function borrowedArgsToCopy(call: Node, defs: LocalDefs | null): boolean[] {
 	const args = (call.data as CallExprData).arguments;
 	const flags: boolean[] = [];
 	const roots: (Symbol | null)[] = [];
@@ -1204,7 +1202,7 @@ export function borrowedArgsToCopy(call: Node): boolean[] {
 		if (borrowed) any = true;
 	}
 	if (!any) return flags;
-	const writes = callWrites(call);
+	const writes = callWrites(call, defs);
 	for (let i = 0; i < args.length; i += 1) {
 		if (!flags[i] || cstringSource(args[i]) != null) continue;
 		let keep = false;
@@ -1232,31 +1230,31 @@ function elementRead(loc: SourceLocation): Node {
 
 test "an element read through a generated access macro writes nothing" {
 	const loc = writeProbe();
-	assert !mayWrite(elementRead(loc), [ELEMENT_SLOT]);
+	assert !mayWrite(elementRead(loc), [ELEMENT_SLOT], null);
 }
 
 test "a store through a generated access macro writes the elements" {
 	const loc = writeProbe();
-	assert mayWrite(makeAssign(elementRead(loc), makeString("s", loc), loc), [ELEMENT_SLOT]);
+	assert mayWrite(makeAssign(elementRead(loc), makeString("s", loc), loc), [ELEMENT_SLOT], null);
 }
 
 test "a union projection through a generated macro writes nothing" {
 	const loc = writeProbe();
 	const read = makeCall(generatedRef("msVariantAccessVal", loc), [localOf("u", int32Type(), loc), makeNumber(0, loc), makeString("a", loc), makeString("a|b", loc)], loc);
-	assert !mayWrite(read, [ELEMENT_SLOT, fieldSlot("a")]);
+	assert !mayWrite(read, [ELEMENT_SLOT, fieldSlot("a")], null);
 }
 
 test "a generated macro handed a function value may write anything" {
 	const loc = writeProbe();
 	const callback = localOf("cb", createFunction([], [], int32Type()), loc);
-	assert mayWrite(makeCall(generatedRef("msSpanAccess", loc), [callback, makeNumber(0, loc)], loc), [fieldSlot("a")]);
+	assert mayWrite(makeCall(generatedRef("msSpanAccess", loc), [callback, makeNumber(0, loc)], loc), [fieldSlot("a")], null);
 }
 
 test "a store through a generated access macro writes only elements of its array's type" {
 	const loc = writeProbe();
 	const store = makeAssign(elementRead(loc), makeString("s", loc), loc);
-	assert mayWrite(store, [heldSlot(ELEMENT_SLOT, createArray(stringType()))]);
-	assert !mayWrite(store, [heldSlot(ELEMENT_SLOT, createArray(createArray(int32Type())))]);
+	assert mayWrite(store, [heldSlot(ELEMENT_SLOT, createArray(stringType()))], null);
+	assert !mayWrite(store, [heldSlot(ELEMENT_SLOT, createArray(createArray(int32Type())))], null);
 }
 
 function loweredViewCall(returned: (param: Node, loc: SourceLocation) => Node, paramType: Type, loc: SourceLocation): Node {

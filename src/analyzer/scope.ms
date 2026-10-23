@@ -12,6 +12,7 @@ import { Node, NodeKind, makeLoc, ExprStmtData, CallExprData, IdentifierData, Sy
 import { RcInfo, RcKind, noRcInfo, classifyType } from "./classify";
 import { hasFlag, makeSymbol, SymbolFlag } from "../checker/symbol";
 import { CfgCache, createCfgCache } from "./cfg";
+import { LocalDefs } from "./writeEffects";
 import { TransformContext } from "../transform/context";
 import { makeCtx } from "../transform/testUtil";
 import { makeExprStmt, makeNull, attachedOpSym } from "../transform/util";
@@ -57,6 +58,7 @@ export interface DrcContext {
 	currentStmtList: Node[];     // The list containing the current statement
 	finallyProtectedVars: Symbol[];   // vars in enclosing finally blocks — never last-read (Phase A); identity by Symbol
 	cfgCache: CfgCache;             // CFG cache per variable — Phase C
+	callerDefs: LocalDefs | null;   // function-value definitions of the body being processed
 	currentFuncBody: Node | null;   // current function body for CFG building — Phase C
 	stmtBorrowReads: BorrowRead[];  // Normal-mode inline reads of RC vars in the current statement
 	                                // — retro-hoisted to borrow temps if the var moves later in it
@@ -87,6 +89,7 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 		currentStmtList: [],
 		finallyProtectedVars: [],
 		cfgCache: createCfgCache(),
+		callerDefs: null,
 		currentFuncBody: null,
 		stmtBorrowReads: [],
 		inEnsureMove: 0,

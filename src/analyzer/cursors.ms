@@ -33,7 +33,7 @@ import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
 import { calledRoutineType, isImmutableModuleConst, isViewCall, receiverOf, viewCallSources } from "../checker/effects";
-import { ANY_HEAP_SLOT, addressSlots, bindCallerBody, canAlias, mayWrite, resetWriteEffects, runsHooks, stepSlot, viewReturnSlots } from "./writeEffects";
+import { ANY_HEAP_SLOT, addressSlots, callerDefsOf, canAlias, LocalDefs, mayWrite, resetWriteEffects, runsHooks, stepSlot, viewReturnSlots } from "./writeEffects";
 import { createDrcContext } from "./scope";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
@@ -190,12 +190,12 @@ function writesOtherPartition(p: Partitions, site: Node, viewRoot: int32): boole
 	return true;
 }
 
-function writtenWhileAlive(p: Partitions, vid: int32, slots: string[]): boolean {
+function writtenWhileAlive(p: Partitions, vid: int32, slots: string[], defs: LocalDefs): boolean {
 	if (slots.length == 0) return false;
 	const v = p.vars[vid];
 	const viewRoot = ufRoot(p, vid);
 	for (let k = 0; k < writeSites.length; k += 1) {
-		if (writeTimes[k] >= v.aliveStart && writeTimes[k] <= v.aliveEnd && mayWrite(writeSites[k], slots) && !writesOtherPartition(p, writeSites[k], viewRoot)) return true;
+		if (writeTimes[k] >= v.aliveStart && writeTimes[k] <= v.aliveEnd && mayWrite(writeSites[k], slots, defs) && !writesOtherPartition(p, writeSites[k], viewRoot)) return true;
 	}
 	return false;
 }
@@ -814,7 +814,7 @@ function trav(p: Partitions, node: Node | null): void {
 
 // ===== Cursor Decision =====
 
-function computeCursorDecisions(p: Partitions): Symbol[] {
+function computeCursorDecisions(p: Partitions, defs: LocalDefs): Symbol[] {
 	const result: Symbol[] = [];
 	let i = 0;
 	while (i < p.vars.length) {
@@ -834,7 +834,7 @@ function computeCursorDecisions(p: Partitions): Symbol[] {
 			if (dangerousMutation(g, v)) { i += 1; continue; }
 		}
 		const slots = holdsAddress(v.sym) ? addressSlots(borrowedSlots[i]) : borrowedSlots[i];
-		if (writtenWhileAlive(p, i, slots)) { i += 1; continue; }
+		if (writtenWhileAlive(p, i, slots, defs)) { i += 1; continue; }
 
 		result.push(v.sym);
 		i += 1;
@@ -869,7 +869,6 @@ export function inferCursors(body: Node): void {
 	if (body == null) return;
 	if (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program) return;
 
-	bindCallerBody(body);
 	const p = createPartitions();
 
 	// Pass 1: compute live ranges and register variables
@@ -890,7 +889,7 @@ export function inferCursors(body: Node): void {
 	trav(p, body);
 
 	// Decision: which variables can safely be cursors?
-	for (const sym of computeCursorDecisions(p)) { setFlag(sym, SymbolFlag.Cursor); }
+	for (const sym of computeCursorDecisions(p, callerDefsOf(body))) { setFlag(sym, SymbolFlag.Cursor); }
 }
 
 // ===== Tests =====

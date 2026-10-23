@@ -32,7 +32,7 @@ import {
 import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym, skipConvDfa } from "./alias";
 import { inferCursors } from "./cursors";
 import { isViewCall, returnsView } from "../checker/effects";
-import { borrowedArgsToCopy } from "./writeEffects";
+import { LocalDefs, borrowedArgsToCopy, callerDefsOf } from "./writeEffects";
 import { cstringSource } from "../transform/native/cstringConvLower";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
 import { checkSource } from "../checker/checkPass";
@@ -534,7 +534,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		isActorSendHandoff = true;
 	}
 
-	const keepAlive = borrowedArgsToCopy(node);
+	const keepAlive = borrowedArgsToCopy(node, dctx.callerDefs);
 	const marks: Node[] = [];
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
@@ -1935,6 +1935,7 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 
 	const outerFinallyVars = dctx.finallyProtectedVars;
 	const outerBody = dctx.currentFuncBody;
+	const outerDefs = dctx.callerDefs;
 	const outerCache = dctx.cfgCache;
 	const outerResultIsCursor = dctx.resultIsCursor;
 	const fnType = ownerSym != null && ownerSym.symbolType != null && ownerSym.symbolType.kind == TypeKind.Function ? ownerSym.symbolType : funcNodeType;
@@ -1945,6 +1946,7 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 
 	// Phase B: infer cursor (borrowed) variables for this function
 	inferCursors(body);
+	dctx.callerDefs = callerDefsOf(body);
 
 	// Phase C: set function body for CFG-based last-read analysis
 	dctx.currentFuncBody = body;
@@ -1975,6 +1977,7 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 
 	dctx.finallyProtectedVars = outerFinallyVars;
 	dctx.currentFuncBody = outerBody;
+	dctx.callerDefs = outerDefs;
 	dctx.cfgCache = outerCache;
 	dctx.resultIsCursor = outerResultIsCursor;
 
@@ -2744,6 +2747,7 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	pushScope(dctx, false, false);
 	dctx.finallyProtectedVars = collectFinallyVars(program);
 	inferCursors(program);
+	dctx.callerDefs = callerDefsOf(program);
 	dctx.currentFuncBody = program;
 	clearCfgCache(dctx.cfgCache);
 	d.programStmts = processStmtList(d.programStmts, dctx, program.location);
