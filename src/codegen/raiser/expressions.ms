@@ -17,7 +17,7 @@ import {
 } from "../../ast/node";
 import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, RaiserCombine, raiserABC, raiserABx, raiserAx, convOperand, fitsImm, immField, branchField, inRefFile, MAX_SLOT } from "../../raiser/bytecode";
 import { RaiserValueKind, createClassType, raiserInt, raiserFloat, raiserNil, raiserBool, raiserConstString } from "../../raiser/value";
-import { lookupHostFn } from "../../raiser/hostRegistry";
+import { lookupHost } from "../../raiser/hostRegistry";
 import { resolveRuntimeDir } from "../../utils/path";
 import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf } from "./valueCopy";
 import { placedInstanceOf } from "../../checker/instantiate";
@@ -43,7 +43,7 @@ import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros, emitTrapValue } fro
 // at the call site with a span — the procIsCallback-resolved-at-codegen
 // shape, one phase earlier than the reference needs it.
 function checkHostBridgeCoverage(sym: Symbol, callee: Node): void {
-	if (lookupHostFn(sym.nativeName) == null) {
+	if (lookupHost(sym.nativeName) == null) {
 		queueRaiserCompileError(
 			`no host bridge for '${sym.nativeName}' — the extern is declared in std but nothing registers it (hostTable.ms)`,
 			callee.location.line, callee.location.column);
@@ -66,9 +66,9 @@ function stdRoutineName(sym: Symbol): string {
 function runtimeHostName(sym: Symbol): string {
 	if (sym.nativeName != "") return sym.nativeName;
 	const routine = stdRoutineName(sym);
-	if (routine != "" && lookupHostFn(routine) != null) return routine;
+	if (routine != "" && lookupHost(routine) != null) return routine;
 	if (sym.declNode != null || !sym.symFlags.has(SymbolFlag.ImportC)) return "";
-	return lookupHostFn(sym.name) != null ? sym.name : "";
+	return lookupHost(sym.name) != null ? sym.name : "";
 }
 
 // --- Operator → Opcode mapping ---

@@ -1393,32 +1393,32 @@ export function ensureHostTableLoaded(): void {
 // --- Tests ---
 
 import { raiserInt, raiserFloat, raiserConstString, RaiserValueKind } from "../../raiser/value";
-import { lookupHostFn, _resetHostRegistryForTests, takeHostRaise } from "../../raiser/hostRegistry";
+import { lookupHost, _resetHostRegistryForTests, takeHostRaise } from "../../raiser/hostRegistry";
 import { int64Bits } from "../../utils/stdBackport";
 
 test "ensureHostTableLoaded registers fs predicates" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
-	assert lookupHostFn("msFsExists") != null;
-	assert lookupHostFn("msFsRealPath") != null;
-	assert lookupHostFn("msFsIsFile") != null;
-	assert lookupHostFn("msFsIsDir") != null;
+	assert lookupHost("msFsExists") != null;
+	assert lookupHost("msFsRealPath") != null;
+	assert lookupHost("msFsIsFile") != null;
+	assert lookupHost("msFsIsDir") != null;
 }
 
 test "ensureHostTableLoaded registers process accessors" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
-	assert lookupHostFn("msProcessCwd") != null;
-	assert lookupHostFn("msProcessPlatform") != null;
-	assert lookupHostFn("msProcessArch") != null;
-	assert lookupHostFn("msProcessGetEnv") != null;
+	assert lookupHost("msProcessCwd") != null;
+	assert lookupHost("msProcessPlatform") != null;
+	assert lookupHost("msProcessArch") != null;
+	assert lookupHost("msProcessGetEnv") != null;
 }
 
 test "string padding bridges preserve native semantics" {
 	ensureHostTableLoaded();
 	setActiveHostHeaps(createStructHeap(), createArrayHeap());
-	assert lookupHostFn("msStringPadStart") != null;
-	assert lookupHostFn("msStringPadEnd") != null;
+	assert lookupHost("msStringPadStart") != null;
+	assert lookupHost("msStringPadEnd") != null;
 	assert unboxString(_bridgeMsStringPadStart([boxString("42"), boxInt(6), boxString("0")])) == "000042";
 	assert unboxString(_bridgeMsStringPadEnd([boxString("42"), boxInt(5), boxString("ab")])) == "42aba";
 	assert unboxString(_bridgeMsStringPadStart([boxString("é"), boxInt(3), boxString("x")])) == "xxé";
@@ -1460,7 +1460,7 @@ test "ensureHostTableLoaded is idempotent" {
 test "bridgeMsFsRealPath resolves the working directory to itself" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
-	const fn = lookupHostFn("msFsRealPath");
+	const fn = lookupHost("msFsRealPath")!.fn;
 	assert fn != null;
 	const result = fn([raiserConstString(".")]);
 	assert result.kind == RaiserValueKind.String;
@@ -1470,7 +1470,7 @@ test "bridgeMsFsRealPath resolves the working directory to itself" {
 test "bridgeMsFsRealPath returns empty for a missing path" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
-	const fn = lookupHostFn("msFsRealPath");
+	const fn = lookupHost("msFsRealPath")!.fn;
 	assert fn != null;
 	const result = fn([raiserConstString("/tmp/__nope_xyz__")]);
 	assert result.kind == RaiserValueKind.String;
@@ -1480,7 +1480,7 @@ test "bridgeMsFsRealPath returns empty for a missing path" {
 test "bridgeMsFsExists returns 1 for present file" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
-	const fn = lookupHostFn("msFsExists");
+	const fn = lookupHost("msFsExists")!.fn;
 	assert fn != null;
 	// README.md is in the project root, where tests run from.
 	const result = fn([raiserConstString("README.md")]);
@@ -1491,7 +1491,7 @@ test "bridgeMsFsExists returns 1 for present file" {
 test "bridgeMsFsExists returns 0 for missing file" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
-	const fn = lookupHostFn("msFsExists");
+	const fn = lookupHost("msFsExists")!.fn;
 	const result = fn([raiserConstString("/tmp/__definitely_does_not_exist_xyz123__")]);
 	assert result.kind == RaiserValueKind.Int;
 	assert result.intVal == 0;
@@ -1500,7 +1500,7 @@ test "bridgeMsFsExists returns 0 for missing file" {
 test "bridgeMsProcessCwd returns non-empty string" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
-	const fn = lookupHostFn("msProcessCwd");
+	const fn = lookupHost("msProcessCwd")!.fn;
 	const result = fn([]);
 	assert result.kind == RaiserValueKind.String;
 	assert unboxString(result).length > 0;
@@ -1509,7 +1509,7 @@ test "bridgeMsProcessCwd returns non-empty string" {
 test "bridgeMsProcessPlatform returns known platform" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
-	const fn = lookupHostFn("msProcessPlatform");
+	const fn = lookupHost("msProcessPlatform")!.fn;
 	const result = fn([]);
 	assert result.kind == RaiserValueKind.String;
 	// Platform is one of darwin/linux/windows in practice.
@@ -1519,7 +1519,7 @@ test "bridgeMsProcessPlatform returns known platform" {
 test "bridgeMsProcessGetEnv missing var returns empty" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
-	const fn = lookupHostFn("msProcessGetEnv");
+	const fn = lookupHost("msProcessGetEnv")!.fn;
 	const result = fn([raiserConstString("__NEVER_SET_VAR_QWXTY__")]);
 	assert result.kind == RaiserValueKind.String;
 	assert unboxString(result) == "";
@@ -1530,8 +1530,8 @@ test "bridgeMsProcessGetEnv missing var returns empty" {
 test "bridgeMsFsReadFile present file + errno 0" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
-	const read = lookupHostFn("msFsReadFile");
-	const errno = lookupHostFn("msFsLastErrno");
+	const read = lookupHost("msFsReadFile")!.fn;
+	const errno = lookupHost("msFsLastErrno")!.fn;
 	const r = read([raiserConstString("README.md")]);
 	assert r.kind == RaiserValueKind.String;
 	assert unboxString(r).length > 0;
@@ -1542,8 +1542,8 @@ test "bridgeMsFsReadFile present file + errno 0" {
 test "bridgeMsFsReadFile missing file + non-zero errno" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
-	const read = lookupHostFn("msFsReadFile");
-	const errno = lookupHostFn("msFsLastErrno");
+	const read = lookupHost("msFsReadFile")!.fn;
+	const errno = lookupHost("msFsLastErrno")!.fn;
 	const r = read([raiserConstString("/tmp/__missing_xyz__")]);
 	assert unboxString(r) == "";
 	const e = errno([]);
@@ -1553,7 +1553,7 @@ test "bridgeMsFsReadFile missing file + non-zero errno" {
 test "bridgeMsFsReadDirEntries returns newline-separated entries" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
-	const fn = lookupHostFn("msFsReadDirEntries");
+	const fn = lookupHost("msFsReadDirEntries")!.fn;
 	const r = fn([raiserConstString(".")]);
 	assert r.kind == RaiserValueKind.String;
 	assert unboxString(r).length > 0;
@@ -1565,17 +1565,17 @@ test "bridgeMsProcessSpawnSync registered" {
 	// Just verify registration. Actual subprocess invocation is brittle inside
 	// the test harness — covered by end-to-end @comptime smoke tests in
 	// src/compiler/meta/comptime.ms where the bridge is exercised via the VM.
-	assert lookupHostFn("msProcessSpawnSync") != null;
+	assert lookupHost("msProcessSpawnSync") != null;
 }
 
 test "bridgeMsProcSpawnGet* state slots registered" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
-	assert lookupHostFn("msProcSpawnGetOk") != null;
-	assert lookupHostFn("msProcSpawnGetPipeOk") != null;
-	assert lookupHostFn("msProcSpawnGetExitCode") != null;
-	assert lookupHostFn("msProcSpawnGetSignal") != null;
-	assert lookupHostFn("msProcSpawnGetStderr") != null;
+	assert lookupHost("msProcSpawnGetOk") != null;
+	assert lookupHost("msProcSpawnGetPipeOk") != null;
+	assert lookupHost("msProcSpawnGetExitCode") != null;
+	assert lookupHost("msProcSpawnGetSignal") != null;
+	assert lookupHost("msProcSpawnGetStderr") != null;
 }
 
 // --- Audit-driven regression tests ---
@@ -1584,8 +1584,8 @@ test "I4 regression: msFsReadDirEntries missing path sets errno" {
 	_resetHostRegistryForTests();
 	_resetBridgeStateForTests();
 	ensureHostTableLoaded();
-	const readDirFn = lookupHostFn("msFsReadDirEntries");
-	const errno = lookupHostFn("msFsLastErrno");
+	const readDirFn = lookupHost("msFsReadDirEntries")!.fn;
+	const errno = lookupHost("msFsLastErrno")!.fn;
 	const r = readDirFn([raiserConstString("/tmp/__never_exists_qpqp__")]);
 	assert r.kind == RaiserValueKind.String;
 	assert unboxString(r) == "";
@@ -1597,8 +1597,8 @@ test "I4 regression: msFsReadDirEntries on file (not dir) sets errno" {
 	_resetHostRegistryForTests();
 	_resetBridgeStateForTests();
 	ensureHostTableLoaded();
-	const readDirFn = lookupHostFn("msFsReadDirEntries");
-	const errno = lookupHostFn("msFsLastErrno");
+	const readDirFn = lookupHost("msFsReadDirEntries")!.fn;
+	const errno = lookupHost("msFsLastErrno")!.fn;
 	readDirFn([raiserConstString("README.md")]);  // path exists but is a file
 	assert errno([]).intVal != 0;
 }
@@ -1606,8 +1606,8 @@ test "I4 regression: msFsReadDirEntries on file (not dir) sets errno" {
 test "I5 regression: bridge state reset clears errno" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
-	const read = lookupHostFn("msFsReadFile");
-	const errno = lookupHostFn("msFsLastErrno");
+	const read = lookupHost("msFsReadFile")!.fn;
+	const errno = lookupHost("msFsLastErrno")!.fn;
 	read([raiserConstString("/tmp/__missing_yyy__")]);
 	assert errno([]).intVal != 0;
 	_resetBridgeStateForTests();
@@ -1618,8 +1618,8 @@ test "errno cleared after successful read following failed read" {
 	_resetHostRegistryForTests();
 	_resetBridgeStateForTests();
 	ensureHostTableLoaded();
-	const read = lookupHostFn("msFsReadFile");
-	const errno = lookupHostFn("msFsLastErrno");
+	const read = lookupHost("msFsReadFile")!.fn;
+	const errno = lookupHost("msFsLastErrno")!.fn;
 	read([raiserConstString("/tmp/__missing_first__")]);
 	assert errno([]).intVal != 0;
 	read([raiserConstString("README.md")]);  // success — should clear errno
@@ -1632,9 +1632,9 @@ test "spawn state preserved across getter calls" {
 	ensureHostTableLoaded();
 	// Multi-getter sequence should return consistent state (no clobbering
 	// between getOk → getExitCode → getStderr).
-	const okFn = lookupHostFn("msProcSpawnGetOk");
-	const exitFn = lookupHostFn("msProcSpawnGetExitCode");
-	const stderrFn = lookupHostFn("msProcSpawnGetStderr");
+	const okFn = lookupHost("msProcSpawnGetOk")!.fn;
+	const exitFn = lookupHost("msProcSpawnGetExitCode")!.fn;
+	const stderrFn = lookupHost("msProcSpawnGetStderr")!.fn;
 	// Initial state after reset
 	assert okFn([]).intVal == 0;
 	assert exitFn([]).intVal == 0;
@@ -1644,8 +1644,8 @@ test "spawn state preserved across getter calls" {
 test "closeHostChildren ends every child left open and the table refuses handles it did not issue" {
 	_resetHostRegistryForTests();
 	ensureHostTableLoaded();
-	const spawnFn = lookupHostFn("msProcChildSpawn");
-	const pidFn = lookupHostFn("msProcChildPid");
+	const spawnFn = lookupHost("msProcChildSpawn")!.fn;
+	const pidFn = lookupHost("msProcChildPid")!.fn;
 	const heap = activeHostArrayHeap()!;
 	const argv = heapAllocArray(heap);
 	heapArrayPush(heap, argv, heapAllocStoredString(heap, "1000"));
@@ -1726,7 +1726,7 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 		if (!r.ok) continue;
 		for (const name of scanRmsExternNames(r.value)) {
 			checked = checked + 1;
-			const covered = lookupHostFn(name) != null
+			const covered = lookupHost(name) != null
 				|| nameListed(intercepted, name)
 				|| nameListed(knownDead, name);
 			assert covered, `${f}: ${name}`;

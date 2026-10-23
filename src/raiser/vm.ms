@@ -21,7 +21,7 @@ import { orcCollectCycles } from "./orc";
 import { ledgerAudit } from "./ledger";
 import { RaiserCopyKind, copyTypedValue } from "./valueCopy";
 import { parseIntStr } from "../utils/string";
-import { HostCapability, lookupHostFn, hostFnAllowedInRestrictedMode, hostFnSpawnsChild, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv, takeHostRaise, hostRaiseIsFatal, raiseFromHost } from "./hostRegistry";
+import { HostCapability, HostEntry, lookupHost, hostEntryAllowedInRestrictedMode, hostEntrySpawnsChild, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv, takeHostRaise, hostRaiseIsFatal, raiseFromHost } from "./hostRegistry";
 import { RaiserHostFn, RaiserPrintSink, boxString } from "./marshal";
 import { int64Bits } from "../utils/stdBackport";
 
@@ -3802,33 +3802,43 @@ function vmHandleConv(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 // using int64_t casts — MetaScript fallback not needed.
 
 // --- CallHost handler ---
-// Generic name-resolved native call. The only host-call mechanism. Lookup
-// is O(n) over the registry, but n is small (~20-200 host fns) and the
-// registered wrappers (in src/compiler/meta/hostTable.ms) own all
+// Generic name-resolved native call. The only host-call mechanism. A call
+// site resolves its registry entry once, into func.hostCache at its constant
+// index; the registered wrappers (in src/compiler/meta/hostTable.ms) own all
 // type-specific marshalling.
 
-function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
-	const func = getModuleFunc(vm.mod, vm.funcIdx);
+function resolveHostEntry(vm: RaiserVM, func: RaiserFunction, ib: int32): HostEntry | null {
 	const nameConst = getFuncConst(func, ib);
 	if (nameConst.kind != RaiserValueKind.String) {
 		vmError(vm, `CallHost expected string constant at index ${ib}, got kind ${nameConst.kind}`);
-		return;
+		return null;
 	}
-	const name = constStringText(nameConst);
-
-	const fn = lookupHostFn(name);
-	if (fn == (null as unknown as RaiserHostFn)) {
+	const name = func.names[ib];
+	const found = lookupHost(name);
+	if (found == null) {
 		vmError(vm, `Unknown host function: ${name}`);
+		return null;
+	}
+	func.hostCache[ib] = found;
+	return found;
+}
+
+function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
+	const func = getModuleFunc(vm.mod, vm.funcIdx);
+	let entry = func.hostCache[ib];
+	if (entry == null || !entry.live) {
+		entry = resolveHostEntry(vm, func, ib);
+		if (entry == null) return;
+	}
+	if (vm.hostCallsRestricted && !hostEntryAllowedInRestrictedMode(entry)) {
+		vmError(vm, `Restricted dependency compile-time code '${vm.hostPolicySource}' cannot call host function '${entry.name}'`);
 		return;
 	}
-	if (vm.hostCallsRestricted && !hostFnAllowedInRestrictedMode(name)) {
-		vmError(vm, `Restricted dependency compile-time code '${vm.hostPolicySource}' cannot call host function '${name}'`);
-		return;
-	}
-	if (!vm.orc && hostFnSpawnsChild(name)) {
+	if (!vm.orc && hostEntrySpawnsChild(entry)) {
 		vmError(vm, "spawn is not available in compile-time evaluation: the child process would outlive the build");
 		return;
 	}
+	const fn = entry.fn;
 
 	const argc = func.blocks[ic + 2] as int32;
 	const args: RaiserValue[] = [];
@@ -5215,6 +5225,58 @@ test "restricted CallHost allows a classified pure host" {
 	execLoop(vm);
 	assert vm.error == "", vm.error;
 	assert vm.exitValue.intVal == 7;
+}
+
+test "CallHost site resolves its entry once and follows re-registration and reset" {
+	_resetHostRegistryForTests();
+	const fnA: RaiserHostFn = (args: RaiserValue[]): RaiserValue => raiserInt(1);
+	const fnB: RaiserHostFn = (args: RaiserValue[]): RaiserValue => raiserInt(2);
+	const fnC: RaiserHostFn = (args: RaiserValue[]): RaiserValue => raiserInt(3);
+	registerHostFn("swap", fnA);
+	const mod = makeTestModule([
+		raiserABC(RaiserOpcode.CallHost, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [raiserConstString("swap")]);
+	const func = getModuleFunc(mod, 0);
+	assert func.hostCache[0] == null;
+	const first = createVM(mod);
+	execLoop(first);
+	assert first.exitValue.intVal == 1;
+	const cached = func.hostCache[0];
+	assert cached != null;
+	registerHostFn("swap", fnB);
+	const second = createVM(mod);
+	execLoop(second);
+	assert second.exitValue.intVal == 2;
+	assert func.hostCache[0] == cached;
+	_resetHostRegistryForTests();
+	const gone = createVM(mod);
+	execLoop(gone);
+	assert gone.error.indexOf("Unknown host function: swap", 0) >= 0, gone.error;
+	registerHostFn("swap", fnC);
+	const third = createVM(mod);
+	execLoop(third);
+	assert third.exitValue.intVal == 3;
+	assert func.hostCache[0] != cached;
+}
+
+test "restricted CallHost refuses at a site an unrestricted run already cached" {
+	_resetHostRegistryForTests();
+	const fn: RaiserHostFn = (args: RaiserValue[]): RaiserValue => raiserInt(1);
+	registerHostFn("unsafe", fn);
+	const mod = makeTestModule([
+		raiserABC(RaiserOpcode.CallHost, 0, 0, 0),
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	], [raiserConstString("unsafe")]);
+	const open = createVM(mod);
+	execLoop(open);
+	assert open.error == "", open.error;
+	assert getModuleFunc(mod, 0).hostCache[0] != null;
+	const restricted = createVM(mod);
+	restricted.hostCallsRestricted = true;
+	restricted.hostPolicySource = "/cache/evil.ms";
+	execLoop(restricted);
+	assert restricted.error.indexOf("host function 'unsafe'", 0) >= 0, restricted.error;
 }
 
 test "instruction line field preserved" {
