@@ -2563,6 +2563,8 @@ s.name;                           // OK: nonisolated, readonly
 await s.getConnections();         // OK: through mailbox
 ```
 
+A nonisolated field is read from other threads while the actor runs and while it stops, so the declaration must be `readonly` and of a value type: a number type, `bigint`, `boolean`, `string`, an enum, or a literal of one. Any other `@nonisolated` field is a compile error: `a nonisolated field is read from other threads, so it must be readonly and of a value type (number, bigint, boolean, string, enum)`. Each read returns an independent copy. Reading a nonisolated field of an actor that has stopped ends the program with `actor <pid> has stopped, so its nonisolated field cannot be read`.
+
 Without the import the name resolves to nothing and the field stays isolated:
 `Cannot find name 'nonisolated'`, followed by `cannot access actor field 'name'
 directly — use actor methods` at the read.
