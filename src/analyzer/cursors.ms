@@ -1428,3 +1428,9 @@ test "a call passing a closure that writes through a capture ends the view" {
 	inferCursors(body);
 	assert !isCursorNamed(body, "v");
 }
+
+test "a call to a nested function that writes the view's source through a capture ends the view" {
+	const body = getFuncNamed(SETTERS + "function f(n: LinkM): int32 { const v = n.next; const own = new LinkM(); function clear(o: LinkM): void { o.next = null; n.next = null; } clear(own); return v != null ? v.v : 0; }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "v");
+}

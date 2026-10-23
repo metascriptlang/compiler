@@ -195,14 +195,14 @@ test "E2E C: a task view of a lent graph takes no rc op beside a method call on 
 	assert !body.contains("msDecrefCyclic(view");
 }
 
-const CAPTURE_WRITERS = (view: string, decl: string, arg: string, call: string) => `
+const CAPTURE_WRITERS = (view: string, decl: string, arg: string, call: string, declare: string) => `
 class L { v: int32 = 0; next: L | null = null; }
 function apply(f: (o: L) => void, o: L): void { f(o); }
 function f(${view}): int32 {
 	${decl}
 	const v = n.next;
 	const own = new L();
-	const clear = (o: L): void => { o.next = null; n.next = null; };
+	${declare}
 	${call}
 	return v != null ? v.v : 0;
 }
@@ -210,13 +210,15 @@ const a = new L(); a.next = new L(); a.next!.v = 7;
 console.log(\`\${f(${arg})}\`);
 `;
 
-test "E2E C: a view stays counted when a closure writes its source through a capture, called directly or passed on" {
-	for (const call of ["clear(own);", "apply(clear, own);"]) {
-		const asParam = compileToC(CAPTURE_WRITERS("n: L", "", "a", call));
-		assert asParam.ok;
-		assert (asParam.ok ? asParam.value : "").contains("msDecrefCyclic(v_"), call;
-		const asLocal = compileToC(CAPTURE_WRITERS("", "const n = new L(); n.next = new L();", "", call));
-		assert asLocal.ok;
-		assert (asLocal.ok ? asLocal.value : "").contains("msDecrefCyclic(v_"), call;
+test "E2E C: a view stays counted when a closure or nested function writes its source through a capture, called directly or passed on" {
+	for (const declare of ["const clear = (o: L): void => { o.next = null; n.next = null; };", "function clear(o: L): void { o.next = null; n.next = null; }"]) {
+		for (const call of ["clear(own);", "apply(clear, own);"]) {
+			const asParam = compileToC(CAPTURE_WRITERS("n: L", "", "a", call, declare));
+			assert asParam.ok;
+			assert (asParam.ok ? asParam.value : "").contains("msDecrefCyclic(v_"), declare + call;
+			const asLocal = compileToC(CAPTURE_WRITERS("", "const n = new L(); n.next = new L();", "", call, declare));
+			assert asLocal.ok;
+			assert (asLocal.ok ? asLocal.value : "").contains("msDecrefCyclic(v_"), declare + call;
+		}
 	}
 }
