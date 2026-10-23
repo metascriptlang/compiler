@@ -1316,6 +1316,27 @@ test "orc: a cycle through a reference field and one through a union field are c
 	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
 }
 
+test "orc: a ring through one of two array fields frees each array once" {
+	const vm = evalOrcVM("class C { kids: C[] = []; mixed: (C | int32 | null)[] = []; }"
+		+ " function ring(): void { const a = new C(); const b = new C(); a.kids.push(b); b.kids.push(a);"
+		+ " const c = new C(); const d = new C(); c.mixed.push(d); c.mixed.push(5); d.mixed.push(c); d.mixed.push(null); }"
+		+ " for (let i = 0; i < 300; i++) ring(); console.log('ok');");
+	assert vm.error == "", vm.error;
+	assert vm.output == "ok\n", vm.output;
+	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
+	assert vm.arrayHeap.freeList.length <= vm.arrayHeap.arrays.length, `${vm.arrayHeap.freeList.length} free of ${vm.arrayHeap.arrays.length}`;
+}
+
+test "orc: a ring through three plain array fields frees each array once" {
+	const vm = evalOrcVM("class C { kids: C[] = []; more: C[] = []; last: C[] = []; }"
+		+ " function ring(): void { const a = new C(); const b = new C(); a.kids.push(b); b.more.push(a); b.last.push(b); }"
+		+ " for (let i = 0; i < 300; i++) ring(); console.log('ok');");
+	assert vm.error == "", vm.error;
+	assert vm.output == "ok\n", vm.output;
+	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
+	assert vm.arrayHeap.freeList.length <= vm.arrayHeap.arrays.length, `${vm.arrayHeap.freeList.length} free of ${vm.arrayHeap.arrays.length}`;
+}
+
 // --- Phase 3 Integration Tests ---
 // These tests verify features that require transforms to work.
 test "match expression returns value" {

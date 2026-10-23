@@ -132,10 +132,11 @@ function releaseWhiteChild(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, 
 }
 
 // --- Phase 3: collect white — recycle the garbage cycle, release external refs ---
-// White → mark GRAY (in-collect-set) to disambiguate from external BLACK refs.
+// White → mark GRAY (in-collect-set) to disambiguate from external BLACK refs. Every root's set joins one
+// list that is freed only after all roots are traced: a node freed early turns BLACK again and a later
+// root's trace would release it as an external ref a second time.
 
-function collectWhite(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue): int32 {
-	const toFree: RaiserValue[] = [];
+function collectWhite(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held: RaiserValue, toFree: RaiserValue[]): void {
 	const work: RaiserValue[] = [heldHandle(held)];
 	while (work.length > 0) {
 		const v = work.pop()!;
@@ -150,6 +151,9 @@ function collectWhite(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held:
 			for (let i = 0; i < count; i += 1) releaseWhiteChild(arrHeap, objHeap, fieldValueAt(obj, i), work);
 		}
 	}
+}
+
+function freeCollected(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, toFree: RaiserValue[]): void {
 	for (const v of toFree) {
 		if (v.kind == RaiserValueKind.Array) {
 			const data = arrHeap.arrays[handleIndex(v.intVal)];
@@ -169,7 +173,6 @@ function collectWhite(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, held:
 			objHeap.freeList.push(handleIndex(v.intVal));
 		}
 	}
-	return toFree.length as int32;
 }
 
 // --- Driver: full-heap trial-deletion collect. Returns count of freed objects. ---
@@ -195,14 +198,15 @@ export function orcCollectCycles(arrHeap: RaiserArrayHeap, objHeap: RaiserObject
 	for (let h = 0; h < objHeap.objects.length; h = h + 1) {
 		if (colorOf(arrHeap, objHeap, objectAt(h)) == COL_GRAY) scan(arrHeap, objHeap, objectAt(h));
 	}
-	let freed = 0;
+	const toFree: RaiserValue[] = [];
 	for (let h = 0; h < arrHeap.arrays.length; h = h + 1) {
-		if (colorOf(arrHeap, objHeap, arrayAt(h)) == COL_WHITE) freed = (freed + collectWhite(arrHeap, objHeap, arrayAt(h))) as int32;
+		if (colorOf(arrHeap, objHeap, arrayAt(h)) == COL_WHITE) collectWhite(arrHeap, objHeap, arrayAt(h), toFree);
 	}
 	for (let h = 0; h < objHeap.objects.length; h = h + 1) {
-		if (colorOf(arrHeap, objHeap, objectAt(h)) == COL_WHITE) freed = (freed + collectWhite(arrHeap, objHeap, objectAt(h))) as int32;
+		if (colorOf(arrHeap, objHeap, objectAt(h)) == COL_WHITE) collectWhite(arrHeap, objHeap, objectAt(h), toFree);
 	}
-	return freed;
+	freeCollected(arrHeap, objHeap, toFree);
+	return toFree.length as int32;
 }
 
 // --- Tests ---
@@ -279,4 +283,23 @@ test "orc walks a chain as long as the heap without native recursion, kept and c
 	rcDecref(arr, obj, raiserObject(first));
 	assert orcCollectCycles(arr, obj) == count;
 	assert obj.freeList.length == count;
+}
+
+test "orc frees a node reachable from two garbage roots once" {
+	const arr = createArrayHeap();
+	const obj = createStructHeap();
+	const a = heapAllocObject(obj);
+	const more = heapAllocArray(arr);
+	const spare = heapAllocArray(arr);
+	const kids = heapAllocArray(arr);
+	rcIncref(arr, obj, raiserArray(kids));
+	heapObjectSetField(obj, a, "kids", raiserArray(kids));
+	rcIncref(arr, obj, raiserArray(more));
+	heapObjectSetField(obj, a, "more", raiserArray(more));
+	rcIncref(arr, obj, raiserArray(spare));
+	heapObjectSetField(obj, a, "spare", raiserArray(spare));
+	rcIncref(arr, obj, raiserObject(a));
+	heapArrayPush(arr, kids, raiserObject(a));
+	assert orcCollectCycles(arr, obj) == 4;
+	assert arr.freeList.length == 3 && obj.freeList.length == 1;
 }
