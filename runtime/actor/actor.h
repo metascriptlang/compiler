@@ -219,7 +219,9 @@ static inline void msHazardClear(void* p) {
     }
 }
 
+/* The fence pairs with the pin's seq_cst publish-then-revalidate: without it the scan can miss a pin that survived the pid release. */
 static inline bool msHazardScan(void* p) {
+    atomic_thread_fence(memory_order_seq_cst);
     for (msHazardRec* h = atomic_load_explicit(&msHazardHead, memory_order_acquire);
          h != NULL; h = atomic_load_explicit(&h->next, memory_order_acquire)) {
         for (int i = 0; i < MS_HAZARD_SLOTS; i++) {
@@ -258,7 +260,7 @@ static inline void msPidRelease(msActor* a) {
 /* Pid → shell. Generation-validated + hazard-pinned; NULL for dead/reused slots.
  * The pin ends inside the runtime call the result flows into — msActorSend,
  * msActorSuspend, msActorStop, etc. all msHazardClear on every exit. */
-static inline msActor* msActorFromPid(int64_t pid) {
+static inline msActor* msActorFromPidSlot(int64_t pid, int* slotOut) {
     if (pid <= 0) return NULL;
     int32_t idx = (int32_t)((uint64_t)pid & MS_PID_SLOT_MASK);
     uint64_t g = ((uint64_t)pid >> MS_PID_SLOT_BITS) & MS_PID_GEN_MASK;
@@ -272,7 +274,11 @@ static inline msActor* msActorFromPid(int64_t pid) {
     for (int i = 0; i < MS_HAZARD_SLOTS; i++) {
         if (atomic_load_explicit(&h->slot[i], memory_order_relaxed) == NULL) { k = i; break; }
     }
-    if (k < 0) return NULL;  /* both slots pinned (impossible by enumeration) — fail safe */
+    if (k < 0) {
+        fputs("internal: hazard slots exhausted\n", stderr);
+        if (msFatalTrap != NULL) msFatalTrap();
+        exit(1);
+    }
     atomic_store_explicit(&h->slot[k], p, memory_order_seq_cst);
     /* Re-validate after publish (hazard handshake vs. the reaper's gen bump). */
     if ((atomic_load_explicit(&s->gen, memory_order_seq_cst) & MS_PID_GEN_MASK) != g
@@ -280,7 +286,13 @@ static inline msActor* msActorFromPid(int64_t pid) {
         atomic_store_explicit(&h->slot[k], NULL, memory_order_release);
         return NULL;
     }
+    *slotOut = k;
     return (msActor*)p;
+}
+
+static inline msActor* msActorFromPid(int64_t pid) {
+    int k;
+    return msActorFromPidSlot(pid, &k);
 }
 
 /* Pin a live table slot by index (any generation) — CD's global iteration. */
@@ -294,7 +306,11 @@ static inline msActor* msPidPinSlot(int32_t idx) {
     for (int i = 0; i < MS_HAZARD_SLOTS; i++) {
         if (atomic_load_explicit(&h->slot[i], memory_order_relaxed) == NULL) { k = i; break; }
     }
-    if (k < 0) return NULL;
+    if (k < 0) {
+        fputs("internal: hazard slots exhausted\n", stderr);
+        if (msFatalTrap != NULL) msFatalTrap();
+        exit(1);
+    }
     atomic_store_explicit(&h->slot[k], p, memory_order_seq_cst);
     if (atomic_load_explicit(&s->gen, memory_order_seq_cst) != g
             || atomic_load_explicit(&s->ptr, memory_order_relaxed) != p) {
@@ -375,16 +391,31 @@ static inline void msActorCtorLeave(int64_t pid) {
     msHazardClear(a);
 }
 
-static inline void* msActorStateOf(int64_t pid) {
-    msActor* a = msActorFromPid(pid);
-    if (a == NULL) {
+/* A nonisolated read pins its actor in one exact hazard slot for the whole access: the
+ * pin returns the slot, the read goes through msActorPinnedState, and the unpin clears
+ * only that slot. Teardown defers the state's destruction while any slot holds the actor. */
+static inline int32_t msActorPin(int64_t pid) {
+    int k;
+    if (msActorFromPidSlot(pid, &k) == NULL) {
         fprintf(stderr, "Error: actor %lld has stopped, so its nonisolated field cannot be read\n", (long long)pid);
         if (msFatalTrap != NULL) msFatalTrap();
         exit(1);
     }
-    void* state = a->state;
-    msHazardClear(a);
-    return state;
+    return (int32_t)k;
+}
+
+static inline void* msActorPinnedState(int32_t slot) {
+    return ((msActor*)atomic_load_explicit(&msMyHazard->slot[slot], memory_order_relaxed))->state;
+}
+
+static inline void msActorUnpin(int32_t slot) {
+    atomic_store_explicit(&msMyHazard->slot[slot], NULL, memory_order_release);
+}
+
+/* An independent copy of a string field read under a pin: a heap payload is copied, never shared. */
+static inline msString msActorCopyString(msString s) {
+    msStringIncref(s);
+    return s;
 }
 
 /* Create actor and return its pid (for the typed pid field in the actor struct) */
@@ -954,6 +985,39 @@ static inline void msActorSetSystemMsgHandler(void* actor, void* fn) {
     msHazardClear(a);
 }
 
+/* I19: pin-aware retirement, owner thread only. The pid slot is long released, so no NEW pin
+ * can appear and pins only drain. A nonisolated read copies the state's fields under its pin,
+ * so the state's destruction, not only the shell's free, waits for every pin. A deferred
+ * actor with its state set still owes the state's teardown; with the state NULL only its shell. */
+static inline void msActorDeferRetire(msActor* a) {
+    int sidD = (a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) ? a->schedulerID : 0;
+    atomic_store_explicit(&a->runNext, msSchedulers[sidD].deferredFree, memory_order_relaxed);
+    msSchedulers[sidD].deferredFree = a;
+}
+
+/* Sole owner: the handle is DRC-exempt (classify.ms) and the spawn-time msIncRef is
+ * cycle-detector-only, so neither releases state — teardown frees it (Pony parity). */
+static inline void msActorRetireState(msActor* a) {
+    msRootsSwap(&a->roots);
+    if (a->state != NULL) {
+        const msTypeInfo* __st = msHeader(a->state)->type;
+        MS_DESTROY_DISPATCH(__st, a->state);
+        msDestroyAndDispose(a->state);
+        a->state = NULL;
+    }
+    msOrcCollect();
+    msRootsSwap(&a->roots);
+    msRootsAdopt(&a->roots);
+}
+
+static inline void msActorFreeShell(msActor* a) {
+    if (msHazardScan(a)) {
+        msActorDeferRetire(a);
+    } else {
+        free(a);
+    }
+}
+
 static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
     /* Guard: prevent double-destroy (re-entrancy from link cascade or supervisor) */
     bool wasAlive = atomic_exchange_explicit(&a->alive, false, memory_order_acq_rel);
@@ -1037,26 +1101,13 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
     if (atomic_load_explicit(&a->stopRequested, memory_order_relaxed)) {
         atomic_fetch_sub(&msActorsStopPending, 1);
     }
-    /* Sole owner: the handle is DRC-exempt (classify.ms) and the spawn-time msIncRef is
-     * cycle-detector-only, so neither releases state — teardown frees it (Pony parity). */
-    if (a->state != NULL) {
-        const msTypeInfo* __st = msHeader(a->state)->type;
-        MS_DESTROY_DISPATCH(__st, a->state);
-        msDestroyAndDispose(a->state);
-        a->state = NULL;
-    }
-    msOrcCollect();
     msRootsSwap(&a->roots);
-    msRootsAdopt(&a->roots);
-    /* I19: defer the free while any in-flight lookup still pins the shell. The
-     * pid slot is long released, so no NEW pin can appear — pins only drain. */
-    if (msHazardScan(a)) {
-        int sidD = (a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) ? a->schedulerID : 0;
-        atomic_store_explicit(&a->runNext, msSchedulers[sidD].deferredFree, memory_order_relaxed);
-        msSchedulers[sidD].deferredFree = a;
-    } else {
-        free(a);
+    if (a->state != NULL && msHazardScan(a)) {
+        msActorDeferRetire(a);
+        return;
     }
+    msActorRetireState(a);
+    msActorFreeShell(a);
 }
 
 static inline void msActorDestroy(msActor* a) {
@@ -1595,7 +1646,11 @@ static inline bool msActorPollLocal(void) {
         sched->deferredFree = NULL;
         while (d != NULL) {
             msActor* nx = atomic_load_explicit(&d->runNext, memory_order_relaxed);
-            if (msHazardScan(d)) {
+            if (d->state != NULL && !msHazardScan(d)) {
+                msActorRetireState(d);
+                didWork = true;
+            }
+            if (d->state != NULL || msHazardScan(d)) {
                 atomic_store_explicit(&d->runNext, sched->deferredFree, memory_order_relaxed);
                 sched->deferredFree = d;
             } else {

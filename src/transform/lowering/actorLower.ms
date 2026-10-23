@@ -15,7 +15,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, DeclKind, Type, TypeKind,
 	DoWhileStmtData, TryCatchStmtData,
 	ExprStmtData, ReturnStmtData, MemberExprData, HiddenDerefData, BinaryExprData,
 	Symbol, SymbolKind, createNode } from "../../ast/node";
-import { TransformContext, freshTempSym, mintSym } from "../context";
+import { TransformContext, freshTempSym, freshOwnedSym, mintSym } from "../context";
 import { canFormAcycle } from "../cycles";
 import { containsExprKind, mapChildren } from "../walker";
 import { setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
@@ -23,7 +23,8 @@ import { mayHoldCycleRoot, disownStmt, disownReturns } from "./spawnLower";
 import {
 	syntheticToken, makeIdentResolved, makeTypedIdentResolved, makeCall, makeExprStmt, makeReturn,
 	makeVarDecl, makeMember, makeNumber, makeNull, makeAbsent, makeBlock, makeBinary,
-	isValueLayoutType, makeHiddenAddr, makeHiddenStdConv, makeTryFinally, runtimeRef,
+	isValueLayoutType, makeHiddenAddr, makeHiddenDeref, makeHiddenStdConv, makeTryFinally, runtimeRef,
+	makeFnDecl, makeLocalDecl, addGeneratedFn, generatedFnCount,
 } from "../util";
 import { voidType, noneType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, copyTypeShallow, unwrapRefNullUnion, getSysType, isStructType, isAtomicRef, instantiateGenericBody, typeDisplayName } from "../../checker/types";
 import { genericParamsOf, literalBase } from "../../checker/types";
@@ -1169,6 +1170,7 @@ interface ActorHandles {
 	states: HashMap<Symbol, Type>;
 	stateTypes: HashSet<Type>;
 	receivers: HashMap<Symbol, Symbol>;
+	readers: HashMap<Symbol, HashMap<string, Symbol>>;
 	seen: HashSet<Type>;
 }
 
@@ -1259,6 +1261,55 @@ function receiverHandle(h: ActorHandles, receiver: Node, actor: Symbol): Node {
 	return pid;
 }
 
+// A nonisolated field is read from other threads, so the read is one routine per field:
+// pin the actor in an exact hazard slot, copy the field into an independent value, unpin,
+// return the copy. The pin never reaches a caller's expression, so operand order and the
+// short-circuit and ternary positions keep the read's own place.
+function nonisolatedCopy(read: Node, fieldType: Type, loc: SourceLocation): Node {
+	const base = literalBase(fieldType);
+	if (base.kind == TypeKind.String) return makeCall(runtimeRef("msActorCopyString", loc), [read], loc);
+	if (base.kind == TypeKind.BigInt) return makeCall(runtimeRef("msBigIntClone", loc), [read], loc);
+	return read;
+}
+
+function nonisolatedReader(h: ActorHandles, owner: Symbol, field: Node, throughDeref: boolean): Symbol {
+	const md = field.data as MemberExprData;
+	const loc = field.location;
+	const key = md.property + (throughDeref ? "*" : "");
+	let byField = h.readers.get(owner);
+	if (byField == null) {
+		byField = new HashMap<string, Symbol>();
+		h.readers.set(owner, byField);
+	}
+	const known = byField.get(key);
+	if (known != null) return known;
+	const fieldType = field.nodeType!;
+	const pidType = getSysType(TypeKind.Int64);
+	const slotType = getSysType(TypeKind.Int32);
+	const pidSym = mintSym(h.ctx, SymbolKind.Parameter, "pid", pidType);
+	const slotSym = mintSym(h.ctx, SymbolKind.Variable, "slot", slotType);
+	const valueSym = freshOwnedSym(h.ctx, "nonisolated", fieldType);
+	let state = makeHiddenStdConv(makeCall(runtimeRef("msActorPinnedState", loc), [makeTypedIdentResolved(slotSym, slotType, loc)], loc), stateOf(h, owner), loc);
+	if (throughDeref) state = makeHiddenDeref(state, loc);
+	const read = makeMember(state, md.property, loc);
+	read.nodeType = fieldType;
+	read.resolvedSym = field.resolvedSym;
+	const stmts: Node[] = [
+		makeLocalDecl(slotSym, makeCall(runtimeRef("msActorPin", loc), [makeTypedIdentResolved(pidSym, pidType, loc)], loc), slotType, loc),
+		makeLocalDecl(valueSym, nonisolatedCopy(read, fieldType, loc), fieldType, loc),
+		makeExprStmt(makeCall(runtimeRef("msActorUnpin", loc), [makeTypedIdentResolved(slotSym, slotType, loc)], loc), loc),
+		makeReturn(makeTypedIdentResolved(valueSym, fieldType, loc), loc),
+	];
+	const fnSym = mintSym(h.ctx, SymbolKind.Function, "$nonisolated" + generatedFnCount().toString(), null);
+	const fnNode = makeFnDecl(fnSym.name, [pidSym], ["int64"], makeBlock(stmts, loc), "", "", loc);
+	fnNode.nodeType = createFunction([pidType], ["pid"], fieldType);
+	fnSym.symbolType = fnNode.nodeType;
+	fnNode.resolvedSym = fnSym;
+	addGeneratedFn(fnNode);
+	byField.set(key, fnSym);
+	return fnSym;
+}
+
 function lowerHandleNode(h: ActorHandles, node: Node): Node {
 	if (node == null) return node;
 	if (node.kind == NodeKind.Identifier) {
@@ -1292,11 +1343,11 @@ function lowerHandleNode(h: ActorHandles, node: Node): Node {
 		md.object = handle;
 		return node;
 	}
-		const state = makeHiddenStdConv(makeCall(runtimeRef("msActorStateOf", node.location), [handle], node.location), stateOf(h, owner), node.location);
-		if (md.object.kind == NodeKind.HiddenDeref) (md.object.data as HiddenDerefData).expr = state;
-		else md.object = state;
+		const reader = nonisolatedReader(h, owner, node, md.object.kind == NodeKind.HiddenDeref);
 		includeActorRuntime(h.ctx);
-		return node;
+		const read = makeCall(makeTypedIdentResolved(reader, reader.symbolType, node.location), [handle], node.location);
+		read.nodeType = node.nodeType;
+		return read;
 	}
 	if (node.kind == NodeKind.ActorDecl) {
 		const actor = node.resolvedSym;
@@ -1332,6 +1383,7 @@ export function lowerActorHandles(program: Node, ctx: TransformContext): Node {
 		states: new HashMap<Symbol, Type>(),
 		stateTypes: new HashSet<Type>(),
 		receivers: new HashMap<Symbol, Symbol>(),
+		readers: new HashMap<Symbol, HashMap<string, Symbol>>(),
 		seen: new HashSet<Type>(),
 	};
 	return lowerHandleNode(h, program);

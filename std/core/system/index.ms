@@ -1142,7 +1142,19 @@ when (mscDeclaresRuntime) {
 	extern function msActorFromPid(pid: int64): Ptr<void>;
 
 	@compilerFunc
-	extern function msActorStateOf(pid: int64): Ptr<void>;
+	extern function msActorPin(pid: int64): int32;
+
+	@compilerFunc
+	extern function msActorPinnedState(slot: int32): Ptr<void>;
+
+	@compilerFunc
+	extern function msActorUnpin(slot: int32): void;
+
+	@compilerFunc
+	extern function msActorCopyString(s: string): string;
+
+	@compilerFunc
+	extern function msBigIntClone(a: bigint): bigint;
 
 	@compilerFunc
 	extern function msActorPollAll(): boolean;

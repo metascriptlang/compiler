@@ -34,6 +34,7 @@ msBigInt* msBigIntMul(const msBigInt* a, const msBigInt* b);
 msBigInt* msBigIntDiv(const msBigInt* a, const msBigInt* b);
 msBigInt* msBigIntMod(const msBigInt* a, const msBigInt* b);
 msBigInt* msBigIntPow(const msBigInt* a, const msBigInt* b);
+msBigInt* msBigIntClone(const msBigInt* a);
 msBigInt* msBigIntNeg(const msBigInt* a);
 msBigInt* msBigIntNot(const msBigInt* a);
 msBigInt* msBigIntAnd(const msBigInt* a, const msBigInt* b);
