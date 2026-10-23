@@ -35,6 +35,7 @@ import { checkProgram } from "../../checker/checkPass";
 import { parseInput, checkedCtx } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
 import { sizedArrayHookName } from "../../analyzer/classify";
+import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
 let _jsProgramScope = false;
 
@@ -1462,7 +1463,7 @@ function deferAfterDropEdges(items: Node[], first: number, self: Symbol, classTy
 		];
 		const head = items.slice(0, i);
 		head.push(makeIf(edge, makeBlock(deferred, loc), null as unknown as Node, loc));
-		head.push(makeExprStmt(makeCall(makeIdentResolved(restSym, loc), [makeIdentResolved(self, loc), makeNull(loc)], loc), loc));
+		for (const it of restItems) head.push(cloneNodeKeepSem(it));
 		return head;
 	}
 	return items;
