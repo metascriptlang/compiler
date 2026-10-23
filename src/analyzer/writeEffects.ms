@@ -285,7 +285,7 @@ function canAliasIn(arg: Type | null, ret: Type | null, seen: HashSet<Type>): bo
 	seen.add(ret);
 	if (ret.kind == TypeKind.Ptr) return false;
 	const a = holderType(arg);
-	if (a == null) return true;
+	if (a == null) return containsPointer(arg, 0);
 	const r = holderType(ret);
 	if (r != null && mayBePartOf(a, r, 0)) return true;
 	const t = r ?? ret;
