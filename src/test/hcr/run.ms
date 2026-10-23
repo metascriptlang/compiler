@@ -1503,6 +1503,28 @@ function overloadCall(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function coreConstant(): void {
+	const tag = "hcrCoreConstant";
+	const dir = freshDir(`${TMP}/coreConstant`);
+	for (const f of ["app.ms", "geo.ms", "scale.ms", "scaleEdit.ms"]) copy(`${FIXTURES}/coreConstant/${f}`, `${dir}/${f}`);
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=img/module${sharedLibraryExt()}`], "an image reading a core static constant did not link");
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-CC ")) seen.push(line);
+	}
+	const want = [
+		"HCR-CC start 6.283185307179586 true",
+		"HCR-CC reloaded scale",
+		"HCR-CC after 9.42477796076938 true",
+	];
+	if (!succeeded(ran) || seen.join("|") != want.join("|")) {
+		console.log(both(ran));
+		failWith(tag, "a core static constant was not folded in an image, or a project constant edit did not reach the image after a reload");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function macroHelper(): void {
 	const tag = "hcrMacroHelper";
 	for (const variant of ["base", "second"]) {
@@ -1989,6 +2011,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrCoreGenericInit", run: coreGenericInit },
 	{ name: "hcrMacroHelper", run: macroHelper },
 	{ name: "hcrOverloadCall", run: overloadCall },
+	{ name: "hcrCoreConstant", run: coreConstant },
 	{ name: "hcrCoreNative", run: coreNative },
 	{ name: "hcrGlobalCell", run: globalCell },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
