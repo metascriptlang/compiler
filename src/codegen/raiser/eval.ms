@@ -2532,3 +2532,11 @@ test "engine: a ref result leaves its callee once, whether the callee made it, w
 	assert vm.error == "", vm.error;
 	assert vm.output == "26 n0n1n2\n", vm.output;
 }
+
+test "engine: a host call keeps its argument order and takes one register twice" {
+	const code = "function probe(a: string, b: string): string { return `${a.indexOf(b)} ${b.indexOf(a)} ${a.indexOf(a)} ${b.indexOf(b)}`; }"
+		+ " console.log(probe(\"xxabc\", \"abc\")); console.log(probe(\"q\", \"q\"));";
+	const vm = evalOrcVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "2 -1 0 0\n0 0 0 0\n", vm.output;
+}
