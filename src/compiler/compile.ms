@@ -33,7 +33,7 @@ import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { getParserDefines, setParserDefines } from "../parser/context";
 import { computeAliveSet } from "../checker/reachability";
-import { inferRaises, resetRaises } from "../checker/raises";
+import { inferRaises, markEveryBodyMayRaise } from "../checker/raises";
 import { collectFreestandingAsync, collectWritableModuleBindings, emptyTopLevelMessage, freestandingAsyncLoc, topLevelCallsAnything, writableModuleBindingMessage, FREESTANDING_ASYNC_MSG } from "../checker/freestanding";
 import { refuseSyncAwaitOnJs } from "../checker/syncAwait";
 import { refusePointerOpsOnJs } from "../checker/byteViews";
@@ -3001,7 +3001,7 @@ resetLiftedOps();
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
-	if (opts.isHcr) resetRaises();
+	if (opts.isHcr) markEveryBodyMayRaise(transformedPrograms);
 	else inferRaises(transformedPrograms);
 	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, hcrModulePaths, hcrRootFunctions(hcrModulePaths), hcrModulePaths);
 	// Release DCE input arrays - no longer needed after alive set computed.

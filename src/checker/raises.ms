@@ -277,6 +277,13 @@ function noteSiteVerdict(node: Node, info: RoutineInfo): void {
 	noteVerdict(classifyTarget(callee, (node.data as CallExprData).arguments), callee, info);
 }
 
+export function markEveryBodyMayRaise(programs: Node[]): void {
+	resetRaises();
+	for (const program of programs) {
+		if (program != null) markStatementValues(program);
+	}
+}
+
 export function inferRaises(programs: Node[]): void {
 	resetRaises();
 	resetWalk();
