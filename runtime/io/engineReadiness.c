@@ -124,7 +124,7 @@ void* msIoAccept(msIoEngine* e, int listenFd) {
 	req->fut = fut;
 	growFdMap(e, listenFd);
 	e->fdMap[listenFd] = req;
-	msSelectorRegister(e->selector, listenFd, MS_EVENT_READ, req);
+	msSelectorRegister(e->selector, listenFd, MS_EVENT_READ | MS_EVENT_EXCLUSIVE, req);
 	return fut;
 }
 
@@ -230,7 +230,7 @@ static void completeRecv(msIoRequest* req) {
 	req->buf = NULL;
 }
 
-static void completeAccept(msIoRequest* req) {
+static int completeAccept(msIoEngine* e, msIoRequest* req) {
 	struct sockaddr_in addr;
 	socklen_t addrLen = sizeof(addr);
 	int cfd;
@@ -238,11 +238,17 @@ static void completeAccept(msIoRequest* req) {
 		cfd = accept(req->fd, (struct sockaddr*)&addr, &addrLen);
 	} while (cfd < 0 && errno == EINTR);
 
+	if (cfd < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+		e->fdMap[req->fd] = req;
+		msSelectorRegister(e->selector, req->fd, MS_EVENT_READ | MS_EVENT_EXCLUSIVE, req);
+		return 1;
+	}
 	if (cfd >= 0) {
 		int flag = 1;
 		setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 	}
 	msFutureCompleteT((msFuture_int32*)req->fut, (int32_t)cfd);
+	return 0;
 }
 
 static void completeSend(msIoRequest* req) {
@@ -652,7 +658,7 @@ int msIoEnginePoll(msIoEngine* e, int timeoutMs) {
 		/* Perform syscall + complete future */
 		switch (req->op) {
 		case MS_IO_RECV:   completeRecv(req);   break;
-		case MS_IO_ACCEPT: completeAccept(req); break;
+		case MS_IO_ACCEPT: if (completeAccept(e, req)) continue; break;
 		case MS_IO_SEND:   completeSend(req);   break;
 		case MS_IO_CLOSE:
 			close(fd);

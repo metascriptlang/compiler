@@ -1,6 +1,6 @@
 // HTTP Server — event-loop-per-core architecture.
 // Each core: kqueue/epoll selector multiplexing all connections.
-// Parallel across cores (spawn + SO_REUSEPORT), concurrent within each (selector).
+// Parallel across cores (spawn; every loop accepts on the one listening socket), concurrent within each (selector).
 
 @emit("#define MS_SELECTOR_BRIDGE");
 @include("runtime/os.h");
@@ -11,7 +11,6 @@
 
 extern function msNetSocket(): int32;
 extern function msNetBind(fd: int32, addr: string, port: int32): int32;
-extern function msNetBindShared(fd: int32, addr: string, port: int32): int32;
 extern function msNetListen(fd: int32, backlog: int32): int32;
 extern function msNetAccept(fd: int32): int32;
 extern function msNetSend(fd: int32, data: string): int32;
@@ -756,31 +755,38 @@ function allocClients(cfg: Readonly<LoopConfig>): ClientState[] {
 export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
 	if (signalAborted(server)) { closeStopped(server); return; }
 	const n = threads > 0 ? threads : msOsCpuCount();
+	const listenFd = takeListenFd(server);
+	if (listenFd < 0) { closeStopped(server); return; }
 	server.running = true;
 	setRunning(server.runState, true);
-	if (server.fd >= 0) { msNetClose(server.fd); server.fd = -1; }
 
 	const cfg = loopConfig(server);
 	const run = server.runState;
-	const addr = server.address;
-	const port = server.port;
 	const handler = server.handler;
 
 	const workers: Promise<null>[] = [];
 	for (let i = 0; i < n - 1; i += 1) {
-		workers.push(spawn(() => serveThread(cfg, run, addr, port, handler)));
+		workers.push(spawn(() => serveThread(cfg, run, listenFd, handler)));
 	}
-	serveThread(cfg, run, addr, port, handler);
+	serveThread(cfg, run, listenFd, handler);
 	for (const w of workers) await w;
+	msNetClose(listenFd);
 	closeStopped(server);
 }
 
-function serveThread(cfg: Readonly<LoopConfig>, run: Locked<RunState>, addr: string, port: int32, handler: RequestHandler): null {
-	const fd = msNetSocket();
-	if (fd < 0) return null;
-	if (msNetBindShared(fd, addr, port) < 0) { msNetClose(fd); return null; }
-	if (msNetListen(fd, 1024) < 0) { msNetClose(fd); return null; }
+function takeListenFd(server: HttpServer): int32 {
+	let fd = server.fd;
+	server.fd = -1;
+	if (fd < 0) {
+		fd = msNetSocket();
+		if (fd < 0) return -1;
+		if (msNetBind(fd, server.address, server.port) < 0 || msNetListen(fd, 1024) < 0) { msNetClose(fd); return -1; }
+	}
 	msNetSetNonBlocking(fd);
+	return fd;
+}
+
+function serveThread(cfg: Readonly<LoopConfig>, run: Locked<RunState>, fd: int32, handler: RequestHandler): null {
 	if (msHasUringEventLoop() == 1) {
 		eventLoopUring(cfg, run, fd, handler);
 	} else {
@@ -789,7 +795,6 @@ function serveThread(cfg: Readonly<LoopConfig>, run: Locked<RunState>, addr: str
 		listenAsyncLoop(cfg, run, fd, handler, clients, loop);
 		driveWithSweep(cfg, run, fd, clients, loop);
 	}
-	msNetClose(fd);
 	return null;
 }
 
@@ -892,7 +897,7 @@ async function handleConnSync(cfg: Readonly<LoopConfig>, run: Locked<RunState>, 
 		requestCount = requestCount + 1;
 		if (cfg.maxRequestsPerConnection > 0 && requestCount >= cfg.maxRequestsPerConnection) break;
 	}
-	// Multi-worker SO_REUSEPORT: fd numbers reused across workers; without
+	// Multi-worker: fd numbers are reused across workers; without
 	// this reset a stale lastActivityMs could trigger one worker to kill
 	// another's freshly-accepted fd.
 	client.lastActivityMs = 0 as int64;
@@ -1342,34 +1347,28 @@ async function handleConnAsync(cfg: Readonly<LoopConfig>, run: Locked<RunState>,
 export function serveConcurrentAsync(server: HttpServer, handler: AsyncRequestHandler, threads: int32 = 0): void {
 	if (signalAborted(server)) { closeStopped(server); return; }
 	const n = threads > 0 ? threads : msOsCpuCount();
+	const listenFd = takeListenFd(server);
+	if (listenFd < 0) { closeStopped(server); return; }
 	server.running = true;
 	setRunning(server.runState, true);
-	if (server.fd >= 0) { msNetClose(server.fd); server.fd = -1; }
 
 	const cfg = loopConfig(server);
 	const run = server.runState;
-	const addr = server.address;
-	const port = server.port;
 
 	const workers: Promise<null>[] = [];
 	for (let i = 0; i < n - 1; i += 1) {
-		workers.push(spawn(() => serveThreadAsync(cfg, run, addr, port, handler)));
+		workers.push(spawn(() => serveThreadAsync(cfg, run, listenFd, handler)));
 	}
-	serveThreadAsync(cfg, run, addr, port, handler);
+	serveThreadAsync(cfg, run, listenFd, handler);
 	for (const w of workers) await w;
+	msNetClose(listenFd);
 	closeStopped(server);
 }
 
-function serveThreadAsync(cfg: Readonly<LoopConfig>, run: Locked<RunState>, addr: string, port: int32, handler: AsyncRequestHandler): null {
-	const fd = msNetSocket();
-	if (fd < 0) return null;
-	if (msNetBindShared(fd, addr, port) < 0) { msNetClose(fd); return null; }
-	if (msNetListen(fd, 1024) < 0) { msNetClose(fd); return null; }
-	msNetSetNonBlocking(fd);
+function serveThreadAsync(cfg: Readonly<LoopConfig>, run: Locked<RunState>, fd: int32, handler: AsyncRequestHandler): null {
 	const clients = allocClients(cfg);
 	const loop = new AcceptLoop();
 	listenAsyncLoopA(cfg, run, fd, handler, clients, loop);
 	driveWithSweep(cfg, run, fd, clients, loop);
-	msNetClose(fd);
 	return null;
 }

@@ -72,6 +72,7 @@ static uint32_t msEventsToEpoll(uint32_t events) {
 	uint32_t ep = 0;
 	if (events & MS_EVENT_READ)  ep |= EPOLLIN;
 	if (events & MS_EVENT_WRITE) ep |= EPOLLOUT;
+	if (events & MS_EVENT_EXCLUSIVE) ep |= EPOLLEXCLUSIVE;
 	return ep;
 }
 

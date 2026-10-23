@@ -14,6 +14,7 @@
 #define MS_EVENT_READ   1
 #define MS_EVENT_WRITE  2
 #define MS_EVENT_ERROR  4
+#define MS_EVENT_EXCLUSIVE 8
 
 /* A ready event returned by msSelectorPoll */
 typedef struct {
