@@ -1297,6 +1297,37 @@ test "untag: a typed slot opcode reads a slot of another class by name" {
 	assert vm.output == "8\n", vm.output;
 }
 
+test "by-name field cache: one union site reads the same field at different slots of classes with different layouts" {
+	const vm = evalOrcVM("class A { x: int32 = 1; n: int32 = 10; } class B { p: string = ''; q: int32 = 0; n: int32 = 20; } class C { n: int32 = 30; }"
+		+ " function get(e: A | B | C): int32 { return e.n; }"
+		+ " const xs: (A | B | C)[] = [new A(), new B(), new C(), new B(), new A()];"
+		+ " let total = 0; for (let r = 0; r < 3; r++) { for (const e of xs) total += get(e); }"
+		+ " console.log(total);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "270\n", vm.output;
+}
+
+test "by-name field cache: a store through a union lands in each class's own slot, and a field past the layout is found by name" {
+	const vm = evalOrcVM("class A { x: int32 = 1; n: int32 = 10; } class B { p: string = ''; n: int32 = 20; }"
+		+ " function bump(e: A | B): void { e.n = e.n + 1; }"
+		+ " const a = new A(); const b = new B(); for (let i = 0; i < 3; i++) { bump(a); bump(b); }"
+		+ " function host(env: { v: int32 }): int32 { return env.v; } function mk(v: int32) { return { v: v }; }"
+		+ " let h = 0; for (let i = 0; i < 4; i++) h += host(mk(i));"
+		+ " console.log(`${a.x} ${a.n} ${b.n} ${h}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "1 13 23 6\n", vm.output;
+}
+
+test "by-name field cache: a union receiver and an object with a field added after its layout" {
+	const vm = evalOrcVM("class A { n: int32 = 1; } class B { m: int32 = 0; n: int32 = 2; }"
+		+ " function pick(u: A | B): int32 { return u.n; }"
+		+ " let t = 0; for (let i = 0; i < 4; i++) { t += pick(i % 2 == 0 ? new A() : new B()); }"
+		+ " function late(a: { k: int32 }, b: { k: int32 }): int32 { return a.k + b.k; }"
+		+ " console.log(`${t} ${late({ k: 1 }, { k: 2 })}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "6 3\n", vm.output;
+}
+
 test "ledger: a reference field and a union field count what they hold through stores, overwrites and self-stores" {
 	const vm = evalOrcVM("class N { s: string = ''; u: int32 | string | null = null; next: N | null = null; }"
 		+ " const a = new N(); for (let i = 0; i < 3; i++) { a.s = 'v' + i.toString(); a.u = 'w' + i.toString(); a.u = i; a.u = 'z' + i.toString(); }"

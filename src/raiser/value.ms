@@ -223,6 +223,12 @@ function constHandle(text: string): int64 {
 	return handle;
 }
 
+export function constNameIds(names: string[]): int64[] {
+	const ids: int64[] = [];
+	for (const n of names) ids.push(constHandle(n));
+	return ids;
+}
+
 function constText(handle: int64): string {
 	return constTexts[handleIndex(handle) as number];
 }
@@ -700,6 +706,7 @@ export interface RaiserClassType {
 	depth: int32;       // the number of ancestors; -1 for a layout that is no class
 	display: int64[];   // the ids of the class and its ancestors, indexed by depth, so display[depth] is the class's own
 	fields: string[];   // the layout NewObject lays out, so a field sits at the slot its type gives it
+	fieldIds: int64[];   // constNameIds(fields): the interned handle of each field name, so a cached field read compares integers
 	kinds: RaiserRegClass[];
 	zeroSlots: int64[];   // the slots of a fresh object: zero bits, a nil handle, the index of each Dyn slot's value in order
 	zeroWordSlots: int64;
@@ -725,7 +732,7 @@ export function createClassType(name: string, depth: int32, display: int64[], fi
 			zeroSlots.push(0);
 		}
 	}
-	return { name, depth, display, fields, kinds, zeroSlots, zeroWordSlots, zeroRefSlots, dynCount };
+	return { name, depth, display, fields, fieldIds: constNameIds(fields), kinds, zeroSlots, zeroWordSlots, zeroRefSlots, dynCount };
 }
 
 export const RAISER_NO_CLASS: RaiserClassType = createClassType("", -1, [], [], []);

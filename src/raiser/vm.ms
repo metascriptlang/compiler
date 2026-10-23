@@ -2532,7 +2532,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64) && handleIndex(handle) < vm.objectHeap.objects.length) {
 					const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
 					const idx = func.fieldCache[pc];
-					if (idx >= 0 && idx < obj.slots.length && obj.classType.fields[idx] == func.names[ic]) {
+					if (idx >= 0 && idx < obj.slots.length && obj.classType.fieldIds[idx] == func.nameIds[ic]) {
 						const cls = ia & 7;
 						if ((cls == CLS_WORD || cls == CLS_FLOAT) && (slotKind(obj, idx) as int32) == cls) {
 							words[wb + (ia >> 3)] = obj.slots[idx];
@@ -2555,7 +2555,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, words: Span<int64>, refs: Spa
 				if (handleTag(handle) == (RaiserHeapKind.Object as int64) && handleIndex(handle) < vm.objectHeap.objects.length) {
 					const obj: Cursor<RaiserObjectData> = vm.objectHeap.objects[handleIndex(handle)];
 					const idx = func.fieldCache[pc];
-					if (idx >= 0 && idx < obj.slots.length && obj.classType.fields[idx] == func.names[ib]) {
+					if (idx >= 0 && idx < obj.slots.length && obj.classType.fieldIds[idx] == func.nameIds[ib]) {
 						const cls = ic & 7;
 						if ((cls == CLS_WORD || cls == CLS_FLOAT) && (slotKind(obj, idx) as int32) == cls) {
 							obj.slots[idx] = words[wb + (ic >> 3)];
@@ -3525,31 +3525,24 @@ function vmHandleLoadField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: in
 		vmError(vm, `object handle out of bounds: ${handle}`); return;
 	}
 	const obj = vm.objectHeap.objects[handleIndex(handle)];
-	const count = objectFieldCount(obj);
+	const idx = cachedFieldIndex(func, pc, obj, ic);
+	setRegConform(vm, ia, idx >= 0 ? fieldValueAt(obj, idx) : raiserNil());
+}
 
-	// MIC: try cached index first
-	let idx = func.fieldCache[pc];
-	if (idx >= 0 && idx < count) {
-		if (fieldNameIs(obj, idx, func.names[ic])) {
-			// Cache hit — O(1) access
-			setRegConform(vm, ia, fieldValueAt(obj, idx));
-			return;
-		}
+// The position of field `names[ni]` in `obj`, -1 when it has none. A laid slot hits on the
+// interned id of its name; a field past the layout and a miss compare text, and a found
+// position is remembered at `pc`.
+function cachedFieldIndex(func: RaiserFunction, pc: int32, obj: RaiserObjectData, ni: int32): int32 {
+	const cached = func.fieldCache[pc];
+	const laid = obj.slots.length as int32;
+	if (cached >= 0 && cached < laid) {
+		if (obj.classType.fieldIds[cached] == func.nameIds[ni]) return cached;
+	} else if (cached >= laid && cached - laid < obj.added.length) {
+		if (obj.added[cached - laid] == func.names[ni]) return cached;
 	}
-
-	// Cache miss — linear scan, then update cache
-	const fieldName = func.names[ic];
-	let fi = 0;
-	while (fi < count) {
-		if (fieldNameIs(obj, fi, fieldName)) {
-			func.fieldCache[pc] = fi;
-			setRegConform(vm, ia, fieldValueAt(obj, fi));
-			return;
-		}
-		fi = fi + 1;
-	}
-	// Field not found — load nil
-	setRegConform(vm, ia, raiserNil());
+	const found = fieldIndex(obj, func.names[ni]) as int32;
+	if (found >= 0) func.fieldCache[pc] = found;
+	return found;
 }
 
 function vmHandleStoreField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: int32, ib: int32, ic: int32): void {
@@ -3561,33 +3554,15 @@ function vmHandleStoreField(vm: RaiserVM, func: RaiserFunction, pc: int32, ia: i
 	}
 	const obj = vm.objectHeap.objects[handleIndex(handle)];
 	const val = getDyn(vm, ic);
-	const count = objectFieldCount(obj);
-
-	// MIC: try cached index first
-	let idx = func.fieldCache[pc];
-	if (idx >= 0 && idx < count) {
-		if (fieldNameIs(obj, idx, func.names[ib])) {
-			// Cache hit — O(1) update
-			vmStoreFieldAt(vm, obj, idx, val);
-			return;
-		}
+	const idx = cachedFieldIndex(func, pc, obj, ib);
+	if (idx >= 0) {
+		vmStoreFieldAt(vm, obj, idx, val);
+		return;
 	}
-
-	// Cache miss — linear scan, then update cache
-	const fieldName = func.names[ib];
-	let fi = 0;
-	while (fi < count) {
-		if (fieldNameIs(obj, fi, fieldName)) {
-			func.fieldCache[pc] = fi;
-			vmStoreFieldAt(vm, obj, fi, val);
-			return;
-		}
-		fi = fi + 1;
-	}
-	// New field — append
 	vmIncref(vm, val);
-	appendField(obj, fieldName, val);
-	func.fieldCache[pc] = count as int32;
+	const count = objectFieldCount(obj);
+	appendField(obj, func.names[ib], val);
+	func.fieldCache[pc] = count;
 }
 
 // The counted store of a value into field `idx`: the field holds the new value before it gives up the old one.
