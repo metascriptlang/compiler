@@ -4995,7 +4995,7 @@ test "every opcode reaches a branch of the dispatch" {
 			mod = opcodeModule(i, 1, 2);
 		}
 		mod.globalCount = 1;
-		mod.functions[0].copyPlans.push({ kind: RaiserCopyKind.Preserve, names: [], children: [], discriminants: [] });
+		mod.functions[0].copyPlans.push({ kind: RaiserCopyKind.Preserve, names: [], children: [], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] });
 		const vm = execModule(mod);
 		assert !vm.error.startsWith("Unknown opcode"), vm.error;
 	}
