@@ -1231,9 +1231,9 @@ function emitRttiHook(g: CGen, name: string, hook: Readonly<Symbol>, trace: bool
 	return name;
 }
 
-export function emitOwnedTypeInfos(g: CGen): void {
+export function emitOwnedTypeInfos(g: CGen, facts: Readonly<CEmissionFacts>): void {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
-	emitTypeInfoTable(g, g.emissionFacts, isHcrImageModule(g, g.modulePath));
+	emitTypeInfoTable(g, facts, isHcrImageModule(g, g.modulePath));
 }
 
 function emitTypeInfoTable(g: CGen, facts: Readonly<CEmissionFacts>, viaRegistry: boolean): void {

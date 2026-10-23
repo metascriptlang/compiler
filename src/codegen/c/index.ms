@@ -199,7 +199,7 @@ export function generatePreparedCModuleOutput(program: Readonly<Node>, ctx: Read
 		}
 	}
 	emitInlineCopies(g);
-	emitOwnedTypeInfos(g);
+	emitOwnedTypeInfos(g, facts);
 
 	// Emit test table (test builds only — after all TestDecl nodes processed)
 	emitTestTable(g);
