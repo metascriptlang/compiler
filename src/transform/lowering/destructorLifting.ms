@@ -23,7 +23,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
+import { int32Type, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook, pickBodyCtx } from "../../checker/instantiate";
@@ -1398,7 +1398,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	// the whole teardown unwinds. Destroy hooks are single-exit (no early return), so bracketing
 	// the statement list is sufficient. No-op under --gc=drc.
 	if (lctx.dropOwner != null && classType != null) {
-		buf.items = deferAfterDropEdges(buf.items, 0, s1, classType, typeName, cName, lctx, loc);
+		buf.items = deferAfterDropEdges(buf.items, s1, classType, cName, lctx, loc);
 	}
 	lctx.dropOwner = outerDropOwner;
 	if (hook == "destroy") {
@@ -1444,29 +1444,51 @@ function dropEdgeCall(stmt: Node): Node | null {
 	return isRuntimeProcCall(call, "msDecrefCyclicEdge") ? call : null;
 }
 
-function deferAfterDropEdges(items: Node[], first: number, self: Symbol, classType: Type, typeName: string, cName: string, lctx: LiftCtx, loc: SourceLocation): Node[] {
-	for (let i = 0; i + 1 < items.length; i += 1) {
-		const edge = dropEdgeCall(items[i]);
-		if (edge == null) continue;
-		const restName = cName + "DestroyRest" + (first + i).toString();
-		const argSym = liftSym(lctx, SymbolKind.Variable, "arg", createPtr(voidType()));
-		const restItems = deferAfterDropEdges(items.slice(i + 1), first + i + 1, self, classType, typeName, cName, lctx, loc);
-		const restFn = makeFnDecl(restName, [self, argSym], [typeName, "Ptr<void>"], makeBlock(bracketTeardown(restItems, loc), loc), "", "void", loc);
-		setHookParamType(restFn, 0, classType);
-		setHookParamType(restFn, 1, createPtr(voidType()));
-		const restSym = liftHelperOp(restFn, restName, "", lctx);
-		lctx.collector.push(restFn);
+function deferAfterDropEdges(items: Node[], self: Symbol, classType: Type, cName: string, lctx: LiftCtx, loc: SourceLocation): Node[] {
+	let edges = 0;
+	for (let i = 0; i + 1 < items.length; i += 1) if (dropEdgeCall(items[i]) != null) edges += 1;
+	if (edges == 0) return items;
+	const restName = cName + "DestroyRest";
+	const ownerSym = liftSym(lctx, SymbolKind.Variable, "owner", createPtr(voidType()));
+	const resumeSym = liftSym(lctx, SymbolKind.Variable, "resume", int32Type());
+	const restFn = makeFnDecl(restName, [ownerSym, resumeSym], ["Ptr<void>", "int32"], null, "", "void", loc);
+	setHookParamType(restFn, 0, createPtr(voidType()));
+	setHookParamType(restFn, 1, int32Type());
+	const restSym = liftHelperOp(restFn, restName, "", lctx);
+	const selfDecl = makeVarDecl(self.name, makeHiddenSubConv(makeIdentResolved(ownerSym, loc), classType, loc), DeclKind.Const, loc);
+	selfDecl.resolvedSym = self;
+	const head: Node[] = [];
+	const rest: Node[] = [makeExprStmt(makeCall(runtimeRef("msOrcBeginTeardown", loc), [], loc), loc), selfDecl];
+	let segment: Node[] = [];
+	let resume = 0;
+	for (let i = 0; i < items.length; i += 1) {
+		const edge = i + 1 < items.length ? dropEdgeCall(items[i]) : null;
+		if (edge == null) {
+			head.push(items[i]);
+			if (resume > 0) segment.push(cloneNodeKeepSem(items[i]));
+			continue;
+		}
+		resume += 1;
 		const deferred: Node[] = [
-			makeExprStmt(makeCall(runtimeRef("msDropDefer", loc), [makeIdentResolved(self, loc), makeIdentResolved(restSym, loc), makeNull(loc)], loc), loc),
+			makeExprStmt(makeCall(runtimeRef("msDropDefer", loc), [makeIdentResolved(self, loc), makeIdentResolved(restSym, loc), makeNumber(resume, loc)], loc), loc),
 			makeExprStmt(makeCall(runtimeRef("msOrcEndTeardown", loc), [], loc), loc),
 			makeReturn(null as unknown as Node, loc),
 		];
-		const head = items.slice(0, i);
-		head.push(makeIf(edge, makeBlock(deferred, loc), null as unknown as Node, loc));
-		for (const it of restItems) head.push(cloneNodeKeepSem(it));
-		return head;
+		const guard = makeIf(edge, makeBlock(deferred, loc), null as unknown as Node, loc);
+		if (resume == 1) {
+			head.push(guard);
+		} else {
+			segment.push(cloneNodeKeepSem(guard));
+			rest.push(makeIf(makeBinary(makeIdentResolved(resumeSym, loc), "<", makeNumber(resume, loc), loc), makeBlock(segment, loc), null as unknown as Node, loc));
+			segment = [];
+			head.push(guard);
+		}
 	}
-	return items;
+	for (const it of segment) rest.push(it);
+	rest.push(makeExprStmt(makeCall(runtimeRef("msOrcEndTeardown", loc), [], loc), loc));
+	(restFn.data as FunctionDeclData).fnBody = makeBlock(rest, loc);
+	lctx.collector.push(restFn);
+	return head;
 }
 
 // ===== Ensure Type Hooks — unified entry (handles named class/interface,

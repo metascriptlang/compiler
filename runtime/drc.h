@@ -112,11 +112,13 @@ void msLedgerDestroy(void* p, const msTypeInfo* type);
 
 /* Keep the range test: a stack pointer above floor + span (an alternate signal stack, a
  * stack the thread did not report) has no known headroom and must drain, never recurse. */
+typedef void (*msDropCont)(void* owner, int32_t resume);
+typedef union { void* p; msDropCont fn; intptr_t n; } msDropSlot;
 typedef struct {
 	uintptr_t floor;
 	uintptr_t span;
 	void* cur;
-	void** data;
+	msDropSlot* data;
 	int32_t len;
 	int32_t cap;
 	int32_t base;
@@ -356,10 +358,9 @@ static inline __attribute__((always_inline)) uintptr_t msStackPointer(void) {
 	return sp;
 }
 
-typedef void (*msDropCont)(void* owner, void* arg);
 
 bool msDropEdgeSlow(void* owner, void* p);
-void msDropDefer(void* owner, void* fn, void* arg);
+void msDropDefer(void* owner, msDropCont fn, int32_t resume);
 void msDropRestore(const msDropState* saved);
 
 static inline bool msDropEdgeLast(void* owner, void* p) {

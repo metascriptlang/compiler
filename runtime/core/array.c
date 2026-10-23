@@ -605,8 +605,8 @@ msRefArray msRefArrayNew(int64_t cap) {
 	return arr;
 }
 
-static void msRefArrayFreeAfterDrop(void* owner, void* arg) {
-	(void)arg;
+static void msRefArrayFreeAfterDrop(void* owner, int32_t resume) {
+	(void)resume;
 	msRefArray* arr = (msRefArray*)owner;
 	free(arr->p);
 	arr->p = NULL;
@@ -622,7 +622,7 @@ void msRefArrayDestroy(msRefArray* arr) {
 			else pending |= msDecrefCyclicEdge(arr, e);
 		}
 		if (pending) {
-			msDropDefer(arr, (void*)msRefArrayFreeAfterDrop, NULL);
+			msDropDefer(arr, msRefArrayFreeAfterDrop, 0);
 			return;
 		}
 		free(arr->p);

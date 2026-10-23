@@ -195,7 +195,7 @@ static void msDropReserve(msDropState* d, int32_t extra) {
 	if (d->len + extra <= d->cap) return;
 	int32_t cap = d->cap < 64 ? 64 : d->cap;
 	while (cap < d->len + extra) cap *= 2;
-	void** data = (void**)realloc(d->data, (size_t)cap * sizeof(void*));
+	msDropSlot* data = (msDropSlot*)realloc(d->data, (size_t)cap * sizeof(msDropSlot));
 	if (data == NULL) {
 		fprintf(stderr, "fatal: out of memory growing the drop stack to %d entries\n", cap);
 		abort();
@@ -204,9 +204,9 @@ static void msDropReserve(msDropState* d, int32_t extra) {
 	d->cap = cap;
 }
 
-static void msDropReverse(void** a, void** b) {
+static void msDropReverse(msDropSlot* a, msDropSlot* b) {
 	while (a < b) {
-		void* swap = *a;
+		msDropSlot swap = *a;
 		*a++ = *b;
 		*b-- = swap;
 	}
@@ -226,12 +226,12 @@ static void msDropRun(msSlab* s, void* root) {
 			msDropDispose(s, p);
 		} else {
 			msDropReserve(d, 1);
-			d->data[d->len++] = (void*)((uintptr_t)p | MS_DROP_FRAME);
+			d->data[d->len++].p = (void*)((uintptr_t)p | MS_DROP_FRAME);
 			msDropReverse(d->data + d->base, d->data + d->len - 1);
 		}
 		p = NULL;
 		while (p == NULL && d->len > floor) {
-			void* item = d->data[--d->len];
+			void* item = d->data[--d->len].p;
 			uintptr_t tag = (uintptr_t)item & MS_DROP_TAG;
 			void* obj = (void*)((uintptr_t)item & ~(uintptr_t)MS_DROP_TAG);
 			if (tag == 0) {
@@ -239,11 +239,11 @@ static void msDropRun(msSlab* s, void* root) {
 			} else if (tag == MS_DROP_FRAME) {
 				msDropDispose(s, obj);
 			} else {
-				msDropCont fn = (msDropCont)d->data[--d->len];
-				void* arg = d->data[--d->len];
+				msDropCont fn = d->data[--d->len].fn;
+				int32_t resume = (int32_t)d->data[--d->len].n;
 				d->cur = obj;
 				d->base = d->len;
-				fn(obj, arg);
+				fn(obj, resume);
 				if (d->len - d->base > 1) msDropReverse(d->data + d->base, d->data + d->len - 1);
 			}
 		}
@@ -271,19 +271,19 @@ bool msDropEdgeSlow(void* owner, void* p) {
 	}
 	if (owner != NULL && owner == d->cur) {
 		msDropReserve(d, 1);
-		d->data[d->len++] = p;
+		d->data[d->len++].p = p;
 		return true;
 	}
 	msDropRun(s, p);
 	return false;
 }
 
-void msDropDefer(void* owner, void* fn, void* arg) {
+void msDropDefer(void* owner, msDropCont fn, int32_t resume) {
 	msDropState* d = &msSlabTLS.drop;
 	msDropReserve(d, 3);
-	d->data[d->len++] = (void*)((uintptr_t)owner | MS_DROP_CONT);
-	d->data[d->len++] = fn;
-	d->data[d->len++] = arg;
+	d->data[d->len++].p = (void*)((uintptr_t)owner | MS_DROP_CONT);
+	d->data[d->len++].fn = fn;
+	d->data[d->len++].n = resume;
 }
 
 void msDropRestore(const msDropState* saved) {

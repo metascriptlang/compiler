@@ -283,7 +283,7 @@ when (mscDeclaresRuntime) {
 	extern function msDecrefCyclicEdge(owner: Ptr<void>, p: Ptr<void>): boolean;
 
 	@compilerFunc
-	extern function msDropDefer(owner: Ptr<void>, fn: Ptr<void>, arg: Ptr<void>): void;
+	extern function msDropDefer(owner: Ptr<void>, fn: Ptr<void>, resume: int32): void;
 
 	@compilerFunc
 	extern function msAtomicIncref(p: Ptr<void>): void;
