@@ -1,15 +1,13 @@
 // LSP Server — Main loop with request queue, state management
 //
-// Reads JSON-RPC from stdin, drains buffered messages, coalesces
+// Reads JSON-RPC from a transport, drains buffered messages, coalesces
 // auto-fired requests, dispatches to handlers, writes responses.
-// I/O uses writeStderr for logging. Actual stdin/stdout I/O
-// requires ms_stdio.h (readLine, readBytes, writeStdout).
 
 import {
 	lspParseContentLength, lspFormatMessage, lspUriToPath, lspPathToUri,
-	lspGetField, lspGetNumberField, lspGetObjectField, lspJsonNumber, lspJsonString,
-	lspErrorResponse
+	lspGetField, lspGetObjectField, lspJsonString, lspIdOf, lspErrorResponse,
 } from "./protocol";
+import { parseJson } from "std/serialize/json/parser";
 import { TransAmDb, createTransAmDb, dbEnsurePrelude, dbSetStdPath, dbSetResolverConfig, dbSetGlobalImports, dbStats } from "../transam/index";
 import { extraGlobalImports, extraGlobalImportsBuildFile } from "../../checker/prelude";
 import { findProjectRoot } from "../../utils/path";
@@ -118,24 +116,34 @@ function lspLog(msg: string): void {
 
 // ===== Message Queue =====
 
-interface QueuedMessage {
+struct QueuedMessage {
 	body: string;
 	method: string;
+	id: string;
+	cancelTarget: string;
 	fileUri: string;
 	receivedAt: float64;
 }
 
-function extractFileUri(params: string): string {
-	if (params.length == 0) return "";
-	const textDoc = lspGetObjectField(params, "textDocument");
-	if (textDoc.length == 0) return "";
-	return lspGetField(textDoc, "uri");
-}
+const DID_CHANGE = "textDocument/didChange";
+const CANCEL_REQUEST = "$/cancelRequest";
 
+// A body that is not JSON queues as a message with no method and no id, which no handler answers.
 function parseQueuedMessage(body: string): QueuedMessage {
-	const method = lspGetField(body, "method");
-	const params = lspGetObjectField(body, "params");
-	return { body, method, fileUri: extractFileUri(params), receivedAt: performance.now() };
+	const receivedAt = performance.now();
+	const parsed = parseJson(body);
+	if (!parsed.ok) return { body, method: "", id: "", cancelTarget: "", fileUri: "", receivedAt };
+	const root = parsed.value;
+	const method = root.getDynamicField("method").asString();
+	const params = root.getDynamicField("params");
+	return {
+		body,
+		method,
+		id: lspIdOf(root.getDynamicField("id")),
+		cancelTarget: method == CANCEL_REQUEST ? lspIdOf(params.getDynamicField("id")) : "",
+		fileUri: params.getDynamicField("textDocument").getDynamicField("uri").asString(),
+		receivedAt,
+	};
 }
 
 // Auto-fired methods that can be safely deduplicated per-file.
@@ -146,91 +154,59 @@ function isAutoFired(method: string): boolean {
 		|| method == "textDocument/documentHighlight";
 }
 
-// Coalesce queue: dedup auto-fired requests per (method, fileUri).
-// Preserves ordering. Never discards lifecycle or content-sync messages.
-function coalesceKeep(queue: QueuedMessage[]): boolean[] {
-	// Mark earlier duplicates of auto-fired requests for removal.
-	// Walk backwards — the last occurrence wins.
-	const keep: boolean[] = [];
-	let i = 0;
-	while (i < queue.length) {
-		keep.push(true);
-		i = i + 1;
-	}
-	i = 0;
-	while (i < queue.length) {
+// Indices the coalesce drops: an auto-fired request with a later one for the same (method, file),
+// and a didChange whose next non-auto-fired message for the file is another didChange.
+// Never drops lifecycle or other content-sync messages.
+function coalesceDropped(queue: QueuedMessage[]): Set<int32> {
+	const dropped = new Set<int32>();
+	const autoFiredAhead = new Set<string>();
+	const didChangeNext = new Set<string>();
+	for (let i = queue.length - 1; i >= 0; i--) {
 		const qm = queue[i];
-		if (isAutoFired(qm.method) && qm.fileUri.length > 0) {
-			// Check if a later entry has same method + fileUri
-			let j = i + 1;
-			while (j < queue.length) {
-				if (queue[j].method == qm.method && queue[j].fileUri == qm.fileUri) {
-					keep[i] = false;
-					break;
-				}
-				j = j + 1;
-			}
+		if (qm.fileUri.length == 0) continue;
+		if (isAutoFired(qm.method)) {
+			const key = qm.method + " " + qm.fileUri;
+			if (autoFiredAhead.has(key)) dropped.add(i);
+			autoFiredAhead.add(key);
+			continue;
 		}
-		i = i + 1;
+		if (qm.method == DID_CHANGE && didChangeNext.has(qm.fileUri)) dropped.add(i);
+		if (qm.method == DID_CHANGE) didChangeNext.add(qm.fileUri);
+		else didChangeNext.delete(qm.fileUri);
 	}
-	// Also dedup didChange: for same file, keep only the last
-	i = 0;
-	while (i < queue.length) {
-		const qm = queue[i];
-		if (qm.method == "textDocument/didChange" && qm.fileUri.length > 0) {
-			let j = i + 1;
-			while (j < queue.length) {
-				if (queue[j].fileUri == qm.fileUri) {
-					if (queue[j].method == "textDocument/didChange") keep[i] = false;
-					if (!isAutoFired(queue[j].method)) break;
-				}
-				j = j + 1;
-			}
-		}
-		i = i + 1;
-	}
-	return keep;
+	return dropped;
 }
 
 function coalesceQueue(queue: QueuedMessage[]): QueuedMessage[] {
-	const keep = coalesceKeep(queue);
+	const dropped = coalesceDropped(queue);
 	const result: QueuedMessage[] = [];
-	let i = 0;
-	while (i < queue.length) {
-		if (keep[i]) result.push(queue[i]);
-		i = i + 1;
+	for (let i = 0; i < queue.length; i++) {
+		if (!dropped.has(i)) result.push(queue[i]);
 	}
 	return result;
 }
 
-const REQUEST_CANCELLED: number = -32800;
-const CONTENT_MODIFIED: number = -32801;
-const INVALID_REQUEST: number = -32600;
+const REQUEST_CANCELLED: int32 = -32800;
+const CONTENT_MODIFIED: int32 = -32801;
+const INVALID_REQUEST: int32 = -32600;
+const INTERNAL_ERROR: int32 = -32603;
 
-function answerContentModified(io: LspTransport, qm: QueuedMessage): void {
-	const id = lspMessageId(qm.body);
-	if (id != "") io.write(lspFormatMessage(lspErrorResponse(id, CONTENT_MODIFIED, "ContentModified")));
+function answerError(io: LspTransport, id: string, code: int32, message: string): void {
+	if (id != "") io.write(lspFormatMessage(lspErrorResponse(id, code, message)));
 }
 
-function isCancelled(id: string, queue: QueuedMessage[], fromIdx: number): boolean {
-	for (let j = fromIdx; j < queue.length; j += 1) {
-		if (queue[j].method == "$/cancelRequest"
-			&& lspMessageId(lspGetObjectField(queue[j].body, "params")) == id) {
-			return true;
-		}
+function isCancelled(id: string, queue: QueuedMessage[], fromIdx: int32): boolean {
+	for (let j = fromIdx; j < queue.length; j++) {
+		if (queue[j].method == CANCEL_REQUEST && queue[j].cancelTarget == id) return true;
 	}
 	return false;
 }
 
 // Check if a request is superseded by a later didChange for the same file.
-function isSuperseded(qm: QueuedMessage, queue: QueuedMessage[], fromIdx: number): boolean {
+function isSuperseded(qm: QueuedMessage, queue: QueuedMessage[], fromIdx: int32): boolean {
 	if (qm.fileUri.length == 0) return false;
-	let j = fromIdx;
-	while (j < queue.length) {
-		if (queue[j].method == "textDocument/didChange" && queue[j].fileUri == qm.fileUri) {
-			return true;
-		}
-		j = j + 1;
+	for (let j = fromIdx; j < queue.length; j++) {
+		if (queue[j].method == DID_CHANGE && queue[j].fileUri == qm.fileUri) return true;
 	}
 	return false;
 }
@@ -257,8 +233,7 @@ export function lspServe(io: LspTransport): int32 {
 		if (!first.ok) return streamExitCode(first.error);
 
 		// 2. Drain all buffered messages (non-blocking)
-		const queue: QueuedMessage[] = [];
-		queue.push(parseQueuedMessage(first.value));
+		const queue: QueuedMessage[] = [parseQueuedMessage(first.value)];
 		let streamOpen = true;
 		let streamEnd = FrameEnd.Closed;
 		while (streamOpen && io.hasBufferedData()) {
@@ -272,11 +247,11 @@ export function lspServe(io: LspTransport): int32 {
 		}
 
 		// 3. Coalesce: dedup auto-fired + didChange per file
-		const keep = coalesceKeep(queue);
+		const dropped = coalesceDropped(queue);
 		const coalesced: QueuedMessage[] = [];
-		for (let k = 0; k < queue.length; k += 1) {
-			if (keep[k]) coalesced.push(queue[k]);
-			else answerContentModified(io, queue[k]);
+		for (let k = 0; k < queue.length; k++) {
+			if (!dropped.has(k)) coalesced.push(queue[k]);
+			else answerError(io, queue[k].id, CONTENT_MODIFIED, "ContentModified");
 		}
 
 		if (queue.length > 1) {
@@ -284,31 +259,27 @@ export function lspServe(io: LspTransport): int32 {
 		}
 
 		// 4. Process in order
-		for (let qi = 0; qi < coalesced.length; qi += 1) {
+		for (let qi = 0; qi < coalesced.length; qi++) {
 			const qm = coalesced[qi];
-			// Skip requests superseded by a later didChange for the same file
 			if (isAutoFired(qm.method) && isSuperseded(qm, coalesced, qi + 1)) {
-				answerContentModified(io, qm);
+				answerError(io, qm.id, CONTENT_MODIFIED, "ContentModified");
 				continue;
 			}
 			if (qm.method == "exit") return state.shutdownRequested ? 0 : 1;
-			const id = qm.method == "$/cancelRequest" ? "" : lspMessageId(qm.body);
-			if (id != "" && isCancelled(id, coalesced, qi + 1)) {
-				io.write(lspFormatMessage(lspErrorResponse(id, REQUEST_CANCELLED, "RequestCancelled")));
+			if (qm.id != "" && isCancelled(qm.id, coalesced, qi + 1)) {
+				answerError(io, qm.id, REQUEST_CANCELLED, "RequestCancelled");
 				continue;
 			}
-			if (id != "") {
+			if (qm.id != "") {
 				const delay = performance.now() - qm.receivedAt;
-				writeStderr(`[LSP-QUEUE] ${qm.method} id=${id} delay=${delay}ms\n`);
+				writeStderr(`[LSP-QUEUE] ${qm.method} id=${qm.id} delay=${delay}ms\n`);
 			}
 			try {
-				const response = processMessage(qm.body, state);
-				if (response.length > 0) {
-					if (response.length > 5000) {
-						writeStderr(`[LSP] sending response len=${response.length} method=${qm.method}\n`);
-					}
-					io.write(response);
+				const response = processQueued(qm, state);
+				if (response.length > 5000) {
+					writeStderr(`[LSP] sending response len=${response.length} method=${qm.method}\n`);
 				}
+				if (response.length > 0) io.write(response);
 			} catch (e) {
 				lspLog("Handler error: " + e);
 			}
@@ -317,9 +288,7 @@ export function lspServe(io: LspTransport): int32 {
 		// 5. Post-drain: publish diagnostics for the last changed file.
 		// Only the FINAL content state gets type-checked — intermediate keystrokes skipped.
 		const pendingDiag = publishPendingDiagnostics(state.db);
-		if (pendingDiag.length > 0) {
-			io.write(pendingDiag);
-		}
+		if (pendingDiag.length > 0) io.write(pendingDiag);
 		writeStderr(`[LSP-STATS] ${dbStats(state.db)}\n`);
 		if (!streamOpen) return streamExitCode(streamEnd);
 	}
@@ -328,57 +297,51 @@ export function lspServe(io: LspTransport): int32 {
 
 // ===== Message Processing =====
 
-function lspMessageId(msg: string): string {
-	const idNum = lspGetNumberField(msg, "id");
-	if (idNum >= 0) return lspJsonNumber(idNum);
-	const idText = lspGetField(msg, "id");
-	return idText != "" ? lspJsonString(idText) : "";
-}
-
-// Process a single JSON-RPC message. Returns wire-formatted response(s)
-// (Content-Length + JSON), or "" if no response needed.
-// For didChange, appends transitive diagnostics notifications.
-export function processMessage(msg: string, state: LspServerState): string {
-	const method = lspGetField(msg, "method");
-	const idStr = lspMessageId(msg);
-	const params = lspGetObjectField(msg, "params");
-
-	if (state.shutdownRequested) {
-		return idStr == "" ? "" : lspFormatMessage(lspErrorResponse(idStr, INVALID_REQUEST, "InvalidRequest: server is shutting down"));
-	}
-
-	// Track lifecycle
+function trackLifecycle(state: LspServerState, method: string, params: string): void {
 	if (method == "initialize") {
 		state.initialized = true;
 		state.watchFilesThroughClient = clientSupportsWatchedFileRegistration(params);
 		const root = resolveRuntimeDir();
-		if (root.length > 0) {
-			dbSetStdPath(state.db, root + "/std");
-		}
+		if (root.length > 0) dbSetStdPath(state.db, root + "/std");
 		dbEnsurePrelude(state.db);
 	}
-	if (method == "shutdown") {
-		state.shutdownRequested = true;
+	if (method == "shutdown") state.shutdownRequested = true;
+}
+
+function logIfSlow(what: string, ms: float64): void {
+	if (ms > 50) writeStderr("[LSP] " + what + " " + ms + "ms\n");
+}
+
+// Process a single JSON-RPC message. Returns wire-formatted response(s)
+// (Content-Length + JSON), or "" if no response needed.
+// For didOpen, appends transitive diagnostics notifications.
+export function processMessage(msg: string, state: LspServerState): string {
+	return processQueued(parseQueuedMessage(msg), state);
+}
+
+function processQueued(qm: QueuedMessage, state: LspServerState): string {
+	const method = qm.method;
+	const idStr = qm.id;
+	if (state.shutdownRequested) {
+		const refusal = lspErrorResponse(idStr, INVALID_REQUEST, "InvalidRequest: server is shutting down");
+		return idStr == "" ? "" : lspFormatMessage(refusal);
 	}
+	const params = lspGetObjectField(qm.body, "params");
+	trackLifecycle(state, method, params);
 	if (method == "initialized") {
 		return state.watchFilesThroughClient ? lspFormatMessage(watchedFilesRegistration()) : "";
 	}
 
 	// Invalidate completion cache when new content arrives
-	if (method == "textDocument/didChange" || method == "textDocument/didOpen") {
+	if (method == DID_CHANGE || method == "textDocument/didOpen") {
 		state.completionCache.uri = "";
 		state.completionCache.line = -1;
 	}
 
-	const documentUri = extractFileUri(params);
-	let flushed = documentUri != "" ? selectProject(state, findProjectRoot(lspUriToPath(documentUri))) : "";
+	let flushed = qm.fileUri != "" ? selectProject(state, findProjectRoot(lspUriToPath(qm.fileUri))) : "";
 
-	// Log all requests for debugging
-	if (method == "textDocument/completion") {
-		writeStderr("[LSP] >>> " + method + " id=" + idStr + "\n");
-	}
-	const _isCompletion = method == "textDocument/completion";
-	// Dispatch with error recovery
+	const isCompletion = method == "textDocument/completion";
+	if (isCompletion) writeStderr("[LSP] >>> " + method + " id=" + idStr + "\n");
 	let json = "";
 	const t0 = performance.now();
 	try {
@@ -387,41 +350,28 @@ export function processMessage(msg: string, state: LspServerState): string {
 	} catch (e) {
 		const errMsg = e != null ? "" + e : "unknown error";
 		writeStderr("LSP handler crash: " + method + " — " + errMsg + "\n");
-		if (idStr != "") {
-			json = lspErrorResponse(idStr, -32603, "internal error: " + errMsg);
-		}
+		if (idStr != "") json = lspErrorResponse(idStr, INTERNAL_ERROR, "internal error: " + errMsg);
 	}
-	const t1 = performance.now();
+	const elapsed = performance.now() - t0;
 
 	resetCancel(state.db.cancelCtx);
 
 	if (json == "") {
-		const notifMs = t1 - t0;
-		if (notifMs > 50) {
-			writeStderr("[LSP] " + method + " (notif) " + notifMs + "ms\n");
-		}
+		logIfSlow(method + " (notif)", elapsed);
 		return flushed;
 	}
 
-	if (_isCompletion) {
-		const elapsed = t1 - t0;
+	if (isCompletion) {
 		writeStderr("[LSP] <<< completion id=" + idStr + " " + elapsed + "ms len=" + json.length + "\n");
 	}
 	let result = flushed + lspFormatMessage(json);
 
 	// Append transitive diagnostics on didOpen (didChange handled in post-drain).
 	if (method == "textDocument/didOpen") {
-		const textDoc = lspGetObjectField(params, "textDocument");
-		const uri = lspGetField(textDoc, "uri");
-		const path = lspUriToPath(uri);
-		result = result + buildTransitiveDiagnosticsWire(state.db, path);
+		result += buildTransitiveDiagnosticsWire(state.db, lspUriToPath(qm.fileUri));
 	}
 
-	const elapsed = t1 - t0;
-	if (elapsed > 50) {
-		writeStderr("[LSP] " + method + " id=" + idStr + " " + elapsed + "ms\n");
-	}
-
+	logIfSlow(method + " id=" + idStr, elapsed);
 	return result;
 }
 
@@ -468,6 +418,10 @@ test "content length parsing" {
 	assert lspParseContentLength("Content-Type: text") == -1;
 }
 
+function queued(body: string, method: string, fileUri: string): QueuedMessage {
+	return { body, method, id: "", cancelTarget: "", fileUri, receivedAt: 0 };
+}
+
 test "coalesce empty queue" {
 	const q: QueuedMessage[] = [];
 	const r = coalesceQueue(q);
@@ -476,16 +430,16 @@ test "coalesce empty queue" {
 
 test "coalesce single message" {
 	const q: QueuedMessage[] = [];
-	q.push({ body: "", method: "textDocument/hover", fileUri: "file:///a.ms", receivedAt: 0 });
+	q.push(queued("", "textDocument/hover", "file:///a.ms"));
 	const r = coalesceQueue(q);
 	assert r.length == 1;
 }
 
 test "coalesce deduplicates auto-fired same file" {
 	const q: QueuedMessage[] = [];
-	q.push({ body: "1", method: "textDocument/inlayHint", fileUri: "file:///a.ms", receivedAt: 0 });
-	q.push({ body: "2", method: "textDocument/hover", fileUri: "file:///a.ms", receivedAt: 0 });
-	q.push({ body: "3", method: "textDocument/inlayHint", fileUri: "file:///a.ms", receivedAt: 0 });
+	q.push(queued("1", "textDocument/inlayHint", "file:///a.ms"));
+	q.push(queued("2", "textDocument/hover", "file:///a.ms"));
+	q.push(queued("3", "textDocument/inlayHint", "file:///a.ms"));
 	const r = coalesceQueue(q);
 	// First inlayHint deduped, hover kept, second inlayHint kept
 	assert r.length == 2;
@@ -495,16 +449,16 @@ test "coalesce deduplicates auto-fired same file" {
 
 test "coalesce keeps different files" {
 	const q: QueuedMessage[] = [];
-	q.push({ body: "1", method: "textDocument/inlayHint", fileUri: "file:///a.ms", receivedAt: 0 });
-	q.push({ body: "2", method: "textDocument/inlayHint", fileUri: "file:///b.ms", receivedAt: 0 });
+	q.push(queued("1", "textDocument/inlayHint", "file:///a.ms"));
+	q.push(queued("2", "textDocument/inlayHint", "file:///b.ms"));
 	const r = coalesceQueue(q);
 	assert r.length == 2;
 }
 
 test "coalesce deduplicates didChange same file" {
 	const q: QueuedMessage[] = [];
-	q.push({ body: "1", method: "textDocument/didChange", fileUri: "file:///a.ms", receivedAt: 0 });
-	q.push({ body: "2", method: "textDocument/didChange", fileUri: "file:///a.ms", receivedAt: 0 });
+	q.push(queued("1", "textDocument/didChange", "file:///a.ms"));
+	q.push(queued("2", "textDocument/didChange", "file:///a.ms"));
 	const r = coalesceQueue(q);
 	assert r.length == 1;
 	assert r[0].body == "2";
@@ -512,17 +466,33 @@ test "coalesce deduplicates didChange same file" {
 
 test "isSuperseded by later didChange" {
 	const q: QueuedMessage[] = [];
-	q.push({ body: "1", method: "textDocument/inlayHint", fileUri: "file:///a.ms", receivedAt: 0 });
-	q.push({ body: "2", method: "textDocument/didChange", fileUri: "file:///a.ms", receivedAt: 0 });
+	q.push(queued("1", "textDocument/inlayHint", "file:///a.ms"));
+	q.push(queued("2", "textDocument/didChange", "file:///a.ms"));
 	assert isSuperseded(q[0], q, 1);
 	assert !isSuperseded(q[1], q, 2);
 }
 
 test "isSuperseded not by different file" {
 	const q: QueuedMessage[] = [];
-	q.push({ body: "1", method: "textDocument/inlayHint", fileUri: "file:///a.ms", receivedAt: 0 });
-	q.push({ body: "2", method: "textDocument/didChange", fileUri: "file:///b.ms", receivedAt: 0 });
+	q.push(queued("1", "textDocument/inlayHint", "file:///a.ms"));
+	q.push(queued("2", "textDocument/didChange", "file:///b.ms"));
 	assert !isSuperseded(q[0], q, 1);
+}
+
+const HOVER_PARAMS = "\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":0}";
+
+test "a nested id in params does not replace the request id" {
+	const state = createServerState();
+	const response = processMessage("{\"method\":\"textDocument/hover\",\"params\":{\"id\":7," + HOVER_PARAMS + "},\"id\":1}", state);
+	assert response.indexOf("\"id\":1,", 0) > 0;
+	assert response.indexOf("\"id\":7", 0) < 0;
+}
+
+test "a nested method in params does not replace the dispatched method" {
+	const state = createServerState();
+	const response = processMessage("{\"params\":{\"method\":\"workspace/other\",\"id\":7," + HOVER_PARAMS + "},\"method\":\"textDocument/hover\",\"id\":1}", state);
+	assert response.indexOf("\"id\":1,", 0) > 0;
+	assert response.indexOf("\"id\":7", 0) < 0;
 }
 
 // ===== Wire-level completion =====
