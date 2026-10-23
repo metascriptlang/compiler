@@ -4,6 +4,10 @@
 // @stdout: chain 200000 ok 1000000 hooks
 // @stdout: tree 20 ok 61 hooks
 // @stdout: tree 100000 ok 300001 hooks
+// @stdout: deep-left 50 ok 300 hooks
+// @stdout: deep-left 200000 ok 1200000 hooks
+// @stdout: deep-right 50 ok 300 hooks
+// @stdout: deep-right 200000 ok 1200000 hooks
 // @stdout: caught 50 thrown 17
 // @stdout: caught 200000 thrown 66667
 // note: a deep drop that crosses the stack bound runs every onDestroy in the order the shallow drop runs them: each node's later fields, then its whole next subtree, then its earlier fields, and a hook that reads its node's memory through a Ptr reads it live; the expected order is computed before the drop
@@ -53,6 +57,19 @@ class Tree {
 	tag: Tag;
 	kids: Tree[] = [];
 	constructor(id: number) { this.tag = { id: id, meta: null }; }
+}
+
+class Bin {
+	a: Tag;
+	l: Bin | null = null;
+	m: Tag;
+	r: Bin | null = null;
+	z: Tag;
+	constructor(k: number) {
+		this.a = { id: k + 3, meta: null };
+		this.m = { id: k + 2, meta: null };
+		this.z = { id: k + 1, meta: null };
+	}
 }
 
 class Hot {
@@ -117,6 +134,44 @@ function treeCase(depth: number): void {
 	verdict("tree", depth, want);
 }
 
+function binCase(name: string, n: number, deepLeft: boolean): void {
+	const want: number[] = [];
+	for (let i = n - 1; i >= 0; i--) {
+		want.push(i * 10 + 1);
+		if (deepLeft) {
+			want.push(i * 10 + 4);
+			want.push(i * 10 + 5);
+			want.push(i * 10 + 6);
+			want.push(i * 10 + 2);
+		}
+	}
+	for (let i = 0; i < n; i++) {
+		if (!deepLeft) {
+			want.push(i * 10 + 2);
+			want.push(i * 10 + 4);
+			want.push(i * 10 + 5);
+			want.push(i * 10 + 6);
+		}
+		want.push(i * 10 + 3);
+	}
+	let h: Bin | null = null;
+	for (let i = 0; i < n; i++) {
+		const x = new Bin(i * 10);
+		const leaf = new Bin(i * 10 + 3);
+		if (deepLeft) {
+			x.l = h;
+			x.r = leaf;
+		} else {
+			x.r = h;
+			x.l = leaf;
+		}
+		h = x;
+	}
+	log.length = 0;
+	h = null;
+	verdict(name, n, want);
+}
+
 function throwCase(n: number): void {
 	let h: Hot | null = null;
 	for (let i = 0; i < n; i++) {
@@ -138,5 +193,9 @@ chainCase(50);
 chainCase(200000);
 treeCase(20);
 treeCase(100000);
+binCase("deep-left", 50, true);
+binCase("deep-left", 200000, true);
+binCase("deep-right", 50, false);
+binCase("deep-right", 200000, false);
 throwCase(50);
 throwCase(200000);
