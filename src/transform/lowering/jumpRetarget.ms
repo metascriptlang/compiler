@@ -7,8 +7,8 @@
 // jump targets and labels the jumps that cross a capturing construct; jumps
 // already correct stay bare, so emitted code for the common cases is unchanged.
 //
-// Reference model: transf.nim transformLoopBody — loop-crossing jumps become
-// labeled breaks resolved at lowering time; codegen only translates labels.
+// Loop-crossing jumps become labeled breaks resolved at lowering time; codegen
+// only translates labels.
 
 import { Node, NodeKind, BreakStmtData, ContinueStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData } from "../../ast/node";
 import { TransformContext } from "../context";

@@ -49,7 +49,7 @@ export function tempRef(sym: Symbol, loc: SourceLocation): Node {
 }
 
 // A value aggregate stays in place: a temp copy would take the writes a call
-// or a store makes through it. JS reads before an await: NIM-REF TR-24.
+// or a store makes through it. JS reads before an await.
 export function snapshotsLikeJs(t: Type | null): boolean {
 	if (t == null) return false;
 	const k = t.kind;

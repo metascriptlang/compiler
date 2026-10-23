@@ -69,9 +69,8 @@ function tailCallVisitor(ctx: TransformContext): (node: Node) => Node {
 }
 
 // A method reached through `this` is only a static call when no subclass can
-// replace it: Nim reads tfFinal for exactly this class of question
-// (ccgexprs.nim:1995, types.nim:456). An extended class carries OpenClass; a
-// class whose type cannot be resolved stays untouched.
+// replace it. An extended class carries OpenClass; a class whose type cannot
+// be resolved stays untouched.
 function lowerBoundRoutine(node: Node, ctx: TransformContext): Node {
 	const d = node.data as VariableDeclData;
 	if (d.declName == "" || d.initializer == null) return node;

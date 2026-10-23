@@ -8,8 +8,7 @@
 // Result is never walked, never registered for destroy, and leaks once per
 // evaluation.
 //
-// Fix (statement-level hoist, the MetaScript equivalent of Nim's
-// nkStmtListExpr in injectdestructors.nim — MetaScript has no such node):
+// Fix (statement-level hoist; MetaScript has no statement-list expression node):
 //
 //   const has = provide(path).ok;
 //     →
@@ -40,7 +39,7 @@
 // Short-circuit operands in an if / while condition (`if (a && f().ok)`) are
 // handled too (b3b): f() there runs only sometimes, so instead of an eager hoist
 // the condition is lowered to a flag + nested-if that preserves short-circuit
-// (what Nim does for `and`/`or`) — see lowerShortCircuit. A fresh call inside a
+// — see lowerShortCircuit. A fresh call inside a
 // ternary branch is still left untouched (a flag rewrite can't express it), and
 // short-circuit in a VariableDecl/assignment initializer is left to the analyzer.
 
@@ -168,9 +167,8 @@ function assignBlock(sym: Symbol, ty: Type, lowered: CondLower, loc: SourceLocat
 
 // Lower a boolean condition that contains a fresh RC call in a SHORT-CIRCUIT
 // operand (`a && f().ok`, `a || f().ok`) into preceding statements + a pure flag,
-// preserving short-circuit evaluation. This is what Nim does (it lowers `and`/`or`
-// to nested-if so injectdestructors sees the conditional fresh value); MetaScript
-// has no nkStmtListExpr, so the flag + if is emitted as real statements.
+// preserving short-circuit evaluation. MetaScript has no statement-list expression
+// node, so the flag + if is emitted as real statements.
 //
 //   a && f().ok   →   let $flag = false; if (a) { const $t = f(); $flag = $t.ok; }   test $flag
 //   a || f().ok   →   let $flag = true;  if (!(a)) { const $t = f(); $flag = $t.ok; } test $flag

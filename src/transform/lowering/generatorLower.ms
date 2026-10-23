@@ -136,7 +136,7 @@ function collectDeclTypes(node: Node, syms: Symbol[], types: Type[]): void {
 	forEachChild(node, (child: Node): void => { collectDeclTypes(child, syms, types); });
 }
 
-// A local without its symbol cannot be told from another of its spelling (NIM-REF TR-1).
+// A local without its symbol cannot be told from another of its spelling.
 export function collectStateLocals(node: Node | null, ctx: TransformContext, out: SymSet): void {
 	if (node == null || isFnBoundary(node)) return;
 	if (node.kind == NodeKind.VariableDecl) {

@@ -115,7 +115,7 @@ export function isDirectParentVar(ss: ScopeStack, sym: Symbol): boolean {
 }
 
 // A symbol-less reference spelled like an enclosing frame's binding cannot be
-// matched to it: NIM-REF TR-11 forbids resolving a capture by name.
+// matched to it: a capture is never resolved by name.
 export function isOuterFrameName(ss: ScopeStack, name: string): boolean {
 	if (ss.funcMarkers.length < 2) return false;
 	for (let i = ss.funcMarkers[0]; i < ss.funcMarkers[ss.funcMarkers.length - 1]; i += 1) {
