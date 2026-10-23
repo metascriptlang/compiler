@@ -490,3 +490,42 @@ export function look(g: Gen, t: Node): int32 {
 	assert result.ok, result.ok ? "" : result.error;
 	assert borrowedOps(functionBody(result.value, "look"), "k") > 0, functionBody(result.value, "look");
 }
+
+test "a scalar argument joins no graph through a call result" {
+	const result = compileToC(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+function make(s: int32): Node { const n = new Node(); n.n = s; return n; }
+function pick(t: Readonly<Node>, s: int32): Node { const n = new Node(); n.n = t.n + s; return n; }
+function firstKid(t: Readonly<Node>): Readonly<Node> { return t.kids[0]; }
+function grow(x: Node): void { x.n += 1; }
+export function look(t: Node, side: int32): int32 {
+	const k = firstKid(t);
+	const s = side + 1;
+	const a = make(s);
+	const b = pick(t, s);
+	grow(a);
+	return k.n + b.n;
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	assert borrowedOps(functionBody(result.value, "look"), "k") == 0, functionBody(result.value, "look");
+}
+
+test "an argument that can alias the result joins its graph through the call" {
+	const result = compileToC(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+function make(): Node { return new Node(); }
+function pick(t: Readonly<Node>, s: Readonly<Node>): Node { const n = new Node(); n.n = t.n + s.n; return n; }
+function firstKid(t: Readonly<Node>): Readonly<Node> { return t.kids[0]; }
+function grow(x: Node): void { x.n += 1; }
+export function look(t: Node): int32 {
+	const k = firstKid(t);
+	const a = make();
+	const b = pick(t, a);
+	grow(a);
+	return k.n + b.n;
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	assert borrowedOps(functionBody(result.value, "look"), "k") > 0, functionBody(result.value, "look");
+}
