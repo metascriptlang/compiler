@@ -28,7 +28,7 @@ import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBas
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook, pickBodyCtx } from "../../checker/instantiate";
 import { walkNode } from "../walker";
-import { canFormAcycle, reachesThroughRef } from "../cycles";
+import { canFormAcycle } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
 import { CheckerContext, newSym, extReceiverSym, findAllExtensionsByName, hasExtensionByName, getExtFnType, addError } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
@@ -68,7 +68,6 @@ class LiftCtx {
 	refusedArrayElems: HashSet<Type>;
 	jsBackend: boolean;
 	dropOwner: Symbol | null;
-	dropClass: Type | null;
 }
 
 // NodeBuf: heap-allocated buffer for accumulating AST nodes.
@@ -528,11 +527,12 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 // --- Standard atomic reference hook generator ---
 // isCyclic: true for types that can form reference cycles (reference parity: atomicRefOp)
 // Cyclic types use msDecrefCyclic/msIncrefCyclic (ORC-aware when MSGC_ORC defined)
-function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: boolean, atomic: boolean, owner: Symbol | null, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: boolean, atomic: boolean, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	const decrefFn = atomic ? "msAtomicDecref" : (isCyclic ? "msDecrefCyclic" : "msDecref");
 	const increfFn = atomic ? "msAtomicIncref" : (isCyclic ? "msIncrefCyclic" : "msIncref");
 	match (hook) {
 		"destroy" => {
+			const owner = lctx.dropOwner;
 			if (owner != null && isCyclic && !atomic) {
 				buf.items.push(makeExprStmt(makeCall(runtimeRef("msDecrefCyclicEdge", loc), [makeIdentResolved(owner, loc), xf], loc), loc));
 			} else {
@@ -686,20 +686,20 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				defaultOp(hook, xf, yf, buf, loc);
 			} else {
 				const cyclic = isCyclicType(fieldType, lctx, visited);
-				refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(fieldType), edgeOwner(fieldType, lctx), lctx, buf, loc);
+				refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(fieldType), lctx, buf, loc);
 			}
 		},
 		TypeKind.BigInt => {
 			// msBigInt is a refcounted heap value that can never form a cycle and
 			// carries no atomic count — the plain non-cyclic ref ops, matching the
 			// RcInfo classify.ms hands the analyzer for the same type.
-			refOp(hook, xf, yf, fieldName, false, false, null, lctx, buf, loc);
+			refOp(hook, xf, yf, fieldName, false, false, lctx, buf, loc);
 		},
 		TypeKind.Ptr => {
 			defaultOp(hook, xf, yf, buf, loc);
 		},
 		TypeKind.Unknown => {
-			refOp(hook, xf, yf, fieldName, true, false, lctx.dropOwner, lctx, buf, loc);
+			refOp(hook, xf, yf, fieldName, true, false, lctx, buf, loc);
 		},
 		TypeKind.Function => {
 			if (hook == "copy") {
@@ -710,7 +710,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		},
 		TypeKind.GenericInstance => {
 			if (isAwaitable(fieldType)) {
-				refOp(hook, xf, yf, fieldName, false, false, null, lctx, buf, loc);
+				refOp(hook, xf, yf, fieldName, false, false, lctx, buf, loc);
 				return;
 			}
 			const distinctInner = distinctBody(fieldType);
@@ -745,7 +745,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 					defaultOp(hook, xf, yf, buf, loc);
 				} else {
 					const cyclic = isCyclicType(fieldType, lctx, visited);
-					refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(refInner), edgeOwner(fieldType, lctx), lctx, buf, loc);
+					refOp(hook, xf, yf, fieldName, cyclic, isAtomicRef(refInner), lctx, buf, loc);
 				}
 				return;
 			}
@@ -1329,9 +1329,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	// therefore responsible for ALL owned fields. Same for copy/sink/wasMoved/trace.
 	const hookSym = getUserDefinedHookSym(subject, hook, lctx);
 	const outerDropOwner = lctx.dropOwner;
-	const outerDropClass = lctx.dropClass;
 	lctx.dropOwner = hook == "destroy" && hookSym == null && classType != null && !lctx.jsBackend ? s1 : null;
-	lctx.dropClass = classType;
 	if (hookSym != null) {
 		const hookIdent = makeIdentResolved(hookSym, loc);
 		const u1 = userHookArg(hookSym, 0, s1, classType, loc);
@@ -1403,7 +1401,6 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 		buf.items = deferAfterDropEdges(buf.items, 0, s1, classType, typeName, cName, lctx, loc);
 	}
 	lctx.dropOwner = outerDropOwner;
-	lctx.dropClass = outerDropClass;
 	if (hook == "destroy") {
 		buf.items = bracketTeardown(buf.items, loc);
 	}
@@ -1432,11 +1429,6 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	const sym = liftOp(fnNode, objType, objType, attachedOpOf(hook), cName + suffix);
 	lctx.collector.push(fnNode);
 	return sym;
-}
-
-function edgeOwner(fieldType: Type, lctx: LiftCtx): Symbol | null {
-	if (lctx.dropOwner == null || lctx.dropClass == null) return null;
-	return reachesThroughRef(fieldType, lctx.dropClass) ? lctx.dropOwner : null;
 }
 
 function bracketTeardown(items: Node[], loc: SourceLocation): Node[] {
@@ -2300,7 +2292,6 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		refusedArrayElems: new HashSet<Type>(),
 		jsBackend: jsBackend,
 		dropOwner: null,
-		dropClass: null,
 	};
 }
 

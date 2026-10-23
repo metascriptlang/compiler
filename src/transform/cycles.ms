@@ -160,10 +160,3 @@ export function canFormAcycle(t: Type | null, cyclicCache: NameSet, acyclicCache
 	}
 	return result;
 }
-
-export function reachesThroughRef(from: Type, owner: Type): boolean {
-	const target = owner.kind == TypeKind.Ref && owner.typeReturn != null ? owner.typeReturn : owner;
-	const key = typeIdentity(target);
-	if (key == "") return true;
-	return cfaAux(from, key, false, createNameSet());
-}
