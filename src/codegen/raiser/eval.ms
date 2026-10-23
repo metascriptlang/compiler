@@ -22,6 +22,7 @@ import { unboxFloat } from "../../raiser/marshal";
 import { RaiserInstruction, raiserABC, RaiserOpcode, RaiserRegClass, getSignedAx, branchOffset, regClassLetter, carriesSlot } from "../../raiser/bytecode";
 import { disasmFunc, opName } from "../../raiser/disasm";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
+import { ModuleGraph, createModuleGraph } from "../../module/graph";
 import { RaiserVM, execModule, execLoop, createVM, vmReleaseHeaps } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction, makeTestModule } from "../../raiser/module";
 import { RaiserFuncMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
@@ -142,6 +143,15 @@ interface ComptimeEngine {
 
 let _engine: ComptimeEngine = null as unknown as ComptimeEngine;
 let _engineToken: CheckerContext = null as unknown as CheckerContext;
+let _engineGraph: ModuleGraph = null as unknown as ModuleGraph;
+
+// The engine belongs to one compilation, named as the macro cache names it: the module
+// graph, or a context outside any graph. _engineToken follows the call site in between.
+function inEngineCompilation(token: CheckerContext): boolean {
+	if (_engine == null) return false;
+	if (token.moduleGraph != null) return token.moduleGraph == _engineGraph;
+	return _engineGraph == null && token == _engineToken;
+}
 
 function freshEngine(): ComptimeEngine {
 	// Seed with a never-called Halt entry so createVM has a valid entry frame;
@@ -298,8 +308,11 @@ export function compileMacroIntoEngine(program: Node, token: CheckerContext, mac
 
 function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnName: string, declCtx: CheckerContext, leadSeeds: Symbol[]): EngineMacroResult {
 	const nested = engineCompiling();
-	if (_engineToken != token && !nested) {
-		_engine = freshEngine();
+	if (!nested) {
+		if (!inEngineCompilation(token)) {
+			_engine = freshEngine();
+			_engineGraph = token.moduleGraph;
+		}
 		_engineToken = token;
 	}
 	const seeds: Symbol[] = [];
@@ -1690,6 +1703,29 @@ function __macroBody(t: string): number {
 		if (e.message.indexOf("noSuchMemberAnywhere", 0) >= 0) found = true;
 	}
 	assert found;
+}
+
+test "engine: macros called from two modules of one graph share one engine" {
+	const outerPr = parseSource("export function helper(x: number): number { return x; }");
+	assert outerPr.ok;
+	const first = checkProgram(outerPr.value);
+	const otherPr = parseSource("export const other = 1;");
+	assert otherPr.ok;
+	const second = checkProgram(otherPr.value);
+	const graph = createModuleGraph();
+	first.moduleGraph = graph;
+	second.moduleGraph = graph;
+	const wrapperA = parseSource("function __macroBody(): number { return helper(1); }");
+	assert wrapperA.ok;
+	const a = compileMacroIntoEngine(wrapperA.value, first, "__macroBody", first);
+	assert a.errors.length == 0;
+	const engine = _engine;
+	const wrapperB = parseSource("function __macroBody(): number { return helper(2); }");
+	assert wrapperB.ok;
+	const b = compileMacroIntoEngine(wrapperB.value, second, "__macroBody", first);
+	assert b.errors.length == 0;
+	assert _engine == engine;
+	assert b.vm == a.vm;
 }
 
 test "engine: a slice is a view that writes through to its array" {
