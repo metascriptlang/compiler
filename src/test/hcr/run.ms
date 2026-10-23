@@ -780,6 +780,7 @@ function engine(): void {
 		"HCR-ENGINE lifecycle v1: destroy probe 8",
 		"HCR-ENGINE lifecycle v1: before reload",
 		"HCR-ENGINE lifecycle v2: after reload",
+		"HCR-ENGINE lifecycle v1: after reload",
 		"HCR-ENGINE after-reload handler throws: rejected lifecycle",
 		"HCR-ENGINE after rollback: value 10 tick 13 version 1",
 		"HCR-ENGINE probe after rollback: instanceof true true scaled 70",
@@ -1176,15 +1177,21 @@ function layoutLogic(variant: string, generation: int32): string {
 		literal = "new P()";
 	}
 	const holder = layoutHolder(variant, grown);
+	const handlerCounts = variant == "resume" ? " ${befores}/${afters}" : "";
 	const lines = [
 		declaration,
 		holder[0],
 		`function make(): P { return ${literal}; }`,
 		`export function hold(): void { ${holder[1]} }`,
 		`export function release(): void { ${holder[2]} }`,
-		"export function fresh(): string { const p = make(); return " + (grown ? "`${p.a} ${p.b}`" : "`${p.a}`") + "; }",
+		"export function fresh(): string { const p = make(); return " + (grown ? "`${p.a} ${p.b}" : "`${p.a}") + handlerCounts + "`; }",
 	];
 	if (variant == "handler") lines.push("@beforeReload\nfunction drop(): void { held = null; }");
+	if (variant == "resume") {
+		lines.push("let befores: int32 = 0;\nlet afters: int32 = 0;");
+		lines.push("@beforeReload\nfunction pause(): void { befores += 1; }");
+		lines.push("@afterReload\nfunction resume(): void { afters += 1; }");
+	}
 	if (generation > 2) lines.push("export const SALT: int32 = 3;");
 	return lines.join("\n") + "\n";
 }
@@ -1234,6 +1241,13 @@ function layoutReload(): void {
 		"HCR-LAYOUT after held: 7 beta",
 		"HCR-LAYOUT released: reloaded logic | ",
 		"HCR-LAYOUT after released: 7 beta",
+	]);
+	layoutVariant("resume", [
+		"HCR-LAYOUT before: 7 0/0",
+		`HCR-LAYOUT held: restart required logic | ${OWN_LIVE}`,
+		"HCR-LAYOUT after held: 7 1/1",
+		"HCR-LAYOUT released: reloaded logic | ",
+		"HCR-LAYOUT after released: 7 beta 2/2",
 	]);
 }
 
