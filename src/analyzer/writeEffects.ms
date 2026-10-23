@@ -205,6 +205,10 @@ function holderType(t: Type | null): Type | null {
 			cur = withoutReadonlyView(cur);
 			continue;
 		}
+		if (cur.kind == TypeKind.GenericInstance && cur.typeExtra != null) {
+			cur = cur.typeExtra;
+			continue;
+		}
 		return cur.kind == TypeKind.Struct || cur.kind == TypeKind.Array ? cur : null;
 	}
 	return null;
@@ -235,7 +239,7 @@ function mayBePartOf(a: Type | null, b: Type | null, depth: int32): boolean {
 	if (a == null || b == null || a === b || depth > 8) return true;
 	if (a.kind == TypeKind.Array && b.kind == TypeKind.Array) return elementsMayAlias(a.typeReturn, b.typeReturn, depth + 1);
 	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) {
-		if (isClassType(a) && isClassType(b)) return sameType(a, b) || classDistance(a, b) >= 0 || classDistance(b, a) >= 0;
+		if (isClassType(a) && isClassType(b)) return a.sym === b.sym || sameType(a, b) || classDistance(a, b) >= 0 || classDistance(b, a) >= 0;
 		return mayHoldEither(a, b);
 	}
 	return false;
