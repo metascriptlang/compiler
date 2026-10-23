@@ -949,9 +949,10 @@ function stepCrash(): void {
 	}
 	const want = [
 		"STEP start 2",
-		"STEP rolled back logic fatal then 2",
-		"STEP rolled back logic fault then 2",
-		"STEP rolled back logic exception then 2",
+		"STEP rolled back logic fatal then 2 frame=0",
+		"STEP rolled back logic fault then 2 frame=0",
+		"STEP rolled back logic exception then 2 frame=0",
+		"STEP rolled back logic fatal then 2 frame=0",
 		"STEP reloaded 3",
 	];
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
