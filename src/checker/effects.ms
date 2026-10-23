@@ -724,9 +724,12 @@ function slotStoreOf(node: Node): EffectCause | null {
 	}
 	if (node.kind == NodeKind.ArrayLiteral && elementHoldsNoCount(node.nodeType)) return null;
 	const items = node.kind == NodeKind.ArrayLiteral ? (node.data as ArrayLiteralData).elements : (node.data as ObjectLiteralData).properties;
-	for (const item of items) {
-		const what = borrowedOf(item);
-		if (what != null) return storeCause(item, what, node.kind == NodeKind.ArrayLiteral ? "into an array literal" : "into an object literal");
+	for (let i = 0; i < items.length; i += 1) {
+		const what = borrowedOf(items[i]);
+		if (what == null) continue;
+		const keys = node.kind == NodeKind.ObjectLiteral ? (node.data as ObjectLiteralData).keys : [];
+		const into = node.kind == NodeKind.ArrayLiteral ? "into an array literal" : i < keys.length && keys[i] != "" ? "into the field '" + keys[i] + "' of an object literal" : "into an object literal";
+		return storeCause(items[i], what, into);
 	}
 	return null;
 }

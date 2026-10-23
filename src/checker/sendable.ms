@@ -706,7 +706,7 @@ function requireSpawnSafe(ctx: CheckerContext, fn: Node, runs: string, at: Node)
 	const borrowed = views.filter((v: Symbol): boolean => !moved.includes(v));
 	deferEffectCheck(at, "spawnSafe", (ctx: CheckerContext): void => {
 		const stored = spawnEffectOf(peelHidden(fn), Effect.StoresBorrowed, borrowed);
-		if (stored != null) addError(ctx, runs + ", but it " + stored.text + "; the task only borrows it and a borrow takes no count, so store an explicit copy of it (clone or spread) or store it outside the spawned code", at.location.line, at.location.column);
+		if (stored != null) addError(ctx, runs + ", but it " + stored.text + "; " + storedValueName(stored.site) + " is a view the task does not own and a view takes no count, so pass it to a routine whose parameters are Readonly (the borrow form), or store an explicit copy of it (clone or spread) when the container must own its elements", at.location.line, at.location.column);
 		const c = spawnEffectOf(peelHidden(fn), Effect.SpawnUnsafe);
 		if (c == null) return;
 		addError(ctx, runs + ", but it " + c.text + "; module state crosses threads only as a const value, a Locked<T> or an Arc<T>", at.location.line, at.location.column);
@@ -1069,6 +1069,12 @@ function rootName(n: Node): string {
 
 function locBefore(a: SourceLocation, b: SourceLocation): boolean {
 	return a.line < b.line || (a.line == b.line && a.column < b.column);
+}
+
+function storedValueName(site: Node): string {
+	const value = site.kind == NodeKind.BinaryExpr ? (site.data as BinaryExprData).right : site;
+	const name = describeExpr(value);
+	return name == "an expression" ? "the stored value" : "'" + name + "'";
 }
 
 function describeExpr(n: Node): string {
