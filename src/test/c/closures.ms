@@ -37,3 +37,18 @@ console.log(f(3));`;
 	const c = compileToC(src);
 	assert c.ok, c.ok ? "" : c.error;
 }
+
+test "E2E C: an arity adapter's parameters reach the frame with their own item" {
+	const src = `function one(s: string): string { return s + "!"; }
+function apply(f: (s: string, i: int32) => string): string { return f("a", 1); }
+console.log(apply(one));`;
+	const c = compileToC(src);
+	assert c.ok, c.ok ? "" : c.error;
+}
+
+test "E2E C: a union text helper's parameter reaches the frame with its own item" {
+	const src = `function show(v: int32 | string): string { return \`\${v}\`; }
+console.log(show(1));`;
+	const c = compileToC(src);
+	assert c.ok, c.ok ? "" : c.error;
+}
