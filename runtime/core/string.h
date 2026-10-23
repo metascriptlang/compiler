@@ -224,8 +224,11 @@ static inline void msStringAppendChar(msString* dest, char c) {
 /* Byte-equal comparison */
 bool msStringEquals(msString a, msString b);
 
-/* Lexicographic compare (< 0, 0, > 0) */
+/* Ordering in UTF-16 code units (< 0, 0, > 0) */
 int msStringCompare(msString a, msString b);
+
+/* Ordering in raw bytes, for binary data held in a string */
+int msStringCompareBytes(msString a, msString b);
 
 /* Operator overload helpers — prelude `<` and `<=` base operators */
 static inline bool msStringCompareLt(msString a, msString b) { return msStringCompare(a, b) < 0; }

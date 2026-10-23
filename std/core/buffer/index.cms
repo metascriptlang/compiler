@@ -126,11 +126,11 @@ extern function msBufferToStringRange(buf: Buffer, start: number, end: number, e
 
 // Uses string functions where buffer had redundant equivalents:
 // - msBufferConcat → msStringConcat
-// - msBufferCompare → msStringCompare
+// - msBufferCompare → msStringCompareBytes
 
 extern function msBufferFromString(str: string): Buffer;
 extern function msStringConcat(a: string, b: string): string;
-extern function msStringCompare(a: string, b: string): number;
+extern function msStringCompareBytes(a: string, b: string): number;
 
 export function fromString(this typeof Buffer, value: string, encoding: string): Buffer {
 	if (encoding == "hex") return msBufferFromHex(value);
@@ -153,7 +153,7 @@ export function copy(this typeof Buffer, value: Buffer): Buffer {
 }
 
 export function compare(this typeof Buffer, a: Buffer, b: Buffer): number {
-	return msStringCompare(a, b);
+	return msStringCompareBytes(a, b);
 }
 
 export function concat(this typeof Buffer, a: Buffer, b: Buffer): Buffer {

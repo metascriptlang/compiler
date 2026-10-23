@@ -343,7 +343,7 @@ bool msStringEquals(msString a, msString b) {
 	return memcmp(a.p->data, b.p->data, a.len) == 0;
 }
 
-int msStringCompare(msString a, msString b) {
+int msStringCompareBytes(msString a, msString b) {
 	if (a.p == b.p && a.len == b.len) return 0;
 	int64_t minLen = a.len < b.len ? a.len : b.len;
 	if (minLen > 0) {
@@ -351,6 +351,41 @@ int msStringCompare(msString a, msString b) {
 		const char* bd = b.p ? b.p->data : "";
 		int cmp = memcmp(ad, bd, minLen);
 		if (cmp != 0) return cmp;
+	}
+	if (a.len < b.len) return -1;
+	if (a.len > b.len) return 1;
+	return 0;
+}
+
+/* UTF-16 code unit order (TypeScript string ordering). It differs from UTF-8 byte order only where
+   the first differing code points are a supplementary one (lead 0xF0..0xF4, surrogate pair) against
+   a BMP one at or above U+E000 (lead 0xEE/0xEF): the pair sorts below. */
+int msStringCompare(msString a, msString b) {
+	if (a.p == b.p && a.len == b.len) return 0;
+	int64_t minLen = a.len < b.len ? a.len : b.len;
+	if (minLen > 0) {
+		const unsigned char* ad = (const unsigned char*)(a.p ? a.p->data : "");
+		const unsigned char* bd = (const unsigned char*)(b.p ? b.p->data : "");
+		int64_t i = 0;
+		while (i + 8 <= minLen) {
+			uint64_t wa, wb;
+			memcpy(&wa, ad + i, 8);
+			memcpy(&wb, bd + i, 8);
+			if (wa != wb) {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__ && defined(__GNUC__)
+				i += __builtin_ctzll(wa ^ wb) >> 3;
+#endif
+				break;
+			}
+			i += 8;
+		}
+		while (i < minLen && ad[i] == bd[i]) i++;
+		if (i < minLen) {
+			unsigned char x = ad[i], y = bd[i];
+			if (x >= 0xF0 && (y == 0xEE || y == 0xEF)) return -1;
+			if (y >= 0xF0 && (x == 0xEE || x == 0xEF)) return 1;
+			return x < y ? -1 : 1;
+		}
 	}
 	if (a.len < b.len) return -1;
 	if (a.len > b.len) return 1;
