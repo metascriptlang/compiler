@@ -128,3 +128,40 @@ console.log(\`\${run()}\`);
 	assert r.ok;
 	assert (r.ok ? r.value : "").contains("msIncrefCyclic(view");
 }
+
+test "E2E C: a view stays counted through a capture-writing function value that returns nothing" {
+	const r = compileToC(`
+class N { v: int32 = 1; next: N | null = null; }
+function use(n: Readonly<N> | null): int32 { return n != null ? n.v : 0; }
+function run(): int32 {
+	const g = new N();
+	g.next = new N();
+	const clear = (x: Readonly<N>) => { g.next = null; };
+	const v = g.next;
+	clear(g);
+	return use(v);
+}
+console.log(\`\${run()}\`);
+`);
+	assert r.ok;
+	assert (r.ok ? r.value : "").contains("msDecrefCyclic(v_");
+}
+
+test "E2E C: a view stays counted through a function value reassigned between calls" {
+	const r = compileToC(`
+class N { v: int32 = 1; next: N | null = null; }
+function nextOf(x: Readonly<N>): Readonly<N> | null { return x.next; }
+function run(): int32 {
+	const g = new N();
+	g.next = new N();
+	let pick = nextOf;
+	const a = pick(g);
+	pick = (x: Readonly<N>): Readonly<N> | null => { g.next = null; return x.next; };
+	const b = pick(g);
+	return (a != null ? a.v : 0) + (b != null ? b.v : 0);
+}
+console.log(\`\${run()}\`);
+`);
+	assert r.ok;
+	assert (r.ok ? r.value : "").contains("msDecrefCyclic(a_");
+}
