@@ -298,7 +298,7 @@ function roleOf(letter: string): RaiserRole {
 }
 
 // One letter for each of A, B and C. A call-like opcode's last operand is a site: its arguments are the registers after A.
-function opRoleLetters(op: RaiserOpcode): string {
+export function opRoleLetters(op: RaiserOpcode): string {
 	return match (op) {
 		RaiserOpcode.LoadConst | RaiserOpcode.LoadNil | RaiserOpcode.LoadGlobal | RaiserOpcode.StoreGlobal | RaiserOpcode.Halt | RaiserOpcode.Print
 			| RaiserOpcode.Ret | RaiserOpcode.Throw | RaiserOpcode.FutureNew | RaiserOpcode.ModuleImport | RaiserOpcode.Catch | RaiserOpcode.ObjConv | RaiserOpcode.LitConv => "x--",
@@ -365,8 +365,19 @@ function opRoleLetters(op: RaiserOpcode): string {
 	};
 }
 
+function buildRoleTable(): RaiserRole[] {
+	const table: RaiserRole[] = [];
+	for (let op = 0; op <= (LAST_RAISER_OPCODE as int32); op += 1) {
+		const letters = opRoleLetters(op as RaiserOpcode);
+		for (let slot = 0; slot < 3; slot += 1) table.push(roleOf(letters.charAt(slot)));
+	}
+	return table;
+}
+
+const ROLE_TABLE: RaiserRole[] = buildRoleTable();
+
 export function opRole(op: RaiserOpcode, slot: int32): RaiserRole {
-	return roleOf(opRoleLetters(op).charAt(slot));
+	return ROLE_TABLE[(op as int32) * 3 + slot];
 }
 
 // What a generic handler finds in an operand once it is retagged: 0..4 is the class a fixed role names,
@@ -729,4 +740,17 @@ test "a branch offset keeps its sign across the 24-bit packed field and stops on
 		wide = (e as Error).message;
 	}
 	assert wide.includes("does not fit the packed 16-bit field");
+}
+
+test "the role table agrees with the role letters of every opcode" {
+	for (let op = 0; op <= (LAST_RAISER_OPCODE as int32); op += 1) {
+		const letters = opRoleLetters(op as RaiserOpcode);
+		for (let slot = 0; slot < 3; slot += 1) assert opRole(op as RaiserOpcode, slot as int32) == roleOf(letters.charAt(slot));
+	}
+}
+
+test "the last opcode has its roles in the table" {
+	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Ref;
+	assert opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.None;
+	assert opRole(LAST_RAISER_OPCODE, 2) == RaiserRole.Ref;
 }
