@@ -17,7 +17,7 @@ import { RcInfo, noRcInfo } from "./classify";
 import { makeNumber, makeString } from "../checker/literalNodes";
 import { classDistance, createArray, createFunction, int32Type, isReadonlyView, stringType, withoutReadonlyView } from "../checker/types";
 import { isAssignable, sameType } from "../checker/compat";
-import { generatedRef, makeAssign, makeCall, makeIdentResolved } from "../transform/util";
+import { generatedRef, makeAssign, makeBlock, makeCall, makeFnDecl, makeIdentResolved, makeReturn } from "../transform/util";
 import { cstringSource } from "../transform/native/cstringConvLower";
 
 const ELEMENT_SLOT = "E";
@@ -321,6 +321,18 @@ function writeTarget(s: WriteSummary, target: Node | null, params: Symbol[] | nu
 			return changed;
 		},
 	};
+}
+
+const LOWERED_ELEMENT_READS = ["msArrayAccess", "msArrayAccessUnchecked", "msRefArrayAccess", "msRefArrayAccessUnchecked", "msSizedArrayAccess",
+	"msSizedArrayAccessUnchecked", "msSpanAccess", "msSpanAccessUnchecked", "msNumberArrayAccess", "msStringArrayAccess", "msUint8ArrayAccess"];
+const LOWERED_INLINE_READS = ["msVariantAccess", "msVariantAccessVal", "msVariantObject", "msVariantObjectVal", "msMaybeVariantObject", "msMaybeAccess", "msMaybeAccessVal"];
+
+function loweredAccessStep(call: Node): string | null {
+	const sym = call.resolvedSym;
+	if (sym == null || (call.data as CallExprData).arguments.length == 0) return null;
+	if (!isGeneratedProc(sym) && !hasFlag(sym, SymbolFlag.CompilerProc)) return null;
+	if (LOWERED_ELEMENT_READS.includes(sym.name)) return ELEMENT_SLOT;
+	return LOWERED_INLINE_READS.includes(sym.name) ? "" : null;
 }
 
 function loweredElementWrite(s: WriteSummary, access: Node): boolean {
@@ -1028,6 +1040,11 @@ function pathFromParams(n: Node, params: Symbol[] | null, d: LocalDefs, seen: Ha
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { return pathFromParams((t.data as HiddenDerefData).expr, params, d, seen, out); },
 		NodeKind.MoveExpr => { return pathFromParams((t.data as MoveExprData).moveArg, params, d, seen, out); },
 		NodeKind.CallExpr => {
+			const projected = loweredAccessStep(t);
+			if (projected != null) {
+				if (projected == ELEMENT_SLOT) out.push(heldSlot(ELEMENT_SLOT, (t.data as CallExprData).arguments[0].nodeType));
+				return pathFromParams((t.data as CallExprData).arguments[0], params, d, seen, out);
+			}
 			if (!isViewCall(t)) return false;
 			const inner = viewReturnSlots(t);
 			if (inner == null) return false;
@@ -1193,4 +1210,22 @@ test "a store through a generated access macro writes only elements of its array
 	const store = makeAssign(elementRead(loc), makeString("s", loc), loc);
 	assert mayWrite(store, [heldSlot(ELEMENT_SLOT, createArray(stringType()))]);
 	assert !mayWrite(store, [heldSlot(ELEMENT_SLOT, createArray(createArray(int32Type())))]);
+}
+
+function loweredViewCall(returned: (param: Node, loc: SourceLocation) => Node, paramType: Type, loc: SourceLocation): Node {
+	const param = makeSymbol("xs", SymbolKind.Parameter, paramType, false);
+	const fn = makeSymbol("lowered", SymbolKind.Function, createFunction([paramType], ["xs"], paramType), false);
+	fn.declNode = makeFnDecl("lowered", [param], [""], makeBlock([makeReturn(returned(makeIdentResolved(param, loc), loc), loc)], loc), "", "", loc);
+	return makeCall(makeIdentResolved(fn, loc), [localOf("ys", paramType, loc)], loc);
+}
+
+test "a view call's result is reached through the lowered accessor its callee returns" {
+	const loc = writeProbe();
+	const arrType = createArray(createArray(int32Type()));
+	const element = loweredViewCall((xs: Node, at: SourceLocation): Node => makeCall(generatedRef("msRefArrayAccess", at), [xs, makeNumber(0, at)], at), arrType, loc);
+	const elementSlots = (viewReturnSlots(element) ?? ["unknown"]).join(",");
+	assert elementSlots == heldSlot(ELEMENT_SLOT, arrType), elementSlots;
+	const variant = loweredViewCall((u: Node, at: SourceLocation): Node => makeCall(generatedRef("msVariantAccess", at), [u, makeNumber(0, at), makeString("a", at), makeString("a|b", at)], at), arrType, loc);
+	const variantSlots = (viewReturnSlots(variant) ?? ["unknown"]).join(",");
+	assert variantSlots == "", variantSlots;
 }
