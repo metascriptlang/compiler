@@ -2697,9 +2697,35 @@ export interface SgSemanticToken {
 
 export function sgCollectSemanticTokens(ctx: CheckerContext, program: Node): SgSemanticToken[] {
 	const result: SgSemanticToken[] = [];
+	const recorded = new HashSet<string>();
+	if (ctx.symRecords != null) {
+		for (const rec of ctx.symRecords) {
+			const sym = rec.sym;
+			if (sym == null || rec.colEnd <= rec.col || isKeywordRecord(rec)) continue;
+			const at = `${rec.line}:${rec.col}`;
+			if (recorded.has(at)) continue;
+			recorded.add(at);
+			result.push({ line: rec.line, col: rec.col, length: rec.colEnd - rec.col, tokenType: sgSymbolToTokenType(rec.kind), modifiers: recordModifiers(rec, sym) });
+		}
+	}
 	if (program == null) return result;
-	sgCollectTokensInNode(ctx, program, result);
+	const walked: SgSemanticToken[] = [];
+	sgCollectTokensInNode(ctx, program, walked);
+	for (const tok of walked) {
+		if (!recorded.has(`${tok.line}:${tok.col}`)) result.push(tok);
+	}
 	return result;
+}
+
+function isKeywordRecord(rec: SgSymRecord): boolean {
+	return rec.name == "this" || (rec.isDecl && rec.kind == SymbolKind.Method && rec.name == "constructor");
+}
+
+function recordModifiers(rec: SgSymRecord, sym: Symbol): int32 {
+	let mods: int32 = rec.isDecl ? 1 : 0;
+	if (rec.kind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Mutable)) mods = mods | 4;
+	if (sym.builtinKind.length > 0) mods = mods | 16;
+	return mods;
 }
 
 // Map SymbolKind to semantic token type index
@@ -2720,21 +2746,7 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 	if (node == null) return;
 	const loc = node.location;
 
-	// Identifiers: look up symbol for semantic classification
-	if (node.kind == NodeKind.Identifier) {
-		const id = node.data as IdentifierData;
-		if (id.name.length == 0) return;
-		const sym = lookupSymbol(ctx.table, id.name);
-		if (sym != null) {
-			const tt = sgSymbolToTokenType(sym.symbolKind);
-			let mods: int32 = 0;
-			if (!hasFlag(sym, SymbolFlag.Mutable) && sym.symbolKind == SymbolKind.Variable) mods = 4; // readonly bit 2
-			if (sym.builtinKind.length > 0) mods = mods | 16; // defaultLibrary bit 4
-			const tok: SgSemanticToken = { line: loc.line, col: loc.column, length: id.name.length, tokenType: tt, modifiers: mods };
-			tokens.push(tok);
-		}
-		return;
-	}
+	if (node.kind == NodeKind.Identifier) return;
 
 	// Declaration names get declaration modifier (bit 0)
 	if (node.kind == NodeKind.FunctionDecl) {
@@ -2847,25 +2859,7 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 		return;
 	}
 
-	// ImportDecl: classify each imported name by its resolved symbol kind
-	if (node.kind == NodeKind.ImportDecl) {
-		const imp = node.data as ImportDeclData;
-		for (let ii = 0; ii < imp.importNames.length; ii += 1) {
-			const name = imp.importNames[ii];
-			if (ii >= imp.nameLocations.length) continue;
-			const nameLoc = imp.nameLocations[ii];
-			if (name.length == 0 || nameLoc == null) continue;
-			const alias = imp.importAliases[ii];
-			const lookupName = (alias != "" && alias != name) ? alias : name;
-			const sym = lookupSymbol(ctx.table, lookupName);
-			if (sym != null) {
-				const tt = sgSymbolToTokenType(sym.symbolKind);
-				const tok: SgSemanticToken = { line: nameLoc.line, col: nameLoc.column, length: name.length, tokenType: tt, modifiers: 0 };
-				tokens.push(tok);
-			}
-		}
-		return;
-	}
+	if (node.kind == NodeKind.ImportDecl) return;
 
 	// ExternDecl: skip — tree-sitter handles extern keyword highlighting.
 	if (node.kind == NodeKind.ExternDecl) return;
