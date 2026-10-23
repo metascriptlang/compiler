@@ -43,7 +43,10 @@ function isGitSource(version: string): boolean {
 // Resolve the build list from root deps using MVS.
 // rootDeps: the project's direct dependencies (from build.ms).
 // loadDeps: callback to get a package's transitive deps (from lockfile or registry).
-export function mvsResolve(rootDeps: DepEntry[], loadDeps: LoadDepsFn): Result<BuildListEntry[], VersionError> {
+export function mvsResolve(
+	rootDeps: DepEntry[],
+	loadDeps: LoadDepsFn,
+): Result<BuildListEntry[], VersionError> {
 	// required: name → highest version seen so far
 	const reqNames: string[] = [];
 	const reqVersions: string[] = [];

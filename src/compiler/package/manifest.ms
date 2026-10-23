@@ -77,7 +77,12 @@ function saveManifest(buildPath: string, content: string): Result<void, Manifest
 
 // --- Public API ---
 
-export function addDepToManifest(buildPath: string, name: string, version: string, scope: string): Result<void, ManifestError> {
+export function addDepToManifest(
+	buildPath: string,
+	name: string,
+	version: string,
+	scope: string,
+): Result<void, ManifestError> {
 	const content = try loadManifest(buildPath);
 
 	const quotedName = "\"" + name + "\"";
@@ -142,7 +147,10 @@ export function addDepToManifest(buildPath: string, name: string, version: strin
 	return saveManifest(buildPath, newContent);
 }
 
-export function removeDepFromManifest(buildPath: string, name: string): Result<void, ManifestError> {
+export function removeDepFromManifest(
+	buildPath: string,
+	name: string,
+): Result<void, ManifestError> {
 	const content = try loadManifest(buildPath);
 
 	const quotedName = "\"" + name + "\"";
@@ -216,7 +224,8 @@ test "a manifest edit says why it could not be made" {
 
 test "removing a dependency that is not declared is NotFound" {
 	const path = join(testTmpDir(), "test-manifest-rm-missing.ms");
-	writeFile(path, "const config = {\n\tdeps: {\n\t\t\"foo\": \"1.0.0\",\n\t},\n};\n\nexport default config;\n");
+	writeFile(path, "const config = {\n\tdeps: {\n\t\t\"foo\": \"1.0.0\",\n\t},\n};\n" +
+		"\nexport default config;\n");
 	const r = removeDepFromManifest(path, "bar");
 	assert !r.ok;
 	if (!r.ok) assert r.error == ManifestError.NotFound;

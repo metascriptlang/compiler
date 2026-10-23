@@ -3,7 +3,14 @@
 import { exists } from "std/fs";
 import { join } from "std/fs/path";
 import { removeDepFromManifest, manifestErrorMessage, ManifestError } from "./manifest";
-import { readLockfile, writeLockfile, entryName, lockfileErrorMessage, LockEntry, LockfileError } from "./lockfile";
+import {
+	readLockfile,
+	writeLockfile,
+	entryName,
+	lockfileErrorMessage,
+	LockEntry,
+	LockfileError,
+} from "./lockfile";
 
 export function cmdRemove(projectRoot: string, args: string[]): boolean {
 	if (args.length == 0) {

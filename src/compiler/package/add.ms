@@ -12,7 +12,14 @@
 import { exists } from "std/fs";
 import { join } from "std/fs/path";
 import { addDepToManifest, manifestErrorMessage } from "./manifest";
-import { readLockfile, writeLockfile, entryName, lockfileErrorMessage, Lockfile, LockfileError } from "./lockfile";
+import {
+	readLockfile,
+	writeLockfile,
+	entryName,
+	lockfileErrorMessage,
+	Lockfile,
+	LockfileError,
+} from "./lockfile";
 import { parseVersion, parseGitSpec, sourceKindOf, SourceKind } from "./version";
 import { LockEntry } from "./lockfile";
 import { fetchPackageInfo, findVersion, latestVersion, RegistryVersion, RegistryPackage } from "./registry";
@@ -32,7 +39,8 @@ export function parseNameVersion(arg: string): { name: string, version: string }
 		// Extract alias from the repo name (last path segment before @)
 		const spec = parseGitSpec(arg);
 		if (spec.ok) {
-			const alias = spec.value.url.slice(spec.value.url.lastIndexOf("/") + 1, spec.value.url.length);
+			const url = spec.value.url;
+			const alias = url.slice(url.lastIndexOf("/") + 1, url.length);
 			return { name: alias, version: arg };
 		}
 		return { name: "", version: "" };
@@ -132,7 +140,11 @@ function gitLockEntry(name: string, version: string, url: string, gitRef: string
 	};
 }
 
-function registryLockEntry(name: string, version: string, found: RegistryVersion | null): LockEntry {
+function registryLockEntry(
+	name: string,
+	version: string,
+	found: RegistryVersion | null,
+): LockEntry {
 	return {
 		key: name + "@" + version,
 		source: SourceKind.Registry,
@@ -146,8 +158,13 @@ function registryLockEntry(name: string, version: string, found: RegistryVersion
 	};
 }
 
-// Version details from registry (archiveUrl + integrity + deps); fetches the package when not yet known.
-function registryVersionOf(name: string, version: string, known: RegistryPackage | null): RegistryVersion | null {
+// Version details from registry (archiveUrl + integrity + deps); fetches the package when
+// not yet known.
+function registryVersionOf(
+	name: string,
+	version: string,
+	known: RegistryPackage | null,
+): RegistryVersion | null {
 	if (known != null) return findVersion(known, version);
 	const info = fetchPackageInfo(name);
 	if (!info.ok) return null;
@@ -269,7 +286,11 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 
 	const entry = kind == SourceKind.Git
 		? gitLockEntry(parsed.name, parsed.version, gitUrl, gitRef)
-		: registryLockEntry(parsed.name, parsed.version, registryVersionOf(parsed.name, parsed.version, registryPkg));
+		: registryLockEntry(
+			parsed.name,
+			parsed.version,
+			registryVersionOf(parsed.name, parsed.version, registryPkg),
+		);
 
 	// Check if already in lockfile — match by package name (not full key,
 	// since the key includes the version and we're updating to a new version)
@@ -363,8 +384,9 @@ test "a registry lock entry takes integrity, url and deps from the registry reco
 }
 
 test "a git lock entry keeps the url and ref and has no commit yet" {
-	const entry = gitLockEntry("foo", "git:github.com/me/foo@v1.0.0", "github.com/me/foo", "v1.0.0");
-	assert entry.key == "foo@git:github.com/me/foo@v1.0.0";
+	const spec = "git:github.com/me/foo@v1.0.0";
+	const entry = gitLockEntry("foo", spec, "github.com/me/foo", "v1.0.0");
+	assert entry.key == "foo@" + spec;
 	assert entry.source == SourceKind.Git;
 	assert entry.url == "github.com/me/foo";
 	assert entry.gitRef == "v1.0.0";

@@ -31,7 +31,8 @@ export function versionErrorMessage(e: VersionError): string {
 		VersionError.RangeOperator => "range operators are not allowed",
 		VersionError.VPrefix => "a v prefix is not allowed",
 		VersionError.WrongPartCount => "expected exactly <major>.<minor>.<patch>",
-		VersionError.BadNumber => "a version number is empty, has a leading zero, is not a number or does not fit in 64 bits",
+		VersionError.BadNumber => "a version number is empty, has a leading zero, is not " +
+			"a number or does not fit in 64 bits",
 		VersionError.BadPrerelease => "the pre-release part is not valid",
 	};
 }

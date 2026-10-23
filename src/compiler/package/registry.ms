@@ -183,9 +183,23 @@ export function latestVersion(pkg: RegistryPackage): RegistryVersion | null {
 function testPackage(versions: string[]): RegistryPackage {
 	const records: RegistryVersion[] = [];
 	for (const v of versions) {
-		records.push({ version: v, integrity: "", archiveUrl: "", publishedAt: "", depKeys: [], depValues: [] });
+		records.push({
+			version: v,
+			integrity: "",
+			archiveUrl: "",
+			publishedAt: "",
+			depKeys: [],
+			depValues: [],
+		});
 	}
-	return { name: "demo", description: "", license: "", repository: "", homepage: "", versions: records };
+	return {
+		name: "demo",
+		description: "",
+		license: "",
+		repository: "",
+		homepage: "",
+		versions: records,
+	};
 }
 
 test "findVersion returns the matching record or null" {

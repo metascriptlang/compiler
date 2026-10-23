@@ -124,11 +124,12 @@ export function cmdInstall(projectRoot: string): boolean {
 			ci = ci + 1;
 		}
 		if (hasNonFile) {
-			console.log("warning: " + lockfileErrorMessage(lock.error) + " — registry/git deps may not resolve");
+			const reason = lockfileErrorMessage(lock.error);
+			console.log("warning: " + reason + " — registry/git deps may not resolve");
 			if (lock.error == LockfileError.Missing) {
 				console.log("run `msc add <pkg>@<version>` to create the lockfile");
 			} else {
-				console.log("fix or delete msc.lock, then run `msc add <pkg>@<version>` to recreate it");
+				console.log("fix or delete msc.lock, then run `msc add <pkg>@<version>`");
 			}
 		}
 	}

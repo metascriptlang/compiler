@@ -121,16 +121,22 @@ export function parseLockfile(content: string): Result<Lockfile, LockfileError> 
 	if (root == null || root.kind != JsonKind.Object) return Result.err(LockfileError.BadShape);
 
 	const versionVal = getObj(root, "version");
-	if (versionVal == null || versionVal.asNumber(-1) != 1) return Result.err(LockfileError.BadVersion);
+	if (versionVal == null || versionVal.asNumber(-1) != 1) {
+		return Result.err(LockfileError.BadVersion);
+	}
 
 	const pkgsObj = getObj(root, "packages");
-	if (pkgsObj == null || pkgsObj.kind != JsonKind.Object) return Result.err(LockfileError.BadShape);
+	if (pkgsObj == null || pkgsObj.kind != JsonKind.Object) {
+		return Result.err(LockfileError.BadShape);
+	}
 
 	const entries: LockEntry[] = [];
 	for (let pi = 0; pi < pkgsObj.keys.length; pi++) {
 		if (pi >= pkgsObj.values.length) return Result.err(LockfileError.BadShape);
 		const entryObj = pkgsObj.values[pi];
-		if (entryObj == null || entryObj.kind != JsonKind.Object) return Result.err(LockfileError.BadShape);
+		if (entryObj == null || entryObj.kind != JsonKind.Object) {
+			return Result.err(LockfileError.BadShape);
+		}
 		const source = try sourceKindFor(getStr(entryObj, "source"));
 		const deps = parseDeps(getObj(entryObj, "deps"));
 		entries.push({
@@ -296,12 +302,16 @@ test "a corrupt lockfile is told apart from a missing one" {
 	assert parseError("{ \"version\": 2, \"packages\": {} }") == LockfileError.BadVersion;
 	assert parseError("{ \"packages\": {} }") == LockfileError.BadVersion;
 	assert parseError("{ \"version\": 1 }") == LockfileError.BadShape;
-	assert parseError("{ \"version\": 1, \"packages\": { \"a@1.0.0\": 7 } }") == LockfileError.BadShape;
-	assert parseError("{ \"version\": 1, \"packages\": { \"a@1.0.0\": { \"source\": \"svn\" } } }") == LockfileError.BadShape;
+	const notAnObject = '{ "version": 1, "packages": { "a@1.0.0": 7 } }';
+	assert parseError(notAnObject) == LockfileError.BadShape;
+	const unknownSource = '{ "version": 1, "packages": { "a@1.0.0": { "source": "svn" } } }';
+	assert parseError(unknownSource) == LockfileError.BadShape;
 }
 
 test "a git entry reads as a Git source and a bare entry as Registry" {
-	const content = "{ \"version\": 1, \"packages\": { \"fork@git:github.com/me/foo@abc\": { \"source\": \"git\", \"url\": \"github.com/me/foo\" }, \"bare@1.0.0\": {} } }";
+	const content = '{ "version": 1, "packages": {' +
+		' "fork@git:github.com/me/foo@abc": { "source": "git", "url": "github.com/me/foo" },' +
+		' "bare@1.0.0": {} } }';
 	const r = parseLockfile(content);
 	assert r.ok;
 	if (r.ok) {
@@ -311,7 +321,9 @@ test "a git entry reads as a Git source and a bare entry as Registry" {
 }
 
 test "a valid lockfile keeps its entries, deps and source" {
-	const content = "{ \"version\": 1, \"packages\": { \"cool-json@1.2.3\": { \"source\": \"registry\", \"version\": \"1.2.3\", \"integrity\": \"sha256-abc\", \"deps\": { \"dep\": \"0.1.0\" } } } }";
+	const content = '{ "version": 1, "packages": { "cool-json@1.2.3": {' +
+		' "source": "registry", "version": "1.2.3", "integrity": "sha256-abc",' +
+		' "deps": { "dep": "0.1.0" } } } }';
 	const r = parseLockfile(content);
 	assert r.ok;
 	if (r.ok) {
