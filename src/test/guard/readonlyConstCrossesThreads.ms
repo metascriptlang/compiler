@@ -1,9 +1,9 @@
 // guard: a module `const` crosses threads when its declared type is deep Readonly and its value is
 // built in its own initializer; a module `let`, or a Readonly const that names a value another
-// binding holds, is still reported, and a write through an alias of the const is refused.
+// binding holds, is refused, and a write through an alias of the const is refused.
 //
-// WHY A SUBPROCESS: the module-state rule is a warning, so the accepted case is a claim that
-//   check stays silent; GUARD-CHECK-FAIL can only claim an error.
+// WHY A SUBPROCESS: the accepted case is a claim that check stays silent; GUARD-CHECK-FAIL can
+//   only claim an error.
 //
 // RED MEANS: the spawn rule stopped telling an immutable built-in-place const from shared mutable
 //   state, or the Readonly view stopped refusing a write through an alias.
@@ -97,8 +97,7 @@ for (const c of cases) {
 			else if (out.includes(MODULE_STATE_RULE)) report(`${c.name}: module state reported: ${out}`);
 		},
 		Expect.ModuleState => {
-			if (r.exitCode != 0) report(`${c.name}: check failed: ${out}`);
-			else if (!out.includes(MODULE_STATE_RULE)) report(`${c.name}: module state not reported: ${out}`);
+			if (r.exitCode == 0 || !out.includes(MODULE_STATE_RULE)) report(`${c.name}: module state not refused: ${out}`);
 		},
 		Expect.WriteRefused => {
 			if (r.exitCode == 0 || !out.includes(WRITE_RULE)) report(`${c.name}: write not refused: ${out}`);
