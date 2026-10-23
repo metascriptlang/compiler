@@ -4,9 +4,10 @@
 import {
 	TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbCheckIsCurrent,
 	dbForgetAllTypeChecks, getFileId, getFilePath, invalidateFile, recordModuleImport,
-	cacheGet, createQueryKey, TaQueryKind,
+	cacheGet, createQueryKey, TaQueryKind, getTransitiveDependents,
 } from "../../transam/index";
 import { lookupLocal } from "../../../checker/symbol";
+import { lookupModuleCtx } from "../../../checker/instantiate";
 import { typeDisplayName } from "../../../checker/types";
 import { requestCancel, resetCancel } from "../../transam/cancel";
 import { parseJson } from "std/serialize/json/parser";
@@ -24,7 +25,7 @@ import {
 import { lspFmtPublishDiagnostics } from "../format";
 import { lineOffset } from "../../fmt/edit";
 import {
-	CompletionCache, createCompletionCache, markFileChanged, drainChangedFiles,
+	CompletionCache, ChangedFile, createCompletionCache, markFileChanged, drainChangedFiles,
 	markDocumentOpen, markDocumentClosed, isDocumentOpen, openDocuments,
 	markDependentsStale, drainStaleDependents, lspReloadFromDisk, dbGetSource, lspDocumentUri,
 } from "./shared";
@@ -49,21 +50,43 @@ import { handleCodeAction, handleFormatting, handleRangeFormatting } from "./for
 
 // ===== Deferred Diagnostics (post-drain) =====
 
+export function checkDependentsUnlessStopped(db: TransAmDb, path: string): boolean {
+	const fileId = getFileId(db.fileInput, path);
+	if (fileId < 0) return true;
+	for (const dep of getTransitiveDependents(db.moduleDeps, fileId)) {
+		const depPath = getFilePath(db.fileInput, dep);
+		if (depPath == "") continue;
+		dbTypeCheck(db, depPath);
+		if (db.cancelCtx.stoppedForInput) return false;
+	}
+	return true;
+}
+
 export function publishPendingDiagnostics(db: TransAmDb): string {
 	const changed = drainChangedFiles();
+	const stale = drainStaleDependents();
 	let result = "";
-	for (const entry of changed) {
-		const path = entry.path;
-		const uri = entry.uri;
+	for (let i = 0; i < changed.length; i++) {
+		const path = changed[i].path;
+		const uri = changed[i].uri;
 		try {
 			const t0 = performance.now();
 			dbTypeCheck(db, path);
 			const t1 = performance.now();
+			if (db.cancelCtx.stoppedForInput) {
+				requeueDiagnostics(changed, i, stale, 0);
+				return result;
+			}
 			prebuildCompletionCache(db, path, uri);
 			const t2 = performance.now();
 			const diagParams = recordPublishedDiagnostics(path, buildDiagnosticsJson(uri, db, path));
 			result = result + lspFormatMessage(lspNotification("textDocument/publishDiagnostics", diagParams));
 			const t3 = performance.now();
+			if (!checkDependentsUnlessStopped(db, path)) {
+				markDependentsStale(path);
+				requeueDiagnostics(changed, i + 1, stale, 0);
+				return result;
+			}
 			result = result + buildTransitiveDiagnosticsWire(db, path);
 			const t4 = performance.now();
 			writeStderr(`[LSP-CHANGE] ${path} check=${t1 - t0}ms cache=${t2 - t1}ms`
@@ -76,14 +99,23 @@ export function publishPendingDiagnostics(db: TransAmDb): string {
 			result = result + lspFormatMessage(lspNotification("textDocument/publishDiagnostics", emptyParams));
 		}
 	}
-	for (const path of drainStaleDependents()) {
+	for (let i = 0; i < stale.length; i++) {
 		try {
-			result = result + buildTransitiveDiagnosticsWire(db, path);
+			if (!checkDependentsUnlessStopped(db, stale[i])) {
+				requeueDiagnostics(changed, changed.length, stale, i);
+				return result;
+			}
+			result = result + buildTransitiveDiagnosticsWire(db, stale[i]);
 		} catch (e) {
-			writeStderr("[LSP] dependents check failed for " + path + ": " + e + "\n");
+			writeStderr("[LSP] dependents check failed for " + stale[i] + ": " + e + "\n");
 		}
 	}
 	return result;
+}
+
+function requeueDiagnostics(changed: ChangedFile[], fromChanged: int32, stale: string[], fromStale: int32): void {
+	for (let i = fromChanged; i < changed.length; i++) markFileChanged(changed[i].path, changed[i].uri);
+	for (let i = fromStale; i < stale.length; i++) markDependentsStale(stale[i]);
 }
 
 // ===== Initialize =====
@@ -137,6 +169,10 @@ export function handleDidOpen(params: string, db: TransAmDb): string {
 	recordImportsForFile(db, path, program);
 	const t3 = performance.now();
 	dbTypeCheck(db, path);
+	if (db.cancelCtx.stoppedForInput) {
+		markFileChanged(path, uri);
+		return "";
+	}
 	const t4 = performance.now();
 	prebuildCompletionCache(db, path, uri);
 	const t5 = performance.now();
@@ -1080,6 +1116,71 @@ test "cancelled type check is not cached and retry checks the same text" {
 	assert diagnostics.length == 1;
 	assert diagnostics[0].getDynamicField("message").asString() == "Type 'string' is not assignable to type 'int32'";
 	assert dbCheckIsCurrent(db, path);
+}
+
+function stopAtProbe(db: TransAmDb, probe: int32): int32[] {
+	const probes: int32[] = [0];
+	db.cancelCtx.inputPending = () => {
+		probes[0] += 1;
+		return probes[0] == probe;
+	};
+	return probes;
+}
+
+const STOP_SOURCE = "const a = 1;\nconst b = a;\nexport const value: int32 = \"wrong\";";
+const STOP_HOVER = "{\"textDocument\":{\"uri\":\"file:///lsp-stop.ms\"},\"position\":{\"line\":2,\"character\":14}}";
+
+test "a check stopped for input at a top-level statement is not cached and the re-run matches an uninterrupted check" {
+	const uri = "file:///lsp-stop.ms";
+	const path = "/lsp-stop.ms";
+	const fresh = createTransAmDb(100);
+	dbSetFileText(fresh, path, STOP_SOURCE);
+	const wanted = buildDiagnosticsJson(uri, fresh, path);
+	const wantedHover = handleHover("1", STOP_HOVER, fresh);
+	const db = createTransAmDb(100);
+	dbSetFileText(db, path, STOP_SOURCE);
+	const probes = stopAtProbe(db, 3);
+	dbTypeCheck(db, path);
+	assert probes[0] == 3;
+	assert db.cancelCtx.stoppedForInput;
+	assert !dbCheckIsCurrent(db, path);
+	assert db.depStack.frames.length == 0;
+	assert !db.checkInProgress.has(path);
+	resetCancel(db.cancelCtx);
+	db.cancelCtx.inputPending = null;
+	assert buildDiagnosticsJson(uri, db, path) == wanted;
+	assert handleHover("1", STOP_HOVER, db) == wantedHover;
+	assert dbCheckIsCurrent(db, path);
+}
+
+test "a check stopped for input leaves the module context of the last finished check registered" {
+	const path = "/lsp-stop-ctx.ms";
+	const db = createTransAmDb(100);
+	dbSetFileText(db, path, STOP_SOURCE);
+	dbTypeCheck(db, path);
+	const finished = lookupModuleCtx(path);
+	assert finished != null;
+	dbSetFileText(db, path, STOP_SOURCE + "\nexport const more = 1;");
+	stopAtProbe(db, 2);
+	dbTypeCheck(db, path);
+	assert db.cancelCtx.stoppedForInput;
+	assert lookupModuleCtx(path) == finished;
+}
+
+test "diagnostics stopped for input stay pending and publish the same once input is read" {
+	const uri = "file:///lsp-stop-pending.ms";
+	const db = createTransAmDb(100);
+	handleDidOpen(didOpenParams(uri, "export const value: int32 = 1;"), db);
+	handleDidChange(didChangeParams(uri, STOP_SOURCE), db);
+	stopAtProbe(db, 2);
+	assert publishPendingDiagnostics(db) == "";
+	assert db.cancelCtx.stoppedForInput;
+	resetCancel(db.cancelCtx);
+	db.cancelCtx.inputPending = null;
+	const items = testPublishedItems(publishPendingDiagnostics(db), uri);
+	assert items.length == 1;
+	assert items[0].getDynamicField("message").asString() == "Type 'string' is not assignable to type 'int32'";
+	assert publishPendingDiagnostics(db) == "";
 }
 
 test "position-only edits preserve UTF-16 diagnostic spans through undo" {
