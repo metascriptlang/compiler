@@ -855,7 +855,7 @@ function dbBoundModule(modulePath: string): CheckerContext | null {
 	const unit = dbBindModule(db, filePath, program, imports, globals, startVersion);
 	for (const message of unchecked) addError(unit.ctx, message, 1, 1);
 	db.checkInProgress.delete(filePath);
-	if (!checkedElsewhere(db, filePath)) registerModuleCtx(filePath, unit.ctx);
+	if (!checkedElsewhere(db, filePath) && !checkCancel(db.cancelCtx, startVersion)) registerModuleCtx(filePath, unit.ctx);
 	return unit.ctx;
 }
 
@@ -973,6 +973,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		}
 	}
 
+	const priorCtx = lookupModuleCtx(filePath);
 	const outerDb = _checkingDb;
 	_checkingDb = db;
 	const unit = bound != null ? bound : dbBindModule(db, filePath, program, imports, globals, startVersion);
@@ -985,6 +986,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	if (checkCancel(db.cancelCtx, startVersion)) {
 		popFrame(db.depStack);
 		db.checkInProgress.delete(filePath);
+		if (priorCtx != null) registerModuleCtx(filePath, priorCtx);
 		return checkerCtx;
 	}
 

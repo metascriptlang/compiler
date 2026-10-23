@@ -1162,6 +1162,17 @@ export function stripGenFlag(flags: string): string {
 export class CancelCtx {
 	version: int32;
 	cancelled: boolean;
+	inputPending: (() => boolean) | null;
+	stoppedForInput: boolean;
+}
+
+export function stopForInput(cancel: CancelCtx): boolean {
+	if (cancel == null) return false;
+	const pending = cancel.inputPending;
+	if (pending == null || !pending()) return false;
+	cancel.cancelled = true;
+	cancel.stoppedForInput = true;
+	return true;
 }
 
 export function isCancelled(cancel: CancelCtx, startVersion: int32): boolean {
