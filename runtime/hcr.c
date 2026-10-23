@@ -715,10 +715,15 @@ static void msHcrGuardInvoke(MsHcrGuardCall* call) {
 
 struct msTaskFrame;
 const struct msTaskFrame* msPoolFrameSwap(const struct msTaskFrame* frame);
+int32_t msPoolRunningPeek(void);
+int32_t msPoolSparesPeek(void);
+void msPoolUnwound(int32_t running, int32_t spares, void* error);
 
 static int32_t msHcrGuarded(MsHcrGuardCall* call) {
-	/* A fault unwinds past the task frames the call pushed: restore the thread's own. */
+	/* A fault unwinds past the task frames and runs the call pushed: restore the thread's own. */
 	const struct msTaskFrame* volatile frame = msPoolFrameSwap(NULL);
+	volatile int32_t running = msPoolRunningPeek();
+	volatile int32_t spares = msPoolSparesPeek();
 	MsHcrGuard guard;
 	guard.kind = MS_HCR_GUARD_OK;
 	guard.code = 0;
@@ -766,6 +771,9 @@ static int32_t msHcrGuarded(MsHcrGuardCall* call) {
 	if (msCurrException != NULL) msDecref((void*)msCurrException);
 	msCurrException = NULL;
 	msErr = false;
+	msError* error = msPoolRunningPeek() > running ? msMakeError(msStringFromCStr(msHcrGuardReason)) : NULL;
+	msPoolUnwound(running, spares, error);
+	if (error != NULL) msDecref(error);
 	return kind;
 }
 

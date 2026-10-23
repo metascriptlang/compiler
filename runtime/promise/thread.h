@@ -71,14 +71,8 @@ typedef struct msSpawnCtx {
 extern void msCompletionQueuePushOwned(void* fut, bool isFail, void* error);
 extern void msCompletionQueuePushEnvRelease(void* env, void* ownerQueue);
 
-static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
-	void* result = NULL;
-	bool cancelledBeforeStart = ctx->cancelFlag != NULL
-		&& atomic_load_explicit(ctx->cancelFlag, memory_order_acquire);
-	if (!cancelledBeforeStart) {
-		result = ctx->env != NULL ? ((void*(*)(void*))ctx->fn)(ctx->env) : ((void*(*)(void))ctx->fn)();
-	}
-
+/* Publishes the task's result, or with msErr set its msCurrException, to its target. */
+static inline void msSpawnWorkerSettle(msSpawnCtx* ctx, void* result) {
 	if (ctx->slotGroup != NULL) {
 		/* Stack-allocated fast path: atomic decrement, no condvar, no pipe. */
 		if (msErr) {
@@ -158,6 +152,16 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 #endif
 	}
 	/* No free — ctx is a local copy from the queue slot (Malebolgia: zero alloc) */
+}
+
+static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
+	void* result = NULL;
+	bool cancelledBeforeStart = ctx->cancelFlag != NULL
+		&& atomic_load_explicit(ctx->cancelFlag, memory_order_acquire);
+	if (!cancelledBeforeStart) {
+		result = ctx->env != NULL ? ((void*(*)(void*))ctx->fn)(ctx->env) : ((void*(*)(void))ctx->fn)();
+	}
+	msSpawnWorkerSettle(ctx, result);
 }
 
 /* Forward declaration — pool submit defined in pool.c */

@@ -81,6 +81,15 @@ bool msPoolRunEdge(const void* awaited, bool follow, bool descend);
  * under NULL: what it spawns has no joining ancestor. */
 const msTaskFrame* msPoolFrameSwap(const msTaskFrame* frame);
 
+/* The queued tasks this thread is running and the spares its waits started. A fault
+ * that unwinds past them hands the counts read before it to msPoolUnwound with the
+ * error that reports it: the runs never return, so each one's target fails with
+ * `error` (its awaiter would wait forever) and its pending count, which the exit drain
+ * waits on, is released; each spare is ended as its wait would have ended it. */
+int32_t msPoolRunningPeek(void);
+int32_t msPoolSparesPeek(void);
+void msPoolUnwound(int32_t running, int32_t spares, void* error);
+
 /* Called where a waiter on the future `awaited` would park. When its closure holds a
  * leaf no spawn completes, tasks stay queued, no worker is idle and fewer than
  * workerCount threads run, it wakes a spare or starts one (true: pair with

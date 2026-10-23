@@ -13,6 +13,9 @@ bool msPoolRunEdge(const void* awaited, bool follow, bool descend) { (void)await
 bool msPoolCompensate(const void* awaited, const char* wait) { (void)awaited; (void)wait; return false; }
 void msPoolCompensateEnd(void) {}
 const msTaskFrame* msPoolFrameSwap(const msTaskFrame* frame) { (void)frame; return NULL; }
+int32_t msPoolRunningPeek(void) { return 0; }
+int32_t msPoolSparesPeek(void) { return 0; }
+void msPoolUnwound(int32_t running, int32_t spares, void* error) { (void)running; (void)spares; (void)error; }
 void msFutureEdgeAll(void* result, void* const* inputs, int32_t count) { (void)result; (void)inputs; (void)count; }
 void msFutureEdgeSettle(void* result, int32_t index) { (void)result; (void)index; }
 void msFutureEdgeAwait(void* retFut, void* awaited) { (void)retFut; (void)awaited; }
@@ -192,9 +195,15 @@ void msOnThreadDestruction(void (*handler)(void)) {
     msThreadDestructionFns[msThreadDestructionLen++] = handler;
 }
 
+static _Thread_local struct msSpawnCtx* msPoolRuns = NULL;
+static _Thread_local int32_t msPoolRunsCap = 0;
+
 static void msAfterThreadRuns(void) {
     for (int32_t i = msThreadDestructionLen - 1; i >= 0; i--) msThreadDestructionFns[i]();
     msRootsThreadTeardown();
+    free(msPoolRuns);
+    msPoolRuns = NULL;
+    msPoolRunsCap = 0;
     free(msThreadDestructionFns);
     msThreadDestructionFns = NULL;
     msThreadDestructionLen = 0;
@@ -202,11 +211,30 @@ static void msAfterThreadRuns(void) {
 }
 
 static _Thread_local const msTaskFrame* msPoolFrame = NULL;
+static _Thread_local int32_t msPoolRunning = 0;
+static _Thread_local int32_t msPoolSpares = 0;
 
 const msTaskFrame* msPoolFrameSwap(const msTaskFrame* frame) {
 	const msTaskFrame* outer = msPoolFrame;
 	msPoolFrame = frame;
 	return outer;
+}
+
+int32_t msPoolRunningPeek(void) { return msPoolRunning; }
+int32_t msPoolSparesPeek(void) { return msPoolSpares; }
+
+void msPoolUnwound(int32_t running, int32_t spares, void* error) {
+	while (msPoolSpares > spares) msPoolCompensateEnd();
+	while (msPoolRunning > running) {
+		struct msSpawnCtx* task = &msPoolRuns[--msPoolRunning];
+		/* The fault that unwound it is already reported: no unhandled rejection at exit. */
+		if (task->slotGroup == NULL && task->group == NULL) atomic_store_explicit(&((msFutureBase*)task->fut)->errorObserved, true, memory_order_relaxed);
+		msIncRef(error);
+		msCurrException = (msException*)error;
+		msErr = true;
+		msSpawnWorkerSettle(task, NULL);
+		atomic_fetch_sub_explicit(&msPoolPendingCount, 1, memory_order_release);
+	}
 }
 
 /* Decrement only after the run: the run posts the task's completion, which the exit
@@ -218,7 +246,17 @@ static void msPoolRunQueued(struct msSpawnCtx* task) {
 	};
 	const msTaskFrame* outer = msPoolFrame;
 	msPoolFrame = &frame;
+	if (msPoolRunning == msPoolRunsCap) {
+		msPoolRunsCap = msPoolRunsCap == 0 ? 8 : msPoolRunsCap * 2;
+		msPoolRuns = (struct msSpawnCtx*)realloc(msPoolRuns, (size_t)msPoolRunsCap * sizeof(struct msSpawnCtx));
+		if (msPoolRuns == NULL) {
+			fprintf(stderr, "msPoolRunQueued: out of memory for %d running tasks\n", msPoolRunsCap);
+			abort();
+		}
+	}
+	msPoolRuns[msPoolRunning++] = *task;
 	msSpawnWorkerRun(task);
+	msPoolRunning--;
 	msPoolFrame = outer;
 	atomic_fetch_sub_explicit(&msPoolPendingCount, 1, memory_order_release);
 }
@@ -657,6 +695,7 @@ bool msPoolCompensate(const void* awaited, const char* wait) {
 		msPoolThreadState[i] = MS_THREAD_SPARE;
 		msPoolSparesActive++;
 		msPoolSparesWanted++;
+		msPoolSpares++;
 		atomic_store_explicit(&msPoolActorWake[i], true, memory_order_release);
 		MS_SIGNAL(pool->workerConds[i]);
 		MS_UNLOCK(pool);
@@ -668,6 +707,7 @@ bool msPoolCompensate(const void* awaited, const char* wait) {
 			atomic_store_explicit(&msPoolThreadCount, count + 1, memory_order_release);
 			msPoolSparesActive++;
 			msPoolSparesWanted++;
+			msPoolSpares++;
 			MS_UNLOCK(pool);
 			return true;
 		}
@@ -686,6 +726,7 @@ bool msPoolCompensate(const void* awaited, const char* wait) {
 
 void msPoolCompensateEnd(void) {
 	msThreadPool* pool = msPoolGet();
+	msPoolSpares--;
 	MS_LOCK(pool);
 	msPoolSparesWanted--;
 	/* Every idle spare retires at its next turn while more are active than wanted. One
