@@ -18,21 +18,21 @@ import { forEachChild } from "../ast/visitor";
 import { hasFlag, setFlag, SymbolFlag } from "../checker/symbol";
 import { makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeAssign, makeTypedIdentResolved, attachedOpSym, generatedProcSym, makeHiddenAddr } from "../transform/util";
 import { testLoc, testFnRef } from "./inject";
-import { testVarSym, symListHas, symListAdd } from "./scope";
+import { testVarSym } from "./scope";
 
 
-function symListIntersect(a: Symbol[], b: Symbol[]): Symbol[] {
-	const result: Symbol[] = [];
+function intersect(a: HashSet<Symbol>, b: HashSet<Symbol>): HashSet<Symbol> {
+	const result = new HashSet<Symbol>();
 	for (const s of a) {
-		if (symListHas(b, s)) result.push(s);
+		if (b.has(s)) result.add(s);
 	}
 	return result;
 }
 
 // ===== Moved-var tracking for branch-aware optimization =====
 
-function collectBlockMoved(block: Node): Symbol[] {
-	const result: Symbol[] = [];
+function collectBlockMoved(block: Node): HashSet<Symbol> {
+	const result = new HashSet<Symbol>();
 	if (block == null) return result;
 	if (block.kind != NodeKind.BlockStmt) return result;
 	scanBlock((block.data as BlockStmtData).statements, result);
@@ -40,20 +40,20 @@ function collectBlockMoved(block: Node): Symbol[] {
 }
 
 // Collect moved vars from if/else — intersection of all branches
-function collectIfMoved(ifNode: Node): Symbol[] {
+function collectIfMoved(ifNode: Node): HashSet<Symbol> {
 	const d = ifNode.data as IfStmtData;
 	const consMoved = collectBlockMoved(d.consequent);
 
 	// No else — can't guarantee moved on all paths
-	if (d.alternate == null) return [];
+	if (d.alternate == null) return new HashSet<Symbol>();
 
 	// else-if chain: recurse
 	if (d.alternate.kind == NodeKind.IfStmt) {
-		return symListIntersect(consMoved, collectIfMoved(d.alternate));
+		return intersect(consMoved, collectIfMoved(d.alternate));
 	}
 
 	// else block
-	return symListIntersect(consMoved, collectBlockMoved(d.alternate));
+	return intersect(consMoved, collectBlockMoved(d.alternate));
 }
 
 // ===== The variable a wasMoved/destroy call acts on =====
@@ -83,20 +83,14 @@ function isPairOpCall(node: Node): boolean {
 	return hasFlag(callee.resolvedSym, SymbolFlag.WasMovedOp) || hasFlag(callee.resolvedSym, SymbolFlag.DestroyOp);
 }
 
-function mentionsSym(node: Node, sym: Symbol): boolean {
-	if (node.kind == NodeKind.Identifier) return node.resolvedSym == sym;
-	if (isPairOpCall(node)) return false;
-	let found = false;
-	forEachChild(node, (child: Node): void => { if (!found && mentionsSym(child, sym)) found = true; });
-	return found;
-}
-
-function invalidateMentioned(moved: Symbol[], stmt: Node): void {
-	let i = 0;
-	while (i < moved.length) {
-		if (mentionsSym(stmt, moved[i])) moved.splice(i, 1);
-		else i += 1;
+function invalidateMentioned(moved: HashSet<Symbol>, node: Node): void {
+	if (moved.size == 0) return;
+	if (node.kind == NodeKind.Identifier) {
+		if (node.resolvedSym != null) moved.delete(node.resolvedSym);
+		return;
 	}
+	if (isPairOpCall(node)) return;
+	forEachChild(node, (child: Node): void => { invalidateMentioned(moved, child); });
 }
 
 
@@ -105,10 +99,10 @@ function invalidateMentioned(moved: Symbol[], stmt: Node): void {
 // Also collects definitely-moved vars from exhaustive if/else branches.
 
 function optimizeBlock(stmts: Node[]): Node[] {
-	return scanBlock(stmts, []);
+	return scanBlock(stmts, new HashSet<Symbol>());
 }
 
-function scanBlock(stmts: Node[], moved: Symbol[]): Node[] {
+function scanBlock(stmts: Node[], moved: HashSet<Symbol>): Node[] {
 	const result: Node[] = [];
 
 	let i = 0;
@@ -122,7 +116,7 @@ function scanBlock(stmts: Node[], moved: Symbol[]): Node[] {
 		// Track wasMoved calls — add var to moved set
 		const wmVar = opCallTarget(stmt, SymbolFlag.WasMovedOp);
 		if (wmVar != null) {
-			symListAdd(moved, wmVar);
+			moved.add(wmVar);
 			result.push(stmt);
 			i += 1;
 			continue;
@@ -130,7 +124,7 @@ function scanBlock(stmts: Node[], moved: Symbol[]): Node[] {
 
 		// Eliminate destroy for definitely-moved vars
 		const dVar = opCallTarget(stmt, SymbolFlag.DestroyOp);
-		if (dVar != null && symListHas(moved, dVar)) {
+		if (dVar != null && moved.has(dVar)) {
 			i += 1;  // skip destroy — var was already zeroed by wasMoved
 			continue;
 		}
@@ -140,7 +134,7 @@ function scanBlock(stmts: Node[], moved: Symbol[]): Node[] {
 		// Collect moved vars from exhaustive if/else branches
 		if (stmt.kind == NodeKind.IfStmt) {
 			for (const v of collectIfMoved(stmt)) {
-				symListAdd(moved, v);
+				moved.add(v);
 			}
 		}
 
