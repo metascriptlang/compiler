@@ -1,10 +1,41 @@
 // @xfail(raiser): the Raiser VM frees a 1 000 000-link list recursively and overflows its own native stack, on the base compiler as well
 // @stdout: chain 1000000 sum 499999500000
 // @stdout: tree depth 300000 nodes 600001
-// note: dropping the last reference to a 1 000 000-link list, and to a tree whose deepest path is 300 000 nodes through child arrays, frees every node without overflowing the native stack: past the thread's stack bound the destroy walks the rest with an explicit stack
+// @stdout: pairs 500000 links 999999
+// note: dropping the last reference to a 1 000 000-link list, and to a tree whose deepest path is 300 000 nodes through child arrays, and to a 999 999-link list alternating two classes that point at each other, frees every node without overflowing the native stack: past the thread's stack bound the destroy walks the rest with an explicit stack
 class Link {
 	next: Link | null = null;
 	v: number = 0;
+}
+
+class Even {
+	odd: Odd | null = null;
+}
+
+class Odd {
+	even: Even | null = null;
+}
+
+function pairs(n: number): Even {
+	let head = new Even();
+	for (let i = 1; i < n; i++) {
+		const odd = new Odd();
+		odd.even = head;
+		const even = new Even();
+		even.odd = odd;
+		head = even;
+	}
+	return head;
+}
+
+function links(head: Even): number {
+	let n: number = 1;
+	let at: Even | null = head;
+	while (at != null && at.odd != null) {
+		n += 2;
+		at = at.odd!.even;
+	}
+	return n;
 }
 
 class Tree {
@@ -64,4 +95,9 @@ function count(root: Tree): number {
 {
 	const root = tree(300000);
 	console.log("tree depth 300000 nodes " + count(root).toString());
+}
+
+{
+	const head = pairs(500000);
+	console.log("pairs 500000 links " + links(head).toString());
 }
