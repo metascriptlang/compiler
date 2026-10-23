@@ -755,7 +755,7 @@ test "the role table agrees with the role letters of every opcode" {
 }
 
 test "the last opcode has its roles in the table" {
-	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Ref;
-	assert opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.None;
-	assert opRole(LAST_RAISER_OPCODE, 2) == RaiserRole.Ref;
+	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Int;
+	assert opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.Ref;
+	assert opRole(LAST_RAISER_OPCODE, 2) == RaiserRole.Int;
 }
