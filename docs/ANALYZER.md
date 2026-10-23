@@ -7,7 +7,7 @@ Deterministic reference counting for the C backend. `analyzeProgram(program, che
 | Stage | Where | Does | Does not |
 |-------|-------|------|----------|
 | Hook lifting | `src/transform/lowering/destructorLifting.ms` | generates the per-type lifecycle hooks | decide when or where they are called |
-| Injection | `inject.ms` with `classify.ms`, `scope.ms`, `lastRead.ms`, `cfg.ms`, `alias.ms`, `cursors.ms` | inserts the calls at the right AST positions | generate hook bodies, optimize |
+| Injection | `inject.ms` with `classify.ms`, `scope.ms`, `cfg.ms`, `alias.ms`, `cursors.ms` | inserts the calls at the right AST positions | generate hook bodies, optimize |
 | Optimization | `optimize.ms` | removes redundant operations | restructure code, add operations |
 
 ## What the injector sees

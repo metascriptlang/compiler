@@ -314,12 +314,6 @@ export function flushPending(dctx: DrcContext, target: Node[]): void {
 	scope.pendingStmts = [];
 }
 
-export function flushPre(dctx: DrcContext, target: Node[]): void {
-	const scope = currentScope(dctx);
-	for (const s of scope.preStmts) { target.push(s); }
-	scope.preStmts = [];
-}
-
 export function hasPending(dctx: DrcContext): boolean {
 	return currentScope(dctx).pendingStmts.length > 0;
 }
@@ -368,10 +362,6 @@ export function symListHas(list: Symbol[], sym: Symbol): boolean {
 
 export function symListAdd(list: Symbol[], sym: Symbol): void {
 	if (!symListHas(list, sym)) list.push(sym);
-}
-
-export function hasPre(dctx: DrcContext): boolean {
-	return currentScope(dctx).preStmts.length > 0;
 }
 
 // ===== Test Helpers =====
