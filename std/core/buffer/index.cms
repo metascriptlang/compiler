@@ -410,15 +410,16 @@ export function fill(this buf: Buffer, value: number, start: number, end: number
 
 // --- Single-byte search (by value, not by string needle) ---
 
-// A miss returns through memchr's null, never an early `return -1`: sharing that constant with the
-// one after the call, clang held -1.0 in a callee-saved float register across memchr, measured
-// 2-3x slower than C on short buffers.
+// The early miss computes its -1 so clang cannot fold both misses into one float constant: shared,
+// arm64 held -1.0 in a callee-saved register across memchr (2-3x slower than C on short buffers), and
+// a miss routed through memchr's null instead cost x86 an extra jump per search (1.12-1.16x).
 function byteSearchIndex(buf: Buffer, value: number, byteOffset: number): int64 {
 	const offset = byteOffset as int64;
 	const start = offset < 0 ? 0 : offset;
 	const length = byteCount(buf);
 	const bytes = bytesOf(buf);
-	const found = start < length ? cMemchr(bytes + start, ((value as int64) as uint8) as int32, (length - start) as uint64) : null;
+	if (start >= length) return (length - start - 1) >> 63;
+	const found = cMemchr(bytes + start, ((value as int64) as uint8) as int32, (length - start) as uint64);
 	return found == null ? -1 : (found as Ptr<uint8>) - bytes;
 }
 
