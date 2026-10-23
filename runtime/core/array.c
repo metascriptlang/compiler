@@ -616,7 +616,11 @@ static void msRefArrayFreeAfterDrop(void* owner, void* arg) {
 void msRefArrayDestroy(msRefArray* arr) {
 	if (arr->p != NULL) {
 		bool pending = false;
-		for (int64_t i = 0; i < arr->len; i++) pending |= msDecrefCyclicEdge(arr, arr->p->data[i]);
+		for (int64_t i = 0; i < arr->len; i++) {
+			void* e = arr->p->data[i];
+			if (e != NULL && msHeader(e)->type != NULL && !msHeader(e)->type->isCyclic) msDecrefCyclic(e);
+			else pending |= msDecrefCyclicEdge(arr, e);
+		}
 		if (pending) {
 			msDropDefer(arr, (void*)msRefArrayFreeAfterDrop, NULL);
 			return;
