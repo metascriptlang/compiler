@@ -6,7 +6,7 @@
 
 import { Type, TypeKind, Symbol, Node, NodeKind, FunctionDeclData, CallingConvention } from "../../ast/node";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, addCGenError } from "./context";
+import { CEmissionFacts, CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, addCGenError } from "./context";
 import { ensureDrcProto, procHeader } from "./types";
 import { mangledFunctionName } from "./names";
 import { placedInstanceOf } from "../../checker/instantiate";
@@ -30,7 +30,7 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Read
 		return;
 	}
 	if (sym != null && copiesInline(g, sym)) {
-		requestInlineCopy(g, calleeName, placedInstanceOf(g.emissionFacts.placedInstances!, sym));
+		requestInlineCopy(g, g.emissionFacts, calleeName, sym);
 		return;
 	}
 	if (sym != null && sym.modulePath != "" && sym.modulePath == g.modulePath) return;
@@ -56,17 +56,18 @@ export function inlineDeclOf(sym: Readonly<Symbol>): Readonly<Node | null> {
 	return sym.declNode;
 }
 
-function requestInlineCopy(g: CGen, calleeName: string, sym: Readonly<Symbol>): void {
+function requestInlineCopy(g: CGen, facts: Readonly<CEmissionFacts>, calleeName: string, called: Readonly<Symbol>): void {
 	const key = "inline:" + calleeName;
 	if (nameSetHas(g.declaredProcs, key)) return;
 	nameSetAdd(g.declaredProcs, key);
+	const sym = placedInstanceOf(facts.placedInstances!, called);
 	const decl = inlineDeclOf(sym);
 	if (decl == null) {
 		addCGenError(g, `internal: @inline function '${sym.name}' has no declaration to copy into ${g.modulePath}`, 0, 0);
 		return;
 	}
 	const d = decl.data as FunctionDeclData;
-	if (mangledFunctionName(g.emissionFacts.moduleNameRoots!, sym, d.fnName, sym.overloadIdx) != calleeName) {
+	if (mangledFunctionName(facts.moduleNameRoots!, sym, d.fnName, sym.overloadIdx) != calleeName) {
 		addCGenError(g, `internal: @inline function '${sym.name}' is called as '${calleeName}' in ${g.modulePath}`, 0, 0);
 		return;
 	}

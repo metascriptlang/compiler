@@ -9,7 +9,7 @@ import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, 
 import { monoInstanceName } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
-import { CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError, NameSet, createNameSet, useHeader, createCGen } from "./context";
+import { CEmissionFacts, CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError, NameSet, createNameSet, useHeader, createCGen } from "./context";
 import { passedByValue } from "../../checker/varPartitions";
 import { SymbolFlag, hasFlag, makeSymbol, setFlag, lookupSymbolReadonly } from "../../checker/symbol";
 import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName, resolveOverloadWinner, overloadAt, mangleQualified, mangleModuleName, buildModuleNameRoots, ModuleNameRoots } from "./names";
@@ -1080,22 +1080,24 @@ export function hasUnionEq(t: Type): boolean {
 	return true;
 }
 
-function typeInfoPointer(g: CGen, info: Readonly<CTypeInfoDemand>): string {
-	if (hcrTypeInfoRef(g, info.cName)) return `&${info.cName}TypeInfo`;
-	const forwKey = "typeInfo:" + info.cName;
+function typeInfoPointer(g: CGen, cName: string): string {
+	if (hcrTypeInfoRef(g, cName)) return `&${cName}TypeInfo`;
+	const forwKey = "typeInfo:" + cName;
 	if (!typeCacheHas(g.forwTypeCache, forwKey)) {
-		typeCacheSet(g.forwTypeCache, forwKey, info.cName);
-		addLine(sec(g, CSection.ForwardDecls), `extern msTypeInfo ${info.cName}TypeInfo;`);
+		typeCacheSet(g.forwTypeCache, forwKey, cName);
+		addLine(sec(g, CSection.ForwardDecls), `extern msTypeInfo ${cName}TypeInfo;`);
 	}
-	return `&${info.cName}TypeInfo`;
+	return `&${cName}TypeInfo`;
 }
 
-function demandedTypeInfo(g: CGen, key: string, what: string): Readonly<CTypeInfoDemand> | null {
-	if (!g.emissionFacts.typeInfos.has(key)) {
-		addCGenError(g, `internal: ${what} TypeInfo ${key} demanded in ${g.modulePath} without a reachability edge`, 0, 0);
-		return null;
-	}
-	return g.emissionFacts.typeInfos.readonlyGet(key);
+function undemandedTypeInfo(g: CGen, key: string, what: string): string {
+	addCGenError(g, `internal: ${what} TypeInfo ${key} demanded in ${g.modulePath} without a reachability edge`, 0, 0);
+	return "NULL";
+}
+
+function demandedTypeInfoPointer(g: CGen, facts: Readonly<CEmissionFacts>, key: string, what: string): string {
+	const info = facts.typeInfos.readonlyGet(key);
+	return info == null ? undemandedTypeInfo(g, key, what) : typeInfoPointer(g, info.cName);
 }
 
 export function typeInfoRef(g: CGen, type: Readonly<Type | null>): string {
@@ -1105,14 +1107,12 @@ export function typeInfoRef(g: CGen, type: Readonly<Type | null>): string {
 		addCGenError(g, `internal: a TypeInfo was requested in ${g.modulePath} for a type that has none`, 0, 0);
 		return "NULL";
 	}
-	const info = demandedTypeInfo(g, objectTypeInfoKeyIn(g.emissionFacts.moduleNameRoots!, subject), "object");
-	return info == null ? "NULL" : typeInfoPointer(g, info);
+	return demandedTypeInfoPointer(g, g.emissionFacts, objectTypeInfoKeyIn(g.emissionFacts.moduleNameRoots!, subject), "object");
 }
 
 export function ensureArcCellTypeInfo(g: CGen, pointeeType: Readonly<Type>): string {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
-	const info = demandedTypeInfo(g, arcCellKeyIn(g.emissionFacts.moduleNameRoots!, pointeeType), "Arc cell");
-	return info == null ? "NULL" : typeInfoPointer(g, info);
+	return demandedTypeInfoPointer(g, g.emissionFacts, arcCellKeyIn(g.emissionFacts.moduleNameRoots!, pointeeType), "Arc cell");
 }
 
 export function refArrayCellKeyIn(roots: Readonly<ModuleNameRoots>, arrT: Readonly<Type>): string {
@@ -1154,8 +1154,7 @@ export function hcrTypeInfoRef(g: CGen, cName: string): boolean {
 export function ensureRefArrayCellTypeInfo(g: CGen, arrT: Readonly<Type>): string {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
 	const key = refArrayCellKeyIn(g.emissionFacts.moduleNameRoots!, arrT);
-	const info = demandedTypeInfo(g, key, "ref-array cell");
-	return info == null ? "NULL" : typeInfoPointer(g, info);
+	return demandedTypeInfoPointer(g, g.emissionFacts, key, "ref-array cell");
 }
 
 function refArrayCellLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
@@ -1204,12 +1203,16 @@ function valueCustodyOpIn(ops: Readonly<HashMap<string, Symbol>>, roots: Readonl
 }
 
 export function valueCustodyRef(g: CGen, t: Readonly<Type | null>): string {
-	const op = valueCustodyOpIn(g.emissionFacts.hookOps!, g.emissionFacts.moduleNameRoots!, t);
+	return valueCustodyRefIn(g, g.emissionFacts, t);
+}
+
+function valueCustodyRefIn(g: CGen, facts: Readonly<CEmissionFacts>, t: Readonly<Type | null>): string {
+	const op = valueCustodyOpIn(facts.hookOps!, facts.moduleNameRoots!, t);
 	if (op == null) {
-		addCGenError(g, `internal: a value disowned from its thread's cycle roots has neither a custody nor a trace op: ${opTypeKeyIn(g.emissionFacts.moduleNameRoots!, t)}`, 0, 0);
+		addCGenError(g, `internal: a value disowned from its thread's cycle roots has neither a custody nor a trace op: ${opTypeKeyIn(facts.moduleNameRoots!, t)}`, 0, 0);
 		return "NULL";
 	}
-	const name = opCNameIn(g.emissionFacts.moduleNameRoots!, op) + "Disown";
+	const name = opCNameIn(facts.moduleNameRoots!, op) + "Disown";
 	if (!nameSetHas(g.declaredProcs, name)) {
 		nameSetAdd(g.declaredProcs, name);
 		emitRttiHook(g, name, op, true);
@@ -1228,8 +1231,11 @@ function emitRttiHook(g: CGen, name: string, hook: Readonly<Symbol>, trace: bool
 
 export function emitOwnedTypeInfos(g: CGen): void {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return;
-	const viaRegistry = isHcrImageModule(g, g.modulePath);
-	for (const info of g.emissionFacts.typeInfoOrder) {
+	emitTypeInfoTable(g, g.emissionFacts, isHcrImageModule(g, g.modulePath));
+}
+
+function emitTypeInfoTable(g: CGen, facts: Readonly<CEmissionFacts>, viaRegistry: boolean): void {
+	for (const info of facts.typeInfoOrder) {
 		if (info.owner != g.modulePath) continue;
 		let destroyName = "NULL";
 		if (info.destroy != null) destroyName = emitRttiHook(g, info.cName + "RttiDestroy", info.destroy, false);
@@ -1237,10 +1243,7 @@ export function emitOwnedTypeInfos(g: CGen): void {
 		if (info.trace != null) traceName = emitRttiHook(g, info.cName + "RttiTrace", info.trace, true);
 		const custodyName = info.custody != null ? emitRttiHook(g, info.cName + "RttiCustody", info.custody, true) : traceName;
 		let baseRef = "NULL";
-		if (info.baseKey != "") {
-			const base = demandedTypeInfo(g, info.baseKey, "base class");
-			if (base != null) baseRef = typeInfoPointer(g, base);
-		}
+		if (info.baseKey != "") baseRef = demandedTypeInfoPointer(g, facts, info.baseKey, "base class");
 		const label = typeInfoLabel(g, info);
 		const shown = info.kind != TypeInfoKind.Object ? "" : runtimeClassSym(info.subject) != null ? typeDisplayNameUnprofiled(info.subject) : "Object";
 		const fields = `.name = "${label}", .isCyclic = ${info.trace != null && !hasFlag(info.trace, SymbolFlag.Acyclic) ? "MS_TRUE" : "MS_FALSE"}, `
@@ -1252,17 +1255,20 @@ export function emitOwnedTypeInfos(g: CGen): void {
 		}
 		if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${info.cName}TypeInfo = (msTypeInfo){ ${fields} };`);
 		else addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${info.cName}TypeInfo = { ${fields} };`);
-		if (info.kind == TypeInfoKind.Object) emitTypeInfoDisplay(g, info);
+		if (info.kind == TypeInfoKind.Object) emitTypeInfoDisplay(g, facts, info);
 	}
 }
 
-function emitTypeInfoDisplay(g: CGen, info: Readonly<CTypeInfoDemand>): void {
+function emitTypeInfoDisplay(g: CGen, facts: Readonly<CEmissionFacts>, info: Readonly<CTypeInfoDemand>): void {
 	const chain: string[] = [`&${info.cName}TypeInfo`];
 	let key = info.baseKey;
 	while (key != "") {
-		const base = demandedTypeInfo(g, key, "base class");
-		if (base == null) return;
-		chain.push(typeInfoPointer(g, base));
+		const base = facts.typeInfos.readonlyGet(key);
+		if (base == null) {
+			undemandedTypeInfo(g, key, "base class");
+			return;
+		}
+		chain.push(typeInfoPointer(g, base.cName));
 		key = base.baseKey;
 	}
 	const displayName = info.cName + "TypeInfoDisplay";
@@ -2149,17 +2155,18 @@ function emitPromiseAllInstance(g: CGen, futName: string, srcT: string, dstElem:
 
 // Emit the MS_DEFINE_FUTURE_THEN_BOXED instance for a boxed value type and return its
 // name. The drop is the type's destructor hook.
+function futureDropHook(g: CGen, facts: Readonly<CEmissionFacts>, innerType: Readonly<Type>): string {
+	const hook = getOpByKeyIn(facts.hookOps!, facts.moduleNameRoots!, innerType, AttachedOp.AttachedDestructor);
+	if (hook == null) return "MS_NO_DROP";
+	const drop = opCNameIn(facts.moduleNameRoots!, hook);
+	ensureDrcProto(g, drop, hook);
+	return drop;
+}
+
 export function ensureFutureThenBoxedInstance(g: CGen, innerType: Readonly<Type>, byRef: boolean): string {
 	const innerDesc = getTypeDesc(g, innerType);
 	const name = (byRef ? "msFutureThenBoxedRef_" : "msFutureThenBoxed_") + mangle(innerDesc);
-	let drop = "MS_NO_DROP";
-	if (hasAsgnFlag(innerType)) {
-		const hook = getOpByKeyIn(g.emissionFacts.hookOps!, g.emissionFacts.moduleNameRoots!, innerType, AttachedOp.AttachedDestructor);
-		if (hook != null) {
-			drop = opCNameIn(g.emissionFacts.moduleNameRoots!, hook);
-			ensureDrcProto(g, drop, hook);
-		}
-	}
+	const drop = hasAsgnFlag(innerType) ? futureDropHook(g, g.emissionFacts, innerType) : "MS_NO_DROP";
 	const b = sec(g, CSection.GlobalVars);
 	addLine(b, "#ifndef " + name + "_DEFINED");
 	addLine(b, "#define " + name + "_DEFINED");
