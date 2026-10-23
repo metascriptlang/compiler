@@ -3,6 +3,7 @@
 import { execFileResult, ExecFileResult, exit, env, cwd, platform } from "std/process";
 import { readFile, writeFile, readDir, exists, ensureDir, removeAll, copyFile } from "std/fs";
 import { sleepAsync } from "std/core/promise";
+import { spawn as spawnChild, ChildProcess, ChildStream } from "std/process/child";
 
 function slashes(p: string): string {
 	return p.replaceAll("\\", "/");
@@ -1969,6 +1970,58 @@ function jsInstanceFiles(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function readUntil(child: ChildProcess, seen: string[], marker: string, limitMs: number): boolean {
+	const deadline = performance.now() + limitMs;
+	while (!seen[0].contains(marker) && performance.now() < deadline) {
+		const got = child.read(ChildStream.Stdout, 200);
+		if (!got.ok) continue;
+		if (got.value.ended) break;
+		seen[0] = seen[0] + got.value.data;
+	}
+	return seen[0].contains(marker);
+}
+
+function runKeys(): void {
+	const tag = "hcrRunKeys";
+	const globalCache = env.get("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_NO_GLOBAL_CACHE", "1");
+	for (const key of ["R", "r", "q"]) {
+		const dir = freshDir(`${TMP}/runKeys_${key}`);
+		copy(`${FIXTURES}/runKeys/app.ms`, `${dir}/app.ms`);
+		copy(`${FIXTURES}/runKeys/logic.ms`, `${dir}/logic.ms`);
+		copy(`${FIXTURES}/runKeys/logicGrown.ms`, `${dir}/grown.txt`);
+		const started = spawnChild(MSC, ["run", "--hcr", "app.ms"], { cwd: dir, mergeStderr: true });
+		need(tag, started.ok, `cannot start ${MSC}`);
+		if (!started.ok) continue;
+		const child = started.value;
+		const seen = [""];
+		const asked = readUntil(child, seen, "HCR-KEYS reloaded 9", 120000);
+		if (!asked) console.log(seen[0]);
+		need(tag, asked, `key ${key}: the edited body did not reload into the running program`);
+		need(tag, seen[0].contains("HCR-KEYS start 7"), `key ${key}: the program did not start on the first build`);
+		if (key != "q") {
+			child.write(`${key}\n`, 5000);
+			const marker = key == "R" ? "HCR-KEYS start 9" : "watch: rebuilt on key r";
+			const answered = readUntil(child, seen, marker, 120000);
+			if (!answered) console.log(seen[0]);
+			need(tag, answered, `key ${key}: no '${marker}' after the key`);
+			if (key == "R") {
+				need(tag, seen[0].contains("watch: restarting"), "key R: no restart notice");
+				need(tag, seen[0].split("checked ").length == 3, "key R: the restart ran a build (a second 'checked N/N' appeared after the edit's own)");
+			}
+		}
+		child.write("q\n", 5000);
+		const ended = child.wait(30000);
+		if (!ended.ok) console.log(seen[0]);
+		need(tag, ended.ok, `key ${key}: q did not end msc`);
+		readUntil(child, seen, "watch: quit", 2000);
+		need(tag, seen[0].contains("watch: quit"), `key ${key}: q printed no 'watch: quit'`);
+		child.close();
+	}
+	env.set("MSC_NO_GLOBAL_CACHE", globalCache);
+	console.log(`ok   ${tag}`);
+}
+
 const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrFsWatch", run: fsWatch },
 	{ name: "hcrModuleAbi", run: moduleAbi },
@@ -2026,6 +2079,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrDynamicImportReload", run: dynamicImportReload },
 	{ name: "hcrDynamicImportParity", run: dynamicImportParity },
 	{ name: "hcrJsInstanceFiles", run: jsInstanceFiles },
+	{ name: "hcrRunKeys", run: runKeys },
 ];
 if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });
 
