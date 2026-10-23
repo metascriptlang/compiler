@@ -45,7 +45,9 @@ export function createHcrStorageTable(): HcrStorageTable {
 	return { voidPointer: createPtr(voidType()), byBinding: new HashMap<string, HcrVariableStorage>() };
 }
 
-function importedVariableId(n: Node, own: HcrIndirectModule, modules: HcrIndirectModule[]): string | null {
+struct HcrImportedVariable { targetId: string; symbol: string; key: string; }
+
+function importedVariable(n: Node, own: HcrIndirectModule, modules: HcrIndirectModule[]): HcrImportedVariable | null {
 	if (n.kind != NodeKind.Identifier && n.kind != NodeKind.MemberExpr) return null;
 	const sym = n.resolvedSym;
 	if (sym == null || !isModuleGlobalVar(sym)) return null;
@@ -56,7 +58,11 @@ function importedVariableId(n: Node, own: HcrIndirectModule, modules: HcrIndirec
 	const target = moduleForPath(modules, sym.modulePath);
 	if (target == null || target.moduleId == own.moduleId) return null;
 	const symbol = mangledGlobalName(buildModuleNameRoots(), sym, referenceName(sym, referenceText(n)));
-	return own.modulePath + "\n" + target.moduleId + "\n" + symbol + "\nv:" + hcrSignatureKey(sym.symbolType);
+	return { targetId: target.moduleId, symbol, key: "v:" + hcrSignatureKey(sym.symbolType) };
+}
+
+function storageId(own: HcrIndirectModule, v: HcrImportedVariable): string {
+	return own.modulePath + "\n" + v.targetId + "\n" + v.symbol + "\n" + v.key;
 }
 
 export function buildHcrStorage(table: HcrStorageTable, program: Node, own: HcrIndirectModule, modules: HcrIndirectModule[]): void {
@@ -64,8 +70,10 @@ export function buildHcrStorage(table: HcrStorageTable, program: Node, own: HcrI
 	let slot: int32 = 0;
 	for (const stmt of (program.data as ProgramData).programStmts) {
 		walkNode(stmt, (n: Node): Node => {
-			const id = importedVariableId(n, own, modules);
-			if (id == null || table.byBinding.has(id)) return n;
+			const v = importedVariable(n, own, modules);
+			if (v == null) return n;
+			const id = storageId(own, v);
+			if (table.byBinding.has(id)) return n;
 			slot += 1;
 			const value = spelled(createStruct(`_ms_hcr_import_value${slot}`, ["value"], [n.resolvedSym!.symbolType], true));
 			table.byBinding.set(id, { value, pointer: createPtr(value) });
@@ -239,22 +247,26 @@ export function lowerHcrIndirection(
 				if (baseSym == null || baseSym.symbolKind != SymbolKind.Module) return n;
 			}
 			const isVariable = constructed == null && isModuleGlobalVar(sym);
-			const text = constructed != null ? sym.name : referenceText(n);
-			const symbol = isVariable
-				? mangledGlobalName(buildModuleNameRoots(), sym, referenceName(sym, text))
-				: mangledFunctionName(buildModuleNameRoots(), sym, referenceName(sym, text), winner != null ? winner.winnerIdx : sym.overloadIdx);
 			let targetId = "";
+			let symbol = "";
+			let key = "";
+			let variableStorageId = "";
 			if (isVariable) {
-				const target = moduleForPath(modules, sym.modulePath);
-				if (target == null || target.moduleId == own.moduleId) return n;
-				targetId = target.moduleId;
+				const v = importedVariable(n, own, modules);
+				if (v == null) return n;
+				targetId = v.targetId;
+				symbol = v.symbol;
+				key = v.key;
+				variableStorageId = storageId(own, v);
 			} else {
+				const text = constructed != null ? sym.name : referenceText(n);
+				symbol = mangledFunctionName(buildModuleNameRoots(), sym, referenceName(sym, text), winner != null ? winner.winnerIdx : sym.overloadIdx);
 				if (sym.symbolKind != SymbolKind.Function || ownFunctions.has(symbol)) return n;
 				const owner = owners.get(symbol);
 				if (owner == null || owner == own.moduleId) return n;
 				targetId = owner;
+				key = "f:" + hcrSignatureKey(sym.symbolType);
 			}
-			const key = (isVariable ? "v:" : "f:") + hcrSignatureKey(sym.symbolType);
 			const id = targetId + "\n" + symbol + "\n" + key;
 			const cachedPointer = bound.get(id);
 			const pointer = cachedPointer != null ? cachedPointer : `_ms_hcr_bind_${mangleModuleName(buildModuleNameRoots(), own.modulePath)}_${bindSlot}`;
@@ -263,7 +275,7 @@ export function lowerHcrIndirection(
 				bound.set(id, pointer);
 				bindings = bindings + `${cString(targetId)}, ${cString(symbol)}, ${cString(key)}, `;
 				if (isVariable) {
-					const storage = storageTable.byBinding.get(importedVariableId(n, own, modules) ?? "");
+					const storage = storageTable.byBinding.get(variableStorageId);
 					if (storage == null) throw new Error(`internal: HCR bind slot ${bindSlot} for '${targetId}::${symbol}' has no storage type built before emission`);
 					storageTypes.set(id, storage);
 					emitted.push(hcrStorageDecl(storage.value, loc));
