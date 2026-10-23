@@ -6,6 +6,7 @@
 import { exists } from "std/fs";
 import { join, isAbsolute } from "std/fs/path";
 import { loadBuildConfig } from "../buildConfig";
+import { SourceKind } from "./version";
 import { readLockfile, entryName, lockfileErrorMessage, LockfileError } from "./lockfile";
 import { registrySrcPath, isCached } from "./cache";
 import { fetchPackageInfo, findVersion } from "./registry";
@@ -79,7 +80,7 @@ export function cmdInstall(projectRoot: string): boolean {
 	if (lock.ok) {
 		for (const entry of lock.value.entries) {
 			const name = entryName(entry.key);
-			if (entry.source == "registry" && entry.version != "") {
+			if (entry.source == SourceKind.Registry && entry.version != "") {
 				const srcPath = registrySrcPath(name, entry.version);
 				if (isCached(srcPath)) {
 					installed = installed + 1;

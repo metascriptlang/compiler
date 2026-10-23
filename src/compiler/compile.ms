@@ -59,6 +59,7 @@ import { registerPreludeStampFn, preludePackKey, preludePackStamp, packRoot, try
 import { modulePassIdentity } from "../checker/prelude";
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
+import { SourceKind } from "./package/version";
 import { registrySrcPath, gitSrcPath, cacheRoot } from "./package/cache";
 import { BuildSession, BuildStatus, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
 import { dbLower } from "./transam/index";
@@ -143,7 +144,7 @@ export function depRoots(projectRoot: string): DepsSection {
 		for (const entry of lock.value.entries) {
 			const name = entryName(entry.key);
 			let srcPath = "";
-			if (entry.source == "git" && entry.url != "" && entry.commit != "") {
+			if (entry.source == SourceKind.Git && entry.url != "" && entry.commit != "") {
 				srcPath = gitSrcPath(entry.url, entry.commit);
 			} else if (entry.version != "") {
 				srcPath = registrySrcPath(name, entry.version);

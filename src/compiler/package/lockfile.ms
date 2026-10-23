@@ -5,12 +5,13 @@
 import { exists, readFile, writeFile } from "std/fs";
 import { parseJson, jsonObject, jsonString, jsonNumber, stringify, stringifyPretty } from "std/core/json";
 import { JsonValue, JsonKind } from "std/core/json";
+import { SourceKind } from "./version";
 
 // --- Types ---
 
 export interface LockEntry {
 	key: string;          // "name@version" or "alias@git:url@sha"
-	source: string;       // "registry" or "git"
+	source: SourceKind;
 	version: string;      // "1.2.3" (registry) or "" (git)
 	integrity: string;    // "sha256-..." or "" (not yet downloaded)
 	url: string;          // "" (registry) or "github.com/owner/repo" (git)
@@ -75,6 +76,21 @@ function getObj(obj: JsonValue, field: string): JsonValue {
 	return null as unknown as JsonValue;
 }
 
+function sourceKindFor(name: string): Result<SourceKind, LockfileError> {
+	return match (name) {
+		"" | "registry" => Result.ok(SourceKind.Registry),
+		"git" => Result.ok(SourceKind.Git),
+		_ => Result.err(LockfileError.BadShape),
+	};
+}
+
+function sourceName(kind: SourceKind): string {
+	return match (kind) {
+		SourceKind.Registry => "registry",
+		SourceKind.Git => "git",
+	};
+}
+
 function parseDeps(depsObj: JsonValue): { keys: string[], values: string[] } {
 	const keys: string[] = [];
 	const values: string[] = [];
@@ -115,11 +131,11 @@ export function parseLockfile(content: string): Result<Lockfile, LockfileError> 
 		if (pi >= pkgsObj.values.length) return Result.err(LockfileError.BadShape);
 		const entryObj = pkgsObj.values[pi];
 		if (entryObj == null || entryObj.kind != JsonKind.Object) return Result.err(LockfileError.BadShape);
-		const source = getStr(entryObj, "source");
+		const source = try sourceKindFor(getStr(entryObj, "source"));
 		const deps = parseDeps(getObj(entryObj, "deps"));
 		entries.push({
 			key: pkgsObj.keys[pi],
-			source: source != "" ? source : "registry",
+			source,
 			version: getStr(entryObj, "version"),
 			integrity: getStr(entryObj, "integrity"),
 			url: getStr(entryObj, "url"),
@@ -154,9 +170,9 @@ export function writeLockfile(path: string, lock: Lockfile): Result<void, Lockfi
 		const eValues: JsonValue[] = [];
 
 		eKeys.push("source");
-		eValues.push(jsonString(entry.source));
+		eValues.push(jsonString(sourceName(entry.source)));
 
-		if (entry.source == "registry") {
+		if (entry.source == SourceKind.Registry) {
 			eKeys.push("version");
 			eValues.push(jsonString(entry.version));
 		}
@@ -166,7 +182,7 @@ export function writeLockfile(path: string, lock: Lockfile): Result<void, Lockfi
 			eValues.push(jsonString(entry.integrity));
 		}
 
-		if (entry.source == "git") {
+		if (entry.source == SourceKind.Git) {
 			eKeys.push("url");
 			eValues.push(jsonString(entry.url));
 			eKeys.push("ref");
@@ -281,6 +297,17 @@ test "a corrupt lockfile is told apart from a missing one" {
 	assert parseError("{ \"packages\": {} }") == LockfileError.BadVersion;
 	assert parseError("{ \"version\": 1 }") == LockfileError.BadShape;
 	assert parseError("{ \"version\": 1, \"packages\": { \"a@1.0.0\": 7 } }") == LockfileError.BadShape;
+	assert parseError("{ \"version\": 1, \"packages\": { \"a@1.0.0\": { \"source\": \"svn\" } } }") == LockfileError.BadShape;
+}
+
+test "a git entry reads as a Git source and a bare entry as Registry" {
+	const content = "{ \"version\": 1, \"packages\": { \"fork@git:github.com/me/foo@abc\": { \"source\": \"git\", \"url\": \"github.com/me/foo\" }, \"bare@1.0.0\": {} } }";
+	const r = parseLockfile(content);
+	assert r.ok;
+	if (r.ok) {
+		assert r.value.entries[0].source == SourceKind.Git;
+		assert r.value.entries[1].source == SourceKind.Registry;
+	}
 }
 
 test "a valid lockfile keeps its entries, deps and source" {

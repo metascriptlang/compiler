@@ -243,7 +243,7 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 		const emptyVals: string[] = [];
 		entry = {
 			key: lockKey,
-			source: "git",
+			source: SourceKind.Git,
 			version: "",
 			integrity: "",
 			url: spec.git.url,
@@ -268,7 +268,7 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 		const depValues: string[] = regVersion != null ? regVersion.depValues : [];
 		entry = {
 			key: lockKey,
-			source: "registry",
+			source: SourceKind.Registry,
 			version: parsed.version,
 			integrity: regVersion != null ? regVersion.integrity : "",
 			url: regVersion != null ? regVersion.archiveUrl : "",
@@ -302,7 +302,7 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	}
 
 	// Download the package archive
-	if (entry.source == "registry" && entry.url != "") {
+	if (entry.source == SourceKind.Registry && entry.url != "") {
 		const downloaded = downloadPackage(parsed.name, parsed.version, entry.url, entry.integrity);
 		if (!downloaded.ok) {
 			console.log(`  error: ${parsed.name}@${parsed.version}: ${packageErrorMessage(downloaded.error)}`);
