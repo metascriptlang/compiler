@@ -20,15 +20,14 @@ function leave(k: int32): int32 {
 	if (k == 0) throw new Error("throw");
 	if (k == 1) fail();
 	if (k == 2) return 7;
+	let joined: int32 = 0;
 	for (let i = 0; i < 3; i++) {
 		const c = spawn(() => work(200000));
 		if (i == 1) break;
-		s0 = s0 + await c;
+		joined = joined + await c;
 	}
-	return await a + await b;
+	return await a + await b + joined;
 }
-
-let s0: int32 = 0;
 
 function task(k: int32): int32 {
 	try {
