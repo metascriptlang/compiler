@@ -209,3 +209,32 @@ export function walk(t: Readonly<Node> | null, acc: int32): int32 {
 	assert result.ok, result.ok ? "" : result.error;
 	assert rcOps(functionBody(result.value, "walk")) > 0, functionBody(result.value, "walk");
 }
+
+test "an argument path stays borrowed across a write to elements no object of its type can be" {
+	const fault = rcFault(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+interface Note { line: string; at: int32; }
+class Log { notes: Note[] = []; }
+function hit(log: Log, t: Readonly<Node>): int32 { log.notes[0] = { line: "x", at: t.n }; return t.n; }
+export function scan(t: Node, log: Log): int32 { return hit(log, t.kids[0]); }
+`, ["scan"]);
+	assert fault == "", fault;
+}
+
+test "an argument path is kept alive across a write to elements its type is assignable to" {
+	const cases = [
+		"class Node { kids: Node[] = []; n: int32 = 0; }\ninterface Named { kids: Node[]; n: int32; }\nfunction made(): Named { return new Node(); }",
+		"class Node { kids: Node[] = []; n: int32 = 0; }\ninterface Named { kids: Node[]; }\nfunction made(): Named { return new Node(); }",
+		"class Node { kids: Node[] = []; n: int32 = 0; }\nclass Marked extends Node { line: string = \"\"; }\ninterface Named { kids: Node[]; n: int32; line: string; }\nfunction made(): Named { return new Marked(); }",
+	];
+	for (const decls of cases) {
+		const result = compileToC(`
+${decls}
+class Log { named: Named[] = []; }
+function hit(log: Log, t: Readonly<Node>): int32 { log.named[0] = made(); return t.n; }
+export function scan(t: Node, log: Log): int32 { return hit(log, t.kids[0]); }
+`);
+		assert result.ok, result.ok ? "" : result.error;
+		assert rcOps(functionBody(result.value, "scan")) > 0, decls + "\n" + functionBody(result.value, "scan");
+	}
+}
