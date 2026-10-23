@@ -35,7 +35,7 @@ export function genTestDeclNode(g: CGen, node: Readonly<Node>): void {
 
 	if (d.testBody.kind == NodeKind.BlockStmt) {
 		const bd = d.testBody.data as BlockStmtData;
-		const p = createProc(funcName, null);
+		const p = createProc(funcName);
 		g.currentProc = p;
 		for (const stmt of bd.statements) {
 			genStmt(g, p, stmt);

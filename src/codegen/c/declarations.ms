@@ -10,7 +10,7 @@ import {
 	CGen, CProc, CSection,
 	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, readProcStmts, readProcLocals,
 	emitProcBody, clearProcBuffers, typeCacheSet, typeCacheGet, typeCacheHas, aliveSetHasDecl, aliveSetHasModule, internString, addCGenError,
-	setLocalSymName, factClaimGeneric, scopeMangledParam, emitProcLocalsLine,
+	setLocalSymName, addIndirectSym, factClaimGeneric, scopeMangledParam, emitProcLocalsLine,
 } from "./context";
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, readonlyDataBracedInit, resolveEmitArgs } from "./statements";
@@ -162,7 +162,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	// Skip body for duplicate generic instances — forward decl already emitted above.
 	if (instanceAlreadyEmitted && !inlineCopy) return;
 	if (d.fnBody != null) {
-		const p = createProc(name, fnType.typeReturn);
+		const p = createProc(name, fnType.typeReturn != null ? getTypeDesc(g, fnType.typeReturn) : "", fnType.typeReturn != null && fnType.typeReturn.kind == TypeKind.Void);
 		p.suppressRaiseCheck = isDrcHookFn || (sym != null && hasFlag(sym, SymbolFlag.NeverRaises));
 		if (nrvo) p.isNrvo = true;
 		// Populate param names + pointer promotion (auto-deref via indirectParams)
@@ -176,7 +176,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 			const bodyPromote = pi < fnType.typeChildren.length && (isDrcHookFn ? ccgIntroducedPtr(g.target, fnType.typeChildren[pi]) : shouldIndirectParam(g.target, fnType.typeChildren[pi], isMutated, pi == 0 && returnsBorrow(fnType)));
 			if (bodyPromote) {
 				p.indirectParams.push(d.params[pi]);
-				if (paramSym != null) p.indirectSyms.push(paramSym);
+				if (paramSym != null) addIndirectSym(p, paramSym);
 			}
 			if (pi < fnType.typeChildren.length && isOpenArrayParam(fnType.typeChildren[pi])) {
 				const spanName = safeName(d.params[pi]);

@@ -3,11 +3,11 @@
 // Follows standard reference patterns for section-based output and block stacking.
 // CGen = BModule, CProc = BProc, CBlock = TBlock, CLoc = TLoc.
 
-import { Node, Type, Symbol } from "../../ast/node";
+import { Node, Type, Symbol, SymbolKind } from "../../ast/node";
 import { CheckerContext, CheckerError, Severity } from "../../checker/context";
 import { TargetInfo, hostTargetInfo } from "../../checker/types";
 import { djb2, fingerprint, hashToHex } from "std/hash";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { hasFlag, makeSymbol, SymbolFlag } from "../../checker/symbol";
 import { headerIncludes } from "../../module/cimport/emit";
 import { ModuleNameRoots } from "./names";
 
@@ -173,7 +173,8 @@ export interface CTryEntry {
 
 export class CProc {
 	name: string;          // mangled C name
-	returnType: Cursor<Readonly<Type>> | null;      // MetaScript return type (null = void/inferred)
+	returnDesc: string;    // C type of the MetaScript return type ("" = inferred)
+	returnsVoid: boolean;
 	isNrvo: boolean;       // true if function uses NRVO (out-param calling convention)
 	labels: number;        // unique temp counter (T1_, T2_, ...)
 	blocks: CBlock[];      // nested block stack (blocks[0] = top-level)
@@ -182,12 +183,14 @@ export class CProc {
 	params: string[];      // parameter names (mangled)
 	hoistedTemps: string[];
 	indirectParams: string[];  // reference pointer introduction params — auto-deref as (*name) (Reference: indirect location parity)
-	indirectSyms: Cursor<Readonly<Symbol>>[];  // the symbols of indirectParams
+	indirectItemModules: int32[];  // the symbols of indirectParams, as (itemModule, item)
+	indirectItems: int32[];
 	nestedTryStmts: CTryEntry[];
 	beforeRetNeeded: boolean;
 	suppressRaiseCheck: boolean;
 	sigConflicts: string[];   // parallel arrays: [mangledName, count, ...]
-	localSyms: Cursor<Readonly<Symbol>>[];
+	localItemModules: int32[];  // parallel to localSymNames: each local's (itemModule, item)
+	localItems: int32[];
 	localSymNames: string[];
 	// Fallback name map for DRC-generated identifiers without resolvedSym.
 	// When fillLocalName renames a VarDecl, the mapping originalName→uniqueName is stored
@@ -209,19 +212,30 @@ export function isIndirectParam(p: Readonly<CProc>, name: string): boolean {
 export function isIndirectRef(p: Readonly<CProc>, sym: Readonly<Symbol | null>, name: string): boolean {
 	if (p == null) return false;
 	if (sym == null) return isIndirectParam(p, name);
-	for (const s of p.indirectSyms) {
-		if (s == sym) return true;
+	for (let i = 0; i < p.indirectItems.length; i += 1) {
+		if (p.indirectItems[i] == sym.item && p.indirectItemModules[i] == sym.itemModule) return true;
 	}
 	return false;
 }
 
-export function createProc(name: string, returnType: Readonly<Type | null>): CProc {
+function requireItem(p: Readonly<CProc>, sym: Readonly<Symbol>): void {
+	if (sym.item <= 0) throw new Error(`internal: ${sym.symbolKind} '${sym.name}' of '${p.name}' was created without an item, so the frame cannot key it`);
+}
+
+export function addIndirectSym(p: CProc, sym: Readonly<Symbol>): void {
+	requireItem(p, sym);
+	p.indirectItemModules.push(sym.itemModule);
+	p.indirectItems.push(sym.item);
+}
+
+export function createProc(name: string, returnDesc: string = "", returnsVoid: boolean = false): CProc {
 	const topBlock = createBlock(0, false);
 	const blocks: CBlock[] = [];
 	blocks.push(topBlock);
 	return {
 		name,
-		returnType,
+		returnDesc,
+		returnsVoid,
 		isNrvo: false,
 		labels: 0,
 		blocks,
@@ -230,12 +244,14 @@ export function createProc(name: string, returnType: Readonly<Type | null>): CPr
 		params: [],
 		hoistedTemps: [],
 		indirectParams: [],
-		indirectSyms: [],
+		indirectItemModules: [],
+		indirectItems: [],
 		nestedTryStmts: [],
 		beforeRetNeeded: false,
 		suppressRaiseCheck: false,
 		sigConflicts: [],
-		localSyms: [],
+		localItemModules: [],
+		localItems: [],
 		localSymNames: [],
 		localNameMap: [],
 		reemitting: false,
@@ -243,20 +259,22 @@ export function createProc(name: string, returnType: Readonly<Type | null>): CPr
 }
 
 export function setLocalSymName(p: CProc, sym: Readonly<Symbol>, name: string): void {
-	for (let i = 0; i < p.localSyms.length; i += 1) {
-		if (p.localSyms[i] == sym) {
+	requireItem(p, sym);
+	for (let i = 0; i < p.localItems.length; i += 1) {
+		if (p.localItems[i] == sym.item && p.localItemModules[i] == sym.itemModule) {
 			p.localSymNames[i] = name;
 			return;
 		}
 	}
-	p.localSyms.push(sym);
+	p.localItemModules.push(sym.itemModule);
+	p.localItems.push(sym.item);
 	p.localSymNames.push(name);
 }
 
 export function lookupLocalSymName(p: Readonly<CProc>, sym: Readonly<Symbol | null>): string {
 	if (p == null || sym == null) return "";
-	for (let i = p.localSyms.length - 1; i >= 0; i -= 1) {
-		if (p.localSyms[i] == sym) return p.localSymNames[i];
+	for (let i = p.localItems.length - 1; i >= 0; i -= 1) {
+		if (p.localItems[i] == sym.item && p.localItemModules[i] == sym.itemModule) return p.localSymNames[i];
 	}
 	return "";
 }
@@ -784,8 +802,8 @@ export function createCGen(ctx: Readonly<CheckerContext>, modulePath: string, al
 		target: ctx != null ? ctx.targetInfo : hostTargetInfo(),
 		modulePath,
 		labels: 0,
-		initProc: createProc("__init000", null),
-		deinitProc: createProc("__deinit000", null),
+		initProc: createProc("__init000"),
+		deinitProc: createProc("__deinit000"),
 		aliveSet,
 		isTestBuild: false,
 		isHcr: false,
@@ -955,14 +973,39 @@ test "rdLoc indirect" {
 }
 
 test "create proc" {
-	const p = createProc("test_fn", null);
+	const p = createProc("test_fn");
 	assert p.name == "test_fn";
 	assert p.labels == 0;
 	assert p.blocks.length == 1;
 }
 
+test "a frame keys its locals by item, so two same-named locals keep their own names" {
+	const p = createProc("test_fn");
+	const outer = makeSymbol("x", SymbolKind.Variable, null, false);
+	const inner = makeSymbol("x", SymbolKind.Variable, null, false);
+	outer.itemModule = 2; outer.item = 7;
+	inner.itemModule = 2; inner.item = 8;
+	setLocalSymName(p, outer, "x");
+	setLocalSymName(p, inner, "x_1");
+	addIndirectSym(p, inner);
+	assert lookupLocalSymName(p, outer) == "x" && lookupLocalSymName(p, inner) == "x_1";
+	assert !isIndirectRef(p, outer, "x") && isIndirectRef(p, inner, "x_1");
+}
+
+test "a local without an item is an internal error naming it and its frame" {
+	const p = createProc("test_fn");
+	const bare = makeSymbol("tmp", SymbolKind.Variable, null, false);
+	let refused = "";
+	try {
+		setLocalSymName(p, bare, "tmp");
+	} catch (e) {
+		refused = (e as Error).message;
+	}
+	assert refused.includes("internal:") && refused.includes("'tmp' of 'test_fn'"), refused;
+}
+
 test "getTemp" {
-	const p = createProc("test_fn", null);
+	const p = createProc("test_fn");
 	const t1 = getTemp(p, "int32_t");
 	assert t1.snippet == "T1_";
 	assert t1.kind == CLocKind.Temp;
@@ -973,7 +1016,7 @@ test "getTemp" {
 }
 
 test "push and pop block" {
-	const p = createProc("test_fn", null);
+	const p = createProc("test_fn");
 	pushBlock(p, true);
 	assert p.blocks.length == 2;
 	assert p.withinLoop == 1;
@@ -986,7 +1029,7 @@ test "push and pop block" {
 }
 
 test "nested blocks" {
-	const p = createProc("test_fn", null);
+	const p = createProc("test_fn");
 	emitStmts(p, "outer;\n");
 	pushBlock(p, false);
 	emitStmts(p, "inner;\n");

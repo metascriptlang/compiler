@@ -9,7 +9,7 @@
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, VariableDeclData, DeclKind, Type, TypeKind, Symbol, SymbolKind, ProgramData } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { duVariantIndexOfType } from "../../checker/compat";
-import { skipModifier, isNumberLiteralSet, isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldNameUnprofiled, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, voidType, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayNameUnprofiled, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing, matchUnionBehindInstance, fieldTypeView } from "../../checker/types";
+import { skipModifier, isNumberLiteralSet, isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldNameUnprofiled, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, getDiscriminantName, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayNameUnprofiled, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing, matchUnionBehindInstance, fieldTypeView } from "../../checker/types";
 import { SymbolFlag, hasFlag, isTypeSymbol } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
@@ -3394,7 +3394,7 @@ function exprSnippet(input: string): string {
 	if (stmt.kind != NodeKind.ExprStmt) return "NOT_EXPR_STMT";
 	const es = stmt.data as ExprStmtData;
 	const g = createCGen(null as unknown as CheckerContext, "");
-	const p = createProc("test", voidType());
+	const p = createProc("test", "void", true);
 	return genExpr(g, p, es.expr);
 }
 
@@ -3469,7 +3469,7 @@ test "a new expression whose type did not resolve is refused, not given a TypeIn
 	if (!pr.ok) return;
 	const stmt = (pr.value.data as ProgramData).programStmts[0];
 	const g = createCGen(null as unknown as CheckerContext, "");
-	const p = createProc("test", voidType());
+	const p = createProc("test", "void", true);
 	genExpr(g, p, (stmt.data as ExprStmtData).expr);
 	assert g.errors.length == 1;
 	assert g.errors[0].message.contains("TypeInfo");
@@ -3551,7 +3551,7 @@ function exprErrors(input: string): string {
 	const pd = pr.value.data as ProgramData;
 	const es = pd.programStmts[0].data as ExprStmtData;
 	const g = createCGen(null as unknown as CheckerContext, "");
-	genExpr(g, createProc("test", voidType()), es.expr);
+	genExpr(g, createProc("test", "void", true), es.expr);
 	let messages = "";
 	for (const e of g.errors) messages = messages + e.message + "\n";
 	return messages;
@@ -3580,7 +3580,7 @@ function lastNewRunsInit(input: string): boolean {
 	if (last.kind != NodeKind.ExprStmt) return false;
 	const newExpr = (last.data as ExprStmtData).expr;
 	if (newExpr.kind != NodeKind.NewExpr) return false;
-	const p = createProc("test", voidType());
+	const p = createProc("test", "void", true);
 	const tmp = genExpr(createCGen(ctx, "owner.ms"), p, newExpr);
 	return readProcStmts(p).contains(`_init(${tmp});`);
 }

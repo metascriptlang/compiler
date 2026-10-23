@@ -1066,7 +1066,7 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	// `return expr` where expr is void (T=void instantiation): C forbids returning a
 	// void expression. A void local has no storage, so an identifier emits nothing.
 	const argIsVoid = d.argument != null && !isNrvo
-		&& ((p.returnType != null && p.returnType.kind == TypeKind.Void)
+		&& (p.returnsVoid
 			|| (d.argument.nodeType != null && d.argument.nodeType.kind == TypeKind.Void));
 	if (argIsVoid && d.argument != null) {
 		if (d.argument.kind != NodeKind.Identifier) {
@@ -1078,7 +1078,7 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		emitStmtsLine(p, "return;");
 		return;
 	}
-	if (d.argument != null && isNrvo && p.returnType != null && buildsInPlace(g, d.argument, getTypeDesc(g, p.returnType))) {
+	if (d.argument != null && isNrvo && p.returnDesc != "" && buildsInPlace(g, d.argument, p.returnDesc)) {
 		const built = genExprInto(g, p, d.argument, "(*__result)");
 		if (built != "(*__result)") emitStmtsLine(p, `*__result = ${built};`);
 	} else if (d.argument != null) {
@@ -1086,8 +1086,8 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 		if (isNrvo) {
 			// C99 compound literal: (Type){ .f = v } needs the (Type) prefix.
 			// Hoisted temp variable: _lit3_ does NOT — struct-to-struct cast is invalid C.
-			if (d.argument.kind == NodeKind.ObjectLiteral && snippet.length > 0 && snippet.charAt(0) == "{" && p.returnType != null) {
-				const castType = getTypeDesc(g, p.returnType);
+			if (d.argument.kind == NodeKind.ObjectLiteral && snippet.length > 0 && snippet.charAt(0) == "{" && p.returnDesc != "") {
+				const castType = p.returnDesc;
 				emitStmtsLine(p, `*__result = (${castType})${snippet};`);
 			} else {
 				emitStmtsLine(p, `*__result = ${snippet};`);
@@ -1097,7 +1097,7 @@ function genReturnStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 				// Reference parity: save return value to temp before finally cleanup.
 				// blockLeaveActions may emit wasMoved that zeros the returned local.
 				// Store in temp first, then run cleanup, then return temp.
-				const retType = p.returnType != null ? getTypeDesc(g, p.returnType) : (d.argument.nodeType != null ? getTypeDesc(g, d.argument.nodeType) : "");
+				const retType = p.returnDesc != "" ? p.returnDesc : (d.argument.nodeType != null ? getTypeDesc(g, d.argument.nodeType) : "");
 				if (retType != "" && retType != "void") {
 					const tmp = getTemp(p, retType);
 					emitStmtsLine(p, `${tmp.snippet} = ${snippet};`);
@@ -1437,7 +1437,7 @@ function stmtOutput(input: string): string {
 	const prog = pr.value;
 	const pd = prog.data as ProgramData;
 	const g = createCGen(null as unknown as CheckerContext, "");
-	const p = createProc("test", null);
+	const p = createProc("test");
 	// Inline loop instead of genStmts to reduce call depth
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		genStmt(g, p, pd.programStmts[i]);
@@ -1555,7 +1555,7 @@ function stmtErrors(input: string): string {
 	if (!pr.ok) return "PARSE_ERROR";
 	const pd = pr.value.data as ProgramData;
 	const g = createCGen(null as unknown as CheckerContext, "");
-	const p = createProc("test", null);
+	const p = createProc("test");
 	for (const stmt of pd.programStmts) genStmt(g, p, stmt);
 	let messages = "";
 	for (const e of g.errors) messages = messages + e.message + "\n";

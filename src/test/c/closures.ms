@@ -23,3 +23,17 @@ test "E2E C: closure with mutable capture" {
 	const c = compileToC(src);
 	assert c.ok;
 }
+
+test "E2E C: a lifted env, a loop temp and two same-named block locals each reach the frame with their own item" {
+	const src = `function f(n: int32): int32 {
+	let total = 0;
+	{ const x = n; total += x; }
+	{ const x = n * 2; total += x; }
+	for (const v of [n, n + 1]) total += v;
+	const g = (k: int32): int32 => total + k + n;
+	return g(1);
+}
+console.log(f(3));`;
+	const c = compileToC(src);
+	assert c.ok, c.ok ? "" : c.error;
+}
