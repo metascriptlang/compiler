@@ -33,7 +33,7 @@ import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
 import { calledRoutineType, isImmutableModuleConst, isViewCall, receiverOf, viewCallSources } from "../checker/effects";
-import { ANY_HEAP_SLOT, addressSlots, callerDefsOf, canAlias, LocalDefs, mayWrite, reachesModuleState, resetWriteEffects, runsHooks, stepSlot, viewReturnSlots } from "./writeEffects";
+import { ANY_HEAP_SLOT, addressSlots, callerDefsOf, callsPlainRoutine, canAlias, LocalDefs, mayWrite, reachesModuleState, resetWriteEffects, runsHooks, stepSlot, viewReturnSlots } from "./writeEffects";
 import { createDrcContext } from "./scope";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
@@ -191,7 +191,7 @@ function callArgumentRoots(p: Partitions, call: Node, roots: Symbol[]): boolean 
 	for (const a of (call.data as CallExprData).arguments) { operands.push(a); }
 	for (const a of operands) {
 		if (a == null) continue;
-		if (runsHooks(a)) return false;
+		if (runsHooks(a) || (a.nodeType != null && a.nodeType.kind == TypeKind.Function)) return false;
 		if (containsPointer(a.nodeType, 0)) allRoots(p, a, roots);
 	}
 	return true;
@@ -200,7 +200,7 @@ function callArgumentRoots(p: Partitions, call: Node, roots: Symbol[]): boolean 
 function writesOtherPartition(p: Partitions, site: Node, viewRoot: int32, defs: LocalDefs): boolean {
 	const roots: Symbol[] = [];
 	if (site.kind == NodeKind.CallExpr) {
-		if (reachesModuleState(site, defs) || !callArgumentRoots(p, site, roots)) return false;
+		if (!callsPlainRoutine(site) || reachesModuleState(site, defs) || !callArgumentRoots(p, site, roots)) return false;
 		return onlyOtherPartitions(p, roots, viewRoot);
 	}
 	if (site.kind != NodeKind.BinaryExpr) return false;
@@ -1407,6 +1407,24 @@ test "a call on a local aliasing the view's source ends the view" {
 
 test "a call whose routine writes module state ends the view whatever it is called on" {
 	const body = getFuncNamed(SETTERS + "function f(n: LinkM): int32 { const v = shared.next; const own = new Spill(); own.setNext(new LinkM()); return v != null ? v.v : 0; }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "v");
+}
+
+test "a call through a local closure that writes the view's source through a capture ends the view" {
+	const body = getFuncNamed(SETTERS + "function f(n: LinkM): int32 { const v = n.next; const own = new LinkM(); const clear = (o: LinkM): void => { o.next = null; n.next = null; }; clear(own); return v != null ? v.v : 0; }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "v");
+}
+
+test "a call through a function parameter ends the view" {
+	const body = getFuncNamed(SETTERS + "function f(n: LinkM, clear: (o: LinkM) => void): int32 { const v = n.next; const own = new LinkM(); clear(own); return v != null ? v.v : 0; }", "f");
+	inferCursors(body);
+	assert !isCursorNamed(body, "v");
+}
+
+test "a call passing a closure that writes through a capture ends the view" {
+	const body = getFuncNamed(SETTERS + "function run(o: LinkM, cb: (o: LinkM) => void): void { cb(o); }\nfunction f(n: LinkM): int32 { const v = n.next; const own = new LinkM(); run(own, (o: LinkM): void => { n.next = null; }); return v != null ? v.v : 0; }", "f");
 	inferCursors(body);
 	assert !isCursorNamed(body, "v");
 }

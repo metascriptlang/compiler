@@ -1139,6 +1139,10 @@ export function callerDefsOf(body: Node): LocalDefs {
 	return localDefs(body);
 }
 
+export function callsPlainRoutine(call: Node): boolean {
+	return isRoutineSym(call.resolvedSym);
+}
+
 export function reachesModuleState(call: Node, defs: LocalDefs | null): boolean {
 	const writes = callWrites(call, defs);
 	if (writes.unknown) return true;
