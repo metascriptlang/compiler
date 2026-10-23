@@ -1433,9 +1433,9 @@ test "ledger: reference elements count what they hold through push, store, self-
 }
 
 test "orc: a cycle through a reference array and one through a union array are collected, and a word array is not traced" {
-	const vm = evalOrcVM("class C { kids: C[] = []; }"
+	const vm = evalOrcVM("class C { kids: C[] = []; mixed: (C | int32 | null)[] = []; }"
 		+ " const lookalike: int64[] = [3, 4, 11, 12, 19, 20, 27, 28];"
-		+ " class M { mixed: (M | int32 | null)[] = []; } function ring(): void { const a = new C(); const b = new C(); a.kids.push(b); b.kids.push(a); const c = new M(); const d = new M(); c.mixed.push(d); c.mixed.push(5); d.mixed.push(c); d.mixed.push(null); }"
+		+ " function ring(): void { const a = new C(); const b = new C(); a.kids.push(b); b.kids.push(a); const c = new C(); const d = new C(); c.mixed.push(d); c.mixed.push(5); d.mixed.push(c); d.mixed.push(null); }"
 		+ " for (let i = 0; i < 300; i++) ring(); console.log(`ok ${lookalike[3]}`);");
 	assert vm.error == "", vm.error;
 	assert vm.output == "ok 12\n", vm.output;
