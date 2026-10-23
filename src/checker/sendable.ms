@@ -216,7 +216,7 @@ function rootOfPath(n: Node): Node | null {
 		if (cur.kind == NodeKind.ArrayAccess) { cur = peelView((cur.data as ArrayAccessData).array); continue; }
 		if (cur.kind == NodeKind.CallExpr) {
 			const callee = peelView((cur.data as CallExprData).callee);
-			if (callee == null || callee.kind != NodeKind.MemberExpr) return null;
+			if (callee == null || callee.kind != NodeKind.MemberExpr) return cur;
 			cur = peelView((callee.data as MemberExprData).object);
 			continue;
 		}
@@ -268,8 +268,43 @@ function reachesLent(n: Node | null, lent: Symbol[]): boolean {
 		return false;
 	}
 	const root = rootOfPath(p);
+	if (root != null && root.kind == NodeKind.CallExpr) return (p.nodeType == null || typeCarriesRef(p.nodeType)) && callReturnsLent(root, lent);
 	if (root == null || root.kind != NodeKind.Identifier || root.resolvedSym == null || !lent.includes(root.resolvedSym)) return false;
 	return p.nodeType == null || typeCarriesRef(p.nodeType);
+}
+
+const returnWalk: Node[] = [];
+
+function callReturnsLent(call: Node, lent: Symbol[]): boolean {
+	const d = call.data as CallExprData;
+	const reached = d.arguments.map((a: Node): boolean => reachesLent(a, lent));
+	if (!reached.includes(true)) return false;
+	const callee = peelView(d.callee);
+	const routine = routineParts(call.resolvedSym != null ? call.resolvedSym : (callee != null ? callee.resolvedSym : null));
+	if (routine == null || routine.paramSyms == null) return true;
+	if (returnWalk.includes(routine)) return false;
+	const inner: Symbol[] = [];
+	const first = firstArgParam(routine);
+	for (let i = 0; i < reached.length && first + i < routine.paramSyms!.length; i += 1) {
+		if (reached[i]) inner.push(routine.paramSyms![first + i]);
+	}
+	returnWalk.push(routine);
+	const hit = returnsReach(routineBody(routine), inner);
+	returnWalk.pop();
+	return hit;
+}
+
+function returnsReach(node: Node | null, lent: Symbol[]): boolean {
+	if (node == null || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr) return false;
+	if (node.kind == NodeKind.VariableDecl) {
+		const sym = node.resolvedSym;
+		if (sym != null && reachesLent((node.data as VariableDeclData).initializer, lent)) lent.push(sym);
+	} else if (node.kind == NodeKind.ReturnStmt) {
+		if (reachesLent((node.data as ReturnStmtData).argument, lent)) return true;
+	}
+	const hit: boolean[] = [false];
+	forEachChild(node, (child: Node): void => { if (!hit[0] && returnsReach(child, lent)) hit[0] = true; });
+	return hit[0];
 }
 
 function findKeptSite(node: Node | null, w: KeptWalk): Node | null {
