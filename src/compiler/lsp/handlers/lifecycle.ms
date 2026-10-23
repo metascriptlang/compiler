@@ -1167,6 +1167,16 @@ test "a check stopped for input leaves the module context of the last finished c
 	assert lookupModuleCtx(path) == finished;
 }
 
+test "a check stopped for input registers no module context for a module never checked before" {
+	const path = "/lsp-stop-first.ms";
+	const db = createTransAmDb(100);
+	dbSetFileText(db, path, STOP_SOURCE);
+	stopAtProbe(db, 2);
+	dbTypeCheck(db, path);
+	assert db.cancelCtx.stoppedForInput;
+	assert lookupModuleCtx(path) == null;
+}
+
 test "diagnostics stopped for input stay pending and publish the same once input is read" {
 	const uri = "file:///lsp-stop-pending.ms";
 	const db = createTransAmDb(100);

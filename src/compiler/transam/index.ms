@@ -973,7 +973,6 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		}
 	}
 
-	const priorCtx = lookupModuleCtx(filePath);
 	const outerDb = _checkingDb;
 	_checkingDb = db;
 	const unit = bound != null ? bound : dbBindModule(db, filePath, program, imports, globals, startVersion);
@@ -986,7 +985,6 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	if (checkCancel(db.cancelCtx, startVersion)) {
 		popFrame(db.depStack);
 		db.checkInProgress.delete(filePath);
-		if (priorCtx != null) registerModuleCtx(filePath, priorCtx);
 		return checkerCtx;
 	}
 

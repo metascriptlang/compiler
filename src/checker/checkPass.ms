@@ -4162,7 +4162,7 @@ export function finishModuleCheck(bound: BoundModule): CheckerContext {
 	// Register this module's ctx so later cross-module generic instantiation can
 	// re-check cloned bodies in THIS module's scope (resolving private consts,
 	// helper functions, etc.). Reference parity: Nim's graph.ifaces[module].
-	if (!isEngineCheckMode() && !sharedPreludeOwns(ctx.preludeCtx, ctx.modulePath)) registerModuleCtx(ctx.modulePath, ctx);
+	if (!isEngineCheckMode() && !sharedPreludeOwns(ctx.preludeCtx, ctx.modulePath) && !isCancelled(ctx.cancelCtx, ctx.cancelVersion)) registerModuleCtx(ctx.modulePath, ctx);
 	return ctx;
 }
 
