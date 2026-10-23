@@ -263,23 +263,23 @@ function wordAt(bytes: Readonly<Ptr<uint8>>): uint64 {
 	return cell[0];
 }
 
-// Shaped for the caller it is inlined into under thin LTO, where a reject that left through a
-// one-way constant-false block cost a second taken branch per call, measured 1.8-2.2x the C kernel
-// on a non-ASCII first byte: short inputs keep the C byte loop, longer ones reject on the first
-// byte, then join one result from the words and the overlapping last word.
+// Shaped for the caller it is inlined into under thin LTO, where clang 18 keeps the length tests
+// inside that caller's loop: the first byte is tested before any size dispatch, so a reject costs C's
+// one test and one taken branch (it measured 1.6-2.1x on x86 behind the dispatch), then short inputs
+// run the C byte loop and longer ones join one result from the words and the overlapping last word.
 export function isAscii(this typeof Buffer, value: Buffer): boolean {
 	const length = value.asBytes().length as int64;
 	if (length == 0) return true;
 	const bytes = value.asBytes() as Readonly<Ptr<uint8>>;
+	if (bytes[0] > 0x7F) return false;
 	if (length < 8) {
-		let at: int64 = 0;
+		let at: int64 = 1;
 		while (at < length) {
 			if (bytes[at] > 0x7F) return false;
 			at += 1;
 		}
 		return true;
 	}
-	if (bytes[0] > 0x7F) return false;
 	const words = bytes as Readonly<Ptr<uint64>>;
 	const wordCount = length >> 3;
 	let high = words[0] & HIGH_BITS;
