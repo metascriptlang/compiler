@@ -584,8 +584,7 @@ export function consumePendingTypeArg(state: ParserState): string {
 // and read via resolvedSym.declNode (see checkExprPass.ms:fillDefaultArgsForNode)
 
 // ===== Conditional-compilation defines =====
-// The table the `when` chain is resolved against (src/compiler/defines.ms, a port of
-// Nim condsyms.nim). This is build CONFIGURATION owned by the driver, not
+// The table the `when` chain is resolved against (src/compiler/defines.ms). This is build CONFIGURATION owned by the driver, not
 // per-parse state that must not leak between files. The driver sets it once per compilation; tests set and reset it explicitly.
 let _parserDefines: DefineTable = createDefineTable();
 

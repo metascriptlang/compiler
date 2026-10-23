@@ -97,11 +97,9 @@ export enum RaiserOpcode {
 	IsKind,           // ABC: R[A] = (R[B].kind == C) as bool
 
 	// String ordering (2)
-	// Nim gives `<`/`<=` on strings their own magics (LtStr/LeStr,
-	// lib/system/comparisons.nim) and their own VM opcodes (vmgen.nim:1216) —
-	// ordering is NEVER decided by integer comparison. Without these, codegen
+	// String ordering is NEVER decided by integer comparison. Without these, codegen
 	// fell through to BxxI64 and compared string HANDLES. `>`/`>=` need no
-	// opcode: Nim derives them by swapping operands, and so does our codegen.
+	// opcode: codegen derives them by swapping operands.
 	// ⚠ Appended at the END on purpose — src/raiser/vm_dispatch.c hardcodes
 	// opcode NUMBERS, so inserting mid-enum would silently desync it.
 	LtStr,            // ABC: if R[A].text < R[B].text skip C

@@ -238,7 +238,7 @@ export function sgQueryByName(ctx: CheckerContext, name: string, modulePath: str
 }
 
 // Strict cross-module match: name AND defining module must match exactly.
-// Rust-analyzer two-pass: fast text match + precise semantic confirmation.
+// Two-pass: fast text match + precise semantic confirmation.
 export function sgQueryByDefiningModule(ctx: CheckerContext, name: string, defModule: string): SgSymbolRef[] {
 	const result: SgSymbolRef[] = [];
 	if (ctx.symRecords == null) return result;

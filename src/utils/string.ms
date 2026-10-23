@@ -199,8 +199,7 @@ export function integerLiteralFits(s: string): boolean {
 
 // Hex/binary/octal literals denote a BIT PATTERN, so they may fill the whole
 // unsigned width of the target and still be legal (0x80 as int8 is -128).
-// Decimal literals get the signed range instead. Nim draws the same line, and
-// says so at lexer.nim:494-497.
+// Decimal literals get the signed range instead.
 export function integerLiteralIsBitPattern(s: string): boolean {
 	return scanInteger(s).bitPattern;
 }
