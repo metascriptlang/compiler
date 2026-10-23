@@ -3,8 +3,7 @@
 import { exists } from "std/fs";
 import { join } from "std/fs/path";
 import { removeDepFromManifest } from "./manifest";
-import { readLockfile, writeLockfile, entryName } from "./lockfile";
-import { LockEntry } from "./lockfile";
+import { readLockfile, writeLockfile, entryName, lockfileErrorMessage, LockEntry, LockfileError } from "./lockfile";
 
 export function cmdRemove(projectRoot: string, args: string[]): boolean {
 	if (args.length == 0) {
@@ -31,15 +30,18 @@ export function cmdRemove(projectRoot: string, args: string[]): boolean {
 	// Remove from lockfile
 	const lockPath = join(projectRoot, "msc.lock");
 	const lock = readLockfile(lockPath);
-	if (lock.valid) {
+	if (lock.ok) {
 		const kept: LockEntry[] = [];
-		for (const entry of lock.entries) {
+		for (const entry of lock.value.entries) {
 			if (entryName(entry.key) != name) {
 				kept.push(entry);
 			}
 		}
-		lock.entries = kept;
-		writeLockfile(lockPath, lock);
+		lock.value.entries = kept;
+		const written = writeLockfile(lockPath, lock.value);
+		if (!written.ok) console.log("warning: " + lockfileErrorMessage(written.error));
+	} else if (lock.error != LockfileError.Missing) {
+		console.log("warning: " + lockfileErrorMessage(lock.error) + " — left unchanged");
 	}
 
 	console.log("removed " + name);

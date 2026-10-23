@@ -6,7 +6,7 @@
 import { exists } from "std/fs";
 import { join, isAbsolute } from "std/fs/path";
 import { loadBuildConfig } from "../buildConfig";
-import { readLockfile, entryName } from "./lockfile";
+import { readLockfile, entryName, lockfileErrorMessage, LockfileError } from "./lockfile";
 import { registrySrcPath, isCached } from "./cache";
 import { fetchPackageInfo, findVersion } from "./registry";
 import { downloadPackage, packageErrorMessage } from "./download";
@@ -76,8 +76,8 @@ export function cmdInstall(projectRoot: string): boolean {
 	// Check registry/git deps via lockfile
 	const lockPath = join(projectRoot, "msc.lock");
 	const lock = readLockfile(lockPath);
-	if (lock.valid) {
-		for (const entry of lock.entries) {
+	if (lock.ok) {
+		for (const entry of lock.value.entries) {
 			const name = entryName(entry.key);
 			if (entry.source == "registry" && entry.version != "") {
 				const srcPath = registrySrcPath(name, entry.version);
@@ -123,8 +123,12 @@ export function cmdInstall(projectRoot: string): boolean {
 			ci = ci + 1;
 		}
 		if (hasNonFile) {
-			console.log("warning: msc.lock not found — registry/git deps may not resolve");
-			console.log("run `msc add <pkg>@<version>` to create the lockfile");
+			console.log("warning: " + lockfileErrorMessage(lock.error) + " — registry/git deps may not resolve");
+			if (lock.error == LockfileError.Missing) {
+				console.log("run `msc add <pkg>@<version>` to create the lockfile");
+			} else {
+				console.log("fix or delete msc.lock, then run `msc add <pkg>@<version>` to recreate it");
+			}
 		}
 	}
 

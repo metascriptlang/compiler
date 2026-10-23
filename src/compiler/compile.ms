@@ -139,8 +139,8 @@ export function depRoots(projectRoot: string): DepsSection {
 	const roots = fileDepRoots(projectRoot);
 	const lockPath = projectRoot != "" ? join(projectRoot, "msc.lock") : "msc.lock";
 	const lock = readLockfile(lockPath);
-	if (lock.valid) {
-		for (const entry of lock.entries) {
+	if (lock.ok) {
+		for (const entry of lock.value.entries) {
 			const name = entryName(entry.key);
 			let srcPath = "";
 			if (entry.source == "git" && entry.url != "" && entry.commit != "") {

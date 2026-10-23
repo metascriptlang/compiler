@@ -38,6 +38,9 @@ export {
 export {
 	LockEntry,
 	Lockfile,
+	LockfileError,
+	lockfileErrorMessage,
+	parseLockfile,
 	readLockfile,
 	writeLockfile,
 	findEntry,

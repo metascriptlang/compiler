@@ -12,7 +12,7 @@
 import { exists } from "std/fs";
 import { join } from "std/fs/path";
 import { addDepToManifest } from "./manifest";
-import { readLockfile, writeLockfile, entryName } from "./lockfile";
+import { readLockfile, writeLockfile, entryName, lockfileErrorMessage, Lockfile, LockfileError } from "./lockfile";
 import { parseSourceSpec, SourceKind } from "./version";
 import { parseGitSpec } from "./version";
 import { LockEntry } from "./lockfile";
@@ -213,20 +213,24 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 		return false;
 	}
 
+	// Read the lockfile first: a corrupt one stops the add before build.ms changes
+	const lockPath = join(projectRoot, "msc.lock");
+	const lockRead = readLockfile(lockPath);
+	let lock: Lockfile = { version: 1, entries: [] };
+	if (lockRead.ok) {
+		lock = lockRead.value;
+	} else if (lockRead.error != LockfileError.Missing && lockRead.error != LockfileError.Empty) {
+		console.log("error: " + lockfileErrorMessage(lockRead.error));
+		console.log("fix or delete msc.lock and retry");
+		return false;
+	}
+
 	// Add to build.ms
 	const scope = isDev ? "devDeps" : "deps";
 	const added = addDepToManifest(buildPath, parsed.name, parsed.version, scope);
 	if (!added) {
 		console.log("error: failed to update build.ms");
 		return false;
-	}
-
-	// Update lockfile
-	const lockPath = join(projectRoot, "msc.lock");
-	let lock = readLockfile(lockPath);
-	if (!lock.valid) {
-		const entries: LockEntry[] = [];
-		lock = { version: 1, entries, valid: true };
 	}
 
 	// Build the lock entry
@@ -292,8 +296,8 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	}
 
 	const written = writeLockfile(lockPath, lock);
-	if (!written) {
-		console.log("error: failed to write msc.lock");
+	if (!written.ok) {
+		console.log("error: " + lockfileErrorMessage(written.error));
 		return false;
 	}
 
