@@ -491,6 +491,38 @@ export function look(g: Gen, t: Node): int32 {
 	assert borrowedOps(functionBody(result.value, "look"), "k") > 0, functionBody(result.value, "look");
 }
 
+test "a view call's result is rooted only in the arguments its callee returns through" {
+	const result = compileToC(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+class Gen { nodes: Node[] = []; count: int32 = 0; }
+function pick(g: Readonly<Gen>, t: Readonly<Node>): Readonly<Node> { return t.kids[0]; }
+function bump(g: Gen): void { g.count += 1; }
+export function look(g: Gen, t: Node): int32 {
+	const k = pick(g, t);
+	bump(g);
+	return k.n;
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	assert borrowedOps(functionBody(result.value, "look"), "k") == 0, functionBody(result.value, "look");
+}
+
+test "a view call's result stays rooted in the argument its callee returns through" {
+	const result = compileToC(`
+class Node { kids: Node[] = []; n: int32 = 0; }
+class Gen { nodes: Node[] = []; count: int32 = 0; }
+function pick(g: Readonly<Gen>, t: Readonly<Node>): Readonly<Node> { return g.nodes[0]; }
+function bump(g: Gen): void { g.count += 1; }
+export function look(g: Gen, t: Node): int32 {
+	const k = pick(g, t);
+	bump(g);
+	return k.n;
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	assert borrowedOps(functionBody(result.value, "look"), "k") > 0, functionBody(result.value, "look");
+}
+
 test "a scalar argument joins no graph through a call result" {
 	const result = compileToC(`
 class Node { kids: Node[] = []; n: int32 = 0; }
