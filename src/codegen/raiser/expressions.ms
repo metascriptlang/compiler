@@ -1,7 +1,6 @@
 // Raiser codegen — Expression compilation
 // AST expression nodes → typed bytecode instructions.
 
-import { isMetaWireSym } from "../../compiler/meta/nodeSym";
 import { resolveOverloadWinner } from "../c/names";
 import { monoInstanceName } from "../../monomorphize/registry";
 import {
@@ -19,7 +18,7 @@ import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, Raise
 import { RaiserValueKind, createClassType, raiserInt, raiserFloat, raiserNil, raiserBool, raiserConstString } from "../../raiser/value";
 import { lookupHost } from "../../raiser/hostRegistry";
 import { resolveRuntimeDir } from "../../utils/path";
-import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf } from "./valueCopy";
+import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, fieldInst } from "./valueCopy";
 import { placedInstanceOf } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
 import { runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase } from "../../checker/types";
@@ -2247,36 +2246,6 @@ function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 	const dest = allocFor(s, node.nodeType);
 	emitInst(s, fieldInst(s, d.object.nodeType, d.property, RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, dest, objReg, nameIdx));
 	return dest;
-}
-
-// Every object of a struct, interface or class type holds its fields in the order
-// of `typeNames`, which puts a parent's fields first; a structural match is a prefix
-// of it. A function value is a closure pair. NewObject lays that order out, so the
-// type fixes each field's slot.
-export function layoutOf(t: Type | null): string[] {
-	if (isMetaWireSym(classSymOfType(skipModifier(t)))) return [];
-	const bare = skipModifier(t);
-	if (bare != null && bare.kind == TypeKind.Function) return CLOSURE_PAIR;
-	const shape = peelToStructOrUnion(t);
-	return shape != null && shape.kind == TypeKind.Struct && !isMaybeType(shape) ? shape.typeNames : [];
-}
-
-// The register class each slot of layoutOf(t) holds.
-export function slotKindsOf(s: RaiserCompState, t: Type | null): RaiserRegClass[] {
-	if (isMetaWireSym(classSymOfType(skipModifier(t)))) return [];
-	const bare = skipModifier(t);
-	if (bare != null && bare.kind == TypeKind.Function) return CLOSURE_PAIR_KINDS;
-	const shape = peelToStructOrUnion(t);
-	return shape != null && shape.kind == TypeKind.Struct && !isMaybeType(shape) ? slotClassesOf(s, shape) : [];
-}
-
-// A slot opcode moves the slot's word as it is, so a field goes by slot only when the value's
-// register is of the class its slot holds; any other register converts by name.
-export function fieldInst(s: RaiserCompState, t: Type | null, name: string, byName: RaiserOpcode, bySlot: RaiserOpcode, a: number, b: number, c: number): RaiserInstruction {
-	const slot = layoutOf(t).indexOf(name);
-	if (slot < 0 || slot > MAX_SLOT) return raiserABC(byName, a, b, c);
-	const value = bySlot == RaiserOpcode.LoadSlot ? a : c;
-	return classOfReg(s, value as int32) == slotKindsOf(s, t)[slot] ? slotInst(bySlot, a, b, c, slot) : raiserABC(byName, a, b, c);
 }
 
 function isRecordOperand(node: Node): boolean {

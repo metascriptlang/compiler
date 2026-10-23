@@ -33,8 +33,8 @@ import {
 	isScalarClass
 } from "./context";
 import { compileStmt } from "./statements";
-import { compileExpr, classTargetKey, emitsRoutine, classTypeOperand, fieldInst } from "./expressions";
-import { emitZeroValue, allocFor, regClassOf, zeroScalar } from "./valueCopy";
+import { compileExpr, classTargetKey, emitsRoutine, classTypeOperand } from "./expressions";
+import { emitZeroValue, allocFor, regClassOf, zeroScalar, fieldInst } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { checkProgram } from "../../checker/checkPass";
 import { transformForRaiser } from "../../transform/raiserLowering";
