@@ -213,7 +213,7 @@ export function generatePreparedCModuleOutput(program: Readonly<Node>, ctx: Read
 
 	defineDeferredElements(g);
 	emitStringPoolDecls(g.stringPool, sec(g, CSection.StringPool));
-	emitIncludes(g);
+	emitIncludes(g, facts);
 	undefPlatformMacros(g);
 
 	output.code = assembleOutput(g);

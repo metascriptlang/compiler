@@ -913,11 +913,11 @@ function emitOneInclude(g: CGen, header: string): void {
 
 // A header another included header already includes is not included again: a header without
 // an include guard would declare everything twice.
-export function emitIncludes(g: CGen): void {
+export function emitIncludes(g: CGen, facts: Readonly<CEmissionFacts>): void {
 	for (const header of g.includes) {
 		let covered = false;
 		for (const other of g.includes) {
-			if (other != header && headerIncludes(g.emissionFacts.headerIncludes!, other).includes(header) && !headerIncludes(g.emissionFacts.headerIncludes!, header).includes(other)) covered = true;
+			if (other != header && headerIncludes(facts.headerIncludes!, other).includes(header) && !headerIncludes(facts.headerIncludes!, header).includes(other)) covered = true;
 		}
 		if (!covered) addLine(sec(g, CSection.Headers), `#include "${header}"`);
 	}
