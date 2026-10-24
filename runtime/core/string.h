@@ -73,11 +73,7 @@ static inline bool msStringIsAscii(msString s) {
 	for (int64_t i = 0; i < s.len; i++) {
 		if (p[i] >= 0x80) { ascii = false; break; }
 	}
-	/* Cache the result. Relaxed atomic OR: concurrent readers may race to fill
-	   the cache with the same answer; a plain RMW would be a torn-write hazard
-	   against another reader's fill. Mutators are single-owner and never run
-	   concurrently with reads; readers load cap through msStrCapLoad. */
-	__atomic_fetch_or(&s.p->cap, MS_ASCII_CHECKED | (ascii ? MS_ASCII_FLAG : 0), __ATOMIC_RELAXED);
+	__atomic_store_n(&s.p->cap, cap | MS_ASCII_CHECKED | (ascii ? MS_ASCII_FLAG : 0), __ATOMIC_RELAXED);
 	return ascii;
 }
 
