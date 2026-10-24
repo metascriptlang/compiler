@@ -540,7 +540,9 @@ function walkLiftStmtList(stmts: Node[], state: LiftState, isTopLevel: boolean):
 					envAccess.nodeType = state.sharedEnvStructType;
 				}
 				const lhs = makeMember(envAccess, envFieldName(state, state.sharedEnvStructType, declSym), stmtLoc);
-				if (stmts[si].nodeType != null) lhs.nodeType = stmts[si].nodeType;
+				const held = envFieldType(state, state.sharedEnvStructType, declSym);
+				if (held != null && held.kind == TypeKind.Cursor) lhs.nodeType = held;
+				else if (stmts[si].nodeType != null) lhs.nodeType = stmts[si].nodeType;
 				const init = (vd.initializer != null) ? vd.initializer : makeDefaultValue(declSym.symbolType, stmtLoc);
 				stmts[si] = makeExprStmt(makeAssign(lhs, init, stmtLoc), stmtLoc);
 			}
@@ -648,7 +650,7 @@ function walkLift(node: Node, state: LiftState): void {
 			const fnLoopSyms = frameLoopSyms(d.fnBody, state);
 			walkLiftBody(d.fnBody, state, () => {
 				if (allCaptures.items.length > 0) {
-					setupSharedEnv(state, allCaptures, allCapturedIdents, fnLoc, fnChain.names, fnChain.types, null, fnLoopSyms);
+					setupSharedEnv(state, d.fnBody, allCaptures, allCapturedIdents, fnLoc, fnChain.names, fnChain.types, null, fnLoopSyms);
 				}
 			});
 			popFuncBoundary(state.ss);
@@ -814,7 +816,7 @@ function walkLift(node: Node, state: LiftState): void {
 			const testLoopSyms = frameLoopSyms(d.testBody, state);
 			walkLiftBody(d.testBody, state, () => {
 				if (allCaptures.items.length > 0) {
-					setupSharedEnv(state, allCaptures, allCapturedIdents, testLoc, testChain.names, testChain.types, null, testLoopSyms);
+					setupSharedEnv(state, d.testBody, allCaptures, allCapturedIdents, testLoc, testChain.names, testChain.types, null, testLoopSyms);
 				}
 			});
 			popFuncBoundary(state.ss);
@@ -1247,7 +1249,7 @@ function liftCapturingClosureBody(
 	const bodyLoopSyms = frameLoopSyms(body, state);
 	walkLiftBody(body, state, () => {
 		if (ownCaptures.items.length > 0) {
-			setupSharedEnv(state, ownCaptures, ownCapturedIdents, loc, entryChain.names, entryChain.types, ownLocals, bodyLoopSyms);
+			setupSharedEnv(state, body, ownCaptures, ownCapturedIdents, loc, entryChain.names, entryChain.types, ownLocals, bodyLoopSyms);
 		}
 	});
 	state.capturedIdents = [];
@@ -1469,6 +1471,62 @@ test "a closure env whose nested closure reads an ancestor binding walks $up to 
 test "a closure env whose nested closure calls an ancestor routine with an env walks $up to it" {
 	const fields = envFieldsNamed(checkedLifted("function outer(): int32 { const a: int32 = 1; const get = (): int32 => a; const t = (): int32 => { const b: int32 = 2; const ok = (): int32 => get() + b; return ok(); }; return t(); }"), "arrow");
 	assert fields.length == 2 && fields[0] == "$up", fields.join(",");
+}
+
+function envFieldKind(stmts: Node[], part: string, field: string): TypeKind | null {
+	for (const s of stmts) {
+		if (s.kind != NodeKind.InterfaceDecl || s.nodeType == null || !s.nodeType.typeName.contains(part)) continue;
+		for (let k = 0; k < s.nodeType.typeNames.length; k += 1) {
+			if (s.nodeType.typeNames[k].startsWith(field)) return s.nodeType.typeChildren[k].kind;
+		}
+		return null;
+	}
+	return null;
+}
+
+const LENT = "class Item { v: int32 = 0; next: Item | null = null; }\n";
+
+function envDump(stmts: Node[]): string {
+	let out = "";
+	for (const s of stmts) {
+		if (s.kind != NodeKind.InterfaceDecl || s.nodeType == null) continue;
+		out = out + s.nodeType.typeName + "{";
+		for (let k = 0; k < s.nodeType.typeNames.length; k += 1) out = out + s.nodeType.typeNames[k] + ":" + `${s.nodeType.typeChildren[k].kind}` + " ";
+		out = out + "} ";
+	}
+	return out;
+}
+
+test "a shared env holds a lent local its called closure reads uncounted" {
+	const stmts = checkedLifted(LENT + "function f(a: Readonly<Item[]>): int32 { const best = a[0]; const ok = (x: Readonly<Item>): boolean => x.v >= best.v; let n: int32 = 0; for (const x of a) if (ok(x)) n += 1; return n; }");
+	assert envFieldKind(stmts, "Env_f_shared", "best") == TypeKind.Cursor, envDump(stmts);
+}
+
+test "a shared env holds a borrowed parameter its called closure reads uncounted" {
+	const stmts = checkedLifted(LENT + "function f(a: Readonly<Item[]>, best: Readonly<Item>): int32 { const ok = (x: Readonly<Item>): boolean => x.v >= best.v; let n: int32 = 0; for (const x of a) if (ok(x)) n += 1; return n; }");
+	assert envFieldKind(stmts, "Env_f_shared", "best") == TypeKind.Cursor, envDump(stmts);
+}
+
+test "a shared env keeps a borrowed array parameter its called closure pushes into as a counted field" {
+	const stmts = checkedLifted(LENT + "function walk(n: int32, f: (x: int32) => void): void { f(n); }\nfunction f(out: Item[]): void { walk(1, (x: int32): void => { out.push(new Item()); }); }");
+	assert envFieldKind(stmts, "Env_f_shared", "out") == TypeKind.Ref, envDump(stmts);
+}
+
+test "a shared env holds a lent local counted when its closure is returned" {
+	const stmts = checkedLifted(LENT + "function f(a: Item[]): () => int32 { const best = a[0]; const get = (): int32 => best.v; return get; }");
+	const k = envFieldKind(stmts, "Env_f_shared", "best");
+	assert k != null && k != TypeKind.Cursor, envDump(stmts);
+}
+
+test "a closure env whose closures stay in its routine reaches the enclosing env through an uncounted $up" {
+	const stmts = checkedLifted(LENT + "function outer(a: Readonly<Item[]>): int32 { const t = (): int32 => { const best = a[0]; const ok = (x: Readonly<Item>): boolean => x.v >= best.v && a.length > 0; let n: int32 = 0; for (const x of a) if (ok(x)) n += 1; return n; }; return t(); }");
+	assert envFieldKind(stmts, "arrow", "$up") == TypeKind.Cursor, envDump(stmts);
+	assert envFieldKind(stmts, "arrow", "best") == TypeKind.Cursor, envDump(stmts);
+}
+
+test "a closure env whose closure escapes reaches the enclosing env through a counted $up" {
+	const stmts = checkedLifted(LENT + "const kept: (() => int32)[] = [];\nfunction outer(a: Readonly<Item[]>): int32 { const t = (): int32 => { const best = a[0]; const get = (): int32 => best.v + a.length; kept.push(get); return 0; }; return t(); }");
+	assert envFieldKind(stmts, "arrow", "$up") == TypeKind.Ref, envDump(stmts);
 }
 
 test "a lifted closure is a routine symbol that its closure pair refers to" {

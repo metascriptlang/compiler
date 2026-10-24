@@ -633,6 +633,7 @@ interface A2Job {
 	claims: LowerClaims;
 	asyncModuleBody: boolean;
 	writeTables: WriteSummaries;
+	liftTables: WriteSummaries;
 }
 
 function hasErrorsFrom(ctx: CheckerContext, base: int32): boolean {
@@ -717,7 +718,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const _fx0 = flowStart();
 	const reloadable: string[] = [];
 	if (hcrSlot >= 0) for (const module of job.hcrModules) reloadable.push(module.modulePath);
-	const transformed = transformProgram(comptimeResolved, ctx, false, reloadable, job.asyncModuleBody);
+	const transformed = transformProgram(comptimeResolved, ctx, false, reloadable, job.asyncModuleBody, job.liftTables);
 	job.timers.xform = job.timers.xform + (performance.now() - _tx0);
 	flowStop("a2.xform", _fx0);
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
@@ -2769,6 +2770,7 @@ resetLiftedOps();
 		for (const path of abi.value.modulePaths) hcrModulePaths.push(path);
 	}
 	const writeTables = createWriteSummaries(session.check.db != null ? session.check.db!.routineDecls : createRoutineDecls(), hcrModulePaths);
+	const liftTables = createWriteSummaries(createRoutineDecls(), hcrModulePaths);
 	const projectChanged = session.keep || projectCacheChanged(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 	const hcrBundleCurrent = hcrBuildAbi == null
 		|| (hcrBuildAbi.hadCurrent && hcrBundlesMatch(hcrBuildAbi.current, hcrBuildAbi.candidate));
@@ -2917,6 +2919,7 @@ resetLiftedOps();
 			claims: { ops: [] },
 			asyncModuleBody: asyncBodies.has(modPath),
 			writeTables,
+			liftTables,
 		};
 		let nativeLowered: Node;
 		if (session.keep) {
@@ -3588,6 +3591,7 @@ resetLiftedOps();
 
 	// Phase A2 — mono → transform → analyze → lower, per module (instances now placed).
 	const writeTables = createWriteSummaries(createRoutineDecls(), opts.isHcr ? [filePath] : []);
+	const liftTables = createWriteSummaries(createRoutineDecls(), opts.isHcr ? [filePath] : []);
 	for (const cm of checkedMods) {
 		const program = cm.program;
 		const ctx = cm.ctx;
@@ -3601,7 +3605,7 @@ resetLiftedOps();
 		const macroExpanded = expandMacros(monoed, ctx);
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
-		const transformed = transformProgram(comptimeResolved, ctx, false, opts.isHcr && modPath == filePath ? [filePath] : []);
+		const transformed = transformProgram(comptimeResolved, ctx, false, opts.isHcr && modPath == filePath ? [filePath] : [], false, liftTables);
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		nativeCtx.rangeChecks = opts.mode != MODE_DANGER;

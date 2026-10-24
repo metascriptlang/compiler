@@ -31,6 +31,7 @@ import { Node, NodeKind, ProgramData, SymbolKind } from "../ast/node";
 import { CheckerContext } from "../checker/context";
 import { hasFlag, setFlag, SymbolFlag } from "../checker/symbol";
 import { createTransformContextWithChecker, TransformContext } from "./context";
+import { WriteSummaries } from "../analyzer/writeEffects";
 import { bindCompilerFuncs } from "./util";
 import { flowLap, flowMark } from "../compiler/flows";
 import { lowerDefer } from "./lowering/deferLower";
@@ -119,9 +120,10 @@ function lowerFieldInitializers(program: Node, ctx: TransformContext): Node {
 	return ctx.jsBackend ? result : lowerAwaitSpill(result, ctx);
 }
 
-export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, reloadableModules: string[] = [], asyncModuleBody: boolean = false): Node {
+export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, reloadableModules: string[] = [], asyncModuleBody: boolean = false, liftTables: WriteSummaries | null = null): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.jsBackend = jsBackend;
+	ctx.liftTables = liftTables;
 	ctx.reloadableModules = reloadableModules;
 	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	flowMark();

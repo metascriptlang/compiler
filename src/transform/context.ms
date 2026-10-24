@@ -4,6 +4,7 @@ import { CheckerContext, addError, newSym, stampItem, createContext } from "../c
 import { Type, Symbol, SymbolKind, SymbolState, SourceLocation } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
 import { noneType } from "../checker/types";
+import { WriteSummaries } from "../analyzer/writeEffects";
 
 // Pending tuple type entry — collected by operatorLower, consumed by destructorLifting.
 export interface PendingTupleOp {
@@ -31,6 +32,7 @@ export class TransformContext {
 	actorImpls: HashMap<Symbol, Symbol>;  // actor method → its _impl handler (actor lowering emits async ones in lowerActorPre)
 	jsEnumToStrings: EnumToStringCopy[];
 	tdzFlags: HashMap<Symbol, Symbol>;  // module binding → its initialized flag (moduleTdz); every read and write inside a function is guarded by it
+	liftTables: WriteSummaries | null;
 }
 
 export interface EnumToStringCopy {
@@ -39,7 +41,7 @@ export interface EnumToStringCopy {
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, raiserBackend: false, reloadableModules: [], rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingUnionEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [], tdzFlags: new HashMap<Symbol, Symbol>() };
+	return { tempCounter: 0, errors: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, raiserBackend: false, reloadableModules: [], rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingUnionEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [], tdzFlags: new HashMap<Symbol, Symbol>(), liftTables: null };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {
