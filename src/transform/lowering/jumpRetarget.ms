@@ -12,7 +12,7 @@
 
 import { Node, NodeKind, BreakStmtData, ContinueStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData } from "../../ast/node";
 import { TransformContext } from "../context";
-import { forEachChild } from "../../ast/visitor";
+import { forEachChild, anyDescendant } from "../../ast/visitor";
 import { mapChildren } from "../walker";
 import { makeBreak, makeBool, makeBlock, makeIf, makeUnary, makeSwitchWrapper, extractBodyStmts } from "../util";
 
@@ -64,16 +64,14 @@ function isSwitchWrapper(node: Node): boolean {
 }
 
 function continuesLoop(node: Node, loopLabel: string): boolean {
-	if (node.kind == NodeKind.ContinueStmt) {
-		const label = (node.data as ContinueStmtData).continueLabel;
-		return label == "" || label == loopLabel;
-	}
-	if (isFnBoundary(node.kind) || (isLoopKind(node.kind) && !isSwitchWrapper(node))) return false;
-	let found = false;
-	forEachChild(node, (child: Node): void => {
-		if (!found && continuesLoop(child, loopLabel)) found = true;
-	});
-	return found;
+	return anyDescendant(
+		node,
+		(n: Node): boolean => {
+			if (n.kind != NodeKind.ContinueStmt) return false;
+			const label = (n.data as ContinueStmtData).continueLabel;
+			return label == "" || label == loopLabel;
+		},
+		(n: Node): boolean => isFnBoundary(n.kind) || (isLoopKind(n.kind) && !isSwitchWrapper(n)));
 }
 
 export function hasLoopContinue(stmts: Node[], loopLabel: string): boolean {

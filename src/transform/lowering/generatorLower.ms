@@ -25,7 +25,7 @@ import {
 	IdentifierData, Symbol, SymbolKind, HiddenDerefData, HiddenStdConvData, MemberExprData, ArrayAccessData, TypeAssertionData,
 	isEmptyBlock, makeLoc,
 } from "../../ast/node";
-import { forEachChild } from "../../ast/visitor";
+import { forEachChild, anyChild, anyDescendant } from "../../ast/visitor";
 import { mapChildren } from "../walker";
 import { setFlag, SymbolFlag } from "../../checker/symbol";
 import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult, getProperty } from "../../checker/types";
@@ -445,11 +445,7 @@ function hasEscapingJump(node: Node, sc: StateCollector, capBreak: boolean, capC
 	} else if (node.kind == NodeKind.SwitchStmt) {
 		cb = true;
 	}
-	let found = false;
-	forEachChild(node, (child: Node): void => {
-		if (!found && hasEscapingJump(child, sc, cb, cc, inLoop)) found = true;
-	});
-	return found;
+	return anyChild(node, (child: Node): boolean => hasEscapingJump(child, sc, cb, cc, inLoop));
 }
 
 function needsSplit(stmt: Node, sc: StateCollector): boolean {
@@ -471,14 +467,7 @@ function isGeneratorFlag(flags: string): boolean {
 // ===== Yield Detection =====
 
 export function containsYield(node: Node | null): boolean {
-	if (node == null) return false;
-	if (node.kind == NodeKind.YieldExpr) return true;
-	if (isFnBoundary(node)) return false;
-	let found = false;
-	forEachChild(node, (child: Node): void => {
-		if (!found && containsYield(child)) found = true;
-	});
-	return found;
+	return anyDescendant(node, (n: Node): boolean => n.kind == NodeKind.YieldExpr, isFnBoundary);
 }
 
 function isDirectYield(expr: Node): boolean {

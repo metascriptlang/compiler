@@ -3,7 +3,7 @@ import {
 	VariableDeclData, ClassDeclData, PropertyDeclData, CallExprData, MemberExprData, NewExprData,
 	ExprStmtData, BinaryExprData, UpdateExprData, HiddenDerefData, OutExprData,
 } from "../../ast/node";
-import { forEachChild } from "../../ast/visitor";
+import { forEachChild, anyChild } from "../../ast/visitor";
 import { booleanType } from "../../checker/types";
 import { setFlag } from "../../checker/symbol";
 import { ModuleGraph, Module } from "../../module/graph";
@@ -274,9 +274,7 @@ function reachesLocalCode(n: Node, modulePath: string): boolean {
 			return true;
 		}
 	}
-	let found = false;
-	forEachChild(n, (c: Node): void => { if (!found && reachesLocalCode(c, modulePath)) found = true; });
-	return found;
+	return anyChild(n, (c: Node): boolean => reachesLocalCode(c, modulePath));
 }
 
 function importsByName(mod: Module, from: string, name: string): boolean {

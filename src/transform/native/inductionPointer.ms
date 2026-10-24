@@ -12,7 +12,7 @@ import { Node, NodeKind, DeclKind, Symbol, SymbolKind, Type, TypeKind, BlockStmt
 import { peelTransparentInstance, peelToRepr, createPtr, getSysType, isIntegerType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isComputedGotoMark } from "../../checker/computedGoto";
-import { forEachChild } from "../../ast/visitor";
+import { forEachChild, anyChild, anyDescendant, noStop } from "../../ast/visitor";
 import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, newLoweredSym } from "../context";
 import { walkNode, mapChildren, isAssignOp } from "../walker";
 import { makeBinary, makeIdentResolved, makeMember, makeNumber, makeVarDecl, makeHiddenStdConv, makeUnary } from "../util";
@@ -95,11 +95,7 @@ function hasComputedGotoLoop(n: Node): boolean {
 			}
 		}
 	}
-	let found = false;
-	forEachChild(n, (c: Node): void => {
-		if (!found && hasComputedGotoLoop(c)) found = true;
-	});
-	return found;
+	return anyChild(n, hasComputedGotoLoop);
 }
 
 function collectAssigned(n: Node): void {
@@ -138,12 +134,7 @@ function isOffsetOperand(n: Node): boolean {
 }
 
 function mentions(n: Node, sym: Symbol): boolean {
-	if (n.kind == NodeKind.Identifier && n.resolvedSym == sym) return true;
-	let found = false;
-	forEachChild(n, (c: Node): void => {
-		if (!found && mentions(c, sym)) found = true;
-	});
-	return found;
+	return anyDescendant(n, (m: Node): boolean => m.kind == NodeKind.Identifier && m.resolvedSym == sym, noStop);
 }
 
 // The index variable `n` is a sum of, with every other term free of that variable and an

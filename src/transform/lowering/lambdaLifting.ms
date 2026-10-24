@@ -24,7 +24,7 @@
 import { Node, NodeKind, DeclKind, SourceLocation, NodeFlag, SymbolKind, Symbol, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, BooleanLiteralData, ObjectLiteralData, ArrayLiteralData, TestDeclData, Type, TypeKind } from "../../ast/node";
 import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, mintSym, newLoweredSym } from "../context";
 import { mapChildren, isFuncBoundary, anyDeep, DEEP_DESCEND, DEEP_HIT, DEEP_SKIP } from "../walker";
-import { forEachChild, initializerHoldsClosure } from "../../ast/visitor";
+import { forEachChild, anyChild, initializerHoldsClosure } from "../../ast/visitor";
 import {
 	makeTypedIdentResolved, makeMember, makeMoveExpr, makeReturn, makeBlock, makeVarDecl,
 	makeFnDecl, makeInterfaceDeclFromTypes, makeObjectLiteral, makeHiddenDeref,
@@ -848,11 +848,7 @@ function heldPastIteration(sym: Symbol, state: LiftState): boolean {
 function closureReachesPast(n: Node | null, inner: SymSet, routines: Node[], state: LiftState): boolean {
 	if (n == null) return false;
 	if (!isFuncBoundary(n)) {
-		let found = false;
-		forEachChild(n, (c: Node): void => {
-			if (!found) found = closureReachesPast(c, inner, routines, state);
-		});
-		return found;
+		return anyChild(n, (c: Node): boolean => closureReachesPast(c, inner, routines, state));
 	}
 	const own = createSymSet();
 	const idents: Node[] = [];
