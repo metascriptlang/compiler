@@ -8,6 +8,7 @@ import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
 import { SymbolFlag, findOverloadImpl, hasFlag, overloadWinner, parentClassSymOf } from "./symbol";
 import { functionSlotOf, hasGenericParams, isAtomicRef, isReadonlyView, isSendableFunction, typeCarriesRef } from "./types";
 import { constBindingInitializer } from "./constFold";
+import { ctorRoutineOf } from "./ctorRoutine";
 import { DYNAMIC_IMPORT } from "./importCall";
 
 export enum Effect {
@@ -513,7 +514,7 @@ export function walkEffect(node: Node | null, e: Effect): EffectCause | null {
 	const here: EffectCause | null = match (node.kind) {
 		NodeKind.Identifier | NodeKind.MemberExpr => useEffect(node, e),
 		NodeKind.CallExpr => e == Effect.StoresBorrowed ? sinkStoreOf(node) ?? viewArgEffect(node) ?? callEffect(node, e) : callEffect(node, e),
-		NodeKind.NewExpr => newEffect(node, e),
+		NodeKind.NewExpr => e == Effect.StoresBorrowed ? newViewArgEffect(node) ?? newEffect(node, e) : newEffect(node, e),
 		NodeKind.AwaitExpr => e == Effect.Suspends && !inAsync ? cause(node, "awaits") : null,
 		NodeKind.BinaryExpr | NodeKind.ArrayLiteral | NodeKind.ObjectLiteral => e == Effect.StoresBorrowed ? slotStoreOf(node) : null,
 		_ => null,
@@ -758,18 +759,33 @@ function sinkStoreOf(call: Node): EffectCause | null {
 // A callee reached with a borrowed argument stores it when its body, or the body of an override
 // the call may dispatch to, stores that parameter, as the task would store the argument itself.
 function viewArgEffect(call: Node): EffectCause | null {
-	const sym = call.resolvedSym;
+	const callee = (call.data as CallExprData).callee;
+	const sym = isSuperCall(callee) ? callee!.resolvedSym : call.resolvedSym;
 	if (!isRoutine(sym)) return null;
 	const shift = call.flags.has(NodeFlag.ExtCall) ? 1 : 0;
 	const passed: (Node | null)[] = shift == 1 ? [receiverOf(call)] : [];
 	for (const a of (call.data as CallExprData).arguments) passed.push(a);
-	const callee = (call.data as CallExprData).callee;
-	const name = callee != null && callee.kind == NodeKind.MemberExpr ? (callee.data as MemberExprData).property : sym!.name;
+	const name = callee != null && callee.kind == NodeKind.MemberExpr ? (callee.data as MemberExprData).property : isSuperCall(callee) ? "super" : sym!.name;
 	const targets: Symbol[] = [sym!];
 	const entry = dispatchEntryFor(sym!);
 	if (entry != null && !entry.overloaded) {
 		for (const o of dispatchOverridesFor(entry.classSym, entry.methodName)) targets.push(o.sym);
 	}
+	return passedViewEffect(call, passed, targets, name);
+}
+
+function newViewArgEffect(newNode: Node): EffectCause | null {
+	const d = newNode.data as NewExprData;
+	const classSym = d.newCallee.resolvedSym;
+	const ctor = ctorRoutineOf(classSym);
+	if (ctor == null) return null;
+	const passed: (Node | null)[] = [];
+	for (const a of d.newArguments) passed.push(a);
+	const written = d.newCallee.kind == NodeKind.Identifier ? (d.newCallee.data as IdentifierData).name : classSym!.name;
+	return passedViewEffect(newNode, passed, [ctor], "new " + written);
+}
+
+function passedViewEffect(call: Node, passed: (Node | null)[], targets: Symbol[], name: string): EffectCause | null {
 	for (let i = 0; i < passed.length; i += 1) {
 		const what = borrowedOf(passed[i]);
 		if (what == null) continue;
