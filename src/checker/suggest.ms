@@ -8,7 +8,7 @@ import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, Dec
 import { forEachChild } from "../ast/visitor";
 import { typeNameOf, unwrapRef, numberType, stringType, booleanType, voidType, nullType, noneType, isUnresolvedType, neverType, errorType, isResult, getResultOkType, getResultErrType, isAffineAwaitable, isMaybeType } from "./types";
 import { ScopeKind, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, filterStaticExtsByOwner, getExtFnType, stripReceiverParam, SgSymRecord } from "./context";
+import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, filterStaticExtsByOwner, getExtFnType, stripReceiverParam, SgSymRecord, sgSortRecords } from "./context";
 // (utils/string imports removed — using native .slice/.charAt)
 import { checkProgram } from "./checkPass";
 import { parseSource, parseSourceLenient } from "../parser/statements/validation";
@@ -120,9 +120,14 @@ function findCallExprHelper(node: Node, line: int32, col: int32): Node | null {
 // Replaces the fragile AST walker (sgFindNodeAtPosition + sgGetSymbolAtCursor).
 // Records are sorted by (line, col) after check completes.
 
+function sortedRecords(ctx: CheckerContext): SgSymRecord[] {
+	sgSortRecords(ctx.symRecords);
+	return ctx.symRecords;
+}
+
 export function sgQueryAtPosition(ctx: CheckerContext, line: int32, col: int32): SgSuggest {
 	if (ctx.symRecords == null || ctx.symRecords.length == 0) return null as unknown as SgSuggest;
-	const records = ctx.symRecords;
+	const records = sortedRecords(ctx);
 	// Binary search for first record on this line
 	let lo = 0;
 	let hi = records.length - 1;
@@ -152,7 +157,7 @@ export function sgQueryAtPosition(ctx: CheckerContext, line: int32, col: int32):
 // contextual type when completing object fields.
 export function sgQueryContextualTypeAt(ctx: CheckerContext, line: int32, col: int32): SgSuggest {
 	if (ctx.symRecords == null || ctx.symRecords.length == 0) return null as unknown as SgSuggest;
-	const records = ctx.symRecords;
+	const records = sortedRecords(ctx);
 	let lo = 0;
 	let hi = records.length - 1;
 	while (lo <= hi) {
@@ -207,7 +212,7 @@ function sgSuggestFromRecord(rec: SgSymRecord): SgSuggest {
 export function sgQueryBySym(ctx: CheckerContext, targetSym: Symbol | null): SgSymbolRef[] {
 	const result: SgSymbolRef[] = [];
 	if (ctx.symRecords == null || targetSym == null) return result;
-	const records = ctx.symRecords;
+	const records = sortedRecords(ctx);
 	let i = 0;
 	while (i < records.length) {
 		const rec = records[i];
@@ -223,7 +228,7 @@ export function sgQueryBySym(ctx: CheckerContext, targetSym: Symbol | null): SgS
 export function sgQueryByName(ctx: CheckerContext, name: string, modulePath: string): SgSymbolRef[] {
 	const result: SgSymbolRef[] = [];
 	if (ctx.symRecords == null) return result;
-	const records = ctx.symRecords;
+	const records = sortedRecords(ctx);
 	let i = 0;
 	while (i < records.length) {
 		const rec = records[i];
@@ -242,7 +247,7 @@ export function sgQueryByName(ctx: CheckerContext, name: string, modulePath: str
 export function sgQueryByDefiningModule(ctx: CheckerContext, name: string, defModule: string): SgSymbolRef[] {
 	const result: SgSymbolRef[] = [];
 	if (ctx.symRecords == null) return result;
-	const records = ctx.symRecords;
+	const records = sortedRecords(ctx);
 	let i = 0;
 	while (i < records.length) {
 		const rec = records[i];
@@ -1097,7 +1102,7 @@ function sgPrefixMatch(prefix: string, name: string): number {
 function sgCountSymUsages(ctx: CheckerContext, targetSym: Symbol): number {
 	if (ctx.symRecords == null || targetSym == null) return 0;
 	let count = 0;
-	const records = ctx.symRecords;
+	const records = sortedRecords(ctx);
 	for (let i = 0; i < records.length; i = i + 1) {
 		if (records[i].sym == targetSym) count = count + 1;
 	}
@@ -2702,7 +2707,7 @@ export function sgCollectSemanticTokens(ctx: CheckerContext, program: Node): SgS
 	const result: SgSemanticToken[] = [];
 	const recorded = new HashSet<string>();
 	if (ctx.symRecords != null) {
-		for (const rec of ctx.symRecords) {
+		for (const rec of sortedRecords(ctx)) {
 			const sym = rec.sym;
 			if (sym == null || rec.colEnd <= rec.col || isKeywordRecord(rec)) continue;
 			const at = `${rec.line}:${rec.col}`;
