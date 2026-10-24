@@ -35,3 +35,47 @@ test "generatorControl: generator return and normal completion each execute spli
 	assert collectIterator(finalizingReturn(false)) == "123";
 	assert finallyTrace == "fin;fin;";
 }
+
+function firstAbove(limit: int32): int32 {
+	for (const value of finalizingReturn(false)) {
+		if (value > limit) return value;
+	}
+	return -1;
+}
+
+test "generatorControl: leaving a for..of early by break, return or throw runs the generator's finally once" {
+	finallyTrace = "";
+	for (const value of finalizingReturn(false)) {
+		if (value == 1) break;
+	}
+	assert finallyTrace == "fin;";
+	assert firstAbove(1) == 2;
+	assert finallyTrace == "fin;fin;";
+	try {
+		for (const value of finalizingReturn(false)) {
+			if (value == 2) throw new Error("left");
+		}
+	} catch (e) {
+		finallyTrace += "caught;";
+	}
+	assert finallyTrace == "fin;fin;fin;caught;";
+}
+
+function* throwingFinally(stop: boolean): Iterator<int32> {
+	try { yield 1; if (stop) return; yield 2; }
+	finally { finallyTrace += "fin;"; throw new Error("fin"); }
+}
+
+test "generatorControl: a return crossing a finally that throws runs that finally once and raises its error" {
+	for (const stop of [true, false]) {
+		finallyTrace = "";
+		let caught = "";
+		try {
+			collectIterator(throwingFinally(stop));
+		} catch (e) {
+			caught = (e as Error).message;
+		}
+		assert finallyTrace == "fin;";
+		assert caught == "fin";
+	}
+}
