@@ -10,8 +10,8 @@ import {
 } from "../../ast/node";
 import { isStructType } from "../../checker/types";
 import { TransformContext, newLoweredSym } from "../context";
-import { isAssignOp } from "../walker";
-export { isAssignOp } from "../walker";
+import { isAssignOp } from "../../ast/operators";
+export { isAssignOp } from "../../ast/operators";
 import { makeVarDecl, makeTypedIdentResolved, makeBinary, isValueLayoutType } from "../util";
 import { cloneIfPure } from "../place";
 

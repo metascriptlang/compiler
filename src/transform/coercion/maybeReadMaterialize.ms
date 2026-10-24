@@ -25,6 +25,7 @@ import { walkNode } from "../walker";
 import { makeMember, makeBinary } from "../util";
 import { unwrapRefusesNull, wrapMaybeValue } from "../native/nullableLower";
 import { cloneIfPure } from "../place";
+import { isAssignOp, isLogicalAssignOp } from "../../ast/operators";
 
 export function materializeMaybeReads(program: Node, ctx: TransformContext): Node {
 	const project = !ctx.jsBackend && !ctx.raiserBackend;
@@ -37,14 +38,8 @@ function carriesTaggedUnion(carrier: Type | null): boolean {
 	return payload != null && payload.kind == TypeKind.Union && storesUnionTag(payload);
 }
 
-function isAssignOp(op: string): boolean {
-	if (op == "=") return true;
-	if (op.length < 2 || op.charAt(op.length - 1) != "=") return false;
-	return op != "==" && op != "!=" && op != "===" && op != "!==" && op != "<=" && op != ">=";
-}
-
 function isCompoundStoreOp(op: string): boolean {
-	return op != "=" && op != "&&=" && op != "||=" && op != "??=";
+	return op != "=" && !isLogicalAssignOp(op);
 }
 
 // `x op= y` on a narrowed carrier stores what `x = x op y` stores: the checker wraps the

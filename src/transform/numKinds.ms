@@ -33,7 +33,3 @@ export function bitsOfKind(kind: TypeKind): int32 {
 		_ => 0,
 	};
 }
-
-export function isShiftOp(op: string): boolean {
-	return op == "<<" || op == ">>" || op == ">>>";
-}

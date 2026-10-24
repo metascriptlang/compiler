@@ -33,7 +33,8 @@ import { walkNode } from "../walker";
 import { makeBinary, makeCall, runtimeRef, makeMember, makeNumber, generatedRef } from "../util";
 import { truncateTo, isIntConvKind } from "./intConvJS";
 import { cloneIfPure } from "../place";
-import { is64Kind, isSignedKind, bitsOfKind, isShiftOp } from "../numKinds";
+import { is64Kind, isSignedKind, bitsOfKind } from "../numKinds";
+import { isShiftOp } from "../../ast/operators";
 
 export { cloneIfPure } from "../place";
 

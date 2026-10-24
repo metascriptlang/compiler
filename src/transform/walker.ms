@@ -5,7 +5,7 @@ import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, CallExpr
 import { Visitor, mapChildren, isFuncBoundary, forEachChild } from "../ast/visitor";
 
 export { mapChildren, isFuncBoundary } from "../ast/visitor";
-export { hasEffect, isAssignOp, walkOnceEvaluated, OnceEvalState, OnceEvalVisitor } from "./walkEffects";
+export { hasEffect, walkOnceEvaluated, OnceEvalState, OnceEvalVisitor } from "./walkEffects";
 export { walkExpandBlocks, walkExpandBlocksHooked, walkBlockExpanding, expandingInsideTry, FnEntryHook, FnExitHook } from "./blockExpand";
 
 // ===== 1:1 Walk =====

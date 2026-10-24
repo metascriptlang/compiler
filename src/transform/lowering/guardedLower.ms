@@ -8,7 +8,8 @@
 
 import { Node, NodeKind, DeclKind, TypeKind, WhileStmtData, DoWhileStmtData, ForStmtData, SwitchStmtData, AssertStmtData, IfStmtData, VariableDeclData, ExprStmtData, BinaryExprData, ConditionalExprData } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { containsExprKind, mapExprChildren, isAssignOp } from "../walker";
+import { containsExprKind, mapExprChildren } from "../walker";
+import { isEagerAssignOp } from "../../ast/operators";
 import { lowerForStmt } from "./forLoopLower";
 import { moveDoWhileTestIntoBody, moveWhileTestIntoBody } from "./jumpRetarget";
 import { Spiller, lowerOperandList, lowerAssign } from "./operandOrder";
@@ -47,7 +48,7 @@ export function hoistGuarded(expr: Node, kind: NodeKind, hoistKind: KindHoister,
 	};
 	if (expr.kind == NodeKind.BinaryExpr) {
 		const op = (expr.data as BinaryExprData).operator;
-		if (isAssignOp(op) && op != "&&=" && op != "||=" && op != "??=") return lowerAssign(sp, expr, hoisted);
+		if (isEagerAssignOp(op)) return lowerAssign(sp, expr, hoisted);
 	}
 	if (lowerOperandList(sp, expr, hoisted)) return expr;
 	mapExprChildren(expr, (child: Node): Node => hoistGuarded(child, kind, hoistKind, hoisted, ctx));

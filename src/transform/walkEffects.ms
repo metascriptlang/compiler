@@ -1,15 +1,11 @@
 import { Node, NodeKind, BinaryExprData, ForStmtData, IfStmtData, ConditionalExprData } from "../ast/node";
 import { forEachChild, anyDescendant, isFuncBoundary } from "../ast/visitor";
+import { isAssignOp } from "../ast/operators";
 
 function isEffectNode(n: Node): boolean {
 	if (n.kind == NodeKind.CallExpr || n.kind == NodeKind.NewExpr || n.kind == NodeKind.UpdateExpr
 		|| n.kind == NodeKind.AwaitExpr || n.kind == NodeKind.YieldExpr || n.kind == NodeKind.OutExpr) return true;
 	return n.kind == NodeKind.BinaryExpr && isAssignOp((n.data as BinaryExprData).operator);
-}
-
-export function isAssignOp(op: string): boolean {
-	if (op == "==" || op == "!=" || op == "===" || op == "!==" || op == "<=" || op == ">=") return false;
-	return op.endsWith("=");
 }
 
 export function hasEffect(n: Node): boolean {

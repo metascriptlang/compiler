@@ -14,7 +14,8 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isComputedGotoMark } from "../../checker/computedGoto";
 import { forEachChild, anyChild, anyDescendant, noStop } from "../../ast/visitor";
 import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, newLoweredSym } from "../context";
-import { walkNode, mapChildren, isAssignOp } from "../walker";
+import { walkNode, mapChildren } from "../walker";
+import { isAssignOp } from "../../ast/operators";
 import { makeBinary, makeIdentResolved, makeMember, makeNumber, makeVarDecl, makeHiddenStdConv, makeUnary } from "../util";
 
 class Pairing {

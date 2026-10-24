@@ -24,7 +24,8 @@ import { makeBinary, makeCall, makeMember, makeNumber, generatedRef, runtimeRef 
 import { createPrimitive, isIntegerType, peelToRepr, literalUnionBase } from "../../checker/types";
 import { int64ToDecimal, uint64ToDecimal } from "../../utils/string";
 import { cloneIfPure } from "../place";
-import { is64Kind, isSignedKind, isFloatKind, isNarrowIntKind, bitsOfKind, isShiftOp } from "../numKinds";
+import { is64Kind, isSignedKind, isFloatKind, isNarrowIntKind, bitsOfKind } from "../numKinds";
+import { isEagerAssignOp, isComparisonOp, isShiftOp } from "../../ast/operators";
 import { makeRangeCheckFor } from "../native/rangeCheckInject";
 
 export function lowerBigIntJS(program: Node, ctx: TransformContext): Node {
@@ -192,7 +193,7 @@ function binaryAsBigInt(node: Node, ctx: TransformContext): Node {
 	const d = node.data as BinaryExprData;
 	const leftT = d.left != null ? d.left.nodeType : null;
 	const rightT = d.right != null ? d.right.nodeType : null;
-	if (isAssignOp(d.operator)) return assignAsBigInt(node, ctx);
+	if (isEagerAssignOp(d.operator)) return assignAsBigInt(node, ctx);
 	if (isComparisonOp(d.operator)) {
 		if (is64Type(leftT) && isNarrowIntType(rightT)) { d.right = bigIntOf(d.right, node.location); return node; }
 		if (is64Type(rightT) && isNarrowIntType(leftT)) { d.left = bigIntOf(d.left, node.location); return node; }
@@ -368,18 +369,3 @@ function asTyped(node: Node, kind: TypeKind): Node {
 
 // ===== Classifiers =====
 
-function isAssignOp(op: string): boolean {
-	return match (op) {
-		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "**=" => true,
-		"<<=" | ">>=" | ">>>=" | "&=" | "|=" | "^=" => true,
-		_ => false,
-	};
-}
-
-function isComparisonOp(op: string): boolean {
-	return match (op) {
-		"===" | "!==" | "==" | "!=" => true,
-		"<" | "<=" | ">" | ">=" => true,
-		_ => false,
-	};
-}
