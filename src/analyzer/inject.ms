@@ -1945,8 +1945,7 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	dctx.finallyProtectedVars = collectFinallyVars(body);
 
 	// Phase B: infer cursor (borrowed) variables for this function
-	inferCursors(dctx.writes, body);
-	dctx.callerDefs = callerDefsOf(dctx.writes, body);
+	dctx.callerDefs = inferCursors(dctx.writes, body) ?? callerDefsOf(dctx.writes, body);
 
 	// Phase C: set function body for CFG-based last-read analysis
 	dctx.currentFuncBody = body;
@@ -2746,8 +2745,7 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	}
 	pushScope(dctx, false, false);
 	dctx.finallyProtectedVars = collectFinallyVars(program);
-	inferCursors(dctx.writes, program);
-	dctx.callerDefs = callerDefsOf(dctx.writes, program);
+	dctx.callerDefs = inferCursors(dctx.writes, program) ?? callerDefsOf(dctx.writes, program);
 	dctx.currentFuncBody = program;
 	clearCfgCache(dctx.cfgCache);
 	d.programStmts = processStmtList(d.programStmts, dctx, program.location);

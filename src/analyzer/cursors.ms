@@ -885,9 +885,9 @@ function dropViewsOfOwners(p: Partitions, chosen: Symbol[]): Symbol[] {
 // ===== Public API =====
 
 // Main entry point — called once per function body, before DRC injection.
-export function inferCursors(w: WriteEffects, body: Node): void {
-	if (body == null) return;
-	if (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program) return;
+export function inferCursors(w: WriteEffects, body: Node): LocalDefs | null {
+	if (body == null) return null;
+	if (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program) return null;
 
 	analysis = w;
 	const p = createPartitions();
@@ -910,9 +910,11 @@ export function inferCursors(w: WriteEffects, body: Node): void {
 	trav(w, p, body);
 
 	// Decision: which variables can safely be cursors?
-	const chosen = computeCursorDecisions(w, p, callerDefsOf(w, body));
+	const defs = callerDefsOf(w, body);
+	const chosen = computeCursorDecisions(w, p, defs);
 	analysis = null;
 	for (const sym of chosen) { setFlag(sym, SymbolFlag.Cursor); }
+	return defs;
 }
 
 // ===== Tests =====

@@ -677,7 +677,7 @@ function routinesOf(w: WriteEffects, value: Node, params: Symbol[] | null, assig
 	}
 	if (assigned != null && paramIndex(params, sym) >= 0 && !assigned.has(sym)) return true;
 	if (d == null || depth >= 8 || !isLocal(sym) || d.spoiled.has(sym)) return false;
-	const k = d.syms.indexOf(sym);
+	const k = d.index.get(sym) ?? -1;
 	if (k < 0) return false;
 	for (const src of d.sources[k]) {
 		if (!routinesOf(w, src, params, assigned, d, depth + 1, out)) return false;
@@ -714,6 +714,7 @@ function freshBase(n: Node, fresh: HashSet<Symbol> | null): boolean {
 
 export class LocalDefs {
 	syms: Symbol[];
+	index: HashMap<Symbol, int32>;
 	sources: Node[][];
 	spoiled: HashSet<Symbol>;
 }
@@ -723,11 +724,12 @@ function addDef(d: LocalDefs, target: Node | null, source: Node): void {
 	const t = skipConvDfa(target);
 	const sym = t.kind == NodeKind.Identifier || t.kind == NodeKind.VariableDecl ? t.resolvedSym : null;
 	if (!isLocal(sym)) return;
-	let k = d.syms.indexOf(sym!);
+	let k: int32 = d.index.get(sym!) ?? -1;
 	if (k < 0) {
 		d.syms.push(sym!);
 		d.sources.push([]);
-		k = d.syms.length - 1;
+		k = (d.syms.length - 1) as int32;
+		d.index.set(sym!, k);
 	}
 	d.sources[k].push(source);
 }
@@ -799,7 +801,7 @@ function isFreshExpr(w: WriteEffects, s: WriteSummary, e: Node | null, fresh: Ha
 // A local is fresh when every value it is given is an object allocated during this call:
 // a construction, a literal, a call that returns a new object, or another fresh local.
 function localDefs(w: WriteEffects, body: Node): LocalDefs {
-	const d: LocalDefs = { syms: [], sources: [], spoiled: new HashSet<Symbol>() };
+	const d: LocalDefs = { syms: [], index: new HashMap<Symbol, int32>(), sources: [], spoiled: new HashSet<Symbol>() };
 	collectDefs(w, d, body, false);
 	return d;
 }
@@ -1104,7 +1106,7 @@ function pathFromParams(w: WriteEffects, n: Node, params: Symbol[] | null, d: Lo
 			if (!isLocal(sym) || d.spoiled.has(sym)) return false;
 			if (seen.has(sym)) return true;
 			seen.add(sym);
-			const k = d.syms.indexOf(sym);
+			const k = d.index.get(sym) ?? -1;
 			if (k < 0) return false;
 			for (const src of d.sources[k]) {
 				if (!pathFromParams(w, src, params, d, seen, out)) return false;
