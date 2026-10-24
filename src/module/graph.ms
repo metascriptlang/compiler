@@ -76,6 +76,7 @@ export class CircularDep {
 export class ModuleGraph {
 	modules: Module[];         // all loaded modules
 	modulePaths: string[];     // parallel: absolute paths (for lookup)
+	moduleIndex: HashMap<string, int32>;
 	loadOrder: string[];       // topological order for checking
 	importStack: string[];     // current loading stack (cycle detection)
 	errors: string[];          // graph-level errors
@@ -89,6 +90,7 @@ export function createModuleGraph(): ModuleGraph {
 	return {
 		modules: [],
 		modulePaths: [],
+		moduleIndex: new HashMap<string, int32>(),
 		loadOrder: [],
 		importStack: [],
 		errors: [],
@@ -127,10 +129,13 @@ export function findModule(graph: ModuleGraph, path: string): Module {
 }
 
 export function findModuleIndex(graph: ModuleGraph, path: string): int32 {
-	for (let i = 0; i < graph.modulePaths.length; i += 1) {
-		if (graph.modulePaths[i] == path) return i;
+	if (graph.moduleIndex.size != graph.modulePaths.length) {
+		const held = graph.moduleIndex.size;
+		const count = graph.modulePaths.length;
+		throw new Error(`internal: module index holds ${held} paths for ${count} modules; append through addModule`);
 	}
-	return -1;
+	const at = graph.moduleIndex.get(path);
+	return at != null ? at : -1;
 }
 
 export function hasModule(graph: ModuleGraph, path: string): boolean {
@@ -138,6 +143,8 @@ export function hasModule(graph: ModuleGraph, path: string): boolean {
 }
 
 export function addModule(graph: ModuleGraph, mod: Module): void {
+	if (graph.moduleIndex.has(mod.path)) throw new Error(`internal: module '${mod.path}' added twice`);
+	graph.moduleIndex.set(mod.path, graph.modules.length as int32);
 	graph.modules.push(mod);
 	graph.modulePaths.push(mod.path);
 }
