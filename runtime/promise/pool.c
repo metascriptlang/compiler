@@ -138,6 +138,18 @@ static inline void msPoolSkipClaimed(msThreadPool* pool) {
 	}
 }
 
+/* A claimed slot behind an unclaimed head stays counted until the head moves; at capacity
+ * dropping them keeps a spawn queued instead of run inline on its caller. */
+static void msPoolDropClaimed(msThreadPool* pool) {
+	int w = pool->head;
+	for (int i = pool->head; i != pool->tail; i = (i + 1) % pool->cap) {
+		if (pool->queue[i].claimed) continue;
+		pool->queue[w] = pool->queue[i];
+		w = (w + 1) % pool->cap;
+	}
+	pool->tail = w;
+}
+
 static inline bool msPoolHasUnclaimed(msThreadPool* pool) {
 	for (int i = pool->head; i != pool->tail; i = (i + 1) % pool->cap) {
 		if (!pool->queue[i].claimed) return true;
@@ -526,6 +538,7 @@ void msPoolSubmit(struct msSpawnCtx* ctx) {
 
 	/* Under lock: only check queue capacity and shutdown.
 	 * busyCount authority is the lock-free atomic (adjusted by Change 2 dec/inc in wait). */
+	if (msPoolQueueLen(pool) >= pool->cap - 1) msPoolDropClaimed(pool);
 	if (msPoolQueueLen(pool) >= pool->cap - 1 || pool->shutdown) {
 		MS_UNLOCK(pool);
 		msSpawnWorkerRun(ctx);
