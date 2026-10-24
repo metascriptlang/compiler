@@ -100,6 +100,7 @@ import "./preludeBodyCompiledOnce";
 import "./moduleParsedOnce";
 import "./bitSetCaseLabel";
 import "./checkTakesParse";
+import "./hostCallbackBeforeBody";
 import "./comptimeStatement";
 import "./comptimeValues";
 import "./declarationBoundaries";

@@ -52,15 +52,23 @@ function checkHostBridgeCoverage(sym: Symbol, callee: Node): string {
 
 let _stdRoot = "";
 
-function stdRoutineName(sym: Symbol): string {
-	if (sym.symbolKind != SymbolKind.Function || sym.modulePath == "") return "";
+// The qualified name a host callback is registered under: the declaring module and the declared
+// name, with no signature, so one callback serves every overload and every instance of a generic.
+export function hostRoutineKey(sym: Symbol): string {
+	const origin = sym.instantiatedFrom != null ? sym.instantiatedFrom : sym;
+	if (origin.symbolKind != SymbolKind.Function || origin.modulePath == "") return "";
 	if (_stdRoot == "") _stdRoot = resolveRuntimeDir() + "/std/";
-	if (!sym.modulePath.startsWith(_stdRoot)) return "";
-	let module = sym.modulePath.slice(_stdRoot.length);
+	if (!origin.modulePath.startsWith(_stdRoot)) return "";
+	let module = origin.modulePath.slice(_stdRoot.length);
 	const dot = module.lastIndexOf(".");
 	if (dot > module.lastIndexOf("/")) module = module.slice(0, dot);
 	if (module.endsWith("/index")) module = module.slice(0, module.length - "/index".length);
-	return `std/${module}.${sym.name}`;
+	return `std/${module}.${origin.name}`;
+}
+
+export function hasHostCallback(sym: Symbol): boolean {
+	const key = hostRoutineKey(sym);
+	return key != "" && lookupHost(key) != null;
 }
 
 function holdsValue(sym: Symbol): boolean {
@@ -79,9 +87,8 @@ export function compileHostForward(s: RaiserCompState, hostName: string, params:
 
 export function runtimeHostName(sym: Symbol): string {
 	if (holdsValue(sym)) return "";
+	if (hasHostCallback(sym)) return hostRoutineKey(sym);
 	if (sym.nativeName != "") return sym.nativeName;
-	const routine = stdRoutineName(sym);
-	if (routine != "" && lookupHost(routine) != null) return routine;
 	if (sym.declNode != null || !sym.symFlags.has(SymbolFlag.ImportC)) return "";
 	return lookupHost(sym.name) != null ? sym.name : "";
 }
@@ -1795,7 +1802,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		const sym = d.callee.resolvedSym;
 		const hostName = runtimeHostName(sym);
 		if (hostName != "") {
-			if (sym.nativeName != "") checkHostBridgeCoverage(sym, d.callee);
+			if (hostName == sym.nativeName) checkHostBridgeCoverage(sym, d.callee);
 			const hostArgs = hostValues(d.arguments);
 			const dest = callBlock(s, node.nodeType, hostArgs, null);
 			emitCallArgs(s, dest, hostArgs);
@@ -1818,8 +1825,9 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 				&& hasStringType((d.callee.data as MemberExprData).object)) {
 			return compileStrIndexRead(s, node, sym.nativeName == "msStringByteAt" ? RaiserOpcode.StrByteAt : RaiserOpcode.StrCharCodeAt);
 		}
-		if (sym.nativeName != "" && !holdsValue(sym)) {
-			checkHostBridgeCoverage(sym, d.callee);
+		const hostName = runtimeHostName(sym);
+		if (hostName != "") {
+			if (hostName == sym.nativeName) checkHostBridgeCoverage(sym, d.callee);
 			const isStatic = node.flags.has(NodeFlag.ExtStatic);
 			const md = d.callee.data as MemberExprData;
 			const allArgs: Node[] = [];
@@ -1828,7 +1836,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 			const hostArgs = hostValues(allArgs);
 			const dest = callBlock(s, node.nodeType, hostArgs, null);
 			emitCallArgs(s, dest, hostArgs);
-			const nameIdx = addConst(s, raiserConstString(sym.nativeName));
+			const nameIdx = addConst(s, raiserConstString(hostName));
 			emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, allArgs.length));
 			return dest;
 		}
