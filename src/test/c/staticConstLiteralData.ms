@@ -37,3 +37,34 @@ console.log(FACES[1]);
 	assert c.ok;
 	assert c.value.contains(".data[0] = ");
 }
+
+test "a module const string array of literals is a flagged static payload" {
+	const c = compileToC(`
+const NAMES: string[] = ["alpha", "beta", "gamma"];
+console.log(NAMES[1]);
+`);
+	assert c.ok;
+	assert c.value.contains("_data_ = { MS_STRLIT_FLAG | 3, { MS_STRING_LIT(");
+	assert !c.value.contains("msStringArrayFromArr(");
+	assert !c.value.contains("msArrayPayloadNew(");
+}
+
+test "a module const int array of literals is a flagged static payload" {
+	const c = compileToC(`
+const NUMS: int32[] = [1, 2, 3, 4];
+console.log(NUMS[1]);
+`);
+	assert c.ok;
+	assert c.value.contains("_data_ = { MS_STRLIT_FLAG | 4, { 1, 2, 3, 4 } };");
+	assert !c.value.contains("msArrayPayloadNew(");
+}
+
+test "a module const array with a non-literal element is still built by init code" {
+	const c = compileToC(`
+function f(): string { return "x"; }
+const NAMES: string[] = ["alpha", f()];
+console.log(NAMES[1]);
+`);
+	assert c.ok;
+	assert !c.value.contains("MS_STRLIT_FLAG | 2");
+}
