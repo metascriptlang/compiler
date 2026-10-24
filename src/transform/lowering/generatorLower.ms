@@ -37,10 +37,10 @@ import {
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
 	makeIf, makeWhile, makeBinary, makeAssign, makeContinue, makeCall,
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
-	makeTryCatch, makeCatchSym, makeMoveExpr,
+	makeTryCatch, makeTryFinally, makeCatchSym, makeMoveExpr, makeString,
 	makeSwitch, makeSwitchCase, makeDefaultValue,
 } from "../util";
-import { int32Type, createPtr, createPrimitive, numberType, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
+import { int32Type, booleanType, createPtr, createPrimitive, numberType, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { isGenericFn } from "../../checker/context";
 import { isOnceLoop, collectIterationDecls, routineSyms, refsAnySym } from "./lambdaLiftingDetect";
@@ -529,6 +529,17 @@ function makeCloseCheck(opSym: Symbol, loc: SourceLocation): Node {
 	const closing = makeBinary(makeTypedIdentResolved(opSym, int32Type(), loc), "===", makeNumber(CLOSE_OP, loc), loc);
 	const consume = makeExprStmt(makeAssign(makeTypedIdentResolved(opSym, int32Type(), loc), makeNumber(0, loc), loc), loc);
 	return makeIf(closing, makeBlock([consume, makeReturn(null, loc)], loc), null, loc);
+}
+
+const RUNNING_MESSAGE = "Generator is already running";
+
+function makeRunningCheck(runSym: Symbol, loc: SourceLocation): Node {
+	const raise = createNode(NodeKind.ThrowStmt, { throwArg: makeString(RUNNING_MESSAGE, loc) }, syntheticToken(loc));
+	return makeIf(makeTypedIdentResolved(runSym, booleanType(), loc), makeBlock([raise], loc), null, loc);
+}
+
+function makeRunningAssign(runSym: Symbol, value: boolean, loc: SourceLocation): Node {
+	return makeExprStmt(makeAssign(makeTypedIdentResolved(runSym, booleanType(), loc), makeBool(value, loc), loc), loc);
 }
 
 function withCloseChecks(stmts: Node[], opSym: Symbol, loc: SourceLocation): Node[] {
@@ -1138,7 +1149,9 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	const loop = makeWhile(makeBool(true, loc), dispatchBody, loc);
 
 	// 8. Build the resume body
-	const resumeBody = makeBlock([...hoisted, loop], loc);
+	const runSym = newLoweredSym(ctx, SymbolKind.Variable, "$running", booleanType(), true);
+	const guarded = makeTryFinally(makeBlock([...hoisted, loop], loc), makeBlock([makeRunningAssign(runSym, false, loc)], loc), loc);
+	const resumeBody = makeBlock([makeRunningCheck(runSym, loc), makeRunningAssign(runSym, true, loc), guarded], loc);
 
 	// 9. Create the FunctionExprs with proper return type (IteratorResult<T>)
 	// Lambda lifting uses nodeType to determine the lifted function's return type.
@@ -1152,7 +1165,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	const setOp = makeExprStmt(makeAssign(makeTypedIdentResolved(opSym, int32Type(), loc), makeNumber(CLOSE_OP, loc), loc), loc);
 	const resumeCall = makeCall(makeTypedIdentResolved(resumeSym, nextFnType, loc), [], loc);
 	resumeCall.nodeType = iterResultType;
-	const closeFn = makeResultFn(makeBlock([setOp, makeReturn(resumeCall, loc)], loc), nextFnType, loc);
+	const closeFn = makeResultFn(makeBlock([makeRunningCheck(runSym, loc), setOp, makeReturn(resumeCall, loc)], loc), nextFnType, loc);
 
 	// 10. Build iterator object: { next, return } over the one resume routine
 	// Set nodeType to Iterator so C codegen emits the named struct, not anonymous.
@@ -1174,6 +1187,9 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 		opDecl.resolvedSym = opSym;
 		newBodyStmts.push(opDecl);
 	}
+	const runDecl = makeVarDecl(runSym.name, makeBool(false, loc), DeclKind.Let, loc);
+	runDecl.resolvedSym = runSym;
+	newBodyStmts.push(runDecl);
 	if (hasExc) newBodyStmts.push(makeCurExcDecl(sc, loc));
 	for (const sym of lifted.items) {
 		// Stamp original nodeType so lambda lifting creates correctly-typed env fields.
