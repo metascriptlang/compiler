@@ -23,7 +23,7 @@
 
 import { Node, NodeKind, NodeFlag, MemberExprData, ObjectLiteralData, TypeAssertionData } from "../../ast/node";
 import { isMaybeType, peelTransparentInstance, isNullableBigInt } from "../../checker/types";
-import { nullAccessHead, unwrapRefusesNull } from "./nullableLower";
+import { nullAccessHead, unwrapRefusesNull } from "../maybeCarrier";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeNull, makeCall, makeString, runtimeRef } from "../util";

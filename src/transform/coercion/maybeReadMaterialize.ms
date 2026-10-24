@@ -23,7 +23,7 @@ import { projectTagUnionMember, narrowMaybePayload, checkedProjection, storesUni
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeMember, makeBinary } from "../util";
-import { unwrapRefusesNull, wrapMaybeValue } from "../native/nullableLower";
+import { unwrapRefusesNull, wrapMaybeValue } from "../maybeCarrier";
 import { cloneIfPure } from "../place";
 import { isAssignOp, isLogicalAssignOp } from "../../ast/operators";
 

@@ -8,7 +8,7 @@ import { isMaybeType, closureStorageType, createFunction, createPtr, createRef, 
 import { TransformContext, mintSym, newLoweredSym, freshTemp } from "../context";
 import { walkNode } from "../walker";
 import { runtimeRef, makeNull, makeTypedObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeTypedIdentResolved, makeMember, makeCall, makeReturn, makeExprStmt, makeBlock, makeFnDecl, makeInterfaceDeclFromTypes, syntheticToken } from "../util";
-import { wrapMaybeValue } from "../native/nullableLower";
+import { wrapMaybeValue } from "../maybeCarrier";
 
 export const ADAPTEE_FIELD: string = "$adaptee";
 

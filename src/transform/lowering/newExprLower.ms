@@ -36,9 +36,8 @@ import {
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import { positionalFieldsOf } from "../../checker/types";
 import { TransformContext, createTransformContext, freshTempSym } from "../context";
-import { walkExpandBlocks, replaceInExpr } from "../walker";
+import { walkExpandBlocks, replaceInExpr, containsConditionalEval } from "../walker";
 import { anyDescendant, noStop } from "../../ast/visitor";
-import { containsConditionalEval } from "./callHoist";
 import { moveWhileTestIntoBody, wrapElseIfWhen } from "./jumpRetarget";
 import { makeVarDecl, makeIdentResolved, makeMember, makeAssign, makeExprStmt } from "../util";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";

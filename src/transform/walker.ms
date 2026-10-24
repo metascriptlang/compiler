@@ -196,3 +196,22 @@ export function anyDeep(n: Node, verdict: (n: Node) => int32): boolean {
 	scan(n);
 	return found;
 }
+
+// True if the expression contains a CONDITIONALLY-evaluated sub-position: the RHS
+// of a short-circuit `&&`/`||`, or a ternary branch. A fresh call there runs only
+// sometimes — hoisting it to a preceding statement would evaluate it eagerly and
+// break the guard (proven: `if (xs.length>0 && xs[0].slice(...))` hoisted the slice
+// before the length guard → crash). Such inits are skipped until the nested-if
+// lowering (which preserves short-circuit) is in place.
+export function containsConditionalEval(expr: Node): boolean {
+	let found = false;
+	replaceInExpr(expr, (node: Node): Node => {
+		if (node.kind == NodeKind.ConditionalExpr) { found = true; }
+		if (node.kind == NodeKind.BinaryExpr) {
+			const op = (node.data as BinaryExprData).operator;
+			if (op == "&&" || op == "||") { found = true; }
+		}
+		return node;
+	});
+	return found;
+}

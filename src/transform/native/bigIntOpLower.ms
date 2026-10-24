@@ -23,7 +23,7 @@ import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, BigIntLi
 import { addError } from "../../checker/context";
 import { booleanType, createPrimitive, int32Type, isNumeric, peelToRepr, typeDisplayName, isNullableBigInt } from "../../checker/types";
 import { isNullExpr } from "../../ast/shape";
-import { nullAccessHead } from "./nullableLower";
+import { nullAccessHead } from "../maybeCarrier";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { isFloatKind } from "../numKinds";

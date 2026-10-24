@@ -18,7 +18,7 @@ import {
 import { isMaybeType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { wrapMaybeValue } from "./nullableLower";
+import { wrapMaybeValue } from "../maybeCarrier";
 import { firstStmtKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 import { createTransformContext } from "../context";
 
