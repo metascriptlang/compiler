@@ -434,7 +434,8 @@ export function markCppCompile(path: string): void {
 // Explicit binaries (e.g. "x86_64-linux-gnu-gcc") get best-effort suffix swap.
 function toCppCompiler(cName: string): string {
 	if (cName.endsWith(" cc")) return cName.slice(0, cName.length - 2) + "c++";
-	if (cName == "clang")  return "clang++";
+	if (basename(cName) == "clang") return cName + "++";
+	if (basename(cName) == "clang.exe") return cName.slice(0, cName.length - 4) + "++.exe";
 	if (cName == "gcc")    return "g++";
 	if (cName == "cc")     return "c++";
 	if (cName.endsWith("-gcc"))   return cName.slice(0, cName.length - 4) + "-g++";
@@ -754,6 +755,12 @@ export function compilerInvocation(ccOption: number, ccBinary: string): Result<T
 	const args: string[] = [];
 	for (let i = 1; i < words.value.length; i++) args.push(words.value[i]);
 	return Result.ok({ path: words.value[0], args });
+}
+
+test "an absolute Clang invocation keeps its directory for the C++ driver" {
+	assert toCppCompiler("/toolchain with spaces/bin/clang") == "/toolchain with spaces/bin/clang++";
+	assert toCppCompiler("C:/toolchain/bin/clang.exe") == "C:/toolchain/bin/clang++.exe";
+	assert toCppCompiler("clang") == "clang++";
 }
 
 function compilerCommand(ccOption: number, ccBinary: string, isCpp: boolean): Result<ToolCommand, ProcessError> {
