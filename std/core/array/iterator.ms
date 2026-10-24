@@ -2,12 +2,9 @@ function closeSource<T>(it: Iterator<T>): void {
 	if (it.return != null) it.return();
 }
 
-function checkedLimit<T>(it: Iterator<T>, limit: number): number {
-	if (limit != limit || limit <= -1) {
-		closeSource(it);
-		throw new Error(`${limit} must be positive`);
-	}
-	return limit;
+function limitError(limit: number): Error | null {
+	if (limit != limit || limit <= -1) return new Error(`${limit} must be positive`);
+	return null;
 }
 
 export function* map<T, U>(this it: Iterator<T>, fn: (x: T, i: number) => U): Iterator<U> {
@@ -41,7 +38,12 @@ function* takeLazy<T>(it: Iterator<T>, limit: number): Iterator<T> {
 }
 
 export function take<T>(this it: Iterator<T>, limit: number): Iterator<T> {
-	return takeLazy(it, checkedLimit(it, limit));
+	const bad = limitError(limit);
+	if (bad != null) {
+		closeSource(it);
+		throw bad;
+	}
+	return takeLazy(it, limit);
 }
 
 function* dropLazy<T>(it: Iterator<T>, limit: number): Iterator<T> {
@@ -56,7 +58,12 @@ function* dropLazy<T>(it: Iterator<T>, limit: number): Iterator<T> {
 }
 
 export function drop<T>(this it: Iterator<T>, limit: number): Iterator<T> {
-	return dropLazy(it, checkedLimit(it, limit));
+	const bad = limitError(limit);
+	if (bad != null) {
+		closeSource(it);
+		throw bad;
+	}
+	return dropLazy(it, limit);
 }
 
 export function* flatMap<T, U>(
@@ -149,16 +156,10 @@ export function find<T>(this it: Iterator<T>, fn: (x: T, i: number) => boolean):
 
 export type Undersized = "only-full" | "allow-partial";
 
-function checkedSize<T>(it: Iterator<T>, size: number, name: string): number {
-	if (size % 1 != 0) {
-		closeSource(it);
-		throw new Error(`${name} must be an integer`);
-	}
-	if (size < 1 || size > 4294967295) {
-		closeSource(it);
-		throw new RangeError(`${name} must be between 1 and 4294967295`);
-	}
-	return size;
+function sizeError(size: number, name: string): Error | null {
+	if (size % 1 != 0) return new Error(`${name} must be an integer`);
+	if (size < 1 || size > 4294967295) return new RangeError(`${name} must be between 1 and 4294967295`);
+	return null;
 }
 
 function* chunksLazy<T>(it: Iterator<T>, size: number): Iterator<T[]> {
@@ -174,7 +175,12 @@ function* chunksLazy<T>(it: Iterator<T>, size: number): Iterator<T[]> {
 }
 
 export function chunks<T>(this it: Iterator<T>, size: number): Iterator<T[]> {
-	return chunksLazy(it, checkedSize(it, size, "chunkSize"));
+	const bad = sizeError(size, "chunkSize");
+	if (bad != null) {
+		closeSource(it);
+		throw bad;
+	}
+	return chunksLazy(it, size);
 }
 
 function* windowsLazy<T>(it: Iterator<T>, size: number, partial: boolean): Iterator<T[]> {
@@ -192,8 +198,12 @@ export function windows<T>(
 	size: number,
 	undersized?: Undersized,
 ): Iterator<T[]> {
-	const checked = checkedSize(it, size, "windowSize");
-	return windowsLazy(it, checked, undersized == "allow-partial");
+	const bad = sizeError(size, "windowSize");
+	if (bad != null) {
+		closeSource(it);
+		throw bad;
+	}
+	return windowsLazy(it, size, undersized == "allow-partial");
 }
 
 function* cycleLazy<T>(it: Iterator<T>): Iterator<T> {
@@ -221,7 +231,12 @@ function* stepByLazy<T>(it: Iterator<T>, step: number): Iterator<T> {
 }
 
 export function stepBy<T>(this it: Iterator<T>, step: number): Iterator<T> {
-	return stepByLazy(it, checkedSize(it, step, "step"));
+	const bad = sizeError(step, "step");
+	if (bad != null) {
+		closeSource(it);
+		throw bad;
+	}
+	return stepByLazy(it, step);
 }
 
 function* scanLazy<T, U>(it: Iterator<T>, fn: (acc: U, x: T, i: number) => U, init: U): Iterator<U> {
