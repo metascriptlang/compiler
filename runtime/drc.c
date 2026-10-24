@@ -530,27 +530,27 @@ void msRootsThreadTeardown(void) {
 /* ===== Color Helpers ===== */
 
 static inline int32_t getColor(msRefHeader* h) {
-	return msRcLoad(h) & MS_COLOR_MASK;
+	return h->rc & MS_COLOR_MASK;
 }
 
 static inline void setColor(msRefHeader* h, int32_t color) {
-	msRcStore(h, (msRcLoad(h) & ~MS_COLOR_MASK) | color);
+	h->rc = (h->rc & ~MS_COLOR_MASK) | color;
 }
 
 static inline intptr_t getCount(msRefHeader* h) {
-	return msRcLoad(h) >> MS_RC_SHIFT;
+	return h->rc >> MS_RC_SHIFT;
 }
 
 static inline void decCount(msRefHeader* h) {
-	msRcStore(h, msRcLoad(h) - MS_RC_INCREMENT);
+	h->rc -= MS_RC_INCREMENT;
 }
 
 static inline void incCount(msRefHeader* h) {
-	msRcStore(h, msRcLoad(h) + MS_RC_INCREMENT);
+	h->rc += MS_RC_INCREMENT;
 }
 
 static inline void setLastRefCount(msRefHeader* h) {
-	msRcStore(h, msRcLoad(h) & MS_RC_MASK);
+	h->rc &= MS_RC_MASK;
 }
 
 /* ===== Trace Ref (reference ORC parity) ===== */

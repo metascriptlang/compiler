@@ -212,7 +212,7 @@ static inline void* msSpawnIntoCancellable(void* fut, msClosure fn, uint32_t cop
 		.inlineCopySize = copySize, .inlineValueOffset = valueOffset,
 	};
 	((msFutureBase*)fut)->spawned = true;
-	if (fn.env != NULL) msAtomicIncRef(fn.env);
+	if (fn.env != NULL) msIncRef(fn.env);
 #if MS_FUTURE_SUBMIT_REF
 	msIncRef(fut);  /* Amendment G: owner-side queue completion ref (see msSpawn) */
 	msFuturePublishCrossThread(fut);  /* Amendment H */

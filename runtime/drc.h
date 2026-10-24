@@ -34,21 +34,11 @@
 /* ===== Reference Header ===== */
 
 typedef struct {
-	_Atomic(intptr_t) rc;    /* Reference count (0 = unique, >0 = shared). Atomic for thread safety. */
+	intptr_t rc;             /* Reference count (0 = unique, >0 = shared). Plain word: only the SHARE helpers use __atomic builtins on it. */
 	const msTypeInfo* type;  /* RTTI (NULL for untyped allocs) */
 	int32_t rootIdx;         /* ORC rootset index (-1 = not registered) */
 	uint32_t allocSize;      /* Total allocation size (header + payload) — for slab recycling */
 } msRefHeader;
-
-/* Owner-serialized rc access: a relaxed load and a relaxed store, never an RMW. Only the
- * SHARE helpers (msAtomicIncRef, msAtomicDecRefIsLast) and Arc/Locked cells use an RMW. */
-static inline intptr_t msRcLoad(msRefHeader* h) {
-	return atomic_load_explicit(&h->rc, memory_order_relaxed);
-}
-
-static inline void msRcStore(msRefHeader* h, intptr_t v) {
-	atomic_store_explicit(&h->rc, v, memory_order_relaxed);
-}
 
 /* Get header from user pointer: header lives right before the object */
 static inline msRefHeader* msHeader(void* p) {
@@ -269,7 +259,7 @@ static inline void* msRealloc(void* old, size_t oldSize, size_t newSize) {
  * non-atomic path, or its first decref would underflow and never free. */
 static inline void* msAllocArc(size_t size, const msTypeInfo* type) {
 	void* p = msAllocTyped(size, type);
-	msRcStore(msHeader(p), MS_RC_INCREMENT);
+	msHeader(p)->rc = MS_RC_INCREMENT;
 	return p;
 }
 
@@ -281,7 +271,7 @@ static inline void* msAllocArc(size_t size, const msTypeInfo* type) {
 static inline void* msAllocUninit(size_t size) {
 	size_t total = sizeof(msRefHeader) + size;
 	msRefHeader* h = (msRefHeader*)msSlabAllocRaw(total);  /* dirty */
-	msRcStore(h, 0);
+	h->rc = 0;
 	h->rootIdx = -1;
 	h->type = NULL;
 	h->allocSize = (uint32_t)total;
@@ -293,7 +283,7 @@ static inline void* msAllocUninit(size_t size) {
 static inline void* msAllocTypedUninit(size_t size, const msTypeInfo* type) {
 	size_t total = sizeof(msRefHeader) + size;
 	msRefHeader* h = (msRefHeader*)msSlabAllocRaw(total);  /* dirty */
-	msRcStore(h, 0);
+	h->rc = 0;
 	h->rootIdx = -1;
 	h->type = type;
 	MS_HCR_COUNT(type, 1);
@@ -309,8 +299,7 @@ static inline void* msAllocTypedUninit(size_t size, const msTypeInfo* type) {
 static inline void msIncRef(void* p) {
 	if (p != NULL) {
 		MS_DRC_STAT_ADD(MS_DS_RC_INC, 1);
-		msRefHeader* h = msHeader(p);
-		msRcStore(h, msRcLoad(h) + MS_RC_INCREMENT);
+		msHeader(p)->rc += MS_RC_INCREMENT;
 	}
 }
 
@@ -319,7 +308,7 @@ static inline void msIncRef(void* p) {
 static inline void msAtomicIncRef(void* p) {
 	if (p != NULL) {
 		MS_DRC_STAT_ADD(MS_DS_RC_INC_ATOMIC, 1);
-		atomic_fetch_add_explicit(&msHeader(p)->rc, MS_RC_INCREMENT, memory_order_relaxed);
+		__atomic_fetch_add(&msHeader(p)->rc, MS_RC_INCREMENT, __ATOMIC_RELAXED);
 	}
 }
 
@@ -331,9 +320,8 @@ static inline bool msDecRefIsLast(void* p) {
 	msRefHeader* h = msHeader(p);
 	/* Check count portion (upper bits) is zero — ignores ORC color/flag bits.
 	 * rc starts at 0 from msAlloc. (rc & ~MS_RC_MASK)==0 means sole owner. */
-	intptr_t before = msRcLoad(h);
-	if ((before & ~MS_RC_MASK) != 0) {
-		msRcStore(h, before - MS_RC_INCREMENT);
+	if ((h->rc & ~MS_RC_MASK) != 0) {
+		h->rc -= MS_RC_INCREMENT;
 		return false;
 	}
 	if (h->rootIdx >= 0) msUnregisterCycle(p);
@@ -348,9 +336,9 @@ static inline bool msDecRefIsLast(void* p) {
 static inline bool msAtomicDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	MS_DRC_STAT_ADD(MS_DS_RC_DEC_ATOMIC, 1);
-	intptr_t old = atomic_fetch_sub_explicit(&msHeader(p)->rc, MS_RC_INCREMENT, memory_order_release);
+	intptr_t old = __atomic_fetch_sub(&msHeader(p)->rc, MS_RC_INCREMENT, __ATOMIC_RELEASE);
 	if ((old & ~MS_RC_MASK) == MS_RC_INCREMENT) {
-		atomic_thread_fence(memory_order_acquire);
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
 		return true;
 	}
 	return false;
@@ -463,7 +451,7 @@ static inline void msRememberCycle(bool isDestroy, void* p, const msTypeInfo* de
 		}
 	} else {
 		if (h->rootIdx < 0 && desc != NULL && desc->isCyclic) {
-			msRcStore(h, (msRcLoad(h) & ~MS_COLOR_MASK) | MS_COL_BLACK);
+			h->rc = (h->rc & ~MS_COLOR_MASK) | MS_COL_BLACK;
 			msRegisterCycle(p, desc);
 		}
 	}
@@ -472,18 +460,16 @@ static inline void msRememberCycle(bool isDestroy, void* p, const msTypeInfo* de
 static inline void msOrcIncRef(void* p) {
 	if (p == NULL) return;
 	MS_DRC_STAT_ADD(MS_DS_RC_INC_CYC, 1);
-	msRefHeader* h = msHeader(p);
-	msRcStore(h, msRcLoad(h) + MS_RC_INCREMENT);
+	msHeader(p)->rc += MS_RC_INCREMENT;
 }
 
 static inline bool msOrcDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	msRefHeader* h = msHeader(p);
-	intptr_t before = msRcLoad(h);
-	bool isLast = (before & ~MS_COLOR_MASK) == 0;
+	bool isLast = (h->rc & ~MS_COLOR_MASK) == 0;
 	MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST, 1); MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST_TRUE, isLast);
 	if (!isLast) {
-		msRcStore(h, before - MS_RC_INCREMENT);
+		h->rc -= MS_RC_INCREMENT;
 	}
 	msRememberCycle(isLast, p, h->type);
 	return isLast;
@@ -491,8 +477,7 @@ static inline bool msOrcDecRefIsLast(void* p) {
 
 static inline void msMarkMaybeCycle(void* p) {
 	if (p != NULL) {
-		msRefHeader* h = msHeader(p);
-		msRcStore(h, msRcLoad(h) | MS_MAYBE_CYCLE);
+		msHeader(p)->rc |= MS_MAYBE_CYCLE;
 	}
 }
 
