@@ -68,8 +68,13 @@ const PARKED: { name: string, card: string }[] = [
 	{ name: "hcrModulePassReload", card: "inbox card 2026-10-06-hcr-ref-array-cell-owned-by-user-image.md" },
 ];
 
+// A failed first build leaves `msc run --hcr` waiting for an edit, so every call gets a wall-clock bound.
+const MSC_SECONDS = "900";
+const BOUNDED = "my $t = shift; setpgrp(0, 0); my $pid = fork; if (!$pid) { exec @ARGV or exit 127 } $SIG{ALRM} = sub { print STDERR \"msc gave no answer within ${t}s\\n\"; kill \"KILL\", -$$ }; alarm $t; waitpid($pid, 0); exit($? >> 8)";
+
 function msc(dir: string, args: string[]): ExecFileResult {
-	return execFileResult(MSC, args, dir);
+	if (platform == "win32") return execFileResult(MSC, args, dir);
+	return execFileResult("perl", ["-e", BOUNDED, MSC_SECONDS, MSC, ...args], dir);
 }
 
 // Build that must succeed: its log is printed before the verdict when it does not.
@@ -959,6 +964,39 @@ function coreGroup(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function compileTimeHelper(): void {
+	const tag = "hcrCompileTimeHelper";
+	const dir = freshDir(`${TMP}/compileTimeHelper`);
+	for (const f of ["shapes.ms", "app.ms", "entry.ms", "runtime.ms"]) copy(`${FIXTURES}/compileTimeHelper/${f}`, `${dir}/${f}`);
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	if (!succeeded(ran) || !both(ran).includes("HCR-CT shapes struct")) {
+		console.log(both(ran));
+		failWith(tag, "an image exporting functions that only macros can call did not build under --hcr");
+	}
+	mustBuild(tag, dir, ["build", "entry.ms"], "an entry module exporting a function that only macros can call did not build");
+	for (const args of [["build", "runtime.ms"], ["build", "--hcr", "runtime.ms"]]) {
+		const refused = msc(dir, args);
+		const said = both(refused);
+		if (succeeded(refused) || !said.includes("exists only while macros expand") || !said.includes("describe -> namesStruct -> typeKind -> msMetaTypeKind")) {
+			console.log(said);
+			failWith(tag, `msc ${args.join(" ")}: runtime code calling a macro-only function was not refused with the call chain`);
+		}
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function spanParamForward(): void {
+	const tag = "hcrSpanParamForward";
+	const dir = freshDir(`${TMP}/spanParamForward`);
+	for (const f of ["lib.ms", "app.ms"]) copy(`${FIXTURES}/spanParamForward/${f}`, `${dir}/${f}`);
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	if (!succeeded(ran) || !both(ran).includes("HCR-SPAN 10 a-b-c")) {
+		console.log(both(ran));
+		failWith(tag, "an image function taking a Span did not forward both halves of it to its reloaded body");
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function stdFirstUse(): void {
 	const tag = "hcrStdFirstUse";
 	const dir = freshDir(`${TMP}/stdFirstUse`);
@@ -1806,6 +1844,8 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrRun", run: runCommand },
 	{ name: "hcrCoreGroup", run: coreGroup },
 	{ name: "hcrStdFirstUse", run: stdFirstUse },
+	{ name: "hcrCompileTimeHelper", run: compileTimeHelper },
+	{ name: "hcrSpanParamForward", run: spanParamForward },
 	{ name: "hcrSharedNativeFlags", run: sharedNativeFlags },
 	{ name: "hcrStepCrash", run: stepCrash },
 	{ name: "hcrCrossImageNew", run: crossImageNew },
