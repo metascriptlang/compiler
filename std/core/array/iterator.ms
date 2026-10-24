@@ -3,7 +3,7 @@ function closeSource<T>(it: Iterator<T>): void {
 }
 
 function limitError(limit: number): Error | null {
-	if (limit != limit || limit <= -1) return new Error(`${limit} must be positive`);
+	if (limit != limit || limit <= -1) return new RangeError(`${limit} must be positive`);
 	return null;
 }
 
@@ -103,7 +103,7 @@ export function reduce<T, U>(
 
 export function reduce<T>(this it: Iterator<T>, fn: (acc: T, x: T, i: number) => T): T {
 	const first = it.next();
-	if (first.done) throw new Error("Reduce of a done iterator with no initial value");
+	if (first.done) throw new TypeError("Reduce of a done iterator with no initial value");
 	let acc = first.value;
 	let i: number = 1;
 	for (const x of it) {
@@ -157,7 +157,7 @@ export function find<T>(this it: Iterator<T>, fn: (x: T, i: number) => boolean):
 export type Undersized = "only-full" | "allow-partial";
 
 function sizeError(size: number, name: string): Error | null {
-	if (size % 1 != 0) return new Error(`${name} must be an integer`);
+	if (size % 1 != 0) return new RangeError(`${name} must be an integer`);
 	if (size < 1 || size > 4294967295) return new RangeError(`${name} must be between 1 and 4294967295`);
 	return null;
 }

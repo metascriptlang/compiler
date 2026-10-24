@@ -87,7 +87,7 @@ export function reduce<T, U>(this arr: Vec<T>, fn: (acc: U, x: T, i: number) => 
 
 export function reduce<T>(this arr: Vec<T>, fn: (acc: T, x: T, i: number) => T): T {
 	const n = arr.length;
-	if (n == 0) throw new Error("Reduce of empty array with no initial value");
+	if (n == 0) throw new TypeError("Reduce of empty array with no initial value");
 	let acc = arr[0];
 	for (let i = 1; i < n && i < arr.length; i += 1) {
 		acc = fn(acc, arr[i], i);

@@ -75,13 +75,13 @@ function* zipLazy<T>(iters: Iterator<T>[], mode: ZipMode, padding: T[]): Iterato
 					"strict" => {
 						if (i != 0) {
 							closeAll(iters, open, true);
-							throw new Error("zip: iterators have different lengths");
+							throw new TypeError("zip: iterators have different lengths");
 						}
 						const spare: T[] = [];
 						for (let k = 1; k < count; k++) {
 							if (!advance(iters, open, k, spare)) {
 								closeAll(iters, open, true);
-								throw new Error("zip: iterators have different lengths");
+								throw new TypeError("zip: iterators have different lengths");
 							}
 							open[k] = false;
 						}
