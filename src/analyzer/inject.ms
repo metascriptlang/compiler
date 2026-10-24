@@ -32,7 +32,7 @@ import {
 import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym } from "./alias";
 import { inferCursors } from "./cursors";
 import { isViewCall, returnsView } from "../checker/effects";
-import { LocalDefs, borrowedArgsToCopy, callerDefsOf, createRoutineDecls, createWriteSummaries } from "./writeEffects";
+import { LocalDefs, borrowedArgsToCopy, callerDefsOf, createRoutineDecls, createWriteSummaries, enterRoutineLending, leaveRoutineLending } from "./writeEffects";
 import { cstringSource } from "../transform/native/cstringConvLower";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
 import { checkSource } from "../checker/checkPass";
@@ -1860,7 +1860,7 @@ function registerFuncParams(paramNames: string[], paramTypes: Type[], paramSyms:
 }
 
 // Phase G: detect generator/async state machine bodies — leading state-selector decl
-function isGeneratorBody(body: Node): boolean {
+export function isGeneratorBody(body: Node): boolean {
 	if (body == null || body.kind != NodeKind.BlockStmt) return false;
 	const bd = body.data as BlockStmtData;
 	if (bd.statements.length == 0) return false;
@@ -1945,6 +1945,7 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	dctx.finallyProtectedVars = collectFinallyVars(body);
 
 	// Phase B: infer cursor (borrowed) variables for this function
+	const outerLending = enterRoutineLending(dctx.writes, ownerSym, paramSyms);
 	dctx.callerDefs = inferCursors(dctx.writes, body) ?? callerDefsOf(dctx.writes, body);
 
 	// Phase C: set function body for CFG-based last-read analysis
@@ -1974,6 +1975,7 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 
 	const cleanup = generateCleanup(scope, loc);
 
+	leaveRoutineLending(dctx.writes, outerLending);
 	dctx.finallyProtectedVars = outerFinallyVars;
 	dctx.currentFuncBody = outerBody;
 	dctx.callerDefs = outerDefs;

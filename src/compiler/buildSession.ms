@@ -16,6 +16,8 @@ import { monoTypeKey } from "../monomorphize/registry";
 import { HcrIndirectModule } from "../transform/native/hcrIndirect";
 import { taHashString, transAmHashNode } from "./transam/hash";
 import { KeyedOp } from "../codegen/c/types";
+import { ContractClaim } from "../analyzer/writeEffects";
+import { sameType } from "../checker/compat";
 
 export enum BuildStatus {
 	Built,
@@ -25,12 +27,34 @@ export enum BuildStatus {
 
 export interface LowerClaims {
 	ops: KeyedOp[];
+	contracts: ContractClaim[];
 }
 
 export function sameClaims(a: LowerClaims, b: LowerClaims): boolean {
-	if (a.ops.length != b.ops.length) return false;
+	if (a.ops.length != b.ops.length || a.contracts.length != b.contracts.length) return false;
 	for (let i = 0; i < a.ops.length; i += 1) {
 		if (a.ops[i].key != b.ops[i].key || a.ops[i].sym.name != b.ops[i].sym.name) return false;
+	}
+	for (let i = 0; i < a.contracts.length; i += 1) {
+		if (!sameContract(a.contracts[i], b.contracts[i])) return false;
+	}
+	return true;
+}
+
+function sameRoutine(a: Symbol | null, b: Symbol | null): boolean {
+	if (a == null || b == null) return a == null && b == null;
+	return a.modulePath == b.modulePath && a.name == b.name && a.disamb == b.disamb;
+}
+
+function sameContract(a: ContractClaim, b: ContractClaim): boolean {
+	if (!sameRoutine(a.fn, b.fn) || !sameRoutine(a.clone, b.clone) || a.params.length != b.params.length || a.slots.length != b.slots.length) return false;
+	for (let i = 0; i < a.params.length; i += 1) {
+		if (a.params[i] != b.params[i]) return false;
+	}
+	for (let i = 0; i < a.slots.length; i += 1) {
+		const x = a.holders[i];
+		const y = b.holders[i];
+		if (a.slots[i] != b.slots[i] || (x == null) != (y == null) || (x != null && x !== y && !sameType(x!, y!))) return false;
 	}
 	return true;
 }

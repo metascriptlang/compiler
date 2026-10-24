@@ -90,6 +90,7 @@ export interface WriteSummaries {
 	contracts: HashMap<Symbol, CallbackContract>;
 	cloneContracts: HashMap<Symbol, CallbackContract>;
 	unitContracts: CallbackContract[];
+	reusedClones: HashMap<Symbol, Symbol>;
 	lending: Lending;
 }
 
@@ -101,7 +102,7 @@ export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits
 		viewReturns: new HashMap<Symbol, string[]>(), viewReturnsUnknown: new HashSet<Symbol>(), viewReturnsOpen: [], viewReturnsReach: 0,
 		slotHolders: [], slotHolderIds: new HashMap<Type, int32>(), stack: [], nextIndex: 0,
 		contracts: new HashMap<Symbol, CallbackContract>(), cloneContracts: new HashMap<Symbol, CallbackContract>(), unitContracts: [],
-		lending: { callbacks: [], contract: null, held: null },
+		reusedClones: new HashMap<Symbol, Symbol>(), lending: { callbacks: [], contract: null, held: null },
 	};
 }
 
@@ -1354,6 +1355,14 @@ interface Lending {
 	held: string[] | null;
 }
 
+export interface ContractClaim {
+	fn: Symbol;
+	clone: Symbol | null;
+	params: int32[];
+	slots: string[];
+	holders: (Type | null)[];
+}
+
 export function callbackParams(w: WriteEffects, decl: Node): int32[] {
 	const out: int32[] = [];
 	const params = decl.paramSyms;
@@ -1478,6 +1487,43 @@ export function bindingKeepsContract(w: WriteEffects, fn: Symbol, binding: Node 
 		absorb(w, writes, { call: null, callee: settled(w, c) });
 	}
 	return !mayWriteAny(w, writes, contract.reads.slots);
+}
+
+function onTables(tables: WriteSummaries): WriteEffects {
+	return { tables, checker: null, unit: "", rcOf: (t: Type | null): RcInfo => noRcInfo(), aliasMemo: new HashMap<Type, HashMap<Type, int32>>() };
+}
+
+export function contractClaims(tables: WriteSummaries): ContractClaim[] {
+	const w = onTables(tables);
+	const out: ContractClaim[] = [];
+	for (const c of tables.unitContracts) {
+		const slots: string[] = [];
+		const holders: (Type | null)[] = [];
+		for (const slot of c.reads.slots) {
+			slots.push(bareSlot(slot));
+			holders.push(slotHolder(w, slot));
+		}
+		out.push({ fn: c.fn, clone: c.clone, params: c.params, slots, holders });
+	}
+	return out;
+}
+
+export function reuseClones(tables: WriteSummaries, claims: ContractClaim[]): void {
+	for (const claim of claims) {
+		if (claim.clone != null) tables.reusedClones.set(claim.fn, claim.clone!);
+	}
+}
+
+export function restoreContracts(tables: WriteSummaries, claims: ContractClaim[]): void {
+	const w = onTables(tables);
+	for (const claim of claims) {
+		const reads = newSummary(SummaryKind.Contract, null, []);
+		for (let i = 0; i < claim.slots.length; i += 1) addSlot(reads, heldSlot(w, claim.slots[i], claim.holders[i]));
+		settled(w, reads);
+		const contract: CallbackContract = { fn: claim.fn, params: claim.params, reads, clone: claim.clone };
+		tables.contracts.set(claim.fn, contract);
+		if (claim.clone != null) tables.cloneContracts.set(claim.clone!, contract);
+	}
 }
 
 function writeProbe(): WriteEffects {

@@ -15,7 +15,7 @@ import { checkModuleGraph, getPreludeContext, setGraphCheckTiming, loadStdGlobal
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
-import { WriteSummaries, createRoutineDecls, createWriteSummaries } from "../analyzer/writeEffects";
+import { WriteSummaries, contractClaims, createRoutineDecls, createWriteSummaries, restoreContracts, reuseClones } from "../analyzer/writeEffects";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait, bundleModuleEvaluator, JsModuleResult } from "../codegen/js/jsgen";
 import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
@@ -755,7 +755,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	job.timers.lower = job.timers.lower + (performance.now() - _tl0);
 	flowStop("a2.lower", _fl0);
 	truncateErrors(ctx, errBase);
-	job.claims = { ops: opsFrom(keyedOpMark) };
+	job.claims = { ops: opsFrom(keyedOpMark), contracts: contractClaims(job.writeTables) };
 	return nativeLowered;
 }
 
@@ -2916,13 +2916,15 @@ resetLiftedOps();
 
 			cloneInput: session.keep,
 			ran: false,
-			claims: { ops: [] },
+			claims: { ops: [], contracts: [] },
 			asyncModuleBody: asyncBodies.has(modPath),
 			writeTables,
 			liftTables,
 		};
 		let nativeLowered: Node;
 		if (session.keep) {
+			const earlier = session.lowerClaims.get(modPath);
+			if (earlier != null) reuseClones(writeTables, earlier.contracts);
 			nativeLowered = dbLower(session.check.db!, modPath, lowerModuleA2, job);
 			if (job.ran) {
 				session.loweredCount = session.loweredCount + 1;
@@ -2938,6 +2940,7 @@ resetLiftedOps();
 				const claims = session.lowerClaims.get(modPath);
 				if (claims != null) {
 					replayOps(claims.ops);
+					restoreContracts(writeTables, claims.contracts);
 				}
 				const replay = session.lowerDiagnostics.get(modPath);
 				if (replay != null) for (const shown of replay) renderModuleError(modPath, cm.source, shown);
