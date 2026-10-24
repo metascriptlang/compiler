@@ -1,5 +1,5 @@
 // @exit: 7
-// @stdout: aborted
+// @stdout: aborted M1
 // @skip-js: binds the C fixture stale.c, which drives the cycle-root registry directly
 // @skip-raiser: binds the C fixture stale.c, whose msTestFreeRootOfExitedWorker has no Raiser host bridge
 

@@ -1,8 +1,8 @@
 #include <pthread.h>
-#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include "runtime/drc.h"
 #include "stale.h"
@@ -10,11 +10,15 @@
 static msTypeInfo cyclic;
 static void* shared;
 static int realStderr;
+static int captured;
 
 static void onAbort(int sig) {
 	(void)sig;
+	char msg[512] = {0};
+	lseek(2, 0, SEEK_SET);
+	ssize_t n = read(2, msg, sizeof(msg) - 1);
 	dup2(realStderr, 2);
-	fputs("aborted\n", stdout);
+	fputs(n > 0 && strstr(msg, "M1 owner violation at free") ? "aborted M1\n" : "aborted other\n", stdout);
 	fflush(stdout);
 	exit(7);
 }
@@ -40,11 +44,8 @@ int32_t msTestFreeRootOfExitedWorker(int32_t ownRoots) {
 	pthread_join(t, NULL);
 	signal(SIGABRT, onAbort);
 	realStderr = dup(2);
-#ifdef _WIN32
-	dup2(open("NUL", O_WRONLY), 2);
-#else
-	dup2(open("/dev/null", O_WRONLY), 2);
-#endif
+	captured = fileno(tmpfile());
+	dup2(captured, 2);
 	msDestroyAndDispose(shared);
 	signal(SIGABRT, SIG_DFL);
 	return msRoots.len;
