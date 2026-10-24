@@ -9,8 +9,8 @@
 // Every node carries .location from the token it was parsed from, enabling LSP symbol recording.
 
 import { Token, TokenKind } from "../lexer/token";
-import { Node, NodeKind, createNode, createNodeAt, IdentifierData, TypeGenericData, TypeObjectData } from "../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, skipBalanced, skipGenericParams, splitAngleAssign, collectTokenText, addError, genericCallParenOffset } from "./context";
+import { Node, NodeKind, createNode, createNodeAt, IdentifierData, TypeGenericData, TypeObjectData, TypeFunctionData } from "../ast/node";
+import { ParserState, createState, current, advance, peek, tokenAt, skipComments, isAtEnd, skipBalanced, skipGenericParams, splitAngleAssign, collectTokenText, addError, genericCallParenOffset } from "./context";
 import { lex } from "../lexer/lexer";
 
 export function distinctMisplacedMessage(line: int32): string {
@@ -109,8 +109,7 @@ export function parseTypeExpr(state: ParserState): Node {
 }
 
 function isNegativeNumberAhead(state: ParserState): boolean {
-	return current(state).kind == TokenKind.Minus && state.position + 1 < state.tokens.length
-		&& state.tokens[state.position + 1].kind == TokenKind.Number;
+	return current(state).kind == TokenKind.Minus && peek(state, 1).kind == TokenKind.Number;
 }
 
 function parseTypeAtom(state: ParserState): Node {
@@ -126,7 +125,7 @@ function parseTypeAtom(state: ParserState): Node {
 		const operandAt = state.position;
 		skipTypeQueryOperand(state);
 		const operandText = collectTokenText(state, operandAt, state.position);
-		return createNode(NodeKind.Identifier, { name: operandText }, state.tokens[operandAt]);
+		return createNode(NodeKind.Identifier, { name: operandText }, tokenAt(state, skipComments(state, operandAt)));
 	}
 
 	// Function type: (a: T, b: U) => R
@@ -280,10 +279,9 @@ function parseTypeFunctionOrParen(state: ParserState): Node {
 		// Param name (optional — could be just types)
 		if (isTypeIdent(current(state))) {
 			const nameToken = current(state);
-			const nextKind = state.position + 1 < state.tokens.length ? state.tokens[state.position + 1].kind : TokenKind.Eof;
+			const nextKind = peek(state, 1).kind;
 			// `name?: Type` is an optional parameter; the type text keeps its `?`
-			const optionalMark = nextKind == TokenKind.Question && state.position + 2 < state.tokens.length
-				&& state.tokens[state.position + 2].kind == TokenKind.Colon;
+			const optionalMark = nextKind == TokenKind.Question && peek(state, 2).kind == TokenKind.Colon;
 			// If followed by ':', it's "name: Type"
 			if (nextKind == TokenKind.Colon || optionalMark) {
 				paramNames.push(nameToken.value);
@@ -916,4 +914,37 @@ test "a function type refuses a required parameter after an optional one" {
 	const errs = typeExprErrors("(a?: int32, b: int32) => int32");
 	assert errs.length == 1;
 	assert errs[0].indexOf("A required parameter cannot follow an optional parameter") >= 0;
+}
+
+function functionTypeParamNames(typeStr: string): string {
+	const lr = lex(typeStr + " = x");
+	if (!lr.ok) return "";
+	const state = createState(lr.value);
+	const node = parseTypeExpr(state);
+	if (node.kind != NodeKind.TypeFunction) return "";
+	return (node.data as TypeFunctionData).typExprParamNames.join("|");
+}
+
+test "function type parameter names survive a block comment before the colon or question mark" {
+	assert functionTypeParamNames("(a /* c */ : int32, b /* c */ ? /* c */ : int32) => int32") == "a|b";
+}
+
+test "function type parameter names survive a line comment before the colon or question mark" {
+	assert functionTypeParamNames("(a // c\n: int32, b ? // c\n: int32) => int32") == "a|b";
+}
+
+test "a negative literal type survives a comment between the sign and the digits" {
+	assert typeExprName("-1") == "-1";
+	assert typeExprName("- /* c */ 1") == "-1";
+	assert typeExprName("- // c\n 1") == "-1";
+}
+
+test "a typeof operand is located at its own token, not at a comment before it" {
+	const lr = lex("typeof /* c */ x = y");
+	assert lr.ok;
+	if (!lr.ok) return;
+	const node = parseTypeExpr(createState(lr.value));
+	assert node.kind == NodeKind.Identifier;
+	assert (node.data as IdentifierData).name == "x";
+	assert node.location.column == lr.value[2].column;
 }

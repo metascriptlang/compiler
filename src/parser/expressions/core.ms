@@ -517,8 +517,7 @@ function parsePrimary(state: ParserState): ExprResult {
 	// Async: async function expr or async arrow
 	if (token.kind == TokenKind.Async) {
 		// async function expression: async function() {} or async function*() {}
-		if (state.position + 1 < state.tokens.length &&
-			state.tokens[state.position + 1].kind == TokenKind.Function) {
+		if (peek(state, 1).kind == TokenKind.Function) {
 			advance(state); // consume 'async'
 			advance(state); // consume 'function'
 			let feFlags = "async";
@@ -565,8 +564,7 @@ function parsePrimary(state: ParserState): ExprResult {
 
 	// Comptime expression: @comptime { ... }
 	if (token.kind == TokenKind.At) {
-		if (state.position + 1 < state.tokens.length &&
-			state.tokens[state.position + 1].value == "comptime") {
+		if (peek(state, 1).value == "comptime") {
 			advance(state); // consume '@'
 			advance(state); // consume 'comptime'
 			const comptimeBlock = try callBlockParser(state);
@@ -577,8 +575,7 @@ function parsePrimary(state: ParserState): ExprResult {
 	// Quote expression: quote { ... }
 	// Only if followed by '{' — otherwise 'quote' is used as identifier
 	if (token.kind == TokenKind.Quote) {
-		if (state.position + 1 < state.tokens.length &&
-			state.tokens[state.position + 1].kind == TokenKind.LBrace) {
+		if (peek(state, 1).kind == TokenKind.LBrace) {
 			advance(state);
 			const quoteBlock = try callBlockParser(state);
 			return Result.ok(createNode(NodeKind.QuoteExpr, { quoteBody: quoteBlock }, token));
@@ -933,4 +930,19 @@ test "explicit type arguments before a call stay a call" {
 	assert exprKind("id<Array<int32>>(x)") == NodeKind.CallExpr;
 	assert exprKind("id<Map<string, Array<int32>>>(x)") == NodeKind.CallExpr;
 	assert exprKind("id<int32 | string>(x)") == NodeKind.CallExpr;
+}
+
+test "a comment after async leaves an async function expression" {
+	assert exprKind("async /* c */ function() {}") == NodeKind.FunctionExpr;
+	assert exprKind("async // c\nfunction() {}") == NodeKind.FunctionExpr;
+}
+
+test "a comment between @ and comptime leaves a comptime block" {
+	assert exprKind("@ /* c */ comptime { 1; }") == NodeKind.ComptimeBlock;
+	assert exprKind("@ // c\ncomptime { 1; }") == NodeKind.ComptimeBlock;
+}
+
+test "a comment between quote and its brace leaves a quote expression" {
+	assert exprKind("quote /* c */ { const x = 1; }") == NodeKind.QuoteExpr;
+	assert exprKind("quote // c\n{ const x = 1; }") == NodeKind.QuoteExpr;
 }

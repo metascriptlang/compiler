@@ -56,9 +56,8 @@ export function captureOptionalType(state: ParserState): string {
 		// Assertion function: `asserts paramName is Type`. Detected before
 		// regular predicates. `asserts` is a contextual keyword (TokenKind.Asserts).
 		if (current(state).kind == TokenKind.Asserts
-				&& state.position + 2 < state.tokens.length
-				&& (state.tokens[state.position + 1].kind == TokenKind.Ident || isIdentLike(state.tokens[state.position + 1]))
-				&& state.tokens[state.position + 2].kind == TokenKind.Is) {
+				&& (peek(state, 1).kind == TokenKind.Ident || isIdentLike(peek(state, 1)))
+				&& peek(state, 2).kind == TokenKind.Is) {
 			advance(state); // `asserts`
 			const assertParamName = current(state).value;
 			advance(state); // param name
@@ -75,8 +74,7 @@ export function captureOptionalType(state: ParserState): string {
 		}
 		// Type predicate: `paramName is Type`.
 		if (current(state).kind == TokenKind.Ident
-				&& state.position + 1 < state.tokens.length
-				&& state.tokens[state.position + 1].kind == TokenKind.Is) {
+				&& peek(state, 1).kind == TokenKind.Is) {
 			const paramName = current(state).value;
 			advance(state); // param name
 			advance(state); // `is`

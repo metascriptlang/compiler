@@ -3,7 +3,7 @@
 
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, StringLiteralData, SwitchCaseData, SwitchStmtData, createNode, makeLoc } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, consumeSemicolon, stampEnd, takePendingComments, takeTrailingDecls } from "../context";
+import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, stampEnd, takePendingComments, takeTrailingDecls } from "../context";
 import { captureOptionalType, getLastTypeExpr, isIdentLike } from "../util";
 import { callBlockParser, callExprParser, callStmtParser } from "./callbacks";
 import { parseArrayPattern, parseObjectPattern } from "./declaration";
@@ -169,8 +169,8 @@ export function parseForStmt(state: ParserState): NodeResult {
 		const nameToken = current(state);
 		if (isIdentLike(nameToken)) {
 			// Peek ahead: is this "name of" (for-of), "name in" (for-in), or "name =" (C-style for)?
-			const afterName = state.position + 1;
-			if (afterName < state.tokens.length && state.tokens[afterName].kind == TokenKind.Of) {
+			const afterName = peek(state, 1).kind;
+			if (afterName == TokenKind.Of) {
 				// for-of loop
 				advance(state); // consume name
 				advance(state); // consume 'of'
@@ -190,7 +190,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 					forOfLabel: "",
 				}, forToken));
 			}
-			if (afterName < state.tokens.length && state.tokens[afterName].kind == TokenKind.In) {
+			if (afterName == TokenKind.In) {
 				// for-in loop
 				advance(state); // consume name
 				advance(state); // consume 'in'
@@ -540,7 +540,8 @@ export function parseAssertStmt(state: ParserState): NodeResult {
 	// Reconstruct source text from tokens
 	let source = "";
 	for (let i = startPos; i < endPos; i += 1) {
-		if (i > startPos) source = source + " ";
+		if (state.tokens[i].kind == TokenKind.Comment) continue;
+		if (source != "") source = source + " ";
 		source = source + state.tokens[i].value;
 	}
 
@@ -666,4 +667,22 @@ test "assert stmt no message" {
 	const pd = pr.value.data as ProgramData;
 	const d = pd.programStmts[0].data as AssertStmtData;
 	assert d.assertMessage == "";
+}
+
+test "a comment between a for binding and of leaves a for-of" {
+	assert stmtKind("for (const x /* c */ of xs) { }") == NodeKind.ForOfStmt;
+	assert stmtKind("for (const x // c\nof xs) { }") == NodeKind.ForOfStmt;
+}
+
+test "a comment between a for binding and in leaves a for-in" {
+	assert stmtKind("for (const k /* c */ in o) { }") == NodeKind.ForInStmt;
+	assert stmtKind("for (const k // c\nin o) { }") == NodeKind.ForInStmt;
+}
+
+test "assert source text leaves out the comments inside the asserted expression" {
+	const pr = parseSource("assert /* c */ a /* c */ > // c\nb;");
+	assert pr.ok;
+	const pd = pr.value.data as ProgramData;
+	const d = pd.programStmts[0].data as AssertStmtData;
+	assert d.assertSource == "a > b";
 }
