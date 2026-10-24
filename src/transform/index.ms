@@ -59,6 +59,7 @@ import { lowerObjectSpread } from "./desugar/objectSpreadLower";
 import { lowerArraySpread } from "./desugar/arraySpreadLower";
 import { lowerForLoop } from "./lowering/forLoopLower";
 import { lowerForOf } from "./lowering/forOfLower";
+import { lowerIterInline } from "./lowering/iterInline";
 import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerSwitch } from "./lowering/switchLower";
@@ -176,6 +177,8 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerDestructuring(result, ctx);
 	flowLap("pass.lowerDestructuring");
 	if (!jsBackend) { result = lowerForLoop(result, ctx); flowLap("pass.lowerForLoop"); }
+	result = lowerIterInline(result, ctx);
+	flowLap("pass.lowerIterInline");
 	result = lowerForOf(result, ctx);
 	flowLap("pass.lowerForOf");
 	result = lowerTryExpr(result, ctx);
