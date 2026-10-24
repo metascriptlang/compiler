@@ -11,7 +11,7 @@ import { Token } from "../../../lexer/token";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import { Doc, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docLineSuffix, docBreakParent, docJoin, docCommaSepList } from "../doc";
 import { callPrintNode } from "./callbacks";
-import { rawBalancedAt, rawGenericsAt, sourceByteAt, writtenOptional, writtenTypeAfterOptional, unoptionalized } from "./literals";
+import { rawBalancedAt, rawGenericsAt, sourceByteAt, sourceSpan, writtenOptional, writtenTypeAfterOptional, unoptionalized } from "./literals";
 
 export function printProgram(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ProgramData;
@@ -364,6 +364,8 @@ export function printForStmt(node: Node, options: FormatOptions): Doc {
 
 export function printForOfStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ForOfStmtData;
+	const asWritten = headerAsWritten(node, d.forOfBody, options, null);
+	if (asWritten != null) return docGroup([asWritten, printBody(d.forOfBody, options)]);
 	let binding = "let";
 	if (d.forOfIsConst) { binding = "const"; }
 	const target = d.forOfPattern != null ? callPrintNode(d.forOfPattern, options) : docText(d.forOfBinding);
@@ -692,6 +694,48 @@ function takeSignatureComments(holder: Node, decl: Node, body: Node, into: Token
 	holder.comments = rest;
 }
 
+function isBetween(c: Token, start: SourceLocation, end: SourceLocation): boolean {
+	const after = c.line > start.line || (c.line == start.line && c.column > start.column);
+	return after && (c.line < end.line || (c.line == end.line && c.column < end.column));
+}
+
+function onParamLines(comments: Token[], decl: Node, paramLocs: SourceLocation[] | null): boolean {
+	if (paramLocs == null || paramLocs.length == 0) return false;
+	const lastLine = paramLocs[paramLocs.length - 1].line;
+	for (const c of comments) {
+		if (c.line <= decl.location.line || c.line >= lastLine) return false;
+	}
+	return true;
+}
+
+export function headerAsWritten(decl: Node, body: Node, options: FormatOptions, paramLocs: SourceLocation[] | null): Doc | null {
+	if (options.source == "" || body == null || isSynthesized(decl, body)) return null;
+	const holders: Node[] = [decl, body];
+	if (body.kind == NodeKind.BlockStmt) {
+		const stmts = (body.data as BlockStmtData).statements;
+		if (stmts.length > 0) holders.push(stmts[0]);
+	}
+	const inner: Token[] = [];
+	for (const h of holders) {
+		for (const c of h.comments) {
+			if (isBetween(c, decl.location, body.location)) inner.push(c);
+		}
+	}
+	if (inner.length == 0 || onParamLines(inner, decl, paramLocs)) return null;
+	const text = sourceSpan(options.source, decl.location.line, decl.location.column, body.location.line, body.location.column);
+	if (text == "") return null;
+	for (const h of holders) {
+		const rest: Token[] = [];
+		for (const c of h.comments) {
+			if (!isBetween(c, decl.location, body.location)) rest.push(c);
+		}
+		h.comments = rest;
+	}
+	const head = text.trimEnd();
+	const gap = text.byteSlice(head.byteLength, text.byteLength);
+	return docGroup([docText(head), gap.includes("\n") ? docHardLine() : docText(" ")]);
+}
+
 function prefixAt(names: string[], positions: string, word: string): void {
 	if (positions == "") return;
 	for (const p of positions.split(",")) {
@@ -732,6 +776,8 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 	if (flagGet(d.fnFlags, "ext") != "" && names.length > 0) names[0] = "this " + names[0];
 	const params: Doc[] = [];
 	const staticType = flagGet(d.fnFlags, "sext");
+	const asWritten = headerAsWritten(node, d.fnBody, options, staticType == "" ? node.paramLocations : null);
+	if (asWritten != null) return docGroup([asWritten, callPrintNode(d.fnBody, options)]);
 	if (staticType != "") params.push(docText("this typeof " + staticType));
 	for (const p of buildParamList(names, types, defaults, options, node.paramLocations)) params.push(p);
 	const paramComments = paramListComments(node, d.fnBody);

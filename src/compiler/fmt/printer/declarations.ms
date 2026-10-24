@@ -15,7 +15,7 @@ import {
 import { Token } from "../../../lexer/token";
 import { callPrintNode } from "./callbacks";
 import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional, unoptionalized } from "./literals";
-import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, writtenName, commentedList, paramListComments, printBlock, wrapNodeComments, isSynthesized, takeStructAccessors } from "./statements";
+import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printBlock, wrapNodeComments, isSynthesized, takeStructAccessors } from "./statements";
 
 function commentedSpecifiers(names: Doc[], locs: SourceLocation[], node: Node): Doc | null {
 	const endLine = node.location.endLine > 0 ? node.location.endLine : 999999;
@@ -656,6 +656,8 @@ export function printMacroDecl(node: Node, options: FormatOptions): Doc {
 
 export function printConstructorDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ConstructorDeclData;
+	const asWritten = headerAsWritten(node, d.ctorBody, options, null);
+	if (asWritten != null) return docGroup([asWritten, callPrintNode(d.ctorBody, options)]);
 	const params = buildParamList(d.ctorParams, d.ctorParamTypes, d.ctorDefaults, options, node.paramLocations);
 	const parts: Doc[] = [docText(d.ctorVisibility != "" ? d.ctorVisibility + " constructor" : "constructor")];
 	for (const p of paramListInParens(params, options)) parts.push(p);
@@ -672,13 +674,16 @@ export function printMethodDecl(node: Node, options: FormatOptions): Doc {
 	const isAsync = flagHas(d.methodFlags, "async") || flagHas(d.methodFlags, "async_generator") || flagHas(d.methodFlags, "async_actor");
 	const isGen = flagHas(d.methodFlags, "generator") || flagHas(d.methodFlags, "async_generator");
 
-	const head = (d.methodVisibility != "" ? d.methodVisibility + " " : "")
+	const modifiers = (d.methodVisibility != "" ? d.methodVisibility + " " : "")
 		+ (d.methodIsStatic ? "static " : "")
 		+ (isExtern ? "extern " : "")
 		+ (isAsync ? "async " : "")
-		+ (isGen ? "*" : "")
+		+ (isGen ? "*" : "");
+	const head = modifiers
 		+ (node.flags.has(NodeFlag.Accessor) ? d.methodName.slice(0, 3) + " " + d.methodName.slice(4, d.methodName.length) : writtenName(options, d.nameLocation, d.methodName)) + genericsFor(options, d.nameLocation, writtenName(options, d.nameLocation, d.methodName), flagGet(d.methodFlags, "gen"));
 
+	const asWritten = headerAsWritten(node, d.methodBody, options, node.paramLocations);
+	if (asWritten != null) return docGroup([docText(modifiers), asWritten, callPrintNode(d.methodBody, options)]);
 	const parts: Doc[] = [docText(head)];
 	const params = buildParamList(d.methodParams, d.methodParamTypes, d.methodDefaults, options, node.paramLocations);
 	const paramComments = paramListComments(node, d.methodBody);
