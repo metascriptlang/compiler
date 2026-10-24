@@ -3,7 +3,7 @@
 
 import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, createNode, makeLoc } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, consumeSemicolon } from "../context";
+import { ParserState, current, advance, isAtEnd, consumeSemicolon } from "../cursor";
 import { skipOptionalType, isIdentLike } from "../util";
 import { parseBlockStmt } from "./core";
 import { parseExpressionFromState } from "../expressions/core";

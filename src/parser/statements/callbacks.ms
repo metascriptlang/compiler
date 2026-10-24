@@ -2,7 +2,7 @@
 // core.ms registers the real implementations at module load time.
 
 import { Node } from "../../ast/node";
-import { ParserState } from "../context";
+import { ParserState } from "../cursor";
 
 type NodeResult = Result<Node, string>;
 type BlockParserFn = (state: ParserState) => NodeResult;

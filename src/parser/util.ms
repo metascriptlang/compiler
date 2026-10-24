@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, isIdentLikeKind, isIdentOrKeyword } from "../lexer/token";
 import { Node, NodeKind, SourceLocation, makeLoc, createNode, createNodeAt, NumberLiteralData, BlockStmtData } from "../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, takePendingComments, addError } from "./context";
+import { ParserState, createState, current, advance, peek, isAtEnd, takePendingComments, addError } from "./cursor";
 import { optionalizeTypeString } from "../utils/string";
 import { skipTypeAnnotation, captureType } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";

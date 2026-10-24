@@ -10,7 +10,8 @@
 
 import { TokenKind, isIdentLikeKind } from "../lexer/token";
 import { Node, NodeKind, createNode, createNodeAt, IdentifierData, TypeGenericData, TypeObjectData, TypeFunctionData } from "../ast/node";
-import { ParserState, createState, current, advance, peek, tokenAt, skipComments, isAtEnd, skipBalanced, skipGenericParams, splitAngleAssign, collectTokenText, addError, genericCallParenOffset } from "./context";
+import { ParserState, createState, current, advance, peek, tokenAt, skipComments, isAtEnd, skipBalanced, collectTokenText, addError } from "./cursor";
+import { skipGenericParams, splitAngleAssign, genericCallParenOffset } from "./generics";
 import { lex } from "../lexer/lexer";
 
 export function distinctMisplacedMessage(line: int32): string {

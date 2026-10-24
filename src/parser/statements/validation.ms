@@ -1,7 +1,7 @@
 // Statement Test Helpers - Convenience functions for parser tests
 
 import { Node, NodeKind, ProgramData, createNodeAt, makeLoc } from "../../ast/node";
-import { createState } from "../context";
+import { createState } from "../cursor";
 import { lex } from "../../lexer/lexer";
 import { parseProgram } from "./core";
 

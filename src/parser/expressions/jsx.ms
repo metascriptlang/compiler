@@ -7,7 +7,7 @@ import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode,
 	JSXElementData, JSXFragmentData, JSXTextData,
 	JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd } from "../context";
+import { ParserState, current, advance, isAtEnd } from "../cursor";
 import { exprNode, exprKind, parseOk } from "./testUtil";
 
 type ExprResult = Result<Expression, string>;

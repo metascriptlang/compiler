@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, Expression, createNode } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, takePendingComments } from "../context";
+import { ParserState, current, advance, isAtEnd, takePendingComments } from "../cursor";
 import { parseMemberChain, tryParseLiteralKeyword, numberLiteralNode } from "./util";
 import { parseOk } from "./testUtil";
 import { isIdentLike } from "../util";

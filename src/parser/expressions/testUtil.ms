@@ -3,7 +3,7 @@
 
 import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, createNodeAt, makeLoc, BinaryExprData, UnaryExprData, UpdateExprData } from "../../ast/node";
-import { ParserState, current, advance } from "../context";
+import { ParserState, current, advance } from "../cursor";
 import { lex } from "../../lexer/lexer";
 import { isIdentLike } from "../util";
 import { numberLiteralNode } from "./util";

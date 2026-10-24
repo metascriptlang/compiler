@@ -3,7 +3,8 @@
 
 import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, ArrowFunctionData, ConditionalExprData, CallExprData, makeLoc } from "../../ast/node";
-import { ParserState, createState, current, advance, isAtEnd, peek, peekIndex, skipComments, tokenAt, matchingParenIndex, markState, rewindState, angleCloserWidth } from "../context";
+import { ParserState, createState, current, advance, isAtEnd, peek, peekIndex, skipComments, tokenAt, matchingParenIndex, markState, rewindState } from "../cursor";
+import { angleCloserWidth } from "../generics";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, getLastParsedDefaults, getLastParamsClosed, isIdentLike } from "../util";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr, exprNode } from "./testUtil";

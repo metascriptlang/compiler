@@ -2,7 +2,7 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, createNode } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd } from "../context";
+import { ParserState, current, advance, isAtEnd } from "../cursor";
 import { parseNumberLiteral, parseIntegerLiteral, integerLiteralFits, integerLiteralIsBitPattern, numericLiteralIsFloat } from "../../utils/string";
 
 // ===== Member Access Chain Parser =====

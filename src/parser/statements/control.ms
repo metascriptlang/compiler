@@ -2,7 +2,7 @@
 
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, StringLiteralData, SwitchCaseData, SwitchStmtData, createNode, makeLoc } from "../../ast/node";
-import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, stampEnd, takePendingComments, takeTrailingDecls } from "../context";
+import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, stampEnd, takePendingComments, takeTrailingDecls } from "../cursor";
 import { captureOptionalType, getLastTypeExpr, isIdentLike } from "../util";
 import { parseBlockStmt, parseStatement } from "./core";
 import { parseExpressionFromState } from "../expressions/core";

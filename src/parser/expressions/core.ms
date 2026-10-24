@@ -2,7 +2,8 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData, AwaitExprData, IdentifierData, MemberExprData, NumberLiteralData, BinaryExprData } from "../../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, captureGenericTypeArgs, stampEnd, takePendingComments, parenGroupThen, expectCloser } from "../context";
+import { ParserState, createState, current, advance, peek, isAtEnd, stampEnd, takePendingComments, parenGroupThen, expectCloser } from "../cursor";
+import { captureGenericTypeArgs } from "../generics";
 import { captureType, captureTypeText, isGenericCallAhead } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, continuesIdentifier } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
