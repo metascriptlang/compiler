@@ -15,11 +15,8 @@ import { collectPublishFiles } from "./walker";
 import { validateBin, binEntryFor } from "./bin";
 import { newZipWriter, zipAdd, zipFinalize, closeZipWriter, ZipWriter } from "std/compress/zip";
 import { buildMultipart, MultipartPart, boundaryCollides } from "std/http/multipart";
-import { createHeaders, setHeader } from "std/http/headers";
 import { error as errStyle, bold, green, cyan, dim } from "../../utils/color";
-import { registryBaseUrl } from "./registry";
-
-const PUBLISH_API_BASE = registryBaseUrl();
+import { registryRequest, registryErrorText } from "./registry";
 
 // Server hard limits — mirror these client-side so the user gets a clear
 // error before we try to upload.
@@ -322,16 +319,7 @@ export function cmdPublish(projectRoot: string, args: string[]): boolean {
 	const mp = buildMultipart(parts, boundary);
 
 	// --- POST to registry ---
-	const headers = createHeaders();
-	setHeader(headers, "authorization", "Bearer " + token);
-	setHeader(headers, "content-type", mp.contentType);
-	const postR = fetch(PUBLISH_API_BASE + "/packages", {
-		method: "POST",
-		body: mp.body,
-		headers: headers,
-		timeout: 120000, // 2 minutes for the full upload
-		maxRedirects: 0,
-	});
+	const postR = registryRequest("POST", "/packages", mp.body, token, mp.contentType, 120000); // 2 minutes for the full upload
 	if (!postR.ok) {
 		console.log(`${errStyle("error")}: failed to reach registry: ${postR.error.message}`);
 		return false;
@@ -352,8 +340,7 @@ export function cmdPublish(projectRoot: string, args: string[]): boolean {
 	}
 
 	// Error path — surface whatever the server said.
-	const serverError = extractJsonField(resp.body, "error");
-	const hint = serverError != "" ? serverError : resp.body;
+	const hint = registryErrorText(resp);
 	match (resp.status) {
 		401 => {
 			console.log(`${errStyle("error")}: token rejected by registry (expired or revoked)`);

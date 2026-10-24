@@ -11,11 +11,10 @@ import { HttpResponse } from "std/http/types";
 import { HttpError } from "std/http/errors";
 import { createHeaders, setHeader } from "std/http/headers";
 import { sleepAsync } from "std/core/promise";
+import { registryRequest } from "./registry";
 import { loadToken, saveToken, deleteToken, credentialsErrorMessage } from "./credentials";
 
 const GITHUB_CLIENT_ID = "Ov23liXkaph4TDPP19yd";
-const REGISTRY_HOST = "api.metascriptlang.org";
-const API_BASE = "https://" + REGISTRY_HOST;
 
 // Parse a URL-encoded key=value pair from a &-separated response.
 function parseUrlEncoded(response: string, key: string): string {
@@ -179,7 +178,7 @@ export async function cmdLogin(projectRoot: string): Promise<boolean> {
 
 	// Step 4: Exchange GitHub token for registry token
 	const authBody = "{\"github_token\":\"" + githubToken + "\"}";
-	const authResult = httpsPost(REGISTRY_HOST, "/auth/github/token", authBody, "application/json");
+	const authResult = registryRequest("POST", "/auth/github/token", authBody, "", "application/json");
 
 	if (!authResult.ok) {
 		console.log("error: failed to connect to registry");
@@ -224,29 +223,13 @@ export function cmdLogout(): boolean {
 	// already rejected, we still fall through to truncate the local file —
 	// the credentials file is the authoritative ticket, server revoke is an
 	// additional guarantee.
-	const meHeaders = createHeaders();
-	setHeader(meHeaders, "authorization", "Bearer " + existing);
-	const meResult = fetch(API_BASE + "/auth/me", {
-		method: "GET",
-		body: "",
-		headers: meHeaders,
-		timeout: 30000,
-		maxRedirects: 5,
-	});
+	const meResult = registryRequest("GET", "/auth/me", "", existing);
 
 	let revoked = false;
 	if (meResult.ok && meResult.value.status == 200) {
 		const tokenId = extractJsonField(meResult.value.body, "tokenId");
 		if (tokenId != "") {
-			const delHeaders = createHeaders();
-			setHeader(delHeaders, "authorization", "Bearer " + existing);
-			const delResult = fetch(API_BASE + "/auth/tokens/" + tokenId, {
-				method: "DELETE",
-				body: "",
-				headers: delHeaders,
-				timeout: 30000,
-				maxRedirects: 0,
-			});
+			const delResult = registryRequest("DELETE", "/auth/tokens/" + tokenId, "", existing);
 			if (delResult.ok && delResult.value.status >= 200 && delResult.value.status < 300) {
 				revoked = true;
 			}
@@ -293,15 +276,7 @@ export function cmdWhoami(args: string[]): boolean {
 		i = i + 1;
 	}
 
-	const headers = createHeaders();
-	setHeader(headers, "authorization", "Bearer " + token);
-	const result = fetch(API_BASE + "/auth/me", {
-		method: "GET",
-		body: "",
-		headers: headers,
-		timeout: 30000,
-		maxRedirects: 5,
-	});
+	const result = registryRequest("GET", "/auth/me", "", token);
 
 	if (!result.ok) {
 		console.log("error: couldn't reach registry: " + result.error.message);

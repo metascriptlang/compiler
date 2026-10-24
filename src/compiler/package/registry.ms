@@ -7,10 +7,11 @@
 // API reference: ~/metascript/landing/apps/api/src/routes/packages.ts
 
 import { HttpError, httpError, HttpErrorKind, invalidResponse } from "std/http/errors";
+import { HttpResponse } from "std/http/types";
+import { createHeaders, setHeader } from "std/http/headers";
 import { parseJson, JsonValue, JsonKind, getDynamicField, asString } from "std/core/json";
 import { arrayField, depsOf } from "./json";
 
-// Default registry URL — override via METASCRIPT_REGISTRY env var.
 const DEFAULT_REGISTRY = "https://api.metascriptlang.org";
 
 // ===== Types =====
@@ -49,9 +50,32 @@ function parseVersionRecord(v: JsonValue): RegistryVersion {
 
 // ===== Public API =====
 
-// Return the registry base URL (from METASCRIPT_REGISTRY env or default).
 export function registryBaseUrl(): string {
 	return DEFAULT_REGISTRY;
+}
+
+// One call to the registry API. `token` "" sends no authorization header, `contentType` ""
+// sends no content-type. A registry call never follows a redirect, so the bearer token
+// cannot be forwarded to another host.
+export function registryRequest(method: string, path: string, body: string, token: string, contentType: string = "", timeout: int32 = 30000): Result<HttpResponse, HttpError> {
+	const headers = createHeaders();
+	if (token != "") setHeader(headers, "authorization", "Bearer " + token);
+	if (contentType != "") setHeader(headers, "content-type", contentType);
+	return fetch(registryBaseUrl() + path, {
+		method: method,
+		body: body,
+		headers: headers,
+		timeout: timeout,
+		maxRedirects: 0,
+	});
+}
+
+// The message of a non-2xx response: its JSON "error" field, else the whole body.
+export function registryErrorText(resp: HttpResponse): string {
+	const parsed = parseJson(resp.body);
+	if (!parsed.ok) return resp.body;
+	const message = parsed.value.getDynamicField("error").asString();
+	return message != "" ? message : resp.body;
 }
 
 // Build the API path for a package name, handling scoped names.
@@ -126,6 +150,10 @@ export function latestVersion(pkg: RegistryPackage): RegistryVersion | null {
 	return pkg.versions[0];
 }
 
+function testResponse(body: string): HttpResponse {
+	return { status: 400, statusText: "Bad Request", headers: createHeaders(), body: body };
+}
+
 function testPackage(versions: string[]): RegistryPackage {
 	const records: RegistryVersion[] = [];
 	for (const v of versions) {
@@ -176,4 +204,12 @@ test "a version record with mistyped fields reads as empty" {
 	const bare = parseJson('{ "dependencies": [1] }');
 	assert bare.ok;
 	if (bare.ok) assert parseVersionRecord(bare.value).depKeys.length == 0;
+}
+
+test "registryErrorText reads the error field, else the body" {
+	assert registryErrorText(testResponse('{"error":"name taken"}')) == "name taken";
+	assert registryErrorText(testResponse('{"error":"say \\"no\\""}')) == 'say "no"';
+	assert registryErrorText(testResponse('{"message":"x"}')) == '{"message":"x"}';
+	assert registryErrorText(testResponse("Bad Gateway")) == "Bad Gateway";
+	assert registryErrorText(testResponse("")) == "";
 }
