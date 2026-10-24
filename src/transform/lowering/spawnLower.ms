@@ -5,14 +5,13 @@
 // Wraps return values in msBoxDouble/msBoxBool/msBoxInt32 so the
 // C runtime can store them as void* in msFuture.value.
 
-import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ObjectLiteralData, Type, TypeKind, SymbolKind, DeclKind, createNode } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ObjectLiteralData, IdentifierData, Type, TypeKind, SymbolKind, DeclKind, createNode } from "../../ast/node";
 import { createFunction, createPtr, voidType, isAwaitable, awaitedType, literalBase, skipModifier, unwrapRefNullUnion, isAtomicRef } from "../../checker/types";
 import { GcMode } from "../../checker/context";
-import { TransformContext, freshOwnedSym } from "../context";
+import { TransformContext, freshOwnedSym, newLoweredSym } from "../context";
 import { walkNode } from "../walker";
 import { custodyReaches } from "../cycles";
-import { lowerDefer } from "./deferLower";
-import { makeCall, makeNull, makeObjectLiteral, syntheticToken, runtimeRef, isRuntimeProcSym, boxedInFuture, makeBlock, makeExprStmt, makeIdentResolved, makeReturn, makeVarDecl } from "../util";
+import { makeCall, makeNull, makeObjectLiteral, syntheticToken, runtimeRef, isRuntimeProcSym, boxedInFuture, makeBlock, makeExprStmt, makeIdentResolved, makeReturn, makeVarDecl, makeMoveExpr } from "../util";
 
 function needsBoxing(t: Type): boolean {
 	if (t == null) return false;
@@ -170,8 +169,7 @@ function prependStmts(fn: Node, stmts: Node[], loc: SourceLocation): void {
 	}
 }
 
-// ULTRALOCK V3: a moved capture leaves the sender's cycle roots before the task is submitted,
-// and the worker's when the task settles, since its env is released on the sender's loop.
+// ULTRALOCK V3: a moved capture leaves the sender's cycle roots before the task is submitted.
 export function disownMovedCaptures(closure: Node, ctx: TransformContext): void {
 	if (closure.kind != NodeKind.CallExpr) return;
 	const cd = closure.data as CallExprData;
@@ -180,20 +178,12 @@ export function disownMovedCaptures(closure: Node, ctx: TransformContext): void 
 	const params = iife.paramSyms!;
 	const loc = iife.location;
 	const atSubmit: Node[] = [];
-	const atSettle: Node[] = [];
 	for (let i = 0; i < params.length && i < cd.arguments.length; i += 1) {
 		if (cd.arguments[i].kind == NodeKind.MoveExpr && mayHoldCycleRoot(params[i].symbolType, ctx)) {
 			atSubmit.push(disownStmt(makeIdentResolved(params[i], loc), params[i].symbolType, loc));
-			atSettle.push(disownStmt(makeIdentResolved(params[i], loc), params[i].symbolType, loc));
 		}
 	}
-	if (atSubmit.length == 0) return;
-	const thunk = spawnThunk(closure);
-	if (thunk != closure) {
-		prependStmts(thunk, [createNode(NodeKind.DeferStmt, { deferExpr: makeBlock(atSettle, loc) }, syntheticToken(loc))], loc);
-		lowerDefer(thunk, ctx);
-	}
-	prependStmts(iife, atSubmit, loc);
+	if (atSubmit.length > 0) prependStmts(iife, atSubmit, loc);
 }
 
 function disownedReturn(arg: Node, retType: Type, ctx: TransformContext, loc: SourceLocation): Node {
@@ -255,6 +245,40 @@ export function disownResult(thunk: Node, retType: Type | null, ctx: TransformCo
 	} else if (thunk.kind == NodeKind.FunctionExpr) {
 		disownReturnsIn((thunk.data as FunctionExprData).funcExprBody, retType, ctx);
 	}
+}
+
+// ULTRALOCK T4: the thunk takes each moved capture out of its env slot at entry, so the scope-end
+// destroy drops it inside the task, before the result is published.
+export function takeMovedCaptures(closure: Node, ctx: TransformContext): void {
+	if (closure.kind != NodeKind.CallExpr) return;
+	const cd = closure.data as CallExprData;
+	const iife = cd.callee;
+	if (iife.kind != NodeKind.ArrowFunction || iife.paramSyms == null) return;
+	const thunk = spawnThunk(closure);
+	if (thunk == closure) return;
+	const params = iife.paramSyms!;
+	const loc = thunk.location;
+	const takes: Node[] = [];
+	for (let i = 0; i < params.length && i < cd.arguments.length; i += 1) {
+		if (cd.arguments[i].kind != NodeKind.MoveExpr) continue;
+		const slot = params[i];
+		const taken = newLoweredSym(ctx, SymbolKind.Variable, "__taken_" + slot.name + "_" + ctx.tempCounter.toString(), slot.symbolType, true);
+		ctx.tempCounter += 1;
+		walkNode(thunk, (n: Node): Node => {
+			if (n.kind == NodeKind.Identifier && n.resolvedSym === slot) {
+				n.resolvedSym = taken;
+				(n.data as IdentifierData).name = taken.name;
+			}
+			return n;
+		});
+		const src = makeMoveExpr(makeIdentResolved(slot, loc), loc);
+		src.nodeType = slot.symbolType;
+		const decl = makeVarDecl(taken.name, src, DeclKind.Let, loc);
+		decl.resolvedSym = taken;
+		decl.nodeType = slot.symbolType;
+		takes.push(decl);
+	}
+	if (takes.length > 0) prependStmts(thunk, takes, loc);
 }
 
 export function lowerSpawn(program: Node, ctx: TransformContext): Node {
@@ -327,6 +351,7 @@ export function lowerSpawn(program: Node, ctx: TransformContext): Node {
 				closureArg.nodeType.typeReturn = createPtr(voidType());
 			}
 		}
+		takeMovedCaptures(closureArg, ctx);
 		disownMovedCaptures(closureArg, ctx);
 
 		return node;
