@@ -1,9 +1,10 @@
 // MetaScript Compiler — managed C toolchain provisioning (locate + install Zig).
 
 import { stopBuild } from "./io";
-import { exec, execFileCapture, env, platform, arch, exit } from "std/process";
-import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable } from "std/fs";
+import { exec, execFileCapture, env, platform, arch, exit, cwd } from "std/process";
+import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable, rmdir } from "std/fs";
 import { quoteCcArg } from "../utils/commandLine";
+import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 import { readLine, writeStderr } from "std/io";
 import { CliOptions, buildCpu } from "./options";
@@ -327,6 +328,28 @@ test "bundle manifest paths cannot escape or inject checksum records" {
 	}
 }
 
+function nativeToolchainPath(compilerRoot: string, explicit: string): string {
+	if (explicit != "") return explicit;
+	if (compilerRoot == "") return "";
+	for (const entry of readDir(compilerRoot)) {
+		if (entry == "msc-toolchain" || entry == "msc-toolchain/") return join(compilerRoot, "msc-toolchain");
+	}
+	return "";
+}
+
+test "native bundle discovery preserves explicit selection and notices an incomplete adjacent bundle" {
+	const root = join(cwd(), `out/nativeToolchainProbe-${performance.now()}`);
+	assert ensureDir(root).ok;
+	assert nativeToolchainPath(root, "") == "";
+	const bundle = join(root, "msc-toolchain");
+	assert ensureDir(bundle).ok;
+	assert nativeToolchainPath(root, "") == bundle;
+	assert nativeToolchainPath(root, "/explicit/bundle") == "/explicit/bundle";
+	assert nativeToolchainPath("", "") == "";
+	assert rmdir(bundle).ok;
+	assert rmdir(root).ok;
+}
+
 // Normalize the --cc alias and resolve (installing if needed) the compiler to
 // use. Every command that emits C must call this — cmdBuildC and cmdTest both
 // do; cmdRun reaches it through cmdBuildC. LTO capability checks live in
@@ -338,7 +361,7 @@ export function resolveCC(opts: CliOptions): void {
 	if (opts.ccBinary != "" || opts.ccCompiler != 0) return;
 	if (opts.targetOs == "solana" || opts.targetOs == "bare" || opts.targetOs == "emcc") return;
 
-	const native = env.get("MSC_NATIVE_TOOLCHAIN");
+	const native = nativeToolchainPath(resolveRuntimeDir(), env.get("MSC_NATIVE_TOOLCHAIN"));
 	if (native != "") {
 		const selected = selectNativeToolchain(opts, native);
 		if (!selected.ok) {
