@@ -10,38 +10,13 @@
 
 import { createHeaders, setHeader } from "std/http/headers";
 import { HttpHeaders } from "std/core/fetch/types";
-import { parseJson, JsonValue, JsonKind } from "std/core/json";
+import { parseJson, getDynamicField, asString } from "std/core/json";
+import { arrayField } from "./json";
 import { loadToken } from "./login";
 import { registryBaseUrl } from "./registry";
 import { error as errStyle, bold, green, cyan, dim } from "../../utils/color";
 
 const ORG_API_BASE = registryBaseUrl();
-
-function getStr(obj: JsonValue, field: string): string {
-	if (obj == null || obj.kind != JsonKind.Object) return "";
-	let i = 0;
-	while (i < obj.keys.length) {
-		if (obj.keys[i] == field && i < obj.values.length) {
-			const v = obj.values[i];
-			if (v != null && v.kind == JsonKind.String) return v.strVal;
-		}
-		i = i + 1;
-	}
-	return "";
-}
-
-function getArray(obj: JsonValue, field: string): JsonValue[] {
-	if (obj == null || obj.kind != JsonKind.Object) return [];
-	let i = 0;
-	while (i < obj.keys.length) {
-		if (obj.keys[i] == field && i < obj.values.length) {
-			const v = obj.values[i];
-			if (v != null && v.kind == JsonKind.Array) return v.items;
-		}
-		i = i + 1;
-	}
-	return [];
-}
 
 function authHeaders(): { headers: HttpHeaders, ok: boolean } {
 	const token = loadToken();
@@ -113,7 +88,7 @@ function orgCreate(args: string[]): boolean {
 	}
 
 	const parsed = parseJson(resp.body);
-	const errMsg = parsed.ok ? getStr(parsed.value, "error") : resp.body;
+	const errMsg = parsed.ok ? parsed.value.getDynamicField("error").asString() : resp.body;
 	console.log(`${errStyle("error")}: ${errMsg}`);
 	return false;
 }
@@ -143,7 +118,7 @@ function orgInvite(args: string[]): boolean {
 	}
 
 	const parsed = parseJson(resp.body);
-	const errMsg = parsed.ok ? getStr(parsed.value, "error") : resp.body;
+	const errMsg = parsed.ok ? parsed.value.getDynamicField("error").asString() : resp.body;
 	console.log(`${errStyle("error")}: ${errMsg}`);
 	return false;
 }
@@ -171,7 +146,7 @@ function orgRemove(args: string[]): boolean {
 	}
 
 	const parsed = parseJson(resp.body);
-	const errMsg = parsed.ok ? getStr(parsed.value, "error") : resp.body;
+	const errMsg = parsed.ok ? parsed.value.getDynamicField("error").asString() : resp.body;
 	console.log(`${errStyle("error")}: ${errMsg}`);
 	return false;
 }
@@ -198,7 +173,7 @@ function orgList(): boolean {
 		return false;
 	}
 
-	const orgs = getArray(parsed.value, "organizations");
+	const orgs = arrayField(parsed.value, "organizations");
 	if (orgs.length == 0) {
 		console.log("no organizations — create one with " + cyan("msc org create <name>"));
 		return true;
@@ -206,8 +181,8 @@ function orgList(): boolean {
 
 	let i = 0;
 	while (i < orgs.length) {
-		const name = getStr(orgs[i], "orgName");
-		const role = getStr(orgs[i], "role");
+		const name = orgs[i].getDynamicField("orgName").asString();
+		const role = orgs[i].getDynamicField("role").asString();
 		console.log(`  ${cyan("@" + name)}  ${dim(role)}`);
 		i = i + 1;
 	}
@@ -239,12 +214,12 @@ function orgMembers(args: string[]): boolean {
 		return false;
 	}
 
-	const members = getArray(parsed.value, "members");
+	const members = arrayField(parsed.value, "members");
 	console.log(`${bold("@" + orgName)} — ${members.length.toString()} member(s)`);
 	let i = 0;
 	while (i < members.length) {
-		const username = getStr(members[i], "username");
-		const role = getStr(members[i], "role");
+		const username = members[i].getDynamicField("username").asString();
+		const role = members[i].getDynamicField("role").asString();
 		console.log(`  ${cyan(username)}  ${dim(role)}`);
 		i = i + 1;
 	}
@@ -283,7 +258,7 @@ function orgRole(args: string[]): boolean {
 	}
 
 	const parsed = parseJson(resp.body);
-	const errMsg = parsed.ok ? getStr(parsed.value, "error") : resp.body;
+	const errMsg = parsed.ok ? parsed.value.getDynamicField("error").asString() : resp.body;
 	console.log(`${errStyle("error")}: ${errMsg}`);
 	return false;
 }

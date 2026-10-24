@@ -7,7 +7,8 @@
 // API reference: ~/metascript/landing/apps/api/src/routes/packages.ts
 
 import { HttpError, httpError, HttpErrorKind, invalidResponse } from "std/http/errors";
-import { parseJson, JsonValue, JsonKind } from "std/core/json";
+import { parseJson, JsonValue, JsonKind, getDynamicField, asString } from "std/core/json";
+import { arrayField, depsOf } from "./json";
 
 // Default registry URL — override via METASCRIPT_REGISTRY env var.
 const DEFAULT_REGISTRY = "https://api.metascriptlang.org";
@@ -34,68 +35,13 @@ export interface RegistryPackage {
 	versions: RegistryVersion[];
 }
 
-// ===== JSON Helpers =====
-
-function getStr(obj: JsonValue, field: string): string {
-	if (obj == null || obj.kind != JsonKind.Object) return "";
-	let i = 0;
-	while (i < obj.keys.length) {
-		if (obj.keys[i] == field && i < obj.values.length) {
-			const v = obj.values[i];
-			if (v != null && v.kind == JsonKind.String) return v.strVal;
-		}
-		i = i + 1;
-	}
-	return "";
-}
-
-function getObj(obj: JsonValue, field: string): JsonValue {
-	if (obj == null || obj.kind != JsonKind.Object) return null as unknown as JsonValue;
-	let i = 0;
-	while (i < obj.keys.length) {
-		if (obj.keys[i] == field && i < obj.values.length) return obj.values[i];
-		i = i + 1;
-	}
-	return null as unknown as JsonValue;
-}
-
-function getArray(obj: JsonValue, field: string): JsonValue[] {
-	const empty: JsonValue[] = [];
-	const arr = getObj(obj, field);
-	if (arr == null || arr.kind != JsonKind.Array) return empty;
-	return arr.items;
-}
-
-// Flatten a JSON object into parallel key/value arrays of strings.
-function parseDeps(depsObj: JsonValue): { keys: string[], values: string[] } {
-	const keys: string[] = [];
-	const values: string[] = [];
-	if (depsObj == null || depsObj.kind != JsonKind.Object) return { keys: keys, values: values };
-	let i = 0;
-	while (i < depsObj.keys.length) {
-		keys.push(depsObj.keys[i]);
-		if (i < depsObj.values.length) {
-			const el = depsObj.values[i];
-			if (el != null && el.kind == JsonKind.String) {
-				values.push(el.strVal);
-			} else {
-				values.push("");
-			}
-		} else {
-			values.push("");
-		}
-		i = i + 1;
-	}
-	return { keys: keys, values: values };
-}
-
 function parseVersionRecord(v: JsonValue): RegistryVersion {
-	const deps = parseDeps(getObj(v, "dependencies"));
+	const deps = depsOf(v.getDynamicField("dependencies"));
 	return {
-		version: getStr(v, "version"),
-		integrity: getStr(v, "integrity"),
-		archiveUrl: getStr(v, "archiveUrl"),
-		publishedAt: getStr(v, "publishedAt"),
+		version: v.getDynamicField("version").asString(),
+		integrity: v.getDynamicField("integrity").asString(),
+		archiveUrl: v.getDynamicField("archiveUrl").asString(),
+		publishedAt: v.getDynamicField("publishedAt").asString(),
 		depKeys: deps.keys,
 		depValues: deps.values,
 	};
@@ -150,18 +96,18 @@ export function fetchPackageInfo(name: string): Result<RegistryPackage, HttpErro
 	}
 	const obj = parsed.value;
 
-	const versionItems = getArray(obj, "versions");
+	const versionItems = arrayField(obj, "versions");
 	const versions: RegistryVersion[] = [];
 	for (const item of versionItems) {
 		versions.push(parseVersionRecord(item));
 	}
 
 	return Result.ok({
-		name: getStr(obj, "name"),
-		description: getStr(obj, "description"),
-		license: getStr(obj, "license"),
-		repository: getStr(obj, "repository"),
-		homepage: getStr(obj, "homepage"),
+		name: obj.getDynamicField("name").asString(),
+		description: obj.getDynamicField("description").asString(),
+		license: obj.getDynamicField("license").asString(),
+		repository: obj.getDynamicField("repository").asString(),
+		homepage: obj.getDynamicField("homepage").asString(),
 		versions: versions,
 	});
 }
@@ -215,4 +161,19 @@ test "latestVersion is the first record, or null for a package with none" {
 	assert latest != null;
 	if (latest != null) assert latest.version == "2.0.0";
 	assert latestVersion(testPackage([])) == null;
+}
+
+test "a version record with mistyped fields reads as empty" {
+	const parsed = parseJson('{ "version": 2, "integrity": null, "archiveUrl": "u", "publishedAt": 1.5,' +
+		' "dependencies": { "a": "1.0.0", "b": 3 } }');
+	assert parsed.ok;
+	if (parsed.ok) {
+		const rec = parseVersionRecord(parsed.value);
+		assert rec.version == "" && rec.integrity == "" && rec.publishedAt == "";
+		assert rec.archiveUrl == "u";
+		assert rec.depKeys.length == 2 && rec.depValues[0] == "1.0.0" && rec.depValues[1] == "";
+	}
+	const bare = parseJson('{ "dependencies": [1] }');
+	assert bare.ok;
+	if (bare.ok) assert parseVersionRecord(bare.value).depKeys.length == 0;
 }

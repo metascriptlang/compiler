@@ -4,7 +4,8 @@
 
 import { exists, readFile, writeFile } from "std/fs";
 import { parseJson, jsonObject, jsonString, jsonNumber, stringify, stringifyPretty } from "std/core/json";
-import { JsonValue, JsonKind } from "std/core/json";
+import { JsonValue, JsonKind, getDynamicField, asNumber, asString } from "std/core/json";
+import { depsOf } from "./json";
 import { SourceKind } from "./version";
 
 // --- Types ---
@@ -50,30 +51,9 @@ export function lockfileErrorMessage(e: LockfileError): string {
 
 // --- Read ---
 
-function getStr(obj: JsonValue, field: string): string {
-	if (obj == null || obj.kind != JsonKind.Object) return "";
-	let i = 0;
-	while (i < obj.keys.length) {
-		if (obj.keys[i] == field && i < obj.values.length) {
-			const v = obj.values[i];
-			if (v != null && v.kind == JsonKind.String) return v.strVal;
-			if (v != null && v.kind == JsonKind.Number) return v.numVal.toString();
-		}
-		i = i + 1;
-	}
-	return "";
-}
-
-function getObj(obj: JsonValue, field: string): JsonValue {
-	if (obj == null || obj.kind != JsonKind.Object) return null as unknown as JsonValue;
-	let i = 0;
-	while (i < obj.keys.length) {
-		if (obj.keys[i] == field && i < obj.values.length) {
-			return obj.values[i];
-		}
-		i = i + 1;
-	}
-	return null as unknown as JsonValue;
+function textField(obj: JsonValue, field: string): string {
+	const v = obj.getDynamicField(field);
+	return v.kind == JsonKind.Number ? v.numVal.toString() : v.asString();
 }
 
 function sourceKindFor(name: string): Result<SourceKind, LockfileError> {
@@ -91,28 +71,6 @@ function sourceName(kind: SourceKind): string {
 	};
 }
 
-function parseDeps(depsObj: JsonValue): { keys: string[], values: string[] } {
-	const keys: string[] = [];
-	const values: string[] = [];
-	if (depsObj == null || depsObj.kind != JsonKind.Object) return { keys, values };
-	let i = 0;
-	while (i < depsObj.keys.length) {
-		keys.push(depsObj.keys[i]);
-		if (i < depsObj.values.length) {
-			const el = depsObj.values[i];
-			if (el != null && el.kind == JsonKind.String) {
-				values.push(el.strVal);
-			} else {
-				values.push("");
-			}
-		} else {
-			values.push("");
-		}
-		i = i + 1;
-	}
-	return { keys, values };
-}
-
 export function parseLockfile(content: string): Result<Lockfile, LockfileError> {
 	if (content == "") return Result.err(LockfileError.Empty);
 	const parsed = parseJson(content);
@@ -120,13 +78,12 @@ export function parseLockfile(content: string): Result<Lockfile, LockfileError> 
 	const root = parsed.value;
 	if (root == null || root.kind != JsonKind.Object) return Result.err(LockfileError.BadShape);
 
-	const versionVal = getObj(root, "version");
-	if (versionVal == null || versionVal.asNumber(-1) != 1) {
+	if (root.getDynamicField("version").asNumber(-1) != 1) {
 		return Result.err(LockfileError.BadVersion);
 	}
 
-	const pkgsObj = getObj(root, "packages");
-	if (pkgsObj == null || pkgsObj.kind != JsonKind.Object) {
+	const pkgsObj = root.getDynamicField("packages");
+	if (pkgsObj.kind != JsonKind.Object) {
 		return Result.err(LockfileError.BadShape);
 	}
 
@@ -137,16 +94,16 @@ export function parseLockfile(content: string): Result<Lockfile, LockfileError> 
 		if (entryObj == null || entryObj.kind != JsonKind.Object) {
 			return Result.err(LockfileError.BadShape);
 		}
-		const source = try sourceKindFor(getStr(entryObj, "source"));
-		const deps = parseDeps(getObj(entryObj, "deps"));
+		const source = try sourceKindFor(textField(entryObj, "source"));
+		const deps = depsOf(entryObj.getDynamicField("deps"));
 		entries.push({
 			key: pkgsObj.keys[pi],
 			source,
-			version: getStr(entryObj, "version"),
-			integrity: getStr(entryObj, "integrity"),
-			url: getStr(entryObj, "url"),
-			gitRef: getStr(entryObj, "ref"),
-			commit: getStr(entryObj, "commit"),
+			version: textField(entryObj, "version"),
+			integrity: textField(entryObj, "integrity"),
+			url: textField(entryObj, "url"),
+			gitRef: textField(entryObj, "ref"),
+			commit: textField(entryObj, "commit"),
 			depKeys: deps.keys,
 			depValues: deps.values,
 		});
@@ -334,6 +291,30 @@ test "a valid lockfile keeps its entries, deps and source" {
 		assert findEntry(r.value, "cool-json", "1.2.3") != null;
 		assert findEntry(r.value, "cool-json", "9.9.9") == null;
 	}
+}
+
+test "a mistyped field reads as empty, a fractional number as its text" {
+	const content = '{ "version": 1, "packages": { "a@1.0.0": {' +
+		' "version": 1.5, "integrity": 7, "url": null, "ref": true, "commit": ["x"],' +
+		' "deps": { "ok": "1.0.0", "int": 3, "obj": {} } } } }';
+	const r = parseLockfile(content);
+	assert r.ok;
+	if (r.ok) {
+		const e = r.value.entries[0];
+		assert e.version == "1.5";
+		assert e.integrity == "" && e.url == "" && e.gitRef == "" && e.commit == "";
+		assert e.depKeys.length == 3 && e.depKeys[2] == "obj";
+		assert e.depValues[0] == "1.0.0" && e.depValues[1] == "" && e.depValues[2] == "";
+	}
+	const wrongDeps = parseLockfile('{ "version": 1, "packages": { "a@1.0.0": { "deps": [1] }, "b@1.0.0": { "deps": "x" } } }');
+	assert wrongDeps.ok;
+	if (wrongDeps.ok) {
+		assert wrongDeps.value.entries[0].depKeys.length == 0;
+		assert wrongDeps.value.entries[1].depKeys.length == 0;
+	}
+	assert parseError('{ "version": 1, "packages": [] }') == LockfileError.BadShape;
+	assert parseError('{ "version": "1", "packages": {} }') == LockfileError.BadVersion;
+	assert parseError('{ "version": 1.0, "packages": { "a@1": { "source": 1.5 } } }') == LockfileError.BadShape;
 }
 
 test "writing under a missing directory is a Write error" {
