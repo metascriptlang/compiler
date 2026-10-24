@@ -4,10 +4,9 @@
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, Expression, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, takePendingComments } from "../context";
-import { parseMemberChain, tryParseLiteralKeyword } from "./util";
+import { parseMemberChain, tryParseLiteralKeyword, numberLiteralNode } from "./util";
 import { parseOk } from "./testUtil";
 import { isIdentLike } from "../util";
-import { parseNumberLiteral, parseIntegerLiteral, integerLiteralFits, integerLiteralIsBitPattern, numericLiteralIsFloat } from "../../utils/string";
 
 
 type ExprResult = Result<Expression, string>;
@@ -168,11 +167,7 @@ function parseSinglePattern(state: ParserState): ExprResult {
 	// Number literal
 	if (token.kind == TokenKind.Number) {
 		advance(state);
-		const isFloat = numericLiteralIsFloat(token.value);
-		const intVal = isFloat ? 0 as int64 : parseIntegerLiteral(token.value);
-		const outOfRangeText = isFloat || integerLiteralFits(token.value) ? "" : token.value;
-		const isBitPattern = !isFloat && integerLiteralIsBitPattern(token.value);
-		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseNumberLiteral(token.value), isFloat, intVal, outOfRangeText, isBitPattern }, token));
+		return Result.ok(numberLiteralNode(token));
 	}
 
 	// String literal — with optional .code suffix ("a".code → MemberExpr)

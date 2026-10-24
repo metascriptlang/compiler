@@ -5,8 +5,8 @@ import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, createNodeAt, makeLoc, BinaryExprData, UnaryExprData, UpdateExprData } from "../../ast/node";
 import { ParserState, current, advance } from "../context";
 import { lex } from "../../lexer/lexer";
-import { parseNumberLiteral, parseIntegerLiteral, integerLiteralFits, integerLiteralIsBitPattern, numericLiteralIsFloat } from "../../utils/string";
 import { isIdentLike } from "../util";
+import { numberLiteralNode } from "./util";
 import { parseExpression } from "./core";
 
 type ExprResult = Result<Expression, string>;
@@ -61,11 +61,7 @@ export function mockExpr(state: ParserState, minPrec: int32): ExprResult {
 	const tok = current(state);
 	if (tok.kind == TokenKind.Number) {
 		advance(state);
-		const isFloat = numericLiteralIsFloat(tok.value);
-		const intVal = isFloat ? 0 as int64 : parseIntegerLiteral(tok.value);
-		const outOfRangeText = isFloat || integerLiteralFits(tok.value) ? "" : tok.value;
-		const isBitPattern = !isFloat && integerLiteralIsBitPattern(tok.value);
-		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseNumberLiteral(tok.value), isFloat, intVal, outOfRangeText, isBitPattern }, tok));
+		return Result.ok(numberLiteralNode(tok));
 	}
 	if (isIdentLike(tok)) {
 		advance(state);

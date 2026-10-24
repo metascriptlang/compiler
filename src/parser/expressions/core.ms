@@ -13,9 +13,8 @@ import { parseJsxRoot } from "./jsx";
 import { parseExprList, parseCallExpr, takeListEndComments } from "./call";
 import { parseTemplateLiteral } from "./template";
 import { parseBlockStmt } from "../statements/core";
-import { tryParseLiteralKeyword } from "./util";
+import { tryParseLiteralKeyword, numberLiteralNode } from "./util";
 import { parseOk, exprKind, exprNode, exprOp, binLeftKind } from "./testUtil";
-import { parseNumberLiteral, parseIntegerLiteral, integerLiteralFits, integerLiteralIsBitPattern, numericLiteralIsFloat } from "../../utils/string";
 
 
 type ExprResult = Result<Expression, string>;
@@ -297,11 +296,7 @@ function parsePrimary(state: ParserState): ExprResult {
 
 	if (token.kind == TokenKind.Number) {
 		advance(state);
-		const isFloat = numericLiteralIsFloat(token.value);
-		const intVal = isFloat ? 0 as int64 : parseIntegerLiteral(token.value);
-		const outOfRangeText = isFloat || integerLiteralFits(token.value) ? "" : token.value;
-		const isBitPattern = !isFloat && integerLiteralIsBitPattern(token.value);
-		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseNumberLiteral(token.value), isFloat, intVal, outOfRangeText, isBitPattern }, token));
+		return Result.ok(numberLiteralNode(token));
 	}
 
 	if (token.kind == TokenKind.String) {

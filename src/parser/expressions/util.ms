@@ -1,8 +1,9 @@
 // Expression Helpers - Shared by the expression parser (core.ms) and the match-pattern parser (match.ms)
 
-import { TokenKind, isIdentOrKeyword } from "../../lexer/token";
+import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd } from "../context";
+import { parseNumberLiteral, parseIntegerLiteral, integerLiteralFits, integerLiteralIsBitPattern, numericLiteralIsFloat } from "../../utils/string";
 
 // ===== Member Access Chain Parser =====
 // Shared by new-expression (core.ms) and match-pattern (match.ms)
@@ -40,4 +41,12 @@ export function tryParseLiteralKeyword(state: ParserState): Node {
 		return createNode(NodeKind.NullLiteral, { nullPlaceholder: true }, token);
 	}
 	return null as unknown as Node;
+}
+
+export function numberLiteralNode(token: Token): Node {
+	const isFloat = numericLiteralIsFloat(token.value);
+	const intVal = isFloat ? 0 as int64 : parseIntegerLiteral(token.value);
+	const outOfRangeText = isFloat || integerLiteralFits(token.value) ? "" : token.value;
+	const isBitPattern = !isFloat && integerLiteralIsBitPattern(token.value);
+	return createNode(NodeKind.NumberLiteral, { value: parseNumberLiteral(token.value), isFloat, intVal, outOfRangeText, isBitPattern }, token);
 }
