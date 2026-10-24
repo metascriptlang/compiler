@@ -94,7 +94,7 @@ for (const [label, flag] of targets) {
 const probeDir = `${dir}/race`;
 removeAll(probeDir);
 ensureDir(probeDir);
-const probeBuilt = execFileResult("clang", ["-O1", "-std=c11", "-pthread", "-fsanitize=thread", `-I${runtimeRoot}`, `-I${runtimeRoot}/runtime`, `${root}/src/test/guard/fixtures/rcRaceProbe.c`, "-o", `${probeDir}/probe`], probeDir);
+const probeBuilt = execFileResult("clang", ["-O1", "-std=c11", "-pthread", "-fsanitize=thread", "-DRC_RACE_PROBE_MAIN", `-I${runtimeRoot}`, `-I${runtimeRoot}/runtime`, `${root}/src/test/guard/fixtures/rcRaceProbe.c`, "-o", `${probeDir}/probe`], probeDir);
 if (probeBuilt.exitCode != 0) {
 	report(`race probe: clang failed: ${probeBuilt.output}${probeBuilt.errorOutput}`);
 } else {
