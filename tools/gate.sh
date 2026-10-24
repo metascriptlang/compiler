@@ -16,7 +16,7 @@ RULES=(
   "tests,corpus|$EMITS"
   "solana|$SOLANA_SDK|$SOLANA_COMPILER"
   'guard|^(std|runtime)/solana/'
-  'guard|^src/test/guard/'
+  'guard|^src/test/guard/|^src/compiler/meta/|^std/meta/|^src/checker/bindNames\.ms$'
   'corpus,san|^src/test/corpus/'
   'san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h|promise/|actor/)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
   'fmt|^src/(compiler/fmt|parser|lexer)/|^src/test/fmt/|^std/meta/'
@@ -1583,9 +1583,10 @@ self_test() {
   local bad=0 cases got want log
   cases=$(cat <<'CASES'
 src/checker/checkPass.ms|build corpus lsp solana suite tests
+src/checker/bindNames.ms|build corpus guard lsp solana suite tests
 src/parser/parser.ms|build corpus fmt suite tests
 src/lexer/lexer.ms|build corpus fmt suite tests
-std/meta/node.ms|build corpus fmt solana suite tests
+std/meta/node.ms|build corpus fmt guard solana suite tests
 std/fs/index.ms|boundary build corpus suite tests
 vendor/miniz/miniz.c|boundary build corpus suite tests
 src/module/loader.ms|build corpus suite tests
@@ -1601,14 +1602,14 @@ src/codegen/c/expressions.ms|build corpus solana suite tests
 src/transform/lowering/deferLower.ms|build corpus guard san suite tests
 src/compiler/cc.ms|boundary build corpus solana suite tests
 src/compiler/compile.ms|boundary build corpus hcr solana suite tests
-src/compiler/meta/comptime.ms|build corpus solana suite tests
+src/compiler/meta/comptime.ms|build corpus guard solana suite tests
 src/compiler/lsp/server.ms|build lsp suite
 src/compiler/transam/query.ms|build lsp suite
 src/test/lsp/run.ms|build lsp suite
 std/process/child.cms|boundary build corpus lsp suite tests
 runtime/process.h|boundary build corpus lsp suite tests
 src/compiler/package/install.ms|boundary build suite
-src/compiler/meta/hostTable.ms|boundary build corpus solana suite tests
+src/compiler/meta/hostTable.ms|boundary build corpus guard solana suite tests
 src/test/nativeBuildBoundary.ms|boundary build suite
 src/compiler/fmt/printer.ms|build fmt suite
 src/test/c/json.ms|build suite tests
