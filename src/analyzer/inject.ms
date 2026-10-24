@@ -10,6 +10,7 @@
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
 import { bakesIntoStaticCell } from "../checker/reachability";
+import { staticDataConstBinding } from "../checker/constFold";
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { createPrimitive, unwrapRefNullUnion, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
@@ -2653,9 +2654,11 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 		if (s.kind == NodeKind.VariableDecl && s.resolvedSym != null && hasFlag(s.resolvedSym, SymbolFlag.HcrCell)) cells.push(s.resolvedSym);
 	}
 	const baked: Symbol[] = [];
+	const staticData: Symbol[] = [];
 	for (const s of d.programStmts) {
 		const decl = s.kind == NodeKind.ExportDecl ? (s.data as ExportDeclData).exportedDecl : s;
 		if (decl.kind == NodeKind.VariableDecl && decl.resolvedSym != null && bakesIntoStaticCell(decl)) baked.push(decl.resolvedSym);
+		if (decl.kind == NodeKind.VariableDecl && decl.resolvedSym != null && staticDataConstBinding(decl)) staticData.push(decl.resolvedSym);
 	}
 	pushScope(dctx, false, false);
 	dctx.finallyProtectedVars = collectFinallyVars(program);
@@ -2670,6 +2673,7 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	while (g > 0) {
 		g -= 1;
 		const vi = dctx.globalsToDestroy[g];
+		if (staticData.includes(vi.sym)) continue;
 		if (baked.includes(vi.sym)) {
 			for (const s of destroyBakedCell(vi.sym, program.location, dctx)) exits.push(s);
 		} else if (!vi.isCursor && vi.rcInfo.destroyFn != null) {

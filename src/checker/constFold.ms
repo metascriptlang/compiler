@@ -4,7 +4,7 @@ import {
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	MemberExprData, ArrayAccessData, ArrayLiteralData, ObjectLiteralData, ConditionalExprData, SpreadExprData, HiddenDerefData,
 } from "../ast/node";
-import { isIntegerType, isFloatType, createPrimitive, enumMemberValue } from "./types";
+import { isIntegerType, isFloatType, isStringLike, createPrimitive, enumMemberValue } from "./types";
 import { makeNumber, makeFloatNumber, makeIntNumber, makeString, makeBool, syntheticToken } from "./literalNodes";
 import { int64Bits } from "../utils/stdBackport";
 
@@ -796,17 +796,18 @@ const READONLY_DATA_DEPTH_LIMIT: int32 = 32;
 // scalar literals is read-only data: nothing can write it (a `const` binding is
 // deep — element and field writes are checker errors), so the SBF link may keep
 // it in .rodata instead of writable static storage.
-export function readonlyDataInitializer(init: Readonly<Node> | null, depth: int32): boolean {
+export function readonlyDataInitializer(init: Readonly<Node> | null, depth: int32, strings: boolean = false): boolean {
 	if (init == null || depth > READONLY_DATA_DEPTH_LIMIT) return false;
 	match (init.kind) {
 		NodeKind.NumberLiteral | NodeKind.BooleanLiteral => { return true; },
+		NodeKind.StringLiteral => { return strings; },
 		NodeKind.HiddenStdConv => {
 			return readonlyDataInitializer((init.data as HiddenStdConvData).convExpr, depth + 1);
 		},
 		NodeKind.ArrayLiteral => {
 			const ad = init.data as ArrayLiteralData;
 			for (const e of ad.elements) {
-				if (!readonlyDataInitializer(e, depth + 1)) return false;
+				if (!readonlyDataInitializer(e, depth + 1, strings)) return false;
 			}
 			return true;
 		},
@@ -822,10 +823,11 @@ export function readonlyDataInitializer(init: Readonly<Node> | null, depth: int3
 	};
 }
 
-export function readonlyDataTypeShape(t: Type | null, depth: int32): boolean {
+export function readonlyDataTypeShape(t: Type | null, depth: int32, strings: boolean = false): boolean {
 	if (t == null || depth > READONLY_DATA_DEPTH_LIMIT) return false;
 	if (isIntegerType(t) || isFloatType(t) || t.kind == TypeKind.Number || t.kind == TypeKind.Boolean) return true;
-	if (t.kind == TypeKind.SizedArray) return readonlyDataTypeShape(t.typeReturn, depth + 1);
+	if (strings && isStringLike(t)) return true;
+	if (t.kind == TypeKind.SizedArray) return readonlyDataTypeShape(t.typeReturn, depth + 1, strings);
 	if (t.kind == TypeKind.Struct) {
 		for (const f of t.typeChildren) {
 			if (!readonlyDataTypeShape(f, depth + 1)) return false;
@@ -838,4 +840,11 @@ export function readonlyDataTypeShape(t: Type | null, depth: int32): boolean {
 export function readonlyDataConstBinding(binding: Readonly<Node>): boolean {
 	return readonlyDataTypeShape(binding.nodeType, 0)
 		&& readonlyDataInitializer((binding.data as VariableDeclData).initializer, 0);
+}
+
+export function staticDataConstBinding(binding: Readonly<Node>): boolean {
+	const d = binding.data as VariableDeclData;
+	return d.declKind == DeclKind.Const
+		&& readonlyDataTypeShape(binding.nodeType, 0, true)
+		&& readonlyDataInitializer(d.initializer, 0, true);
 }

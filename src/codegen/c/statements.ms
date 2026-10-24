@@ -11,10 +11,10 @@ import {
 	CGen, CProc, CTryEntry,
 	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
 	readProcStmts, emitLineDir, getTemp, fillLocalName, lookupLocalSymName, lookupLocalName, setLocalSymName, pushBlock, popBlock,
-	CSection, addLine, sec, nameSetAdd, nameSetHas, addCGenError, addUnloweredError, isIndirectRef, raiseTarget,
+	CSection, addLine, sec, nameSetAdd, nameSetHas, internString, addCGenError, addUnloweredError, isIndirectRef, raiseTarget,
 } from "./context";
 import { genExpr, genExprInto, buildsInPlace, shimCallArg } from "./expressions";
-import { formatCNumber, formatCNumberLit, cBoolLiteral } from "./literals";
+import { formatCNumber, formatCNumberLit, cBoolLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { ensureCrossModuleProto } from "./forward";
 import { safeName, mangledGlobalName, mangledFunctionName, isModuleGlobalVar, mangleFieldName } from "./names";
@@ -464,7 +464,7 @@ function genNestedGlobalVar(g: CGen, p: CProc, node: Readonly<Node>, d: Readonly
 	emitStmtsLine(p, `${varName} = ${genExpr(g, p, d.initializer)};`);
 }
 
-export function readonlyDataBracedInit(init: Readonly<Node>, t: Type | null): string {
+export function readonlyDataBracedInit(g: CGen, init: Readonly<Node>, t: Type | null): string {
 	match (init.kind) {
 		NodeKind.NumberLiteral => {
 			return formatCNumberLit(init.data as NumberLiteralData, init.nodeType);
@@ -472,8 +472,12 @@ export function readonlyDataBracedInit(init: Readonly<Node>, t: Type | null): st
 		NodeKind.BooleanLiteral => {
 			return cBoolLiteral((init.data as BooleanLiteralData).boolValue);
 		},
+		NodeKind.StringLiteral => {
+			const value = (init.data as StringLiteralData).value;
+			return msStringPoolRef(internString(g.stringPool, value), cStringByteLen(value));
+		},
 		NodeKind.HiddenStdConv => {
-			return readonlyDataBracedInit((init.data as HiddenStdConvData).convExpr, t);
+			return readonlyDataBracedInit(g, (init.data as HiddenStdConvData).convExpr, t);
 		},
 		NodeKind.ArrayLiteral => {
 			// A sized array's C type is a struct with one `data[N]` member, so
@@ -482,7 +486,7 @@ export function readonlyDataBracedInit(init: Readonly<Node>, t: Type | null): st
 			const elemT = t != null && t.kind == TypeKind.SizedArray ? t.typeReturn : null;
 			let parts = "";
 			for (const e of ad.elements) {
-				const part = readonlyDataBracedInit(e, elemT);
+				const part = readonlyDataBracedInit(g, e, elemT);
 				if (part == "") return "";
 				parts = parts.length == 0 ? part : parts + ", " + part;
 			}
@@ -493,7 +497,7 @@ export function readonlyDataBracedInit(init: Readonly<Node>, t: Type | null): st
 			const od = init.data as ObjectLiteralData;
 			let parts = "";
 			for (let i = 0; i < od.properties.length; i += 1) {
-				const part = readonlyDataBracedInit(od.properties[i], null);
+				const part = readonlyDataBracedInit(g, od.properties[i], null);
 				if (part == "") return "";
 				const kv = `.${mangleFieldName(od.keys[i])} = ${part}`;
 				parts = parts.length == 0 ? kv : parts + ", " + kv;
@@ -507,7 +511,7 @@ export function readonlyDataBracedInit(init: Readonly<Node>, t: Type | null): st
 function genReadonlyDataLocal(g: CGen, p: CProc, node: Readonly<Node>, d: Readonly<VariableDeclData>): boolean {
 	if (g.checkerCtx == null || g.checkerCtx.targetOs != "solana" || d.declKind != DeclKind.Const
 			|| d.initializer == null || node.resolvedSym == null || !readonlyDataConstBinding(node)) return false;
-	const braced = readonlyDataBracedInit(d.initializer, node.nodeType);
+	const braced = readonlyDataBracedInit(g, d.initializer, node.nodeType);
 	if (braced == "") return false;
 	const varName = fillLocalName(p, safeName(d.declName), false);
 	setLocalSymName(p, node.resolvedSym, varName);
