@@ -1,0 +1,553 @@
+#!/usr/bin/env python3
+"""Prepare target runtime payloads with a local Zig, then prove them with clang and lld alone.
+
+    prepareRuntime.py --zig ZIG --engine ENGINE_DIR --output NEW_DIR [--target T ...]
+    prepareRuntime.py --prove --engine ENGINE_DIR --runtime RUNTIME_DIR [--zig ZIG] [--deny PATH ...]
+
+Production runs Zig once per target on a fixture with private caches, so every runtime file
+is attributable to that run, and copies the ordered inputs of the link line and the ordered
+include directories of the compile line it printed. Each target gets a native clang config
+file (`clang --config RUNTIME/T.cfg -c x.c`, then `clang --config RUNTIME/T.cfg x.o -o out`);
+the payload carries no Zig. The engine is found from the config file by a relative path, so
+engine and runtime are laid out as siblings (`--engine-relative`, default `../engine`).
+
+The payload is a local proof from an installed Zig, not an upstream-controlled build; its
+provenance receipt says so and never certifies redistribution.
+"""
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+import prepareEngine as pe
+
+FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
+ZIG_TIMEOUT_SECONDS = 3600
+CONFIG_TOKEN = re.compile(r"^[A-Za-z0-9_.+=:/<>,@%-]+$")
+SHARED_OBJECT = re.compile(r"\.so(\.\d+)*$")
+SAFE_NAME = re.compile(r"^[A-Za-z0-9_.+-]+$")
+LINK_VALUED = ("-o", "-z", "--entry", "-m", "--dynamic-linker", "-mllvm")
+PIC_FLAGS = ("-fno-PIE", "-fPIE", "-fno-PIC", "-fPIC", "-fno-pie", "-fpie", "-fno-pic", "-fpic")
+WASI_LICENSES = ("LICENSE", "LICENSE-APACHE", "LICENSE-APACHE-LLVM", "LICENSE-MIT")
+EXPECTED_OUTPUT = "ok sum=14 sqrt=1.414 wide=120 eps=1\n"
+
+TARGETS = {
+    "wasm32-wasi": {
+        "fixture": "runtimeWasi.c", "zigLinkArgs": [], "linker": "wasm-ld", "driverFlags": [],
+        "clangTarget": "wasm32-wasip1",
+        "notices": {"zig": ["../LICENSE"], "musl": ["libc/musl/COPYRIGHT"],
+                    "wasi-libc": ["libc/wasi/" + n for n in WASI_LICENSES]},
+    },
+    "x86_64-linux-gnu.2.31": {
+        "fixture": "runtimeLinux.c", "zigLinkArgs": ["-lm", "-lpthread"], "linker": "ld.lld",
+        "driverFlags": ["-no-pie"],
+        "notices": {"zig": ["../LICENSE"], "glibc": ["libc/glibc/LICENSES"]},
+    },
+}
+
+
+def parseCompileArgv(line):
+    """Read the target, cpu, position-independence flags, defines and ordered -isystem
+    directories from a `zig clang` line."""
+    tokens = line.split()
+    found = {"target": None, "cpu": None, "pic": [], "defines": [], "features": [], "isystem": []}
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        following = tokens[i + 1] if i + 1 < len(tokens) else None
+        if token == "-target" and following:
+            found["target"] = following
+            i += 1
+        elif token == "-isystem" and following:
+            found["isystem"].append(following)
+            i += 1
+        elif tokens[i:i + 4:2] == ["-Xclang", "-Xclang"] and tokens[i + 1:i + 2] == ["-target-cpu"]:
+            found["cpu"] = tokens[i + 3]
+            i += 3
+        elif tokens[i:i + 4:2] == ["-Xclang", "-Xclang"] and tokens[i + 1:i + 2] == ["-target-feature"]:
+            found["features"].append(tokens[i + 3])
+            i += 3
+        elif token in PIC_FLAGS:
+            found["pic"].append(token)
+        elif token.startswith("-D") and token != "-DNDEBUG":
+            found["defines"].append(token)
+        i += 1
+    for key in ("target", "cpu"):
+        if not found[key]:
+            raise pe.EngineError("compile line has no %s: %s" % (key, line))
+    if not found["isystem"]:
+        raise pe.EngineError("compile line has no -isystem: %s" % line)
+    return found
+
+
+def parseLinkArgv(line, output, objectName, cacheRoot):
+    """Split a linker line into (linker, items). An item is ("arg", text), ("input", path) for a
+    runtime file under cacheRoot, or ("user", None) for the fixture object. `-o OUTPUT` is
+    dropped: the clang driver spells it."""
+    tokens = line.split()
+    items, i = [], 1
+    while i < len(tokens):
+        token = tokens[i]
+        if token == "-o":
+            if tokens[i + 1:i + 2] != [output]:
+                raise pe.EngineError("link line writes %s, not %s" % (tokens[i + 1:i + 2], output))
+            i += 2
+        elif token in LINK_VALUED:
+            if i + 1 >= len(tokens):
+                raise pe.EngineError("link option %s has no value" % token)
+            items += [("arg", token), ("arg", tokens[i + 1])]
+            i += 2
+        elif token.startswith("-"):
+            items.append(("arg", token))
+            i += 1
+        elif os.path.basename(token) == objectName:
+            items.append(("user", None))
+            i += 1
+        else:
+            real = os.path.realpath(token)
+            if not os.path.isabs(token) or not os.path.isfile(real) or os.path.islink(token):
+                raise pe.EngineError("link input %s is not an absolute regular file" % token)
+            if os.path.commonpath([cacheRoot, real]) != cacheRoot:
+                raise pe.EngineError("link input %s is not from this run's private cache" % token)
+            items.append(("input", real))
+            i += 1
+    if sum(1 for kind, _ in items if kind == "user") != 1:
+        raise pe.EngineError("link line names the fixture object %s %d times" % (
+            objectName, sum(1 for kind, _ in items if kind == "user")))
+    return os.path.basename(tokens[0]), items
+
+
+def selectLines(stderr, fixture, output):
+    """The one compile line of the fixture and the one link line that writes output."""
+    compile_, link = [], []
+    for line in stderr.splitlines():
+        tokens = line.split()
+        if tokens[1:3] == ["clang", fixture]:
+            compile_.append(line)
+        elif "-o" in tokens and output in tokens[tokens.index("-o") + 1:tokens.index("-o") + 2]:
+            link.append(line)
+    if len(compile_) != 1 or len(link) != 1:
+        raise pe.EngineError("expected one compile and one link line, found %d and %d" % (
+            len(compile_), len(link)))
+    return compile_[0], link[0]
+
+
+def selectTargets(names):
+    chosen = list(names) if names else list(TARGETS)
+    for name in chosen:
+        if name not in TARGETS:
+            raise pe.EngineError("target %s is not supported; allowed: %s" % (name, ", ".join(TARGETS)))
+    if len(set(chosen)) != len(chosen):
+        raise pe.EngineError("duplicate target in %s" % chosen)
+    return chosen
+
+
+def checkName(name):
+    if not SAFE_NAME.match(name) or name in (".", ".."):
+        raise pe.EngineError("unsupported file name %r" % name)
+    return name
+
+
+def configLine(tokens):
+    for token in tokens:
+        if not CONFIG_TOKEN.match(token):
+            raise pe.EngineError("config token %r would need quoting" % token)
+    return " ".join(tokens)
+
+
+def renderConfig(target, spec, compile_, items, directories, engineRelative, major):
+    """Text of RUNTIME/<target>.cfg. Compile and link both read it; linker arguments travel
+    as -Xlinker pairs, which `-c` leaves alone and which stay safe around commas."""
+    here = "<CFGDIR>"
+    engine = "%s/%s" % (here, engineRelative)
+    lines = ["# generated by prepareRuntime.py for %s; do not edit" % target,
+             configLine(["-target", spec.get("clangTarget") or compile_["target"]]),
+             configLine(["-Xclang", "-target-cpu", "-Xclang", compile_["cpu"]])]
+    if compile_["pic"]:
+        lines.append(configLine(compile_["pic"]))
+    lines += [configLine([d]) for d in compile_["defines"]]
+    lines.append("-nostdinc")
+    lines.append(configLine(["-isystem", "%s/lib/clang/%s/include" % (engine, major)]))
+    lines += [configLine(["-isystem", "%s/include/libc/%s" % (here, d)]) for d in directories]
+    lines += ["-nostdlib"] + [configLine([f]) for f in spec["driverFlags"]]
+    lines.append(configLine(["--ld-path=%s/bin/%s" % (engine, spec["linker"])]))
+    for kind, value in items:
+        if kind == "arg":
+            lines.append(configLine(["-Xlinker", value]))
+        elif kind == "input":
+            lines.append(configLine(["-Xlinker", "%s/%s/%s" % (here, target, checkName(os.path.basename(value)))]))
+    return "\n".join(lines) + "\n"
+
+
+def runZig(zig, target, work):
+    """One Zig compile and link of the target's fixture. Returns (stderr, cacheRoot, output)."""
+    spec = TARGETS[target]
+    private = os.path.join(work, target)
+    cache = os.path.join(private, "global")
+    output = os.path.join(private, "fixture.out")
+    os.makedirs(cache)
+    os.makedirs(os.path.join(private, "local"))
+    environment = {"PATH": "/usr/bin:/bin", "HOME": private, "TMPDIR": private,
+                   "ZIG_GLOBAL_CACHE_DIR": cache, "ZIG_LOCAL_CACHE_DIR": os.path.join(private, "local"),
+                   "ZIG_VERBOSE_CC": "1", "ZIG_VERBOSE_LINK": "1"}
+    fixture = os.path.join(FIXTURES, spec["fixture"])
+    command = [zig, "cc", "-target", target, "-O2", fixture] + spec["zigLinkArgs"] + ["-o", output]
+    try:
+        done = subprocess.run(command, cwd=private, env=environment, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, universal_newlines=True,
+                              timeout=ZIG_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        raise pe.EngineError("zig timed out after %d s for %s" % (ZIG_TIMEOUT_SECONDS, target))
+    if done.returncode != 0:
+        raise pe.EngineError("zig failed for %s (%d): %s" % (target, done.returncode, done.stderr.strip()))
+    return done.stderr, os.path.realpath(cache), output
+
+
+def zigIdentity(zig):
+    version = pe.run([zig, "version"]).strip()
+    return {"version": version, "sha256": pe.sha256File(zig)}
+
+
+def copyTree(source, destination):
+    for directory, dirnames, filenames in os.walk(source):
+        for name in dirnames + filenames:
+            if os.path.islink(os.path.join(directory, name)):
+                raise pe.EngineError("symlink in %s: %s" % (source, name))
+    shutil.copytree(source, destination)
+    for directory, _, filenames in os.walk(destination):
+        for name in filenames:
+            os.chmod(os.path.join(directory, name), 0o644)
+
+
+def copyHeaders(isystem, output, zigLib):
+    """Copy the libc include directories in order, skipping Zig's own builtin headers (the
+    engine's replace them). Returns (copied names in order, absent names)."""
+    if isystem[0] != os.path.join(zigLib, "include"):
+        raise pe.EngineError("first include directory %s is not %s/include" % (isystem[0], zigLib))
+    root = os.path.join(zigLib, "libc", "include")
+    copied, absent = [], []
+    for directory in isystem[1:]:
+        if os.path.dirname(directory) != root:
+            raise pe.EngineError("include directory %s is not directly under %s" % (directory, root))
+        name = checkName(os.path.basename(directory))
+        if not os.path.isdir(directory):
+            absent.append(name)
+            continue
+        target = os.path.join(output, "include", "libc", name)
+        if os.path.exists(target):
+            raise pe.EngineError("include directory %s is listed twice" % name)
+        copyTree(directory, target)
+        copied.append(name)
+    return copied, absent
+
+
+def parseArchive(data):
+    """Members of a GNU-format ar archive as [(name, bytes)], without its symbol table."""
+    if data[:8] != b"!<arch>\n":
+        raise pe.EngineError("not an ar archive")
+    members, longNames, offset = [], b"", 8
+    while offset < len(data):
+        header = data[offset:offset + 60]
+        if len(header) < 60 or header[58:60] != b"`\n":
+            raise pe.EngineError("bad ar member header at %d" % offset)
+        name, size = header[:16].decode("ascii").rstrip(), int(header[48:58])
+        body = data[offset + 60:offset + 60 + size]
+        if len(body) != size:
+            raise pe.EngineError("ar member at %d is truncated" % offset)
+        offset += 60 + size + size % 2
+        if name == "/" or name == "/SYM64/":
+            continue
+        if name == "//":
+            longNames = body
+            continue
+        if name.startswith("/") and name[1:].isdigit():
+            start = int(name[1:])
+            name = longNames[start:longNames.index(b"/\n", start)].decode("utf-8")
+        elif name.endswith("/"):
+            name = name[:-1]
+        else:
+            raise pe.EngineError("unsupported ar member name %r" % name)
+        members.append((name, body))
+    return members
+
+
+def normalizeInput(engine, path):
+    """Strip debug info (all symbols from a link-time stub, which keeps its dynamic symbols) and, for an archive, give members plain ordered names: Zig records the
+    private cache path of each member and the source paths of its compile in them."""
+    strip = os.path.join(engine, "bin", "llvm-strip")
+    if SHARED_OBJECT.search(path):
+        pe.run([strip, "--strip-all", path])
+        return
+    if not path.endswith(".a"):
+        if path.endswith(".o"):
+            pe.run([strip, "--strip-debug", path])
+        return
+    with open(path, "rb") as f:
+        members = parseArchive(f.read())
+    scratch = tempfile.mkdtemp(prefix="normalizeInput-", dir=os.path.dirname(path))
+    try:
+        names = []
+        for index, (name, body) in enumerate(members):
+            plain = "%04d-%s" % (index, checkName(os.path.basename(name)))
+            with open(os.path.join(scratch, plain), "wb") as f:
+                f.write(body)
+            names.append(plain)
+        pe.run([strip, "--strip-debug"] + [os.path.join(scratch, n) for n in names])
+        rebuilt = os.path.join(scratch, "rebuilt.a")
+        pe.run([os.path.join(engine, "bin", "llvm-ar"), "rcsD", rebuilt] + [os.path.join(scratch, n) for n in names])
+        shutil.copyfile(rebuilt, path)
+    finally:
+        shutil.rmtree(scratch)
+
+
+def copyInputs(items, output, target, engine):
+    """Copy the runtime inputs of the link line into output/<target>/, one file per name."""
+    destination = os.path.join(output, target)
+    os.makedirs(destination, exist_ok=True)
+    records = []
+    for kind, value in items:
+        if kind != "input":
+            continue
+        name = checkName(os.path.basename(value))
+        copy = os.path.join(destination, name)
+        if os.path.exists(copy):
+            raise pe.EngineError("%s: two runtime inputs are named %s" % (target, name))
+        if not os.path.isfile(value):
+            raise pe.EngineError("%s: runtime input %s is missing" % (target, value))
+        shutil.copyfile(value, copy)
+        os.chmod(copy, 0o644)
+        normalizeInput(engine, copy)
+        records.append({"name": name, "producedSha256": pe.sha256File(value),
+                        "sha256": pe.sha256File(copy), "bytes": os.path.getsize(copy)})
+    if not records:
+        raise pe.EngineError("%s: the link line has no runtime input" % target)
+    return records
+
+
+def copyNotices(output, zigLib, spec):
+    """Copy the license files named for the target from the Zig tree; a missing one is an error."""
+    zigRoot = os.path.dirname(zigLib)
+    records = []
+    for directory, relatives in sorted(spec["notices"].items()):
+        for relative in relatives:
+            source = os.path.realpath(os.path.join(zigLib, relative))
+            if os.path.commonpath([zigRoot, source]) != zigRoot:
+                raise pe.EngineError("notice %s leaves the Zig tree" % relative)
+            if not os.path.isfile(source):
+                raise pe.EngineError("notice %s is missing from %s" % (relative, zigLib))
+            target = os.path.join(output, "notices", directory, os.path.basename(source))
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            if os.path.exists(target):
+                if pe.sha256File(target) != pe.sha256File(source):
+                    raise pe.EngineError("notices/%s/%s has two different sources" % (
+                        directory, os.path.basename(source)))
+                continue
+            shutil.copyfile(source, target)
+            records.append("notices/%s/%s" % (directory, os.path.basename(source)))
+    return records
+
+
+def engineMajor(engine):
+    host, version, _ = pe.verifyEngine(engine)
+    return host, version, version.split(".")[0]
+
+
+def produceTarget(zig, engine, target, work, output, engineRelative, major):
+    spec = TARGETS[target]
+    stderr, cacheRoot, out = runZig(zig, target, work)
+    fixture = os.path.join(FIXTURES, spec["fixture"])
+    compileLine, linkLine = selectLines(stderr, fixture, out)
+    compile_ = parseCompileArgv(compileLine)
+    objectName = os.path.splitext(spec["fixture"])[0] + ".o"
+    linker, items = parseLinkArgv(linkLine, out, objectName, cacheRoot)
+    if linker != spec["linker"]:
+        raise pe.EngineError("%s linked with %s, expected %s" % (target, linker, spec["linker"]))
+    zigLib = os.path.dirname(compile_["isystem"][0])
+    if re.search(r"\s", zigLib):
+        raise pe.EngineError("Zig lib directory %s has whitespace" % zigLib)
+    directories, absent = copyHeaders(compile_["isystem"], output, zigLib)
+    inputs = copyInputs(items, output, target, engine)
+    notices = copyNotices(output, zigLib, spec)
+    pe.writeText(os.path.join(output, target + ".cfg"),
+                 renderConfig(target, spec, compile_, items, directories, engineRelative, major))
+    return {
+        "target": target, "zigTarget": compile_["target"],
+        "clangTarget": spec.get("clangTarget") or compile_["target"], "cpu": compile_["cpu"],
+        "cpuFeatures": compile_["features"], "positionIndependence": compile_["pic"],
+        "defines": compile_["defines"], "linker": linker,
+        "linkArgs": [value if kind == "arg" else "$RT/%s/%s" % (target, os.path.basename(value))
+                     if kind == "input" else "$OBJECT" for kind, value in items],
+        "includeDirectories": directories, "includeDirectoriesAbsentInZig": absent,
+        "inputs": inputs, "notices": notices,
+        "zigFlagsNotCarried": "debug info, -O level, -DNDEBUG, frame pointer and unwind flags",
+        "inputsNormalized": "debug sections stripped, stub symbol tables stripped; archive members renamed NNNN-name and the archive rebuilt deterministically",
+    }
+
+
+def writeProvenance(output, zigId, host, engineVersion, engineRelative, records):
+    receipt = {
+        "kind": "local-zig-runtime-proof",
+        "statement": "Produced by running a locally installed Zig once per target on a fixture. "
+                     "Not an upstream-controlled build and not bit-reproducible by this tool.",
+        "redistributionCertified": False,
+        "zig": zigId, "producerHost": host, "engineVersion": engineVersion,
+        "engineRelative": engineRelative, "targets": records,
+        "noticeGaps": ["no license file ships in the Zig tree for libc/include/any-linux-any "
+                       "(Linux uapi headers) or the glibc stub inputs beyond libc/glibc/LICENSES"],
+    }
+    os.makedirs(os.path.join(output, "notices"), exist_ok=True)
+    pe.writeText(os.path.join(output, "notices", "runtime-provenance.json"),
+                 json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+
+
+def prepareRuntime(zig, engine, output, targets, engineRelative="../engine"):
+    zig, engine, output = (os.path.abspath(p) for p in (zig, engine, output))
+    targets = selectTargets(targets)
+    parts = engineRelative.split("/")
+    if os.path.isabs(engineRelative) or "" in parts or not all(SAFE_NAME.match(p) or p == ".." for p in parts):
+        raise pe.EngineError("--engine-relative %r must be a plain relative path" % engineRelative)
+    if os.path.lexists(output):
+        raise pe.EngineError("output %s exists; it is never replaced" % output)
+    if not os.access(zig, os.X_OK):
+        raise pe.EngineError("--zig %s is not executable" % zig)
+    host, version, major = engineMajor(engine)
+    zigId = zigIdentity(zig)
+    os.makedirs(os.path.dirname(output), exist_ok=True)
+    partial = tempfile.mkdtemp(prefix=os.path.basename(output) + ".partial-", dir=os.path.dirname(output))
+    work = tempfile.mkdtemp(prefix="prepareRuntime-")
+    try:
+        records = [produceTarget(zig, engine, t, work, partial, engineRelative, major) for t in targets]
+        writeProvenance(partial, zigId, host, version, engineRelative, records)
+        os.chmod(partial, 0o755)
+        os.rename(partial, output)
+    except BaseException:
+        shutil.rmtree(partial, ignore_errors=True)
+        raise
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return output, records
+
+
+def sandboxed(profile, work, command):
+    environment = {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "TMPDIR": work}
+    return subprocess.run(["/usr/bin/sandbox-exec", "-f", profile] + command, env=environment,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+
+
+def elfProblem(path):
+    with open(path, "rb") as f:
+        head = f.read(20)
+    machine = int.from_bytes(head[18:20], "little")
+    if head[:4] != b"\x7fELF" or head[4] != 2 or machine != 62:
+        return "not an x86_64 ELF64 file"
+    return None
+
+
+def glibcSymbolProblem(nm, path, limit=(2, 31)):
+    """Every versioned glibc symbol the ELF needs is within limit, and printf is among them."""
+    needed = [l.split()[-1] for l in pe.run([nm, "-D", path]).splitlines() if "@GLIBC_" in l]
+    versions = [tuple(int(n) for n in re.search(r"@GLIBC_([\d.]+)", s).group(1).split(".")) for s in needed]
+    if not any(s.startswith("printf@") for s in needed):
+        return "no versioned printf in %s" % needed
+    if any(v > limit for v in versions):
+        return "needs a glibc newer than %s: %s" % (limit, needed)
+    return None
+
+
+def prove(engine, runtime, denied, zig=None, targets=None):
+    """Relocate engine and runtime as siblings and run the fixtures through `clang --config`
+    under a sandbox that cannot read the originals, Zig or any --deny path."""
+    engine, runtime = os.path.realpath(engine), os.path.realpath(runtime)
+    pe.verifyEngine(engine)
+    targets = selectTargets(targets)
+    work = os.path.realpath(tempfile.mkdtemp(prefix="runtime-proof-"))
+    root = os.path.join(work, "relocated tree")
+    movedEngine, movedRuntime = os.path.join(root, "engine"), os.path.join(root, "runtime")
+    shutil.copytree(engine, movedEngine, symlinks=True)
+    shutil.copytree(runtime, movedRuntime)
+    secrets = [engine, runtime] + [os.path.realpath(p) for p in denied]
+    if zig:
+        secrets.append(os.path.dirname(os.path.realpath(zig)))
+    profile = os.path.join(work, "deny.sb")
+    pe.writeText(profile, "(version 1)(allow default)" + "".join(
+        '(deny file-read* (subpath "%s"))(deny process-exec (subpath "%s"))' % (p, p) for p in secrets) + "\n")
+    control = sandboxed(profile, work, [os.path.join(engine, "bin", "clang"), "--version"])
+    if control.returncode == 0:
+        raise pe.EngineError("sandbox does not deny the original engine")
+    if zig and sandboxed(profile, work, [os.path.realpath(zig), "version"]).returncode == 0:
+        raise pe.EngineError("sandbox does not deny Zig")
+
+    clang, nm = os.path.join(movedEngine, "bin", "clang"), os.path.join(movedEngine, "bin", "llvm-nm")
+    for target in targets:
+        fixture = os.path.join(FIXTURES, TARGETS[target]["fixture"])
+        config = ["--config", os.path.join(movedRuntime, target + ".cfg")]
+        obj, binary = os.path.join(work, target + ".o"), os.path.join(work, target + ".bin")
+        steps = [("compile", [clang] + config + ["-O2", "-c", fixture, "-o", obj]),
+                 ("link", [clang] + config + [obj, "-o", binary])]
+        for name, command in steps:
+            done = sandboxed(profile, work, command)
+            if done.returncode != 0:
+                raise pe.EngineError("%s %s failed: %s" % (target, name, done.stderr.strip()))
+            if done.stderr.strip():
+                raise pe.EngineError("%s %s warned: %s" % (target, name, done.stderr.strip()))
+        with open(binary, "rb") as f:
+            data = f.read()
+        leaked = [p for p in secrets if p.encode("utf-8") in data]
+        if leaked:
+            raise pe.EngineError("%s output holds source paths %s" % (target, leaked))
+        if target == "wasm32-wasi":
+            wasmtime = shutil.which("wasmtime")
+            if not wasmtime:
+                raise pe.EngineError("wasmtime not found; the wasm32-wasi run is not proven")
+            ran = subprocess.run([wasmtime, binary], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 universal_newlines=True)
+            if ran.returncode != 0 or ran.stdout != EXPECTED_OUTPUT:
+                raise pe.EngineError("%s run: %r %r" % (target, ran.stdout, ran.stderr))
+            print("%s: linked and ran: %s" % (target, ran.stdout.strip()))
+        else:
+            problem = elfProblem(binary) or glibcSymbolProblem(nm, binary)
+            if problem:
+                raise pe.EngineError("%s: %s" % (target, problem))
+            print("%s: linked, ELF and glibc symbol versions checked; not run (host is not Linux)" % target)
+    print("relocated=%s denied=%d zig=%s" % (root, len(secrets), "denied" if zig else "not given"))
+    shutil.rmtree(work)
+
+
+def main(argv):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--zig")
+    parser.add_argument("--engine", required=True)
+    parser.add_argument("--output")
+    parser.add_argument("--runtime")
+    parser.add_argument("--target", action="append", default=[])
+    parser.add_argument("--engine-relative", default="../engine")
+    parser.add_argument("--deny", action="append", default=[])
+    parser.add_argument("--prove", action="store_true")
+    args = parser.parse_args(argv)
+    try:
+        if args.prove:
+            if not args.runtime:
+                parser.error("--prove needs --runtime")
+            prove(args.engine, args.runtime, args.deny, args.zig, args.target)
+        else:
+            if not (args.zig and args.output):
+                parser.error("--zig and --output are required")
+            output, records = prepareRuntime(args.zig, args.engine, args.output, args.target,
+                                             args.engine_relative)
+            for record in records:
+                print("%s: %d inputs, %d include directories" % (
+                    record["target"], len(record["inputs"]), len(record["includeDirectories"])))
+            print("runtime written to %s" % output)
+    except pe.EngineError as error:
+        print("prepareRuntime: error: %s" % error, file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
