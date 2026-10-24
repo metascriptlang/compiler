@@ -7,7 +7,7 @@ import {
 	ArrowFunctionData, FunctionExprData, TestDeclData, ProgramData, ReturnStmtData, AwaitExprData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall } from "./effects";
+import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall, aliasTarget, boundRoutine } from "./effects";
 import { isPrimitiveKind, isViewType, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName, isLockedRef, isAtomicRef, typeCarriesRef, withoutReadonlyView, withoutNullMember } from "./types";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, addError, dispatchEntryFor, dispatchOverridesFor } from "./context";
@@ -625,6 +625,7 @@ interface BorrowUnit {
 	thunks: Node[];
 	writers: Symbol[];
 	callWrites: CallWrite[];
+	worker: boolean;
 }
 
 interface CallWrite {
@@ -641,6 +642,7 @@ interface Lend {
 	end: int32;
 	closer: Node | null;
 	scope: int32[];
+	bounds: Symbol[];
 }
 
 function isBorrower(u: BorrowUnit, sym: Symbol): boolean {
@@ -1224,7 +1226,7 @@ function callEffects(u: BorrowUnit, node: Node): void {
 }
 
 function noteCallWrite(u: BorrowUnit, site: Node, parts: Node[], fnType: Type | null, offset: int32, runsClosures: boolean): void {
-	if (u.lends.length == 0) return;
+	if (u.lends.length == 0 && !u.worker) return;
 	const roots: Symbol[] = [];
 	for (let i = 0; i < parts.length; i += 1) {
 		const formal = i + offset >= 0 ? formalAt(fnType, i + offset) : null;
@@ -1621,12 +1623,18 @@ function lendable(sym: Symbol): boolean {
 	return !isLockedRef(sym.symbolType) && !isAtomicRef(sym.symbolType);
 }
 
-function lentRoots(u: BorrowUnit, node: Node | null, inner: Symbol[], out: Symbol[]): void {
+function lentRoots(u: BorrowUnit, node: Node | null, inner: Symbol[], out: Symbol[], via: Symbol[]): void {
 	if (node == null || node.kind == NodeKind.MoveExpr) return;
 	const sym = node.kind == NodeKind.Identifier ? node.resolvedSym : null;
 	if (sym != null && lendable(sym) && !out.includes(sym) && !inner.includes(sym)
-		&& (variableId(u.p, sym) >= 0 || sym.symbolKind == SymbolKind.Parameter)) out.push(sym);
-	forEachChild(node, (child: Node): void => { lentRoots(u, child, inner, out); });
+		&& (variableId(u.p, sym) >= 0 || !hasFlag(sym, SymbolFlag.Global))) out.push(sym);
+	const bound = boundRoutine(sym);
+	if (bound != null && !via.includes(sym!)) {
+		via.push(sym!);
+		innerParams(bound, inner);
+		lentRoots(u, bound, inner, out, via);
+	}
+	forEachChild(node, (child: Node): void => { lentRoots(u, child, inner, out, via); });
 }
 
 function joinedBy(node: Node): Node[] {
@@ -1703,11 +1711,13 @@ function openLend(u: BorrowUnit, site: Node, thunk: Node): void {
 	const inner: Symbol[] = [];
 	innerParams(thunk, inner);
 	const roots: Symbol[] = [];
-	lentRoots(u, thunk, inner, roots);
+	const reached: Symbol[] = [];
+	lentRoots(u, thunk, inner, roots, reached);
+	const bounds = reached.filter((b: Symbol): boolean => !containsNode(thunk, boundRoutine(b)!));
 	for (const r of roots) { registerVariable(u.p, r, true, 0); }
 	const at = u.closerSites.indexOf(site);
 	const closer = at >= 0 ? u.closerAwaits[at] : null;
-	u.lends.push({ site, handle: null, roots, start, end: -1, closer, scope: closer != null ? currentScope(u) : [] });
+	u.lends.push({ site, handle: null, roots, start, end: -1, closer, scope: closer != null ? currentScope(u) : [], bounds });
 }
 
 function nameLend(u: BorrowUnit, sym: Symbol | null, init: Node | null): void {
@@ -1808,22 +1818,93 @@ function runPass(u: BorrowUnit, body: Node, pass: int32): void {
 	for (let i = defers.length - 1; i >= 0; i -= 1) { walk(u, defers[i]); }
 }
 
+function newUnit(ctx: CheckerContext, pointers: Symbol[], worker: boolean): BorrowUnit {
+	return {
+		p: createPartitions(), pass: 1, scope: [], defers: [], ctx, pointers, blocks: [], captured: [], routines: [], suspends: [], suspendSites: [], escaped: [],
+		lends: [], closerSites: [], closerAwaits: [], thunks: [], writers: [], callWrites: [], worker,
+	};
+}
+
+function routineBodies(node: Node | null, out: Node[]): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr) {
+		const body = routineBody(node);
+		if (body != null && !out.includes(body)) out.push(body);
+	}
+	forEachChild(node, (child: Node): void => { routineBodies(child, out); });
+}
+
+function containsNode(root: Node | null, target: Node): boolean {
+	if (root == null) return false;
+	if (root == target) return true;
+	let found = false;
+	forEachChild(root, (child: Node): void => { if (!found && containsNode(child, target)) found = true; });
+	return found;
+}
+
+function writeSite(u: BorrowUnit, id: int32): Node | null {
+	const root = ufRoot(u.p, id);
+	if (u.p.vars[root].con.kind == CK_ROOT_OF) {
+		const g = u.p.graphs[u.p.vars[root].con.target];
+		for (let i = 0; i < g.mutations.length; i += 1) {
+			if (g.keeps[i].length == 1 && g.keeps[i][0] == -1) return g.sites[i];
+		}
+	}
+	for (const w of u.callWrites) {
+		for (const s of w.roots) {
+			const sid = variableId(u.p, s);
+			if (sid >= 0 && ufRoot(u.p, sid) == root) return w.site;
+		}
+	}
+	return null;
+}
+
+function refuseWorkerWrites(parent: BorrowUnit, l: Lend): void {
+	const bodies: Node[] = [];
+	const own: Symbol[] = [];
+	for (const b of l.bounds) {
+		const routine = boundRoutine(b);
+		routineBodies(routine, bodies);
+		innerParams(routine, own);
+	}
+	const pointers: Symbol[] = [];
+	for (const b of bodies) { collectPointers(b, pointers); }
+	const u = newUnit(parent.ctx, pointers, true);
+	for (let pass = 1; pass <= 2; pass += 1) {
+		for (const b of bodies) { runPass(u, b, pass); }
+	}
+	const named: int32[] = [];
+	for (let id = 0; id < u.p.vars.length; id += 1) {
+		const v = u.p.vars[id];
+		if (!v.external || own.includes(v.sym) || !lendable(v.sym) || !carriesPointer(v.sym.symbolType)) continue;
+		const root = ufRoot(u.p, id);
+		if (named.includes(root)) continue;
+		const site = writeSite(u, id);
+		if (site == null) continue;
+		named.push(root);
+		let found: Symbol | null = null;
+		for (let i = l.bounds.length - 1; i >= 0; i -= 1) { if (containsNode(boundRoutine(l.bounds[i]), site)) found = l.bounds[i]; }
+		if (found == null) throw new Error(`internal: the write to '${v.sym.name}' at ${site.location.line}:${site.location.column} lies in no closure bound by the spawn at ${l.site.location.line}:${l.site.location.column}`);
+		const bound = aliasTarget(found)!;
+		addError(parent.ctx, `cannot write through Readonly<${typeDisplayName(v.sym.symbolType)}> — a read-only view never converts back to the mutable type (PARALOCK E24)\n'${v.sym.name}' is captured by '${bound.name}', bound at ${bound.location.line}:${bound.location.column}, which the spawn at ${l.site.location.line}:${l.site.location.column} runs on another thread; the write is here`,
+			site.location.line, site.location.column);
+	}
+}
+
 function checkUnit(ctx: CheckerContext, body: Node | null): void {
 	if (body == null || (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program)) return;
 	if (spawnsIn(body)) refuseBorrowingHandleEscapes(ctx, body);
 	const pointers: Symbol[] = [];
 	collectPointers(body, pointers);
 	if (pointers.length == 0 && !declaresView(body, new TypeVisitSet()) && !spawnsIn(body)) return;
-	const u: BorrowUnit = {
-		p: createPartitions(), pass: 1, scope: [], defers: [], ctx, pointers, blocks: [], captured: [], routines: [], suspends: [], suspendSites: [], escaped: [],
-		lends: [], closerSites: [], closerAwaits: [], thunks: [], writers: [], callWrites: [],
-	};
+	const u = newUnit(ctx, pointers, false);
 	runPass(u, body, 1);
 	for (const l of u.lends) {
 		if (l.end < 0) l.end = u.p.abstractTime;
 	}
 	runPass(u, body, 2);
 	checkLends(u, body.kind == NodeKind.Program ? "the end of the module" : "the end of the function");
+	for (const l of u.lends) { refuseWorkerWrites(u, l); }
 	for (const v of u.p.vars) {
 		if (v.external || !isBorrower(u, v.sym)) continue;
 		for (let bi = 0; bi < v.borrowsFrom.length; bi += 1) {
