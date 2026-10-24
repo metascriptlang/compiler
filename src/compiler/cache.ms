@@ -896,8 +896,8 @@ export function writeCompileCache(oFile: string, fp: string): void {
 
 const CACHE_VERSION = "v4";
 
-function projectCacheFile(inputs: string, outputFile: string, command: string): string {
-	const key = objectListKey([cwd(), join(cwd(), outputFile), command, inputs]);
+function projectCacheFile(outputFile: string, command: string): string {
+	const key = objectListKey([cwd(), join(cwd(), outputFile), command]);
 	return `${getCacheDir()}/project.${key}.cache`;
 }
 
@@ -991,31 +991,19 @@ function storedDepPath(entry: string): string {
 	return "";
 }
 
-// Check if the project needs rebuilding.
-// Reference-aligned: changeDetectedViaJsonBuildInstructions.
-// Returns true if anything changed (= must rebuild). Returns false if up-to-date.
-export function projectCacheChanged(
-	depPaths: string[],
-	outputFile: string,
-	ccOption: number,
-	ccBinary: string,
-	mode: number,
-	flags: string
-): boolean {
-	const currentCmd = buildCmdFingerprint(ccOption, ccBinary, mode, flags);
-	const inputs = objectListKey(depPaths);
-	const cacheFile = projectCacheFile(inputs, outputFile, currentCmd);
-	_projectInputKey = cacheFile;
-	_projectInputHashes = [];
-	for (const path of depPaths) _projectInputHashes.push(hashFile(path));
-	if (_forceRebuild) return true;
-	if (!exists(cacheFile) || !exists(outputFile)) return true;
+interface ProjectRecord {
+	inputs: string;
+	deps: string[];
+}
+
+function readProjectRecord(cacheFile: string, outputFile: string, command: string): ProjectRecord | null {
+	if (!exists(cacheFile) || !exists(outputFile)) return null;
 	const cacheResult = readFile(cacheFile);
-	if (!cacheResult.ok) return true;
+	if (!cacheResult.ok) return null;
 	const newline = cacheResult.value.indexOf("\n", 0);
-	if (newline < 0) return true;
+	if (newline < 0) return null;
 	const body = cacheResult.value.slice(newline + 1, cacheResult.value.length);
-	if (cacheResult.value.slice(0, newline) != hashContent(body)) return true;
+	if (cacheResult.value.slice(0, newline) != hashContent(body)) return null;
 	const lines = splitLines(body);
 
 	let storedVersion = "";
@@ -1043,13 +1031,59 @@ export function projectCacheChanged(
 		if (val != "") { storedDeps.push(val); }
 	}
 
-	if (storedVersion != CACHE_VERSION) return true;
-	if (storedOutput != join(cwd(), outputFile)) return true;
-	if (storedCmd != currentCmd) return true;
-	if (storedCwd != cwd()) return true;
-	if (storedInputs != inputs) return true;
-	if (!outputMatches(storedOutputHash, outputFile)) return true;
+	if (storedVersion != CACHE_VERSION) return null;
+	if (storedOutput != join(cwd(), outputFile)) return null;
+	if (storedCmd != command) return null;
+	if (storedCwd != cwd()) return null;
+	if (!outputMatches(storedOutputHash, outputFile)) return null;
+	return { inputs: storedInputs, deps: storedDeps };
+}
 
+function storedDepCurrent(entry: string): boolean {
+	const path = storedDepPath(entry);
+	return path != "" && entry == `${path}=${hashFile(path)}`;
+}
+
+export function projectRecordCurrent(
+	outputFile: string,
+	ccOption: number,
+	ccBinary: string,
+	mode: number,
+	flags: string
+): boolean {
+	if (_forceRebuild) return false;
+	const command = buildCmdFingerprint(ccOption, ccBinary, mode, flags);
+	const record = readProjectRecord(projectCacheFile(outputFile, command), outputFile, command);
+	if (record == null || record.deps.length == 0) return false;
+	for (const entry of record.deps) {
+		if (!storedDepCurrent(entry)) return false;
+	}
+	return true;
+}
+
+// Check if the project needs rebuilding.
+// Reference-aligned: changeDetectedViaJsonBuildInstructions.
+// Returns true if anything changed (= must rebuild). Returns false if up-to-date.
+export function projectCacheChanged(
+	depPaths: string[],
+	outputFile: string,
+	ccOption: number,
+	ccBinary: string,
+	mode: number,
+	flags: string
+): boolean {
+	const currentCmd = buildCmdFingerprint(ccOption, ccBinary, mode, flags);
+	const inputs = objectListKey(depPaths);
+	const cacheFile = projectCacheFile(outputFile, currentCmd);
+	_projectInputKey = cacheFile;
+	_projectInputHashes = [];
+	for (const path of depPaths) _projectInputHashes.push(hashFile(path));
+	if (_forceRebuild) return true;
+	const record = readProjectRecord(cacheFile, outputFile, currentCmd);
+	if (record == null) return true;
+	if (record.inputs != inputs) return true;
+
+	const storedDeps = record.deps;
 	if (storedDeps.length < depPaths.length) return true;
 	let di = 0;
 	while (di < depPaths.length) {
@@ -1058,8 +1092,7 @@ export function projectCacheChanged(
 		di = di + 1;
 	}
 	while (di < storedDeps.length) {
-		const path = storedDepPath(storedDeps[di]);
-		if (path == "" || storedDeps[di] != `${path}=${hashFile(path)}`) return true;
+		if (!storedDepCurrent(storedDeps[di])) return true;
 		di = di + 1;
 	}
 
@@ -1083,7 +1116,7 @@ export function writeProjectCache(
 	if (!exists(outputFile)) return;
 	const command = buildCmdFingerprint(ccOption, ccBinary, mode, flags);
 	const inputs = objectListKey(depPaths);
-	const record = projectCacheFile(inputs, outputFile, command);
+	const record = projectCacheFile(outputFile, command);
 	const seen = new HashSet<string>();
 	let dependencies = "";
 	for (let i = 0; i < depPaths.length; i++) {
@@ -1196,10 +1229,30 @@ test "project records reject changed outputs, dependencies and corrupt metadata 
 		assert !projectCacheChanged([depB], outB, 0, "", 0, "-O0");
 		writeFile(depA, "entry-a");
 		assert !projectCacheChanged([depA], outA, 0, "", 0, "-O0");
-		const record = projectCacheFile(objectListKey([depA]), outA, buildCmdFingerprint(0, "", 0, "-O0"));
+		const record = projectCacheFile(outA, buildCmdFingerprint(0, "", 0, "-O0"));
 		writeFile(record, "corrupt");
 		assert projectCacheChanged([depA], outA, 0, "", 0, "-O0");
 		assert !projectCacheChanged([depB], outB, 0, "", 0, "-O0");
+	});
+}
+
+test "a project record answers from its own dependency list" {
+	withProjectRecordFixture("early", (dir: string): void => {
+		const entry = `${dir}/entry.ms`;
+		const imported = `${dir}/imported.ms`;
+		const out = `${dir}/app`;
+		writeFile(entry, "entry");
+		writeFile(imported, "imported");
+		writeFile(out, "output");
+		writeProjectCache([entry, imported], out, 0, "", 0, "-O0");
+		assert projectRecordCurrent(out, 0, "", 0, "-O0");
+		assert !projectRecordCurrent(out, 0, "", 0, "-O0 -DOTHER");
+		writeFile(imported, "imported edited");
+		assert !projectRecordCurrent(out, 0, "", 0, "-O0");
+		writeFile(imported, "imported");
+		assert projectRecordCurrent(out, 0, "", 0, "-O0");
+		remove(imported);
+		assert !projectRecordCurrent(out, 0, "", 0, "-O0");
 	});
 }
 

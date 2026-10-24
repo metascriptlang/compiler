@@ -77,7 +77,7 @@ import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, i
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
 import { hashContent } from "../utils/contentHash";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
@@ -2592,6 +2592,13 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 	exit(code);
 }
 
+function frontendIdentity(entryPath: string, opts: CliOptions, config: ResolverConfig): string {
+	const aliases: string[] = [];
+	for (let i = 0; i < config.aliasKeys.length; i += 1) aliases.push(`${config.aliasKeys[i]}=${config.aliasValues[i]}`);
+	return ` entry=${entryPath} app=${opts.appMode} strictNil=${opts.strictNullChecks} vmIterations=${opts.vmIterations}`
+		+ ` std=${config.stdPath} ext=${config.extensions.join(",")} search=${config.searchPaths.join(",")} alias=${aliases.join(",")}`;
+}
+
 export function buildC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection, session: BuildSession): BuildStatus {
 	startSessionBuild(session);
 	_hcrWarmJobs = [];
@@ -2615,18 +2622,6 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	const config = buildResolverConfig(Target.C, resolveSection, opts.targetOs, opts.projectRoot);
 	setGraphCheckTiming(opts.showTime);
 	setGraphLoadTiming(opts.showTime);
-// Reference parity: global hook ownership registry shared across all modules.
-// First module to need a type's DRC hooks generates them; others get extern protos.
-// Before the graph check: enum toString ops register during checking, and this resets the op table.
-resetLiftedOps();
-	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode), session.check);
-	applyGcMode(opts);
-	session.moduleCount = graph.loadOrder.length as int32;
-	if (opts.hcrHost && hcrHostMissesEngine(graph, config.stdPath)) {
-		printDiag(`${error("error")}: ${basename(entryPath)} never imports std/hcr, so nothing calls reload() and an edit would never reach the running program; import { reload } from "std/hcr" and call reload() once per pass of the main loop`);
-		stopBuild();
-	}
-
 	// Solana: resolve the SBF toolchain, force release mode. The gc force lives
 	// in resolveTargetGcMode (it has to happen before the check pass).
 	// Both halves come from Anza's platform-tools bundle - a stock LLVM will not
@@ -2687,13 +2682,32 @@ resetLiftedOps();
 	}
 	outBinary = normalize(outBinary);
 
-	// Project-level cache: skip entire pipeline if nothing changed.
-	// Reference-aligned: changeDetectedViaJsonBuildInstructions — early return before codegen.
 	const allFlags0 = cliCompileFlags(opts);
-	const buildIdentityFlags = cliLinkFlags(allFlags0, opts) + defineIdentity(opts.defines) + modulePassIdentity();
+	const buildIdentityFlags = cliLinkFlags(allFlags0, opts) + defineIdentity(opts.defines) + modulePassIdentity() + frontendIdentity(entryPath, opts, config);
+	const recordDecides = !session.keep && !opts.emitC && !opts.isHcr && !opts.hcrHost && !opts.genDeps;
+	if (recordDecides && projectRecordCurrent(outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags)) {
+		printDiag(success("Up to date") + " " + bold(outBinary));
+		session.lastBuilt = true;
+		return BuildStatus.UpToDate;
+	}
+
+// Reference parity: global hook ownership registry shared across all modules.
+// First module to need a type's DRC hooks generates them; others get extern protos.
+// Before the graph check: enum toString ops register during checking, and this resets the op table.
+resetLiftedOps();
+	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode), session.check);
+	applyGcMode(opts);
+	session.moduleCount = graph.loadOrder.length as int32;
+	if (opts.hcrHost && hcrHostMissesEngine(graph, config.stdPath)) {
+		printDiag(`${error("error")}: ${basename(entryPath)} never imports std/hcr, so nothing calls reload() and an edit would never reach the running program; import { reload } from "std/hcr" and call reload() once per pass of the main loop`);
+		stopBuild();
+	}
+
 	const projectDeps: string[] = [];
 	for (const path of graph.loadOrder) projectDeps.push(path);
 	for (const path of linkInputs(opts)) projectDeps.push(path);
+	const buildFile = opts.projectRoot != "" ? join(opts.projectRoot, "build.ms") : "";
+	if (buildFile != "" && exists(buildFile)) projectDeps.push(buildFile);
 	let hcrBuildAbi: HcrBuildAbi = null as unknown as HcrBuildAbi;
 	if (opts.isHcr && !opts.emitC) {
 		const prepared = prepareHcrBuildAbi(graph, entryPath, outBinary, opts, allFlags0, config.stdPath);
