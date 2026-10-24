@@ -28,22 +28,6 @@ const KNOWN_GAPS: string[] = [
 	"bridge:arrowDefaults", "bridge:enumInits",
 ];
 
-function endsWith(s: string, suffix: string): boolean {
-	if (s.length < suffix.length) return false;
-	return s.slice(s.length - suffix.length, s.length) == suffix;
-}
-
-function trim(s: string): string {
-	// "\r" is load-bearing on Windows: git checkouts there use CRLF line
-	// endings, and without it every field name keeps a "\r\n\t" prefix —
-	// tableMentions then never matches and all 6 tables fail spuriously.
-	let a = 0;
-	let b = s.length;
-	while (a < b && (s.slice(a, a + 1) == " " || s.slice(a, a + 1) == "\t" || s.slice(a, a + 1) == "\n" || s.slice(a, a + 1) == "\r")) a = a + 1;
-	while (b > a && (s.slice(b - 1, b) == " " || s.slice(b - 1, b) == "\t" || s.slice(b - 1, b) == "\n" || s.slice(b - 1, b) == "\r")) b = b - 1;
-	return s.slice(a, b);
-}
-
 function refersToNode(t: string): boolean {
 	let p = 0;
 	while (true) {
@@ -61,7 +45,7 @@ function collectFieldsInto(body: string, out: string[]): void {
 	for (const part of body.split(",")) {
 		const colon = part.indexOf(":", 0);
 		if (colon < 0) continue;
-		const name = trim(part.slice(0, colon));
+		const name = part.slice(0, colon).trim();
 		const ty = part.slice(colon + 1, part.length);
 		if (name.length == 0) continue;
 		if (!refersToNode(ty)) continue;
@@ -81,8 +65,8 @@ export function nodeFieldNames(src: string): string[] {
 		if (brace < 0) break;
 		const end = src.indexOf("};", brace);
 		if (end < 0) break;
-		const alias = trim(src.slice(i + 12, brace));
-		if (endsWith(alias, "Data")) collectFieldsInto(src.slice(brace + 4, end), out);
+		const alias = src.slice(i + 12, brace).trim();
+		if (alias.endsWith("Data")) collectFieldsInto(src.slice(brace + 4, end), out);
 		pos = end + 2;
 	}
 	return out;
