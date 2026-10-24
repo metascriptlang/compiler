@@ -19,6 +19,7 @@ export enum Effect {
 	Suspends,
 	StoresBorrowed,
 	StartsTask,
+	WritesCell,
 }
 
 export interface EffectCause {
@@ -42,6 +43,7 @@ let spawnTable: EffectTable = emptyTable();
 let suspendTable: EffectTable = emptyTable();
 let sharedConstTable: EffectTable = emptyTable();
 let startTable: EffectTable = emptyTable();
+let writeTable: EffectTable = emptyTable();
 let startsByModule = new HashMap<string, boolean>();
 let cycles = new HashMap<string, string[]>();
 let freshConsts = new HashMap<Symbol, boolean>();
@@ -56,6 +58,7 @@ let heldSources = new HashMap<Symbol, Node[]>();
 let flowScanned: Node[] = [];
 let resolving: Symbol[] = [];
 const UNFOLLOWED = "a value the checker cannot follow";
+const CONST_BORROW = "the module const '";
 let assumedOpen = false;
 let inAsync = false;
 let ownParams: string[] = [];
@@ -76,6 +79,7 @@ function tableFor(e: Effect): EffectTable {
 		Effect.Suspends => suspendTable,
 		Effect.StoresBorrowed => sharedConstTable,
 		Effect.StartsTask => startTable,
+		Effect.WritesCell => writeTable,
 	};
 }
 
@@ -100,6 +104,7 @@ export function runDeferredEffectChecks(ctx: CheckerContext): void {
 	suspendTable = emptyTable();
 	sharedConstTable = emptyTable();
 	startTable = emptyTable();
+	writeTable = emptyTable();
 	startsByModule = new HashMap<string, boolean>();
 	cycles = new HashMap<string, string[]>();
 	freshConsts = new HashMap<Symbol, boolean>();
@@ -606,7 +611,7 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 	if (isSuperCall(callee)) return null;
 	if ((e == Effect.Suspends || e == Effect.StartsTask) && isSpawnCall(call)) return cause(call, "spawns");
 	if (callee != null && callee.resolvedSym != null && callee.resolvedSym.builtinKind == DYNAMIC_IMPORT) {
-		return e == Effect.SideEffect ? cause(call, "imports '" + callee.resolvedSym.modulePath + "'") : null;
+		return e == Effect.SideEffect || e == Effect.WritesCell ? cause(call, "imports '" + callee.resolvedSym.modulePath + "'") : null;
 	}
 	const sym = call.resolvedSym;
 	if (!isRoutine(sym)) {
@@ -619,6 +624,9 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 		return e == Effect.StoresBorrowed ? null : cause(call, "calls a function value");
 	}
 	if (hasFlag(sym!, SymbolFlag.GeneratedOp)) return null;
+	if (e == Effect.WritesCell && (hasFlag(sym!, SymbolFlag.ImportC) || routineBody(unpackDecl(sym!.declNode)) == null)) {
+		return { site: call, text: cause(call, "calls the external '" + sym!.name + "'").text + ", which may write state the checker cannot see" };
+	}
 	if (routineBody(unpackDecl(sym!.declNode)) == null) {
 		if (e != Effect.SideEffect || receiverOf(call) != null) return null;
 		return cause(call, "calls the external '" + sym!.name + "'");
@@ -633,6 +641,16 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 	if (own != null) return own;
 	const dispatched = dispatchedEffect(call, sym!, e);
 	return dispatched != null ? dispatched : ownedValueHookEffect(call, e);
+}
+
+function constReadEffect(call: Node): EffectCause | null {
+	const recv = receiverOf(call);
+	let read = recv != null ? borrowedOf(recv) ?? heldBorrow(recv) : null;
+	for (const arg of (call.data as CallExprData).arguments) {
+		if (read == null || !read.startsWith(CONST_BORROW)) read = borrowedOf(arg);
+	}
+	if (read == null || !read.startsWith(CONST_BORROW)) return null;
+	return through(call, "reads " + read, callEffect(call, Effect.WritesCell));
 }
 
 export function newEffect(newNode: Node, e: Effect): EffectCause | null {
@@ -660,7 +678,7 @@ function ownedValueHookEffect(site: Node, e: Effect): EffectCause | null {
 function useEffect(node: Node, e: Effect): EffectCause | null {
 	const sym = node.resolvedSym;
 	if (sym == null) return null;
-	if ((e == Effect.Suspends || e == Effect.StoresBorrowed || e == Effect.StartsTask) && sym.symbolKind != SymbolKind.Function) return null;
+	if ((e == Effect.Suspends || e == Effect.StoresBorrowed || e == Effect.StartsTask || e == Effect.WritesCell) && sym.symbolKind != SymbolKind.Function) return null;
 	if (isModuleState(sym)) return isConstantValue(sym, e) ? null : cause(node, "uses " + stateName(sym));
 	if (sym.symbolKind == SymbolKind.Function) return through(node, "refers to '" + sym.name + "'", routineEffect(sym, e));
 	return null;
@@ -671,14 +689,15 @@ export function walkEffect(node: Node | null, e: Effect): EffectCause | null {
 	if (isRoutineNode(node)) return walkNestedRoutine(node, e);
 	const here: EffectCause | null = match (node.kind) {
 		NodeKind.Identifier | NodeKind.MemberExpr => useEffect(node, e),
-		NodeKind.CallExpr => e == Effect.StoresBorrowed ? sinkStoreOf(node) ?? viewArgEffect(node) ?? callEffect(node, e) : callEffect(node, e),
+		NodeKind.CallExpr => e == Effect.StoresBorrowed ? sinkStoreOf(node) ?? viewArgEffect(node) ?? callEffect(node, e)
+			: e == Effect.SpawnUnsafe ? constReadEffect(node) ?? callEffect(node, e) : callEffect(node, e),
 		NodeKind.NewExpr => e == Effect.StoresBorrowed ? newViewArgEffect(node) ?? newEffect(node, e) : newEffect(node, e),
 		NodeKind.AwaitExpr => e == Effect.Suspends && !inAsync ? cause(node, "awaits") : null,
 		NodeKind.BinaryExpr | NodeKind.ArrayLiteral | NodeKind.ObjectLiteral => e == Effect.StoresBorrowed ? slotStoreOf(node) : null,
 		_ => null,
 	};
 	if (here != null) return here;
-	if (e == Effect.StoresBorrowed && node.kind == NodeKind.ForOfStmt && node.resolvedSym != null) forOfSources.set(node.resolvedSym!, (node.data as ForOfStmtData).forOfIterable);
+	if ((e == Effect.StoresBorrowed || e == Effect.SpawnUnsafe) && node.kind == NodeKind.ForOfStmt && node.resolvedSym != null) forOfSources.set(node.resolvedSym!, (node.data as ForOfStmtData).forOfIterable);
 	return walkChildren(node, e);
 }
 
@@ -778,7 +797,7 @@ function isLocalBinding(sym: Symbol | null): boolean {
 function bindingBorrow(n: Node, value: Node): string | null {
 	const sym = n.resolvedSym;
 	if (sym == null) return null;
-	if (isImmutableModuleConst(sym)) return "the module const '" + sym.name + "'";
+	if (isImmutableModuleConst(sym)) return CONST_BORROW + sym.name + "'";
 	if (isViewRoot(sym)) return "the view '" + sym.name + "'";
 	if (!isLocalBinding(sym) || resolving.includes(sym)) return null;
 	resolving.push(sym);
