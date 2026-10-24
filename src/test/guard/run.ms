@@ -11,6 +11,11 @@
 //   // GUARD-BALANCE <MangledType>       assert alloc==destroy for that type at exit
 //   // GUARD-TEST-BALANCE <MangledType>  run the file under `msc test` with the ledger and assert the balance there
 //   // GUARD-CHECK-FAIL <substr>         build MUST fail and the log MUST carry every substr
+//   <code> // GUARD-REFUSED              with GUARD-CHECK-FAIL, at the end of each refused line: an error must be
+//                                        located on that line, so one shape that starts compiling turns the
+//                                        guard red while the others still fail; `// GUARD-WARNED` likewise for a
+//                                        warning. A probe whose errors sit on two or more lines must mark them;
+//                                        GUARD_RECORD_SITES=1 prints the lines each build reports
 //   // GUARD-JS                          also build --target=js + node-run; pass = exit 0 + GUARD-OK printed
 //   // GUARD-TSAN                        also build --sanitize=thread --cc=clang + run; pass = exit 0 +
 //                                        GUARD-OK printed + no ThreadSanitizer report (unscored without the toolchain)
@@ -18,9 +23,13 @@
 //                                        build must fail with every tag, else it must link (nothing is run)
 //   // GUARD-ASAN                        with GUARD-OS bare: also build --sanitize=address --cc=clang and run on the
 //                                        host; pass = exit 0 + GUARD-OK printed + no AddressSanitizer report
-// The double-destroy abort needs no directive — it is name-agnostic.
+// The double-destroy abort needs no directive — it is name-agnostic. A balance holds only over a
+// type the probe allocated: a type with no ledger row proves nothing and is red.
 //
-// Env: MSC=<path to msc> (default: ./msc, else installed msc)
+// Env: MSC=<path to msc> (default: ./msc, else installed msc); GUARD_ONLY=<name,...> runs those
+// probes only. GUARD_SELFTEST=1 runs selftest/*.ms instead: each fixture breaks one checking rule
+// and names the red it must produce (`// SELFTEST-RED <substr>`); a fixture that stays green, or
+// goes red for another reason, fails the run, because a check that cannot go red checks nothing.
 import { execFileResult, ExecFileResult, exit, env, cwd, cmdExists, platform, arch } from "std/process";
 import { readFile, writeFile, readDir, exists, ensureDir, remove, removeAll, rename, symlink } from "std/fs";
 
@@ -78,6 +87,7 @@ const HAS_NODE = cmdExists("node");
 
 let fails = 0;
 let passes = 0;
+const failReasons: string[] = [];
 const unscoredOs: string[] = [];
 const unscoredSkips: string[] = [];
 const unscoredTsan: string[] = [];
@@ -90,6 +100,7 @@ function ok(tag: string): void {
 
 function fail(tag: string, why: string): void {
 	fails = fails + 1;
+	failReasons.push(why);
 	console.log(`FAIL ${tag}: ${why}`);
 }
 
@@ -158,7 +169,7 @@ function ledgerImbalance(text: string, typeName: string): string {
 			dump = [];
 		}
 	}
-	if (lastDump.length == 0) return `${typeName} alloc=? destroy=?`;
+	if (lastDump.length == 0) return `${typeName} has no ledger row: it was never allocated or its name moved, so its balance proves nothing`;
 	for (const line of lastDump) {
 		const a = fieldOf(line, "alloc=");
 		const d = fieldOf(line, "destroy=");
@@ -175,11 +186,14 @@ interface Probe {
 	balance: string[];
 	testBalance: string[];
 	checkfails: string[];
+	refusedLines: int32[];
+	warnedLines: int32[];
 	wantJs: boolean;
 	wantTsan: boolean;
 	wantAsan: boolean;
 	os: string;
 	osArgs: string[];
+	selftestRed: string;
 }
 
 function firstWord(s: string): string {
@@ -193,7 +207,13 @@ function parseDirectives(probe: Probe, src: string): void {
 	const BAL = "// GUARD-BALANCE";
 	const CHECK = "// GUARD-CHECK-FAIL ";
 	const OS = "// GUARD-OS ";
-	for (const line of lines(src)) {
+	const all = lines(src);
+	for (let i = 0; i < all.length; i++) {
+		const line = all[i];
+		if (!line.trim().startsWith("//")) {
+			if (line.contains("// GUARD-REFUSED")) probe.refusedLines.push((i + 1) as int32);
+			if (line.contains("// GUARD-WARNED")) probe.warnedLines.push((i + 1) as int32);
+		}
 		const testAt = line.indexOf(TEST);
 		const balAt = line.indexOf(BAL);
 		if (testAt >= 0) {
@@ -204,6 +224,7 @@ function parseDirectives(probe: Probe, src: string): void {
 			if (tok != "") probe.balance.push(tok);
 		}
 		if (line.startsWith(CHECK)) probe.checkfails.push(line.slice(CHECK.length, line.length));
+		if (line.startsWith("// SELFTEST-RED ")) probe.selftestRed = line.slice("// SELFTEST-RED ".length, line.length).trim();
 		if (line.startsWith("// GUARD-JS")) probe.wantJs = true;
 		if (line.startsWith("// GUARD-TSAN")) probe.wantTsan = true;
 		if (line.startsWith("// GUARD-ASAN")) probe.wantAsan = true;
@@ -222,18 +243,21 @@ function readFileOr(path: string, dflt: string): string {
 	return r.ok ? r.value : dflt;
 }
 
-function discoverProbes(): Probe[] {
+function discoverProbes(dir: string): Probe[] {
+	const only = envOr("GUARD_ONLY", "");
+	const wanted = only == "" ? [] : only.split(",");
 	const names: string[] = [];
-	for (const e of readDir(GUARD_DIR)) {
+	for (const e of readDir(dir)) {
 		if (e.endsWith("/") || !e.endsWith(".ms") || e == "run.ms") continue;
-		names.push(e.slice(0, e.length - 3));
+		const name = e.slice(0, e.length - 3);
+		if (wanted.length == 0 || wanted.includes(name)) names.push(name);
 	}
 	names.sort();
 	const probes: Probe[] = [];
 	for (const name of names) {
 		const probe: Probe = {
-			name, path: `${GUARD_DIR}/${name}.ms`,
-			balance: [], testBalance: [], checkfails: [], wantJs: false, wantTsan: false, wantAsan: false, os: "", osArgs: [],
+			name, path: `${dir}/${name}.ms`,
+			balance: [], testBalance: [], checkfails: [], refusedLines: [], warnedLines: [], wantJs: false, wantTsan: false, wantAsan: false, os: "", osArgs: [], selftestRed: "",
 		};
 		parseDirectives(probe, readFileOr(probe.path, ""));
 		probes.push(probe);
@@ -271,13 +295,68 @@ function binExecutable(binPath: string): string {
 	return "";
 }
 
-function checkDiagnostics(tag: string, log: string, wants: string[]): void {
+function stripAnsi(text: string): string {
+	let out = "";
+	let i = 0;
+	while (i < text.length) {
+		if (text.charCodeAt(i) == 27) {
+			while (i < text.length && text.charAt(i) != "m") i += 1;
+			i += 1;
+			continue;
+		}
+		out = out + text.charAt(i);
+		i += 1;
+	}
+	return out;
+}
+
+// The source lines of `path` that the build reports a diagnostic of `severity` on.
+function diagnosticLines(log: string, path: string, severity: string): int32[] {
+	const out: int32[] = [];
+	let current = "";
+	const marker = `--> ${path}:`;
+	for (const line of lines(stripAnsi(log))) {
+		const t = line.trim();
+		if (t.startsWith("error")) current = "error";
+		else if (t.startsWith("warning")) current = "warning";
+		const at = t.indexOf(marker);
+		if (at < 0 || current != severity) continue;
+		const rest = t.slice(at + marker.length, t.length);
+		const colon = rest.indexOf(":");
+		const n = (colon < 0 ? rest : rest.slice(0, colon)).parseInt() as int32;
+		if (!out.includes(n)) out.push(n);
+	}
+	return out;
+}
+
+const RECORD_SITES = envOr("GUARD_RECORD_SITES", "") == "1";
+
+function checkDiagnostics(probe: Probe, lane: string, tag: string, log: string): void {
 	let good = true;
-	for (const want of wants) {
+	for (const want of probe.checkfails) {
 		if (want != "" && !log.contains(want)) {
 			fail(tag, `missing diagnostic: ${want}`);
 			good = false;
 		}
+	}
+	const errorsAt = diagnosticLines(log, probe.path, "error");
+	const warningsAt = diagnosticLines(log, probe.path, "warning");
+	if (RECORD_SITES) console.log(`     record ${probe.name} [${lane}]: errors at ${errorsAt.join(" ")}; warnings at ${warningsAt.join(" ")}`);
+	for (const n of probe.refusedLines) {
+		if (!errorsAt.includes(n)) {
+			fail(tag, `line ${n} is marked GUARD-REFUSED but the build reports no error there: that shape compiles`);
+			good = false;
+		}
+	}
+	for (const n of probe.warnedLines) {
+		if (!warningsAt.includes(n)) {
+			fail(tag, `line ${n} is marked GUARD-WARNED but the build reports no warning there`);
+			good = false;
+		}
+	}
+	if (probe.refusedLines.length == 0 && probe.warnedLines.length == 0 && errorsAt.length > 1) {
+		fail(tag, `errors on ${errorsAt.length} lines (${errorsAt.join(", ")}) and none marked GUARD-REFUSED: a shape that starts compiling would go unnoticed`);
+		good = false;
 	}
 	if (good) ok(tag);
 }
@@ -294,7 +373,7 @@ function runDrcLane(probe: Probe): void {
 			fail(tag, "compiled clean — a checker rule was dropped");
 			return;
 		}
-		checkDiagnostics(tag, both(b), probe.checkfails);
+		checkDiagnostics(probe, "drc", tag, both(b));
 		return;
 	}
 	if (!succeeded(b)) {
@@ -362,7 +441,7 @@ function runOsLane(probe: Probe): void {
 			fail(tag, "compiled clean — a checker rule was dropped");
 			return;
 		}
-		checkDiagnostics(tag, both(b), probe.checkfails);
+		checkDiagnostics(probe, probe.os, tag, both(b));
 		return;
 	}
 	if (!succeeded(b)) {
@@ -433,7 +512,7 @@ function runJsLane(probe: Probe): void {
 			fail(tag, "compiled clean — a checker rule was dropped");
 			return;
 		}
-		checkDiagnostics(tag, both(b), probe.checkfails);
+		checkDiagnostics(probe, "js", tag, both(b));
 		return;
 	}
 	if (!succeeded(b)) {
@@ -882,6 +961,47 @@ function buildMsTargetDecides(): void {
 	}
 }
 
+function runProbe(probe: Probe): void {
+	if (probe.os != "") {
+		runOsLane(probe);
+	} else {
+		runDrcLane(probe);
+		if (probe.wantJs) runJsLane(probe);
+		if (probe.wantTsan) runTsanLane(probe);
+		if (probe.testBalance.length > 0) runTestLane(probe);
+	}
+}
+
+// Each fixture breaks one check on purpose; a check that cannot go red here passes hollow guards.
+function selftest(): void {
+	let bad = 0;
+	const fixtures = discoverProbes(`${GUARD_DIR}/selftest`);
+	for (const probe of fixtures) {
+		const before = failReasons.length;
+		runProbe(probe);
+		const reasons = failReasons.slice(before);
+		const tag = `selftest ${probe.name}`;
+		if (probe.selftestRed == "") {
+			bad = bad + 1;
+			console.log(`BAD  ${tag}: no // SELFTEST-RED line`);
+		} else if (reasons.length == 0) {
+			bad = bad + 1;
+			console.log(`BAD  ${tag}: stayed green, the check it breaks is hollow`);
+		} else if (!reasons.some((r) => r.contains(probe.selftestRed))) {
+			bad = bad + 1;
+			console.log(`BAD  ${tag}: red for another reason, wanted '${probe.selftestRed}'`);
+		} else {
+			console.log(`red  ${tag}: as declared`);
+		}
+	}
+	if (fixtures.length == 0) {
+		bad = bad + 1;
+		console.log(`BAD  selftest: no fixtures under ${GUARD_DIR}/selftest`);
+	}
+	console.log(bad == 0 ? `nim-guard selftest: ALL RED AS DECLARED (${fixtures.length} fixtures)` : `nim-guard selftest: ${bad} fixture(s) wrong`);
+	if (bad > 0) exit(1);
+}
+
 function main(): void {
 	if (SHARD_COUNT < 1 || SHARD_INDEX < 0 || SHARD_INDEX >= SHARD_COUNT) {
 		console.log(`nim-guard: GUARD_SHARD must be <index>/<count> with 0 <= index < count, got '${envOr("GUARD_SHARD", "")}'`);
@@ -895,21 +1015,18 @@ function main(): void {
 		console.log("nim-guard: !! node not found — GUARD-JS probes still BUILD for the js target, but their GUARD-OK run is unscored on this host");
 	}
 
-	const probes = discoverProbes();
+	if (envOr("GUARD_SELFTEST", "") == "1") {
+		selftest();
+		return;
+	}
+	const probes = discoverProbes(GUARD_DIR);
 	for (let i = 0; i < probes.length; i++) {
 		const probe = probes[i];
 		if (!claimProbe(probe, i)) continue;
-		if (probe.os != "") {
-			runOsLane(probe);
-		} else {
-			runDrcLane(probe);
-			if (probe.wantJs) runJsLane(probe);
-			if (probe.wantTsan) runTsanLane(probe);
-			if (probe.testBalance.length > 0) runTestLane(probe);
-		}
+		runProbe(probe);
 		if (CLAIMS != "") writeFile(`${CLAIMS}/done/${probe.name}`, "");
 	}
-	if (SHARD_INDEX > 0) {
+	if (SHARD_INDEX > 0 || envOr("GUARD_ONLY", "") != "") {
 		console.log(fails == 0 ? `nim-guard: ALL GREEN (${passes} cells)` : `nim-guard: FAILURES ABOVE (${passes} ok, ${fails} red)`);
 		if (fails > 0) exit(1);
 		return;
