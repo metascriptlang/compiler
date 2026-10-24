@@ -70,6 +70,12 @@ const n = new Box().size() + new Box().grow("x");
 	assert imported.contains("Box already has method size(); an extension with the same name and parameters would shadow it @2"), "class from another module: " + imported;
 	assert imported.contains("Dog already has method speak(); an extension with the same name and parameters would shadow it @3"), "inherited method: " + imported;
 	assert !imported.contains("grow"), "a new parameter type is an overload: " + imported;
+	const generic = checkOnly(`
+class Box { size(): int32 { return 1; } onDestroy(): void { } }
+function size<T>(this x: T): int32 { return 3; }
+function onDestroy<T>(this x: Readonly<T>): void { }
+`).errors.join("\n");
+	assert !generic.contains("already has method"), "a receiver that is a type parameter repeats no class's method: " + generic;
 }
 
 test "an overload that differs only by a defaulted parameter stays ambiguous" {

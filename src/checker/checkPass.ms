@@ -1509,6 +1509,7 @@ function refuseAccessorOverField(ctx: CheckerContext, node: Node, receiver: Type
 function refuseExtensionOverMethod(ctx: CheckerContext, sym: Symbol, fnType: Type, name: string, at: SourceLocation): void {
 	if (ctx.extensionRegistry == null || sym.symbolKind != SymbolKind.Function || !isInstanceExtension(sym)) return;
 	const receiver = unwrapRef(fnType.typeChildren[0]);
+	if (receiver == null || withoutReadonlyView(receiver).kind == TypeKind.GenericParam) return;
 	for (const ext of findAllExtensionsByName(ctx.extensionRegistry, name)) {
 		const method = ext.sym;
 		if (method == null || method == sym || ext.isStatic || method.declNode == null || method.declNode.kind != NodeKind.MethodDecl) continue;
