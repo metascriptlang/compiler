@@ -12,7 +12,7 @@ because `ls` is current.
 | `parser/` | recursive descent + Pratt precedence; `statements/` and `expressions/` split by node family | `statements/core.ms` `parseProgram` |
 | `binder/` | flow graph the checker's narrowing reads | `index.ms` `bindFlowGraph` |
 | `checker/` | the three passes (collect, resolve, check), flow narrowing, and `suggest.ms`, the position queries the LSP calls | `orchestrator.ms` `checkModuleGraph` |
-| `monomorphize/` | mangled names for generic instances (`registry.ms`) and the per-module instance drain | `collect.ms` `monomorphizeProgram` |
+| `monomorphize/` | mangled names for generic instances; instances themselves are made by the checker (`checker/instantiate.ms`) | `registry.ms` `monoInstanceName` |
 | `transform/` | AST lowering passes; the C-only tail is `native/` | `index.ms` `transformProgram`; `native/index.ms` |
 | `analyzer/` | DRC injection (C backend only) | `index.ms` `analyzeProgram` |
 | `codegen/c/` | C emitter, one module of C per source module | `index.ms` `generateCModule` |
