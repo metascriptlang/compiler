@@ -7,7 +7,7 @@ import {
 	ArrowFunctionData, FunctionExprData, TestDeclData, ProgramData, ReturnStmtData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { isPrimitiveKind, isViewType, isReadonlyView, isStructType, typeDisplayName } from "./types";
+import { isPrimitiveKind, isViewType, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName } from "./types";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, addError, dispatchEntryFor, dispatchOverridesFor } from "./context";
 import { isAddressTaking, checkPointerEscapesIn } from "./pointerAddress";
@@ -1518,14 +1518,14 @@ function walk(u: BorrowUnit, node: Node | null): void {
 	};
 }
 
-function declaresView(node: Node | null): boolean {
+function declaresView(node: Node | null, clear: TypeVisitSet): boolean {
 	if (node == null) return false;
 	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr
 		|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ConstructorDecl) return false;
-	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null && isViewType(node.resolvedSym.symbolType)) return true;
-	if (node.kind == NodeKind.ForOfStmt && node.resolvedSym != null && isViewType(node.resolvedSym.symbolType)) return true;
+	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null && holdsViewSkippingClear(node.resolvedSym.symbolType, clear)) return true;
+	if (node.kind == NodeKind.ForOfStmt && node.resolvedSym != null && holdsViewSkippingClear(node.resolvedSym.symbolType, clear)) return true;
 	let found = false;
-	forEachChild(node, (child: Node): void => { if (!found && declaresView(child)) found = true; });
+	forEachChild(node, (child: Node): void => { if (!found && declaresView(child, clear)) found = true; });
 	return found;
 }
 
@@ -1551,7 +1551,7 @@ function checkUnit(ctx: CheckerContext, body: Node | null): void {
 	if (body == null || (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program)) return;
 	const pointers: Symbol[] = [];
 	collectPointers(body, pointers);
-	if (pointers.length == 0 && !declaresView(body)) return;
+	if (pointers.length == 0 && !declaresView(body, new TypeVisitSet())) return;
 	const u: BorrowUnit = { p: createPartitions(), pass: 1, scope: [], defers: [], ctx, pointers, blocks: [], captured: [], routines: [], suspends: [], suspendSites: [], escaped: [] };
 	runPass(u, body, 1);
 	runPass(u, body, 2);

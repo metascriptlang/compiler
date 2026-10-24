@@ -1209,8 +1209,17 @@ export function sgRecordSym(
 // Stable bottom-up merge sort by (line, col) — called once after check completes.
 export function sgSortRecords(records: SgSymRecord[]): void {
 	const n = records.length;
+	let sorted = true;
+	for (let k = 1; k < n; k += 1) {
+		const a = records[k - 1];
+		const b = records[k];
+		if (b.line < a.line || (b.line == a.line && b.col < a.col)) { sorted = false; break; }
+	}
+	if (sorted) return;
 	const tmp: SgSymRecord[] = [];
 	for (let k = 0; k < n; k += 1) tmp.push(records[k]);
+	let from = records;
+	let into = tmp;
 	let width = 1;
 	while (width < n) {
 		let lo = 0;
@@ -1221,23 +1230,28 @@ export function sgSortRecords(records: SgSymRecord[]): void {
 			let r = mid;
 			let o = lo;
 			while (l < mid && r < hi) {
-				const a = records[l];
-				const b = records[r];
+				const a = from[l];
+				const b = from[r];
 				if (b.line < a.line || (b.line == a.line && b.col < a.col)) {
-					tmp[o] = b;
+					into[o] = b;
 					r += 1;
 				} else {
-					tmp[o] = a;
+					into[o] = a;
 					l += 1;
 				}
 				o += 1;
 			}
-			while (l < mid) { tmp[o] = records[l]; l += 1; o += 1; }
-			while (r < hi) { tmp[o] = records[r]; r += 1; o += 1; }
+			while (l < mid) { into[o] = from[l]; l += 1; o += 1; }
+			while (r < hi) { into[o] = from[r]; r += 1; o += 1; }
 			lo = hi;
 		}
-		for (let k = 0; k < n; k += 1) records[k] = tmp[k];
+		const spent = from;
+		from = into;
+		into = spent;
 		width = width * 2;
+	}
+	if (from != records) {
+		for (let k = 0; k < n; k += 1) records[k] = from[k];
 	}
 }
 

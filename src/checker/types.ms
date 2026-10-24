@@ -3953,6 +3953,10 @@ export function isViewType(t: Type | null): boolean {
 	return holdsView(t, new TypeVisitSet());
 }
 
+export function holdsViewSkippingClear(t: Type | null, clear: TypeVisitSet): boolean {
+	return holdsView(t, clear);
+}
+
 function holdsView(t: Type | null, seen: TypeVisitSet): boolean {
 	if (t == null) return false;
 	if (t.kind == TypeKind.Var || t.kind == TypeKind.Span || t.kind == TypeKind.Borrow) return true;
