@@ -105,6 +105,7 @@ typedef struct msActor {
     /* The actor's cycle roots: the running thread's while a visit holds processing
      * (msRootsSwap), so its cells keep their root entries when it changes threads. */
     msCellSeq roots;
+    struct msActorJobs* jobs;  /* NULL until the actor first starts code that outlives a visit */
 } msActor;
 
 /* ===== Batch Size ===== */
@@ -707,18 +708,162 @@ static inline void msActorSend(msActor* a, msMessage* msg) {
     msHazardClear(a);
 }
 
+/* ===== Actor jobs (ULTRALOCK A4) =====
+ * A firing thread holds only a trampoline and posts the record; the env is the actor's
+ * and is run or dropped only under processing. */
+
+#define MS_ACTOR_MSG_JOB (-5)
+
+typedef struct msActorJob {
+    _Atomic(int32_t) refs;        /* live list + each trampoline + each queued post */
+    _Atomic(bool) cancelled;
+    _Atomic(bool) pending;        /* an interval keeps at most one tick queued */
+    bool periodic;
+    bool dropAfterRun;
+    bool envDone;                 /* processing only */
+    int64_t pid;
+    int64_t timerId;
+    msClosure cb;
+    void (*drop)(void*);
+    void* chain;                  /* the async env this continuation resumes */
+    struct msActorJob* liveNext;
+    struct msActorJob* livePrev;
+} msActorJob;
+
+/* Everything but `queue` is touched only under processing. */
+typedef struct msActorJobs {
+    msMpscQueue queue;
+    msActorJob* live;
+    msActorJob* running;
+} msActorJobs;
+
+static inline void msActorJobUnref(msActorJob* r) {
+    if (atomic_fetch_sub_explicit(&r->refs, 1, memory_order_acq_rel) == 1) free(r);
+}
+
+static inline msActorJobs* msActorJobsEnsure(msActor* a) {
+    if (a->jobs == NULL) {
+        msActorJobs* j = (msActorJobs*)msMemAlloc0(sizeof(msActorJobs));
+        msMpscInit(&j->queue);
+        a->jobs = j;
+    }
+    return a->jobs;
+}
+
+static inline void msActorJobDropEnv(msActorJobs* j, msActorJob* r) {
+    if (r->envDone) return;
+    r->envDone = true;
+    if (r->livePrev != NULL) r->livePrev->liveNext = r->liveNext;
+    else j->live = r->liveNext;
+    if (r->liveNext != NULL) r->liveNext->livePrev = r->livePrev;
+    if (r->drop != NULL && r->cb.env != NULL) r->drop(r->cb.env);
+    msActorJobUnref(r);
+}
+
+static inline void msActorJobRun(msActorJobs* j, msActorJob* r) {
+    if (r->envDone) return;
+    if (atomic_load_explicit(&r->cancelled, memory_order_acquire)) {
+        msActorJobDropEnv(j, r);
+        return;
+    }
+    if (r->periodic) {
+        atomic_store_explicit(&r->pending, false, memory_order_release);
+        j->running = r;
+        ((void(*)(void*))r->cb.fn)(r->cb.env);
+        j->running = NULL;
+        if (atomic_load_explicit(&r->cancelled, memory_order_acquire)) msActorJobDropEnv(j, r);
+        return;
+    }
+    void (*drop)(void*) = r->dropAfterRun ? r->drop : NULL;
+    r->drop = NULL;
+    msActorJobDropEnv(j, r);
+    ((void(*)(void*))r->cb.fn)(r->cb.env);
+    if (drop != NULL && r->cb.env != NULL) drop(r->cb.env);
+}
+
+static inline void msActorJobsCancelTimer(msActorJobs* j, int64_t id) {
+    for (msActorJob* r = j->live; r != NULL; r = r->liveNext) {
+        if (r->timerId != id) continue;
+        atomic_store_explicit(&r->cancelled, true, memory_order_release);
+        if (r != j->running) msActorJobDropEnv(j, r);
+        return;
+    }
+}
+
+static inline void msActorPostJob(int64_t pid, msActorJob* r) {
+    msActor* a = msActorFromPid(pid);
+    if (a == NULL) return;
+    msActorJobs* j = a->jobs;
+    if (j == NULL || !atomic_load_explicit(&a->alive, memory_order_acquire)) {
+        msHazardClear(a);
+        return;
+    }
+    if (r != NULL) atomic_fetch_add_explicit(&r->refs, 1, memory_order_relaxed);
+    msMessage* m = msMsgAllocSized(MS_ACTOR_MSG_JOB, NULL, 1);
+    msMsgSetPtr(m, 0, r);
+    bool wasEmpty = msMpscPush(&j->queue, m);
+    atomic_store_explicit(&a->hasWork, true, memory_order_release);
+    if (wasEmpty) msActorScheduleEdge(a);
+    msHazardClear(a);
+}
+
+static inline void msActorJobPost(msActorJob* r) {
+    if (atomic_load_explicit(&r->cancelled, memory_order_acquire)) return;
+    if (r->periodic && atomic_exchange_explicit(&r->pending, true, memory_order_acq_rel)) return;
+    msActorPostJob(r->pid, r);
+}
+
+static inline int msActorRunJobs(msActor* a, msActorJobs* j, int budget) {
+    (void)a;
+    int n = 0;
+    while (n < budget) {
+        msMessage* m = msMpscPop(&j->queue);
+        if (m == NULL) break;
+        n++;
+        msActorJob* r = (msActorJob*)msMsgGetPtr(m, 0);
+        if (r == NULL) continue;
+        msActorJobRun(j, r);
+        msActorJobUnref(r);
+    }
+    return n;
+}
+
+static inline void msActorJobsDrain(msActorJobs* j) {
+    msMessage* m;
+    while ((m = msMpscPop(&j->queue)) != NULL) {
+        msActorJob* r = (msActorJob*)msMsgGetPtr(m, 0);
+        if (r != NULL) msActorJobUnref(r);
+    }
+}
+
+/* At shell free: no pin is left, so no poster can still push. */
+static inline void msActorJobsFree(msActor* a) {
+    msActorJobs* j = a->jobs;
+    if (j == NULL) return;
+    msActorJobsDrain(j);
+    msMpscDestroy(&j->queue);
+    free(j);
+    a->jobs = NULL;
+}
+
 static inline void msActorVisitEnd(msActor* a, msActor* prevActor) {
     /* Keep seq_cst: pairs with msActorScheduleEdge's exchange after a queue push (Dekker). */
     atomic_store_explicit(&a->scheduled, false, memory_order_seq_cst);
     atomic_thread_fence(memory_order_seq_cst);
     bool work = false;
+    bool jobsIdle = true;
+    msActorJobs* j = a->jobs;
+    if (j != NULL) {
+        if (!msMpscMarkEmpty(&j->queue)) work = true;
+        jobsIdle = !work;
+    }
     bool frozen = (atomic_load_explicit(&a->syncFlags, memory_order_seq_cst) & MS_ACTOR_SUSPENDED) != 0;
     if (!frozen) {
         if (atomic_load_explicit(&a->suspendedFut, memory_order_acquire) != NULL) {
             work = true;
         } else if (!msMpscMarkEmpty(&a->mailbox)) {
             work = true;
-        } else {
+        } else if (jobsIdle) {
             atomic_store_explicit(&a->hasWork, false, memory_order_release);
         }
     }
@@ -769,8 +914,9 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         if (sfp != NULL) {
             if (msActorHasFlag(a, MS_ACTOR_SUSPENDED)) {
                 msRootsSwap(&a->roots);
+                int ran = a->jobs != NULL ? msActorRunJobs(a, a->jobs, maxBatch) : 0;
                 msActorVisitEnd(a, prevActor);
-                return 0;
+                return ran;
             }
             /* Resumed: the resume callback completed the reply and released implFut.
              * Clear suspension state, fall through to mailbox drain. */
@@ -809,6 +955,7 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         a->lastActivityMs = msMonoTimeMs();
     }
 
+    int ran = a->jobs != NULL ? msActorRunJobs(a, a->jobs, maxBatch) : 0;
     int processed = 0;
     bool parked = false;
     while (processed < maxBatch) {
@@ -838,7 +985,7 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
     }
 
     msActorVisitEnd(a, prevActor);
-    return processed;
+    return ran + processed;
 }
 
 /* ===== Message Accessors (for dispatch functions generated by compiler) ===== */
@@ -1004,6 +1151,7 @@ static inline void msActorFreeShell(msActor* a) {
     if (msHazardScan(a)) {
         msActorDeferRetire(a);
     } else {
+        msActorJobsFree(a);
         free(a);
     }
 }
@@ -1642,6 +1790,7 @@ static inline bool msActorPollLocal(void) {
                 atomic_store_explicit(&d->runNext, sched->deferredFree, memory_order_relaxed);
                 sched->deferredFree = d;
             } else {
+                msActorJobsFree(d);
                 free(d);
                 didWork = true;
             }
