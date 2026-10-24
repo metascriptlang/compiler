@@ -81,21 +81,20 @@ export function detectionGetCapturedIdents(state: DetectionState, fnNode: Node):
 // Walks a function body, identifying which outer-scope vars are referenced from
 // inside any nested closure. Tracks closure depth — only references inside arrow
 // or function-expression bodies count as captures.
-//
-// Module-level state avoids closure-of-closure issues: this code itself is
-// lambda-lifting-relevant and we run it BEFORE any lifting happens.
 
-let _detectAllSyms: SymSet = createSymSet();
-let _detectAllSS: ScopeStack = createScopeStack();
-let _detectAllIdents: Node[] = [];
-let _detectClosureDepth: number = 0;  // >0 when inside a closure
-// Number of funcMarkers at start of the current detectAllCaptures call.
-// Used to filter out captures whose defining frame was pushed DURING the walk
-// (i.e., locals of nested closures owned by their own envs, not by F's env).
-let _detectInitialMarkers: number = 0;
-let _detectPendingRoutine: Symbol | null = null;
-let _detectRoutine: Symbol | null = null;
-let _detectRoutineDepth: number = 0;
+interface DetectWalk {
+	captured: SymSet;
+	ss: ScopeStack;
+	idents: Node[];
+	closureDepth: number;  // >0 when inside a closure
+	// Number of funcMarkers at start of the current detectAllCaptures call.
+	// Used to filter out captures whose defining frame was pushed DURING the walk
+	// (i.e., locals of nested closures owned by their own envs, not by F's env).
+	initialMarkers: number;
+	pendingRoutine: Symbol | null;
+	routine: Symbol | null;
+	routineDepth: number;
+}
 
 export function routineBindingSym(node: Node): Symbol | null {
 	if (node.kind != NodeKind.VariableDecl) return null;
@@ -141,28 +140,28 @@ export function routineSyms(root: Node, depth: number, splitLoopLocals: Symbol[]
 	return routines;
 }
 
-// True if `sym`'s defining frame index is < `_detectInitialMarkers`,
+// True if `sym`'s defining frame index is < `initialMarkers`,
 // i.e., the var lives in F's own frame or one of F's ancestors — never in a
 // frame pushed during F's body walk.
-function definedAtOrAboveInitial(sym: Symbol): boolean {
+function definedAtOrAboveInitial(sym: Symbol, w: DetectWalk): boolean {
 	let symIdx = -1;
-	let i = _detectAllSS.syms.length - 1;
+	let i = w.ss.syms.length - 1;
 	while (i >= 0) {
-		if (_detectAllSS.syms[i] == sym) { symIdx = i; break; }
+		if (w.ss.syms[i] == sym) { symIdx = i; break; }
 		i -= 1;
 	}
 	if (symIdx < 0) return false;
 	// Find defining frame: highest funcMarker idx s.t. funcMarkers[idx] <= symIdx.
 	// If no funcMarker is <= symIdx, the var is module-level — keep it (handled
 	// elsewhere by isModuleLevelVar filter).
-	let frameIdx = _detectAllSS.funcMarkers.length;
-	let j = _detectAllSS.funcMarkers.length - 1;
+	let frameIdx = w.ss.funcMarkers.length;
+	let j = w.ss.funcMarkers.length - 1;
 	while (j >= 0) {
-		if (_detectAllSS.funcMarkers[j] <= symIdx) { frameIdx = j; break; }
+		if (w.ss.funcMarkers[j] <= symIdx) { frameIdx = j; break; }
 		j -= 1;
 	}
-	if (frameIdx >= _detectAllSS.funcMarkers.length) return true;
-	return frameIdx < _detectInitialMarkers;
+	if (frameIdx >= w.ss.funcMarkers.length) return true;
+	return frameIdx < w.initialMarkers;
 }
 
 // Detect all captures from a function body. Single entry point; returns both
@@ -175,49 +174,46 @@ function definedAtOrAboveInitial(sym: Symbol): boolean {
 // belong to that nested closure's own env. Each closure boundary records its
 // own captures via separate detectAllCaptures calls (see `detectPassWalk`).
 export function detectAllCaptures(body: Node, ss: ScopeStack): DetectResult {
-	_detectAllSyms = createSymSet();
-	_detectAllIdents = [];
-	_detectClosureDepth = 0;
-	_detectPendingRoutine = null;
-	_detectRoutine = null;
-	_detectRoutineDepth = 0;
-	_detectAllSS = cloneScopeStack(ss);
-	_detectInitialMarkers = _detectAllSS.funcMarkers.length;
-	detectAllWalk(body);
-	const result: DetectResult = {
-		captures: _detectAllSyms,
-		capturedIdents: _detectAllIdents,
+	const scopes = cloneScopeStack(ss);
+	const w: DetectWalk = {
+		captured: createSymSet(),
+		ss: scopes,
+		idents: [],
+		closureDepth: 0,
+		initialMarkers: scopes.funcMarkers.length,
+		pendingRoutine: null,
+		routine: null,
+		routineDepth: 0,
 	};
-	_detectAllSyms = createSymSet();
-	_detectAllIdents = [];
-	return result;
+	detectAllWalk(body, w);
+	return { captures: w.captured, capturedIdents: w.idents };
 }
 
-function detectClosureBody(paramSyms: Symbol[] | null, params: string[], body: Node): void {
-	const savedRoutine = _detectRoutine;
-	const savedRoutineDepth = _detectRoutineDepth;
-	_detectRoutine = _detectPendingRoutine;
-	_detectPendingRoutine = null;
-	pushFuncBoundary(_detectAllSS);
-	_detectClosureDepth += 1;
-	_detectRoutineDepth = _detectClosureDepth;
-	defineParams(_detectAllSS, paramSyms, params);
-	detectAllWalk(body);
-	_detectClosureDepth -= 1;
-	popFuncBoundary(_detectAllSS);
-	_detectRoutine = savedRoutine;
-	_detectRoutineDepth = savedRoutineDepth;
+function detectClosureBody(paramSyms: Symbol[] | null, params: string[], body: Node, w: DetectWalk): void {
+	const savedRoutine = w.routine;
+	const savedRoutineDepth = w.routineDepth;
+	w.routine = w.pendingRoutine;
+	w.pendingRoutine = null;
+	pushFuncBoundary(w.ss);
+	w.closureDepth += 1;
+	w.routineDepth = w.closureDepth;
+	defineParams(w.ss, paramSyms, params);
+	detectAllWalk(body, w);
+	w.closureDepth -= 1;
+	popFuncBoundary(w.ss);
+	w.routine = savedRoutine;
+	w.routineDepth = savedRoutineDepth;
 }
 
-function detectAllWalk(node: Node | null): void {
+function detectAllWalk(node: Node | null, w: DetectWalk): void {
 	if (node == null) return;
 	if (node.kind == NodeKind.Identifier) {
 		const sym = node.resolvedSym;
 		if (sym == null) return;
-		if (_detectRoutine != null && sym == _detectRoutine && _detectClosureDepth == _detectRoutineDepth) return;
+		if (w.routine != null && sym == w.routine && w.closureDepth == w.routineDepth) return;
 		// Only capture at closure depth > 0 (inside ArrowFunction/FunctionExpr).
 		// Variables in the main function body are directly accessible — no capture needed.
-		if (_detectClosureDepth > 0 && !isLocalVar(_detectAllSS, sym) && isOuterVar(_detectAllSS, sym) && definedAtOrAboveInitial(sym)) {
+		if (w.closureDepth > 0 && !isLocalVar(w.ss, sym) && isOuterVar(w.ss, sym) && definedAtOrAboveInitial(sym, w)) {
 			// Reference parity (interestingVar): only capture variables and params.
 			// Skip types (Class, Interface, TypeAlias, Enum) — they're not runtime values.
 			const sk = sym.symbolKind;
@@ -230,12 +226,12 @@ function detectAllWalk(node: Node | null): void {
 			// Functions and other symbols use the frame they are bound in.
 			const isModLevel = (sk == SymbolKind.Variable || sk == SymbolKind.Temp || sk == SymbolKind.Parameter)
 				? hasFlag(sym, SymbolFlag.Global)
-				: isModuleLevelVar(_detectAllSS, sym);
+				: isModuleLevelVar(w.ss, sym);
 			if (!isModLevel) {
-				if (!symSetContains(_detectAllSyms, sym)) {
-					_detectAllIdents.push(node);
+				if (!symSetContains(w.captured, sym)) {
+					w.idents.push(node);
 				}
-				symSetAdd(_detectAllSyms, sym);
+				symSetAdd(w.captured, sym);
 			}
 		}
 		return;
@@ -245,101 +241,101 @@ function detectAllWalk(node: Node | null): void {
 	// Enter closures: push boundary, define params, recurse body, pop, track depth
 	if (node.kind == NodeKind.ArrowFunction) {
 		const d = node.data as ArrowFunctionData;
-		detectClosureBody(node.paramSyms, d.arrowParams, d.arrowBody);
+		detectClosureBody(node.paramSyms, d.arrowParams, d.arrowBody, w);
 		return;
 	}
 	if (node.kind == NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
-		detectClosureBody(node.paramSyms, d.funcExprParams, d.funcExprBody);
+		detectClosureBody(node.paramSyms, d.funcExprParams, d.funcExprBody, w);
 		return;
 	}
 	// Track variable definitions for scope awareness
 	if (node.kind == NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
 		const boundBeforeInitializer = initializerHoldsClosure(d.initializer);
-		if (boundBeforeInitializer) defineVar(_detectAllSS, node.resolvedSym, d.declName);
-		_detectPendingRoutine = routineBindingSym(node);
-		detectAllWalk(d.initializer);
-		_detectPendingRoutine = null;
-		if (!boundBeforeInitializer) defineVar(_detectAllSS, node.resolvedSym, d.declName);
+		if (boundBeforeInitializer) defineVar(w.ss, node.resolvedSym, d.declName);
+		w.pendingRoutine = routineBindingSym(node);
+		detectAllWalk(d.initializer, w);
+		w.pendingRoutine = null;
+		if (!boundBeforeInitializer) defineVar(w.ss, node.resolvedSym, d.declName);
 		return;
 	}
 	// Generic: recurse children via explicit dispatch (avoid deep mapChildren stack)
 	if (node.kind == NodeKind.BlockStmt) {
 		const d = node.data as BlockStmtData;
-		defineLocalRoutines(_detectAllSS, d.statements);
-		for (const s of d.statements) detectAllWalk(s);
+		defineLocalRoutines(w.ss, d.statements);
+		for (const s of d.statements) detectAllWalk(s, w);
 		return;
 	}
 	if (node.kind == NodeKind.ExprStmt) {
-		detectAllWalk((node.data as ExprStmtData).expr);
+		detectAllWalk((node.data as ExprStmtData).expr, w);
 		return;
 	}
 	if (node.kind == NodeKind.ReturnStmt) {
-		detectAllWalk((node.data as ReturnStmtData).argument);
+		detectAllWalk((node.data as ReturnStmtData).argument, w);
 		return;
 	}
 	if (node.kind == NodeKind.IfStmt) {
 		const d = node.data as IfStmtData;
-		detectAllWalk(d.condition);
-		detectAllWalk(d.consequent);
-		detectAllWalk(d.alternate);
+		detectAllWalk(d.condition, w);
+		detectAllWalk(d.consequent, w);
+		detectAllWalk(d.alternate, w);
 		return;
 	}
 	if (node.kind == NodeKind.WhileStmt) {
 		const d = node.data as WhileStmtData;
-		detectAllWalk(d.whileCondition);
-		detectAllWalk(d.whileBody);
+		detectAllWalk(d.whileCondition, w);
+		detectAllWalk(d.whileBody, w);
 		return;
 	}
 	if (node.kind == NodeKind.DoWhileStmt) {
 		const d = node.data as DoWhileStmtData;
-		detectAllWalk(d.doBody);
-		detectAllWalk(d.doCondition);
+		detectAllWalk(d.doBody, w);
+		detectAllWalk(d.doCondition, w);
 		return;
 	}
 	if (node.kind == NodeKind.TryCatchStmt) {
 		const d = node.data as TryCatchStmtData;
-		detectAllWalk(d.tryBody);
-		if (d.catchName != "") defineVar(_detectAllSS, node.resolvedSym, d.catchName);
-		detectAllWalk(d.catchBody);
-		detectAllWalk(d.finallyBody);
+		detectAllWalk(d.tryBody, w);
+		if (d.catchName != "") defineVar(w.ss, node.resolvedSym, d.catchName);
+		detectAllWalk(d.catchBody, w);
+		detectAllWalk(d.finallyBody, w);
 		return;
 	}
 	if (node.kind == NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
-		detectAllWalk(d.left);
-		detectAllWalk(d.right);
+		detectAllWalk(d.left, w);
+		detectAllWalk(d.right, w);
 		return;
 	}
 	if (node.kind == NodeKind.UnaryExpr) {
-		detectAllWalk((node.data as UnaryExprData).operand);
+		detectAllWalk((node.data as UnaryExprData).operand, w);
 		return;
 	}
 	if (node.kind == NodeKind.CallExpr) {
 		const d = node.data as CallExprData;
-		detectAllWalk(d.callee);
-		for (const a of d.arguments) detectAllWalk(a);
+		detectAllWalk(d.callee, w);
+		for (const a of d.arguments) detectAllWalk(a, w);
 		return;
 	}
 	if (node.kind == NodeKind.SwitchStmt) {
 		const d = node.data as SwitchStmtData;
-		detectAllWalk(d.switchDisc);
-		for (const c of d.switchCases) detectAllWalk(c);
+		detectAllWalk(d.switchDisc, w);
+		for (const c of d.switchCases) detectAllWalk(c, w);
 		return;
 	}
 	if (node.kind == NodeKind.SwitchCase) {
 		const d = node.data as SwitchCaseData;
-		for (const t of d.caseTests) detectAllWalk(t);
-		for (const s of d.caseStmts) detectAllWalk(s);
+		for (const t of d.caseTests) detectAllWalk(t, w);
+		for (const s of d.caseStmts) detectAllWalk(s, w);
 		return;
 	}
 	if (node.kind == NodeKind.ExportDecl) {
-		detectAllWalk((node.data as ExportDeclData).exportedDecl);
+		detectAllWalk((node.data as ExportDeclData).exportedDecl, w);
 		return;
 	}
 	// For remaining node kinds: use mapChildren as fallback
-	mapChildren(node, (child: Node): Node => { detectAllWalk(child); return child; });
+	mapChildren(node, (child: Node): Node => { detectAllWalk(child, w); return child; });
 }
 
 export function isOnceLoop(n: Node): boolean {
