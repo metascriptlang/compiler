@@ -1446,11 +1446,8 @@ function callWritesInto(call: Node | null, refNode: Node): boolean {
 	}
 	let fnType: Type | null = null;
 	let fnTypeKnown = false;
-	let i = 0;
-	for (const arg of args) {
-		const at = i;
-		i = i + 1;
-		let passed = stripHidden(arg);
+	for (let at = 0; at < args.length; at += 1) {
+		let passed = stripHidden(args[at]);
 		if (passed != null && passed.kind == NodeKind.OutExpr) {
 			passed = (passed.data as OutExprData).outArg;
 		} else if (passed != null) {

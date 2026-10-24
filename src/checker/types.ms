@@ -3969,8 +3969,8 @@ function holdsView(t: Type | null, seen: TypeVisitSet): boolean {
 }
 
 function anyChildHoldsView(t: Type, seen: TypeVisitSet): boolean {
-	for (const child of t.typeChildren) {
-		if (holdsView(child, seen)) return true;
+	for (let i = 0; i < t.typeChildren.length; i += 1) {
+		if (holdsView(t.typeChildren[i], seen)) return true;
 	}
 	return false;
 }
@@ -3984,8 +3984,8 @@ function inferredScan(t: Type | null, seen: TypeVisitSet): boolean {
 	if (t.kind == TypeKind.Inferred) return true;
 	if (isDeclaredStruct(t) || !typeVisitAdd(seen, t)) return false;
 	if (inferredScan(t.typeReturn, seen) || inferredScan(t.typeExtra, seen)) return true;
-	for (const child of t.typeChildren) {
-		if (inferredScan(child, seen)) return true;
+	for (let i = 0; i < t.typeChildren.length; i += 1) {
+		if (inferredScan(t.typeChildren[i], seen)) return true;
 	}
 	return false;
 }
@@ -4010,8 +4010,8 @@ function holdsAddress(t: Type | null, seen: TypeVisitSet): boolean {
 }
 
 function anyChildHoldsAddress(t: Type, seen: TypeVisitSet): boolean {
-	for (const child of t.typeChildren) {
-		if (holdsAddress(child, seen)) return true;
+	for (let i = 0; i < t.typeChildren.length; i += 1) {
+		if (holdsAddress(t.typeChildren[i], seen)) return true;
 	}
 	return false;
 }
