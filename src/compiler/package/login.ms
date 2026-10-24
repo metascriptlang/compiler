@@ -33,23 +33,34 @@ export function loadToken(): string {
 	return content.trim();
 }
 
-export function saveToken(token: string): boolean {
+export enum CredentialsError {
+	NoHome,
+	Write,
+}
+
+export function credentialsErrorMessage(e: CredentialsError): string {
+	return match (e) {
+		CredentialsError.NoHome => "HOME not set, cannot locate ~/.metascript/credentials",
+		CredentialsError.Write => "could not write ~/.metascript/credentials",
+	};
+}
+
+export function saveToken(token: string): Result<void, CredentialsError> {
 	const path = credentialsPath();
-	if (path == "") return false;
-	const result = writeFile(path, token + "\n");
-	if (!result.ok) return false;
+	if (path == "") return Result.err(CredentialsError.NoHome);
+	if (!writeFile(path, token + "\n").ok) return Result.err(CredentialsError.Write);
 	// Tighten perms to 0600 (owner rw only) — 384 decimal.
 	// Spec (docs/PACKAGE.md §File locations) requires mode 0600 on
 	// ~/.metascript/credentials. No-op on Windows.
 	chmod(path, 384 as int32);
-	return true;
+	return Result.ok(null);
 }
 
-export function deleteToken(): boolean {
+export function deleteToken(): Result<void, CredentialsError> {
 	const path = credentialsPath();
-	if (path == "" || !exists(path)) return true;
-	const result = writeFile(path, "");
-	return result.ok;
+	if (path == "" || !exists(path)) return Result.ok(null);
+	if (!writeFile(path, "").ok) return Result.err(CredentialsError.Write);
+	return Result.ok(null);
 }
 
 // Parse a URL-encoded key=value pair from a &-separated response.
@@ -233,8 +244,8 @@ export function cmdLogin(projectRoot: string): boolean {
 
 	// Step 5: Store token
 	const saved = saveToken(registryToken);
-	if (!saved) {
-		console.log("error: failed to save credentials");
+	if (!saved.ok) {
+		console.log("error: failed to save credentials: " + credentialsErrorMessage(saved.error));
 		return false;
 	}
 
@@ -286,9 +297,10 @@ export function cmdLogout(): boolean {
 	}
 
 	// Step 2: Always truncate local credentials, even if server revoke failed.
-	const ok = deleteToken();
-	if (!ok) {
-		console.log("error: failed to remove credentials");
+	const removed = deleteToken();
+	if (!removed.ok) {
+		const reason = credentialsErrorMessage(removed.error);
+		console.log("error: failed to remove credentials: " + reason);
 		return false;
 	}
 
