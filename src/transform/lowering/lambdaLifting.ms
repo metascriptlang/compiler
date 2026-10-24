@@ -410,42 +410,34 @@ function preRegisterVarTypes(body: Node, state: LiftState): void {
 // ===== Capture Detection =====
 // Detect which outer bindings a function body references.
 // Walk the body recursively, collecting the symbols bound in outer scopes.
-// Module-level state avoids closure capture of value-type arrays (use-after-free in C backend).
 
-let _captureCC: SymSet = createSymSet();
-let _captureIdents: Node[] = [];
-let _captureSS: ScopeStack = createScopeStack();
-let _captureRoutine: Symbol | null = null;
-let _captureReport: TransformContext | null = null;
-
-function detectCaptures(body: Node, ss: ScopeStack, identNodes: Node[], routine: Symbol | null, report: TransformContext | null): SymSet {
-	_captureCC = createSymSet();
-	_captureIdents = identNodes;
-	_captureSS = ss;
-	_captureRoutine = routine;
-	_captureReport = report;
-	collectCaptures(body);
-	const result = _captureCC;
-	_captureCC = createSymSet();
-	_captureIdents = [];
-	_captureRoutine = null;
-	_captureReport = null;
-	return result;
+interface CaptureWalk {
+	captured: SymSet;
+	idents: Node[];
+	ss: ScopeStack;
+	routine: Symbol | null;
+	report: TransformContext | null;
 }
 
-function collectCaptures(node: Node): void {
+function detectCaptures(body: Node, ss: ScopeStack, identNodes: Node[], routine: Symbol | null, report: TransformContext | null): SymSet {
+	const walk: CaptureWalk = { captured: createSymSet(), idents: identNodes, ss, routine, report };
+	collectCaptures(body, walk);
+	return walk.captured;
+}
+
+function collectCaptures(node: Node, walk: CaptureWalk): void {
 	if (node == null) return;
 	if (node.kind == NodeKind.Identifier) {
 		const sym = node.resolvedSym;
 		if (sym == null) {
 			const name = (node.data as IdentifierData).name;
-			if (_captureReport != null && isOuterFrameName(_captureSS, name)) {
-				reportTransformError(_captureReport, `internal: the reference to '${name}' reached lambda lifting without its symbol`, node.location);
+			if (walk.report != null && isOuterFrameName(walk.ss, name)) {
+				reportTransformError(walk.report, `internal: the reference to '${name}' reached lambda lifting without its symbol`, node.location);
 			}
 			return;
 		}
-		if (_captureRoutine != null && sym == _captureRoutine) return;
-		if (!isLocalVar(_captureSS, sym) && isOuterVar(_captureSS, sym)) {
+		if (walk.routine != null && sym == walk.routine) return;
+		if (!isLocalVar(walk.ss, sym) && isOuterVar(walk.ss, sym)) {
 			// Reference parity (interestingVar): skip types — not runtime values.
 			const sk = sym.symbolKind;
 			if (sk == SymbolKind.Class || sk == SymbolKind.Interface
@@ -454,12 +446,12 @@ function collectCaptures(node: Node): void {
 			}
 			const isModLevel = (sk == SymbolKind.Variable || sk == SymbolKind.Temp || sk == SymbolKind.Parameter)
 				? hasFlag(sym, SymbolFlag.Global)
-				: isModuleLevelVar(_captureSS, sym);
+				: isModuleLevelVar(walk.ss, sym);
 			if (!isModLevel) {
-				if (!symSetContains(_captureCC, sym)) {
-					_captureIdents.push(node);
+				if (!symSetContains(walk.captured, sym)) {
+					walk.idents.push(node);
 				}
-				symSetAdd(_captureCC, sym);
+				symSetAdd(walk.captured, sym);
 			}
 		}
 		return;
@@ -467,11 +459,11 @@ function collectCaptures(node: Node): void {
 	if (isFuncBoundary(node)) return;
 	if (node.kind == NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
-		collectCaptures(d.initializer);
-		defineVar(_captureSS, node.resolvedSym, d.declName);
+		collectCaptures(d.initializer, walk);
+		defineVar(walk.ss, node.resolvedSym, d.declName);
 		return;
 	}
-	mapChildren(node, (child: Node): Node => { collectCaptures(child); return child; });
+	mapChildren(node, (child: Node): Node => { collectCaptures(child, walk); return child; });
 }
 
 // Replace captured Identifier nodes with env field access.
