@@ -656,10 +656,11 @@ export function printMacroDecl(node: Node, options: FormatOptions): Doc {
 
 export function printConstructorDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ConstructorDeclData;
+	const visibility = d.ctorVisibility != "" ? d.ctorVisibility + " " : "";
 	const asWritten = headerAsWritten(node, d.ctorBody, options, null);
-	if (asWritten != null) return docGroup([asWritten, callPrintNode(d.ctorBody, options)]);
+	if (asWritten != null) return docGroup([docText(visibility), asWritten, callPrintNode(d.ctorBody, options)]);
 	const params = buildParamList(d.ctorParams, d.ctorParamTypes, d.ctorDefaults, options, node.paramLocations);
-	const parts: Doc[] = [docText(d.ctorVisibility != "" ? d.ctorVisibility + " constructor" : "constructor")];
+	const parts: Doc[] = [docText(visibility + "constructor")];
 	for (const p of paramListInParens(params, options)) parts.push(p);
 	parts.push(docText(" "));
 	parts.push(callPrintNode(d.ctorBody, options));
