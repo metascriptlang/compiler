@@ -4411,6 +4411,13 @@ function declaredSymbolsNamed(ctx: CheckerContext, name: string): Symbol[] {
 	return syms;
 }
 
+test "a function declared in a module-level block is checked and callable in that block" {
+	for (const open of ["if (true) {", "{", "while (false) {"]) {
+		assert checkOk(open + "\n\tfunction g(): int32 { return 7; }\n\tconst r: int32 = g();\n}");
+		assert checkErrors(open + "\n\tfunction g(): int32 { const s: string = 1; return 7; }\n}") == 1;
+	}
+}
+
 test "a second class or actor of one name is checked with its own symbol" {
 	for (const src of [
 		"class A { x: int32 = 1; }\nclass A { y: string = \"s\"; }",
