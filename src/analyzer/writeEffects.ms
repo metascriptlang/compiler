@@ -6,7 +6,7 @@
 
 import { Node, NodeKind, NodeFlag, ObjectLiteralData, Symbol, SymbolKind, SourceLocation, Type, TypeFlag, TypeKind, makeLoc, BinaryExprData, CallExprData, ClassDeclData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, MoveExprData, NewExprData, OutExprData, PropertyDeclData, ArrayAccessData, IdentifierData, ProgramData, ExportDeclData, ReturnStmtData, VariableDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, hasFlag, makeSymbol, parentClassSymOf } from "../checker/symbol";
+import { SymbolFlag, findOverloadImpl, hasFlag, makeSymbol, parentClassSymOf } from "../checker/symbol";
 import { CheckerContext, LIFECYCLE_HOOK_NAMES, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "../checker/context";
 import { calledRoutine, isViewCall, routineBody, receiverOf, viewCallSources } from "../checker/effects";
 import { lookupInstanceHook, pickBodyCtx } from "../checker/instantiate";
@@ -30,6 +30,7 @@ enum SummaryKind {
 	Routine,
 	Construction,
 	Hooks,
+	Closure,
 }
 
 interface Edge {
@@ -40,6 +41,7 @@ interface Edge {
 class WriteSummary {
 	kind: SummaryKind;
 	sym: Symbol | null;
+	literal: Node | null;
 	hooks: Symbol[];
 	slots: string[];
 	slotSet: HashSet<string>;
@@ -68,6 +70,8 @@ export interface WriteSummaries {
 	routineDecls: RoutineDecls;
 	reloadableUnits: string[];
 	routineSummaries: HashMap<Symbol, WriteSummary>;
+	closureSummaries: HashMap<Node, WriteSummary>;
+	retainedParams: HashMap<Symbol, int32>;
 	constructionSummaries: HashMap<Symbol, WriteSummary>;
 	hookSummaries: HashMap<Type, WriteSummary>;
 	hookless: HashSet<Type>;
@@ -85,7 +89,7 @@ export interface WriteSummaries {
 export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits: string[]): WriteSummaries {
 	return {
 		routineDecls, reloadableUnits,
-		routineSummaries: new HashMap<Symbol, WriteSummary>(), constructionSummaries: new HashMap<Symbol, WriteSummary>(),
+		routineSummaries: new HashMap<Symbol, WriteSummary>(), closureSummaries: new HashMap<Node, WriteSummary>(), retainedParams: new HashMap<Symbol, int32>(), constructionSummaries: new HashMap<Symbol, WriteSummary>(),
 		hookSummaries: new HashMap<Type, WriteSummary>(), hookless: new HashSet<Type>(), ownerHookCache: new HashMap<Symbol, Symbol[]>(),
 		viewReturns: new HashMap<Symbol, string[]>(), viewReturnsUnknown: new HashSet<Symbol>(), viewReturnsOpen: [], viewReturnsReach: 0,
 		slotHolders: [], slotHolderIds: new HashMap<Type, int32>(), stack: [], nextIndex: 0,
@@ -134,7 +138,7 @@ function reloadsApart(w: WriteEffects, caller: WriteSummary, callee: WriteSummar
 
 function newSummary(kind: SummaryKind, sym: Symbol | null, hooks: Symbol[]): WriteSummary {
 	return {
-		kind, sym, hooks, slots: [], slotSet: new HashSet<string>(), refParamWrites: 0, returnsFresh: false, unknown: false,
+		kind, sym, literal: null, hooks, slots: [], slotSet: new HashSet<string>(), refParamWrites: 0, returnsFresh: false, unknown: false,
 		edges: [], linked: new HashSet<Cursor<WriteSummary>>(), index: -1, low: -1, onStack: false, done: false,
 	};
 }
@@ -159,6 +163,10 @@ function unpackDecl(decl: Node | null): Node | null {
 
 function routineDecl(w: WriteEffects, sym: Symbol): Node | null {
 	return w.tables.routineDecls.decls.get(sym) ?? unpackDecl(sym.declNode);
+}
+
+function summaryDecl(w: WriteEffects, s: WriteSummary): Node | null {
+	return s.kind == SummaryKind.Closure ? s.literal : routineDecl(w, s.sym!);
 }
 
 function isRoutineNode(n: Node): boolean {
@@ -677,6 +685,10 @@ function routinesOf(w: WriteEffects, value: Node, params: Symbol[] | null, assig
 	if (t.kind == NodeKind.NullLiteral) return true;
 	const fn = closureRoutine(t);
 	if (fn != null) return routinesOf(w, fn, params, assigned, d, depth, out);
+	if (t.kind == NodeKind.ArrowFunction || t.kind == NodeKind.FunctionExpr) {
+		out.push(closureSummary(w, t));
+		return true;
+	}
 	const sym = t.kind == NodeKind.Identifier ? t.resolvedSym : null;
 	if (sym == null) return false;
 	if (isRoutineSym(sym) && !runsNativeOnC(w, sym)) {
@@ -883,7 +895,7 @@ function isArrayStorage(t: Type | null): boolean {
 	return at != null && at.kind == TypeKind.Array;
 }
 
-function isAssign(op: string): boolean {
+export function isAssign(op: string): boolean {
 	if (op == "==" || op == "!=" || op == "===" || op == "!==" || op == "<=" || op == ">=") return false;
 	return op.endsWith("=");
 }
@@ -904,10 +916,10 @@ function link(w: WriteEffects, s: WriteSummary, call: Node | null, callee: Write
 
 function walkSummary(w: WriteEffects, s: WriteSummary): void {
 	match (s.kind) {
-		SummaryKind.Routine => {
-			const decl = routineDecl(w, s.sym!);
+		SummaryKind.Routine | SummaryKind.Closure => {
+			const decl = summaryDecl(w, s);
 			const body = routineBody(decl);
-			const fresh = walkBody(w, s, body, decl != null ? decl.paramSyms : null, (decl != null && decl.kind == NodeKind.ConstructorDecl) || hasFlag(s.sym!, SymbolFlag.ClassInit));
+			const fresh = walkBody(w, s, body, decl != null ? decl.paramSyms : null, (decl != null && decl.kind == NodeKind.ConstructorDecl) || (s.sym != null && hasFlag(s.sym!, SymbolFlag.ClassInit)));
 			if (body != null && fresh != null) s.returnsFresh = returnsFreshObject(w, s, body, fresh);
 		},
 		SummaryKind.Construction => {
@@ -969,8 +981,8 @@ function absorb(w: WriteEffects, s: WriteSummary, e: Edge): boolean {
 	for (const slot of c.slots) {
 		if (addSlot(s, slot)) changed = true;
 	}
-	if (e.call != null && c.refParamWrites != 0 && s.kind == SummaryKind.Routine) {
-		const decl = routineDecl(w, s.sym!);
+	if (e.call != null && c.refParamWrites != 0 && (s.kind == SummaryKind.Routine || s.kind == SummaryKind.Closure)) {
+		const decl = summaryDecl(w, s);
 		const params = decl != null ? decl.paramSyms : null;
 		const args = (e.call.data as CallExprData).arguments;
 		for (let i = 0; i < args.length && i < 31; i += 1) {
@@ -985,6 +997,15 @@ function routineSummary(w: WriteEffects, sym: Symbol): WriteSummary {
 	if (known != null) return known;
 	const s = newSummary(SummaryKind.Routine, sym, []);
 	w.tables.routineSummaries.set(sym, s);
+	return s;
+}
+
+function closureSummary(w: WriteEffects, literal: Node): WriteSummary {
+	const known = w.tables.closureSummaries.get(literal);
+	if (known != null) return known;
+	const s = newSummary(SummaryKind.Closure, null, []);
+	s.literal = literal;
+	w.tables.closureSummaries.set(literal, s);
 	return s;
 }
 
@@ -1014,6 +1035,61 @@ function callWrites(w: WriteEffects, call: Node, defs: LocalDefs | null): WriteS
 		else absorb(w, s, { call: null, callee: settled(w, c) });
 	}
 	return s;
+}
+
+export function retainsArg(w: WriteEffects, call: Node, ai: int32): boolean {
+	const called = call.resolvedSym;
+	if (!isRoutineSym(called)) return true;
+	const sym = findOverloadImpl(called!) ?? called!;
+	const fi = ai + (call.flags.has(NodeFlag.ExtCall) ? 1 : 0);
+	const formals = sym.symbolType != null && sym.symbolType.kind == TypeKind.Function ? sym.symbolType.typeChildren : null;
+	if (formals == null || fi >= formals.length || formals[fi] == null || formals[fi].kind == TypeKind.Sink) return true;
+	return retainsParam(w, sym, fi);
+}
+
+export function retainsParam(w: WriteEffects, sym: Symbol, i: int32): boolean {
+	if (i < 0 || i >= 31 || runsNativeOnC(w, sym) || dispatchEntryFor(sym) != null) return true;
+	const known = w.tables.retainedParams.get(sym);
+	if (known != null) return (known & (1 << i)) != 0;
+	w.tables.retainedParams.set(sym, -1);
+	const decl = routineDecl(w, sym);
+	const body = routineBody(decl);
+	const bits = body != null && decl!.paramSyms != null ? retainedParams(w, body, decl!.paramSyms!) : -1;
+	w.tables.retainedParams.set(sym, bits);
+	return (bits & (1 << i)) != 0;
+}
+
+function retainedParams(w: WriteEffects, body: Node, params: Symbol[]): int32 {
+	let bits: int32 = 0;
+	const retain = (n: Node): void => {
+		if (n.kind == NodeKind.Identifier && n.resolvedSym != null) {
+			const k = paramIndex(params, n.resolvedSym!);
+			if (k >= 0) bits = bits | (k < 31 ? 1 << k : -1);
+		}
+		forEachChild(n, retain);
+	};
+	const step = (n: Node): void => {
+		if (isRoutineNode(n) || n.kind == NodeKind.Identifier) {
+			retain(n);
+			return;
+		}
+		if (n.kind != NodeKind.CallExpr) {
+			forEachChild(n, step);
+			return;
+		}
+		const cd = n.data as CallExprData;
+		const callee = cd.callee != null ? skipConvDfa(cd.callee) : null;
+		if (callee != null && !(callee.kind == NodeKind.Identifier && callee.resolvedSym != null && paramIndex(params, callee.resolvedSym!) >= 0)) step(callee);
+		for (let ai = 0; ai < cd.arguments.length; ai += 1) {
+			const a = cd.arguments[ai];
+			if (a == null) continue;
+			const t = skipConvDfa(a);
+			if (t.kind == NodeKind.Identifier && t.resolvedSym != null && paramIndex(params, t.resolvedSym!) >= 0 && !retainsArg(w, n, ai as int32)) continue;
+			step(a);
+		}
+	};
+	step(body);
+	return bits;
 }
 
 // The slots a view call's result is reached through below its arguments: the steps every
