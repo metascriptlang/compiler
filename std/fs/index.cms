@@ -38,20 +38,18 @@ when (windows) {
 	extern const ENOMEM: int32;
 	extern let _doserrno: uint32;
 	extern function msFsErrnoFromWin32(code: uint32): int32;
-	extern function cChmod(path: cstring, mode: int32): int32 from "_chmod";
-	extern function cMkdir(path: cstring): int32 from "_mkdir";
-	extern function cRmdir(path: cstring): int32 from "_rmdir";
-	extern function cUnlink(path: cstring): int32 from "_unlink";
-	extern function cFullpath(resolved: Ptr<uint8> | null, path: cstring, length: uint64): Ptr<uint8> | null from "_fullpath";
+	extern function cChmod(path: Ptr<uint16>, mode: int32): int32 from "_wchmod";
+	extern function cMkdir(path: Ptr<uint16>): int32 from "_wmkdir";
+	extern function cRmdir(path: Ptr<uint16>): int32 from "_wrmdir";
+	extern function cUnlink(path: Ptr<uint16>): int32 from "_wunlink";
+	extern function cWfopen(path: Ptr<uint16>, mode: Ptr<uint16>): Ptr<FILE> | null from "_wfopen";
+	extern function cFullpath(resolved: Ptr<uint16> | null, path: Ptr<uint16>, length: uint64): Ptr<uint16> | null from "_wfullpath";
 	extern function cStricmp(a: cstring, b: cstring): int32 from "_stricmp";
 	extern function cMallocBytes(size: uint64): Ptr<uint8> | null from "malloc";
 	extern function cMallocWide(size: uint64): Ptr<uint16> | null from "malloc";
 	extern function cFreeWide(p: Ptr<uint16>): void from "free";
 
-	// The narrow CRT calls take the path in the ANSI code page, as the C kernels did;
-	// rename, symlink and the final path of realpath convert it from UTF-8 to UTF-16.
 	extern struct Stat from "struct _stat64" { st_mode: uint16; st_size: int64; st_mtime: int64; }
-	extern function cStat(path: cstring, ref buf: Stat): int32 from "_stat64";
 	extern const S_IFMT: uint16;
 	extern const S_IFREG: uint16;
 	extern const S_IFDIR: uint16;
@@ -81,7 +79,6 @@ when (windows) {
 	extern function MoveFileExW(oldPath: Ptr<uint16>, newPath: Ptr<uint16>, flags: uint32): int32;
 	extern function GetFileAttributesW(path: Ptr<uint16>): uint32;
 	extern function CreateSymbolicLinkW(path: Ptr<uint16>, target: Ptr<uint16>, flags: uint32): uint8;
-	extern function CreateFileA(path: cstring, access: uint32, share: uint32, security: Ptr<void> | null, disposition: uint32, flags: uint32, template: Ptr<void> | null): Ptr<void>;
 	extern function CreateFileW(path: Ptr<uint16>, access: uint32, share: uint32, security: Ptr<void> | null, disposition: uint32, flags: uint32, template: Ptr<void> | null): Ptr<void>;
 	extern function GetFinalPathNameByHandleW(handle: Ptr<void>, path: Ptr<uint16> | null, room: uint32, flags: uint32): uint32;
 	extern struct LargeInteger from "LARGE_INTEGER" { QuadPart: int64; }
@@ -95,21 +92,6 @@ when (windows) {
 	extern function GetFileInformationByHandle(handle: Ptr<void>, ref info: HandleInformation): int32;
 	extern function GetFileInformationByHandleEx(handle: Ptr<void>, infoClass: int32, ref info: BasicInformation, size: uint32): int32;
 
-	function chmodErrno(path: string, mode: int32): int32 {
-		return cChmod(path as cstring, mode) == 0 ? 0 : errno;
-	}
-	function rmdirErrno(path: string): int32 {
-		_doserrno = 0;
-		if (cRmdir(path as cstring) == 0) return 0;
-		const err = errno;
-		return _doserrno != 0 ? msFsErrnoFromWin32(_doserrno) : err;
-	}
-	function mkdirErrno(path: string): int32 {
-		if (cMkdir(path as cstring) == 0) return 0;
-		const err = errno;
-		return err == EEXIST ? 0 : err;
-	}
-
 	// UTF-16 length of a UTF-8 path including its NUL; 0 when it does not convert.
 	function wideLength(path: cstring): int32 {
 		return MultiByteToWideChar(CP_UTF8, 0, path, -1, null, 0);
@@ -118,6 +100,57 @@ when (windows) {
 		const wide = cMallocWide((length as uint64) * 2);
 		if (wide != null) MultiByteToWideChar(CP_UTF8, 0, path, -1, wide, length);
 		return wide;
+	}
+	function widePath(path: string): Ptr<uint16> | null {
+		const length = wideLength(path as cstring);
+		return length > 0 ? wideCopy(path as cstring, length) : null;
+	}
+
+	function chmodErrno(path: string, mode: int32): int32 {
+		const wide = widePath(path);
+		if (wide == null) return EINVAL;
+		const err = cChmod(wide, mode) == 0 ? 0 : errno;
+		cFreeWide(wide);
+		return err;
+	}
+	function rmdirErrno(path: string): int32 {
+		const wide = widePath(path);
+		if (wide == null) return EINVAL;
+		_doserrno = 0;
+		const done = cRmdir(wide) == 0;
+		const err = done ? 0 : _doserrno != 0 ? msFsErrnoFromWin32(_doserrno) : errno;
+		cFreeWide(wide);
+		return err;
+	}
+	function mkdirErrno(path: string): int32 {
+		const wide = widePath(path);
+		if (wide == null) return EINVAL;
+		const err = cMkdir(wide) == 0 ? 0 : errno;
+		cFreeWide(wide);
+		return err == EEXIST ? 0 : err;
+	}
+	function removeErrno(path: string): int32 {
+		const wide = widePath(path);
+		if (wide == null) return EINVAL;
+		let err = cUnlink(wide) == 0 ? 0 : errno;
+		if (err == EACCES && cChmod(wide, 438) == 0 && cUnlink(wide) == 0) err = 0;
+		cFreeWide(wide);
+		return err;
+	}
+	function writeFileErrno(path: string, content: string, mode: string): int32 {
+		const widePathName = widePath(path);
+		const wideMode = widePath(mode);
+		if (widePathName == null || wideMode == null) {
+			if (widePathName != null) cFreeWide(widePathName);
+			if (wideMode != null) cFreeWide(wideMode);
+			return EINVAL;
+		}
+		const file = cWfopen(widePathName, wideMode);
+		const err = errno;
+		cFreeWide(widePathName);
+		cFreeWide(wideMode);
+		if (file == null) return err == EACCES && isDirKernel(path) ? EISDIR : err;
+		return writeAndClose(file, content);
 	}
 
 	// The CRT rename refuses an existing target; MoveFileExW replaces it, as POSIX rename
@@ -175,25 +208,24 @@ when (windows) {
 	// links. When that is the same spelling up to case, no link was crossed and the
 	// caller's spelling stays.
 	function realpathKernel(path: string): string {
-		const full = cFullpath(null, path as cstring, 0);
+		const wide = widePath(path);
+		if (wide == null) return "";
+		const full = cFullpath(null, wide, 0);
+		cFreeWide(wide);
 		if (full == null) return "";
 		let st: Stat = {};
 		let result = "";
-		if (cStat(full as cstring, st) == 0) {
-			const final = finalPath(full as cstring);
-			result = final != "" && cStricmp(final as cstring, full as cstring) != 0 ? final : msStringFromCStr(full as cstring);
+		if (statOfWide(full, st)) {
+			const spelled = utf8Of(full);
+			const final = finalPath(full);
+			result = final != "" && cStricmp(final as cstring, spelled as cstring) != 0 ? final : spelled;
 		}
-		cFree(full);
+		cFreeWide(full);
 		return result;
 	}
-	function finalPath(full: cstring): string {
-		const fullLength = wideLength(full);
-		if (fullLength <= 0) return "";
-		const fullWide = wideCopy(full, fullLength);
-		if (fullWide == null) return "";
+	function finalPath(fullWide: Ptr<uint16>): string {
 		const handle = CreateFileW(fullWide, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 			null, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, null);
-		cFreeWide(fullWide);
 		if (handle == INVALID_HANDLE_VALUE) return "";
 		const flags = FILE_NAME_NORMALIZED | VOLUME_NAME_DOS;
 		const need = GetFinalPathNameByHandleW(handle, null, 0, flags);
@@ -219,7 +251,14 @@ when (windows) {
 	}
 
 	function statOf(path: string, ref st: Stat): boolean {
-		const file = CreateFileA(path as cstring, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		const wide = widePath(path);
+		if (wide == null) return false;
+		const found = statOfWide(wide, st);
+		cFreeWide(wide);
+		return found;
+	}
+	function statOfWide(path: Ptr<uint16>, ref st: Stat): boolean {
+		const file = CreateFileW(path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 			null, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, null);
 		if (file == INVALID_HANDLE_VALUE) return false;
 		let info: HandleInformation = {};
@@ -237,8 +276,11 @@ when (windows) {
 		return statOf(path, st) ? st.st_mtime as number : -1;
 	}
 	function changeStampKernel(path: string): string {
-		const file = CreateFileA(path as cstring, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		const wide = widePath(path);
+		if (wide == null) return "";
+		const file = CreateFileW(wide, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 			null, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, null);
+		cFreeWide(wide);
 		if (file == INVALID_HANDLE_VALUE) return "";
 		let info: HandleInformation = {};
 		let basic: BasicInformation = {};
@@ -307,6 +349,16 @@ when (windows) {
 	function symlinkErrno(target: string, path: string): int32 {
 		return cSymlink(target as cstring, path as cstring) == 0 ? 0 : errno;
 	}
+	// Any later libc call (free included) may overwrite errno: read it straight after the
+	// syscall, before anything else runs.
+	function removeErrno(path: string): int32 {
+		return cUnlink(path as cstring) == 0 ? 0 : errno;
+	}
+	function writeFileErrno(path: string, content: string, mode: string): int32 {
+		const file = cFopen(path as cstring, mode as cstring);
+		if (file == null) return errno;
+		return writeAndClose(file, content);
+	}
 	function isExecutableKernel(path: string): boolean {
 		when (wasm) {
 			return false;
@@ -347,27 +399,7 @@ when (windows) {
 	}
 }
 
-// Any later libc call (free included) may overwrite errno: read it straight after the
-// syscall, before anything else runs.
-
-function removeErrno(path: string): int32 {
-	if (cUnlink(path as cstring) == 0) return 0;
-	const err = errno;
-	when (windows) {
-		if (err == EACCES && cChmod(path as cstring, 438) == 0 && cUnlink(path as cstring) == 0) return 0;
-	}
-	return err;
-}
-function writeFileErrno(path: string, content: string, mode: string): int32 {
-	const file = cFopen(path as cstring, mode as cstring);
-	if (file == null) {
-		const err = errno;
-		when (windows) {
-			return err == EACCES && isDirKernel(path) ? EISDIR : err;
-		} else {
-			return err;
-		}
-	}
+function writeAndClose(file: Ptr<FILE>, content: string): int32 {
 	const length = content.asBytes().length as uint64;
 	let err: int32 = 0;
 	if (cFwrite(content as cstring, 1, length, file) != length) err = errno != 0 ? errno : FAILED_WITHOUT_ERRNO;
