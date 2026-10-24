@@ -167,39 +167,6 @@ export function lspGetArrayItems(arrayJson: string): string[] {
 export { dirname } from "std/fs/path";
 import { dirname } from "std/fs/path";
 
-// Resolve a relative import specifier against a base file path.
-// Handles "./foo", "../bar", "../../baz". Auto-appends ".ms" if missing.
-// Returns "" for non-relative imports (std/*, bare module names).
-export function lspResolveImport(basePath: string, importSpec: string): string {
-	if (importSpec.byteLength == 0) return "";
-	// Must start with "./" or "../" to be relative
-	if (importSpec.charAt(0) != ".") return "";
-	if (importSpec.byteLength < 2) return "";
-	const second = importSpec.charAt(1);
-	if (second != "/" && second != ".") return "";
-
-	let dir = dirname(basePath);
-	let spec = importSpec;
-
-	// Process "../" prefixes
-	while (spec.byteLength >= 3 && spec.slice(0, 3) == "../") {
-		dir = dirname(dir);
-		spec = spec.slice(3, spec.byteLength);
-	}
-	// Process "./" prefix
-	if (spec.byteLength >= 2 && spec.slice(0, 2) == "./") {
-		spec = spec.slice(2, spec.byteLength);
-	}
-
-	const result = dir + "/" + spec;
-	// Already has extension — single candidate
-	if (result.endsWith(".ms") || result.endsWith(".h") || result.endsWith(".cms")) {
-		return result;
-	}
-	// Default: append .ms
-	return result + ".ms";
-}
-
 test "extract method" {
 	const json = "{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":1}";
 	assert lspGetField(json, "method") == "initialize";
@@ -298,21 +265,6 @@ test "dirname basic" {
 	assert dirname("/a/b/c.ms") == "/a/b";
 	assert dirname("/a/b.ms") == "/a";
 	assert dirname("/a.ms") == "/";
-}
-
-test "resolve import same dir" {
-	assert lspResolveImport("/a/b/c.ms", "./utils") == "/a/b/utils.ms";
-	assert lspResolveImport("/a/b/c.ms", "./utils.ms") == "/a/b/utils.ms";
-}
-
-test "resolve import parent dir" {
-	assert lspResolveImport("/a/b/c.ms", "../utils") == "/a/utils.ms";
-	assert lspResolveImport("/a/b/c/d.ms", "../../utils") == "/a/utils.ms";
-}
-
-test "resolve import non-relative returns empty" {
-	assert lspResolveImport("/a/b.ms", "std/testing") == "";
-	assert lspResolveImport("/a/b.ms", "lodash") == "";
 }
 
 test "bool field reads true only" {
