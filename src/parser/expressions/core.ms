@@ -2,8 +2,8 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData, AwaitExprData, IdentifierData, MemberExprData, NumberLiteralData, BinaryExprData } from "../../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, captureGenericTypeArgs, collectTokenText, stampEnd, takePendingComments, parenGroupThen, expectCloser } from "../context";
-import { skipTypeAnnotation, parseTypeExpr, isGenericCallAhead } from "../typeAnnotation";
+import { ParserState, createState, current, advance, peek, isAtEnd, captureGenericTypeArgs, stampEnd, takePendingComments, parenGroupThen, expectCloser } from "../context";
+import { captureType, captureTypeText, isGenericCallAhead } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, continuesIdentifier } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
 import { parseMatchExpr } from "./match";
@@ -37,15 +37,9 @@ const NO_BINARY_PREC: int32 = 100;
 
 function parseAsType(state: ParserState, left: Node, token: Token): Node {
 	advance(state);
-	const asStart = state.position;
-	skipTypeAnnotation(state);
-	const asType = collectTokenText(state, asStart, state.position);
-	const asSavedPos = state.position;
-	state.position = asStart;
-	const asTypeExpr = parseTypeExpr(state);
-	state.position = asSavedPos;
-	const asNode = createNode(NodeKind.TypeAssertion, { asExpr: left, asType }, token);
-	asNode.typeExpr = asTypeExpr;
+	const captured = captureType(state);
+	const asNode = createNode(NodeKind.TypeAssertion, { asExpr: left, asType: captured.text }, token);
+	asNode.typeExpr = captured.expr;
 	return asNode;
 }
 
@@ -479,10 +473,7 @@ function parsePrimary(state: ParserState): ExprResult {
 	// Sizeof expression: sizeof Type
 	if (token.kind == TokenKind.Sizeof) {
 		advance(state);
-		const sStart = state.position;
-		skipTypeAnnotation(state);
-		const sEnd = state.position;
-		const sizeofType = collectTokenText(state, sStart, sEnd);
+		const sizeofType = captureTypeText(state);
 		if (sizeofType == "") {
 			return Result.err(`Expected type after sizeof at line ${token.line}`);
 		}

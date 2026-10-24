@@ -3,9 +3,9 @@
 
 import { Token, TokenKind, isIdentLikeKind, isIdentOrKeyword } from "../lexer/token";
 import { Node, NodeKind, SourceLocation, makeLoc, createNode, createNodeAt, NumberLiteralData, BlockStmtData } from "../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, takePendingComments, collectTokenText, addError } from "./context";
+import { ParserState, createState, current, advance, peek, isAtEnd, takePendingComments, addError } from "./context";
 import { optionalizeTypeString } from "../utils/string";
-import { skipTypeAnnotation, parseTypeExpr } from "./typeAnnotation";
+import { skipTypeAnnotation, captureType } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
 import { isBinaryOperator } from "./expressions/precedence";
 import { parseExpressionFromState } from "./expressions/core";
@@ -63,15 +63,9 @@ export function captureOptionalType(state: ParserState): string {
 			const assertParamName = current(state).value;
 			advance(state); // param name
 			advance(state); // `is`
-			const assertTargetStart = state.position;
-			skipTypeAnnotation(state);
-			const assertTargetEnd = state.position;
-			const assertTargetText = collectTokenText(state, assertTargetStart, assertTargetEnd);
-			const assertSavedPos = state.position;
-			state.position = assertTargetStart;
-			_lastTypeExpr = parseTypeExpr(state);
-			state.position = assertSavedPos;
-			return `asserts ${assertParamName} is ${assertTargetText}`;
+			const assertTarget = captureType(state);
+			_lastTypeExpr = assertTarget.expr;
+			return `asserts ${assertParamName} is ${assertTarget.text}`;
 		}
 		// Type predicate: `paramName is Type`.
 		if (current(state).kind == TokenKind.Ident
@@ -79,29 +73,13 @@ export function captureOptionalType(state: ParserState): string {
 			const paramName = current(state).value;
 			advance(state); // param name
 			advance(state); // `is`
-			const targetStart = state.position;
-			skipTypeAnnotation(state);
-			const targetEnd = state.position;
-			const targetText = collectTokenText(state, targetStart, targetEnd);
-			// Re-parse target for positioned TypeExpr so LSP symbol recording works.
-			const savedPos = state.position;
-			state.position = targetStart;
-			_lastTypeExpr = parseTypeExpr(state);
-			state.position = savedPos;
-			return `${paramName} is ${targetText}`;
+			const target = captureType(state);
+			_lastTypeExpr = target.expr;
+			return `${paramName} is ${target.text}`;
 		}
-		const typeStart = state.position;
-		// Skip using the battle-tested skip path (never changes parser behavior)
-		skipTypeAnnotation(state);
-		const typeEnd = state.position;
-		const text = collectTokenText(state, typeStart, typeEnd);
-		// Build positioned TypeExpr tree by re-parsing the same token range
-		// This is safe: parseTypeExpr only reads tokens[typeStart..typeEnd], no side effects
-		const savedPos = state.position;
-		state.position = typeStart;
-		_lastTypeExpr = parseTypeExpr(state);
-		state.position = savedPos; // Restore to skip endpoint (authoritative)
-		return text;
+		const captured = captureType(state);
+		_lastTypeExpr = captured.expr;
+		return captured.text;
 	}
 	return "";
 }

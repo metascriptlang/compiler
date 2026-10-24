@@ -55,6 +55,29 @@ export function skipTypeAnnotation(state: ParserState): void {
 	}
 }
 
+export struct CapturedType {
+	text: string;
+	expr: Node;
+}
+
+// Scan one type annotation, then parse the same tokens again for the positioned tree; the cursor ends where the scan did.
+export function captureType(state: ParserState): CapturedType {
+	const start = state.position;
+	skipTypeAnnotation(state);
+	const end = state.position;
+	const text = collectTokenText(state, start, end);
+	state.position = start;
+	const expr = parseTypeExpr(state);
+	state.position = end;
+	return { text, expr };
+}
+
+export function captureTypeText(state: ParserState): string {
+	const start = state.position;
+	skipTypeAnnotation(state);
+	return collectTokenText(state, start, state.position);
+}
+
 // ===== Positioned Type Expression Parser =====
 // Builds a TypeExpr AST tree with position info for every type identifier.
 // Standard parity: semTypeNode dispatches on Identifier/GenericType etc.
@@ -706,9 +729,7 @@ function annotationText(typeStr: string): string {
 	const lr = lex(typeStr + " = x");
 	if (!lr.ok) return "";
 	const state = createState(lr.value);
-	const startPos = state.position;
-	skipTypeAnnotation(state);
-	return collectTokenText(state, startPos, state.position);
+	return captureTypeText(state);
 }
 
 test "simple type text" { assert annotationText("number") == "number"; }
