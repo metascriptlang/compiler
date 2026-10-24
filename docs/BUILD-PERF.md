@@ -31,10 +31,14 @@ both arms: that is the noise check, and every row of it should carry no mark.
 - Counts and non-process bytes are exact: they do not depend on load or host. `=` means identical in
   every run of both arms; `≠` means the change moved the number. An exact row that varies inside one
   arm is read as timed.
-- Timed rows (`ms`, `instr`, process bytes) compare medians. `*` marks a delta over 3 times the
-  noise, the larger coefficient of variation of the two arms, and over 1%; no mark means the move is
-  not shown to be real. The 1% floor exists because three runs of one binary can agree to 0.0% and
-  still differ by 0.2% (711, `MSPERF_SELF=1`, 2026-10-25: `phase.A` +0.2% at noise 0.0%). Instructions retired carry far less noise than wall time under load.
+- Timed rows (`ms`, `instr`, process bytes) compare medians. `*` marks an `instr` or bytes delta over
+  3 times the noise (the larger sample coefficient of variation of the two arms), over 1% and, for
+  `instr`, over 5M instructions; `ms` rows are wall time under load and are never marked. No mark
+  means the move is not shown to be real. Resolution is about 2%: on 19 runs of one binary on 711
+  (2026-10-25, load 50-90) the rows of 1G and more spread 0.37% (sd, median), a 2% move on them was
+  caught 81% of the time at 5 runs, and with the 5M floor no 3-vs-3 or 5-vs-5 split of those runs
+  carried a false mark (32% of the 3-vs-3 tables did without it). A claimed 1% move needs a rerun of
+  that program with about 15 runs per arm.
 - `new` / `gone` is a flow only one arm wrote. A header line names the sources each arm produced:
   a compiler without `MSC_FLOWS` yields only `proc` rows.
 - Coverage: the leaf flows of phase A (`pass.*`, `analyze.*`, `a2.mono`, `a2.macro`, `a2.lower`) over

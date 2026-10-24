@@ -15,7 +15,7 @@
 //                             rt:<name>  src/test/perf/programs/<name>.ms, built once per
 //                                        arm with -DMS_DRC_STAT, then the binary is measured
 //                           the first three are measured as `build --emit=c`
-//   MSPERF_RUNS=N           runs per arm (default 3), arms interleaved in shuffled order
+//   MSPERF_RUNS=N           runs per arm (default 5), arms interleaved in shuffled order
 //   MSPERF_OUT=<dir>        raw rows and tables (default out/perf/<timestamp>)
 //   MSPERF_FIXTURES=<dir>   measure nothing, tabulate <dir>/<program>.<base|cand>.<n>.tsv
 //
@@ -23,7 +23,8 @@
 // it printed "Up to date": a cache hit measures nothing.
 //
 // Marks: `=` an exact count identical in every run of both arms; `≠` an exact count that
-// changed; `*` a timed delta over 3x noise (max CV of the two arms) and over 1%; `new` / `gone` a
+// changed; `*` an instr or bytes delta over 3x noise (max CV of the two arms), over 1% and,
+// for instr, over 5M (ms rows are wall time under load and never marked); `new` / `gone` a
 // flow only one arm wrote. Process totals come from /usr/bin/time -l on macOS
 // (instructions retired), `perf stat` on Linux when it exists, else /usr/bin/time -f.
 
@@ -33,6 +34,7 @@ import { writeStderr } from "std/io";
 
 const NOISE_FACTOR = 3.0;
 const NOISE_FLOOR_PERCENT = 1.0;
+const NOISE_FLOOR_INSTR = 5000000.0;
 
 function envOr(name: string, dflt: string): string {
 	const v = env.get(name);
@@ -92,7 +94,7 @@ function cvPercent(xs: float64[]): float64 {
 	if (mean == 0) { return 0; }
 	let sq = 0.0;
 	for (const x of xs) { sq += (x - mean) * (x - mean); }
-	return Math.abs(Math.sqrt(sq / xs.length) / mean) * 100;
+	return xs.length < 2 ? 0 : Math.abs(Math.sqrt(sq / (xs.length - 1)) / mean) * 100;
 }
 
 function isFlat(xs: float64[]): boolean {
@@ -169,7 +171,8 @@ function markFor(key: string, bv: float64[], cv: float64[], runs: int32, delta: 
 	if (isExact(f[0], f[2]) && bv.length == runs && cv.length == runs && isFlat(bv) && isFlat(cv)) {
 		return bv[0] == cv[0] ? "=" : "≠";
 	}
-	if (delta == 0) { return ""; }
+	if (delta == 0 || f[2] == "ms") { return ""; }
+	if (f[2] == "instr" && Math.abs(delta) <= NOISE_FLOOR_INSTR) { return ""; }
 	if (baseMedian == 0 || Math.abs(pct) > Math.max(NOISE_FACTOR * noise, NOISE_FLOOR_PERCENT)) { return "*"; }
 	return "";
 }
@@ -429,7 +432,7 @@ function loadLine(): string {
 }
 
 function main(): int32 {
-	const runs = envOr("MSPERF_RUNS", "3").parseInt() as int32;
+	const runs = envOr("MSPERF_RUNS", "5").parseInt() as int32;
 	const programs = envOr("MSPERF_PROGRAMS", "711,fmt").split(",");
 	const fixtures = env.get("MSPERF_FIXTURES");
 	const kernel = shellOut("uname -s");
@@ -507,7 +510,7 @@ test "an exact count that changed is marked ≠" {
 
 test "a timed delta inside noise carries no mark" {
 	const l = fixtureLine(fixtureLines(), "msc\tpass.jitter\tinstr");
-	assert l.delta == 4000;
+	assert l.delta == 400000;
 	assert l.mark == "";
 }
 
@@ -517,9 +520,13 @@ test "a timed delta under 1% carries no mark even when the runs agree exactly" {
 	assert l.mark == "";
 }
 
+test "a wall time row is never marked, however far it moved" {
+	assert fixtureLine(fixtureLines(), "msc\tpass.wall\tms").mark == "";
+}
+
 test "a timed delta beyond three times noise is marked *" {
 	const l = fixtureLine(fixtureLines(), "msc\tpass.slower\tinstr");
-	assert l.delta == 100000;
+	assert l.delta == 10000000;
 	assert l.mark == "*";
 }
 
