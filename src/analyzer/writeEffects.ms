@@ -591,6 +591,7 @@ function walkBody(w: WriteEffects, s: WriteSummary, body: Node | null, params: S
 	const stores: Node[] = [];
 	const fnArgs: Node[] = [];
 	const own: OwnCalls = { params, called: [] };
+	const d = localDefs(w, body);
 	const passFunctions = (args: Node[]): void => {
 		for (const a of args) {
 			if (a != null && mayBeFunctionValue(a.nodeType)) fnArgs.push(a);
@@ -625,7 +626,7 @@ function walkBody(w: WriteEffects, s: WriteSummary, body: Node | null, params: S
 						else stores.push(inner);
 					}
 					passFunctions(args);
-					for (const c of calleesOf(w, n, s, stores, own, null)) link(w, s, n, c);
+					for (const c of calleesOf(w, n, s, stores, own, d)) link(w, s, n, c);
 				}
 			},
 			NodeKind.NewExpr => {
@@ -637,7 +638,6 @@ function walkBody(w: WriteEffects, s: WriteSummary, body: Node | null, params: S
 		forEachChild(n, step);
 	};
 	step(body);
-	const d = localDefs(w, body);
 	const assigned = assignedParams(targets, params);
 	for (const p of own.called) {
 		if (assigned.has(p)) markUnknown(s);

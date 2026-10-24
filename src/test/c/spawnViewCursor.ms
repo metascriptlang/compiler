@@ -286,3 +286,111 @@ test "E2E C: a view read beside a call of a plain function field stays counted" 
 	assert r.ok;
 	assert (r.ok ? r.value : "").contains("msIncrefCyclic(view");
 }
+
+const LOCAL_CLOSURE_CALLEE = (thunk: string) => `
+class N { v: int32 = 1; next: N | null = null; }
+function countUp(items: Readonly<N[]>): int32 {
+	const ok = (x: Readonly<N>): boolean => x.v > 0;
+	let n: int32 = 0;
+	for (const x of items) if (ok(x)) n += 1;
+	return n;
+}
+function tally(items: Readonly<N[]>): int32 {
+	let n: int32 = 0;
+	const bump = (x: Readonly<N>): void => { if (x.v > 0) n += 1; };
+	for (const x of items) bump(x);
+	return n;
+}
+function countFrom(head: Readonly<N>): int32 {
+	const ok = (x: Readonly<N>): boolean => x.v > 0;
+	let n: int32 = 0;
+	let cur: Readonly<N> | null = head;
+	while (cur != null) {
+		if (ok(cur)) n += 1;
+		cur = cur.next;
+	}
+	return n;
+}
+function outer(items: Readonly<N[]>): int32 {
+	return countUp(items) + countFrom(items[0]);
+}
+function round(): int32 {
+	const items: N[] = [new N(), new N()];
+	items[0].next = items[1];
+	const t = spawn(() => ${thunk});
+	return await t;
+}
+console.log(\`\${round()}\`);
+`;
+
+function namedBody(c: string, name: string): string {
+	for (const line of c.split("\n")) {
+		if (line.contains(" " + name) && line.endsWith(") {") && !line.startsWith(" ") && !line.startsWith("\t")) {
+			const open = c.indexOf(line, 0);
+			return c.slice(open, c.indexOf("\n}", open));
+		}
+	}
+	return "";
+}
+
+function countedOrMissing(c: string, name: string, callee: string): string {
+	const body = namedBody(c, name);
+	return body.contains(callee + "__") && !body.contains("msIncref") && !body.contains("msDecref") ? "" : name + ": " + body;
+}
+
+test "E2E C: a task passes its lent array uncounted to a callee that calls a local closure" {
+	const r = compileToC(LOCAL_CLOSURE_CALLEE("countUp(items)"));
+	assert r.ok;
+	const fault = countedOrMissing(r.ok ? r.value : "", "dollarlifted_round_", "countUp");
+	assert fault == "", fault;
+}
+
+test "E2E C: a task passes its lent array uncounted to a callee whose local closure writes its own captured counter" {
+	const r = compileToC(LOCAL_CLOSURE_CALLEE("tally(items)"));
+	assert r.ok;
+	const fault = countedOrMissing(r.ok ? r.value : "", "dollarlifted_round_", "tally");
+	assert fault == "", fault;
+}
+
+test "E2E C: a lent array and its element pass uncounted one call deeper to callees that call local closures" {
+	const r = compileToC(LOCAL_CLOSURE_CALLEE("outer(items)"));
+	assert r.ok;
+	const c = r.ok ? r.value : "";
+	const thunkFault = countedOrMissing(c, "dollarlifted_round_", "outer");
+	assert thunkFault == "", thunkFault;
+	const outerFault = countedOrMissing(c, "outer__", "countFrom");
+	assert outerFault == "", outerFault;
+}
+
+const STORING_CLOSURE_CALLEE = (store: string) => `
+class N { v: int32 = 1; }
+function apply(f: () => void): void { f(); }
+function storeFirst(xs: N[]): void {
+	const store = (): void => { xs[0] = new N(); };
+	${store};
+}
+function readAfterStore(xs: N[], x: Readonly<N>): int32 {
+	const store = (): void => { xs[0] = new N(); };
+	${store};
+	return x.v;
+}
+function readAfterNestedStore(xs: N[], x: Readonly<N>): int32 {
+	storeFirst(xs);
+	return x.v;
+}
+function run(): int32 {
+	const xs: N[] = [new N()];
+	return readAfterStore(xs, xs[0]) + readAfterNestedStore(xs, xs[0]);
+}
+console.log(\`\${run()}\`);
+`;
+
+test "E2E C: an element passed to a callee whose local closure stores into the array stays counted, called directly, passed on or one call deeper" {
+	for (const store of ["store()", "apply(store)"]) {
+		const r = compileToC(STORING_CLOSURE_CALLEE(store));
+		assert r.ok;
+		const body = namedBody(r.ok ? r.value : "", "run__");
+		assert body.contains("readAfterStore__"), body;
+		assert body.split("msIncref(dollarborrow").length == 3, store + body;
+	}
+}
