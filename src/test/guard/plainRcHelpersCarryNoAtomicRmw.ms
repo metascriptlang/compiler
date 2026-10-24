@@ -20,7 +20,7 @@ const msc = mscEnv != "" ? mscEnv : `${root}/msc`;
 const mscDir = msc.substring(0, msc.lastIndexOf("/"));
 const runtimeRoot = mscDir != "" && exists(`${mscDir}/runtime/drc.h`) ? mscDir : root;
 const dir = `${root}/out/guardPlainRc`;
-const owners = ["rcPinOwnerInc", "rcPinOwnerDec", "rcPinOwnerOrcInc", "rcPinOwnerOrcDec", "rcPinOwnerMark"];
+const owners = ["rcPinOwnerInc", "rcPinOwnerDec", "rcPinOwnerOrcInc", "rcPinOwnerOrcDec", "rcPinOwnerMark", "rcPinIsAscii"];
 const shares = ["rcPinShareInc", "rcPinShareDec"];
 const sdk = platform == "darwin" ? execFileResult("xcrun", ["--show-sdk-path"], root).output.trim() : "";
 const targets = sdk == "" ? [["host", ""]] : [["host", ""], ["x86_64", `--target=x86_64-linux-gnu -isystem ${sdk}/usr/include`]];
