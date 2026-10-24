@@ -11,11 +11,11 @@
 import {
 	Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol, createNodeAt,
 	BlockStmtData, WhileStmtData, IfStmtData, ThrowStmtData, StringLiteralData, VariableDeclData, CallExprData, TypeAssertionData, HiddenStdConvData, HiddenDerefData,
-	ArrayAccessData,
+	ArrayAccessData, NumberLiteralData, TryCatchStmtData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { appendLoopTail, bodySuspends } from "./forLoopLower";
-import { int32Type, charType, stringType, noneType, createArray, createSizedArray, createRef, isIterator, getIteratorNextFnType, peelTransparentInstance } from "../../checker/types";
+import { int32Type, charType, stringType, noneType, booleanType, getIteratorReturnFnType, createArray, createSizedArray, createRef, isIterator, isMaybeType, getIteratorNextFnType, peelTransparentInstance } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { walkNode } from "../walker";
 import { clonePlace, isVariantRead } from "../place";
@@ -23,6 +23,7 @@ import {
 	makeIdentResolved, makeNumber, makeBlock, makeVarDecl, makeWhile,
 	makeBinary, makeUnary, makeAssign, makeExprStmt, makeMember, makeArrayAccess, makeCall,
 	makeIf, makeString, runtimeRef, extractBodyStmts, boolToDeclKind, counterType, makeCounterStep,
+	makeBool, makeNull, makeTryCatch, makeTryFinally, makeCatchSym,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 
@@ -60,7 +61,9 @@ function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
 //     while (!$r.done) { const x = $r.value; body; $r = $iter.next(); } }
 
 function makeNextCallSym(iterSym: Symbol, resultType: Type | null, loc: SourceLocation): Node {
-	const call = makeCall(makeMember(makeIdentResolved(iterSym, loc), "next", loc), [], loc);
+	const step = makeMember(makeIdentResolved(iterSym, loc), "next", loc);
+	step.nodeType = getIteratorNextFnType(peelTransparentInstance(iterSym.symbolType));
+	const call = makeCall(step, [], loc);
 	if (resultType != null) call.nodeType = resultType;
 	return call;
 }
@@ -79,10 +82,11 @@ function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: Source
 	const rDecl = makeVarDecl(rSym.name, makeNextCallSym(iterSym, resultType, loc), DeclKind.Let, loc);
 	rDecl.resolvedSym = rSym;
 	if (resultType != null) rDecl.nodeType = resultType;
-	stmts.push(rDecl);
 
 	const cond = makeUnary("!", makeMember(makeIdentResolved(rSym, loc), "done", loc), loc);
-	const bodyStmts: Node[] = [];
+	const liveSym = freshTempSym(ctx, "live", booleanType());
+	const setLive = (on: boolean): Node => makeExprStmt(makeAssign(makeIdentResolved(liveSym, loc), makeBool(on, loc), loc), loc);
+	const bodyStmts: Node[] = [setLive(true)];
 	const itemType = resultType != null && resultType.typeChildren != null && resultType.typeChildren.length > 0 ? resultType.typeChildren[0] : null;
 	const itemDk = boolToDeclKind(d.forOfIsConst);
 	const patKind = d.forOfPattern != null ? d.forOfPattern.kind : NodeKind.Identifier;
@@ -107,14 +111,44 @@ function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: Source
 		bodyStmts.push(itemDecl);
 	}
 	const userStmts = extractBodyStmts(d.forOfBody);
-	const nextAt = (): Node => makeExprStmt(makeAssign(makeIdentResolved(rSym, loc), makeNextCallSym(iterSym, resultType, loc), loc), loc);
+	const nextAt = (): Node => makeBlock([setLive(false), makeExprStmt(makeAssign(makeIdentResolved(rSym, loc), makeNextCallSym(iterSym, resultType, loc), loc), loc)], loc);
 	const tail = appendLoopTail(userStmts, nextAt(), nextAt, bodySuspends(userStmts), ctx, loc);
 	for (const s of tail.tailStmts) { bodyStmts.push(s); }
 
 	const loop = makeWhile(cond, makeBlock(bodyStmts, loc), loc);
 	(loop.data as WhileStmtData).whileLabel = tail.tailLabel;
-	stmts.push(loop);
+	const liveDecl = makeVarDecl(liveSym.name, makeBool(false, loc), DeclKind.Let, loc);
+	liveDecl.resolvedSym = liveSym;
+	stmts.push(liveDecl);
+	stmts.push(closeOnAbruptExit(makeBlock([rDecl, loop], loc), iterSym, liveSym, ctx, loc));
 	return makeBlock(stmts, loc);
+}
+
+function closeOnAbruptExit(loop: Node, iterSym: Symbol, liveSym: Symbol, ctx: TransformContext, loc: SourceLocation): Node {
+	const retType = getIteratorReturnFnType(peelTransparentInstance(iterSym.symbolType));
+	const closeIfLive = (swallow: boolean): Node => {
+		const field = (): Node => makeMember(makeIdentResolved(iterSym, loc), "return", loc);
+		const present = field();
+		present.nodeType = retType;
+		const callee = field();
+		callee.nodeType = retType != null && isMaybeType(retType) ? retType.typeReturn : retType;
+		const call = makeCall(callee, [], loc);
+		call.nodeType = callee.nodeType != null ? callee.nodeType.typeReturn : null;
+		let close: Node = makeIf(makeBinary(present, "!==", makeNull(loc), loc), makeBlock([makeExprStmt(call, loc)], loc), null as unknown as Node, loc);
+		if (swallow) close = makeBareCatch(makeBlock([close], loc), loc);
+		const off = makeExprStmt(makeAssign(makeIdentResolved(liveSym, loc), makeBool(false, loc), loc), loc);
+		return makeIf(makeIdentResolved(liveSym, loc), makeBlock([off, close], loc), null as unknown as Node, loc);
+	};
+	const caught = makeCatchSym(ctx, "$bodyExc");
+	const rethrow = createNodeAt(NodeKind.ThrowStmt, { throwArg: makeIdentResolved(caught, loc) }, loc);
+	return makeTryCatch(loop, caught, makeBlock([closeIfLive(true), rethrow], loc), makeBlock([closeIfLive(false)], loc), loc);
+}
+
+function makeBareCatch(tryBody: Node, loc: SourceLocation): Node {
+	const n = makeTryFinally(tryBody, null as unknown as Node, loc);
+	const d = n.data as TryCatchStmtData;
+	d.hasCatchClause = true;
+	return n;
 }
 
 // ===== Array/String For-Of =====
