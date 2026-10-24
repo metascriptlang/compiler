@@ -1,4 +1,4 @@
-import { Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, CallExprData, NewExprData, TryCatchStmtData, ExportDeclData, DecoratedDeclData, MacroInvocationData, ExprStmtData, VariableDeclData, ReturnStmtData, BinaryExprData, ObjectLiteralData, OutExprData, HiddenDerefData, Symbol, SymbolKind, TypeKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, CallExprData, NewExprData, TryCatchStmtData, MacroInvocationData, ExprStmtData, VariableDeclData, ReturnStmtData, BinaryExprData, ObjectLiteralData, OutExprData, HiddenDerefData, Symbol, SymbolKind, TypeKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { dispatchEntryFor, dispatchOverridesFor } from "./context";
@@ -14,6 +14,14 @@ interface RoutineInfo {
 let _raisesNothing: HashSet<Symbol> = new HashSet<Symbol>();
 let _closureTargets: HashMap<Symbol, Symbol> = new HashMap<Symbol, Symbol>();
 let _tempWrites: HashMap<Symbol, int32> = new HashMap<Symbol, int32>();
+let _routines: HashMap<Symbol, RoutineInfo> = new HashMap<Symbol, RoutineInfo>();
+let _order: RoutineInfo[] = [];
+let _siteInfos: RoutineInfo[] = [];
+let _siteNodes: Node[] = [];
+let _statementValues: Node[] = [];
+let _walkInfo: RoutineInfo | null = null;
+let _walkCaught = false;
+let _holdFound = false;
 
 export function resetRaises(): void {
 	_raisesNothing = new HashSet<Symbol>();
@@ -117,79 +125,115 @@ function isNestedRoutine(node: Node): boolean {
 		|| node.kind == NodeKind.ActorDecl || node.kind == NodeKind.TestDecl;
 }
 
-function noteVerdict(verdict: CallRaise, callee: Symbol | null, info: RoutineInfo, routines: HashMap<Symbol, RoutineInfo>): void {
+function noteVerdict(verdict: CallRaise, callee: Symbol | null, info: RoutineInfo): void {
 	if (verdict == CallRaise.Can) info.raises = true;
 	else if (verdict == CallRaise.AsBody) {
-		if (routines.has(callee!)) info.callees.push(callee!);
+		if (_routines.has(callee!)) info.callees.push(callee!);
 		else info.raises = true;
 	}
 }
 
-function scanBody(node: Node, caught: boolean, info: RoutineInfo, routines: HashMap<Symbol, RoutineInfo>): void {
-	if (node == null || isNestedRoutine(node)) return;
-	if (node.kind == NodeKind.TryCatchStmt) {
-		const d = node.data as TryCatchStmtData;
-		scanBody(d.tryBody, caught || d.hasCatchClause, info, routines);
-		if (d.hasCatchClause) scanBody(d.catchBody, caught, info, routines);
-		scanBody(d.finallyBody, caught, info, routines);
-		return;
-	}
-	if (!caught) {
-		if (node.kind == NodeKind.ThrowStmt || node.kind == NodeKind.AwaitExpr || node.kind == NodeKind.YieldExpr) {
-			info.raises = true;
-		} else if (node.kind == NodeKind.NewExpr) {
-			noteVerdict(classifyNew(node), node.resolvedSym, info, routines);
-		} else if (node.kind == NodeKind.MacroInvocation && (node.data as MacroInvocationData).macroName == "emit") {
-			info.raises = true;
-		} else if (node.kind == NodeKind.CallExpr) {
-			noteVerdict(classifyCall(node), calleeTarget(node), info, routines);
-		}
-	}
-	forEachChild(node, (child: Node): void => { scanBody(child, caught, info, routines); });
+function resetWalk(): void {
+	_routines = new HashMap<Symbol, RoutineInfo>();
+	_order = [];
+	_siteInfos = [];
+	_siteNodes = [];
+	_statementValues = [];
+	_walkInfo = null;
+	_walkCaught = false;
 }
 
-function collectRoutines(node: Node, found: Node[]): void {
+function routineOf(node: Node): RoutineInfo | null {
+	if (node.kind != NodeKind.FunctionDecl || node.resolvedSym == null || (node.data as FunctionDeclData).fnBody == null) return null;
+	const sym = node.resolvedSym!;
+	const seen = _routines.get(sym);
+	if (seen != null) {
+		seen.raises = true;
+		return null;
+	}
+	const info: RoutineInfo = { sym: sym, raises: false, callees: [] };
+	_routines.set(sym, info);
+	_order.push(info);
+	return info;
+}
+
+function noteStatementValue(node: Node): void {
+	let value: Node | null = null;
+	if (node.kind == NodeKind.ExprStmt) value = (node.data as ExprStmtData).expr;
+	else if (node.kind == NodeKind.VariableDecl) value = (node.data as VariableDeclData).initializer;
+	else if (node.kind == NodeKind.ReturnStmt) value = (node.data as ReturnStmtData).argument;
+	if (value != null) _statementValues.push(value);
+}
+
+function walkTry(node: Node, info: RoutineInfo): void {
+	const d = node.data as TryCatchStmtData;
+	const caught = _walkCaught;
+	_walkCaught = caught || d.hasCatchClause;
+	walkProgram(d.tryBody);
+	_walkCaught = caught;
+	if (d.hasCatchClause) walkProgram(d.catchBody);
+	else {
+		_walkInfo = null;
+		walkProgram(d.catchBody);
+		_walkInfo = info;
+	}
+	walkProgram(d.finallyBody);
+}
+
+function noteRaiseSite(node: Node, info: RoutineInfo): void {
+	if (node.kind == NodeKind.ThrowStmt || node.kind == NodeKind.AwaitExpr || node.kind == NodeKind.YieldExpr) {
+		info.raises = true;
+	} else if (node.kind == NodeKind.MacroInvocation && (node.data as MacroInvocationData).macroName == "emit") {
+		info.raises = true;
+	} else if (node.kind == NodeKind.NewExpr || node.kind == NodeKind.CallExpr) {
+		_siteInfos.push(info);
+		_siteNodes.push(node);
+	}
+}
+
+function walkProgram(node: Node): void {
 	if (node == null) return;
 	noteTempWrites(node);
-	if (node.kind == NodeKind.FunctionDecl && node.resolvedSym != null && (node.data as FunctionDeclData).fnBody != null) {
-		found.push(node);
-	}
-	if (node.kind == NodeKind.ExportDecl) {
-		collectRoutines((node.data as ExportDeclData).exportedDecl, found);
+	noteStatementValue(node);
+	const info = _walkInfo;
+	if (isNestedRoutine(node)) {
+		const caught = _walkCaught;
+		_walkInfo = routineOf(node);
+		_walkCaught = false;
+		forEachChild(node, walkProgram);
+		_walkInfo = info;
+		_walkCaught = caught;
 		return;
 	}
-	if (node.kind == NodeKind.DecoratedDecl) {
-		collectRoutines((node.data as DecoratedDeclData).decoratedNode, found);
+	if (info != null) {
+		if (node.kind == NodeKind.TryCatchStmt) {
+			walkTry(node, info);
+			return;
+		}
+		if (!_walkCaught) noteRaiseSite(node, info);
+	}
+	forEachChild(node, walkProgram);
+}
+
+function noteSiteVerdict(node: Node, info: RoutineInfo): void {
+	if (node.kind == NodeKind.NewExpr) {
+		noteVerdict(classifyNew(node), node.resolvedSym, info);
 		return;
 	}
-	forEachChild(node, (child: Node): void => { collectRoutines(child, found); });
+	const callee = calleeTarget(node);
+	noteVerdict(classifyTarget(callee, (node.data as CallExprData).arguments), callee, info);
 }
 
 export function inferRaises(programs: Node[]): void {
 	resetRaises();
-	const decls: Node[] = [];
+	resetWalk();
 	for (const program of programs) {
 		if (program == null) continue;
-		for (const stmt of (program.data as ProgramData).programStmts) collectRoutines(stmt, decls);
+		for (const stmt of (program.data as ProgramData).programStmts) walkProgram(stmt);
 	}
-	const routines = new HashMap<Symbol, RoutineInfo>();
-	const order: RoutineInfo[] = [];
-	const bodies: Node[] = [];
-	for (const decl of decls) {
-		const sym = decl.resolvedSym!;
-		const seen = routines.get(sym);
-		if (seen != null) {
-			seen.raises = true;
-			continue;
-		}
-		const info: RoutineInfo = { sym: sym, raises: false, callees: [] };
-		routines.set(sym, info);
-		order.push(info);
-		bodies.push((decl.data as FunctionDeclData).fnBody);
-	}
-	for (let i = 0; i < order.length; i += 1) scanBody(bodies[i], false, order[i], routines);
+	for (let i = 0; i < _siteNodes.length; i += 1) noteSiteVerdict(_siteNodes[i], _siteInfos[i]);
 	const callers = new HashMap<Symbol, RoutineInfo[]>();
-	for (const info of order) {
+	for (const info of _order) {
 		for (const callee of info.callees) {
 			const list = callers.get(callee);
 			if (list != null) list.push(info);
@@ -197,7 +241,7 @@ export function inferRaises(programs: Node[]): void {
 		}
 	}
 	const pending: RoutineInfo[] = [];
-	for (const info of order) {
+	for (const info of _order) {
 		if (info.raises) pending.push(info);
 	}
 	while (pending.length > 0) {
@@ -210,37 +254,27 @@ export function inferRaises(programs: Node[]): void {
 			pending.push(caller);
 		}
 	}
-	for (const info of order) {
+	for (const info of _order) {
 		if (!info.raises) _raisesNothing.add(info.sym);
 	}
-	for (const program of programs) {
-		if (program != null) markStatementValues(program);
+	for (const value of _statementValues) markValue(value);
+	resetWalk();
+}
+
+function holdStep(expr: Node): void {
+	if (_holdFound || expr == null || isNestedRoutine(expr)) return;
+	if ((expr.kind == NodeKind.CallExpr && callCanRaise(expr)) || (expr.kind == NodeKind.NewExpr && newCanRaise(expr))) {
+		_holdFound = true;
+		return;
 	}
+	forEachChild(expr, holdStep);
 }
 
-function holdsRaisingCall(expr: Node): boolean {
-	if (expr == null || isNestedRoutine(expr)) return false;
-	if (expr.kind == NodeKind.CallExpr && callCanRaise(expr)) return true;
-	if (expr.kind == NodeKind.NewExpr && newCanRaise(expr)) return true;
-	let found = false;
-	forEachChild(expr, (child: Node): void => {
-		if (!found && holdsRaisingCall(child)) found = true;
-	});
-	return found;
-}
-
-function markValue(value: Node | null): void {
-	if (value == null) return;
-	const raises = holdsRaisingCall(value);
+function markValue(value: Node): void {
+	_holdFound = false;
+	holdStep(value);
+	const raises = _holdFound;
 	value.flags = value.flags.excl(raises ? NodeFlag.CannotRaise : NodeFlag.CanRaise).incl(raises ? NodeFlag.CanRaise : NodeFlag.CannotRaise);
-}
-
-function markStatementValues(node: Node): void {
-	if (node == null) return;
-	if (node.kind == NodeKind.ExprStmt) markValue((node.data as ExprStmtData).expr);
-	else if (node.kind == NodeKind.VariableDecl) markValue((node.data as VariableDeclData).initializer);
-	else if (node.kind == NodeKind.ReturnStmt) markValue((node.data as ReturnStmtData).argument);
-	forEachChild(node, (child: Node): void => { markStatementValues(child); });
 }
 
 export function callCanRaise(call: Readonly<Node>): boolean {
