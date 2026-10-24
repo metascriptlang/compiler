@@ -573,6 +573,25 @@ export function hasEffect(n: Node): boolean {
 	return found;
 }
 
+export const DEEP_DESCEND = 0;
+export const DEEP_HIT = 1;
+export const DEEP_SKIP = 2;
+
+// Does any node in the subtree answer DEEP_HIT? A null node and a DEEP_SKIP subtree are not
+// entered. One closure serves the whole search, where a recursive predicate builds one per node.
+export function anyDeep(n: Node, verdict: (n: Node) => int32): boolean {
+	let found = false;
+	const scan = (c: Node): void => {
+		if (found || c == null) return;
+		const v = verdict(c);
+		if (v == DEEP_HIT) { found = true; return; }
+		if (v == DEEP_SKIP) return;
+		forEachChild(c, scan);
+	};
+	scan(n);
+	return found;
+}
+
 export interface OnceEvalState {
 	effectSeen: boolean;
 }
