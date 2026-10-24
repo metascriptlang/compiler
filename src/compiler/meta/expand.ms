@@ -53,7 +53,7 @@ import {
 	// SymbolKind for Case 2 enum-member rewrite (Bug B Layer 2)
 	SymbolKind, NodeFlag, Symbol, TypeKind,
 } from "../../ast/node";
-import { CheckerContext, Severity, addError, addErrorFullRange, createContext } from "../../checker/context";
+import { CheckerContext, CheckerError, Severity, addError, addErrorFullRange, createContext } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
 import { forEachChild } from "../../ast/visitor";
 import { nextQuoteGensymSuffix } from "../../checker/template";
@@ -1722,11 +1722,25 @@ interface CompiledMacro {
 
 // A null `compiled` marks a macro whose body or helpers failed to check: it is
 // never executed, since its bytecode is garbage and running it turns one precise
-// diagnostic into a VM panic or a wrong AST. Reported once, then refused silently
-// for every later call site.
+// diagnostic into a VM panic or a wrong AST. Its errors are reported once per checking
+// context, then the macro is refused silently for that context's later call sites.
 interface MacroBuild {
 	typeArg: string;
 	compiled: CompiledMacro | null;
+	errors: CheckerError[];
+	reportedIn: CheckerContext | null;
+}
+
+function failedBuild(typeArg: string, ctx: CheckerContext, mark: int32): MacroBuild {
+	const errors: CheckerError[] = [];
+	for (let i = mark; i < ctx.errors.length; i += 1) errors.push(ctx.errors[i]);
+	return { typeArg, compiled: null, errors, reportedIn: ctx };
+}
+
+function replayBuildErrors(build: MacroBuild, ctx: CheckerContext): void {
+	if (build.compiled != null || build.reportedIn == ctx) return;
+	for (const e of build.errors) ctx.errors.push(e);
+	build.reportedIn = ctx;
 }
 
 // One cache per compilation, as the reference keeps a macro's code on the module graph's VM: the
@@ -1734,6 +1748,11 @@ interface MacroBuild {
 let _macroBuilds: HashMap<Symbol, MacroBuild[]> = new HashMap<Symbol, MacroBuild[]>();
 let _macroBuildsGraph: ModuleGraph = null as unknown as ModuleGraph;
 let _macroBuildsCtx: CheckerContext = null as unknown as CheckerContext;
+let _macroCompiles: int32 = 0;
+
+export function macroCompileCount(): int32 {
+	return _macroCompiles;
+}
 
 function inMacroBuildsCompilation(ctx: CheckerContext): boolean {
 	if (engineCompiling()) return true;
@@ -1758,7 +1777,9 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 	const builds: MacroBuild[] = known != null ? known : [];
 	if (known == null) _macroBuilds.set(macroSym, builds);
 	for (let bi = 0; bi < builds.length; bi += 1) {
-		if (builds[bi].typeArg == typeArg) return builds[bi].compiled;
+		if (builds[bi].typeArg != typeArg) continue;
+		replayBuildErrors(builds[bi], ctx);
+		return builds[bi].compiled;
 	}
 	let body = decl.macroDeclBody;
 	let params = decl.macroDeclParams;
@@ -1774,7 +1795,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 	const bakeMark = ctx.errors.length;
 	bakeMacroBody(workBody, ctx, macroSym, macroName, typeArg, decl.macroDeclParams, params);
 	if (errorsSince(ctx, bakeMark)) {
-		builds.push({ typeArg, compiled: null });
+		builds.push(failedBuild(typeArg, ctx, bakeMark));
 		return null;
 	}
 	body = workBody;
@@ -1820,6 +1841,7 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 
 	const program = createNode(NodeKind.Program, { programStmts: wrapperStmts }, synthToken(loc));
 
+	_macroCompiles += 1;
 	const result = callMacroEngineCompiler(program, ctx, "$macro:body", regCtx);
 	if (result == null as unknown as EngineMacroResult) return null;
 	let broken = false;
@@ -1831,13 +1853,13 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 		}
 	}
 	if (broken) {
-		builds.push({ typeArg, compiled: null });
+		builds.push(failedBuild(typeArg, ctx, bakeMark));
 		return null;
 	}
 	if (result.funcIdx < 0) return null;
 
 	const cm: CompiledMacro = { vm: result.vm, funcIdx: result.funcIdx, typeArgInput: params.length > decl.macroDeclParams.length };
-	builds.push({ typeArg, compiled: cm });
+	builds.push({ typeArg, compiled: cm, errors: [], reportedIn: null });
 	return cm;
 }
 

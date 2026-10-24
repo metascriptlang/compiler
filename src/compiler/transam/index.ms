@@ -48,7 +48,7 @@ import { registerModuleProgram, registerModuleCtx, lookupModuleProgram, lookupMo
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
 import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
-import "../meta/expand"; // side-effect: registers expandMacroInvocation callback
+import { macroCompileCount } from "../meta/expand"; // also registers the expandMacroInvocation callback
 import "../meta/modulePass";
 import "../meta/comptime"; // side-effect: registers evalComptimeBlock callback
 import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, findExportedSymbol, collectExports } from "../../checker/context";
@@ -56,7 +56,7 @@ import { collectTopLevelLocal, collectTopLevel, declOfStatement } from "../../ch
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { openScope, ScopeKind } from "../../checker/symbol";
 import { ImportDeclData, ExportDeclData, ProgramData, ClassDeclData } from "../../ast/node";
-import { ModuleGraph, createModule, createModuleGraph, addModule, findModule, ImportEntry, createImportEntry } from "../../module/graph";
+import { ModuleGraph, createModule, createModuleGraph, addModule, findModule, findModuleIndex, ImportEntry, createImportEntry } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
 import { headerModuleSource, createTaReadProvider, SourceProvider, MapEntry, createMapProvider, loadModuleGraph, collectImportCalls } from "../../module/loader";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
@@ -146,6 +146,7 @@ export class TransAmDb {
 	preprocessCache: HashMap<int32, string>;  // fileId → preprocessed source
 	checkInProgress: HashSet<string>;          // cycle guard for macro-dep pre-checks
 	graph: ModuleGraph | null;                 // loaded graph whose modules this db checks
+	editGraph: ModuleGraph;                    // the graph of every module bound outside `graph`; one compilation for the db's life, a rebind replaces the module
 	trees: HashMap<int32, Node>;               // tree key → parsed, checked, transformed or analyzed tree
 	contexts: HashMap<int32, CheckerContext>;  // check key → checker context
 	bound: HashMap<string, BoundCheck>;         // bound and not finished: in progress, or bound on demand from an import cycle
@@ -202,6 +203,7 @@ export function createTransAmDb(cacheCapacity: int32): TransAmDb {
 		preprocessCache: new HashMap<int32, string>(),
 		checkInProgress: new HashSet<string>(),
 		graph: null,
+		editGraph: createModuleGraph(),
 		trees: new HashMap<int32, Node>(),
 		contexts: new HashMap<int32, CheckerContext>(),
 		bound: new HashMap<string, BoundCheck>(),
@@ -811,11 +813,13 @@ function boundAtRevision(db: TransAmDb, filePath: string): BoundModule | null {
 
 function dbBindModule(db: TransAmDb, filePath: string, program: Node, imports: ImportEntry[], globals: CheckerContext[], startVersion: int32): BoundModule {
 	const graphMod = db.graph != null ? findModule(db.graph, filePath) : null;
-	const graph: ModuleGraph = graphMod != null ? db.graph! : createModuleGraph();
+	const graph: ModuleGraph = graphMod != null ? db.graph! : db.editGraph;
 	const mod = graphMod != null ? graphMod : createModule(filePath);
 	if (graphMod == null) {
 		mod.imports = imports;
-		addModule(graph, mod);
+		const at = findModuleIndex(graph, filePath);
+		if (at >= 0) graph.modules[at] = mod;
+		else addModule(graph, mod);
 	}
 	if (db.preludeCtx == null) db.preludeCtx = preludeContextFor(db.stdPath, ".cms");
 	registerModuleProgram(filePath, program);
@@ -1126,6 +1130,7 @@ export function dbStats(db: TransAmDb): string {
 	}
 	return `entries=${cache.entries.length} hits=${cache.hits} misses=${cache.misses}`
 		+ ` marked=${cache.marked} evicted=${cache.evicted} bound=${cache.bound} collected=${cache.collected}`
+		+ ` macros=${macroCompileCount()}`
 		+ ` recomputed:${recomputed}`;
 }
 
@@ -1996,4 +2001,70 @@ test "a module the shared prelude imports stays registered when checked, as a bu
 	dbSetFileText(db, imported, try readStdFile(imported) catch "");
 	const ctx = dbTypeCheck(db, imported);
 	assert lookupModuleCtx(imported) == ctx;
+}
+
+const MACRO_TWICE = 'import { Node } from "std/meta";\nexport macro twice(n: Node): Node {\n\treturn quote { (${n} * 2) };\n}\n';
+const MACRO_USER = 'import { twice } from "./mac";\nexport const x: int32 = twice(2);\n';
+
+function macroDb(macroText: string, userText: string): TransAmDb {
+	resetInstantiationState();
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbSetFileText(db, "/m/mac.ms", macroText);
+	dbSetFileText(db, "/m/use.ms", userText);
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, "/m/use.ms"), getFileId(db.fileInput, "/m/mac.ms"));
+	return db;
+}
+
+function checkMessages(db: TransAmDb, path: string): string {
+	const ctx = dbTypeCheck(db, path);
+	return ctx.errors.map((e: CheckerError): string => e.message).join("\n");
+}
+
+test "editing a call site reuses the macro build" {
+	const db = macroDb(MACRO_TWICE, MACRO_USER);
+	assert checkMessages(db, "/m/use.ms") == "";
+	const built = macroCompileCount();
+	dbSetFileText(db, "/m/use.ms", MACRO_USER.replace("twice(2)", "twice(3)"));
+	assert checkMessages(db, "/m/use.ms") == "";
+	dbSetFileText(db, "/m/use.ms", MACRO_USER + "export const y: int32 = twice(4);\n");
+	assert checkMessages(db, "/m/use.ms") == "";
+	assert macroCompileCount() == built, `${macroCompileCount() - built} recompiles`;
+}
+
+test "editing the macro body rebuilds it and the new expansion reaches the importer" {
+	const db = macroDb(MACRO_TWICE, MACRO_USER);
+	assert checkMessages(db, "/m/use.ms") == "";
+	const built = macroCompileCount();
+	dbSetFileText(db, "/m/mac.ms", MACRO_TWICE.replace("(${n} * 2)", "\"two\""));
+	assert checkMessages(db, "/m/use.ms") != "";
+	assert macroCompileCount() == built + 1;
+	dbSetFileText(db, "/m/mac.ms", MACRO_TWICE);
+	assert checkMessages(db, "/m/use.ms") == "";
+}
+
+test "a macro that fails to compile is reported on every check that reaches it" {
+	const db = macroDb(MACRO_TWICE.replace("quote { (${n} * 2) }", "missingHelper(${n})"), MACRO_USER);
+	const first = checkMessages(db, "/m/use.ms");
+	assert first != "";
+	dbSetFileText(db, "/m/use.ms", MACRO_USER.replace("twice(2)", "twice(3)"));
+	assert checkMessages(db, "/m/use.ms") != "";
+	dbSetFileText(db, "/m/use.ms", MACRO_USER.replace("twice(2)", "twice(4)"));
+	assert checkMessages(db, "/m/use.ms") != "";
+}
+
+test "editing a helper module the macro imports rebuilds the macro" {
+	const helper = (text: string): string => `export function pick(): string {\n\treturn ${text};\n}\n`;
+	const mac = 'import { Node } from "std/meta";\nimport { pick } from "./h";\nexport macro twice(n: Node): Node {\n\tconst s = pick();\n\treturn quote { (${n} * 2) };\n}\n';
+	const db = macroDb(mac, MACRO_USER);
+	dbSetFileText(db, "/m/h.ms", helper('"a"'));
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, "/m/mac.ms"), getFileId(db.fileInput, "/m/h.ms"));
+	assert checkMessages(db, "/m/use.ms") == "";
+	const built = macroCompileCount();
+	dbSetFileText(db, "/m/h.ms", helper('"b"'));
+	assert checkMessages(db, "/m/use.ms") == "";
+	assert macroCompileCount() == built + 1, `${macroCompileCount() - built} recompiles`;
+	dbSetFileText(db, "/m/use.ms", MACRO_USER.replace("twice(2)", "twice(3)"));
+	assert checkMessages(db, "/m/use.ms") == "";
+	assert macroCompileCount() == built + 1;
 }
