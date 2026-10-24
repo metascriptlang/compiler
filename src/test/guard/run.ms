@@ -124,6 +124,12 @@ function status(r: ExecFileResult): string {
 	return r.signal != 0 ? `signal=${r.signal}` : `exit=${r.exitCode}`;
 }
 
+// A probe that prints GUARD-FAIL names its broken invariant; the bare exit status does not.
+function statusWithReasons(r: ExecFileResult): string {
+	const reasons = lines(r.output).filter((l) => l.startsWith("GUARD-FAIL")).slice(0, 3).map((l) => l.slice("GUARD-FAIL".length, l.length).trim());
+	return reasons.length == 0 ? status(r) : `${status(r)}: ${reasons.join(" | ")}`;
+}
+
 function firstErrorLines(log: string): string {
 	let out = "";
 	let n = 0;
@@ -406,7 +412,7 @@ function runDrcLane(probe: Probe): void {
 	}
 	const dd = firstLineContaining(run.errorOutput, "DOUBLE-DESTROY");
 	if (!succeeded(run) || dd != "") {
-		fail(tag, dd != "" ? dd : status(run));
+		fail(tag, dd != "" ? dd : statusWithReasons(run));
 		console.log("     -> drift from Nim last-ref dispose model; run /trace-nim on the named type");
 		return;
 	}
@@ -504,7 +510,7 @@ function runOsAsanLane(probe: Probe): void {
 	writeFile(`${LOG_DIR}/${probe.name}.${probe.os}.asan.out`, merged);
 	const report = firstLineContaining(merged, "ERROR: AddressSanitizer");
 	if (report != "" || !succeeded(run) || !merged.contains("GUARD-OK")) {
-		fail(tag, report != "" ? report : status(run));
+		fail(tag, report != "" ? report : statusWithReasons(run));
 		return;
 	}
 	ok(tag);
@@ -577,7 +583,7 @@ function runTsanLane(probe: Probe): void {
 	writeFile(`${LOG_DIR}/${probe.name}.tsan.out`, merged);
 	const race = firstLineContaining(merged, "WARNING: ThreadSanitizer");
 	if (race != "" || !succeeded(run) || !merged.contains("GUARD-OK")) {
-		fail(tag, race != "" ? race : status(run));
+		fail(tag, race != "" ? race : statusWithReasons(run));
 		return;
 	}
 	ok(tag);
