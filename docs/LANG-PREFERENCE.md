@@ -10,6 +10,29 @@ ownership, safety and performance practice in one place. Follow the defaults; us
 when their contract is the one your program needs. [LANG.md](LANG.md) remains the authoritative
 detailed language reference, not a prerequisite for ordinary authoring.
 
+Each example is a separate `.ms` module unless related files are named together. Native-only
+behavior is marked. An exported signature or accepted syntax does not certify every target or
+shape: §19 distinguishes checked limits, source-audited facilities and design-only additions.
+
+Quick navigation:
+
+- Basics: [defaults](#1-defaults-that-make-code-read-as-metascript),
+  [functions/files](#2-files-apis-and-formatting),
+  [numbers](#3-numbers-domain-types-and-conversions), [text](#4-text-is-not-a-byte-offset).
+- Storage: [values/classes](#5-values-for-data-references-for-sharing),
+  [ownership/hooks](#6-own-once-view-while-processing-move-when-finished),
+  [collections/generators](#7-collections-and-iteration).
+- Control: [failure/variants](#8-express-cases-and-failure-not-encodings),
+  [async/actors](#9-one-awaitable-surface-three-execution-tools).
+- Extension: [generics/types](#11-reuse-types-extend-behavior-and-specialize-work),
+  [protocols](#12-protocols-are-explicit-conventions),
+  [macros/JSX](#13-compile-time-code-macros-and-jsx).
+- Boundaries: [native ABI](#10-use-c-directly-make-the-boundary-explicit),
+  [codecs](#14-validate-data-at-the-boundary), [Proxy](#15-proxy-and-reflection).
+- Delivery: [builds/targets](#16-modules-builds-and-targets),
+  [standard modules](#17-know-the-library-boundary), [tests](#18-tests-measurement-and-delivery),
+  [current limits](#19-current-limits-and-design-boundaries).
+
 ## 1. Defaults that make code read as MetaScript
 
 - `const` first; `let` when the binding or its value-owned storage must change.
@@ -60,6 +83,39 @@ Guard a CLI entry with `when (!testBuild)` so testing its module does not start 
 Keep library imports free of unrelated startup effects. Use `.cms` for native implementations,
 `.jms` for JS implementations, and `.ms` for portable code; native success is not backend parity.
 
+### Function contracts
+
+Use named functions for public operations and arrows for local callbacks. A callback type is
+`(value: T) => U`; a rest parameter is `...values: T[]`. Optional parameters/properties use null,
+not a separate undefined value. Default parameters, annotated object parameter patterns and
+contextually typed callback patterns are supported:
+
+```ms
+interface Params { n?: int32; }
+function withDefault({ n = 4 }: Params): int32 { return n; }
+const read: (value: Params) => int32 = ({ n }) => n ?? 7;
+function total(...items: int32[]): int32 {
+	let sum: int32 = 0;
+	for (const item of items) { sum += item; }
+	return sum;
+}
+console.log(withDefault({}), read({}), total(1, 2, 3));
+```
+
+Closures/nested functions capture state; do not assume a callback is a plain C function pointer
+or that a local `const` callback can read a later uninitialized binding. Annotate recursive
+boundaries. Every returning path must satisfy the result contract. `void` means no useful result;
+`never` is for an operation that cannot return normally, not a way to hide a missing return.
+
+Overloads can use concrete bodies with distinct parameter types or supported signatures followed
+by an implementation. Return-type-only overloads are ambiguous. Prefer a generic when one body
+expresses the operation; annotate literal/callback inputs when contextual overload ranking needs
+help rather than relying on accidental declaration order.
+
+Parameter modes are contracts: ordinary parameters borrow, `readonly` forbids mutation, `ref`
+mutates a caller location, `out` initializes it, and `sink` takes ownership (§6). Modes affect
+function compatibility and overrides. Destructuring does not waive lifetime or mutation rules.
+
 ## 3. Numbers, domain types and conversions
 
 | Meaning | Default |
@@ -95,6 +151,38 @@ There is no universal `any`. Narrow class objects with `instanceof`; decode untr
 Call a defined conversion extension (`value.asColor()`, for example) explicitly instead of assuming
 that a cast invokes it. Use `String(n)` for numeric text and `.toString()` for a type's formatting
 contract; a cast is not formatting or parsing.
+
+A primitive brand such as `string & { __brand: "UserKey" }` is another nominal surface: explicit
+construction from the base, with widening back to the base. Brand identity comes from its brand
+field/value pairs, not just the alias name. Prefer `distinct` for a deliberately separate domain;
+use a brand when that one-way compatibility is wanted. Object-only intersections combine declared
+fields; they are not arbitrary native-layout reinterpretations.
+
+### Big integers and operators
+
+Use `bigint`/`123n` beyond fixed-width ranges. Convert deliberately between bigint, floating-point
+and fixed-width values; never pass an exact identifier/amount through `number`. Bare `number`
+remains float64 syntax, not arbitrary-precision integer syntax. Bigint on C/JS does not establish
+bigint support in the compile-time VM. Radix/separator literals still need the right declared width.
+
+Operator overloads use backtick names. Keep operand meaning unsurprising; use a named operation
+when mutation, external-resource acquisition or failure deserves a visible contract.
+
+```ms
+struct Distance { value: int32; }
+function `+`(this a: Distance, b: Distance): Distance { return { value: a.value + b.value }; }
+const a: Distance = { value: 2 };
+const b: Distance = { value: 3 };
+const c = a + b;
+console.log(c.value);
+console.log(5n + 7n, (-1 as int8) >>> 0);
+```
+
+The output is `5` then `12n 255`: logical right shift preserves the operand's integer width.
+Do not assume every bit operation is a JS 32-bit operation, or use one as numeric validation.
+A compound operator can have its own mutating `this ref` contract; overloading a base operator
+does not imply every compound spelling has identical dispatch. Import operator extensions that
+are part of the API rather than making meaning depend on an unrelated caller module.
 
 ## 4. Text is not a byte offset
 
@@ -174,6 +262,40 @@ Prefer return values (or a tuple) for ordinary outputs. Reserve `out` for delibe
 filling or a native output slot; assign it on every returning path. `ref` is a parameter mode,
 not the managed pointer type `Ref<T>`.
 
+### Classes and structural contracts
+
+Use a class for shared identity, constructors and inherited behavior. Class methods may be in the
+class; ordinary struct methods are extensions. Initialize required fields on every constructor
+path; do not use a field assertion to invent valid state. `private`/`protected`, instance methods,
+getters/setters, static members and checked `implements` contracts have implemented consumers.
+Not every generic override, accessor, actor, extern or decorator combination is supported.
+
+```ms
+class Counter {
+	protected count: int32;
+	constructor(count: int32) { this.count = count; }
+	read(): int32 { return this.count; }
+	get current(): int32 { return this.count; }
+}
+class OffsetCounter extends Counter {
+	constructor(count: int32) { super(count); }
+	read(): int32 { return this.count + 1; }
+}
+function readCounter(value: Counter): int32 { return value.read(); }
+const counter = new OffsetCounter(6);
+console.log(readCounter(counter), counter.current);
+```
+
+The override dispatches through a base-typed reference (`7 6`). Do not extrapolate constructor
+`super(...)` to `super.method()` (§19). Native interface views/`implements` are layout-sensitive:
+field order and required storage matter; a method/getter does not fill a function-typed field.
+Neither structural spelling nor a cast manufactures arbitrary width-subtyping or compatible ABI.
+
+An optional `x?: T` stores `T | null`. A readonly field restricts writing that field; it is not
+a deep freeze of all referenced data. Private struct fields can reserve construction authority
+to their declaring module; obtain such a value through that module rather than forging a literal,
+a default-filled array or a cast.
+
 ## 6. Own once; view while processing; move when finished
 
 ```ms
@@ -208,6 +330,30 @@ example();
 - A `readonly` parameter prohibits mutation; it does not request an owning local copy.
   For scratch value storage, write `let local = parameter`; reference fields still alias.
 
+A `sink` parameter receives ownership: passing a still-live value copies as required; an explicit
+`move` can transfer an eligible value. This differs from `move` in a borrowing call. Do not use
+a moved-from owner again without establishing a new valid owned value.
+
+A `Borrow<T>` result follows caller-owned storage rooted in the first parameter/receiver, not a
+local temporary or unrelated second owner. Reading it need not copy the owner. An ordinary
+inferred binding can materialize an owning value; request a borrow explicitly when that is the
+contract. A borrow does not pin backing storage or make it a snapshot.
+
+```ms
+function keep(sink text: string): string { return text; }
+struct Row { n: int32; }
+function first(rows: Row[]): Borrow<Row> { return rows[0]; }
+function readFirst(rows: Row[]): int32 { return first(rows).n; }
+function demonstrate(): void {
+	const kept = "a".repeat(2);
+	console.log(keep(kept), kept);
+	const sent = "b".repeat(2);
+	console.log(keep(move sent));
+	console.log(readFirst([{ n: 7 }]));
+}
+demonstrate();
+```
+
 Native resource owners need a real retain/clone/release or transfer contract. Prefer `defer`
 for scoped cleanup. Custom lifecycle hooks **replace**, not augment, generated field operations:
 you must handle every owned field, not just the native handle, and tolerate moved-from zeros.
@@ -231,6 +377,50 @@ useContext();
 
 This balances this scope's retained count only. If C keeps the context afterward, its own retained
 count must survive until C is finished. Calling `process.exit()` is not a substitute for cleanup.
+
+### Pointer and lifecycle toolbox
+
+| Tool | Lifetime contract |
+|---|---|
+| `Ptr<T>` | Raw typed address; no ownership, bounds or pointee-lifetime guarantee. |
+| `Ref<T>` | Managed heap pointer; distinct from the `ref` parameter mode. |
+| `Span<T>` | Pointer plus length; bounded non-owning access, not copied elements. |
+| `Borrow<T>` | Reads an existing location; its owner/storage must outlive every use. |
+| `Cursor<T>` | Nullable non-owning edge; does not retain or clear itself when the referent dies. |
+| `Var<T>` | Type-level mutable-location form corresponding to `ref`; ordinary APIs should spell their parameter modes. |
+| `Readonly<T>` | Access restriction; storage and ownership still follow `T`. |
+
+Native `x as Ptr<T>` can take the address of an inline place; an integer-to-pointer conversion
+instead uses the integer as an address. Neither grants lifetime. A const place remains read-only.
+Arrays/strings are handles: use their proper byte/element views rather than reinterpreting the
+handle as its data. Raw arithmetic/reinterpretation is native-only; non-null does not prove bounds
+or alignment. Keep raw access inside a small wrapper with an ordinary typed API.
+
+Custom hooks bind in the type's own module and run on native, not JS. Leave generated hooks in
+charge unless an actual resource/ownership operation requires taking over. The six public names:
+
+| Hook | Responsibility |
+|---|---|
+| `onDestroy` | Release the resource and every owned field; tolerate moved-from state. |
+| `onCopy` | Implement complete copy/assignment, including the destination's old state. |
+| `onMove` | Implement complete transfer without leaving two owners of one resource. |
+| `onMoved` | Establish the moved-from side's safe state. |
+| `onClone` | Return an independently valid owned `T` for a copy into a sink position. |
+| `onTrace` | Expose every managed edge required by the native cycle visitor. |
+
+For a struct/distinct `T`, mutating hooks take `this ref value: T` (or `this value: Var<T>`);
+copy/move add `source: T`, trace adds `env: Ptr<void>`. `onClone(this value: T): T` returns a fresh
+value; other hooks return void. Destroy can also take a plain/read-only value receiver.
+A class/interface already has reference storage: only destroy/trace apply, with a plain receiver,
+not `this ref`. Do not import internal hook names or signatures from historical designs.
+
+Hooks replace generated field operations, not just the external-resource part. Keep them
+synchronous and suitable for their calling context. A custom derived destroy hook cannot assume
+automatic base-hook chaining. Do not rely on leftover primitive fields after a move.
+
+Reference counting alone does not reclaim ownership cycles. Use the collector mode appropriate
+to the graph, or a genuinely non-owning back-edge with a proven owner lifetime. A cursor is not
+a clearing weak reference. Do not disable memory management to hide an ownership bug.
 
 ## 7. Collections and iteration
 
@@ -268,6 +458,39 @@ multiple arrays or avoiding an expensive element copy; use `while` for drains/co
 without a natural sequence. Prefer one readable loop over a chain of allocating transformations
 when processing owned buffers in a hot path. Use a named tuple/struct when multiple outputs need
 meaning; a short `[min, max]` pair is clearer than unrelated out parameters.
+
+Tuples (`[T, U]`, including named/optional elements) are aggregates; each element keeps its own
+ownership. Array/object declaration and parameter destructuring are not the unsupported `match`
+patterns mentioned below. Use them to name meaningful components, not to conceal expensive copies.
+A tuple rest parameter can describe correlated arity; do not assume every nested/rest pattern is
+supported just because simple destructuring works.
+
+For a resumable producer, a generator returns `Iterator<T>`, not `Generator<T>`. Constructing it
+is not materializing every result. Check `.done` before reading `.value`:
+
+```ms
+function* integers(): Iterator<int32> {
+	yield 2;
+	yield 3;
+}
+const iterator = integers();
+let next = iterator.next();
+let total: int32 = 0;
+while (!next.done) {
+	total += next.value;
+	next = iterator.next();
+}
+console.log(total);
+let traversed: int32 = 0;
+for (const item of integers()) { traversed += item; }
+console.log(traversed);
+```
+
+Both traversals print `5`, but their storage/work need not be identical. The standard
+`Iterator.toItems` adapter drains into an array; do not promise streaming/allocation-free
+`for..of` from the generator spelling. Use checked `.next()` consumption when that distinction
+matters. Keep suspension state owned; a borrowed view cannot simply remain valid across a yield.
+Do not assume delegation, send/throw/close or a final return payload from another generator API.
 
 ## 8. Express cases and failure, not encodings
 
@@ -327,6 +550,33 @@ Query `.has`, keep the result of `.incl`/`.excl`. Empty is `0 as BitSet<Mode>`, 
 one enum member. Format enum/set text with `.toString()`; set iteration/stringification may
 allocate. For optional data, write `T | null` and narrow with `if (x !== null)`; never disguise
 an empty value as a valid `T` with a double cast.
+
+Optional chaining/nullish fallback handle expected absence; they are not input validation.
+Prefer a real checked branch over a non-null assertion when absence is an error.
+
+A user-defined variant family can use an enum/boolean `match` type or a TS-style union sharing a
+literal discriminator. Narrow before reading a payload. Choose `struct ... = match` for value
+arms; an anonymous/reference arm does not become a deep copy because its carrier is a union.
+
+```ms
+interface Value { n: int32; }
+function read(value: Value | null): int32 { return value?.n ?? 0; }
+console.log(read(null), read({ n: 7 }));
+
+enum Kind {
+	Text,
+	Count,
+}
+struct Data = match (kind: Kind) {
+	Kind.Text => { text: string },
+	Kind.Count => { count: int32 },
+};
+function describe(value: Data): string {
+	if (value.kind === Kind.Text) { return value.text; }
+	return value.count.toString();
+}
+console.log(describe({ kind: Kind.Count, count: 7 }));
+```
 
 ## 9. One awaitable surface, three execution tools
 
@@ -410,9 +660,88 @@ method is CALL (`await service.read()`). SEND is not a completion wait. An actor
 message through awaits; queued messages wait until it finishes. Avoid cyclic awaited CALLs.
 For typed failures, async functions return `Promise<Result<T, E>>`; actor methods declare
 `Result<T, E>` directly. Callers use `try await operation()`. See [concurrency](LANG.md#actors).
+Actor arguments cross an ownership boundary: copy value data, explicitly `move` ownership or
+share supported `Arc<T>` data. A plain const-reference borrow requires an awaited CALL; it
+cannot be sent fire-and-forget or discarded. Keep its owner alive and unchanged until the reply.
 Let the event loop drain; `process.exit()` bypasses pending work and orphan-failure reporting.
 Native C is the concurrency target: JS result parity does not prove threads, ownership transfer,
 scheduling or native resource behavior. Freestanding/on-chain code is not a concurrency target.
+
+### Promise, cancellation and actor lifecycle
+
+A `Promise<T>` means eventual completion, not execution on another CPU. Prefer an async function;
+use an executor to adapt a callback API. Executors run immediately and settle once. `.then`,
+`.catch` and `.finally` compose values/errors/cleanup; their supported typed overloads are not an
+unrestricted dynamic JS API. Return the handler's result rather than sharing a mutable result slot.
+
+```ms
+const promise = new Promise<int32>((resolve, reject) => {
+	resolve(3);
+	reject("late");
+});
+console.log(await promise.then((value: int32): int32 => value + 1));
+class Ready { then(done: (value: int32) => void): void { done(7); } }
+console.log(await new Ready());
+const controller = new AbortController();
+controller.abort("first");
+controller.abort("second");
+console.log(controller.signal.aborted, controller.signal.reason);
+```
+
+| Operation | Author contract |
+|---|---|
+| `Promise.resolve` / `reject` | Construct settled completion/failure; use an Error for meaningful failure handling. |
+| `Promise.all(values)` | Input-order values; an input rejection rejects it. Empty input yields an empty array. |
+| `Promise.race(values)` | First settlement wins; a rejection can win. Empty input never settles. It does not cancel the loser. |
+| `Promise.any(values)` | First fulfillment wins; all-rejected/empty input rejects, without a promised AggregateError API. |
+| `Promise.allSettled(values)` | Present but unsafe as its declared native result; not a recommended API on this baseline (§19). |
+| `AbortController` / `AbortSignal` | Cooperative notification; aborting does not preempt arbitrary work. The first reason is retained. |
+| Timers / `sleepAsync` | Schedule completion; clear handles you no longer own, especially intervals that keep the loop alive. |
+
+Structural thenables have a statically checked callable `then` delivering a concrete value;
+recursive/generic-delivered awaitables are not universally accepted. `return await` keeps
+settlement inside an enclosing catch/finally. Native also permits a blocking await in an ordinary
+synchronous function; JS refuses that form. Use an async function or module top-level await on JS.
+Native blocking await pumps progress; async/actor await suspends its computation. Neither alone
+creates CPU parallelism.
+
+Native `AbortSignal.throwIfAborted()` and JS currently disagree (§19). Observing a flag/reason does
+not certify that method or automatically abort another API: forward cancellation where supported
+and handle that API's failure. A spawn timeout is not preemption; cancellation/join can outlast
+the deadline. Native timed submission uses the fused `await spawn(fn, { timeout: milliseconds })`
+form; do not assume the same option works on a separately stored handle. JS `spawn` scheduling
+is not a native worker thread.
+
+Actors can initialize private state in a typed constructor and expose their identity as `.pid`:
+
+```ms
+import { ExitReason, stop, nonisolated } from "std/actor";
+actor Worker {
+	@nonisolated readonly version: int32 = 1;
+	private count: int32;
+	constructor(count: int32) { this.count = count; }
+	read(): int32 { return this.count; }
+}
+const worker = new Worker(7);
+console.log(await worker.read(), worker.version);
+stop(worker.pid, ExitReason.Normal);
+```
+
+This lifecycle sample is native. `std/actor` supplies `stop`, `link`/`unlink`, `trapExits`,
+`monitor`/`demonitor`, `setIdleTimeout`, `registerName`/`whereis`/`unregister`. Monitoring death
+notification differs from linked failure propagation. A missing registered name returns PID 0;
+a PID is identity, not permission to read state. Define who stops children and owns queued work.
+`onTerminate`, `onExit`, `onDown`, `onIdle` are lifecycle boundaries, not ordinary value destructors;
+forced termination is not a guarantee that every cleanup hook ran. A stop request is not a
+synchronous acknowledgment that every external callback/resource has gone away.
+
+JS lifecycle links/monitors/traps/idle APIs are partly no-ops and exit-reason names differ; do not
+infer native lifecycle semantics from simple CALL output parity. Import `nonisolated` from
+`std/actor` to mark a field for direct external reads without a message/await (`version` above).
+Reserve that exposure for immutable data: readonly does not deeply freeze referenced contents,
+and the annotation is not proof of safe arbitrary sharing. Keep mutable state behind messages.
+`std/actor/supervisor` has restart strategies/child specifications/introspection, but the checked
+native import fails inside its implementation (§19), so it is not a green supervision recipe.
 
 ## 10. Use C directly; make the boundary explicit
 
@@ -457,6 +786,30 @@ it does not adapt arbitrary pointer/count ABIs or authorize retaining a borrowed
 keeps one. Copying a Handle does not create another retained count. Wrap C status-plus-output
 APIs in checked `Result` APIs at the application boundary.
 
+### ABI and retained callbacks
+
+| Boundary | Required discipline |
+|---|---|
+| Header import / `extern` function, variable or constant | Match C names, types, calling convention and linkage. Extern binding is not a native implementation. |
+| Opaque/header-owned `extern struct ... from ...` | C owns the layout; a declared subset of fields does not define its size/order. Do not guess packing, bitfields or alignment. |
+| Fixed arrays / array parameters | Distinguish inline storage from a decayed pointer; include the API's actual length type. |
+| `@exportName` | Stable symbol on an eligible nongeneric module-level function with a body and C-compatible signature. |
+| Callback plus context pointer | Keep callback code and context valid until C unregisters/releases them. Capturing closures are not universal C function pointers. |
+| `Handle<T>` | Explicit managed retention: `retain` adds a count, `borrow` does not; `at` reconstructs a wrapper, `value` reads it, `take` consumes the hand-off. Copying the wrapper does not retain. |
+
+Balance handle counts manually; do not release again after ownership-taking `take`. Never let C
+retain a temporary cstring, stack address, span or unretained object. Use real writable storage
+for C output and convert back under its length/terminator contract, not a managed-string cast.
+
+Unlike ordinary array-packed rest parameters, an extern rest tail passes each argument individually
+to C. Match C's promoted argument types and the callee's format/count contract, including explicit
+cstring input where required. An `unknown[]` rest spelling is not a universal boxed C ABI.
+
+Aggregate arguments through C variadics are not portable across supported toolchains/ABIs.
+Prefer a typed fixed signature or pointer/count interface, especially for structs containing
+pointers. `sizeof` of a header-owned type uses its C layout, not the subset written in MetaScript.
+One successful host build does not certify callbacks, layouts or another platform's ABI.
+
 ## 11. Reuse types, extend behavior and specialize work
 
 Use generics instead of copied type-specific algorithms; ownership still follows the actual `T`.
@@ -468,11 +821,134 @@ Use the extension receiver modes above. Export extensions that callers in anothe
 and import their names as well as the type. For a shared interface's
 callback contract, a function-typed field is explicit: `onChange: (value: int32) => void`.
 
-Convention protocols are ordinary extensions with special names. Define `toString` for the type's
-human-readable form, `toItems` for iteration, and named `as<Type>` conversions where meaningful.
-Prefer explicit calls when conversion or formatting matters. A protocol can still allocate or
-return shared data: inspect its implementation, do not assume the spelling makes it zero-cost.
-Do not use runtime reflection or a macro where a field, typed function or generic says the same thing.
+### Type-level computation
+
+These operations compute types, not runtime schema validators. Name intermediate aliases rather
+than exposing a clever type expression whose diagnostics nobody can understand.
+
+| Surface | Use and boundary |
+|---|---|
+| Generic constraints/defaults | State required operations; do not infer application of function type-parameter defaults from parsing alone (§19). |
+| Literal/union/intersection types | Real alternatives or combined contracts, not storage-repairing casts. |
+| `keyof T`, `T[K]` | Derive property names and their corresponding types from the same shape. |
+| Mapped types | Transform a finite key set with supported optional/readonly modifiers; not every TS extension is present. |
+| `T extends U ? A : B`, `infer` | Select/extract a type from an assignability pattern; `infer` belongs inside the pattern. |
+| `Partial`, `Required`, `Pick`, `Omit` | Deliberate structural input/output shapes, not partly initialized native owners. |
+| `Exclude`, `Extract` | Filter union members, not runtime values. |
+| `Record<K,V>` | Literal keys can form a finite record; an open string domain uses map storage, not arbitrary JS properties. |
+| `Readonly` | Restrict writes; do not infer a clone, ownership transfer or immutable foreign resource. |
+| Type-position `typeof` | Ordinary queries accept namespace imports, not arbitrary local values; runtime `typeof` is different. |
+
+```ms
+interface Point { x: int32; label: string; }
+type Element<T> = T extends Array<infer E> ? E : T;
+type Flags<T> = { [K in keyof T]: boolean };
+const flags: Flags<Point> = { x: true, label: false };
+const n: Element<int32[]> = 3;
+console.log(flags.x, n);
+
+type Task = { kind: "read"; key: string } | { kind: "write"; key: string; value: int32 };
+function weight(task: Task): int32 {
+	if (task.kind === "write") { return task.value; }
+	return 0;
+}
+console.log(weight({ kind: "write", key: "x", value: 7 }));
+```
+
+A user-defined predicate must perform the actual check, not hide an assertion. Class `instanceof`
+is useful at an `unknown` boundary; an annotation does not prove arbitrary structural fields.
+Assertion-function narrowing has a separate native limitation (§19).
+
+```ms
+class Message { text: string = "hello"; }
+function isMessage(value: unknown): value is Message { return value instanceof Message; }
+const value: unknown = new Message();
+if (isMessage(value)) { console.log(value.text); }
+```
+
+## 12. Protocols are explicit conventions
+
+A protocol is an ordinary operation selected at a particular use site, not a registry, new
+interface declaration or universal dynamic dispatch. Export/import the providing extension.
+Keep protocol reads as unsurprising as the syntax they replace; bodies can still allocate,
+convert, mutate shared data or fail.
+
+| Convention | Use site and author rule |
+|---|---|
+| `toString` | Formatting in supported concatenation/templates; use explicit formatting at boundaries, not an assumed wire encoder or every console/String site. |
+| `hash` and `==` | Native collection-key hashing/equality. Equal keys must hash alike; do not mutate key semantics while stored. There is no implicit `equals`/`hashCode` protocol. |
+| `toItems` / `toPairs` | Element versus key/value traversal. Supply the required array/Iterator shape; returned views still need live owners. |
+| `getDynamicField` | Otherwise unknown dotted field reads. Deliberately gives up typo checking on opted-in types. |
+| `setDynamicField` | Otherwise unknown dotted writes. Define miss/write policy; known physical fields remain ordinary fields. |
+| `valueOf` | One fallback read-through when the original value does not fit. Already-valid identity/inference/generic operations retain the original object. |
+| Runtime `converter` | Deliberate one-step conversion to a required target type, not assertion, validation or overload scoring. |
+| `then` | Checked structural adoption at supported await/settlement sites (§9), not a custom awaitable annotation. |
+
+Dynamic field dispatch is dotted access, not universal bracket/length synthesis. Optional access,
+compound writes and chained writes do not all have ordinary field semantics. Native custom hash
+extensions do not make JS's separate collections custom-hash collections. Check the actual key
+contract before claiming cross-backend value-key parity.
+
+```ms
+interface Store { id: int32; fields: Map<string, int32>; }
+export function getDynamicField(this store: Store, key: string): int32 {
+	return store.fields.get(key) ?? 0;
+}
+export function setDynamicField(this store: Store, key: string, value: int32): void {
+	store.fields.set(key, value);
+}
+const store: Store = { id: 9, fields: new Map<string, int32>() };
+store.count = 7;
+console.log(store.count, store.id);
+
+interface Box { value: int32; }
+export converter boxToInt(box: Box): int32 { return box.value; }
+const box: Box = { value: 8 };
+const n: int32 = box;
+console.log(n);
+
+struct Cell { value: int32; }
+export function valueOf(this cell: Cell): int32 { return cell.value; }
+const cell: Cell = { value: 10 };
+const value: int32 = cell;
+const original = cell;
+console.log(value, original.value);
+```
+
+A runtime converter is module-level, nongeneric, has one nondefault parameter and an explicit
+return type. Its source or target belongs to its declaring module, and the converter must be
+visible at the use site. It does not chain, choose overloads or redefine ordinary truthiness;
+numeric/distinct casts retain their cast meaning. A `Node`-source converter instead runs at
+compile time (§13).
+
+`asString`, `asInt32`, `asBoolean` and similar names are ordinary explicit accessors. Historical
+`as<Type>` prose does not make every such method an implicit conversion. In particular, a parsed
+format value's accessor can default: a dynamic read plus a cast is not schema validation.
+
+### Generic protocols across modules
+
+A generic walker can call a concrete type's caller-visible extension. Export it and import the
+operations with the type. Put implementations beside their receiver type or the walker; this
+co-location is discipline, not globally enforced coherence. Generic-instance caching is not a
+guarantee that the same concrete type can mean different things in unrelated caller modules.
+
+`protocolLib.ms`:
+
+```ms
+export function readWith<T>(value: T): int32 { return value.protoRead(); }
+```
+
+`protocolMain.ms`:
+
+```ms
+import { readWith } from "./protocolLib";
+struct Reading { n: int32; }
+export function protoRead(this value: Reading): int32 { return value.n; }
+const value: Reading = { n: 7 };
+console.log(readWith(value));
+```
+
+## 13. Compile-time code, macros and JSX
 
 Use `@comptime` for genuine constants and tables, `when` for compile-time selection, and macros
 only when typed functions cannot express the required code generation:
@@ -502,7 +978,136 @@ be compile-time values. Compile-time I/O is a build input, not free runtime work
 `macro`/`quote` for AST generation and are invoked as ordinary bare calls; keep generation local,
 typed and necessary. Use [LANG.md](LANG.md#conditional-compilation) for the exact grammar.
 
-## 12. Validate data at the boundary
+### Choose the smallest compile-time tool
+
+| Tool | Appropriate job |
+|---|---|
+| `when` / `else when` | Compile-time target/feature selection, not a runtime condition. |
+| `@comptime` expression/block | Build-time evaluation; a statement block leaves no runtime statement. |
+| `@comptime function` | Evaluate a helper whose inputs are compile-time values; arbitrary runtime APIs are not VM APIs. |
+| `macro name(node: Node): Node` | Inspect/generate caller AST, not evaluated runtime arguments. Invoke with a bare call, not `@name(...)`. |
+| Typed macro argument | Request checked syntax/type information; early declaration-generation inputs may be untyped. |
+| `quote { ... }`, `${node}` | Construct/splice AST, not text pretending to be syntax. |
+| `converter name(node: Node): Target` | Compile-time expansion at a supported expected-type boundary, rechecked against runtime `Target`. |
+| Statement macro / `SpliceMany` | Generate declarations/sibling statements; do not assume recursive flattening of nested splices. |
+| Decorator | Transform a supported declaration or preserve field metadata; not arbitrary runtime annotation execution. |
+| `@emit`, native directives | Explicit backend escape hatches; own their generated code, ABI and lifetime obligations. |
+| `@inline`, `@noinline`, `@computedGoto` | Specialized native code-generation hints, not portability, lifetime or speed guarantees. |
+
+Import public APIs from `std/meta`. Macro engine syntax uses flat fields such as `node.jsxTag`;
+ordinary runtime Node construction has the actual tagged Node shape. Check kinds before reading
+kind-specific fields. Preserve useful source locations. Guard nullable query results and negative
+unavailable sizes/offsets before using them as layouts or allocation sizes.
+
+| API family | Purpose |
+|---|---|
+| `Node`, `NodeKind`, `createNode` / `createNodeAt` | Construct/inspect actual AST shapes; compiler-wire macro literals are not a universal runtime constructor shape. |
+| `bindSym`, `getImpl`, `resolveType` | Refer to a real declaration/type instead of inventing an identifier spelling. |
+| `getType`, `getTypeImpl`, `typeKind`, `sameType`, `symKind` | Inspect checked semantics; syntax, aliases and resolved representation are different views. |
+| `childCount` / `childAt`, literal-value helpers | Traverse/query nodes from reusable macro helpers without assuming flat-wire member access everywhere. |
+| `getSize`, `getAlign`, `getOffset`, `getTypeArg` | Inspect known target layout/current instantiation, not the physical layout of host JS objects. |
+| `define`, `warning`, `error` | Read build definitions and diagnose the offending node. |
+| `expansionFile`, `readFile` | Build-time source/resources; resolve paths deliberately instead of assuming cwd is the caller's directory. |
+
+Quoted local declarations receive fresh names; handwritten identifier records do not inherit that
+guarantee. Keep generated work visible and inspect expansions when the abstraction becomes harder
+to debug than its output. Macro libraries are trusted build-time code; unexported evaluator
+internals are not application APIs.
+
+JSX is AST syntax (elements, attributes, children, fragments), not a built-in renderer. Its chosen
+macro/converter/runtime defines components, props, spread and whitespace semantics. A native
+macro can explicitly consume JSX without any browser/DOM runtime:
+
+```ms
+import { Node, NodeKind } from "std/meta";
+macro addOne(value: Node): Node { return quote { ${value} + 1 }; }
+macro tag(node: Node): Node {
+	return {
+		kind: NodeKind.StringLiteral,
+		line: node.line,
+		column: node.column,
+		value: node.jsxTag,
+	};
+}
+console.log(addOne(3), tag(<Panel enabled={true}/>));
+```
+
+Decorators execute at compilation, but their target/result contracts differ:
+
+| Position | Contract |
+|---|---|
+| Class, method, getter, setter | Receive declaration AST plus `DecoratorContext`; return a compatible replacement or nothing. |
+| Class field | May return `(initial: Node) => Node` to transform initializer syntax, not its runtime value. |
+| Auto-accessor (`accessor x: T = init`) | Receive `ClassAccessorDecoratorTarget` with getter/setter Nodes; return `ClassAccessorDecoratorResult` with optional replacement `get`, `set`, and/or initializer transformer `init`. |
+| Struct/interface data field | Retain metadata for an explicit consumer, as shown below; not a class-field runtime initializer hook. |
+
+`context.addInitializer(statement)` registers AST for supported runtime initialization positions;
+it does not immediately execute that statement as a decorator effect. `context.access` builds
+member-access syntax, not a general runtime Reflect API. `metadataSet`, `metadataHas` and
+`metadataGet` operate on `context.metadata`, including inherited compile-time metadata; this does
+not automatically create runtime annotations or serializer behavior. Factories/composition and
+member initializers have target restrictions; do not infer parameter decorators or unrestricted
+static/actor/extern support.
+
+```ms
+import { Node, DecoratorContext } from "std/meta";
+function unchanged(node: Node, context: DecoratorContext): Node { return node; }
+@unchanged
+class Decorated { n: int32 = 7; }
+console.log(new Decorated().n);
+```
+
+An auto-accessor has hidden storage plus a getter/setter. This initializer transformer doubles
+its initial value; compound assignment then uses the generated accessors (`7`):
+
+```ms
+import {
+	Node,
+	ClassAccessorDecoratorTarget,
+	ClassAccessorDecoratorContext,
+	ClassAccessorDecoratorResult,
+} from "std/meta";
+macro doubledAccessor(
+	value: ClassAccessorDecoratorTarget,
+	context: ClassAccessorDecoratorContext,
+): ClassAccessorDecoratorResult {
+	return { init: (initial: Node): Node => quote { ${initial} * 2 } };
+}
+class Counter {
+	@doubledAccessor accessor count: int32 = 3;
+}
+const counter = new Counter();
+counter.count += 1;
+console.log(counter.count);
+```
+
+Data-field decorators can instead preserve metadata. Their arguments are unevaluated syntax,
+not runtime calls or automatic validation. A consumer must actually interpret the marker:
+
+```ms
+import { Node, NodeKind, bindSym, getImpl, error } from "std/meta";
+function marker(): void { }
+struct Payload { @marker("wire") value: int32; }
+macro firstField(node: Node): Node {
+	const declaration = getImpl(bindSym("Payload"));
+	if (declaration == null) { error("Payload declaration required", node); }
+	const field = declaration.interfaceFields[0];
+	const annotation = declaration.interfaceFieldDecorators[0][0].macroName;
+	return {
+		kind: NodeKind.StringLiteral,
+		line: node.line,
+		column: node.column,
+		value: field + ":" + annotation,
+	};
+}
+console.log(firstField(Payload));
+```
+
+This inspects the known `Payload` (`value:marker`). A reusable macro must additionally validate
+declaration kind, field count and metadata shape before indexing these arrays. Merely writing a
+serializer-looking marker does not give an existing codec that feature.
+
+## 14. Validate data at the boundary
 
 Keep untrusted JSON, CLI input, network bytes and C outputs outside trusted domain types until
 both shape and business rules are checked. `JSON.parse<T>` returns a Result; it is a decoder,
@@ -540,7 +1145,184 @@ store, and a C API's status before reading its output. Static types do not authe
 retain a native object, or prove that a buffer is still alive. A failed invariant names the case;
 it does not silently default, clamp untrusted data or return a partly initialized success value.
 
-## 13. Tests, measurement and delivery
+### Serialization is a format contract, not an assertion
+
+Typed JSON is not a complete application schema validator. Still validate bounds, discriminants,
+presence and cross-field rules before constructing a domain value. Optional omission, nullable
+normalization and unknown-field policy belong to the wire contract.
+
+`JSON.stringify` omits an absent/null optional `field?`, but emits null for an unmarked `T | null`
+field. Enums encode by member name in the checked example. Typed decode can normalize a missing
+nullable field to null: the checked required `nul: string | null` accepted explicit null and an
+absent key. Validate presence explicitly when it matters; a nullable result slot does not prove it.
+Wide unsigned/bigint values need an exact chosen wire representation, not an assumed lossless
+passage through a floating-point JSON number.
+
+| Surface | Contract |
+|---|---|
+| `JSON.parse<T>`, `JSON.stringify` | Typed codec for supported shapes; handle Result failure and perform domain validation. Nested/generic/union shapes still need representative consumer tests. |
+| `JsonValue` / `std/serialize/json` | Dynamic tree access. Accessor/converter defaults do not prove the original field's kind. |
+| `std/serialize/cbor` | Binary codec, value tree and typed helpers. Format decoding success is not strict validation of every target field. |
+| `UntypedTree<V, Input>` | Shared exported capability for a format's `parseValue`, not every capability in the serialization design. |
+
+A CBOR round trip from an already trusted typed value:
+
+```ms
+import { cborEncode, decode, cborValueToStruct } from "std/serialize/cbor";
+interface Wire { n: int32; }
+const source: Wire = { n: 7 };
+const decoded = decode(cborEncode(source));
+if (!decoded.ok) { throw new Error(decoded.error); }
+const result: Wire = cborValueToStruct(decoded.value, null as Wire | null);
+console.log(result.n);
+```
+
+Do not generalize this to strict decoding of untrusted objects: conversion helpers can default
+fields, so validate the tree/schema before trusting the conversion. Planned multi-format codecs,
+shared typed serializer/deserializer, streaming/transcoding and rename/skip/default override
+systems do not follow from the existing generic metadata mechanism. Type-level derive registration
+was rejected for this design; do not add ceremony the current call-site type walker does not need.
+
+## 15. Proxy and reflection
+
+Prefer an ordinary record/class or an explicit protocol. Use `Proxy<T, H>` when interception itself
+is the API: typed traps receive the target/key and `Reflect` performs the ordinary operation.
+
+```ms
+interface Value { n: int32; }
+class Handler {
+	get<K extends keyof Value>(value: Value, key: K): Value[K] { return Reflect.get(value, key); }
+}
+const value: Value = { n: 1 };
+const proxy = new Proxy(value, new Handler());
+proxy.n += 2;
+console.log(value.n, proxy.n);
+```
+
+The supported traps are `get`, `set`, `has`, `deleteProperty`; missing traps fall back to target
+behavior and a false write/delete result fails. Records, maps and dense arrays have different
+key/write/delete/length policies. Arrays do not gain holes, arbitrary past-length writes or
+length growth through a proxy. Do not infer prototype/descriptor/callable/ownKeys traps or a
+security sandbox. `proxyTarget`/`proxyHandler` expose the underlying parts deliberately.
+
+Compile-time AST reflection, Proxy interception and C layout queries solve different problems;
+none is an arbitrary runtime cast or a universal dynamic object model.
+
+## 16. Modules, builds and targets
+
+### Imports and packages
+
+Named imports/re-exports keep APIs explicit. Namespace imports group an API; aliases resolve name
+clashes; side-effect imports request initialization. Type-only use carries declarations for
+checking, not value initialization; default exports and `import type` are supported. Imported
+bindings/namespaces are not writable copies. Cycles do not authorize reading a value
+before initialization. Prefer extensionless imports; target variants include `.cms`, `.jms`,
+`.rms`, `.wms` over the portable `.ms`, with target-specific resolution rules.
+
+Dynamic `import()` takes a statically resolvable literal path and returns a promise of the module
+namespace, not an arbitrary-path runtime loader. Initialization is once. These related files
+printed `init` once then `3 3` on native, bundled JS and split JS:
+
+`importLib.ms`:
+
+```ms
+console.log("init");
+export const n: int32 = 3;
+```
+
+`importMain.ms`:
+
+```ms
+const a = await import("./importLib");
+const b = await import("./importLib");
+console.log(a.n, b.n);
+```
+
+Dynamic import has target/host restrictions, including bare/Solana and library output; do not
+infer network code download or universal plugin loading from its spelling.
+
+A package's `build.ms` is declarative configuration parsed by the compiler, not an arbitrary
+configuration program. Nearest configuration establishes the project; CLI settings override it.
+A minimal related pair:
+
+`build.ms`:
+
+```ms
+const config = {
+	entry: "./configured.ms",
+	defines: { coverageExample: true },
+	fmt: { printWidth: 100, useTabs: true },
+};
+export default config;
+```
+
+`configured.ms`:
+
+```ms
+when (coverageExample) { console.log("configured"); }
+```
+
+`msc run` and `msc run --target=js` in that directory printed `configured`. Other loader-supported
+settings include entry/output, build target/toolchain, `cc`, `deps`, fmt/LSP options,
+`globalImports`, and named `modulePass` transforms. The public configuration type and old prose
+may lag loader fields; do not assume arbitrary root/alias/search-path options work.
+A modulePass is a build-wide macro transform with an explicit AST contract, not an import resolver;
+it must not rewrite import structure. Additive global imports do not override local/explicit names.
+
+Use `deps: { name: "file:../lib" }` for a deliberate sibling dependency; import package subpaths.
+Use `msc add`/`install`/`remove` and review lock state for registry/git dependencies. Registry
+versions are not general semver ranges. `package.bin`/`msc x` expose package tools; publishing is
+a separate action from checking/testing. Installing a package is not permission to execute
+unreviewed code; macros/plugins/build actions are trusted-code boundaries.
+
+### Select a consumer, not just an extension
+
+| Target/workflow | Author obligation |
+|---|---|
+| Native C (`msc run` / `build`) | Runtime ownership, C toolchain/linkage and platform libraries. `build` produces a native artifact without running it; add `--emit=c` to stop after C emission, before compile/link. |
+| JS (`--target=js`, optional `--split`) | Compatible JS host; split emits ES modules. No implied native hooks, layouts, C linkage or worker-thread semantics. |
+| VM (`--target=raiser`) | Evaluator-supported APIs/extern bridges, not native/JS parity. Unbridged runtime calls are not valid merely because parsing succeeded. |
+| `--app=lib` / `staticlib` | Stable exported ABI and host init/cleanup. Initialize the entry module/dependencies, not indiscriminately program-wide `MsMain`; do not depend on mangled internal names as a public ABI. |
+| Bare/manual | Explicit host/allocation/runtime boundary. Removing automatic RC does not remove cleanup obligations or provide a new allocator API. |
+| WASM / Emscripten | Distinct `--os=wasm` / `--os=emcc` toolchain/host paths. Mixed JS/WASM placement/ownership and `@wasm()` are design, not these target flags. |
+| HCR (`--hcr`, `std/hcr`) | Explicit reload boundary and compatible state/resources. Globals persist; a changed initializer is not migration. Restart-required/rejected reloads are real outcomes. |
+| Cross-compilation / mobile / UI hosts | Actual SDK, ABI, libraries and host lifecycle; a target name is not app certification. |
+| Erlang | Postponed, not an alternative supported recipe. |
+
+For HCR, `reload`/`lastReload`/`step` and `@beforeReload`/`@afterReload` delimit application work;
+quiesce external callbacks/jobs or keep their resources under stable host ownership. Without HCR,
+`step` invokes its body and reload reports NoChange. These are source-audited boundaries, not a
+fresh HCR/platform certification. Optimization/GC flags never repair invalid code; check the same
+contracts under intended release settings and benchmark only an optimized executable.
+
+## 17. Know the library boundary
+
+Use an existing standard module before building an application substitute. The prelude supplies
+core types/common operations; explicit imports below inventory public families, not a claim that
+every exported operation works on every backend.
+
+| Family | Prefer it for |
+|---|---|
+| Prelude scalars, strings, Array/ArrayLike, fixed/typed arrays, Vec, Span, Map/Set, BitSet | Storage and iteration in §§3–7, chosen by ownership, shape and key semantics. |
+| Prelude Result/errors, Promise/system/timers/abort | Explicit failure/completion contracts rather than an application-local future framework. |
+| Prelude JSON/JsonValue, Buffer, BigInt, Math, Date, performance, console | Values, bytes, time and diagnostics; clocks/formatting are not security/determinism guarantees. Native Buffer's string backing does not authorize text-index APIs for binary offsets. |
+| Prelude fetch/WebSocket | Supported-host network APIs; transport, protocol/status, cancellation and authorization are separate checks. |
+| Prelude Proxy/Reflect | Deliberately intercepted object operations (§15), not universal reflection. |
+| `std/io`, `std/fs`, `std/fs/path`, `std/os`, `std/process` | Streams, files/paths/globs/watch, system information, argv/env/cwd/children. Shell exec strings are not sanitized argv. |
+| `std/net`, `std/http`, `std/https` | Sockets, protocol parsing/client/server/TLS integration. Check status and explicitly own connection cleanup. |
+| `std/hash`, `std/crypto` | Collection hashing versus cryptographic hashing/randomness/signatures/ciphers. An exported algorithm or Math.random is not an authentication recipe. |
+| `std/compress`, `std/archive/tar` | Compression/archives; bound decompressed size and validate extracted paths. Native dependencies do not imply JS/browser support. |
+| `std/serialize/json`, `std/serialize/cbor` | Typed or dynamic format data with the schema/domain boundary in §14. |
+| `std/meta`, `std/typetraits`, `std/build` | AST/macros/decorators/JSX helpers, compile-time traits and project configuration. |
+| `std/actor`, `std/ffi`, `std/runtime/selector`, `std/hcr` | Explicit actor/native event/host/reload boundaries, including current limits. The selector is not a general reflection API. |
+| `std/surreal`, `std/toycodec`, `std/solana`, `std/arbitrum` | Database/domain libraries, a codec demonstration and chain-specific SDKs; not language primitives or an application security audit. |
+
+For explicit prelude imports use actual paths such as `std/core/array` or `std/core/string`, not
+historical abbreviated paths. Solana's account/PDA/signing/CPI/IDL/simulator and Arbitrum's
+calldata/storage/word/address APIs still require their domain's explicit byte/proof/error contracts.
+This is a source inventory, not execution certification of every library or on-chain program.
+
+## 18. Tests, measurement and delivery
 
 Keep `test "invariant" { ... }` blocks at module scope beside their code, with the `assert` keyword.
 Test one behavior per case: success, failure, empty/boundary input and an ownership-sensitive
@@ -569,6 +1351,41 @@ Before considering a module finished:
 - Tests cover boundaries and failure paths; supported backends keep the intended results.
 - The code is formatted, named and organized for its reader, without speculative machinery.
 
+Use `assert condition, "context"` for a useful failure. `msc fmt` formats source; review its diff
+rather than treating formatting as validation. `dump-tokens`, `dump-ast` and `pipeline` inspect
+compiler representations, not wire schemas. Use `msc lsp` for editor integration; a language-server
+roadmap is not a guarantee that every rename/refactoring/completion feature works. Diagnostics,
+debug info and timing tools answer different questions from sanitizers and resource audits.
+
+## 19. Current limits and design boundaries
+
+Judge a capability by code plus a focused consumer check, not a historical SHIPPED label or an
+accepted signature. These are limits of the checked baseline, not desired future semantics.
+
+| Surface | Current disposition |
+|---|---|
+| `super(...)` / `super.method()` | Constructor chaining/override example runs; tested `super.read()` fails on C and JS. |
+| `abstract` | An empty abstract class could still be constructed on C and JS; do not rely on abstractness enforcement. |
+| Predicate / assertion function | Check boolean predicates separately. The tested `asserts value is Message` followed by a read emitted an invalid native void-pointer member read; JS ran. |
+| Type-position `typeof local` | Refused with the namespace-import-only diagnostic; special static receiver syntax is not a general type query. |
+| Template-literal types | The tested literal-union template type was rejected. Runtime string templates are a different feature. |
+| Additional familiar TS surfaces | `DeepReadonly` did not resolve as a prelude type; the checked regex literal's `.test()` call was refused on C/JS. An AST node or familiar name is not an implemented runtime/type API. |
+| Function generic defaults / const generics | The checked `zero<T = int32>()` call could not infer T. Use explicit supported type arguments/specialization; do not infer const generics from generic syntax. |
+| `allSettled` | Declared `T[]` disagrees with native payload. Reading the checked result aborted; JS returned an array. |
+| `throwIfAborted` | Native aborted signal threw AbortError; JS stopped with Error: unreachable. Flag/reason behavior does not certify this method. |
+| Supervisor | Checked native import fails on Promise<number> comparisons/indexing inside the implementation. Restart design/API is not a green recipe. |
+| Cross-caller protocols | Caller-visible extensions work for instantiation, not guaranteed independent cached meanings for the same concrete type. Keep implementations coherent/type-local. |
+| Lifetime/cross-thread law | §§6 and 9 are obligations, not proof that all retained addresses, thread affinity, shutdown races or unsafe closure shapes are diagnosed. |
+| Proposed ownership syntax | `lent`, WeakRef and author acyclic/thread-bound annotations are not substitutes for the current documented model. Do not invent syntax from designs. |
+| Serialization ecosystem | JSON/CBOR and UntypedTree do not establish planned common typed codecs, per-format overrides, rename/skip/default, streaming/transcoding or additional formats. |
+| Other proposed extensions | Concepts/where constraints, custom literal suffixes, multimethod vtables, `.parallel()`, custom awaitable annotations and mixed-JS/WASM ownership are not current recipes merely because designs survive. |
+| Full target parity | Native, JS, evaluator, bare/WASM and HCR have different consumers/limits; one target's success is not all targets' support. |
+
+Coverage spans functions/classes/advanced types (§§2–5, 8, 11), ownership/views/hooks/FFI (§§5–6, 10),
+collections/iterators/protocols (§§7, 12), async/actors (§9), AST/decorators/JSX (§13), formats and
+interception (§§14–15), and packages/targets/std/tooling (§§16–18). Historical/rejected designs are
+not promoted to available authoring APIs.
+
 ## Verification scope
 
 Checked on macOS arm64, installed `msc 0.3.4`, binary/support BUILD `6b8655024`, Node `24.1.0`;
@@ -589,14 +1406,35 @@ Native probes printed `after custom 0` / `after automatic 1` for custom-hook fie
 [hook replacement](../src/test/handoff/userDestructor.ms) and
 [formal ownership](../src/test/corpus/programs/parameterHookDemand/main.ms) retain the contracts.
 
-The standalone revision additionally exercises modules/test entry, distinct IDs, Unicode index
+The previous standalone revision exercised modules/test entry, distinct IDs, Unicode index
 spaces, Map/Set iteration, match/BitSet, trait specialization, async entry, moved/Locked work,
-Handle/defer and JSON validation. All 16 MS code blocks match checked runnable sources: 14 have
-C/JS results, two are native-only; the original six retain unchanged verified code. The module
+Handle/defer and JSON validation. Its 16 MS blocks match checked runnable sources: 14 have C/JS
+results, two are native-only; the original six retain unchanged verified code. The module
 example passes `check` and `test` (302 tests including imported std tests). JSON validation returns
 `true false false false false` on C, JS and C `--danger`, including integers beyond int32 and int64.
 Unknown scalar/array/map admissions are refused on C/JS; class narrowing and LIFO defer order run
 on both. The companion-header C example prints `42`.
 
+The feature inventory revision maps all 39 MS blocks to checked entry modules or named fixtures:
+36 have C/JS evidence and three are native-only. New outputs include `4 7 6` (parameter forms),
+`7 6` (override/getter), `5` / `12n 255` (operators/bigint/shift), two `5`s (iterator consumers),
+`7 9` / `8` / `10 10` (dynamic/converter/valueOf), `7` (cross-module generic), `4 Panel` (macro/JSX),
+`value:marker` (field metadata), `7` (auto-accessor), `3 3` (Proxy), `4` / `7` / `true first`
+(Promise/thenable/abort), `7` (CBOR) and `configured` (manifest, C/JS). Native lifecycle/direct
+immutable-field access printed `7 1`; native borrowed CALL/moved SEND printed `7` twice and fused
+timed spawn printed `7`. Brand/tuple probes printed `a a`, `1 2`, `1 a`; utility probes printed
+`3 4 5 6 true 7` / `a b`. Quote hygiene preserved caller values (`7 8`). A comptime statement
+printed `building` during compilation and only `running` at runtime.
+
+The existing `accessorFieldDesugars` consumer ran on C/JS with
+`accessor:x | 1 3 13 ab! | 6 dirty=1 | 6.5 dirty=2`; `typeOnlyImportInit` ran with
+`inits=[side,mixed,made] sum=26 k=none`. Repeated dynamic imports initialized once on C, JS bundle
+and JS split. `build --target=c` produced an executable that printed `5` when run separately;
+`build --emit=c` emitted three C modules without compiling/linking. A simple VM entry printed `5`;
+that does not certify all evaluator APIs. The refusal,
+abstract-construction, native allSettled abort, JS abort-method failure and supervisor diagnostics
+in §19 were separately observed, not counted as successful recipes. Source-audited API/target
+inventory is distinguished from these executed examples; not every listed API/shape was run.
+
 This is syntax/behavior evidence, not a benchmark, exhaustive safety audit, sanitizer run or
-guarantee for Windows, Linux, browser, freestanding or on-chain.
+guarantee for Windows, Linux, browser, freestanding, HCR or on-chain.
