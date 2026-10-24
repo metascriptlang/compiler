@@ -1,12 +1,8 @@
 // Module Graph — core data structures for compilation
 //
 // Arrays passed by pointer — bare T[] types (wrappers removed).
-//
-// IMPORTANT: No imports from ast/ or checker/ — DRC lifecycle mangling bug generates
-// Node_destroy with wrong module path when Node appears as a field type here.
-// AST, SymbolTable, and Symbol[] are managed separately by the loader/checker via
-// parallel arrays indexed by module position in the graph.
 
+import { Node } from "../ast/node";
 
 // ===== Module State Machine =====
 
@@ -48,12 +44,12 @@ export interface ImportEntry {
 }
 
 // ===== Module =====
-// Lightweight — no ast/checker types. Complex data stored in parallel arrays.
 
 export class Module {
 	path: string;              // absolute file path (canonical key)
 	rawSource: string;         // source text as read; a C header's is its translation
 	source: string;            // source text the checker parses
+	program: Node | null;      // the loader's parse of `source`, until the check adopts it
 	state: ModuleState;        // loading state machine
 	exportNames: string[];     // names of exported symbols (for lookup)
 	imports: ImportEntry[];    // resolved import dependencies
@@ -106,6 +102,7 @@ export function createModule(path: string): Module {
 		path,
 		rawSource: "",
 		source: "",
+		program: null,
 		state: ModuleState.Unloaded,
 		exportNames: [],
 		imports: [],

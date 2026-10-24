@@ -91,6 +91,7 @@ import "./checkedReadErrors";
 import "./comptimeHostEffects";
 import "./comptimeMacroValues";
 import "./preludeBodyCompiledOnce";
+import "./moduleParsedOnce";
 import "./comptimeStatement";
 import "./comptimeValues";
 import "./declarationBoundaries";

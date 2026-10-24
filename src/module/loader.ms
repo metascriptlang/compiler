@@ -9,11 +9,6 @@
 //   - std/ library resolution against configurable stdPath
 //   - Multiple search paths for bare imports
 //   - Path alias rewriting
-//
-// NOTE: ASTs are NOT stored on Module (DRC lifecycle mangling bug prevents
-// storing Node on interfaces defined outside ast/node.ms). The loader parses
-// temporarily to extract import declarations, then discards the AST.
-// The checker re-parses Module.source for each pass.
 
 import {
 	Module, ModuleGraph, ModuleState, createModuleGraph, createModule, createImportEntry,
@@ -317,6 +312,19 @@ function createAndAddModule(graph: ModuleGraph, path: string): void {
 	pushImportStack(graph, path);
 }
 
+let _moduleParses: int32 = 0;
+
+export function moduleParseCount(): int32 {
+	return _moduleParses;
+}
+
+export function parseModuleSourceLenient(source: string): Result<Node, string> {
+	_moduleParses += 1;
+	const lr = lex(source);
+	if (!lr.ok) return Result.err(lr.error);
+	return callStateProgramParser(createState(lr.value));
+}
+
 // Load .ms source module — DRC-isolated (mod stays in this scope)
 function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProvider, config: ResolverConfig, useConfig: int32): boolean {
 	const mod = createModule(path);
@@ -340,6 +348,7 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 	mod.source = mod.rawSource;
 
 	// Parse with recovery — always get partial AST, errors in state.errors
+	_moduleParses += 1;
 	const lr = lex(mod.source);
 	if (!lr.ok) {
 		mod.errors.push(createModuleError(`Lex: ${lr.error}`, 0, 0, ErrorSeverity.Error));
@@ -361,6 +370,7 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 		return false;
 	}
 	const program = parseResult.value;
+	mod.program = program;
 	const pd = program.data as ProgramData;
 	for (const stmt of pd.programStmts) {
 		if (stmt.kind == NodeKind.ImportDecl) {

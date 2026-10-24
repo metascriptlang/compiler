@@ -60,7 +60,7 @@ import { openScope, ScopeKind } from "../../checker/symbol";
 import { ImportDeclData, ExportDeclData, ProgramData, ClassDeclData } from "../../ast/node";
 import { ModuleGraph, createModule, createModuleGraph, addModule, findModule, findModuleIndex, ImportEntry, createImportEntry } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
-import { headerModuleSource, createTaReadProvider, SourceProvider, MapEntry, createMapProvider, loadModuleGraph, collectImportCalls } from "../../module/loader";
+import { headerModuleSource, createTaReadProvider, SourceProvider, MapEntry, createMapProvider, loadModuleGraph, collectImportCalls, parseModuleSourceLenient } from "../../module/loader";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { resolveRuntimeDir } from "../../utils/path";
 import { errorCount as checkErrorCount, addError } from "../../checker/context";
@@ -514,16 +514,23 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 	const fileDur = getFileDurability(db.fileInput, fileId);
 	recordDurability(db.depStack, fileDur);
 
-	// Use lenient parse: LSP needs partial ASTs from incomplete code (e.g. "config.")
-	const parseResult = parseSourceLenient(source);
-	let program = null as unknown as Node;
-	if (parseResult.ok) {
-		program = parseResult.value;
-	}
+	const program = adoptLoaderParse(db, filePath, source);
 	db.trees.set(parseNodeKey(fileId), program);
 	const parseHash = taHashString(source) as number;
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, parseHash, true);
 	return program;
+}
+
+function adoptLoaderParse(db: TransAmDb, filePath: string, source: string): Node {
+	const graphMod = db.graph != null ? findModule(db.graph, filePath) : null;
+	if (graphMod != null && graphMod.program != null && graphMod.source == source) {
+		const parsed = graphMod.program!;
+		graphMod.program = null;
+		return parsed;
+	}
+	// Use lenient parse: LSP needs partial ASTs from incomplete code (e.g. "config.")
+	const parseResult = parseModuleSourceLenient(source);
+	return parseResult.ok ? parseResult.value : null as unknown as Node;
 }
 
 // ===== Cross-Module Export Registration =====
