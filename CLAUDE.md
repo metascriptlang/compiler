@@ -29,6 +29,9 @@ msc run --target=raiser src/test/guard/run.ms   # lifecycle guards (proven-red)
 
 MSCORPUS_ONLY=<exact,names> msc run src/test/corpus/run.ms   # exact subset; recipe + traps: docs/TESTING.md
 
+# Flow A/B: base vs ./msc, each pass, DRC counter and emitted-C cost as its own row; docs/BUILD-PERF.md "Measuring by flow"
+MSPERF_BASE=<old msc> MSPERF_PROGRAMS=711 nice -n 10 msc run src/test/perf/run.ms
+
 msc run src/index.ms                              # build + run natively
 msc build examples/actorSpawnBasic.ms --target=c  # compile to C only
 
