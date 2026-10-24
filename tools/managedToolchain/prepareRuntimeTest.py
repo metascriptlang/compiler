@@ -1039,6 +1039,15 @@ class ProofHelperTest(TempCase):
                                            ("longer", [b"/lib/ld-linux-aarch64.so.1x\0"], arm)):
             self.assertIn("interpreter is", pr.elfInterpreterProblem(self.elf(name, interpreters), target), msg=name)
 
+    def test_glibc_symbol_oracle_matches_the_consumer_without_loosening_the_limit(self):
+        with mock.patch.object(pe, "run", return_value=" U __libc_start_main@GLIBC_2.17\n U fputs@GLIBC_2.17\n"):
+            self.assertIsNone(pr.glibcSymbolProblem("nm", "elf", requiredSymbol="__libc_start_main"))
+            self.assertIn("printf", pr.glibcSymbolProblem("nm", "elf"))
+        with mock.patch.object(pe, "run", return_value=" U __libc_start_main@GLIBC_2.17\n U memcpy@GLIBC_2.34\n"):
+            self.assertIn("newer", pr.glibcSymbolProblem("nm", "elf", requiredSymbol="__libc_start_main"))
+        with mock.patch.object(pe, "run", return_value=" U fputs@GLIBC_2.17\n"):
+            self.assertIn("__libc_start_main", pr.glibcSymbolProblem("nm", "elf", requiredSymbol="__libc_start_main"))
+
     def test_glibc_version_limit(self):
         with mock.patch.object(pe, "run", return_value="  U printf@GLIBC_2.2.5\n  U memcpy@GLIBC_2.14\n"):
             self.assertIsNone(pr.glibcSymbolProblem("nm", "elf"))

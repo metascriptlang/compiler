@@ -750,12 +750,11 @@ def elfInterpreterProblem(path, target):
     return None
 
 
-def glibcSymbolProblem(nm, path, limit=(2, 31)):
-    """Every versioned glibc symbol the ELF needs is within limit, and printf is among them."""
+def glibcSymbolProblem(nm, path, limit=(2, 31), requiredSymbol="printf"):
     needed = [l.split()[-1] for l in pe.run([nm, "-D", path]).splitlines() if "@GLIBC_" in l]
     versions = [tuple(int(n) for n in re.search(r"@GLIBC_([\d.]+)", s).group(1).split(".")) for s in needed]
-    if not any(s.startswith("printf@") for s in needed):
-        return "no versioned printf in %s" % needed
+    if not any(s.startswith(requiredSymbol + "@") for s in needed):
+        return "no versioned %s in %s" % (requiredSymbol, needed)
     if any(v > limit for v in versions):
         return "needs a glibc newer than %s: %s" % (limit, needed)
     return None
