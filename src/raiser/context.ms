@@ -1,14 +1,4 @@
-// Raiser VM — Persistent execution context
-// Holds VM state across multiple module executions.
-//
-// Use case: compiler runs build.ms, keeps result, then runs macros
-// against the same context — build config visible to macro execution.
-//
-//   const ctx = createContext();
-//   load(ctx, buildModule);
-//   execute(ctx);                // build.ms runs, state persists
-//   load(ctx, macroModule);
-//   execute(ctx);                // macro sees build.ms results
+// Raiser VM — run context: the module to run, its settings, and the record of the last run
 
 import {
 	RaiserValue, raiserNil, raiserInt,
