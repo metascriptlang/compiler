@@ -130,8 +130,14 @@ LSP-only).
 
 Measured 2026-09-22, card `~/metascript/.inbox/compiler/2026-09-22-build-ms-declared-but-unwired.md`:
 
-- `resolve.alias` — extracted, passed to the resolver, and still `Cannot resolve module` for both
-  `"@lib": "./src/lib"` and `"lib": "./src/lib"`.
+- `resolve.alias` — wired for `msc build` and `msc check` only, and the value is read relative to
+  the importing file's directory, not the project root. Measured 2026-10-25 with `msc` v0.3.4
+  (`~/.metascript/BUILD` binary `6b8655024`), entry `src/main.ms`: `"@lib": "../lib"` resolves
+  to `<root>/lib` and `"./lib"` to `src/lib` under `msc build`; an alias used from
+  `src/deep/m.ms` with `"../lib"` resolved to `src/lib`; an absolute path resolves;
+  `"./src/lib"` stops with `Cannot resolve module` (also under the name `lib`). `msc run`, with a file or from `entry`, on C, `--target=js` and
+  `--target=raiser`, stops with `Cannot resolve module '@lib/util'` for every value above.
+  Not verified: Windows paths, an alias target outside the project.
 - `root` — declared in `std/build`'s `BuildConfig` as the base for non-relative imports, and read
   by nothing. Measured 2026-10-15 on a candidate built from `7e7c0dd02`: with `root: "src"` or
   `root: "."`, `import … from "lib/util"` and `from "src/lib/util"` both stop with `Cannot resolve
