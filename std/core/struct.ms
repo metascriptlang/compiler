@@ -1204,3 +1204,9 @@ export function toString<E>(this self: BitSet<E>): string {
 	}
 	return out + "}";
 }
+
+export function* concat<T>(this typeof Iterator, ...items: Iterator<T>[]): Iterator<T> {
+	for (const it of items) {
+		for (const x of it) yield x;
+	}
+}

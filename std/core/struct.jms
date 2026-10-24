@@ -150,3 +150,20 @@ export function msSetCard32(v: uint32): int32 {
 	}
 	return c;
 }
+
+export struct IteratorResult<T> {
+	value: T;
+	done: boolean;
+}
+
+@builtin("Iterator")
+export struct Iterator<T> {
+	next: () => IteratorResult<T>;
+	return: (() => IteratorResult<T>) | null;
+}
+
+export function* concat<T>(this typeof Iterator, ...items: Iterator<T>[]): Iterator<T> {
+	for (const it of items) {
+		for (const x of it) yield x;
+	}
+}

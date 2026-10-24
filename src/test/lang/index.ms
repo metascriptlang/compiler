@@ -84,6 +84,7 @@ import "./parameterHookDemand";
 import "./arrayText";
 import "./arrayIteration";
 import "./iteratorHelpers";
+import "./iteratorStatics";
 import "./sequentialTypeof";
 import "./cborNestedTypeIdentity";
 import "./structFieldDecorators";
