@@ -1,53 +1,17 @@
-// LSP Protocol — JSON-RPC framing + minimal JSON building/parsing
+// LSP Protocol — field probes over JSON text, relative import resolution, and the facade the
+// handlers import the rest of the wire vocabulary through (jsonEncode, jsonRpc, fileUri).
 //
-// Pure computation: JSON building, field extraction, message framing format.
-// No I/O — actual stdin/stdout handled by server.ms.
+// Pure computation. No I/O — actual stdin/stdout handled by server.ms.
 
 import { parseJson } from "std/serialize/json/parser";
-import { JsonKind, JsonValue, asInt64, asNumber, asString } from "std/serialize/json/types";
-import { getDynamicField } from "std/serialize/json/accessors";
-import { digitValue, parseIntPrefix } from "std/core/number/parse";
+import { JsonKind } from "std/serialize/json/types";
 import { isDigit } from "../../lexer/chars";
 
-
-// ===== JSON Building =====
-
-function unicodeEscape(code: int32): string {
-	const hex = code.toString(16);
-	return "\\u" + "0000".slice(0, 4 - hex.length) + hex;
-}
-
-export function lspJsonString(val: string): string {
-	const parts: string[] = ["\""];
-	let start = 0;
-	for (let i = 0; i < val.length; i++) {
-		const code = val.charCodeAt(i);
-		const escape = match (code) {
-			"\\".code => "\\\\",
-			"\"".code => "\\\"",
-			"\n".code => "\\n",
-			"\r".code => "\\r",
-			"\t".code => "\\t",
-			_ => code > 127 ? unicodeEscape(code) : "",
-		};
-		if (escape == "") continue;
-		if (start < i) parts.push(val.slice(start, i));
-		parts.push(escape);
-		start = i + 1;
-	}
-	if (start < val.length) parts.push(val.slice(start, val.length));
-	parts.push("\"");
-	return parts.join("");
-}
-
-export function lspJsonNumber(val: number): string {
-	return "" + val;
-}
-
-export function lspJsonBool(val: boolean): string {
-	if (val) return "true";
-	return "false";
-}
+export { lspJsonString, lspJsonNumber, lspJsonBool } from "./jsonEncode";
+export {
+	lspParseContentLength, lspFormatMessage, lspIdOf, lspResponse, lspRequest, lspNotification, lspErrorResponse,
+} from "./jsonRpc";
+export { lspUriToPath, lspPathToUri } from "./fileUri";
 
 // ===== JSON Field Extraction =====
 
@@ -198,134 +162,6 @@ export function lspGetArrayItems(arrayJson: string): string[] {
 	return items;
 }
 
-// ===== Content-Length Framing =====
-
-// Parse Content-Length from a header line. Returns -1 if not a Content-Length header.
-export function lspParseContentLength(headerLine: string): int32 {
-	const prefix = "Content-Length: ";
-	if (headerLine.byteLength <= prefix.byteLength) return -1;
-	if (headerLine.slice(0, prefix.byteLength) != prefix) return -1;
-	return parseIntPrefix(headerLine.slice(prefix.byteLength, headerLine.byteLength)) as int32;
-}
-
-// Format a JSON-RPC message with Content-Length header for writing.
-export function lspFormatMessage(json: string): string {
-	return "Content-Length: " + lspJsonNumber(json.byteLength) + "\r\n\r\n" + json;
-}
-
-// ===== JSON Response Builders =====
-
-export function lspIdOf(id: JsonValue): string {
-	return match (id.kind) {
-		JsonKind.Int => id.asInt64().toString(),
-		JsonKind.Number => lspJsonNumber(id.asNumber()),
-		JsonKind.String => lspJsonString(id.asString()),
-		_ => "",
-	};
-}
-
-// Build a JSON-RPC response: {"jsonrpc":"2.0","id":N,"result":{...}}
-export function lspResponse(id: string, resultJson: string): string {
-	return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":" + resultJson + "}";
-}
-
-export function lspRequest(id: string, method: string, paramsJson: string): string {
-	return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"method\":" + lspJsonString(method) + ",\"params\":" + paramsJson + "}";
-}
-
-// Build a JSON-RPC notification: {"jsonrpc":"2.0","method":"...","params":{...}}
-export function lspNotification(method: string, paramsJson: string): string {
-	return "{\"jsonrpc\":\"2.0\",\"method\":" + lspJsonString(method) + ",\"params\":" + paramsJson + "}";
-}
-
-// Build a JSON-RPC error response
-export function lspErrorResponse(id: string, code: int32, message: string): string {
-	return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + lspJsonNumber(code) + ",\"message\":" + lspJsonString(message) + "}}";
-}
-
-// ===== URI Conversion =====
-
-function escapedByte(s: string, at: int32): int32 {
-	if (at + 2 >= s.length || s.charAt(at) != "%") return -1;
-	const hi = digitValue(s.charCodeAt(at + 1));
-	const lo = digitValue(s.charCodeAt(at + 2));
-	return hi < 16 && lo < 16 ? hi * 16 + lo : -1;
-}
-
-// Percent-decoding. Real clients hand us escaped URIs: the VS Code plugin sends
-// `document.uri.toString()`, which escapes the Windows drive colon as `%3A` and
-// every space as `%20`. Left undecoded, the drive-letter check below never fires
-// and every path-keyed feature (project root, build.ms lookup) silently resolves
-// against a path that exists nowhere.
-//
-// Escapes are UTF-8 BYTES, so a non-ASCII character arrives as a run of them
-// (é = %C3%A9); decoding each byte through fromCodePoint would emit mojibake.
-// Continuation bytes are folded into one code point here.
-function lspPercentDecode(s: string): string {
-	let out = "";
-	let i = 0;
-	while (i < s.length) {
-		const b0 = escapedByte(s, i);
-		if (b0 < 0) {
-			out += s.charAt(i);
-			i++;
-			continue;
-		}
-		i += 3;
-		if (b0 < 0x80) {
-			out += fromCodePoint(b0);
-			continue;
-		}
-		const need = b0 >= 0xF0 ? 3 : b0 >= 0xE0 ? 2 : b0 >= 0xC0 ? 1 : 0;
-		if (need == 0) continue;
-		let cp = b0 - (need == 3 ? 0xF0 : need == 2 ? 0xE0 : 0xC0);
-		let ok = true;
-		for (let taken = 0; taken < need; taken++) {
-			const cb = escapedByte(s, i);
-			if (cb < 0x80 || cb >= 0xC0) { ok = false; break; }
-			cp = cp * 64 + (cb - 0x80);
-			i += 3;
-		}
-		if (ok) out += fromCodePoint(cp);
-	}
-	return out;
-}
-
-export function lspUriToPath(uri: string): string {
-	// "file:///Users/foo/bar.ms" → "/Users/foo/bar.ms"
-	// "file:///C:/Users/foo.ms" → "C:/Users/foo.ms" (drop leading slash before drive)
-	const prefix = "file://";
-	if (uri.byteLength > prefix.byteLength) {
-		if (uri.slice(0, prefix.byteLength) == prefix) {
-			const stripped = lspPercentDecode(uri.slice(prefix.byteLength, uri.byteLength));
-			// Windows: "/C:/..." → "C:/..." (RFC 8089 file URIs)
-			if (stripped.length >= 3 && stripped.charAt(0) == "/" && stripped.charAt(2) == ":") {
-				return stripped.slice(1, stripped.length);
-			}
-			return stripped;
-		}
-	}
-	return uri;
-}
-
-export function lspPathToUri(path: string): string {
-	const drive = path.length >= 2 && path.charAt(1) == ":" ? path.charAt(0).toLowerCase() : "";
-	if (drive != "" && "abcdefghijklmnopqrstuvwxyz".includes(drive)) return `file:///${drive}%3A${lspPathEscape(path.slice(2, path.length))}`;
-	return "file://" + lspPathEscape(path);
-}
-
-function lspPathEscape(path: string): string {
-	const hex = "0123456789ABCDEF";
-	let out = "";
-	for (let i = 0; i < path.byteLength; i++) {
-		const b = path.byteAt(i);
-		const kept = (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A)
-			|| b == "-".code || b == ".".code || b == "_".code || b == "~".code || b == "/".code;
-		out = kept ? out + fromCodePoint(b) : `${out}%${hex.charAt(b >> 4)}${hex.charAt(b & 15)}`;
-	}
-	return out;
-}
-
 // ===== Path Helpers =====
 
 export { dirname } from "std/fs/path";
@@ -363,46 +199,6 @@ export function lspResolveImport(basePath: string, importSpec: string): string {
 	// Default: append .ms
 	return result + ".ms";
 }
-
-// ===== Tests =====
-test "uri to path" { assert lspUriToPath("file:///Users/foo/bar.ms") == "/Users/foo/bar.ms"; }
-
-test "path to uri" { assert lspPathToUri("/a/b.ms") == "file:///a/b.ms"; }
-
-test "path to uri gives a windows drive as the escaped lower-case volume a client sends" {
-	assert lspPathToUri("C:/Users/foo/bar.ms") == "file:///c%3A/Users/foo/bar.ms";
-	assert lspPathToUri("d:/x.ms") == "file:///d%3A/x.ms";
-	assert lspUriToPath(lspPathToUri("C:/x/y.ms")) == "c:/x/y.ms";
-}
-
-test "path to uri escapes every byte of a segment outside the unreserved set" {
-	assert lspPathToUri("/My Docs/a#1?b.ms") == "file:///My%20Docs/a%231%3Fb.ms";
-	assert lspPathToUri("C:/a b/[x]@y.ms") == "file:///c%3A/a%20b/%5Bx%5D%40y.ms";
-	assert lspPathToUri("/Users/caf" + fromCodePoint(233) + "/a-b_c.~ms") == "file:///Users/caf%C3%A9/a-b_c.~ms";
-	const odd = "/q/a b#c%d/e.ms";
-	assert lspUriToPath(lspPathToUri(odd)) == odd;
-}
-
-test "non-file uri unchanged" { assert lspUriToPath("http://example.com") == "http://example.com"; }
-
-test "simple string" { assert lspJsonString("hello") == "\"hello\""; }
-
-test "escapes backslash" { assert lspJsonString("a\\b") == "\"a\\\\b\""; }
-
-test "escapes quote" { assert lspJsonString("a\"b") == "\"a\\\"b\""; }
-
-test "escapes newline" { assert lspJsonString("a\nb") == "\"a\\nb\""; }
-
-test "empty string" { assert lspJsonString("") == "\"\""; }
-
-test "number" {
-	assert lspJsonNumber(42) == "42";
-	assert lspJsonNumber(0) == "0";
-}
-
-test "bool true" { assert lspJsonBool(true) == "true"; }
-
-test "bool false" { assert lspJsonBool(false) == "false"; }
 
 test "extract method" {
 	const json = "{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":1}";
@@ -498,22 +294,6 @@ test "error response format" {
 	assert lspGetNumberField(e, "id") == 1;
 }
 
-test "parse content length" {
-	assert lspParseContentLength("Content-Length: 123") == 123;
-	assert lspParseContentLength("Content-Length: 0") == 0;
-}
-
-test "not content length" {
-	assert lspParseContentLength("Content-Type: json") == -1;
-	assert lspParseContentLength("") == -1;
-}
-
-test "format message" {
-	const msg = lspFormatMessage("{\"id\":1}");
-	// Should start with Content-Length header
-	assert msg.slice(0, 16) == "Content-Length: ";
-}
-
 test "dirname basic" {
 	assert dirname("/a/b/c.ms") == "/a/b";
 	assert dirname("/a/b.ms") == "/a";
@@ -533,33 +313,6 @@ test "resolve import parent dir" {
 test "resolve import non-relative returns empty" {
 	assert lspResolveImport("/a/b.ms", "std/testing") == "";
 	assert lspResolveImport("/a/b.ms", "lodash") == "";
-}
-
-test "uri to path decodes the escaped windows drive colon" {
-	// What the VS Code plugin actually sends on Windows (vscode-uri toString).
-	assert lspUriToPath("file:///c%3A/Users/foo/bar.ms") == "c:/Users/foo/bar.ms";
-	assert lspUriToPath("file:///C%3A/Users/foo/bar.ms") == "C:/Users/foo/bar.ms";
-}
-
-test "uri to path decodes escaped spaces" {
-	assert lspUriToPath("file:///Users/My%20Docs/a.ms") == "/Users/My Docs/a.ms";
-}
-
-test "uri to path leaves an unescaped uri unchanged" {
-	assert lspUriToPath("file:///C:/x/y.ms") == "C:/x/y.ms";
-	assert lspUriToPath("file:///Users/foo/bar.ms") == "/Users/foo/bar.ms";
-}
-
-test "uri to path folds multi-byte utf-8 escapes into one code point" {
-	// caf%C3%A9 is two escapes for ONE character; byte-wise decoding would
-	// yield mojibake and a path that opens nothing.
-	const p = lspUriToPath("file:///Users/caf%C3%A9/a.ms");
-	assert p == "/Users/caf" + fromCodePoint(233) + "/a.ms";
-}
-
-test "uri to path keeps a literal percent that is not an escape" {
-	assert lspUriToPath("file:///Users/100%pure/a.ms") == "/Users/100%pure/a.ms";
-	assert lspUriToPath("file:///Users/a%zz/b.ms") == "/Users/a%zz/b.ms";
 }
 
 test "bool field reads true only" {
@@ -582,23 +335,8 @@ test "request carries id, method and params" {
 	assert lspGetField(r, "method") == "client/registerCapability";
 }
 
-test "an id goes back as the client wrote it: number, string, or none" {
-	const r = parseJson("{\"a\":7,\"b\":\"x\",\"c\":null,\"d\":1.5}");
-	assert r.ok;
-	if (r.ok) {
-		assert lspIdOf(r.value.getDynamicField("a")) == "7";
-		assert lspIdOf(r.value.getDynamicField("b")) == "\"x\"";
-		assert lspIdOf(r.value.getDynamicField("c")) == "";
-		assert lspIdOf(r.value.getDynamicField("d")) == "1.5";
-		assert lspIdOf(r.value.getDynamicField("missing")) == "";
-	}
-}
-
-test "json string escapes non-ASCII as lower-case \\u units" {
-	assert lspJsonString("é") == "\"\\u00e9\"";
-	assert lspJsonString("a\tb") == "\"a\\tb\"";
-}
-
-test "content length ignores text after the digits" {
-	assert lspParseContentLength("Content-Length: 12abc") == 12;
+test "protocol still serves the wire vocabulary the handlers import from it" {
+	assert lspJsonString("a") == "\"a\"";
+	assert lspFormatMessage("{}") == "Content-Length: 2\r\n\r\n{}";
+	assert lspUriToPath(lspPathToUri("/a/b.ms")) == "/a/b.ms";
 }
