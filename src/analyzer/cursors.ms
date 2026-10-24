@@ -890,6 +890,14 @@ export function inferCursors(w: WriteEffects, body: Node): LocalDefs | null {
 	if (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program) return null;
 
 	analysis = w;
+	try {
+		return inferCursorsIn(w, body);
+	} finally {
+		analysis = null;
+	}
+}
+
+function inferCursorsIn(w: WriteEffects, body: Node): LocalDefs {
 	const p = createPartitions();
 
 	// Pass 1: compute live ranges and register variables
@@ -912,7 +920,6 @@ export function inferCursors(w: WriteEffects, body: Node): LocalDefs | null {
 	// Decision: which variables can safely be cursors?
 	const defs = callerDefsOf(w, body);
 	const chosen = computeCursorDecisions(w, p, defs);
-	analysis = null;
 	for (const sym of chosen) { setFlag(sym, SymbolFlag.Cursor); }
 	return defs;
 }
