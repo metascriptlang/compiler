@@ -155,12 +155,21 @@ what identity is made of; the rest is registry metadata shown by `msc publish`.
 |---|---|---|
 | `"file:../libpkg"` | local folder, relative to the project root or absolute | none — `build.ms` is the whole truth |
 | `"1.2.3"` | registry, **exact minimum version** | `msc.lock` |
-| `"git:github.com/owner/repo@v1.2.3"` | git host archive, tag or 40-char SHA | `msc.lock` |
+| `"git:github.com/owner/repo@v1.2.3"` | not supported yet: `msc add` and `msc install` refuse it | — |
 
-There are no range operators — `^`, `~`, `>=`, `*` are errors, by design: every version is an
-exact minimum and resolution is Maximum Version Selection (one version per package, the highest
-minimum wins, no backtracking). `devDeps` are for tests and tooling; both are compiled and both
-may declare commands.
+There are no range operators — `^`, `~`, `>=`, `*` are errors, by design. A registry dep resolves
+the version `msc.lock` names for it and nothing else: there is no Maximum Version Selection, and
+`build.ms` is not compared with the lock (measured with a candidate built from `e5ab88ef3`:
+`build.ms` naming `2.0.0` against a lock entry `1.0.0` imported the cached `1.0.0`). A registry
+package's own dependencies are not installed; `msc install` refuses an entry that needs one:
+
+```
+$ msc install        # msc.lock: probeOuter@1.0.0 with deps { probeInner: 0.1.0 }, no probeInner entry
+error: probeOuter@1.0.0 needs probeInner@0.1.0; transitive dependencies are not installed yet
+1 missing, 0 OK      # exit 1
+```
+
+`devDeps` are for tests and tooling; both are compiled and both may declare commands.
 
 ### Importing a dependency
 
@@ -172,12 +181,24 @@ import { greeting } from "greeter/src/index";
 ```
 
 `file:` deps are followed transitively (a dep's own `build.ms` `deps`/`devDeps` are read, depth
-capped at 20). Registry/git deps resolve through `msc.lock` to `~/.metascript/cache/src/…`.
+capped at 20). Registry deps resolve through `msc.lock` to `~/.metascript/cache/src/…`.
 
 ### `msc.lock`
 
-Plain JSON, written by `msc add` for registry and git sources, read by every build. `file:` deps
+Plain JSON, written by `msc add` for registry sources, read by every build. `file:` deps
 never appear in it — moving the folder is the upgrade. Reader/writer: `src/compiler/package/lockfile.ms`.
+
+`msc install` fails (exit 1, naming the dep) when `msc.lock` holds a git entry, when a registry
+entry needs a package with no entry of its own, and when `build.ms` names a registry or git dep
+and `msc.lock` is missing or unreadable (measured with the same candidate):
+
+```
+error: foo@git:github.com/acme/foo@v1.2.3: git sources are not installed yet
+error: msc.lock not found, so registry and git deps cannot be installed
+```
+
+`msc add foo@git:github.com/acme/foo@v1.2.3` (also with `-D`) prints
+`error: git sources are not installed yet` and leaves `build.ms` and `msc.lock` unchanged.
 
 ## Declared commands — `package.bin`
 
@@ -300,9 +321,9 @@ mean audited.
 | Command | Behavior |
 |---|---|
 | `msc init <name>` | Scaffold `build.ms` with `entry: "src/index.ms"` + `src/index.ms` ending in a bare `main();`, so `msc build` / `msc run` take the project without a file argument. Measured 2026-10-15: inside a fresh scaffold, `msc build` printed `Built 1 module(s) → out/debug/index` on a candidate built from `7e7c0dd02`, where v0.3.4 (`15b93cbba`) stopped with `error: build requires an input file` because it wrote `root:`. |
-| `msc add <spec> [-D]` | Add a dep to `deps` (or `devDeps` with `-D`) in `build.ms`, then install commands. Spec: `name` (registry latest), `name@1.2.3`, `name@git:host/path@ref`, `name@file:path`. Also rewrites `msc.lock` for registry/git. |
+| `msc add <spec> [-D]` | Add a dep to `deps` (or `devDeps` with `-D`) in `build.ms`, then install commands. Spec: `name` (registry latest), `name@1.2.3`, `name@file:path`; a `git:` source is refused. Also rewrites `msc.lock` for registry. |
 | `msc remove <name>` | Remove the dep from `build.ms` + `msc.lock`, then prune its shims from `.msc/bin/`. `-g <name>` removes a global install (manifest + `~/.metascript/bin/` shim). |
-| `msc install` | Verify locked deps are present, install commands into `.msc/bin/`. `-g <spec>` = global (see shims). |
+| `msc install` | Verify locked deps are present, install commands into `.msc/bin/`; refuses git entries, transitive registry deps and a missing `msc.lock` for a registry dep. `-g <spec>` = global (see shims). |
 | `msc x <cmd> [args…]` | Run a declared command. No argument lists them. |
 | `msc publish [--dry-run]` | Pack `package.files`/`package.ignore` selection and upload with the stored token; the metadata sent to the registry carries `bin`, so the registry can show which commands a package installs (server-side exposure pending — `.inbox/landing/pkg-bin-metadata.md`). `--dry-run` prints the resolved list — measured: `files: 3 … build.ms, src/index.ms, tooling/cli.ms`. |
 | `msc login` / `msc logout` | GitHub device-flow OAuth → registry bearer token in `~/.metascript/credentials` (mode 0600); logout revokes server-side then truncates. |
