@@ -15,7 +15,7 @@ import {
 	ConstructorDeclData, TestDeclData, SymbolKind, DeclKind, Symbol, BooleanLiteralData,
 } from "../../ast/node";
 import { SymSet, createSymSet, symSetAdd, symSetContains } from "../context";
-import { mapChildren, isFuncBoundary } from "../walker";
+import { mapChildren, isFuncBoundary, anyDeep, DEEP_DESCEND, DEEP_HIT, DEEP_SKIP } from "../walker";
 import { forEachChild, initializerHoldsClosure } from "../../ast/visitor";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
@@ -110,17 +110,13 @@ function isFrameNode(n: Node): boolean {
 
 export function refsAnySym(n: Node | null, syms: Symbol[]): boolean {
 	if (n == null || syms.length == 0) return false;
-	if (n.kind == NodeKind.Identifier) {
+	return anyDeep(n, (c: Node): int32 => {
+		if (c.kind != NodeKind.Identifier) return DEEP_DESCEND;
 		for (const s of syms) {
-			if (n.resolvedSym == s) return true;
+			if (c.resolvedSym == s) return DEEP_HIT;
 		}
-		return false;
-	}
-	let found = false;
-	forEachChild(n, (c: Node): void => {
-		if (!found && refsAnySym(c, syms)) found = true;
+		return DEEP_SKIP;
 	});
-	return found;
 }
 
 export function symIn(syms: Symbol[], sym: Symbol): boolean {

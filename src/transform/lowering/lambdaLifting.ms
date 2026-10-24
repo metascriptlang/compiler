@@ -23,7 +23,7 @@
 
 import { Node, NodeKind, DeclKind, SourceLocation, NodeFlag, SymbolKind, Symbol, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, BooleanLiteralData, ObjectLiteralData, ArrayLiteralData, TestDeclData, Type, TypeKind } from "../../ast/node";
 import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, mintSym, newLoweredSym } from "../context";
-import { mapChildren, isFuncBoundary } from "../walker";
+import { mapChildren, isFuncBoundary, anyDeep, DEEP_DESCEND, DEEP_HIT, DEEP_SKIP } from "../walker";
 import { forEachChild, initializerHoldsClosure } from "../../ast/visitor";
 import {
 	makeTypedIdentResolved, makeMember, makeMoveExpr, makeReturn, makeBlock, makeVarDecl,
@@ -317,17 +317,10 @@ function currentEnvAccessSym(state: LiftState): Symbol | null {
 // Used to determine if a capture can be moved instead of copied.
 
 function nodeRefsSym(node: Node, sym: Symbol): boolean {
-	if (node == null) return false;
-	if (node.kind == NodeKind.Identifier) return node.resolvedSym == sym;
-	if (isFuncBoundary(node)) return false;
-	let found = false;
-	mapChildren(node, (child: Node): Node => {
-		if (!found && nodeRefsSym(child, sym)) {
-			found = true;
-		}
-		return child;
+	return anyDeep(node, (n: Node): int32 => {
+		if (n.kind == NodeKind.Identifier) return n.resolvedSym == sym ? DEEP_HIT : DEEP_SKIP;
+		return isFuncBoundary(n) ? DEEP_SKIP : DEEP_DESCEND;
 	});
-	return found;
 }
 
 function isCaptureLastUse(sym: Symbol, closureIdx: number, stmts: Node[]): boolean {
@@ -955,15 +948,10 @@ function openLoopEnv(body: Node, state: LiftState, loc: SourceLocation): Node {
 // Create env struct + lifted function, return closure pair ObjectLiteral.
 
 function refsRoutine(node: Node, routine: Symbol): boolean {
-	if (node == null) return false;
-	if (node.kind == NodeKind.Identifier) return node.resolvedSym == routine;
-	if (isFuncBoundary(node)) return false;
-	let found = false;
-	mapChildren(node, (child: Node): Node => {
-		if (!found && refsRoutine(child, routine)) found = true;
-		return child;
+	return anyDeep(node, (n: Node): int32 => {
+		if (n.kind == NodeKind.Identifier) return n.resolvedSym == routine ? DEEP_HIT : DEEP_SKIP;
+		return isFuncBoundary(n) ? DEEP_SKIP : DEEP_DESCEND;
 	});
-	return found;
 }
 
 function rewriteRoutineSelfRefs(node: Node, routine: Symbol, closureOf: (ref: Node) => Node): Node {
