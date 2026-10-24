@@ -4,7 +4,7 @@
 import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd } from "../context";
-import { parseOk } from "./util";
+import { parseOk } from "./testUtil";
 
 
 type ExprResult = Result<Expression, string>;
@@ -64,7 +64,6 @@ export function parseTemplateLiteral(state: ParserState, parsePrec: PrecParserFn
 
 // ===== Tests =====
 
-import "../statements/core"; // registers parser callbacks
 test "no substitution" { assert parseOk("`hello`"); }
 
 test "single interpolation" { assert parseOk("`hello ${name}`"); }

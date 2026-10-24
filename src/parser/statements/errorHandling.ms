@@ -5,7 +5,8 @@ import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, createNode, makeLoc } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, consumeSemicolon } from "../context";
 import { skipOptionalType, isIdentLike } from "../util";
-import { callBlockParser, callExprParser } from "./callbacks";
+import { parseBlockStmt } from "./core";
+import { parseExpressionFromState } from "../expressions/core";
 import { programOk } from "./validation";
 
 
@@ -17,7 +18,7 @@ type NodeResult = Result<Node, string>;
 export function parseThrowStmt(state: ParserState): NodeResult {
 	const throwToken = current(state);
 	advance(state);
-	const expr = try callExprParser(state);
+	const expr = try parseExpressionFromState(state);
 	consumeSemicolon(state);
 	return Result.ok(createNode(NodeKind.ThrowStmt, { throwArg: expr }, throwToken));
 }
@@ -29,7 +30,7 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 	const tryToken = current(state);
 
 	advance(state);
-	const tryBlock = try callBlockParser(state);
+	const tryBlock = try parseBlockStmt(state);
 	// Case 1: try-catch[-finally]
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Catch) {
 		advance(state);
@@ -52,12 +53,12 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 			}
 			advance(state);
 		}
-		const catchBlock = try callBlockParser(state);
+		const catchBlock = try parseBlockStmt(state);
 
 		// try-catch-finally
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Finally) {
 			advance(state);
-			const finallyBlock = try callBlockParser(state);
+			const finallyBlock = try parseBlockStmt(state);
 			return Result.ok(createNode(NodeKind.TryCatchStmt, {
 				tryBody: tryBlock, catchName: catchParam,
 				catchBody: catchBlock, finallyBody: finallyBlock,
@@ -76,7 +77,7 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 	// Case 2: try-finally only
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Finally) {
 		advance(state);
-		const finallyBlock = try callBlockParser(state);
+		const finallyBlock = try parseBlockStmt(state);
 		return Result.ok(createNode(NodeKind.TryCatchStmt, {
 			tryBody: tryBlock, catchName: "",
 			catchBody: createNode(NodeKind.BlockStmt, { statements: [] }, tryToken),
@@ -90,7 +91,6 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 
 // ===== Tests =====
 
-import "./core"; // registers parser callbacks
 // Throw
 test "throw string" { assert programOk("throw \"error\";"); }
 

@@ -8,7 +8,8 @@ import { optionalizeTypeString } from "../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
 import { isBinaryOperator } from "./expressions/precedence";
-import { callExprParser, callObjectPatternParser, callArrayPatternParser } from "./statements/callbacks";
+import { parseExpressionFromState } from "./expressions/core";
+import { parseObjectPattern, parseArrayPattern } from "./statements/declaration";
 
 
 // ===== Comment Preservation =====
@@ -219,7 +220,7 @@ function parseDefaultValue(state: ParserState): Result<Node, string> {
 	const typeExprs = _lastParamTypeExprs;
 	const locations = _lastParamLocations;
 	const patterns = _lastParamPatterns;
-	const value = callExprParser(state);
+	const value = parseExpressionFromState(state);
 	_lastDefaults = defaults;
 	_lastParamTypeExprs = typeExprs;
 	_lastParamLocations = locations;
@@ -353,7 +354,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 		if (current(state).kind == TokenKind.LBrace || current(state).kind == TokenKind.LBracket) {
 			const destToken = current(state);
 			_lastParamLocations.push(makeLoc(destToken.line, destToken.column));
-			const patResult = destToken.kind == TokenKind.LBrace ? callObjectPatternParser(state) : callArrayPatternParser(state);
+			const patResult = destToken.kind == TokenKind.LBrace ? parseObjectPattern(state) : parseArrayPattern(state);
 			if (!patResult.ok) { break; }
 			const slot = params.length / 2;
 			while (_lastParamPatterns.length < slot) { _lastParamPatterns.push(null as unknown as Node); }
@@ -432,7 +433,6 @@ export function extractParamTypes(raw: string[]): string[] {
 
 // ===== Tests =====
 
-import "./statements/core"; // registers parser callbacks
 
 function parseParams(input: string, fnName: string): string[] {
 	const lr = lex(input);

@@ -5,7 +5,7 @@ import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, CallExprData } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, stampEnd, takePendingComments, expectCloser } from "../context";
 import { lex } from "../../lexer/lexer";
-import { parseOk, mockExpr } from "./util";
+import { parseOk, mockExpr } from "./testUtil";
 
 
 type ExprResult = Result<Expression, string>;
@@ -67,7 +67,6 @@ export function parseCallExpr(state: ParserState, callee: Expression, exprParser
 
 // ===== Tests =====
 
-import "../statements/core"; // registers parser callbacks
 
 function callArgCount(input: string): int32 {
 	const lr = lex(`f${input}`);

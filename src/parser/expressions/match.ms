@@ -4,7 +4,8 @@
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, Expression, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, takePendingComments } from "../context";
-import { parseOk, parseMemberChain, tryParseLiteralKeyword } from "./util";
+import { parseMemberChain, tryParseLiteralKeyword } from "./util";
+import { parseOk } from "./testUtil";
 import { isIdentLike } from "../util";
 import { parseNumberLiteral, parseIntegerLiteral, integerLiteralFits, integerLiteralIsBitPattern, numericLiteralIsFloat } from "../../utils/string";
 
@@ -214,7 +215,6 @@ function parseSinglePattern(state: ParserState): ExprResult {
 
 // ===== Tests =====
 
-import "../statements/core"; // registers parser callbacks
 test "number patterns" { assert parseOk("match (x) { 1 => \"one\", _ => \"other\" }"); }
 
 test "string patterns" { assert parseOk("match (s) { \"a\" => 1, \"b\" => 2, _ => 0 }"); }

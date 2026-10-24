@@ -6,7 +6,7 @@ import { Node, NodeKind, Expression, createNode, ArrowFunctionData, ConditionalE
 import { ParserState, createState, current, advance, isAtEnd, peek, peekIndex, skipComments, tokenAt, markState, rewindState, angleCloserWidth } from "../context";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, getLastParsedDefaults, getLastParamsClosed, isIdentLike } from "../util";
 import { lex } from "../../lexer/lexer";
-import { parseOk, mockExpr, exprNode } from "./util";
+import { parseOk, mockExpr, exprNode } from "./testUtil";
 
 
 type ExprResult = Result<Expression, string>;
@@ -285,7 +285,6 @@ export function parseBareIdentArrow(
 
 // ===== Tests =====
 
-import "../statements/core"; // registers parser callbacks
 
 function mockBlock(state: ParserState): ExprResult {
 	return Result.err("mock: block not supported");
