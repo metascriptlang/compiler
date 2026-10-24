@@ -2201,7 +2201,7 @@ function destructuresByPosition(t: Type): boolean {
 	return base.kind == TypeKind.Tuple || base.kind == TypeKind.Array || base.kind == TypeKind.SizedArray || base.kind == TypeKind.Span;
 }
 
-function definePatternBinding(ctx: CheckerContext, sym: Symbol, declaring: Node | null): void {
+function definePatternBinding(ctx: CheckerContext, sym: Symbol, named: Node, declaring: Node | null): void {
 	if (declaring == null) {
 		setFlag(sym, SymbolFlag.ForVar);
 	} else {
@@ -2213,6 +2213,7 @@ function definePatternBinding(ctx: CheckerContext, sym: Symbol, declaring: Node 
 		}
 	}
 	defineSymbol(ctx.table, sym);
+	sgRecordSym(ctx, named.location.line, named.location.column, named.location.column + sym.name.length, sym, sym.symbolType, SymbolKind.Variable, sym.name, "", true);
 }
 
 function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType: Type, isConst: boolean, declaring: Node | null): void {
@@ -2230,7 +2231,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 					if (hasDefault) checkExpr(ctx, apd.patternDefaults[i], bound);
 					if (bound != null) elem.nodeType = bound;
 					const elemSym = declSymbol(ctx, elem, id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst);
-					definePatternBinding(ctx, elemSym, declaring);
+					definePatternBinding(ctx, elemSym, elem, declaring);
 					elem.resolvedSym = elemSym;
 					markInitialized(ctx.initTracker, id.name);
 				}
@@ -2245,7 +2246,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 							addError(ctx, `rest element '${id.name}' requires an array source`, elem.location.line, elem.location.column);
 						}
 						const restSym = declSymbol(ctx, inner, id.name, SymbolKind.Variable, derived != null ? derived : inferredType(), !isConst);
-						definePatternBinding(ctx, restSym, declaring);
+						definePatternBinding(ctx, restSym, inner, declaring);
 						inner.resolvedSym = restSym;
 						markInitialized(ctx.initTracker, id.name);
 					}
@@ -2284,7 +2285,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 							addError(ctx, `object rest '${restId.name}' requires a source with remaining named fields`, prop.location.line, prop.location.column);
 						}
 						const objRestSym = declSymbol(ctx, inner, restId.name, SymbolKind.Variable, restType != null ? restType : inferredType(), !isConst);
-						definePatternBinding(ctx, objRestSym, declaring);
+						definePatternBinding(ctx, objRestSym, inner, declaring);
 						inner.resolvedSym = objRestSym;
 						markInitialized(ctx.initTracker, restId.name);
 					}
@@ -2301,7 +2302,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 				if (p.propDefault != null) checkExpr(ctx, p.propDefault, bound);
 				if (bound != null) p.propAlias.nodeType = bound;
 				const aliasSym = declSymbol(ctx, p.propAlias, id.name, SymbolKind.Variable, bound != null ? bound : inferredType(), !isConst);
-				definePatternBinding(ctx, aliasSym, declaring);
+				definePatternBinding(ctx, aliasSym, p.propAlias, declaring);
 				p.propAlias.resolvedSym = aliasSym;
 				markInitialized(ctx.initTracker, id.name);
 			}
