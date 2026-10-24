@@ -98,6 +98,10 @@ let _aliveSet: AliveSet = createAliveSet();
 let _singleModule = "";
 let _imageModules = new HashSet<string>();
 let _sourceDependenciesOnly = false;
+let _compileTimeModules = new HashSet<string>();
+let _compileTimeOnly = new HashMap<Symbol, boolean>();
+let _reachedCompileTime = new HashSet<Symbol>();
+let _walkStack: string[] = [];
 
 // ===== Core Walker =====
 
@@ -399,6 +403,10 @@ function noteOpUse(sym: Symbol, user: string): void {
 }
 
 function markReferenced(sym: Symbol, modulePath: string): void {
+	if (isCompileTimeExtern(sym)) {
+		noteCompileTimeReach(sym);
+		return;
+	}
 	noteOpUse(sym, modulePath);
 	markSymAndWalk(sym, modulePath);
 	for (const overload of sym.overloads) markSymAndWalk(overload, modulePath);
@@ -467,7 +475,9 @@ function walkDecl(di: int32): void {
 	}
 	aliveSetAddModule(_aliveSet, modulePath);
 	if (found.nodeType != null && hasGenericParams(found.nodeType)) return;
+	_walkStack.push(name);
 	walkBody(found, modulePath);
+	_walkStack.pop();
 	// Codegen lowers `super(args)` to `<Parent>_init(this, args)` with no AST
 	// edge, so a live class keeps its init alive, as `new C(...)` needs.
 	if (found.kind == NodeKind.ClassDecl) markClassInit(found, modulePath);
@@ -480,6 +490,50 @@ function walkDecl(di: int32): void {
 	if (isActorOrigin) {
 		markObjectTypeInfo(found.resolvedSym.symbolType, modulePath);
 	}
+}
+
+function isCompileTimeExtern(sym: Symbol): boolean {
+	return sym.symbolKind == SymbolKind.Function && hasFlag(sym, SymbolFlag.ImportC) && _compileTimeModules.has(sym.modulePath);
+}
+
+function noteCompileTimeReach(sym: Symbol): void {
+	if (_reachedCompileTime.has(sym)) return;
+	_reachedCompileTime.add(sym);
+	const chain = _walkStack.slice(0);
+	chain.push(sym.name);
+	_aliveSet.compileTimeReaches.push(chain.join(" -> "));
+}
+
+// A routine is compile-time-only when it is marked so, is a host function of a compile-time
+// module, or reaches one through its body; an image never exports it as a runtime root.
+function compileTimeOnly(sym: Symbol): boolean {
+	if (hasFlag(sym, SymbolFlag.CompileTime) || isCompileTimeExtern(sym)) return true;
+	if (sym.symbolKind != SymbolKind.Function) return false;
+	const known = _compileTimeOnly.get(sym);
+	if (known != null) return known;
+	_compileTimeOnly.set(sym, false);
+	let reaches = false;
+	let di = _symDeclHead.get(sym) ?? -1;
+	while (di >= 0 && !reaches) {
+		reaches = bodyReachesCompileTime(_declNodes[di]);
+		di = _symDeclNext[di];
+	}
+	_compileTimeOnly.set(sym, reaches);
+	return reaches;
+}
+
+function bodyReachesCompileTime(node: Node): boolean {
+	if ((node.kind == NodeKind.Identifier || node.kind == NodeKind.MemberExpr) && node.resolvedSym != null
+			&& compileTimeOnly(node.resolvedSym)) return true;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && bodyReachesCompileTime(child)) found = true;
+	});
+	return found;
+}
+
+function compileTimeOnlyDecl(decl: Node): boolean {
+	return decl.kind == NodeKind.FunctionDecl && decl.resolvedSym != null && compileTimeOnly(decl.resolvedSym);
 }
 
 // The declaration a top-level statement introduces, unwrapped from
@@ -619,8 +673,14 @@ export function computeAliveSet(
 	imageModules: string[] = [],
 	rootModulesOnly: boolean = false,
 	sourceDependenciesOnly: boolean = false,
+	compileTimeModules: string[] = [],
 ): AliveSet {
 	_sourceDependenciesOnly = sourceDependenciesOnly;
+	_compileTimeModules = new HashSet<string>();
+	for (const path of compileTimeModules) _compileTimeModules.add(path);
+	_compileTimeOnly = new HashMap<Symbol, boolean>();
+	_reachedCompileTime = new HashSet<Symbol>();
+	_walkStack = [];
 	const rootFunctions = new HashSet<Symbol>();
 	for (const sym of exportRootFunctions) {
 		rootFunctions.add(sym);
@@ -663,7 +723,7 @@ export function computeAliveSet(
 
 			if (bare.kind == NodeKind.FunctionDecl) {
 				if (bare.resolvedSym != null && rootFunctions.has(bare.resolvedSym)) {
-					markSymAndWalk(bare.resolvedSym, modulePath);
+					if (!compileTimeOnly(bare.resolvedSym)) markSymAndWalk(bare.resolvedSym, modulePath);
 					continue;
 				}
 			}
@@ -700,6 +760,7 @@ export function computeAliveSet(
 
 			if ((modulePath == entryPath || exportRootModules.includes(modulePath)) && isExportedDecl(bare)) {
 				const decl = topDecl(bare);
+				if (decl != null && compileTimeOnlyDecl(decl)) continue;
 				if (decl != null) {
 					markRootDecl(decl, modulePath);
 					if (modulePath != entryPath && !_imageModules.has(modulePath)) markCompleteClassHooks(decl, modulePath);

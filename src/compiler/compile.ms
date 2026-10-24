@@ -2117,6 +2117,25 @@ function hcrReloadHandlers(program: Node | null, flag: SymbolFlag): string[] {
 
 const RAISER_ONLY_STD_DIRS: string[] = ["meta"];
 
+function compileTimeModules(paths: string[], stdPath: string): string[] {
+	const modules: string[] = [];
+	if (stdPath == "") return modules;
+	for (const path of paths) {
+		for (const dir of RAISER_ONLY_STD_DIRS) {
+			if (isUnder(path, join(stdPath, dir)) && !modules.includes(path)) modules.push(path);
+		}
+	}
+	return modules;
+}
+
+function refuseRuntimeCompileTimeReach(aliveSet: Readonly<AliveSet>): void {
+	if (aliveSet.compileTimeReaches.length == 0) return;
+	for (const chain of aliveSet.compileTimeReaches) {
+		printDiag(`${error("error")}: runtime code calls a function that exists only while macros expand: ${chain}; call it from a macro or a @comptime function`);
+	}
+	throw new Error(BUILD_STOPPED);
+}
+
 function hcrCoreModules(
 	graph: ModuleGraph,
 	stdPath: string,
@@ -3008,7 +3027,9 @@ resetLiftedOps();
 	if (opts.isHcr) {
 		for (const path of hcrCore) exportRootModules.push(path);
 	}
-	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, exportRootModules, hcrRootFunctions(hcrModulePaths), hcrModulePaths);
+	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, exportRootModules, hcrRootFunctions(hcrModulePaths), hcrModulePaths,
+		false, false, compileTimeModules(transformedPaths, config.stdPath));
+	refuseRuntimeCompileTimeReach(aliveSet);
 	// Release DCE input arrays - no longer needed after alive set computed.
 	transformedPrograms = [];
 	transformedPaths = [];
@@ -3626,7 +3647,9 @@ resetLiftedOps();
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
 	inferRaises(transformedPrograms);
-	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, filePath, true, graph);
+	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, filePath, true, graph, [], [], [], false, false,
+		compileTimeModules(transformedPaths, config.stdPath));
+	refuseRuntimeCompileTimeReach(aliveSet);
 
 	// Compile prelude @compile directives — unconditional (reference-aligned: all @compile are always built)
 	if (graphPreludeCtx != null && graphPreludeCtx.compileDirectives != "") {

@@ -625,12 +625,14 @@ export class AliveSet {
 	typeInfos: CTypeInfoDemand[];
 	typeInfoKeys: HashSet<string>;
 	foreignOps: HashMap<Symbol, string[]>;
+	compileTimeReaches: string[];
 }
 
 export function createAliveSet(): AliveSet {
 	return {
 		computed: false, _modules: new HashSet<string>(), _syms: new HashSet<Symbol>(),
 		typeInfos: [], typeInfoKeys: new HashSet<string>(), foreignOps: new HashMap<Symbol, string[]>(),
+		compileTimeReaches: [],
 	};
 }
 
