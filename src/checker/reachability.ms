@@ -83,6 +83,7 @@ function declIndexBuild(programs: Node[], paths: string[]): void {
 
 let _visitedSet: HashSet<string> = new HashSet<string>();
 let _visitedSyms: HashSet<Symbol> = new HashSet<Symbol>();
+let _markedUnions: HashSet<Type> = new HashSet<Type>();
 
 function visitedHas(key: string): boolean {
 	return _visitedSet.has(key);
@@ -258,6 +259,8 @@ function markPromiseAllResult(resultType: Type, modulePath: string): void {
 
 // Union narrow/project sites make codegen emit variant Copy/Destroy calls with no AST edge.
 function markUnionHookEdges(t: Type): void {
+	if (_markedUnions.has(t)) return;
+	_markedUnions.add(t);
 	for (const vt of t.typeChildren) {
 		if (vt == null) continue;
 		let vbase = vt;
@@ -614,6 +617,7 @@ export function computeAliveSet(
 	for (const path of imageModules) _imageModules.add(path);
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
+	_markedUnions = new HashSet<Type>();
 	declIndexBuild(programs, paths);
 	aliveSetAddModule(_aliveSet, entryPath);
 	for (const path of imageModules) aliveSetAddModule(_aliveSet, path);
@@ -719,6 +723,7 @@ function takeReachability(): AliveSet {
 	_imageModules = new HashSet<string>();
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
+	_markedUnions = new HashSet<Type>();
 	_declHead = new HashMap<string, int32>();
 	_declNodes = [];
 	_declNext = [];
@@ -735,6 +740,7 @@ export function collectModuleTypeInfoDemands(program: Node, modulePath: string):
 	_aliveSet = createAliveSet();
 	_visitedSet = new HashSet<string>();
 	_visitedSyms = new HashSet<Symbol>();
+	_markedUnions = new HashSet<Type>();
 	_singleModule = modulePath;
 	declIndexBuild([program], [modulePath]);
 	for (const stmt of (program.data as ProgramData).programStmts) {
