@@ -20,7 +20,7 @@ Recursive-descent + Pratt precedence. Produces the full AST (named-field discrim
 union `NodeData`, not a generic child array). Module loading resolves imports
 eagerly (`loadSourceModule` → lex → `callStateProgramParser` → walk import decls).
 
-`.h` C-header imports are inlined as `extern` decls before parsing (`inlineHeaderImports`).
+A `.h` import is a module whose source `headerModuleSource` translates from the C header before it is lexed (see [`src/module/CLAUDE.md`](../src/module/CLAUDE.md)).
 
 ## Phase 2 — Macro Expansion + Type Checking (`src/checker`, `src/compiler/meta`)
 
@@ -49,7 +49,7 @@ operator logic in a helper in `fit.ms` (like `checkBitwiseOperands`), called onc
 existing `effLeft`/`effRight` reads. A build at 100% CPU with flat RSS and no clang child is
 hung: `sample <pid>` it.
 
-Cross-module symbol resolution via `ExportRegistry`. Flat `Type` interface (all fields
+Cross-module symbol resolution via `ExportRegistry`. Flat `Type` class (all fields
 present, unused empty) to avoid self-referencing-struct codegen bugs.
 
 ## Phase 3 — Transforms + Normalization (`src/transform`)
@@ -120,7 +120,7 @@ structs, per-type lifecycle hooks, etc.
 
 ## AST node kinds by phase (orientation)
 
-Phase 1 introduces the full surface syntax (~58 NodeKinds: literals, expressions, statements,
+Phase 1 introduces the full surface syntax (`NodeKind` in `std/meta/node.ms`: literals, expressions, statements,
 declarations, error-handling). Phase 2 adds macro/check synthetic kinds. Phase 3 *removes*
 rich kinds (match, for, defer, try-expr, ternary-in-stmt) and adds lowered forms (while,
 if/else, ordinal switch, state machines, lifted functions, temps). Phases 4–5 add ~0 new kinds — they
@@ -135,11 +135,10 @@ and whole programs under `msc run --target=raiser`. It consumes the **post-trans
 (`transformForRaiser`) and skips Phase 4 and Phase 5.
 
 **Core architecture:**
-- **Register-based** instruction set; the register file starts at 256 slots and grows.
-- **`match (op)` dispatch** in `src/raiser/vm.ms`, one arm per opcode, compiled to a C `switch`; there is no other C dispatch.
+- **Register-based** instruction set; the word file and the ref file each start at 256 slots and grow.
+- **One `switch` dispatch** in `src/raiser/vm.ms`, one arm per opcode.
 - **Handle-based heaps** (`ObjectHeap`/`ArrayHeap`), one per strand: arena by default,
   refcount + cycle collector under `gcMode = "orc"`.
-- **Flat tagged `RaiserValue`** (Nil/Bool/Int/Float/String/Array/Object), kind-dispatched.
 
 Design, measured status and what is not built: [`RAISER.md`](RAISER.md).
 
@@ -155,13 +154,13 @@ them through a **name-keyed registry of MS host functions** — no dlopen, no ge
 **Two layers:**
 - **Layer 1** — pure-MS wrappers in `std/*` (`readFile`, `exec`, `env`), compiled to bytecode,
   run inside the VM.
-- **Layer 2** — host bridges: `src/compiler/meta/hostTable.ms` registers 105
+- **Layer 2** — host bridges: `src/compiler/meta/hostTable.ms` registers
   `RaiserHostFn` wrappers under the extern's native name
   (`registerHostFn("msFsReadFile", …)`).
 
 **Mechanism:**
 - Loading (lazy): the first `@comptime`/macro evaluation calls
-  `ensureHostTableLoaded()` (`codegen/raiser/eval.ms`), which populates the
+  `ensureHostTableLoaded()` (`codegen/raiser/eval.ms` calls it, `compiler/meta/hostTable.ms` defines it), which populates the
   registry in `src/raiser/hostRegistry.ms` once per process.
 - Checking: macros always check against the `.rms` prelude
   (`buildPreludeContext(stdPath, ".rms")`) regardless of the build target, so
@@ -183,21 +182,23 @@ current mechanism.
 
 ---
 
-## Trans-Am — incremental computation (`src/transam`)
+## Trans-Am — incremental computation (`src/compiler/transam`)
 
-Memoized query engine (incremental rebuild): caches phase results keyed by content hash so
-re-compilation only recomputes what changed. Used by the LSP and watch builds.
+Memoized query engine (incremental rebuild): each phase result is a cache entry keyed by
+(query kind, file id), and a dependency recomputed to the same output hash leaves its dependents
+valid, so re-compilation only recomputes what changed. `checkModuleGraph` and the LSP use it.
+Design: [`TRANSAM.md`](TRANSAM.md).
 
 ---
 
 ## Module dependency rules
 
-Each module dir has an `index.ms` hub re-exporting its public API. Circular imports between
-sub-parsers are broken via **callback injection** (`callbacks.ms` holds function pointers;
-`core.ms` registers real implementations at load) — sub-parsers import only from
-`callbacks.ms`. The checker breaks its cycles the same way (`checker/checkerCallbacks.ms`), so a
-new import edge that reorders module init can read a callback before it is registered: an
-import of `checker/checkExprPass` from a pass under `src/transform/` built clean and then
-SIGSEGV'd every C compile while JS compiles kept working (observed 2026-08-01, not re-measured).
+Circular imports are broken by **callback injection**: a `callbacks.ms` holds function slots and
+the module that owns the real implementation registers it at load. There are four:
+`parser/statements/callbacks.ms`, `checker/checkerCallbacks.ms`,
+`compiler/meta/callbacks.ms`, `compiler/fmt/printer/callbacks.ms`. A new import edge that
+reorders module init can read a callback before it is registered: an import of
+`checker/checkExprPass` from a pass under `src/transform/` built clean and then SIGSEGV'd every
+C compile while JS compiles kept working (observed 2026-08-01, not re-measured).
 Target source is parsed by our own parser as raw strings, so parse bugs
 are always in `src/parser`.
