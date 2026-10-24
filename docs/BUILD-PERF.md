@@ -32,8 +32,9 @@ both arms: that is the noise check, and every row of it should carry no mark.
   every run of both arms; `≠` means the change moved the number. An exact row that varies inside one
   arm is read as timed.
 - Timed rows (`ms`, `instr`, process bytes) compare medians. `*` marks a delta over 3 times the
-  noise, the larger coefficient of variation of the two arms; no mark means the move is not shown to
-  be real. Instructions retired carry far less noise than wall time under load.
+  noise, the larger coefficient of variation of the two arms, and over 1%; no mark means the move is
+  not shown to be real. The 1% floor exists because three runs of one binary can agree to 0.0% and
+  still differ by 0.2% (711, `MSPERF_SELF=1`, 2026-10-25: `phase.A` +0.2% at noise 0.0%). Instructions retired carry far less noise than wall time under load.
 - `new` / `gone` is a flow only one arm wrote. A header line names the sources each arm produced:
   a compiler without `MSC_FLOWS` yields only `proc` rows.
 - Coverage: the leaf flows of phase A (`pass.*`, `analyze.*`, `a2.mono`, `a2.macro`, `a2.lower`) over

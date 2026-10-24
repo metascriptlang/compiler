@@ -23,7 +23,7 @@
 // it printed "Up to date": a cache hit measures nothing.
 //
 // Marks: `=` an exact count identical in every run of both arms; `≠` an exact count that
-// changed; `*` a timed delta over 3x noise (max CV of the two arms); `new` / `gone` a
+// changed; `*` a timed delta over 3x noise (max CV of the two arms) and over 1%; `new` / `gone` a
 // flow only one arm wrote. Process totals come from /usr/bin/time -l on macOS
 // (instructions retired), `perf stat` on Linux when it exists, else /usr/bin/time -f.
 
@@ -32,6 +32,7 @@ import { readFile, writeFile, exists } from "std/fs";
 import { writeStderr } from "std/io";
 
 const NOISE_FACTOR = 3.0;
+const NOISE_FLOOR_PERCENT = 1.0;
 
 function envOr(name: string, dflt: string): string {
 	const v = env.get(name);
@@ -169,7 +170,7 @@ function markFor(key: string, bv: float64[], cv: float64[], runs: int32, delta: 
 		return bv[0] == cv[0] ? "=" : "≠";
 	}
 	if (delta == 0) { return ""; }
-	if (baseMedian == 0 || Math.abs(pct) > NOISE_FACTOR * noise) { return "*"; }
+	if (baseMedian == 0 || Math.abs(pct) > Math.max(NOISE_FACTOR * noise, NOISE_FLOOR_PERCENT)) { return "*"; }
 	return "";
 }
 
@@ -507,6 +508,12 @@ test "an exact count that changed is marked ≠" {
 test "a timed delta inside noise carries no mark" {
 	const l = fixtureLine(fixtureLines(), "msc\tpass.jitter\tinstr");
 	assert l.delta == 4000;
+	assert l.mark == "";
+}
+
+test "a timed delta under 1% carries no mark even when the runs agree exactly" {
+	const l = fixtureLine(fixtureLines(), "msc\tfloor.steady\tinstr");
+	assert l.noise == 0;
 	assert l.mark == "";
 }
 

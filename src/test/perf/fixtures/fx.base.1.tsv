@@ -8,3 +8,4 @@ proc	total	bytes	100000000
 msc	a2.xform	instr	3000000
 msc	analyze.inject	instr	166667
 msc	total	instr	3703704
+msc	floor.steady	instr	1000000
