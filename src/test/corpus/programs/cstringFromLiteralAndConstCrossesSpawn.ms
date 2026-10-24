@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser VM has no pool threads and cannot call a C extern (strlen), which this program pins across a spawn
 // @skip-js: a sync function awaits and strlen is an extern C function; JS has neither
 // @stdout: literal 2600000
 // @stdout: const 3800000

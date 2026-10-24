@@ -1,3 +1,4 @@
+// @xfail(raiser): output differs from c: raiser runs no user lifecycle hooks (destroyed 0) (inbox 2026-10-21-raiser-never-runs-a-class-ondestroy)
 // @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
 // @stdout: cursor-array-literal const=1 arg=1 pair=2 owned=1 total=5
 let destroyed = 0;

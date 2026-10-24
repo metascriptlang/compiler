@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser VM has no actors: no matching constructor for an actor class
 // @stdout: async 2
 // @stdout: call 3
 // @stdout: all 10

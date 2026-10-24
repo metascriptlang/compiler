@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser VM has no spawn pool threads, Locked cell or exit join, which this program pins (no host bridge for msLockedHeldHere/msLockedAcquire, and Locked has no constructor)
 // @stdout: async returned 3
 // @stdout: Error: unhandled rejection: held task failed in an async return
 // @exit: 1

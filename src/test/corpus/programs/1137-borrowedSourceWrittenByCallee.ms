@@ -1,3 +1,4 @@
+// @xfail(raiser): raiser runtime error: expected an object, got value kind Array (inbox 2026-10-18-raiser-length-assign-on-typed-array-expects-object)
 // @stdout: borrowed-source-written global=28:cfg: global=29:cfg: captured=28:cfg: captured=29:cfg: element=28:cfg: element=29:cfg: truncated=28:cfg: spliced=29:cfg: grown=28:cfg: constructs=28:cfg: initializes=29:cfg: array=3:7 array=3:13 transitive=28:cfg: transitive=29:cfg: method=28:cfg: method=29:cfg: closure=28:cfg: closure=31:axxx hook=22:valu ref=22:valu struct=25:firs struct=26:seco cursorCall=31:axxx cursorAssign=41:zqqq
 let out = "borrowed-source-written";
 function report(name: string, text: string): void { out += ` ${name}=${text.length}:${text.substring(0, 4)}`; }

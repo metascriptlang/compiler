@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser VM has no actors and no per-thread cycle root sets, which this program pins
 // @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms); the program pins the native sync-context await
 // @stdout: moved 512
 // @stdout: churn 1024

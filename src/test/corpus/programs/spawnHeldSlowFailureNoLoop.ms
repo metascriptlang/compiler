@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser VM has no spawn pool threads, Locked cell or exit join, which this program pins (no host bridge for msLockedHeldHere/msLockedAcquire, and Locked has no constructor)
 // @stdout: returned 3
 // @stdout: Error: unhandled rejection: slow task failed
 // @exit: 1

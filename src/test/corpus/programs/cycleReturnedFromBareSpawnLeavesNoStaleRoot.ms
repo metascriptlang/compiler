@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser VM refuses spawn of a bare function (inbox 2026-09-19-raiser-spawn-named-function) and has no per-thread cycle root sets, which this program pins
 // @stdout: moved 64
 // @stdout: churn 1024
 // @serial
