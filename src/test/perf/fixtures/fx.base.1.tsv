@@ -1,0 +1,7 @@
+msc	pass.steady	count	7
+msc	pass.grew	count	10
+msc	pass.jitter	instr	1000000
+msc	pass.slower	instr	2000000
+msc	phase.A	instr	3333333
+proc	total	instr	3750000
+proc	total	bytes	100000000
