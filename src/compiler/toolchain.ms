@@ -281,6 +281,7 @@ function validateNativeToolchain(path: string): Result<NativeToolchain, string> 
 function nativeRuntimeConfig(targetOs: string, cpu: string, shared: boolean = false): string {
 	if (targetOs == "wasm" && cpu == "wasm32") return "wasm32-wasi.cfg";
 	if (targetOs == "linux" && (cpu == "amd64" || cpu == "x86_64")) return "x86_64-linux-gnu.2.31.cfg";
+	if (targetOs == "linux" && (cpu == "arm64" || cpu == "aarch64")) return "aarch64-linux-gnu.2.31.cfg";
 	if (targetOs == "windows" && (cpu == "amd64" || cpu == "x86_64")) return shared ? "windows/x86_64-windows-gnu.dll.cfg" : "windows/x86_64-windows-gnu.cfg";
 	if (targetOs == "windows" && (cpu == "arm64" || cpu == "aarch64")) return shared ? "windows/aarch64-windows-gnu.dll.cfg" : "windows/aarch64-windows-gnu.cfg";
 	return "";
@@ -311,7 +312,9 @@ test "prepared runtimes are selected by both OS and CPU" {
 	assert nativeRuntimeConfig("wasm", "wasm32") == "wasm32-wasi.cfg";
 	assert nativeRuntimeConfig("linux", "amd64") == "x86_64-linux-gnu.2.31.cfg";
 	assert nativeRuntimeConfig("linux", "x86_64") == "x86_64-linux-gnu.2.31.cfg";
-	assert nativeRuntimeConfig("linux", "arm64") == "";
+	assert nativeRuntimeConfig("linux", "arm64") == "aarch64-linux-gnu.2.31.cfg";
+	assert nativeRuntimeConfig("linux", "aarch64") == "aarch64-linux-gnu.2.31.cfg";
+	assert nativeRuntimeConfig("linux", "arm") == "";
 	assert nativeRuntimeConfig("windows", "amd64") == "windows/x86_64-windows-gnu.cfg";
 	assert nativeRuntimeConfig("windows", "x86_64", true) == "windows/x86_64-windows-gnu.dll.cfg";
 	assert nativeRuntimeConfig("windows", "arm64") == "windows/aarch64-windows-gnu.cfg";
