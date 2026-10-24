@@ -42,6 +42,7 @@ Examples per tier, the corpus directive contract, the two-tree convention and th
 | Program output, exit status or lifetime | `MSC=<candidate> MSCORPUS_ONLY=<exact,names> msc run src/test/corpus/run.ms`; add `MSCORPUS_SAN=1` for its SAN contract |
 | Lifecycle guard failure | The runner's named guard/shard reproduction; preserve its GC modes and ledger oracle (`guard/README.md`) |
 | Solana, native boundary, HCR or formatter failure | The named failing consumer and its required host/backend configuration; recipes in `docs/TESTING.md` |
+| Performance of one flow | `MSPERF_BASE=<previous msc> MSPERF_PROGRAMS=711 msc run src/test/perf/run.ms` (candidate `./msc`); reading: `docs/BUILD-PERF.md` §Measuring by flow |
 | Changed `std/` or `runtime/` inputs | Check with a candidate beside the changed support trees; publication via `tools/syncLocalBinary.ms` belongs to delivery, not the edit loop |
 
 **After a RED land, rerun the named failures in the owning worktree before requeueing.** Fix new reds before requeueing; let the existing known-now-green pruning handle entries the gate proved green. Do not use another full gate to find out whether the same failure remains. A BUSY result is not a RED: the queue retries it with eligible green lanes kept. Reuse completed evidence only while its checked code, inputs, toolchain and settings still match.

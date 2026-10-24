@@ -249,6 +249,10 @@ alloc/destroy balances at exit. A guard is only trusted after it has been
 PROVEN RED against the drift it targets. Methodology and ledger details:
 `guard/README.md`; runner: `guard/run.ms`, run on Raiser.
 
+### Flow A/B (`perf/run.ms`)
+
+Not a pass/fail tier: it tables what one change moved, flow by flow, between two compilers. Use and reading: [`BUILD-PERF.md`](BUILD-PERF.md) §Measuring by flow.
+
 
 ## Which compiler is under test — the two-tree convention
 
