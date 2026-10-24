@@ -198,11 +198,13 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	}
 }
 
+function emitInlineCopy(g: CGen, sym: Readonly<Symbol>): void {
+	const decl = inlineDeclOf(sym);
+	if (decl != null) genFunctionDecl(g, decl, false, true);
+}
+
 export function emitInlineCopies(g: CGen): void {
-	for (let i = 0; i < g.inlineCopies.length; i += 1) {
-		const decl = inlineDeclOf(g.inlineCopies[i]);
-		if (decl != null) genFunctionDecl(g, decl, false, true);
-	}
+	for (let i = 0; i < g.inlineCopies.length; i += 1) emitInlineCopy(g, g.inlineCopies[i]);
 }
 
 // ===== Overload Index Matching =====
@@ -742,7 +744,7 @@ function readonlyDataBracedInit(g: CGen, init: Readonly<Node>, t: Readonly<Type 
 	};
 }
 
-import { createCGen, assembleOutput, scopeMangledParam } from "./context";
+import { CEmissionFacts, createAliveSet, createCGen, assembleOutput, scopeMangledParam } from "./context";
 import { CheckerContext, GcMode, isGenericFn } from "../../checker/context";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
@@ -752,7 +754,9 @@ function declOutput(input: string): string {
 	if (!pr.ok) return "PARSE_ERROR: " + pr.error;
 	const prog = pr.value;
 	const pd = prog.data as ProgramData;
-	const g = createCGen(null as unknown as CheckerContext, "test");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "test", alive, facts);
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		genDecl(g, pd.programStmts[i], false);
 	}

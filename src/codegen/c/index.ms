@@ -73,8 +73,7 @@ export function prepareCModuleEmission(program: Node, ctx: CheckerContext, modul
 	if (program == null || program.kind != NodeKind.Program) return;
 	prepareEmissionTypes(program, ctx);
 	markErrorBlindFinallies(program);
-	const g = createCGen(ctx, modulePath, aliveSet);
-	g.emissionFacts = facts;
+	const g = createCGen(ctx, modulePath, aliveSet, facts);
 	g.preparationFacts = facts;
 	g.preparingDeclarations = true;
 	bindRegistryFacts(facts);
@@ -129,8 +128,7 @@ export function generateCModuleOutput(program: Node, ctx: CheckerContext, module
 }
 
 export function generatePreparedCModuleOutput(program: Readonly<Node>, ctx: Readonly<CheckerContext>, modulePath: string, aliveSet: Readonly<AliveSet>, isTestBuild: boolean, isHcr: boolean, facts: Readonly<CEmissionFacts>): CModuleOutput {
-	const g = createCGen(ctx, modulePath, aliveSet);
-	g.emissionFacts = facts;
+	const g = createCGen(ctx, modulePath, aliveSet, facts);
 	g.isTestBuild = isTestBuild;
 	g.isHcr = isHcr;
 

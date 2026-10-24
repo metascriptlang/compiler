@@ -9,7 +9,7 @@ import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, 
 import { monoInstanceName } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
-import { CEmissionFacts, CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError, NameSet, createNameSet, useHeader, createCGen } from "./context";
+import { createAliveSet, CEmissionFacts, CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError, NameSet, createNameSet, useHeader, createCGen } from "./context";
 import { passedByValue } from "../../checker/varPartitions";
 import { SymbolFlag, hasFlag, makeSymbol, setFlag, lookupSymbolReadonly } from "../../checker/symbol";
 import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName, resolveOverloadWinner, overloadAt, mangleQualified, mangleModuleName, buildModuleNameRoots, ModuleNameRoots } from "./names";
@@ -2371,14 +2371,18 @@ test "interface no RC" { assert !needsRC(createStruct("Bar", [], [], true)); }
 test "number no RC" { assert !needsRC(createPrimitive(TypeKind.Number)); }
 
 test "primitive type desc" {
-	const g = createCGen(null as unknown as CheckerContext, "");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	assert getTypeDesc(g, createPrimitive(TypeKind.Number)) == "double";
 	assert getTypeDesc(g, createPrimitive(TypeKind.Int32)) == "int32_t";
 	assert getTypeDesc(g, createPrimitive(TypeKind.String)) == "msString";
 }
 
 test "enum emits typedef and defines" {
-	const g = createCGen(null as unknown as CheckerContext, "");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	const result = getTypeDesc(g, createEnum("Color", ["Red", "Green", "Blue"]));
 	assert result == "Color";
 	const types = extract(sec(g, CSection.Types));
@@ -2395,7 +2399,9 @@ test "interface emits struct" {
 	const propTypes: Type[] = [];
 	propTypes.push(createPrimitive(TypeKind.Int32));
 	propTypes.push(createPrimitive(TypeKind.Int32));
-	const g = createCGen(null as unknown as CheckerContext, "");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	const result = getTypeDesc(g, declaredHere(createStruct("Point", propNames, propTypes, true)));
 	assert result == "Point";
 	const types = extract(sec(g, CSection.Types));
@@ -2407,7 +2413,9 @@ test "class (Ref<Object>) emits struct with pointer" {
 	propNames.push("name");
 	const propTypes: Type[] = [];
 	propTypes.push(createPrimitive(TypeKind.String));
-	const g = createCGen(null as unknown as CheckerContext, "");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	const result = getTypeDesc(g, createRef(declaredHere(createStruct("Person", propNames, propTypes, true))));
 	assert result == "Person*";
 	const types = extract(sec(g, CSection.Types));
@@ -2415,20 +2423,26 @@ test "class (Ref<Object>) emits struct with pointer" {
 }
 
 test "array type" {
-	const g = createCGen(null as unknown as CheckerContext, "");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	assert getTypeDesc(g, createArray(createPrimitive(TypeKind.Number))) == "msNumberArray";
 	assert getTypeDesc(g, createArray(createPrimitive(TypeKind.String))) == "msStringArray";
 }
 
 test "forward decl emitted" {
-	const g = createCGen(null as unknown as CheckerContext, "");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	getTypeDesc(g, declaredHere(createStruct("Widget", [], [], true)));
 	const fwd = extract(sec(g, CSection.ForwardDecls));
 	assert fwd == "#ifndef Widget_DEFINED\ntypedef struct Widget Widget;\n#endif\n";
 }
 
 test "cached second call" {
-	const g = createCGen(null as unknown as CheckerContext, "");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	const t = createEnum("Dir", ["Up", "Down"]);
 	const r1 = getTypeDesc(g, t);
 	const r2 = getTypeDesc(g, t);
@@ -2522,7 +2536,9 @@ test "tuple type key" {
 }
 
 test "tuple type desc emits struct" {
-	const g = createCGen(null as unknown as CheckerContext, "");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	const t = createTuple([createPrimitive(TypeKind.Number), createPrimitive(TypeKind.String)]);
 	const name = getTypeDesc(g, t);
 	const types = extract(sec(g, CSection.Types));
@@ -2532,7 +2548,9 @@ test "tuple type desc emits struct" {
 }
 
 test "a tuple's element types are defined before the tuple struct opens" {
-	const g = createCGen(null as unknown as CheckerContext, "");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	const face = createEnum("Face", ["None", "Back"]);
 	face.sym = makeSymbol("Face", SymbolKind.Enum, face, false);
 	const t = createTuple([createTuple([face, createPrimitive(TypeKind.Int32)]), createPrimitive(TypeKind.Int32)]);
@@ -2564,7 +2582,9 @@ test "anonymous type emits struct with hash name" {
 	types1.push(createPrimitive(TypeKind.Number));
 	types1.push(createPrimitive(TypeKind.Number));
 	const anon = createStruct("", names1, types1, true);
-	const g = createCGen(null as unknown as CheckerContext, "");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	const result = getTypeDesc(g, anon);
 	// Should NOT be "empty_"
 	assert result != "empty_";
@@ -2613,7 +2633,9 @@ test "a sealed op table serves known ops and refuses a new one" {
 }
 
 test "a TypeInfo demanded without a reachability edge is an error naming the type" {
-	const g = createCGen(null as unknown as CheckerContext, "consumer.ms");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "consumer.ms", alive, facts);
 	const t = declaredHere(createStruct("Undemanded", ["v"], [createPrimitive(TypeKind.String)], true));
 	typeInfoRef(g, createRef(t));
 	assert g.errors.length == 1;
@@ -2621,7 +2643,9 @@ test "a TypeInfo demanded without a reachability edge is an error naming the typ
 }
 
 test "a TypeInfo requested for a type that has none is an error" {
-	const g = createCGen(null as unknown as CheckerContext, "consumer.ms");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "consumer.ms", alive, facts);
 	typeInfoRef(g, createPrimitive(TypeKind.String));
 	assert g.errors.length == 1;
 }
@@ -2650,7 +2674,9 @@ test "a hook base name comes from the type's own symbol, not from a table lookup
 }
 
 test "enum typedef follows the largest ordinal and a negative member" {
-	const g = createCGen(null as unknown as CheckerContext, "");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	getTypeDesc(g, createEnum("Wide", ["Low", "High"], [0, 300]));
 	getTypeDesc(g, createEnum("Signed", ["Below", "Zero"], [-1, 0]));
 	const types = extract(sec(g, CSection.Types));

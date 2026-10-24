@@ -22,7 +22,7 @@ import { getTypeDesc, hasNoRuntimeRepr, isNrvoReturnType, getCalleeReturnType, g
 import { formatCNumber, formatCNumberLit, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { int64ToDecimal, parseIntegerLiteral, findChar } from "../../utils/string";
 import { ensureCrossModuleProto, copiesInline } from "./forward";
-import { CEmissionFacts, useHeader, createCGen, createProc, sec, CSection, readProcStmts, raiseTarget } from "./context";
+import { createAliveSet, CEmissionFacts, useHeader, createCGen, createProc, sec, CSection, readProcStmts, raiseTarget } from "./context";
 import { inferredCallRaises } from "../../checker/raises";
 import { GcMode, CheckerContext } from "../../checker/context";
 import { monoBaseName } from "../../monomorphize/registry";
@@ -826,7 +826,7 @@ function objLitShape(g: CGen, node: Readonly<Node>, report: boolean): ObjLitShap
 // Post-order stack traversal: Discover pushes children, Emit combines results.
 
 interface ExprStackItem {
-	node: Readonly<Node>;
+	node: Cursor<Readonly<Node>>;
 	phase: number;       // 0 = Discover, 1 = Emit
 	childCount: number;  // results to pop during Emit
 	tag: number;         // sub-case dispatch (0 = default)
@@ -837,7 +837,7 @@ interface ExprStackItem {
 class ExprEvalCtx {
 	workStack: ExprStackItem[];
 	results: string[];
-	destNodes: Readonly<Node>[];
+	destNodes: Cursor<Readonly<Node>>[];
 	destNames: string[];
 }
 
@@ -972,7 +972,7 @@ function runExpr(g: CGen, p: CProc, node: Readonly<Node>, dest: string): string 
 			discoverExpr(g, p, item.node, ctx);
 			if (item.node != null && item.node.kind == NodeKind.Identifier) viewImportedCArray(g, item.node, ctx);
 		} else {
-			emitExpr(g, p, item, ctx);
+			emitExpr(g, p, item.node, item, ctx);
 			if (item.node.kind == NodeKind.MemberExpr) viewImportedCArray(g, item.node, ctx);
 		}
 	}
@@ -1576,8 +1576,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 
 // ===== Emit phase: combine child results =====
 
-function emitExpr(g: CGen, p: CProc, item: Readonly<ExprStackItem>, ctx: ExprEvalCtx): void {
-	const node = item.node;
+function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprStackItem>, ctx: ExprEvalCtx): void {
 	const kind = node.kind;
 	const cc = item.childCount;
 	const tag = item.tag;
@@ -2309,7 +2308,7 @@ function emitExpr(g: CGen, p: CProc, item: Readonly<ExprStackItem>, ctx: ExprEva
 
 	// CallExpr
 	if (kind == NodeKind.CallExpr) {
-		emitCallExpr(g, p, item, ctx);
+		emitCallExpr(g, p, node, item, ctx);
 		return;
 	}
 
@@ -2710,8 +2709,7 @@ function callMagicOf(sym: Readonly<Symbol | null>): CallMagic {
 	};
 }
 
-function emitCallExpr(g: CGen, p: CProc, item: Readonly<ExprStackItem>, ctx: ExprEvalCtx): void {
-	const node = item.node;
+function emitCallExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprStackItem>, ctx: ExprEvalCtx): void {
 	const cd = node.data as CallExprData;
 	const cc = item.childCount;
 	const tag = item.tag;
@@ -3393,7 +3391,9 @@ function exprSnippet(input: string): string {
 	const stmt = pd.programStmts[0];
 	if (stmt.kind != NodeKind.ExprStmt) return "NOT_EXPR_STMT";
 	const es = stmt.data as ExprStmtData;
-	const g = createCGen(null as unknown as CheckerContext, "");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	const p = createProc("test", "void", true);
 	return genExpr(g, p, es.expr);
 }
@@ -3468,7 +3468,9 @@ test "a new expression whose type did not resolve is refused, not given a TypeIn
 	assert pr.ok;
 	if (!pr.ok) return;
 	const stmt = (pr.value.data as ProgramData).programStmts[0];
-	const g = createCGen(null as unknown as CheckerContext, "");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	const p = createProc("test", "void", true);
 	genExpr(g, p, (stmt.data as ExprStmtData).expr);
 	assert g.errors.length == 1;
@@ -3550,7 +3552,9 @@ function exprErrors(input: string): string {
 	if (!pr.ok) return "PARSE_ERROR";
 	const pd = pr.value.data as ProgramData;
 	const es = pd.programStmts[0].data as ExprStmtData;
-	const g = createCGen(null as unknown as CheckerContext, "");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	genExpr(g, createProc("test", "void", true), es.expr);
 	let messages = "";
 	for (const e of g.errors) messages = messages + e.message + "\n";
@@ -3581,7 +3585,9 @@ function lastNewRunsInit(input: string): boolean {
 	const newExpr = (last.data as ExprStmtData).expr;
 	if (newExpr.kind != NodeKind.NewExpr) return false;
 	const p = createProc("test", "void", true);
-	const tmp = genExpr(createCGen(ctx, "owner.ms"), p, newExpr);
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const tmp = genExpr(createCGen(ctx, "owner.ms", alive, facts), p, newExpr);
 	return readProcStmts(p).contains(`_init(${tmp});`);
 }
 

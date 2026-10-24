@@ -164,7 +164,7 @@ export function createBlock(id: number, isLoop: boolean): CBlock {
 }
 
 export interface CTryEntry {
-	fin: Readonly<Node> | null;
+	fin: Cursor<Readonly<Node>> | null;
 	label: string;
 	inFlightException: string;
 }
@@ -739,7 +739,7 @@ export interface DeferredElement {
 // ===== CGen — module-level state (Standard reference parity) =====
 
 export class CGen {
-	emissionFacts: Readonly<CEmissionFacts>;
+	emissionFacts: Cursor<Readonly<CEmissionFacts>>;
 	preparationFacts: CEmissionFacts | null;
 	errors: CheckerError[];
 	preparingDeclarations: boolean;
@@ -752,13 +752,13 @@ export class CGen {
 	declaredProcs: NameSet;    // prevents duplicate prototypes
 	declaredThings: NameSet;   // prevents duplicate declarations
 	includes: string[];
-	checkerCtx: Readonly<CheckerContext>;
+	checkerCtx: Cursor<Readonly<CheckerContext>>;
 	target: TargetInfo;
 	modulePath: string;        // source file path (for module-qualified init names)
 	labels: number;            // module-scope unique counter
 	initProc: CProc;           // shared CProc for Init000 (persistent temp counter)
 	deinitProc: CProc;
-	aliveSet: Readonly<AliveSet>;        // global DCE reachability set (empty = no filtering)
+	aliveSet: Cursor<Readonly<AliveSet>>;        // global DCE reachability set (empty = no filtering)
 	isTestBuild: boolean;      // true when compiling via cmdTest (assert = non-fatal)
 	isHcr: boolean;            // true when --hcr (fixed Init000 names for dlsym)
 	testEntries: TestEntry[];  // collected test wrapper functions (test builds only)
@@ -778,7 +778,7 @@ export interface TestEntry {
 	funcName: string;   // C function name (__ms_test_0, __ms_test_1, ...)
 }
 
-export function createCGen(ctx: Readonly<CheckerContext>, modulePath: string, aliveSet: Readonly<AliveSet> = createAliveSet()): CGen {
+export function createCGen(ctx: Readonly<CheckerContext>, modulePath: string, aliveSet: Readonly<AliveSet>, facts: Readonly<CEmissionFacts>): CGen {
 	const sections: Builder[] = [];
 	for (let i = 0; i < 11; i += 1) {
 		const b = createBuilder();
@@ -786,7 +786,7 @@ export function createCGen(ctx: Readonly<CheckerContext>, modulePath: string, al
 	}
 	return {
 		sections,
-		emissionFacts: new CEmissionFacts(),
+		emissionFacts: facts,
 		preparationFacts: null,
 		errors: [],
 		preparingDeclarations: false,
@@ -1107,12 +1107,16 @@ test "no duplicates" {
 }
 
 test "create with 11 sections" {
-	const g = createCGen(null as unknown as CheckerContext, "test");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "test", alive, facts);
 	assert g.sections.length == 11;
 }
 
 test "section accessor" {
-	const g = createCGen(null as unknown as CheckerContext, "test");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "test", alive, facts);
 	add(sec(g, CSection.Headers), "#include <stdint.h>\n");
 	add(sec(g, CSection.Procs), "void foo() {}\n");
 	assert extract(sec(g, CSection.Headers)) == "#include <stdint.h>\n";
@@ -1120,7 +1124,9 @@ test "section accessor" {
 }
 
 test "assembleOutput" {
-	const g = createCGen(null as unknown as CheckerContext, "test");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "test", alive, facts);
 	add(sec(g, CSection.Headers), "#include <stdint.h>\n");
 	add(sec(g, CSection.Procs), "void foo() {}\n");
 	const output = assembleOutput(g);
@@ -1128,7 +1134,9 @@ test "assembleOutput" {
 }
 
 test "moduleTemp" {
-	const g = createCGen(null as unknown as CheckerContext, "test");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "test", alive, facts);
 	const t1 = moduleTemp(g);
 	const t2 = moduleTemp(g);
 	assert t1 == "TM1_";

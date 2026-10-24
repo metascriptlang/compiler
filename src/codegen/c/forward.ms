@@ -81,13 +81,15 @@ import { createStruct, createFunction, createPrimitive } from "../../checker/typ
 import { makeSymbol } from "../../checker/symbol";
 import { SymbolKind } from "../../ast/node";
 import { CheckerContext } from "../../checker/context";
-import { createCGen, extract } from "./context";
+import { createAliveSet, createCGen, extract } from "./context";
 
 test "a function named like a lifecycle hook keeps the ordinary parameter ABI in its prototype" {
 	const num = createPrimitive(TypeKind.Float64);
 	const big = createStruct("Big", ["a", "b", "c", "d"], [num, num, num, num], true);
 	big.sym = makeSymbol("Big", SymbolKind.Struct, big, false);
-	const g = createCGen(null as unknown as CheckerContext, "");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	ensureCrossModuleProto(g, "MakeCopy", createFunction([big], ["p"], num), null);
 	assert extract(sec(g, CSection.ProcHeaders)).contains("double MakeCopy(const Big*);");
 }

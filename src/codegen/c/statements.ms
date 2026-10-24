@@ -689,12 +689,12 @@ function wrapCond(s: string): string {
 //   Lend: ;
 function genIfStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 	// Collect all branches: [{cond, body}, ...] + optional elseBody
-	const branches: Readonly<Node>[] = [];
-	const bodies: Readonly<Node>[] = [];
-	let elseBody: Readonly<Node> | null = null;
-	let current: Readonly<Node> | null = node;
+	const branches: Cursor<Readonly<Node>>[] = [];
+	const bodies: Cursor<Readonly<Node>>[] = [];
+	let elseBody: Cursor<Readonly<Node>> | null = null;
+	let current: Cursor<Readonly<Node>> | null = node;
 	while (current != null && current.kind == NodeKind.IfStmt) {
-		const d = current.data as IfStmtData;
+		const d: Cursor<Readonly<IfStmtData>> = current.data as IfStmtData;
 		branches.push(d.condition);
 		bodies.push(d.consequent);
 		if (isEmptyBlock(d.alternate)) {
@@ -814,7 +814,7 @@ function genBlockWithTail(g: CGen, p: CProc, node: Readonly<Node>, t: DispatchTa
 	if (node.kind == NodeKind.BlockStmt) {
 		genStmtsWithTail(g, p, (node.data as BlockStmtData).statements, t, loop, sw);
 	} else {
-		const one: Readonly<Node>[] = [node];
+		const one: Cursor<Readonly<Node>>[] = [node];
 		genStmtsWithTail(g, p, one, t, loop, sw);
 	}
 	setStmtsIndent(p, oldIndent);
@@ -822,12 +822,12 @@ function genBlockWithTail(g: CGen, p: CProc, node: Readonly<Node>, t: DispatchTa
 }
 
 function genTailIf(g: CGen, p: CProc, node: Readonly<Node>, t: DispatchTail, loop: Readonly<Node>, sw: Readonly<Node>): void {
-	const conds: Readonly<Node>[] = [];
-	const bodies: Readonly<Node>[] = [];
-	let elseBody: Readonly<Node> | null = null;
-	let current: Readonly<Node> | null = node;
+	const conds: Cursor<Readonly<Node>>[] = [];
+	const bodies: Cursor<Readonly<Node>>[] = [];
+	let elseBody: Cursor<Readonly<Node>> | null = null;
+	let current: Cursor<Readonly<Node>> | null = node;
 	while (current != null && current.kind == NodeKind.IfStmt) {
-		const d = current.data as IfStmtData;
+		const d: Cursor<Readonly<IfStmtData>> = current.data as IfStmtData;
 		conds.push(d.condition);
 		bodies.push(d.consequent);
 		if (isEmptyBlock(d.alternate)) {
@@ -1432,7 +1432,7 @@ function genUnreachableStmt(g: CGen, p: CProc, node: Readonly<Node>): void {
 
 // ===== Tests =====
 
-import { createCGen, createProc } from "./context";
+import { CEmissionFacts, createAliveSet, createCGen, createProc } from "./context";
 import { CheckerContext } from "../../checker/context";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
@@ -1443,7 +1443,9 @@ function stmtOutput(input: string): string {
 	if (!pr.ok) return "PARSE_ERROR: " + pr.error;
 	const prog = pr.value;
 	const pd = prog.data as ProgramData;
-	const g = createCGen(null as unknown as CheckerContext, "");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	const p = createProc("test");
 	// Inline loop instead of genStmts to reduce call depth
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
@@ -1561,7 +1563,9 @@ function stmtErrors(input: string): string {
 	const pr = parseSource(input);
 	if (!pr.ok) return "PARSE_ERROR";
 	const pd = pr.value.data as ProgramData;
-	const g = createCGen(null as unknown as CheckerContext, "");
+	const facts = new CEmissionFacts();
+	const alive = createAliveSet();
+	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	const p = createProc("test");
 	for (const stmt of pd.programStmts) genStmt(g, p, stmt);
 	let messages = "";
