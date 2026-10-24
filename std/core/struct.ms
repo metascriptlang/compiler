@@ -17,7 +17,7 @@ import { isArray, needsCopy } from "std/typetraits";
 
 // ===== Concurrent-access guard (Go writing-flag model) =====
 @builtin("MapFatal")
-extern function msMapFatal(msg: string): void;
+extern function msMapFatal(msg: string): never;
 
 function hashMapEndWrite<K, V>(m: HashMap<K, V>): void { if (!m.writing) { msMapFatal("concurrent map writes"); } m.writing = false; }
 function hashSetEndWrite<T>(s: HashSet<T>): void { if (!s.writing) { msMapFatal("concurrent map writes"); } s.writing = false; }
