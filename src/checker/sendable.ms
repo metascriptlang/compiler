@@ -6,6 +6,7 @@ import { CheckerContext, addError, addWarning, dispatchEntryFor, dispatchOverrid
 import { isAsyncFunctionNode } from "./freestanding";
 import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, routineEffect, walkEffect, walkWithViews } from "./effects";
 import { constBindingInitializer } from "./constFold";
+import { MOVED_PREFIX, markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
 import { PEEL_ALIAS, createArray, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, isAtomicRef, isNumeric, isReadonlyView, stringType, typeCarriesRef, typeDisplayName } from "./types";
 
@@ -299,11 +300,20 @@ function isSendable(t: Type, argNode: Node, sendClass: boolean): boolean {
 	return false;
 }
 
+function recordActorMove(ctx: CheckerContext, mv: Node): void {
+	const arg = peelHidden((mv.data as MoveExprData).moveArg);
+	const sym = arg.kind == NodeKind.Identifier ? arg.resolvedSym : null;
+	if (sym == null || !typeCarriesRef(sym.symbolType)) return;
+	checkMoveSoleOwner(ctx, sym, [sym.name], mv, mv.location);
+	markConsumedName(ctx.affineTracker, MOVED_PREFIX + symbolConsumeKey(sym));
+}
+
 // Returns true when this arg is a plain-ref BORROW the caller must not discard
 // (the discard itself is diagnosed at the call site via ctx.stmtPosExpr).
 export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: Node, pi: number, sendClass: boolean): boolean {
 	const t = argNode.nodeType;
 	if (t == null) return false;
+	if (argNode.kind == NodeKind.MoveExpr) recordActorMove(ctx, argNode);
 	const isPlainRefBorrow = !sendClass && t.kind == TypeKind.Ref && !isAtomicRef(t) && !isActorRef(t)
 		&& argNode.kind != NodeKind.MoveExpr;
 	if (t.kind != TypeKind.Function) {
