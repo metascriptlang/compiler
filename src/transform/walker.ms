@@ -564,9 +564,12 @@ export function hasEffect(n: Node): boolean {
 	if (n == null || isFuncBoundary(n)) return false;
 	if (isEffectNode(n)) return true;
 	let found = false;
-	forEachChild(n, (c: Node): void => {
-		if (!found && hasEffect(c)) { found = true; }
-	});
+	const scan = (c: Node): void => {
+		if (found || c == null || isFuncBoundary(c)) return;
+		if (isEffectNode(c)) { found = true; return; }
+		forEachChild(c, scan);
+	};
+	forEachChild(n, scan);
 	return found;
 }
 
@@ -577,40 +580,45 @@ export interface OnceEvalState {
 export type OnceEvalVisitor = (node: Node, effectBefore: boolean) => void;
 
 export function walkOnceEvaluated(node: Node, st: OnceEvalState, visit: OnceEvalVisitor): void {
+	const step = (c: Node): void => onceWalk(c, st, visit, step);
+	onceWalk(node, st, visit, step);
+}
+
+function onceWalk(node: Node, st: OnceEvalState, visit: OnceEvalVisitor, step: (c: Node) => void): void {
 	if (node == null || isFuncBoundary(node)) return;
 	const k = node.kind;
 	if (k == NodeKind.BlockStmt || k == NodeKind.MethodDecl || k == NodeKind.ClassDecl || k == NodeKind.ActorDecl
 		|| k == NodeKind.SwitchCase || k == NodeKind.MatchCase
 		|| k == NodeKind.WhileStmt || k == NodeKind.DoWhileStmt) return;
 	if (k == NodeKind.ForStmt) {
-		walkOnceEvaluated((node.data as ForStmtData).forInit, st, visit);
+		onceWalk((node.data as ForStmtData).forInit, st, visit, step);
 		return;
 	}
 	if (k == NodeKind.IfStmt) {
-		walkOnceEvaluated((node.data as IfStmtData).condition, st, visit);
+		onceWalk((node.data as IfStmtData).condition, st, visit, step);
 		return;
 	}
 	if (k == NodeKind.ConditionalExpr) {
 		const cd = node.data as ConditionalExprData;
-		walkOnceEvaluated(cd.ternaryCondition, st, visit);
+		onceWalk(cd.ternaryCondition, st, visit, step);
 		if (hasEffect(cd.ternaryConsequent) || hasEffect(cd.ternaryAlternate)) st.effectSeen = true;
 		return;
 	}
 	if (k == NodeKind.BinaryExpr) {
 		const bd = node.data as BinaryExprData;
 		if (bd.operator == "&&" || bd.operator == "||") {
-			walkOnceEvaluated(bd.left, st, visit);
+			onceWalk(bd.left, st, visit, step);
 			if (hasEffect(bd.right)) st.effectSeen = true;
 			return;
 		}
 		if (bd.operator == "=" && (bd.left.kind == NodeKind.ArrayLiteral || bd.left.kind == NodeKind.ObjectLiteral)) {
-			walkOnceEvaluated(bd.right, st, visit);
+			onceWalk(bd.right, st, visit, step);
 			st.effectSeen = true;
 			return;
 		}
 	}
 	const effectBefore = st.effectSeen;
-	forEachChild(node, (c: Node): void => walkOnceEvaluated(c, st, visit));
+	forEachChild(node, step);
 	visit(node, effectBefore);
 	if (isEffectNode(node)) st.effectSeen = true;
 }
@@ -920,10 +928,13 @@ export function containsExprKind(node: Node, kind: NodeKind): boolean {
 	if (node == null) return false;
 	if (node.kind == kind) return true;
 	let found = false;
-	mapExprChildren(node, (child: Node): Node => {
-		if (!found && containsExprKind(child, kind)) { found = true; }
+	const scan = (child: Node): Node => {
+		if (found || child == null) return child;
+		if (child.kind == kind) { found = true; return child; }
+		mapExprChildren(child, scan);
 		return child;
-	});
+	};
+	mapExprChildren(node, scan);
 	return found;
 }
 
@@ -931,7 +942,12 @@ export function containsExprKind(node: Node, kind: NodeKind): boolean {
 // If replacer returns a different node, use it as the replacement.
 export function replaceInExpr(node: Node, replacer: Visitor): Node {
 	if (node == null) return node;
-	mapExprChildren(node, (child: Node): Node => replaceInExpr(child, replacer));
+	const walk = (child: Node): Node => {
+		if (child == null) return child;
+		mapExprChildren(child, walk);
+		return replacer(child);
+	};
+	mapExprChildren(node, walk);
 	return replacer(node);
 }
 
