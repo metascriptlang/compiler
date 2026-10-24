@@ -146,10 +146,20 @@ export function objectStamp(): string {
 
 export function supportTreesStamp(root: string): string {
 	if (root == "") return hashContent("");
+	return treesStamp(root, [join(root, "runtime"), join(root, "vendor")], ["runtime/", "vendor/"]);
+}
+
+// Content stamp of the std tree the prelude pack is built from, remembered by the files'
+// change stamps exactly as the support trees are.
+export function stdTreeStamp(stdPath: string): string {
+	if (stdPath == "") return hashContent("");
+	return treesStamp(`std:${stdPath}`, [stdPath], ["std/"]);
+}
+
+function treesStamp(subject: string, dirs: string[], prefixes: string[]): string {
 	const paths: string[] = [];
 	const names: string[] = [];
-	collectTreeFiles(join(root, "runtime"), "runtime/", paths, names);
-	collectTreeFiles(join(root, "vendor"), "vendor/", paths, names);
+	for (let t: int32 = 0; t < dirs.length; t += 1) collectTreeFiles(dirs[t], prefixes[t], paths, names);
 	const stamps: string[] = [];
 	const listed: string[] = [];
 	let stamped = true;
@@ -160,10 +170,10 @@ export function supportTreesStamp(root: string): string {
 		listed.push(`${names[i]}\t${stamp}`);
 	}
 	const listing = hashContent(listed.join("\n"));
-	const sumPath = hashMemoPath(root, "sum");
+	const sumPath = hashMemoPath(subject, "sum");
 	const sum = readSealed(sumPath);
 	if (stamped && sum.length == 2 && sum[0] == listing) return sum[1];
-	const memo = hashMemoPath(root, "files");
+	const memo = hashMemoPath(subject, "files");
 	loadHashMemo(memo);
 	const writes = _hashMemoWrites;
 	const parts: string[] = [""];
@@ -1678,7 +1688,7 @@ function settledSupportTree(tag: string): string {
 	if (_settledTreesBase == "") {
 		const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
 		_settledTreesBase = `${base}/msc-support-memo-${performance.now()}`;
-		for (const t of ["edit", "seal", "add"]) {
+		for (const t of ["edit", "seal", "add", "std"]) {
 			ensureDir(`${_settledTreesBase}/${t}/runtime`);
 			ensureDir(`${_settledTreesBase}/${t}/vendor/lib`);
 			writeFile(`${_settledTreesBase}/${t}/runtime/core.h`, "#define A 1\n");
@@ -1723,6 +1733,29 @@ test "a support-tree stamp is served from disk to the next process and moves on 
 	assert edited != first;
 	assert edited == uncachedStamp(root);
 	forgetSupportMemo(root);
+}
+
+test "a std-tree stamp is served from disk to the next process and moves on a same-size edit" {
+	if (globalCacheRoot() == "") return;
+	const dir = `${settledSupportTree("std")}/vendor`;
+	const subject = `std:${dir}`;
+	_hashByStamp.clear();
+	const first = stdTreeStamp(dir);
+	assert readSealed(hashMemoPath(subject, "sum")).length == 2;
+	assert readSealed(hashMemoPath(subject, "files")).length == 2;
+	_hashByStamp.clear();
+	assert stdTreeStamp(dir) == first;
+	writeFile(`${dir}/lib/x.h`, "#define B 2\n");
+	_hashByStamp.clear();
+	const edited = stdTreeStamp(dir);
+	assert edited != first;
+	remove(hashMemoPath(subject, "sum"));
+	remove(hashMemoPath(subject, "files"));
+	_hashByStamp.clear();
+	assert stdTreeStamp(dir) == edited;
+	remove(hashMemoPath(subject, "sum"));
+	remove(hashMemoPath(subject, "files"));
+	removeAll(dir);
 }
 
 test "a support-tree memo whose seal does not match its body is ignored" {

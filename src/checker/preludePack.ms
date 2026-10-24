@@ -63,12 +63,14 @@ function join(a: string, b: string): string {
 
 let _toolStamp = "";
 let _toolStampFn: (() => string) | null = null;
+let _stdStampFn: ((stdPath: string) => string) | null = null;
 
 // compile.ms registers compiler/cache.toolchainStamp at load (memoized there
 // — one stamp computation per process shared with the object cache). Without
-// registration (standalone tests) a local equivalent is computed.
-export function registerPreludeStampFn(fn: () => string): void {
+// registration (standalone tests) a local equivalent is computed, for the std tree as well.
+export function registerPreludeStampFn(fn: () => string, stdFn: (stdPath: string) => string): void {
 	_toolStampFn = fn;
+	_stdStampFn = stdFn;
 }
 
 function toolStamp(): string {
@@ -91,6 +93,11 @@ let _stdTreeHash = "";
 let _stdTreeHashPath = "";
 function stdTreeHash(stdPath: string): string {
 	if (_stdTreeHash != "" && _stdTreeHashPath == stdPath) return _stdTreeHash;
+	if (_stdStampFn != null) {
+		_stdTreeHash = _stdStampFn(stdPath);
+		_stdTreeHashPath = stdPath;
+		return _stdTreeHash;
+	}
 	let acc = "";
 	if (stdPath != "") acc = stampTreePack("", stdPath, "std/");
 	_stdTreeHash = hashContent(acc);
