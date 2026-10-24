@@ -1586,6 +1586,22 @@ function compileHiXorLoCall(s: RaiserCompState, node: Node): int32 {
 	return emitIntBinary(s, RaiserOpcode.BitXor, high, low);
 }
 
+function compileLoadLECall(s: RaiserCompState, node: Node, width: int32): int32 {
+	const d = node.data as CallExprData;
+	const bytes = compileExpr(s, d.arguments[0]);
+	const offset = compileExpr(s, d.arguments[1]);
+	let value = emitIntConst(s, 0);
+	for (let i = 0; i < width; i += 1) {
+		const index = allocWord(s);
+		emitInst(s, raiserABC(RaiserOpcode.AddI64Imm, index, offset, immField(i)));
+		const byte = allocWord(s);
+		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, byte, bytes, index));
+		const shifted = emitIntBinary(s, RaiserOpcode.ShiftLeft, byte, emitIntConst(s, i * 8));
+		value = emitIntBinary(s, RaiserOpcode.BitOr, value, shifted);
+	}
+	return value;
+}
+
 function namespaceMemberIdent(node: Node): Node | null {
 	if (node.kind != NodeKind.MemberExpr || node.resolvedSym == null) return null;
 	const d = node.data as MemberExprData;
@@ -1648,6 +1664,9 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	}
 	if (builtinKind == "HiXorLo" && d.arguments.length == 2) {
 		return compileHiXorLoCall(s, node);
+	}
+	if ((builtinKind == "LoadLE64" || builtinKind == "LoadLE32") && d.arguments.length == 2) {
+		return compileLoadLECall(s, node, builtinKind == "LoadLE64" ? 8 : 4);
 	}
 	if (builtinKind == "Float64Bits" && d.arguments.length == 1) {
 		const value = compileExpr(s, d.arguments[0]);

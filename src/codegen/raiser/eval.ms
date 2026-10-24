@@ -1258,6 +1258,22 @@ test "engine: the hash builtins give the bits of the native 128-bit mix and floa
 		+ " 4609434218613702656 13830554455654793216\n";
 }
 
+test "engine: the little-endian load builtins read 8 and 4 bytes of a byte view at an offset" {
+	const ctx = evalOrcVM("@builtin(\"LoadLE64\") extern function load64(b: Readonly<Span<uint8>>, o: int64): uint64;"
+		+ " @builtin(\"LoadLE32\") extern function load32(b: Readonly<Span<uint8>>, o: int64): uint64;"
+		+ " const b = 'abcdefghé'.asBytes();"
+		+ " console.log(`${load64(b, 0)} ${load64(b, 2)} ${load32(b, 0)} ${load32(b, 6)}`);");
+	assert ctx.error == "";
+	assert ctx.output == "7523094288207667809 12232735806177240163 1684234849 2848155751\n";
+}
+
+test "engine: a little-endian load past the end of the view is an index error" {
+	const ctx = evalOrcVM("@builtin(\"LoadLE64\") extern function load64(b: Readonly<Span<uint8>>, o: int64): uint64;"
+		+ " const b = 'abcdefghé'.asBytes();"
+		+ " console.log(`${load64(b, 3)}`);");
+	assert ctx.error != "";
+}
+
 test "orc: correct result + no error on object program" {
 	const vm = evalOrcVM("function mk(): { x: number } { return { x: 7 }; } const o = mk(); return o.x;");
 	assert vm.error == "";
