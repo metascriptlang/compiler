@@ -22,6 +22,25 @@ export enum Effect {
 	WritesCell,
 }
 
+enum BorrowKind {
+	ModuleConst,
+	View,
+	Unfollowed,
+}
+
+interface BorrowSource {
+	kind: BorrowKind;
+	sym: Symbol | null;
+}
+
+function borrowText(b: BorrowSource): string {
+	return match (b.kind) {
+		BorrowKind.ModuleConst => "the module const '" + b.sym!.name + "'",
+		BorrowKind.View => "the view '" + b.sym!.name + "'",
+		BorrowKind.Unfollowed => UNFOLLOWED,
+	};
+}
+
 export interface EffectCause {
 	site: Node;
 	text: string;
@@ -58,7 +77,6 @@ let heldSources = new HashMap<Symbol, Node[]>();
 let flowScanned: Node[] = [];
 let resolving: Symbol[] = [];
 const UNFOLLOWED = "a value the checker cannot follow";
-const CONST_BORROW = "the module const '";
 let assumedOpen = false;
 let inAsync = false;
 let ownParams: string[] = [];
@@ -647,10 +665,10 @@ function constReadEffect(call: Node): EffectCause | null {
 	const recv = receiverOf(call);
 	let read = recv != null ? borrowedOf(recv) ?? heldBorrow(recv) : null;
 	for (const arg of (call.data as CallExprData).arguments) {
-		if (read == null || !read.startsWith(CONST_BORROW)) read = borrowedOf(arg);
+		if (read == null || read.kind != BorrowKind.ModuleConst) read = borrowedOf(arg);
 	}
-	if (read == null || !read.startsWith(CONST_BORROW)) return null;
-	return through(call, "reads " + read, callEffect(call, Effect.WritesCell));
+	if (read == null || read.kind != BorrowKind.ModuleConst) return null;
+	return through(call, "reads " + borrowText(read), callEffect(call, Effect.WritesCell));
 }
 
 export function newEffect(newNode: Node, e: Effect): EffectCause | null {
@@ -704,7 +722,7 @@ export function walkEffect(node: Node | null, e: Effect): EffectCause | null {
 // What a stored value borrows, seen through conversions, both arms of a choice, field and element
 // reads, a view call's sources and a local const or for-of binding: a module const every thread
 // shares, or a view of what the task borrows. Storing it into an owning slot takes a count on it.
-function borrowedOf(value: Node | null): string | null {
+function borrowedOf(value: Node | null): BorrowSource | null {
 	if (value == null) return null;
 	const n = peelConv(value);
 	if (!typeCarriesRef(n.nodeType) || isAtomicRef(n.nodeType)) return null;
@@ -732,17 +750,17 @@ function viewsInScope(): boolean {
 	return viewSyms.length > 0 || viewParams.length > 0;
 }
 
-function unfollowed(): string | null {
-	return viewsInScope() ? UNFOLLOWED : null;
+function unfollowed(): BorrowSource | null {
+	return viewsInScope() ? { kind: BorrowKind.Unfollowed, sym: null } : null;
 }
 
-function binaryBorrow(n: Node): string | null {
+function binaryBorrow(n: Node): BorrowSource | null {
 	const d = n.data as BinaryExprData;
 	if (d.operator == "??" || d.operator == "||" || d.operator == "&&") return borrowedOf(d.left) ?? borrowedOf(d.right);
 	return d.operator == "=" ? borrowedOf(d.right) : unfollowed();
 }
 
-function matchBorrow(n: Node): string | null {
+function matchBorrow(n: Node): BorrowSource | null {
 	for (const c of (n.data as MatchExprData).matchCases) {
 		const b = borrowedOf((c.data as MatchCaseData).caseBody);
 		if (b != null) return b;
@@ -753,7 +771,7 @@ function matchBorrow(n: Node): string | null {
 // A call returns what the task borrows when it is a view call over a borrowed source, or when its
 // result does not own and a receiver, a local container it reads or an argument is borrowed; an
 // owning result is a fresh value whatever the call reads.
-function callBorrow(call: Node): string | null {
+function callBorrow(call: Node): BorrowSource | null {
 	if (isViewCall(call)) {
 		const sources: Node[] = [];
 		viewCallSources(call, sources);
@@ -775,11 +793,11 @@ function holdsNoCountResult(t: Type | null): boolean {
 	return false;
 }
 
-function capturedBorrow(fn: Node): string | null {
-	const hit: (string | null)[] = [null];
+function capturedBorrow(fn: Node): BorrowSource | null {
+	const hit: (BorrowSource | null)[] = [null];
 	const visit = (node: Node): void => {
 		if (hit[0] != null) return;
-		if (node.kind == NodeKind.Identifier && node.resolvedSym != null && isViewRoot(node.resolvedSym!)) hit[0] = "the view '" + node.resolvedSym!.name + "'";
+		if (node.kind == NodeKind.Identifier && node.resolvedSym != null && isViewRoot(node.resolvedSym!)) hit[0] = { kind: BorrowKind.View, sym: node.resolvedSym };
 		forEachChild(node, visit);
 	};
 	forEachChild(fn, visit);
@@ -794,11 +812,11 @@ function isLocalBinding(sym: Symbol | null): boolean {
 	return sym != null && (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Parameter) && !hasFlag(sym, SymbolFlag.Global);
 }
 
-function bindingBorrow(n: Node, value: Node): string | null {
+function bindingBorrow(n: Node, value: Node): BorrowSource | null {
 	const sym = n.resolvedSym;
 	if (sym == null) return null;
-	if (isImmutableModuleConst(sym)) return CONST_BORROW + sym.name + "'";
-	if (isViewRoot(sym)) return "the view '" + sym.name + "'";
+	if (isImmutableModuleConst(sym)) return { kind: BorrowKind.ModuleConst, sym };
+	if (isViewRoot(sym)) return { kind: BorrowKind.View, sym };
 	if (!isLocalBinding(sym) || resolving.includes(sym)) return null;
 	resolving.push(sym);
 	const b = localBorrow(sym, value);
@@ -806,7 +824,7 @@ function bindingBorrow(n: Node, value: Node): string | null {
 	return b;
 }
 
-function localBorrow(sym: Symbol, value: Node): string | null {
+function localBorrow(sym: Symbol, value: Node): BorrowSource | null {
 	const iterated = forOfSources.get(sym);
 	if (iterated != null) {
 		const b = borrowedOf(iterated) ?? heldBorrow(iterated);
@@ -822,7 +840,7 @@ function localBorrow(sym: Symbol, value: Node): string | null {
 }
 
 // What a local container holds: every element store and every argument of a call on it.
-function heldBorrow(container: Node | null): string | null {
+function heldBorrow(container: Node | null): BorrowSource | null {
 	const root = container != null ? pathRoot(container) : null;
 	if (root == null || !isLocalBinding(root) || resolving.includes(root)) return null;
 	resolving.push(root);
@@ -831,7 +849,7 @@ function heldBorrow(container: Node | null): string | null {
 	return b;
 }
 
-function firstBorrow(sources: Node[] | null): string | null {
+function firstBorrow(sources: Node[] | null): BorrowSource | null {
 	if (sources == null) return null;
 	for (const v of sources) {
 		const b = borrowedOf(v);
@@ -879,8 +897,8 @@ function scanFlows(node: Node | null): void {
 	visit(node);
 }
 
-function storeCause(site: Node, what: string, into: string): EffectCause {
-	return cause(site, "stores " + what + " " + into);
+function storeCause(site: Node, what: BorrowSource, into: string): EffectCause {
+	return cause(site, "stores " + borrowText(what) + " " + into);
 }
 
 function holdsNoCount(slot: Type | null): boolean {
@@ -970,7 +988,7 @@ function passedViewEffect(call: Node, passed: (Node | null)[], targets: Symbol[]
 			const decl = unpackDecl(t.declNode);
 			const params = decl != null && routineBody(decl) != null ? routineParams(decl) : [];
 			const c = i < params.length ? paramStoreEffect(t, decl!, i, params[i]) : null;
-			if (c != null) return through(call, "passes " + what + " to '" + name + "'", c);
+			if (c != null) return through(call, "passes " + borrowText(what) + " to '" + name + "'", c);
 		}
 	}
 	return null;
