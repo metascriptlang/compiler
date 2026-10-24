@@ -92,6 +92,9 @@ void msHcrCountAdd(const msTypeInfo* type, int32_t delta);
 #endif
 
 #ifdef MS_DRC_LEDGER
+enum { MS_LEDGER_RC_INC, MS_LEDGER_RC_DEC, MS_LEDGER_SHARE_INC, MS_LEDGER_SHARE_DEC, MS_LEDGER_ROOT_REG, MS_LEDGER_COUNTERS };
+void msLedgerCount(int counter);
+#define MS_LEDGER_COUNT(counter)   msLedgerCount(counter)
 void msLedgerAlloc(void* p, const msTypeInfo* type);
 void msLedgerDestroy(void* p, const msTypeInfo* type);
 #define MS_LEDGER_ALLOC(p, t)      msLedgerAlloc((p), (t))
@@ -100,6 +103,7 @@ void msLedgerDestroy(void* p, const msTypeInfo* type);
 	if ((t) != NULL && (t)->destroyFn != NULL) (t)->destroyFn(p); \
 } while (0)
 #else
+#define MS_LEDGER_COUNT(counter)   ((void)0)
 #define MS_LEDGER_ALLOC(p, t)      ((void)0)
 #define MS_DESTROY_DISPATCH(t, p)  do { \
 	if ((t) != NULL && (t)->destroyFn != NULL) (t)->destroyFn(p); \
@@ -299,6 +303,8 @@ static inline void* msAllocTypedUninit(size_t size, const msTypeInfo* type) {
 static inline void msIncRef(void* p) {
 	if (p != NULL) {
 		MS_DRC_STAT_ADD(MS_DS_RC_INC, 1);
+		MS_LEDGER_COUNT(MS_LEDGER_RC_INC);
+		MS_DRC_STAT_ADD(MS_DS_RC_INC, 1);
 		msHeader(p)->rc += MS_RC_INCREMENT;
 	}
 }
@@ -308,6 +314,8 @@ static inline void msIncRef(void* p) {
 static inline void msAtomicIncRef(void* p) {
 	if (p != NULL) {
 		MS_DRC_STAT_ADD(MS_DS_RC_INC_ATOMIC, 1);
+		MS_LEDGER_COUNT(MS_LEDGER_SHARE_INC);
+		MS_DRC_STAT_ADD(MS_DS_RC_INC_ATOMIC, 1);
 		__atomic_fetch_add(&msHeader(p)->rc, MS_RC_INCREMENT, __ATOMIC_RELAXED);
 	}
 }
@@ -316,6 +324,8 @@ void msUnregisterCycle(void* p);
 
 static inline bool msDecRefIsLast(void* p) {
 	if (p == NULL) return false;
+	MS_DRC_STAT_ADD(MS_DS_RC_DEC, 1);
+	MS_LEDGER_COUNT(MS_LEDGER_RC_DEC);
 	MS_DRC_STAT_ADD(MS_DS_RC_DEC, 1);
 	msRefHeader* h = msHeader(p);
 	/* Check count portion (upper bits) is zero — ignores ORC color/flag bits.
@@ -335,6 +345,8 @@ static inline bool msDecRefIsLast(void* p) {
  * through the cycle collector. */
 static inline bool msAtomicDecRefIsLast(void* p) {
 	if (p == NULL) return false;
+	MS_DRC_STAT_ADD(MS_DS_RC_DEC_ATOMIC, 1);
+	MS_LEDGER_COUNT(MS_LEDGER_SHARE_DEC);
 	MS_DRC_STAT_ADD(MS_DS_RC_DEC_ATOMIC, 1);
 	intptr_t old = __atomic_fetch_sub(&msHeader(p)->rc, MS_RC_INCREMENT, __ATOMIC_RELEASE);
 	if ((old & ~MS_RC_MASK) == MS_RC_INCREMENT) {
@@ -467,11 +479,14 @@ static inline void msRememberCycle(bool isDestroy, void* p, const msTypeInfo* de
 static inline void msOrcIncRef(void* p) {
 	if (p == NULL) return;
 	MS_DRC_STAT_ADD(MS_DS_RC_INC_CYC, 1);
+	MS_LEDGER_COUNT(MS_LEDGER_RC_INC);
+	MS_DRC_STAT_ADD(MS_DS_RC_INC_CYC, 1);
 	msHeader(p)->rc += MS_RC_INCREMENT;
 }
 
 static inline bool msOrcDecRefIsLast(void* p) {
 	if (p == NULL) return false;
+	MS_LEDGER_COUNT(MS_LEDGER_RC_DEC);
 	msRefHeader* h = msHeader(p);
 	bool isLast = (h->rc & ~MS_COLOR_MASK) == 0;
 	MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST, 1); MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST_TRUE, isLast);

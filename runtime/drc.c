@@ -88,6 +88,13 @@ static const char* msLedgerRowName(const msTypeInfo* type) {
 /* TOTAL prints even at zero counts: the SAN corpus runner treats "no LEDGER
  * line at all" as instrumentation loss, and a program whose only allocations
  * were baked into static const cells makes no ledger entries. */
+static long gLedgerCounter[MS_LEDGER_COUNTERS];
+void msLedgerCount(int counter) {
+	__atomic_fetch_add(&gLedgerCounter[counter], 1, __ATOMIC_RELAXED);
+}
+static long msLedgerCounterRead(int counter) {
+	return __atomic_load_n(&gLedgerCounter[counter], __ATOMIC_RELAXED);
+}
 static void msLedgerDump(void) {
 	pthread_mutex_lock(&gLedgerMutex);
 	long totalA = 0, totalD = 0;
@@ -97,6 +104,10 @@ static void msLedgerDump(void) {
 		totalA += gLedgerAllocN[i];
 		totalD += gLedgerDestroyN[i];
 	}
+	fprintf(stderr, "LEDGER COUNTS rc_inc=%ld rc_dec=%ld share_inc=%ld share_dec=%ld root_reg=%ld\n",
+		msLedgerCounterRead(MS_LEDGER_RC_INC), msLedgerCounterRead(MS_LEDGER_RC_DEC),
+		msLedgerCounterRead(MS_LEDGER_SHARE_INC), msLedgerCounterRead(MS_LEDGER_SHARE_DEC),
+		msLedgerCounterRead(MS_LEDGER_ROOT_REG));
 	fprintf(stderr, "LEDGER TOTAL alloc=%ld destroy=%ld\n", totalA, totalD);
 	fflush(stderr);
 	pthread_mutex_unlock(&gLedgerMutex);
@@ -483,6 +494,7 @@ void msRegisterCycle(void* p, const msTypeInfo* type) {
 	MS_ROOT_OWNER_CHECK(p, "register");
 	/* Already registered? */
 	if (h->rootIdx >= 0) return;
+	MS_LEDGER_COUNT(MS_LEDGER_ROOT_REG);
 	h->rootIdx = msRoots.len;
 	MS_DRC_STAT_CYCLE(type);
 	msCell cell = { p, type };

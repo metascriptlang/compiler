@@ -16,6 +16,9 @@
 //   // @serial             -> contention-sensitive (actor/spawn): its run cells
 //                             execute alone, after the parallel drain
 //   // @skip-js: why       -> no JS lane; the skip list is the JS backend worklist
+//   // @maxrcops: <n>    -> SAN cell: rc helper calls (inc + dec, owner and SHARE)
+//                             stay at or under <n>; the cell detail prints the counts
+//   // @maxroots: <n>    -> SAN cell: cycle-root registrations stay at or under <n>
 //   // @maxatomics(<host>) <n> -> danger cell: atomic instructions in the binary
 //                             (objdump) stay at or under <n> on that host
 //                             (`darwin-arm64`, `linux-x86_64`); a budgeted
@@ -50,7 +53,7 @@
 // MSCORPUS_SELFTEST=1 runs selftest/ instead of programs/: each fixture breaks one
 // directive on purpose and names the red it must produce (`// @selftest-red <substr>`
 // on one of its FAIL lines); a fixture that stays green, or that is red for another
-// reason, fails the run. Combine with MSCORPUS_SAN=1 for the SAN-lane fixtures.
+// reason, fails the run. With MSCORPUS_SAN=1 it runs the SAN-lane fixtures in selftest-san/.
 //
 // MSCORPUS_SAN=1 runs the SAN lane instead: every program built once
 // (drc) with ASan + slab-off + the DRC ledger, asserting exit + @stdout +
@@ -68,7 +71,7 @@ import { isNotFound } from "std/io/errors";
 import { sleepAsync } from "std/core/promise";
 
 const SELFTEST = envOr("MSCORPUS_SELFTEST", "") == "1";
-const PROG_DIR = SELFTEST ? "src/test/corpus/selftest/" : "src/test/corpus/programs/";
+const PROG_DIR = !SELFTEST ? "src/test/corpus/programs/" : envOr("MSCORPUS_SAN", "") == "1" ? "src/test/corpus/selftest-san/" : "src/test/corpus/selftest/";
 const OUT_DIR = "out/corpus/";
 
 // Windows has no POSIX shell, so every place this runner reaches for one is a
@@ -314,6 +317,8 @@ interface Spec {
 	atomicHosts: string[];
 	atomicMax: int32[];
 	selftestRed: string;
+	maxRcOps: int32;
+	maxRoots: int32;
 }
 
 interface Cell {
@@ -503,6 +508,7 @@ function parseSpec(name: string, entry: string): Spec {
 		xfailLanes: [], serial: false, skipJs: false, skipRaiser: false,
 		slackTypes: [], slackNs: [],
 		atomicHosts: [], atomicMax: [], selftestRed: "",
+		maxRcOps: -1, maxRoots: -1,
 	};
 	const src = readFileOr(entry, "");
 	const lines = src.split("\n");
@@ -513,6 +519,10 @@ function parseSpec(name: string, entry: string): Spec {
 		if (rss != "") { spec.maxRssMb = rss.parseInt() as float64; }
 		const sub = directiveValue(t, "@stdout");
 		if (sub != "") { spec.stdoutSubs.push(sub); }
+		const rcOps = directiveValue(t, "@maxrcops");
+		if (rcOps != "") { spec.maxRcOps = rcOps.parseInt() as int32; }
+		const roots = directiveValue(t, "@maxroots");
+		if (roots != "") { spec.maxRoots = roots.parseInt() as int32; }
 		const ec = directiveValue(t, "@exit");
 		if (ec != "") { spec.expectExit = ec.parseInt() as int32; }
 		if (t.indexOf("// @serial") == 0) { spec.serial = true; }
@@ -920,9 +930,41 @@ function finishSanCell(c: Cell): void {
 	if (asanLine != "") { detail = detail + " [" + asanLine + "]"; }
 	if (doubleLine != "") { detail = detail + " [" + doubleLine + "]"; }
 	if (imbalance != "") { detail = detail + " [ledger " + imbalance + "]"; }
-	c.pass = exitOk && outOk && asanLine == "" && doubleLine == "" && imbalance == "" && ledgerLive;
+	const overCounts = ledgerCountsOver(c.spec, errLog);
+	if (overCounts != "") { detail = detail + " [" + overCounts + "]"; }
+	const counts = lastLineContaining(errLog, "LEDGER COUNTS ");
+	if (counts != "") { detail = detail + " " + counts.slice(counts.indexOf("LEDGER COUNTS ") + 14, counts.length); }
+	c.pass = exitOk && outOk && asanLine == "" && doubleLine == "" && imbalance == "" && overCounts == "" && ledgerLive;
 	c.detail = detail;
 	c.finished = true;
+}
+
+function lastLineContaining(text: string, needle: string): string {
+	let found = "";
+	for (const line of text.split("\n")) { if (line.contains(needle)) { found = line.trim(); } }
+	return found;
+}
+
+function ledgerCount(line: string, key: string): int32 {
+	const at = line.indexOf(" " + key + "=");
+	if (at < 0) { return -1; }
+	const rest = line.slice(at + key.length + 2, line.length);
+	const end = rest.indexOf(" ");
+	return (end < 0 ? rest : rest.slice(0, end)).parseInt() as int32;
+}
+
+// The ledger counts every rc helper call and root registration the program made; a
+// budget bounds them, so an op the optimizer used to remove comes back as a red.
+function ledgerCountsOver(spec: Spec, errLog: string): string {
+	if (spec.maxRcOps < 0 && spec.maxRoots < 0) { return ""; }
+	const line = lastLineContaining(errLog, "LEDGER COUNTS ");
+	if (line == "") { return "no LEDGER COUNTS line, so @maxrcops/@maxroots cannot be checked"; }
+	const over: string[] = [];
+	const rcOps = ledgerCount(line, "rc_inc") + ledgerCount(line, "rc_dec") + ledgerCount(line, "share_inc") + ledgerCount(line, "share_dec");
+	if (spec.maxRcOps >= 0 && rcOps > spec.maxRcOps) { over.push("rc ops " + rcOps + ">" + spec.maxRcOps); }
+	const roots = ledgerCount(line, "root_reg");
+	if (spec.maxRoots >= 0 && roots > spec.maxRoots) { over.push("root registrations " + roots + ">" + spec.maxRoots); }
+	return joinWith(over, ", ");
 }
 
 function finishCell(c: Cell): void {
