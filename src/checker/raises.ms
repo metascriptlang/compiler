@@ -22,6 +22,7 @@ let _statementValues: Node[] = [];
 let _walkInfo: RoutineInfo | null = null;
 let _walkCaught = false;
 let _holdFound = false;
+let _blindBroken = false;
 
 export function resetRaises(): void {
 	_raisesNothing = new HashSet<Symbol>();
@@ -303,18 +304,22 @@ export function statementCanRaise(value: Readonly<Node>): boolean {
 // True when running the body can neither set nor observe the error flag: every call is a
 // never-raising runtime or lifecycle routine and nothing throws, awaits, nests a try or jumps out
 // (a jump out of a finally drops the exception in flight, which the error scaffold clears).
-export function bodyIsErrorBlind(node: Node | null): boolean {
-	if (node == null || isNestedRoutine(node)) return true;
+function bodyIsErrorBlind(node: Node | null): boolean {
+	_blindBroken = false;
+	blindStep(node);
+	return !_blindBroken;
+}
+
+function blindStep(node: Node | null): void {
+	if (_blindBroken || node == null || isNestedRoutine(node)) return;
 	match (node.kind) {
 		NodeKind.ThrowStmt | NodeKind.NewExpr | NodeKind.AwaitExpr | NodeKind.YieldExpr
 			| NodeKind.TryCatchStmt | NodeKind.MacroInvocation
-			| NodeKind.ReturnStmt | NodeKind.BreakStmt | NodeKind.ContinueStmt => { return false; },
-		NodeKind.CallExpr => { if (classifyCall(node) != CallRaise.Never) return false; },
+			| NodeKind.ReturnStmt | NodeKind.BreakStmt | NodeKind.ContinueStmt => { _blindBroken = true; return; },
+		NodeKind.CallExpr => { if (classifyCall(node) != CallRaise.Never) { _blindBroken = true; return; } },
 		_ => {},
 	};
-	let blind = true;
-	forEachChild(node, (child: Node): void => { if (blind && !bodyIsErrorBlind(child)) blind = false; });
-	return blind;
+	forEachChild(node, blindStep);
 }
 
 // Marks each finally block that runs without touching the error flag, so codegen reads the verdict
@@ -325,7 +330,7 @@ export function markErrorBlindFinallies(node: Node | null): void {
 		const fin = (node.data as TryCatchStmtData).finallyBody;
 		if (fin != null && bodyIsErrorBlind(fin)) fin.flags = fin.flags.incl(NodeFlag.CannotRaise);
 	}
-	forEachChild(node, (child: Node): void => { markErrorBlindFinallies(child); });
+	forEachChild(node, markErrorBlindFinallies);
 }
 
 export function finallyIsErrorBlind(fin: Readonly<Node>): boolean {
