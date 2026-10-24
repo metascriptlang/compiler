@@ -740,7 +740,7 @@ export interface DeferredElement {
 
 export class CGen {
 	emissionFacts: Cursor<Readonly<CEmissionFacts>>;
-	preparationFacts: CEmissionFacts | null;
+	preparationFacts: Cursor<CEmissionFacts> | null;
 	errors: CheckerError[];
 	preparingDeclarations: boolean;
 	emittedInstances: HashSet<string>;
