@@ -222,100 +222,11 @@ export function compareVersionStrings(a: string, b: string): Result<int32, Versi
 	return Result.ok(compareVersions(pa, pb));
 }
 
-// MVS helper: returns the largest version string from the list.
-// Returns empty string if the list is empty or contains any invalid version.
-export function maxVersion(versions: string[]): string {
-	if (versions.length == 0) return "";
-	const first = parseVersion(versions[0]);
-	if (!first.ok) return "";
-	let best = first.value;
-	let bestStr = versions[0];
-	for (let i = 1; i < versions.length; i++) {
-		const cur = parseVersion(versions[i]);
-		if (!cur.ok) return "";
-		if (compareVersions(cur.value, best) > 0) {
-			best = cur.value;
-			bestStr = versions[i];
-		}
-	}
-	return bestStr;
-}
-
 // --- Source type discrimination ---
 
 export enum SourceKind {
 	Registry,
 	Git,
-}
-
-export interface ParsedGitSpec {
-	url: string;          // "github.com/owner/repo" (normalized, no protocol)
-	ref: string;          // tag "1.2.3" or 40-char SHA
-}
-
-export enum GitSpecError {
-	NotGit,
-	NoRef,
-	UnknownHost,
-}
-
-export function gitSpecErrorMessage(e: GitSpecError): string {
-	return match (e) {
-		GitSpecError.NotGit => "a git source starts with git:",
-		GitSpecError.NoRef => "a git source needs <host>/<path>@<ref>",
-		GitSpecError.UnknownHost => "the git host is not one of the known hosts",
-	};
-}
-
-// Well-known git hosts that provide HTTPS archive URLs (no git binary needed).
-const KNOWN_GIT_HOSTS: string[] = ["github.com", "gitlab.com", "bitbucket.org", "codeberg.org"];
-
-function isKnownHost(host: string): boolean {
-	for (const kh of KNOWN_GIT_HOSTS) {
-		if (host == kh) return true;
-	}
-	return false;
-}
-
-// Check if a string is a valid 40-character hex SHA.
-function isHexSha40(s: string): boolean {
-	if (s.length != 40) return false;
-	let i = 0;
-	while (i < 40) {
-		const c = s.byteAt(i);
-		const isDigit = c >= "0".code && c <= "9".code;
-		const isLower = c >= "a".code && c <= "f".code;
-		if (!isDigit && !isLower) return false;
-		i = i + 1;
-	}
-	return true;
-}
-
-// Parse a git source spec: "git:<host>/<path>@<ref>"
-// The ref is any tag name the repo uses or a 40-char commit SHA; only an empty
-// ref is rejected here, the archive fetch validates the rest.
-export function parseGitSpec(s: string): Result<ParsedGitSpec, GitSpecError> {
-	if (!s.startsWith("git:")) return Result.err(GitSpecError.NotGit);
-
-	const rest = s.slice(4, s.length);  // "github.com/owner/repo@v1.2.3"
-	// Split on LAST @ — URL may contain slashes but not @
-	const atIdx = rest.lastIndexOf("@");
-	if (atIdx < 1) return Result.err(GitSpecError.NoRef);
-
-	const url = rest.slice(0, atIdx);
-	const gitRef = rest.slice(atIdx + 1, rest.length);
-	if (gitRef.length == 0) return Result.err(GitSpecError.NoRef);
-
-	const slash = url.indexOf("/");
-	const host = slash >= 0 ? url.slice(0, slash) : url;
-	if (!isKnownHost(host)) return Result.err(GitSpecError.UnknownHost);
-
-	return Result.ok({ url, ref: gitRef });
-}
-
-// Classify a dependency version string as a registry or git source.
-export function sourceKindOf(s: string): SourceKind {
-	return s.startsWith("git:") ? SourceKind.Git : SourceKind.Registry;
 }
 
 // A `file:` spec names a local directory; a bare `file:` names nothing.
@@ -530,89 +441,11 @@ test "a numeric pre-release identifier of any length compares by value" {
 	assert comparesAs("1.0.0-9", "1.0.0-10", -1);
 }
 
-test "maxVersion picks highest" {
-	const vs: string[] = ["1.0.0", "1.2.3", "1.2.0"];
-	assert maxVersion(vs) == "1.2.3";
-}
-
-test "maxVersion prefers release over prerelease" {
-	const vs: string[] = ["1.2.3-rc1", "1.2.3"];
-	assert maxVersion(vs) == "1.2.3";
-}
-
-test "maxVersion empty list" {
-	const vs: string[] = [];
-	assert maxVersion(vs) == "";
-}
-
-test "maxVersion single entry" {
-	const vs: string[] = ["1.2.3"];
-	assert maxVersion(vs) == "1.2.3";
-}
-
-test "maxVersion rejects any invalid entry" {
-	const vs: string[] = ["1.2.3", "not-a-version"];
-	assert maxVersion(vs) == "";
-}
-
 test "isValidVersion convenience" {
 	assert isValidVersion("1.2.3");
 	assert !isValidVersion("v1.2.3");
 	assert !isValidVersion("");
 	assert isValidVersion("1.0.0-rc1");
-}
-
-// --- Git spec tests ---
-
-function parsedGit(s: string): ParsedGitSpec {
-	const r = parseGitSpec(s);
-	if (r.ok) return r.value;
-	return { url: "", ref: "" };
-}
-
-function gitFailsWith(s: string, e: GitSpecError): boolean {
-	const r = parseGitSpec(s);
-	if (r.ok) return false;
-	return r.error == e;
-}
-
-test "parseGitSpec valid tag" {
-	const g = parsedGit("git:github.com/acme/foo@v1.2.3");
-	assert g.url == "github.com/acme/foo";
-	assert g.ref == "v1.2.3";  // git ref preserves the original tag name
-}
-
-test "parseGitSpec valid SHA" {
-	const g = parsedGit("git:github.com/acme/foo@abcdef1234567890abcdef1234567890abcdef12");
-	assert g.ref == "abcdef1234567890abcdef1234567890abcdef12";
-}
-
-test "parseGitSpec accepts every known host" {
-	assert parsedGit("git:gitlab.com/group/project@v2.0.0").url == "gitlab.com/group/project";
-	assert parseGitSpec("git:bitbucket.org/team/repo@v1.0.0").ok;
-	assert parseGitSpec("git:codeberg.org/user/repo@v0.1.0").ok;
-}
-
-test "parseGitSpec accepts a branch or a short ref" {
-	assert parsedGit("git:github.com/acme/foo@main").ref == "main";
-	assert parsedGit("git:github.com/acme/foo@abc123").ref == "abc123";
-}
-
-test "parseGitSpec reports why a spec is refused" {
-	assert gitFailsWith("git:example.com/foo/bar@v1.0.0", GitSpecError.UnknownHost);
-	assert gitFailsWith("github.com/acme/foo@v1.0.0", GitSpecError.NotGit);
-	assert gitFailsWith("git:github.com/acme/foo@", GitSpecError.NoRef);
-	assert gitFailsWith("git:github.com/acme/foo", GitSpecError.NoRef);
-	assert gitFailsWith("git:@v1.0.0", GitSpecError.NoRef);
-}
-
-// --- sourceKindOf tests ---
-
-test "sourceKindOf tells git from registry" {
-	assert sourceKindOf("1.2.3") == SourceKind.Registry;
-	assert sourceKindOf("not-a-version") == SourceKind.Registry;
-	assert sourceKindOf("git:github.com/acme/foo@v1.2.3") == SourceKind.Git;
-	assert sourceKindOf("git:") == SourceKind.Git;
 }
 
 test "fileDepPath resolves a file: spec against the base and refuses other specs" {

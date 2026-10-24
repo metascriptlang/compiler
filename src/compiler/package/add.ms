@@ -3,13 +3,16 @@
 // Usage:
 //   msc add <name>@<version>         — registry dep (exact version)
 //   msc add <name>@<version> -D      — dev dep
-//   msc add git:<url>@<ref>          — git dep
+//   msc add <name>@file:<path>       — local folder
+//
+// A git source is refused: nothing installs one yet.
 //
 // For v1: adds dep to build.ms and writes/updates msc.lock.
 // Registry fetch (resolving "latest" without @version) requires the registry
 // server — deferred until the server is updated to match PACKAGE.md spec.
 
-import { exists } from "std/fs";
+import { exists, readFile, writeFile, ensureDir, removeAll } from "std/fs";
+import { tmpDir } from "../../utils/path";
 import { join } from "std/fs/path";
 import { addDepToManifest, manifestErrorMessage } from "./manifest";
 import {
@@ -20,7 +23,7 @@ import {
 	Lockfile,
 	LockfileError,
 } from "./lockfile";
-import { parseVersion, parseGitSpec, sourceKindOf, isFileDep, SourceKind } from "./version";
+import { parseVersion, isFileDep, SourceKind } from "./version";
 import { LockEntry } from "./lockfile";
 import { fetchPackageInfo, findVersion, latestVersion, RegistryVersion, RegistryPackage } from "./registry";
 import { downloadPackage, packageErrorMessage } from "./download";
@@ -34,31 +37,6 @@ import { downloadPackage, packageErrorMessage } from "./download";
 //   "@acme/router"        → { name: "@acme/router", version: "" }
 //   "@acme/router@1.0.0"  → { name: "@acme/router", version: "1.0.0" }
 export function parseNameVersion(arg: string): { name: string, version: string } {
-	// Git source: entire string is the version spec
-	if (arg.length >= 4 && arg.slice(0, 4) == "git:") {
-		// Extract alias from the repo name (last path segment before @)
-		const spec = parseGitSpec(arg);
-		if (spec.ok) {
-			const url = spec.value.url;
-			const alias = url.slice(url.lastIndexOf("/") + 1, url.length);
-			return { name: alias, version: arg };
-		}
-		return { name: "", version: "" };
-	}
-
-	// Check for alias=git:... syntax
-	let eqIdx = -1;
-	let ei = 0;
-	while (ei < arg.length) {
-		if (arg.charAt(ei) == "=") { eqIdx = ei; ei = arg.length; }
-		ei = ei + 1;
-	}
-	if (eqIdx > 0 && eqIdx + 4 < arg.length && arg.slice(eqIdx + 1, eqIdx + 5) == "git:") {
-		const alias = arg.slice(0, eqIdx);
-		const gitSpec = arg.slice(eqIdx + 1, arg.length);
-		return { name: alias, version: gitSpec };
-	}
-
 	// Scoped package: @org/name or @org/name@version
 	// The first @ is the org prefix, find the @ after the / for the version
 	if (arg.length > 0 && arg.charAt(0) == "@") {
@@ -126,20 +104,6 @@ export function parseNameVersion(arg: string): { name: string, version: string }
 	return { name: arg, version: "" };
 }
 
-function gitLockEntry(name: string, version: string, url: string, gitRef: string): LockEntry {
-	return {
-		key: name + "@" + version,
-		source: SourceKind.Git,
-		version: "",
-		integrity: "",
-		url,
-		gitRef,
-		commit: "",
-		depKeys: [],
-		depValues: [],
-	};
-}
-
 function registryLockEntry(
 	name: string,
 	version: string,
@@ -169,6 +133,11 @@ function registryVersionOf(
 	const info = fetchPackageInfo(name);
 	if (!info.ok) return null;
 	return findVersion(info.value, version);
+}
+
+// A git source in any spelling: `git:…`, `name@git:…` or `alias=git:…`.
+function isGitSource(arg: string): boolean {
+	return arg.startsWith("git:") || arg.indexOf("@git:") >= 0 || arg.indexOf("=git:") >= 0;
 }
 
 // Execute `msc add <args>`.
@@ -202,6 +171,12 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 
 	if (pkgArg == "") {
 		console.log("error: no package specifier provided");
+		return false;
+	}
+
+	if (isGitSource(pkgArg)) {
+		console.log("error: git sources are not installed yet: " + pkgArg);
+		console.log("use <name>@<version> from the registry or <name>@file:<path>");
 		return false;
 	}
 
@@ -244,20 +219,7 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 		return true;
 	}
 
-	// Validate version
-	const kind = sourceKindOf(parsed.version);
-	let gitUrl = "";
-	let gitRef = "";
-	if (kind == SourceKind.Git) {
-		const git = parseGitSpec(parsed.version);
-		if (!git.ok) {
-			console.log("error: invalid git source '" + parsed.version + "'");
-			console.log("expected format: git:<host>/<path>@<tag-or-sha>");
-			return false;
-		}
-		gitUrl = git.value.url;
-		gitRef = git.value.ref;
-	} else if (!parseVersion(parsed.version).ok) {
+	if (!parseVersion(parsed.version).ok) {
 		console.log("error: invalid version '" + parsed.version + "'");
 		console.log("expected format: <major>.<minor>.<patch> (e.g. 1.2.3)");
 		return false;
@@ -283,13 +245,11 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 		return false;
 	}
 
-	const entry = kind == SourceKind.Git
-		? gitLockEntry(parsed.name, parsed.version, gitUrl, gitRef)
-		: registryLockEntry(
-			parsed.name,
-			parsed.version,
-			registryVersionOf(parsed.name, parsed.version, registryPkg),
-		);
+	const entry = registryLockEntry(
+		parsed.name,
+		parsed.version,
+		registryVersionOf(parsed.name, parsed.version, registryPkg),
+	);
 
 	// Check if already in lockfile — match by package name (not full key,
 	// since the key includes the version and we're updating to a new version)
@@ -382,12 +342,40 @@ test "a registry lock entry takes integrity, url and deps from the registry reco
 	assert entry.depValues[0] == "0.1.0";
 }
 
-test "a git lock entry keeps the url and ref and has no commit yet" {
-	const spec = "git:github.com/me/foo@v1.0.0";
-	const entry = gitLockEntry("foo", spec, "github.com/me/foo", "v1.0.0");
-	assert entry.key == "foo@" + spec;
-	assert entry.source == SourceKind.Git;
-	assert entry.url == "github.com/me/foo";
-	assert entry.gitRef == "v1.0.0";
-	assert entry.commit == "";
+function addProject(label: string): string {
+	const root = join(tmpDir(), "mscAddTest-" + label);
+	removeAll(root);
+	ensureDir(root);
+	writeFile(join(root, "build.ms"), addBuildMs);
+	return root;
+}
+
+const addBuildMs = "const config = { package: { name: \"app\", version: \"1.0.0\" }, deps: {  }, devDeps: {  } };\nexport default config;\n";
+
+test "add refuses a git source and leaves build.ms and msc.lock alone" {
+	const specs = [
+		"foo@git:github.com/acme/foo@v1.2.3",
+		"git:github.com/acme/foo@v1.2.3",
+		"foo=git:github.com/acme/foo@v1.2.3",
+		"@acme/foo@git:github.com/acme/foo@v1.2.3",
+	];
+	for (const spec of specs) {
+		const root = addProject("git");
+		assert !cmdAdd(root, [spec]);
+		assert (try readFile(join(root, "build.ms")) catch "") == addBuildMs;
+		assert !exists(join(root, "msc.lock"));
+	}
+}
+
+test "add refuses a git source as a dev dep too" {
+	const root = addProject("gitDev");
+	assert !cmdAdd(root, ["foo@git:github.com/acme/foo@v1.2.3", "-D"]);
+	assert (try readFile(join(root, "build.ms")) catch "") == addBuildMs;
+	assert !exists(join(root, "msc.lock"));
+}
+
+test "add still takes a file: source" {
+	const root = addProject("file");
+	assert cmdAdd(root, ["foo@file:../foo"]);
+	assert (try readFile(join(root, "build.ms")) catch "").includes("file:../foo");
 }
