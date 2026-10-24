@@ -130,8 +130,7 @@ int64_t msTlsConnect(msString hostname, int32_t port, msString caPath) {
 	int fd = tcpConnect(hostBuf, port);
 	if (fd < 0) return 0;
 
-	msTlsCtx *ctx = (msTlsCtx*)calloc(1, sizeof(msTlsCtx));
-	if (!ctx) { ms_close_socket(fd); return 0; }
+	msTlsCtx *ctx = (msTlsCtx*)msMemAlloc0(sizeof(msTlsCtx));
 	ctx->fd = fd;
 
 	mbedtls_ssl_init(&ctx->ssl);
@@ -203,8 +202,7 @@ msString msTlsRead(int64_t handle, int32_t maxBytes) {
 	msTlsCtx *ctx = TLS_FROM_HANDLE(handle);
 	if (!ctx || maxBytes <= 0) return MS_EMPTY_STRING;
 
-	unsigned char *buf = (unsigned char*)malloc(maxBytes);
-	if (!buf) return MS_EMPTY_STRING;
+	unsigned char *buf = (unsigned char*)msMemAlloc(maxBytes);
 
 	int ret = mbedtls_ssl_read(&ctx->ssl, buf, maxBytes);
 	if (ret <= 0) {

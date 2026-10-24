@@ -222,8 +222,7 @@ static inline msString msNetRecv(int32_t fd, int32_t maxBytes) {
 	if (maxBytes <= 0) return MS_EMPTY_STRING;
 	if (maxBytes > 16777216) maxBytes = 16777216; /* 16 MiB cap */
 
-	char* buf = (char*)malloc((size_t)maxBytes + 1);
-	if (!buf) return MS_EMPTY_STRING;
+	char* buf = (char*)msMemAlloc((size_t)maxBytes + 1);
 
 	ms_ssize_t received;
 	do {
@@ -673,7 +672,7 @@ static inline msString msBuildResponse(int32_t status, msString statusTextStr,
 	if (hlen < 0 || hlen >= 512) hlen = 511;
 	int32_t total = hlen + bodyLen;
 	/* Allocate string: payload header + data */
-	msStrPayload* pp = (msStrPayload*)malloc(sizeof(msStrPayload) + total + 1);
+	msStrPayload* pp = (msStrPayload*)msMemAlloc(sizeof(msStrPayload) + total + 1);
 	pp->cap = total;
 	memcpy(pp->data, header, hlen);
 	if (body.p && bodyLen > 0)

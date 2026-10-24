@@ -667,7 +667,7 @@ static void msHcrGuardSignal(int sig, siginfo_t* info, void* context) {
 static void msHcrGuardInstall(void) {
 	if (msHcrGuardAltStack == NULL) {
 		size_t size = 65536;
-		msHcrGuardAltStack = malloc(size);
+		msHcrGuardAltStack = msHcrAllocate(size);
 		stack_t stack;
 		stack.ss_sp = msHcrGuardAltStack;
 		stack.ss_size = size;

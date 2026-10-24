@@ -40,7 +40,7 @@ static msIoRequest* allocRequest(msIoEngine* e) {
 		memset(r, 0, sizeof(msIoRequest));
 		return r;
 	}
-	return (msIoRequest*)calloc(1, sizeof(msIoRequest));
+	return (msIoRequest*)msMemAlloc0(sizeof(msIoRequest));
 }
 
 static void freeRequest(msIoEngine* e, msIoRequest* r) {
@@ -55,7 +55,7 @@ static void growFdMap(msIoEngine* e, int fd) {
 	if (fd < e->fdMapCap) return;
 	int newCap = e->fdMapCap;
 	while (newCap <= fd) newCap *= 2;
-	e->fdMap = (msIoRequest**)realloc(e->fdMap, newCap * sizeof(msIoRequest*));
+	e->fdMap = (msIoRequest**)msRealloc(e->fdMap, e->fdMapCap * sizeof(msIoRequest*), newCap * sizeof(msIoRequest*));
 	memset(e->fdMap + e->fdMapCap, 0, (newCap - e->fdMapCap) * sizeof(msIoRequest*));
 	e->fdMapCap = newCap;
 }
@@ -63,14 +63,14 @@ static void growFdMap(msIoEngine* e, int fd) {
 /* ===== Create / Destroy ===== */
 
 msIoEngine* msIoEngineCreate(void) {
-	msIoEngine* e = (msIoEngine*)calloc(1, sizeof(msIoEngine));
+	msIoEngine* e = (msIoEngine*)msMemAlloc0(sizeof(msIoEngine));
 	e->selector = msSelectorCreate();
 	if (e->selector == NULL) { free(e); return NULL; }
 	e->fdMapCap = ENGINE_INIT_FDMAP;
-	e->fdMap = (msIoRequest**)calloc(ENGINE_INIT_FDMAP, sizeof(msIoRequest*));
+	e->fdMap = (msIoRequest**)msMemAlloc0(ENGINE_INIT_FDMAP * sizeof(msIoRequest*));
 	/* Pre-allocate request pool */
 	for (int i = 0; i < ENGINE_INIT_POOL; i++) {
-		msIoRequest* r = (msIoRequest*)calloc(1, sizeof(msIoRequest));
+		msIoRequest* r = (msIoRequest*)msMemAlloc0(sizeof(msIoRequest));
 		r->next = e->freeList;
 		e->freeList = r;
 		e->freeCount++;
@@ -134,7 +134,7 @@ void* msIoRecv(msIoEngine* e, int fd, int32_t maxBytes) {
 	msIoRequest* req = allocRequest(e);
 	req->op = MS_IO_RECV;
 	req->fd = fd;
-	req->buf = (char*)malloc((size_t)maxBytes + 1);
+	req->buf = (char*)msMemAlloc((size_t)maxBytes + 1);
 	req->len = maxBytes;
 	msFuture_msString* fut = msIoStringFutureCreate();
 	req->fut = fut;
@@ -418,8 +418,9 @@ static void fsWatchAppend(msFsWatcher* w, char kind, const char* rel) {
 		return;
 	}
 	if (w->used + length + 2 > w->cap) {
+		size_t oldCap = w->cap;
 		while (w->used + length + 2 > w->cap) w->cap = w->cap == 0 ? 256 : w->cap * 2;
-		w->batch = (char*)realloc(w->batch, w->cap);
+		w->batch = (char*)msRealloc(w->batch, oldCap, w->cap);
 	}
 	if (w->used > 0) w->batch[w->used++] = '\n';
 	w->batch[w->used++] = kind;
@@ -489,7 +490,7 @@ static void fsWatchRelease(int32_t handle) {
 int32_t msFsWatchOpen(msIoEngine* e, msString path) {
 	(void)e;
 	_msFsWatchLastError = 0;
-	char* given = (char*)malloc((size_t)path.len + 1);
+	char* given = (char*)msMemAlloc((size_t)path.len + 1);
 	memcpy(given, path.p ? path.p->data : "", (size_t)path.len);
 	given[path.len] = 0;
 	struct stat info;
@@ -517,19 +518,20 @@ int32_t msFsWatchOpen(msIoEngine* e, msString path) {
 		fcntl(fds[i], F_SETFL, fcntl(fds[i], F_GETFL) | O_NONBLOCK);
 		fcntl(fds[i], F_SETFD, FD_CLOEXEC);
 	}
-	msFsWatcher* w = (msFsWatcher*)calloc(1, sizeof(msFsWatcher));
+	msFsWatcher* w = (msFsWatcher*)msMemAlloc0(sizeof(msFsWatcher));
 	w->readFd = fds[0];
 	w->writeFd = fds[1];
 	w->open = 1;
-	w->root = strdup(resolved);
 	w->rootLen = strlen(resolved);
+	w->root = (char*)msMemAlloc(w->rootLen + 1);
+	memcpy(w->root, resolved, w->rootLen + 1);
 	pthread_mutex_init(&w->lock, NULL);
 	int32_t handle = _msFsWatcherCount;
 	for (int32_t i = 0; i < _msFsWatcherCount; i++) {
 		if (_msFsWatchers[i] == NULL) { handle = i; break; }
 	}
 	if (handle == _msFsWatcherCount) {
-		_msFsWatchers = (msFsWatcher**)realloc(_msFsWatchers, (size_t)(_msFsWatcherCount + 1) * sizeof(msFsWatcher*));
+		_msFsWatchers = (msFsWatcher**)msRealloc(_msFsWatchers, (size_t)_msFsWatcherCount * sizeof(msFsWatcher*), (size_t)(_msFsWatcherCount + 1) * sizeof(msFsWatcher*));
 		_msFsWatcherCount++;
 	}
 	_msFsWatchers[handle] = w;
@@ -585,7 +587,7 @@ void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) {
 }
 
 int32_t msFsWriteSettled(msString path) {
-	char* name = (char*)malloc((size_t)path.len + 1);
+	char* name = (char*)msMemAlloc((size_t)path.len + 1);
 	if (path.len > 0) memcpy(name, path.p->data, (size_t)path.len);
 	name[path.len] = 0;
 	int absent = access(name, F_OK) != 0;

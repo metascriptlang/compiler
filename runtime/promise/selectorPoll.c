@@ -30,10 +30,10 @@ struct msSelector {
 };
 
 msSelector* msSelectorCreate(void) {
-	msSelector* sel = (msSelector*)calloc(1, sizeof(msSelector));
+	msSelector* sel = (msSelector*)msMemAlloc0(sizeof(msSelector));
 	sel->cap = MS_POLL_INIT_CAP;
-	sel->fds = (struct pollfd*)calloc(sel->cap, sizeof(struct pollfd));
-	sel->userdata = (void**)calloc(sel->cap, sizeof(void*));
+	sel->fds = (struct pollfd*)msMemAlloc0(sel->cap * sizeof(struct pollfd));
+	sel->userdata = (void**)msMemAlloc0(sel->cap * sizeof(void*));
 	return sel;
 }
 
@@ -63,8 +63,8 @@ int msSelectorRegister(msSelector* sel, int fd, uint32_t events, void* userdata)
 	if (msPollFind(sel, fd) >= 0) return -1; /* already registered */
 	if (sel->len >= sel->cap) {
 		int newCap = sel->cap * 2;
-		sel->fds = (struct pollfd*)realloc(sel->fds, newCap * sizeof(struct pollfd));
-		sel->userdata = (void**)realloc(sel->userdata, newCap * sizeof(void*));
+		sel->fds = (struct pollfd*)msRealloc(sel->fds, sel->cap * sizeof(struct pollfd), newCap * sizeof(struct pollfd));
+		sel->userdata = (void**)msRealloc(sel->userdata, sel->cap * sizeof(void*), newCap * sizeof(void*));
 		sel->cap = newCap;
 	}
 	sel->fds[sel->len].fd = fd;

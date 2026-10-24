@@ -184,7 +184,7 @@ static inline void msFutureThenEnvFree(msFutureThenEnv* e) {
 
 static inline msFuture* msFutureThenAttach(void* input, msClosure onFulfilled, msClosure onRejected, int typeTag, msClosureFn cb) {
     msFuture* output = (msFuture*)msFutureCreate();
-    msFutureThenEnv* env = (msFutureThenEnv*)malloc(sizeof(msFutureThenEnv));
+    msFutureThenEnv* env = (msFutureThenEnv*)msMemAlloc(sizeof(msFutureThenEnv));
     env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output);
     msClosureCopy(onFulfilled); env->onFulfilled = onFulfilled;
     msClosureCopy(onRejected); env->onRejected = onRejected;
@@ -305,7 +305,7 @@ static inline void name##_cb(void* raw) { \
 } \
 static inline void* name(void* input, msClosure onRejected) { \
     msFuture* output = (msFuture*)msAlloc(sizeof(fut_type)); \
-    msFutureCatchEnv* env = (msFutureCatchEnv*)malloc(sizeof(msFutureCatchEnv)); \
+    msFutureCatchEnv* env = (msFutureCatchEnv*)msMemAlloc(sizeof(msFutureCatchEnv)); \
     env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onRejected); env->onRejected = onRejected; env->typeTag = MS_TYPETAG_PTR; \
     msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)name##_cb, .env = env}); \
     return output; \
@@ -437,15 +437,15 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
             msFutureComplete(result, resultArr); \
             return result; \
         } \
-        /* calloc (not malloc): zeroed slots make the failure/dup paths safe — the
+        /* msMemAlloc0 (not msMemAlloc): zeroed slots make the failure/dup paths safe — the
          * cell's arrDestroyFn walks all `len` slots, and an uncollected slot must
          * read as NULL/zero (destroy no-op), never garbage. */ \
-        payloadType* payload = (payloadType*)calloc(1, sizeof(payloadType) + (size_t)count * sizeof(DstT)); \
+        payloadType* payload = (payloadType*)msMemAlloc0(sizeof(payloadType) + (size_t)count * sizeof(DstT)); \
         payload->cap = count; \
         resultArr->p = payload; \
-        elemFutType** inputsCopy = (elemFutType**)malloc((size_t)count * sizeof(elemFutType*)); \
+        elemFutType** inputsCopy = (elemFutType**)msMemAlloc((size_t)count * sizeof(elemFutType*)); \
         for (int i = 0; i < count; i++) { inputsCopy[i] = futures[i]; msIncref(inputsCopy[i]); } \
-        elemFutType##_allState* state = (elemFutType##_allState*)calloc(1, sizeof(elemFutType##_allState)); \
+        elemFutType##_allState* state = (elemFutType##_allState*)msMemAlloc0(sizeof(elemFutType##_allState)); \
         state->result = result; \
         msIncref(result); \
         state->inputs = inputsCopy; \
@@ -456,7 +456,7 @@ static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
         atomic_store_explicit(&state->failed, false, memory_order_relaxed); \
         msFutureEdgeAll(result, (void* const*)inputsCopy, count); \
         for (int i = 0; i < count; i++) { \
-            elemFutType##_allCbEnv* cbEnv = (elemFutType##_allCbEnv*)malloc(sizeof(elemFutType##_allCbEnv)); \
+            elemFutType##_allCbEnv* cbEnv = (elemFutType##_allCbEnv*)msMemAlloc(sizeof(elemFutType##_allCbEnv)); \
             cbEnv->state = state; \
             cbEnv->index = i; \
             msFutureAddCallback((msFuture*)futures[i], (msClosure){ \

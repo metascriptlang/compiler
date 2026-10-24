@@ -255,7 +255,7 @@ static inline void msSpawnTaskSubmit(msAwaitGroup* group, int32_t slot, msClosur
 		.fut = NULL,
 		.group = group,
 		.slot = slot,
-		.cancelFlag = group ? &group->cancelled : NULL,
+		.cancelFlag = &group->cancelled,
 		.ownerQueue = msLoopCompletionQueue(),
 	};
 	if (fn.env != NULL) {
@@ -306,7 +306,7 @@ typedef struct msSpawnHeld {
 } msSpawnHeld;
 
 static inline void* msSpawnHeldCreate(void) {
-	return calloc(1, sizeof(msSpawnHeld));
+	return msMemAlloc0(sizeof(msSpawnHeld));
 }
 
 static inline void msSpawnHeldKeep(void* hp, void* fut) {
@@ -320,9 +320,9 @@ static inline void msSpawnHeldKeep(void* hp, void* fut) {
 		}
 		h->len = live;
 		if (h->len == h->cap) {
-			h->cap = h->cap > 0 ? h->cap * 2 : 4;
-			h->futs = (void**)realloc(h->futs, (size_t)h->cap * sizeof(void*));
-			if (h->futs == NULL) abort();
+			int64_t oldCap = h->cap;
+			h->cap = oldCap > 0 ? oldCap * 2 : 4;
+			h->futs = (void**)msRealloc(h->futs, (size_t)oldCap * sizeof(void*), (size_t)h->cap * sizeof(void*));
 		}
 	}
 	msIncRef(fut);

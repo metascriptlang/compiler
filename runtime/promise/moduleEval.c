@@ -38,7 +38,7 @@ static void msModuleUnlock(void) {
 void msModuleTableRegister(msModuleRecord* records, int32_t count) {
 	gRecords = records;
 	gRecordCount = count;
-	gRanOrder = (int32_t*)calloc((size_t)count, sizeof(int32_t));
+	gRanOrder = (int32_t*)msMemAlloc0((size_t)count * sizeof(int32_t));
 	for (int32_t i = 0; i < count; i++) records[i].cycleRoot = i;
 }
 
@@ -132,7 +132,7 @@ static void msModuleRecordError(msModuleRecord* m, void* error) {
 }
 
 static void msModuleAddAsyncParent(msModuleRecord* r, int32_t parent) {
-	r->asyncParents = (int32_t*)realloc(r->asyncParents, (size_t)(r->asyncParentCount + 1) * sizeof(int32_t));
+	r->asyncParents = (int32_t*)msRealloc(r->asyncParents, (size_t)r->asyncParentCount * sizeof(int32_t), (size_t)(r->asyncParentCount + 1) * sizeof(int32_t));
 	r->asyncParents[r->asyncParentCount++] = parent;
 }
 
@@ -186,7 +186,7 @@ static void msModuleAsyncFulfilled(msModuleRecord* m) {
 	m->asyncEvaluation = false;
 	m->status = MS_MODULE_EVALUATED;
 	msModuleSettleWaiters(m);
-	int32_t* list = (int32_t*)malloc((size_t)gRecordCount * sizeof(int32_t));
+	int32_t* list = (int32_t*)msMemAlloc((size_t)gRecordCount * sizeof(int32_t));
 	int32_t count = 0;
 	msModuleGatherAvailableAncestors(m, list, &count);
 	qsort(list, (size_t)count, sizeof(int32_t), msModuleOrdinalOrder);
@@ -242,7 +242,7 @@ static void msModuleExecuteAsync(msModuleRecord* m) {
 		fprintf(stderr, "internal: module '%s' has a top-level await but its body started no async routine\n", m->name);
 		abort();
 	}
-	msModuleAsyncRun* run = (msModuleAsyncRun*)malloc(sizeof(msModuleAsyncRun));
+	msModuleAsyncRun* run = (msModuleAsyncRun*)msMemAlloc(sizeof(msModuleAsyncRun));
 	run->at = (int32_t)(m - gRecords);
 	run->fut = fut;
 	msFutureAddCallback(fut, (msClosure){ .fn = (msClosureFn)msModuleAsyncSettled, .env = run });
@@ -310,7 +310,7 @@ static void msModuleEvaluate(msModuleWaiter* w) {
 	msModuleRecord* r = w->record;
 	if (r->status == MS_MODULE_EVALUATING_ASYNC || r->status == MS_MODULE_EVALUATED) r = &gRecords[r->cycleRoot];
 	if (r->status == MS_MODULE_PENDING) {
-		int32_t* stack = (int32_t*)malloc((size_t)gRecordCount * sizeof(int32_t));
+		int32_t* stack = (int32_t*)msMemAlloc((size_t)gRecordCount * sizeof(int32_t));
 		int32_t depth = 0;
 		void* error = NULL;
 		bool thrown = false;
@@ -375,7 +375,7 @@ void* msModuleImport(msString name) {
 	extern void msEnsureLoopChannel(void);
 	msEnsureLoopChannel();
 #endif
-	msModuleWaiter* w = (msModuleWaiter*)malloc(sizeof(msModuleWaiter));
+	msModuleWaiter* w = (msModuleWaiter*)msMemAlloc(sizeof(msModuleWaiter));
 	w->record = r;
 	w->fut = fut;
 	w->next = NULL;

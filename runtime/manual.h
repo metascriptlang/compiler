@@ -658,9 +658,9 @@ static inline void* msBoxString(msString v) {
 #ifdef MSOS_BARE
     msString* p = (msString*)msArenaAlloc(sizeof(msString));
 #else
-    msString* p = (msString*)malloc(sizeof(msString));
+    msString* p = (msString*)msMemAlloc(sizeof(msString));
 #endif
-    if (p) *p = v;
+    *p = v;
     return p;
 }
 static inline msString msUnboxString(void* p) {
@@ -673,10 +673,10 @@ static inline msString msUnboxString(void* p) {
 static inline void* msBoxStruct(const void* val, size_t size) {
 #ifdef MSOS_BARE
     void* p = msArenaAlloc(size);
-    if (p) __builtin_memcpy(p, val, size);
+    __builtin_memcpy(p, val, size);
 #else
-    void* p = malloc(size);
-    if (p) memcpy(p, val, size);
+    void* p = msMemAlloc(size);
+    memcpy(p, val, size);
 #endif
     return p;
 }

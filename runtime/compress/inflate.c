@@ -78,9 +78,7 @@ static int queuePush(struct msInflateCtx* c, const uint8_t* data, size_t len) {
     if (needed > c->queueCap) {
         size_t newCap = c->queueCap == 0 ? 4096 : c->queueCap * 2;
         while (newCap < needed) newCap *= 2;
-        uint8_t* q = (uint8_t*)realloc(c->queue, newCap);
-        if (!q) return -1;
-        c->queue = q;
+        c->queue = (uint8_t*)msRealloc(c->queue, c->queueCap, newCap);
         c->queueCap = newCap;
     }
     memcpy(c->queue + c->queueLen, data, len);
@@ -100,8 +98,7 @@ int64_t msInflateNew(int32_t format) {
         format != MS_COMPRESS_FORMAT_ZLIB &&
         format != MS_COMPRESS_FORMAT_DEFLATE) return 0;
 
-    struct msInflateCtx* c = (struct msInflateCtx*)calloc(1, sizeof(*c));
-    if (!c) return 0;
+    struct msInflateCtx* c = (struct msInflateCtx*)msMemAlloc0(sizeof(*c));
     tinfl_init(&c->tinfl);
     c->format = format;
     c->gzState = (format == MS_COMPRESS_FORMAT_GZIP) ? GZ_STATE_HEADER : GZ_STATE_BODY;

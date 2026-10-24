@@ -151,7 +151,7 @@ static msIoRequest* allocRequest(msIoEngine* e) {
 		memset(r, 0, sizeof(msIoRequest));
 		return r;
 	}
-	return (msIoRequest*)calloc(1, sizeof(msIoRequest));
+	return (msIoRequest*)msMemAlloc0(sizeof(msIoRequest));
 }
 
 static void freeRequest(msIoEngine* e, msIoRequest* r) {
@@ -177,14 +177,14 @@ static void uringArmWake(msIoEngine* e) {
 /* ===== Create / Destroy ===== */
 
 msIoEngine* msIoEngineCreate(void) {
-	msIoEngine* e = (msIoEngine*)calloc(1, sizeof(msIoEngine));
+	msIoEngine* e = (msIoEngine*)msMemAlloc0(sizeof(msIoEngine));
 	if (uringInit(&e->ring) < 0) {
 		free(e);
 		return NULL;
 	}
 	e->wakeFd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);  /* armed only on serve engines, in AddWakeFd */
 	for (int i = 0; i < ENGINE_INIT_POOL; i++) {
-		msIoRequest* r = (msIoRequest*)calloc(1, sizeof(msIoRequest));
+		msIoRequest* r = (msIoRequest*)msMemAlloc0(sizeof(msIoRequest));
 		r->next = e->freeList;
 		e->freeList = r;
 		e->freeCount++;
@@ -252,7 +252,7 @@ void* msIoRecv(msIoEngine* e, int fd, int32_t maxBytes) {
 	msIoRequest* req = allocRequest(e);
 	req->op = MS_IO_RECV;
 	req->fd = fd;
-	req->buf = (char*)malloc((size_t)maxBytes + 1);
+	req->buf = (char*)msMemAlloc((size_t)maxBytes + 1);
 	req->len = maxBytes;
 	msFuture_msString* fut = msIoStringFutureCreate();
 	req->fut = fut;
@@ -351,7 +351,7 @@ int32_t msFsWatchLastError(void) {
 
 static char* fsWatchJoin(const char* a, const char* b) {
 	size_t la = strlen(a), lb = strlen(b);
-	char* out = (char*)malloc(la + lb + 2);
+	char* out = (char*)msMemAlloc(la + lb + 2);
 	memcpy(out, a, la);
 	size_t at = la;
 	if (la > 0 && lb > 0) out[at++] = '/';
@@ -369,12 +369,15 @@ static int fsWatchAdd(msFsWatcher* w, const char* rel) {
 		if (w->wds[i] == wd) return wd;
 	}
 	if (w->count == w->cap) {
-		w->cap = w->cap == 0 ? 16 : w->cap * 2;
-		w->wds = (int*)realloc(w->wds, (size_t)w->cap * sizeof(int));
-		w->dirs = (char**)realloc(w->dirs, (size_t)w->cap * sizeof(char*));
+		int32_t oldCap = w->cap;
+		w->cap = oldCap == 0 ? 16 : oldCap * 2;
+		w->wds = (int*)msRealloc(w->wds, (size_t)oldCap * sizeof(int), (size_t)w->cap * sizeof(int));
+		w->dirs = (char**)msRealloc(w->dirs, (size_t)oldCap * sizeof(char*), (size_t)w->cap * sizeof(char*));
 	}
+	size_t relSize = strlen(rel) + 1;
 	w->wds[w->count] = wd;
-	w->dirs[w->count] = strdup(rel);
+	w->dirs[w->count] = (char*)msMemAlloc(relSize);
+	memcpy(w->dirs[w->count], rel, relSize);
 	w->count++;
 	return wd;
 }
@@ -433,7 +436,7 @@ static void fsWatchRelease(msFsWatcher* w) {
 int32_t msFsWatchOpen(msIoEngine* e, msString path) {
 	(void)e;
 	_msFsWatchLastError = 0;
-	char* root = (char*)malloc((size_t)path.len + 1);
+	char* root = (char*)msMemAlloc((size_t)path.len + 1);
 	memcpy(root, path.p ? path.p->data : "", (size_t)path.len);
 	root[path.len] = 0;
 	struct stat info;
@@ -453,7 +456,7 @@ int32_t msFsWatchOpen(msIoEngine* e, msString path) {
 		if (_msFsWatchers[i].fd < 0 && _msFsWatchers[i].pending == NULL) { handle = i; break; }
 	}
 	if (handle == _msFsWatcherCount) {
-		_msFsWatchers = (msFsWatcher*)realloc(_msFsWatchers, (size_t)(_msFsWatcherCount + 1) * sizeof(msFsWatcher));
+		_msFsWatchers = (msFsWatcher*)msRealloc(_msFsWatchers, (size_t)_msFsWatcherCount * sizeof(msFsWatcher), (size_t)(_msFsWatcherCount + 1) * sizeof(msFsWatcher));
 		_msFsWatcherCount++;
 	}
 	msFsWatcher* w = &_msFsWatchers[handle];
@@ -504,7 +507,7 @@ void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) {
 	req->op = MS_IO_WATCH;
 	req->fd = w->fd;
 	req->offset = handle;
-	req->buf = (char*)malloc(MS_FS_WATCH_BUFFER);
+	req->buf = (char*)msMemAlloc(MS_FS_WATCH_BUFFER);
 	req->len = MS_FS_WATCH_BUFFER;
 	req->fut = fut;
 	fsWatchArm(e, w, req);
@@ -512,7 +515,7 @@ void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) {
 }
 
 int32_t msFsWriteSettled(msString path) {
-	char* name = (char*)malloc((size_t)path.len + 1);
+	char* name = (char*)msMemAlloc((size_t)path.len + 1);
 	if (path.len > 0) memcpy(name, path.p->data, (size_t)path.len);
 	name[path.len] = 0;
 	int absent = access(name, F_OK) != 0;
@@ -559,7 +562,7 @@ static int fsWatchComplete(msIoEngine* e, msIoRequest* req, int32_t res) {
 		return 0;
 	}
 	size_t cap = 256, used = 0;
-	char* out = (char*)malloc(cap);
+	char* out = (char*)msMemAlloc(cap);
 	int overflow = 0;
 	for (int32_t at = 0; at < res;) {
 		const struct inotify_event* ev = (const struct inotify_event*)(req->buf + at);
@@ -571,8 +574,9 @@ static int fsWatchComplete(msIoEngine* e, msIoRequest* req, int32_t res) {
 		char* rel = fsWatchJoin(dir, ev->name);
 		if (w->recursive && (ev->mask & IN_ISDIR) && (ev->mask & (IN_CREATE | IN_MOVED_TO))) fsWatchAddTree(w, rel);
 		size_t length = strlen(rel);
+		size_t oldCap = cap;
 		while (used + length + 3 > cap) cap *= 2;
-		out = (char*)realloc(out, cap);
+		out = (char*)msRealloc(out, oldCap, cap);
 		if (used > 0) out[used++] = '\n';
 		out[used++] = (!(ev->mask & IN_ISDIR) && (ev->mask & (IN_CLOSE_WRITE | IN_MOVED_TO))) ? 'w' : 'c';
 		memcpy(out + used, rel, length);

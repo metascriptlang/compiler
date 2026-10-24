@@ -223,48 +223,46 @@ void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs);
 /* Read the result for slot `i`. Only valid after the group has finished.
  * Returns NULL for failed slots. */
 static inline void* msAwaitGroupResult(msAwaitGroup* g, int32_t slot) {
-	if (g == NULL || slot < 0 || slot >= g->size) return NULL;
+	if (slot < 0 || slot >= g->size) return NULL;
 	return g->results[slot];
 }
 
 /* Phase 3: Did the timed wait expire before all slots completed? */
 static inline bool msAwaitGroupTimedOut(msAwaitGroup* g) {
-	return g != NULL && g->timedOut;
+	return g->timedOut;
 }
 
 /* Phase 4b: set the done future for async cooperative group await.
  * Called by transform-generated code before submitting tasks. */
 static inline void msAwaitGroupSetDoneFut(msAwaitGroup* g, void* fut) {
-	if (g != NULL) {
 #if MS_FUTURE_SUBMIT_REF
-		/* Amendment G: take the queue's completion ref on the owner thread now,
-		 * before any worker can publish doneFut as finished. Paired with the
-		 * dispatcher drain's msFutureDrcDestroy; finishSlot pushes via PushOwned. */
-		if (fut != NULL) {
-			msIncRef(fut);
-			msFuturePublishCrossThread(fut);
-		}
+	/* Amendment G: take the queue's completion ref on the owner thread now,
+	 * before any worker can publish doneFut as finished. Paired with the
+	 * dispatcher drain's msFutureDrcDestroy; finishSlot pushes via PushOwned. */
+	if (fut != NULL) {
+		msIncRef(fut);
+		msFuturePublishCrossThread(fut);
+	}
 #endif
 #ifdef _WIN32
-		/* Channel-exists-before-visible, same as the msSpawn/msSpawnInto submit
-		 * sites (thread.h): finishSlot's last worker completes doneFut via
-		 * msCompletionQueuePushOwned, which needs the
-		 * scheduler-0 loop's IOCP to exist or it falls back to the
-		 * I15-violating inline path. See msEnsureLoopChannel (dispatchFull.c). */
-		{
-			extern void msEnsureLoopChannel(void);
-			msEnsureLoopChannel();
-		}
-#endif
-		atomic_store_explicit(&g->doneFut, fut, memory_order_release);
+	/* Channel-exists-before-visible, same as the msSpawn/msSpawnInto submit
+	 * sites (thread.h): finishSlot's last worker completes doneFut via
+	 * msCompletionQueuePushOwned, which needs the
+	 * scheduler-0 loop's IOCP to exist or it falls back to the
+	 * I15-violating inline path. See msEnsureLoopChannel (dispatchFull.c). */
+	{
+		extern void msEnsureLoopChannel(void);
+		msEnsureLoopChannel();
 	}
+#endif
+	atomic_store_explicit(&g->doneFut, fut, memory_order_release);
 }
 
 /* Phase 3: Fast-path cancellation check for spawn safe points.
  * Called at loop backedges inside spawn closures. Single branch on
  * relaxed atomic load — ~1ns overhead per check. */
 static inline bool msSpawnCheckCancel(msAwaitGroup* g) {
-	return g != NULL && atomic_load_explicit(&g->cancelled, memory_order_relaxed);
+	return atomic_load_explicit(&g->cancelled, memory_order_relaxed);
 }
 
 /* ===== msAwaitSlot — Stack-Allocated Fast Path (Malebolgia parity) ===== */

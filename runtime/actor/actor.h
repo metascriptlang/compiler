@@ -187,7 +187,7 @@ static inline int32_t msPidSlotClaim(void) {
         pthread_mutex_lock(&msPidSegLock);
         if (atomic_load_explicit(&msPidSegs[segI], memory_order_relaxed) == NULL) {
             atomic_store_explicit(&msPidSegs[segI],
-                (msPidSlot*)calloc(MS_PID_SEG_SIZE, sizeof(msPidSlot)), memory_order_release);
+                (msPidSlot*)msMemAlloc0(MS_PID_SEG_SIZE * sizeof(msPidSlot)), memory_order_release);
         }
         pthread_mutex_unlock(&msPidSegLock);
     }
@@ -197,7 +197,7 @@ static inline int32_t msPidSlotClaim(void) {
 static inline msHazardRec* msHazardEnsure(void) {
     msHazardRec* h = msMyHazard;
     if (h != NULL) return h;
-    h = (msHazardRec*)calloc(1, sizeof(msHazardRec));
+    h = (msHazardRec*)msMemAlloc0(sizeof(msHazardRec));
     msHazardRec* head = atomic_load_explicit(&msHazardHead, memory_order_relaxed);
     do {
         atomic_store_explicit(&h->next, head, memory_order_relaxed);
@@ -341,7 +341,7 @@ static inline bool msActorHasFlag(msActor* a, uint8_t flag) {
 /* ===== Actor Lifecycle ===== */
 
 static inline msActor* msActorCreate(void* state, msActorDispatchFn dispatch) {
-    msActor* a = (msActor*)calloc(1, sizeof(msActor));
+    msActor* a = (msActor*)msMemAlloc0(sizeof(msActor));
     msMpscInit(&a->mailbox);
     a->dispatch = dispatch;
     a->state = state;
@@ -621,7 +621,7 @@ extern pthread_mutex_t msNameRegistryLock;
 static inline void msNameRegistryEnsure(void) {
     if (msNameRegistry != NULL) return;
     msNameRegistryCap = MS_NAME_REGISTRY_INIT_CAP;
-    msNameRegistry = (msNameEntry*)calloc(msNameRegistryCap, sizeof(msNameEntry));
+    msNameRegistry = (msNameEntry*)msMemAlloc0(msNameRegistryCap * sizeof(msNameEntry));
 }
 
 /* Grow and rehash when load factor exceeds 75%. Must hold lock. */
@@ -629,7 +629,7 @@ static inline void msNameRegistryGrow(void) {
     int oldCap = msNameRegistryCap;
     msNameEntry* oldTable = msNameRegistry;
     msNameRegistryCap = oldCap * 2;
-    msNameRegistry = (msNameEntry*)calloc(msNameRegistryCap, sizeof(msNameEntry));
+    msNameRegistry = (msNameEntry*)msMemAlloc0(msNameRegistryCap * sizeof(msNameEntry));
     msNameRegistryCount = 0;
     /* Rehash all entries into new table */
     for (int i = 0; i < oldCap; i++) {
@@ -1180,7 +1180,7 @@ static inline void msActorAddRef(msActor* from, msActor* to) {
     /* Grow on demand */
     if (from->refsCount >= from->refsCap) {
         int newCap = from->refsCap == 0 ? 4 : from->refsCap * 2;
-        from->refs = (int64_t*)realloc(from->refs, newCap * sizeof(int64_t));
+        from->refs = (int64_t*)msRealloc(from->refs, from->refsCap * sizeof(int64_t), newCap * sizeof(int64_t));
         from->refsCap = newCap;
     }
     from->refs[from->refsCount++] = toPid;
@@ -1196,7 +1196,7 @@ static inline void msActorAddLink(msActor* a, int64_t targetPid) {
     }
     if (a->linkCount >= a->linkCap) {
         int newCap = a->linkCap == 0 ? 4 : a->linkCap * 2;
-        a->links = (int64_t*)realloc(a->links, newCap * sizeof(int64_t));
+        a->links = (int64_t*)msRealloc(a->links, a->linkCap * sizeof(int64_t), newCap * sizeof(int64_t));
         a->linkCap = newCap;
     }
     a->links[a->linkCount++] = targetPid;
@@ -1286,8 +1286,8 @@ static inline int64_t msActorMonitorPid(int64_t watcherPid, int64_t targetPid) {
     /* Add watcher pid to target's monitor list */
     if (target->monitorCount >= target->monitorCap) {
         int newCap = target->monitorCap == 0 ? 4 : target->monitorCap * 2;
-        target->monitorWatchers = (int64_t*)realloc(target->monitorWatchers, newCap * sizeof(int64_t));
-        target->monitorRefs = (int64_t*)realloc(target->monitorRefs, newCap * sizeof(int64_t));
+        target->monitorWatchers = (int64_t*)msRealloc(target->monitorWatchers, target->monitorCap * sizeof(int64_t), newCap * sizeof(int64_t));
+        target->monitorRefs = (int64_t*)msRealloc(target->monitorRefs, target->monitorCap * sizeof(int64_t), newCap * sizeof(int64_t));
         target->monitorCap = newCap;
     }
     target->monitorWatchers[target->monitorCount] = watcherPid;
@@ -1475,7 +1475,7 @@ static inline bool msActorPollLocal(void);            /* defined below */
 static inline void msSchedActorsGrow(msSchedActors* sched, int needed) {
     int newCap = sched->cap == 0 ? MS_SCHED_INIT_CAP : sched->cap * 2;
     while (newCap < needed) newCap *= 2;
-    msActor** newArr = (msActor**)calloc(newCap, sizeof(msActor*));
+    msActor** newArr = (msActor**)msMemAlloc0(newCap * sizeof(msActor*));
     if (sched->actors != NULL) {
         memcpy(newArr, sched->actors, sched->cap * sizeof(msActor*));
         /* Old array intentionally NOT freed — CD may be reading it concurrently.
@@ -1722,9 +1722,9 @@ static inline void msCDUnmarkReachable(msActor* a) {
     /* Iterative pid-walk: one child pinned at a time (recursion would pin per
      * depth and overflow the hazard slots). Reaped referents skip cleanly. */
     int cap = 64, top = 0;
-    int64_t* stack = (int64_t*)malloc(cap * sizeof(int64_t));
+    int64_t* stack = (int64_t*)msMemAlloc(cap * sizeof(int64_t));
     for (int r = 0; r < a->refsCount; r++) {
-        if (top >= cap) { cap *= 2; stack = (int64_t*)realloc(stack, cap * sizeof(int64_t)); }
+        if (top >= cap) { stack = (int64_t*)msRealloc(stack, cap * sizeof(int64_t), cap * 2 * sizeof(int64_t)); cap *= 2; }
         stack[top++] = a->refs[r];
     }
     while (top > 0) {
@@ -1733,7 +1733,7 @@ static inline void msCDUnmarkReachable(msActor* a) {
         if (msActorHasFlag(ref, MS_ACTOR_CYCLE_MARKED)) {
             msActorClearFlag(ref, MS_ACTOR_CYCLE_MARKED);
             for (int r = 0; r < ref->refsCount; r++) {
-                if (top >= cap) { cap *= 2; stack = (int64_t*)realloc(stack, cap * sizeof(int64_t)); }
+                if (top >= cap) { stack = (int64_t*)msRealloc(stack, cap * sizeof(int64_t), cap * 2 * sizeof(int64_t)); cap *= 2; }
                 stack[top++] = ref->refs[r];
             }
         }

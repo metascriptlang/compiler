@@ -25,7 +25,7 @@ struct msSelector {
 msSelector* msSelectorCreate(void) {
 	int kqfd = kqueue();
 	if (kqfd < 0) return NULL;
-	msSelector* sel = (msSelector*)malloc(sizeof(msSelector));
+	msSelector* sel = (msSelector*)msMemAlloc(sizeof(msSelector));
 	sel->kqfd = kqfd;
 	/* Self-clearing cross-thread wake (EV_CLEAR auto-resets after each delivery,
 	 * so msSelectorWake needs no drain — see msSelectorPoll which skips it). */

@@ -138,7 +138,7 @@ static int msDequeLen(msCallbackDeque* d) {
 static void msDequeGrow(msCallbackDeque* d) {
 	int oldCap = d->cap;
 	int newCap = oldCap == 0 ? 8 : oldCap * 2;
-	msClosure* newItems = (msClosure*)malloc(newCap * sizeof(msClosure));
+	msClosure* newItems = (msClosure*)msMemAlloc(newCap * sizeof(msClosure));
 	/* Copy existing items in order */
 	int len = msDequeLen(d);
 	for (int i = 0; i < len; i++) {
@@ -265,7 +265,7 @@ static volatile LONG gWakeIocpCount = 0;
 
 msDispatcher* msGetDispatcher(void) {
 	if (gDispatcher == NULL) {
-		gDispatcher = (msDispatcher*)calloc(1, sizeof(msDispatcher));
+		gDispatcher = (msDispatcher*)msMemAlloc0(sizeof(msDispatcher));
 		gDispatcher->iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
 		/* Register in the wake registry — the IOCP mirror of POSIX's
 		 * msSelectorRegister(gDispatcher->selector, <main channel wake fd>, …) in the
@@ -342,12 +342,12 @@ void msEnsureLoopChannel(void) {
 void msCompletionQueuePushOwned(void* fut, bool isFail, void* error) {
 	HANDLE iocp = gDispatcher != NULL ? gDispatcher->iocp : NULL;
 	if (iocp == NULL) iocp = msFirstLoopIocp();
-	msCompletionMsg* msg = iocp != NULL ? (msCompletionMsg*)malloc(sizeof(msCompletionMsg)) : NULL;
-	if (msg == NULL) {
+	if (iocp == NULL) {
 		if (isFail) msFutureFail(fut, error);
 		else msFutureComplete(fut, NULL);
 		return;
 	}
+	msCompletionMsg* msg = (msCompletionMsg*)msMemAlloc(sizeof(msCompletionMsg));
 	msg->fut = fut;
 	msg->value = NULL;
 	msg->isFail = isFail;
@@ -379,8 +379,7 @@ void msCompletionQueuePushReleaseBatch(void** futs, int count) {
 	}
 	for (int i = 0; i < count; i++) {
 		if (futs[i] == NULL) continue;
-		msCompletionMsg* msg = (msCompletionMsg*)malloc(sizeof(msCompletionMsg));
-		if (msg == NULL) { msFutureDrcDestroy(futs[i]); continue; }
+		msCompletionMsg* msg = (msCompletionMsg*)msMemAlloc(sizeof(msCompletionMsg));
 		msg->fut = NULL;
 		msg->value = futs[i];
 		msg->isFail = false;
@@ -477,7 +476,7 @@ static msLoopChannel* msThreadChannel(void) {
 	msEnsureWakePipe();
 	if (!msIsPoolWorker) return &gMainChannel;
 	if (tlWorkerChannel == NULL) {
-		msLoopChannel* c = (msLoopChannel*)calloc(1, sizeof(msLoopChannel));
+		msLoopChannel* c = (msLoopChannel*)msMemAlloc0(sizeof(msLoopChannel));
 		c->wake[0] = c->wake[1] = -1;
 		c->workerSchedId = msPoolWorkerSchedId;
 		msLoopChannelOpen(c);
@@ -693,7 +692,7 @@ static void msDispatcherThreadDestroy(void) {
 
 msDispatcher* msGetDispatcher(void) {
 	if (gDispatcher == NULL) {
-		gDispatcher = (msDispatcher*)calloc(1, sizeof(msDispatcher));
+		gDispatcher = (msDispatcher*)msMemAlloc0(sizeof(msDispatcher));
 		msOnThreadDestruction(msDispatcherThreadDestroy);
 		gDispatcher->selector = msSelectorCreate();
 		msEnsureWakePipe();
@@ -730,7 +729,7 @@ int msGetDispatcherSelectorFd(void) {
 
 static void msTimerHeapGrow(msTimerHeap* h) {
 	int newCap = h->cap == 0 ? 8 : h->cap * 2;
-	h->data = (msTimer*)realloc(h->data, newCap * sizeof(msTimer));
+	h->data = (msTimer*)msRealloc(h->data, h->cap * sizeof(msTimer), newCap * sizeof(msTimer));
 	h->cap = newCap;
 }
 
@@ -1107,8 +1106,7 @@ void msPostEnvRelease(void* env) {
 		msDecref(env);
 		return;
 	}
-	msCompletionMsg* msg = (msCompletionMsg*)malloc(sizeof(msCompletionMsg));
-	if (msg == NULL) { msDecref(env); return; }
+	msCompletionMsg* msg = (msCompletionMsg*)msMemAlloc(sizeof(msCompletionMsg));
 	msg->fut = NULL;
 	msg->value = env;
 	msg->isFail = false;
@@ -1319,7 +1317,7 @@ void msAsyncStart(void* retFut, msClosure stepper) {
 	if (!msIsPoolWorker) {
 		msGetDispatcher();
 	}
-	msAsyncCbEnv* env = (msAsyncCbEnv*)malloc(sizeof(msAsyncCbEnv));
+	msAsyncCbEnv* env = (msAsyncCbEnv*)msMemAlloc(sizeof(msAsyncCbEnv));
 	env->stepper = stepper;
 	env->retFut = retFut;
 	if (stepper.env) msIncRef(stepper.env);

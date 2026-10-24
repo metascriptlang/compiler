@@ -14,8 +14,7 @@ msString msCryptoArgon2Hash(msString password, msString salt,
 	size_t encodedLen = argon2_encodedlen(
 		(uint32_t)timeCost, (uint32_t)memoryCost, (uint32_t)parallelism,
 		(uint32_t)salt.len, (uint32_t)hashLen, Argon2_id);
-	char* encoded = (char*)malloc(encodedLen + 1);
-	if (!encoded) return MS_EMPTY_STRING;
+	char* encoded = (char*)msMemAlloc(encodedLen + 1);
 
 	int ret = argon2id_hash_encoded(
 		(uint32_t)timeCost, (uint32_t)memoryCost, (uint32_t)parallelism,
@@ -39,8 +38,7 @@ double msCryptoArgon2Verify(msString encoded, msString password) {
 msString msCryptoArgon2HashRaw(msString password, msString salt,
                                int32_t timeCost, int32_t memoryCost,
                                int32_t parallelism, int32_t hashLen) {
-	uint8_t* hash = (uint8_t*)malloc((size_t)hashLen);
-	if (!hash) return MS_EMPTY_STRING;
+	uint8_t* hash = (uint8_t*)msMemAlloc((size_t)hashLen);
 
 	int ret = argon2id_hash_raw(
 		(uint32_t)timeCost, (uint32_t)memoryCost, (uint32_t)parallelism,

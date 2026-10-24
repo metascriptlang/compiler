@@ -203,8 +203,7 @@ msString msCryptoAesSeal(msString key, msString plainText, msString aad) {
 
 	/* Allocate output: nonce(12) + cipherText + tag(16) */
 	size_t outLen = 12 + ptLen + 16;
-	uint8_t* out = (uint8_t*)malloc(outLen);
-	if (!out) return MS_EMPTY_STRING;
+	uint8_t* out = (uint8_t*)msMemAlloc(outLen);
 
 	memcpy(out, nonce, 12);
 	uint8_t tag[16];
@@ -237,8 +236,7 @@ int64_t msCryptoAesOpen(msString key, msString sealed, msString aad, msString* p
 	const uint8_t* ct = sealedData + 12;
 	const uint8_t* expectedTag = sealedData + 12 + ctLen;
 
-	uint8_t* plainText = (uint8_t*)malloc(ctLen > 0 ? ctLen : 1);
-	if (!plainText) return 0;
+	uint8_t* plainText = (uint8_t*)msMemAlloc(ctLen > 0 ? ctLen : 1);
 
 	uint8_t computedTag[16];
 	if (!aesGcmCrypt(keyBits, keyData, ct, ctLen, nonce, 12,
@@ -268,8 +266,7 @@ msString msCryptoAesCbcEncrypt(msString key, msString plainText, msString iv) {
 
 	size_t ptLen = (size_t)plainText.len;
 	size_t paddedLen = ptLen + (16 - (ptLen % 16));
-	uint8_t* padded = (uint8_t*)calloc(1, paddedLen);
-	if (!padded) return MS_EMPTY_STRING;
+	uint8_t* padded = (uint8_t*)msMemAlloc0(paddedLen);
 	memcpy(padded, msStringToCString(plainText), ptLen);
 	paddedLen = addPkcs7Padding(padded, ptLen, 16);
 
@@ -284,8 +281,7 @@ msString msCryptoAesCbcEncrypt(msString key, msString plainText, msString iv) {
 		return MS_EMPTY_STRING;
 	}
 
-	uint8_t* out = (uint8_t*)malloc(paddedLen);
-	if (!out) { mbedtls_aes_free(&aes); free(padded); return MS_EMPTY_STRING; }
+	uint8_t* out = (uint8_t*)msMemAlloc(paddedLen);
 
 	mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, paddedLen, ivCopy, padded, out);
 	mbedtls_aes_free(&aes);
@@ -313,8 +309,7 @@ msString msCryptoAesCbcDecrypt(msString key, msString cipherText, msString iv) {
 		return MS_EMPTY_STRING;
 	}
 
-	uint8_t* out = (uint8_t*)malloc(ctLen);
-	if (!out) { mbedtls_aes_free(&aes); return MS_EMPTY_STRING; }
+	uint8_t* out = (uint8_t*)msMemAlloc(ctLen);
 
 	mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, ctLen, ivCopy,
 	                       (const uint8_t*)msStringToCString(cipherText), out);

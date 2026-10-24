@@ -368,7 +368,7 @@ static inline void msFutureAddCallback(void* fp, msClosure cb) {
 		msCallSoon(cb);
 		return;
 	}
-	msFutureCb* node = (msFutureCb*)malloc(sizeof(msFutureCb));
+	msFutureCb* node = (msFutureCb*)msMemAlloc(sizeof(msFutureCb));
 	node->fn = (void(*)(void*))cb.fn;
 	node->env = cb.env;
 	node->next = NULL;

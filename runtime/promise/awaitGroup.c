@@ -40,8 +40,7 @@ typedef struct { _Atomic(bool) finished; } msFutureBaseMinimal;
 msAwaitGroup* msAwaitGroupInit(int32_t n) {
 	if (n < 0) n = 0;
 
-	msAwaitGroup* g = (msAwaitGroup*)calloc(1, sizeof(msAwaitGroup));
-	if (g == NULL) return NULL;
+	msAwaitGroup* g = (msAwaitGroup*)msMemAlloc0(sizeof(msAwaitGroup));
 
 	g->size = n;
 	atomic_store_explicit(&g->pending, n, memory_order_relaxed);
@@ -53,11 +52,7 @@ msAwaitGroup* msAwaitGroupInit(int32_t n) {
 	atomic_store_explicit(&g->doneFut, NULL, memory_order_relaxed);
 
 	if (n > 0) {
-		g->results = (void**)calloc((size_t)n, sizeof(void*));
-		if (g->results == NULL) {
-			free(g);
-			return NULL;
-		}
+		g->results = (void**)msMemAlloc0((size_t)n * sizeof(void*));
 	} else {
 		g->results = NULL;
 	}
@@ -74,8 +69,6 @@ msAwaitGroup* msAwaitGroupInit(int32_t n) {
 }
 
 void msAwaitGroupFree(msAwaitGroup* g) {
-	if (g == NULL) return;
-
 	/* Wait for the last worker to fully exit finishSlot.
 	 * Without this, the caller (who saw pending==0 via help-first or
 	 * fast-path) could free the group while a worker is still accessing
@@ -138,14 +131,13 @@ static void finishSlot(msAwaitGroup* g) {
 }
 
 void msAwaitGroupCompleteSlot(msAwaitGroup* g, int32_t slot, void* value) {
-	if (g == NULL) return;
 	if (slot < 0 || slot >= g->size) return;
 	g->results[slot] = value;
 	finishSlot(g);
 }
 
 void msAwaitGroupCheckFailed(msAwaitGroup* g) {
-	if (g == NULL || !atomic_load_explicit(&g->failed, memory_order_acquire)) return;
+	if (!atomic_load_explicit(&g->failed, memory_order_acquire)) return;
 	void* err = g->error;
 	g->error = NULL;
 	msAwaitGroupFree(g);
@@ -153,7 +145,6 @@ void msAwaitGroupCheckFailed(msAwaitGroup* g) {
 }
 
 void msAwaitGroupFailSlot(msAwaitGroup* g, int32_t slot, void* error) {
-	if (g == NULL) return;
 	if (slot < 0 || slot >= g->size) return;
 
 	/* First failure wins. Use compare_exchange to atomically claim the
@@ -182,8 +173,6 @@ void msAwaitGroupFailSlot(msAwaitGroup* g, int32_t slot, void* error) {
 }
 
 void msAwaitGroupBlocking(msAwaitGroup* g) {
-	if (g == NULL) return;
-
 	/* Fast path: everyone already done (including the n==0 case). */
 	if (atomic_load_explicit(&g->pending, memory_order_acquire) == 0) {
 		return;
@@ -257,8 +246,6 @@ static bool msAwaitGroupExpired(msAwaitGroup* g, int64_t deadlineMs) {
 }
 
 void msAwaitGroupBlockingWithDeadline(msAwaitGroup* g, int64_t deadlineMs) {
-	if (g == NULL) return;
-
 	/* Fast path: already done. */
 	if (atomic_load_explicit(&g->pending, memory_order_acquire) == 0) {
 		return;
@@ -369,7 +356,7 @@ void* msAwaitSlotCreate(int32_t n) {
 		s = &msSlotPool[msSlotPoolIdx++];
 	} else {
 		/* Heap fallback for deep recursion + work stealing (24 bytes) */
-		s = (msAwaitSlot*)malloc(sizeof(msAwaitSlot));
+		s = (msAwaitSlot*)msMemAlloc(sizeof(msAwaitSlot));
 	}
 	atomic_store_explicit(&s->pending, n, memory_order_relaxed);
 	atomic_store_explicit(&s->failed, false, memory_order_relaxed);

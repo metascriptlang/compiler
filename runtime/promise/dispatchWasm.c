@@ -30,7 +30,7 @@ void msSleepMs(int ms) {
 
 static void msDequeInit(msCallbackDeque* q) {
     q->cap = 64;
-    q->items = (msClosure*)calloc(q->cap, sizeof(msClosure));
+    q->items = (msClosure*)msMemAlloc0(q->cap * sizeof(msClosure));
     q->head = 0;
     q->tail = 0;
 }
@@ -39,7 +39,7 @@ static void msDequeAppend(msCallbackDeque* q, msClosure cb) {
     int next = (q->tail + 1) % q->cap;
     if (next == q->head) {
         int newCap = q->cap * 2;
-        msClosure* newItems = (msClosure*)calloc(newCap, sizeof(msClosure));
+        msClosure* newItems = (msClosure*)msMemAlloc0(newCap * sizeof(msClosure));
         int count = 0;
         int i = q->head;
         while (i != q->tail) { newItems[count++] = q->items[i]; i = (i + 1) % q->cap; }
@@ -62,8 +62,9 @@ static int msDequeLen(msCallbackDeque* q) {
 
 static void msTimerHeapPush(msTimerHeap* h, msTimer t) {
     if (h->len >= h->cap) {
-        h->cap = h->cap ? h->cap * 2 : 16;
-        h->data = (msTimer*)realloc(h->data, h->cap * sizeof(msTimer));
+        int oldCap = h->cap;
+        h->cap = oldCap ? oldCap * 2 : 16;
+        h->data = (msTimer*)msRealloc(h->data, oldCap * sizeof(msTimer), h->cap * sizeof(msTimer));
     }
     h->data[h->len] = t;
     int i = h->len++;
@@ -97,7 +98,7 @@ static void msDequeAppend_wrapper(msClosure cb);
 
 msDispatcher* msGetDispatcher(void) {
     if (gDispatcher == NULL) {
-        gDispatcher = (msDispatcher*)calloc(1, sizeof(msDispatcher));
+        gDispatcher = (msDispatcher*)msMemAlloc0(sizeof(msDispatcher));
         msDequeInit(&gDispatcher->callbacks);
         msCallSoonProc = (msCallSoonFn)msDequeAppend_wrapper;
     }
@@ -233,7 +234,7 @@ void msEnsureOwnerDispatcher(void) {
 void msAsyncStart(void* retFut, msClosure stepper) {
     (void)retFut;
     msGetDispatcher();
-    msAsyncCbEnv* env = (msAsyncCbEnv*)malloc(sizeof(msAsyncCbEnv));
+    msAsyncCbEnv* env = (msAsyncCbEnv*)msMemAlloc(sizeof(msAsyncCbEnv));
     env->stepper = stepper;
     if (stepper.env) msIncRef(stepper.env);
     msAsyncCb(env);

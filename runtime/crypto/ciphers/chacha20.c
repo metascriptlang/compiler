@@ -22,8 +22,7 @@ msString msChacha20Seal(msString key, msString plainText, msString aad) {
 	size_t pt_len = plainText.p ? (size_t)plainText.len : 0;
 	size_t out_len = NONCE_SIZE + pt_len + MAC_SIZE;
 
-	uint8_t *out = (uint8_t *)malloc(out_len);
-	if (!out) return MS_EMPTY_STRING;
+	uint8_t *out = (uint8_t *)msMemAlloc(out_len);
 
 	/* Layout: nonce(24) || cipherText || mac(16) */
 	memcpy(out, nonce, NONCE_SIZE);
@@ -51,8 +50,7 @@ msString msChacha20Open(msString key, msString sealed, msString aad) {
 	const uint8_t *ct = data + NONCE_SIZE;
 	const uint8_t *mac = data + NONCE_SIZE + ct_len;
 
-	uint8_t *pt = (uint8_t *)malloc(ct_len > 0 ? ct_len : 1);
-	if (!pt) return MS_EMPTY_STRING;
+	uint8_t *pt = (uint8_t *)msMemAlloc(ct_len > 0 ? ct_len : 1);
 
 	int r = crypto_aead_unlock(
 		pt,                              /* plain_text */

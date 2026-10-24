@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include "runtime/hcrTls.h"
+#include "runtime/drc.h"
 #include <string.h>
 
 /* ===== Message (Pony parity: size-class allocation, exact-fit per method) ===== */
@@ -78,7 +79,7 @@ MS_TLS_EXTERN_ARRAY(msMsgPool, msMsgPools, MS_MSG_POOL_CLASSES);
 
 static inline void msMsgPoolGrow(msMsgPool* pool, int msgSize) {
     /* Allocate slab as raw bytes — messages are msgSize apart */
-    char* slab = (char*)calloc(MS_MSG_POOL_SLAB, msgSize);
+    char* slab = (char*)msMemAlloc0((size_t)MS_MSG_POOL_SLAB * msgSize);
     for (int i = 0; i < MS_MSG_POOL_SLAB - 1; i++) {
         msMessage* cur = (msMessage*)(slab + i * msgSize);
         msMessage* nxt = (msMessage*)(slab + (i + 1) * msgSize);
