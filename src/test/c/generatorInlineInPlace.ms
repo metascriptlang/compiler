@@ -1,4 +1,4 @@
-import { compileToC } from "../helpers";
+import { compileToC, compileProjectToC, MapEntry } from "../helpers";
 
 const generators = `
 	function* count(n: int32): Iterator<int32> {
@@ -50,6 +50,59 @@ test "E2E C: a stored generator is driven through its iterator" {
 		for (const x of it) {
 			console.log(x);
 		}
+	`);
+	assert c != "";
+	assert c.contains("dollariter");
+}
+
+const LIB_PATH = "test/generatorInlineInPlace/lib.ms";
+const MAIN_PATH = "test/generatorInlineInPlace/main.ms";
+
+const LIB = `export function* count(n: int32): Iterator<int32> {
+	for (let i: int32 = 0; i < n; i++) {
+		yield i;
+	}
+}
+
+export function* doubled<T>(this it: Iterator<T>, f: (x: T) => T): Iterator<T> {
+	for (const x of it) {
+		yield f(f(x));
+	}
+}
+`;
+
+function mainC(consumer: string): string {
+	const entries: MapEntry[] = [
+		{ entryPath: LIB_PATH, entrySource: LIB },
+		{ entryPath: MAIN_PATH, entrySource: `import { count, doubled } from "./lib";\n` + consumer },
+	];
+	const units = compileProjectToC(entries, MAIN_PATH).split("#include <stdint.h>\n");
+	for (const unit of units) {
+		if (unit.contains("ZmainOms__Init000(void) {")) return unit;
+	}
+	return "";
+}
+
+test "E2E C: a chain of generators from another module consumed by for-of drives no iterator" {
+	const c = mainC(`
+		let s: int32 = 0;
+		for (const y of count(4).doubled((v: int32): int32 => v + 1)) {
+			s += y;
+		}
+		console.log(s);
+	`);
+	assert c != "";
+	assert !c.contains("dollariter");
+}
+
+test "E2E C: a stored chain of generators from another module is driven through its iterator" {
+	const c = mainC(`
+		const it = count(4).doubled((v: int32): int32 => v + 1);
+		let s: int32 = 0;
+		for (const y of it) {
+			s += y;
+		}
+		console.log(s);
 	`);
 	assert c != "";
 	assert c.contains("dollariter");
