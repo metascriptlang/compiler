@@ -196,8 +196,8 @@ function holderType(t: Type | null): Type | null {
 			cur = withoutReadonlyView(cur);
 			continue;
 		}
-		if (cur.kind == TypeKind.GenericInstance && cur.typeExtra != null) {
-			cur = cur.typeExtra;
+		if (cur.kind == TypeKind.GenericInstance && (cur.typeReturn ?? cur.typeExtra) != null) {
+			cur = cur.typeReturn ?? cur.typeExtra;
 			continue;
 		}
 		return cur.kind == TypeKind.Struct || cur.kind == TypeKind.Array ? cur : null;

@@ -88,3 +88,4 @@ import "./flowsRecorder";
 import "./awaitWaitPath";
 import "./acyclicDecorator";
 import "./spawnViewCursor";
+import "./genericHolderSlots";
