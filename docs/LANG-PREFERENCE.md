@@ -2,7 +2,8 @@
 
 Write TypeScript-shaped code with explicit ownership, native layouts and deliberate concurrency.
 MetaScript combines values, non-owning views, ownership transfer, compiler-managed native
-lifetimes and compile-time execution. Choose semantics first; measure the hot path second.
+lifetimes and compile-time execution. Choose semantics first; profile representative work with
+`--release`, keeping target, toolchain, flags and inputs identical between variants.
 
 Use this guide for choices, [LANG.md](LANG.md) for syntax and
 `~/metascript/docs/CODE-STYLE.md` for full style rules. Older examples are not a capability
@@ -29,9 +30,10 @@ checklist; the verification scope below bounds these recommendations.
 | Shared object | `interface`, `class`, `Ref<T>` | Managed reference; aliases share identity |
 | Owned growable buffer | `Vec<T>` | Value; an owning copy is independent |
 | Shared growable buffer | `T[]` / `Array<T>` | Managed reference; assignment aliases |
-| Fixed-size storage | `T[N]` | Inline elements; no separate buffer allocation |
+| Fixed-size storage | `T[N]` | Native: inline elements; JS: array objects |
 | Window over existing elements | `Span<T>` | Non-owning, writable view; cannot resize |
-| Read-only window / shared view | `Readonly<Span<T>>`, `Readonly<T>` | View, not an owning snapshot |
+| Read-only window | `Readonly<Span<T>>` | Non-owning view |
+| Read-only access | `Readonly<T>` | Ownership/storage still follow `T`; not a deep clone |
 | Read an existing place without copying it | local `Borrow<T>` | Read-only borrow, not an owner |
 | Native address | `Ptr<T>` | Unmanaged; does not keep the pointee alive |
 
@@ -91,15 +93,17 @@ example();
 - A shorter local name for a Vec can mean an owning copy. Use a view for access, not
   `const local = owner.buffer` by habit. For expensive value elements, use indexed field reads
   or a local `Borrow<T>` rather than assuming `for..of` never copies.
-- `const next = move pending` explicitly transfers ownership; `consume(move pending)` and
-  `return move pending` are expressions, not parameter modifiers. Do not reuse the old value.
+- `const next = move pending` and `return move pending` transfer into an owning destination;
+  do not reuse the moved-from source. `move` is an expression, not a parameter modifier:
+  `read(move pending)` does not make an ordinary borrowing parameter consume it.
   Last-use transfer is already optimized where legal; do not scatter `move` everywhere.
-- `Readonly<T>` is not the `readonly` parameter modifier: the latter requests a local value copy.
-  Neither copying a wrapper nor declaring a view deep-clones its referenced objects.
+- A `readonly` parameter prohibits mutation; it does not request an owning local copy.
+  For scratch value storage, write `let local = parameter`; reference fields still alias.
 
-Native resource owners need a real retain/clone/release or transfer contract. Use `defer` for
-scoped cleanup; custom lifecycle hooks must tolerate a zeroed moved-from value. Do not assume
-native destruction timing or hooks are reproduced by the JS backend.
+Native resource owners need a real retain/clone/release or transfer contract. Prefer `defer`
+for scoped cleanup. Custom lifecycle hooks **replace**, not augment, generated field operations:
+you must handle every owned field, not just the native handle, and tolerate moved-from zeros.
+Do not assume native destruction timing or hooks are reproduced by the JS backend.
 
 ## 4. Express cases and failure, not encodings
 
@@ -129,7 +133,8 @@ Cover enum members; guarded arms need an unguarded fallback. Use `_` for wildcar
 alternatives, and explicit `return` in expression block arms. Do not copy destructuring or
 binding-pattern examples from older notes without checking support.
 
-Use `BitSet<E>` instead of integer masks: `const rights: BitSet<Right> = Right.Read | Right.Write`;
+Use `BitSet<E>` over an ordinal enum (default `0, 1, ...`, not power-of-two flag values):
+`const rights: BitSet<Right> = Right.Read | Right.Write`;
 query `.has`, keep the result of `.incl`/`.excl`. Empty is `0 as BitSet<Right>`, not a cast of
 one enum member. Format enum/set text with `.toString()`; set iteration/stringification may
 allocate. For optional data, write `T | null` and narrow with `if (x !== null)`; never disguise
@@ -168,13 +173,16 @@ Keep handles local and consume them once before leaving their scope.
 Borrowed captures are read-only, not snapshots: keep their owners alive and unchanged until
 joining. To give a worker a fresh sole-owner graph to mutate, use
 `spawn(() => consume(work), { move: [work] })` and stop using `work` in the parent.
-For deliberate sharing, use `Arc<T>` for eligible immutable data or `Locked<T>` with a plain-data
-payload; `lockedUpdate`/`lockedRead` callbacks must be short, nonblocking and contain no await,
-I/O or reentry into the same cell. Do not share arbitrary mutable references or raw addresses.
+For deliberate sharing, `Arc<T>` holds immutable value data, including strings but no references
+or arrays; `Locked<T>` holds plain data with no strings, arrays or references. Its
+`lockedUpdate`/`lockedRead` callbacks must be short, nonblocking and contain no await, I/O or
+reentry into the same cell. Do not share arbitrary mutable references or raw addresses.
 
 Actor methods are inherently asynchronous: omit `async`; a `void` method is SEND, a value-returning
-method is CALL (`await service.read()`). SEND is not a completion wait. Prefer
-`Promise<Result<T, E>>` with `try await operation()` for typed asynchronous failures.
+method is CALL (`await service.read()`). SEND is not a completion wait. An actor keeps its current
+message through awaits; queued messages wait until it finishes. Avoid cyclic awaited CALLs.
+For typed failures, async functions return `Promise<Result<T, E>>`; actor methods declare
+`Result<T, E>` directly. Callers use `try await operation()`. See [concurrency](LANG.md#actors).
 Let the event loop drain; `process.exit()` bypasses pending work and orphan-failure reporting.
 Native C is the concurrency target: JS result parity does not prove threads, ownership transfer,
 scheduling or native resource behavior. Freestanding/on-chain code is not a concurrency target.
@@ -182,7 +190,8 @@ scheduling or native resource behavior. Freestanding/on-chain code is not a conc
 ## 6. Use C directly; make the boundary explicit
 
 Prefer real declarations: `import { twice } from "./bridge.h";` then `twice(21)` calls C.
-A matching adjacent `bridge.c` is compiled automatically; see [C interop](LANG-INTERLOP.md).
+A matching adjacent `bridge.c` is compiled automatically; see [FFI](LANG.md#extern-declarations-ffi)
+and [directives](LANG.md#directives-standalone-module-level).
 For a hand-written ABI binding, inclusion and compilation are separate:
 
 ```ms
@@ -195,12 +204,17 @@ console.log(nativeAbs(-9));
 `@link("./library.a")` adds a link input. Use `.cms` / `.jms` or `when (c)` / `when (js)`
 to separate backend implementations; a native binding does not acquire JS linkage.
 
-Match widths, nullability, layout, allocator/free pairs and who may retain a pointer. Use
-`cstring` for the C string ABI, not a managed `string` declaration. A manual extern
-`Readonly<Span<T>>` parameter expands to a data pointer plus `int64_t` length for a matching API;
-it does not adapt arbitrary ABIs or authorize retaining a borrowed buffer. `Ptr<T>` does not
-retain an object; use the explicit [FFI Handle contract](../std/ffi/index.cms) when C keeps one.
-C status-plus-output APIs should become checked `Result` APIs at the application boundary.
+Match widths, nullability, layout, allocator/free pairs and pointer retention. Use `cstring`
+for read-only NUL-terminated input, not writable buffers: converting a managed string borrows
+its storage, without making a writable copy. Keep it alive and unchanged; never let C write
+through or retain that borrowed pointer. Writable/output APIs need independently owned mutable
+storage and a matching ABI binding.
+
+A manual extern `Readonly<Span<T>>` parameter expands to a data pointer plus `int64_t` length;
+it does not adapt arbitrary pointer/count ABIs or authorize retaining a borrowed buffer.
+`Ptr<T>` does not retain an object; use the [Handle contract](LANG.md#primitive-types) when C
+keeps one. Copying a Handle does not create another retained count. Wrap C status-plus-output
+APIs in checked `Result` APIs at the application boundary.
 
 ## 7. Specialize work before runtime
 
@@ -234,5 +248,10 @@ Borrow reads, move, enum dispatch, BitSet and generic traits. Native-only probes
 The native `externSpanAcrossModules` corpus consumer printed `6 26 30 0 13` for readonly/mutable
 Span ABI calls across modules, including fixed arrays, a Vec, an empty array and a slice.
 Both checkers refused value-parameter mutation, a Borrow write, an incompletely written out
-parameter and a direct Span return. This is syntax/behavior evidence, not a benchmark, exhaustive
-safety audit, sanitizer run or guarantee for Windows, Linux, browser, freestanding or on-chain.
+parameter and a direct Span return. The audit additionally checked ordinal-enum refusals on C/JS,
+actor Result replies and mailbox order on C/JS, and move into borrowing parameters on C/JS.
+Native probes printed `after custom 0` / `after automatic 1` for custom-hook field cleanup;
+[hook replacement](../src/test/handoff/userDestructor.ms) and
+[formal ownership](../src/test/corpus/programs/parameterHookDemand/main.ms) retain the contracts.
+This is syntax/behavior evidence, not a benchmark, exhaustive safety audit, sanitizer run or
+guarantee for Windows, Linux, browser, freestanding or on-chain.
