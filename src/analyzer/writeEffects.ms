@@ -13,7 +13,8 @@ import { lookupInstanceHook, pickBodyCtx } from "../checker/instantiate";
 import { isMutatingArrayMethod } from "../checker/paramMutationAnalysis";
 import { containsPointer } from "../checker/varPartitions";
 import { skipConvDfa } from "./alias";
-import { RcInfo, noRcInfo } from "./classify";
+import { RcInfo, RcKind, noRcInfo } from "./classify";
+import { returnsBorrow } from "../codegen/c/types";
 import { makeNumber, makeString } from "../checker/literalNodes";
 import { classDistance, createArray, createFunction, int32Type, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
 import { isAssignable, sameType } from "../checker/compat";
@@ -1308,10 +1309,19 @@ export function borrowedArgsToCopy(w: WriteEffects, call: Node, defs: LocalDefs 
 		for (let j = 0; j < args.length && !keep; j += 1) {
 			if (j != i && byAddress[j] && roots[i] != null && roots[j] === roots[i]) keep = true;
 		}
-		if (!keep && slots[i].length > 0) keep = mayWriteAny(w, writes, addressSlots(slots[i]));
+		const reads = reachesCalleeByValue(w, call, i) ? slots[i] : addressSlots(slots[i]);
+		if (!keep && slots[i].length > 0) keep = mayWriteAny(w, writes, reads);
 		flags[i] = keep;
 	}
 	return flags;
+}
+
+function reachesCalleeByValue(w: WriteEffects, call: Node, i: int32): boolean {
+	const kind = w.rcOf((call.data as CallExprData).arguments[i].nodeType).rcKind;
+	if (kind != RcKind.Ref && kind != RcKind.String) return false;
+	const sym = call.resolvedSym;
+	const fnType = sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function ? sym.symbolType : (call.data as CallExprData).callee.nodeType;
+	return i > 0 || !returnsBorrow(fnType);
 }
 
 function writeProbe(): WriteEffects {

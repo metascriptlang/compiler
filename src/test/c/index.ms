@@ -91,3 +91,4 @@ import "./openSlotCycleClassification";
 import "./spawnViewCursor";
 import "./spawnCaptureCursor";
 import "./genericHolderSlots";
+import "./borrowedArgumentPins";
