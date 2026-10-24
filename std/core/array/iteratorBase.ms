@@ -129,27 +129,40 @@ export function toItems<T>(this p: Peekable<T>): Iterator<T> {
 
 export function peekable<T>(this it: Iterator<T>): Peekable<T> {
 	const slot: T[] = [];
-	let exhausted = false;
+	const tail: T[] = [];
+	let ended = false;
+	const finish = (last: T): void => {
+		if (ended) return;
+		ended = true;
+		tail.push(last);
+	};
 	const fill = (): boolean => {
 		if (slot.length > 0) return true;
-		if (exhausted) return false;
+		if (ended) return false;
 		const r = it.next();
 		if (r.done) {
-			exhausted = true;
+			finish(r.value);
 			return false;
 		}
 		slot.push(r.value);
 		return true;
 	};
+	const close = () => {
+		while (slot.length > 0) slot.pop();
+		if (it.return == null) throw new Error("peekable: the source has no return");
+		const r = it.return();
+		finish(r.value);
+		return r;
+	};
 	return {
 		next: () => {
 			if (slot.length > 0) return { value: slot.pop(), done: false };
-			return it.next();
+			if (ended) return { value: tail[0], done: true };
+			const r = it.next();
+			if (r.done) finish(r.value);
+			return r;
 		},
-		return: () => {
-			if (it.return != null) return it.return();
-			return it.next();
-		},
+		return: it.return == null ? null : close,
 		peek: () => (fill() ? slot[0] : null),
 	};
 }

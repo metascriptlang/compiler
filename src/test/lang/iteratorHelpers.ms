@@ -490,6 +490,63 @@ test "iterator peekable: return closes the source" {
 	assert log.join(",") == "a.next,a.return";
 }
 
+function pulled(pulls: int32[], n: int32, closable: boolean): Iterator<int32> {
+	return {
+		next: () => {
+			pulls[0] += 1;
+			if (pulls[0] > n) return { value: 0, done: true };
+			return { value: pulls[0], done: false };
+		},
+		return: closable ? () => {
+			pulls[1] += 1;
+			return { value: 0, done: true };
+		} : null,
+	};
+}
+
+test "iterator peekable: closing a source without return pulls nothing more" {
+	const pulls: int32[] = [0, 0];
+	for (const x of pulled(pulls, 9, false).peekable<int32>().toItems<int32>()) {
+		if (x == 2) break;
+	}
+	assert pulls[0] == 2;
+	let taken = 0;
+	const names: Iterator<string> = {
+		next: () => {
+			taken += 1;
+			return { value: `n${taken}`, done: false };
+		},
+		return: null,
+	};
+	const it = names.peekable<string>();
+	assert it.peek() == "n1";
+	assert it.return == null;
+	assert taken == 1;
+}
+
+test "iterator peekable: return closes the source once, drops the peeked element and ends" {
+	const pulls: int32[] = [0, 0];
+	const p = pulled(pulls, 9, true).peekable<int32>();
+	assert `${p.peek()}` == "1";
+	assert p.return != null;
+	if (p.return != null) assert p.return().done;
+	assert pulls[0] == 1 && pulls[1] == 1;
+	assert p.next().done && p.peek() == null;
+	assert pulls[0] == 1;
+}
+
+test "iterator peekable: a source that reported done is not pulled again" {
+	const pulls: int32[] = [0, 0];
+	const p = pulled(pulls, 1, true).peekable<int32>();
+	assert p.next().value == 1;
+	assert p.peek() == null && p.peek() == null;
+	assert p.next().done && p.next().done;
+	assert pulls[0] == 2;
+	const q = pulled(pulls, 0, true).peekable<int32>();
+	assert q.next().done && q.next().done && q.peek() == null;
+	assert pulls[0] == 3;
+}
+
 test "iterator sum, min and max: reductions with null for an empty min and max" {
 	const log: string[] = [];
 	assert counter("a", 4, log).sum() == 10;
