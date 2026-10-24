@@ -26,8 +26,7 @@ import { isAssignable, unmetConstraint, foldTypeParamCandidates } from "./compat
 import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity } from "./resolvePass";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr } from "./checkerCallbacks";
-import { mapChildren } from "../transform/walker";
-import { forEachChild } from "../ast/visitor";
+import { forEachChild, mapChildren } from "../ast/visitor";
 
 // Check if a function symbol is a template (has "template" in fnFlags).
 export function isTemplateSym(sym: Symbol): boolean {

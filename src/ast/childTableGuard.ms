@@ -2,6 +2,8 @@ import { readFile } from "std/fs";
 
 const NODE_SRC = "std/meta/node.ms";
 
+const MAP_CHILDREN_DECL = "export function mapChildren(";
+
 const TABLE_NAMES: string[] = ["visitor", "walker", "clone", "hash", "printer", "bridge"];
 
 // The per-kind tables. "clone" and "printer" point at fieldspec.ms since
@@ -10,7 +12,7 @@ const TABLE_NAMES: string[] = ["visitor", "walker", "clone", "hash", "printer", 
 // is a generic sink-driven dump.
 const TABLE_PATHS: string[] = [
 	"src/ast/visitor.ms",
-	"src/transform/walker.ms",
+	"src/ast/visitor.ms",
 	"src/ast/fieldspec.ms",
 	"src/compiler/transam/hash.ms",
 	"src/ast/fieldspec.ms",
@@ -87,6 +89,15 @@ function firstUnreadable(paths: string[]): string {
 	return "";
 }
 
+// visitor.ms holds two tables: forEachChild before mapChildren, mapChildren from its declaration on.
+function tableSource(path: string, table: string): string {
+	const src = readOrEmpty(path);
+	if (table != "visitor" && table != "walker") return src;
+	const at = src.indexOf(MAP_CHILDREN_DECL, 0);
+	if (at < 0) return "";
+	return table == "visitor" ? src.slice(0, at) : src.slice(at, src.length);
+}
+
 function isKnownGap(key: string): boolean {
 	for (const g of KNOWN_GAPS) { if (g == key) return true; }
 	return false;
@@ -111,8 +122,8 @@ test "child-table guard: every Node-typed field is handled by every table" {
 	let count = 0;
 	let ti = 0;
 	while (ti < TABLE_PATHS.length) {
-		const src = readOrEmpty(TABLE_PATHS[ti]);
 		const table = TABLE_NAMES[ti];
+		const src = tableSource(TABLE_PATHS[ti], table);
 		for (const f of names) {
 			if (tableMentions(src, f)) continue;
 			const key = table + ":" + f;
@@ -132,8 +143,8 @@ test "child-table guard: KNOWN_GAPS has no stale entry" {
 	let count = 0;
 	let ti = 0;
 	while (ti < TABLE_PATHS.length) {
-		const src = readOrEmpty(TABLE_PATHS[ti]);
 		const table = TABLE_NAMES[ti];
+		const src = tableSource(TABLE_PATHS[ti], table);
 		for (const f of names) {
 			if (!tableMentions(src, f)) continue;
 			const key = table + ":" + f;
