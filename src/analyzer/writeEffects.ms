@@ -1489,6 +1489,22 @@ export function bindingKeepsContract(w: WriteEffects, fn: Symbol, binding: Node 
 	return !mayWriteAny(w, writes, contract.reads.slots);
 }
 
+export function cloneForCall(w: WriteEffects, call: Node, defs: LocalDefs | null): Symbol | null {
+	const sym = call.resolvedSym;
+	if (sym == null || call.kind != NodeKind.CallExpr) return null;
+	const contract = w.tables.contracts.get(sym);
+	if (contract == null || contract.clone == null) return null;
+	if (w.tables.reloadableUnits.length > 0) {
+		const unit = w.tables.routineDecls.routineUnits.get(sym);
+		if (unit == null || (w.tables.reloadableUnits.includes(unit) && unit != w.unit)) return null;
+	}
+	const args = (call.data as CallExprData).arguments;
+	for (const i of contract.params) {
+		if (i >= args.length || !bindingKeepsContract(w, sym, args[i], defs)) return null;
+	}
+	return contract.clone;
+}
+
 function onTables(tables: WriteSummaries): WriteEffects {
 	return { tables, checker: null, unit: "", rcOf: (t: Type | null): RcInfo => noRcInfo(), aliasMemo: new HashMap<Type, HashMap<Type, int32>>() };
 }

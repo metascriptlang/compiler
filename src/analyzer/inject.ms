@@ -32,7 +32,7 @@ import {
 import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym } from "./alias";
 import { inferCursors } from "./cursors";
 import { isViewCall, returnsView } from "../checker/effects";
-import { LocalDefs, borrowedArgsToCopy, callerDefsOf, createRoutineDecls, createWriteSummaries, enterRoutineLending, leaveRoutineLending } from "./writeEffects";
+import { LocalDefs, borrowedArgsToCopy, callerDefsOf, cloneForCall, createRoutineDecls, createWriteSummaries, enterRoutineLending, leaveRoutineLending } from "./writeEffects";
 import { cstringSource } from "../transform/native/cstringConvLower";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
 import { checkSource } from "../checker/checkPass";
@@ -534,6 +534,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		isActorSendHandoff = true;
 	}
 
+	const lent = cloneForCall(dctx.writes, node, dctx.callerDefs);
 	const keepAlive = borrowedArgsToCopy(dctx.writes, node, dctx.callerDefs);
 	const marks: Node[] = [];
 	for (let i = 0; i < cd.arguments.length; i += 1) {
@@ -553,6 +554,10 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		marks.push(markOperandEnd(dctx, node.location));
 	}
 	keepOperandOrder(cd.arguments, marks, dctx);
+	if (lent != null) {
+		if (cd.callee.resolvedSym === node.resolvedSym) cd.callee.resolvedSym = lent;
+		node.resolvedSym = lent;
+	}
 	// ensureDestruction on the call's return value is consolidated in processNode (Normal mode) —
 	// NOT applied to individual arguments (each nested call arg gets its own via the recursive walk).
 	if ((mode == DrcMode.SinkArg || mode == DrcMode.Consumed) && (isCursorSlot(node.nodeType) || isViewCall(node))) {
