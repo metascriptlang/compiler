@@ -32,6 +32,12 @@ Quick navigation:
 - Delivery: [builds/targets](#16-modules-builds-and-targets),
   [standard modules](#17-know-the-library-boundary), [tests](#18-tests-measurement-and-delivery),
   [current limits](#19-current-limits-and-design-boundaries).
+- Worked recipes: [managed-field owner](#compose-resource-hooks-with-managed-fields),
+  [retained C callback](#complete-retained-context-handoff),
+  [checked macro](#check-a-macro-input-before-generating-an-expression),
+  [two declarations](#generate-two-declarations-with-splicemany),
+  [nullable JSON](#required-nullable-json-distinguish-missing-from-null),
+  [strict CBOR](#strict-cbor-field-kind-duplicate-policy-exact-extraction-then-range).
 
 ## 1. Defaults that make code read as MetaScript
 
@@ -211,8 +217,12 @@ line += String(7);
 console.log(before, line);
 ```
 
-Never feed a byte offset into a code-unit API or the reverse. Neither length counts user-perceived
-graphemes. `char` is an 8-bit byte character, not a Unicode code point; hold code points in `int32`.
+Never feed a byte offset into a code-unit API or the reverse. For valid UTF-8 text and a byte
+offset in range at a complete character boundary, `text.byteSlice(0, byteOffset).length` gives
+the corresponding UTF-16 position; it is not an arbitrary-byte boundary validator. For `é🚀x`,
+byte offsets `0, 2, 6, 7` map to code-unit positions `0, 1, 3, 4`: four units, seven bytes.
+Neither length counts user-perceived graphemes. `char` is an 8-bit byte character, not a Unicode
+code point; hold code points in `int32`.
 `'A'` is a string, not a char literal. String `for..of` visits UTF-8 bytes, not Unicode characters;
 choose an explicit index space rather than using it as a Unicode loop. Supply both slice endpoints.
 For a read-only string window use `Readonly<Span<char>>`, not writable `Span<char>`. Do not infer
@@ -417,6 +427,80 @@ not `this ref`. Do not import internal hook names or signatures from historical 
 Hooks replace generated field operations, not just the external-resource part. Keep them
 synchronous and suitable for their calling context. A custom derived destroy hook cannot assume
 automatic base-hook chaining. Do not rely on leftover primitive fields after a move.
+
+### Compose resource hooks with managed fields
+
+Do not put a resource-only destructor on an owner that also contains strings, Vecs or references:
+that would replace their generated cleanup. Put the custom resource operation on a small leaf
+and leave the containing owner's hooks generated. This native example owns explicit foreign
+Handle counts and an independent Vec; it needs no invented manual field-visitor API:
+
+```ms
+import { Handle } from "std/ffi";
+let destroyed: int32 = 0;
+class Resource {
+	id: int32;
+	constructor(id: int32) { this.id = id; }
+}
+function onDestroy(this resource: Resource): void { destroyed += 1; }
+struct Token { pointer: Ptr<void> | null; }
+function releaseToken(ref token: Token): void {
+	const pointer = token.pointer;
+	if (pointer != null) { Handle.at<Resource>(pointer).release(); }
+	token.pointer = null;
+}
+function onDestroy(this ref token: Token): void { releaseToken(token); }
+function onCopy(this ref dest: Token, source: Token): void {
+	const pointer = source.pointer;
+	if (pointer != null) { Handle.at<Resource>(pointer).retain(); }
+	releaseToken(dest);
+	dest.pointer = pointer;
+}
+function onMove(this ref dest: Token, source: Token): void {
+	releaseToken(dest);
+	dest.pointer = source.pointer;
+}
+function onMoved(this ref token: Token): void { token.pointer = null; }
+function onClone(this token: Token): Token {
+	const pointer = token.pointer;
+	if (pointer != null) { Handle.at<Resource>(pointer).retain(); }
+	return { pointer };
+}
+struct Owner { token: Token; words: Vec<string>; }
+function createOwner(id: int32): Owner {
+	const resource = new Resource(id);
+	return { token: { pointer: Handle.retain(resource).ptr }, words: ["original"] };
+}
+function demonstrate(): void {
+	let first = createOwner(1);
+	let second = first;
+	second.words[0] = "changed";
+	console.log(first.words[0], second.words[0]);
+	second = createOwner(2);
+	const taken = move second;
+	const copies: Owner[] = [first, first];
+	let tokenA = first.token;
+	let tokenB = first.token;
+	tokenB = move tokenA;
+	const tokens: Token[] = [tokenB, tokenB];
+	if (tokenB.pointer == null) { throw new Error("live token required"); }
+	console.log(taken.words[0], copies.length, tokens.length, first.words[0], destroyed);
+}
+demonstrate();
+console.log("destroyed", destroyed);
+```
+
+DRC and ORC printed `original changed`, `original 2 2 original 0`, then `destroyed 2`.
+Copy/clone retain, replacement releases the old destination, move transfers its count, and
+`onMoved` clears the source without releasing the transferred count. `ref` is declared on the
+parameter; calls such as `releaseToken(dest)` do not add a `ref` argument keyword.
+
+`Owner` still gets generated Vec copy/destruction and moved-from handling. `Token` has no managed
+field to visit: its pointer is an explicitly retained external root, released by the leaf hook.
+`Resource` has only a scalar field, so its counting destructor does not conceal managed cleanup.
+This is composition, not a manual `onTrace` recipe for an arbitrary managed graph. Do not hide
+managed cycle edges behind raw pointers. For an actual SDK resource, use that SDK's documented
+retain/release pair; `Handle.at<T>` is only for a valid matching Handle token, not an SDK address.
 
 Reference counting alone does not reclaim ownership cycles. Use the collector mode appropriate
 to the graph, or a genuinely non-owning back-edge with a proven owner lifetime. A cursor is not
@@ -667,6 +751,32 @@ Let the event loop drain; `process.exit()` bypasses pending work and orphan-fail
 Native C is the concurrency target: JS result parity does not prove threads, ownership transfer,
 scheduling or native resource behavior. Freestanding/on-chain code is not a concurrency target.
 
+A native CALL/SEND pair makes the argument distinction concrete:
+
+```ms
+interface Payload { n: int32; }
+actor Mailbox {
+	private count: int32 = 0;
+	read(payload: Payload): int32 { return payload.n; }
+	store(payload: Payload): void { this.count = payload.n; }
+	current(): int32 { return this.count; }
+}
+async function demonstrate(): Promise<void> {
+	const mailbox = new Mailbox();
+	const borrowed: Payload = { n: 7 };
+	console.log(await mailbox.read(borrowed), borrowed.n);
+	const transferred: Payload = { n: 9 };
+	mailbox.store(move transferred);
+	console.log(await mailbox.current());
+}
+await demonstrate();
+```
+
+This prints `7 7`, then `9` on native. The awaited `read` borrows `borrowed`; it remains usable
+after the reply. `store` takes the moved message; do not reuse `transferred`. Submission alone
+is not completion: the later CALL observes state after the earlier queued SEND in this example.
+This does not grant ordering across arbitrary producers or promise that actor death ran cleanup.
+
 ### Promise, cancellation and actor lifecycle
 
 A `Promise<T>` means eventual completion, not execution on another CPU. Prefer an async function;
@@ -800,6 +910,101 @@ APIs in checked `Result` APIs at the application boundary.
 Balance handle counts manually; do not release again after ownership-taking `take`. Never let C
 retain a temporary cstring, stack address, span or unretained object. Use real writable storage
 for C output and convert back under its length/terminator contract, not a managed-string cast.
+
+### Complete retained-context handoff
+
+This single-threaded fixture calls back synchronously from `cookbook_emit`. Successful registration
+keeps the pointer but does not retain it; failure keeps nothing. Unregister clears it and leaves
+no callback in flight. Save these three related files together. First, `callback.h`:
+
+```c
+#pragma once
+#include <stdbool.h>
+#include <stdint.h>
+
+bool cookbook_register(void *context, bool accept);
+void cookbook_emit(int32_t amount);
+void cookbook_unregister(void);
+void recipeOnEvent(void *context, int32_t amount);
+```
+
+`callback.c`:
+
+```c
+#include "callback.h"
+#include <stddef.h>
+
+static void *saved;
+
+bool cookbook_register(void *context, bool accept) {
+	if (!accept || saved != NULL) return false;
+	saved = context;
+	return true;
+}
+
+void cookbook_emit(int32_t amount) {
+	if (saved != NULL) recipeOnEvent(saved, amount);
+}
+
+void cookbook_unregister(void) {
+	saved = NULL;
+}
+```
+
+`callbackMain.ms`:
+
+```ms
+import { Handle } from "std/ffi";
+import { cookbook_register, cookbook_emit, cookbook_unregister } from "./callback.h";
+let destroyed: int32 = 0;
+class Context { total: int32 = 0; }
+function onDestroy(this context: Context): void { destroyed += 1; }
+@exportName("recipeOnEvent")
+export function onEvent(pointer: Ptr<void>, amount: int32): void {
+	const context = Handle.at<Context>(pointer).value();
+	context.total += amount;
+}
+function start(accept: boolean): Result<Handle<Context>, string> {
+	const context = new Context();
+	const handle = Handle.retain(context);
+	if (!cookbook_register(handle.ptr, accept)) {
+		handle.release();
+		return Result.err("registration refused");
+	}
+	return Result.ok(handle);
+}
+function demonstrate(): void {
+	const failed = start(false);
+	console.log(failed.ok, destroyed);
+	const registration = start(true);
+	if (!registration.ok) { throw new Error(registration.error); }
+	{
+		const handle = registration.value;
+		defer { cookbook_unregister(); handle.release(); }
+		cookbook_emit(7);
+		console.log(handle.value().total, destroyed);
+	}
+	cookbook_emit(99);
+}
+demonstrate();
+console.log(destroyed);
+```
+
+`msc run callbackMain.ms` printed `false 1`, `7 1`, then `2` under native DRC and ORC.
+The failed context is released; the successful context survives `start` returning and is used
+by actual C code before unregister/release. The final emit cannot call the released context.
+
+`handle.ptr` is the pointer token; `Handle.at<Context>(pointer)` reconstructs a non-retaining
+wrapper of that exact type. The callback must not release the registration's count. The successful
+Result transfers the *obligation* to unregister and release exactly once, not an automatically
+managed ownership count. Do not copy it into independently releasing owners. `take()` would
+consume a count; this example instead ends it with `release()` and does not use it afterward.
+
+For a real SDK, unregister must also wait for callbacks already executing and forbid future ones
+before release. If callbacks come from foreign threads, runtime entry/thread attachment and
+synchronization need the actual host contract; this fixture certifies none of those. Keep the
+scoped cleanup, or an equivalent owner, on every exit; unregister must finish before release.
+A stable exported function avoids assuming that a capturing lambda is a C ABI.
 
 Unlike ordinary array-packed rest parameters, an extern rest tail passes each argument individually
 to C. Match C's promoted argument types and the callee's format/count contract, including explicit
@@ -986,7 +1191,7 @@ typed and necessary. Use [LANG.md](LANG.md#conditional-compilation) for the exac
 | `@comptime` expression/block | Build-time evaluation; a statement block leaves no runtime statement. |
 | `@comptime function` | Evaluate a helper whose inputs are compile-time values; arbitrary runtime APIs are not VM APIs. |
 | `macro name(node: Node): Node` | Inspect/generate caller AST, not evaluated runtime arguments. Invoke with a bare call, not `@name(...)`. |
-| Typed macro argument | Request checked syntax/type information; early declaration-generation inputs may be untyped. |
+| `getType(node)` in a checked macro | Inspect checked syntax; no `typed` parameter modifier. Early declaration-generation inputs may be untyped. |
 | `quote { ... }`, `${node}` | Construct/splice AST, not text pretending to be syntax. |
 | `converter name(node: Node): Target` | Compile-time expansion at a supported expected-type boundary, rechecked against runtime `Target`. |
 | Statement macro / `SpliceMany` | Generate declarations/sibling statements; do not assume recursive flattening of nested splices. |
@@ -1013,6 +1218,81 @@ Quoted local declarations receive fresh names; handwritten identifier records do
 guarantee. Keep generated work visible and inspect expansions when the abstraction becomes harder
 to debug than its output. Macro libraries are trusted build-time code; unexported evaluator
 internals are not application APIs.
+
+### Check a macro input before generating an expression
+
+A normal `Node` argument can carry checked type information. Ask for it and reject an unavailable
+or wrong type; do not infer semantics from identifier spelling. This expression macro accepts
+an explicitly int32 value and evaluates the spliced expression once:
+
+```ms
+import { Node, getType, resolveType, sameType, error } from "std/meta";
+macro addInt32(value: Node): Node {
+	const actual = getType(value);
+	const expected = resolveType("int32");
+	if (actual == null || expected == null || !sameType(actual, expected)) {
+		error("addInt32 requires int32", value);
+	}
+	return quote { ${value} + 1 };
+}
+function demonstrate(): void {
+	const value: int32 = 6;
+	console.log(addInt32(value), addInt32(8 as int32));
+}
+demonstrate();
+```
+
+C and JS print `7 9`. Replacing a call with `addInt32("bad")` or `addInt32(7 as int64)` is
+refused during checking: `Macro 'addInt32': addInt32 requires int32`. There is no separate
+`typed` keyword to invent.
+The query is phase-dependent: an imported macro's bare module-level declaration call expands
+early, before its input necessarily has a checked type. Use that position to generate declarations,
+not to assume that `getType` is available there.
+
+### Generate two declarations with SpliceMany
+
+Here the exported macro deliberately uses syntax, not an early type query. `pairMacro.ms`:
+
+```ms
+import { Node, NodeKind } from "std/meta";
+export macro declarePair(value: Node): Node {
+	return {
+		kind: NodeKind.SpliceMany, line: value.line, column: value.column,
+		spliceNodes: [
+			{
+				kind: NodeKind.FunctionDecl, line: value.line, column: value.column,
+				fnName: "firstValue", params: [], fnParamTypes: [], fnReturnType: "int32",
+				fnFlags: "", fnDefaults: [], nativeName: "",
+				nameLocation: { line: value.line, column: value.column },
+				fnBody: quote { const scratch: int32 = 1; return ${value} + scratch; },
+			},
+			{
+				kind: NodeKind.FunctionDecl, line: value.line, column: value.column,
+				fnName: "secondValue", params: [], fnParamTypes: [], fnReturnType: "int32",
+				fnFlags: "", fnDefaults: [], nativeName: "",
+				nameLocation: { line: value.line, column: value.column },
+				fnBody: quote { const scratch: int32 = 2; return ${value} + scratch; },
+			},
+		],
+	};
+}
+```
+
+`pairMain.ms`:
+
+```ms
+import { declarePair } from "./pairMacro";
+const scratch: int32 = 40;
+declarePair(scratch);
+console.log(firstValue(), secondValue(), scratch);
+```
+
+C and JS print `41 42 40`: both siblings exist, quoted locals do not capture the caller's
+`scratch`, and the spliced caller reference keeps its meaning. These are flat compiler-wire
+macro literals, not the runtime tagged Node constructor shape. The caller-visible declaration
+names `firstValue`/`secondValue` are fixed: invoke this recipe once per module or choose a naming
+policy that diagnoses collisions. Do not promise collision-free generated names from a
+handwritten `fnName`, nested-splice flattening, or automatic validity of arbitrary input syntax.
 
 JSX is AST syntax (elements, attributes, children, fragments), not a built-in renderer. Its chosen
 macro/converter/runtime defines components, props, spread and whitespace semantics. A native
@@ -1165,20 +1445,145 @@ passage through a floating-point JSON number.
 | `std/serialize/cbor` | Binary codec, value tree and typed helpers. Format decoding success is not strict validation of every target field. |
 | `UntypedTree<V, Input>` | Shared exported capability for a format's `parseValue`, not every capability in the serialization design. |
 
-A CBOR round trip from an already trusted typed value:
+### Required nullable JSON: distinguish missing from null
+
+This wire contract requires a top-level `note`, either a string or null; unrelated fields are
+allowed. Check the decoded object's key membership and original kind, not an accessor's default
+or a textual substring. The 1024-byte limit is an application choice, not a universal JSON limit.
 
 ```ms
-import { cborEncode, decode, cborValueToStruct } from "std/serialize/cbor";
-interface Wire { n: int32; }
-const source: Wire = { n: 7 };
-const decoded = decode(cborEncode(source));
-if (!decoded.ok) { throw new Error(decoded.error); }
-const result: Wire = cborValueToStruct(decoded.value, null as Wire | null);
-console.log(result.n);
+import { JsonKind, JsonValue } from "std/serialize/json";
+struct Note { text: string | null; }
+enum NoteError {
+	TooLarge,
+	Malformed,
+	NotObject,
+	Missing,
+	WrongKind,
+}
+function readNote(text: string): Result<Note, NoteError> {
+	if (text.byteLength() > 1024) { return Result.err(NoteError.TooLarge); }
+	const parsed = JSON.parseValue(text);
+	if (!parsed.ok) { return Result.err(NoteError.Malformed); }
+	const root = parsed.value;
+	if (root.kind != JsonKind.Object) { return Result.err(NoteError.NotObject); }
+	let value: JsonValue | null = null;
+	for (let i: int32 = 0; i < root.keys.length; i += 1) {
+		if (root.keys[i] != "note") { continue; }
+		value = root.values[i];
+		break;
+	}
+	if (value == null) { return Result.err(NoteError.Missing); }
+	if (value.kind == JsonKind.Null) { return Result.ok({ text: null }); }
+	if (value.kind != JsonKind.String) { return Result.err(NoteError.WrongKind); }
+	return Result.ok({ text: value.strVal });
+}
+const inputs = [
+	"x".repeat(1025), "é".repeat(513), "bad", "[]", "null", "{}",
+	'{"note":null}', '{"note":"hello"}', '{"extra":7,"note":""}',
+	'{"outer":{"note":null}}', '{"\\u006eote":null}', '{"note":7}',
+	'{"note":false}', '{"note":{"n":1}}', '{"note":null,"note":"x"}',
+	'{"note":"x","note":null}', '{"note":"a","\\u006eote":"b"}',
+];
+for (const input of inputs) {
+	const result = readNote(input);
+	if (result.ok) { console.log("ok", result.value.text ?? "(null)"); }
+	else { console.log("error", result.error.toString()); }
+}
 ```
 
-Do not generalize this to strict decoding of untrusted objects: conversion helpers can default
-fields, so validate the tree/schema before trusting the conversion. Planned multi-format codecs,
+Both oversized inputs return `TooLarge`; the second has only 513 UTF-16 units but 1026 bytes.
+Malformed input returns `Malformed`; array/null roots return `NotObject`. An absent key or one
+present only inside `outer` returns `Missing`. Explicit null and the decoded escaped key succeed;
+empty string remains empty. Numbers, booleans and objects return `WrongKind`, not null or a
+coerced string. Here a null *pointer* means not found; a non-null JsonValue of kind Null is present.
+
+**Duplicate-key policy:** the JSON parser collapses decoded duplicate keys, keeping the last value.
+The final three cases succeed with `x`, null and `b`. A post-parse membership scan cannot recover
+wire duplicates, including escaped spellings. If a protocol requires rejecting them, that needs a
+parser contract that preserves/rejects duplicates; this recipe does not claim to supply one.
+Neither `JsonKind.Number` nor a convenience numeric accessor alone proves exact wide-integer
+preservation. Choose an exact wire representation when the consumer needs it.
+
+### Strict CBOR field: kind, duplicate policy, exact extraction, then range
+
+This contract permits other text keys but requires exactly one integer `count` in `1..64`.
+A text `"4"`, float `4.0` and null are not the integer wire kind. Read `intVal` only after checking
+Int, keep its int64 representation through validation, then narrow. Unlike the JSON parser above,
+the CBOR value tree preserves repeated map entries, so this recipe can reject duplicate `count`.
+
+```ms
+import { Buffer } from "std/core/buffer";
+import {
+	CborKind, decode, encode, cborTextMap, cborMap, cborInt, cborText, cborFloat, cborNull,
+} from "std/serialize/cbor";
+enum CountError {
+	TooLarge,
+	Malformed,
+	NotMap,
+	WrongKey,
+	Missing,
+	Duplicate,
+	WrongKind,
+	OutOfRange,
+}
+function readCount(bytes: Buffer): Result<int32, CountError> {
+	if (bytes.byteLength() > 1024) { return Result.err(CountError.TooLarge); }
+	const parsed = decode(bytes);
+	if (!parsed.ok) { return Result.err(CountError.Malformed); }
+	const root = parsed.value;
+	if (root.kind != CborKind.Map) { return Result.err(CountError.NotMap); }
+	let found = false;
+	let count: int64 = 0;
+	for (let i: int32 = 0; i < root.keys.length; i += 1) {
+		const key = root.keys[i];
+		if (key.kind != CborKind.Text) { return Result.err(CountError.WrongKey); }
+		if (key.textVal != "count") { continue; }
+		if (found) { return Result.err(CountError.Duplicate); }
+		found = true;
+		const value = root.values[i];
+		if (value.kind != CborKind.Int) { return Result.err(CountError.WrongKind); }
+		count = value.intVal;
+	}
+	if (!found) { return Result.err(CountError.Missing); }
+	if (count < 1 || count > 64) { return Result.err(CountError.OutOfRange); }
+	return Result.ok(count as int32);
+}
+const inputs: Buffer[] = [
+	Buffer.alloc(1025),
+	encode(cborTextMap(["count"], [cborInt(4)])),
+	encode(cborTextMap(["count"], [cborInt(1)])),
+	encode(cborTextMap(["other", "count"], [cborText("x"), cborInt(64)])),
+	encode(cborTextMap([], [])),
+	encode(cborTextMap(["count"], [cborNull()])),
+	encode(cborTextMap(["count"], [cborText("4")])),
+	encode(cborTextMap(["count"], [cborFloat(4.0)])),
+	encode(cborTextMap(["count"], [cborInt(0)])),
+	encode(cborTextMap(["count"], [cborInt(65)])),
+	encode(cborTextMap(["count", "count"], [cborInt(1), cborInt(2)])),
+	encode(cborMap([cborInt(1)], [cborInt(4)])),
+	Buffer.fromString("a165636f756e741b7fffffffffffffff", "hex"),
+	Buffer.fromString("a165636f756e741b8000000000000000", "hex"),
+	Buffer.fromString("a1", "hex"),
+	encode(cborNull()),
+];
+for (const input of inputs) {
+	const result = readCount(input);
+	if (result.ok) { console.log("ok", result.value); }
+	else { console.log("error", result.error.toString()); }
+}
+```
+
+Outputs include `ok 4`, `ok 1`, `ok 64`, and named failures for size, absence, kind, range,
+duplicates and non-text keys. The two long hex values encode `count = 2^63 - 1` and `2^63`:
+the first reaches `OutOfRange`; the checked signed-int64 decoder refuses the second, reported
+here as `Malformed`, rather than wrapping it into a valid count. A truncated map is `Malformed`;
+a null root is `NotMap`. C, JS and native `--danger` agree on this entire matrix and the JSON one.
+
+These recipes validate fields of successfully decoded trees, not arbitrary decoder resource/depth
+bounds. Enforce transport/input budgets before buffering/parsing; the byte caps do not certify
+every nesting, UTF-8, tag or allocation case. Defaulting typed conversion helpers are not strict
+schema checks. Planned multi-format codecs,
 shared typed serializer/deserializer, streaming/transcoding and rename/skip/default override
 systems do not follow from the existing generic metadata mechanism. Type-level derive registration
 was rejected for this design; do not add ceremony the current call-site type walker does not need.
@@ -1204,6 +1609,28 @@ behavior and a false write/delete result fails. Records, maps and dense arrays h
 key/write/delete/length policies. Arrays do not gain holes, arbitrary past-length writes or
 length growth through a proxy. Do not infer prototype/descriptor/callable/ownKeys traps or a
 security sandbox. `proxyTarget`/`proxyHandler` expose the underlying parts deliberately.
+
+A refusing record setter has a concrete generic signature, not a guessed one. This separate
+program catches the failed compound write and prints `1` on C and JS:
+
+```ms
+interface Value { n: int32; }
+class Handler {
+	get<K extends keyof Value>(value: Value, key: K): Value[K] {
+		return Reflect.get(value, key);
+	}
+	set<K extends keyof Value>(value: Value, key: K, next: Value[K]): boolean {
+		return false;
+	}
+}
+const target: Value = { n: 1 };
+const proxy = new Proxy(target, new Handler());
+try { proxy.n += 1; }
+catch (error) { console.log(target.n); }
+```
+
+The policy applies to writes through this proxy. The original target and other aliases are not
+deeply frozen; this is not a read-only capability or a sandbox for arbitrary object graphs.
 
 Compile-time AST reflection, Proxy interception and C layout queries solve different problems;
 none is an arbitrary runtime cast or a universal dynamic object model.
@@ -1360,7 +1787,9 @@ debug info and timing tools answer different questions from sanitizers and resou
 ## 19. Current limits and design boundaries
 
 Judge a capability by code plus a focused consumer check, not a historical SHIPPED label or an
-accepted signature. These are limits of the checked baseline, not desired future semantics.
+accepted signature. These limits were observed on BUILD `6b8655024`, not inferred from a signature
+or re-certified by the later cookbook checks on BUILD `00bcf1a39`. They are baseline observations,
+not desired future semantics; check the current consumer before claiming a limit is fixed.
 
 | Surface | Current disposition |
 |---|---|
@@ -1415,7 +1844,7 @@ example passes `check` and `test` (302 tests including imported std tests). JSON
 Unknown scalar/array/map admissions are refused on C/JS; class narrowing and LIFO defer order run
 on both. The companion-header C example prints `42`.
 
-The feature inventory revision maps all 39 MS blocks to checked entry modules or named fixtures:
+The feature inventory revision mapped its then-39 MS blocks to checked entry modules or named fixtures:
 36 have C/JS evidence and three are native-only. New outputs include `4 7 6` (parameter forms),
 `7 6` (override/getter), `5` / `12n 255` (operators/bigint/shift), two `5`s (iterator consumers),
 `7 9` / `8` / `10 10` (dynamic/converter/valueOf), `7` (cross-module generic), `4 Panel` (macro/JSX),
@@ -1435,6 +1864,34 @@ that does not certify all evaluator APIs. The refusal,
 abstract-construction, native allSettled abort, JS abort-method failure and supervisor diagnostics
 in §19 were separately observed, not counted as successful recipes. Source-audited API/target
 inventory is distinguished from these executed examples; not every listed API/shape was run.
+
+The reader-feedback cookbook revision uses installed `msc 0.3.4` BUILD `00bcf1a39`
+(compiler/support tree `3a5694c70a73f1af5dcf8746d9a8b1ff95b7a121`) on the same host/Node;
+its authoring base tree is `dd695d2156f58383eb01af2b15267e364a78ffcb`. It retains 38 of the previous
+39 MS blocks unchanged and replaces the trusted CBOR round trip with strict field validation.
+All 47 current MS blocks match checked entry sources or named fixtures: 41 have C/JS evidence,
+six are native-only. Earlier evidence above remains scoped to its original baseline.
+
+New checks run `msc run [--target=js] recipe.ms`, `msc check [--target=js] reject.ms`,
+`msc run --danger recipe.ms`, and native `msc run --gc=drc recipe.ms` / `--gc=orc`.
+The JSON matrix's 17 inputs cover byte budgets, malformed/wrong roots, absence, explicit null,
+empty string, nested/escaped keys, wrong kinds and last-wins duplicates. The CBOR matrix's
+16 inputs cover byte budgets, inclusive bounds, unknown/non-text keys, missing/duplicate fields,
+wrong kinds, range, int64 extremes and malformed bytes. C/JS and native `--danger` outputs agree.
+Separate tree extraction on C/JS prints exact `9007199254740991`, `9007199254740993` and
+`9223372036854775807`, rather than only checking that a large value is rejected.
+The checked macro prints `7 9` and refuses string/int64 inputs with `addInt32 requires int32` on C/JS;
+the two-declaration macro prints `41 42 40` on both, including the caller-name hygiene variant.
+Proxy refusal prints `1`; byte-to-unit conversion prints `0 1 3 4` on C/JS.
+
+Native DRC and ORC each print `false 1 | 7 1 | 2` for the compiled C callback fixture,
+`original changed | original 2 2 original 0 | destroyed 2` for owner replacement/move/copies,
+and `7 7 | 9` for borrowed CALL/moved SEND. A forced throw inside the callback scope still
+unregisters/releases: both modes print `false 1 | 7 1 | caught | 2`, including a later no-op emit.
+Emitted owner C also retains generated Vec cleanup
+alongside the token hook. These are not foreign-thread callback, SDK-unregister-race, manual
+managed-graph trace, arbitrary macro-input or all-decoder safety certifications. Unchanged
+examples, the 302-test module suite, §19 limits and other targets were not rerun for this revision.
 
 This is syntax/behavior evidence, not a benchmark, exhaustive safety audit, sanitizer run or
 guarantee for Windows, Linux, browser, freestanding, HCR or on-chain.
