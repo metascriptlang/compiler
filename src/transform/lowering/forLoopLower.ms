@@ -9,8 +9,9 @@ import { Node, NodeKind, SourceLocation, ForStmtData, BlockStmtData, IfStmtData,
 import { forEachChild, anyChild, anyDescendant } from "../../ast/visitor";
 import { TransformContext, freshOwnedSym } from "../context";
 import { walkNode, mapChildren, isFuncBoundary } from "../walker";
+import { isRoutineOrTestNode } from "../../ast/shape";
 import { makeBool, makeBlock, makeWhile, makeExprStmt, makeBreak, makeSwitchWrapper, extractBodyStmts, makeVarDecl, makeIdentResolved, makeAssign, makeIf, makeUnary, syntheticToken } from "../util";
-import { isFnBoundary, LoopJumps, hasLoopContinue, retargetLoopJumps } from "./jumpRetarget";
+import { LoopJumps, hasLoopContinue, retargetLoopJumps } from "./jumpRetarget";
 import { booleanType } from "../../checker/types";
 import { firstStmtKindAfter, stmtCountAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 
@@ -101,7 +102,7 @@ export function bodySuspends(bodyStmts: Node[]): boolean {
 }
 
 function hasSuspendPoint(node: Node): boolean {
-	return anyDescendant(node, (n: Node): boolean => n.kind == NodeKind.YieldExpr || n.kind == NodeKind.AwaitExpr, (n: Node): boolean => isFnBoundary(n.kind));
+	return anyDescendant(node, (n: Node): boolean => n.kind == NodeKind.YieldExpr || n.kind == NodeKind.AwaitExpr, isRoutineOrTestNode);
 }
 
 // Rewrite continue → { update; continue; } at current loop level.

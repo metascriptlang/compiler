@@ -22,7 +22,7 @@
 import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, BigIntLiteralData, ExprStmtData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { addError } from "../../checker/context";
 import { booleanType, createPrimitive, int32Type, isNumeric, peelToRepr, typeDisplayName, isNullableBigInt } from "../../checker/types";
-import { isNullExpr } from "../lowering/operatorLower";
+import { isNullExpr } from "../../ast/shape";
 import { nullAccessHead } from "./nullableLower";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";

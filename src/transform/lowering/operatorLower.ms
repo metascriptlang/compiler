@@ -16,7 +16,8 @@
 //   reference comparisons  — template `>` = y < x           → derived from <
 //   reference comparisons  — template `>=` = y <= x         → derived from <=
 
-import { Node, NodeKind, BinaryExprData, ExprStmtData, NewExprData, UnaryExprData, IdentifierData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind, AttachedOp, NodeFlag, CallingConvention } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, ExprStmtData, NewExprData, UnaryExprData, IdentifierData, MemberExprData, SourceLocation, Type, TypeKind, Symbol, SymbolKind, AttachedOp, NodeFlag, CallingConvention } from "../../ast/node";
+import { isNullExpr } from "../../ast/shape";
 import { TransformContext, PendingTupleOp, reportTransformError } from "../context";
 import { liftedOp, hookBaseCName, hasUnionEq, anonUnionCName, opTypeKey } from "../../codegen/c/types";
 import { walkNode, hasEffect } from "../walker";
@@ -58,13 +59,7 @@ function isBuiltinOperand(t: Type | null): boolean {
 
 // ===== Null Detection =====
 
-// Recursively unwrap TypeAssertion to detect null expressions.
-// `null` → TypeAssertion(TypeAssertion(NullLiteral, "unknown"), "Type")
-export function isNullExpr(node: Node): boolean {
-	if (node.kind == NodeKind.NullLiteral) return true;
-	if (node.kind == NodeKind.TypeAssertion) return isNullExpr((node.data as TypeAssertionData).asExpr);
-	return false;
-}
+export { isNullExpr } from "../../ast/shape";
 
 // ===== Operator Resolution =====
 

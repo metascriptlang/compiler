@@ -15,7 +15,7 @@ import { isLocation } from "../../checker/assignable";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeMember, makeBool, makeNull, makeTypedObjectLiteral, makeCall, makeString, runtimeRef } from "../util";
-import { isNullExpr } from "../lowering/operatorLower";
+import { isNullExpr } from "../../ast/shape";
 
 // Wrap a value for assignment/return into a Maybe<T> slot. Canonical entry
 // point for transform-layer Maybe construction — used by nullableLower

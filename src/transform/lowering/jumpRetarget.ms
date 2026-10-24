@@ -11,6 +11,7 @@
 // only translates labels.
 
 import { Node, NodeKind, BreakStmtData, ContinueStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, IfStmtData } from "../../ast/node";
+import { isRoutineOrTestNode } from "../../ast/shape";
 import { TransformContext } from "../context";
 import { forEachChild, anyDescendant } from "../../ast/visitor";
 import { mapChildren } from "../walker";
@@ -34,15 +35,6 @@ export function retargetJumps(program: Node, ctx: TransformContext): Node {
 	const st: RetargetState = { stack: [], ctx };
 	walk(program, st);
 	return program;
-}
-
-export function isFnBoundary(kind: NodeKind): boolean {
-	return kind == NodeKind.FunctionDecl
-		|| kind == NodeKind.FunctionExpr
-		|| kind == NodeKind.ArrowFunction
-		|| kind == NodeKind.MethodDecl
-		|| kind == NodeKind.ConstructorDecl
-		|| kind == NodeKind.TestDecl;
 }
 
 export function isLoopKind(kind: NodeKind): boolean {
@@ -71,7 +63,7 @@ function continuesLoop(node: Node, loopLabel: string): boolean {
 			const label = (n.data as ContinueStmtData).continueLabel;
 			return label == "" || label == loopLabel;
 		},
-		(n: Node): boolean => isFnBoundary(n.kind) || (isLoopKind(n.kind) && !isSwitchWrapper(n)));
+		(n: Node): boolean => isRoutineOrTestNode(n) || (isLoopKind(n.kind) && !isSwitchWrapper(n)));
 }
 
 export function hasLoopContinue(stmts: Node[], loopLabel: string): boolean {
@@ -99,7 +91,7 @@ export function retargetLoopJumps(node: Node, jumps: LoopJumps, inSwitch: boolea
 		return node;
 	}
 	const wrapper = isSwitchWrapper(node);
-	if (isFnBoundary(node.kind) || (isLoopKind(node.kind) && !wrapper)) return node;
+	if (isRoutineOrTestNode(node) || (isLoopKind(node.kind) && !wrapper)) return node;
 	const childInSwitch = inSwitch || wrapper || node.kind == NodeKind.SwitchStmt;
 	mapChildren(node, (child: Node): Node => retargetLoopJumps(child, jumps, childInSwitch));
 	return node;
@@ -234,7 +226,7 @@ function walk(node: Node, st: RetargetState): void {
 		retargetContinue(node, st);
 		return;
 	}
-	if (isFnBoundary(kind)) {
+	if (isRoutineOrTestNode(node)) {
 		const savedStack = st.stack;
 		st.stack = [];
 		forEachChild(node, (child: Node) => { walk(child, st); });

@@ -9,6 +9,7 @@
 // not at all: any use the pass does not recognise leaves that integer as it is.
 
 import { Node, NodeKind, DeclKind, Symbol, SymbolKind, Type, TypeKind, BlockStmtData, WhileStmtData, FunctionDeclData, ArrayAccessData, BinaryExprData, UnaryExprData, UpdateExprData, ExprStmtData, VariableDeclData, CallExprData, MemberExprData, NumberLiteralData, OutExprData } from "../../ast/node";
+import { isRoutineNode } from "../../ast/shape";
 import { peelTransparentInstance, peelToRepr, createPtr, getSysType, isIntegerType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isComputedGotoMark } from "../../checker/computedGoto";
@@ -259,10 +260,6 @@ function rejectSpan(sym: Symbol): void {
 	}
 }
 
-function isFunctionNode(k: NodeKind): boolean {
-	return k == NodeKind.FunctionDecl || k == NodeKind.FunctionExpr || k == NodeKind.ArrowFunction || k == NodeKind.MethodDecl || k == NodeKind.ConstructorDecl;
-}
-
 function visit(node: Node): Node {
 	if (node == null) return node;
 	if (node.kind == NodeKind.ArrayAccess) return visitAccess(node);
@@ -274,7 +271,7 @@ function visit(node: Node): Node {
 }
 
 function visitChildren(node: Node): void {
-	const fn = isFunctionNode(node.kind);
+	const fn = isRoutineNode(node);
 	if (fn) st.closureDepth += 1;
 	st.ancestors.push(node);
 	mapChildren(node, visit);

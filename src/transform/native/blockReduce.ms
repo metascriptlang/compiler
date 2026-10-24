@@ -11,6 +11,7 @@
 // at the exact element. Any other loop is left alone.
 
 import { Node, NodeKind, Symbol, Type, TypeKind, DeclKind, SourceLocation, BinaryExprData, CallExprData, BlockStmtData, ExprStmtData, VariableDeclData, MemberExprData, ArrayAccessData, IfStmtData, WhileStmtData, HiddenStdConvData, HiddenDerefData, NumberLiteralData } from "../../ast/node";
+import { peelStdConv } from "../../ast/shape";
 import { peelToRepr, getSysType, booleanType } from "../../checker/types";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode } from "../walker";
@@ -219,8 +220,7 @@ function isLengthCheck(stmt: Node, array: Node, len: Node): boolean {
 }
 
 function isOne(n: Node): boolean {
-	let e = n;
-	while (e.kind == NodeKind.HiddenStdConv) e = (e.data as HiddenStdConvData).convExpr;
+	const e = peelStdConv(n);
 	if (e.kind != NodeKind.NumberLiteral) return false;
 	const d = e.data as NumberLiteralData;
 	return !d.isFloat && d.intVal == 1;

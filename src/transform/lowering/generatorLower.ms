@@ -25,6 +25,7 @@ import {
 	IdentifierData, Symbol, SymbolKind, HiddenDerefData, HiddenStdConvData, MemberExprData, ArrayAccessData, TypeAssertionData,
 	isEmptyBlock, makeLoc,
 } from "../../ast/node";
+import { isScopeBoundary } from "../../ast/shape";
 import { forEachChild, anyChild, anyDescendant } from "../../ast/visitor";
 import { mapChildren } from "../walker";
 import { setFlag, SymbolFlag } from "../../checker/symbol";
@@ -114,15 +115,9 @@ function noteSplitLoopLocals(stmts: Node[]): void {
 
 // ===== Helpers =====
 
-function isFnBoundary(node: Node): boolean {
-	return node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction
-		|| node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.MethodDecl
-		|| node.kind == NodeKind.ConstructorDecl || node.kind == NodeKind.ClassDecl;
-}
-
 // Reference parity (captureVar): env fields always carry their original type.
 function collectDeclTypes(node: Node, syms: Symbol[], types: Type[]): void {
-	if (node == null || isFnBoundary(node)) return;
+	if (node == null || isScopeBoundary(node)) return;
 	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null) {
 		const d = node.data as VariableDeclData;
 		let t = node.nodeType;
@@ -138,7 +133,7 @@ function collectDeclTypes(node: Node, syms: Symbol[], types: Type[]): void {
 
 // A local without its symbol cannot be told from another of its spelling.
 export function collectStateLocals(node: Node | null, ctx: TransformContext, out: SymSet): void {
-	if (node == null || isFnBoundary(node)) return;
+	if (node == null || isScopeBoundary(node)) return;
 	if (node.kind == NodeKind.VariableDecl) {
 		if (node.resolvedSym != null) {
 			symSetAdd(out, node.resolvedSym);
@@ -173,7 +168,7 @@ function outlivesSuspension(t: Type | null): boolean {
 }
 
 function extendStateLifetimes(node: Node | null, locals: SymSet, live: Symbol[], lifted: SymSet, ctx: TransformContext): void {
-	if (node == null || isFnBoundary(node)) return;
+	if (node == null || isScopeBoundary(node)) return;
 	if (node.kind == NodeKind.YieldExpr) {
 		for (const sym of live) {
 			if (outlivesSuspension(sym.symbolType)) symSetAdd(lifted, sym);
@@ -391,7 +386,7 @@ function inlineCrossedFinallies(sc: StateCollector, frameIdx: number, out: Node[
 // The emitted `continue` must reach the state dispatcher: a jump nested in a C
 // loop of its own is split instead (hasEscapingJump).
 function rewriteJumps(node: Node, sc: StateCollector, capBreak: boolean, capContinue: boolean, loc: SourceLocation): Node {
-	if (node == null || isFnBoundary(node)) return node;
+	if (node == null || isScopeBoundary(node)) return node;
 	if (node.kind == NodeKind.ReturnStmt) {
 		if (sc.genReturns != true) return node;
 		const out: Node[] = [];
@@ -425,7 +420,7 @@ function rewriteJumps(node: Node, sc: StateCollector, capBreak: boolean, capCont
 }
 
 function hasEscapingJump(node: Node, sc: StateCollector, capBreak: boolean, capContinue: boolean, inCLoop: boolean): boolean {
-	if (node == null || isFnBoundary(node)) return false;
+	if (node == null || isScopeBoundary(node)) return false;
 	if (node.kind == NodeKind.ReturnStmt) return sc.genReturns == true && crossesYieldFinally(sc, -1);
 	if (node.kind == NodeKind.BreakStmt || node.kind == NodeKind.ContinueStmt) {
 		const idx = jumpFrame(sc, node, capBreak, capContinue);
@@ -467,7 +462,7 @@ function isGeneratorFlag(flags: string): boolean {
 // ===== Yield Detection =====
 
 export function containsYield(node: Node | null): boolean {
-	return anyDescendant(node, (n: Node): boolean => n.kind == NodeKind.YieldExpr, isFnBoundary);
+	return anyDescendant(node, (n: Node): boolean => n.kind == NodeKind.YieldExpr, isScopeBoundary);
 }
 
 function isDirectYield(expr: Node): boolean {

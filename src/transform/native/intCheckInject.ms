@@ -14,6 +14,7 @@
 // and its result is converted back, so it wraps at its own width.
 
 import { Node, NodeKind, NodeFlag, BinaryExprData, UnaryExprData, UpdateExprData, HiddenStdConvData, NumberLiteralData, Type, TypeKind } from "../../ast/node";
+import { peelStdConv } from "../../ast/shape";
 import { peelToRepr, createPrimitive } from "../../checker/types";
 import { wrapInConv, isBitwiseBinaryOp, isBitwiseCompoundOp } from "../../checker/fit";
 import { TransformContext } from "../context";
@@ -144,9 +145,7 @@ function typedCall(name: string, args: Node[], node: Node): Node {
 }
 
 function isLiteral(n: Node): boolean {
-	let e = n;
-	while (e.kind == NodeKind.HiddenStdConv) e = (e.data as HiddenStdConvData).convExpr;
-	return e.kind == NodeKind.NumberLiteral;
+	return peelStdConv(n).kind == NodeKind.NumberLiteral;
 }
 
 function floatAssignHelper(d: BinaryExprData): string {
@@ -261,8 +260,7 @@ function atOwnWidth(call: Node, t: Type, node: Node): Node {
 
 // A literal divisor other than 0 and -1 can neither be zero nor overflow MIN / -1.
 function cannotRaise(divisor: Node, t: Type): boolean {
-	let n = divisor;
-	while (n.kind == NodeKind.HiddenStdConv) n = (n.data as HiddenStdConvData).convExpr;
+	const n = peelStdConv(divisor);
 	if (n.kind != NodeKind.NumberLiteral) return false;
 	const lit = n.data as NumberLiteralData;
 	if (lit.isFloat) return false;

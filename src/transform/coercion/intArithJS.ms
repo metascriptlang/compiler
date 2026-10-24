@@ -25,7 +25,8 @@
 // Tests: src/test/js/intArith.ms — every decision reads a resolved type, which
 // a parse-only fixture cannot supply.
 
-import { Node, NodeKind, NodeFlag, createNodeAt, BinaryExprData, UnaryExprData, UpdateExprData, IdentifierData, NumberLiteralData, BigIntLiteralData, HiddenStdConvData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, createNodeAt, BinaryExprData, UnaryExprData, UpdateExprData, IdentifierData, NumberLiteralData, BigIntLiteralData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { peelStdConv } from "../../ast/shape";
 import { TransformContext } from "../context";
 import { peelToRepr, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
@@ -115,8 +116,7 @@ function signedType(t: Type | null): Type | null {
 }
 
 function isLiteral(n: Node): boolean {
-	let e = n;
-	while (e.kind == NodeKind.HiddenStdConv) e = (e.data as HiddenStdConvData).convExpr;
+	const e = peelStdConv(n);
 	return e.kind == NodeKind.NumberLiteral || e.kind == NodeKind.BigIntLiteral;
 }
 
@@ -129,8 +129,7 @@ function stepOne(t: Type, loc: SourceLocation): Node {
 
 // A literal divisor other than 0 and -1 can neither be zero nor overflow MIN / -1.
 function cannotRaise(divisor: Node, t: Type): boolean {
-	let n = divisor;
-	while (n.kind == NodeKind.HiddenStdConv) n = (n.data as HiddenStdConvData).convExpr;
+	const n = peelStdConv(divisor);
 	if (n.kind == NodeKind.BigIntLiteral) {
 		const text = (n.data as BigIntLiteralData).bigintValue;
 		return text != "0n" && text != "-1n" && text.charAt(0) != "-";

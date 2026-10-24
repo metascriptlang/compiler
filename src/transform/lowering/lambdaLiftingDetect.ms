@@ -14,6 +14,7 @@ import {
 	SwitchCaseData, ExportDeclData, FunctionDeclData, MethodDeclData,
 	ConstructorDeclData, TestDeclData, SymbolKind, DeclKind, Symbol, BooleanLiteralData,
 } from "../../ast/node";
+import { isRoutineOrTestNode } from "../../ast/shape";
 import { SymSet, createSymSet, symSetAdd, symSetContains } from "../context";
 import { mapChildren, isFuncBoundary, anyDeep, DEEP_DESCEND, DEEP_HIT, DEEP_SKIP } from "../walker";
 import { forEachChild, initializerHoldsClosure } from "../../ast/visitor";
@@ -104,10 +105,6 @@ export function routineBindingSym(node: Node): Symbol | null {
 	return node.resolvedSym;
 }
 
-function isFrameNode(n: Node): boolean {
-	return isFuncBoundary(n) || n.kind == NodeKind.MethodDecl || n.kind == NodeKind.ConstructorDecl || n.kind == NodeKind.TestDecl;
-}
-
 export function refsAnySym(n: Node | null, syms: Symbol[]): boolean {
 	if (n == null || syms.length == 0) return false;
 	return anyDeep(n, (c: Node): int32 => {
@@ -132,7 +129,7 @@ function collectRoutineCandidates(n: Node | null, depth: number, splitLoopLocals
 		const sym = routineBindingSym(n);
 		if (sym != null && !refsAnySym((n.data as VariableDeclData).initializer, splitLoopLocals)) out.push(sym);
 	}
-	const inner = isFrameNode(n) ? depth + 1 : depth;
+	const inner = isRoutineOrTestNode(n) ? depth + 1 : depth;
 	forEachChild(n, (c: Node): void => { collectRoutineCandidates(c, inner, splitLoopLocals, out); });
 }
 

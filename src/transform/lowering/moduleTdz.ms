@@ -3,6 +3,7 @@ import {
 	VariableDeclData, ClassDeclData, PropertyDeclData, CallExprData, MemberExprData, NewExprData,
 	ExprStmtData, BinaryExprData, UpdateExprData, HiddenDerefData, OutExprData,
 } from "../../ast/node";
+import { isRoutineNode } from "../../ast/shape";
 import { forEachChild, anyChild } from "../../ast/visitor";
 import { isEagerAssignOp } from "../../ast/operators";
 import { booleanType } from "../../checker/types";
@@ -80,7 +81,7 @@ export function guardModuleTdzRaiser(program: Node, ctx: TransformContext): Node
 
 function guardUses(n: Node, inFunction: boolean, ctx: TransformContext): Node {
 	if (n == null) return n;
-	const deferred = inFunction || isFunctionLike(n)
+	const deferred = inFunction || isRoutineNode(n)
 		|| (n.kind == NodeKind.PropertyDecl && !(n.data as PropertyDeclData).propIsStatic);
 	if (deferred) {
 		const cls = classOperand(n, ctx);
@@ -219,18 +220,13 @@ function isLexicalBindingSym(sym: Symbol): boolean {
 	return sym.symbolKind == SymbolKind.Variable && decl != null && decl.resolvedSym == sym && lexicalBindingOf(decl) == sym;
 }
 
-function isFunctionLike(n: Node): boolean {
-	return n.kind == NodeKind.FunctionDecl || n.kind == NodeKind.FunctionExpr || n.kind == NodeKind.ArrowFunction
-		|| n.kind == NodeKind.MethodDecl || n.kind == NodeKind.ConstructorDecl;
-}
-
 function collectDeferredUses(n: Node, inFunction: boolean, uses: HashSet<Symbol>, order: Symbol[]): void {
 	if (n == null) return;
 	if (inFunction && n.kind == NodeKind.Identifier && n.resolvedSym != null && !uses.has(tdzBindingOf(n.resolvedSym))) {
 		uses.add(tdzBindingOf(n.resolvedSym));
 		order.push(tdzBindingOf(n.resolvedSym));
 	}
-	const deferred = inFunction || isFunctionLike(n)
+	const deferred = inFunction || isRoutineNode(n)
 		|| (n.kind == NodeKind.PropertyDecl && !(n.data as PropertyDeclData).propIsStatic);
 	forEachChild(n, (c: Node): void => collectDeferredUses(c, deferred, uses, order));
 }
