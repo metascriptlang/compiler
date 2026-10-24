@@ -650,6 +650,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 				for (const ov of s.overloads) enqSym(ov, false);
 			}
 			if (s.staticOwner != null) enqSym(s.staticOwner, false);
+			if (s.instantiatedFrom != null) enqSym(s.instantiatedFrom, false);
 			if (s.staticFields != null) {
 				for (const sf of s.staticFields) enqSym(sf, false);
 			}
@@ -739,7 +740,7 @@ export function writePreludePack(key: string, stamp: string, ctx: CheckerContext
 		const dp = idxs(s.defaultParams);
 		const tps: int32[] = [];
 		for (const tp of s.typeParams) tps.push(idxType(tp));
-		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint32}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(s.builtinKind)}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}\t${s.disamb}\t${escapeP(s.exportName)}\t${idxSym(s.staticOwner)}\t${intsCsv(tps)}`);
+		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint32}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${scopeSet.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(s.builtinKind)}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${idxNode(s.declNode)}\t${dp}\t${s.disamb}\t${escapeP(s.exportName)}\t${idxSym(s.staticOwner)}\t${intsCsv(tps)}\t${idxSym(s.instantiatedFrom)}`);
 	}
 
 	const importIdx: int32[] = [];
@@ -1250,6 +1251,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 	const symDeclIdx: int32[] = [];
 	const symOwnerIdx: int32[] = [];
 	const symTypeParamsIdx: int32[][] = [];
+	const symOriginIdx: int32[] = [];
 	const symDpRaw: string[] = [];
 	const inScopeFlags: int32[] = [];
 	const nodeTypeRef: int32[] = [];
@@ -1363,6 +1365,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 			if (rd.last == 9) s.exportName = unescapeP(rd.str());
 			symOwnerIdx.push(rd.last == 9 ? rd.int() as int32 : -1);
 			symTypeParamsIdx.push(rd.last == 9 ? rd.ints() : []);
+			symOriginIdx.push(rd.last == 9 ? rd.int() as int32 : -1);
 			syms.push(s);
 			rd.endRow();
 		} else if (tag == 69) {
@@ -1455,6 +1458,7 @@ function tryLoadPreludePackBody(body: string): CheckerContext | null {
 		}
 		s.typeParams = tps;
 		s.staticOwner = symOwnerIdx[i] >= 0 && symOwnerIdx[i] < syms.length ? syms[symOwnerIdx[i]] : null;
+		s.instantiatedFrom = symOriginIdx[i] >= 0 && symOriginIdx[i] < syms.length ? syms[symOriginIdx[i]] : null;
 		s.declNode = symDeclIdx[i] >= 0 && symDeclIdx[i] < nodes.length ? nodes[symDeclIdx[i]] : null as unknown as Node;
 		s.defaultParams = parseNodeArr(symDpRaw[i], nodes);
 	}
@@ -1762,6 +1766,43 @@ test "preludePack: a generic type keeps its declared parameters and their constr
 		const constraint = got.typeParams[1].typeExtra;
 		assert constraint != null && constraint.kind == TypeKind.KeyOf;
 		assert constraint.typeChildren[0] == got.typeParams[0];
+		remove(`${packRoot()}/${key}.pk`);
+	} finally {
+		pkLeavePrivateCache(prevHome);
+	}
+}
+
+test "preludePack: a generic instance keeps the generic it was instantiated from" {
+	const prevHome = pkEnterPrivateCache();
+	try {
+		const ctx = makeTestCtx();
+		const generic = makeSymbolState("pkPop", SymbolKind.Function, noneType(), false, SymbolState.Hollow);
+		generic.state = SymbolState.Checked;
+		generic.nameId = getIdentId(ctx.table.identCache, generic.name);
+		(ctx.table.current.symbols as Map<int32, Symbol>).set(generic.nameId, generic);
+		const inScope = makeSymbolState("pkPop_int32", SymbolKind.Function, noneType(), false, SymbolState.Hollow);
+		inScope.state = SymbolState.Checked;
+		inScope.instantiatedFrom = generic;
+		inScope.nameId = getIdentId(ctx.table.identCache, inScope.name);
+		(ctx.table.current.symbols as Map<int32, Symbol>).set(inScope.nameId, inScope);
+		const unlisted = makeSymbolState("pkShift", SymbolKind.Function, noneType(), false, SymbolState.Hollow);
+		unlisted.state = SymbolState.Checked;
+		const reachedOnlyByLink = makeSymbolState("pkShift_int32", SymbolKind.Function, noneType(), false, SymbolState.Hollow);
+		reachedOnlyByLink.state = SymbolState.Checked;
+		reachedOnlyByLink.instantiatedFrom = unlisted;
+		reachedOnlyByLink.nameId = getIdentId(ctx.table.identCache, reachedOnlyByLink.name);
+		(ctx.table.current.symbols as Map<int32, Symbol>).set(reachedOnlyByLink.nameId, reachedOnlyByLink);
+		const key = preludePackKey("instantiated-from", ".test");
+		writePreludePack(key, PK_STAMP, ctx);
+		const loaded = tryLoadPreludePack(key, PK_STAMP);
+		assert loaded != null;
+		const gotGeneric = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkPop"));
+		const gotInstance = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkPop_int32"));
+		assert gotGeneric != null && gotInstance != null;
+		assert gotInstance.instantiatedFrom == gotGeneric;
+		const gotLinked = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkShift_int32"));
+		assert gotLinked != null && gotLinked.instantiatedFrom != null;
+		assert gotLinked.instantiatedFrom!.name == "pkShift";
 		remove(`${packRoot()}/${key}.pk`);
 	} finally {
 		pkLeavePrivateCache(prevHome);
