@@ -24,6 +24,13 @@ export function symbolConsumeKey(sym: Symbol): string {
 	return `${sym.name}:${loc.line}:${loc.column}`;
 }
 
+// A moved binding (`move` into a spawn thunk or an actor call) is tracked as "mv:" + key.
+export const MOVED_PREFIX = "mv:";
+
+export function isMovedKey(key: string): boolean {
+	return key.slice(0, MOVED_PREFIX.length) == MOVED_PREFIX;
+}
+
 // Reference shape: effects.consumed flat list (mirror of InitTracker.initialized)
 export interface AffineTracker {
 	consumed: string[];   // append-only list of consumed affine Promise binding keys
@@ -82,6 +89,8 @@ export function collectNewConsumes(t: AffineTracker, oldState: int32): string[] 
 
 // A name is promoted to "consumed" at the merge point iff it was consumed in
 // every non-exiting branch AND the construct is exhaustive (has else / default).
+// A moved key joins as a union instead: a use after the join is wrong when ANY branch
+// that reaches it moved the binding.
 export function mergeConsumeBranches(
 	t: AffineTracker,
 	oldState: int32,
@@ -90,6 +99,12 @@ export function mergeConsumeBranches(
 	isExhaustive: boolean,
 ): void {
 	mergeBranches(t.consumed, oldState, branchConsumes, branchBreaks, isExhaustive);
+	for (let b = 0; b < branchConsumes.length; b += 1) {
+		if (branchBreaks[b] != BreakState.BsNone) continue;
+		for (const key of branchConsumes[b]) {
+			if (isMovedKey(key)) addName(t.consumed, key);
+		}
+	}
 	t.floor = t.floors.pop()!;
 }
 
@@ -226,4 +241,25 @@ test "a revive after a nested branch closes still clears the outer consume" {
 	assert !isConsumedName(t, "h");
 	leaveConsumeScope(t, loop);
 	assert t.floor == 0;
+}
+
+test "merge keeps a moved key when one non-exiting branch moved it" {
+	const t = createAffineTracker();
+	const old = saveConsumeState(t);
+	mergeConsumeBranches(t, old, [["mv:c:1:1"], []], [BreakState.BsNone, BreakState.BsNone], true);
+	assert isConsumedName(t, "mv:c:1:1");
+}
+
+test "merge keeps a moved key with no else" {
+	const t = createAffineTracker();
+	const old = saveConsumeState(t);
+	mergeConsumeBranches(t, old, [["mv:c:1:1"]], [BreakState.BsNone], false);
+	assert isConsumedName(t, "mv:c:1:1");
+}
+
+test "merge drops a moved key from a branch that exits" {
+	const t = createAffineTracker();
+	const old = saveConsumeState(t);
+	mergeConsumeBranches(t, old, [["mv:c:1:1"]], [BreakState.BsBreakOrReturn], false);
+	assert !isConsumedName(t, "mv:c:1:1");
 }

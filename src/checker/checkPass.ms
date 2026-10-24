@@ -7,7 +7,7 @@ import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprS
 import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
-import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey, leaveConsumeScope, markConsumedName } from "./spawnAffinity";
+import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey, leaveConsumeScope, markConsumedName, isMovedKey, MOVED_PREFIX } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet, NamedSymbol } from "./symbol";
 import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration, stdSymbol } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl, declOfStatement } from "./collectPass";
@@ -139,6 +139,23 @@ function detectLoopReuse(ctx: CheckerContext, outerKeys: string[], bodyStartStat
 				break;
 			}
 		}
+	}
+}
+
+// A loop body may run again, so a binding declared outside it and moved inside it is
+// used after its move on the next iteration; the move also reaches the code after the loop.
+function leaveLoopConsumeScope(ctx: CheckerContext, snap: int32, loop: Node, body: Node): void {
+	const moved = collectNewConsumes(ctx.affineTracker, snap).filter(isMovedKey);
+	leaveConsumeScope(ctx.affineTracker, snap);
+	for (const key of moved) {
+		const declKey = key.slice(MOVED_PREFIX.length);
+		const name = consumeKeyName(declKey);
+		const outer = lookupSymbol(ctx.table, name);
+		if (outer == null || symbolConsumeKey(outer) != declKey) continue;
+		if (breaksBlock(body) == BreakState.BsNone) {
+			addError(ctx, `'${name}' is moved inside a loop, so the next iteration uses it after the move (PARALOCK E24)`, loop.location.line, loop.location.column);
+		}
+		markConsumedName(ctx.affineTracker, key);
 	}
 }
 
@@ -2196,7 +2213,7 @@ function checkWhileStmt(ctx: CheckerContext, node: Node): void {
 	// PARALOCK Phase 1: detect outer-handle consumption (reuse on iteration N+1)
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.whileBody);
-	leaveConsumeScope(ctx.affineTracker, affineSnap);
+	leaveLoopConsumeScope(ctx, affineSnap, node, d.whileBody);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 }
 
@@ -2225,7 +2242,7 @@ function checkForStmt(ctx: CheckerContext, node: Node): void {
 	restoreInitState(ctx.initTracker, oldState);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.forBody);
-	leaveConsumeScope(ctx.affineTracker, affineSnap);
+	leaveLoopConsumeScope(ctx, affineSnap, node, d.forBody);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 }
 
@@ -2307,7 +2324,7 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	restoreInitState(ctx.initTracker, oldInitState);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.forOfBody);
-	leaveConsumeScope(ctx.affineTracker, affineSnap);
+	leaveLoopConsumeScope(ctx, affineSnap, node, d.forOfBody);
 }
 
 function destructuresByPosition(t: Type): boolean {
@@ -2448,7 +2465,7 @@ function checkForInStmt(ctx: CheckerContext, node: Node): void {
 	restoreInitState(ctx.initTracker, oldInitState);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.forInBody);
-	leaveConsumeScope(ctx.affineTracker, affineSnap);
+	leaveLoopConsumeScope(ctx, affineSnap, node, d.forInBody);
 }
 
 function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
@@ -2464,7 +2481,7 @@ function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
 	exitLoopScope(ctx, saved);
 	detectLoopReuse(ctx, outerSpawnKeys, affineSnap, node.location.line, node.location.column);
 	detectSequentialAwaitSpawn(ctx, d.doBody);
-	leaveConsumeScope(ctx.affineTracker, affineSnap);
+	leaveLoopConsumeScope(ctx, affineSnap, node, d.doBody);
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 	ctx.condEvalDepth = ctx.condEvalDepth + 1;
 	checkExpr(ctx, d.doCondition, null);
