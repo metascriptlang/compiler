@@ -170,7 +170,7 @@ export function main(): int32 {
 			}
 		},
 		"login" => {
-			if (!cmdLogin(projectRoot)) process.exit(1);
+			if (!await cmdLogin(projectRoot)) process.exit(1);
 		},
 		"logout" => {
 			if (!cmdLogout()) process.exit(1);

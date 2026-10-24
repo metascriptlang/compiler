@@ -13,6 +13,7 @@ import { join } from "std/fs/path";
 import { HttpResponse } from "std/http/types";
 import { HttpError } from "std/http/errors";
 import { createHeaders, setHeader } from "std/http/headers";
+import { sleepAsync } from "std/core/promise";
 
 const GITHUB_CLIENT_ID = "Ov23liXkaph4TDPP19yd";
 const REGISTRY_HOST = "api.metascriptlang.org";
@@ -121,15 +122,20 @@ function httpsPost(host: string, path: string, body: string, contentType: string
 	});
 }
 
-// Busy-wait sleep (ms).
-function sleepMs(ms: number): void {
-	const start = performance.now();
-	while (performance.now() - start < ms) {
-		// busy wait
-	}
+const DEFAULT_POLL_SECONDS: int32 = 5;
+const MAX_POLL_SECONDS: int32 = 60;
+const SLOW_DOWN_SECONDS: int32 = 5;
+
+// Seconds between polls: the server's "interval" field, or the default when it is
+// missing or not a positive number; capped so a bad value cannot stall the login.
+export function pollIntervalSeconds(raw: string): int32 {
+	const seconds = raw.parseInt();
+	if (seconds < 1) return DEFAULT_POLL_SECONDS;
+	if (seconds > MAX_POLL_SECONDS) return MAX_POLL_SECONDS;
+	return seconds as int32;
 }
 
-export function cmdLogin(projectRoot: string): boolean {
+export async function cmdLogin(projectRoot: string): Promise<boolean> {
 	const _pr = projectRoot;
 	const existing = loadToken();
 	if (existing != "") {
@@ -160,9 +166,7 @@ export function cmdLogin(projectRoot: string): boolean {
 	const deviceCode = parseUrlEncoded(deviceResp.body, "device_code");
 	const userCode = parseUrlEncoded(deviceResp.body, "user_code");
 	const verificationUri = percentDecode(parseUrlEncoded(deviceResp.body, "verification_uri"));
-	let interval = 5;
-	const intervalStr = parseUrlEncoded(deviceResp.body, "interval");
-	if (intervalStr != "") interval = 8; // conservative default
+	let interval = pollIntervalSeconds(parseUrlEncoded(deviceResp.body, "interval"));
 
 	if (deviceCode == "" || userCode == "") {
 		console.log("error: invalid response from GitHub");
@@ -187,7 +191,7 @@ export function cmdLogin(projectRoot: string): boolean {
 	let githubToken = "";
 
 	while (attempts < maxAttempts && githubToken == "") {
-		sleepMs(interval * 1000);
+		await sleepAsync(interval * 1000);
 
 		const pollBody = "client_id=" + GITHUB_CLIENT_ID + "&device_code=" + deviceCode + "&grant_type=urn:ietf:params:oauth:grant-type:device_code";
 		const pollResult = httpsPost("github.com", "/login/oauth/access_token", pollBody, "application/x-www-form-urlencoded");
@@ -199,7 +203,7 @@ export function cmdLogin(projectRoot: string): boolean {
 				githubToken = token;
 			} else {
 				const err = parseUrlEncoded(body, "error");
-				if (err == "slow_down") { interval = interval + 5; }
+				if (err == "slow_down") { interval = interval + SLOW_DOWN_SECONDS; }
 				else if (err == "expired_token") {
 					console.log("\nerror: device code expired — please try again");
 					return false;
@@ -397,4 +401,21 @@ export function cmdWhoami(args: string[]): boolean {
 	}
 	console.log(username);
 	return true;
+}
+
+test "the poll interval follows the server" {
+	assert pollIntervalSeconds("10") == 10;
+	assert pollIntervalSeconds("1") == 1;
+}
+
+test "a missing or unusable poll interval falls back to the default" {
+	assert pollIntervalSeconds("") == 5;
+	assert pollIntervalSeconds("0") == 5;
+	assert pollIntervalSeconds("-3") == 5;
+	assert pollIntervalSeconds("soon") == 5;
+}
+
+test "a very long poll interval is capped" {
+	assert pollIntervalSeconds("3600") == 60;
+	assert pollIntervalSeconds("99999999999999") == 60;
 }
