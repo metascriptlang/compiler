@@ -34,7 +34,7 @@ enum SummaryKind {
 
 interface Edge {
 	call: Node | null;
-	callee: WriteSummary;
+	callee: Cursor<WriteSummary>;
 }
 
 class WriteSummary {
@@ -47,7 +47,7 @@ class WriteSummary {
 	returnsFresh: boolean;
 	unknown: boolean;
 	edges: Edge[];
-	linked: HashSet<WriteSummary>;
+	linked: HashSet<Cursor<WriteSummary>>;
 	index: int32;
 	low: int32;
 	onStack: boolean;
@@ -135,7 +135,7 @@ function reloadsApart(w: WriteEffects, caller: WriteSummary, callee: WriteSummar
 function newSummary(kind: SummaryKind, sym: Symbol | null, hooks: Symbol[]): WriteSummary {
 	return {
 		kind, sym, hooks, slots: [], slotSet: new HashSet<string>(), refParamWrites: 0, returnsFresh: false, unknown: false,
-		edges: [], linked: new HashSet<WriteSummary>(), index: -1, low: -1, onStack: false, done: false,
+		edges: [], linked: new HashSet<Cursor<WriteSummary>>(), index: -1, low: -1, onStack: false, done: false,
 	};
 }
 
