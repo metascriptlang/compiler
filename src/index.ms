@@ -13,8 +13,13 @@ import { findProjectRoot } from "./utils/path";
 import "./ast/childTableGuard";
 import "./ast/childSlotGuard";
 import "./compiler/lsp/handlers/positionsTest";
+import { exists } from "std/fs";
+import { join } from "std/fs/path";
 import { runPackageCommand } from "./compiler/package/index";
-import { cmdX } from "./compiler/x";
+import { cmdAdd } from "./compiler/package/add";
+import { cmdRemove } from "./compiler/package/remove";
+import { cmdInstall } from "./compiler/package/install";
+import { cmdX, syncShims, projectShimDir, cmdInstallGlobal, globalManifestRoot, globalShimDir } from "./compiler/x";
 import { maybeShowUpdateNotice, cmdUpgrade, sweepUpgradeBackups } from "./compiler/upgrade";
 import { collectGlobalCache } from "./compiler/cache";
 
@@ -24,6 +29,35 @@ function requireFile(opts: CliOptions): void {
 		printUsage();
 		process.exit(1);
 	}
+}
+
+// add, remove and install re-sync the command shims; -g moves remove and install to the global manifest.
+function commandArgs(opts: CliOptions): string[] {
+	const args: string[] = [];
+	if (opts.inputFile != "") args.push(opts.inputFile);
+	for (const arg of opts.extraArgs) args.push(arg);
+	return args;
+}
+
+function runShimCommand(cmd: string, opts: CliOptions, projectRoot: string): boolean {
+	const global = opts.extraArgs.includes("-g") || opts.extraArgs.includes("--global");
+	if (cmd == "install" && global) return cmdInstallGlobal(opts.inputFile);
+	let root = projectRoot;
+	let shimDir = projectShimDir(projectRoot);
+	if (cmd == "remove" && global) {
+		root = globalManifestRoot();
+		if (root == "" || !exists(join(root, "build.ms"))) {
+			console.log(`${error("error")}: no global manifest — nothing was installed with ${cyan("install -g")}`);
+			return false;
+		}
+		shimDir = globalShimDir();
+	}
+	const ok = match (cmd) {
+		"add" => cmdAdd(root, commandArgs(opts)),
+		"remove" => cmdRemove(root, opts.inputFile != "" ? [opts.inputFile] : []),
+		_ => cmdInstall(root),
+	};
+	return ok && syncShims(root, shimDir);
 }
 
 export function main(): int32 {
@@ -116,14 +150,14 @@ export function main(): int32 {
 				else cmdBuildC(opts.inputFile, opts, cfg.resolve);
 			}
 		},
-		"add" | "remove" | "install" | "login" | "logout" | "whoami" | "publish" | "org" => {
-			if (!await runPackageCommand(cmd, opts, projectRoot)) process.exit(1);
+		"add" | "remove" | "install" => {
+			if (!runShimCommand(cmd, opts, projectRoot)) process.exit(1);
+		},
+		"login" | "logout" | "whoami" | "publish" | "org" => {
+			if (!await runPackageCommand(cmd, opts.inputFile, opts.extraArgs, projectRoot)) process.exit(1);
 		},
 		"x" => {
-			const xArgs: string[] = [];
-			if (opts.inputFile != "") xArgs.push(opts.inputFile);
-			for (const ea of opts.extraArgs) { xArgs.push(ea); }
-			if (!cmdX(projectRoot, xArgs, opts)) process.exit(1);
+			if (!cmdX(projectRoot, commandArgs(opts), opts)) process.exit(1);
 		},
 		"upgrade" => { process.exit(cmdUpgrade(opts)); },
 		_ => {
