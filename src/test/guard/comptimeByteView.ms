@@ -11,7 +11,7 @@
 struct Pet { a: uint32; b: uint8; }
 
 function firstByte(view: Span<Pet>): uint8 {
-	const bytes = view as Ptr<void> as Ptr<uint8>;
+	const bytes = view as Ptr<void> as Ptr<uint8>; // GUARD-REFUSED
 	return bytes[0];
 }
 

@@ -18,7 +18,7 @@ class C { v: int32; constructor(v: int32) { this.v = v; } }
 
 async function assignedInThunk(rebound: C): Promise<int32> {
 	const h = spawn(() => {
-		for (let i = 0; i < 100000; i += 1) rebound = new C(i);
+		for (let i = 0; i < 100000; i += 1) rebound = new C(i); // GUARD-REFUSED
 		return 1;
 	});
 	let s: int32 = 0;
@@ -28,7 +28,7 @@ async function assignedInThunk(rebound: C): Promise<int32> {
 
 async function assignedInNestedArrow(nestedRebound: C): Promise<int32> {
 	const h = spawn(() => {
-		const swap = (): void => { nestedRebound = new C(2); };
+		const swap = (): void => { nestedRebound = new C(2); }; // GUARD-REFUSED
 		swap();
 		return 1;
 	});
@@ -38,7 +38,7 @@ async function assignedInNestedArrow(nestedRebound: C): Promise<int32> {
 
 async function compoundAssigned(counted: number): Promise<number> {
 	const h = spawn(() => {
-		counted += 1;
+		counted += 1; // GUARD-REFUSED
 		return 1;
 	});
 	const seen = counted;

@@ -13,7 +13,7 @@ import { Node, NodeKind } from "std/meta";
 const LINE: int32 = @comptime {
 	const n: Node = {
 		kind: NodeKind.NumberLiteral, line: 7, column: 3,
-		value: 1, isFloat: false, bogusKey: 1,
+		value: 1, isFloat: false, bogusKey: 1, // GUARD-REFUSED
 	};
 	return n.line;
 };

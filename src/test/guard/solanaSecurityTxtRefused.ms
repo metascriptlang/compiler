@@ -17,10 +17,10 @@ import { securityTxt } from "std/solana";
 const runtimeText = "https://example";
 const fields = { name: "a", projectUrl: "b", contacts: "c", policy: "d" };
 
-securityTxt({ name: "a", projectUrl: "b", contacts: "c" });
-securityTxt({ name: "a", project_url: "b", contacts: "c", policy: "d" });
-securityTxt({ name: "a", projectUrl: "b", contacts: "c\0d", policy: "d" });
-securityTxt({ name: "a", projectUrl: "b", contacts: "c", policy: runtimeText });
-securityTxt({ name: "a", name: "b", projectUrl: "b", contacts: "c", policy: "d" });
-securityTxt({ name: "a", projectUrl: "b", contacts: "c", policy: "d", auditors: "x=======END SECURITY.TXT V1=======" });
-securityTxt(fields);
+securityTxt({ name: "a", projectUrl: "b", contacts: "c" }); // GUARD-REFUSED
+securityTxt({ name: "a", project_url: "b", contacts: "c", policy: "d" }); // GUARD-REFUSED
+securityTxt({ name: "a", projectUrl: "b", contacts: "c\0d", policy: "d" }); // GUARD-REFUSED
+securityTxt({ name: "a", projectUrl: "b", contacts: "c", policy: runtimeText }); // GUARD-REFUSED
+securityTxt({ name: "a", name: "b", projectUrl: "b", contacts: "c", policy: "d" }); // GUARD-REFUSED
+securityTxt({ name: "a", projectUrl: "b", contacts: "c", policy: "d", auditors: "x=======END SECURITY.TXT V1=======" }); // GUARD-REFUSED
+securityTxt(fields); // GUARD-REFUSED

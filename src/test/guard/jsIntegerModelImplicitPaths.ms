@@ -27,15 +27,15 @@ function takesI32(n: int32): int32 { return n; }
 
 function returnsI32(): int32 {
 	const f: float64 = opaque(3.9);
-	return f;
+	return f; // GUARD-REFUSED
 }
 
 function main(): void {
-	const viaDecl: int32 = opaque(3.9);
-	const viaParam: int32 = takesI32(opaque(3.9));
+	const viaDecl: int32 = opaque(3.9); // GUARD-REFUSED
+	const viaParam: int32 = takesI32(opaque(3.9)); // GUARD-REFUSED
 	const viaReturn: int32 = returnsI32();
 	let viaAssign: int32 = 0;
-	viaAssign = opaque(3.9);
+	viaAssign = opaque(3.9); // GUARD-REFUSED
 	console.log("unreachable " + (viaDecl + viaParam + viaReturn + viaAssign).toString());
 }
 

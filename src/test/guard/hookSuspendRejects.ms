@@ -22,38 +22,38 @@ function work(n: int32): int32 { return n + 1; }
 async function asy(n: int32): Promise<int32> { return n * 2; }
 
 class SpawnDirect { v: int32; constructor(v: int32) { this.v = v; } }
-function onDestroy(this x: SpawnDirect): void { const f = spawn(() => work(1)); console.log(`${await f}`); }
+function onDestroy(this x: SpawnDirect): void { const f = spawn(() => work(1)); console.log(`${await f}`); } // GUARD-REFUSED
 
 function spawnHelper(): int32 { return await spawn(() => work(1)); }
 class SpawnCallee { v: int32; constructor(v: int32) { this.v = v; } }
-function onDestroy(this x: SpawnCallee): void { console.log(`${spawnHelper()}`); }
+function onDestroy(this x: SpawnCallee): void { console.log(`${spawnHelper()}`); } // GUARD-REFUSED
 
 function deep2(): int32 { return await spawn(() => work(2)); }
 function deep1(): int32 { return deep2(); }
 class SpawnDeep { v: int32; constructor(v: int32) { this.v = v; } }
-function onDestroy(this x: SpawnDeep): void { console.log(`${deep1()}`); }
+function onDestroy(this x: SpawnDeep): void { console.log(`${deep1()}`); } // GUARD-REFUSED
 
 let inert: () => int32 = (): int32 => { return 5; };
 class FnValue { v: int32; constructor(v: int32) { this.v = v; } }
-function onDestroy(this x: FnValue): void { console.log(`${inert()}`); }
+function onDestroy(this x: FnValue): void { console.log(`${inert()}`); } // GUARD-REFUSED
 
 class AwaitDirect { v: int32; constructor(v: int32) { this.v = v; } }
-function onDestroy(this x: AwaitDirect): void { console.log(`${await asy(x.v)}`); }
+function onDestroy(this x: AwaitDirect): void { console.log(`${await asy(x.v)}`); } // GUARD-REFUSED
 
 function awaitHelper(n: int32): int32 { return await asy(n); }
 class AwaitCallee { v: int32; constructor(v: int32) { this.v = v; } }
-function onDestroy(this x: AwaitCallee): void { console.log(`${awaitHelper(x.v)}`); }
+function onDestroy(this x: AwaitCallee): void { console.log(`${awaitHelper(x.v)}`); } // GUARD-REFUSED
 
 class Lend { v: int32; constructor(v: int32) { this.v = v; } }
-function onDestroy(this x: Lend): void { const f = spawn(() => work(x.v)); console.log(`${await f}`); }
+function onDestroy(this x: Lend): void { const f = spawn(() => work(x.v)); console.log(`${await f}`); } // GUARD-REFUSED
 
 class MethodHook {
 	v: int32 = 1;
-	onDestroy(): void { console.log(`${spawnHelper()}`); }
+	onDestroy(): void { console.log(`${spawnHelper()}`); } // GUARD-REFUSED
 }
 
 struct CopyHook { n: int32; }
-function onCopy(this ref d: CopyHook, src: CopyHook): void { d.n = deep1() + src.n; }
+function onCopy(this ref d: CopyHook, src: CopyHook): void { d.n = deep1() + src.n; } // GUARD-REFUSED
 
 function run(): void {
 	const a = new SpawnDirect(1); const b = new SpawnCallee(2); const c = new SpawnDeep(3);

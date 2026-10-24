@@ -42,15 +42,15 @@ struct Plain { owner: Signer; }
 
 function twinSize(): int32 { return sizeof(RealTwin) as int32; }
 
-console.log(anchorIdl<Op>({ name: "early", address: "", Read: [Plain], accounts: [EarlyHolder], events: [], errors: "" }));
-console.log(anchorIdl<Op>({ name: "late", address: "", Read: [Plain], accounts: [LateHolder], events: [], errors: "" }));
-console.log(anchorIdl<Op>({ name: "twin", address: "", Read: [Plain], accounts: [TwinHolder], events: [], errors: "" }));
-console.log(anchorIdl<Op>({ name: "deep", address: "", Read: [Plain], accounts: [DeepHolder], events: [], errors: "" }));
-console.log(anchorIdl<Op>({ name: "mode", address: "", Read: [Plain], accounts: [ModeHolder], events: [], errors: "" }));
-console.log(anchorIdl<Op>({ name: "flag", address: "", Read: [Plain], accounts: [FlagHolder], events: [], errors: "" }));
-console.log(anchorIdl<Op>({ name: "moved", address: "", Read: [Plain], accounts: [], events: [Moved], errors: "" }));
-console.log(anchorIdl<Op>({ name: "key", address: "", Read: [KeyTake], accounts: [], events: [], errors: "" }));
-console.log(anchorIdl<Op>({ name: "round", address: "", Read: [RoundTake], accounts: [], events: [], errors: "" }));
+console.log(anchorIdl<Op>({ name: "early", address: "", Read: [Plain], accounts: [EarlyHolder], events: [], errors: "" })); // GUARD-REFUSED
+console.log(anchorIdl<Op>({ name: "late", address: "", Read: [Plain], accounts: [LateHolder], events: [], errors: "" })); // GUARD-REFUSED
+console.log(anchorIdl<Op>({ name: "twin", address: "", Read: [Plain], accounts: [TwinHolder], events: [], errors: "" })); // GUARD-REFUSED
+console.log(anchorIdl<Op>({ name: "deep", address: "", Read: [Plain], accounts: [DeepHolder], events: [], errors: "" })); // GUARD-REFUSED
+console.log(anchorIdl<Op>({ name: "mode", address: "", Read: [Plain], accounts: [ModeHolder], events: [], errors: "" })); // GUARD-REFUSED
+console.log(anchorIdl<Op>({ name: "flag", address: "", Read: [Plain], accounts: [FlagHolder], events: [], errors: "" })); // GUARD-REFUSED
+console.log(anchorIdl<Op>({ name: "moved", address: "", Read: [Plain], accounts: [], events: [Moved], errors: "" })); // GUARD-REFUSED
+console.log(anchorIdl<Op>({ name: "key", address: "", Read: [KeyTake], accounts: [], events: [], errors: "" })); // GUARD-REFUSED
+console.log(anchorIdl<Op>({ name: "round", address: "", Read: [RoundTake], accounts: [], events: [], errors: "" })); // GUARD-REFUSED
 console.log(twinSize());
 
 struct LateInner { a: uint32; b: uint32; c: uint64; }

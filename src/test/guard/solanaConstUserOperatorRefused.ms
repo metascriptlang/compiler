@@ -9,7 +9,7 @@ import { logU64, instructionData } from "std/solana";
 function `/`(this a: int32, b: int32): int32 { return instructionData().length as int32; }
 function twice(n: int32): int32 { return n * 2; }
 const ONE: int32 = 64;
-const STEP: int32 = ONE / 8;
-const CALLED: int32 = twice(ONE);
+const STEP: int32 = ONE / 8; // GUARD-REFUSED
+const CALLED: int32 = twice(ONE); // GUARD-REFUSED
 function main(): void { logU64((STEP + CALLED) as uint64); }
 main();

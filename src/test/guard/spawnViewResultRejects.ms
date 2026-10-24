@@ -21,19 +21,19 @@ class Counter { n: int32 = 0; }
 
 async function bareRef(): Promise<int32> {
 	const c = new Counter();
-	const r = await spawn(() => c);
+	const r = await spawn(() => c); // GUARD-REFUSED
 	return r.n;
 }
 
 async function inStruct(): Promise<int32> {
 	const c = new Counter();
-	const r = await spawn(() => ({ v: c }));
+	const r = await spawn(() => ({ v: c })); // GUARD-REFUSED
 	return r.v.n;
 }
 
 async function inArray(): Promise<int32> {
 	const c = new Counter();
-	const r = await spawn(() => [c]);
+	const r = await spawn(() => [c]); // GUARD-REFUSED
 	return r[0].n;
 }
 

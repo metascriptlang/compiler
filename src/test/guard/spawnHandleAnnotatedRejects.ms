@@ -25,13 +25,13 @@ function work(c: Readonly<Child>): int32 {
 function returnedAnnotated(): Promise<int32> {
 	const c = new Child(3);
 	const f: Promise<int32> = spawn(() => work(c));
-	return f;
+	return f; // GUARD-REFUSED
 }
 
 function awaitedTwiceAnnotated(): int32 {
 	const c = new Child(3);
 	const f: Promise<int32> = spawn(() => work(c));
-	return (await f) + (await f);
+	return (await f) + (await f); // GUARD-REFUSED
 }
 
 function respawnedInOneBranch(c: boolean): int32 {
@@ -39,7 +39,7 @@ function respawnedInOneBranch(c: boolean): int32 {
 	let reusedInBranch: Promise<int32> = spawn(() => work(k));
 	const first = await reusedInBranch;
 	if (c) reusedInBranch = spawn(() => work(k));
-	return first + await reusedInBranch;
+	return first + await reusedInBranch; // GUARD-REFUSED
 }
 
 console.log(awaitedTwiceAnnotated());

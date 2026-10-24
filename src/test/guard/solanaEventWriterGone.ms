@@ -4,7 +4,7 @@
 // An event is serialized by emit into a stack buffer the core owns: no writer value over a buffer
 // is exported, so none can be built, returned or kept by a program.
 // RED MEANS: std/solana exports an event writer again.
-import { EventWriter, eventWriter } from "std/solana";
+import { EventWriter, eventWriter } from "std/solana"; // GUARD-REFUSED
 
 function leaked(): EventWriter {
 	const discriminator: uint8[8] = [1, 2, 3, 4, 5, 6, 7, 8];

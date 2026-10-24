@@ -35,10 +35,10 @@ async function main(): Promise<void> {
 	const symbols: Symbol[] = [new Symbol()];
 	const nodes: Node[] = [new Node()];
 	const lib = new LibType();
-	const a = spawn(() => countTypes(types));
-	const b = spawn(() => countSymbols(symbols));
-	const c = spawn(() => countNodes(nodes));
-	const d = spawn(() => depthOf(lib));
+	const a = spawn(() => countTypes(types)); // GUARD-REFUSED
+	const b = spawn(() => countSymbols(symbols)); // GUARD-REFUSED
+	const c = spawn(() => countNodes(nodes)); // GUARD-REFUSED
+	const d = spawn(() => depthOf(lib)); // GUARD-REFUSED
 	console.log(`${await a}${await b}${await c}${await d}`);
 }
 

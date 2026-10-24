@@ -21,7 +21,7 @@ struct Boxed extends Box<Pubkey> { limit: uint64; }
 
 struct Plain { owner: Signer; }
 
-console.log(anchorIdl<Op>({ name: "guarded", address: "", Read: [Guarded], accounts: [], events: [], errors: "" }));
-console.log(anchorIdl<Op>({ name: "boxed", address: "", Read: [Plain], accounts: [Boxed], events: [], errors: "" }));
-console.log(anchorIdl<Op>({ name: "far", address: "", Read: [FarDerived], accounts: [], events: [], errors: "" }));
-console.log(anchorIdl<Op>({ name: "kept", address: "", Read: [Plain], accounts: [FarKeptChild], events: [], errors: "" }));
+console.log(anchorIdl<Op>({ name: "guarded", address: "", Read: [Guarded], accounts: [], events: [], errors: "" })); // GUARD-REFUSED
+console.log(anchorIdl<Op>({ name: "boxed", address: "", Read: [Plain], accounts: [Boxed], events: [], errors: "" })); // GUARD-REFUSED
+console.log(anchorIdl<Op>({ name: "far", address: "", Read: [FarDerived], accounts: [], events: [], errors: "" })); // GUARD-REFUSED
+console.log(anchorIdl<Op>({ name: "kept", address: "", Read: [Plain], accounts: [FarKeptChild], events: [], errors: "" })); // GUARD-REFUSED

@@ -13,8 +13,8 @@ import { seedText } from "std/solana/seed";
 import { createProgramAccountSeeded as direct } from "std/solana/core";
 
 function chosen(payer: Account, target: Account): Result<uint8, ProgramError> {
-	const a = try createProgramAccountSeeded(payer, target, 16, programId(), [seedText("pet")], 253);
-	const b = try direct(payer, target, 16, programId(), [seedText("pet")], 253);
-	const c: Result<uint64, ProgramError> = createProgramAccountSeeded(payer, target, 16, programId(), [seedText("pet")]);
+	const a = try createProgramAccountSeeded(payer, target, 16, programId(), [seedText("pet")], 253); // GUARD-REFUSED
+	const b = try direct(payer, target, 16, programId(), [seedText("pet")], 253); // GUARD-REFUSED
+	const c: Result<uint64, ProgramError> = createProgramAccountSeeded(payer, target, 16, programId(), [seedText("pet")]); // GUARD-REFUSED
 	return Result.ok(a);
 }

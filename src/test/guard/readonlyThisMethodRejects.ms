@@ -23,26 +23,26 @@ class Other { m: int32 = 0; }
 class Tally {
 	n: int32 = 3;
 	// 1 — the read-only receiver refuses a write.
-	reset(this: Readonly<Tally>): void { this.n = 0; }
+	reset(this: Readonly<Tally>): void { this.n = 0; } // GUARD-REFUSED
 	bump(): void { this.n += 1; }
 	// 5 — the receiver must be this class.
-	wrong(this: Readonly<Other>): int32 { return this.m; }
+	wrong(this: Readonly<Other>): int32 { return this.m; } // GUARD-REFUSED
 	// 3 — a static method has no receiver.
-	static make(this: Readonly<Tally>): Tally { return new Tally(); }
+	static make(this: Readonly<Tally>): Tally { return new Tally(); } // GUARD-REFUSED
 }
 
 // 6 — a constructor has no receiver parameter.
 class Built {
 	v: int32;
-	constructor(this: Built, v: int32) { this.v = v; }
+	constructor(this: Built, v: int32) { this.v = v; } // GUARD-REFUSED
 }
 
 // 2 — a plain method is not callable through a view.
 function viewCallsMutator(): void {
 	const t = new Tally();
 	const v: Readonly<Tally> = t;
-	v.bump();
+	v.bump(); // GUARD-REFUSED
 }
 
 // 4 — `this: T` on a free function is not an extension receiver.
-function freeThis(this: Tally): int32 { return 1; }
+function freeThis(this: Tally): int32 { return 1; } // GUARD-REFUSED

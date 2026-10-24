@@ -12,12 +12,12 @@ export enum SignedOp { Below = -1, Zero = 0 }
 export enum TwinOp { Open = 1, Shut = 1 }
 
 function bySign(): Result<uint64, ProgramError> {
-	const op = try instruction<SignedOp>();
+	const op = try instruction<SignedOp>(); // GUARD-REFUSED
 	return Result.ok(op == SignedOp.Zero ? 0 : 1);
 }
 
 function byTwin(): Result<uint64, ProgramError> {
-	const op = try instruction<TwinOp>();
+	const op = try instruction<TwinOp>(); // GUARD-REFUSED
 	return Result.ok(op == TwinOp.Open ? 0 : 1);
 }
 

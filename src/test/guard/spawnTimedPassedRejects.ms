@@ -16,10 +16,10 @@ function first(p: Promise<int32>): int32 {
 }
 
 function run(): int32 {
-	const all = Promise.all([spawn((): int32 => 1, { timeout: 10 }), spawn((): int32 => 2)]);
+	const all = Promise.all([spawn((): int32 => 1, { timeout: 10 }), spawn((): int32 => 2)]); // GUARD-REFUSED
 	const rs = await all;
-	const mixed = await Promise.all([spawn((): int32 => 4, { timeout: 10 }), first(spawn((): int32 => 5))]);
-	return rs[0] + rs[1] + mixed[0] + first(spawn((): int32 => 3, { timeout: 10 }));
+	const mixed = await Promise.all([spawn((): int32 => 4, { timeout: 10 }), first(spawn((): int32 => 5))]); // GUARD-REFUSED
+	return rs[0] + rs[1] + mixed[0] + first(spawn((): int32 => 3, { timeout: 10 })); // GUARD-REFUSED
 }
 
 console.log(`${run()}`);

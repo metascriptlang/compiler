@@ -28,11 +28,11 @@ shared.k = new T();
 shared.sa = new C();
 const f = spawn(() => {
 	const k = shared.k;
-	if (k != null) k.n = 99;
+	if (k != null) k.n = 99; // GUARD-REFUSED
 	const ab = shared.ab;
-	if (ab instanceof A) ab.n = 98;
+	if (ab instanceof A) ab.n = 98; // GUARD-REFUSED
 	const sa = shared.sa;
-	if (typeof sa != "string") sa.n = 97;
+	if (typeof sa != "string") sa.n = 97; // GUARD-REFUSED
 	return 0;
 });
 await f;

@@ -18,16 +18,16 @@ struct Input { kind: Stage; }
 struct Moved { kind: Stage; amount: uint64; }
 
 function read(): Result<uint64, ProgramError> {
-	const given = try args<Input>();
+	const given = try args<Input>(); // GUARD-REFUSED
 	return Result.ok(given.kind as uint64);
 }
 
 function log(): void {
 	const moved: Moved = { kind: Stage.Shut, amount: 3 };
-	emit<Moved>(moved);
+	emit<Moved>(moved); // GUARD-REFUSED
 }
 
 const result = read();
 if (!result.ok) { failWith(result.error); }
 log();
-console.log(anchorIdl<Op>({ name: "staged", address: "", Read: [ReadAccounts, Input], accounts: [], events: [], errors: "" }));
+console.log(anchorIdl<Op>({ name: "staged", address: "", Read: [ReadAccounts, Input], accounts: [], events: [], errors: "" })); // GUARD-REFUSED

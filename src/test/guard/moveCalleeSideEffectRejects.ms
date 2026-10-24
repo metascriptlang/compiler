@@ -29,7 +29,7 @@ function getShared(): Box { const b: Box = { n: 0 }; cache.push(b); return b; }
 // 1 — the factory keeps what it returns.
 function fromAliasingFactory(): int32 {
 	const g = getShared();
-	return await spawn(() => { g.n = 42; return g.n; }, { move: [g] });
+	return await spawn(() => { g.n = 42; return g.n; }, { move: [g] }); // GUARD-REFUSED
 }
 
 const registry: Registered[] = [];
@@ -41,7 +41,7 @@ class Registered {
 // 2 — the constructor publishes `this`.
 function fromPublishingConstructor(): int32 {
 	const g = new Registered();
-	return await spawn(() => { g.n = 7; return g.n; }, { move: [g] });
+	return await spawn(() => { g.n = 7; return g.n; }, { move: [g] }); // GUARD-REFUSED
 }
 
 const kept: Stashed[] = [];
@@ -54,7 +54,7 @@ class Stashed {
 function afterStashingMethod(): int32 {
 	const g = new Stashed();
 	g.stash();
-	return await spawn(() => { g.n = 9; return g.n; }, { move: [g] });
+	return await spawn(() => { g.n = 9; return g.n; }, { move: [g] }); // GUARD-REFUSED
 }
 
 const shared: Box = { n: 0 };
@@ -63,7 +63,7 @@ function current(): Box { return shared; }
 // 4 — a field initialised from a call that returns module state.
 function fieldFromModuleState(): int32 {
 	const g: Holder = { b: current() };
-	return await spawn(() => { const b = g.b; return b != null ? b.n : 0; }, { move: [g] });
+	return await spawn(() => { const b = g.b; return b != null ? b.n : 0; }, { move: [g] }); // GUARD-REFUSED
 }
 
 const pool: Box[] = [{ n: 0 }];
@@ -73,7 +73,7 @@ function pick(): Box { return pool[0]; }
 function fieldAssignedFromCall(): int32 {
 	const g: Holder = { b: null };
 	g.b = pick();
-	return await spawn(() => { const b = g.b; return b != null ? b.n : 0; }, { move: [g] });
+	return await spawn(() => { const b = g.b; return b != null ? b.n : 0; }, { move: [g] }); // GUARD-REFUSED
 }
 
 console.log(fromAliasingFactory() + fromPublishingConstructor() + afterStashingMethod() + fieldFromModuleState() + fieldAssignedFromCall());

@@ -26,10 +26,10 @@ struct GuardUbS { a: int32; b: string; }
 
 function main(): void {
     const t: GuardUbS = { a: 1, b: "x" };
-    const r = Result.ok(t);
+    const r = Result.ok(t); // GUARD-REFUSED
     const s: Result<GuardUbS, string> = r;
     if (s.ok) { console.log(s.value.b); }
-    const e = Result.err("boom");
+    const e = Result.err("boom"); // GUARD-REFUSED
     const s2: Result<GuardUbS, string> = e;
     if (!s2.ok) { console.log(s2.error); }
 }

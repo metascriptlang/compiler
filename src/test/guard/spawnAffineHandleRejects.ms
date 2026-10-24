@@ -17,18 +17,18 @@
 function work(): int32 { return 1; }
 
 function discarded(): void {
-	spawn(work);
+	spawn(work); // GUARD-REFUSED
 }
 
 function neverAwaited(): int32 {
-	const idle = spawn(work);
+	const idle = spawn(work); // GUARD-REFUSED
 	return 0;
 }
 
 function awaitedInLoop(): int32 {
 	const looped = spawn(work);
 	let s: int32 = 0;
-	for (let i = 0; i < 2; i += 1) s += await looped;
+	for (let i = 0; i < 2; i += 1) s += await looped; // GUARD-REFUSED
 	return s;
 }
 

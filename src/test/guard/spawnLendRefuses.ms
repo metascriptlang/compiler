@@ -31,21 +31,21 @@ function poke(h: Holder, i: int32): void { h.child = new Child(i); }
 
 function field(): int32 {
 	const fieldObj = new Holder(new Child(1));
-	const f = spawn(() => fieldObj.child.v);
+	const f = spawn(() => fieldObj.child.v); // GUARD-REFUSED
 	fieldObj.child = new Child(2);
 	return await f;
 }
 
 function elem(): int32 {
 	const elemArr: Child[] = [new Child(1), new Child(2)];
-	const f = spawn(() => elemArr[1].v);
+	const f = spawn(() => elemArr[1].v); // GUARD-REFUSED
 	elemArr[1] = new Child(3);
 	return await f;
 }
 
 function len(): int32 {
 	const lenArr: Child[] = [new Child(1)];
-	const f = spawn(() => lenArr.length > 0 ? lenArr[0].v : 0);
+	const f = spawn(() => lenArr.length > 0 ? lenArr[0].v : 0); // GUARD-REFUSED
 	lenArr.length = 0;
 	return await f;
 }
@@ -53,7 +53,7 @@ function len(): int32 {
 function alias(): int32 {
 	const aliasObj = new Holder(new Child(1));
 	const other = aliasObj;
-	const f = spawn(() => aliasObj.child.v);
+	const f = spawn(() => aliasObj.child.v); // GUARD-REFUSED
 	other.child = new Child(2);
 	return await f;
 }
@@ -61,7 +61,7 @@ function alias(): int32 {
 function loopBinding(hs: Holder[]): int32 {
 	let t: int32 = 0;
 	for (const loopH of hs) {
-		const f = spawn(() => loopH.child.v);
+		const f = spawn(() => loopH.child.v); // GUARD-REFUSED
 		loopH.child = new Child(2);
 		t = t + await f;
 	}
@@ -70,14 +70,14 @@ function loopBinding(hs: Holder[]): int32 {
 
 function callee(): int32 {
 	const calleeObj = new Holder(new Child(1));
-	const f = spawn(() => calleeObj.child.v);
+	const f = spawn(() => calleeObj.child.v); // GUARD-REFUSED
 	poke(calleeObj, 2);
 	return await f;
 }
 
 function method(): int32 {
 	const methodObj = new Holder(new Child(1));
-	const f = spawn(() => methodObj.child.v);
+	const f = spawn(() => methodObj.child.v); // GUARD-REFUSED
 	methodObj.replace(2);
 	return await f;
 }
@@ -85,21 +85,21 @@ function method(): int32 {
 function closure(): int32 {
 	const closureObj = new Holder(new Child(1));
 	const bump = (i: int32): void => { closureObj.child = new Child(i); };
-	const f = spawn(() => closureObj.child.v);
+	const f = spawn(() => closureObj.child.v); // GUARD-REFUSED
 	bump(2);
 	return await f;
 }
 
 async function asyncParent(): Promise<int32> {
 	const asyncObj = new Holder(new Child(1));
-	const f = spawn(() => asyncObj.child.v);
+	const f = spawn(() => asyncObj.child.v); // GUARD-REFUSED
 	asyncObj.child = new Child(2);
 	return await f;
 }
 
 function branchSkipsAwait(c: boolean): int32 {
 	const branchObj = new Holder(new Child(1));
-	const f = spawn(() => branchObj.child.v);
+	const f = spawn(() => branchObj.child.v); // GUARD-REFUSED
 	let r: int32 = 0;
 	if (c) r = await f;
 	branchObj.child = new Child(2);
@@ -109,7 +109,7 @@ function branchSkipsAwait(c: boolean): int32 {
 function spawnInLoop(): int32 {
 	const manyObj = new Holder(new Child(1));
 	const fs: Promise<int32>[] = [];
-	for (let k = 0; k < 2; k += 1) fs.push(spawn(() => manyObj.child.v));
+	for (let k = 0; k < 2; k += 1) fs.push(spawn(() => manyObj.child.v)); // GUARD-REFUSED
 	manyObj.child = new Child(2);
 	let t: int32 = 0;
 	for (const f of fs) t = t + await f;
@@ -117,7 +117,7 @@ function spawnInLoop(): int32 {
 }
 
 function primitiveParam(primN: int32): int32 {
-	const f = spawn(() => primN * 2);
+	const f = spawn(() => primN * 2); // GUARD-REFUSED
 	primN = 5;
 	return await f + primN;
 }
@@ -126,14 +126,14 @@ actor Lender {
 	obj: Holder;
 	constructor() { this.obj = new Holder(new Child(1)); }
 	go(): int32 {
-		const f = spawn(() => this.obj.child.v);
+		const f = spawn(() => this.obj.child.v); // GUARD-REFUSED
 		this.obj.child = new Child(2);
 		return await f;
 	}
 }
 
 const moduleObj = new Holder(new Child(1));
-const g = spawn(() => moduleObj.child.v);
+const g = spawn(() => moduleObj.child.v); // GUARD-REFUSED
 moduleObj.child = new Child(2);
 
 async function main(): Promise<void> {

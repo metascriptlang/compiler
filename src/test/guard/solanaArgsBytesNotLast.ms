@@ -8,7 +8,7 @@ struct UploadArgs {
 }
 
 function upload(): Result<uint64, ProgramError> {
-	const read = try args<UploadArgs>();
+	const read = try args<UploadArgs>(); // GUARD-REFUSED
 	return Result.ok(read.index as uint64);
 }
 

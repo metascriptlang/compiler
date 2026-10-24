@@ -11,12 +11,12 @@
 // GUARD-CHECK-FAIL a spawn with { timeout } must be awaited where it is written
 
 function run(): int32 {
-	const h = spawn((): int32 => 1, { timeout: 10 });
+	const h = spawn((): int32 => 1, { timeout: 10 }); // GUARD-REFUSED
 	return await h;
 }
 
 async function runAsync(): Promise<int32> {
-	const h = spawn((): int32 => 2, { timeout: 10 });
+	const h = spawn((): int32 => 2, { timeout: 10 }); // GUARD-REFUSED
 	return await h;
 }
 

@@ -36,14 +36,14 @@ struct Oracle {}
 function twinSize(): uint64 { return sizeof(RealTwin) as uint64; }
 
 function run(): Result<uint64, ProgramError> {
-	const early = try accounts<EarlyTake>();
-	const late = try accounts<LateTake>();
-	const thin = try accounts<ThinTake>();
-	const plain = try accounts<PlainTake>();
-	const twin = try accounts<TwinTake>();
-	const held = try accounts<HeldTake>();
-	const child = try accounts<HolderChild>();
-	const feed = try accounts<Feed>();
+	const early = try accounts<EarlyTake>(); // GUARD-REFUSED
+	const late = try accounts<LateTake>(); // GUARD-REFUSED
+	const thin = try accounts<ThinTake>(); // GUARD-REFUSED
+	const plain = try accounts<PlainTake>(); // GUARD-REFUSED
+	const twin = try accounts<TwinTake>(); // GUARD-REFUSED
+	const held = try accounts<HeldTake>(); // GUARD-REFUSED
+	const child = try accounts<HolderChild>(); // GUARD-REFUSED
+	const feed = try accounts<Feed>(); // GUARD-REFUSED
 	return Result.ok(early.owner.lamports() + late.owner.lamports() + thin.owner.lamports() + plain.owner.lamports() +
 		twinSize() + twin.owner.lamports() + held.owner.lamports() + child.owner.lamports() + feed.owner.lamports());
 }

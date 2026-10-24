@@ -25,7 +25,7 @@ function privateGate(): int32 {
 	const c: Counter = { n: 0 };
 	const f = spawn(() => {
 		const gate = new Locked<int32>(0);
-		lockedUpdate(gate, (v: int32): int32 => { c.n = c.n + 1; return v; });
+		lockedUpdate(gate, (v: int32): int32 => { c.n = c.n + 1; return v; }); // GUARD-REFUSED
 		return 0;
 	});
 	await f;
@@ -37,7 +37,7 @@ function sharedGate(): int32 {
 	const gate = new Locked<int32>(0);
 	const c: Counter = { n: 0 };
 	const f = spawn(() => {
-		lockedUpdate(gate, (v: int32): int32 => { c.n = c.n + 1; return v + 1; });
+		lockedUpdate(gate, (v: int32): int32 => { c.n = c.n + 1; return v + 1; }); // GUARD-REFUSED
 		return 0;
 	});
 	await f;
@@ -49,7 +49,7 @@ function readSection(): int32 {
 	const gate = new Locked<int32>(0);
 	const c: Counter = { n: 0 };
 	const f = spawn(() => {
-		return lockedRead(gate, (v: int32): int32 => { c.n = v + 1; return c.n; });
+		return lockedRead(gate, (v: int32): int32 => { c.n = v + 1; return c.n; }); // GUARD-REFUSED
 	});
 	return await f;
 }
@@ -59,7 +59,7 @@ function pushUnderGate(): int32 {
 	const gate = new Locked<int32>(0);
 	const items: int32[] = [];
 	const f = spawn(() => {
-		lockedUpdate(gate, (v: int32): int32 => { items.push(9); return v; });
+		lockedUpdate(gate, (v: int32): int32 => { items.push(9); return v; }); // GUARD-REFUSED
 		return 0;
 	});
 	await f;

@@ -30,11 +30,11 @@ struct PinnedRoot { intruder: Writable; }
 struct KeptBase { owner: uint64; }
 struct Plain { owner: Signer; }
 
-console.log(anchorIdl<Op>({ name: "early", address: "", Read: [EarlyChild], accounts: [], events: [], errors: "" }));
-console.log(anchorIdl<Op>({ name: "late", address: "", Read: [LateChild], accounts: [], events: [], errors: "" }));
-console.log(anchorIdl<Op>({ name: "leaf", address: "", Read: [PinnedLeaf], accounts: [], events: [], errors: "" }));
-console.log(anchorIdl<Op>({ name: "named", address: "", Read: [NamedChild], accounts: [], events: [], errors: "" }));
-console.log(anchorIdl<Op>({ name: "borrowed", address: "", Read: [Borrowed], accounts: [], events: [], errors: "" }));
-console.log(anchorIdl<Op>({ name: "kept", address: "", Read: [Plain], accounts: [KeptChild], events: [], errors: "" }));
+console.log(anchorIdl<Op>({ name: "early", address: "", Read: [EarlyChild], accounts: [], events: [], errors: "" })); // GUARD-REFUSED
+console.log(anchorIdl<Op>({ name: "late", address: "", Read: [LateChild], accounts: [], events: [], errors: "" })); // GUARD-REFUSED
+console.log(anchorIdl<Op>({ name: "leaf", address: "", Read: [PinnedLeaf], accounts: [], events: [], errors: "" })); // GUARD-REFUSED
+console.log(anchorIdl<Op>({ name: "named", address: "", Read: [NamedChild], accounts: [], events: [], errors: "" })); // GUARD-REFUSED
+console.log(anchorIdl<Op>({ name: "borrowed", address: "", Read: [Borrowed], accounts: [], events: [], errors: "" })); // GUARD-REFUSED
+console.log(anchorIdl<Op>({ name: "kept", address: "", Read: [Plain], accounts: [KeptChild], events: [], errors: "" })); // GUARD-REFUSED
 
 struct PinnedLate { intruder: Writable; }

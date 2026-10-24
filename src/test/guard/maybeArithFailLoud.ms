@@ -15,9 +15,9 @@ function main(): void {
 	const m = new Map<int32, int32>();
 	m.set(1 as int32, 10 as int32);
 	let sum = 0;
-	for (const k of m.toItems()) { sum = sum + m.get(k); }
+	for (const k of m.toItems()) { sum = sum + m.get(k); } // GUARD-REFUSED
 	let hits = 0;
-	for (const k of m.toItems()) { if (m.get(k) < 5) { hits = hits + 1; } }
+	for (const k of m.toItems()) { if (m.get(k) < 5) { hits = hits + 1; } } // GUARD-REFUSED
 	console.log(`${sum} ${hits}`);
 }
 main();

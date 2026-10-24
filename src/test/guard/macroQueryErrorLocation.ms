@@ -21,9 +21,9 @@ function main(): void {
 	const third: Thing = { size: 5 };
 	console.log(thing.size + other.size + third.size);
 	const total = thing.size;
-	refuseTypeArg<Thing>(thing);
-	refuseNamedImpl(other);
-	refuseBound(third);
+	refuseTypeArg<Thing>(thing); // GUARD-REFUSED
+	refuseNamedImpl(other); // GUARD-REFUSED
+	refuseBound(third); // GUARD-REFUSED
 	console.log(total);
 }
 main();

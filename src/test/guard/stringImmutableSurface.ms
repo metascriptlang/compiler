@@ -26,9 +26,9 @@
 
 function main(): void {
 	let s = "abc";
-	s[0] = "x";
-	s[1] += "y";
-	s.length = 2;
+	s[0] = "x"; // GUARD-REFUSED
+	s[1] += "y"; // GUARD-REFUSED
+	s.length = 2; // GUARD-REFUSED
 	console.log(s);
 }
 main();

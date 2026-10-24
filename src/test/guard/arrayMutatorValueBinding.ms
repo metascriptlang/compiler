@@ -3,18 +3,18 @@
 // GUARD-CHECK-FAIL cannot mutate value-type loop variable 'p'
 
 function f(v: Vec<int32>): int32 {
-	v.push(1);
+	v.push(1); // GUARD-REFUSED
 	return v.length;
 }
 
 function g(w: Vec<float64>): int32 {
-	w.sort();
+	w.sort(); // GUARD-REFUSED
 	return w.length;
 }
 
 function h(vv: Vec<Vec<int32>>): int32 {
 	for (const p of vv) {
-		p.push(7);
+		p.push(7); // GUARD-REFUSED
 	}
 	return vv.length;
 }

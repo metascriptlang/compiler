@@ -41,9 +41,9 @@ export struct Fresh {
 
 function run(): Result<uint64, ProgramError> {
 	const control = try owned<Cat>(0);
-	const pet = try owned<Pet>(1);
+	const pet = try owned<Pet>(1); // GUARD-REFUSED
 	const x = try accounts<Fresh>();
-	const made = try create<Hen>(x.payer, x.target);
+	const made = try create<Hen>(x.payer, x.target); // GUARD-REFUSED
 	return Result.ok(control.data().value + pet.data().value + made.data().value);
 }
 

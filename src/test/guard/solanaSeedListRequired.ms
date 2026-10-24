@@ -18,10 +18,10 @@ import {
 function main(): void {
 	const seeds = ["pet", "dog"];
 	const program = pubkeyOf("9hSR6S7WPtxmTojgo6GG3k4yDPecgJY292j7xrsUGWBu");
-	const byName = findProgramAddress(seeds);
-	const byProgram = findProgramAddressOf(program, seeds);
-	const byCreate = programAddress(seeds);
-	const byText = findProgramAddress("pet");
+	const byName = findProgramAddress(seeds); // GUARD-REFUSED
+	const byProgram = findProgramAddressOf(program, seeds); // GUARD-REFUSED
+	const byCreate = programAddress(seeds); // GUARD-REFUSED
+	const byText = findProgramAddress("pet"); // GUARD-REFUSED
 	if (!byName.ok) { failWith(byName.error); }
 	if (!byProgram.ok) { failWith(byProgram.error); }
 	if (!byCreate.ok) { failWith(byCreate.error); }

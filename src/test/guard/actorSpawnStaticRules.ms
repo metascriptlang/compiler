@@ -31,12 +31,12 @@ actor GuardActor {
     n: number = 0;
 
     s1(): number {
-        const r = await spawn(() => { console.log(this); return 0; });
+        const r = await spawn(() => { console.log(this); return 0; }); // GUARD-REFUSED
         return r;
     }
 
     s3(): number {
-        const r = await spawn(() => { this.n = 5; return 0; });
+        const r = await spawn(() => { this.n = 5; return 0; }); // GUARD-REFUSED
         return r;
     }
 }
@@ -44,7 +44,7 @@ actor GuardActor {
 async function main(): Promise<void> {
     const xs: number[] = [1, 2];
     for (const x of xs) {
-        const r = await spawn(() => x);
+        const r = await spawn(() => x); // GUARD-WARNED
     }
 }
 

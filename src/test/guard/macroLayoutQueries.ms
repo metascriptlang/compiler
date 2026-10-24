@@ -26,7 +26,7 @@ macro missingField(value: Node): Node {
 	return value;
 }
 
-const a = missingSize(1);
-const b = missingAlign(1);
-const c = scalarOffset(1);
-const d = missingField(LayoutGuard);
+const a = missingSize(1); // GUARD-REFUSED
+const b = missingAlign(1); // GUARD-REFUSED
+const c = scalarOffset(1); // GUARD-REFUSED
+const d = missingField(LayoutGuard); // GUARD-REFUSED

@@ -28,14 +28,14 @@ extern function strlen(s: cstring): int64;
 
 function fromReassignedLocal(n: int32): int64 {
 	let s: string = "value-" + n.toString();
-	const c: cstring = s;
+	const c: cstring = s; // GUARD-REFUSED
 	s = "other";
 	return strlen(c);
 }
 
 function fromReassignedLocalCapturedBySpawn(n: int32): int64 {
 	let captured: string = "value-" + n.toString();
-	const c: cstring = captured;
+	const c: cstring = captured; // GUARD-REFUSED
 	const f = spawn(() => strlen(c));
 	captured = "other";
 	return await f;
@@ -43,26 +43,26 @@ function fromReassignedLocalCapturedBySpawn(n: int32): int64 {
 
 function fromAssignedParameter(p: string): int64 {
 	p = p + "-other";
-	return strlen(p);
+	return strlen(p); // GUARD-REFUSED
 }
 
 function fromAssignedLocalArgument(n: int32): int64 {
 	let moved: string = "value-" + n.toString();
 	moved = moved + "-other";
-	return strlen(moved);
+	return strlen(moved); // GUARD-REFUSED
 }
 
 function fromParameterKeptInLocal(kept: string): int64 {
-	const c: cstring = kept;
+	const c: cstring = kept; // GUARD-REFUSED
 	return strlen(c);
 }
 
 function fromReturnedParameter(returned: string): cstring {
-	return returned;
+	return returned; // GUARD-REFUSED
 }
 
 function fromTemporary(n: int32): int64 {
-	const c: cstring = "value-" + n.toString();
+	const c: cstring = "value-" + n.toString(); // GUARD-REFUSED
 	return strlen(c);
 }
 

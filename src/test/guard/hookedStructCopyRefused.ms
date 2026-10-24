@@ -29,25 +29,25 @@ struct Owner { fd: Fd; tag: int32; }
 
 function run(): void {
 	const a: Fd = { n: 1 };
-	const b = a;
+	const b = a; // GUARD-REFUSED
 	console.log(`${a.n} ${b.n}`);
 
 	const o: Owner = { fd: { n: 2 }, tag: 7 };
-	const p = o;
+	const p = o; // GUARD-REFUSED
 	console.log(`${o.tag} ${p.tag}`);
 
 	const pair: [Fd, int32] = [{ n: 4 }, 5];
-	const twin = pair;
+	const twin = pair; // GUARD-REFUSED
 	console.log(`${pair[1]} ${twin[1]}`);
 
 	const kept: Fd = { n: 6 };
 	const held: Fd[] = [];
-	held.push(kept);
-	const boxed: Owner = { fd: kept, tag: 8 };
+	held.push(kept); // GUARD-REFUSED
+	const boxed: Owner = { fd: kept, tag: 8 }; // GUARD-REFUSED
 	console.log(`${held.length} ${boxed.tag} ${kept.n}`);
 
 	const h = grab(9);
-	const g = h;
+	const g = h; // GUARD-REFUSED
 	console.log(`${h as int32} ${g as int32}`);
 }
 

@@ -38,19 +38,19 @@ function allowed(found: Pda<Pet>): uint64 {
 }
 
 function forged(pet: Mutable<Pet>, found: Pda<Pet>): void {
-	const a: Pda<Pet> = { account: pet, bump: 9 };
-	const b = pet as Pda<Pet>;
+	const a: Pda<Pet> = { account: pet, bump: 9 }; // GUARD-REFUSED
+	const b = pet as Pda<Pet>; // GUARD-REFUSED
 	let c = found;
-	c.bump = 9;
-	const d = found.bump;
-	const e = found.account;
-	const f = {} as Pda<Pet>;
-	const g: Pda<Pet> = {};
+	c.bump = 9; // GUARD-REFUSED
+	const d = found.bump; // GUARD-REFUSED
+	const e = found.account; // GUARD-REFUSED
+	const f = {} as Pda<Pet>; // GUARD-REFUSED
+	const g: Pda<Pet> = {}; // GUARD-REFUSED
 	let h: Pda<Pet>;
-	const i = h.foundBump();
-	const j: Pda<Pet>[2] = [];
+	const i = h.foundBump(); // GUARD-REFUSED
+	const j: Pda<Pet>[2] = []; // GUARD-REFUSED
 	let s: Signer;
-	const k = s.lamports();
+	const k = s.lamports(); // GUARD-REFUSED
 }
 
 function run(): Result<uint64, ProgramError> {

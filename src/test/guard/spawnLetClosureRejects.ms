@@ -9,8 +9,8 @@
 async function run(): Promise<int32> {
 	let n: int32 = 0;
 	let f = (): int32 => { for (let i = 0; i < 100000; i += 1) n += 1; return 0; };
-	const a = spawn(f);
-	const b = spawn(f);
+	const a = spawn(f); // GUARD-REFUSED
+	const b = spawn(f); // GUARD-REFUSED
 	await a; await b;
 	return n;
 }

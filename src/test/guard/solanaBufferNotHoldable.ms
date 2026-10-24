@@ -4,7 +4,7 @@
 // Instruction bytes are written by functions over a stack array and an offset, so no value an author can
 // return or store holds the address of that array; a writer value over the frame is not expressible.
 // RED MEANS: std/solana exports a writer that can outlive the array it points into.
-import { BorshBuffer, borshBuffer } from "std/solana";
+import { BorshBuffer, borshBuffer } from "std/solana"; // GUARD-REFUSED
 
 function leaked(): BorshBuffer {
 	let storage: uint8[8] = [];

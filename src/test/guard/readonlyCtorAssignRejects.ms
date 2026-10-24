@@ -20,23 +20,23 @@ class K {
 	readonly inherited: int32 = 5;
 	static readonly inStatic: int32 = 6;
 	constructor() {
-		const f = (): void => { this.inArrow = 20; };
+		const f = (): void => { this.inArrow = 20; }; // GUARD-REFUSED
 		f();
 	}
-	bump(): void { this.inMethod = 10; }
+	bump(): void { this.inMethod = 10; } // GUARD-REFUSED
 }
 
 class Sub extends K {
 	constructor() {
 		super();
-		this.inSubCtor = 40;
+		this.inSubCtor = 40; // GUARD-REFUSED
 	}
 }
 
-function free(k: K): void { k.inFree = 30; }
-function viaSub(s: Sub): void { s.inherited = 50; }
+function free(k: K): void { k.inFree = 30; } // GUARD-REFUSED
+function viaSub(s: Sub): void { s.inherited = 50; } // GUARD-REFUSED
 
-K.inStatic = 60;
+K.inStatic = 60; // GUARD-REFUSED
 free(new K());
 viaSub(new Sub());
 console.log("unreachable");

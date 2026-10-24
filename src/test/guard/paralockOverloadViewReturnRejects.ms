@@ -22,7 +22,7 @@ function pick(a: Readonly<T>, b: Readonly<T>): Readonly<T> {
 const shared = new T();
 const f = spawn(() => {
 	const mine = new T();
-	const leaked = pick(mine, shared);
+	const leaked = pick(mine, shared); // GUARD-REFUSED
 	leaked.n = 99;
 	return 0;
 });

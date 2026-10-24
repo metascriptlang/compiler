@@ -29,13 +29,13 @@ struct PinnedLone { authority: Signer; }
 type PinnedRenamed = Renamed;
 
 function run(): Result<uint64, ProgramError> {
-	const early = try accounts<Early>();
-	const late = try accounts<Late>();
-	const twin = try accounts<Twin>();
-	const open = try accounts<Open>();
-	const lone = try accounts<Lone>();
-	const away = try accounts<Away>();
-	const renamed = try accounts<Renamed>();
+	const early = try accounts<Early>(); // GUARD-REFUSED
+	const late = try accounts<Late>(); // GUARD-REFUSED
+	const twin = try accounts<Twin>(); // GUARD-REFUSED
+	const open = try accounts<Open>(); // GUARD-REFUSED
+	const lone = try accounts<Lone>(); // GUARD-REFUSED
+	const away = try accounts<Away>(); // GUARD-REFUSED
+	const renamed = try accounts<Renamed>(); // GUARD-REFUSED
 	return Result.ok(early.authority.lamports() + late.authority.lamports() + twin.authority.lamports() +
 		open.authority.lamports() + lone.authority.lamports() + away.authority.lamports() +
 		renamed.authority.lamports());

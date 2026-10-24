@@ -21,7 +21,7 @@ actor Verbs {
 	n: int32 = 1;
 	weigh(p: Plain): int32 { return p.n; }
 	capturesThis(): int32 {
-		const h = spawn(() => { const self = this; return self.n; });
+		const h = spawn(() => { const self = this; return self.n; }); // GUARD-REFUSED
 		return await h;
 	}
 }
@@ -29,7 +29,7 @@ actor Verbs {
 async function mutableRefCall(): Promise<int32> {
 	let p: Plain = { n: 2 };
 	const v = new Verbs();
-	const r = await v.weigh(p);
+	const r = await v.weigh(p); // GUARD-REFUSED
 	stop(v.pid, ExitReason.Normal);
 	return r;
 }

@@ -19,16 +19,16 @@ class Cell { n: int32 = 0; }
 class Slot { n: int32 = 0; }
 interface Pair { n: int32; next: Node | null; }
 
-function leak(w: Readonly<Pair>): Pair { return { ...w }; }
+function leak(w: Readonly<Pair>): Pair { return { ...w }; } // GUARD-REFUSED
 
 const pair: Pair = { n: 0, next: new Node() };
 const cells: Cell[] = [new Cell()];
 const slots: Slot[] = [new Slot()];
 const f = spawn(() => {
 	const copy = leak(pair);
-	const mine: Cell[] = [...cells];
+	const mine: Cell[] = [...cells]; // GUARD-REFUSED
 	const inferred = [...slots];
-	inferred[0].n = 97;
+	inferred[0].n = 97; // GUARD-REFUSED
 	return copy.n + mine.length;
 });
 await f;

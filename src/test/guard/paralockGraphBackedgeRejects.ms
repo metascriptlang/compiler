@@ -21,23 +21,23 @@ import { Symbol, Type } from "std/meta/node";
 function setSlot(ref x: int32): void { x = 8; }
 
 export async function direct(s: Symbol): Promise<int32> {
-	const h = spawn(() => { s.declNode.variantSlot = 1; return 0; });
+	const h = spawn(() => { s.declNode.variantSlot = 1; return 0; }); // GUARD-REFUSED
 	return await h;
 }
 
 export async function refArg(s: Symbol): Promise<int32> {
-	const h = spawn(() => { setSlot(s.declNode.variantSlot); return 0; });
+	const h = spawn(() => { setSlot(s.declNode.variantSlot); return 0; }); // GUARD-REFUSED
 	return await h;
 }
 
 export async function selfHostShape(t: Type): Promise<int32> {
-	const h = spawn(() => { t.sym!.declNode.nodeType = null; return 0; });
+	const h = spawn(() => { t.sym!.declNode.nodeType = null; return 0; }); // GUARD-REFUSED
 	return await h;
 }
 
 export async function closureInWorker(s: Symbol): Promise<int32> {
 	const h = spawn(() => {
-		const relabel = () => { s.declNode.variantSlot = 2; };
+		const relabel = () => { s.declNode.variantSlot = 2; }; // GUARD-REFUSED
 		relabel();
 		return 0;
 	});
@@ -45,6 +45,6 @@ export async function closureInWorker(s: Symbol): Promise<int32> {
 }
 
 export async function deeper(s: Symbol): Promise<int32> {
-	const h = spawn(() => { s.declNode.resolvedSym!.declNode.variantSlot = 3; return 0; });
+	const h = spawn(() => { s.declNode.resolvedSym!.declNode.variantSlot = 3; return 0; }); // GUARD-REFUSED
 	return await h;
 }

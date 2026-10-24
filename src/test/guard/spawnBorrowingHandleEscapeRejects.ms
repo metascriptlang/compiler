@@ -34,33 +34,33 @@ class Holder {
 	constructor(p: Promise<int32> | null) { this.pending = p; }
 
 	start(d: Data): void {
-		this.pending = spawn(() => read(d));
+		this.pending = spawn(() => read(d)); // GUARD-REFUSED
 	}
 }
 
 function returned(d: Data): Promise<int32> {
 	const h = spawn(() => read(d));
-	return h;
+	return h; // GUARD-REFUSED
 }
 
 function stored(d: Data): void {
-	parked = spawn(() => read(d));
+	parked = spawn(() => read(d)); // GUARD-REFUSED
 }
 
 function passed(d: Data): void {
-	keep(spawn(() => read(d)));
+	keep(spawn(() => read(d))); // GUARD-REFUSED
 }
 
 function intoParameter(byKey: Map<int32, Promise<int32>>, d: Data): void {
-	byKey.set(1, spawn(() => read(d)));
+	byKey.set(1, spawn(() => read(d))); // GUARD-REFUSED
 }
 
 function intoConstructor(d: Data): Holder {
-	return new Holder(spawn(() => read(d)));
+	return new Holder(spawn(() => read(d))); // GUARD-REFUSED
 }
 
 function intoObject(d: Data): int32 {
-	const o = { p: spawn(() => read(d)) };
+	const o = { p: spawn(() => read(d)) }; // GUARD-REFUSED
 	return 0;
 }
 

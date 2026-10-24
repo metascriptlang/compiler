@@ -26,18 +26,18 @@ function deep1(): int32 { return deep2(); }
 let hook: () => int32 = (): int32 => 2;
 function named(v: int32): int32 { return v + waits(); }
 const bound = (v: int32): int32 => { const f = spawn(() => one()); await f; return v; };
-function viaParam(c: Locked<int32>, f: (v: int32) => int32): void { lockedUpdate(c, f); }
+function viaParam(c: Locked<int32>, f: (v: int32) => int32): void { lockedUpdate(c, f); } // GUARD-REFUSED
 
 function main(): void {
 	const c: Locked<int32> = new Locked<int32>(0);
-	lockedUpdate(c, (v: int32): int32 => v + await spawn(() => one()));
-	lockedUpdate(c, (v: int32): int32 => { const f = spawn(() => one()); await f; return v; });
-	lockedUpdate(c, (v: int32): int32 => v + waits());
-	lockedUpdate(c, (v: int32): int32 => v + deep1());
-	lockedUpdate(c, (v: int32): int32 => v + hook());
-	console.log(lockedRead(c, (v: int32): int32 => v + waits()));
-	lockedUpdate(c, named);
-	lockedUpdate(c, bound);
+	lockedUpdate(c, (v: int32): int32 => v + await spawn(() => one())); // GUARD-REFUSED
+	lockedUpdate(c, (v: int32): int32 => { const f = spawn(() => one()); await f; return v; }); // GUARD-REFUSED
+	lockedUpdate(c, (v: int32): int32 => v + waits()); // GUARD-REFUSED
+	lockedUpdate(c, (v: int32): int32 => v + deep1()); // GUARD-REFUSED
+	lockedUpdate(c, (v: int32): int32 => v + hook()); // GUARD-REFUSED
+	console.log(lockedRead(c, (v: int32): int32 => v + waits())); // GUARD-REFUSED
+	lockedUpdate(c, named); // GUARD-REFUSED
+	lockedUpdate(c, bound); // GUARD-REFUSED
 	viaParam(c, (v: int32): int32 => v);
 }
 

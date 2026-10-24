@@ -11,7 +11,7 @@ function main(): void {
 	if (!first.ok) { return; }
 	const a = first.value;
 	let storage: uint8[1] = [];
-	const sent = invoke(programId(), [
+	const sent = invoke(programId(), [ // GUARD-REFUSED
 		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
 		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),
 		InstructionAccount.writable(a), InstructionAccount.writable(a), InstructionAccount.writable(a),

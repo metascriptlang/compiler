@@ -22,19 +22,19 @@ class Counter { n: int32 = 4; }
 
 async function oneLevel(): Promise<int32> {
 	const a = new Counter();
-	const f = await spawn(() => () => a.n);
+	const f = await spawn(() => () => a.n); // GUARD-REFUSED
 	return f();
 }
 
 async function twoLevels(): Promise<int32> {
 	const b = new Counter();
-	const f = await spawn(() => () => () => b.n);
+	const f = await spawn(() => () => () => b.n); // GUARD-REFUSED
 	return f()();
 }
 
 async function inObject(): Promise<int32> {
 	const k = new Counter();
-	const r = await spawn(() => ({ f: () => k.n }));
+	const r = await spawn(() => ({ f: () => k.n })); // GUARD-REFUSED
 	return r.f();
 }
 

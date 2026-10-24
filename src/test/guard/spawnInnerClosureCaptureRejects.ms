@@ -8,8 +8,8 @@
 
 async function run(): Promise<int32> {
 	let n: int32 = 0;
-	const a = spawn((): int32 => { const g = (): void => { for (let i = 0; i < 100000; i += 1) n += 1; }; g(); return 0; });
-	const b = spawn((): int32 => { const g = (): void => { for (let i = 0; i < 100000; i += 1) n += 1; }; g(); return 0; });
+	const a = spawn((): int32 => { const g = (): void => { for (let i = 0; i < 100000; i += 1) n += 1; }; g(); return 0; }); // GUARD-REFUSED
+	const b = spawn((): int32 => { const g = (): void => { for (let i = 0; i < 100000; i += 1) n += 1; }; g(); return 0; }); // GUARD-REFUSED
 	await a; await b;
 	return n;
 }

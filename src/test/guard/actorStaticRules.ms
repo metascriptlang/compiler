@@ -3,8 +3,8 @@
 // GUARD-CHECK-FAIL can still be mutated through the readonly static 'xs'
 
 actor A {
-	static n: int32 = 0;
-	static readonly xs: int32[] = [1, 2];
+	static n: int32 = 0; // GUARD-REFUSED
+	static readonly xs: int32[] = [1, 2]; // GUARD-REFUSED
 	ping(): int32 { return 1; }
 }
 

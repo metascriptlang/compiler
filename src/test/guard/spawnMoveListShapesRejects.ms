@@ -20,25 +20,25 @@ interface Counter { n: int32; }
 
 function optionsNotLiteral(): int32 {
 	const o = { timeout: 5 };
-	const f = spawn(() => 1, o);
+	const f = spawn(() => 1, o); // GUARD-REFUSED
 	return await f;
 }
 
 function moveNotArray(): int32 {
 	const c: Counter = { n: 0 };
-	const f = spawn(() => c.n, { move: c });
+	const f = spawn(() => c.n, { move: c }); // GUARD-REFUSED
 	return await f;
 }
 
 function moveUnknownName(): int32 {
-	const f = spawn(() => 1, { move: [ghost] });
+	const f = spawn(() => 1, { move: [ghost] }); // GUARD-REFUSED
 	return await f;
 }
 
 function movedFromOuter(): int32 {
 	const outerCounter: Counter = { n: 0 };
 	function inner(): int32 {
-		const f = spawn(() => outerCounter.n, { move: [outerCounter] });
+		const f = spawn(() => outerCounter.n, { move: [outerCounter] }); // GUARD-REFUSED
 		return await f;
 	}
 	return inner();
