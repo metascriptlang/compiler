@@ -32,6 +32,7 @@ import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
 import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn, instanceArgsOf, instanceParamsOf } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { generateRaiser, appendProgramToImage } from "./rgen";
+import { hasHostCallback } from "./expressions";
 import { getComptimeOuterCtx, setComptimeOuterCtx, ComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer, registerMacroEvaluator, registerMacroCompiler, registerEngineStdSymbol, enterEngineCompile, leaveEngineCompile, engineCompiling } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
 import { registerTypeQueryHostFns } from "../../compiler/meta/typeQuery";
@@ -422,6 +423,12 @@ export function engineRecheckCount(): int32 {
 	return _engineRecheckCount;
 }
 
+const _engineBodyNames: string[] = [];
+
+export function engineCompiledNames(): string[] {
+	return _engineBodyNames;
+}
+
 function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	if (_engine == null) return -1;
 	recordBodyRead(sym.modulePath);
@@ -430,7 +437,8 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const name = isClass ? sym.name + "_new" : sym.name;
 	const seenIdx = isClass ? _engine.funcMap.ctorIndices.get(sym) : _engine.funcMap.symbolIndices.get(sym);
 	if (seenIdx != null) return seenIdx;
-	if (sym.declNode == null) return -1;
+	if (sym.declNode == null || hasHostCallback(sym)) return -1;
+	_engineBodyNames.push(sym.name);
 	const homeOutsideBuild = lookupModuleCtx(sym.modulePath) == null;
 	const vmStd = isVmPreludeSym(sym) || (homeOutsideBuild && isVmStdHelper(sym));
 	const checkedByVmPrelude = isVmPreludeSym(sym) || isVmStdHelper(sym);

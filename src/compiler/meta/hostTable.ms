@@ -70,6 +70,7 @@ import { rawString } from "std/core/buffer/bytes";
 import { utf8Text } from "std/core/string/bytes";
 import { performance } from "std/core/performance";
 import { fromCodePoint } from "std/core/string";
+import { asciiLower, asciiUpper, isSpaceByte, repeat, reverse, equalsIgnoreCase } from "std/core/string/shared";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join, resolve } from "std/fs/path";
 import { registerCompileTimeRead } from "../cache";
@@ -1213,6 +1214,64 @@ function _bridgeMsMemMismatch(args: RaiserValue[]): RaiserValue {
 	return boxInt(spanMismatch(heap, args[0], 0, args[1], aLen < bLen ? aLen : bLen) as number);
 }
 
+// --- Whole-function callbacks, keyed by the routine's qualified name ---
+// The call site asks for the key before it compiles any body, so these std routines never
+// become VM code; each callback serves every overload of its name (see hostRoutineKey).
+
+function _callbackClampIndex(args: RaiserValue[]): RaiserValue {
+	const i = unboxInt(args[0]);
+	const len = unboxInt(args[1]);
+	return boxInt(i < 0 ? 0 : i > len ? len : i);
+}
+
+function _callbackRepeat(args: RaiserValue[]): RaiserValue {
+	return boxString(unboxString(args[0]).repeat(unboxInt(args[1]) as int32));
+}
+
+function _callbackReverse(args: RaiserValue[]): RaiserValue {
+	return boxString(unboxString(args[0]).reverse());
+}
+
+function _callbackEqualsIgnoreCase(args: RaiserValue[]): RaiserValue {
+	return boxBool(unboxString(args[0]).equalsIgnoreCase(unboxString(args[1])));
+}
+
+function _callbackAsciiLower(args: RaiserValue[]): RaiserValue {
+	return boxInt(asciiLower(unboxInt(args[0]) as int32));
+}
+
+function _callbackAsciiUpper(args: RaiserValue[]): RaiserValue {
+	return boxInt(asciiUpper(unboxInt(args[0]) as int32));
+}
+
+function _callbackIsSpaceByte(args: RaiserValue[]): RaiserValue {
+	return boxBool(isSpaceByte(unboxInt(args[0]) as int32));
+}
+
+function _callbackByteLastIndexOf(args: RaiserValue[]): RaiserValue {
+	const startIdx = args.length > 2 ? unboxInt(args[2]) as int32 : -1;
+	return boxInt(unboxString(args[0]).byteLastIndexOf(unboxString(args[1]), startIdx));
+}
+
+function registerStringCallbacks(): void {
+	registerHostFn("std/core/string/shared.clampIndex",   _callbackClampIndex, HostCapability.Pure);
+	registerHostFn("std/core/string/shared.trim",         _bridgeMsStringTrim, HostCapability.Pure);
+	registerHostFn("std/core/string/shared.trimStart",    _bridgeMsStringTrimStart, HostCapability.Pure);
+	registerHostFn("std/core/string/shared.trimEnd",      _bridgeMsStringTrimEnd, HostCapability.Pure);
+	registerHostFn("std/core/string/shared.toLowerCase",  bridgeMsStringToLower, HostCapability.Pure);
+	registerHostFn("std/core/string/shared.toUpperCase",  bridgeMsStringToUpper, HostCapability.Pure);
+	registerHostFn("std/core/string/shared.repeat",       _callbackRepeat, HostCapability.Pure);
+	registerHostFn("std/core/string/shared.reverse",      _callbackReverse, HostCapability.Pure);
+	registerHostFn("std/core/string/shared.equalsIgnoreCase", _callbackEqualsIgnoreCase, HostCapability.Pure);
+	registerHostFn("std/core/string/shared.asciiLower",   _callbackAsciiLower, HostCapability.Pure);
+	registerHostFn("std/core/string/shared.asciiUpper",   _callbackAsciiUpper, HostCapability.Pure);
+	registerHostFn("std/core/string/shared.isSpaceByte",  _callbackIsSpaceByte, HostCapability.Pure);
+	registerHostFn("std/core/string/bytes.byteLength",    _bridgeMsStringByteLength, HostCapability.Pure);
+	registerHostFn("std/core/string/bytes.byteAt",        _bridgeMsStringByteAt, HostCapability.Pure);
+	registerHostFn("std/core/string/bytes.byteSlice",     _bridgeMsStringByteSlice, HostCapability.Pure);
+	registerHostFn("std/core/string/bytes.byteLastIndexOf", _callbackByteLastIndexOf, HostCapability.Pure);
+}
+
 // --- Registry init ---
 // Idempotent: subsequent calls are no-ops. Phase 5 invokes this on first
 // @comptime block entry.
@@ -1476,6 +1535,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msEqualMem",            _bridgeMsEqualMem, HostCapability.Pure);
 	registerHostFn("msMemMismatch",         _bridgeMsMemMismatch, HostCapability.Pure);
 	registerHostFn("msAsBytes",             _bridgeMsAsBytes, HostCapability.Pure);
+	registerStringCallbacks();
 	registerHostFn("msAsString",            _bridgeMsAsString, HostCapability.Pure);
 	registerHostFn("msRawString",           _bridgeMsRawString, HostCapability.Pure);
 	// math (std/core/math externs + the float `%` / `**` lowerings)
