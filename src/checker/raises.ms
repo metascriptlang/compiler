@@ -130,13 +130,20 @@ function isDispatched(sym: Readonly<Symbol>): boolean {
 function destroyRoutine(tables: Readonly<RaiseTables>, sym: Readonly<Symbol>, args: Readonly<Node[]>): Readonly<Symbol | null> {
 	if (tables.bodies.has(sym) && !hasFlag(sym, SymbolFlag.ImportC)) return sym;
 	if (args.length == 0 || args[0].nodeType == null) return null;
-	const op = releasedTypeDestroy(tables.ops, tables.roots, args[0].nodeType!);
-	return op != null && tables.bodies.has(op) ? releasedTypeDestroy(tables.ops, tables.roots, args[0].nodeType!) : null;
+	return withBody(tables.bodies, releasedTypeDestroy(tables.ops, tables.roots, args[0].nodeType!));
+}
+
+function withBody(bodies: Readonly<HashSet<Symbol>>, op: Readonly<Symbol | null>): Readonly<Symbol | null> {
+	return op != null && bodies.has(op) ? op : null;
 }
 
 // A class value is a ref whose destroy is lifted for the object it points at.
 function releasedTypeDestroy(ops: Readonly<HashMap<string, Symbol>>, roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): Readonly<Symbol | null> {
-	if (getOpByKeyIn(ops, roots, t, AttachedOp.AttachedDestructor) != null || t.kind != TypeKind.Ref || t.typeReturn == null) return getOpByKeyIn(ops, roots, t, AttachedOp.AttachedDestructor);
+	return ownOrPointee(getOpByKeyIn(ops, roots, t, AttachedOp.AttachedDestructor), ops, roots, t);
+}
+
+function ownOrPointee(own: Readonly<Symbol | null>, ops: Readonly<HashMap<string, Symbol>>, roots: Readonly<ModuleNameRoots>, t: Readonly<Type>): Readonly<Symbol | null> {
+	if (own != null || t.kind != TypeKind.Ref || t.typeReturn == null) return own;
 	return getOpByKeyIn(ops, roots, t.typeReturn!, AttachedOp.AttachedDestructor);
 }
 
@@ -279,9 +286,22 @@ function noteSiteVerdict(node: Node, info: RoutineInfo): void {
 
 export function markEveryBodyMayRaise(programs: Node[]): void {
 	resetRaises();
-	for (const program of programs) {
-		if (program != null) markStatementValues(program);
-	}
+	resetWalk();
+	for (const program of programs) collectMarkSites(program);
+	markCollectedSites();
+	resetWalk();
+}
+
+function collectMarkSites(node: Node): void {
+	if (node == null) return;
+	noteStatementValue(node);
+	noteCall(node);
+	forEachChild(node, collectMarkSites);
+}
+
+function markCollectedSites(): void {
+	for (const call of _calls) markCall(call);
+	for (const value of _statementValues) markValue(value);
 }
 
 export function inferRaises(programs: Node[]): void {
@@ -318,14 +338,13 @@ export function inferRaises(programs: Node[]): void {
 	for (const info of _order) {
 		if (!info.raises) _tables.raisesNothing.add(info.sym);
 	}
-	for (const call of _calls) markCall(call);
-	for (const value of _statementValues) markValue(value);
+	markCollectedSites();
 	resetWalk();
 }
 
 function holdStep(expr: Node): void {
 	if (_holdFound || expr == null || isNestedRoutine(expr)) return;
-	if ((expr.kind == NodeKind.CallExpr && callCanRaise(expr)) || (expr.kind == NodeKind.NewExpr && newCanRaise(expr))) {
+	if ((expr.kind == NodeKind.CallExpr || expr.kind == NodeKind.NewExpr) && inferredCallRaises(expr)) {
 		_holdFound = true;
 		return;
 	}
@@ -345,8 +364,9 @@ function markCall(call: Node): void {
 }
 
 export function callCanRaise(call: Readonly<Node>): boolean {
-	const verdict = classifyCall(call);
-	if (verdict == CallRaise.AsBody) return !_tables.raisesNothing.has(calleeTarget(_tables, call)!);
+	const target = calleeTarget(_tables, call);
+	const verdict = classifyTarget(target, (call.data as CallExprData).arguments);
+	if (verdict == CallRaise.AsBody) return !_tables.raisesNothing.has(target!);
 	return verdict == CallRaise.Can;
 }
 
