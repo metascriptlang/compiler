@@ -417,16 +417,10 @@ void msCellSeqInit(msCellSeq* s) {
 	s->cap = 0;
 }
 
-static void msCellSeqGrow(msCellSeq* s) {
+void msCellSeqGrow(msCellSeq* s) {
 	int32_t newCap = s->cap <= 0 ? 16 : s->cap * 2;
 	s->data = (msCell*)msRealloc(s->data, (size_t)s->cap * sizeof(msCell), (size_t)newCap * sizeof(msCell));
 	s->cap = newCap;
-}
-
-void msCellSeqPush(msCellSeq* s, msCell cell) {
-	if (s->len >= s->cap) msCellSeqGrow(s);
-	s->data[s->len] = cell;
-	s->len++;
 }
 
 void msCellSeqClear(msCellSeq* s) {
@@ -551,20 +545,6 @@ static inline void incCount(msRefHeader* h) {
 
 static inline void setLastRefCount(msRefHeader* h) {
 	h->rc &= MS_RC_MASK;
-}
-
-/* ===== Trace Ref (reference ORC parity) ===== */
-/* Called by generated trace hooks. Receives ADDRESS of pointer slot, not the value.
- * This enables collectColor to null out slots (entry[] = nil) so destructors
- * don't follow dangling pointers to moribund objects. */
-
-void msOrcTraceRef(void* slotAddr, void* env) {
-	if (slotAddr == NULL || env == NULL) return;
-	void* child = *(void**)slotAddr;
-	if (child == NULL) return;
-	msGcEnv* j = (msGcEnv*)env;
-	msCell cell = { slotAddr, msHeader(child)->type };
-	msCellSeqPush(&j->traceStack, cell);
 }
 
 /* ===== Helper: call type's trace hook ===== */

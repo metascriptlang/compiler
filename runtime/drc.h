@@ -429,7 +429,14 @@ typedef struct {
 } msCellSeq;
 
 void msCellSeqInit(msCellSeq* s);
-void msCellSeqPush(msCellSeq* s, msCell cell);
+void msCellSeqGrow(msCellSeq* s);
+
+static inline void msCellSeqPush(msCellSeq* s, msCell cell) {
+	if (s->len >= s->cap) msCellSeqGrow(s);
+	s->data[s->len] = cell;
+	s->len++;
+}
+
 void msCellSeqClear(msCellSeq* s);
 void msCellSeqFree(msCellSeq* s);
 
@@ -499,7 +506,12 @@ typedef struct {
 	bool keepThreshold;
 } msGcEnv;
 
-void msOrcTraceRef(void* child, void* env);
+static inline void msOrcTraceRef(void* slotAddr, void* env) {
+	void* child = *(void**)slotAddr;
+	if (child == NULL) return;
+	msCell cell = { slotAddr, msHeader(child)->type };
+	msCellSeqPush(&((msGcEnv*)env)->traceStack, cell);
+}
 
 #ifdef MSGC_ORC_STATS
 MS_TLS_EXTERN(int32_t, msFreedCyclicObjects);
