@@ -128,6 +128,118 @@ void msLedgerDestroy(void* p, const msTypeInfo* type) {
 }
 #endif  /* MS_DRC_LEDGER */
 
+/* ===== DRC flow counters (perf-only, -DMS_DRC_STAT) ===== */
+#ifdef MS_DRC_STAT
+#include "runtime/drc.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+
+#define MS_DS_TYPE_SLOTS 1024
+#define MS_DS_TOP_TYPES 32
+
+typedef struct msDsBlock {
+	uint64_t c[MS_DS_COUNT];
+	uint64_t cycOther;
+	const msTypeInfo* cycType[MS_DS_TYPE_SLOTS];
+	uint64_t cycCount[MS_DS_TYPE_SLOTS];
+	struct msDsBlock* next;
+} msDsBlock;
+
+static msDsBlock* gDsBlocks = NULL;
+static pthread_mutex_t gDsMutex = PTHREAD_MUTEX_INITIALIZER;
+static _Thread_local msDsBlock* tDsBlock = NULL;
+
+static msDsBlock* msDsLocal(void) {
+	if (tDsBlock != NULL) return tDsBlock;
+	msDsBlock* b = (msDsBlock*)calloc(1, sizeof(msDsBlock));
+	if (b == NULL) abort();
+	pthread_mutex_lock(&gDsMutex);
+	b->next = gDsBlocks;
+	gDsBlocks = b;
+	pthread_mutex_unlock(&gDsMutex);
+	tDsBlock = b;
+	return b;
+}
+
+void msDrcStatAdd(int id, uint64_t n) { msDsLocal()->c[id] += n; }
+
+void msDrcStatCycle(const msTypeInfo* type) {
+	msDsBlock* b = msDsLocal();
+	b->c[MS_DS_CYC_REG]++;
+	size_t i = ((uintptr_t)type >> 4) & (MS_DS_TYPE_SLOTS - 1);
+	for (size_t n = 0; n < MS_DS_TYPE_SLOTS; n++) {
+		if (b->cycType[i] == type || b->cycType[i] == NULL) {
+			b->cycType[i] = type;
+			b->cycCount[i]++;
+			return;
+		}
+		i = (i + 1) & (MS_DS_TYPE_SLOTS - 1);
+	}
+	b->cycOther++;
+}
+
+typedef struct { const char* name; uint64_t count; } msDsTypeRow;
+
+static int msDsRowCmp(const void* a, const void* b) {
+	const msDsTypeRow* x = (const msDsTypeRow*)a;
+	const msDsTypeRow* y = (const msDsTypeRow*)b;
+	if (x->count != y->count) return x->count < y->count ? 1 : -1;
+	return strcmp(x->name, y->name);
+}
+
+static const char* msDsFlowNames[MS_DS_COUNT] = {
+	"alloc", "alloc", "free", "rc.inc", "rc.dec", "rc.incAtomic", "rc.decAtomic", "rc.incCyclic",
+	"orc.decLast", "orc.decLast.true", "cycle.register", "collect", "collect.traced", "collect.freed"
+};
+
+/* Runs from atexit, registered before the pool's, so it runs after the pool joined its workers. */
+static void msDsDump(void) {
+	const char* path = getenv("MS_DRC_STAT");
+	if (path == NULL || path[0] == '\0') return;
+	FILE* f = fopen(path, "a");
+	if (f == NULL) return;
+	pthread_mutex_lock(&gDsMutex);
+	uint64_t total[MS_DS_COUNT] = {0};
+	uint64_t other = 0;
+	size_t cap = 0;
+	for (msDsBlock* b = gDsBlocks; b != NULL; b = b->next) {
+		for (int i = 0; i < MS_DS_COUNT; i++) total[i] += b->c[i];
+		other += b->cycOther;
+		for (int i = 0; i < MS_DS_TYPE_SLOTS; i++) if (b->cycType[i] != NULL) cap++;
+	}
+	msDsTypeRow* rows = (msDsTypeRow*)calloc(cap + 1, sizeof(msDsTypeRow));
+	size_t nrows = 0;
+	for (msDsBlock* b = gDsBlocks; b != NULL; b = b->next) {
+		for (int i = 0; i < MS_DS_TYPE_SLOTS; i++) {
+			if (b->cycType[i] == NULL) continue;
+			const char* name = b->cycType[i]->name != NULL ? b->cycType[i]->name : "<unnamed>";
+			size_t k = 0;
+			while (k < nrows && strcmp(rows[k].name, name) != 0) k++;
+			if (k == nrows) { rows[k].name = name; nrows++; }
+			rows[k].count += b->cycCount[i];
+		}
+	}
+	qsort(rows, nrows, sizeof(msDsTypeRow), msDsRowCmp);
+	static const char* metric[MS_DS_COUNT] = {"count", "bytes"};
+	for (int i = 0; i < MS_DS_COUNT; i++) {
+		fprintf(f, "drc\t%s\t%s\t%llu\n", msDsFlowNames[i],
+			i == MS_DS_ALLOC_BYTES ? metric[1] : metric[0], (unsigned long long)total[i]);
+	}
+	fprintf(f, "drc\trc.decCyclic\tcount\t%llu\n", (unsigned long long)total[MS_DS_ORC_DEC_LAST]);
+	for (size_t k = 0; k < nrows; k++) {
+		if (k < MS_DS_TOP_TYPES) fprintf(f, "drc\tcycle.register.%s\tcount\t%llu\n", rows[k].name, (unsigned long long)rows[k].count);
+		else other += rows[k].count;
+	}
+	fprintf(f, "drc\tcycle.register.other\tcount\t%llu\n", (unsigned long long)other);
+	free(rows);
+	pthread_mutex_unlock(&gDsMutex);
+	fclose(f);
+}
+__attribute__((constructor)) static void msDsRegisterDump(void) { atexit(msDsDump); }
+#endif  /* MS_DRC_STAT */
+
 #ifndef MSGC_MANUAL
 #include "runtime/drc.h"
 
@@ -365,6 +477,7 @@ void msRegisterCycle(void* p, const msTypeInfo* type) {
 	/* Already registered? */
 	if (h->rootIdx >= 0) return;
 	h->rootIdx = msRoots.len;
+	MS_DRC_STAT_CYCLE(type);
 	msCell cell = { p, type };
 	msCellSeqPush(&msRoots, cell);
 
@@ -570,6 +683,8 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 		collectColor(j, msRoots.data[i].ptr, msRoots.data[i].type, colToCollect);
 	}
 
+	MS_DRC_STAT(MS_DS_COLLECT, 1); MS_DRC_STAT(MS_DS_COLLECT_TRACED, j->touched);
+
 	/* Protect against re-entrancy: destructors may trigger registerCycle */
 	int32_t oldThreshold = msRootsThreshold;
 	msRootsThreshold = INT32_MAX;
@@ -586,6 +701,7 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 
 	msRootsThreshold = oldThreshold;
 	j->freed += j->toFree.len;
+	MS_DRC_STAT(MS_DS_COLLECT_FREED, j->toFree.len);
 	msCellSeqFree(&j->toFree);
 }
 
