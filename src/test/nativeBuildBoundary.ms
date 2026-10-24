@@ -27,8 +27,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, or all");
 	exit(2);
 }
 
@@ -1078,6 +1078,35 @@ function runIosProcess(): void {
 	record("the same program on macOS through the fork shim iOS uses for a cwd", IOS_PROCESS_EXPECTED, command(dir, "ios-process-fork-run", `${dir}/fork`, [dir]).stdout.trim());
 }
 
+function flowRow(rows: string, flow: string, metric: string): number {
+	for (const line of rows.split("\n")) {
+		const cols = line.split("\t");
+		if (cols.length == 4 && cols[0] == "msc" && cols[1] == flow && cols[2] == metric) return parseFloat(cols[3]);
+	}
+	return -1;
+}
+
+function runFlows(): void {
+	const dir = `${root}/flows`;
+	ensureDir(dir);
+	put(`${dir}/main.ms`, "console.log(1 + 2);\n");
+	const rowsFile = `${dir}/flows.tsv`;
+	env.set("MSC_FLOWS", rowsFile);
+	const built = command(dir, "flows-build", compiler, ["build", "main.ms", "--emit=c", "--output=out"]);
+	env.delete("MSC_FLOWS");
+	need(built.code == 0, "flows build");
+	const read = readFile(rowsFile);
+	const rows = read.ok ? read.value : "";
+	let passMs: number = 0;
+	for (const line of rows.split("\n")) {
+		const cols = line.split("\t");
+		if (cols.length == 4 && cols[1].startsWith("pass.") && cols[2] == "ms") passMs = passMs + parseFloat(cols[3]);
+	}
+	recordTrue("MSC_FLOWS writes the total, setup, phase A and emit rows of a build", flowRow(rows, "total", "ms") > 0 && flowRow(rows, "phase.setup", "ms") > 0 && flowRow(rows, "phase.A", "ms") > 0 && flowRow(rows, "emit.module", "ms") > 0);
+	recordTrue("the pass rows of a build fit inside its phase A", passMs > 0 && passMs <= flowRow(rows, "phase.A", "ms"));
+	record("a build lowers each module once under a2.xform", "true", `${flowRow(rows, "a2.xform", "count") > 0}`);
+}
+
 if (group == "argv" || group == "all") runArgv();
 if (group == "compile-cache" || group == "all") runCompileCache();
 if (group == "link-cache" || group == "all") runLinkCache();
@@ -1097,6 +1126,7 @@ if (group == "emcc-jspi" || group == "all") runEmccJspi();
 if (group == "module-names" || group == "all") runModuleNames();
 if (group == "wasi-platform" || group == "all") runWasiPlatform();
 if (group == "ios-process" || group == "all") runIosProcess();
+if (group == "flows" || group == "all") runFlows();
 
 let failures = 0;
 console.log(`root ${root}`);
