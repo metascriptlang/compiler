@@ -52,3 +52,43 @@ console.log(show(1));`;
 	const c = compileToC(src);
 	assert c.ok, c.ok ? "" : c.error;
 }
+
+const UP_CHAIN = (okBody: string) => `class Item { v: int32 = 0; next: Item | null = null; }
+function outer(items: Item[]): int32 {
+	const run = (): int32 => {
+		const best = items[0];
+		const ok = (x: Item): boolean => ${okBody};
+		let n: int32 = 0;
+		for (const x of items) if (ok(x)) n += 1;
+		return n;
+	};
+	return run();
+}
+const items: Item[] = [new Item(), new Item()];
+console.log(outer(items));`;
+
+function envStruct(c: string, owner: string): string {
+	for (const line of c.split("\n")) {
+		if (line.startsWith(`struct dollarEnv_${owner}`) && line.endsWith(" {")) {
+			const open = c.indexOf(line, 0);
+			return c.slice(open, c.indexOf("};", open));
+		}
+	}
+	return `<no env ${owner}>`;
+}
+
+test "E2E C: a closure env whose nested closure reads only its own frame has no $up" {
+	const c = compileToC(UP_CHAIN("x.v >= best.v"));
+	assert c.ok, c.ok ? "" : c.error;
+	const env = envStruct(c.ok ? c.value : "", "outer_arrow");
+	assert env.contains("best"), env;
+	assert !env.contains("dollarup_"), env;
+}
+
+test "E2E C: a closure env whose nested closure reads an ancestor binding keeps its $up" {
+	const c = compileToC(UP_CHAIN("x.v >= best.v && items.length > 1"));
+	assert c.ok, c.ok ? "" : c.error;
+	const env = envStruct(c.ok ? c.value : "", "outer_arrow");
+	assert env.contains("best"), env;
+	assert env.contains("dollarup_"), env;
+}
