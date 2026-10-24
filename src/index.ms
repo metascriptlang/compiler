@@ -12,6 +12,7 @@ import { error, bold, green, cyan } from "./utils/color";
 import { findProjectRoot } from "./utils/path";
 import "./ast/childTableGuard";
 import "./ast/childSlotGuard";
+import "./compiler/lsp/handlers/positionsTest";
 import { join } from "std/fs/path";
 import { exists } from "std/fs";
 // Import the package manager hub for test discovery. Individual commands
