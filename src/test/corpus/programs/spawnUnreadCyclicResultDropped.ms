@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: msSpawn
 // @serial
 // @stdout: witness 0
 // @stdout: spawned 1

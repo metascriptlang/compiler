@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runs no user lifecycle hooks (stdout misses its @stdout line)
 // @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
 // @stdout: map has=200/200 copies=0 · set has=200/200 copies=0
 // @stdout: grow map=0 set=0 hashMap=0 hashSet=0 sizes=200,200,200,200

@@ -1,5 +1,3 @@
-// @xfail(c): a nested spawn's completion resumes its awaiter on the loop thread, concurrently with the task, so the count loses updates (PARALOCK-runtime Amendment R)
-// @xfail(danger): a nested spawn's completion resumes its awaiter on the loop thread, concurrently with the task, so the count loses updates (PARALOCK-runtime Amendment R)
 // @serial
 
 class Box { n: int64 = 0; }

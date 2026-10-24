@@ -1,4 +1,3 @@
-// @xfail(raiser): the Raiser VM frees a 1 000 000-link list recursively and overflows its own native stack, on the base compiler as well
 // @stdout: chain 1000000 sum 499999500000
 // @stdout: tree depth 300000 nodes 600001
 // @stdout: pairs 500000 links 999999

@@ -1,5 +1,4 @@
 // @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms); the program pins the native sync-context await
-// @xfail(raiser): raiser runtime error: Unknown host function: msSpawn
 // @serial
 // @stdout: two caught 50|three caught 50|async caught 50
 // note: `await Promise.all` of spawns rejects with the first failure, as in TS, and the group destroys every later child's error instead of dropping it; nothing is reported, since Promise.all handled each rejection. Two failing children, three, and the async join; the SAN lane checks the Error ledger balances (old compiler: Error destroy is about half of alloc).
