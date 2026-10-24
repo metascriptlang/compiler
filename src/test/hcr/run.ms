@@ -609,6 +609,18 @@ function replayMatchesCold(tag: string, dir: string, fixture: string, restored: 
 	}
 }
 
+function watchGenericLayout(): void {
+	const tag = "hcrWatchGenericLayout";
+	const dir = freshDir(`${TMP}/watchGenericLayout`);
+	for (const f of readDir(`${FIXTURES}/genericLayoutEdit`)) copy(`${FIXTURES}/genericLayoutEdit/${f}`, `${dir}/${f}`);
+	const steps: WatchStep[] = [
+		{ file: "box2.txt", target: "box.ms", warm: false, fails: false },
+		{ file: "box3.txt", target: "box.ms", warm: true, fails: false },
+	];
+	replayMatchesCold(tag, dir, `${FIXTURES}/genericLayoutEdit`, ["box.ms"], steps);
+	console.log(`ok   ${tag}`);
+}
+
 function arrayOwner(): void {
 	const tag = "hcrArrayOwner";
 	const ext = sharedLibraryExt();
@@ -1829,6 +1841,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrModuleLocalNames", run: localNames },
 	{ name: "hcrWatchWarm", run: watchWarm },
 	{ name: "hcrWatchGeneric", run: watchGeneric },
+	{ name: "hcrWatchGenericLayout", run: watchGenericLayout },
 	{ name: "hcrWatchAsync", run: watchAsync },
 	{ name: "hcrNewInstance", run: newInstance },
 	{ name: "hcrPrivateHelper", run: privateHelper },
