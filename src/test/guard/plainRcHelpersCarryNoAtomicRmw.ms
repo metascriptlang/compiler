@@ -58,7 +58,7 @@ function atomicIn(text: string): string {
 	return "";
 }
 function listingOf(cell: string, label: string, flag: string, source: string, name: string): string {
-	const args = ["-O2", "-std=c11", "-S", `-I${runtimeRoot}`, `-I${runtimeRoot}/runtime`, source, "-o", `${cell}/${name}.s`];
+	const args = ["-O2", "-std=c11", "-S", "-D_GNU_SOURCE", `-I${runtimeRoot}`, `-I${runtimeRoot}/runtime`, source, "-o", `${cell}/${name}.s`];
 	if (flag != "") for (const f of flag.split(" ")) args.push(f);
 	const built = execFileResult("clang", args, cell);
 	if (built.exitCode != 0) {
