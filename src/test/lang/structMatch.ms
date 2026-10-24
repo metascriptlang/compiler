@@ -51,7 +51,7 @@ function describe(s: Shape): int32 {
 
 test "a boolean struct match is copied on assignment" {
 	const a = mkPair();
-	const b = a;
+	let b = a;
 	if (b.ok) b.value = "z";
 	if (a.ok) assert a.value == "lib";
 	if (b.ok) assert b.value == "z";
@@ -59,7 +59,7 @@ test "a boolean struct match is copied on assignment" {
 
 test "an enum struct match is copied on assignment" {
 	const a = mkShape();
-	const b = a;
+	let b = a;
 	if (b.kind == Kind.Lib) b.name = "z";
 	if (a.kind == Kind.Lib) assert a.name == "lib";
 	if (b.kind == Kind.Lib) assert b.name == "z";
@@ -67,7 +67,7 @@ test "an enum struct match is copied on assignment" {
 
 test "a generic struct match is copied on assignment" {
 	const a = mkEither();
-	const b = a;
+	let b = a;
 	if (b.ok) b.value = "z";
 	if (a.ok) assert a.value == "lib";
 	if (b.ok) assert b.value == "z";
@@ -90,7 +90,7 @@ test "a struct match written over another may change its arm" {
 
 test "a struct match held by a struct is copied with it" {
 	const h: Holder = { pair: mkPair(), n: 1 };
-	const g = h;
+	let g = h;
 	if (g.pair.ok) g.pair.value = "z";
 	if (h.pair.ok) assert h.pair.value == "lib";
 }
