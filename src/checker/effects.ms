@@ -89,6 +89,7 @@ interface DeferredCheck {
 let deferred: DeferredCheck[] = [];
 let hookRegistry: ExtensionRegistry | null = null;
 const TASK_DROP_HOOKS: string[] = ["onDestroy", "onCopy", "onClone"];
+const BUILTINS_WRITING_NOTHING: string[] = ["PtrBits", "Float64Bits", "HiXorLo", "MapFatal"];
 
 function tableFor(e: Effect): EffectTable {
 	return match (e) {
@@ -641,7 +642,7 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 		}
 		return e == Effect.StoresBorrowed ? null : cause(call, "calls a function value");
 	}
-	if (hasFlag(sym!, SymbolFlag.GeneratedOp)) return null;
+	if (hasFlag(sym!, SymbolFlag.GeneratedOp) || isStdBuiltinWritingNothing(sym!)) return null;
 	if (e == Effect.WritesCell && (hasFlag(sym!, SymbolFlag.ImportC) || routineBody(unpackDecl(sym!.declNode)) == null)) {
 		return { site: call, text: cause(call, "calls the external '" + sym!.name + "'").text + ", which may write state the checker cannot see" };
 	}
@@ -659,6 +660,11 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 	if (own != null) return own;
 	const dispatched = dispatchedEffect(call, sym!, e);
 	return dispatched != null ? dispatched : ownedValueHookEffect(call, e);
+}
+
+function isStdBuiltinWritingNothing(sym: Symbol): boolean {
+	const home = "std/core/struct.";
+	return BUILTINS_WRITING_NOTHING.includes(sym.builtinKind) && (sym.modulePath.startsWith(home) || sym.modulePath.indexOf("/" + home) >= 0);
 }
 
 function constReadEffect(call: Node): EffectCause | null {
