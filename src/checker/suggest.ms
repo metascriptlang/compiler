@@ -3885,3 +3885,36 @@ test "call lookup finds a callee after many visited nodes" {
 	const call = sgFindCallExprByCalleeLocation(pr.value, 301, 1);
 	assert call != null;
 }
+
+function hintRows(src: string): string {
+	const pr = parseSource(src);
+	if (!pr.ok) return "unparsed";
+	const ctx = checkProgram(pr.value);
+	const rows: string[] = [];
+	for (const h of sgCollectInlayHints(ctx, pr.value, 1, 20)) rows.push(`${h.line}:${h.col} ${h.label}`);
+	return rows.join(", ");
+}
+
+function symbolDetails(src: string): string {
+	const pr = parseSource(src);
+	if (!pr.ok) return "unparsed";
+	const ctx = checkProgram(pr.value);
+	const rows: string[] = [];
+	for (const s of sgCollectSymbolsInFile(ctx, pr.value)) rows.push(`${s.name}=${s.detail}`);
+	return rows.join(", ");
+}
+
+test "a nested function's return hint and its calls' parameter hints come from its own symbol" {
+	const rows = hintRows("function outer(): int32 {\n\tfunction inner(n: int32) { return n + 1; }\n\tconst r = inner(2);\n\treturn r;\n}\n");
+	assert rows == "2:16 : (n: int32) => int32, 3:9 : int32, 3:18 n:", rows;
+}
+
+test "a call to an overload takes the parameter hints of the overload it resolved to" {
+	const rows = hintRows("function f(a: int32): int32 { return a; }\nfunction f(s: string): string { return s; }\nconst x = f(\"t\");\n");
+	assert rows == "3:8 : string, 3:13 s:", rows;
+}
+
+test "each overload and each destructured name details the symbol declared at its name" {
+	const details = symbolDetails("function f(a: int32): int32 { return a; }\nfunction f(s: string): string { return s; }\nconst [p, q] = [1, 2];\ntype Id = int32;\n");
+	assert details == "f=(a: int32) => int32, f=(s: string) => string, p=int32, q=int32, Id=int32", details;
+}
