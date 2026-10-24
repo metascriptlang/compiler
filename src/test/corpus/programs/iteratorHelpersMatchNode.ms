@@ -1,4 +1,4 @@
-// @xfail(raiser): closeSource tests the nullable `return` field and the Raiser has no host bridge for that function-or-null comparison (Unknown host function: Maybe_fn_fnIteratorResultint3226)
+// @xfail(raiser): a call through the narrowed `return` field inside a generic is an unknown host function (inbox 2026-10-25-raiser-calls-a-narrowed-nullable-function-field-in-a-generic-as-a-host-function)
 // Iterator helpers trace the same events as the native ES2025 helpers: which stage runs per
 // element, when the source is closed, what an eager argument check does.
 // @stdout: ok
