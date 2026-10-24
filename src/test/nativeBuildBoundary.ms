@@ -678,12 +678,13 @@ function runSpawnDrain(): void {
 	put(`${dir}/main.ms`, "class A { name() { return \"A\"; } }\nclass B extends A { name() { return \"B\"; } }\nasync function main() {\n\tconsole.log(\"pre\");\n\tconst f = spawn(() => { return true ? new B() : new A(); });\n\tconst g: A = await f;\n\tconst x = spawn(() => 1);\n\tconst y = spawn(() => 2);\n\tconst s = (await x) + (await y);\n\tconst k = spawn(() => new B());\n\tconst h: A = await k;\n\tconsole.log(`post ${g.name()} ${s} ${h.name()}`);\n}\nmain();\n");
 	need(build(dir, "spawn-drain", "probe.exe", ["--gc=drc"]) == 0, "spawn-drain build");
 	let complete = 0;
-	let last = "";
+	let firstBad = "none";
 	for (let i = 0; i < 10; i++) {
-		last = pinnedRun(dir, "probe.exe");
-		if (last.startsWith("exit=0") && last.contains("post B 3 B")) complete = complete + 1;
+		const run = pinnedRun(dir, "probe.exe");
+		if (run.startsWith("exit=0") && run.contains("post B 3 B")) complete = complete + 1;
+		else if (firstBad == "none") firstBad = `run ${i}: ${run}`;
 	}
-	record(`pinned to one CPU, the exit drain waits for every spawned task (last: ${last})`, "10", `${complete}`);
+	record(`pinned to one CPU, the exit drain waits for every spawned task (first bad: ${firstBad})`, "10", `${complete}`);
 }
 
 function runDirectivePaths(): void {
