@@ -112,17 +112,12 @@ static inline msClosure msActorStampIf(msClosure cb, void (*drop)(void*), void* 
 	if (__builtin_expect(msActorCurrentForJobs() != NULL, 0)) return msActorStamp(cb, drop, chain);
 	return cb;
 }
-
-static inline void msActorJobForget(msClosure cb) {
-	if (msActorMaybeCurrent() && cb.fn == (msClosureFn)msActorJobFire) msActorJobAbandon(cb.env);
-}
 #else
 #define MS_ACTOR_JOBS 0
 static inline msClosure msActorStampIf(msClosure cb, void (*drop)(void*), void* chain) {
 	(void)drop; (void)chain;
 	return cb;
 }
-static inline void msActorJobForget(msClosure cb) { (void)cb; }
 #endif
 
 /* ===== Callback list (Standard reference CallbackList pattern — singly-linked) ===== */
@@ -132,6 +127,20 @@ typedef struct msFutureCb {
 	void* env;
 	struct msFutureCb* next;
 } msFutureCb;
+
+#if MS_ACTOR_JOBS
+MS_ACTOR_JOB_PATH static inline void msActorJobsForgetList(msFutureCb* cb) {
+	for (; cb != NULL; cb = cb->next) {
+		if (cb->fn == (void (*)(void*))msActorJobFire) msActorJobAbandon(cb->env);
+	}
+}
+
+static inline void msActorJobsForget(msFutureCb* cb) {
+	if (msActorMaybeCurrent() && cb != NULL) msActorJobsForgetList(cb);
+}
+#else
+static inline void msActorJobsForget(msFutureCb* cb) { (void)cb; }
+#endif
 
 /* The futures a combinator's or an async function's result waits on, so a blocked
  * waiter can run the queued tasks behind them. Owned by the result future. */
@@ -287,9 +296,9 @@ static inline void msFutureDestroyInner(void* fp) {
 	if (f->valueDrop != NULL) f->valueDrop(fp);
 	msFutureDropError(f);
 	msFutureCb* cb = f->callbacks;
+	msActorJobsForget(cb);
 	while (cb) {
 		msFutureCb* next = cb->next;
-		msActorJobForget((msClosure){ .fn = (msClosureFn)cb->fn, .env = cb->env });
 		free(cb);
 		cb = next;
 	}
@@ -370,9 +379,9 @@ static inline void msFutureCancel(void* fp) {
 	f->callbacks = NULL;
 	f->cbTail = NULL;
 	msFutCbUnlock();
+	msActorJobsForget(cb);
 	while (cb) {
 		msFutureCb* next = cb->next;
-		msActorJobForget((msClosure){ .fn = (msClosureFn)cb->fn, .env = cb->env });
 		free(cb);
 		cb = next;
 	}

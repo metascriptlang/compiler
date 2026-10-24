@@ -1278,9 +1278,8 @@ void msAsyncCb(void* raw) {
 	msPoolFrameSwap(frame);
 }
 
-static void msAsyncStep(msAsyncCbEnv* e) {
+static inline __attribute__((always_inline)) void msAsyncStepAs(msAsyncCbEnv* e, msActor* actor) {
 	msFutureEdgeAwait(e->retFut, NULL);
-	msActor* actor = msActorCurrentForJobs();
 	msAsyncCbEnv* outerChain = NULL;
 	if (__builtin_expect(actor != NULL, 0)) {
 		outerChain = gAsyncChain;
@@ -1338,6 +1337,15 @@ static void msAsyncStep(msAsyncCbEnv* e) {
 	if (__builtin_expect(actor != NULL, 0)) resume = msActorStamp(resume, msAsyncCbEnvDrop, e);
 	msFutureAddCallback(next, resume);
 	msFutureDrcDestroy(next);
+}
+
+__attribute__((noinline)) static void msAsyncStepActor(msAsyncCbEnv* e) {
+	msAsyncStepAs(e, msActorCurrentNoHoist());
+}
+
+static void msAsyncStep(msAsyncCbEnv* e) {
+	if (msActorMaybeCurrent()) msAsyncStepActor(e);
+	else msAsyncStepAs(e, NULL);
 }
 
 void msEnsureOwnerDispatcher(void) {
