@@ -441,7 +441,7 @@ typedef struct {
 } msCellSeq;
 
 void msCellSeqInit(msCellSeq* s);
-void msCellSeqGrow(msCellSeq* s);
+__attribute__((noinline)) void msCellSeqGrow(msCellSeq* s);
 
 static inline void msCellSeqPush(msCellSeq* s, msCell cell) {
 	if (s->len >= s->cap) msCellSeqGrow(s);
