@@ -945,7 +945,7 @@ test "header cache wrapper: an entry carries the complete structs of its header"
 	);
 	const out1 = headerModuleSource("/tmp/mshcw/s.h", createFileSystemProvider(), null, []);
 	const t = headerTarget();
-	const key = completeStructKey(`${t.os}-${t.cpu}`, "HcwS", ["size", "v"], ["int64", "int32"]);
+	const key = completeStructKey(`${t.os}-${t.cpu}`, "HcwS", ["size", "v"], [t.longSize == 4 ? "int32" : "int64", "int32"]);
 	assert storedOut.startsWith("1\n" + key + "\n"), storedOut;
 	assert headerModuleSource("/tmp/mshcw/s.h", createFileSystemProvider(), null, []) == out1;
 	unregisterHeaderCacheForTest();

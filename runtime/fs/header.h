@@ -38,6 +38,11 @@ msString msFsReadFile(msString path);
  * Returns MS_EMPTY_STRING on error (check msFsLastErrno). */
 msString msFsReadDirEntries(msString path);
 
+#ifdef _WIN32
+/* Win32 error code as the errno POSIX reports for the same failure. */
+int32_t msFsErrnoFromWin32(uint32_t code);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

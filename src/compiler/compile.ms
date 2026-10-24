@@ -3,7 +3,9 @@
 import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd, env } from "std/process";
 import { watch, nextChanges, msIoRunOnce, writeSettled, writerCloseObservable, FsWatch, FsChanges } from "std/fs/watch";
 import { exists, readFile, writeFile, remove } from "std/fs";
-import { writeStderr } from "std/io";
+import { writeStderr, writeStdout, readLine, stdinHasData, stdinDisableBuffering } from "std/io";
+import { spawn as spawnChild, ChildProcess, ChildStream, ExitStatus } from "std/process/child";
+import { ProcessErrorKind } from "std/process/errors";
 import { isAlphanumeric, isDigit } from "../lexer/chars";
 import { BinaryExprData, ClassDeclData, DecoratedDeclData, EnumDeclData, ExportDeclData, IdentifierData, ImportDeclData, InterfaceDeclData, MacroInvocationData, FunctionDeclData, UpdateExprData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
@@ -51,6 +53,7 @@ import { hcrTypeCounts } from "./hcrCount";
 import { lookupModuleCtx, lookupModuleProgram, drainPendingInstances, distinctInstances, placeInstance, retainCheckedInstances } from "../checker/instantiate";
 import { setOuterProgramForComptime, setOuterCheckContext } from "./meta/callbacks";
 import { markTypeOnlyImports } from "../checker/importElision";
+import { markVmOnlyRoutines } from "../checker/vmOnly";
 import { createTransformContextWithChecker } from "../transform/context";
 import { resetLiftedOps, setJsProgramScope } from "../transform/lowering/destructorLifting";
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity, planDynamicModules } from "../module/graph";
@@ -460,6 +463,7 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 	// windows build's linkFlags().
 	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, opts.targetOs, targetInfo, gcMode, config, session, opts.strictNullChecks, opts.appMode);
 	graphPreludeCtx = getPreludeContext();
+	if (opts.isHcr) markVmOnlyRoutines(graph, config.stdPath);
 	reportModuleErrors(graph, "type error");
 	// Standard reference parity (main.nim: `if conf.errorCounter > 0: return` before
 	// cgenWriteModules): the gate lives in the shared funnel, so no command can reach
@@ -710,7 +714,9 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	}
 	const hcrSlot = job.hcrSlot;
 	const _tx0 = performance.now();
-	const transformed = transformProgram(comptimeResolved, ctx, false, hcrSlot >= 0, job.asyncModuleBody);
+	const reloadable: string[] = [];
+	if (hcrSlot >= 0) for (const module of job.hcrModules) reloadable.push(module.modulePath);
+	const transformed = transformProgram(comptimeResolved, ctx, false, reloadable, job.asyncModuleBody);
 	job.timers.xform = job.timers.xform + (performance.now() - _tx0);
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
 	const nativeCtx = createTransformContextWithChecker(ctx);
@@ -2137,6 +2143,8 @@ function hcrPathChanged(paths: string[], path: string): boolean {
 	return false;
 }
 
+let hcrRestartReason = "";
+
 function publishHcrBuildAbi(state: HcrBuildAbi, changedPaths: string[]): void {
 	const decisions: HcrReloadDecision[] = [];
 	if (state.hadCurrent) {
@@ -2175,7 +2183,10 @@ function publishHcrBuildAbi(state: HcrBuildAbi, changedPaths: string[]): void {
 		printDiag(`${error("error")}: cannot publish HCR ABI bundle '${state.bundlePath}'`);
 		throw new Error(BUILD_STOPPED);
 	}
-	for (const decision of decisions) console.log(hcrReloadDiagnostic(decision));
+	for (const decision of decisions) {
+		console.log(hcrReloadDiagnostic(decision));
+		if (decision.kind == HcrReloadKind.RestartRequired) hcrRestartReason = hcrReloadDiagnostic(decision);
+	}
 	printDiag(`${green("  Wrote")} ${bold(state.bundlePath)}`);
 }
 
@@ -2434,9 +2445,72 @@ export function cmdWatchC(entryPath: string, opts: CliOptions, resolveSection: R
 	}
 }
 
-struct HostExit {
-	code: int32;
+struct HostCtl {
+	stop: boolean;
 	done: boolean;
+	code: int32;
+}
+
+function sayFlushed(line: string): void {
+	writeStdout(`${line}\n`);
+}
+
+const HOST_DRAIN_MS = 50;
+
+function hostStatusCode(status: ExitStatus): int32 {
+	return status.signal != 0 ? 128 + status.signal : status.code;
+}
+
+function finishHost(ctl: Locked<HostCtl>, code: int32): int32 {
+	lockedUpdate(ctl, (v: HostCtl): HostCtl => { return { stop: v.stop, done: true, code: code }; });
+	return code;
+}
+
+// 0 data relayed, 1 stream ended, 2 nothing within the deadline.
+function relayHostStream(child: ChildProcess, stream: ChildStream, timeoutMs: int32): int32 {
+	const got = child.read(stream, timeoutMs);
+	if (!got.ok) {
+		if (got.error.kind == ProcessErrorKind.Timeout) return 2;
+		sayFlushed(`watch: cannot read the program's output: ${got.error.message}`);
+		return 1;
+	}
+	if (got.value.ended) return 1;
+	if (stream == ChildStream.Stdout) writeStdout(got.value.data);
+	else writeStderr(got.value.data);
+	return 0;
+}
+
+function runHost(host: string, dir: string, stem: string, ctl: Locked<HostCtl>): int32 {
+	const started = spawnChild(host, [dir, stem]);
+	if (!started.ok) {
+		printDiag(`${error("error")}: cannot start the HCR host ${host}: ${started.error.message}`);
+		return finishHost(ctl, 1);
+	}
+	const child = started.value;
+	let code: int32 = 1;
+	while (true) {
+		if (lockedRead(ctl, (v: HostCtl): boolean => v.stop)) {
+			const killed = child.kill();
+			if (killed.ok) code = hostStatusCode(killed.value);
+			break;
+		}
+		const waited = child.wait(20);
+		relayHostStream(child, ChildStream.Stdout, 0);
+		relayHostStream(child, ChildStream.Stderr, 0);
+		if (waited.ok) {
+			code = hostStatusCode(waited.value);
+			while (relayHostStream(child, ChildStream.Stdout, HOST_DRAIN_MS) == 0) {}
+			while (relayHostStream(child, ChildStream.Stderr, HOST_DRAIN_MS) == 0) {}
+			break;
+		}
+		if (waited.error.kind != ProcessErrorKind.Timeout) {
+			printDiag(`${error("error")}: waiting for the HCR host failed: ${waited.error.message}`);
+			child.kill();
+			break;
+		}
+	}
+	child.close();
+	return finishHost(ctl, code);
 }
 
 function buildHcrHost(dir: string): string {
@@ -2470,14 +2544,49 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 	while (!watchBuild(run)) {
 		if (!watchNext(run, (): boolean => false)) exit(1);
 	}
-	const exited: Locked<HostExit> = new Locked({ code: 0, done: false });
-	const running = spawn((): int32 => {
-		const code = execFile(host, [dir, stem]) as int32;
-		lockedUpdate(exited, (v: HostExit): HostExit => { return { code: code, done: true }; });
-		return code;
-	});
+	stdinDisableBuffering();
+	const ctl: Locked<HostCtl> = new Locked({ stop: false, done: false, code: 0 });
+	let running = spawn((): int32 => runHost(host, dir, stem, ctl));
 	warmHcrSession(opts);
-	while (watchNext(run, (): boolean => lockedRead(exited, (v: HostExit): boolean => v.done))) watchBuild(run);
+	const keys: string[] = [""];
+	const idle = (): boolean => {
+		if (lockedRead(ctl, (v: HostCtl): boolean => v.done)) return true;
+		if (!stdinHasData()) return false;
+		const key = readLine().trim();
+		if (key == "R" || key == "r" || key == "q") {
+			keys[0] = key;
+			return true;
+		}
+		if (key != "") sayFlushed(`watch: unknown key '${key}': R restarts the program, r rebuilds, q quits`);
+		return false;
+	};
+	const rebuild = (): void => {
+		watchBuild(run);
+		if (hcrRestartReason != "") sayFlushed(`watch: ${hcrRestartReason}; press R to restart`);
+		hcrRestartReason = "";
+	};
+	while (true) {
+		keys[0] = "";
+		if (watchNext(run, idle)) {
+			rebuild();
+			continue;
+		}
+		if (lockedRead(ctl, (v: HostCtl): boolean => v.done)) break;
+		if (keys[0] == "r") {
+			rebuild();
+			sayFlushed("watch: rebuilt on key r");
+		} else if (keys[0] == "R") {
+			lockedUpdate(ctl, (v: HostCtl): HostCtl => { return { stop: true, done: v.done, code: v.code }; });
+			await running;
+			sayFlushed("watch: restarting the program on the last build");
+			lockedUpdate(ctl, (v: HostCtl): HostCtl => { return { stop: false, done: false, code: 0 }; });
+			running = spawn((): int32 => runHost(host, dir, stem, ctl));
+		} else {
+			if (keys[0] == "q") sayFlushed("watch: quit");
+			lockedUpdate(ctl, (v: HostCtl): HostCtl => { return { stop: true, done: v.done, code: v.code }; });
+			break;
+		}
+	}
 	const code = await running;
 	exit(code);
 }
@@ -3407,7 +3516,7 @@ resetLiftedOps();
 		const macroExpanded = expandMacros(monoed, ctx);
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
-		const transformed = transformProgram(comptimeResolved, ctx, false, opts.isHcr && modPath == filePath);
+		const transformed = transformProgram(comptimeResolved, ctx, false, opts.isHcr && modPath == filePath ? [filePath] : []);
 		exitOnCheckerErrors(ctx, modPath, cm.source);
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		nativeCtx.rangeChecks = opts.mode != MODE_DANGER;

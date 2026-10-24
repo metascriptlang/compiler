@@ -498,6 +498,14 @@ function revertAfterCrash(reason: string): ReloadResult {
 	return result(ReloadKind.RolledBack, names, `the program crashed with ${reason}; rolled back ${names.join(",")}`);
 }
 
+function resumeLoaded(count: int32, outcome: ReloadResult): ReloadResult {
+	const failed = failingHandler("HcrAfterReload000", count);
+	if (failed != "") {
+		fatal(`${outcome.reason}; resuming the loaded generation then failed in the after-reload handler of module '${failed}'`);
+	}
+	return outcome;
+}
+
 export function engineLastReload(): ReloadResult {
 	return last;
 }
@@ -575,7 +583,8 @@ function performReload(): ReloadResult {
 		release(candidates);
 		forgetAfter(known);
 		bundleIdentity = bundle;
-		return result(ReloadKind.Rejected, [quiesceFailed], `the before-reload handler of module '${quiesceFailed}' threw`);
+		const quiesced = findModule(quiesceFailed);
+		return resumeLoaded(quiesced == null ? 0 : modules.indexOf(quiesced) as int32, result(ReloadKind.Rejected, [quiesceFailed], `the before-reload handler of module '${quiesceFailed}' threw`));
 	}
 
 	if (changes.length > 0) {
@@ -587,7 +596,7 @@ function performReload(): ReloadResult {
 			release(candidates);
 			forgetAfter(known);
 			bundleIdentity = bundle;
-			return result(ReloadKind.RestartRequired, refused, refusal);
+			return resumeLoaded(known, result(ReloadKind.RestartRequired, refused, refusal));
 		}
 	}
 
@@ -609,7 +618,7 @@ function performReload(): ReloadResult {
 		release(candidates);
 		forgetAfter(known);
 		bundleIdentity = bundle;
-		return result(ReloadKind.Rejected, [dataFailed], `data initialization of module '${dataFailed}' threw`);
+		return resumeLoaded(known, result(ReloadKind.Rejected, [dataFailed], `data initialization of module '${dataFailed}' threw`));
 	}
 	const names: string[] = [];
 	const previousImages: HcrImage[] = [];
@@ -652,6 +661,6 @@ function performReload(): ReloadResult {
 		bindDeferred(item.module);
 	}
 	forgetAfter(known);
-	return result(ReloadKind.Rejected, [resumeFailed],
-		`the ${initFailed != "" ? "initializer" : "after-reload handler"} of module '${resumeFailed}' threw; rolled back ${names.join(",")}`);
+	return resumeLoaded(known, result(ReloadKind.Rejected, [resumeFailed],
+		`the ${initFailed != "" ? "initializer" : "after-reload handler"} of module '${resumeFailed}' threw; rolled back ${names.join(",")}`));
 }

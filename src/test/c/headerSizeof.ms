@@ -17,6 +17,8 @@ function compileOn(backend: string, main: string): string {
 	const t = createDefineTable();
 	applyDefineSwitch(t, `-d:${backend}`);
 	applyDefineSwitch(t, `-d:backend=${backend}`);
+	applyDefineSwitch(t, "-d:os=linux");
+	applyDefineSwitch(t, "-d:cpu=x86_64");
 	setParserDefines(t);
 	const entries: MapEntry[] = [{ entryPath: HEADER, entrySource: SHAPES }, { entryPath: MAIN, entrySource: main }];
 	const out = backend == "js" ? compileProjectToJS(entries, MAIN) : compileProjectToC(entries, MAIN);

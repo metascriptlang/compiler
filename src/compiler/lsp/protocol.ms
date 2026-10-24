@@ -310,8 +310,20 @@ export function lspUriToPath(uri: string): string {
 
 export function lspPathToUri(path: string): string {
 	const drive = path.length >= 2 && path.charAt(1) == ":" ? path.charAt(0).toLowerCase() : "";
-	if (drive != "" && "abcdefghijklmnopqrstuvwxyz".includes(drive)) return `file:///${drive}%3A${path.slice(2, path.length)}`;
-	return "file://" + path;
+	if (drive != "" && "abcdefghijklmnopqrstuvwxyz".includes(drive)) return `file:///${drive}%3A${lspPathEscape(path.slice(2, path.length))}`;
+	return "file://" + lspPathEscape(path);
+}
+
+function lspPathEscape(path: string): string {
+	const hex = "0123456789ABCDEF";
+	let out = "";
+	for (let i = 0; i < path.byteLength; i++) {
+		const b = path.byteAt(i);
+		const kept = (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A)
+			|| b == "-".code || b == ".".code || b == "_".code || b == "~".code || b == "/".code;
+		out = kept ? out + fromCodePoint(b) : `${out}%${hex.charAt(b >> 4)}${hex.charAt(b & 15)}`;
+	}
+	return out;
 }
 
 // ===== Path Helpers =====
@@ -361,6 +373,14 @@ test "path to uri gives a windows drive as the escaped lower-case volume a clien
 	assert lspPathToUri("C:/Users/foo/bar.ms") == "file:///c%3A/Users/foo/bar.ms";
 	assert lspPathToUri("d:/x.ms") == "file:///d%3A/x.ms";
 	assert lspUriToPath(lspPathToUri("C:/x/y.ms")) == "c:/x/y.ms";
+}
+
+test "path to uri escapes every byte of a segment outside the unreserved set" {
+	assert lspPathToUri("/My Docs/a#1?b.ms") == "file:///My%20Docs/a%231%3Fb.ms";
+	assert lspPathToUri("C:/a b/[x]@y.ms") == "file:///c%3A/a%20b/%5Bx%5D%40y.ms";
+	assert lspPathToUri("/Users/caf" + fromCodePoint(233) + "/a-b_c.~ms") == "file:///Users/caf%C3%A9/a-b_c.~ms";
+	const odd = "/q/a b#c%d/e.ms";
+	assert lspUriToPath(lspPathToUri(odd)) == odd;
 }
 
 test "non-file uri unchanged" { assert lspUriToPath("http://example.com") == "http://example.com"; }

@@ -3,6 +3,7 @@
 import { execFileResult, ExecFileResult, exit, env, cwd, platform } from "std/process";
 import { readFile, writeFile, readDir, exists, ensureDir, removeAll, copyFile } from "std/fs";
 import { sleepAsync } from "std/core/promise";
+import { spawn as spawnChild, ChildProcess, ChildStream } from "std/process/child";
 
 function slashes(p: string): string {
 	return p.replaceAll("\\", "/");
@@ -780,6 +781,7 @@ function engine(): void {
 		"HCR-ENGINE lifecycle v1: destroy probe 8",
 		"HCR-ENGINE lifecycle v1: before reload",
 		"HCR-ENGINE lifecycle v2: after reload",
+		"HCR-ENGINE lifecycle v1: after reload",
 		"HCR-ENGINE after-reload handler throws: rejected lifecycle",
 		"HCR-ENGINE after rollback: value 10 tick 13 version 1",
 		"HCR-ENGINE probe after rollback: instanceof true true scaled 70",
@@ -1176,15 +1178,21 @@ function layoutLogic(variant: string, generation: int32): string {
 		literal = "new P()";
 	}
 	const holder = layoutHolder(variant, grown);
+	const handlerCounts = variant == "resume" ? " ${befores}/${afters}" : "";
 	const lines = [
 		declaration,
 		holder[0],
 		`function make(): P { return ${literal}; }`,
 		`export function hold(): void { ${holder[1]} }`,
 		`export function release(): void { ${holder[2]} }`,
-		"export function fresh(): string { const p = make(); return " + (grown ? "`${p.a} ${p.b}`" : "`${p.a}`") + "; }",
+		"export function fresh(): string { const p = make(); return " + (grown ? "`${p.a} ${p.b}" : "`${p.a}") + handlerCounts + "`; }",
 	];
 	if (variant == "handler") lines.push("@beforeReload\nfunction drop(): void { held = null; }");
+	if (variant == "resume") {
+		lines.push("let befores: int32 = 0;\nlet afters: int32 = 0;");
+		lines.push("@beforeReload\nfunction pause(): void { befores += 1; }");
+		lines.push("@afterReload\nfunction resume(): void { afters += 1; }");
+	}
 	if (generation > 2) lines.push("export const SALT: int32 = 3;");
 	return lines.join("\n") + "\n";
 }
@@ -1234,6 +1242,13 @@ function layoutReload(): void {
 		"HCR-LAYOUT after held: 7 beta",
 		"HCR-LAYOUT released: reloaded logic | ",
 		"HCR-LAYOUT after released: 7 beta",
+	]);
+	layoutVariant("resume", [
+		"HCR-LAYOUT before: 7 0/0",
+		`HCR-LAYOUT held: restart required logic | ${OWN_LIVE}`,
+		"HCR-LAYOUT after held: 7 1/1",
+		"HCR-LAYOUT released: reloaded logic | ",
+		"HCR-LAYOUT after released: 7 beta 2/2",
 	]);
 }
 
@@ -1463,6 +1478,77 @@ function coreGenericInit(): void {
 ")) {
 		console.log(both(ran));
 		failWith(tag, "a generic class instance a project image and a core module both construct did not link and reload");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function overloadCall(): void {
+	const tag = "hcrOverloadCall";
+	const dir = freshDir(`${TMP}/overloadCall`);
+	for (const f of ["app.ms", "caller.ms", "shapes.ms", "shapesEdit.ms"]) copy(`${FIXTURES}/overloadCall/${f}`, `${dir}/${f}`);
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=img/module${sharedLibraryExt()}`], "calls into another image's overloads did not link");
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-OV ")) seen.push(line);
+	}
+	const want = [
+		"HCR-OV start s x n 2 ns 2 n 3 n 7",
+		"HCR-OV reloaded shapes",
+		"HCR-OV after s x n2 4 ns 2 n2 6 n2 14",
+	];
+	if (!succeeded(ran) || seen.join("|") != want.join("|")) {
+		console.log(both(ran));
+		failWith(tag, "a call into another image's second or later overload did not bind through the registry and follow a reload");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function coreConstant(): void {
+	const tag = "hcrCoreConstant";
+	const dir = freshDir(`${TMP}/coreConstant`);
+	for (const f of ["app.ms", "geo.ms", "scale.ms", "scaleEdit.ms"]) copy(`${FIXTURES}/coreConstant/${f}`, `${dir}/${f}`);
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=img/module${sharedLibraryExt()}`], "an image reading a core static constant did not link");
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-CC ")) seen.push(line);
+	}
+	const want = [
+		"HCR-CC start 6.283185307179586 true",
+		"HCR-CC reloaded scale",
+		"HCR-CC after 9.42477796076938 true",
+	];
+	if (!succeeded(ran) || seen.join("|") != want.join("|")) {
+		console.log(both(ran));
+		failWith(tag, "a core static constant was not folded in an image, or a project constant edit did not reach the image after a reload");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function macroHelper(): void {
+	const tag = "hcrMacroHelper";
+	for (const variant of ["base", "second"]) {
+		const dir = freshDir(`${TMP}/macroHelper${variant}`);
+		const files = variant == "base" ? ["app.ms", "tools.ms"] : ["app.ms", "tools.ms", "helpers.ms"];
+		for (const f of files) copy(`${FIXTURES}/macroHelper/${variant}/${f}`, `${dir}/${f}`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=img/module${sharedLibraryExt()}`], `an exported helper only a macro calls (${variant}) did not build`);
+		const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+		const seen: string[] = [];
+		for (const line of lines(both(ran))) {
+			if (line.startsWith("HCR-MH ")) seen.push(line);
+		}
+		if (!succeeded(ran) || seen.length != 1 || seen[0] != "HCR-MH B2 0") {
+			console.log(both(ran));
+			failWith(tag, `an exported helper only a macro calls (${variant}) reached the core image or left the project module without an image`);
+		}
+	}
+	const dir = freshDir(`${TMP}/macroHelperRuntime`);
+	for (const f of ["runtimeCall.ms", "tools.ms"]) copy(`${FIXTURES}/macroHelper/base/${f}`, `${dir}/${f}`);
+	const refused = msc(dir, ["build", "runtimeCall.ms", "--hcr", `--output=img/module${sharedLibraryExt()}`]);
+	if (succeeded(refused) || both(refused).indexOf("'arity' calls 'childCount'", 0) < 0) {
+		console.log(both(refused));
+		failWith(tag, "a run-time call to a helper only the macro VM can run was not refused by name");
 	}
 	console.log(`ok   ${tag}`);
 }
@@ -1884,6 +1970,58 @@ function jsInstanceFiles(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function readUntil(child: ChildProcess, seen: string[], marker: string, limitMs: number): boolean {
+	const deadline = performance.now() + limitMs;
+	while (!seen[0].contains(marker) && performance.now() < deadline) {
+		const got = child.read(ChildStream.Stdout, 200);
+		if (!got.ok) continue;
+		if (got.value.ended) break;
+		seen[0] = seen[0] + got.value.data;
+	}
+	return seen[0].contains(marker);
+}
+
+function runKeys(): void {
+	const tag = "hcrRunKeys";
+	const globalCache = env.get("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_NO_GLOBAL_CACHE", "1");
+	for (const key of ["R", "r", "q"]) {
+		const dir = freshDir(`${TMP}/runKeys_${key}`);
+		copy(`${FIXTURES}/runKeys/app.ms`, `${dir}/app.ms`);
+		copy(`${FIXTURES}/runKeys/logic.ms`, `${dir}/logic.ms`);
+		copy(`${FIXTURES}/runKeys/logicGrown.ms`, `${dir}/grown.txt`);
+		const started = spawnChild(MSC, ["run", "--hcr", "app.ms"], { cwd: dir, mergeStderr: true });
+		need(tag, started.ok, `cannot start ${MSC}`);
+		if (!started.ok) continue;
+		const child = started.value;
+		const seen = [""];
+		const asked = readUntil(child, seen, "HCR-KEYS reloaded 9", 120000);
+		if (!asked) console.log(seen[0]);
+		need(tag, asked, `key ${key}: the edited body did not reload into the running program`);
+		need(tag, seen[0].contains("HCR-KEYS start 7"), `key ${key}: the program did not start on the first build`);
+		if (key != "q") {
+			child.write(`${key}\n`, 5000);
+			const marker = key == "R" ? "HCR-KEYS start 9" : "watch: rebuilt on key r";
+			const answered = readUntil(child, seen, marker, 120000);
+			if (!answered) console.log(seen[0]);
+			need(tag, answered, `key ${key}: no '${marker}' after the key`);
+			if (key == "R") {
+				need(tag, seen[0].contains("watch: restarting"), "key R: no restart notice");
+				need(tag, seen[0].split("checked ").length == 3, "key R: the restart ran a build (a second 'checked N/N' appeared after the edit's own)");
+			}
+		}
+		child.write("q\n", 5000);
+		const ended = child.wait(30000);
+		if (!ended.ok) console.log(seen[0]);
+		need(tag, ended.ok, `key ${key}: q did not end msc`);
+		readUntil(child, seen, "watch: quit", 2000);
+		need(tag, seen[0].contains("watch: quit"), `key ${key}: q printed no 'watch: quit'`);
+		child.close();
+	}
+	env.set("MSC_NO_GLOBAL_CACHE", globalCache);
+	console.log(`ok   ${tag}`);
+}
+
 const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrFsWatch", run: fsWatch },
 	{ name: "hcrModuleAbi", run: moduleAbi },
@@ -1924,6 +2062,9 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrCoreCell", run: coreCell },
 	{ name: "hcrCoreOp", run: coreOp },
 	{ name: "hcrCoreGenericInit", run: coreGenericInit },
+	{ name: "hcrMacroHelper", run: macroHelper },
+	{ name: "hcrOverloadCall", run: overloadCall },
+	{ name: "hcrCoreConstant", run: coreConstant },
 	{ name: "hcrCoreNative", run: coreNative },
 	{ name: "hcrGlobalCell", run: globalCell },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
@@ -1938,6 +2079,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrDynamicImportReload", run: dynamicImportReload },
 	{ name: "hcrDynamicImportParity", run: dynamicImportParity },
 	{ name: "hcrJsInstanceFiles", run: jsInstanceFiles },
+	{ name: "hcrRunKeys", run: runKeys },
 ];
 if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });
 

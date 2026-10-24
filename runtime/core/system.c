@@ -18,6 +18,7 @@
  * normalization. Runs before main via the constructor the runtime already
  * relies on elsewhere. */
 __attribute__((constructor)) static void msStdStreamsBinaryMode(void) {
+	_setmode(_fileno(stdin), _O_BINARY);
 	_setmode(_fileno(stdout), _O_BINARY);
 	_setmode(_fileno(stderr), _O_BINARY);
 }
@@ -44,6 +45,17 @@ MS_TLS_PUBLISH(msErrPayload)
  * never run (lost wakeup; proven by the spawn-inside-actor hang, 2026-09-05).
  * Held only for list-pointer swaps, never while callbacks execute. */
 _Atomic(int) gMsFutCbLock = 0;
+
+/* One spawn lock for the whole program (see _msSpawnCreateLock in runtime/process.h).
+ * std/process and std/process/child each include that header into their own C file, so a
+ * lock defined there would be one per file and would serialize nothing between them. */
+#ifdef _WIN32
+#include <windows.h>
+SRWLOCK _msSpawnCreateLock = SRWLOCK_INIT;
+#elif !defined(__EMSCRIPTEN__) && !defined(__wasi__)
+#include <pthread.h>
+pthread_mutex_t _msSpawnCreateLock = PTHREAD_MUTEX_INITIALIZER;
+#endif
 
 void msPrintln(msString s) {
 	if (s.p != NULL && s.len > 0) {

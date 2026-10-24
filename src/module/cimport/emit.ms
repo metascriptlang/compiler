@@ -51,7 +51,7 @@ function cTypeToMs(t: CType, skipTypedef: boolean = false): string {
 		CTypeKind.Char => t.isSigned ? "int8" : "uint8",
 		CTypeKind.Short => t.isSigned ? "int16" : "uint16",
 		CTypeKind.Int => t.isSigned ? "int32" : "uint32",
-		CTypeKind.Long => t.isSigned ? "int64" : "uint64",
+		CTypeKind.Long => t.size == 4 ? (t.isSigned ? "int32" : "uint32") : (t.isSigned ? "int64" : "uint64"),
 		CTypeKind.LongLong => t.isSigned ? "int64" : "uint64",
 		CTypeKind.Float => "float32",
 		CTypeKind.Double => "number",
@@ -639,8 +639,18 @@ test "emit variadic function" {
 }
 
 test "emit type alias" {
-	const ms = translateHeaderModule("typedef unsigned long size_t;").source;
-	assert ms.indexOf("type size_t = uint64") >= 0;
+	const ms = translateHeaderModule("typedef unsigned long size_t;", "header.h", [], null, null, targetFor("linux", "x86_64")).source;
+	assert ms.indexOf("type size_t = uint64") >= 0, ms;
+}
+
+test "a long takes the width of the target's long" {
+	const src = "typedef unsigned long ul;\ntypedef long sl;\n";
+	const lp64 = translateHeaderModule(src, "header.h", [], null, null, targetFor("linux", "x86_64")).source;
+	assert lp64.includes("type ul = uint64") && lp64.includes("type sl = int64"), lp64;
+	const llp64 = translateHeaderModule(src, "header.h", [], null, null, targetFor("windows", "x86_64")).source;
+	assert llp64.includes("type ul = uint32") && llp64.includes("type sl = int32"), llp64;
+	const ilp32 = translateHeaderModule(src, "header.h", [], null, null, targetFor("linux", "i386")).source;
+	assert ilp32.includes("type ul = uint32") && ilp32.includes("type sl = int32"), ilp32;
 }
 
 test "emit function pointer param" {

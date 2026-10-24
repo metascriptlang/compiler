@@ -11,6 +11,26 @@
 #include <string.h>
 #include <errno.h>
 
+int32_t msFsErrnoFromWin32(uint32_t code) {
+	switch (code) {
+	case ERROR_FILE_NOT_FOUND:
+	case ERROR_PATH_NOT_FOUND:
+	case ERROR_DIRECTORY:
+		return ENOENT;
+	case ERROR_ACCESS_DENIED:
+		return EACCES;
+	case ERROR_ALREADY_EXISTS:
+	case ERROR_FILE_EXISTS:
+		return EEXIST;
+	case ERROR_INVALID_PARAMETER:
+		return EINVAL;
+	case ERROR_NOT_ENOUGH_MEMORY:
+		return ENOMEM;
+	default:
+		return EIO;
+	}
+}
+
 static _Thread_local int _msFsLastErrno = 0;
 
 int32_t msFsLastErrno(void) {
@@ -67,7 +87,7 @@ msString msFsReadDirEntries(msString path) {
 	HANDLE h = FindFirstFileA(pattern, &fd);
 	free(pattern);
 	if (h == INVALID_HANDLE_VALUE) {
-		_msFsLastErrno = (int)GetLastError();
+		_msFsLastErrno = msFsErrnoFromWin32(GetLastError());
 		return MS_EMPTY_STRING;
 	}
 

@@ -32,11 +32,13 @@ when (windows) {
 	@include("io.h");
 	@include("windows.h");
 
-	extern const ENOENT: int32;
 	extern const EACCES: int32;
+	extern const EISDIR: int32;
 	extern const EINVAL: int32;
 	extern const ENOMEM: int32;
-	extern const EIO: int32;
+	extern let _doserrno: uint32;
+	extern function msFsErrnoFromWin32(code: uint32): int32;
+	extern function cChmod(path: cstring, mode: int32): int32 from "_chmod";
 	extern function cMkdir(path: cstring): int32 from "_mkdir";
 	extern function cRmdir(path: cstring): int32 from "_rmdir";
 	extern function cUnlink(path: cstring): int32 from "_unlink";
@@ -48,18 +50,15 @@ when (windows) {
 
 	// The narrow CRT calls take the path in the ANSI code page, as the C kernels did;
 	// rename, symlink and the final path of realpath convert it from UTF-8 to UTF-16.
-	extern struct Stat from "struct _stat" { st_mode: uint16; st_size: int32; st_mtime: int64; }
-	extern function cStat(path: cstring, ref buf: Stat): int32 from "_stat";
+	extern struct Stat from "struct _stat64" { st_mode: uint16; st_size: int64; st_mtime: int64; }
+	extern function cStat(path: cstring, ref buf: Stat): int32 from "_stat64";
 	extern const S_IFMT: uint16;
 	extern const S_IFREG: uint16;
 	extern const S_IFDIR: uint16;
 
 	extern const CP_UTF8: uint32;
-	extern const ERROR_FILE_NOT_FOUND: uint32;
-	extern const ERROR_PATH_NOT_FOUND: uint32;
-	extern const ERROR_ACCESS_DENIED: uint32;
-	extern const ERROR_INVALID_PARAMETER: uint32;
-	extern const ERROR_NOT_ENOUGH_MEMORY: uint32;
+	const UNIX_EPOCH_IN_FILETIME: int64 = 116444736000000000;
+	const FILETIME_PER_SECOND: int64 = 10000000;
 	extern const MOVEFILE_REPLACE_EXISTING: uint32;
 	extern const SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE: uint32;
 	extern const SYMBOLIC_LINK_FLAG_DIRECTORY: uint32;
@@ -86,7 +85,9 @@ when (windows) {
 	extern function CreateFileW(path: Ptr<uint16>, access: uint32, share: uint32, security: Ptr<void> | null, disposition: uint32, flags: uint32, template: Ptr<void> | null): Ptr<void>;
 	extern function GetFinalPathNameByHandleW(handle: Ptr<void>, path: Ptr<uint16> | null, room: uint32, flags: uint32): uint32;
 	extern struct LargeInteger from "LARGE_INTEGER" { QuadPart: int64; }
+	extern struct FileTime from "FILETIME" { dwLowDateTime: uint32; dwHighDateTime: uint32; }
 	extern struct HandleInformation from "BY_HANDLE_FILE_INFORMATION" {
+		dwFileAttributes: uint32; ftLastWriteTime: FileTime;
 		dwVolumeSerialNumber: uint32; nFileSizeHigh: uint32; nFileSizeLow: uint32;
 		nFileIndexHigh: uint32; nFileIndexLow: uint32;
 	}
@@ -94,8 +95,15 @@ when (windows) {
 	extern function GetFileInformationByHandle(handle: Ptr<void>, ref info: HandleInformation): int32;
 	extern function GetFileInformationByHandleEx(handle: Ptr<void>, infoClass: int32, ref info: BasicInformation, size: uint32): int32;
 
-	// Windows keeps permissions in ACLs: chmod succeeds without changing anything.
-	function chmodErrno(path: string, mode: int32): int32 { return 0; }
+	function chmodErrno(path: string, mode: int32): int32 {
+		return cChmod(path as cstring, mode) == 0 ? 0 : errno;
+	}
+	function rmdirErrno(path: string): int32 {
+		_doserrno = 0;
+		if (cRmdir(path as cstring) == 0) return 0;
+		const err = errno;
+		return _doserrno != 0 ? msFsErrnoFromWin32(_doserrno) : err;
+	}
 	function mkdirErrno(path: string): int32 {
 		if (cMkdir(path as cstring) == 0) return 0;
 		const err = errno;
@@ -118,37 +126,31 @@ when (windows) {
 	function renameErrno(oldPath: string, newPath: string): int32 {
 		const oldLength = wideLength(oldPath as cstring);
 		const newLength = wideLength(newPath as cstring);
-		if (oldLength <= 0 || newLength <= 0) return ERROR_INVALID_PARAMETER as int32;
+		if (oldLength <= 0 || newLength <= 0) return EINVAL;
 		const oldWide = wideCopy(oldPath as cstring, oldLength);
 		const newWide = wideCopy(newPath as cstring, newLength);
 		if (oldWide == null || newWide == null) {
 			if (oldWide != null) cFreeWide(oldWide);
 			if (newWide != null) cFreeWide(newWide);
-			return ERROR_NOT_ENOUGH_MEMORY as int32;
+			return ENOMEM;
 		}
 		const moved = MoveFileExW(oldWide, newWide, MOVEFILE_REPLACE_EXISTING) != 0;
 		const failure = moved ? 0 : GetLastError();
 		cFreeWide(oldWide);
 		cFreeWide(newWide);
-		if (moved) return 0;
-		if (failure == ERROR_FILE_NOT_FOUND || failure == ERROR_PATH_NOT_FOUND) return ENOENT;
-		if (failure == ERROR_ACCESS_DENIED) return EACCES;
-		if (failure == ERROR_INVALID_PARAMETER) return EINVAL;
-		if (failure == ERROR_NOT_ENOUGH_MEMORY) return ENOMEM;
-		return EIO;
+		return moved ? 0 : msFsErrnoFromWin32(failure);
 	}
 
-	// A failure reports the Win32 error code itself, not an errno.
 	function symlinkErrno(target: string, path: string): int32 {
 		const targetLength = wideLength(target as cstring);
 		const pathLength = wideLength(path as cstring);
-		if (targetLength <= 0 || pathLength <= 0) return ERROR_INVALID_PARAMETER as int32;
+		if (targetLength <= 0 || pathLength <= 0) return EINVAL;
 		const targetWide = wideCopy(target as cstring, targetLength);
 		const pathWide = wideCopy(path as cstring, pathLength);
 		if (targetWide == null || pathWide == null) {
 			if (targetWide != null) cFreeWide(targetWide);
 			if (pathWide != null) cFreeWide(pathWide);
-			return ERROR_NOT_ENOUGH_MEMORY as int32;
+			return ENOMEM;
 		}
 		for (let i = 0; i < targetLength; i++) {
 			if (targetWide[i] == "/".code) targetWide[i] = "\\".code as uint16;
@@ -160,10 +162,10 @@ when (windows) {
 			flags |= SYMBOLIC_LINK_FLAG_DIRECTORY;
 		}
 		const made = CreateSymbolicLinkW(pathWide, targetWide, flags) != 0;
-		const failure = made ? 0 : GetLastError() as int32;
+		const failure = made ? 0 : GetLastError();
 		cFreeWide(targetWide);
 		cFreeWide(pathWide);
-		return failure;
+		return made ? 0 : msFsErrnoFromWin32(failure);
 	}
 
 	// No exec bit: any regular file counts, and the caller matches PATHEXT.
@@ -216,9 +218,23 @@ when (windows) {
 		return text;
 	}
 
+	function statOf(path: string, ref st: Stat): boolean {
+		const file = CreateFileA(path as cstring, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+			null, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, null);
+		if (file == INVALID_HANDLE_VALUE) return false;
+		let info: HandleInformation = {};
+		const ok = GetFileInformationByHandle(file, info) != 0;
+		CloseHandle(file);
+		if (!ok) return false;
+		st.st_mode = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ? S_IFDIR : S_IFREG;
+		st.st_size = (((info.nFileSizeHigh as uint64) << 32) | (info.nFileSizeLow as uint64)) as int64;
+		const written = (((info.ftLastWriteTime.dwHighDateTime as uint64) << 32) | (info.ftLastWriteTime.dwLowDateTime as uint64)) as int64;
+		st.st_mtime = (written - UNIX_EPOCH_IN_FILETIME) / FILETIME_PER_SECOND;
+		return true;
+	}
 	function modifiedTimeKernel(path: string): number {
 		let st: Stat = {};
-		return cStat(path as cstring, st) == 0 ? st.st_mtime as number : -1;
+		return statOf(path, st) ? st.st_mtime as number : -1;
 	}
 	function changeStampKernel(path: string): string {
 		const file = CreateFileA(path as cstring, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -234,8 +250,7 @@ when (windows) {
 		let n = putDigits(buf, 0, info.dwVolumeSerialNumber as uint64, 1);
 		buf[n] = 58; n = putDigits(buf, n + 1, info.nFileIndexHigh as uint64, 1);
 		buf[n] = 46; n = putDigits(buf, n + 1, info.nFileIndexLow as uint64, 1);
-		buf[n] = 58; n = putDigits(buf, n + 1, info.nFileSizeHigh as uint64, 1);
-		buf[n] = 46; n = putDigits(buf, n + 1, info.nFileSizeLow as uint64, 1);
+		buf[n] = 58; n = putDigits(buf, n + 1, ((info.nFileSizeHigh as uint64) << 32) | (info.nFileSizeLow as uint64), 1);
 		buf[n] = 58; n = putSigned(buf, n + 1, basic.LastWriteTime.QuadPart);
 		buf[n] = 58; n = putSigned(buf, n + 1, basic.ChangeTime.QuadPart);
 		return msStringNew(((buf as Span<uint8>) as Ptr<uint8>) as cstring, n as int64);
@@ -270,6 +285,7 @@ when (windows) {
 		function ctimeOf(st: Stat): Timespec { return st.st_ctim; }
 	}
 	extern function cStat(path: cstring, ref buf: Stat): int32 from "stat";
+	function statOf(path: string, ref st: Stat): boolean { return cStat(path as cstring, st) == 0; }
 	extern const S_IFMT: uint32;
 	extern const S_IFREG: uint32;
 	extern const S_IFDIR: uint32;
@@ -281,6 +297,9 @@ when (windows) {
 		if (cMkdir(path as cstring, 493) == 0) return 0;
 		const err = errno;
 		return err == EEXIST ? 0 : err;
+	}
+	function rmdirErrno(path: string): int32 {
+		return cRmdir(path as cstring) == 0 ? 0 : errno;
 	}
 	function renameErrno(oldPath: string, newPath: string): int32 {
 		return cRename(oldPath as cstring, newPath as cstring) == 0 ? 0 : errno;
@@ -331,15 +350,19 @@ when (windows) {
 // Any later libc call (free included) may overwrite errno: read it straight after the
 // syscall, before anything else runs.
 
-function rmdirErrno(path: string): int32 {
-	return cRmdir(path as cstring) == 0 ? 0 : errno;
-}
 function removeErrno(path: string): int32 {
 	return cUnlink(path as cstring) == 0 ? 0 : errno;
 }
 function writeFileErrno(path: string, content: string, mode: string): int32 {
 	const file = cFopen(path as cstring, mode as cstring);
-	if (file == null) return errno;
+	if (file == null) {
+		const err = errno;
+		when (windows) {
+			return err == EACCES && isDirKernel(path) ? EISDIR : err;
+		} else {
+			return err;
+		}
+	}
 	const length = content.asBytes().length as uint64;
 	let err: int32 = 0;
 	if (cFwrite(content as cstring, 1, length, file) != length) err = errno != 0 ? errno : FAILED_WITHOUT_ERRNO;
@@ -349,19 +372,19 @@ function writeFileErrno(path: string, content: string, mode: string): int32 {
 
 function existsKernel(path: string): boolean {
 	let st: Stat = {};
-	return cStat(path as cstring, st) == 0;
+	return statOf(path, st);
 }
 function isFileKernel(path: string): boolean {
 	let st: Stat = {};
-	return cStat(path as cstring, st) == 0 && (st.st_mode & S_IFMT) == S_IFREG;
+	return statOf(path, st) && (st.st_mode & S_IFMT) == S_IFREG;
 }
 function isDirKernel(path: string): boolean {
 	let st: Stat = {};
-	return cStat(path as cstring, st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR;
+	return statOf(path, st) && (st.st_mode & S_IFMT) == S_IFDIR;
 }
 function fileSizeKernel(path: string): number {
 	let st: Stat = {};
-	return cStat(path as cstring, st) == 0 ? st.st_size as number : -1;
+	return statOf(path, st) ? st.st_size as number : -1;
 }
 
 // changeStamp runs once per cached source file, so it formats into one stack buffer
@@ -415,7 +438,7 @@ export function appendFile(path: string, content: string): Result<void, IoError>
 }
 
 // Change POSIX permission bits on a path. Mode is passed as a decimal int32
-// (e.g. 384 for rw------- = 0600). No-op on Windows.
+// (e.g. 384 for rw------- = 0600).
 export function chmod(path: string, mode: int32): Result<void, IoError> {
 	return errnoResult(chmodErrno(path, mode), path, "chmod failed");
 }

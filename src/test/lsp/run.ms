@@ -56,7 +56,7 @@ import { stringify } from "std/serialize/json/stringify";
 import { parseJson } from "std/serialize/json/parser";
 import { JsonKind, JsonValue } from "std/serialize/json/types";
 import { getDynamicField, asInt32 } from "std/serialize/json/accessors";
-import { lspParseContentLength, lspJsonString } from "../../compiler/lsp/protocol";
+import { lspParseContentLength, lspJsonString, lspUriToPath } from "../../compiler/lsp/protocol";
 import {
 	LspScenario,
 	LspReplay,
@@ -632,7 +632,7 @@ function compareCheckpoint(
 	const files: string[] = [];
 	const checks: Result<ChildProcess, ProcessError>[] = [];
 	for (let i = 0; i < snap.uris.length; i++) {
-		const file = inProject ? lspUriPath(snap.uris[i]) : `${slashes(realpath(dir))}/${basename(lspUriPath(snap.uris[i]))}`;
+		const file = inProject ? lspUriToPath(snap.uris[i]) : `${slashes(realpath(dir))}/${basename(lspUriToPath(snap.uris[i]))}`;
 		writeFile(file, snap.texts[i]);
 		files.push(file);
 	}
@@ -653,10 +653,6 @@ function compareCheckpoint(
 		if (fromBatch != "") return fromBatch;
 	}
 	return "";
-}
-
-function lspUriPath(uri: string): string {
-	return uri.startsWith("file://") ? uri.byteSlice(7, uri.byteLength) : uri;
 }
 
 function verdict(scenario: LspScenario, r: LspReplay): string {
