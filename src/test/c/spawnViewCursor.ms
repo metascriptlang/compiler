@@ -222,3 +222,67 @@ test "E2E C: a view stays counted when a closure or nested function writes its s
 		}
 	}
 }
+
+const SENDABLE_CALLS = (args: string) => `
+class N { kids: N[] = []; parent: N | null = null; }
+class Facts { root: N | null = null; }
+class Job { slot: int32 = 0; program: N | null = null; path: string = ""; }
+class Res { n: int32 = 0; }
+type Emitter = Sendable<(job: Readonly<Job>, facts: Readonly<Facts>, hot: boolean) => Res>;
+function emitJob(job: Readonly<Job>, facts: Readonly<Facts>, hot: boolean): Res { const r = new Res(); r.n = job.slot + (hot ? 1 : 0); return r; }
+function run(jobs: Job[], facts: Readonly<Facts>, entry: string, emitter: Emitter = emitJob): int32 {
+	const pending: Promise<Res>[] = [];
+	for (let next = 0; next < jobs.length; next += 1) {
+		const job = jobs[next];
+		pending.push(spawn(() => emitter(${args})));
+	}
+	let t = 0;
+	for (let i = 0; i < pending.length; i += 1) t += (await pending[i]).n;
+	return t;
+}
+const root = new N();
+const f = new Facts(); f.root = root;
+const a = new Job(); a.program = root; a.path = "a";
+const b = new Job(); b.slot = 1; b.program = root; b.path = "b";
+console.log(\`\${run([a, b], f, "a")}\`);
+`;
+
+test "E2E C: a task call through a Sendable value with Readonly formals takes no rc op on the lent arguments" {
+	const body = compiledThunks(SENDABLE_CALLS("job, facts, false"));
+	assert body.length > 0;
+	assert !body.contains("msIncref");
+	assert !body.contains("msDecref");
+}
+
+test "E2E C: a task call through a Sendable value takes no rc op on the operands spilled ahead of a short-circuit argument" {
+	const body = compiledThunks(SENDABLE_CALLS(`job, facts, entry != "" && job.path == entry`));
+	assert body.length > 0;
+	assert !body.contains("msIncref");
+	assert !body.contains("msDecref");
+}
+
+const FIELD_CALLS = (fnType: string) => `
+class N { v: int32 = 1; next: N | null = null; }
+class Holder { child: N | null = null; fn: ${fnType}; constructor(fn: ${fnType}) { this.fn = fn; } }
+function read(n: Readonly<N>): int32 { return n.v; }
+function run(h: Holder): int32 {
+	const view = h.child;
+	if (view == null) return 0;
+	return h.fn(view) + view.v;
+}
+const h = new Holder(read);
+h.child = new N();
+console.log(\`\${run(h)}\`);
+`;
+
+test "E2E C: a view read beside a call of a Sendable field takes no rc op" {
+	const r = compileToC(FIELD_CALLS("Sendable<(n: Readonly<N>) => int32>"));
+	assert r.ok;
+	assert !(r.ok ? r.value : "").contains("msIncrefCyclic(view");
+}
+
+test "E2E C: a view read beside a call of a plain function field stays counted" {
+	const r = compileToC(FIELD_CALLS("(n: Readonly<N>) => int32"));
+	assert r.ok;
+	assert (r.ok ? r.value : "").contains("msIncrefCyclic(view");
+}

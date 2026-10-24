@@ -15,7 +15,7 @@ import { containsPointer } from "../checker/varPartitions";
 import { skipConvDfa } from "./alias";
 import { RcInfo, noRcInfo } from "./classify";
 import { makeNumber, makeString } from "../checker/literalNodes";
-import { classDistance, createArray, createFunction, int32Type, isReadonlyView, stringType, withoutReadonlyView } from "../checker/types";
+import { classDistance, createArray, createFunction, int32Type, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
 import { isAssignable, sameType } from "../checker/compat";
 import { generatedRef, makeAssign, makeBlock, makeCall, makeFnDecl, makeIdentResolved, makeReturn } from "../transform/util";
 import { cstringSource } from "../transform/native/cstringConvLower";
@@ -498,7 +498,7 @@ function calleesOf(w: WriteEffects, call: Node, s: WriteSummary, stores: Node[] 
 		}
 		const known: WriteSummary[] = [];
 		if (defs != null && callee != null && routinesOf(w, callee, null, null, defs, 0, known)) return known;
-		markUnknown(s);
+		if (callee == null || !sendableWritesNothingHeld(callee.nodeType)) markUnknown(s);
 		return [];
 	}
 	const out: WriteSummary[] = [];
@@ -510,6 +510,14 @@ function calleesOf(w: WriteEffects, call: Node, s: WriteSummary, stores: Node[] 
 		else for (const o of dispatchOverridesFor(entry.classSym, entry.methodName)) out.push(routineSummary(w, o.sym));
 	}
 	return out;
+}
+
+function sendableWritesNothingHeld(t: Type | null): boolean {
+	if (!isSendableFunction(t)) return false;
+	for (const p of t!.typeChildren) {
+		if (!isReadonlyView(p) && containsPointer(p, 0)) return false;
+	}
+	return true;
 }
 
 function addHook(out: Symbol[], hook: Symbol): void {

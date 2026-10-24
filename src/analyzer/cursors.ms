@@ -15,7 +15,7 @@
 // false positives would be unsound (dangling pointer).
 
 import {
-	Node, NodeFlag, NodeKind, Symbol, Type, TypeKind,
+	Node, NodeFlag, NodeKind, Symbol, SymbolKind, Type, TypeKind,
 	VariableDeclData, MemberExprData, ArrayAccessData,
 	BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData,
 	WhileStmtData, ForStmtData, DoWhileStmtData,
@@ -241,6 +241,12 @@ function callFormals(call: Node): Type[] | null {
 		if (impl != null) sym = impl;
 	}
 	return sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function ? sym.symbolType.typeChildren : null;
+}
+
+function callsFieldValue(callee: Node): boolean {
+	const sym = callee.resolvedSym;
+	if (sym != null) return sym.symbolKind != SymbolKind.Function && sym.symbolKind != SymbolKind.Method;
+	return callee.nodeType != null && callee.nodeType.kind == TypeKind.Function;
 }
 
 function readOnlyFormal(formals: Type[] | null, i: int32): boolean {
@@ -665,7 +671,7 @@ function trav(w: WriteEffects, p: Partitions, node: Node | null): void {
 			for (const arg of d.arguments) { trav(w, p, arg); }
 
 			// Method call (obj.method(...)) → obj is potentially mutated
-			if (d.callee != null && d.callee.kind == NodeKind.MemberExpr) {
+			if (d.callee != null && d.callee.kind == NodeKind.MemberExpr && !callsFieldValue(d.callee)) {
 				const objRoots: Symbol[] = [];
 				allRoots(p, (d.callee.data as MemberExprData).object, objRoots);
 				for (const r of objRoots) { potentialMutation(p, r); }
