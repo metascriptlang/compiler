@@ -8,7 +8,7 @@ import {
 	Node, NodeKind, createNodeAt, makeLoc, IdentifierData,
 	ProgramData, BlockStmtData, IfStmtData, WhileStmtData, ForStmtData,
 	ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
-	FunctionDeclData, ArrowFunctionData, FunctionExprData,
+	FunctionDeclData, ArrowFunctionData, FunctionExprData, EnumDeclData,
 	ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData,
 	ExportDeclData, DecoratedDeclData, MacroDeclData,
 	VariableDeclData, ReturnStmtData, ThrowStmtData, ExprStmtData,
@@ -118,6 +118,53 @@ test "anyDescendant: stops testing after the first match" {
 	let calls = 0;
 	assert anyDescendant(root, (n: Node): boolean => { calls += 1; return n.kind == NodeKind.Identifier; }, noStop);
 	assert calls == 2;
+}
+
+function numNode(v: number): Node {
+	return createNodeAt(NodeKind.NumberLiteral, { value: v, isFloat: false }, makeLoc(1, 1));
+}
+
+function childrenOf(n: Node): Node[] {
+	const out: Node[] = [];
+	forEachChild(n, (c: Node): void => { out.push(c); });
+	return out;
+}
+
+test "forEachChild: an enum visits each member initialiser and skips a member without one" {
+	const a = numNode(1);
+	const b = numNode(2);
+	const none = null as unknown as Node;
+	const decl = createNodeAt(NodeKind.EnumDecl, { enumName: "E", enumMembers: ["A", "B", "C"], enumValues: [1, 0, 2], nameLocation: makeLoc(1, 1), memberLocations: [], enumInits: [a, none, b] }, makeLoc(1, 1));
+	const seen = childrenOf(decl);
+	assert seen.length == 2 && seen[0] == a && seen[1] == b;
+}
+
+test "mapChildren: an enum rewrites each member initialiser in place" {
+	const a = numNode(1);
+	const none = null as unknown as Node;
+	const repl = numNode(9);
+	const decl = createNodeAt(NodeKind.EnumDecl, { enumName: "E", enumMembers: ["A", "B"], enumValues: [1, 0], nameLocation: makeLoc(1, 1), memberLocations: [], enumInits: [a, none] }, makeLoc(1, 1));
+	mapChildren(decl, (n: Node): Node => repl);
+	const inits = (decl.data as EnumDeclData).enumInits;
+	assert inits[0] == repl && inits[1] == null;
+}
+
+test "forEachChild: a decorated declaration visits its decorators before the declaration" {
+	const dec = createNodeAt(NodeKind.MacroInvocation, { macroName: "tag", macroArgs: [], macroHasParens: false }, makeLoc(1, 1));
+	const inner = blockNode([]);
+	const decorated = createNodeAt(NodeKind.DecoratedDecl, { decorators: [dec], decoratedNode: inner }, makeLoc(1, 1));
+	const seen = childrenOf(decorated);
+	assert seen.length == 2 && seen[0] == dec && seen[1] == inner;
+}
+
+test "mapChildren: a decorated declaration rewrites its decorators and the declaration" {
+	const dec = createNodeAt(NodeKind.MacroInvocation, { macroName: "tag", macroArgs: [], macroHasParens: false }, makeLoc(1, 1));
+	const inner = blockNode([]);
+	const decorated = createNodeAt(NodeKind.DecoratedDecl, { decorators: [dec], decoratedNode: inner }, makeLoc(1, 1));
+	const repl = nameNode("r");
+	mapChildren(decorated, (n: Node): Node => repl);
+	const d = decorated.data as DecoratedDeclData;
+	assert d.decorators[0] == repl && d.decoratedNode == repl;
 }
 
 export function literalHeldClosures(init: Node, out: Node[]): void {
@@ -288,7 +335,12 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 		},
 		NodeKind.DecoratedDecl => {
 			const d: Cursor<DecoratedDeclData> = node.data as DecoratedDeclData;
+			for (const dec of d.decorators) visitChild(cb, dec);
 			visitChild(cb, d.decoratedNode);
+		},
+		NodeKind.EnumDecl => {
+			const d: Cursor<EnumDeclData> = node.data as EnumDeclData;
+			for (const init of d.enumInits) visitChild(cb, init);
 		},
 		NodeKind.MacroDecl => {
 			const d: Cursor<MacroDeclData> = node.data as MacroDeclData;
@@ -579,7 +631,7 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 			| NodeKind.NullLiteral | NodeKind.BigIntLiteral | NodeKind.RegexLiteral
 			| NodeKind.Identifier | NodeKind.TypeAnnotation | NodeKind.SizeofExpr
 			| NodeKind.BreakStmt | NodeKind.ContinueStmt | NodeKind.UnreachableStmt
-			| NodeKind.ImportDecl | NodeKind.TypeAliasDecl | NodeKind.EnumDecl
+			| NodeKind.ImportDecl | NodeKind.TypeAliasDecl
 			| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ExternDecl
 			| NodeKind.JSXText => {},
 	};
@@ -746,7 +798,20 @@ export function mapChildren(node: Node, f: Visitor): void {
 		},
 		NodeKind.DecoratedDecl => {
 			const d: Cursor<DecoratedDeclData> = node.data as DecoratedDeclData;
+			let i = 0;
+			while (i < d.decorators.length) {
+				d.decorators[i] = f(d.decorators[i]);
+				i += 1;
+			}
 			d.decoratedNode = f(d.decoratedNode);
+		},
+		NodeKind.EnumDecl => {
+			const d: Cursor<EnumDeclData> = node.data as EnumDeclData;
+			let i = 0;
+			while (i < d.enumInits.length) {
+				if (d.enumInits[i] != null) { d.enumInits[i] = f(d.enumInits[i]); }
+				i += 1;
+			}
 		},
 		NodeKind.MacroDecl => {
 			const d: Cursor<MacroDeclData> = node.data as MacroDeclData;
@@ -1032,7 +1097,7 @@ export function mapChildren(node: Node, f: Visitor): void {
 			| NodeKind.NullLiteral | NodeKind.BigIntLiteral | NodeKind.RegexLiteral
 			| NodeKind.Identifier | NodeKind.TypeAnnotation | NodeKind.SizeofExpr
 			| NodeKind.BreakStmt | NodeKind.ContinueStmt | NodeKind.UnreachableStmt
-			| NodeKind.ImportDecl | NodeKind.TypeAliasDecl | NodeKind.EnumDecl
+			| NodeKind.ImportDecl | NodeKind.TypeAliasDecl
 			| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ExternDecl
 			| NodeKind.JSXText => {},
 	};
