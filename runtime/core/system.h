@@ -219,16 +219,16 @@ static inline void msStringCopy(msString* dest, msString src) {
 
 /* --- Array lifecycle (unified) — uniquely owned payloads --- */
 /* Reference parity: payloads are never shared. DRC emits deep copy or move. */
-#define msArrayDestroy(arr)            do { if ((arr).p) { free((arr).p); } (arr).p = NULL; (arr).len = 0; } while(0)
+#define msArrayDestroy(arr)            do { if ((arr).p) { msArrayPayloadFree((arr).p); } (arr).p = NULL; (arr).len = 0; } while(0)
 #define msArrayWasMoved(arr)           do { (arr).len = 0; (arr).p = NULL; } while(0)
 /* msArrayCopy: 1-arg = in-place deep copy (detach from shared payload), 2-arg = deep copy into different dest.
  * Reference parity: =copy for seq always allocates a fresh payload (unique ownership). */
 #define msArrayCopy1(arr) do { \
 	if ((arr).p != NULL) { \
 		size_t _ac1_esz = sizeof((arr).p->data[0]); \
-		size_t _ac1_sz = sizeof(msArrayPayloadBase) + (size_t)(arr).p->cap * _ac1_esz; \
+		size_t _ac1_sz = sizeof(msArrayPayloadBase) + (size_t)((arr).p->cap & MS_CAP_MASK) * _ac1_esz; \
 		__typeof__((arr).p) _ac1_newp = (__typeof__((arr).p))malloc(_ac1_sz); \
-		_ac1_newp->cap = (arr).p->cap; \
+		_ac1_newp->cap = (arr).p->cap & MS_CAP_MASK; \
 		memcpy(_ac1_newp->data, (arr).p->data, (size_t)(arr).len * _ac1_esz); \
 		(arr).p = _ac1_newp; \
 	} \
@@ -236,9 +236,9 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msArrayCopy2(d, s)             do { \
 	if ((s).p != NULL) { \
 		size_t _ac_esz = sizeof((s).p->data[0]); \
-		size_t _ac_sz = sizeof(msArrayPayloadBase) + (size_t)(s).p->cap * _ac_esz; \
+		size_t _ac_sz = sizeof(msArrayPayloadBase) + (size_t)((s).p->cap & MS_CAP_MASK) * _ac_esz; \
 		(d).p = (__typeof__((s).p))malloc(_ac_sz); \
-		(d).p->cap = (s).p->cap; \
+		(d).p->cap = (s).p->cap & MS_CAP_MASK; \
 		memcpy((d).p->data, (s).p->data, (size_t)(s).len * _ac_esz); \
 	} else { \
 		(d).p = NULL; \
@@ -261,9 +261,9 @@ static inline void msStringCopy(msString* dest, msString src) {
 	msStringPayload* _asc_sp = _asc_src.p; \
 	msStringPayload* _asc_newp = NULL; \
 	if (_asc_sp) { \
-		size_t _asc_sz = sizeof(msStringPayload) + (size_t)_asc_sp->cap * sizeof(msString); \
+		size_t _asc_sz = sizeof(msStringPayload) + (size_t)(_asc_sp->cap & MS_CAP_MASK) * sizeof(msString); \
 		_asc_newp = (msStringPayload*)calloc(1, _asc_sz); \
-		_asc_newp->cap = _asc_sp->cap; \
+		_asc_newp->cap = _asc_sp->cap & MS_CAP_MASK; \
 		for (int64_t _asc_i = 0; _asc_i < _asc_len; _asc_i++) { \
 			_asc_newp->data[_asc_i] = _asc_sp->data[_asc_i]; \
 			msStringIncref(_asc_newp->data[_asc_i]); \
@@ -289,9 +289,9 @@ static inline void msStringCopy(msString* dest, msString src) {
 	msRefPayload* _arc_sp = (msRefPayload*)_arc_src.p; \
 	msRefPayload* _arc_newp = NULL; \
 	if (_arc_sp) { \
-		size_t _arc_sz = sizeof(msRefPayload) + (size_t)_arc_sp->cap * sizeof(void*); \
+		size_t _arc_sz = sizeof(msRefPayload) + (size_t)(_arc_sp->cap & MS_CAP_MASK) * sizeof(void*); \
 		_arc_newp = (msRefPayload*)calloc(1, _arc_sz); \
-		_arc_newp->cap = _arc_sp->cap; \
+		_arc_newp->cap = _arc_sp->cap & MS_CAP_MASK; \
 		for (int64_t _arc_i = 0; _arc_i < _arc_len; _arc_i++) { \
 			_arc_newp->data[_arc_i] = _arc_sp->data[_arc_i]; \
 			if (_arc_newp->data[_arc_i]) msIncRef(_arc_newp->data[_arc_i]); \
@@ -322,9 +322,9 @@ static inline void msStringCopy(msString* dest, msString src) {
 	msRefPayload* _aarc_sp = (msRefPayload*)_aarc_src.p; \
 	msRefPayload* _aarc_newp = NULL; \
 	if (_aarc_sp) { \
-		size_t _aarc_sz = sizeof(msRefPayload) + (size_t)_aarc_sp->cap * sizeof(void*); \
+		size_t _aarc_sz = sizeof(msRefPayload) + (size_t)(_aarc_sp->cap & MS_CAP_MASK) * sizeof(void*); \
 		_aarc_newp = (msRefPayload*)calloc(1, _aarc_sz); \
-		_aarc_newp->cap = _aarc_sp->cap; \
+		_aarc_newp->cap = _aarc_sp->cap & MS_CAP_MASK; \
 		for (int64_t _aarc_i = 0; _aarc_i < _aarc_len; _aarc_i++) { \
 			_aarc_newp->data[_aarc_i] = _aarc_sp->data[_aarc_i]; \
 			if (_aarc_newp->data[_aarc_i]) msAtomicIncRef(_aarc_newp->data[_aarc_i]); \
