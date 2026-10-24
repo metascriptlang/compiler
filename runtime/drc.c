@@ -531,6 +531,7 @@ void msRootsAdopt(msCellSeq* orphan) {
 
 static msCellSeq msOrphanRoots;
 static char msOrphanRootsLock;
+static int32_t msOrphanRootsPending;
 
 static void msOrphanRootsAcquire(void) {
 	while (__atomic_test_and_set(&msOrphanRootsLock, __ATOMIC_ACQUIRE)) {}
@@ -541,9 +542,11 @@ static void msOrphanRootsRelease(void) {
 }
 
 static void msAdoptOrphanRoots(void) {
+	if (__atomic_load_n(&msOrphanRootsPending, __ATOMIC_RELAXED) == 0) return;
 	msOrphanRootsAcquire();
 	msCellSeq spilled = msOrphanRoots;
 	msCellSeqInit(&msOrphanRoots);
+	__atomic_store_n(&msOrphanRootsPending, 0, __ATOMIC_RELAXED);
 	msOrphanRootsRelease();
 	msRootsAdopt(&spilled);
 }
@@ -552,6 +555,7 @@ void msRootsThreadTeardown(void) {
 	if (msRoots.len > 0) {
 		msOrphanRootsAcquire();
 		for (int32_t i = 0; i < msRoots.len; i++) msCellSeqPush(&msOrphanRoots, msRoots.data[i]);
+		__atomic_store_n(&msOrphanRootsPending, 1, __ATOMIC_RELAXED);
 		msOrphanRootsRelease();
 	}
 	msCellSeqFree(&msRoots);
