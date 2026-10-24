@@ -106,6 +106,7 @@ import "./bitSetCaseLabel";
 import "./destructuringRestLast";
 import "./stringMutatorsRemoved";
 import "./checkTakesParse";
+import "./hostCallbackBeforeBody";
 import "./comptimeStatement";
 import "./comptimeValues";
 import "./declarationBoundaries";
