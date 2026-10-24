@@ -184,7 +184,9 @@ static inline msPidSlot* msPidSlotAt(int32_t idx) {
     return &seg[idx & (MS_PID_SEG_SIZE - 1)];
 }
 
-static inline int32_t msPidSlotClaim(void) {
+__attribute__((noinline, cold, noreturn)) static void msPidTableFull(msActor* spawning);
+
+static inline int32_t msPidSlotClaim(msActor* spawning) {
     uint64_t head = atomic_load_explicit(&msPidFreeHead, memory_order_acquire);
     while ((uint32_t)head != 0u) {
         int32_t idx = (int32_t)((uint32_t)head - 1u);
@@ -195,9 +197,7 @@ static inline int32_t msPidSlotClaim(void) {
     }
     int32_t idx = atomic_fetch_add(&msPidNextSlot, 1);
     if (idx >= MS_TEST_PID_SLOT_LIMIT) {
-        fputs("fatal: pid table full\n", stderr);
-        if (msFatalTrap != NULL) msFatalTrap();
-        exit(1);
+        msPidTableFull(spawning);
     }
     int segI = idx >> MS_PID_SEG_BITS;
     if (atomic_load_explicit(&msPidSegs[segI], memory_order_acquire) == NULL) {
@@ -249,7 +249,7 @@ static inline bool msHazardScan(void* p) {
 }
 
 static inline int64_t msPidPublish(msActor* a) {
-    int32_t idx = msPidSlotClaim();
+    int32_t idx = msPidSlotClaim(a);
     msPidSlot* s = msPidSlotAt(idx);
     uint64_t g = atomic_load_explicit(&s->gen, memory_order_relaxed) + 1;
     atomic_store_explicit(&s->gen, g, memory_order_relaxed);
@@ -335,6 +335,70 @@ static inline msActor* msPidPinSlot(int32_t idx) {
         return NULL;
     }
     return (msActor*)p;
+}
+
+typedef struct msPidTypeCount {
+    const msTypeInfo* type;
+    int64_t count;
+} msPidTypeCount;
+
+static inline const char* msPidTypeName(const msTypeInfo* t) {
+    return t == NULL ? "<untyped>" : t->name;
+}
+
+static int msPidTypeCountDesc(const void* x, const void* y) {
+    int64_t a = ((const msPidTypeCount*)x)->count, b = ((const msPidTypeCount*)y)->count;
+    return (a < b) - (a > b);
+}
+
+/* Best effort: a slot is read only under the hazard pin the cycle detector uses, so a racing
+ * release or publish can make the counts off by the actors that moved during the walk. */
+static void msPidTableFull(msActor* spawning) {
+    int32_t slots = atomic_load_explicit(&msPidNextSlot, memory_order_acquire);
+    if (slots > MS_TEST_PID_SLOT_LIMIT) slots = MS_TEST_PID_SLOT_LIMIT;
+    msPidTypeCount* tab = NULL;
+    int64_t live = 0;
+    int used = 0, cap = 0;
+    bool tabOk = true;
+    for (int32_t i = 0; i < slots; i++) {
+        if (atomic_load_explicit(&msPidSegs[i >> MS_PID_SEG_BITS], memory_order_acquire) == NULL) continue;
+        msActor* a = msPidPinSlot(i);
+        if (a == NULL) continue;
+        live++;
+        const msTypeInfo* t = a->state != NULL ? msHeader(a->state)->type : NULL;
+        msHazardClear(a);
+        if (!tabOk) continue;
+        int k = 0;
+        while (k < used && tab[k].type != t) k++;
+        if (k == used) {
+            if (used == cap) {
+                int ncap = cap == 0 ? 16 : cap * 2;
+                msPidTypeCount* nt = (msPidTypeCount*)realloc(tab, (size_t)ncap * sizeof(msPidTypeCount));
+                if (nt == NULL) { tabOk = false; continue; }
+                tab = nt;
+                cap = ncap;
+            }
+            tab[used].type = t;
+            tab[used].count = 0;
+            used++;
+        }
+        tab[k].count++;
+    }
+    fprintf(stderr, "fatal: pid table full: %lld live actors (limit %d)\n",
+            (long long)live, (int)MS_TEST_PID_SLOT_LIMIT);
+    if (tabOk && used > 0) {
+        const msTypeInfo* st = spawning->state != NULL ? msHeader(spawning->state)->type : NULL;
+        fprintf(stderr, "  spawning: %s\n  live by type:", msPidTypeName(st));
+        qsort(tab, (size_t)used, sizeof(msPidTypeCount), msPidTypeCountDesc);
+        int shown = used < 8 ? used : 8;
+        for (int k = 0; k < shown; k++)
+            fprintf(stderr, "%s %s %lld", k == 0 ? "" : " \xc2\xb7", msPidTypeName(tab[k].type), (long long)tab[k].count);
+        if (used > shown) fprintf(stderr, " \xc2\xb7 +%d more types", used - shown);
+        fputs("\n  live actors are never reclaimed until stopped: a type that keeps growing is not being stopped\n", stderr);
+    }
+    free(tab);
+    if (msFatalTrap != NULL) msFatalTrap();
+    exit(1);
 }
 
 /* ===== Flag Helpers ===== */
