@@ -547,6 +547,68 @@ test "iterator peekable: a source that reported done is not pulled again" {
 	assert pulls[0] == 3;
 }
 
+function throwingReturn(log: string[]): Iterator<int32> {
+	let k: int32 = 0;
+	return {
+		next: () => {
+			log.push("next");
+			k += 1;
+			return { value: k, done: false };
+		},
+		return: () => {
+			log.push("return");
+			throw new Error("close failed");
+		},
+	};
+}
+
+function closeOutcome(body: (it: Iterator<int32>) => void): string {
+	const log: string[] = [];
+	return `${messageOf(() => body(throwingReturn(log)))} ${log.join(",")}`;
+}
+
+test "iterator close: a throwing return propagates from an early exit" {
+	const early = "close failed next,return";
+	assert closeOutcome((it: Iterator<int32>): void => { it.take<int32>(1).toArray<int32>(); }) == early;
+	assert closeOutcome((it: Iterator<int32>): void => {
+		it.some<int32>((x: int32, i: number): boolean => x == 1);
+	}) == early;
+	assert closeOutcome((it: Iterator<int32>): void => {
+		it.find<int32>((x: int32, i: number): boolean => x == 1);
+	}) == early;
+	assert closeOutcome((it: Iterator<int32>): void => {
+		for (const x of it.map<int32, int32>((y: int32, i: number): int32 => y)) break;
+	}) == early;
+}
+
+test "iterator close: the body's error wins over a throwing return" {
+	const early = "body failed next,return";
+	assert closeOutcome((it: Iterator<int32>): void => {
+		for (const x of it.map<int32, int32>((y: int32, i: number): int32 => y)) throw new Error("body failed");
+	}) == early;
+	assert closeOutcome((it: Iterator<int32>): void => {
+		for (const x of it) throw new Error("body failed");
+	}) == early;
+	assert closeOutcome((it: Iterator<int32>): void => {
+		it.map<int32, int32>((x: int32, i: number): int32 => { throw new Error("body failed"); }).toArray<int32>();
+	}) == early;
+}
+
+test "iterator close: a throwing return propagates for string elements" {
+	let pulls = 0;
+	const names: Iterator<string> = {
+		next: () => {
+			pulls += 1;
+			return { value: `n${pulls}`, done: false };
+		},
+		return: () => {
+			throw new Error("close failed");
+		},
+	};
+	assert messageOf(() => { names.take<string>(1).toArray<string>(); }) == "close failed";
+	assert messageOf(() => { names.find<string>((x: string, i: number): boolean => x == "n2"); }) == "close failed";
+}
+
 test "iterator sum, min and max: reductions with null for an empty min and max" {
 	const log: string[] = [];
 	assert counter("a", 4, log).sum() == 10;
