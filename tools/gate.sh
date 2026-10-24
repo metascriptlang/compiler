@@ -12,7 +12,7 @@ RULES=(
   'build|^tools/.*\.ms$'
   'hcr|^src/test/hcr/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^runtime/hcr|^examples/hcrProbe/'
   'tests|^src/test/(c|js|handoff|fmt|checker3pass|lang)/|^src/test/helpers\.ms$'
-  'lsp|^src/compiler/(lsp|transam)/|^src/test/lsp/|^std/process/|^runtime/process\.h$'
+  'lsp|^src/compiler/(lsp|transam)/|^src/checker/|^src/test/lsp/|^std/process/|^runtime/process\.h$'
   "tests,corpus|$EMITS"
   "solana|$SOLANA_SDK|$SOLANA_COMPILER"
   'guard|^(std|runtime)/solana/'
@@ -1582,7 +1582,7 @@ FAKE
 self_test() {
   local bad=0 cases got want log
   cases=$(cat <<'CASES'
-src/checker/checkPass.ms|build corpus solana suite tests
+src/checker/checkPass.ms|build corpus lsp solana suite tests
 src/parser/parser.ms|build corpus fmt suite tests
 src/lexer/lexer.ms|build corpus fmt suite tests
 std/meta/node.ms|build corpus fmt solana suite tests
