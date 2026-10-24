@@ -8,26 +8,46 @@
 //   msc org members <org>              — list org members
 //   msc org role <org> <user> <role>   — change member role (owner|member)
 
-import { createHeaders, setHeader } from "std/http/headers";
-import { HttpHeaders } from "std/core/fetch/types";
-import { parseJson, getDynamicField, asString } from "std/core/json";
+import { HttpResponse } from "std/http/types";
+import { parseJson, getDynamicField, asString, stringify, jsonObject, jsonString } from "std/core/json";
 import { arrayField } from "./json";
 import { loadToken } from "./credentials";
-import { registryBaseUrl } from "./registry";
+import { registryRequest, registryErrorText } from "./registry";
 import { error as errStyle, bold, green, cyan, dim } from "../../utils/color";
 
-const ORG_API_BASE = registryBaseUrl();
+// `{ "<key>": "<value>" }`, with the value escaped.
+function fieldBody(key: string, value: string): string {
+	return stringify(jsonObject([key], [jsonString(value)]));
+}
 
-function authHeaders(): { headers: HttpHeaders, ok: boolean } {
-	const token = loadToken();
-	if (token == "") {
-		console.log(`${errStyle("error")}: not logged in — run ${cyan("msc login")} first`);
-		return { headers: createHeaders(), ok: false };
+// Sends one call; null after printing why it could not be sent.
+function orgCall(method: string, path: string, body: string, needsLogin: boolean): HttpResponse | null {
+	let token = "";
+	if (needsLogin) {
+		token = loadToken();
+		if (token == "") {
+			console.log(`${errStyle("error")}: not logged in — run ${cyan("msc login")} first`);
+			return null;
+		}
 	}
-	const h = createHeaders();
-	setHeader(h, "authorization", "Bearer " + token);
-	setHeader(h, "content-type", "application/json");
-	return { headers: h, ok: true };
+	const sent = registryRequest(method, path, body, token, body != "" ? "application/json" : "");
+	if (!sent.ok) {
+		console.log(`${errStyle("error")}: failed to reach registry`);
+		return null;
+	}
+	return sent.value;
+}
+
+// A call that changes an org: prints `done` on `okStatus`, else the registry's error.
+function orgChange(method: string, path: string, body: string, okStatus: int32, done: string): boolean {
+	const resp = orgCall(method, path, body, true);
+	if (resp == null) return false;
+	if (resp.status == okStatus) {
+		console.log(done);
+		return true;
+	}
+	console.log(`${errStyle("error")}: ${registryErrorText(resp)}`);
+	return false;
 }
 
 export function cmdOrg(args: string[]): boolean {
@@ -70,27 +90,7 @@ function orgCreate(args: string[]): boolean {
 		return false;
 	}
 	const name = args[1];
-	const auth = authHeaders();
-	if (!auth.ok) return false;
-
-	const body = "{\"name\":" + "\"" + name + "\"}";
-	const fetchResult = fetch(ORG_API_BASE + "/orgs", {
-		method: "POST",
-		body: body,
-		headers: auth.headers,
-	});
-	if (!fetchResult.ok) { console.log(`${errStyle("error")}: failed to reach registry`); return false; }
-	const resp = fetchResult.value;
-
-	if (resp.status == 201) {
-		console.log(`${green("created")} organization ${cyan("@" + name)}`);
-		return true;
-	}
-
-	const parsed = parseJson(resp.body);
-	const errMsg = parsed.ok ? parsed.value.getDynamicField("error").asString() : resp.body;
-	console.log(`${errStyle("error")}: ${errMsg}`);
-	return false;
+	return orgChange("POST", "/orgs", fieldBody("name", name), 201, `${green("created")} organization ${cyan("@" + name)}`);
 }
 
 function orgInvite(args: string[]): boolean {
@@ -100,27 +100,7 @@ function orgInvite(args: string[]): boolean {
 	}
 	const orgName = args[1];
 	const username = args[2];
-	const auth = authHeaders();
-	if (!auth.ok) return false;
-
-	const body = "{\"username\":\"" + username + "\"}";
-	const fetchResult = fetch(ORG_API_BASE + "/orgs/" + orgName + "/members", {
-		method: "POST",
-		body: body,
-		headers: auth.headers,
-	});
-	if (!fetchResult.ok) { console.log(`${errStyle("error")}: failed to reach registry`); return false; }
-	const resp = fetchResult.value;
-
-	if (resp.status == 201) {
-		console.log(`${green("added")} ${cyan(username)} to ${cyan("@" + orgName)}`);
-		return true;
-	}
-
-	const parsed = parseJson(resp.body);
-	const errMsg = parsed.ok ? parsed.value.getDynamicField("error").asString() : resp.body;
-	console.log(`${errStyle("error")}: ${errMsg}`);
-	return false;
+	return orgChange("POST", "/orgs/" + orgName + "/members", fieldBody("username", username), 201, `${green("added")} ${cyan(username)} to ${cyan("@" + orgName)}`);
 }
 
 function orgRemove(args: string[]): boolean {
@@ -130,37 +110,12 @@ function orgRemove(args: string[]): boolean {
 	}
 	const orgName = args[1];
 	const username = args[2];
-	const auth = authHeaders();
-	if (!auth.ok) return false;
-
-	const fetchResult = fetch(ORG_API_BASE + "/orgs/" + orgName + "/members/" + username, {
-		method: "DELETE",
-		headers: auth.headers,
-	});
-	if (!fetchResult.ok) { console.log(`${errStyle("error")}: failed to reach registry`); return false; }
-	const resp = fetchResult.value;
-
-	if (resp.status == 200) {
-		console.log(`${green("removed")} ${cyan(username)} from ${cyan("@" + orgName)}`);
-		return true;
-	}
-
-	const parsed = parseJson(resp.body);
-	const errMsg = parsed.ok ? parsed.value.getDynamicField("error").asString() : resp.body;
-	console.log(`${errStyle("error")}: ${errMsg}`);
-	return false;
+	return orgChange("DELETE", "/orgs/" + orgName + "/members/" + username, "", 200, `${green("removed")} ${cyan(username)} from ${cyan("@" + orgName)}`);
 }
 
 function orgList(): boolean {
-	const auth = authHeaders();
-	if (!auth.ok) return false;
-
-	const fetchResult = fetch(ORG_API_BASE + "/orgs", {
-		method: "GET",
-		headers: auth.headers,
-	});
-	if (!fetchResult.ok) { console.log(`${errStyle("error")}: failed to reach registry`); return false; }
-	const resp = fetchResult.value;
+	const resp = orgCall("GET", "/orgs", "", true);
+	if (resp == null) return false;
 
 	if (resp.status != 200) {
 		console.log(`${errStyle("error")}: failed to list organizations`);
@@ -196,9 +151,8 @@ function orgMembers(args: string[]): boolean {
 	}
 	const orgName = args[1];
 
-	const fetchResult = fetch(ORG_API_BASE + "/orgs/" + orgName, { method: "GET" });
-	if (!fetchResult.ok) { console.log(`${errStyle("error")}: failed to reach registry`); return false; }
-	const resp = fetchResult.value;
+	const resp = orgCall("GET", "/orgs/" + orgName, "", false);
+	if (resp == null) return false;
 	if (resp.status == 404) {
 		console.log(`${errStyle("error")}: organization not found: @${orgName}`);
 		return false;
@@ -240,25 +194,14 @@ function orgRole(args: string[]): boolean {
 		return false;
 	}
 
-	const auth = authHeaders();
-	if (!auth.ok) return false;
+	return orgChange("PATCH", "/orgs/" + orgName + "/members/" + username, fieldBody("role", role), 200, `${green("updated")} ${cyan(username)} → ${cyan(role)} in ${cyan("@" + orgName)}`);
+}
 
-	const body = "{\"role\":\"" + role + "\"}";
-	const fetchResult = fetch(ORG_API_BASE + "/orgs/" + orgName + "/members/" + username, {
-		method: "PATCH",
-		body: body,
-		headers: auth.headers,
-	});
-	if (!fetchResult.ok) { console.log(`${errStyle("error")}: failed to reach registry`); return false; }
-	const resp = fetchResult.value;
-
-	if (resp.status == 200) {
-		console.log(`${green("updated")} ${cyan(username)} → ${cyan(role)} in ${cyan("@" + orgName)}`);
-		return true;
-	}
-
-	const parsed = parseJson(resp.body);
-	const errMsg = parsed.ok ? parsed.value.getDynamicField("error").asString() : resp.body;
-	console.log(`${errStyle("error")}: ${errMsg}`);
-	return false;
+test "a request body escapes a quote and a backslash in the value" {
+	const quoted = parseJson(fieldBody("name", 'a"b'));
+	assert quoted.ok;
+	if (quoted.ok) assert quoted.value.getDynamicField("name").asString() == 'a"b';
+	const slashed = parseJson(fieldBody("username", "a\\b"));
+	assert slashed.ok;
+	if (slashed.ok) assert slashed.value.getDynamicField("username").asString() == "a\\b";
 }
