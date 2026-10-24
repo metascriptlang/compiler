@@ -12,7 +12,7 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeNumber, runtimeRef } from "../util";
 import { isFloatKind } from "../numKinds";
-import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts, checkedCtx } from "../testUtil";
+import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts, checkedCtx, castOf } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
 
 // ===== Helpers =====
@@ -260,10 +260,6 @@ function rangeHelperOf(input: string): string {
 		return n;
 	});
 	return name;
-}
-
-function castOf(target: string): string {
-	return "function f(v: float64): void { const r = v as " + target + "; }";
 }
 
 function parsedAsType(input: string): string {

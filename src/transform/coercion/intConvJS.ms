@@ -13,7 +13,7 @@ import { createPrimitive, isWideningInt64Conv, peelToRepr, distinctNumericBase }
 import { readsUnionMember } from "./bigIntJS";
 import { is64Kind, isFloatKind, isNarrowIntKind } from "../numKinds";
 import { rangeCheckHelper, makeRangeCheckFor } from "../native/rangeCheckInject";
-import { parseInput, makeJsCtx, getStmts, firstExprKindAfter } from "../testUtil";
+import { parseInput, makeJsCtx, getStmts, firstExprKindAfter, castOf } from "../testUtil";
 import { checkProgramJs } from "../../checker/checkPass";
 
 export function lowerIntConvJS(program: Node, ctx: TransformContext): Node {
@@ -148,10 +148,6 @@ function castOp(input: string): string {
 function castKind(input: string): NodeKind {
 	const r = castResult(input);
 	return r != null ? r.kind : NodeKind.Program;
-}
-
-function castOf(target: string): string {
-	return "function f(v: float64): void { const r = v as " + target + "; }";
 }
 
 // ===== Tests =====
