@@ -19,6 +19,7 @@ const TABLE_PATHS: string[] = [
 	"src/compiler/meta/bridge.ms",
 ];
 
+// Parked: ~/metascript/.inbox/compiler/2026-10-25-a-parameter-default-and-a-field-decorator-stay-untyped-in-the-tree.md
 const KNOWN_GAPS: string[] = [
 	"visitor:arrowDefaults", "visitor:ctorDefaults", "visitor:fnDefaults", "visitor:interfaceFieldDecorators",
 	"visitor:methodDefaults",
