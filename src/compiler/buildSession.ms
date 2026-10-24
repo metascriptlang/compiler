@@ -1,4 +1,4 @@
-import { Node, Type, TypeFlag, Symbol, SymbolKind } from "../ast/node";
+import { Node, Type, TypeFlag, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { CModuleOutput } from "../codegen/c/index";
 import { forEachChild } from "../ast/visitor";
 import { CheckSession, createCheckSession } from "../checker/orchestrator";
@@ -61,7 +61,7 @@ export class BuildSession {
 	lowerFingerprints: HashMap<string, string>;
 	lowerDiagnostics: HashMap<string, ModuleError[]>;
 	lowerClaims: HashMap<string, LowerClaims>;
-	hcrTypeRegistryFingerprint: string;
+	hcrTypeLayouts: HashMap<string, string>;
 	hcrCoreModules: string[];
 	staleReason: string;
 	moduleCount: int32;
@@ -81,7 +81,7 @@ export function createBuildSession(keep: boolean): BuildSession {
 		lowerFingerprints: new HashMap<string, string>(),
 		lowerDiagnostics: new HashMap<string, ModuleError[]>(),
 		lowerClaims: new HashMap<string, LowerClaims>(),
-		hcrTypeRegistryFingerprint: "",
+		hcrTypeLayouts: new HashMap<string, string>(),
 		hcrCoreModules: [],
 		staleReason: "",
 		moduleCount: 0,
@@ -133,7 +133,7 @@ function typeShapeWithin(t: Type | null, seen: HashSet<Type>): string {
 	} else if (t.typeChildren != null) {
 		for (const child of t.typeChildren) shape = shape + "(" + typeShapeWithin(child, seen) + ")";
 	}
-	if (t.typeReturn != null) shape = shape + ">" + typeShapeWithin(t.typeReturn, seen);
+	if (t.typeReturn != null && t.kind != TypeKind.GenericInstance) shape = shape + ">" + typeShapeWithin(t.typeReturn, seen);
 	seen.delete(t);
 	return shape;
 }
@@ -180,12 +180,12 @@ export function instancesFingerprint(session: BuildSession, instances: Node[] | 
 	return joined;
 }
 
-export function hcrTypeRegistryFingerprint(modules: HcrIndirectModule[]): string {
-	let out = "";
+export function hcrTypeLayouts(session: BuildSession, modules: HcrIndirectModule[]): HashMap<string, string> {
+	const layouts = new HashMap<string, string>();
 	for (const m of modules) {
-		out = out + m.moduleId + "|" + m.typeInfos.join(",") + "|" + m.typeKeys.join(",") + "\n";
+		layouts.set(m.modulePath, m.moduleId + "|" + m.typeInfos.join(",") + "|" + m.typeKeys.join(",") + "\n" + projectTypesFingerprint(session, [m.modulePath]));
 	}
-	return out;
+	return layouts;
 }
 
 

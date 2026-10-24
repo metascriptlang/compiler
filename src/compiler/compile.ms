@@ -57,7 +57,7 @@ import { modulePassIdentity } from "../checker/prelude";
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
 import { readLockfile, entryName } from "./package/lockfile";
 import { registrySrcPath, gitSrcPath } from "./package/cache";
-import { BuildSession, BuildStatus, DirectiveHit, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeRegistryFingerprint, projectTypesFingerprint, sameClaims } from "./buildSession";
+import { BuildSession, BuildStatus, DirectiveHit, LowerClaims, createBuildSession, startSessionBuild, instancesFingerprint, hcrTypeLayouts, sameClaims } from "./buildSession";
 import { dbLower } from "./transam/index";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { ResolveSection, DepsSection, defaultResolveSection, defaultDepsSection, loadBuildConfig } from "./buildConfig";
@@ -2874,25 +2874,20 @@ resetLiftedOps();
 	const ownerFingerprints: HashMap<string, string> = new HashMap<string, string>();
 	if (session.keep) {
 		if (opts.isHcr) {
-			const typesNow = hcrTypeRegistryFingerprint(hcrModules) + projectTypesFingerprint(session, hcrModulePaths);
+			const typesNow = hcrTypeLayouts(session, hcrModules);
 			let greenHcrModule = false;
 			for (const path of hcrModulePaths) {
 				if (!session.check.rechecked.has(path)) greenHcrModule = true;
 			}
-			const retainedModules: HcrIndirectModule[] = [];
-			const retainedPaths: string[] = [];
-			for (const module of hcrModules) {
-				if (!session.lowerFingerprints.has(module.modulePath)) continue;
-				retainedModules.push(module);
-				retainedPaths.push(module.modulePath);
+			if (greenHcrModule) {
+				for (const path of hcrModulePaths) {
+					const before = session.hcrTypeLayouts.get(path);
+					if (before == null || before == typesNow.get(path)) continue;
+					session.staleReason = `the type layouts of ${path} changed`;
+					return BuildStatus.Stale;
+				}
 			}
-			const retainedTypes = hcrTypeRegistryFingerprint(retainedModules)
-				+ projectTypesFingerprint(session, retainedPaths);
-			if (session.hcrTypeRegistryFingerprint != "" && session.hcrTypeRegistryFingerprint != retainedTypes && greenHcrModule) {
-				session.staleReason = "the project type layouts changed";
-				return BuildStatus.Stale;
-			}
-			session.hcrTypeRegistryFingerprint = typesNow;
+			session.hcrTypeLayouts = typesNow;
 		}
 		for (const cm of checkedMods) {
 			let fingerprint = instancesFingerprint(session, instancesByOwner.get(cm.modPath));
