@@ -1,6 +1,8 @@
 // guard: a module `const` crosses threads when its declared type is deep Readonly and its value is
-// built in its own initializer; a module `let`, or a Readonly const that names a value another
-// binding holds, is refused, and a write through an alias of the const is refused.
+// built in its own initializer; a module `let`, a Readonly const that names a value another
+// binding holds, or one returned by a call on a receiver that is not fresh (a method, an extension
+// or a chained receiver that may keep the result), is refused on C and JS, and a write through an
+// alias of the const is refused.
 //
 // WHY A SUBPROCESS: the accepted case is a claim that check stays silent; GUARD-CHECK-FAIL can
 //   only claim an error.
@@ -39,11 +41,17 @@ interface Case {
 
 const CELL = "interface Cell { n: int32; tag: string; }\n"
 	+ "function build(n: int32): Cell { return { n: n, tag: \"t\" }; }\n";
-const SPAWN = "function main(): void {\n"
+const SPAWN = "async function main(): Promise<void> {\n"
 	+ "\tconst f = spawn(() => read());\n"
 	+ "\tconsole.log(await f);\n"
 	+ "}\n"
-	+ "main();\n";
+	+ "await main();\n";
+const FACTORY = "class Factory {\n"
+	+ "\tcache: Cell[] = [];\n"
+	+ "\tmake(n: int32): Cell { const c = build(n); this.cache.push(c); return c; }\n"
+	+ "}\n"
+	+ "function keep(this f: Factory, n: int32): Cell { const c = build(n); f.cache.push(c); return c; }\n"
+	+ "class Outer { inner: Factory = new Factory(); }\n";
 
 const cases: Case[] = [
 	{
@@ -74,6 +82,50 @@ const cases: Case[] = [
 			+ SPAWN,
 	},
 	{
+		name: "a Readonly const a fresh receiver's method returns",
+		expect: Expect.Clean,
+		text: CELL + FACTORY
+			+ "const made: Readonly<Cell> = new Factory().make(1);\n"
+			+ "function read(): int32 { return made.n; }\n"
+			+ SPAWN,
+	},
+	{
+		name: "a Readonly const a module const's method caches",
+		expect: Expect.ModuleState,
+		text: CELL + FACTORY
+			+ "const F: Factory = new Factory();\n"
+			+ "const made: Readonly<Cell> = F.make(1);\n"
+			+ "function read(): int32 { return made.n; }\n"
+			+ SPAWN,
+	},
+	{
+		name: "a Readonly const array holding what a module const's method caches",
+		expect: Expect.ModuleState,
+		text: CELL + FACTORY
+			+ "const F: Factory = new Factory();\n"
+			+ "const list: Readonly<Cell[]> = [build(1), F.make(2)];\n"
+			+ "function read(): int32 { return list[1].n; }\n"
+			+ SPAWN,
+	},
+	{
+		name: "a Readonly const an extension on a module const caches",
+		expect: Expect.ModuleState,
+		text: CELL + FACTORY
+			+ "const F: Factory = new Factory();\n"
+			+ "const made: Readonly<Cell> = F.keep(1);\n"
+			+ "function read(): int32 { return made.n; }\n"
+			+ SPAWN,
+	},
+	{
+		name: "a Readonly const a chained receiver's method caches",
+		expect: Expect.ModuleState,
+		text: CELL + FACTORY
+			+ "const F: Outer = new Outer();\n"
+			+ "const made: Readonly<Cell> = F.inner.make(1);\n"
+			+ "function read(): int32 { return made.n; }\n"
+			+ SPAWN,
+	},
+	{
 		name: "a write through an alias of a Readonly const",
 		expect: Expect.WriteRefused,
 		text: CELL
@@ -89,20 +141,23 @@ for (const c of cases) {
 	const dir = `${root}/out/guard/readonlyConstCrossesThreads/${slot}`;
 	ensureDir(dir);
 	writeFile(`${dir}/main.ms`, c.text);
-	const r = execFileResult(msc, ["check", `${dir}/main.ms`]);
-	const out = `${r.output}${r.errorOutput}`;
-	match (c.expect) {
-		Expect.Clean => {
-			if (r.exitCode != 0) report(`${c.name}: check failed: ${out}`);
-			else if (out.includes(MODULE_STATE_RULE)) report(`${c.name}: module state reported: ${out}`);
-		},
-		Expect.ModuleState => {
-			if (r.exitCode == 0 || !out.includes(MODULE_STATE_RULE)) report(`${c.name}: module state not refused: ${out}`);
-		},
-		Expect.WriteRefused => {
-			if (r.exitCode == 0 || !out.includes(WRITE_RULE)) report(`${c.name}: write not refused: ${out}`);
-		},
-	};
+	for (const target of ["c", "js"]) {
+		const r = execFileResult(msc, ["check", `--target=${target}`, `${dir}/main.ms`]);
+		const out = `${r.output}${r.errorOutput}`;
+		const name = `${c.name} [${target}]`;
+		match (c.expect) {
+			Expect.Clean => {
+				if (r.exitCode != 0) report(`${name}: check failed: ${out}`);
+				else if (out.includes(MODULE_STATE_RULE)) report(`${name}: module state reported: ${out}`);
+			},
+			Expect.ModuleState => {
+				if (r.exitCode == 0 || !out.includes(MODULE_STATE_RULE)) report(`${name}: module state not refused: ${out}`);
+			},
+			Expect.WriteRefused => {
+				if (r.exitCode == 0 || !out.includes(WRITE_RULE)) report(`${name}: write not refused: ${out}`);
+			},
+		};
+	}
 }
 
 if (failed != 0) exit(1);
