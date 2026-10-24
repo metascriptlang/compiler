@@ -1,7 +1,7 @@
 // hashFarm over a string's bytes equals the reference's string hash. Each pair is the string and
 // the hash the reference computes for its bytes: every length branch (0, 1-3, 4-7, 8-16, 17-32,
 // 33-64 and the 64-byte loop with its tail) and non-ASCII text.
-import { hashString } from "std/core/struct";
+import { hashFarm, hashString } from "std/core/struct";
 
 struct FarmVector {
 	s: string;
@@ -45,6 +45,67 @@ const farmVectors: FarmVector[] = [
 test "a string hashes to the reference's hashFarm for every length branch" {
 	for (const v of farmVectors) {
 		assert hashString(v.s) == v.h, `hash of a ${v.s.byteLength}-byte string`;
+	}
+}
+
+const multiBytePieces: string[] = ["é", "日", "ß", "€", "ü", "語", "✓", "ñ"];
+
+function farmInput(len: int32): string {
+	let s = "";
+	let i: int32 = 0;
+	while (s.byteLength < len) {
+		const piece = multiBytePieces[i % 8];
+		if (i % 3 == 1 && piece.byteLength <= len - s.byteLength) {
+			s += piece;
+		} else {
+			s += String.fromCharCode(33 + (i * 7) % 90);
+		}
+		i = i + 1;
+	}
+	return s;
+}
+
+struct FarmBoundary {
+	len: int32;
+	h: int64;
+}
+
+const farmBoundaries: FarmBoundary[] = [
+	{ len: 0, h: -7286425919675154353 },
+	{ len: 1, h: -1459307080660855630 },
+	{ len: 2, h: -3245377973713539183 },
+	{ len: 3, h: 1502982227347875767 },
+	{ len: 4, h: -6052264090671492281 },
+	{ len: 5, h: -4740361854840842962 },
+	{ len: 7, h: 6508798854405788457 },
+	{ len: 8, h: 9178820140425197559 },
+	{ len: 9, h: 8600668962426277906 },
+	{ len: 15, h: -2711361252893743389 },
+	{ len: 16, h: 20700482545660186 },
+	{ len: 17, h: -3756524715969020908 },
+	{ len: 24, h: -7016000420833704117 },
+	{ len: 31, h: -3412642471000863413 },
+	{ len: 32, h: -4772905594073404675 },
+	{ len: 33, h: 2440207308259438366 },
+	{ len: 48, h: -8094225882468158327 },
+	{ len: 63, h: -714695674669876527 },
+	{ len: 64, h: 1514324311622918298 },
+	{ len: 65, h: -7234370128720440227 },
+	{ len: 100, h: -4296955606318437727 },
+	{ len: 127, h: 280313738596540298 },
+	{ len: 128, h: -4011982847677367922 },
+	{ len: 129, h: -719242291507778984 },
+	{ len: 191, h: 2619377369322252106 },
+	{ len: 192, h: 107427516177264626 },
+	{ len: 193, h: -7144222755226846986 },
+	{ len: 1000, h: -4514120196060668950 },
+];
+
+test "hashFarm keeps its bits at every length-class boundary over multi-byte text" {
+	for (const v of farmBoundaries) {
+		const s = farmInput(v.len);
+		assert s.byteLength == v.len, `input of ${v.len} bytes`;
+		assert hashFarm(s) == v.h, `hashFarm of a ${v.len}-byte string`;
 	}
 }
 
