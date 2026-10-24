@@ -303,6 +303,7 @@ void* msAwaitSlotCreate(int32_t n);
 void msAwaitSlotRelease(void* sp);
 
 void msActorWakeEventLoop(void);  /* dispatchFull.c: wakes the loop thread's poll */
+void msEnsureWakePipe(void);
 
 static inline void msAwaitSlotDone(msAwaitSlot* s) {
     int32_t prev = atomic_fetch_sub_explicit(&s->pending, 1, memory_order_acq_rel);
@@ -355,6 +356,7 @@ static inline void msAwaitSlotWait(void* sp) {
          * the completion wakes as it wakes for a loop event; a worker parks, waking
          * to run the descendants the task queues meanwhile. */
         int32_t flag = msIsPoolWorker ? MS_SLOT_PARKED : MS_SLOT_LOOP;
+        if (!msIsPoolWorker) msEnsureWakePipe();
         int32_t v = atomic_fetch_or_explicit(&s->pending, flag, memory_order_acq_rel) | flag;
         if ((v & MS_SLOT_COUNT) == 0) break;
         if (!msIsPoolWorker) {

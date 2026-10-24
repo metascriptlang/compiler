@@ -148,6 +148,7 @@ int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs) {
 void msNotifyFutureComplete(void) { /* single-threaded: no condvar */ }
 void msWorkerWaitOnFuture(void* fut) { (void)fut; }
 void msActorWakeEventLoop(void) {}
+void msEnsureWakePipe(void) {}
 
 bool msRunOnce(int timeoutMs) {
     msDispatcher* d = msGetDispatcher();
