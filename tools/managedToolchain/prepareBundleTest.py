@@ -51,6 +51,8 @@ class BundleTest(unittest.TestCase):
         self.runtimeCalls.append((zig, engine, output, targets, engineRelative))
         write(os.path.join(output, "x86_64-linux-gnu.2.31.cfg"), "-target x\n")
         write(os.path.join(output, "notices", "runtime-provenance.json"), '{"kind": "runtime"}\n')
+        write(os.path.join(output, "x86_64-linux-gnu.2.31", "libm.so.6"), "stub\n")
+        os.symlink("libm.so.6", os.path.join(output, "x86_64-linux-gnu.2.31", "libm.so"))
         return output, []
 
     def test_the_bundle_keeps_engine_contents_at_the_root_and_the_runtime_as_a_child(self):
@@ -79,6 +81,30 @@ class BundleTest(unittest.TestCase):
         self.assertNotEqual(identity, self.engineIdentity)
         self.assertEqual(self.verified[0], self.engine)
         self.assertTrue(self.verified[-1].startswith(out + ".partial-"))
+
+    def test_a_library_alias_stays_a_relative_link_and_is_hashed_with_its_stub(self):
+        out = self.path("bundle")
+        pb.prepareBundle(self.engine, "/z/zig", out, [])
+        directory = os.path.join(out, "runtime", "x86_64-linux-gnu.2.31")
+        self.assertEqual(os.readlink(os.path.join(directory, "libm.so")), "libm.so.6")
+        hashes = dict(reversed(l.split("  ", 1)) for l in read(os.path.join(out, "FILES.sha256")).splitlines())
+        stub = hashes["runtime/x86_64-linux-gnu.2.31/libm.so.6"]
+        self.assertEqual(hashes["runtime/x86_64-linux-gnu.2.31/libm.so"], stub)
+        self.assertEqual(stub, pe.sha256File(os.path.join(directory, "libm.so.6")))
+
+    def test_an_alias_leaving_the_bundle_is_refused_and_not_published(self):
+        outside = self.path("outside")
+        write(outside)
+
+        def escaping(zig, engine, output, targets, engineRelative):
+            write(os.path.join(output, "notices", "runtime-provenance.json"), "{}\n")
+            os.symlink(outside, os.path.join(output, "libm.so"))
+            return output, []
+
+        with mock.patch.object(pr, "prepareRuntime", side_effect=escaping):
+            with self.assertRaisesRegex(pe.EngineError, "leaves the bundle"):
+                pb.prepareBundle(self.engine, "/z/zig", self.path("bundle"), [])
+        self.assertEqual(sorted(os.listdir(self.dir)), ["engine", "outside"])
 
     def test_the_source_engine_is_not_changed_and_its_receipt_is_recorded_without_certifying(self):
         before = (pe.listFiles(self.engine), read(os.path.join(self.engine, "IDENTITY")))
