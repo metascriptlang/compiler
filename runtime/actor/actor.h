@@ -750,6 +750,8 @@ typedef struct msActorJobs {
     int32_t lentCap;
 } msActorJobs;
 
+extern void msTimerCancelId(int64_t id);  /* dispatchFull.c */
+
 static inline void msActorJobUnref(msActorJob* r) {
     if (atomic_fetch_sub_explicit(&r->refs, 1, memory_order_acq_rel) == 1) free(r);
 }
@@ -925,6 +927,18 @@ static inline void msActorJobsDrain(msActorJobs* j) {
     j->heldLen = 0;
 }
 
+static inline void msActorJobsTeardown(msActorJobs* j) {
+    while (j->live != NULL) {
+        msActorJob* r = j->live;
+        atomic_store_explicit(&r->cancelled, true, memory_order_release);
+        if (r->timerId != 0) msTimerCancelId(r->timerId);
+        msActorJobDropEnv(j, r);
+    }
+    msActorJobsDrain(j);
+    for (int32_t i = 0; i < j->lentLen; i++) msDecref(j->lent[i].fut);
+    j->lentLen = 0;
+}
+
 /* At shell free: no pin is left, so no poster can still push. */
 static inline void msActorJobsFree(msActor* a) {
     msActorJobs* j = a->jobs;
@@ -1072,7 +1086,8 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         }
     }
 
-    if (!parked && msMpscIsEmpty(&a->mailbox) && a->state != NULL && msHeader(a->state)->rc > 0) {
+    if (!parked && msMpscIsEmpty(&a->mailbox) && (a->jobs == NULL || a->jobs->live == NULL)
+            && a->state != NULL && msHeader(a->state)->rc > 0) {
         msActorSetFlag(a, MS_ACTOR_BLOCKED);
     }
 
@@ -1311,6 +1326,7 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
         }
     }
     msMpscDestroy(&a->mailbox);
+    if (a->jobs != NULL) msActorJobsTeardown(a->jobs);
     if (a->links != NULL) free(a->links);
     if (a->monitorWatchers != NULL) free(a->monitorWatchers);
     if (a->monitorRefs != NULL) free(a->monitorRefs);

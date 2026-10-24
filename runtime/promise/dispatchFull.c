@@ -1244,6 +1244,8 @@ double msSetInterval(msClosure cb, double ms) {
 	return (double)msArmTimer(cb, ms, period);
 }
 
+void msTimerCancelId(int64_t id) { msCancelTimer(id); }
+
 void msClearTimeout(double id) {
 	msActorClearTimerJob((int64_t)id);
 	msCancelTimer((int64_t)id);
