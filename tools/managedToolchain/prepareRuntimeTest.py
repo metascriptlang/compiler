@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -321,6 +322,85 @@ class ArchiveTest(unittest.TestCase):
                      b"!<arch>\n" + arMember("a.o/", b"abc")[:-2]):
             with self.assertRaises(pe.EngineError):
                 pr.parseArchive(data)
+
+
+@unittest.skipUnless(os.environ.get("MANAGED_TOOLCHAIN_ENGINE") and shutil.which("wasmtime"),
+                     "needs MANAGED_TOOLCHAIN_ENGINE=<prepared engine> and wasmtime")
+class LldArchiveTest(TempCase):
+    """Archives the way lld reads them: members load lazily by reference, in any command-line
+    order, and a nested reference (user object -> libA -> libB) is followed. libB holds two
+    members both named dup.o, which normalization must keep apart."""
+
+    def setUp(self):
+        super().setUp()
+        self.engine = os.environ["MANAGED_TOOLCHAIN_ENGINE"]
+        self.fixture = os.path.join(pr.FIXTURES, "archiveChain.c")
+        for variant in ("MEMBER_A", "MEMBER_B1", "MEMBER_B2", "MEMBER_UNUSED"):
+            self.compile(variant, variant)
+        self.compile("user", None)
+
+    def tool(self, name):
+        return os.path.join(self.engine, "bin", name)
+
+    def compile(self, name, define):
+        pe.run([self.tool("clang"), "--target=wasm32", "-ffreestanding", "-nostdlib", "-O2", "-c", self.fixture]
+               + (["-D" + define] if define else []) + ["-o", self.path(name + ".o")])
+
+    def build(self, name, members):
+        """Archive with `q`, which appends without replacing a member of the same name."""
+        out = self.path(name + ".a")
+        for i, (member, base) in enumerate(members):
+            directory = self.path("stage", name, str(i))
+            os.makedirs(directory)
+            shutil.copyfile(self.path(member + ".o"), os.path.join(directory, base))
+            pe.run([self.tool("llvm-ar"), "q", out, os.path.join(directory, base)])
+        return out
+
+    def link(self, inputs, name="out", extra=()):
+        output = self.path(name + ".wasm")
+        pe.run([self.tool("clang"), "--target=wasm32", "-nostdlib", "-Wl,--no-entry"] + list(extra)
+               + list(inputs) + ["-o", output])
+        return output
+
+    def invoke(self, module, export):
+        done = subprocess.run(["wasmtime", "--invoke", export, module], stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, universal_newlines=True)
+        return done.returncode, done.stdout.strip()
+
+    def libraries(self):
+        return (self.build("libA", [("MEMBER_A", "dup.o")]),
+                self.build("libB", [("MEMBER_B1", "dup.o"), ("MEMBER_B2", "dup.o"), ("MEMBER_UNUSED", "unused.o")]))
+
+    def test_archives_before_the_user_object_resolve_nested_references_lazily(self):
+        libA, libB = self.libraries()
+        user = self.path("user.o")
+        for order in ((libA, libB, user), (libB, libA, user), (user, libA, libB)):
+            module = self.link(order)
+            self.assertEqual(self.invoke(module, "run"), (0, "13"), msg=order)
+            self.assertNotEqual(self.invoke(module, "leak")[0], 0, msg="unreferenced member was loaded")
+        eager = self.link([user, libA], "eager", ["-Wl,--whole-archive", libB, "-Wl,--no-whole-archive"])
+        self.assertEqual(self.invoke(eager, "leak"), (0, "99"))
+
+    def test_normalization_keeps_both_members_of_one_name(self):
+        libA, libB = self.libraries()
+        self.assertEqual(pe.run([self.tool("llvm-ar"), "t", libB]).split(), ["dup.o", "dup.o", "unused.o"])
+        pr.normalizeInput(self.engine, libB)
+        with open(libB, "rb") as f:
+            names = [name for name, _ in pr.parseArchive(f.read())]
+        self.assertEqual(names, ["0000-dup.o", "0001-dup.o", "0002-unused.o"])
+        module = self.link([libA, libB, self.path("user.o")], "normalized")
+        self.assertEqual(self.invoke(module, "run"), (0, "13"))
+        self.assertNotEqual(self.invoke(module, "leak")[0], 0)
+
+    def test_replacing_by_name_would_lose_a_member_and_fail_the_link(self):
+        libA = self.build("libA", [("MEMBER_A", "dup.o")])
+        for member in ("MEMBER_B1", "MEMBER_B2"):
+            os.makedirs(self.path("byName", member))
+            shutil.copyfile(self.path(member + ".o"), self.path("byName", member, "dup.o"))
+            pe.run([self.tool("llvm-ar"), "rc", self.path("byName.a"), self.path("byName", member, "dup.o")])
+        self.assertEqual(pe.run([self.tool("llvm-ar"), "t", self.path("byName.a")]).split(), ["dup.o"])
+        with self.assertRaisesRegex(pe.EngineError, "undefined symbol: fromB"):
+            self.link([libA, self.path("byName.a"), self.path("user.o")], "lost")
 
 
 class ProofHelperTest(TempCase):
