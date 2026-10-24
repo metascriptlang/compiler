@@ -69,12 +69,39 @@ export function* doubled<T>(this it: Iterator<T>, f: (x: T) => T): Iterator<T> {
 		yield f(f(x));
 	}
 }
+
+function shut(it: Iterator<int32>): void {
+	if (it.return != null) it.return();
+}
+
+function* firstN(it: Iterator<int32>, n: int32): Iterator<int32> {
+	let left = n;
+	for (const x of it) {
+		if (left < 1) return;
+		left -= 1;
+		yield x;
+	}
+}
+
+export function firsts(it: Iterator<int32>, n: int32): Iterator<int32> {
+	if (n < 0) {
+		shut(it);
+		throw new Error("negative");
+	}
+	return firstN(it, n);
+}
+
+export function total(it: Iterator<int32>): int32 {
+	let t: int32 = 0;
+	for (const x of it) t += x;
+	return t;
+}
 `;
 
 function mainC(consumer: string): string {
 	const entries: MapEntry[] = [
 		{ entryPath: LIB_PATH, entrySource: LIB },
-		{ entryPath: MAIN_PATH, entrySource: `import { count, doubled } from "./lib";\n` + consumer },
+		{ entryPath: MAIN_PATH, entrySource: `import { count, doubled, firsts, total } from "./lib";\n` + consumer },
 	];
 	const units = compileProjectToC(entries, MAIN_PATH).split("#include <stdint.h>\n");
 	for (const unit of units) {
@@ -93,6 +120,43 @@ test "E2E C: a chain of generators from another module consumed by for-of drives
 	`);
 	assert c != "";
 	assert !c.contains("dollariter");
+}
+
+test "E2E C: a consumer of a forwarded chain from another module drives no iterator" {
+	const c = mainC(`
+		const s = total(firsts(count(9), 3).doubled((v: int32): int32 => v + 1));
+		console.log(s);
+	`);
+	assert c != "";
+	assert !c.contains("dollariter");
+	assert !c.contains("total__");
+}
+
+function maxLineDirective(c: string): int32 {
+	let most: int32 = 0;
+	for (const part of c.split("#line ").slice(1)) {
+		const n = parseInt(part.split(" ")[0]);
+		if (n > most) most = n as int32;
+	}
+	return most;
+}
+
+test "E2E C: code inlined from another module is attributed to the line that called it" {
+	const c = mainC(`
+		const s = total(firsts(count(9), 3).doubled((v: int32): int32 => v + 1));
+		console.log(s);
+	`);
+	assert c != "";
+	assert maxLineDirective(c) <= 4;
+}
+
+test "E2E C: a consumer of a stored chain from another module stays a call" {
+	const c = mainC(`
+		const it = firsts(count(9), 3);
+		console.log(total(it));
+	`);
+	assert c != "";
+	assert c.contains("total__");
 }
 
 test "E2E C: a stored chain of generators from another module is driven through its iterator" {
