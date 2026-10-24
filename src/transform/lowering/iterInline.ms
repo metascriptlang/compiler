@@ -1,5 +1,5 @@
 import {
-	Node, NodeKind, NodeFlag, DeclKind, Symbol, SymbolKind, SymbolFlag,
+	Node, NodeKind, NodeFlag, DeclKind, Symbol, SymbolKind, SymbolFlag, SourceLocation,
 	ForOfStmtData, ForInStmtData, ForStmtData, WhileStmtData, DoWhileStmtData, CallExprData,
 	MemberExprData, FunctionDeclData, ExprStmtData, YieldExprData, ReturnStmtData,
 	TryCatchStmtData, BinaryExprData, UpdateExprData,
@@ -26,6 +26,7 @@ interface InlineState {
 	ctx: TransformContext;
 	generators: HashMap<Symbol, Node>;
 	recursive: HashSet<Symbol>;
+	expanding: HashSet<Symbol>;
 	localNames: HashSet<string>;
 }
 
@@ -42,13 +43,23 @@ interface JumpPlan {
 }
 
 
+const _inlineBodies = new HashMap<Symbol, Node>();
+
 export function lowerIterInline(program: Node, ctx: TransformContext): Node {
 	const generators = new HashMap<Symbol, Node>();
 	collectGenerators(program, generators);
-	if (generators.size == 0) return program;
+	for (const sym of generators.keys()) {
+		const decl = generators.get(sym)!;
+		const kept = cloneNodeKeepSem(decl);
+		copyLabels(decl, kept);
+		_inlineBodies.set(sym, kept);
+	}
+	if (_inlineBodies.size == 0) return program;
 	const localNames = new HashSet<string>();
 	if (ctx.jsBackend) collectLocalNames(program, true, localNames);
-	const st: InlineState = { ctx, generators, recursive: recursiveGenerators(generators), localNames };
+	const st: InlineState = {
+		ctx, generators, recursive: recursiveGenerators(generators), expanding: new HashSet<Symbol>(), localNames,
+	};
 	return walkNode(program, (node: Node): Node => inlineForOf(node, st));
 }
 
@@ -146,7 +157,11 @@ function inlineForOf(node: Node, st: InlineState): Node {
 
 
 function matchCall(d: ForOfStmtData, st: InlineState): InlineCall | null {
-	const iterable = d.forOfIterable;
+	if (patternHasDefaults(d.forOfPattern)) return null;
+	return matchIterable(d.forOfIterable, st);
+}
+
+function matchIterable(iterable: Node, st: InlineState): InlineCall | null {
 	if (iterable.kind != NodeKind.CallExpr) return null;
 	const iterType = iterable.nodeType != null ? peelTransparentInstance(iterable.nodeType) : null;
 	if (iterType == null || !isIterator(iterType)) return null;
@@ -163,16 +178,38 @@ function matchCall(d: ForOfStmtData, st: InlineState): InlineCall | null {
 	}
 	if (sym == null) return null;
 	for (const a of c.arguments) { args.push(a); }
-	const decl = st.generators.get(sym);
+	const decl = st.generators.has(sym) ? st.generators.get(sym) : foreignBody(sym, st);
 	if (decl == null) return null;
-	if (st.recursive.has(sym)) return null;
+	if (st.recursive.has(sym) || st.expanding.has(sym)) return null;
 	const fd = decl.data as FunctionDeclData;
 	if (decl.paramSyms == null) throw new Error(`internal: generator '${fd.fnName}' reached inlining without its parameter symbols`);
 	if (decl.paramSyms.length != args.length || fd.params.length != args.length) return null;
-	if (patternHasDefaults(d.forOfPattern)) return null;
 	if (bodyRefusal(fd.fnBody, false, false) != "") return null;
 	if (st.localNames.size > 0 && capturesLocalName(decl, st.localNames)) return null;
 	return { decl, args };
+}
+
+function foreignBody(sym: Symbol, st: InlineState): Node | null {
+	if (st.ctx.reloadableModules.indexOf(sym.modulePath) >= 0) return null;
+	const kept = _inlineBodies.get(sym);
+	if (kept == null || writesModuleState(kept)) return null;
+	return kept;
+}
+
+function writesModuleState(decl: Node): boolean {
+	const body = (decl.data as FunctionDeclData).fnBody;
+	const globals = new HashSet<Symbol>();
+	collectGlobals(body, globals);
+	for (const g of globals) {
+		if (writesTo(body, g)) return true;
+	}
+	return false;
+}
+
+function collectGlobals(node: Node, out: HashSet<Symbol>): void {
+	const sym = node.kind == NodeKind.Identifier ? node.resolvedSym : null;
+	if (sym != null && hasFlag(sym, SymbolFlag.Global)) out.add(sym);
+	forEachChild(node, (child: Node): void => { collectGlobals(child, out); });
 }
 
 function patternHasDefaults(pattern: Node | null): boolean {
@@ -243,29 +280,93 @@ function expand(node: Node, d: ForOfStmtData, call: InlineCall, st: InlineState)
 	const bindingSym = node.resolvedSym;
 	node.resolvedSym = null;
 	const renames = new HashMap<Symbol, Symbol>();
+	const sources = new HashMap<Symbol, Node>();
 	const out: Node[] = [];
 	for (let i = 0; i < call.args.length; i += 1) {
 		const param = params[i];
 		const arg = call.args[i];
-		if (!writesTo(fd.fnBody, param) && isStableRead(arg)) {
+		const writes = writesTo(fd.fnBody, param);
+		if (!writes && isStableRead(arg)) {
 			renames.set(param, arg.resolvedSym!);
 			continue;
 		}
+		const source = writes ? null : chainSource(fd.fnBody, param, arg, st);
+		if (source != null) {
+			sources.set(param, boundSource(arg, source, out, st, loc));
+			continue;
+		}
 		const temp = freshOwnedSym(ctx, param.name, param.symbolType);
-		const kind = writesTo(fd.fnBody, param) ? DeclKind.Let : DeclKind.Const;
-		const bound = makeVarDecl(temp.name, arg, kind, loc);
+		const bound = makeVarDecl(temp.name, arg, writes ? DeclKind.Let : DeclKind.Const, loc);
 		bound.resolvedSym = temp;
 		bound.nodeType = param.symbolType;
 		out.push(bound);
 		renames.set(param, temp);
 	}
-	const body = cloneFresh(fd.fnBody, renames, ctx, true);
+	const sym = call.decl.resolvedSym!;
+	const body = walkNode(cloneFresh(fd.fnBody, renames, ctx, true), (n: Node): Node => {
+		const read = n.kind == NodeKind.Identifier ? n.resolvedSym : null;
+		return read != null && sources.has(read) ? sources.get(read)! : n;
+	});
+	st.expanding.add(sym);
 	const inlined = walkNode(body, (n: Node): Node => inlineForOf(n, st));
+	st.expanding.delete(sym);
 	const endLabel = freshLabel(ctx, "inl");
 	const plan: JumpPlan = { endLabel, contLabel: "", loopLabel: d.forOfLabel, contUsed: false };
 	const stmts = extractBodyStmts(replaceYields(inlined, d, bindingSym, plan, ctx));
 	out.push(makeSwitchWrapper(stmts, endLabel, loc));
 	return makeBlock(out, loc);
+}
+
+function chainSource(body: Node, param: Symbol, arg: Node, st: InlineState): InlineCall | null {
+	if (readCount(body, param) != 1 || !iteratesOnce(body, param)) return null;
+	return matchIterable(arg, st);
+}
+
+function boundSource(arg: Node, source: InlineCall, out: Node[], st: InlineState, loc: SourceLocation): Node {
+	const fd = source.decl.data as FunctionDeclData;
+	const params = source.decl.paramSyms!;
+	const bound: Node[] = [];
+	for (let i = 0; i < source.args.length; i += 1) {
+		const a = source.args[i];
+		const p = params[i];
+		const inner = writesTo(fd.fnBody, p) ? null : chainSource(fd.fnBody, p, a, st);
+		if (isStableRead(a)) {
+			bound.push(a);
+		} else if (inner != null) {
+			bound.push(boundSource(a, inner, out, st, loc));
+		} else {
+			const temp = freshOwnedSym(st.ctx, p.name, p.symbolType);
+			const decl = makeVarDecl(temp.name, a, DeclKind.Const, loc);
+			decl.resolvedSym = temp;
+			decl.nodeType = p.symbolType;
+			out.push(decl);
+			bound.push(makeIdentResolved(temp, loc));
+		}
+	}
+	const c = arg.data as CallExprData;
+	const receiver = arg.flags.has(NodeFlag.ExtCall);
+	if (receiver) (c.callee.data as MemberExprData).object = bound[0];
+	c.arguments = receiver ? bound.slice(1) : bound;
+	return arg;
+}
+
+function readCount(node: Node, sym: Symbol): int32 {
+	let n: int32 = node.kind == NodeKind.Identifier && node.resolvedSym == sym ? 1 : 0;
+	forEachChild(node, (child: Node): void => { n += readCount(child, sym); });
+	return n;
+}
+
+function iteratesOnce(node: Node, sym: Symbol): boolean {
+	if (node.kind == NodeKind.ForOfStmt) {
+		const iterable = (node.data as ForOfStmtData).forOfIterable;
+		if (iterable.kind == NodeKind.Identifier && iterable.resolvedSym == sym) return true;
+	}
+	if (isFnBoundary(node.kind) || (isLoopKind(node.kind) && !isWrapper(node))) return false;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && iteratesOnce(child, sym)) found = true;
+	});
+	return found;
 }
 
 function freshLabel(ctx: TransformContext, prefix: string): string {
@@ -613,6 +714,26 @@ test "a generator that calls itself keeps the closure path" {
 
 test "a stored generator keeps the closure path" {
 	assert stillForOf("function* g(): Iterator<int32> { yield 1; }\nconst it = g();\nfor (const x of it) { }");
+}
+
+const chainSrc = "function* count(n: int32): Iterator<int32> { for (let i = 0; i < n; i++) { yield i; } }\n";
+
+test "a generator call passed as the source a generator iterates once is expanded in place too" {
+	const prog = lowered(chainSrc + "function* doubled(it: Iterator<int32>): Iterator<int32> { for (const x of it) { yield x * 2; } }\nlet s = 0;\nfor (const y of doubled(count(3))) { s += y; }");
+	const stmts = getStmts(prog);
+	assert countKind(stmts[stmts.length - 1], NodeKind.ForOfStmt) == 0;
+}
+
+test "a source read twice by the generator stays an iterator" {
+	const prog = lowered(chainSrc + "function* firstThenRest(it: Iterator<int32>): Iterator<int32> { const f = it.next(); if (!f.done) yield f.value; for (const x of it) { yield x; } }\nfor (const y of firstThenRest(count(3))) { }");
+	const stmts = getStmts(prog);
+	assert countKind(stmts[stmts.length - 1], NodeKind.ForOfStmt) == 1;
+}
+
+test "a source the generator iterates inside a loop stays an iterator" {
+	const prog = lowered(chainSrc + "function* again(it: Iterator<int32>): Iterator<int32> { for (let k = 0; k < 2; k++) { for (const x of it) { yield x; } } }\nfor (const y of again(count(3))) { }");
+	const stmts = getStmts(prog);
+	assert countKind(stmts[stmts.length - 1], NodeKind.ForOfStmt) == 1;
 }
 
 test "two expansions of one generator declare disjoint symbols" {
