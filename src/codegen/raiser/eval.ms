@@ -406,8 +406,8 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	if (sym.declNode == null) return -1;
 	const homeOutsideBuild = lookupModuleCtx(sym.modulePath) == null;
 	const vmStd = isVmPreludeSym(sym) || (homeOutsideBuild && isVmStdHelper(sym));
-	const preludeOwned = raiserPreludeCtx().preludeModuleScopes.get(sym.modulePath) != null;
-	if ((vmStd || preludeOwned) && isCheckedRoutineDecl(sym.declNode)) {
+	const checkedByVmPrelude = isVmPreludeSym(sym) || isVmStdHelper(sym);
+	if (checkedByVmPrelude && isCheckedRoutineDecl(sym.declNode)) {
 		return compileCheckedBodyIntoEngine(sym, sym.declNode, isClass ? name : "$comptime:helper");
 	}
 	const seedCtx = seedCtxForSym(sym);
