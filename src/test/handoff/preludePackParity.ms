@@ -65,6 +65,7 @@ function sameScopeText(ctx: CheckerContext): string[] {
 		const s = scope.get(id);
 		if (s != null) rows.push(`${identName(ctx.table.identCache, id)}=>${absentLocationAsZero(symText(s))}`);
 	}
+	rows.sort();
 	return rows;
 }
 
@@ -91,6 +92,7 @@ function tableRows(ctx: CheckerContext): string[] {
 	for (const path of ctx.ownModules) rows.push(`own|${path}`);
 	rows.push(`counts|${ctx.importSet.size}|${ctx.interfSet.size}|${ctx.interf.length}|${ctx.converterTargetTypes.size}|${ctx.preludeExports.size}`);
 	rows.push(`dir|${ctx.includeDirectives}|${ctx.compilerFlags}|${ctx.compileDirectives}`);
+	rows.sort();
 	return rows;
 }
 

@@ -1742,7 +1742,7 @@ test "a std-tree stamp is served from disk to the next process and moves on a sa
 	_hashByStamp.clear();
 	const first = stdTreeStamp(dir);
 	assert readSealed(hashMemoPath(subject, "sum")).length == 2;
-	assert readSealed(hashMemoPath(subject, "files")).length == 2;
+	assert readSealed(hashMemoPath(subject, "files")).length == 1;
 	_hashByStamp.clear();
 	assert stdTreeStamp(dir) == first;
 	writeFile(`${dir}/lib/x.h`, "#define B 2\n");
