@@ -1,13 +1,13 @@
-# MetaScript: preferred idioms
+# MetaScript authoring guideline
 
 Write TypeScript-shaped code with explicit ownership, native layouts and deliberate concurrency.
 MetaScript combines values, non-owning views, ownership transfer, compiler-managed native
 lifetimes and compile-time execution. Choose semantics first; profile representative work with
 `--release`, keeping target, toolchain, flags and inputs identical between variants.
 
-Use this guide for choices, [LANG.md](LANG.md) for syntax and
-`~/metascript/docs/CODE-STYLE.md` for full style rules. Older examples are not a capability
-checklist; the verification scope below bounds these recommendations.
+This is the canonical guideline for writing idiomatic MetaScript: syntax choices, style,
+ownership and performance patterns. [LANG.md](LANG.md) is the authoritative detailed language
+reference. The verification scope below bounds implementation claims.
 
 ## 1. Defaults that make code read as MetaScript
 
