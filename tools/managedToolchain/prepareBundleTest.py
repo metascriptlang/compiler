@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 import prepareBundle as pb
+import prepareCppRuntime as pc
 import prepareEngine as pe
 import prepareRuntime as pr
 import prepareWindowsRuntime as pw
@@ -37,9 +38,11 @@ class BundleTest(unittest.TestCase):
         self.verified = []
         self.runtimeCalls = []
         self.windowsCalls = []
+        self.cppCalls = []
         for patcher in (mock.patch.object(pe, "verifyEngine", side_effect=self.verify),
                         mock.patch.object(pr, "prepareRuntime", side_effect=self.prepareRuntime),
-                        mock.patch.object(pw, "prepareWindowsRuntime", side_effect=self.prepareWindows)):
+                        mock.patch.object(pw, "prepareWindowsRuntime", side_effect=self.prepareWindows),
+                        mock.patch.object(pc, "addCppRuntime", side_effect=self.addCpp)):
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -64,6 +67,13 @@ class BundleTest(unittest.TestCase):
         write(os.path.join(windows, "x86_64-windows-gnu.cfg"), "-target w\n")
         write(os.path.join(windows, "notices", pw.PROVENANCE), '{"kind": "windows"}\n')
         return windows, []
+
+    def addCpp(self, zig, engine, runtime, targets=None, seed=None):
+        self.cppCalls.append((zig, engine, runtime, targets, sorted(os.listdir(runtime))))
+        for target in targets:
+            write(os.path.join(runtime, pc.VARIANTS[(target, "exe")]["config"]), "-isystem cxx\n")
+        write(os.path.join(runtime, pc.PROVENANCE), '{"kind": "cpp"}\n')
+        return {}
 
     def test_the_bundle_keeps_engine_contents_at_the_root_and_the_runtime_as_a_child(self):
         out = self.path("out", "bundle")
@@ -91,11 +101,46 @@ class BundleTest(unittest.TestCase):
         for name in (receipt["runtimeProvenance"], receipt["windowsRuntimeProvenance"]):
             self.assertTrue(os.path.isfile(os.path.join(out, name)))
 
+    def test_every_runtime_gets_the_cpp_overlay_of_its_x86_64_targets_and_the_receipt_names_the_c_only_ones(self):
+        out = self.path("bundle")
+        pb.prepareBundle(self.engine, "/z/zig", out, [])
+        zig, source, runtime, targets, present = self.cppCalls[0]
+        self.assertEqual((zig, source, targets), ("/z/zig", self.engine, ["x86_64-linux-gnu.2.31", "x86_64-windows-gnu"]))
+        self.assertEqual((os.path.basename(runtime), present), ("runtime", ["notices", "wasm32-wasi", "windows", "x86_64-linux-gnu.2.31",
+                                                                           "x86_64-linux-gnu.2.31.cfg"]))
+        receipt = json.loads(read(os.path.join(out, "notices", "bundle-provenance.json")))
+        self.assertEqual(receipt["cppRuntimeProvenance"], "runtime/notices/cpp-provenance.json")
+        self.assertEqual(receipt["cppTargets"], ["x86_64-linux-gnu.2.31", "x86_64-windows-gnu"])
+        self.assertEqual(receipt["cOnlyTargets"], ["wasm32-wasi", "aarch64-linux-gnu.2.31", "aarch64-windows-gnu"])
+        listed = [l.split("  ", 1)[1] for l in read(os.path.join(out, "FILES.sha256")).splitlines()]
+        for rel in ("runtime/x86_64-linux-gnu.2.31.cxx.cfg", "runtime/notices/cpp-provenance.json"):
+            self.assertIn(rel, listed)
+
+    def test_the_cpp_overlay_follows_the_selected_targets_only(self):
+        for requested, cpp, cOnly in ((["x86_64-windows-gnu"], ["x86_64-windows-gnu"], []),
+                                      (["x86_64-linux-gnu.2.31", "aarch64-windows-gnu"], ["x86_64-linux-gnu.2.31"],
+                                       ["aarch64-windows-gnu"]),
+                                      (["wasm32-wasi"], None, None), (["aarch64-windows-gnu"], None, None)):
+            self.cppCalls.clear()
+            out = self.path("bundle-" + "-".join(requested))
+            pb.prepareBundle(self.engine, "/z/zig", out, requested)
+            receipt = json.loads(read(os.path.join(out, "notices", "bundle-provenance.json")))
+            self.assertEqual([call[3] for call in self.cppCalls], [cpp] if cpp else [], msg=requested)
+            self.assertEqual(receipt.get("cppTargets"), cpp, msg=requested)
+            self.assertEqual(receipt.get("cOnlyTargets"), cOnly, msg=requested)
+            self.assertEqual("cppRuntimeProvenance" in receipt, bool(cpp), msg=requested)
+
+    def test_a_failing_cpp_overlay_leaves_no_output_or_partial(self):
+        with mock.patch.object(pc, "addCppRuntime", side_effect=pe.EngineError("C++ link failed")):
+            with self.assertRaisesRegex(pe.EngineError, "C\\+\\+ link failed"):
+                pb.prepareBundle(self.engine, "/z/zig", self.path("bundle"), [])
+        self.assertEqual(sorted(os.listdir(self.dir)), ["engine"])
+
     def test_the_windows_target_alone_makes_only_the_windows_runtime(self):
         out = self.path("bundle")
         pb.prepareBundle(self.engine, "/z/zig", out, ["x86_64-windows-gnu"])
         self.assertEqual(self.runtimeCalls, [])
-        self.assertEqual(os.listdir(os.path.join(out, "runtime")), ["windows"])
+        self.assertEqual(sorted(os.listdir(os.path.join(out, "runtime"))), ["notices", "windows"])
         receipt = json.loads(read(os.path.join(out, "notices", "bundle-provenance.json")))
         self.assertNotIn("runtimeProvenance", receipt)
         self.assertIn("windowsRuntimeProvenance", receipt)

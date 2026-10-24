@@ -9,6 +9,9 @@ engine reached by `..`; the x86_64-windows-gnu and aarch64-windows-gnu runtimes 
 prepareWindowsRuntime.py, with the engine reached by `../..`. HOST, VERSION, FILES.sha256 and IDENTITY are rewritten over every file of
 the bundle, and the source engine's identity is recorded in notices/bundle-provenance.json.
 
+The x86_64-linux-gnu.2.31 and x86_64-windows-gnu runtimes also get the C++ overlay of prepareCppRuntime.py merged
+into `runtime/`; the aarch64 and wasm32-wasi runtimes stay C only, and the receipt names them under `cOnlyTargets`.
+
 The bundle is a local proof, not an upstream-controlled build, and never certifies redistribution.
 """
 import argparse
@@ -18,6 +21,7 @@ import shutil
 import sys
 import tempfile
 
+import prepareCppRuntime as pc
 import prepareEngine as pe
 import prepareRuntime as pr
 import prepareWindowsRuntime as pw
@@ -32,7 +36,7 @@ def splitTargets(targets):
     return [t for t in targets if t not in pw.TARGETS], windows if windows or not targets else []
 
 
-def writeBundleProvenance(root, engineIdentity, host, version, hasRuntime, hasWindows):
+def writeBundleProvenance(root, engineIdentity, host, version, hasRuntime, hasWindows, cppTargets=(), cOnlyTargets=()):
     receipt = {
         "kind": "local-bundle-assembly",
         "statement": "Engine copied unchanged, runtime prepared by prepareRuntime.py; the contract files "
@@ -47,6 +51,10 @@ def writeBundleProvenance(root, engineIdentity, host, version, hasRuntime, hasWi
         receipt["runtimeProvenance"] = "runtime/notices/runtime-provenance.json"
     if hasWindows:
         receipt["windowsRuntimeProvenance"] = "runtime/windows/notices/" + pw.PROVENANCE
+    if cppTargets:
+        receipt["cppRuntimeProvenance"] = "runtime/" + pc.PROVENANCE
+        receipt["cppTargets"] = list(cppTargets)
+        receipt["cOnlyTargets"] = list(cOnlyTargets)
     pe.writeText(os.path.join(root, "notices", "bundle-provenance.json"),
                  json.dumps(receipt, indent=2, sort_keys=True) + "\n")
 
@@ -73,9 +81,15 @@ def prepareBundle(engine, zig, output, targets):
             pr.prepareRuntime(zig, engine, runtime, others, ENGINE_RELATIVE)
         else:
             os.makedirs(runtime)
-        if windows or not targets:
+        hasWindows = bool(windows) or not targets
+        if hasWindows:
             pw.prepareWindowsRuntime(zig, engine, os.path.join(runtime, "windows"), windows or None)
-        writeBundleProvenance(clone, engineIdentity, host, version, hasRuntime, bool(windows) or not targets)
+        prepared = ((others or list(pr.TARGETS)) if hasRuntime else []) + ((windows or list(pw.TARGETS)) if hasWindows else [])
+        cppTargets = [t for t in pc.TARGETS if t in prepared]
+        if cppTargets:
+            pc.addCppRuntime(zig, engine, runtime, cppTargets)
+        writeBundleProvenance(clone, engineIdentity, host, version, hasRuntime, hasWindows, cppTargets,
+                              [t for t in prepared if t not in cppTargets])
         pe.writeContract(clone, host, version)
         pe.verifyEngine(clone)
         os.chmod(clone, 0o755)
