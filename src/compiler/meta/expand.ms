@@ -1749,6 +1749,12 @@ let _macroBuilds: HashMap<Symbol, MacroBuild[]> = new HashMap<Symbol, MacroBuild
 let _macroBuildsGraph: ModuleGraph = null as unknown as ModuleGraph;
 let _macroBuildsCtx: CheckerContext = null as unknown as CheckerContext;
 let _macroCompiles: int32 = 0;
+let _macroPreprocesses: int32 = 0;
+let _preprocessedMacros: HashSet<Symbol> = new HashSet<Symbol>();
+
+export function macroPreprocessCount(): int32 {
+	return _macroPreprocesses;
+}
 
 export function macroCompileCount(): int32 {
 	return _macroCompiles;
@@ -1767,12 +1773,16 @@ function errorsSince(ctx: CheckerContext, mark: int32): boolean {
 	return false;
 }
 
+function enterMacroBuildsCompilation(ctx: CheckerContext): void {
+	if (inMacroBuildsCompilation(ctx)) return;
+	_macroBuilds = new HashMap<Symbol, MacroBuild[]>();
+	_preprocessedMacros = new HashSet<Symbol>();
+	_macroBuildsGraph = ctx.moduleGraph;
+	_macroBuildsCtx = ctx;
+}
+
 function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym: Symbol, macroName: string, decl: MacroDeclData, typeArg: string): CompiledMacro | null {
-	if (!inMacroBuildsCompilation(ctx)) {
-		_macroBuilds = new HashMap<Symbol, MacroBuild[]>();
-		_macroBuildsGraph = ctx.moduleGraph;
-		_macroBuildsCtx = ctx;
-	}
+	enterMacroBuildsCompilation(ctx);
 	const known = _macroBuilds.get(macroSym);
 	const builds: MacroBuild[] = known != null ? known : [];
 	if (known == null) _macroBuilds.set(macroSym, builds);
@@ -1889,10 +1899,12 @@ export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 	const body = decl.macroDeclBody;
 	const params = decl.macroDeclParams;
 
-	// Phase D: Preprocess the body to rewrite NodeKind.X / DeclKind.X member
-	// access to integer literals. Mutation is in-place and idempotent — running
-	// on already-preprocessed code is a no-op, so it's safe to call repeatedly.
-	preprocessMacroBody(body, regCtx, macroSym.name, params);
+	enterMacroBuildsCompilation(ctx);
+	if (!_preprocessedMacros.has(macroSym)) {
+		_macroPreprocesses += 1;
+		preprocessMacroBody(body, regCtx, macroSym.name, params);
+		_preprocessedMacros.add(macroSym);
+	}
 
 	// Validate arity
 	if (d.macroArgs.length != params.length) {

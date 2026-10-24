@@ -48,7 +48,7 @@ import { registerModuleProgram, registerModuleCtx, lookupModuleProgram, lookupMo
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
 import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
-import { macroCompileCount } from "../meta/expand"; // also registers the expandMacroInvocation callback
+import { macroCompileCount, macroPreprocessCount } from "../meta/expand"; // also registers the expandMacroInvocation callback
 import "../meta/modulePass";
 import "../meta/comptime"; // side-effect: registers evalComptimeBlock callback
 import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, findExportedSymbol, collectExports } from "../../checker/context";
@@ -2067,4 +2067,17 @@ test "editing a helper module the macro imports rebuilds the macro" {
 	dbSetFileText(db, "/m/use.ms", MACRO_USER.replace("twice(2)", "twice(3)"));
 	assert checkMessages(db, "/m/use.ms") == "";
 	assert macroCompileCount() == built + 1;
+}
+
+test "a macro body is preprocessed once per declaration, not once per call site or check" {
+	const db = macroDb(MACRO_TWICE, MACRO_USER + "export const y: int32 = twice(4);\n");
+	const before = macroPreprocessCount();
+	assert checkMessages(db, "/m/use.ms") == "";
+	assert macroPreprocessCount() == before + 1, `${macroPreprocessCount() - before} preprocesses for two call sites`;
+	dbSetFileText(db, "/m/use.ms", MACRO_USER.replace("twice(2)", "twice(3)"));
+	assert checkMessages(db, "/m/use.ms") == "";
+	assert macroPreprocessCount() == before + 1;
+	dbSetFileText(db, "/m/mac.ms", MACRO_TWICE.replace("* 2", "* 3"));
+	assert checkMessages(db, "/m/use.ms") == "";
+	assert macroPreprocessCount() == before + 2;
 }
