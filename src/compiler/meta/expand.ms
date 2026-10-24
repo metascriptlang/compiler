@@ -1553,9 +1553,9 @@ function preprocessMacroBody(body: Node, scope: CheckerContext, definer: string,
 	leaveMetaScope(outer);
 }
 
-function bakeMacroBody(body: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string, typeArg: string, params: string[], typeArgParams: string[] | null): Node {
+function bakeMacroBody(body: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string, hasTypeArg: boolean, params: string[], typeArgParams: string[] | null): Node {
 	const outer = enterMetaScope(macroScopeOf(ctx, macroSym), macroSym.name, params, body);
-	const baked = bakeTypeIntrinsics(body, ctx, macroSym, macroName, typeArg, typeArgParams);
+	const baked = bakeTypeIntrinsics(body, ctx, macroSym, macroName, hasTypeArg, typeArgParams);
 	leaveMetaScope(outer);
 	return baked;
 }
@@ -1615,7 +1615,7 @@ function atCallSite(): SourceLocation {
 // Safe to bake into the shared body: the compiled-macro cache is keyed by macro
 // name, and a named type does not vary per call site. Mutation is idempotent —
 // a second pass finds literals, not calls.
-function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string, typeArg: string, typeArgParams: string[] | null = null): Node {
+function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string, hasTypeArg: boolean, typeArgParams: string[] | null = null): Node {
 	if (node == null) return node;
 	if (node.kind == NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;
@@ -1682,23 +1682,16 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 				return createNodeAt(NodeKind.TypeAssertion, { asExpr: literal, asType: "Node" }, node.location);
 			}
 		}
-		// getTypeArg() — the explicit <T> written at THIS call site. Resolved in the
-		// CALL SITE scope (that is where the user spelled the name), unlike
-		// getTypeImpl which resolves in the macro's own module.
+		// getTypeArg() reads the explicit <T> written at THIS call site from the VM
+		// argument, so one compiled body serves every T; invokeMacro resolves T in
+		// the CALL SITE scope per call, unlike getTypeImpl which resolves in the
+		// macro's own module.
 		if (intrinsic == "MetaGetTypeArg" && cd.arguments.length == 0) {
-			if (typeArg == "") {
+			if (!hasTypeArg) {
 				addError(ctx, `Macro '${macroName}': getTypeArg() needs an explicit type argument at the call site — write ${macroName}<T>(...)`, node.location.line, node.location.column);
 				return node;
 			}
-			if (typeArg.indexOf(",", 0) >= 0) {
-				addError(ctx, `Macro '${macroName}': getTypeArg() supports a single type argument, got '${typeArg}'`, node.location.line, node.location.column);
-				return node;
-			}
-			const argType = resolveAnnotation(typeArg, ctx, 0, 0);
-			if (argType == null || isUnresolvedType(argType)) {
-				addError(ctx, `Macro '${macroName}': getTypeArg() cannot resolve type '${typeArg}' at the call site`, node.location.line, node.location.column);
-				return node;
-			}
+			_typeArgSite = node.location;
 			if (typeArgParams != null) {
 				const params: string[] = typeArgParams;
 				if (!params.includes("$macro:typeArg")) params.push("$macro:typeArg");
@@ -1706,7 +1699,7 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 			return createNodeAt(NodeKind.Identifier, { name: "$macro:typeArg" }, node.location);
 		}
 	}
-	mapChildren(node, (child: Node): Node => bakeTypeIntrinsics(child, ctx, macroSym, macroName, typeArg, typeArgParams));
+	mapChildren(node, (child: Node): Node => bakeTypeIntrinsics(child, ctx, macroSym, macroName, hasTypeArg, typeArgParams));
 	return node;
 }
 
@@ -1718,23 +1711,26 @@ interface CompiledMacro {
 	vm: RaiserVM;
 	funcIdx: number;
 	typeArgInput: boolean;
+	typeArgSite: SourceLocation;
 }
+
+let _typeArgSite: SourceLocation = makeLoc(0, 0);
 
 // A null `compiled` marks a macro whose body or helpers failed to check: it is
 // never executed, since its bytecode is garbage and running it turns one precise
 // diagnostic into a VM panic or a wrong AST. Its errors are reported once per checking
 // context, then the macro is refused silently for that context's later call sites.
 interface MacroBuild {
-	typeArg: string;
+	hasTypeArg: boolean;
 	compiled: CompiledMacro | null;
 	errors: CheckerError[];
 	reportedIn: CheckerContext | null;
 }
 
-function failedBuild(typeArg: string, ctx: CheckerContext, mark: int32): MacroBuild {
+function failedBuild(hasTypeArg: boolean, ctx: CheckerContext, mark: int32): MacroBuild {
 	const errors: CheckerError[] = [];
 	for (let i = mark; i < ctx.errors.length; i += 1) errors.push(ctx.errors[i]);
-	return { typeArg, compiled: null, errors, reportedIn: ctx };
+	return { hasTypeArg, compiled: null, errors, reportedIn: ctx };
 }
 
 function replayBuildErrors(build: MacroBuild, ctx: CheckerContext): void {
@@ -1781,19 +1777,36 @@ function enterMacroBuildsCompilation(ctx: CheckerContext): void {
 	_macroBuildsCtx = ctx;
 }
 
+// The compiled body takes <T> as an argument, so each call site checks its own T.
 function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym: Symbol, macroName: string, decl: MacroDeclData, typeArg: string): CompiledMacro | null {
+	const cm = getOrCompileMacroBody(ctx, regCtx, macroSym, macroName, decl, typeArg != "");
+	if (cm == null || !cm.typeArgInput) return cm;
+	const at = cm.typeArgSite;
+	if (typeArg.indexOf(",", 0) >= 0) {
+		addError(ctx, `Macro '${macroName}': getTypeArg() supports a single type argument, got '${typeArg}'`, at.line, at.column);
+		return null;
+	}
+	const argType = resolveAnnotation(typeArg, ctx, 0, 0);
+	if (argType == null || isUnresolvedType(argType)) {
+		addError(ctx, `Macro '${macroName}': getTypeArg() cannot resolve type '${typeArg}' at the call site`, at.line, at.column);
+		return null;
+	}
+	return cm;
+}
+
+function getOrCompileMacroBody(ctx: CheckerContext, regCtx: CheckerContext, macroSym: Symbol, macroName: string, decl: MacroDeclData, hasTypeArg: boolean): CompiledMacro | null {
 	enterMacroBuildsCompilation(ctx);
 	const known = _macroBuilds.get(macroSym);
 	const builds: MacroBuild[] = known != null ? known : [];
 	if (known == null) _macroBuilds.set(macroSym, builds);
 	for (let bi = 0; bi < builds.length; bi += 1) {
-		if (builds[bi].typeArg != typeArg) continue;
+		if (builds[bi].hasTypeArg != hasTypeArg) continue;
 		replayBuildErrors(builds[bi], ctx);
 		return builds[bi].compiled;
 	}
 	let body = decl.macroDeclBody;
 	let params = decl.macroDeclParams;
-	if (typeArg != "") {
+	if (hasTypeArg) {
 		params = [];
 		for (const param of decl.macroDeclParams) params.push(param);
 	}
@@ -1801,14 +1814,16 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 	// Bake into a CLONE when the call site supplies a type argument: the declared
 	// body is shared by every call site, and getTypeArg() resolves per site.
 	let workBody = body;
-	if (typeArg != "") workBody = cloneNodeForCheck(body);
+	if (hasTypeArg) workBody = cloneNodeForCheck(body);
 	const bakeMark = ctx.errors.length;
-	bakeMacroBody(workBody, ctx, macroSym, macroName, typeArg, decl.macroDeclParams, params);
+	_typeArgSite = atCallSite();
+	bakeMacroBody(workBody, ctx, macroSym, macroName, hasTypeArg, decl.macroDeclParams, params);
 	if (errorsSince(ctx, bakeMark)) {
-		builds.push(failedBuild(typeArg, ctx, bakeMark));
+		builds.push(failedBuild(hasTypeArg, ctx, bakeMark));
 		return null;
 	}
 	body = workBody;
+	const typeArgSite = _typeArgSite;
 
 	const loc = body.location;
 	const wrapperStmts: Node[] = [];
@@ -1863,13 +1878,13 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 		}
 	}
 	if (broken) {
-		builds.push(failedBuild(typeArg, ctx, bakeMark));
+		builds.push(failedBuild(hasTypeArg, ctx, bakeMark));
 		return null;
 	}
 	if (result.funcIdx < 0) return null;
 
-	const cm: CompiledMacro = { vm: result.vm, funcIdx: result.funcIdx, typeArgInput: params.length > decl.macroDeclParams.length };
-	builds.push({ typeArg, compiled: cm, errors: [], reportedIn: null });
+	const cm: CompiledMacro = { vm: result.vm, funcIdx: result.funcIdx, typeArgInput: params.length > decl.macroDeclParams.length, typeArgSite };
+	builds.push({ hasTypeArg, compiled: cm, errors: [], reportedIn: null });
 	return cm;
 }
 
@@ -2347,7 +2362,7 @@ registerMacroBodyPreparer((body: Node, ctx: CheckerContext, macroSym: Symbol, ma
 	const decl = macroDeclOf(macroSym);
 	const params: string[] = decl != null ? decl.macroDeclParams : [];
 	preprocessMacroBody(body, macroScopeOf(ctx, macroSym), macroSym.name, params);
-	return bakeMacroBody(body, ctx, macroSym, macroName, "", params, null);
+	return bakeMacroBody(body, ctx, macroSym, macroName, false, params, null);
 });
 registerComptimeHelperPreparer((decl: Node, scope: CheckerContext): void => {
 	preprocessMacroBody(decl, scope, "", []);
