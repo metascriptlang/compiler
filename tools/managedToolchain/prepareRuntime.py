@@ -11,7 +11,10 @@ file (`clang --config RUNTIME/T.cfg -c x.c`, then `clang --config RUNTIME/T.cfg 
 the payload carries no Zig. Each config also names its target directory as the linker's library
 search root, and a glibc stub `libNAME.so.N` gets the regular alias `libNAME.so` (a relative
 symlink in the same directory), so the `-lm -lpthread` a build line appends are found without the
-caller knowing the layout. The engine is found from the config file by a relative path
+caller knowing the layout. A wasm32-wasi runtime has its math in `libc.a`, so the `-lm` a build line
+appends gets the standard empty `libm.a` beside it, made with the engine's `llvm-ar` in GNU format
+(the sysroot convention of an empty archive for each library flag the libc already satisfies); the
+receipt records it and verification refuses an archive that is not empty. The engine is found from the config file by a relative path
 (`--engine-relative`): siblings by default (`../engine`), or `..` when the runtime is a child of
 the engine root, as in a full bundle.
 
@@ -36,6 +39,7 @@ FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 ZIG_TIMEOUT_SECONDS = 3600
 CONFIG_TOKEN = re.compile(r"^[A-Za-z0-9_.+=:/<>,@%-]+$")
 SHARED_OBJECT = re.compile(r"\.so(\.\d+)*$")
+EMPTY_ARCHIVE = b"!<arch>\n"
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.+-]+$")
 VERSIONED_STUB = re.compile(r"^lib([A-Za-z0-9_+-]+)\.so\.\d+$")
 # Zig's `ld` stub is the dynamic linker (soname ld-linux-*.so.2); glibc has no `libld.so` for it.
@@ -57,7 +61,7 @@ REMOVED_DISABLED_FEATURES = [{
 TARGETS = {
     "wasm32-wasi": {
         "fixture": "runtimeWasi.c", "zigLinkArgs": [], "linker": "wasm-ld", "driverFlags": [],
-        "clangTarget": "wasm32-wasip1",
+        "clangTarget": "wasm32-wasip1", "emptyArchives": ["libm.a"],
         "notices": {"zig": ["../LICENSE"], "musl": ["libc/musl/COPYRIGHT"],
                     "wasi-libc": ["libc/wasi/" + n for n in WASI_LICENSES]},
     },
@@ -400,6 +404,37 @@ def verifyLibraryAliases(directory, records):
                 directory, record["alias"], target))
 
 
+def createEmptyArchives(engine, directory, names):
+    """Make each of names in directory as an archive with no member, the way a libc sysroot
+    answers a library flag it already satisfies. An archive that would land on an existing name
+    is refused. Returns [{"name", "sha256", "bytes"}]."""
+    records = []
+    for name in names:
+        path = os.path.join(directory, checkName(name))
+        if os.path.lexists(path):
+            raise pe.EngineError("%s: empty archive %s collides with an existing file" % (directory, name))
+        pe.run([os.path.join(engine, "bin", "llvm-ar"), "--format=gnu", "crs", path])
+        os.chmod(path, 0o644)
+        records.append({"name": name, "sha256": pe.sha256File(path), "bytes": os.path.getsize(path)})
+    verifyEmptyArchives(directory, records)
+    return records
+
+
+def verifyEmptyArchives(directory, records):
+    """Each record is a regular file of directory holding exactly an archive header and no
+    member, with the recorded hash and size, so it satisfies a -l flag and defines no symbol."""
+    for record in records:
+        path = os.path.join(directory, record["name"])
+        if os.path.islink(path) or not os.path.isfile(path):
+            raise pe.EngineError("%s: empty archive %s is not a regular file" % (directory, record["name"]))
+        with open(path, "rb") as f:
+            data = f.read()
+        if data != EMPTY_ARCHIVE or parseArchive(data):
+            raise pe.EngineError("%s: %s is not an empty archive (%d bytes)" % (directory, record["name"], len(data)))
+        if pe.sha256File(path) != record["sha256"] or len(data) != record["bytes"]:
+            raise pe.EngineError("%s: empty archive %s differs from its record" % (directory, record["name"]))
+
+
 def copyNotices(output, zigLib, spec):
     """Copy the license files named for the target from the Zig tree; a missing one is an error."""
     zigRoot = os.path.dirname(zigLib)
@@ -444,6 +479,7 @@ def produceTarget(zig, zigVersion, engine, target, work, output, engineRelative,
     directories, absent = copyHeaders(compile_["isystem"], output, zigLib)
     inputs = copyInputs(items, output, target, engine)
     aliases = linkLibraryAliases(os.path.join(output, target), [i["name"] for i in inputs])
+    emptyArchives = createEmptyArchives(engine, os.path.join(output, target), spec.get("emptyArchives", []))
     notices = copyNotices(output, zigLib, spec)
     carried, notCarried = translateFeatures(compile_["features"], target, compile_["cpu"], zigVersion, major)
     pe.writeText(os.path.join(output, target + ".cfg"),
@@ -458,7 +494,8 @@ def produceTarget(zig, zigVersion, engine, target, work, output, engineRelative,
         "linkArgs": [value if kind == "arg" else "$RT/%s/%s" % (target, os.path.basename(value))
                      if kind == "input" else "$OBJECT" for kind, value in items],
         "includeDirectories": directories, "includeDirectoriesAbsentInZig": absent,
-        "inputs": inputs, "libraryAliases": aliases, "notices": notices,
+        "inputs": inputs, "libraryAliases": aliases, "emptyArchives": emptyArchives,
+        "notices": notices,
         "zigFlagsNotCarried": "debug info, -O level, -DNDEBUG, frame pointer and unwind flags",
         "inputsNormalized": "debug sections stripped, stub symbol tables stripped; archive members renamed NNNN-name and the archive rebuilt deterministically",
     }
@@ -593,12 +630,14 @@ def verifyConfigs(engine, runtime, engineRelative, records, work):
         prefixes = [e["absentMacroPrefix"] for e in record["cpuFeaturesNotCarried"]]
         checkConfig(run, os.path.join(link, "bin", "clang"),
                     ["--config", os.path.join(copy, record["target"] + ".cfg")],
-                    record["target"], work, prefixes, libraryNames(record["libraryAliases"]))
+                    record["target"], work, prefixes,
+                    libraryNames(record["libraryAliases"], record["emptyArchives"]))
 
 
-def libraryNames(aliases):
-    """The -l names that reach the aliases: `libm.so` is `-lm`."""
-    return [a["alias"][len("lib"):-len(".so")] for a in aliases]
+def libraryNames(aliases, archives=()):
+    """The -l names that reach the aliases and the empty archives: `libm.so` and `libm.a` are `-lm`."""
+    return [a["alias"][len("lib"):-len(".so")] for a in aliases] + [
+        a["name"][len("lib"):-len(".a")] for a in archives]
 
 
 def sandboxed(profile, work, command):
@@ -669,9 +708,13 @@ def prove(engine, runtime, denied, zig=None, targets=None):
         if "libraryAliases" not in recorded:
             raise pe.EngineError("%s receipt records no libraryAliases; prepare the runtime again" % target)
         prefixes = [e["absentMacroPrefix"] for e in recorded["cpuFeaturesNotCarried"]]
+        if "emptyArchives" not in recorded:
+            raise pe.EngineError("%s receipt records no emptyArchives; prepare the runtime again" % target)
         verifyLibraryAliases(os.path.join(movedRuntime, target), recorded["libraryAliases"])
+        verifyEmptyArchives(os.path.join(movedRuntime, target), recorded["emptyArchives"])
+        libraries = libraryNames(recorded["libraryAliases"], recorded["emptyArchives"])
         binary = checkConfig(lambda command: sandboxed(profile, work, command), clang, config, target,
-                             work, prefixes, libraryNames(recorded["libraryAliases"]))
+                             work, prefixes, libraries)
         with open(binary, "rb") as f:
             data = f.read()
         leaked = [p for p in secrets if p.encode("utf-8") in data]
@@ -681,11 +724,13 @@ def prove(engine, runtime, denied, zig=None, targets=None):
             wasmtime = shutil.which("wasmtime")
             if not wasmtime:
                 raise pe.EngineError("wasmtime not found; the wasm32-wasi run is not proven")
-            ran = subprocess.run([wasmtime, binary], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                 universal_newlines=True)
-            if ran.returncode != 0 or ran.stdout != EXPECTED_OUTPUT:
-                raise pe.EngineError("%s run: %r %r" % (target, ran.stdout, ran.stderr))
-            print("%s: linked and ran: %s" % (target, ran.stdout.strip()))
+            for program in [binary] + ([binary + ".search"] if libraries else []):
+                ran = subprocess.run([wasmtime, program], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     universal_newlines=True)
+                if ran.returncode != 0 or ran.stdout != EXPECTED_OUTPUT:
+                    raise pe.EngineError("%s run of %s: %r %r" % (target, os.path.basename(program),
+                                                                  ran.stdout, ran.stderr))
+            print("%s: linked and ran (also with -l%s): %s" % (target, " -l".join(libraries), EXPECTED_OUTPUT.strip()))
         else:
             problem = elfProblem(binary) or glibcSymbolProblem(nm, binary)
             if problem:

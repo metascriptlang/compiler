@@ -53,6 +53,7 @@ class BundleTest(unittest.TestCase):
         write(os.path.join(output, "notices", "runtime-provenance.json"), '{"kind": "runtime"}\n')
         write(os.path.join(output, "x86_64-linux-gnu.2.31", "libm.so.6"), "stub\n")
         os.symlink("libm.so.6", os.path.join(output, "x86_64-linux-gnu.2.31", "libm.so"))
+        write(os.path.join(output, "wasm32-wasi", "libm.a"), "!<arch>\n")
         return output, []
 
     def test_the_bundle_keeps_engine_contents_at_the_root_and_the_runtime_as_a_child(self):
@@ -91,6 +92,12 @@ class BundleTest(unittest.TestCase):
         stub = hashes["runtime/x86_64-linux-gnu.2.31/libm.so.6"]
         self.assertEqual(hashes["runtime/x86_64-linux-gnu.2.31/libm.so"], stub)
         self.assertEqual(stub, pe.sha256File(os.path.join(directory, "libm.so.6")))
+
+    def test_an_empty_archive_is_hashed_so_a_changed_one_fails_the_bundle_verification(self):
+        out = self.path("bundle")
+        pb.prepareBundle(self.engine, "/z/zig", out, [])
+        hashes = dict(reversed(l.split("  ", 1)) for l in read(os.path.join(out, "FILES.sha256")).splitlines())
+        self.assertEqual(hashes["runtime/wasm32-wasi/libm.a"], hashlib.sha256(b"!<arch>\n").hexdigest())
 
     def test_an_alias_leaving_the_bundle_is_refused_and_not_published(self):
         outside = self.path("outside")

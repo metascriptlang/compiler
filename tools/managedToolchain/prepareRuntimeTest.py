@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import shutil
@@ -333,6 +334,15 @@ sys.stderr.write(link + "\\n")
 """
 
 
+FAKE_LLVM_AR = """#!%(python)s
+import sys
+if sys.argv[1:3] != ["--format=gnu", "crs"] or len(sys.argv) != 4:
+    sys.exit("unexpected llvm-ar arguments %%r" %% sys.argv[1:])
+with open(sys.argv[3], "wb") as f:
+    f.write(b"!<arch>\\n")
+"""
+
+
 class PipelineTest(TempCase):
     def setUp(self):
         super().setUp()
@@ -346,7 +356,8 @@ class PipelineTest(TempCase):
         write(self.zig, FAKE_ZIG % {"python": sys.executable, "lib": self.lib})
         os.chmod(self.zig, 0o755)
         self.engine = self.path("engine")
-        os.makedirs(self.engine)
+        write(os.path.join(self.engine, "bin", "llvm-ar"), FAKE_LLVM_AR % {"python": sys.executable})
+        os.chmod(os.path.join(self.engine, "bin", "llvm-ar"), 0o755)
         for patcher in (mock.patch.object(pe, "verifyEngine", return_value=("aarch64-macos", "22.1.1", 0)),
                         mock.patch.object(pr, "normalizeInput"),
                         mock.patch.object(pr, "verifyConfigs")):
@@ -360,7 +371,10 @@ class PipelineTest(TempCase):
                                                     "wasm32-wasi.cfg", "x86_64-linux-gnu.2.31",
                                                     "x86_64-linux-gnu.2.31.cfg"])
         self.assertEqual(sorted(os.listdir(self.path("rt", "wasm32-wasi"))),
-                         ["crt1-command.o", "libc.a", "libcompiler_rt.a"])
+                         ["crt1-command.o", "libc.a", "libcompiler_rt.a", "libm.a"])
+        self.assertEqual(read(self.path("rt", "wasm32-wasi", "libm.a")), "!<arch>\n")
+        self.assertEqual(sorted(os.listdir(self.path("rt", "x86_64-linux-gnu.2.31"))),
+                         ["crt1.o", "libc.so", "libc.so.6", "libc_nonshared.a"])
         self.assertEqual(read(self.path("rt", "x86_64-linux-gnu.2.31", "libc.so.6")), "artifact libc.so.6")
         self.assertEqual(os.readlink(self.path("rt", "x86_64-linux-gnu.2.31", "libc.so")), "libc.so.6")
         self.assertEqual(read(self.path("rt", "x86_64-linux-gnu.2.31", "libc.so")), "artifact libc.so.6")
@@ -383,6 +397,9 @@ class PipelineTest(TempCase):
         self.assertEqual(wasm["cpuFeaturesNotCarried"], [])
         self.assertEqual((wasm["libraryAliases"], linux["libraryAliases"]),
                          ([], [{"alias": "libc.so", "target": "libc.so.6"}]))
+        self.assertEqual((wasm["emptyArchives"], linux["emptyArchives"]), (
+            [{"name": "libm.a", "sha256": hashlib.sha256(b"!<arch>\n").hexdigest(), "bytes": 8}], []))
+        self.assertEqual(pr.libraryNames(wasm["libraryAliases"], wasm["emptyArchives"]), ["m"])
         self.assertIn("-Xlinker -L -Xlinker <CFGDIR>/x86_64-linux-gnu.2.31\n", read(self.path("rt", "x86_64-linux-gnu.2.31.cfg")))
         self.assertEqual(linux["cpuFeatures"], ["-amx-transpose"])
         self.assertEqual([e["feature"] for e in linux["cpuFeaturesNotCarried"]], ["-amx-transpose"])
@@ -492,6 +509,69 @@ class LibraryAliasTest(TempCase):
             pr.verifyLibraryAliases(directory, record)
 
 
+class EmptyArchiveTest(TempCase):
+    def setUp(self):
+        super().setUp()
+        self.engine = self.path("an engine")
+        write(os.path.join(self.engine, "bin", "llvm-ar"), FAKE_LLVM_AR % {"python": sys.executable})
+        os.chmod(os.path.join(self.engine, "bin", "llvm-ar"), 0o755)
+        self.directory = self.path("rt dir", "target")
+        os.makedirs(self.directory)
+
+    def archive(self, data=b"!<arch>\n"):
+        path = os.path.join(self.directory, "libm.a")
+        with open(path, "wb") as f:
+            f.write(data)
+        return [{"name": "libm.a", "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}]
+
+    def test_the_archive_is_made_by_the_engine_in_gnu_format_and_parses_with_no_member(self):
+        records = pr.createEmptyArchives(self.engine, self.directory, ["libm.a"])
+        self.assertEqual(records, [{"name": "libm.a", "sha256": hashlib.sha256(b"!<arch>\n").hexdigest(), "bytes": 8}])
+        with open(os.path.join(self.directory, "libm.a"), "rb") as f:
+            self.assertEqual(pr.parseArchive(f.read()), [])
+        self.assertEqual(oct(os.stat(os.path.join(self.directory, "libm.a")).st_mode & 0o777), "0o644")
+
+    def test_no_names_make_no_archive(self):
+        self.assertEqual(pr.createEmptyArchives(self.engine, self.directory, []), [])
+        self.assertEqual(os.listdir(self.directory), [])
+
+    def test_an_archive_that_would_replace_a_file_or_leave_the_directory_is_refused(self):
+        write(os.path.join(self.directory, "libm.a"), "real\n")
+        with self.assertRaisesRegex(pe.EngineError, "libm.a collides"):
+            pr.createEmptyArchives(self.engine, self.directory, ["libm.a"])
+        self.assertEqual(read(os.path.join(self.directory, "libm.a")), "real\n")
+        with self.assertRaisesRegex(pe.EngineError, "unsupported file name"):
+            pr.createEmptyArchives(self.engine, self.directory, ["../libm.a"])
+
+    def test_the_wasi_target_names_exactly_libm_and_the_glibc_target_none(self):
+        self.assertEqual(pr.TARGETS["wasm32-wasi"]["emptyArchives"], ["libm.a"])
+        self.assertNotIn("emptyArchives", pr.TARGETS["x86_64-linux-gnu.2.31"])
+
+    def test_verification_accepts_the_recorded_empty_archive(self):
+        pr.verifyEmptyArchives(self.directory, self.archive())
+
+    def test_verification_refuses_an_archive_that_counterfeits_math_symbols_or_the_host_format(self):
+        member = arMember("sqrt.o/", b"\x00asm\x01\x00\x00\x00")
+        darwinEmpty = b"!<arch>\n" + arMember("#1/12", b"__.SYMDEF\x00\x00\x00\x00\x00")
+        for data in (b"!<arch>\n" + member, darwinEmpty, b"", b"!<arch>", b"not an archive\n"):
+            records = self.archive(data)
+            with self.assertRaisesRegex(pe.EngineError, "not an empty archive", msg=data):
+                pr.verifyEmptyArchives(self.directory, records)
+
+    def test_verification_refuses_a_link_a_missing_file_or_a_changed_record(self):
+        records = self.archive()
+        records[0]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(pe.EngineError, "differs from its record"):
+            pr.verifyEmptyArchives(self.directory, records)
+        records = self.archive()
+        os.rename(os.path.join(self.directory, "libm.a"), os.path.join(self.directory, "real.a"))
+        with self.assertRaisesRegex(pe.EngineError, "not a regular file"):
+            pr.verifyEmptyArchives(self.directory, records)
+        os.symlink("real.a", os.path.join(self.directory, "libm.a"))
+        with self.assertRaisesRegex(pe.EngineError, "not a regular file"):
+            pr.verifyEmptyArchives(self.directory, records)
+
+
 class LibrarySearchLinkTest(TempCase):
     """The consumer case: `-lm -lpthread` appended by a build line, linked through a real prepared
     bundle that is relocated to a path with a space. Needs MANAGED_TOOLCHAIN_BUNDLE=<full bundle>."""
@@ -530,6 +610,44 @@ class LibrarySearchLinkTest(TempCase):
             done = self.invoke("p.o", library, "-o", "p.bin")
             self.assertNotEqual(done.returncode, 0, msg=library)
             self.assertIn("unable to find library " + library, done.stderr)
+
+
+class WasiMathLinkTest(TempCase):
+    """The consumer case on wasm32-wasi: the `-lm` a build line appends, through a real prepared
+    bundle relocated to a path with a space. Needs MANAGED_TOOLCHAIN_BUNDLE=<full bundle>; a bundle
+    prepared before the empty libm.a fails here with `unable to find library -lm`."""
+
+    def setUp(self):
+        super().setUp()
+        source = os.environ.get("MANAGED_TOOLCHAIN_BUNDLE")
+        if not (source and sys.platform == "darwin"):
+            self.skipTest("needs MANAGED_TOOLCHAIN_BUNDLE=<full bundle> on the macOS producer host")
+        self.bundle = self.path("a bundle")
+        shutil.copytree(source, self.bundle, symlinks=True)
+        self.clang = os.path.join(self.bundle, "bin", "clang")
+        self.config = ["--config", os.path.join(self.bundle, "runtime", "wasm32-wasi.cfg")]
+        write(self.path("m.c"), "#include <math.h>\n#include <stdio.h>\n"
+              "int main(void){volatile double x=2.0;printf(\"%.3f\\n\",sqrt(x));return 0;}\n")
+
+    def invoke(self, *arguments):
+        return subprocess.run([self.clang] + self.config + list(arguments), cwd=self.dir,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
+                              env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent"})
+
+    def test_a_build_line_that_appends_lm_links_without_a_warning_and_runs(self):
+        self.assertEqual(self.invoke("-c", "m.c", "-o", "m.o").returncode, 0)
+        done = self.invoke("m.o", "-lm", "-o", "m.wasm")
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
+        wasmtime = shutil.which("wasmtime")
+        if wasmtime:
+            ran = subprocess.run([wasmtime, self.path("m.wasm")], stdout=subprocess.PIPE, universal_newlines=True)
+            self.assertEqual((ran.returncode, ran.stdout), (0, "1.414\n"))
+
+    def test_a_library_the_runtime_does_not_ship_is_still_refused(self):
+        self.assertEqual(self.invoke("-c", "m.c", "-o", "m.o").returncode, 0)
+        done = self.invoke("m.o", "-lnosuch", "-o", "m.wasm")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("unable to find library -lnosuch", done.stderr)
 
 
 class ArchiveTest(unittest.TestCase):
@@ -642,12 +760,12 @@ class EngineRelativeLayoutTest(TempCase):
         write(os.path.join(self.runtime, "notices", "runtime-provenance.json"),
               json.dumps({"engineRelative": "..", "targets": [{
                   "target": "x86_64-linux-gnu.2.31", "cpuFeaturesNotCarried": [],
-                  "libraryAliases": [{"alias": "libm.so", "target": "libm.so.6"}]}]}))
+                  "libraryAliases": [{"alias": "libm.so", "target": "libm.so.6"}], "emptyArchives": []}]}))
         self.seen = []
 
     def records(self):
         return [{"target": "x86_64-linux-gnu.2.31", "cpuFeaturesNotCarried": [],
-                 "libraryAliases": [{"alias": "libm.so", "target": "libm.so.6"}]}]
+                 "libraryAliases": [{"alias": "libm.so", "target": "libm.so.6"}], "emptyArchives": []}]
 
     def recordConfig(self, run, clang, config, target, work, prefixes, libraries):
         """What a config reads: the engine file and header the config's own directory reaches."""
@@ -771,6 +889,30 @@ class EngineRelativeLayoutTest(TempCase):
         with open(receipt, "w") as f:
             json.dump(data, f)
         with self.assertRaisesRegex(pe.EngineError, "prepare the runtime again"):
+            self.prove("..", embedded=False)
+
+    def test_prove_refuses_a_receipt_from_before_empty_archives(self):
+        receipt = os.path.join(self.runtime, "notices", "runtime-provenance.json")
+        data = json.loads(read(receipt))
+        del data["targets"][0]["emptyArchives"]
+        with open(receipt, "w") as f:
+            json.dump(data, f)
+        with self.assertRaisesRegex(pe.EngineError, "records no emptyArchives; prepare the runtime again"):
+            self.prove("..", embedded=False)
+
+    def test_prove_refuses_an_empty_archive_that_holds_a_member(self):
+        directory = os.path.join(self.runtime, "x86_64-linux-gnu.2.31")
+        write(os.path.join(directory, "libm.a"), "!<arch>\n")
+        receipt = os.path.join(self.runtime, "notices", "runtime-provenance.json")
+        data = json.loads(read(receipt))
+        data["targets"][0]["emptyArchives"] = [{"name": "libm.a", "sha256": pe.sha256File(os.path.join(directory, "libm.a")),
+                                                "bytes": 8}]
+        with open(receipt, "w") as f:
+            json.dump(data, f)
+        self.prove("..", embedded=False)
+        with open(os.path.join(directory, "libm.a"), "ab") as f:
+            f.write(arMember("m.o/", b"\x00asm"))
+        with self.assertRaisesRegex(pe.EngineError, "not an empty archive"):
             self.prove("..", embedded=False)
 
     def test_prove_refuses_an_engine_entry_on_the_runtime_location(self):
