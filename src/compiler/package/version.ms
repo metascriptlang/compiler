@@ -7,6 +7,8 @@
 // Version selection is done via Minimum Version Selection (MVS), not SAT solving.
 // See docs/PACKAGE.md for the full specification.
 
+import { join, isAbsolute } from "std/fs/path";
+
 // --- Types ---
 
 export interface ParsedVersion {
@@ -316,6 +318,18 @@ export function sourceKindOf(s: string): SourceKind {
 	return s.startsWith("git:") ? SourceKind.Git : SourceKind.Registry;
 }
 
+// A `file:` spec names a local directory; a bare `file:` names nothing.
+export function isFileDep(spec: string): boolean {
+	return spec.length > 5 && spec.startsWith("file:");
+}
+
+// The directory a `file:` spec names, resolved against baseDir when relative.
+export function fileDepPath(spec: string, baseDir: string): string {
+	if (!isFileDep(spec)) return "";
+	const path = spec.slice(5, spec.length);
+	return isAbsolute(path) ? path : join(baseDir, path);
+}
+
 // --- Inline tests ---
 
 function parsedVersion(s: string): ParsedVersion {
@@ -599,4 +613,12 @@ test "sourceKindOf tells git from registry" {
 	assert sourceKindOf("not-a-version") == SourceKind.Registry;
 	assert sourceKindOf("git:github.com/acme/foo@v1.2.3") == SourceKind.Git;
 	assert sourceKindOf("git:") == SourceKind.Git;
+}
+
+test "fileDepPath resolves a file: spec against the base and refuses other specs" {
+	assert isFileDep("file:../lib") && !isFileDep("file:") && !isFileDep("1.2.3") && !isFileDep("git:file:x");
+	assert fileDepPath("file:libs/a", "/proj") == "/proj/libs/a";
+	assert fileDepPath("file:/abs/lib", "/proj") == "/abs/lib";
+	assert fileDepPath("file:", "/proj") == "";
+	assert fileDepPath("1.2.3", "/proj") == "";
 }

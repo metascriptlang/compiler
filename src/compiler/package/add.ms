@@ -20,7 +20,7 @@ import {
 	Lockfile,
 	LockfileError,
 } from "./lockfile";
-import { parseVersion, parseGitSpec, sourceKindOf, SourceKind } from "./version";
+import { parseVersion, parseGitSpec, sourceKindOf, isFileDep, SourceKind } from "./version";
 import { LockEntry } from "./lockfile";
 import { fetchPackageInfo, findVersion, latestVersion, RegistryVersion, RegistryPackage } from "./registry";
 import { downloadPackage, packageErrorMessage } from "./download";
@@ -232,8 +232,7 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	}
 
 	// file: source — local folder, no version validation, no lockfile entry
-	const isFileSource = parsed.version.length > 5 && parsed.version.slice(0, 5) == "file:";
-	if (isFileSource) {
+	if (isFileDep(parsed.version)) {
 		const scope = isDev ? "devDeps" : "deps";
 		const added = addDepToManifest(buildPath, parsed.name, parsed.version, scope);
 		if (!added.ok) {
