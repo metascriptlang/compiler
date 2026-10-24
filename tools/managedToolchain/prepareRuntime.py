@@ -8,8 +8,9 @@ Production runs Zig once per target on a fixture with private caches, so every r
 is attributable to that run, and copies the ordered inputs of the link line and the ordered
 include directories of the compile line it printed. Each target gets a native clang config
 file (`clang --config RUNTIME/T.cfg -c x.c`, then `clang --config RUNTIME/T.cfg x.o -o out`);
-the payload carries no Zig. The engine is found from the config file by a relative path, so
-engine and runtime are laid out as siblings (`--engine-relative`, default `../engine`).
+the payload carries no Zig. The engine is found from the config file by a relative path
+(`--engine-relative`): siblings by default (`../engine`), or `..` when the runtime is a child of
+the engine root, as in a full bundle.
 
 The payload is a local proof from an installed Zig, not an upstream-controlled build; its
 provenance receipt says so and never certifies redistribution.
@@ -436,6 +437,19 @@ def writeProvenance(output, zigId, host, engineVersion, engineRelative, records)
                  json.dumps(receipt, indent=2, sort_keys=True) + "\n")
 
 
+def checkEngineRelative(engineRelative):
+    """The engine path as seen from the runtime directory: one or more leading `..`, then plain
+    names (`../engine`, or `..` alone for an engine root holding the runtime as a child). The
+    engine is never inside the runtime. Returns the number of `..`."""
+    parts = engineRelative.split("/")
+    ups = 0
+    while ups < len(parts) and parts[ups] == "..":
+        ups += 1
+    if ups == 0 or not all(SAFE_NAME.match(p) and p not in (".", "..") for p in parts[ups:]):
+        raise pe.EngineError("--engine-relative %r must be a plain relative path of `..` steps then names" % engineRelative)
+    return ups
+
+
 def renameNoReplace(source, destination):
     """Move source to destination atomically, failing when destination exists even if empty."""
     libc = ctypes.CDLL(None, use_errno=True)
@@ -456,9 +470,7 @@ def renameNoReplace(source, destination):
 def prepareRuntime(zig, engine, output, targets, engineRelative="../engine"):
     zig, engine, output = (os.path.abspath(p) for p in (zig, engine, output))
     targets = selectTargets(targets)
-    parts = engineRelative.split("/")
-    if os.path.isabs(engineRelative) or "" in parts or not all(SAFE_NAME.match(p) or p == ".." for p in parts):
-        raise pe.EngineError("--engine-relative %r must be a plain relative path" % engineRelative)
+    checkEngineRelative(engineRelative)
     if os.path.lexists(output):
         raise pe.EngineError("output %s exists; it is never replaced" % output)
     if not os.access(zig, os.X_OK):
@@ -503,15 +515,31 @@ def checkConfig(run, clang, config, target, work, absentMacroPrefixes):
     return binary
 
 
+def linkEngineBeside(engine, directory, runtime):
+    """engineRelative names an existing ancestor of the copied runtime (the engine root holds
+    the runtime as a child): every engine entry becomes a symlink in that ancestor, and an entry
+    that would land on an existing name is refused."""
+    if os.path.islink(directory) or directory == runtime or not pe.containsPath(directory, runtime):
+        raise pe.EngineError("engine path %s collides with the runtime copy" % directory)
+    for name in sorted(os.listdir(engine)):
+        entry = os.path.join(directory, name)
+        if os.path.lexists(entry):
+            raise pe.EngineError("engine entry %s collides with %s" % (name, entry))
+        os.symlink(os.path.join(engine, name), entry)
+
+
 def verifyConfigs(engine, runtime, engineRelative, records, work):
     """Run checkConfig for each produced target on a copy of the runtime whose engine path
     resolves as the config says."""
-    depth = engineRelative.split("/").count("..")
+    depth = checkEngineRelative(engineRelative)
     copy = os.path.join(work, "verify", *(["up"] * depth), "runtime")
     shutil.copytree(runtime, copy)
     link = os.path.normpath(os.path.join(copy, engineRelative))
-    os.makedirs(os.path.dirname(link), exist_ok=True)
-    os.symlink(engine, link)
+    if os.path.lexists(link):
+        linkEngineBeside(engine, link, copy)
+    else:
+        os.makedirs(os.path.dirname(link), exist_ok=True)
+        os.symlink(engine, link)
     environment = {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "TMPDIR": work}
     run = lambda command: subprocess.run(command, env=environment, stdout=subprocess.PIPE,
                                          stderr=subprocess.PIPE, universal_newlines=True)
@@ -549,17 +577,29 @@ def glibcSymbolProblem(nm, path, limit=(2, 31)):
 
 
 def prove(engine, runtime, denied, zig=None, targets=None):
-    """Relocate engine and runtime as siblings and run the fixtures through `clang --config`
-    under a sandbox that cannot read the originals, Zig or any --deny path."""
+    """Relocate engine and runtime where the receipt's engineRelative puts them and run the
+    fixtures through `clang --config` under a sandbox that cannot read the originals, Zig or any
+    --deny path. A runtime that is a child of the engine root travels inside the engine copy."""
     engine, runtime = os.path.realpath(engine), os.path.realpath(runtime)
     pe.verifyEngine(engine)
     targets = selectTargets(targets)
+    with open(os.path.join(runtime, "notices", "runtime-provenance.json")) as f:
+        receipt = json.load(f)
+    depth = checkEngineRelative(receipt["engineRelative"])
     work = os.path.realpath(tempfile.mkdtemp(prefix="runtime-proof-"))
     root = os.path.join(work, "relocated tree")
-    movedEngine, movedRuntime = os.path.join(root, "engine"), os.path.join(root, "runtime")
+    movedRuntime = os.path.join(root, *(["inner"] * (depth - 1)), "runtime")
+    movedEngine = os.path.normpath(os.path.join(movedRuntime, receipt["engineRelative"]))
+    embedded = engine != runtime and pe.containsPath(engine, runtime)
+    if embedded and movedRuntime != os.path.join(movedEngine, os.path.relpath(runtime, engine)):
+        raise pe.EngineError("runtime sits inside the engine at %s, not where engineRelative %s puts it" % (
+            os.path.relpath(runtime, engine), receipt["engineRelative"]))
     shutil.copytree(engine, movedEngine, symlinks=True)
-    shutil.copytree(runtime, movedRuntime)
-    secrets = [engine, runtime] + [os.path.realpath(p) for p in denied]
+    if not embedded:
+        if os.path.lexists(movedRuntime):
+            raise pe.EngineError("engine entry collides with the runtime at %s" % movedRuntime)
+        shutil.copytree(runtime, movedRuntime)
+    secrets = ([engine] if embedded else [engine, runtime]) + [os.path.realpath(p) for p in denied]
     if zig:
         secrets.append(os.path.dirname(os.path.realpath(zig)))
     profile = os.path.join(work, "deny.sb")
@@ -572,8 +612,6 @@ def prove(engine, runtime, denied, zig=None, targets=None):
         raise pe.EngineError("sandbox does not deny Zig")
 
     clang, nm = os.path.join(movedEngine, "bin", "clang"), os.path.join(movedEngine, "bin", "llvm-nm")
-    with open(os.path.join(runtime, "notices", "runtime-provenance.json")) as f:
-        receipt = json.load(f)
     for target in targets:
         config = ["--config", os.path.join(movedRuntime, target + ".cfg")]
         prefixes = [e["absentMacroPrefix"] for r in receipt["targets"] if r["target"] == target

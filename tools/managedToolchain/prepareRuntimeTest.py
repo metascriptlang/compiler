@@ -409,7 +409,8 @@ class PipelineTest(TempCase):
         self.assertFalse(os.path.exists(self.path("rt")))
 
     def test_engine_relative_path_must_be_plain(self):
-        for bad in ("/abs/engine", "a//b", "a b", "../en gine", ""):
+        for bad in ("/abs/engine", "a//b", "a b", "../en gine", "", "engine", "./engine", "../engine/..",
+                    "../../.", "../a/../b", "../runtime/"):
             with self.assertRaises(pe.EngineError, msg=repr(bad)):
                 pr.prepareRuntime(self.zig, self.engine, self.path("rt"), [], bad)
 
@@ -517,6 +518,132 @@ class LldArchiveTest(TempCase):
         self.assertEqual(pe.run([self.tool("llvm-ar"), "t", self.path("byName.a")]).split(), ["dup.o"])
         with self.assertRaisesRegex(pe.EngineError, "undefined symbol: fromB"):
             self.link([libA, self.path("byName.a"), self.path("user.o")], "lost")
+
+
+class EngineRelativeLayoutTest(TempCase):
+    """verifyConfigs and prove put engine and runtime where the receipt's engineRelative says,
+    including `..`, the engine root that holds the runtime as a child; every path has a space."""
+
+    def setUp(self):
+        super().setUp()
+        self.engine = self.path("an engine")
+        write(os.path.join(self.engine, "bin", "clang"), "clang")
+        write(os.path.join(self.engine, "lib", "clang", "22", "include", "stddef.h"))
+        self.runtime = self.path("a runtime")
+        write(os.path.join(self.runtime, "x86_64-linux-gnu.2.31.cfg"))
+        write(os.path.join(self.runtime, "notices", "runtime-provenance.json"),
+              json.dumps({"engineRelative": "..", "targets": [{"target": "x86_64-linux-gnu.2.31",
+                                                                "cpuFeaturesNotCarried": []}]}))
+        self.seen = []
+
+    def records(self):
+        return [{"target": "x86_64-linux-gnu.2.31", "cpuFeaturesNotCarried": []}]
+
+    def recordConfig(self, run, clang, config, target, work, prefixes):
+        """What a config reads: the engine file and header the config's own directory reaches."""
+        base = os.path.dirname(config[1])
+        relative = self.relative
+        self.seen.append((os.path.isfile(clang), os.path.isfile(config[1]),
+                          os.path.isfile(os.path.join(base, relative, "lib", "clang", "22", "include", "stddef.h")),
+                          os.path.realpath(os.path.join(base, relative, "bin", "clang"))
+                          == os.path.realpath(os.path.join(self.engine, "bin", "clang"))))
+        return None
+
+    def verify(self, relative):
+        self.relative = relative
+        work = tempfile.mkdtemp(prefix="work dir ", dir=self.dir)
+        with mock.patch.object(pr, "checkConfig", side_effect=self.recordConfig):
+            pr.verifyConfigs(self.engine, self.runtime, relative, self.records(), work)
+
+    def test_engine_relative_steps_up_count_and_names_are_validated(self):
+        self.assertEqual(pr.checkEngineRelative("../engine"), 1)
+        self.assertEqual(pr.checkEngineRelative(".."), 1)
+        self.assertEqual(pr.checkEngineRelative("../.."), 2)
+        self.assertEqual(pr.checkEngineRelative("../../a/b"), 2)
+        for bad in ("", ".", "engine", "../a/..", "../a/.", "..//a", "../a b", "/..", "..\\a"):
+            with self.assertRaises(pe.EngineError, msg=repr(bad)):
+                pr.checkEngineRelative(bad)
+
+    def test_a_sibling_engine_is_one_leaf_symlink(self):
+        self.verify("../engine")
+        self.assertEqual(self.seen, [(True, True, True, True)])
+
+    def test_the_engine_root_above_the_runtime_gets_per_entry_symlinks(self):
+        self.verify("..")
+        self.assertEqual(self.seen, [(True, True, True, True)])
+
+    def test_a_deeper_engine_root_gets_per_entry_symlinks(self):
+        self.verify("../..")
+        self.assertEqual(self.seen, [(True, True, True, True)])
+
+    def test_an_engine_entry_named_like_the_runtime_is_refused(self):
+        write(os.path.join(self.engine, "runtime", "x"))
+        for relative in ("..", "../runtime"):
+            with self.assertRaises(pe.EngineError, msg=relative):
+                self.verify(relative)
+
+    def test_the_verified_engine_is_never_written_into(self):
+        before = sorted(os.listdir(self.engine))
+        self.verify("..")
+        self.assertEqual(sorted(os.listdir(self.engine)), before)
+        self.assertEqual(sorted(os.listdir(self.runtime)), ["notices", "x86_64-linux-gnu.2.31.cfg"])
+
+    def prove(self, relative, embedded):
+        """pr.prove on a layout, with the sandbox, the checks and the engine contract mocked
+        out. Returns what the relocated tree held when the config ran, plus the deny profile."""
+        receipt = os.path.join(self.runtime, "notices", "runtime-provenance.json")
+        data = json.loads(read(receipt))
+        data["engineRelative"] = relative
+        with open(receipt, "w") as f:
+            json.dump(data, f)
+        if embedded:
+            shutil.move(self.runtime, os.path.join(self.engine, "runtime"))
+            self.runtime = os.path.join(self.engine, "runtime")
+        out = self.path("fake.bin")
+        write(out, "bin")
+        held, profiles, copies = [], [], []
+        realCopytree = shutil.copytree
+
+        def ran(run, clang, config, target, work, prefixes):
+            held.append((os.path.isfile(clang), os.path.isfile(config[1]),
+                         os.path.isdir(os.path.join(os.path.dirname(config[1]), "runtime"))))
+            return out
+
+        def sandboxed(profile, work, command):
+            profiles.append(read(profile))
+            return subprocess.CompletedProcess(command, 1, "", "denied")
+
+        with mock.patch.object(pe, "verifyEngine", return_value=("aarch64-macos", "22.1.1", 0)), \
+                mock.patch.object(pr, "checkConfig", side_effect=ran), \
+                mock.patch.object(pr, "sandboxed", side_effect=sandboxed), \
+                mock.patch.object(pr, "elfProblem", return_value=None), \
+                mock.patch.object(pr, "glibcSymbolProblem", return_value=None), \
+                mock.patch.object(shutil, "copytree", side_effect=lambda *a, **k: (
+                    copies.append(a[0]) if isinstance(a[0], str) else None, realCopytree(*a, **k))[1]):
+            pr.prove(self.engine, self.runtime, [], None, ["x86_64-linux-gnu.2.31"])
+        return held, profiles[0], copies
+
+    def test_prove_relocates_the_sibling_layout_as_two_trees(self):
+        held, profile, copies = self.prove("../engine", embedded=False)
+        self.assertEqual(held, [(True, True, False)])
+        self.assertEqual(sorted(copies), sorted([os.path.realpath(self.engine), os.path.realpath(self.runtime)]))
+        self.assertEqual(profile.count('(deny file-read* (subpath "'), 2)
+
+    def test_prove_relocates_the_engine_root_layout_without_copying_the_runtime_twice(self):
+        held, profile, copies = self.prove("..", embedded=True)
+        self.assertEqual(held, [(True, True, False)])
+        self.assertEqual(copies, [os.path.realpath(self.engine)])
+        self.assertEqual(profile.count('(deny file-read* (subpath "'), 1)
+        self.assertEqual(profile.count(os.path.realpath(self.engine)), 2)
+
+    def test_prove_refuses_a_runtime_inside_the_engine_where_the_receipt_does_not_say(self):
+        with self.assertRaisesRegex(pe.EngineError, "not where engineRelative"):
+            self.prove("../engine", embedded=True)
+
+    def test_prove_refuses_an_engine_entry_on_the_runtime_location(self):
+        write(os.path.join(self.engine, "runtime", "x"))
+        with self.assertRaisesRegex(pe.EngineError, "collides"):
+            self.prove("..", embedded=False)
 
 
 class ProofHelperTest(TempCase):
