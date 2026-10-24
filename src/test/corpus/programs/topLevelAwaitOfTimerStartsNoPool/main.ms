@@ -4,7 +4,7 @@
 // @serial
 // @skip-js: binds the C fixture loopWakes.c and reads the C runtime worker pool
 // @skip-raiser: binds the C fixture loopWakes.c; the Raiser runs spawn inline and has no worker pool
-// note: a blocking top-level await of a timer polls this thread's loop until the timer fires: the process keeps its one OS thread and the wait sleeps in the poller until the timer is due, a handful of context switches for 250 ms (old runtime: the wait's help step started the pool, one thread per CPU, and woke every 5 ms, about 50 switches). The number await takes the typed wait and the string await the untyped one; the first spawn still starts the pool and its await settles.
+// note: a blocking top-level await of a timer polls this thread's loop until the timer fires: the process keeps its one OS thread and the wait sleeps in the poller until the timer is due, a handful of voluntary context switches for 250 ms (old runtime: the wait's help step started the pool, one thread per CPU, and woke every 5 ms, about 50 switches; preemptions by other processes are not counted, so host load cannot fail it). The number await takes the typed wait and the string await the untyped one; the first spawn still starts the pool and its await settles.
 
 @include("./loopWakes.h")
 @compile("./loopWakes.c")

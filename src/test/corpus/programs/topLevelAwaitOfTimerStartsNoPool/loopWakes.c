@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <sys/resource.h>
 #include "loopWakes.h"
 
@@ -32,5 +33,5 @@ int32_t msTestOsThreads(void) {
 int32_t msTestContextSwitches(void) {
 	struct rusage u;
 	if (getrusage(RUSAGE_SELF, &u) != 0) return -1;
-	return (int32_t)(u.ru_nvcsw + u.ru_nivcsw);
+	return (int32_t)u.ru_nvcsw;
 }
