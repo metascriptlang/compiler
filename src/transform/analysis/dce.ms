@@ -3,12 +3,11 @@
 // Hoisted declarations stay. lowerDCE then runs the symbol sweep (sweepDecls.ms).
 
 import { Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, TestDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, VariableDeclData, ReturnStmtData, BinaryExprData, MemberExprData, TypeKind } from "../../ast/node";
-import { TransformContext, createTransformContextWithChecker } from "../context";
-import { checkProgram } from "../../checker/checkPass";
+import { TransformContext } from "../context";
 import { makeBlock, makeExprStmt } from "../util";
 import { sweepDeadDecls } from "./sweepDecls";
 import { overloadWinner } from "../../checker/symbol";
-import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
+import { stmtCountAfter, firstStmtKindAfter, checkedStmtCount } from "../testUtil";
 
 // ===== Helpers =====
 
@@ -349,15 +348,6 @@ export function lowerDCE(program: Node, ctx: TransformContext): Node {
 	return program;
 }
 
-// ===== Test Helper: DCE with checker context =====
-
-function checkedStmtCount(input: string): int32 {
-	const result = parseInput(input);
-	if (!result.ok) return -1;
-	const cc = checkProgram(result.value);
-	return getStmts(lowerDCE(result.value, createTransformContextWithChecker(cc))).length;
-}
-
 // ===== Tests =====
 test "passthrough unchanged" { assert stmtCountAfter("const x = 1;", lowerDCE) == 1; }
 
@@ -425,11 +415,11 @@ test "else-if chain missing else" {
 	assert stmtCountAfter(code, lowerDCE) == 2;
 }
 
-test "never call strips after" { assert checkedStmtCount("function fail(): never { throw 1; } fail(); const dead = 2;") == 2; }
+test "never call strips after" { assert checkedStmtCount("function fail(): never { throw 1; } fail(); const dead = 2;", lowerDCE) == 2; }
 
-test "void call keeps after" { assert checkedStmtCount("function log(): void {} log(); const alive = 2;") == 3; }
+test "void call keeps after" { assert checkedStmtCount("function log(): void {} log(); const alive = 2;", lowerDCE) == 3; }
 
-test "unknown function keeps after" { assert checkedStmtCount("mystery(); const alive = 2;") == 2; }
+test "unknown function keeps after" { assert checkedStmtCount("mystery(); const alive = 2;", lowerDCE) == 2; }
 
 test "null checker graceful" {
 	// stmtCountAfter uses null checkerCtx — must not crash
@@ -452,7 +442,7 @@ test "used class kept" { assert stmtCountAfter("class Alive {} const x = Alive;"
 
 test "transitive liveness" { assert stmtCountAfter("function helper() { return 1; } function api() { return helper(); } api();", lowerDCE) == 3; }
 
-test "an unused enum is swept by the entry" { assert checkedStmtCount("enum Color { Red, Green } const x = 1;") == 1; }
+test "an unused enum is swept by the entry" { assert checkedStmtCount("enum Color { Red, Green } const x = 1;", lowerDCE) == 1; }
 
 test "variable decl always kept" {
 	// Variable declarations have side effects (initializer runs)

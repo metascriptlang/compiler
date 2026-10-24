@@ -32,7 +32,7 @@ import {
 	makeHiddenDeref, makeNull, makeDefaultValue, makeAssign, makeExprStmt, syntheticToken, resolveSimpleTypeStr,
 } from "../util";
 import { createPtr, createRef, voidType, isUnresolvedType } from "../../checker/types";
-import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx } from "../testUtil";
+import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx, checkedFnBodyStmts } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
 import {
 	detectPass, detectionGetCaptures, detectionGetCapturedIdents, routineBindingSym, routineSyms, refsAnySym,
@@ -1412,11 +1412,7 @@ test "a macro body is not lifted" {
 }
 
 function checkedFnBody(input: string): Node[] {
-	const result = parseInput(input);
-	if (!result.ok) return [];
-	checkProgram(result.value);
-	const fd = getStmts(result.value)[0].data as FunctionDeclData;
-	return (fd.fnBody.data as BlockStmtData).statements;
+	return checkedFnBodyStmts(input, (prog: Node, ctx: TransformContext): Node => prog) ?? [];
 }
 
 test "isCaptureLastUse: var not used after closure" {
