@@ -23,6 +23,21 @@ export function isIdentLikeKind(kind: TokenKind): boolean {
 	return kind == TokenKind.Ident || ((kind as number) >= (TokenKind.Abstract as number) && kind != TokenKind.Comment && kind != TokenKind.Eof && (kind as number) < (TokenKind.JsxTagStart as number));
 }
 
+// A token after which an expression may begin: the part a regex literal and a JSX `<` agree on.
+export function startsExprAfter(kind: TokenKind): boolean {
+	return match (kind) {
+		TokenKind.Eof | TokenKind.Assign
+		| TokenKind.PlusEq | TokenKind.MinusEq | TokenKind.StarEq | TokenKind.StarStarEq | TokenKind.SlashEq
+		| TokenKind.AmpEq | TokenKind.PipeEq | TokenKind.CaretEq | TokenKind.LtLtEq | TokenKind.GtGtEq | TokenKind.GtGtGtEq
+		| TokenKind.EqEq | TokenKind.EqEqEq | TokenKind.BangEq | TokenKind.BangEqEq
+		| TokenKind.AmpAmp | TokenKind.PipePipe | TokenKind.Question
+		| TokenKind.Colon | TokenKind.Comma | TokenKind.Semicolon
+		| TokenKind.LParen | TokenKind.LBracket | TokenKind.LBrace
+		| TokenKind.Arrow | TokenKind.Return | TokenKind.Yield | TokenKind.Case => true,
+		_ => false,
+	};
+}
+
 // Map identifier string to keyword TokenKind (or Ident)
 // Compiler generates FNV-1a hash table for 80+ string cases — O(1) lookup
 export function identToKeyword(ident: string): TokenKind {

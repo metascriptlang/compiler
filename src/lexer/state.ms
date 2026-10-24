@@ -1,6 +1,6 @@
 // Lexer State — Token accumulation and source navigation
 
-import { Token, TokenKind } from "./token";
+import { Token, TokenKind, startsExprAfter } from "./token";
 
 // Lexer mode stack frame (docs/JSX-ROADMAP.md "Architecture decision").
 // Tag = inside `<… >` opening tag; Children = between `>` and `</`; Closing = inside `</…>`;
@@ -74,28 +74,16 @@ export function addComment(s: LexerState, value: string, line: int32, column: in
 
 export function allowsRegexAfter(s: LexerState): boolean {
 	const last = s.lastToken;
-	// After operators, punctuation that starts expressions, keywords — regex allowed
-	if (last == TokenKind.Assign || last == TokenKind.LParen || last == TokenKind.LBracket ||
-		last == TokenKind.LBrace || last == TokenKind.Comma || last == TokenKind.Semicolon ||
-		last == TokenKind.Colon || last == TokenKind.Question || last == TokenKind.Bang ||
-		last == TokenKind.Tilde || last == TokenKind.Plus || last == TokenKind.Minus ||
-		last == TokenKind.Star || last == TokenKind.Percent || last == TokenKind.Amp ||
-		last == TokenKind.Pipe || last == TokenKind.Caret || last == TokenKind.EqEq ||
-		last == TokenKind.EqEqEq || last == TokenKind.BangEq || last == TokenKind.BangEqEq ||
-		last == TokenKind.LtEq || last == TokenKind.Gt || last == TokenKind.GtEq ||
-		last == TokenKind.AmpAmp || last == TokenKind.PipePipe || last == TokenKind.PlusEq ||
-		last == TokenKind.MinusEq || last == TokenKind.StarEq || last == TokenKind.StarStarEq || last == TokenKind.SlashEq ||
-		last == TokenKind.AmpEq || last == TokenKind.PipeEq || last == TokenKind.CaretEq ||
-		last == TokenKind.LtLtEq || last == TokenKind.GtGtEq || last == TokenKind.GtGtGtEq ||
-		last == TokenKind.Arrow || last == TokenKind.Eof || last == TokenKind.Return ||
-		last == TokenKind.Case || last == TokenKind.Delete || last == TokenKind.In ||
-		last == TokenKind.Instanceof || last == TokenKind.New || last == TokenKind.Typeof ||
-		last == TokenKind.Void || last == TokenKind.If || last == TokenKind.While ||
-		last == TokenKind.For || last == TokenKind.Await || last == TokenKind.Yield) {
-		return true;
-	}
-	// After values, identifiers, closing brackets — expect division, not regex
-	return false;
+	// After operators, punctuation that starts expressions, keywords — regex allowed;
+	// after values, identifiers, closing brackets — expect division, not regex
+	return startsExprAfter(last) || match (last) {
+		TokenKind.Bang | TokenKind.Tilde | TokenKind.Plus | TokenKind.Minus
+		| TokenKind.Star | TokenKind.Percent | TokenKind.Amp | TokenKind.Pipe | TokenKind.Caret
+		| TokenKind.LtEq | TokenKind.Gt | TokenKind.GtEq
+		| TokenKind.Delete | TokenKind.In | TokenKind.Instanceof | TokenKind.New | TokenKind.Typeof
+		| TokenKind.Void | TokenKind.If | TokenKind.While | TokenKind.For | TokenKind.Await => true,
+		_ => false,
+	};
 }
 
 // ===== Tests =====
