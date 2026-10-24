@@ -2,9 +2,9 @@
 // Two modes: walkNode (1:1 visitor) and walkBlockExpanding (1:N statement expansion, in blockExpand.ms)
 
 import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, HiddenDerefData, HiddenStdConvData, TypeAssertionData, PropertyDeclData } from "../ast/node";
-import { Visitor, mapChildrenWith, applyVisitor, isFuncBoundary, forEachChild } from "../ast/visitor";
+import { Visitor, mapChildren, isFuncBoundary, forEachChild } from "../ast/visitor";
 
-export { mapChildren, mapChildrenWith, isFuncBoundary } from "../ast/visitor";
+export { mapChildren, isFuncBoundary } from "../ast/visitor";
 export { hasEffect, walkOnceEvaluated, OnceEvalState, OnceEvalVisitor } from "./walkEffects";
 export { walkExpandBlocks, walkExpandBlocksHooked, walkBlockExpanding, expandingInsideTry, FnEntryHook, FnExitHook } from "./blockExpand";
 
@@ -21,26 +21,24 @@ export function walkNode(node: Node, visitor: Visitor): Node {
 
 // Recurse into all child nodes using bottom-up walkNode traversal
 export function walkChildren(node: Node, visitor: Visitor): void {
-	mapChildrenWith(node, visitor, walkChild);
-}
-
-function walkChild(child: Node, visitor: Visitor): Node {
-	if (child == null) return null as unknown as Node;
-	mapChildrenWith(child, visitor, walkChild);
-	return visitor(child);
+	const walk = (child: Node): Node => {
+		if (child == null) return null as unknown as Node;
+		mapChildren(child, walk);
+		return visitor(child);
+	};
+	mapChildren(node, walk);
 }
 
 export function walkWithinStatement(node: Node, visitor: Visitor): Node {
 	if (node == null) return null as unknown as Node;
 	if (opensStatementScope(node)) return node;
-	mapChildrenWith(node, visitor, walkChildWithinStatement);
+	const walk = (child: Node): Node => {
+		if (child == null || opensStatementScope(child)) return child;
+		mapChildren(child, walk);
+		return visitor(child);
+	};
+	mapChildren(node, walk);
 	return visitor(node);
-}
-
-function walkChildWithinStatement(child: Node, visitor: Visitor): Node {
-	if (child == null || opensStatementScope(child)) return child;
-	mapChildrenWith(child, visitor, walkChildWithinStatement);
-	return visitor(child);
 }
 
 function opensStatementScope(node: Node): boolean {
@@ -52,14 +50,13 @@ function opensStatementScope(node: Node): boolean {
 export function walkOutsideInstanceFieldInits(node: Node, visitor: Visitor): Node {
 	if (node == null) return null as unknown as Node;
 	if (isInstanceFieldInit(node)) return node;
-	mapChildrenWith(node, visitor, walkChildOutsideInstanceFieldInits);
+	const walk = (child: Node): Node => {
+		if (child == null || isInstanceFieldInit(child)) return child;
+		mapChildren(child, walk);
+		return visitor(child);
+	};
+	mapChildren(node, walk);
 	return visitor(node);
-}
-
-function walkChildOutsideInstanceFieldInits(child: Node, visitor: Visitor): Node {
-	if (child == null || isInstanceFieldInit(child)) return child;
-	mapChildrenWith(child, visitor, walkChildOutsideInstanceFieldInits);
-	return visitor(child);
 }
 
 export function isInstanceFieldInit(node: Node): boolean {
@@ -72,86 +69,82 @@ export function isInstanceFieldInit(node: Node): boolean {
 // block statements, or match case arms.
 
 export function mapExprChildren(node: Node, f: Visitor): void {
-	mapExprChildrenWith(node, f, applyVisitor);
-}
-
-export function mapExprChildrenWith<C>(node: Node, ctx: C, f: (child: Node, ctx: C) => Node): void {
 	match (node.kind) {
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
-			d.callee = f(d.callee, ctx);
+			d.callee = f(d.callee);
 			let i = 0;
-			while (i < d.arguments.length) { d.arguments[i] = f(d.arguments[i], ctx); i += 1; }
+			while (i < d.arguments.length) { d.arguments[i] = f(d.arguments[i]); i += 1; }
 		},
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
-			d.left = f(d.left, ctx);
-			d.right = f(d.right, ctx);
+			d.left = f(d.left);
+			d.right = f(d.right);
 		},
 		NodeKind.UnaryExpr => {
 			const d = node.data as UnaryExprData;
-			d.operand = f(d.operand, ctx);
+			d.operand = f(d.operand);
 		},
 		NodeKind.MemberExpr => {
 			const d = node.data as MemberExprData;
-			d.object = f(d.object, ctx);
+			d.object = f(d.object);
 		},
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
-			d.array = f(d.array, ctx);
-			d.index = f(d.index, ctx);
+			d.array = f(d.array);
+			d.index = f(d.index);
 		},
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
-			d.ternaryCondition = f(d.ternaryCondition, ctx);
-			d.ternaryConsequent = f(d.ternaryConsequent, ctx);
-			d.ternaryAlternate = f(d.ternaryAlternate, ctx);
+			d.ternaryCondition = f(d.ternaryCondition);
+			d.ternaryConsequent = f(d.ternaryConsequent);
+			d.ternaryAlternate = f(d.ternaryAlternate);
 		},
 		NodeKind.ObjectLiteral => {
 			const d = node.data as ObjectLiteralData;
 			let i = 0;
-			while (i < d.properties.length) { d.properties[i] = f(d.properties[i], ctx); i += 1; }
+			while (i < d.properties.length) { d.properties[i] = f(d.properties[i]); i += 1; }
 		},
 		NodeKind.ArrayLiteral => {
 			const d = node.data as ArrayLiteralData;
 			let i = 0;
-			while (i < d.elements.length) { d.elements[i] = f(d.elements[i], ctx); i += 1; }
+			while (i < d.elements.length) { d.elements[i] = f(d.elements[i]); i += 1; }
 		},
 		NodeKind.SpreadExpr => {
 			const d = node.data as SpreadExprData;
-			d.spreadArg = f(d.spreadArg, ctx);
+			d.spreadArg = f(d.spreadArg);
 		},
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
-			d.newCallee = f(d.newCallee, ctx);
+			d.newCallee = f(d.newCallee);
 			let i = 0;
-			while (i < d.newArguments.length) { d.newArguments[i] = f(d.newArguments[i], ctx); i += 1; }
+			while (i < d.newArguments.length) { d.newArguments[i] = f(d.newArguments[i]); i += 1; }
 		},
 		NodeKind.TryExpr => {
 			const d = node.data as TryExprData;
-			d.tryArg = f(d.tryArg, ctx);
-			if (d.hasCatch) { d.catchVal = f(d.catchVal, ctx); }
+			d.tryArg = f(d.tryArg);
+			if (d.hasCatch) { d.catchVal = f(d.catchVal); }
 		},
 		NodeKind.MatchExpr => {
 			const d = node.data as MatchExprData;
-			d.matchDisc = f(d.matchDisc, ctx);
+			d.matchDisc = f(d.matchDisc);
 			// Don't recurse into matchCases — they're statement-level
 		},
 		NodeKind.TypeAssertion => {
 			const d = node.data as TypeAssertionData;
-			d.asExpr = f(d.asExpr, ctx);
+			d.asExpr = f(d.asExpr);
 		},
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
 			const d = node.data as HiddenDerefData;
-			d.expr = f(d.expr, ctx);
+			d.expr = f(d.expr);
 		},
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
 			const d = node.data as HiddenStdConvData;
-			d.convExpr = f(d.convExpr, ctx);
+			d.convExpr = f(d.convExpr);
 		},
 		NodeKind.UpdateExpr => {
 			const d = node.data as UpdateExprData;
-			d.updateArg = f(d.updateArg, ctx);
+			d.updateArg = f(d.updateArg);
 		},
 		_ => {},
 	};
@@ -159,31 +152,29 @@ export function mapExprChildrenWith<C>(node: Node, ctx: C, f: (child: Node, ctx:
 
 // Check if any node in an expression tree has the given NodeKind.
 export function containsExprKind(node: Node, kind: NodeKind): boolean {
-	const probe: ExprKindProbe = { kind, found: false };
-	probeExprKind(node, probe);
-	return probe.found;
-}
-
-interface ExprKindProbe {
-	kind: NodeKind;
-	found: boolean;
-}
-
-function probeExprKind(node: Node, probe: ExprKindProbe): Node {
-	if (node == null || probe.found) return node;
-	if (node.kind == probe.kind) {
-		probe.found = true;
-		return node;
-	}
-	mapExprChildrenWith(node, probe, probeExprKind);
-	return node;
+	if (node == null) return false;
+	if (node.kind == kind) return true;
+	let found = false;
+	const scan = (child: Node): Node => {
+		if (found || child == null) return child;
+		if (child.kind == kind) { found = true; return child; }
+		mapExprChildren(child, scan);
+		return child;
+	};
+	mapExprChildren(node, scan);
+	return found;
 }
 
 // Bottom-up expression tree walk: recurse into children first, then apply replacer.
 // If replacer returns a different node, use it as the replacement.
 export function replaceInExpr(node: Node, replacer: Visitor): Node {
 	if (node == null) return node;
-	mapExprChildrenWith(node, replacer, replaceInExpr);
+	const walk = (child: Node): Node => {
+		if (child == null) return child;
+		mapExprChildren(child, walk);
+		return replacer(child);
+	};
+	mapExprChildren(node, walk);
 	return replacer(node);
 }
 
