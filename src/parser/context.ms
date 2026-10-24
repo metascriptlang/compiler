@@ -96,33 +96,27 @@ export function stampEnd(state: ParserState, node: Node): void {
 	node.location.endColumn = (prev.column + width) as int32;
 }
 
-// Internal helper to get the raw token at current position (including comments)
-function rawCurrent(state: ParserState): Token {
-	if (state.position >= state.tokens.length) return { kind: TokenKind.Eof, value: "", line: 0, column: 0, rawValue: "" };
-	return state.tokens[state.position];
+function eofToken(): Token {
+	return { kind: TokenKind.Eof, value: "", line: 0, column: 0, rawValue: "" };
 }
 
 // Public helper to get the next non-comment token.
 // Transparently skips comments so parser logic remains focused on semantics.
 export function current(state: ParserState): Token {
-	let pos = state.position;
-	while (pos < state.tokens.length && state.tokens[pos].kind == TokenKind.Comment) {
-		pos += 1;
-	}
-	if (pos < state.tokens.length) return state.tokens[pos];
-	if (state.tokens.length == 0) return { kind: TokenKind.Eof, value: "", line: 0, column: 0, rawValue: "" };
-	return state.tokens[state.tokens.length - 1]; // Safe EOF fallback
+	return tokenAt(state, skipComments(state, state.position));
 }
 
-export function advance(state: ParserState): Token {
-	// Skip and collect comment tokens into the side-channel.
-	// Comments are attached to the NEXT non-comment token (leading comments).
+// Comments are attached to the NEXT non-comment token (leading comments).
+function collectLeadingComments(state: ParserState): void {
 	while (state.position < state.tokens.length && state.tokens[state.position].kind == TokenKind.Comment) {
 		state.pendingComments.push(state.tokens[state.position]);
 		state.position += 1;
 	}
+}
 
-	if (state.position >= state.tokens.length) return { kind: TokenKind.Eof, value: "", line: 0, column: 0, rawValue: "" };
+export function advance(state: ParserState): Token {
+	collectLeadingComments(state);
+	if (state.position >= state.tokens.length) return eofToken();
 	const token = state.tokens[state.position];
 	if (token.kind != TokenKind.Eof) {
 		state.position += 1;
@@ -135,10 +129,7 @@ export function advance(state: ParserState): Token {
 // advanced over yet. This ensures comments immediately before a construct
 // are attached to it (e.g., leading comments before a function parameter).
 export function takePendingComments(state: ParserState): Token[] {
-	while (state.position < state.tokens.length && state.tokens[state.position].kind == TokenKind.Comment) {
-		state.pendingComments.push(state.tokens[state.position]);
-		state.position += 1;
-	}
+	collectLeadingComments(state);
 	const comments: Token[] = [];
 	for (const c of state.pendingComments) {
 		let seen = false;
@@ -152,11 +143,7 @@ export function takePendingComments(state: ParserState): Token[] {
 }
 
 export function isAtEnd(state: ParserState): boolean {
-	let pos = state.position;
-	// Skip comments to see if we are genuinely at EOF
-	while (pos < state.tokens.length && state.tokens[pos].kind == TokenKind.Comment) {
-		pos += 1;
-	}
+	const pos = skipComments(state, state.position);
 	if (pos >= state.tokens.length) return true;
 	return state.tokens[pos].kind == TokenKind.Eof;
 }
@@ -171,7 +158,7 @@ export function skipComments(state: ParserState, from: int32): int32 {
 
 export function tokenAt(state: ParserState, pos: int32): Token {
 	if (pos < state.tokens.length) return state.tokens[pos];
-	if (state.tokens.length == 0) return { kind: TokenKind.Eof, value: "", line: 0, column: 0, rawValue: "" };
+	if (state.tokens.length == 0) return eofToken();
 	return state.tokens[state.tokens.length - 1];
 }
 
@@ -336,8 +323,7 @@ export function skipGenericParams(state: ParserState): void {
 }
 
 export function splitAngleAssign(state: ParserState): void {
-	let pos = state.position;
-	while (pos < state.tokens.length && state.tokens[pos].kind == TokenKind.Comment) pos += 1;
+	const pos = skipComments(state, state.position);
 	if (pos >= state.tokens.length) return;
 	const tok = state.tokens[pos];
 	const closer = match (tok.kind) {
@@ -452,22 +438,28 @@ function skipGenericParamRest(state: ParserState): void {
 	}
 }
 
-// Lookahead: the '(' at peek(offset) closes, and the token after its ')' is `follow`.
-export function parenGroupThen(state: ParserState, offset: int32, follow: TokenKind): boolean {
-	if (peek(state, offset).kind != TokenKind.LParen) return false;
+// Raw index of the ')' that closes the '(' counted from raw index `from`, or -1 when Eof or the end comes first.
+export function matchingParenIndex(state: ParserState, from: int32): int32 {
 	let depth = 0;
-	let pos = peekIndex(state, offset);
+	let pos = from;
 	while (pos < state.tokens.length) {
 		const k = state.tokens[pos].kind;
-		if (k == TokenKind.Eof) return false;
+		if (k == TokenKind.Eof) return -1;
 		if (k == TokenKind.LParen) depth += 1;
 		if (k == TokenKind.RParen) {
 			depth -= 1;
-			if (depth == 0) return tokenAt(state, skipComments(state, pos + 1)).kind == follow;
+			if (depth == 0) return pos;
 		}
 		pos = skipComments(state, pos + 1);
 	}
-	return false;
+	return -1;
+}
+
+// Lookahead: the '(' at peek(offset) closes, and the token after its ')' is `follow`.
+export function parenGroupThen(state: ParserState, offset: int32, follow: TokenKind): boolean {
+	if (peek(state, offset).kind != TokenKind.LParen) return false;
+	const close = matchingParenIndex(state, peekIndex(state, offset));
+	return close >= 0 && tokenAt(state, skipComments(state, close + 1)).kind == follow;
 }
 
 // Lookahead: the peek offset of the '(' right after the '>' that balances
@@ -564,12 +556,6 @@ export function captureGenericTypeArgs(state: ParserState): string {
 
 export function findCallTypeArg(node: Node): string {
 	return node.typeArg;
-}
-
-export function consumePendingTypeArg(state: ParserState): string {
-	const ta = state.pendingTypeArg;
-	state.pendingTypeArg = "";
-	return ta;
 }
 
 

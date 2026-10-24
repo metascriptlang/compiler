@@ -3,7 +3,7 @@
 
 import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, ArrowFunctionData, ConditionalExprData, CallExprData, makeLoc } from "../../ast/node";
-import { ParserState, createState, current, advance, isAtEnd, peek, peekIndex, skipComments, tokenAt, markState, rewindState, angleCloserWidth } from "../context";
+import { ParserState, createState, current, advance, isAtEnd, peek, peekIndex, skipComments, tokenAt, matchingParenIndex, markState, rewindState, angleCloserWidth } from "../context";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, getLastParsedDefaults, getLastParamsClosed, isIdentLike } from "../util";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr, exprNode } from "./testUtil";
@@ -22,48 +22,30 @@ type BlockParser = (state: ParserState) => ExprResult;
 // Used for ambiguous cases where the inside of the paren COULD be either
 // arrow params or a paren-wrapped expression (e.g. `({k:v})`, `(x = 5)`).
 function scanParenForArrow(state: ParserState): boolean {
-	// Bounded by actual remaining token count — finite by construction.
-	// Belt-and-suspenders: Eof exit + token-count bound prevents any malformed
-	// input from hanging the parser.
+	const close = matchingParenIndex(state, peekIndex(state, 0));
+	if (close < 0) return false;
+	// Closed the outermost paren. Look for '=>' (possibly past return type)
+	let j = skipComments(state, close + 1);
+	if (tokenAt(state, j).kind != TokenKind.Colon) return tokenAt(state, j).kind == TokenKind.Arrow;
+	// Skip return type annotation: walk until top-level '=>' or terminator
 	const limit = state.tokens.length;
-	let pDepth = 0;
-	let i = peekIndex(state, 0);
-	while (i < limit) {
-		const t = state.tokens[i];
-		if (t.kind == TokenKind.Eof) return false;
-		if (t.kind == TokenKind.LParen) {
-			pDepth = pDepth + 1;
-		} else if (t.kind == TokenKind.RParen) {
-			pDepth = pDepth - 1;
-			if (pDepth == 0) {
-				// Closed the outermost paren. Look for '=>' (possibly past return type)
-				let j = skipComments(state, i + 1);
-				if (tokenAt(state, j).kind == TokenKind.Colon) {
-					// Skip return type annotation: walk until top-level '=>' or terminator
-					j = skipComments(state, j + 1);
-					let tDepth = 0;
-					while (j < limit) {
-						const tt = state.tokens[j];
-						if (tt.kind == TokenKind.Arrow && tDepth == 0) return true;
-						if (tt.kind == TokenKind.LParen || tt.kind == TokenKind.LBrace ||
-							tt.kind == TokenKind.LBracket || tt.kind == TokenKind.Lt) {
-							tDepth = tDepth + 1;
-						} else {
-							const closes = tt.kind == TokenKind.RParen || tt.kind == TokenKind.RBrace || tt.kind == TokenKind.RBracket ? 1 : angleCloserWidth(tt.kind);
-							tDepth = tDepth - closes;
-							if (tDepth < 0) return false;
-						}
-						if (tDepth == 0 &&
-							(tt.kind == TokenKind.Semicolon || tt.kind == TokenKind.Comma ||
-							 tt.kind == TokenKind.Eof)) return false;
-						j = skipComments(state, j + 1);
-					}
-					return false;
-				}
-				return tokenAt(state, j).kind == TokenKind.Arrow;
-			}
+	j = skipComments(state, j + 1);
+	let tDepth = 0;
+	while (j < limit) {
+		const tt = state.tokens[j];
+		if (tt.kind == TokenKind.Arrow && tDepth == 0) return true;
+		if (tt.kind == TokenKind.LParen || tt.kind == TokenKind.LBrace ||
+			tt.kind == TokenKind.LBracket || tt.kind == TokenKind.Lt) {
+			tDepth = tDepth + 1;
+		} else {
+			const closes = tt.kind == TokenKind.RParen || tt.kind == TokenKind.RBrace || tt.kind == TokenKind.RBracket ? 1 : angleCloserWidth(tt.kind);
+			tDepth = tDepth - closes;
+			if (tDepth < 0) return false;
 		}
-		i = skipComments(state, i + 1);
+		if (tDepth == 0 &&
+			(tt.kind == TokenKind.Semicolon || tt.kind == TokenKind.Comma ||
+			 tt.kind == TokenKind.Eof)) return false;
+		j = skipComments(state, j + 1);
 	}
 	return false;
 }
