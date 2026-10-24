@@ -661,10 +661,13 @@ function isXfail(c: Cell): boolean {
 	return false;
 }
 
-// parse peak RSS (MB) from `/usr/bin/time -l` output (macOS prints BYTES)
+// parse peak RSS (MB) from `/usr/bin/time -l` output (macOS prints BYTES) or GNU `time -v` (KILOBYTES)
 function parseRssMB(output: string): float64 {
 	const lines = output.split("\n");
 	for (const line of lines) {
+		if (line.contains("Maximum resident set size (kbytes):")) {
+			return (line.slice(line.indexOf(":") + 1, line.length).trim().parseInt() as float64) / 1024.0;
+		}
 		if (line.contains("maximum resident set size")) {
 			const idx = line.indexOf("maximum");
 			const numStr = line.slice(0, idx).trim();
@@ -737,7 +740,7 @@ function cellInner(c: Readonly<Cell>, q: (p: string) => string): string {
 	}
 	if (c.spec.maxRssMb >= 0.0) {
 		// wintime prints the `time -l` RSS line to stderr, same as macOS.
-		const timer = IS_WIN ? q(WINTIME) + " " : "/usr/bin/time -l ";
+		const timer = IS_WIN ? q(WINTIME) + " " : platform == "linux" ? "/usr/bin/time -v " : "/usr/bin/time -l ";
 		return timer + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "time.log");
 	}
 	return bin + " > " + q(c.dir + "out.log") + " 2>&1";
