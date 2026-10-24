@@ -1,11 +1,11 @@
 // Effects are read from checked bodies, and a callee later in the module is not
 // checked yet where its caller is: queue a check with deferEffectCheck.
 
-import { ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, PropertyDeclData, Symbol, SymbolKind, Type, TryExprData, TypeAssertionData, TypeKind, VariableDeclData } from "../ast/node";
+import { ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, PropertyDeclData, SpreadExprData, Symbol, SymbolKind, Type, TryExprData, TypeAssertionData, TypeKind, VariableDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
-import { SymbolFlag, findOverloadImpl, hasFlag, overloadWinner, parentClassSymOf } from "./symbol";
+import { SymbolFlag, SymbolTable, findOverloadImpl, hasFlag, lookupSymbol, overloadWinner, parentClassSymOf } from "./symbol";
 import { functionSlotOf, hasGenericParams, isAtomicRef, isReadonlyView, isSendableFunction, typeCarriesRef } from "./types";
 import { constBindingInitializer } from "./constFold";
 import { ctorRoutineOf } from "./ctorRoutine";
@@ -306,7 +306,7 @@ function isModuleState(sym: Symbol): boolean {
 export function isImmutableModuleConst(sym: Symbol): boolean {
 	if (!hasFlag(sym, SymbolFlag.Global) || hasFlag(sym, SymbolFlag.StaticLocal) || hasFlag(sym, SymbolFlag.Mutable)) return false;
 	const t = sym.symbolType;
-	return sym.symbolKind == SymbolKind.Variable && t != null && t.kind != TypeKind.Ptr && isReadonlyView(t) && builtInPlace(constBindingInitializer(sym));
+	return sym.symbolKind == SymbolKind.Variable && t != null && t.kind != TypeKind.Ptr && isReadonlyView(t) && builtFresh(sym);
 }
 
 function isConstantValue(sym: Symbol, e: Effect): boolean {
@@ -314,34 +314,87 @@ function isConstantValue(sym: Symbol, e: Effect): boolean {
 	if (hasFlag(sym, SymbolFlag.Mutable)) return false;
 	if (typeCarriesRef(t)) {
 		if (t != null && t.kind == TypeKind.Ptr) return pointsAtConstantState(sym, e);
-		return e == Effect.SpawnUnsafe && isReadonlyView(t) && builtInPlace(constBindingInitializer(sym));
+		return e == Effect.SpawnUnsafe && isReadonlyView(t) && builtFresh(sym);
 	}
 	return e == Effect.SpawnUnsafe || !isAtomicRef(t);
 }
 
-// No other binding holds a part of a value built from literals, `new` and calls of routines that
-// reach no module state, over arguments built the same way; a deep Readonly binding of it is then
-// never written.
-function builtInPlace(node: Node | null): boolean {
-	if (node == null) return false;
-	const n = peelConv(node);
-	if (n.kind == NodeKind.StringLiteral || !typeCarriesRef(n.nodeType)) return true;
-	if (n.kind == NodeKind.ObjectLiteral) return !n.flags.has(NodeFlag.Closure) && allBuiltInPlace((n.data as ObjectLiteralData).properties);
-	if (n.kind == NodeKind.ArrayLiteral) return allBuiltInPlace((n.data as ArrayLiteralData).elements);
-	if (n.kind == NodeKind.NewExpr) return reachesNoState(n.resolvedSym) && allBuiltInPlace((n.data as NewExprData).newArguments);
-	if (n.kind == NodeKind.CallExpr) return reachesNoState(n.resolvedSym) && allBuiltInPlace((n.data as CallExprData).arguments);
-	return false;
+function builtFresh(sym: Symbol): boolean {
+	const init = constBindingInitializer(sym);
+	return init != null && isFreshValue(init, CONST_INIT_SCOPE);
 }
 
-function allBuiltInPlace(nodes: Node[]): boolean {
+const CONST_INIT_SCOPE: FreshScope = {
+	moveNames: [],
+	table: null,
+	buildsAlone: (site: Node): boolean => (site.kind == NodeKind.NewExpr ? newEffect(site, Effect.SideEffect) : callEffect(site, Effect.SideEffect)) == null,
+};
+
+export interface FreshScope {
+	moveNames: string[];
+	table: SymbolTable | null;
+	buildsAlone: (site: Node) => boolean;
+}
+
+export function peelView(n: Node): Node {
+	let cur = peelConv(n);
+	while (cur.kind == NodeKind.TypeAssertion || cur.kind == NodeKind.HiddenSubConv) {
+		cur = peelConv(cur.kind == NodeKind.TypeAssertion ? (cur.data as TypeAssertionData).asExpr : (cur.data as HiddenStdConvData).convExpr);
+	}
+	return cur;
+}
+
+export function isFreshValue(n: Node | null, s: FreshScope): boolean {
+	if (n == null) return true;
+	if (n.nodeType != null && !typeCarriesRef(n.nodeType)) return true;
+	const p = peelView(n);
+	if (p != n) return isFreshValue(p, s);
+	return match (p.kind) {
+		NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral | NodeKind.NullLiteral
+			| NodeKind.BigIntLiteral | NodeKind.RegexLiteral | NodeKind.MoveExpr | NodeKind.UnaryExpr
+			| NodeKind.UpdateExpr | NodeKind.SizeofExpr => true,
+		NodeKind.Identifier => {
+			const name = (p.data as IdentifierData).name;
+			if (s.moveNames.includes(name)) return true;
+			const sym = p.resolvedSym != null ? p.resolvedSym : s.table != null ? lookupSymbol(s.table!, name) : null;
+			if (sym == null) return true;
+			if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Temp && sym.symbolKind != SymbolKind.Parameter) return true;
+			return !typeCarriesRef(sym.symbolType);
+		},
+		NodeKind.ObjectLiteral => allFresh((p.data as ObjectLiteralData).properties, s),
+		NodeKind.ArrayLiteral => allFresh((p.data as ArrayLiteralData).elements, s),
+		NodeKind.SpreadExpr => isFreshValue((p.data as SpreadExprData).spreadArg, s),
+		NodeKind.NewExpr => allFresh((p.data as NewExprData).newArguments, s) && s.buildsAlone(p),
+		NodeKind.CallExpr => {
+			const d = p.data as CallExprData;
+			const callee = d.callee != null ? peelView(d.callee) : null;
+			if (callee != null && callee.kind == NodeKind.MemberExpr && !isFreshValue((callee.data as MemberExprData).object, s)) return false;
+			return allFresh(d.arguments, s) && s.buildsAlone(p);
+		},
+		NodeKind.AwaitExpr => isFreshValue((p.data as AwaitExprData).awaitArg, s),
+		NodeKind.ConditionalExpr => isFreshValue((p.data as ConditionalExprData).ternaryConsequent, s) && isFreshValue((p.data as ConditionalExprData).ternaryAlternate, s),
+		NodeKind.MatchExpr => {
+			for (const c of (p.data as MatchExprData).matchCases) {
+				const b = (c.data as MatchCaseData).caseBody;
+				if (b.kind == NodeKind.BlockStmt || !isFreshValue(b, s)) return false;
+			}
+			return true;
+		},
+		NodeKind.TryExpr => isFreshValue((p.data as TryExprData).tryArg, s) && (!(p.data as TryExprData).hasCatch || isFreshValue((p.data as TryExprData).catchVal, s)),
+		NodeKind.BinaryExpr => {
+			const d = p.data as BinaryExprData;
+			if (d.operator == "??" || d.operator == "||" || d.operator == "&&") return isFreshValue(d.left, s) && isFreshValue(d.right, s);
+			return true;
+		},
+		_ => false,
+	};
+}
+
+function allFresh(nodes: Node[], s: FreshScope): boolean {
 	for (const n of nodes) {
-		if (!builtInPlace(n)) return false;
+		if (!isFreshValue(n, s)) return false;
 	}
 	return true;
-}
-
-function reachesNoState(sym: Symbol | null): boolean {
-	return isRoutine(sym) && routineEffect(sym!, Effect.SpawnUnsafe) == null;
 }
 
 function pointsAtConstantState(sym: Symbol, e: Effect): boolean {

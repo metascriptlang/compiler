@@ -1,9 +1,9 @@
 // Actor sendability + this-write isolation rules.
 
-import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, TryExprData, Type, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
+import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, addError, addWarning } from "./context";
-import { Effect, EffectCause, callEffect, deferEffectCheck, newEffect, routineEffect, walkEffect, walkWithViews } from "./effects";
+import { Effect, EffectCause, FreshScope, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, routineEffect, walkEffect, walkWithViews } from "./effects";
 import { constBindingInitializer } from "./constFold";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
 import { createArray, createGenericParam, createRef, createStruct, int32Type, isPrimitiveKind, isSendableFunction, isStructType, isAtomicRef, isNumeric, isReadonlyView, stringType, typeCarriesRef, typeDisplayName } from "./types";
@@ -1024,16 +1024,6 @@ function enclosingBody(ctx: CheckerContext): Node | null {
 	return null;
 }
 
-function peelView(n: Node): Node {
-	let cur = peelHidden(n);
-	while (cur != null) {
-		if (cur.kind == NodeKind.TypeAssertion) { cur = peelHidden((cur.data as TypeAssertionData).asExpr); continue; }
-		if (cur.kind == NodeKind.HiddenSubConv) { cur = peelHidden((cur.data as HiddenStdConvData).convExpr); continue; }
-		break;
-	}
-	return cur;
-}
-
 function refersToOwner(n: Node, w: OwnerWalk): boolean {
 	const p = peelView(n);
 	if (p == null || p.kind != NodeKind.Identifier) return false;
@@ -1123,7 +1113,15 @@ function reportEscape(n: Node, how: string, w: OwnerWalk): void {
 }
 
 function requireFresh(rhs: Node | null, what: string, w: OwnerWalk): void {
-	if (rhs == null || w.reported || isFreshValue(rhs, w)) return;
+	const scope: FreshScope = {
+		moveNames: w.moveNames,
+		table: w.ctx.table,
+		buildsAlone: (site: Node): boolean => {
+			requireNoSideEffect(site, w);
+			return true;
+		},
+	};
+	if (rhs == null || w.reported || isFreshValue(rhs, scope)) return;
 	reportNotSoleOwner(w, what + " at " + rhs.location.line + ":" + rhs.location.column + " is not a fresh value (a literal, `new`, `move`, or a call whose receiver and arguments are fresh)");
 }
 
@@ -1133,71 +1131,6 @@ function requireNoSideEffect(site: Node, w: OwnerWalk): void {
 		const c = site.kind == NodeKind.NewExpr ? newEffect(site, Effect.SideEffect) : callEffect(site, Effect.SideEffect);
 		if (c != null) reportNotSoleOwner(w, "a call with side effects may keep an alias of it: " + c.text);
 	});
-}
-
-function isFreshValue(n: Node | null, w: OwnerWalk): boolean {
-	if (n == null) return true;
-	if (n.nodeType != null && !typeCarriesRef(n.nodeType)) return true;
-	const p = peelView(n);
-	if (p == null) return true;
-	if (p != n) return isFreshValue(p, w);
-	return match (p.kind) {
-		NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral | NodeKind.NullLiteral
-			| NodeKind.BigIntLiteral | NodeKind.RegexLiteral | NodeKind.MoveExpr | NodeKind.UnaryExpr
-			| NodeKind.UpdateExpr | NodeKind.SizeofExpr => true,
-		NodeKind.Identifier => {
-			const name = (p.data as IdentifierData).name;
-			for (const m of w.moveNames) { if (m == name) return true; }
-			const sym = p.resolvedSym != null ? p.resolvedSym : lookupSymbol(w.ctx.table, name);
-			if (sym == null) return true;
-			if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Temp && sym.symbolKind != SymbolKind.Parameter) return true;
-			return !typeCarriesRef(sym.symbolType);
-		},
-		NodeKind.ObjectLiteral => {
-			for (const v of (p.data as ObjectLiteralData).properties) { if (!isFreshValue(v, w)) return false; }
-			return true;
-		},
-		NodeKind.ArrayLiteral => {
-			for (const e of (p.data as ArrayLiteralData).elements) { if (!isFreshValue(e, w)) return false; }
-			return true;
-		},
-		NodeKind.SpreadExpr => isFreshValue((p.data as SpreadExprData).spreadArg, w),
-		NodeKind.NewExpr => {
-			for (const a of (p.data as NewExprData).newArguments) { if (!isFreshValue(a, w)) return false; }
-			requireNoSideEffect(p, w);
-			return true;
-		},
-		NodeKind.CallExpr => {
-			const d = p.data as CallExprData;
-			const callee = peelView(d.callee);
-			if (callee != null && callee.kind == NodeKind.MemberExpr && !isFreshValue((callee.data as MemberExprData).object, w)) return false;
-			for (const a of d.arguments) { if (!isFreshValue(a, w)) return false; }
-			requireNoSideEffect(p, w);
-			return true;
-		},
-		NodeKind.AwaitExpr => isFreshValue((p.data as AwaitExprData).awaitArg, w),
-		NodeKind.ConditionalExpr => {
-			const d = p.data as ConditionalExprData;
-			return isFreshValue(d.ternaryConsequent, w) && isFreshValue(d.ternaryAlternate, w);
-		},
-		NodeKind.MatchExpr => {
-			for (const c of (p.data as MatchExprData).matchCases) {
-				const b = (c.data as MatchCaseData).caseBody;
-				if (b.kind == NodeKind.BlockStmt || !isFreshValue(b, w)) return false;
-			}
-			return true;
-		},
-		NodeKind.TryExpr => {
-			const d = p.data as TryExprData;
-			return isFreshValue(d.tryArg, w) && (!d.hasCatch || isFreshValue(d.catchVal, w));
-		},
-		NodeKind.BinaryExpr => {
-			const d = p.data as BinaryExprData;
-			if (d.operator == "??" || d.operator == "||" || d.operator == "&&") return isFreshValue(d.left, w) && isFreshValue(d.right, w);
-			return true;
-		},
-		_ => false,
-	};
 }
 
 function capturesOwner(node: Node | null, w: OwnerWalk): boolean {
