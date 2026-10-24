@@ -6,7 +6,7 @@ import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecut
 import { quoteCcArg } from "../utils/commandLine";
 import { join } from "std/fs/path";
 import { readLine, writeStderr } from "std/io";
-import { CliOptions } from "./options";
+import { CliOptions, buildCpu } from "./options";
 import { metascriptHome } from "../utils/path";
 
 function eprintln(msg: string): void {
@@ -277,17 +277,39 @@ function validateNativeToolchain(path: string): Result<NativeToolchain, string> 
 	return Result.ok({ root, version, identity });
 }
 
+function nativeRuntimeConfig(targetOs: string, cpu: string): string {
+	if (targetOs == "wasm" && cpu == "wasm32") return "wasm32-wasi.cfg";
+	if (targetOs == "linux" && (cpu == "amd64" || cpu == "x86_64")) return "x86_64-linux-gnu.2.31.cfg";
+	return "";
+}
+
 function selectNativeToolchain(opts: CliOptions, path: string): Result<void, string> {
 	const bundle = try validateNativeToolchain(path);
-	if (opts.targetOs != "darwin" && opts.targetOs != "macos") {
-		return Result.err(`native toolchain: prepared runtime for ${opts.targetOs} is not installed in ${bundle.root}`);
+	opts.ccBinary = `${quoteCcArg(join(bundle.root, "bin/clang"))} --no-default-config`;
+	opts.passC = `-DMSC_NATIVE_TOOLCHAIN_${bundle.identity}=1 ${opts.passC}`;
+	if (opts.targetOs == "darwin" || opts.targetOs == "macos") {
+		const sdk = execFileCapture("xcrun", ["--sdk", "macosx", "--show-sdk-path"]);
+		if (!sdk.ok || sdk.value.trim() == "") return Result.err("native toolchain: macOS builds require an installed Xcode SDK");
+		opts.passC = `-isysroot ${quoteCcArg(sdk.value.trim())} -resource-dir ${quoteCcArg(join(bundle.root, `lib/clang/${bundle.version.split(".")[0]}`))} ${opts.passC}`;
+		opts.passL = `--ld-path=${quoteCcArg(join(bundle.root, "bin/ld64.lld"))} ${opts.passL}`;
+		return Result.ok(null);
 	}
-	const sdk = execFileCapture("xcrun", ["--sdk", "macosx", "--show-sdk-path"]);
-	if (!sdk.ok || sdk.value.trim() == "") return Result.err("native toolchain: macOS builds require an installed Xcode SDK");
-	opts.ccBinary = quoteCcArg(join(bundle.root, "bin/clang"));
-	opts.passC = `-isysroot ${quoteCcArg(sdk.value.trim())} -resource-dir ${quoteCcArg(join(bundle.root, `lib/clang/${bundle.version.split(".")[0]}`))} -DMSC_NATIVE_TOOLCHAIN_${bundle.identity}=1 ${opts.passC}`;
-	opts.passL = `--ld-path=${quoteCcArg(join(bundle.root, "bin/ld64.lld"))} ${opts.passL}`;
+	const cpu = buildCpu(opts.targetOs, opts.cpuTarget);
+	const name = nativeRuntimeConfig(opts.targetOs, cpu);
+	const config = join(bundle.root, `runtime/${name}`);
+	if (name == "" || !exists(config)) return Result.err(`native toolchain: prepared runtime for ${opts.targetOs}/${cpu} is not installed in ${bundle.root}`);
+	if (opts.isHcr || opts.appMode != "console") return Result.err(`native toolchain: ${name} currently supplies executable startup only, not ${opts.isHcr ? "HCR" : opts.appMode}`);
+	opts.ccBinary = `${opts.ccBinary} --config=${quoteCcArg(config)}`;
 	return Result.ok(null);
+}
+
+test "prepared runtimes are selected by both OS and CPU" {
+	assert nativeRuntimeConfig("wasm", "wasm32") == "wasm32-wasi.cfg";
+	assert nativeRuntimeConfig("linux", "amd64") == "x86_64-linux-gnu.2.31.cfg";
+	assert nativeRuntimeConfig("linux", "x86_64") == "x86_64-linux-gnu.2.31.cfg";
+	assert nativeRuntimeConfig("linux", "arm64") == "";
+	assert nativeRuntimeConfig("windows", "amd64") == "";
+	assert nativeRuntimeConfig("wasm", "arm64") == "";
 }
 
 test "bundle checksums require a complete lowercase SHA256" {
