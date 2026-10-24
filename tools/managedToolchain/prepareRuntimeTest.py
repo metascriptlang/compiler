@@ -111,10 +111,12 @@ class CaptureParsingTest(TempCase):
 
 
 class TargetAndConfigTest(unittest.TestCase):
-    def test_allowlist_is_exactly_the_two_existing_targets(self):
-        self.assertEqual(pr.selectTargets([]), ["wasm32-wasi", "x86_64-linux-gnu.2.31"])
+    def test_allowlist_is_exactly_the_wasi_and_the_two_glibc_targets(self):
+        self.assertEqual(pr.selectTargets([]), ["wasm32-wasi", "x86_64-linux-gnu.2.31", "aarch64-linux-gnu.2.31"])
         self.assertEqual(pr.selectTargets(["wasm32-wasi"]), ["wasm32-wasi"])
-        for bad in (["aarch64-linux-gnu.2.31"], ["x86_64-linux-gnu"], ["wasm32-wasi", "wasm32-wasi"]):
+        self.assertEqual(pr.selectTargets(["aarch64-linux-gnu.2.31"]), ["aarch64-linux-gnu.2.31"])
+        for bad in (["aarch64-linux-gnu"], ["aarch64-linux-gnu.2.30"], ["aarch64-linux-musl"], ["x86_64-linux-gnu"],
+                    ["wasm32-wasi", "wasm32-wasi"]):
             with self.assertRaises(pe.EngineError):
                 pr.selectTargets(bad)
 
@@ -177,10 +179,31 @@ class FeatureTranslationTest(unittest.TestCase):
                                  (["-amx-transpose"], {"target": "wasm32-wasi"})):
             self.assertEqual(self.split(features, **kwargs), (features, []), msg=(features, kwargs))
 
+    def test_the_aarch64_linux_features_are_left_out_for_exactly_the_zig_engine_target_and_cpu(self):
+        arm = "aarch64-linux-gnu.2.31"
+        for feature in ("-no-zcz-fp", "-tme", "-zcz", "-zcz-gp"):
+            carried, notCarried = pr.translateFeatures([feature, "+neon"], arm, "generic", "0.16.0", "22")
+            self.assertEqual((carried, [e["feature"] for e in notCarried]), (["+neon"], [feature]))
+            self.assertEqual(notCarried[0]["target"], arm)
+            for other in ((arm, "apple-m1", "0.16.0", "22"), (arm, "generic", "0.17.0", "22"),
+                          (arm, "generic", "0.16.0", "21"), (arm, "generic", "0.16.0", "23"),
+                          ("aarch64-linux-gnu", "generic", "0.16.0", "22"),
+                          ("aarch64-linux-musl", "generic", "0.16.0", "22"),
+                          ("x86_64-linux-gnu.2.31", "generic", "0.16.0", "22")):
+                self.assertEqual(pr.translateFeatures([feature], *other)[0], [feature], msg=(feature, other))
+        self.assertEqual(pr.translateFeatures(["+tme", "-sve", "-bogus"], arm, "generic", "0.16.0", "22")[0],
+                         ["+tme", "-sve", "-bogus"])
+
+    def test_the_aarch64_linux_entries_are_the_windows_ones_for_the_same_cpu(self):
+        windows = [e for e in pr.REMOVED_DISABLED_FEATURES if e["target"] == "aarch64-windows-gnu"]
+        self.assertEqual([dict(e, target="aarch64-windows-gnu") for e in pr.REMOVED_DISABLED_FEATURES_AARCH64_LINUX],
+                         windows)
+        self.assertEqual({e["target"] for e in pr.REMOVED_DISABLED_FEATURES_AARCH64_LINUX}, {"aarch64-linux-gnu.2.31"})
+
     def test_every_translation_names_its_sources_and_the_macro_that_must_stay_absent(self):
-        for entry in pr.REMOVED_DISABLED_FEATURES:
+        for entry in pr.REMOVED_DISABLED_FEATURES + pr.REMOVED_DISABLED_FEATURES_AARCH64_LINUX:
             self.assertTrue(entry["feature"].startswith("-"))
-            self.assertTrue(entry["absentMacroPrefix"] or entry["target"] == "aarch64-windows-gnu")
+            self.assertTrue(entry["absentMacroPrefix"] or entry["target"].startswith("aarch64-"))
             self.assertGreaterEqual(len(entry["sources"]), 2)
             for source in entry["sources"]:
                 self.assertRegex(source, r"^https://(raw\.githubusercontent|github)\.com/llvm/llvm-project/(blob/)?llvmorg-2[12]\.\d+\.\d+/")
@@ -285,6 +308,26 @@ class CopyTest(TempCase):
         with self.assertRaises(pe.EngineError):
             pr.copyHeaders([lib + "/other/include"], self.path("out3"), lib)
 
+    def test_a_directory_two_targets_share_is_copied_once(self):
+        lib = self.path("zig", "lib")
+        for name in ("one", "shared", "two"):
+            write(os.path.join(lib, "libc", "include", name, "h.h"), name)
+        root = lib + "/libc/include/"
+        copied = {}
+        first = pr.copyTargetHeaders([lib + "/include", root + "one", root + "shared"], self.path("out"), lib, copied)
+        second = pr.copyTargetHeaders([lib + "/include", root + "two", root + "shared", root + "gone"],
+                                      self.path("out"), lib, copied)
+        self.assertEqual((first, second), ((["one", "shared"], []), (["two", "shared"], ["gone"])))
+        self.assertEqual(sorted(os.listdir(self.path("out", "include", "libc"))), ["one", "shared", "two"])
+        self.assertEqual(read(self.path("out", "include", "libc", "shared", "h.h")), "shared")
+
+    def test_a_shared_name_from_another_zig_directory_is_refused(self):
+        lib = self.path("zig", "lib")
+        write(os.path.join(lib, "libc", "include", "shared", "h.h"))
+        with self.assertRaisesRegex(pe.EngineError, "is also"):
+            pr.copyTargetHeaders([lib + "/include", lib + "/libc/include/shared"], self.path("out"), lib,
+                                 {"shared": lib + "/elsewhere/shared"})
+
     def test_missing_notice_is_an_explicit_error(self):
         lib = self.path("zig", "lib")
         write(self.path("zig", "LICENSE"))
@@ -323,13 +366,17 @@ if target == "wasm32-wasi":
     link = "wasm-ld --entry _start -o %%s %%s %%s %%s %%s" %% (out, make("crt1-command.o"), make("libc.a"),
         make(stem + ".o"), make("libcompiler_rt.a"))
 else:
-    for d in ("x86-linux-gnu", "generic-glibc"):
+    arm = target.startswith("aarch64")
+    for d in ("aarch64-linux-gnu" if arm else "x86-linux-gnu", "generic-glibc"):
         isystem += " -isystem %%s/libc/include/%%s" %% (lib, d)
-    triple, flags, cpu = "x86_64-unknown-linux5.10.0-gnu2.31.0", "-fno-PIE -fPIC -D__GLIBC_MINOR__=31", "x86-64"
+    triple = "aarch64-unknown-linux5.10.0-gnu2.31.0" if arm else "x86_64-unknown-linux5.10.0-gnu2.31.0"
+    flags, cpu = "-fno-PIE -fPIC -D__GLIBC_MINOR__=31", "generic" if arm else "x86-64"
     link = "ld.lld -z stack-size=1 -o %%s %%s --dynamic-linker /lib64/ld.so %%s --as-needed %%s %%s" %% (
         out, make("crt1.o"), make(stem + ".o"), make("libc.so.6"), make("libc_nonshared.a"))
 sys.stderr.write("ar rcs %%s/x.a\\n" %% cache)
-features = "-Xclang -target-feature -Xclang -amx-transpose" if cpu == "x86-64" else "-Xclang -target-feature -Xclang +sign-ext"
+features = {"x86-64": "-Xclang -target-feature -Xclang -amx-transpose",
+            "generic": "-Xclang -target-feature -Xclang -tme -Xclang -target-feature -Xclang +neon"}.get(
+    cpu, "-Xclang -target-feature -Xclang +sign-ext")
 sys.stderr.write("%%s clang %%s -target %%s %%s %%s -Xclang -target-cpu -Xclang %%s %%s -c -o /t/o.o\\n" %% (
     sys.argv[0], fixture, triple, flags, isystem, cpu, features))
 sys.stderr.write(link + "\\n")
@@ -349,7 +396,7 @@ class PipelineTest(TempCase):
     def setUp(self):
         super().setUp()
         self.lib = self.path("zig", "lib")
-        for name in ("wasm-wasi-musl", "generic-musl", "x86-linux-gnu", "generic-glibc"):
+        for name in ("wasm-wasi-musl", "generic-musl", "x86-linux-gnu", "aarch64-linux-gnu", "generic-glibc"):
             write(os.path.join(self.lib, "libc", "include", name, "h.h"))
         for rel in ("../LICENSE", "libc/musl/COPYRIGHT", "libc/glibc/LICENSES") + tuple(
                 "libc/wasi/" + n for n in pr.WASI_LICENSES):
@@ -366,12 +413,12 @@ class PipelineTest(TempCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def test_both_targets_produce_a_relocatable_payload(self):
+    def test_all_targets_produce_a_relocatable_payload(self):
         out = self.path("rt")
         pr.prepareRuntime(self.zig, self.engine, out, [])
-        self.assertEqual(sorted(os.listdir(out)), ["include", "notices", "wasm32-wasi",
-                                                    "wasm32-wasi.cfg", "x86_64-linux-gnu.2.31",
-                                                    "x86_64-linux-gnu.2.31.cfg"])
+        self.assertEqual(sorted(os.listdir(out)), ["aarch64-linux-gnu.2.31", "aarch64-linux-gnu.2.31.cfg", "include",
+                                                    "notices", "wasm32-wasi", "wasm32-wasi.cfg",
+                                                    "x86_64-linux-gnu.2.31", "x86_64-linux-gnu.2.31.cfg"])
         self.assertEqual(sorted(os.listdir(self.path("rt", "wasm32-wasi"))),
                          ["crt1-command.o", "libc.a", "libcompiler_rt.a", "libm.a"])
         self.assertEqual(read(self.path("rt", "wasm32-wasi", "libm.a")), "!<arch>\n")
@@ -382,7 +429,7 @@ class PipelineTest(TempCase):
         self.assertEqual(read(self.path("rt", "x86_64-linux-gnu.2.31", "libc.so")), "artifact libc.so.6")
         self.assertEqual([n for n in os.listdir(self.path("rt", "wasm32-wasi")) if os.path.islink(self.path("rt", "wasm32-wasi", n))], [])
         self.assertEqual(sorted(os.listdir(self.path("rt", "include", "libc"))),
-                         ["generic-glibc", "generic-musl", "wasm-wasi-musl", "x86-linux-gnu"])
+                         ["aarch64-linux-gnu", "generic-glibc", "generic-musl", "wasm-wasi-musl", "x86-linux-gnu"])
         config = read(self.path("rt", "wasm32-wasi.cfg"))
         self.assertIn("-Xlinker <CFGDIR>/wasm32-wasi/libc.a\n", config)
         self.assertNotIn(self.dir, config)
@@ -390,17 +437,19 @@ class PipelineTest(TempCase):
         self.assertEqual(read(self.path("rt", "notices", "zig", "LICENSE")), "license ../LICENSE")
         receipt = json.loads(read(self.path("rt", "notices", "runtime-provenance.json")))
         self.assertFalse(receipt["redistributionCertified"])
-        self.assertEqual([t["target"] for t in receipt["targets"]], ["wasm32-wasi", "x86_64-linux-gnu.2.31"])
+        self.assertEqual([t["target"] for t in receipt["targets"]],
+                         ["wasm32-wasi", "x86_64-linux-gnu.2.31", "aarch64-linux-gnu.2.31"])
         self.assertEqual(receipt["targets"][0]["linkArgs"][2:],
                          ["$RT/wasm32-wasi/crt1-command.o", "$RT/wasm32-wasi/libc.a", "$OBJECT",
                           "$RT/wasm32-wasi/libcompiler_rt.a"])
         self.assertEqual(receipt["zig"]["version"], "0.16.0")
-        wasm, linux = receipt["targets"]
+        wasm, linux, arm = receipt["targets"]
         self.assertEqual(wasm["cpuFeaturesNotCarried"], [])
-        self.assertEqual((wasm["libraryAliases"], linux["libraryAliases"]),
-                         ([], [{"alias": "libc.so", "target": "libc.so.6"}]))
-        self.assertEqual((wasm["emptyArchives"], linux["emptyArchives"]), (
-            [{"name": "libm.a", "sha256": hashlib.sha256(b"!<arch>\n").hexdigest(), "bytes": 8}], []))
+        self.assertEqual((wasm["libraryAliases"], linux["libraryAliases"], arm["libraryAliases"]),
+                         ([], [{"alias": "libc.so", "target": "libc.so.6"}],
+                          [{"alias": "libc.so", "target": "libc.so.6"}]))
+        self.assertEqual((wasm["emptyArchives"], linux["emptyArchives"], arm["emptyArchives"]), (
+            [{"name": "libm.a", "sha256": hashlib.sha256(b"!<arch>\n").hexdigest(), "bytes": 8}], [], []))
         self.assertEqual(pr.libraryNames(wasm["libraryAliases"], wasm["emptyArchives"]), ["m"])
         self.assertIn("-Xlinker -L -Xlinker <CFGDIR>/x86_64-linux-gnu.2.31\n", read(self.path("rt", "x86_64-linux-gnu.2.31.cfg")))
         self.assertEqual(linux["cpuFeatures"], ["-amx-transpose"])
@@ -408,6 +457,18 @@ class PipelineTest(TempCase):
         self.assertEqual(len(linux["cpuFeaturesNotCarried"][0]["sources"]), 2)
         self.assertIn("-Xclang -target-feature -Xclang +sign-ext\n", config)
         self.assertNotIn("amx-transpose", read(self.path("rt", "x86_64-linux-gnu.2.31.cfg")))
+        self.assertEqual((arm["zigTarget"], arm["clangTarget"], arm["cpu"]),
+                         ("aarch64-unknown-linux5.10.0-gnu2.31.0",) * 2 + ("generic",))
+        self.assertEqual(arm["cpuFeatures"], ["-tme", "+neon"])
+        self.assertEqual([e["feature"] for e in arm["cpuFeaturesNotCarried"]], ["-tme"])
+        self.assertEqual([e["target"] for e in arm["cpuFeaturesNotCarried"]], ["aarch64-linux-gnu.2.31"])
+        armConfig = read(self.path("rt", "aarch64-linux-gnu.2.31.cfg"))
+        self.assertIn("-target aarch64-unknown-linux5.10.0-gnu2.31.0\n", armConfig)
+        self.assertIn("-Xclang -target-feature -Xclang +neon\n", armConfig)
+        self.assertNotIn("-tme", armConfig)
+        self.assertIn("-isystem <CFGDIR>/include/libc/aarch64-linux-gnu\n", armConfig)
+        self.assertIn("-Xlinker -L -Xlinker <CFGDIR>/aarch64-linux-gnu.2.31\n", armConfig)
+        self.assertEqual(read(self.path("rt", "aarch64-linux-gnu.2.31", "libc.so.6")), "artifact libc.so.6")
         self.assertNotIn("generated by", config)
         self.assertEqual(os.listdir(self.dir).count("rt"), 1)
 
@@ -432,7 +493,7 @@ class PipelineTest(TempCase):
 
     def test_unsupported_target_is_refused_before_zig_runs(self):
         with self.assertRaises(pe.EngineError):
-            pr.prepareRuntime(self.path("no-such-zig"), self.engine, self.path("rt"), ["aarch64-linux-gnu.2.31"])
+            pr.prepareRuntime(self.path("no-such-zig"), self.engine, self.path("rt"), ["aarch64-linux-musl"])
         self.assertFalse(os.path.exists(self.path("rt")))
 
     def test_engine_relative_path_must_be_plain(self):
@@ -855,6 +916,7 @@ class EngineRelativeLayoutTest(TempCase):
                 mock.patch.object(pr, "checkConfig", side_effect=ran), \
                 mock.patch.object(pr, "sandboxed", side_effect=sandboxed), \
                 mock.patch.object(pr, "elfProblem", return_value=None), \
+                mock.patch.object(pr, "elfInterpreterProblem", return_value=None), \
                 mock.patch.object(pr, "glibcSymbolProblem", return_value=None), \
                 mock.patch.object(shutil, "copytree", side_effect=lambda *a, **k: (
                     copies.append(a[0]) if isinstance(a[0], str) else None, realCopytree(*a, **k))[1]):
@@ -933,6 +995,49 @@ class ProofHelperTest(TempCase):
             f.write(b"\x7fELF\x02\x01\x01" + b"\0" * 11 + (183).to_bytes(2, "little"))
         self.assertIsNone(pr.elfProblem(good))
         self.assertIsNotNone(pr.elfProblem(bad))
+
+    def test_elf_check_is_per_target(self):
+        def header(machine, data=1):
+            return b"\x7fELF\x02" + bytes([data]) + b"\x01" + b"\0" * 11 + machine.to_bytes(2, "little")
+        x64, arm, big = "x86_64-linux-gnu.2.31", "aarch64-linux-gnu.2.31", self.path("big")
+        for name, data in (("x64", header(62)), ("arm", header(183)), ("big", header(183, data=2))):
+            with open(self.path(name), "wb") as f:
+                f.write(data)
+        self.assertEqual((pr.elfProblem(self.path("x64"), x64), pr.elfProblem(self.path("arm"), arm)), (None, None))
+        self.assertIn("aarch64", pr.elfProblem(self.path("x64"), arm))
+        self.assertIn("x86_64", pr.elfProblem(self.path("arm"), x64))
+        self.assertIn("aarch64", pr.elfProblem(big, arm))
+        self.assertEqual(sorted(pr.ELF_TARGETS), sorted(t for t in pr.TARGETS if "linux" in t))
+
+    def elf(self, name, interpreters, machine=183):
+        """A little-endian ELF64 with a program header per interpreter string, as written by ld."""
+        phoff, phsize = 64, 56
+        body = bytearray(b"\0" * (phoff + phsize * len(interpreters)))
+        body[:20] = b"\x7fELF\x02\x01\x01" + b"\0" * 11 + machine.to_bytes(2, "little")
+        body[32:40] = phoff.to_bytes(8, "little")
+        body[54:58] = phsize.to_bytes(2, "little") + len(interpreters).to_bytes(2, "little")
+        for index, text in enumerate(interpreters):
+            start = len(body)
+            body += text
+            header = phoff + index * phsize
+            body[header:header + 4] = (3).to_bytes(4, "little")
+            body[header + 8:header + 16] = start.to_bytes(8, "little")
+            body[header + 32:header + 40] = len(text).to_bytes(8, "little")
+        with open(self.path(name), "wb") as f:
+            f.write(body)
+        return self.path(name)
+
+    def test_interpreter_is_the_loader_of_the_target(self):
+        arm, x64 = "aarch64-linux-gnu.2.31", "x86_64-linux-gnu.2.31"
+        self.assertIsNone(pr.elfInterpreterProblem(self.elf("a", [b"/lib/ld-linux-aarch64.so.1\0"]), arm))
+        self.assertIsNone(pr.elfInterpreterProblem(self.elf("x", [b"/lib64/ld-linux-x86-64.so.2\0"], 62), x64))
+        for name, interpreters, target in (("swap", [b"/lib64/ld-linux-x86-64.so.2\0"], arm),
+                                           ("soname", [b"/lib/ld-linux-aarch64.so.2\0"], arm),
+                                           ("none", [], arm),
+                                           ("twice", [b"/lib/ld-linux-aarch64.so.1\0"] * 2, arm),
+                                           ("noNul", [b"/lib/ld-linux-aarch64.so.1"], arm),
+                                           ("longer", [b"/lib/ld-linux-aarch64.so.1x\0"], arm)):
+            self.assertIn("interpreter is", pr.elfInterpreterProblem(self.elf(name, interpreters), target), msg=name)
 
     def test_glibc_version_limit(self):
         with mock.patch.object(pe, "run", return_value="  U printf@GLIBC_2.2.5\n  U memcpy@GLIBC_2.14\n"):

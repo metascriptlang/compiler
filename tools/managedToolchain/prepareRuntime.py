@@ -42,7 +42,7 @@ SHARED_OBJECT = re.compile(r"\.so(\.\d+)*$")
 EMPTY_ARCHIVE = b"!<arch>\n"
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.+-]+$")
 VERSIONED_STUB = re.compile(r"^lib([A-Za-z0-9_+-]+)\.so\.\d+$")
-# Zig's `ld` stub is the dynamic linker (soname ld-linux-*.so.2); glibc has no `libld.so` for it.
+# Zig's `ld` stub is the dynamic linker (soname ld-linux-*.so.2 or .so.1); glibc has no `libld.so` for it.
 NO_LINKER_NAME = ("ld",)
 LINK_VALUED = ("-o", "-z", "--entry", "-m", "--dynamic-linker", "-mllvm")
 PIC_FLAGS = ("-fno-PIE", "-fPIE", "-fno-PIC", "-fPIC", "-fno-pie", "-fpie", "-fno-pic", "-fpic")
@@ -103,6 +103,19 @@ REMOVED_DISABLED_FEATURES += [{
      + FIELD_DEFAULT),
 )]
 
+# The aarch64 GNU Linux production records the same four disabled features of the same generic cpu
+# (checked against the Zig 0.16.0 compile line), and every source above is target independent, so each
+# entry holds for it. The list is apart from REMOVED_DISABLED_FEATURES, whose entries each name one
+# feature once for the Windows consumers; translateFeatures reads both.
+REMOVED_DISABLED_FEATURES_AARCH64_LINUX = [dict(e, target="aarch64-linux-gnu.2.31") for e in REMOVED_DISABLED_FEATURES
+                                           if e["target"] == "aarch64-windows-gnu"]
+
+GNU_LINUX = {
+    "fixture": "runtimeLinux.c", "zigLinkArgs": ["-lm", "-lpthread"], "linker": "ld.lld",
+    "driverFlags": ["-no-pie"],
+    "notices": {"zig": ["../LICENSE"], "glibc": ["libc/glibc/LICENSES"]},
+}
+
 TARGETS = {
     "wasm32-wasi": {
         "fixture": "runtimeWasi.c", "zigLinkArgs": [], "linker": "wasm-ld", "driverFlags": [],
@@ -110,11 +123,14 @@ TARGETS = {
         "notices": {"zig": ["../LICENSE"], "musl": ["libc/musl/COPYRIGHT"],
                     "wasi-libc": ["libc/wasi/" + n for n in WASI_LICENSES]},
     },
-    "x86_64-linux-gnu.2.31": {
-        "fixture": "runtimeLinux.c", "zigLinkArgs": ["-lm", "-lpthread"], "linker": "ld.lld",
-        "driverFlags": ["-no-pie"],
-        "notices": {"zig": ["../LICENSE"], "glibc": ["libc/glibc/LICENSES"]},
-    },
+    "x86_64-linux-gnu.2.31": GNU_LINUX,
+    "aarch64-linux-gnu.2.31": GNU_LINUX,
+}
+# What a linked glibc executable of each GNU target must be: ELF machine and the loader it names.
+# The loader's soname is `.so.2` on x86_64 and `.so.1` on aarch64, so each target spells its own.
+ELF_TARGETS = {
+    "x86_64-linux-gnu.2.31": {"machine": 62, "name": "x86_64", "interpreter": "/lib64/ld-linux-x86-64.so.2"},
+    "aarch64-linux-gnu.2.31": {"machine": 183, "name": "aarch64", "interpreter": "/lib/ld-linux-aarch64.so.1"},
 }
 
 
@@ -259,7 +275,8 @@ def translateFeatures(features, target, cpu, zigVersion, engineMajor):
     must honor it."""
     carried, notCarried = [], []
     for feature in features:
-        entry = next((e for e in REMOVED_DISABLED_FEATURES if e["feature"] == feature
+        entry = next((e for e in REMOVED_DISABLED_FEATURES + REMOVED_DISABLED_FEATURES_AARCH64_LINUX
+                      if e["feature"] == feature
                       and (e["zig"], e["engineMajor"], e["target"], e["cpu"]) == (
                           zigVersion, engineMajor, target, cpu)), None)
         if entry:
@@ -508,7 +525,21 @@ def engineMajor(engine):
     return host, version, version.split(".")[0]
 
 
-def produceTarget(zig, zigVersion, engine, target, work, output, engineRelative, major):
+def copyTargetHeaders(isystem, output, zigLib, copied):
+    """The libc include directories of a target not yet in output (the glibc targets share
+    `generic-glibc` and `any-linux-any`); a name already copied must be the same Zig directory.
+    Returns (the directory names this target's config lists in order, the names absent in Zig)."""
+    fresh = [d for d in isystem[1:] if os.path.basename(d) not in copied]
+    for d in isystem[1:]:
+        if copied.get(os.path.basename(d), d) != d:
+            raise pe.EngineError("include directory %s is also %s" % (d, copied[os.path.basename(d)]))
+    new, _ = copyHeaders([isystem[0]] + fresh, output, zigLib)
+    copied.update({os.path.basename(d): d for d in fresh if os.path.basename(d) in new})
+    names = [os.path.basename(d) for d in isystem[1:]]
+    return [n for n in names if n in copied], [n for n in names if n not in copied]
+
+
+def produceTarget(zig, zigVersion, engine, target, work, output, engineRelative, major, copied):
     spec = TARGETS[target]
     stderr, cacheRoot, out = runZig(zig, target, work)
     fixture = os.path.join(FIXTURES, spec["fixture"])
@@ -521,7 +552,7 @@ def produceTarget(zig, zigVersion, engine, target, work, output, engineRelative,
     zigLib = os.path.dirname(compile_["isystem"][0])
     if re.search(r"\s", zigLib):
         raise pe.EngineError("Zig lib directory %s has whitespace" % zigLib)
-    directories, absent = copyHeaders(compile_["isystem"], output, zigLib)
+    directories, absent = copyTargetHeaders(compile_["isystem"], output, zigLib, copied)
     inputs = copyInputs(items, output, target, engine)
     aliases = linkLibraryAliases(os.path.join(output, target), [i["name"] for i in inputs])
     emptyArchives = createEmptyArchives(engine, os.path.join(output, target), spec.get("emptyArchives", []))
@@ -606,7 +637,8 @@ def prepareRuntime(zig, engine, output, targets, engineRelative="../engine"):
     partial = tempfile.mkdtemp(prefix=os.path.basename(output) + ".partial-", dir=os.path.dirname(output))
     work = tempfile.mkdtemp(prefix="prepareRuntime-")
     try:
-        records = [produceTarget(zig, zigId["version"], engine, t, work, partial, engineRelative, major)
+        copied = {}
+        records = [produceTarget(zig, zigId["version"], engine, t, work, partial, engineRelative, major, copied)
                    for t in targets]
         verifyConfigs(engine, partial, engineRelative, records, work)
         writeProvenance(partial, zigId, host, version, engineRelative, records)
@@ -691,12 +723,30 @@ def sandboxed(profile, work, command):
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
 
 
-def elfProblem(path):
+def elfProblem(path, target="x86_64-linux-gnu.2.31"):
+    expected = ELF_TARGETS[target]
     with open(path, "rb") as f:
         head = f.read(20)
     machine = int.from_bytes(head[18:20], "little")
-    if head[:4] != b"\x7fELF" or head[4] != 2 or machine != 62:
-        return "not an x86_64 ELF64 file"
+    if head[:4] != b"\x7fELF" or head[4] != 2 or head[5] != 1 or machine != expected["machine"]:
+        return "not an %s ELF64 file" % expected["name"]
+    return None
+
+
+def elfInterpreterProblem(path, target):
+    """The ELF's PT_INTERP is exactly the loader of target, a single NUL-terminated path."""
+    expected = ELF_TARGETS[target]["interpreter"]
+    with open(path, "rb") as f:
+        data = f.read()
+    offset, size, count = (int.from_bytes(data[a:a + n], "little") for a, n in ((32, 8), (54, 2), (56, 2)))
+    found = []
+    for i in range(count):
+        header = offset + i * size
+        if int.from_bytes(data[header:header + 4], "little") == 3:
+            start, length = (int.from_bytes(data[header + a:header + a + 8], "little") for a in (8, 32))
+            found.append(data[start:start + length])
+    if found != [expected.encode("ascii") + b"\0"]:
+        return "interpreter is %s, not %s" % ([f.rstrip(b"\0").decode("ascii", "replace") for f in found], expected)
     return None
 
 
@@ -777,7 +827,7 @@ def prove(engine, runtime, denied, zig=None, targets=None):
                                                                   ran.stdout, ran.stderr))
             print("%s: linked and ran (also with -l%s): %s" % (target, " -l".join(libraries), EXPECTED_OUTPUT.strip()))
         else:
-            problem = elfProblem(binary) or glibcSymbolProblem(nm, binary)
+            problem = elfProblem(binary, target) or elfInterpreterProblem(binary, target) or glibcSymbolProblem(nm, binary)
             if problem:
                 raise pe.EngineError("%s: %s" % (target, problem))
             print("%s: linked, ELF and glibc symbol versions checked; not run (host is not Linux)" % target)
