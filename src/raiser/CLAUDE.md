@@ -15,8 +15,6 @@ The VM that runs Raiser bytecode: `@comptime` blocks and macros, and whole progr
 | `context.ms` | persistent context across module executions: the embedding API |
 | `hostRegistry.ms` / `marshal.ms` | `CallHost` name → function table; box / unbox at the host boundary |
 | `disasm.ms` | bytecode printer |
-| `repl.ms` | execution demo, run as a test |
-| `spike/` | untagged-register prototypes; do not type-check on the current compiler |
 
 ## Rules
 

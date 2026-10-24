@@ -4,7 +4,7 @@
 import { RaiserOpcode, RaiserInstruction, RaiserRegClass, regClassLetter, operandTagged, operandKind, operandRank, operandClass, OPERAND_TAGGED, raiserABC, raiserABx, raiserAx, getBx, getSignedAx, immField, immValue, isBranchI64, branchField, branchOffset } from "./bytecode";
 import { raiserInt, raiserToString, createArrayHeap } from "./value";
 import {
-	RaiserModule, RaiserFunction,
+	RaiserFunction,
 	getModuleEntry, getFuncName, getFuncCodeLen, getFuncInst, getFuncConst, getFuncConstLen, makeTestModule
 } from "./module";
 
@@ -221,13 +221,6 @@ export function disasmFunc(func: RaiserFunction): string {
 		result = `${result}${line}\n`;
 	}
 	return result;
-}
-
-// Print to console (for repl/debug use)
-export function printModule(mod: RaiserModule): void {
-	const entry = getModuleEntry(mod);
-	const s = disasmFunc(entry);
-	console.log(s);
 }
 
 // --- Tests ---
