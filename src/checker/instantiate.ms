@@ -56,8 +56,6 @@ export function lookupModuleCtx(modulePath: string): CheckerContext | null {
 	return _moduleCtxMap.get(modulePath);
 }
 
-// Stored here (not as Module field) because src/module/graph.ms is forbidden
-// from importing ast/ types. Same pattern as _moduleCtxMap above.
 let _moduleProgramMap: HashMap<string, Node> = new HashMap<string, Node>();
 
 export function registerModuleProgram(modulePath: string, program: Node): void {
