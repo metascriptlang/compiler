@@ -6,7 +6,7 @@ from pathlib import Path
 import shutil
 import tempfile
 
-from prepareWindowsRuntime import readPe, peProblem, MACHINE_AMD64, DLL_CHARACTERISTIC, SUBSYSTEM_CONSOLE
+from prepareWindowsRuntime import readPe, peProblem, TARGET, ARM64_TARGET, TARGETS, DLL_CHARACTERISTIC, SUBSYSTEM_CONSOLE
 from proveDefault import COMPILER_ROOT, FIXTURES, SUPPORT_TREES, build, run, sandboxProfile
 
 
@@ -29,36 +29,33 @@ def prove(compiler, control, bundle):
                        "MSC_NATIVE_TOOLCHAIN": str(bundle), "MSC_NO_GLOBAL_CACHE": "1",
                        "MSC_CACHE_DIR": str(work / "cache")}
         run(sandbox + ["/usr/bin/clang", "--version"], environment, expected=1)
-        flags = ("--os=windows", "--cpu=x86_64")
-        failure = run(sandbox + build(old, work / "consumer.ms", work / "old.exe", *flags),
-                      environment, expected=1)
-        if not any(message in failure for message in (
-                "prepared runtime for windows/x86_64 is not installed",
-                "call to undeclared function 'GetCurrentThreadStackLimits'")):
-            raise RuntimeError("control failed for an unrelated reason:\n" + failure)
-        print("control: Windows selection or platform-baseline regression reproduced")
+        run(sandbox + build(old, work / "consumer.ms", work / "old.exe", "--os=windows", "--cpu=arm64"),
+            environment, expected=1, contains="prepared runtime for windows/arm64 is not installed")
+        print("control: missing ARM64 Windows selection reproduced")
 
-        executable = work / "consumer.exe"
-        run(sandbox + build(new, work / "consumer.ms", executable, *flags), environment)
-        pe = readPe(executable)
-        if (pe["machine"] != MACHINE_AMD64 or pe["characteristics"] & DLL_CHARACTERISTIC
-                or pe["subsystem"] != SUBSYSTEM_CONSOLE):
-            raise RuntimeError("msc did not produce an AMD64 console executable: %r" % pe)
-        print("msc executable: AMD64 console PE linked with Zig and system compiler denied; not run")
+        for cpu, target in (("x86_64", TARGET), ("arm64", ARM64_TARGET)):
+            flags = ("--os=windows", "--cpu=" + cpu)
+            expected = TARGETS[target]
+            executable = work / (cpu + ".exe")
+            run(sandbox + build(new, work / "consumer.ms", executable, *flags), environment)
+            pe = readPe(executable)
+            if (pe["machine"] != expected["machine"] or pe["characteristics"] & DLL_CHARACTERISTIC
+                    or pe["subsystem"] != SUBSYSTEM_CONSOLE):
+                raise RuntimeError("msc did not produce a %s console executable: %r" % (cpu, pe))
 
-        dll, imports = work / "consumer.dll", work / "consumer.lib"
-        run(sandbox + build(new, library, dll, *flags, "--app=lib", "--passL=-Wl,--out-implib," + str(imports)),
-            environment)
-        problem = peProblem("dll", readPe(dll))
-        if problem:
-            raise RuntimeError(problem)
-        if imports.read_bytes()[:8] != b"!<arch>\n":
-            raise RuntimeError("msc did not produce an import archive")
-        print("msc DLL: AMD64 PE, addNumbers export, Win32/CRT imports and import library verified; not run")
-        for flag, reason in (("--hcr", "HCR"), ("--app=staticlib", "staticlib")):
-            run(sandbox + build(new, work / "consumer.ms", work / "unsupported", *flags, flag),
-                environment, expected=1, contains="does not supply " + reason + " startup")
-        print("unsupported prepared Windows HCR/static startup refused explicitly")
+            dll, imports = work / (cpu + ".dll"), work / (cpu + ".lib")
+            run(sandbox + build(new, library, dll, *flags, "--app=lib", "--passL=-Wl,--out-implib," + str(imports)),
+                environment)
+            problem = peProblem("dll", readPe(dll), target)
+            if problem:
+                raise RuntimeError(problem)
+            if imports.read_bytes()[:8] != b"!<arch>\n":
+                raise RuntimeError("msc did not produce an import archive for " + cpu)
+            print("%s: console exe, DLL/addNumbers/Win32+CRT imports and import library verified; not run" % cpu)
+            for flag, reason in (("--hcr", "HCR"), ("--app=staticlib", "staticlib")):
+                run(sandbox + build(new, work / "consumer.ms", work / "unsupported", *flags, flag),
+                    environment, expected=1, contains="does not supply " + reason + " startup")
+        print("both architectures: unsupported prepared Windows HCR/static startup refused explicitly")
 
 
 if __name__ == "__main__":

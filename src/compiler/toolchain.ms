@@ -282,6 +282,7 @@ function nativeRuntimeConfig(targetOs: string, cpu: string, shared: boolean = fa
 	if (targetOs == "wasm" && cpu == "wasm32") return "wasm32-wasi.cfg";
 	if (targetOs == "linux" && (cpu == "amd64" || cpu == "x86_64")) return "x86_64-linux-gnu.2.31.cfg";
 	if (targetOs == "windows" && (cpu == "amd64" || cpu == "x86_64")) return shared ? "windows/x86_64-windows-gnu.dll.cfg" : "windows/x86_64-windows-gnu.cfg";
+	if (targetOs == "windows" && (cpu == "arm64" || cpu == "aarch64")) return shared ? "windows/aarch64-windows-gnu.dll.cfg" : "windows/aarch64-windows-gnu.cfg";
 	return "";
 }
 
@@ -313,8 +314,10 @@ test "prepared runtimes are selected by both OS and CPU" {
 	assert nativeRuntimeConfig("linux", "arm64") == "";
 	assert nativeRuntimeConfig("windows", "amd64") == "windows/x86_64-windows-gnu.cfg";
 	assert nativeRuntimeConfig("windows", "x86_64", true) == "windows/x86_64-windows-gnu.dll.cfg";
-	assert nativeRuntimeConfig("windows", "arm64") == "";
-	assert nativeRuntimeConfig("windows", "arm64", true) == "";
+	assert nativeRuntimeConfig("windows", "arm64") == "windows/aarch64-windows-gnu.cfg";
+	assert nativeRuntimeConfig("windows", "aarch64", true) == "windows/aarch64-windows-gnu.dll.cfg";
+	assert nativeRuntimeConfig("windows", "arm") == "";
+	assert nativeRuntimeConfig("windows", "arm", true) == "";
 	assert nativeRuntimeConfig("wasm", "arm64") == "";
 }
 
