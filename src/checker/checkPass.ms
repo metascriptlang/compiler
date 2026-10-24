@@ -4403,6 +4403,25 @@ test "return outside function" { assert !checkOk("return 1;"); }
 
 test "class method scope" { assert checkOk("class Foo { bar(x) { return x; } }"); }
 
+function declaredSymbolsNamed(ctx: CheckerContext, name: string): Symbol[] {
+	const syms: Symbol[] = [];
+	for (const rec of ctx.symRecords) {
+		if (rec.isDecl && rec.name == name && rec.sym != null) syms.push(rec.sym!);
+	}
+	return syms;
+}
+
+test "a second class or actor of one name is checked with its own symbol" {
+	for (const src of [
+		"class A { x: int32 = 1; }\nclass A { y: string = \"s\"; }",
+		"actor A { x: int32 = 1; }\nactor A { y: string = \"s\"; }",
+	]) {
+		const syms = declaredSymbolsNamed(checkSource(src), "A");
+		assert syms.length == 2;
+		assert syms[0] != syms[1];
+	}
+}
+
 test "try-catch param" { assert checkOk("try { const x = 1; } catch (e) { const y = e; }"); }
 
 test "owning self-ref field warns (not errors)" {
