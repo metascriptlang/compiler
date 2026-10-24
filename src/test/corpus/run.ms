@@ -12,7 +12,7 @@
 //   // @stdout: <substr>   -> merged output must contain <substr>; every @stdout
 //                             line is checked (parity programs mostly omit it)
 //   // @exit: <n>          -> expected exit code (default 0)
-//   // @xfail(<lane>): why -> known-fail for that lane; XPASS is reported LOUD
+//   // @xfail(<lane>): why -> known-fail for that lane; an XPASS is a red, so the directive goes as soon as the lane passes
 //   // @serial             -> contention-sensitive (actor/spawn): its run cells
 //                             execute alone, after the parallel drain
 //   // @skip-js: why       -> no JS lane; the skip list is the JS backend worklist
@@ -47,6 +47,11 @@
 //   MSCORPUS_BUILD_JOBS=N  # parallel builds     (default: CPU count)
 //   MSCORPUS_JOBS=N        # parallel run slots  (default: 4, unchanged)
 //
+// MSCORPUS_SELFTEST=1 runs selftest/ instead of programs/: each fixture breaks one
+// directive on purpose and names the red it must produce (`// @selftest-red <substr>`
+// on one of its FAIL lines); a fixture that stays green, or that is red for another
+// reason, fails the run. Combine with MSCORPUS_SAN=1 for the SAN-lane fixtures.
+//
 // MSCORPUS_SAN=1 runs the SAN lane instead: every program built once
 // (drc) with ASan + slab-off + the DRC ledger, asserting exit + @stdout +
 // no ASan report + no DOUBLE-DESTROY + per-type ledger balance. Balance
@@ -62,7 +67,8 @@ import { writeStderr } from "std/io";
 import { isNotFound } from "std/io/errors";
 import { sleepAsync } from "std/core/promise";
 
-const PROG_DIR = "src/test/corpus/programs/";
+const SELFTEST = envOr("MSCORPUS_SELFTEST", "") == "1";
+const PROG_DIR = SELFTEST ? "src/test/corpus/selftest/" : "src/test/corpus/programs/";
 const OUT_DIR = "out/corpus/";
 
 // Windows has no POSIX shell, so every place this runner reaches for one is a
@@ -307,6 +313,7 @@ interface Spec {
 	slackNs: int32[];
 	atomicHosts: string[];
 	atomicMax: int32[];
+	selftestRed: string;
 }
 
 interface Cell {
@@ -334,7 +341,10 @@ function runCapture(cmd: string): RunOut {
 	return { exitCode: e.exitCode as int32, signal: e.signal as int32, output: e.output + e.errorOutput };
 }
 
+const redLines: string[] = [];
+
 function progress(line: string): void {
+	if (line.trim().startsWith("✗")) { redLines.push(line); }
 	writeStderr(line + "\n");
 }
 
@@ -492,7 +502,7 @@ function parseSpec(name: string, entry: string): Spec {
 		maxRssMb: -1.0, stdoutSubs: [], expectExit: 0,
 		xfailLanes: [], serial: false, skipJs: false, skipRaiser: false,
 		slackTypes: [], slackNs: [],
-		atomicHosts: [], atomicMax: [],
+		atomicHosts: [], atomicMax: [], selftestRed: "",
 	};
 	const src = readFileOr(entry, "");
 	const lines = src.split("\n");
@@ -506,6 +516,7 @@ function parseSpec(name: string, entry: string): Spec {
 		const ec = directiveValue(t, "@exit");
 		if (ec != "") { spec.expectExit = ec.parseInt() as int32; }
 		if (t.indexOf("// @serial") == 0) { spec.serial = true; }
+		if (t.indexOf("// @selftest-red ") == 0) { spec.selftestRed = t.slice(17, t.length).trim(); }
 		if (t.indexOf("// @skip-js") == 0) { spec.skipJs = true; }
 		if (t.indexOf("// @skip-raiser") == 0) { spec.skipRaiser = true; }
 		if (t.indexOf("// @xfail(") == 0) {
@@ -1043,7 +1054,11 @@ function atomicsOverBudget(counts: Map<string, int32>, recorded: string): string
 function reportCell(c: Cell, t: Tally): void {
 	const tag = c.spec.name + " [" + c.lane + "]";
 	if (isXfail(c)) {
-		if (c.pass) { t.xpasses = t.xpasses + 1; progress("  ? XPASS " + tag + " — " + c.detail); }
+		if (c.pass) {
+			t.xpasses = t.xpasses + 1;
+			t.fails = t.fails + 1;
+			progress("  ✗ FAIL " + tag + " — XPASS: the known-fail passes, delete its @xfail(" + c.lane + ") — " + c.detail);
+		}
 		else { t.xfails = t.xfails + 1; progress("  ▷ xfail " + tag); }
 	} else {
 		if (c.pass) { t.passes = t.passes + 1; progress("  ✓ " + tag + " — " + c.detail); }
@@ -1478,10 +1493,25 @@ function main(): void {
 	const summary = t.passes + " pass · " + t.fails + " fail · " + t.xfails + " xfail · " + t.xpasses + " xpass";
 	progress("  " + summary);
 	console.log(summary);
-	if (t.xpasses > 0) {
-		console.log("NOTE: XPASS = a known-fail now passes — clear its @xfail directive");
-	}
+	if (SELFTEST) { exit(judgeSelftest(specs)); }
 	if (t.fails > 0) { exit(1); }
+}
+
+// A directive whose check cannot go red here passes every program that carries it.
+function judgeSelftest(specs: Spec[]): int32 {
+	let bad = 0;
+	for (const spec of specs) {
+		const mine = redLines.filter((l: string): boolean => l.contains(" " + spec.name + " ["));
+		let verdict = "red as declared";
+		if (spec.selftestRed == "") { verdict = "no // @selftest-red line"; }
+		else if (mine.length == 0) { verdict = "stayed green, the directive it breaks is hollow"; }
+		else if (!mine.some((l: string): boolean => l.contains(spec.selftestRed))) { verdict = "red for another reason, wanted '" + spec.selftestRed + "'"; }
+		if (verdict != "red as declared") { bad = bad + 1; }
+		console.log((verdict == "red as declared" ? "red  " : "BAD  ") + "selftest " + spec.name + ": " + verdict);
+	}
+	if (specs.length == 0) { bad = bad + 1; console.log("BAD  selftest: no fixtures under " + PROG_DIR); }
+	console.log(bad == 0 ? "corpus selftest: ALL RED AS DECLARED (" + specs.length + " fixtures)" : "corpus selftest: " + bad + " fixture(s) wrong");
+	return bad == 0 ? 0 : 1;
 }
 
 main();
