@@ -1660,6 +1660,7 @@ export function resetCapturedAssignments(): void {
 	containerAssignments = new HashMap<Node, ContainerAssignments>();
 	lastAssignments = new HashMap<Symbol, int32>();
 	closureContainers = new HashMap<Node, Node>();
+	aliasPaths = new HashMap<Node, AliasPath>();
 }
 
 function assignmentsIn(container: Node): ContainerAssignments {
@@ -1791,22 +1792,34 @@ function writesReference(node: Node | null, refNode: Node): boolean {
 	return false;
 }
 
-function aliasStillHolds(aliasId: Node, refNode: Node): boolean {
-	if (isConstBinding(refNode)) return true;
-	if (aliasId.flowNode == null || aliasId.resolvedSym == null) return false;
-	const decl = aliasId.resolvedSym.declNode;
+class AliasPath {
+	from: FlowNode;
+	reachesStart: boolean = false;
+	writers: FlowNode[] = [];
+	constructor(from: FlowNode) { this.from = from; }
+}
+
+let aliasPaths = new HashMap<Node, AliasPath>();
+
+function aliasPathOf(aliasId: Node, from: FlowNode, decl: Node | null): AliasPath {
+	const known = aliasPaths.get(aliasId);
+	if (known != null && known.from == from) return known;
+	const path = new AliasPath(from);
 	const seen = new HashSet<FlowNode>();
-	const todo: FlowNode[] = [aliasId.flowNode];
+	const todo: FlowNode[] = [from];
 	while (todo.length > 0) {
 		const flow = todo.pop();
 		if (flow == null || flow.flags.has(FlowFlag.Unreachable) || seen.has(flow)) continue;
 		seen.add(flow);
-		if (flow.flags.has(FlowFlag.Start)) return false;
+		if (flow.flags.has(FlowFlag.Start)) {
+			path.reachesStart = true;
+			break;
+		}
 		if (flow.flags.has(FlowFlag.Assignment)) {
 			if (flow.node == decl) continue;
-			if (writesReference(flow.node, refNode)) return false;
-		} else if (flow.flags.has(FlowFlag.Call) && callWritesInto(flow.node, refNode)) {
-			return false;
+			path.writers.push(flow);
+		} else if (flow.flags.has(FlowFlag.Call)) {
+			path.writers.push(flow);
 		}
 		if (flow.antecedent != null) todo.push(flow.antecedent);
 		let list: FlowList | null = flow.antecedents;
@@ -1814,6 +1827,18 @@ function aliasStillHolds(aliasId: Node, refNode: Node): boolean {
 			todo.push(list.flow);
 			list = list.next;
 		}
+	}
+	aliasPaths.set(aliasId, path);
+	return path;
+}
+
+function aliasStillHolds(aliasId: Node, refNode: Node): boolean {
+	if (isConstBinding(refNode)) return true;
+	if (aliasId.flowNode == null || aliasId.resolvedSym == null) return false;
+	const path = aliasPathOf(aliasId, aliasId.flowNode, aliasId.resolvedSym.declNode);
+	if (path.reachesStart) return false;
+	for (const flow of path.writers) {
+		if (flow.flags.has(FlowFlag.Assignment) ? writesReference(flow.node, refNode) : callWritesInto(flow.node, refNode)) return false;
 	}
 	return true;
 }
