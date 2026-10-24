@@ -8,7 +8,7 @@
 // plus TypeGeneric, TypeArray, TypeUnion, TypeFunction, TypeObject for structural types.
 // Every node carries .location from the token it was parsed from, enabling LSP symbol recording.
 
-import { Token, TokenKind } from "../lexer/token";
+import { TokenKind, isIdentLikeKind } from "../lexer/token";
 import { Node, NodeKind, createNode, createNodeAt, IdentifierData, TypeGenericData, TypeObjectData, TypeFunctionData } from "../ast/node";
 import { ParserState, createState, current, advance, peek, tokenAt, skipComments, isAtEnd, skipBalanced, skipGenericParams, splitAngleAssign, collectTokenText, addError, genericCallParenOffset } from "./context";
 import { lex } from "../lexer/lexer";
@@ -58,13 +58,6 @@ export function skipTypeAnnotation(state: ParserState): void {
 // ===== Positioned Type Expression Parser =====
 // Builds a TypeExpr AST tree with position info for every type identifier.
 // Standard parity: semTypeNode dispatches on Identifier/GenericType etc.
-
-function isTypeIdent(token: Token): boolean {
-	const k = token.kind;
-	if (k == TokenKind.Ident) return true;
-	// Contextual keywords usable as type names (string, number, boolean, void, etc.)
-	return (k as number) >= (TokenKind.Abstract as number) && k != TokenKind.Comment && k != TokenKind.Eof && (k as number) < (TokenKind.JsxTagStart as number);
-}
 
 // Given an already-parsed leading atom, fold any trailing `& T & U` into a
 // TypeIntersection node. If no `&` follows, returns `first` unchanged.
@@ -155,7 +148,7 @@ function parseTypeAtom(state: ParserState): Node {
 	}
 
 	// Named type: identifier (possibly with generics and array suffix)
-	if (!isTypeIdent(token)) {
+	if (!isIdentLikeKind(token.kind)) {
 		// Fallback: create an Identifier with whatever token we have
 		advance(state);
 		return createNode(NodeKind.Identifier, { name: token.value }, token);
@@ -169,7 +162,7 @@ function parseTypeAtom(state: ParserState): Node {
 	// splitting on ".", and resolveTypeExpr can walk the MemberExpr for LSP recording.
 	while (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 		advance(state); // consume .
-		if (isAtEnd(state) || !isTypeIdent(current(state))) break;
+		if (isAtEnd(state) || !isIdentLikeKind(current(state).kind)) break;
 		const memberToken = current(state);
 		advance(state);
 		result = createNode(NodeKind.MemberExpr, { object: result, property: memberToken.value, isOptional: false }, token);
@@ -277,7 +270,7 @@ function parseTypeFunctionOrParen(state: ParserState): Node {
 
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RParen) {
 		// Param name (optional — could be just types)
-		if (isTypeIdent(current(state))) {
+		if (isIdentLikeKind(current(state).kind)) {
 			const nameToken = current(state);
 			const nextKind = peek(state, 1).kind;
 			// `name?: Type` is an optional parameter; the type text keeps its `?`
@@ -368,7 +361,7 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 			}
 			advance(state); // consume [
 			// Consume the binding name (we only care about the key TYPE, not the name)
-			if (!isAtEnd(state) && isTypeIdent(current(state))) {
+			if (!isAtEnd(state) && isIdentLikeKind(current(state).kind)) {
 				advance(state); // consume key binding name
 			}
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Colon) {
@@ -392,7 +385,7 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 			continue;
 		}
 
-		if (isTypeIdent(current(state)) && !hasIndexSig) {
+		if (isIdentLikeKind(current(state).kind) && !hasIndexSig) {
 			const fieldName = current(state).value;
 			fieldNames.push(fieldName);
 			advance(state); // consume field name
@@ -451,7 +444,7 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 	// Tier 3: infer X — consume keyword + identifier name
 	if (token.kind == TokenKind.Infer) {
 		advance(state); // consume 'infer'
-		if (!isAtEnd(state) && isTypeIdent(current(state))) {
+		if (!isAtEnd(state) && isIdentLikeKind(current(state).kind)) {
 			advance(state); // consume the inferred type name
 		}
 		return;
@@ -481,7 +474,7 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 	advance(state);
 	while (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 		advance(state);
-		if (isAtEnd(state) || !isTypeIdent(current(state))) break;
+		if (isAtEnd(state) || !isIdentLikeKind(current(state).kind)) break;
 		advance(state);
 	}
 	skipGenericParams(state);
@@ -492,11 +485,11 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 }
 
 function skipTypeQueryOperand(state: ParserState): void {
-	if (isAtEnd(state) || !isTypeIdent(current(state))) return;
+	if (isAtEnd(state) || !isIdentLikeKind(current(state).kind)) return;
 	advance(state);
 	while (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 		advance(state);
-		if (isAtEnd(state) || !isTypeIdent(current(state))) return;
+		if (isAtEnd(state) || !isIdentLikeKind(current(state).kind)) return;
 		advance(state);
 	}
 }
@@ -525,7 +518,7 @@ function skipTypeAtom(state: ParserState): void {
 	// Tier 3: infer X — consume keyword + identifier name
 	if (token.kind == TokenKind.Infer) {
 		advance(state);
-		if (!isAtEnd(state) && isTypeIdent(current(state))) {
+		if (!isAtEnd(state) && isIdentLikeKind(current(state).kind)) {
 			advance(state);
 		}
 		return;
@@ -571,7 +564,7 @@ function skipTypeAtom(state: ParserState): void {
 	// Qualified/enum-literal type: K.A — consume .Ident chain greedily
 	while (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 		advance(state); // consume .
-		if (isAtEnd(state) || !isTypeIdent(current(state))) break;
+		if (isAtEnd(state) || !isIdentLikeKind(current(state).kind)) break;
 		advance(state); // consume member name
 	}
 	// Generic type arguments: Type<A, B> — handles >> and >>> for nested generics

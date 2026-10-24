@@ -18,6 +18,11 @@ export function isIdentOrKeyword(kind: TokenKind): boolean {
 	return kind == TokenKind.Ident || ((kind as number) >= (TokenKind.Break as number) && kind != TokenKind.Comment && kind != TokenKind.Eof && (kind as number) < (TokenKind.JsxTagStart as number));
 }
 
+// Ident and the contextual keywords (Abstract up to the JSX block): the tokens that may name a variable, parameter, field or type.
+export function isIdentLikeKind(kind: TokenKind): boolean {
+	return kind == TokenKind.Ident || ((kind as number) >= (TokenKind.Abstract as number) && kind != TokenKind.Comment && kind != TokenKind.Eof && (kind as number) < (TokenKind.JsxTagStart as number));
+}
+
 // Map identifier string to keyword TokenKind (or Ident)
 // Compiler generates FNV-1a hash table for 80+ string cases — O(1) lookup
 export function identToKeyword(ident: string): TokenKind {
@@ -314,3 +319,13 @@ test "kindToString Plus" { assert tokenKindToString(TokenKind.Plus) == "PLUS"; }
 test "kindToString Eof" { assert tokenKindToString(TokenKind.Eof) == "EOF"; }
 
 test "kindToString Const" { assert tokenKindToString(TokenKind.Const) == "CONST"; }
+
+test "isIdentLikeKind takes contextual keywords and refuses reserved ones, comments, Eof and JSX" {
+	assert isIdentLikeKind(TokenKind.Ident);
+	assert isIdentLikeKind(TokenKind.Abstract);
+	assert !isIdentLikeKind(TokenKind.Const);
+	assert !isIdentLikeKind(TokenKind.Comment);
+	assert !isIdentLikeKind(TokenKind.Eof);
+	assert !isIdentLikeKind(TokenKind.JsxTagStart);
+	assert isIdentOrKeyword(TokenKind.Const);
+}

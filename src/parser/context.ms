@@ -1,16 +1,9 @@
 // Parser Context - Shared parser state and helpers
 
-import { Token, TokenKind } from "../lexer/token";
+import { Token, TokenKind, isIdentLikeKind } from "../lexer/token";
 import { lex } from "../lexer/lexer";
 import { Node } from "../ast/node";
 import { DefineTable, createDefineTable } from "../compiler/defines";
-// Local copy of util.ms:isIdentLike to avoid circular import with util.ms.
-// Must stay in sync with the canonical version in util.ms.
-function isIdentLikeToken(token: Token): boolean {
-	const k = token.kind;
-	if (k == TokenKind.Ident) { return true; }
-	return (k as number) >= (TokenKind.Abstract as number) && k != TokenKind.Comment && k != TokenKind.Eof && (k as number) < (TokenKind.JsxTagStart as number);
-}
 
 // ===== Parser State =====
 
@@ -413,7 +406,7 @@ export function captureGenericParams(state: ParserState): string {
 			skipGenericParamRest(state);
 			continue;
 		}
-		if (isIdentLikeToken(current(state)) && depth == 1) {
+		if (isIdentLikeKind(current(state).kind) && depth == 1) {
 			if (names != "") { names = `${names},`; }
 			names = `${names}${current(state).value}`;
 			advance(state);

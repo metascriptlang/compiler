@@ -1,7 +1,7 @@
 // Parser Utilities - Shared helpers used by both expression and statement parsers
 // Lives at parser/ level to avoid circular imports between expressions/ and statements/
 
-import { Token, TokenKind } from "../lexer/token";
+import { Token, TokenKind, isIdentLikeKind, isIdentOrKeyword } from "../lexer/token";
 import { Node, NodeKind, SourceLocation, makeLoc, createNode, createNodeAt, NumberLiteralData, BlockStmtData } from "../ast/node";
 import { ParserState, createState, current, advance, peek, isAtEnd, takePendingComments, collectTokenText, addError } from "./context";
 import { optionalizeTypeString } from "../utils/string";
@@ -127,19 +127,13 @@ export function continuesIdentifier(token: Token): boolean {
 // Returns true if the token is an identifier or a contextual keyword
 // that can be used in identifier positions (variable names, fields, etc.)
 export function isIdentLike(token: Token): boolean {
-	const k = token.kind;
-	if (k == TokenKind.Ident) { return true; }
-	// Keywords from Abstract onwards are contextual (can be used as variable/param names)
-	return (k as number) >= (TokenKind.Abstract as number) && k != TokenKind.Comment && k != TokenKind.Eof && (k as number) < (TokenKind.JsxTagStart as number);
+	return isIdentLikeKind(token.kind);
 }
 
 // Property/method name position — allows ALL keywords (TypeScript parity).
 // In TypeScript: promise.catch(), map.delete(), set.has() are all valid.
 export function isPropertyName(token: Token): boolean {
-	const k = token.kind;
-	if (k == TokenKind.Ident) return true;
-	// Any keyword can be a property/method name
-	return (k as number) >= (TokenKind.Break as number) && k != TokenKind.Comment && k != TokenKind.Eof && (k as number) < (TokenKind.JsxTagStart as number);
+	return isIdentOrKeyword(token.kind);
 }
 
 // ===== Parameter List Parser =====
