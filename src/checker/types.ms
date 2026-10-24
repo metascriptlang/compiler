@@ -3453,6 +3453,52 @@ export function hasTypeIdentity(t: Readonly<Type>): boolean {
 		|| (t.kind == TypeKind.Distinct && t.typeFlags.has(TypeFlag.BrandWiden));
 }
 
+class HeldBeyond {
+	held: Type[];
+	seen: HashSet<Type>;
+}
+
+let _heldBySym: HashMap<Symbol, HeldBeyond> = new HashMap<Symbol, HeldBeyond>();
+let _heldByName: HashMap<string, HeldBeyond> = new HashMap<string, HeldBeyond>();
+
+export function resetHeldBeyond(): void {
+	_heldBySym = new HashMap<Symbol, HeldBeyond>();
+	_heldByName = new HashMap<string, HeldBeyond>();
+}
+
+function heldEntry(slot: Type, create: boolean): HeldBeyond | null {
+	if (slot.sym != null) {
+		const known = _heldBySym.get(slot.sym);
+		if (known != null || !create) return known;
+		const made: HeldBeyond = { held: [], seen: new HashSet<Type>() };
+		_heldBySym.set(slot.sym, made);
+		return made;
+	}
+	const known = _heldByName.get(slot.typeName);
+	if (known != null || !create) return known;
+	const made: HeldBeyond = { held: [], seen: new HashSet<Type>() };
+	_heldByName.set(slot.typeName, made);
+	return made;
+}
+
+// A slot typed by an interface or an unnamed record takes any object whose leading fields fit
+// (objectLayoutFits), so a cycle can close through it by way of that object. The checker notes
+// each such type here and the cycle classification walks them, as the reference walks the
+// subtypes of a non-final object; a slot nothing else was accepted into stays closed.
+export function noteHeldBeyond(slot: Type, held: Type): void {
+	if (slot.sym != null && slot.sym.symbolKind != SymbolKind.Interface) return;
+	const entry = heldEntry(slot, true)!;
+	if (entry.seen.has(held)) return;
+	entry.seen.add(held);
+	entry.held.push(held);
+}
+
+export function heldBeyond(slot: Type): Type[] {
+	if (slot.sym != null && slot.sym.symbolKind != SymbolKind.Interface) return [];
+	const entry = heldEntry(slot, false);
+	return entry != null ? entry.held : [];
+}
+
 export function nominalTypeKey(t: Readonly<Type>): string {
 	const sym = t.sym;
 	if (sym != null) {

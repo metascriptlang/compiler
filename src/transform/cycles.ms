@@ -13,12 +13,14 @@
 // a fresh IntSet marker per query and no cache at all).
 //
 // Unknown pointee (Ref with null typeReturn) is conservatively cyclic.
-// The reference non-final rule (types.nim:436-438) is implemented via the
-// OpenClass bit on the Struct arm below — a class that is extended is cyclic.
+// The reference non-final rule (types.nim:433-435) is implemented via the
+// OpenClass bit on the Struct arm below — a class that is extended is cyclic. An interface
+// or unnamed record is open the same way, but only to the object types the checker accepted
+// behind it, so a hierarchy whose implementers cannot reach back stays acyclic.
 
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { NameSet, createNameSet, nameSetAdd, nameSetContains } from "./context";
-import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef } from "../checker/types";
+import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef, heldBeyond, hasGenericParams } from "../checker/types";
 import { anonTypeName, isAnonTypeName, typeKey } from "../codegen/c/types";
 import { monoInstanceName } from "../monomorphize/registry";
 
@@ -112,6 +114,16 @@ function cfaStructFields(t: Type, origKey: string, withRef: boolean, marker: Nam
 	if (t.typeExtra != null && cfaAux(t.typeExtra, origKey, withRef, marker)) return true;
 	for (const child of t.typeChildren) {
 		if (cfaAux(child, origKey, withRef, marker)) return true;
+	}
+	return cfaHeldBeyond(t, origKey, withRef, marker);
+}
+
+// An interface or unnamed record stands for every object type the checker accepted behind
+// it (noteHeldBeyond); a cycle can run through any of them. An implementer with generic
+// parameters has fields no walk can see, so it counts as closing one.
+function cfaHeldBeyond(t: Type, origKey: string, withRef: boolean, marker: NameSet): boolean {
+	for (const held of heldBeyond(t)) {
+		if (hasGenericParams(held) || cfaAux(held, origKey, withRef, marker)) return true;
 	}
 	return false;
 }
