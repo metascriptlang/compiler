@@ -109,7 +109,7 @@ export function spanLower(program: Node, ctx: TransformContext, final: boolean):
 // path through its own copy, so the tree stays a tree.
 
 // `a[s..e]` as a Span: its own arm stabilizes the array and the start.
-function isRangeSlice(node: Node): boolean {
+export function isRangeSlice(node: Node): boolean {
 	if (node.kind != NodeKind.ArrayAccess) return false;
 	const idx = (node.data as ArrayAccessData).index;
 	if (idx == null || idx.kind != NodeKind.BinaryExpr) return false;

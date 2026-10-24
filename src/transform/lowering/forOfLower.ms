@@ -19,6 +19,7 @@ import { int32Type, charType, stringType, noneType, booleanType, getIteratorRetu
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { walkNode } from "../walker";
 import { clonePlace, isVariantRead } from "../place";
+import { isRangeSlice } from "./spanLower";
 import {
 	makeIdentResolved, makeNumber, makeBlock, makeVarDecl, makeWhile,
 	makeBinary, makeUnary, makeAssign, makeExprStmt, makeMember, makeArrayAccess, makeCall,
@@ -290,7 +291,7 @@ function pathInner(node: Node): Node | null {
 	if (node.kind == NodeKind.HiddenDeref) return (node.data as HiddenDerefData).expr;
 	if (node.kind == NodeKind.TypeAssertion) return (node.data as TypeAssertionData).asExpr;
 	if (isVariantRead(node)) return (node.data as HiddenStdConvData).convExpr;
-	if (node.kind == NodeKind.ArrayAccess) {
+	if (node.kind == NodeKind.ArrayAccess && !isRangeSlice(node)) {
 		const array = (node.data as ArrayAccessData).array;
 		const t = array.nodeType;
 		if (t != null && (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray)) return array;
