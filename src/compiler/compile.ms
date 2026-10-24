@@ -3011,9 +3011,13 @@ resetLiftedOps();
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
+	const fRaises = flowStart();
 	if (opts.isHcr) markEveryBodyMayRaise(transformedPrograms);
 	else inferRaises(transformedPrograms);
+	flowStop("b.raises", fRaises);
+	const fAlive = flowStart();
 	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false, graph, hcrModulePaths, hcrRootFunctions(hcrModulePaths), hcrModulePaths);
+	flowStop("b.alive", fAlive);
 	// Release DCE input arrays - no longer needed after alive set computed.
 	transformedPrograms = [];
 	transformedPaths = [];

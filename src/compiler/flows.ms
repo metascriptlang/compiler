@@ -19,6 +19,8 @@ const flowNames: string[] = [];
 const flowMs = new HashMap<string, number>();
 const flowInstr = new HashMap<string, number>();
 const flowCount = new HashMap<string, number>();
+const tallyNames: string[] = [];
+const tally = new HashMap<string, number>();
 
 export function flowsEnabled(): boolean {
 	return flowsOn;
@@ -30,6 +32,8 @@ export function flowsEnable(on: boolean): void {
 	flowMs.clear();
 	flowInstr.clear();
 	flowCount.clear();
+	tallyNames.length = 0;
+	tally.clear();
 	haveInstr = true;
 }
 
@@ -79,6 +83,15 @@ export function flowStop(name: string, since: FlowStamp): void {
 	flowAdd(name, performance.now() - since.ms, readInstr() - since.instr);
 }
 
+export function flowTally(name: string, n: number): void {
+	if (!flowsOn) return;
+	if (!tally.has(name)) {
+		tallyNames.push(name);
+		tally.set(name, 0);
+	}
+	tally.set(name, tally.get(name)! + n);
+}
+
 export function flowRowsText(): string {
 	let text = "";
 	for (const name of flowNames) {
@@ -86,6 +99,7 @@ export function flowRowsText(): string {
 		if (haveInstr && flowInstr.has(name)) text += `msc\t${name}\tinstr\t${flowInstr.get(name)}\n`;
 		text += `msc\t${name}\tcount\t${flowCount.get(name)}\n`;
 	}
+	for (const name of tallyNames) text += `msc\t${name}\tcount\t${tally.get(name)}\n`;
 	return text;
 }
 

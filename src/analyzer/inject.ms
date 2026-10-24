@@ -10,6 +10,7 @@
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
 import { bakesIntoStaticCell } from "../checker/reachability";
+import { flowStart, flowStop } from "../compiler/flows";
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
@@ -2739,11 +2740,18 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 		if (decl.kind == NodeKind.VariableDecl && decl.resolvedSym != null && bakesIntoStaticCell(decl)) baked.push(decl.resolvedSym);
 	}
 	pushScope(dctx, false, false);
+	const fPrep = flowStart();
 	dctx.finallyProtectedVars = collectFinallyVars(program);
+	flowStop("inject.finallyVars", fPrep);
+	const fCursors = flowStart();
 	dctx.callerDefs = inferCursors(dctx.writes, program) ?? callerDefsOf(dctx.writes, program);
+	flowStop("inject.cursors", fCursors);
 	dctx.currentFuncBody = program;
 	clearCfgCache(dctx.cfgCache);
+	const fWalk = flowStart();
 	d.programStmts = processStmtList(d.programStmts, dctx, program.location);
+	flowStop("inject.walk", fWalk);
+	const fExits = flowStart();
 	const moduleScope = popScope(dctx);
 	for (const s of generateCleanup(moduleScope, program.location)) d.programStmts.push(s);
 	const exits: Node[] = tearDownGlobals(dctx, baked, program.location);
@@ -2755,7 +2763,7 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 		destroys.flags = destroys.flags.incl(NodeFlag.GlobalDestroys);
 		d.programStmts.push(destroys);
 	}
-
+	flowStop("inject.exits", fExits);
 	return program;
 }
 
