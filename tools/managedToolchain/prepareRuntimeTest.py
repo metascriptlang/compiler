@@ -154,6 +154,35 @@ class TargetAndConfigTest(unittest.TestCase):
         self.assertIn("--ld-path=<CFGDIR>/../engine/bin/ld.lld\n", text)
 
 
+class PublicationTest(TempCase):
+    def test_an_existing_empty_directory_is_not_replaced(self):
+        source, destination = self.path("partial"), self.path("out")
+        write(os.path.join(source, "payload"))
+        os.makedirs(destination)
+        inode = os.stat(destination).st_ino
+        with self.assertRaisesRegex(pe.EngineError, "never replaced"):
+            pr.renameNoReplace(source, destination)
+        self.assertEqual((os.listdir(destination), os.stat(destination).st_ino), ([], inode))
+        self.assertTrue(os.path.isfile(os.path.join(source, "payload")))
+
+    def test_an_existing_file_is_not_replaced(self):
+        write(self.path("partial", "payload"))
+        write(self.path("out"), "keep")
+        with self.assertRaisesRegex(pe.EngineError, "never replaced"):
+            pr.renameNoReplace(self.path("partial"), self.path("out"))
+        self.assertEqual(read(self.path("out")), "keep")
+
+    def test_a_free_destination_receives_the_directory(self):
+        write(self.path("partial", "payload"))
+        pr.renameNoReplace(self.path("partial"), self.path("out"))
+        self.assertEqual(os.listdir(self.path("out")), ["payload"])
+        self.assertFalse(os.path.exists(self.path("partial")))
+
+    def test_a_missing_source_is_an_os_error_not_a_claim(self):
+        with self.assertRaises(FileNotFoundError):
+            pr.renameNoReplace(self.path("gone"), self.path("out"))
+
+
 class CopyTest(TempCase):
     def test_missing_artifact_is_refused(self):
         with self.assertRaises(pe.EngineError):
@@ -286,6 +315,20 @@ class PipelineTest(TempCase):
         os.makedirs(self.path("rt"))
         with self.assertRaisesRegex(pe.EngineError, "never replaced"):
             pr.prepareRuntime(self.zig, self.engine, self.path("rt"), [])
+
+    def test_output_claimed_while_producing_is_never_replaced(self):
+        out = self.path("rt")
+        original = pr.writeProvenance
+
+        def claimWhileProducing(*args):
+            os.makedirs(out)
+            original(*args)
+
+        with mock.patch.object(pr, "writeProvenance", side_effect=claimWhileProducing):
+            with self.assertRaisesRegex(pe.EngineError, "never replaced"):
+                pr.prepareRuntime(self.zig, self.engine, out, [])
+        self.assertEqual(os.listdir(out), [])
+        self.assertEqual([n for n in os.listdir(self.dir) if n.startswith("rt.partial")], [])
 
     def test_unsupported_target_is_refused_before_zig_runs(self):
         with self.assertRaises(pe.EngineError):

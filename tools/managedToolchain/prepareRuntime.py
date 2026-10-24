@@ -15,6 +15,8 @@ The payload is a local proof from an installed Zig, not an upstream-controlled b
 provenance receipt says so and never certifies redistribution.
 """
 import argparse
+import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -405,6 +407,23 @@ def writeProvenance(output, zigId, host, engineVersion, engineRelative, records)
                  json.dumps(receipt, indent=2, sort_keys=True) + "\n")
 
 
+def renameNoReplace(source, destination):
+    """Move source to destination atomically, failing when destination exists even if empty."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    paths = (os.fsencode(source), os.fsencode(destination))
+    if sys.platform == "darwin":
+        result = libc.renamex_np(paths[0], paths[1], 0x4)
+    elif sys.platform.startswith("linux"):
+        result = libc.renameat2(-100, paths[0], -100, paths[1], 1)
+    else:
+        raise pe.EngineError("no atomic no-replace rename is known for %s" % sys.platform)
+    if result != 0:
+        code = ctypes.get_errno()
+        if code == errno.EEXIST:
+            raise pe.EngineError("output %s exists; it is never replaced" % destination)
+        raise OSError(code, os.strerror(code), destination)
+
+
 def prepareRuntime(zig, engine, output, targets, engineRelative="../engine"):
     zig, engine, output = (os.path.abspath(p) for p in (zig, engine, output))
     targets = selectTargets(targets)
@@ -424,7 +443,7 @@ def prepareRuntime(zig, engine, output, targets, engineRelative="../engine"):
         records = [produceTarget(zig, engine, t, work, partial, engineRelative, major) for t in targets]
         writeProvenance(partial, zigId, host, version, engineRelative, records)
         os.chmod(partial, 0o755)
-        os.rename(partial, output)
+        renameNoReplace(partial, output)
     except BaseException:
         shutil.rmtree(partial, ignore_errors=True)
         raise
