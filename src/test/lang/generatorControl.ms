@@ -79,3 +79,45 @@ test "generatorControl: a return crossing a finally that throws runs that finall
 		assert caught == "fin";
 	}
 }
+
+const runningBox: Iterator<int32>[] = [];
+let runningEntries: int32 = 0;
+let runningTrace = "";
+
+function* reentering(viaReturn: boolean): Iterator<int32> {
+	runningEntries += 1;
+	try {
+		const self = runningBox[0];
+		if (viaReturn) { if (self.return != null) self.return(); }
+		else self.next();
+		runningTrace += "no throw;";
+	} catch (e) {
+		runningTrace += `${(e as Error).message};`;
+	}
+	yield 1;
+	yield 2;
+}
+
+test "generatorControl: a generator resumed through next from its own body throws and then resumes normally" {
+	runningBox.length = 0;
+	runningEntries = 0;
+	runningTrace = "";
+	runningBox.push(reentering(false));
+	assert runningBox[0].next().value == 1;
+	assert runningBox[0].next().value == 2;
+	assert runningBox[0].next().done;
+	assert runningEntries == 1;
+	assert runningTrace == "Generator is already running;";
+}
+
+test "generatorControl: a generator closed through return from its own body throws and keeps its state" {
+	runningBox.length = 0;
+	runningEntries = 0;
+	runningTrace = "";
+	runningBox.push(reentering(true));
+	assert runningBox[0].next().value == 1;
+	assert runningBox[0].next().value == 2;
+	assert runningBox[0].next().done;
+	assert runningEntries == 1;
+	assert runningTrace == "Generator is already running;";
+}
