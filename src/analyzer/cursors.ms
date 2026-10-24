@@ -1062,7 +1062,7 @@ export class CaptureCursors {
 	envEscapes: boolean;
 }
 
-export function inferCaptureCursors(w: WriteEffects, body: Node): CaptureCursors {
+export function inferCaptureCursors(w: WriteEffects, body: Node, params: Symbol[] | null): CaptureCursors {
 	const lent = new HashSet<Symbol>();
 	if (body.kind != NodeKind.BlockStmt) return { lent, envEscapes: true };
 	analysis = w;
@@ -1073,10 +1073,20 @@ export function inferCaptureCursors(w: WriteEffects, body: Node): CaptureCursors
 		for (const sym of chosen) {
 			if (captured.has(sym)) lent.add(sym);
 		}
+		if (!envEscapes && params != null) {
+			for (const p of params!) {
+				if (captured.has(p) && !assignedInClosures.includes(p) && borrowedParam(p)) lent.add(p);
+			}
+		}
 		return { lent, envEscapes };
 	} finally {
 		analysis = null;
 	}
+}
+
+function borrowedParam(p: Symbol): boolean {
+	const t = p.symbolType;
+	return t != null && t.kind != TypeKind.Sink && t.kind != TypeKind.Var;
 }
 
 function inferCursorsIn(w: WriteEffects, body: Node, defs: LocalDefs): Symbol[] {
