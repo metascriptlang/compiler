@@ -256,15 +256,10 @@ export function stripMsModuleExtension(name: string): string {
 // ===== Extension Detection =====
 
 function hasKnownExtension(specifier: string): boolean {
-	return specifier.endsWith(".ms")
-		|| specifier.endsWith(".cms")
-		|| specifier.endsWith(".jms")
-		|| specifier.endsWith(".rms")
-		|| specifier.endsWith(".ems")
-		|| specifier.endsWith(".wms")
-		|| specifier.endsWith(".ts")
-		|| specifier.endsWith(".js")
-		|| specifier.endsWith(".h");
+	for (const ext of msModuleExtensions) {
+		if (specifier.endsWith(ext)) return true;
+	}
+	return specifier.endsWith(".ts") || specifier.endsWith(".js") || specifier.endsWith(".h");
 }
 
 // ===== Helpers =====
@@ -278,18 +273,6 @@ function isRelative(specifier: string): boolean {
 	if (specifier.length < 2) return false;
 	const prefix = specifier.slice(0, 2);
 	return prefix == "./" || prefix == "..";
-}
-
-// ===== Legacy Helpers (kept for backward compat) =====
-
-export function buildFilePath(specifier: string, fromFile: string): string {
-	const baseDir = dirname(fromFile);
-	return normalize(join(baseDir, specifier + ".ms"));
-}
-
-export function buildIndexPath(specifier: string, fromFile: string): string {
-	const baseDir = dirname(fromFile);
-	return normalize(join(baseDir, join(specifier, "index.ms")));
 }
 
 // ===== Tests =====
@@ -334,9 +317,6 @@ test "isStdImport" {
 	assert !isStdImport("ab");
 }
 
-test "buildFilePath" { assert buildFilePath("./foo", "/a/b.ms") == "/a/foo.ms"; }
-
-test "buildIndexPath" { assert buildIndexPath("./sub", "/a/b.ms") == "/a/sub/index.ms"; }
 // -- Backend extension mapping --
 test "backendExtension C" { assert backendExtension(Backend.C) == ".cms"; }
 
@@ -469,6 +449,15 @@ test "explicit .cms extension" {
 	const r = resolveImportWithConfig("std/core.cms", "/a/b.ms", cfg);
 	assert r.length == 1;
 	assert r[0] == "/std/core.cms";
+}
+
+test "every MetaScript module extension names its one file" {
+	const cfg = createDefaultConfig(Backend.C, "");
+	for (const ext of msModuleExtensions) {
+		const r = resolveImportWithConfig(`./foo${ext}`, "/a/b.ms", cfg);
+		assert r.length == 1;
+		assert r[0] == `/a/foo${ext}`;
+	}
 }
 
 test "absolute path with an explicit extension names that one file" {
