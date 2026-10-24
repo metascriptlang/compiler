@@ -1,13 +1,12 @@
 // MetaScript Compiler CLI — Entry point (dispatch only)
 
-import { platform } from "std/process";
 import { CliOptions, Target, parseArgs, applyProjectConfig } from "./compiler/options";
 import { defineSymbol, formatDefines } from "./compiler/defines";
 import { VERSION, printUsage } from "./compiler/usage";
 import { cmdBuildJS, cmdBuildC, cmdWatchC, cmdRunHcr, cmdRunJS, cmdRunRaiser, cmdTest, cmdTestJS } from "./compiler/compile";
 import { cmdCheck, cmdDumpTokens, cmdDumpAst, cmdPipeline, cmdRun, cmdFmt, cmdInit, cmdClean } from "./compiler/commands";
 import { lspRunServer } from "./compiler/lsp/server";
-import { loadBuildConfig, loadFmtSection, resolveCcForTarget } from "./compiler/buildConfig";
+import { resolveCcForTarget } from "./compiler/buildConfig";
 import { verboseLog } from "./compiler/io";
 import { error, bold, green, cyan } from "./utils/color";
 import { findProjectRoot } from "./utils/path";
@@ -47,12 +46,12 @@ export function main(): int32 {
 	// build.ms. Go/Rust convention: the manifest defines the project root.
 	// All manifest operations (build.ms, msc.lock) are relative to this directory.
 	const projectRoot = findProjectRoot(opts.inputFile);
-	const buildMsPath = join(projectRoot, "build.ms");
 	const applied = applyProjectConfig(opts, projectRoot);
 	if (!applied.ok) {
 		console.log(`${error("error")}: ${applied.error}`);
 		process.exit(1);
 	}
+	const cfg = applied.value;
 	if (opts.showDefines) {
 		console.log(formatDefines(opts.defines));
 		process.exit(0);
@@ -66,25 +65,22 @@ export function main(): int32 {
 		"version" => console.log(`${bold("Metascript")} ${green(`v${VERSION}`)}`),
 		"check" => {
 			requireFile(opts);
-			cmdCheck(opts.inputFile, opts, loadBuildConfig(buildMsPath, opts.showTime).resolve);
+			cmdCheck(opts.inputFile, opts, cfg.resolve);
 		},
 		"dump-tokens" => { requireFile(opts); cmdDumpTokens(opts.inputFile); },
 		"dump-ast" => { requireFile(opts); cmdDumpAst(opts.inputFile); },
 		"pipeline" => { requireFile(opts); cmdPipeline(opts.inputFile); },
-		"fmt" => { requireFile(opts); cmdFmt(opts.inputFile, opts, loadFmtSection(".")); },
+		"fmt" => { requireFile(opts); cmdFmt(opts.inputFile, opts, cfg.fmt); },
 		"run" => {
 			// argv path overrides build.ms root; fallback to build.ms when no argv
-			if (opts.inputFile == "") {
-				const cfg = loadBuildConfig(buildMsPath, opts.showTime);
-				if (cfg.valid && cfg.entry.length > 0) { opts.inputFile = cfg.entry; }
-			}
+			if (opts.inputFile == "" && cfg.valid && cfg.entry.length > 0) { opts.inputFile = cfg.entry; }
 			requireFile(opts);
 			if (opts.target == Target.JS) {
 				cmdRunJS(opts.inputFile, opts);
 			} else if (opts.target == Target.Raiser) {
-				cmdRunRaiser(opts.inputFile, opts);
+				cmdRunRaiser(opts.inputFile, opts, cfg.resolve);
 			} else if (opts.isHcr) {
-				cmdRunHcr(opts.inputFile, opts);
+				cmdRunHcr(opts.inputFile, opts, cfg.resolve);
 			} else {
 				cmdRun(opts.inputFile, opts);
 			}
@@ -99,8 +95,6 @@ export function main(): int32 {
 			}
 		},
 		"build" => {
-			// Load build.ms for config (target, optimize, outDir, etc.)
-			const cfg = loadBuildConfig(buildMsPath, opts.showTime);
 			// argv path overrides build.ms root
 			if (opts.inputFile == "" && cfg.valid && cfg.entry.length > 0) {
 				opts.inputFile = cfg.entry;
