@@ -182,6 +182,13 @@ static inline void msFutureThenEnvFree(msFutureThenEnv* e) {
     msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onFulfilled); msClosureDestroy(e->onRejected); free(e);
 }
 
+static inline void msFutureThenEnvDrop(void* e) { msFutureThenEnvFree((msFutureThenEnv*)e); }
+
+static inline void msFutureCatchEnvDrop(void* raw) {
+    msFutureCatchEnv* e = (msFutureCatchEnv*)raw;
+    msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onRejected); free(e);
+}
+
 static inline msFuture* msFutureThenAttach(void* input, msClosure onFulfilled, msClosure onRejected, int typeTag, msClosureFn cb) {
     msFuture* output = (msFuture*)msFutureCreate();
     msFutureThenEnv* env = (msFutureThenEnv*)msMemAlloc(sizeof(msFutureThenEnv));
@@ -189,7 +196,7 @@ static inline msFuture* msFutureThenAttach(void* input, msClosure onFulfilled, m
     msClosureCopy(onFulfilled); env->onFulfilled = onFulfilled;
     msClosureCopy(onRejected); env->onRejected = onRejected;
     env->typeTag = typeTag;
-    msFutureAddCallback(input, (msClosure){.fn = cb, .env = env});
+    msFutureAddCallback(input, msActorStampIf((msClosure){.fn = cb, .env = env}, msFutureThenEnvDrop, NULL));
     return output;
 }
 
@@ -307,7 +314,7 @@ static inline void* name(void* input, msClosure onRejected) { \
     msFuture* output = (msFuture*)msAlloc(sizeof(fut_type)); \
     msFutureCatchEnv* env = (msFutureCatchEnv*)msMemAlloc(sizeof(msFutureCatchEnv)); \
     env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onRejected); env->onRejected = onRejected; env->typeTag = MS_TYPETAG_PTR; \
-    msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)name##_cb, .env = env}); \
+    msFutureAddCallback(input, msActorStampIf((msClosure){.fn = (msClosureFn)name##_cb, .env = env}, msFutureCatchEnvDrop, NULL)); \
     return output; \
 }
 

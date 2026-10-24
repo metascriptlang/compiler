@@ -653,6 +653,8 @@ bool msWorkerLoopPending(void) {
 bool msWorkerLoopPump(void) {
     if (tlWorkerChannel == NULL) return false;
     const msTaskFrame* frame = msPoolFrameSwap(NULL);
+    msActor* actor = msCurrentActor;
+    msCurrentActor = NULL;
     char buf[64];
     while (read(tlWorkerChannel->wake[0], buf, sizeof(buf)) > 0) {}
     bool didWork = msChannelDrain(tlWorkerChannel);
@@ -660,6 +662,7 @@ bool msWorkerLoopPump(void) {
     if (gDispatcher != NULL) msProcessCallbacks(gDispatcher, &didWork);
     msFutureReleaseFlush();
     msSettleWorkerWork();
+    msCurrentActor = actor;
     msPoolFrameSwap(frame);
     return didWork;
 }
@@ -828,8 +831,12 @@ int msProcessTimers(msDispatcher* d, bool* didWork) {
 			msFutureCompleteVoid(t.fut);
 			msFutureDrcDestroy(t.fut);
 		} else if (t.cancelled || t.cb.fn == NULL) {
-			msReleaseEnvOnLoop(t.cb.env);
+			if (t.actorJob) msActorJobAbandon(t.cb.env);
+			else msReleaseEnvOnLoop(t.cb.env);
 			continue;
+		} else if (t.actorJob) {
+			if (t.periodMs > 0) msActorJobTick(t.cb.env);
+			else msActorJobFire(t.cb.env);
 		} else {
 			((void(*)(void*))t.cb.fn)(t.cb.env);
 			/* An interval's env rides its re-armed entry; only a one-shot releases. */
@@ -874,7 +881,10 @@ static bool msRunOnceIn(int timeoutMs);
 
 bool msRunOnce(int timeoutMs) {
 	const msTaskFrame* frame = msPoolFrameSwap(NULL);
+	msActor* actor = msCurrentActor;
+	msCurrentActor = NULL;
 	bool didWork = msRunOnceIn(timeoutMs);
+	msCurrentActor = actor;
 	msPoolFrameSwap(frame);
 	return didWork;
 }
@@ -1195,6 +1205,10 @@ static int64_t msArmTimer(msClosure cb, double ms, int64_t periodMs) {
 		.periodMs = periodMs,
 		.cancelled = false,
 	};
+	if (msCurrentActor != NULL) {
+		t.cb = (msClosure){ .fn = (msClosureFn)msActorJobFire, .env = msActorStampTimer(cb, id, periodMs > 0) };
+		t.actorJob = true;
+	}
 	msTimerArm(t);
 	return id;
 }
@@ -1204,6 +1218,7 @@ static bool msCancelTimerIn(msTimerHeap* heap, int64_t id) {
 		if (heap->data[i].id == id) {
 			heap->data[i].cancelled = true;
 			heap->data[i].periodMs = 0;
+			if (heap->data[i].actorJob) msActorJobCancelMark(heap->data[i].cb.env);
 			return true;
 		}
 	}
@@ -1229,13 +1244,22 @@ double msSetInterval(msClosure cb, double ms) {
 	return (double)msArmTimer(cb, ms, period);
 }
 
-void msClearTimeout(double id) { msCancelTimer((int64_t)id); }
+void msClearTimeout(double id) {
+	msActorClearTimerJob((int64_t)id);
+	msCancelTimer((int64_t)id);
+}
 
-void msClearInterval(double id) { msCancelTimer((int64_t)id); }
+void msClearInterval(double id) { msClearTimeout(id); }
 
 /* ===== Async Stepper Callback (createCb pattern) ===== */
 
 static void msAsyncStep(msAsyncCbEnv* e);
+
+static void msAsyncCbEnvDrop(void* raw) {
+	msAsyncCbEnv* e = (msAsyncCbEnv*)raw;
+	if (e->stepper.env != NULL) msDecref(e->stepper.env);
+	free(e);
+}
 
 /* A step that suspends returns while the tasks it submitted are still queued, so no
  * frame of the thread it runs on joins them: they are submitted with no ancestor. */
@@ -1294,7 +1318,7 @@ static void msAsyncStep(msAsyncCbEnv* e) {
 	/* Not resolved — register ourselves as callback on the yielded future,
 	 * then drop our +1 ref (env field keeps the future alive while suspended). */
 	msFutureEdgeAwait(e->retFut, next);
-	msFutureAddCallback(next, (msClosure){ .fn = (msClosureFn)msAsyncCb, .env = e });
+	msFutureAddCallback(next, msActorStampIf((msClosure){ .fn = (msClosureFn)msAsyncCb, .env = e }, msAsyncCbEnvDrop, e));
 	msFutureDrcDestroy(next);
 }
 
@@ -1341,7 +1365,8 @@ void msDestroyDispatcher(void) {
 		if (t.fut != NULL) {
 			msFutureCancel(t.fut);
 			msFutureDrcDestroy(t.fut);
-		} else if (t.cb.env != NULL) msDecref(t.cb.env);
+		} else if (t.actorJob) msActorJobAbandon(t.cb.env);
+		else if (t.cb.env != NULL) msDecref(t.cb.env);
 	}
 	free(gTimers.data);
 	gTimers.data = NULL;

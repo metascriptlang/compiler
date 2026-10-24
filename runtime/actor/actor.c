@@ -73,4 +73,65 @@ MS_TLS_PUBLISH(msMsgPools)
 MS_THREAD_LOCAL msReadyEvent _msEvtBuf[64];
 MS_TLS_PUBLISH(_msEvtBuf)
 
+
+static msActorJob* msActorJobNew(msClosure cb, void (*drop)(void*), void* chain) {
+    msActor* a = msCurrentActor;
+    msActorJobs* j = msActorJobsEnsure(a);
+    msActorJob* r = (msActorJob*)msMemAlloc0(sizeof(msActorJob));
+    atomic_store_explicit(&r->refs, 2, memory_order_relaxed);
+    r->pid = a->pid;
+    r->cb = cb;
+    r->drop = drop;
+    r->chain = chain;
+    r->liveNext = j->live;
+    if (j->live != NULL) j->live->livePrev = r;
+    j->live = r;
+    return r;
+}
+
+msClosure msActorStamp(msClosure cb, void (*drop)(void*), void* chain) {
+    return (msClosure){ .fn = (msClosureFn)msActorJobFire, .env = msActorJobNew(cb, drop, chain) };
+}
+
+static void msActorTimerEnvDrop(void* env) {
+    const msTypeInfo* t = msHeader(env)->type;
+    if (msDecRefIsLast(env)) {
+        MS_DESTROY_DISPATCH(t, env);
+        msDestroyAndDispose(env);
+    }
+}
+
+void* msActorStampTimer(msClosure cb, int64_t id, bool periodic) {
+    msActorJob* r = msActorJobNew(cb, msActorTimerEnvDrop, NULL);
+    r->timerId = id;
+    r->periodic = periodic;
+    r->dropAfterRun = true;
+    return r;
+}
+
+void msActorJobFire(void* r) {
+    msActorJobPost((msActorJob*)r);
+    msActorJobUnref((msActorJob*)r);
+}
+
+void msActorJobTick(void* r) {
+    msActorJobPost((msActorJob*)r);
+}
+
+void msActorJobCancelMark(void* r) {
+    atomic_store_explicit(&((msActorJob*)r)->cancelled, true, memory_order_release);
+}
+
+void msActorJobAbandon(void* raw) {
+    msActorJob* r = (msActorJob*)raw;
+    atomic_store_explicit(&r->cancelled, true, memory_order_release);
+    msActorPostJob(r->pid, r);
+    msActorJobUnref(r);
+}
+
+void msActorClearTimerJob(int64_t id) {
+    msActor* a = msCurrentActor;
+    if (a != NULL && a->jobs != NULL) msActorJobsCancelTimer(a->jobs, id);
+}
+
 #endif /* !MSOS_BARE && !MSOS_WASM && !MSOS_EMCC */

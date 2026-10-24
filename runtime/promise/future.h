@@ -75,6 +75,36 @@ static inline void msCallSoon(msClosure cb) {
 	}
 }
 
+/* ===== Actor jobs (runtime/actor/actor.h, ULTRALOCK A4) ===== */
+
+#if !defined(MSOS_BARE) && !defined(MSOS_WASM) && !defined(MSOS_EMCC)
+#define MS_ACTOR_JOBS 1
+typedef struct msActor msActor;
+MS_TLS_EXTERN(msActor*, msCurrentActor);
+msClosure msActorStamp(msClosure cb, void (*drop)(void*), void* chain);
+void* msActorStampTimer(msClosure cb, int64_t id, bool periodic);
+void msActorJobFire(void* job);
+void msActorJobTick(void* job);
+void msActorJobCancelMark(void* job);
+void msActorJobAbandon(void* job);
+void msActorClearTimerJob(int64_t id);
+
+static inline msClosure msActorStampIf(msClosure cb, void (*drop)(void*), void* chain) {
+	return msCurrentActor != NULL ? msActorStamp(cb, drop, chain) : cb;
+}
+
+static inline void msActorJobForget(msClosure cb) {
+	if (cb.fn == (msClosureFn)msActorJobFire) msActorJobAbandon(cb.env);
+}
+#else
+#define MS_ACTOR_JOBS 0
+static inline msClosure msActorStampIf(msClosure cb, void (*drop)(void*), void* chain) {
+	(void)drop; (void)chain;
+	return cb;
+}
+static inline void msActorJobForget(msClosure cb) { (void)cb; }
+#endif
+
 /* ===== Callback list (Standard reference CallbackList pattern — singly-linked) ===== */
 
 typedef struct msFutureCb {
@@ -239,6 +269,7 @@ static inline void msFutureDestroyInner(void* fp) {
 	msFutureCb* cb = f->callbacks;
 	while (cb) {
 		msFutureCb* next = cb->next;
+		msActorJobForget((msClosure){ .fn = (msClosureFn)cb->fn, .env = cb->env });
 		free(cb);
 		cb = next;
 	}
@@ -321,6 +352,7 @@ static inline void msFutureCancel(void* fp) {
 	msFutCbUnlock();
 	while (cb) {
 		msFutureCb* next = cb->next;
+		msActorJobForget((msClosure){ .fn = (msClosureFn)cb->fn, .env = cb->env });
 		free(cb);
 		cb = next;
 	}

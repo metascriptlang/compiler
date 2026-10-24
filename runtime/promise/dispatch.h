@@ -38,6 +38,7 @@ typedef struct msTimer {
 	int64_t id;            /* handle returned to the caller; 0 for sleep timers */
 	int64_t periodMs;      /* > 0 → interval: re-armed after each fire */
 	bool cancelled;        /* clearTimeout/clearInterval marks, the loop skips */
+	bool actorJob;         /* cb.env is an actor job record (actor.h): posted, never run here */
 } msTimer;
 
 typedef struct msTimerHeap {

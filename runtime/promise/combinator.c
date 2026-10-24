@@ -346,11 +346,17 @@ void* msFutureCatchTyped(void* input, msClosure onRejected, int typeTag) {
 	msFuture* output = (msFuture*)msFutureCreate();
 	msFutureCatchEnv* env = (msFutureCatchEnv*)msMemAlloc(sizeof(msFutureCatchEnv));
 	env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onRejected); env->onRejected = onRejected; env->typeTag = typeTag;
-	msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)msFutureCatchCb, .env = env});
+	msFutureAddCallback(input, msActorStampIf((msClosure){.fn = (msClosureFn)msFutureCatchCb, .env = env}, msFutureCatchEnvDrop, NULL));
 	return output;
 }
 
 /* ===== Promise.finally ===== */
+
+static void msFutureFinallyEnvDrop(void* raw) {
+	msFutureFinallyEnv* e = (msFutureFinallyEnv*)raw;
+	msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onSettled);
+	free(e);
+}
 
 static void msFutureFinallyCb(void* raw) {
 	msFutureFinallyEnv* e = (msFutureFinallyEnv*)raw;
@@ -372,7 +378,7 @@ void* msFutureFinally(void* input, msClosure onSettled) {
 	msFuture* output = (msFuture*)msFutureCreate();
 	msFutureFinallyEnv* env = (msFutureFinallyEnv*)msMemAlloc(sizeof(msFutureFinallyEnv));
 	env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onSettled); env->onSettled = onSettled;
-	msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)msFutureFinallyCb, .env = env});
+	msFutureAddCallback(input, msActorStampIf((msClosure){.fn = (msClosureFn)msFutureFinallyCb, .env = env}, msFutureFinallyEnvDrop, NULL));
 	return output;
 }
 
