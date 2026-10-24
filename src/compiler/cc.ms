@@ -670,7 +670,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 		flags = appendFlag(flags, "-D_GNU_SOURCE");
 	}
 	if (opts.targetOs == "windows" && !isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary))) {
-		flags = appendFlag(flags, "-D_WIN32_WINNT=0x0600");
+		flags = appendFlag(flags, "-D_WIN32_WINNT=0x0A00");
 	}
 	if (opts.gcMode == "orc") flags = appendFlag(flags, "-DMSGC_ORC");
 	if (opts.sanitize != "") flags = appendFlag(flags, `-fsanitize=${opts.sanitize}`);
