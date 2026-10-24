@@ -32,11 +32,12 @@ import { setFlag, hasFlag, isCursorSym, SymbolFlag, findOverloadImpl } from "../
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
-import { calledRoutineType, isImmutableModuleConst, isViewCall, receiverOf, viewCallSources } from "../checker/effects";
-import { ANY_HEAP_SLOT, addressSlots, callerDefsOf, callsPlainRoutine, canAlias, createRoutineDecls, createWriteSummaries, LocalDefs, mayWrite, reachesModuleState, runsHooks, stepSlot, viewReturnSlots, WriteEffects } from "./writeEffects";
+import { calledRoutineType, isImmutableModuleConst, isViewCall, receiverOf, routineBody, viewCallSources } from "../checker/effects";
+import { ANY_HEAP_SLOT, addressSlots, callerDefsOf, callsPlainRoutine, canAlias, createRoutineDecls, createWriteSummaries, isAssign, LocalDefs, mayWrite, reachesModuleState, retainsArg, runsHooks, stepSlot, viewReturnSlots, WriteEffects } from "./writeEffects";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
 import { isReadonlyView } from "../checker/types";
+import { skipConvDfa } from "./alias";
 
 // ===== VarFlag (per-variable analysis flags) =====
 
@@ -51,6 +52,11 @@ let viewSources: int32[][] = [];
 let writeSites: Node[] = [];
 let writeTimes: int32[] = [];
 let analysis: WriteEffects | null = null;
+let closureNames: HashMap<Node, Symbol[]> = new HashMap<Node, Symbol[]>();
+let holderNames: HashMap<Symbol, Symbol[]> = new HashMap<Symbol, Symbol[]>();
+let capturedLocals: Symbol[] = [];
+let assignedInClosures: Symbol[] = [];
+let envEscapes = false;
 
 function registerVariable(p: Partitions, sym: Symbol | null, isParam: boolean): void {
 	registerPartitionVariable(p, sym, isParam, VF_IS_PARAM);
@@ -440,6 +446,7 @@ function liveRanges(p: Partitions, node: Node | null): void {
 				if (p.abstractTime > p.vars[id].aliveEnd) p.vars[id].aliveEnd = p.abstractTime;
 				if (p.abstractTime < p.vars[id].aliveStart) p.vars[id].aliveStart = p.abstractTime;
 			}
+			if (node.resolvedSym != null) keepAlive(p, holderNames.get(node.resolvedSym!));
 		},
 
 		NodeKind.CallExpr => {
@@ -511,6 +518,7 @@ function liveRanges(p: Partitions, node: Node | null): void {
 		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr | NodeKind.MethodDecl | NodeKind.ConstructorDecl
 			| NodeKind.ClassDecl | NodeKind.ActorDecl | NodeKind.TestDecl => {
 			p.abstractTime -= 1;
+			keepAlive(p, closureNames.get(node));
 		},
 
 		// Compound traversal
@@ -574,6 +582,150 @@ function liveRanges(p: Partitions, node: Node | null): void {
 		// the match routes them to the skip branch on re-entry.
 		_ => { forEachChild(node, (child: Node): void => { liveRanges(p, child); }); },
 	};
+}
+
+function keepAlive(p: Partitions, names: Symbol[] | null): void {
+	if (names == null) return;
+	for (const sym of names!) {
+		const id = variableId(p, sym);
+		if (id >= 0 && p.abstractTime > p.vars[id].aliveEnd) p.vars[id].aliveEnd = p.abstractTime;
+	}
+}
+
+// ===== Captures: closures a routine creates =====
+
+function isNestedRoutine(n: Node): boolean {
+	return n.kind == NodeKind.FunctionDecl || n.kind == NodeKind.ArrowFunction || n.kind == NodeKind.FunctionExpr || n.kind == NodeKind.MethodDecl
+		|| n.kind == NodeKind.ConstructorDecl || n.kind == NodeKind.ClassDecl || n.kind == NodeKind.ActorDecl;
+}
+
+function closureLiteral(n: Node | null): Node | null {
+	if (n == null) return null;
+	const t = skipConvDfa(n);
+	return t.kind == NodeKind.ArrowFunction || t.kind == NodeKind.FunctionExpr ? t : null;
+}
+
+function assignedLocal(target: Node | null): void {
+	if (target == null) return;
+	let t = skipConvDfa(target);
+	while (t.kind == NodeKind.HiddenDeref || t.kind == NodeKind.HiddenAddr) t = skipConvDfa((t.data as { expr: Node }).expr);
+	if (t.kind == NodeKind.Identifier && t.resolvedSym != null) assignedInClosures.push(t.resolvedSym!);
+}
+
+function namesOf(routine: Node): Symbol[] {
+	const names: Symbol[] = [];
+	const seen = new HashSet<Symbol>();
+	const step = (n: Node): void => {
+		match (n.kind) {
+			NodeKind.Identifier => {
+				const sym = n.resolvedSym;
+				if (sym != null && !hasFlag(sym!, SymbolFlag.Global) && !seen.has(sym!)) {
+					seen.add(sym!);
+					names.push(sym!);
+				}
+			},
+			NodeKind.BinaryExpr => {
+				const bd = n.data as BinaryExprData;
+				if (isAssign(bd.operator)) assignedLocal(bd.left);
+			},
+			NodeKind.UpdateExpr => assignedLocal((n.data as { updateOp: string, updateArg: Node, isPrefix: boolean }).updateArg),
+			NodeKind.HiddenAddr => assignedLocal(n),
+			NodeKind.OutExpr => assignedLocal((n.data as { outArg: Node }).outArg),
+			_ => {},
+		};
+		forEachChild(n, step);
+	};
+	forEachChild(routine, step);
+	return names;
+}
+
+function levelHolders(body: Node, out: Symbol[]): void {
+	const step = (n: Node): void => {
+		if (n.kind == NodeKind.FunctionDecl) {
+			if (n.resolvedSym != null) out.push(n.resolvedSym!);
+			return;
+		}
+		if (isNestedRoutine(n)) return;
+		if (n.kind == NodeKind.VariableDecl && n.resolvedSym != null && closureLiteral((n.data as VariableDeclData).initializer) != null) out.push(n.resolvedSym!);
+		forEachChild(n, step);
+	};
+	step(body);
+}
+
+function scanClosures(w: WriteEffects, body: Node | null, top: boolean, outer: Symbol[]): void {
+	if (body == null) return;
+	const level: Symbol[] = [];
+	levelHolders(body, level);
+	const holders = new HashSet<Symbol>();
+	for (const h of level) holders.add(h);
+	const visible: Symbol[] = [];
+	for (const h of outer) visible.push(h);
+	for (const h of level) visible.push(h);
+	const isHolder = (n: Node): boolean => n.kind == NodeKind.Identifier && n.resolvedSym != null && holders.has(n.resolvedSym!);
+	const routine = (lit: Node, holder: Symbol | null): void => {
+		if (top) {
+			const names = namesOf(lit);
+			closureNames.set(lit, names);
+			if (holder != null) holderNames.set(holder!, names);
+			for (const sym of names) capturedLocals.push(sym);
+		}
+		scanClosures(w, routineBody(lit), false, visible);
+	};
+	const step = (n: Node): void => {
+		match (n.kind) {
+			NodeKind.ArrowFunction | NodeKind.FunctionExpr => {
+				envEscapes = true;
+				routine(n, null);
+			},
+			NodeKind.FunctionDecl => routine(n, n.resolvedSym),
+			NodeKind.MethodDecl | NodeKind.ConstructorDecl | NodeKind.ClassDecl | NodeKind.ActorDecl => {
+				envEscapes = true;
+				routine(n, null);
+			},
+			NodeKind.Identifier => {
+				if (n.resolvedSym != null && visible.includes(n.resolvedSym!)) envEscapes = true;
+			},
+			NodeKind.VariableDecl => {
+				const lit = closureLiteral((n.data as VariableDeclData).initializer);
+				if (lit != null && n.resolvedSym != null) routine(lit!, n.resolvedSym);
+				else forEachChild(n, step);
+			},
+			NodeKind.CallExpr => {
+				const cd = n.data as CallExprData;
+				if (cd.callee != null) {
+					const callee = skipConvDfa(cd.callee);
+					const lit = closureLiteral(callee);
+					if (lit != null) routine(lit!, null);
+					else if (!isHolder(callee)) step(cd.callee);
+				}
+				for (let ai = 0; ai < cd.arguments.length; ai += 1) {
+					const a = cd.arguments[ai];
+					if (a == null) continue;
+					const lit = closureLiteral(a);
+					if (lit == null && !isHolder(skipConvDfa(a))) {
+						step(a);
+						continue;
+					}
+					if (retainsArg(w, n, ai as int32)) envEscapes = true;
+					if (lit != null) routine(lit!, null);
+				}
+			},
+			_ => forEachChild(n, step),
+		};
+	};
+	step(body);
+}
+
+function preventCaptures(p: Partitions): void {
+	for (const sym of assignedInClosures) {
+		const id = variableId(p, sym);
+		if (id >= 0) p.vars[id].flags = p.vars[id].flags | VF_PREVENT_CURSOR | VF_IS_REASSIGNED;
+	}
+	if (!envEscapes) return;
+	for (const sym of capturedLocals) {
+		const id = variableId(p, sym);
+		if (id >= 0) p.vars[id].flags = p.vars[id].flags | VF_PREVENT_CURSOR;
+	}
 }
 
 // ===== Pass 2: traverse (build graphs) =====
@@ -897,17 +1049,48 @@ export function inferCursors(w: WriteEffects, body: Node): LocalDefs | null {
 
 	analysis = w;
 	try {
-		return inferCursorsIn(w, body);
+		const defs = callerDefsOf(w, body);
+		for (const sym of inferCursorsIn(w, body, defs)) { setFlag(sym, SymbolFlag.Cursor); }
+		return defs;
 	} finally {
 		analysis = null;
 	}
 }
 
-function inferCursorsIn(w: WriteEffects, body: Node): LocalDefs {
+export class CaptureCursors {
+	lent: HashSet<Symbol>;
+	envEscapes: boolean;
+}
+
+export function inferCaptureCursors(w: WriteEffects, body: Node): CaptureCursors {
+	const lent = new HashSet<Symbol>();
+	if (body.kind != NodeKind.BlockStmt) return { lent, envEscapes: true };
+	analysis = w;
+	try {
+		const chosen = inferCursorsIn(w, body, callerDefsOf(w, body));
+		const captured = new HashSet<Symbol>();
+		for (const sym of capturedLocals) captured.add(sym);
+		for (const sym of chosen) {
+			if (captured.has(sym)) lent.add(sym);
+		}
+		return { lent, envEscapes };
+	} finally {
+		analysis = null;
+	}
+}
+
+function inferCursorsIn(w: WriteEffects, body: Node, defs: LocalDefs): Symbol[] {
 	const p = createPartitions();
+	closureNames = new HashMap<Node, Symbol[]>();
+	holderNames = new HashMap<Symbol, Symbol[]>();
+	capturedLocals = [];
+	assignedInClosures = [];
+	envEscapes = false;
+	scanClosures(w, body, true, []);
 
 	// Pass 1: compute live ranges and register variables
 	liveRanges(p, body);
+	preventCaptures(p);
 
 	// Reset time for pass 2 (consistent abstractTime required)
 	p.abstractTime = 0;
@@ -924,10 +1107,7 @@ function inferCursorsIn(w: WriteEffects, body: Node): LocalDefs {
 	trav(w, p, body);
 
 	// Decision: which variables can safely be cursors?
-	const defs = callerDefsOf(w, body);
-	const chosen = computeCursorDecisions(w, p, defs);
-	for (const sym of chosen) { setFlag(sym, SymbolFlag.Cursor); }
-	return defs;
+	return computeCursorDecisions(w, p, defs);
 }
 
 // ===== Tests =====
@@ -1379,4 +1559,63 @@ test "a call passing a closure that writes through a capture ends the view" {
 test "a call to a nested function that writes the view's source through a capture ends the view" {
 	const body = inferredNamed(SETTERS + "function f(n: LinkM): int32 { const v = n.next; const own = new LinkM(); function clear(o: LinkM): void { o.next = null; n.next = null; } clear(own); return v != null ? v.v : 0; }", "f");
 	assert !isCursorNamed(body, "v");
+}
+
+const CAPTURES = LINKS + "const kept: (() => int32)[] = [];\n"
+	+ "function keep(f: () => int32): void { kept.push(f); }\n"
+	+ "function count(a: Readonly<Link[]>, f: (x: Readonly<Link>) => boolean): int32 { let n: int32 = 0; for (const x of a) if (f(x)) n += 1; return n; }\n";
+
+test "a local a called closure reads stays a cursor" {
+	const body = inferredNamed(CAPTURES + "function f(a: Readonly<Link[]>): int32 { const best = a[0]; const ok = (x: Readonly<Link>): boolean => x.v >= best.v; let n: int32 = 0; for (const x of a) if (ok(x)) n += 1; return n; }", "f");
+	assert isCursorNamed(body, "best");
+}
+
+test "a call to a local closure inside the borrow's life runs only the closure's writes" {
+	const body = inferredNamed(CAPTURES + "function f(a: Link[]): int32 { const best = a[0]; use(best.v); const get = (): int32 => best.v; use(get()); use(best.v); return 0; }", "f");
+	assert isCursorNamed(body, "best");
+}
+
+test "a local a returned closure reads is NOT cursor" {
+	const body = inferredNamed(CAPTURES + "function f(a: Link[]): () => int32 { const best = a[0]; const get = (): int32 => best.v; return get; }", "f");
+	assert !isCursorNamed(body, "best");
+}
+
+test "a local a closure reads lives until the closure's last call" {
+	const body = inferredNamed(CAPTURES + "function f(a: Link[]): int32 { const best = a[0]; const get = (): int32 => best.v; a[0] = new Link(); return get(); }", "f");
+	assert !isCursorNamed(body, "best");
+}
+
+test "a local a pushed closure reads is NOT cursor" {
+	const body = inferredNamed(CAPTURES + "function f(a: Link[]): int32 { const best = a[0]; const fs: (() => int32)[] = []; fs.push((): int32 => best.v); return fs.length; }", "f");
+	assert !isCursorNamed(body, "best");
+}
+
+test "a closure handed to a parameter its callee retains ends the cursor" {
+	const body = inferredNamed(CAPTURES + "function f(a: Link[]): int32 { const best = a[0]; keep((): int32 => best.v); return 0; }", "f");
+	assert !isCursorNamed(body, "best");
+}
+
+test "a closure handed to a parameter its callee only calls keeps the cursor" {
+	const body = inferredNamed(CAPTURES + "function f(a: Readonly<Link[]>): int32 { const best = a[0]; return count(a, (x: Readonly<Link>): boolean => x.v >= best.v); }", "f");
+	assert isCursorNamed(body, "best");
+}
+
+test "a closure handed to a std reader keeps the cursor" {
+	const body = inferredNamed(CAPTURES + "function f(a: Link[], b: Link[]): int32 { const best = a[0]; return b.filter((x: Link): boolean => x.v >= best.v).length; }", "f");
+	assert isCursorNamed(body, "best");
+}
+
+test "a local a closure assigns is NOT cursor" {
+	const body = inferredNamed(CAPTURES + "function f(a: Link[]): int32 { let best = a[0]; const pick = (): void => { best = a[1]; }; return best.v; }", "f");
+	assert !isCursorNamed(body, "best");
+}
+
+test "a closure a nested closure returns ends the cursor of the env it reads" {
+	const body = inferredNamed(CAPTURES + "function f(a: Link[]): int32 { const best = a[0]; const mk = (): (() => int32) => { const g = (): int32 => best.v; return g; }; const h = mk(); return h(); }", "f");
+	assert !isCursorNamed(body, "best");
+}
+
+test "a closure named inside another closure ends the cursor" {
+	const body = inferredNamed(CAPTURES + "function f(a: Link[]): int32 { const best = a[0]; const get = (): int32 => best.v; const twice = (): int32 => get() + get(); return twice(); }", "f");
+	assert !isCursorNamed(body, "best");
 }
