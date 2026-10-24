@@ -8,9 +8,11 @@
 //     while (i < max) {              let i;
 //         yield i;           →       return { next: function() {
 //         i = i + 1;                     while (true) {
-//     }                                      if ($state === 0) { i = 0; $state = 1; }
-// }                                          else if ($state === 1) { ... }
-//                                            else { return { value: null, done: true }; }
+//     }                                      switch ($state) {
+// }                                          case 0: i = 0; $state = 1; break;
+//                                            case 1: ...
+//                                            default: return { value: null, done: true };
+//                                            }
 //                                        }
 //                                    }};
 //                                }
@@ -22,7 +24,7 @@ import {
 	SwitchStmtData, SwitchCaseData, BreakStmtData, ContinueStmtData,
 	ExprStmtData, TryCatchStmtData, YieldExprData, BinaryExprData,
 	ExportDeclData, ClassDeclData, MethodDeclData, DecoratedDeclData, Type, TypeKind,
-	IdentifierData, Symbol, SymbolKind, HiddenDerefData, HiddenStdConvData, MemberExprData, ArrayAccessData, TypeAssertionData,
+	IdentifierData, NumberLiteralData, Symbol, SymbolKind, HiddenDerefData, HiddenStdConvData, MemberExprData, ArrayAccessData, TypeAssertionData,
 	isEmptyBlock, makeLoc,
 } from "../../ast/node";
 import { isScopeBoundary } from "../../ast/shape";
@@ -1054,27 +1056,201 @@ export function convertDeclsToAssigns(stmts: Node[], lifted: SymSet, loc: Source
 				init.nodeType = stmt.nodeType;
 			}
 			stmts[i] = makeExprStmt(makeAssign(lhs, init, loc), loc);
+		} else {
+			convertNestedDeclsToAssigns(stmt, lifted, loc);
 		}
 	}
+}
+
+function convertNestedDeclsToAssigns(node: Node, lifted: SymSet, loc: SourceLocation): void {
+	if (node == null || isFnBoundary(node)) return;
+	match (node.kind) {
+		NodeKind.BlockStmt => {
+			convertDeclsToAssigns((node.data as BlockStmtData).statements, lifted, loc);
+		},
+		NodeKind.SwitchCase => {
+			convertDeclsToAssigns((node.data as SwitchCaseData).caseStmts, lifted, loc);
+		},
+		_ => {
+			forEachChild(node, (c: Node): void => { convertNestedDeclsToAssigns(c, lifted, loc); });
+		},
+	}
+}
+
+type StateAssignVisitor = (lit: Node, beforeReturn: boolean) => void;
+
+function stateAssignLit(stmt: Node, stateSym: Symbol): Node | null {
+	if (stmt.kind != NodeKind.ExprStmt) return null;
+	const e = (stmt.data as ExprStmtData).expr;
+	if (e.kind != NodeKind.BinaryExpr) return null;
+	const bd = e.data as BinaryExprData;
+	if (bd.operator != "=" || bd.left.resolvedSym != stateSym) return null;
+	if (bd.right.kind != NodeKind.NumberLiteral) return null;
+	return bd.right;
+}
+
+function litState(lit: Node): number {
+	return (lit.data as NumberLiteralData).value;
+}
+
+function setLitState(lit: Node, state: number): void {
+	const d = lit.data as NumberLiteralData;
+	d.value = state;
+	d.intVal = state as int64;
+}
+
+function eachStateAssign(list: Node[], stateSym: Symbol, f: StateAssignVisitor): void {
+	for (let i = 0; i < list.length; i += 1) {
+		const lit = stateAssignLit(list[i], stateSym);
+		if (lit != null) {
+			f(lit, i + 1 < list.length && list[i + 1].kind == NodeKind.ReturnStmt);
+		} else {
+			eachNestedStateAssign(list[i], stateSym, f);
+		}
+	}
+}
+
+function eachNestedStateAssign(node: Node, stateSym: Symbol, f: StateAssignVisitor): void {
+	if (node == null || isFnBoundary(node)) return;
+	match (node.kind) {
+		NodeKind.BlockStmt => {
+			eachStateAssign((node.data as BlockStmtData).statements, stateSym, f);
+		},
+		NodeKind.SwitchCase => {
+			eachStateAssign((node.data as SwitchCaseData).caseStmts, stateSym, f);
+		},
+		_ => {
+			if (stateAssignLit(node, stateSym) != null) {
+				throw new Error("internal: a state assignment outside a statement list");
+			}
+			forEachChild(node, (c: Node): void => { eachNestedStateAssign(c, stateSym, f); });
+		},
+	}
+}
+
+function skipTarget(sc: StateCollector, state: number): number {
+	let to = state;
+	for (let steps = 0; steps < sc.items.length; steps += 1) {
+		if (to <= 0) return to;
+		const body = sc.items[to].stmts;
+		const lit = body.length == 1 ? stateAssignLit(body[0], sc.stateSym) : null;
+		if (lit == null) return to;
+		to = litState(lit);
+	}
+	return state;
+}
+
+function remapStates(sc: StateCollector, map: (state: number) => number): void {
+	for (const st of sc.items) {
+		eachStateAssign(st.stmts, sc.stateSym, (lit: Node, beforeReturn: boolean): void => {
+			if (litState(lit) >= 0) setLitState(lit, map(litState(lit)));
+		});
+		if (st.excLanding >= 0) st.excLanding = map(st.excLanding);
+		if (st.nextState >= 0) st.nextState = map(st.nextState);
+	}
+}
+
+function inlineStates(list: Node[], sc: StateCollector, inline: boolean[]): Node[] {
+	const out: Node[] = [];
+	for (const stmt of list) {
+		const lit = stateAssignLit(stmt, sc.stateSym);
+		if (lit != null && litState(lit) >= 0 && inline[litState(lit)]) {
+			for (const s of inlineStates(sc.items[litState(lit)].stmts, sc, inline)) out.push(s);
+		} else {
+			if (lit == null) inlineNestedStates(stmt, sc, inline);
+			out.push(stmt);
+		}
+	}
+	return out;
+}
+
+function inlineNestedStates(node: Node, sc: StateCollector, inline: boolean[]): void {
+	if (node == null || isFnBoundary(node)) return;
+	match (node.kind) {
+		NodeKind.BlockStmt => {
+			const bd = node.data as BlockStmtData;
+			bd.statements = inlineStates(bd.statements, sc, inline);
+		},
+		NodeKind.SwitchCase => {
+			const cd = node.data as SwitchCaseData;
+			cd.caseStmts = inlineStates(cd.caseStmts, sc, inline);
+		},
+		_ => { forEachChild(node, (c: Node): void => { inlineNestedStates(c, sc, inline); }); },
+	}
+}
+
+export function optimizeStates(sc: StateCollector): void {
+	const n = sc.items.length;
+	const skipped: boolean[] = [];
+	for (let i = 0; i < n; i += 1) skipped.push(i != 0 && skipTarget(sc, i) != i);
+	remapStates(sc, (state: number): number => skipTarget(sc, state));
+	const pinned: boolean[] = [];
+	const refs: int32[] = [];
+	const host: number[] = [];
+	for (let i = 0; i < n; i += 1) {
+		pinned.push(i == 0);
+		refs.push(0);
+		host.push(-1);
+	}
+	for (const st of sc.items) {
+		if (skipped[st.index]) continue;
+		if (st.excLanding >= 0) pinned[st.excLanding] = true;
+		if (st.nextState >= 0) pinned[st.nextState] = true;
+		eachStateAssign(st.stmts, sc.stateSym, (lit: Node, beforeReturn: boolean): void => {
+			const to = litState(lit);
+			if (to < 0) return;
+			if (beforeReturn) pinned[to] = true;
+			refs[to] += 1;
+			host[to] = st.index;
+		});
+	}
+	const inline: boolean[] = [];
+	for (let i = 0; i < n; i += 1) {
+		const once = !pinned[i] && refs[i] == 1 && host[i] != i;
+		inline.push(once && sc.items[host[i]].excLanding == sc.items[i].excLanding);
+	}
+	for (let i = 0; i < n; i += 1) {
+		let h = host[i];
+		for (let steps = 0; inline[i] && h >= 0 && steps < n; steps += 1) {
+			if (h == i) inline[i] = false;
+			h = inline[h] ? host[h] : -1;
+		}
+	}
+	for (let i = 0; i < n; i += 1) {
+		if (!inline[i]) sc.items[i].stmts = inlineStates(sc.items[i].stmts, sc, inline);
+	}
+	const live: boolean[] = [];
+	for (let i = 0; i < n; i += 1) live.push(i == 0);
+	for (const st of sc.items) {
+		eachStateAssign(st.stmts, sc.stateSym, (lit: Node, beforeReturn: boolean): void => {
+			if (litState(lit) >= 0) live[litState(lit)] = true;
+		});
+		if (st.excLanding >= 0) live[st.excLanding] = true;
+	}
+	const renumber: number[] = [];
+	const kept: GenState[] = [];
+	for (let i = 0; i < n; i += 1) {
+		const keep = live[i] && !inline[i];
+		renumber.push(keep ? kept.length : -1);
+		if (keep) kept.push(sc.items[i]);
+	}
+	sc.items = kept;
+	remapStates(sc, (state: number): number => {
+		if (renumber[state] < 0) {
+			throw new Error(`internal: state ${state} is still reached after it was removed`);
+		}
+		return renumber[state];
+	});
+	for (let i = 0; i < kept.length; i += 1) kept[i].index = i;
 }
 
 // ===== State Machine Builder =====
 
 function buildStateDispatch(sc: StateCollector, loc: SourceLocation, resultType: Type | null): Node {
-	// Default (terminal) state: return { value: null, done: true }
-	let current: Node = makeBlock([makeReturn(makeDoneResult(loc, resultType), loc)], loc);
-
-	// Build if-else chain from last state to first
-	for (let i = sc.items.length - 1; i >= 0; i -= 1) {
-		const stateIdx = sc.items[i].index;
-		const cond = makeBinary(
-			makeTypedIdentResolved(sc.stateSym, null, loc), "===",
-			makeNumber(stateIdx, loc), loc,
-		);
-		const body = makeBlock(sc.items[i].stmts, loc);
-		current = makeIf(cond, body, current, loc);
-	}
-	return current;
+	const cases: Node[] = [];
+	for (const st of sc.items) cases.push(makeSwitchCase([makeNumber(st.index, loc)], st.stmts, false, loc));
+	cases.push(makeSwitchCase([], [makeReturn(makeDoneResult(loc, resultType), loc)], true, loc));
+	return makeSwitch(makeTypedIdentResolved(sc.stateSym, int32Type(), loc), cases, loc);
 }
 
 // ===== Generator Function Transform =====
@@ -1126,6 +1302,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	const doneState = -1;  // terminal
 
 	splitStmts(bodyStmts, sc, initState, doneState, loc, iterResultType);
+	optimizeStates(sc);
 
 	// 5. Convert the declarations of the locals that outlive a state to assignments
 	const spanning = localsSpanningStates(sc, locals);
@@ -1136,7 +1313,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 		convertDeclsToAssigns(st.stmts, lifted, loc);
 	}
 
-	// 6. Build the state dispatch (if-else chain)
+	// 6. Build the state dispatch (a switch on $state)
 	const dispatch = buildStateDispatch(sc, loc, iterResultType);
 
 	// 6b. If any state has an exception landing (a try with a yield inside),
@@ -1177,7 +1354,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	// 11. Build new function body:
 	//   let $state = 0;
 	//   let local1; let local2; ...
-	//   return { next: function() { while(true) { if-else dispatch } } };
+	//   return { next: function() { while(true) { switch dispatch } } };
 	const newBodyStmts: Node[] = [];
 	const stateDecl = makeVarDecl("$state", makeNumber(0, loc), DeclKind.Let, loc);
 	stateDecl.resolvedSym = stateSym;
@@ -1375,4 +1552,42 @@ test "a generator's state and current-exception variables are minted with their 
 	const excs = hoistedDeclsOf(src, "$curExc");
 	assert states.length == 1 && excs.length == 1;
 	assert states[0].resolvedSym.item > 0 && excs[0].resolvedSym.item > 0;
+}
+
+function stateCases(node: Node): int32 {
+	if (node.kind == NodeKind.SwitchStmt) {
+		const sd = node.data as SwitchStmtData;
+		if (sd.switchDisc.resolvedSym != null && sd.switchDisc.resolvedSym.name == "$state") return (sd.switchCases.length - 1) as int32;
+	}
+	let found: int32 = -1;
+	forEachChild(node, (c: Node): void => {
+		if (found < 0) found = stateCases(c);
+	});
+	return found;
+}
+
+function stateCasesOf(src: string): int32 {
+	const parsed = parseInput(src);
+	if (!parsed.ok) return -1 as int32;
+	checkProgram(parsed.value);
+	lowerGenerator(parsed.value, makeCtx());
+	return stateCases(parsed.value);
+}
+
+function declsNamed(node: Node, name: string): int32 {
+	let count: int32 = node.kind == NodeKind.VariableDecl && node.resolvedSym != null && node.resolvedSym.name == name ? 1 : 0;
+	forEachChild(node, (c: Node): void => { count += declsNamed(c, name); });
+	return count;
+}
+
+test "a local declared in a state run in place of its jump is still hoisted once" {
+	const parsed = parseInput("function* g(n: int32): Iterator<int32> { let i: int32 = 0; while (i < n) { const x: int32 = i * 2; yield x; yield x; i += 1; } }");
+	assert parsed.ok;
+	checkProgram(parsed.value);
+	lowerGenerator(parsed.value, makeCtx());
+	assert declsNamed(parsed.value, "x") == 1;
+}
+
+test "a state reached by one jump runs in place of the jump" {
+	assert stateCasesOf("function* g(n: int32): Iterator<int32> { let i: int32 = 0; while (i < n) { yield i; i += 1; } }") == 3;
 }
