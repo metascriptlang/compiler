@@ -3,7 +3,7 @@
 // Flow:
 //   1. fetch(archiveUrl) → raw zip bytes
 //   2. sha256(bytes) == lockfile.integrity → verified
-//   3. write to cache/download/<name>/<version>.zip
+//   3. write to cache/download/registry/<name>/<version>.zip
 //   4. extract to cache/extracted/<name>@<version>.partial/, then rename it to
 //      cache/extracted/<name>@<version>/ (the rename is the commit)
 //   5. every extracted file is chmod 0444
