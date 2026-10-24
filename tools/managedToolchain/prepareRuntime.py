@@ -58,6 +58,51 @@ REMOVED_DISABLED_FEATURES = [{
     "sources": LLVM_X86_SOURCES,
 } for target in ("x86_64-linux-gnu.2.31", "x86_64-windows-gnu")]
 
+
+def llvmSource(version, path, line=None):
+    """A pinned LLVM source URL; without a line it names the whole file, for a definition the version lacks."""
+    return "https://github.com/llvm/llvm-project/blob/llvmorg-%s/llvm/%s%s" % (
+        version, path, "#L%d" % line if line else "")
+
+
+def aarch64Source(version, name, line=None):
+    return llvmSource(version, "lib/Target/AArch64/" + name, line)
+
+
+AARCH64_GENERIC = [aarch64Source("21.1.0", "AArch64Processors.td", 1127), aarch64Source("21.1.0", "AArch64Processors.td", 1138),
+                   aarch64Source("22.1.1", "AArch64Processors.td", 1388), aarch64Source("22.1.1", "AArch64Processors.td", 1399)]
+FIELD_DEFAULT = [llvmSource("21.1.0", "utils/TableGen/SubtargetEmitter.cpp", 159),
+                 llvmSource("22.1.1", "utils/TableGen/SubtargetEmitter.cpp", 172)]
+
+REMOVED_DISABLED_FEATURES += [{
+    "feature": feature, "zig": "0.16.0", "engineMajor": "22", "target": "aarch64-windows-gnu", "cpu": "generic",
+    "absentMacroPrefix": macro, "reason": reason, "sources": sources + AARCH64_GENERIC,
+} for feature, macro, reason, sources in (
+    ("-no-zcz-fp", None,
+     "LLVM 22 renames no-zcz-fp (HasZeroCycleZeroingFP) to no-zcz-fpr64 (HasZeroCycleZeroingFPR64); a disabled "
+     "feature leaves its field at the generated default, true for both, and emitFMov0 emits movi d in both",
+     [aarch64Source("21.1.0", "AArch64Features.td", 637), aarch64Source("22.1.1", "AArch64Features.td", 700),
+      aarch64Source("21.1.0", "AArch64AsmPrinter.cpp", 1829), aarch64Source("22.1.1", "AArch64AsmPrinter.cpp", 1922)]
+     + FIELD_DEFAULT),
+    ("-tme", "__ARM_FEATURE_TME",
+     "defined in LLVM 21 and without a definition in LLVM 22; generic enables no TME, so ignoring the disabled "
+     "feature leaves the same state",
+     [aarch64Source("21.1.0", "AArch64Features.td", 397), aarch64Source("22.1.1", "AArch64Features.td")]),
+    ("-zcz", None,
+     "LLVM 22 replaces the aggregate zcz (implying zcz-gp) with zcz-gpr32, zcz-gpr64 and zcz-fpr128; generic "
+     "enables none of them in either version and their fields default false",
+     [aarch64Source("21.1.0", "AArch64Features.td", 640), aarch64Source("22.1.1", "AArch64Features.td", 687),
+      aarch64Source("22.1.1", "AArch64Features.td", 690), aarch64Source("22.1.1", "AArch64Features.td", 693)]
+     + FIELD_DEFAULT),
+    ("-zcz-gp", None,
+     "LLVM 22 splits zcz-gp (HasZeroCycleZeroingGP) into zcz-gpr32 and zcz-gpr64; generic enables none, the fields "
+     "default false, and copyPhysReg zeroes through ORR in both",
+     [aarch64Source("21.1.0", "AArch64Features.td", 630), aarch64Source("22.1.1", "AArch64Features.td", 687),
+      aarch64Source("22.1.1", "AArch64Features.td", 690), aarch64Source("21.1.0", "AArch64InstrInfo.cpp", 5192),
+      aarch64Source("22.1.1", "AArch64InstrInfo.cpp", 5491), aarch64Source("22.1.1", "AArch64InstrInfo.cpp", 5536)]
+     + FIELD_DEFAULT),
+)]
+
 TARGETS = {
     "wasm32-wasi": {
         "fixture": "runtimeWasi.c", "zigLinkArgs": [], "linker": "wasm-ld", "driverFlags": [],
@@ -627,7 +672,7 @@ def verifyConfigs(engine, runtime, engineRelative, records, work):
     run = lambda command: subprocess.run(command, env=environment, stdout=subprocess.PIPE,
                                          stderr=subprocess.PIPE, universal_newlines=True)
     for record in records:
-        prefixes = [e["absentMacroPrefix"] for e in record["cpuFeaturesNotCarried"]]
+        prefixes = [e["absentMacroPrefix"] for e in record["cpuFeaturesNotCarried"] if e["absentMacroPrefix"]]
         checkConfig(run, os.path.join(link, "bin", "clang"),
                     ["--config", os.path.join(copy, record["target"] + ".cfg")],
                     record["target"], work, prefixes,
@@ -707,7 +752,7 @@ def prove(engine, runtime, denied, zig=None, targets=None):
         recorded = next(r for r in receipt["targets"] if r["target"] == target)
         if "libraryAliases" not in recorded:
             raise pe.EngineError("%s receipt records no libraryAliases; prepare the runtime again" % target)
-        prefixes = [e["absentMacroPrefix"] for e in recorded["cpuFeaturesNotCarried"]]
+        prefixes = [e["absentMacroPrefix"] for e in recorded["cpuFeaturesNotCarried"] if e["absentMacroPrefix"]]
         if "emptyArchives" not in recorded:
             raise pe.EngineError("%s receipt records no emptyArchives; prepare the runtime again" % target)
         verifyLibraryAliases(os.path.join(movedRuntime, target), recorded["libraryAliases"])

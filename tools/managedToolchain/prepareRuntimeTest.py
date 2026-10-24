@@ -180,8 +180,10 @@ class FeatureTranslationTest(unittest.TestCase):
     def test_every_translation_names_its_sources_and_the_macro_that_must_stay_absent(self):
         for entry in pr.REMOVED_DISABLED_FEATURES:
             self.assertTrue(entry["feature"].startswith("-"))
-            self.assertTrue(entry["absentMacroPrefix"])
-            self.assertEqual(len(entry["sources"]), 2)
+            self.assertTrue(entry["absentMacroPrefix"] or entry["target"] == "aarch64-windows-gnu")
+            self.assertGreaterEqual(len(entry["sources"]), 2)
+            for source in entry["sources"]:
+                self.assertRegex(source, r"^https://(raw\.githubusercontent|github)\.com/llvm/llvm-project/(blob/)?llvmorg-2[12]\.\d+\.\d+/")
 
 
 class ConfigCheckTest(TempCase):
