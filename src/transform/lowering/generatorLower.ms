@@ -55,7 +55,7 @@ export interface GenState {
 	stmts: Node[];
 	yieldVarSym: Symbol | null;  // binding assigned from yield (for async resume)
 	yieldVarType: Type | null;     // type of the variable (for unboxing msFutureRead)
-	excLanding: number;     // reference exceptionTable[i]: state to jump to if this state raises (-1 = propagate)
+	excLanding: number;     // reference exceptionTable[i]: state to jump to if this state raises (-1 = not yet marked, RAISES_OUT = past every try)
 }
 
 // Active while-with-yield scope. break/continue inside the body must
@@ -76,14 +76,17 @@ export interface LoopFrame {
 export interface FinallyFrame {
 	stmts: Node[];
 	loopDepth: number;
-	hasYield: boolean;
+	landingDepth: number;
 }
+
+const RAISES_OUT: number = -2;
 
 export interface StateCollector {
 	items: GenState[];
 	loopStack: LoopFrame[];
 	excType: Type | null;   // exception type carried by $curExc (from a catch's nodeType)
 	finallyStack: FinallyFrame[];
+	landings: number[];
 	stateSym: Symbol;
 	curExcSym: Symbol;
 	genReturns?: boolean;
@@ -282,6 +285,12 @@ function finallyPrefix(frames: FinallyFrame[], n: number): FinallyFrame[] {
 	return out;
 }
 
+function landingPrefix(landings: number[], n: number): number[] {
+	const out: number[] = [];
+	for (let i = 0; i < n; i += 1) out.push(landings[i]);
+	return out;
+}
+
 function lookupDeclIdx(syms: Symbol[], sym: Symbol): int32 {
 	let i = 0;
 	while (i < syms.length) {
@@ -362,25 +371,11 @@ function jumpExit(stmt: Node, sc: StateCollector, frameIdx: number, loc: SourceL
 	return [makeStateAssign(frame.continueState, loc, sc.stateSym)];
 }
 
-function crossesYieldFinally(sc: StateCollector, frameIdx: number): boolean {
+function crossesFinally(sc: StateCollector, frameIdx: number): boolean {
 	for (const f of sc.finallyStack) {
-		if (f.loopDepth > frameIdx && f.hasYield) return true;
+		if (f.loopDepth > frameIdx) return true;
 	}
 	return false;
-}
-
-function inlineCrossedFinallies(sc: StateCollector, frameIdx: number, out: Node[], loc: SourceLocation): void {
-	const loops = sc.loopStack;
-	const fins = sc.finallyStack;
-	for (let f = fins.length - 1; f >= 0; f -= 1) {
-		if (fins[f].loopDepth > frameIdx) {
-			sc.loopStack = loopPrefix(loops, fins[f].loopDepth);
-			sc.finallyStack = finallyPrefix(fins, f);
-			for (const s of fins[f].stmts) out.push(rewriteJumps(cloneNodeKeepSem(s), sc, false, false, loc));
-		}
-	}
-	sc.loopStack = loops;
-	sc.finallyStack = fins;
 }
 
 // The emitted `continue` must reach the state dispatcher: a jump nested in a C
@@ -389,18 +384,12 @@ function rewriteJumps(node: Node, sc: StateCollector, capBreak: boolean, capCont
 	if (node == null || isScopeBoundary(node)) return node;
 	if (node.kind == NodeKind.ReturnStmt) {
 		if (sc.genReturns != true) return node;
-		const out: Node[] = [];
-		inlineCrossedFinallies(sc, -1, out, loc);
-		for (const s of jumpExit(node, sc, -1, loc)) out.push(s);
-		return makeBlock(out, loc);
+		return makeBlock(jumpExit(node, sc, -1, loc), loc);
 	}
 	if (node.kind == NodeKind.BreakStmt || node.kind == NodeKind.ContinueStmt) {
 		const idx = jumpFrame(sc, node, capBreak, capContinue);
 		if (idx < 0) return node;
-		const exits = jumpExit(node, sc, idx, loc);
-		const out: Node[] = [];
-		inlineCrossedFinallies(sc, idx, out, loc);
-		for (const s of exits) out.push(s);
+		const out = jumpExit(node, sc, idx, loc);
 		out.push(makeContinue(loc));
 		return makeBlock(out, loc);
 	}
@@ -421,10 +410,10 @@ function rewriteJumps(node: Node, sc: StateCollector, capBreak: boolean, capCont
 
 function hasEscapingJump(node: Node, sc: StateCollector, capBreak: boolean, capContinue: boolean, inCLoop: boolean): boolean {
 	if (node == null || isScopeBoundary(node)) return false;
-	if (node.kind == NodeKind.ReturnStmt) return sc.genReturns == true && crossesYieldFinally(sc, -1);
+	if (node.kind == NodeKind.ReturnStmt) return sc.genReturns == true && crossesFinally(sc, -1);
 	if (node.kind == NodeKind.BreakStmt || node.kind == NodeKind.ContinueStmt) {
 		const idx = jumpFrame(sc, node, capBreak, capContinue);
-		return idx >= 0 && (inCLoop || crossesYieldFinally(sc, idx));
+		return idx >= 0 && (inCLoop || crossesFinally(sc, idx));
 	}
 	let cb = capBreak;
 	let cc = capContinue;
@@ -497,16 +486,25 @@ function splitJump(stmt: Node, sc: StateCollector, currentState: number, loc: So
 	const exits = jumpExit(stmt, sc, frameIdx, loc);
 	const loops = sc.loopStack;
 	const fins = sc.finallyStack;
+	const landings = sc.landings;
 	let cur = currentState;
 	for (let f = fins.length - 1; f >= 0; f -= 1) {
 		if (fins[f].loopDepth > frameIdx) {
 			sc.loopStack = loopPrefix(loops, fins[f].loopDepth);
 			sc.finallyStack = finallyPrefix(fins, f);
-			cur = emitInline(cloneStmts(fins[f].stmts), sc, cur, loc, resultType);
+			sc.landings = landingPrefix(landings, fins[f].landingDepth);
+			const finSt = allocState(sc);
+			sc.items[cur].stmts.push(makeStateAssign(finSt, loc, sc.stateSym));
+			cur = emitInline(cloneStmts(fins[f].stmts), sc, finSt, loc, resultType);
+			const outside = fins[f].landingDepth > 0 ? landings[fins[f].landingDepth - 1] : RAISES_OUT;
+			for (let s = finSt; s < sc.items.length; s += 1) {
+				if (sc.items[s].excLanding == -1) sc.items[s].excLanding = outside;
+			}
 		}
 	}
 	sc.loopStack = loops;
 	sc.finallyStack = fins;
+	sc.landings = landings;
 	for (const s of exits) sc.items[cur].stmts.push(s);
 }
 
@@ -704,11 +702,13 @@ function splitTryCatch(node: Node, sc: StateCollector, currentState: number, aft
 	const tryExit = allocState(sc);
 	sc.items[currentState].stmts.push(makeStateAssign(tryStart, loc, sc.stateSym));
 
+	sc.landings.push(catchSt);
 	splitStmts(extractBodyStmts(td.tryBody), sc, tryStart, tryExit, loc, resultType);
+	sc.landings.pop();
 	// exceptionTable: every state produced for the try body lands on the catch.
-	// Guard `excLanding < 0` so a nested inner try keeps its own (already-set) catch.
+	// Guard `excLanding == -1` so a nested inner try keeps its own (already-set) catch.
 	for (let s = tryStart; s < sc.items.length; s += 1) {
-		if (sc.items[s].excLanding < 0) sc.items[s].excLanding = catchSt;
+		if (sc.items[s].excLanding == -1) sc.items[s].excLanding = catchSt;
 	}
 	sc.items[tryExit].stmts.push(makeStateAssign(afterSt, loc, sc.stateSym));
 
@@ -779,14 +779,16 @@ function splitTryFinally(node: Node, sc: StateCollector, currentState: number, a
 	const tryStart = allocState(sc);
 	const tryExit = allocState(sc);
 	sc.items[currentState].stmts.push(makeStateAssign(tryStart, loc, sc.stateSym));
-	const frame: FinallyFrame = { stmts: extractBodyStmts(td.finallyBody), loopDepth: sc.loopStack.length, hasYield: containsYield(td.finallyBody) };
+	const frame: FinallyFrame = { stmts: extractBodyStmts(td.finallyBody), loopDepth: sc.loopStack.length, landingDepth: sc.landings.length };
 	sc.finallyStack.push(frame);
 
 	if (!td.hasCatchClause) {
 		const finReraise = allocState(sc);
+		sc.landings.push(finReraise);
 		splitStmts(extractBodyStmts(td.tryBody), sc, tryStart, tryExit, loc, resultType);
+		sc.landings.pop();
 		for (let s = tryStart; s < sc.items.length; s += 1) {
-			if (s != finReraise && sc.items[s].excLanding < 0) sc.items[s].excLanding = finReraise;
+			if (s != finReraise && sc.items[s].excLanding == -1) sc.items[s].excLanding = finReraise;
 		}
 		sc.finallyStack.pop();
 		appendReraiseFinally(sc, finReraise, frame, loc, resultType);
@@ -797,9 +799,11 @@ function splitTryFinally(node: Node, sc: StateCollector, currentState: number, a
 		// catch from landing on itself (splitTryCatch avoids this by allocating
 		// catchSt first; here the two mark loops below cover both orders).
 		const catchSt = allocState(sc);
+		sc.landings.push(catchSt);
 		splitStmts(extractBodyStmts(td.tryBody), sc, tryStart, tryExit, loc, resultType);
+		sc.landings.pop();
 		for (let s = tryStart; s < sc.items.length; s += 1) {
-			if (s != catchSt && sc.items[s].excLanding < 0) sc.items[s].excLanding = catchSt;
+			if (s != catchSt && sc.items[s].excLanding == -1) sc.items[s].excLanding = catchSt;
 		}
 		sc.finallyStack.pop();
 		const finNormalStart = sc.items.length;
@@ -809,13 +813,15 @@ function splitTryFinally(node: Node, sc: StateCollector, currentState: number, a
 		const catchExit = allocState(sc);
 		const finReraise = allocState(sc);
 		bindCatchToCurExc(node, sc);
+		sc.landings.push(finReraise);
 		splitStmts(extractBodyStmts(td.catchBody), sc, catchSt, catchExit, loc, resultType);
+		sc.landings.pop();
 		// The normal-exit finally states stay landing-free (single finally run);
 		// everything else in the catch range — catchSt itself, catchExit's entry
 		// read included — runs the finally then re-raises.
 		for (let s = catchSt; s < sc.items.length; s += 1) {
 			const inFinNormal = s >= finNormalStart && s < finNormalEnd;
-			if (s != finReraise && !inFinNormal && sc.items[s].excLanding < 0) sc.items[s].excLanding = finReraise;
+			if (s != finReraise && !inFinNormal && sc.items[s].excLanding == -1) sc.items[s].excLanding = finReraise;
 		}
 		sc.finallyStack.pop();
 		appendReraiseFinally(sc, finReraise, frame, loc, resultType);
@@ -1048,7 +1054,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	const curExcSym = newLoweredSym(ctx, SymbolKind.Variable, "$curExc", null as unknown as Type, true);
 
 	// 4. Split at yield points
-	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [], stateSym, curExcSym, genReturns: true, genResultType: iterResultType };
+	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [], landings: [], stateSym, curExcSym, genReturns: true, genResultType: iterResultType };
 	const initState = allocState(sc);
 	const doneState = -1;  // terminal
 
