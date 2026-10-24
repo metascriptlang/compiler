@@ -45,3 +45,31 @@ console.log(r.length);
 		}
 	}
 }
+
+test "a union-of-literals field is a string with string hooks in a struct that has no other string" {
+	const result = compileToC(`
+type Fmt = "a" | "b";
+struct Slot { k: Fmt; n: int32; }
+struct Outer { slot: Slot; tag: int32; }
+function dup(o: Outer): Outer { const t = o; return t; }
+function run(): int32 { const grid: Slot[2] = [{ k: "a", n: 1 }, { k: "b", n: 2 }]; return dup({ slot: grid[0], tag: 1 }).tag; }
+console.log(run());
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	assert result.value.contains("msStringDecref((*self).k);"), "owner destroy releases the union field";
+	assert result.value.contains("msStringCopy((&((*dest).k)), (*src).k);"), "owner copy retains the union field";
+	assert result.value.contains("Destroy((&((*self).slot)));"), "a struct in a struct runs the field's hooks";
+	assert result.value.contains("Destroy((&(grid_1_)));"), "a sized array of the struct is destroyed with its owner";
+}
+
+test "a literal member beside null or another type makes its owner a string owner too" {
+	for (const field of ["\"a\" | \"b\" | null", "\"a\" | \"b\" | int32", "\"a\""]) {
+		const result = compileToC(`
+struct Slot { k: ${field}; n: int32; }
+function dup(s: Slot): Slot { const t = s; return t; }
+console.log(dup({ k: "a", n: 1 }).n);
+`);
+		assert result.ok, result.ok ? "" : result.error;
+		assert result.value.contains("Copy((&(dollarborrow_"), field + " copy hook";
+	}
+}
