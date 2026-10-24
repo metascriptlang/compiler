@@ -336,11 +336,13 @@ void msStringSetLength(msString* s, int64_t newLen) {
 
 /* ===== Comparison ===== */
 
-bool msStringEquals(msString a, msString b) {
-	if (a.len != b.len) return false;
-	if (a.len == 0) return true;
-	if (a.p == b.p) return true;
-	return memcmp(a.p->data, b.p->data, a.len) == 0;
+int32_t msStringHash(msString s) {
+	unsigned int h = 5381;
+	const char* data = (s.p != NULL) ? s.p->data : "";
+	for (int64_t i = 0; i < s.len; i++) {
+		h = (h * 33 + (unsigned char)data[i]);
+	}
+	return (int32_t)h;
 }
 
 int msStringCompareBytes(msString a, msString b) {

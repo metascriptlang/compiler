@@ -106,14 +106,7 @@ static inline bool msStringIsEmpty(msString s) {
 
 /* DJB2 hash — used by match lowering for string switch optimization.
  * Must match the compile-time djb2Hash in matchLower.ms. */
-static inline int32_t msStringHash(msString s) {
-	unsigned int h = 5381;
-	const char* data = (s.p != NULL) ? s.p->data : "";
-	for (int64_t i = 0; i < s.len; i++) {
-		h = (h * 33 + (unsigned char)data[i]);
-	}
-	return (int32_t)h;
-}
+int32_t msStringHash(msString s);
 
 /* `.length` is int32 on every backend, so no string, array or buffer grows past
    it: the allocation sites refuse a larger count instead of wrapping the length. */
@@ -222,7 +215,12 @@ static inline void msStringAppendChar(msString* dest, char c) {
 /* ===== Comparison ===== */
 
 /* Byte-equal comparison */
-bool msStringEquals(msString a, msString b);
+static inline bool msStringEquals(msString a, msString b) {
+	if (a.len != b.len) return false;
+	if (a.len == 0) return true;
+	if (a.p == b.p) return true;
+	return memcmp(a.p->data, b.p->data, a.len) == 0;
+}
 
 /* Ordering in UTF-16 code units (< 0, 0, > 0) */
 int msStringCompare(msString a, msString b);
