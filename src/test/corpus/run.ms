@@ -328,6 +328,7 @@ interface Spec {
 	selftestRed: string;
 	maxRcOps: int32;
 	maxRoots: int32;
+	unknownDirectives: string[];
 }
 
 interface Cell {
@@ -493,11 +494,15 @@ function keepChosenLanes(jobs: BuildJob[]): BuildJob[] {
 }
 
 // A directive that cannot apply is a lie the runner used to keep (T9):
-// @xfail naming an impossible lane fails loud. @skip-js applies to every
+// @xfail naming an impossible lane fails loud, and so does a `// @` line the runner does not parse. @skip-js applies to every
 // program — @maxrss ones included, since they get a js cell alongside the
 // RSS cells (2026-09-01 audit) — so it is never inert anymore.
 function validateDirectives(specs: Spec[], t: Tally): void {
 	for (const spec of specs) {
+		for (const line of spec.unknownDirectives) {
+			progressRed("  ✗ " + spec.name + " [directives] — unknown directive '" + line + "': the runner would ignore it");
+			t.fails = t.fails + 1;
+		}
 		const lanes = laneUniverse(spec);
 		for (const lane of spec.xfailLanes) {
 			if (!listHas(lanes, lane)) {
@@ -516,6 +521,22 @@ function directiveValue(line: string, key: string): string {
 	return "";
 }
 
+const VALUE_DIRECTIVES = ["@maxrss:", "@stdout:", "@maxrcops:", "@maxroots:", "@exit:"];
+const LANE_DIRECTIVES = ["@xfail(", "@ledger-slack(", "@maxatomics("];
+const FLAG_DIRECTIVES = ["@serial", "@skip-js", "@skip-raiser", "@selftest-red"];
+
+function knownDirective(line: string): boolean {
+	const body = line.slice(3, line.length);
+	for (const d of VALUE_DIRECTIVES) { if (body.indexOf(d) == 0) { return true; } }
+	for (const d of LANE_DIRECTIVES) { if (body.indexOf(d) == 0) { return true; } }
+	for (const d of FLAG_DIRECTIVES) {
+		if (body.indexOf(d) != 0) { continue; }
+		const next = body.length > d.length ? body.charCodeAt(d.length) : 32;
+		if (next == 32 || next == 58) { return true; }
+	}
+	return false;
+}
+
 function parseSpec(name: string, entry: string): Spec {
 	const spec: Spec = {
 		name, entry,
@@ -523,7 +544,7 @@ function parseSpec(name: string, entry: string): Spec {
 		xfailLanes: [], serial: false, skipJs: false, skipRaiser: false,
 		slackTypes: [], slackNs: [],
 		atomicHosts: [], atomicMax: [], selftestRed: "",
-		maxRcOps: -1, maxRoots: -1,
+		maxRcOps: -1, maxRoots: -1, unknownDirectives: [],
 	};
 	const src = readFileOr(entry, "");
 	const lines = src.split("\n");
@@ -540,6 +561,7 @@ function parseSpec(name: string, entry: string): Spec {
 		if (roots != "") { spec.maxRoots = roots.parseInt() as int32; }
 		const ec = directiveValue(t, "@exit");
 		if (ec != "") { spec.expectExit = ec.parseInt() as int32; }
+		if (t.indexOf("// @") == 0 && !knownDirective(t)) { spec.unknownDirectives.push(t); }
 		if (t.indexOf("// @serial") == 0) { spec.serial = true; }
 		if (t.indexOf("// @selftest-red ") == 0) { spec.selftestRed = t.slice(17, t.length).trim(); }
 		if (t.indexOf("// @skip-js") == 0) { spec.skipJs = true; }
@@ -1289,7 +1311,7 @@ function buildWorker(jobs: Readonly<BuildJob[]>, first: int32, stride: int32): n
 }
 
 function workerCopy(j: Readonly<BuildJob>): BuildJob {
-	const spec: Spec = { ...j.spec, stdoutSubs: [...j.spec.stdoutSubs], xfailLanes: [...j.spec.xfailLanes], slackTypes: [...j.spec.slackTypes], slackNs: [...j.spec.slackNs], atomicHosts: [...j.spec.atomicHosts], atomicMax: [...j.spec.atomicMax] };
+	const spec: Spec = { ...j.spec, stdoutSubs: [...j.spec.stdoutSubs], xfailLanes: [...j.spec.xfailLanes], slackTypes: [...j.spec.slackTypes], slackNs: [...j.spec.slackNs], atomicHosts: [...j.spec.atomicHosts], atomicMax: [...j.spec.atomicMax], unknownDirectives: [...j.spec.unknownDirectives] };
 	return { spec, lane: j.lane, cmd: j.cmd, cell: { ...j.cell, spec } };
 }
 
