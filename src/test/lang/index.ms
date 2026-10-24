@@ -82,6 +82,7 @@ import "./refParamDeref";
 import "./refParamWrites";
 import "./parameterHookDemand";
 import "./arrayText";
+import "./arrayIteration";
 import "./sequentialTypeof";
 import "./cborNestedTypeIdentity";
 import "./structFieldDecorators";
