@@ -1303,7 +1303,7 @@ function parseClassMember(state: ParserState): NodeResult {
 
 	// Constructor — early return, own scope for try
 	if (current(state).kind == TokenKind.Constructor) {
-		return parseClassConstructor(state);
+		return parseClassConstructor(state, memberVisibility);
 	}
 
 	// Get/Set accessors — early return
@@ -1371,7 +1371,7 @@ function parseClassMember(state: ParserState): NodeResult {
 // parseParamList and skipDefaultValue imported from ../util
 
 
-function parseClassConstructor(state: ParserState): NodeResult {
+function parseClassConstructor(state: ParserState, visibility: string): NodeResult {
 	const ctorToken = current(state);
 	advance(state);
 	const raw = parseParamList(state, "constructor");
@@ -1387,6 +1387,7 @@ function parseClassConstructor(state: ParserState): NodeResult {
 		ctorParamTypes,
 		ctorBody: body,
 		ctorDefaults,
+		ctorVisibility: visibility,
 	}, ctorToken);
 	ctorNode.typeExprs = ctorParamTypeExprs;
 	ctorNode.paramLocations = ctorParamLocs;

@@ -115,3 +115,4 @@ import "./cases/classImplements";
 import "./cases/typeModifiers";
 import "./cases/declarationList";
 import "./cases/layoutOptions";
+import "./cases/constructorVisibility";

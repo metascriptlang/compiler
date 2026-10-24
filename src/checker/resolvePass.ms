@@ -2880,7 +2880,7 @@ function inheritConstructor(ctx: CheckerContext, node: Node, sym: Symbol, parent
 	}
 	const superCall = createNodeAt(NodeKind.CallExpr, { callee: createNodeAt(NodeKind.Identifier, { name: "super" }, loc), arguments: args, isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
 	const body = createNodeAt(NodeKind.BlockStmt, { statements: [createNodeAt(NodeKind.ExprStmt, { expr: superCall }, loc)] }, loc);
-	const ctorNode = createNodeAt(NodeKind.ConstructorDecl, { ctorParams: params, ctorParamTypes: typeTexts, ctorBody: body, ctorDefaults: [] }, loc);
+	const ctorNode = createNodeAt(NodeKind.ConstructorDecl, { ctorParams: params, ctorParamTypes: typeTexts, ctorBody: body, ctorDefaults: [], ctorVisibility: "" }, loc);
 	ctorNode.nodeType = createFunction(paramTypes, params, voidType());
 	ctorNode.paramLocations = locs;
 	d.classBody.push(ctorNode);

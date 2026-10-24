@@ -501,7 +501,7 @@ export type NodeData =
 	| { className: string, classDisplayName: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation, classImplements: string[] } // ClassDecl
 	| { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }  // PropertyDecl
 	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation } // MethodDecl
-	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[] } // ConstructorDecl
+	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[], ctorVisibility: string } // ConstructorDecl
 	// Error handling variants
 	| { throwArg: Node }                                           // ThrowStmt
 	| { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node, catchBindingLocation: SourceLocation, hasCatchClause: boolean } // TryCatchStmt
@@ -731,7 +731,7 @@ export type ClassDeclData = { className: string, classDisplayName: string, class
 export type ActorDeclData = { actorName: string, actorBody: Node[], nameLocation: SourceLocation };
 export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }; // propVisibility: "" | "public" | "private" | "protected"
 export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation };
-export type ConstructorDeclData = { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[] };
+export type ConstructorDeclData = { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[], ctorVisibility: string };
 export type ExternDeclData = { externKind: ExternKind, externName: string, nativeName: string, externType: string };
 export type MacroDeclData = { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclReturnType: string, macroDeclBody: Node };
 export type DecoratedDeclData = { decorators: Node[], decoratedNode: Node };

@@ -403,7 +403,7 @@ export function transAmHashNode(node: Node): number {
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
-			h = hStrings(h, d.ctorParams); h = hStrings(h, d.ctorParamTypes); h = hN(h, d.ctorBody);
+			h = hStrings(h, d.ctorParams); h = hStrings(h, d.ctorParamTypes); h = hN(h, d.ctorBody); h = hS(h, d.ctorVisibility);
 		},
 		NodeKind.ExternDecl => {
 			const d = node.data as ExternDeclData;

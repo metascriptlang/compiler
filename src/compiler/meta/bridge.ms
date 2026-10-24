@@ -1234,6 +1234,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStrs(objHeap, arrHeap, handle, "ctorParamTypes", d.ctorParamTypes);
 			setNode(objHeap, arrHeap, handle, "ctorBody", d.ctorBody);
 			setDefaults(objHeap, arrHeap, handle, "ctorDefaults", d.ctorDefaults, includeTypeAst);
+			setStr(objHeap, arrHeap, handle, "ctorVisibility", d.ctorVisibility);
 		},
 		NodeKind.ExternDecl => {
 			const d = node.data as ExternDeclData;
@@ -2239,6 +2240,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const ctorBody = readNode(objHeap, arrHeap, h, "ctorBody", loc);
 			return createNodeAt(NodeKind.ConstructorDecl, {
 				ctorParams, ctorParamTypes, ctorBody, ctorDefaults: readDefaults(objHeap, arrHeap, h, "ctorDefaults", loc),
+				ctorVisibility: readStr(objHeap, arrHeap, h, "ctorVisibility"),
 			}, loc);
 		},
 		NodeKind.ExternDecl => {
