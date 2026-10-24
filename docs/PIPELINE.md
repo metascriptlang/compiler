@@ -79,8 +79,7 @@ complex expressions are lowered to STATEMENTS**, rather than handled inline in t
 
 The order is the code: `transformProgram` in `src/transform/index.ms` (one list, each
 step gated by `jsBackend` where a backend needs it) and, for C only, `transformForNative` in
-`src/transform/native/index.ms`; [`TRANSFORM.md`](TRANSFORM.md) tracks it per pass. Do not copy
-the list into a doc. Order is a contract, and these edges hold in `index.ms` at `99ff1ce60`:
+`src/transform/native/index.ms`. Do not copy the list into a doc. Order is a contract, and these edges hold in `index.ms` at `99ff1ce60`:
 `for` lowers to `while` before `for-of`; `switch` and `match` lower to `if` before `async` and
 generators; `async` lowers before `generatorLower`; `generatorLower` runs before `lambdaLifting`
 (the reverse of the usual order, on purpose: the generator creates `$state` and a function
