@@ -56,25 +56,30 @@ export interface MapEntry {
 type TaReadFn = (path: string) => string;
 
 export class SourceProvider {
-	entries: MapEntry[];
+	sources: HashMap<string, string>;  // path → text, the first entry for a path
+	stdRoots: HashMap<string, string>; // directory → the nearest ancestor holding a std tree, "" for none
 	useFileSystem: boolean;
 	taReadFn: TaReadFn;  // null for map/filesystem providers; non-null for Trans-Am-backed
 	readLog: string[] | null;   // set per-call by the header-inline cache wrapper to record every probe as "<path>\t<hash>" / "<path>\t-"
 }
 
 export function createMapProvider(entries: MapEntry[]): SourceProvider {
-	return { entries, useFileSystem: false, taReadFn: null as unknown as TaReadFn, readLog: null };
+	const sources = new HashMap<string, string>();
+	for (const e of entries) {
+		if (!sources.has(e.entryPath)) sources.set(e.entryPath, e.entrySource);
+	}
+	return { sources, stdRoots: new HashMap<string, string>(), useFileSystem: false, taReadFn: null as unknown as TaReadFn, readLog: null };
 }
 
 export function createFileSystemProvider(): SourceProvider {
-	return { entries: [], useFileSystem: true, taReadFn: null as unknown as TaReadFn, readLog: null };
+	return { sources: new HashMap<string, string>(), stdRoots: new HashMap<string, string>(), useFileSystem: true, taReadFn: null as unknown as TaReadFn, readLog: null };
 }
 
 // Trans-Am-backed provider. The callback MUST load the file into Trans-Am, record a
 // FileText dependency on the current query frame, and return the raw source string.
 // Constructed by transam/index.ms:createTaSourceProvider.
 export function createTaReadProvider(readFn: TaReadFn): SourceProvider {
-	return { entries: [], useFileSystem: false, taReadFn: readFn, readLog: null };
+	return { sources: new HashMap<string, string>(), stdRoots: new HashMap<string, string>(), useFileSystem: false, taReadFn: readFn, readLog: null };
 }
 
 export function provideSource(provider: SourceProvider, path: string): Result<string, string> {
@@ -83,18 +88,16 @@ export function provideSource(provider: SourceProvider, path: string): Result<st
 		if (content.length > 0) return Result.ok(content);
 		return Result.err(`File not found: ${path}`);
 	}
-	for (const e of provider.entries) {
-		if (e.entryPath == path) {
-			if (provider.readLog != null) provider.readLog.push(`${path}\t${hashContent(e.entrySource)}`);
-			return Result.ok(e.entrySource);
-		}
+	const known = provider.sources.get(path);
+	if (known != null) {
+		if (provider.readLog != null) provider.readLog.push(`${path}\t${hashContent(known)}`);
+		return Result.ok(known);
 	}
 	if (provider.useFileSystem) {
 		const content = try readFile(path) catch "";
 		if (content.length > 0) {
 			if (provider.readLog != null) provider.readLog.push(`${path}\t${hashContent(content)}`);
-			const cached: MapEntry = { entryPath: path, entrySource: content };
-			provider.entries.push(cached);
+			provider.sources.set(path, content);
 			return Result.ok(content);
 		}
 	}
@@ -400,25 +403,35 @@ test "canonicalModulePath — two spellings of one directory share an identity" 
 
 function canonicalizeStdModule(path: string, stdPath: string, provider: SourceProvider): string {
 	if (stdPath.length == 0) return path;
-	let dir = dirname(path);
+	const root = stdRootAbove(dirname(path), provider);
+	if (root == "") return path;
+	const prefix = join(root, "std") + "/";
+	if (path.length > prefix.length && path.slice(0, prefix.length) == prefix) {
+		const subpath = path.slice(prefix.length, path.length);
+		const candidate = join(stdPath, subpath);
+		if (provideSource(provider, candidate).ok) return candidate;
+	}
+	return path;
+}
+
+function stdRootAbove(start: string, provider: SourceProvider): string {
+	const known = provider.stdRoots.get(start);
+	if (known != null) return known;
+	let root = "";
+	let dir = start;
 	let stepsUp = 0;
 	while (dir.length > 1 && stepsUp < 6) {
-		const marker = join(dir, "std/core/system/index.ms");
-		if (provideSource(provider, marker).ok) {
-			const prefix = join(dir, "std") + "/";
-			if (path.length > prefix.length && path.slice(0, prefix.length) == prefix) {
-				const subpath = path.slice(prefix.length, path.length);
-				const candidate = join(stdPath, subpath);
-				if (provideSource(provider, candidate).ok) return candidate;
-			}
-			return path;
+		if (provideSource(provider, join(dir, "std/core/system/index.ms")).ok) {
+			root = dir;
+			break;
 		}
 		const parent = dirname(dir);
-		if (parent == dir) return path;
+		if (parent == dir) break;
 		dir = parent;
 		stepsUp = stepsUp + 1;
 	}
-	return path;
+	provider.stdRoots.set(start, root);
+	return root;
 }
 
 // useConfig: 0 = bare (skip std, .ms only), 1 = full (use ResolverConfig)
