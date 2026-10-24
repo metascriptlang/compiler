@@ -3949,13 +3949,16 @@ export function peelSink(t: Type): Type {
 }
 
 export function isViewType(t: Type | null): boolean {
+	if (t != null && t.typeReturn == null && t.typeExtra == null && t.typeChildren.length == 0) return t.kind == TypeKind.Var || t.kind == TypeKind.Span || t.kind == TypeKind.Borrow;
 	return holdsView(t, new TypeVisitSet());
 }
 
 function holdsView(t: Type | null, seen: TypeVisitSet): boolean {
-	if (t == null || !typeVisitAdd(seen, t)) return false;
+	if (t == null) return false;
+	if (t.kind == TypeKind.Var || t.kind == TypeKind.Span || t.kind == TypeKind.Borrow) return true;
+	if (t.typeReturn == null && t.typeExtra == null && t.typeChildren.length == 0) return false;
+	if (!typeVisitAdd(seen, t)) return false;
 	return match (t.kind) {
-		TypeKind.Var | TypeKind.Span | TypeKind.Borrow => true,
 		TypeKind.Sink | TypeKind.Alias | TypeKind.Cursor => holdsView(t.typeReturn, seen),
 		TypeKind.Distinct | TypeKind.Array | TypeKind.SizedArray => holdsView(t.typeReturn, seen),
 		TypeKind.Ref => holdsView(t.typeReturn, seen),
@@ -3988,13 +3991,16 @@ function inferredScan(t: Type | null, seen: TypeVisitSet): boolean {
 }
 
 export function mayHoldAddress(t: Type | null): boolean {
+	if (t != null && t.typeReturn == null && t.typeExtra == null && t.typeChildren.length == 0) return t.kind == TypeKind.Var || t.kind == TypeKind.Span || t.kind == TypeKind.Borrow || t.kind == TypeKind.Ptr || t.kind == TypeKind.Lent;
 	return holdsAddress(t, new TypeVisitSet());
 }
 
 function holdsAddress(t: Type | null, seen: TypeVisitSet): boolean {
-	if (t == null || !typeVisitAdd(seen, t)) return false;
+	if (t == null) return false;
+	if (t.kind == TypeKind.Var || t.kind == TypeKind.Span || t.kind == TypeKind.Borrow || t.kind == TypeKind.Ptr || t.kind == TypeKind.Lent) return true;
+	if (t.typeReturn == null && t.typeExtra == null && t.typeChildren.length == 0) return false;
+	if (!typeVisitAdd(seen, t)) return false;
 	return match (t.kind) {
-		TypeKind.Var | TypeKind.Span | TypeKind.Borrow | TypeKind.Ptr | TypeKind.Lent => true,
 		TypeKind.Sink | TypeKind.Alias | TypeKind.Cursor | TypeKind.Distinct => holdsAddress(t.typeReturn, seen),
 		TypeKind.Array | TypeKind.SizedArray | TypeKind.Ref => holdsAddress(t.typeReturn, seen),
 		TypeKind.GenericInstance => holdsAddress(t.typeExtra, seen),
@@ -4031,6 +4037,8 @@ function typeVisitHas(seen: Cursor<Type>[], t: Type): boolean {
 	return false;
 }
 
+const TYPE_VISIT_LINEAR_MAX: int32 = 8;
+
 export class TypeVisitSet {
 	entries: Cursor<Type>[];
 	table: int32[];
@@ -4057,6 +4065,12 @@ function typeVisitGrow(visited: TypeVisitSet): void {
 }
 
 export function typeVisitAdd(visited: TypeVisitSet, t: Cursor<Type>): boolean {
+	if (visited.table.length == 0) {
+		if (typeVisitHas(visited.entries, t as unknown as Type)) return false;
+		visited.entries.push(t);
+		if (visited.entries.length > TYPE_VISIT_LINEAR_MAX) typeVisitGrow(visited);
+		return true;
+	}
 	if (visited.table.length < (visited.entries.length + 1) * 2) typeVisitGrow(visited);
 	const h = typeVisitSlot(visited, t);
 	if (visited.table[h] != 0) return false;
