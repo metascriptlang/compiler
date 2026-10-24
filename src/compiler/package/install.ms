@@ -1,9 +1,7 @@
 // msc install — ensure all dependencies are available.
 // Reads build.ms + msc.lock, verifies all entries are present in cache.
 // For file: deps, verifies the path exists.
-// A registry dep is downloaded when its cache entry is missing. A git entry, a registry entry
-// that needs a package msc.lock has no entry for, and a registry/git dep without a usable
-// msc.lock are refused: none of them is installed yet.
+// A registry dep is downloaded when its cache entry is missing.
 
 import { exists, ensureDir, removeAll, writeFile } from "std/fs";
 import { tmpDir } from "../../utils/path";
@@ -57,6 +55,20 @@ function refuseUninstallable(lock: Lockfile): int32 {
 	return refused;
 }
 
+function refuseUnlockedDeps(section: DepsSection, lock: Lockfile): int32 {
+	let refused = 0;
+	for (let i = 0; i < section.keys.length; i++) {
+		if (isFileDep(section.values[i]) || hasEntryNamed(lock, section.keys[i])) continue;
+		if (section.values[i].startsWith("git:")) {
+			console.log(`error: ${section.keys[i]}: git sources are not installed yet`);
+		} else {
+			console.log(`error: ${section.keys[i]} is in build.ms but msc.lock has no entry for it; run \`msc add ${section.keys[i]}@${section.values[i]}\``);
+		}
+		refused = refused + 1;
+	}
+	return refused;
+}
+
 function countNonFileDeps(section: DepsSection): int32 {
 	let count = 0;
 	for (const ver of section.values) {
@@ -98,7 +110,7 @@ export function cmdInstall(projectRoot: string): boolean {
 	// Check registry/git deps via lockfile
 	const lockPath = join(projectRoot, "msc.lock");
 	const lock = readLockfile(lockPath);
-	const refused = lock.ok ? refuseUninstallable(lock.value) : 0;
+	const refused = lock.ok ? refuseUninstallable(lock.value) + refuseUnlockedDeps(cfg.deps, lock.value) + refuseUnlockedDeps(cfg.devDeps, lock.value) : 0;
 	if (refused > 0) {
 		missing = missing + refused;
 		allOk = false;
@@ -220,6 +232,24 @@ test "install passes when the dependency of a registry entry has an entry of its
 	removeAll(registrySrcPath("mscInstallTestOuter", "1.0.0"));
 	removeAll(registrySrcPath("mscInstallTestInner", "0.1.0"));
 	assert passed;
+}
+
+test "install refuses a registry dep of either section that a valid msc.lock has no entry for" {
+	const lock = '{ "version": 1, "packages": { ' + cachedRegistryEntry("mscInstallTestHeld", "1.0.0", "") + ' } }';
+	const heldDeps = "\"mscInstallTestHeld\": \"1.0.0\"";
+	const refusedDep = !cmdInstall(lockedProject("unlockedDep", heldDeps + ", \"outer\": \"1.0.0\"", "", lock));
+	const refusedDev = !cmdInstall(lockedProject("unlockedDev", heldDeps, "\"outer\": \"1.0.0\"", lock));
+	const passed = cmdInstall(lockedProject("lockedAll", heldDeps, "", lock));
+	removeAll(registrySrcPath("mscInstallTestHeld", "1.0.0"));
+	assert refusedDep;
+	assert refusedDev;
+	assert passed;
+}
+
+test "install refuses a git dep of either section that a valid msc.lock has no entry for" {
+	const lock = '{ "version": 1, "packages": {} }';
+	assert !cmdInstall(lockedProject("unlockedGit", "\"foo\": \"git:github.com/acme/foo@v1.2.3\"", "", lock));
+	assert !cmdInstall(lockedProject("unlockedGitDev", "", "\"foo\": \"git:github.com/acme/foo@v1.2.3\"", lock));
 }
 
 test "install refuses a registry or git dep when msc.lock is missing" {
