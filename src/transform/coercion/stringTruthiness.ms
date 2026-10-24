@@ -3,13 +3,14 @@
 // and null are falsy. A C double reads NaN as true, so C floats go through msNumberIsTruthy.
 
 import { Node, NodeKind, IfStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, ConditionalExprData, UnaryExprData, BinaryExprData, ExprStmtData, PropertyDeclData, TypeKind, Type } from "../../ast/node";
-import { isStructType, isMaybeType, unwrapMaybeType, unwrapRefNullUnion, peelTransparentInstance, isNullableBigInt, booleanType, stringType, isNumeric, isFloatType, isStringLike, isBoolType, holdsFalsyValue } from "../../checker/types";
+import { isStructType, isMaybeType, unwrapMaybeType, unwrapRefNullUnion, peelTransparentInstance, isNullableBigInt, booleanType, stringType, isNumeric, isStringLike, isBoolType, holdsFalsyValue } from "../../checker/types";
 import { addError } from "../../checker/context";
 import { TransformContext } from "../context";
 import { walkNode, walkExpandBlocks, walkWithinStatement, walkOutsideInstanceFieldInits, isInstanceFieldInit } from "../walker";
 import { makeBinary, makeMember, makeNumber, makeBool, makeNull, makeUnary, makeCall, makeConditional, runtimeRef, makeIdentResolved } from "../util";
 import { bindOnce, blockifyArrowsReading } from "./nullishCoalesce";
 import { cloneIfPure } from "../place";
+import { isFloatKind } from "../numKinds";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
 import { firstStmtKindAfter, firstExprKindAfter, stmtCountAfter } from "../testUtil";
@@ -115,7 +116,7 @@ function negationNeedsTest(operand: Node): boolean {
 }
 
 function isFloatingNumber(t: Type): boolean {
-	return t.kind == TypeKind.Number || isFloatType(t);
+	return isFloatKind(t.kind);
 }
 
 function testsPayloadValue(payload: Type): boolean {

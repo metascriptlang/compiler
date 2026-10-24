@@ -17,6 +17,7 @@ import { walkNode } from "../walker";
 import { makeCall, runtimeRef, makeIdentResolved, cloneIdent, makeVarDecl, makeBlock, makeWhile, makeIf, makeBinary, makeAssign, makeExprStmt, makeHiddenDeref, makeHiddenStdConv, isRuntimeProcCall } from "../util";
 import { makeIntNumber } from "../../checker/literalNodes";
 import { clonePlace } from "../place";
+import { isSignedKind, bitsOfKind } from "../numKinds";
 
 type Reduce = { acc: Node, op: string, term: Node };
 type Reduction = { acc: Node, op: string, arrays: Node[], index: Node, len: Node, widthTag: string };
@@ -142,7 +143,7 @@ function widened(term: Node, acc: Node): Node | null {
 	const to = peelToRepr(d.convType);
 	const from = signedKind(d.convExpr.nodeType);
 	const accKind = signedKind(acc.nodeType);
-	if (to == null || from == null || accKind == null || to.kind != accKind || width(from) > width(accKind)) return null;
+	if (to == null || from == null || accKind == null || to.kind != accKind || bitsOfKind(from) > bitsOfKind(accKind)) return null;
 	return d.convExpr;
 }
 
@@ -246,7 +247,7 @@ function distinctFrom(acc: Node, others: Node[]): boolean {
 function sumTag(acc: Node, array: Node): string {
 	const a = signedKind(acc.nodeType);
 	const e = signedKind(elementType(array));
-	if (a == null || e == null || width(e) > width(a)) return "";
+	if (a == null || e == null || bitsOfKind(e) > bitsOfKind(a)) return "";
 	return widthName(a) + widthName(e);
 }
 
@@ -259,20 +260,11 @@ function dotTag(acc: Node, product: Node, a: Node, b: Node): string {
 function signedKind(t: Type | null): TypeKind | null {
 	const r = peelToRepr(t);
 	if (r == null) return null;
-	return r.kind == TypeKind.Int8 || r.kind == TypeKind.Int16 || r.kind == TypeKind.Int32 || r.kind == TypeKind.Int64 ? r.kind : null;
-}
-
-function width(k: TypeKind): number {
-	return match (k) {
-		TypeKind.Int8 => 8,
-		TypeKind.Int16 => 16,
-		TypeKind.Int32 => 32,
-		_ => 64,
-	};
+	return isSignedKind(r.kind) ? r.kind : null;
 }
 
 function widthName(k: TypeKind): string {
-	return `I${width(k)}`;
+	return `I${bitsOfKind(k)}`;
 }
 
 function maxOf(k: TypeKind): int64 {

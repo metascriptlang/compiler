@@ -33,6 +33,7 @@ import { walkNode } from "../walker";
 import { makeBinary, makeCall, runtimeRef, makeMember, makeNumber, generatedRef } from "../util";
 import { truncateTo, isIntConvKind } from "./intConvJS";
 import { cloneIfPure } from "../place";
+import { is64Kind, isSignedKind, bitsOfKind, isShiftOp } from "../numKinds";
 
 export { cloneIfPure } from "../place";
 
@@ -63,7 +64,7 @@ function divideAsInteger(node: Node, d: BinaryExprData): Node {
 	if (d.operator == "**" || !cannotRaise(d.right, t)) return checkedIntOp(d.operator, d.left, d.right, t, node.nodeType, node.location);
 	if (d.operator != "/") return node;
 	// BigInt division already truncates; Math.trunc on a BigInt throws.
-	if (is64(t.kind)) return node;
+	if (is64Kind(t.kind)) return node;
 	const narrow = subIntKind(t);
 	if (narrow != TypeKind.Unknown) return wrapTo(node, narrow, node.location);
 	return truncateTo(node, t.kind, node.location);
@@ -77,7 +78,7 @@ function checkedIntOp(op: string, left: Node, right: Node, t: Type, resultType: 
 		"%" => "msMod",
 		_ => "msPow",
 	};
-	const hk = is64(t.kind) ? t.kind : (isSignedKind(t.kind) ? TypeKind.Int32 : TypeKind.Uint32);
+	const hk = is64Kind(t.kind) ? t.kind : (isSignedKind(t.kind) ? TypeKind.Int32 : TypeKind.Uint32);
 	const suffix = match (hk) {
 		TypeKind.Int32 => "I32",
 		TypeKind.Int64 => "I64",
@@ -125,14 +126,6 @@ function stepOne(t: Type, loc: SourceLocation): Node {
 	return one;
 }
 
-function is64(kind: TypeKind): boolean {
-	return kind == TypeKind.Int64 || kind == TypeKind.Uint64;
-}
-
-function isSignedKind(kind: TypeKind): boolean {
-	return kind == TypeKind.Int8 || kind == TypeKind.Int16 || kind == TypeKind.Int32 || kind == TypeKind.Int64;
-}
-
 // A literal divisor other than 0 and -1 can neither be zero nor overflow MIN / -1.
 function cannotRaise(divisor: Node, t: Type): boolean {
 	let n = divisor;
@@ -156,21 +149,13 @@ function subIntKind(t: Type | null): TypeKind {
 	};
 }
 
-function subIntBits(kind: TypeKind): number {
-	return kind == TypeKind.Int8 || kind == TypeKind.Uint8 ? 8 : 16;
-}
-
 function wrapsAtWidth(op: string): boolean {
 	return op == "+" || op == "-" || op == "*";
 }
 
-function isShiftOp(op: string): boolean {
-	return op == "<<" || op == ">>" || op == ">>>";
-}
-
 function wrapTo(inner: Node, kind: TypeKind, loc: SourceLocation): Node {
 	if (kind == TypeKind.Uint8 || kind == TypeKind.Uint16) return truncateTo(inner, kind, loc);
-	const up = 32 - subIntBits(kind);
+	const up = 32 - bitsOfKind(kind);
 	const result = makeBinary(makeBinary(inner, "<<", makeNumber(up, loc), loc), ">>", makeNumber(up, loc), loc);
 	result.nodeType = createPrimitive(kind);
 	return result;
@@ -180,7 +165,7 @@ function wrapTo(inner: Node, kind: TypeKind, loc: SourceLocation): Node {
 // before it widens to the node's type, as C computes it.
 function shiftAtLeftWidth(node: Node, d: BinaryExprData): Node {
 	const kind = subIntKind(d.left.nodeType);
-	const bits = subIntBits(kind);
+	const bits = bitsOfKind(kind);
 	const loc = node.location;
 	const count = makeBinary(d.right, "&", makeNumber(bits - 1, loc), loc);
 	const unsigned = kind == TypeKind.Uint8 || kind == TypeKind.Uint16;
@@ -299,11 +284,11 @@ export function needsIntegerCompoundRewrite(d: BinaryExprData): boolean {
 	if (base == "") return false;
 	const t = peelToRepr(d.left.nodeType);
 	if (t == null || !isIntConvKind(t.kind)) return false;
-	if (isShiftOp(base)) return is64(t.kind) || subIntKind(t) != TypeKind.Unknown || (base == "<<" && t.kind == TypeKind.Uint32);
+	if (isShiftOp(base)) return is64Kind(t.kind) || subIntKind(t) != TypeKind.Unknown || (base == "<<" && t.kind == TypeKind.Uint32);
 	if (base == "&" || base == "|" || base == "^") return t.kind == TypeKind.Uint32;
 	if (base == "**" || ((base == "/" || base == "%") && !cannotRaise(d.right, t))) return true;
 	if (wrapsAtWidth(base) && isSignedKind(t.kind)) return true;
-	if (base == "%" || is64(t.kind)) return false;
+	if (base == "%" || is64Kind(t.kind)) return false;
 	return base == "/" || t.kind == TypeKind.Uint32 || subIntKind(t) != TypeKind.Unknown;
 }
 
@@ -314,7 +299,7 @@ function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: Tra
 		d.operator = ">>>=";
 		return node;
 	}
-	if (!needsIntegerCompoundRewrite(d) || (is64(t.kind) && isShiftOp(base))) return node;
+	if (!needsIntegerCompoundRewrite(d) || (is64Kind(t.kind) && isShiftOp(base))) return node;
 	const checked = base == "**" || ((base == "/" || base == "%") && !cannotRaise(d.right, t));
 	const unsigned = t.kind == TypeKind.Uint32;
 	const narrow = subIntKind(t);
