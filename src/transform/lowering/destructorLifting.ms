@@ -2164,23 +2164,52 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx): void {
 	});
 }
 
-function hookedDistinctElement(t: Type | null, lctx: LiftCtx, seen: HashSet<Type>): Type | null {
-	if (t == null || seen.has(t) || lctx.hookFreeTypes.has(t)) return null;
-	seen.add(t);
+let _freeOfDistinctArraysEpoch: int32 = -1;
+let _freeOfDistinctArrays = new HashSet<Type>();
+
+function keepDistinctMarksCurrent(): void {
+	if (_freeOfDistinctArraysEpoch == instantiatedBodyCount()) return;
+	_freeOfDistinctArraysEpoch = instantiatedBodyCount();
+	_freeOfDistinctArrays = new HashSet<Type>();
+}
+
+interface DistinctWalk {
+	seen: HashSet<Type>;
+	order: Type[];
+	reachesDistinctArray: boolean;
+}
+
+function hookedDistinctElement(t: Type | null, lctx: LiftCtx, walk: DistinctWalk): Type | null {
+	if (t == null || walk.seen.has(t) || _freeOfDistinctArrays.has(t)) return null;
+	if (lctx.hookFreeTypes.has(t)) {
+		walk.reachesDistinctArray = true;
+		return null;
+	}
+	walk.seen.add(t);
+	walk.order.push(t);
 	const elem = t.kind == TypeKind.Array ? t.typeReturn : null;
-	if (elem != null && elem.kind == TypeKind.Distinct && hasAnyUserHook(elem, lctx)) return elem;
+	if (elem != null && elem.kind == TypeKind.Distinct) {
+		walk.reachesDistinctArray = true;
+		if (hasAnyUserHook(elem, lctx)) return elem;
+	}
 	for (const child of t.typeChildren) {
-		const hit = hookedDistinctElement(child, lctx, seen);
+		const hit = hookedDistinctElement(child, lctx, walk);
 		if (hit != null) return hit;
 	}
-	return hookedDistinctElement(t.typeReturn, lctx, seen);
+	return hookedDistinctElement(t.typeReturn, lctx, walk);
 }
 
 function refuseArrayOfHookedDistinct(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	if (lctx.jsBackend || lctx.checkerCtx == null) return;
-	const seen = new HashSet<Type>();
-	const elem = hookedDistinctElement(t, lctx, seen);
-	if (elem == null) seen.forEach((v: Type): void => { lctx.hookFreeTypes.add(v); });
+	keepDistinctMarksCurrent();
+	const walk: DistinctWalk = { seen: new HashSet<Type>(), order: [], reachesDistinctArray: false };
+	const elem = hookedDistinctElement(t, lctx, walk);
+	if (!walk.reachesDistinctArray) {
+		for (const free of walk.order) _freeOfDistinctArrays.add(free);
+	}
+	if (elem == null) {
+		for (const free of walk.order) lctx.hookFreeTypes.add(free);
+	}
 	if (elem == null || lctx.refusedArrayElems.has(elem)) return;
 	lctx.refusedArrayElems.add(elem);
 	addError(lctx.checkerCtx, "an array of the distinct type '" + elem.typeName + "' would never run its lifecycle hooks, because it is stored as an array of its base type: keep the values in a struct and make the array of those", loc.line, loc.column);
@@ -2587,4 +2616,48 @@ test "a lifted symbol cannot be minted without a checker context" {
 		refused = e.message;
 	}
 	assert refused.contains("self");
+}
+
+interface CheckedSource {
+	program: Node;
+	checker: CheckerContext;
+}
+
+function checkSource(input: string): CheckedSource {
+	resetHookSyms();
+	const pr = parseInput(input);
+	if (!pr.ok) throw new Error(`test source does not parse: ${input}`);
+	return { program: pr.value, checker: checkProgram(pr.value) };
+}
+
+function liftRefusals(src: CheckedSource): string {
+	liftDestructors(src.program, checkedCtx(src.checker), true);
+	let all = "";
+	for (const e of src.checker.errors) all += e.message + "\n";
+	return all;
+}
+
+function localTypeOf(program: Node, name: string): Type {
+	const found: Type[] = [];
+	walkNode(program, (node: Node): Node => {
+		if (node.kind == NodeKind.VariableDecl && (node.data as VariableDeclData).declName == name && node.nodeType != null) found.push(node.nodeType!);
+		return node;
+	});
+	if (found.length == 0) throw new Error(`no local '${name}'`);
+	return found[0];
+}
+
+const HOOKED_FD_BOX = "type Fd = distinct int32;\nfunction onDestroy(this x: Fd): void { }\nstruct Box<T> { items: T[]; }\n";
+
+test "two instances of one generic are checked apart: the one holding an array of a hooked distinct type is refused" {
+	const src = checkSource(HOOKED_FD_BOX + "function run(): void { const plain: Box<int32> = { items: [] }; const held: Box<Fd> = { items: [] }; }");
+	assert liftRefusals(src).contains("an array of the distinct type 'Fd'");
+}
+
+test "a type walked free of distinct arrays is marked once and not walked again" {
+	const src = checkSource(HOOKED_FD_BOX + "function run(): void { const plain: Box<int32> = { items: [] }; }");
+	assert !liftRefusals(src).contains("distinct type");
+	const walk: DistinctWalk = { seen: new HashSet<Type>(), order: [], reachesDistinctArray: false };
+	assert hookedDistinctElement(localTypeOf(src.program, "plain"), newLiftCtx(checkedCtx(src.checker), false), walk) == null;
+	assert walk.order.length == 0;
 }
