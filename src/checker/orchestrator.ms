@@ -216,12 +216,12 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		const tno = typeNameOfProfile();
 		const tdn = typeDisplayNameProfile();
 		const cce = checkCallExprProfile();
-		console.log(`    isAssignable: n=${isa[0]} t=${isa[1]}ms | unifyType: n=${uni[0]} t=${uni[1]}ms | substituteParams: n=${sub[0]} t=${sub[1]}ms`);
-		console.log(`    typeNameOf: n=${tno[0]} t=${tno[1]}ms | typeDisplayName: n=${tdn[0]} t=${tdn[1]}ms | checkCallExpr: n=${cce[0]} t=${cce[1]}ms`);
+		console.log(`    isAssignable: n=${isa[0]} | unifyType: n=${uni[0]} | substituteParams: n=${sub[0]}`);
+		console.log(`    typeNameOf: n=${tno[0]} | typeDisplayName: n=${tdn[0]} | checkCallExpr: n=${cce[0]}`);
 		const gp = getPropertyProfile();
 		const fvb = findVariantByFieldNameProfile();
 		const fae = findAllExtensionsByNameProfile();
-		console.log(`    getProperty: n=${gp[0]} t=${gp[1]}ms | findVariantByFieldName: n=${fvb[0]} t=${fvb[1]}ms | findAllExtByName: n=${fae[0]} t=${fae[1]}ms`);
+		console.log(`    getProperty: n=${gp[0]} | findVariantByFieldName: n=${fvb[0]} | findAllExtByName: n=${fae[0]}`);
 	}
 	return db.exportRegistry;
 }

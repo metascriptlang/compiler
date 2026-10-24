@@ -2558,9 +2558,9 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 		}
 		if (ctx.currentFunction != null && isLocalFunctionStmt(d.statements[i])) forwardDeclareLocalRun(ctx, d.statements, i);
 		_blocksInFlight.push({ stmts: d.statements, at: i, scope: ctx.table.current });
-		const _cs0 = performance.now();
+		const _cs0 = _slowTrace ? performance.now() : 0;
 		checkStmt(ctx, d.statements[i]);
-		const _cs1 = performance.now();
+		const _cs1 = _slowTrace ? performance.now() : 0;
 		_blocksInFlight.pop();
 		if (_slowTrace && _cs1 - _cs0 > 100) {
 			console.log(`        SLOWSTMT ${ctx.modulePath}:${d.statements[i].location.line} ${_cs1 - _cs0}ms kind=${d.statements[i].kind}`);
@@ -2956,7 +2956,7 @@ function checkDefaultInParamScope(ctx: CheckerContext, def: Node, paramType: Typ
 
 export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[] | null, defaults: Node[] | null = null): Symbol[] {
 	const paramSyms: Symbol[] = [];
-	const _fb0 = performance.now();
+	const _fb0 = _slowTrace ? performance.now() : 0;
 	const savedFunction = ctx.currentFunction;
 	const savedMatchDepth = ctx.matchExprDepth;
 	const savedCtorExits = ctx.ctorExits;
@@ -3053,7 +3053,7 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 	ctx.matchExprDepth = savedMatchDepth;
 	if (compileTimeBody) ctx.compileTimeBodyDepth = ctx.compileTimeBodyDepth - 1;
 	// PROFILE: surface pathological per-function check times immediately.
-	const _fb1 = performance.now();
+	const _fb1 = _slowTrace ? performance.now() : 0;
 	if (_slowTrace && _fb1 - _fb0 > 500) {
 		console.log(`    SLOWFN ${ctx.modulePath} :: ${sym != null ? sym.name : "<anon>"} ${_fb1 - _fb0}ms`);
 	}

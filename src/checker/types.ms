@@ -967,20 +967,17 @@ export function detectUnionDiscriminant(unionType: Type | null, fieldName: strin
 // after `peelToStructOrUnion`. Without that gate, calling on `T | null`
 // (nullable) patterns would erroneously match the Ref variant's fields.
 let _fvbCount: float64 = 0;
-let _fvbTime: float64 = 0;
 let _queryProfilingEnabled = true;
 let _queryCachesReadOnly = false;
 export function setConcurrentTypeQueries(enabled: boolean): void {
 	_queryProfilingEnabled = !enabled;
 	_queryCachesReadOnly = enabled;
 }
-export function findVariantByFieldNameProfile(): float64[] { return [_fvbCount, _fvbTime]; }
+export function findVariantByFieldNameProfile(): float64[] { return [_fvbCount]; }
 export function findVariantByFieldName(unionType: Type | null, fieldName: string): int32 {
 	if (!_queryProfilingEnabled) return findVariantByFieldNameInner(unionType, fieldName);
 	_fvbCount = _fvbCount + 1;
-	const _v0 = performance.now();
 	const r = findVariantByFieldNameInner(unionType, fieldName);
-	_fvbTime = _fvbTime + (performance.now() - _v0);
 	return r;
 }
 function findVariantByFieldNameInner(unionType: Type | null, fieldName: string): int32 {
@@ -4177,8 +4174,7 @@ function canonicalSubstitutedUnion(copy: Type): Type {
 }
 
 let _substCount: float64 = 0;
-let _substTime: float64 = 0;
-export function substituteParamsProfile(): float64[] { return [_substCount, _substTime]; }
+export function substituteParamsProfile(): float64[] { return [_substCount]; }
 
 // Every binding is substituted in ONE tree walk: inferGenericReturn folds
 // bindings per call site, and a walk per binding cost ~56s on self-host.
@@ -4186,9 +4182,7 @@ export function substituteParams(t: Type | null, params: Type[], concretes: Type
 	const seen: Cursor<Type>[] = [];
 	if (!_queryProfilingEnabled) return substituteAllParamsInner(t, params, concretes, seen);
 	_substCount = _substCount + 1;
-	const _s0 = performance.now();
 	const r = substituteAllParamsInner(t, params, concretes, seen);
-	_substTime = _substTime + (performance.now() - _s0);
 	return r;
 }
 
@@ -4349,14 +4343,11 @@ export function mergeUnifyBindings(into: UnifyBindings, from: UnifyBindings): vo
 let unifyDepth = 0;
 
 let _unifyCount: float64 = 0;
-let _unifyTime: float64 = 0;
-export function unifyTypeProfile(): float64[] { return [_unifyCount, _unifyTime]; }
+export function unifyTypeProfile(): float64[] { return [_unifyCount]; }
 export function unifyType(formal: Type | null, concrete: Type | null, bindings: UnifyBindings): void {
 	if (!_queryProfilingEnabled) { unifyTypeGuard(formal, concrete, bindings); return; }
 	_unifyCount = _unifyCount + 1;
-	const _u0 = performance.now();
 	unifyTypeGuard(formal, concrete, bindings);
-	_unifyTime = _unifyTime + (performance.now() - _u0);
 }
 function unifyTypeGuard(formal: Type | null, concrete: Type | null, bindings: UnifyBindings): void {
 	if (formal == null || concrete == null) return;
@@ -4711,14 +4702,11 @@ function collectGenericParams(t: Type | null, found: Type[], depth: int32): void
 }
 
 let _gpCount: float64 = 0;
-let _gpTime: float64 = 0;
-export function getPropertyProfile(): float64[] { return [_gpCount, _gpTime]; }
+export function getPropertyProfile(): float64[] { return [_gpCount]; }
 export function getProperty(t: Type | null, name: string): Type {
 	if (!_queryProfilingEnabled) return getPropertyInner(t, name);
 	_gpCount = _gpCount + 1;
-	const _g0 = performance.now();
 	const r = getPropertyInner(t, name);
-	_gpTime = _gpTime + (performance.now() - _g0);
 	return r;
 }
 function getPropertyInner(t: Type | null, name: string): Type {
@@ -4837,14 +4825,11 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 // `typeDisplayName` instead — it never returns empty and falls back to the
 // kind's spelling.
 let _tnoCount: float64 = 0;
-let _tnoTime: float64 = 0;
-export function typeNameOfProfile(): float64[] { return [_tnoCount, _tnoTime]; }
+export function typeNameOfProfile(): float64[] { return [_tnoCount]; }
 export function typeNameOf(t: Type | null): string {
 	if (!_queryProfilingEnabled) return typeNameOfInner(t);
 	_tnoCount = _tnoCount + 1;
-	const _n0 = performance.now();
 	const r = typeNameOfInner(t);
-	_tnoTime = _tnoTime + (performance.now() - _n0);
 	return r;
 }
 
@@ -4950,14 +4935,11 @@ function typeNameOfInner(t: Type | null): string {
 // For type-keyed lookups (extension receiver matching, transform dispatch),
 // use typeNameOf directly — the empty return is intentional there.
 let _tdnCount: float64 = 0;
-let _tdnTime: float64 = 0;
-export function typeDisplayNameProfile(): float64[] { return [_tdnCount, _tdnTime]; }
+export function typeDisplayNameProfile(): float64[] { return [_tdnCount]; }
 export function typeDisplayName(t: Type | null): string {
 	if (!_queryProfilingEnabled) return typeDisplayNameInner(t);
 	_tdnCount = _tdnCount + 1;
-	const _d0 = performance.now();
 	const r = typeDisplayNameInner(t);
-	_tdnTime = _tdnTime + (performance.now() - _d0);
 	return r;
 }
 function typeDisplayNameInner(t: Type | null): string {

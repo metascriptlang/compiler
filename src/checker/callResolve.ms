@@ -1644,11 +1644,9 @@ export function checkPropagatedErrorAgainst(ctx: CheckerContext, node: Node, ret
 }
 
 let _cceCount: float64 = 0;
-let _cceTime: float64 = 0;
-export function checkCallExprProfile(): float64[] { return [_cceCount, _cceTime]; }
+export function checkCallExprProfile(): float64[] { return [_cceCount]; }
 export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): Type {
 	_cceCount = _cceCount + 1;
-	const _cc0 = performance.now();
 	const tracker = ctx.initTracker;
 	const identsFrom = tracker.argIdents.length;
 	const readsFrom = tracker.pendingReads.length;
@@ -1668,7 +1666,6 @@ export function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Typ
 		r = seen;
 	}
 	refuseHiddenMethodCall(ctx, node);
-	_cceTime = _cceTime + (performance.now() - _cc0);
 	return evalCompileTimeCall(ctx, node, foldTypeTrait(ctx, node, r));
 }
 

@@ -336,13 +336,10 @@ export function findExtensionBySym(registry: ExtensionRegistry, sym: Symbol, nam
 // Standard reference pattern: candidates are collected by name, then filtered by type compatibility
 // at the call site using isAssignable (not a name comparison).
 let _faeCount: float64 = 0;
-let _faeTime: float64 = 0;
-export function findAllExtensionsByNameProfile(): float64[] { return [_faeCount, _faeTime]; }
+export function findAllExtensionsByNameProfile(): float64[] { return [_faeCount]; }
 export function findAllExtensionsByName(registry: ExtensionRegistry, methodName: string): ExtensionMethod[] {
 	_faeCount = _faeCount + 1;
-	const _e0 = performance.now();
 	const r = findAllExtensionsByNameInner(registry, methodName);
-	_faeTime = _faeTime + (performance.now() - _e0);
 	return r;
 }
 function findAllExtensionsByNameInner(registry: ExtensionRegistry, methodName: string): ExtensionMethod[] {

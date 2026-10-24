@@ -319,8 +319,7 @@ function pairOnStack(sources: Type[], targets: Type[], source: Type | null, targ
 const _assignSources: Type[] = [];
 const _assignTargets: Type[] = [];
 let _isaCount: float64 = 0;
-let _isaTime: float64 = 0;
-export function isAssignableProfile(): float64[] { return [_isaCount, _isaTime]; }
+export function isAssignableProfile(): float64[] { return [_isaCount]; }
 export function unmetConstraint(param: Type, bound: Type, params: Type[], types: Type[]): Type | null {
 	if (bound == null || bound.kind == TypeKind.Error || isUnresolvedType(bound) || isUnknownType(bound) || hasGenericParams(bound)) return null;
 	const raw = param.typeExtra;
@@ -338,9 +337,7 @@ export function isAssignable(source: Type | null, target: Type | null): boolean 
 	_isaCount = _isaCount + 1;
 	_assignSources.push(source);
 	_assignTargets.push(target);
-	const _isa0 = performance.now();
 	const result = isAssignableInner(source, target);
-	_isaTime = _isaTime + (performance.now() - _isa0);
 	_assignSources.pop();
 	_assignTargets.pop();
 	return result;
