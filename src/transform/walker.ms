@@ -637,6 +637,13 @@ export function walkBlockExpanding(stmts: Node[], expander: ExpandingVisitor): N
 
 type StmtExpander = (stmt: Node, ctx: TransformContext) => Node[];
 
+class ExpandWalk {
+	expander: StmtExpander;
+	ctx: TransformContext;
+	onFnEntry: FnEntryHook;
+	onFnExit: FnExitHook;
+}
+
 // Optional hook called on function-like node entry/exit.
 // onEntry receives the function node, returns opaque state to restore on exit.
 // Used by resultDesugar to track enclosing function return types.
@@ -648,19 +655,19 @@ export type FnExitHook = (node: Node) => void;
 // not the original node. These helpers take the node, extract old stmts, compute
 // new stmts, and write back via node.data = {...} in a single scope where the
 // return value is directly consumed (no local for DRC to destroy).
-function replaceProgStmts(node: Node, expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook, onFnExit: FnExitHook): void {
+function replaceProgStmts(node: Node, w: ExpandWalk, visit: Visitor): void {
 	const pd = node.data as ProgramData;
-	node.data = { programStmts: expandAndRecurseHooked(pd.programStmts, expander, ctx, onFnEntry, onFnExit) };
+	node.data = { programStmts: expandStmtList(pd.programStmts, w, visit) };
 }
 
-function replaceBlockStmts(node: Node, expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook, onFnExit: FnExitHook): void {
+function replaceBlockStmts(node: Node, w: ExpandWalk, visit: Visitor): void {
 	const bd = node.data as BlockStmtData;
-	node.data = { statements: expandAndRecurseHooked(bd.statements, expander, ctx, onFnEntry, onFnExit) };
+	node.data = { statements: expandStmtList(bd.statements, w, visit) };
 }
 
-function replaceCaseStmts(node: Node, expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook, onFnExit: FnExitHook): void {
+function replaceCaseStmts(node: Node, w: ExpandWalk, visit: Visitor): void {
 	const cd = node.data as SwitchCaseData;
-	node.data = { caseTests: cd.caseTests, caseStmts: expandAndRecurseHooked(cd.caseStmts, expander, ctx, onFnEntry, onFnExit), isDefault: cd.isDefault };
+	node.data = { caseTests: cd.caseTests, caseStmts: expandStmtList(cd.caseStmts, w, visit), isDefault: cd.isDefault };
 }
 
 let expandTryDepth = 0;
@@ -669,22 +676,22 @@ export function expandingInsideTry(): boolean {
 	return expandTryDepth > 0;
 }
 
-function walkFnBodyHooked(body: Node, expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook, onFnExit: FnExitHook): void {
+function walkFnBodyHooked(body: Node, w: ExpandWalk, visit: Visitor): void {
 	const outerTryDepth = expandTryDepth;
 	expandTryDepth = 0;
-	walkExpandBlocksHooked(body, expander, ctx, onFnEntry, onFnExit);
+	expandWalk(body, w, visit);
 	expandTryDepth = outerTryDepth;
 }
 
-function expandStmtBodyHooked(node: Node, expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook, onFnExit: FnExitHook): Node {
+function expandStmtBodyHooked(node: Node, w: ExpandWalk, visit: Visitor): Node {
 	if (node == null) return node;
 	if (node.kind == NodeKind.BlockStmt) {
-		walkExpandBlocksHooked(node, expander, ctx, onFnEntry, onFnExit);
+		expandWalk(node, w, visit);
 		return node;
 	}
-	const expanded = expander(node, ctx);
+	const expanded = w.expander(node, w.ctx);
 	for (const stmt of expanded) {
-		walkExpandBlocksHooked(stmt, expander, ctx, onFnEntry, onFnExit);
+		expandWalk(stmt, w, visit);
 	}
 	if (expanded.length == 1) return expanded[0];
 	return makeBlock(expanded, node.location);
@@ -694,105 +701,116 @@ export function walkExpandBlocks(node: Node, expander: StmtExpander, ctx: Transf
 	walkExpandBlocksHooked(node, expander, ctx, null as unknown as FnEntryHook, null as unknown as FnExitHook);
 }
 
+// One visitor per walk: the default arm hands it to mapChildren for every node it does not
+// special-case, so it is built once here and not once per node.
 export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook, onFnExit: FnExitHook): void {
+	const w: ExpandWalk = { expander, ctx, onFnEntry, onFnExit };
+	const visit = (child: Node): Node => {
+		expandWalk(child, w, visit);
+		return child;
+	};
+	expandWalk(node, w, visit);
+}
+
+function expandWalk(node: Node, w: ExpandWalk, visit: Visitor): void {
 	if (node == null) return;
 	match (node.kind) {
 		NodeKind.Program => {
-			replaceProgStmts(node, expander, ctx, onFnEntry, onFnExit);
+			replaceProgStmts(node, w, visit);
 		},
 		NodeKind.BlockStmt => {
-			replaceBlockStmts(node, expander, ctx, onFnEntry, onFnExit);
+			replaceBlockStmts(node, w, visit);
 		},
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
-			if (onFnEntry != null) onFnEntry(node);
-			walkFnBodyHooked(d.fnBody, expander, ctx, onFnEntry, onFnExit);
-			if (onFnExit != null) onFnExit(node);
+			if (w.onFnEntry != null) w.onFnEntry(node);
+			walkFnBodyHooked(d.fnBody, w, visit);
+			if (w.onFnExit != null) w.onFnExit(node);
 		},
 		NodeKind.ArrowFunction => {
 			const d = node.data as ArrowFunctionData;
-			if (onFnEntry != null) onFnEntry(node);
-			walkFnBodyHooked(d.arrowBody, expander, ctx, onFnEntry, onFnExit);
-			if (onFnExit != null) onFnExit(node);
+			if (w.onFnEntry != null) w.onFnEntry(node);
+			walkFnBodyHooked(d.arrowBody, w, visit);
+			if (w.onFnExit != null) w.onFnExit(node);
 		},
 		NodeKind.FunctionExpr => {
 			const d = node.data as FunctionExprData;
-			if (onFnEntry != null) onFnEntry(node);
-			walkFnBodyHooked(d.funcExprBody, expander, ctx, onFnEntry, onFnExit);
-			if (onFnExit != null) onFnExit(node);
+			if (w.onFnEntry != null) w.onFnEntry(node);
+			walkFnBodyHooked(d.funcExprBody, w, visit);
+			if (w.onFnExit != null) w.onFnExit(node);
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
-			if (onFnEntry != null) onFnEntry(node);
-			walkFnBodyHooked(d.methodBody, expander, ctx, onFnEntry, onFnExit);
-			if (onFnExit != null) onFnExit(node);
+			if (w.onFnEntry != null) w.onFnEntry(node);
+			walkFnBodyHooked(d.methodBody, w, visit);
+			if (w.onFnExit != null) w.onFnExit(node);
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
-			walkFnBodyHooked(d.ctorBody, expander, ctx, onFnEntry, onFnExit);
+			walkFnBodyHooked(d.ctorBody, w, visit);
 		},
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
-			walkExpandBlocksHooked(d.exportedDecl, expander, ctx, onFnEntry, onFnExit);
+			expandWalk(d.exportedDecl, w, visit);
 		},
 		NodeKind.TestDecl => {
 			const d = node.data as TestDeclData;
-			walkFnBodyHooked(d.testBody, expander, ctx, onFnEntry, onFnExit);
+			walkFnBodyHooked(d.testBody, w, visit);
 		},
 		NodeKind.AssertStmt => {},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			d.consequent = expandStmtBodyHooked(d.consequent, expander, ctx, onFnEntry, onFnExit);
-			d.alternate = expandStmtBodyHooked(d.alternate, expander, ctx, onFnEntry, onFnExit);
+			d.consequent = expandStmtBodyHooked(d.consequent, w, visit);
+			d.alternate = expandStmtBodyHooked(d.alternate, w, visit);
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
-			d.whileBody = expandStmtBodyHooked(d.whileBody, expander, ctx, onFnEntry, onFnExit);
+			d.whileBody = expandStmtBodyHooked(d.whileBody, w, visit);
 		},
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
-			d.doBody = expandStmtBodyHooked(d.doBody, expander, ctx, onFnEntry, onFnExit);
+			d.doBody = expandStmtBodyHooked(d.doBody, w, visit);
 		},
 		NodeKind.ForStmt => {
 			const d = node.data as ForStmtData;
-			d.forBody = expandStmtBodyHooked(d.forBody, expander, ctx, onFnEntry, onFnExit);
+			d.forBody = expandStmtBodyHooked(d.forBody, w, visit);
 		},
 		NodeKind.ForOfStmt => {
 			const d = node.data as ForOfStmtData;
-			d.forOfBody = expandStmtBodyHooked(d.forOfBody, expander, ctx, onFnEntry, onFnExit);
+			d.forOfBody = expandStmtBodyHooked(d.forOfBody, w, visit);
 		},
 		NodeKind.ForInStmt => {
 			const d = node.data as ForInStmtData;
-			d.forInBody = expandStmtBodyHooked(d.forInBody, expander, ctx, onFnEntry, onFnExit);
+			d.forInBody = expandStmtBodyHooked(d.forInBody, w, visit);
 		},
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
 			expandTryDepth += 1;
-			walkExpandBlocksHooked(d.tryBody, expander, ctx, onFnEntry, onFnExit);
-			walkExpandBlocksHooked(d.catchBody, expander, ctx, onFnEntry, onFnExit);
-			walkExpandBlocksHooked(d.finallyBody, expander, ctx, onFnEntry, onFnExit);
+			expandWalk(d.tryBody, w, visit);
+			expandWalk(d.catchBody, w, visit);
+			expandWalk(d.finallyBody, w, visit);
 			expandTryDepth -= 1;
 		},
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
 			let i = 0;
 			while (i < d.switchCases.length) {
-				walkExpandBlocksHooked(d.switchCases[i], expander, ctx, onFnEntry, onFnExit);
+				expandWalk(d.switchCases[i], w, visit);
 				i = i + 1;
 			}
 		},
 		NodeKind.SwitchCase => {
-			replaceCaseStmts(node, expander, ctx, onFnEntry, onFnExit);
+			replaceCaseStmts(node, w, visit);
 		},
 		NodeKind.DecoratedDecl => {
 			const d = node.data as DecoratedDeclData;
-			walkExpandBlocksHooked(d.decoratedNode, expander, ctx, onFnEntry, onFnExit);
+			expandWalk(d.decoratedNode, w, visit);
 		},
 		NodeKind.ClassDecl => {
 			const d = node.data as ClassDeclData;
 			let i = 0;
 			while (i < d.classBody.length) {
-				walkExpandBlocksHooked(d.classBody[i], expander, ctx, onFnEntry, onFnExit);
+				expandWalk(d.classBody[i], w, visit);
 				i = i + 1;
 			}
 		},
@@ -800,15 +818,12 @@ export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: 
 			const d = node.data as ActorDeclData;
 			let i = 0;
 			while (i < d.actorBody.length) {
-				walkExpandBlocksHooked(d.actorBody[i], expander, ctx, onFnEntry, onFnExit);
+				expandWalk(d.actorBody[i], w, visit);
 				i = i + 1;
 			}
 		},
 		_ => {
-			mapChildren(node, (child) => {
-				walkExpandBlocksHooked(child, expander, ctx, onFnEntry, onFnExit);
-				return child;
-			});
+			mapChildren(node, visit);
 		},
 	};
 }
@@ -920,20 +935,16 @@ export function replaceInExpr(node: Node, replacer: Visitor): Node {
 	return replacer(node);
 }
 
-function expandAndRecurse(stmts: Node[], expander: StmtExpander, ctx: TransformContext): Node[] {
-	return expandAndRecurseHooked(stmts, expander, ctx, null as unknown as FnEntryHook, null as unknown as FnExitHook);
-}
-
-function expandAndRecurseHooked(stmts: Node[], expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook, onFnExit: FnExitHook): Node[] {
+function expandStmtList(stmts: Node[], w: ExpandWalk, visit: Visitor): Node[] {
 	const result: Node[] = [];
 	for (const stmt of stmts) {
-		const expanded = expander(stmt, ctx);
+		const expanded = w.expander(stmt, w.ctx);
 		for (const node of expanded) {
 			result.push(node);
 		}
 	}
 	for (const node of result) {
-		walkExpandBlocksHooked(node, expander, ctx, onFnEntry, onFnExit);
+		expandWalk(node, w, visit);
 	}
 	return result;
 }
