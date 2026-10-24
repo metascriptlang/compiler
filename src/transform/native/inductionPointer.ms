@@ -39,8 +39,6 @@ class Induction {
 	body: Node;
 }
 
-let st: Induction = { pairs: [], assigned: createSymSet(), ancestors: [], closureDepth: 0, wet: false, ctx: null as unknown as TransformContext, body: null as unknown as Node };
-
 export function lowerInductionPointers(program: Node, ctx: TransformContext): Node {
 	if (ctx.boundChecks) return program;
 	walkNode(program, (n: Node): Node => {
@@ -53,17 +51,17 @@ export function lowerInductionPointers(program: Node, ctx: TransformContext): No
 function lowerFunction(fn: Node, ctx: TransformContext): void {
 	const body = (fn.data as FunctionDeclData).fnBody;
 	if (body == null || body.kind != NodeKind.BlockStmt || !hasComputedGotoLoop(body)) return;
-	st = { pairs: [], assigned: createSymSet(), ancestors: [], closureDepth: 0, wet: false, ctx, body };
-	collectAssigned(body);
-	collectPairs(body);
+	const st: Induction = { pairs: [], assigned: createSymSet(), ancestors: [], closureDepth: 0, wet: false, ctx, body };
+	collectAssigned(body, st);
+	collectPairs(body, st);
 	let before: int32 = -1;
-	while (before != activeCount()) {
-		before = activeCount();
-		runPass(body);
+	while (before != activeCount(st)) {
+		before = activeCount(st);
+		runPass(body, st);
 	}
 	if (before == 0) return;
 	st.wet = true;
-	runPass(body);
+	runPass(body, st);
 	const params: Node[] = [];
 	for (const p of st.pairs) {
 		if (p.active && p.declAt < 0) params.push(pointerDecl(p, makeIdentResolved(p.idx, body.location)));
@@ -74,7 +72,7 @@ function lowerFunction(fn: Node, ctx: TransformContext): void {
 	}
 }
 
-function activeCount(): int32 {
+function activeCount(st: Induction): int32 {
 	let n: int32 = 0;
 	for (const p of st.pairs) {
 		if (p.active) n += 1;
@@ -82,10 +80,10 @@ function activeCount(): int32 {
 	return n;
 }
 
-function runPass(body: Node): void {
+function runPass(body: Node, st: Induction): void {
 	st.ancestors = [];
 	st.closureDepth = 0;
-	visitChildren(body);
+	visitChildren(body, st);
 }
 
 function hasComputedGotoLoop(n: Node): boolean {
@@ -100,7 +98,7 @@ function hasComputedGotoLoop(n: Node): boolean {
 	return anyChild(n, hasComputedGotoLoop);
 }
 
-function collectAssigned(n: Node): void {
+function collectAssigned(n: Node, st: Induction): void {
 	if (n.kind == NodeKind.BinaryExpr) {
 		const d = n.data as BinaryExprData;
 		if (isAssignOp(d.operator) && d.left.kind == NodeKind.Identifier && d.left.resolvedSym != null) symSetAdd(st.assigned, d.left.resolvedSym);
@@ -111,10 +109,10 @@ function collectAssigned(n: Node): void {
 		const arg = (n.data as OutExprData).outArg;
 		if (arg != null && arg.kind == NodeKind.Identifier && arg.resolvedSym != null) symSetAdd(st.assigned, arg.resolvedSym);
 	}
-	forEachChild(n, (c: Node): void => collectAssigned(c));
+	forEachChild(n, (c: Node): void => collectAssigned(c, st));
 }
 
-function isIndexVar(sym: Symbol | null): boolean {
+function isIndexVar(sym: Symbol | null, st: Induction): boolean {
 	if (sym == null || sym.symbolType == null || !symSetContains(st.assigned, sym)) return false;
 	if (sym.symbolKind != SymbolKind.Parameter && !(sym.symbolKind == SymbolKind.Variable && hasFlag(sym, SymbolFlag.Mutable))) return false;
 	return sym.symbolType.kind == TypeKind.Int32 || sym.symbolType.kind == TypeKind.Int64;
@@ -141,31 +139,31 @@ function mentions(n: Node, sym: Symbol): boolean {
 
 // The index variable `n` is a sum of, with every other term free of that variable and an
 // integer; null when `n` has any other shape.
-function indexVarOf(n: Node): Symbol | null {
-	if (n.kind == NodeKind.Identifier) return isIndexVar(n.resolvedSym) ? n.resolvedSym : null;
+function indexVarOf(n: Node, st: Induction): Symbol | null {
+	if (n.kind == NodeKind.Identifier) return isIndexVar(n.resolvedSym, st) ? n.resolvedSym : null;
 	if (n.kind != NodeKind.BinaryExpr) return null;
 	const d = n.data as BinaryExprData;
 	if (d.operator != "+" && d.operator != "-") return null;
-	const l = indexVarOf(d.left);
+	const l = indexVarOf(d.left, st);
 	if (l != null && isOffsetOperand(d.right) && !mentions(d.right, l)) return l;
 	if (d.operator == "+") {
-		const r = indexVarOf(d.right);
+		const r = indexVarOf(d.right, st);
 		if (r != null && isOffsetOperand(d.left) && !mentions(d.left, r)) return r;
 	}
 	return null;
 }
 
 // The terms of `n` other than the index variable `sym`, as one expression; null when none remain.
-function restOf(n: Node, sym: Symbol): Node | null {
+function restOf(n: Node, sym: Symbol, st: Induction): Node | null {
 	if (n.kind == NodeKind.Identifier) return null;
 	const d = n.data as BinaryExprData;
-	const l = indexVarOf(d.left);
+	const l = indexVarOf(d.left, st);
 	if (l == sym) {
-		const rest = restOf(d.left, sym);
+		const rest = restOf(d.left, sym, st);
 		if (rest == null) return d.operator == "+" ? d.right : negate(d.right);
 		return sumNode(rest, d.operator, d.right, n);
 	}
-	const rest = restOf(d.right, sym);
+	const rest = restOf(d.right, sym, st);
 	if (rest == null) return d.left;
 	return sumNode(d.left, "+", rest, n);
 }
@@ -195,7 +193,7 @@ function spanElemOf(access: Node): Type | null {
 	return t.typeReturn;
 }
 
-function topLevelDeclIndex(sym: Symbol): number {
+function topLevelDeclIndex(sym: Symbol, st: Induction): number {
 	const stmts = (st.body.data as BlockStmtData).statements;
 	for (let k = 0; k < stmts.length; k += 1) {
 		if (stmts[k].kind == NodeKind.VariableDecl && stmts[k].resolvedSym == sym && (stmts[k].data as VariableDeclData).initializer != null) return k;
@@ -203,16 +201,16 @@ function topLevelDeclIndex(sym: Symbol): number {
 	return -2;
 }
 
-function collectPairs(n: Node): void {
+function collectPairs(n: Node, st: Induction): void {
 	if (n.kind == NodeKind.ArrayAccess) {
 		const elem = spanElemOf(n);
-		const idx = elem != null ? indexVarOf((n.data as ArrayAccessData).index) : null;
-		if (elem != null && idx != null) addPairing(idx, (n.data as ArrayAccessData).array.resolvedSym, elem);
+		const idx = elem != null ? indexVarOf((n.data as ArrayAccessData).index, st) : null;
+		if (elem != null && idx != null) addPairing(idx, (n.data as ArrayAccessData).array.resolvedSym, elem, st);
 	}
-	forEachChild(n, (c: Node): void => collectPairs(c));
+	forEachChild(n, (c: Node): void => collectPairs(c, st));
 }
 
-function addPairing(idx: Symbol, spanSym: Symbol | null, elem: Type): void {
+function addPairing(idx: Symbol, spanSym: Symbol | null, elem: Type, st: Induction): void {
 	if (spanSym == null) return;
 	const span: Symbol = spanSym;
 	for (const p of st.pairs) {
@@ -220,10 +218,10 @@ function addPairing(idx: Symbol, spanSym: Symbol | null, elem: Type): void {
 		if (p.span != span) p.active = false;
 		return;
 	}
-	const declAt = idx.symbolKind == SymbolKind.Parameter ? -1 : topLevelDeclIndex(idx);
+	const declAt = idx.symbolKind == SymbolKind.Parameter ? -1 : topLevelDeclIndex(idx, st);
 	let ok = declAt >= -1;
 	if (span.symbolKind == SymbolKind.Variable) {
-		const spanAt = topLevelDeclIndex(span);
+		const spanAt = topLevelDeclIndex(span, st);
 		ok = ok && !hasFlag(span, SymbolFlag.Mutable) && spanAt >= 0 && declAt > spanAt;
 	} else if (span.symbolKind != SymbolKind.Parameter) {
 		ok = false;
@@ -233,7 +231,7 @@ function addPairing(idx: Symbol, spanSym: Symbol | null, elem: Type): void {
 	st.pairs.push({ idx, span, elem, ptrType, ptr, declAt, active: ok });
 }
 
-function activePairOfIdx(sym: Symbol | null): Pairing | null {
+function activePairOfIdx(sym: Symbol | null, st: Induction): Pairing | null {
 	if (sym == null) return null;
 	for (const p of st.pairs) {
 		if (p.active && p.idx == sym) return p;
@@ -241,7 +239,7 @@ function activePairOfIdx(sym: Symbol | null): Pairing | null {
 	return null;
 }
 
-function spanIsPaired(sym: Symbol | null): boolean {
+function spanIsPaired(sym: Symbol | null, st: Induction): boolean {
 	if (sym == null) return false;
 	for (const p of st.pairs) {
 		if (p.active && p.span == sym) return true;
@@ -249,37 +247,37 @@ function spanIsPaired(sym: Symbol | null): boolean {
 	return false;
 }
 
-function reject(p: Pairing): void {
+function reject(p: Pairing, st: Induction): void {
 	if (st.wet && p.active) throw new Error("internal: induction pairing for '" + p.idx.name + "' rejected after the survey accepted it");
 	p.active = false;
 }
 
-function rejectSpan(sym: Symbol): void {
+function rejectSpan(sym: Symbol, st: Induction): void {
 	for (const p of st.pairs) {
-		if (p.span == sym) reject(p);
+		if (p.span == sym) reject(p, st);
 	}
 }
 
-function visit(node: Node): Node {
+function visit(node: Node, st: Induction): Node {
 	if (node == null) return node;
-	if (node.kind == NodeKind.ArrayAccess) return visitAccess(node);
-	if (node.kind == NodeKind.ExprStmt) return visitStatement(node);
-	if (node.kind == NodeKind.VariableDecl) return visitDecl(node);
-	if (node.kind == NodeKind.Identifier) return visitIdentifier(node);
-	visitChildren(node);
+	if (node.kind == NodeKind.ArrayAccess) return visitAccess(node, st);
+	if (node.kind == NodeKind.ExprStmt) return visitStatement(node, st);
+	if (node.kind == NodeKind.VariableDecl) return visitDecl(node, st);
+	if (node.kind == NodeKind.Identifier) return visitIdentifier(node, st);
+	visitChildren(node, st);
 	return node;
 }
 
-function visitChildren(node: Node): void {
+function visitChildren(node: Node, st: Induction): void {
 	const fn = isRoutineNode(node);
 	if (fn) st.closureDepth += 1;
 	st.ancestors.push(node);
-	mapChildren(node, visit);
+	mapChildren(node, (child: Node): Node => visit(child, st));
 	st.ancestors.pop();
 	if (fn) st.closureDepth -= 1;
 }
 
-function parentOf(): Node {
+function parentOf(st: Induction): Node {
 	return st.ancestors[st.ancestors.length - 1];
 }
 
@@ -328,17 +326,17 @@ function spanUseAllowed(parent: Node, n: Node): boolean {
 	return parent.kind == NodeKind.HiddenStdConv;
 }
 
-function visitIdentifier(node: Node): Node {
+function visitIdentifier(node: Node, st: Induction): Node {
 	const sym = node.resolvedSym;
-	const p = activePairOfIdx(sym);
+	const p = activePairOfIdx(sym, st);
 	if (p != null) {
-		if (st.closureDepth > 0 || !readsAllowed(parentOf(), node)) {
-			reject(p);
+		if (st.closureDepth > 0 || !readsAllowed(parentOf(st), node)) {
+			reject(p, st);
 			return node;
 		}
 		return st.wet ? currentOffset(p, node) : node;
 	}
-	if (sym != null && spanIsPaired(sym) && (st.closureDepth > 0 || !spanUseAllowed(parentOf(), node))) rejectSpan(sym);
+	if (sym != null && spanIsPaired(sym, st) && (st.closureDepth > 0 || !spanUseAllowed(parentOf(st), node))) rejectSpan(sym, st);
 	return node;
 }
 
@@ -368,22 +366,22 @@ function pointerDecl(p: Pairing, init: Node): Node {
 	return decl;
 }
 
-function visitAccess(node: Node): Node {
+function visitAccess(node: Node, st: Induction): Node {
 	const d = node.data as ArrayAccessData;
 	const elem = spanElemOf(node);
-	const idx = elem != null ? indexVarOf(d.index) : null;
-	const p = idx != null ? activePairOfIdx(idx) : null;
+	const idx = elem != null ? indexVarOf(d.index, st) : null;
+	const p = idx != null ? activePairOfIdx(idx, st) : null;
 	if (p == null || p.span != d.array.resolvedSym) {
-		visitChildren(node);
+		visitChildren(node, st);
 		return node;
 	}
 	if (st.closureDepth > 0) {
-		reject(p);
+		reject(p, st);
 		return node;
 	}
 	st.ancestors.push(node);
-	const rest = restOf(d.index, p.idx);
-	const offset = rest != null ? visit(rest) : makeNumber(0, node.location);
+	const rest = restOf(d.index, p.idx, st);
+	const offset = rest != null ? visit(rest, st) : makeNumber(0, node.location);
 	st.ancestors.pop();
 	if (st.wet) {
 		d.array = makeIdentResolved(p.ptr, d.array.location);
@@ -392,34 +390,34 @@ function visitAccess(node: Node): Node {
 	return node;
 }
 
-function visitDecl(node: Node): Node {
+function visitDecl(node: Node, st: Induction): Node {
 	const d = node.data as VariableDeclData;
-	const p = activePairOfIdx(node.resolvedSym);
+	const p = activePairOfIdx(node.resolvedSym, st);
 	if (p == null || p.declAt < 0) {
-		visitChildren(node);
+		visitChildren(node, st);
 		return node;
 	}
 	if (st.closureDepth > 0 || mentions(d.initializer, p.idx) || !isOffsetOperand(d.initializer)) {
-		reject(p);
+		reject(p, st);
 		return node;
 	}
-	visitChildren(node);
+	visitChildren(node, st);
 	if (!st.wet) return node;
 	return pointerDecl(p, d.initializer);
 }
 
 // `i += e`, `i -= e`, `i = i + e`, `i = i - e` step the pointer; `i = e` re-seats it.
-function visitStatement(node: Node): Node {
+function visitStatement(node: Node, st: Induction): Node {
 	const sd = node.data as ExprStmtData;
 	const e = sd.expr;
 	if (e.kind != NodeKind.BinaryExpr) {
-		visitChildren(node);
+		visitChildren(node, st);
 		return node;
 	}
 	const d = e.data as BinaryExprData;
-	const p = d.left.kind == NodeKind.Identifier ? activePairOfIdx(d.left.resolvedSym) : null;
+	const p = d.left.kind == NodeKind.Identifier ? activePairOfIdx(d.left.resolvedSym, st) : null;
 	if (p == null) {
-		visitChildren(node);
+		visitChildren(node, st);
 		return node;
 	}
 	let op = "";
@@ -427,20 +425,20 @@ function visitStatement(node: Node): Node {
 	if (d.operator == "+=" || d.operator == "-=") {
 		op = d.operator;
 	} else if (d.operator == "=") {
-		if (indexVarOf(d.right) == p.idx) {
+		if (indexVarOf(d.right, st) == p.idx) {
 			op = "+=";
-			const rest = restOf(d.right, p.idx);
+			const rest = restOf(d.right, p.idx, st);
 			amount = rest != null ? rest : makeNumber(0, e.location);
 		} else {
 			op = "=";
 		}
 	}
 	if (op == "" || st.closureDepth > 0 || mentions(amount, p.idx) || !isOffsetOperand(amount)) {
-		reject(p);
+		reject(p, st);
 		return node;
 	}
 	st.ancestors.push(node);
-	const next = visit(amount);
+	const next = visit(amount, st);
 	st.ancestors.pop();
 	if (!st.wet) return node;
 	const target = makeIdentResolved(p.ptr, d.left.location);
