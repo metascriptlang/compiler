@@ -1,8 +1,9 @@
 // MetaScript Compiler — managed C toolchain provisioning (locate + install Zig).
 
 import { stopBuild } from "./io";
-import { exec, env, platform, arch, exit } from "std/process";
-import { exists, ensureDir, remove } from "std/fs";
+import { exec, execFileCapture, env, platform, arch, exit } from "std/process";
+import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable } from "std/fs";
+import { quoteCcArg } from "../utils/commandLine";
 import { join } from "std/fs/path";
 import { readLine, writeStderr } from "std/io";
 import { CliOptions } from "./options";
@@ -149,6 +150,161 @@ function ensureZig(assumeYes: boolean): string {
 	return managedZigBinary();
 }
 
+struct NativeToolchain {
+	root: string;
+	version: string;
+	identity: string;
+}
+
+function isSha256(value: string): boolean {
+	if (value.length != 64) return false;
+	for (let i = 0; i < value.length; i++) {
+		if ("0123456789abcdef".indexOf(value.charAt(i)) < 0) return false;
+	}
+	return true;
+}
+
+function bundlePathSafe(path: string): boolean {
+	if (path == "" || path.indexOf(":") >= 0 || path.indexOf("\\") >= 0) return false;
+	for (let i = 0; i < path.length; i++) {
+		if (path.charCodeAt(i) < 32 || path.charCodeAt(i) == 127) return false;
+	}
+	for (const part of path.split("/")) {
+		if (part == "" || part == "." || part == "..") return false;
+	}
+	return true;
+}
+
+function bundleText(root: string, name: string): Result<string, string> {
+	const path = join(root, name);
+	if (realpath(path).replaceAll("\\", "/") != path) return Result.err(`native toolchain: missing or symlinked metadata ${name}`);
+	const text = readFile(path);
+	if (!text.ok) return Result.err(`native toolchain: cannot read ${path}`);
+	return Result.ok(text.value);
+}
+
+function fileSha256(path: string): Result<string, string> {
+	const command = platform == "windows" ? "certutil" : platform == "darwin" ? "shasum" : "sha256sum";
+	const args = platform == "windows" ? ["-hashfile", path, "SHA256"] : platform == "darwin" ? ["-a", "256", path] : [path];
+	const hash = execFileCapture(command, args);
+	if (!hash.ok) return Result.err(`native toolchain: cannot hash ${path}: ${hash.error.message}`);
+	for (const line of hash.value.split("\n")) {
+		const digest = line.trim().slice(0, 64).toLowerCase();
+		if (isSha256(digest)) return Result.ok(digest);
+	}
+	return Result.err(`native toolchain: invalid SHA256 output for ${path}`);
+}
+
+function validateBundleTree(root: string, directory: string, names: HashSet<string>): Result<void, string> {
+	for (const entry of readDir(join(root, directory))) {
+		const name = entry.endsWith("/") ? entry.slice(0, entry.length - 1) : entry;
+		const relative = directory == "" ? name : `${directory}/${name}`;
+		if (!bundlePathSafe(relative)) return Result.err(`native toolchain: unsafe payload path ${relative}`);
+		const full = join(root, relative);
+		if (isDir(full)) {
+			if (realpath(full).replaceAll("\\", "/") != full) return Result.err(`native toolchain: directory symlink ${relative}`);
+			const children = try validateBundleTree(root, relative, names);
+		} else if (relative != "FILES.sha256" && relative != "IDENTITY" && !names.has(relative)) {
+			return Result.err(`native toolchain: unlisted payload ${relative}`);
+		}
+	}
+	return Result.ok(null);
+}
+
+function validateNativeToolchain(path: string): Result<NativeToolchain, string> {
+	const root = realpath(path).replaceAll("\\", "/");
+	if (root == "") return Result.err(`native toolchain: missing bundle ${path}`);
+	const hostText = try bundleText(root, "HOST");
+	const versionText = try bundleText(root, "VERSION");
+	const identityText = try bundleText(root, "IDENTITY");
+	const manifest = try bundleText(root, "FILES.sha256");
+	if (arch != "arm64" && arch != "amd64" && arch != "aarch64" && arch != "x86_64") {
+		return Result.err(`native toolchain: unsupported host architecture ${arch}`);
+	}
+	if (hostText != `${hostKey()}\n`) return Result.err(`native toolchain: bundle host ${hostText.trim()} does not match ${hostKey()}`);
+	const version = versionText.trim();
+	const components = version.split(".");
+	if (components.length != 3 || versionText != `${version}\n`) return Result.err("native toolchain: invalid VERSION");
+	for (const component of components) {
+		if (component == "") return Result.err("native toolchain: invalid VERSION");
+		for (let i = 0; i < component.length; i++) {
+			if ("0123456789".indexOf(component.charAt(i)) < 0) return Result.err("native toolchain: invalid VERSION");
+		}
+	}
+	const identity = identityText.trim();
+	if (!isSha256(identity) || identityText != `${identity}\n`) return Result.err("native toolchain: invalid IDENTITY");
+	const actualIdentity = try fileSha256(join(root, "FILES.sha256"));
+	if (actualIdentity != identity) return Result.err("native toolchain: FILES.sha256 identity mismatch");
+	if (!manifest.endsWith("\n")) return Result.err("native toolchain: unterminated FILES.sha256");
+	const names = new HashSet<string>();
+	const lines = manifest.split("\n");
+	for (let i = 0; i < lines.length - 1; i++) {
+		const line = lines[i];
+		const name = line.slice(66);
+		if (line.length < 67 || line.slice(64, 66) != "  " || !isSha256(line.slice(0, 64)) || !bundlePathSafe(name)) {
+			return Result.err(`native toolchain: invalid manifest entry ${line}`);
+		}
+		if (name == "FILES.sha256" || name == "IDENTITY" || names.has(name)) return Result.err(`native toolchain: duplicate or reserved manifest entry ${name}`);
+		names.add(name);
+		const resolved = realpath(join(root, name)).replaceAll("\\", "/");
+		if (!resolved.startsWith(`${root}/`)) return Result.err(`native toolchain: missing or escaping payload ${name}`);
+		if (platform == "windows") {
+			const digest = try fileSha256(join(root, name));
+			if (digest != line.slice(0, 64)) return Result.err(`native toolchain: checksum mismatch for ${name}`);
+		}
+	}
+	const tree = try validateBundleTree(root, "", names);
+	const suffix = platform == "windows" ? ".exe" : "";
+	for (const name of ["HOST", "VERSION", `bin/clang${suffix}`, `bin/clang++${suffix}`, `bin/llvm-ar${suffix}`, `lib/clang/${components[0]}/include/stddef.h`]) {
+		if (!names.has(name)) return Result.err(`native toolchain: unlisted required payload ${name}`);
+	}
+	for (const tool of ["clang", "clang++", "llvm-ar", platform == "darwin" ? "ld64.lld" : platform == "windows" ? "lld-link" : "ld.lld"]) {
+		const name = `bin/${tool}${suffix}`;
+		if (!names.has(name) || !isExecutable(join(root, name))) return Result.err(`native toolchain: missing executable ${name}`);
+	}
+	if (platform != "windows") {
+		const checked = platform == "darwin"
+			? execFileCapture("shasum", ["-a", "256", "-c", "FILES.sha256"], root)
+			: execFileCapture("sha256sum", ["-c", "FILES.sha256"], root);
+		if (!checked.ok) return Result.err(`native toolchain: payload checksum verification failed: ${checked.error.output}${checked.error.errorOutput}`);
+	}
+	const compiler = execFileCapture(join(root, `bin/clang${suffix}`), ["--version"]);
+	if (!compiler.ok) return Result.err("native toolchain: cannot execute bundled clang");
+	const firstLine = compiler.value.split("\n")[0];
+	if (!firstLine.endsWith(`clang version ${version}`) && !firstLine.contains(`clang version ${version} `)) {
+		return Result.err(`native toolchain: compiler version does not match ${version}`);
+	}
+	return Result.ok({ root, version, identity });
+}
+
+function selectNativeToolchain(opts: CliOptions, path: string): Result<void, string> {
+	const bundle = try validateNativeToolchain(path);
+	if (opts.targetOs != "darwin" && opts.targetOs != "macos") {
+		return Result.err(`native toolchain: prepared runtime for ${opts.targetOs} is not installed in ${bundle.root}`);
+	}
+	const sdk = execFileCapture("xcrun", ["--sdk", "macosx", "--show-sdk-path"]);
+	if (!sdk.ok || sdk.value.trim() == "") return Result.err("native toolchain: macOS builds require an installed Xcode SDK");
+	opts.ccBinary = quoteCcArg(join(bundle.root, "bin/clang"));
+	opts.passC = `-isysroot ${quoteCcArg(sdk.value.trim())} -resource-dir ${quoteCcArg(join(bundle.root, `lib/clang/${bundle.version.split(".")[0]}`))} -DMSC_NATIVE_TOOLCHAIN_${bundle.identity}=1 ${opts.passC}`;
+	opts.passL = `--ld-path=${quoteCcArg(join(bundle.root, "bin/ld64.lld"))} ${opts.passL}`;
+	return Result.ok(null);
+}
+
+test "bundle checksums require a complete lowercase SHA256" {
+	assert isSha256("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+	assert !isSha256("");
+	assert !isSha256("0123456789abcdef");
+	assert !isSha256("G123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+}
+
+test "bundle manifest paths cannot escape or inject checksum records" {
+	assert bundlePathSafe("bin/clang++");
+	assert bundlePathSafe("notices/source provenance.json");
+	for (const path of ["", "/bin/clang", "../clang", "bin/../clang", "bin//clang", "./bin/clang", "C:/clang", "bin\\clang", "bin/clang\nextra", "bin/clang\t"]) {
+		assert !bundlePathSafe(path);
+	}
+}
+
 // Normalize the --cc alias and resolve (installing if needed) the compiler to
 // use. Every command that emits C must call this — cmdBuildC and cmdTest both
 // do; cmdRun reaches it through cmdBuildC. LTO capability checks live in
@@ -160,6 +316,15 @@ export function resolveCC(opts: CliOptions): void {
 	if (opts.ccBinary != "" || opts.ccCompiler != 0) return;
 	if (opts.targetOs == "solana" || opts.targetOs == "bare" || opts.targetOs == "emcc") return;
 
+	const native = env.get("MSC_NATIVE_TOOLCHAIN");
+	if (native != "") {
+		const selected = selectNativeToolchain(opts, native);
+		if (!selected.ok) {
+			eprintln(`error: ${selected.error}`);
+			stopBuild();
+		}
+		return;
+	}
 	if (ensureZig(opts.autoYes) == "") stopBuild();
 	// Leave ccBinary empty: getCompilerName resolves managed zig from its warmed
 	// global, which workers read read-only. Stuffing the heap path string into
