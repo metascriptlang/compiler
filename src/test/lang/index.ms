@@ -99,3 +99,4 @@ import "./oneValueFieldAlias";
 import "./nullable";
 import "./keyedAccess";
 import "./proxyTraps";
+import "./commentLookahead";
