@@ -8,7 +8,10 @@ Production runs Zig once per target on a fixture with private caches, so every r
 is attributable to that run, and copies the ordered inputs of the link line and the ordered
 include directories of the compile line it printed. Each target gets a native clang config
 file (`clang --config RUNTIME/T.cfg -c x.c`, then `clang --config RUNTIME/T.cfg x.o -o out`);
-the payload carries no Zig. The engine is found from the config file by a relative path
+the payload carries no Zig. Each config also names its target directory as the linker's library
+search root, and a glibc stub `libNAME.so.N` gets the regular alias `libNAME.so` (a relative
+symlink in the same directory), so the `-lm -lpthread` a build line appends are found without the
+caller knowing the layout. The engine is found from the config file by a relative path
 (`--engine-relative`): siblings by default (`../engine`), or `..` when the runtime is a child of
 the engine root, as in a full bundle.
 
@@ -34,6 +37,9 @@ ZIG_TIMEOUT_SECONDS = 3600
 CONFIG_TOKEN = re.compile(r"^[A-Za-z0-9_.+=:/<>,@%-]+$")
 SHARED_OBJECT = re.compile(r"\.so(\.\d+)*$")
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.+-]+$")
+VERSIONED_STUB = re.compile(r"^lib([A-Za-z0-9_+-]+)\.so\.\d+$")
+# Zig's `ld` stub is the dynamic linker (soname ld-linux-*.so.2); glibc has no `libld.so` for it.
+NO_LINKER_NAME = ("ld",)
 LINK_VALUED = ("-o", "-z", "--entry", "-m", "--dynamic-linker", "-mllvm")
 PIC_FLAGS = ("-fno-PIE", "-fPIE", "-fno-PIC", "-fPIC", "-fno-pie", "-fpie", "-fno-pic", "-fpic")
 WASI_LICENSES = ("LICENSE", "LICENSE-APACHE", "LICENSE-APACHE-LLVM", "LICENSE-MIT")
@@ -188,6 +194,7 @@ def renderConfig(target, spec, compile_, items, directories, engineRelative, maj
     lines += [configLine(["-isystem", "%s/include/libc/%s" % (here, d)]) for d in directories]
     lines += ["-nostdlib"] + [configLine([f]) for f in spec["driverFlags"]]
     lines.append(configLine(["--ld-path=%s/bin/%s" % (engine, spec["linker"])]))
+    lines.append(configLine(["-Xlinker", "-L", "-Xlinker", "%s/%s" % (here, target)]))
     for kind, value in items:
         if kind == "arg":
             lines.append(configLine(["-Xlinker", value]))
@@ -358,6 +365,41 @@ def copyInputs(items, output, target, engine):
     return records
 
 
+def linkLibraryAliases(directory, names):
+    """Give each versioned stub `libNAME.so.N` of names the alias `libNAME.so`, a relative symlink
+    to the stub beside it, so `-lNAME` finds it. An alias that would land on an existing name,
+    or on one that two stubs both claim, is refused. Returns [{"alias", "target"}]."""
+    records = []
+    for name in names:
+        match = VERSIONED_STUB.match(name)
+        if not match or match.group(1) in NO_LINKER_NAME:
+            continue
+        alias = "lib%s.so" % match.group(1)
+        if os.path.lexists(os.path.join(directory, alias)):
+            raise pe.EngineError("%s: library alias %s for %s collides with an existing file" % (
+                directory, alias, name))
+        os.symlink(name, os.path.join(directory, alias))
+        records.append({"alias": alias, "target": name})
+    verifyLibraryAliases(directory, records)
+    return records
+
+
+def verifyLibraryAliases(directory, records):
+    """The symlinks of directory are exactly records, each a plain name for a regular file there."""
+    found = sorted(n for n in os.listdir(directory) if os.path.islink(os.path.join(directory, n)))
+    if found != sorted(r["alias"] for r in records):
+        raise pe.EngineError("%s: symlinks %s are not the recorded aliases %s" % (
+            directory, found, [r["alias"] for r in records]))
+    for record in records:
+        path, target = os.path.join(directory, record["alias"]), record["target"]
+        if os.readlink(path) != target or os.path.basename(target) != target:
+            raise pe.EngineError("%s: alias %s is not a relative link to %s" % (directory, record["alias"], target))
+        real = os.path.join(directory, target)
+        if os.path.islink(real) or not os.path.isfile(real):
+            raise pe.EngineError("%s: alias %s points at %s, which is not a regular file" % (
+                directory, record["alias"], target))
+
+
 def copyNotices(output, zigLib, spec):
     """Copy the license files named for the target from the Zig tree; a missing one is an error."""
     zigRoot = os.path.dirname(zigLib)
@@ -401,6 +443,7 @@ def produceTarget(zig, zigVersion, engine, target, work, output, engineRelative,
         raise pe.EngineError("Zig lib directory %s has whitespace" % zigLib)
     directories, absent = copyHeaders(compile_["isystem"], output, zigLib)
     inputs = copyInputs(items, output, target, engine)
+    aliases = linkLibraryAliases(os.path.join(output, target), [i["name"] for i in inputs])
     notices = copyNotices(output, zigLib, spec)
     carried, notCarried = translateFeatures(compile_["features"], target, compile_["cpu"], zigVersion, major)
     pe.writeText(os.path.join(output, target + ".cfg"),
@@ -415,7 +458,7 @@ def produceTarget(zig, zigVersion, engine, target, work, output, engineRelative,
         "linkArgs": [value if kind == "arg" else "$RT/%s/%s" % (target, os.path.basename(value))
                      if kind == "input" else "$OBJECT" for kind, value in items],
         "includeDirectories": directories, "includeDirectoriesAbsentInZig": absent,
-        "inputs": inputs, "notices": notices,
+        "inputs": inputs, "libraryAliases": aliases, "notices": notices,
         "zigFlagsNotCarried": "debug info, -O level, -DNDEBUG, frame pointer and unwind flags",
         "inputsNormalized": "debug sections stripped, stub symbol tables stripped; archive members renamed NNNN-name and the archive rebuilt deterministically",
     }
@@ -495,15 +538,18 @@ def prepareRuntime(zig, engine, output, targets, engineRelative="../engine"):
     return output, records
 
 
-def checkConfig(run, clang, config, target, work, absentMacroPrefixes):
-    """Compile and link the target's fixture through the config. Any nonzero exit or any stderr
-    (an unhonored CPU feature warns) is an error. Returns the linked binary."""
+def checkConfig(run, clang, config, target, work, absentMacroPrefixes, libraries=()):
+    """Compile and link the target's fixture through the config, then link it again with
+    -l<name> for each of libraries. Any nonzero exit or any stderr (an unhonored CPU feature
+    warns) is an error. Returns the linked binary."""
     fixture = os.path.join(FIXTURES, TARGETS[target]["fixture"])
     obj, binary = os.path.join(work, target + ".o"), os.path.join(work, target + ".bin")
     steps = [("compile", [clang] + config + ["-O2", "-c", fixture, "-o", obj]),
              ("link", [clang] + config + [obj, "-o", binary]),
+             ("library search", [clang] + config + [obj] + ["-l" + n for n in libraries]
+              + ["-o", binary + ".search"]) if libraries else None,
              ("macros", [clang] + config + ["-dM", "-E", "-x", "c", "/dev/null"])]
-    for name, command in steps:
+    for name, command in filter(None, steps):
         done = run(command)
         if done.returncode != 0:
             raise pe.EngineError("%s %s failed: %s" % (target, name, done.stderr.strip()))
@@ -533,7 +579,7 @@ def verifyConfigs(engine, runtime, engineRelative, records, work):
     resolves as the config says."""
     depth = checkEngineRelative(engineRelative)
     copy = os.path.join(work, "verify", *(["up"] * depth), "runtime")
-    shutil.copytree(runtime, copy)
+    shutil.copytree(runtime, copy, symlinks=True)
     link = os.path.normpath(os.path.join(copy, engineRelative))
     if os.path.lexists(link):
         linkEngineBeside(engine, link, copy)
@@ -547,7 +593,12 @@ def verifyConfigs(engine, runtime, engineRelative, records, work):
         prefixes = [e["absentMacroPrefix"] for e in record["cpuFeaturesNotCarried"]]
         checkConfig(run, os.path.join(link, "bin", "clang"),
                     ["--config", os.path.join(copy, record["target"] + ".cfg")],
-                    record["target"], work, prefixes)
+                    record["target"], work, prefixes, libraryNames(record["libraryAliases"]))
+
+
+def libraryNames(aliases):
+    """The -l names that reach the aliases: `libm.so` is `-lm`."""
+    return [a["alias"][len("lib"):-len(".so")] for a in aliases]
 
 
 def sandboxed(profile, work, command):
@@ -598,7 +649,7 @@ def prove(engine, runtime, denied, zig=None, targets=None):
     if not embedded:
         if os.path.lexists(movedRuntime):
             raise pe.EngineError("engine entry collides with the runtime at %s" % movedRuntime)
-        shutil.copytree(runtime, movedRuntime)
+        shutil.copytree(runtime, movedRuntime, symlinks=True)
     secrets = ([engine] if embedded else [engine, runtime]) + [os.path.realpath(p) for p in denied]
     if zig:
         secrets.append(os.path.dirname(os.path.realpath(zig)))
@@ -614,10 +665,13 @@ def prove(engine, runtime, denied, zig=None, targets=None):
     clang, nm = os.path.join(movedEngine, "bin", "clang"), os.path.join(movedEngine, "bin", "llvm-nm")
     for target in targets:
         config = ["--config", os.path.join(movedRuntime, target + ".cfg")]
-        prefixes = [e["absentMacroPrefix"] for r in receipt["targets"] if r["target"] == target
-                    for e in r["cpuFeaturesNotCarried"]]
+        recorded = next(r for r in receipt["targets"] if r["target"] == target)
+        if "libraryAliases" not in recorded:
+            raise pe.EngineError("%s receipt records no libraryAliases; prepare the runtime again" % target)
+        prefixes = [e["absentMacroPrefix"] for e in recorded["cpuFeaturesNotCarried"]]
+        verifyLibraryAliases(os.path.join(movedRuntime, target), recorded["libraryAliases"])
         binary = checkConfig(lambda command: sandboxed(profile, work, command), clang, config, target,
-                             work, prefixes)
+                             work, prefixes, libraryNames(recorded["libraryAliases"]))
         with open(binary, "rb") as f:
             data = f.read()
         leaked = [p for p in secrets if p.encode("utf-8") in data]

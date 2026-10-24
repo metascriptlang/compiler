@@ -141,6 +141,7 @@ class TargetAndConfigTest(unittest.TestCase):
             "-isystem <CFGDIR>/include/libc/generic-musl",
             "-nostdlib",
             "--ld-path=<CFGDIR>/../engine/bin/wasm-ld",
+            "-Xlinker -L -Xlinker <CFGDIR>/wasm32-wasi",
             "-Xlinker --entry",
             "-Xlinker _start",
             "-Xlinker <CFGDIR>/wasm32-wasi/crt1-command.o",
@@ -153,6 +154,7 @@ class TargetAndConfigTest(unittest.TestCase):
         self.assertIn("-D__GLIBC_MINOR__=31\n", text)
         self.assertIn("-no-pie\n", text)
         self.assertIn("--ld-path=<CFGDIR>/../engine/bin/ld.lld\n", text)
+        self.assertIn("-Xlinker -L -Xlinker <CFGDIR>/x86_64-linux-gnu.2.31\n", text)
 
 
 class FeatureTranslationTest(unittest.TestCase):
@@ -360,6 +362,9 @@ class PipelineTest(TempCase):
         self.assertEqual(sorted(os.listdir(self.path("rt", "wasm32-wasi"))),
                          ["crt1-command.o", "libc.a", "libcompiler_rt.a"])
         self.assertEqual(read(self.path("rt", "x86_64-linux-gnu.2.31", "libc.so.6")), "artifact libc.so.6")
+        self.assertEqual(os.readlink(self.path("rt", "x86_64-linux-gnu.2.31", "libc.so")), "libc.so.6")
+        self.assertEqual(read(self.path("rt", "x86_64-linux-gnu.2.31", "libc.so")), "artifact libc.so.6")
+        self.assertEqual([n for n in os.listdir(self.path("rt", "wasm32-wasi")) if os.path.islink(self.path("rt", "wasm32-wasi", n))], [])
         self.assertEqual(sorted(os.listdir(self.path("rt", "include", "libc"))),
                          ["generic-glibc", "generic-musl", "wasm-wasi-musl", "x86-linux-gnu"])
         config = read(self.path("rt", "wasm32-wasi.cfg"))
@@ -376,6 +381,9 @@ class PipelineTest(TempCase):
         self.assertEqual(receipt["zig"]["version"], "0.16.0")
         wasm, linux = receipt["targets"]
         self.assertEqual(wasm["cpuFeaturesNotCarried"], [])
+        self.assertEqual((wasm["libraryAliases"], linux["libraryAliases"]),
+                         ([], [{"alias": "libc.so", "target": "libc.so.6"}]))
+        self.assertIn("-Xlinker -L -Xlinker <CFGDIR>/x86_64-linux-gnu.2.31\n", read(self.path("rt", "x86_64-linux-gnu.2.31.cfg")))
         self.assertEqual(linux["cpuFeatures"], ["-amx-transpose"])
         self.assertEqual([e["feature"] for e in linux["cpuFeaturesNotCarried"]], ["-amx-transpose"])
         self.assertEqual(len(linux["cpuFeaturesNotCarried"][0]["sources"]), 2)
@@ -424,6 +432,104 @@ class PipelineTest(TempCase):
 def arMember(name, body):
     header = "%-16s%-12s%-6s%-6s%-8s%-10d`\n" % (name, "0", "0", "0", "644", len(body))
     return header.encode("ascii") + body + (b"\n" if len(body) % 2 else b"")
+
+
+class LibraryAliasTest(TempCase):
+    def stubs(self, *names):
+        directory = self.path("rt dir", "target")
+        for name in names:
+            write(os.path.join(directory, name))
+        return directory
+
+    def test_each_versioned_stub_gets_a_relative_link_and_the_linker_stub_gets_none(self):
+        directory = self.stubs("libm.so.6", "libpthread.so.0", "libdl.so.2", "librt.so.1", "libld.so.2",
+                               "libc_nonshared.a", "crt1.o", "libz.so", "libfoo.so.1.2")
+        records = pr.linkLibraryAliases(directory, sorted(os.listdir(directory)))
+        self.assertEqual([r["alias"] for r in records],
+                         ["libdl.so", "libm.so", "libpthread.so", "librt.so"])
+        for record in records:
+            self.assertEqual(os.readlink(os.path.join(directory, record["alias"])), record["target"])
+            self.assertEqual(os.path.realpath(os.path.join(directory, record["alias"])),
+                             os.path.join(os.path.realpath(directory), record["target"]))
+        self.assertEqual(sorted(n for n in os.listdir(directory) if os.path.islink(os.path.join(directory, n))),
+                         ["libdl.so", "libm.so", "libpthread.so", "librt.so"])
+        self.assertEqual(pr.libraryNames(records), ["dl", "m", "pthread", "rt"])
+
+    def test_an_alias_that_would_replace_a_file_is_refused(self):
+        directory = self.stubs("libm.so.6", "libm.so")
+        with self.assertRaisesRegex(pe.EngineError, "libm.so for libm.so.6 collides"):
+            pr.linkLibraryAliases(directory, ["libm.so.6"])
+        self.assertFalse(os.path.islink(os.path.join(directory, "libm.so")))
+
+    def test_two_stubs_claiming_one_alias_are_refused(self):
+        directory = self.stubs("libm.so.6", "libm.so.7")
+        with self.assertRaisesRegex(pe.EngineError, "collides"):
+            pr.linkLibraryAliases(directory, ["libm.so.6", "libm.so.7"])
+
+    def test_a_stub_that_is_not_shipped_would_dangle_and_is_refused(self):
+        directory = self.stubs("libc.so.6")
+        with self.assertRaisesRegex(pe.EngineError, "not a regular file"):
+            pr.linkLibraryAliases(directory, ["libm.so.6"])
+
+    def test_verification_refuses_an_absolute_external_dangling_or_chained_link(self):
+        directory = self.stubs("libm.so.6")
+        record = [{"alias": "libm.so", "target": "libm.so.6"}]
+        outside = self.path("outside")
+        write(outside)
+        for target in (os.path.join(directory, "libm.so.6"), "../../outside", "sub/../libm.so.6"):
+            link = os.path.join(directory, "libm.so")
+            os.symlink(target, link)
+            with self.assertRaisesRegex(pe.EngineError, "not a relative link"):
+                pr.verifyLibraryAliases(directory, record)
+            os.remove(link)
+        os.symlink("libm.so.6", os.path.join(directory, "libm.so"))
+        pr.verifyLibraryAliases(directory, record)
+        os.remove(os.path.join(directory, "libm.so.6"))
+        with self.assertRaisesRegex(pe.EngineError, "not a regular file"):
+            pr.verifyLibraryAliases(directory, record)
+        os.symlink("../../outside", os.path.join(directory, "libm.so.6"))
+        with self.assertRaisesRegex(pe.EngineError, "not the recorded aliases"):
+            pr.verifyLibraryAliases(directory, record)
+
+
+class LibrarySearchLinkTest(TempCase):
+    """The consumer case: `-lm -lpthread` appended by a build line, linked through a real prepared
+    bundle that is relocated to a path with a space. Needs MANAGED_TOOLCHAIN_BUNDLE=<full bundle>."""
+
+    def setUp(self):
+        super().setUp()
+        source = os.environ.get("MANAGED_TOOLCHAIN_BUNDLE")
+        if not (source and sys.platform == "darwin"):
+            self.skipTest("needs MANAGED_TOOLCHAIN_BUNDLE=<full bundle> on the macOS producer host")
+        self.bundle = self.path("a bundle")
+        shutil.copytree(source, self.bundle, symlinks=True)
+        self.clang = os.path.join(self.bundle, "bin", "clang")
+        self.config = ["--config", os.path.join(self.bundle, "runtime", "x86_64-linux-gnu.2.31.cfg")]
+        write(self.path("p.c"), "#include <math.h>\n#include <stdio.h>\n#include <dlfcn.h>\n#include <time.h>\n"
+              "int main(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);dlopen(\"x\",0);"
+              "printf(\"%f\\n\",sqrt(2.0));return 0;}\n")
+
+    def invoke(self, *arguments):
+        return subprocess.run([self.clang] + self.config + list(arguments), cwd=self.dir,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
+                              env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent"})
+
+    def test_compile_only_is_silent(self):
+        done = self.invoke("-c", "p.c", "-o", "p.o")
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
+
+    def test_explicit_libraries_link_without_a_warning(self):
+        self.assertEqual(self.invoke("-c", "p.c", "-o", "p.o").returncode, 0)
+        for libraries in (["-lm", "-lpthread"], ["-lm", "-lpthread", "-ldl", "-lrt"], ["-lc", "-lutil", "-lresolv"]):
+            done = self.invoke("p.o", *libraries, "-o", "p.bin")
+            self.assertEqual((done.returncode, done.stderr), (0, ""), msg=libraries)
+
+    def test_a_library_the_runtime_does_not_ship_is_still_refused(self):
+        self.assertEqual(self.invoke("-c", "p.c", "-o", "p.o").returncode, 0)
+        for library in ("-lnosuch", "-lld"):
+            done = self.invoke("p.o", library, "-o", "p.bin")
+            self.assertNotEqual(done.returncode, 0, msg=library)
+            self.assertIn("unable to find library " + library, done.stderr)
 
 
 class ArchiveTest(unittest.TestCase):
@@ -531,22 +637,28 @@ class EngineRelativeLayoutTest(TempCase):
         write(os.path.join(self.engine, "lib", "clang", "22", "include", "stddef.h"))
         self.runtime = self.path("a runtime")
         write(os.path.join(self.runtime, "x86_64-linux-gnu.2.31.cfg"))
+        write(os.path.join(self.runtime, "x86_64-linux-gnu.2.31", "libm.so.6"))
+        os.symlink("libm.so.6", os.path.join(self.runtime, "x86_64-linux-gnu.2.31", "libm.so"))
         write(os.path.join(self.runtime, "notices", "runtime-provenance.json"),
-              json.dumps({"engineRelative": "..", "targets": [{"target": "x86_64-linux-gnu.2.31",
-                                                                "cpuFeaturesNotCarried": []}]}))
+              json.dumps({"engineRelative": "..", "targets": [{
+                  "target": "x86_64-linux-gnu.2.31", "cpuFeaturesNotCarried": [],
+                  "libraryAliases": [{"alias": "libm.so", "target": "libm.so.6"}]}]}))
         self.seen = []
 
     def records(self):
-        return [{"target": "x86_64-linux-gnu.2.31", "cpuFeaturesNotCarried": []}]
+        return [{"target": "x86_64-linux-gnu.2.31", "cpuFeaturesNotCarried": [],
+                 "libraryAliases": [{"alias": "libm.so", "target": "libm.so.6"}]}]
 
-    def recordConfig(self, run, clang, config, target, work, prefixes):
+    def recordConfig(self, run, clang, config, target, work, prefixes, libraries):
         """What a config reads: the engine file and header the config's own directory reaches."""
         base = os.path.dirname(config[1])
         relative = self.relative
+        self.libraries = libraries
         self.seen.append((os.path.isfile(clang), os.path.isfile(config[1]),
                           os.path.isfile(os.path.join(base, relative, "lib", "clang", "22", "include", "stddef.h")),
                           os.path.realpath(os.path.join(base, relative, "bin", "clang"))
-                          == os.path.realpath(os.path.join(self.engine, "bin", "clang"))))
+                          == os.path.realpath(os.path.join(self.engine, "bin", "clang")),
+                          os.path.islink(os.path.join(base, "x86_64-linux-gnu.2.31", "libm.so"))))
         return None
 
     def verify(self, relative):
@@ -566,15 +678,18 @@ class EngineRelativeLayoutTest(TempCase):
 
     def test_a_sibling_engine_is_one_leaf_symlink(self):
         self.verify("../engine")
-        self.assertEqual(self.seen, [(True, True, True, True)])
+        self.assertEqual(self.seen, [(True, True, True, True, True)])
+        self.assertEqual(self.libraries, ["m"])
 
     def test_the_engine_root_above_the_runtime_gets_per_entry_symlinks(self):
         self.verify("..")
-        self.assertEqual(self.seen, [(True, True, True, True)])
+        self.assertEqual(self.seen, [(True, True, True, True, True)])
+        self.assertEqual(self.libraries, ["m"])
 
     def test_a_deeper_engine_root_gets_per_entry_symlinks(self):
         self.verify("../..")
-        self.assertEqual(self.seen, [(True, True, True, True)])
+        self.assertEqual(self.seen, [(True, True, True, True, True)])
+        self.assertEqual(self.libraries, ["m"])
 
     def test_an_engine_entry_named_like_the_runtime_is_refused(self):
         write(os.path.join(self.engine, "runtime", "x"))
@@ -586,7 +701,8 @@ class EngineRelativeLayoutTest(TempCase):
         before = sorted(os.listdir(self.engine))
         self.verify("..")
         self.assertEqual(sorted(os.listdir(self.engine)), before)
-        self.assertEqual(sorted(os.listdir(self.runtime)), ["notices", "x86_64-linux-gnu.2.31.cfg"])
+        self.assertEqual(sorted(os.listdir(self.runtime)), ["notices", "x86_64-linux-gnu.2.31",
+                                                            "x86_64-linux-gnu.2.31.cfg"])
 
     def prove(self, relative, embedded):
         """pr.prove on a layout, with the sandbox, the checks and the engine contract mocked
@@ -604,9 +720,11 @@ class EngineRelativeLayoutTest(TempCase):
         held, profiles, copies = [], [], []
         realCopytree = shutil.copytree
 
-        def ran(run, clang, config, target, work, prefixes):
+        def ran(run, clang, config, target, work, prefixes, libraries):
+            base = os.path.dirname(config[1])
             held.append((os.path.isfile(clang), os.path.isfile(config[1]),
-                         os.path.isdir(os.path.join(os.path.dirname(config[1]), "runtime"))))
+                         os.path.isdir(os.path.join(base, "runtime")),
+                         os.path.islink(os.path.join(base, "x86_64-linux-gnu.2.31", "libm.so")), libraries))
             return out
 
         def sandboxed(profile, work, command):
@@ -625,13 +743,13 @@ class EngineRelativeLayoutTest(TempCase):
 
     def test_prove_relocates_the_sibling_layout_as_two_trees(self):
         held, profile, copies = self.prove("../engine", embedded=False)
-        self.assertEqual(held, [(True, True, False)])
+        self.assertEqual(held, [(True, True, False, True, ["m"])])
         self.assertEqual(sorted(copies), sorted([os.path.realpath(self.engine), os.path.realpath(self.runtime)]))
         self.assertEqual(profile.count('(deny file-read* (subpath "'), 2)
 
     def test_prove_relocates_the_engine_root_layout_without_copying_the_runtime_twice(self):
         held, profile, copies = self.prove("..", embedded=True)
-        self.assertEqual(held, [(True, True, False)])
+        self.assertEqual(held, [(True, True, False, True, ["m"])])
         self.assertEqual(copies, [os.path.realpath(self.engine)])
         self.assertEqual(profile.count('(deny file-read* (subpath "'), 1)
         self.assertEqual(profile.count(os.path.realpath(self.engine)), 2)
@@ -639,6 +757,21 @@ class EngineRelativeLayoutTest(TempCase):
     def test_prove_refuses_a_runtime_inside_the_engine_where_the_receipt_does_not_say(self):
         with self.assertRaisesRegex(pe.EngineError, "not where engineRelative"):
             self.prove("../engine", embedded=True)
+
+    def test_prove_refuses_aliases_the_receipt_does_not_record_or_that_leave_the_directory(self):
+        directory = os.path.join(self.runtime, "x86_64-linux-gnu.2.31")
+        os.symlink("libm.so.6", os.path.join(directory, "libstray.so"))
+        with self.assertRaisesRegex(pe.EngineError, "not the recorded aliases"):
+            self.prove("..", embedded=False)
+
+    def test_prove_refuses_a_receipt_from_before_library_aliases(self):
+        receipt = os.path.join(self.runtime, "notices", "runtime-provenance.json")
+        data = json.loads(read(receipt))
+        del data["targets"][0]["libraryAliases"]
+        with open(receipt, "w") as f:
+            json.dump(data, f)
+        with self.assertRaisesRegex(pe.EngineError, "prepare the runtime again"):
+            self.prove("..", embedded=False)
 
     def test_prove_refuses_an_engine_entry_on_the_runtime_location(self):
         write(os.path.join(self.engine, "runtime", "x"))
