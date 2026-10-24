@@ -556,11 +556,11 @@ function checkStmtNode(ctx: CheckerContext, node: Node): void {
 				addError(ctx, "converter '" + fd.fnName + "' is only allowed at module level", fd.nameLocation.line, fd.nameLocation.column);
 			} else if (fdFlags.indexOf("extern", 0) >= 0 && fdLocal) {
 				checkExternFunctionStmt(ctx, node);
-			} else if (ctx.currentFunction != null && isGenericFn(fdFlags)) {
+			} else if (fdLocal && isGenericFn(fdFlags)) {
 				collectFunction(ctx, node);
 				resolveFunction(ctx, node);
 				declareLocalGeneric(node.resolvedSym!, ctx.table.current);
-			} else if (ctx.currentFunction != null) {
+			} else if (fdLocal) {
 				rewriteNestedFunctionDecl(ctx, node);
 				checkVariableDecl(ctx, node);
 			} else {
