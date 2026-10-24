@@ -4020,7 +4020,7 @@ function plainDataAt(t: Type | null, declaresHook: (owner: Type) => boolean, dep
 		TypeKind.Tuple => plainDataAll(t.typeChildren, declaresHook, depth),
 		TypeKind.Struct when (isMaybeType(t)) => plainDataAt(t.typeReturn, declaresHook, depth + 1),
 		TypeKind.Struct when (isStructType(t)) => !declaresHook(t) && plainDataAll(t.typeChildren, declaresHook, depth),
-		TypeKind.Union => !unionHasMemberOfKind(t, TypeKind.StringLiteral) && !declaresHook(t)
+		TypeKind.Union => !declaresHook(t)
 			&& plainDataAll(t.typeChildren, declaresHook, depth),
 		TypeKind.GenericInstance => t.typeReturn != null && !hasAsgnFlag(t.typeReturn) && !declaresHook(t)
 			&& plainDataAt(t.typeReturn, declaresHook, depth + 1),
@@ -4976,7 +4976,7 @@ export function evictionNeedsElementHook(elem: Type | null): boolean {
 }
 
 export function propagateToOwner(parent: Type, child: Type): void {
-	if (child != null && (child.typeFlags.has(TypeFlag.HasAsgn) || isAwaitable(child))) {
+	if (child != null && (child.typeFlags.has(TypeFlag.HasAsgn) || child.kind == TypeKind.StringLiteral || isAwaitable(child))) {
 		parent.typeFlags = parent.typeFlags.incl(TypeFlag.HasAsgn);
 	}
 	if (isDeclaredStruct(parent)) propagateGenericParam(parent, child);
