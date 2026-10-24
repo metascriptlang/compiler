@@ -31,6 +31,7 @@ export enum Target {
 export const MODE_DEBUG = 0;
 export const MODE_RELEASE = 1;
 export const MODE_DANGER = 2;
+export const CC_PREPARED = 3;
 
 export interface CliOptions {
 	command: string;
@@ -44,7 +45,6 @@ export interface CliOptions {
 	vmIterations: number;    // --max-vm-iterations=<n>: Raiser VM loop budget (0 = VM default, 10M iterations)
 	mode: number;
 	ccCompiler: number;
-	ccPrepared: boolean;
 	ccBinary: string;          // --cc=<path>: explicit C compiler binary (cross-compile)
 	targetOs: string;          // Target OS. Always set; defaults to host platform.
 	                           // Values: "linux"|"macos"|"windows"|"freebsd"|"bare"|"solana"|"wasm"|"emcc".
@@ -147,7 +147,6 @@ export function newCliOptions(): CliOptions {
 		vmIterations: 0,
 		mode: MODE_DEBUG,
 		ccCompiler: 0,
-		ccPrepared: false,
 		ccBinary: "",
 		targetOs: platform,
 		cpuTarget: "",

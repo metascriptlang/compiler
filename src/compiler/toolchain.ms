@@ -4,11 +4,10 @@ import { stopBuild } from "./io";
 import { exec, execFileCapture, env, platform, arch, exit, cwd } from "std/process";
 import { exists, ensureDir, remove, readFile, readDir, realpath, isDir, isExecutable, rmdir } from "std/fs";
 import { quoteCcArg } from "../utils/commandLine";
-import { resolveRuntimeDir } from "../utils/path";
+import { metascriptHome, resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 import { readLine, writeStderr } from "std/io";
-import { CliOptions, buildCpu } from "./options";
-import { metascriptHome } from "../utils/path";
+import { CliOptions, CC_PREPARED, buildCpu } from "./options";
 
 function eprintln(msg: string): void {
 	writeStderr(msg + "\n");
@@ -379,7 +378,7 @@ export function resolveCC(opts: CliOptions): void {
 			eprintln(`error: ${selected.error}`);
 			stopBuild();
 		}
-		opts.ccPrepared = true;
+		opts.ccCompiler = CC_PREPARED;
 		return;
 	}
 	if (ensureZig(opts.autoYes) == "") stopBuild();
