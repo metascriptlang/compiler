@@ -39,7 +39,8 @@ import { TransformContext, createTransformContext, freshTempSym } from "../conte
 import { walkExpandBlocks, replaceInExpr } from "../walker";
 import { anyDescendant, noStop } from "../../ast/visitor";
 import { containsConditionalEval } from "./callHoist";
-import { makeVarDecl, makeIdentResolved, makeMember, makeAssign, makeExprStmt, makeBlock, makeIf, makeUnary, makeBreak, makeBool, extractBodyStmts } from "../util";
+import { moveWhileTestIntoBody, wrapElseIfWhen } from "./jumpRetarget";
+import { makeVarDecl, makeIdentResolved, makeMember, makeAssign, makeExprStmt } from "../util";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 
 // ===== Gate =====
@@ -155,9 +156,7 @@ function altChainHasPositionalNew(alt: Node): boolean {
 // now-listed inner if (same trick as callHoist expandIf).
 function expandIf(stmt: Node, ctx: TransformContext): Node[] {
 	const ifd = stmt.data as IfStmtData;
-	if (ifd.alternate != null && ifd.alternate.kind == NodeKind.IfStmt && altChainHasPositionalNew(ifd.alternate)) {
-		ifd.alternate = makeBlock([ifd.alternate], ifd.alternate.location);
-	}
+	wrapElseIfWhen(ifd, altChainHasPositionalNew);
 	if (containsConditionalEval(ifd.condition)) return [stmt];
 	const hoisted: Node[] = [];
 	ifd.condition = hoistPositionalNews(ifd.condition, hoisted, ctx);
@@ -175,11 +174,7 @@ function expandWhile(stmt: Node, ctx: TransformContext): Node[] {
 	const pre: Node[] = [];
 	const cond = hoistPositionalNews(wd.whileCondition, pre, ctx);
 	if (pre.length == 0) return [stmt];
-	const loc = stmt.location;
-	pre.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null as unknown as Node, loc));
-	for (const s of extractBodyStmts(wd.whileBody)) { pre.push(s); }
-	wd.whileCondition = makeBool(true, loc);
-	wd.whileBody = makeBlock(pre, loc);
+	moveWhileTestIntoBody(stmt, pre, cond);
 	return [stmt];
 }
 

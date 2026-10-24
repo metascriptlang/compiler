@@ -10,7 +10,7 @@
 // Loop-crossing jumps become labeled breaks resolved at lowering time; codegen
 // only translates labels.
 
-import { Node, NodeKind, BreakStmtData, ContinueStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData } from "../../ast/node";
+import { Node, NodeKind, BreakStmtData, ContinueStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, IfStmtData } from "../../ast/node";
 import { TransformContext } from "../context";
 import { forEachChild, anyDescendant } from "../../ast/visitor";
 import { mapChildren } from "../walker";
@@ -124,6 +124,20 @@ export function moveDoWhileTestIntoBody(stmt: Node, pre: Node[], cond: Node, ctx
 	body.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null as unknown as Node, loc));
 	wd.doCondition = makeBool(true, loc);
 	wd.doBody = makeBlock(body, loc);
+}
+
+export function moveWhileTestIntoBody(stmt: Node, pre: Node[], cond: Node): void {
+	const wd = stmt.data as WhileStmtData;
+	const loc = stmt.location;
+	pre.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null as unknown as Node, loc));
+	for (const s of extractBodyStmts(wd.whileBody)) pre.push(s);
+	wd.whileCondition = makeBool(true, loc);
+	wd.whileBody = makeBlock(pre, loc);
+}
+
+export function wrapElseIfWhen(d: IfStmtData, alternateNeedsWalk: (alternate: Node) => boolean): void {
+	const alt = d.alternate;
+	if (alt != null && alt.kind == NodeKind.IfStmt && alternateNeedsWalk(alt)) d.alternate = makeBlock([alt], alt.location);
 }
 
 function ensureLoopLabel(target: JumpTarget, ctx: TransformContext): string {

@@ -10,10 +10,10 @@ import { Node, NodeKind, DeclKind, TypeKind, WhileStmtData, DoWhileStmtData, For
 import { TransformContext, freshTempSym } from "../context";
 import { containsExprKind, mapExprChildren, isAssignOp } from "../walker";
 import { lowerForStmt } from "./forLoopLower";
-import { moveDoWhileTestIntoBody } from "./jumpRetarget";
+import { moveDoWhileTestIntoBody, moveWhileTestIntoBody } from "./jumpRetarget";
 import { Spiller, lowerOperandList, lowerAssign } from "./operandOrder";
 import { lowerShortCircuitExpr } from "./conditionalExprLower";
-import { makeIdentResolved, makeBlock, makeVarDecl, makeExprStmt, makeNull, makeIf, makeAssign, makeBool, makeUnary, makeBreak, extractBodyStmts } from "../util";
+import { makeIdentResolved, makeBlock, makeVarDecl, makeExprStmt, makeNull, makeIf, makeAssign } from "../util";
 
 export type KindHoister = (node: Node, hoisted: Node[], ctx: TransformContext) => Node;
 
@@ -89,13 +89,7 @@ export function expandConditionStmt(stmt: Node, kind: NodeKind, hoistKind: KindH
 			if (!containsExprKind(d.whileCondition, kind)) return [stmt];
 			const pre: Node[] = [];
 			const cond = hoistGuarded(d.whileCondition, kind, hoistKind, pre, ctx);
-			if (pre.length > 0) {
-				const loc = stmt.location;
-				pre.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null, loc));
-				for (const s of extractBodyStmts(d.whileBody)) { pre.push(s); }
-				d.whileCondition = makeBool(true, loc);
-				d.whileBody = makeBlock(pre, loc);
-			}
+			if (pre.length > 0) moveWhileTestIntoBody(stmt, pre, cond);
 		},
 		NodeKind.DoWhileStmt => {
 			const d = stmt.data as DoWhileStmtData;

@@ -47,7 +47,8 @@ import { Node, NodeKind, DeclKind, Symbol, SourceLocation, VariableDeclData, Bin
 import { isResult, isAwaitable, noneType, booleanType } from "../../checker/types";
 import { TransformContext, freshTempSym } from "../context";
 import { walkExpandBlocks, replaceInExpr } from "../walker";
-import { makeVarDecl, makeIdentResolved, makeIf, makeBlock, makeBreak, makeUnary, makeBool, makeBinary, makeAssign, makeExprStmt, makeDefaultValue, extractBodyStmts } from "../util";
+import { moveWhileTestIntoBody, wrapElseIfWhen } from "./jumpRetarget";
+import { makeVarDecl, makeIdentResolved, makeIf, makeBlock, makeUnary, makeBool, makeBinary, makeAssign, makeExprStmt, makeDefaultValue } from "../util";
 
 // A boolean condition lowered to: run `pre` statements (unconditionally, in order),
 // then test `expr` (a pure boolean with no fresh RC call left in a conditional spot).
@@ -297,9 +298,7 @@ function expandIf(stmt: Node, ctx: TransformContext): Node[] {
 	// `else if (f().ok)` is the `.alternate`, never a statement-list entry, so expandStmt
 	// can't reach its condition. Wrap a fresh-cond else-if in a block so the walker
 	// descends and lowers the now-listed inner if; deeper else-ifs cascade the same way.
-	if (ifd.alternate != null && ifd.alternate.kind == NodeKind.IfStmt && altChainHasFreshCond(ifd.alternate)) {
-		ifd.alternate = makeBlock([ifd.alternate], ifd.alternate.location);
-	}
+	wrapElseIfWhen(ifd, altChainHasFreshCond);
 	// Plain once-eval conditions are captured by the analyzer (processIf walks the condition).
 	// callHoist only keeps the conditional-eval (short-circuit) main condition; the wrap above
 	// still routes a short-circuit else-if through the walker while a plain one falls to the analyzer.
@@ -321,12 +320,7 @@ function expandWhile(stmt: Node, ctx: TransformContext): Node[] {
 	const wd = stmt.data as WhileStmtData;
 	const lowered = lowerBoolCond(wd.whileCondition, ctx);
 	if (lowered == null) return [stmt];
-	const loc = stmt.location;
-	const body = lowered.pre;
-	body.push(makeIf(makeUnary("!", lowered.expr, loc), makeBlock([makeBreak(loc)], loc), null as unknown as Node, loc));
-	for (const s of extractBodyStmts(wd.whileBody)) { body.push(s); }
-	wd.whileCondition = makeBool(true, loc);
-	wd.whileBody = makeBlock(body, loc);
+	moveWhileTestIntoBody(stmt, lowered.pre, lowered.expr);
 	return [stmt];
 }
 

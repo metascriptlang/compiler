@@ -1,10 +1,11 @@
-import { Node, NodeKind, NodeData, BinaryExprData, CallExprData, UnaryExprData, TypeAssertionData, NumberLiteralData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, BlockStmtData, ArrowFunctionData, ArrayAccessData, MemberExprData, HiddenDerefData, Type, TypeKind, SourceLocation, createNodeAt } from "../../ast/node";
+import { Node, NodeKind, NodeData, BinaryExprData, CallExprData, UnaryExprData, TypeAssertionData, NumberLiteralData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ArrowFunctionData, ArrayAccessData, MemberExprData, HiddenDerefData, Type, TypeKind, SourceLocation, createNodeAt } from "../../ast/node";
 import { bitSetElemType, setRepr, booleanType, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocks, mapExprChildren } from "../walker";
-import { makeBinary, makeUnary, makeNumber, makeIdentResolved, makeArrayAccess, makeCall, makeConditional, makeVarDecl, makeBlock, makeIf, makeBreak, makeBool, makeReturn, runtimeRef } from "../util";
+import { makeBinary, makeUnary, makeNumber, makeIdentResolved, makeArrayAccess, makeCall, makeConditional, makeVarDecl, makeBlock, makeReturn, runtimeRef } from "../util";
 import { cloneIfPure } from "../place";
+import { moveWhileTestIntoBody, wrapElseIfWhen } from "./jumpRetarget";
 import { DeclKind } from "../../ast/node";
 
 function byteType(): Type { return createPrimitive(TypeKind.Uint8); }
@@ -463,11 +464,6 @@ export function containsImpureArrayOp(expr: Node): boolean {
 	return found;
 }
 
-function bodyStatements(body: Node): Node[] {
-	if (body != null && body.kind == NodeKind.BlockStmt) return (body.data as BlockStmtData).statements;
-	return body != null ? [body] : [];
-}
-
 function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 	const pre: Node[] = [];
 	if (stmt.kind == NodeKind.VariableDecl) {
@@ -481,19 +477,13 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 		if (d.argument != null) d.argument = hoistArrayOperands(d.argument, pre, ctx);
 	} else if (stmt.kind == NodeKind.IfStmt) {
 		const d = stmt.data as IfStmtData;
-		if (d.alternate != null && d.alternate.kind == NodeKind.IfStmt && containsImpureArrayOp((d.alternate.data as IfStmtData).condition)) {
-			d.alternate = makeBlock([d.alternate], d.alternate.location);
-		}
+		wrapElseIfWhen(d, (alt: Node): boolean => containsImpureArrayOp((alt.data as IfStmtData).condition));
 		d.condition = hoistArrayOperands(d.condition, pre, ctx);
 	} else if (stmt.kind == NodeKind.WhileStmt) {
 		const d = stmt.data as WhileStmtData;
 		if (!containsImpureArrayOp(d.whileCondition)) return [stmt];
-		const loc = stmt.location;
 		const cond = hoistArrayOperands(d.whileCondition, pre, ctx);
-		pre.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null as unknown as Node, loc));
-		for (const s of bodyStatements(d.whileBody)) pre.push(s);
-		d.whileCondition = makeBool(true, loc);
-		d.whileBody = makeBlock(pre, loc);
+		moveWhileTestIntoBody(stmt, pre, cond);
 		return [stmt];
 	}
 	pre.push(stmt);
