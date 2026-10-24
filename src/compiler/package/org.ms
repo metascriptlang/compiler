@@ -12,7 +12,7 @@ import { createHeaders, setHeader } from "std/http/headers";
 import { HttpHeaders } from "std/core/fetch/types";
 import { parseJson, getDynamicField, asString } from "std/core/json";
 import { arrayField } from "./json";
-import { loadToken } from "./login";
+import { loadToken } from "./credentials";
 import { registryBaseUrl } from "./registry";
 import { error as errStyle, bold, green, cyan, dim } from "../../utils/color";
 

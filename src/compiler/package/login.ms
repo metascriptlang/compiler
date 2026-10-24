@@ -7,62 +7,15 @@
 // 4. Exchange GitHub token for registry token via POST /auth/github/token
 // 5. Store registry token at ~/.metascript/credentials
 
-import { exists, readFile, writeFile, chmod } from "std/fs";
-import { env } from "std/process";
-import { join } from "std/fs/path";
 import { HttpResponse } from "std/http/types";
 import { HttpError } from "std/http/errors";
 import { createHeaders, setHeader } from "std/http/headers";
 import { sleepAsync } from "std/core/promise";
+import { loadToken, saveToken, deleteToken, credentialsErrorMessage } from "./credentials";
 
 const GITHUB_CLIENT_ID = "Ov23liXkaph4TDPP19yd";
 const REGISTRY_HOST = "api.metascriptlang.org";
 const API_BASE = "https://" + REGISTRY_HOST;
-
-function credentialsPath(): string {
-	let home = env.get("HOME");
-	// Windows fallback — HOME isn't set by default there.
-	if (home == "") home = env.get("USERPROFILE");
-	if (home == "") return "";
-	return join(join(home, ".metascript"), "credentials");
-}
-
-export function loadToken(): string {
-	const path = credentialsPath();
-	if (path == "" || !exists(path)) return "";
-	const content = try readFile(path) catch "";
-	return content.trim();
-}
-
-export enum CredentialsError {
-	NoHome,
-	Write,
-}
-
-export function credentialsErrorMessage(e: CredentialsError): string {
-	return match (e) {
-		CredentialsError.NoHome => "HOME not set, cannot locate ~/.metascript/credentials",
-		CredentialsError.Write => "could not write ~/.metascript/credentials",
-	};
-}
-
-export function saveToken(token: string): Result<void, CredentialsError> {
-	const path = credentialsPath();
-	if (path == "") return Result.err(CredentialsError.NoHome);
-	if (!writeFile(path, token + "\n").ok) return Result.err(CredentialsError.Write);
-	// Tighten perms to 0600 (owner rw only) — 384 decimal.
-	// Spec (docs/PACKAGE.md §File locations) requires mode 0600 on
-	// ~/.metascript/credentials. No-op on Windows.
-	chmod(path, 384 as int32);
-	return Result.ok(null);
-}
-
-export function deleteToken(): Result<void, CredentialsError> {
-	const path = credentialsPath();
-	if (path == "" || !exists(path)) return Result.ok(null);
-	if (!writeFile(path, "").ok) return Result.err(CredentialsError.Write);
-	return Result.ok(null);
-}
 
 // Parse a URL-encoded key=value pair from a &-separated response.
 function parseUrlEncoded(response: string, key: string): string {

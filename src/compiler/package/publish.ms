@@ -10,7 +10,7 @@
 import { exists, readFile } from "std/fs";
 import { join } from "std/fs/path";
 import { loadBuildConfig, PackageSection } from "../buildConfig";
-import { loadToken } from "./login";
+import { loadToken } from "./credentials";
 import { collectPublishFiles } from "./walker";
 import { validateBin, binEntryFor } from "./bin";
 import { newZipWriter, zipAdd, zipFinalize, closeZipWriter, ZipWriter } from "std/compress/zip";
