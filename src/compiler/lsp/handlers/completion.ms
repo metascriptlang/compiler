@@ -10,7 +10,7 @@ import {
 	lspResponse
 } from "../protocol";
 import {
-	lspFmtCompletionItem, lspFmtMultiLineTextEdit,
+	lspFmtCompletionItem, lspFmtLeanCompletionItem, lspFmtMultiLineTextEdit,
 } from "../format";
 import {
 	sgTypeToString, sgDetectCompletionContext, sgGetPrefix, sgGetCompletionCandidates,
@@ -65,12 +65,12 @@ export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null);
 	const items: string[] = [];
 	for (const kw of STMT_KEYWORDS) {
-		items.push("{\"label\":" + lspJsonString(kw) + ",\"kind\":" + KEYWORD_COMPLETION_KIND + ",\"sortText\":\"16\"}");
+		items.push(lspFmtLeanCompletionItem(kw, KEYWORD_COMPLETION_KIND, "16"));
 	}
 	for (const c of candidates) {
 		const kindNum = lspCompletionItemKind(c.kind, c.isMutable);
 		const sortText = lspCompletionSortText(c);
-		items.push("{\"label\":" + lspJsonString(c.name) + ",\"kind\":" + kindNum + ",\"sortText\":" + lspJsonString(sortText) + "}");
+		items.push(lspFmtLeanCompletionItem(c.name, kindNum, sortText));
 	}
 	// Cross-module candidates (also minimal — just label + kind)
 	if (db.exportRegistry != null) {
@@ -82,7 +82,7 @@ export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string
 				if (sym.name.length == 0 || inScopeSet.has(sym.name)) continue;
 				if (sym.ext != null) continue;
 				const kindNum = lspCompletionItemKind(sym.sym.symbolKind, false);
-				items.push("{\"label\":" + lspJsonString(sym.name) + ",\"kind\":" + kindNum + ",\"sortText\":\"25\"}");
+				items.push(lspFmtLeanCompletionItem(sym.name, kindNum, "25"));
 			}
 		}
 	}

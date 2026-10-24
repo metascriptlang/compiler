@@ -6,7 +6,7 @@ import {
 import { writeStderr } from "std/io";
 import { lspJsonString, lspGetObjectField, lspGetField, lspGetNumberField, lspGetArrayItems, lspUriToPath, lspResponse, lspErrorResponse } from "../protocol";
 import { parseJson } from "std/serialize/json/parser";
-import { lspFmtRange, lspFmtTextEdit } from "../format";
+import { lspFmtMultiLineTextEdit, lspFmtQuickFix, lspFmtTextEdit } from "../format";
 import { formatNode } from "../../fmt/printer";
 import { FmtPos, formatStatementEdit, innermostStatement, applyEdit } from "../../fmt/edit";
 import { LineIndex, lineStart } from "../../../utils/sourceLines";
@@ -86,7 +86,7 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 				const edit = lspFmtTextEdit(startLine, 0, line.length, fmtLines[startLine]);
 				const changesJson = "{" + lspJsonString(uri) + ":[" + edit + "]}";
 				const title = hasIndentIssue ? "Fix: Reformat this line" : "Fix: Remove trailing whitespace";
-				actions.push("{\"title\":" + lspJsonString(title) + ",\"kind\":\"quickfix\",\"isPreferred\":true,\"edit\":{\"changes\":" + changesJson + "}}");
+				actions.push(lspFmtQuickFix(title, changesJson));
 			}
 		}
 	}
@@ -122,9 +122,8 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 	const lines = LineIndex.build(source);
 	const lineCount = lines.starts.length - 1;
 	const lastLineLen = source.byteSlice(lines.lineStart(lineCount + 1), source.byteLength).length;
-	const range = lspFmtRange(0, 0, lineCount, lastLineLen);
 	const t5 = performance.now();
-	const edit = "{\"range\":" + range + ",\"newText\":" + lspJsonString(formatted) + "}";
+	const edit = lspFmtMultiLineTextEdit(0, 0, lineCount, lastLineLen, formatted);
 	const t6 = performance.now();
 	writeStderr(`[LSP-FMT] json=${t6 - t5}ms total=${t6 - t0}ms lines=${lineCount} lastLineLen=${lastLineLen} responseLen=${edit.length}\n`);
 	return lspResponse(id, "[" + edit + "]");
@@ -172,8 +171,7 @@ export function handleRangeFormatting(id: string, params: string, db: TransAmDb)
 
 	const startCharacter = lspCharacterIn(lines, source, e.start.line, e.start.column);
 	const endCharacter = lspCharacterIn(lines, source, e.end.line, e.end.column);
-	const lspRange = lspFmtRange(e.start.line - 1, startCharacter, e.end.line - 1, endCharacter);
-	return lspResponse(id, "[{\"range\":" + lspRange + ",\"newText\":" + lspJsonString(e.newText) + "}]");
+	return lspResponse(id, "[" + lspFmtMultiLineTextEdit(e.start.line - 1, startCharacter, e.end.line - 1, endCharacter, e.newText) + "]");
 }
 
 function formattingDb(source: string): TransAmDb {

@@ -82,6 +82,31 @@ export function lspFmtCompletionItem(
 	return jEnd(b);
 }
 
+export function lspFmtLeanCompletionItem(label: string, kind: number, sortText: string): string {
+	const b = jsonObj();
+	jStr(b, "label", label);
+	jNum(b, "kind", kind);
+	jStr(b, "sortText", sortText);
+	return jEnd(b);
+}
+
+export function lspFmtQuickFix(title: string, changesJson: string): string {
+	const edit = jsonObj();
+	jRaw(edit, "changes", changesJson);
+	const b = jsonObj();
+	jStr(b, "title", title);
+	jStr(b, "kind", "quickfix");
+	jBool(b, "isPreferred", true);
+	jRaw(b, "edit", jEnd(edit));
+	return jEnd(b);
+}
+
+export function lspFmtSemanticTokens(dataJson: string): string {
+	const b = jsonObj();
+	jRaw(b, "data", dataJson);
+	return jEnd(b);
+}
+
 // ===== Hover =====
 
 export function lspFmtHoverResult(
@@ -305,4 +330,20 @@ test "signature help" {
 	const sig = lspFmtSignature("foo(a: number)", "[" + p + "]");
 	const help = lspFmtSignatureHelp("[" + sig + "]", 0, 0);
 	assert help.length > 40;
+}
+
+test "a lean completion item is its label, kind and sort text" {
+	assert lspFmtLeanCompletionItem("if", 14, "16") == "{\"label\":\"if\",\"kind\":14,\"sortText\":\"16\"}";
+}
+
+test "a quick fix carries its edits under edit.changes" {
+	assert lspFmtQuickFix("Fix", "{\"file:///a.ms\":[]}") == "{\"title\":\"Fix\",\"kind\":\"quickfix\",\"isPreferred\":true,\"edit\":{\"changes\":{\"file:///a.ms\":[]}}}";
+}
+
+test "semantic tokens wrap the data array" {
+	assert lspFmtSemanticTokens("[]") == "{\"data\":[]}";
+}
+
+test "a multi-line text edit is its range then its text" {
+	assert lspFmtMultiLineTextEdit(0, 1, 2, 3, "x\n") == "{\"range\":{\"start\":{\"line\":0,\"character\":1},\"end\":{\"line\":2,\"character\":3}},\"newText\":\"x\\n\"}";
 }

@@ -2,6 +2,7 @@
 
 import { TransAmDb, dbParse, dbTypeCheck, createTransAmDb, dbSetFileText } from "../../transam/index";
 import { lspJsonNumber, lspGetField, lspGetObjectField, lspUriToPath, lspResponse } from "../protocol";
+import { lspFmtSemanticTokens } from "../format";
 import { SgSemanticToken, sgCollectSemanticTokens, sgSortTokens } from "../../../checker/suggest";
 import { dbGetSource, lspDocumentUri } from "./shared";
 import { LineIndex, lineStart } from "../../../utils/sourceLines";
@@ -44,21 +45,21 @@ export function handleSemanticTokensFull(id: string, params: string, db: TransAm
 	const rev = db.revision.value;
 	const cached = _semTokenCache.get(path);
 	if (cached != null && cached.revision == rev) {
-		return lspResponse(id, "{\"data\":" + cached.data + "}");
+		return lspResponse(id, lspFmtSemanticTokens(cached.data));
 	}
 
 	const program = dbParse(db, path);
-	if (program == null) return lspResponse(id, "{\"data\":[]}");
+	if (program == null) return lspResponse(id, lspFmtSemanticTokens("[]"));
 
 	const ctx = dbTypeCheck(db, path);
-	if (ctx == null) return lspResponse(id, "{\"data\":[]}");
+	if (ctx == null) return lspResponse(id, lspFmtSemanticTokens("[]"));
 
 	const tokens = sgCollectSemanticTokens(ctx, program);
 	const data = encodeSemanticTokenDeltas(dbGetSource(db, path), tokens);
 
 	_semTokenCache.set(path, { revision: rev, data });
 
-	return lspResponse(id, "{\"data\":" + data + "}");
+	return lspResponse(id, lspFmtSemanticTokens(data));
 }
 
 const TOKEN_TYPES = ["namespace", "type", "class", "enum", "interface", "struct", "typeParameter", "parameter", "variable", "property", "enumMember", "event", "function", "method"];
