@@ -181,9 +181,10 @@ export interface ModuleNameRoots {
 	compiler: string;
 	packages: string;
 	project: string;
+	uniqueNames: HashMap<string, string>;
 }
 
-let moduleNameRoots: ModuleNameRoots = { compiler: "", packages: "", project: "" };
+let moduleNameRoots: ModuleNameRoots = { compiler: "", packages: "", project: "", uniqueNames: new HashMap<string, string>() };
 
 export function setModuleNameRoots(roots: ModuleNameRoots): void {
 	moduleNameRoots = roots;
@@ -218,8 +219,14 @@ export function buildModuleNameRoots(): ModuleNameRoots {
 	return moduleNameRoots;
 }
 
+export function registerModuleNames(roots: ModuleNameRoots, modulePaths: Readonly<string[]>): void {
+	for (const modulePath of modulePaths) {
+		if (!roots.uniqueNames.has(modulePath)) roots.uniqueNames.set(modulePath, mangleRootedModuleName(modulePath, roots));
+	}
+}
+
 export function mangleModuleName(roots: Readonly<ModuleNameRoots>, modulePath: string): string {
-	return mangleRootedModuleName(modulePath, roots);
+	return roots.uniqueNames.readonlyGet(modulePath) ?? mangleRootedModuleName(modulePath, roots);
 }
 
 function mangleRootedModuleName(modulePath: string, roots: Readonly<ModuleNameRoots>): string {
@@ -232,13 +239,13 @@ function encodeModulePath(modulePath: string): string {
 	for (let i = 0; i < modulePath.byteLength; i += 1) {
 		const ch = modulePath.charAt(i);
 		if (isLowerOrDigit(ch)) {
-			result = result + ch;
+			result += ch;
 		} else if (ch == "/" || ch == "\\") {
-			result = result + "Z";
+			result += "Z";
 		} else if (ch == ".") {
-			result = result + "O";
+			result += "O";
 		} else {
-			result = result + charOrd(ch);
+			result += charOrd(ch);
 		}
 	}
 	// Ensure the mangled name starts with a letter so it is a valid C identifier
@@ -692,11 +699,38 @@ test "underscore becomes ordinal" { assert mangleModuleName(buildModuleNameRoots
 test "full path with mixed case" { assert mangleModuleName(buildModuleNameRoots(), "src/codegen/MyGen") == "srcZcodegenZ77y71en"; }
 
 test "a module name is spelled from its root, so a std module and a same-named project module stay apart" {
-	const roots: ModuleNameRoots = { compiler: "/msc", packages: "/pkgs", project: "/proj" };
+	const roots: ModuleNameRoots = { compiler: "/msc", packages: "/pkgs", project: "/proj", uniqueNames: new HashMap<string, string>() };
 	assert mangleRootedModuleName("/msc/std/a.ms", roots) == "SstdZaOms";
 	assert mangleRootedModuleName("/proj/std/a.ms", roots) == "stdZaOms";
 	assert mangleRootedModuleName("/pkgs/p/a.ms", roots) == "PpZaOms";
 	assert mangleRootedModuleName("/proj/sub/a.ms", roots) == "subZaOms";
 	assert mangleRootedModuleName("/other/a.ms", roots) == "OOZotherZaOms";
-	assert mangleRootedModuleName("/proj/std/a.ms", { compiler: "", packages: "", project: "" }) == "ZprojZstdZaOms";
+	assert mangleRootedModuleName("/proj/std/a.ms", { compiler: "", packages: "", project: "", uniqueNames: new HashMap<string, string>() }) == "ZprojZstdZaOms";
+}
+
+function namedRoots(): ModuleNameRoots {
+	return { compiler: "/msc", packages: "/pkgs", project: "/proj", uniqueNames: new HashMap<string, string>() };
+}
+
+test "a registered module's name is encoded once and read back on every later request" {
+	const roots = namedRoots();
+	registerModuleNames(roots, ["/proj/sub/a.ms"]);
+	roots.uniqueNames.set("/proj/sub/a.ms", "registered");
+	registerModuleNames(roots, ["/proj/sub/a.ms"]);
+	assert mangleModuleName(roots, "/proj/sub/a.ms") == "registered";
+}
+
+test "registered modules with one file name keep the names their own paths encode to" {
+	const roots = namedRoots();
+	registerModuleNames(roots, ["/proj/a/x.ms", "/proj/b/x.ms", "/msc/a/x.ms", "/pkgs/a/x.ms"]);
+	assert mangleModuleName(roots, "/proj/a/x.ms") == "aZxOms";
+	assert mangleModuleName(roots, "/proj/b/x.ms") == "bZxOms";
+	assert mangleModuleName(roots, "/msc/a/x.ms") == "SaZxOms";
+	assert mangleModuleName(roots, "/pkgs/a/x.ms") == "PaZxOms";
+}
+
+test "an unregistered module is named from its path" {
+	const roots = namedRoots();
+	registerModuleNames(roots, ["/proj/a/x.ms"]);
+	assert mangleModuleName(roots, "/pkgs/p/a.ms") == "PpZaOms";
 }

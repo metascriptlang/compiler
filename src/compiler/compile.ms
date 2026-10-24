@@ -27,7 +27,7 @@ import { RaiserModule } from "../raiser/module";
 import { RaiserPrintSink } from "../raiser/marshal";
 import { RaiserValueKind } from "../raiser/value";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission, replayCModuleEmission } from "../codegen/c/index";
-import { isModuleGlobalVar, mangledFunctionName, mangledGlobalName, mangleModuleName, mangleProcName, mangleQualified, safeName, setModuleNameRoots, moduleDisplayPath, buildModuleNameRoots } from "../codegen/c/names";
+import { isModuleGlobalVar, mangledFunctionName, mangledGlobalName, mangleModuleName, mangleProcName, mangleQualified, safeName, setModuleNameRoots, moduleDisplayPath, buildModuleNameRoots, registerModuleNames } from "../codegen/c/names";
 import { aliveSetHasDecl, aliveSetHasModule, aliveSetHasNamed, aliveSetImportsC, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit } from "../codegen/c/context";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
@@ -421,6 +421,7 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 		compiler: config.stdPath != "" ? dirname(config.stdPath) : "",
 		packages: packages != "" ? `${packages}/extracted` : "",
 		project: moduleNameProjectRoot(entryPath, opts.projectRoot),
+		uniqueNames: new HashMap<string, string>(),
 	});
 	const provider = createFileSystemProvider();
 
@@ -440,6 +441,7 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 	}
 	const _pl0 = performance.now();
 	const _r = loadModule(graph, entryPath, provider, config, 1);
+	registerModuleNames(buildModuleNameRoots(), graph.loadOrder);
 	if (graphLoadTiming) {
 		const ht = takeHeaderTimings();
 		console.log(`    graphLoad: preludeMods=${performance.now() - _gl0}ms entryTree=${performance.now() - _pl0}ms modules=${graph.loadOrder.length} seed=${_preludeSeedHit ? 1 : 0} headers=${ht.ms}ms/${ht.n} hits=${ht.hits}`);

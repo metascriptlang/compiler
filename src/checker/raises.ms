@@ -33,7 +33,7 @@ function freshRaiseTables(ops: HashMap<string, Symbol>, roots: ModuleNameRoots):
 	};
 }
 
-let _tables: RaiseTables = freshRaiseTables(new HashMap<string, Symbol>(), { compiler: "", packages: "", project: "" });
+let _tables: RaiseTables = freshRaiseTables(new HashMap<string, Symbol>(), { compiler: "", packages: "", project: "", uniqueNames: new HashMap<string, string>() });
 let _routines: HashMap<Symbol, RoutineInfo> = new HashMap<Symbol, RoutineInfo>();
 let _order: RoutineInfo[] = [];
 let _siteInfos: RoutineInfo[] = [];
