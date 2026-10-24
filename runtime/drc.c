@@ -467,7 +467,6 @@ _Thread_local int32_t msOrcCollections = 0;
 MS_TLS_PUBLISH(msOrcCollections)
 #endif
 
-#ifdef MS_DRC_LEDGER
 static void msRootOwnerCheck(void* p, const char* site) {
 	int32_t idx = msHeader(p)->rootIdx;
 	if (idx < 0 || (idx < msRoots.len && msRoots.data[idx].ptr == p)) return;
@@ -475,6 +474,8 @@ static void msRootOwnerCheck(void* p, const char* site) {
 		site, p, idx, msRoots.len);
 	abort();
 }
+
+#ifdef MS_DRC_LEDGER
 #define MS_ROOT_OWNER_CHECK(p, site) msRootOwnerCheck((p), (site))
 #else
 #define MS_ROOT_OWNER_CHECK(p, site) ((void)0)
@@ -499,7 +500,7 @@ void msUnregisterCycle(void* p) {
 	if (p == NULL) return;
 	msRefHeader* h = msHeader(p);
 	if (h->rootIdx < 0) return;
-	MS_ROOT_OWNER_CHECK(p, "free");
+	msRootOwnerCheck(p, "free");
 	msCellSeqRemoveAt(&msRoots, h->rootIdx);
 	h->rootIdx = -1;
 }
