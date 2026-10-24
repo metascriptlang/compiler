@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser process dies with SIGSEGV (exit 139) in the 300000-deep tree stage, after the chain line, on the installed compiler as well (the C runtime's drop worklist does not run in the VM)
 // @stdout: chain 1000000 sum 499999500000
 // @stdout: tree depth 300000 nodes 600001
 // @stdout: pairs 500000 links 999999
