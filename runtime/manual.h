@@ -372,6 +372,12 @@ static inline void* msMemAlloc0(size_t size) {
     return p;
 }
 
+static inline void* msMemAllocN0(size_t n, size_t size) {
+    void* p = calloc(n, size);
+    if (p == (void*)0 && n != 0 && size != 0) msRaiseOutOfMemory();
+    return p;
+}
+
 /* ===== String runtime ===== */
 #include "runtime/core/string.h"
 

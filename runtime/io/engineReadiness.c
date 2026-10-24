@@ -67,7 +67,7 @@ msIoEngine* msIoEngineCreate(void) {
 	e->selector = msSelectorCreate();
 	if (e->selector == NULL) { free(e); return NULL; }
 	e->fdMapCap = ENGINE_INIT_FDMAP;
-	e->fdMap = (msIoRequest**)msMemAlloc0(ENGINE_INIT_FDMAP * sizeof(msIoRequest*));
+	e->fdMap = (msIoRequest**)msMemAllocN0(ENGINE_INIT_FDMAP, sizeof(msIoRequest*));
 	/* Pre-allocate request pool */
 	for (int i = 0; i < ENGINE_INIT_POOL; i++) {
 		msIoRequest* r = (msIoRequest*)msMemAlloc0(sizeof(msIoRequest));

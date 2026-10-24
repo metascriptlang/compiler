@@ -60,7 +60,7 @@ void* msPromiseAll(msRefArray* arr) {
 	state->result = result;
 	msIncref(result);
 	state->inputs = inputsCopy;
-	state->values = (void**)msMemAlloc0(count * sizeof(void*));
+	state->values = (void**)msMemAllocN0(count, sizeof(void*));
 	state->count = count;
 	state->remaining = count;
 	msFutureEdgeAll(result, (void* const*)inputsCopy, count);

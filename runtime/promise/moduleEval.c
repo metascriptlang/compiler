@@ -38,7 +38,7 @@ static void msModuleUnlock(void) {
 void msModuleTableRegister(msModuleRecord* records, int32_t count) {
 	gRecords = records;
 	gRecordCount = count;
-	gRanOrder = (int32_t*)msMemAlloc0((size_t)count * sizeof(int32_t));
+	gRanOrder = (int32_t*)msMemAllocN0((size_t)count, sizeof(int32_t));
 	for (int32_t i = 0; i < count; i++) records[i].cycleRoot = i;
 }
 

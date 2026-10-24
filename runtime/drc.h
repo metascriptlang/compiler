@@ -177,6 +177,12 @@ static inline void* msMemAlloc0(size_t size) {
 	return p;
 }
 
+static inline void* msMemAllocN0(size_t n, size_t size) {
+	void* p = calloc(n, size);
+	if (p == NULL && n != 0 && size != 0) msRaiseOutOfMemory();
+	return p;
+}
+
 /* Slab primitive WITHOUT any zeroing — caller owns the memory state.
  * Returns dirty memory on cache hit; malloc'd (dirty) memory on cache miss.
  * Used by the Uninit alloc variants whose callers guarantee full field coverage. */

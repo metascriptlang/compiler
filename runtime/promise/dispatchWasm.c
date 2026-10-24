@@ -30,7 +30,7 @@ void msSleepMs(int ms) {
 
 static void msDequeInit(msCallbackDeque* q) {
     q->cap = 64;
-    q->items = (msClosure*)msMemAlloc0(q->cap * sizeof(msClosure));
+    q->items = (msClosure*)msMemAllocN0(q->cap, sizeof(msClosure));
     q->head = 0;
     q->tail = 0;
 }
@@ -39,7 +39,7 @@ static void msDequeAppend(msCallbackDeque* q, msClosure cb) {
     int next = (q->tail + 1) % q->cap;
     if (next == q->head) {
         int newCap = q->cap * 2;
-        msClosure* newItems = (msClosure*)msMemAlloc0(newCap * sizeof(msClosure));
+        msClosure* newItems = (msClosure*)msMemAllocN0(newCap, sizeof(msClosure));
         int count = 0;
         int i = q->head;
         while (i != q->tail) { newItems[count++] = q->items[i]; i = (i + 1) % q->cap; }

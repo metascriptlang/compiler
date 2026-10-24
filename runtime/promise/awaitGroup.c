@@ -52,7 +52,7 @@ msAwaitGroup* msAwaitGroupInit(int32_t n) {
 	atomic_store_explicit(&g->doneFut, NULL, memory_order_relaxed);
 
 	if (n > 0) {
-		g->results = (void**)msMemAlloc0((size_t)n * sizeof(void*));
+		g->results = (void**)msMemAllocN0((size_t)n, sizeof(void*));
 	} else {
 		g->results = NULL;
 	}

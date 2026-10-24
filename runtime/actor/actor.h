@@ -187,7 +187,7 @@ static inline int32_t msPidSlotClaim(void) {
         pthread_mutex_lock(&msPidSegLock);
         if (atomic_load_explicit(&msPidSegs[segI], memory_order_relaxed) == NULL) {
             atomic_store_explicit(&msPidSegs[segI],
-                (msPidSlot*)msMemAlloc0(MS_PID_SEG_SIZE * sizeof(msPidSlot)), memory_order_release);
+                (msPidSlot*)msMemAllocN0(MS_PID_SEG_SIZE, sizeof(msPidSlot)), memory_order_release);
         }
         pthread_mutex_unlock(&msPidSegLock);
     }
@@ -621,7 +621,7 @@ extern pthread_mutex_t msNameRegistryLock;
 static inline void msNameRegistryEnsure(void) {
     if (msNameRegistry != NULL) return;
     msNameRegistryCap = MS_NAME_REGISTRY_INIT_CAP;
-    msNameRegistry = (msNameEntry*)msMemAlloc0(msNameRegistryCap * sizeof(msNameEntry));
+    msNameRegistry = (msNameEntry*)msMemAllocN0(msNameRegistryCap, sizeof(msNameEntry));
 }
 
 /* Grow and rehash when load factor exceeds 75%. Must hold lock. */
@@ -629,7 +629,7 @@ static inline void msNameRegistryGrow(void) {
     int oldCap = msNameRegistryCap;
     msNameEntry* oldTable = msNameRegistry;
     msNameRegistryCap = oldCap * 2;
-    msNameRegistry = (msNameEntry*)msMemAlloc0(msNameRegistryCap * sizeof(msNameEntry));
+    msNameRegistry = (msNameEntry*)msMemAllocN0(msNameRegistryCap, sizeof(msNameEntry));
     msNameRegistryCount = 0;
     /* Rehash all entries into new table */
     for (int i = 0; i < oldCap; i++) {
@@ -1475,7 +1475,7 @@ static inline bool msActorPollLocal(void);            /* defined below */
 static inline void msSchedActorsGrow(msSchedActors* sched, int needed) {
     int newCap = sched->cap == 0 ? MS_SCHED_INIT_CAP : sched->cap * 2;
     while (newCap < needed) newCap *= 2;
-    msActor** newArr = (msActor**)msMemAlloc0(newCap * sizeof(msActor*));
+    msActor** newArr = (msActor**)msMemAllocN0(newCap, sizeof(msActor*));
     if (sched->actors != NULL) {
         memcpy(newArr, sched->actors, sched->cap * sizeof(msActor*));
         /* Old array intentionally NOT freed — CD may be reading it concurrently.

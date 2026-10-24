@@ -479,7 +479,7 @@ static void msPoolInit(void) {
 	int cpus = msDetectCPUs();
 	gPool->workerCount = cpus < MS_POOL_MAX_WORKERS ? cpus : MS_POOL_MAX_WORKERS;
 	gPool->cap = MS_POOL_MAX_QUEUE;
-	gPool->queue = (msSpawnCtx*)msMemAlloc0(gPool->cap * sizeof(msSpawnCtx));
+	gPool->queue = (msSpawnCtx*)msMemAllocN0(gPool->cap, sizeof(msSpawnCtx));
 
 #ifdef _WIN32
 	InitializeCriticalSection(&gPool->cs);
@@ -487,14 +487,14 @@ static void msPoolInit(void) {
 		InitializeConditionVariable(&gPool->workerConds[i]);
 	}
 	InitializeConditionVariable(&gPool->space);
-	gPool->workers = (HANDLE*)msMemAlloc0(MS_POOL_MAX_WORKERS * sizeof(HANDLE));
+	gPool->workers = (HANDLE*)msMemAllocN0(MS_POOL_MAX_WORKERS, sizeof(HANDLE));
 #else
 	pthread_mutex_init(&gPool->mutex, NULL);
 	for (int i = 0; i < MS_POOL_MAX_WORKERS; i++) {
 		pthread_cond_init(&gPool->workerConds[i], NULL);
 	}
 	pthread_cond_init(&gPool->space, NULL);
-	gPool->workers = (pthread_t*)msMemAlloc0(MS_POOL_MAX_WORKERS * sizeof(pthread_t));
+	gPool->workers = (pthread_t*)msMemAllocN0(MS_POOL_MAX_WORKERS, sizeof(pthread_t));
 #endif
 	int created = 0;
 	while (created < gPool->workerCount && msPoolStartThread(gPool, created, false)) created++;

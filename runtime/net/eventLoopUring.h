@@ -198,11 +198,11 @@ static void __uringThreadRelease(void) {
 
 static inline void __ensureRecvBufs(void) {
 	if (_uringRecvBufs == NULL) {
-		_uringRecvBufs = (char(*)[4096])msMemAlloc0((size_t)URING_MAX_FDS * 4096);
+		_uringRecvBufs = (char(*)[4096])msMemAllocN0((size_t)URING_MAX_FDS, 4096);
 		__uringRegisterRelease();
 	}
 	if (_uringRespBufs == NULL) {
-		_uringRespBufs = (msString*)msMemAlloc0(URING_MAX_FDS * sizeof(msString));
+		_uringRespBufs = (msString*)msMemAllocN0(URING_MAX_FDS, sizeof(msString));
 		__uringRegisterRelease();
 	}
 }

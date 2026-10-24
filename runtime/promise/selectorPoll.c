@@ -32,8 +32,8 @@ struct msSelector {
 msSelector* msSelectorCreate(void) {
 	msSelector* sel = (msSelector*)msMemAlloc0(sizeof(msSelector));
 	sel->cap = MS_POLL_INIT_CAP;
-	sel->fds = (struct pollfd*)msMemAlloc0(sel->cap * sizeof(struct pollfd));
-	sel->userdata = (void**)msMemAlloc0(sel->cap * sizeof(void*));
+	sel->fds = (struct pollfd*)msMemAllocN0(sel->cap, sizeof(struct pollfd));
+	sel->userdata = (void**)msMemAllocN0(sel->cap, sizeof(void*));
 	return sel;
 }
 

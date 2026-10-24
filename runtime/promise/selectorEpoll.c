@@ -40,7 +40,7 @@ msSelector* msSelectorCreate(void) {
 	msSelector* sel = (msSelector*)msMemAlloc0(sizeof(msSelector));
 	sel->epfd = epfd;
 	sel->userDataCap = EPOLL_INIT_CAP;
-	sel->userData = (void**)msMemAlloc0(EPOLL_INIT_CAP * sizeof(void*));
+	sel->userData = (void**)msMemAllocN0(EPOLL_INIT_CAP, sizeof(void*));
 	/* Cross-thread wake (msSelectorWake): a self-resetting eventfd watched by this
 	 * epoll. One write wakes one epoll_wait; the poll drains + skips it. */
 	sel->wakeFd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
