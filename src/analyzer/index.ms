@@ -93,7 +93,7 @@ function destroyedGlobal(stmt: Node): string {
 }
 
 test "module globals are destroyed in reverse declaration order at program end" {
-	const result = analyzePipeline("const first: string[] = [\"a\"];\nconst second: string[] = [\"b\"];\nconsole.log(first.length + second.length);");
+	const result = analyzePipeline("function mk(s: string): string[] { return [s]; }\nconst first: string[] = mk(\"a\");\nconst second: string[] = mk(\"b\");\nconsole.log(first.length + second.length);");
 	const stmts = (result.data as ProgramData).programStmts;
 	const exitBlock = stmts[stmts.length - 1];
 	assert exitBlock.kind == NodeKind.BlockStmt && exitBlock.flags.has(NodeFlag.GlobalDestroys);

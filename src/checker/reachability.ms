@@ -14,7 +14,7 @@ import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, cr
 import { isCHeaderPath } from "../module/loader";
 import { refArrayCellKey, refArrayCellOp, getOpByKey, typeInfoSubject, objectTypeInfoKey, arcCellKey, promiseAllShape, PromiseAllShape, hookBaseCName, anonTypeName, isAnonTypeName } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, makeSymbol } from "./symbol";
-import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, getProperty, peelToStructOrUnion } from "./types";
+import { hasGenericParams, isIntegerType, isFloatType, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, getProperty, peelToStructOrUnion } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { ctorRoutineOf } from "./ctorRoutine";
@@ -777,21 +777,44 @@ function varDeclNeedsRuntimeInit(node: Node): boolean {
 	return true;
 }
 
-// Empty array only: a non-empty bake would place the element buffer in static
-// memory, and any later push/realloc on that buffer is UB. Empty = { len 0,
-// p NULL }, a state the runtime already grows from (msArrayPrepareAdd).
-// nativeLower wraps top-level array initializers in msBoxRefArray(lit) before
-// computeAliveSet runs, so the literal is peeled out of that call here.
-function bakeableEmptyArrayLiteral(init: Readonly<Node>): boolean {
-	if (init.kind == NodeKind.ArrayLiteral) {
-		const ad = init.data as ArrayLiteralData;
-		return ad.elements.length == 0;
-	}
-	if (init.kind != NodeKind.CallExpr) return false;
+// Empty array, or a non-empty one whose leaves are literals: its payload is
+// static data carrying the literal flag, so growth copies it and destroy never
+// frees it (msArrayPrepareAdd, msArrayPayloadFree). nativeLower wraps top-level
+// array initializers in msBoxRefArray(lit), and a string[] literal in
+// msStringArrayFromArr(count, ...), before computeAliveSet runs.
+export function bakedArrayElements(init: Readonly<Node>): Readonly<Node[]> | null {
+	if (init.kind == NodeKind.ArrayLiteral) return (init.data as ArrayLiteralData).elements;
+	if (init.kind != NodeKind.CallExpr || init.resolvedSym == null) return null;
 	const cd = init.data as CallExprData;
-	if (init.resolvedSym == null || init.resolvedSym.builtinKind != "BoxRefArray") return false;
-	if (cd.arguments.length != 1) return false;
-	return bakeableEmptyArrayLiteral(cd.arguments[0]);
+	if (init.resolvedSym.builtinKind == "BoxRefArray") {
+		return cd.arguments.length == 1 ? bakedArrayElements(cd.arguments[0]) : null;
+	}
+	if (init.resolvedSym.builtinKind != "StringArrayFromArr" || cd.arguments.length < 1) return null;
+	return cd.arguments.slice(1);
+}
+
+export function bakedLeaf(e: Readonly<Node>): Readonly<Node> {
+	return e.kind == NodeKind.HiddenStdConv ? (e.data as HiddenStdConvData).convExpr : e;
+}
+
+function bakeableLeaf(e: Readonly<Node>, elemT: Type): boolean {
+	const leaf = bakedLeaf(e);
+	if (elemT.kind == TypeKind.String) return e.kind == NodeKind.StringLiteral;
+	if (elemT.kind == TypeKind.Boolean) return leaf.kind == NodeKind.BooleanLiteral;
+	if (isIntegerType(elemT) || isFloatType(elemT) || elemT.kind == TypeKind.Number) return leaf.kind == NodeKind.NumberLiteral;
+	return false;
+}
+
+function bakeableLiteralArray(node: Readonly<Node>, init: Readonly<Node>): boolean {
+	const t = node.nodeType;
+	if (t == null || t.kind != TypeKind.Ref || t.typeReturn == null || t.typeReturn.kind != TypeKind.Array) return false;
+	const elemT = t.typeReturn.typeReturn;
+	const elements = bakedArrayElements(init);
+	if (elemT == null || elements == null) return false;
+	for (const e of elements) {
+		if (!bakeableLeaf(e, elemT)) return false;
+	}
+	return true;
 }
 
 export function isClosureThunkConv(node: Readonly<Node>): boolean {
@@ -808,7 +831,7 @@ export function isBakeableAggregateConst(node: Readonly<Node>): boolean {
 	if (d.initializer == null) return false;
 	const init = d.initializer;
 	if (init.kind == NodeKind.ArrayLiteral || init.kind == NodeKind.CallExpr) {
-		return bakeableEmptyArrayLiteral(init);
+		return bakeableLiteralArray(node, init);
 	}
 	if (init.kind == NodeKind.HiddenStdConv) {
 		const cv = init.data as HiddenStdConvData;

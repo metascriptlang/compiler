@@ -20,7 +20,7 @@ import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { copiesInline, inlineDeclOf } from "./forward";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { bakesIntoStaticCell, functionDeclIsAlive } from "../../checker/reachability";
+import { bakesIntoStaticCell, bakedArrayElements, bakedLeaf, functionDeclIsAlive } from "../../checker/reachability";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
 
 // ===== genDecl — main declaration dispatcher =====
@@ -695,7 +695,23 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	const arrCType = cType.slice(0, cType.length - 1);
 	const typeInfo = ensureRefArrayCellTypeInfo(g, arrT);
 	const viaRegistry = isHcrImageModule(g, g.modulePath);
-	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${arrCType} b; } ${varName}_konst_ = { { .rc = 1 << 30, .type = ${viaRegistry ? "NULL" : typeInfo}, .rootIdx = -1, .allocSize = 0 }, { 0, NULL } };`);
+	const elements = bakedArrayElements(d.initializer);
+	const elemT = arrT.typeReturn;
+	if (elements == null || elemT == null) return refuseBake(g, node, "its initializer is not a literal array");
+	let payload = "NULL";
+	if (elements.length > 0) {
+		let leaves = "";
+		for (const e of elements) {
+			const leaf = bakedLeaf(e);
+			const text = leaf.kind == NodeKind.StringLiteral ? msStringPoolRef(internString(g.stringPool, (leaf.data as StringLiteralData).value), cStringByteLen((leaf.data as StringLiteralData).value))
+				: leaf.kind == NodeKind.BooleanLiteral ? cBoolLiteral((leaf.data as BooleanLiteralData).boolValue)
+				: formatCNumberLit(leaf.data as NumberLiteralData, elemT);
+			leaves = leaves.length == 0 ? text : leaves + ", " + text;
+		}
+		addLine(sec(g, CSection.GlobalVars), `static struct { int64_t cap; ${getTypeDesc(g, elemT)} data[${elements.length}]; } ${varName}_data_ = { MS_STRLIT_FLAG | ${elements.length}, { ${leaves} } };`);
+		payload = `(void*)&${varName}_data_`;
+	}
+	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${arrCType} b; } ${varName}_konst_ = { { .rc = 1 << 30, .type = ${viaRegistry ? "NULL" : typeInfo}, .rootIdx = -1, .allocSize = 0 }, { ${elements.length}, ${payload} } };`);
 	if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${varName}_konst_.h.type = ${typeInfo};`);
 	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = &${varName}_konst_.b;`);
 	nameSetAdd(g.declaredGlobals, varName);
