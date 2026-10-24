@@ -40,6 +40,16 @@ typedef struct {
 	uint32_t allocSize;      /* Total allocation size (header + payload) — for slab recycling */
 } msRefHeader;
 
+/* Owner-serialized rc access: a relaxed load and a relaxed store, never an RMW. Only the
+ * SHARE helpers (msAtomicIncRef, msAtomicDecRefIsLast) and Arc/Locked cells use an RMW. */
+static inline intptr_t msRcLoad(msRefHeader* h) {
+	return atomic_load_explicit(&h->rc, memory_order_relaxed);
+}
+
+static inline void msRcStore(msRefHeader* h, intptr_t v) {
+	atomic_store_explicit(&h->rc, v, memory_order_relaxed);
+}
+
 /* Get header from user pointer: header lives right before the object */
 static inline msRefHeader* msHeader(void* p) {
 	return (msRefHeader*)((char*)p - sizeof(msRefHeader));
@@ -259,7 +269,7 @@ static inline void* msRealloc(void* old, size_t oldSize, size_t newSize) {
  * non-atomic path, or its first decref would underflow and never free. */
 static inline void* msAllocArc(size_t size, const msTypeInfo* type) {
 	void* p = msAllocTyped(size, type);
-	msHeader(p)->rc = MS_RC_INCREMENT;
+	msRcStore(msHeader(p), MS_RC_INCREMENT);
 	return p;
 }
 
@@ -271,7 +281,7 @@ static inline void* msAllocArc(size_t size, const msTypeInfo* type) {
 static inline void* msAllocUninit(size_t size) {
 	size_t total = sizeof(msRefHeader) + size;
 	msRefHeader* h = (msRefHeader*)msSlabAllocRaw(total);  /* dirty */
-	h->rc = 0;
+	msRcStore(h, 0);
 	h->rootIdx = -1;
 	h->type = NULL;
 	h->allocSize = (uint32_t)total;
@@ -283,7 +293,7 @@ static inline void* msAllocUninit(size_t size) {
 static inline void* msAllocTypedUninit(size_t size, const msTypeInfo* type) {
 	size_t total = sizeof(msRefHeader) + size;
 	msRefHeader* h = (msRefHeader*)msSlabAllocRaw(total);  /* dirty */
-	h->rc = 0;
+	msRcStore(h, 0);
 	h->rootIdx = -1;
 	h->type = type;
 	MS_HCR_COUNT(type, 1);
@@ -299,7 +309,8 @@ static inline void* msAllocTypedUninit(size_t size, const msTypeInfo* type) {
 static inline void msIncRef(void* p) {
 	if (p != NULL) {
 		MS_DRC_STAT_ADD(MS_DS_RC_INC, 1);
-		msHeader(p)->rc += MS_RC_INCREMENT;
+		msRefHeader* h = msHeader(p);
+		msRcStore(h, msRcLoad(h) + MS_RC_INCREMENT);
 	}
 }
 
@@ -320,11 +331,10 @@ static inline bool msDecRefIsLast(void* p) {
 	msRefHeader* h = msHeader(p);
 	/* Check count portion (upper bits) is zero — ignores ORC color/flag bits.
 	 * rc starts at 0 from msAlloc. (rc & ~MS_RC_MASK)==0 means sole owner. */
-	if ((h->rc & ~MS_RC_MASK) != 0) {
-		intptr_t before = atomic_fetch_sub(&h->rc, MS_RC_INCREMENT);
-		bool concurrentDecrefLeftUsLast = (before & ~MS_RC_MASK) == 0;
-		if (!concurrentDecrefLeftUsLast) return false;
-		h->rc += MS_RC_INCREMENT;
+	intptr_t before = msRcLoad(h);
+	if ((before & ~MS_RC_MASK) != 0) {
+		msRcStore(h, before - MS_RC_INCREMENT);
+		return false;
 	}
 	if (h->rootIdx >= 0) msUnregisterCycle(p);
 	return true;
@@ -453,7 +463,7 @@ static inline void msRememberCycle(bool isDestroy, void* p, const msTypeInfo* de
 		}
 	} else {
 		if (h->rootIdx < 0 && desc != NULL && desc->isCyclic) {
-			h->rc = (h->rc & ~MS_COLOR_MASK) | MS_COL_BLACK;
+			msRcStore(h, (msRcLoad(h) & ~MS_COLOR_MASK) | MS_COL_BLACK);
 			msRegisterCycle(p, desc);
 		}
 	}
@@ -462,16 +472,18 @@ static inline void msRememberCycle(bool isDestroy, void* p, const msTypeInfo* de
 static inline void msOrcIncRef(void* p) {
 	if (p == NULL) return;
 	MS_DRC_STAT_ADD(MS_DS_RC_INC_CYC, 1);
-	msHeader(p)->rc += MS_RC_INCREMENT;
+	msRefHeader* h = msHeader(p);
+	msRcStore(h, msRcLoad(h) + MS_RC_INCREMENT);
 }
 
 static inline bool msOrcDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	msRefHeader* h = msHeader(p);
-	bool isLast = (h->rc & ~MS_COLOR_MASK) == 0;
+	intptr_t before = msRcLoad(h);
+	bool isLast = (before & ~MS_COLOR_MASK) == 0;
 	MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST, 1); MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST_TRUE, isLast);
 	if (!isLast) {
-		h->rc -= MS_RC_INCREMENT;
+		msRcStore(h, before - MS_RC_INCREMENT);
 	}
 	msRememberCycle(isLast, p, h->type);
 	return isLast;
@@ -479,7 +491,8 @@ static inline bool msOrcDecRefIsLast(void* p) {
 
 static inline void msMarkMaybeCycle(void* p) {
 	if (p != NULL) {
-		msHeader(p)->rc |= MS_MAYBE_CYCLE;
+		msRefHeader* h = msHeader(p);
+		msRcStore(h, msRcLoad(h) | MS_MAYBE_CYCLE);
 	}
 }
 
