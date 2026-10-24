@@ -1,5 +1,51 @@
 # Build Performance — Roadmap
 
+## Measuring by flow
+
+A whole-compiler A/B costs 45-60 minutes and names no flow. Every instrument below writes rows
+`<source>\t<flow>\t<metric>\t<value>` (source `msc` `drc` `emit` `proc`; metric `ms` `instr` `count`
+`bytes`), and `src/test/perf/run.ms` turns the rows of a base and a candidate compiler into one table
+per program, so a change shows its own delta in about a minute.
+
+| Instrument | Measures | Switch on |
+|---|---|---|
+| `msc` rows | the compiler's passes, analyzer steps, phases, emit and cc | env `MSC_FLOWS=<file>` |
+| `drc` rows | allocations, rc operations, cycle registrations and collections of a program | build with `--passC=-DMS_DRC_STAT`, run with env `MS_DRC_STAT=<file>`; an `msc` built that way reports its own runtime flows |
+| `emit` rows | per function counts in emitted C (rc ops, pins, atomics) | `msc run src/test/perf/emitCostScan.ms <emit dir>`, or `--diff A B` for a ranked table |
+| `proc` rows | whole process: instructions retired, wall, max rss | the runner adds them itself |
+
+The runner's environment and program names are the header of `src/test/perf/run.ms`.
+
+**A/B recipe.** Build the candidate at the worktree root (`msc build src/index.ms --danger --lto=off
+--output=msc`), keep the previous build as the base, then
+
+```sh
+MSPERF_BASE=/path/to/previous/msc MSPERF_PROGRAMS=711,self nice -n 10 msc run src/test/perf/run.ms
+```
+
+Check `uptime` first and do not start a second compile beside it. `MSPERF_SELF=1` runs one binary as
+both arms: that is the noise check, and every row of it should carry no mark.
+
+**Reading the table.** Rows sort by the size of the instruction delta, then the count delta.
+
+- Counts and non-process bytes are exact: they do not depend on load or host. `=` means identical in
+  every run of both arms; `≠` means the change moved the number. An exact row that varies inside one
+  arm is read as timed.
+- Timed rows (`ms`, `instr`, process bytes) compare medians. `*` marks a delta over 3 times the
+  noise, the larger coefficient of variation of the two arms; no mark means the move is not shown to
+  be real. Instructions retired carry far less noise than wall time under load.
+- `new` / `gone` is a flow only one arm wrote. A header line names the sources each arm produced:
+  a compiler without `MSC_FLOWS` yields only `proc` rows.
+- Coverage: the sum of `pass.*` instructions over `phase.A`, and the sum of the `msc` timed flows
+  (without `phase.*` and `total`) over the process total. A low share means the table leaves a flow
+  out and its delta cannot be located in it.
+
+**Measured noise, 2026-10-25** (macOS arm64, installed `msc` v0.3.4 as both arms, `711` built with
+`--emit=c`, 3 runs, load average 100-140 during the run): process instructions 25.49G against 25.64G,
+median difference +0.6% at noise 0.3% (no mark); wall time noise 17% and max rss noise 11%, so wall
+time and rss under that load show nothing. Not measured: Linux (`perf stat` and the `/usr/bin/time -f`
+fallback are written, not run), and `rt:` programs.
+
 ## Measured 2026-10-22 — four more front-end fixes
 
 Same methods as 2026-10-21 below. All four leave emitted C of `src/index.ms` identical
