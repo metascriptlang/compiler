@@ -16,8 +16,8 @@ per program, so a change shows its own delta in about a minute.
 
 The runner's environment and program names are the header of `src/test/perf/run.ms`.
 
-**A/B recipe.** Build the candidate at the worktree root (`msc build src/index.ms --danger --lto=off
---output=msc`), keep the previous build as the base, then
+**A/B recipe.** Build the candidate at the worktree root (`msc build src/index.ms --gc=drc --danger
+--lto=off --output=msc`), keep the previous build as the base, then
 
 ```sh
 MSPERF_BASE=/path/to/previous/msc MSPERF_PROGRAMS=711,self nice -n 10 msc run src/test/perf/run.ms
