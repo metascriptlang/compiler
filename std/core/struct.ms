@@ -28,16 +28,8 @@ function setEndWrite<T>(s: Set<T>): void { if (!s.writing) { msMapFatal("concurr
 // Return type for function* generators. Matches generatorLower's output shape.
 // Users write: function* range(): Iterator<int32> { yield 1; }
 
-export struct IteratorResult<T> {
-	value: T;
-	done: boolean;
-}
-
-@builtin("Iterator")
-export struct Iterator<T> {
-	next: () => IteratorResult<T>;
-	return: (() => IteratorResult<T>) | null;
-}
+import { Iterator, IteratorResult } from "./array/iteratorStatics";
+export { Iterator, IteratorResult, ZipMode, ZipOptions, concat, zip } from "./array/iteratorStatics";
 
 // Drain iterator to array. Uses while+next() (not for...of — would be circular).
 export function toItems<T>(this iter: Iterator<T>): T[] {
@@ -1199,114 +1191,4 @@ export function toString<E>(this self: BitSet<E>): string {
 		i = i + 1;
 	}
 	return out + "}";
-}
-
-export function* concat<T>(this typeof Iterator, ...items: Iterator<T>[]): Iterator<T> {
-	for (const it of items) {
-		for (const x of it) yield x;
-	}
-}
-
-export type ZipMode = "shortest" | "longest" | "strict";
-
-export interface ZipOptions<T> {
-	mode?: ZipMode;
-	padding?: T[];
-}
-
-function closeAll<T>(iters: Iterator<T>[], open: boolean[], swallow: boolean): void {
-	let failure: Error | null = null;
-	for (let i = iters.length - 1; i >= 0; i--) {
-		if (!open[i]) continue;
-		open[i] = false;
-		const it = iters[i];
-		if (it.return != null) {
-			try {
-				it.return();
-			} catch (e) {
-				if (failure == null) failure = e;
-			}
-		}
-	}
-	if (!swallow && failure != null) throw failure;
-}
-
-function advance<T>(iters: Iterator<T>[], open: boolean[], i: number, out: T[]): boolean {
-	try {
-		const r = iters[i].next();
-		if (!r.done) out.push(r.value);
-		return r.done;
-	} catch (e) {
-		open[i] = false;
-		closeAll(iters, open, true);
-		throw e;
-	}
-}
-
-function* zipLazy<T>(iters: Iterator<T>[], mode: ZipMode, padding: T[]): Iterator<T[]> {
-	const count = iters.length;
-	if (count == 0) return;
-	const open: boolean[] = [];
-	for (let i = 0; i < count; i++) open.push(true);
-	let live = count;
-	try {
-		while (true) {
-			const results: T[] = [];
-			for (let i = 0; i < count; i++) {
-				if (!open[i]) {
-					results.push(padding[i]);
-					continue;
-				}
-				if (!advance(iters, open, i, results)) continue;
-				open[i] = false;
-				live -= 1;
-				match (mode) {
-					"shortest" => {
-						return;
-					}
-					"strict" => {
-						if (i != 0) {
-							closeAll(iters, open, true);
-							throw new Error("zip: iterators have different lengths");
-						}
-						const spare: T[] = [];
-						for (let k = 1; k < count; k++) {
-							if (!advance(iters, open, k, spare)) {
-								closeAll(iters, open, true);
-								throw new Error("zip: iterators have different lengths");
-							}
-							open[k] = false;
-						}
-						return;
-					}
-					_ => {
-						if (live == 0) return;
-						results.push(padding[i]);
-					}
-				}
-			}
-			yield results;
-		}
-	} finally {
-		closeAll(iters, open, false);
-	}
-}
-
-export function zip<T>(
-	this typeof Iterator,
-	items: Iterator<T>[],
-	options?: ZipOptions<T>,
-): Iterator<T[]> {
-	const mode: ZipMode = options != null && options.mode != null ? options.mode : "shortest";
-	let padding: T[] = [];
-	if (mode == "longest") {
-		if (options == null || options.padding == null || options.padding.length < items.length) {
-			const open: boolean[] = [];
-			for (let i = 0; i < items.length; i++) open.push(true);
-			closeAll(items, open, true);
-			throw new Error("zip: mode longest needs one padding value per iterator");
-		}
-		padding = options.padding;
-	}
-	return zipLazy(items, mode, padding);
 }
