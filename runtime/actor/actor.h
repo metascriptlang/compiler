@@ -106,6 +106,7 @@ typedef struct msActor {
      * (msRootsSwap), so its cells keep their root entries when it changes threads. */
     msCellSeq roots;
     struct msActorJobs* jobs;  /* NULL until the actor first starts code that outlives a visit */
+    struct msActor* ctorPrev;  /* the constructing thread's actor, restored when the constructor returns */
 } msActor;
 
 /* ===== Batch Size ===== */
@@ -388,12 +389,15 @@ static inline void msActorCtorEnter(int64_t pid) {
         expected = false;
     }
     msRootsSwap(&a->roots);
+    a->ctorPrev = msCurrentActor;
+    msActorEnter(a);
     msHazardClear(a);
 }
 
 static inline void msActorCtorLeave(int64_t pid) {
     msActor* a = msActorFromPid(pid);
     if (a == NULL) return;
+    msCurrentActor = a->ctorPrev;
     msRootsSwap(&a->roots);
     atomic_store_explicit(&a->processing, false, memory_order_release);
     msHazardClear(a);
