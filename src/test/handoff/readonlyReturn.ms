@@ -22,7 +22,16 @@ test "readonlyReturn: a path from any view parameter, a view call or null is a b
 
 test "readonlyReturn: a fresh value alone is refused with the owning result type" {
 	assert errors(node + "function mk(t: Readonly<Node>): Readonly<Node> { return new Node(); }", owning) == 1;
-	assert errors(node + "function mk(t: Readonly<Node>): Readonly<Node> { const k = t.kids[0]; return k; }", "escapes its stack frame") == 1;
+	assert errors(node + "function mk(t: Readonly<Node>): Readonly<Node> { let k = t.kids[0]; return k; }", "escapes its stack frame") == 1;
+	assert errors(node + "function mk(t: Readonly<Node>): Readonly<Node> { const k = new Node(); return k; }", "escapes its stack frame") == 1;
+}
+
+test "readonlyReturn: a const local holding a reference reached from a view parameter borrows that path" {
+	assert errors(node + "function f(t: Readonly<Node>): Readonly<Node> { const k = t.kids[0]; return k; }", "") == 0;
+	assert errors(node + "class Item { geo: Node | null = null; skin: Node | null = null; }\nfunction f(this item: Readonly<Item>): Readonly<Node> | null {\n\tconst geo = item.geo;\n\treturn geo === null ? item.skin : geo.kids[0];\n}", "") == 0;
+	assert errors(node + "function f(t: Readonly<Node>): Readonly<Node> {\n\tconst a = t.kids[0];\n\tconst b = a.kids[0];\n\tif (b.n > 0) return a;\n\treturn b;\n}", "") == 0;
+	assert errors(node + "function f(t: Readonly<Node>): int32 { const outer = t; const g = (): Readonly<Node> => outer.kids[0]; return g().n; }", "'outer' escapes its stack frame") == 1;
+	assert errors("struct Row { kid: Node; }\n" + node + "function f(rows: Readonly<Row[]>): Readonly<Node> { const r = rows[0]; return r.kid; }", "escapes its stack frame") == 1;
 }
 
 test "readonlyReturn: a fresh arm beside a view arm names both and offers a split or a copy" {

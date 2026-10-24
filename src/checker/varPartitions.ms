@@ -8,7 +8,7 @@ import {
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall } from "./effects";
-import { isPrimitiveKind, isViewType, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName, isLockedRef, isAtomicRef, typeCarriesRef, withoutReadonlyView } from "./types";
+import { isPrimitiveKind, isViewType, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName, isLockedRef, isAtomicRef, typeCarriesRef, withoutReadonlyView, withoutNullMember } from "./types";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, addError, dispatchEntryFor, dispatchOverridesFor } from "./context";
 import { isAddressTaking, checkPointerEscapesIn } from "./pointerAddress";
@@ -2056,7 +2056,17 @@ function viewRootFault(id: Node, routine: Node, stepped: boolean): string {
 		if (stepped) return `a path below the module constant '${sym.name}' can be released while borrowed`;
 		return "";
 	}
+	const bound = constRefAlias(sym);
+	if (bound != null && viewReturnFault(bound, routine, stepped) == "") return "";
 	return `'${sym.name}' escapes its stack frame`;
+}
+
+function constRefAlias(sym: Symbol): Node | null {
+	if (sym.symbolKind != SymbolKind.Variable || hasFlag(sym, SymbolFlag.Mutable) || hasFlag(sym, SymbolFlag.Global) || sym.symbolType == null) return null;
+	if (withoutReadonlyView(withoutNullMember(withoutReadonlyView(sym.symbolType))).kind != TypeKind.Ref) return null;
+	const decl = sym.declNode;
+	if (decl == null || decl.kind != NodeKind.VariableDecl || decl.resolvedSym != sym) return null;
+	return (decl.data as VariableDeclData).initializer;
 }
 
 // The signature carries a parameter's sink mode, and still names a parameter a generic body leaves
