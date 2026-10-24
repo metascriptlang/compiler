@@ -110,7 +110,6 @@ function namedTypeHasHooks(t: Type, lctx: LiftCtx): boolean {
 // hooks would reference a struct type codegen never produces → compile error.
 // Result was historically here too, but post-migration it flows through the
 // standard Union path (boolean-discriminated tagged union).
-// Iterator (`TypeKind.Struct`) is already filtered by the GenericInstance kind check.
 function unwrapGenericInstance(gi: Type): { mangledName: string, body: Type } {
 	if (gi == null || gi.kind != TypeKind.GenericInstance) {
 		return { mangledName: "", body: null as unknown as Type };

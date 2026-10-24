@@ -36,6 +36,7 @@ export struct IteratorResult<T> {
 @builtin("Iterator")
 export struct Iterator<T> {
 	next: () => IteratorResult<T>;
+	return: (() => IteratorResult<T>) | null;
 }
 
 // Drain iterator to array. Uses while+next() (not for...of — would be circular).

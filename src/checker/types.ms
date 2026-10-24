@@ -385,9 +385,12 @@ export function createIteratorResult(yieldType: Type): Type {
 }
 
 export function createIterator(yieldType: Type): Type {
-	const nextFnType = createClosureType([], [], createIteratorResult(yieldType));
-	const iter = spelled(createStruct("Iterator", ["next"], [nextFnType], false));
-	return iter;
+	const stepFnType = createClosureType([], [], createIteratorResult(_iteratorResultParam));
+	const returnFnType = nullableUnionOf([createClosureType([], [], createIteratorResult(_iteratorResultParam)), nullType()]);
+	const genericBase = spelled(createStruct("Iterator", ["next", "return"], [stepFnType, returnFnType], false));
+	const gi = createGenericInstance(genericBase, [yieldType]);
+	instantiateGenericBody(gi, "T");
+	return gi;
 }
 
 export function isIterator(t: Readonly<Type | null>): boolean {
@@ -397,24 +400,22 @@ export function isIterator(t: Readonly<Type | null>): boolean {
 
 export function getIteratorNextFnType(t: Type | null): Type | null {
 	if (t == null || !isIterator(t)) return null;
-	if (t.typeChildren != null && t.typeChildren.length > 0) return t.typeChildren[0];
-	return null;
+	return getProperty(t, "next");
+}
+
+export function getIteratorReturnFnType(t: Type | null): Type | null {
+	if (t == null || !isIterator(t)) return null;
+	return getProperty(t, "return");
 }
 
 export function getIteratorYieldType(t: Type): Type | null;
 export function getIteratorYieldType(t: Readonly<Type>): Readonly<Type | null>;
 export function getIteratorYieldType(t: Readonly<Type>): Readonly<Type | null> {
 	if (t == null) return null;
-	// Iterator struct has field "next: () => IteratorResult<T>"
-	// IteratorResult has field "value: T" — extract T from there
-	if (t.typeChildren != null && t.typeChildren.length > 0) {
-		const nextFnType = t.typeChildren[0]; // the next() function type
-		if (nextFnType != null && nextFnType.typeReturn != null) {
-			const resultType = nextFnType.typeReturn; // IteratorResult<T>
-			if (resultType.typeChildren != null && resultType.typeChildren.length > 0) {
-				return t.typeChildren[0].typeReturn.typeChildren[0]; // T (the value field)
-			}
-		}
+	const next = isIterator(t) ? declaredFieldType(t, "next") : null;
+	if (next != null && next.typeReturn != null) {
+		const value = declaredFieldType(next.typeReturn, "value");
+		if (value != null) return value;
 	}
 	return INFERRED_VIEW;
 }
