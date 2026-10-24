@@ -4,7 +4,7 @@ import { hasGenericParams, createPtr, createStruct, spelled, voidType } from "..
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isGenericFn } from "../../checker/context";
 import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName } from "../../codegen/c/names";
-import { isNrvoReturnType, opCName } from "../../codegen/c/types";
+import { isNrvoReturnType, opCName, hasNoRuntimeRepr, isOpenArrayParam, openArrayDataName, openArrayLenName } from "../../codegen/c/types";
 import { hcrSignatureKey } from "../../compiler/hcrAbi";
 import { walkNode } from "../walker";
 import { syntheticToken, makeHiddenDeref, makeTypedIdent, makeMember, makeCall, runtimeRef } from "../util";
@@ -292,7 +292,17 @@ function forwardToCurrent(fn: Node, symbol: string, cell: string): void {
 	}
 	const nrvo = isNrvoReturnType(fnType.typeReturn, fnType);
 	const args: string[] = nrvo ? ["__result"] : [];
-	for (const param of d.params) args.push(safeName(param));
+	for (let i = 0; i < d.params.length; i += 1) {
+		const paramType = i < fnType.typeChildren.length ? fnType.typeChildren[i] : null;
+		if (hasNoRuntimeRepr(paramType)) continue;
+		const name = safeName(d.params[i]);
+		if (isOpenArrayParam(paramType)) {
+			args.push(openArrayDataName(name));
+			args.push(openArrayLenName(name));
+		} else {
+			args.push(name);
+		}
+	}
 	const call = `((__typeof__(&${symbol}))${cell}->current)(${args.join(", ")})`;
 	const returnsValue = !nrvo && fnType.typeReturn != null && fnType.typeReturn.kind != TypeKind.Void;
 	const forward = returnsValue ? `return ${call};` : `{ ${call}; return; }`;
