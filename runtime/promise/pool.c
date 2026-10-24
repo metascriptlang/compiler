@@ -444,6 +444,7 @@ static pthread_once_t gPoolOnce = PTHREAD_ONCE_INIT;
 
 static bool msPoolStartThread(msThreadPool* pool, int idx, bool spare) {
 	intptr_t start = ((intptr_t)idx << 1) | (spare ? 1 : 0);
+	MS_LEDGER_COUNT(MS_LEDGER_THREAD_START);
 #ifdef _WIN32
 	pool->workers[idx] = CreateThread(NULL, 0, msPoolWorkerLoop, (LPVOID)start, 0, NULL);
 	return pool->workers[idx] != NULL;

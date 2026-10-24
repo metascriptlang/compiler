@@ -53,7 +53,13 @@
 // MSCORPUS_SELFTEST=1 runs selftest/ instead of programs/: each fixture breaks one
 // directive on purpose and names the red it must produce (`// @selftest-red <substr>`
 // on one of its FAIL lines); a fixture that stays green, or that is red for another
-// reason, fails the run. With MSCORPUS_SAN=1 it runs the SAN-lane fixtures in selftest-san/.
+// reason, fails the run. With MSCORPUS_SAN=1 it runs the SAN-lane fixtures in selftest-san/,
+// with MSCORPUS_TSAN=1 every fixture in selftest-tsan/ (no threaded list).
+//
+// MSCORPUS_TSAN=1 runs the TSan lane: each program the last MSCORPUS_SAN=1 run of the
+// same candidate saw start a pool thread (out/corpus/threaded.txt, keyed to the
+// compiler's path and checksum and the program selection; any other list fails loud),
+// built --sanitize=thread and run; pass = exit + @stdout + no ThreadSanitizer report.
 //
 // MSCORPUS_SAN=1 runs the SAN lane instead: every program built once
 // (drc) with ASan + slab-off + the DRC ledger, asserting exit + @stdout +
@@ -71,7 +77,7 @@ import { isNotFound } from "std/io/errors";
 import { sleepAsync } from "std/core/promise";
 
 const SELFTEST = envOr("MSCORPUS_SELFTEST", "") == "1";
-const PROG_DIR = !SELFTEST ? "src/test/corpus/programs/" : envOr("MSCORPUS_SAN", "") == "1" ? "src/test/corpus/selftest-san/" : "src/test/corpus/selftest/";
+const PROG_DIR = !SELFTEST ? "src/test/corpus/programs/" : envOr("MSCORPUS_SAN", "") == "1" ? "src/test/corpus/selftest-san/" : envOr("MSCORPUS_TSAN", "") == "1" ? "src/test/corpus/selftest-tsan/" : "src/test/corpus/selftest/";
 const OUT_DIR = "out/corpus/";
 
 // Windows has no POSIX shell, so every place this runner reaches for one is a
@@ -167,6 +173,9 @@ const BUILD_SLOTS = slotDefault("MSCORPUS_BUILD_JOBS", CPUS, CPUS);
 const RUN_SLOTS = slotDefault("MSCORPUS_JOBS", 4, CPUS);
 const FREE_RUN_SLOTS: int32 = BUILD_SLOTS / 2 > RUN_SLOTS ? BUILD_SLOTS / 2 : RUN_SLOTS;
 const SAN = envOr("MSCORPUS_SAN", "") == "1";
+const TSAN = envOr("MSCORPUS_TSAN", "") == "1";
+// One cell per program and no parity: the SAN and TSan lanes.
+const SOLO = SAN || TSAN;
 // 8M ledger-set entries: ASan quarantines freed addresses (no reuse), so the
 // finalized-pointer set degrades to append-only under slab-off — the default
 // 1M overflows on 3M-iteration churn programs. Overflow still aborts LOUDLY.
@@ -429,7 +438,7 @@ function stalenessWarning(): string {
 }
 
 function laneUniverse(spec: Spec): string[] {
-	const lanes: string[] = ["c", "danger", "san"];
+	const lanes: string[] = ["c", "danger", "san", "tsan"];
 	if (!spec.skipRaiser) { lanes.push("raiser"); }
 	if (!spec.skipJs) { lanes.push("js"); lanes.push("esm"); }
 	return lanes;
@@ -461,7 +470,8 @@ function narrowingError(specs: Spec[]): string {
 	for (const lane of LANES) {
 		if (!listHas(PARITY_LANES, lane)) { return "MSCORPUS_LANES names '" + lane + "'; the parity lanes are " + joinWith(PARITY_LANES, "/"); }
 	}
-	if (SAN && LANES.length > 0) { return "MSCORPUS_LANES narrows the parity run; the SAN lane builds one cell per program"; }
+	if (SAN && TSAN) { return "MSCORPUS_SAN and MSCORPUS_TSAN are separate runs: the TSan lane reads the list the SAN run writes"; }
+	if (SOLO && LANES.length > 0) { return "MSCORPUS_LANES narrows the parity run; the SAN and TSan lanes build one cell per program"; }
 	for (const name of ONLY) {
 		let found = false;
 		for (const spec of specs) { if (spec.name == name) { found = true; } }
@@ -685,6 +695,9 @@ function cellInner(c: Readonly<Cell>, q: (p: string) => string): string {
 			return (c.sanLibs == "" ? "" : "set \"PATH=" + winPath(c.sanLibs) + ";%PATH%\"\r\n") + "set \"ASAN_OPTIONS=detect_leaks=0\"\r\n" + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
 		}
 		return "ASAN_OPTIONS=detect_leaks=0 " + bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
+	}
+	if (c.lane == "tsan") {
+		return bin + " > " + q(c.dir + "stdout.log") + " 2> " + q(c.dir + "err.log");
 	}
 	if (c.lane == "js") {
 		return "node " + bin + " > " + q(c.dir + "out.log") + " 2>&1";
@@ -910,6 +923,20 @@ function parseLedgerFailure(err: string, spec: Spec): string {
 	return "";
 }
 
+function finishTsanCell(c: Cell): void {
+	const rawExit = readExit(c);
+	const errLog = readFileOr(c.dir + "err.log", "");
+	const missing = missingStdoutLines(c.spec, readFileOr(c.dir + "stdout.log", "") + errLog);
+	const race = firstLineContaining(errLog, "WARNING: ThreadSanitizer");
+	let detail = "exit=" + rawExit;
+	if (rawExit != c.spec.expectExit) { detail = detail + " [exit≠" + c.spec.expectExit + "]"; }
+	if (missing.length > 0) { detail = detail + " [stdout missing " + quotedList(missing) + "]"; }
+	if (race != "") { detail = detail + " [" + race + "]"; }
+	c.pass = rawExit == c.spec.expectExit && missing.length == 0 && race == "";
+	c.detail = detail;
+	c.finished = true;
+}
+
 function finishSanCell(c: Cell): void {
 	const rawExit = readExit(c);
 	const stdoutLog = readFileOr(c.dir + "stdout.log", "");
@@ -969,6 +996,7 @@ function ledgerCountsOver(spec: Spec, errLog: string): string {
 
 function finishCell(c: Cell): void {
 	if (c.lane == "san") { finishSanCell(c); return; }
+	if (c.lane == "tsan") { finishTsanCell(c); return; }
 	// node lanes of an @maxrss program finish parity-style: no time.log, and
 	// the RSS bound is native-only.
 	if (isRssCell(c)) { finishRssCell(c); } else { finishParityCell(c); }
@@ -1166,6 +1194,11 @@ interface BuildJob { spec: Spec; lane: string; cmd: string; cell: Cell; }
 function planJobs(specs: Spec[]): BuildJob[] {
 	const jobs: BuildJob[] = [];
 	for (const spec of specs) {
+		if (TSAN) {
+			const bin = OUT_DIR + "bin/" + spec.name + ".tsan";
+			jobs.push({ spec, lane: "tsan", cmd: MSC_CMD + " build " + spec.entry + " --sanitize=thread --cc=clang --output=" + bin, cell: makeCell(spec, "tsan", bin) });
+			continue;
+		}
 		if (SAN) {
 			const bin = OUT_DIR + "bin/" + spec.name + ".san";
 			jobs.push({ spec, lane: "san", cmd: sanBuildCmd(spec.entry, bin), cell: makeCell(spec, "san", bin) });
@@ -1361,7 +1394,7 @@ function drain(running: Cell[], t: Tally, parityDone: Cell[]): void {
 
 function settleCell(c: Cell, t: Tally, parityDone: Cell[]): void {
 	finishCell(c);
-	if (SAN) { reportCell(c, t); return; }
+	if (SOLO) { reportCell(c, t); return; }
 	if (!isXfail(c)) { reportCell(c, t); }
 	parityDone.push(c);
 }
@@ -1397,13 +1430,14 @@ function main(): void {
 	// that describe the harness rather than the compiler.
 	if (!ensureWintime()) { exit(1); }
 
-	const specs = discoverSpecs();
-	const narrowing = narrowingError(specs);
+	const discovered = discoverSpecs();
+	const narrowing = narrowingError(discovered);
 	if (narrowing != "") { progress("  ✗ " + narrowing); exit(1); }
+	const specs = TSAN ? threadedSpecs(discovered) : discovered;
 	const jobs = keepChosenLanes(planJobs(specs));
 
 	progress("");
-	const mode = SAN ? "SAN lane (ASan + slab-off + DRC ledger, drc)" : "parity + RSS lanes";
+	const mode = SAN ? "SAN lane (ASan + slab-off + DRC ledger, drc)" : TSAN ? "TSan lane (programs the SAN run saw start a thread)" : "parity + RSS lanes";
 	progress("Corpus tier — " + specs.length + " programs, " + jobs.length + " builds, " + mode + " (msc=" + MSC + ", build slots=" + BUILD_SLOTS + ", run slots=" + RUN_SLOTS + " measured + " + FREE_RUN_SLOTS + " unmeasured)");
 
 	const t: Tally = { fails: 0, xfails: 0, xpasses: 0, passes: 0 };
@@ -1415,7 +1449,7 @@ function main(): void {
 	if (!HAS_CLANG) {
 		progress("  !! clang missing, or present but unable to compile a hello world here — the danger" + (SAN ? " and san" : "") + " lane(s) build with the auto-detected compiler instead. On this host that means --danger WITHOUT LTO, so whole-program DCE (the class this lane exists to catch) is not exercised");
 	}
-	if (!HAS_NODE && !SAN) {
+	if (!HAS_NODE && !SOLO) {
 		progress("  !! node not found — the js lane is DISABLED on this host; every parity verdict below is C-only (c/danger), so C↔JS backend divergence is not covered");
 	}
 
@@ -1425,7 +1459,7 @@ function main(): void {
 	if (LANES.length > 0) {
 		progress("  !! MSCORPUS_LANES — only " + joinWith(LANES, "/") + " cells are built; parity compares those lanes alone");
 	}
-	if (!RAISER && !SAN) {
+	if (!RAISER && !SOLO) {
 		progress("  !! raiser lane off — no program runs on the Raiser VM; MSCORPUS_RAISER=1 turns it on");
 	}
 
@@ -1524,7 +1558,7 @@ function main(): void {
 
 	// parity byte-compare per program (all lanes finished by now)
 	for (const spec of specs) {
-		if (SAN) { continue; }
+		if (SOLO) { continue; }
 		const mine: Cell[] = [];
 		for (const c of parityDone) { if (c.spec.name == spec.name) { mine.push(c); } }
 		compareParityGroup(mine, t);
@@ -1536,7 +1570,51 @@ function main(): void {
 	progress("  " + summary);
 	console.log(summary);
 	if (SELFTEST) { exit(judgeSelftest(specs)); }
+	if (SAN) { writeThreaded(jobs); }
 	if (t.fails > 0) { exit(1); }
+}
+
+// ---- TSan selection: the programs the SAN run saw start a pool thread ----
+
+// Pool workers are the only threads that run program code; hcr's log pump runs none.
+const THREADED_FILE = OUT_DIR + "threaded.txt";
+const TSAN_EXCLUDED: string[] = ["rootFreedOutsideItsExecutorFailsLoud"];
+const TSAN_EXCLUDED_WHY = "frees a root from its own pthread on purpose to prove the M1 abort, a race by design";
+
+// A list belongs to one candidate and one program selection; any other is stale.
+function threadedKey(): string {
+	return "msc=" + MSC + " cksum=" + runCapture("cksum " + MSC).output.trim().split(" ").slice(0, 2).join(" ") + " only=" + envOr("MSCORPUS_ONLY", "") + " filter=" + FILTER;
+}
+
+function writeThreaded(jobs: BuildJob[]): void {
+	const names: string[] = [];
+	for (const j of jobs) {
+		const counts = lastLineContaining(readFileOr(j.cell.dir + "err.log", ""), "LEDGER COUNTS ");
+		if (ledgerCount(counts, "thread_start") > 0) { names.push(j.spec.name); }
+	}
+	writeFile(THREADED_FILE, threadedKey() + "\n" + names.join("\n") + "\n");
+	progress("  " + names.length + " program(s) started a thread → " + THREADED_FILE);
+}
+
+function threadedSpecs(all: Spec[]): Spec[] {
+	if (SELFTEST) { return all; }
+	const text = readFileOr(THREADED_FILE, "");
+	if (text == "") {
+		progress("  ✗ TSan lane: no " + THREADED_FILE + "; run MSCORPUS_SAN=1 with this candidate first");
+		exit(1);
+	}
+	const rows = text.split("\n");
+	if (rows[0] != threadedKey()) {
+		progress("  ✗ TSan lane: " + THREADED_FILE + " was written for '" + rows[0] + "', not '" + threadedKey() + "'; rerun MSCORPUS_SAN=1 with this candidate");
+		exit(1);
+	}
+	const picked: Spec[] = [];
+	for (const spec of all) {
+		if (!rows.slice(1).includes(spec.name)) { continue; }
+		if (TSAN_EXCLUDED.includes(spec.name)) { progress("  !! TSan lane skips " + spec.name + ": " + TSAN_EXCLUDED_WHY); continue; }
+		picked.push(spec);
+	}
+	return picked;
 }
 
 // A directive whose check cannot go red here passes every program that carries it.

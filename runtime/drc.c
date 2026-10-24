@@ -104,10 +104,10 @@ static void msLedgerDump(void) {
 		totalA += gLedgerAllocN[i];
 		totalD += gLedgerDestroyN[i];
 	}
-	fprintf(stderr, "LEDGER COUNTS rc_inc=%ld rc_dec=%ld share_inc=%ld share_dec=%ld root_reg=%ld\n",
+	fprintf(stderr, "LEDGER COUNTS rc_inc=%ld rc_dec=%ld share_inc=%ld share_dec=%ld root_reg=%ld thread_start=%ld\n",
 		msLedgerCounterRead(MS_LEDGER_RC_INC), msLedgerCounterRead(MS_LEDGER_RC_DEC),
 		msLedgerCounterRead(MS_LEDGER_SHARE_INC), msLedgerCounterRead(MS_LEDGER_SHARE_DEC),
-		msLedgerCounterRead(MS_LEDGER_ROOT_REG));
+		msLedgerCounterRead(MS_LEDGER_ROOT_REG), msLedgerCounterRead(MS_LEDGER_THREAD_START));
 	fprintf(stderr, "LEDGER TOTAL alloc=%ld destroy=%ld\n", totalA, totalD);
 	fflush(stderr);
 	pthread_mutex_unlock(&gLedgerMutex);

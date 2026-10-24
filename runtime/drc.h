@@ -92,7 +92,7 @@ void msHcrCountAdd(const msTypeInfo* type, int32_t delta);
 #endif
 
 #ifdef MS_DRC_LEDGER
-enum { MS_LEDGER_RC_INC, MS_LEDGER_RC_DEC, MS_LEDGER_SHARE_INC, MS_LEDGER_SHARE_DEC, MS_LEDGER_ROOT_REG, MS_LEDGER_COUNTERS };
+enum { MS_LEDGER_RC_INC, MS_LEDGER_RC_DEC, MS_LEDGER_SHARE_INC, MS_LEDGER_SHARE_DEC, MS_LEDGER_ROOT_REG, MS_LEDGER_THREAD_START, MS_LEDGER_COUNTERS };
 void msLedgerCount(int counter);
 #define MS_LEDGER_COUNT(counter)   msLedgerCount(counter)
 void msLedgerAlloc(void* p, const msTypeInfo* type);
