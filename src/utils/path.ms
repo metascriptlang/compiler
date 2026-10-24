@@ -4,6 +4,25 @@ import { argv, cwd, env, platform } from "std/process";
 import { exists, realpath, ensureDir, writeFile, remove, removeAll, symlink } from "std/fs";
 import { dirname, join, isAbsolute, normalize } from "std/fs/path";
 
+// ~/.metascript. HOME wins over USERPROFILE on every host, so a Git-bash session on
+// Windows resolves the same root as a POSIX one; "" when neither is set.
+export function metascriptHome(): string {
+	let home = env.get("HOME");
+	if (home == "") home = env.get("USERPROFILE");
+	if (home == "") return "";
+	return join(home, ".metascript");
+}
+
+// The OS temp directory without std/os, whose header cannot be included on Windows.
+// Windows sets TMP and TEMP, POSIX sets TMPDIR; /tmp when none is set.
+export function tmpDir(): string {
+	for (const name of ["TMP", "TEMP", "TMPDIR"]) {
+		const dir = env.get(name);
+		if (dir != "") return dir;
+	}
+	return "/tmp";
+}
+
 // Find the project root by walking up looking for build.ms.
 // If entryFile is given (a relative one against CWD), walks up from its directory first.
 // Falls back to walking up from CWD. Returns CWD if build.ms not found anywhere.
@@ -182,4 +201,37 @@ test "findProjectRoot spells every root the way module paths are spelled" {
 
 test "canonicalRootDir — an already-clean root is unchanged" {
 	assert canonicalRootDir("C:/proj/compiler") == "C:/proj/compiler";
+}
+
+test "metascriptHome prefers HOME, falls back to USERPROFILE, and is empty without both" {
+	const home = env.get("HOME");
+	const profile = env.get("USERPROFILE");
+	env.set("HOME", "/h");
+	env.set("USERPROFILE", "/u");
+	assert metascriptHome() == "/h/.metascript";
+	env.set("HOME", "");
+	assert metascriptHome() == "/u/.metascript";
+	env.set("USERPROFILE", "");
+	assert metascriptHome() == "";
+	env.set("HOME", home);
+	env.set("USERPROFILE", profile);
+}
+
+test "tmpDir takes TMP, then TEMP, then TMPDIR, then /tmp" {
+	const tmp = env.get("TMP");
+	const temp = env.get("TEMP");
+	const tmpdir = env.get("TMPDIR");
+	env.set("TMP", "");
+	env.set("TEMP", "");
+	env.set("TMPDIR", "");
+	assert tmpDir() == "/tmp";
+	env.set("TMPDIR", "/c");
+	assert tmpDir() == "/c";
+	env.set("TEMP", "/b");
+	assert tmpDir() == "/b";
+	env.set("TMP", "/a");
+	assert tmpDir() == "/a";
+	env.set("TMP", tmp);
+	env.set("TEMP", temp);
+	env.set("TMPDIR", tmpdir);
 }

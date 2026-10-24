@@ -44,7 +44,7 @@ import {
 	frames, request, notification, initializeDrain, openParams, changeParams, positionParams,
 } from "./replayScenarios";
 import { getDynamicField, at, length, asString, asInt32 } from "std/serialize/json/accessors";
-import { resolveRuntimeDir } from "../../utils/path";
+import { resolveRuntimeDir, tmpDir } from "../../utils/path";
 
 
 // ===== Server State =====
@@ -609,8 +609,7 @@ test "wire completion: the server survives a file with an absent child slot" {
 // ===== Project config per opened file =====
 
 test "an opened file's msc.lock packages reach that project's resolver" {
-	const tmp = env.get("TMPDIR") != "" ? env.get("TMPDIR") : "/tmp";
-	const dir = `${tmp}/msc-lsplock`;
+	const dir = `${tmpDir()}/msc-lsplock`;
 	ensureDir(dir);
 	const root = realpath(dir);
 	writeFile(`${root}/build.ms`, "const config = {};\nexport default config;\n");
@@ -636,8 +635,7 @@ function replay(drains: string[][], projectDir: string = ""): LspReplay {
 }
 
 function memoryProjectDir(name: string): string {
-	const tmp = env.get("TMPDIR") != "" ? env.get("TMPDIR") : "/tmp";
-	const dir = `${tmp}/mscLspMemory/${scenarioSlug(name)}`;
+	const dir = `${tmpDir()}/mscLspMemory/${scenarioSlug(name)}`;
 	ensureDir(dir);
 	return realpath(dir).replaceAll("\\", "/");
 }
@@ -821,8 +819,7 @@ function spliceLib(statement: string): string {
 }
 
 function spliceDir(name: string): string {
-	const tmp = env.get("TMPDIR") != "" ? env.get("TMPDIR") : "/tmp";
-	const dir = normalize(tmp + "/msc-lspsplice-" + name);
+	const dir = normalize(tmpDir() + "/msc-lspsplice-" + name);
 	mkdir(dir);
 	return dir;
 }

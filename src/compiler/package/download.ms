@@ -13,7 +13,7 @@ import { join, dirname } from "std/fs/path";
 import { createHeaders } from "std/http/headers";
 import { sha256 } from "std/crypto";
 import { openZip, zipEntries, zipExtract, zipFindByName, closeZip, ZipReader, newZipWriter, zipAdd, zipFinalize, closeZipWriter } from "std/compress/zip";
-import { env } from "std/process";
+import { tmpDir } from "../../utils/path";
 import { registryDownloadPath, registrySrcPath } from "./cache";
 import { isAbsoluteEntry, leavesPackage } from "./bin";
 
@@ -128,12 +128,6 @@ export function downloadPackage(name: string, version: string, archiveUrl: strin
 	return Result.ok(null);
 }
 
-function testTmpDir(): string {
-	const tmp = env.get("TMPDIR");
-	if (tmp != "") return tmp;
-	return "/tmp";
-}
-
 function testArchive(names: string[]): string {
 	const made = newZipWriter();
 	if (!made.ok) return "";
@@ -147,7 +141,7 @@ function testArchive(names: string[]): string {
 }
 
 function freshDir(label: string): string {
-	const dir = join(testTmpDir(), "mscDownloadTest-" + label);
+	const dir = join(tmpDir(), "mscDownloadTest-" + label);
 	removeAll(dir);
 	ensureDir(dir);
 	return dir;

@@ -10,11 +10,12 @@
 import { FetchOptions } from "std/http/types";
 import { createHeaders, setHeader } from "std/http/headers";
 import { readFile, writeFile, readDir, remove } from "std/fs";
+import { join } from "std/fs/path";
 import { env, exec } from "std/process";
 import { VERSION } from "./usage";
 import { compareVersionStrings } from "./package/version";
 import { CliOptions } from "./options";
-import { resolveRuntimeDir } from "../utils/path";
+import { resolveRuntimeDir, metascriptHome } from "../utils/path";
 import { yellow, dim, bold, cyan } from "../utils/color";
 
 // ===== Constants =====
@@ -37,11 +38,9 @@ function emptyCache(): UpdateCache {
 }
 
 function cacheFilePath(): string {
-	const home = env.get("HOME");
-	// Windows fallback — HOME isn't set by default there.
-	const base = home != "" ? home : env.get("USERPROFILE");
-	if (base == "") return "";
-	return base + "/.metascript/.update-check";
+	const home = metascriptHome();
+	if (home == "") return "";
+	return join(home, ".update-check");
 }
 
 function readCache(): UpdateCache {

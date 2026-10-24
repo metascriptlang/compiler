@@ -1,5 +1,5 @@
 import { readDir, remove, removeAll, writeFile, modifiedTime, ensureDir, exists } from "std/fs";
-import { env } from "std/process";
+import { tmpDir } from "./path";
 
 export const STALE_ENTRY_SECONDS = 7 * 24 * 3600;
 export const STALE_TMP_SECONDS = 3600;
@@ -36,8 +36,7 @@ export function collectStaleEntries(root: string, now: number, staleSeconds: num
 }
 
 function scratchRoot(label: string): string {
-	const base = env.get("TEMP") != "" ? env.get("TEMP") : (env.get("TMPDIR") != "" ? env.get("TMPDIR") : "/tmp");
-	const root = `${base}/msc-${label}-${performance.now()}`;
+	const root = `${tmpDir()}/msc-${label}-${performance.now()}`;
 	ensureDir(`${root}/stampA`);
 	ensureDir(`${root}/stampB`);
 	writeFile(`${root}/stampA/entry.pk`, "a");
