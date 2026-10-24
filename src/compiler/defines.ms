@@ -23,6 +23,8 @@ export function createDefineTable(): DefineTable {
 	const t: DefineTable = { symbols: new HashMap<string, string>(), names: [], seeded: [] };
 	// std blocks the previous compiler cannot read sit under this symbol; the guards go one sync cycle after the compiler lands.
 	defineSymbol(t, "mscDeclaresRuntime", "true");
+	// The runtime aborts on a foreign root entry only under this symbol: a compiler built by one that predates it still emits worker code that registers program cells in worker roots, so the guard goes one sync cycle after the compiler lands.
+	defineSymbol(t, "mscKeepsRootsWithOwner", "true");
 	return t;
 }
 
@@ -178,6 +180,7 @@ test "define: bare flag stores true" {
 test "define: a fresh table carries the compiler feature symbol" {
 	const t = createDefineTable();
 	assert isDefined(t, "mscDeclaresRuntime");
+	assert isDefined(t, "mscKeepsRootsWithOwner");
 }
 
 test "define: unknown flag is false, never an error" {

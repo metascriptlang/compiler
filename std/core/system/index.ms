@@ -1,6 +1,9 @@
 @include("runtime/core/system.h");
 @compile("runtime/core/system.c");
 @compile("runtime/drc.c");
+when (mscKeepsRootsWithOwner) {
+	@passC("-DMS_ROOT_OWNER_AT_FREE");
+}
 
 export class console {
 	/**
