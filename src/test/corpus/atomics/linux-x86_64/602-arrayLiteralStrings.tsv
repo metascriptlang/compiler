@@ -1,0 +1,11 @@
+1	msChannelDrain
+1	msThreadTimers
+1	msTimerDelayFrom
+1	msWorkerLoopPump
+2	msAwaitGroupFailSlot
+2	msCompletionQueuePushEnvRelease
+2	msCompletionQueuePushOwned
+2	msCompletionQueuePushReleaseBatch
+2	msProcessTimers
+3	msRunOnce
+8	msPoolWorkerLoop

@@ -1,0 +1,14 @@
+1	_msPoolInit
+1	_msThreadTimers
+16	_msPoolRunQueued
+16	_msProcessTimers
+2	_msDrainUntilIdle
+2	_msPoolShutdown
+3	_msCompletionQueuePushReleaseBatch
+3	_msPoolWakeWorker
+4	_msChannelDrain
+7	_msAwaitGroupCompleteSlot
+7	_msRunOnce
+8	_msAwaitGroupFailSlot
+8	_msPoolWorkerLoop
+8	_msTimerDelayFrom
