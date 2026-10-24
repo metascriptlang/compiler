@@ -95,95 +95,42 @@ export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string
 
 // ===== Object Literal Type Resolution (AST-Based) =====
 
-// Find the root struct type for an object literal by walking the AST.
-// Finds the outermost ObjectLiteral ancestor, then looks for the VariableDecl
-// that contains it to get the declared type via sgRecords.
-function lspFindObjectLiteralTypeAST(program: Node, line: int32, col: int32, ctx: CheckerContext): Type | null {
-	// Find the outermost ObjectLiteral ancestor at cursor position
-	const rootObj = lspFindRootObjectLiteral(program, line, col);
-	if (rootObj == null) return null;
-	// Find the VariableDecl that contains this ObjectLiteral
-	const varDecl = lspFindParentVarDecl(program, rootObj);
-	if (varDecl == null) return null;
-	// Query sgRecords for the variable's type — use nameLocation (identifier position), not node location (keyword position)
-	const vd = varDecl.data as VariableDeclData;
-	const sg = sgQueryAtPosition(ctx, vd.nameLocation.line, vd.nameLocation.column);
-	if (sg != null) return sg.symType;
-	return null;
+// Nodes from root down to target, both included; empty when target is not under root.
+function lspPathTo(root: Node, target: Node): Node[] {
+	const path: Node[] = [];
+	lspCollectPath(root, target, path);
+	return path;
 }
 
-// Find the outermost ObjectLiteral containing the cursor.
-// If nested `{ fmt: { | } }`, returns the outer `{ }`.
-// Uses findEnclosingObjectLiteral (from suggest.ms) which has subtree-touch validation,
-// then walks up to find the outermost ancestor ObjectLiteral.
-function lspFindRootObjectLiteral(root: Node, line: int32, col: int32): Node | null {
-	// Find the innermost ObjectLiteral first (validated by subtree check)
-	const innermost = findEnclosingObjectLiteral(root, line, col);
-	if (innermost == null) return null;
-	// Walk from root to find the outermost ObjectLiteral that is an ancestor of innermost
-	const outermost = lspFindOutermostObjLitAncestor(root, innermost);
-	return outermost != null ? outermost : innermost;
-}
-
-// Find the outermost ObjectLiteral node that is an ancestor of target.
-function lspFindOutermostObjLitAncestor(root: Node, target: Node): Node | null {
-	if (root == null) return null;
-	if (root == target) return null;
-	let isAncestor = false;
-	let childResult: Node | null = null;
-	forEachChild(root, (child: Node): void => {
-		if (!isAncestor) {
-			if (child == target) {
-				isAncestor = true;
-			} else {
-				const r = lspFindOutermostObjLitAncestor(child, target);
-				if (r != null) {
-					childResult = r;
-					isAncestor = true;
-				} else if (sgNodeContains(child, target)) {
-					isAncestor = true;
-				}
-			}
-		}
-	});
-	if (isAncestor && root.kind == NodeKind.ObjectLiteral) {
-		return root;
-	}
-	return childResult;
-}
-
-// Check if node contains target anywhere in its subtree.
-function sgNodeContains(node: Node, target: Node): boolean {
-	if (node == null) return false;
+function lspCollectPath(node: Node, target: Node, path: Node[]): boolean {
+	path.push(node);
 	if (node == target) return true;
 	let found = false;
 	forEachChild(node, (child: Node): void => {
-		if (!found && sgNodeContains(child, target)) {
-			found = true;
-		}
+		if (!found && lspCollectPath(child, target, path)) found = true;
 	});
+	if (!found) path.pop();
 	return found;
 }
 
-// Find the VariableDecl AST node that contains a given ObjectLiteral node.
-function lspFindParentVarDecl(root: Node, target: Node): Node | null {
-	if (root == null) return null;
-	if (root.kind == NodeKind.VariableDecl) {
-		const vd = root.data as VariableDeclData;
-		if (vd.initializer == target) {
-			return root;
-		}
-	}
-	let found: Node | null = null;
-	forEachChild(root, (child: Node): void => {
-		if (found == null) {
-			const r = lspFindParentVarDecl(child, target);
-			if (r != null) {
-				found = r;
-			}
-		}
-	});
-	return found;
+// Find the root struct type for an object literal: the outermost ObjectLiteral around the
+// cursor (`{ fmt: { | } }` gives the outer one) and the VariableDecl it initializes, whose
+// declared type sgRecords holds.
+function lspFindObjectLiteralTypeAST(program: Node, line: int32, col: int32, ctx: CheckerContext): Type | null {
+	const innermost = findEnclosingObjectLiteral(program, line, col);
+	if (innermost == null) return null;
+	const path = lspPathTo(program, innermost);
+	let root = 0;
+	while (root < path.length && path[root].kind != NodeKind.ObjectLiteral) root++;
+	if (root == 0 || root == path.length) return null;
+	const varDecl = path[root - 1];
+	if (varDecl.kind != NodeKind.VariableDecl) return null;
+	const vd = varDecl.data as VariableDeclData;
+	if (vd.initializer != path[root]) return null;
+	// Use nameLocation (identifier position), not node location (keyword position)
+	const sg = sgQueryAtPosition(ctx, vd.nameLocation.line, vd.nameLocation.column);
+	if (sg != null) return sg.symType;
+	return null;
 }
 
 // ===== Completion =====
