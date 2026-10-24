@@ -3,9 +3,10 @@
 //   a / b    → msDivI32(a, b)         (a zero divisor and MIN / -1 raise)
 //   a % b    → msModI32(a, b)
 //   a /= b   → msDivAssignI32(a, b)   (the left side is evaluated once)
-//   a ** b   → msPowI64(a, b)         (msPowWrapI64 under --danger)
+//   a ** b   → msPowI64(a, b)         (msPowWrapI64 under --danger; std/core/system, @inline)
 //   x ** y   → msPowF64(x, y)         (a float power, ECMAScript's NaN cases)
-//   a **= b  → msPowAssignI64(a, b)   (msPowAssignF64 on a float target, msPowWrapAssign under --danger)
+//   a **= b  → msPowAssignI64(a, b)   (msPowAssignF64 on a float target, msPowWrapAssign under --danger;
+//                                      the integer ones are std/core/system functions taking `ref a`)
 //   f %= b   → msModAssignF64(f, b)   (a float target; fmod, the left side evaluated once)
 //   n |= b   → msOrAssignF64(n, b)    (a number target of & | ^ << >> >>>, as n = n | b)
 //
@@ -181,12 +182,27 @@ function lowerPow(node: Node, d: BinaryExprData, ctx: TransformContext): Node {
 function lowerPowAssign(node: Node, d: BinaryExprData, ctx: TransformContext): Node {
 	const t = integerRepr(d.left.nodeType);
 	let helper = "msPowAssignF64";
-	if (t != null && ctx.rangeChecks && isSubIntSigned(t.kind)) helper = ownWidthName("msPowAssign", t);
-	else if (t != null) helper = helperName(ctx.rangeChecks ? "msPowAssign" : "msPowWrapAssign", t);
+	if (t != null) helper = ownWidthSuffixed(ctx.rangeChecks ? "msPowAssign" : "msPowWrapAssign", t);
 	else if (!isFloatRepr(d.left.nodeType)) return node;
 	const call = makeCall(runtimeRef(helper, node.location), [d.left, d.right], node.location);
 	call.nodeType = d.left.nodeType;
 	return call;
+}
+
+function ownWidthSuffixed(prefix: string, t: Type): string {
+	const suffix = match (t.kind) {
+		TypeKind.Int8 => "I8",
+		TypeKind.Int16 => "I16",
+		TypeKind.Int32 => "I32",
+		TypeKind.Int64 => "I64",
+		TypeKind.Uint8 => "U8",
+		TypeKind.Uint16 => "U16",
+		TypeKind.Uint32 => "U32",
+		TypeKind.Uint64 => "U64",
+		_ => "",
+	};
+	if (suffix == "") throw new Error("internal: integer power assignment on type kind " + t.kind);
+	return prefix + suffix;
 }
 
 function isFloatRepr(t: Type | null): boolean {

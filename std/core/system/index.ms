@@ -652,22 +652,10 @@ when (mscDeclaresRuntime) {
 	extern function msModI32(a: int32, b: int32): int32;
 
 	@compilerFunc
-	extern function msPowI32(a: int32, b: int32): int32;
-
-	@compilerFunc
-	extern function msPowWrapI32(a: int32, b: int32): int32;
-
-	@compilerFunc
 	extern function msDivI64(a: int64, b: int64): int64;
 
 	@compilerFunc
 	extern function msModI64(a: int64, b: int64): int64;
-
-	@compilerFunc
-	extern function msPowI64(a: int64, b: int64): int64;
-
-	@compilerFunc
-	extern function msPowWrapI64(a: int64, b: int64): int64;
 
 	@compilerFunc
 	extern function msDivU32(a: uint32, b: uint32): uint32;
@@ -676,22 +664,232 @@ when (mscDeclaresRuntime) {
 	extern function msModU32(a: uint32, b: uint32): uint32;
 
 	@compilerFunc
-	extern function msPowU32(a: uint32, b: uint32): uint32;
-
-	@compilerFunc
-	extern function msPowWrapU32(a: uint32, b: uint32): uint32;
-
-	@compilerFunc
 	extern function msDivU64(a: uint64, b: uint64): uint64;
 
 	@compilerFunc
 	extern function msModU64(a: uint64, b: uint64): uint64;
 
 	@compilerFunc
-	extern function msPowU64(a: uint64, b: uint64): uint64;
+	extern function msRaiseRangeError(v: int64, lo: int64, hi: int64): never;
+
+	@compilerFunc @inline
+	function msPowI32(a: int32, b: int32): int32 {
+		if (b < 0) msRaiseRangeError(b, 0, 2147483647);
+		let r: int32 = 1;
+		let x = a;
+		let y = b;
+		while (true) {
+			if ((y & 1) != 0) r *= x;
+			y >>= 1;
+			if (y == 0) return r;
+			x *= x;
+		}
+	}
+
+	@compilerFunc @inline
+	function msPowWrapI32(a: int32, b: int32): int32 {
+		if (b < 0) return a == 1 ? 1 : (a == -1 ? ((b & 1) != 0 ? -1 : 1) : 0);
+		return msPowWrapU32(a as uint32, b as uint32) as int32;
+	}
+
+	@compilerFunc @inline
+	function msPowI64(a: int64, b: int64): int64 {
+		if (b < 0) msRaiseRangeError(b, 0, 9223372036854775807);
+		let r: int64 = 1;
+		let x = a;
+		let y = b;
+		while (true) {
+			if ((y & 1) != 0) r *= x;
+			y >>= 1;
+			if (y == 0) return r;
+			x *= x;
+		}
+	}
+
+	@compilerFunc @inline
+	function msPowWrapI64(a: int64, b: int64): int64 {
+		if (b < 0) return a == 1 ? 1 : (a == -1 ? ((b & 1) != 0 ? -1 : 1) : 0);
+		return msPowWrapU64(a as uint64, b as uint64) as int64;
+	}
+
+	@compilerFunc @inline
+	function msPowU32(a: uint32, b: uint32): uint32 {
+		let r: uint64 = 1;
+		let x: uint64 = a;
+		let y = b;
+		while (true) {
+			if ((y & 1) != 0) {
+				r *= x;
+				if (r > 4294967295) msRaiseOverflow();
+			}
+			y >>= 1;
+			if (y == 0) return r as uint32;
+			x *= x;
+			if (x > 4294967295) msRaiseOverflow();
+		}
+	}
+
+	@compilerFunc @inline
+	function msPowWrapU32(a: uint32, b: uint32): uint32 {
+		let r: uint32 = 1;
+		let x = a;
+		let y = b;
+		while (y != 0) {
+			if ((y & 1) != 0) r *= x;
+			y >>= 1;
+			x *= x;
+		}
+		return r;
+	}
+
+	@inline
+	function mulFitsU64(a: uint64, b: uint64): boolean {
+		if (b == 0) return true;
+		return a <= 18446744073709551615 / b;
+	}
+
+	@compilerFunc @inline
+	function msPowU64(a: uint64, b: uint64): uint64 {
+		let r: uint64 = 1;
+		let x = a;
+		let y = b;
+		while (true) {
+			if ((y & 1) != 0) {
+				if (!mulFitsU64(r, x)) msRaiseOverflow();
+				r *= x;
+			}
+			y >>= 1;
+			if (y == 0) return r;
+			if (!mulFitsU64(x, x)) msRaiseOverflow();
+			x *= x;
+		}
+	}
+
+	@compilerFunc @inline
+	function msPowWrapU64(a: uint64, b: uint64): uint64 {
+		let r: uint64 = 1;
+		let x = a;
+		let y = b;
+		while (y != 0) {
+			if ((y & 1) != 0) r *= x;
+			y >>= 1;
+			x *= x;
+		}
+		return r;
+	}
+
+	@compilerFunc @inline
+	function msPowI8(a: int8, b: int8): int8 {
+		const r = msPowI32(a, b);
+		if (r < -128 || r > 127) msRaiseOverflow();
+		return r as int8;
+	}
+
+	@compilerFunc @inline
+	function msPowI16(a: int16, b: int16): int16 {
+		const r = msPowI32(a, b);
+		if (r < -32768 || r > 32767) msRaiseOverflow();
+		return r as int16;
+	}
 
 	@compilerFunc
-	extern function msPowWrapU64(a: uint64, b: uint64): uint64;
+	extern function msRaiseOverflow(): never;
+
+	@compilerFunc @inline
+	function msPowAssignI8(ref lv: int8, b: int8): int8 {
+		lv = msPowI8(lv, b);
+		return lv;
+	}
+
+	@compilerFunc @inline
+	function msPowAssignI16(ref lv: int16, b: int16): int16 {
+		lv = msPowI16(lv, b);
+		return lv;
+	}
+
+	@compilerFunc @inline
+	function msPowAssignI32(ref lv: int32, b: int32): int32 {
+		lv = msPowI32(lv, b);
+		return lv;
+	}
+
+	@compilerFunc @inline
+	function msPowAssignI64(ref lv: int64, b: int64): int64 {
+		lv = msPowI64(lv, b);
+		return lv;
+	}
+
+	@compilerFunc @inline
+	function msPowAssignU8(ref lv: uint8, b: uint8): uint8 {
+		lv = (msPowU32(lv, b) & 255) as uint8;
+		return lv;
+	}
+
+	@compilerFunc @inline
+	function msPowAssignU16(ref lv: uint16, b: uint16): uint16 {
+		lv = (msPowU32(lv, b) & 65535) as uint16;
+		return lv;
+	}
+
+	@compilerFunc @inline
+	function msPowAssignU32(ref lv: uint32, b: uint32): uint32 {
+		lv = msPowU32(lv, b);
+		return lv;
+	}
+
+	@compilerFunc @inline
+	function msPowAssignU64(ref lv: uint64, b: uint64): uint64 {
+		lv = msPowU64(lv, b);
+		return lv;
+	}
+
+	@compilerFunc @inline
+	function msPowWrapAssignI8(ref lv: int8, b: int8): int8 {
+		lv = msPowWrapI32(lv, b) as int8;
+		return lv;
+	}
+
+	@compilerFunc @inline
+	function msPowWrapAssignI16(ref lv: int16, b: int16): int16 {
+		lv = msPowWrapI32(lv, b) as int16;
+		return lv;
+	}
+
+	@compilerFunc @inline
+	function msPowWrapAssignI32(ref lv: int32, b: int32): int32 {
+		lv = msPowWrapI32(lv, b);
+		return lv;
+	}
+
+	@compilerFunc @inline
+	function msPowWrapAssignI64(ref lv: int64, b: int64): int64 {
+		lv = msPowWrapI64(lv, b);
+		return lv;
+	}
+
+	@compilerFunc @inline
+	function msPowWrapAssignU8(ref lv: uint8, b: uint8): uint8 {
+		lv = msPowWrapU32(lv, b) as uint8;
+		return lv;
+	}
+
+	@compilerFunc @inline
+	function msPowWrapAssignU16(ref lv: uint16, b: uint16): uint16 {
+		lv = msPowWrapU32(lv, b) as uint16;
+		return lv;
+	}
+
+	@compilerFunc @inline
+	function msPowWrapAssignU32(ref lv: uint32, b: uint32): uint32 {
+		lv = msPowWrapU32(lv, b);
+		return lv;
+	}
+
+	@compilerFunc @inline
+	function msPowWrapAssignU64(ref lv: uint64, b: uint64): uint64 {
+		lv = msPowWrapU64(lv, b);
+		return lv;
+	}
 
 	@compilerFunc
 	extern function msDivAssignI32(lv: Ptr<void>, b: Ptr<void>): void;
@@ -775,35 +973,11 @@ when (mscDeclaresRuntime) {
 	@compilerFunc
 	extern function msDivI8(a: int8, b: int8): int8;
 	@compilerFunc
-	extern function msPowI8(a: int8, b: int8): int8;
-	@compilerFunc
 	extern function msDivI16(a: int16, b: int16): int16;
-	@compilerFunc
-	extern function msPowI16(a: int16, b: int16): int16;
 	@compilerFunc
 	extern function msDivAssignI8(lv: Ptr<void>, b: Ptr<void>): void;
 	@compilerFunc
-	extern function msPowAssignI8(lv: Ptr<void>, b: Ptr<void>): void;
-	@compilerFunc
 	extern function msDivAssignI16(lv: Ptr<void>, b: Ptr<void>): void;
-	@compilerFunc
-	extern function msPowAssignI16(lv: Ptr<void>, b: Ptr<void>): void;
-	@compilerFunc
-	extern function msPowAssignI32(lv: Ptr<void>, b: Ptr<void>): void;
-	@compilerFunc
-	extern function msPowWrapAssignI32(lv: Ptr<void>, b: Ptr<void>): void;
-	@compilerFunc
-	extern function msPowAssignI64(lv: Ptr<void>, b: Ptr<void>): void;
-	@compilerFunc
-	extern function msPowWrapAssignI64(lv: Ptr<void>, b: Ptr<void>): void;
-	@compilerFunc
-	extern function msPowAssignU32(lv: Ptr<void>, b: Ptr<void>): void;
-	@compilerFunc
-	extern function msPowWrapAssignU32(lv: Ptr<void>, b: Ptr<void>): void;
-	@compilerFunc
-	extern function msPowAssignU64(lv: Ptr<void>, b: Ptr<void>): void;
-	@compilerFunc
-	extern function msPowWrapAssignU64(lv: Ptr<void>, b: Ptr<void>): void;
 	@compilerFunc
 	extern function msPowAssignF64(lv: Ptr<void>, b: Ptr<void>): void;
 	@compilerFunc

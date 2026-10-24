@@ -1,7 +1,7 @@
 /*
- * Checked integer arithmetic, division, modulo and power, ToInt32, the float power, and the
- * compound assignments C has no operator for on a float target. The includer declares
- * msRaiseDivByZero, msRaiseOverflow and msRaiseRangeError first
+ * Checked integer arithmetic, division and modulo, ToInt32, the float power, and the
+ * compound assignments C has no operator for on a float target (integer power is
+ * std/core/system). The includer declares msRaiseDivByZero and msRaiseOverflow first
  * (runtime/core/system.h, runtime/manual.h).
  */
 #ifndef MS_CHECKED_ARITH_H
@@ -66,83 +66,6 @@ static inline uint64_t msModU64(uint64_t a, uint64_t b) {
 #define msDivAssignU64(lv, b) msDivAssign_(lv, b, msDivU64)
 #define msModAssignU64(lv, b) msDivAssign_(lv, b, msModU64)
 
-static inline int64_t msPowI64(int64_t a, int64_t b) {
-	if (b < 0) msRaiseRangeError(b, 0, INT64_MAX);
-	int64_t r = 1;
-	for (;;) {
-		if ((b & 1) && __builtin_mul_overflow(r, a, &r)) msRaiseOverflow();
-		b >>= 1;
-		if (b == 0) return r;
-		if (__builtin_mul_overflow(a, a, &a)) msRaiseOverflow();
-	}
-}
-
-static inline int32_t msPowI32(int32_t a, int32_t b) {
-	if (b < 0) msRaiseRangeError(b, 0, INT32_MAX);
-	int32_t r = 1;
-	for (;;) {
-		if ((b & 1) && __builtin_mul_overflow(r, a, &r)) msRaiseOverflow();
-		b >>= 1;
-		if (b == 0) return r;
-		if (__builtin_mul_overflow(a, a, &a)) msRaiseOverflow();
-	}
-}
-
-static inline uint64_t msPowU64(uint64_t a, uint64_t b) {
-	uint64_t r = 1;
-	for (;;) {
-		if ((b & 1) && __builtin_mul_overflow(r, a, &r)) msRaiseOverflow();
-		b >>= 1;
-		if (b == 0) return r;
-		if (__builtin_mul_overflow(a, a, &a)) msRaiseOverflow();
-	}
-}
-
-static inline uint32_t msPowU32(uint32_t a, uint32_t b) {
-	uint32_t r = 1;
-	for (;;) {
-		if ((b & 1) && __builtin_mul_overflow(r, a, &r)) msRaiseOverflow();
-		b >>= 1;
-		if (b == 0) return r;
-		if (__builtin_mul_overflow(a, a, &a)) msRaiseOverflow();
-	}
-}
-
-/* A negative exponent truncates a^b toward zero, the value an integer slot
-   keeps of the float TypeScript computes. */
-static inline uint64_t msPowWrapU64(uint64_t a, uint64_t b) {
-	uint64_t r = 1;
-	while (b != 0) {
-		if (b & 1) r *= a;
-		b >>= 1;
-		a *= a;
-	}
-	return r;
-}
-
-static inline int64_t msPowWrapI64(int64_t a, int64_t b) {
-	if (b < 0) return a == 1 ? 1 : (a == -1 ? ((b & 1) ? -1 : 1) : 0);
-	return (int64_t)msPowWrapU64((uint64_t)a, (uint64_t)b);
-}
-
-static inline int32_t msPowWrapI32(int32_t a, int32_t b) {
-	if (b < 0) return a == 1 ? 1 : (a == -1 ? ((b & 1) ? -1 : 1) : 0);
-	return (int32_t)(uint32_t)msPowWrapU64((uint64_t)(int64_t)a, (uint64_t)b);
-}
-
-static inline uint32_t msPowWrapU32(uint32_t a, uint32_t b) {
-	return (uint32_t)msPowWrapU64(a, b);
-}
-
-#define msPowAssignI32(lv, b) msDivAssign_(lv, b, msPowI32)
-#define msPowAssignI64(lv, b) msDivAssign_(lv, b, msPowI64)
-#define msPowAssignU32(lv, b) msDivAssign_(lv, b, msPowU32)
-#define msPowAssignU64(lv, b) msDivAssign_(lv, b, msPowU64)
-#define msPowWrapAssignI32(lv, b) msDivAssign_(lv, b, msPowWrapI32)
-#define msPowWrapAssignI64(lv, b) msDivAssign_(lv, b, msPowWrapI64)
-#define msPowWrapAssignU32(lv, b) msDivAssign_(lv, b, msPowWrapU32)
-#define msPowWrapAssignU64(lv, b) msDivAssign_(lv, b, msPowWrapU64)
-
 static inline int32_t msToInt32(double x) {
 	if (x > -2147483649.0 && x < 2147483648.0) return (int32_t)x;
 	if (!isfinite(x)) return 0;
@@ -198,12 +121,8 @@ static inline double msPowF64(double x, double y) {
 
 #define msDivI8(a, b) msOverflowChk_(int8_t, __builtin_add_overflow, msDivI32(a, b), 0)
 #define msDivI16(a, b) msOverflowChk_(int16_t, __builtin_add_overflow, msDivI32(a, b), 0)
-#define msPowI8(a, b) msOverflowChk_(int8_t, __builtin_add_overflow, msPowI32(a, b), 0)
-#define msPowI16(a, b) msOverflowChk_(int16_t, __builtin_add_overflow, msPowI32(a, b), 0)
 #define msDivAssignI8(lv, b) msDivAssign_(lv, b, msDivI8)
 #define msDivAssignI16(lv, b) msDivAssign_(lv, b, msDivI16)
-#define msPowAssignI8(lv, b) msDivAssign_(lv, b, msPowI8)
-#define msPowAssignI16(lv, b) msDivAssign_(lv, b, msPowI16)
 
 #define msArithAssign_(lv, b, builtin) (*({ \
 	__typeof__(lv)* __aap = &(lv); \

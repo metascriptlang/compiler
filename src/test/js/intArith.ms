@@ -53,7 +53,7 @@ test "int64 division by a variable calls the checked division" {
 test "int32 power calls the integer power" {
 	const result = compileToJS("function f(a: int32, b: int32): int32 { return a ** b; }");
 	assert result.ok;
-	assert result.value.contains("msPowI32(");
+	assert result.value.contains("msPowI32");
 }
 
 test "float power stays the operator" {
