@@ -1,7 +1,7 @@
 // Effects are read from checked bodies, and a callee later in the module is not
 // checked yet where its caller is: queue a check with deferEffectCheck.
 
-import { ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, PropertyDeclData, SpreadExprData, Symbol, SymbolKind, Type, TryExprData, TypeAssertionData, TypeKind, VariableDeclData } from "../ast/node";
+import { ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ClassDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ProgramData, PropertyDeclData, SpreadExprData, Symbol, SymbolKind, Type, TryExprData, TypeAssertionData, TypeKind, VariableDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
@@ -10,12 +10,15 @@ import { functionSlotOf, hasGenericParams, isAtomicRef, isReadonlyView, isSendab
 import { constBindingInitializer } from "./constFold";
 import { ctorRoutineOf } from "./ctorRoutine";
 import { DYNAMIC_IMPORT } from "./importCall";
+import { lookupModuleProgram } from "./instantiate";
+import { ModuleGraph } from "../module/graph";
 
 export enum Effect {
 	SideEffect,
 	SpawnUnsafe,
 	Suspends,
 	StoresBorrowed,
+	StartsTask,
 }
 
 export interface EffectCause {
@@ -38,6 +41,12 @@ let sideTable: EffectTable = emptyTable();
 let spawnTable: EffectTable = emptyTable();
 let suspendTable: EffectTable = emptyTable();
 let sharedConstTable: EffectTable = emptyTable();
+let startTable: EffectTable = emptyTable();
+let startsByModule = new HashMap<string, boolean>();
+let cycles = new HashMap<string, string[]>();
+let freshConsts = new HashMap<Symbol, boolean>();
+let checkedModules = new HashSet<string>();
+let moduleGraph: ModuleGraph | null = null;
 let paramStoreTables: EffectTable[] = [];
 let viewSyms: Symbol[] = [];
 let viewParams: string[] = [];
@@ -66,6 +75,7 @@ function tableFor(e: Effect): EffectTable {
 		Effect.SpawnUnsafe => spawnTable,
 		Effect.Suspends => suspendTable,
 		Effect.StoresBorrowed => sharedConstTable,
+		Effect.StartsTask => startTable,
 	};
 }
 
@@ -80,6 +90,8 @@ export function runDeferredEffectChecks(ctx: CheckerContext): void {
 	const checks = deferred;
 	deferred = [];
 	hookRegistry = ctx.extensionRegistry;
+	moduleGraph = ctx.moduleGraph;
+	checkedModules.add(ctx.modulePath);
 	for (const d of checks) d.check(ctx);
 	hookRegistry = null;
 	checkHookEffects(ctx);
@@ -87,6 +99,10 @@ export function runDeferredEffectChecks(ctx: CheckerContext): void {
 	spawnTable = emptyTable();
 	suspendTable = emptyTable();
 	sharedConstTable = emptyTable();
+	startTable = emptyTable();
+	startsByModule = new HashMap<string, boolean>();
+	cycles = new HashMap<string, string[]>();
+	freshConsts = new HashMap<Symbol, boolean>();
 	paramStoreTables = [];
 	forOfSources = new HashMap<Symbol, Node>();
 	assignedSources = new HashMap<Symbol, Node[]>();
@@ -320,8 +336,96 @@ function isConstantValue(sym: Symbol, e: Effect): boolean {
 }
 
 function builtFresh(sym: Symbol): boolean {
+	const known = freshConsts.get(sym);
+	if (known != null) return known;
 	const init = constBindingInitializer(sym);
-	return init != null && isFreshValue(init, CONST_INIT_SCOPE);
+	const fresh = init != null && isFreshValue(init, CONST_INIT_SCOPE) && noTaskStartsBefore(sym);
+	freshConsts.set(sym, fresh);
+	return fresh;
+}
+
+function noTaskStartsBefore(sym: Symbol): boolean {
+	const program = lookupModuleProgram(sym.modulePath);
+	const decl = sym.declNode;
+	if (program == null || decl == null || !checkedModules.has(sym.modulePath)) return false;
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		if (topLevelStartsTask(stmt)) return false;
+		if (declares(stmt, decl)) return cycleStartsNoTask(sym.modulePath);
+	}
+	return false;
+}
+
+function declares(stmt: Node, decl: Node): boolean {
+	const s = stmt.kind == NodeKind.ExportDecl ? (stmt.data as ExportDeclData).exportedDecl : stmt;
+	if (s == decl || unpackDecl(s) == decl) return true;
+	const c = unpackDecl(s);
+	if (c == null || c.kind != NodeKind.ClassDecl) return false;
+	for (const m of (c.data as ClassDeclData).classBody) {
+		if (m == decl || unpackDecl(m) == decl) return true;
+	}
+	return false;
+}
+
+function topLevelStartsTask(stmt: Node): boolean {
+	const s = unpackDecl(stmt.kind == NodeKind.ExportDecl ? (stmt.data as ExportDeclData).exportedDecl : stmt);
+	if (s == null || isRoutineNode(s)) return false;
+	if (s.kind != NodeKind.ClassDecl) return walkEffect(s, Effect.StartsTask) != null;
+	for (const m of (s.data as ClassDeclData).classBody) {
+		const member = unpackDecl(m);
+		if (member == null || isRoutineNode(member)) continue;
+		if (member.kind == NodeKind.PropertyDecl && !(member.data as PropertyDeclData).propIsStatic) continue;
+		if (walkEffect(member, Effect.StartsTask) != null) return true;
+	}
+	return false;
+}
+
+function cycleStartsNoTask(path: string): boolean {
+	if (moduleGraph == null) return false;
+	for (const member of importCycleOf(moduleGraph!, path)) {
+		if (member == path) continue;
+		const known = startsByModule.get(member);
+		if (known != null) {
+			if (known) return false;
+			continue;
+		}
+		const program = lookupModuleProgram(member);
+		if (program == null || !checkedModules.has(member)) return false;
+		let starts = false;
+		for (const stmt of (program.data as ProgramData).programStmts) {
+			if (topLevelStartsTask(stmt)) {
+				starts = true;
+				break;
+			}
+		}
+		startsByModule.set(member, starts);
+		if (starts) return false;
+	}
+	return true;
+}
+
+function importCycleOf(graph: ModuleGraph, path: string): string[] {
+	const known = cycles.get(path);
+	if (known != null) return known;
+	const reached = reachableFrom(graph, path, false);
+	const back = reachableFrom(graph, path, true);
+	const cycle = reached.filter((p: string): boolean => back.includes(p));
+	cycles.set(path, cycle);
+	return cycle;
+}
+
+function reachableFrom(graph: ModuleGraph, start: string, reverse: boolean): string[] {
+	const seen: string[] = [start];
+	for (let i = 0; i < seen.length; i += 1) {
+		for (const m of graph.modules) {
+			for (const imp of m.imports) {
+				if (imp.typeOnly) continue;
+				const from = reverse ? imp.sourcePath : m.path;
+				const to = reverse ? m.path : imp.sourcePath;
+				if (from == seen[i] && !seen.includes(to)) seen.push(to);
+			}
+		}
+	}
+	return seen;
 }
 
 const CONST_INIT_SCOPE: FreshScope = {
@@ -500,7 +604,7 @@ function isSuperCall(callee: Node | null): boolean {
 export function callEffect(call: Node, e: Effect): EffectCause | null {
 	const callee = (call.data as CallExprData).callee;
 	if (isSuperCall(callee)) return null;
-	if (e == Effect.Suspends && isSpawnCall(call)) return cause(call, "spawns");
+	if ((e == Effect.Suspends || e == Effect.StartsTask) && isSpawnCall(call)) return cause(call, "spawns");
 	if (callee != null && callee.resolvedSym != null && callee.resolvedSym.builtinKind == DYNAMIC_IMPORT) {
 		return e == Effect.SideEffect ? cause(call, "imports '" + callee.resolvedSym.modulePath + "'") : null;
 	}
@@ -533,6 +637,7 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 
 export function newEffect(newNode: Node, e: Effect): EffectCause | null {
 	const classSym = (newNode.data as NewExprData).newCallee.resolvedSym;
+	if (e == Effect.StartsTask && classSym != null && classSym.symbolKind == SymbolKind.Actor) return cause(newNode, "starts the actor '" + classSym.name + "'");
 	if (classSym == null || classSym.symbolKind != SymbolKind.Class) return null;
 	const built = through(newNode, "constructs '" + classSym.name + "'", constructionEffect(classSym, e));
 	return built != null ? built : ownedValueHookEffect(newNode, e);
@@ -555,7 +660,7 @@ function ownedValueHookEffect(site: Node, e: Effect): EffectCause | null {
 function useEffect(node: Node, e: Effect): EffectCause | null {
 	const sym = node.resolvedSym;
 	if (sym == null) return null;
-	if ((e == Effect.Suspends || e == Effect.StoresBorrowed) && sym.symbolKind != SymbolKind.Function) return null;
+	if ((e == Effect.Suspends || e == Effect.StoresBorrowed || e == Effect.StartsTask) && sym.symbolKind != SymbolKind.Function) return null;
 	if (isModuleState(sym)) return isConstantValue(sym, e) ? null : cause(node, "uses " + stateName(sym));
 	if (sym.symbolKind == SymbolKind.Function) return through(node, "refers to '" + sym.name + "'", routineEffect(sym, e));
 	return null;
