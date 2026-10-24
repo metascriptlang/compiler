@@ -27,7 +27,7 @@ import { RaiserVM, execModule, execLoop, createVM, vmReleaseHeaps } from "../../
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction, makeTestModule } from "../../raiser/module";
 import { RaiserFuncMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
 import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState, globalScope } from "../../checker/symbol";
-import { cloneNodeForCheck } from "../../monomorphize/clone";
+import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
 import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
 import { generateRaiser, appendProgramToImage } from "./rgen";
@@ -109,6 +109,32 @@ function transformForEngine(program: Node): Node {
 		}
 	}
 	return transformed;
+}
+
+// A prelude routine was checked once, in the prelude; the engine lowers that checked body
+// as it stands, so its clone keeps the types and symbols the check gave it.
+function transformCheckedForEngine(program: Node, bodyCtx: CheckerContext): Node {
+	ensureHostTableLoaded();
+	registerTypeQueryHostFns();
+	_lastEngineCheckErrors = [];
+	return transformForRaiser(program, bodyCtx);
+}
+
+function isCheckedRoutineDecl(decl: Node): boolean {
+	if (decl.nodeType == null) return false;
+	return decl.kind == NodeKind.ClassDecl || (decl.kind == NodeKind.FunctionDecl && decl.paramSyms != null);
+}
+
+function compileCheckedBodyIntoEngine(sym: Symbol, decl: Node, engineName: string): int32 {
+	const previousOnDemand = registerRaiserOnDemand(ensureCompiledIntoEngine);
+	defer registerRaiserOnDemand(previousOnDemand);
+	enterEngineCompile();
+	defer leaveEngineCompile();
+	const clone = cloneNodeKeepSem(decl);
+	if (clone.kind == NodeKind.FunctionDecl) (clone.data as FunctionDeclData).fnName = engineName;
+	const program = createNode(NodeKind.Program, { programStmts: [clone] }, synthToken(decl.location));
+	const transformed = transformCheckedForEngine(program, preludeBodyCtx(raiserPreludeCtx(), sym.modulePath));
+	return appendProgramToImage(_engine.image, _engine.funcMap, transformed, engineName, sym);
 }
 
 export function evalASTCompile(program: Node): RaiserModule {
@@ -364,6 +390,12 @@ function instanceTypeParamSeeds(sym: Symbol): Symbol[] {
 	return seeds;
 }
 
+let _engineRecheckCount: int32 = 0;
+
+export function engineRecheckCount(): int32 {
+	return _engineRecheckCount;
+}
+
 function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	if (_engine == null) return -1;
 	const isClass = sym.symbolKind == SymbolKind.Class;
@@ -372,11 +404,16 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const seenIdx = isClass ? _engine.funcMap.ctorIndices.get(sym) : _engine.funcMap.symbolIndices.get(sym);
 	if (seenIdx != null) return seenIdx;
 	if (sym.declNode == null) return -1;
+	const homeOutsideBuild = lookupModuleCtx(sym.modulePath) == null;
+	const vmStd = isVmPreludeSym(sym) || (homeOutsideBuild && isVmStdHelper(sym));
+	const preludeOwned = raiserPreludeCtx().preludeModuleScopes.get(sym.modulePath) != null;
+	if ((vmStd || preludeOwned) && isCheckedRoutineDecl(sym.declNode)) {
+		return compileCheckedBodyIntoEngine(sym, sym.declNode, isClass ? name : "$comptime:helper");
+	}
 	const seedCtx = seedCtxForSym(sym);
 	const seeds: Symbol[] = instanceTypeParamSeeds(sym);
 	let exts: ExtensionMethod[] = [];
-	const homeOutsideBuild = lookupModuleCtx(sym.modulePath) == null;
-	if (isVmPreludeSym(sym) || (homeOutsideBuild && isVmStdHelper(sym))) {
+	if (vmStd) {
 		for (const s of vmStdSeeds(sym)) seeds.push(s);
 	} else if (seedCtx != null) {
 		for (const s of moduleScopeSymbols(seedCtx.table)) {
@@ -393,6 +430,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	callComptimeHelperPreparer(clone, seedCtx != null ? seedCtx : _engineToken);
 	const decls: Node[] = [clone];
 	const program = createNode(NodeKind.Program, { programStmts: decls }, synthToken(sym.declNode.location));
+	_engineRecheckCount += 1;
 	const idx = compileProgramIntoEngine(program, seeds, exts, engineName, sym);
 	for (const e of _lastEngineCheckErrors) {
 		if (e.severity != Severity.Error) continue;
