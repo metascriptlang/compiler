@@ -66,6 +66,7 @@ class LiftCtx {
 	scannedTypes: HashSet<Type>;
 	arrayRootEpochs: HashMap<Type, int32>;
 	refusedArrayElems: HashSet<Type>;
+	hookFreeTypes: HashSet<Type>;
 	jsBackend: boolean;
 	dropOwner: Symbol | null;
 }
@@ -2128,7 +2129,7 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx): void {
 }
 
 function hookedDistinctElement(t: Type | null, lctx: LiftCtx, seen: HashSet<Type>): Type | null {
-	if (t == null || seen.has(t)) return null;
+	if (t == null || seen.has(t) || lctx.hookFreeTypes.has(t)) return null;
 	seen.add(t);
 	const elem = t.kind == TypeKind.Array ? t.typeReturn : null;
 	if (elem != null && elem.kind == TypeKind.Distinct && hasAnyUserHook(elem, lctx)) return elem;
@@ -2141,7 +2142,9 @@ function hookedDistinctElement(t: Type | null, lctx: LiftCtx, seen: HashSet<Type
 
 function refuseArrayOfHookedDistinct(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	if (lctx.jsBackend || lctx.checkerCtx == null) return;
-	const elem = hookedDistinctElement(t, lctx, new HashSet<Type>());
+	const seen = new HashSet<Type>();
+	const elem = hookedDistinctElement(t, lctx, seen);
+	if (elem == null) seen.forEach((v: Type): void => { lctx.hookFreeTypes.add(v); });
 	if (elem == null || lctx.refusedArrayElems.has(elem)) return;
 	lctx.refusedArrayElems.add(elem);
 	addError(lctx.checkerCtx, "an array of the distinct type '" + elem.typeName + "' would never run its lifecycle hooks, because it is stored as an array of its base type: keep the values in a struct and make the array of those", loc.line, loc.column);
@@ -2312,6 +2315,7 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		scannedTypes: new HashSet<Type>(),
 		arrayRootEpochs: new HashMap<Type, int32>(),
 		refusedArrayElems: new HashSet<Type>(),
+		hookFreeTypes: new HashSet<Type>(),
 		jsBackend: jsBackend,
 		dropOwner: null,
 	};
