@@ -1,5 +1,4 @@
 // @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
-// @skip-js: stop() in std/actor/index.jms leaves the actor's setInterval armed, so node never exits
 // @stdout: stopped with a tick queued: true
 // @stdout: exit after stop
 // @serial
