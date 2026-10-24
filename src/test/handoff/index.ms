@@ -26,6 +26,7 @@ import "./typeAliasStruct";
 import "./literalCoercion";
 import "./numericLiteralRefusal";
 import "./intLiteralBoundary";
+import "./integerPowerLowering";
 import "./discriminatedUnion";
 import "./classGeneric";
 import "./macroNodeFieldTyped";
