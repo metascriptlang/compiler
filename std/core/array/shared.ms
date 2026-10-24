@@ -67,3 +67,60 @@ export function spliceCount(deleteCount: number, room: int64): int64 {
 	if (deleteCount >= (room as number)) return room;
 	return deleteCount as int64;
 }
+
+export function every<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): boolean {
+	const n = arr.length;
+	let i = 0;
+	while (i < n && i < arr.length) {
+		if (!fn(arr[i], i)) return false;
+		i = i + 1;
+	}
+	return true;
+}
+
+export function reduce<T, U>(this arr: Vec<T>, fn: (acc: U, x: T, i: number) => U, init: U): U {
+	const n = arr.length;
+	let acc = init;
+	let i = 0;
+	while (i < n && i < arr.length) {
+		acc = fn(acc, arr[i], i);
+		i = i + 1;
+	}
+	return acc;
+}
+
+export function reduce<T>(this arr: Vec<T>, fn: (acc: T, x: T, i: number) => T): T {
+	const n = arr.length;
+	if (n == 0) throw new Error("Reduce of empty array with no initial value");
+	let acc = arr[0];
+	let i = 1;
+	while (i < n && i < arr.length) {
+		acc = fn(acc, arr[i], i);
+		i = i + 1;
+	}
+	return acc;
+}
+
+export function* values<T>(this arr: T[]): Iterator<T> {
+	let i = 0;
+	while (i < arr.length) {
+		yield arr[i];
+		i = i + 1;
+	}
+}
+
+export function* keys<T>(this arr: T[]): Iterator<number> {
+	let i = 0;
+	while (i < arr.length) {
+		yield i;
+		i = i + 1;
+	}
+}
+
+export function* entries<T>(this arr: T[]): Iterator<[number, T]> {
+	let i = 0;
+	while (i < arr.length) {
+		yield [i, arr[i]];
+		i = i + 1;
+	}
+}
