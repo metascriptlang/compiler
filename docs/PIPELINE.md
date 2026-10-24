@@ -136,7 +136,7 @@ and whole programs under `msc run --target=raiser`. It consumes the **post-trans
 
 **Core architecture:**
 - **Register-based** instruction set; the register file starts at 256 slots and grows.
-- **`if` / `else if` dispatch** in `src/raiser/vm.ms`, one arm per opcode; there is no C dispatch.
+- **`match (op)` dispatch** in `src/raiser/vm.ms`, one arm per opcode, compiled to a C `switch`; there is no other C dispatch.
 - **Handle-based heaps** (`ObjectHeap`/`ArrayHeap`), one per strand: arena by default,
   refcount + cycle collector under `gcMode = "orc"`.
 - **Flat tagged `RaiserValue`** (Nil/Bool/Int/Float/String/Array/Object), kind-dispatched.

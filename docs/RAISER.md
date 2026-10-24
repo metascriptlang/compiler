@@ -50,7 +50,7 @@ scope or surviving storage growth.
 
 | Tier | What | Admission |
 |---|---|---|
-| 0 | VM opcode | not expressible in MS: string identity / length / index, array index / length / push / set-length, arithmetic. Chosen for representation, never for speed |
+| 0 | VM opcode | not expressible in MS: string identity / length / index, array index / length / push / set-length, arithmetic. A std operation becomes an opcode for representation, never for speed; how an instruction codegen already emits is encoded (an immediate operand, a field slot index, a compare fused with its branch) is chosen for speed |
 | 1 | Host bridge (`CallHost`, `src/compiler/meta/hostTable.ms`, 105 `registerHostFn` entries) | needs host state or representation: fs, process, env, string ↔ bytes. Needs a written reason |
 | 2 | Portable MS (`std/core/string/shared.ms`, `std/core/array/index.rms`) | everything derivable; shared with the C and JS backends |
 
@@ -117,20 +117,23 @@ Earlier test lanes: `msc test src/raiser/value.ms` 333/333, `src/raiser/vm.ms` 5
 
 ## Performance
 
-`fib(27)`, minimum of 5 runs, VM time = raiser run of `fib(27)` minus raiser run of `fib(1)` (so parse, check and bytecode generation drop out). Measured 2026-09-19 at load 16–20 on 14 cores:
+The VM runs inside `msc`, so its speed follows how `msc` was built: a `--danger` build drops the VM's `when (mode != "danger")` checks and compiles at `-O3`. `tools/syncLocalBinary.ms` installs only a `--danger` build. The run flag `msc run --target=raiser --danger` sets the program's own `mode` and nothing in the VM. Measured 2026-10-22 on the installed msc (`ae54a85be`), instructions retired without and with the flag: fib bench 5.95e9 and 5.91e9, field bench 9.38e9 and 9.35e9.
 
-| | time | VM ÷ this |
-|---|---|---|
-| native `--danger`, whole process | 4.0 ms | 110× |
-| native default (`-O0`), whole process | 6.5 ms | 68× |
-| Raiser, VM part | 440.9 ms | — |
-| Raiser, fixed cost (`fib(1)` run) | 652.9 ms | — |
+Measured 2026-10-22 on macOS arm64, one run each at load 45–90: the public release v0.3.3 (`install.sh`, published 2026-10-14, before the speed work) against `main` `f5d89ee4e` built `--danger --cc=clang`. Command: `msc run --target=raiser --max-vm-iterations=2000000000 <bench>.ms`, benches tw1–tw6 kept outside the repo in the machine-local `paper/raiser-speed-handoff/bench/`. "VM ms" is what each program times with `performance.now()` around its loop. "Instructions" is the whole process, compile included (about 2.3e9 on `f5d89ee4e`), from `/usr/bin/time -l`, and does not depend on load. Every pair printed the same result.
 
-So Raiser suits small inputs. The per-slot boxed `RaiserValue` register file and per-op value allocation are the known costs. The `spike/` prototypes (untagged `number[]` registers, instructions packed into one `number`) measured about 5× over the boxed loop earlier; they no longer type-check (18 implicit `number → int32` narrowing errors), so that number is not re-measured.
+| bench | VM ms v0.3.3 | VM ms `f5d89ee4e` | VM speed-up | instructions v0.3.3 | instructions `f5d89ee4e` | ratio |
+|---|---|---|---|---|---|---|
+| tw1 loop 5e7 | 35845 | 525 | 68× | 283.8e9 | 7.65e9 | 37× |
+| tw2 fib(34) | 14497 | 380 | 38× | 123.4e9 | 5.82e9 | 21× |
+| tw4 field loop 2e7 | 34625 | 517 | 67× | 209.8e9 | 9.61e9 | 22× |
+| tw5 `new` + virtual call | 15584 | 507 | 31× | 97.4e9 | 6.82e9 | 14× |
+| tw6 closure call | 34413 | 726 | 47× | 240.0e9 | 11.21e9 | 21× |
+
+The instruction ratio is lower than the VM ratio because it includes the compile, which the work did not speed up. Not measured here: repeated runs on an idle machine, and LuaJIT on this load.
 
 ## Bytecode
 
-`RaiserInstruction` is a record `{ op, a, b, c, cachedIdx, line }`, not a packed word. ABx and Ax are views over it: `Bx = b·256 + c`, `Ax` = signed 24 bits over `a`, `b`, `c`. `cachedIdx` is a per-instruction inline cache for `LoadField` / `StoreField`, which otherwise look fields up by name.
+Codegen builds `RaiserInstruction` records `{ op, a, b, c, line }`; ABx and Ax are views over them: `Bx = b·256 + c`, `Ax` = signed 24 bits over `a`, `b`, `c`. `createRaiserFunction` packs each record once into an `int64` word (`op` in bits 0–7, then `a`, `b`, `c` in 16 bits each) and the VM reads only the packed words; `assertPacked` refuses a function whose `code` changed after creation. The source line and the `LoadField` / `StoreField` inline cache (field index, `-1` = miss) sit in side tables `lines` and `fieldCache`, one entry per instruction.
 
 92 opcodes in `RaiserOpcode` (counted 2026-10-06); the table names the families, not every member:
 
