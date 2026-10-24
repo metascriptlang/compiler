@@ -1,5 +1,5 @@
-// Emit workers read the checked program at once, so the code an emit job reaches takes no rc op on
-// a cell of that program: not on the cell itself, not by releasing a struct whose destroy hook
+// Emit workers read the checked program at once, so the code an emit job or a spawned thunk reaches takes no
+// rc op on a cell of that program: not on the cell itself, not by releasing a struct whose destroy hook
 // releases one, and not through a void* helper (V5).
 import { argv, cwd, execFileCapture, exit } from "std/process";
 import { ensureDir, exists, readDir, readFile, removeAll } from "std/fs";
@@ -9,6 +9,7 @@ const ROOT_SUFFIX = "compileOms_u0";
 const RC_OPS = ["msIncrefCyclic(", "msDecrefCyclic(", "msIncref(", "msDecref("];
 const PROGRAM_CELLS = ["Node__", "Type__", "Symbol__", "CheckerContext__"];
 const JOB_INPUTS = ["ModuleEmissionJob__", "AliveSet__", "CEmissionFacts__"];
+const CLOSURE_LITERAL = " = (msClosure){ .fn = (void*)";
 const NOT_TYPES = ["return", "goto", "else", "case", "const", "struct", "sizeof"];
 
 interface CFunction {
@@ -277,7 +278,36 @@ function callArguments(line: string, open: int32): string[] {
 	return args;
 }
 
-function reachedFromEmitJob(fns: HashMap<string, CFunction>): string[] {
+// A closure literal a function hands to an msSpawn*Submit call: its body runs on a worker.
+function spawnedThunks(fns: HashMap<string, CFunction>): string[] {
+	const out: string[] = [];
+	for (const fn of fns.values()) {
+		const thunkOf = new HashMap<string, string>();
+		for (const line of fn.body) {
+			const lit = line.indexOf(CLOSURE_LITERAL);
+			if (lit >= 0) {
+				const open = line.lastIndexOf("(", lit);
+				thunkOf.set(line.slice(open + 1, lit).trim(), identAt(line, lit + CLOSURE_LITERAL.length));
+				continue;
+			}
+			let at = line.indexOf("msSpawn");
+			while (at >= 0) {
+				const name = identAt(line, at);
+				if (name.endsWith("Submit")) {
+					for (const arg of callArguments(line, at + name.length)) {
+						const thunk = thunkOf.get(arg.trim());
+						if (thunk != null && fns.has(thunk) && !out.includes(thunk)) out.push(thunk);
+					}
+				}
+				at = line.indexOf("msSpawn", at + name.length);
+			}
+		}
+	}
+	return out;
+}
+
+// Roots: the emit job itself, which a thunk reaches only through a function value, and every spawned thunk.
+function reachedFromWorkers(fns: HashMap<string, CFunction>): string[] {
 	let root = "";
 	for (const name of fns.keys()) {
 		if (name.startsWith(ROOT_PREFIX) && name.endsWith(ROOT_SUFFIX)) root = name;
@@ -289,6 +319,9 @@ function reachedFromEmitJob(fns: HashMap<string, CFunction>): string[] {
 	const seen = new HashSet<string>();
 	const order: string[] = [root];
 	seen.add(root);
+	for (const thunk of spawnedThunks(fns)) {
+		if (!seen.has(thunk)) { seen.add(thunk); order.push(thunk); }
+	}
 	for (let k = 0; k < order.length; k += 1) {
 		for (const line of fns.get(order[k])!.body) {
 			let i = 0;
@@ -326,7 +359,7 @@ export function rcOpsOnCells(dir: string): RcOp[] {
 	markShared(p);
 	markErased(p);
 	const found: RcOp[] = [];
-	for (const name of reachedFromEmitJob(p.fns)) {
+	for (const name of reachedFromWorkers(p.fns)) {
 		const fn = p.fns.get(name)!;
 		const types = localTypes(fn);
 		for (let k = 0; k < fn.body.length; k += 1) {
@@ -396,7 +429,7 @@ if (!exists(dir)) {
 const ops = rcOpsOnCells(dir);
 for (const op of ops) {
 	const at = op.at.startsWith(`${cwd()}/`) ? op.at.slice(cwd().length + 1) : op.at;
-	console.log(`FAIL self-host: emit-reached rc op on a ${op.cell} in ${op.fn} at ${at}\n  ${op.text}`);
+	console.log(`FAIL self-host: worker-reached rc op on a ${op.cell} in ${op.fn} at ${at}\n  ${op.text}`);
 }
 if (ops.length > 0) exit(1);
-console.log("emit rc scan: 0 rc ops on the checked program in emit-reached code");
+console.log("emit rc scan: 0 rc ops on the checked program in worker-reached code");
