@@ -1951,7 +1951,7 @@ CC_FLAG=""
 lane_cmd() {
   case "$1" in
     build) printf '%s build src/index.ms --gc=drc --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
-    boundary) printf '%s run --target=raiser src/test/nativeBuildBoundary.ms %s' "$CAND" "$CAND" ;;
+    boundary) printf '%s run --target=raiser src/test/nativeBuildBoundary.ms %s; r=$?; %s run --target=raiser src/test/projectConfigCommands.ms %s || r=1; exit $r' "$CAND" "$CAND" "$CAND" "$CAND" ;;
     corpus) printf '%s%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$([ "$raiser_on" -eq 1 ] && printf 'MSCORPUS_RAISER=1 ')" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     fmt) printf '%s run src/test/fmt/run.ms' "$BUILDER" ;;
