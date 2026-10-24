@@ -1,3 +1,4 @@
+// @xfail(raiser): the Raiser std declares no Date, so the busy-wait on Date.now stops at the type check with exit 1 before any task runs
 // @stdout: held async ok
 // @stdout: held array ok
 // @stdout: no env capture ok
