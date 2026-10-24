@@ -9,7 +9,6 @@ src/module/cparse/       ← Pure C parser (chibicc port). Tokenize, preprocess,
 src/module/cimport/
   emit.ms                ← C→MS type mapping + declaration emission
   index.ms               ← Public API: parseHeader (single sync entry, aggregates diagnostics)
-  cli.ms                 ← Standalone CLI for testing
 ```
 
 ### Dependency Rules
