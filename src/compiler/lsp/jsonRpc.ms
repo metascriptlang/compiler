@@ -79,3 +79,12 @@ test "an id goes back as the client wrote it: number, string, or none" {
 test "content length ignores text after the digits" {
 	assert lspParseContentLength("Content-Length: 12abc") == 12;
 }
+
+test "a frame with non-ASCII text declares the bytes it writes" {
+	const body = lspErrorResponse("1", -32603, "caf\u00e9 \u{1F600}");
+	assert body.byteLength > body.length;
+	const header = "Content-Length: " + body.byteLength + "\r\n\r\n";
+	const msg = lspFormatMessage(body);
+	assert msg == header + body;
+	assert msg.byteLength == header.byteLength + body.byteLength;
+}
