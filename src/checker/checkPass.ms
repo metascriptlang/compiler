@@ -10,7 +10,7 @@ import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charT
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols } from "./symbol";
 import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
-import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl } from "./collectPass";
+import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl, declOfStatement } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { readFile, writeFile, ensureDir, isFile } from "std/fs";
@@ -29,7 +29,7 @@ import { isBuiltinDirective, inlineDecorator } from "./decoratorHelpers";
 import { isComputedGotoMark, computedGotoMarks, isRegisteredMark, refuseComputedGotoMisuse } from "./computedGoto";
 import { splitTopLevel, getModuleDir, appendFlag } from "../utils/string";
 import { bindFlowGraph } from "../binder/index";
-import { bindContainerNames, bindModuleNames, releaseNames, paramSymbol } from "./bindNames";
+import { bindContainerNames, bindModuleNames, bindTemplateBodyNames, releaseNames, paramSymbol } from "./bindNames";
 import { getFlowTypeOfReference, isEndOfBodyReachable } from "./flow";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { checkViewBorrows } from "./varPartitions";
@@ -3192,6 +3192,7 @@ function bindProgram(ctx: CheckerContext, program: Node): Node[] {
 	ctx.decoratorsPending = false;
 	const _c1 = performance.now();
 	resolveDeclarations(ctx, program);
+	bindTemplateBodies(ctx, program);
 	const _c2 = performance.now();
 	bindFlowGraph(program);  // Phase 1: build the CFG (unused by checker yet — Phase 2 will query)
 	const moduleNames = bindModuleNames(ctx, program);
@@ -3200,6 +3201,15 @@ function bindProgram(ctx: CheckerContext, program: Node): Node[] {
 	_tResolve = _tResolve + (_c2 - _c1);
 	_tFlow = _tFlow + (_c3 - _c2);
 	return moduleNames;
+}
+
+function bindTemplateBodies(ctx: CheckerContext, program: Node): void {
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		const decl = declOfStatement(stmt);
+		if (decl.kind != NodeKind.FunctionDecl) continue;
+		const fd = decl.data as FunctionDeclData;
+		if (fd.fnBody != null && fd.fnFlags.indexOf("template", 0) >= 0) bindTemplateBodyNames(ctx, fd.params, fd.fnBody);
+	}
 }
 
 function checkBoundProgram(ctx: CheckerContext, program: Node, moduleNames: Node[]): void {
