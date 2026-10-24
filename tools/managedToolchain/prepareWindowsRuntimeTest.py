@@ -41,10 +41,10 @@ class TempCase(unittest.TestCase):
         return os.path.join(self.dir, *parts)
 
 
-def linkLine(cache, startup="crt2.obj", dll=False, archives=ARCHIVES, extra=""):
+def linkLine(cache, startup="crt2.obj", dll=False, archives=ARCHIVES, extra="", machine="X64"):
     options = "-lldmingw -ERRORLIMIT:0 -NOLOGO -DEBUG -PDB:p.pdb -PDBALTPATH:p.pdb -MLLVM:-float-abi=hard "
-    options += "-BASE:5368709120 -BUILD-ID:NO -MACHINE:X64 " if dll else \
-        "-STACK:16777216 -BASE:5368709120 -BUILD-ID:NO -MACHINE:X64 "
+    options += "-BASE:5368709120 -BUILD-ID:NO -MACHINE:%s " % machine if dll else \
+        "-STACK:16777216 -BASE:5368709120 -BUILD-ID:NO -MACHINE:%s " % machine
     options += ("-DLL " if dll else "") + "-BREPRO -OUT:/o/fixture -IMPLIB:/o/fixture.lib "
     inputs = " ".join("%s/%s" % (cache, n) for n in [startup] + archives)
     return "lld-link " + options + extra + "/l/runtimeWindows.obj -ALTERNATENAME:__image_base__=__ImageBase " + inputs
@@ -62,7 +62,8 @@ class LinkLineTest(TempCase):
 
     def test_an_executable_line_yields_its_stack_base_and_ordered_inputs(self):
         found = self.parse(linkLine(self.cache))
-        self.assertEqual((found["dll"], found["stack"], found["base"]), (False, 16777216, 5368709120))
+        self.assertEqual((found["dll"], found["stack"], found["base"], found["machine"]),
+                         (False, 16777216, 5368709120, "X64"))
         self.assertEqual([os.path.basename(p) for p in found["inputs"]], ["crt2.obj"] + ARCHIVES)
         self.assertEqual(found["notCarried"], ["-ALTERNATENAME:__image_base__=__ImageBase"])
 
@@ -70,6 +71,11 @@ class LinkLineTest(TempCase):
         found = self.parse(linkLine(self.cache, "dllcrt2.obj", True))
         self.assertEqual((found["dll"], found["stack"]), (True, None))
         self.assertEqual(os.path.basename(found["inputs"][0]), "dllcrt2.obj")
+
+    def test_the_machine_is_read_from_the_line_and_a_line_without_one_is_refused(self):
+        self.assertEqual(self.parse(linkLine(self.cache, machine="ARM64"))["machine"], "ARM64")
+        with self.assertRaisesRegex(pe.EngineError, "no -MACHINE"):
+            self.parse(linkLine(self.cache).replace("-MACHINE:X64 ", ""))
 
     def test_an_option_that_is_neither_carried_nor_named_is_refused(self):
         with self.assertRaisesRegex(pe.EngineError, "-OPT:NOICF is not understood"):
@@ -112,12 +118,35 @@ class LibraryTailTest(unittest.TestCase):
             pw.libraryTail(["/c/crt2.obj", "/c/libmingw32.lib", "/c/compiler_rt.lib"], "crt2.obj")
 
 
+ARM_COMPILE = COMPILE.replace("x86_64-unknown-windows-gnu", "aarch64-unknown-windows-gnu").replace(
+    "-Xclang x86-64 ", "-Xclang generic ").replace("-Xclang -target-feature -Xclang -amx-transpose ",
+                                                  "-Xclang -target-feature -Xclang -tme ")
+ARM_REMOVED = ["-no-zcz-fp", "-tme", "-zcz", "-zcz-gp"]
+
+
 class ConfigTest(unittest.TestCase):
-    def render(self, variant):
-        compile_ = pr.parseCompileArgv(COMPILE)
-        compile_["features"], _ = pr.translateFeatures(compile_["features"], pw.TARGET, "x86-64", "0.16.0", "22")
+    def render(self, variant, target=pw.TARGET):
+        compile_ = pr.parseCompileArgv(ARM_COMPILE if target == pw.ARM64_TARGET else COMPILE)
+        compile_["features"], _ = pr.translateFeatures(compile_["features"], target, compile_["cpu"], "0.16.0", "22")
         link = {"stack": 16777216 if variant == "exe" else None, "base": 0x140000000}
-        return pw.renderWindowsConfig(variant, compile_, link, ["any-windows-any"], [n[:-4] for n in ARCHIVES], "22")
+        return pw.renderWindowsConfig(variant, compile_, link, ["any-windows-any"], [n[:-4] for n in ARCHIVES], "22",
+                                      target)
+
+    def test_the_arm64_configs_carry_their_own_target_cpu_directory_and_startup_object(self):
+        exe, dll = self.render("exe", pw.ARM64_TARGET).splitlines(), self.render("dll", pw.ARM64_TARGET).splitlines()
+        self.assertIn("-target aarch64-unknown-windows-gnu", exe)
+        self.assertIn("-Xclang -target-cpu -Xclang generic", exe)
+        self.assertIn("--sysroot=<CFGDIR>/aarch64-windows-gnu", exe)
+        self.assertIn("-Xlinker <CFGDIR>/aarch64-windows-gnu/crt2.obj", exe)
+        self.assertIn("--ld-path=<CFGDIR>/../../bin/ld.lld", exe)
+        self.assertIn("--sysroot=<CFGDIR>/aarch64-windows-gnu.dll", dll)
+        self.assertIn("-Xlinker <CFGDIR>/aarch64-windows-gnu.dll/dllcrt2.obj", dll)
+        self.assertIn("-shared", dll)
+        self.assertNotIn("-shared", exe)
+        for lines in (exe, dll):
+            self.assertEqual([l for l in lines if l.startswith("$")], ["$-l" + n[:-4] for n in ARCHIVES])
+            self.assertFalse(any("x86" in l or "amd64" in l.lower() for l in lines))
+        self.assertNotIn("tme", "\n".join(exe))
 
     def test_the_executable_config_reaches_the_engine_two_levels_up_and_the_startup_object_first(self):
         lines = self.render("exe").splitlines()
@@ -158,6 +187,33 @@ class ConfigTest(unittest.TestCase):
             self.assertEqual(pr.translateFeatures(feature, *other)[0], feature, msg=other)
         self.assertEqual(pr.translateFeatures(["-amx-tile", "+avx512f"], pw.TARGET, "x86-64", "0.16.0", "22")[0],
                          ["-amx-tile", "+avx512f"])
+
+    def test_the_arm64_removed_features_are_left_out_only_for_this_zig_engine_target_and_cpu(self):
+        for feature in ARM_REMOVED:
+            self.assertEqual(pr.translateFeatures([feature, "+neon"], pw.ARM64_TARGET, "generic", "0.16.0", "22"),
+                             (["+neon"], [e for e in pr.REMOVED_DISABLED_FEATURES if e["feature"] == feature]))
+            for other in ((pw.TARGET, "generic", "0.16.0", "22"), (pw.ARM64_TARGET, "apple-m1", "0.16.0", "22"),
+                          (pw.ARM64_TARGET, "generic", "0.17.0", "22"), (pw.ARM64_TARGET, "generic", "0.16.0", "23")):
+                self.assertEqual(pr.translateFeatures([feature], *other)[0], [feature], msg=(feature, other))
+        # an enabled feature of the same names, and a feature the table does not name, stay
+        self.assertEqual(pr.translateFeatures(["+tme", "-sve", "-bogus"], pw.ARM64_TARGET, "generic", "0.16.0", "22")[0],
+                         ["+tme", "-sve", "-bogus"])
+
+    def test_each_arm64_translation_names_pinned_sources_for_both_llvm_versions_and_its_field_default(self):
+        entries = {e["feature"]: e for e in pr.REMOVED_DISABLED_FEATURES if e["target"] == pw.ARM64_TARGET}
+        self.assertEqual(sorted(entries), ARM_REMOVED)
+        for feature, entry in entries.items():
+            sources = "\n".join(entry["sources"])
+            for version in ("llvmorg-21.1.0/", "llvmorg-22.1.1/"):
+                self.assertIn(version + "llvm/lib/Target/AArch64/AArch64Features.td", sources, msg=feature)
+                self.assertIn(version + "llvm/lib/Target/AArch64/AArch64Processors.td#L", sources, msg=feature)
+            if feature != "-tme":
+                self.assertIn("llvmorg-22.1.1/llvm/utils/TableGen/SubtargetEmitter.cpp#L172", sources, msg=feature)
+        self.assertIn("no-zcz-fpr64", entries["-no-zcz-fp"]["reason"])
+        self.assertIn("default, true for both", entries["-no-zcz-fp"]["reason"])
+        for feature in ("-zcz", "-zcz-gp"):
+            self.assertIn("zcz-gpr64", entries[feature]["reason"])
+            self.assertIn("default false", entries[feature]["reason"])
 
     def test_a_path_that_would_need_quoting_is_refused(self):
         with self.assertRaises(pe.EngineError):
@@ -228,6 +284,17 @@ class PeTest(TempCase):
         self.assertRegex(pw.peProblem("dll", pw.readPe(self.path("exe"))), "do not match a dll")
         self.assertRegex(pw.peProblem("exe", pw.readPe(self.path("dll"))), "do not match a exe")
 
+    def test_the_machine_of_each_target_is_checked_and_the_other_one_refused(self):
+        syntheticPe(self.path("arm"), machine=pw.MACHINE_ARM64, exports=())
+        syntheticPe(self.path("x64"), exports=())
+        self.assertEqual(pw.readPe(self.path("arm"))["machine"], 0xaa64)
+        self.assertIsNone(pw.peProblem("exe", pw.readPe(self.path("arm")), pw.ARM64_TARGET))
+        self.assertIsNone(pw.peProblem("exe", pw.readPe(self.path("x64")), pw.TARGET))
+        self.assertIsNone(pw.peProblem("exe", pw.readPe(self.path("x64"))))
+        self.assertRegex(pw.peProblem("exe", pw.readPe(self.path("arm"))), "0xaa64 is not AMD64")
+        self.assertRegex(pw.peProblem("exe", pw.readPe(self.path("arm")), pw.TARGET), "not AMD64")
+        self.assertRegex(pw.peProblem("exe", pw.readPe(self.path("x64")), pw.ARM64_TARGET), "0x8664 is not ARM64")
+
     def test_a_wrong_machine_subsystem_missing_export_or_missing_import_is_a_problem(self):
         cases = [({"machine": 0xaa64}, "exe", "not AMD64"), ({"subsystem": 2}, "exe", "not console"),
                  ({"dll": True, "exports": ()}, "dll", "lack addNumbers"),
@@ -245,27 +312,33 @@ lib = %(lib)r
 if sys.argv[1] == "version":
     print("0.16.0")
     sys.exit(0)
+target = sys.argv[sys.argv.index("-target") + 1]
+arm = target.startswith("aarch64")
 dll = "-shared" in sys.argv
 out = sys.argv[sys.argv.index("-o") + 1]
 fixture = [a for a in sys.argv if a.endswith(".c")][0]
 stem = os.path.splitext(os.path.basename(fixture))[0]
-cache = os.path.join(os.environ["ZIG_GLOBAL_CACHE_DIR"], "o", "dll" if dll else "exe")
+cache = os.path.join(os.environ["ZIG_GLOBAL_CACHE_DIR"], "o", target + ("-dll" if dll else "-exe"))
 os.makedirs(cache, exist_ok=True)
 names = (["dllcrt2.obj"] if dll else ["crt2.obj"]) + %(archives)r
 paths = []
 for name in names:
     with open(os.path.join(cache, name), "w") as f:
-        f.write("artifact %%s %%s" %% (name, "dll" if dll else "exe"))
+        f.write("artifact %%s %%s %%s" %% (name, target, "dll" if dll else "exe"))
     paths.append(os.path.join(cache, name))
 isystem = "-isystem %%s/include" %% lib
-for d in ("x86_64-windows-gnu", "any-windows-any"):
+for d in (target, "any-windows-any"):
     isystem += " -isystem %%s/libc/include/%%s" %% (lib, d)
-sys.stderr.write("%%s clang %%s --no-default-config -target x86_64-unknown-windows-gnu -g -gcodeview -DNDEBUG "
-                 "-D__MSVCRT_VERSION__=0xE00 %%s -Xclang -target-cpu -Xclang x86-64 -Xclang -target-feature "
-                 "-Xclang -amx-transpose -Xclang -target-feature -Xclang +sse2 -c -o /t/o.o\\n" %% (
-                 sys.argv[0], fixture, isystem))
+machine = %(machine)r or ("ARM64" if arm else "X64")
+cpu, zigTarget = ("generic", "aarch64-unknown-windows-gnu") if arm else (%(x64Cpu)r, "x86_64-unknown-windows-gnu")
+feature = "-tme" if arm else "-amx-transpose"
+sys.stderr.write("%%s clang %%s --no-default-config -target %%s -g -gcodeview -DNDEBUG "
+                 "-D__MSVCRT_VERSION__=0xE00 %%s -Xclang -target-cpu -Xclang %%s -Xclang -target-feature "
+                 "-Xclang %%s -Xclang -target-feature -Xclang +sse2 -c -o /t/o.o\\n" %% (
+                 sys.argv[0], fixture, zigTarget, isystem, cpu, feature))
 link = "lld-link -lldmingw -ERRORLIMIT:0 -NOLOGO -DEBUG -PDB:p.pdb -PDBALTPATH:p.pdb -MLLVM:-float-abi=hard "
-link += "-BASE:6442450944 -BUILD-ID:NO -MACHINE:X64 -DLL " if dll else "-STACK:16777216 -BASE:5368709120 -BUILD-ID:NO -MACHINE:X64 "
+link += "-BASE:6442450944 -BUILD-ID:NO -MACHINE:%%s -DLL " %% machine if dll else \
+    "-STACK:16777216 -BASE:5368709120 -BUILD-ID:NO -MACHINE:%%s " %% machine
 link += "-BREPRO -OUT:%%s -IMPLIB:%%s.lib %%s/%%s.obj -ALTERNATENAME:__image_base__=__ImageBase %%s" %% (
     out, out, cache, stem, " ".join(paths))
 sys.stderr.write(link + "\\n")
@@ -276,15 +349,12 @@ class PipelineTest(TempCase):
     def setUp(self):
         super().setUp()
         self.lib = self.path("zig", "lib")
-        for name in ("x86_64-windows-gnu", "any-windows-any"):
-            write(os.path.join(self.lib, "libc", "include", name, "h.h")) if name == "any-windows-any" else None
+        write(os.path.join(self.lib, "libc", "include", "any-windows-any", "h.h"))
         os.makedirs(os.path.join(self.lib, "include"))
         for rel in ("../LICENSE", "libc/mingw/COPYING"):
             write(os.path.normpath(os.path.join(self.lib, rel)), "license " + rel)
         self.zig = self.path("zig", "zigfake")
-        write(self.zig, FAKE_ZIG % {"python": sys.executable, "lib": self.lib,
-                                    "archives": ["libmingw32.lib", "zigc.lib", "compiler_rt.lib", "ws2_32.lib"]})
-        os.chmod(self.zig, 0o755)
+        self.writeZig()
         self.engine = self.path("engine")
         os.makedirs(self.engine)
         for patcher in (mock.patch.object(pe, "verifyEngine", return_value=("aarch64-macos", "22.1.1", 0)),
@@ -292,43 +362,92 @@ class PipelineTest(TempCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def test_the_runtime_has_two_configs_two_input_directories_headers_notices_and_a_receipt(self):
+    def writeZig(self, machine=None, x64Cpu="x86-64",
+                 archives=("libmingw32.lib", "zigc.lib", "compiler_rt.lib", "ws2_32.lib")):
+        write(self.zig, FAKE_ZIG % {"python": sys.executable, "lib": self.lib, "archives": list(archives),
+                                    "machine": machine, "x64Cpu": x64Cpu})
+        os.chmod(self.zig, 0o755)
+
+    def receipt(self, out):
+        return json.loads(read(os.path.join(out, "notices", pw.PROVENANCE)))
+
+    def test_the_runtime_has_both_targets_each_with_two_configs_two_input_directories_shared_headers_and_a_receipt(self):
         out = self.path("rt", "windows")
         pw.prepareWindowsRuntime(self.zig, self.engine, out)
-        self.assertEqual(sorted(os.listdir(out)), ["include", "notices", "x86_64-windows-gnu", "x86_64-windows-gnu.cfg",
-                                                    "x86_64-windows-gnu.dll", "x86_64-windows-gnu.dll.cfg"])
-        self.assertEqual(sorted(os.listdir(self.path("rt", "windows", "x86_64-windows-gnu"))),
-                         ["compiler_rt.lib", "crt2.obj", "libmingw32.lib", "ws2_32.lib", "zigc.lib"])
-        self.assertEqual(sorted(os.listdir(self.path("rt", "windows", "x86_64-windows-gnu.dll")))[:2],
-                         ["compiler_rt.lib", "dllcrt2.obj"])
-        self.assertEqual(read(self.path("rt", "windows", "x86_64-windows-gnu.dll", "libmingw32.lib")),
-                         "artifact libmingw32.lib dll")
-        self.assertEqual(os.listdir(self.path("rt", "windows", "include", "libc")), ["any-windows-any"])
-        exe = read(self.path("rt", "windows", "x86_64-windows-gnu.cfg"))
-        self.assertIn("$-llibmingw32\n$-lzigc\n$-lcompiler_rt\n$-lws2_32\n", exe)
-        self.assertIn("-Xlinker --stack=16777216\n", exe)
-        self.assertIn("-Xlinker --image-base=0x140000000\n", exe)
-        dll = read(self.path("rt", "windows", "x86_64-windows-gnu.dll.cfg"))
-        self.assertIn("-Xlinker --image-base=0x180000000\n", dll)
-        self.assertNotIn(self.dir, exe + dll)
-        self.assertNotIn("amx-transpose", exe + dll)
-        self.assertEqual(read(self.path("rt", "windows", "notices", "mingw-w64", "COPYING")), "license libc/mingw/COPYING")
+        self.assertEqual(sorted(os.listdir(out)), [
+            "aarch64-windows-gnu", "aarch64-windows-gnu.cfg", "aarch64-windows-gnu.dll", "aarch64-windows-gnu.dll.cfg",
+            "include", "notices", "x86_64-windows-gnu", "x86_64-windows-gnu.cfg", "x86_64-windows-gnu.dll",
+            "x86_64-windows-gnu.dll.cfg"])
+        for target, other in (("x86_64-windows-gnu", "aarch64"), ("aarch64-windows-gnu", "x86_64")):
+            self.assertEqual(sorted(os.listdir(os.path.join(out, target))),
+                             ["compiler_rt.lib", "crt2.obj", "libmingw32.lib", "ws2_32.lib", "zigc.lib"])
+            self.assertEqual(sorted(os.listdir(os.path.join(out, target + ".dll")))[:2], ["compiler_rt.lib", "dllcrt2.obj"])
+            self.assertEqual(read(os.path.join(out, target + ".dll", "libmingw32.lib")),
+                             "artifact libmingw32.lib %s dll" % target)
+            exe, dll = (read(os.path.join(out, target + suffix)) for suffix in (".cfg", ".dll.cfg"))
+            self.assertIn("$-llibmingw32\n$-lzigc\n$-lcompiler_rt\n$-lws2_32\n", exe)
+            self.assertIn("-Xlinker --stack=16777216\n", exe)
+            self.assertIn("-Xlinker --image-base=0x140000000\n", exe)
+            self.assertIn("-Xlinker --image-base=0x180000000\n", dll)
+            self.assertNotIn(self.dir, exe + dll)
+            self.assertNotIn(other, exe + dll)
+        self.assertEqual(os.listdir(os.path.join(out, "include", "libc")), ["any-windows-any"])
+        self.assertIn("-target x86_64-unknown-windows-gnu\n", read(os.path.join(out, "x86_64-windows-gnu.cfg")))
+        self.assertIn("-target aarch64-unknown-windows-gnu\n", read(os.path.join(out, "aarch64-windows-gnu.cfg")))
+        self.assertIn("-Xclang -target-cpu -Xclang generic\n", read(os.path.join(out, "aarch64-windows-gnu.dll.cfg")))
+        self.assertIn("-Xlinker <CFGDIR>/aarch64-windows-gnu.dll/dllcrt2.obj\n", read(os.path.join(out, "aarch64-windows-gnu.dll.cfg")))
+        self.assertNotIn("amx-transpose", read(os.path.join(out, "x86_64-windows-gnu.cfg")))
+        self.assertNotIn("-tme", read(os.path.join(out, "aarch64-windows-gnu.cfg")))
+        self.assertIn("-Xclang -target-feature -Xclang +sse2\n", read(os.path.join(out, "aarch64-windows-gnu.cfg")))
+        self.assertEqual(read(os.path.join(out, "notices", "mingw-w64", "COPYING")), "license libc/mingw/COPYING")
 
     def test_the_receipt_names_the_unproved_modes_what_zig_did_not_carry_and_certifies_nothing(self):
-        pw.prepareWindowsRuntime(self.zig, self.engine, self.path("rt", "windows"))
-        receipt = json.loads(read(self.path("rt", "windows", "notices", pw.PROVENANCE)))
+        out = self.path("rt", "windows")
+        pw.prepareWindowsRuntime(self.zig, self.engine, out)
+        receipt = self.receipt(out)
         self.assertFalse(receipt["redistributionCertified"])
-        self.assertEqual((receipt["target"], receipt["engineRelative"]), ("x86_64-windows-gnu", "../.."))
-        self.assertEqual(receipt["includeDirectoriesAbsentInZig"], ["x86_64-windows-gnu"])
-        exe, dll = receipt["variants"]
-        self.assertEqual((exe["variant"], dll["variant"]), ("exe", "dll"))
-        self.assertEqual([e["feature"] for e in exe["cpuFeaturesNotCarried"]], ["-amx-transpose"])
-        self.assertEqual(dll["zigLinkOptionsNotCarried"], ["-ALTERNATENAME:__image_base__=__ImageBase"])
-        self.assertEqual(exe["libraryTail"], ["libmingw32", "zigc", "compiler_rt", "ws2_32"])
+        self.assertEqual((receipt["targets"], receipt["engineRelative"]),
+                         (["x86_64-windows-gnu", "aarch64-windows-gnu"], "../.."))
+        self.assertEqual(receipt["includeDirectories"], ["any-windows-any"])
+        self.assertEqual(receipt["includeDirectoriesAbsentInZig"],
+                         {"x86_64-windows-gnu": ["x86_64-windows-gnu"], "aarch64-windows-gnu": ["aarch64-windows-gnu"]})
+        self.assertEqual([(r["target"], r["variant"]) for r in receipt["variants"]], [
+            ("x86_64-windows-gnu", "exe"), ("x86_64-windows-gnu", "dll"),
+            ("aarch64-windows-gnu", "exe"), ("aarch64-windows-gnu", "dll")])
+        x64Exe, x64Dll, armExe, armDll = receipt["variants"]
+        self.assertEqual([e["feature"] for e in x64Exe["cpuFeaturesNotCarried"]], ["-amx-transpose"])
+        self.assertEqual([e["feature"] for e in armExe["cpuFeaturesNotCarried"]], ["-tme"])
+        self.assertEqual((x64Exe["linkMachine"], armExe["linkMachine"]), ("X64", "ARM64"))
+        self.assertEqual((armExe["zigTarget"], armExe["cpu"]), ("aarch64-unknown-windows-gnu", "generic"))
+        self.assertEqual(armDll["zigLinkOptionsNotCarried"], ["-ALTERNATENAME:__image_base__=__ImageBase"])
+        self.assertEqual(armExe["libraryTail"], ["libmingw32", "zigc", "compiler_rt", "ws2_32"])
         self.assertTrue(any("never run" in limit for limit in receipt["limits"]))
-        self.assertTrue(any("aarch64" in limit for limit in receipt["limits"]))
-        for record in exe["inputs"]:
-            self.assertEqual(record["sha256"], pe.sha256File(self.path("rt", "windows", "x86_64-windows-gnu", record["name"])))
+        self.assertFalse(any("aarch64" in limit and "not prepared" in limit for limit in receipt["limits"]))
+        for record in receipt["variants"]:
+            for item in record["inputs"]:
+                self.assertEqual(item["sha256"], pe.sha256File(os.path.join(out, record["directory"], item["name"])))
+
+    def test_one_target_alone_leaves_the_other_out_and_an_unknown_or_repeated_target_is_refused(self):
+        out = self.path("rt", "windows")
+        pw.prepareWindowsRuntime(self.zig, self.engine, out, ["aarch64-windows-gnu"])
+        self.assertEqual(sorted(os.listdir(out)), ["aarch64-windows-gnu", "aarch64-windows-gnu.cfg",
+                                                    "aarch64-windows-gnu.dll", "aarch64-windows-gnu.dll.cfg",
+                                                    "include", "notices"])
+        self.assertEqual(self.receipt(out)["targets"], ["aarch64-windows-gnu"])
+        for bad in (["wasm32-wasi"], ["x86_64-windows-gnu", "x86_64-windows-gnu"]):
+            with self.assertRaisesRegex(pe.EngineError, "unknown or duplicated"):
+                pw.prepareWindowsRuntime(self.zig, self.engine, self.path("bad", "windows"), bad)
+
+    def test_a_link_line_for_the_other_machine_or_a_compile_line_for_another_cpu_is_refused(self):
+        self.writeZig(machine="X64")
+        with self.assertRaisesRegex(pe.EngineError, "aarch64-windows-gnu exe link line has -MACHINE:X64, not ARM64"):
+            pw.prepareWindowsRuntime(self.zig, self.engine, self.path("rt", "windows"), ["aarch64-windows-gnu"])
+        self.writeZig(machine="ARM64")
+        with self.assertRaisesRegex(pe.EngineError, "x86_64-windows-gnu exe link line has -MACHINE:ARM64, not X64"):
+            pw.prepareWindowsRuntime(self.zig, self.engine, self.path("rt2", "windows"), ["x86_64-windows-gnu"])
+        self.writeZig(x64Cpu="znver4")
+        with self.assertRaisesRegex(pe.EngineError, "cpu znver4, not .* cpu x86-64"):
+            pw.prepareWindowsRuntime(self.zig, self.engine, self.path("rt3", "windows"), ["x86_64-windows-gnu"])
 
     def test_an_existing_output_is_never_replaced_and_a_failure_leaves_nothing(self):
         os.makedirs(self.path("rt", "windows"))
@@ -342,22 +461,25 @@ class PipelineTest(TempCase):
     def test_the_standalone_form_is_a_new_runtime_directory_holding_only_windows(self):
         output, records = pw.prepareRuntimeDirectory(self.zig, self.engine, self.path("fresh", "runtime"))
         self.assertEqual(os.listdir(output), ["windows"])
-        self.assertEqual([r["variant"] for r in records], ["exe", "dll"])
+        self.assertEqual([(r["target"], r["variant"]) for r in records][:2], [("x86_64-windows-gnu", "exe"),
+                                                                               ("x86_64-windows-gnu", "dll")])
+        self.assertEqual(len(records), 4)
         with self.assertRaisesRegex(pe.EngineError, "never replaced"):
             pw.prepareRuntimeDirectory(self.zig, self.engine, output)
 
     def test_a_missing_runtime_archive_fails_before_any_output(self):
-        write(self.zig, read(self.zig).replace("'compiler_rt.lib', ", ""))
+        self.writeZig(archives=("libmingw32.lib", "zigc.lib", "ws2_32.lib"))
         with self.assertRaisesRegex(pe.EngineError, "no compiler_rt.lib"):
             pw.prepareWindowsRuntime(self.zig, self.engine, self.path("rt", "windows"))
         self.assertEqual(os.listdir(self.path("rt")), [])
 
 
 class RealLinkTest(TempCase):
-    """The consumer case on x86_64-windows-gnu, through a real prepared runtime relocated to a path with
-    a space: the `$-l` tail follows the caller's inputs, a compile has no library input, a duplicate
+    """The consumer case on each prepared Windows target, through a real prepared runtime relocated to a path
+    with a space: the `$-l` tail follows the caller's inputs, a compile has no library input, a duplicate
     caller library is harmless, a missing library is refused, and the PE files are what Zig made.
     Needs MANAGED_TOOLCHAIN_ENGINE=<prepared engine> and MANAGED_TOOLCHAIN_WINDOWS_RUNTIME=<runtime dir>."""
+    ABSENT_MACROS = {pw.TARGET: ["__AMX_"], pw.ARM64_TARGET: ["__ARM_FEATURE_TME"]}
 
     def setUp(self):
         super().setUp()
@@ -371,35 +493,46 @@ class RealLinkTest(TempCase):
         shutil.copytree(runtime, os.path.join(self.root, "runtime"), symlinks=True)
         self.clang = os.path.join(self.root, "bin", "clang")
         self.runtime = os.path.join(self.root, "runtime", "windows")
+        self.targets = [t for t in pw.TARGETS if os.path.isfile(os.path.join(self.runtime, pw.variantConfig(t, "exe")))]
+        if not self.targets:
+            self.fail("the runtime has no Windows target config")
+
+    def run_(self, command):
+        return subprocess.run(command, cwd=self.dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              universal_newlines=True, env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent"})
 
     def invoke(self, config, *arguments):
-        return subprocess.run([self.clang, "--config", os.path.join(self.runtime, config)] + list(arguments),
-                              cwd=self.dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
-                              env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent"})
+        return self.run_([self.clang, "--config", os.path.join(self.runtime, config)] + list(arguments))
 
     def fixture(self, name):
         return os.path.join(pr.FIXTURES, name)
 
     def test_both_variants_compile_and_link_without_a_warning_and_with_the_callers_libraries_again(self):
-        outputs = pw.checkWindowsConfig(
-            lambda command: subprocess.run(command, cwd=self.dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                           universal_newlines=True, env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent"}),
-            self.clang, self.runtime, self.dir, ["__AMX_"])
-        self.assertEqual(sorted(outputs), ["dll", "dllLibs", "exe", "exeLibs"])
+        for target in self.targets:
+            work = self.path("work-" + target)
+            os.makedirs(work)
+            outputs = pw.checkWindowsConfig(self.run_, self.clang, self.runtime, work, self.ABSENT_MACROS[target], target)
+            self.assertEqual(sorted(outputs), ["dll", "dllLibs", "exe", "exeLibs"], msg=target)
+            self.assertEqual(pw.readPe(outputs["exe"])["machine"], pw.TARGETS[target]["machine"], msg=target)
+            self.assertEqual(pw.readPe(outputs["dll"])["machine"], pw.TARGETS[target]["machine"], msg=target)
 
     def test_a_compile_with_the_dollar_config_has_no_library_input(self):
-        done = self.invoke("x86_64-windows-gnu.cfg", "-O2", "-c", self.fixture("runtimeWindows.c"), "-o", "w.o", "-###")
-        self.assertEqual(done.returncode, 0)
-        self.assertNotIn("libmingw32", done.stderr)
-        done = self.invoke("x86_64-windows-gnu.cfg", "w.o", "-o", "w.exe", "-###")
-        self.assertLess(done.stderr.index("w.o"), done.stderr.index("-llibmingw32"))
-        self.assertNotIn("/opt/homebrew", done.stderr)
+        for target in self.targets:
+            config = pw.variantConfig(target, "exe")
+            done = self.invoke(config, "-O2", "-c", self.fixture("runtimeWindows.c"), "-o", "w.o", "-###")
+            self.assertEqual(done.returncode, 0, msg=target)
+            self.assertNotIn("libmingw32", done.stderr)
+            done = self.invoke(config, "w.o", "-o", "w.exe", "-###")
+            self.assertLess(done.stderr.index("w.o"), done.stderr.index("-llibmingw32"), msg=target)
+            self.assertNotIn("/opt/homebrew", done.stderr)
 
     def test_a_library_the_runtime_does_not_ship_is_still_refused(self):
-        self.assertEqual(self.invoke("x86_64-windows-gnu.cfg", "-O2", "-c", self.fixture("runtimeWindows.c"), "-o", "w.o").returncode, 0)
-        done = self.invoke("x86_64-windows-gnu.cfg", "w.o", "-lnosuch", "-o", "w.exe")
-        self.assertNotEqual(done.returncode, 0)
-        self.assertIn("unable to find library -lnosuch", done.stderr)
+        for target in self.targets:
+            config = pw.variantConfig(target, "exe")
+            self.assertEqual(self.invoke(config, "-O2", "-c", self.fixture("runtimeWindows.c"), "-o", "w.o").returncode, 0)
+            done = self.invoke(config, "w.o", "-lnosuch", "-o", "w.exe")
+            self.assertNotEqual(done.returncode, 0, msg=target)
+            self.assertIn("unable to find library -lnosuch", done.stderr)
 
 
 if __name__ == "__main__":

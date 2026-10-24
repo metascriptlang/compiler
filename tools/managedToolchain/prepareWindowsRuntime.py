@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Prepare the x86_64-windows-gnu runtime with a local Zig, then prove it with clang and lld alone.
+"""Prepare the x86_64-windows-gnu and aarch64-windows-gnu runtimes with a local Zig, then prove them with clang and lld alone.
 
-    prepareWindowsRuntime.py --zig ZIG --engine ENGINE_DIR --output NEW_RUNTIME_DIR
+    prepareWindowsRuntime.py --zig ZIG --engine ENGINE_DIR --output NEW_RUNTIME_DIR [--target T ...]
     prepareWindowsRuntime.py --prove --engine ENGINE_DIR --runtime RUNTIME_DIR [--zig ZIG] [--deny PATH ...]
 
 NEW_RUNTIME_DIR receives `windows/`; in a bundle the same directory is `runtime/windows/`, and the
-engine is `../..` from it. Zig runs once for an executable and once for a DLL on fixtures, both in
-one private cache, and the ordered inputs of each lld-link line it printed are copied opaquely
-(`crt2.obj` or `dllcrt2.obj`, `libmingw32.lib` which differs between the two, the Zig and compiler
-runtime archives, the import libraries). Two native clang configs result:
+engine is `../..` from it. For each target Zig runs once for an executable and once for a DLL on
+fixtures, all in one private cache, and the ordered inputs of each lld-link line it printed are copied
+opaquely (`crt2.obj` or `dllcrt2.obj`, `libmingw32.lib` which differs between the two, the Zig and
+compiler runtime archives, the import libraries). Two native clang configs result per target:
 
-    windows/x86_64-windows-gnu.cfg       clang --config ... x.c / x.o -o x.exe
-    windows/x86_64-windows-gnu.dll.cfg   clang --config ... x.c / x.o -o x.dll   (the config carries -shared)
+    windows/<target>.cfg       clang --config ... x.c / x.o -o x.exe
+    windows/<target>.dll.cfg   clang --config ... x.c / x.o -o x.dll   (the config carries -shared)
 
 Each config names its startup object as a linker input, which lld loads before the caller's object,
 and its archives as `$-l` lines: clang appends those after every command-line input on a link and
@@ -21,8 +21,9 @@ order with no wrapper or change to the caller's command line. The caller's own `
 directory so the driver searches no host MinGW directory. The clang GNU driver picks `ld.lld`'s
 MinGW mode itself.
 
-Only the removed disabled CPU feature of prepareRuntime.REMOVED_DISABLED_FEATURES is left out of
-the config; any other unknown feature stays and the proof fails on the engine's warning.
+Only the removed disabled CPU features of prepareRuntime.REMOVED_DISABLED_FEATURES are left out of
+the config; any other unknown feature stays and the proof fails on the engine's warning. The two
+targets differ in the data of TARGETS alone (Zig's target and cpu, the lld-link machine, the PE machine).
 
 The payload is a local proof from an installed Zig, not an upstream-controlled build; its
 provenance receipt says so and never certifies redistribution.
@@ -41,31 +42,47 @@ import prepareEngine as pe
 import prepareRuntime as pr
 
 TARGET = "x86_64-windows-gnu"
+ARM64_TARGET = "aarch64-windows-gnu"
 ENGINE_RELATIVE = "../.."
 PROVENANCE = "windows-provenance.json"
 MACHINE_AMD64 = 0x8664
+MACHINE_ARM64 = 0xaa64
 SUBSYSTEM_CONSOLE = 3
 DLL_CHARACTERISTIC = 0x2000
-LINK_IGNORED = ("-lldmingw", "-ERRORLIMIT:0", "-NOLOGO", "-DEBUG", "-BUILD-ID:NO", "-BREPRO", "-MACHINE:X64",
+LINK_IGNORED = ("-lldmingw", "-ERRORLIMIT:0", "-NOLOGO", "-DEBUG", "-BUILD-ID:NO", "-BREPRO",
                 "-MLLVM:-float-abi=hard")
 LINK_PREFIXES = ("-PDB:", "-PDBALTPATH:", "-OUT:", "-IMPLIB:")
 USER_LIBRARIES = ["-lws2_32", "-lbcrypt", "-lmswsock"]
 LIBRARY_STEM = re.compile(r"^[A-Za-z0-9_.+-]+$")
 
+# What differs between the targets: the compile line's target and cpu, lld-link's -MACHINE, the PE machine.
+TARGETS = {
+    TARGET: {"zigTarget": "x86_64-unknown-windows-gnu", "cpu": "x86-64", "linkMachine": "X64",
+             "machine": MACHINE_AMD64, "machineName": "AMD64"},
+    ARM64_TARGET: {"zigTarget": "aarch64-unknown-windows-gnu", "cpu": "generic", "linkMachine": "ARM64",
+                   "machine": MACHINE_ARM64, "machineName": "ARM64"},
+}
+# A variant's directory is `<target><suffix>` and its config `<target><suffix>.cfg`.
 VARIANTS = {
-    "exe": {"fixture": "runtimeWindows.c", "zigArgs": [], "startup": "crt2.obj", "driverFlags": [],
-            "directory": TARGET, "config": TARGET + ".cfg"},
+    "exe": {"fixture": "runtimeWindows.c", "zigArgs": [], "startup": "crt2.obj", "driverFlags": [], "suffix": ""},
     "dll": {"fixture": "runtimeWindowsDll.c", "zigArgs": ["-shared"], "startup": "dllcrt2.obj",
-            "driverFlags": ["-shared"], "directory": TARGET + ".dll", "config": TARGET + ".dll.cfg"},
+            "driverFlags": ["-shared"], "suffix": ".dll"},
 }
 SPEC = {"clangTarget": None, "linker": "ld.lld",
         "notices": {"zig": ["../LICENSE"], "mingw-w64": ["libc/mingw/COPYING"]}}
-LIMITS = ["no Windows execution was available: the executable and the DLL are linked and their PE headers, "
-          "imports and exports inspected, never run",
-          "x86_64 only; aarch64-windows-gnu is not prepared",
+LIMITS = ["no Windows execution was available, on either architecture: the executables and the DLLs are linked "
+          "and their PE headers, imports and exports inspected, never run",
           "C++ (libc++) and LTO are not exercised for this target",
           "no archive is normalized: the C runtime inputs are copied as Zig produced them, so zigc.lib is "
           "not byte-reproducible across Zig caches"]
+
+
+def variantDirectory(target, variant):
+    return target + VARIANTS[variant]["suffix"]
+
+
+def variantConfig(target, variant):
+    return variantDirectory(target, variant) + ".cfg"
 
 
 def selectWindowsLines(stderr, fixture, output):
@@ -84,10 +101,10 @@ def selectWindowsLines(stderr, fixture, output):
 
 
 def parseCoffLinkArgv(line, objectName, cacheRoot, cwd):
-    """Read a Zig lld-link line into {"dll", "stack", "base", "inputs", "notCarried"}. `inputs` are
+    """Read a Zig lld-link line into {"dll", "machine", "stack", "base", "inputs", "notCarried"}. `inputs` are
     the real files after the fixture object, in order, each under cacheRoot. Every option is either
     carried, named as not carried, or an error."""
-    found = {"dll": False, "stack": None, "base": None, "inputs": [], "notCarried": [], "user": 0}
+    found = {"dll": False, "machine": None, "stack": None, "base": None, "inputs": [], "notCarried": [], "user": 0}
     for token in line.split()[1:]:
         if token == "-DLL":
             found["dll"] = True
@@ -95,6 +112,8 @@ def parseCoffLinkArgv(line, objectName, cacheRoot, cwd):
             found["stack"] = int(token[7:])
         elif token.startswith("-BASE:") and token[6:].isdigit():
             found["base"] = int(token[6:])
+        elif token.startswith("-MACHINE:"):
+            found["machine"] = token[9:]
         elif token.startswith("-ALTERNATENAME:"):
             found["notCarried"].append(token)
         elif token in LINK_IGNORED or token.startswith(LINK_PREFIXES):
@@ -116,28 +135,30 @@ def parseCoffLinkArgv(line, objectName, cacheRoot, cwd):
         raise pe.EngineError("link line names the fixture object %s %d times" % (objectName, found["user"]))
     if found["base"] is None:
         raise pe.EngineError("link line has no -BASE")
+    if found["machine"] is None:
+        raise pe.EngineError("link line has no -MACHINE")
     return found
 
 
-def runZig(zig, variant, work, cache):
-    """One Zig compile and link of the variant's fixture in the shared private cache. Returns
+def runZig(zig, target, variant, work, cache):
+    """One Zig compile and link of the variant's fixture for target in the shared private cache. Returns
     (stderr, output, working directory)."""
     spec = VARIANTS[variant]
-    private = os.path.join(work, variant)
+    private = os.path.join(work, target, variant)
     output = os.path.join(private, "fixture." + variant)
     os.makedirs(os.path.join(private, "local"))
     environment = {"PATH": "/usr/bin:/bin", "HOME": private, "TMPDIR": private,
                    "ZIG_GLOBAL_CACHE_DIR": cache, "ZIG_LOCAL_CACHE_DIR": os.path.join(private, "local"),
                    "ZIG_VERBOSE_CC": "1", "ZIG_VERBOSE_LINK": "1"}
-    command = [zig, "cc", "-target", TARGET, "-O2"] + spec["zigArgs"] + [
+    command = [zig, "cc", "-target", target, "-O2"] + spec["zigArgs"] + [
         os.path.join(pr.FIXTURES, spec["fixture"])] + USER_LIBRARIES + ["-o", output]
     try:
         done = subprocess.run(command, cwd=private, env=environment, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, universal_newlines=True, timeout=pr.ZIG_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        raise pe.EngineError("zig timed out after %d s for %s %s" % (pr.ZIG_TIMEOUT_SECONDS, TARGET, variant))
+        raise pe.EngineError("zig timed out after %d s for %s %s" % (pr.ZIG_TIMEOUT_SECONDS, target, variant))
     if done.returncode != 0:
-        raise pe.EngineError("zig failed for %s %s (%d): %s" % (TARGET, variant, done.returncode, done.stderr.strip()))
+        raise pe.EngineError("zig failed for %s %s (%d): %s" % (target, variant, done.returncode, done.stderr.strip()))
     return done.stderr, output, private
 
 
@@ -157,11 +178,11 @@ def libraryTail(inputs, startup):
     return stems
 
 
-def renderWindowsConfig(variant, compile_, link, directories, stems, major):
+def renderWindowsConfig(variant, compile_, link, directories, stems, major, target=TARGET):
     """Text of RUNTIME/<config>. The common head is prepareRuntime.renderConfig's; the startup
     object is a linker input, the archives are `$-l` lines after every command-line input."""
     spec = dict(SPEC, driverFlags=VARIANTS[variant]["driverFlags"])
-    directory = VARIANTS[variant]["directory"]
+    directory = variantDirectory(target, variant)
     text = pr.renderConfig(directory, spec, compile_, [], directories, ENGINE_RELATIVE, major)
     lines = [pr.configLine(["--sysroot=<CFGDIR>/" + directory]), pr.configLine(["-Xlinker", "--error-limit=0"])]
     if link["stack"] is not None:
@@ -173,51 +194,93 @@ def renderWindowsConfig(variant, compile_, link, directories, stems, major):
     return text + "\n".join(lines) + "\n"
 
 
-def produceVariant(zig, variant, work, cache):
-    spec = VARIANTS[variant]
-    stderr, out, private = runZig(zig, variant, work, cache)
+def produceVariant(zig, target, variant, work, cache):
+    spec, expected = VARIANTS[variant], TARGETS[target]
+    stderr, out, private = runZig(zig, target, variant, work, cache)
     compileLine, linkLine = selectWindowsLines(stderr, os.path.join(pr.FIXTURES, spec["fixture"]), out)
+    compile_ = pr.parseCompileArgv(compileLine)
     link = parseCoffLinkArgv(linkLine, os.path.splitext(spec["fixture"])[0] + ".obj", os.path.realpath(cache), private)
+    if (compile_["target"], compile_["cpu"]) != (expected["zigTarget"], expected["cpu"]):
+        raise pe.EngineError("%s %s compile line is for %s cpu %s, not %s cpu %s" % (
+            target, variant, compile_["target"], compile_["cpu"], expected["zigTarget"], expected["cpu"]))
+    if link["machine"] != expected["linkMachine"]:
+        raise pe.EngineError("%s %s link line has -MACHINE:%s, not %s" % (
+            target, variant, link["machine"], expected["linkMachine"]))
     if link["dll"] != (variant == "dll"):
-        raise pe.EngineError("%s link line has -DLL=%s" % (variant, link["dll"]))
-    return pr.parseCompileArgv(compileLine), link, libraryTail(link["inputs"], spec["startup"])
+        raise pe.EngineError("%s %s link line has -DLL=%s" % (target, variant, link["dll"]))
+    return compile_, link, libraryTail(link["inputs"], spec["startup"])
 
 
-def produceTarget(zig, zigVersion, engine, work, output, major):
-    cache = os.path.join(work, "global")
-    os.makedirs(cache)
-    produced = {variant: produceVariant(zig, variant, work, cache) for variant in VARIANTS}
+def copyTargetHeaders(isystem, output, zigLib, copied):
+    """The libc include directories of a target not yet in output (the targets share `any-windows-any`).
+    Returns (the directory names this target's config lists in order, the names absent in Zig)."""
+    new, _ = pr.copyHeaders([d for d in isystem if d == isystem[0] or os.path.basename(d) not in copied],
+                            output, zigLib)
+    copied.update(new)
+    names = [os.path.basename(d) for d in isystem[1:]]
+    return [n for n in names if n in copied], [n for n in names if n not in copied]
+
+
+def produceTarget(zig, zigVersion, engine, target, work, cache, output, copied, major):
+    """Both variants of one target. Returns (zigLib, directories, absent, records)."""
+    produced = {variant: produceVariant(zig, target, variant, work, cache) for variant in VARIANTS}
     first = produced["exe"][0]
     if produced["dll"][0]["isystem"] != first["isystem"]:
-        raise pe.EngineError("the executable and the DLL compile lines name different include directories")
+        raise pe.EngineError("%s: the executable and the DLL compile lines name different include directories" % target)
     zigLib = os.path.dirname(first["isystem"][0])
     if re.search(r"\s", zigLib):
         raise pe.EngineError("Zig lib directory %s has whitespace" % zigLib)
-    directories, absent = pr.copyHeaders(first["isystem"], output, zigLib)
+    directories, absent = copyTargetHeaders(first["isystem"], output, zigLib, copied)
     records = []
     for variant, (compile_, link, stems) in produced.items():
-        directory = VARIANTS[variant]["directory"]
+        directory = variantDirectory(target, variant)
         inputs = pr.copyInputs([("input", p) for p in link["inputs"]], output, directory, engine)
-        carried, notCarried = pr.translateFeatures(compile_["features"], TARGET, compile_["cpu"], zigVersion, major)
-        pe.writeText(os.path.join(output, VARIANTS[variant]["config"]),
-                     renderWindowsConfig(variant, dict(compile_, features=carried), link, directories, stems, major))
+        carried, notCarried = pr.translateFeatures(compile_["features"], target, compile_["cpu"], zigVersion, major)
+        pe.writeText(os.path.join(output, variantConfig(target, variant)),
+                     renderWindowsConfig(variant, dict(compile_, features=carried), link, directories, stems, major,
+                                         target))
         records.append({
-            "variant": variant, "directory": directory, "config": VARIANTS[variant]["config"],
+            "target": target, "variant": variant, "directory": directory, "config": variantConfig(target, variant),
             "zigTarget": compile_["target"], "cpu": compile_["cpu"], "defines": compile_["defines"],
             "cpuFeatures": compile_["features"], "cpuFeaturesNotCarried": notCarried,
             "startupObject": VARIANTS[variant]["startup"], "libraryTail": stems,
-            "stack": link["stack"], "imageBase": "0x%x" % link["base"],
+            "linkMachine": link["machine"], "stack": link["stack"], "imageBase": "0x%x" % link["base"],
             "zigLinkOptionsNotCarried": link["notCarried"], "inputs": inputs,
             "zigFlagsNotCarried": "debug info, -O level, -DNDEBUG, frame pointer and unwind flags, "
                                   "-DEBUG/-PDB/-BREPRO/-IMPLIB outputs (the caller asks for them)",
         })
-    return directories, absent, records, pr.copyNotices(output, zigLib, SPEC)
+    return zigLib, directories, absent, records
 
 
-def prepareWindowsRuntime(zig, engine, windows):
-    """Write the Windows runtime to the new directory `windows`, whose engine is two levels up
-    in a bundle. Returns (windows, records)."""
+def produceTargets(zig, zigVersion, engine, targets, work, output, major):
+    """Every target in the one private cache. Returns (include directories copied, {target: absent names},
+    records, notice files)."""
+    cache = os.path.join(work, "global")
+    os.makedirs(cache)
+    copied, absent, records, zigLibs = set(), {}, [], set()
+    for target in targets:
+        zigLib, directories, absent[target], produced = produceTarget(
+            zig, zigVersion, engine, target, work, cache, output, copied, major)
+        zigLibs.add(zigLib)
+        records += produced
+    if len(zigLibs) != 1:
+        raise pe.EngineError("the targets name different Zig lib directories %s" % sorted(zigLibs))
+    return sorted(copied), absent, records, pr.copyNotices(output, zigLibs.pop(), SPEC)
+
+
+def selectWindowsTargets(names):
+    chosen = [t for t in TARGETS if t in names] if names else list(TARGETS)
+    unknown = [n for n in names or [] if n not in TARGETS]
+    if unknown or len(set(names or [])) != len(names or []):
+        raise pe.EngineError("Windows targets %s are unknown or duplicated; allowed: %s" % (names, ", ".join(TARGETS)))
+    return chosen
+
+
+def prepareWindowsRuntime(zig, engine, windows, targets=None):
+    """Write the Windows runtime of `targets` (every target of TARGETS when none) to the new directory
+    `windows`, whose engine is two levels up in a bundle. Returns (windows, records)."""
     zig, engine, windows = (os.path.abspath(p) for p in (zig, engine, windows))
+    targets = selectWindowsTargets(targets)
     if os.path.lexists(windows):
         raise pe.EngineError("output %s exists; it is never replaced" % windows)
     if not os.access(zig, os.X_OK):
@@ -228,9 +291,10 @@ def prepareWindowsRuntime(zig, engine, windows):
     partial = tempfile.mkdtemp(prefix=os.path.basename(windows) + ".partial-", dir=os.path.dirname(windows))
     work = tempfile.mkdtemp(prefix="prepareWindowsRuntime-")
     try:
-        directories, absent, records, notices = produceTarget(zig, zigId["version"], engine, work, partial, major)
+        directories, absent, records, notices = produceTargets(zig, zigId["version"], engine, targets, work, partial,
+                                                              major)
         verifyConfigs(engine, partial, records, work)
-        writeProvenance(partial, zigId, host, version, directories, absent, records, notices)
+        writeProvenance(partial, zigId, host, version, targets, directories, absent, records, notices)
         os.chmod(partial, 0o755)
         pr.renameNoReplace(partial, windows)
     except BaseException:
@@ -241,7 +305,7 @@ def prepareWindowsRuntime(zig, engine, windows):
     return windows, records
 
 
-def prepareRuntimeDirectory(zig, engine, output):
+def prepareRuntimeDirectory(zig, engine, output, targets=None):
     """The standalone form: a new RUNTIME directory holding only `windows/`."""
     output = os.path.abspath(output)
     if os.path.lexists(output):
@@ -249,7 +313,7 @@ def prepareRuntimeDirectory(zig, engine, output):
     os.makedirs(os.path.dirname(output), exist_ok=True)
     partial = tempfile.mkdtemp(prefix=os.path.basename(output) + ".partial-", dir=os.path.dirname(output))
     try:
-        records = prepareWindowsRuntime(zig, engine, os.path.join(partial, "windows"))[1]
+        records = prepareWindowsRuntime(zig, engine, os.path.join(partial, "windows"), targets)[1]
         os.chmod(partial, 0o755)
         pr.renameNoReplace(partial, output)
     except BaseException:
@@ -258,14 +322,14 @@ def prepareRuntimeDirectory(zig, engine, output):
     return output, records
 
 
-def writeProvenance(windows, zigId, host, engineVersion, directories, absent, records, notices):
+def writeProvenance(windows, zigId, host, engineVersion, targets, directories, absent, records, notices):
     receipt = {
         "kind": "local-zig-windows-runtime-proof",
-        "statement": "Produced by running a locally installed Zig once for an executable and once for a DLL on "
-                     "fixtures. Not an upstream-controlled build and not bit-reproducible by this tool.",
+        "statement": "Produced by running a locally installed Zig once for an executable and once for a DLL per "
+                     "target on fixtures. Not an upstream-controlled build and not bit-reproducible by this tool.",
         "redistributionCertified": False,
         "zig": zigId, "producerHost": host, "engineVersion": engineVersion,
-        "target": TARGET, "engineRelative": ENGINE_RELATIVE,
+        "targets": targets, "engineRelative": ENGINE_RELATIVE,
         "includeDirectories": directories, "includeDirectoriesAbsentInZig": absent,
         "variants": records, "notices": notices, "limits": LIMITS,
         "linkerFlavor": "clang GNU driver, ld.lld in MinGW mode; no lld-link and no wrapper",
@@ -325,11 +389,12 @@ def readPe(path):
             "imports": imports, "exports": exports}
 
 
-def peProblem(variant, info):
-    """Why a linked file is not the x86_64 executable or DLL the variant promises, or None."""
+def peProblem(variant, info, target=TARGET):
+    """Why a linked file is not the executable or DLL of target the variant promises, or None."""
     imports = {name.lower() for name in info["imports"]}
-    if info["machine"] != MACHINE_AMD64:
-        return "machine %#x is not AMD64" % info["machine"]
+    expected = TARGETS[target]
+    if info["machine"] != expected["machine"]:
+        return "machine %#x is not %s" % (info["machine"], expected["machineName"])
     isDll = bool(info["characteristics"] & DLL_CHARACTERISTIC)
     if isDll != (variant == "dll"):
         return "characteristics %#x do not match a %s" % (info["characteristics"], variant)
@@ -343,13 +408,13 @@ def peProblem(variant, info):
     return None
 
 
-def checkWindowsConfig(run, clang, runtime, work, absentMacroPrefixes):
-    """Compile and link both fixtures through their configs: the plain link, the link with the caller's
+def checkWindowsConfig(run, clang, runtime, work, absentMacroPrefixes, target=TARGET):
+    """Compile and link both fixtures of target through their configs: the plain link, the link with the caller's
     own `-lws2_32 -lmswsock -lbcrypt` and `-shared` again, a DLL with an import library, and an executable
     with a PDB. Any nonzero exit or any stderr is an error. Returns {name: path of the linked file}."""
     outputs = {}
     for variant, spec in VARIANTS.items():
-        config = ["--config", os.path.join(runtime, spec["config"])]
+        config = ["--config", os.path.join(runtime, variantConfig(target, variant))]
         fixture = os.path.join(pr.FIXTURES, spec["fixture"])
         obj = os.path.join(work, variant + ".o")
         suffix = ".dll" if variant == "dll" else ".exe"
@@ -371,32 +436,38 @@ def checkWindowsConfig(run, clang, runtime, work, absentMacroPrefixes):
         for name, command in steps:
             done = run(command)
             if done.returncode != 0:
-                raise pe.EngineError("%s %s %s failed: %s" % (TARGET, variant, name, done.stderr.strip()))
+                raise pe.EngineError("%s %s %s failed: %s" % (target, variant, name, done.stderr.strip()))
             if done.stderr.strip():
-                raise pe.EngineError("%s %s %s warned: %s" % (TARGET, variant, name, done.stderr.strip()))
+                raise pe.EngineError("%s %s %s warned: %s" % (target, variant, name, done.stderr.strip()))
         present = [p for p in absentMacroPrefixes if "#define " + p in done.stdout]
         if present:
-            raise pe.EngineError("%s %s config defines %s macros" % (TARGET, variant, present))
+            raise pe.EngineError("%s %s config defines %s macros" % (target, variant, present))
         outputs[variant] = os.path.join(work, variant + suffix)
         outputs[variant + "Libs"] = os.path.join(work, variant + "Libs" + suffix)
     for name in ("dll.lib", "dllImplib.dll", "exe.pdb", "exePdb.exe"):
         if not os.path.isfile(os.path.join(work, name)):
-            raise pe.EngineError("%s: %s was not written" % (TARGET, name))
+            raise pe.EngineError("%s: %s was not written" % (target, name))
     with open(os.path.join(work, "exe.pdb"), "rb") as f:
         if not f.read(32).startswith(b"Microsoft C/C++ MSF 7.00"):
-            raise pe.EngineError("%s: exe.pdb is not a PDB" % TARGET)
+            raise pe.EngineError("%s: exe.pdb is not a PDB" % target)
     with open(os.path.join(work, "dll.lib"), "rb") as f:
         if f.read(8) != b"!<arch>\n":
-            raise pe.EngineError("%s: dll.lib is not an import archive" % TARGET)
+            raise pe.EngineError("%s: dll.lib is not an import archive" % target)
     for name in ("exe", "exeLibs", "dll", "dllLibs"):
-        problem = peProblem(name[:3], readPe(outputs[name]))
+        problem = peProblem(name[:3], readPe(outputs[name]), target)
         if problem:
-            raise pe.EngineError("%s %s: %s" % (TARGET, name, problem))
+            raise pe.EngineError("%s %s: %s" % (target, name, problem))
     return outputs
 
 
+def macroPrefixes(records):
+    """The predefined-macro prefixes that must stay absent for the removed disabled features of records."""
+    return sorted({e["absentMacroPrefix"] for r in records for e in r["cpuFeaturesNotCarried"]
+                   if e["absentMacroPrefix"]})
+
+
 def verifyConfigs(engine, windows, records, work):
-    """checkWindowsConfig on a copy of the runtime two levels below an engine tree, the layout of a bundle."""
+    """checkWindowsConfig of every recorded target on a copy of the runtime two levels below an engine tree, the layout of a bundle."""
     root = os.path.join(work, "verify")
     runtime = os.path.join(root, "runtime")
     os.makedirs(runtime)
@@ -405,8 +476,12 @@ def verifyConfigs(engine, windows, records, work):
     environment = {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "TMPDIR": work}
     run = lambda command: subprocess.run(command, env=environment, stdout=subprocess.PIPE,
                                          stderr=subprocess.PIPE, universal_newlines=True)
-    prefixes = sorted({e["absentMacroPrefix"] for r in records for e in r["cpuFeaturesNotCarried"]})
-    checkWindowsConfig(run, os.path.join(root, "bin", "clang"), os.path.join(runtime, "windows"), work, prefixes)
+    for target in dict.fromkeys(r["target"] for r in records):
+        prefixes = macroPrefixes(r for r in records if r["target"] == target)
+        scratch = os.path.join(work, "verify-" + target)
+        os.makedirs(scratch)
+        checkWindowsConfig(run, os.path.join(root, "bin", "clang"), os.path.join(runtime, "windows"), scratch,
+                           prefixes, target)
 
 
 def prove(engine, runtime, denied, zig=None):
@@ -417,6 +492,9 @@ def prove(engine, runtime, denied, zig=None):
     pe.verifyEngine(engine)
     with open(os.path.join(runtime, "windows", "notices", PROVENANCE)) as f:
         receipt = json.load(f)
+    targets = receipt.get("targets")
+    if not targets or any(t not in TARGETS for t in targets):
+        raise pe.EngineError("receipt targets %r are not in %s; prepare the runtime again" % (targets, sorted(TARGETS)))
     if receipt["engineRelative"] != ENGINE_RELATIVE:
         raise pe.EngineError("receipt engineRelative %r is not %r" % (receipt["engineRelative"], ENGINE_RELATIVE))
     work = os.path.realpath(tempfile.mkdtemp(prefix="windows-proof-"))
@@ -435,23 +513,25 @@ def prove(engine, runtime, denied, zig=None):
         raise pe.EngineError("sandbox does not deny the original engine")
     if zig and pr.sandboxed(profile, work, [os.path.realpath(zig), "version"]).returncode == 0:
         raise pe.EngineError("sandbox does not deny Zig")
-    prefixes = sorted({e["absentMacroPrefix"] for r in receipt["variants"] for e in r["cpuFeaturesNotCarried"]})
-    scratch = os.path.join(work, "out")
-    os.makedirs(scratch)
-    outputs = checkWindowsConfig(lambda command: pr.sandboxed(profile, work, command),
-                                 os.path.join(root, "bin", "clang"), os.path.join(root, "runtime", "windows"),
-                                 scratch, prefixes)
-    for name, path in sorted(outputs.items()):
-        with open(path, "rb") as f:
-            data = f.read()
-        leaked = [p for p in secrets if p.encode("utf-8") in data]
-        if leaked:
-            raise pe.EngineError("%s output %s holds source paths %s" % (TARGET, name, leaked))
-        info = readPe(path)
-        print("%s %s: AMD64 %s, imports %s%s; linked, not run" % (
-            TARGET, name, "DLL" if info["characteristics"] & DLL_CHARACTERISTIC else "console exe",
-            ",".join(sorted(info["imports"])), "; exports " + ",".join(info["exports"]) if info["exports"] else ""))
-    print("%s: import library and PDB written; the caller's own -lws2_32 -lmswsock -lbcrypt link; Windows execution not proven" % TARGET)
+    for target in targets:
+        prefixes = macroPrefixes(r for r in receipt["variants"] if r["target"] == target)
+        scratch = os.path.join(work, "out-" + target)
+        os.makedirs(scratch)
+        outputs = checkWindowsConfig(lambda command: pr.sandboxed(profile, work, command),
+                                     os.path.join(root, "bin", "clang"), os.path.join(root, "runtime", "windows"),
+                                     scratch, prefixes, target)
+        for name, path in sorted(outputs.items()):
+            with open(path, "rb") as f:
+                data = f.read()
+            leaked = [p for p in secrets if p.encode("utf-8") in data]
+            if leaked:
+                raise pe.EngineError("%s output %s holds source paths %s" % (target, name, leaked))
+            info = readPe(path)
+            print("%s %s: %s %s, imports %s%s; linked, not run" % (
+                target, name, TARGETS[target]["machineName"],
+                "DLL" if info["characteristics"] & DLL_CHARACTERISTIC else "console exe",
+                ",".join(sorted(info["imports"])), "; exports " + ",".join(info["exports"]) if info["exports"] else ""))
+        print("%s: import library and PDB written; the caller's own -lws2_32 -lmswsock -lbcrypt link; Windows execution not proven" % target)
     print("relocated=%s denied=%d zig=%s" % (root, len(secrets), "denied" if zig else "not given"))
     shutil.rmtree(work)
 
@@ -463,6 +543,7 @@ def main(argv):
     parser.add_argument("--output")
     parser.add_argument("--runtime")
     parser.add_argument("--deny", action="append", default=[])
+    parser.add_argument("--target", action="append", default=[], help="a Windows target; every target when none")
     parser.add_argument("--prove", action="store_true")
     args = parser.parse_args(argv)
     try:
@@ -473,10 +554,10 @@ def main(argv):
         else:
             if not (args.zig and args.output):
                 parser.error("--zig and --output are required")
-            output, records = prepareRuntimeDirectory(args.zig, args.engine, args.output)
+            output, records = prepareRuntimeDirectory(args.zig, args.engine, args.output, args.target)
             for record in records:
-                print("%s: %d inputs, %d archives in the tail" % (
-                    record["variant"], len(record["inputs"]), len(record["libraryTail"])))
+                print("%s %s: %d inputs, %d archives in the tail" % (
+                    record["target"], record["variant"], len(record["inputs"]), len(record["libraryTail"])))
             print("runtime written to %s" % output)
     except pe.EngineError as error:
         print("prepareWindowsRuntime: error: %s" % error, file=sys.stderr)
