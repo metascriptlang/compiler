@@ -13,15 +13,8 @@ import { findProjectRoot } from "./utils/path";
 import "./ast/childTableGuard";
 import "./ast/childSlotGuard";
 import "./compiler/lsp/handlers/positionsTest";
-import { join } from "std/fs/path";
-import { exists } from "std/fs";
-// Import the package manager hub for test discovery. Individual commands
-// (msc add, install, publish, ...) are wired up from this module as they land.
-// NOTE: imported so test discovery finds these modules' inline tests; any link
-// errors from OTHER files in the working tree are pre-existing, not caused by
-// this import.
-import { cmdAdd, cmdRemove, cmdInstall, cmdLogin, cmdLogout, cmdWhoami, cmdPublish, cmdOrg } from "./compiler/package/index";
-import { cmdX, syncShims, projectShimDir, cmdInstallGlobal, globalManifestRoot, globalShimDir } from "./compiler/x";
+import { runPackageCommand } from "./compiler/package/index";
+import { cmdX } from "./compiler/x";
 import { maybeShowUpdateNotice, cmdUpgrade, sweepUpgradeBackups } from "./compiler/upgrade";
 import { collectGlobalCache } from "./compiler/cache";
 
@@ -123,68 +116,8 @@ export function main(): int32 {
 				else cmdBuildC(opts.inputFile, opts, cfg.resolve);
 			}
 		},
-		"add" => {
-			const addArgs: string[] = [];
-			if (opts.inputFile != "") addArgs.push(opts.inputFile);
-			for (const ea of opts.extraArgs) { addArgs.push(ea); }
-			if (!cmdAdd(projectRoot, addArgs)) process.exit(1);
-			if (!syncShims(projectRoot, projectShimDir(projectRoot))) process.exit(1);
-		},
-		"remove" => {
-			let globalRemove = false;
-			for (const ea of opts.extraArgs) {
-				if (ea == "-g" || ea == "--global") globalRemove = true;
-			}
-			if (globalRemove) {
-				const root = globalManifestRoot();
-				if (root == "" || !exists(join(root, "build.ms"))) {
-					console.log(`${error("error")}: no global manifest — nothing was installed with ${cyan("install -g")}`);
-					process.exit(1);
-				}
-				const grArgs: string[] = [];
-				if (opts.inputFile != "") grArgs.push(opts.inputFile);
-				if (!cmdRemove(root, grArgs)) process.exit(1);
-				if (!syncShims(root, globalShimDir())) process.exit(1);
-			} else {
-				const rmArgs: string[] = [];
-				if (opts.inputFile != "") rmArgs.push(opts.inputFile);
-				if (!cmdRemove(projectRoot, rmArgs)) process.exit(1);
-				if (!syncShims(projectRoot, projectShimDir(projectRoot))) process.exit(1);
-			}
-		},
-		"install" => {
-			let globalInstall = false;
-			for (const ea of opts.extraArgs) {
-				if (ea == "-g" || ea == "--global") globalInstall = true;
-			}
-			if (globalInstall) {
-				if (!cmdInstallGlobal(opts.inputFile)) process.exit(1);
-			} else {
-				if (!cmdInstall(projectRoot)) process.exit(1);
-				if (!syncShims(projectRoot, projectShimDir(projectRoot))) process.exit(1);
-			}
-		},
-		"login" => {
-			if (!await cmdLogin(projectRoot)) process.exit(1);
-		},
-		"logout" => {
-			if (!cmdLogout()) process.exit(1);
-		},
-		"whoami" => {
-			const whoArgs: string[] = [];
-			for (const ea of opts.extraArgs) { whoArgs.push(ea); }
-			if (!cmdWhoami(whoArgs)) process.exit(1);
-		},
-		"publish" => {
-			const pubArgs: string[] = [];
-			for (const ea of opts.extraArgs) { pubArgs.push(ea); }
-			if (!cmdPublish(projectRoot, pubArgs)) process.exit(1);
-		},
-		"org" => {
-			const orgArgs: string[] = [];
-			if (opts.inputFile != "") orgArgs.push(opts.inputFile);
-			for (const ea of opts.extraArgs) { orgArgs.push(ea); }
-			if (!cmdOrg(orgArgs)) process.exit(1);
+		"add" | "remove" | "install" | "login" | "logout" | "whoami" | "publish" | "org" => {
+			if (!await runPackageCommand(cmd, opts, projectRoot)) process.exit(1);
 		},
 		"x" => {
 			const xArgs: string[] = [];

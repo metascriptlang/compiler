@@ -1,76 +1,66 @@
-// Package Manager — public hub.
+// Package manager commands: msc add, remove, install, login, logout, whoami, publish, org.
 //
-// Re-exports the package manager API. Individual submodules live in sibling
-// files (version, mvs, manifest, lockfile, cache, registry, auth, etc.) and
-// are wired up as the package manager commands (msc add, install, publish)
-// are implemented.
-//
-// Importing this hub from src/index.ms ensures the submodules' inline tests
-// are discovered by the main test runner (msc test src/index.ms).
+// mvs and gitsource have no command yet; they are imported so the test runner finds their tests.
 
-export {
-	ParsedVersion,
-	VersionError,
-	versionErrorMessage,
-	parseVersion,
-	isValidVersion,
-	compareVersions,
-	compareVersionStrings,
-	maxVersion,
-	SourceKind,
-	ParsedGitSpec,
-	GitSpecError,
-	gitSpecErrorMessage,
-	parseGitSpec,
-	sourceKindOf,
-} from "./version";
+import { exists } from "std/fs";
+import { join } from "std/fs/path";
+import { CliOptions } from "../options";
+import { syncShims, projectShimDir, cmdInstallGlobal, globalManifestRoot, globalShimDir } from "../x";
+import { error, cyan } from "../../utils/color";
+import { cmdAdd } from "./add";
+import { cmdRemove } from "./remove";
+import { cmdInstall } from "./install";
+import { cmdLogin, cmdLogout, cmdWhoami } from "./login";
+import { cmdPublish } from "./publish";
+import { cmdOrg } from "./org";
+import "./mvs";
+import "./gitsource";
 
-export {
-	DepEntry,
-	BuildListEntry,
-	mvsResolve,
-	findInBuildList,
-} from "./mvs";
+function commandArgs(opts: CliOptions): string[] {
+	const args: string[] = [];
+	if (opts.inputFile != "") args.push(opts.inputFile);
+	for (const arg of opts.extraArgs) args.push(arg);
+	return args;
+}
 
-export {
-	HostConfig,
-	KNOWN_HOSTS,
-	detectHost,
-	archiveUrl,
-} from "./gitsource";
+function hasGlobalFlag(opts: CliOptions): boolean {
+	for (const arg of opts.extraArgs) {
+		if (arg == "-g" || arg == "--global") return true;
+	}
+	return false;
+}
 
-export {
-	LockEntry,
-	Lockfile,
-	LockfileError,
-	lockfileErrorMessage,
-	parseLockfile,
-	readLockfile,
-	writeLockfile,
-	findEntry,
-	entryName,
-} from "./lockfile";
+function removeDep(opts: CliOptions, projectRoot: string): boolean {
+	const args: string[] = [];
+	if (opts.inputFile != "") args.push(opts.inputFile);
+	if (!hasGlobalFlag(opts)) return cmdRemove(projectRoot, args) && syncShims(projectRoot, projectShimDir(projectRoot));
+	const root = globalManifestRoot();
+	if (root == "" || !exists(join(root, "build.ms"))) {
+		console.log(`${error("error")}: no global manifest — nothing was installed with ${cyan("install -g")}`);
+		return false;
+	}
+	return cmdRemove(root, args) && syncShims(root, globalShimDir());
+}
 
-export {
-	cacheRoot,
-	registrySrcPath,
-	registryDownloadPath,
-	gitSrcPath,
-	gitDownloadPath,
-	isCached,
-} from "./cache";
-
-export { cmdAdd } from "./add";
-export { cmdRemove } from "./remove";
-export { cmdInstall } from "./install";
-export { cmdLogin, cmdLogout, cmdWhoami } from "./login";
-export { cmdPublish } from "./publish";
-export { cmdOrg } from "./org";
-export { downloadPackage, packageErrorMessage, PackageError } from "./download";
-export {
-	addDepToManifest,
-	removeDepFromManifest,
-	readManifest,
-	ManifestError,
-	manifestErrorMessage,
-} from "./manifest";
+// Runs one package command; false means it failed and the process exits 1.
+export async function runPackageCommand(cmd: string, opts: CliOptions, projectRoot: string): Promise<boolean> {
+	return match (cmd) {
+		"add" => cmdAdd(projectRoot, commandArgs(opts)) && syncShims(projectRoot, projectShimDir(projectRoot)),
+		"remove" => removeDep(opts, projectRoot),
+		"install" => {
+			if (hasGlobalFlag(opts)) return cmdInstallGlobal(opts.inputFile);
+			return cmdInstall(projectRoot) && syncShims(projectRoot, projectShimDir(projectRoot));
+		},
+		"login" => {
+			return await cmdLogin(projectRoot);
+		},
+		"logout" => cmdLogout(),
+		"whoami" => cmdWhoami(opts.extraArgs),
+		"publish" => cmdPublish(projectRoot, opts.extraArgs),
+		"org" => cmdOrg(commandArgs(opts)),
+		_ => {
+			console.log(`${error("error")}: ${cmd} is not a package command`);
+			return false;
+		},
+	};
+}
