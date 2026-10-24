@@ -529,7 +529,31 @@ void msRootsAdopt(msCellSeq* orphan) {
 	msCellSeqFree(orphan);
 }
 
+static msCellSeq msOrphanRoots;
+static char msOrphanRootsLock;
+
+static void msOrphanRootsAcquire(void) {
+	while (__atomic_test_and_set(&msOrphanRootsLock, __ATOMIC_ACQUIRE)) {}
+}
+
+static void msOrphanRootsRelease(void) {
+	__atomic_clear(&msOrphanRootsLock, __ATOMIC_RELEASE);
+}
+
+static void msAdoptOrphanRoots(void) {
+	msOrphanRootsAcquire();
+	msCellSeq spilled = msOrphanRoots;
+	msCellSeqInit(&msOrphanRoots);
+	msOrphanRootsRelease();
+	msRootsAdopt(&spilled);
+}
+
 void msRootsThreadTeardown(void) {
+	if (msRoots.len > 0) {
+		msOrphanRootsAcquire();
+		for (int32_t i = 0; i < msRoots.len; i++) msCellSeqPush(&msOrphanRoots, msRoots.data[i]);
+		msOrphanRootsRelease();
+	}
 	msCellSeqFree(&msRoots);
 }
 
@@ -732,6 +756,7 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 /* ===== Public API (GC_runOrc / GC_partialCollect parity) ===== */
 
 void msOrcCollect(void) {
+	msAdoptOrphanRoots();
 	if (msRoots.len == 0) return;
 
 	msGcEnv j;
