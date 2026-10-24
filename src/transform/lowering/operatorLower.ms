@@ -22,7 +22,7 @@ import { liftedOp, hookBaseCName, hasUnionEq, anonUnionCName, opTypeKey } from "
 import { walkNode, hasEffect } from "../walker";
 import { cloneIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary, makeNull, receiverKind, makeTypedIdentResolved, runtimeRef, isRuntimeProcCall } from "../util";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isResult, isStringLike, unwrapRefNullUnion, peelThrough, PEEL_ALIAS, peelTransparentInstance, isAwaitable, peelToStructOrUnion, isStdCollectionKind } from "../../checker/types";
-import { cloneIfPure } from "../coercion/intArithJS";
+import { cloneIfPure } from "../place";
 import { resolveOperatorCall, ExtensionMethod, getExtFnType, declaredKeyHash, findAllExtensionsByName, hasConcreteReceiver, isReceiverMatch } from "../../checker/context";
 
 // The checker binds every operator a routine in scope is declared for; an operator that reaches

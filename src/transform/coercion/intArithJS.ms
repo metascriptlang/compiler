@@ -25,13 +25,16 @@
 // Tests: src/test/js/intArith.ms — every decision reads a resolved type, which
 // a parse-only fixture cannot supply.
 
-import { Node, NodeKind, NodeFlag, StringLiteralData, createNodeAt, BinaryExprData, UnaryExprData, UpdateExprData, IdentifierData, MemberExprData, ArrayAccessData, CallExprData, NumberLiteralData, BigIntLiteralData, HiddenDerefData, HiddenStdConvData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, createNodeAt, BinaryExprData, UnaryExprData, UpdateExprData, IdentifierData, NumberLiteralData, BigIntLiteralData, HiddenStdConvData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { peelToRepr, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
 import { walkNode } from "../walker";
-import { makeBinary, makeCall, cloneIdent, runtimeRef, makeMember, makeArrayAccess, makeNumber, makeHiddenDeref, makeHiddenAddr, isRuntimeProcCall, generatedRef } from "../util";
+import { makeBinary, makeCall, runtimeRef, makeMember, makeNumber, generatedRef } from "../util";
 import { truncateTo, isIntConvKind } from "./intConvJS";
+import { cloneIfPure } from "../place";
+
+export { cloneIfPure } from "../place";
 
 export function lowerIntArithJS(program: Node, ctx: TransformContext): Node {
 	walkNode(program, (node: Node): Node => materializeIntOp(node, ctx));
@@ -338,75 +341,4 @@ function compoundAsInteger(node: Node, d: BinaryExprData, base: string, ctx: Tra
 		: makeBinary(readBack, base, d.right, node.location);
 	const stored = narrow != TypeKind.Unknown ? wrapTo(widened, narrow, node.location) : truncateTo(widened, t.kind, node.location);
 	return makeBinary(d.left, "=", stored, node.location);
-}
-
-// A second read of the lvalue is only safe when re-evaluating it cannot call
-// anything or move anything — identifiers, field chains over them, and indexes
-// that are themselves identifiers or literals.
-export function cloneIfPure(node: Node): Node | null {
-	if (node.kind == NodeKind.Identifier) {
-		return cloneIdent(node, node.location);
-	}
-	if (node.kind == NodeKind.MemberExpr) {
-		const d = node.data as MemberExprData;
-		const obj = cloneIfPure(d.object);
-		if (obj == null) return null;
-		const c = makeMember(obj, d.property, node.location);
-		c.nodeType = node.nodeType;
-		c.resolvedSym = node.resolvedSym;
-		return c;
-	}
-	if (node.kind == NodeKind.ArrayAccess) {
-		const d = node.data as ArrayAccessData;
-		const arr = cloneIfPure(d.array);
-		if (arr == null) return null;
-		const idx = cloneIfPure(d.index);
-		if (idx == null) return null;
-		const c = makeArrayAccess(arr, idx, node.location);
-		c.nodeType = node.nodeType;
-		return c;
-	}
-	if (node.kind == NodeKind.NumberLiteral) {
-		const d = node.data as NumberLiteralData;
-		const c = makeNumber(d.value, node.location);
-		c.nodeType = node.nodeType;
-		return c;
-	}
-	if (node.kind == NodeKind.StringLiteral) {
-		const c = createNodeAt(NodeKind.StringLiteral, { value: (node.data as StringLiteralData).value }, node.location);
-		c.nodeType = node.nodeType;
-		return c;
-	}
-	// A deref/addr wrapper evaluates nothing of its own, so re-reading it costs
-	// exactly what re-reading its operand costs. conditionalExprLower walks the
-	// same pair transparently when it hoists assignment-target effects.
-	if (node.kind == NodeKind.HiddenDeref || node.kind == NodeKind.HiddenAddr) {
-		const d = node.data as HiddenDerefData;
-		const inner = cloneIfPure(d.expr);
-		if (inner == null) return null;
-		const c = node.kind == NodeKind.HiddenDeref ? makeHiddenDeref(inner, node.location) : makeHiddenAddr(inner, node.location);
-		c.nodeType = node.nodeType;
-		return c;
-	}
-	if (node.kind == NodeKind.CallExpr && isCompilerCheckCall(node)) {
-		const d = node.data as CallExprData;
-		const args: Node[] = [];
-		for (const a of d.arguments) {
-			const c = cloneIfPure(a);
-			if (c == null) return null;
-			args.push(c);
-		}
-		const c = makeCall(cloneIdent(d.callee, node.location), args, node.location);
-		c.nodeType = node.nodeType;
-		c.resolvedSym = node.resolvedSym;
-		return c;
-	}
-	return null;
-}
-
-// A bound check the access lowering injected re-runs nothing the program can
-// observe, so a checked read stays clonable while its own operands are.
-function isCompilerCheckCall(node: Node): boolean {
-	return isRuntimeProcCall(node, "msChkIndex") || isRuntimeProcCall(node, "msChkArray")
-		|| isRuntimeProcCall(node, "msArrayAt") || isRuntimeProcCall(node, "msSpanAt") || isRuntimeProcCall(node, "msMaybeGet");
 }

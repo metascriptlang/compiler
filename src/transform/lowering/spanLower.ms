@@ -15,7 +15,7 @@ import { createSizedArray, createArray, createPtr, createPrimitive, peelToStruct
 import { takesAddressAtCArg, nonNullMemberOfNullable } from "../../checker/compat";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
 import { walkNode, walkExpandBlocks, replaceInExpr } from "../walker";
-import { cloneIfPure } from "../coercion/intArithJS";
+import { cloneIfPure } from "../place";
 import { containsConditionalEval } from "./callHoist";
 import {
 	makeMember, makeTypedObjectLiteral, makeNumber, makeBinary, makeCall, makeIdent,

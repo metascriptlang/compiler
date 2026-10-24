@@ -13,7 +13,7 @@ import { TransformContext, newLoweredSym } from "../context";
 import { isAssignOp } from "../walker";
 export { isAssignOp } from "../walker";
 import { makeVarDecl, makeTypedIdentResolved, makeBinary, isValueLayoutType } from "../util";
-import { cloneIfPure } from "../coercion/intArithJS";
+import { cloneIfPure } from "../place";
 
 export type Spiller = { ctx: TransformContext, has: (n: Node) => boolean, lower: (n: Node, pre: Node[]) => Node };
 

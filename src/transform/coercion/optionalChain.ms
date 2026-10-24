@@ -11,7 +11,7 @@ import { walkNode, walkExpandBlocks, walkWithinStatement, walkOutsideInstanceFie
 import { makeMember, makeNull, makeBinary, makeConditional, makeIdentResolved } from "../util";
 import { firstExprKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 import { rereadOperand, bindOnce, blockifyArrowsReading } from "./nullishCoalesce";
-import { cloneIfPure } from "./intArithJS";
+import { cloneIfPure } from "../place";
 
 // ===== Main Entry Point =====
 

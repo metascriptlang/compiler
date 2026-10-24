@@ -14,8 +14,9 @@ import { Node, NodeKind, Symbol, Type, TypeKind, DeclKind, SourceLocation, Binar
 import { peelToRepr, getSysType, booleanType } from "../../checker/types";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, runtimeRef, makeIdentResolved, cloneIdent, makeVarDecl, makeBlock, makeWhile, makeIf, makeBinary, makeAssign, makeExprStmt, makeMember, makeHiddenDeref, makeHiddenStdConv, isRuntimeProcCall } from "../util";
+import { makeCall, runtimeRef, makeIdentResolved, cloneIdent, makeVarDecl, makeBlock, makeWhile, makeIf, makeBinary, makeAssign, makeExprStmt, makeHiddenDeref, makeHiddenStdConv, isRuntimeProcCall } from "../util";
 import { makeIntNumber } from "../../checker/literalNodes";
+import { clonePlace } from "../place";
 
 type Reduce = { acc: Node, op: string, term: Node };
 type Reduction = { acc: Node, op: string, arrays: Node[], index: Node, len: Node, widthTag: string };
@@ -32,7 +33,7 @@ function versionLoop(loop: Node, ctx: TransformContext): Node {
 	const loc = loop.location;
 	const i64 = getSysType(TypeKind.Int64);
 	const endSym = freshTempSym(ctx, "end", i64);
-	const endCall = makeCall(runtimeRef("msBlockEnd", loc), [ident(r.index, loc), cloneLen(r.len, loc)], loc);
+	const endCall = makeCall(runtimeRef("msBlockEnd", loc), [ident(r.index, loc), clonePlace(r.len, loc)], loc);
 	endCall.nodeType = i64;
 	const endDecl = makeVarDecl(endSym.name, endCall, DeclKind.Const, loc);
 	endDecl.resolvedSym = endSym;
@@ -288,24 +289,8 @@ function ident(n: Node, loc: SourceLocation): Node {
 	return cloneIdent(n, loc);
 }
 
-function cloneLen(len: Node, loc: SourceLocation): Node {
-	if (len.kind == NodeKind.Identifier) return cloneIdent(len, loc);
-	const d = len.data as MemberExprData;
-	const m = makeMember(cloneArray(d.object, loc), "length", loc);
-	m.nodeType = len.nodeType;
-	m.resolvedSym = len.resolvedSym;
-	return m;
-}
-
-function cloneArray(a: Node, loc: SourceLocation): Node {
-	if (a.kind == NodeKind.Identifier) return cloneIdent(a, loc);
-	const inner = makeHiddenDeref(cloneIdent((a.data as HiddenDerefData).expr, loc), loc);
-	inner.nodeType = a.nodeType;
-	return inner;
-}
-
 function arrayValue(a: Node, loc: SourceLocation): Node {
-	const c = cloneArray(a, loc);
+	const c = clonePlace(a, loc);
 	if (c.nodeType != null && c.nodeType.kind == TypeKind.Ref) return makeHiddenDeref(c, loc);
 	return c;
 }

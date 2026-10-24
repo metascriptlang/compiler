@@ -23,7 +23,7 @@ import { walkNode } from "../walker";
 import { makeBinary, makeCall, makeMember, makeNumber, generatedRef, runtimeRef } from "../util";
 import { createPrimitive, isIntegerType, peelToRepr, literalUnionBase } from "../../checker/types";
 import { int64ToDecimal, uint64ToDecimal } from "../../utils/string";
-import { cloneIfPure } from "./intArithJS";
+import { cloneIfPure } from "../place";
 import { makeRangeCheckFor } from "../native/rangeCheckInject";
 
 export function lowerBigIntJS(program: Node, ctx: TransformContext): Node {

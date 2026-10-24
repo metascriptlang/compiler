@@ -4,7 +4,7 @@ import { addError } from "../../checker/context";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocks, mapExprChildren } from "../walker";
 import { makeBinary, makeUnary, makeNumber, makeIdentResolved, makeArrayAccess, makeCall, makeConditional, makeVarDecl, makeBlock, makeIf, makeBreak, makeBool, makeReturn, runtimeRef } from "../util";
-import { cloneIfPure } from "../coercion/intArithJS";
+import { cloneIfPure } from "../place";
 import { DeclKind } from "../../ast/node";
 
 function byteType(): Type { return createPrimitive(TypeKind.Uint8); }

@@ -24,7 +24,7 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeMember, makeBinary } from "../util";
 import { unwrapRefusesNull, wrapMaybeValue } from "../native/nullableLower";
-import { cloneIfPure } from "./intArithJS";
+import { cloneIfPure } from "../place";
 
 export function materializeMaybeReads(program: Node, ctx: TransformContext): Node {
 	const project = !ctx.jsBackend && !ctx.raiserBackend;

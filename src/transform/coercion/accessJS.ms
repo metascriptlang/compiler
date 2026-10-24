@@ -5,7 +5,7 @@ import { addError } from "../../checker/context";
 import { peelTransparentInstance, unknownType } from "../../checker/types";
 import { walkNode, walkExpandBlocks, isAssignOp } from "../walker";
 import { makeBinary, makeCall, makeMember, makeArrayAccess, makeAssign, makeVarDecl, makeNull, makeIdentResolved, runtimeRef, isRuntimeProcCall } from "../util";
-import { cloneIfPure } from "./intArithJS";
+import { cloneIfPure } from "../place";
 import { asUnknown } from "./nullishCoalesce";
 
 export function lowerAccessJS(program: Node, ctx: TransformContext): Node {

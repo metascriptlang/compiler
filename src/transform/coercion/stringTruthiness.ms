@@ -9,7 +9,7 @@ import { TransformContext } from "../context";
 import { walkNode, walkExpandBlocks, walkWithinStatement, walkOutsideInstanceFieldInits, isInstanceFieldInit } from "../walker";
 import { makeBinary, makeMember, makeNumber, makeBool, makeNull, makeUnary, makeCall, makeConditional, runtimeRef, makeIdentResolved } from "../util";
 import { bindOnce, blockifyArrowsReading } from "./nullishCoalesce";
-import { cloneIfPure } from "./intArithJS";
+import { cloneIfPure } from "../place";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
 import { firstStmtKindAfter, firstExprKindAfter, stmtCountAfter } from "../testUtil";
