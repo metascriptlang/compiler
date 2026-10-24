@@ -2022,6 +2022,119 @@ function runKeys(): void {
 	console.log(`ok   ${tag}`);
 }
 
+
+function eventsOf(path: string): string[] {
+	const out: string[] = [];
+	for (const line of lines(read(path))) {
+		if (line != "") out.push(line);
+	}
+	return out;
+}
+
+function eventAt(events: string[], from: int32, needle: string): int32 {
+	for (let i = from; i < events.length; i += 1) {
+		if (events[i].contains(needle)) return i;
+	}
+	return -1;
+}
+
+function startEvents(tag: string, name: string, events: string): ChildProcess {
+	const dir = freshDir(`${TMP}/${name}`);
+	for (const f of readDir(`${FIXTURES}/runEvents`)) copy(`${FIXTURES}/runEvents/${f}`, `${dir}/${f}`);
+	const started = spawnChild(MSC, ["run", "--hcr", `--events=${events}`, "app.ms"], { cwd: dir, mergeStderr: true });
+	if (!started.ok) {
+		console.log(`FAIL ${tag}: cannot start ${MSC}`);
+		exit(1);
+	}
+	return started.value;
+}
+
+function runEvents(): void {
+	const tag = "hcrRunEvents";
+	const globalCache = env.get("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_NO_GLOBAL_CACHE", "1");
+	const dir = `${TMP}/runEvents`;
+	const child = startEvents(tag, "runEvents", "events.jsonl");
+	const seen = [""];
+	const stage = (marker: string, why: string): void => {
+		const got = readUntil(child, seen, marker, 120000);
+		if (!got) console.log(seen[0]);
+		need(tag, got, why);
+	};
+	stage("EVENTS start 7 1", "the program did not start on the first build");
+	copy(`${dir}/logicEdited.ms`, `${dir}/logic.ms`);
+	stage("EVENTS reloaded 9", "the body edit did not reload");
+	copy(`${dir}/logicBroken.ms`, `${dir}/logic.ms`);
+	stage("stopping before codegen", "the type error did not stop the build");
+	copy(`${dir}/modelGrown.ms`, `${dir}/model.ms`);
+	copy(`${dir}/logicEdited.ms`, `${dir}/logic.ms`);
+	stage("; press R to restart", "a field added to a live class did not ask for a restart");
+	child.write("q\n", 5000);
+	const ended = child.wait(30000);
+	if (!ended.ok) console.log(seen[0]);
+	need(tag, ended.ok, "q did not end msc");
+	readUntil(child, seen, "watch: quit", 2000);
+	child.close();
+
+	const human = [
+		"error: Type 'int32' is not assignable to type 'string'",
+		`  --> ${dir}/logic.ms:1:42`,
+		"    |",
+		"1 | export function value(): string { return 1; }",
+		`    | ${"".padStart(41, " ")}^`,
+		"",
+		"error: 1 type error(s) found, stopping before codegen",
+	].join("\n");
+	need(tag, seen[0].replaceAll("\r", "").contains(human), "the human type-error lines differ from the pinned rendering");
+
+	const ev = eventsOf(`${dir}/events.jsonl`);
+	for (const line of ev) {
+		need(tag, line.startsWith("{\"v\":1,\"t\":") && line.endsWith("}"), `not an event envelope: ${line}`);
+	}
+	const first = eventAt(ev, 0, "\"event\":\"build.done\"");
+	need(tag, first >= 0, "no build.done for the first build");
+	const start2 = eventAt(ev, first + 1, "\"event\":\"build.start\"");
+	need(tag, start2 > first, "no build.start for the body edit");
+	need(tag, eventAt(ev, start2, "\"event\":\"build.start\",\"build\":2,\"changed\":[\"logic.ms\"]") > start2, "no build.start naming logic.ms as changed");
+	const done2 = eventAt(ev, start2, "\"event\":\"build.done\"");
+	need(tag, done2 > start2, "no build.done after the body edit");
+	const reloaded = eventAt(ev, done2, "\"event\":\"reload\",\"source\":\"runtime\",\"kind\":\"reloaded\"");
+	need(tag, reloaded > done2, "no runtime reload event of kind reloaded after the body edit");
+	const failed = eventAt(ev, reloaded, "\"event\":\"build.failed\"");
+	need(tag, failed > reloaded, "no build.failed for the type error");
+	const located = `"file":"${dir}/logic.ms","line":1,"col":42,"severity":"error","message":"Type 'int32' is not assignable to type 'string'"`;
+	need(tag, ev[failed].contains(located), `build.failed does not carry the diagnostic location: ${ev[failed]}`);
+	const restart = eventAt(ev, failed, "\"event\":\"reload\",\"source\":\"runtime\",\"kind\":\"restartRequired\"");
+	need(tag, restart > failed && ev[restart].contains("\"modules\":[\"model\"]") && ev[restart].contains("live values"), "no runtime restartRequired naming the model module and its live values");
+	need(tag, eventAt(ev, restart, "\"event\":\"exit\",\"code\":") > restart, "no exit event");
+	need(tag, seen[0].contains("watch: type 'Box'"), "the restart hint does not carry the engine's reason");
+
+	const onStdout = startEvents(tag, "runEventsStdout", "-");
+	const out = [""];
+	const got = readUntil(onStdout, out, "EVENTS start 7 1", 120000);
+	if (!got) console.log(out[0]);
+	need(tag, got, "--events=- : the program did not start");
+	onStdout.write("q\n", 5000);
+	onStdout.wait(30000);
+	readUntil(onStdout, out, "watch: quit", 2000);
+	onStdout.close();
+	need(tag, out[0].contains("{\"v\":1,\"t\":") && out[0].contains("\"event\":\"build.done\"") && out[0].contains("watch: build 0 built"), "--events=- : events and human lines are not both on stdout");
+
+	const bad = startEvents(tag, "runEventsMalformed", "events.jsonl");
+	const badSeen = [""];
+	const up = readUntil(bad, badSeen, "EVENTS start 7 1", 120000);
+	if (!up) console.log(badSeen[0]);
+	need(tag, up, "malformed case: the program did not start");
+	const verdicts = `${TMP}/runEventsMalformed/out/hcr/app.reload.jsonl`;
+	need(tag, writeFile(verdicts, "this is not json\n").ok, `cannot write ${verdicts}`);
+	readUntil(bad, badSeen, "is not JSON", 20000);
+	const died = bad.wait(30000);
+	bad.close();
+	need(tag, badSeen[0].contains("app.reload.jsonl line 1 is not JSON"), `a malformed verdict line was not named: ${badSeen[0]}`);
+	need(tag, died.ok && died.value.code == 1, "a malformed verdict line did not end msc with code 1");
+	env.set("MSC_NO_GLOBAL_CACHE", globalCache);
+	console.log(`ok   ${tag}`);
+}
 const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrFsWatch", run: fsWatch },
 	{ name: "hcrModuleAbi", run: moduleAbi },
@@ -2080,6 +2193,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrDynamicImportParity", run: dynamicImportParity },
 	{ name: "hcrJsInstanceFiles", run: jsInstanceFiles },
 	{ name: "hcrRunKeys", run: runKeys },
+	{ name: "hcrRunEvents", run: runEvents },
 ];
 if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });
 
