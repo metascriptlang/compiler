@@ -76,7 +76,7 @@ A frame starts at HIGH durability and only `recordDurability` lowers it. A query
 | Kind | Role | Computed by |
 |------|------|-------------|
 | `FileText` | input: raw source, set by the caller | `dbSetFileText` |
-| `Preprocess` | raw text to preprocessed source (`.h` translation, `.h` import inlining); in a graph-bound db, the graph module's `source` | `dbPreprocess` |
+| `Preprocess` | raw text to module source: a `.h` file becomes its translated module (`headerModuleSource`); in a graph-bound db, the graph module's `source` | `dbPreprocess` |
 | `Parse` | source to AST | `dbParse` |
 | `TypeCheck` | AST to `CheckerContext` | `dbTypeCheck` |
 | `Transform` | typed AST to transformed AST | `dbTransform` |
