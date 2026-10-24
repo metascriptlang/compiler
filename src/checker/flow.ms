@@ -1381,11 +1381,6 @@ function calleeType(callee: Node | null): Type | null {
 	return fnType != null && fnType.kind == TypeKind.Function ? fnType : null;
 }
 
-function calleeParams(callee: Node | null): Type[] {
-	const fnType = calleeType(callee);
-	return fnType == null ? [] : fnType.typeChildren;
-}
-
 function callNeverReturns(call: Node | null): boolean {
 	if (call == null || call.kind != NodeKind.CallExpr) return false;
 	const callee = (call.data as CallExprData).callee;
@@ -1445,16 +1440,22 @@ function callWritesInto(call: Node | null, refNode: Node): boolean {
 	} else {
 		return false;
 	}
-	const params = calleeParams(callee);
+	let fnType: Type | null = null;
+	let fnTypeKnown = false;
 	let i = 0;
 	for (const arg of args) {
-		const param = params != null && i < params.length ? params[i] : null as unknown as Type;
+		const at = i;
 		i = i + 1;
 		let passed = stripHidden(arg);
 		if (passed != null && passed.kind == NodeKind.OutExpr) {
 			passed = (passed.data as OutExprData).outArg;
-		} else if (param == null || param.kind != TypeKind.Var) {
-			passed = null;
+		} else if (passed != null) {
+			if (!fnTypeKnown) {
+				fnType = calleeType(callee);
+				fnTypeKnown = true;
+			}
+			const param = fnType != null && at < fnType.typeChildren.length ? fnType.typeChildren[at] : null as unknown as Type;
+			if (param == null || param.kind != TypeKind.Var) passed = null;
 		}
 		if (passed != null && writesThrough(passed, refNode)) return true;
 	}
