@@ -177,3 +177,53 @@ export function max<T>(this it: Iterator<T>): T | null {
 	}
 	return best;
 }
+
+export interface RangeOptions {
+	step?: number;
+	inclusive?: boolean;
+}
+
+function* rangeLazy(start: number, end: number, step: number, inclusive: boolean): Iterator<number> {
+	const increasing = end == Infinity || (end != -Infinity && end > start);
+	if (increasing != step > 0) return;
+	for (let count = 0; true; count++) {
+		const value = start + step * count;
+		if (increasing) {
+			if (end != Infinity && (inclusive ? value > end : value >= end)) return;
+		} else if (end != -Infinity && (inclusive ? value < end : value <= end)) {
+			return;
+		}
+		yield value;
+		if (value == end) return;
+	}
+}
+
+function checkedRange(start: number, end: number, step: number | null, inclusive: boolean): Iterator<number> {
+	if (start != start) throw new RangeError("start must not be NaN");
+	if (end != end) throw new RangeError("end must not be NaN");
+	if (start == Infinity || start == -Infinity) throw new RangeError("start must be finite");
+	const increasing = end == Infinity || (end != -Infinity && end > start);
+	let by: number = increasing ? 1 : -1;
+	if (step != null) by = step;
+	if (by != by) throw new RangeError("step must not be NaN");
+	if (by == Infinity || by == -Infinity) throw new RangeError("step must be finite");
+	if (by == 0 && start != end) throw new RangeError("step must not be zero");
+	return rangeLazy(start, end, by, inclusive);
+}
+
+export function range(this typeof Iterator, start: number, end: number): Iterator<number> {
+	return checkedRange(start, end, null, false);
+}
+
+export function range(this typeof Iterator, start: number, end: number, step: number): Iterator<number> {
+	return checkedRange(start, end, step, false);
+}
+
+export function range(
+	this typeof Iterator,
+	start: number,
+	end: number,
+	options: RangeOptions,
+): Iterator<number> {
+	return checkedRange(start, end, options.step ?? null, options.inclusive ?? false);
+}

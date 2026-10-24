@@ -193,3 +193,69 @@ test "iterator zip: string and struct elements, and zip of zips" {
 	const outer = Iterator.zip<int32[]>([inner, [[7], [8]].values()]).toArray();
 	assert outer.length == 2 && outer[1][0].join(",") == "2,2" && outer[1][1].join(",") == "8";
 }
+
+function firstOf(it: Iterator<number>, n: number): string {
+	return it.take(n).toArray().join(",");
+}
+
+test "iterator range: end is exclusive by default and the step follows the direction" {
+	assert firstOf(Iterator.range(0, 5), 20) == "0,1,2,3,4";
+	assert firstOf(Iterator.range(5, 0), 20) == "5,4,3,2,1";
+	assert firstOf(Iterator.range(0, 10, 3), 20) == "0,3,6,9";
+	assert firstOf(Iterator.range(10, 0, -4), 20) == "10,6,2";
+	assert firstOf(Iterator.range(0, 0), 20) == "";
+}
+
+test "iterator range: inclusive yields end only when a step lands on it" {
+	assert firstOf(Iterator.range(0, 5, { inclusive: true }), 20) == "0,1,2,3,4,5";
+	assert firstOf(Iterator.range(5, 0, { inclusive: true }), 20) == "5,4,3,2,1,0";
+	assert firstOf(Iterator.range(0, 10, { step: 3, inclusive: true }), 20) == "0,3,6,9";
+	assert firstOf(Iterator.range(0, 9, { step: 3, inclusive: true }), 20) == "0,3,6,9";
+	assert firstOf(Iterator.range(10, 0, { step: -5, inclusive: true }), 20) == "10,5,0";
+	assert firstOf(Iterator.range(0, 0, { inclusive: true }), 20) == "0";
+	assert firstOf(Iterator.range(0, 5, { step: 2 }), 20) == "0,2,4";
+}
+
+test "iterator range: a step against the direction is empty and a zero step needs start == end" {
+	assert firstOf(Iterator.range(0, 5, -1), 20) == "";
+	assert firstOf(Iterator.range(5, 0, 1), 20) == "";
+	assert firstOf(Iterator.range(3, 3, 0), 20) == "";
+	assert firstOf(Iterator.range(3, 3, { step: 0, inclusive: true }), 20) == "3";
+	assert messageOf((): void => {
+		Iterator.range(0, 5, 0);
+	}) == "step must not be zero";
+}
+
+test "iterator range: floating-point steps compute start + step * i, not repeated addition" {
+	assert firstOf(Iterator.range(0, 1, 0.1), 20)
+		== "0,0.1,0.2,0.30000000000000004,0.4,0.5,0.6000000000000001,0.7000000000000001,0.8,0.9";
+	assert firstOf(Iterator.range(0, 1, { step: 0.1, inclusive: true }), 20).endsWith(",0.9,1");
+	assert firstOf(Iterator.range(-1, 1, 0.5), 20) == "-1,-0.5,0,0.5";
+	assert firstOf(Iterator.range(0, 1, { step: 0.3, inclusive: true }), 20) == "0,0.3,0.6,0.8999999999999999";
+}
+
+test "iterator range: an infinite end is lazy and the iterator composes with the helpers" {
+	assert firstOf(Iterator.range(0, Infinity), 4) == "0,1,2,3";
+	assert firstOf(Iterator.range(0, Infinity, 5), 3) == "0,5,10";
+	assert firstOf(Iterator.range(0, -Infinity), 3) == "0,-1,-2";
+	assert firstOf(Iterator.range(0, -Infinity, 1), 3) == "";
+	assert Iterator.range(0, 6).filter((x: number): boolean => x % 2 == 0).sum() == 6;
+}
+
+test "iterator range: bad arguments throw when called, before any element is read" {
+	assert messageOf((): void => {
+		Iterator.range(NaN, 1);
+	}) == "start must not be NaN";
+	assert messageOf((): void => {
+		Iterator.range(0, NaN);
+	}) == "end must not be NaN";
+	assert messageOf((): void => {
+		Iterator.range(Infinity, 1);
+	}) == "start must be finite";
+	assert messageOf((): void => {
+		Iterator.range(0, 1, NaN);
+	}) == "step must not be NaN";
+	assert messageOf((): void => {
+		Iterator.range(0, 1, { step: Infinity });
+	}) == "step must be finite";
+}

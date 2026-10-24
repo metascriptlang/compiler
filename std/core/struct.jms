@@ -152,4 +152,4 @@ export function msSetCard32(v: uint32): int32 {
 }
 
 import { Iterator, IteratorResult } from "./array/iteratorBase";
-export { Iterator, IteratorResult, ZipMode, ZipOptions, concat, zip, peekable, toItems, Peekable, min, max } from "./array/iteratorBase";
+export { Iterator, IteratorResult, ZipMode, ZipOptions, concat, zip, peekable, toItems, Peekable, min, max, range, RangeOptions } from "./array/iteratorBase";

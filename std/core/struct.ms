@@ -29,7 +29,7 @@ function setEndWrite<T>(s: Set<T>): void { if (!s.writing) { msMapFatal("concurr
 // Users write: function* range(): Iterator<int32> { yield 1; }
 
 import { Iterator, IteratorResult } from "./array/iteratorBase";
-export { Iterator, IteratorResult, ZipMode, ZipOptions, concat, zip, peekable, toItems, Peekable, min, max } from "./array/iteratorBase";
+export { Iterator, IteratorResult, ZipMode, ZipOptions, concat, zip, peekable, toItems, Peekable, min, max, range, RangeOptions } from "./array/iteratorBase";
 
 // Drain iterator to array. Uses while+next() (not for...of — would be circular).
 export function toItems<T>(this iter: Iterator<T>): T[] {
