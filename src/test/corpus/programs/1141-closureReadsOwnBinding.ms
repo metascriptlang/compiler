@@ -5,7 +5,6 @@
 // @stdout: deeper 42
 // @stdout: generic 4 s
 // @stdout: nullable 5
-// @xfail(san): each binding holds a closure whose environment holds the binding, a cycle that --gc=drc never collects (the orc cell collects it), as docs/LANG.md records for a closure held by a frame value
 // A function stored in an object or array literal may read the binding that
 // literal initializes: it cannot run before the binding holds the literal, so
 // it reads the binding's current value whenever it is called. A `let` rebound

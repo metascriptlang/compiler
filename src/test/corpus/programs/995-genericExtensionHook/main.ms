@@ -1,7 +1,6 @@
 // @xfail(raiser): runs but stdout misses its @stdout line (exit=0)
 // @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
 // @stdout: destroyed g7 t b4 s5 | r3 r2 r1
-// @xfail(san): the user onDestroy hook leaves its value's fields unfreed, so msStringArrayRefCell is never destroyed; card 2026-10-21-design-a-user-ondestroy-hook-leaves-the-fields-of-its-value-unfreed.md
 import { Res, res, resDestroyed } from "./res";
 
 let trail = "";
