@@ -20,7 +20,7 @@ import {
 	ProgramData, BlockStmtData, FunctionDeclData, FunctionExprData,
 	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
 	SwitchStmtData, SwitchCaseData, BreakStmtData, ContinueStmtData,
-	ExprStmtData, TryCatchStmtData, YieldExprData,
+	ExprStmtData, TryCatchStmtData, YieldExprData, BinaryExprData,
 	ExportDeclData, ClassDeclData, MethodDeclData, DecoratedDeclData, Type, TypeKind,
 	IdentifierData, Symbol, SymbolKind, HiddenDerefData, HiddenStdConvData, MemberExprData, ArrayAccessData, TypeAssertionData,
 	isEmptyBlock, makeLoc,
@@ -30,11 +30,12 @@ import { forEachChild, anyChild, anyDescendant, Visit } from "../../ast/visitor"
 import { mapChildren } from "../walker";
 import { setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult, getProperty } from "../../checker/types";
+import { wrapMaybeValue } from "../native/nullableLower";
 import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, newLoweredSym } from "../context";
 import {
 	makeIdentResolved, makeTypedIdent, makeTypedIdentResolved, makeNull, makeNumber, makeBool,
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
-	makeIf, makeWhile, makeBinary, makeAssign, makeContinue,
+	makeIf, makeWhile, makeBinary, makeAssign, makeContinue, makeCall,
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
 	makeTryCatch, makeCatchSym, makeMoveExpr,
 	makeSwitch, makeSwitchCase, makeDefaultValue,
@@ -91,6 +92,7 @@ export interface StateCollector {
 	curExcSym: Symbol;
 	genReturns?: boolean;
 	genResultType?: Type;
+	closeOpSym?: Symbol;
 }
 
 interface SplitDiag {
@@ -508,7 +510,39 @@ function splitJump(stmt: Node, sc: StateCollector, currentState: number, loc: So
 	for (const s of exits) sc.items[cur].stmts.push(s);
 }
 
-export function splitStmts(stmts: Node[], sc: StateCollector, startState: number, exitState: number, loc: SourceLocation, resultType: Type | null): void {
+const CLOSE_OP: int32 = 2;
+
+function isYieldStmt(stmt: Node): boolean {
+	if (stmt.kind == NodeKind.ExprStmt) return isDirectYield((stmt.data as ExprStmtData).expr);
+	if (stmt.kind != NodeKind.VariableDecl) return false;
+	const init = (stmt.data as VariableDeclData).initializer;
+	return init != null && isDirectYield(init);
+}
+
+function isCloseCheck(stmt: Node, opSym: Symbol): boolean {
+	if (stmt.kind != NodeKind.IfStmt) return false;
+	const cond = (stmt.data as IfStmtData).condition;
+	return cond.kind == NodeKind.BinaryExpr && (cond.data as BinaryExprData).left.resolvedSym == opSym;
+}
+
+function makeCloseCheck(opSym: Symbol, loc: SourceLocation): Node {
+	const closing = makeBinary(makeTypedIdentResolved(opSym, int32Type(), loc), "===", makeNumber(CLOSE_OP, loc), loc);
+	const consume = makeExprStmt(makeAssign(makeTypedIdentResolved(opSym, int32Type(), loc), makeNumber(0, loc), loc), loc);
+	return makeIf(closing, makeBlock([consume, makeReturn(null, loc)], loc), null, loc);
+}
+
+function withCloseChecks(stmts: Node[], opSym: Symbol, loc: SourceLocation): Node[] {
+	const out: Node[] = [];
+	for (let i = 0; i < stmts.length; i += 1) {
+		out.push(stmts[i]);
+		const checked = i + 1 < stmts.length && isCloseCheck(stmts[i + 1], opSym);
+		if (isYieldStmt(stmts[i]) && !checked) out.push(makeCloseCheck(opSym, loc));
+	}
+	return out;
+}
+
+export function splitStmts(given: Node[], sc: StateCollector, startState: number, exitState: number, loc: SourceLocation, resultType: Type | null): void {
+	const stmts = sc.closeOpSym != null ? withCloseChecks(given, sc.closeOpSym, loc) : given;
 	let currentState = startState;
 	let i = 0;
 	while (i < stmts.length) {
@@ -1034,6 +1068,19 @@ function buildStateDispatch(sc: StateCollector, loc: SourceLocation, resultType:
 
 // ===== Generator Function Transform =====
 
+function makeResultFn(body: Node, fnType: Type | null, loc: SourceLocation): Node {
+	const fn = createNode(NodeKind.FunctionExpr, {
+		funcExprParams: [],
+		funcExprParamTypes: [],
+		funcExprBody: body,
+		funcExprFlags: "",
+		funcExprReturnType: "",
+	}, syntheticToken(loc));
+	if (fnType != null) fn.nodeType = fnType;
+	fn.paramSyms = [];
+	return fn;
+}
+
 function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, returnNodeType: Type | null, ctx: TransformContext, loc: SourceLocation): Node {
 	// 1. Collect all locals and their types
 	const locals = createSymSet();
@@ -1053,9 +1100,18 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	setFlag(stateSym, SymbolFlag.StateMachine);
 	const curExcSym = newLoweredSym(ctx, SymbolKind.Variable, "$curExc", null as unknown as Type, true);
 
+	const closable = returnNodeType != null && isIterator(returnNodeType);
+	const opSym = newLoweredSym(ctx, SymbolKind.Variable, "$op", int32Type(), true);
+
 	// 4. Split at yield points
 	const sc: StateCollector = { items: [], loopStack: [], excType: null, finallyStack: [], landings: [], stateSym, curExcSym, genReturns: true, genResultType: iterResultType };
-	const initState = allocState(sc);
+	if (closable) sc.closeOpSym = opSym;
+	const entryState = allocState(sc);
+	const initState = closable ? allocState(sc) : entryState;
+	if (closable) {
+		sc.items[entryState].stmts.push(rewriteJumps(makeCloseCheck(opSym, loc), sc, false, false, loc));
+		sc.items[entryState].stmts.push(makeStateAssign(initState, loc, stateSym));
+	}
 	const doneState = -1;  // terminal
 
 	splitStmts(bodyStmts, sc, initState, doneState, loc, iterResultType);
@@ -1081,28 +1137,29 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	// 7. Wrap in while(true) { dispatch }
 	const loop = makeWhile(makeBool(true, loc), dispatchBody, loc);
 
-	// 8. Build next() function body
-	const nextBody = makeBlock([...hoisted, loop], loc);
+	// 8. Build the resume body
+	const resumeBody = makeBlock([...hoisted, loop], loc);
 
-	// 9. Create next FunctionExpr with proper return type (IteratorResult<T>)
+	// 9. Create the FunctionExprs with proper return type (IteratorResult<T>)
 	// Lambda lifting uses nodeType to determine the lifted function's return type.
 	const nextFnType = getIteratorNextFnType(returnNodeType);
-	const nextFn = createNode(NodeKind.FunctionExpr, {
-		funcExprParams: [],
-		funcExprParamTypes: [],
-		funcExprBody: nextBody,
-		funcExprFlags: "",
-		funcExprReturnType: "",
-	}, syntheticToken(loc));
-	if (nextFnType != null) nextFn.nodeType = nextFnType;
-	nextFn.paramSyms = [];
+	const resumeFn = makeResultFn(resumeBody, nextFnType, loc);
+	const resumeSym = newLoweredSym(ctx, SymbolKind.Variable, "$resume", nextFnType, false);
+	setFlag(resumeSym, SymbolFlag.StateMachine);
+	const resumeDecl = makeVarDecl(resumeSym.name, resumeFn, DeclKind.Const, loc);
+	resumeDecl.resolvedSym = resumeSym;
+	if (nextFnType != null) resumeDecl.nodeType = nextFnType;
+	const setOp = makeExprStmt(makeAssign(makeTypedIdentResolved(opSym, int32Type(), loc), makeNumber(CLOSE_OP, loc), loc), loc);
+	const resumeCall = makeCall(makeTypedIdentResolved(resumeSym, nextFnType, loc), [], loc);
+	resumeCall.nodeType = iterResultType;
+	const closeFn = makeResultFn(makeBlock([setOp, makeReturn(resumeCall, loc)], loc), nextFnType, loc);
 
-	// 10. Build iterator object: { next: function() { ... } }
+	// 10. Build iterator object: { next, return } over the one resume routine
 	// Set nodeType to Iterator so C codegen emits the named struct, not anonymous.
-	const iterObj = makeObjectLiteral(["next"], [nextFn], loc);
-	if (returnNodeType != null && isIterator(returnNodeType)) {
-		iterObj.nodeType = returnNodeType;
-	}
+	const iterObj = closable
+		? makeObjectLiteral(["next", "return"], [makeTypedIdentResolved(resumeSym, nextFnType, loc), wrapMaybeValue(closeFn, getProperty(returnNodeType!, "return"), loc)], loc)
+		: makeObjectLiteral(["next"], [resumeFn], loc);
+	if (closable) iterObj.nodeType = returnNodeType;
 
 	// 11. Build new function body:
 	//   let $state = 0;
@@ -1112,6 +1169,11 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	const stateDecl = makeVarDecl("$state", makeNumber(0, loc), DeclKind.Let, loc);
 	stateDecl.resolvedSym = stateSym;
 	newBodyStmts.push(stateDecl);
+	if (closable) {
+		const opDecl = makeVarDecl(opSym.name, makeNumber(0, loc), DeclKind.Let, loc);
+		opDecl.resolvedSym = opSym;
+		newBodyStmts.push(opDecl);
+	}
 	if (hasExc) newBodyStmts.push(makeCurExcDecl(sc, loc));
 	for (const sym of lifted.items) {
 		// Stamp original nodeType so lambda lifting creates correctly-typed env fields.
@@ -1122,6 +1184,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 		if (dtIdx >= 0) decl.nodeType = dtTypes[dtIdx];
 		newBodyStmts.push(decl);
 	}
+	if (closable) newBodyStmts.push(resumeDecl);
 	newBodyStmts.push(makeReturn(iterObj, loc));
 
 	return makeBlock(newBodyStmts, loc);
