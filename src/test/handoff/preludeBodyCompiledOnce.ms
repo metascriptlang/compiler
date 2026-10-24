@@ -50,3 +50,23 @@ function main(): void {
 `);
 	assert result.ok, result.ok ? "" : result.error;
 }
+
+test "an Error a macro constructs is compiled from its checked declaration, not checked again" {
+	const before = engineRecheckCount();
+	const result = compileToCWithStd(`
+import { Node, NodeKind } from "std/meta";
+
+export macro errorValue(node: Node): Node {
+	const e = new Error("boom");
+	if (e.message != "boom") { error("message mismatch", node); }
+	return { kind: NodeKind.StringLiteral, line: node.line, column: node.column, value: e.message };
+}
+
+function main(): void {
+	const x = errorValue(0);
+	console.log(x);
+}
+`);
+	assert result.ok, result.ok ? "" : result.error;
+	assert engineRecheckCount() == before, `Error checked again: ${engineRecheckCount() - before}`;
+}
