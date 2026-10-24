@@ -20,7 +20,9 @@
 //                             (objdump) stay at or under <n> on that host
 //                             (`darwin-arm64`, `linux-x86_64`); a budgeted
 //                             program without one for this host fails; record
-//                             with MSCORPUS_ATOMICS_RECORD=1 (atomics/<host>/*.tsv)
+//                             with MSCORPUS_ATOMICS_RECORD=1 (atomics/<host>/*.tsv);
+//                             a toolchain change moves the count: re-record, and
+//                             the tsv diff names the functions that moved
 //
 // Programs WITHOUT @maxrss are parity programs: run through C, Raiser and (unless
 // @skip-js) JS-on-node, outputs byte-compared. No golden files.
@@ -917,7 +919,7 @@ function finishCell(c: Cell): void {
 	// node lanes of an @maxrss program finish parity-style: no time.log, and
 	// the RSS bound is native-only.
 	if (isRssCell(c)) { finishRssCell(c); } else { finishParityCell(c); }
-	if (c.lane == "danger" && c.spec.atomicHosts.length > 0) { checkAtomics(c); }
+	if (c.pass && c.lane == "danger" && c.spec.atomicHosts.length > 0) { checkAtomics(c); }
 }
 
 // ---- atomic budget (danger lane) ----
