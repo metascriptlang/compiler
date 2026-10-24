@@ -22,6 +22,7 @@ void msFutureEdgeAwait(void* retFut, void* awaited) { (void)retFut; (void)awaite
 bool msPoolBusyDec(void) { return false; }
 void msPoolBusyInc(void) {}
 int32_t msPoolPendingPeek(void) { return 0; }
+int32_t msPoolThreadPeek(void) { return 0; }
 void msPoolPendingAdd(int32_t delta) { (void)delta; }
 
 #elif !defined(MSOS_BARE)
@@ -150,6 +151,10 @@ static inline bool msPoolHasUnclaimed(msThreadPool* pool) {
 enum { MS_THREAD_WORKER = 0, MS_THREAD_SPARE = 1, MS_THREAD_RETIRED = 2 };
 static uint8_t msPoolThreadState[MS_POOL_MAX_WORKERS];  /* under the pool lock */
 static _Atomic(int) msPoolThreadCount = 0;
+
+int32_t msPoolThreadPeek(void) {
+	return atomic_load_explicit(&msPoolThreadCount, memory_order_acquire);
+}
 static int msPoolSparesActive = 0;  /* under the pool lock */
 static int msPoolSparesWanted = 0;  /* under the pool lock */
 static msThreadPool* gPool = NULL;
@@ -628,6 +633,7 @@ static inline bool msPoolTaskIn(const struct msSpawnCtx* task, const void** set,
 }
 
 bool msPoolRunEdge(const void* awaited, bool follow, bool descend) {
+	if (msPoolPendingPeek() == 0) return false;
 	msThreadPool* pool = msPoolGet();
 	const void* set[MS_EDGE_WALK_MAX];
 	set[0] = awaited;

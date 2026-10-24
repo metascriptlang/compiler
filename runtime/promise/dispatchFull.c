@@ -1001,6 +1001,11 @@ static inline bool msIsWorkerWait(void) {
  * Cost: ~1 kqueue syscall per 5ms while waiting — negligible.
  * Production runtimes use similar bounds (Tokio ~50μs, Go ~10ms, Pony ~1ms). */
 #define MS_ACTIVE_WAIT_MS 5
+#define MS_LOOP_POLL_MS 500
+
+static inline int msMainWaitMs(void) {
+	return msPoolThreadPeek() > 0 ? MS_ACTIVE_WAIT_MS : MS_LOOP_POLL_MS;
+}
 
 static void msMarkReached(void* reached) { *(bool*)reached = true; }
 
@@ -1034,7 +1039,7 @@ void* msWaitFor(void* fp) {
 		queued = msFutureHasEdge(fut);
 		if (!worker) {
 			if (!spare) spare = msPoolCompensate(fp, "an await of a promise");
-			msRunOnce(MS_ACTIVE_WAIT_MS);
+			msRunOnce(msMainWaitMs());
 		} else if (!msWorkerLoopPump()) {
 			if (!spare) spare = msPoolCompensate(fp, "an await of a promise");
 			msWorkerWaitOnFuture(fp);
@@ -1060,7 +1065,7 @@ void msWaitForReady(void* fp) {
 		queued = msFutureHasEdge(fut);
 		if (!worker) {
 			if (!spare) spare = msPoolCompensate(fp, "an await of a promise");
-			msRunOnce(MS_ACTIVE_WAIT_MS);
+			msRunOnce(msMainWaitMs());
 		} else if (msWorkerLoopPump()) {
 			spins = 0;
 		} else if (helped && spins < 32) {
