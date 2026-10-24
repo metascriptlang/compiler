@@ -148,7 +148,13 @@ MS_TLS_EXTERN(int, msMySchedulerID);
  * semantics; hazard pins stand in for BEAM's thread-progress. */
 
 #define MS_PID_SLOT_BITS 26
-#define MS_PID_GEN_MASK ((1ull << 27) - 1)
+#ifndef MS_TEST_PID_GEN_BITS
+#define MS_TEST_PID_GEN_BITS 27
+#endif
+#ifndef MS_TEST_PID_SLOT_LIMIT
+#define MS_TEST_PID_SLOT_LIMIT (1 << MS_PID_SLOT_BITS)
+#endif
+#define MS_PID_GEN_MASK ((1ull << MS_TEST_PID_GEN_BITS) - 1)
 #define MS_PID_SLOT_MASK ((1u << MS_PID_SLOT_BITS) - 1)
 #define MS_PID_SEG_BITS 12
 #define MS_PID_SEG_SIZE (1 << MS_PID_SEG_BITS)
@@ -188,6 +194,11 @@ static inline int32_t msPidSlotClaim(void) {
                 memory_order_acq_rel, memory_order_acquire)) return idx;
     }
     int32_t idx = atomic_fetch_add(&msPidNextSlot, 1);
+    if (idx >= MS_TEST_PID_SLOT_LIMIT) {
+        fputs("fatal: pid table full\n", stderr);
+        if (msFatalTrap != NULL) msFatalTrap();
+        exit(1);
+    }
     int segI = idx >> MS_PID_SEG_BITS;
     if (atomic_load_explicit(&msPidSegs[segI], memory_order_acquire) == NULL) {
         pthread_mutex_lock(&msPidSegLock);
@@ -241,7 +252,6 @@ static inline int64_t msPidPublish(msActor* a) {
     int32_t idx = msPidSlotClaim();
     msPidSlot* s = msPidSlotAt(idx);
     uint64_t g = atomic_load_explicit(&s->gen, memory_order_relaxed) + 1;
-    if ((g & MS_PID_GEN_MASK) == 0) g++;  /* keep the packed pid nonzero (0 = null pid) */
     atomic_store_explicit(&s->gen, g, memory_order_relaxed);
     a->pid = (int64_t)(((g & MS_PID_GEN_MASK) << MS_PID_SLOT_BITS) | (uint64_t)(uint32_t)idx);
     a->pidSlot = idx;
@@ -253,7 +263,8 @@ static inline int64_t msPidPublish(msActor* a) {
 static inline void msPidRelease(msActor* a) {
     msPidSlot* s = msPidSlotAt(a->pidSlot);
     atomic_store_explicit(&s->ptr, NULL, memory_order_relaxed);
-    atomic_fetch_add_explicit(&s->gen, 1, memory_order_release);
+    uint64_t dead = atomic_fetch_add_explicit(&s->gen, 1, memory_order_release) + 1;
+    if (dead >= MS_PID_GEN_MASK) return;  /* the next generation would wrap onto a stale pid: retire the slot */
     uint64_t head = atomic_load_explicit(&msPidFreeHead, memory_order_relaxed);
     uint64_t newHead;
     do {
