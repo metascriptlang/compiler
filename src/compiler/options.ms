@@ -66,6 +66,7 @@ export interface CliOptions {
 	hcrHost: boolean;          // msc run --hcr: the std host starts the program, so it must import std/hcr
 	watch: boolean;
 	watchReplay: string;
+	eventsPath: string;        // msc run --hcr --events=<path>|-: JSON Lines of the watch session
 	emitSubdir: string;
 	appMode: string;           // --app=console|lib|staticlib: executable vs shared/static library
 	strictNullChecks: boolean; // --strict-nil: warn on unguarded class deref
@@ -165,6 +166,7 @@ export function newCliOptions(): CliOptions {
 		hcrHost: false,
 		watch: false,
 		watchReplay: "",
+		eventsPath: "",
 		emitSubdir: "",
 		appMode: "console",
 		strictNullChecks: false,
@@ -382,6 +384,8 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 		} else if (arg.startsWith("--watch-replay=")) {
 			opts.watch = true;
 			opts.watchReplay = arg.slice(15, arg.length);
+		} else if (arg.startsWith("--events=")) {
+			opts.eventsPath = arg.slice(9, arg.length);
 		} else if (arg.startsWith("--app=")) {
 			const appVal = arg.slice(6, arg.length);
 			if (appVal == "console" || appVal == "lib" || appVal == "staticlib") {
