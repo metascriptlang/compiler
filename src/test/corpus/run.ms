@@ -16,6 +16,11 @@
 //   // @serial             -> contention-sensitive (actor/spawn): its run cells
 //                             execute alone, after the parallel drain
 //   // @skip-js: why       -> no JS lane; the skip list is the JS backend worklist
+//   // @maxatomics(<host>) <n> -> danger cell: atomic instructions in the binary
+//                             (objdump) stay at or under <n> on that host
+//                             (`darwin-arm64`, `linux-x86_64`); a budgeted
+//                             program without one for this host fails; record
+//                             with MSCORPUS_ATOMICS_RECORD=1 (atomics/<host>/*.tsv)
 //
 // Programs WITHOUT @maxrss are parity programs: run through C, Raiser and (unless
 // @skip-js) JS-on-node, outputs byte-compared. No golden files.
@@ -298,6 +303,8 @@ interface Spec {
 	skipRaiser: boolean;
 	slackTypes: string[];
 	slackNs: int32[];
+	atomicHosts: string[];
+	atomicMax: int32[];
 }
 
 interface Cell {
@@ -483,6 +490,7 @@ function parseSpec(name: string, entry: string): Spec {
 		maxRssMb: -1.0, stdoutSubs: [], expectExit: 0,
 		xfailLanes: [], serial: false, skipJs: false, skipRaiser: false,
 		slackTypes: [], slackNs: [],
+		atomicHosts: [], atomicMax: [],
 	};
 	const src = readFileOr(entry, "");
 	const lines = src.split("\n");
@@ -507,6 +515,13 @@ function parseSpec(name: string, entry: string): Spec {
 			if (close > 17) {
 				spec.slackTypes.push(t.slice(17, close));
 				spec.slackNs.push(t.slice(close + 2, t.length).trim().parseInt() as int32);
+			}
+		}
+		if (t.indexOf("// @maxatomics(") == 0) {
+			const close = t.indexOf(")");
+			if (close > 15) {
+				spec.atomicHosts.push(t.slice(15, close));
+				spec.atomicMax.push(t.slice(close + 2, t.length).trim().parseInt() as int32);
 			}
 		}
 	}
@@ -901,8 +916,124 @@ function finishCell(c: Cell): void {
 	if (c.lane == "san") { finishSanCell(c); return; }
 	// node lanes of an @maxrss program finish parity-style: no time.log, and
 	// the RSS bound is native-only.
-	if (isRssCell(c)) { finishRssCell(c); return; }
-	finishParityCell(c);
+	if (isRssCell(c)) { finishRssCell(c); } else { finishParityCell(c); }
+	if (c.lane == "danger" && c.spec.atomicHosts.length > 0) { checkAtomics(c); }
+}
+
+// ---- atomic budget (danger lane) ----
+
+// What counts as an atomic instruction depends on the instruction set, so a budget is
+// per host. The tsv beside it names the functions of the recorded count, for the red
+// detail only: mangled names carry path hashes that differ between checkouts.
+const ATOMIC_HOST = IS_WIN ? "windows" : platform + "-" + runCapture("uname -m").output.trim();
+const ATOMICS_DIR = "src/test/corpus/atomics/";
+const ATOMICS_RECORD = envOr("MSCORPUS_ATOMICS_RECORD", "") == "1";
+const ARM64_ATOMIC_OPS: string[] = ["ldadd", "ldclr", "ldeor", "ldset", "ldsmax", "ldsmin", "ldumax", "ldumin", "swp", "cas", "ldxr", "ldaxr", "stxr", "stlxr", "ldxp", "ldaxp", "stxp", "stlxp", "ldar", "ldapr", "stlr"];
+
+function checkAtomics(c: Cell): void {
+	const counts = countAtomics(c.bin);
+	if (counts == null) {
+		c.pass = false;
+		c.detail = c.detail + " [atomics: objdump could not read " + c.bin + "]";
+		return;
+	}
+	let total = 0;
+	for (const n of counts.values()) { total += n; }
+	const budgetFile = ATOMICS_DIR + ATOMIC_HOST + "/" + c.spec.name + ".tsv";
+	if (ATOMICS_RECORD) {
+		ensureDir(ATOMICS_DIR + ATOMIC_HOST);
+		writeFile(budgetFile, atomicsTsv(counts));
+		c.detail = c.detail + ` [atomics recorded: // @maxatomics(${ATOMIC_HOST}) ${total}]`;
+		return;
+	}
+	const at = c.spec.atomicHosts.indexOf(ATOMIC_HOST);
+	if (at < 0) {
+		c.pass = false;
+		c.detail = c.detail + ` [atomics=${total}, no @maxatomics(${ATOMIC_HOST}); record with MSCORPUS_ATOMICS_RECORD=1]`;
+		return;
+	}
+	const max = c.spec.atomicMax[at];
+	if (total <= max) {
+		c.detail = c.detail + ` atomics=${total}`;
+		return;
+	}
+	c.pass = false;
+	c.detail = c.detail + ` [atomics ${total}>${max}: ${atomicsOverBudget(counts, readFileOr(budgetFile, ""))}]`;
+}
+
+function countAtomics(bin: string): Map<string, int32> | null {
+	const r = execFileCapture("objdump", ["-d", "--no-show-raw-insn", bin]);
+	if (!r.ok) { return null; }
+	const counts = new Map<string, int32>();
+	let fn = "";
+	for (const line of r.value.split("\n")) {
+		if (line.endsWith(">:")) {
+			fn = stableFunctionName(line.slice(line.indexOf("<") + 1, line.length - 2));
+			continue;
+		}
+		const colon = line.indexOf(":");
+		if (colon < 0 || fn == "") { continue; }
+		if (isAtomicInstruction(line.slice(colon + 1, line.length).trim())) {
+			counts.set(fn, (counts.get(fn) ?? 0) + 1);
+		}
+	}
+	return counts;
+}
+
+function isAtomicInstruction(text: string): boolean {
+	let end = 0;
+	while (end < text.length && text.charAt(end) != " " && text.charAt(end) != "\t") { end += 1; }
+	const op = text.slice(0, end);
+	if (op == "lock" || op == "mfence") { return true; }
+	if (op.startsWith("xchg")) { return text.contains("("); }
+	for (const prefix of ARM64_ATOMIC_OPS) {
+		if (op.startsWith(prefix)) { return true; }
+	}
+	return false;
+}
+
+function stableFunctionName(raw: string): string {
+	const llvm = raw.indexOf(".llvm.");
+	const name = llvm >= 0 ? raw.slice(0, llvm) : raw;
+	const parts: string[] = [];
+	for (const part of name.split("_")) { parts.push(isPathHash(part) ? "H" : part); }
+	return parts.join("_");
+}
+
+function isPathHash(part: string): boolean {
+	if (part.length < 5 || part.length > 8) { return false; }
+	let digits = 0;
+	for (let i = 0; i < part.length; i += 1) {
+		const ch = part.charAt(i);
+		if (ch >= "0" && ch <= "9") { digits += 1; } else if (ch < "a" || ch > "z") { return false; }
+	}
+	return digits > 0;
+}
+
+function atomicsTsv(counts: Map<string, int32>): string {
+	const lines: string[] = [];
+	for (const [fn, n] of counts) { lines.push(`${n}\t${fn}`); }
+	lines.sort();
+	return lines.join("\n") + "\n";
+}
+
+interface AtomicGrowth { fn: string; by: int32; }
+
+function atomicsOverBudget(counts: Map<string, int32>, recorded: string): string {
+	const before = new Map<string, int32>();
+	for (const line of recorded.split("\n")) {
+		const tab = line.indexOf("\t");
+		if (tab > 0) { before.set(line.slice(tab + 1, line.length), line.slice(0, tab).parseInt() as int32); }
+	}
+	const grown: AtomicGrowth[] = [];
+	for (const [fn, n] of counts) {
+		const was = before.get(fn) ?? 0;
+		if (n > was) { grown.push({ fn, by: n - was }); }
+	}
+	grown.sort((a: AtomicGrowth, b: AtomicGrowth): number => b.by - a.by);
+	if (grown.length == 0) { return "no function grew against " + (recorded == "" ? "a missing tsv" : "the tsv"); }
+	const named = grown.slice(0, 8).map((g: AtomicGrowth): string => `${g.fn} +${g.by}`);
+	return named.join(", ") + (grown.length > 8 ? `, and ${grown.length - 8} more` : "");
 }
 
 // ---- reporting ----
@@ -1061,7 +1192,7 @@ function buildWorker(jobs: Readonly<BuildJob[]>, first: int32, stride: int32): n
 }
 
 function workerCopy(j: Readonly<BuildJob>): BuildJob {
-	const spec: Spec = { ...j.spec, stdoutSubs: [...j.spec.stdoutSubs], xfailLanes: [...j.spec.xfailLanes], slackTypes: [...j.spec.slackTypes], slackNs: [...j.spec.slackNs] };
+	const spec: Spec = { ...j.spec, stdoutSubs: [...j.spec.stdoutSubs], xfailLanes: [...j.spec.xfailLanes], slackTypes: [...j.spec.slackTypes], slackNs: [...j.spec.slackNs], atomicHosts: [...j.spec.atomicHosts], atomicMax: [...j.spec.atomicMax] };
 	return { spec, lane: j.lane, cmd: j.cmd, cell: { ...j.cell, spec } };
 }
 
