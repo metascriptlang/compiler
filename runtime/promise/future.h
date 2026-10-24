@@ -88,6 +88,7 @@ void msActorJobTick(void* job);
 void msActorJobCancelMark(void* job);
 void msActorJobAbandon(void* job);
 void msActorClearTimerJob(int64_t id);
+void msActorLendNote(void* fut);
 
 static inline msClosure msActorStampIf(msClosure cb, void (*drop)(void*), void* chain) {
 	return msCurrentActor != NULL ? msActorStamp(cb, drop, chain) : cb;

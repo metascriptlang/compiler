@@ -342,12 +342,18 @@ static inline void msSpawnHeldKeep(void* hp, void* fut) {
 static inline void* msSpawnHeldSubmit(void* hp, msClosure fn) {
 	void* fut = msSpawnCancellable(fn, &((msSpawnHeld*)hp)->cancelled);
 	msSpawnHeldKeep(hp, fut);
+#if MS_ACTOR_JOBS
+	if (msCurrentActor != NULL) msActorLendNote(fut);
+#endif
 	return fut;
 }
 
 static inline void* msSpawnIntoHeldSubmit(void* fut, msClosure fn, void* hp, uint32_t copySize, uint32_t valueOffset) {
 	msSpawnIntoCancellable(fut, fn, copySize, valueOffset, &((msSpawnHeld*)hp)->cancelled);
 	msSpawnHeldKeep(hp, fut);
+#if MS_ACTOR_JOBS
+	if (msCurrentActor != NULL) msActorLendNote(fut);
+#endif
 	return fut;
 }
 

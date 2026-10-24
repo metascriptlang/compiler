@@ -1255,6 +1255,10 @@ void msClearInterval(double id) { msClearTimeout(id); }
 
 static void msAsyncStep(msAsyncCbEnv* e);
 
+static MS_THREAD_LOCAL msAsyncCbEnv* gAsyncChain = NULL;
+
+void* msAsyncCurrentChain(void) { return gAsyncChain; }
+
 static void msAsyncCbEnvDrop(void* raw) {
 	msAsyncCbEnv* e = (msAsyncCbEnv*)raw;
 	if (e->stepper.env != NULL) msDecref(e->stepper.env);
@@ -1271,6 +1275,8 @@ void msAsyncCb(void* raw) {
 
 static void msAsyncStep(msAsyncCbEnv* e) {
 	msFutureEdgeAwait(e->retFut, NULL);
+	msAsyncCbEnv* outerChain = gAsyncChain;
+	gAsyncChain = e;
 
 	/* Call stepper — returns next msFutureBase* to wait on, or NULL when done.
 	 * Stepper returns msFutureBase* (any typed future cast to base).
@@ -1296,6 +1302,7 @@ static void msAsyncStep(msAsyncCbEnv* e) {
 			? ((msFutureBase*(*)(void*))e->stepper.fn)(e->stepper.env)
 			: ((msFutureBase*(*)(void))e->stepper.fn)();
 	}
+	gAsyncChain = outerChain;
 
 	if (next == NULL) {
 		/* Stepper completed — drop the env reference taken in msAsyncStart.

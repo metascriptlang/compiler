@@ -134,4 +134,10 @@ void msActorClearTimerJob(int64_t id) {
     if (a != NULL && a->jobs != NULL) msActorJobsCancelTimer(a->jobs, id);
 }
 
+extern void* msAsyncCurrentChain(void);  /* dispatchFull.c */
+
+void msActorLendNote(void* fut) {
+    msActorLendNoteIn(msCurrentActor, fut, msAsyncCurrentChain());
+}
+
 #endif /* !MSOS_BARE && !MSOS_WASM && !MSOS_EMCC */

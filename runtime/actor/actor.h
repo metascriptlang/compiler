@@ -730,11 +730,24 @@ typedef struct msActorJob {
     struct msActorJob* livePrev;
 } msActorJob;
 
+typedef struct msActorLend {
+    void* fut;
+    void* chain;
+    bool watched;
+    bool joined;  /* the lender chain ran a step after the child settled */
+} msActorLend;
+
 /* Everything but `queue` is touched only under processing. */
 typedef struct msActorJobs {
     msMpscQueue queue;
     msActorJob* live;
     msActorJob* running;
+    msActorJob** held;
+    int32_t heldLen;
+    int32_t heldCap;
+    msActorLend* lent;
+    int32_t lentLen;
+    int32_t lentCap;
 } msActorJobs;
 
 static inline void msActorJobUnref(msActorJob* r) {
@@ -813,16 +826,90 @@ static inline void msActorJobPost(msActorJob* r) {
     msActorPostJob(r->pid, r);
 }
 
+static inline void msActorLendWakeCb(void* pid) {
+    msActorPostJob((int64_t)(intptr_t)pid, NULL);
+}
+
+static inline bool msActorLendBusy(msActorJobs* j) {
+    int32_t k = 0;
+    for (int32_t i = 0; i < j->lentLen; i++) {
+        msActorLend l = j->lent[i];
+        if ((l.chain == NULL || l.joined)
+                && atomic_load_explicit(&((msFutureBase*)l.fut)->finished, memory_order_acquire)) msDecref(l.fut);
+        else j->lent[k++] = l;
+    }
+    j->lentLen = k;
+    return k > 0;
+}
+
+static inline void msActorLendJoin(msActorJobs* j, void* chain) {
+    for (int32_t i = 0; i < j->lentLen; i++) {
+        if (j->lent[i].chain == chain
+                && atomic_load_explicit(&((msFutureBase*)j->lent[i].fut)->finished, memory_order_acquire)) {
+            j->lent[i].joined = true;
+        }
+    }
+}
+
+static inline bool msActorLendAllows(msActorJobs* j, msActorJob* r) {
+    if (r->chain == NULL) return false;
+    for (int32_t i = 0; i < j->lentLen; i++) {
+        if (j->lent[i].chain == r->chain) return true;
+    }
+    return false;
+}
+
+static inline void msActorJobHold(msActor* a, msActorJobs* j, msActorJob* r) {
+    if (j->heldLen == j->heldCap) {
+        int32_t cap = j->heldCap > 0 ? j->heldCap * 2 : 8;
+        j->held = (msActorJob**)msRealloc(j->held, (size_t)j->heldCap * sizeof(msActorJob*), (size_t)cap * sizeof(msActorJob*));
+        j->heldCap = cap;
+    }
+    j->held[j->heldLen++] = r;
+    for (int32_t i = 0; i < j->lentLen; i++) {
+        if (j->lent[i].watched) continue;
+        j->lent[i].watched = true;
+        msFutureAddCallback(j->lent[i].fut,
+            (msClosure){ .fn = (msClosureFn)msActorLendWakeCb, .env = (void*)(intptr_t)a->pid });
+    }
+}
+
+static inline void msActorLendNoteIn(msActor* a, void* fut, void* chain) {
+    msActorJobs* j = msActorJobsEnsure(a);
+    if (j->lentLen == j->lentCap) {
+        int32_t cap = j->lentCap > 0 ? j->lentCap * 2 : 4;
+        j->lent = (msActorLend*)msRealloc(j->lent, (size_t)j->lentCap * sizeof(msActorLend), (size_t)cap * sizeof(msActorLend));
+        j->lentCap = cap;
+    }
+    msIncRef(fut);
+    j->lent[j->lentLen++] = (msActorLend){ .fut = fut, .chain = chain, .watched = false, .joined = false };
+}
+
 static inline int msActorRunJobs(msActor* a, msActorJobs* j, int budget) {
-    (void)a;
     int n = 0;
     while (n < budget) {
-        msMessage* m = msMpscPop(&j->queue);
-        if (m == NULL) break;
-        n++;
-        msActorJob* r = (msActorJob*)msMsgGetPtr(m, 0);
-        if (r == NULL) continue;
+        bool busy = j->lentLen > 0 && msActorLendBusy(j);
+        msActorJob* r;
+        if (!busy && j->heldLen > 0) {
+            r = j->held[0];
+            j->heldLen--;
+            memmove(j->held, j->held + 1, (size_t)j->heldLen * sizeof(msActorJob*));
+            n++;
+        } else {
+            msMessage* m = msMpscPop(&j->queue);
+            if (m == NULL) break;
+            n++;
+            r = (msActorJob*)msMsgGetPtr(m, 0);
+            if (r == NULL) continue;
+            if (busy && !msActorLendAllows(j, r)) {
+                msActorJobHold(a, j, r);
+                continue;
+            }
+        }
+        void* chain = r->chain;
+        if (chain != NULL && j->lentLen > 0) msActorLendJoin(j, chain);
         msActorJobRun(j, r);
+        if (chain != NULL && j->lentLen > 0) msActorLendJoin(j, chain);
         msActorJobUnref(r);
     }
     return n;
@@ -834,6 +921,8 @@ static inline void msActorJobsDrain(msActorJobs* j) {
         msActorJob* r = (msActorJob*)msMsgGetPtr(m, 0);
         if (r != NULL) msActorJobUnref(r);
     }
+    for (int32_t i = 0; i < j->heldLen; i++) msActorJobUnref(j->held[i]);
+    j->heldLen = 0;
 }
 
 /* At shell free: no pin is left, so no poster can still push. */
@@ -842,6 +931,8 @@ static inline void msActorJobsFree(msActor* a) {
     if (j == NULL) return;
     msActorJobsDrain(j);
     msMpscDestroy(&j->queue);
+    free(j->held);
+    free(j->lent);
     free(j);
     a->jobs = NULL;
 }
@@ -855,7 +946,8 @@ static inline void msActorVisitEnd(msActor* a, msActor* prevActor) {
     msActorJobs* j = a->jobs;
     if (j != NULL) {
         if (!msMpscMarkEmpty(&j->queue)) work = true;
-        jobsIdle = !work;
+        else if (j->heldLen > 0) work = !(j->lentLen > 0 && msActorLendBusy(j));
+        jobsIdle = !work && j->heldLen == 0;
     }
     bool frozen = (atomic_load_explicit(&a->syncFlags, memory_order_seq_cst) & MS_ACTOR_SUSPENDED) != 0;
     if (!frozen) {
