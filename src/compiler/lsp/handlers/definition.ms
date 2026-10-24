@@ -14,10 +14,11 @@ import {
 import { sgGetPrefix, sgFindImportSource, sgFindExportedDecl, sgQueryAtPosition } from "../../../checker/suggest";
 import { SymbolFlag, hasFlag } from "../../../checker/symbol";
 import { SourceLocation, makeLoc, SymbolKind } from "../../../ast/node";
-import { lspExtractPosition, dbGetSource, lspEnsureFileLoaded, lspCharacter } from "./shared";
+import { lspExtractPosition, dbGetSource, lspEnsureFileLoaded } from "./shared";
+import { lspCharacter, lspCharacterIn } from "../position";
 import { dbResolveImport } from "../../transam/index";
 import { isAlphanumeric } from "../../../lexer/chars";
-import { lineOffset } from "../../fmt/edit";
+import { LineIndex, lineStart, lineOf } from "../../../utils/sourceLines";
 
 
 // Byte offset of the first whole-word `word` that lies inside [from, to), or -1.
@@ -35,54 +36,50 @@ function findWord(src: string, word: string, from: int32, to: int32): int32 {
 	return -1;
 }
 
-function lineEnd(src: string, lineStart: int32): int32 {
-	const newline = src.byteIndexOf("\n", lineStart);
+function lineEnd(src: string, start: int32): int32 {
+	const newline = src.byteIndexOf("\n", start);
 	return newline < 0 ? src.byteLength : newline;
 }
 
 // 0-based line and LSP character of a byte offset.
 function locationAt(src: string, offset: int32): SourceLocation {
-	let line: int32 = 0;
-	let lineStart: int32 = 0;
-	for (let i: int32 = 0; i < offset; i++) {
-		if (src.byteAt(i) == "\n".code) {
-			line++;
-			lineStart = i + 1;
-		}
-	}
-	return makeLoc(line, lspCharacter(src, line + 1, offset - lineStart + 1));
+	const lines = LineIndex.build(src);
+	const line = lines.lineOf(offset);
+	return makeLoc(line - 1, lspCharacterIn(lines, src, line, offset - lines.lineStart(line) + 1));
 }
 
 // Find the 0-based column of `name` as a whole word on 0-based `targetLine`.
 function lspFindNameCol(src: string, targetLine: int32, name: string): int32 {
 	if (targetLine < 0) return -1;
-	const lineStart = lineOffset(src, targetLine + 1);
-	const at = findWord(src, name, lineStart, lineEnd(src, lineStart));
-	return at < 0 ? -1 : lspCharacter(src, targetLine + 1, at - lineStart + 1);
+	const lines = LineIndex.build(src);
+	const start = lines.lineStart(targetLine + 1);
+	const at = findWord(src, name, start, lineEnd(src, start));
+	return at < 0 ? -1 : lspCharacterIn(lines, src, targetLine + 1, at - start + 1);
 }
 
 // Find a field declaration (`name:` or `name?`) in the lines after `startLine`, stopping at the
 // first line that closes a brace. Returns 0-based {line, col}, or {-1, -1}.
 function lspFindFieldLine(src: string, startLine: int32, fieldName: string): SourceLocation {
 	let line = startLine + 1;
-	let lineStart = lineOffset(src, line + 1);
-	while (lineStart < src.byteLength) {
-		const end = lineEnd(src, lineStart);
-		let at = findWord(src, fieldName, lineStart, end);
+	const lines = LineIndex.build(src);
+	let start = lines.lineStart(line + 1);
+	while (start < src.byteLength) {
+		const end = lineEnd(src, start);
+		let at = findWord(src, fieldName, start, end);
 		while (at >= 0) {
 			let next = at + fieldName.byteLength;
 			while (next < src.byteLength && (src.byteAt(next) == " ".code || src.byteAt(next) == "\t".code)) {
 				next++;
 			}
 			if (next < src.byteLength && (src.byteAt(next) == ":".code || src.byteAt(next) == "?".code)) {
-				return makeLoc(line, lspCharacter(src, line + 1, at - lineStart + 1));
+				return makeLoc(line, lspCharacterIn(lines, src, line + 1, at - start + 1));
 			}
 			at = findWord(src, fieldName, at + 1, end);
 		}
-		const brace = src.byteIndexOf("}", lineStart);
+		const brace = src.byteIndexOf("}", start);
 		if (brace >= 0 && brace < end) return makeLoc(-1, -1);
 		line++;
-		lineStart = end + 1;
+		start = end + 1;
 	}
 	return makeLoc(-1, -1);
 }

@@ -30,8 +30,10 @@ import { CheckerContext } from "../../../checker/context";
 import { lookupSymbol } from "../../../checker/symbol";
 import { Symbol, SymbolKind, CallExprData, TypeKind } from "../../../ast/node";
 import {
-	lspExtractPosition, lspDocumentUri, dbGetSource, lspEnsureFileLoaded, lspCharacter,
+	lspExtractPosition, lspDocumentUri, dbGetSource, lspEnsureFileLoaded,
 } from "./shared";
+import { LineIndex } from "../../../utils/sourceLines";
+import { lspCharacterIn } from "../position";
 
 // ===== Hover =====
 
@@ -98,8 +100,9 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	// Hover range: highlight the hovered token (0-based line/col for LSP)
 	const fileSource = dbGetSource(db, path);
 	const hoverLine = pos.line - 1;
-	const hoverCol = lspCharacter(fileSource, pos.line, pos.col1);
-	const hoverEndCol = lspCharacter(fileSource, pos.line, pos.col1 + suggest.name.byteLength);
+	const lines = LineIndex.build(fileSource);
+	const hoverCol = lspCharacterIn(lines, fileSource, pos.line, pos.col1);
+	const hoverEndCol = lspCharacterIn(lines, fileSource, pos.line, pos.col1 + suggest.name.byteLength);
 	return lspResponse(id, lspFmtHoverResult(hoverText, hoverDoc, hoverLine, hoverCol, hoverEndCol));
 }
 
@@ -236,6 +239,7 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 	if (hintsList.length == 0) return lspResponse(id, "[]");
 
 	const hints: string[] = [];
+	const lines = LineIndex.build(source);
 	for (const h of hintsList) {
 		// LSP InlayHintKind: 1 = Type, 2 = Parameter
 		// Exception hints map to Type kind (1) with paddingLeft
@@ -251,7 +255,7 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 		// following argument expression.
 		const padLeft = h.hintKind == SgInlayHintKind.Exception;
 		const padRight = h.hintKind == SgInlayHintKind.Parameter;
-		hints.push(lspFmtInlayHint(h.line - 1, lspCharacter(source, h.line, h.col), h.label, lspKind, padLeft, padRight));
+		hints.push(lspFmtInlayHint(h.line - 1, lspCharacterIn(lines, source, h.line, h.col), h.label, lspKind, padLeft, padRight));
 	}
 	return lspResponse(id, "[" + hints.join(",") + "]");
 }
@@ -269,13 +273,14 @@ function lspRefKey(ref: SgSymbolRef): int64 {
 
 function pushUniqueLocations(items: string[], uri: string, source: string, refs: SgSymbolRef[]): void {
 	const seen: HashSet<int64> = new HashSet<int64>();
+	const lines = LineIndex.build(source);
 	for (const ref of refs) {
 		const key = lspRefKey(ref);
 		if (seen.has(key)) continue;
 		seen.add(key);
 		items.push(lspFmtLocation(
-			uri, ref.line - 1, lspCharacter(source, ref.line, ref.col),
-			ref.line - 1, lspCharacter(source, ref.line, lspRefEnd(ref)),
+			uri, ref.line - 1, lspCharacterIn(lines, source, ref.line, ref.col),
+			ref.line - 1, lspCharacterIn(lines, source, ref.line, lspRefEnd(ref)),
 		));
 	}
 }
@@ -331,10 +336,11 @@ export function handleDocumentHighlight(id: string, params: string, db: TransAmD
 	const source = dbGetSource(db, path);
 	const refs = sgQueryBySym(ctx, suggest.sym);
 	const highlights: string[] = [];
+	const lines = LineIndex.build(source);
 	for (const ref of refs) {
 		highlights.push(lspFmtDocumentHighlight(
-			ref.line - 1, lspCharacter(source, ref.line, ref.col),
-			lspCharacter(source, ref.line, lspRefEnd(ref)), 1,
+			ref.line - 1, lspCharacterIn(lines, source, ref.line, ref.col),
+			lspCharacterIn(lines, source, ref.line, lspRefEnd(ref)), 1,
 		));
 	}
 	return lspResponse(id, "[" + highlights.join(",") + "]");
@@ -345,10 +351,11 @@ export function handleDocumentHighlight(id: string, params: string, db: TransAmD
 function buildTextEdits(refs: SgSymbolRef[], newName: string, source: string): string {
 	if (refs.length == 0) return "";
 	const edits: string[] = [];
+	const lines = LineIndex.build(source);
 	for (const ref of refs) {
 		edits.push(lspFmtTextEdit(
-			ref.line - 1, lspCharacter(source, ref.line, ref.col),
-			lspCharacter(source, ref.line, lspRefEnd(ref)), newName,
+			ref.line - 1, lspCharacterIn(lines, source, ref.line, ref.col),
+			lspCharacterIn(lines, source, ref.line, lspRefEnd(ref)), newName,
 		));
 	}
 	return "[" + edits.join(",") + "]";

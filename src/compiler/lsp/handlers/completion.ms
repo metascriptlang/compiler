@@ -18,7 +18,6 @@ import {
 	sgFindImportBySource, sgExtractImportPath, sgExtractImportSource, sgExtractExistingImportNames,
 	sgComputeImportEdit, sgQueryAtPosition, sgQueryContextualTypeAt, sgObjectFieldPathAST, sgCompleteObjectFields,
 	findEnclosingObjectLiteral, findNodeAtPosition,
-	sgGetLineOffset,
 	SgSuggest, SgCompletionKind
 } from "../../../checker/suggest";
 import { CheckerContext, findModuleExports } from "../../../checker/context";
@@ -27,6 +26,7 @@ import { SymbolFlag, hasFlag } from "../../../checker/symbol";
 import { createTypeRef } from "../../../checker/types";
 import { Node, MemberExprData, ObjectLiteralData, VariableDeclData, NodeKind, Type, Symbol, SymbolKind } from "../../../ast/node";
 import { forEachChild } from "../../../ast/visitor";
+import { lineOffset } from "../../../utils/sourceLines";
 import { isMsModuleExtension, stripMsModuleExtension } from "../../../module/resolver";
 import {
 	dbGetSource, lspExtractPosition, lspEnsureFileLoaded,
@@ -392,8 +392,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 
 	// Prebuilt cache hit: return pre-computed items instantly.
 	// Skip for member access (char before cursor is '.') and import triggers.
-	const lineOffset = sgGetLineOffset(source, pos.line);
-	const charBefore = pos.col > 0 ? source.byteAt(lineOffset + pos.col - 1) : 0;
+	const charBefore = pos.col > 0 ? source.byteAt(lineOffset(source, pos.line) + pos.col - 1) : 0;
 	const prebuiltItems = _prebuiltCache.has(pos.uri) ? _prebuiltCache.get(pos.uri) : null;
 	if (prefix.length == 0 && charBefore != ".".code && prebuiltItems != null && prebuiltItems.length > 0) {
 		const limited = prebuiltItems.length > 100 ? prebuiltItems.slice(0, 100) : prebuiltItems;
@@ -433,12 +432,12 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	let staticOwner: Symbol | null = null;
 	if (kind == SgCompletionKind.MemberAccess) {
 		// Find the dot position by scanning source backward from cursor
-		const lineOffset = sgGetLineOffset(source, pos.line);
+		const lineStart = lineOffset(source, pos.line);
 		let dotCol = pos.col; // 0-based col of cursor
-		while (dotCol > 0 && source.byteAt(lineOffset + dotCol - 1) != ".".code) {
+		while (dotCol > 0 && source.byteAt(lineStart + dotCol - 1) != ".".code) {
 			dotCol = dotCol - 1;
 		}
-		// dotCol: scan stopped here. byteAt(lineOffset + dotCol - 1) === "."
+		// dotCol: scan stopped here. byteAt(lineStart + dotCol - 1) === "."
 		// So dot is at 0-based col (dotCol - 1), char before dot at 0-based col (dotCol - 2)
 		// sgQueryAtPosition uses 1-based col -> (dotCol - 2) + 1 = dotCol - 1
 		if (dotCol > 1) {

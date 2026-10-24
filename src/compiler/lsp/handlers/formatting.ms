@@ -8,11 +8,13 @@ import { lspJsonString, lspGetObjectField, lspGetField, lspGetNumberField, lspGe
 import { parseJson } from "std/serialize/json/parser";
 import { lspFmtRange, lspFmtTextEdit } from "../format";
 import { formatNode } from "../../fmt/printer";
-import { FmtPos, formatStatementEdit, innermostStatement, lineOffset, applyEdit } from "../../fmt/edit";
+import { FmtPos, formatStatementEdit, innermostStatement, applyEdit } from "../../fmt/edit";
+import { LineIndex, lineStart } from "../../../utils/sourceLines";
+import { lspByteColumn, lspCharacterIn } from "../position";
 import { checkLossless } from "../../fmt/lossless";
 import { registerCoreParsers } from "../../../parser/statements/core";
 import { parseSource } from "../../../parser/statements/validation";
-import { dbGetSource, lspByteColumn, lspCharacter, lspDocumentUri } from "./shared";
+import { dbGetSource, lspDocumentUri } from "./shared";
 import { getFormatOptions, splitLines, detectLineIndent } from "./diagnostics";
 
 
@@ -117,12 +119,9 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 
 	if (formatted.byteLength == source.byteLength && formatted == source) return lspResponse(id, "[]");
 
-	let lineCount: int32 = 0;
-	let lastNl: int32 = -1;
-	for (let i: int32 = 0; i < source.byteLength; i++) {
-		if (source.byteAt(i) == "\n".code) { lineCount++; lastNl = i; }
-	}
-	const lastLineLen = source.byteSlice(lastNl + 1, source.byteLength).length;
+	const lines = LineIndex.build(source);
+	const lineCount = lines.starts.length - 1;
+	const lastLineLen = source.byteSlice(lines.lineStart(lineCount + 1), source.byteLength).length;
 	const range = lspFmtRange(0, 0, lineCount, lastLineLen);
 	const t5 = performance.now();
 	const edit = "{\"range\":" + range + ",\"newText\":" + lspJsonString(formatted) + "}";
@@ -166,12 +165,13 @@ export function handleRangeFormatting(id: string, params: string, db: TransAmDb)
 	const e = edit.value;
 	const kept = checkLossless(source, applyEdit(source, e));
 	if (!kept.ok) return lspErrorResponse(id, -32603, "fmt refused: " + kept.error);
-	const startOffset = lineOffset(source, e.start.line) + e.start.column - 1;
-	const endOffset = lineOffset(source, e.end.line) + e.end.column - 1;
+	const lines = LineIndex.build(source);
+	const startOffset = lines.lineStart(e.start.line) + e.start.column - 1;
+	const endOffset = lines.lineStart(e.end.line) + e.end.column - 1;
 	if (source.byteSlice(startOffset, endOffset) == e.newText) return lspResponse(id, "[]");
 
-	const startCharacter = lspCharacter(source, e.start.line, e.start.column);
-	const endCharacter = lspCharacter(source, e.end.line, e.end.column);
+	const startCharacter = lspCharacterIn(lines, source, e.start.line, e.start.column);
+	const endCharacter = lspCharacterIn(lines, source, e.end.line, e.end.column);
 	const lspRange = lspFmtRange(e.start.line - 1, startCharacter, e.end.line - 1, endCharacter);
 	return lspResponse(id, "[{\"range\":" + lspRange + ",\"newText\":" + lspJsonString(e.newText) + "}]");
 }

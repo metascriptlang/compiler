@@ -4,21 +4,18 @@ import { TransAmDb, dbParse, dbTypeCheck, createTransAmDb, dbSetFileText } from 
 import { lspJsonNumber, lspGetField, lspGetObjectField, lspUriToPath, lspResponse } from "../protocol";
 import { SgSemanticToken, sgCollectSemanticTokens, sgSortTokens } from "../../../checker/suggest";
 import { dbGetSource, lspDocumentUri } from "./shared";
+import { LineIndex, lineStart } from "../../../utils/sourceLines";
 
 function encodeSemanticTokenDeltas(source: string, tokens: SgSemanticToken[]): string {
 	sgSortTokens(tokens);
 	let prevLine = 0;
 	let prevCol = 0;
-	let lineStart = 0;
-	let lineNumber = 1;
+	const lines = LineIndex.build(source);
 	const fields: string[] = [];
 	for (const t of tokens) {
-		while (lineNumber < t.line && lineStart < source.byteLength) {
-			if (source.byteAt(lineStart) == "\n".code) lineNumber = lineNumber + 1;
-			lineStart = lineStart + 1;
-		}
 		const line = t.line - 1;
-		const col = source.byteSlice(lineStart, lineStart + t.col - 1).length;
+		const start = lines.lineStart(t.line);
+		const col = source.byteSlice(start, start + t.col - 1).length;
 		const deltaLine = line - prevLine;
 		const deltaStart = deltaLine == 0 ? col - prevCol : col;
 		fields.push(lspJsonNumber(deltaLine));

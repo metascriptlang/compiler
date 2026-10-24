@@ -1,4 +1,4 @@
-import { lspByteColumn, lspCharacter } from "./shared";
+import { lspByteColumn, lspCharacter } from "../position";
 
 // row: [line, character, column, 1 when column maps back to character]
 // returns the index of the first row that disagrees, or -1
@@ -59,4 +59,17 @@ test "empty source" {
 test "line beyond last line" {
 	assert firstBadRow("ab\ncd", [[5, 0, 1, 0], [5, 3, 1, 0]]) == -1;
 	assert lspCharacter("ab\ncd", 5, 4) == 0;
+}
+
+test "one line with a two, three and four byte character" {
+	assert firstBadRow("a\u{E9}\u{65E5}\u{1F600}z", [
+		[1, 0, 1, 1], [1, 1, 2, 1], [1, 2, 4, 1], [1, 3, 7, 1], [1, 4, 7, 0], [1, 5, 11, 1], [1, 6, 12, 1],
+	]) == -1;
+}
+
+test "last line without a trailing newline" {
+	assert firstBadRow("ab\nc\u{1F600}\u{E9}", [
+		[1, 2, 3, 1],
+		[2, 0, 1, 1], [2, 1, 2, 1], [2, 2, 2, 0], [2, 3, 6, 1], [2, 4, 8, 1], [2, 9, 8, 0],
+	]) == -1;
 }

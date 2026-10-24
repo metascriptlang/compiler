@@ -9,7 +9,9 @@ import { writeStderr } from "std/io";
 import {
 	lspGetField, lspGetNumberField, lspGetObjectField, lspUriToPath,
 } from "../protocol";
-import { lineOffset } from "../../fmt/edit";
+import { lspByteColumn } from "../position";
+
+export { lspCharacter } from "../position";
 
 
 // ===== Completion Cache =====
@@ -72,28 +74,6 @@ export interface LspCursorParams {
 	line: int32;   // 1-based (parser convention)
 	col: int32;    // 0-based (for text offset scanning)
 	col1: int32;   // 1-based (for AST node position matching)
-}
-
-// LSP characters count UTF-16 code units; checker columns count bytes from 1.
-function lspLineText(source: string, line: int32): string {
-	const text = source.byteSlice(lineOffset(source, line), lineOffset(source, line + 1));
-	const terminator = text.endsWith("\r\n") ? 2 : text.endsWith("\n") ? 1 : 0;
-	return text.byteSlice(0, text.byteLength - terminator);
-}
-
-export function lspByteColumn(source: string, line: int32, character: int32): int32 {
-	const text = lspLineText(source, line);
-	const unit = character < text.length ? character : text.length;
-	const previous = text.charCodeAt(unit - 1);
-	const current = text.charCodeAt(unit);
-	const inside = previous >= 0xD800 && previous <= 0xDBFF && current >= 0xDC00 && current <= 0xDFFF;
-	return text.slice(0, inside ? unit - 1 : unit).byteLength + 1;
-}
-
-export function lspCharacter(source: string, line: int32, column: int32): int32 {
-	const text = lspLineText(source, line);
-	const end = column > 0 ? column - 1 : 0;
-	return text.byteSlice(0, end < text.byteLength ? end : text.byteLength).length;
 }
 
 export function lspDocumentUri(params: string): string {
