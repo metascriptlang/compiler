@@ -41,6 +41,14 @@ both arms: that is the noise check, and every row of it should carry no mark.
   `phase.A`, and the `phase.*` rows over the `msc total`. A low share means the table leaves a flow
   out and its delta cannot be located in it.
 
+**Self check on the merged instruments, 2026-10-25** (`msc-cand` of `wt/perf-flows` built
+`--gc=drc --danger --lto=off`, `MSPERF_SELF=1`, `711`, 3 runs, load 63-73): no row marked; coverage
+97.0% of `phase.A` in leaf flows and 100.0% of the `msc total` in `phase.*` rows. `phase.setup`
+(session start, cache init, parser registration) is 4.1G of 30.5G instructions here against 1.1G in
+a warm run from the worktree, so it is a flow worth its own look. A compiler built without
+`--gc=drc` is an orc compiler and crashes in parallel emit (compiler inbox, `sharedTypeQueries`
+card); build both arms with `--gc=drc`.
+
 **Measured noise, 2026-10-25** (macOS arm64, installed `msc` v0.3.4 as both arms, `711` built with
 `--emit=c`, 3 runs, load average 100-140 during the run): process instructions 25.49G against 25.64G,
 median difference +0.6% at noise 0.3% (no mark); wall time noise 17% and max rss noise 11%, so wall
