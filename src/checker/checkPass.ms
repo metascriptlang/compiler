@@ -990,14 +990,8 @@ function namesAMember(text: string, end: int32): boolean {
 
 function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
-	// Use resolvedSym set by collectPass (preserves overloadIdx for overloaded functions).
-	// Only fall back to lookupSymbol if collector didn't set it (e.g., monomorphized clones).
-	let sym = node.resolvedSym;
-	if (sym == null) {
-		sym = lookupSymbol(ctx.table, d.fnName);
-		if (sym == null) return;
-		node.resolvedSym = sym;
-	}
+	const sym = node.resolvedSym;
+	if (sym == null) throw new Error(`internal: function '${d.fnName}' reached its check without the symbol collect declared for it`);
 
 	// Demand-driven: ensure signature is shaped before checking body
 	ensureShaped(sym, ctx);
@@ -1548,9 +1542,8 @@ export function checkFunctionOnDemand(ctx: CheckerContext, sym: Symbol): void {
 
 function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
-	const sym = lookupSymbol(ctx.table, d.className);
-	if (sym == null) return;
-	node.resolvedSym = sym;
+	const sym = node.resolvedSym;
+	if (sym == null) throw new Error(`internal: class '${d.className}' reached its check without the symbol collect declared for it`);
 
 	// Demand-driven: ensure class fields/methods are shaped
 	ensureShaped(sym, ctx);
@@ -1694,9 +1687,8 @@ function refuseUnassignedFields(ctx: CheckerContext, body: Node[], ctorExits: st
 
 function checkActorDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ActorDeclData;
-	const sym = lookupSymbol(ctx.table, d.actorName);
-	if (sym == null) return;
-	node.resolvedSym = sym;
+	const sym = node.resolvedSym;
+	if (sym == null) throw new Error(`internal: actor '${d.actorName}' reached its check without the symbol collect declared for it`);
 
 	ensureShaped(sym, ctx);
 	sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.actorName.length, sym, sym.symbolType, SymbolKind.Actor, d.actorName, "", true);
