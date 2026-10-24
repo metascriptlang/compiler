@@ -7,6 +7,7 @@ import { CToken, CTokenKind, LitKind, makeEofToken } from "./token";
 import { Diagnostic, DiagSeverity, makeDiag } from "./error";
 import { decodeUtf8, isIdent1, isIdent2, fromHex, stripBom, canonicalizeNewline, removeBackslashNewline, convertUniversalChars } from "./unicode";
 import { int64Bits } from "../../utils/stdBackport";
+import { isDigit, isLetter, isAlphanumeric } from "../../lexer/chars";
 
 export interface TokenizeResult {
 	head: CToken;
@@ -58,20 +59,6 @@ function skipN(s: ScanState, n: int32): void {
 	while (i < n) { advance(s); i = i + 1; }
 }
 
-// ===== Character classification =====
-
-function isDigit(ch: int32): boolean {
-	return ch >= "0".code && ch <= "9".code;
-}
-
-function isAlpha(ch: int32): boolean {
-	return (ch >= "a".code && ch <= "z".code) || (ch >= "A".code && ch <= "Z".code) || ch == "_".code;
-}
-
-function isAlnum(ch: int32): boolean {
-	return isAlpha(ch) || isDigit(ch);
-}
-
 function isSpace(ch: int32): boolean {
 	return ch == " ".code || ch == "\t".code || ch == 11 || ch == 12;
 }
@@ -116,7 +103,7 @@ function readIdent(s: ScanState): int32 {
 	const start = s.pos;
 	let ch = peek(s);
 
-	if (isAlpha(ch)) {
+	if (isLetter(ch)) {
 		advance(s);
 	} else if (ch >= 0x80) {
 		const decoded = decodeUtf8(s.source, s.pos);
@@ -128,7 +115,7 @@ function readIdent(s: ScanState): int32 {
 
 	while (s.pos < s.source.byteLength) {
 		ch = peek(s);
-		if (isAlnum(ch)) {
+		if (isAlphanumeric(ch)) {
 			advance(s);
 		} else if (ch >= 0x80) {
 			const decoded = decodeUtf8(s.source, s.pos);
@@ -328,7 +315,7 @@ function readPPNumber(s: ScanState, tokenStart: int32, startLine: int32, startCo
 			(peekAt(s, 1) == "+".code || peekAt(s, 1) == "-".code)) {
 			advance(s);
 			advance(s);
-		} else if (isAlnum(ch) || ch == ".".code) {
+		} else if (isAlphanumeric(ch) || ch == ".".code) {
 			advance(s);
 		} else {
 			break;
