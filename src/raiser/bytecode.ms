@@ -36,7 +36,7 @@ export enum RaiserOpcode {
 	Print,            // ABC: debug print R[A]
 
 	// Array operations (5)
-	NewArray,         // ABC: R[A] = new array from R[A+1..A+B]
+	NewArray,         // ABC: R[A] = new array from R[A+1..A+B], holding elements of the class the instruction's slot names (arrayClassSlot)
 	LoadIndex,        // ABC: R[A] = R[B][R[C]]
 	StoreIndex,       // ABC: R[A][R[B]] = R[C]
 	ArrayLen,         // ABC: R[A] = len(R[B])
@@ -97,11 +97,9 @@ export enum RaiserOpcode {
 	IsKind,           // ABC: R[A] = (R[B].kind == C) as bool
 
 	// String ordering (2)
-	// Nim gives `<`/`<=` on strings their own magics (LtStr/LeStr,
-	// lib/system/comparisons.nim) and their own VM opcodes (vmgen.nim:1216) —
-	// ordering is NEVER decided by integer comparison. Without these, codegen
+	// String ordering is NEVER decided by integer comparison. Without these, codegen
 	// fell through to BxxI64 and compared string HANDLES. `>`/`>=` need no
-	// opcode: Nim derives them by swapping operands, and so does our codegen.
+	// opcode: codegen derives them by swapping operands.
 	// ⚠ Appended at the END on purpose — src/raiser/vm_dispatch.c hardcodes
 	// opcode NUMBERS, so inserting mid-enum would silently desync it.
 	LtStr,            // ABC: if R[A].text < R[B].text skip C
@@ -162,8 +160,8 @@ export enum RaiserOpcode {
 	LoadDeref,        // ABC: R[A] = R[B][] — an object or array pointer reads as itself
 	StoreDeref,       // ABC: R[A][] = R[C]
 	SameLoc,          // ABC: R[A] = R[B] and R[C] are the same address (kind, handle, index, field)
-	InstanceOf,       // ABC: R[A] = R[B] is an object whose class is K[C] or derives from it
-	ObjConv,          // ABC: fatal unless R[A] is nil or an instance of class K[B], named K[C]
+	InstanceOf,       // ABC: R[A] = R[B] is an object whose class is the packed class id K[C] or derives from it
+	ObjConv,          // ABC: fatal unless R[A] is nil or an instance of the packed class id K[B], named K[C]
 	BTruthy,          // ABC: if R[A] is truthy (ToBoolean) skip C
 	NarrowS,          // ABC: fatal unless R[A] fits a signed B-bit integer, or an unsigned one when C is 1
 	ModuleImport,     // ABx: R[A] = future of import() of the module record named K[Bx]
@@ -213,9 +211,13 @@ export enum RaiserOpcode {
 	LoadSlotR,        // ABC: LoadSlot into a Ref register
 	StoreSlotW,       // ABC: StoreSlot from a Word register
 	StoreSlotR,       // ABC: StoreSlot from a Ref register
+	CallClosureTyped, // ABC: CallClosure at a site whose callee has a declared function type, which the checker only lets hold a pair of that signature; a danger build trusts the pair and the signature
+	ConcatStrR,       // ABC: refs[A] = refs[B] ++ refs[C], both statically strings
+	StrByteAt,        // ABC: words[A] = byte R[C] of the string refs[B], -1 outside it
+	StrCharCodeAt,    // ABC: words[A] = UTF-16 code unit R[C] of the string refs[B], -1 outside it
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.StoreSlotR;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.StrCharCodeAt;
 
 // How FutureCombine settles its result from its inputs (Promise.all, race, any).
 export enum RaiserCombine {
@@ -297,7 +299,7 @@ function roleOf(letter: string): RaiserRole {
 }
 
 // One letter for each of A, B and C. A call-like opcode's last operand is a site: its arguments are the registers after A.
-function opRoleLetters(op: RaiserOpcode): string {
+export function opRoleLetters(op: RaiserOpcode): string {
 	return match (op) {
 		RaiserOpcode.LoadConst | RaiserOpcode.LoadNil | RaiserOpcode.LoadGlobal | RaiserOpcode.StoreGlobal | RaiserOpcode.Halt | RaiserOpcode.Print
 			| RaiserOpcode.Ret | RaiserOpcode.Throw | RaiserOpcode.FutureNew | RaiserOpcode.ModuleImport | RaiserOpcode.Catch | RaiserOpcode.ObjConv | RaiserOpcode.LitConv => "x--",
@@ -344,6 +346,8 @@ function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.StoreSlotW => "r-i",
 		RaiserOpcode.StoreSlotR => "r-r",
 		RaiserOpcode.ConcatStr => "rxx",
+		RaiserOpcode.ConcatStrR => "rrr",
+		RaiserOpcode.StrByteAt | RaiserOpcode.StrCharCodeAt => "iri",
 		RaiserOpcode.EqStr | RaiserOpcode.NeStr | RaiserOpcode.LtStr | RaiserOpcode.LeStr => "rr-",
 		RaiserOpcode.StrLen | RaiserOpcode.StrByteLen => "ir-",
 		RaiserOpcode.StrCharAt => "rri",
@@ -356,7 +360,7 @@ function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.StoreDeref => "x-x",
 		RaiserOpcode.Call | RaiserOpcode.CallDirect | RaiserOpcode.CallHost | RaiserOpcode.FutureCombine => "x--",
 		RaiserOpcode.CallIndirect => "xi-",
-		RaiserOpcode.CallClosure => "xr-",
+		RaiserOpcode.CallClosure | RaiserOpcode.CallClosureTyped => "xr-",
 		RaiserOpcode.Spawn | RaiserOpcode.Await | RaiserOpcode.FutureSettle | RaiserOpcode.FutureFail => "xx-",
 		RaiserOpcode.Sleep => "xx-",
 		RaiserOpcode.Finally | RaiserOpcode.FinallyEnd => "e--",
@@ -364,8 +368,19 @@ function opRoleLetters(op: RaiserOpcode): string {
 	};
 }
 
+function buildRoleTable(): RaiserRole[] {
+	const table: RaiserRole[] = [];
+	for (let op = 0; op <= (LAST_RAISER_OPCODE as int32); op += 1) {
+		const letters = opRoleLetters(op as RaiserOpcode);
+		for (let slot = 0; slot < 3; slot += 1) table.push(roleOf(letters.charAt(slot)));
+	}
+	return table;
+}
+
+const ROLE_TABLE: RaiserRole[] = buildRoleTable();
+
 export function opRole(op: RaiserOpcode, slot: int32): RaiserRole {
-	return roleOf(opRoleLetters(op).charAt(slot));
+	return ROLE_TABLE[(op as int32) * 3 + slot];
 }
 
 // What a generic handler finds in an operand once it is retagged: 0..4 is the class a fixed role names,
@@ -389,7 +404,7 @@ export function operandKind(op: RaiserOpcode, slot: int32): int32 {
 }
 
 export function opHasSite(op: RaiserOpcode): boolean {
-	return op == RaiserOpcode.Call || op == RaiserOpcode.CallDirect || op == RaiserOpcode.CallIndirect || op == RaiserOpcode.CallClosure || op == RaiserOpcode.CallHost || op == RaiserOpcode.FutureCombine || op == RaiserOpcode.NewArray;
+	return op == RaiserOpcode.Call || op == RaiserOpcode.CallDirect || op == RaiserOpcode.CallIndirect || op == RaiserOpcode.CallClosure || op == RaiserOpcode.CallClosureTyped || op == RaiserOpcode.CallHost || op == RaiserOpcode.FutureCombine || op == RaiserOpcode.NewArray;
 }
 
 // How many registers follow A as the arguments of a site opcode: the count sits in C, or in B for NewArray.
@@ -534,8 +549,20 @@ export function branchOffset(field: number): int64 {
 	return (field as int64) - BRANCH_EXCESS;
 }
 
+// A NewArray's slot is 0 for an array of tagged values and the element class plus one otherwise, so
+// an instruction built without a slot makes the array that holds anything.
+export function arrayClassSlot(cls: RaiserRegClass): number {
+	return cls == RaiserRegClass.Dyn ? 0 : (cls as number) + 1;
+}
+
+export function slotArrayClass(slot: number): RaiserRegClass {
+	if (slot < 0 || slot > 5) throw new Error(`internal: NewArray slot ${slot} names no element class`);
+	return slot == 0 ? RaiserRegClass.Dyn : (slot - 1) as RaiserRegClass;
+}
+
 export function carriesSlot(op: RaiserOpcode): boolean {
 	return match (op) {
+		RaiserOpcode.NewArray => true,
 		RaiserOpcode.LoadSlot | RaiserOpcode.StoreSlot | RaiserOpcode.LoadSlotW | RaiserOpcode.LoadSlotR | RaiserOpcode.StoreSlotW | RaiserOpcode.StoreSlotR => true,
 		_ => false,
 	};
@@ -545,6 +572,7 @@ export function carriesSlot(op: RaiserOpcode): boolean {
 // from bit 40 up as a signed field, and a slot opcode's slot the top 8.
 const PACKED_FIELD_LIMIT = 65536;
 export const MAX_SLOT = 255;
+export const TYPED_SLOTS = 64;   // a typed slot opcode names a slot below this, one bit of an object's slot masks
 const PACKED_BRANCH_LIMIT = 16777216;
 
 function packedField(inst: RaiserInstruction, v: number, name: string, limit: int64, bits: int32): int64 {
@@ -727,4 +755,17 @@ test "a branch offset keeps its sign across the 24-bit packed field and stops on
 		wide = (e as Error).message;
 	}
 	assert wide.includes("does not fit the packed 16-bit field");
+}
+
+test "the role table agrees with the role letters of every opcode" {
+	for (let op = 0; op <= (LAST_RAISER_OPCODE as int32); op += 1) {
+		const letters = opRoleLetters(op as RaiserOpcode);
+		for (let slot = 0; slot < 3; slot += 1) assert opRole(op as RaiserOpcode, slot as int32) == roleOf(letters.charAt(slot));
+	}
+}
+
+test "the last opcode has its roles in the table" {
+	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Int;
+	assert opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.Ref;
+	assert opRole(LAST_RAISER_OPCODE, 2) == RaiserRole.Int;
 }

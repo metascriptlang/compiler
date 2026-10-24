@@ -17,7 +17,7 @@
 // trailing mask can undo an arithmetic shift of the int32 view. It also emits
 // `(a * b) >>> 0` for multiplication, and that one is a defect measured against
 // its own C backend: 4294967295² is 1 in C and 0 in JS. Math.imul is exact, so
-// MS uses it. See NIM-REF CG-13.
+// MS uses it.
 //
 // Signed + - *, unary minus and steps, and char steps, stop on overflow (msOverflow*), as the
 // C backend's checkedArith.h does; unlike C, --danger keeps the check here.

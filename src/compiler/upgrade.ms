@@ -130,7 +130,8 @@ export function maybeShowUpdateNotice(): void {
 	}
 
 	if (cache.latestVersion == "") return;
-	if (compareVersionStrings(cache.latestVersion, VERSION) <= 0) return;
+	const cmp = compareVersionStrings(cache.latestVersion, VERSION);
+	if (!cmp.ok || cmp.value <= 0) return;
 
 	// Notice: one line, indented, yellow. Goes to stdout (same stream as command
 	// output) so it shows in `msc run ... | cat`. If that bothers users, they

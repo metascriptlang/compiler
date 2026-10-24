@@ -29,10 +29,6 @@ export interface VarInfo {
 	isInitialized: boolean; // first-write optimization: skip destroy on first assignment
 }
 
-export class MovedVar {
-	sym: Symbol | null;
-}
-
 export class BorrowRead {
 	readSym: Symbol;
 	readNode: Node;
@@ -42,8 +38,9 @@ export class BorrowRead {
 // ===== DRC Scope =====
 
 export interface DrcScope {
-	varsToCleanup: VarInfo[];     // variables needing cleanup at scope exit
-	wasMoved: MovedVar[];         // var-level move bookkeeping
+	varsToCleanup: VarInfo[];     // variables needing cleanup at scope exit, in registration order
+	varIndex: HashMap<Symbol, VarInfo>;  // first VarInfo registered per symbol — lookup index of varsToCleanup
+	wasMoved: HashSet<Symbol>;    // var-level move bookkeeping
 	preStmts: Node[];             // stmts to flush before current statement (per-scope isolation, reference parity)
 	pendingStmts: Node[];         // stmts to flush after current statement (per-scope isolation, reference parity)
 	needsTry: boolean;            // does this scope need try/finally wrapping?
@@ -115,7 +112,8 @@ export function classifyRc(t: Type | null, dctx: DrcContext): RcInfo {
 function createScope(isLoop: boolean, isFunction: boolean): DrcScope {
 	return {
 		varsToCleanup: [],
-		wasMoved: [],
+		varIndex: new HashMap<Symbol, VarInfo>(),
+		wasMoved: new HashSet<Symbol>(),
 		preStmts: [],
 		pendingStmts: [],
 		needsTry: false,
@@ -145,6 +143,11 @@ export function scopeDepth(dctx: DrcContext): number {
 
 // ===== Variable Registration =====
 
+function trackVar(scope: DrcScope, info: VarInfo): void {
+	scope.varsToCleanup.push(info);
+	if (!scope.varIndex.has(info.sym)) scope.varIndex.set(info.sym, info);
+}
+
 export function registerVar(dctx: DrcContext, rcInfo: RcInfo, isCursor: boolean, sym: Symbol | null): void {
 	// A variable the checker or a transform left without a Symbol has no identity
 	// to track it by — report it rather than tracking it under a name that another
@@ -156,9 +159,7 @@ export function registerVar(dctx: DrcContext, rcInfo: RcInfo, isCursor: boolean,
 	if (isCursor) {
 		// Cursors are borrowed — never cleaned up, but MUST be registered so
 		// field accesses (d.field) are recognized as borrows by isLastReadFieldSafe.
-		const scope = currentScope(dctx);
-		const info: VarInfo = { sym, rcInfo, isCursor: true, isInitialized: true };
-		scope.varsToCleanup.push(info);
+		trackVar(currentScope(dctx), { sym, rcInfo, isCursor: true, isInitialized: true });
 		return;
 	}
 	if (!rcInfo.needsCleanup) return;
@@ -171,9 +172,7 @@ export function registerVar(dctx: DrcContext, rcInfo: RcInfo, isCursor: boolean,
 		dctx.globalsToDestroy.push({ sym, rcInfo, isCursor: false, isInitialized: true });
 		return;
 	}
-	const scope = currentScope(dctx);
-	const info: VarInfo = { sym, rcInfo, isCursor: false, isInitialized: true };
-	scope.varsToCleanup.push(info);
+	trackVar(currentScope(dctx), { sym, rcInfo, isCursor: false, isInitialized: true });
 }
 
 // Mark a variable as uninitialized (for `let x;` without initializer — Phase D first-write optimization)
@@ -188,33 +187,20 @@ export function markUninitialized(dctx: DrcContext, sym: Symbol | null): void {
 
 export function recordMove(dctx: DrcContext, sym: Symbol | null): void {
 	if (sym == null) return;
-	const scope = currentScope(dctx);
-	if (wasMovedInScope(scope, sym)) return;
-	const mv: MovedVar = { sym };
-	scope.wasMoved.push(mv);
+	currentScope(dctx).wasMoved.add(sym);
 }
 
 export function wasMovedInScope(scope: DrcScope, sym: Symbol | null): boolean {
-	if (sym == null) return false;
-	for (const mv of scope.wasMoved) {
-		if (mv.sym == sym) return true;
-	}
-	return false;
+	return sym != null && scope.wasMoved.has(sym);
 }
 
 // Record move bookkeeping in the scope that tracks the variable — read only by
 // varMovedInContext (the self-consume assignment gates); cleanup destroys unconditionally.
 export function recordMoveInContext(dctx: DrcContext, sym: Symbol | null): void {
 	if (sym == null) return;
-	let i = dctx.scopes.length;
-	while (i > 0) {
-		i -= 1;
-		const vi = findVarInfo(dctx.scopes[i], sym);
-		if (vi != null) {
-			if (!wasMovedInScope(dctx.scopes[i], sym)) {
-				const mv: MovedVar = { sym };
-				dctx.scopes[i].wasMoved.push(mv);
-			}
+	for (let i = dctx.scopes.length - 1; i >= 0; i -= 1) {
+		if (findVarInfo(dctx.scopes[i], sym) != null) {
+			dctx.scopes[i].wasMoved.add(sym);
 			return;
 		}
 	}
@@ -225,9 +211,7 @@ export function recordMoveInContext(dctx: DrcContext, sym: Symbol | null): void 
 // True if the variable was recorded moved in the scope that actually tracks it.
 export function varMovedInContext(dctx: DrcContext, sym: Symbol | null): boolean {
 	if (sym == null) return false;
-	let i = dctx.scopes.length;
-	while (i > 0) {
-		i -= 1;
+	for (let i = dctx.scopes.length - 1; i >= 0; i -= 1) {
 		if (findVarInfo(dctx.scopes[i], sym) != null) {
 			return wasMovedInScope(dctx.scopes[i], sym);
 		}
@@ -239,15 +223,9 @@ export function varMovedInContext(dctx: DrcContext, sym: Symbol | null): boolean
 // the var a fresh value, so scope-exit destroys the new value instead of skipping it.
 export function clearMoveInContext(dctx: DrcContext, sym: Symbol | null): void {
 	if (sym == null) return;
-	let i = dctx.scopes.length;
-	while (i > 0) {
-		i -= 1;
+	for (let i = dctx.scopes.length - 1; i >= 0; i -= 1) {
 		if (findVarInfo(dctx.scopes[i], sym) != null) {
-			const filtered: MovedVar[] = [];
-			for (const mv of dctx.scopes[i].wasMoved) {
-				if (mv.sym != sym) filtered.push(mv);
-			}
-			dctx.scopes[i].wasMoved = filtered;
+			dctx.scopes[i].wasMoved.delete(sym);
 			return;
 		}
 	}
@@ -265,17 +243,14 @@ export function setNeedsTryAll(dctx: DrcContext): void {
 
 export function findVarInfo(scope: DrcScope, sym: Symbol | null): VarInfo {
 	if (sym == null) return null as unknown as VarInfo;
-	for (const vi of scope.varsToCleanup) {
-		if (vi.sym == sym) return vi;
-	}
-	return null as unknown as VarInfo;
+	const vi = scope.varIndex.get(sym);
+	if (vi == null) return null as unknown as VarInfo;
+	return vi;
 }
 
 // Search all scopes from innermost outward
 export function findVarInfoInContext(dctx: DrcContext, sym: Symbol | null): VarInfo {
-	let i = dctx.scopes.length;
-	while (i > 0) {
-		i -= 1;
+	for (let i = dctx.scopes.length - 1; i >= 0; i -= 1) {
 		const vi = findVarInfo(dctx.scopes[i], sym);
 		if (vi != null) return vi;
 	}
@@ -286,9 +261,7 @@ export function findVarInfoInContext(dctx: DrcContext, sym: Symbol | null): VarI
 // Stops at function scope boundaries — won't find module-level variables.
 // Use this when determining if a variable is "local owned" vs "borrowed from outer scope".
 export function findVarInfoInFunction(dctx: DrcContext, sym: Symbol | null): VarInfo {
-	let i = dctx.scopes.length;
-	while (i > 0) {
-		i -= 1;
+	for (let i = dctx.scopes.length - 1; i >= 0; i -= 1) {
 		const scope = dctx.scopes[i];
 		const vi = findVarInfo(scope, sym);
 		if (vi != null) return vi;
@@ -312,12 +285,6 @@ export function flushPending(dctx: DrcContext, target: Node[]): void {
 	const scope = currentScope(dctx);
 	for (const s of scope.pendingStmts) { target.push(s); }
 	scope.pendingStmts = [];
-}
-
-export function flushPre(dctx: DrcContext, target: Node[]): void {
-	const scope = currentScope(dctx);
-	for (const s of scope.preStmts) { target.push(s); }
-	scope.preStmts = [];
 }
 
 export function hasPending(dctx: DrcContext): boolean {
@@ -368,10 +335,6 @@ export function symListHas(list: Symbol[], sym: Symbol): boolean {
 
 export function symListAdd(list: Symbol[], sym: Symbol): void {
 	if (!symListHas(list, sym)) list.push(sym);
-}
-
-export function hasPre(dctx: DrcContext): boolean {
-	return currentScope(dctx).preStmts.length > 0;
 }
 
 // ===== Test Helpers =====

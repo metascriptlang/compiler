@@ -28,7 +28,7 @@ import {
 import { forEachChild } from "../../ast/visitor";
 import { mapChildren } from "../walker";
 import { setFlag, SymbolFlag } from "../../checker/symbol";
-import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult } from "../../checker/types";
+import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult, getProperty } from "../../checker/types";
 import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, newLoweredSym } from "../context";
 import {
 	makeIdentResolved, makeTypedIdent, makeTypedIdentResolved, makeNull, makeNumber, makeBool,
@@ -136,7 +136,7 @@ function collectDeclTypes(node: Node, syms: Symbol[], types: Type[]): void {
 	forEachChild(node, (child: Node): void => { collectDeclTypes(child, syms, types); });
 }
 
-// A local without its symbol cannot be told from another of its spelling (NIM-REF TR-1).
+// A local without its symbol cannot be told from another of its spelling.
 export function collectStateLocals(node: Node | null, ctx: TransformContext, out: SymSet): void {
 	if (node == null || isFnBoundary(node)) return;
 	if (node.kind == NodeKind.VariableDecl) {
@@ -314,7 +314,7 @@ function makeIterResult(value: Node, done: boolean, loc: SourceLocation, resultT
 }
 
 function makeDoneResult(loc: SourceLocation, resultType: Type | null): Node {
-	return makeIterResult(makeNull(loc), true, loc, resultType);
+	return makeIterResult(resultType != null ? makeDefaultValue(getProperty(resultType, "value"), loc) : makeNull(loc), true, loc, resultType);
 }
 
 export function makeStateAssign(stateNum: number, loc: SourceLocation, stateSym: Symbol): Node {

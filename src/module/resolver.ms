@@ -143,8 +143,16 @@ export function resolveImport(specifier: string, fromFile: string): ResolveCandi
 	// Std library — handled externally in bare mode
 	if (isStdImport(specifier)) return result;
 
-	// Bare specifiers — unsupported in legacy mode
-	if (!isRelative(specifier)) return result;
+	// Bare specifiers — unsupported in legacy mode, except an absolute path with its extension
+	// (a header module names the headers it includes that way) and a C header beside the importer
+	if (!isRelative(specifier)) {
+		if (isAbsolute(specifier)) {
+			if (hasKnownExtension(specifier)) result.push(normalize(specifier));
+		} else if (specifier.endsWith(".h")) {
+			result.push(normalize(join(dirname(fromFile), specifier)));
+		}
+		return result;
+	}
 
 	const baseDir = dirname(fromFile);
 	// Normalize to collapse ./ and ../ — a file must resolve to ONE canonical path
@@ -193,7 +201,8 @@ function addDirectCandidates(result: ResolveCandidates, spec: string, fromFile: 
 			result.push(join(config.stdPath, subpath));
 		}
 	} else {
-		// Bare with extension — try search paths
+		// Bare with extension — a C header beside the importer first, then the search paths
+		if (spec.endsWith(".h")) result.push(normalize(join(dirname(fromFile), spec)));
 		for (const sp of config.searchPaths) {
 			result.push(join(sp, spec));
 		}

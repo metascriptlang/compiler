@@ -62,19 +62,16 @@ export function* toItems<T>(this arr: Vec<T>): Iterator<T> {
 }
 
 // ===== Hash Functions =====
-// DJB2 algorithm matches std/hash.hashString, except:
-// - Returns 314159265 for empty strings (Map/Set "empty slot" sentinel)
-// - Returns 314159265 if hash computes to 0 (same sentinel reason)
-// Kept inline because struct.ms is a prelude module loaded before std/hash.
+// hashFarm over the string's bytes (runtime/core/string.c; the Raiser reaches the same
+// code through the host table). An empty Map/Set slot holds hcode 0, so a key that
+// hashes to 0 takes the 314159265 sentinel.
+
+@include("runtime/core/string.h");
+
+export extern function hashFarm(s: string): int64 from "msStringHashFarm";
 
 export function hashString(s: string): int64 {
-	if (s.byteLength == 0) return 314159265 as int64;
-	let h: int64 = 5381;
-	let i: int64 = 0;
-	while (i < s.byteLength) {
-		h = (h * (33 as int64) + (s.byteAt(i as int32) as int64)) & (0xFFFFFFFF as int64);
-		i = i + (1 as int64);
-	}
+	const h = hashFarm(s);
 	if (h == (0 as int64)) return 314159265 as int64;
 	return h;
 }

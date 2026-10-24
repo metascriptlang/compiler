@@ -1,5 +1,4 @@
 // Match Expression Parser
-// Pattern: ~/projects/metascript/src/parser/parser.zig parseMatchStatement()
 // Uses callback injection to avoid circular imports with expression.ms
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";

@@ -44,9 +44,9 @@
 /* ===== RefHeader (same layout as drc.h) ===== */
 
 typedef struct {
-    int32_t rc;
-    int32_t rootIdx;
+    intptr_t rc;
     const msTypeInfo* type;
+    int32_t rootIdx;
     uint32_t allocSize;
 } msRefHeader;
 
@@ -479,6 +479,10 @@ static inline void msStringCopy(msString* dest, msString src) { *dest = src; }
 #define msPtrWasMoved(p)      do { (p) = (void*)0; } while(0)
 #define msIncrefCyclic(p)     ((void)0)
 #define msDecrefCyclic(p)     ((void)0)
+#define msDecrefEdge(o, p)    ((void)(o), false)
+#define msDecrefCyclicEdge(o, p) ((void)(o), false)
+#define msDropHasRoom() true
+#define msDropDefer(o, f, a)  ((void)(o), (void)(f), (void)(a))
 #define msAtomicIncref(p)     ((void)0)
 #define msAtomicDecref(p)     ((void)0)
 

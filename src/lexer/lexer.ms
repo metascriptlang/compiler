@@ -1,6 +1,5 @@
 // Lexer — Main entry point for tokenization
 // Converts source code into a sequence of tokens
-// Pattern: ~/projects/metascript/src/lexer/lexer.zig
 
 import { Token, TokenKind, isIdentOrKeyword } from "./token";
 import { createLexerState, peek, peekAt, advanceChar, skip, addToken } from "./state";
@@ -40,8 +39,6 @@ export function lex(source: string): Result<Token[], string> {
 		if (ch == "`".code) { scanTemplateString(s); continue; }
 
 		// Operators (multi-char and single-char)
-		// scanOperator now handles comments and adds them to s.tokens if TokenKind.Comment was added there
-		// Wait, I should make sure scanOperator actually adds them to s.tokens or s.comments
 		if (scanOperator(s)) { continue; }
 
 		// Punctuation (single-char tokens)

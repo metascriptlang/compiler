@@ -62,17 +62,41 @@ export class MemoryWire {
 	input: string;
 	pos: int32;
 	output: string;
+	lateChunk: string;
+	lateAfterChunks: int32;
+	lateAtEmptyProbe: int32;
+	emptyProbes: int32;
 }
 
 export function createMemoryWire(chunks: string[]): MemoryWire {
-	return { chunks, nextChunk: 0, input: "", pos: 0, output: "" };
+	return { chunks, nextChunk: 0, input: "", pos: 0, output: "", lateChunk: "", lateAfterChunks: 0, lateAtEmptyProbe: 0, emptyProbes: 0 };
+}
+
+// Input that appears while the server works: once afterChunks chunks have been read, the
+// atEmptyProbe-th hasBufferedData call that finds nothing buffered finds lateChunk.
+export function createLateInputWire(chunks: string[], lateChunk: string, afterChunks: int32, atEmptyProbe: int32): MemoryWire {
+	const wire = createMemoryWire(chunks);
+	wire.lateChunk = lateChunk;
+	wire.lateAfterChunks = afterChunks;
+	wire.lateAtEmptyProbe = atEmptyProbe;
+	return wire;
+}
+
+function wireHasBufferedData(wire: MemoryWire): boolean {
+	if (wire.pos < wire.input.byteLength) return true;
+	if (wire.nextChunk < wire.lateAfterChunks) return false;
+	wire.emptyProbes++;
+	if (wire.emptyProbes != wire.lateAtEmptyProbe) return false;
+	wire.input = wire.lateChunk;
+	wire.pos = 0;
+	return true;
 }
 
 function deliverChunk(wire: MemoryWire): boolean {
 	if (wire.nextChunk >= wire.chunks.length) return false;
 	wire.input = wire.input.byteSlice(wire.pos, wire.input.byteLength) + wire.chunks[wire.nextChunk];
 	wire.pos = 0;
-	wire.nextChunk = wire.nextChunk + 1;
+	wire.nextChunk++;
 	return true;
 }
 
@@ -87,7 +111,7 @@ function wireReadLine(wire: MemoryWire): string {
 		newline = wire.input.byteIndexOf("\n", wire.pos);
 	}
 	let end = newline;
-	if (end > wire.pos && wire.input.byteAt(end - 1) == 13) end = end - 1;
+	if (end > wire.pos && wire.input.byteAt(end - 1) == 13) end--;
 	const line = wire.input.byteSlice(wire.pos, end);
 	wire.pos = newline + 1;
 	return line;
@@ -105,8 +129,8 @@ export function memoryTransport(wire: MemoryWire): LspTransport {
 	return {
 		readLine: () => wireReadLine(wire),
 		readBytes: (count: int32) => wireReadBytes(wire, count),
-		hasBufferedData: () => wire.pos < wire.input.byteLength,
-		write: (frames: string) => { wire.output = wire.output + frames; },
+		hasBufferedData: () => wireHasBufferedData(wire),
+		write: (frames: string) => { wire.output += frames; },
 	};
 }
 
@@ -131,6 +155,20 @@ test "frame read counts body bytes, not UTF-16 units" {
 	const end = lspReadFrame(io);
 	assert !end.ok;
 	if (!end.ok) assert end.error == FrameEnd.Closed;
+}
+
+test "late input appears at the chosen empty probe once enough chunks were read" {
+	const wire = createLateInputWire([frame("{\"a\":1}")], frame("{\"b\":2}"), 1, 2);
+	const io = memoryTransport(wire);
+	assert !io.hasBufferedData();
+	const a = lspReadFrame(io);
+	assert a.ok;
+	assert !io.hasBufferedData();
+	assert io.hasBufferedData();
+	const b = lspReadFrame(io);
+	assert b.ok;
+	if (b.ok) assert b.value == "{\"b\":2}";
+	assert !io.hasBufferedData();
 }
 
 test "frame read skips other headers and blocks across chunks" {

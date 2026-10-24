@@ -8,10 +8,10 @@
 
 import { Node, NodeKind, DeclKind, TypeKind, WhileStmtData, DoWhileStmtData, ForStmtData, SwitchStmtData, AssertStmtData, IfStmtData, VariableDeclData, ExprStmtData, BinaryExprData, ConditionalExprData } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { containsExprKind, mapExprChildren } from "../walker";
+import { containsExprKind, mapExprChildren, isAssignOp } from "../walker";
 import { lowerForStmt } from "./forLoopLower";
 import { moveDoWhileTestIntoBody } from "./jumpRetarget";
-import { Spiller, lowerOperandList, lowerAssign, isAssignOp } from "./operandOrder";
+import { Spiller, lowerOperandList, lowerAssign } from "./operandOrder";
 import { lowerShortCircuitExpr } from "./conditionalExprLower";
 import { makeIdentResolved, makeBlock, makeVarDecl, makeExprStmt, makeNull, makeIf, makeAssign, makeBool, makeUnary, makeBreak, extractBodyStmts } from "../util";
 

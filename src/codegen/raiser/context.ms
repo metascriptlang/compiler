@@ -5,7 +5,7 @@ import {
 	RaiserOpcode, RaiserInstruction, RaiserRegClass, RaiserRole, RaiserConvClass, opRole, convOperand,
 	raiserABC, raiserABx, raiserAx, getSignedAx, fitsImm, immField, isBranchI64, branchField, branchOffset
 } from "../../raiser/bytecode";
-import { RaiserValue, RaiserValueKind, RaiserClassType, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserNil } from "../../raiser/value";
+import { RaiserValue, RaiserValueKind, RaiserClassType, createClassType, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserNil } from "../../raiser/value";
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind } from "../../ast/node";
 import { RaiserCopyPlan } from "../../raiser/valueCopy";
 import { CheckerError, Severity } from "../../checker/context";
@@ -151,6 +151,18 @@ export function classSymOfType(t: Type | null): Symbol | null {
 	return cur.sym;
 }
 
+const _classIds = new Map<string, int64>();
+
+// A class key keeps one id for the life of the process, so a class compiled into a live image
+// after its ancestors carries the ancestors' ids.
+export function raiserClassId(key: string): int64 {
+	const known = _classIds.get(key);
+	if (known != null) return known;
+	const id = _classIds.size + 1;
+	_classIds.set(key, id);
+	return id;
+}
+
 export function raiserClassKey(classSym: Symbol): string {
 	const own = classSymOfType(classSym.symbolType);
 	const sym = own != null ? own : classSym;
@@ -184,7 +196,7 @@ function writesA(op: RaiserOpcode): boolean {
 			| RaiserOpcode.ShiftLeft | RaiserOpcode.ShiftRight | RaiserOpcode.ShiftRightU | RaiserOpcode.AddI64Imm | RaiserOpcode.SubI64Imm
 			| RaiserOpcode.Conv | RaiserOpcode.ArrayLen | RaiserOpcode.StrLen | RaiserOpcode.StrByteLen
 			| RaiserOpcode.IsKind | RaiserOpcode.InstanceOf | RaiserOpcode.SameLoc
-			| RaiserOpcode.ConcatStr | RaiserOpcode.StrCharAt | RaiserOpcode.StrSlice | RaiserOpcode.NewObject | RaiserOpcode.ArraySlice | RaiserOpcode.NewArray => true,
+			| RaiserOpcode.ConcatStr | RaiserOpcode.ConcatStrR | RaiserOpcode.StrByteAt | RaiserOpcode.StrCharCodeAt | RaiserOpcode.StrCharAt | RaiserOpcode.StrSlice | RaiserOpcode.NewObject | RaiserOpcode.ArraySlice | RaiserOpcode.NewArray => true,
 		_ => false,
 	};
 }
@@ -534,13 +546,14 @@ export function resolveClassInit(s: RaiserCompState, classSym: Symbol): int32 {
 
 // --- Closure pair helpers ---
 // The NewObject operand of a typed object that has no class: its layout alone.
-export function layoutOperand(s: RaiserCompState, fields: string[]): int32 {
+export function layoutOperand(s: RaiserCompState, fields: string[], kinds: RaiserRegClass[]): int32 {
 	if (fields.length == 0) return 0;
-	s.classTypes.push({ name: "", chain: [], fields });
+	s.classTypes.push(createClassType("", -1, [], fields, kinds));
 	return s.classTypes.length;
 }
 
 export const CLOSURE_PAIR: string[] = ["fn", "env"];
+export const CLOSURE_PAIR_KINDS: RaiserRegClass[] = [RaiserRegClass.Word, RaiserRegClass.Ref];
 
 export function slotInst(op: RaiserOpcode, a: number, b: number, c: number, slot: number): RaiserInstruction {
 	const inst = raiserABC(op, a, b, c);
@@ -553,7 +566,7 @@ export function slotInst(op: RaiserOpcode, a: number, b: number, c: number, slot
 
 export function emitClosurePair(s: RaiserCompState, funcIdx: int32, envReg: int32): int32 {
 	const pairReg = allocRef(s);
-	emitInst(s, raiserABC(RaiserOpcode.NewObject, pairReg, layoutOperand(s, CLOSURE_PAIR), 0));
+	emitInst(s, raiserABC(RaiserOpcode.NewObject, pairReg, layoutOperand(s, CLOSURE_PAIR, CLOSURE_PAIR_KINDS), 0));
 	const fnReg = allocWord(s);
 	emitLoadConst(s, fnReg, raiserInt(funcIdx));
 	const fnConst = addConst(s, raiserConstString("fn"));
@@ -657,7 +670,7 @@ function writesResultAfterReading(op: RaiserOpcode): boolean {
 			| RaiserOpcode.AddF64 | RaiserOpcode.SubF64 | RaiserOpcode.MulF64 | RaiserOpcode.DivF64 | RaiserOpcode.NegF64
 			| RaiserOpcode.BitAnd | RaiserOpcode.BitOr | RaiserOpcode.BitXor | RaiserOpcode.BitNot
 			| RaiserOpcode.ShiftLeft | RaiserOpcode.ShiftRight | RaiserOpcode.ShiftRightU
-			| RaiserOpcode.Conv | RaiserOpcode.ArrayLen | RaiserOpcode.StrLen | RaiserOpcode.StrCharAt | RaiserOpcode.ConcatStr
+			| RaiserOpcode.Conv | RaiserOpcode.ArrayLen | RaiserOpcode.StrLen | RaiserOpcode.StrCharAt | RaiserOpcode.ConcatStr | RaiserOpcode.ConcatStrR | RaiserOpcode.StrByteAt
 			| RaiserOpcode.IsKind => true,
 		_ => false,
 	};

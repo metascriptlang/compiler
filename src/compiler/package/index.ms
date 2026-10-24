@@ -10,6 +10,8 @@
 
 export {
 	ParsedVersion,
+	VersionError,
+	versionErrorMessage,
 	parseVersion,
 	isValidVersion,
 	compareVersions,
@@ -17,8 +19,10 @@ export {
 	maxVersion,
 	SourceKind,
 	ParsedGitSpec,
+	GitSpecError,
+	gitSpecErrorMessage,
 	parseGitSpec,
-	parseSourceSpec,
+	sourceKindOf,
 } from "./version";
 
 export {
@@ -38,6 +42,9 @@ export {
 export {
 	LockEntry,
 	Lockfile,
+	LockfileError,
+	lockfileErrorMessage,
+	parseLockfile,
 	readLockfile,
 	writeLockfile,
 	findEntry,
@@ -59,5 +66,11 @@ export { cmdInstall } from "./install";
 export { cmdLogin, cmdLogout, cmdWhoami } from "./login";
 export { cmdPublish } from "./publish";
 export { cmdOrg } from "./org";
-export { downloadPackage } from "./download";
-export { addDepToManifest, removeDepFromManifest, readManifest } from "./manifest";
+export { downloadPackage, packageErrorMessage, PackageError } from "./download";
+export {
+	addDepToManifest,
+	removeDepFromManifest,
+	readManifest,
+	ManifestError,
+	manifestErrorMessage,
+} from "./manifest";

@@ -7,12 +7,12 @@
 // CancelCtx type lives in checker/context.ms (single source of truth).
 // transam→checker dependency is already established (CheckerContext, etc.).
 
-import { CancelCtx } from "../../checker/context";
+import { CancelCtx, stopForInput } from "../../checker/context";
 
 // ===== Cancellation Context =====
 
 export function createCancelContext(): CancelCtx {
-	return { version: 0, cancelled: false };
+	return { version: 0, cancelled: false, inputPending: null, stoppedForInput: false };
 }
 
 // ===== Cancellation API =====
@@ -36,6 +36,7 @@ export function requestCancel(ctx: CancelCtx): void {
 // Reset after handling cancellation
 export function resetCancel(ctx: CancelCtx): void {
 	ctx.cancelled = false;
+	ctx.stoppedForInput = false;
 }
 
 // ===== Tests =====
@@ -80,4 +81,19 @@ test "multiple cancels increment version" {
 	resetCancel(ctx);
 	requestCancel(ctx);
 	assert ctx.version == 2;
+}
+
+test "stopForInput stops only while input is pending and resetCancel clears it" {
+	const ctx = createCancelContext();
+	assert !stopForInput(ctx);
+	let pending = false;
+	ctx.inputPending = () => pending;
+	assert !stopForInput(ctx);
+	assert !ctx.cancelled;
+	pending = true;
+	assert stopForInput(ctx);
+	assert ctx.cancelled && ctx.stoppedForInput;
+	assert ctx.version == 0;
+	resetCancel(ctx);
+	assert !ctx.cancelled && !ctx.stoppedForInput;
 }

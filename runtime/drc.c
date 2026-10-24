@@ -133,6 +133,165 @@ void msLedgerDestroy(void* p, const msTypeInfo* type) {
 
 _Thread_local msSlab msSlabTLS;
 MS_TLS_PUBLISH(msSlabTLS)
+
+#include <stdio.h>
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+#if defined(__linux__)
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
+
+enum { MS_DROP_FRAME = 1, MS_DROP_CONT = 2, MS_DROP_TAG = 3 };
+
+static void msDropBounds(msDropState* d) {
+	uintptr_t lo = 0;
+	uintptr_t hi = 0;
+#if defined(__APPLE__)
+	pthread_t self = pthread_self();
+	hi = (uintptr_t)pthread_get_stackaddr_np(self);
+	lo = hi - (uintptr_t)pthread_get_stacksize_np(self);
+#elif defined(_WIN32)
+	ULONG_PTR low = 0;
+	ULONG_PTR high = 0;
+	GetCurrentThreadStackLimits(&low, &high);
+	lo = (uintptr_t)low;
+	hi = (uintptr_t)high;
+#elif defined(__linux__)
+	pthread_attr_t attr;
+	if (pthread_getattr_np(pthread_self(), &attr) == 0) {
+		void* addr = NULL;
+		size_t size = 0;
+		if (pthread_attr_getstack(&attr, &addr, &size) == 0) {
+			lo = (uintptr_t)addr;
+			hi = lo + size;
+		}
+		pthread_attr_destroy(&attr);
+	}
+	struct rlimit limit;
+	if (hi != 0 && getpid() == (pid_t)syscall(SYS_gettid) && getrlimit(RLIMIT_STACK, &limit) == 0
+		&& limit.rlim_cur != RLIM_INFINITY && hi - lo > (uintptr_t)limit.rlim_cur) {
+		lo = hi - (uintptr_t)limit.rlim_cur;
+	}
+#endif
+	uintptr_t size = hi > lo ? hi - lo : 0;
+	uintptr_t headroom = size / 8;
+	if (headroom < 64 * 1024) headroom = 64 * 1024;
+	if (headroom > 1024 * 1024) headroom = 1024 * 1024;
+	if (size <= 2 * headroom) {
+		d->floor = UINTPTR_MAX;
+		d->span = 1;
+		return;
+	}
+	d->floor = lo + headroom;
+	d->span = hi - d->floor;
+}
+
+static void msDropReserve(msDropState* d, int32_t extra) {
+	if (d->len + extra <= d->cap) return;
+	int32_t cap = d->cap < 64 ? 64 : d->cap;
+	while (cap < d->len + extra) cap *= 2;
+	msDropSlot* data = (msDropSlot*)realloc(d->data, (size_t)cap * sizeof(msDropSlot));
+	if (data == NULL) {
+		fprintf(stderr, "fatal: out of memory growing the drop stack to %d entries\n", cap);
+		abort();
+	}
+	d->data = data;
+	d->cap = cap;
+}
+
+static void msDropReverse(msDropSlot* a, msDropSlot* b) {
+	while (a < b) {
+		msDropSlot swap = *a;
+		*a++ = *b;
+		*b-- = swap;
+	}
+}
+
+static void msDropRun(msSlab* s, void* root) {
+	msDropState* d = &s->drop;
+	void* const outerCur = d->cur;
+	const int32_t outerBase = d->base;
+	const int32_t floor = d->len;
+	void* p = root;
+	for (;;) {
+		d->cur = p;
+		d->base = d->len;
+		MS_DESTROY_DISPATCH(msHeader(p)->type, p);
+		if (d->len == d->base) {
+			msDropDispose(s, p);
+		} else {
+			msDropReserve(d, 1);
+			d->data[d->len++].p = (void*)((uintptr_t)p | MS_DROP_FRAME);
+			msDropReverse(d->data + d->base, d->data + d->len - 1);
+		}
+		p = NULL;
+		while (p == NULL && d->len > floor) {
+			void* item = d->data[--d->len].p;
+			uintptr_t tag = (uintptr_t)item & MS_DROP_TAG;
+			void* obj = (void*)((uintptr_t)item & ~(uintptr_t)MS_DROP_TAG);
+			if (tag == 0) {
+				p = obj;
+			} else if (tag == MS_DROP_FRAME) {
+				msDropDispose(s, obj);
+			} else {
+				msDropCont fn = d->data[--d->len].fn;
+				int32_t resume = (int32_t)d->data[--d->len].n;
+				d->cur = obj;
+				d->base = d->len;
+				fn(obj, resume);
+				if (d->len - d->base > 1) msDropReverse(d->data + d->base, d->data + d->len - 1);
+			}
+		}
+		if (p == NULL) break;
+	}
+	d->cur = outerCur;
+	d->base = outerBase;
+	if (outerCur == NULL && floor == 0) {
+		free(d->data);
+		d->data = NULL;
+		d->cap = 0;
+	}
+}
+
+bool msDropEdgeSlow(void* owner, void* p) {
+	msSlab* s = &msSlabTLS;
+	msDropState* d = &s->drop;
+	if (d->span == 0) {
+		msDropBounds(d);
+		if (msStackPointer() - d->floor < d->span) {
+			MS_DESTROY_DISPATCH(msHeader(p)->type, p);
+			msDropDispose(s, p);
+			return false;
+		}
+	}
+	if (owner != NULL && owner == d->cur) {
+		msDropReserve(d, 1);
+		d->data[d->len++].p = p;
+		return true;
+	}
+	msDropRun(s, p);
+	return false;
+}
+
+void msDropDefer(void* owner, msDropCont fn, int32_t resume) {
+	msDropState* d = &msSlabTLS.drop;
+	msDropReserve(d, 3);
+	d->data[d->len++].p = (void*)((uintptr_t)owner | MS_DROP_CONT);
+	d->data[d->len++].fn = fn;
+	d->data[d->len++].n = resume;
+}
+
+void msDropRestore(const msDropState* saved) {
+	msDropState* d = &msSlabTLS.drop;
+	d->cur = saved->cur;
+	d->len = saved->len;
+	d->base = saved->base;
+}
 #endif
 
 #ifdef MSGC_ORC
@@ -235,7 +394,7 @@ static inline void setColor(msRefHeader* h, int32_t color) {
 	h->rc = (h->rc & ~MS_COLOR_MASK) | color;
 }
 
-static inline int32_t getCount(msRefHeader* h) {
+static inline intptr_t getCount(msRefHeader* h) {
 	return h->rc >> MS_RC_SHIFT;
 }
 
@@ -245,6 +404,10 @@ static inline void decCount(msRefHeader* h) {
 
 static inline void incCount(msRefHeader* h) {
 	h->rc += MS_RC_INCREMENT;
+}
+
+static inline void setLastRefCount(msRefHeader* h) {
+	h->rc &= MS_RC_MASK;
 }
 
 /* ===== Trace Ref (reference ORC parity) ===== */
@@ -416,6 +579,7 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 	for (int32_t i = 0; i < j->toFree.len; i++) {
 		void* p = j->toFree.data[i].ptr;
 		const msTypeInfo* type = j->toFree.data[i].type;
+		setLastRefCount(msHeader(p));
 		MS_DESTROY_DISPATCH(type, p);
 		msDestroyAndDispose(p);
 	}

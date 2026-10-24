@@ -1132,6 +1132,14 @@ export function collectExtern(ctx: CheckerContext, node: Node): void {
 		ExternKind.Type => SymbolKind.TypeAlias,
 		_ => SymbolKind.Variable,
 	};
+	const cTag = d.externKind == ExternKind.Struct && ctx.exportRegistry != null && isCTagSpelling(d.nativeName) ? d.nativeName : "";
+	const shared = cTag != "" ? ctx.exportRegistry.cTags.get(cTag) : null;
+	if (shared != null && shared.name == d.externName) {
+		const result = defineSymbol(ctx.table, shared);
+		if (!result.ok) addError(ctx, result.error, node.location.line, node.location.column);
+		node.resolvedSym = shared;
+		return;
+	}
 	const symType = d.externKind == ExternKind.Struct ? retainedType(ctx, node, createStruct(d.externName, [], [], true)) : inferredType();
 	const mutable = d.externKind == ExternKind.Var || d.externKind == ExternKind.Let;
 	const sym = declSymbol(ctx, node, d.externName, kind, symType, mutable);
@@ -1145,6 +1153,11 @@ export function collectExtern(ctx: CheckerContext, node: Node): void {
 		sym.nativeName = d.externName;
 	}
 	defineOrError(ctx, sym, node);
+	if (cTag != "") ctx.exportRegistry.cTags.set(cTag, sym);
+}
+
+function isCTagSpelling(nativeName: string | null): boolean {
+	return nativeName != null && (nativeName.startsWith("struct ") || nativeName.startsWith("union "));
 }
 
 export function collectMacro(ctx: CheckerContext, node: Node): void {
@@ -1365,13 +1378,15 @@ function stripModuleExtension(path: string): string {
 	return path;
 }
 
+// Importing a C header includes it in the importer's C, as `@include` does, so a C declaration
+// the importer writes itself (an `extern function`) sees the header's types and prototypes.
+function includeHeader(ctx: CheckerContext, path: string): void {
+	if (ctx.includeDirectives.split("\n").includes(path)) return;
+	ctx.includeDirectives = ctx.includeDirectives == "" ? path : `${ctx.includeDirectives}\n${path}`;
+}
+
 function collectImport(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ImportDeclData;
-
-	// .h imports: skip registry lookup and symbol creation. The extern decls
-	// synthesized by inlineHeaderImports define the symbols locally. The
-	// ImportDecl survives as metadata so Phase B can flag unused imports.
-	if (isCHeaderPath(d.importSource)) return;
 
 	// std/core is the prelude — symbols already in Global scope via injectPrelude.
 	// But explicit imports promote them to Module scope (e.g., making extension methods
@@ -1383,6 +1398,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 
 	// Resolve types from ExportRegistry
 	const sourcePath = resolveImportSourcePath(ctx, d.importSource);
+	if (isCHeaderPath(sourcePath)) includeHeader(ctx, sourcePath);
 
 	// Namespace import: import * as ns from "path"
 	// Create a Module symbol only. Individual exports are resolved on demand
@@ -1521,11 +1537,6 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 	// as reference compilers using idempotent set-add for import deduplication).
 	if (d.exportedDecl.kind == NodeKind.ImportDecl) {
 		const imp = d.exportedDecl.data as ImportDeclData;
-
-		// .h re-exports: inlineHeaderImports emitted extern decls with the
-		// re-export aliasing already baked in (buildReexportReplacement). Skip
-		// the registry path; let the synthesized extern decls define the symbols.
-		if (isCHeaderPath(imp.importSource)) return;
 
 		if (!isGlobalImport(imp.importSource)) {
 			// Star re-export: export * from "path" — re-export all symbols from source

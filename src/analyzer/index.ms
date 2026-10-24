@@ -2,7 +2,6 @@
 //
 // Pipeline: parse → check → transform → **analyze** → codegen
 //
-// Re-exports the public API from all sub-modules.
 // analyzeProgram is the main entry point called from src/index.ms.
 
 import { Node, NodeKind, NodeFlag, ProgramData, BlockStmtData } from "../ast/node";
@@ -14,8 +13,6 @@ import { createDrcContext, pushScope, popScope } from "./scope";
 import { injectProgram } from "./inject";
 import { optimizeDrc } from "./optimize";
 import { classifyType, RcKind, noRcInfo } from "./classify";
-import { isLastReadInBlock } from "./lastRead";
-import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, skipConvDfa, getRootSym } from "./alias";
 
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
@@ -31,18 +28,6 @@ export function analyzeProgram(program: Node, checkerCtx: CheckerContext): Node 
 	const injected = injectProgram(program, dctx);
 	return optimizeDrc(injected);
 }
-
-// ===== Re-exports =====
-
-export { classifyType, RcKind, noRcInfo } from "./classify";
-export { isLastReadInBlock } from "./lastRead";
-export { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, skipConvDfa, getRootSym } from "./alias";
-export { injectProgram } from "./inject";
-export { optimizeDrc } from "./optimize";
-export {
-	DrcContext, createDrcContext, pushScope, popScope, currentScope,
-	registerVar, recordMove,
-} from "./scope";
 
 // ===== Integration Tests =====
 

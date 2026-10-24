@@ -4,6 +4,7 @@ import { RaiserInstruction, RaiserOpcode, RaiserRegClass, raiserABC, raiserABx, 
 import { RaiserValue, RaiserValueKind, RaiserClassType, raiserInt, constStringText } from "./value";
 import { RaiserCopyPlan } from "./valueCopy";
 import { layoutRegisters } from "./regs";
+import { HostEntry } from "./hostRegistry";
 
 // --- Function ---
 
@@ -14,7 +15,9 @@ export interface RaiserFunction {
 	lines: int32[];       // source line per instruction, 0 = unknown
 	fieldCache: int32[];  // LoadField/StoreField cached field index per instruction, -1 = miss
 	constants: RaiserValue[];
-	names: string[];      // constants[i] read as text, "" for a non-string; LoadField and StoreField compare it on every access
+	hostCache: (HostEntry | null)[];  // CallHost entry resolved once per constant index, null = not resolved yet
+	nameIds: int64[];     // the interned handle of constants[i] when it is a string, -1 otherwise, so a cached field access compares integers
+	names: string[];      // constants[i] read as text, "" for a non-string; a cache miss in LoadField and StoreField compares it
 	arity: number;
 	localsCount: number;
 	wordRegs: int32;      // registers of the word file the frame holds
@@ -72,10 +75,16 @@ export function createRaiserFunction(name: string, code: RaiserInstruction[], co
 		fieldCache.push(-1);
 	}
 	const names: string[] = [];
-	for (const c of constants) names.push(c.kind == RaiserValueKind.String ? constStringText(c) : "");
+	const hostCache: (HostEntry | null)[] = [];
+	const nameIds: int64[] = [];
+	for (const c of constants) {
+		names.push(c.kind == RaiserValueKind.String ? constStringText(c) : "");
+		hostCache.push(null);
+		nameIds.push(c.kind == RaiserValueKind.String ? c.intVal : -1);
+	}
 	let paramRefs: int32 = 0;
 	for (let r = 0; r < arity && r < layout.regOps.length; r += 1) if (inRefFile((layout.regOps[r] & 7) as RaiserRegClass)) paramRefs += 1;
-	const func: RaiserFunction = { name, code: layout.code, packed, lines, fieldCache, constants, names, arity, localsCount, wordRegs: layout.wordRegs, refRegs: layout.refRegs, paramRefs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: layout.sigs, copyPlans: [], classTypes: [] };
+	const func: RaiserFunction = { name, code: layout.code, packed, lines, fieldCache, constants, hostCache, nameIds, names, arity, localsCount, wordRegs: layout.wordRegs, refRegs: layout.refRegs, paramRefs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: layout.sigs, copyPlans: [], classTypes: [] };
 	bindReturns(func);
 	return func;
 }

@@ -5,8 +5,6 @@
 // this via `detectionGetCaptures` / `detectionGetCapturedIdents` instead of
 // running per-function detection inline.
 //
-// Reference: Nim's `detectCapturedVars` (`compiler/lambdalifting.nim:430-516`) +
-// `DetectionPass` struct (`lambdalifting.nim:297-310`).
 
 import {
 	Node, NodeKind, ArrowFunctionData, FunctionExprData,
@@ -429,7 +427,7 @@ function detectPassWalk(node: Node, state: DetectionState, ss: ScopeStack, enclo
 	}
 	if (node.kind == NodeKind.ArrowFunction) {
 		const d = node.data as ArrowFunctionData;
-		// Arrows are env-owners too (Nim parity): each arrow that has captures
+		// Arrows are env-owners too: each arrow that has captures
 		// gets its own per-call env, so locals declared inside its body don't
 		// share storage across multiple invocations of the same arrow. See
 		// `detectAllCaptures`'s defined-at-or-above-initial filter for how each

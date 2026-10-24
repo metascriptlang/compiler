@@ -605,9 +605,28 @@ msRefArray msRefArrayNew(int64_t cap) {
 	return arr;
 }
 
+static void msRefArrayFreeAfterDrop(void* owner, int32_t resume) {
+	(void)resume;
+	msRefArray* arr = (msRefArray*)owner;
+	free(arr->p);
+	arr->p = NULL;
+	arr->len = 0;
+}
+
 void msRefArrayDestroy(msRefArray* arr) {
 	if (arr->p != NULL) {
-		for (int64_t i = 0; i < arr->len; i++) msDecrefCyclic(arr->p->data[i]);
+		bool pending = false;
+		if (msDropHasRoom()) {
+			for (int64_t i = 0; i < arr->len; i++) msDecrefCyclic(arr->p->data[i]);
+		} else for (int64_t i = 0; i < arr->len; i++) {
+			void* e = arr->p->data[i];
+			if (e != NULL && msHeader(e)->type != NULL && !msHeader(e)->type->isCyclic) msDecrefCyclic(e);
+			else pending |= msDecrefCyclicEdge(arr, e);
+		}
+		if (pending) {
+			msDropDefer(arr, msRefArrayFreeAfterDrop, 0);
+			return;
+		}
 		free(arr->p);
 		arr->p = NULL;
 	}

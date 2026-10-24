@@ -1,4 +1,4 @@
-// Update Expression Lowering — statement `x++` becomes `x += 1` (Nim mInc -> binaryStmt `+=`).
+// Update Expression Lowering — statement `x++` becomes `x += 1`.
 
 import { Node, NodeKind, ExprStmtData, UpdateExprData, BinaryExprData } from "../../ast/node";
 import { TransformContext } from "../context";

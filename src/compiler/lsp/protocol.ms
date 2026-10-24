@@ -2,52 +2,38 @@
 //
 // Pure computation: JSON building, field extraction, message framing format.
 // No I/O — actual stdin/stdout handled by server.ms.
-//
-// All string methods (indexOf, charAt, slice) come from std/core/string prelude.
 
-// String value decoding delegates to the shared JSON parser so we honour
-// the full RFC 8259 escape spec (including `\uXXXX` + surrogate pairs).
-// Hand-rolled escape handling here would re-implement (and inevitably
-// drift from) std/core/json/parser.ms.
 import { parseJson } from "std/serialize/json/parser";
-import { JsonKind } from "std/serialize/json/types";
+import { JsonKind, JsonValue, asInt64, asNumber, asString } from "std/serialize/json/types";
+import { getDynamicField } from "std/serialize/json/accessors";
+import { digitValue, parseIntPrefix } from "std/core/number/parse";
+import { isDigit } from "../../lexer/chars";
 
 
 // ===== JSON Building =====
 
+function unicodeEscape(code: int32): string {
+	const hex = code.toString(16);
+	return "\\u" + "0000".slice(0, 4 - hex.length) + hex;
+}
+
 export function lspJsonString(val: string): string {
-	const parts: string[] = [];
-	parts.push("\"");
+	const parts: string[] = ["\""];
 	let start = 0;
-	let i = 0;
-	while (i < val.length) {
+	for (let i = 0; i < val.length; i++) {
 		const code = val.charCodeAt(i);
-		if (code > 127) {
-			if (start < i) parts.push(val.slice(start, i));
-			const hex = code.toString(16);
-			parts.push("\\u");
-			parts.push("0000".slice(0, 4 - hex.length));
-			parts.push(hex);
-			i = i + 1;
-			start = i;
-			continue;
-		}
-		const ch = val.charAt(i);
-		if (ch == "\\" || ch == "\"" || ch == "\n" || ch == "\r" || ch == "\t") {
-			if (start < i) parts.push(val.slice(start, i));
-			parts.push(match (ch) {
-				"\\" => "\\\\",
-				"\"" => "\\\"",
-				"\n" => "\\n",
-				"\r" => "\\r",
-				"\t" => "\\t",
-				_ => ch,
-			});
-			i = i + 1;
-			start = i;
-			continue;
-		}
-		i = i + 1;
+		const escape = match (code) {
+			"\\".code => "\\\\",
+			"\"".code => "\\\"",
+			"\n".code => "\\n",
+			"\r".code => "\\r",
+			"\t".code => "\\t",
+			_ => code > 127 ? unicodeEscape(code) : "",
+		};
+		if (escape == "") continue;
+		if (start < i) parts.push(val.slice(start, i));
+		parts.push(escape);
+		start = i + 1;
 	}
 	if (start < val.length) parts.push(val.slice(start, val.length));
 	parts.push("\"");
@@ -63,20 +49,11 @@ export function lspJsonBool(val: boolean): string {
 	return "false";
 }
 
-export function lspJsonNull(): string {
-	return "null";
-}
-
 // ===== JSON Field Extraction =====
 
-// Find a string value for a key in a JSON object.
-// Uses native indexOf for O(n) pattern search to locate the field, then
-// delegates to the shared `parseJson` (std/core/json) to decode the string
-// token. This guarantees we honour the full RFC 8259 §7 escape spec —
-// `\"  \\  \/  \b  \f  \n  \r  \t  \uXXXX` (with UTF-16 surrogate pairs) —
-// without re-implementing it. LSP4IJ (IntelliJ) emits `=` as `=`, `>`
-// as `>`, etc.; the bug was invisible until then because VSCode/Neovim
-// send those characters raw.
+// Find a string value for a key in a JSON object. The string token goes through the shared
+// JSON parser so every RFC 8259 escape decodes, which matters because LSP4IJ (IntelliJ)
+// sends `=` as `\u003d` where VSCode and Neovim send it raw.
 export function lspGetField(json: string, field: string): string {
 	const pattern = "\"" + field + "\":";
 	let pos = 0;
@@ -85,7 +62,7 @@ export function lspGetField(json: string, field: string): string {
 		if (i < 0) return "";
 		// Skip whitespace after colon
 		let j = i + pattern.byteLength;
-		while (j < json.byteLength && (json.charAt(j) == " " || json.charAt(j) == "\t")) { j = j + 1; }
+		while (j < json.byteLength && (json.charAt(j) == " " || json.charAt(j) == "\t")) { j++; }
 		// Expect opening quote for string value (skip past non-string matches like nested keys)
 		if (j >= json.byteLength || json.charAt(j) != "\"") {
 			pos = i + 1;
@@ -102,10 +79,10 @@ export function lspGetField(json: string, field: string): string {
 					k = k + 2;
 				}
 			} else if (c == "\"") {
-				k = k + 1;
+				k++;
 				break;
 			} else {
-				k = k + 1;
+				k++;
 			}
 		}
 		// Hand the string token (with quotes) to the JSON parser for decoding
@@ -126,21 +103,18 @@ export function lspGetNumberField(json: string, field: string): number {
 	if (i < 0) return -1;
 	// Found key. Parse digits.
 	let j = i + pattern.byteLength;
-	while (j < json.byteLength && json.charAt(j) == " ") { j = j + 1; }
+	while (j < json.byteLength && json.charAt(j) == " ") { j++; }
 	let neg = false;
 	if (j < json.byteLength && json.charAt(j) == "-") {
 		neg = true;
-		j = j + 1;
+		j++;
 	}
 	let result = 0;
 	let found = false;
-	while (j < json.byteLength) {
-		const c = json.charAt(j);
-		const d = digitValue(c);
-		if (d < 0) break;
-		result = result * 10 + d;
+	while (j < json.byteLength && isDigit(json.charCodeAt(j))) {
+		result = result * 10 + (json.charCodeAt(j) - "0".code);
 		found = true;
-		j = j + 1;
+		j++;
 	}
 	if (!found) return -1;
 	if (neg) result = 0 - result;
@@ -156,7 +130,7 @@ export function lspGetObjectField(json: string, field: string): string {
 		const i = json.indexOf(pattern, pos);
 		if (i < 0) return "";
 		let j = i + pattern.byteLength;
-		while (j < json.byteLength && json.charAt(j) == " ") { j = j + 1; }
+		while (j < json.byteLength && json.charAt(j) == " ") { j++; }
 		const opener = j < json.byteLength ? json.charAt(j) : "";
 		if (opener == "{" || opener == "[") {
 			const closer = opener == "{" ? "}" : "]";
@@ -165,21 +139,21 @@ export function lspGetObjectField(json: string, field: string): string {
 			let start = j;
 			while (j < json.byteLength) {
 				const c = json.charAt(j);
-				if (c == opener) { depth = depth + 1; }
+				if (c == opener) { depth++; }
 				else if (c == closer) {
-					depth = depth - 1;
+					depth--;
 					if (depth == 0) {
 						return json.slice(start, j + 1);
 					}
 				} else if (c == "\"") {
 					// Skip quoted string
-					j = j + 1;
+					j++;
 					while (j < json.byteLength && json.charAt(j) != "\"") {
-						if (json.charAt(j) == "\\") { j = j + 1; }
-						j = j + 1;
+						if (json.charAt(j) == "\\") { j++; }
+						j++;
 					}
 				}
-				j = j + 1;
+				j++;
 			}
 		}
 		pos = i + 1;
@@ -192,7 +166,7 @@ export function lspGetBoolField(json: string, field: string): boolean {
 	const i = json.indexOf(pattern);
 	if (i < 0) return false;
 	let j = i + pattern.byteLength;
-	while (j < json.byteLength && json.charAt(j) == " ") { j = j + 1; }
+	while (j < json.byteLength && json.charAt(j) == " ") { j++; }
 	return json.slice(j, j + 4) == "true";
 }
 
@@ -204,22 +178,22 @@ export function lspGetArrayItems(arrayJson: string): string[] {
 	while (j < arrayJson.byteLength) {
 		const c = arrayJson.charAt(j);
 		if (c == "\"") {
-			j = j + 1;
+			j++;
 			while (j < arrayJson.byteLength && arrayJson.charAt(j) != "\"") {
-				if (arrayJson.charAt(j) == "\\") { j = j + 1; }
-				j = j + 1;
+				if (arrayJson.charAt(j) == "\\") { j++; }
+				j++;
 			}
 		} else if (c == "{" || c == "[") {
-			depth = depth + 1;
+			depth++;
 			if (depth == 2 && c == "{") { start = j; }
 		} else if (c == "}" || c == "]") {
 			if (depth == 2 && c == "}" && start >= 0) {
 				items.push(arrayJson.slice(start, j + 1));
 				start = -1;
 			}
-			depth = depth - 1;
+			depth--;
 		}
-		j = j + 1;
+		j++;
 	}
 	return items;
 }
@@ -231,8 +205,7 @@ export function lspParseContentLength(headerLine: string): int32 {
 	const prefix = "Content-Length: ";
 	if (headerLine.byteLength <= prefix.byteLength) return -1;
 	if (headerLine.slice(0, prefix.byteLength) != prefix) return -1;
-	const numPart = headerLine.slice(prefix.byteLength, headerLine.byteLength);
-	return parseSimpleInt(numPart);
+	return parseIntPrefix(headerLine.slice(prefix.byteLength, headerLine.byteLength)) as int32;
 }
 
 // Format a JSON-RPC message with Content-Length header for writing.
@@ -240,27 +213,16 @@ export function lspFormatMessage(json: string): string {
 	return "Content-Length: " + lspJsonNumber(json.byteLength) + "\r\n\r\n" + json;
 }
 
-// ===== Helpers =====
+// ===== JSON Response Builders =====
 
-function digitValue(c: string): int32 {
-	return match (c) {
-		"0" => 0, "1" => 1, "2" => 2, "3" => 3, "4" => 4,
-		"5" => 5, "6" => 6, "7" => 7, "8" => 8, "9" => 9,
-		_ => -1,
+export function lspIdOf(id: JsonValue): string {
+	return match (id.kind) {
+		JsonKind.Int => id.asInt64().toString(),
+		JsonKind.Number => lspJsonNumber(id.asNumber()),
+		JsonKind.String => lspJsonString(id.asString()),
+		_ => "",
 	};
 }
-
-function parseSimpleInt(s: string): int32 {
-	let result = 0;
-	for (let i = 0; i < s.byteLength; i = i + 1) {
-		const d = digitValue(s.charAt(i));
-		if (d < 0) break;
-		result = result * 10 + d;
-	}
-	return result;
-}
-
-// ===== JSON Response Builders =====
 
 // Build a JSON-RPC response: {"jsonrpc":"2.0","id":N,"result":{...}}
 export function lspResponse(id: string, resultJson: string): string {
@@ -277,17 +239,17 @@ export function lspNotification(method: string, paramsJson: string): string {
 }
 
 // Build a JSON-RPC error response
-export function lspErrorResponse(id: string, code: number, message: string): string {
+export function lspErrorResponse(id: string, code: int32, message: string): string {
 	return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + lspJsonNumber(code) + ",\"message\":" + lspJsonString(message) + "}}";
 }
 
 // ===== URI Conversion =====
 
-function lspHexDigit(code: int32): int32 {
-	if (code >= "0".code && code <= "9".code) return code - "0".code;
-	if (code >= "a".code && code <= "f".code) return code - "a".code + 10;
-	if (code >= "A".code && code <= "F".code) return code - "A".code + 10;
-	return -1;
+function escapedByte(s: string, at: int32): int32 {
+	if (at + 2 >= s.length || s.charAt(at) != "%") return -1;
+	const hi = digitValue(s.charCodeAt(at + 1));
+	const lo = digitValue(s.charCodeAt(at + 2));
+	return hi < 16 && lo < 16 ? hi * 16 + lo : -1;
 }
 
 // Percent-decoding. Real clients hand us escaped URIs: the VS Code plugin sends
@@ -303,46 +265,28 @@ function lspPercentDecode(s: string): string {
 	let out = "";
 	let i = 0;
 	while (i < s.length) {
-		const ch = s.charAt(i);
-		if (ch != "%" || i + 2 >= s.length) {
-			out = out + ch;
-			i = i + 1;
+		const b0 = escapedByte(s, i);
+		if (b0 < 0) {
+			out += s.charAt(i);
+			i++;
 			continue;
 		}
-		const hi = lspHexDigit(s.charCodeAt(i + 1));
-		const lo = lspHexDigit(s.charCodeAt(i + 2));
-		if (hi < 0 || lo < 0) {
-			// Not a valid escape — a literal "%" in the path.
-			out = out + ch;
-			i = i + 1;
-			continue;
-		}
-		const b0 = hi * 16 + lo;
-		i = i + 3;
+		i += 3;
 		if (b0 < 0x80) {
-			out = out + fromCodePoint(b0);
+			out += fromCodePoint(b0);
 			continue;
 		}
-		let need = 0;
-		let cp = 0;
-		if (b0 >= 0xF0) { need = 3; cp = b0 - 0xF0; }
-		else if (b0 >= 0xE0) { need = 2; cp = b0 - 0xE0; }
-		else if (b0 >= 0xC0) { need = 1; cp = b0 - 0xC0; }
-		else { continue; }
-		let taken = 0;
+		const need = b0 >= 0xF0 ? 3 : b0 >= 0xE0 ? 2 : b0 >= 0xC0 ? 1 : 0;
+		if (need == 0) continue;
+		let cp = b0 - (need == 3 ? 0xF0 : need == 2 ? 0xE0 : 0xC0);
 		let ok = true;
-		while (taken < need) {
-			if (i + 2 >= s.length || s.charAt(i) != "%") { ok = false; break; }
-			const chi = lspHexDigit(s.charCodeAt(i + 1));
-			const clo = lspHexDigit(s.charCodeAt(i + 2));
-			if (chi < 0 || clo < 0) { ok = false; break; }
-			const cb = chi * 16 + clo;
+		for (let taken = 0; taken < need; taken++) {
+			const cb = escapedByte(s, i);
 			if (cb < 0x80 || cb >= 0xC0) { ok = false; break; }
 			cp = cp * 64 + (cb - 0x80);
-			i = i + 3;
-			taken = taken + 1;
+			i += 3;
 		}
-		if (ok) out = out + fromCodePoint(cp);
+		if (ok) out += fromCodePoint(cp);
 	}
 	return out;
 }
@@ -384,12 +328,8 @@ function lspPathEscape(path: string): string {
 
 // ===== Path Helpers =====
 
-// Re-export from std/fs/path so LSP handlers have one canonical path API.
-// (Historical `lspDirname` only split on "/"; replaced with the cross-platform
-// variant that accepts both "/" and "\\".) LSP handlers import `dirname` from
-// here; resolveImport below also uses it directly.
-import { dirname as _dirname } from "std/fs/path";
-export function dirname(p: string): string { return _dirname(p); }
+export { dirname } from "std/fs/path";
+import { dirname } from "std/fs/path";
 
 // Resolve a relative import specifier against a base file path.
 // Handles "./foo", "../bar", "../../baz". Auto-appends ".ms" if missing.
@@ -420,22 +360,8 @@ export function lspResolveImport(basePath: string, importSpec: string): string {
 	if (result.endsWith(".ms") || result.endsWith(".h") || result.endsWith(".cms")) {
 		return result;
 	}
-	// Default: append .ms (callers use lspResolveImportCandidates for full fallback)
+	// Default: append .ms
 	return result + ".ms";
-}
-
-// Resolve relative import to candidate paths: spec.ms, spec/index.ms, spec.cms, spec/index.cms.
-// Used by LSP and TransAm for directory-style imports (e.g., "./platform/sdl" → "sdl/index.ms").
-export function lspResolveImportCandidates(basePath: string, importSpec: string): string[] {
-	const first = lspResolveImport(basePath, importSpec);
-	if (first == "") return [];
-	// Already has extension — single candidate
-	if (importSpec.endsWith(".ms") || importSpec.endsWith(".h") || importSpec.endsWith(".cms")) {
-		return [first];
-	}
-	// Bare specifier: try .ms, /index.ms, .cms, /index.cms
-	const base = first.endsWith(".ms") ? first.slice(0, first.length - 3) : first;
-	return [base + ".ms", base + "/index.ms", base + ".cms", base + "/index.cms"];
 }
 
 // ===== Tests =====
@@ -477,8 +403,6 @@ test "number" {
 test "bool true" { assert lspJsonBool(true) == "true"; }
 
 test "bool false" { assert lspJsonBool(false) == "false"; }
-
-test "null" { assert lspJsonNull() == "null"; }
 
 test "extract method" {
 	const json = "{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":1}";
@@ -656,4 +580,25 @@ test "request carries id, method and params" {
 	const r = lspRequest("\"r1\"", "client/registerCapability", "{}");
 	assert lspGetField(r, "id") == "r1";
 	assert lspGetField(r, "method") == "client/registerCapability";
+}
+
+test "an id goes back as the client wrote it: number, string, or none" {
+	const r = parseJson("{\"a\":7,\"b\":\"x\",\"c\":null,\"d\":1.5}");
+	assert r.ok;
+	if (r.ok) {
+		assert lspIdOf(r.value.getDynamicField("a")) == "7";
+		assert lspIdOf(r.value.getDynamicField("b")) == "\"x\"";
+		assert lspIdOf(r.value.getDynamicField("c")) == "";
+		assert lspIdOf(r.value.getDynamicField("d")) == "1.5";
+		assert lspIdOf(r.value.getDynamicField("missing")) == "";
+	}
+}
+
+test "json string escapes non-ASCII as lower-case \\u units" {
+	assert lspJsonString("é") == "\"\\u00e9\"";
+	assert lspJsonString("a\tb") == "\"a\\tb\"";
+}
+
+test "content length ignores text after the digits" {
+	assert lspParseContentLength("Content-Length: 12abc") == 12;
 }

@@ -104,11 +104,16 @@ the pass. Measured on that build: 1062 gave identical C (16 modules via `--emit=
 node flags stop crossing the macro wire. Writing `config` twice inside `when (…) { const config = … }
 else { … }` also works (measured the same day), but its two copies drift.
 
-Not covered: the language server does not load `build.ms` `globalImports` at all, so an editor
-shows neither the injected names nor what the pass emits (card
-`~/metascript/.inbox/compiler/2026-10-06-lsp-ignores-build-global-imports.md`). Under `--hcr`, a
-globalImports module that keeps a module-level `string[]` fails to link, with or without a pass
-(card `2026-10-06-hcr-ref-array-cell-owned-by-user-image.md`).
+The language server checks each `globalImports` entry as an implicit import of the project, with
+the same visibility as batch checking: a module sees the entries before the first one whose import
+closure reaches it, and std modules see none; module passes bind as in batch. Measured 2026-10-23
+by the replay scenarios in `src/compiler/lsp/replayScenarios.ms` (a macro from a global import
+expands, class and generic identity, edits reaching users, both visibility cases, a pass after a
+project switch), each compared with `msc check`. A change to `build.ms` itself still needs a server
+restart.
+
+Under `--hcr`, a globalImports module that keeps a module-level `string[]` fails to link, with
+or without a pass (card `2026-10-06-hcr-ref-array-cell-owned-by-user-image.md`).
 
 ### `lsp` — editor-only target
 

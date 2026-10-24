@@ -11,8 +11,7 @@
 // Positional new without a constructor is a MetaScript extension (TS rejects
 // the args). Before this pass the C backend carried an inline positional
 // branch in codegen and JS had nothing — `new Pt(1, 2)` silently dropped both
-// args on JS. One statement-splice lowering here serves both backends: the
-// materialize-once shape Nim uses at sem (defaultFieldsForTheUninitialized).
+// args on JS. One statement-splice lowering here serves both backends.
 // The 0-arg `new` runs <Class>_init (super chain + field defaults, ctorLower),
 // then the positional assignments override — same order the C branch had.
 //

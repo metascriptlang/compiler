@@ -1,5 +1,5 @@
 // Lambda Lifting — converts closures with captures into lifted functions + env
-// structs. Two-pass design (Nim parity, see `compiler/lambdalifting.nim`):
+// structs. Two-pass design:
 //
 //   Pass 1 — `detectPass` (in `lambdaLiftingDetect.ms`): walks the whole
 //            program once, records per-FunctionDecl/Method/Ctor the union of
@@ -28,7 +28,7 @@ import { forEachChild, initializerHoldsClosure } from "../../ast/visitor";
 import {
 	makeTypedIdentResolved, makeMember, makeMoveExpr, makeReturn, makeBlock, makeVarDecl,
 	makeFnDecl, makeInterfaceDeclFromTypes, makeObjectLiteral, makeHiddenDeref,
-	makeNull, makeAssign, makeExprStmt, syntheticToken, resolveSimpleTypeStr, extractBodyStmts,
+	makeNull, makeDefaultValue, makeAssign, makeExprStmt, syntheticToken, resolveSimpleTypeStr, extractBodyStmts,
 } from "../util";
 import { createPtr, createRef, voidType, isUnresolvedType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
@@ -47,8 +47,7 @@ import {
 } from "./lambdaLiftingScope";
 
 // Synthetic env field — pointer to the lexical parent env. Each per-closure env
-// gets one of these wired to its enclosing function's env (see Nim's `:up`,
-// lambdalifting.nim:125). The `$` prefix marks it as a synthetic name unlikely
+// gets one of these wired to its enclosing function's env. The `$` prefix marks it as a synthetic name unlikely
 // to collide with user identifiers.
 const UP_FIELD: string = "$up";
 
@@ -542,7 +541,7 @@ function chainIndexOf(state: LiftState, chainTypes: Type[], sym: Symbol): number
 }
 
 // Walk `$up` from a base env-struct access up the ancestor chain to the env that
-// stores `sym` (chainTypes[targetIdx]) — Nim accessViaEnvParam, lambdalifting.nim:529.
+// stores `sym` (chainTypes[targetIdx]).
 // `access0` is the starting env-struct value: `(*((Cur*)_envP))` for a lifted body
 // (chainWalkAccess), or the named env var for the outer-ref rewrite (rewriteOuterRef).
 function chainWalkFrom(state: LiftState, access0: Node, curType0: Type, sym: Symbol, chainNames: string[], chainTypes: Type[], targetIdx: number, nodeOriginalType: Type, loc: SourceLocation): Node {
@@ -589,7 +588,7 @@ function chainWalkAccess(
 // - envTypeName / envStructType: this closure's env (cast target for `_envP`)
 // - chainNames / chainTypes: ancestor envs, immediate-parent first. A capture
 //   not stored in the current env lives in one of these — reached by walking
-//   `$up` (Nim accessViaEnvParam), never copied down (that was bug D).
+//   `$up`, never copied down (that was bug D).
 function rewriteNode(
 	state: LiftState,
 	node: Node,
@@ -603,7 +602,7 @@ function rewriteNode(
 		const sym = node.resolvedSym;
 		if (sym != null && symSetContains(captures, sym)) {
 			// If the captured binding is NOT a field of the current env, walk the
-			// `$up` chain to the ancestor env that stores it (Nim parity).
+			// `$up` chain to the ancestor env that stores it.
 			if (!envHasField(state, envStructType, sym)) {
 				const idx = chainIndexOf(state, chainTypes, sym);
 				if (idx < 0) {
@@ -648,7 +647,7 @@ function rewriteOuterRef(state: LiftState, node: Node, rewrite: PendingEnvRewrit
 		const isFnCapture = sym != null && sym.symbolKind == SymbolKind.Function;
 		if (!isFnCapture && sym != null && symSetContains(rewrite.capturedSyms, sym) && rewrite.envVarSym != null) {
 			// Ancestor capture skipped from this env: walk `$up` from the named
-			// env var to the ancestor env that stores it (Nim accessViaEnvParam).
+			// env var to the ancestor env that stores it.
 			// Neither held nor reachable here: the scope that owns it rewrites it.
 			if (!envHasField(state, rewrite.envStructType, sym)) {
 				const idx = chainIndexOf(state, rewrite.chainTypes, sym);
@@ -1464,7 +1463,7 @@ function setupSharedEnv(state: LiftState, allCaptures: SymSet, allCapturedIdents
 	// the function's shared env via this field. Drives chain walk in rewriteNode.
 	envFieldSyms.push(null as unknown as Symbol);
 	if (outerEnvName != "" && outerEnvStructType != null) {
-		// Owning ref to the enclosing env (Nim's `up` is a ref): keeps the parent
+		// Owning ref to the enclosing env: keeps the parent
 		// frame alive while any nested closure holds this env, so the `$up` walk
 		// never dangles for an escaping closure (DRC increfs on wire, ORC decrefs
 		// on destroy). Chain is acyclic → no cycle, short → no destroy-recursion.
@@ -1476,7 +1475,7 @@ function setupSharedEnv(state: LiftState, allCaptures: SymSet, allCapturedIdents
 	}
 	for (const sym of allCaptures.items) {
 		// Ancestor capture: an enclosing env already stores this var. Do NOT add a
-		// field here — it is read via the `$up` walk, never copied (Nim parity).
+		// field here — it is read via the `$up` walk, never copied.
 		let isAncestor = false;
 		if (ownLocals == null || !symSetContains(ownLocals, sym)) {
 			for (const at of parentChainTypes) { if (envHasField(state, at, sym)) { isAncestor = true; break; } }
@@ -1512,7 +1511,7 @@ function setupSharedEnv(state: LiftState, allCaptures: SymSet, allCapturedIdents
 
 	// Wire `$up` to the enclosing env. This closure's lifted body receives the
 	// enclosing env as `_envP` (the closure pair carries it), so nested closures
-	// walk `$up` to reach ancestor-frame slots (Nim rawClosureCreation up-field).
+	// walk `$up` to reach ancestor-frame slots.
 	if (outerEnvName != "" && outerEnvStructType != null) {
 		const upLhs = makeMember(envVarDeref(state.sharedEnvVarSym!, state.sharedEnvStructType, loc), UP_FIELD, loc);
 		upLhs.nodeType = createRef(outerEnvStructType);
@@ -1532,7 +1531,7 @@ function setupSharedEnv(state: LiftState, allCaptures: SymSet, allCapturedIdents
 	// (e.g. module-level `const me` + async-local `const me = await ...`), a
 	// name-based check mistakes the inner hoisted local for a module-level capture
 	// and emits `env.name = name` whose RHS has no declaration in function scope.
-	// Mirrors detectAllWalk's interestingVar check and Nim's `sfGlobal notin s.flags`.
+	// Mirrors detectAllWalk's interestingVar check.
 	for (const sym of allCaptures.items) {
 		const isParam = symSetContains(state.currentParams, sym);
 		const orig = findCapturedIdent(sym, state.sharedEnvCapturedIdents);
@@ -1694,7 +1693,7 @@ function walkLiftStmtList(stmts: Node[], state: LiftState, isTopLevel: boolean):
 				}
 				const lhs = makeMember(envAccess, envFieldName(state, state.sharedEnvStructType, declSym), stmtLoc);
 				if (stmts[si].nodeType != null) lhs.nodeType = stmts[si].nodeType;
-				const init = (vd.initializer != null) ? vd.initializer : makeNull(stmtLoc);
+				const init = (vd.initializer != null) ? vd.initializer : makeDefaultValue(declSym.symbolType, stmtLoc);
 				stmts[si] = makeExprStmt(makeAssign(lhs, init, stmtLoc), stmtLoc);
 			}
 		}
@@ -2029,7 +2028,7 @@ function walkLift(node: Node, state: LiftState): void {
 				d.elements[ei] = walkOrLift(d.elements[ei], state);
 			}
 		},
-		// Uniform child traversal (Nim transf walks every sub-node): any
+		// Uniform child traversal: any
 		// expression wrapper not handled above — MemberExpr/ArrayAccess/
 		// ConditionalExpr/TypeAssertion/… — must still reach an inline arrow
 		// nested in a call it holds (`g(x => …).m()`), else codegen emits
@@ -2338,7 +2337,7 @@ function liftCapturingClosureBody(
 	const ownEnvParamSym = freshEnvParamSym(state.ctx);
 	state.envParamSym = ownEnvParamSym;
 	defineParams(state.ss, node.paramSyms, params);
-	// Each capturing closure is its own env-owner (Nim parity). Locals
+	// Each capturing closure is its own env-owner. Locals
 	// declared inside its body MUST live in this closure's per-call env, not
 	// in an enclosing FunctionDecl's shared env — otherwise multiple
 	// invocations of the same closure share storage and overwrite each
@@ -2476,7 +2475,7 @@ function normalizeArrowBodies(node: Node): Node {
 export function lowerLambda(program: Node, ctx: TransformContext): Node {
 	const state = createLiftState(ctx);
 	normalizeArrowBodies(program);
-	// Pass 1: collect per-fn capture info upfront (Nim parity).
+	// Pass 1: collect per-fn capture info upfront.
 	state.detection = detectPass(program);
 	state.splitLoopLocals = ctx.splitLoopLocals;
 	collectRoutines(program, state);

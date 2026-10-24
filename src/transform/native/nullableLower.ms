@@ -26,8 +26,7 @@ import { isNullExpr } from "../lowering/operatorLower";
 //   - Null in any form:         retype/canonicalize as Maybe wrapper, codegen
 //                               emits `{0}` zero-init (present=false).
 //   - Non-null value:           `{ value: init, present: true }` ObjectLiteral
-//                               typed as wrapper. Direct struct construction
-//                               (Nim parity).
+//                               typed as wrapper. Direct struct construction.
 export function wrapMaybeValue(init: Node, maybeType: Type, loc: SourceLocation): Node {
 	if (init.nodeType != null && isMaybeType(init.nodeType)) return init;
 	if (init.kind == NodeKind.NullLiteral) {

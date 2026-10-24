@@ -187,7 +187,7 @@ function declspec(ctx: ParseCtx, attr: VarAttr): CType {
 				"struct" => { advance(ctx); ty = structDecl(ctx); },
 				"union" => { advance(ctx); ty = unionDecl(ctx); },
 				"enum" => { advance(ctx); ty = enumSpecifier(ctx); },
-				_ => { const td = ctx.typedefs.get(s); if (td != null) { ty = td; ty.typedefName = s; } advance(ctx); },
+				_ => { const td = ctx.typedefs.get(s); if (td != null) ty = spelledAs(td, s); advance(ctx); },
 			};
 			counter = counter + SPEC_OTHER;
 			continue;
@@ -467,11 +467,34 @@ function arrayDimensions(ctx: ParseCtx, ty: CType): CType {
 	return makeArray(ty, size);
 }
 
+// A struct, union or enum is one type however it is named, so it is spelled by the typedef
+// that first names it; any other type a typedef names is spelled at each use by the name written
+// there, without renaming the declarations that wrote the type before.
+function spelledAs(td: CType, name: string): CType {
+	if (isTagType(td)) return td;
+	const t = copyType(td);
+	t.typedefName = name;
+	return t;
+}
+
+function isTagType(t: CType): boolean {
+	return t.kind == CTypeKind.Struct || t.kind == CTypeKind.Union || t.kind == CTypeKind.Enum;
+}
+
 // ===== Declarator =====
 
 interface DeclResult {
 	type: CType;
 	name: string;
+	at: CToken;
+}
+
+// The token a declaration's text was written at: a token a macro produced is written where the
+// macro was invoked, not where it was defined.
+function writtenAt(tok: CToken): CToken {
+	let at = tok;
+	while (at.origin != null) at = at.origin;
+	return at;
 }
 
 function declarator(ctx: ParseCtx, ty: CType): DeclResult {
@@ -503,13 +526,14 @@ function declarator(ctx: ParseCtx, ty: CType): DeclResult {
 
 	// Identifier
 	let name = "";
-	if (ctx.tok.kind == CTokenKind.Ident && !ctx.typedefs.has(ctx.tok.stringVal)) {
+	let at = writtenAt(ctx.tok);
+	if (ctx.tok.kind == CTokenKind.Ident) {
 		name = ctx.tok.stringVal;
 		advance(ctx);
 	}
 
 	ty = typeSuffix(ctx, ty);
-	return { type: ty, name };
+	return { type: ty, name, at };
 }
 
 const TYPE_KEYWORDS: string[] = [
@@ -710,6 +734,7 @@ function enumSpecifier(ctx: ParseCtx): CType {
 
 	while (!eq(ctx, "}") && !isEnd(ctx)) {
 		const name = ctx.tok.stringVal;
+		const nameAt = writtenAt(ctx.tok);
 		advance(ctx);
 
 		if (consume(ctx, "=")) {
@@ -729,8 +754,8 @@ function enumSpecifier(ctx: ParseCtx): CType {
 			isExtern: false,
 			isDefinition: true,
 			enumValue: enumVal,
-			file: ctx.tok.file,
-			line: ctx.tok.line,
+			file: nameAt.file,
+			line: nameAt.line,
 		});
 		ctx.enumConstants.set(name, enumVal);
 
@@ -842,8 +867,8 @@ export function parseTranslationUnit(head: CToken, target: TargetInfo): ParseRes
 					isExtern: attr.isExtern,
 					isDefinition: true,
 					enumValue: 0 as int64,
-					file: ctx.tok.file,
-					line: ctx.tok.line,
+					file: declResult.at.file,
+					line: declResult.at.line,
 				});
 			}
 			continue;
@@ -864,8 +889,8 @@ export function parseTranslationUnit(head: CToken, target: TargetInfo): ParseRes
 				isExtern: attr.isExtern,
 				isDefinition: false,
 				enumValue: 0 as int64,
-				file: ctx.tok.file,
-				line: ctx.tok.line,
+				file: declResult.at.file,
+				line: declResult.at.line,
 			});
 			continue;
 		}
@@ -879,8 +904,8 @@ export function parseTranslationUnit(head: CToken, target: TargetInfo): ParseRes
 			isExtern: attr.isExtern,
 			isDefinition: !attr.isExtern,
 			enumValue: 0 as int64,
-			file: ctx.tok.file,
-			line: ctx.tok.line,
+			file: declResult.at.file,
+			line: declResult.at.line,
 		});
 
 		// Handle multiple declarators: int a, b;
@@ -896,8 +921,8 @@ export function parseTranslationUnit(head: CToken, target: TargetInfo): ParseRes
 				isExtern: attr.isExtern,
 				isDefinition: !attr.isExtern,
 				enumValue: 0 as int64,
-				file: ctx.tok.file,
-				line: ctx.tok.line,
+				file: declResult2.at.file,
+				line: declResult2.at.line,
 			});
 		}
 
@@ -958,6 +983,7 @@ function parseTypedef(ctx: ParseCtx, baseTy: CType): void {
 		}
 
 		if (name != "") {
+			if (isTagType(ty) && ty.typedefName == "") ty.typedefName = name;
 			ctx.typedefs.set(name, ty);
 			ctx.objs.push({
 				kind: ObjKind.TypedefName,
@@ -967,8 +993,8 @@ function parseTypedef(ctx: ParseCtx, baseTy: CType): void {
 				isExtern: false,
 				isDefinition: true,
 				enumValue: 0 as int64,
-				file: ctx.tok.file,
-				line: ctx.tok.line,
+				file: declResult.at.file,
+				line: declResult.at.line,
 			});
 		}
 	}

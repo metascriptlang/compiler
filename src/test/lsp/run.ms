@@ -20,11 +20,38 @@
 // a project takes its build.ms from the working directory. A scenario with a project is written
 // under the neutral directory first, its documents live there, and batch checks them in place.
 //
+// LSP_PERF=1 times the same scenarios instead, plus a 3-module chain and a pinned real app,
+// over repetitions in alternating order, and prints one JSON line per cell (metric x fixture).
+// A drain is timed from its write: startup from spawn to the initialize answer, an open or
+// edit from a drain holding only that document's notifications to its next publish, hover and
+// completion from a drain holding only that request, sent at every checkpoint probe after the
+// checkpoint agreed. Queue delay and the server's own split come from its stderr, read after
+// every drain until its [LSP-STATS] line. On the real app a second kind of round overlaps two
+// writes: an edit and a hover H1 go in one write, and once the server logs H1 as dispatched (its
+// check has started) a second write carries a newer edit and a hover H2, led by a cancel of H1 in
+// one variant. hover-behind-check is H2's write to its answer, cancel-to-answer is the same write
+// to H1's answer, and the h1-* counts say how H1 ended. H2 must answer what a fresh server
+// answers on the same text. A fixture whose scenario fails in any repetition
+// reports every cell as an error, and the run exits 1 when any cell errs or its p95 passes its
+// budget (BUDGETS).
+//
 // Env: MSC=<path to msc> (default: ./msc, else installed msc)
 //      LSP_REPLAY_TIMEOUT_MS=<deadline of each wait> (default 10000)
-import { spawn as spawnChild, ChildProcess, ChildStream, ReadChunk, ProcessError, env, cwd } from "std/process";
-import { writeFile, exists, ensureDir, realpath } from "std/fs";
-import { basename } from "std/fs/path";
+//      LSP_PERF=1, LSP_PERF_REPS=<repetitions> (default 5), LSP_PERF_OUT=<file> (default stdout)
+import {
+	spawn as spawnChild,
+	ChildProcess,
+	ChildStream,
+	ReadChunk,
+	ProcessError,
+	ProcessErrorKind,
+	env,
+	cwd,
+	execFileCapture,
+	findOnPath,
+} from "std/process";
+import { writeFile, readFile, exists, ensureDir, realpath } from "std/fs";
+import { basename, dirname } from "std/fs/path";
 import { stringify } from "std/serialize/json/stringify";
 import { parseJson } from "std/serialize/json/parser";
 import { JsonKind, JsonValue } from "std/serialize/json/types";
@@ -34,6 +61,7 @@ import {
 	LspScenario,
 	LspReplay,
 	LspCheckpoints,
+	LspProbe,
 	lspScenarios,
 	lspTranscript,
 	idKey,
@@ -43,6 +71,7 @@ import {
 	notification,
 	initializeDrain,
 	openParams,
+	changeParams,
 	positionParams,
 	materialiseProject,
 	replaceInFrames,
@@ -77,6 +106,7 @@ function timeoutMs(): int32 {
 
 const MSC = resolveMsc();
 const TIMEOUT_MS = timeoutMs();
+const PERF = env.get("LSP_PERF") == "1";
 const OUT = `${ROOT}/out/lspReplay`;
 
 function neutralDir(): string {
@@ -159,12 +189,25 @@ class Session {
 	received: string;
 	parsedTo: int32;
 	messages: JsonValue[];
+	arrivals: number[];
 	badFrame: string;
 	ended: boolean;
+	timedOut: boolean;
 	log: string;
+	measured: boolean;
+	startedAt: number;
+	drainsWritten: int32;
+	opened: string[];
+	stderrText: string;
+	samples: PerfSample[];
+	usage: ProcessUsage[];
+	rssBeforeEdits: number;
+	rssAfterEdits: number;
+	editDrains: int32;
 }
 
-function startSession(log: string): Result<Session, string> {
+function startSession(log: string, measured: boolean = false): Result<Session, string> {
+	const startedAt = performance.now();
 	const started = spawnChild(MSC, ["lsp"], { cwd: NEUTRAL });
 	if (!started.ok) return Result.err(`cannot start ${MSC} lsp: ${started.error.message}`);
 	return Result.ok({
@@ -172,9 +215,21 @@ function startSession(log: string): Result<Session, string> {
 		received: "",
 		parsedTo: 0,
 		messages: [],
+		arrivals: [],
 		badFrame: "",
 		ended: false,
+		timedOut: false,
 		log,
+		measured,
+		startedAt,
+		drainsWritten: 0,
+		opened: [],
+		stderrText: "",
+		samples: [],
+		usage: [],
+		rssBeforeEdits: -1,
+		rssAfterEdits: -1,
+		editDrains: 0,
 	});
 }
 
@@ -230,14 +285,17 @@ function absorb(s: Session, chunk: ReadChunk): void {
 		s.log += "<<< stdout EOF\n";
 		return;
 	}
+	const now = performance.now();
 	s.log += `<<< stdout ${chunk.data.byteLength} bytes\n${chunk.data}\n`;
 	s.received += chunk.data;
 	const bodies: string[] = [];
 	s.parsedTo = completeFrames(s.received, s.parsedTo, bodies);
 	for (const body of bodies) {
 		const parsed = parseJson(body);
-		if (parsed.ok) s.messages.push(parsed.value);
-		else if (s.badFrame == "") s.badFrame = body;
+		if (parsed.ok) {
+			s.messages.push(parsed.value);
+			s.arrivals.push(now);
+		} else if (s.badFrame == "") s.badFrame = body;
 	}
 }
 
@@ -286,9 +344,15 @@ function awaitPlan(s: Session, plan: DrainPlan, publishedBefore: int32[]): Resul
 	while (want != "") {
 		if (s.ended) return Result.err(`stdout ended with no ${want}`);
 		const left = deadline - performance.now();
-		if (left <= 0) return Result.err(`no ${want} within ${TIMEOUT_MS} ms`);
+		if (left <= 0) {
+			s.timedOut = true;
+			return Result.err(`no ${want} within ${TIMEOUT_MS} ms`);
+		}
 		const got = s.child.read(ChildStream.Stdout, left as int32);
-		if (!got.ok) return Result.err(`no ${want} within ${TIMEOUT_MS} ms: ${got.error.message}`);
+		if (!got.ok) {
+			s.timedOut = got.error.kind == ProcessErrorKind.Timeout;
+			return Result.err(`no ${want} within ${TIMEOUT_MS} ms: ${got.error.message}`);
+		}
 		absorb(s, got.value);
 		want = missing(s, plan, publishedBefore);
 	}
@@ -326,6 +390,13 @@ function drive(
 		const before = publishCounts(s, plan.documents);
 		const bytes = drains[i].join("");
 		s.log += `>>> drain ${i + 1} (${bytes.byteLength} bytes)\n${bytes}\n`;
+		s.drainsWritten++;
+		if (s.measured && s.editDrains == 0 && changesText(drains[i])) {
+			const usage = readUsage(s);
+			if (!usage.ok) return Result.err(`drain ${i + 1}: ${usage.error}`);
+			s.rssBeforeEdits = usage.value.rssKb;
+		}
+		const writtenAt = performance.now();
 		const sent = s.child.write(bytes, TIMEOUT_MS);
 		if (!sent.ok) {
 			s.log += `>>> write failed: ${sent.error.message}\n`;
@@ -333,6 +404,10 @@ function drive(
 		}
 		const waited = awaitPlan(s, plan, before);
 		if (!waited.ok) return Result.err(`drain ${i + 1}: ${waited.error}`);
+		if (s.measured) {
+			const measured = measureDrain(s, plan, drains[i], before, writtenAt);
+			if (measured != "") return Result.err(`drain ${i + 1}: ${measured}`);
+		}
 		if (plan.exits) return Result.ok((i + 1) as int32);
 		const edited = applyDrain(snap, drains[i]);
 		if (edited != "") return Result.err(`drain ${i + 1}: ${edited}`);
@@ -341,6 +416,8 @@ function drive(
 		const where = `checkpoint ${taken} (after drain ${i + 1})`;
 		const differs = compareCheckpoint(s, snap, checkpoints, `${scenarioSlug(name)}-${taken}`, taken, inProject);
 		if (differs != "") return Result.err(`${where}: ${differs}`);
+		const probed = s.measured ? timeProbes(s, checkpoints, taken) : "";
+		if (probed != "") return Result.err(`${where}: ${probed}`);
 	}
 	if (checkpoints != null && taken != checkpoints.afterDrains.length) {
 		return Result.err(`ran ${taken} of ${checkpoints.afterDrains.length} checkpoints`);
@@ -426,8 +503,8 @@ function freshAnswers(snap: Snapshot, query: string[], name: string): Result<str
 		const drained = readToEnd(fresh);
 		if (!drained.ok) failure = drained.error;
 	}
-	fresh.child.close();
 	fresh.log += `<<< stderr\n${fresh.child.takeStderr()}\n`;
+	fresh.child.close();
 	writeFile(`${OUT}/${name}-fresh.txt`, fresh.log);
 	if (failure != "") return Result.err(`fresh server: ${failure}`);
 	const out: string[] = [];
@@ -585,9 +662,28 @@ function verdict(scenario: LspScenario, r: LspReplay): string {
 	return invariant(r);
 }
 
+// The probes of a project scenario, moved off PROJECT_URI as its drains are.
+function movedCheckpoints(
+	checkpoints: LspCheckpoints | null,
+	projectDir: string,
+): LspCheckpoints | null {
+	if (checkpoints == null || projectDir == "") return checkpoints;
+	const probes: LspProbe[] = [];
+	for (const p of checkpoints.probes) {
+		const uri = p.uri.replaceAll(PROJECT_URI, projectUri(projectDir));
+		probes.push({ uri, line: p.line, character: p.character });
+	}
+	return { afterDrains: checkpoints.afterDrains, probes };
+}
+
 function replayOnProcess(s: Session, scenario: LspScenario, drains: string[][], projectDir: string): string {
-	const driven = drive(s, drains, scenario.name, scenario.checkpoints, projectDir != "");
+	const checkpoints = movedCheckpoints(scenario.checkpoints, projectDir);
+	const driven = drive(s, drains, scenario.name, checkpoints, projectDir != "");
 	if (!driven.ok) return driven.error;
+	if (s.measured && !s.ended) {
+		const sampled = sampleUsage(s);
+		if (sampled != "") return sampled;
+	}
 	s.child.closeStdin();
 	const drained = readToEnd(s);
 	if (!drained.ok) return drained.error;
@@ -605,7 +701,14 @@ function replayOnProcess(s: Session, scenario: LspScenario, drains: string[][], 
 	return verdict(scenario, r);
 }
 
-function runScenario(scenario: LspScenario): string {
+class ScenarioRun {
+	failure: string;
+	timedOut: boolean;
+	samples: PerfSample[];
+	usage: ProcessUsage[];
+}
+
+function runScenario(scenario: LspScenario): ScenarioRun {
 	let drains = scenario.drains;
 	let projectDir = "";
 	const project = scenario.project;
@@ -613,18 +716,843 @@ function runScenario(scenario: LspScenario): string {
 		ensureDir(`${NEUTRAL}/${scenarioSlug(scenario.name)}`);
 		projectDir = slashes(realpath(`${NEUTRAL}/${scenarioSlug(scenario.name)}`));
 		const moved = materialiseProject(project, drains, projectDir);
-		if (!moved.ok) return moved.error;
+		if (!moved.ok) return { failure: moved.error, timedOut: false, samples: [], usage: [] };
 		drains = moved.value;
 	}
-	const started = startSession(`scenario: ${scenario.name}\ncompiler: ${MSC}\n`);
-	if (!started.ok) return started.error;
+	const started = startSession(`scenario: ${scenario.name}\ncompiler: ${MSC}\n`, PERF);
+	if (!started.ok) return { failure: started.error, timedOut: false, samples: [], usage: [] };
 	const s = started.value;
 	const failure = replayOnProcess(s, scenario, drains, projectDir);
-	s.child.close();
 	s.log += `<<< stderr\n${s.child.takeStderr()}\n`;
+	s.child.close();
 	s.log += `=== ${failure == "" ? "ok" : "FAIL " + failure}\n`;
 	writeFile(`${OUT}/${scenarioSlug(scenario.name)}.txt`, s.log);
-	return failure;
+	for (const sample of editGrowth(s)) s.samples.push(sample);
+	return { failure, timedOut: s.timedOut, samples: s.samples, usage: s.usage };
+}
+
+// ===== Perf mode =====
+
+interface PerfSample {
+	metric: string;
+	value: number;
+}
+
+interface ProcessUsage {
+	drain: int32;
+	rssKb: number;
+	cpuMs: number;
+}
+
+const USAGE_EVERY = 10;
+const PROBE_ROUNDS = 3;
+const EDITS = 40;
+const COLD_OPENS_PER_REPETITION = 8;
+const NEON_REV = "5b2c634a23646ce3796797ec4d79e2d4c2360969";
+const VOID_REV = "a29845a0fd75c3fd6c0c8d0d0205882965a31d25";
+const YOGA_REV = "f92ae144a943eab59ad9ea375de65f3bf131635f";
+const TODO_LIST = "neon/examples/components/todoList.ms";
+const OVERLAP_ROUNDS = 3;
+const OVERLAP_METRICS = [
+	["hover-behind-check", "ms"],
+	["hover-behind-check-nocancel", "ms"],
+	["cancel-to-answer", "ms"],
+	["h1-result", "count"],
+	["h1-cancelled", "count"],
+	["h1-modified", "count"],
+];
+const REQUEST_CANCELLED = -32800;
+const CONTENT_MODIFIED = -32801;
+const EDIT_NAME = `perf: todoList at neon ${NEON_REV.byteSlice(0, 8)}, an edit loop`;
+const METRICS = [
+	["startup-to-ready", "ms"],
+	["open-to-diagnostics", "ms"],
+	["open-server", "ms"],
+	["edit-to-diagnostics", "ms"],
+	["edit-server", "ms"],
+	["hover", "ms"],
+	["completion", "ms"],
+	["queue-delay", "ms"],
+	["rss", "kB"],
+	["rss-growth", "kB/drain"],
+	["cpu", "ms/drain"],
+];
+// p95 ceilings in ms, chosen by the person on 2026-10-23 from the baseline; RSS waits for the
+// cycle collector.
+const BUDGETS = [
+	["startup-to-ready", "", "250"],
+	["open-to-diagnostics", "", "1200"],
+	["edit-to-diagnostics", "small", "20"],
+	["edit-to-diagnostics", "todoList", "300"],
+	["hover", "", "20"],
+	["completion", "", "20"],
+	["queue-delay", "", "10"],
+];
+
+function budgetOf(metric: string, fixture: string): number {
+	for (const b of BUDGETS) {
+		if (b[0] == metric && (b[1] == "" || b[1] == fixture)) return b[2].parseFloat();
+	}
+	return -1;
+}
+
+function perfRepetitions(): int32 {
+	const raw = env.get("LSP_PERF_REPS");
+	return raw == "" ? 5 : raw.parseInt() as int32;
+}
+
+function bodiesOf(drain: string[]): JsonValue[] {
+	const bodies: string[] = [];
+	for (const frame of drain) completeFrames(frame, 0, bodies);
+	const out: JsonValue[] = [];
+	for (const body of bodies) {
+		const parsed = parseJson(body);
+		if (parsed.ok) out.push(parsed.value);
+	}
+	return out;
+}
+
+function isPublishFor(m: JsonValue, uri: string): boolean {
+	const publish = textField(m, "method") == "textDocument/publishDiagnostics";
+	return publish && textField(m, "params.uri") == uri;
+}
+
+// When the publish for uri that follows the first `before` ones arrived, or -1.
+function publishArrival(s: Session, uri: string, before: int32): number {
+	let n = 0;
+	for (let k = 0; k < s.messages.length; k++) {
+		const m = s.messages[k];
+		if (!isPublishFor(m, uri)) continue;
+		if (n == before) return s.arrivals[k];
+		n++;
+	}
+	return -1;
+}
+
+function answerIndex(s: Session, key: string): int32 {
+	for (let k = 0; k < s.messages.length; k++) {
+		const m = s.messages[k];
+		const answer = hasKey(m, "id") && !hasKey(m, "method");
+		if (answer && idKey(m.getDynamicField("id")) == key) return k as int32;
+	}
+	return -1;
+}
+
+function answerResult(s: Session, key: string): string {
+	const k = answerIndex(s, key);
+	if (k < 0) return "no answer";
+	const m = s.messages[k];
+	if (!hasKey(m, "result")) return `no result: ${stringify(m)}`;
+	return stringify(m.getDynamicField("result"));
+}
+
+// Moves the complete lines of s.stderrText into lines; says whether one was [LSP-STATS].
+function takeLines(s: Session, lines: string[]): boolean {
+	const parts = s.stderrText.split("\n");
+	s.stderrText = parts[parts.length - 1];
+	let stats = false;
+	for (let k = 0; k + 1 < parts.length; k++) {
+		lines.push(parts[k]);
+		if (parts[k].startsWith("[LSP-STATS] ")) stats = true;
+	}
+	return stats;
+}
+
+// The stderr lines of the drain just answered; the server ends each of its drains with an
+// [LSP-STATS] line, unless the drain ends the server.
+function drainStderr(s: Session, waitForStats: boolean): Result<string[], string> {
+	const lines: string[] = [];
+	s.stderrText += s.child.takeStderr();
+	let stats = takeLines(s, lines);
+	const deadline = performance.now() + TIMEOUT_MS;
+	while (waitForStats && !stats) {
+		const left = deadline - performance.now();
+		if (left <= 0) {
+			s.timedOut = true;
+			return Result.err(`no [LSP-STATS] line within ${TIMEOUT_MS} ms`);
+		}
+		const got = s.child.read(ChildStream.Stderr, left as int32);
+		if (!got.ok) {
+			s.timedOut = got.error.kind == ProcessErrorKind.Timeout;
+			return Result.err(`no [LSP-STATS] line: ${got.error.message}`);
+		}
+		if (got.value.ended) return Result.err("stderr ended with no [LSP-STATS] line");
+		s.stderrText += got.value.data;
+		stats = takeLines(s, lines);
+	}
+	return Result.ok(lines);
+}
+
+// The number after `key` in a server log line, up to its "ms".
+function loggedMs(line: string, key: string): Result<number, string> {
+	const at = line.byteIndexOf(key, 0);
+	if (at < 0) return Result.err(`server line has no ${key}: ${line}`);
+	const from = at + key.byteLength;
+	const end = line.byteIndexOf("ms", from);
+	return Result.ok(line.byteSlice(from, end < 0 ? line.byteLength : end).parseFloat());
+}
+
+function sampleLogged(s: Session, metric: string, line: string, key: string): string {
+	const ms = loggedMs(line, key);
+	if (!ms.ok) return ms.error;
+	s.samples.push({ metric, value: ms.value });
+	return "";
+}
+
+// Ps prints "<rss kB> <[hh:]mm:ss[.cc]>" for the server: its resident size and CPU so far.
+function readUsage(s: Session): Result<ProcessUsage, string> {
+	const ps = execFileCapture("ps", ["-o", "rss=,time=", "-p", `${s.child.pid}`]);
+	if (!ps.ok) return Result.err(`ps of the server: ${ps.error.message}`);
+	const fields: string[] = [];
+	for (const f of ps.value.trim().split(" ")) {
+		if (f != "") fields.push(f);
+	}
+	if (fields.length != 2) return Result.err(`ps of the server printed ${lspJsonString(ps.value)}`);
+	let cpuSeconds: number = 0;
+	for (const part of fields[1].split(":")) cpuSeconds = cpuSeconds * 60 + part.parseFloat();
+	const rssKb = fields[0].parseFloat();
+	return Result.ok({ drain: s.drainsWritten, rssKb, cpuMs: cpuSeconds * 1000 });
+}
+
+function sampleUsage(s: Session): string {
+	const usage = readUsage(s);
+	if (!usage.ok) return usage.error;
+	s.usage.push(usage.value);
+	return "";
+}
+
+function changesText(drain: string[]): boolean {
+	for (const m of bodiesOf(drain)) {
+		if (textField(m, "method") == "textDocument/didChange") return true;
+	}
+	return false;
+}
+
+// Growth across the warm edits: RSS before the first edit drain to after the last, per edit.
+function editGrowth(s: Session): PerfSample[] {
+	if (s.editDrains == 0) return [];
+	const growth = (s.rssAfterEdits - s.rssBeforeEdits) / s.editDrains;
+	return [{ metric: "rss-growth", value: growth }];
+}
+
+function measureDrain(
+	s: Session,
+	plan: DrainPlan,
+	drain: string[],
+	before: int32[],
+	writtenAt: number,
+): string {
+	const waitForStats = !plan.exits && (plan.answers.length > 0 || plan.documents.length > 0);
+	const read = drainStderr(s, waitForStats);
+	if (!read.ok) return read.error;
+	const lines = read.value;
+	s.log += `<<< stderr after drain ${s.drainsWritten}\n${lines.join("\n")}\n`;
+	let requests = 0;
+	let requestMethod = "";
+	let requestKey = "";
+	let editMethod = "";
+	const opens: string[] = [];
+	for (const m of bodiesOf(drain)) {
+		const method = textField(m, "method");
+		if (hasKey(m, "id")) {
+			requests++;
+			requestMethod = method;
+			requestKey = idKey(m.getDynamicField("id"));
+			const k = answerIndex(s, requestKey);
+			if (method == "initialize" && s.drainsWritten == 1 && k >= 0) {
+				s.samples.push({ metric: "startup-to-ready", value: s.arrivals[k] - s.startedAt });
+			}
+		}
+		const edits = method == "textDocument/didOpen" || method == "textDocument/didChange";
+		if (edits && editMethod == "") editMethod = method;
+		if (method == "textDocument/didOpen") opens.push(textField(m, "params.textDocument.uri"));
+	}
+	for (const line of lines) {
+		if (!line.startsWith("[LSP-QUEUE] ")) continue;
+		const sampled = sampleLogged(s, "queue-delay", line, " delay=");
+		if (sampled != "") return sampled;
+	}
+	if (requests == 0 && plan.documents.length == 1) {
+		const uri = plan.documents[0];
+		const took = publishArrival(s, uri, before[0]) - writtenAt;
+		const cold = editMethod == "textDocument/didOpen" && s.opened.indexOf(uri) < 0;
+		const edit = editMethod == "textDocument/didChange";
+		if (cold) s.samples.push({ metric: "open-to-diagnostics", value: took });
+		if (edit) s.samples.push({ metric: "edit-to-diagnostics", value: took });
+		for (const line of lines) {
+			const opened = cold && line.startsWith("[LSP-OPEN] ");
+			const changed = edit && line.startsWith("[LSP-CHANGE] ");
+			if (!opened && !changed) continue;
+			const sampled = sampleLogged(s, opened ? "open-server" : "edit-server", line, " total=");
+			if (sampled != "") return sampled;
+		}
+	}
+	const hover = requestMethod == "textDocument/hover";
+	const probe = hover || requestMethod == "textDocument/completion";
+	if (requests == 1 && plan.documents.length == 0 && probe) {
+		const k = answerIndex(s, requestKey);
+		const metric = hover ? "hover" : "completion";
+		if (k >= 0) s.samples.push({ metric, value: s.arrivals[k] - writtenAt });
+	}
+	for (const uri of opens) {
+		if (s.opened.indexOf(uri) < 0) s.opened.push(uri);
+	}
+	if (changesText(drain) && !s.ended) {
+		const usage = readUsage(s);
+		if (!usage.ok) return usage.error;
+		s.editDrains++;
+		s.rssAfterEdits = usage.value.rssKb;
+	}
+	const due = s.drainsWritten == 1 || s.drainsWritten % USAGE_EVERY == 0;
+	return due && !plan.exits && !s.ended ? sampleUsage(s) : "";
+}
+
+// Asks hover and completion alone at every probe once the checkpoint agreed: the hover must
+// answer what the checkpoint's hover answered, the completion must answer a result.
+function timeProbes(s: Session, checkpoints: LspCheckpoints, taken: int32): string {
+	for (let round = 0; round < PROBE_ROUNDS; round++) {
+		for (let k = 0; k < checkpoints.probes.length; k++) {
+			const p = checkpoints.probes[k];
+			const at = positionParams(p.uri, p.line, p.character);
+			const hoverId = `${QUERY_PREFIX}${taken}-hover-${round}-${k}`;
+			const where = `${p.line}:${p.character}`;
+			const hover = request(lspJsonString(hoverId), "textDocument/hover", at);
+			const hovered = drive(s, [frames([hover])]);
+			if (!hovered.ok) return `timed hover: ${hovered.error}`;
+			const want = answerResult(s, `s:${QUERY_PREFIX}${taken}-${2 * k + 1}`);
+			const got = answerResult(s, `s:${hoverId}`);
+			if (got != want) return `timed hover at ${where}: checkpoint ${want}, got ${got}`;
+			const completionId = `${QUERY_PREFIX}${taken}-completion-${round}-${k}`;
+			const completion = request(lspJsonString(completionId), "textDocument/completion", at);
+			const completed = drive(s, [frames([completion])]);
+			if (!completed.ok) return `timed completion: ${completed.error}`;
+			const answer = answerResult(s, `s:${completionId}`);
+			if (answer.startsWith("no ")) return `timed completion at ${where}: ${answer}`;
+		}
+	}
+	return "";
+}
+
+function usageSamples(usage: ProcessUsage[]): PerfSample[] {
+	const out: PerfSample[] = [];
+	for (let k = 0; k < usage.length; k++) {
+		out.push({ metric: "rss", value: usage[k].rssKb });
+		if (k == 0 || usage[k].drain == usage[k - 1].drain) continue;
+		const drains = usage[k].drain - usage[k - 1].drain;
+		out.push({ metric: "cpu", value: (usage[k].cpuMs - usage[k - 1].cpuMs) / drains });
+	}
+	return out;
+}
+
+// ===== Perf fixtures =====
+
+interface PerfEntry {
+	scenario: LspScenario;
+	fixture: string;
+}
+
+function openDrain(uri: string, text: string): string[] {
+	return frames([notification("textDocument/didOpen", openParams(uri, text))]);
+}
+
+function changeDrain(uri: string, version: int32, text: string): string[] {
+	return frames([notification("textDocument/didChange", changeParams(uri, version, text))]);
+}
+
+// "" when uri was published `publishes` times (at least once when -1) with no error.
+function publishedWithoutErrors(r: LspReplay, uri: string, publishes: int32): string {
+	let n = 0;
+	for (const m of r.messages) {
+		if (!isPublishFor(m, uri)) continue;
+		n++;
+		const diagnostics = m.getDynamicField("params").getDynamicField("diagnostics");
+		const which = `publish ${n} of ${uri}`;
+		if (diagnostics.kind != JsonKind.Array) return `${which} has no diagnostics array`;
+		for (const d of diagnostics.items) {
+			if (d.getDynamicField("severity").asInt32(-1) == 1) return `${which}: ${stringify(d)}`;
+		}
+	}
+	if (publishes < 0 ? n > 0 : n == publishes) return "";
+	return `${uri} published ${n} times, expected ${publishes < 0 ? "some" : `${publishes}`}`;
+}
+
+function projectDirOf(name: string): Result<string, string> {
+	const dir = `${NEUTRAL}/${scenarioSlug(name)}`;
+	if (!ensureDir(dir).ok) return Result.err(`cannot create ${dir}`);
+	return Result.ok(realpath(dir));
+}
+
+function chainEditLoop(): LspScenario {
+	const logic = PROJECT_URI + "chain/logic.ms";
+	const mid = PROJECT_URI + "chain/mid.ms";
+	const far = PROJECT_URI + "chain/far.ms";
+	const one = "export function value(): int32 { return 1; }\n";
+	const two = "export function value(): int32 { return 2; }\n";
+	const midText = "import { value } from \"./logic\";\n"
+		+ "export function midValue() { return value(); }\n";
+	const farText = "import { midValue } from \"./mid\";\n"
+		+ "export const farValue = () => midValue();\n";
+	const drains = [
+		initializeDrain(),
+		openDrain(logic, one),
+		openDrain(mid, midText),
+		openDrain(far, farText),
+	];
+	for (let k = 0; k < EDITS; k++) {
+		drains.push(changeDrain(logic, (k + 2) as int32, k % 2 == 0 ? two : one));
+	}
+	return {
+		name: "perf: a body edit at the root of a 3-module chain",
+		batching: "any",
+		drains,
+		check: (r: LspReplay) => {
+			const logicFailure = publishedWithoutErrors(r, logic, (EDITS + 1) as int32);
+			if (logicFailure != "") return logicFailure;
+			const midFailure = publishedWithoutErrors(r, mid, -1);
+			return midFailure != "" ? midFailure : publishedWithoutErrors(r, far, -1);
+		},
+		checkAnyBatching: null,
+		checkpoints: {
+			afterDrains: [3, (drains.length - 1) as int32],
+			probes: [{ uri: mid, line: 1, character: 36 }, { uri: far, line: 1, character: 30 }],
+		},
+		project: [
+			{ path: "chain/logic.ms", text: one },
+			{ path: "chain/mid.ms", text: midText },
+			{ path: "chain/far.ms", text: farText },
+		],
+	};
+}
+
+function probeAt(uri: string, text: string, marker: string): Result<LspProbe, string> {
+	const lines = text.split("\n");
+	for (let line = 0; line < lines.length; line++) {
+		const at = lines[line].byteIndexOf(marker, 0);
+		if (at >= 0) return Result.ok({ uri, line: line as int32, character: at as int32 });
+	}
+	return Result.err(`no ${marker} in ${TODO_LIST}`);
+}
+
+function todoListEditLoop(name: string, text: string): Result<LspScenario, string> {
+	const uri = PROJECT_URI + TODO_LIST;
+	const edited = text.replaceAll("\"ship the starter\"", "\"ship the starter now\"");
+	if (edited == text) return Result.err(`${TODO_LIST} has no "ship the starter" to edit`);
+	const signal = try probeAt(uri, text, "createSignal<Todo[]>");
+	const setter = try probeAt(uri, text, "setTodos(next);");
+	const drains = [initializeDrain(), openDrain(uri, text)];
+	for (let k = 0; k < EDITS; k++) {
+		drains.push(changeDrain(uri, (k + 2) as int32, k % 2 == 0 ? edited : text));
+	}
+	return Result.ok({
+		name,
+		batching: "any",
+		drains,
+		check: (r: LspReplay) => publishedWithoutErrors(r, uri, (EDITS + 1) as int32),
+		checkAnyBatching: null,
+		checkpoints: { afterDrains: [1, (drains.length - 1) as int32], probes: [signal, setter] },
+		project: [],
+	});
+}
+
+function todoListColdOpen(name: string, text: string): LspScenario {
+	const uri = PROJECT_URI + TODO_LIST;
+	return {
+		name,
+		batching: "any",
+		drains: [initializeDrain(), openDrain(uri, text)],
+		check: (r: LspReplay) => publishedWithoutErrors(r, uri, 1),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: [],
+	};
+}
+
+function commandOutput(path: string, args: string[], dir: string = ""): Result<string, string> {
+	const ran = execFileCapture(path, args, dir);
+	if (!ran.ok) return Result.err(`${path} ${args.join(" ")}: ${ran.error.message}`);
+	return Result.ok(ran.value.trim());
+}
+
+// The recompiler's main checkout sits in the workspace beside neon, void and yoga.
+function workspaceDir(): Result<string, string> {
+	const args = ["rev-parse", "--path-format=absolute", "--git-common-dir"];
+	const common = try commandOutput("git", args, ROOT);
+	return Result.ok(dirname(dirname(common)));
+}
+
+// Writes the real app at its pinned commits under dir, laid out as neon imports it. The
+// shader headers stay out: over 100 MB, and no module the app reaches imports them.
+function extractTodoList(dir: string): Result<void, string> {
+	const workspace = try workspaceDir();
+	const repos = [
+		["neon", NEON_REV, "build.ms", "src", "examples/components"],
+		["void", VOID_REV, "build.ms", "src", ":(exclude)*.glsl.h"],
+		["yoga", YOGA_REV, "build.ms", "src"],
+	];
+	for (const repo of repos) {
+		const tar = `${NEUTRAL}/${repo[0]}-${repo[1]}.tar`;
+		const args = ["-C", `${workspace}/${repo[0]}`, "archive", `--prefix=${repo[0]}/`];
+		for (const arg of ["-o", tar, repo[1], "--"]) args.push(arg);
+		for (let k = 2; k < repo.length; k++) args.push(repo[k]);
+		try commandOutput("git", args);
+		try commandOutput("tar", ["-xf", tar, "-C", dir]);
+	}
+	return Result.ok(null);
+}
+
+function recompilerRevision(): Result<string, string> {
+	const head = try commandOutput("git", ["rev-parse", "--short=12", "HEAD"], ROOT);
+	const status = ["status", "--porcelain", "--", "src/test/lsp", "src/compiler/lsp"];
+	const dirty = try commandOutput("git", status, ROOT);
+	return Result.ok(`recompiler@${head}${dirty == "" ? "" : "+dirty"}`);
+}
+
+function perfEntries(): Result<PerfEntry[], string> {
+	const openName = `perf: todoList at neon ${NEON_REV.byteSlice(0, 8)}, a cold open`;
+	const editDir = try projectDirOf(EDIT_NAME);
+	const openDir = try projectDirOf(openName);
+	try extractTodoList(editDir);
+	try extractTodoList(openDir);
+	const read = readFile(`${editDir}/${TODO_LIST}`);
+	if (!read.ok) return Result.err(`cannot read ${TODO_LIST} under ${editDir}`);
+	const editLoop: PerfEntry = {
+		scenario: try todoListEditLoop(EDIT_NAME, read.value),
+		fixture: "todoList",
+	};
+	const coldOpen: PerfEntry = {
+		scenario: todoListColdOpen(openName, read.value),
+		fixture: "todoList",
+	};
+	const small: PerfEntry[] = [{ scenario: chainEditLoop(), fixture: "small" }];
+	for (const scenario of lspScenarios()) small.push({ scenario, fixture: "small" });
+	const entries: PerfEntry[] = [];
+	let opens = 0;
+	for (let k = 0; k < small.length; k++) {
+		entries.push(small[k]);
+		if (k == small.length / 2) entries.push(editLoop);
+		if (k % 3 == 1 && opens < COLD_OPENS_PER_REPETITION) {
+			entries.push(coldOpen);
+			opens++;
+		}
+	}
+	while (opens < COLD_OPENS_PER_REPETITION) {
+		entries.push(coldOpen);
+		opens++;
+	}
+	return Result.ok(entries);
+}
+
+// ===== Overlapping arrival =====
+
+interface OverlapFixture {
+	uri: string;
+	texts: string[];
+	expected: string[];
+	probe: LspProbe;
+}
+
+// A hover answered by a fresh server that holds only text.
+function freshHover(uri: string, probe: LspProbe, text: string): Result<string, string> {
+	const id = `${QUERY_PREFIX}ovlx`;
+	const at = positionParams(uri, probe.line, probe.character);
+	const query = frames([request(lspJsonString(id), "textDocument/hover", at)]);
+	const answers = try freshAnswers({ uris: [uri], texts: [text] }, query, "overlap-expected");
+	const marker = `textDocument/hover s:${id} => `;
+	for (const a of answers) {
+		if (!a.startsWith(marker)) continue;
+		const parsed = parseJson(a.byteSlice(marker.byteLength, a.byteLength));
+		if (!parsed.ok || !hasKey(parsed.value, "result")) return Result.err(`fresh hover is no result: ${a}`);
+		return Result.ok(stringify(parsed.value.getDynamicField("result")));
+	}
+	return Result.err("fresh server did not answer the hover");
+}
+
+function overlapFixture(): Result<OverlapFixture, string> {
+	const dir = try projectDirOf(EDIT_NAME);
+	const uri = projectUri(dir) + TODO_LIST;
+	const read = readFile(`${dir}/${TODO_LIST}`);
+	if (!read.ok) return Result.err(`cannot read ${TODO_LIST} under ${dir}`);
+	const original = read.value;
+	const first = original.replaceAll("\"ship the starter\"", "\"ship the starter now\"");
+	const second = original.replaceAll("\"ship the starter\"", "\"ship the starter later\"");
+	if (first == original) return Result.err(`${TODO_LIST} has no "ship the starter" to edit`);
+	const probe = try probeAt(uri, original, "createSignal<Todo[]>");
+	const texts = [original, first, second];
+	const expected: string[] = [];
+	for (const text of texts) expected.push(try freshHover(uri, probe, text));
+	return Result.ok({ uri, texts, expected, probe });
+}
+
+class Overlap {
+	s: Session;
+	fixture: OverlapFixture;
+	state: int32;
+	version: int32;
+	rounds: int32;
+}
+
+// Waits until the server logs hover `id` as dispatched, which is when its check starts.
+function awaitDispatch(s: Session, id: string): string {
+	const deadline = performance.now() + TIMEOUT_MS;
+	const lines: string[] = [];
+	while (true) {
+		s.stderrText += s.child.takeStderr();
+		takeLines(s, lines);
+		for (const line of lines) {
+			if (line.startsWith("[LSP-QUEUE] textDocument/hover") && line.byteIndexOf(id, 0) >= 0) return "";
+		}
+		const left = deadline - performance.now();
+		if (left <= 0) return `no dispatch of ${id} within ${TIMEOUT_MS} ms`;
+		const got = s.child.read(ChildStream.Stderr, left as int32);
+		if (!got.ok) return `no dispatch of ${id}: ${got.error.message}`;
+		if (got.value.ended) return `stderr ended with no dispatch of ${id}`;
+		s.stderrText += got.value.data;
+	}
+	return "";
+}
+
+function writeDrain(s: Session, drain: string[]): string {
+	const bytes = drain.join("");
+	s.log += `>>> overlap write (${bytes.byteLength} bytes)\n${bytes}\n`;
+	const sent = s.child.write(bytes, TIMEOUT_MS);
+	return sent.ok ? "" : `write failed: ${sent.error.message}`;
+}
+
+// One overlap: edit and hover H1, then, once H1's check runs, [cancel H1,] a newer edit and hover H2.
+function overlapRound(o: Overlap, cancel: boolean): string {
+	const s = o.s;
+	const f = o.fixture;
+	o.rounds++;
+	const h1 = `ovl${o.rounds}h1`;
+	const h2 = `${QUERY_PREFIX}ovl${o.rounds}h2`;
+	const barrier = `${QUERY_PREFIX}ovl${o.rounds}sync`;
+	const midText = (o.state + 1) % 3;
+	const lastText = (o.state + 2) % 3;
+	const at = positionParams(f.uri, f.probe.line, f.probe.character);
+	const hover = (id: string): string => request(lspJsonString(id), "textDocument/hover", at);
+	const edit = (version: int32, text: string): string => {
+		return notification("textDocument/didChange", changeParams(f.uri, version, text));
+	};
+	const first = frames([edit(o.version + 1, f.texts[midText]), hover(h1)]);
+	const secondBodies: string[] = [];
+	if (cancel) secondBodies.push(notification("$/cancelRequest", `{"id":${lspJsonString(h1)}}`));
+	secondBodies.push(edit(o.version + 2, f.texts[lastText]));
+	secondBodies.push(hover(h2));
+	const second = frames(secondBodies);
+	o.version += 2;
+	o.state = lastText;
+	const all: string[] = [];
+	for (const frame of first) all.push(frame);
+	for (const frame of second) all.push(frame);
+	const plan = planDrain(all, false);
+	const before = publishCounts(s, plan.documents);
+	const sentFirst = writeDrain(s, first);
+	if (sentFirst != "") return sentFirst;
+	const dispatched = awaitDispatch(s, h1);
+	if (dispatched != "") return dispatched;
+	const writtenAt = performance.now();
+	const sentSecond = writeDrain(s, second);
+	if (sentSecond != "") return sentSecond;
+	const waited = awaitPlan(s, plan, before);
+	if (!waited.ok) return waited.error;
+	const k1 = answerIndex(s, `s:${h1}`);
+	const k2 = answerIndex(s, `s:${h2}`);
+	const m1 = s.messages[k1];
+	const m2 = s.messages[k2];
+	if (!hasKey(m2, "result")) return `${h2} is no result: ${stringify(m2)}`;
+	const got = stringify(m2.getDynamicField("result"));
+	if (got != f.expected[lastText]) return `${h2}: fresh server ${f.expected[lastText]}, got ${got}`;
+	const failed = hasKey(m1, "error");
+	const code = failed ? m1.getDynamicField("error").getDynamicField("code").asInt32(0) : 0;
+	if (failed && code != REQUEST_CANCELLED && code != CONTENT_MODIFIED) return `${h1} answered ${stringify(m1)}`;
+	const behind = cancel ? "hover-behind-check" : "hover-behind-check-nocancel";
+	s.samples.push({ metric: behind, value: s.arrivals[k2] - writtenAt });
+	if (cancel) {
+		s.samples.push({ metric: "cancel-to-answer", value: s.arrivals[k1] - writtenAt });
+		s.samples.push({ metric: "h1-result", value: code == 0 ? 1 : 0 });
+		s.samples.push({ metric: "h1-cancelled", value: code == REQUEST_CANCELLED ? 1 : 0 });
+		s.samples.push({ metric: "h1-modified", value: code == CONTENT_MODIFIED ? 1 : 0 });
+	}
+	// A later request is answered after the publishes of the batch that answered H2.
+	const settle = frames([hover(barrier)]);
+	const sentSettle = writeDrain(s, settle);
+	if (sentSettle != "") return sentSettle;
+	const done = awaitPlan(s, planDrain(settle, false), []);
+	return done.ok ? "" : done.error;
+}
+
+function runOverlap(f: OverlapFixture): ScenarioRun {
+	const name = "overlap";
+	const started = startSession(`scenario: ${name}\ncompiler: ${MSC}\n`);
+	if (!started.ok) return { failure: started.error, timedOut: false, samples: [], usage: [] };
+	const s = started.value;
+	let failure = "";
+	const opened = drive(s, [initializeDrain(), openDrain(f.uri, f.texts[0])]);
+	if (!opened.ok) failure = opened.error;
+	const o: Overlap = { s, fixture: f, state: 0, version: 1, rounds: 0 };
+	for (const cancel of [true, false]) {
+		for (let k = 0; k < OVERLAP_ROUNDS && failure == ""; k++) {
+			const failed = overlapRound(o, cancel);
+			if (failed != "") failure = `round ${o.rounds}: ${failed}`;
+		}
+	}
+	if (failure == "") {
+		s.child.closeStdin();
+		const drained = readToEnd(s);
+		if (!drained.ok) failure = drained.error;
+	}
+	s.log += `<<< stderr\n${s.child.takeStderr()}\n=== ${failure == "" ? "ok" : "FAIL " + failure}\n`;
+	s.child.close();
+	writeFile(`${OUT}/${name}.txt`, s.log);
+	return { failure, timedOut: s.timedOut, samples: s.samples, usage: [] };
+}
+
+// ===== Perf cells =====
+
+class PerfCell {
+	metric: string;
+	unit: string;
+	fixture: string;
+	revision: string;
+	values: number[];
+	repetitions: int32[];
+	timeouts: int32;
+	errors: int32;
+	error: string;
+}
+
+function record(cells: PerfCell[], fixture: string, name: string, run: ScenarioRun, repetition: int32): void {
+	const samples = run.samples;
+	for (const sample of usageSamples(run.usage)) samples.push(sample);
+	for (const cell of cells) {
+		if (cell.fixture != fixture) continue;
+		if (run.failure != "") {
+			cell.errors++;
+			if (run.timedOut) cell.timeouts++;
+			if (cell.error == "") cell.error = `${name}: ${run.failure}`;
+			continue;
+		}
+		for (const sample of samples) {
+			if (sample.metric != cell.metric) continue;
+			cell.values.push(sample.value);
+			if (cell.repetitions.indexOf(repetition) < 0) cell.repetitions.push(repetition);
+		}
+	}
+}
+
+function nearestRank(sorted: number[], percent: int32): number {
+	const rank = ((sorted.length as int32) * percent + 99) / 100;
+	return sorted[rank < 1 ? 0 : rank - 1];
+}
+
+function p95Of(cell: PerfCell): number {
+	const sorted: number[] = [];
+	for (const v of cell.values) sorted.push(v);
+	sorted.sort();
+	return nearestRank(sorted, 95);
+}
+
+function overBudget(cell: PerfCell): boolean {
+	const budget = budgetOf(cell.metric, cell.fixture);
+	return budget >= 0 && cell.values.length > 0 && p95Of(cell) > budget;
+}
+
+function cellLine(cell: PerfCell, uptimeStart: string, uptimeEnd: string, binary: string): string {
+	const n = cell.values.length;
+	let line = `{"cell":${lspJsonString(cell.metric)},"fixture":${lspJsonString(cell.fixture)}`
+		+ `,"unit":${lspJsonString(cell.unit)},"n":${n},"repetitions":${cell.repetitions.length}`;
+	const error = cell.error != "" ? cell.error : n == 0 ? "no samples" : "";
+	if (error != "") line += `,"error":${lspJsonString(error)}`;
+	else {
+		const sorted: number[] = [];
+		for (const v of cell.values) sorted.push(v);
+		sorted.sort();
+			line += `,"min":${sorted[0]},"p50":${nearestRank(sorted, 50)}`
+				+ `,"p95":${nearestRank(sorted, 95)}`;
+		let sum: number = 0;
+		for (const v of cell.values) sum += v;
+		if (cell.unit == "count") line += `,"sum":${sum}`;
+	}
+	const budget = budgetOf(cell.metric, cell.fixture);
+	if (budget >= 0) line += `,"budget":${budget},"overBudget":${overBudget(cell)}`;
+	return line + `,"timeouts":${cell.timeouts},"errors":${cell.errors}`
+		+ `,"uptimeStart":${lspJsonString(uptimeStart)},"uptimeEnd":${lspJsonString(uptimeEnd)}`
+		+ `,"binary":${lspJsonString(binary)},"revision":${lspJsonString(cell.revision)}}`;
+}
+
+function perfRun(): Result<boolean, string> {
+	ensureDir(OUT);
+	ensureDir(NEUTRAL);
+	const uptimeStart = try commandOutput("uptime", []);
+	const msc = findOnPath(MSC);
+	if (msc == "") return Result.err(`${MSC} is not on PATH`);
+	const hashed = try commandOutput("shasum", ["-a", "256", msc]);
+	const binary = `sha256:${hashed.split(" ")[0]}`;
+	const small = try recompilerRevision();
+	const app = `neon@${NEON_REV.byteSlice(0, 12)} void@${VOID_REV.byteSlice(0, 12)}`
+		+ ` yoga@${YOGA_REV.byteSlice(0, 12)}`;
+	const entries = try perfEntries();
+	const cells: PerfCell[] = [];
+	for (const fixture of ["small", "todoList"]) {
+		for (const metric of METRICS) {
+			cells.push({
+				metric: metric[0],
+				unit: metric[1],
+				fixture,
+				revision: fixture == "small" ? small : app,
+				values: [],
+				repetitions: [],
+				timeouts: 0,
+				errors: 0,
+				error: "",
+			});
+		}
+	}
+	for (const metric of OVERLAP_METRICS) {
+		cells.push({
+			metric: metric[0],
+			unit: metric[1],
+			fixture: "todoList",
+			revision: app,
+			values: [],
+			repetitions: [],
+			timeouts: 0,
+			errors: 0,
+			error: "",
+		});
+	}
+	const overlap = try overlapFixture();
+	const repetitions = perfRepetitions();
+	for (let repetition = 0; repetition < repetitions; repetition++) {
+		for (let k = 0; k < entries.length; k++) {
+			const entry = entries[repetition % 2 == 0 ? k : entries.length - 1 - k];
+			record(cells, entry.fixture, entry.scenario.name, runScenario(entry.scenario), repetition as int32);
+		}
+		record(cells, "todoList", "overlap", runOverlap(overlap), repetition as int32);
+	}
+	const uptimeEnd = try commandOutput("uptime", []);
+	const lines: string[] = [];
+	let green = true;
+	for (const cell of cells) {
+		lines.push(cellLine(cell, uptimeStart, uptimeEnd, binary));
+		if (cell.error != "" || cell.values.length == 0 || overBudget(cell)) green = false;
+	}
+	const target = env.get("LSP_PERF_OUT");
+	if (target == "") {
+		for (const line of lines) console.log(line);
+	} else if (!writeFile(target, lines.join("\n") + "\n").ok) {
+		return Result.err(`cannot write ${target}`);
+	}
+	return Result.ok(green);
+}
+
+function perfMain(): int32 {
+	const ran = perfRun();
+	if (!ran.ok) {
+		console.log(`lsp-perf: ${ran.error}`);
+		return 1;
+	}
+	return ran.value ? 0 : 1;
 }
 
 function main(): int32 {
@@ -634,7 +1562,7 @@ function main(): int32 {
 	let passes = 0;
 	let fails = 0;
 	for (const scenario of lspScenarios()) {
-		const failure = runScenario(scenario);
+		const failure = runScenario(scenario).failure;
 		if (failure == "") {
 			passes++;
 			console.log(`ok   ${scenario.name}`);
@@ -649,4 +1577,4 @@ function main(): int32 {
 	return fails > 0 ? 1 : 0;
 }
 
-process.exit(main());
+process.exit(PERF ? perfMain() : main());

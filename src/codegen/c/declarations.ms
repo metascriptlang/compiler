@@ -683,7 +683,7 @@ function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, stati
 	if (bakeLocals.length > 0 || bakeStmts.length > 0) return refuseBake(g, node, "its fields need initialization code");
 	const typeInfo = typeInfoRef(g, node.nodeType);
 	const viaRegistry = isHcrImageModule(g, g.modulePath);
-	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${body} b; } ${varName}_konst_ = { { 1 << 30, -1, ${viaRegistry ? "NULL" : typeInfo}, 0 }, { ${braced} } };`);
+	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${body} b; } ${varName}_konst_ = { { .rc = 1 << 30, .type = ${viaRegistry ? "NULL" : typeInfo}, .rootIdx = -1, .allocSize = 0 }, { ${braced} } };`);
 	if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${varName}_konst_.h.type = ${typeInfo};`);
 	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = &${varName}_konst_.b;`);
 	nameSetAdd(g.declaredGlobals, varName);
@@ -699,7 +699,7 @@ function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, 
 	const arrCType = cType.slice(0, cType.length - 1);
 	const typeInfo = ensureRefArrayCellTypeInfo(g, arrT);
 	const viaRegistry = isHcrImageModule(g, g.modulePath);
-	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${arrCType} b; } ${varName}_konst_ = { { 1 << 30, -1, ${viaRegistry ? "NULL" : typeInfo}, 0 }, { 0, NULL } };`);
+	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${arrCType} b; } ${varName}_konst_ = { { .rc = 1 << 30, .type = ${viaRegistry ? "NULL" : typeInfo}, .rootIdx = -1, .allocSize = 0 }, { 0, NULL } };`);
 	if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${varName}_konst_.h.type = ${typeInfo};`);
 	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = &${varName}_konst_.b;`);
 	nameSetAdd(g.declaredGlobals, varName);

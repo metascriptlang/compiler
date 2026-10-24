@@ -28,7 +28,6 @@ import {
 	createDefaultConfig,
 } from "./resolver";
 import { lex } from "../lexer/lexer";
-import { TokenKind } from "../lexer/token";
 import { createState, getParserDefines, setParserDefines } from "../parser/context";
 import { definedValue, createDefineTable, initDefines } from "../compiler/defines";
 import { callStateProgramParser } from "../parser/statements/callbacks";
@@ -36,7 +35,7 @@ import "../parser/statements/core";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData, CallExprData, IdentifierData, StringLiteralData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { readFile, writeFile, ensureDir, realpath, readDir } from "std/fs";
-import { translateCHeader, registerCompleteStruct, completeStructKey } from "./cimport/emit";
+import { translateHeaderModule, HeaderTranslation, registerCompleteStruct, completeStructKey, registerHeaderIncludes } from "./cimport/emit";
 import { Diagnostic, DiagSeverity } from "./cparse/error";
 import { TargetInfo, targetFor, hostTarget } from "./cparse/target";
 import { resolveRuntimeDir } from "../utils/path";
@@ -103,48 +102,37 @@ export function provideSource(provider: SourceProvider, path: string): Result<st
 	return Result.err(`File not found: ${path}`);
 }
 
-// ===== C Header Detection =====
-
-// Inline .h imports: scan source for `import { ... } from "*.h"` lines,
-// and inject `@include` + extern declarations generated from the C header
-// immediately AFTER the import statement. The original import statement is
-// preserved so Phase B unused-import detection (which walks ImportDecl nodes)
-// sees .h imports uniformly with .cms/.ms imports.
+// ===== C Header Modules =====
 //
-// collectImport treats .h sources as a special case: it skips ExportRegistry
-// lookup and symbol creation because the inlined extern decls below define
-// the symbols locally in the current module's scope.
-// Build-perf §1.2: how much of the loader half is C-header translation
-// (chibicc) vs plain read. Accumulated under graphLoadTiming; read by
-// compile.ms's graphLoad print.
-let _inlineMs: float64 = 0;
-let _inlineN: int32 = 0;
-let _inlineHits: int32 = 0;
-export interface InlineHeaderTimings {
+// A `.h` path loads as a module whose source is the translation of the declarations its own
+// file writes (cimport translateHeaderModule): each C declaration is one declaration however
+// many modules and headers reach it. Build-perf §1.2: how much of the loader half is header
+// translation; read by graphLoadTiming.
+let _headerMs: float64 = 0;
+let _headerN: int32 = 0;
+let _headerHits: int32 = 0;
+export interface HeaderTimings {
 	ms: float64;
 	n: int32;
 	hits: int32;
 }
-export function takeInlineHeaderTimings(): InlineHeaderTimings {
-	const r: InlineHeaderTimings = { ms: _inlineMs, n: _inlineN, hits: _inlineHits };
-	_inlineMs = 0;
-	_inlineN = 0;
-	_inlineHits = 0;
+export function takeHeaderTimings(): HeaderTimings {
+	const r: HeaderTimings = { ms: _headerMs, n: _headerN, hits: _headerHits };
+	_headerMs = 0;
+	_headerN = 0;
+	_headerHits = 0;
 	return r;
 }
 
-// ===== Header-Inline Disk Cache (build-perf Phase A0) =====
+// ===== Header Disk Cache (build-perf Phase A0) =====
 //
-// inlineHeaderImports is a pure transform (module source + headers → source)
-// and the compiler runs it twice per module per build (graph load + checker
-// prelude load); the chibicc translation inside dominated the loader half.
 // Cache mechanics live in compiler/cache.ms (Layer 5) — loader.ms cannot
 // import that module (checker/context → module/graph would make the module
 // layer depend on the checker), so the implementations are injected at
 // compile.ms module load, the same cycle-breaker pattern as
 // parser/statements/callbacks.ms.
 
-type HeaderCacheKeyFn = (source: string, modulePath: string, compact: boolean, target: string) => string;
+type HeaderCacheKeyFn = (source: string, headerPath: string, target: string) => string;
 type HeaderCacheLookupFn = (key: string) => string;
 type HeaderCacheStoreFn = (key: string, deps: string[], output: string) => void;
 
@@ -163,33 +151,14 @@ function headerDepHash(s: string): string {
 	return `${hashToHex(djb2(s))}_${hashToHex(fingerprint(s))}`;
 }
 
-// Returns the cache key when this call should engage the disk cache, "" when
-// not: cache unregistered, MSC_NO_HEADER_CACHE=1, non-filesystem provider
-// (Trans-Am, pure map providers whose entries may not mirror disk), or a
-// source that cannot contain a .h import at all.
-function mayImportHeader(source: string): boolean {
-	return importsHeaderIn(source, "\"") || importsHeaderIn(source, "'");
-}
-
-function importsHeaderIn(source: string, quote: string): boolean {
-	const needle = `.h${quote}`;
-	let at = source.byteIndexOf(needle);
-	while (at >= 0) {
-		const open = source.byteLastIndexOf(quote, at);
-		let k = open - 1;
-		while (k >= 0 && (source.byteAt(k) == " ".code || source.byteAt(k) == "\t".code || source.byteAt(k) == "\n".code || source.byteAt(k) == "\r".code)) k -= 1;
-		if (open >= 0 && k >= 3 && source.byteSlice(k - 3, k + 1) == "from") return true;
-		at = source.byteIndexOf(needle, at + 3);
-	}
-	return false;
-}
-
-function headerCacheEngage(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean): string {
+// "" when the disk cache does not apply: cache unregistered, MSC_NO_HEADER_CACHE=1, or a
+// provider whose entries may not mirror disk (Trans-Am, map providers).
+function headerCacheKey(source: string, headerPath: string, search: string[], provider: SourceProvider): string {
 	if (_hcLookupFn == null) return "";
 	if (provider.taReadFn != null || !provider.useFileSystem) return "";
 	if (env.get("MSC_NO_HEADER_CACHE") != "") return "";
 	const t = headerTarget();
-	return _hcKeyFn(source, modulePath, compactReplacement, t != null ? `${t.os}-${t.cpu}` : "");
+	return _hcKeyFn(source, headerPath, `${t != null ? `${t.os}-${t.cpu}` : ""}\t${search.join("\t")}`);
 }
 
 export function headerTarget(): TargetInfo {
@@ -199,346 +168,133 @@ export function headerTarget(): TargetInfo {
 	return os != "" && cpu != "" ? targetFor(os, cpu) : hostTarget();
 }
 
-export function inlineHeaderImports(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean = false, outErrors: ModuleError[] | null = null): string {
-	const _ih0 = performance.now();
-	_inlineN = _inlineN + 1;
-	if (!mayImportHeader(source)) {
-		_inlineMs = _inlineMs + (performance.now() - _ih0);
-		return source;
-	}
-	const key = headerCacheEngage(source, modulePath, provider, compactReplacement);
-	if (key != "") {
-		const hit = _hcLookupFn(key);
-		if (hit != "") {
-			_inlineHits = _inlineHits + 1;
-			_inlineMs = _inlineMs + (performance.now() - _ih0);
-			return unpackCompleteStructs(hit);
-		}
-	}
-	const errLen0 = outErrors != null ? outErrors.length : 0;
-	const prevLog = provider.readLog;
-	const probeLog: string[] = [];
-	const cparseReads: string[] = [];
-	const completeKeys: string[] = [];
-	if (key != "") provider.readLog = probeLog;
-	let deps: string[] | null = null;
-	let output = "";
-	try {
-		output = inlineHeaderImportsInner(source, modulePath, provider, compactReplacement, outErrors, cparseReads, completeKeys);
-	} finally {
-		if (key != "") {
-			const seen = new HashSet<string>();
-			deps = [];
-			for (const d of probeLog) {
-				if (!seen.has(d)) { seen.add(d); deps.push(d); }
-			}
-			for (const d of cparseReads) {
-				if (!seen.has(d)) { seen.add(d); deps.push(d); }
-			}
-			provider.readLog = prevLog;
-		}
-	}
-	// Store only clean runs: a run that surfaced diagnostics must recompute
-	// next time so the diagnostics re-surface. Output equal to source means
-	// nothing was inlined — recomputing that is as cheap as a hit.
-	if (key != "" && deps != null && output != source && (outErrors == null || outErrors.length == errLen0)) {
-		_hcStoreFn(key, deps, packCompleteStructs(completeKeys, output));
-	}
-	_inlineMs = _inlineMs + (performance.now() - _ih0);
-	return output;
+function builtinIncludeDir(): string {
+	const root = resolveRuntimeDir();
+	return root != "" ? root + "/src/module/cparse/include" : "src/module/cparse/include";
 }
 
-function packCompleteStructs(keys: string[], output: string): string {
+// The real header goes to the C compiler with its companion `.c`; a builtin stub only stands
+// in for a system header while cparse reads, so the C compiler never sees it.
+function headerDirectives(path: string, provider: SourceProvider): string {
+	if (path.startsWith(canonicalModulePath(builtinIncludeDir()) + "/")) return "";
+	const companion = path.slice(0, path.length - 2) + ".c";
+	const compile = provideSource(provider, companion).ok ? `@compile("${companion}");\n` : "";
+	return `@include("${path}");\n${compile}`;
+}
+
+// A header another header includes is read with the search paths of the header that included it
+// as well as its own, as one C translation unit reads every header it includes.
+const _inheritedSearch = new HashMap<string, string[]>();
+
+function headerSearchPaths(path: string): string[] {
+	const headerDir = dirname(path);
+	const root = resolveRuntimeDir();
+	const search = root != ""
+		? [builtinIncludeDir(), root, headerDir, dirname(headerDir)]
+		: [builtinIncludeDir(), headerDir, dirname(headerDir)];
+	for (const p of _inheritedSearch.get(path) ?? []) {
+		if (!search.includes(p)) search.push(p);
+	}
+	return search;
+}
+
+// The module source of the header at `path` (canonical). `graph`, when given, holds what each
+// header's declarations looked like to the first header that read it.
+export function headerModuleSource(path: string, provider: SourceProvider, graph: ModuleGraph | null, outErrors: ModuleError[]): string {
+	const t0 = performance.now();
+	_headerN = _headerN + 1;
+	const raw = provideSource(provider, path);
+	if (!raw.ok) {
+		outErrors.push(createModuleError(`cannot read C header '${path}'`, 0, 0, ErrorSeverity.Error));
+		return "";
+	}
+	const target = headerTarget();
+	if (target == null) {
+		outErrors.push(createModuleError(`C header '${path}': no C target model for --os=${definedValue(getParserDefines(), "os")} --cpu=${definedValue(getParserDefines(), "cpu")}`, 0, 0, ErrorSeverity.Error));
+		return "";
+	}
+	const search = headerSearchPaths(path);
+	const key = headerCacheKey(raw.value, path, search, provider);
+	let entry = key != "" ? _hcLookupFn(key) : "";
+	if (entry != "") {
+		_headerHits = _headerHits + 1;
+	} else {
+		const prevLog = provider.readLog;
+		const probes: string[] = [];
+		if (key != "") provider.readLog = probes;
+		const diags: Diagnostic[] = [];
+		const reads: string[] = [];
+		const completeKeys: string[] = [];
+		const translated = translateHeaderModule(raw.value, path, search, diags, reads, target, completeKeys, canonicalModulePath);
+		entry = packHeaderEntry(completeKeys, translated, headerDirectives(path, provider) + translated.source);
+		provider.readLog = prevLog;
+		for (const d of diags) {
+			const sev = d.severity == DiagSeverity.Error ? ErrorSeverity.Error : ErrorSeverity.Warning;
+			outErrors.push(createModuleError(`C header ${d.file}:${d.line}:${d.col}: ${d.message}`, 0, 0, sev));
+		}
+		// A run that surfaced diagnostics recomputes next time so they surface again.
+		if (key != "" && diags.length == 0) {
+			const deps: string[] = [];
+			const seen = new HashSet<string>();
+			for (const d of probes.concat(reads)) {
+				if (!seen.has(d)) { seen.add(d); deps.push(d); }
+			}
+			_hcStoreFn(key, deps, entry);
+		}
+	}
+	const source = unpackHeaderEntry(entry, path, search, graph, outErrors);
+	_headerMs = _headerMs + (performance.now() - t0);
+	return source;
+}
+
+// Entry: the complete-struct keys, the own shape hash, one "<file>\t<hash>" line per included
+// file, then the module source.
+function packHeaderEntry(keys: string[], t: HeaderTranslation, source: string): string {
 	let packed = `${keys.length}\n`;
 	for (const k of keys) packed = packed + k + "\n";
-	return packed + output;
+	packed = packed + headerDepHash(t.ownShape) + "\n" + `${t.includedShapes.size}\n`;
+	for (const [file, shape] of t.includedShapes) packed = packed + `${file}\t${headerDepHash(shape)}\n`;
+	return packed + source;
 }
 
-function unpackCompleteStructs(entry: string): string {
-	let pos = entry.indexOf("\n");
-	const count = pos > 0 ? entry.slice(0, pos).parseInt() : 0;
-	pos = pos + 1;
-	for (let i = 0; i < count; i += 1) {
-		const nl = entry.indexOf("\n", pos);
-		registerCompleteStruct(entry.slice(pos, nl));
-		pos = nl + 1;
+function unpackHeaderEntry(entry: string, path: string, search: string[], graph: ModuleGraph | null, outErrors: ModuleError[]): string {
+	const lines = entry.split("\n");
+	let at = 0;
+	const keyCount = lines[at].parseInt();
+	at = at + 1;
+	for (let i = 0; i < keyCount; i += 1) {
+		registerCompleteStruct(lines[at]);
+		at = at + 1;
 	}
-	return entry.slice(pos, entry.length);
+	if (graph != null) recordHeaderShape(graph, path, lines[at], path, outErrors);
+	at = at + 1;
+	const shapeCount = lines[at].parseInt();
+	at = at + 1;
+	const included: string[] = [];
+	for (let i = 0; i < shapeCount; i += 1) {
+		const tab = lines[at].indexOf("\t");
+		included.push(lines[at].slice(0, tab));
+		if (graph != null) recordHeaderShape(graph, lines[at].slice(0, tab), lines[at].slice(tab + 1, lines[at].length), path, outErrors);
+		at = at + 1;
+	}
+	registerHeaderIncludes(path, included);
+	for (const file of included) {
+		if (!_inheritedSearch.has(file)) _inheritedSearch.set(file, search);
+	}
+	return lines.slice(at, lines.length).join("\n");
 }
 
-function inlineHeaderImportsInner(source: string, modulePath: string, provider: SourceProvider, compactReplacement: boolean, outErrors: ModuleError[] | null, cparseReads: string[], completeKeys: string[]): string {
-	let result = source;
-	let insertedLines = 0;
-	const emittedHeaderDecls = new HashSet<string>();
-	const starts = importStatementStarts(source);
-	let shift = 0;
-	for (const start of starts) {
-		const importIdx = start + shift;
-		const isReexport = result.charCodeAt(importIdx) == "e".code;
-
-		// Find the full statement — terminated by ;
-		const stmtEnd = result.indexOf(";", importIdx);
-		if (stmtEnd < 0) continue;
-		const stmt = result.slice(importIdx, stmtEnd + 1);
-
-		// Must have "from" clause with a .h specifier
-		const fromIdx = stmt.indexOf(" from ");
-		if (fromIdx < 0) continue;
-
-		// Extract specifier (between quotes after "from")
-		const afterFrom = stmt.slice(fromIdx + 6, stmt.length).trim();
-		let specifier = "";
-		if (afterFrom.startsWith("\"") || afterFrom.startsWith("'")) {
-			const quote = afterFrom.charAt(0);
-			const endQuote = afterFrom.indexOf(quote, 1);
-			if (endQuote > 0) specifier = afterFrom.slice(1, endQuote);
-		}
-
-		if (!specifier.endsWith(".h")) continue;
-
-		// Extract brace positions (shared by guard check and name extraction)
-		const braceOpen = stmt.indexOf("{");
-		const braceClose = stmt.indexOf("}");
-
-		// For re-exports, must have { ... } braces (export { X as Y } from "*.h")
-		if (isReexport && braceOpen < 0) continue;
-
-		// Resolve the .h file path relative to the consuming module
-		let headerPath = specifier;
-		if (specifier.startsWith("./") || specifier.startsWith("../")) {
-			const moduleDir = dirname(modulePath);
-			headerPath = moduleDir + "/" + specifier.slice(specifier.startsWith("./") ? 2 : 0, specifier.length);
-		} else if (!isAbsolute(specifier)) {
-			// Bare specifier ("lib/x.h"): module-relative first so the build does
-			// not depend on the invocation CWD; std's bare paths (resolved via the
-			// CWD/compiler-root chain below) miss here and keep their behavior.
-			const moduleDir = dirname(modulePath);
-			const moduleRel = moduleDir + "/" + specifier;
-			if (provideSource(provider, moduleRel).ok) headerPath = moduleRel;
-		}
-
-		// Read the .h file. Try as-is first (works when CWD is project root). If that
-		// fails for a bare relative path, try resolving against the compiler root —
-		// this lets installed std (~/.metascript/std/...) work from any CWD without
-		// rewriting `headerPath` (which downstream code uses to derive companion .c
-		// paths and @include directives — must stay consistent).
-		let headerSource = provideSource(provider, headerPath);
-		if (!headerSource.ok && !isAbsolute(headerPath)) {
-			const root = resolveRuntimeDir();
-			if (root != "") headerSource = provideSource(provider, `${root}/${headerPath}`);
-		}
-		if (!headerSource.ok) {
-			if (outErrors != null) {
-				const missLine = countLinesBefore(result, importIdx) - insertedLines;
-				outErrors.push(createModuleError(`cannot read C header '${specifier}' (resolved '${headerPath}')`, missLine, 1, ErrorSeverity.Error));
-			}
-			continue;
-		}
-
-		// Parse specifier list once — used for both name filtering and re-export generation
-		const specs = parseSpecItems(stmt, braceOpen, braceClose);
-		const importedNames: string[] = [];
-		for (const spec of specs) {
-			importedNames.push(spec.origName);
-		}
-
-		// Generate extern declarations from C header
-		// Include paths: builtin C headers (stdint.h etc.) + header's own directory
-		// + its parent so `#include <libname/foo.h>` inside the lib resolves.
-		const headerDir = dirname(headerPath);
-		const headerParentDir = dirname(headerDir);
-		const compilerRoot = resolveRuntimeDir();
-		const builtinInclude = compilerRoot != "" ? compilerRoot + "/src/module/cparse/include" : "src/module/cparse/include";
-		const includePaths = compilerRoot != ""
-			? [builtinInclude, compilerRoot, headerDir, headerParentDir]
-			: [builtinInclude, headerDir, headerParentDir];
-		const target = headerTarget();
-		if (target == null) {
-			if (outErrors != null) {
-				const noTargetLine = countLinesBefore(result, importIdx) - insertedLines;
-				outErrors.push(createModuleError(`C header '${specifier}': no C target model for --os=${definedValue(getParserDefines(), "os")} --cpu=${definedValue(getParserDefines(), "cpu")}`, noTargetLine, 1, ErrorSeverity.Error));
-			}
-			continue;
-		}
-		const headerDiags: Diagnostic[] = [];
-		let translated = translateCHeader(headerSource.value, importedNames, false, headerPath, includePaths, headerDiags, emittedHeaderDecls, cparseReads, target, completeKeys);
-		if (outErrors != null && headerDiags.length > 0) {
-			const importLine = countLinesBefore(result, importIdx) - insertedLines;
-			for (const hd of headerDiags) {
-				const sev = hd.severity == DiagSeverity.Error ? ErrorSeverity.Error : ErrorSeverity.Warning;
-				outErrors.push(createModuleError(`C header ${hd.file}:${hd.line}:${hd.col}: ${hd.message}`, importLine, 1, sev));
-			}
-		}
-
-		// Auto-compile companion .c file if it exists (e.g., native.h → native.c).
-		// Apply the same compiler-root fallback as the .h lookup above — when building
-		// from a directory outside the compiler tree (e.g., an example project), the
-		// bare relative path won't resolve against CWD; retrying under the compiler
-		// root picks up `std` and `runtime` sources bundled with the install.
-		const companionC = headerPath.slice(0, headerPath.length - 2) + ".c";
-		let hasCompanionC = provideSource(provider, companionC).ok;
-		if (!hasCompanionC && !isAbsolute(companionC)) {
-			const root = resolveRuntimeDir();
-			if (root != "") hasCompanionC = provideSource(provider, `${root}/${companionC}`).ok;
-		}
-		let compileDirective = "";
-		if (hasCompanionC) compileDirective = `@compile("${companionC}");\n`;
-
-		let replacement = "";
-		if (isReexport) {
-			replacement = buildReexportReplacement(translated, specs, headerPath, compileDirective);
-		} else {
-			replacement = `@include("${headerPath}");\n${compileDirective}${translated}`;
-		}
-
-		// Line-preserving mode: compact the replacement to one line AND keep the original
-		// trailing newline so subsequent line numbers stay aligned with the user's source.
-		// All decls are terminated by `;` or `}`, so collapsing newlines to spaces is safe.
-		// Without this, multi-line replacements shift downstream line numbers, breaking
-		// LSP hover/goto positions.
-		if (compactReplacement) {
-			replacement = replacement.split("\n").join(" ");
-		}
-
-		// Insert the inlined declarations immediately AFTER the import statement.
-		// The original `import { ... } from "*.h";` is PRESERVED so:
-		//   - Phase B unused-import detection (checker/checkPass.ms:reportUnusedImports)
-		//     walks its ImportDecl node uniformly with .cms/.ms imports
-		//   - LSP hover/goto positions on the import clause are natural (real tokens)
-		//   - collectImport short-circuits on .h sources; the extern decls inlined
-		//     below actually define the symbols in the current module's scope.
-		// In compact mode the replacement is collapsed to one line so downstream
-		// line numbers stay aligned with the user's original source.
-		const insertPos = stmtEnd + 1;  // just past the ';' of the import
-		const sep = compactReplacement ? " " : "\n";
-		result = result.slice(0, insertPos) + sep + replacement + result.slice(insertPos, result.length);
-		shift = shift + sep.length + replacement.length;
-		if (!compactReplacement) {
-			insertedLines = insertedLines + countLinesBefore(replacement, replacement.length);
-		}
+// A header whose declarations differ between two readers (a macro an includer defines before
+// its #include) would be two different declarations under one name.
+function recordHeaderShape(graph: ModuleGraph, file: string, hash: string, reader: string, outErrors: ModuleError[]): void {
+	const seen = graph.headerShapes.get(file);
+	if (seen == null) {
+		graph.headerShapes.set(file, `${hash}\t${reader}`);
+		return;
 	}
-	return result;
-}
-
-function importStatementStarts(source: string): int32[] {
-	const starts: int32[] = [];
-	if (source.byteIndexOf(".h\"") < 0 && source.byteIndexOf(".h'") < 0) return starts;
-	const lexed = lex(source);
-	if (!lexed.ok) return starts;
-	const lines = source.split("\n");
-	const lineStarts: int32[] = [0];
-	for (let i = 0; i + 1 < lines.length; i += 1) lineStarts.push(lineStarts[i] + lines[i].length + 1);
-	const toks = lexed.value;
-	for (let i = 0; i < toks.length; i += 1) {
-		const t = toks[i];
-		const reexport = t.kind == TokenKind.Export && i + 1 < toks.length && toks[i + 1].kind == TokenKind.LBrace;
-		if ((t.kind == TokenKind.Import || reexport) && t.line >= 1 && t.line <= lineStarts.length) {
-			starts.push(lineStarts[t.line - 1] + t.column - 1);
-		}
-	}
-	return starts;
-}
-
-// Line number (1-based) of the character at endPos, counting inserted text —
-// callers subtract their own insertion count to recover original-source lines.
-function countLinesBefore(text: string, endPos: int32): int32 {
-	let n = 1;
-	for (let i = 0; i < endPos; i += 1) {
-		if (text.charCodeAt(i) == "\n".code) n = n + 1;
-	}
-	return n;
-}
-
-// Parse "{ A, B as C }" into original names and alias pairs.
-interface SpecItem { origName: string; aliasName: string; }
-function parseSpecItems(stmt: string, braceOpen: int32, braceClose: int32): SpecItem[] {
-	const items: SpecItem[] = [];
-	if (braceOpen < 0 || braceClose <= braceOpen) return items;
-	const parts = stmt.slice(braceOpen + 1, braceClose).split(",");
-	for (const part of parts) {
-		const trimmed = part.trim();
-		if (trimmed.length == 0) continue;
-		const asIdx = trimmed.indexOf(" as ");
-		if (asIdx > 0) {
-			items.push({ origName: trimmed.slice(0, asIdx).trim(), aliasName: trimmed.slice(asIdx + 4, trimmed.length).trim() });
-		} else {
-			items.push({ origName: trimmed, aliasName: "" });
-		}
-	}
-	return items;
-}
-
-// Prefix `export ` onto every occurrence of `marker` that ends at an
-// identifier boundary. `extern function YGNodeNew` must NOT match inside
-// `extern function YGNodeNewWithConfig` — a naive split/join exportizes the
-// longer name's line too, and the longer name's own pass then produces
-// `export export`. Returns "" when no boundary-valid occurrence exists.
-function exportizeAtIdentBoundary(text: string, marker: string): string {
-	let out = "";
-	let pos = 0;
-	let hit = false;
-	while (true) {
-		const idx = text.indexOf(marker, pos);
-		if (idx < 0) {
-			out = out + text.slice(pos, text.length);
-			break;
-		}
-		const after = idx + marker.length;
-		const ch = after < text.length ? text.charCodeAt(after) : 0;
-		const isIdentChar = (ch >= "A".code && ch <= "Z".code) || (ch >= "a".code && ch <= "z".code)
-			|| (ch >= "0".code && ch <= "9".code) || ch == "_".code;
-		out = out + text.slice(pos, idx);
-		if (isIdentChar) {
-			out = out + marker;
-		} else {
-			out = out + "export " + marker;
-			hit = true;
-		}
-		pos = after;
-	}
-	if (!hit) return "";
-	return out;
-}
-
-// Build re-export replacement: inline externs + aliased export declarations.
-function buildReexportReplacement(translated: string, specs: SpecItem[], headerPath: string, compileDirective: string): string {
-	let reexportDecls = "";
-	let exportTranslated = translated;
-
-	for (const spec of specs) {
-		if (spec.aliasName != "") {
-			// Aliased: find the translated extern and re-emit with alias + from clause
-			const declMarker = ` ${spec.origName}(`;
-			const structMarker = ` ${spec.origName} {`;
-			const typeMarker = ` ${spec.origName} =`;
-			if (translated.indexOf(declMarker) >= 0) {
-				const dIdx = translated.indexOf(declMarker);
-				const lineStart = translated.lastIndexOf("\n", dIdx);
-				const lineEnd = translated.indexOf("\n", dIdx);
-				const declLine = translated.slice(lineStart >= 0 ? lineStart + 1 : 0, lineEnd >= 0 ? lineEnd : translated.length);
-				let aliasDecl = declLine.split(`extern function ${spec.origName}`).join(`export extern function ${spec.aliasName}`);
-				if (aliasDecl.endsWith(";")) {
-					aliasDecl = aliasDecl.slice(0, aliasDecl.length - 1) + ` from "${spec.origName}";`;
-				}
-				reexportDecls = reexportDecls + aliasDecl + "\n";
-			} else if (translated.indexOf(structMarker) >= 0 || translated.indexOf(typeMarker) >= 0) {
-				reexportDecls = reexportDecls + `export type ${spec.aliasName} = ${spec.origName};\n`;
-			}
-		} else {
-			// Non-aliased: re-add export prefix to matching extern
-			const kinds = ["function", "interface", "struct", "enum", "type"];
-			for (const k of kinds) {
-				const marker = `extern ${k} ${spec.origName}`;
-				const replaced = exportizeAtIdentBoundary(exportTranslated, marker);
-				if (replaced != "") {
-					exportTranslated = replaced;
-					break;
-				}
-			}
-		}
-	}
-
-	return `@include("${headerPath}");\n${compileDirective}${exportTranslated}${reexportDecls}`;
+	const tab = seen.indexOf("\t");
+	if (seen.slice(0, tab) == hash) return;
+	outErrors.push(createModuleError(`C header '${file}' declares something different when read from '${reader}' than from '${seen.slice(tab + 1, seen.length)}': a macro defined before its #include changes it`, 0, 0, ErrorSeverity.Error));
 }
 
 export function isCHeaderPath(path: string): boolean {
@@ -570,19 +326,20 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 	addModule(graph, mod);
 	pushImportStack(graph, path);
 
-	const sourceResult = provideSource(provider, path);
-	if (!sourceResult.ok) {
-		mod.errors.push(createModuleError(sourceResult.error, 0, 0, ErrorSeverity.Error));
-		finalizeModule(graph, mod, path);
-		return false;
+	if (isCHeaderPath(path)) {
+		const headerErrors: ModuleError[] = [];
+		mod.rawSource = headerModuleSource(path, provider, graph, headerErrors);
+		for (const he of headerErrors) mod.errors.push(he);
+	} else {
+		const sourceResult = provideSource(provider, path);
+		if (!sourceResult.ok) {
+			mod.errors.push(createModuleError(sourceResult.error, 0, 0, ErrorSeverity.Error));
+			finalizeModule(graph, mod, path);
+			return false;
+		}
+		mod.rawSource = sourceResult.value;
 	}
-	mod.rawSource = sourceResult.value;
-
-	// Inline .h imports: replace `import { ... } from "*.h"` with extern declarations.
-	// reference parity: importc declarations live inline in the consuming module, no separate module.
-	const headerErrors: ModuleError[] = [];
-	mod.source = inlineHeaderImports(mod.rawSource, path, provider, true, headerErrors);
-	for (const he of headerErrors) mod.errors.push(he);
+	mod.source = mod.rawSource;
 
 	// Parse with recovery — always get partial AST, errors in state.errors
 	const lr = lex(mod.source);
@@ -609,18 +366,11 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 	const pd = program.data as ProgramData;
 	for (const stmt of pd.programStmts) {
 		if (stmt.kind == NodeKind.ImportDecl) {
-			const d = stmt.data as ImportDeclData;
-			// .h imports are fully handled by inlineHeaderImports above (which inlined
-			// extern decls alongside this ImportDecl). The ImportDecl is kept purely for
-			// checker unused-import detection; don't try to resolve it as a module.
-			if (isCHeaderPath(d.importSource)) continue;
 			processImportDecl(graph, mod, stmt, provider, config, useConfig);
 		} else if (stmt.kind == NodeKind.ExportDecl) {
 			// Re-export: export { ... } from "./module" wraps ImportDecl in ExportDecl
 			const ed = stmt.data as ExportDeclData;
 			if (ed.exportedDecl != null && ed.exportedDecl.kind == NodeKind.ImportDecl) {
-				const id = ed.exportedDecl.data as ImportDeclData;
-				if (isCHeaderPath(id.importSource)) continue;
 				processImportDecl(graph, mod, ed.exportedDecl, provider, config, useConfig);
 			}
 		}
@@ -704,12 +454,6 @@ export function loadModule(graph: ModuleGraph, path: string, provider: SourcePro
 				// Not a hard error — two-phase checking handles circular deps gracefully
 			}
 		}
-		return Result.ok(true);
-	}
-
-	// C header files: handled by inlineHeaderImports() in the consuming module.
-	// No separate module needed — reference parity.
-	if (isCHeaderPath(path)) {
 		return Result.ok(true);
 	}
 
@@ -851,93 +595,120 @@ test "single file graph" {
 	assert mod.source == "const x = 1;";
 }
 
-test "inlineHeaderImports surfaces missing-include diagnostics with .ms import line" {
-	const entries: MapEntry[] = [];
-	entries.push(makeEntry("/tmp/msdiagtest/bad.h", "#include <nope/nada.h>\nint diagOk(void);\n"));
-	const provider = createMapProvider(entries);
-	const src = "// lead line\nimport { diagOk } from " + "\"./bad.h\";\n";
+test "a C header's diagnostics are its module's errors" {
 	const errs: ModuleError[] = [];
-	const inlined = inlineHeaderImports(src, "/tmp/msdiagtest/main.ms", provider, false, errs);
-	assert inlined.indexOf("extern function diagOk") >= 0;
+	const source = headerModuleSource("/tmp/msdiagtest/bad.h", createMapProvider([makeEntry("/tmp/msdiagtest/bad.h", "#include <nope/nada.h>\nint diagOk(void);\n")]), null, errs);
+	assert source.indexOf("export extern function diagOk") >= 0;
 	assert errs.length > 0;
 	assert errs[0].message.indexOf("nada.h") >= 0;
 	assert errs[0].message.indexOf("file not found") >= 0;
-	assert errs[0].line == 2;
 }
 
-test "inlineHeaderImports surfaces unreadable .h as Error instead of silent skip" {
-	const provider = createMapProvider([]);
-	const src = "import { ghost } from " + "\"./missing.h\";\n";
-	const errs: ModuleError[] = [];
-	const inlined = inlineHeaderImports(src, "/tmp/msmissing/main.ms", provider, false, errs);
-	assert inlined.indexOf("extern function ghost") < 0;
-	assert errs.length == 1;
-	assert errs[0].severity == ErrorSeverity.Error;
-	assert errs[0].message.indexOf("missing.h") >= 0;
-	assert errs[0].line == 1;
+test "an unreadable C header is an error of the module that imports it" {
+	const graph = loadModuleGraph("/tmp/msmissing/main.ms", createMapProvider([makeEntry("/tmp/msmissing/main.ms", "import { ghost } from " + "\"./missing.h\";\n")]));
+	const main = findModule(graph, "/tmp/msmissing/main.ms");
+	assert main != null && main.errors.length == 1;
+	assert main.errors[0].severity == ErrorSeverity.Error;
+	assert main.errors[0].message.indexOf("missing.h") >= 0;
 }
 
-test "inlineHeaderImports resolves bare .h specifier module-relative (CWD-independent)" {
+test "a bare C header specifier resolves beside the importing module" {
 	const entries: MapEntry[] = [];
 	entries.push(makeEntry("/tmp/msbarespec/lib/api.h", "int bareOk(void);\n"));
-	const provider = createMapProvider(entries);
-	const src = "import { bareOk } from " + "\"lib/api.h\";\n";
-	const inlined = inlineHeaderImports(src, "/tmp/msbarespec/main.ms", provider);
-	assert inlined.indexOf("extern function bareOk") >= 0;
+	entries.push(makeEntry("/tmp/msbarespec/main.ms", "import { bareOk } from " + "\"lib/api.h\";\n"));
+	const graph = loadModuleGraph("/tmp/msbarespec/main.ms", createMapProvider(entries));
+	const header = findModule(graph, "/tmp/msbarespec/lib/api.h");
+	assert header != null && header.source.indexOf("export extern function bareOk") >= 0;
 }
 
-function inlinePlatHeaderFor(os: string, cpu: string, errs: ModuleError[]): string {
-	const header = "#if defined(_WIN32)\nint platWin(void);\n#elif defined(__APPLE__)\nint platApple(void);\n#else\nint platOther(void);\n#endif\n";
-	return inlineHeaderFor(os, cpu, header, "platWin, platApple, platOther", errs);
-}
-
-function inlineHeaderFor(os: string, cpu: string, header: string, names: string, errs: ModuleError[]): string {
+test "a C header imported by two modules under two spellings is one module" {
 	const entries: MapEntry[] = [];
-	entries.push(makeEntry("/tmp/mstarget/plat.h", header));
-	const src = "import { " + names + " } from " + "\"./plat.h\";\n";
+	entries.push(makeEntry("/tmp/msoneheader/foo.h", "typedef struct { int a; } Pair;\n"));
+	entries.push(makeEntry("/tmp/msoneheader/main.ms", "import { Pair } from " + "\"./foo.h\";\nimport { x } from \"./sub/b\";\n"));
+	entries.push(makeEntry("/tmp/msoneheader/sub/b.ms", "import { Pair } from " + "\"../foo.h\";\nexport const x = 1;\n"));
+	const graph = loadModuleGraph("/tmp/msoneheader/main.ms", createMapProvider(entries));
+	assert graph.modules.length == 3;
+	const header = findModule(graph, "/tmp/msoneheader/foo.h");
+	assert header != null && header.source.indexOf("@include(\"/tmp/msoneheader/foo.h\");") == 0;
+}
+
+test "a header two includers read differently is an error" {
+	ensureDir("/tmp/msshape");
+	writeFile("/tmp/msshape/cfg.h", "#ifndef CFG_H\n#define CFG_H\n#ifdef WIDE\ntypedef long N;\n#else\ntypedef int N;\n#endif\n#endif\n");
+	writeFile("/tmp/msshape/wide.h", "#define WIDE\n#include \"cfg.h\"\nN wide(void);\n");
+	writeFile("/tmp/msshape/main.ms", "import { N } from " + "\"./cfg.h\";\nimport { wide } from \"./wide.h\";\n");
+	const dir = canonicalModulePath("/tmp/msshape");
+	const graph = loadModuleGraph(dir + "/main.ms", createFileSystemProvider());
+	const wide = findModule(graph, dir + "/wide.h");
+	const cfg = findModule(graph, dir + "/cfg.h");
+	assert wide != null && cfg != null;
+	const all = wide.errors.concat(cfg.errors);
+	assert all.length == 1, `${all.length}`;
+	assert all[0].message.indexOf(`C header '${dir}/cfg.h' declares something different`) == 0, all[0].message;
+}
+
+test "a header another header includes is read with the search paths of its includer" {
+	ensureDir("/tmp/mssearch/include/lib/sub");
+	writeFile("/tmp/mssearch/include/lib/types.h", "#ifndef LT_H\n#define LT_H\ntypedef int Handle;\n#endif\n");
+	writeFile("/tmp/mssearch/include/lib/sub/use.h", "#ifndef LU_H\n#define LU_H\n#include <lib/types.h>\nHandle useHandle(void);\n#endif\n");
+	writeFile("/tmp/mssearch/include/lib/top.h", "#include <lib/types.h>\n#include <lib/sub/use.h>\n");
+	writeFile("/tmp/mssearch/main.ms", "import { useHandle } from " + "\"./include/lib/top.h\";\n");
+	const dir = canonicalModulePath("/tmp/mssearch");
+	const graph = loadModuleGraph(dir + "/main.ms", createFileSystemProvider());
+	const use = findModule(graph, dir + "/include/lib/sub/use.h");
+	assert use != null && use.errors.length == 0, use != null ? use.errors[0].message : "use.h not loaded";
+	assert use.source.indexOf("export extern function useHandle(): Handle;") >= 0, use.source;
+}
+
+function platHeaderFor(os: string, cpu: string, errs: ModuleError[]): string {
+	const header = "#if defined(_WIN32)\nint platWin(void);\n#elif defined(__APPLE__)\nint platApple(void);\n#else\nint platOther(void);\n#endif\n";
+	return headerFor(os, cpu, header, errs);
+}
+
+function headerFor(os: string, cpu: string, header: string, errs: ModuleError[]): string {
 	const saved = getParserDefines();
 	const defs = createDefineTable();
 	initDefines(defs, "c", os, cpu, "drc", 0);
 	setParserDefines(defs);
 	try {
-		return inlineHeaderImports(src, "/tmp/mstarget/main.ms", createMapProvider(entries), false, errs);
+		return headerModuleSource("/tmp/mstarget/plat.h", createMapProvider([makeEntry("/tmp/mstarget/plat.h", header)]), null, errs);
 	} finally {
 		setParserDefines(saved);
 	}
 }
 
-test "inlineHeaderImports takes the _WIN32 branch for a windows build" {
-	const inlined = inlinePlatHeaderFor("windows", "amd64", []);
-	assert inlined.indexOf("extern function platWin") >= 0;
-	assert inlined.indexOf("extern function platApple") < 0;
-	assert inlined.indexOf("extern function platOther") < 0;
+test "a C header takes the _WIN32 branch for a windows build" {
+	const source = platHeaderFor("windows", "amd64", []);
+	assert source.indexOf("extern function platWin") >= 0;
+	assert source.indexOf("extern function platApple") < 0;
+	assert source.indexOf("extern function platOther") < 0;
 }
 
-test "inlineHeaderImports takes neither the apple nor the windows branch for a linux build" {
-	const inlined = inlinePlatHeaderFor("linux", "arm64", []);
-	assert inlined.indexOf("extern function platOther") >= 0;
-	assert inlined.indexOf("extern function platApple") < 0;
-	assert inlined.indexOf("extern function platWin") < 0;
+test "a C header takes neither the apple nor the windows branch for a linux build" {
+	const source = platHeaderFor("linux", "arm64", []);
+	assert source.indexOf("extern function platOther") >= 0;
+	assert source.indexOf("extern function platApple") < 0;
+	assert source.indexOf("extern function platWin") < 0;
 }
 
-test "inlineHeaderImports takes the __APPLE__ branch for a macos build" {
-	const inlined = inlinePlatHeaderFor("macos", "arm64", []);
-	assert inlined.indexOf("extern function platApple") >= 0;
-	assert inlined.indexOf("extern function platOther") < 0;
+test "a C header takes the __APPLE__ branch for a macos build" {
+	const source = platHeaderFor("macos", "arm64", []);
+	assert source.indexOf("extern function platApple") >= 0;
+	assert source.indexOf("extern function platOther") < 0;
 }
 
-test "inlineHeaderImports reads a windows export macro that expands to __declspec" {
+test "a C header reads a windows export macro that expands to __declspec" {
 	const header = "#if defined(_WIN32)\n#define LIB_API __declspec(dllimport)\n#else\n#define LIB_API\n#endif\nLIB_API int addOne(int x);\n";
 	const errs: ModuleError[] = [];
-	const inlined = inlineHeaderFor("windows", "amd64", header, "addOne", errs);
+	const source = headerFor("windows", "amd64", header, errs);
 	assert errs.length == 0;
-	assert inlined.indexOf("extern function addOne") >= 0;
+	assert source.indexOf("extern function addOne") >= 0;
 }
 
-test "inlineHeaderImports reports a build target with no C model instead of guessing one" {
+test "a C header reports a build target with no C model instead of guessing one" {
 	const errs: ModuleError[] = [];
-	const inlined = inlinePlatHeaderFor("linux", "vax", errs);
-	assert inlined.indexOf("extern function") < 0;
+	const source = platHeaderFor("linux", "vax", errs);
+	assert source.indexOf("extern function") < 0;
 	assert errs.length == 1;
 	assert errs[0].severity == ErrorSeverity.Error;
 	assert errs[0].message.indexOf("--cpu=vax") >= 0;
@@ -968,30 +739,6 @@ test "no std module binds C by importing a header" {
 	collectStdHeaderImports(root + "/std", found, scanned);
 	assert scanned[0] > 100;
 	assert found.length == 0;
-}
-
-test "re-export from .h with prefix-colliding names does not double-export" {
-	const entries: MapEntry[] = [];
-	entries.push(makeEntry("/tmp/msprefix/api.h", "int fooBar(void);\nint fooBarBaz(void);\n"));
-	const provider = createMapProvider(entries);
-	const src = "export { fooBar, fooBarBaz } from " + "\"./api.h\";\n";
-	const inlined = inlineHeaderImports(src, "/tmp/msprefix/main.ms", provider);
-	assert inlined.indexOf("export extern function fooBar(") >= 0;
-	assert inlined.indexOf("export extern function fooBarBaz(") >= 0;
-	assert inlined.indexOf("export export") < 0;
-}
-
-test "inlineHeaderImports reads import statements, never a string or a comment that spells one" {
-	const entries: MapEntry[] = [];
-	entries.push(makeEntry("/tmp/msspelled/lp.h", "int linkProbe(int x);\nint otherProbe(int x);\n"));
-	const provider = createMapProvider(entries);
-	const spelled = "import { otherProbe } fr" + "om \"./lp.h\";";
-	const src = "const t = `" + spelled + "`;\nconst q = '" + spelled + "';\n/* " + spelled + " */\nimport { linkProbe } fr" + "om \"./lp.h\";\n";
-	const inlined = inlineHeaderImports(src, "/tmp/msspelled/main.ms", provider);
-	assert inlined.indexOf("extern function linkProbe(") >= 0;
-	assert inlined.indexOf("extern function otherProbe(") < 0;
-	assert inlined.indexOf("`" + spelled + "`") >= 0;
-	assert inlined.indexOf("'" + spelled + "'") >= 0;
 }
 
 test "A imports B chain" {
@@ -1090,98 +837,27 @@ test "an absolute import with an explicit extension loads the module it names" {
 	assert mod.imports[1].sourcePath == "/vendor/pkg/index.ms";
 }
 
-test "C header import inlines declarations" {
+function importsHeaderModule(appSource: string): boolean {
 	const entries: MapEntry[] = [];
-	entries.push(makeEntry("/src/app.ms", "import { foo } from \"./lib.h\";"));
-	entries.push(makeEntry("/src/lib.h", "void foo(int x);"));
-	const provider = createMapProvider(entries);
-	const graph = loadModuleGraph("/src/app.ms", provider);
-	// .h imports are inlined — no separate module created (reference parity)
-	assert graph.modules.length == 1;
-	assert graph.errors.length == 0;
-	const hAppMod = findModule(graph, "/src/app.ms");
-	assert hAppMod != null;
-	// The consuming module's source should contain the inlined extern declaration
-	assert hAppMod.source.indexOf("extern") >= 0;
-	const appMod = findModule(graph, "/src/app.ms");
-	assert appMod != null;
-	assert appMod.errors.length == 0;
-}
-
-test "C header import in single quotes inlines declarations" {
-	const entries: MapEntry[] = [];
-	const quote = "'";
-	entries.push(makeEntry("/src/app.ms", `import { foo } from ${quote}./lib.h${quote};`));
+	entries.push(makeEntry("/src/app.ms", appSource));
 	entries.push(makeEntry("/src/lib.h", "void foo(int x);"));
 	const graph = loadModuleGraph("/src/app.ms", createMapProvider(entries));
-	assert graph.errors.length == 0;
-	const appMod = findModule(graph, "/src/app.ms");
-	assert appMod != null;
-	assert appMod.source.indexOf("extern") >= 0;
+	const app = findModule(graph, "/src/app.ms");
+	const lib = findModule(graph, "/src/lib.h");
+	return graph.errors.length == 0 && app != null && app.source == appSource && app.imports.length == 1
+		&& app.imports[0].sourcePath == "/src/lib.h" && lib != null && lib.source.indexOf("export extern function foo") >= 0;
 }
 
-test "a module whose only header names are @include directives keeps its source" {
-	const source = "@include(\"runtime/core/string.h\")\nimport { x } from \"./other.ms\";\nexport const y = x;\n";
-	assert inlineHeaderImports(source, "/src/app.ms", createMapProvider([])) == source;
+test "a C header imported in single quotes is a module" {
+	assert importsHeaderModule("import { foo } from './lib.h';");
 }
 
-test "C header import with spaces and a tab before the specifier inlines declarations" {
-	const entries: MapEntry[] = [];
-	const quote = "\"";
-	entries.push(makeEntry("/src/app.ms", `import { foo } from  \t${quote}./lib.h${quote};`));
-	entries.push(makeEntry("/src/lib.h", "void foo(int x);"));
-	const graph = loadModuleGraph("/src/app.ms", createMapProvider(entries));
-	assert graph.errors.length == 0;
-	const appMod = findModule(graph, "/src/app.ms");
-	assert appMod != null;
-	assert appMod.source.indexOf("extern") >= 0;
+test "a C header imported with spaces and a tab before the specifier is a module" {
+	assert importsHeaderModule("import { foo } from  \t\"./lib.h\";");
 }
 
-test "a module that names .has and .hash but imports no header keeps its source" {
-	const source = "import { x } from \"./other.ms\";\nconst s = new HashSet<string>();\nconsole.log(`${s.has(\"a\")} ${x.hash}`);\n";
-	assert inlineHeaderImports(source, "/src/app.ms", createMapProvider([])) == source;
-}
-
-test "C header import keeps every later line where the source has it" {
-	const entries: MapEntry[] = [];
-	entries.push(makeEntry("/src/app.ms", "import { foo, bar } from \"./lib.h\";\nconst x = 1;\nconst y = 2;"));
-	entries.push(makeEntry("/src/lib.h", "void foo(int x);\nint bar(void);"));
-	const graph = loadModuleGraph("/src/app.ms", createMapProvider(entries));
-	const mod = findModule(graph, "/src/app.ms");
-	assert mod != null;
-	assert mod.source.indexOf("extern") >= 0;
-	const lines = mod.source.split("\n");
-	assert lines.length == 3;
-	assert lines[1] == "const x = 1;";
-	assert lines[2] == "const y = 2;";
-}
-
-test "C header import after lines of multi-unit characters inlines at its own statement" {
-	const entries: MapEntry[] = [];
-	entries.push(makeEntry("/src/app.ms", "// é — 👍 日本\nconst s = \"→\";\nimport { foo } from \"./lib.h\";\nconst x = 1;"));
-	entries.push(makeEntry("/src/lib.h", "void foo(int x);"));
-	const graph = loadModuleGraph("/src/app.ms", createMapProvider(entries));
-	assert graph.errors.length == 0;
-	const mod = findModule(graph, "/src/app.ms");
-	assert mod != null;
-	const lines = mod.source.split("\n");
-	assert lines.length == 4;
-	assert lines[0] == "// é — 👍 日本";
-	assert lines[1] == "const s = \"→\";";
-	assert lines[2].startsWith("import { foo } from \"./lib.h\";") && lines[2].indexOf("extern") >= 0, lines[2];
-	assert lines[3] == "const x = 1;";
-}
-
-test "a module keeps the source it was read from beside its inlined source" {
-	const raw = "import { foo } from \"./lib.h\";\nconst x = foo;";
-	const entries: MapEntry[] = [];
-	entries.push(makeEntry("/src/app.ms", raw));
-	entries.push(makeEntry("/src/lib.h", "void foo(int x);"));
-	const graph = loadModuleGraph("/src/app.ms", createMapProvider(entries));
-	const mod = findModule(graph, "/src/app.ms");
-	assert mod != null;
-	assert mod.rawSource == raw;
-	assert mod.source != raw;
+test "a module that imports a C header keeps its own source" {
+	assert importsHeaderModule("// é — 👍 日本\nimport { foo } from \"./lib.h\";\nconst x = foo;");
 }
 
 test "parse error recorded" {
@@ -1232,28 +908,27 @@ function unregisterHeaderCacheForTest(): void {
 test "header cache wrapper: miss stores deps+output, hit short-circuits" {
 	ensureDir("/tmp/mshcw");
 	writeFile("/tmp/mshcw/a.h", "extern int hcwA(void);\n");
-	const src = "import { hcwA } from " + "\"./a.h\";\n";
 	let storedKey = "";
 	let storedDeps: string[] = [];
 	let storedOut = "";
 	registerHeaderCache(
-		(_s: string, _m: string, _c: boolean) => "KHCW",
+		(_s: string, _h: string, _t: string) => "KHCW",
 		(k: string) => { return k == "KHCW" && storedOut != "" ? storedOut : ""; },
 		(k: string, d: string[], o: string) => { storedKey = k; storedDeps = d; storedOut = o; }
 	);
-	takeInlineHeaderTimings();
-	const out1 = inlineHeaderImports(src, "/tmp/mshcw/main.ms", createFileSystemProvider());
+	takeHeaderTimings();
+	const out1 = headerModuleSource("/tmp/mshcw/a.h", createFileSystemProvider(), null, []);
 	assert storedKey == "KHCW";
-	assert storedOut == "0\n" + out1, storedOut;
-	assert out1.indexOf("extern function hcwA") >= 0;
-	let sawHeader = false;
+	assert storedOut.endsWith("\n" + out1), storedOut;
+	assert out1.indexOf("export extern function hcwA") >= 0;
+	let sawCompanionProbe = false;
 	for (const d of storedDeps) {
-		if (d.indexOf("/tmp/mshcw/a.h\t", 0) == 0) sawHeader = true;
+		if (d == "/tmp/mshcw/a.c\t-") sawCompanionProbe = true;
 	}
-	assert sawHeader;
-	const out2 = inlineHeaderImports(src, "/tmp/mshcw/main.ms", createFileSystemProvider());
+	assert sawCompanionProbe, storedDeps.join(",");
+	const out2 = headerModuleSource("/tmp/mshcw/a.h", createFileSystemProvider(), null, []);
 	assert out2 == out1;
-	const t = takeInlineHeaderTimings();
+	const t = takeHeaderTimings();
 	assert t.hits == 1;
 	assert t.n == 2;
 	unregisterHeaderCacheForTest();
@@ -1262,33 +937,32 @@ test "header cache wrapper: miss stores deps+output, hit short-circuits" {
 test "header cache wrapper: an entry carries the complete structs of its header" {
 	ensureDir("/tmp/mshcw");
 	writeFile("/tmp/mshcw/s.h", "typedef struct { long size; int v; } HcwS;\n");
-	const src = "import { HcwS } from " + "\"./s.h\";\n";
 	let storedOut = "";
 	registerHeaderCache(
-		(_s: string, _m: string, _c: boolean) => "KHCWS",
+		(_s: string, _h: string, _t: string) => "KHCWS",
 		(k: string) => { return k == "KHCWS" && storedOut != "" ? storedOut : ""; },
 		(_k: string, _d: string[], o: string) => { storedOut = o; }
 	);
-	const out1 = inlineHeaderImports(src, "/tmp/mshcw/mainS.ms", createFileSystemProvider());
+	const out1 = headerModuleSource("/tmp/mshcw/s.h", createFileSystemProvider(), null, []);
 	const t = headerTarget();
 	const key = completeStructKey(`${t.os}-${t.cpu}`, "HcwS", ["size", "v"], [t.longSize == 4 ? "int32" : "int64", "int32"]);
-	assert storedOut == "1\n" + key + "\n" + out1, storedOut;
-	assert inlineHeaderImports(src, "/tmp/mshcw/mainS.ms", createFileSystemProvider()) == out1;
+	assert storedOut.startsWith("1\n" + key + "\n"), storedOut;
+	assert headerModuleSource("/tmp/mshcw/s.h", createFileSystemProvider(), null, []) == out1;
 	unregisterHeaderCacheForTest();
 }
 
 test "header cache wrapper: diagnostics-producing runs are not stored" {
-	const src = "import { nope } from " + "\"./missing.h\";\n";
+	ensureDir("/tmp/mshcw");
+	writeFile("/tmp/mshcw/bad.h", "#include <nope/nada.h>\nint hcwBad(void);\n");
 	let storeCalls = 0;
 	registerHeaderCache(
-		(_s: string, _m: string, _c: boolean) => "KERR",
+		(_s: string, _h: string, _t: string) => "KERR",
 		(_k: string) => "",
 		(_k: string, _d: string[], _o: string) => { storeCalls = storeCalls + 1; }
 	);
 	const errs: ModuleError[] = [];
-	const out = inlineHeaderImports(src, "/tmp/mshcw/miss.ms", createFileSystemProvider(), false, errs);
+	headerModuleSource("/tmp/mshcw/bad.h", createFileSystemProvider(), null, errs);
 	assert errs.length > 0;
-	assert out.indexOf("extern function nope") < 0;
 	assert storeCalls == 0;
 	unregisterHeaderCacheForTest();
 }
@@ -1297,12 +971,11 @@ test "header cache wrapper: map providers bypass the cache" {
 	const entries: MapEntry[] = [];
 	entries.push(makeEntry("/virt/b.h", "extern int vB(void);\n"));
 	registerHeaderCache(
-		(_s: string, _m: string, _c: boolean) => "KMAP",
+		(_s: string, _h: string, _t: string) => "KMAP",
 		(_k: string) => "SHOULD-NEVER-SERVE",
 		(_k: string, _d: string[], _o: string) => {}
 	);
-	const src = "import { vB } from " + "\"/virt/b.h\";\n";
-	const out = inlineHeaderImports(src, "/virt/main.ms", createMapProvider(entries));
+	const out = headerModuleSource("/virt/b.h", createMapProvider(entries), null, []);
 	assert out.indexOf("SHOULD-NEVER-SERVE") < 0;
 	assert out.indexOf("extern function vB") >= 0;
 	unregisterHeaderCacheForTest();

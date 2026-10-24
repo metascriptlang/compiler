@@ -1,6 +1,5 @@
 // Template Literal Desugaring
 // `hello ${name}, age ${age}!` → "hello " + name + ", age " + age + "!"
-// Pattern: ~/projects/metascript/src/parser/parser.zig parseTemplateExpression()
 
 import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode } from "../../ast/node";

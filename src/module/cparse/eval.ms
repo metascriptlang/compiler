@@ -27,10 +27,50 @@ function next(es: CConstEvalState): void {
 	if (es.tok.kind != CTokenKind.Eof) es.tok = es.tok.next;
 }
 
-// ===== Recursive descent (C operator precedence) =====
+// ===== Precedence climbing (C operator precedence, intmax_t width) =====
+
+function binaryPrecedence(op: string): int32 {
+	return match (op) {
+		"||" => 1,
+		"&&" => 2,
+		"|" => 3,
+		"^" => 4,
+		"&" => 5,
+		"==" | "!=" => 6,
+		"<" | ">" | "<=" | ">=" => 7,
+		"<<" | ">>" => 8,
+		"+" | "-" => 9,
+		"*" | "/" | "%" => 10,
+		_ => 0,
+	};
+}
+
+function applyBinary(op: string, lhs: int64, rhs: int64): int64 {
+	return match (op) {
+		"||" => (lhs != 0 || rhs != 0) ? 1 : 0,
+		"&&" => (lhs != 0 && rhs != 0) ? 1 : 0,
+		"|" => lhs | rhs,
+		"^" => lhs ^ rhs,
+		"&" => lhs & rhs,
+		"==" => lhs == rhs ? 1 : 0,
+		"!=" => lhs != rhs ? 1 : 0,
+		"<" => lhs < rhs ? 1 : 0,
+		">" => lhs > rhs ? 1 : 0,
+		"<=" => lhs <= rhs ? 1 : 0,
+		">=" => lhs >= rhs ? 1 : 0,
+		"<<" => lhs << rhs,
+		">>" => lhs >> rhs,
+		"+" => lhs + rhs,
+		"-" => lhs - rhs,
+		"*" => lhs * rhs,
+		"/" when rhs != 0 => (lhs / rhs) as int64,
+		"%" when rhs != 0 => lhs % rhs,
+		_ => lhs,
+	};
+}
 
 function evalTernary(es: CConstEvalState): int64 {
-	let val = evalOr(es);
+	const val = evalBinary(es, 1);
 	if (es.tok.stringVal == "?") {
 		next(es);
 		const thenVal = evalTernary(es);
@@ -42,117 +82,17 @@ function evalTernary(es: CConstEvalState): int64 {
 	return val;
 }
 
-function evalOr(es: CConstEvalState): int64 {
-	let val = evalAnd(es);
-	while (es.tok.stringVal == "||") {
-		next(es);
-		const rhs = evalAnd(es);
-		val = (val != 0 || rhs != 0) ? 1 : 0;
-	}
-	return val;
-}
-
-function evalAnd(es: CConstEvalState): int64 {
-	let val = evalBitOr(es);
-	while (es.tok.stringVal == "&&") {
-		next(es);
-		const rhs = evalBitOr(es);
-		val = (val != 0 && rhs != 0) ? 1 : 0;
-	}
-	return val;
-}
-
-function evalBitOr(es: CConstEvalState): int64 {
-	let val = evalBitXor(es);
-	while (es.tok.stringVal == "|") {
-		next(es);
-		val = val | evalBitXor(es);
-	}
-	return val;
-}
-
-function evalBitXor(es: CConstEvalState): int64 {
-	let val = evalBitAnd(es);
-	while (es.tok.stringVal == "^") {
-		next(es);
-		val = val ^ evalBitAnd(es);
-	}
-	return val;
-}
-
-function evalBitAnd(es: CConstEvalState): int64 {
-	let val = evalEquality(es);
-	while (es.tok.stringVal == "&") {
-		next(es);
-		val = val & evalEquality(es);
-	}
-	return val;
-}
-
-function evalEquality(es: CConstEvalState): int64 {
-	let val = evalRelational(es);
-	while (es.tok.stringVal == "==" || es.tok.stringVal == "!=") {
+function evalBinary(es: CConstEvalState, minPrecedence: int32): int64 {
+	let lhs = evalUnary(es);
+	let precedence = binaryPrecedence(es.tok.stringVal);
+	while (precedence >= minPrecedence) {
 		const op = es.tok.stringVal;
 		next(es);
-		const rhs = evalRelational(es);
-		if (op == "==") val = val == rhs ? 1 : 0;
-		else val = val != rhs ? 1 : 0;
+		const rhs = evalBinary(es, precedence + 1);
+		lhs = applyBinary(op, lhs, rhs);
+		precedence = binaryPrecedence(es.tok.stringVal);
 	}
-	return val;
-}
-
-function evalRelational(es: CConstEvalState): int64 {
-	let val = evalShift(es);
-	while (es.tok.stringVal == "<" || es.tok.stringVal == ">" ||
-		   es.tok.stringVal == "<=" || es.tok.stringVal == ">=") {
-		const op = es.tok.stringVal;
-		next(es);
-		const rhs = evalShift(es);
-		val = match (op) {
-			"<" => val < rhs ? 1 : 0,
-			">" => val > rhs ? 1 : 0,
-			"<=" => val <= rhs ? 1 : 0,
-			_ => val >= rhs ? 1 : 0,
-		};
-	}
-	return val;
-}
-
-function evalShift(es: CConstEvalState): int64 {
-	let val = evalAdd(es);
-	while (es.tok.stringVal == "<<" || es.tok.stringVal == ">>") {
-		const op = es.tok.stringVal;
-		next(es);
-		const rhs = evalAdd(es);
-		if (op == "<<") val = val << rhs;
-		else val = val >> rhs;
-	}
-	return val;
-}
-
-function evalAdd(es: CConstEvalState): int64 {
-	let val = evalMul(es);
-	while (es.tok.stringVal == "+" || es.tok.stringVal == "-") {
-		const op = es.tok.stringVal;
-		next(es);
-		const rhs = evalMul(es);
-		if (op == "+") val = val + rhs;
-		else val = val - rhs;
-	}
-	return val;
-}
-
-function evalMul(es: CConstEvalState): int64 {
-	let val = evalUnary(es);
-	while (es.tok.stringVal == "*" || es.tok.stringVal == "/" || es.tok.stringVal == "%") {
-		const op = es.tok.stringVal;
-		next(es);
-		const rhs = evalUnary(es);
-		if (op == "*") val = val * rhs;
-		else if (op == "/" && rhs != 0) val = (val / rhs) as int64;
-		else if (op == "%" && rhs != 0) val = val % rhs;
-	}
-	return val;
+	return lhs;
 }
 
 function evalUnary(es: CConstEvalState): int64 {
@@ -361,4 +301,40 @@ test "eval keeps a value past 32 bits" {
 	const r = evalStr("0x100000000LL + (1LL << 40)");
 	assert r.ok == true;
 	assert r.value == 1103806595072 as int64;
+}
+
+test "eval precedence climbs every level" {
+	assert evalStr("1 || 0 && 0").value == 1 as int64;
+	assert evalStr("1 | 2 ^ 3 & 1").value == 3 as int64;
+	assert evalStr("1 == 1 < 2").value == 1 as int64;
+	assert evalStr("1 << 1 + 1").value == 4 as int64;
+	assert evalStr("2 + 3 * 4 - 6 / 2 % 2").value == 13 as int64;
+	assert evalStr("10 - 3 - 2").value == 5 as int64;
+	assert evalStr("2 * 3 % 4").value == 2 as int64;
+}
+
+test "eval relational operators are left associative" {
+	assert evalStr("3 > 2 > 1").value == 0 as int64;
+	assert evalStr("1 <= 1 >= 1").value == 1 as int64;
+}
+
+test "eval ternary nests to the right" {
+	assert evalStr("0 ? 1 : 0 ? 2 : 3").value == 3 as int64;
+	assert evalStr("1 ? 2 : 3 + 4").value == 2 as int64;
+}
+
+test "eval ternary without a colon fails" {
+	const r = evalStr("1 ? 2");
+	assert r.ok == false;
+	assert r.error == "expected ':' in ternary";
+}
+
+test "eval division by zero leaves the left side" {
+	assert evalStr("7 / 0").value == 7 as int64;
+	assert evalStr("7 % 0").value == 7 as int64;
+}
+
+test "eval shifts at 64 bits" {
+	assert evalStr("1ULL << 40").value == 1099511627776 as int64;
+	assert evalStr("0x100000000 > 1").value == 1 as int64;
 }

@@ -11,13 +11,19 @@
 
 import { exists } from "std/fs";
 import { join } from "std/fs/path";
-import { addDepToManifest } from "./manifest";
-import { readLockfile, writeLockfile, entryName } from "./lockfile";
-import { parseSourceSpec, SourceKind } from "./version";
-import { parseGitSpec } from "./version";
+import { addDepToManifest, manifestErrorMessage } from "./manifest";
+import {
+	readLockfile,
+	writeLockfile,
+	entryName,
+	lockfileErrorMessage,
+	Lockfile,
+	LockfileError,
+} from "./lockfile";
+import { parseVersion, parseGitSpec, sourceKindOf, SourceKind } from "./version";
 import { LockEntry } from "./lockfile";
 import { fetchPackageInfo, findVersion, latestVersion, RegistryVersion, RegistryPackage } from "./registry";
-import { downloadPackage } from "./download";
+import { downloadPackage, packageErrorMessage } from "./download";
 
 // Parse "name@version" into { name, version }.
 // Handles scoped names:
@@ -32,15 +38,9 @@ export function parseNameVersion(arg: string): { name: string, version: string }
 	if (arg.length >= 4 && arg.slice(0, 4) == "git:") {
 		// Extract alias from the repo name (last path segment before @)
 		const spec = parseGitSpec(arg);
-		if (spec.isValid) {
-			// Extract repo name as alias
-			let lastSlash = -1;
-			let i = 0;
-			while (i < spec.url.length) {
-				if (spec.url.charAt(i) == "/") lastSlash = i;
-				i = i + 1;
-			}
-			const alias = lastSlash >= 0 ? spec.url.slice(lastSlash + 1, spec.url.length) : spec.url;
+		if (spec.ok) {
+			const url = spec.value.url;
+			const alias = url.slice(url.lastIndexOf("/") + 1, url.length);
 			return { name: alias, version: arg };
 		}
 		return { name: "", version: "" };
@@ -126,6 +126,51 @@ export function parseNameVersion(arg: string): { name: string, version: string }
 	return { name: arg, version: "" };
 }
 
+function gitLockEntry(name: string, version: string, url: string, gitRef: string): LockEntry {
+	return {
+		key: name + "@" + version,
+		source: SourceKind.Git,
+		version: "",
+		integrity: "",
+		url,
+		gitRef,
+		commit: "",
+		depKeys: [],
+		depValues: [],
+	};
+}
+
+function registryLockEntry(
+	name: string,
+	version: string,
+	found: RegistryVersion | null,
+): LockEntry {
+	return {
+		key: name + "@" + version,
+		source: SourceKind.Registry,
+		version,
+		integrity: found != null ? found.integrity : "",
+		url: found != null ? found.archiveUrl : "",
+		gitRef: "",
+		commit: "",
+		depKeys: found != null ? found.depKeys : [],
+		depValues: found != null ? found.depValues : [],
+	};
+}
+
+// Version details from registry (archiveUrl + integrity + deps); fetches the package when
+// not yet known.
+function registryVersionOf(
+	name: string,
+	version: string,
+	known: RegistryPackage | null,
+): RegistryVersion | null {
+	if (known != null) return findVersion(known, version);
+	const info = fetchPackageInfo(name);
+	if (!info.ok) return null;
+	return findVersion(info.value, version);
+}
+
 // Execute `msc add <args>`.
 // projectRoot: directory containing build.ms
 // args: remaining CLI arguments after "add"
@@ -166,7 +211,7 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 		return false;
 	}
 	// Fetch registry metadata (reused for latest-resolve + lockfile population)
-	let registryPkg: RegistryPackage = null as unknown as RegistryPackage;
+	let registryPkg: RegistryPackage | null = null;
 
 	if (parsed.version == "") {
 		// Resolve latest version from registry.
@@ -177,7 +222,7 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 			return false;
 		}
 		registryPkg = infoResult.value;
-		const latest = latestVersion(registryPkg);
+		const latest = latestVersion(infoResult.value);
 		if (latest == null) {
 			console.log("error: no published versions for " + parsed.name);
 			return false;
@@ -191,8 +236,8 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	if (isFileSource) {
 		const scope = isDev ? "devDeps" : "deps";
 		const added = addDepToManifest(buildPath, parsed.name, parsed.version, scope);
-		if (!added) {
-			console.log("error: failed to update build.ms");
+		if (!added.ok) {
+			console.log("error: failed to update build.ms: " + manifestErrorMessage(added.error));
 			return false;
 		}
 		const devTag = isDev ? " (dev)" : "";
@@ -201,79 +246,51 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	}
 
 	// Validate version
-	const spec = parseSourceSpec(parsed.version);
-	if (spec.kind == SourceKind.Registry && !spec.version.isValid) {
+	const kind = sourceKindOf(parsed.version);
+	let gitUrl = "";
+	let gitRef = "";
+	if (kind == SourceKind.Git) {
+		const git = parseGitSpec(parsed.version);
+		if (!git.ok) {
+			console.log("error: invalid git source '" + parsed.version + "'");
+			console.log("expected format: git:<host>/<path>@<tag-or-sha>");
+			return false;
+		}
+		gitUrl = git.value.url;
+		gitRef = git.value.ref;
+	} else if (!parseVersion(parsed.version).ok) {
 		console.log("error: invalid version '" + parsed.version + "'");
 		console.log("expected format: <major>.<minor>.<patch> (e.g. 1.2.3)");
 		return false;
 	}
-	if (spec.kind == SourceKind.Git && !spec.git.isValid) {
-		console.log("error: invalid git source '" + parsed.version + "'");
-		console.log("expected format: git:<host>/<path>@<tag-or-sha>");
+
+	// Read the lockfile first: a corrupt one stops the add before build.ms changes
+	const lockPath = join(projectRoot, "msc.lock");
+	const lockRead = readLockfile(lockPath);
+	let lock: Lockfile = { version: 1, entries: [] };
+	if (lockRead.ok) {
+		lock = lockRead.value;
+	} else if (lockRead.error != LockfileError.Missing && lockRead.error != LockfileError.Empty) {
+		console.log("error: " + lockfileErrorMessage(lockRead.error));
+		console.log("fix or delete msc.lock and retry");
 		return false;
 	}
 
 	// Add to build.ms
 	const scope = isDev ? "devDeps" : "deps";
 	const added = addDepToManifest(buildPath, parsed.name, parsed.version, scope);
-	if (!added) {
-		console.log("error: failed to update build.ms");
+	if (!added.ok) {
+		console.log("error: failed to update build.ms: " + manifestErrorMessage(added.error));
 		return false;
 	}
 
-	// Update lockfile
-	const lockPath = join(projectRoot, "msc.lock");
-	let lock = readLockfile(lockPath);
-	if (!lock.valid) {
-		const entries: LockEntry[] = [];
-		lock = { version: 1, entries, valid: true };
-	}
-
-	// Build the lock entry
-	let lockKey = "";
-	let entry: LockEntry = null as unknown as LockEntry;
-
-	if (spec.kind == SourceKind.Git) {
-		lockKey = parsed.name + "@" + parsed.version;
-		const emptyKeys: string[] = [];
-		const emptyVals: string[] = [];
-		entry = {
-			key: lockKey,
-			source: "git",
-			version: "",
-			integrity: "",
-			url: spec.git.url,
-			gitRef: spec.git.ref,
-			commit: "",
-			depKeys: emptyKeys,
-			depValues: emptyVals,
-		};
-	} else {
-		// Get version details from registry (archiveUrl + integrity + deps)
-		let regVersion: RegistryVersion = null as unknown as RegistryVersion;
-		if (registryPkg == null) {
-			const infoResult = fetchPackageInfo(parsed.name);
-			if (infoResult.ok) registryPkg = infoResult.value;
-		}
-		if (registryPkg != null) {
-			regVersion = findVersion(registryPkg, parsed.version);
-		}
-
-		lockKey = parsed.name + "@" + parsed.version;
-		const depKeys: string[] = regVersion != null ? regVersion.depKeys : [];
-		const depValues: string[] = regVersion != null ? regVersion.depValues : [];
-		entry = {
-			key: lockKey,
-			source: "registry",
-			version: parsed.version,
-			integrity: regVersion != null ? regVersion.integrity : "",
-			url: regVersion != null ? regVersion.archiveUrl : "",
-			gitRef: "",
-			commit: "",
-			depKeys,
-			depValues,
-		};
-	}
+	const entry = kind == SourceKind.Git
+		? gitLockEntry(parsed.name, parsed.version, gitUrl, gitRef)
+		: registryLockEntry(
+			parsed.name,
+			parsed.version,
+			registryVersionOf(parsed.name, parsed.version, registryPkg),
+		);
 
 	// Check if already in lockfile — match by package name (not full key,
 	// since the key includes the version and we're updating to a new version)
@@ -292,14 +309,16 @@ export function cmdAdd(projectRoot: string, args: string[]): boolean {
 	}
 
 	const written = writeLockfile(lockPath, lock);
-	if (!written) {
-		console.log("error: failed to write msc.lock");
+	if (!written.ok) {
+		console.log("error: " + lockfileErrorMessage(written.error));
 		return false;
 	}
 
 	// Download the package archive
-	if (entry.source == "registry" && entry.url != "") {
-		if (!downloadPackage(parsed.name, parsed.version, entry.url, entry.integrity)) {
+	if (entry.source == SourceKind.Registry && entry.url != "") {
+		const downloaded = downloadPackage(parsed.name, parsed.version, entry.url, entry.integrity);
+		if (!downloaded.ok) {
+			console.log(`  error: ${parsed.name}@${parsed.version}: ${packageErrorMessage(downloaded.error)}`);
 			console.log("warning: added to lockfile but download failed — run `msc install` to retry");
 		}
 	}
@@ -337,4 +356,39 @@ test "a plain name@version is unchanged" {
 	const p = parseNameVersion("cool-json@1.2.3");
 	assert p.name == "cool-json";
 	assert p.version == "1.2.3";
+}
+
+test "a registry lock entry without registry details has no integrity or url" {
+	const entry = registryLockEntry("cool-json", "1.2.3", null);
+	assert entry.key == "cool-json@1.2.3";
+	assert entry.source == SourceKind.Registry;
+	assert entry.integrity == "";
+	assert entry.url == "";
+	assert entry.depKeys.length == 0;
+}
+
+test "a registry lock entry takes integrity, url and deps from the registry record" {
+	const found: RegistryVersion = {
+		version: "1.2.3",
+		integrity: "sha256-abc",
+		archiveUrl: "https://example.test/cool-json.zip",
+		publishedAt: "",
+		depKeys: ["dep"],
+		depValues: ["0.1.0"],
+	};
+	const entry = registryLockEntry("cool-json", "1.2.3", found);
+	assert entry.integrity == "sha256-abc";
+	assert entry.url == "https://example.test/cool-json.zip";
+	assert entry.depKeys[0] == "dep";
+	assert entry.depValues[0] == "0.1.0";
+}
+
+test "a git lock entry keeps the url and ref and has no commit yet" {
+	const spec = "git:github.com/me/foo@v1.0.0";
+	const entry = gitLockEntry("foo", spec, "github.com/me/foo", "v1.0.0");
+	assert entry.key == "foo@" + spec;
+	assert entry.source == SourceKind.Git;
+	assert entry.url == "github.com/me/foo";
+	assert entry.gitRef == "v1.0.0";
+	assert entry.commit == "";
 }

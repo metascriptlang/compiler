@@ -7,8 +7,7 @@
 // collapsing T | null → Maybe<T> for any non-pointer T).
 //
 // All return statements in the body are transformed via direct struct construction
-// (Nim-parity: ~/projects/nim/lib/pure/options.nim's `some(val)` returns
-// `Option[T](has: true, val: val)` — a struct literal, no runtime helper):
+// (a struct literal, no runtime helper):
 //   return null   → return <NullLiteral typed as Maybe<T>>     // codegen emits {0}
 //   return expr   → return { value: expr, present: true }      // direct struct literal
 

@@ -1431,16 +1431,12 @@ export function writeLinkCache(oFiles: string[], externalInputs: string[], linkF
 	atomicWriteFile(linkCacheFile(image), content);
 }
 
-// ===== Header Inline Cache (Layer 5) =====
+// ===== Header Module Cache (Layer 5) =====
 //
-// Caches the output of the loader's inlineHeaderImports transform — the
-// chibicc translation of every `import { ... } from "*.h"` in a module
-// source — on disk, content-hash keyed. Model: ccache / Zig @cImport's
-// content-addressed translate cache (the reference compiler has no
-// header-translation step at all; its FFI is hand-written declarations, so
-// this caches the one transform that is OUR divergence from it).
+// Caches the module source the loader translates from a C header, on disk,
+// content-hash keyed (ccache-style).
 //
-// Key folds: module source, modulePath, compact flag, VERSION, platform,
+// Key folds: header source, header path, target, VERSION, platform,
 // compiler root (resolveRuntimeDir — the emitted @include paths and include
 // search roots embed it) and toolchainStamp (msc binary + every file under
 // runtime/ and vendor/). Headers OUTSIDE the stamped trees (user projects,
@@ -1456,7 +1452,7 @@ export function writeLinkCache(oFiles: string[], externalInputs: string[], linkF
 // recomputes next time so the diagnostics re-surface (loader-side gate).
 // MSC_NO_HEADER_CACHE=1 disables both lookup and store.
 
-const HEADER_ENTRY_MAGIC = "MSHI1";
+const HEADER_ENTRY_MAGIC = "MSHM1";
 
 // Global when available, else the local cache dir (exotic environments).
 function headersCacheDir(): string {
@@ -1465,8 +1461,8 @@ function headersCacheDir(): string {
 	return `${getCacheDir()}/headers`;
 }
 
-export function headerInlineKey(source: string, modulePath: string, compact: boolean, target: string): string {
-	return hashContent(`${VERSION}:${platform}:${target}:${compact ? "C" : "F"}:${resolveRuntimeDir()}:${modulePath}\n${source}\n${toolchainStamp()}`);
+export function headerModuleKey(source: string, headerPath: string, target: string): string {
+	return hashContent(`${VERSION}:${platform}:${target}:${resolveRuntimeDir()}:${headerPath}\n${source}\n${toolchainStamp()}`);
 }
 
 function depUnderStampedTrees(path: string): boolean {
@@ -1488,11 +1484,11 @@ function verifyHeaderDep(dep: string): boolean {
 	return content != "" && hashContent(content) == hash;
 }
 
-// Lookup a cached inlineHeaderImports output. Entry layout:
-//   "MSHI1\n<dep>\n...\n--\n<output>"
+// Lookup a cached header module. Entry layout:
+//   "MSHM1\n<dep>\n...\n--\n<output>"
 // Returns "" on miss, disabled, corrupt entry, or any dep that no longer
 // verifies. A miss never deletes the entry — concurrent readers first.
-export function lookupHeaderInline(key: string): string {
+export function lookupHeaderModule(key: string): string {
 	if (env.get("MSC_NO_HEADER_CACHE") != "") return "";
 	const body = try readFile(`${headersCacheDir()}/${key}.hi`) catch "";
 	if (!body.startsWith(`${HEADER_ENTRY_MAGIC}\n`)) return "";
@@ -1509,10 +1505,10 @@ export function lookupHeaderInline(key: string): string {
 	return body.slice(pos, body.length);
 }
 
-// Publish an inlineHeaderImports output atomically (tmp + rename). Deps are
+// Publish a header module atomically (tmp + rename). Deps are
 // the recorded read set (path+hash / path+absent lines). Deterministic
 // content for a given key, so concurrent publishers write identical bytes.
-export function storeHeaderInline(key: string, deps: string[], output: string): void {
+export function storeHeaderModule(key: string, deps: string[], output: string): void {
 	if (env.get("MSC_NO_HEADER_CACHE") != "") return;
 	const dir = headersCacheDir();
 	ensureDir(dir);
@@ -1920,7 +1916,7 @@ test "atomicWriteFile replaces existing content and leaves no tmp siblings" {
 	remove(p);
 }
 
-// ===== Header Inline Cache (Layer 5) tests =====
+// ===== Header Module Cache (Layer 5) tests =====
 //
 // Disk mechanics only — wrapper orchestration lives in module/loader.ms
 // tests. Fixtures are real files under /tmp (same convention as bug043).
@@ -1930,63 +1926,63 @@ test "header cache: store → hit, dep content change → miss, restore → hit"
 	const hpath = "/tmp/mshc/hcx.h";
 	const orig = "extern int hcx(void);\n";
 	writeFile(hpath, orig);
-	const key = headerInlineKey("import { hcx } from \"./hcx.h\";", "/tmp/mshc/m.ms", false, "linux-x86_64");
-	storeHeaderInline(key, [`${hpath}\t${hashContent(orig)}`], "OUT-1");
-	assert lookupHeaderInline(key) == "OUT-1";
+	const key = headerModuleKey("extern int hcx(void);", "/tmp/mshc/hcx.h", "linux-x86_64");
+	storeHeaderModule(key, [`${hpath}\t${hashContent(orig)}`], "OUT-1");
+	assert lookupHeaderModule(key) == "OUT-1";
 	writeFile(hpath, "extern int hcx2(void);\n");
-	assert lookupHeaderInline(key) == "";
+	assert lookupHeaderModule(key) == "";
 	writeFile(hpath, orig);
-	assert lookupHeaderInline(key) == "OUT-1";
+	assert lookupHeaderModule(key) == "OUT-1";
 }
 
 test "header cache: absent dep stays valid until the file appears" {
 	const gone = "/tmp/mshc/gone.h";
 	if (exists(gone)) remove(gone);
-	const key = headerInlineKey("import { m } from \"./gone.h\";", "/tmp/mshc/gone.ms", false, "linux-x86_64");
-	storeHeaderInline(key, [`${gone}\t-`], "OUT-2");
-	assert lookupHeaderInline(key) == "OUT-2";
+	const key = headerModuleKey("extern int m(void);", "/tmp/mshc/gone.h", "linux-x86_64");
+	storeHeaderModule(key, [`${gone}\t-`], "OUT-2");
+	assert lookupHeaderModule(key) == "OUT-2";
 	writeFile(gone, "int x;\n");
-	assert lookupHeaderInline(key) == "";
+	assert lookupHeaderModule(key) == "";
 	if (exists(gone)) remove(gone);
 }
 
 test "header cache: deps under runtime//vendor/ skip disk re-verification" {
-	const key = headerInlineKey("import { r } from \"./r.h\";", "/tmp/mshc/stamped.ms", false, "linux-x86_64");
+	const key = headerModuleKey("extern int r(void);", "/tmp/mshc/r.h", "linux-x86_64");
 	const stampedPath = `${resolveRuntimeDir()}/runtime/definitely-not-here.h`;
-	storeHeaderInline(key, [`${stampedPath}\tdeadbeef`], "OUT-3");
-	assert lookupHeaderInline(key) == "OUT-3";
+	storeHeaderModule(key, [`${stampedPath}\tdeadbeef`], "OUT-3");
+	assert lookupHeaderModule(key) == "OUT-3";
 }
 
 test "header cache: malformed dep line is a miss, empty dep list is a hit" {
-	const keyA = headerInlineKey("import { x1 } from \"./x1.h\";", "/tmp/mshc/bad.ms", false, "linux-x86_64");
-	storeHeaderInline(keyA, ["nodep-newline"], "OUT-4");
-	assert lookupHeaderInline(keyA) == "";
-	const keyB = headerInlineKey("import { x2 } from \"./x2.h\";", "/tmp/mshc/empty.ms", false, "linux-x86_64");
-	storeHeaderInline(keyB, [], "OUT-5");
-	assert lookupHeaderInline(keyB) == "OUT-5";
+	const keyA = headerModuleKey("extern int x1(void);", "/tmp/mshc/x1.h", "linux-x86_64");
+	storeHeaderModule(keyA, ["nodep-newline"], "OUT-4");
+	assert lookupHeaderModule(keyA) == "";
+	const keyB = headerModuleKey("extern int x2(void);", "/tmp/mshc/x2.h", "linux-x86_64");
+	storeHeaderModule(keyB, [], "OUT-5");
+	assert lookupHeaderModule(keyB) == "OUT-5";
 }
 
 test "header cache: a translation for one build target is not a hit for another" {
-	const src = "import { t } from \"./t.h\";";
-	const linux = headerInlineKey(src, "/tmp/mshc/t.ms", false, "linux-x86_64");
-	const windows = headerInlineKey(src, "/tmp/mshc/t.ms", false, "windows-x86_64");
+	const src = "extern int t(void);";
+	const linux = headerModuleKey(src, "/tmp/mshc/t.h", "linux-x86_64");
+	const windows = headerModuleKey(src, "/tmp/mshc/t.h", "windows-x86_64");
 	assert linux != windows;
-	storeHeaderInline(linux, [], "OUT-LINUX");
-	assert lookupHeaderInline(windows) == "";
+	storeHeaderModule(linux, [], "OUT-LINUX");
+	assert lookupHeaderModule(windows) == "";
 }
 
 test "header cache: MSC_NO_HEADER_CACHE disables both directions" {
-	const key = headerInlineKey("import { k } from \"./k.h\";", "/tmp/mshc/k.ms", false, "linux-x86_64");
-	storeHeaderInline(key, [], "OUT-6");
-	assert lookupHeaderInline(key) == "OUT-6";
+	const key = headerModuleKey("extern int k(void);", "/tmp/mshc/k.h", "linux-x86_64");
+	storeHeaderModule(key, [], "OUT-6");
+	assert lookupHeaderModule(key) == "OUT-6";
 	env.set("MSC_NO_HEADER_CACHE", "1");
 	try {
-		assert lookupHeaderInline(key) == "";
-		storeHeaderInline(key, [], "OUT-7");
+		assert lookupHeaderModule(key) == "";
+		storeHeaderModule(key, [], "OUT-7");
 	} finally {
 		env.delete("MSC_NO_HEADER_CACHE");
 	}
-	assert lookupHeaderInline(key) == "OUT-6";
+	assert lookupHeaderModule(key) == "OUT-6";
 }
 
 test "the C compiler identity moves with its path, size, mtime and version" {

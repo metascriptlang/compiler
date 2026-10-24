@@ -4577,6 +4577,7 @@ function genericScan(t: Type | null, active: TypeVisitSet): boolean {
 	if (t == null) return false;
 	if (t.kind == TypeKind.GenericParam) return true;
 	if (isDeclaredStruct(t)) return t.typeFlags.has(TypeFlag.HasGenericParam);
+	if (t.typeReturn == null && t.typeExtra == null && t.typeChildren.length == 0) return false;
 	if (!typeVisitAdd(active, t)) return false;
 	if (t.kind == TypeKind.GenericInstance) {
 		for (let gi = 0; gi < t.typeChildren.length; gi += 1) {

@@ -6,10 +6,11 @@
 import { exists } from "std/fs";
 import { join, isAbsolute } from "std/fs/path";
 import { loadBuildConfig } from "../buildConfig";
-import { readLockfile, entryName } from "./lockfile";
+import { SourceKind } from "./version";
+import { readLockfile, entryName, lockfileErrorMessage, LockfileError } from "./lockfile";
 import { registrySrcPath, isCached } from "./cache";
 import { fetchPackageInfo, findVersion } from "./registry";
-import { downloadPackage } from "./download";
+import { downloadPackage, packageErrorMessage } from "./download";
 
 export function cmdInstall(projectRoot: string): boolean {
 	const buildPath = join(projectRoot, "build.ms");
@@ -76,10 +77,10 @@ export function cmdInstall(projectRoot: string): boolean {
 	// Check registry/git deps via lockfile
 	const lockPath = join(projectRoot, "msc.lock");
 	const lock = readLockfile(lockPath);
-	if (lock.valid) {
-		for (const entry of lock.entries) {
+	if (lock.ok) {
+		for (const entry of lock.value.entries) {
 			const name = entryName(entry.key);
-			if (entry.source == "registry" && entry.version != "") {
+			if (entry.source == SourceKind.Registry && entry.version != "") {
 				const srcPath = registrySrcPath(name, entry.version);
 				if (isCached(srcPath)) {
 					installed = installed + 1;
@@ -97,7 +98,13 @@ export function cmdInstall(projectRoot: string): boolean {
 							}
 						}
 					}
-					if (archiveUrl != "" && downloadPackage(name, entry.version, archiveUrl, integrity)) {
+					let downloadedOk = false;
+					if (archiveUrl != "") {
+						const downloaded = downloadPackage(name, entry.version, archiveUrl, integrity);
+						downloadedOk = downloaded.ok;
+						if (!downloaded.ok) console.log(`  error: ${name}@${entry.version}: ${packageErrorMessage(downloaded.error)}`);
+					}
+					if (downloadedOk) {
 						installed = installed + 1;
 					} else {
 						console.log(`missing: ${name}@${entry.version} (download failed)`);
@@ -117,8 +124,13 @@ export function cmdInstall(projectRoot: string): boolean {
 			ci = ci + 1;
 		}
 		if (hasNonFile) {
-			console.log("warning: msc.lock not found — registry/git deps may not resolve");
-			console.log("run `msc add <pkg>@<version>` to create the lockfile");
+			const reason = lockfileErrorMessage(lock.error);
+			console.log("warning: " + reason + " — registry/git deps may not resolve");
+			if (lock.error == LockfileError.Missing) {
+				console.log("run `msc add <pkg>@<version>` to create the lockfile");
+			} else {
+				console.log("fix or delete msc.lock, then run `msc add <pkg>@<version>`");
+			}
 		}
 	}
 

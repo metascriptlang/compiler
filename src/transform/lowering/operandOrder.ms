@@ -10,6 +10,8 @@ import {
 } from "../../ast/node";
 import { isStructType } from "../../checker/types";
 import { TransformContext, newLoweredSym } from "../context";
+import { isAssignOp } from "../walker";
+export { isAssignOp } from "../walker";
 import { makeVarDecl, makeTypedIdentResolved, makeBinary, isValueLayoutType } from "../util";
 import { cloneIfPure } from "../coercion/intArithJS";
 
@@ -21,11 +23,6 @@ export function isVoidType(t: Type | null): boolean {
 
 export function isNeverType(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Never;
-}
-
-export function isAssignOp(op: string): boolean {
-	if (op == "==" || op == "!=" || op == "===" || op == "!==" || op == "<=" || op == ">=") return false;
-	return op.endsWith("=");
 }
 
 function isCallKind(e: Node): boolean {
@@ -52,7 +49,7 @@ export function tempRef(sym: Symbol, loc: SourceLocation): Node {
 }
 
 // A value aggregate stays in place: a temp copy would take the writes a call
-// or a store makes through it. JS reads before an await: NIM-REF TR-24.
+// or a store makes through it. JS reads before an await.
 export function snapshotsLikeJs(t: Type | null): boolean {
 	if (t == null) return false;
 	const k = t.kind;

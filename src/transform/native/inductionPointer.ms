@@ -14,7 +14,7 @@ import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isComputedGotoMark } from "../../checker/computedGoto";
 import { forEachChild } from "../../ast/visitor";
 import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, newLoweredSym } from "../context";
-import { walkNode, mapChildren } from "../walker";
+import { walkNode, mapChildren, isAssignOp } from "../walker";
 import { makeBinary, makeIdentResolved, makeMember, makeNumber, makeVarDecl, makeHiddenStdConv, makeUnary } from "../util";
 
 class Pairing {
@@ -100,11 +100,6 @@ function hasComputedGotoLoop(n: Node): boolean {
 		if (!found && hasComputedGotoLoop(c)) found = true;
 	});
 	return found;
-}
-
-function isAssignOp(op: string): boolean {
-	if (op == "==" || op == "!=" || op == "===" || op == "!==" || op == "<=" || op == ">=") return false;
-	return op.endsWith("=");
 }
 
 function collectAssigned(n: Node): void {

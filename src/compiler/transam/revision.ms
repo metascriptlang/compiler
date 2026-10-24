@@ -51,7 +51,7 @@ export function incrementRevision(rev: TaRevision): void {
 
 // ===== Query Key — uniquely identifies a cached query =====
 
-export interface TaQueryKey {
+export struct TaQueryKey {
 	queryKind: TaQueryKind;
 	fileId: int32;         // sequential file ID (not content hash in Phase 1)
 }

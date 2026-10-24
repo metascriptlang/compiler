@@ -26,21 +26,15 @@ export const KNOWN_HOSTS: HostConfig[] = [
 
 // Find the HostConfig for a given URL like "github.com/owner/repo".
 // Returns null if the host is not in KNOWN_HOSTS.
-export function detectHost(url: string): HostConfig {
-	// Extract host: everything before the first "/"
-	let slashIdx = -1;
-	let i = 0;
-	while (i < url.length) {
-		if (url.charAt(i) == "/") { slashIdx = i; i = url.length; }
-		i = i + 1;
-	}
-	if (slashIdx < 0) return null as unknown as HostConfig;
-	const host = url.slice(0, slashIdx);
+export function detectHost(url: string): HostConfig | null {
+	const slash = url.indexOf("/");
+	if (slash < 0) return null;
+	const host = url.slice(0, slash);
 
 	for (const hc of KNOWN_HOSTS) {
 		if (hc.host == host) return hc;
 	}
-	return null as unknown as HostConfig;
+	return null;
 }
 
 // --- Archive URL construction ---
@@ -107,25 +101,25 @@ export function archiveUrl(hostConfig: HostConfig, url: string, gitRef: string):
 test "detectHost github" {
 	const h = detectHost("github.com/acme/foo");
 	assert h != null;
-	assert h.host == "github.com";
+	if (h != null) assert h.host == "github.com";
 }
 
 test "detectHost gitlab" {
 	const h = detectHost("gitlab.com/group/project");
 	assert h != null;
-	assert h.host == "gitlab.com";
+	if (h != null) assert h.host == "gitlab.com";
 }
 
 test "detectHost bitbucket" {
 	const h = detectHost("bitbucket.org/team/repo");
 	assert h != null;
-	assert h.host == "bitbucket.org";
+	if (h != null) assert h.host == "bitbucket.org";
 }
 
 test "detectHost codeberg" {
 	const h = detectHost("codeberg.org/user/repo");
 	assert h != null;
-	assert h.host == "codeberg.org";
+	if (h != null) assert h.host == "codeberg.org";
 }
 
 test "detectHost unknown returns null" {
@@ -138,32 +132,37 @@ test "detectHost no slash returns null" {
 
 test "archiveUrl github tag" {
 	const h = detectHost("github.com/acme/foo");
-	const url = archiveUrl(h, "github.com/acme/foo", "1.2.3");
-	assert url == "https://codeload.github.com/acme/foo/tar.gz/1.2.3";
+	assert h != null;
+	if (h != null) assert archiveUrl(h, "github.com/acme/foo", "1.2.3") ==
+		"https://codeload.github.com/acme/foo/tar.gz/1.2.3";
 }
 
 test "archiveUrl github SHA" {
 	const h = detectHost("github.com/acme/foo");
-	const url = archiveUrl(h, "github.com/acme/foo", "abc123");
-	assert url == "https://codeload.github.com/acme/foo/tar.gz/abc123";
+	assert h != null;
+	if (h != null) assert archiveUrl(h, "github.com/acme/foo", "abc123") ==
+		"https://codeload.github.com/acme/foo/tar.gz/abc123";
 }
 
 test "archiveUrl gitlab" {
 	const h = detectHost("gitlab.com/group/project");
-	const url = archiveUrl(h, "gitlab.com/group/project", "2.0.0");
-	assert url == "https://gitlab.com/group/project/-/archive/2.0.0/project-2.0.0.tar.gz";
+	assert h != null;
+	if (h != null) assert archiveUrl(h, "gitlab.com/group/project", "2.0.0") ==
+		"https://gitlab.com/group/project/-/archive/2.0.0/project-2.0.0.tar.gz";
 }
 
 test "archiveUrl bitbucket" {
 	const h = detectHost("bitbucket.org/team/repo");
-	const url = archiveUrl(h, "bitbucket.org/team/repo", "1.0.0");
-	assert url == "https://bitbucket.org/team/repo/get/1.0.0.tar.gz";
+	assert h != null;
+	if (h != null) assert archiveUrl(h, "bitbucket.org/team/repo", "1.0.0") ==
+		"https://bitbucket.org/team/repo/get/1.0.0.tar.gz";
 }
 
 test "archiveUrl codeberg" {
 	const h = detectHost("codeberg.org/user/repo");
-	const url = archiveUrl(h, "codeberg.org/user/repo", "0.1.0");
-	assert url == "https://codeberg.org/user/repo/archive/0.1.0.tar.gz";
+	assert h != null;
+	if (h != null) assert archiveUrl(h, "codeberg.org/user/repo", "0.1.0") ==
+		"https://codeberg.org/user/repo/archive/0.1.0.tar.gz";
 }
 
 test "extractRepoName simple" {

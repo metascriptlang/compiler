@@ -2,10 +2,11 @@
 // Day-1: flat tagged interface. No NaN-boxing.
 // Bool stored as intVal (0/1) to keep the interface simple.
 
-import { RaiserRegClass } from "./bytecode";
+import { RaiserRegClass, regClassLetter, TYPED_SLOTS } from "./bytecode";
 
 @include("runtime/core/hashBits.h");
 extern function msBitsFloat64(u: int64): float64;
+extern function msFloat64Bits(d: float64): int64;
 
 
 // A kind from String up holds one heap handle in intVal; the kinds below it hold no reference.
@@ -222,6 +223,12 @@ function constHandle(text: string): int64 {
 	return handle;
 }
 
+export function constNameIds(names: string[]): int64[] {
+	const ids: int64[] = [];
+	for (const n of names) ids.push(constHandle(n));
+	return ids;
+}
+
 function constText(handle: int64): string {
 	return constTexts[handleIndex(handle) as number];
 }
@@ -346,6 +353,44 @@ export function heapAppend(arr: RaiserArrayHeap, dst: int64, suffix: RaiserValue
 
 export function heapStringHeldOnce(arr: RaiserArrayHeap, v: RaiserValue): boolean {
 	return handleHeapKind(v.intVal) == RaiserHeapKind.String && arr.strings.rc[handleIndex(v.intVal)] == 1;
+}
+
+// The handle forms of the readers above, for an operand a typed Ref register holds: the heap kind
+// in the handle picks the table, and a handle that names no string reads as "" like a non-String value.
+function handleTexts(arr: RaiserArrayHeap, h: int64): string[] {
+	return handleHeapKind(h) == RaiserHeapKind.String ? arr.strings.texts : constTexts;
+}
+
+function handleTextIndex(h: int64): number {
+	const kind = handleHeapKind(h);
+	return kind == RaiserHeapKind.String || kind == RaiserHeapKind.ConstString ? handleIndex(h) as number : 0;
+}
+
+export function heapConcatHandles(arr: RaiserArrayHeap, a: int64, b: int64): int64 {
+	return heapAllocString(arr, handleTexts(arr, a)[handleTextIndex(a)] + handleTexts(arr, b)[handleTextIndex(b)]).intVal;
+}
+
+export function heapAppendHandle(arr: RaiserArrayHeap, dst: int64, suffix: int64): void {
+	arr.strings.texts[handleIndex(dst) as number] += handleTexts(arr, suffix)[handleTextIndex(suffix)];
+}
+
+export function heapHandleHeldOnce(arr: RaiserArrayHeap, h: int64): boolean {
+	return handleHeapKind(h) == RaiserHeapKind.String && arr.strings.rc[handleIndex(h)] == 1;
+}
+
+// -1 outside the text, the way msStringByteAt answers.
+export function heapHandleCharCodeAt(arr: RaiserArrayHeap, h: int64, idx: int64): int64 {
+	const t = handleTexts(arr, h);
+	const i = handleTextIndex(h);
+	if (idx < 0 || idx >= (t[i].length as int64)) return -1;
+	return t[i].charCodeAt(idx as int32) as int64;
+}
+
+export function heapHandleByteAt(arr: RaiserArrayHeap, h: int64, idx: int64): int64 {
+	const t = handleTexts(arr, h);
+	const i = handleTextIndex(h);
+	if (idx < 0 || idx >= (t[i].byteLength as int64)) return -1;
+	return t[i].byteAt(idx as int32) as int64;
 }
 
 export function heapStringLive(arr: RaiserArrayHeap): number {
@@ -499,8 +544,13 @@ test "array" { assert raiserToString(createArrayHeap(), raiserArray(0)) == "[arr
 // Arrays live on a side heap. RaiserValue with kind=Array stores an integer handle
 // in intVal that indexes into the heap. Reference semantics (shared handle).
 
+// An array holds its elements in the class its NewArray names: a Word, Float or Bool element as raw
+// bits and a Ref element as its handle (0 is nil), both in `words`, or any other element as a value in
+// `items`. A view holds only the array it stands on, as the one value of `items`.
 export interface RaiserArrayData {
 	items: RaiserValue[];
+	words: int64[];
+	elemClass: RaiserRegClass;
 	rc: int32;
 	color: int32;
 	viewOff: int64;
@@ -521,11 +571,17 @@ export function createArrayHeap(): RaiserArrayHeap {
 }
 
 export function heapAllocArray(heap: RaiserArrayHeap): int64 {
+	return heapAllocArrayOf(heap, RaiserRegClass.Dyn);
+}
+
+export function heapAllocArrayOf(heap: RaiserArrayHeap, elemClass: RaiserRegClass): int64 {
 	if (heap.freeList.length > 0) {
 		const reused = heap.freeList[heap.freeList.length - 1];
 		heap.freeList.length = heap.freeList.length - 1;
 		const data = heap.arrays[reused];
 		data.items.length = 0;
+		data.words.length = 0;
+		data.elemClass = elemClass;
 		data.rc = 0;
 		data.color = 0;
 		data.viewOff = -1;
@@ -534,7 +590,8 @@ export function heapAllocArray(heap: RaiserArrayHeap): int64 {
 	}
 	const idx = heap.arrays.length;
 	const items: RaiserValue[] = [];
-	const data: RaiserArrayData = { items, rc: 0, color: 0, viewOff: -1, viewLen: 0 };
+	const words: int64[] = [];
+	const data: RaiserArrayData = { items, words, elemClass, rc: 0, color: 0, viewOff: -1, viewLen: 0 };
 	heap.arrays.push(data);
 	return makeHandle(idx, RaiserHeapKind.Array);
 }
@@ -553,43 +610,100 @@ export function heapArrayIsView(heap: RaiserArrayHeap, handle: int64): boolean {
 	return heap.arrays[handleIndex(handle)].viewOff >= 0;
 }
 
+// The number of values the array holds: its elements, or the one array a view stands on.
+export function arrayHeldCount(data: RaiserArrayData): number {
+	return data.elemClass == RaiserRegClass.Dyn ? data.items.length : data.words.length;
+}
+
+// Whether any held value can be a heap reference.
+export function arrayHoldsHandles(data: RaiserArrayData): boolean {
+	return data.elemClass == RaiserRegClass.Dyn || data.elemClass == RaiserRegClass.Ref;
+}
+
+// The value held at `index`, read in the array's element class.
+export function arrayHeldAt(data: RaiserArrayData, index: number): RaiserValue {
+	return match (data.elemClass) {
+		RaiserRegClass.Dyn => data.items[index],
+		RaiserRegClass.Word => raiserInt(data.words[index]),
+		RaiserRegClass.Float => raiserFloat(msBitsFloat64(data.words[index])),
+		RaiserRegClass.Bool => raiserBool(data.words[index] != 0),
+		RaiserRegClass.Ref => handleValue(data.words[index]),
+	};
+}
+
+// "" when the array can hold the value, otherwise why it cannot.
+export function arrayRefusal(data: RaiserArrayData, val: RaiserValue): string {
+	if (slotFits(data.elemClass, val)) return "";
+	return `internal: an array of ${regClassLetter(data.elemClass)} elements got a value of kind ${val.kind}`;
+}
+
+// Stores a value at `index` without counting: the array takes over the caller's count of it.
+export function arrayHeldStore(data: RaiserArrayData, index: number, val: RaiserValue): void {
+	if (data.elemClass == RaiserRegClass.Dyn) {
+		data.items[index] = val;
+		return;
+	}
+	const refused = arrayRefusal(data, val);
+	if (refused != "") throw new Error(refused);
+	data.words[index] = slotWord(data.elemClass, val);
+}
+
+function arrayHeldPush(data: RaiserArrayData, val: RaiserValue): void {
+	if (data.elemClass == RaiserRegClass.Dyn) {
+		const copy: RaiserValue = { kind: val.kind, intVal: val.intVal, floatVal: val.floatVal };
+		data.items.push(copy);
+		return;
+	}
+	const refused = arrayRefusal(data, val);
+	if (refused != "") throw new Error(refused);
+	data.words.push(slotWord(data.elemClass, val));
+}
+
+// The array a view stands on, or the array itself.
+export function arrayBaseOf(heap: RaiserArrayHeap, data: RaiserArrayData): RaiserArrayData {
+	return data.viewOff >= 0 ? heap.arrays[handleIndex(data.items[0].intVal)] : data;
+}
+
 export function heapArrayLen(heap: RaiserArrayHeap, handle: int64): int32 {
 	const data = heap.arrays[handleIndex(handle)];
-	return data.viewOff >= 0 ? data.viewLen : data.items.length;
+	return data.viewOff >= 0 ? data.viewLen : arrayHeldCount(data) as int32;
 }
 
 export function heapArrayGet(heap: RaiserArrayHeap, handle: int64, index: int64): RaiserValue {
 	const data = heap.arrays[handleIndex(handle)];
-	if (data.viewOff >= 0) return heap.arrays[handleIndex(data.items[0].intVal)].items[data.viewOff + index];
-	return data.items[index];
+	if (data.viewOff >= 0) return arrayHeldAt(arrayBaseOf(heap, data), (data.viewOff + index) as number);
+	return arrayHeldAt(data, index as number);
 }
 
 export function heapArraySet(heap: RaiserArrayHeap, handle: int64, index: int64, val: RaiserValue): void {
 	const data = heap.arrays[handleIndex(handle)];
 	if (data.viewOff >= 0) {
-		heap.arrays[handleIndex(data.items[0].intVal)].items[data.viewOff + index] = val;
+		arrayHeldStore(arrayBaseOf(heap, data), (data.viewOff + index) as number, val);
 		return;
 	}
-	// Deep copy to avoid pointer aliasing
-	data.items[index] = val;
+	arrayHeldStore(data, index as number, val);
 }
 
 export function heapArrayPush(heap: RaiserArrayHeap, handle: int64, val: RaiserValue): void {
-	// Deep copy to avoid pointer aliasing (register values are shared objects)
-	const copy: RaiserValue = { kind: val.kind, intVal: val.intVal, floatVal: val.floatVal };
-	heap.arrays[handleIndex(handle)].items.push(copy);
+	arrayHeldPush(heap.arrays[handleIndex(handle)], val);
 }
 
 // The only shrink primitive on the heap: truncate drops references (arena
-// regime — no per-value RC), extend pads with nil copies.
+// regime — no per-value RC), extend pads with the zero of the element class.
 export function heapArraySetLen(heap: RaiserArrayHeap, handle: int64, newLen: int64): void {
-	const items = heap.arrays[handleIndex(handle)].items;
-	if (newLen < items.length) {
-		items.shrink(newLen < 0 ? 0 : newLen);
+	const data = heap.arrays[handleIndex(handle)];
+	const target = newLen < 0 ? 0 : newLen;
+	if (data.elemClass != RaiserRegClass.Dyn) {
+		if (target < data.words.length) data.words.shrink(target);
+		while (data.words.length < target) data.words.push(0);
+		return;
+	}
+	if (newLen < data.items.length) {
+		data.items.shrink(target);
 	} else {
-		while (items.length < newLen) {
+		while (data.items.length < newLen) {
 			const nilCopy: RaiserValue = { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0 };
-			items.push(nilCopy);
+			data.items.push(nilCopy);
 		}
 	}
 }
@@ -688,34 +802,65 @@ export function heapBoxLive(heap: RaiserArrayHeap): number {
 }
 
 // --- Object Heap ---
-// Objects live on a side heap like arrays, their values inline. A slot inside the class
-// layout is named by the class; only a field added past it carries its name on the object.
+// Objects live on a side heap like arrays. A slot inside the class layout is named by the
+// class and holds one word in its register class: a Word, Float or Bool slot its raw bits, a
+// Ref slot its handle (0 is nil), a Dyn slot the index of its value in `values`. A field added
+// past the layout carries its name on the object and its value in `values`, after the Dyn slots'.
 // Linear scan for field lookup (fast for typical <20 field objects).
 
 export interface RaiserClassType {
 	name: string;
-	chain: string[];
+	depth: int32;       // the number of ancestors; -1 for a layout that is no class
+	display: int64[];   // the ids of the class and its ancestors, indexed by depth, so display[depth] is the class's own
 	fields: string[];   // the layout NewObject lays out, so a field sits at the slot its type gives it
+	fieldIds: int64[];   // constNameIds(fields): the interned handle of each field name, so a cached field read compares integers
+	kinds: RaiserRegClass[];
+	zeroSlots: int64[];   // the slots of a fresh object: zero bits, a nil handle, the index of each Dyn slot's value in order
+	zeroWordSlots: int64;
+	zeroRefSlots: int64;
+	dynCount: int32;   // the nil values a fresh object holds, one per Dyn slot
 }
 
-export const RAISER_NO_CLASS: RaiserClassType = { name: "", chain: [], fields: [] };
+// A class type with its zero object computed once, so NewObject copies it instead of laying out each slot.
+export function createClassType(name: string, depth: int32, display: int64[], fields: string[], kinds: RaiserRegClass[]): RaiserClassType {
+	const zeroSlots: int64[] = [];
+	let zeroWordSlots: int64 = 0;
+	let zeroRefSlots: int64 = 0;
+	let dynCount: int32 = 0;
+	for (let i = 0; i < fields.length; i += 1) {
+		const cls = kinds[i];
+		const bit: int64 = i < TYPED_SLOTS ? (1 as int64) << (i as int64) : 0;
+		if (cls == RaiserRegClass.Word) zeroWordSlots = zeroWordSlots | bit;
+		if (cls == RaiserRegClass.Ref) zeroRefSlots = zeroRefSlots | bit;
+		if (cls == RaiserRegClass.Dyn) {
+			zeroSlots.push(dynCount as int64);
+			dynCount += 1;
+		} else {
+			zeroSlots.push(0);
+		}
+	}
+	return { name, depth, display, fields, fieldIds: constNameIds(fields), kinds, zeroSlots, zeroWordSlots, zeroRefSlots, dynCount };
+}
+
+export const RAISER_NO_CLASS: RaiserClassType = createClassType("", -1, [], [], []);
 
 export interface RaiserObjectData {
-	fields: RaiserValue[];
-	added: string[];   // the names of fields[layout length..], in insertion order
+	slots: int64[];
+	wordSlots: int64;   // bit i set when slot i (below TYPED_SLOTS) is a Word slot, so a typed slot opcode checks its slot in one load
+	refSlots: int64;    // the same for Ref slots
+	values: RaiserValue[];
+	added: string[];   // the names of the fields past the layout, in insertion order
 	rc: int32;
 	color: int32;
 	classType: RaiserClassType;
 }
 
-// Whether a class is, or extends, the one a module constant names; the constant is read in place.
+// Whether a class is, or extends, the one a module constant names: the constant packs the target's
+// id and depth (id * 64 + depth), and an ancestor at the target's depth must carry its id.
 export function raiserIsInstance(classType: RaiserClassType, key: RaiserValue): boolean {
-	when (mode != "danger") { if (key.kind != RaiserValueKind.String || !isConstHandle(key.intVal)) throw new Error("internal: a class key must be an interned string"); }
-	const at = handleIndex(key.intVal) as number;
-	for (let i = 0; i < classType.chain.length; i += 1) {
-		if (classType.chain[i] == constTexts[at]) return true;
-	}
-	return false;
+	when (mode != "danger") { if (key.kind != RaiserValueKind.Int) throw new Error("internal: a class key must be a packed class id"); }
+	const depth = (key.intVal & 63) as int32;
+	return depth <= classType.depth && classType.display[depth] == (key.intVal >> 6);
 }
 
 export interface RaiserObjectHeap {
@@ -734,7 +879,10 @@ export function heapAllocObject(heap: RaiserObjectHeap): int64 {
 		const reused = heap.freeList[heap.freeList.length - 1];
 		heap.freeList.length = heap.freeList.length - 1;
 		const data: Cursor<RaiserObjectData> = heap.objects[reused];
-		data.fields.length = 0;
+		data.slots.length = 0;
+		data.wordSlots = 0;
+		data.refSlots = 0;
+		data.values.length = 0;
 		data.added.length = 0;
 		data.rc = 0;
 		data.color = 0;
@@ -742,43 +890,137 @@ export function heapAllocObject(heap: RaiserObjectHeap): int64 {
 		return makeHandle(reused, RaiserHeapKind.Object);
 	}
 	const idx = heap.objects.length;
-	const fields: RaiserValue[] = [];
+	const slots: int64[] = [];
+	const values: RaiserValue[] = [];
 	const added: string[] = [];
-	const data: RaiserObjectData = { fields, added, rc: 0, color: 0, classType: RAISER_NO_CLASS };
+	const data: RaiserObjectData = { slots, wordSlots: 0, refSlots: 0, values, added, rc: 0, color: 0, classType: RAISER_NO_CLASS };
 	heap.objects.push(data);
 	return makeHandle(idx, RaiserHeapKind.Object);
 }
 
+function laySlot(obj: RaiserObjectData): void {
+	const cls = obj.classType.kinds[obj.slots.length];
+	const bit: int64 = obj.slots.length < TYPED_SLOTS ? (1 as int64) << (obj.slots.length as int64) : 0;
+	if (cls == RaiserRegClass.Word) obj.wordSlots = obj.wordSlots | bit;
+	if (cls == RaiserRegClass.Ref) obj.refSlots = obj.refSlots | bit;
+	if (cls == RaiserRegClass.Dyn) {
+		obj.slots.push(obj.values.length as int64);
+		obj.values.push(raiserNil());
+	} else {
+		obj.slots.push(0);
+	}
+}
+
+// Every slot of the object's class at its zero: zero bits, a nil handle, a nil value.
+export function layOutObject(obj: RaiserObjectData, classType: RaiserClassType): void {
+	obj.classType = classType;
+	const count = classType.zeroSlots.length;
+	obj.slots.length = count;
+	obj.wordSlots = classType.zeroWordSlots;
+	obj.refSlots = classType.zeroRefSlots;
+	if (classType.dynCount > 0) {
+		for (let i = 0; i < count; i += 1) obj.slots[i] = classType.zeroSlots[i];
+		for (let i: int32 = 0; i < classType.dynCount; i += 1) obj.values.push(raiserNil());
+	}
+}
+
+// The register class slot `index` holds, which must be laid.
+@inline
+export function slotKind(obj: RaiserObjectData, index: int32): RaiserRegClass {
+	return obj.classType.kinds[index];
+}
+
+export function objectFieldCount(obj: RaiserObjectData): int32 {
+	return (obj.slots.length + obj.added.length) as int32;
+}
+
 export function heapObjectFieldCount(heap: RaiserObjectHeap, handle: int64): int32 {
-	const obj = heap.objects[handleIndex(handle)];
-	return obj.fields.length;
+	return objectFieldCount(heap.objects[handleIndex(handle)]);
 }
 
 export function fieldNameAt(obj: RaiserObjectData, index: number): string {
-	const laid = obj.classType.fields.length;
+	const laid = obj.slots.length;
 	return index < laid ? obj.classType.fields[index] : obj.added[index - laid];
 }
 
 export function fieldNameIs(obj: RaiserObjectData, index: number, name: string): boolean {
-	const laid = obj.classType.fields.length;
+	const laid = obj.slots.length;
 	return index < laid ? obj.classType.fields[index] == name : obj.added[index - laid] == name;
 }
 
 export function fieldIndex(obj: RaiserObjectData, name: string): number {
-	for (let i = 0; i < obj.fields.length; i += 1) {
+	const count = objectFieldCount(obj);
+	for (let i = 0; i < count; i += 1) {
 		if (fieldNameIs(obj, i, name)) return i;
 	}
 	return -1;
 }
 
+// The value a field holds, read in its slot's class.
+export function fieldValueAt(obj: RaiserObjectData, index: number): RaiserValue {
+	const laid = obj.slots.length;
+	if (index >= laid) return obj.values[obj.values.length - obj.added.length + index - laid];
+	const bits = obj.slots[index];
+	return match (obj.classType.kinds[index]) {
+		RaiserRegClass.Word => raiserInt(bits),
+		RaiserRegClass.Float => raiserFloat(msBitsFloat64(bits)),
+		RaiserRegClass.Bool => raiserBool(bits != 0),
+		RaiserRegClass.Ref => handleValue(bits),
+		RaiserRegClass.Dyn => obj.values[bits],
+	};
+}
+
+// Whether a value fits a slot of class `cls`; an Int widens into a Float slot as it does into a Float register.
+export function slotFits(cls: RaiserRegClass, val: RaiserValue): boolean {
+	if (cls == RaiserRegClass.Float) return val.kind == RaiserValueKind.Float || val.kind == RaiserValueKind.Int;
+	if (cls == RaiserRegClass.Dyn) return true;
+	return kindFitsClass(val.kind, cls);
+}
+
+// The word a slot of class `cls` holds for a value that fits it.
+export function slotWord(cls: RaiserRegClass, val: RaiserValue): int64 {
+	if (cls == RaiserRegClass.Float) return val.kind == RaiserValueKind.Int ? msFloat64Bits(val.intVal as number) : msFloat64Bits(val.floatVal);
+	return val.kind == RaiserValueKind.Nil ? 0 : val.intVal;
+}
+
+// "" when field `index` can hold the value, otherwise why it cannot.
+export function fieldRefusal(obj: RaiserObjectData, index: number, val: RaiserValue): string {
+	if (index >= obj.slots.length) return "";
+	const cls = obj.classType.kinds[index];
+	if (slotFits(cls, val)) return "";
+	return `internal: field '${obj.classType.fields[index]}' of ${obj.classType.name != "" ? obj.classType.name : "a typed object"} is a ${regClassLetter(cls)} slot, got a value of kind ${val.kind}`;
+}
+
+// Stores a value into a field without counting: the field takes over the caller's count of it.
+export function fieldStoreAt(obj: RaiserObjectData, index: number, val: RaiserValue): void {
+	const laid = obj.slots.length;
+	if (index >= laid) {
+		obj.values[obj.values.length - obj.added.length + index - laid] = val;
+		return;
+	}
+	const cls = obj.classType.kinds[index];
+	if (cls == RaiserRegClass.Dyn) {
+		obj.values[obj.slots[index]] = val;
+		return;
+	}
+	const refused = fieldRefusal(obj, index, val);
+	if (refused != "") throw new Error(refused);
+	obj.slots[index] = slotWord(cls, val);
+}
+
 export function appendField(obj: RaiserObjectData, name: string, val: RaiserValue): void {
-	if (obj.fields.length >= obj.classType.fields.length) obj.added.push(name);
-	obj.fields.push(val);
+	if (obj.slots.length < obj.classType.fields.length) {
+		laySlot(obj);
+		fieldStoreAt(obj, obj.slots.length - 1, val);
+		return;
+	}
+	obj.added.push(name);
+	obj.values.push(val);
 }
 
 export function heapObjectFieldNameAt(heap: RaiserObjectHeap, handle: int64, index: int64): string {
 	const obj = heap.objects[handleIndex(handle)];
-	if (index < 0 || index >= obj.fields.length) return "";
+	if (index < 0 || index >= objectFieldCount(obj)) return "";
 	return fieldNameAt(obj, index as number);
 }
 
@@ -796,20 +1038,20 @@ test "heapObjectFieldNameAt/ValueAt follow insertion order" {
 
 export function heapObjectFieldValueAt(heap: RaiserObjectHeap, handle: int64, index: int64): RaiserValue {
 	const obj = heap.objects[handleIndex(handle)];
-	if (index < 0 || index >= obj.fields.length) return { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0 };
-	return obj.fields[index];
+	if (index < 0 || index >= objectFieldCount(obj)) return { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0 };
+	return fieldValueAt(obj, index as number);
 }
 
 export function heapObjectGetField(heap: RaiserObjectHeap, handle: int64, name: string): RaiserValue {
 	const obj = heap.objects[handleIndex(handle)];
 	const i = fieldIndex(obj, name);
-	return i >= 0 ? obj.fields[i] : raiserNil();
+	return i >= 0 ? fieldValueAt(obj, i) : raiserNil();
 }
 
 export function heapObjectSetField(heap: RaiserObjectHeap, handle: int64, name: string, val: RaiserValue): void {
 	const obj = heap.objects[handleIndex(handle)];
 	const i = fieldIndex(obj, name);
-	if (i >= 0) obj.fields[i] = val;
+	if (i >= 0) fieldStoreAt(obj, i, val);
 	else appendField(obj, name, val);
 }
 
@@ -877,20 +1119,33 @@ function rcDestroyString(arrHeap: RaiserArrayHeap, index: int64): void {
 @noinline
 function rcDestroyArray(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, index: int64): void {
 	const data = arrHeap.arrays[index];
+	if (data.elemClass == RaiserRegClass.Ref) {
+		for (const handle of data.words) {
+			if (handle != 0) rcDecrefHandle(arrHeap, objHeap, handle);
+		}
+	}
 	for (const item of data.items) {
 		rcDecref(arrHeap, objHeap, item);
 	}
 	data.items.length = 0;
+	data.words.length = 0;
 	arrHeap.freeList.push(index);
 }
 
 @noinline
 function rcDestroyObject(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, index: int64): void {
 	const data: Cursor<RaiserObjectData> = objHeap.objects[index];
-	for (let i = 0; i < data.fields.length; i += 1) {
-		if (data.fields[i].kind >= RaiserValueKind.String) rcDecrefHandle(arrHeap, objHeap, data.fields[i].intVal);
+	const kinds = data.classType.kinds;
+	for (let i = 0; i < data.slots.length; i += 1) {
+		if (kinds[i] == RaiserRegClass.Ref && data.slots[i] != 0) rcDecrefHandle(arrHeap, objHeap, data.slots[i]);
 	}
-	data.fields.length = 0;
+	for (let i = 0; i < data.values.length; i += 1) {
+		if (data.values[i].kind >= RaiserValueKind.String) rcDecrefHandle(arrHeap, objHeap, data.values[i].intVal);
+	}
+	data.slots.length = 0;
+	data.wordSlots = 0;
+	data.refSlots = 0;
+	data.values.length = 0;
 	data.added.length = 0;
 	objHeap.freeList.push(index);
 }
@@ -905,30 +1160,45 @@ function rcDestroyBox(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, index
 
 // --- Cross-heap graph copy ---
 // A handle indexes the heap that allocated it, so a value crossing into
-// another heap must be materialized there. The src->dst handle map preserves
-// sharing and terminates on cycles: a graph the collector exists to reclaim
+// another heap must be materialized there. The src->dst handle maps preserve
+// sharing and terminate on cycles: a graph the collector exists to reclaim
 // would otherwise recurse forever. Scalars carry their payload inline and
 // Future handles index the VM-wide future table, so both cross unchanged.
+// Reaching a node allocates its destination shell and queues a job to fill it, so a chain as long as the heap
+// costs job-list space, not stack frames.
+
+enum RaiserCopyKind { Array, Object, Slot }
+
+interface RaiserCopyJob {
+	kind: RaiserCopyKind;
+	source: RaiserValue;
+	dst: int64;
+}
 
 export interface RaiserCopyMap {
-	arrSrc: int64[];
-	arrDst: int64[];
-	objSrc: int64[];
-	objDst: int64[];
+	arrays: Map<int64, int64>;
+	objects: Map<int64, int64>;
+	registerSlots: Map<int64, int64>;
+	globalSlots: Map<int64, int64>;
+	jobs: RaiserCopyJob[];
 	sourceWords: int64[] | null;
 	sourceRefs: int64[] | null;
 	sourceGlobals: RaiserValue[] | null;
 	destGlobals: RaiserValue[] | null;
-	slotSrc: RaiserValue[] | null;
-	slotDst: RaiserValue[] | null;
 }
 
 export function createCopyMap(): RaiserCopyMap {
-	const arrSrc: int64[] = [];
-	const arrDst: int64[] = [];
-	const objSrc: int64[] = [];
-	const objDst: int64[] = [];
-	return { arrSrc, arrDst, objSrc, objDst, sourceWords: null, sourceRefs: null, sourceGlobals: null, destGlobals: null, slotSrc: null, slotDst: null };
+	return {
+		arrays: new Map<int64, int64>(),
+		objects: new Map<int64, int64>(),
+		registerSlots: new Map<int64, int64>(),
+		globalSlots: new Map<int64, int64>(),
+		jobs: [],
+		sourceWords: null,
+		sourceRefs: null,
+		sourceGlobals: null,
+		destGlobals: null,
+	};
 }
 
 export function copyGraph(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue): RaiserValue {
@@ -942,99 +1212,121 @@ function copiedRegisterValue(map: RaiserCopyMap, address: int64): RaiserValue {
 	const abs = address >> 3;
 	const words = map.sourceWords;
 	const refs = map.sourceRefs;
-	if (words == null || refs == null) throw "internal: a copied slot address must have its source storage";
+	if (words == null || refs == null) throw new Error("internal: a copied slot address must have its source storage");
 	if (cls == RaiserRegClass.Ref || cls == RaiserRegClass.Dyn) {
-		if (abs >= refs.length) throw "internal: a copied slot address must have its source storage";
+		if (abs >= refs.length) throw new Error("internal: a copied slot address must have its source storage");
 		const h = refs[abs];
 		return handleValue(h);
 	}
-	if (abs >= words.length) throw "internal: a copied slot address must have its source storage";
+	if (abs >= words.length) throw new Error("internal: a copied slot address must have its source storage");
 	if (cls == RaiserRegClass.Word) return raiserInt(words[abs]);
 	if (cls == RaiserRegClass.Bool) return raiserBool(words[abs] != 0);
 	return raiserFloat(bitsToFloat(words[abs]));
 }
 
-export function copyGraphWith(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
-	if (val.kind == RaiserValueKind.RegAddr || val.kind == RaiserValueKind.GlobalAddr) {
-		const source = map.sourceGlobals;
-		if (val.kind == RaiserValueKind.GlobalAddr) {
-			if (source == null || val.intVal < 0 || val.intVal >= source.length) throw "internal: a copied slot address must have its source storage";
-			if (map.destGlobals != null) return raiserGlobalAddr(val.intVal);
-		}
-		let keys = map.slotSrc;
-		let copies = map.slotDst;
-		if (keys == null || copies == null) {
-			keys = [];
-			copies = [];
-			map.slotSrc = keys;
-			map.slotDst = copies;
-		}
-		for (let i = 0; i < keys.length; i += 1) {
-			if (keys[i].kind == val.kind && keys[i].intVal == val.intVal) return copies[i];
-		}
-		const handle = heapAllocArray(dstArr);
-		const address = raiserElemAddr(handle, 0);
-		keys.push(val);
-		copies.push(address);
-		const held = val.kind == RaiserValueKind.RegAddr ? copiedRegisterValue(map, val.intVal) : source![val.intVal];
-		const copied = copyGraphWith(srcArr, srcObj, dstArr, dstObj, held, map);
-		heapArrayPush(dstArr, handle, copied);
-		rcIncref(dstArr, dstObj, copied);
-		return address;
+function copySlotShell(dstArr: RaiserArrayHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
+	const isRegister = val.kind == RaiserValueKind.RegAddr;
+	const source = map.sourceGlobals;
+	if (!isRegister) {
+		if (source == null || val.intVal < 0 || val.intVal >= source.length) throw new Error("internal: a copied slot address must have its source storage");
+		if (map.destGlobals != null) return raiserGlobalAddr(val.intVal);
 	}
-	if (val.kind == RaiserValueKind.Array || val.kind == RaiserValueKind.ElemAddr) {
-		for (let i = 0; i < map.arrSrc.length; i = i + 1) {
-			if (map.arrSrc[i] == val.intVal) {
-				return val.kind == RaiserValueKind.Array ? raiserArray(map.arrDst[i]) : raiserElemAddr(map.arrDst[i], val.floatVal as int64);
-			}
-		}
-		if (handleIndex(val.intVal) >= srcArr.arrays.length) {
-			if (val.kind == RaiserValueKind.ElemAddr) throw "internal: a copied element address must have an array owner";
-			return raiserNil();
-		}
-		const dstHandle = heapAllocArray(dstArr);
-		map.arrSrc.push(val.intVal);
-		map.arrDst.push(dstHandle);
-		const items = srcArr.arrays[handleIndex(val.intVal)].items;
-		for (let i = 0; i < items.length; i = i + 1) {
-			const copied = copyGraphWith(srcArr, srcObj, dstArr, dstObj, items[i], map);
-			heapArrayPush(dstArr, dstHandle, copied);
-			rcIncref(dstArr, dstObj, copied);
-		}
-		dstArr.arrays[handleIndex(dstHandle)].viewOff = srcArr.arrays[handleIndex(val.intVal)].viewOff;
-		dstArr.arrays[handleIndex(dstHandle)].viewLen = srcArr.arrays[handleIndex(val.intVal)].viewLen;
-		return val.kind == RaiserValueKind.Array ? raiserArray(dstHandle) : raiserElemAddr(dstHandle, val.floatVal as int64);
+	const slots = isRegister ? map.registerSlots : map.globalSlots;
+	if (slots.has(val.intVal)) return raiserElemAddr(slots.get(val.intVal)!, 0);
+	const handle = heapAllocArray(dstArr);
+	slots.set(val.intVal, handle);
+	const held = isRegister ? copiedRegisterValue(map, val.intVal) : source![val.intVal];
+	map.jobs.push({ kind: RaiserCopyKind.Slot, source: held, dst: handle });
+	return raiserElemAddr(handle, 0);
+}
+
+function copyArrayShell(srcArr: RaiserArrayHeap, dstArr: RaiserArrayHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
+	const isArray = val.kind == RaiserValueKind.Array;
+	if (map.arrays.has(val.intVal)) {
+		const known = map.arrays.get(val.intVal)!;
+		return isArray ? raiserArray(known) : raiserElemAddr(known, val.floatVal as int64);
 	}
-	if (val.kind == RaiserValueKind.Object || val.kind == RaiserValueKind.FieldAddr) {
-		for (let i = 0; i < map.objSrc.length; i = i + 1) {
-			if (map.objSrc[i] == val.intVal) {
-				return val.kind == RaiserValueKind.Object ? raiserObject(map.objDst[i]) : raiserFieldAddrAt(map.objDst[i], val.floatVal as int64);
-			}
-		}
-		if (handleIndex(val.intVal) >= srcObj.objects.length) {
-			if (val.kind == RaiserValueKind.FieldAddr) throw "internal: a copied field address must have an object owner";
-			return raiserNil();
-		}
-		const dstHandle = heapAllocObject(dstObj);
-		dstObj.objects[handleIndex(dstHandle)].classType = srcObj.objects[handleIndex(val.intVal)].classType;
-		map.objSrc.push(val.intVal);
-		map.objDst.push(dstHandle);
-		const source = srcObj.objects[handleIndex(val.intVal)];
-		for (let i = 0; i < source.fields.length; i = i + 1) {
-			const copied = copyGraphWith(srcArr, srcObj, dstArr, dstObj, source.fields[i], map);
-			appendField(dstObj.objects[handleIndex(dstHandle)], fieldNameAt(source, i), copied);
-			rcIncref(dstArr, dstObj, copied);
-		}
-		return val.kind == RaiserValueKind.Object ? raiserObject(dstHandle) : raiserFieldAddrAt(dstHandle, val.floatVal as int64);
+	if (handleIndex(val.intVal) >= srcArr.arrays.length) {
+		if (!isArray) throw new Error("internal: a copied element address must have an array owner");
+		return raiserNil();
 	}
+	const dstHandle = heapAllocArrayOf(dstArr, srcArr.arrays[handleIndex(val.intVal)].elemClass);
+	map.arrays.set(val.intVal, dstHandle);
+	map.jobs.push({ kind: RaiserCopyKind.Array, source: raiserArray(val.intVal), dst: dstHandle });
+	return isArray ? raiserArray(dstHandle) : raiserElemAddr(dstHandle, val.floatVal as int64);
+}
+
+function copyObjectShell(srcObj: RaiserObjectHeap, dstObj: RaiserObjectHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
+	const isObject = val.kind == RaiserValueKind.Object;
+	if (map.objects.has(val.intVal)) {
+		const known = map.objects.get(val.intVal)!;
+		return isObject ? raiserObject(known) : raiserFieldAddrAt(known, val.floatVal as int64);
+	}
+	if (handleIndex(val.intVal) >= srcObj.objects.length) {
+		if (!isObject) throw new Error("internal: a copied field address must have an object owner");
+		return raiserNil();
+	}
+	const dstHandle = heapAllocObject(dstObj);
+	dstObj.objects[handleIndex(dstHandle)].classType = srcObj.objects[handleIndex(val.intVal)].classType;
+	map.objects.set(val.intVal, dstHandle);
+	map.jobs.push({ kind: RaiserCopyKind.Object, source: raiserObject(val.intVal), dst: dstHandle });
+	return isObject ? raiserObject(dstHandle) : raiserFieldAddrAt(dstHandle, val.floatVal as int64);
+}
+
+// The destination of one value: a scalar is itself, a node is its destination shell, filled by a queued job.
+function copyShell(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
+	if (val.kind == RaiserValueKind.RegAddr || val.kind == RaiserValueKind.GlobalAddr) return copySlotShell(dstArr, val, map);
+	if (val.kind == RaiserValueKind.Array || val.kind == RaiserValueKind.ElemAddr) return copyArrayShell(srcArr, dstArr, val, map);
+	if (val.kind == RaiserValueKind.Object || val.kind == RaiserValueKind.FieldAddr) return copyObjectShell(srcObj, dstObj, val, map);
 	if (val.kind == RaiserValueKind.String && handleHeapKind(val.intVal) == RaiserHeapKind.String) return heapAllocString(dstArr, heapStringText(srcArr, val));
 	if (val.kind == RaiserValueKind.Box) {
-		const inner = copyGraphWith(srcArr, srcObj, dstArr, dstObj, heapBoxValue(srcArr, val.intVal), map);
+		const inner = copyShell(srcArr, srcObj, dstArr, dstObj, heapBoxValue(srcArr, val.intVal), map);
 		const copy = heapAllocBox(dstArr, inner);
 		rcIncref(dstArr, dstObj, inner);
 		return { kind: RaiserValueKind.Box, intVal: copy, floatVal: 0.0 };
 	}
 	return val;
+}
+
+function fillArray(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, job: RaiserCopyJob, map: RaiserCopyMap): void {
+	const source = srcArr.arrays[handleIndex(job.source.intVal)];
+	const held = arrayHeldCount(source);
+	for (let i = 0; i < held; i = i + 1) {
+		const copied = copyShell(srcArr, srcObj, dstArr, dstObj, arrayHeldAt(source, i), map);
+		heapArrayPush(dstArr, job.dst, copied);
+		rcIncref(dstArr, dstObj, copied);
+	}
+	dstArr.arrays[handleIndex(job.dst)].viewOff = source.viewOff;
+	dstArr.arrays[handleIndex(job.dst)].viewLen = source.viewLen;
+}
+
+function fillObject(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, job: RaiserCopyJob, map: RaiserCopyMap): void {
+	const source = srcObj.objects[handleIndex(job.source.intVal)];
+	const count = objectFieldCount(source);
+	for (let i = 0; i < count; i = i + 1) {
+		const copied = copyShell(srcArr, srcObj, dstArr, dstObj, fieldValueAt(source, i), map);
+		appendField(dstObj.objects[handleIndex(job.dst)], fieldNameAt(source, i), copied);
+		rcIncref(dstArr, dstObj, copied);
+	}
+}
+
+function fillSlot(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, job: RaiserCopyJob, map: RaiserCopyMap): void {
+	const copied = copyShell(srcArr, srcObj, dstArr, dstObj, job.source, map);
+	heapArrayPush(dstArr, job.dst, copied);
+	rcIncref(dstArr, dstObj, copied);
+}
+
+export function copyGraphWith(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: RaiserArrayHeap, dstObj: RaiserObjectHeap, val: RaiserValue, map: RaiserCopyMap): RaiserValue {
+	const root = copyShell(srcArr, srcObj, dstArr, dstObj, val, map);
+	while (map.jobs.length > 0) {
+		const job = map.jobs.pop()!;
+		match (job.kind) {
+			RaiserCopyKind.Array => fillArray(srcArr, srcObj, dstArr, dstObj, job, map),
+			RaiserCopyKind.Object => fillObject(srcArr, srcObj, dstArr, dstObj, job, map),
+			RaiserCopyKind.Slot => fillSlot(srcArr, srcObj, dstArr, dstObj, job, map),
+		}
+	}
+	return root;
 }
 
 test "copyGraph relocates a field address that points into its own owner" {
@@ -1172,6 +1464,50 @@ test "copyGraph refcounts the destination edges" {
 	const kid = heapArrayGet(dArr, copied.intVal, 0);
 	assert dArr.arrays[handleIndex(kid.intVal)].rc == 1;
 	assert dArr.arrays[handleIndex(copied.intVal)].rc == 0;
+}
+
+test "copyGraph copies a linked list as long as the heap without native recursion" {
+	const sArr = createArrayHeap();
+	const sObj = createStructHeap();
+	const dArr = createArrayHeap();
+	const dObj = createStructHeap();
+	const count = 200000;
+	const first = heapAllocObject(sObj);
+	let prev = first;
+	for (let i = 1; i < count; i += 1) {
+		const next = heapAllocObject(sObj);
+		heapObjectSetField(sObj, prev, "next", raiserObject(next));
+		prev = next;
+	}
+	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserObject(first));
+	assert dObj.objects.length == count;
+	let length = 1;
+	let at = copied;
+	while (true) {
+		const next = heapObjectGetField(dObj, at.intVal, "next");
+		if (next.kind != RaiserValueKind.Object) break;
+		at = next;
+		length += 1;
+	}
+	assert length == count;
+}
+
+test "copyGraph keeps a shared element and a cycle through an array of objects" {
+	const sArr = createArrayHeap();
+	const sObj = createStructHeap();
+	const dArr = createArrayHeap();
+	const dObj = createStructHeap();
+	const shared = heapAllocObject(sObj);
+	const list = heapAllocArray(sArr);
+	heapArrayPush(sArr, list, raiserObject(shared));
+	heapArrayPush(sArr, list, raiserObject(shared));
+	heapObjectSetField(sObj, shared, "owner", raiserArray(list));
+	const copied = copyGraph(sArr, sObj, dArr, dObj, raiserArray(list));
+	assert dObj.objects.length == 1 && dArr.arrays.length == 1;
+	const first = heapArrayGet(dArr, copied.intVal, 0);
+	const second = heapArrayGet(dArr, copied.intVal, 1);
+	assert first.intVal == second.intVal;
+	assert heapObjectGetField(dObj, first.intVal, "owner").intVal == copied.intVal;
 }
 
 // --- ORC refcount tests ---

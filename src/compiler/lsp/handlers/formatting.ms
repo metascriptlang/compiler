@@ -12,7 +12,7 @@ import { FmtPos, formatStatementEdit, innermostStatement, lineOffset, applyEdit 
 import { checkLossless } from "../../fmt/lossless";
 import { registerCoreParsers } from "../../../parser/statements/core";
 import { parseSource } from "../../../parser/statements/validation";
-import { dbGetSource, lspByteColumn, lspCharacter } from "./shared";
+import { dbGetSource, lspByteColumn, lspCharacter, lspDocumentUri } from "./shared";
 import { getFormatOptions, splitLines, detectLineIndent } from "./diagnostics";
 
 
@@ -27,8 +27,7 @@ let _codeActionFmtSource = "";
 let _codeActionFmtResult = "";
 
 export function handleCodeAction(id: string, params: string, db: TransAmDb): string {
-	const textDoc = lspGetObjectField(params, "textDocument");
-	const uri = lspGetField(textDoc, "uri");
+	const uri = lspDocumentUri(params);
 	const path = lspUriToPath(uri);
 	const source = dbGetSource(db, path);
 	if (source == "") return lspResponse(id, "[]");
@@ -95,8 +94,7 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 
 export function handleFormatting(id: string, params: string, db: TransAmDb): string {
 	const t0 = performance.now();
-	const textDoc = lspGetObjectField(params, "textDocument");
-	const uri = lspGetField(textDoc, "uri");
+	const uri = lspDocumentUri(params);
 	const path = lspUriToPath(uri);
 	const source = dbGetSource(db, path);
 	if (source == "") return lspResponse(id, "[]");
@@ -119,10 +117,10 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 
 	if (formatted.byteLength == source.byteLength && formatted == source) return lspResponse(id, "[]");
 
-	let lineCount = 0;
-	let lastNl = -1;
-	for (let i = 0; i < source.byteLength; i = i + 1) {
-		if (source.byteAt(i) == "\n".code) { lineCount = lineCount + 1; lastNl = i; }
+	let lineCount: int32 = 0;
+	let lastNl: int32 = -1;
+	for (let i: int32 = 0; i < source.byteLength; i++) {
+		if (source.byteAt(i) == "\n".code) { lineCount++; lastNl = i; }
 	}
 	const lastLineLen = source.byteSlice(lastNl + 1, source.byteLength).length;
 	const range = lspFmtRange(0, 0, lineCount, lastLineLen);
@@ -141,8 +139,7 @@ function formattingBytePosition(source: string, position: string): Result<FmtPos
 }
 
 export function handleRangeFormatting(id: string, params: string, db: TransAmDb): string {
-	const textDoc = lspGetObjectField(params, "textDocument");
-	const uri = lspGetField(textDoc, "uri");
+	const uri = lspDocumentUri(params);
 	const path = lspUriToPath(uri);
 	const source = dbGetSource(db, path);
 	if (source == "") return lspResponse(id, "[]");

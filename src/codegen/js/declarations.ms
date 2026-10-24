@@ -420,10 +420,6 @@ export function emitConstructorDecl(gen: JSGenerator, node: Node): void {
 
 export function emitImportDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as ImportDeclData;
-	// .h imports have no JavaScript counterpart — their extern decls are
-	// inlined alongside the ImportDecl by inlineHeaderImports, and the JS
-	// backend doesn't consume C headers. Skip emission entirely.
-	if (d.importSource.length >= 2 && d.importSource.slice(d.importSource.length - 2, d.importSource.length) == ".h") return;
 	// std/meta is the compile-time AST/macro API — no runtime JS counterpart.
 	if (d.importSource == "std/meta" || (d.importSource.length >= 9 && d.importSource.slice(0, 9) == "std/meta/")) return;
 	// Bundle: every module shares one flat scope and names carry module

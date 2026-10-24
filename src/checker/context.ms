@@ -38,10 +38,13 @@ export interface ModuleExports {
 export interface ExportRegistry {
 	entries: ModuleExports[];
 	moduleIndex: HashMap<string, number>;  // modulePath → index in entries[]
+	// An incomplete C struct or union is one type per tag across every translation unit
+	// (C11 6.2.7), so every header that names it declares the same symbol.
+	cTags: HashMap<string, Symbol>;
 }
 
 export function createExportRegistry(): ExportRegistry {
-	return { entries: [], moduleIndex: new HashMap<string, number>() };
+	return { entries: [], moduleIndex: new HashMap<string, number>(), cTags: new HashMap<string, Symbol>() };
 }
 
 export function registerModuleExports(registry: ExportRegistry, modulePath: string, exports: ExportedSymInfo[]): void {
@@ -252,29 +255,29 @@ export function defaultCheckedAtDeclaration(def: Node): boolean {
 }
 
 export function registerExtension(registry: ExtensionRegistry, method: ExtensionMethod): void {
-	// Dedup by sym identity first (cheap fast-path).
-	if (method.sym != null) {
-		for (const existing of registry.methods) {
-			if (existing.sym == method.sym && existing.methodName == method.methodName) return;
-		}
-	}
-	// Stronger dedup: same logical extension may register through multiple
-	// import / re-export paths producing distinct Symbol instances for the
-	// same definition (same name + modulePath + receiver + location). Without this,
-	// `obj.asNumber()` reports "Ambiguous overloaded extension method" even
-	// though only one definition exists. Fast path skips this loop when
-	// the sym lacks a stable identity (modulePath empty).
-	if (method.sym != null && method.sym.modulePath != "") {
-		for (const other of registry.methods) {
-			if (other.sym != null
-					&& other.methodName == method.methodName
-					&& other.sym.name == method.sym.name
-					&& other.sym.modulePath == method.sym.modulePath
-					&& other.isStatic == method.isStatic
-					&& other.sym.location.line == method.sym.location.line
-					&& other.sym.location.column == method.sym.location.column) {
-				return;
+	// Both dedup rules need an equal methodName, so only that name's chain is scanned.
+	// The second rule: the same logical extension may register through several import /
+	// re-export paths producing distinct Symbol instances for one definition (same name,
+	// modulePath, kind and location); without it `obj.asNumber()` reports "Ambiguous
+	// overloaded extension method" though only one definition exists.
+	const msym = method.sym;
+	if (msym != null) {
+		let ci = registry.byNameHead.get(method.methodName) ?? -1;
+		while (ci >= 0) {
+			const other = registry.methods[ci];
+			const osym = other.sym;
+			if (osym != null) {
+				if (osym == msym) return;
+				if (msym.modulePath != ""
+						&& osym.name == msym.name
+						&& osym.modulePath == msym.modulePath
+						&& other.isStatic == method.isStatic
+						&& osym.location.line == msym.location.line
+						&& osym.location.column == msym.location.column) {
+					return;
+				}
 			}
+			ci = registry.byNameNext[ci];
 		}
 	}
 	const idx = registry.methods.length;
@@ -1159,6 +1162,17 @@ export function stripGenFlag(flags: string): string {
 export class CancelCtx {
 	version: int32;
 	cancelled: boolean;
+	inputPending: (() => boolean) | null;
+	stoppedForInput: boolean;
+}
+
+export function stopForInput(cancel: CancelCtx): boolean {
+	if (cancel == null) return false;
+	const pending = cancel.inputPending;
+	if (pending == null || !pending()) return false;
+	cancel.cancelled = true;
+	cancel.stoppedForInput = true;
+	return true;
 }
 
 export function isCancelled(cancel: CancelCtx, startVersion: int32): boolean {
@@ -1195,21 +1209,38 @@ export function sgRecordSym(
 	ctx.symRecords.push(rec);
 }
 
-// Insertion sort by (line, col) — called once after check completes.
+// Stable bottom-up merge sort by (line, col) — called once after check completes.
 export function sgSortRecords(records: SgSymRecord[]): void {
-	let i = 1;
-	while (i < records.length) {
-		const rec = records[i];
-		let j = i - 1;
-		while (j >= 0) {
-			const other = records[j];
-			if (other.line < rec.line) break;
-			if (other.line == rec.line && other.col <= rec.col) break;
-			records[j + 1] = records[j];
-			j = j - 1;
+	const n = records.length;
+	const tmp: SgSymRecord[] = [];
+	for (let k = 0; k < n; k += 1) tmp.push(records[k]);
+	let width = 1;
+	while (width < n) {
+		let lo = 0;
+		while (lo < n) {
+			const mid = lo + width < n ? lo + width : n;
+			const hi = lo + 2 * width < n ? lo + 2 * width : n;
+			let l = lo;
+			let r = mid;
+			let o = lo;
+			while (l < mid && r < hi) {
+				const a = records[l];
+				const b = records[r];
+				if (b.line < a.line || (b.line == a.line && b.col < a.col)) {
+					tmp[o] = b;
+					r += 1;
+				} else {
+					tmp[o] = a;
+					l += 1;
+				}
+				o += 1;
+			}
+			while (l < mid) { tmp[o] = records[l]; l += 1; o += 1; }
+			while (r < hi) { tmp[o] = records[r]; r += 1; o += 1; }
+			lo = hi;
 		}
-		records[j + 1] = rec;
-		i = i + 1;
+		for (let k = 0; k < n; k += 1) records[k] = tmp[k];
+		width = width * 2;
 	}
 }
 
@@ -1329,6 +1360,7 @@ export class CheckerContext {
 	pendingLocalTypeDecls: Node[]; // admitted local type decls, appended to programStmts after body checking — destructorLifting and codegen discover types by walking module statements only, so a body-only decl would never get DRC hooks or TypeInfo
 	liftedLocalTypeDecls: Node[];
 	preludeCtx: CheckerContext;  // access private prelude symbols during instantiation
+	globalImportsCtx: CheckerContext | null;
 	instantiatingCtx: CheckerContext;
 	interf: Symbol[];
 	interfSet: HashSet<Symbol>;
@@ -1422,6 +1454,7 @@ export function createContext(): CheckerContext {
 		conversionOperand: null as unknown as Node,
 		conversionTarget: null as unknown as Type,
 		preludeCtx: null as unknown as CheckerContext,
+		globalImportsCtx: null,
 		instantiatingCtx: null as unknown as CheckerContext,
 		interf: [],
 		interfSet: new HashSet<Symbol>(),
@@ -1668,6 +1701,49 @@ test "extension name lookups keep registration order across truncation" {
 	registerExtension(r, c);
 	assert findAllExtensionsByName(r, "m").length == 1;
 	assert findAllExtensionsByName(r, "m")[0] == c;
+}
+
+function extAt(name: string, line: int32, col: int32, isStatic: boolean): ExtensionMethod {
+	const sym = makeSymbol("m", SymbolKind.Function, noneType(), false);
+	sym.modulePath = "/a.ms";
+	sym.location.line = line;
+	sym.location.column = col;
+	return { methodName: name, sourcePath: "/a.ms", isStatic, sym };
+}
+
+test "registerExtension dedups by symbol, then by definition site, within one name" {
+	const r = createExtensionRegistry();
+	const first = extAt("m", 3, 1, false);
+	registerExtension(r, first);
+	registerExtension(r, extAt("other", 3, 1, false));
+	registerExtension(r, first);
+	registerExtension(r, extAt("m", 3, 1, false));
+	assert r.methods.length == 2;
+	registerExtension(r, extAt("m", 4, 1, false));
+	registerExtension(r, extAt("m", 3, 1, true));
+	registerExtension(r, extAt("m", 4, 1, false));
+	const all = findAllExtensionsByName(r, "m");
+	assert all.length == 3;
+	assert all[0] == first;
+	assert all[1].sym!.location.line == 4;
+	assert all[2].isStatic;
+}
+
+test "sgSortRecords is stable and sorts many records" {
+	const records: SgSymRecord[] = [];
+	const dummySym = null as unknown as Symbol;
+	const dummyType = noneType();
+	for (let i = 0; i < 101; i += 1) {
+		records.push({ line: (i * 7) % 5, col: (i * 3) % 4, colEnd: i, sym: dummySym, symType: dummyType, kind: SymbolKind.Variable, name: `${i}`, containerName: "", isDecl: false });
+	}
+	sgSortRecords(records);
+	for (let i = 1; i < records.length; i += 1) {
+		const a = records[i - 1];
+		const b = records[i];
+		assert a.line < b.line || (a.line == b.line && a.col <= b.col);
+		if (a.line == b.line && a.col == b.col) assert a.colEnd < b.colEnd;
+	}
+	assert records.length == 101;
 }
 
 function staticExtOf(owner: Symbol | null): ExtensionMethod {

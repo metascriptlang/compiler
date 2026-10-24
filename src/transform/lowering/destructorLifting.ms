@@ -20,10 +20,10 @@
 //   =dup       TypeName_dup(src): TypeName       — clone (init + copy, return)
 //   =trace     TypeName_trace(self, callback)    — ORC cycle tracing (cyclic types only)
 
-import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext, createTransformContextWithChecker } from "../context";
-import { attachedOpSym, isRuntimeProcSym, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
+import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
+import { int32Type, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook, pickBodyCtx } from "../../checker/instantiate";
@@ -35,6 +35,7 @@ import { checkProgram } from "../../checker/checkPass";
 import { parseInput, checkedCtx } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
 import { sizedArrayHookName } from "../../analyzer/classify";
+import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
 let _jsProgramScope = false;
 
@@ -66,6 +67,7 @@ class LiftCtx {
 	arrayRootEpochs: HashMap<Type, int32>;
 	refusedArrayElems: HashSet<Type>;
 	jsBackend: boolean;
+	dropOwner: Symbol | null;
 }
 
 // NodeBuf: heap-allocated buffer for accumulating AST nodes.
@@ -377,6 +379,8 @@ function genElementLoop(hook: string, elemType: Type, bound: Node | null, xf: No
 	const xi = makeArrayAccess(xClone, makeTypedIdentResolved(counterSym, null, loc), loc);
 	const bodyBuf = newBuf();
 	const visited: NameSet = createNameSet();
+	const dropOwner = lctx.dropOwner;
+	lctx.dropOwner = null;
 
 	if (hook == "trace") {
 		// Reference: trace passes raw callback (y), not y[i]
@@ -389,6 +393,7 @@ function genElementLoop(hook: string, elemType: Type, bound: Node | null, xf: No
 	} else {
 		fillBody(hook, xi, xi, "", elemType, lctx, bodyBuf, visited, loc);
 	}
+	lctx.dropOwner = dropOwner;
 	if (bodyBuf.items.length == 0) return;
 	buf.items.push(counterDecl);
 
@@ -526,7 +531,14 @@ function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: bo
 	const decrefFn = atomic ? "msAtomicDecref" : (isCyclic ? "msDecrefCyclic" : "msDecref");
 	const increfFn = atomic ? "msAtomicIncref" : (isCyclic ? "msIncrefCyclic" : "msIncref");
 	match (hook) {
-		"destroy" => { genCall(decrefFn, hook, xf, yf, buf, loc); },
+		"destroy" => {
+			const owner = lctx.dropOwner;
+			if (owner != null && isCyclic && !atomic) {
+				buf.items.push(makeExprStmt(makeCall(runtimeRef("msDecrefCyclicEdge", loc), [makeIdentResolved(owner, loc), xf], loc), loc));
+			} else {
+				genCall(decrefFn, hook, xf, yf, buf, loc);
+			}
+		},
 		"copy" => { genCopyRef(increfFn, xf, yf, fieldName, buf, loc); },
 		"sink" => {
 			if (isCyclic && !atomic) {
@@ -1316,6 +1328,8 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	// a user hook lets the author traverse iteratively instead. The author is
 	// therefore responsible for ALL owned fields. Same for copy/sink/wasMoved/trace.
 	const hookSym = getUserDefinedHookSym(subject, hook, lctx);
+	const outerDropOwner = lctx.dropOwner;
+	lctx.dropOwner = hook == "destroy" && hookSym == null && classType != null && !lctx.jsBackend ? s1 : null;
 	if (hookSym != null) {
 		const hookIdent = makeIdentResolved(hookSym, loc);
 		const u1 = userHookArg(hookSym, 0, s1, classType, loc);
@@ -1383,11 +1397,12 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	// this object's already-freed, not-yet-nulled slots (UAF). The guard defers collection until
 	// the whole teardown unwinds. Destroy hooks are single-exit (no early return), so bracketing
 	// the statement list is sufficient. No-op under --gc=drc.
+	if (lctx.dropOwner != null && classType != null) {
+		buf.items = deferAfterDropEdges(buf.items, s1, classType, cName, lctx, loc);
+	}
+	lctx.dropOwner = outerDropOwner;
 	if (hook == "destroy") {
-		const wrapped: Node[] = [makeExprStmt(makeCall(runtimeRef("msOrcBeginTeardown", loc), [], loc), loc)];
-		for (const it of buf.items) { wrapped.push(it); }
-		wrapped.push(makeExprStmt(makeCall(runtimeRef("msOrcEndTeardown", loc), [], loc), loc));
-		buf.items = wrapped;
+		buf.items = bracketTeardown(buf.items, loc);
 	}
 
 	const suffix = hookSuffix(hook);
@@ -1414,6 +1429,66 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	const sym = liftOp(fnNode, objType, objType, attachedOpOf(hook), cName + suffix);
 	lctx.collector.push(fnNode);
 	return sym;
+}
+
+function bracketTeardown(items: Node[], loc: SourceLocation): Node[] {
+	const wrapped: Node[] = [makeExprStmt(makeCall(runtimeRef("msOrcBeginTeardown", loc), [], loc), loc)];
+	for (const it of items) { wrapped.push(it); }
+	wrapped.push(makeExprStmt(makeCall(runtimeRef("msOrcEndTeardown", loc), [], loc), loc));
+	return wrapped;
+}
+
+function dropEdgeCall(stmt: Node): Node | null {
+	if (stmt.kind != NodeKind.ExprStmt) return null;
+	const call = (stmt.data as ExprStmtData).expr;
+	return isRuntimeProcCall(call, "msDecrefCyclicEdge") ? call : null;
+}
+
+function deferAfterDropEdges(items: Node[], self: Symbol, classType: Type, cName: string, lctx: LiftCtx, loc: SourceLocation): Node[] {
+	let edges = 0;
+	for (let i = 0; i + 1 < items.length; i += 1) if (dropEdgeCall(items[i]) != null) edges += 1;
+	if (edges == 0) return items;
+	const restName = cName + "DestroyRest";
+	const ownerSym = liftSym(lctx, SymbolKind.Variable, "owner", createPtr(voidType()));
+	const resumeSym = liftSym(lctx, SymbolKind.Variable, "resume", int32Type());
+	const restFn = makeFnDecl(restName, [ownerSym, resumeSym], ["Ptr<void>", "int32"], null, "", "void", loc);
+	setHookParamType(restFn, 0, createPtr(voidType()));
+	setHookParamType(restFn, 1, int32Type());
+	const restSym = liftHelperOp(restFn, restName, "", lctx);
+	const selfDecl = makeVarDecl(self.name, makeHiddenSubConv(makeIdentResolved(ownerSym, loc), classType, loc), DeclKind.Const, loc);
+	selfDecl.resolvedSym = self;
+	const head: Node[] = [];
+	const rest: Node[] = [makeExprStmt(makeCall(runtimeRef("msOrcBeginTeardown", loc), [], loc), loc), selfDecl];
+	let segment: Node[] = [];
+	let resume = 0;
+	for (let i = 0; i < items.length; i += 1) {
+		const edge = i + 1 < items.length ? dropEdgeCall(items[i]) : null;
+		if (edge == null) {
+			head.push(items[i]);
+			if (resume > 0) segment.push(cloneNodeKeepSem(items[i]));
+			continue;
+		}
+		resume += 1;
+		const deferred: Node[] = [
+			makeExprStmt(makeCall(runtimeRef("msDropDefer", loc), [makeIdentResolved(self, loc), makeIdentResolved(restSym, loc), makeNumber(resume, loc)], loc), loc),
+			makeExprStmt(makeCall(runtimeRef("msOrcEndTeardown", loc), [], loc), loc),
+			makeReturn(null as unknown as Node, loc),
+		];
+		const guard = makeIf(edge, makeBlock(deferred, loc), null as unknown as Node, loc);
+		if (resume == 1) {
+			head.push(guard);
+		} else {
+			segment.push(cloneNodeKeepSem(guard));
+			rest.push(makeIf(makeBinary(makeIdentResolved(resumeSym, loc), "<", makeNumber(resume, loc), loc), makeBlock(segment, loc), null as unknown as Node, loc));
+			segment = [];
+			head.push(guard);
+		}
+	}
+	for (const it of segment) rest.push(it);
+	rest.push(makeExprStmt(makeCall(runtimeRef("msOrcEndTeardown", loc), [], loc), loc));
+	(restFn.data as FunctionDeclData).fnBody = makeBlock(rest, loc);
+	lctx.collector.push(restFn);
+	return head;
 }
 
 // ===== Ensure Type Hooks — unified entry (handles named class/interface,
@@ -2238,6 +2313,7 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		arrayRootEpochs: new HashMap<Type, int32>(),
 		refusedArrayElems: new HashSet<Type>(),
 		jsBackend: jsBackend,
+		dropOwner: null,
 	};
 }
 

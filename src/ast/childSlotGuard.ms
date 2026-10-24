@@ -1,17 +1,8 @@
-// nim-guard: AST child slots — a traversal callback must never see a null child
+// Guard: AST child slots — a traversal callback must never see a null child
 //
-// INVARIANT (Nim): every child slot holds a NODE; absence is an `nkEmpty` node,
-//   never nil. The parser fills both optional slots of an nkIdentDefs
-//   unconditionally — `parser.nim:1078` (no `:` type) and `parser.nim:1086`
-//   (no `=` initializer) each `result.add(newNodeP(nkEmpty, p))` — and sem then
-//   tests the KIND, never nil (`semstmts.nim:970` `if def.kind == nkEmpty`).
-//   That is why Nim's traversals dereference `n[i]` unconditionally.
-// NIM-REF §0 anti-flip heuristic — AST shape is the loosely-tracked structural
-//   zone, so MS's nullable child slot is DIVERGE-INTENTIONAL. The divergence
-//   transfers an obligation: with absence encoded as `null` instead of a
-//   sentinel node, `forEachChild` must normalize it away. Otherwise every one of
-//   its ~20 consumers has to remember the guard, and one forgetting is a
-//   segfault, not a type error.
+// INVARIANT: with absence encoded as `null` instead of a sentinel node, `forEachChild`
+//   must normalize it away. Otherwise every one of its ~20 consumers has to
+//   remember the guard, and one forgetting is a segfault, not a type error.
 //
 // WHAT IT CATCHES: `forEachChild` (src/ast/visitor.ms) handing `cb` a null.
 //   `let v: uin` with no initializer leaves `initializer === null`; the LSP's

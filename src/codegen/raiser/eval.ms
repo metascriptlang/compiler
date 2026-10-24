@@ -7,6 +7,9 @@ import { createUnifyBindings, unifyType } from "../../checker/types";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
 import { ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, isPreludeExport } from "../../checker/context";
+import { lookupSymbol } from "../../checker/symbol";
+import { layoutOf, slotKindsOf } from "./valueCopy";
+import { createCompState } from "./context";
 import { findModule } from "../../module/graph";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join } from "std/fs/path";
@@ -14,11 +17,12 @@ import { platform } from "std/process";
 import { writeStderr } from "std/io";
 import { createTransformContextWithChecker } from "../../transform/context";
 import { transformForRaiser } from "../../transform/raiserLowering";
-import { RaiserValueKind, RaiserValue, RaiserObjectHeap, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapArrayLen, heapArrayGet, raiserConstString, handleIndex } from "../../raiser/value";
+import { RaiserValueKind, RaiserValue, RaiserObjectHeap, heapObjectFieldCount, heapObjectFieldNameAt, heapObjectGetField, heapObjectGetString, heapStringText, heapStringLive, heapArrayLen, heapArrayGet, raiserConstString, handleIndex, handleValue, RaiserClassType } from "../../raiser/value";
 import { unboxFloat } from "../../raiser/marshal";
-import { RaiserInstruction, raiserABC, RaiserOpcode, getSignedAx, branchOffset, regClassLetter, carriesSlot } from "../../raiser/bytecode";
+import { RaiserInstruction, raiserABC, RaiserOpcode, RaiserRegClass, getSignedAx, branchOffset, regClassLetter, carriesSlot } from "../../raiser/bytecode";
 import { disasmFunc, opName } from "../../raiser/disasm";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
+import { ModuleGraph, createModuleGraph } from "../../module/graph";
 import { RaiserVM, execModule, execLoop, createVM, vmReleaseHeaps } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction, makeTestModule } from "../../raiser/module";
 import { RaiserFuncMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
@@ -139,6 +143,15 @@ interface ComptimeEngine {
 
 let _engine: ComptimeEngine = null as unknown as ComptimeEngine;
 let _engineToken: CheckerContext = null as unknown as CheckerContext;
+let _engineGraph: ModuleGraph = null as unknown as ModuleGraph;
+
+// The engine belongs to one compilation, named as the macro cache names it: the module
+// graph, or a context outside any graph. _engineToken follows the call site in between.
+function inEngineCompilation(token: CheckerContext): boolean {
+	if (_engine == null) return false;
+	if (token.moduleGraph != null) return token.moduleGraph == _engineGraph;
+	return _engineGraph == null && token == _engineToken;
+}
 
 function freshEngine(): ComptimeEngine {
 	// Seed with a never-called Halt entry so createVM has a valid entry frame;
@@ -160,8 +173,9 @@ function seedExtensionsOf(mc: CheckerContext, skip: Symbol | null): ExtensionMet
 	if (mc.extensionRegistry == null) return out;
 	if (mc.currentModule != null && mc.currentModule.stdPrelude) return out;
 	const fromPrelude = new HashSet<Symbol>();
-	if (mc.preludeCtx != null && mc.preludeCtx.extensionRegistry != null) {
-		for (const p of mc.preludeCtx.extensionRegistry.methods) {
+	for (const layer of [mc.preludeCtx, mc.globalImportsCtx]) {
+		if (layer == null || layer.extensionRegistry == null) continue;
+		for (const p of layer.extensionRegistry.methods) {
 			if (p.sym != null) fromPrelude.add(p.sym);
 		}
 	}
@@ -294,8 +308,11 @@ export function compileMacroIntoEngine(program: Node, token: CheckerContext, mac
 
 function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnName: string, declCtx: CheckerContext, leadSeeds: Symbol[]): EngineMacroResult {
 	const nested = engineCompiling();
-	if (_engineToken != token && !nested) {
-		_engine = freshEngine();
+	if (!nested) {
+		if (!inEngineCompilation(token)) {
+			_engine = freshEngine();
+			_engineGraph = token.moduleGraph;
+		}
 		_engineToken = token;
 	}
 	const seeds: Symbol[] = [];
@@ -579,6 +596,68 @@ test "engine: an object keeps its class, which instanceof and a checked conversi
 		+ " console.log((x as B).b, (n as B | null) == null); console.log((d as B).b);");
 	assert ctx.error == "invalid object conversion: D is not B", ctx.error;
 	assert ctx.output == "true true false true false true false\n2 true\n", ctx.output;
+}
+
+test "engine: instanceof reads the class display through a 3-level chain, a sibling, an unrelated class and an object literal" {
+	const ctx = evalOrcVM("class A { a: int32 = 1; } class B extends A { } class C extends B { } class D extends A { } class E { } class F extends C { }"
+		+ " const f: A = new F(); const c: A = new C(); const d: A = new D(); const a: A = new A(); const e: unknown = new E(); const lit: unknown = { a: 1 }; const w: unknown = 5;"
+		+ " console.log(f instanceof A, f instanceof B, f instanceof C, f instanceof F, f instanceof D, f instanceof E);"
+		+ " console.log(c instanceof F, c instanceof C, c instanceof B, d instanceof B, d instanceof A, a instanceof D, a instanceof A);"
+		+ " console.log(e instanceof A, e instanceof E, lit instanceof A, lit instanceof E, w instanceof A);");
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == "true true true true false false\nfalse true true false true false true\nfalse true false false false\n", ctx.output;
+}
+
+test "engine: a class's display holds the ids of its ancestors by depth, and a layout without a class holds none" {
+	const ctx = evalOrcVM("class A { a: int32 = 1; } class B extends A { } class C extends B { } const c = new C(); const b = new B(); const o = { a: 1 }; console.log('ok');");
+	assert ctx.error == "", ctx.error;
+	let seenC = false;
+	let seenB = false;
+	for (const obj of ctx.objectHeap.objects) {
+		const t = obj.classType;
+		if (t.name == "C") {
+			seenC = true;
+			assert t.depth == 2 && t.display.length == 3, `${t.depth} ${t.display.length}`;
+		}
+		if (t.name == "B") {
+			seenB = true;
+			assert t.depth == 1 && t.display.length == 2, `${t.depth} ${t.display.length}`;
+		}
+		if (t.name == "") assert t.depth == -1 && t.display.length == 0;
+	}
+	assert seenC && seenB;
+	let c: RaiserClassType | null = null;
+	let b: RaiserClassType | null = null;
+	for (const obj of ctx.objectHeap.objects) {
+		if (obj.classType.name == "C") c = obj.classType;
+		if (obj.classType.name == "B") b = obj.classType;
+	}
+	assert c!.display[0] == b!.display[0] && c!.display[1] == b!.display[1] && c!.display[2] != b!.display[1];
+}
+
+test "engine: a class appended to the live image after its ancestors keeps their ids" {
+	const outerPr = parseSource("class A { a: int32 = 1; } class B extends A { } class C extends B { } class D extends A { }");
+	assert outerPr.ok;
+	const outerCtx = checkProgram(outerPr.value);
+	const first = parseSource("export function __first(): number { const b: A = new B(); return (b instanceof A ? 1 : 0) + (b instanceof C ? 2 : 0); }");
+	assert first.ok;
+	const r1 = compileMacroIntoEngine(first.value, outerCtx, "__first", outerCtx);
+	assert r1.errors.length == 0, r1.errors.length > 0 ? r1.errors[0].message : "";
+	const later = parseSource("export function __later(): number { const c: A = new C(); const d: A = new D(); return (c instanceof A ? 1 : 0) + (c instanceof B ? 2 : 0) + (c instanceof D ? 4 : 0) + (d instanceof B ? 8 : 0) + (d instanceof A ? 16 : 0); }");
+	assert later.ok;
+	const r2 = compileMacroIntoEngine(later.value, outerCtx, "__later", outerCtx);
+	assert r2.errors.length == 0, r2.errors.length > 0 ? r2.errors[0].message : "";
+	const noArgs: RaiserValue[] = [];
+	assert callWithComptimeHostPolicy(r2.vm, r1.funcIdx, noArgs, "").intVal == 1;
+	assert callWithComptimeHostPolicy(r2.vm, r2.funcIdx, noArgs, "").intVal == 19;
+	let b: RaiserClassType | null = null;
+	let c: RaiserClassType | null = null;
+	for (const obj of r2.vm.objectHeap.objects) {
+		if (obj.classType.name == "B") b = obj.classType;
+		if (obj.classType.name == "C") c = obj.classType;
+	}
+	assert b != null && c != null;
+	assert c!.display[0] == b!.display[0] && c!.display[1] == b!.display[1];
 }
 
 test "engine: an as into a narrower literal union stops on a value outside it" {
@@ -1163,6 +1242,223 @@ test "orc: shared ref survives (stored in array)" {
 	assert unboxFloat(vm.exitValue) == 10;
 }
 
+test "untag: an object holds its scalar fields as raw words, a reference as its handle and a union as a value" {
+	const vm = evalOrcVM("class P { n: int32 = 0; f: float64 = 0.0; b: boolean = false; s: string = ''; u: int32 | string | null = null; }"
+		+ " const p = new P(); p.n = 7; p.f = 2.5; p.b = true; p.s = 'x' + p.n.toString(); p.u = 9;"
+		+ " console.log(`${p.n} ${p.f} ${p.b} ${p.s} ${p.u}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "7 2.5 true x7 9\n", vm.output;
+	let found = 0;
+	for (const obj of vm.objectHeap.objects) {
+		if (obj.classType.name != "P" || obj.slots.length != 5) continue;
+		found += 1;
+		const kinds = obj.classType.kinds;
+		assert kinds[0] == RaiserRegClass.Word && kinds[1] == RaiserRegClass.Float && kinds[2] == RaiserRegClass.Bool && kinds[3] == RaiserRegClass.Ref && kinds[4] == RaiserRegClass.Dyn;
+		assert obj.slots[0] == 7 && obj.slots[1] == 4612811918334230528 && obj.slots[2] == 1;
+		assert heapStringText(vm.arrayHeap, handleValue(obj.slots[3])) == "x7";
+		assert obj.values.length == 1 && obj.values[obj.slots[4]].kind == RaiserValueKind.Int && obj.values[obj.slots[4]].intVal == 9;
+	}
+	assert found == 1;
+}
+
+function classNamed(vm: RaiserVM, name: string): RaiserClassType {
+	for (const obj of vm.objectHeap.objects) {
+		if (obj.classType.name == name) return obj.classType;
+	}
+	throw new Error(`internal: no object of class ${name}`);
+}
+
+test "template: an object of word fields starts from the class's zero slots and word mask" {
+	const vm = evalOrcVM("class W { a: int32 = 0; b: int64 = 0; c: boolean = false; d: float64 = 0.0; } const w = new W(); w.b = 5; w.d = 1.5; console.log(`${w.a} ${w.b} ${w.c} ${w.d}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "0 5 false 1.5\n", vm.output;
+	const t = classNamed(vm, "W");
+	assert t.zeroSlots.length == 4 && t.zeroWordSlots == 3 && t.zeroRefSlots == 0 && t.dynCount == 0;
+}
+
+test "template: a mixed object numbers its Dyn slots in order and masks its Word and Ref slots" {
+	const vm = evalOrcVM("class M { n: int32 = 0; u: int32 | string | null = null; s: string = ''; v: int32 | null = null; f: float64 = 0.0; }"
+		+ " const m = new M(); m.u = 'a'; m.v = 3; m.n = 4; m.s = 'q'; console.log(`${m.n} ${m.u} ${m.s} ${m.v} ${m.f}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "4 a q 3 0\n", vm.output;
+	const t = classNamed(vm, "M");
+	assert t.zeroSlots.join(",") == "0,0,0,1,0", t.zeroSlots.join(",");
+	assert t.zeroWordSlots == 1 && t.zeroRefSlots == 4 && t.dynCount == 2, `${t.zeroWordSlots} ${t.zeroRefSlots} ${t.dynCount}`;
+}
+
+test "template: a subclass lays its parent's fields first, and a subclass of a parent with a union starts both from nil" {
+	const vm = evalOrcVM("class A { x: int32 = 1; u: int32 | string | null = null; } class B extends A { y: string = ''; z: int32 | null = null; }"
+		+ " const b = new B(); console.log(`${b.x} ${b.u == null} [${b.y}] ${b.z == null}`); b.z = 8; b.u = 'k'; console.log(`${b.z} ${b.u}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "1 true [] true\n8 k\n", vm.output;
+	const t = classNamed(vm, "B");
+	assert t.fields.join(",") == "x,u,y,z" && t.zeroSlots.join(",") == "0,0,0,1" && t.zeroWordSlots == 1 && t.zeroRefSlots == 4, `${t.fields.join(",")} ${t.zeroSlots.join(",")}`;
+}
+
+test "template: an object reused from the free list holds no field of its last life" {
+	const vm = evalOrcVM("class R { n: int32 = 0; s: string = ''; u: int32 | string | null = null; }"
+		+ " function churn(i: int32): int32 { const r = new R(); const seen = r.n + r.s.length + (r.u == null ? 0 : 1); r.n = i + 1; r.s = 'x' + i.toString(); r.u = i; return seen; }"
+		+ " let total = 0; for (let i = 0; i < 50; i++) total += churn(i); console.log(total);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "0\n", vm.output;
+	assert vm.objectHeap.objects.length < 10, `${vm.objectHeap.objects.length}`;
+}
+
+test "untag: a typed slot opcode reads a slot of another class by name" {
+	const vm = evalOrcVM("function add(x: int32, e: { n: int32 }): int32 { return e.n + x; } function env(n) { return { n: n }; } console.log(add(3, env(5)));");
+	assert vm.error == "", vm.error;
+	assert vm.output == "8\n", vm.output;
+}
+
+test "by-name field cache: one union site reads the same field at different slots of classes with different layouts" {
+	const vm = evalOrcVM("class A { x: int32 = 1; n: int32 = 10; } class B { p: string = ''; q: int32 = 0; n: int32 = 20; } class C { n: int32 = 30; }"
+		+ " function get(e: A | B | C): int32 { return e.n; }"
+		+ " const xs: (A | B | C)[] = [new A(), new B(), new C(), new B(), new A()];"
+		+ " let total = 0; for (let r = 0; r < 3; r++) { for (const e of xs) total += get(e); }"
+		+ " console.log(total);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "270\n", vm.output;
+}
+
+test "by-name field cache: a store through a union lands in each class's own slot, and a field past the layout is found by name" {
+	const vm = evalOrcVM("class A { x: int32 = 1; n: int32 = 10; } class B { p: string = ''; n: int32 = 20; }"
+		+ " function bump(e: A | B): void { e.n = e.n + 1; }"
+		+ " const a = new A(); const b = new B(); for (let i = 0; i < 3; i++) { bump(a); bump(b); }"
+		+ " function host(env: { v: int32 }): int32 { return env.v; } function mk(v: int32) { return { v: v }; }"
+		+ " let h = 0; for (let i = 0; i < 4; i++) h += host(mk(i));"
+		+ " console.log(`${a.x} ${a.n} ${b.n} ${h}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "1 13 23 6\n", vm.output;
+}
+
+test "by-name field cache: a union receiver and an object with a field added after its layout" {
+	const vm = evalOrcVM("class A { n: int32 = 1; } class B { m: int32 = 0; n: int32 = 2; }"
+		+ " function pick(u: A | B): int32 { return u.n; }"
+		+ " let t = 0; for (let i = 0; i < 4; i++) { t += pick(i % 2 == 0 ? new A() : new B()); }"
+		+ " function late(a: { k: int32 }, b: { k: int32 }): int32 { return a.k + b.k; }"
+		+ " console.log(`${t} ${late({ k: 1 }, { k: 2 })}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "6 3\n", vm.output;
+}
+
+test "ledger: a reference field and a union field count what they hold through stores, overwrites and self-stores" {
+	const vm = evalOrcVM("class N { s: string = ''; u: int32 | string | null = null; next: N | null = null; }"
+		+ " const a = new N(); for (let i = 0; i < 3; i++) { a.s = 'v' + i.toString(); a.u = 'w' + i.toString(); a.u = i; a.u = 'z' + i.toString(); }"
+		+ " a.s = a.s; a.u = a.u; const b = new N(); b.s = 'b'; b.next = a; a.next = b; a.next = a.next; b.next = null;"
+		+ " console.log(`${a.s} ${a.u} ${a.next!.s} ${b.next == null}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "v2 z2 b true\n", vm.output;
+}
+
+test "orc: a cycle through a reference field and one through a union field are collected" {
+	const vm = evalOrcVM("class C { next: C | null = null; other: C | int32 | null = null; }"
+		+ " function ring(): void { const a = new C(); const b = new C(); a.next = b; b.next = a; const c = new C(); const d = new C(); c.other = d; d.other = c; }"
+		+ " for (let i = 0; i < 300; i++) ring(); console.log('ok');");
+	assert vm.error == "", vm.error;
+	assert vm.output == "ok\n", vm.output;
+	assert vm.objectHeap.objects.length < 600, `${vm.objectHeap.objects.length}`;
+	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
+}
+
+test "orc: a ring through one of two array fields frees each array once" {
+	const vm = evalOrcVM("class C { kids: C[] = []; mixed: (C | int32 | null)[] = []; }"
+		+ " function ring(): void { const a = new C(); const b = new C(); a.kids.push(b); b.kids.push(a);"
+		+ " const c = new C(); const d = new C(); c.mixed.push(d); c.mixed.push(5); d.mixed.push(c); d.mixed.push(null); }"
+		+ " for (let i = 0; i < 300; i++) ring(); console.log('ok');");
+	assert vm.error == "", vm.error;
+	assert vm.output == "ok\n", vm.output;
+	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
+	assert vm.arrayHeap.freeList.length <= vm.arrayHeap.arrays.length, `${vm.arrayHeap.freeList.length} free of ${vm.arrayHeap.arrays.length}`;
+}
+
+test "orc: a ring through three plain array fields frees each array once" {
+	const vm = evalOrcVM("class C { kids: C[] = []; more: C[] = []; last: C[] = []; }"
+		+ " function ring(): void { const a = new C(); const b = new C(); a.kids.push(b); b.more.push(a); b.last.push(b); }"
+		+ " for (let i = 0; i < 300; i++) ring(); console.log('ok');");
+	assert vm.error == "", vm.error;
+	assert vm.output == "ok\n", vm.output;
+	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
+	assert vm.arrayHeap.freeList.length <= vm.arrayHeap.arrays.length, `${vm.arrayHeap.freeList.length} free of ${vm.arrayHeap.arrays.length}`;
+}
+
+test "untag: an array holds scalar elements as raw words, references as handles and a union as values" {
+	const vm = evalOrcVM("const n: int32[] = [1, 2, 3]; const f: float64[] = [1.5, 2.5]; const b: boolean[] = [true, false]; const s: string[] = ['x' + n.length.toString()]; const u: (int32 | string | null)[] = [7, 'y', null];"
+		+ " n.push(4); f[1] = 3.5; const sl = n[1..3];"
+		+ " console.log(`${n[3]} ${f[1]} ${b[0]} ${s[0]} ${u[0]} ${u[1]} ${u[2]} ${sl.length} ${sl[0]} ${sl[1]}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "4 3.5 true x3 7 y null 2 2 3\n", vm.output;
+	let words = 0;
+	let floats = 0;
+	let bools = 0;
+	let refs = 0;
+	let dyns = 0;
+	for (const a of vm.arrayHeap.arrays) {
+		if (a.rc == 0) continue;
+		if (a.viewOff >= 0) {
+			assert a.elemClass == RaiserRegClass.Dyn && a.items.length == 1 && a.words.length == 0;
+		} else if (a.elemClass == RaiserRegClass.Word && a.words.length == 4) {
+			words += 1;
+			assert a.words[0] == 1 && a.words[3] == 4 && a.items.length == 0;
+		} else if (a.elemClass == RaiserRegClass.Float && a.words.length == 2) {
+			floats += 1;
+			assert a.words[0] == 4609434218613702656 && a.words[1] == 4615063718147915776;
+		} else if (a.elemClass == RaiserRegClass.Bool && a.words.length == 2) {
+			bools += 1;
+			assert a.words[0] == 1 && a.words[1] == 0;
+		} else if (a.elemClass == RaiserRegClass.Ref && a.words.length == 1) {
+			refs += 1;
+			assert heapStringText(vm.arrayHeap, handleValue(a.words[0])) == "x3" && a.items.length == 0;
+		} else if (a.elemClass == RaiserRegClass.Dyn && a.items.length == 3) {
+			dyns += 1;
+			assert a.items[0].kind == RaiserValueKind.Int && a.items[1].kind == RaiserValueKind.String && a.items[2].kind == RaiserValueKind.Nil && a.words.length == 0;
+		}
+	}
+	assert words == 1 && floats == 1 && bools == 1 && refs == 1 && dyns == 1, `${words} ${floats} ${bools} ${refs} ${dyns}`;
+}
+
+test "untag: a store the element class cannot hold through a wider alias stops the run naming the class" {
+	const vm = evalOrcVM("const n: int32[] = [1, 2]; const wide: (int32 | string)[] = n as (int32 | string)[]; wide.push('late'); console.log('unreachable');");
+	assert vm.error.indexOf("an array of W elements got a value of kind") >= 0, vm.error;
+}
+
+test "ledger: reference elements count what they hold through push, store, self-store, truncation, a view and a copy" {
+	const vm = evalOrcVM("class N { s: string = ''; }"
+		+ " const a: string[] = []; for (let i = 0; i < 4; i++) a.push('v' + i.toString());"
+		+ " a[1] = 'w' + a.length.toString(); a[0] = a[0]; a[2] = a[3]; const v = a[1..3]; const vs = `${v[0]} ${v[1]}`; a.setLength(2);"
+		+ " const objs: N[] = []; for (let i = 0; i < 3; i++) { const n = new N(); n.s = 'o' + i.toString(); objs.push(n); }"
+		+ " objs[0] = objs[2]; const keep = objs[1]; const copy = [...a, 'tail'];"
+		+ " console.log(`${a.length} ${a[1]} ${vs} ${objs[0].s} ${keep.s} ${copy.length} ${copy[2]}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "2 w4 w4 v3 o2 o1 3 tail\n", vm.output;
+}
+
+test "orc: a cycle through a reference array and one through a union array are collected, and a word array is not traced" {
+	const vm = evalOrcVM("class C { kids: C[] = []; }"
+		+ " const lookalike: int64[] = [3, 4, 11, 12, 19, 20, 27, 28];"
+		+ " class M { mixed: (M | int32 | null)[] = []; } function ring(): void { const a = new C(); const b = new C(); a.kids.push(b); b.kids.push(a); const c = new M(); const d = new M(); c.mixed.push(d); c.mixed.push(5); d.mixed.push(c); d.mixed.push(null); }"
+		+ " for (let i = 0; i < 300; i++) ring(); console.log(`ok ${lookalike[3]}`);");
+	assert vm.error == "", vm.error;
+	assert vm.output == "ok 12\n", vm.output;
+	assert vm.objectHeap.objects.length < 600, `${vm.objectHeap.objects.length}`;
+	assert vm.objectHeap.objects.length - vm.objectHeap.freeList.length == 0, `${vm.objectHeap.objects.length - vm.objectHeap.freeList.length}`;
+	let live = 0;
+	for (let i = 0; i < vm.arrayHeap.arrays.length; i += 1) {
+		if (vm.arrayHeap.arrays[i].rc > 0) live += 1;
+	}
+	assert live == 1, `${live}`;
+}
+
+test "untag: the indexed fast paths keep length, bounds, view and reference counts exact in every element class" {
+	const vm = evalOrcVM("const w: int64[] = []; const f: float64[] = []; const b: boolean[] = []; const s: string[] = [];"
+		+ " for (let i = 0; i < 5; i++) { w.push(i * 3); f.push(i + 0.5); b.push(i % 2 == 0); s.push('s' + i.toString()); }"
+		+ " let sum = 0; let fsum = 0.0; let t = 0; for (let i = 0; i < w.length; i++) { w[i] = w[i] + 1; f[i] = f[i] * 2.0; b[i] = !b[i]; s[i] = s[i] + '!'; sum += w[i]; fsum += f[i]; if (b[i]) t++; }"
+		+ " s[0] = s[4]; s[4] = s[4]; const v = w[1..4];"
+		+ " console.log(`${w.length} ${sum} ${fsum} ${t} ${s[0]} ${s[3]} ${v.length} ${v[2]} ${s.length}`);"
+		+ " console.log(w[5]);");
+	assert vm.output == "5 35 25 2 s4! s3! 3 10 5\n", vm.output;
+	assert vm.error.indexOf("array index out of bounds: 5 (length 5)") >= 0, vm.error;
+}
+
 // --- Phase 3 Integration Tests ---
 // These tests verify features that require transforms to work.
 test "match expression returns value" {
@@ -1384,24 +1680,34 @@ test "a function reads the global a module-level destructuring declares" {
 }
 
 test "hand-written closure pair (no transforms)" {
-	const ctx = evalRaiserDirect("function lifted(_envP: unknown): number { return _envP.x; } const x = 99; const f = { fn: lifted, env: { x: x } }; return f();");
+	const ctx = evalRaiserDirect("function lifted(_envP: unknown): number { return _envP.x; } const x = 99; const f = { fn: lifted as unknown, env: { x: x } }; return f();");
 	assert ctx.lastResult.intVal == 99;
 }
 
 test "closure pair nested fn (no transforms)" {
-	const ctx = evalRaiserDirect("function liftedFn(_envP: unknown): number { return _envP.x; } function make(): int32 { const x = 42; const f = { fn: liftedFn, env: { x: x } }; return f(); } return make();");
+	const ctx = evalRaiserDirect("function liftedFn(_envP: unknown): number { return _envP.x; } function make(): int32 { const x = 42; const f = { fn: liftedFn as unknown, env: { x: x } }; return f(); } return make();");
 	assert ctx.lastResult.intVal == 42;
 }
 
 test "closure pair multi-field env (no transforms)" {
-	const ctx = evalRaiserDirect("function liftedFn(_envP: unknown): number { return _envP.a + _envP.b; } const a = 10; const b = 32; const f = { fn: liftedFn, env: { a: a, b: b } }; return f();");
+	const ctx = evalRaiserDirect("function liftedFn(_envP: unknown): number { return _envP.a + _envP.b; } const a = 10; const b = 32; const f = { fn: liftedFn as unknown, env: { a: a, b: b } }; return f();");
 	assert ctx.lastResult.intVal == 42;
 }
 
 test "engine: a call through a closure is one CallClosure that reads the pair itself" {
 	const f = compiledFunc("function apply(f: (x: int64) => int64, n: int64): int64 { return f(n); } console.log(`${apply((x: int64): int64 => x + 1, 2)}`);", "apply");
 	const text = disasmFunc(f);
-	assert countNamed(f, "CallClosure") == 1 && countNamed(f, "CallIndirect") == 0 && countNamed(f, "IsKind") == 0 && !text.includes("LoadSlot"), text;
+	assert countNamed(f, "CallClosureTyped") == 1 && countNamed(f, "CallClosure") == 0 && countNamed(f, "CallIndirect") == 0 && countNamed(f, "IsKind") == 0 && !text.includes("LoadSlot"), text;
+}
+
+test "engine: a call through a function-typed value takes the typed site for any parameter class, with and without an env" {
+	const code = "class P { v: int64 = 4; } function twice(f: (p: P, y: float64, s: string) => string, p: P): string { return f(p, 1.5, 'a') + f(p, 2.5, 'b'); }"
+		+ " const k = 7; console.log(twice((p: P, y: float64, s: string): string => s + `${p.v + k} ${y}`, new P()) + twice((p: P, y: float64, s: string): string => s + `${p.v} ${y}`, new P()));";
+	const f = compiledFunc(code, "twice");
+	assert countNamed(f, "CallClosureTyped") == 2 && countNamed(f, "CallClosure") == 0, disasmFunc(f);
+	const vm = evalOrcVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "a11 1.5b11 2.5a4 1.5b4 2.5\n", vm.output;
 }
 
 test "a closure call passes its env or none, reads its callee before the arguments, and lets a throw through" {
@@ -1475,6 +1781,29 @@ function __macroBody(t: string): number {
 		if (e.message.indexOf("noSuchMemberAnywhere", 0) >= 0) found = true;
 	}
 	assert found;
+}
+
+test "engine: macros called from two modules of one graph share one engine" {
+	const outerPr = parseSource("export function helper(x: number): number { return x; }");
+	assert outerPr.ok;
+	const first = checkProgram(outerPr.value);
+	const otherPr = parseSource("export const other = 1;");
+	assert otherPr.ok;
+	const second = checkProgram(otherPr.value);
+	const graph = createModuleGraph();
+	first.moduleGraph = graph;
+	second.moduleGraph = graph;
+	const wrapperA = parseSource("function __macroBody(): number { return helper(1); }");
+	assert wrapperA.ok;
+	const a = compileMacroIntoEngine(wrapperA.value, first, "__macroBody", first);
+	assert a.errors.length == 0;
+	const engine = _engine;
+	const wrapperB = parseSource("function __macroBody(): number { return helper(2); }");
+	assert wrapperB.ok;
+	const b = compileMacroIntoEngine(wrapperB.value, second, "__macroBody", first);
+	assert b.errors.length == 0;
+	assert _engine == engine;
+	assert b.vm == a.vm;
 }
 
 test "engine: a slice is a view that writes through to its array" {
@@ -1648,6 +1977,40 @@ test "engine: a field of a receiver whose type fixes its layout is read and writ
 	assert slots.join(",") == "1,1,0", `${slots.join(",")}\n${text}`;
 }
 
+test "engine: a macro wire class has no layout, so its fields are read by name, and a user class keeps its own" {
+	const pr = parseSource("class Wire { kind: int32 = 0; name: string = ''; } class Plain { kind: int32 = 0; } export interface Opaque { kind: int32; }");
+	assert pr.ok;
+	const ctx = checkProgram(pr.value);
+	const wire = lookupSymbol(ctx.table, "Wire");
+	const plain = lookupSymbol(ctx.table, "Plain");
+	assert layoutOf(wire.symbolType).join(",") == "kind,name" && layoutOf(plain.symbolType).join(",") == "kind";
+	wire.builtinKind = "MetaNode";
+	assert layoutOf(wire.symbolType).length == 0 && slotKindsOf(createCompState(), wire.symbolType).length == 0;
+	assert layoutOf(plain.symbolType).join(",") == "kind";
+	wire.builtinKind = "";
+	wire.modulePath = "std/meta/node.ms";
+	assert layoutOf(wire.symbolType).length == 0;
+	const opaque = lookupSymbol(ctx.table, "Opaque");
+	assert layoutOf(opaque.symbolType).join(",") == "kind";
+	opaque.modulePath = "std/meta/node.ms";
+	assert layoutOf(opaque.symbolType).length == 0;
+}
+
+test "engine: concat of two string operands uses the typed opcode and a mixed one the Dyn opcode" {
+	const code = "function both(a: string, b: string): string { return a + b; } function mixed(a: string, n: int64): string { return a + n; }"
+		+ " class O { n: int64 = 7; } const o = new O(); let s = 'ab'; for (let i = 0; i < 5; i++) { s = s + s; }"
+		+ " console.log(`${both('x', 'y')} ${mixed('a', 1)} ${'a' + 1} ${s.length} ${s.slice(0, 4)} t${o.n}u`);";
+	const both = compiledFunc(code, "both");
+	assert countNamed(both, "ConcatStrR") == 1 && countNamed(both, "ConcatStr") == 0, disasmFunc(both);
+	const mixed = compiledFunc(code, "mixed");
+	assert countNamed(mixed, "ConcatStr") == 1 && countNamed(mixed, "ConcatStrR") == 0, disasmFunc(mixed);
+	for (const gc of ["orc", "arena"]) {
+		const vm = execModule(compileForOrc(code), gc);
+		assert vm.error == "", vm.error;
+		assert vm.output == "xy a1 a1 64 abab t7u\n", vm.output;
+	}
+}
+
 test "a slot read after the object table grew sees the new objects" {
 	const vm = evalOrcVM("class P { x: int64 = 0; next: P | null = null; } function run(): int64 { let head = new P(); let t: int64 = 0; for (let i: int64 = 1; i <= 300; i++) { const p = new P(); p.x = i; p.next = head; head = p; t = t + head.x; } return t; } console.log(`${run()}`);");
 	assert vm.error == "", vm.error;
@@ -1664,6 +2027,31 @@ test "engine: a slot of a word or ref register is read and written by the typed 
 	const vm = evalOrcVM(code);
 	assert vm.error == "", vm.error;
 	assert vm.output == "5 b! 1.5 1;10 b! 2.5 1;15 b! 3.5 1;\n", vm.output;
+}
+
+test "engine: a struct is copied into a held struct and zeroed through typed slots, nested and inside an array" {
+	const decl = "struct V { x: int64; y: int64; z: int64; } struct B { a: V; n: int64; }";
+	const flat = decl + " function f(): string { let p: V = { x: 1, y: 2, z: 3 }; let q: V = { x: 0, y: 0, z: 0 }; q = p; p.x = 9; let zz: V; return `${q.x} ${q.y} ${q.z} ${p.x} ${zz.x}`; } console.log(f());";
+	const nested = decl + " function f(): string { let b: B = { a: { x: 1, y: 2, z: 3 }, n: 4 }; let c: B = { a: { x: 0, y: 0, z: 0 }, n: 0 }; c = b; b.a.x = 9; const arr: V[] = [{ x: 5, y: 6, z: 7 }]; let w: V = { x: 0, y: 0, z: 0 }; arr[0] = w; w.y = 1; let zb: B; return `${c.a.x} ${c.n} ${b.a.x} ${arr[0].x} ${arr[0].y} ${zb.a.z} ${zb.n}`; } console.log(f());";
+	const out = ["1 2 3 9 0\n", "1 4 9 0 0 0 0\n"];
+	const sources = [flat, nested];
+	for (let i = 0; i < sources.length; i += 1) {
+		const f = compiledFunc(sources[i], "f");
+		assert countNamed(f, "LoadField") == 0 && countNamed(f, "StoreField") == 0, disasmFunc(f);
+		assert countNamed(f, "StoreSlotW") + countNamed(f, "LoadSlotW") > 0, disasmFunc(f);
+		const vm = evalOrcVM(sources[i]);
+		assert vm.error == "", vm.error;
+		assert vm.output == out[i], vm.output;
+	}
+}
+
+function backBranchSpan(f: RaiserFunction): number {
+	for (let i = 0; i < f.code.length; i = i + 1) {
+		const inst = f.code[i];
+		if (inst.op == RaiserOpcode.Jump && getSignedAx(inst) < 0) return -getSignedAx(inst);
+		if (opName(inst.op).startsWith("Br") && branchOffset(inst.c) < 0) return -(branchOffset(inst.c) as number);
+	}
+	return 0;
 }
 
 function backJumpSpan(f: RaiserFunction): number {
@@ -1693,7 +2081,6 @@ test "engine: a counted for loop steps, counts and tests its bound in one instru
 	const imm = compiledFunc("function f(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 10; ++i) { s += i; } return s; } console.log(`${f()}`);", "f");
 	assert countNamed(imm, "ForLtI64Imm") == 1 && countNamed(imm, "Jump") == 0, disasmFunc(imm);
 	const kept = [
-		"function f(): int32 { let s: int32 = 0; for (let i: int32 = 0; i < 10; i++) { s += i; } return s; } console.log(`${f()}`);",
 		"function f(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 10; i += 2) { s += i; } return s; } console.log(`${f()}`);",
 		"function f(): int64 { let s: int64 = 0; for (let i: int64 = 0; i <= 10; i++) { s += i; } return s; } console.log(`${f()}`);",
 		"function f(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 10; s++) { i++; } return s; } console.log(`${f()}`);",
@@ -1703,8 +2090,10 @@ test "engine: a counted for loop steps, counts and tests its bound in one instru
 	];
 	for (const program of kept) {
 		const f = compiledFunc(program, "f");
-		assert countNamed(f, "ForLtI64") + countNamed(f, "ForLtI64Imm") == 0 && backJumpSpan(f) > 0, disasmFunc(f);
+		assert countNamed(f, "ForLtI64") + countNamed(f, "ForLtI64Imm") == 0 && backBranchSpan(f) > 0, disasmFunc(f);
 	}
+	const narrow = compiledFunc("function f(): int32 { let s: int32 = 0; for (let i: int32 = 0; i < 10; i++) { s += i; } return s; } console.log(`${f()}`);", "f");
+	assert countNamed(narrow, "ForLtI64Imm") == 1 && countNamed(narrow, "NarrowS") == 1, disasmFunc(narrow);
 	const ctx = evalOrcVM("function sum(n: int64): int64 { let s: int64 = 0; for (let i: int64 = 0; i < n; i++) { s += i; } return s; }"
 		+ " function grow(): int64 { let n: int64 = 3; let s: int64 = 0; for (let i: int64 = 0; i < n; i++) { if (i == 1) n = 6; s += i; } return s; }"
 		+ " function skip(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 10; i++) { if (i % 2 == 0) continue; if (i > 7) break; s += i; } return s; }"
@@ -1728,6 +2117,62 @@ test "engine: a counted for loop steps, counts and tests its bound in one instru
 	short.loopLimit = 99;
 	execLoop(short);
 	assert short.error.indexOf("too many iterations (limit 99)") >= 0 && short.loopCount == 100 && short.output == "", short.error;
+}
+
+test "engine: an int32 counter below an int32 bound steps without a range check, any other step keeps it" {
+	const bounded = compiledFunc("function f(a: int32[]): int64 { let s: int64 = 0; for (let i: int32 = 0; i < a.length; i = i + 1) { s += a[i]; } return s; } console.log(`${f([1, 2])}`);", "f");
+	assert countNamed(bounded, "NarrowS") == 0 && countNamed(bounded, "Jump") == 0, disasmFunc(bounded);
+	const post = compiledFunc("function f(n: int32): int64 { let s: int64 = 0; for (let i: int32 = 0; i < n; i++) { s += i; } return s; } console.log(`${f(3)}`);", "f");
+	assert countNamed(post, "NarrowS") == 0, disasmFunc(post);
+	const loose = compiledFunc("function f(n: int32): int64 { let s: int64 = 0; let i: int32 = 0; while (i < n) { s += 1; i++; } return s; } console.log(`${f(5)}`);", "f");
+	assert countNamed(loose, "NarrowS") == 0, disasmFunc(loose);
+	const kept = [
+		"function f(n: int32): int64 { let s: int64 = 0; for (let i: int32 = 0; i < n; i++) { if (i == 1) i = 2147483647; s += 1; } return s; } console.log(`${f(5)}`);",
+		"function f(n: int64): int64 { let s: int64 = 0; for (let i: int32 = 0; i < n; i++) { s += 1; } return s; } console.log(`${f(5)}`);",
+		"function f(n: int32): int64 { let s: int64 = 0; for (let i: int32 = 0; i <= n; i++) { s += 1; } return s; } console.log(`${f(5)}`);",
+		"function f(n: uint32): int64 { let s: int64 = 0; for (let i: int32 = 0; i < n; i++) { s += 1; } return s; } console.log(`${f(5)}`);",
+		"function f(n: int32): int64 { let s: int64 = 0; for (let i: int32 = 0; i < n; i += 2) { s += 1; } return s; } console.log(`${f(5)}`);",
+	];
+	for (const program of kept) {
+		const f = compiledFunc(program, "f");
+		assert countNamed(f, "NarrowS") >= 1, disasmFunc(f);
+	}
+	const loops = evalOrcVM("function sum(a: int32[]): int64 { let s: int64 = 0; for (let i: int32 = 0; i < a.length; i++) { s += a[i]; } return s; }"
+		+ " function wide(a: int64[]): int64 { let s: int64 = 0; for (let i: int64 = 0; i < a.length; i++) { s += a[i]; } return s; }"
+		+ " function each(a: int32[]): int64 { let s: int64 = 0; for (const x of a) { s += x; } return s; }"
+		+ " function eachWide(a: int64[]): int64 { let s: int64 = 0; for (const x of a) { s += x; } return s; }"
+		+ " console.log(`${sum([1, 2, 3])} ${sum([])} ${wide([4, 5])} ${wide([])} ${each([7, 8])} ${each([])} ${eachWide([9, 10, 11])} ${eachWide([])}`);");
+	assert loops.error == "" && loops.output == "6 0 9 0 15 0 30 0\n", `${loops.error} ${loops.output}`;
+	const jump = evalOrcVM("function f(n: int32): int64 { let s: int64 = 0; for (let i: int32 = 0; i < n; i++) { if (i == 1) i = 2147483647; s += 1; } return s; } console.log(`${f(5)}`);");
+	assert jump.error.indexOf("over- or underflow") >= 0 && jump.output == "", jump.error;
+	const wrap = evalOrcVM("function f(): int64 { let s: int64 = 0; for (let i: int32 = 2147483646; i <= 2147483647; i++) { s += 1; } return s; } console.log(`${f()}`);");
+	assert wrap.error.indexOf("over- or underflow") >= 0, wrap.error;
+	const grown = evalOrcVM("function f(a: int64[]): int64 { let s: int64 = 0; for (const x of a) { s += x; if (x == 1) a.push(9); } return s; } console.log(`${f([1, 2])}`);");
+	assert grown.error.indexOf("the length of the array changed while iterating over it") >= 0 && grown.output == "", grown.error;
+	const grownByIndex = evalOrcVM("function f(a: int32[]): int64 { let s: int64 = 0; for (let i: int32 = 0; i < a.length; i++) { s += a[i]; if (i < 3) a.push(10); } return s; } console.log(`${f([1])}`);");
+	assert grownByIndex.error == "" && grownByIndex.output == "31\n", `${grownByIndex.error} ${grownByIndex.output}`;
+}
+
+test "engine: a widening integer conversion emits no instruction, a narrowing one keeps its range check" {
+	const widen = compiledFunc("function f(a: int32, b: uint8, c: uint32, d: int16): int64 { const x: int64 = a; const y: int64 = b; const z: int64 = c; const w: int32 = d; return x + y + z + w; } console.log(`${f(-1, 2, 3, 4)}`);", "f");
+	assert countNamed(widen, "Conv") == 0, disasmFunc(widen);
+	const kept = [
+		"function f(a: int64): int32 { return a as int32; } console.log(`${f(1)}`);",
+		"function f(a: int32): uint32 { return a as uint32; } console.log(`${f(1)}`);",
+		"function f(a: uint32): int32 { return a as int32; } console.log(`${f(1)}`);",
+		"function f(a: uint64): int64 { return a as int64; } console.log(`${f(1)}`);",
+		"function f(a: int32): float64 { return a as float64; } console.log(`${f(1)}`);",
+	];
+	for (const program of kept) {
+		const f = compiledFunc(program, "f");
+		assert countNamed(f, "Conv") >= 1, disasmFunc(f);
+	}
+	const ok = evalOrcVM("function f(a: int32, b: uint8, c: uint32, d: int16): int64 { const x: int64 = a; const y: int64 = b; const z: int64 = c; const w: int32 = d; return x + y + z + w; } console.log(`${f(-1, 2, 4000000000, 4)}`);");
+	assert ok.error == "" && ok.output == "4000000005\n", `${ok.error} ${ok.output}`;
+	const narrow = evalOrcVM("function f(a: int64): int32 { return a as int32; } console.log(`${f(5000000000)}`);");
+	assert narrow.error.indexOf("not in range") >= 0 && narrow.output == "", narrow.error;
+	const negative = evalOrcVM("function f(a: uint32): int32 { return a as int32; } console.log(`${f(4000000000)}`);");
+	assert negative.error.indexOf("not in range") >= 0 && negative.output == "", negative.error;
 }
 
 test "engine: an if on a comparison emits no bool constant and no compare against zero" {
@@ -1972,7 +2417,7 @@ test "engine: fib, a counting loop and a while on zero use the immediate forms" 
 	assert countNamed(run, "LoadConst") == 1 && countNamed(run, "BrGeI64") == 1, disasmFunc(run);
 	const wh = compiledFunc("function w(x: int64): int64 { let n: int64 = 0; while (x != 0) { x = x - 1; n++; } return n; } console.log(`${w(3)}`);", "w");
 	assert countNamed(wh, "LoadConst") == 0 && countNamed(wh, "BrEqI64Imm") == 1 && countNamed(wh, "SubI64Imm") == 1 && countNamed(wh, "AddI64Imm") == 1, disasmFunc(wh);
-	assert backJumpSpan(wh) == 4, disasmFunc(wh);
+	assert countNamed(wh, "Jump") == 0 && backBranchSpan(wh) == 3, disasmFunc(wh);
 	const ctx = evalOrcVM("function fib(n: int64): int64 { if (n < 2) return n; return fib(n - 1) + fib(n - 2); }"
 		+ " function w(x: int64): int64 { let n: int64 = 0; while (x != 0) { x = x - 1; n++; } return n; } console.log(`${fib(15)} ${w(7)}`);");
 	assert ctx.error == "" && ctx.output == "610 7\n", `${ctx.error} ${ctx.output}`;
@@ -2349,4 +2794,12 @@ test "engine: a ref result leaves its callee once, whether the callee made it, w
 	const vm = evalOrcVM(code);
 	assert vm.error == "", vm.error;
 	assert vm.output == "26 n0n1n2\n", vm.output;
+}
+
+test "engine: a host call keeps its argument order and takes one register twice" {
+	const code = "function probe(a: string, b: string): string { return `${a.indexOf(b)} ${b.indexOf(a)} ${a.indexOf(a)} ${b.indexOf(b)}`; }"
+		+ " console.log(probe(\"xxabc\", \"abc\")); console.log(probe(\"q\", \"q\"));";
+	const vm = evalOrcVM(code);
+	assert vm.error == "", vm.error;
+	assert vm.output == "2 -1 0 0\n0 0 0 0\n", vm.output;
 }

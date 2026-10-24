@@ -14,7 +14,7 @@
 // version merging because they're identified by (alias, url, commit),
 // not by canonical package name. See docs/PACKAGE.md for design rationale.
 
-import { compareVersionStrings } from "./version";
+import { parseVersion, compareVersionStrings, VersionError } from "./version";
 
 // --- Types ---
 
@@ -43,7 +43,10 @@ function isGitSource(version: string): boolean {
 // Resolve the build list from root deps using MVS.
 // rootDeps: the project's direct dependencies (from build.ms).
 // loadDeps: callback to get a package's transitive deps (from lockfile or registry).
-export function mvsResolve(rootDeps: DepEntry[], loadDeps: LoadDepsFn): BuildListEntry[] {
+export function mvsResolve(
+	rootDeps: DepEntry[],
+	loadDeps: LoadDepsFn,
+): Result<BuildListEntry[], VersionError> {
 	// required: name → highest version seen so far
 	const reqNames: string[] = [];
 	const reqVersions: string[] = [];
@@ -92,6 +95,7 @@ export function mvsResolve(rootDeps: DepEntry[], loadDeps: LoadDepsFn): BuildLis
 		}
 
 		// Registry source: merge via max(all minimums)
+		const _valid = try parseVersion(ver);
 		let existingIdx = -1;
 		let ei = 0;
 		while (ei < reqNames.length) {
@@ -101,8 +105,7 @@ export function mvsResolve(rootDeps: DepEntry[], loadDeps: LoadDepsFn): BuildLis
 
 		if (existingIdx >= 0) {
 			// Already have this package — keep the higher version
-			const cmp = compareVersionStrings(ver, reqVersions[existingIdx]);
-			if (cmp == -2) continue; // invalid version string — skip silently (validated at extractDeps time)
+			const cmp = try compareVersionStrings(ver, reqVersions[existingIdx]);
 			if (cmp <= 0) continue;   // existing is same or higher, skip
 			reqVersions[existingIdx] = ver;
 		} else {
@@ -141,7 +144,7 @@ export function mvsResolve(rootDeps: DepEntry[], loadDeps: LoadDepsFn): BuildLis
 		result.push({ name: gitNames[gbi], version: gitVersions[gbi] });
 		gbi = gbi + 1;
 	}
-	return result;
+	return Result.ok(result);
 }
 
 // --- Helpers ---
@@ -166,15 +169,21 @@ function emptyLoader(name: string, version: string): DepEntry[] {
 	return empty;
 }
 
+function resolved(root: DepEntry[], loader: LoadDepsFn): BuildListEntry[] {
+	const r = mvsResolve(root, loader);
+	if (r.ok) return r.value;
+	return [];
+}
+
 test "mvs empty root" {
 	const root: DepEntry[] = [];
-	const list = mvsResolve(root, emptyLoader);
-	assert list.length == 0;
+	assert mvsResolve(root, emptyLoader).ok;
+	assert resolved(root, emptyLoader).length == 0;
 }
 
 test "mvs single dep" {
 	const root: DepEntry[] = [{ name: "foo", version: "1.0.0" }];
-	const list = mvsResolve(root, emptyLoader);
+	const list = resolved(root, emptyLoader);
 	assert list.length == 1;
 	assert list[0].name == "foo";
 	assert list[0].version == "1.0.0";
@@ -185,7 +194,7 @@ test "mvs two independent deps" {
 		{ name: "foo", version: "1.0.0" },
 		{ name: "bar", version: "2.0.0" },
 	];
-	const list = mvsResolve(root, emptyLoader);
+	const list = resolved(root, emptyLoader);
 	assert list.length == 2;
 	assert findInBuildList(list, "foo") == "1.0.0";
 	assert findInBuildList(list, "bar") == "2.0.0";
@@ -220,7 +229,7 @@ test "mvs diamond picks max" {
 		{ name: "foo", version: "1.0.0" },
 		{ name: "bar", version: "1.0.0" },
 	];
-	const list = mvsResolve(root, diamondLoader);
+	const list = resolved(root, diamondLoader);
 	assert findInBuildList(list, "foo") == "1.2.0";
 	assert findInBuildList(list, "bar") == "1.0.0";
 }
@@ -230,7 +239,7 @@ test "mvs transitive bump" {
 		{ name: "A", version: "1.0.0" },
 		{ name: "C", version: "1.0.0" },
 	];
-	const list = mvsResolve(root, transitiveLoader);
+	const list = resolved(root, transitiveLoader);
 	assert findInBuildList(list, "B") == "2.0.0";
 }
 
@@ -239,7 +248,7 @@ test "mvs git source pass-through" {
 		{ name: "foo", version: "1.0.0" },
 		{ name: "my-fork", version: "git:github.com/me/foo@v1.0.0" },
 	];
-	const list = mvsResolve(root, emptyLoader);
+	const list = resolved(root, emptyLoader);
 	assert list.length == 2;
 	assert findInBuildList(list, "foo") == "1.0.0";
 	assert findInBuildList(list, "my-fork") == "git:github.com/me/foo@v1.0.0";
@@ -251,7 +260,7 @@ test "mvs git source not merged with registry" {
 		{ name: "foo", version: "1.0.0" },
 		{ name: "my-fork", version: "git:github.com/acme/foo@v2.0.0" },
 	];
-	const list = mvsResolve(root, emptyLoader);
+	const list = resolved(root, emptyLoader);
 	assert findInBuildList(list, "foo") == "1.0.0";
 	assert findInBuildList(list, "my-fork") == "git:github.com/acme/foo@v2.0.0";
 }
@@ -286,7 +295,7 @@ function escalatingLoader(name: string, version: string): DepEntry[] {
 
 test "mvs deep chain" {
 	const root: DepEntry[] = [{ name: "A", version: "1.0.0" }];
-	const list = mvsResolve(root, chainLoader);
+	const list = resolved(root, chainLoader);
 	assert list.length == 4;
 	assert findInBuildList(list, "D") == "1.0.0";
 }
@@ -296,14 +305,14 @@ test "mvs duplicate root deps deduped" {
 		{ name: "foo", version: "1.0.0" },
 		{ name: "foo", version: "1.2.0" },
 	];
-	const list = mvsResolve(root, emptyLoader);
+	const list = resolved(root, emptyLoader);
 	assert list.length == 1;
 	assert findInBuildList(list, "foo") == "1.2.0";
 }
 
 test "mvs cycle does not infinite loop" {
 	const root: DepEntry[] = [{ name: "A", version: "1.0.0" }];
-	const list = mvsResolve(root, cycleLoader);
+	const list = resolved(root, cycleLoader);
 	assert list.length == 2;
 	assert findInBuildList(list, "A") == "1.0.0";
 	assert findInBuildList(list, "B") == "1.0.0";
@@ -311,7 +320,22 @@ test "mvs cycle does not infinite loop" {
 
 test "mvs version-escalating cycle terminates" {
 	const root: DepEntry[] = [{ name: "A", version: "1.0.0" }];
-	const list = mvsResolve(root, escalatingLoader);
+	const list = resolved(root, escalatingLoader);
 	assert findInBuildList(list, "A") == "2.0.0";
 	assert findInBuildList(list, "B") == "2.0.0";
+}
+
+test "mvs fails on an invalid version instead of dropping the dependency" {
+	const lone: DepEntry[] = [{ name: "foo", version: "bad" }];
+	const first = mvsResolve(lone, emptyLoader);
+	assert !first.ok;
+	if (!first.ok) assert first.error == VersionError.TooShort;
+
+	const later: DepEntry[] = [
+		{ name: "foo", version: "1.0.0" },
+		{ name: "foo", version: "^1.2.0" },
+	];
+	const second = mvsResolve(later, emptyLoader);
+	assert !second.ok;
+	if (!second.ok) assert second.error == VersionError.RangeOperator;
 }

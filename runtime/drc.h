@@ -42,9 +42,9 @@
 /* ===== Reference Header ===== */
 
 typedef struct {
-	_Atomic(int32_t) rc;     /* Reference count (0 = unique, >0 = shared). Atomic for thread safety. */
-	int32_t rootIdx;         /* ORC rootset index (-1 = not registered) */
+	_Atomic(intptr_t) rc;    /* Reference count (0 = unique, >0 = shared). Atomic for thread safety. */
 	const msTypeInfo* type;  /* RTTI (NULL for untyped allocs) */
+	int32_t rootIdx;         /* ORC rootset index (-1 = not registered) */
 	uint32_t allocSize;      /* Total allocation size (header + payload) — for slab recycling */
 } msRefHeader;
 
@@ -110,9 +110,24 @@ void msLedgerDestroy(void* p, const msTypeInfo* type);
 #define MS_SLAB_BUCKETS 4
 #define MS_SLAB_LIMIT 256      /* max cached entries per bucket (prevents unbounded growth) */
 
+/* Keep the range test: a stack pointer above floor + span (an alternate signal stack, a
+ * stack the thread did not report) has no known headroom and must drain, never recurse. */
+typedef void (*msDropCont)(void* owner, int32_t resume);
+typedef union { void* p; msDropCont fn; intptr_t n; } msDropSlot;
+typedef struct {
+	uintptr_t floor;
+	uintptr_t span;
+	void* cur;
+	msDropSlot* data;
+	int32_t len;
+	int32_t cap;
+	int32_t base;
+} msDropState;
+
 typedef struct msSlab {
 	void* free[MS_SLAB_BUCKETS];       /* free-list heads per bucket */
 	int32_t count[MS_SLAB_BUCKETS];    /* entries per bucket */
+	msDropState drop;
 } msSlab;
 
 MS_TLS_EXTERN(msSlab, msSlabTLS);
@@ -272,7 +287,7 @@ static inline bool msDecRefIsLast(void* p) {
 	 * rc starts at 0 from msAlloc. (rc & ~MS_RC_MASK)==0 means sole owner.
 	 * Under --gc=drc, MS_RC_MASK=0 so this reduces to h->rc==0. */
 	if ((h->rc & ~MS_RC_MASK) != 0) {
-		int32_t before = atomic_fetch_sub(&h->rc, MS_RC_INCREMENT);
+		intptr_t before = atomic_fetch_sub(&h->rc, MS_RC_INCREMENT);
 		bool concurrentDecrefLeftUsLast = (before & ~MS_RC_MASK) == 0;
 		if (!concurrentDecrefLeftUsLast) return false;
 		h->rc += MS_RC_INCREMENT;
@@ -290,7 +305,7 @@ static inline bool msDecRefIsLast(void* p) {
  * through the cycle collector even under --gc=orc. */
 static inline bool msAtomicDecRefIsLast(void* p) {
 	if (p == NULL) return false;
-	int32_t old = atomic_fetch_sub_explicit(&msHeader(p)->rc, MS_RC_INCREMENT, memory_order_release);
+	intptr_t old = atomic_fetch_sub_explicit(&msHeader(p)->rc, MS_RC_INCREMENT, memory_order_release);
 	if ((old & ~MS_RC_MASK) == MS_RC_INCREMENT) {
 		atomic_thread_fence(memory_order_acquire);
 		return true;
@@ -311,6 +326,55 @@ static inline void msDestroyAndDispose(void* p) {
 		MS_HCR_COUNT(h->type, -1);
 		msSlabFree(h, h->allocSize);
 	}
+}
+
+static inline void msDropDispose(msSlab* slab, void* p) {
+	msRefHeader* h = msHeader(p);
+#ifdef MSGC_ORC
+	if (h->rootIdx >= 0) msUnregisterCycle(p);
+#endif
+	MS_HCR_COUNT(h->type, -1);
+	int b = msSlabBucket(h->allocSize);
+	if (b >= 0 && slab->count[b] < MS_SLAB_LIMIT) {
+		*(void**)h = slab->free[b];
+		slab->free[b] = h;
+		slab->count[b]++;
+		return;
+	}
+	free(h);
+}
+
+static inline __attribute__((always_inline)) uintptr_t msStackPointer(void) {
+	uintptr_t sp;
+#if defined(__APPLE__) && defined(__aarch64__)
+	sp = (uintptr_t)__builtin_frame_address(0);
+#elif defined(__aarch64__)
+	__asm__("mov %0, sp" : "=r"(sp));
+#elif defined(__x86_64__)
+	__asm__("mov %%rsp, %0" : "=r"(sp));
+#else
+	sp = (uintptr_t)__builtin_frame_address(0);
+#endif
+	return sp;
+}
+
+
+bool msDropEdgeSlow(void* owner, void* p);
+void msDropDefer(void* owner, msDropCont fn, int32_t resume);
+void msDropRestore(const msDropState* saved);
+
+static inline bool msDropHasRoom(void) {
+	return msStackPointer() - msSlabTLS.drop.floor < msSlabTLS.drop.span;
+}
+
+static inline bool msDropEdgeLast(void* owner, void* p) {
+	msSlab* s = &msSlabTLS;
+	if (msStackPointer() - s->drop.floor < s->drop.span) {
+		MS_DESTROY_DISPATCH(msHeader(p)->type, p);
+		msDropDispose(s, p);
+		return false;
+	}
+	return msDropEdgeSlow(owner, p);
 }
 
 #define msWasMoved(p) ((p) = NULL)
@@ -414,8 +478,8 @@ typedef struct {
 	msCellSeq toFree;
 	int32_t freed;
 	int32_t touched;
-	int32_t edges;
-	int32_t rcSum;
+	intptr_t edges;
+	intptr_t rcSum;
 	bool keepThreshold;
 } msGcEnv;
 

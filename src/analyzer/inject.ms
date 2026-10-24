@@ -836,7 +836,7 @@ function processNew(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// A constructor's parameters are owned (see isCtorRoutine): the arguments are sunk, a last
 	// use or a temporary moves in and anything still live is copied.
 	const marks: Node[] = [];
-	const argMode = isCtorRoutine(node.resolvedSym) ? DrcMode.SinkArg : DrcMode.Normal;
+	const argMode = isCtorRoutine(node.resolvedSym) || isAtomicRef(node.nodeType) ? DrcMode.SinkArg : DrcMode.Normal;
 	for (let i = 0; i < nd.newArguments.length; i += 1) {
 		nd.newArguments[i] = processNode(nd.newArguments[i], dctx, isRestArg(node.resolvedSym, i, nd.newArguments.length) ? DrcMode.Normal : argMode);
 		marks.push(markOperandEnd(dctx, node.location));

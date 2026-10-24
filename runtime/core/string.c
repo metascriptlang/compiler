@@ -230,12 +230,6 @@ msString msStringNewLen(int64_t len) {
 	return (msString){ .len = len, .p = p };
 }
 
-void msStringDestroy(msString s) {
-	if (!msIsLiteral(s)) {
-		free(s.p);
-	}
-}
-
 void msStringPrepareMutation(msString* s) {
 	if (s->p != NULL && (s->p->cap & MS_STRLIT_FLAG) != 0) {
 		msStrPayload* oldP = s->p;
@@ -349,7 +343,7 @@ bool msStringEquals(msString a, msString b) {
 	return memcmp(a.p->data, b.p->data, a.len) == 0;
 }
 
-int msStringCompare(msString a, msString b) {
+int msStringCompareBytes(msString a, msString b) {
 	if (a.p == b.p && a.len == b.len) return 0;
 	int64_t minLen = a.len < b.len ? a.len : b.len;
 	if (minLen > 0) {
@@ -357,6 +351,41 @@ int msStringCompare(msString a, msString b) {
 		const char* bd = b.p ? b.p->data : "";
 		int cmp = memcmp(ad, bd, minLen);
 		if (cmp != 0) return cmp;
+	}
+	if (a.len < b.len) return -1;
+	if (a.len > b.len) return 1;
+	return 0;
+}
+
+/* UTF-16 code unit order (TypeScript string ordering). It differs from UTF-8 byte order only where
+   the first differing code points are a supplementary one (lead 0xF0..0xF4, surrogate pair) against
+   a BMP one at or above U+E000 (lead 0xEE/0xEF): the pair sorts below. */
+int msStringCompare(msString a, msString b) {
+	if (a.p == b.p && a.len == b.len) return 0;
+	int64_t minLen = a.len < b.len ? a.len : b.len;
+	if (minLen > 0) {
+		const unsigned char* ad = (const unsigned char*)(a.p ? a.p->data : "");
+		const unsigned char* bd = (const unsigned char*)(b.p ? b.p->data : "");
+		int64_t i = 0;
+		while (i + 8 <= minLen) {
+			uint64_t wa, wb;
+			memcpy(&wa, ad + i, 8);
+			memcpy(&wb, bd + i, 8);
+			if (wa != wb) {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__ && defined(__GNUC__)
+				i += __builtin_ctzll(wa ^ wb) >> 3;
+#endif
+				break;
+			}
+			i += 8;
+		}
+		while (i < minLen && ad[i] == bd[i]) i++;
+		if (i < minLen) {
+			unsigned char x = ad[i], y = bd[i];
+			if (x >= 0xF0 && (y == 0xEE || y == 0xEF)) return -1;
+			if (y >= 0xF0 && (x == 0xEE || x == 0xEF)) return 1;
+			return x < y ? -1 : 1;
+		}
 	}
 	if (a.len < b.len) return -1;
 	if (a.len > b.len) return 1;
@@ -542,6 +571,152 @@ int64_t msStringCount(msString s, msString sub) {
 int64_t msStringByteAt(msString s, int64_t idx) {
 	if (idx < 0 || idx >= s.len || s.p == NULL) return -1;
 	return (int64_t)(unsigned char)s.p->data[idx];
+}
+
+/* ---- Byte hash (Map/Set string keys) ---- */
+
+#define MS_FARM_K0 0xc3a5c85c97cb3127ULL
+#define MS_FARM_K1 0xb492b66fbe98f273ULL
+#define MS_FARM_K2 0x9ae16a3b2f90404fULL
+
+static inline uint64_t msFarmLoad8(const unsigned char* p) {
+	uint64_t v;
+	memcpy(&v, p, 8);
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	v = __builtin_bswap64(v);
+#endif
+	return v;
+}
+
+static inline uint64_t msFarmLoad4(const unsigned char* p) {
+	uint32_t v;
+	memcpy(&v, p, 4);
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	v = __builtin_bswap32(v);
+#endif
+	return v;
+}
+
+static inline uint64_t msFarmRotR(uint64_t v, int bits) { return (v >> bits) | (v << (64 - bits)); }
+static inline uint64_t msFarmShiftMix(uint64_t v) { return v ^ (v >> 47); }
+
+static inline uint64_t msFarmLen16(uint64_t u, uint64_t v, uint64_t mul) {
+	uint64_t a = (u ^ v) * mul;
+	a ^= a >> 47;
+	uint64_t b = (v ^ a) * mul;
+	b ^= b >> 47;
+	return b * mul;
+}
+
+static uint64_t msFarmLen0To16(const unsigned char* s, uint64_t n) {
+	if (n >= 8) {
+		uint64_t mul = MS_FARM_K2 + n * 2;
+		uint64_t a = msFarmLoad8(s) + MS_FARM_K2;
+		uint64_t b = msFarmLoad8(s + n - 8);
+		uint64_t c = msFarmRotR(b, 37) * mul + a;
+		uint64_t d = (msFarmRotR(a, 25) + b) * mul;
+		return msFarmLen16(c, d, mul);
+	}
+	if (n >= 4) {
+		uint64_t mul = MS_FARM_K2 + n * 2;
+		uint64_t a = msFarmLoad4(s);
+		return msFarmLen16(n + (a << 3), msFarmLoad4(s + n - 4), mul);
+	}
+	if (n > 0) {
+		uint32_t a = s[0];
+		uint32_t b = s[n >> 1];
+		uint32_t c = s[n - 1];
+		uint32_t y = a + (b << 8);
+		uint32_t z = (uint32_t)n + (c << 2);
+		return msFarmShiftMix((uint64_t)y * MS_FARM_K2 ^ (uint64_t)z * MS_FARM_K0) * MS_FARM_K2;
+	}
+	return MS_FARM_K2;
+}
+
+static uint64_t msFarmLen17To32(const unsigned char* s, uint64_t n) {
+	uint64_t mul = MS_FARM_K2 + n * 2;
+	uint64_t a = msFarmLoad8(s) * MS_FARM_K1;
+	uint64_t b = msFarmLoad8(s + 8);
+	uint64_t c = msFarmLoad8(s + n - 8) * mul;
+	uint64_t d = msFarmLoad8(s + n - 16) * MS_FARM_K2;
+	return msFarmLen16(msFarmRotR(a + b, 43) + msFarmRotR(c, 30) + d,
+		a + msFarmRotR(b + MS_FARM_K2, 18) + c, mul);
+}
+
+static uint64_t msFarmLen33To64(const unsigned char* s, uint64_t n) {
+	uint64_t mul = MS_FARM_K2 + n * 2;
+	uint64_t a = msFarmLoad8(s) * MS_FARM_K2;
+	uint64_t b = msFarmLoad8(s + 8);
+	uint64_t c = msFarmLoad8(s + n - 8) * mul;
+	uint64_t d = msFarmLoad8(s + n - 16) * MS_FARM_K2;
+	uint64_t y = msFarmRotR(a + b, 43) + msFarmRotR(c, 30) + d;
+	uint64_t z = msFarmLen16(y, a + msFarmRotR(b + MS_FARM_K2, 18) + c, mul);
+	uint64_t e = msFarmLoad8(s + 16) * mul;
+	uint64_t f = msFarmLoad8(s + 24);
+	uint64_t g = (y + msFarmLoad8(s + n - 32)) * mul;
+	uint64_t h = (z + msFarmLoad8(s + n - 24)) * mul;
+	return msFarmLen16(msFarmRotR(e + f, 43) + msFarmRotR(g, 30) + h,
+		e + msFarmRotR(f + a, 18) + g, mul);
+}
+
+static inline void msFarmWeakLen32(const unsigned char* s, uint64_t seedA, uint64_t seedB, uint64_t out[2]) {
+	uint64_t w = msFarmLoad8(s), x = msFarmLoad8(s + 8), y = msFarmLoad8(s + 16), z = msFarmLoad8(s + 24);
+	uint64_t a = seedA + w;
+	uint64_t b = msFarmRotR(seedB + a + z, 21);
+	uint64_t c = a;
+	a += x;
+	a += y;
+	b += msFarmRotR(a, 44);
+	out[0] = a + z;
+	out[1] = b + c;
+}
+
+static uint64_t msFarmLong(const unsigned char* s, uint64_t n) {
+	uint64_t x = 81;
+	uint64_t y = 81 * MS_FARM_K1 + 113;
+	uint64_t z = msFarmShiftMix(y * MS_FARM_K2 + 113) * MS_FARM_K2;
+	uint64_t v[2] = {0, 0}, w[2] = {0, 0};
+	x = x * MS_FARM_K2 + msFarmLoad8(s);
+	uint64_t eos = ((n - 1) / 64) * 64;
+	uint64_t last64 = eos + ((n - 1) & 63) - 63;
+	uint64_t o = 0;
+	for (;;) {
+		x = msFarmRotR(x + y + v[0] + msFarmLoad8(s + o + 8), 37) * MS_FARM_K1;
+		y = msFarmRotR(y + v[1] + msFarmLoad8(s + o + 48), 42) * MS_FARM_K1;
+		x ^= w[1];
+		y += v[0] + msFarmLoad8(s + o + 40);
+		z = msFarmRotR(z + w[0], 33) * MS_FARM_K1;
+		msFarmWeakLen32(s + o, v[1] * MS_FARM_K1, x + w[0], v);
+		msFarmWeakLen32(s + o + 32, z + w[1], y + msFarmLoad8(s + o + 16), w);
+		uint64_t t = z; z = x; x = t;
+		o += 64;
+		if (o == eos) break;
+	}
+	uint64_t mul = MS_FARM_K1 + ((z & 0xff) << 1);
+	o = last64;
+	w[0] += (n - 1) & 63;
+	v[0] += w[0];
+	w[0] += v[0];
+	x = msFarmRotR(x + y + v[0] + msFarmLoad8(s + o + 8), 37) * mul;
+	y = msFarmRotR(y + v[1] + msFarmLoad8(s + o + 48), 42) * mul;
+	x ^= w[1] * 9;
+	y += v[0] * 9 + msFarmLoad8(s + o + 40);
+	z = msFarmRotR(z + w[0], 33) * mul;
+	msFarmWeakLen32(s + o, v[1] * mul, x + w[0], v);
+	msFarmWeakLen32(s + o + 32, z + w[1], y + msFarmLoad8(s + o + 16), w);
+	uint64_t t = z; z = x; x = t;
+	return msFarmLen16(msFarmLen16(v[0], w[0], mul) + msFarmShiftMix(y) * MS_FARM_K0 + z,
+		msFarmLen16(v[1], w[1], mul) + x, mul);
+}
+
+int64_t msStringHashFarm(msString s) {
+	const unsigned char* data = s.p != NULL ? (const unsigned char*)s.p->data : (const unsigned char*)"";
+	uint64_t n = (uint64_t)s.len;
+	uint64_t h = n <= 16 ? msFarmLen0To16(data, n)
+		: n <= 32 ? msFarmLen17To32(data, n)
+		: n <= 64 ? msFarmLen33To64(data, n)
+		: msFarmLong(data, n);
+	return (int64_t)h;
 }
 
 /* ---- Character-level access (TypeScript parity, UTF-16 code unit indexed) ---- */

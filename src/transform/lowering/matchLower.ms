@@ -492,7 +492,7 @@ function moveInto(node: Node, mode: string, assignSym: Symbol | null, loc: Sourc
 }
 
 // Emit the final result: either return expr or assignSym = expr.
-// A noreturn arm yields no value (Nim endsInNoReturn) — emit the bare call.
+// A noreturn arm yields no value — emit the bare call.
 function emitResult(expr: Node, mode: string, assignSym: Symbol | null, loc: SourceLocation): Node {
 	if (expr.nodeType != null && expr.nodeType.kind == TypeKind.Never) {
 		return makeExprStmt(expr, loc);

@@ -28,23 +28,6 @@ import { TaFileInputStore, createFileInputStore, setFileText, getFileHash } from
 import { TaModuleDepGraph, createModuleDepGraph, getTransitiveDependents, recordModuleImport } from "./moduleDeps";
 
 
-// ===== Callback Registration for Query Executor =====
-// avoids function-type parameters (closure codegen issues)
-
-let registeredExecutor: number = 0;  // executor fn slot id (hash-keyed)
-
-type TaExecutorFn = (queryKind: int32, fileId: int32) => number;
-
-// Internal module-level variable for executor function
-let _executorKind: int32 = 0;
-let _executorFileId: int32 = 0;
-let _executorResult: number = 0;
-let _executorCalled: boolean = false;
-
-export function registerExecutorResult(result: number): void {
-	_executorResult = result;
-}
-
 // ===== tryMarkGreen — can we use the cached value? =====
 
 export function tryMarkGreen(

@@ -9,17 +9,15 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, setConditionalAssignFn, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols } from "./symbol";
-import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
+import { markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, sgSortRecords, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
-import { readFile, writeFile, ensureDir } from "std/fs";
+import { readFile, writeFile, ensureDir, isFile } from "std/fs";
 import { env, cwd } from "std/process";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, normalize, isAbsolute } from "std/fs/path";
-import { translateCHeader } from "../module/cimport/emit";
-import { inlineHeaderImports, createFileSystemProvider } from "../module/loader";
-import { defaultGlobalImports, extraGlobalImports } from "./prelude";
+import { defaultGlobalImports, modulePasses, ModulePassState } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
 import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
 setConditionalAssignFn(isAssignable);
@@ -1241,7 +1239,7 @@ export function registerBoundModuleFn(fn: (modulePath: string) => CheckerContext
 }
 
 function enterOwnerModule(ctx: CheckerContext, sym: Symbol): CheckerContext | null {
-	if (!isForeign(ctx, sym)) return ctx;
+	if (!isForeign(ctx, sym) || lookupModuleCtx(sym.modulePath) == ctx) return ctx;
 	const owner = pickBodyCtx(sym.modulePath, ctx, sym);
 	if (owner.modulePath == sym.modulePath) return owner;
 	const bound = isEngineCheckMode() ? null : _boundModuleFn(sym.modulePath);
@@ -1837,6 +1835,9 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 	match (node.kind) {
 		NodeKind.PropertyDecl => {
 			const pd = node.data as PropertyDeclData;
+			const fieldSym = makeSymbol(pd.propName, SymbolKind.Property, node.nodeType, false);
+			fieldSym.state = SymbolState.Shaped;
+			sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + pd.propName.length, fieldSym, node.nodeType, SymbolKind.Property, pd.propName, className, true);
 			if (pd.propInitializer != null) {
 				const savedBoundary = ctx.staticInitBoundary;
 				if (pd.propIsStatic) {
@@ -3099,7 +3100,7 @@ export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 	const hoistMark = ctx.pendingHoisted.length;
 	let i = 0;
 	while (i < stmts.programStmts.length) {
-		if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) return;
+		if (isCancelled(ctx.cancelCtx, ctx.cancelVersion) || stopForInput(ctx.cancelCtx)) return;
 		checkStmt(ctx, stmts.programStmts[i]);
 		i = i + drainHoisted(ctx, stmts.programStmts, i, hoistMark) + 1;
 	}
@@ -3458,6 +3459,12 @@ function resolveModuleRelativeIncludes(flags: string, modDir: string): string {
 	return result;
 }
 
+function moduleRelativeHeader(header: string, modDir: string): string {
+	if (modDir == "" || isAbsolute(header)) return header;
+	const beside = normalize(modDir + "/" + header);
+	return isFile(beside) ? beside : header;
+}
+
 // Process a single MacroInvocation node as a directive (@include/@link/@passC/@passL).
 export function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 	if (mi.kind != NodeKind.MacroInvocation) return;
@@ -3475,9 +3482,9 @@ export function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 	if (arg0Kind == NodeKind.Identifier && arg0Str == "") return;
 	const name = md.macroName;
 	if (name == "include") {
-		if (ctx.includeDirectives != "") ctx.includeDirectives = ctx.includeDirectives + "\n";
-		ctx.includeDirectives = ctx.includeDirectives + arg0Str;
 		const modDir = getModuleDir(ctx.modulePath);
+		if (ctx.includeDirectives != "") ctx.includeDirectives = ctx.includeDirectives + "\n";
+		ctx.includeDirectives = ctx.includeDirectives + moduleRelativeHeader(arg0Str, modDir);
 		if (modDir != "") ctx.compilerFlags = appendFlag(ctx.compilerFlags, quoteCcArg("-iquote" + modDir));
 	} else if (name == "compile") {
 		if (ctx.compileDirectives != "") ctx.compileDirectives = ctx.compileDirectives + "\n";
@@ -3641,11 +3648,9 @@ function preludeSource(stdSpecifier: string, stdPath: string, backendExt: string
 function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: string, backendExt: string): void {
 	const found = preludeSource(stdSpecifier, stdPath, backendExt);
 	const resolvedPath = found.path;
-	let src = found.source;
+	const src = found.source;
 	if (ctx.ownModules.has(resolvedPath)) return;
 	if (src.length > 0) {
-		const fsProvider = createFileSystemProvider();
-		src = inlineHeaderImports(src, resolvedPath, fsProvider);
 		const pr = parseSource(src);
 		if (pr.ok) {
 			// modulePath must be set BEFORE sub-module loading so relative
@@ -3746,10 +3751,6 @@ function resolvePreludeSubSource(specifier: string, indexDir: string, stdPath: s
 		const src = try readFile(path) catch "";
 		if (src.length > 0) return { path, source: src };
 	}
-	if (basePath.endsWith(".h")) {
-		const hSrc = try readFile(basePath) catch "";
-		if (hSrc.length > 0) return { path: basePath, source: translateCHeader(hSrc, []) };
-	}
 	return { path: "", source: "" };
 }
 
@@ -3799,7 +3800,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		const id = importDeclNode.data as ImportDeclData;
 		const resolved = resolvePreludeSubSource(id.importSource, dir, stdPath, backendExt);
 		const subResolved = resolved.path;
-		let subSrc = resolved.source;
+		const subSrc = resolved.source;
 		if (subSrc.length == 0) continue;
 
 		// Dedup: if already loaded into the shared registry, skip. Preludes
@@ -3811,8 +3812,6 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 			loadPreludeOne(ctx, preludeSpecifier, stdPath, backendExt);
 			continue;
 		}
-		// Inline .h imports in sub-module source before parsing
-		subSrc = inlineHeaderImports(subSrc, subResolved, createFileSystemProvider());
 		const subPr = parseSource(subSrc);
 		if (!subPr.ok) continue;
 		// Recurse: pre-load THIS sub-module's own prelude-resolvable imports
@@ -3841,15 +3840,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		runThreePasses(subCtx, subPr.value);
 		ctx.preludeModuleScopes.set(subResolved, moduleScopeSymbols(subCtx.table));
 
-		// Stamp headerPath on .h-translated symbols so C codegen emits #include
 		const subScope = subCtx.table.current;
-		if (subResolved.endsWith(".h")) {
-			for (const sym of subScope.symbols.values()) {
-				if (hasFlag(sym, SymbolFlag.ImportC) && sym.headerPath == "") {
-					sym.headerPath = subResolved;
-				}
-			}
-		}
 
 		const subExports: ExportedSymInfo[] = [];
 		for (const sym of subScope.symbols.values()) {
@@ -3924,11 +3915,7 @@ export function getSharedIdentCache(ctx: CheckerContext): IdentCache {
 // NOTE: Uses while loops (not for-of) so DRC properly increfs shared symbols.
 // for-of creates cursor bindings that skip RC — pushing cursors into another
 // container creates dangling pointers when the source is destroyed.
-export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): void {
-	// A `@compilerFunc` routine is reachable by name from every module a
-	// synthesized call lands in, whether or not the declaring module exported it —
-	// so the table travels whole, like the reference keeps it on the module graph.
-	ctx.compilerFuncs = preludeCtx.compilerFuncs;
+function injectPreludeExports(ctx: CheckerContext, preludeCtx: CheckerContext): void {
 	// With shared IdentCache, nameIds are already consistent across all contexts
 	// in the same compilation. Map iteration preserves insertion order.
 	for (const sym of globalScope(preludeCtx.table).symbols.values()) {
@@ -3957,6 +3944,14 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 			ei = ei + 1;
 		}
 	}
+}
+
+export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): void {
+	// A `@compilerFunc` routine is reachable by name from every module a
+	// synthesized call lands in, whether or not the declaring module exported it —
+	// so the table travels whole, like the reference keeps it on the module graph.
+	ctx.compilerFuncs = preludeCtx.compilerFuncs;
+	injectPreludeExports(ctx, preludeCtx);
 	if (preludeCtx.includeDirectives != "") {
 		if (ctx.includeDirectives != "") ctx.includeDirectives = ctx.includeDirectives + "\n";
 		ctx.includeDirectives = ctx.includeDirectives + preludeCtx.includeDirectives;
@@ -4001,6 +3996,28 @@ export function promoteModuleIntoPrelude(preludeCtx: CheckerContext, ctx: Checke
 		}
 		ei = ei + 1;
 	}
+}
+
+export function buildGlobalImportsLayer(identCache: IdentCache, checked: CheckerContext[]): CheckerContext {
+	const layer = createContextWithCache(identCache);
+	layer.extensionRegistry = createExtensionRegistry();
+	for (const ctx of checked) promoteModuleIntoPrelude(layer, ctx);
+	return layer;
+}
+
+export function bindModulePassesFrom(modulePath: string, ctx: CheckerContext): string[] {
+	const refused: string[] = [];
+	for (const pass of modulePasses()) {
+		if (pass.modulePath != modulePath) continue;
+		let found: Symbol | null = null;
+		for (const e of collectExports(ctx, modulePath)) {
+			if (e.name == pass.macro && e.sym.symbolKind == SymbolKind.Macro) found = e.sym;
+		}
+		pass.sym = found;
+		pass.state = found != null ? ModulePassState.Bound : ModulePassState.Broken;
+		if (found == null) refused.push(`globalImports names modulePass '${pass.macro}', but this module exports no macro '${pass.macro}'`);
+	}
+	return refused;
 }
 
 export function promoteStdModuleIntoPrelude(preludeCtx: CheckerContext, ctx: CheckerContext, specifier: string, injectedIncludes: string, injectedFlags: string): void {
@@ -4092,6 +4109,7 @@ export function bindModuleForCheck(
 	cancelVersion: int32,
 	adoptedDecls: HashMap<Node, Symbol> | null,
 	applyModulePasses: boolean,
+	globalImports: CheckerContext | null = null,
 ): BoundModule {
 	// Use shared IdentCache from prelude (one cache per compilation)
 	const sharedCache = preludeCtx.table.identCache;
@@ -4101,7 +4119,9 @@ export function bindModuleForCheck(
 	if (cancelCtx != null) { ctx.cancelCtx = cancelCtx; ctx.cancelVersion = cancelVersion; }
 	if (adoptedDecls != null) ctx.adoptedDecls = adoptedDecls;
 	injectPrelude(ctx, preludeCtx);
+	if (globalImports != null) injectPreludeExports(ctx, globalImports);
 	ctx.preludeCtx = preludeCtx;  // friend modules — access private prelude symbols during instantiation
+	ctx.globalImportsCtx = globalImports;
 	const consoleClass = lookupSymbol(ctx.table, "console");
 	if (consoleClass != null) {
 		const consoleGlobal = makeSymbol("console", SymbolKind.Variable, consoleClass.symbolType, false);
@@ -4142,7 +4162,7 @@ export function finishModuleCheck(bound: BoundModule): CheckerContext {
 	// Register this module's ctx so later cross-module generic instantiation can
 	// re-check cloned bodies in THIS module's scope (resolving private consts,
 	// helper functions, etc.). Reference parity: Nim's graph.ifaces[module].
-	if (!isEngineCheckMode() && !sharedPreludeOwns(ctx.preludeCtx, ctx.modulePath)) registerModuleCtx(ctx.modulePath, ctx);
+	if (!isEngineCheckMode() && !sharedPreludeOwns(ctx.preludeCtx, ctx.modulePath) && !isCancelled(ctx.cancelCtx, ctx.cancelVersion)) registerModuleCtx(ctx.modulePath, ctx);
 	return ctx;
 }
 
@@ -4157,14 +4177,9 @@ interface SharedPrelude {
 }
 
 let _preludeCtxByKey: Map<string, SharedPrelude> = new Map<string, SharedPrelude>();
-let _graphPreludeFn: (stdPath: string, backendExt: string) => CheckerContext = null as unknown as (stdPath: string, backendExt: string) => CheckerContext;
-
-export function registerGraphPreludeFn(fn: (stdPath: string, backendExt: string) => CheckerContext): void {
-	_graphPreludeFn = fn;
-}
 
 export function preludeContextFor(stdPath: string, backendExt: string): CheckerContext {
-	const key = backendExt + "|" + stdPath + "|" + extraGlobalImports().join("|");
+	const key = backendExt + "|" + stdPath;
 	let shared = _preludeCtxByKey.get(key);
 	if (shared == null) {
 		shared = buildSharedPrelude(stdPath, backendExt);
@@ -4178,7 +4193,7 @@ function buildSharedPrelude(stdPath: string, backendExt: string): SharedPrelude 
 	const duMark = duVariantMark();
 	const ctorMark = ctorRoutineMark();
 	const outerDispatch = startDispatchCapture();
-	const ctx = _graphPreludeFn != null ? _graphPreludeFn(stdPath, backendExt) : buildPreludeContext(stdPath, backendExt);
+	const ctx = buildPreludeContext(stdPath, backendExt);
 	return {
 		ctx,
 

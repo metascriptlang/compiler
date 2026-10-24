@@ -52,8 +52,8 @@ export interface ImportEntry {
 
 export class Module {
 	path: string;              // absolute file path (canonical key)
-	rawSource: string;         // source text as read, before C headers are inlined
-	source: string;            // source text with C headers inlined
+	rawSource: string;         // source text as read; a C header's is its translation
+	source: string;            // source text the checker parses
 	state: ModuleState;        // loading state machine
 	exportNames: string[];     // names of exported symbols (for lookup)
 	imports: ImportEntry[];    // resolved import dependencies
@@ -84,6 +84,7 @@ export class ModuleGraph {
 	importStack: string[];     // current loading stack (cycle detection)
 	errors: string[];          // graph-level errors
 	circularDeps: CircularDep[];  // detected circular imports (for LSP warnings)
+	headerShapes: HashMap<string, string>;  // C header path -> "<hash of its declarations>\t<header that read it first>"
 }
 
 // ===== Constructors =====
@@ -96,6 +97,7 @@ export function createModuleGraph(): ModuleGraph {
 		importStack: [],
 		errors: [],
 		circularDeps: [],
+		headerShapes: new HashMap<string, string>(),
 	};
 }
 
@@ -160,25 +162,6 @@ export function popImportStack(graph: ModuleGraph): void {
 	if (graph.importStack.length > 0) {
 		graph.importStack.pop();
 	}
-}
-
-// ===== Circular Dependency Queries =====
-
-export function isCircularImport(graph: ModuleGraph, path: string): boolean {
-	for (const dep of graph.circularDeps) {
-		if (dep.fromPath == path || dep.toPath == path) return true;
-	}
-	return false;
-}
-
-export function getCircularDepsFor(graph: ModuleGraph, path: string): CircularDep[] {
-	const result: CircularDep[] = [];
-	for (const dep of graph.circularDeps) {
-		if (dep.fromPath == path || dep.toPath == path) {
-			result.push(dep);
-		}
-	}
-	return result;
 }
 
 // ===== Export Name Lookup =====

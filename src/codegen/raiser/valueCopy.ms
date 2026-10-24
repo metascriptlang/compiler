@@ -1,10 +1,11 @@
 import { Type, TypeKind, TypeFlag } from "../../ast/node";
 import { RaiserCopyPlan, RaiserCopyKind } from "../../raiser/valueCopy";
 import { distinctBody, enumMemberValue, isMaybeType, isStructType, needsValueCopy, valueCopyRepr, skipModifier, peelToStructOrUnion, setRepr, isAwaitable, numberLiteralBase, literalBase } from "../../checker/types";
-import { RaiserOpcode, RaiserRegClass, raiserABC, raiserAx } from "../../raiser/bytecode";
-import { RaiserValue, RaiserValueKind, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil } from "../../raiser/value";
+import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC, raiserAx, MAX_SLOT, arrayClassSlot } from "../../raiser/bytecode";
+import { RaiserValue, RaiserValueKind, raiserInt, raiserConstString, raiserFloat, raiserBool, raiserNil, RAISER_NO_CLASS } from "../../raiser/value";
+import { isMetaWireSym } from "../../compiler/meta/nodeSym";
 import { peelToRepr, unwrapRef } from "../../checker/types";
-import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, layoutOperand } from "./context";
+import { RaiserCompState, emitInst, allocReg, allocWord, allocBool, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, classOfConstant, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen, queueRaiserCompileError, emitTrap, emitTrapNil, layoutOperand, slotInst, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, classSymOfType } from "./context";
 
 function copyPlan(s: RaiserCompState, valueType: Type | null): int32 {
 	const base = distinctBody(valueType);
@@ -20,7 +21,7 @@ function copyPlan(s: RaiserCompState, valueType: Type | null): int32 {
 	for (let i = 0; i < s.copyTypes.length; i += 1) {
 		if (s.copyTypes[i] == valueType) return i;
 	}
-	const plan: RaiserCopyPlan = { kind: RaiserCopyKind.Preserve, names: [], children: [], discriminants: [] };
+	const plan: RaiserCopyPlan = { kind: RaiserCopyKind.Preserve, names: [], children: [], discriminants: [], laid: RAISER_NO_CLASS, laidChildren: [] };
 	const index = s.copyPlans.length;
 	s.copyTypes.push(valueType);
 	s.copyPlans.push(plan);
@@ -105,10 +106,11 @@ export function emitValueAssign(s: RaiserCompState, destination: int32, source: 
 			const name = addConst(s, raiserConstString(t.typeNames[i]));
 			const fieldType = i < t.typeChildren.length ? t.typeChildren[i] : null;
 			const held = allocFor(s, fieldType);
-			emitInst(s, raiserABC(RaiserOpcode.LoadField, held, destination, name));
+			emitInst(s, fieldInst(s, t, t.typeNames[i], RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, held, destination, name));
 			const next = allocFor(s, fieldType);
-			emitInst(s, raiserABC(RaiserOpcode.LoadField, next, source, name));
-			emitInst(s, raiserABC(RaiserOpcode.StoreField, destination, name, emitValueAssign(s, held, next, fieldType)));
+			emitInst(s, fieldInst(s, t, t.typeNames[i], RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, next, source, name));
+			const assigned = emitValueAssign(s, held, next, fieldType);
+			emitInst(s, fieldInst(s, t, t.typeNames[i], RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, destination, name, assigned));
 		}
 	} else {
 		const nextLen = allocWord(s);
@@ -162,7 +164,7 @@ function emitZeroOf(s: RaiserCompState, valueType: Type | null, open: Type[]): i
 	const t = zeroShape(valueType);
 	if (t != null && (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray)) {
 		const array = allocRef(s);
-		emitInst(s, raiserABC(RaiserOpcode.NewArray, array, 0, 0));
+		emitInst(s, newArrayInst(s, array, 0, t.typeReturn));
 		if (t.kind == TypeKind.SizedArray) {
 			const count = allocWord(s);
 			emitLoadConst(s, count, raiserInt(t.typeValue as int64));
@@ -179,11 +181,11 @@ function emitZeroOf(s: RaiserCompState, valueType: Type | null, open: Type[]): i
 			}
 		}
 		const object = allocRef(s);
-		emitInst(s, raiserABC(RaiserOpcode.NewObject, object, layoutOperand(s, t.typeNames), 0));
+		emitInst(s, raiserABC(RaiserOpcode.NewObject, object, layoutOperand(s, t.typeNames, slotClassesOf(s, t)), 0));
 		open.push(t);
 		for (let i = 0; i < t.typeNames.length; i += 1) {
 			const field = emitZeroOf(s, i < t.typeChildren.length ? t.typeChildren[i] : null, open);
-			emitInst(s, raiserABC(RaiserOpcode.StoreField, object, addConst(s, raiserConstString(t.typeNames[i])), field));
+			emitInst(s, fieldInst(s, t, t.typeNames[i], RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, object, addConst(s, raiserConstString(t.typeNames[i])), field));
 		}
 		open.pop();
 		return object;
@@ -234,7 +236,7 @@ export function emitOmittedFieldZeros(s: RaiserCompState, object: int32, literal
 		const name = t.typeNames[i];
 		if (keys.includes(name)) continue;
 		const field = emitZeroValue(s, i < t.typeChildren.length ? t.typeChildren[i] : null);
-		emitInst(s, raiserABC(RaiserOpcode.StoreField, object, addConst(s, raiserConstString(name)), field));
+		emitInst(s, fieldInst(s, t, name, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, object, addConst(s, raiserConstString(name)), field));
 	}
 }
 
@@ -257,6 +259,48 @@ export function joinClass(a: RaiserRegClass, b: RaiserRegClass): RaiserRegClass 
 
 export function regClassOf(s: RaiserCompState, t: Type | null): RaiserRegClass {
 	return classOfType(s, t, 0);
+}
+
+// The register class of each field of a struct shape, in the order of its names: the class its slot holds.
+export function slotClassesOf(s: RaiserCompState, shape: Type): RaiserRegClass[] {
+	const kinds: RaiserRegClass[] = [];
+	for (let i = 0; i < shape.typeNames.length; i += 1) kinds.push(i < shape.typeChildren.length ? regClassOf(s, shape.typeChildren[i]) : RaiserRegClass.Dyn);
+	return kinds;
+}
+
+// Every object of a struct, interface or class type holds its fields in the order
+// of `typeNames`, which puts a parent's fields first; a structural match is a prefix
+// of it. A function value is a closure pair. NewObject lays that order out, so the
+// type fixes each field's slot.
+export function layoutOf(t: Type | null): string[] {
+	if (isMetaWireSym(classSymOfType(skipModifier(t)))) return [];
+	const bare = skipModifier(t);
+	if (bare != null && bare.kind == TypeKind.Function) return CLOSURE_PAIR;
+	const shape = peelToStructOrUnion(t);
+	return shape != null && shape.kind == TypeKind.Struct && !isMaybeType(shape) ? shape.typeNames : [];
+}
+
+// The register class each slot of layoutOf(t) holds.
+export function slotKindsOf(s: RaiserCompState, t: Type | null): RaiserRegClass[] {
+	if (isMetaWireSym(classSymOfType(skipModifier(t)))) return [];
+	const bare = skipModifier(t);
+	if (bare != null && bare.kind == TypeKind.Function) return CLOSURE_PAIR_KINDS;
+	const shape = peelToStructOrUnion(t);
+	return shape != null && shape.kind == TypeKind.Struct && !isMaybeType(shape) ? slotClassesOf(s, shape) : [];
+}
+
+// A slot opcode moves the slot's word as it is, so a field goes by slot only when the value's
+// register is of the class its slot holds; any other register converts by name.
+export function fieldInst(s: RaiserCompState, t: Type | null, name: string, byName: RaiserOpcode, bySlot: RaiserOpcode, a: number, b: number, c: number): RaiserInstruction {
+	const slot = layoutOf(t).indexOf(name);
+	if (slot < 0 || slot > MAX_SLOT) return raiserABC(byName, a, b, c);
+	const value = bySlot == RaiserOpcode.LoadSlot ? a : c;
+	return classOfReg(s, value as int32) == slotKindsOf(s, t)[slot] ? slotInst(bySlot, a, b, c, slot) : raiserABC(byName, a, b, c);
+}
+
+// An array holds its elements in the register class of their type.
+export function newArrayInst(s: RaiserCompState, dest: number, count: number, elementType: Type | null): RaiserInstruction {
+	return slotInst(RaiserOpcode.NewArray, dest, count, 0, arrayClassSlot(regClassOf(s, elementType)));
 }
 
 export function allocFor(s: RaiserCompState, t: Type | null): int32 {
