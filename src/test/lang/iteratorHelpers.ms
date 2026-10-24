@@ -209,6 +209,40 @@ test "iterator take and drop: NaN fails at the call and a fraction below one is 
 	assert counter("d", 3, log).drop(-0.5).toArray().join(",") == "1,2,3";
 }
 
+function errorClassOf(body: () => void): string {
+	try {
+		body();
+	} catch (e) {
+		if (e instanceof RangeError) return "RangeError";
+		if (e instanceof TypeError) return "TypeError";
+		return "Error";
+	}
+	return "no throw";
+}
+
+test "iterator helpers: a bad limit or size is a RangeError and a missing value a TypeError, as in TS" {
+	const none: int32[] = [];
+	const log: string[] = [];
+	assert errorClassOf((): void => {
+		none.values().take(-1);
+	}) == "RangeError";
+	assert errorClassOf((): void => {
+		none.values().drop(NaN);
+	}) == "RangeError";
+	assert errorClassOf((): void => {
+		none.values().chunks(1.5);
+	}) == "RangeError";
+	assert errorClassOf((): void => {
+		none.values().reduce((a: int32, x: int32, i: number): int32 => a + x);
+	}) == "TypeError";
+	assert errorClassOf((): void => {
+		none.reduce((a: int32, x: int32, i: number): int32 => a + x);
+	}) == "TypeError";
+	assert errorClassOf((): void => {
+		Iterator.zip<int32>([counter("a", 1, log), counter("b", 2, log)], { mode: "strict" }).toArray();
+	}) == "TypeError";
+}
+
 test "iterator helpers: each helper counts the elements it received" {
 	const seen: string[] = [];
 	const source = (): Iterator<int32> => [5, 6, 7, 8].values();
