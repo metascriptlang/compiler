@@ -372,6 +372,13 @@ static inline msActor* msActorCreate(void* state, msActorDispatchFn dispatch) {
 
 /* The constructor is the actor's first visit: it holds processing and runs over the
  * actor's root set, so the cells it builds are the actor's from their first root entry. */
+static inline void msActorEnter(msActor* a) {
+    if (!atomic_load_explicit(&msActorEntered, memory_order_relaxed)) {
+        atomic_store_explicit(&msActorEntered, true, memory_order_relaxed);
+    }
+    msCurrentActor = a;
+}
+
 static inline void msActorCtorEnter(int64_t pid) {
     msActor* a = msActorFromPid(pid);
     if (a == NULL) return;
@@ -1012,7 +1019,7 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
     }
 
     msActor* prevActor = msCurrentActor;
-    msCurrentActor = a;
+    msActorEnter(a);
 
     /* Phase 5: check for pending suspension before draining mailbox */
     {

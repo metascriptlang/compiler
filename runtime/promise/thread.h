@@ -160,12 +160,12 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 		&& atomic_load_explicit(ctx->cancelFlag, memory_order_acquire);
 	if (!cancelledBeforeStart) {
 #if MS_ACTOR_JOBS
-		msActor* actor = msCurrentActor;
-		msCurrentActor = NULL;
+		msActor* actor = msActorCurrentForJobs();
+		if (__builtin_expect(actor != NULL, 0)) msCurrentActor = NULL;
 #endif
 		result = ctx->env != NULL ? ((void*(*)(void*))ctx->fn)(ctx->env) : ((void*(*)(void))ctx->fn)();
 #if MS_ACTOR_JOBS
-		msCurrentActor = actor;
+		if (__builtin_expect(actor != NULL, 0)) msCurrentActor = actor;
 #endif
 	}
 	msSpawnWorkerSettle(ctx, result);
@@ -343,7 +343,7 @@ static inline void* msSpawnHeldSubmit(void* hp, msClosure fn) {
 	void* fut = msSpawnCancellable(fn, &((msSpawnHeld*)hp)->cancelled);
 	msSpawnHeldKeep(hp, fut);
 #if MS_ACTOR_JOBS
-	if (msCurrentActor != NULL) msActorLendNote(fut);
+	if (__builtin_expect(msActorCurrentForJobs() != NULL, 0)) msActorLendNote(fut);
 #endif
 	return fut;
 }
@@ -352,7 +352,7 @@ static inline void* msSpawnIntoHeldSubmit(void* fut, msClosure fn, void* hp, uin
 	msSpawnIntoCancellable(fut, fn, copySize, valueOffset, &((msSpawnHeld*)hp)->cancelled);
 	msSpawnHeldKeep(hp, fut);
 #if MS_ACTOR_JOBS
-	if (msCurrentActor != NULL) msActorLendNote(fut);
+	if (__builtin_expect(msActorCurrentForJobs() != NULL, 0)) msActorLendNote(fut);
 #endif
 	return fut;
 }

@@ -653,8 +653,8 @@ bool msWorkerLoopPending(void) {
 bool msWorkerLoopPump(void) {
     if (tlWorkerChannel == NULL) return false;
     const msTaskFrame* frame = msPoolFrameSwap(NULL);
-    msActor* actor = msCurrentActor;
-    msCurrentActor = NULL;
+    msActor* actor = msActorCurrentForJobs();
+    if (__builtin_expect(actor != NULL, 0)) msCurrentActor = NULL;
     char buf[64];
     while (read(tlWorkerChannel->wake[0], buf, sizeof(buf)) > 0) {}
     bool didWork = msChannelDrain(tlWorkerChannel);
@@ -662,7 +662,7 @@ bool msWorkerLoopPump(void) {
     if (gDispatcher != NULL) msProcessCallbacks(gDispatcher, &didWork);
     msFutureReleaseFlush();
     msSettleWorkerWork();
-    msCurrentActor = actor;
+    if (__builtin_expect(actor != NULL, 0)) msCurrentActor = actor;
     msPoolFrameSwap(frame);
     return didWork;
 }
@@ -831,10 +831,10 @@ int msProcessTimers(msDispatcher* d, bool* didWork) {
 			msFutureCompleteVoid(t.fut);
 			msFutureDrcDestroy(t.fut);
 		} else if (t.cancelled || t.cb.fn == NULL) {
-			if (t.actorJob) msActorJobAbandon(t.cb.env);
+			if (__builtin_expect(t.actorJob, 0)) msActorJobAbandon(t.cb.env);
 			else msReleaseEnvOnLoop(t.cb.env);
 			continue;
-		} else if (t.actorJob) {
+		} else if (__builtin_expect(t.actorJob, 0)) {
 			if (t.periodMs > 0) msActorJobTick(t.cb.env);
 			else msActorJobFire(t.cb.env);
 		} else {
@@ -881,10 +881,10 @@ static bool msRunOnceIn(int timeoutMs);
 
 bool msRunOnce(int timeoutMs) {
 	const msTaskFrame* frame = msPoolFrameSwap(NULL);
-	msActor* actor = msCurrentActor;
-	msCurrentActor = NULL;
+	msActor* actor = msActorCurrentForJobs();
+	if (__builtin_expect(actor != NULL, 0)) msCurrentActor = NULL;
 	bool didWork = msRunOnceIn(timeoutMs);
-	msCurrentActor = actor;
+	if (__builtin_expect(actor != NULL, 0)) msCurrentActor = actor;
 	msPoolFrameSwap(frame);
 	return didWork;
 }
@@ -1189,6 +1189,12 @@ msFuture_void* msSleepAsync(int ms) {
  * it comes due — cheaper than an O(n) heap removal for a rare operation. */
 static _Atomic(int64_t) gTimerSeq = 0;
 
+MS_ACTOR_JOB_PATH static void msTimerStampActor(msTimer* t) {
+	if (msCurrentActor == NULL) return;
+	t->cb = (msClosure){ .fn = (msClosureFn)msActorJobFire, .env = msActorStampTimer(t->cb, t->id, t->periodMs > 0) };
+	t->actorJob = true;
+}
+
 static int64_t msArmTimer(msClosure cb, double ms, int64_t periodMs) {
 	if (cb.env != NULL) msIncRef(cb.env);
 	/* The id counter is shared now that any thread can arm; a plain increment
@@ -1205,10 +1211,7 @@ static int64_t msArmTimer(msClosure cb, double ms, int64_t periodMs) {
 		.periodMs = periodMs,
 		.cancelled = false,
 	};
-	if (msCurrentActor != NULL) {
-		t.cb = (msClosure){ .fn = (msClosureFn)msActorJobFire, .env = msActorStampTimer(cb, id, periodMs > 0) };
-		t.actorJob = true;
-	}
+	if (msActorMaybeCurrent()) msTimerStampActor(&t);
 	msTimerArm(t);
 	return id;
 }
@@ -1218,7 +1221,7 @@ static bool msCancelTimerIn(msTimerHeap* heap, int64_t id) {
 		if (heap->data[i].id == id) {
 			heap->data[i].cancelled = true;
 			heap->data[i].periodMs = 0;
-			if (heap->data[i].actorJob) msActorJobCancelMark(heap->data[i].cb.env);
+			if (__builtin_expect(heap->data[i].actorJob, 0)) msActorJobCancelMark(heap->data[i].cb.env);
 			return true;
 		}
 	}
@@ -1247,7 +1250,7 @@ double msSetInterval(msClosure cb, double ms) {
 void msTimerCancelId(int64_t id) { msCancelTimer(id); }
 
 void msClearTimeout(double id) {
-	msActorClearTimerJob((int64_t)id);
+	if (__builtin_expect(msActorCurrentForJobs() != NULL, 0)) msActorClearTimerJob((int64_t)id);
 	msCancelTimer((int64_t)id);
 }
 
@@ -1277,8 +1280,12 @@ void msAsyncCb(void* raw) {
 
 static void msAsyncStep(msAsyncCbEnv* e) {
 	msFutureEdgeAwait(e->retFut, NULL);
-	msAsyncCbEnv* outerChain = gAsyncChain;
-	gAsyncChain = e;
+	msActor* actor = msActorCurrentForJobs();
+	msAsyncCbEnv* outerChain = NULL;
+	if (__builtin_expect(actor != NULL, 0)) {
+		outerChain = gAsyncChain;
+		gAsyncChain = e;
+	}
 
 	/* Call stepper — returns next msFutureBase* to wait on, or NULL when done.
 	 * Stepper returns msFutureBase* (any typed future cast to base).
@@ -1304,7 +1311,7 @@ static void msAsyncStep(msAsyncCbEnv* e) {
 			? ((msFutureBase*(*)(void*))e->stepper.fn)(e->stepper.env)
 			: ((msFutureBase*(*)(void))e->stepper.fn)();
 	}
-	gAsyncChain = outerChain;
+	if (__builtin_expect(actor != NULL, 0)) gAsyncChain = outerChain;
 
 	if (next == NULL) {
 		/* Stepper completed — drop the env reference taken in msAsyncStart.
@@ -1327,7 +1334,9 @@ static void msAsyncStep(msAsyncCbEnv* e) {
 	/* Not resolved — register ourselves as callback on the yielded future,
 	 * then drop our +1 ref (env field keeps the future alive while suspended). */
 	msFutureEdgeAwait(e->retFut, next);
-	msFutureAddCallback(next, msActorStampIf((msClosure){ .fn = (msClosureFn)msAsyncCb, .env = e }, msAsyncCbEnvDrop, e));
+	msClosure resume = { .fn = (msClosureFn)msAsyncCb, .env = e };
+	if (__builtin_expect(actor != NULL, 0)) resume = msActorStamp(resume, msAsyncCbEnvDrop, e);
+	msFutureAddCallback(next, resume);
 	msFutureDrcDestroy(next);
 }
 

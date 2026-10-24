@@ -20,6 +20,10 @@
 MS_THREAD_LOCAL msActor* msCurrentActor = NULL;
 MS_TLS_PUBLISH(msCurrentActor)
 
+_Atomic(bool) msActorEntered = false;
+
+msActor* msActorCurrentNoHoist(void) { return msCurrentActor; }
+
 /* Per-thread scheduler ID — main thread = 0, pool worker N = N (1..workerCount).
  * Default -1 means "this thread is not a registered actor poller" so
  * msActorPollLocal early-returns instead of polling msSchedulers[-1]. */

@@ -81,21 +81,40 @@ static inline void msCallSoon(msClosure cb) {
 #define MS_ACTOR_JOBS 1
 typedef struct msActor msActor;
 MS_TLS_EXTERN(msActor*, msCurrentActor);
-msClosure msActorStamp(msClosure cb, void (*drop)(void*), void* chain);
-void* msActorStampTimer(msClosure cb, int64_t id, bool periodic);
-void msActorJobFire(void* job);
-void msActorJobTick(void* job);
-void msActorJobCancelMark(void* job);
-void msActorJobAbandon(void* job);
-void msActorClearTimerJob(int64_t id);
-void msActorLendNote(void* fut);
+#define MS_ACTOR_JOB_PATH __attribute__((cold, noinline))
+MS_ACTOR_JOB_PATH msClosure msActorStamp(msClosure cb, void (*drop)(void*), void* chain);
+MS_ACTOR_JOB_PATH void* msActorStampTimer(msClosure cb, int64_t id, bool periodic);
+MS_ACTOR_JOB_PATH void msActorJobFire(void* job);
+MS_ACTOR_JOB_PATH void msActorJobTick(void* job);
+MS_ACTOR_JOB_PATH void msActorJobCancelMark(void* job);
+MS_ACTOR_JOB_PATH void msActorJobAbandon(void* job);
+MS_ACTOR_JOB_PATH void msActorClearTimerJob(int64_t id);
+MS_ACTOR_JOB_PATH void msActorLendNote(void* fut);
+
+/* Set by the first thread to enter an actor; a thread whose msCurrentActor is set has
+ * set it itself, so a relaxed read is enough and a program without actors reads no TLS. */
+#if defined(_WIN32)
+extern _Atomic(bool) msActorEntered;
+#else
+extern __attribute__((visibility("hidden"))) _Atomic(bool) msActorEntered;
+#endif
+MS_ACTOR_JOB_PATH msActor* msActorCurrentNoHoist(void);
+
+static inline bool msActorMaybeCurrent(void) {
+	return __builtin_expect(atomic_load_explicit(&msActorEntered, memory_order_relaxed), 0);
+}
+
+static inline msActor* msActorCurrentForJobs(void) {
+	return msActorMaybeCurrent() ? msActorCurrentNoHoist() : NULL;
+}
 
 static inline msClosure msActorStampIf(msClosure cb, void (*drop)(void*), void* chain) {
-	return msCurrentActor != NULL ? msActorStamp(cb, drop, chain) : cb;
+	if (__builtin_expect(msActorCurrentForJobs() != NULL, 0)) return msActorStamp(cb, drop, chain);
+	return cb;
 }
 
 static inline void msActorJobForget(msClosure cb) {
-	if (cb.fn == (msClosureFn)msActorJobFire) msActorJobAbandon(cb.env);
+	if (msActorMaybeCurrent() && cb.fn == (msClosureFn)msActorJobFire) msActorJobAbandon(cb.env);
 }
 #else
 #define MS_ACTOR_JOBS 0
