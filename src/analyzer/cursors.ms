@@ -33,10 +33,10 @@ import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
 import { calledRoutineType, isImmutableModuleConst, isViewCall, receiverOf, routineBody, viewCallSources } from "../checker/effects";
-import { ANY_HEAP_SLOT, addressSlots, callerDefsOf, callsPlainRoutine, canAlias, collectsHeld, createRoutineDecls, createWriteSummaries, isAssign, LocalDefs, mayWrite, noteHeldAcrossCallbacks, reachesModuleState, retainsArg, runsCallbacks, runsHooks, stepSlot, viewReturnSlots, WriteEffects } from "./writeEffects";
+import { ANY_HEAP_SLOT, APPEND_SLOT, addressSlots, callerDefsOf, callsPlainRoutine, canAlias, collectsHeld, createRoutineDecls, createWriteSummaries, isAssign, LocalDefs, mayWrite, noteHeldAcrossCallbacks, reachesModuleState, retainsArg, runsCallbacks, runsHooks, stepSlot, viewReturnSlots, WriteEffects } from "./writeEffects";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
-import { isReadonlyView } from "../checker/types";
+import { isAwaitable, isReadonlyView, withoutReadonlyView } from "../checker/types";
 import { skipConvDfa } from "./alias";
 
 // ===== VarFlag (per-variable analysis flags) =====
@@ -57,6 +57,7 @@ let holderNames: HashMap<Symbol, Symbol[]> = new HashMap<Symbol, Symbol[]>();
 let capturedLocals: Symbol[] = [];
 let assignedInClosures: Symbol[] = [];
 let envEscapes = false;
+let callerDefs: LocalDefs | null = null;
 
 function registerVariable(p: Partitions, sym: Symbol | null, isParam: boolean): void {
 	registerPartitionVariable(p, sym, isParam, VF_IS_PARAM);
@@ -201,6 +202,75 @@ function callArgumentRoots(w: WriteEffects, p: Partitions, call: Node, roots: Sy
 		if (containsPointer(a.nodeType, 0)) allRoots(p, a, roots);
 	}
 	return true;
+}
+
+function isHandleType(type: Type | null): boolean {
+	let t = type;
+	for (let depth = 0; t != null && depth < 8; depth += 1) {
+		if ((t.kind == TypeKind.Ref || t.kind == TypeKind.Alias || t.kind == TypeKind.Distinct || t.kind == TypeKind.Lent) && t.typeReturn != null) { t = t.typeReturn; continue; }
+		if (isReadonlyView(t)) { t = withoutReadonlyView(t); continue; }
+		if (t.kind == TypeKind.Union) {
+			let handles = 0;
+			for (const m of t.typeChildren) {
+				if (m != null && m.kind == TypeKind.Null) continue;
+				if (!isHandleType(m)) return false;
+				handles += 1;
+			}
+			return handles > 0;
+		}
+		return t.kind == TypeKind.Array || (t.kind == TypeKind.Struct && t.sym != null && t.sym.symbolKind == SymbolKind.Class);
+	}
+	return false;
+}
+
+function isHeapHandle(sym: Symbol | null): boolean {
+	return isHandleType(sym != null ? sym.symbolType : null);
+}
+
+function isNativePush(sym: Symbol): boolean {
+	return sym.nativeName.startsWith("&ms") && sym.nativeName.endsWith("ArrayPush");
+}
+
+function appendsOnlyHandles(call: Node): boolean {
+	const sym = call.resolvedSym!;
+	const args = (call.data as CallExprData).arguments;
+	const recv = receiverOf(call) ?? (args.length > 0 ? args[0] : null);
+	if (!isNativePush(sym) || recv == null) return false;
+	let at = recv.nodeType;
+	while (at != null && (at.kind == TypeKind.Var || at.kind == TypeKind.Ref || at.kind == TypeKind.Ptr) && at.typeReturn != null) at = at.typeReturn;
+	return at != null && at.kind == TypeKind.Array && isHandleType(at.typeReturn);
+}
+
+function summaryIsExact(w: WriteEffects, call: Node): boolean {
+	const sym = call.resolvedSym!;
+	if (hasFlag(sym, SymbolFlag.OverloadSig) || (hasFlag(sym, SymbolFlag.ImportC) && !isNativePush(sym))) return false;
+	return !mayWrite(w, call, [APPEND_SLOT], callerDefs) || appendsOnlyHandles(call);
+}
+
+function callLeavesGraphAlone(w: WriteEffects, p: Partitions, call: Node, roots: Symbol[]): boolean {
+	if (!callsPlainRoutine(call) || reachesModuleState(w, call, callerDefs) || !summaryIsExact(w, call)) return false;
+	if (isAwaitable(call.nodeType) || !callArgumentRoots(w, p, call, roots) || roots.length == 0) return false;
+	const recv = receiverOf(call);
+	if (recv != null && isAwaitable(recv.nodeType)) return false;
+	for (const a of (call.data as CallExprData).arguments) {
+		if (a != null && (a.kind == NodeKind.HiddenAddr || isAwaitable(a.nodeType))) return false;
+	}
+	const parts: int32[] = [];
+	for (const r of roots) {
+		const id = variableId(p, r);
+		if (id < 0 || !isHeapHandle(r)) return false;
+		const part = ufRoot(p, id);
+		if (parts.indexOf(part) >= 0) return false;
+		parts.push(part);
+	}
+	return true;
+}
+
+function keepAliveToCall(p: Partitions, roots: Symbol[]): void {
+	for (const r of roots) {
+		const id = variableId(p, r);
+		if (id >= 0 && p.abstractTime > p.vars[id].aliveEnd) p.vars[id].aliveEnd = p.abstractTime;
+	}
 }
 
 function writesOtherPartition(w: WriteEffects, p: Partitions, site: Node, viewRoot: int32, defs: LocalDefs): boolean {
@@ -822,8 +892,12 @@ function trav(w: WriteEffects, p: Partitions, node: Node | null): void {
 			trav(w, p, d.callee);
 			for (const arg of d.arguments) { trav(w, p, arg); }
 
+			const keptRoots: Symbol[] = [];
+			const leavesGraph = callLeavesGraphAlone(w, p, node, keptRoots);
+			if (leavesGraph) keepAliveToCall(p, keptRoots);
+
 			// Method call (obj.method(...)) → obj is potentially mutated
-			if (d.callee != null && d.callee.kind == NodeKind.MemberExpr && !callsFieldValue(d.callee)) {
+			if (!leavesGraph && d.callee != null && d.callee.kind == NodeKind.MemberExpr && !callsFieldValue(d.callee)) {
 				const objRoots: Symbol[] = [];
 				allRoots(p, (d.callee.data as MemberExprData).object, objRoots);
 				for (const r of objRoots) { potentialMutation(p, r); }
@@ -848,7 +922,7 @@ function trav(w: WriteEffects, p: Partitions, node: Node | null): void {
 			const receiverFormals = node.flags.has(NodeFlag.ExtCall) ? 1 : 0;
 			for (let ai = 0; ai < d.arguments.length; ai += 1) {
 				const fi = ai + receiverFormals;
-				if (!readOnlyFormal(formals, fi) && !sinkFormal(formals, fi) && !isViewArg(d.arguments[ai])) potentialMutationViaArg(p, d.arguments[ai]);
+				if (!leavesGraph && !readOnlyFormal(formals, fi) && !sinkFormal(formals, fi) && !isViewArg(d.arguments[ai])) potentialMutationViaArg(p, d.arguments[ai]);
 			}
 			recordWrite(p, node);
 		},
@@ -1112,6 +1186,7 @@ function inferCursorsIn(w: WriteEffects, body: Node, defs: LocalDefs): Symbol[] 
 	}
 	writeSites = [];
 	writeTimes = [];
+	callerDefs = defs;
 
 	// Pass 2: build union-find graphs and track mutations
 	trav(w, p, body);
@@ -1643,4 +1718,57 @@ test "a closure a nested closure returns ends the cursor of the env it reads" {
 test "a closure named inside another closure ends the cursor" {
 	const body = inferredNamed(CAPTURES + "function f(a: Link[]): int32 { const best = a[0]; const get = (): int32 => best.v; const twice = (): int32 => get() + get(); return twice(); }", "f");
 	assert !isCursorNamed(body, "best");
+}
+
+const DOCS = "class Doc { value: string = \"\"; line: string = \"\"; kids: Doc[] = []; }\n"
+	+ "struct Wrap { d: Doc }\n"
+	+ "function bump(o: Doc): void { o.line = \"x\"; }\n"
+	+ "function rewrite(o: Doc): void { o.value = \"x\"; }\n"
+	+ "function mk(i: int32): Doc { return new Doc(); }\n"
+	+ "function touch(w: Wrap): void {}\n"
+	+ "function use(s: string): void { console.log(s); }\n";
+
+test "a callee that writes another field keeps the cursor" {
+	const body = inferredNamed(DOCS + "function f(o: Doc): void { const t = o.value; bump(o); use(t); }", "f");
+	assert isCursorNamed(body, "t");
+}
+
+test "a callee that writes the cursor's own field ends the cursor" {
+	const body = inferredNamed(DOCS + "function f(o: Doc): void { const t = o.value; rewrite(o); use(t); }", "f");
+	assert !isCursorNamed(body, "t");
+}
+
+test "a callee that writes the field through an alias of the source ends the cursor" {
+	const body = inferredNamed(DOCS + "function f(o: Doc): void { const t = o.value; const a = o; rewrite(a); use(t); }", "f");
+	assert !isCursorNamed(body, "t");
+}
+
+test "receiver push keeps no __ord count" {
+	const body = inferredNamed(DOCS + "function f(a: Doc, i: int32): void { const ord = a.kids; const k = mk(i); ord.push(k); }", "f");
+	assert isCursorNamed(body, "ord");
+}
+
+test "receiver push keeps a cursor on another field" {
+	const body = inferredNamed(DOCS + "function f(a: Doc, i: int32): void { const t = a.value; a.kids.push(mk(i)); use(t); }", "f");
+	assert isCursorNamed(body, "t");
+}
+
+test "receiver push of an element read from the same array keeps the call's graph mutation" {
+	const body = inferredNamed(DOCS + "function f(a: Doc): void { const ord = a.kids; const k = ord[0]; ord.push(k); use(k.value); }", "f");
+	assert !isCursorNamed(body, "k");
+}
+
+test "receiver push keeps a cursor on a class element it appends beside" {
+	const body = inferredNamed(DOCS + "function f(a: Doc, i: int32): void { const k = a.kids[0]; a.kids.push(mk(i)); use(k.value); }", "f");
+	assert isCursorNamed(body, "k");
+}
+
+test "receiver push of a borrow from the same array keeps the call's graph mutation" {
+	const body = inferredNamed(DOCS + "function f(a: Doc): void { const k = a.kids[0]; a.kids.push(k); use(k.value); }", "f");
+	assert !isCursorNamed(body, "k");
+}
+
+test "a value-typed local root keeps the call's graph mutation" {
+	const body = inferredNamed(DOCS + "function f(o: Doc): void { const w: Wrap = { d: o }; const t = w.d; touch(w); use(t.value); }", "f");
+	assert !isCursorNamed(body, "t");
 }
