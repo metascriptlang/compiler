@@ -23,6 +23,7 @@
 //                                        build must fail with every tag, else it must link (nothing is run)
 //   // GUARD-ASAN                        with GUARD-OS bare: also build --sanitize=address --cc=clang and run on the
 //                                        host; pass = exit 0 + GUARD-OK printed + no AddressSanitizer report
+// Any other `// GUARD-<word>` in a probe is red, so a misspelt or unimplemented directive cannot pass silently.
 // The double-destroy abort needs no directive — it is name-agnostic. A balance holds only over a
 // type the probe allocated: a type with no ledger row proves nothing and is red.
 //
@@ -194,7 +195,10 @@ interface Probe {
 	os: string;
 	osArgs: string[];
 	selftestRed: string;
+	unknownDirectives: string[];
 }
+
+const KNOWN_DIRECTIVES = ["GUARD-BALANCE", "GUARD-TEST-BALANCE", "GUARD-CHECK-FAIL", "GUARD-REFUSED", "GUARD-WARNED", "GUARD-JS", "GUARD-TSAN", "GUARD-OS", "GUARD-ASAN"];
 
 function firstWord(s: string): string {
 	const w = s.trim();
@@ -222,6 +226,11 @@ function parseDirectives(probe: Probe, src: string): void {
 		} else if (balAt >= 0) {
 			const tok = firstWord(line.slice(balAt + BAL.length, line.length));
 			if (tok != "") probe.balance.push(tok);
+		}
+		const marker = line.indexOf("// GUARD-");
+		if (marker >= 0) {
+			const word = firstWord(line.slice(marker + 3, line.length));
+			if (!KNOWN_DIRECTIVES.includes(word)) probe.unknownDirectives.push(`${word} at line ${i + 1}`);
 		}
 		if (line.startsWith(CHECK)) probe.checkfails.push(line.slice(CHECK.length, line.length));
 		if (line.startsWith("// SELFTEST-RED ")) probe.selftestRed = line.slice("// SELFTEST-RED ".length, line.length).trim();
@@ -257,7 +266,7 @@ function discoverProbes(dir: string): Probe[] {
 	for (const name of names) {
 		const probe: Probe = {
 			name, path: `${dir}/${name}.ms`,
-			balance: [], testBalance: [], checkfails: [], refusedLines: [], warnedLines: [], wantJs: false, wantTsan: false, wantAsan: false, os: "", osArgs: [], selftestRed: "",
+			balance: [], testBalance: [], checkfails: [], refusedLines: [], warnedLines: [], wantJs: false, wantTsan: false, wantAsan: false, os: "", osArgs: [], selftestRed: "", unknownDirectives: [],
 		};
 		parseDirectives(probe, readFileOr(probe.path, ""));
 		probes.push(probe);
@@ -962,7 +971,9 @@ function buildMsTargetDecides(): void {
 }
 
 function runProbe(probe: Probe): void {
-	if (probe.os != "") {
+	if (probe.unknownDirectives.length > 0) {
+		fail(probe.name, `unknown directive ${probe.unknownDirectives.join(", ")}: the runner would ignore it and the guard would assert less than it says`);
+	} else if (probe.os != "") {
 		runOsLane(probe);
 	} else {
 		runDrcLane(probe);
