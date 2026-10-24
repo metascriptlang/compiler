@@ -69,6 +69,7 @@ import "./unionContextual";
 import "./fnSlotUnionRepr";
 import "./valueOfProtocol";
 import "./paramDestructure";
+import "./paramMutationScan";
 import "./maybeGenericPayload";
 import "./genericReturnIntoMaybe";
 import "./extGenericFromArg";
