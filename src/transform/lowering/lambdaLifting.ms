@@ -52,7 +52,7 @@ import {
 	createLiftState, inEnclosingFnBody, hasEnclosingFnEnv, currentEnvAccessSym, preRegisterVarTypes,
 	makeEnvStruct, envHasField, envFieldName, envFieldType, rewriteNode, applyActiveRewrites, isRoutineSym,
 	routineInfoOf, withoutRoutines, wrapFnAsClosure, makeEnvVarAndClosurePair, PreCreatedEnv,
-	createSnapshotPairEnv, setupSharedEnv, makeClosurePairOnly,
+	createSnapshotPairEnv, setupSharedEnv, makeClosurePairOnly, requireUp,
 } from "./lambdaLiftingEnv";
 import {
 	frameLoopSyms, loopEnvOf, envChainFrom, frameChain, innermostLoopHolding, splitLoopCaptures, loopsHoldAll,
@@ -149,7 +149,7 @@ function collectRoutines(program: Node, state: LiftState): void {
 	state.routines = routineSyms(program, 0, state.splitLoopLocals);
 }
 
-function envPointerTo(target: Type, envName: string, envType: Type, chainNames: string[], chainTypes: Type[], envParamSym: Symbol, loc: SourceLocation): Node | null {
+function envPointerTo(state: LiftState, target: Type, envName: string, envType: Type, chainNames: string[], chainTypes: Type[], envParamSym: Symbol, loc: SourceLocation): Node | null {
 	const own = createNode(NodeKind.TypeAssertion, { asExpr: makeTypedIdentResolved(envParamSym, null, loc), asType: envName }, syntheticToken(loc));
 	if (envType == target) {
 		own.nodeType = createRef(envType);
@@ -159,6 +159,7 @@ function envPointerTo(target: Type, envName: string, envType: Type, chainNames: 
 	let access: Node = makeHiddenDeref(own, loc);
 	access.nodeType = envType;
 	for (let k = 0; k < chainTypes.length; k += 1) {
+		requireUp(state, access.nodeType!, target.typeName, loc);
 		const up = makeMember(access, UP_FIELD, loc);
 		up.nodeType = createPtr(voidType());
 		const next = createNode(NodeKind.TypeAssertion, { asExpr: up, asType: chainNames[k] }, syntheticToken(loc));
@@ -306,7 +307,7 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 				if (reachTypes[k] == target) idx = k;
 			}
 			if (idx < 0) {
-				const pointer = envPointerTo(target, envName, envStructType, rwChainNames, rwChainTypes, envParamSym, loc);
+				const pointer = envPointerTo(state, target, envName, envStructType, rwChainNames, rwChainTypes, envParamSym, loc);
 				if (pointer == null) {
 					reportTransformError(state.ctx, `internal: the env of '${info.sym.name}' is not reachable from this closure`, ref.location);
 					return ref;
@@ -1441,11 +1442,33 @@ function envFieldsOf(stmts: Node[]): string[] {
 	return [];
 }
 
+function envFieldsNamed(stmts: Node[], part: string): string[] {
+	for (const s of stmts) {
+		if (s.kind == NodeKind.InterfaceDecl && s.nodeType != null && s.nodeType.typeName.contains(part)) return s.nodeType.typeNames;
+	}
+	return ["<no env named " + part + ">"];
+}
+
 test "two captured bindings of one spelling get a field each" {
 	const fields = envFieldsOf(checkedLifted("function f(): void { let n: int32 = 0; { const x: int32 = 1; const g = (): int32 => x + n; n = g(); } { const x: int32 = 2; const h = (): int32 => x + n; n = h(); } }"));
-	assert fields.length == 4;
-	assert fields[0] == "$up";
-	assert fields[1] != fields[2] && fields[2] != fields[3] && fields[1] != fields[3];
+	assert fields.length == 3;
+	assert !fields.includes("$up");
+	assert fields[0] != fields[1] && fields[1] != fields[2] && fields[0] != fields[2];
+}
+
+test "a closure env whose nested closures read only its own frame has no $up" {
+	const fields = envFieldsNamed(checkedLifted("function outer(): int32 { const a: int32 = 1; const t = (): int32 => { const b: int32 = a; const ok = (): int32 => b; return ok(); }; return t(); }"), "arrow");
+	assert fields.length == 1 && fields[0] != "$up", fields.join(",");
+}
+
+test "a closure env whose nested closure reads an ancestor binding walks $up to it" {
+	const fields = envFieldsNamed(checkedLifted("function outer(): int32 { const a: int32 = 1; const t = (): int32 => { const b: int32 = a; const ok = (): int32 => a + b; return ok(); }; return t(); }"), "arrow");
+	assert fields.length == 2 && fields[0] == "$up", fields.join(",");
+}
+
+test "a closure env whose nested closure calls an ancestor routine with an env walks $up to it" {
+	const fields = envFieldsNamed(checkedLifted("function outer(): int32 { const a: int32 = 1; const get = (): int32 => a; const t = (): int32 => { const b: int32 = 2; const ok = (): int32 => get() + b; return ok(); }; return t(); }"), "arrow");
+	assert fields.length == 2 && fields[0] == "$up", fields.join(",");
 }
 
 test "a lifted closure is a routine symbol that its closure pair refers to" {

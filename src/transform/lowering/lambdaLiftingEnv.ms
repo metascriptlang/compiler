@@ -346,6 +346,37 @@ export function chainIndexOf(state: LiftState, chainTypes: Type[], sym: Symbol):
 	return -1;
 }
 
+function envHasUp(state: LiftState, envStructType: Type): boolean {
+	const fieldSyms = state.envFieldSyms.get(envStructType);
+	if (fieldSyms == null) return false;
+	for (const s of fieldSyms) {
+		if (s == null) return true;
+	}
+	return false;
+}
+
+export function requireUp(state: LiftState, envStructType: Type, target: string, loc: SourceLocation): void {
+	if (!envHasUp(state, envStructType)) {
+		reportTransformError(state.ctx, `internal: the env '${envStructType.typeName}' has no $up on the walk to '${target}'`, loc);
+	}
+}
+
+function readsAncestorEnv(state: LiftState, nestedReads: SymSet, ownLocals: SymSet | null, chainTypes: Type[]): boolean {
+	for (const sym of nestedReads.items) {
+		if (ownLocals != null && symSetContains(ownLocals, sym)) continue;
+		if (!isRoutineSym(state, sym)) {
+			if (chainIndexOf(state, chainTypes, sym) >= 0) return true;
+			continue;
+		}
+		const info = routineInfoOf(state, sym);
+		if (info == null) return true;
+		for (const t of chainTypes) {
+			if (t == info.envStructType) return true;
+		}
+	}
+	return false;
+}
+
 // Walk `$up` from a base env-struct access up the ancestor chain to the env that
 // stores `sym` (chainTypes[targetIdx]).
 // `access0` is the starting env-struct value: `(*((Cur*)_envP))` for a lifted body
@@ -355,6 +386,7 @@ function chainWalkFrom(state: LiftState, access0: Node, curType0: Type, sym: Sym
 	let curType = curType0;
 	let k = 0;
 	while (k <= targetIdx) {
+		requireUp(state, curType, sym.name, loc);
 		const upMember = makeMember(access, UP_FIELD, loc);
 		upMember.nodeType = createPtr(voidType());  // read $up (owning Ref<parent>, or void* at a root env) then cast
 		const nextCast = createNode(NodeKind.TypeAssertion, { asExpr: upMember, asType: chainNames[k] }, syntheticToken(loc));
@@ -635,6 +667,7 @@ export function setupSharedEnv(state: LiftState, allCaptures: SymSet, allCapture
 	for (const sym of withoutRoutines(allCaptures, state).items) {
 		if (!symSetContains(loopSyms, sym)) symSetAdd(frameCaptures, sym);
 	}
+	const nestedReads = allCaptures;
 	allCaptures = frameCaptures;
 	state.sharedEnvActive = true;
 	state.sharedEnvName = `$Env_${state.currentFnName}_shared`;
@@ -652,20 +685,15 @@ export function setupSharedEnv(state: LiftState, allCaptures: SymSet, allCapture
 	const envFieldSyms: Symbol[] = [];
 	const envFieldTypes: string[] = [];
 	const envResolvedTypes: Type[] = [];
-	// Up-chain field: pointer to lexical parent env. For shared (function-root)
-	// envs this is null; per-closure envs created inside functions point back to
-	// the function's shared env via this field. Drives chain walk in rewriteNode.
-	envFieldSyms.push(null as unknown as Symbol);
-	if (outerEnvName != "" && outerEnvStructType != null) {
+	const wiresUp = outerEnvName != "" && outerEnvStructType != null && readsAncestorEnv(state, nestedReads, ownLocals, parentChainTypes);
+	if (wiresUp) {
 		// Owning ref to the enclosing env: keeps the parent
 		// frame alive while any nested closure holds this env, so the `$up` walk
 		// never dangles for an escaping closure (DRC increfs on wire, ORC decrefs
 		// on destroy). Chain is acyclic → no cycle, short → no destroy-recursion.
+		envFieldSyms.push(null as unknown as Symbol);
 		envFieldTypes.push("");
 		envResolvedTypes.push(createRef(outerEnvStructType));
-	} else {
-		envFieldTypes.push("unknown");
-		envResolvedTypes.push(createPtr(voidType()));
 	}
 	for (const sym of allCaptures.items) {
 		// Ancestor capture: an enclosing env already stores this var. Do NOT add a
@@ -706,7 +734,7 @@ export function setupSharedEnv(state: LiftState, allCaptures: SymSet, allCapture
 	// Wire `$up` to the enclosing env. This closure's lifted body receives the
 	// enclosing env as `_envP` (the closure pair carries it), so nested closures
 	// walk `$up` to reach ancestor-frame slots.
-	if (outerEnvName != "" && outerEnvStructType != null) {
+	if (wiresUp) {
 		const upLhs = makeMember(envVarDeref(state.sharedEnvVarSym!, state.sharedEnvStructType, loc), UP_FIELD, loc);
 		upLhs.nodeType = createRef(outerEnvStructType);
 		// Cast the void* enclosing-env param to Ref<outerEnv> so DRC sees an owning
