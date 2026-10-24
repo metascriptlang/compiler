@@ -5,7 +5,7 @@
 // SYNC: mapChildren in transform/walker.ms must handle the same NodeKinds.
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, createNodeAt, makeLoc, IdentifierData,
 	ProgramData, BlockStmtData, IfStmtData, WhileStmtData, ForStmtData,
 	ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	FunctionDeclData, ArrowFunctionData, FunctionExprData,
@@ -29,6 +29,86 @@ import {
 } from "./node";
 
 type ChildVisitor = (child: Node) => void;
+
+export function anyChild(node: Node, test: (child: Node) => boolean): boolean {
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && test(child)) found = true;
+	});
+	return found;
+}
+
+export function noStop(n: Node): boolean {
+	return false;
+}
+
+export function anyDescendant(node: Node | null, test: (n: Node) => boolean, stop: (n: Node) => boolean): boolean {
+	if (node == null) return false;
+	if (test(node)) return true;
+	if (stop(node)) return false;
+	return anyChild(node, (child: Node): boolean => anyDescendant(child, test, stop));
+}
+
+function nameNode(name: string): Node {
+	return createNodeAt(NodeKind.Identifier, { name }, makeLoc(1, 1));
+}
+
+function blockNode(stmts: Node[]): Node {
+	return createNodeAt(NodeKind.BlockStmt, { statements: stmts }, makeLoc(1, 1));
+}
+
+function isNamed(n: Node, name: string): boolean {
+	return n.kind == NodeKind.Identifier && (n.data as IdentifierData).name == name;
+}
+
+test "anyChild: a match among the direct children" {
+	const root = blockNode([nameNode("a"), nameNode("b")]);
+	assert anyChild(root, (c: Node): boolean => isNamed(c, "b"));
+}
+
+test "anyChild: a match one level down is not a direct child" {
+	const root = blockNode([nameNode("a"), blockNode([nameNode("b")])]);
+	assert !anyChild(root, (c: Node): boolean => isNamed(c, "b"));
+}
+
+test "anyChild: no match, and a leaf has no children" {
+	assert !anyChild(blockNode([nameNode("a")]), (c: Node): boolean => isNamed(c, "z"));
+	assert !anyChild(nameNode("a"), (c: Node): boolean => true);
+}
+
+test "anyChild: stops testing after the first match" {
+	const root = blockNode([nameNode("a"), nameNode("a"), nameNode("a")]);
+	let calls = 0;
+	assert anyChild(root, (c: Node): boolean => { calls += 1; return true; });
+	assert calls == 1;
+}
+
+test "anyDescendant: a match at any depth, the node itself included" {
+	const deep = blockNode([nameNode("a"), blockNode([blockNode([nameNode("b")])])]);
+	assert anyDescendant(deep, (n: Node): boolean => isNamed(n, "b"), noStop);
+	assert anyDescendant(nameNode("b"), (n: Node): boolean => isNamed(n, "b"), noStop);
+}
+
+test "anyDescendant: no match, and a null node" {
+	const root = blockNode([nameNode("a"), blockNode([nameNode("b")])]);
+	assert !anyDescendant(root, (n: Node): boolean => isNamed(n, "z"), noStop);
+	assert !anyDescendant(null, (n: Node): boolean => true, noStop);
+}
+
+test "anyDescendant: does not descend into a stop node but still tests it" {
+	const inner = blockNode([nameNode("b")]);
+	const root = blockNode([nameNode("a"), inner]);
+	const stopAtBlock = (n: Node): boolean => n.kind == NodeKind.BlockStmt && n != root;
+	assert !anyDescendant(root, (n: Node): boolean => isNamed(n, "b"), stopAtBlock);
+	assert anyDescendant(root, (n: Node): boolean => n == inner, stopAtBlock);
+}
+
+test "anyDescendant: stops testing after the first match" {
+	const root = blockNode([nameNode("a"), nameNode("a"), blockNode([nameNode("a")])]);
+	let calls = 0;
+	assert anyDescendant(root, (n: Node): boolean => { calls += 1; return n.kind == NodeKind.Identifier; }, noStop);
+	assert calls == 2;
+}
 
 export function literalHeldClosures(init: Node, out: Node[]): void {
 	if (init.kind == NodeKind.ArrowFunction || init.kind == NodeKind.FunctionExpr) {
