@@ -90,6 +90,7 @@ import "./genericArgumentAliasRelation";
 import "./aliasStaticReceiver";
 import "./metaTransparentAliasEquality";
 import "./macroTypeArgumentReplacement";
+import "./macroTypeArgCompileOnce";
 import "./comptime";
 import "./inheritance";
 import "./nullableFunction";
