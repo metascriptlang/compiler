@@ -1,4 +1,4 @@
-import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, HiddenStdConvData, IdentifierData } from "../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, HiddenStdConvData, IdentifierData } from "../ast/node";
 import { classDeclNodeOf, parentClassSymOf, Scope } from "./symbol";
 import { CheckerContext, addError, extReceiverSym } from "./context";
 import { skipModifier, distinctBody, isStructType, isMaybeType, typeDisplayName } from "./types";
@@ -270,6 +270,31 @@ export function refuseHiddenMethodCall(ctx: CheckerContext, call: Node): void {
 	if (owner == null) return;
 	const receiver = md.methodIsStatic ? null : receiverClassOf(callee);
 	reportClassMember(ctx, owner, md.methodName, "method", vis == DeclaredVisibility.Protected, receiver, call.location.line, call.location.column);
+}
+
+function constructorVisibility(cls: Symbol): DeclaredVisibility {
+	const decl = classDeclNodeOf(cls);
+	if (decl == null || decl.kind != NodeKind.ClassDecl) return DeclaredVisibility.NotDeclared;
+	for (const member of (decl.data as ClassDeclData).classBody) {
+		const m = unwrapDecl(member);
+		if (m != null && m.kind == NodeKind.ConstructorDecl) return memberVisibility((m.data as ConstructorDeclData).ctorVisibility);
+	}
+	return DeclaredVisibility.NotDeclared;
+}
+
+export function refuseHiddenConstructor(ctx: CheckerContext, declaring: Symbol, line: int32, column: int32): void {
+	const owner = originOf(declaring);
+	const vis = constructorVisibility(owner);
+	if (vis != DeclaredVisibility.Private && vis != DeclaredVisibility.Protected) return;
+	const protectedCtor = vis == DeclaredVisibility.Protected;
+	if (enclosingGrant(ctx, owner, protectedCtor) != null) return;
+	addError(ctx, `Constructor of class '${owner.name}' is ${protectedCtor ? "protected" : "private"} and only accessible within the class declaration`, line, column);
+}
+
+export function refuseExtendingPrivateConstructor(ctx: CheckerContext, parent: Symbol, line: int32, column: int32): void {
+	const owner = originOf(parent);
+	if (constructorVisibility(owner) != DeclaredVisibility.Private || enclosingGrant(ctx, owner, false) != null) return;
+	addError(ctx, `Cannot extend a class '${owner.name}'. Class constructor is marked as private`, line, column);
 }
 
 export function isSuperReceiver(object: Node): boolean {

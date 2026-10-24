@@ -148,6 +148,7 @@ import "./comptimeConversionRange";
 import "./readonlyViewRefArgument";
 import "./nullFirstTernaryArg";
 import "./fieldVisibility";
+import "./constructorVisibility";
 import "./useBeforeAssign";
 import "./outParameterWrites";
 import "./sinkParamModes";
