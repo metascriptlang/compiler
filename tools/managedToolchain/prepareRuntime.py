@@ -52,11 +52,11 @@ LLVM_X86_SOURCES = ["https://raw.githubusercontent.com/llvm/llvm-project/llvmorg
                     for v in ("21.1.0", "22.1.1")]
 
 REMOVED_DISABLED_FEATURES = [{
-    "feature": "-amx-transpose", "zig": "0.16.0", "engineMajor": "22", "target": "x86_64-linux-gnu.2.31",
+    "feature": "-amx-transpose", "zig": "0.16.0", "engineMajor": "22", "target": target,
     "cpu": "x86-64", "absentMacroPrefix": "__AMX_",
     "reason": "defined by LLVM 21 (FeatureAMXTRANSPOSE) and removed by LLVM 22; x86-64 enables no AMX feature in either",
     "sources": LLVM_X86_SOURCES,
-}]
+} for target in ("x86_64-linux-gnu.2.31", "x86_64-windows-gnu")]
 
 TARGETS = {
     "wasm32-wasi": {
