@@ -227,21 +227,24 @@ function medianOf(arm: Arm, key: string): float64 {
 	return arm.vals.has(key) ? median(arm.vals.get(key)!) : 0.0;
 }
 
+// phase.A's leaves: a2.xform and a2.native are split into pass.* rows, a2.analyze into analyze.* rows.
+const PHASE_A_LEAVES = ["a2.mono", "a2.macro", "a2.lower"];
+
 function coverage(arm: Arm): string {
 	const phaseA = medianOf(arm, "msc\tphase.A\tinstr");
-	const proc = medianOf(arm, "proc\ttotal\tinstr");
-	let passes = 0.0;
-	let timed = 0.0;
+	const total = medianOf(arm, "msc\ttotal\tinstr");
+	let leaves = 0.0;
+	let phases = 0.0;
 	for (const key of arm.keys) {
 		const f = key.split("\t");
 		if (f[0] != "msc" || f[2] != "instr") { continue; }
 		const v = medianOf(arm, key);
-		if (f[1].startsWith("pass.")) { passes += v; }
-		if (!f[1].startsWith("phase.") && f[1] != "total") { timed += v; }
+		if (f[1].startsWith("pass.") || f[1].startsWith("analyze.") || PHASE_A_LEAVES.includes(f[1])) { leaves += v; }
+		if (f[1].startsWith("phase.")) { phases += v; }
 	}
-	const a = phaseA > 0 ? percentText(passes / phaseA * 100) : "n/a";
-	const b = proc > 0 && timed > 0 ? percentText(timed / proc * 100) : "n/a";
-	return `sum pass.* instr / phase.A instr ${a} · sum timed msc flows / proc total instr ${b}`;
+	const a = phaseA > 0 ? percentText(leaves / phaseA * 100) : "n/a";
+	const b = total > 0 ? percentText(phases / total * 100) : "n/a";
+	return `leaf flows / phase.A instr ${a} · phase.* / msc total instr ${b}`;
 }
 
 // ---- rendering ---------------------------------------------------------------
@@ -528,7 +531,7 @@ test "rows rank by instruction delta, then count delta" {
 	assert r[firstCount].key == "msc\tpass.grew\tcount";
 }
 
-test "coverage divides the pass instructions by the phase and the timed flows by the process" {
+test "coverage counts only leaf flows of phase A, and the phases of the msc total" {
 	const arm = loadArm("src/test/perf/fixtures", "fx", "base", 3);
-	assert coverage(arm) == "sum pass.* instr / phase.A instr 90.0% · sum timed msc flows / proc total instr 80.0%";
+	assert coverage(arm) == "leaf flows / phase.A instr 95.0% · phase.* / msc total instr 90.0%";
 }

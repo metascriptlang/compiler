@@ -36,8 +36,8 @@ both arms: that is the noise check, and every row of it should carry no mark.
   be real. Instructions retired carry far less noise than wall time under load.
 - `new` / `gone` is a flow only one arm wrote. A header line names the sources each arm produced:
   a compiler without `MSC_FLOWS` yields only `proc` rows.
-- Coverage: the sum of `pass.*` instructions over `phase.A`, and the sum of the `msc` timed flows
-  (without `phase.*` and `total`) over the process total. A low share means the table leaves a flow
+- Coverage: the leaf flows of phase A (`pass.*`, `analyze.*`, `a2.mono`, `a2.macro`, `a2.lower`) over
+  `phase.A`, and the `phase.*` rows over the `msc total`. A low share means the table leaves a flow
   out and its delta cannot be located in it.
 
 **Measured noise, 2026-10-25** (macOS arm64, installed `msc` v0.3.4 as both arms, `711` built with
