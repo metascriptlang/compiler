@@ -246,8 +246,21 @@ function peelConv(n: Node): Node {
 	return cur;
 }
 
-function boundRoutine(sym: Symbol | null): Node | null {
-	const bound = constBindingInitializer(sym);
+export function aliasTarget(sym: Symbol | null): Symbol | null {
+	const seen: Symbol[] = [];
+	let cur = sym;
+	while (cur != null && !seen.includes(cur)) {
+		seen.push(cur);
+		const init = constBindingInitializer(cur);
+		const next = init != null ? peelConv(init) : null;
+		if (next == null || next.kind != NodeKind.Identifier || next.resolvedSym == null || (next.resolvedSym.symbolKind != SymbolKind.Function && constBindingInitializer(next.resolvedSym) == null)) return cur;
+		cur = next.resolvedSym;
+	}
+	return cur;
+}
+
+export function boundRoutine(sym: Symbol | null): Node | null {
+	const bound = constBindingInitializer(aliasTarget(sym));
 	return bound != null && isRoutineNode(peelConv(bound)) ? peelConv(bound) : null;
 }
 

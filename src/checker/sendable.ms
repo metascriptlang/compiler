@@ -3,7 +3,7 @@
 import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, addError, addWarning } from "./context";
-import { Effect, EffectCause, FreshScope, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, routineEffect, walkEffect, walkWithViews } from "./effects";
+import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, routineEffect, walkEffect, walkWithViews } from "./effects";
 import { constBindingInitializer } from "./constFold";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
 import { createArray, createGenericParam, createRef, createStruct, int32Type, isPrimitiveKind, isSendableFunction, isStructType, isAtomicRef, isNumeric, isReadonlyView, stringType, typeCarriesRef, typeDisplayName } from "./types";
@@ -395,21 +395,24 @@ function refuseKeptBorrow(call: Node, argNode: Node, pi: number): void {
 // The walk must therefore reach EVERY read position, so it delegates to
 // forEachChild: the earlier hand-written arm list covered 4 shapes and silently
 // let `x++` (UpdateExpr) and any argument wrapped in HiddenStdConv through.
-function walkForMutableCaptures(node: Node | null, params: string[], reported: string[], ctx: CheckerContext, by: string): void {
+function walkForMutableCaptures(node: Node | null, params: string[], reported: string[], ctx: CheckerContext, by: string, via: Node[]): void {
 	if (node == null) return;
 	match (node.kind) {
 		// A nested routine runs on the same thread as the thunk that calls it, so its
 		// captures are the thunk's captures; its own parameters bind, like the thunk's.
 		NodeKind.FunctionDecl | NodeKind.FunctionExpr | NodeKind.ArrowFunction => {
 			const nested = routineParamsAndBody(node);
-			walkForMutableCaptures(nested.body, params.concat(nested.params), reported, ctx, by);
+			walkForMutableCaptures(nested.body, params.concat(nested.params), reported, ctx, by, via);
 		},
-		NodeKind.Identifier => { reportMutableCapture(node, false, params, reported, ctx, by); },
+		NodeKind.Identifier => {
+			reportMutableCapture(node, false, params, reported, ctx, by);
+			reportBoundCapture(node, ctx, by, via);
+		},
 		NodeKind.BinaryExpr | NodeKind.UpdateExpr => {
 			const target = node.kind == NodeKind.UpdateExpr ? (node.data as UpdateExprData).updateArg
 				: writesItsLeft((node.data as BinaryExprData).operator) ? (node.data as BinaryExprData).left : null;
 			if (target != null) reportMutableCapture(target, true, params, reported, ctx, by);
-			forEachChild(node, (child: Node): void => { walkForMutableCaptures(child, params, reported, ctx, by); });
+			forEachChild(node, (child: Node): void => { walkForMutableCaptures(child, params, reported, ctx, by, via); });
 		},
 		// Binding positions: the identifiers under a pattern DECLARE names, they
 		// do not read the enclosing scope. Walking them would look the name up
@@ -417,11 +420,20 @@ function walkForMutableCaptures(node: Node | null, params: string[], reported: s
 		NodeKind.ArrayPattern | NodeKind.ObjectPattern | NodeKind.ObjectPatternProp => {},
 		NodeKind.MatchCase => {
 			const d = node.data as MatchCaseData;
-			walkForMutableCaptures(d.caseGuard, params, reported, ctx, by);
-			walkForMutableCaptures(d.caseBody, params, reported, ctx, by);
+			walkForMutableCaptures(d.caseGuard, params, reported, ctx, by, via);
+			walkForMutableCaptures(d.caseBody, params, reported, ctx, by, via);
 		},
-		_ => { forEachChild(node, (child: Node): void => { walkForMutableCaptures(child, params, reported, ctx, by); }); },
+		_ => { forEachChild(node, (child: Node): void => { walkForMutableCaptures(child, params, reported, ctx, by, via); }); },
 	};
+}
+
+function reportBoundCapture(node: Node, ctx: CheckerContext, by: string, via: Node[]): void {
+	const sym = node.resolvedSym;
+	const bound = boundRoutine(sym);
+	if (bound == null || via.includes(bound)) return;
+	via.push(bound);
+	judgedAtDeclaration(ctx, sym!, by, via);
+	via.pop();
 }
 
 // A parameter carries no Mutable flag, yet a thunk that assigns it rebinds the
@@ -466,7 +478,7 @@ export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawn
 	if (source.kind != NodeKind.ArrowFunction && source.kind != NodeKind.FunctionExpr && !isSendableFunction(source.nodeType)) {
 		const sym = source.kind == NodeKind.Identifier ? source.resolvedSym : null;
 		if (sym == null || !judgedAtDeclaration(ctx, sym, "spawn")) {
-			const name = describeExpr(source);
+			const name = source.kind == NodeKind.CallExpr ? describeExpr((source.data as CallExprData).callee) + "(...)" : describeExpr(source);
 			addError(ctx, `'${name}' is a function value that may capture mutable state, so spawn cannot run it on another thread — spawn a function declaration or a closure, or declare '${name}' as Sendable<F>`,
 				source.location.line, source.location.column);
 			return;
@@ -705,7 +717,7 @@ function borrowedCapture(ctx: CheckerContext, node: Node): Node | null {
 
 function spawnEffectOf(fn: Node, e: Effect, views: Symbol[] = []): EffectCause | null {
 	if (fn.kind != NodeKind.Identifier) return walkWithViews(fn, e, views);
-	const sym = fn.resolvedSym;
+	const sym = aliasTarget(fn.resolvedSym);
 	if (sym == null) return null;
 	if (sym.symbolKind == SymbolKind.Function) return routineEffect(sym, e);
 	const bound = constBindingInitializer(sym);
@@ -717,7 +729,7 @@ function spawnEffectOf(fn: Node, e: Effect, views: Symbol[] = []): EffectCause |
 
 function spawnedClosure(fn: Node): Node {
 	if (fn.kind != NodeKind.Identifier || fn.resolvedSym == null || fn.resolvedSym!.symbolKind == SymbolKind.Function) return fn;
-	const bound = constBindingInitializer(fn.resolvedSym);
+	const bound = constBindingInitializer(aliasTarget(fn.resolvedSym));
 	return bound != null ? peelHidden(bound) : fn;
 }
 
@@ -761,7 +773,7 @@ function isLockedSection(sym: Symbol | null): boolean {
 
 function lockCallbackEffect(fn: Node): EffectCause | null {
 	if (fn.kind == NodeKind.ArrowFunction || fn.kind == NodeKind.FunctionExpr) return walkEffect(fn, Effect.Suspends);
-	const sym = fn.kind == NodeKind.Identifier ? fn.resolvedSym : null;
+	const sym = fn.kind == NodeKind.Identifier ? aliasTarget(fn.resolvedSym) : null;
 	if (sym != null && sym.symbolKind == SymbolKind.Function) return routineEffect(sym, Effect.Suspends);
 	const bound = sym != null ? constBindingInitializer(sym) : null;
 	if (bound != null) {
@@ -784,13 +796,13 @@ export function refuseSuspendingLockCallback(ctx: CheckerContext, call: Node): v
 }
 
 
-function checkClosureCaptures(ctx: CheckerContext, closure: Node, by: string): void {
+function checkClosureCaptures(ctx: CheckerContext, closure: Node, by: string, via: Node[] = []): void {
 	const parts = routineParamsAndBody(closure);
 	const body = parts.body;
 	const reported: string[] = [];
 	if (body != null) {
-		walkForMutableCaptures(body, parts.params, reported, ctx, by);
-		if (ctx.currentActor != null) {
+		walkForMutableCaptures(body, parts.params, reported, ctx, by, via);
+		if (ctx.currentActor != null && via.length == 0) {
 			const actorReported: string[] = [];
 			walkActorSpawnRules(ctx, body, actorReported);
 		}
@@ -815,7 +827,8 @@ export function checkSendableSource(ctx: CheckerContext, expr: Node): boolean {
 	return false;
 }
 
-function judgedAtDeclaration(ctx: CheckerContext, sym: Symbol, by: string = "a Sendable function"): boolean {
+function judgedAtDeclaration(ctx: CheckerContext, bindingSym: Symbol, by: string = "a Sendable function", via: Node[] = []): boolean {
+	const sym = aliasTarget(bindingSym)!;
 	const home = scopeHolding(ctx.table, sym);
 	if (home == null) return false;
 	const routine = sym.symbolKind == SymbolKind.Function;
@@ -825,7 +838,7 @@ function judgedAtDeclaration(ctx: CheckerContext, sym: Symbol, by: string = "a S
 	if (declared == null || (declared.kind != NodeKind.FunctionDecl && declared.kind != NodeKind.ArrowFunction && declared.kind != NodeKind.FunctionExpr)) return false;
 	const here = ctx.table.current;
 	ctx.table.current = home;
-	checkClosureCaptures(ctx, declared, by);
+	checkClosureCaptures(ctx, declared, by, via);
 	ctx.table.current = here;
 	return true;
 }
@@ -931,7 +944,7 @@ function walkActorSpawnRules(ctx: CheckerContext, node: Node | null, reportedKey
 				addError(ctx, `spawn thunk inside an actor method cannot capture '${name}', which can hold the actor 'this' — borrow individual fields instead (PARALOCK S1/E61)`, node.location.line, node.location.column);
 				return;
 			}
-			const bound = constBindingInitializer(sym);
+			const bound = constBindingInitializer(aliasTarget(sym));
 			const routine = bound != null ? peelHidden(bound) : null;
 			if (routine != null && (routine.kind == NodeKind.ArrowFunction || routine.kind == NodeKind.FunctionExpr) && pushIfNew(reportedKeys, "c:" + name)) {
 				walkActorSpawnRules(ctx, routineParamsAndBody(routine).body, reportedKeys);
@@ -1125,6 +1138,13 @@ function requireFresh(rhs: Node | null, what: string, w: OwnerWalk): void {
 	reportNotSoleOwner(w, what + " at " + rhs.location.line + ":" + rhs.location.column + " is not a fresh value (a literal, `new`, `move`, or a call whose receiver and arguments are fresh)");
 }
 
+function requireFreshBinding(init: Node | null, w: OwnerWalk): void {
+	const lit = init == null ? null : peelView(init);
+	const held = lit != null && (lit.kind == NodeKind.ArrowFunction || lit.kind == NodeKind.FunctionExpr) ? borrowedCapture(w.ctx, lit) : null;
+	if (held == null || w.reported) { requireFresh(init, "the value bound to '" + w.name + "'", w); return; }
+	reportNotSoleOwner(w, "the closure bound to '" + w.name + "' captures '" + describeExpr(held) + "' at " + held.location.line + ":" + held.location.column + ", and the parent still names that captured graph");
+}
+
 function requireNoSideEffect(site: Node, w: OwnerWalk): void {
 	deferEffectCheck(site, "noSideEffect", (ctx: CheckerContext): void => {
 		if (w.reported) return;
@@ -1153,7 +1173,7 @@ function walkOwner(node: Node | null, w: OwnerWalk): void {
 			const d = node.data as VariableDeclData;
 			if (node == w.sym.declNode) {
 				w.declared = true;
-				requireFresh(d.initializer, "the value bound to '" + w.name + "'", w);
+				requireFreshBinding(d.initializer, w);
 			} else if (!isMovedName(d.declName, w) && escapesOwner(d.initializer, w)) {
 				reportEscape(node, "it is bound to '" + d.declName + "'", w);
 			}
