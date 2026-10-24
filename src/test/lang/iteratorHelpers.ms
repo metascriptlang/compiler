@@ -316,3 +316,83 @@ test "iterator helpers: struct elements" {
 	assert points.values().some((p: Point, i: number): boolean => p.y == 6);
 	assert points.values().every((p: Point, i: number): boolean => p.x < p.y);
 }
+
+function rows<T>(r: T[][]): string {
+	const out: string[] = [];
+	for (const row of r) out.push(row.join(","));
+	return out.join("|");
+}
+
+test "iterator chunks: groups in order and yields the short tail" {
+	const log: string[] = [];
+	assert rows(counter("c", 5, log).chunks(2).toArray()) == "1,2|3,4|5";
+	assert log.join(",") == "c.next,c.next,c.next,c.next,c.next,c.next";
+	assert rows(counter("e", 4, log).chunks(2).toArray()) == "1,2|3,4";
+}
+
+test "iterator chunks: an early exit closes the source" {
+	const log: string[] = [];
+	const r = counter("c", 9, log).chunks(2).take(1).toArray();
+	assert rows(r) == "1,2";
+	assert log.join(",") == "c.next,c.next,c.return";
+}
+
+test "iterator chunks: a bad size fails at the call, closes the receiver and names the error" {
+	const log: string[] = [];
+	assert messageOf((): void => {
+		counter("a", 3, log).chunks(0);
+	}) == "chunkSize must be between 1 and 4294967295";
+	assert messageOf((): void => {
+		counter("b", 3, log).chunks(4294967296);
+	}) == "chunkSize must be between 1 and 4294967295";
+	assert messageOf((): void => {
+		counter("c", 3, log).chunks(1.5);
+	}) == "chunkSize must be an integer";
+	assert messageOf((): void => {
+		counter("d", 3, log).chunks(NaN);
+	}) == "chunkSize must be an integer";
+	assert log.join(",") == "a.return,b.return,c.return,d.return";
+}
+
+test "iterator windows: slides one element and drops the undersized tail by default" {
+	const log: string[] = [];
+	assert rows(counter("w", 5, log).windows(3).toArray()) == "1,2,3|2,3,4|3,4,5";
+	assert rows(counter("s", 2, log).windows(3).toArray()) == "";
+}
+
+test "iterator windows: allow-partial yields one short window only when the source ran short" {
+	const log: string[] = [];
+	assert rows(counter("p", 2, log).windows(3, "allow-partial").toArray()) == "1,2";
+	assert rows(counter("f", 4, log).windows(3, "allow-partial").toArray()) == "1,2,3|2,3,4";
+	assert rows(counter("o", 1, log).windows(1, "allow-partial").toArray()) == "1";
+	assert counter("z", 0, log).windows(2, "allow-partial").toArray().length == 0;
+}
+
+test "iterator windows: every window is its own array" {
+	const all = counter("w", 4, []).windows(2).toArray();
+	all[0].push(99);
+	assert rows(all) == "1,2,99|2,3|3,4";
+}
+
+test "iterator windows: a bad size closes the receiver and an early exit closes the source" {
+	const log: string[] = [];
+	assert messageOf((): void => {
+		counter("a", 3, log).windows(0);
+	}) == "windowSize must be between 1 and 4294967295";
+	assert messageOf((): void => {
+		counter("b", 3, log).windows(2.5, "allow-partial");
+	}) == "windowSize must be an integer";
+	assert rows(counter("c", 9, log).windows(2).take(1).toArray()) == "1,2";
+	assert log.join(",") == "a.return,b.return,c.next,c.next,c.return";
+}
+
+test "iterator chunks and windows: string and struct elements" {
+	const words: string[] = ["a", "b", "c"];
+	assert rows(words.values().chunks(2).toArray()) == "a,b|c";
+	assert rows(words.values().windows(2).toArray()) == "a,b|b,c";
+	const points: Point[] = [{ x: 1, y: 2 }, { x: 3, y: 4 }, { x: 5, y: 6 }];
+	const w = points.values().windows(2).toArray();
+	assert w.length == 2 && w[0][1].x == 3 && w[1][0].y == 4;
+	const c = points.values().chunks(2).toArray();
+	assert c.length == 2 && c[0][1].y == 4 && c[1].length == 1 && c[1][0].x == 5;
+}

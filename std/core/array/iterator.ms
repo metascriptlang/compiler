@@ -146,3 +146,52 @@ export function find<T>(this it: Iterator<T>, fn: (x: T, i: number) => boolean):
 	}
 	return null;
 }
+
+export type Undersized = "only-full" | "allow-partial";
+
+function checkedSize<T>(it: Iterator<T>, size: number, name: string): number {
+	if (size % 1 != 0) {
+		closeSource(it);
+		throw new Error(`${name} must be an integer`);
+	}
+	if (size < 1 || size > 4294967295) {
+		closeSource(it);
+		throw new RangeError(`${name} must be between 1 and 4294967295`);
+	}
+	return size;
+}
+
+function* chunksLazy<T>(it: Iterator<T>, size: number): Iterator<T[]> {
+	let buffer: T[] = [];
+	for (const x of it) {
+		buffer.push(x);
+		if (buffer.length == size) {
+			yield buffer;
+			buffer = [];
+		}
+	}
+	if (buffer.length > 0) yield buffer;
+}
+
+export function chunks<T>(this it: Iterator<T>, size: number): Iterator<T[]> {
+	return chunksLazy(it, checkedSize(it, size, "chunkSize"));
+}
+
+function* windowsLazy<T>(it: Iterator<T>, size: number, partial: boolean): Iterator<T[]> {
+	const buffer: T[] = [];
+	for (const x of it) {
+		if (buffer.length == size) buffer.shift();
+		buffer.push(x);
+		if (buffer.length == size) yield buffer.slice(0);
+	}
+	if (partial && buffer.length > 0 && buffer.length < size) yield buffer.slice(0);
+}
+
+export function windows<T>(
+	this it: Iterator<T>,
+	size: number,
+	undersized?: Undersized,
+): Iterator<T[]> {
+	const checked = checkedSize(it, size, "windowSize");
+	return windowsLazy(it, checked, undersized == "allow-partial");
+}
