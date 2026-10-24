@@ -10,6 +10,8 @@ The VM that runs Raiser bytecode: `@comptime` blocks and macros, and whole progr
 | `value.ms` | `RaiserValue`, array, object and string heaps (rc, color, free list), `rcIncref` / `rcDecref`, `copyGraph` |
 | `valueCopy.ms` | `copyTypedValue`: runs the copy plans `CopyValue` carries |
 | `module.ms` | `RaiserFunction`, `RaiserModule` |
+| `regs.ms` | register layout: class inference, the operand verifier, renumbering into the word file and the ref file |
+| `ledger.ms` | live-0 audit: finds heap items whose count exceeds the references that remain |
 | `vm.ms` | dispatch loop, strands and scheduler, futures, safepoints, loop budget |
 | `orc.ms` | `orcCollectCycles`: trial-deletion cycle collector |
 | `context.ms` | persistent context across module executions: the embedding API |
@@ -19,7 +21,7 @@ The VM that runs Raiser bytecode: `@comptime` blocks and macros, and whole progr
 ## Rules
 
 - **The VM knows no AST** — `src/raiser/` never imports a node type; codegen hands it a `RaiserModule`.
-- **Dispatch is one `match (op)` in `vm.ms`, one arm per opcode** — it compiles to a C `switch` over the opcode (a jump table); a `break` or `continue` in an arm still targets the dispatch loop, not the generated switch.
+- **Dispatch is one `switch (op)` in `vm.ms` over packed instruction words, one arm per opcode** — the `while (true)` around it is marked `@computedGoto`, so the C backend jumps through a table of label addresses.
 - **`gcMode` picks the memory regime per VM** — `createVM` and `createContext` default to `"arena"` (no refcount); `cmdRunRaiser` sets `"orc"`. RC and the cycle collector run only under `"orc"`.
 - **A string is a handle on the strand's string heap** — text reaches a host function only through `unboxString` and returns through `boxString`, both on the active host heap; module constants and field names are interned handles below zero that every heap reads.
 - **Every value that crosses strand heaps goes through `copyGraph`** — `spawn` copies the closure env and the global slots into the new strand's heap, `futureComplete` copies the result into the future's own heap, the awaiting reader copies it out.

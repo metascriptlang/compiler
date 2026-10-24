@@ -7,8 +7,8 @@ Raiser is MetaScript's statically typed bytecode VM. It covers what the C backen
 | # | Role | State |
 |---|---|---|
 | 1 | Comptime engine: `@comptime` blocks and macros during compilation | in use |
-| 2 | IDE eval loop: long-running runtime for inline eval and hot redefinition | not built; `src/raiser/repl.ms` is an execution demo |
-| 3 | Embeddable scripting / sandboxed eval | the `context.ms` API exists; nothing outside the compiler uses it |
+| 2 | IDE eval loop: long-running runtime for inline eval and hot redefinition | not built |
+| 3 | Embeddable scripting / sandboxed eval | the `context.ms` API, wrapped for embedders by `src/embed/index.ms` (`examples/embedGameLoop/host.ms` is its consumer) |
 | 4 | Game-logic scripting on a client that cannot ship native code: the Lua / AngelScript niche, logic above the render loop, not the loop | not built |
 
 `msc run --target=raiser <file>` also runs whole checked programs, multi-module, for tooling. The measured consumer is the Ion project generator: a typed manifest resolves a graph, emits an Xcode project, builds an app and runs its window smoke with no native manifest-evaluation fallback (not re-run here).
@@ -135,7 +135,7 @@ The instruction ratio is lower than the VM ratio because it includes the compile
 
 Codegen builds `RaiserInstruction` records `{ op, a, b, c, line }`; ABx and Ax are views over them: `Bx = b·256 + c`, `Ax` = signed 24 bits over `a`, `b`, `c`. `createRaiserFunction` packs each record once into an `int64` word (`op` in bits 0–7, then `a`, `b`, `c` in 16 bits each) and the VM reads only the packed words; `assertPacked` refuses a function whose `code` changed after creation. The source line and the `LoadField` / `StoreField` inline cache (field index, `-1` = miss) sit in side tables `lines` and `fieldCache`, one entry per instruction.
 
-92 opcodes in `RaiserOpcode` (counted 2026-10-06); the table names the families, not every member:
+`RaiserOpcode` (`bytecode.ms`) has more members than this table lists; it names the families it was written for, not every member:
 
 | Family | Opcodes |
 |---|---|
@@ -157,7 +157,7 @@ Exceptions follow a safepoint model. `Try` pushes a safepoint. `Catch` is never 
 
 ## Not built
 
-Each checked by grep over `src/raiser`, `src/codegen/raiser`, `src/compiler/meta`: offset-based field access (`LoadFieldOffset`), typed I32 / U32 / U64 / F32 opcodes, arity-specialized `Call0`–`Call4`, a `CallExtern` that calls linked natives through function pointers, any C mirror of the dispatch loop (computed goto or threaded), the IDE eval protocol (`evalForm`, watch opcode), a binary bytecode file format.
+A grep over `src/raiser`, `src/codegen/raiser`, `src/compiler/meta` finds no `Call0`–`Call4` arity-specialized call, no `CallExtern` that calls linked natives through function pointers, and no IDE eval protocol (`evalForm`, watch opcode); a binary bytecode file format was not searched for. The dispatch loop in `vm.ms` is one `switch` marked `@computedGoto`, which the C backend emits as a table of label addresses.
 
 ## Out of scope
 
@@ -179,4 +179,4 @@ Each checked by grep over `src/raiser`, `src/codegen/raiser`, `src/compiler/meta
 
 - The Ion generator consumer and the 2026-09-04 `startsWith` budget measurement were not re-run.
 - ORC was not exercised by a cycle-collecting probe here; only the code paths were read (`orc.ms`, the `gcMode` gates in `vm.ms`).
-- `bytecode.ms` comments still say "32-bit instructions" and justify appending opcodes at the end of the enum by a `vm_dispatch.c` that hardcodes their numbers; neither holds (see Bytecode, Not built). Opcodes are still appended at the end by convention.
+- `bytecode.ms` comments still say "32-bit instructions" and justify appending opcodes at the end of the enum by a `vm_dispatch.c` that hardcodes their numbers; `grep -rn vm_dispatch src` finds only that comment, and the packed word is 64 bits. Opcodes are still appended at the end by convention.
