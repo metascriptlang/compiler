@@ -647,13 +647,21 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 // that stop at function boundaries.
 // SYNC: forEachChild must handle the same NodeKinds (read-only variant).
 export function mapChildren(node: Node, f: Visitor): void {
+	mapChildrenWith(node, f, applyVisitor);
+}
+
+export function applyVisitor(child: Node, f: Visitor): Node {
+	return f(child);
+}
+
+export function mapChildrenWith<C>(node: Node, ctx: C, f: (child: Node, ctx: C) => Node): void {
 	match (node.kind) {
 		// Program root
 		NodeKind.Program => {
 			const d: Cursor<ProgramData> = node.data as ProgramData;
 			let i = 0;
 			while (i < d.programStmts.length) {
-				d.programStmts[i] = f(d.programStmts[i]);
+				d.programStmts[i] = f(d.programStmts[i], ctx);
 				i += 1;
 			}
 		},
@@ -662,7 +670,7 @@ export function mapChildren(node: Node, f: Visitor): void {
 			const d: Cursor<SpliceManyData> = node.data as SpliceManyData;
 			let i = 0;
 			for (const child of d.spliceNodes) {
-				d.spliceNodes[i] = f(child);
+				d.spliceNodes[i] = f(child, ctx);
 				i += 1;
 			}
 		},
@@ -671,51 +679,51 @@ export function mapChildren(node: Node, f: Visitor): void {
 			const d: Cursor<BlockStmtData> = node.data as BlockStmtData;
 			let i = 0;
 			while (i < d.statements.length) {
-				d.statements[i] = f(d.statements[i]);
+				d.statements[i] = f(d.statements[i], ctx);
 				i += 1;
 			}
 		},
 		// Statements with child nodes
 		NodeKind.IfStmt => {
 			const d: Cursor<IfStmtData> = node.data as IfStmtData;
-			d.condition = f(d.condition);
-			d.consequent = f(d.consequent);
-			d.alternate = f(d.alternate);
+			d.condition = f(d.condition, ctx);
+			d.consequent = f(d.consequent, ctx);
+			d.alternate = f(d.alternate, ctx);
 		},
 		NodeKind.WhileStmt => {
 			const d: Cursor<WhileStmtData> = node.data as WhileStmtData;
-			d.whileCondition = f(d.whileCondition);
-			d.whileBody = f(d.whileBody);
+			d.whileCondition = f(d.whileCondition, ctx);
+			d.whileBody = f(d.whileBody, ctx);
 		},
 		NodeKind.ForStmt => {
 			const d: Cursor<ForStmtData> = node.data as ForStmtData;
-			d.forInit = f(d.forInit);
-			d.forCondition = f(d.forCondition);
-			d.forUpdate = f(d.forUpdate);
-			d.forBody = f(d.forBody);
+			d.forInit = f(d.forInit, ctx);
+			d.forCondition = f(d.forCondition, ctx);
+			d.forUpdate = f(d.forUpdate, ctx);
+			d.forBody = f(d.forBody, ctx);
 		},
 		NodeKind.ForOfStmt => {
 			const d: Cursor<ForOfStmtData> = node.data as ForOfStmtData;
-			d.forOfIterable = f(d.forOfIterable);
-			d.forOfBody = f(d.forOfBody);
-			if (d.forOfPattern != null) { d.forOfPattern = f(d.forOfPattern); }
+			d.forOfIterable = f(d.forOfIterable, ctx);
+			d.forOfBody = f(d.forOfBody, ctx);
+			if (d.forOfPattern != null) { d.forOfPattern = f(d.forOfPattern, ctx); }
 		},
 		NodeKind.ForInStmt => {
 			const d: Cursor<ForInStmtData> = node.data as ForInStmtData;
-			d.forInObject = f(d.forInObject);
-			d.forInBody = f(d.forInBody);
+			d.forInObject = f(d.forInObject, ctx);
+			d.forInBody = f(d.forInBody, ctx);
 		},
 		NodeKind.DoWhileStmt => {
 			const d: Cursor<DoWhileStmtData> = node.data as DoWhileStmtData;
-			d.doBody = f(d.doBody);
-			d.doCondition = f(d.doCondition);
+			d.doBody = f(d.doBody, ctx);
+			d.doCondition = f(d.doCondition, ctx);
 		},
 		NodeKind.SwitchStmt => {
 			const d: Cursor<SwitchStmtData> = node.data as SwitchStmtData;
-			d.switchDisc = f(d.switchDisc);
+			d.switchDisc = f(d.switchDisc, ctx);
 			let i = 0;
 			while (i < d.switchCases.length) {
-				d.switchCases[i] = f(d.switchCases[i]);
+				d.switchCases[i] = f(d.switchCases[i], ctx);
 				i += 1;
 			}
 		},
@@ -723,30 +731,30 @@ export function mapChildren(node: Node, f: Visitor): void {
 			const d: Cursor<SwitchCaseData> = node.data as SwitchCaseData;
 			let i = 0;
 			while (i < d.caseTests.length) {
-				d.caseTests[i] = f(d.caseTests[i]);
+				d.caseTests[i] = f(d.caseTests[i], ctx);
 				i += 1;
 			}
 			let j = 0;
 			while (j < d.caseStmts.length) {
-				d.caseStmts[j] = f(d.caseStmts[j]);
+				d.caseStmts[j] = f(d.caseStmts[j], ctx);
 				j += 1;
 			}
 		},
 		NodeKind.MatchStmt => {
 			const d: Cursor<MatchStmtData> = node.data as MatchStmtData;
-			d.matchStmtDisc = f(d.matchStmtDisc);
+			d.matchStmtDisc = f(d.matchStmtDisc, ctx);
 			let i = 0;
 			while (i < d.matchStmtCases.length) {
-				d.matchStmtCases[i] = f(d.matchStmtCases[i]);
+				d.matchStmtCases[i] = f(d.matchStmtCases[i], ctx);
 				i += 1;
 			}
 		},
 		NodeKind.MatchExpr => {
 			const d: Cursor<MatchExprData> = node.data as MatchExprData;
-			d.matchDisc = f(d.matchDisc);
+			d.matchDisc = f(d.matchDisc, ctx);
 			let i = 0;
 			while (i < d.matchCases.length) {
-				d.matchCases[i] = f(d.matchCases[i]);
+				d.matchCases[i] = f(d.matchCases[i], ctx);
 				i += 1;
 			}
 		},
@@ -754,30 +762,30 @@ export function mapChildren(node: Node, f: Visitor): void {
 			const d: Cursor<MatchCaseData> = node.data as MatchCaseData;
 			let i = 0;
 			while (i < d.casePatterns.length) {
-				d.casePatterns[i] = f(d.casePatterns[i]);
+				d.casePatterns[i] = f(d.casePatterns[i], ctx);
 				i += 1;
 			}
-			if (d.caseGuard != null) { d.caseGuard = f(d.caseGuard); }
-			d.caseBody = f(d.caseBody);
+			if (d.caseGuard != null) { d.caseGuard = f(d.caseGuard, ctx); }
+			d.caseBody = f(d.caseBody, ctx);
 		},
 		// Declarations with bodies
 		NodeKind.FunctionDecl => {
 			const d: Cursor<FunctionDeclData> = node.data as FunctionDeclData;
-			d.fnBody = f(d.fnBody);
+			d.fnBody = f(d.fnBody, ctx);
 		},
 		NodeKind.ArrowFunction => {
 			const d: Cursor<ArrowFunctionData> = node.data as ArrowFunctionData;
-			d.arrowBody = f(d.arrowBody);
+			d.arrowBody = f(d.arrowBody, ctx);
 		},
 		NodeKind.FunctionExpr => {
 			const d: Cursor<FunctionExprData> = node.data as FunctionExprData;
-			d.funcExprBody = f(d.funcExprBody);
+			d.funcExprBody = f(d.funcExprBody, ctx);
 		},
 		NodeKind.ClassDecl => {
 			const d: Cursor<ClassDeclData> = node.data as ClassDeclData;
 			let i = 0;
 			while (i < d.classBody.length) {
-				d.classBody[i] = f(d.classBody[i]);
+				d.classBody[i] = f(d.classBody[i], ctx);
 				i += 1;
 			}
 		},
@@ -785,107 +793,107 @@ export function mapChildren(node: Node, f: Visitor): void {
 			const d: Cursor<ActorDeclData> = node.data as ActorDeclData;
 			let i = 0;
 			while (i < d.actorBody.length) {
-				d.actorBody[i] = f(d.actorBody[i]);
+				d.actorBody[i] = f(d.actorBody[i], ctx);
 				i += 1;
 			}
 		},
 		NodeKind.MethodDecl => {
 			const d: Cursor<MethodDeclData> = node.data as MethodDeclData;
-			d.methodBody = f(d.methodBody);
+			d.methodBody = f(d.methodBody, ctx);
 		},
 		NodeKind.ConstructorDecl => {
 			const d: Cursor<ConstructorDeclData> = node.data as ConstructorDeclData;
-			d.ctorBody = f(d.ctorBody);
+			d.ctorBody = f(d.ctorBody, ctx);
 		},
 		NodeKind.ExportDecl => {
 			const d: Cursor<ExportDeclData> = node.data as ExportDeclData;
-			d.exportedDecl = f(d.exportedDecl);
+			d.exportedDecl = f(d.exportedDecl, ctx);
 		},
 		NodeKind.DecoratedDecl => {
 			const d: Cursor<DecoratedDeclData> = node.data as DecoratedDeclData;
 			let i = 0;
 			while (i < d.decorators.length) {
-				d.decorators[i] = f(d.decorators[i]);
+				d.decorators[i] = f(d.decorators[i], ctx);
 				i += 1;
 			}
-			d.decoratedNode = f(d.decoratedNode);
+			d.decoratedNode = f(d.decoratedNode, ctx);
 		},
 		NodeKind.EnumDecl => {
 			const d: Cursor<EnumDeclData> = node.data as EnumDeclData;
 			let i = 0;
 			while (i < d.enumInits.length) {
-				if (d.enumInits[i] != null) { d.enumInits[i] = f(d.enumInits[i]); }
+				if (d.enumInits[i] != null) { d.enumInits[i] = f(d.enumInits[i], ctx); }
 				i += 1;
 			}
 		},
 		NodeKind.MacroDecl => {
 			const d: Cursor<MacroDeclData> = node.data as MacroDeclData;
-			d.macroDeclBody = f(d.macroDeclBody);
+			d.macroDeclBody = f(d.macroDeclBody, ctx);
 		},
 		// Simple statements with one child
 		NodeKind.VariableDecl => {
 			const d: Cursor<VariableDeclData> = node.data as VariableDeclData;
-			if (d.initializer != null) d.initializer = f(d.initializer);
+			if (d.initializer != null) d.initializer = f(d.initializer, ctx);
 		},
 		NodeKind.ReturnStmt => {
 			const d: Cursor<ReturnStmtData> = node.data as ReturnStmtData;
-			d.argument = f(d.argument!);
+			d.argument = f(d.argument!, ctx);
 		},
 		NodeKind.ThrowStmt => {
 			const d: Cursor<ThrowStmtData> = node.data as ThrowStmtData;
-			d.throwArg = f(d.throwArg);
+			d.throwArg = f(d.throwArg, ctx);
 		},
 		NodeKind.ExprStmt => {
 			const d: Cursor<ExprStmtData> = node.data as ExprStmtData;
-			d.expr = f(d.expr);
+			d.expr = f(d.expr, ctx);
 		},
 		NodeKind.DeferStmt => {
 			const d: Cursor<DeferStmtData> = node.data as DeferStmtData;
-			d.deferExpr = f(d.deferExpr);
+			d.deferExpr = f(d.deferExpr, ctx);
 		},
 		NodeKind.TryCatchStmt => {
 			const d: Cursor<TryCatchStmtData> = node.data as TryCatchStmtData;
-			d.tryBody = f(d.tryBody);
-			d.catchBody = f(d.catchBody);
-			d.finallyBody = f(d.finallyBody);
+			d.tryBody = f(d.tryBody, ctx);
+			d.catchBody = f(d.catchBody, ctx);
+			d.finallyBody = f(d.finallyBody, ctx);
 		},
 		// Expressions
 		NodeKind.BinaryExpr => {
 			const d: Cursor<BinaryExprData> = node.data as BinaryExprData;
-			d.left = f(d.left);
-			d.right = f(d.right);
+			d.left = f(d.left, ctx);
+			d.right = f(d.right, ctx);
 		},
 		NodeKind.UnaryExpr => {
 			const d: Cursor<UnaryExprData> = node.data as UnaryExprData;
-			d.operand = f(d.operand);
+			d.operand = f(d.operand, ctx);
 		},
 		NodeKind.UpdateExpr => {
 			const d: Cursor<UpdateExprData> = node.data as UpdateExprData;
-			d.updateArg = f(d.updateArg);
+			d.updateArg = f(d.updateArg, ctx);
 		},
 		NodeKind.CallExpr => {
 			const d: Cursor<CallExprData> = node.data as CallExprData;
-			d.callee = f(d.callee);
+			d.callee = f(d.callee, ctx);
 			let i = 0;
 			while (i < d.arguments.length) {
-				d.arguments[i] = f(d.arguments[i]);
+				d.arguments[i] = f(d.arguments[i], ctx);
 				i += 1;
 			}
 		},
 		NodeKind.MemberExpr => {
 			const d: Cursor<MemberExprData> = node.data as MemberExprData;
-			d.object = f(d.object);
+			d.object = f(d.object, ctx);
 		},
 		NodeKind.ArrayAccess => {
 			const d: Cursor<ArrayAccessData> = node.data as ArrayAccessData;
-			d.array = f(d.array);
-			d.index = f(d.index);
+			d.array = f(d.array, ctx);
+			d.index = f(d.index, ctx);
 		},
 		NodeKind.ObjectLiteral => {
 			const d: Cursor<ObjectLiteralData> = node.data as ObjectLiteralData;
 			let i = 0;
 			while (i < d.properties.length) {
-				d.properties[i] = f(d.properties[i]);
+				d.properties[i] = f(d.properties[i], ctx);
 				i += 1;
 			}
 		},
@@ -893,106 +901,106 @@ export function mapChildren(node: Node, f: Visitor): void {
 			const d: Cursor<ArrayLiteralData> = node.data as ArrayLiteralData;
 			let i = 0;
 			while (i < d.elements.length) {
-				d.elements[i] = f(d.elements[i]);
+				d.elements[i] = f(d.elements[i], ctx);
 				i += 1;
 			}
 		},
 		NodeKind.ConditionalExpr => {
 			const d: Cursor<ConditionalExprData> = node.data as ConditionalExprData;
-			d.ternaryCondition = f(d.ternaryCondition);
-			d.ternaryConsequent = f(d.ternaryConsequent);
-			d.ternaryAlternate = f(d.ternaryAlternate);
+			d.ternaryCondition = f(d.ternaryCondition, ctx);
+			d.ternaryConsequent = f(d.ternaryConsequent, ctx);
+			d.ternaryAlternate = f(d.ternaryAlternate, ctx);
 		},
 		NodeKind.SpreadExpr => {
 			const d: Cursor<SpreadExprData> = node.data as SpreadExprData;
-			d.spreadArg = f(d.spreadArg);
+			d.spreadArg = f(d.spreadArg, ctx);
 		},
 		NodeKind.NewExpr => {
 			const d: Cursor<NewExprData> = node.data as NewExprData;
-			d.newCallee = f(d.newCallee);
+			d.newCallee = f(d.newCallee, ctx);
 			let i = 0;
 			while (i < d.newArguments.length) {
-				d.newArguments[i] = f(d.newArguments[i]);
+				d.newArguments[i] = f(d.newArguments[i], ctx);
 				i += 1;
 			}
 		},
 		NodeKind.TryExpr => {
 			const d: Cursor<TryExprData> = node.data as TryExprData;
-			d.tryArg = f(d.tryArg);
-			if (d.hasCatch) { d.catchVal = f(d.catchVal); }
+			d.tryArg = f(d.tryArg, ctx);
+			if (d.hasCatch) { d.catchVal = f(d.catchVal, ctx); }
 		},
 		NodeKind.AwaitExpr => {
 			const d: Cursor<AwaitExprData> = node.data as AwaitExprData;
-			d.awaitArg = f(d.awaitArg);
+			d.awaitArg = f(d.awaitArg, ctx);
 		},
 		NodeKind.YieldExpr => {
 			const d: Cursor<YieldExprData> = node.data as YieldExprData;
-			d.yieldArg = f(d.yieldArg);
+			d.yieldArg = f(d.yieldArg, ctx);
 		},
 		NodeKind.MoveExpr => {
 			const d: Cursor<MoveExprData> = node.data as MoveExprData;
-			d.moveArg = f(d.moveArg);
+			d.moveArg = f(d.moveArg, ctx);
 		},
 		NodeKind.OutExpr => {
 			const d: Cursor<OutExprData> = node.data as OutExprData;
-			d.outArg = f(d.outArg);
+			d.outArg = f(d.outArg, ctx);
 		},
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
 			const d: Cursor<HiddenDerefData> = node.data as HiddenDerefData;
-			d.expr = f(d.expr);
+			d.expr = f(d.expr, ctx);
 		},
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
 			const d: Cursor<HiddenStdConvData> = node.data as HiddenStdConvData;
-			d.convExpr = f(d.convExpr);
+			d.convExpr = f(d.convExpr, ctx);
 		},
 		NodeKind.TypeAssertion => {
 			const d: Cursor<TypeAssertionData> = node.data as TypeAssertionData;
-			d.asExpr = f(d.asExpr);
+			d.asExpr = f(d.asExpr, ctx);
 		},
 		NodeKind.DestructuringDecl => {
 			const d: Cursor<DestructuringDeclData> = node.data as DestructuringDeclData;
-			d.destrPattern = f(d.destrPattern);
-			d.destrInit = f(d.destrInit);
+			d.destrPattern = f(d.destrPattern, ctx);
+			d.destrInit = f(d.destrInit, ctx);
 		},
 		NodeKind.QuoteExpr => {
 			const d: Cursor<QuoteExprData> = node.data as QuoteExprData;
-			d.quoteBody = f(d.quoteBody);
+			d.quoteBody = f(d.quoteBody, ctx);
 		},
 		NodeKind.ComptimeBlock => {
 			const d: Cursor<ComptimeBlockData> = node.data as ComptimeBlockData;
-			d.comptimeBody = f(d.comptimeBody);
+			d.comptimeBody = f(d.comptimeBody, ctx);
 		},
 		NodeKind.MacroInvocation => {
 			const d: Cursor<MacroInvocationData> = node.data as MacroInvocationData;
 			let i = 0;
 			while (i < d.macroArgs.length) {
-				d.macroArgs[i] = f(d.macroArgs[i]);
+				d.macroArgs[i] = f(d.macroArgs[i], ctx);
 				i += 1;
 			}
 		},
 		NodeKind.TestDecl => {
 			const d: Cursor<TestDeclData> = node.data as TestDeclData;
-			d.testBody = f(d.testBody);
+			d.testBody = f(d.testBody, ctx);
 		},
 		NodeKind.AssertStmt => {
 			const d: Cursor<AssertStmtData> = node.data as AssertStmtData;
-			d.assertExpr = f(d.assertExpr);
-			if (d.assertMessageExpr != null) { d.assertMessageExpr = f(d.assertMessageExpr); }
+			d.assertExpr = f(d.assertExpr, ctx);
+			if (d.assertMessageExpr != null) { d.assertMessageExpr = f(d.assertMessageExpr, ctx); }
 		},
 		NodeKind.PropertyDecl => {
 			const d: Cursor<PropertyDeclData> = node.data as PropertyDeclData;
-			if (d.propInitializer != null) { d.propInitializer = f(d.propInitializer); }
+			if (d.propInitializer != null) { d.propInitializer = f(d.propInitializer, ctx); }
 		},
 		NodeKind.ArrayPattern => {
 			const d: Cursor<ArrayPatternData> = node.data as ArrayPatternData;
 			let i = 0;
 			while (i < d.patternElements.length) {
-				d.patternElements[i] = f(d.patternElements[i]);
+				d.patternElements[i] = f(d.patternElements[i], ctx);
 				i += 1;
 			}
 			i = 0;
 			while (i < d.patternDefaults.length) {
-				if (d.patternDefaults[i] != null) { d.patternDefaults[i] = f(d.patternDefaults[i]); }
+				if (d.patternDefaults[i] != null) { d.patternDefaults[i] = f(d.patternDefaults[i], ctx); }
 				i += 1;
 			}
 		},
@@ -1000,67 +1008,67 @@ export function mapChildren(node: Node, f: Visitor): void {
 			const d: Cursor<ObjectPatternData> = node.data as ObjectPatternData;
 			let i = 0;
 			while (i < d.patternProps.length) {
-				d.patternProps[i] = f(d.patternProps[i]);
+				d.patternProps[i] = f(d.patternProps[i], ctx);
 				i += 1;
 			}
 		},
 		NodeKind.ObjectPatternProp => {
 			const d: Cursor<ObjectPatternPropData> = node.data as ObjectPatternPropData;
-			if (d.propAlias != null) { d.propAlias = f(d.propAlias); }
-			if (d.propDefault != null) { d.propDefault = f(d.propDefault); }
+			if (d.propAlias != null) { d.propAlias = f(d.propAlias, ctx); }
+			if (d.propDefault != null) { d.propDefault = f(d.propDefault, ctx); }
 		},
 		NodeKind.TypeGeneric => {
 			const d: Cursor<TypeGenericData> = node.data as TypeGenericData;
-			d.typExprBase = f(d.typExprBase);
+			d.typExprBase = f(d.typExprBase, ctx);
 			let i = 0;
 			while (i < d.typExprArgs.length) {
-				d.typExprArgs[i] = f(d.typExprArgs[i]);
+				d.typExprArgs[i] = f(d.typExprArgs[i], ctx);
 				i += 1;
 			}
 		},
 		NodeKind.TypeArray => {
 			const d: Cursor<TypeArrayData> = node.data as TypeArrayData;
-			d.typExprElement = f(d.typExprElement);
+			d.typExprElement = f(d.typExprElement, ctx);
 		},
 		NodeKind.TypeUnion => {
 			const d: Cursor<TypeUnionData> = node.data as TypeUnionData;
 			let i = 0;
 			while (i < d.typExprMembers.length) {
-				d.typExprMembers[i] = f(d.typExprMembers[i]);
+				d.typExprMembers[i] = f(d.typExprMembers[i], ctx);
 				i += 1;
 			}
 		},
 		NodeKind.TypeIntersection => {
 			const d: Cursor<TypeIntersectionData> = node.data as TypeIntersectionData;
 			for (let i = 0; i < d.typExprMembers.length; i += 1) {
-				d.typExprMembers[i] = f(d.typExprMembers[i]);
+				d.typExprMembers[i] = f(d.typExprMembers[i], ctx);
 			}
 		},
 		NodeKind.TypeFunction => {
 			const d: Cursor<TypeFunctionData> = node.data as TypeFunctionData;
 			let i = 0;
 			while (i < d.typExprParams.length) {
-				d.typExprParams[i] = f(d.typExprParams[i]);
+				d.typExprParams[i] = f(d.typExprParams[i], ctx);
 				i += 1;
 			}
-			if (d.typExprReturn != null) { d.typExprReturn = f(d.typExprReturn); }
+			if (d.typExprReturn != null) { d.typExprReturn = f(d.typExprReturn, ctx); }
 		},
 		NodeKind.TypeObject => {
 			const d: Cursor<TypeObjectData> = node.data as TypeObjectData;
 			let i = 0;
 			while (i < d.typExprFieldTypes.length) {
-				d.typExprFieldTypes[i] = f(d.typExprFieldTypes[i]);
+				d.typExprFieldTypes[i] = f(d.typExprFieldTypes[i], ctx);
 				i += 1;
 			}
-			if (d.typExprIndexKey != null) { d.typExprIndexKey = f(d.typExprIndexKey); }
-			if (d.typExprIndexValue != null) { d.typExprIndexValue = f(d.typExprIndexValue); }
+			if (d.typExprIndexKey != null) { d.typExprIndexKey = f(d.typExprIndexKey, ctx); }
+			if (d.typExprIndexValue != null) { d.typExprIndexValue = f(d.typExprIndexValue, ctx); }
 			// Per-field decorators (V2): walk each decorator node in place
 			let di = 0;
 			while (di < d.typExprFieldDecorators.length) {
 				const decs = d.typExprFieldDecorators[di];
 				let dj = 0;
 				while (dj < decs.length) {
-					decs[dj] = f(decs[dj]);
+					decs[dj] = f(decs[dj], ctx);
 					dj += 1;
 				}
 				di += 1;
@@ -1069,31 +1077,31 @@ export function mapChildren(node: Node, f: Visitor): void {
 		NodeKind.JSXElement => {
 			const d: Cursor<JSXElementData> = node.data as JSXElementData;
 			let i = 0;
-			while (i < d.jsxAttrs.length) { d.jsxAttrs[i] = f(d.jsxAttrs[i]); i += 1; }
+			while (i < d.jsxAttrs.length) { d.jsxAttrs[i] = f(d.jsxAttrs[i], ctx); i += 1; }
 			let j = 0;
-			while (j < d.jsxChildren.length) { d.jsxChildren[j] = f(d.jsxChildren[j]); j += 1; }
+			while (j < d.jsxChildren.length) { d.jsxChildren[j] = f(d.jsxChildren[j], ctx); j += 1; }
 		},
 		NodeKind.JSXFragment => {
 			const d: Cursor<JSXFragmentData> = node.data as JSXFragmentData;
 			let i = 0;
-			while (i < d.jsxFragChildren.length) { d.jsxFragChildren[i] = f(d.jsxFragChildren[i]); i += 1; }
+			while (i < d.jsxFragChildren.length) { d.jsxFragChildren[i] = f(d.jsxFragChildren[i], ctx); i += 1; }
 		},
 		NodeKind.JSXExpressionContainer => {
 			const d: Cursor<JSXExpressionContainerData> = node.data as JSXExpressionContainerData;
-			d.jsxExpr = f(d.jsxExpr);
+			d.jsxExpr = f(d.jsxExpr, ctx);
 		},
 		NodeKind.JSXAttribute => {
 			const d: Cursor<JSXAttributeData> = node.data as JSXAttributeData;
-			d.jsxAttrValue = f(d.jsxAttrValue);
+			d.jsxAttrValue = f(d.jsxAttrValue, ctx);
 		},
 		NodeKind.JSXSpreadAttribute => {
 			const d: Cursor<JSXSpreadAttributeData> = node.data as JSXSpreadAttributeData;
-			d.jsxSpreadArg = f(d.jsxSpreadArg);
+			d.jsxSpreadArg = f(d.jsxSpreadArg, ctx);
 		},
 		NodeKind.ComputedProperty => {
 			const d: Cursor<ComputedPropertyData> = node.data as ComputedPropertyData;
-			d.computedKey = f(d.computedKey);
-			d.computedValue = f(d.computedValue);
+			d.computedKey = f(d.computedKey, ctx);
+			d.computedValue = f(d.computedValue, ctx);
 		},
 		// Genuine leaves (no Node children). Listed explicitly (not via `_`) so
 		// adding a new NodeKind forces an exhaustiveness error here — keeping
