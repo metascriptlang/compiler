@@ -27,6 +27,7 @@ import {
 import { TransformContext } from "./context";
 import { makeBlock } from "./util";
 import { forEachChild } from "../ast/visitor";
+import { parseInput, makeCtx, getStmts } from "./testUtil";
 
 // Visitor function: takes a node, returns replacement (or same node if unchanged)
 type Visitor = (node: Node) => Node;
@@ -684,17 +685,20 @@ export type FnExitHook = (node: Node) => void;
 // return value is directly consumed (no local for DRC to destroy).
 function replaceProgStmts(node: Node, w: ExpandWalk, visit: Visitor): void {
 	const pd = node.data as ProgramData;
-	node.data = { programStmts: expandStmtList(pd.programStmts, w, visit) };
+	const expanded = expandStmtList(pd.programStmts, w, visit);
+	if (expanded != pd.programStmts) node.data = { programStmts: expanded };
 }
 
 function replaceBlockStmts(node: Node, w: ExpandWalk, visit: Visitor): void {
 	const bd = node.data as BlockStmtData;
-	node.data = { statements: expandStmtList(bd.statements, w, visit) };
+	const expanded = expandStmtList(bd.statements, w, visit);
+	if (expanded != bd.statements) node.data = { statements: expanded };
 }
 
 function replaceCaseStmts(node: Node, w: ExpandWalk, visit: Visitor): void {
 	const cd = node.data as SwitchCaseData;
-	node.data = { caseTests: cd.caseTests, caseStmts: expandStmtList(cd.caseStmts, w, visit), isDefault: cd.isDefault };
+	const expanded = expandStmtList(cd.caseStmts, w, visit);
+	if (expanded != cd.caseStmts) node.data = { caseTests: cd.caseTests, caseStmts: expanded, isDefault: cd.isDefault };
 }
 
 let expandTryDepth = 0;
@@ -970,10 +974,20 @@ export function replaceInExpr(node: Node, replacer: Visitor): Node {
 	return replacer(node);
 }
 
+// Returns `stmts` itself when every statement expands to itself, so a block no lowering touches
+// is neither copied nor rebuilt.
 function expandStmtList(stmts: Node[], w: ExpandWalk, visit: Visitor): Node[] {
-	const result: Node[] = [];
-	for (const stmt of stmts) {
+	let result: Node[] = stmts;
+	let changed = false;
+	for (let i = 0; i < stmts.length; i += 1) {
+		const stmt = stmts[i];
 		const expanded = w.expander(stmt, w.ctx);
+		if (!changed && expanded.length == 1 && expanded[0] == stmt) continue;
+		if (!changed) {
+			changed = true;
+			result = [];
+			for (let j = 0; j < i; j += 1) result.push(stmts[j]);
+		}
 		for (const node of expanded) {
 			result.push(node);
 		}
@@ -982,4 +996,35 @@ function expandStmtList(stmts: Node[], w: ExpandWalk, visit: Visitor): Node[] {
 		expandWalk(node, w, visit);
 	}
 	return result;
+}
+
+// ===== Tests =====
+
+function keepStmt(stmt: Node, ctx: TransformContext): Node[] {
+	return [stmt];
+}
+
+function splitStmt(stmt: Node, ctx: TransformContext): Node[] {
+	return stmt.kind == NodeKind.VariableDecl ? [stmt, stmt] : [stmt];
+}
+
+test "a statement list no expander touched keeps its array" {
+	const parsed = parseInput("const a = 1; const b = 2;");
+	assert parsed.ok;
+	const before = getStmts(parsed.value);
+	walkExpandBlocks(parsed.value, keepStmt, makeCtx());
+	assert getStmts(parsed.value) == before;
+}
+
+test "a statement list an expander grew is rebuilt in order" {
+	const parsed = parseInput("const a = 1; f();");
+	assert parsed.ok;
+	const before = getStmts(parsed.value);
+	walkExpandBlocks(parsed.value, splitStmt, makeCtx());
+	const after = getStmts(parsed.value);
+	assert after != before;
+	assert after.length == 3;
+	assert after[0].kind == NodeKind.VariableDecl;
+	assert after[1].kind == NodeKind.VariableDecl;
+	assert after[2].kind == NodeKind.ExprStmt;
 }
