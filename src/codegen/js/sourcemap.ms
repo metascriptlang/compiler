@@ -6,6 +6,7 @@
 // re-indexes sources, which is what keeps a prepended header honest.
 
 import { relative } from "std/fs/path";
+import { stringify, jsonString } from "std/core/json";
 
 // Reading the .ms text is the driver's job; this module stays free of I/O.
 export type SourceReader = (path: string) => string;
@@ -135,50 +136,15 @@ export function encodeVLQ(values: int32[]): string {
 	return result;
 }
 
-// JSON has no \x escape and forbids raw control bytes, so escapeJSString cannot
-// be reused here: it would emit \x00 for NUL and pass \f and \v through raw.
-// Bytes are copied in runs so multi-byte UTF-8 stays intact; WTF-8 lone
-// surrogates become \uXXXX.
-export function jsonEscape(s: string): string {
-	let result = "";
-	let runStart: int32 = 0;
-	let i: int32 = 0;
-	while (i < s.byteLength) {
-		const b = s.byteAt(i);
-		if (b == "\\".code || b == "\"".code || b < 32) {
-			if (runStart < i) result = result + s.byteSlice(runStart, i);
-			result = result + match (b) {
-				"\\".code => "\\\\",
-				"\"".code => "\\\"",
-				8 => "\\b",
-				9 => "\\t",
-				10 => "\\n",
-				12 => "\\f",
-				13 => "\\r",
-				_ => "\\u" + b.toString(16).padStart(4, "0"),
-			};
-			i += 1;
-			runStart = i;
-		} else if (b == 237 && i + 2 < s.byteLength
-				&& s.byteAt(i + 1) >= 160 && s.byteAt(i + 1) <= 191) {
-			if (runStart < i) result = result + s.byteSlice(runStart, i);
-			const cu = 53248 + (s.byteAt(i + 1) - 128) * 64 + (s.byteAt(i + 2) - 128);
-			result = result + "\\u" + cu.toString(16).padStart(4, "0");
-			i += 3;
-			runStart = i;
-		} else {
-			i += 1;
-		}
-	}
-	if (runStart < i) result = result + s.byteSlice(runStart, i);
-	return result;
+function jsonQuoted(s: string): string {
+	return stringify(jsonString(s));
 }
 
 function jsonStringArray(items: string[]): string {
 	let out = "";
 	for (let i: int32 = 0; i < items.length; i += 1) {
 		if (i > 0) { out = out + ","; }
-		out = `${out}"${jsonEscape(items[i])}"`;
+		out = `${out}${jsonQuoted(items[i])}`;
 	}
 	return out;
 }
@@ -194,9 +160,9 @@ function sourcesJson(info: SourceInfo, mapDir: string, read: SourceReader): stri
 		if (i > 0) { sources = sources + ","; contents = contents + ","; }
 		const abs = info.files[i];
 		const rel = mapDir == "" ? abs : relative(mapDir, abs);
-		sources = `${sources}"${jsonEscape(rel == "" ? abs : rel)}"`;
+		sources = `${sources}${jsonQuoted(rel == "" ? abs : rel)}`;
 		const text = read(abs);
-		contents = text == "" ? contents + "null" : `${contents}"${jsonEscape(text)}"`;
+		contents = text == "" ? contents + "null" : `${contents}${jsonQuoted(text)}`;
 	}
 	return `"sources":[${sources}],"sourcesContent":[${contents}]`;
 }
@@ -242,7 +208,7 @@ export function toSourceMapJson(info: SourceInfo, file: string, mapDir: string, 
 		}
 		ignoreJson = `,"x_google_ignoreList":[${items}]`;
 	}
-	return `{"version":3,"file":"${jsonEscape(file)}",${sourcesJson(info, mapDir, read)},"names":[${jsonStringArray(info.names)}],"mappings":"${mappings}"${ignoreJson}}`;
+	return `{"version":3,"file":${jsonQuoted(file)},${sourcesJson(info, mapDir, read)},"names":[${jsonStringArray(info.names)}],"mappings":"${mappings}"${ignoreJson}}`;
 }
 
 // ===== Tests =====
@@ -360,18 +326,18 @@ test "a named segment encodes its fifth field" {
 }
 
 test "json escape covers what escapeJSString cannot" {
-	assert jsonEscape("a\"b\\c") == "a\\\"b\\\\c";
-	assert jsonEscape("a\nb\tc") == "a\\nb\\tc";
-	assert jsonEscape(fromCodePoint(12)) == "\\f";
-	assert jsonEscape(fromCodePoint(11)) == "\\u000b";
-	assert jsonEscape(fromCodePoint(0)) == "\\u0000";
-	assert jsonEscape(fromCodePoint(1)) == "\\u0001";
+	assert jsonQuoted("a\"b\\c") == "\"a\\\"b\\\\c\"";
+	assert jsonQuoted("a\nb\tc") == "\"a\\nb\\tc\"";
+	assert jsonQuoted(fromCodePoint(12)) == "\"\\f\"";
+	assert jsonQuoted(fromCodePoint(11)) == "\"\\u000b\"";
+	assert jsonQuoted(fromCodePoint(0)) == "\"\\u0000\"";
+	assert jsonQuoted(fromCodePoint(1)) == "\"\\u0001\"";
 }
 
 test "json escape keeps astral runs intact" {
 	const astral = fromCodePoint(128512);
-	assert jsonEscape(astral) == astral;
-	assert jsonEscape(fromCodePoint(55296)) == "\\" + "ud800";
+	assert jsonQuoted(astral) == "\"" + astral + "\"";
+	assert jsonQuoted(fromCodePoint(55296)) == "\"\\" + "ud800\"";
 }
 
 test "ignored sources land in x_google_ignoreList" {
