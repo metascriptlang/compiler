@@ -14,7 +14,7 @@ import { parseExprList, parseCallExpr, takeListEndComments } from "./call";
 import { parseTemplateLiteral } from "./template";
 import { parseBlockStmt } from "../statements/core";
 import { tryParseLiteralKeyword, numberLiteralNode } from "./util";
-import { parseOk, exprKind, exprNode, exprOp, binLeftKind } from "./testUtil";
+import { parseOk, exprKind, exprNode, exprOp, binLeftKind, binRightKind } from "./testUtil";
 
 
 type ExprResult = Result<Expression, string>;
@@ -860,6 +860,11 @@ test "parens" { assert parseOk("(a + b) * c"); }
 test "** right assoc" { assert parseOk("a ** b ** c"); }
 
 test "**= binds loosest" { assert exprOp("a **= b ** 2") == "**="; }
+
+test "a regex literal is the right operand of ?? and of %=" {
+	assert binRightKind("a ?? /x/g") == NodeKind.RegexLiteral;
+	assert binRightKind("n %= /x/") == NodeKind.RegexLiteral;
+}
 
 test "assign right assoc" { assert parseOk("a = b = c"); }
 

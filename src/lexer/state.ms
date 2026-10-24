@@ -79,7 +79,9 @@ export function allowsRegexAfter(s: LexerState): boolean {
 	return startsExprAfter(last) || match (last) {
 		TokenKind.Bang | TokenKind.Tilde | TokenKind.Plus | TokenKind.Minus
 		| TokenKind.Star | TokenKind.Percent | TokenKind.Amp | TokenKind.Pipe | TokenKind.Caret
-		| TokenKind.LtEq | TokenKind.Gt | TokenKind.GtEq
+		| TokenKind.Lt | TokenKind.LtEq | TokenKind.Gt | TokenKind.GtEq
+		| TokenKind.StarStar | TokenKind.LtLt | TokenKind.GtGt | TokenKind.GtGtGt | TokenKind.PipeGt | TokenKind.DotDotDot
+		| TokenKind.Throw | TokenKind.Else | TokenKind.Do
 		| TokenKind.Delete | TokenKind.In | TokenKind.Instanceof | TokenKind.New | TokenKind.Typeof
 		| TokenKind.Void | TokenKind.If | TokenKind.While | TokenKind.For | TokenKind.Await => true,
 		_ => false,

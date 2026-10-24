@@ -418,6 +418,27 @@ test "a regex may follow a bitwise compound assignment" {
 	assert lexKindAt("x >>>= /a/", 2) == TokenKind.Regex;
 }
 
+test "a regex may follow ??, %=, **, a shift, <, |>, a spread and an expression-starting keyword" {
+	assert lexKindAt("a ?? /x/", 2) == TokenKind.Regex;
+	assert lexKindAt("n %= /x/", 2) == TokenKind.Regex;
+	assert lexKindAt("a ** /x/", 2) == TokenKind.Regex;
+	assert lexKindAt("a << /x/", 2) == TokenKind.Regex;
+	assert lexKindAt("a >> /x/", 2) == TokenKind.Regex;
+	assert lexKindAt("a >>> /x/", 2) == TokenKind.Regex;
+	assert lexKindAt("a < /x/", 2) == TokenKind.Regex;
+	assert lexKindAt("a |> /x/", 2) == TokenKind.Regex;
+	assert lexKindAt("[.../x/]", 2) == TokenKind.Regex;
+	assert lexKindAt("throw /x/", 1) == TokenKind.Regex;
+	assert lexKindAt("else /x/", 1) == TokenKind.Regex;
+	assert lexKindAt("do /x/", 1) == TokenKind.Regex;
+}
+
+test "a slash after a value stays a division" {
+	assert lexKindAt("a / b / c", 3) == TokenKind.Slash;
+	assert lexKindAt("a++ / 2", 2) == TokenKind.Slash;
+	assert lexKindAt("a ?? b / 2", 3) == TokenKind.Slash;
+}
+
 test "operators jammed without spaces" {
 	assert lexCount("a+b") == 3;
 	assert lexCount("a-b") == 3;

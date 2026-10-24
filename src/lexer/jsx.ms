@@ -14,8 +14,7 @@ import { scanString, scanTemplateContinuation } from "./scanner";
 // `Eof` covers start-of-input. Comparison/closing-generic `Gt` deliberately excluded so
 // `foo<T>()` and `a < b` stay arithmetic.
 function isExprPositionToken(k: TokenKind): boolean {
-	return startsExprAfter(k) || k == TokenKind.PercentEq || k == TokenKind.QuestionQuestion
-		|| k == TokenKind.TemplateHead || k == TokenKind.TemplateMiddle;
+	return startsExprAfter(k) || k == TokenKind.TemplateHead || k == TokenKind.TemplateMiddle;
 }
 
 function isJsxStart(s: LexerState): boolean {

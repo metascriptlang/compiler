@@ -74,6 +74,15 @@ export function mockExpr(state: ParserState, minPrec: int32): ExprResult {
 	return Result.err("mock: unexpected token");
 }
 
+export function binRightKind(input: string): NodeKind {
+	const lr = lex(input);
+	if (!lr.ok) return NodeKind.NumberLiteral;
+	const pr = parseExpression(lr.value);
+	if (!pr.ok) return NodeKind.NumberLiteral;
+	const d = pr.value.data as BinaryExprData;
+	return d.right.kind;
+}
+
 export function binLeftKind(input: string): NodeKind {
 	const lr = lex(input);
 	if (!lr.ok) return NodeKind.NumberLiteral;

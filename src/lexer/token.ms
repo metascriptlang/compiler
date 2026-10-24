@@ -30,7 +30,7 @@ export function startsExprAfter(kind: TokenKind): boolean {
 		| TokenKind.PlusEq | TokenKind.MinusEq | TokenKind.StarEq | TokenKind.StarStarEq | TokenKind.SlashEq
 		| TokenKind.AmpEq | TokenKind.PipeEq | TokenKind.CaretEq | TokenKind.LtLtEq | TokenKind.GtGtEq | TokenKind.GtGtGtEq
 		| TokenKind.EqEq | TokenKind.EqEqEq | TokenKind.BangEq | TokenKind.BangEqEq
-		| TokenKind.AmpAmp | TokenKind.PipePipe | TokenKind.Question
+		| TokenKind.PercentEq | TokenKind.AmpAmp | TokenKind.PipePipe | TokenKind.QuestionQuestion | TokenKind.Question
 		| TokenKind.Colon | TokenKind.Comma | TokenKind.Semicolon
 		| TokenKind.LParen | TokenKind.LBracket | TokenKind.LBrace
 		| TokenKind.Arrow | TokenKind.Return | TokenKind.Yield | TokenKind.Case => true,
