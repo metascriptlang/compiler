@@ -411,7 +411,7 @@ function buildRt(kernel: string, program: string, name: string, msc: string, out
 	const work = `${out}/work/${program}.${name}.build`;
 	absDir(work);
 	const bin = `${work}/bin`;
-	const r = exec(`cd ${q(work)} && MSC_NO_GLOBAL_CACHE=1 nice -n 10 ${q(msc)} build ${q(absPath(sourceOf(program)))} --danger --passC=-DMS_DRC_STAT --output=${q(bin)} > ${q(work + "/log.txt")} 2>&1`);
+	const r = exec(`cd ${q(work)} && MSC_NO_GLOBAL_CACHE=1 nice -n 10 ${q(msc)} build ${q(shellOut("pwd -P") + "/" + sourceOf(program))} --danger --passC=-DMS_DRC_STAT --output=${q(bin)} > ${q(work + "/log.txt")} 2>&1`);
 	if (!r.ok) { fail(`build of ${program} with the ${name} compiler failed; log ${work}/log.txt`); }
 	return bin;
 }
@@ -461,7 +461,7 @@ function main(): int32 {
 			const msc = job.arm == "base" ? base : cand;
 			const command = job.program.startsWith("rt:")
 				? q(rtBins.get(job.program + "\t" + job.arm)!)
-				: `${q(msc)} build ${q(absPath(sourceOf(job.program)))} --emit=c`;
+				: `${q(msc)} build ${q(shellOut("pwd -P") + "/" + sourceOf(job.program))} --emit=c`;
 			progress(`  ${job.program} ${job.arm} ${job.run}/${runs}`);
 			runJob(kernel, job, msc, command, out);
 		}
