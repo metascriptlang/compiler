@@ -91,5 +91,16 @@ for (const [label, flag] of targets) {
 	}
 }
 
+const probeDir = `${dir}/race`;
+removeAll(probeDir);
+ensureDir(probeDir);
+const probeBuilt = execFileResult("clang", ["-O1", "-std=c11", "-pthread", "-fsanitize=thread", `-I${runtimeRoot}`, `-I${runtimeRoot}/runtime`, `${root}/src/test/guard/fixtures/rcRaceProbe.c`, "-o", `${probeDir}/probe`], probeDir);
+if (probeBuilt.exitCode != 0) {
+	report(`race probe: clang failed: ${probeBuilt.output}${probeBuilt.errorOutput}`);
+} else {
+	const probeRun = execFileResult(`${probeDir}/probe`, [], probeDir);
+	if (!`${probeRun.output}${probeRun.errorOutput}`.includes("ThreadSanitizer: data race")) report("race probe: two threads on msIncRef of one cell raised no TSan report, so owner races are invisible to TSan");
+}
+
 if (failed > 0) exit(1);
 console.log("GUARD-OK");
