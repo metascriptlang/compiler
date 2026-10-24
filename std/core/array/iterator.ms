@@ -195,3 +195,61 @@ export function windows<T>(
 	const checked = checkedSize(it, size, "windowSize");
 	return windowsLazy(it, checked, undersized == "allow-partial");
 }
+
+function* cycleLazy<T>(it: Iterator<T>): Iterator<T> {
+	const seen: T[] = [];
+	for (const x of it) {
+		seen.push(x);
+		yield x;
+	}
+	if (seen.length == 0) return;
+	while (true) {
+		for (let i = 0; i < seen.length; i++) yield seen[i];
+	}
+}
+
+export function cycle<T>(this it: Iterator<T>): Iterator<T> {
+	return cycleLazy(it);
+}
+
+function* stepByLazy<T>(it: Iterator<T>, step: number): Iterator<T> {
+	let skipped = 0;
+	for (const x of it) {
+		if (skipped == 0) yield x;
+		skipped = skipped + 1 == step ? 0 : skipped + 1;
+	}
+}
+
+export function stepBy<T>(this it: Iterator<T>, step: number): Iterator<T> {
+	return stepByLazy(it, checkedSize(it, step, "step"));
+}
+
+function* scanLazy<T, U>(it: Iterator<T>, fn: (acc: U, x: T, i: number) => U, init: U): Iterator<U> {
+	let acc = init;
+	let i: number = 0;
+	for (const x of it) {
+		acc = fn(acc, x, i);
+		i += 1;
+		yield acc;
+	}
+}
+
+export function scan<T, U>(
+	this it: Iterator<T>,
+	fn: (acc: U, x: T, i: number) => U,
+	init: U,
+): Iterator<U> {
+	return scanLazy(it, fn, init);
+}
+
+export function sum(this it: Iterator<number>): number {
+	let total: number = 0;
+	for (const x of it) total += x;
+	return total;
+}
+
+export function sum(this it: Iterator<int32>): int32 {
+	let total: int32 = 0;
+	for (const x of it) total += x;
+	return total;
+}

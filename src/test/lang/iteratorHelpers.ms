@@ -396,3 +396,110 @@ test "iterator chunks and windows: string and struct elements" {
 	const c = points.values().chunks(2).toArray();
 	assert c.length == 2 && c[0][1].y == 4 && c[1].length == 1 && c[1][0].x == 5;
 }
+
+test "iterator cycle: buffers the first pass, then repeats it without touching the source" {
+	const log: string[] = [];
+	assert counter("a", 2, log).cycle().take(5).toArray().join(",") == "1,2,1,2,1";
+	assert log.join(",") == "a.next,a.next,a.next";
+}
+
+test "iterator cycle: an empty source ends and an early exit closes the open source" {
+	const log: string[] = [];
+	assert counter("e", 0, log).cycle().toArray().length == 0;
+	assert counter("b", 3, log).cycle().take(1).toArray().join(",") == "1";
+	assert log.join(",") == "e.next,b.next,b.return";
+}
+
+test "iterator cycle: string elements" {
+	const xy: string[] = ["x", "y"];
+	assert xy.values().cycle().take(5).toArray().join("") == "xyxyx";
+}
+
+test "iterator stepBy: yields the first element and then every step-th, pulling lazily" {
+	const log: string[] = [];
+	assert counter("s", 7, log).stepBy(3).toArray().join(",") == "1,4,7";
+	assert log.length == 8;
+	const early: string[] = [];
+	assert counter("t", 9, early).stepBy(2).take(2).toArray().join(",") == "1,3";
+	assert early.join(",") == "t.next,t.next,t.next,t.return";
+	assert counter("u", 3, early).stepBy(1).toArray().join(",") == "1,2,3";
+	const abcd: string[] = ["a", "b", "c", "d"];
+	assert abcd.values().stepBy(3).toArray().join("") == "ad";
+}
+
+test "iterator stepBy: a bad step throws eagerly and closes the source" {
+	const log: string[] = [];
+	assert messageOf((): void => {
+		counter("a", 3, log).stepBy(0);
+	}) == "step must be between 1 and 4294967295";
+	assert messageOf((): void => {
+		counter("b", 3, log).stepBy(1.5);
+	}) == "step must be an integer";
+	assert log.join(",") == "a.return,b.return";
+}
+
+test "iterator scan: yields each accumulated value with the element index" {
+	const log: string[] = [];
+	const sums = counter("a", 3, log).scan((acc: int32, x: int32): int32 => acc + x, 0);
+	assert log.length == 0;
+	assert sums.toArray().join(",") == "1,3,6";
+	const fives: number[] = [5, 5, 5];
+	const idx = fives.values().scan((acc: string, x: number, i: number): string => `${acc}${x + i}`, "");
+	assert idx.toArray().join(",") == "5,56,567";
+	assert counter("b", 1, log).scan((acc: int32, x: int32): int32 => acc, 7).toArray().join(",") == "7";
+}
+
+test "iterator scan: an early exit closes the source" {
+	const log: string[] = [];
+	counter("a", 5, log).scan((acc: int32, x: int32): int32 => acc + x, 0).take(1).toArray();
+	assert log.join(",") == "a.next,a.return";
+}
+
+test "iterator peekable: peek does not consume and is null once the source is done" {
+	const log: string[] = [];
+	const p = counter("a", 2, log).peekable();
+	assert log.length == 0;
+	assert `${p.peek()}` == "1" && `${p.peek()}` == "1";
+	assert log.join(",") == "a.next";
+	assert p.next().value == 1;
+	assert `${p.peek()}` == "2";
+	assert p.next().value == 2;
+	assert p.peek() == null && p.peek() == null;
+	assert log.join(",") == "a.next,a.next,a.next";
+}
+
+test "iterator peekable: works in for-of and with the helpers" {
+	const ones: number[] = [1, 2, 3];
+	const p = ones.values().peekable();
+	let seen = "";
+	for (const x of p) seen += `${x}:${p.peek()} `;
+	assert seen == "1:2 2:3 3:null ";
+	const q = ones.values().peekable();
+	assert `${q.peek()}` == "1";
+	assert q.map((x: number): number => x * 2).toArray().join(",") == "2,4,6";
+	const words = ["a", "b"].values().peekable();
+	assert words.peek() == "a";
+	assert words.toArray<string>().join("") == "ab";
+}
+
+test "iterator peekable: return closes the source" {
+	const log: string[] = [];
+	const p = counter("a", 3, log).peekable();
+	p.peek();
+	p.take<int32>(1).toArray<int32>();
+	assert log.join(",") == "a.next,a.return";
+}
+
+test "iterator sum, min and max: reductions with null for an empty min and max" {
+	const log: string[] = [];
+	assert counter("a", 4, log).sum() == 10;
+	assert counter("e", 0, log).sum() == 0;
+	const halves: number[] = [1.5, 2.25];
+	assert halves.values().sum() == 3.75;
+	assert `${counter("b", 4, log).min()}` == "1" && `${counter("c", 4, log).max()}` == "4";
+	assert counter("e", 0, log).min() == null && counter("e", 0, log).max() == null;
+	const nums: number[] = [3, 1, 2];
+	assert nums.values().min() == 1 && nums.values().max() == 3;
+	const words: string[] = ["b", "a", "c"];
+	assert words.values().min() == "a" && words.values().max() == "c";
+}

@@ -118,3 +118,62 @@ export function zip<T>(
 	}
 	return zipLazy(items, mode, padding);
 }
+
+export struct Peekable<T> extends Iterator<T> {
+	peek: () => T | null;
+}
+
+export function toItems<T>(this p: Peekable<T>): Iterator<T> {
+	return { next: p.next, return: p.return };
+}
+
+export function peekable<T>(this it: Iterator<T>): Peekable<T> {
+	const slot: T[] = [];
+	let exhausted = false;
+	const fill = (): boolean => {
+		if (slot.length > 0) return true;
+		if (exhausted) return false;
+		const r = it.next();
+		if (r.done) {
+			exhausted = true;
+			return false;
+		}
+		slot.push(r.value);
+		return true;
+	};
+	return {
+		next: () => {
+			if (slot.length > 0) return { value: slot.pop(), done: false };
+			return it.next();
+		},
+		return: () => {
+			if (it.return != null) return it.return();
+			return it.next();
+		},
+		peek: () => (fill() ? slot[0] : null),
+	};
+}
+
+function lessThan<T>(a: T, b: T): boolean {
+	return a < b;
+}
+
+export function min<T>(this it: Iterator<T>): T | null {
+	const first = it.next();
+	if (first.done) return null;
+	let best = first.value;
+	for (const x of it) {
+		if (lessThan(x, best)) best = x;
+	}
+	return best;
+}
+
+export function max<T>(this it: Iterator<T>): T | null {
+	const first = it.next();
+	if (first.done) return null;
+	let best = first.value;
+	for (const x of it) {
+		if (!lessThan(x, best)) best = x;
+	}
+	return best;
+}

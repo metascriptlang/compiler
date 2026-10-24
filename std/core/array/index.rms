@@ -240,7 +240,7 @@ export function includes<T>(this arr: Vec<T>, value: T): boolean {
 }
 
 export { lastIndexOf, findIndex, findLastIndex, filter, some, find, every, reduce, values, keys, entries } from "./shared";
-export { map, filter, take, drop, flatMap, reduce, toArray, forEach, some, every, find, chunks, windows } from "./iterator";
+export { map, filter, take, drop, flatMap, reduce, toArray, forEach, some, every, find, chunks, windows, cycle, stepBy, scan, sum } from "./iterator";
 
 export function indexOf(this view: Readonly<Span<uint8>>, value: uint8): number {
 	const n = view.length;

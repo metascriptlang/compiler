@@ -28,8 +28,8 @@ function setEndWrite<T>(s: Set<T>): void { if (!s.writing) { msMapFatal("concurr
 // Return type for function* generators. Matches generatorLower's output shape.
 // Users write: function* range(): Iterator<int32> { yield 1; }
 
-import { Iterator, IteratorResult } from "./array/iteratorStatics";
-export { Iterator, IteratorResult, ZipMode, ZipOptions, concat, zip } from "./array/iteratorStatics";
+import { Iterator, IteratorResult } from "./array/iteratorBase";
+export { Iterator, IteratorResult, ZipMode, ZipOptions, concat, zip, peekable, toItems, Peekable, min, max } from "./array/iteratorBase";
 
 // Drain iterator to array. Uses while+next() (not for...of — would be circular).
 export function toItems<T>(this iter: Iterator<T>): T[] {
