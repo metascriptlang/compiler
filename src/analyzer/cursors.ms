@@ -50,6 +50,7 @@ let borrowedSlots: string[][] = [];
 let viewSources: int32[][] = [];
 let writeSites: Node[] = [];
 let writeTimes: int32[] = [];
+let analysis: WriteEffects | null = null;
 
 function registerVariable(p: Partitions, sym: Symbol | null, isParam: boolean): void {
 	registerPartitionVariable(p, sym, isParam, VF_IS_PARAM);
@@ -69,7 +70,7 @@ function getIdentSym(node: Node): Symbol | null {
 }
 
 function graphCanHold(holder: Type | null, part: Type | null): boolean {
-	return containsPointer(holder, 0) && canAlias(part, holder);
+	return containsPointer(holder, 0) && canAlias(analysis!, part, holder);
 }
 
 function lentSources(call: Node): Node[] {
@@ -125,7 +126,7 @@ function allRoots(p: Partitions, node: Node, result: Symbol[]): void {
 				const args = (node.data as CallExprData).arguments;
 				for (let ai = 0; ai < args.length; ai += 1) {
 					const fi = ai + receiverFormals;
-					if (formals == null || fi >= formals.length || canAlias(formals[fi], node.nodeType)) allRoots(p, args[ai], result);
+					if (formals == null || fi >= formals.length || canAlias(analysis!, formals[fi], node.nodeType)) allRoots(p, args[ai], result);
 				}
 			}
 		},
@@ -888,6 +889,7 @@ export function inferCursors(w: WriteEffects, body: Node): void {
 	if (body == null) return;
 	if (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program) return;
 
+	analysis = w;
 	const p = createPartitions();
 
 	// Pass 1: compute live ranges and register variables
@@ -908,7 +910,9 @@ export function inferCursors(w: WriteEffects, body: Node): void {
 	trav(w, p, body);
 
 	// Decision: which variables can safely be cursors?
-	for (const sym of computeCursorDecisions(w, p, callerDefsOf(w, body))) { setFlag(sym, SymbolFlag.Cursor); }
+	const chosen = computeCursorDecisions(w, p, callerDefsOf(w, body));
+	analysis = null;
+	for (const sym of chosen) { setFlag(sym, SymbolFlag.Cursor); }
 }
 
 // ===== Tests =====
@@ -919,7 +923,7 @@ function inferredIn(input: string, pick: (stmts: Node[]) => Node): Node {
 	const prog = result.value;
 	const checker = checkProgram(prog);
 	const ctx = makeCtx();
-	const writes: WriteEffects = { tables: createWriteSummaries(createRoutineDecls(), []), checker, unit: "", rcOf: (t: Type | null): RcInfo => classifyType(t, ctx, false) };
+	const writes: WriteEffects = { tables: createWriteSummaries(createRoutineDecls(), []), checker, unit: "", rcOf: (t: Type | null): RcInfo => classifyType(t, ctx, false), aliasMemo: new HashMap<Type, HashMap<Type, int32>>() };
 	const body = pick((prog.data as ProgramData).programStmts);
 	inferCursors(writes, body);
 	return body;

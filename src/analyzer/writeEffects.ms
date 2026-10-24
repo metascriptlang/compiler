@@ -97,6 +97,7 @@ export interface WriteEffects {
 	checker: CheckerContext | null;
 	unit: string;
 	rcOf: (t: Type | null) => RcInfo;
+	aliasMemo: HashMap<Type, HashMap<Type, int32>>;
 }
 
 export function noteRoutineDecls(w: WriteEffects, program: Node): void {
@@ -265,8 +266,17 @@ function isOpenType(t: Type): boolean {
 		|| t.kind == TypeKind.Union || t.kind == TypeKind.TypeReference || t.kind == TypeKind.Error;
 }
 
-export function canAlias(arg: Type | null, ret: Type | null): boolean {
-	return canAliasIn(arg, ret, new HashSet<Type>());
+export function canAlias(w: WriteEffects, arg: Type | null, ret: Type | null): boolean {
+	if (arg == null || ret == null) return true;
+	let byRet = new HashMap<Type, int32>();
+	const known = w.aliasMemo.get(arg);
+	if (known != null) byRet = known;
+	else w.aliasMemo.set(arg, byRet);
+	const hit = byRet.get(ret);
+	if (hit != null) return hit == 1;
+	const result = canAliasIn(arg, ret, new HashSet<Type>());
+	byRet.set(ret, result ? 1 : 0);
+	return result;
 }
 
 function canAliasIn(arg: Type | null, ret: Type | null, seen: HashSet<Type>): boolean {
@@ -1219,7 +1229,7 @@ export function borrowedArgsToCopy(w: WriteEffects, call: Node, defs: LocalDefs 
 }
 
 function writeProbe(): WriteEffects {
-	return { tables: createWriteSummaries(createRoutineDecls(), []), checker: null, unit: "", rcOf: (t: Type | null): RcInfo => noRcInfo() };
+	return { tables: createWriteSummaries(createRoutineDecls(), []), checker: null, unit: "", rcOf: (t: Type | null): RcInfo => noRcInfo(), aliasMemo: new HashMap<Type, HashMap<Type, int32>>() };
 }
 
 function localOf(name: string, t: Type, loc: SourceLocation): Node {

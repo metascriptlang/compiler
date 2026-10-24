@@ -93,7 +93,7 @@ export function createDrcContext(ctx: TransformContext, tables: WriteSummaries):
 		finallyProtectedVars: [],
 		cfgCache: createCfgCache(),
 		callerDefs: null,
-		writes: { tables, checker, unit: checker.modulePath, rcOf: (t: Type | null): RcInfo => classifyBeforeLift(t, ctx, rcMemo) },
+		writes: { tables, checker, unit: checker.modulePath, rcOf: (t: Type | null): RcInfo => classifyBeforeLift(t, ctx, rcMemo), aliasMemo: new HashMap<Type, HashMap<Type, int32>>() },
 		currentFuncBody: null,
 		stmtBorrowReads: [],
 		inEnsureMove: 0,
