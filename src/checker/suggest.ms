@@ -7,7 +7,7 @@
 import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, ArrayAccessData, BinaryExprData, ConditionalExprData, TypeAssertionData, UpdateExprData, VariableDeclData, FunctionDeclData, ObjectLiteralData, TryExprData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenStdConvData, HiddenDerefData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, DecoratedDeclData, MacroDeclData, TestDeclData, ExternDeclData, ExternKind, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, SpreadExprData, NodeFlag, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { typeNameOf, unwrapRef, numberType, stringType, booleanType, voidType, nullType, noneType, isUnresolvedType, neverType, errorType, isResult, getResultOkType, getResultErrType, isAffineAwaitable, isMaybeType } from "./types";
-import { ScopeKind, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
+import { ScopeKind, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, filterStaticExtsByOwner, getExtFnType, stripReceiverParam, SgSymRecord } from "./context";
 // (utils/string imports removed — using native .slice/.charAt)
 import { checkProgram } from "./checkPass";
@@ -1911,8 +1911,16 @@ function sgJoinFieldNames(names: string[]): string {
 	return result;
 }
 
-function sgGetSymbolDetail(ctx: CheckerContext, name: string): string {
-	const sym = lookupSymbol(ctx.table, name);
+function sgDeclaredSymAt(ctx: CheckerContext, loc: SourceLocation): Symbol | null {
+	if (ctx.symRecords == null || loc == null) return null;
+	for (const rec of ctx.symRecords) {
+		if (rec.isDecl && rec.line == loc.line && rec.col == loc.column) return rec.sym;
+	}
+	return null;
+}
+
+function sgGetSymbolDetail(ctx: CheckerContext, loc: SourceLocation): string {
+	const sym = sgDeclaredSymAt(ctx, loc);
 	if (sym == null) return "";
 	if (sym.symbolType == null) return "";
 	return sgTypeToString(sym.symbolType);
@@ -1978,7 +1986,7 @@ function sgCollectPatternNames(pattern: Node, isMutable: boolean, ctx: CheckerCo
 	if (pattern.kind == NodeKind.Identifier) {
 		const id = pattern.data as IdentifierData;
 		if (id.name == "_") return;
-		const dt = sgGetSymbolDetail(ctx, id.name);
+		const dt = sgGetSymbolDetail(ctx, pattern.location);
 		result.push({ name: id.name, kind: SymbolKind.Variable, location: pattern.location, detail: dt, isMutable, children: [] });
 		return;
 	}
@@ -2009,14 +2017,14 @@ function sgCollectOneSymbol(node: Node, ctx: CheckerContext, result: SgDocumentS
 
 	if (node.kind == NodeKind.FunctionDecl) {
 		const fd = node.data as FunctionDeclData;
-		const dt = sgGetSymbolDetail(ctx, fd.fnName);
+		const dt = sgGetSymbolDetail(ctx, fd.nameLocation);
 		const item: SgDocumentSymbol = { name: fd.fnName, kind: SymbolKind.Function, location: node.location, detail: dt, isMutable: false, children: [] };
 		result.push(item);
 		return;
 	}
 	if (node.kind == NodeKind.VariableDecl) {
 		const vd = node.data as VariableDeclData;
-		const dt = sgGetSymbolDetail(ctx, vd.declName);
+		const dt = sgGetSymbolDetail(ctx, vd.nameLocation);
 		const mut = vd.declKind != DeclKind.Const;
 		const item: SgDocumentSymbol = { name: vd.declName, kind: SymbolKind.Variable, location: node.location, detail: dt, isMutable: mut, children: [] };
 		result.push(item);
@@ -2055,7 +2063,7 @@ function sgCollectOneSymbol(node: Node, ctx: CheckerContext, result: SgDocumentS
 	}
 	if (node.kind == NodeKind.TypeAliasDecl) {
 		const td = node.data as TypeAliasDeclData;
-		const dt = sgGetSymbolDetail(ctx, td.aliasName);
+		const dt = sgGetSymbolDetail(ctx, td.nameLocation);
 		const item: SgDocumentSymbol = { name: td.aliasName, kind: SymbolKind.TypeAlias, location: node.location, detail: dt, isMutable: false, children: [] };
 		result.push(item);
 		return;
@@ -2369,10 +2377,7 @@ function sgCollectVarTypeHint(
 	// Only show hint if no explicit type annotation
 	if (vd.declType.length > 0) return;
 
-	// Use resolvedSym from the checked AST node (set during semantic analysis).
-	// Scope-based lookupSymbol is unreliable after checker finishes — function scopes
-	// are closed, so prelude extensions with the same name could shadow local variables.
-	const sym = node.resolvedSym != null ? node.resolvedSym : lookupSymbol(ctx.table, vd.declName);
+	const sym = node.resolvedSym;
 	if (sym == null) return;
 	if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Parameter) return;
 	if (sym.symbolType == null) return;
@@ -2460,7 +2465,7 @@ function sgCollectReturnTypeHint(
 	// Only show hint if no explicit return type annotation
 	if (fd.fnReturnType.length > 0) return;
 
-	const sym = lookupSymbol(ctx.table, fd.fnName);
+	const sym = node.resolvedSym;
 	if (sym == null) return;
 	if (sym.symbolType == null) return;
 	const retType = sym.symbolType.typeReturn;
@@ -2493,14 +2498,7 @@ function sgCollectCallParamHints(
 	if (node.location.line < startLine) return;
 	if (node.location.line > endLine) return;
 
-	let calleeName = "";
-	if (cd.callee != null && cd.callee.kind == NodeKind.Identifier) {
-		const cid = cd.callee.data as IdentifierData;
-		calleeName = cid.name;
-	}
-	if (calleeName == "") return;
-
-	const sym = lookupSymbol(ctx.table, calleeName);
+	const sym = sgCalleeSym(node);
 	if (sym == null) return;
 	if (sym.symbolType == null) return;
 	if (sym.symbolType.kind != TypeKind.Function) return;
@@ -2603,20 +2601,25 @@ function sgLeftmostLocation(node: Node): SourceLocation {
 // ===== Exception Inlay Hints =====
 
 // Infer the return type of a call expression's callee.
+function sgCalleeSym(call: Node): Symbol | null {
+	const cd = call.data as CallExprData;
+	if (cd.callee == null || cd.callee.kind != NodeKind.Identifier) return null;
+	const sym = cd.callee.resolvedSym;
+	if (sym == null) return null;
+	const idx = cd.resolvedOverloadIdx;
+	if (sym.overloads != null && idx > 0 && idx - 1 < sym.overloads.length) return sym.overloads[idx - 1];
+	return sym;
+}
+
 function inferCalleeReturnType(ctx: CheckerContext, node: Node): Type | null {
 	if (node.kind == NodeKind.CallExpr) {
-		const cd = node.data as CallExprData;
-		if (cd.callee != null && cd.callee.kind == NodeKind.Identifier) {
-			const id = cd.callee.data as IdentifierData;
-			const sym = lookupSymbol(ctx.table, id.name);
-			if (sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function) {
-				return sym.symbolType.typeReturn;
-			}
+		const sym = sgCalleeSym(node);
+		if (sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function) {
+			return sym.symbolType.typeReturn;
 		}
 	}
 	if (node.kind == NodeKind.Identifier) {
-		const id = node.data as IdentifierData;
-		const sym = lookupSymbol(ctx.table, id.name);
+		const sym = node.resolvedSym;
 		if (sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function) {
 			return sym.symbolType.typeReturn;
 		}
