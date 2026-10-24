@@ -72,6 +72,7 @@ test "a build writes its phase rows, and the passes fit inside phase A" {
 		if (cols.length == 4 && cols[1].startsWith("pass.") && cols[2] == "ms") passMs = passMs + parseFloat(cols[3]);
 	}
 	assert rowValue(text, "total", "ms") > 0;
+	assert rowValue(text, "phase.setup", "ms") > 0;
 	assert rowValue(text, "phase.A", "ms") > 0;
 	assert passMs > 0 && passMs <= rowValue(text, "phase.A", "ms");
 	assert rowValue(text, "emit.module", "ms") > 0;

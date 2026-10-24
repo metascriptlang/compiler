@@ -2621,6 +2621,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 }
 
 function buildCPhases(entryPath: string, opts: CliOptions, resolveSection: ResolveSection, session: BuildSession): BuildStatus {
+	const fSetup = flowStart();
 	startSessionBuild(session);
 	_hcrWarmJobs = [];
 	_hcrWarmLinks = [];
@@ -2631,6 +2632,7 @@ function buildCPhases(entryPath: string, opts: CliOptions, resolveSection: Resol
 	initCache(opts.mode, opts.forceRebuild);
 	resetCompiledOFiles();
 	registerCoreParsers();
+	flowStop("phase.setup", fSetup);
 	const t0 = performance.now();
 	const fGraph = flowStart();
 	// Before ANY phase reads it: freestanding targets imply --gc=manual, and the
