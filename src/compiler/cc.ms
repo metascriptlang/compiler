@@ -663,7 +663,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 	if (opts.targetOs == "linux") {
 		flags = appendFlag(flags, "-D_GNU_SOURCE");
 	}
-	if (opts.targetOs == "windows" && !isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary))) {
+	if (opts.targetOs == "windows" && !opts.ccPrepared && !isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary))) {
 		flags = appendFlag(flags, "-D_WIN32_WINNT=0x0A00");
 	}
 	if (opts.sanitize != "") flags = appendFlag(flags, `-fsanitize=${opts.sanitize}`);
@@ -1368,6 +1368,16 @@ export function archiveStatic(oFiles: string[], outArchive: string): Result<void
 // Get the runtime directory path (for -I include path).
 export function getRuntimeDir(): string {
 	return resolveRuntime();
+}
+
+test "prepared Windows configurations keep their platform baseline instead of the external compiler default" {
+	const opts = newCliOptions();
+	opts.targetOs = "windows";
+	opts.ccBinary = "/prepared/clang --config=/prepared/windows.cfg";
+	opts.ccPrepared = true;
+	assert !cliCompileFlags(opts).contains("-D_WIN32_WINNT=");
+	opts.ccPrepared = false;
+	assert cliCompileFlags(opts).contains("-D_WIN32_WINNT=0x0600");
 }
 
 test "the default math library follows the link target, not the host" {
