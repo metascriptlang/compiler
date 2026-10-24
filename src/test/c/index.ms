@@ -89,4 +89,5 @@ import "./awaitWaitPath";
 import "./acyclicDecorator";
 import "./openSlotCycleClassification";
 import "./spawnViewCursor";
+import "./spawnCaptureCursor";
 import "./genericHolderSlots";
