@@ -439,3 +439,50 @@ test "E2E C: advancing through a moved next link resets the old link once" {
 	assert c.ok;
 	assert occurrences(c.value, "msPtrWasMoved((*cur_1_).next)") == 1;
 }
+
+test "E2E C: a non-null asserted field bound across a call that clears it takes its own reference" {
+	const c = compileToC(`
+		class Leaf { k: number = 0; }
+		class Holder { a: Leaf | null = null; }
+		function clear(h: Holder): void { h.a = null; }
+		function kept(h: Holder): number {
+			const d = h.a!;
+			clear(h);
+			return d.k;
+		}
+	`);
+	assert c.ok;
+	assert !c.value.contains("(d_1_ = (*h).a)");
+	assert c.value.contains("msIncref(dollarborrow_");
+	assert c.value.contains("(d_1_ = dollarborrow_");
+	assert c.value.contains("msDecref(d_1_)");
+}
+
+test "E2E C: a non-null asserted argument evaluated before a sibling that clears its field takes its own reference" {
+	const c = compileToC(`
+		class Leaf { k: number = 0; }
+		class Holder { a: Leaf | null = null; }
+		function sum(a: Leaf, b: number): number { return a.k + b; }
+		function bump(h: Holder): number { h.a = null; return 0; }
+		function both(h: Holder): number { return sum(h.a!, bump(h)); }
+	`);
+	assert c.ok;
+	assert !c.value.contains("_ = (*h).a);");
+	assert c.value.contains("msIncref(dollarborrow_");
+	assert c.value.contains("_ = dollarborrow_");
+	assert c.value.contains("msDecref(__ord_");
+}
+
+test "E2E C: a non-null asserted field bound while nothing writes its holder stays a borrow" {
+	const c = compileToC(`
+		class Leaf { k: number = 0; }
+		class Holder { a: Leaf | null = null; }
+		function read(h: Holder): number {
+			const d = h.a!;
+			return d.k;
+		}
+	`);
+	assert c.ok;
+	assert c.value.contains("(d_1_ = (*h).a)");
+	assert !c.value.contains("msDecref(d_1_)");
+}
