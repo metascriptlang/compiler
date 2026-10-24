@@ -13,14 +13,25 @@ export function metascriptHome(): string {
 	return join(home, ".metascript");
 }
 
-// The OS temp directory without std/os, whose header cannot be included on Windows.
-// Windows sets TMP and TEMP, POSIX sets TMPDIR; /tmp when none is set.
-export function tmpDir(): string {
-	for (const name of ["TMP", "TEMP", "TMPDIR"]) {
-		const dir = env.get(name);
-		if (dir != "") return dir;
+function firstSet(names: string[], fallback: string): string {
+	for (const name of names) {
+		const value = env.get(name);
+		if (value != "") return value;
 	}
-	return "/tmp";
+	return fallback;
+}
+
+function posixTmpDir(): string {
+	return firstSet(["TMPDIR"], "/tmp");
+}
+
+function windowsTmpDir(): string {
+	return firstSet(["TMP", "TEMP", "USERPROFILE"], "C:\\Temp");
+}
+
+// The OS temp directory in std/os's order, without std/os, whose header cannot be included on Windows.
+export function tmpDir(): string {
+	return platform == "windows" ? windowsTmpDir() : posixTmpDir();
 }
 
 // Find the project root by walking up looking for build.ms.
@@ -217,21 +228,32 @@ test "metascriptHome prefers HOME, falls back to USERPROFILE, and is empty witho
 	env.set("USERPROFILE", profile);
 }
 
-test "tmpDir takes TMP, then TEMP, then TMPDIR, then /tmp" {
-	const tmp = env.get("TMP");
-	const temp = env.get("TEMP");
-	const tmpdir = env.get("TMPDIR");
+test "the POSIX temp directory is TMPDIR, then /tmp" {
+	const saved = [env.get("TMPDIR"), env.get("TMP")];
+	env.set("TMP", "/ignored");
+	env.set("TMPDIR", "");
+	assert posixTmpDir() == "/tmp";
+	env.set("TMPDIR", "/a");
+	assert posixTmpDir() == "/a";
+	env.set("TMPDIR", saved[0]);
+	env.set("TMP", saved[1]);
+}
+
+test "the Windows temp directory is TMP, then TEMP, then USERPROFILE, then the std fallback" {
+	const saved = [env.get("TMP"), env.get("TEMP"), env.get("USERPROFILE"), env.get("TMPDIR")];
+	env.set("TMPDIR", "/ignored");
 	env.set("TMP", "");
 	env.set("TEMP", "");
-	env.set("TMPDIR", "");
-	assert tmpDir() == "/tmp";
-	env.set("TMPDIR", "/c");
-	assert tmpDir() == "/c";
+	env.set("USERPROFILE", "");
+	assert windowsTmpDir() == "C:\\Temp";
+	env.set("USERPROFILE", "/c");
+	assert windowsTmpDir() == "/c";
 	env.set("TEMP", "/b");
-	assert tmpDir() == "/b";
+	assert windowsTmpDir() == "/b";
 	env.set("TMP", "/a");
-	assert tmpDir() == "/a";
-	env.set("TMP", tmp);
-	env.set("TEMP", temp);
-	env.set("TMPDIR", tmpdir);
+	assert windowsTmpDir() == "/a";
+	env.set("TMP", saved[0]);
+	env.set("TEMP", saved[1]);
+	env.set("USERPROFILE", saved[2]);
+	env.set("TMPDIR", saved[3]);
 }
