@@ -758,6 +758,26 @@ function injectCallerExtensions(bodyCtx: CheckerContext, ctx: CheckerContext): i
 	return preCount;
 }
 
+interface InstanceBodyMark {
+	scopes: int32;
+	records: int32;
+}
+
+function markInstanceBody(bodyCtx: CheckerContext): InstanceBodyMark {
+	return { scopes: bodyCtx.table.allScopes.length, records: bodyCtx.symRecords.length };
+}
+
+// An instance body checked in another module's ctx opens scopes and records symbols there; that ctx
+// outlives the check that asked for the instance, so each instantiation would stay on it for good.
+// Neither is read once the body is checked: no node or symbol holds a scope, and the records point
+// into the clone, not into the module's own source. Nested instantiations released theirs first, so
+// everything above the mark belongs to this one.
+function releaseInstanceBody(bodyCtx: CheckerContext, ctx: CheckerContext, mark: InstanceBodyMark): void {
+	if (bodyCtx == ctx) return;
+	bodyCtx.table.allScopes.shrink(mark.scopes);
+	bodyCtx.symRecords.shrink(mark.records);
+}
+
 function truncateCallerExtensions(bodyCtx: CheckerContext, preCount: int32): void {
 	if (preCount < 0) return;
 	truncateExtensions(bodyCtx.extensionRegistry, preCount);
@@ -1048,6 +1068,7 @@ export function instantiateGenericFunction(sym: Symbol, params: Type[], concrete
 		// Reference parity (instantiateGenericParamList): inject concrete type
 		// symbols into scope so resolveAnnotation("Item") finds the user type during re-check.
 		// Without this, HashMap<string, Item[]> methods resolve "Item" to Unknown.
+		const instMark = markInstanceBody(bodyCtx);
 		const callerScope = openInstanceScope(bodyCtx, dedup.params, dedup.types, routine.outer);
 		bodyCtx.table.current.friendModules.push(sym.modulePath);
 		bodyCtx.table.current.privateAccess = methodOwnerClass(bodyCtx, sym);
@@ -1111,6 +1132,7 @@ export function instantiateGenericFunction(sym: Symbol, params: Type[], concrete
 		removeInjectedSyms(bodyCtx, injectedSyms);
 		bodyCtx.table.current = callerScope;
 		truncateCallerExtensions(bodyCtx, extPreCount);
+		releaseInstanceBody(bodyCtx, ctx, instMark);
 	}
 
 	addPendingInstance(host, cloned);
@@ -1154,6 +1176,7 @@ function instanceFieldInits(classData: ClassDeclData, params: Type[], types: Typ
 	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx, classSym);
 	const savedModulePath = bodyCtx.modulePath;
 	bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
+	const instMark = markInstanceBody(bodyCtx);
 	const callerScope = openInstanceScope(bodyCtx, params, types);
 	bodyCtx.table.current.privateAccess = classSym;
 	const injectedSyms: Symbol[] = [];
@@ -1178,6 +1201,7 @@ function instanceFieldInits(classData: ClassDeclData, params: Type[], types: Typ
 	removeInjectedSyms(bodyCtx, injectedSyms);
 	bodyCtx.table.current = callerScope;
 	truncateCallerExtensions(bodyCtx, extPreCount);
+	releaseInstanceBody(bodyCtx, ctx, instMark);
 	return fields;
 }
 
@@ -1245,6 +1269,7 @@ function checkFieldInitializerCopy(ctx: CheckerContext, init: Node, fieldName: s
 	const bodyCtx = pickBodyCtx(classSym.modulePath, ctx, classSym);
 	const savedModulePath = bodyCtx.modulePath;
 	bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
+	const instMark = markInstanceBody(bodyCtx);
 	const callerScope = openInstanceScope(bodyCtx, params, types);
 	bodyCtx.table.current.privateAccess = classSym;
 	const injectedSyms: Symbol[] = [];
@@ -1262,6 +1287,7 @@ function checkFieldInitializerCopy(ctx: CheckerContext, init: Node, fieldName: s
 	removeInjectedSyms(bodyCtx, injectedSyms);
 	bodyCtx.table.current = callerScope;
 	truncateCallerExtensions(bodyCtx, extPreCount);
+	releaseInstanceBody(bodyCtx, ctx, instMark);
 	return copy;
 }
 
@@ -1413,6 +1439,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, par
 		bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
 		clearCheckerState(clonedBody);
 		bindFunctionFlow(clonedBody, clonedBody);
+		const instMark = markInstanceBody(bodyCtx);
 		const callerScope = openInstanceScope(bodyCtx, params, types);
 		bodyCtx.table.current.privateAccess = classSym;
 		// Inject concrete type symbols (parity with instantiateGenericFunction).
@@ -1433,6 +1460,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, par
 		removeInjectedSyms(bodyCtx, injectedSyms);
 		bodyCtx.table.current = callerScope;
 		truncateCallerExtensions(bodyCtx, extPreCount);
+		releaseInstanceBody(bodyCtx, ctx, instMark);
 	}
 
 	return ctorDeclNode;

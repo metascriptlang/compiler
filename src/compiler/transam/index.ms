@@ -2032,6 +2032,46 @@ test "editing a call site reuses the macro build" {
 	assert macroCompileCount() == built, `${macroCompileCount() - built} recompiles`;
 }
 
+const GENERIC_LIB = "export function twice<T>(x: T): T { const y = x; return y; }\nexport class Box<T> { v: T; constructor(v: T) { this.v = v; } }\n";
+const GENERIC_USE = 'import { twice, Box } from "./lib";\nconst a: int32 = twice(1);\nconst b = new Box<int32>(2);\nconst c: string = twice("s");\n';
+
+function instanceBodiesKept(libPath: string, usePath: string, lib: string, use: string): string {
+	resetInstantiationState();
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbSetFileText(db, libPath, lib);
+	dbSetFileText(db, usePath, use);
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, usePath), getFileId(db.fileInput, libPath));
+	const kept = (): int32 => {
+		const libCtx = lookupModuleCtx(libPath)!;
+		return libCtx.table.allScopes.length + libCtx.symRecords.length;
+	};
+	for (let k = 0; k < 2; k += 1) {
+		dbSetFileText(db, usePath, use + `const n${k} = ${k};\n`);
+		const errors = dbTypeCheck(db, usePath).errors;
+		if (errors.length != 0) return errors[0].message;
+	}
+	const afterTwo = kept();
+	for (let k = 2; k < 8; k += 1) {
+		dbSetFileText(db, usePath, use + `const n${k} = ${k};\n`);
+		const errors = dbTypeCheck(db, usePath).errors;
+		if (errors.length != 0) return errors[0].message;
+	}
+	const grown = kept() - afterTwo;
+	return grown == 0 ? "" : `${grown} scopes and records stayed`;
+}
+
+test "rechecking a module leaves no instance body on the module that defines its generics" {
+	const left = instanceBodiesKept("/g/lib.ms", "/g/use.ms", GENERIC_LIB, GENERIC_USE);
+	assert left == "", left;
+}
+
+test "rechecking a module leaves no instance body on the module whose class constructor it instantiates" {
+	const use = 'import { Box } from "./lib2";\nconst b = new Box<int32>(2);\nconst c = new Box<string>("s");\n';
+	const left = instanceBodiesKept("/g/lib2.ms", "/g/use2.ms", GENERIC_LIB, use);
+	assert left == "", left;
+}
+
 test "editing the macro body rebuilds it and the new expansion reaches the importer" {
 	const db = macroDb(MACRO_TWICE, MACRO_USER);
 	assert checkMessages(db, "/m/use.ms") == "";
