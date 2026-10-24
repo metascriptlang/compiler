@@ -22,7 +22,7 @@ import {
 	ExprStmtData, VariableDeclData, UpdateExprData, UnaryExprData,
 	ExportDeclData, DoWhileStmtData,
 } from "../ast/node";
-import { Type, TypeKind, Symbol } from "../ast/node";
+import { Type, TypeKind, TypeFlag, Symbol } from "../ast/node";
 import { CheckerContext, addError, isGenericFn } from "./context";
 import { splitTopLevel, parseIntStr } from "../utils/string";
 
@@ -121,7 +121,8 @@ export function isValueAggregateParam(t: Type | null): boolean {
 	if (t == null) return false;
 	return match (t.kind) {
 		TypeKind.Array | TypeKind.SizedArray | TypeKind.Tuple | TypeKind.Struct => true,
-		TypeKind.GenericInstance => t.typeExtra != null && t.typeExtra.kind == TypeKind.Struct,
+		TypeKind.Union => t.typeFlags.has(TypeFlag.ValueUnion),
+		TypeKind.GenericInstance => t.typeExtra != null && (t.typeExtra.kind == TypeKind.Struct || (t.typeExtra.kind == TypeKind.Union && t.typeExtra.typeFlags.has(TypeFlag.ValueUnion))),
 		_ => false,
 	};
 }
