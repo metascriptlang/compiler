@@ -102,3 +102,4 @@ import "./nullable";
 import "./keyedAccess";
 import "./proxyTraps";
 import "./commentLookahead";
+import "./nonNullAssertionOwns";
