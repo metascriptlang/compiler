@@ -2,7 +2,6 @@ import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 import { checkProgramWithRegistry, preludeContextFor } from "../../checker/checkPass";
 import { ExportRegistry } from "../../checker/context";
-import { monomorphizeProgram } from "../../monomorphize/collect";
 import { transformProgram } from "../../transform/index";
 import { Node, NodeKind, ProgramData, FunctionDeclData, IdentifierData, NewExprData } from "../../ast/node";
 import { Module, ModuleGraph } from "../../module/graph";
@@ -16,7 +15,7 @@ function transformedProgram(source: string, jsBackend: boolean): Node {
 	const pr = parseSource(source);
 	if (!pr.ok) throw new Error("internal: test source does not parse");
 	const ctx = checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, prelude);
-	return transformProgram(monomorphizeProgram(pr.value, ctx), ctx, jsBackend);
+	return transformProgram(pr.value, ctx, jsBackend);
 }
 
 function isExpression(n: Node): boolean {

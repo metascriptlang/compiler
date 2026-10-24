@@ -2,7 +2,6 @@ import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 import { checkProgramWithRegistry, preludeContextFor } from "../../checker/checkPass";
 import { CheckerContext, ExportRegistry } from "../../checker/context";
-import { monomorphizeProgram } from "../../monomorphize/collect";
 import { Node, NodeKind, Symbol, NewExprData, ProgramData } from "../../ast/node";
 import { Module, ModuleGraph } from "../../module/graph";
 import { forEachChild } from "../../ast/visitor";
@@ -69,8 +68,7 @@ test "instanceSymbolIdentity: a generic type instance adds no declaration of its
 	const source = "interface UserBox<T> { v: T }\nstruct UserPair<A, B> { a: A; b: B }\nfunction userMake(): UserBox<number> { const p: UserPair<number, string> = { a: 1, b: \"x\" }; const b: UserBox<string> = { v: \"s\" }; return { v: p.a }; }";
 	const unit = checkedUnit(source);
 	const before = (unit.program.data as ProgramData).programStmts.length;
-	const mono = monomorphizeProgram(unit.program, unit.ctx);
-	const stmts = (mono.data as ProgramData).programStmts;
+	const stmts = (unit.program.data as ProgramData).programStmts;
 	assert stmts.length == before, `statements ${before} -> ${stmts.length}`;
 	for (const stmt of stmts) {
 		if (stmt.kind == NodeKind.InterfaceDecl || stmt.kind == NodeKind.StructDecl) assert stmt.resolvedSym != null, "a declaration without a symbol";

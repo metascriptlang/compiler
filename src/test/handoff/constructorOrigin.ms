@@ -2,7 +2,6 @@ import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 import { checkProgramWithRegistry, preludeContextFor } from "../../checker/checkPass";
 import { CheckerContext, ExportRegistry } from "../../checker/context";
-import { monomorphizeProgram } from "../../monomorphize/collect";
 import { transformProgram } from "../../transform/index";
 import { Node, NodeKind, Symbol, SymbolKind, ProgramData, ClassDeclData, ActorDeclData, FunctionDeclData, NewExprData, CallExprData, IdentifierData } from "../../ast/node";
 import { Module, ModuleGraph } from "../../module/graph";
@@ -66,7 +65,7 @@ test "constructorOrigin: the lifted init function keeps the constructor's own sy
 			const className = source.startsWith("class UserBox") ? "UserBox" : "UserCell";
 			const before = js ? null : ctorOf(classNamed(unit.program, className)!);
 			const beforeSym: Symbol | null = before != null ? before.resolvedSym : null;
-			const lowered = transformProgram(monomorphizeProgram(unit.program, unit.ctx), unit.ctx, js);
+			const lowered = transformProgram(unit.program, unit.ctx, js);
 			const init = liftedInit(lowered, className + "_init");
 			if (js) continue;
 			assert init != null, className;
@@ -149,7 +148,7 @@ test "constructorOrigin: new of a class without a written constructor carries th
 		const routine = ne.resolvedSym;
 		assert routine != null && routine.symbolKind == SymbolKind.Function, `routine js=${js}`;
 		assert routine.declNode == null, `written declaration js=${js}`;
-		const lowered = transformProgram(monomorphizeProgram(unit.program, unit.ctx), unit.ctx, js);
+		const lowered = transformProgram(unit.program, unit.ctx, js);
 		if (js) {
 			const ctor = ctorOf(classNamed(lowered, "UserCell")!)!;
 			assert ctor.resolvedSym == routine, "js constructor";
@@ -197,6 +196,6 @@ test "constructorOrigin: an actor without a constructor lowers with a routine of
 	const unit = checkedUnit("actor UserIdle { n: number = 0; ping(): void { this.n = 1; } }\nfunction userMake(): void { const w = new UserIdle(); }", false);
 	const ne = onlyNew(unit.program);
 	assert ne.resolvedSym != null && ne.resolvedSym.symbolKind == SymbolKind.Function;
-	const lowered = transformProgram(monomorphizeProgram(unit.program, unit.ctx), unit.ctx, false);
+	const lowered = transformProgram(unit.program, unit.ctx, false);
 	assert liftedInit(lowered, "UserIdle_init") != null;
 }

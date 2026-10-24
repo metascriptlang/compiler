@@ -7,7 +7,6 @@ import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 import { checkProgramWithRegistry, preludeContextFor } from "../../checker/checkPass";
 import { CheckerContext, Severity, ExportRegistry } from "../../checker/context";
-import { monomorphizeProgram } from "../../monomorphize/collect";
 import { validateTypedAST } from "../../checker/validate";
 import { transformProgram } from "../../transform/index";
 import { transformForNative } from "../../transform/native/index";
@@ -33,9 +32,8 @@ export function fullPipeline(source: string): Node {
 	const pr = parseSource(source);
 	if (!pr.ok) return null as unknown as Node;
 	const ctx = checkProgramWithRegistry(pr.value, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, prelude);
-	const monoed = monomorphizeProgram(pr.value, ctx);
-	validateTypedAST(ctx, monoed);
-	const transformed = transformProgram(monoed, ctx, false);
+	validateTypedAST(ctx, pr.value);
+	const transformed = transformProgram(pr.value, ctx, false);
 	const nativeCtx = createTransformContextWithChecker(ctx);
 	return transformForNative(transformed, nativeCtx);
 }
