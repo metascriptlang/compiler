@@ -418,6 +418,33 @@ function runProjectCache(): void {
 	if (savedDisabled == "") env.delete("MSC_NO_GLOBAL_CACHE"); else env.set("MSC_NO_GLOBAL_CACHE", savedDisabled);
 }
 
+function loadedGraph(dir: string, label: string, flags: string[]): string {
+	const args: string[] = ["--verbose"];
+	for (const f of flags) args.push(f);
+	need(build(dir, label, "probe", args) == 0, `${label} build`);
+	const log = readFile(`${dir}/${label}.log`);
+	need(log.ok, `${label} log`);
+	return log.ok && log.value.indexOf("loading module graph", 0) >= 0 ? "loaded" : "skipped";
+}
+
+function runRecordSkip(): void {
+	const dir = `${root}/record skip`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/lib.ms`, "export function probeValue(): int32 { return 71; }\n");
+	put(`${dir}/main.ms`, "import { probeValue } from \"./lib\";\nconsole.log(probeValue());\n");
+	waitForNextSecond();
+	need(build(dir, "record-first") == 0, "record first build");
+	record("an unchanged project answers before loading its module graph", "skipped", loadedGraph(dir, "record-unchanged", []));
+	put(`${dir}/lib.ms`, "export function probeValue(): int32 { return 73; }\n");
+	record("an edited imported module loads the module graph", "loaded", loadedGraph(dir, "record-imported-edit", []));
+	record("an edited imported module rebuilds", "73", value(dir));
+	waitForNextSecond();
+	need(build(dir, "record-settled") == 0, "record settled build");
+	record("a define absent from the record loads the module graph", "loaded", loadedGraph(dir, "record-define", ["-d:recordProbe"]));
+	record("a gc mode absent from the record loads the module graph", "loaded", loadedGraph(dir, "record-gc", ["--gc=drc"]));
+}
+
 function runAudit(): void {
 	const linkOptions = fixture("link options", "", "");
 	const firstArchive = makeArchive(linkOptions, "first", 41);
@@ -1057,7 +1084,10 @@ if (group == "link-cache" || group == "all") runLinkCache();
 if (group == "audit" || group == "all") runAudit();
 if (group == "comptime-cache" || group == "all") runComptimeCache();
 if (group == "object-store" || group == "all") runObjectStore();
-if (group == "project-cache" || group == "all") runProjectCache();
+if (group == "project-cache" || group == "all") {
+	runProjectCache();
+	runRecordSkip();
+}
 if (group == "directive-paths" || group == "all") runDirectivePaths();
 if (group == "spawn-drain" || group == "all") runSpawnDrain();
 if (group == "upcast-cast" || group == "all") runUpcastCast();
