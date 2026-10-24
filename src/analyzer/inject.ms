@@ -29,7 +29,7 @@ import {
 	addPre,
 	testStringRc, classifyRc,
 } from "./scope";
-import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym, skipConvDfa } from "./alias";
+import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym } from "./alias";
 import { inferCursors } from "./cursors";
 import { isViewCall, returnsView } from "../checker/effects";
 import { LocalDefs, borrowedArgsToCopy, callerDefsOf, createRoutineDecls, createWriteSummaries } from "./writeEffects";
@@ -2007,19 +2007,7 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	// (e.g., `const d = node.data as Variant`). If not registered as cursor, field
 	// accesses through it (d.field) won't be recognized as borrows, allowing
 	// field-level moves that corrupt the aliased parent object.
-	let isCursor = false;
-	// Union variant narrowing: `const d = node.data as Variant` borrows from parent node.
-	// In C, codegen emits a pointer into the union — DRC must not destroy the alias.
-	if (d.initializer != null && d.initializer.kind == NodeKind.TypeAssertion) {
-		const tad = d.initializer.data as TypeAssertionData;
-		if (tad.asExpr != null && tad.asExpr.nodeType != null && tad.asExpr.nodeType.kind == TypeKind.Union && !isFreshExpr(skipConvDfa(tad.asExpr).kind)) {
-			isCursor = true;
-		}
-	}
-	// Phase B: check cursor inference results (borrow-only variables skip all RC)
-	if (isCursorSym(stmt.resolvedSym)) {
-		isCursor = true;
-	}
+	const isCursor = isCursorSym(stmt.resolvedSym);
 
 	// Pass resolvedSym so generateCleanup emits destroy/wasMoved with the correct symbol.
 	// This lets the C codegen resolve same-named variables in different scopes to unique C names.
