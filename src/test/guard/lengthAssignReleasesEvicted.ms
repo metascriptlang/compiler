@@ -7,8 +7,8 @@
 // refs only; an element with any other destroy goes through std `setLength`, or `shrink` for a
 // zero length, also inside a generic body.
 //
-// RED MEANS a length assignment evicted elements without releasing them: a line printed
-// GUARD-FAIL with the element family, or the ledger shows Witness alloc > destroy at exit.
+// RED MEANS a length assignment evicted elements without releasing them: a line
+// printed GUARD-FAIL with the element family, or the ledger shows Witness alloc > destroy at exit.
 // GUARD-BALANCE Witness
 
 import { exit } from "std/process";
