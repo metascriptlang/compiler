@@ -77,7 +77,8 @@ export interface FlowState {
 	reference: Node;                 // the reference expression whose type we're computing
 	declaredType: Type;              // the declared (pre-narrowing) type of the reference
 	depth: int32;                    // recursion guard; TypeScript caps at 2000
-	sharedFlows: SharedFlowEntry[];  // per-query Shared-flow cache
+	sharedFlows: SharedFlowEntry[];  // per-query Shared-flow cache, newest entry last and read first
+	declaredFlow: FlowType;          // the declared type as a complete flow type, built once per query
 	flowLoopStack: FlowLoopInfo[];   // in-progress loop analyses (re-entry detection)
 	reduceLabels: FlowReduceLabelData[];
 	// Phase 6 deferred fields (not yet used):
@@ -92,6 +93,7 @@ function createFlowState(refNode: Node, declaredType: Type): FlowState {
 		declaredType: declaredType,
 		depth: 0,
 		sharedFlows: [],
+		declaredFlow: flowType(declaredType, false),
 		flowLoopStack: [],
 		reduceLabels: [],
 	};
@@ -376,7 +378,7 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 	if (state.depth == 2000) return flowType(state.declaredType, false);
 	state.depth = state.depth + 1;
 	let current: FlowNode | null = flow;
-	let result: FlowType = flowType(state.declaredType, false);
+	let result: FlowType = state.declaredFlow;
 	// Track a pending Shared-flow node: if we detect one on entry, cache the
 	// final result under its key on exit. This memoizes expensive sub-walks
 	// within a single query.
@@ -384,10 +386,11 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 	// Linear condition narrowings collected while walking the antecedent chain,
 	// applied post-order after the loop. Converts a deep if/else/&&/|| spine from
 	// O(n) call-stack (the old getTypeAtFlowCondition recursion) to O(n) heap.
-	const pending: FlowNode[] = [];
+	let pending: FlowNode[] | null = null;
+	let lookedUp: FlowNode | null = null;
 	while (true) {
 		if (current == null) {
-			result = flowType(state.declaredType, false);
+			result = state.declaredFlow;
 			break;
 		}
 		const flags = current.flags;
@@ -400,14 +403,15 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 				result = cached;
 				break;
 			}
+			lookedUp = current;
 			// Only stake a cache claim on a clean walk (no pending narrowings
 			// above this node) — otherwise the committed type would wrongly
 			// include narrowings that belong above the shared node.
-			if (pending.length == 0) sharedFlow = current;
+			if (pending == null) sharedFlow = current;
 		}
 		if (flags.has(FlowFlag.Unreachable)) {
 			// Dead code — no narrowing, return declared type.
-			result = flowType(state.declaredType, false);
+			result = state.declaredFlow;
 			break;
 		}
 		if (flags.has(FlowFlag.Start)) {
@@ -416,7 +420,7 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 				current = created;
 				continue;
 			}
-			result = flowType(state.declaredType, false);
+			result = state.declaredFlow;
 			break;
 		}
 		if (flags.has(FlowFlag.Assignment)) {
@@ -439,7 +443,7 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 		}
 		if (flags.has(FlowFlag.Call)) {
 			if (callWritesInto(current.node, state.reference)) {
-				result = flowType(state.declaredType, false);
+				result = state.declaredFlow;
 				break;
 			}
 			current = current.antecedent;
@@ -449,6 +453,7 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 			// Linear (single-antecedent) narrowing — collect and keep walking
 			// iteratively instead of recursing, so deep condition chains don't
 			// grow the call stack. Drained post-loop below.
+			if (pending == null) pending = [];
 			pending.push(current);
 			current = current.antecedent;
 			continue;
@@ -472,13 +477,15 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 			// 2^N recursion (a 50-statement chain never finished). getTypeAtFlowNode
 			// is a pure function of (state, node), so the first result per label
 			// is final. Same cache list as the Shared-flow memo.
-			const cachedLabel = lookupSharedFlow(state, current);
-			if (cachedLabel != null) {
-				result = cachedLabel;
-				break;
+			if (lookedUp != current) {
+				const cachedLabel = lookupSharedFlow(state, current);
+				if (cachedLabel != null) {
+					result = cachedLabel;
+					break;
+				}
 			}
 			result = getTypeAtBranchLabel(state, ants);
-			cacheSharedFlow(state, current, result);
+			if (sharedFlow != current) cacheSharedFlow(state, current, result);
 			break;
 		}
 		if (flags.has(FlowFlag.LoopLabel)) {
@@ -508,9 +515,9 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 	// Drain collected condition narrowings post-order (outermost applied first,
 	// innermost last) — the exact unwind order of the former
 	// getTypeAtFlowCondition recursion, but on the heap.
-	let pi = pending.length - 1;
+	let pi = pending == null ? -1 : pending.length - 1;
 	while (pi >= 0) {
-		const cnode = pending[pi];
+		const cnode = pending![pi];
 		const assumeTrue = cnode.flags.has(FlowFlag.TrueCondition);
 		const narrowed = narrowType(result.t, cnode.node, state.reference, assumeTrue);
 		result = flowType(narrowed, result.incomplete);
@@ -524,23 +531,20 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 	return result;
 }
 
-// Shared-flow cache lookup: linear scan by FlowNode identity — per-query N is typically < 20.
+// Shared-flow cache: entries are appended and read newest first, so a node
+// cached again during its own computation (a loop back edge) is served the
+// later result without a scan to overwrite the earlier one.
 function lookupSharedFlow(state: FlowState, flow: FlowNode): FlowType {
-	for (const entry of state.sharedFlows) {
-		if (entry.flow == flow) return entry.ft;
+	const entries = state.sharedFlows;
+	let i = entries.length - 1;
+	while (i >= 0) {
+		if (entries[i].flow == flow) return entries[i].ft;
+		i = i - 1;
 	}
 	return null as unknown as FlowType;
 }
 
 function cacheSharedFlow(state: FlowState, flow: FlowNode, ft: FlowType): void {
-	// Overwrite any existing entry for this flow (the result may improve
-	// after back-edge fixed-point analysis completes).
-	for (const entry of state.sharedFlows) {
-		if (entry.flow == flow) {
-			entry.ft = ft;
-			return;
-		}
-	}
 	state.sharedFlows.push({ flow: flow, ft: ft });
 }
 
@@ -1429,8 +1433,8 @@ function reachesStart(from: FlowNode, reduceLabels: FlowReduceLabelData[]): bool
 
 function callWritesInto(call: Node | null, refNode: Node): boolean {
 	if (call == null) return false;
-	let args: Node[] = [];
 	let callee: Node | null = null;
+	let args: Node[];
 	if (call.kind == NodeKind.CallExpr) {
 		const cd = call.data as CallExprData;
 		args = cd.arguments;
