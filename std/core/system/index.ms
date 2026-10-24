@@ -74,6 +74,12 @@ export class SyntaxError extends Error {
 	}
 }
 
+export class TypeError extends Error {
+	constructor(message: string) {
+		super(message);
+	}
+}
+
 @builtin("compilerFunc")
 export extern function compilerFunc(): void;
 
