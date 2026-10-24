@@ -842,6 +842,10 @@ function _bridgeMsStringIndexOf(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).indexOf(unboxString(args[1]), start as int32));
 }
 
+function _bridgeMsStringEquals(args: RaiserValue[]): RaiserValue {
+	return boxBool(unboxString(args[0]) == unboxString(args[1]));
+}
+
 function _bridgeMsStringCharCodeAt(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).charCodeAt(unboxInt(args[1]) as int32));
 }
@@ -1341,6 +1345,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStringTrimStart",     _bridgeMsStringTrimStart, HostCapability.Pure);
 	registerHostFn("msStringTrimEnd",       _bridgeMsStringTrimEnd, HostCapability.Pure);
 	registerHostFn("msStringIndexOf",       _bridgeMsStringIndexOf, HostCapability.Pure);
+	registerHostFn("msStringEquals",        _bridgeMsStringEquals, HostCapability.Pure);
 	registerHostFn("msStringCharCodeAt",    _bridgeMsStringCharCodeAt, HostCapability.Pure);
 	registerHostFn("msStringPadStart",      _bridgeMsStringPadStart, HostCapability.Pure);
 	registerHostFn("msStringPadEnd",        _bridgeMsStringPadEnd, HostCapability.Pure);
