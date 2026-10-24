@@ -150,6 +150,12 @@ class TargetAndConfigTest(unittest.TestCase):
             "-Xlinker <CFGDIR>/wasm32-wasi/crt1-command.o",
             "-Xlinker <CFGDIR>/wasm32-wasi/libc.a"])
 
+    def test_gnu_configs_confine_driver_library_search_to_the_prepared_target(self):
+        compile_ = pr.parseCompileArgv(LINUX_COMPILE)
+        for target in pr.ELF_TARGETS:
+            text = pr.renderConfig(target, pr.TARGETS[target], compile_, [], [], "..", "22")
+            self.assertIn("--sysroot=<CFGDIR>/%s\n" % target, text)
+
     def test_linux_config_keeps_no_pie_and_the_glibc_define(self):
         compile_ = pr.parseCompileArgv(LINUX_COMPILE)
         text = pr.renderConfig("x86_64-linux-gnu.2.31", pr.TARGETS["x86_64-linux-gnu.2.31"], compile_, [],

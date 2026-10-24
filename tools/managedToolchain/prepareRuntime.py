@@ -250,6 +250,8 @@ def renderConfig(target, spec, compile_, items, directories, engineRelative, maj
     engine = "%s/%s" % (here, engineRelative)
     lines = [configLine(["-target", spec.get("clangTarget") or compile_["target"]]),
              configLine(["-Xclang", "-target-cpu", "-Xclang", compile_["cpu"]])]
+    if target in ELF_TARGETS:
+        lines.append(configLine(["--sysroot=%s/%s" % (here, target)]))
     lines += [configLine(["-Xclang", "-target-feature", "-Xclang", f]) for f in compile_["features"]]
     if compile_["pic"]:
         lines.append(configLine(compile_["pic"]))
