@@ -84,3 +84,4 @@ import "./topLevelCursors";
 import "./proxyStaticKey";
 import "./inductionPointer";
 import "./typeInfoHookAdapters";
+import "./flowsRecorder";

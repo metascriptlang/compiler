@@ -72,6 +72,7 @@ import { evaluateComptimeBlocks } from "./meta/comptime";
 import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER } from "./options";
+import { flowStart, flowStop, flowAddMs, flowsEnabled, flowsWrite } from "./flows";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
 import { compileCFile, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, linkObjects, warmLinkPlan, objectSearchDirs, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
@@ -689,9 +690,11 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	const errBase = ctx.errors.length;
 	if (opts.verbose) verboseLog(`transforming ${modPath}`);
 	const _tm0 = performance.now();
+	const _fm0 = flowStart();
 	const monoed = monomorphizeProgram(program, ctx);
 	validateTypedAST(ctx, monoed);
 	job.timers.mono = job.timers.mono + (performance.now() - _tm0);
+	flowStop("a2.mono", _fm0);
 	if (hasErrorsFrom(ctx, errBase)) {
 		for (let i = errBase; i < ctx.errors.length; i += 1) {
 			const e = ctx.errors[i];
@@ -703,10 +706,12 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	}
 
 	const _tmc0 = performance.now();
+	const _fmc0 = flowStart();
 	const macroExpanded = expandMacros(monoed, ctx);
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
 	const comptimeResolved = evaluateComptimeBlocks(macroExpanded);
 	job.timers.macro = job.timers.macro + (performance.now() - _tmc0);
+	flowStop("a2.macro", _fmc0);
 	if (opts.gcMode == "manual" && !(job.stdPath != "" && modPath.startsWith(job.stdPath))) {
 		for (const hitNode of collectFreestandingAsync(comptimeResolved)) {
 			const hitLoc = freestandingAsyncLoc(hitNode);
@@ -715,18 +720,22 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	}
 	const hcrSlot = job.hcrSlot;
 	const _tx0 = performance.now();
+	const _fx0 = flowStart();
 	const reloadable: string[] = [];
 	if (hcrSlot >= 0) for (const module of job.hcrModules) reloadable.push(module.modulePath);
 	const transformed = transformProgram(comptimeResolved, ctx, false, reloadable, job.asyncModuleBody);
 	job.timers.xform = job.timers.xform + (performance.now() - _tx0);
+	flowStop("a2.xform", _fx0);
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
 	const nativeCtx = createTransformContextWithChecker(ctx);
 	nativeCtx.rangeChecks = opts.mode != MODE_DANGER;
 	nativeCtx.boundChecks = opts.mode != MODE_DANGER;
 	nativeCtx.objChecks = opts.mode != MODE_DANGER;
 	const _tn0 = performance.now();
+	const _fn0 = flowStart();
 	const nativeTransformed = transformForNative(transformed, nativeCtx);
 	job.timers.native = job.timers.native + (performance.now() - _tn0);
+	flowStop("a2.native", _fn0);
 	const hcrLifted = hcrSlot >= 0 ? liftHcrState(nativeTransformed, nativeCtx, job.hcrModules[hcrSlot].moduleId) : nativeTransformed;
 	exitOnCheckerErrorsFrom(ctx, errBase, modPath, job.source);
 	if (opts.gcMode == "none") ctx.gcMode = GcMode.None;
@@ -735,6 +744,7 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 	ctx.targetOs = opts.targetOs;
 	ctx.targetInfo = opts.targetInfo;
 	const _ta0 = performance.now();
+	const _fa0 = flowStart();
 	const preAnErrors = ctx.errors.length;
 	const analyzed = analyzeProgram(hcrLifted, ctx);
 	if (ctx.errors.length > preAnErrors) {
@@ -745,9 +755,12 @@ function lowerModuleA2(checked: Node, ctx: CheckerContext, job: A2Job): Node {
 		throw new Error(BUILD_STOPPED);
 	}
 	job.timers.analyze = job.timers.analyze + (performance.now() - _ta0);
+	flowStop("a2.analyze", _fa0);
 	const _tl0 = performance.now();
+	const _fl0 = flowStart();
 	const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 	job.timers.lower = job.timers.lower + (performance.now() - _tl0);
+	flowStop("a2.lower", _fl0);
 	truncateErrors(ctx, errBase);
 	job.claims = { ops: opsFrom(keyedOpMark) };
 	return nativeLowered;
@@ -2600,6 +2613,14 @@ function frontendIdentity(entryPath: string, opts: CliOptions, config: ResolverC
 }
 
 export function buildC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection, session: BuildSession): BuildStatus {
+	const fTotal = flowStart();
+	const status = buildCPhases(entryPath, opts, resolveSection, session);
+	flowStop("total", fTotal);
+	flowsWrite();
+	return status;
+}
+
+function buildCPhases(entryPath: string, opts: CliOptions, resolveSection: ResolveSection, session: BuildSession): BuildStatus {
 	startSessionBuild(session);
 	_hcrWarmJobs = [];
 	_hcrWarmLinks = [];
@@ -2611,6 +2632,7 @@ export function buildC(entryPath: string, opts: CliOptions, resolveSection: Reso
 	resetCompiledOFiles();
 	registerCoreParsers();
 	const t0 = performance.now();
+	const fGraph = flowStart();
 	// Before ANY phase reads it: freestanding targets imply --gc=manual, and the
 	// checker needs the resolved mode (freestanding async gate) — applyGcMode
 	// below runs too late for that, it only re-stamps the prelude context.
@@ -2753,7 +2775,9 @@ resetLiftedOps();
 
 	// Phase A: Parse → Check → Mono → Transform → Analyze all modules, store results
 	if (opts.showTime) printTiming("graph load+check", t0);
+	flowStop("phase.graph", fGraph);
 	const tA = performance.now();
+	const fA = flowStart();
 	const processed: ProcessedModule[] = [];
 	let transformedPrograms: Node[] = [];
 	let transformedPaths: string[] = [];
@@ -2943,6 +2967,7 @@ resetLiftedOps();
 	}
 
 	if (opts.showTime) printTiming("phase A (parse+check+transform)", tA);
+	flowStop("phase.A", fA);
 	if (opts.showTime) {
 		console.log(`    mono=${a2t.mono}ms macro=${a2t.macro}ms xform=${a2t.xform}ms native=${a2t.native}ms analyze=${a2t.analyze}ms lower=${a2t.lower}ms`);
 	}
@@ -2963,6 +2988,7 @@ resetLiftedOps();
 
 
 	const tB = performance.now();
+	const fB = flowStart();
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
@@ -3008,7 +3034,9 @@ resetLiftedOps();
 
 
 	if (opts.showTime) printTiming("phase B (DCE)", tB);
+	flowStop("phase.B", fB);
 	const tC = performance.now();
+	const fC = flowStart();
 
 	// Compile prelude @compile directives — unconditional.
 	// These are C runtime files, not application code. The linker strips unused sections.
@@ -3088,6 +3116,11 @@ resetLiftedOps();
 		reusedEmits.add(job.modPath);
 	}
 	let codegenTime: float64 = performance.now() - emitStart;
+	if (flowsEnabled()) {
+		let emitWorkMs: float64 = 0;
+		for (const emitted of emissionResults) emitWorkMs = emitWorkMs + (emitted.finished - emitted.started);
+		flowAddMs("emit.module", emitWorkMs);
+	}
 	if (opts.showTime) {
 		console.log(`    emit workers=${emitWidth} overlap=${emissionOverlapped(emissionResults)}`);
 		let emitWork: float64 = 0;
@@ -3221,6 +3254,7 @@ resetLiftedOps();
 	for (const mp of asyncBodies) dynamicPlan.topLevelAwait.add(mp);
 
 	// Skip link step if --emit=c (only writing C source files)
+	if (opts.emitC) flowStop("phase.C", fC);
 	if (opts.emitC && opts.isHcr) {
 		const emitDir = emitDirOf(opts);
 		const coreModules: string[] = [];
@@ -3310,6 +3344,7 @@ resetLiftedOps();
 	const tCl = performance.now();
 	const cCodes = dispatchCompileJobs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary, cJobs.length <= PLANNED_COMPILE_JOBS);
 	clangTime = performance.now() - tCl;
+	flowAddMs("cc", clangTime);
 	let moduleCompileFailed = false;
 	let cji = 0;
 	while (cji < cJobs.length) {
@@ -3334,6 +3369,7 @@ resetLiftedOps();
 		cji = cji + 1;
 	}
 	if (moduleCompileFailed) throw new Error(BUILD_STOPPED);
+	flowStop("phase.C", fC);
 	if (opts.showTime) {
 		printTiming("phase C (codegen+compile)", tC);
 		console.log(`    codegen: ${codegenTime}ms  clang: ${clangTime}ms`);
@@ -3380,6 +3416,7 @@ resetLiftedOps();
 	}
 
 	const tD = performance.now();
+	const fD = flowStart();
 
 	// Emscripten: a wait from sync code suspends the wasm stack only through a sleep or a
 	// pending timer (spawn runs inline here), so JSPI is linked exactly when one of those
@@ -3449,6 +3486,7 @@ resetLiftedOps();
 	writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 
 	if (opts.showTime) printTiming("phase D (link)", tD);
+	flowStop("phase.link", fD);
 	printDiag(success(`Built ${compiled} module(s) → ${bold(outBinary)}`));
 	if (opts.showTime) printTiming("total", t0);
 	session.lastBuilt = true;

@@ -15,6 +15,7 @@
 // Called AFTER the general transform pipeline, ONLY for non-JS backends.
 
 import { Node } from "../../ast/node";
+import { flowLap, flowMark } from "../../compiler/flows";
 import { TransformContext } from "../context";
 import { markClosureCalls } from "./closureCallMarker";
 // closureCallLower removed — Reference parity: dispatch generated at codegen time
@@ -29,18 +30,30 @@ import { lowerDownConversions } from "./downConvLower";
 import { lowerInductionPointers } from "./inductionPointer";
 
 export function transformForNative(program: Node, ctx: TransformContext): Node {
+	flowMark();
 	let result = markClosureCalls(program, ctx);
+	flowLap("pass.markClosureCalls");
 	result = lowerNumberBitwiseOperands(result, ctx);
+	flowLap("pass.native.lowerNumberBitwiseOperands");
 	result = injectRangeChecks(result, ctx);
+	flowLap("pass.injectRangeChecks");
 	result = injectIntChecks(result, ctx);
+	flowLap("pass.injectIntChecks");
 	result = coerceOptionals(result, ctx);
+	flowLap("pass.coerceOptionals");
 	result = lowerBuiltins(result, ctx);
+	flowLap("pass.native.lowerBuiltins");
 	result = lowerStringOps(result, ctx);
+	flowLap("pass.native.lowerStringOps");
 	// Last: injection must run after every pass that can request an Enum_toString
 	// (builtinLower/debugLower here + the stage-1 lowerBuiltins run in transformProgram).
 	result = lowerEnumToString(result, ctx);
+	flowLap("pass.native.lowerEnumToString");
 	result = lowerDownConversions(result, ctx);
+	flowLap("pass.lowerDownConversions");
 	result = insertVarParamDerefs(result, ctx);
+	flowLap("pass.insertVarParamDerefs");
 	result = lowerInductionPointers(result, ctx);
+	flowLap("pass.lowerInductionPointers");
 	return result;
 }

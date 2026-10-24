@@ -32,6 +32,7 @@ import { CheckerContext } from "../checker/context";
 import { hasFlag, setFlag, SymbolFlag } from "../checker/symbol";
 import { createTransformContextWithChecker, TransformContext } from "./context";
 import { bindCompilerFuncs } from "./util";
+import { flowLap, flowMark } from "../compiler/flows";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerBitSet } from "./lowering/bitSetLower";
 import { lowerConstFold } from "./coercion/constantFolding";
@@ -123,121 +124,161 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	ctx.jsBackend = jsBackend;
 	ctx.reloadableModules = reloadableModules;
 	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
+	flowMark();
 	let result = eraseBrandTypes(program);
-	if (!jsBackend) { result = planModuleTdz(result, ctx); }
+	flowLap("pass.eraseBrandTypes");
+	if (!jsBackend) { result = planModuleTdz(result, ctx); flowLap("pass.planModuleTdz"); }
 	result = lowerBorrow(result, ctx);
+	flowLap("pass.lowerBorrow");
 	result = lowerImplicitConv(result, ctx);
+	flowLap("pass.lowerImplicitConv");
 	result = jsBackend ? lowerPowerAssert(result, ctx) : lowerAssert(result, ctx);
+	flowLap(jsBackend ? "pass.lowerPowerAssert" : "pass.lowerAssert");
 	result = lowerDefer(result, ctx);
+	flowLap("pass.lowerDefer");
 	result = lowerConstFold(result, ctx);
-	if (!jsBackend) { result = lowerStaticInit(result, ctx); }
+	flowLap("pass.lowerConstFold");
+	if (!jsBackend) { result = lowerStaticInit(result, ctx); flowLap("pass.lowerStaticInit"); }
 	result = lowerVoidBind(result, ctx);
+	flowLap("pass.lowerVoidBind");
 	result = lowerObjectSpread(result, ctx);
-	result = ctx.jsBackend ? result : lowerArraySpread(result, ctx);
-	if (!jsBackend) { result = lowerStringConcatFlatten(result, ctx); }
+	flowLap("pass.lowerObjectSpread");
+	if (!jsBackend) { result = lowerArraySpread(result, ctx); flowLap("pass.lowerArraySpread"); }
+	if (!jsBackend) { result = lowerStringConcatFlatten(result, ctx); flowLap("pass.lowerStringConcatFlatten"); }
 	result = lowerOptionalChain(result, ctx);
+	flowLap("pass.lowerOptionalChain");
 	result = lowerNullishCoalesce(result, ctx);
+	flowLap("pass.lowerNullishCoalesce");
 	result = materializeMaybeReads(result, ctx);
+	flowLap("pass.materializeMaybeReads");
 	result = lowerStringTruthiness(result, ctx);
+	flowLap("pass.lowerStringTruthiness");
 	result = lowerRestParams(result, ctx);
+	flowLap("pass.lowerRestParams");
 	result = lowerDestructuring(result, ctx);
-	if (!jsBackend) { result = lowerForLoop(result, ctx); }
+	flowLap("pass.lowerDestructuring");
+	if (!jsBackend) { result = lowerForLoop(result, ctx); flowLap("pass.lowerForLoop"); }
 	result = lowerForOf(result, ctx);
+	flowLap("pass.lowerForOf");
 	result = lowerTryExpr(result, ctx);
+	flowLap("pass.lowerTryExpr");
 	result = lowerResultConstructors(result);
+	flowLap("pass.lowerResultConstructors");
 	result = lowerTypeof(result, ctx);
+	flowLap("pass.lowerTypeof");
 	result = lowerSwitch(result, ctx);
+	flowLap("pass.lowerSwitch");
 	result = lowerMatch(result, ctx);
+	flowLap("pass.lowerMatch");
 	// A `try` in a match expression arm became a statement only now.
 	result = lowerTryExpr(result, ctx);
+	flowLap("pass.lowerTryExpr#2");
 	result = retargetJumps(result, ctx);
+	flowLap("pass.retargetJumps");
 	result = lowerTailCall(result, ctx);
-	if (!jsBackend) { result = lowerParamReassign(result, ctx); }
-	if (asyncModuleBody) { result = lowerAsyncModuleBody(result, ctx); }
-	if (!jsBackend) { result = lowerAwaitSpill(result, ctx); }
-	if (!jsBackend) { result = lowerNamespaceValues(result); }
-	if (!jsBackend) { result = lowerActorPre(result, ctx); }
-	if (!jsBackend) { result = lowerSpawnGroup(result, ctx); }
+	flowLap("pass.lowerTailCall");
+	if (!jsBackend) { result = lowerParamReassign(result, ctx); flowLap("pass.lowerParamReassign"); }
+	if (asyncModuleBody) { result = lowerAsyncModuleBody(result, ctx); flowLap("pass.lowerAsyncModuleBody"); }
+	if (!jsBackend) { result = lowerAwaitSpill(result, ctx); flowLap("pass.lowerAwaitSpill"); }
+	if (!jsBackend) { result = lowerNamespaceValues(result); flowLap("pass.lowerNamespaceValues"); }
+	if (!jsBackend) { result = lowerActorPre(result, ctx); flowLap("pass.lowerActorPre"); }
+	if (!jsBackend) { result = lowerSpawnGroup(result, ctx); flowLap("pass.lowerSpawnGroup"); }
 	result = lowerPointerAddresses(result, ctx, !jsBackend);
-	if (!jsBackend) { result = lowerAsync(result, ctx); }
-	if (!jsBackend) { result = lowerAsyncBridge(result, ctx); }
-	if (!jsBackend) { result = lowerGenerator(result, ctx); }
-	if (!jsBackend) { result = lowerSpawn(result, ctx); }
+	flowLap("pass.lowerPointerAddresses");
+	if (!jsBackend) { result = lowerAsync(result, ctx); flowLap("pass.lowerAsync"); }
+	if (!jsBackend) { result = lowerAsyncBridge(result, ctx); flowLap("pass.lowerAsyncBridge"); }
+	if (!jsBackend) { result = lowerGenerator(result, ctx); flowLap("pass.lowerGenerator"); }
+	if (!jsBackend) { result = lowerSpawn(result, ctx); flowLap("pass.lowerSpawn"); }
 	// lowerSpawn boxes a thunk's return value around its await; spill that before lowerAwait.
-	if (!jsBackend) { result = lowerAwaitSpill(result, ctx); }
-	if (!jsBackend) { result = lowerAwait(result, ctx); }
-	if (!jsBackend) { result = lowerFieldInitializers(result, ctx); }
-	if (!jsBackend) { result = lowerActor(result, ctx); }
-	if (!jsBackend) { result = lowerVarHoist(result, ctx); }
-	if (!jsBackend) { result = lowerRvalueBridge(result, ctx); }
+	if (!jsBackend) { result = lowerAwaitSpill(result, ctx); flowLap("pass.lowerAwaitSpill#2"); }
+	if (!jsBackend) { result = lowerAwait(result, ctx); flowLap("pass.lowerAwait"); }
+	if (!jsBackend) { result = lowerFieldInitializers(result, ctx); flowLap("pass.lowerFieldInitializers"); }
+	if (!jsBackend) { result = lowerActor(result, ctx); flowLap("pass.lowerActor"); }
+	if (!jsBackend) { result = lowerVarHoist(result, ctx); flowLap("pass.lowerVarHoist"); }
+	if (!jsBackend) { result = lowerRvalueBridge(result, ctx); flowLap("pass.lowerRvalueBridge"); }
 	result = lowerExtensionMethod(result, ctx);
+	flowLap("pass.lowerExtensionMethod");
 	// Field initializers become assignments inside the constructor, so both
 	// backends run them in one place and the parent chain reaches them.
 	result = jsBackend ? lowerFieldInitializers(result, ctx) : lowerCtorInit(result, ctx);
+	flowLap(jsBackend ? "pass.lowerFieldInitializers" : "pass.lowerCtorInit");
 	result = lowerNewExpr(result, ctx);
+	flowLap("pass.lowerNewExpr");
 	// Lift class/actor methods → top-level FunctionDecl. C + Raiser want one
 	// uniform shape for codegen; JS keeps `class Foo {}` native (its semantics
 	// already match what we want at the source level).
-	if (!jsBackend) { result = lowerMethodToFunction(result, ctx); }
-	if (!jsBackend) { result = lowerLambda(result, ctx); }
+	if (!jsBackend) { result = lowerMethodToFunction(result, ctx); flowLap("pass.lowerMethodToFunction"); }
+	if (!jsBackend) { result = lowerLambda(result, ctx); flowLap("pass.lowerLambda"); }
 	// Hoist fresh RC-returning calls out of non-RC bindings so the analyzer cleans
 	// them (fixes `const has = provide(path).ok` leaking the Result). C/DRC only.
 	result = lowerUnionConversions(result, ctx);
-	if (!jsBackend) { result = lowerCallHoist(result, ctx); }
+	flowLap("pass.lowerUnionConversions");
+	if (!jsBackend) { result = lowerCallHoist(result, ctx); flowLap("pass.lowerCallHoist"); }
 	result = lowerBuiltins(result, ctx);
-	if (jsBackend) { result = lowerStringLengthJS(result, ctx); }
+	flowLap("pass.lowerBuiltins");
+	if (jsBackend) { result = lowerStringLengthJS(result, ctx); flowLap("pass.lowerStringLengthJS"); }
 	result = lowerCStringConv(result, ctx);
+	flowLap("pass.lowerCStringConv");
 	result = lowerClosureEqualities(result, ctx);
+	flowLap("pass.lowerClosureEqualities");
 	result = lowerOperators(result, ctx);
-	if (jsBackend) { result = bindCollectionKeyOps(result, ctx); }
-	if (!jsBackend) { result = lowerBigIntOps(result, ctx); }
-	if (!jsBackend) { result = lowerStringOps(result, ctx); }
-	if (jsBackend) { result = lowerJsPointers(result, ctx); }
-	if (jsBackend) { result = lowerJsVarParam(result, ctx); }
+	flowLap("pass.lowerOperators");
+	if (jsBackend) { result = bindCollectionKeyOps(result, ctx); flowLap("pass.bindCollectionKeyOps"); }
+	if (!jsBackend) { result = lowerBigIntOps(result, ctx); flowLap("pass.lowerBigIntOps"); }
+	if (!jsBackend) { result = lowerStringOps(result, ctx); flowLap("pass.lowerStringOps"); }
+	if (jsBackend) { result = lowerJsPointers(result, ctx); flowLap("pass.lowerJsPointers"); }
+	if (jsBackend) { result = lowerJsVarParam(result, ctx); flowLap("pass.lowerJsVarParam"); }
 	result = spanLower(result, ctx, false);
+	flowLap("pass.spanLower");
 	result = lowerConditionalExpr(result, ctx);
+	flowLap("pass.lowerConditionalExpr");
 	// Conditionally-evaluated positions are statements now: the span sources the
 	// first run had to leave there are evaluated once ahead of them and split.
 	result = spanLower(result, ctx, true);
-	if (!jsBackend) { result = spanParamExpand(result, ctx); }
+	flowLap("pass.spanLower#2");
+	if (!jsBackend) { result = spanParamExpand(result, ctx); flowLap("pass.spanParamExpand"); }
 	// Conditionally-evaluated positions (ternary arm, `&&`/`||` RHS, while-cond)
 	// are statements now, so the positional-new hoist that skipped them above can
 	// reach them. The pass empties `newArguments` when it lowers, so this second
 	// run only sees what the first one refused.
 	result = lowerNewExpr(result, ctx);
-	if (!jsBackend) { result = lowerUpdateExpr(result, ctx); }
-	if (!jsBackend) { result = lowerNullable(result, ctx); }
-	if (!jsBackend) { result = projectNarrowedUnions(result, ctx); }
-	if (jsBackend) { result = lowerUnionTags(result, ctx); }
-	if (jsBackend) { result = checkVariantReads(result, ctx, true); }
+	flowLap("pass.lowerNewExpr#2");
+	if (!jsBackend) { result = lowerUpdateExpr(result, ctx); flowLap("pass.lowerUpdateExpr"); }
+	if (!jsBackend) { result = lowerNullable(result, ctx); flowLap("pass.lowerNullable"); }
+	if (!jsBackend) { result = projectNarrowedUnions(result, ctx); flowLap("pass.projectNarrowedUnions"); }
+	if (jsBackend) { result = lowerUnionTags(result, ctx); flowLap("pass.lowerUnionTags"); }
+	if (jsBackend) { result = checkVariantReads(result, ctx, true); flowLap("pass.checkVariantReads"); }
 	// C materializes the Maybe struct (above); JS de-materializes it — the two
 	// backends are inverse directions of the same T|null lowering. Keeps JS on
 	// native null (platform interop) and codegen dumb.
-	if (jsBackend) { result = unwrapMaybe(result, ctx); }
+	if (jsBackend) { result = unwrapMaybe(result, ctx); flowLap("pass.unwrapMaybe"); }
 	// Enum operands of a BitSet expression still carry their ordinal; turn each
 	// into its bit before any backend sees the operator.
 	result = lowerBitSet(result, ctx);
+	flowLap("pass.lowerBitSet");
 	result = lowerDCE(result, ctx);
+	flowLap("pass.lowerDCE");
 	// The 64-bit pass runs first so the width passes below never see the nodes
 	// it consumed.
-	if (jsBackend) { result = refuseUnfoldedSizeofJS(result, ctx); }
-	if (jsBackend) { result = lowerNumberBitwiseOperands(result, ctx); }
-	if (jsBackend) { result = injectRangeChecksJS(result, ctx); }
-	if (jsBackend) { result = lowerBigIntJS(result, ctx); }
-	if (jsBackend) { result = lowerFloat32JS(result, ctx); }
-	if (jsBackend) { result = lowerIntArithJS(result, ctx); }
-	if (jsBackend) { result = lowerIntConvJS(result, ctx); }
-	if (jsBackend) { result = lowerAccessJS(result, ctx); }
+	if (jsBackend) { result = refuseUnfoldedSizeofJS(result, ctx); flowLap("pass.refuseUnfoldedSizeofJS"); }
+	if (jsBackend) { result = lowerNumberBitwiseOperands(result, ctx); flowLap("pass.lowerNumberBitwiseOperands"); }
+	if (jsBackend) { result = injectRangeChecksJS(result, ctx); flowLap("pass.injectRangeChecksJS"); }
+	if (jsBackend) { result = lowerBigIntJS(result, ctx); flowLap("pass.lowerBigIntJS"); }
+	if (jsBackend) { result = lowerFloat32JS(result, ctx); flowLap("pass.lowerFloat32JS"); }
+	if (jsBackend) { result = lowerIntArithJS(result, ctx); flowLap("pass.lowerIntArithJS"); }
+	if (jsBackend) { result = lowerIntConvJS(result, ctx); flowLap("pass.lowerIntConvJS"); }
+	if (jsBackend) { result = lowerAccessJS(result, ctx); flowLap("pass.lowerAccessJS"); }
 	// Definitions for the `EnumName_toString` calls the lowerings above emit
 	// (enum reverse index + `.toString()`). C injects the same functions at the
 	// tail of its native pipeline (transform/native/index.ms); JS has no native
 	// pipeline, so its injection lands here — last for the same reason: every
 	// pass that can request an enum has already run, and DCE cannot sweep a
 	// definition whose only reference is a call the lowerings just created.
-	if (jsBackend) { result = lowerEnumToString(result, ctx); }
+	if (jsBackend) { result = lowerEnumToString(result, ctx); flowLap("pass.lowerEnumToString"); }
 	result = liftDestructors(result, ctx, !jsBackend);
-	if (jsBackend) { result = dropLocalTypeLift(result, checkerCtx); }
-	if (jsBackend) { result = ownModuleScopeTemps(result, checkerCtx); }
+	flowLap("pass.liftDestructors");
+	if (jsBackend) { result = dropLocalTypeLift(result, checkerCtx); flowLap("pass.dropLocalTypeLift"); }
+	if (jsBackend) { result = ownModuleScopeTemps(result, checkerCtx); flowLap("pass.ownModuleScopeTemps"); }
 	return result;
 }
 

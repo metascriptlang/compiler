@@ -6,6 +6,7 @@
 
 import { Node, NodeKind, NodeFlag, ProgramData, BlockStmtData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { flowLap, flowMark } from "../compiler/flows";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { CheckerContext, GcMode } from "../checker/context";
 import { createTransformContextWithChecker } from "../transform/context";
@@ -23,10 +24,15 @@ import { transformProgram } from "../transform/index";
 export function analyzeProgram(program: Node, checkerCtx: CheckerContext): Node {
 	if (checkerCtx == null) return program;  // test mode — skip analysis
 	if (checkerCtx.gcMode == GcMode.None || checkerCtx.gcMode == GcMode.Manual) return program;
+	flowMark();
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const dctx = createDrcContext(ctx);
+	flowLap("analyze.context");
 	const injected = injectProgram(program, dctx);
-	return optimizeDrc(injected);
+	flowLap("analyze.inject");
+	const optimized = optimizeDrc(injected);
+	flowLap("analyze.optimize");
+	return optimized;
 }
 
 // ===== Integration Tests =====
