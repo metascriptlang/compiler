@@ -59,8 +59,8 @@ class BundleTest(unittest.TestCase):
         write(os.path.join(output, "wasm32-wasi", "libm.a"), "!<arch>\n")
         return output, []
 
-    def prepareWindows(self, zig, engine, windows):
-        self.windowsCalls.append((zig, engine, windows))
+    def prepareWindows(self, zig, engine, windows, targets=None):
+        self.windowsCalls.append((zig, engine, windows, targets))
         write(os.path.join(windows, "x86_64-windows-gnu.cfg"), "-target w\n")
         write(os.path.join(windows, "notices", pw.PROVENANCE), '{"kind": "windows"}\n')
         return windows, []
@@ -81,9 +81,9 @@ class BundleTest(unittest.TestCase):
         out = self.path("bundle")
         pb.prepareBundle(self.engine, "/z/zig", out, [])
         self.assertEqual(self.runtimeCalls[0][3:], ([], ".."))
-        zig, source, windows = self.windowsCalls[0]
-        self.assertEqual((zig, source, os.path.basename(windows), os.path.basename(os.path.dirname(windows))),
-                         ("/z/zig", self.engine, "windows", "runtime"))
+        zig, source, windows, targets = self.windowsCalls[0]
+        self.assertEqual((zig, source, os.path.basename(windows), os.path.basename(os.path.dirname(windows)), targets),
+                         ("/z/zig", self.engine, "windows", "runtime", None))
         self.assertEqual(read(os.path.join(out, "runtime", "windows", "x86_64-windows-gnu.cfg")), "-target w\n")
         receipt = json.loads(read(os.path.join(out, "notices", "bundle-provenance.json")))
         self.assertEqual(receipt["runtimeProvenance"], "runtime/notices/runtime-provenance.json")
@@ -99,6 +99,14 @@ class BundleTest(unittest.TestCase):
         receipt = json.loads(read(os.path.join(out, "notices", "bundle-provenance.json")))
         self.assertNotIn("runtimeProvenance", receipt)
         self.assertIn("windowsRuntimeProvenance", receipt)
+
+    def test_each_windows_target_alone_or_both_selects_exactly_those_targets(self):
+        for requested, expected in ((["aarch64-windows-gnu"], ["aarch64-windows-gnu"]),
+                                    (["aarch64-windows-gnu", "x86_64-windows-gnu"], ["aarch64-windows-gnu", "x86_64-windows-gnu"]),
+                                    (["x86_64-windows-gnu", "wasm32-wasi"], ["x86_64-windows-gnu"])):
+            self.windowsCalls.clear()
+            pb.prepareBundle(self.engine, "/z/zig", self.path("bundle-" + "-".join(requested)), requested)
+            self.assertEqual([call[3] for call in self.windowsCalls], [expected], msg=requested)
 
     def test_an_explicit_other_target_leaves_the_windows_runtime_out(self):
         out = self.path("bundle")

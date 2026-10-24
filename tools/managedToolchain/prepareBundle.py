@@ -5,8 +5,8 @@
 
 The engine is the verified component from prepareEngine.py. The bundle keeps its contents at the
 root (bin/, lib/, notices/) and adds `runtime/`, the payload prepareRuntime.py writes with the
-engine reached by `..`; the x86_64-windows-gnu runtime is `runtime/windows/`, from prepareWindowsRuntime.py,
-with the engine reached by `../..`. HOST, VERSION, FILES.sha256 and IDENTITY are rewritten over every file of
+engine reached by `..`; the x86_64-windows-gnu and aarch64-windows-gnu runtimes are `runtime/windows/`, from
+prepareWindowsRuntime.py, with the engine reached by `../..`. HOST, VERSION, FILES.sha256 and IDENTITY are rewritten over every file of
 the bundle, and the source engine's identity is recorded in notices/bundle-provenance.json.
 
 The bundle is a local proof, not an upstream-controlled build, and never certifies redistribution.
@@ -26,9 +26,10 @@ ENGINE_RELATIVE = ".."
 
 
 def splitTargets(targets):
-    """(targets prepareRuntime.py makes, whether prepareWindowsRuntime.py runs). No target selects every target."""
-    windows = pw.TARGET in targets
-    return [t for t in targets if t != pw.TARGET], windows or not targets
+    """(targets prepareRuntime.py makes, Windows targets prepareWindowsRuntime.py makes; none when no Windows
+    target is named and others are). No target selects every target."""
+    windows = [t for t in targets if t in pw.TARGETS]
+    return [t for t in targets if t not in pw.TARGETS], windows if windows or not targets else []
 
 
 def writeBundleProvenance(root, engineIdentity, host, version, hasRuntime, hasWindows):
@@ -72,9 +73,9 @@ def prepareBundle(engine, zig, output, targets):
             pr.prepareRuntime(zig, engine, runtime, others, ENGINE_RELATIVE)
         else:
             os.makedirs(runtime)
-        if windows:
-            pw.prepareWindowsRuntime(zig, engine, os.path.join(runtime, "windows"))
-        writeBundleProvenance(clone, engineIdentity, host, version, hasRuntime, windows)
+        if windows or not targets:
+            pw.prepareWindowsRuntime(zig, engine, os.path.join(runtime, "windows"), windows or None)
+        writeBundleProvenance(clone, engineIdentity, host, version, hasRuntime, bool(windows) or not targets)
         pe.writeContract(clone, host, version)
         pe.verifyEngine(clone)
         os.chmod(clone, 0o755)
