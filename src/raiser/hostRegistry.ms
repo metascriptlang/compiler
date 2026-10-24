@@ -5,8 +5,11 @@
 // auto-generated host table (codegen/raiser/hostTable.ms emits MS source
 // that calls registerHostFn for every reachable extern).
 //
-import { RaiserHostFn } from "./marshal";
-import { RaiserObjectHeap, RaiserArrayHeap, createStructHeap, createArrayHeap } from "./value";
+import { RaiserValue, RaiserObjectHeap, RaiserArrayHeap, createStructHeap, createArrayHeap } from "./value";
+
+// Every registered host call has this shape. Wrappers handle per-native
+// type-specific marshalling internally.
+export type RaiserHostFn = (args: RaiserValue[]) => RaiserValue;
 
 export enum HostCapability {
 	Unsafe,
@@ -138,7 +141,6 @@ export function _resetHostRegistryForTests(): void {
 
 // --- Tests ---
 
-import { RaiserValue } from "./value";
 import { raiserConstString, raiserInt, RaiserValueKind, heapStringText } from "./value";
 
 test "register and lookup host fn" {

@@ -24,11 +24,7 @@ import {
 } from "./value";
 import { activeHostArrayHeap, setActiveHostHeaps } from "./hostRegistry";
 
-// --- Host function signature ---
-// Every registered host call has this shape. Wrappers handle per-native
-// type-specific marshalling internally.
-
-export type RaiserHostFn = (args: RaiserValue[]) => RaiserValue;
+export { RaiserHostFn } from "./hostRegistry";
 
 export type RaiserPrintSink = (text: string) => void;
 
