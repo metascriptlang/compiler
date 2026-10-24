@@ -231,13 +231,10 @@ static inline bool msMpscPush(msMpscQueue* q, msMessage* msg) {
 	/* Release fence: ensure msg fields are visible before linking */
 	atomic_thread_fence(memory_order_release);
 
-	/* Swap head atomically. acq_rel pairs producer-producer: prev owner's
-	 * writes (msg init, pool slab calloc, etc.) are visible to the next producer
-	 * that pops this msg off head via exchange. Relaxed here (Pony's choice)
-	 * would require ANNOTATE_HAPPENS_BEFORE for TSan visibility; acq_rel is
-	 * free on aarch64 (swpal vs swpl, same cycles) and x86 (xchg is seq_cst
-	 * regardless), and gives correct happens-before without annotations. */
-	msMessage* prev = atomic_exchange_explicit(&q->head, msg, memory_order_acq_rel);
+	/* seq_cst, not acq_rel: the actor's visit end drops its run token and then
+	 * marks this queue empty, and the pusher takes the token after this exchange;
+	 * both sides must be in one total order (same instruction on aarch64 and x86). */
+	msMessage* prev = atomic_exchange_explicit(&q->head, msg, memory_order_seq_cst);
 
 	/* Check if queue was empty (LSB tag) */
 	bool wasEmpty = ((uintptr_t)prev & 1) != 0;
@@ -305,7 +302,7 @@ static inline bool msMpscIsEmpty(msMpscQueue* q) {
  */
 static inline bool msMpscMarkEmpty(msMpscQueue* q) {
     msMessage* tail = q->tail;
-    msMessage* head = atomic_load_explicit(&q->head, memory_order_acquire);
+    msMessage* head = atomic_load_explicit(&q->head, memory_order_seq_cst);
 
     /* Already marked empty */
     if (((uintptr_t)head & 1) != 0) return true;
@@ -317,7 +314,7 @@ static inline bool msMpscMarkEmpty(msMpscQueue* q) {
     msMessage* tagged = (msMessage*)((uintptr_t)head | 1);
     return atomic_compare_exchange_strong_explicit(
         &q->head, &tail, tagged,
-        memory_order_acq_rel, memory_order_acquire);
+        memory_order_seq_cst, memory_order_seq_cst);
 }
 
 #endif /* MS_MAILBOX_H */

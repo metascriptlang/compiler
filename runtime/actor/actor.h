@@ -579,12 +579,13 @@ static inline void msActorResumeFromFut(void* rawActor, ...) {
         else msPoolWakeWorker(sid);
         return;
     }
-    msActorClearFlag(a, MS_ACTOR_SUSPENDED);
+    /* Keep seq_cst: msActorVisitEnd drops the token then reads SUSPENDED (Dekker pair). */
+    atomic_fetch_and_explicit(&a->syncFlags, (uint8_t)~MS_ACTOR_SUSPENDED, memory_order_seq_cst);
     /* Normal resume: suspendedFut stays set — the visit clears it (gate stays
      * closed until the visit owns the shell under processing). */
-    atomic_store_explicit(&a->scheduled, true, memory_order_release);
+    bool push = !atomic_exchange_explicit(&a->scheduled, true, memory_order_seq_cst);
     msFutureDeferredRelease(implFut);
-    if (sid >= 0 && sid < msSchedulerCount) {
+    if (push && sid >= 0 && sid < msSchedulerCount) {
         msSchedRunPush(&msSchedulers[sid], a);
     }
     if (sid == 0) msActorWakeEventLoop();
@@ -651,6 +652,19 @@ static inline void msNameRegistryGrow(void) {
 extern void msSetActorDestroyHook(void (*hook)(void*));
 extern void msCallActorDestroyHook(void* actor);
 
+static inline void msActorScheduleEdge(msActor* a) {
+    if (atomic_exchange_explicit(&a->scheduled, true, memory_order_seq_cst)) return;
+    int sid = a->schedulerID;
+    if (sid >= 0 && sid < msSchedulerCount) {
+        msSchedRunPush(&msSchedulers[sid], a);
+        if (!atomic_exchange_explicit(&msSchedulers[sid].wakeAmortized, true,
+                memory_order_acq_rel)) {
+            if (sid == 0) msActorWakeEventLoop();
+            else msPoolWakeWorker(sid);
+        }
+    }
+}
+
 /*
  * Send a message to an actor (any thread, wait-free).
  */
@@ -689,28 +703,36 @@ static inline void msActorSend(msActor* a, msMessage* msg) {
     bool wasEmpty = msMpscPush(&a->mailbox, msg);
     atomic_store_explicit(&a->hasWork, true, memory_order_release);
 
-    /* Pony messageq gate: schedule iff this push transitioned the mailbox empty→non-empty.
-     * wasEmpty is atomic with the processing thread's markEmpty, so exactly one party (this
-     * sender, or the processing thread's re-enqueue) schedules the actor — no stale-flag
-     * window (the old scheduled-CAS could observe scheduled=false mid-deschedule and push the
-     * actor onto a run queue while it was still being processed, so a popper popped it, failed
-     * the processing CAS, and dropped it = strand), and no double-enqueue (only the
-     * empty→non-empty edge pushes). A SUSPENDED actor is re-scheduled by its resume path. */
-    if (wasEmpty && !msActorHasFlag(a, MS_ACTOR_SUSPENDED)) {
-        atomic_store_explicit(&a->scheduled, true, memory_order_release);
-        int sid = a->schedulerID;
-        if (sid >= 0 && sid < msSchedulerCount) {
-            msSchedRunPush(&msSchedulers[sid], a);
-            /* Amortized wake: skip the wake syscall if this scheduler was already woken since
-             * its last drain — O(schedulers) wakes instead of O(actors) at high send rates. */
-            if (!atomic_exchange_explicit(&msSchedulers[sid].wakeAmortized, true,
-                    memory_order_acq_rel)) {
-                if (sid == 0) msActorWakeEventLoop();
-                else msPoolWakeWorker(sid);
-            }
+    if (wasEmpty && !msActorHasFlag(a, MS_ACTOR_SUSPENDED)) msActorScheduleEdge(a);
+    msHazardClear(a);
+}
+
+static inline void msActorVisitEnd(msActor* a, msActor* prevActor) {
+    /* Keep seq_cst: pairs with msActorScheduleEdge's exchange after a queue push (Dekker). */
+    atomic_store_explicit(&a->scheduled, false, memory_order_seq_cst);
+    atomic_thread_fence(memory_order_seq_cst);
+    bool work = false;
+    bool frozen = (atomic_load_explicit(&a->syncFlags, memory_order_seq_cst) & MS_ACTOR_SUSPENDED) != 0;
+    if (!frozen) {
+        if (atomic_load_explicit(&a->suspendedFut, memory_order_acquire) != NULL) {
+            work = true;
+        } else if (!msMpscMarkEmpty(&a->mailbox)) {
+            work = true;
+        } else {
+            atomic_store_explicit(&a->hasWork, false, memory_order_release);
         }
     }
-    msHazardClear(a);
+    bool push = work && !atomic_exchange_explicit(&a->scheduled, true, memory_order_seq_cst);
+    int sid = a->schedulerID;
+    msCurrentActor = prevActor;
+    msRootsSwap(&a->roots);
+    atomic_store_explicit(&a->processing, false, memory_order_release);
+    if (push && sid >= 0 && sid < msSchedulerCount) {
+        msSchedRunPush(&msSchedulers[sid], a);
+        if (sid == 0) msActorWakeEventLoop();
+        else msPoolWakeWorker(sid);
+    }
+    msFutureReleaseFlush();
 }
 
 /*
@@ -746,8 +768,8 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         void* sfp = atomic_load_explicit(&a->suspendedFut, memory_order_acquire);
         if (sfp != NULL) {
             if (msActorHasFlag(a, MS_ACTOR_SUSPENDED)) {
-                msCurrentActor = prevActor;
-                atomic_store_explicit(&a->processing, false, memory_order_release);
+                msRootsSwap(&a->roots);
+                msActorVisitEnd(a, prevActor);
                 return 0;
             }
             /* Resumed: the resume callback completed the reply and released implFut.
@@ -788,6 +810,7 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
     }
 
     int processed = 0;
+    bool parked = false;
     while (processed < maxBatch) {
         msMessage* msg = msMpscPop(&a->mailbox);
         if (msg == NULL) break;
@@ -805,49 +828,16 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
         processed++;
         if (atomic_load_explicit(&a->suspendedFut, memory_order_relaxed) != NULL
                 || (atomic_load_explicit(&a->syncFlags, memory_order_relaxed) & MS_ACTOR_SUSPENDED) != 0) {
-            atomic_store_explicit(&a->scheduled, false, memory_order_release);
-            msCurrentActor = prevActor;
-            msRootsSwap(&a->roots);
-            atomic_store_explicit(&a->processing, false, memory_order_release);
-            msFutureReleaseFlush();
-            return processed;
+            parked = true;
+            break;
         }
     }
 
-    /* Scheduling decision, made WHILE HOLDING processing. BLOCKED (a heuristic) from the
-     * pre-check; markEmpty is the LAST mailbox op and runs under processing so it shares the
-     * single-consumer exclusion with msMpscPop (reading/CASing q->tail off-processing is the
-     * two-consumer race). BLOCKED slightly-stale on a racing late message is harmless. */
-    if (msMpscIsEmpty(&a->mailbox) && a->state != NULL && msHeader(a->state)->rc > 0) {
+    if (!parked && msMpscIsEmpty(&a->mailbox) && a->state != NULL && msHeader(a->state)->rc > 0) {
         msActorSetFlag(a, MS_ACTOR_BLOCKED);
     }
 
-    /* markEmpty: the LAST consumer op, under processing.
-     *   TRUE  → truly empty → deschedule, NO re-push. A future sender's wasEmpty push
-     *           re-queues it (atomic with markEmpty, so exactly one party schedules) — Pony parity.
-     *   FALSE → a message is pending → re-enqueue, but DEFER the run-queue push to AFTER the
-     *           processing release below, so a concurrent popper acquires processing only once
-     *           we have let go (it wins the freed CAS, never drops). */
-    bool reEnqueue;
-    if (msMpscMarkEmpty(&a->mailbox)) {
-        atomic_store_explicit(&a->hasWork, false, memory_order_release);
-        atomic_store_explicit(&a->scheduled, false, memory_order_release);
-        reEnqueue = false;
-    } else {
-        reEnqueue = true;
-    }
-
-    msCurrentActor = prevActor;
-    msRootsSwap(&a->roots);
-    atomic_store_explicit(&a->processing, false, memory_order_release);
-
-    if (reEnqueue && a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) {
-        msSchedRunPush(&msSchedulers[a->schedulerID], a);
-        if (a->schedulerID == 0) msActorWakeEventLoop();
-        else msPoolWakeWorker(a->schedulerID);
-    }
-
-    msFutureReleaseFlush();
+    msActorVisitEnd(a, prevActor);
     return processed;
 }
 
@@ -1615,17 +1605,15 @@ static inline bool msActorPollLocal(void) {
         for (int i = 0; i < cnt; i++) {
             msActor* sa = sched->actors[i];
             if (!atomic_load_explicit(&sa->stopRequested, memory_order_acquire)) continue;
-            /* Suspended-stopped lane ONLY. The latched SUSPENDED flag keeps
-             * senders off the wasEmpty edge, so no run-queue entry can exist —
-             * `scheduled` alone can't prove that (markEmpty/push overwrite race
-             * frees a live queue node → pop UAF). Awake/idle stops always get a
-             * STOP-msg visit whose gate reaps with the pop owned. */
+            /* Suspended-stopped lane ONLY: awake/idle stops always get a STOP-msg
+             * visit whose gate reaps with the pop owned. Taking the run token keeps
+             * a job post from queueing the shell this scan frees. */
             if (!msActorHasFlag(sa, MS_ACTOR_SUSPENDED)) continue;
             if (atomic_load_explicit(&sa->suspendedFut, memory_order_acquire) != NULL) continue;
             bool expP = false;
             if (!atomic_compare_exchange_strong_explicit(&sa->processing, &expP, true,
                     memory_order_acquire, memory_order_relaxed)) continue;
-            if (atomic_load_explicit(&sa->scheduled, memory_order_acquire)) {
+            if (atomic_exchange_explicit(&sa->scheduled, true, memory_order_seq_cst)) {
                 /* Queued — that visit's gate reaps; don't double-own. */
                 atomic_store_explicit(&sa->processing, false, memory_order_release);
                 continue;
