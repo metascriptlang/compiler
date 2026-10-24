@@ -9,6 +9,7 @@ from unittest import mock
 import prepareBundle as pb
 import prepareEngine as pe
 import prepareRuntime as pr
+import prepareWindowsRuntime as pw
 
 
 def write(path, text="x\n"):
@@ -35,8 +36,10 @@ class BundleTest(unittest.TestCase):
         self.engineIdentity = read(os.path.join(self.engine, "IDENTITY")).strip()
         self.verified = []
         self.runtimeCalls = []
+        self.windowsCalls = []
         for patcher in (mock.patch.object(pe, "verifyEngine", side_effect=self.verify),
-                        mock.patch.object(pr, "prepareRuntime", side_effect=self.prepareRuntime)):
+                        mock.patch.object(pr, "prepareRuntime", side_effect=self.prepareRuntime),
+                        mock.patch.object(pw, "prepareWindowsRuntime", side_effect=self.prepareWindows)):
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -56,6 +59,12 @@ class BundleTest(unittest.TestCase):
         write(os.path.join(output, "wasm32-wasi", "libm.a"), "!<arch>\n")
         return output, []
 
+    def prepareWindows(self, zig, engine, windows):
+        self.windowsCalls.append((zig, engine, windows))
+        write(os.path.join(windows, "x86_64-windows-gnu.cfg"), "-target w\n")
+        write(os.path.join(windows, "notices", pw.PROVENANCE), '{"kind": "windows"}\n')
+        return windows, []
+
     def test_the_bundle_keeps_engine_contents_at_the_root_and_the_runtime_as_a_child(self):
         out = self.path("out", "bundle")
         self.assertEqual(pb.prepareBundle(self.engine, "/z/zig", out, ["t"]), out)
@@ -68,6 +77,50 @@ class BundleTest(unittest.TestCase):
         self.assertEqual(os.path.basename(runtime), "runtime")
         self.assertTrue(os.path.dirname(runtime).startswith(out + ".partial-"))
 
+    def test_no_target_prepares_every_runtime_and_the_windows_runtime_is_a_child_of_runtime(self):
+        out = self.path("bundle")
+        pb.prepareBundle(self.engine, "/z/zig", out, [])
+        self.assertEqual(self.runtimeCalls[0][3:], ([], ".."))
+        zig, source, windows = self.windowsCalls[0]
+        self.assertEqual((zig, source, os.path.basename(windows), os.path.basename(os.path.dirname(windows))),
+                         ("/z/zig", self.engine, "windows", "runtime"))
+        self.assertEqual(read(os.path.join(out, "runtime", "windows", "x86_64-windows-gnu.cfg")), "-target w\n")
+        receipt = json.loads(read(os.path.join(out, "notices", "bundle-provenance.json")))
+        self.assertEqual(receipt["runtimeProvenance"], "runtime/notices/runtime-provenance.json")
+        self.assertEqual(receipt["windowsRuntimeProvenance"], "runtime/windows/notices/windows-provenance.json")
+        for name in (receipt["runtimeProvenance"], receipt["windowsRuntimeProvenance"]):
+            self.assertTrue(os.path.isfile(os.path.join(out, name)))
+
+    def test_the_windows_target_alone_makes_only_the_windows_runtime(self):
+        out = self.path("bundle")
+        pb.prepareBundle(self.engine, "/z/zig", out, ["x86_64-windows-gnu"])
+        self.assertEqual(self.runtimeCalls, [])
+        self.assertEqual(os.listdir(os.path.join(out, "runtime")), ["windows"])
+        receipt = json.loads(read(os.path.join(out, "notices", "bundle-provenance.json")))
+        self.assertNotIn("runtimeProvenance", receipt)
+        self.assertIn("windowsRuntimeProvenance", receipt)
+
+    def test_an_explicit_other_target_leaves_the_windows_runtime_out(self):
+        out = self.path("bundle")
+        pb.prepareBundle(self.engine, "/z/zig", out, ["wasm32-wasi"])
+        self.assertEqual(self.windowsCalls, [])
+        self.assertEqual(self.runtimeCalls[0][3], ["wasm32-wasi"])
+        self.assertFalse(os.path.exists(os.path.join(out, "runtime", "windows")))
+        receipt = json.loads(read(os.path.join(out, "notices", "bundle-provenance.json")))
+        self.assertNotIn("windowsRuntimeProvenance", receipt)
+
+    def test_windows_and_another_target_make_both(self):
+        out = self.path("bundle")
+        pb.prepareBundle(self.engine, "/z/zig", out, ["x86_64-windows-gnu", "wasm32-wasi"])
+        self.assertEqual(self.runtimeCalls[0][3], ["wasm32-wasi"])
+        self.assertEqual(len(self.windowsCalls), 1)
+
+    def test_a_failing_windows_runtime_leaves_no_output_or_partial(self):
+        with mock.patch.object(pw, "prepareWindowsRuntime", side_effect=pe.EngineError("zig failed")):
+            with self.assertRaisesRegex(pe.EngineError, "zig failed"):
+                pb.prepareBundle(self.engine, "/z/zig", self.path("bundle"), [])
+        self.assertEqual(sorted(os.listdir(self.dir)), ["engine"])
+
     def test_the_identity_covers_every_file_of_the_bundle_and_replaces_the_engine_identity(self):
         out = self.path("bundle")
         pb.prepareBundle(self.engine, "/z/zig", out, [])
@@ -75,7 +128,8 @@ class BundleTest(unittest.TestCase):
         self.assertEqual(listed, pe.listFiles(out))
         for rel in ("bin/clang", "bin/clang-22", "lib/dep.dylib", "notices/provenance.json",
                     "notices/bundle-provenance.json", "runtime/x86_64-linux-gnu.2.31.cfg",
-                    "runtime/notices/runtime-provenance.json", "HOST", "VERSION"):
+                    "runtime/notices/runtime-provenance.json", "runtime/windows/x86_64-windows-gnu.cfg",
+                    "runtime/windows/notices/windows-provenance.json", "HOST", "VERSION"):
             self.assertIn(rel, listed)
         identity = read(os.path.join(out, "IDENTITY")).strip()
         self.assertEqual(identity, hashlib.sha256(read(os.path.join(out, "FILES.sha256")).encode()).hexdigest())

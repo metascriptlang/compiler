@@ -5,7 +5,8 @@
 
 The engine is the verified component from prepareEngine.py. The bundle keeps its contents at the
 root (bin/, lib/, notices/) and adds `runtime/`, the payload prepareRuntime.py writes with the
-engine reached by `..`. HOST, VERSION, FILES.sha256 and IDENTITY are rewritten over every file of
+engine reached by `..`; the x86_64-windows-gnu runtime is `runtime/windows/`, from prepareWindowsRuntime.py,
+with the engine reached by `../..`. HOST, VERSION, FILES.sha256 and IDENTITY are rewritten over every file of
 the bundle, and the source engine's identity is recorded in notices/bundle-provenance.json.
 
 The bundle is a local proof, not an upstream-controlled build, and never certifies redistribution.
@@ -19,11 +20,18 @@ import tempfile
 
 import prepareEngine as pe
 import prepareRuntime as pr
+import prepareWindowsRuntime as pw
 
 ENGINE_RELATIVE = ".."
 
 
-def writeBundleProvenance(root, engineIdentity, host, version):
+def splitTargets(targets):
+    """(targets prepareRuntime.py makes, whether prepareWindowsRuntime.py runs). No target selects every target."""
+    windows = pw.TARGET in targets
+    return [t for t in targets if t != pw.TARGET], windows or not targets
+
+
+def writeBundleProvenance(root, engineIdentity, host, version, hasRuntime, hasWindows):
     receipt = {
         "kind": "local-bundle-assembly",
         "statement": "Engine copied unchanged, runtime prepared by prepareRuntime.py; the contract files "
@@ -33,8 +41,11 @@ def writeBundleProvenance(root, engineIdentity, host, version):
         "sourceEngineIdentity": engineIdentity,
         "engineProvenance": "notices/provenance.json",
         "engineProvenanceSha256": pe.sha256File(os.path.join(root, "notices", "provenance.json")),
-        "runtimeProvenance": "runtime/notices/runtime-provenance.json",
     }
+    if hasRuntime:
+        receipt["runtimeProvenance"] = "runtime/notices/runtime-provenance.json"
+    if hasWindows:
+        receipt["windowsRuntimeProvenance"] = "runtime/windows/notices/" + pw.PROVENANCE
     pe.writeText(os.path.join(root, "notices", "bundle-provenance.json"),
                  json.dumps(receipt, indent=2, sort_keys=True) + "\n")
 
@@ -54,8 +65,16 @@ def prepareBundle(engine, zig, output, targets):
     clone = tempfile.mkdtemp(prefix=os.path.basename(output) + ".partial-", dir=os.path.dirname(output))
     try:
         shutil.copytree(engine, clone, symlinks=True, dirs_exist_ok=True)
-        pr.prepareRuntime(zig, engine, os.path.join(clone, "runtime"), targets, ENGINE_RELATIVE)
-        writeBundleProvenance(clone, engineIdentity, host, version)
+        others, windows = splitTargets(targets)
+        runtime = os.path.join(clone, "runtime")
+        hasRuntime = bool(others) or not targets
+        if hasRuntime:
+            pr.prepareRuntime(zig, engine, runtime, others, ENGINE_RELATIVE)
+        else:
+            os.makedirs(runtime)
+        if windows:
+            pw.prepareWindowsRuntime(zig, engine, os.path.join(runtime, "windows"))
+        writeBundleProvenance(clone, engineIdentity, host, version, hasRuntime, windows)
         pe.writeContract(clone, host, version)
         pe.verifyEngine(clone)
         os.chmod(clone, 0o755)
