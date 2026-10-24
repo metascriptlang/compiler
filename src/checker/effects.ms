@@ -643,10 +643,11 @@ export function callEffect(call: Node, e: Effect): EffectCause | null {
 		return e == Effect.StoresBorrowed ? null : cause(call, "calls a function value");
 	}
 	if (hasFlag(sym!, SymbolFlag.GeneratedOp) || isStdBuiltinWritingNothing(sym!)) return null;
-	if (e == Effect.WritesCell && (hasFlag(sym!, SymbolFlag.ImportC) || routineBody(unpackDecl(sym!.declNode)) == null)) {
+	const external = hasFlag(sym!, SymbolFlag.ImportC) || routineBody(unpackDecl(sym!.declNode)) == null;
+	if (e == Effect.WritesCell && external) {
 		return { site: call, text: cause(call, "calls the external '" + sym!.name + "'").text + ", which may write state the checker cannot see" };
 	}
-	if (routineBody(unpackDecl(sym!.declNode)) == null) {
+	if (external) {
 		if (e != Effect.SideEffect || receiverOf(call) != null) return null;
 		return cause(call, "calls the external '" + sym!.name + "'");
 	}
