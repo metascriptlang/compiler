@@ -33,7 +33,7 @@ import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
 import { calledRoutineType, isImmutableModuleConst, isViewCall, receiverOf, routineBody, viewCallSources } from "../checker/effects";
-import { ANY_HEAP_SLOT, addressSlots, callerDefsOf, callsPlainRoutine, canAlias, createRoutineDecls, createWriteSummaries, isAssign, LocalDefs, mayWrite, reachesModuleState, retainsArg, runsHooks, stepSlot, viewReturnSlots, WriteEffects } from "./writeEffects";
+import { ANY_HEAP_SLOT, addressSlots, callerDefsOf, callsPlainRoutine, canAlias, collectsHeld, createRoutineDecls, createWriteSummaries, isAssign, LocalDefs, mayWrite, noteHeldAcrossCallbacks, reachesModuleState, retainsArg, runsCallbacks, runsHooks, stepSlot, viewReturnSlots, WriteEffects } from "./writeEffects";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
 import { isReadonlyView } from "../checker/types";
@@ -1117,7 +1117,22 @@ function inferCursorsIn(w: WriteEffects, body: Node, defs: LocalDefs): Symbol[] 
 	trav(w, p, body);
 
 	// Decision: which variables can safely be cursors?
-	return computeCursorDecisions(w, p, defs);
+	const chosen = computeCursorDecisions(w, p, defs);
+	noteCursorsAcrossCallbacks(w, p, chosen);
+	return chosen;
+}
+
+function noteCursorsAcrossCallbacks(w: WriteEffects, p: Partitions, chosen: Symbol[]): void {
+	if (!collectsHeld(w)) return;
+	for (const sym of chosen) {
+		const i = variableId(p, sym);
+		const v = p.vars[i];
+		for (let k = 0; k < writeSites.length; k += 1) {
+			if (writeTimes[k] >= v.aliveStart && writeTimes[k] <= v.aliveEnd && runsCallbacks(w, writeSites[k])) {
+				noteHeldAcrossCallbacks(w, holdsAddress(sym) ? addressSlots(borrowedSlots[i]) : borrowedSlots[i]);
+			}
+		}
+	}
 }
 
 // ===== Tests =====

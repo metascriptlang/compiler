@@ -32,6 +32,7 @@ enum SummaryKind {
 	Construction,
 	Hooks,
 	Closure,
+	Contract,
 }
 
 interface Edge {
@@ -50,6 +51,7 @@ class WriteSummary {
 	returnsFresh: boolean;
 	unknown: boolean;
 	edges: Edge[];
+	forwards: Symbol[];
 	linked: HashSet<Cursor<WriteSummary>>;
 	index: int32;
 	low: int32;
@@ -85,6 +87,10 @@ export interface WriteSummaries {
 	slotHolderIds: HashMap<Type, int32>;
 	stack: WriteSummary[];
 	nextIndex: int32;
+	contracts: HashMap<Symbol, CallbackContract>;
+	cloneContracts: HashMap<Symbol, CallbackContract>;
+	unitContracts: CallbackContract[];
+	lending: Lending;
 }
 
 export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits: string[]): WriteSummaries {
@@ -94,6 +100,8 @@ export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits
 		hookSummaries: new HashMap<Type, WriteSummary>(), hookless: new HashSet<Type>(), ownerHookCache: new HashMap<Symbol, Symbol[]>(),
 		viewReturns: new HashMap<Symbol, string[]>(), viewReturnsUnknown: new HashSet<Symbol>(), viewReturnsOpen: [], viewReturnsReach: 0,
 		slotHolders: [], slotHolderIds: new HashMap<Type, int32>(), stack: [], nextIndex: 0,
+		contracts: new HashMap<Symbol, CallbackContract>(), cloneContracts: new HashMap<Symbol, CallbackContract>(), unitContracts: [],
+		lending: { callbacks: [], contract: null, held: null },
 	};
 }
 
@@ -140,7 +148,7 @@ function reloadsApart(w: WriteEffects, caller: WriteSummary, callee: WriteSummar
 function newSummary(kind: SummaryKind, sym: Symbol | null, hooks: Symbol[]): WriteSummary {
 	return {
 		kind, sym, literal: null, hooks, slots: [], slotSet: new HashSet<string>(), refParamWrites: 0, returnsFresh: false, unknown: false,
-		edges: [], linked: new HashSet<Cursor<WriteSummary>>(), index: -1, low: -1, onStack: false, done: false,
+		edges: [], forwards: [], linked: new HashSet<Cursor<WriteSummary>>(), index: -1, low: -1, onStack: false, done: false,
 	};
 }
 
@@ -505,6 +513,7 @@ function calleesOf(w: WriteEffects, call: Node, s: WriteSummary, stores: Node[] 
 			own.called.push(sym);
 			return [];
 		}
+		if (own == null && sym != null && w.tables.lending.callbacks.includes(sym)) return [];
 		const known: WriteSummary[] = [];
 		if (defs != null && callee != null && routinesOf(w, callee, null, null, defs, 0, known)) return known;
 		if (callee == null || !sendableWritesNothingHeld(callee.nodeType)) markUnknown(s);
@@ -943,6 +952,12 @@ function walkSummary(w: WriteEffects, s: WriteSummary): void {
 				if (routineBody(routineDecl(w, h)) != null) link(w, s, null, routineSummary(w, h));
 			}
 		},
+		SummaryKind.Contract => {
+			for (const target of s.forwards) {
+				const c = w.tables.contracts.get(target);
+				if (c != null && c.reads !== s) link(w, s, null, c.reads);
+			}
+		},
 	};
 }
 
@@ -1029,7 +1044,7 @@ function callWrites(w: WriteEffects, call: Node, defs: LocalDefs | null): WriteS
 	if (call.kind == NodeKind.CallExpr) addressWrites(w, s, call, null, false);
 	const callees = call.kind == NodeKind.NewExpr ? constructionsOf(w, call) : calleesOf(w, call, s, null, null, defs);
 	for (const a of call.kind == NodeKind.NewExpr ? (call.data as NewExprData).newArguments : (call.data as CallExprData).arguments) {
-		if (a != null && mayBeFunctionValue(a.nodeType) && !routinesOf(w, a, null, null, null, 0, callees)) markUnknown(s);
+		if (a != null && mayBeFunctionValue(a.nodeType) && !isLentCallback(w, a) && !routinesOf(w, a, null, null, null, 0, callees)) markUnknown(s);
 	}
 	for (const c of callees) {
 		if (reloadsApart(w, s, c)) markUnknown(s);
@@ -1303,6 +1318,7 @@ export function borrowedArgsToCopy(w: WriteEffects, call: Node, defs: LocalDefs 
 	}
 	if (!any) return flags;
 	const writes = callWrites(w, call, defs);
+	const lends = runsCallbacks(w, call);
 	for (let i = 0; i < args.length; i += 1) {
 		if (!flags[i] || cstringSource(args[i]) != null) continue;
 		let keep = false;
@@ -1311,6 +1327,7 @@ export function borrowedArgsToCopy(w: WriteEffects, call: Node, defs: LocalDefs 
 		}
 		const reads = reachesCalleeByValue(w, call, i) ? slots[i] : addressSlots(slots[i]);
 		if (!keep && slots[i].length > 0) keep = mayWriteAny(w, writes, reads);
+		if (!keep && lends) noteHeldAcrossCallbacks(w, reads);
 		flags[i] = keep;
 	}
 	return flags;
@@ -1322,6 +1339,145 @@ function reachesCalleeByValue(w: WriteEffects, call: Node, i: int32): boolean {
 	const sym = call.resolvedSym;
 	const fnType = sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function ? sym.symbolType : (call.data as CallExprData).callee.nodeType;
 	return i > 0 || !returnsBorrow(fnType);
+}
+
+class CallbackContract {
+	fn: Symbol;
+	params: int32[];
+	reads: WriteSummary;
+	clone: Symbol | null;
+}
+
+interface Lending {
+	callbacks: Symbol[];
+	contract: CallbackContract | null;
+	held: string[] | null;
+}
+
+export function callbackParams(w: WriteEffects, decl: Node): int32[] {
+	const out: int32[] = [];
+	const params = decl.paramSyms;
+	const body = routineBody(decl);
+	if (params == null || body == null) return out;
+	const targets: Node[] = [];
+	const step = (n: Node): void => {
+		if (n.kind == NodeKind.BinaryExpr && isAssign((n.data as BinaryExprData).operator)) targets.push((n.data as BinaryExprData).left);
+		if (n.kind == NodeKind.CallExpr) {
+			const args = (n.data as CallExprData).arguments;
+			if (isLifecycleOp(w, n)) targets.push(args[0]);
+			for (const a of args) { if (a != null && a.kind == NodeKind.HiddenAddr) targets.push(a); }
+		}
+		forEachChild(n, step);
+	};
+	step(body);
+	const assigned = assignedParams(targets, params);
+	for (let i = 0; i < params.length; i += 1) {
+		const t = params[i].symbolType;
+		if (t != null && t.kind == TypeKind.Function && !assigned.has(params[i])) out.push(i as int32);
+	}
+	return out;
+}
+
+export function lendCallbacks(w: WriteEffects, callbacks: Symbol[], held: string[] | null): Lending {
+	const outer = w.tables.lending;
+	w.tables.lending = { callbacks, contract: null, held };
+	return outer;
+}
+
+export function enterRoutineLending(w: WriteEffects, owner: Symbol | null, params: Symbol[] | null): Lending {
+	const outer = w.tables.lending;
+	const contract = owner != null ? w.tables.cloneContracts.get(owner) : null;
+	const callbacks: Symbol[] = [];
+	if (contract != null) {
+		if (params == null) throw new Error(`internal: callback reader clone '${owner!.name}' has no parameters`);
+		for (const i of contract.params) callbacks.push(params[i]);
+	}
+	w.tables.lending = { callbacks, contract, held: contract != null ? [] : null };
+	return outer;
+}
+
+export function leaveRoutineLending(w: WriteEffects, outer: Lending): void {
+	const inner = w.tables.lending;
+	w.tables.lending = outer;
+	if (inner.contract == null) return;
+	for (const slot of inner.held!) {
+		if (!inner.contract.reads.slotSet.has(slot)) throw new Error(`internal: callback reader clone '${inner.contract.clone!.name}' holds ${bareSlot(slot)} across a callback outside its contract`);
+	}
+}
+
+function isLentCallback(w: WriteEffects, value: Node | null): boolean {
+	if (value == null) return false;
+	const t = skipConvDfa(value);
+	return t.kind == NodeKind.Identifier && t.resolvedSym != null && w.tables.lending.callbacks.includes(t.resolvedSym!);
+}
+
+export function runsCallbacks(w: WriteEffects, n: Node): boolean {
+	if (w.tables.lending.callbacks.length == 0) return false;
+	if (n.kind == NodeKind.NewExpr) {
+		for (const a of (n.data as NewExprData).newArguments) { if (isLentCallback(w, a)) return true; }
+		return false;
+	}
+	if (n.kind != NodeKind.CallExpr) return false;
+	const sym = n.resolvedSym;
+	if (sym != null && w.tables.lending.callbacks.includes(sym)) return true;
+	for (const a of (n.data as CallExprData).arguments) { if (isLentCallback(w, a)) return true; }
+	return false;
+}
+
+export function forwardedTo(w: WriteEffects, call: Node): Symbol | null {
+	if (call.kind != NodeKind.CallExpr || !isRoutineSym(call.resolvedSym)) return null;
+	for (const a of (call.data as CallExprData).arguments) { if (isLentCallback(w, a)) return call.resolvedSym; }
+	return null;
+}
+
+export function collectsHeld(w: WriteEffects): boolean {
+	return w.tables.lending.held != null && w.tables.lending.callbacks.length > 0;
+}
+
+export function noteHeldAcrossCallbacks(w: WriteEffects, slots: string[]): void {
+	const held = w.tables.lending.held;
+	if (held == null) return;
+	for (const slot of slots) { if (!held.includes(slot)) held.push(slot); }
+}
+
+export function openContract(w: WriteEffects, fn: Symbol, params: int32[], clone: Symbol, held: string[], forwards: Symbol[]): void {
+	const reads = newSummary(SummaryKind.Contract, null, []);
+	for (const slot of held) addSlot(reads, slot);
+	for (const f of forwards) { if (!reads.forwards.includes(f)) reads.forwards.push(f); }
+	const contract: CallbackContract = { fn, params, reads, clone };
+	w.tables.contracts.set(fn, contract);
+	w.tables.cloneContracts.set(clone, contract);
+	w.tables.unitContracts.push(contract);
+}
+
+export function settleContract(w: WriteEffects, fn: Symbol): Symbol | null {
+	const contract = w.tables.contracts.get(fn);
+	if (contract == null) throw new Error(`internal: '${fn.name}' has no callback contract to settle`);
+	const reads = settled(w, contract.reads);
+	if (reads.unknown || reads.slots.length == 0) {
+		if (contract.clone != null) w.tables.cloneContracts.delete(contract.clone!);
+		contract.clone = null;
+	}
+	return contract.clone;
+}
+
+export function bindingKeepsContract(w: WriteEffects, fn: Symbol, binding: Node | null, defs: LocalDefs | null): boolean {
+	const contract = w.tables.contracts.get(fn);
+	if (contract == null || contract.clone == null || binding == null) return false;
+	const inner = w.tables.lending.contract;
+	if (isLentCallback(w, binding)) {
+		if (inner == null) return false;
+		for (const slot of contract.reads.slots) { if (!inner.reads.slotSet.has(slot)) return false; }
+		return true;
+	}
+	const callees: WriteSummary[] = [];
+	if (!routinesOf(w, binding, null, null, defs, 0, callees)) return false;
+	const writes = newSummary(SummaryKind.Routine, null, []);
+	for (const c of callees) {
+		if (reloadsApart(w, writes, c)) return false;
+		absorb(w, writes, { call: null, callee: settled(w, c) });
+	}
+	return !mayWriteAny(w, writes, contract.reads.slots);
 }
 
 function writeProbe(): WriteEffects {
