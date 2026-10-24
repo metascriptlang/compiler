@@ -84,8 +84,6 @@ function instrumentTestBody(testNode: Node, ctx: TransformContext): void {
 
 // ===== Instrument a single AssertStmt =====
 
-let paCounter = 0;
-
 function instrumentAssert(assertNode: Node, ctx: TransformContext): Node {
 	const d = assertNode.data as AssertStmtData;
 	const expr = d.assertExpr;
@@ -99,7 +97,6 @@ function instrumentAssert(assertNode: Node, ctx: TransformContext): Node {
 	// Only instrument "interesting" expressions (binary, member, call, unary)
 	if (!isDecomposable(expr)) return assertNode;
 
-	paCounter = 0;
 	const captures: CaptureEntry[] = [];
 	const baseCol = expr.location.column;
 	const resultRef = decomposeExpr(ctx, expr, captures, baseCol, loc);
@@ -261,8 +258,7 @@ function captureValue(
 	captures: CaptureEntry[],
 	loc: SourceLocation,
 ): Node {
-	const name = "__pa_" + paCounter.toString();
-	paCounter = paCounter + 1;
+	const name = "__pa_" + captures.length.toString();
 	const tempSym = newLoweredSym(ctx, SymbolKind.Temp, name, expr.nodeType);
 	const varDecl = makeVarDecl(name, expr, DeclKind.Const, loc);
 	varDecl.resolvedSym = tempSym;
@@ -380,7 +376,6 @@ test "decompose simple binary" {
 	const bin = createNode(NodeKind.BinaryExpr, {
 		operator: "===", left, right,
 	}, syntheticToken(makeLoc(1, 2)));
-	paCounter = 0;
 	const captures: CaptureEntry[] = [];
 	const result = decomposeExpr(makeCtx(), bin, captures, 0, loc);
 	// Should have 3 captures: a, b, a === b
@@ -400,7 +395,6 @@ test "decompose member access" {
 	const bin = createNode(NodeKind.BinaryExpr, {
 		operator: "===", left: mem, right,
 	}, syntheticToken(makeLoc(1, 6)));
-	paCounter = 0;
 	const captures: CaptureEntry[] = [];
 	decomposeExpr(makeCtx(), bin, captures, 0, loc);
 	// Should have 4 captures: obj, obj.x, y, obj.x === y
