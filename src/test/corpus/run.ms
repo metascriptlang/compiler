@@ -355,11 +355,16 @@ function runCapture(cmd: string): RunOut {
 	return { exitCode: e.exitCode as int32, signal: e.signal as int32, output: e.output + e.errorOutput };
 }
 
+function progress(line: string): void {
+	writeStderr(line + "\n");
+}
+
+// Main thread only: build workers print through progress, and module state stays on this thread.
 const redLines: string[] = [];
 
-function progress(line: string): void {
-	if (line.trim().startsWith("✗")) { redLines.push(line); }
-	writeStderr(line + "\n");
+function progressRed(line: string): void {
+	redLines.push(line);
+	progress(line);
 }
 
 function readFileOr(path: string, dflt: string): string {
@@ -496,7 +501,7 @@ function validateDirectives(specs: Spec[], t: Tally): void {
 		const lanes = laneUniverse(spec);
 		for (const lane of spec.xfailLanes) {
 			if (!listHas(lanes, lane)) {
-				progress("  ✗ " + spec.name + " [directives] — @xfail(" + lane + ") can never fire; this program's lanes are " + joinWith(lanes, "/"));
+				progressRed("  ✗ " + spec.name + " [directives] — @xfail(" + lane + ") can never fire; this program's lanes are " + joinWith(lanes, "/"));
 				t.fails = t.fails + 1;
 			}
 		}
@@ -1127,12 +1132,12 @@ function reportCell(c: Cell, t: Tally): void {
 		if (c.pass) {
 			t.xpasses = t.xpasses + 1;
 			t.fails = t.fails + 1;
-			progress("  ✗ FAIL " + tag + " — XPASS: the known-fail passes, delete its @xfail(" + c.lane + ") — " + c.detail);
+			progressRed("  ✗ FAIL " + tag + " — XPASS: the known-fail passes, delete its @xfail(" + c.lane + ") — " + c.detail);
 		}
 		else { t.xfails = t.xfails + 1; progress("  ▷ xfail " + tag); }
 	} else {
 		if (c.pass) { t.passes = t.passes + 1; progress("  ✓ " + tag + " — " + c.detail); }
-		else { t.fails = t.fails + 1; progress("  ✗ FAIL " + tag + " — " + c.detail); }
+		else { t.fails = t.fails + 1; progressRed("  ✗ FAIL " + tag + " — " + c.detail); }
 	}
 }
 
@@ -1184,7 +1189,7 @@ function compareParityGroup(group: Cell[], t: Tally): void {
 	for (const c of cells) { lanes = lanes == "" ? c.lane : lanes + "↔" + c.lane; }
 	const tag = base.spec.name + " [parity]";
 	if (same) { t.passes = t.passes + 1; progress("  ✓ " + tag + " — " + lanes + " identical"); }
-	else { t.fails = t.fails + 1; progress("  ✗ FAIL " + tag + " — " + base.lane + " vs " + other + " outputs differ"); }
+	else { t.fails = t.fails + 1; progressRed("  ✗ FAIL " + tag + " — " + base.lane + " vs " + other + " outputs differ"); }
 }
 
 // ---- build plan ----
