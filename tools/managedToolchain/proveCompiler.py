@@ -33,6 +33,25 @@ def fakeBundle(root):
     prepareEngine.writeContract(str(root), prepareEngine.detectHost()[0], "22.1.1")
 
 
+def proveNativeLibraries(compiler, bundle, work, sandbox, environment):
+    sdk = subprocess.run(["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path"], check=True,
+                         capture_output=True, text=True).stdout.strip()
+    major = (bundle / "VERSION").read_text().strip().split(".")[0]
+    client = work / "libraryClient.cpp"
+    client.write_text('#include <stdio.h>\n#include "companion.h"\n'
+                      'int main(){int v=companionValue();printf("native-library-ok %d\\n",v);return v==42?0:1;}\n')
+    for mode, suffix in (("lib", ".dylib"), ("staticlib", ".a")):
+        library, executable = work / ("companion" + suffix), work / ("libraryClient-" + mode)
+        run(sandbox + [str(compiler), "build", str(work / "companionConsumer.ms"), "--lto=off", "--colors=off",
+                       "--app=" + mode, "--output=" + str(library)], environment)
+        run(sandbox + [str(bundle / "bin/clang++"), "--no-default-config", "-isysroot", sdk,
+                       "-resource-dir", str(bundle / "lib/clang" / major),
+                       "--ld-path=" + str(bundle / "bin/ld64.lld"), str(client), str(library),
+                       "-o", str(executable)], environment)
+        run(sandbox + [str(executable)], environment, contains="native-library-ok 42")
+    print("native C++20 shared/static companions ran through bundled-Clang++ clients without Zig")
+
+
 def prove(compiler, engine):
     host, version, _ = prepareEngine.verifyEngine(str(engine))
     with tempfile.TemporaryDirectory(prefix="native-compiler-proof-") as temporary:
@@ -110,6 +129,7 @@ def prove(compiler, engine):
             raise RuntimeError("payload identity change did not recompile the native companion\n" + changed)
         run([str(work / "cpp")], environment, contains="42\ncached-companion")
         print("payload-only identity change reached native build validation")
+        proveNativeLibraries(compiler, moved, work, sandbox, environment)
 
 
 if __name__ == "__main__":
