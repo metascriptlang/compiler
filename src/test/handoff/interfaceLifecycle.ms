@@ -11,7 +11,7 @@ test "E2E C: large struct auto-promoted to const pointer param" {
 	const c = compileToC(src);
 	assert c.ok;
 	assert c.value.contains("(const Info__");
-	assert c.value.contains("* v)");
+	assert c.value.contains("* v_p0)");
 	assert c.value.contains("((&(a__");
 }
 
@@ -20,15 +20,15 @@ test "E2E C: small struct passed by value" {
 	const src = "struct Pt { x: number; y: number; }\nfunction show(v: Pt): void {}\nconst a: Pt = { x: 1, y: 2 };\nshow(a);";
 	const c = compileToC(src);
 	assert c.ok;
-	assert c.value.contains(" v)");
-	assert !c.value.contains("* v)");
+	assert c.value.contains(" v_p0)");
+	assert !c.value.contains("* v_p0)");
 }
 
 test "E2E C: ref param is mutable (no const)" {
 	const src = "struct Vec2 { x: number; y: number; }\nfunction scale(ref v: Vec2): void {}\nlet a: Vec2 = { x: 1, y: 2 };\nscale(a);";
 	const c = compileToC(src);
 	assert c.ok;
-	assert c.value.contains("* v)");
+	assert c.value.contains("* v_p0)");
 	assert !c.value.contains("const Vec2__");
 }
 

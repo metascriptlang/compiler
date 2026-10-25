@@ -37,6 +37,6 @@ test "E2E C: nullable class no double pointer" {
 	const src = "class Nd { value: number }\nfunction process(n: Nd): number {\n  if (n === null) { return 0; }\n  return n.value;\n}\nconst nd = new Nd(42);\nconst r = process(nd);";
 	const c = compileToC(src);
 	assert c.ok;
-	assert c.value.contains("* n)");
+	assert c.value.contains("* n_p0)");
 	assert singlePointer(c.value, "Nd");
 }
