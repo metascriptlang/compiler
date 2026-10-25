@@ -97,7 +97,43 @@ function sanRuntime(dir: string): void {
 	copy(`${resource}/lib/windows/${SAN_DLL}`, `${dir}/${SAN_DLL}`);
 }
 
-function msc(dir: string, args: string[]): ExecFileResult {
+const RUN_CAP_MS = 300000;
+
+function capNotice(capMs: int32): string {
+	return `hcr runner: msc run cut after ${capMs} ms`;
+}
+
+function boundedRun(dir: string, args: string[], capMs: int32): ExecFileResult {
+	const started = spawnChild(MSC, args, { cwd: dir, mergeStderr: true });
+	if (!started.ok) return execFileResult(MSC, args, dir);
+	const child = started.value;
+	let text = "";
+	let ended = false;
+	const deadline = performance.now() + capMs;
+	while (!ended && performance.now() < deadline) {
+		const got = child.read(ChildStream.Stdout, 200);
+		if (!got.ok) continue;
+		if (got.value.ended) ended = true;
+		else text += got.value.data;
+	}
+	const status = ended ? child.wait(30000) : child.kill();
+	const done = ended && status.ok;
+	if (!done) text += `\n${capNotice(capMs)}\n`;
+	const result: ExecFileResult = {
+		started: true,
+		pipeOk: done,
+		exitCode: status.ok ? status.value.code : -1,
+		signal: status.ok ? status.value.signal : 0,
+		output: text,
+		errorOutput: "",
+		startErrno: 0,
+	};
+	child.close();
+	return result;
+}
+
+function msc(dir: string, args: string[], capMs: int32 = RUN_CAP_MS): ExecFileResult {
+	if (args[0] == "run") return boundedRun(dir, args, capMs);
 	if (!SAN || args[0] != "build") return execFileResult(MSC, args, dir);
 	sanSetup();
 	const full: string[] = [];
