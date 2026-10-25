@@ -744,7 +744,7 @@ function sgExtractLine(source: string, line: int32): string {
 	while (end < source.byteLength && source.byteAt(end) != "\n".code) {
 		end = end + 1;
 	}
-	return source.slice(start, end);
+	return source.byteSlice(start, end);
 }
 
 // Strip leading whitespace from a string.
@@ -756,7 +756,7 @@ function sgTrimLeft(s: string): string {
 		i = i + 1;
 	}
 	if (i == 0) return s;
-	return s.slice(i, s.byteLength);
+	return s.byteSlice(i, s.byteLength);
 }
 
 // Extract /** JSDoc */ doc comment above a declaration at the given line (1-indexed).
@@ -789,9 +789,9 @@ function sgExtractJsDocBlock(source: string, endLine: int32): string {
 		// Strip /** and */
 		let s = raw;
 		const openIdx = sgFindSubstring(s, "/**");
-		if (openIdx >= 0) s = s.slice(openIdx + 3, s.length);
+		if (openIdx >= 0) s = s.byteSlice(openIdx + 3, s.byteLength);
 		const closeIdx = sgFindSubstring(s, "*/");
-		if (closeIdx >= 0) s = s.slice(0, closeIdx);
+		if (closeIdx >= 0) s = s.byteSlice(0, closeIdx);
 		return sgTrimLeft(sgTrimRight(s));
 	}
 	// Multi-line: collect from startLine+1 to endLine-1, plus partial first/last
@@ -800,7 +800,7 @@ function sgExtractJsDocBlock(source: string, endLine: int32): string {
 	const firstRaw = sgExtractLine(source, startLine);
 	const openIdx = sgFindSubstring(firstRaw, "/**");
 	if (openIdx >= 0) {
-		const after = firstRaw.slice(openIdx + 3, firstRaw.length);
+		const after = firstRaw.byteSlice(openIdx + 3, firstRaw.byteLength);
 		const trimAfter = sgTrimLeft(sgTrimRight(after));
 		if (trimAfter.length > 0) lines.push(trimAfter);
 	}
@@ -811,9 +811,9 @@ function sgExtractJsDocBlock(source: string, endLine: int32): string {
 		let content = raw;
 		// Strip leading * (with optional space)
 		if (content.byteLength > 0 && content.byteAt(0) == "*".code) {
-			content = content.slice(1, content.byteLength);
+			content = content.byteSlice(1, content.byteLength);
 			if (content.byteLength > 0 && content.byteAt(0) == " ".code) {
-				content = content.slice(1, content.byteLength);
+				content = content.byteSlice(1, content.byteLength);
 			}
 		}
 		lines.push(sgTrimRight(content));
@@ -824,12 +824,12 @@ function sgExtractJsDocBlock(source: string, endLine: int32): string {
 	// Strip */ first, then strip leading * prefix
 	let lastContent = lastRaw;
 	const closeIdx2 = sgFindSubstring(lastContent, "*/");
-	if (closeIdx2 >= 0) lastContent = lastContent.slice(0, closeIdx2);
+	if (closeIdx2 >= 0) lastContent = lastContent.byteSlice(0, closeIdx2);
 	lastContent = sgTrimLeft(lastContent);
 	if (lastContent.byteLength > 0 && lastContent.byteAt(0) == "*".code) {
-		lastContent = lastContent.slice(1, lastContent.byteLength);
+		lastContent = lastContent.byteSlice(1, lastContent.byteLength);
 		if (lastContent.byteLength > 0 && lastContent.byteAt(0) == " ".code) {
-			lastContent = lastContent.slice(1, lastContent.byteLength);
+			lastContent = lastContent.byteSlice(1, lastContent.byteLength);
 		}
 	}
 	lastContent = sgTrimRight(lastContent);
@@ -853,7 +853,7 @@ function sgTrimRight(s: string): string {
 		if (ch != " ".code && ch != "\t".code && ch != "\r".code) break;
 		i = i - 1;
 	}
-	return s.slice(0, i + 1);
+	return s.byteSlice(0, i + 1);
 }
 
 // ===== Cross-Module Helpers =====
@@ -1078,7 +1078,7 @@ function sgGetLineText(source: string, line: int32): string {
 	while (lineEnd < source.byteLength && source.byteAt(lineEnd) != "\n".code) {
 		lineEnd = lineEnd + 1;
 	}
-	return source.slice(lineOffset, lineEnd);
+	return source.byteSlice(lineOffset, lineEnd);
 }
 
 function sgStartsWith(s: string, prefix: string): boolean {
@@ -1689,7 +1689,7 @@ export function sgExtractImportPath(source: string, line: int32, col: int32): st
 	const openQuote = qi;
 	const cursorCol0 = col - 1;
 	if (cursorCol0 <= openQuote) return "";
-	return lineText.slice(openQuote + 1, cursorCol0);
+	return lineText.byteSlice(openQuote + 1, cursorCol0);
 }
 
 // Extract existing imported names from ImportDecl AST node.
@@ -3707,6 +3707,21 @@ test "doc comment JSDoc multi-line" {
 	const src = "/**\n * Parses the input string.\n * @param text A valid string.\n * @returns The parsed value.\n */\nfunction parse(text: string): number { return 0; }";
 	const comment = sgExtractDocComment(src, 6);
 	assert comment == "Parses the input string.\n@param text A valid string.\n@returns The parsed value.";
+}
+
+test "doc comment after non-ASCII text keeps its own words" {
+	const src = "const café = \"crème\";\n/** Adds two numbers. */\nfunction add(x: number): number { return x; }";
+	assert sgExtractDocComment(src, 3) == "Adds two numbers.";
+}
+
+test "doc comment with non-ASCII words keeps every line whole" {
+	const src = "// ünïcödé\n/**\n * Đọc dữ liệu.\n * @param text chuỗi vào.\n */\nfunction parse(text: string): number { return 0; }";
+	assert sgExtractDocComment(src, 6) == "Đọc dữ liệu.\n@param text chuỗi vào.";
+}
+
+test "import path after non-ASCII text on the line" {
+	const src = "const ö = 1; import { x } from \"std/bu";
+	assert sgExtractImportPath(src, 1, src.byteLength + 1) == "std/bu";
 }
 
 test "doc comment JSDoc empty body" {
