@@ -29,6 +29,7 @@ import {
 import { voidType, noneType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, copyTypeShallow, unwrapRefNullUnion, getSysType, isStructType, isAtomicRef, instantiateGenericBody, typeDisplayName } from "../../checker/types";
 import { genericParamsOf, literalBase } from "../../checker/types";
 import { ctorRoutineFor } from "../../checker/ctorRoutine";
+import { peelHidden } from "../../checker/sendable";
 
 // msMessage.data[56] holds 7 pointer-sized slots (56 / 8 on 64-bit).
 const MS_MSG_MAX_ARGS = 7;
@@ -1241,6 +1242,22 @@ function bindReceivers(h: ActorHandles, actor: Symbol, members: Node[]): void {
 	}
 }
 
+function bindReceiverAlias(h: ActorHandles, decl: Node): boolean {
+	const d = decl.data as VariableDeclData;
+	const sym = decl.resolvedSym;
+	if (d.declKind != DeclKind.Const || sym == null || d.initializer == null) return false;
+	const init = peelHidden(d.initializer);
+	const actor = init.kind == NodeKind.Identifier && init.resolvedSym != null ? h.receivers.get(init.resolvedSym) : null;
+	if (actor == null) return false;
+	const state = stateOf(h, actor);
+	init.nodeType = state;
+	d.initializer = init;
+	sym.symbolType = state;
+	decl.nodeType = state;
+	h.receivers.set(sym, actor);
+	return true;
+}
+
 function isStateField(actor: Symbol, property: string): boolean {
 	const state = actor.symbolType.typeReturn;
 	return state != null && state.typeNames.indexOf(property) >= 0;
@@ -1350,6 +1367,7 @@ function lowerHandleNode(h: ActorHandles, node: Node): Node {
 		read.nodeType = node.nodeType;
 		return read;
 	}
+	if (node.kind == NodeKind.VariableDecl && bindReceiverAlias(h, node)) return node;
 	if (node.kind == NodeKind.ActorDecl) {
 		const actor = node.resolvedSym;
 		if (actor == null) throw new Error(`internal: actor '${(node.data as ActorDeclData).actorName}' reached handle lowering without a symbol`);
