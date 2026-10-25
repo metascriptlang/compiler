@@ -71,7 +71,12 @@ function instantiates(instance: Type, generic: Symbol | null, writtenName: strin
 	return instance.typeName == (generic != null ? generic.name : writtenName);
 }
 
-function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Type, astTypeArg: string, expectedType: Type | null): { type: Type, instance: Symbol | null } {
+function newTypeArg(node: Node, index: int32, text: string, ctx: CheckerContext, line: int32, col: int32): Type {
+	const supplied = suppliedTypeArgs(node);
+	return supplied != null && index < supplied.length ? supplied[index] : resolveAnnotation(text, ctx, line, col);
+}
+
+function resolveGenericNewExpr(ctx: CheckerContext, newNode: Node, callee: Node, calleeType: Type, expectedType: Type | null): { type: Type, instance: Symbol | null } {
 	const member = callee.kind == NodeKind.MemberExpr ? callee.data as MemberExprData : null;
 	const bound = callee.resolvedSym != null && callee.resolvedSym.instantiatedFrom != null
 		? callee.resolvedSym.instantiatedFrom : callee.resolvedSym;
@@ -85,7 +90,8 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 	const genericParams = calleeSym != null ? symGenericParams(calleeSym) : builtinGenericParams(calleeName);
 	if (genericParams == "") return { type: calleeType, instance: null };
 	// Try explicit type args first (sources 1 + 2 in priority comment above).
-	const typeArgStr = astTypeArg;
+	const typeArgStr = newNode.typeArg;
+	const supplied = suppliedTypeArgs(newNode);
 	const paramNames = splitTopLevel(genericParamNamesOf(genericParams), ",");
 	const trimmedParamNames: string[] = [];
 	const concreteTypes: Type[] = [];
@@ -96,10 +102,10 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 		for (let pi = 0; pi < paramNames.length; pi += 1) {
 			trimmedParamNames.push(paramNames[pi].trim());
 			const argName = pi < args.length ? args[pi].trim() : "";
-			const resolved = resolveAnnotation(argName, ctx, callee.location.line, typeArgCol);
+			const resolved = newTypeArg(newNode, pi, argName, ctx, callee.location.line, typeArgCol);
 			concreteTypes.push(resolved);
 			if (argName != "") {
-				const typeArgSym = lookupSymbol(ctx.table, argName);
+				const typeArgSym = supplied != null ? null : lookupSymbol(ctx.table, argName);
 				if (typeArgSym != null) {
 					sgRecordSym(ctx, callee.location.line, typeArgCol, typeArgCol + argName.length, typeArgSym, typeArgSym.symbolType, typeArgSym.symbolKind, argName, "", false);
 				}
@@ -197,6 +203,7 @@ export function adoptExpansionResult(node: Node, value: Node): void {
 	node.kind = value.kind;
 	node.data = value.data;
 	node.typeArg = value.typeArg;
+	node.typeExpr = value.typeExpr;
 	node.typeExprs = value.typeExprs;
 	if (value.location != null) node.location = value.location;
 	node.nodeType = null as unknown as Type;
@@ -1022,7 +1029,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			const typeArgStr = node.typeArg;
 			let pointee = null as unknown as Type;
 			if (typeArgStr != "") {
-				pointee = resolveAnnotation(typeArgStr.trim(), ctx, d.newCallee.location.line, ltCol + 1);
+				pointee = newTypeArg(node, 0, typeArgStr.trim(), ctx, d.newCallee.location.line, ltCol + 1);
 			} else if (expected != null && isAtomicRef(expected) && !isLockedRef(expected) && expected.typeReturn != null) {
 				pointee = expected.typeReturn;
 			}
@@ -1049,7 +1056,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			const typeArgStr = node.typeArg;
 			let payload = null as unknown as Type;
 			if (typeArgStr != "") {
-				payload = resolveAnnotation(typeArgStr.trim(), ctx, d.newCallee.location.line, ltCol + 1);
+				payload = newTypeArg(node, 0, typeArgStr.trim(), ctx, d.newCallee.location.line, ltCol + 1);
 			} else if (expected != null && isLockedRef(expected)) {
 				payload = lockedPayloadType(expected);
 			}
@@ -1100,9 +1107,9 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			const typeArgStr = node.typeArg;
 			if (typeArgStr != "") {
 				const trimmed = typeArgStr.trim();
-				const elemType = resolveAnnotation(trimmed, ctx, d.newCallee.location.line, ltCol + 1);
+				const elemType = newTypeArg(node, 0, trimmed, ctx, d.newCallee.location.line, ltCol + 1);
 				// Record type arg symbol for hover/go-to-definition
-				const typeArgSym = lookupSymbol(ctx.table, trimmed);
+				const typeArgSym = suppliedTypeArgs(node) != null ? null : lookupSymbol(ctx.table, trimmed);
 				if (typeArgSym != null) {
 					sgRecordSym(ctx, d.newCallee.location.line, ltCol + 1, ltCol + 1 + trimmed.length, typeArgSym, typeArgSym.symbolType, typeArgSym.symbolKind, trimmed, "", false);
 				}
@@ -1130,7 +1137,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 	// it over the stale location-keyed side channel (important for cloned bodies).
 	// Also pass `expected` so that `const m: Map<K, V> = new Map();` (no type
 	// args on the `new`) can pull K/V from the contextual annotation.
-	const generic = resolveGenericNewExpr(ctx, d.newCallee, calleeType!, node.typeArg, expected);
+	const generic = resolveGenericNewExpr(ctx, node, d.newCallee, calleeType!, expected);
 	const resolvedType = generic.type;
 	// Error: generic type without type args AND no inferable contextual type.
 	// `resolveGenericNewExpr` returns the bare `calleeType` (still

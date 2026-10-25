@@ -1598,10 +1598,15 @@ function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: int32, c
 
 export function boundAnnotationType(node: Node | null): Type | null {
 	if (node == null || !node.flags.has(NodeFlag.BoundSym)) return null;
-	if (node.resolvedSym == null || node.nodeType == null) {
-		throw new Error("internal: a bound type annotation has no checked symbol or type");
+	if (node.nodeType == null) {
+		throw new Error("internal: a bound type annotation has no checked type");
 	}
 	return node.nodeType;
+}
+
+export function annotatedType(text: string, operand: Node | null, ctx: CheckerContext, line: int32, col: int32): Type {
+	const bound = boundAnnotationType(operand);
+	return bound != null ? bound : resolveAnnotation(text, ctx, line, col);
 }
 
 // ===== TypeExpr Recording (standard parity: markUsed in semTypeNode) =====
@@ -2843,7 +2848,7 @@ function resolveVariable(ctx: CheckerContext, node: Node): void {
 		// Mirrors resolveExtern below; Shaping machinery handles forward aliases.
 		const sym = lookupSymbol(ctx.table, d.declName);
 		if (sym != null && isUnresolvedType(sym.symbolType)) {
-			sym.symbolType = resolveAnnotation(d.declType, ctx, node.location.line, node.location.column);
+			sym.symbolType = annotatedType(d.declType, node.typeExpr, ctx, node.location.line, node.location.column);
 		}
 		return;
 	}

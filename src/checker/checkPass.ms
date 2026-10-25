@@ -22,7 +22,7 @@ import { join, normalize, isAbsolute } from "std/fs/path";
 import { defaultGlobalImports, modulePasses, ModulePassState } from "./prelude";
 import { setOuterProgramForComptime, setOuterCheckContext, getComptimeOuterCtx, ComptimeOuterCtx } from "../compiler/meta/callbacks";
 import { isAssignable, nonNullMemberOfNullable, sameType, sinkModeDiffers, fieldReprMismatch, explainMemberPrefix, holdsMembersOf } from "./compat";
-import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams } from "./resolvePass";
+import { fillForwardSymbol, resolveDeclarations, resolveAnnotation, resolveReturnAnnotation, resolveTypeAlias, resolveInterface, resolveClass, resolveActor, resolveExtern, resolveFunction, refuseHookInferredReturn, resolveTypeExpr, ensureShaped, defineTypeParams, refuseNestedView, refuseUsedSuspendingViewParams, annotatedType } from "./resolvePass";
 import { monoBaseName } from "../monomorphize/registry";
 import { lookupModuleCtx, registerModuleCtx, forgetInstances, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
 import { CtorRow, startCtorCapture, endCtorCapture, replayCtorRoutines } from "./ctorRoutine";
@@ -717,7 +717,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	let declType: Type | null = null;
 	if (d.declType != "") {
 		const typeLoc = node.typeExpr != null ? node.typeExpr.location : d.nameLocation;
-		declType = resolveAnnotation(d.declType, ctx, typeLoc.line, typeLoc.column);
+		declType = annotatedType(d.declType, node.typeExpr, ctx, typeLoc.line, typeLoc.column);
 		resolveTypeExpr(node.typeExpr, ctx);
 	}
 	// Self-recursive closure binding: `const fact = (n: int32): int32 => fact(n-1)`.
@@ -2582,7 +2582,7 @@ function forwardDeclareLocal(ctx: CheckerContext, node: Node): void {
 		if (pt == "") return;
 		paramTypes.push(resolveAnnotation(pt, ctx, d.nameLocation.line, d.nameLocation.column));
 	}
-	const declared = d.declType != "" ? resolveAnnotation(d.declType, ctx, d.nameLocation.line, d.nameLocation.column) : null;
+	const declared = d.declType != "" ? annotatedType(d.declType, node.typeExpr, ctx, d.nameLocation.line, d.nameLocation.column) : null;
 	const sym = declSymbol(ctx, node, d.declName, SymbolKind.Variable, declared != null ? declared : createClosureType(paramTypes, fd.funcExprParams, inferredType()), false);
 	sym.declNode = node;
 	defineOrError(ctx, sym, node);
