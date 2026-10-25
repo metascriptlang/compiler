@@ -63,3 +63,12 @@ console.log(x.w);`, "it has no field 'w'");
 		assert miss == "", miss;
 	}
 }
+
+test "an unresolved type name is refused however it is spelled" {
+	for (const spelled of ["Missing__Type", "Missing__Type<int32>", "MissingType"]) {
+		const head = spelled.indexOf("<") >= 0 ? spelled.substring(0, spelled.indexOf("<")) : spelled;
+		const miss = refusalMiss(`function f(x: ${spelled}): int32 { return 1; }
+console.log(f(5));`, `Unresolved type '${head}'`);
+		assert miss == "", miss;
+	}
+}

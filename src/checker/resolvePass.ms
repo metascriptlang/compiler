@@ -1672,9 +1672,7 @@ function isValidTypeIdentifier(name: string): boolean {
 }
 
 function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: int32, col: int32, mangledName: string): Type {
-	if (line > 0 && isValidTypeIdentifier(name)
-			&& name.indexOf("__") < 0 && name.indexOf("typeof ") < 0
-			&& name != "unknown" && name != "never") {
+	if (line > 0 && isValidTypeIdentifier(name) && name != "unknown" && name != "never") {
 		// Hard error, not warning: the inferredType() recovery reaches codegen as
 		// void*, and call sites then pass &global for what should be an object
 		// pointer — a silent memory-corruption miscompile, far worse than failing
