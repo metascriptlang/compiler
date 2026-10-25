@@ -848,6 +848,52 @@ function refArrayAcyclicEmitsPlainRelease(): void {
 	ok(tag);
 }
 
+function instanceBodies(text: string, prefix: string, elem: string): string[] {
+	const bodies: string[] = [];
+	for (const line of lines(text)) {
+		if (!line.endsWith(") {") || line.startsWith(" ") || line.startsWith("\t")) continue;
+		const open = line.indexOf("(", 0);
+		const name = line.slice(line.lastIndexOf(" ", open) + 1, open);
+		if (!name.startsWith(prefix) || !name.contains(elem)) continue;
+		const at = text.indexOf(line, 0);
+		bodies.push(text.slice(at, text.indexOf("\n}\n", at)));
+	}
+	return bodies;
+}
+
+function arrayRelocatesByMove(): void {
+	const tag = "arrayRelocatesByMove";
+	const dir = freshDir("relocate");
+	writeFile(`${dir}/main.ms`, readFileOr(`${GUARD_DIR}/arrayRelocateByMove.ms`, ""));
+	const b = execFileResult(MSC, ["build", "main.ms", "--emit=c"], dir);
+	writeFile(`${LOG_DIR}/${tag}.log`, both(b));
+	if (!succeeded(b)) {
+		fail(tag, "emit error");
+		return;
+	}
+	let text = "";
+	for (const f of readDir(`${dir}/out/debug`)) {
+		if (f.endsWith(".c")) text = text + (try readFile(`${dir}/out/debug/${f}`) catch "");
+	}
+	const cases = [["_ref_Node_", "msIncref"], ["__Cell_", "Copy("]];
+	for (const c of cases) {
+		for (const prefix of ["TXX_splice_", "TXX_reverse_", "TXX_shift_", "mergeRuns_", "TXX_sortBy_"]) {
+			const bodies = instanceBodies(text, prefix, c[0]);
+			if (bodies.length == 0) {
+				fail(tag, `no ${prefix} instance over ${c[0]} emitted`);
+				return;
+			}
+			for (const body of bodies) {
+				if (body.contains(c[1])) {
+					fail(tag, `${prefix} over ${c[0]} relocates by copy (${c[1]})`);
+					return;
+				}
+			}
+		}
+	}
+	ok(tag);
+}
+
 // M7: a value another thread can reach is counted before the call that publishes it. Over the
 // emitted C of the actorArcPublishRaceFree guard, every routine that sends an actor message sets
 // its Arc argument with msMsgSetPtrShared first, and every routine that submits a Promise.all task
@@ -1054,6 +1100,7 @@ function main(): void {
 	deadFrameEmitsNoHooks();
 	fieldNameKeepsNoRoutine();
 	refArrayAcyclicEmitsPlainRelease();
+	arrayRelocatesByMove();
 	publishCountsBeforeVisible();
 	buildMsTargetDecides();
 	preludeGate("preludeUserModule", "gi", `${GUARD_DIR}/fixtures/preludeUserModule`, "neonGuardPreludeProbe",
