@@ -1,4 +1,3 @@
-// @xfail(raiser): a call through the narrowed `return` field inside a generic is an unknown host function (inbox 2026-10-25-raiser-calls-a-narrowed-nullable-function-field-in-a-generic-as-a-host-function)
 // An iterator chain stored in a const and read once is expanded at its read, and keeps the
 // order Node shows: arguments and checks at the declaration, the body at the read.
 // @stdout: ok
