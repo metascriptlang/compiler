@@ -1264,7 +1264,7 @@ function isOperatorSymName(name: string): boolean {
 export function importSymFromRegistry(
 	ctx: CheckerContext, alias: string, importName: string,
 	exportInfo: ExportedSymInfo, sourcePath: string,
-	nameLoc: SourceLocation, defNode: Node
+	nameLoc: SourceLocation, aliasLoc: SourceLocation, defNode: Node
 ): Symbol {
 	const sym = exportInfo.sym;
 	if (sym == null) {
@@ -1279,7 +1279,8 @@ export function importSymFromRegistry(
 	}
 	noteImported(ctx, sym);
 	if (hasFlag(sym, SymbolFlag.Converter)) addRuntimeConverter(ctx, sym);
-	sgRecordSym(ctx, nameLoc.line, nameLoc.column, nameLoc.column + alias.length, sym, sym.symbolType, sym.symbolKind, alias, "", false);
+	sgRecordSym(ctx, aliasLoc.line, aliasLoc.column, aliasLoc.column + alias.length, sym, sym.symbolType, sym.symbolKind, alias, "", false);
+	if (alias != importName) sgRecordSym(ctx, nameLoc.line, nameLoc.column, nameLoc.column + importName.length, sym, sym.symbolType, sym.symbolKind, importName, "", false);
 	return sym;
 }
 
@@ -1352,10 +1353,10 @@ function preludeExportOf(ctx: CheckerContext, specifier: string, name: string): 
 	return null;
 }
 
-function importAliasedPreludeSym(ctx: CheckerContext, alias: string, name: string, sym: Symbol, nameLoc: SourceLocation, defNode: Node, markExported: boolean): Symbol {
+function importAliasedPreludeSym(ctx: CheckerContext, alias: string, name: string, sym: Symbol, nameLoc: SourceLocation, aliasLoc: SourceLocation, defNode: Node, markExported: boolean): Symbol {
 	const pre = ctx.preludeCtx;
 	const info = buildExportInfo(sym, pre.extensionRegistry, sym.modulePath, pre);
-	const primary = importSymFromRegistry(ctx, alias, name, info, sym.modulePath, nameLoc, defNode);
+	const primary = importSymFromRegistry(ctx, alias, name, info, sym.modulePath, nameLoc, aliasLoc, defNode);
 	propagateImportedExtensions(ctx, alias, info, sym.modulePath, primary);
 	return primary;
 }
@@ -1365,6 +1366,7 @@ function collectPreludeNames(ctx: CheckerContext, imp: ImportDeclData, node: Nod
 		const name = imp.importNames[i];
 		const alias = imp.importAliases[i];
 		const loc = i < imp.nameLocations.length ? imp.nameLocations[i] : node.location;
+		const aliasLoc = i < imp.aliasLocations.length ? imp.aliasLocations[i] : node.location;
 		const local = lookupLocal(ctx.table, alias);
 		const sym = preludeExportOf(ctx, imp.importSource, name);
 		if (local != null) {
@@ -1382,7 +1384,7 @@ function collectPreludeNames(ctx: CheckerContext, imp: ImportDeclData, node: Nod
 			if (reexport) exportSym(ctx, sym);
 			continue;
 		}
-		const aliased = importAliasedPreludeSym(ctx, alias, name, sym, loc, node, reexport);
+		const aliased = importAliasedPreludeSym(ctx, alias, name, sym, loc, aliasLoc, node, reexport);
 		if (reexport) exportSymAs(ctx, aliased, alias);
 	}
 }
@@ -1452,7 +1454,8 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 				defineSymbol(ctx.table, preludeSym);
 			} else if (exportInfo != null) {
 				const nameLoc = i < d.nameLocations.length ? d.nameLocations[i] : node.location;
-				const primarySym = importSymFromRegistry(ctx, localAlias, importName, exportInfo, sourcePath, nameLoc, node);
+				const aliasLoc = i < d.aliasLocations.length ? d.aliasLocations[i] : node.location;
+				const primarySym = importSymFromRegistry(ctx, localAlias, importName, exportInfo, sourcePath, nameLoc, aliasLoc, node);
 				if (primarySym.symbolKind == SymbolKind.Macro && exportInfo.converterTargetType != null) {
 					ctx.converterTargetTypes.set(primarySym, exportInfo.converterTargetType);
 					registerConverter(ctx, primarySym, 1, nameLoc.line, nameLoc.column);
@@ -1584,7 +1587,7 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 								exportSym(ctx, preludeStarSym);
 								continue;
 							}
-							const sym = importSymFromRegistry(ctx, expInfo.name, expInfo.name, expInfo, sourcePath, node.location, node);
+							const sym = importSymFromRegistry(ctx, expInfo.name, expInfo.name, expInfo, sourcePath, node.location, node.location, node);
 							exportSymAs(ctx, sym, expInfo.name);
 							propagateImportedExtensions(ctx, expInfo.name, expInfo, sourcePath, sym);
 						}
@@ -1615,7 +1618,8 @@ export function collectExport(ctx: CheckerContext, node: Node): void {
 							defineSymbol(ctx.table, preludeReSym);
 						} else if (exportInfo != null) {
 							const reNameLoc = i < imp.nameLocations.length ? imp.nameLocations[i] : d.exportedDecl.location;
-							const primaryNamed = importSymFromRegistry(ctx, alias, importName, exportInfo, sourcePath, reNameLoc, node);
+							const reAliasLoc = i < imp.aliasLocations.length ? imp.aliasLocations[i] : d.exportedDecl.location;
+							const primaryNamed = importSymFromRegistry(ctx, alias, importName, exportInfo, sourcePath, reNameLoc, reAliasLoc, node);
 							// Re-export parity: propagate extension-method dispatch via
 							// shared helper. Same path used by collectImport's primary
 							// reg, named re-export, and star re-export.

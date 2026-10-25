@@ -2195,7 +2195,7 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const importSource = readStr(objHeap, arrHeap, h, "importSource");
 			const importTypeNames = readStrs(objHeap, arrHeap, h, "importTypeNames");
 			return createNodeAt(NodeKind.ImportDecl, {
-				importNames, importAliases, importSource, nameLocations: [], importTypeNames,
+				importNames, importAliases, importSource, nameLocations: [], aliasLocations: [], importTypeNames,
 			}, loc);
 		},
 		NodeKind.ExportDecl => {
@@ -3006,7 +3006,7 @@ test "round-trip ImportDecl" {
 	const loc = makeLoc(1, 0);
 	const orig = createNode(NodeKind.ImportDecl, {
 		importNames: ["X", "Y"], importAliases: ["X", "Z"],
-		importSource: "./mod", nameLocations: [], importTypeNames: ["Y"],
+		importSource: "./mod", nameLocations: [], aliasLocations: [], importTypeNames: ["Y"],
 	}, synthToken(loc));
 	const val = nodeToValue(orig, objH, arrH);
 	const back = valueToNode(val, objH, arrH, loc);

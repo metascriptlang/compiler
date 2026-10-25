@@ -20,7 +20,7 @@ function makeLocFromToken(token: Token): SourceLocation {
 
 // Shared specifier list parser for import/export: { name as alias, ... }
 // Assumes opening '{' already consumed. Consumes up to but not including '}'.
-interface SpecifierList { names: string[]; aliases: string[]; locations: SourceLocation[]; typeNames: string[]; }
+interface SpecifierList { names: string[]; aliases: string[]; locations: SourceLocation[]; aliasLocations: SourceLocation[]; typeNames: string[]; }
 
 function writesTypeModifier(state: ParserState): boolean {
 	const next = peek(state, 1).kind;
@@ -36,6 +36,7 @@ function parseSpecifierList(state: ParserState): SpecifierList {
 	const names: string[] = [];
 	const aliases: string[] = [];
 	const locations: SourceLocation[] = [];
+	const aliasLocations: SourceLocation[] = [];
 	const typeNames: string[] = [];
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 		const typed = current(state).kind == TokenKind.Type && writesTypeModifier(state);
@@ -49,9 +50,11 @@ function parseSpecifierList(state: ParserState): SpecifierList {
 		if (!isAtEnd(state) && current(state).kind == TokenKind.As) {
 			advance(state);
 			aliases.push(current(state).value);
+			aliasLocations.push(makeLoc(current(state).line, current(state).column));
 			advance(state);
 		} else {
 			aliases.push(specName);
+			aliasLocations.push(makeLoc(specifier.line, specifier.column));
 		}
 		names.push(specName);
 		if (current(state).kind == TokenKind.Comma) {
@@ -60,7 +63,7 @@ function parseSpecifierList(state: ParserState): SpecifierList {
 			break;
 		}
 	}
-	return { names, aliases, locations, typeNames };
+	return { names, aliases, locations, aliasLocations, typeNames };
 }
 
 // ===== Variable Declaration =====
@@ -357,6 +360,7 @@ export function parseImportDecl(state: ParserState): NodeResult {
 			importAliases: [],
 			importSource: source,
 			nameLocations: [],
+			aliasLocations: [],
 			importTypeNames: [],
 		}, importToken));
 	}
@@ -384,7 +388,7 @@ export function parseImportDecl(state: ParserState): NodeResult {
 		advance(state);
 		consumeSemicolon(state);
 		return Result.ok(withTypeModifier(createNode(NodeKind.ImportDecl, {
-			importNames: ["*"], importAliases: [nsName], importSource: source, nameLocations: [], importTypeNames: [],
+			importNames: ["*"], importAliases: [nsName], importSource: source, nameLocations: [], aliasLocations: [], importTypeNames: [],
 		}, importToken), typeModifier));
 	}
 
@@ -420,6 +424,7 @@ export function parseImportDecl(state: ParserState): NodeResult {
 		importAliases: aliases,
 		importSource: source,
 		nameLocations: specs.locations,
+		aliasLocations: specs.aliasLocations,
 		importTypeNames: specs.typeNames,
 	}, importToken), typeModifier));
 }
@@ -470,7 +475,7 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 		advance(state);
 		consumeSemicolon(state);
 		const importNode = withTypeModifier(createNode(NodeKind.ImportDecl, {
-			importNames: ["*"], importAliases: [nsAlias], importSource: source, nameLocations: [], importTypeNames: [],
+			importNames: ["*"], importAliases: [nsAlias], importSource: source, nameLocations: [], aliasLocations: [], importTypeNames: [],
 		}, exportToken), typeModifier);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: importNode }, exportToken));
 	}
@@ -492,7 +497,7 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 		advance(state);
 		consumeSemicolon(state);
 		const importNode = withTypeModifier(createNode(NodeKind.ImportDecl, {
-			importNames: names, importAliases: aliases, importSource: source, nameLocations: specs.locations, importTypeNames: specs.typeNames,
+			importNames: names, importAliases: aliases, importSource: source, nameLocations: specs.locations, aliasLocations: specs.aliasLocations, importTypeNames: specs.typeNames,
 		}, exportToken), typeModifier);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: importNode }, exportToken));
 	}

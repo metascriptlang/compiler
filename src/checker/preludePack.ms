@@ -40,7 +40,7 @@ import { env, argv } from "std/process";
 import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
 
-const PACK_MAGIC = "MSPK6";
+const PACK_MAGIC = "MSPK7";
 
 function hashFile(path: string): string {
 	const src = try readFile(path) catch "";
@@ -1188,7 +1188,7 @@ function buildNodeData(kind: NodeKind, rd: PackReader, nodes: Node[], types: Typ
 	if (kind == NodeKind.SwitchCase) return { caseTests: rd.nodeArr(nodes), caseStmts: rd.nodeArr(nodes), isDefault: rd.flag() } as NodeData;
 	if (kind == NodeKind.UnreachableStmt) return { unreachableMsg: rd.text() } as NodeData;
 	if (kind == NodeKind.MatchStmt) return { matchStmtDisc: rd.nodeRef(nodes) as Node, matchStmtCases: rd.nodeArr(nodes) } as NodeData;
-	if (kind == NodeKind.ImportDecl) return { importNames: splitCsv(rd.str()), importAliases: splitCsv(rd.str()), importSource: rd.text(), nameLocations: parseLocs(rd.str()), importTypeNames: splitCsv(rd.str()) } as NodeData;
+	if (kind == NodeKind.ImportDecl) return { importNames: splitCsv(rd.str()), importAliases: splitCsv(rd.str()), importSource: rd.text(), nameLocations: parseLocs(rd.str()), aliasLocations: parseLocs(rd.str()), importTypeNames: splitCsv(rd.str()) } as NodeData;
 	if (kind == NodeKind.ExportDecl) return { exportedDecl: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.TypeAliasDecl) return { aliasName: rd.text(), aliasType: rd.text(), aliasIsDistinct: rd.flag(), aliasGenericParams: rd.text(), discriminantName: rd.text(), discriminantType: rd.text(), variantKeys: splitCsv(rd.str()), variantTypes: splitCsv(rd.str()), nameLocation: parseLoc(rd.str()) } as NodeData;
 	if (kind == NodeKind.EnumDecl) return { enumName: rd.text(), enumMembers: splitCsv(rd.str()), enumValues: parseFloatsCsv(rd.str()), nameLocation: parseLoc(rd.str()), memberLocations: parseLocs(rd.str()), enumInits: rd.nodeArr(nodes) } as NodeData;

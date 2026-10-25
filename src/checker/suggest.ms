@@ -4014,6 +4014,7 @@ test "import line: cursor in path triggers ImportPath" {
 		importSource: "std/build",
 		importTypeNames: [],
 		nameLocations: [makeLoc(1, 10)],
+		aliasLocations: [makeLoc(1, 10)],
 	}, makeLoc(1, 1));
 	assert importContextFromAST(importNode, 30) == "path";
 }
@@ -4026,6 +4027,7 @@ test "import line: cursor in braces triggers ImportName" {
 		importSource: "std/build",
 		importTypeNames: [],
 		nameLocations: [makeLoc(1, 10)],
+		aliasLocations: [makeLoc(1, 10)],
 	}, makeLoc(1, 1));
 	assert importContextFromAST(importNode, 12) == "names";
 }
