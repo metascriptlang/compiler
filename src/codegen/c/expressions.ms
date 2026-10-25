@@ -1511,7 +1511,11 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 				}
 				addLine(sec(g, CSection.ProcHeaders), `void ${parentInitName}(${parentProtoParams});`);
 			}
-			let argList = `(${parentName}*)this`;
+			if (p.params.length == 0) {
+				addCGenError(g, `internal: super() in '${p.name}' has no receiver parameter at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);
+				return;
+			}
+			let argList = `(${parentName}*)${paramCName(p.params[0], 0)}`;
 			let ai = 0;
 			while (ai < cd.arguments.length) {
 				argList = argList + ", " + genExpr(g, p, cd.arguments[ai]);
