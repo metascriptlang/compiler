@@ -25,8 +25,8 @@ import { makeSymbol } from "../../checker/symbol";
 import { newSym } from "../../checker/context";
 import { widenVariantToUnion } from "../../checker/fit";
 import { TransformContext, freshTempSym, mintingChecker } from "../context";
-import { walkNode, walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
-import { hoistGuarded, lowerGuardedTernary, expandConditionStmt } from "../lowering/guardedLower";
+import { walkNode, walkExpandBlocksHooked, containsExprKind } from "../walker";
+import { hoistGuarded, lowerGuardedTernary, expandConditionStmt, KindHoister } from "../lowering/guardedLower";
 import {
 	makeIdentResolved, makeVarDecl, makeBlock, makeCallResolved,
 	makeReturn, makeIf, makeMember, makeConditional, makeUnary, makeObjectLiteral, makeBool, makeNull,
@@ -60,24 +60,32 @@ function makeResultMember(ctx: TransformContext, sym: Symbol, resType: Type | nu
 // not the inner expression's Result type (e.g. Result<void, string> vs Result<Person, string>).
 // Uses walkExpandBlocksHooked's FnEntry/FnExit callbacks to save/restore on function boundaries.
 
-let enclosingFnRetType: Type | null = null;
-let fnRetTypeStack: (Type | null)[] = [];
-
-function onFnEntry(node: Node): void {
-	fnRetTypeStack.push(enclosingFnRetType);
-	enclosingFnRetType = node.nodeType != null ? node.nodeType.typeReturn : null;
+interface TryRun {
+	enclosingFnRetType: Type | null;
+	fnRetTypeStack: (Type | null)[];
 }
 
-function onFnExit(node: Node): void {
-	enclosingFnRetType = fnRetTypeStack.length > 0 ? fnRetTypeStack.pop() : null;
+function onFnEntry(node: Node, run: TryRun): void {
+	run.fnRetTypeStack.push(run.enclosingFnRetType);
+	run.enclosingFnRetType = node.nodeType != null ? node.nodeType.typeReturn : null;
+}
+
+function onFnExit(node: Node, run: TryRun): void {
+	run.enclosingFnRetType = run.fnRetTypeStack.length > 0 ? run.fnRetTypeStack.pop() : null;
 }
 
 // ===== Main Entry Point =====
 
 export function lowerTryExpr(program: Node, ctx: TransformContext): Node {
-	enclosingFnRetType = null;
-	fnRetTypeStack = [];
-	walkExpandBlocksHooked(program, expandStmt, ctx, onFnEntry, onFnExit);
+	const run: TryRun = { enclosingFnRetType: null, fnRetTypeStack: [] };
+	const hoistOne: KindHoister = (n: Node, h: Node[], c: TransformContext): Node => hoistOneTry(n, h, c, run);
+	walkExpandBlocksHooked(
+		program,
+		(stmt: Node, c: TransformContext): Node[] => expandStmt(stmt, c, run, hoistOne),
+		ctx,
+		(node: Node): void => onFnEntry(node, run),
+		(node: Node): void => onFnExit(node, run),
+	);
 	lowerResultConstructors(program);
 	return program;
 }
@@ -144,13 +152,13 @@ function makeResultErr(errExpr: Node, resType: Type, loc: SourceLocation): Node 
 // its guard, so its operand and its error return run only when that position is evaluated.
 
 // Hoist all TryExpr from an expression tree into preceding statements.
-function hoistTryExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
-	return hoistGuarded(expr, NodeKind.TryExpr, hoistOneTry, hoisted, ctx);
+function hoistTryExpr(expr: Node, hoisted: Node[], ctx: TransformContext, run: TryRun): Node {
+	return hoistGuarded(expr, NodeKind.TryExpr, (n: Node, h: Node[], c: TransformContext): Node => hoistOneTry(n, h, c, run), hoisted, ctx);
 }
 
-function hoistOneTry(node: Node, hoisted: Node[], ctx: TransformContext): Node {
+function hoistOneTry(node: Node, hoisted: Node[], ctx: TransformContext, run: TryRun): Node {
 	const tryData = node.data as TryExprData;
-	tryData.tryArg = hoistTryExpr(tryData.tryArg, hoisted, ctx);
+	tryData.tryArg = hoistTryExpr(tryData.tryArg, hoisted, ctx, run);
 	const loc = node.location;
 	const resType = tryData.tryArg.nodeType;
 	const sym = freshTempSym(ctx, "result", resType != null ? resType : noneType());
@@ -219,7 +227,7 @@ function hoistOneTry(node: Node, hoisted: Node[], ctx: TransformContext): Node {
 	}
 
 	// if (!$result.ok) { return { ok: false, error: $result.error }; }
-	hoisted.push(makeErrorCheck(sym, resType!, loc, ctx, node.resolvedSym));
+	hoisted.push(makeErrorCheck(sym, resType!, run.enclosingFnRetType, loc, ctx, node.resolvedSym));
 
 	// Replace TryExpr with $result.value. For `Result<void, E>` the v0
 	// variant has no `value` field — synthesize a void placeholder
@@ -236,13 +244,13 @@ function hoistOneTry(node: Node, hoisted: Node[], ctx: TransformContext): Node {
 
 // Expand a single statement — unified through hoistTryExpr.
 // Matches reference desugarStatement: all cases dispatch to desugarExpression.
-function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
+function expandStmt(stmt: Node, ctx: TransformContext, run: TryRun, hoistOne: KindHoister): Node[] {
 	match (stmt.kind) {
 		NodeKind.VariableDecl => {
 			const d = stmt.data as VariableDeclData;
 			if (d.initializer != null && containsExprKind(d.initializer, NodeKind.TryExpr)) {
 				const hoisted: Node[] = [];
-				d.initializer = hoistTryExpr(d.initializer, hoisted, ctx);
+				d.initializer = hoistTryExpr(d.initializer, hoisted, ctx, run);
 				hoisted.push(stmt);
 				return hoisted;
 			}
@@ -251,7 +259,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 			const d = stmt.data as ReturnStmtData;
 			if (d.argument != null && containsExprKind(d.argument, NodeKind.TryExpr)) {
 				const hoisted: Node[] = [];
-				d.argument = hoistTryExpr(d.argument, hoisted, ctx);
+				d.argument = hoistTryExpr(d.argument, hoisted, ctx, run);
 				hoisted.push(stmt);
 				return hoisted;
 			}
@@ -260,13 +268,13 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 			const d = stmt.data as ExprStmtData;
 			if (containsExprKind(d.expr, NodeKind.TryExpr)) {
 				const hoisted: Node[] = [];
-				d.expr = hoistTryExpr(d.expr, hoisted, ctx);
+				d.expr = hoistTryExpr(d.expr, hoisted, ctx, run);
 				hoisted.push(stmt);
 				return hoisted;
 			}
 		},
 		NodeKind.IfStmt | NodeKind.WhileStmt | NodeKind.DoWhileStmt | NodeKind.ForStmt | NodeKind.SwitchStmt | NodeKind.AssertStmt => {
-			return expandConditionStmt(stmt, NodeKind.TryExpr, hoistOneTry, ctx);
+			return expandConditionStmt(stmt, NodeKind.TryExpr, hoistOne, ctx);
 		},
 		_ => {},
 	};
@@ -276,7 +284,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 // Build: if (!$result.ok) { return { ok: false, error: $result.error }; }
 // Uses enclosingFnRetType for the return literal's type (not resType) so the error-path
 // return matches the function's signature (e.g. Result<void, string>, not Result<Person, string>).
-function makeErrorCheck(sym: Symbol, resType: Type, loc: SourceLocation, ctx: TransformContext, converter: Symbol | null = null): Node {
+function makeErrorCheck(sym: Symbol, resType: Type, enclosingFnRetType: Type | null, loc: SourceLocation, ctx: TransformContext, converter: Symbol | null = null): Node {
 	const okAccess = makeResultMember(ctx, sym, resType, "ok", loc);
 	const notOk = makeUnary("!", okAccess, loc);
 	notOk.nodeType = booleanType();
@@ -360,7 +368,7 @@ test "makeErrorCheck produces IfStmt with return" {
 	const resType = createResult(numberType(), stringType());
 	const loc = makeLoc(0, 0);
 	const sym = makeSymbol("$r", SymbolKind.Variable, resType, false);
-	const ifNode = makeErrorCheck(sym, resType, loc, makeCtx());
+	const ifNode = makeErrorCheck(sym, resType, null, loc, makeCtx());
 	assert ifNode.kind == NodeKind.IfStmt;
 	const ifData = ifNode.data as IfStmtData;
 	assert ifData.condition.kind == NodeKind.UnaryExpr;
@@ -373,7 +381,7 @@ test "makeErrorCheck Result.err call has nodeType" {
 	const resType = createResult(numberType(), stringType());
 	const loc = makeLoc(0, 0);
 	const sym = makeSymbol("$r", SymbolKind.Variable, resType, false);
-	const ifNode = makeErrorCheck(sym, resType, loc, makeCtx());
+	const ifNode = makeErrorCheck(sym, resType, null, loc, makeCtx());
 	const ifData = ifNode.data as IfStmtData;
 	const thenBlock = ifData.consequent.data as BlockStmtData;
 	const retData = thenBlock.statements[0].data as RetData;
