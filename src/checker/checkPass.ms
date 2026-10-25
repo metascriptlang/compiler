@@ -14,7 +14,9 @@ import { collectFunction, collectClass, collectActor, collectInterface, collectS
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { readFile, writeFile, ensureDir, isFile, removeAll } from "std/fs";
-import { env, cwd } from "std/process";
+import { env, cwd, platform, arch } from "std/process";
+import { getParserDefines, setParserDefines } from "../parser/context";
+import { createDefineTable, definedValue, initDefines, DefineTable } from "../compiler/defines";
 import { resolveRuntimeDir } from "../utils/path";
 import { join, normalize, isAbsolute } from "std/fs/path";
 import { defaultGlobalImports, modulePasses, ModulePassState } from "./prelude";
@@ -3889,6 +3891,32 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 // BUILD-PERF Phase A1: a disk pack (checker/preludePack.ms) short-circuits the
 // whole load on a warm stamp — see the pack module for the lazy AST rules.
 export function buildPreludeContext(stdPath: string, backendExt: string = ".cms"): CheckerContext {
+	const defines = getParserDefines();
+	if (definedValue(defines, "backend") != "") return buildPreludeUnderDefines(stdPath, backendExt);
+	// No build seeded the defines (an in-process check): parse the prelude as the host's debug build of
+	// the backend its extension names, so a `when` in std picks the branch that module set was written for.
+	setParserDefines(hostBuildDefines(backendExt));
+	try {
+		return buildPreludeUnderDefines(stdPath, backendExt);
+	} finally {
+		setParserDefines(defines);
+	}
+}
+
+function hostBuildDefines(backendExt: string): DefineTable {
+	const backend = match (backendExt) {
+		".cms" => "c",
+		".jms" => "js",
+		".rms" => "raiser",
+		_ => "",
+	};
+	if (backend == "") throw new Error(`internal: no backend for the prelude extension '${backendExt}'`);
+	const t = createDefineTable();
+	initDefines(t, backend, platform, arch, "drc", 0);
+	return t;
+}
+
+function buildPreludeUnderDefines(stdPath: string, backendExt: string): CheckerContext {
 	const packKey = preludePackKey(stdPath, backendExt);
 	const packStamp = preludePackStamp(stdPath);
 	const packed = tryLoadPreludePack(packKey, packStamp);
@@ -6434,6 +6462,20 @@ function preludeOfModules(dir: string, sources: string[][]): CheckerContext {
 function preludeExports(ctx: CheckerContext, name: string): boolean {
 	const sym = lookupSymbol(ctx.table, name);
 	return sym != null && isPreludeExport(ctx, sym);
+}
+
+test "an in-process prelude is parsed as the build its extension names" {
+	const std = `${preludeOrderRoot}/backend/std`;
+	ensureDir(`${std}/core/date`);
+	const source = "when (c) { export const viaC = 1; }\nwhen (js) { export const viaJs = 1; }\nwhen (raiser) { export const viaRaiser = 1; }\n";
+	for (const build of [[".cms", "viaC"], [".jms", "viaJs"], [".rms", "viaRaiser"]]) {
+		writeFile(`${std}/core/date/index${build[0]}`, source);
+		const ctx = buildPreludeContext(std, build[0]);
+		for (const name of ["viaC", "viaJs", "viaRaiser"]) {
+			assert preludeExports(ctx, name) == (name == build[1]), `${build[0]} prelude: ${name}`;
+		}
+	}
+	removeAll(preludeOrderRoot);
 }
 
 const preludeMath = "export class Math {}\nexport extern function trunc(this typeof Math, x: float64): float64 from \"trunc\";\n";
