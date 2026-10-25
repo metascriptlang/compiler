@@ -148,6 +148,7 @@ import "./macroInternalTypeNames";
 import "./quoteBindsWhereWritten";
 import "./macroReservedNames";
 import "./macroNamedLikeDirective";
+import "./macroPreludeScope";
 import "./compileTimeNameUse";
 import "./extensionImportUse";
 import "./memberBinding";
