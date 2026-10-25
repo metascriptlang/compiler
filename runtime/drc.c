@@ -541,8 +541,7 @@ static void msOrphanRootsRelease(void) {
 	__atomic_clear(&msOrphanRootsLock, __ATOMIC_RELEASE);
 }
 
-static void msAdoptOrphanRoots(void) {
-	if (__atomic_load_n(&msOrphanRootsPending, __ATOMIC_RELAXED) == 0) return;
+static __attribute__((noinline)) void msAdoptOrphanRoots(void) {
 	msOrphanRootsAcquire();
 	msCellSeq spilled = msOrphanRoots;
 	msCellSeqInit(&msOrphanRoots);
@@ -760,7 +759,7 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 /* ===== Public API (GC_runOrc / GC_partialCollect parity) ===== */
 
 void msOrcCollect(void) {
-	msAdoptOrphanRoots();
+	if (__atomic_load_n(&msOrphanRootsPending, __ATOMIC_RELAXED) != 0) msAdoptOrphanRoots();
 	if (msRoots.len == 0) return;
 
 	msGcEnv j;
