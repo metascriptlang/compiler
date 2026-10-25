@@ -35,14 +35,29 @@ Examples per tier, the corpus directive contract, the two-tree convention and th
 
 **When the slice is ready to land, queue `~/nerdtools/claude/tools/wt.sh land <name> --async` and wait in the background with `land <name> --wait`.** The land runs the acceptance gate once or reuses a valid verdict; do not run a separate gate first, because that duplicates the land's verification. `tools/gate.sh --dry-run` proposes lanes to compare with the changed contract; `--release` belongs to cutting a release. Follow the root `CLAUDE.md` for commit checks and verdict reuse.
 
-| Debug-loop contract | Focused check |
-|---|---|
-| Function or language invariant | Candidate `test <owner-file>`; use `--tests-in-dir` for the owning test directory when dependencies are outside the claim |
-| Program output, exit status or lifetime | `MSC=<candidate> MSCORPUS_ONLY=<exact,names> msc run src/test/corpus/run.ms`; add `MSCORPUS_SAN=1` for its SAN contract |
-| Lifecycle guard failure | The runner's named guard/shard reproduction; preserve its ledger oracle (`guard/README.md`) |
-| Solana, native boundary, HCR or formatter failure | The named failing consumer and its required host/backend configuration; recipes in `docs/TESTING.md` |
-| Performance of one flow | `MSPERF_BASE=<previous msc> MSPERF_PROGRAMS=711 msc run src/test/perf/run.ms` (candidate `./msc`); reading: `docs/BUILD-PERF.md` §Measuring by flow |
-| Changed `std/` or `runtime/` inputs | Check with a candidate beside the changed support trees; publication via `tools/syncLocalBinary.ms` belongs to delivery, not the edit loop |
+Build the candidate once per compiler edit: `msc build src/index.ms --danger --lto=off --output=msc`. It takes 2–2.5 min on 8 cores and is the only step allowed over the budget. Then run one check per changed contract:
+
+| the diff changes | check | measured |
+|---|---|---|
+| a function or language invariant in one module | `./msc test <owner-file> --tests-in-dir` | 4–50 s |
+| program output, exit status or lifetime | `MSC=./msc MSCORPUS_ONLY=<exact,names> msc run src/test/corpus/run.ms`; add `MSCORPUS_SAN=1` for its SAN contract | 4–10 s per program |
+| one lifecycle invariant | `MSC=./msc GUARD_ONLY=<names> msc run --target=raiser src/test/guard/run.ms`; keep its ledger oracle (`guard/README.md`) | 1–5 s per guard |
+| what one program emits | `./msc build <prog.ms> --emit=c`, then read that module's C | seconds |
+| the cost of one flow | `MSPERF_BASE=<old msc> MSPERF_PROGRAMS=711 MSPERF_RUNS=1 msc run src/test/perf/run.ms`, read the rows of the flow you changed (`docs/BUILD-PERF.md` §Measuring by flow) | one program per arm |
+| Solana, native boundary, HCR or formatter | the named failing consumer with its host and backend; recipes in `docs/TESTING.md` | not measured |
+| `std/` or `runtime/` inputs | the checks above, with a candidate beside the changed support trees; `tools/syncLocalBinary.ms` belongs to delivery | as above |
+
+Measured on lc-1, tree 651e100ee, 2026-10-26, cache warm:
+
+- **`msc test <file>` without `--tests-in-dir` also runs the tests of every module the file imports.**
+  - For `src/analyzer/inject.ms` that is 102 test files in 85–122 s, against 7 files in 49.5 s with the flag.
+  - The tier indexes (`lang/`, `handoff/`, `c/`, `js/`) and `src/index.ms` are gate entries, never checks during an edit.
+- **Split a performance question by flow.** Run one program and one flow per measurement (`MSC_FLOWS`, `MS_DRC_STAT`, `src/test/perf/emitCostScan.ms --diff`). A whole-compiler A/B waits for the land.
+- **Over budget now; these are tracked on card `fast-loop`:**
+  - `src/checker/checkPass.ms` takes 65 s with the flag, 30 s of it its own tests.
+  - `src/codegen/raiser/eval.ms` takes 76 s with the flag, 19 s of it its own tests.
+  - Every test binary costs about 40 s to build, because the front end checks and transforms the test blocks of every module in the graph, not only the tested ones.
+- **The guard runner's JS leg calls `msc` from `PATH`.** A host without it reports exit 127 as a red guard.
 
 **After a RED land, rerun the named failures in the owning worktree before requeueing.** Fix new reds before requeueing; let the existing known-now-green pruning handle entries the gate proved green. Do not use another full gate to find out whether the same failure remains. A BUSY result is not a RED: the queue retries it with eligible green lanes kept. Reuse completed evidence only while its checked code, inputs, toolchain and settings still match.
 

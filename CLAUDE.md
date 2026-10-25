@@ -130,26 +130,9 @@ msString msStringConcatArr(const msString* arr, int64_t n);   // GOOD
 - **Branches and releases follow [`docs/GIT-FLOW.md`](docs/GIT-FLOW.md)** — release, fix and merge work each get their own worktree.
 - **Decide what verification a change needs before you land it** — name what the change can alter and which lane observes that: who reads the changed code, which test or corpus program reaches it. When a lane can observe it, send it to the gate train (workspace `CLAUDE.md` §Worktrees; the Mac land queue only for what Linux cannot verify), because a train gates it once against the base it lands on, together with every other slice ready at that moment. When none can (a string only `msc --version` prints, a comment, a doc), say so with that evidence and land with `land --no-gate` once the person agrees; the flag records that the gate did not run, and the person owns that call because the gate is the shared safety net.
 
-## The edit loop — one check per changed contract, under 60 s each
+## The edit loop
 
-While a slice is in work, run only the check that observes what the diff changed, and pick it yourself. Building the candidate compiler is the one fixed cost per edit (`msc build src/index.ms --danger --lto=off --output=msc`, 2–2.5 min on 8 cores). Each check after it stays under 60 s. A wrong pick is accepted, because the land's gate runs every lane once; a lane, a gate, `msc test src/index.ms` or a corpus sweep during the edit holds the person for most of an hour.
-
-| the diff changes | run | measured |
-|---|---|---|
-| a function's invariant, one module | `./msc test <file> --tests-in-dir` | 4–50 s; 85–122 s without the flag |
-| program output, exit status or lifetime | `MSC=./msc MSCORPUS_ONLY=<names> msc run src/test/corpus/run.ms` | 4–10 s per program |
-| one lifecycle invariant | `MSC=./msc GUARD_ONLY=<names> msc run --target=raiser src/test/guard/run.ms` | 1–5 s per guard |
-| one program's emitted C | `./msc build <prog.ms> --emit=c`, then read the module's C | seconds |
-| the cost of one flow | `MSPERF_BASE=<old msc> MSPERF_PROGRAMS=711 MSPERF_RUNS=1 msc run src/test/perf/run.ms`, read the flow rows | one program per arm |
-
-- **Without `--tests-in-dir`, `msc test <file>` runs the tests of every module the file imports.** For `src/analyzer/inject.ms` that is 102 test files, and the run takes 85–122 s. With the flag it runs 7 files in 49.5 s.
-- **Split a perf question by flow** (`MSC_FLOWS`, `MS_DRC_STAT`, `src/test/perf/emitCostScan.ms --diff`). Measure one program and one flow per run. A whole-compiler A/B waits for the land.
-- **When the cheapest check that observes the change cannot finish in 60 s, run it once and write the slow step on card `fast-loop`**, so the step gets split rather than tolerated.
-- **Known over budget**, measured on lc-1 on tree 651e100ee with the cache warm:
-  - `--tests-in-dir` on `src/checker/checkPass.ms` takes 65 s; its own tests take 30 s.
-  - `--tests-in-dir` on `src/codegen/raiser/eval.ms` takes 76 s; its own tests take 19 s.
-  - Every test binary costs about 40 s to build, because the front end checks and transforms the test blocks of every module in the graph, not only the tested ones.
-- **The guard runner's JS leg calls `msc` from `PATH`.** A host without it reports exit 127 as a red guard.
+While a slice is in work, each check observes one changed contract and finishes in under 60 s. The candidate build is the only longer step. Read [`src/test/CLAUDE.md`](src/test/CLAUDE.md) §Running before you test, run or measure anything: it gives the command and the measured cost for each kind of change.
 
 ## Verification Cost — lanes follow the change; the full ladder follows a release
 
