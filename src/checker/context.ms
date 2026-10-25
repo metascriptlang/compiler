@@ -1,7 +1,7 @@
 import { platform } from "std/process";
 import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf, declaredBasesOf, classDeclaredParentOf, distinctWidenBody, isArrayShaped } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore, typeRelation, TypeRelation } from "./compat";
-import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, lookupStd, markUsed, makeSymbol, RoutineFlag, routineFlagSet, refuseRoutineFlagDecodeWhileSealed } from "./symbol";
+import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, lookupStd, markUsed, makeSymbol, RoutineFlag, routineFlagSet, refuseRoutineFlagDecodeWhileSealed, decodeRoutineFlags } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
 import { Node, NodeKind, NodeFlag, SourceLocation, makeLoc, createNodeAt, DeclKind, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData, ArrowFunctionData, FunctionExprData, DecoratedDeclData, AttachedOp } from "../ast/node";
@@ -1138,7 +1138,7 @@ export function addRuntimeConverter(ctx: CheckerContext, sym: Symbol): void {
 // truth for "is this a generic decl?" — used by checker (mono dispatch),
 // codegen (skip generic body emission), and extension resolution.
 export function isGenericFn(flags: string): boolean {
-	return routineFlagSet(flags).has(RoutineFlag.Generic);
+	return decodeRoutineFlags(flags).has(RoutineFlag.Generic);
 }
 
 export function isGeneratorFlags(flags: string): boolean {
