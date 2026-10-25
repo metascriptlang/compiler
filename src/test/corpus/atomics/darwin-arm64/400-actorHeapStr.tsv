@@ -5,8 +5,8 @@
 1	_msWorkerLoopPump
 10	_msActorRunJobs
 10	_msCancelTimer
+11	_msPoolWorkerLoop
 12	_msPoolRunEdge
-13	_msPoolWorkerLoop
 14	_msActorProcess
 14	_msActorVisitEnd
 16	_msPoolCompensate
@@ -17,10 +17,7 @@
 18	_msActorSend
 2	_msActorJobAbandon
 2	_msActorJobTick
-2	_msAdoptOrphanRoots
 2	_msDrainUntilIdle
-2	_msMsgOrphansTake
-2	_msMsgPoolsThreadTeardown
 2	_msPoolShutdown
 29	_msActorPollLocal
 3	_msActorJobFire

@@ -11,10 +11,7 @@
 18	_msSpawnWorkerSettle
 2	_msActorJobAbandon
 2	_msActorJobTick
-2	_msAdoptOrphanRoots
 2	_msDrainUntilIdle
-2	_msMsgOrphansTake
-2	_msMsgPoolsThreadTeardown
 2	_msPoolRunQueued
 2	_msPoolShutdown
 3	_msActorJobFire
@@ -26,6 +23,6 @@
 6	_msRunOnce
 7	_msAwaitGroupCompleteSlot
 7	_msAwaitSlotSettle
+7	_msPoolWorkerLoop
 8	_msAwaitGroupFailSlot
 8	_msTimerDelayFrom
-9	_msPoolWorkerLoop
