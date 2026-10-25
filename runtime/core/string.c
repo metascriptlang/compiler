@@ -390,27 +390,6 @@ int msStringCompare(msString a, msString b) {
 	return 0;
 }
 
-bool msStringStartsWith(msString s, msString prefix) {
-	if (prefix.len == 0) return true;
-	if (prefix.len > s.len) return false;
-	if (s.p == NULL) return false;
-	return memcmp(s.p->data, prefix.p->data, prefix.len) == 0;
-}
-
-bool msStringEndsWith(msString s, msString suffix) {
-	if (suffix.len == 0) return true;
-	if (suffix.len > s.len) return false;
-	if (s.p == NULL) return false;
-	return memcmp(s.p->data + s.len - suffix.len, suffix.p->data, suffix.len) == 0;
-}
-
-bool msStringContains(msString s, msString sub) {
-	if (sub.len == 0) return true;
-	if (sub.len > s.len) return false;
-	if (s.p == NULL) return false;
-	return msStringByteIndexOf(s, sub, 0) >= 0;
-}
-
 /* ===== Search ===== */
 
 /* start and return value are byte offsets. */
@@ -818,50 +797,6 @@ msString msStringSlice(msString s, int64_t start, int64_t end) {
 
 /* ===== Transformation ===== */
 
-msString msStringToLower(msString s) {
-	if (s.len == 0) return MS_EMPTY_STRING;
-	msString result = msStringNew(s.p->data, s.len);
-	for (int64_t i = 0; i < result.len; i++) {
-		result.p->data[i] = (char)tolower((unsigned char)result.p->data[i]);
-	}
-	return result;
-}
-
-msString msStringToUpper(msString s) {
-	if (s.len == 0) return MS_EMPTY_STRING;
-	msString result = msStringNew(s.p->data, s.len);
-	for (int64_t i = 0; i < result.len; i++) {
-		result.p->data[i] = (char)toupper((unsigned char)result.p->data[i]);
-	}
-	return result;
-}
-
-msString msStringTrim(msString s) {
-	if (s.len == 0 || s.p == NULL) return MS_EMPTY_STRING;
-	int64_t start = 0;
-	int64_t end = s.len;
-	while (start < end && isspace((unsigned char)s.p->data[start])) start++;
-	while (end > start && isspace((unsigned char)s.p->data[end - 1])) end--;
-	if (start >= end) return MS_EMPTY_STRING;
-	return msStringNew(s.p->data + start, end - start);
-}
-
-msString msStringTrimStart(msString s) {
-	if (s.len == 0 || s.p == NULL) return MS_EMPTY_STRING;
-	int64_t start = 0;
-	while (start < s.len && isspace((unsigned char)s.p->data[start])) start++;
-	if (start >= s.len) return MS_EMPTY_STRING;
-	return msStringNew(s.p->data + start, s.len - start);
-}
-
-msString msStringTrimEnd(msString s) {
-	if (s.len == 0 || s.p == NULL) return MS_EMPTY_STRING;
-	int64_t end = s.len;
-	while (end > 0 && isspace((unsigned char)s.p->data[end - 1])) end--;
-	if (end <= 0) return MS_EMPTY_STRING;
-	return msStringNew(s.p->data, end);
-}
-
 msString msStringReplace(msString s, msString search, msString replacement) {
 	if (search.len == 0) return msStringConcat(replacement, s);
 	if (s.len == 0) return MS_EMPTY_STRING;
@@ -936,17 +871,6 @@ msString msStringReplaceAll(msString s, msString search, msString replacement) {
 
 	result.len = dstPos;
 	result.p->data[dstPos] = '\0';
-	return result;
-}
-
-msString msStringReverse(msString s) {
-	if (s.len <= 1) {
-		return s.len == 1 ? msStringNew(s.p->data, 1) : MS_EMPTY_STRING;
-	}
-	msString result = msStringNew(s.p->data, s.len);
-	for (int64_t i = 0; i < s.len; i++) {
-		result.p->data[i] = s.p->data[s.len - 1 - i];
-	}
 	return result;
 }
 

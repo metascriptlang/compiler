@@ -824,18 +824,6 @@ function _bridgeMsNodeChildAt(args: RaiserValue[]): RaiserValue {
 // dispatch through the CallHost path without falling into "Unknown host
 // function" silent-nil. Full catalogue: docs/RAISER-GAP.md Phase 4.
 
-function _bridgeMsStringTrim(args: RaiserValue[]): RaiserValue {
-	return boxString(unboxString(args[0]).trim());
-}
-
-function _bridgeMsStringTrimStart(args: RaiserValue[]): RaiserValue {
-	return boxString(unboxString(args[0]).trimStart());
-}
-
-function _bridgeMsStringTrimEnd(args: RaiserValue[]): RaiserValue {
-	return boxString(unboxString(args[0]).trimEnd());
-}
-
 // indexOf: MS declares (s, sub, start: int64 = 0) — handle optional 3rd arg
 function _bridgeMsStringIndexOf(args: RaiserValue[]): RaiserValue {
 	const start = args.length > 2 ? args[2].intVal : 0;
@@ -1099,29 +1087,6 @@ function _bridgeMsNodeStringValue(args: RaiserValue[]): RaiserValue {
 	return boxString(unboxString(heapObjectGetField(objHeap, n.intVal, "value")));
 }
 
-function bridgeMsStringToLower(args: RaiserValue[]): RaiserValue {
-	return boxString(unboxString(args[0]).toLowerCase());
-}
-
-function bridgeMsStringToUpper(args: RaiserValue[]): RaiserValue {
-	return boxString(unboxString(args[0]).toUpperCase());
-}
-
-// msStringContains uses MS method name `.contains()` which doesn't exist in
-// JS native (JS has `.includes()`). Workaround: indexOf >= 0. Avoids needing
-// type-assertion escape hatch in bridge body.
-function bridgeMsStringContains(args: RaiserValue[]): RaiserValue {
-	return boxInt(unboxString(args[0]).indexOf(unboxString(args[1])) >= 0 ? 1 : 0);
-}
-
-function _bridgeMsStringStartsWith(args: RaiserValue[]): RaiserValue {
-	return boxInt(unboxString(args[0]).startsWith(unboxString(args[1])) ? 1 : 0);
-}
-
-function _bridgeMsStringEndsWith(args: RaiserValue[]): RaiserValue {
-	return boxInt(unboxString(args[0]).endsWith(unboxString(args[1])) ? 1 : 0);
-}
-
 function _bridgeMsStringReplace(args: RaiserValue[]): RaiserValue {
 	return boxString(unboxString(args[0]).replace(unboxString(args[1]), unboxString(args[2])));
 }
@@ -1341,9 +1306,6 @@ export function ensureHostTableLoaded(): void {
 	// Coverage: trim family + case + indexOf/contains/start/end + replace.
 	// Hot paths (charAt/slice) stay hardcoded in raiser/expressions.ms for
 	// direct-opcode performance.
-	registerHostFn("msStringTrim",          _bridgeMsStringTrim, HostCapability.Pure);
-	registerHostFn("msStringTrimStart",     _bridgeMsStringTrimStart, HostCapability.Pure);
-	registerHostFn("msStringTrimEnd",       _bridgeMsStringTrimEnd, HostCapability.Pure);
 	registerHostFn("msStringIndexOf",       _bridgeMsStringIndexOf, HostCapability.Pure);
 	registerHostFn("msStringEquals",        _bridgeMsStringEquals, HostCapability.Pure);
 	registerHostFn("msStringCharCodeAt",    _bridgeMsStringCharCodeAt, HostCapability.Pure);
@@ -1400,11 +1362,6 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msNodeIntValue",        _bridgeMsNodeIntValue, HostCapability.Pure);
 	registerHostFn("msNodeFloatValue",      _bridgeMsNodeFloatValue, HostCapability.Pure);
 	registerHostFn("msNodeStringValue",     _bridgeMsNodeStringValue, HostCapability.Pure);
-	registerHostFn("msStringToLower",       bridgeMsStringToLower, HostCapability.Pure);
-	registerHostFn("msStringToUpper",       bridgeMsStringToUpper, HostCapability.Pure);
-	registerHostFn("msStringContains",      bridgeMsStringContains, HostCapability.Pure);
-	registerHostFn("msStringStartsWith",    _bridgeMsStringStartsWith, HostCapability.Pure);
-	registerHostFn("msStringEndsWith",      _bridgeMsStringEndsWith, HostCapability.Pure);
 	registerHostFn("msStringReplace",       _bridgeMsStringReplace, HostCapability.Pure);
 	registerHostFn("msStringReplaceAll",    _bridgeMsStringReplaceAll, HostCapability.Pure);
 	registerHostFn("msStringByteLength",    _bridgeMsStringByteLength, HostCapability.Pure);
