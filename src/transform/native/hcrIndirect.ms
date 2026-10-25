@@ -3,7 +3,7 @@ import { exportedFunctionOf } from "../../checker/decoratorHelpers";
 import { hasGenericParams, createPtr, createStruct, spelled, voidType } from "../../checker/types";
 import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { isGenericFn } from "../../checker/context";
-import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName, buildModuleNameRoots, overloadAt } from "../../codegen/c/names";
+import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, referenceName, mangleModuleName, safeName, buildModuleNameRoots, overloadAt, staticFieldCName } from "../../codegen/c/names";
 import { isNrvoReturnType, opCName, callOverloadWinner, hasNoRuntimeRepr, isOpenArrayParam, openArrayDataName, openArrayLenName } from "../../codegen/c/types";
 import { hcrSignatureKey } from "../../compiler/hcrAbi";
 import { walkNode } from "../walker";
@@ -47,17 +47,27 @@ export function createHcrStorageTable(): HcrStorageTable {
 
 struct HcrImportedVariable { targetId: string; symbol: string; key: string; }
 
+export function isStaticField(sym: Readonly<Symbol>): boolean {
+	return sym.symbolKind == SymbolKind.Variable && hasFlag(sym, SymbolFlag.Static);
+}
+
+function readsModuleState(n: Node, sym: Symbol): boolean {
+	if (n.kind == NodeKind.MemberExpr && isStaticField(sym)) return true;
+	if (!isModuleGlobalVar(sym)) return false;
+	if (n.kind != NodeKind.MemberExpr) return true;
+	const baseSym = (n.data as MemberExprData).object.resolvedSym;
+	return baseSym != null && baseSym.symbolKind == SymbolKind.Module;
+}
+
 function importedVariable(n: Node, own: HcrIndirectModule, modules: HcrIndirectModule[]): HcrImportedVariable | null {
 	if (n.kind != NodeKind.Identifier && n.kind != NodeKind.MemberExpr) return null;
 	const sym = n.resolvedSym;
-	if (sym == null || !isModuleGlobalVar(sym)) return null;
-	if (n.kind == NodeKind.MemberExpr) {
-		const baseSym = (n.data as MemberExprData).object.resolvedSym;
-		if (baseSym == null || baseSym.symbolKind != SymbolKind.Module) return null;
-	}
+	if (sym == null || !readsModuleState(n, sym)) return null;
 	const target = moduleForPath(modules, sym.modulePath);
 	if (target == null || target.moduleId == own.moduleId) return null;
-	const symbol = mangledGlobalName(buildModuleNameRoots(), sym, referenceName(sym, referenceText(n)));
+	const symbol = isStaticField(sym)
+		? staticFieldCName(buildModuleNameRoots(), sym)
+		: mangledGlobalName(buildModuleNameRoots(), sym, referenceName(sym, referenceText(n)));
 	return { targetId: target.moduleId, symbol, key: "v:" + hcrSignatureKey(sym.symbolType) };
 }
 
@@ -265,11 +275,11 @@ export function lowerHcrIndirection(
 			const winner = overloadCallees.get(n);
 			const sym = winner != null ? winner : n.kind == NodeKind.NewExpr ? constructorInitOf(constructed) : n.resolvedSym;
 			if (sym == null) return n;
-			if (n.kind == NodeKind.MemberExpr) {
+			const isVariable = constructed == null && readsModuleState(n, sym);
+			if (n.kind == NodeKind.MemberExpr && !isVariable) {
 				const baseSym = (n.data as MemberExprData).object.resolvedSym;
 				if (baseSym == null || baseSym.symbolKind != SymbolKind.Module) return n;
 			}
-			const isVariable = constructed == null && isModuleGlobalVar(sym);
 			let targetId = "";
 			let symbol = "";
 			let key = "";

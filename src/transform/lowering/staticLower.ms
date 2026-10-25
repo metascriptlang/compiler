@@ -14,13 +14,13 @@ function isDataInitLiteral(init: Node): boolean {
 		|| init.kind == NodeKind.StringLiteral
 		|| init.kind == NodeKind.BooleanLiteral;
 }
-function isInlinedReadonlyScalar(member: Node): boolean {
+function isInlinedReadonlyScalar(member: Node, reloadable: string[]): boolean {
 	if (member.kind != NodeKind.PropertyDecl) return false;
 	const d = member.data as PropertyDeclData;
 	if (!d.propIsStatic || !d.propIsReadonly || d.propInitializer == null) return false;
 	const sym = member.resolvedSym;
 	if (sym == null || !sym.symFlags.has(SymbolFlag.Static)) throw new Error(`internal: static field '${d.propName}' has no declaration symbol`);
-	if (sym.symFlags.has(SymbolFlag.Mutable)) return false;
+	if (sym.symFlags.has(SymbolFlag.Mutable) || reloadable.includes(sym.modulePath)) return false;
 	return literalTakesType(d.propInitializer, member.nodeType);
 }
 
@@ -56,7 +56,7 @@ function staticRunBlock(declNode: Node, stmts: Node[]): Node {
 	return createNodeAt(NodeKind.BlockStmt, { statements: stmts }, declNode.location);
 }
 
-function lowerBodyStaticsInPlace(declNode: Node, ownerName: string, body: Node[], out: Node[], reevaluated: boolean): void {
+function lowerBodyStaticsInPlace(declNode: Node, ownerName: string, body: Node[], out: Node[], reevaluated: boolean, reloadable: string[]): void {
 	let write: int32 = 0;
 	for (let read: int32 = 0; read < body.length; read += 1) {
 		const m = body[read];
@@ -65,7 +65,7 @@ function lowerBodyStaticsInPlace(declNode: Node, ownerName: string, body: Node[]
 			continue;
 		}
 		const member = bareMember(m);
-		if (m.kind == NodeKind.PropertyDecl && isInlinedReadonlyScalar(member)) continue;
+		if (m.kind == NodeKind.PropertyDecl && isInlinedReadonlyScalar(member, reloadable)) continue;
 		body[write] = m;
 		write += 1;
 		if (member.kind != NodeKind.PropertyDecl) continue;
@@ -78,7 +78,7 @@ function lowerBodyStaticsInPlace(declNode: Node, ownerName: string, body: Node[]
 	body.shrink(write);
 }
 
-function expandClassStmt(stmt: Node, lifted: Node[]): Node[] {
+function expandClassStmt(stmt: Node, lifted: Node[], reloadable: string[]): Node[] {
 	let target = stmt;
 	if (target.kind == NodeKind.ExportDecl) {
 		target = (target.data as ExportDeclData).exportedDecl;
@@ -88,10 +88,10 @@ function expandClassStmt(stmt: Node, lifted: Node[]): Node[] {
 	const local = lifted.indexOf(target) >= 0;
 	if (target.kind == NodeKind.ClassDecl) {
 		const cd = target.data as ClassDeclData;
-		lowerBodyStaticsInPlace(target, cd.className, cd.classBody, out, local);
+		lowerBodyStaticsInPlace(target, cd.className, cd.classBody, out, local, reloadable);
 	} else if (target.kind == NodeKind.ActorDecl) {
 		const ad = target.data as ActorDeclData;
-		lowerBodyStaticsInPlace(target, ad.actorName, ad.actorBody, out, local);
+		lowerBodyStaticsInPlace(target, ad.actorName, ad.actorBody, out, local, reloadable);
 	}
 	return out;
 }
@@ -118,7 +118,8 @@ function requireLoweredInPlace(decl: Node): void {
 // where the body declares it, once per evaluation, so the lifted copy is not expanded.
 export function lowerStaticInit(program: Node, ctx: TransformContext): Node {
 	const lifted: Node[] = ctx != null && ctx.checkerCtx != null ? ctx.checkerCtx.liftedLocalTypeDecls : [];
-	const expand = (stmt: Node, c: TransformContext): Node[] => expandClassStmt(stmt, lifted);
+	const reloadable: string[] = ctx != null ? ctx.reloadableModules : [];
+	const expand = (stmt: Node, c: TransformContext): Node[] => expandClassStmt(stmt, lifted, reloadable);
 	const kept: Node[] = [];
 	for (const s of (program.data as ProgramData).programStmts) {
 		if (lifted.indexOf(s) >= 0) {

@@ -1,7 +1,7 @@
 import {
 	Node, NodeKind, SourceLocation, createNode, DeclKind, SymbolKind, SymbolFlag,
 	ProgramData, VariableDeclData, ExportDeclData, DecoratedDeclData, ExprStmtData, BinaryExprData,
-	MacroInvocationData, Symbol, Type, TypeKind, noFieldDecorators,
+	MacroInvocationData, Symbol, Type, TypeKind, noFieldDecorators, ClassDeclData, ActorDeclData, PropertyDeclData, BlockStmtData,
 } from "../../ast/node";
 import { spelled, createPtr, createStruct, booleanType, isUnresolvedType } from "../../checker/types";
 import { makeSymbol, setFlag, hasFlag } from "../../checker/symbol";
@@ -9,7 +9,7 @@ import { initFlagName } from "../lowering/moduleTdz";
 import { constantLiteralOf } from "../../checker/constFold";
 import { skipConvDfa } from "../../analyzer/alias";
 import { hcrSignatureKey } from "../../compiler/hcrAbi";
-import { mangledGlobalName, buildModuleNameRoots } from "../../codegen/c/names";
+import { mangledGlobalName, buildModuleNameRoots, staticFieldCName } from "../../codegen/c/names";
 import { cStringLiteral } from "../../codegen/c/literals";
 import { TransformContext, reportTransformError, stampLoweredSym } from "../context";
 import { walkNode } from "../walker";
@@ -46,50 +46,56 @@ export function liftHcrState(program: Node, ctx: TransformContext, moduleId: str
 	];
 	const kept: Node[] = [];
 	const extracted: (HcrGlobal | null)[] = [];
+	const statics: HcrGlobal[][] = [];
 	for (const stmt of pd.programStmts) {
 		const g = extractGlobal(stmt, ctx, globals.length as int32);
 		extracted.push(g);
-		if (g == null) continue;
-		globals.push(g);
-		bySymbol.set(g.sym, g);
+		if (g != null) {
+			globals.push(g);
+			bySymbol.set(g.sym, g);
+		}
+		const fields = g == null ? extractStaticFields(stmt, ctx, globals.length as int32) : [];
+		statics.push(fields);
+		for (const field of fields) {
+			globals.push(field);
+			bySymbol.set(field.sym, field);
+		}
 	}
 	const flagged = flaggedBindings(globals);
+	const pieces: HcrPiece[][] = [];
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		const stmt = pd.programStmts[i];
 		const g = extracted[i];
+		const out: HcrPiece[] = [];
+		pieces.push(out);
 		if (g == null) {
 			const set = initFlagSet(stmt);
 			if (set != null) {
 				const binding = flagged.get(set);
-				kept.push(binding == null || binding.literalAlias ? stmt
-					: makeIf(makeIdentResolved(binding.fresh, stmt.location), makeBlock([stmt], stmt.location), null, stmt.location));
+				out.push(binding == null || binding.literalAlias ? always(stmt) : guarded(stmt, [binding.fresh]));
 				continue;
 			}
-			kept.push(isDeclarationOrEmit(stmt)
-				? stmt
-				: makeIf(makeIdentResolved(first, stmt.location), makeBlock([stmt], stmt.location), null, stmt.location));
+			const field = staticFieldSet(stmt, bySymbol);
+			if (field != null) {
+				out.push(guarded(stmt, [field.fresh]));
+				continue;
+			}
+			out.push(isDeclarationOrEmit(stmt) ? { node: stmt, guards: [], runs: false } : guarded(stmt, [first]));
+			for (const field of statics[i]) {
+				registerGlobal(result, field, moduleId, stmt.location);
+				if (field.initNode != null) out.push(initGlobal(field, stmt.location));
+			}
 			continue;
 		}
-		result.push(hcrStorageDecl(g.storageType, stmt.location));
-		result.push(makeHcrVariableDecl(g.pointer, stmt.location));
-		result.push(makeHcrVariableDecl(g.fresh, stmt.location));
-		result.push(makeEmitStmt(
-			`/*DATINITSECTION*/  ${g.fresh.nativeName} = msHcrRegisterVariable(${cStringLiteral(moduleId)}, ${cStringLiteral(g.cName)}, ${cStringLiteral(g.key)}, sizeof(*${g.pointer.nativeName}), (void**)&${g.pointer.nativeName});`,
-			stmt.location,
-		));
+		registerGlobal(result, g, moduleId, stmt.location);
 		const binding = flagged.get(g.sym);
 		if (binding != null) {
-			kept.push(followCell(g, binding, stmt.location));
+			out.push(followCell(g, binding, stmt.location));
 		} else if (g.initNode != null) {
-			const lhs = makeIdentResolved(g.sym, stmt.location);
-			lhs.nodeType = g.declType;
-			const assign = makeBinary(lhs, "=", g.initNode, stmt.location);
-			assign.nodeType = g.declType;
-			const init = makeExprStmt(assign, stmt.location);
-			kept.push(g.literalAlias ? init
-				: makeIf(makeIdentResolved(g.fresh, stmt.location), makeBlock([init], stmt.location), null, stmt.location));
+			out.push(initGlobal(g, stmt.location));
 		}
 	}
+	for (const out of pieces) for (const piece of out) kept.push(piece.node);
 	let entries = "";
 	let names = "";
 	for (const g of globals) {
@@ -107,6 +113,41 @@ export function liftHcrState(program: Node, ctx: TransformContext, moduleId: str
 	for (const stmt of kept) result.push(rewriteGlobalRefs(stmt, bySymbol));
 	pd.programStmts = result;
 	return program;
+}
+
+function registerGlobal(result: Node[], g: HcrGlobal, moduleId: string, loc: SourceLocation): void {
+	result.push(hcrStorageDecl(g.storageType, loc));
+	result.push(makeHcrVariableDecl(g.pointer, loc));
+	result.push(makeHcrVariableDecl(g.fresh, loc));
+	result.push(makeEmitStmt(
+		`/*DATINITSECTION*/  ${g.fresh.nativeName} = msHcrRegisterVariable(${cStringLiteral(moduleId)}, ${cStringLiteral(g.cName)}, ${cStringLiteral(g.key)}, sizeof(*${g.pointer.nativeName}), (void**)&${g.pointer.nativeName});`,
+		loc,
+	));
+}
+
+struct HcrPiece {
+	node: Node;
+	guards: Symbol[];
+	runs: boolean;
+}
+
+function always(node: Node): HcrPiece {
+	return { node, guards: [], runs: true };
+}
+
+function guarded(stmt: Node, guards: Symbol[]): HcrPiece {
+	let cond = makeIdentResolved(guards[0], stmt.location);
+	for (let i = 1; i < guards.length; i += 1) cond = makeBinary(cond, "||", makeIdentResolved(guards[i], stmt.location), stmt.location);
+	return { node: makeIf(cond, makeBlock([stmt], stmt.location), null, stmt.location), guards, runs: true };
+}
+
+function initGlobal(g: HcrGlobal, loc: SourceLocation): HcrPiece {
+	const lhs = makeIdentResolved(g.sym, loc);
+	lhs.nodeType = g.declType;
+	const assign = makeBinary(lhs, "=", g.initNode, loc);
+	assign.nodeType = g.declType;
+	const init = makeExprStmt(assign, loc);
+	return g.literalAlias ? always(init) : guarded(init, [g.fresh]);
 }
 
 function flaggedBindings(globals: HcrGlobal[]): HashMap<Symbol, HcrGlobal> {
@@ -129,13 +170,12 @@ function initFlagSet(stmt: Node): Symbol | null {
 	return hasFlag(target.resolvedSym, SymbolFlag.InitFlag) ? target.resolvedSym : null;
 }
 
-function followCell(flag: HcrGlobal, binding: HcrGlobal, loc: SourceLocation): Node {
+function followCell(flag: HcrGlobal, binding: HcrGlobal, loc: SourceLocation): HcrPiece {
 	const lhs = makeIdentResolved(flag.sym, loc);
 	lhs.nodeType = flag.declType;
 	const assign = makeBinary(lhs, "=", makeUnary("!", makeIdentResolved(binding.fresh, loc), loc), loc);
 	assign.nodeType = flag.declType;
-	const changed = makeBinary(makeIdentResolved(flag.fresh, loc), "||", makeIdentResolved(binding.fresh, loc), loc);
-	return makeIf(changed, makeBlock([makeExprStmt(assign, loc)], loc), null, loc);
+	return guarded(makeExprStmt(assign, loc), [flag.fresh, binding.fresh]);
 }
 
 function unwrapDeclaration(node: Node): Node {
@@ -168,18 +208,67 @@ function extractGlobal(stmt: Node, ctx: TransformContext, index: int32): HcrGlob
 		reportTransformError(ctx, `internal: HCR state lifting met module variable '${d.declName}' without a resolved type`, node.location);
 		return null as unknown as HcrGlobal;
 	}
+	return makeHcrGlobal(ctx, index, sym, t, d.initializer, mangledGlobalName(buildModuleNameRoots(), sym, d.declName), d.declName,
+		d.declKind == DeclKind.Const && isLiteralAlias(d.initializer));
+}
+
+function makeHcrGlobal(ctx: TransformContext, index: int32, sym: Symbol, t: Type, initNode: Node, cName: string, sourceName: string, literalAlias: boolean): HcrGlobal {
 	const storageType = spelled(createStruct(`_ms_hcr_value${index}`, ["value"], [t], true));
 	const pointer = makeHcrSymbol(ctx, `_ms_hcr_v${index}`, createPtr(storageType));
 	setFlag(pointer, SymbolFlag.HcrCell);
 	const fresh = makeHcrSymbol(ctx, `_ms_hcr_new${index}`, booleanType());
-	return {
-		sym, declType: t, storageType, initNode: d.initializer,
-		cName: mangledGlobalName(buildModuleNameRoots(), sym, d.declName),
-		sourceName: d.declName,
-		key: "v:" + hcrSignatureKey(sym.symbolType),
-		pointer, fresh,
-		literalAlias: d.declKind == DeclKind.Const && isLiteralAlias(d.initializer),
-	};
+	return { sym, declType: t, storageType, initNode, cName, sourceName, key: "v:" + hcrSignatureKey(sym.symbolType), pointer, fresh, literalAlias };
+}
+
+function extractStaticFields(stmt: Node, ctx: TransformContext, index: int32): HcrGlobal[] {
+	const fields: HcrGlobal[] = [];
+	const node = unwrapDeclaration(stmt);
+	if (node == null) return fields;
+	let body: Node[] = [];
+	if (node.kind == NodeKind.ClassDecl) {
+		body = (node.data as ClassDeclData).classBody;
+	} else if (node.kind == NodeKind.ActorDecl) {
+		body = (node.data as ActorDeclData).actorBody;
+	} else {
+		return fields;
+	}
+	let write: int32 = 0;
+	for (let read: int32 = 0; read < body.length; read += 1) {
+		const member = unwrapDeclaration(body[read]);
+		if (member == null || member.kind != NodeKind.PropertyDecl || !(member.data as PropertyDeclData).propIsStatic) {
+			body[write] = body[read];
+			write += 1;
+			continue;
+		}
+		const d = member.data as PropertyDeclData;
+		const sym = member.resolvedSym;
+		const t = member.nodeType != null ? member.nodeType : sym != null ? sym.symbolType : null;
+		if (sym == null || t == null || t.kind == TypeKind.None || isUnresolvedType(t)) {
+			reportTransformError(ctx, `internal: HCR state lifting met static field '${d.propName}' without a symbol or a resolved type`, member.location);
+			continue;
+		}
+		const literalAlias = d.propIsReadonly && isLiteralAlias(d.propInitializer);
+		fields.push(makeHcrGlobal(ctx, index + fields.length, sym, t, d.propInitializer, staticFieldCName(buildModuleNameRoots(), sym), sym.name, literalAlias));
+		d.propInitializer = null as unknown as Node;
+	}
+	body.shrink(write);
+	return fields;
+}
+
+function staticFieldSet(stmt: Node, globals: HashMap<Symbol, HcrGlobal>): HcrGlobal | null {
+	let s = stmt;
+	if (s.kind == NodeKind.BlockStmt) {
+		const inner = (s.data as BlockStmtData).statements;
+		if (inner.length != 1) return null;
+		s = inner[0];
+	}
+	if (s.kind != NodeKind.ExprStmt) return null;
+	const expr = (s.data as ExprStmtData).expr;
+	if (expr == null || expr.kind != NodeKind.BinaryExpr || (expr.data as BinaryExprData).operator != "=") return null;
+	const target = (expr.data as BinaryExprData).left;
+	if (target.kind != NodeKind.MemberExpr || target.resolvedSym == null || !hasFlag(target.resolvedSym, SymbolFlag.Static)) return null;
+	const g = globals.get(target.resolvedSym);
+	return g != null ? g : null;
 }
 
 function isLiteralAlias(initializer: Node): boolean {
