@@ -76,6 +76,9 @@ typedef struct msTaskFrame {
  * (Promise.all / allSettled inputs, the future an async function is suspended on);
  * with `descend`, a queued task a running task of the closure joins counts too. */
 bool msPoolRunEdge(const void* awaited, bool follow, bool descend);
+#ifdef MSPOOL_STATS
+int32_t msPoolEdgeRuns(void);
+#endif
 
 /* Sets the running task of this thread and returns the previous one. A callback runs
  * under NULL: what it spawns has no joining ancestor. */

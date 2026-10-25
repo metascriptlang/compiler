@@ -650,6 +650,14 @@ static inline bool msPoolTaskIn(const struct msSpawnCtx* task, const void** set,
 	return false;
 }
 
+#ifdef MSPOOL_STATS
+static _Atomic(int32_t) msPoolEdgeRunCount = 0;
+
+int32_t msPoolEdgeRuns(void) {
+	return atomic_load_explicit(&msPoolEdgeRunCount, memory_order_relaxed);
+}
+#endif
+
 bool msPoolRunEdge(const void* awaited, bool follow, bool descend) {
 	if (msPoolPendingPeek() == 0) return false;
 	msThreadPool* pool = msPoolGet();
@@ -677,6 +685,9 @@ bool msPoolRunEdge(const void* awaited, bool follow, bool descend) {
 	MS_UNLOCK(pool);
 	if (walk) msTicketLockRelease(&gEdgeLock);
 	if (!found) return false;
+#ifdef MSPOOL_STATS
+	atomic_fetch_add_explicit(&msPoolEdgeRunCount, 1, memory_order_relaxed);
+#endif
 	msPoolRunQueued(&task);
 	return true;
 }
