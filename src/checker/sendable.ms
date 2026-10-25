@@ -268,6 +268,16 @@ export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: 
 	if (t == null) return false;
 	const isPlainRefBorrow = !sendClass && t.kind == TypeKind.Ref && !isAtomicRef(t)
 		&& argNode.kind != NodeKind.MoveExpr;
+	if (t.kind != TypeKind.Function) {
+		const path = plainFunctionPath(t, []);
+		if (path != null) {
+			const label = describeExpr(argNode);
+			addError(ctx, `${label == "an expression" ? "the argument" : label}${path} is a plain function inside a value that crosses to the actor, so it may capture mutable state and would run on the actor's thread — declare that field Sendable<F>, so its closure is checked where it is built, or send the data without the function`,
+				argNode.location.line, argNode.location.column);
+			return false;
+		}
+	}
+	if (sendClass) refuseSentClosures(ctx, argNode, argNode);
 	if (isSendable(t, argNode, sendClass)) {
 		if (isPlainRefBorrow && (t.sym == null || t.sym.symbolKind != SymbolKind.Actor)) refuseKeptBorrow(call, argNode, pi);
 		return isPlainRefBorrow;
@@ -292,6 +302,70 @@ export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: 
 	addError(ctx, `actor methods only accept value types, \`move\`, or \`const\` references\n${typedesc} ${argLabel} is a mutable reference${hint}`,
 		argNode.location.line, argNode.location.column);
 	return false;
+}
+
+function plainFunctionPath(t: Type | null, seen: Type[]): string | null {
+	if (t == null || seen.includes(t)) return null;
+	if (t.kind == TypeKind.Function) return isSendableFunction(t) ? null : "";
+	seen.push(t);
+	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Span) {
+		const p = plainFunctionPath(t.typeReturn, seen);
+		return p == null ? null : "[]" + p;
+	}
+	if (t.kind == TypeKind.Struct || t.kind == TypeKind.Tuple) {
+		for (let i = 0; i < t.typeChildren.length; i += 1) {
+			const p = plainFunctionPath(t.typeChildren[i], seen);
+			if (p != null) return (i < t.typeNames.length ? "." + t.typeNames[i] : "[" + i + "]") + p;
+		}
+		return null;
+	}
+	if (t.kind == TypeKind.Union || t.kind == TypeKind.GenericInstance || t.kind == TypeKind.Varargs) {
+		for (const c of t.typeChildren) {
+			const p = plainFunctionPath(c, seen);
+			if (p != null) return p;
+		}
+	}
+	return plainFunctionPath(t.typeReturn, seen);
+}
+
+function refuseSentClosures(ctx: CheckerContext, argNode: Node, at: Node): void {
+	const p = peelView(argNode);
+	if (p.kind == NodeKind.MoveExpr) {
+		const moved = peelView((p.data as MoveExprData).moveArg);
+		const init = moved.kind == NodeKind.Identifier ? constBindingInitializer(moved.resolvedSym) : null;
+		if (init != null) refuseSentClosures(ctx, init, at);
+		return;
+	}
+	if (p.kind == NodeKind.ObjectLiteral || p.kind == NodeKind.ArrayLiteral) {
+		const parts = p.kind == NodeKind.ObjectLiteral ? (p.data as ObjectLiteralData).properties : (p.data as ArrayLiteralData).elements;
+		for (const e of parts) refuseSentClosures(ctx, e, at);
+		return;
+	}
+	if (p.kind == NodeKind.ArrowFunction || p.kind == NodeKind.FunctionExpr || isSendableFunction(p.nodeType) || isSendableFunction(argNode.nodeType)) refuseSentClosureBorrow(ctx, argNode, at);
+}
+
+function refuseSentClosureBorrow(ctx: CheckerContext, argNode: Node, at: Node): void {
+	let source = spawnedClosure(peelHidden(argNode));
+	const sym = source.kind == NodeKind.Identifier ? aliasTarget(source.resolvedSym) : null;
+	if (sym != null && sym.symbolKind == SymbolKind.Function) {
+		if (isModuleScoped(ctx, sym) || sym.declNode == null) return;
+		source = sym.declNode!;
+	}
+	const name = describeExpr(argNode);
+	if (source.kind != NodeKind.ArrowFunction && source.kind != NodeKind.FunctionExpr && source.kind != NodeKind.FunctionDecl) {
+		addError(ctx, `a send without a reply runs '${name}' on the actor after this code moves on, and its captures cannot be seen here — pass a closure literal or a function declaration whose captures are copies, Arc<T> or Locked<T>, or give the method a result and await it so the call lends what the function captures`,
+			at.location.line, at.location.column);
+		return;
+	}
+	const views: Symbol[] = [];
+	const moved: Symbol[] = [];
+	collectBorrowCaptures(ctx, source, views, moved);
+	for (const v of views) {
+		if (moved.includes(v)) continue;
+		addError(ctx, `a send without a reply runs this closure on the actor after this code moves on, so it cannot borrow '${v.name}': no reply ends the loan — capture a copy instead (const n = ${v.name}.field, or a clone), share it through Arc<T> or Locked<T>, or give the method a result and await it so the call lends '${v.name}' until the reply`,
+			at.location.line, at.location.column);
+		return;
+	}
 }
 
 function routineParts(sym: Symbol | null): Node | null {
@@ -568,8 +642,81 @@ export function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawn
 		refuseViewResult(ctx, source);
 	}
 	requireSpawnSafe(ctx, closure, "spawn runs this thunk on another thread", spawnNode);
+	refuseBorrowedAwaitable(ctx, closure, spawnNode);
 	if (isIsolatedThunk(ctx, source)) spawnNode.flags = spawnNode.flags.incl(NodeFlag.Isolated);
 	else spawnNode.flags = spawnNode.flags.excl(NodeFlag.Isolated);
+}
+
+function reachesAwaitable(t: Type | null, seen: Type[]): boolean {
+	if (t == null || seen.includes(t)) return false;
+	if (isAwaitable(t)) return true;
+	if (!typeCarriesRef(t)) return false;
+	seen.push(t);
+	return match (t.kind) {
+		TypeKind.Alias | TypeKind.Ref | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Distinct
+			| TypeKind.Borrow | TypeKind.Lent | TypeKind.Sink | TypeKind.Var | TypeKind.Cursor => reachesAwaitable(t.typeReturn, seen),
+		TypeKind.Union | TypeKind.Tuple | TypeKind.Struct | TypeKind.GenericInstance | TypeKind.Varargs => {
+			for (const c of t.typeChildren) { if (reachesAwaitable(c, seen)) return true; }
+			return false;
+		},
+		_ => false,
+	};
+}
+
+function borrowedRoot(n: Node, borrowed: Symbol[]): Symbol | null {
+	let cur = peelView(n);
+	while (cur.kind == NodeKind.MemberExpr || cur.kind == NodeKind.ArrayAccess) {
+		cur = peelView(cur.kind == NodeKind.MemberExpr ? (cur.data as MemberExprData).object : (cur.data as ArrayAccessData).array);
+	}
+	const sym = cur.kind == NodeKind.Identifier ? cur.resolvedSym : null;
+	return sym != null && borrowed.includes(sym) ? sym : null;
+}
+
+function borrowedAwaitableUse(node: Node | null, borrowed: Symbol[]): Node | null {
+	if (node == null) return null;
+	const p = peelView(node);
+	if (p.kind == NodeKind.AwaitExpr) {
+		const arg = peelView((p.data as AwaitExprData).awaitArg);
+		if (borrowedRoot(arg, borrowed) != null && isAwaitable(arg.nodeType)) return null;
+	}
+	if (p.kind == NodeKind.CallExpr) {
+		const d = p.data as CallExprData;
+		const callee = peelView(d.callee);
+		if (callee.kind == NodeKind.MemberExpr) {
+			const receiver = (callee.data as MemberExprData).object;
+			if (borrowedRoot(receiver, borrowed) != null && reachesAwaitable(receiver.nodeType, [])) return receiver;
+		}
+		if (!keepsArgumentsInFrame(p)) {
+			const inCallee = borrowedAwaitableUse(d.callee, borrowed);
+			if (inCallee != null) return inCallee;
+			for (const a of d.arguments) {
+				if (borrowedRoot(a, borrowed) != null) continue;
+				const inArg = borrowedAwaitableUse(a, borrowed);
+				if (inArg != null) return inArg;
+			}
+			return null;
+		}
+	}
+	if ((p.kind == NodeKind.Identifier || p.kind == NodeKind.MemberExpr || p.kind == NodeKind.ArrayAccess) && borrowedRoot(p, borrowed) != null) {
+		return reachesAwaitable(p.nodeType, []) ? p : null;
+	}
+	let found: Node | null = null;
+	forEachChild(p, (child: Node): void => { if (found == null) found = borrowedAwaitableUse(child, borrowed); });
+	return found;
+}
+
+function refuseBorrowedAwaitable(ctx: CheckerContext, fn: Node, at: Node): void {
+	const thunk = spawnedClosure(peelHidden(fn));
+	const views: Symbol[] = [];
+	const moved: Symbol[] = [];
+	collectBorrowCaptures(ctx, thunk, views, moved);
+	const borrowed = views.filter((v: Symbol): boolean => !moved.includes(v) && reachesAwaitable(v.symbolType, []));
+	if (borrowed.length == 0) return;
+	const use = borrowedAwaitableUse(routineParamsAndBody(thunk).body, borrowed);
+	if (use == null) return;
+	const name = describeExpr(use);
+	addError(ctx, `spawn's task uses '${name}', a promise it only borrows, other than by awaiting it; a promise is counted and settled on the thread that made it, and a borrowed view takes no count, so a task may only await it — await '${name}' in the task, or attach the callback outside the task`,
+		use.location.line, use.location.column);
 }
 
 function isIsolatedThunk(ctx: CheckerContext, thunk: Node): boolean {
@@ -646,81 +793,8 @@ function checkHandleFrame(f: HandleFrame, body: Node): void {
 	if (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program) refuseReturnedHandle(f, body);
 }
 
-	refuseBorrowedAwaitable(ctx, closure, spawnNode);
 function refuseReturnedHandle(f: HandleFrame, value: Node | null): void {
 	if (f.returnsLeave && carriesHandle(f, value)) refuseHandleEscape(f, value!, "returning it");
-}
-
-function reachesAwaitable(t: Type | null, seen: Type[]): boolean {
-	if (t == null || seen.includes(t)) return false;
-	if (isAwaitable(t)) return true;
-	if (!typeCarriesRef(t)) return false;
-	seen.push(t);
-	return match (t.kind) {
-		TypeKind.Alias | TypeKind.Ref | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Distinct
-			| TypeKind.Borrow | TypeKind.Lent | TypeKind.Sink | TypeKind.Var | TypeKind.Cursor => reachesAwaitable(t.typeReturn, seen),
-		TypeKind.Union | TypeKind.Tuple | TypeKind.Struct | TypeKind.GenericInstance | TypeKind.Varargs => {
-			for (const c of t.typeChildren) { if (reachesAwaitable(c, seen)) return true; }
-			return false;
-		},
-		_ => false,
-	};
-}
-
-function borrowedRoot(n: Node, borrowed: Symbol[]): Symbol | null {
-	let cur = peelView(n);
-	while (cur.kind == NodeKind.MemberExpr || cur.kind == NodeKind.ArrayAccess) {
-		cur = peelView(cur.kind == NodeKind.MemberExpr ? (cur.data as MemberExprData).object : (cur.data as ArrayAccessData).array);
-	}
-	const sym = cur.kind == NodeKind.Identifier ? cur.resolvedSym : null;
-	return sym != null && borrowed.includes(sym) ? sym : null;
-}
-
-function borrowedAwaitableUse(node: Node | null, borrowed: Symbol[]): Node | null {
-	if (node == null) return null;
-	const p = peelView(node);
-	if (p.kind == NodeKind.AwaitExpr) {
-		const arg = peelView((p.data as AwaitExprData).awaitArg);
-		if (borrowedRoot(arg, borrowed) != null && isAwaitable(arg.nodeType)) return null;
-	}
-	if (p.kind == NodeKind.CallExpr) {
-		const d = p.data as CallExprData;
-		const callee = peelView(d.callee);
-		if (callee.kind == NodeKind.MemberExpr) {
-			const receiver = (callee.data as MemberExprData).object;
-			if (borrowedRoot(receiver, borrowed) != null && reachesAwaitable(receiver.nodeType, [])) return receiver;
-		}
-		if (!keepsArgumentsInFrame(p)) {
-			const inCallee = borrowedAwaitableUse(d.callee, borrowed);
-			if (inCallee != null) return inCallee;
-			for (const a of d.arguments) {
-				if (borrowedRoot(a, borrowed) != null) continue;
-				const inArg = borrowedAwaitableUse(a, borrowed);
-				if (inArg != null) return inArg;
-			}
-			return null;
-		}
-	}
-	if ((p.kind == NodeKind.Identifier || p.kind == NodeKind.MemberExpr || p.kind == NodeKind.ArrayAccess) && borrowedRoot(p, borrowed) != null) {
-		return reachesAwaitable(p.nodeType, []) ? p : null;
-	}
-	let found: Node | null = null;
-	forEachChild(p, (child: Node): void => { if (found == null) found = borrowedAwaitableUse(child, borrowed); });
-	return found;
-}
-
-function refuseBorrowedAwaitable(ctx: CheckerContext, fn: Node, at: Node): void {
-	const thunk = spawnedClosure(peelHidden(fn));
-	const views: Symbol[] = [];
-	const moved: Symbol[] = [];
-	collectBorrowCaptures(ctx, thunk, views, moved);
-	const borrowed = views.filter((v: Symbol): boolean => !moved.includes(v) && reachesAwaitable(v.symbolType, []));
-	if (borrowed.length == 0) return;
-	const use = borrowedAwaitableUse(routineParamsAndBody(thunk).body, borrowed);
-	if (use == null) return;
-	const name = describeExpr(use);
-	addError(ctx, `spawn's task uses '${name}', a promise it only borrows, other than by awaiting it; a promise is counted and settled on the thread that made it, and a borrowed view takes no count, so a task may only await it — await '${name}' in the task, or attach the callback outside the task`,
-		use.location.line, use.location.column);
 }
 
 function isNestedRoutine(n: Node): boolean {
