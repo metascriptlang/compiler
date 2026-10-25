@@ -1,8 +1,9 @@
 // Actor sendability + this-write isolation rules.
 
-import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, ThrowStmtData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
+import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, ThrowStmtData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { CheckerContext, addError, addWarning, isOutsideResolvedStd } from "./context";
+import { CheckerContext, addError, addWarning, dispatchEntryFor, dispatchOverridesFor, isOutsideResolvedStd } from "./context";
+import { isAsyncFunctionNode } from "./freestanding";
 import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, routineEffect, walkEffect, walkWithViews } from "./effects";
 import { constBindingInitializer } from "./constFold";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
@@ -541,6 +542,10 @@ interface HandleFrame {
 	holders: Symbol[];
 	binds: HandleFlow[];
 	stores: HandleFlow[];
+	via: Node | null;
+	viaName: string;
+	trail: Node[];
+	awaited: Node[];
 }
 
 interface HandleFlow {
@@ -550,7 +555,7 @@ interface HandleFlow {
 }
 
 export function refuseBorrowingHandleEscapes(ctx: CheckerContext, body: Node): void {
-	checkHandleFrame({ ctx, ownSpawns: true, returnsLeave: true, locals: [], holders: [], binds: [], stores: [] }, body);
+	checkHandleFrame({ ctx, ownSpawns: true, returnsLeave: true, locals: [], holders: [], binds: [], stores: [], via: null, viaName: "", trail: [], awaited: [] }, body);
 }
 
 function checkHandleFrame(f: HandleFrame, body: Node): void {
@@ -563,7 +568,7 @@ function checkHandleFrame(f: HandleFrame, body: Node): void {
 }
 
 function refuseReturnedHandle(f: HandleFrame, value: Node | null): void {
-	if (f.returnsLeave && carriesHandle(f, value)) refuseHandleEscape(f.ctx, value!, "returning it");
+	if (f.returnsLeave && carriesHandle(f, value)) refuseHandleEscape(f, value!, "returning it");
 }
 
 function isNestedRoutine(n: Node): boolean {
@@ -800,31 +805,73 @@ function capturedHolder(f: HandleFrame, n: Node | null): Node | null {
 	return found;
 }
 
-function refuseHandleEscape(ctx: CheckerContext, at: Node, how: string): void {
-	addError(ctx, `a spawn whose task borrows from this scope is joined when the scope exits, so its handle stays here: ${how} would let the handle outlive that join; await it in this scope, or let the task capture only copies, moved values, Arc<T> or Locked<T> so its handle is an ordinary promise`,
-		at.location.line, at.location.column);
+function refuseHandleEscape(f: HandleFrame, at: Node, how: string): void {
+	const site = f.via ?? at;
+	const inside = f.via == null ? "" : ` (in '${f.viaName}' at ${at.location.line}:${at.location.column}, which was lent the handle)`;
+	addError(f.ctx, `a spawn whose task borrows from this scope is joined when the scope exits, so its handle stays here: ${how} would let the handle outlive that join${inside}; await it in this scope, or let the task capture only copies, moved values, Arc<T> or Locked<T> so its handle is an ordinary promise`,
+		site.location.line, site.location.column);
 }
 
 function refuseUnlessKept(f: HandleFrame, left: Node, value: Node): void {
 	const target = peelView(left);
 	if (target.kind == NodeKind.Identifier && target.resolvedSym != null && f.locals.includes(target.resolvedSym!)) return;
 	const into = elementWriteRoot(target);
-	if (into == null || !f.locals.includes(into)) refuseHandleEscape(f.ctx, value, "storing it in '" + describeExpr(left) + "'");
-	else if (!ownsContainer(f, into, [])) refuseHandleEscape(f.ctx, value, "storing it in '" + describeExpr(left) + "', an array this scope did not create,");
+	if (into == null || !f.locals.includes(into)) refuseHandleEscape(f, value, "storing it in '" + describeExpr(left) + "'");
+	else if (!ownsContainer(f, into, [])) refuseHandleEscape(f, value, "storing it in '" + describeExpr(left) + "', an array this scope did not create,");
 }
 
 function checkHandleArguments(f: HandleFrame, call: Node): void {
 	if (keepsArgumentsInFrame(call)) return;
 	const d = call.data as CallExprData;
 	const into = arrayReceiver(call);
-	for (const a of d.arguments) {
+	for (let i = 0; i < d.arguments.length; i += 1) {
+		const a = d.arguments[i];
 		if (!carriesHandle(f, a)) continue;
-		if (into == null || !f.locals.includes(into)) refuseHandleEscape(f.ctx, a, "passing it to '" + describeExpr(d.callee) + "'");
-		else if (!ownsContainer(f, into, [])) refuseHandleEscape(f.ctx, a, "passing it to '" + describeExpr(d.callee) + "', an array this scope did not create,");
+		if (into == null || !f.locals.includes(into)) {
+			const unlent = lendRefusal(f, call, i);
+			if (unlent != null) refuseHandleEscape(f, a, "passing it to '" + describeExpr(d.callee) + "'" + unlent);
+		} else if (!ownsContainer(f, into, [])) refuseHandleEscape(f, a, "passing it to '" + describeExpr(d.callee) + "', an array this scope did not create,");
 	}
 	const callee = peelView(d.callee);
 	if (callee.kind != NodeKind.MemberExpr || !carriesHandle(f, (callee.data as MemberExprData).object)) return;
 	for (const a of d.arguments) checkHandleCallback(f, a);
+}
+
+function lendTargets(call: Node): Symbol[] {
+	const sym = call.resolvedSym ?? peelView((call.data as CallExprData).callee).resolvedSym;
+	if (sym == null) return [];
+	const targets: Symbol[] = [sym!];
+	const entry = dispatchEntryFor(sym!);
+	if (entry != null && !entry.overloaded) {
+		for (const o of dispatchOverridesFor(entry.classSym, entry.methodName)) targets.push(o.sym);
+	}
+	return targets;
+}
+
+function lendRefusal(f: HandleFrame, call: Node, i: int32): string | null {
+	const routines: Node[] = [];
+	for (const t of lendTargets(call)) {
+		const r = routineParts(t);
+		if (r == null || r.paramSyms == null) return "";
+		routines.push(r);
+	}
+	if (routines.length == 0) return "";
+	for (const r of routines) {
+		if (firstArgParam(r) + i >= r.paramSyms!.length) return "";
+		const formal = r.paramSyms![firstArgParam(r) + i];
+		if (!isReadonlyView(formal.symbolType)) return `, whose parameter '${formal.name}' is not Readonly<...>: declare it Readonly<...> to lend the handle for the call,`;
+		if (routineBody(r) == null) return ", which has no body to check,";
+		if (isAsyncFunctionNode(r) && !f.awaited.includes(call)) return ", an async function whose call is not awaited in place,";
+	}
+	for (const r of routines) checkLentBody(f, call, r, r.paramSyms![firstArgParam(r) + i]);
+	return null;
+}
+
+function checkLentBody(f: HandleFrame, call: Node, routine: Node, formal: Symbol): void {
+	if (f.trail.includes(routine)) return;
+	const name = describeExpr((call.data as CallExprData).callee);
+	const g: HandleFrame = { ctx: f.ctx, ownSpawns: false, returnsLeave: true, locals: [], holders: [formal], binds: [], stores: [], via: f.via ?? call, viaName: f.via == null ? name : f.viaName, trail: f.trail.concat([routine]), awaited: [] };
+	checkHandleFrame(g, routineBody(routine)!);
 }
 
 function checkHandleCallback(f: HandleFrame, arg: Node): void {
@@ -832,7 +879,7 @@ function checkHandleCallback(f: HandleFrame, arg: Node): void {
 	if (p.kind == NodeKind.ArrowFunction || p.kind == NodeKind.FunctionExpr) {
 		const body = routineParamsAndBody(p).body;
 		if (body == null) return;
-		const g: HandleFrame = { ctx: f.ctx, ownSpawns: false, returnsLeave: false, locals: [], holders: [], binds: [], stores: [] };
+		const g: HandleFrame = { ctx: f.ctx, ownSpawns: false, returnsLeave: false, locals: [], holders: [], binds: [], stores: [], via: f.via, viaName: f.viaName, trail: f.trail, awaited: [] };
 		if (p.paramSyms != null) {
 			for (const s of p.paramSyms!) { if (holdsAwaitable(s.symbolType, [])) g.holders.push(s); }
 		}
@@ -843,7 +890,7 @@ function checkHandleCallback(f: HandleFrame, arg: Node): void {
 	if (t == null || t.kind != TypeKind.Function) return;
 	for (const c of t.typeChildren) {
 		if (holdsAwaitable(c, [])) {
-			refuseHandleEscape(f.ctx, arg, "passing it to '" + describeExpr(arg) + "'");
+			refuseHandleEscape(f, arg, "passing it to '" + describeExpr(arg) + "'");
 			return;
 		}
 	}
@@ -853,36 +900,37 @@ function walkHandleUses(f: HandleFrame, node: Node | null): void {
 	if (node == null) return;
 	if (isNestedRoutine(node)) {
 		const held = capturedHolder(f, node);
-		if (held != null) refuseHandleEscape(f.ctx, held, "capturing it in a closure");
+		if (held != null) refuseHandleEscape(f, held, "capturing it in a closure");
 		return;
 	}
 	match (node.kind) {
 		NodeKind.VariableDecl => {
 			const init = (node.data as VariableDeclData).initializer;
-			if (node.resolvedSym != null && !f.locals.includes(node.resolvedSym!) && carriesHandle(f, init)) refuseHandleEscape(f.ctx, init!, "storing it in '" + (node.data as VariableDeclData).declName + "'");
+			if (node.resolvedSym != null && !f.locals.includes(node.resolvedSym!) && carriesHandle(f, init)) refuseHandleEscape(f, init!, "storing it in '" + (node.data as VariableDeclData).declName + "'");
 		},
 		NodeKind.ReturnStmt => refuseReturnedHandle(f, (node.data as ReturnStmtData).argument),
 		NodeKind.YieldExpr => {
 			const arg = (node.data as YieldExprData).yieldArg;
-			if (carriesHandle(f, arg)) refuseHandleEscape(f.ctx, arg, "yielding it");
+			if (carriesHandle(f, arg)) refuseHandleEscape(f, arg, "yielding it");
 		},
 		NodeKind.ThrowStmt => {
 			const arg = (node.data as ThrowStmtData).throwArg;
-			if (carriesHandle(f, arg)) refuseHandleEscape(f.ctx, arg, "throwing it");
+			if (carriesHandle(f, arg)) refuseHandleEscape(f, arg, "throwing it");
 		},
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
 			if (isAssignOp(d.operator) && carriesHandle(f, d.right)) refuseUnlessKept(f, d.left, d.right);
 		},
 		NodeKind.CallExpr => checkHandleArguments(f, node),
+		NodeKind.AwaitExpr => { f.awaited.push(peelView((node.data as AwaitExprData).awaitArg)); },
 		NodeKind.NewExpr => {
 			for (const a of (node.data as NewExprData).newArguments) {
-				if (carriesHandle(f, a)) refuseHandleEscape(f.ctx, a, "passing it to a constructor");
+				if (carriesHandle(f, a)) refuseHandleEscape(f, a, "passing it to a constructor");
 			}
 		},
 		NodeKind.ObjectLiteral => {
 			for (const p of (node.data as ObjectLiteralData).properties) {
-				if (carriesHandle(f, p)) refuseHandleEscape(f.ctx, p, "storing it in an object");
+				if (carriesHandle(f, p)) refuseHandleEscape(f, p, "storing it in an object");
 			}
 		},
 		_ => {},
