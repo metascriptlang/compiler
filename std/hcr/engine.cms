@@ -1,7 +1,7 @@
 import { exit } from "../process";
 import { writeStderr } from "../io";
 import { ReloadKind, ReloadResult } from "./types";
-import { fileSize, readDir, removeAll } from "../fs";
+import { appendFile, fileSize, readDir, removeAll } from "../fs";
 
 @include("runtime/hcrEngine.h");
 
@@ -113,6 +113,39 @@ const discovering: string[] = [];
 
 function result(kind: ReloadKind, names: string[], reason: string): ReloadResult {
 	return { kind, modules: names, reason, generations: retainedGenerations, retainedBytes: retainedBytes };
+}
+
+function verdictPath(): string {
+	return `${launchDir}/${launchStem}.reload.jsonl`;
+}
+
+function jsonText(s: string): string {
+	let out = "\"";
+	for (let i: int32 = 0; i < s.byteLength; i += 1) {
+		const b = s.byteAt(i);
+		if (b == "\\".code || b == "\"".code) out = out + "\\" + s.byteSlice(i, i + 1);
+		else if (b < 32) out = out + "\\u" + b.toString(16).padStart(4, "0");
+		else out = out + s.byteSlice(i, i + 1);
+	}
+	return out + "\"";
+}
+
+function verdictKey(kind: ReloadKind): string {
+	return match (kind) {
+		ReloadKind.NoChange => "noChange",
+		ReloadKind.Reloaded => "reloaded",
+		ReloadKind.Pending => "pending",
+		ReloadKind.Rejected => "rejected",
+		ReloadKind.RestartRequired => "restartRequired",
+		ReloadKind.RolledBack => "rolledBack",
+	};
+}
+
+function publishVerdict(outcome: ReloadResult): void {
+	if (outcome.kind == ReloadKind.NoChange) return;
+	const names: string[] = [];
+	for (const name of outcome.modules) names.push(jsonText(name));
+	appendFile(verdictPath(), `{"kind":"${verdictKey(outcome.kind)}","modules":[${names.join(",")}],"reason":${jsonText(outcome.reason)}}\n`);
 }
 
 function corePath(): string {
@@ -461,6 +494,7 @@ function layoutRefusal(changes: TypeChange[], refused: string[]): string {
 
 export function engineReload(): ReloadKind {
 	last = performReload();
+	publishVerdict(last);
 	return last.kind;
 }
 
@@ -468,6 +502,7 @@ export function engineStep(body: () => void): ReloadKind {
 	const kind = engineReload();
 	if (msHcrGuardRun(body) == 0) return kind;
 	last = revertAfterCrash(msHcrGuardText());
+	publishVerdict(last);
 	return last.kind;
 }
 

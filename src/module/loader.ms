@@ -652,7 +652,7 @@ test "a C header imported by two modules under two spellings is one module" {
 
 test "a header two includers read differently is an error" {
 	ensureDir("/tmp/msshape");
-	writeFile("/tmp/msshape/cfg.h", "#ifndef CFG_H\n#define CFG_H\n#ifdef WIDE\ntypedef long N;\n#else\ntypedef int N;\n#endif\n#endif\n");
+	writeFile("/tmp/msshape/cfg.h", "#ifndef CFG_H\n#define CFG_H\n#ifdef WIDE\ntypedef long long N;\n#else\ntypedef int N;\n#endif\n#endif\n");
 	writeFile("/tmp/msshape/wide.h", "#define WIDE\n#include \"cfg.h\"\nN wide(void);\n");
 	writeFile("/tmp/msshape/main.ms", "import { N } from " + "\"./cfg.h\";\nimport { wide } from \"./wide.h\";\n");
 	const dir = canonicalModulePath("/tmp/msshape");

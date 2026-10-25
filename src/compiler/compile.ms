@@ -2,7 +2,10 @@
 
 import { exit, exec, execFile, execFileCapture, findOnPath, argv, platform, cwd, env, ProcessError } from "std/process";
 import { watch, nextChanges, msIoRunOnce, writeSettled, writerCloseObservable, FsWatch, FsChanges } from "std/fs/watch";
-import { exists, readFile, writeFile, remove } from "std/fs";
+import { exists, readFile, writeFile, appendFile, remove } from "std/fs";
+import { parseJson } from "std/serialize/json/parser";
+import { getDynamicField, jsonToStringArray } from "std/serialize/json/accessors";
+import { asString } from "std/serialize/json/types";
 import { writeStderr, writeStdout, readLine, stdinHasData, stdinDisableBuffering } from "std/io";
 import { spawn as spawnChild, ChildProcess, ChildStream, ExitStatus } from "std/process/child";
 import { ProcessErrorKind } from "std/process/errors";
@@ -19,6 +22,7 @@ import { WriteSummaries, contractClaims, createRoutineDecls, createWriteSummarie
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait, bundleModuleEvaluator, JsModuleResult } from "../codegen/js/jsgen";
 import { SourceInfo, createSourceInfo, appendInfo, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
+import { stringify, jsonString } from "std/core/json";
 import { createJSHelpers, escapeJSString, JsTreeLayout, createJsTreeLayout, relSpecBetween } from "../codegen/js/emit";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { takeRaiserCompileErrors } from "../codegen/raiser/context";
@@ -231,6 +235,73 @@ function printDiag(line: string): void {
 	writeStderr(line + "\n");
 }
 
+let eventsPath = "";
+let eventDiagnostics: string[] = [];
+
+function jsonText(s: string): string {
+	return stringify(jsonString(s));
+}
+
+function jsonTexts(values: string[]): string {
+	const items: string[] = [];
+	for (const value of values) items.push(jsonText(value));
+	return `[${items.join(",")}]`;
+}
+
+function diagnosticJson(file: string, line: int32, column: int32, severity: string, message: string): string {
+	return `{"file":${jsonText(file)},"line":${line},"col":${column},"severity":"${severity}","message":${jsonText(message)}}`;
+}
+
+function appendEvent(path: string, name: string, commaFields: string): boolean {
+	if (path == "") return true;
+	const line = `{"v":1,"t":${Math.floor(Date.now()) as int64},"event":"${name}"${commaFields}}\n`;
+	if (path == "-") {
+		writeStdout(line);
+		return true;
+	}
+	return appendFile(path, line).ok;
+}
+
+function emitEventTo(path: string, name: string, commaFields: string): void {
+	if (appendEvent(path, name, commaFields)) return;
+	printError(`cannot write the event to '${path}'`);
+	exit(1);
+}
+
+function emitEvent(name: string, commaFields: string): void {
+	emitEventTo(eventsPath, name, commaFields);
+}
+
+function plainText(s: string): string {
+	let out = "";
+	let i: int32 = 0;
+	while (i < s.byteLength) {
+		if (s.byteAt(i) == 27 && i + 1 < s.byteLength && s.byteAt(i + 1) == "[".code) {
+			i += 2;
+			while (i < s.byteLength && s.byteAt(i) != "m".code) i += 1;
+			i += 1;
+		} else {
+			out = out + s.byteSlice(i, i + 1);
+			i += 1;
+		}
+	}
+	return out;
+}
+
+function recordError(message: string): void {
+	if (eventsPath != "") eventDiagnostics.push(diagnosticJson("", 0, 0, "error", plainText(message)));
+}
+
+function printError(message: string): void {
+	recordError(message);
+	printDiag(`${error("error")}: ${message}`);
+}
+
+function printErrorOut(message: string): void {
+	recordError(message);
+	console.log(`${error("error")}: ${message}`);
+}
+
 let _diagnosticHook: ((file: string, e: ModuleError) => void) | null = null;
 
 export function setDiagnosticHook(hook: ((file: string, e: ModuleError) => void) | null): void {
@@ -239,6 +310,7 @@ export function setDiagnosticHook(hook: ((file: string, e: ModuleError) => void)
 
 // Render a single structured error in Rust-style format
 function renderModuleError(modPath: string, source: string, e: ModuleError): void {
+	if (eventsPath != "") eventDiagnostics.push(diagnosticJson(modPath, e.line, e.column, e.severity == ErrorSeverity.Warning ? "warning" : "error", e.message));
 	const hook = _diagnosticHook;
 	if (hook != null) {
 		hook(modPath, e);
@@ -471,7 +543,7 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 		}
 	}
 	if (graphErrors > 0) {
-		if (_diagnosticHook == null) printDiag(`${error("error")}: ${graphErrors} type error(s) found, stopping before codegen`);
+		if (_diagnosticHook == null) printError(`${graphErrors} type error(s) found, stopping before codegen`);
 		stopBuild();
 	}
 	markTypeOnlyImports(graph, config.stdPath);
@@ -924,7 +996,7 @@ interface CBuildState {
 function flagArgsOrExit(flags: string): string[] {
 	const parsed = splitCcFlags(flags);
 	if (parsed.ok) return parsed.value;
-	printDiag(`${error("error")}: ${parsed.error}`);
+	printError(`${parsed.error}`);
 	stopBuild();
 	return [];
 }
@@ -1130,7 +1202,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 				}
 				fullPath = normalize(fullPath);
 				if (!exists(fullPath)) {
-					printDiag(`${error("error")}: @compile cannot find: ${fullPath}`);
+					printError(`@compile cannot find: ${fullPath}`);
 					stopBuild();
 				}
 				// Mark C++ at directive-resolution time (main thread, sequential)
@@ -1218,7 +1290,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 		const code = exitCodes[ci];
 		if (code != 0) {
 
-			printDiag(`${error("error")}: @compile failed for ${j.fullPath} ${dim(`(exit ${code})`)}`);
+			printError(`@compile failed for ${j.fullPath} ${dim(`(exit ${code})`)}`);
 			stopBuild();
 		}
 		const compileCmd = fullCompileCmd(ccOption, mode, j.fileFlags, ccBinary, isCppFile(j.fullPath));
@@ -1229,7 +1301,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 			publishToStore(j.storeKey, published.value, j.dependencyFile, j.fullPath, dirs, [dirname(j.fullPath)]);
 			oFiles[j.slot] = published.value;
 		} else {
-			printDiag(`${error("error")}: @compile ${j.fullPath}: ${published.error}`);
+			printError(`@compile ${j.fullPath}: ${published.error}`);
 			stopBuild();
 		}
 		ci = ci + 1;
@@ -1926,6 +1998,7 @@ function linkHcrImage(objects: string[], externalInputs: string[], image: string
 	}
 	const linked = linkObjects(objects, image, flags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.targetOs);
 	if (!linked.ok) {
+		recordError(`link failed for HCR image ${image} (exit ${linked.error.exitCode})`);
 		console.log(`${error("error")}: link failed for HCR image ${image} ${dim(`(exit ${linked.error.exitCode})`)}`);
 		if (linked.error.errorOutput != "") console.log(linked.error.errorOutput);
 		throw new Error(BUILD_STOPPED);
@@ -1974,7 +2047,7 @@ function linkHcrImages(
 		coreFlags = appendFlag(coreFlags, quoteCcArg(`-Wl,-install_name,@rpath/${basename(core)}`));
 		imageFlags = appendFlag(imageFlags, "-Wl,-rpath,@loader_path");
 	} else {
-		console.log(`${error("error")}: --hcr has no per-module image adapter for target '${opts.targetOs}'`);
+		printErrorOut(`--hcr has no per-module image adapter for target '${opts.targetOs}'`);
 		throw new Error(BUILD_STOPPED);
 	}
 
@@ -1992,12 +2065,12 @@ function linkHcrImages(
 	for (let i = 0; i < hcrModulePaths.length; i += 1) {
 		const moduleId = hcrModules[i].moduleId;
 		if (moduleId == "core") {
-			console.log(`${error("error")}: HCR module id 'core' collides with the core image name; rename the module`);
+			printErrorOut(`HCR module id 'core' collides with the core image name; rename the module`);
 			throw new Error(BUILD_STOPPED);
 		}
 		const j = jobPaths.indexOf(hcrModulePaths[i]);
 		if (j < 0) {
-			console.log(`${error("error")}: internal: HCR module '${hcrModulePaths[i]}' was not emitted`);
+			printErrorOut(`internal: HCR module '${hcrModulePaths[i]}' was not emitted`);
 			throw new Error(BUILD_STOPPED);
 		}
 		const objects: string[] = [];
@@ -2074,7 +2147,7 @@ function refuseCoreCallsIntoImageOps(unit: ProcessedModule, imagePaths: string[]
 		if (users == null) continue;
 		for (const user of users) {
 			if (imagePaths.includes(user)) continue;
-			printDiag(`${error("error")}: internal: HCR core module '${user}' calls '${op.name}', which module '${unit.modPath}' generates in its reloadable image`);
+			printError(`internal: HCR core module '${user}' calls '${op.name}', which module '${unit.modPath}' generates in its reloadable image`);
 			throw new Error(BUILD_STOPPED);
 		}
 	}
@@ -2095,7 +2168,7 @@ function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[]
 		for (const name of module.typeInfos) {
 			const claimed = facts.hcrTypeInfoOwners.readonlyGet(name);
 			if (claimed != null && claimed != module.moduleId) {
-				printDiag(`${error("error")}: internal: HCR TypeInfo '${name}' is owned by both '${claimed}' and '${module.moduleId}'`);
+				printError(`internal: HCR TypeInfo '${name}' is owned by both '${claimed}' and '${module.moduleId}'`);
 				throw new Error(BUILD_STOPPED);
 			}
 			facts.hcrTypeInfoOwners.set(name, module.moduleId);
@@ -2201,15 +2274,17 @@ function publishHcrBuildAbi(state: HcrBuildAbi, changedPaths: string[]): void {
 
 	const encoded = serializeHcrAbiBundle(state.candidate);
 	if (!encoded.ok) {
-		printDiag(`${error("error")}: cannot serialize HCR ABI bundle: ${encoded.error}`);
+		printError(`cannot serialize HCR ABI bundle: ${encoded.error}`);
 		throw new Error(BUILD_STOPPED);
 	}
 	if (!atomicWriteFile(state.bundlePath, encoded.value)) {
-		printDiag(`${error("error")}: cannot publish HCR ABI bundle '${state.bundlePath}'`);
+		printError(`cannot publish HCR ABI bundle '${state.bundlePath}'`);
 		throw new Error(BUILD_STOPPED);
 	}
 	for (const decision of decisions) {
 		console.log(hcrReloadDiagnostic(decision));
+		const kind = decision.kind == HcrReloadKind.RestartRequired ? "restartRequired" : "pending";
+		emitEvent("reload", `,"source":"build","kind":"${kind}","modules":${jsonTexts([decision.subject])},"reason":${jsonText(hcrReloadDiagnostic(decision))}`);
 		if (decision.kind == HcrReloadKind.RestartRequired) hcrRestartReason = hcrReloadDiagnostic(decision);
 	}
 	printDiag(`${green("  Wrote")} ${bold(state.bundlePath)}`);
@@ -2227,11 +2302,11 @@ export function cmdBuildC(entryPath: string, opts: CliOptions, resolveSection: R
 	try {
 		status = buildC(entryPath, opts, resolveSection, session);
 	} catch (e) {
-		if (e.message != BUILD_STOPPED) printDiag(`${error("error")}: internal: the build threw '${e.message}'`);
+		if (e.message != BUILD_STOPPED) printError(`internal: the build threw '${e.message}'`);
 		exit(1);
 	}
 	if (status == BuildStatus.Stale) {
-		printDiag(`${error("error")}: internal: a fresh build session reported stale state (${session.staleReason})`);
+		printError(`internal: a fresh build session reported stale state (${session.staleReason})`);
 		exit(1);
 	}
 }
@@ -2246,6 +2321,7 @@ interface WatchFeed {
 	armed: boolean[];
 	batches: FsChanges[];
 	batchRoots: string[];
+	changed: string[];
 }
 
 function pumpFeed(feed: WatchFeed, timeoutMs: int32): void {
@@ -2343,6 +2419,7 @@ function waitForSourceChange(feed: WatchFeed, stopped: () => boolean): boolean {
 			absorbBatches(feed, pending);
 			if (pending.ended) return false;
 		}
+		feed.changed = pending.shown;
 		return true;
 	}
 }
@@ -2350,7 +2427,7 @@ function waitForSourceChange(feed: WatchFeed, stopped: () => boolean): boolean {
 function readReplay(path: string): string[][] {
 	const text = readFile(path);
 	if (!text.ok) {
-		printDiag(`${error("error")}: cannot read --watch-replay file '${path}'`);
+		printError(`cannot read --watch-replay file '${path}'`);
 		exit(1);
 	}
 	const steps: string[][] = [];
@@ -2359,7 +2436,7 @@ function readReplay(path: string): string[][] {
 		if (line == "") continue;
 		const parts = line.split(" ");
 		if (parts.length != 2) {
-			printDiag(`${error("error")}: --watch-replay line '${line}' must be '<source> <target>'`);
+			printError(`--watch-replay line '${line}' must be '<source> <target>'`);
 			exit(1);
 		}
 		steps.push(parts);
@@ -2370,7 +2447,7 @@ function readReplay(path: string): string[][] {
 function copyForReplay(from: string, to: string): void {
 	const text = readFile(from);
 	if (!text.ok || !writeFile(to, text.value).ok) {
-		printDiag(`${error("error")}: --watch-replay cannot copy '${from}' to '${to}'`);
+		printError(`--watch-replay cannot copy '${from}' to '${to}'`);
 		exit(1);
 	}
 }
@@ -2383,11 +2460,12 @@ interface WatchRun {
 	feed: WatchFeed | null;
 	replay: string[][];
 	step: int32;
+	changed: string[];
 }
 
 function openWatch(entryPath: string, opts: CliOptions, resolveSection: ResolveSection): WatchRun {
 	if (!opts.isHcr) {
-		printDiag(`${error("error")}: --watch needs --hcr: warm rebuilds are verified against cold builds only for HCR module images`);
+		printError(`--watch needs --hcr: warm rebuilds are verified against cold builds only for HCR module images`);
 		exit(1);
 	}
 	const replay: string[][] = opts.watchReplay != "" ? readReplay(opts.watchReplay) : [];
@@ -2398,11 +2476,11 @@ function openWatch(entryPath: string, opts: CliOptions, resolveSection: ResolveS
 		for (const depRoot of fileDepRoots(root).values) {
 			if (!isUnder(depRoot, root)) roots.push(depRoot);
 		}
-		const opened: WatchFeed = { watchers: [], armed: [], batches: [], batchRoots: [] };
+		const opened: WatchFeed = { watchers: [], armed: [], batches: [], batchRoots: [], changed: [] };
 		for (const dir of roots) {
 			const watcher = watch(dir, true);
 			if (!watcher.ok) {
-				printDiag(`${error("error")}: --watch cannot watch ${dir}: ${watcher.error.message}`);
+				printError(`--watch cannot watch ${dir}: ${watcher.error.message}`);
 				exit(1);
 			}
 			opened.watchers.push(watcher.value);
@@ -2412,13 +2490,15 @@ function openWatch(entryPath: string, opts: CliOptions, resolveSection: ResolveS
 		feed = opened;
 	}
 	setRecoverableBuild(true);
-	return { entryPath, opts, resolveSection, session: createBuildSession(true), feed, replay, step: 0 };
+	return { entryPath, opts, resolveSection, session: createBuildSession(true), feed, replay, step: 0, changed: [] };
 }
 
 function watchBuild(run: WatchRun): boolean {
 	const opts = run.opts;
 	if (opts.emitC) opts.emitSubdir = `watch${run.step}`;
 	const t0 = performance.now();
+	eventDiagnostics = [];
+	emitEvent("build.start", `,"build":${run.step},"changed":${jsonTexts(run.changed)}`);
 	let status = BuildStatus.Built;
 	let stopped = false;
 	let internal = "";
@@ -2442,12 +2522,15 @@ function watchBuild(run: WatchRun): boolean {
 	}
 	if (stopped) label = "failed";
 	if (internal != "") {
-		printDiag(`${error("error")}: internal: the build threw '${internal}'`);
+		printError(`internal: the build threw '${internal}'`);
 		run.session = createBuildSession(true);
 		label = "failed";
 	}
 	const session = run.session;
-	console.log(`watch: build ${run.step} ${label} in ${Math.round(performance.now() - t0)} ms (checked ${session.check.rechecked.size}/${session.moduleCount}, lowered ${session.loweredCount})`);
+	const elapsed = Math.round(performance.now() - t0);
+	console.log(`watch: build ${run.step} ${label} in ${elapsed} ms (checked ${session.check.rechecked.size}/${session.moduleCount}, lowered ${session.loweredCount})`);
+	if (label == "failed") emitEvent("build.failed", `,"build":${run.step},"ms":${elapsed},"diagnostics":[${eventDiagnostics.join(",")}]`);
+	else emitEvent("build.done", `,"build":${run.step},"ms":${elapsed},"checked":${session.check.rechecked.size},"lowered":${session.loweredCount}`);
 	run.step = run.step + 1;
 	return label != "failed";
 }
@@ -2456,9 +2539,12 @@ function watchNext(run: WatchRun, stopped: () => boolean): boolean {
 	if (run.feed == null) {
 		if (run.step > run.replay.length) return false;
 		copyForReplay(run.replay[run.step - 1][0], run.replay[run.step - 1][1]);
+		run.changed = [run.replay[run.step - 1][1]];
 		return true;
 	}
-	return waitForSourceChange(run.feed!, stopped);
+	const changed = waitForSourceChange(run.feed!, stopped);
+	if (changed) run.changed = run.feed!.changed;
+	return changed;
 }
 
 export function cmdWatchC(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
@@ -2505,7 +2591,51 @@ function relayHostStream(child: ChildProcess, stream: ChildStream, timeoutMs: in
 	return 0;
 }
 
-function runHost(host: string, dir: string, stem: string, ctl: Locked<HostCtl>, errorLabel: string): int32 {
+interface VerdictTail {
+	path: string;
+	offset: int32;
+	line: int32;
+}
+
+function relayVerdict(tail: VerdictTail, text: string, events: string, errorLabel: string): boolean {
+	tail.line = tail.line + 1;
+	const parsed = parseJson(text);
+	if (!parsed.ok) {
+		printDiag(`${errorLabel}: internal: ${tail.path} line ${tail.line} is not JSON: ${parsed.error}`);
+		return false;
+	}
+	const kind = asString(getDynamicField(parsed.value, "kind"));
+	const reason = asString(getDynamicField(parsed.value, "reason"));
+	if (kind == "") {
+		printDiag(`${errorLabel}: internal: ${tail.path} line ${tail.line} has no reload kind`);
+		return false;
+	}
+	const modules = jsonToStringArray(getDynamicField(parsed.value, "modules"));
+	if (!appendEvent(events, "reload", `,"source":"runtime","kind":${jsonText(kind)},"modules":${jsonTexts(modules)},"reason":${jsonText(reason)}`)) {
+		printDiag(`${errorLabel}: cannot write the event to '${events}'`);
+		return false;
+	}
+	if (kind == "restartRequired") sayFlushed(`watch: ${reason}; press R to restart`);
+	return true;
+}
+
+function tailVerdicts(tail: VerdictTail, events: string, errorLabel: string): boolean {
+	const read = readFile(tail.path);
+	if (!read.ok) return true;
+	const all = read.value;
+	let start = tail.offset;
+	for (let i = start; i < all.byteLength; i += 1) {
+		if (all.byteAt(i) != 10) continue;
+		if (!relayVerdict(tail, all.byteSlice(start, i), events, errorLabel)) return false;
+		start = i + 1;
+	}
+	tail.offset = start;
+	return true;
+}
+
+function runHost(host: string, dir: string, stem: string, ctl: Locked<HostCtl>, errorLabel: string, events: string): int32 {
+	const tail: VerdictTail = { path: `${dir}/${stem}.reload.jsonl`, offset: 0, line: 0 };
+	remove(tail.path);
 	const started = spawnChild(host, [dir, stem]);
 	if (!started.ok) {
 		printDiag(`${errorLabel}: cannot start the HCR host ${host}: ${started.error.message}`);
@@ -2522,10 +2652,16 @@ function runHost(host: string, dir: string, stem: string, ctl: Locked<HostCtl>, 
 		const waited = child.wait(20);
 		relayHostStream(child, ChildStream.Stdout, 0);
 		relayHostStream(child, ChildStream.Stderr, 0);
+		if (!tailVerdicts(tail, events, errorLabel)) {
+			child.kill();
+			code = 1;
+			break;
+		}
 		if (waited.ok) {
 			code = hostStatusCode(waited.value);
 			while (relayHostStream(child, ChildStream.Stdout, HOST_DRAIN_MS) == 0) {}
 			while (relayHostStream(child, ChildStream.Stderr, HOST_DRAIN_MS) == 0) {}
+			if (!tailVerdicts(tail, events, errorLabel)) code = 1;
 			break;
 		}
 		if (waited.error.kind != ProcessErrorKind.Timeout) {
@@ -2543,7 +2679,7 @@ function buildHcrHost(dir: string): string {
 	const host = `${dir}/host${exeSuffix()}`;
 	const built = execFileCapture(resolveArgv0(argv[0]), ["build", source, `--output=${host}`]);
 	if (!built.ok) {
-		printDiag(`${error("error")}: cannot build the HCR host from ${source}`);
+		printError(`cannot build the HCR host from ${source}`);
 		printDiag(built.error.errorOutput != "" ? built.error.errorOutput : built.error.message);
 		exit(1);
 	}
@@ -2556,7 +2692,7 @@ function hcrHostMissesEngine(graph: ModuleGraph, stdPath: string): boolean {
 
 export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: ResolveSection = defaultResolveSection()): void {
 	if (opts.watchReplay != "") {
-		printDiag(`${error("error")}: msc run --hcr watches the sources itself; --watch-replay belongs to msc build`);
+		printError(`msc run --hcr watches the sources itself; --watch-replay belongs to msc build`);
 		exit(1);
 	}
 	const dir = "out/hcr";
@@ -2565,14 +2701,23 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 	opts.outputPath = `${dir}/${stem}${soSuffix()}`;
 	opts.hcrHost = true;
 	const host = buildHcrHost(dir);
+	const events = opts.eventsPath;
+	eventsPath = events;
+	if (events != "" && events != "-" && !writeFile(events, "").ok) {
+		printError(`cannot create the events file '${events}'`);
+		exit(1);
+	}
 	const run = openWatch(entryPath, opts, resolveSection);
 	while (!watchBuild(run)) {
-		if (!watchNext(run, (): boolean => false)) exit(1);
+		if (!watchNext(run, (): boolean => false)) {
+			emitEvent("exit", `,"code":1`);
+			exit(1);
+		}
 	}
 	stdinDisableBuffering();
 	const ctl: Locked<HostCtl> = new Locked({ stop: false, done: false, code: 0 });
 	const errorLabel = error("error");
-	let running = spawn((): int32 => runHost(host, dir, stem, ctl, errorLabel));
+	let running = spawn((): int32 => runHost(host, dir, stem, ctl, errorLabel, events));
 	warmHcrSession(opts);
 	const keys: string[] = [""];
 	const idle = (): boolean => {
@@ -2606,7 +2751,7 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 			await running;
 			sayFlushed("watch: restarting the program on the last build");
 			lockedUpdate(ctl, (v: HostCtl): HostCtl => { return { stop: false, done: false, code: 0 }; });
-			running = spawn((): int32 => runHost(host, dir, stem, ctl, errorLabel));
+			running = spawn((): int32 => runHost(host, dir, stem, ctl, errorLabel, events));
 		} else {
 			if (keys[0] == "q") sayFlushed("watch: quit");
 			lockedUpdate(ctl, (v: HostCtl): HostCtl => { return { stop: true, done: v.done, code: v.code }; });
@@ -2614,6 +2759,7 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 		}
 	}
 	const code = await running;
+	emitEvent("exit", `,"code":${code}`);
 	exit(code);
 }
 
@@ -2667,7 +2813,7 @@ function buildCPhases(entryPath: string, opts: CliOptions, resolveSection: Resol
 		if (opts.ccBinary == "") {
 			const sbfClang = resolveBpfClang();
 			if (sbfClang == "") {
-				printDiag(`${error("error")}: --os=solana requires a clang with the ${bold("sbf")} target registered`);
+				printError(`--os=solana requires a clang with the ${bold("sbf")} target registered`);
 				console.log(`  System clang carries ${bold("bpf")}/${bold("bpfel")} (Linux kernel BPF) — a different ABI, not this.`);
 				console.log(`  Install Anza platform-tools (${bold("cargo build-sbf")} fetches it to ~/.cache/solana),`);
 				console.log(`  or point at one: ${bold("MSC_SBF_CLANG=/path/to/platform-tools/llvm/bin/clang")}`);
@@ -2676,12 +2822,12 @@ function buildCPhases(entryPath: string, opts: CliOptions, resolveSection: Resol
 			opts.ccBinary = sbfClang;
 		}
 		if (resolveSbfLinker() == "") {
-			printDiag(`${error("error")}: --os=solana requires ${bold("ld.lld")} beside the SBF clang`);
+			printError(`--os=solana requires ${bold("ld.lld")} beside the SBF clang`);
 			console.log(`  Expected it in the same platform-tools ${bold("llvm/bin")} directory.`);
 			throw new Error(BUILD_STOPPED);
 		}
 		if (resolveSbfObjcopy() == "") {
-			printDiag(`${error("error")}: --os=solana requires ${bold("llvm-objcopy")} beside the SBF clang`);
+			printError(`--os=solana requires ${bold("llvm-objcopy")} beside the SBF clang`);
 			console.log(`  Expected it in the same platform-tools ${bold("llvm/bin")} directory.`);
 			throw new Error(BUILD_STOPPED);
 		}
@@ -2748,7 +2894,7 @@ resetLiftedOps();
 	if (opts.isHcr && !opts.emitC) {
 		const prepared = prepareHcrBuildAbi(graph, entryPath, outBinary, opts, allFlags0, config.stdPath);
 		if (!prepared.ok) {
-			printDiag(`${error("error")}: ${prepared.error}`);
+			printError(`${prepared.error}`);
 			throw new Error(BUILD_STOPPED);
 		}
 		hcrBuildAbi = prepared.value;
@@ -2760,12 +2906,12 @@ resetLiftedOps();
 			? Result.ok({ candidate: hcrBuildAbi.candidate, modulePaths: hcrBuildAbi.modulePaths })
 			: buildHcrCandidateAbi(graph, entryPath, opts, allFlags0, config.stdPath);
 		if (!abi.ok) {
-			printDiag(`${error("error")}: ${abi.error}`);
+			printError(`${abi.error}`);
 			throw new Error(BUILD_STOPPED);
 		}
 		const indirect = hcrIndirectModules(abi.value);
 		if (!indirect.ok) {
-			printDiag(`${error("error")}: ${indirect.error}`);
+			printError(`${indirect.error}`);
 			throw new Error(BUILD_STOPPED);
 		}
 		hcrModules = indirect.value;
@@ -2822,7 +2968,7 @@ resetLiftedOps();
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod == null) {
-			printDiag(`${error("error")}: internal: module '${modPath}' is in loadOrder but missing from the graph — its code will be skipped`);
+			printError(`internal: module '${modPath}' is in loadOrder but missing from the graph — its code will be skipped`);
 			continue;
 		}
 		// The graph-checker phase (loadAndCheckGraph → checkModuleGraph) already
@@ -2996,7 +3142,7 @@ resetLiftedOps();
 	// Gate: stop before codegen if any type errors (standard compiler parity).
 	// All three reference compilers NEVER proceed to codegen with type errors.
 	if (totalCheckerErrors > 0) {
-		printDiag(`${error("error")}: ${totalCheckerErrors} type error(s) found, stopping before codegen`);
+		printError(`${totalCheckerErrors} type error(s) found, stopping before codegen`);
 		throw new Error(BUILD_STOPPED);
 	}
 	if (opts.targetOs == "solana" && !isDefined(opts.defines, "testBuild")) {
@@ -3186,11 +3332,11 @@ resetLiftedOps();
 		if (!result.completed) continue;
 		const modPath = emissionJobs[eri].modPath;
 		if (result.failure != "") {
-			printDiag(`${error("error")}: ${modPath}: ${result.failure}`);
+			printError(`${modPath}: ${result.failure}`);
 			emissionFailed = true;
 		}
 		for (const diagnostic of result.output.errors) {
-			printDiag(`${error("error")}: ${modPath}: ${diagnostic.message}`);
+			printError(`${modPath}: ${diagnostic.message}`);
 			emissionFailed = true;
 		}
 	}
@@ -3361,7 +3507,7 @@ resetLiftedOps();
 		for (const mp of hcrModulePaths) {
 			const output = moduleOutputFor(moduleOutputs, mp);
 			if (output == null) {
-				console.log(`${error("error")}: internal: HCR module '${mp}' produced no C output`);
+				printErrorOut(`internal: HCR module '${mp}' produced no C output`);
 				throw new Error(BUILD_STOPPED);
 			}
 			pushDispatcherJob(cJobs, oSlots, `_hcrimage_${mangleModuleName(buildModuleNameRoots(), mp)}`, genHcrImageDispatcher(output, mp == entryPath, dynamicPlan.lazy.has(mp)), imageFlags, opts);
@@ -3403,11 +3549,11 @@ resetLiftedOps();
 			}
 			oSlots[cj.slot] = [published];
 		} else if (cj.modPath == "") {
-			printDiag(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${code})`)}`);
+			printError(`compile failed for dispatcher ${dim(`(exit ${code})`)}`);
 			throw new Error(BUILD_STOPPED);
 		} else {
 			invalidateCompileCache(cj.modPath, cj.fp);
-			printDiag(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
+			printError(`compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
 			moduleCompileFailed = true;
 		}
 		cji = cji + 1;
@@ -3480,7 +3626,7 @@ resetLiftedOps();
 	if (opts.appMode == "staticlib") {
 		const arRes = archiveStatic(oFiles, outBinary);
 		if (!arRes.ok) {
-			printDiag(`${error("error")}: ar failed ${dim(`(exit ${arRes.error.exitCode})`)}`);
+			printError(`ar failed ${dim(`(exit ${arRes.error.exitCode})`)}`);
 			if (arRes.error.errorOutput != "") printDiag(arRes.error.errorOutput);
 			throw new Error(BUILD_STOPPED);
 		}
@@ -3494,7 +3640,7 @@ resetLiftedOps();
 			const retryCodes = dispatchCompileJobs(retryJobs, opts.mode, opts.ccCompiler, opts.ccBinary, true);
 			for (const code of retryCodes) {
 				if (code != 0) {
-					printDiag(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${code})`)}`);
+					printError(`compile failed for dispatcher ${dim(`(exit ${code})`)}`);
 					throw new Error(BUILD_STOPPED);
 				}
 			}
@@ -3504,14 +3650,14 @@ resetLiftedOps();
 			linkRes = linkSolana(oFiles, outBinary, opts.ccBinary, opts.lto, opts.mode, opts.strip);
 		}
 		if (!linkRes.ok) {
-			printDiag(`${error("error")}: SBF link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
+			printError(`SBF link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
 			if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);
 			throw new Error(BUILD_STOPPED);
 		}
 	} else {
 		const linkRes = linkObjects(oFiles, outBinary, linkFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.targetOs);
 		if (!linkRes.ok) {
-			printDiag(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
+			printError(`link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
 			if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);
 			throw new Error(BUILD_STOPPED);
 		}
@@ -3685,11 +3831,11 @@ resetLiftedOps();
 		if (!result.completed) continue;
 		const modPath = emissionJobs[eri].modPath;
 		if (result.failure != "") {
-			printDiag(`${error("error")}: ${modPath}: ${result.failure}`);
+			printError(`${modPath}: ${result.failure}`);
 			emissionFailed = true;
 		}
 		for (const diagnostic of result.output.errors) {
-			printDiag(`${error("error")}: ${modPath}: ${diagnostic.message}`);
+			printError(`${modPath}: ${diagnostic.message}`);
 			emissionFailed = true;
 		}
 	}
@@ -3766,11 +3912,11 @@ resetLiftedOps();
 		if (code == 0) {
 			oSlots[cj.slot] = [cj.fp != "" ? publishModuleObject(cj.modPath, cj.baseFp, cj.oFile, cj.fp) : cj.oFile];
 		} else if (cj.modPath == "") {
-			printDiag(`${error("error")}: compile failed for test dispatcher ${dim(`(exit ${code})`)}`);
+			printError(`compile failed for test dispatcher ${dim(`(exit ${code})`)}`);
 			testFailed = true;
 		} else {
 			invalidateCompileCache(cj.modPath, cj.fp);
-			printDiag(`${error("error")}: compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
+			printError(`compile failed for ${cj.modPath} ${dim(`(exit ${code})`)}`);
 			testFailed = true;
 		}
 		cji = cji + 1;
@@ -3798,7 +3944,7 @@ resetLiftedOps();
 	for (const flag of globalLinkFlags()) { testLink = appendFlag(testLink, flag); }
 	const linkRes = linkObjects(oFiles, testBin, testLink, opts.mode, opts.ccCompiler, opts.ccBinary, opts.targetOs);
 	if (!linkRes.ok) {
-		printDiag(`${error("error")}: link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
+		printError(`link failed ${dim(`(exit ${linkRes.error.exitCode})`)}`);
 		if (linkRes.error.errorOutput != "") printDiag(linkRes.error.errorOutput);
 		exit(1);
 	}
@@ -3807,10 +3953,10 @@ resetLiftedOps();
 	if (opts.verbose) verboseLog("running tests");
 	const runCode = execFile(testBin);
 	if (platform == "windows" && runCode >= 0xC0000000) {
-		printDiag(`${error("error")}: test binary terminated with status 0x${runCode.toString(16).toUpperCase()}`);
+		printError(`test binary terminated with status 0x${runCode.toString(16).toUpperCase()}`);
 		exit(1);
 	}
-	if (runCode > 128) printDiag(`${error("error")}: test binary terminated by signal ${runCode - 128}`);
+	if (runCode > 128) printError(`test binary terminated by signal ${runCode - 128}`);
 	exit(runCode);
 }
 
