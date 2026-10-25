@@ -1902,6 +1902,7 @@ CASES
   adopt_self_test || bad=1
   adopt_cache_self_test || bad=1
   boot_self_test || bad=1
+  bash "$TOP/tools/gateFailureFilterTest.sh" || bad=1
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
 }
@@ -2200,7 +2201,7 @@ run_test_lane() {
 
 split_flaky() {
   awk -v want="$1" '
-    NR == FNR { f[$0] = 1; next }
+    FILENAME == ARGV[1] { f[$0] = 1; next }
     { id = $0; sub(/ \[[^]]*\]$/, "", id)
       hit = (id in f) || ($0 in f)
       if ((want == "keep") == (hit != 0)) print }' "$OUT/flaky.ids" -
