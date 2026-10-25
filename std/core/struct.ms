@@ -62,13 +62,152 @@ export function* toItems<T>(this arr: Vec<T>): Iterator<T> {
 }
 
 // ===== Hash Functions =====
-// hashFarm over the string's bytes (runtime/core/string.c; the Raiser reaches the same
-// code through the host table). An empty Map/Set slot holds hcode 0, so a key that
-// hashes to 0 takes the 314159265 sentinel.
+// An empty Map/Set slot holds hcode 0, so a key that hashes to 0 takes the 314159265 sentinel.
 
-@include("runtime/core/string.h");
+@builtin("LoadLE64")
+extern function msLoadLE64(b: Readonly<Span<uint8>>, o: int64): uint64;
+@builtin("LoadLE32")
+extern function msLoadLE32(b: Readonly<Span<uint8>>, o: int64): uint64;
 
-export extern function hashFarm(s: string): int64 from "msStringHashFarm";
+@inline function farmRotR(v: uint64, bits: uint64): uint64 {
+	return (v >> bits) | (v << ((64 as uint64) - bits));
+}
+
+@inline function farmShiftMix(v: uint64): uint64 {
+	return v ^ (v >> (47 as uint64));
+}
+
+@inline function farmLen16(u: uint64, v: uint64, mul: uint64): uint64 {
+	let a = (u ^ v) * mul;
+	a = a ^ (a >> (47 as uint64));
+	let b = (v ^ a) * mul;
+	b = b ^ (b >> (47 as uint64));
+	return b * mul;
+}
+
+@inline function farmLen0To16(b: Readonly<Span<uint8>>): uint64 {
+	const len = b.length as int64;
+	const k0 = 0xc3a5c85c97cb3127 as uint64;
+	const k2 = 0x9ae16a3b2f90404f as uint64;
+	const n = len as uint64;
+	if (len >= 8) {
+		const mul = k2 + n * (2 as uint64);
+		const a = msLoadLE64(b, 0) + k2;
+		const c = msLoadLE64(b, len - 8);
+		return farmLen16(farmRotR(c, 37) * mul + a, (farmRotR(a, 25) + c) * mul, mul);
+	}
+	if (len >= 4) {
+		const mul = k2 + n * (2 as uint64);
+		return farmLen16(n + (msLoadLE32(b, 0) << (3 as uint64)), msLoadLE32(b, len - 4), mul);
+	}
+	if (len > 0) {
+		const y = (b[0] as uint64) + ((b[len >> 1] as uint64) << (8 as uint64));
+		const z = n + ((b[len - 1] as uint64) << (2 as uint64));
+		return farmShiftMix(y * k2 ^ z * k0) * k2;
+	}
+	return k2;
+}
+
+@inline function farmLen17To32(b: Readonly<Span<uint8>>): uint64 {
+	const len = b.length as int64;
+	const k1 = 0xb492b66fbe98f273 as uint64;
+	const k2 = 0x9ae16a3b2f90404f as uint64;
+	const mul = k2 + (len as uint64) * (2 as uint64);
+	const a = msLoadLE64(b, 0) * k1;
+	const c = msLoadLE64(b, 8);
+	const d = msLoadLE64(b, len - 8) * mul;
+	const e = msLoadLE64(b, len - 16) * k2;
+	return farmLen16(
+		farmRotR(a + c, 43) + farmRotR(d, 30) + e,
+		a + farmRotR(c + k2, 18) + d,
+		mul,
+	);
+}
+
+@inline function farmLen33To64(b: Readonly<Span<uint8>>): uint64 {
+	const len = b.length as int64;
+	const k2 = 0x9ae16a3b2f90404f as uint64;
+	const mul = k2 + (len as uint64) * (2 as uint64);
+	const a = msLoadLE64(b, 0) * k2;
+	const c = msLoadLE64(b, 8);
+	const d = msLoadLE64(b, len - 8) * mul;
+	const e = msLoadLE64(b, len - 16) * k2;
+	const y = farmRotR(a + c, 43) + farmRotR(d, 30) + e;
+	const z = farmLen16(y, a + farmRotR(c + k2, 18) + d, mul);
+	const f = msLoadLE64(b, 16) * mul;
+	const g = msLoadLE64(b, 24);
+	const h = (y + msLoadLE64(b, len - 32)) * mul;
+	const i = (z + msLoadLE64(b, len - 24)) * mul;
+	return farmLen16(farmRotR(f + g, 43) + farmRotR(h, 30) + i, f + farmRotR(g + a, 18) + h, mul);
+}
+
+@inline function farmWeakLen32(
+	b: Readonly<Span<uint8>>,
+	o: int64,
+	seedA: uint64,
+	seedB: uint64,
+): [uint64, uint64] {
+	const z = msLoadLE64(b, o + 24);
+	let a = seedA + msLoadLE64(b, o);
+	let c = farmRotR(seedB + a + z, 21);
+	const first = a;
+	a = a + msLoadLE64(b, o + 8) + msLoadLE64(b, o + 16);
+	c = c + farmRotR(a, 44);
+	return [a + z, c + first];
+}
+
+function farmLong(b: Readonly<Span<uint8>>): uint64 {
+	const len = b.length as int64;
+	const last = b[len - 64..len];
+	const k0 = 0xc3a5c85c97cb3127 as uint64;
+	const k1 = 0xb492b66fbe98f273 as uint64;
+	const k2 = 0x9ae16a3b2f90404f as uint64;
+	let y = (81 as uint64) * k1 + (113 as uint64);
+	let z = farmShiftMix(y * k2 + (113 as uint64)) * k2;
+	let x = (81 as uint64) * k2 + msLoadLE64(b, 0);
+	let v: [uint64, uint64] = [0 as uint64, 0 as uint64];
+	let w: [uint64, uint64] = [0 as uint64, 0 as uint64];
+	let rest = b;
+	while (rest.length > 64) {
+		const block = rest[0..64];
+		x = farmRotR(x + y + v[0] + msLoadLE64(block, 8), 37) * k1;
+		y = farmRotR(y + v[1] + msLoadLE64(block, 48), 42) * k1;
+		x = x ^ w[1];
+		y = y + v[0] + msLoadLE64(block, 40);
+		z = farmRotR(z + w[0], 33) * k1;
+		v = farmWeakLen32(block, 0, v[1] * k1, x + w[0]);
+		w = farmWeakLen32(block, 32, z + w[1], y + msLoadLE64(block, 16));
+		const t = z;
+		z = x;
+		x = t;
+		rest = rest[64..rest.length];
+	}
+	const mul = k1 + ((z & (0xff as uint64)) << (1 as uint64));
+	const w0 = w[0] + (((len - 1) & 63) as uint64);
+	const v0 = v[0] + w0;
+	const w0Mixed = w0 + v0;
+	x = farmRotR(x + y + v0 + msLoadLE64(last, 8), 37) * mul;
+	y = farmRotR(y + v[1] + msLoadLE64(last, 48), 42) * mul;
+	x = x ^ w[1] * (9 as uint64);
+	y = y + v0 * (9 as uint64) + msLoadLE64(last, 40);
+	z = farmRotR(z + w0Mixed, 33) * mul;
+	v = farmWeakLen32(last, 0, v[1] * mul, x + w0Mixed);
+	w = farmWeakLen32(last, 32, z + w[1], y + msLoadLE64(last, 16));
+	return farmLen16(
+		farmLen16(v[0], w[0], mul) + farmShiftMix(y) * k0 + x,
+		farmLen16(v[1], w[1], mul) + z,
+		mul,
+	);
+}
+
+export function hashFarm(s: string): int64 {
+	const b = s.asBytes();
+	const len = b.length as int64;
+	if (len <= 16) return int64Bits(farmLen0To16(b));
+	if (len <= 32) return int64Bits(farmLen17To32(b));
+	if (len <= 64) return int64Bits(farmLen33To64(b));
+	return int64Bits(farmLong(b));
+}
 
 export function hashString(s: string): int64 {
 	const h = hashFarm(s);
