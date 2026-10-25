@@ -8,7 +8,8 @@ import { forEachChild, anyChild } from "../../ast/visitor";
 import { isEagerAssignOp } from "../../ast/operators";
 import { booleanType } from "../../checker/types";
 import { setFlag } from "../../checker/symbol";
-import { ModuleGraph, Module, findModuleIndex } from "../../module/graph";
+import { ModuleGraph, findModuleIndex } from "../../module/graph";
+import { findExportedSymbol, findModuleExports } from "../../checker/context";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { mapChildren, hasEffect } from "../walker";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
@@ -35,14 +36,14 @@ export function planModuleTdz(program: Node, ctx: TransformContext): Node {
 	const deferred = new HashSet<Symbol>();
 	const deferredOrder: Symbol[] = [];
 	for (const stmt of stmts) collectDeferredUses(stmt, false, deferred, deferredOrder);
-	const self = ctx.checkerCtx.currentModule;
 	const cycle = cycleOf(ctx.checkerCtx.moduleGraph, modulePath);
+	const imported = cycleImportedBindings(ctx, cycle);
 	const sets: Node[][] = [];
 	for (let i = 0; i < stmts.length; i += 1) sets.push([]);
 	const flagDecls: Node[] = [];
 	for (const b of bindings) {
 		const reached = deferred.has(b.sym) && (cycle.size > 0 || (firstRun >= 0 && firstRun <= b.statement));
-		if (!reached && !importedByCycleMember(ctx.checkerCtx.moduleGraph, cycle, modulePath, b.sym.name)) continue;
+		if (!reached && !imported.has(tdzBindingOf(b.sym))) continue;
 		const flag = moduleFlagOf(b.sym, modulePath, ctx);
 		const loc = stmts[b.statement].location;
 		const decl = makeVarDecl(flag.name, makeBool(false, loc), DeclKind.Let, loc);
@@ -54,7 +55,7 @@ export function planModuleTdz(program: Node, ctx: TransformContext): Node {
 	}
 	for (const sym of deferredOrder) {
 		if (sym.modulePath == "" || sym.modulePath == modulePath || !cycle.has(sym.modulePath)) continue;
-		if (!isLexicalBindingSym(sym) || self == null || !importsByName(self, sym.modulePath, sym.name)) continue;
+		if (!isLexicalBindingSym(sym) || !imported.has(tdzBindingOf(sym))) continue;
 		moduleFlagOf(sym, sym.modulePath, ctx);
 	}
 	if (flagDecls.length == 0) return program;
@@ -89,7 +90,8 @@ function guardUses(n: Node, inFunction: boolean, ctx: TransformContext): Node {
 			mapChildren(n, (c: Node): Node => c == cls ? c : guardUses(c, true, ctx));
 			return guarded(n, cls, ctx);
 		}
-		if (n.kind == NodeKind.Identifier) return n.resolvedSym != null && n.resolvedSym.symbolKind == SymbolKind.Class ? n : guarded(n, n, ctx);
+		const read = moduleBindingRead(n);
+		if (read != null) return read.symbolKind == SymbolKind.Class ? n : guarded(n, n, ctx);
 		if (n.kind == NodeKind.ExprStmt) {
 			const assign = (n.data as ExprStmtData).expr;
 			if (assign.kind == NodeKind.BinaryExpr && (assign.data as BinaryExprData).operator == "=" && flagOf((assign.data as BinaryExprData).left, ctx) != null) {
@@ -128,8 +130,18 @@ function writtenBinding(n: Node): Node | null {
 }
 
 function flagOf(n: Node, ctx: TransformContext): Symbol | null {
-	if (n.kind != NodeKind.Identifier || n.resolvedSym == null) return null;
-	return ctx.tdzFlags.get(tdzBindingOf(n.resolvedSym));
+	const read = moduleBindingRead(n);
+	return read == null ? null : ctx.tdzFlags.get(tdzBindingOf(read));
+}
+
+// The binding a node reads by name: an identifier, or a member of a namespace import
+// (`ns.x` keeps its MemberExpr and carries the exported symbol).
+export function moduleBindingRead(n: Node): Symbol | null {
+	if (n.resolvedSym == null) return null;
+	if (n.kind == NodeKind.Identifier) return n.resolvedSym;
+	if (n.kind != NodeKind.MemberExpr) return null;
+	const object = (n.data as MemberExprData).object;
+	return object.resolvedSym != null && object.resolvedSym.symbolKind == SymbolKind.Module ? n.resolvedSym : null;
 }
 
 function failCall(binding: Node, ctx: TransformContext): Node | null {
@@ -138,7 +150,7 @@ function failCall(binding: Node, ctx: TransformContext): Node | null {
 		reportTransformError(ctx, "internal: std declares no msModuleBindingUninitialized to guard a module binding read before its declaration", binding.location);
 		return null;
 	}
-	return makeCallResolved(makeIdentResolved(fail, binding.location), [makeString(tdzBindingOf(binding.resolvedSym!).name, binding.location)], fail, binding.location);
+	return makeCallResolved(makeIdentResolved(fail, binding.location), [makeString(tdzBindingOf(moduleBindingRead(binding)!).name, binding.location)], fail, binding.location);
 }
 
 function guarded(use: Node, binding: Node, ctx: TransformContext): Node {
@@ -215,9 +227,10 @@ function isLexicalBindingSym(sym: Symbol): boolean {
 
 function collectDeferredUses(n: Node, inFunction: boolean, uses: HashSet<Symbol>, order: Symbol[]): void {
 	if (n == null) return;
-	if (inFunction && n.kind == NodeKind.Identifier && n.resolvedSym != null && !uses.has(tdzBindingOf(n.resolvedSym))) {
-		uses.add(tdzBindingOf(n.resolvedSym));
-		order.push(tdzBindingOf(n.resolvedSym));
+	const read = inFunction ? moduleBindingRead(n) : null;
+	if (read != null && !uses.has(tdzBindingOf(read))) {
+		uses.add(tdzBindingOf(read));
+		order.push(tdzBindingOf(read));
 	}
 	const deferred = inFunction || isRoutineNode(n)
 		|| (n.kind == NodeKind.PropertyDecl && !(n.data as PropertyDeclData).propIsStatic);
@@ -263,19 +276,28 @@ function reachesLocalCode(n: Node, modulePath: string): boolean {
 	return anyChild(n, (c: Node): boolean => reachesLocalCode(c, modulePath));
 }
 
-function importsByName(mod: Module, from: string, name: string): boolean {
-	for (const entry of mod.imports) {
-		if (entry.sourcePath == from && entry.names.indexOf(name) >= 0) return true;
+// The bindings the importers in a cycle can reach: each import entry resolved through the
+// export registry, so a renaming barrel and a namespace import name the declaring symbol.
+function cycleImportedBindings(ctx: TransformContext, cycle: HashSet<string>): HashSet<Symbol> {
+	const out = new HashSet<Symbol>();
+	const graph = ctx.checkerCtx.moduleGraph;
+	if (graph == null || cycle.size == 0) return out;
+	const registry = ctx.checkerCtx.exportRegistry;
+	for (const path of graph.modulePaths) {
+		if (!cycle.has(path)) continue;
+		for (const entry of graph.modules[findModuleIndex(graph, path)].imports) {
+			if (entry.names.length == 1 && entry.names[0] == "*") {
+				const exports = findModuleExports(registry, entry.sourcePath);
+				if (exports != null) for (const info of exports.symbols) out.add(tdzBindingOf(info.sym));
+				continue;
+			}
+			for (const name of entry.names) {
+				const info = findExportedSymbol(registry, entry.sourcePath, name);
+				if (info != null && info.sym != null) out.add(tdzBindingOf(info.sym));
+			}
+		}
 	}
-	return false;
-}
-
-function importedByCycleMember(graph: ModuleGraph | null, cycle: HashSet<string>, modulePath: string, name: string): boolean {
-	if (graph == null) return false;
-	for (const mod of graph.modules) {
-		if (mod.path != modulePath && cycle.has(mod.path) && importsByName(mod, modulePath, name)) return true;
-	}
-	return false;
+	return out;
 }
 
 let _cycleGraph: ModuleGraph | null = null;

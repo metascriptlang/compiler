@@ -54,7 +54,7 @@ import { needsUint64CompoundWrap } from "../coercion/bigIntJS";
 import { readsBeforeHoist, snapshotsLikeJs, isNeverType } from "./operandOrder";
 import { fitJoinedBranch, shortCircuitLeftShare, shortCircuitRightRuns } from "../../checker/fit";
 import { truthinessTest } from "../coercion/stringTruthiness";
-import { tdzBindingOf } from "./moduleTdz";
+import { tdzBindingOf, moduleBindingRead } from "./moduleTdz";
 import { cstringSource } from "../native/cstringConvLower";
 
 // ===== Hoist (top-down) =====
@@ -76,7 +76,7 @@ function branchValueStmt(target: Node, branch: Node, loc: SourceLocation): Node 
 // is conditionally evaluated → never descended (LHS is).
 function hoistTernaries(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
 	if (expr == null) return expr;
-	if (expr.kind == NodeKind.Identifier) {
+	if (expr.kind == NodeKind.Identifier || expr.kind == NodeKind.MemberExpr && tdzFlagOf(expr) != null) {
 		const flag = tdzFlagOf(expr);
 		if (flag != null) pushTdzGuard(expr, flag, hoisted, ctx);
 		return expr;
@@ -880,8 +880,8 @@ let tdzFlags = new HashMap<Symbol, Symbol>();
 let tdzGuards = new HashSet<Node>();
 
 function tdzFlagOf(n: Node): Symbol | null {
-	if (functionDepth == 0 || n.kind != NodeKind.Identifier || n.resolvedSym == null) return null;
-	return tdzFlags.get(tdzBindingOf(n.resolvedSym));
+	const read = functionDepth == 0 ? null : moduleBindingRead(n);
+	return read == null ? null : tdzFlags.get(tdzBindingOf(read));
 }
 
 function pushTdzGuard(binding: Node, flag: Symbol, hoisted: Node[], ctx: TransformContext): void {
@@ -891,7 +891,7 @@ function pushTdzGuard(binding: Node, flag: Symbol, hoisted: Node[], ctx: Transfo
 		reportTransformError(ctx, "internal: std declares no msModuleBindingUninitialized to guard a module binding read before its declaration", loc);
 		return;
 	}
-	const call = makeCallResolved(makeIdentResolved(fail, loc), [makeString(tdzBindingOf(binding.resolvedSym!).name, loc)], fail, loc);
+	const call = makeCallResolved(makeIdentResolved(fail, loc), [makeString(tdzBindingOf(moduleBindingRead(binding)!).name, loc)], fail, loc);
 	const guard = makeIf(makeUnary("!", makeIdentResolved(flag, loc), loc), makeBlock([makeExprStmt(call, loc)], loc), null as unknown as Node, loc);
 	tdzGuards.add(guard);
 	hoisted.push(guard);
