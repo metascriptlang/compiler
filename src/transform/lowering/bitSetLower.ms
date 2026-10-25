@@ -1,10 +1,11 @@
-import { Node, NodeKind, NodeData, BinaryExprData, CallExprData, UnaryExprData, TypeAssertionData, NumberLiteralData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ArrowFunctionData, ArrayAccessData, MemberExprData, HiddenDerefData, Type, TypeKind, SourceLocation, createNodeAt } from "../../ast/node";
+import { Node, NodeKind, NodeData, BinaryExprData, CallExprData, UnaryExprData, TypeAssertionData, NumberLiteralData, IfStmtData, WhileStmtData, ArrowFunctionData, ArrayAccessData, MemberExprData, HiddenDerefData, Type, TypeKind, SourceLocation, createNodeAt } from "../../ast/node";
 import { bitSetElemType, setRepr, booleanType, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocks, mapExprChildren } from "../walker";
 import { makeBinary, makeUnary, makeNumber, makeIdentResolved, makeArrayAccess, makeCall, makeConditional, makeVarDecl, makeBlock, makeReturn, runtimeRef } from "../util";
 import { cloneIfPure } from "../place";
+import { hoistStmtValue } from "../blockExpand";
 import { moveWhileTestIntoBody, wrapElseIfWhen } from "./jumpRetarget";
 import { DeclKind } from "../../ast/node";
 
@@ -465,29 +466,23 @@ export function containsImpureArrayOp(expr: Node): boolean {
 }
 
 function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
-	const pre: Node[] = [];
-	if (stmt.kind == NodeKind.VariableDecl) {
-		const d = stmt.data as VariableDeclData;
-		if (d.initializer != null) d.initializer = hoistArrayOperands(d.initializer, pre, ctx);
-	} else if (stmt.kind == NodeKind.ExprStmt) {
-		const d = stmt.data as ExprStmtData;
-		if (d.expr != null) d.expr = hoistArrayOperands(d.expr, pre, ctx);
-	} else if (stmt.kind == NodeKind.ReturnStmt) {
-		const d = stmt.data as ReturnStmtData;
-		if (d.argument != null) d.argument = hoistArrayOperands(d.argument, pre, ctx);
-	} else if (stmt.kind == NodeKind.IfStmt) {
+	if (stmt.kind == NodeKind.IfStmt) {
+		const pre: Node[] = [];
 		const d = stmt.data as IfStmtData;
 		wrapElseIfWhen(d, (alt: Node): boolean => containsImpureArrayOp((alt.data as IfStmtData).condition));
 		d.condition = hoistArrayOperands(d.condition, pre, ctx);
-	} else if (stmt.kind == NodeKind.WhileStmt) {
+		pre.push(stmt);
+		return pre;
+	}
+	if (stmt.kind == NodeKind.WhileStmt) {
+		const pre: Node[] = [];
 		const d = stmt.data as WhileStmtData;
 		if (!containsImpureArrayOp(d.whileCondition)) return [stmt];
 		const cond = hoistArrayOperands(d.whileCondition, pre, ctx);
 		moveWhileTestIntoBody(stmt, pre, cond);
 		return [stmt];
 	}
-	pre.push(stmt);
-	return pre;
+	return hoistStmtValue(stmt, hoistArrayOperands, ctx);
 }
 
 function normalizeImpureArrowBodies(program: Node, ctx: TransformContext): Node {

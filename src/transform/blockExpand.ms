@@ -4,6 +4,7 @@ import {
 	FunctionDeclData, ArrowFunctionData, FunctionExprData,
 	ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData,
 	ExportDeclData, DecoratedDeclData, TryCatchStmtData, TestDeclData,
+	VariableDeclData, ExprStmtData, ReturnStmtData,
 } from "../ast/node";
 import { Visitor, mapChildren } from "../ast/visitor";
 import { TransformContext } from "./context";
@@ -26,6 +27,26 @@ export function walkBlockExpanding(stmts: Node[], expander: ExpandingVisitor): N
 		}
 	}
 	return result;
+}
+
+// ===== Value-slot hoist =====
+
+export type SlotHoist = (value: Node, pre: Node[], ctx: TransformContext) => Node;
+
+export function hoistStmtValue(stmt: Node, hoist: SlotHoist, ctx: TransformContext): Node[] {
+	const pre: Node[] = [];
+	if (stmt.kind == NodeKind.VariableDecl) {
+		const d = stmt.data as VariableDeclData;
+		if (d.initializer != null) d.initializer = hoist(d.initializer, pre, ctx);
+	} else if (stmt.kind == NodeKind.ExprStmt) {
+		const d = stmt.data as ExprStmtData;
+		if (d.expr != null) d.expr = hoist(d.expr, pre, ctx);
+	} else if (stmt.kind == NodeKind.ReturnStmt) {
+		const d = stmt.data as ReturnStmtData;
+		if (d.argument != null) d.argument = hoist(d.argument, pre, ctx);
+	}
+	pre.push(stmt);
+	return pre;
 }
 
 // ===== Block-Expanding Walk =====
