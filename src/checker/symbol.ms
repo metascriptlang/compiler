@@ -360,6 +360,10 @@ export function lookupSymbolInDefiningScope(table: SymbolTable, definer: string,
 	return scope.symbols.get(getIdentId(table.identCache, name))!;
 }
 
+export function lookupStd(table: SymbolTable, name: string): Symbol | null {
+	return globalScope(table).symbols.get(getIdentId(table.identCache, name)) ?? null;
+}
+
 export function globalScope(table: SymbolTable): Scope {
 	let scope = table.current;
 	while (scope.parent != null) scope = scope.parent!;

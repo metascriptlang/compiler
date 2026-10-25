@@ -1,5 +1,5 @@
 import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind, AttachedOp } from "../ast/node";
-import { extractDecoratorInfo, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator } from "./decoratorHelpers";
+import { extractDecoratorInfo, intrinsicBuiltinOf, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, exportNameDecorator, exportedFunctionOf, reloadHandlerDecorator, inlineDecorator } from "./decoratorHelpers";
 import { expandAutoAccessors, isAutoAccessorField } from "./autoAccessor";
 import { inferredType, noneType, createModuleNamespace, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef, assignType, int32Type, getSysType, stringType } from "./types";
 import { defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind, RoutineFlag, routineFlagSet } from "./symbol";
@@ -156,7 +156,7 @@ function collectDeclLocal(ctx: CheckerContext, node: Node): void {
 			collectDeclLocal(ctx, dd.decoratedNode);
 			const sym = declOfStatement(dd.decoratedNode).resolvedSym;
 			if (sym != null) {
-				const info = extractDecoratorInfo(node);
+				const info = extractDecoratorInfo(ctx, node);
 				if (info.nativeName != "" && sym.nativeName == "") sym.nativeName = formatExternName(ctx, "declaration", sym.name, info.nativeName, node.location);
 				const kind = stdBuiltinKind(ctx, info.builtinKind, node);
 				if (kind != "") sym.builtinKind = kind;
@@ -291,7 +291,7 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 	const named = lookupSymbol(ctx.table, declName);
 	if (named == null) return;
 	const sym = declaredSymbolOf(dd.decoratedNode, named);
-	const info = extractDecoratorInfo(node);
+	const info = extractDecoratorInfo(ctx, node);
 	const handlerName = reloadHandlerExportName(ctx, dd, sym, declName);
 	const exportName = handlerName != "" ? handlerName : exportNameRejected ? "" : info.exportName;
 	const kind = stdBuiltinKind(ctx, info.builtinKind, node);
@@ -347,9 +347,9 @@ function declaredSymbolOf(decorated: Node, named: Symbol): Symbol {
 }
 
 function markBorrow(ctx: CheckerContext, dd: DecoratedDeclData, sym: Symbol): void {
-	const problem = borrowMisuse(dd);
+	const problem = borrowMisuse(ctx, dd);
 	if (problem != "") {
-		const dec = borrowDecorator(dd.decorators);
+		const dec = borrowDecorator(ctx, dd.decorators);
 		addError(ctx, problem, dec.location.line, dec.location.column);
 		return;
 	}
@@ -357,15 +357,15 @@ function markBorrow(ctx: CheckerContext, dd: DecoratedDeclData, sym: Symbol): vo
 	sym.symFlags = sym.symFlags.excl(SymbolFlag.OverloadSig);
 }
 
-function borrowDecorator(decorators: Node[]): Node {
+function borrowDecorator(ctx: CheckerContext, decorators: Node[]): Node {
 	for (const dec of decorators) {
-		if (dec.kind == NodeKind.MacroInvocation && (dec.data as MacroInvocationData).macroName == "delegate") return dec;
+		if (dec.kind == NodeKind.MacroInvocation && intrinsicBuiltinOf(ctx, (dec.data as MacroInvocationData).macroName) == "delegate") return dec;
 	}
 	return decorators[0];
 }
 
-function borrowMisuse(dd: DecoratedDeclData): string {
-	if ((borrowDecorator(dd.decorators).data as MacroInvocationData).macroArgs.length > 0) return "@delegate takes no arguments";
+function borrowMisuse(ctx: CheckerContext, dd: DecoratedDeclData): string {
+	if ((borrowDecorator(ctx, dd.decorators).data as MacroInvocationData).macroArgs.length > 0) return "@delegate takes no arguments";
 	let decl = dd.decoratedNode;
 	if (decl.kind == NodeKind.ExportDecl) decl = (decl.data as ExportDeclData).exportedDecl;
 	if (decl.kind == NodeKind.TypeAliasDecl) return "";
@@ -866,7 +866,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 		const dd = member.data as DecoratedDeclData;
 		if (dd.decoratedNode != null && dd.decoratedNode.kind == NodeKind.MethodDecl) {
 			methodNode = dd.decoratedNode;
-			const info = extractDecoratorInfo(member);
+			const info = extractDecoratorInfo(ctx, member);
 			builtinKind = stdBuiltinKind(ctx, info.builtinKind, member);
 			throws = info.throws;
 			reportExportNameMisuse(ctx, dd);

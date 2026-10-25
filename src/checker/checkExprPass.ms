@@ -1524,44 +1524,8 @@ function checkAssignmentWrite(ctx: CheckerContext, node: Node, d: BinaryExprData
 			if (peeled != null) probeType = peeled;
 			let propertyExists = !isUnresolvedType(getProperty(probeType, md.property))
 				|| (probeType.typeNames != null && probeType.typeNames.indexOf(md.property) >= 0);
-			if (!propertyExists && probeType.typeName != "") {
-				const classSym = lookupSymbol(ctx.table, probeType.typeName);
-				if (classSym != null) {
-					ensureShaped(classSym, ctx);
-					let classStruct = classSym.symbolType;
-					if (classStruct != null && classStruct.kind == TypeKind.Alias && classStruct.typeReturn != null) {
-						classStruct = classStruct.typeReturn;
-					}
-					if (classStruct != null && classStruct.kind == TypeKind.Ref && classStruct.typeReturn != null) {
-						classStruct = classStruct.typeReturn;
-					}
-					if (classStruct != null && (classStruct.kind == TypeKind.Struct || classStruct.kind == TypeKind.Union)) {
-						if (!isUnresolvedType(getProperty(classStruct, md.property))) {
-							propertyExists = true;
-						}
-					}
-				}
-			}
-			// Last-resort fallback: shape the receiver's source symbol if reachable.
-			// `recvType.sym` carries the declaration site for alias parameters even
-			// when typeName was lost. This shapes `MacroInvocationData` to its inner
-			// record BEFORE we declare the field missing — matching how a prior read
-			// would have primed the alias on the same parameter.
-			if (!propertyExists && recvType.sym != null) {
-				ensureShaped(recvType.sym, ctx);
-				let symType = recvType.sym.symbolType;
-				let _h = 0;
-				while (symType != null && _h < 4) {
-					_h = _h + 1;
-					if (symType.kind == TypeKind.Alias && symType.typeReturn != null) { symType = symType.typeReturn; continue; }
-					if (symType.kind == TypeKind.Ref && symType.typeReturn != null) { symType = symType.typeReturn; continue; }
-					break;
-				}
-				if (symType != null && (symType.kind == TypeKind.Struct || symType.kind == TypeKind.Union)
-						&& !isUnresolvedType(getProperty(symType, md.property))) {
-					propertyExists = true;
-				}
-			}
+			if (!propertyExists && probeType.sym != null) propertyExists = declaresField(ctx, probeType.sym, md.property);
+			if (!propertyExists && recvType.sym != null) propertyExists = declaresField(ctx, recvType.sym, md.property);
 			if (!propertyExists) {
 				const setExts = findAllExtensionsByName(ctx.extensionRegistry, "setDynamicField");
 				let extMatch = false;
@@ -4300,7 +4264,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
 import { instantiateClassConstructor, pickBodyCtx, literalFieldInitializer, instantiateParentClass, declaresUserHook } from "./instantiate";
-import { iterateSpreadSource, adoptExpansionResult, anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, keepFoldedType, keepComptimeNominalType, isNominalLiteralType, takeDefaultArgTemps, adoptAwaitedThenable, awaitReturnedThenable, refuseUnhashableKey } from "./callResolve";
+import { iterateSpreadSource, adoptExpansionResult, anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, keepFoldedType, keepComptimeNominalType, isNominalLiteralType, takeDefaultArgTemps, adoptAwaitedThenable, awaitReturnedThenable, refuseUnhashableKey, declaresField } from "./callResolve";
 
 function bodyIntoBlock(body: Node, temps: Node[]): void {
 	const value = createNodeAt(NodeKind.Identifier, { name: "" }, body.location);

@@ -24,7 +24,7 @@ import { bindFromExplicitTypeArgs, explicitTypeArgs, builtinTypeHead, checkExpli
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive, isLiteralTree } from "./speculate";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, moduleScopeNamed, enumMemberName } from "./symbol";
+import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, moduleScopeNamed, enumMemberName, lookupStd } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
 import { TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase } from "./types";
@@ -827,7 +827,7 @@ function thenableAdoption(ctx: CheckerContext, operand: Node, site: string): The
 	if (passesReject) {
 		const onRejected = functionSlotOf(then.typeChildren[1]);
 		const reason = onRejected != null && onRejected.typeChildren.length > 0 ? onRejected.typeChildren[0] : null;
-		const errorSym = lookupSymbol(ctx.table, "Error");
+		const errorSym = lookupStd(ctx.table, "Error");
 		if (reason == null || errorSym == null || !derivesFromClass(reason, errorSym)) {
 			const got = reason != null ? `, not '${typeDisplayName(reason)}'` : "";
 			refuseThenable(ctx, site, operand, `the second parameter of '${owner}.then' must be a callback taking an Error${got}, the reason an awaited promise rejects with`);
@@ -874,7 +874,7 @@ export function raisedOperand(ctx: CheckerContext, operand: Node): Node | null {
 	callCheckExpr(ctx, operand, null);
 	const argType = operand.nodeType;
 	if (argType == null || argType.kind == TypeKind.Error || isUnresolvedType(argType) || hasGenericParams(argType)) return operand;
-	const errSym = lookupSymbol(ctx.table, "Error");
+	const errSym = lookupStd(ctx.table, "Error");
 	if (errSym == null || errSym.symbolType == null) {
 		addError(ctx, "throw needs the std 'Error' class in scope", operand.location.line, operand.location.column);
 		return null;
@@ -982,6 +982,17 @@ function checkStructConstruction(ctx: CheckerContext, node: Node, structType: Ty
 	return node.nodeType!;
 }
 
+export function declaresField(ctx: CheckerContext, sym: Symbol, property: string): boolean {
+	ensureShaped(sym, ctx);
+	let t = sym.symbolType;
+	let hops = 0;
+	while (t != null && hops < 4 && (t.kind == TypeKind.Alias || t.kind == TypeKind.Ref) && t.typeReturn != null) {
+		t = t.typeReturn;
+		hops += 1;
+	}
+	return t != null && (t.kind == TypeKind.Struct || t.kind == TypeKind.Union) && !isUnresolvedType(getProperty(t, property));
+}
+
 export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | null): Type {
 	const d = node.data as NewExprData;
 	d.newArguments = expandTupleSpreads(ctx, inlineLiteralSpreads(d.newArguments));
@@ -992,7 +1003,8 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		// new Arc(value): atomic-refcounted shared box. Pointee type is the explicit
 		// <T> if present, else inferred from the single argument. Represented as a
 		// Ref with the IsAtomic flag — codegen boxes the value via msAllocArc.
-		const head = builtinTypeHead(ctx, id.name);
+		const newSym = lookupSymbol(ctx.table, id.name);
+		const head = newSym != null && !isTypeSymbol(newSym) ? "" : builtinTypeHead(ctx, id.name);
 		if (head == "Arc" && d.newArguments.length == 1) {
 			const ltCol = d.newCallee.location.column + id.name.length;
 			const typeArgStr = node.typeArg;
@@ -1042,7 +1054,6 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		}
 		// Interface/value type: new HashMap() / new Array(32) with type from variable annotation
 		// Also handle Ref<Struct> and Ref<GenericInstance> (interface types are Ref-wrapped)
-		const newSym = lookupSymbol(ctx.table, id.name);
 		if (expected != null && (expected.kind == TypeKind.Struct || expected.kind == TypeKind.GenericInstance)
 				&& expected.typeName == id.name && (newSym == null || !hasFlag(newSym, SymbolFlag.HasConstructor))) {
 			typeNewCallee(ctx, d.newCallee);
@@ -1058,7 +1069,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		const expectedArrInner = (expected != null && expected.kind == TypeKind.Ref
 			&& expected.typeReturn != null && expected.typeReturn.kind == TypeKind.Array)
 			? expected.typeReturn : expected;
-		if (expected != null && expectedArrInner != null && expectedArrInner.kind == TypeKind.Array && id.name == "Array") {
+		if (expected != null && expectedArrInner != null && expectedArrInner.kind == TypeKind.Array && head == "Array") {
 			typeNewCallee(ctx, d.newCallee);
 			node.nodeType = expected;
 			checkNewArgs(ctx, d.newArguments);
@@ -1068,11 +1079,10 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 			return expected;
 		}
 		// new Array<T>() or new Array<T>(size) — resolve element type from explicit type arg
-		if (id.name == "Array") {
+		if (head == "Array") {
 			// Record Array symbol for hover/go-to-definition consistency
-			const arraySym = lookupSymbol(ctx.table, "Array");
-			if (arraySym != null) {
-				sgRecordSym(ctx, d.newCallee.location.line, d.newCallee.location.column, d.newCallee.location.column + 5, arraySym, arraySym.symbolType, arraySym.symbolKind, "Array", "", false);
+			if (newSym != null) {
+				sgRecordSym(ctx, d.newCallee.location.line, d.newCallee.location.column, d.newCallee.location.column + id.name.length, newSym, newSym.symbolType, newSym.symbolKind, id.name, "", false);
 			}
 			const ltCol = d.newCallee.location.column + id.name.length;
 			const typeArgStr = node.typeArg;
@@ -1098,6 +1108,12 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 	}
 	checkInTypeSlot(ctx, d.newCallee);
 	const calleeType = d.newCallee.nodeType;
+	const target = d.newCallee.resolvedSym;
+	if (target != null && target.symbolKind == SymbolKind.Function) {
+		addError(ctx, `'new ${target.name}': '${target.name}' is a function, not a class: only a class or struct can be constructed`, node.location.line, node.location.column);
+		node.nodeType = errorType();
+		return node.nodeType;
+	}
 	// Pass the NewExpr's AST-resident typeArg so resolveGenericNewExpr can prefer
 	// it over the stale location-keyed side channel (important for cloned bodies).
 	// Also pass `expected` so that `const m: Map<K, V> = new Map();` (no type
@@ -4656,7 +4672,7 @@ export function resolveBorrow(ctx: CheckerContext, sym: Symbol, name: string, at
 
 function builtinTextFor(ctx: CheckerContext, name: string, baseArgs: Type[], ret: Type | null): Symbol | null {
 	if (name != "toString" || baseArgs.length != 1 || ret == null || !isStringLike(ret)) return null;
-	const text = lookupSymbol(ctx.table, "String");
+	const text = lookupStd(ctx.table, "String");
 	return text != null && text.builtinKind == "ToString" ? text : null;
 }
 
@@ -6034,52 +6050,9 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		// Receiver match uses the un-peeled object type (Ref<T> intact) — the
 		// extension is declared on the wrapping reference type, not the inner
 		// variant Union. Mirrors the getDynamicField synthesis below.
-		//
-		// Defense in depth: before suppressing the error, mirror the class-aware
-		// fallback — type aliases over records are only shaped after
-		// a read primes them, so the initial `getProperty` on the alias may
-		// return Unknown even though the underlying record owns the field. Walk
-		// the type's name via `lookupSymbol`+`ensureShaped` to surface the real
-		// field. Without this, writes on alias-typed receivers (e.g.
-		// `MacroInvocationData.macroArgs`) would silently route through the
-		// protocol and surface a confusing setDynamicField type error.
 		let realFieldOnAlias = !isUnresolvedType(getProperty(resolvedObjType, d.property));
-		if (!realFieldOnAlias && resolvedObjType.typeName != "") {
-			const aliasSym = lookupSymbol(ctx.table, resolvedObjType.typeName);
-			if (aliasSym != null) {
-				ensureShaped(aliasSym, ctx);
-				let inner = aliasSym.symbolType;
-				let _h = 0;
-				while (inner != null && _h < 4) {
-					_h = _h + 1;
-					if (inner.kind == TypeKind.Alias && inner.typeReturn != null) { inner = inner.typeReturn; continue; }
-					if (inner.kind == TypeKind.Ref && inner.typeReturn != null) { inner = inner.typeReturn; continue; }
-					break;
-				}
-				if (inner != null && (inner.kind == TypeKind.Struct || inner.kind == TypeKind.Union)
-						&& !isUnresolvedType(getProperty(inner, d.property))) {
-					realFieldOnAlias = true;
-				}
-			}
-		}
-		// Also try `objType.sym` (the un-resolved receiver) — alias parameters
-		// often expose the declaration via this back-pointer even when typeName
-		// was lost during peeling above.
-		if (!realFieldOnAlias && objType.sym != null) {
-			ensureShaped(objType.sym, ctx);
-			let symType = objType.sym.symbolType;
-			let _h2 = 0;
-			while (symType != null && _h2 < 4) {
-				_h2 = _h2 + 1;
-				if (symType.kind == TypeKind.Alias && symType.typeReturn != null) { symType = symType.typeReturn; continue; }
-				if (symType.kind == TypeKind.Ref && symType.typeReturn != null) { symType = symType.typeReturn; continue; }
-				break;
-			}
-			if (symType != null && (symType.kind == TypeKind.Struct || symType.kind == TypeKind.Union)
-					&& !isUnresolvedType(getProperty(symType, d.property))) {
-				realFieldOnAlias = true;
-			}
-		}
+		if (!realFieldOnAlias && resolvedObjType.sym != null) realFieldOnAlias = declaresField(ctx, resolvedObjType.sym, d.property);
+		if (!realFieldOnAlias && objType.sym != null) realFieldOnAlias = declaresField(ctx, objType.sym, d.property);
 		let suppressDynWrite = false;
 		if (!realFieldOnAlias
 				&& ctx.initTracker.leftPartOfAsgn > 0

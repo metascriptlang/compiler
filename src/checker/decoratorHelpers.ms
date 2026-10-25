@@ -174,7 +174,7 @@ function exportNameOf(dec: Node, decorated: Node): string {
 }
 
 // Extract all decorator metadata from a DecoratedDecl node as primitives.
-export function extractDecoratorInfo(node: Node): DecoratorInfo {
+export function extractDecoratorInfo(ctx: CheckerContext, node: Node): DecoratorInfo {
 	const dd = node.data as DecoratedDeclData;
 	let btKind = "";
 	for (let i = 0; i < dd.decorators.length; i += 1) {
@@ -199,9 +199,10 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 		const dec = dd.decorators[i];
 		if (dec.kind != NodeKind.MacroInvocation) continue;
 		const name = (dec.data as MacroInvocationData).macroName;
-		if (name == "compilerFunc") isCompilerFunc = true;
-		if (name == "throws") canThrow = true;
-		if (name == "delegate") borrows = true;
+		const tag = intrinsicBuiltinOf(ctx, name);
+		if (tag == "compilerFunc") isCompilerFunc = true;
+		if (tag == "throws") canThrow = true;
+		if (tag == "delegate") borrows = true;
 		if (name == "comptime") atCompileTime = true;
 		if (name == "noinline") keptOutOfLine = true;
 		if (name == "acyclic") prunesCycles = true;
