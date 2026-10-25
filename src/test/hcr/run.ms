@@ -593,8 +593,8 @@ function subdirModule(): void {
 function runBound(): void {
 	const tag = "hcrRunBound";
 	const cases = [
-		{ fixture: "typeError.ms", capMs: 30000, seen: "type error" },
-		{ fixture: "parseError.ms", capMs: 30000, seen: "Unexpected token" },
+		{ fixture: "typeError.txt", capMs: 30000, seen: "type error" },
+		{ fixture: "parseError.txt", capMs: 30000, seen: "Unexpected token" },
 	];
 	for (const c of cases) {
 		const dir = freshDir(`${TMP}/runBound_${c.fixture}`);
