@@ -26,6 +26,7 @@ import { RaiserVM, execModule, execLoop, createVM, vmReleaseHeaps } from "../../
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction, makeTestModule } from "../../raiser/module";
 import { RaiserFuncMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
 import { moduleScopeNamed, enclosingScopeNamed, NamedSymbol, makeSymbolState, globalScope } from "../../checker/symbol";
+import { metaTypeSeeds } from "../../compiler/meta/stdTags";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
 import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn, instanceArgsOf, instanceParamsOf } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
@@ -164,6 +165,7 @@ interface ComptimeEngine {
 	funcMap: RaiserFuncMap;
 	vm: RaiserVM;
 	bodyCtxs: HashMap<CheckerContext, CheckerContext>;
+	metaSeeds: NamedSymbol[] | null;
 }
 
 let _engine: ComptimeEngine = null as unknown as ComptimeEngine;
@@ -190,7 +192,15 @@ function freshEngine(): ComptimeEngine {
 	const vm = createVM(image, "arena");
 	vm.printSink = (text: string): void => { writeStderr(text + "\n"); };
 	const bodyCtxs = new HashMap<CheckerContext, CheckerContext>();
-	return { image, funcMap, vm, bodyCtxs };
+	return { image, funcMap, vm, bodyCtxs, metaSeeds: null };
+}
+
+function withMetaSeeds(seeds: NamedSymbol[]): NamedSymbol[] {
+	if (_engine.metaSeeds == null) _engine.metaSeeds = metaTypeSeeds(_engineGraph);
+	const all: NamedSymbol[] = [];
+	for (const s of _engine.metaSeeds!) all.push(s);
+	for (const s of seeds) all.push(s);
+	return all;
 }
 
 function seedExtensionsOf(mc: CheckerContext, skip: Symbol | null): ExtensionMethod[] {
@@ -268,7 +278,7 @@ function engineBodyCtx(definingModulePath: string, owner: Symbol | null): Checke
 	if (declCtx == null) return null;
 	const known = _engine.bodyCtxs.get(declCtx);
 	if (known != null) return known;
-	registerSeedSymbols(moduleScopeNamed(declCtx.table), seedExtensionsOf(declCtx, null));
+	registerSeedSymbols(withMetaSeeds(moduleScopeNamed(declCtx.table)), seedExtensionsOf(declCtx, null));
 	const empty = createNode(NodeKind.Program, { programStmts: [] }, synthToken(makeLoc(1, 1)));
 	const bodyCtx = checkProgramWithRegistryCancellable(empty, outer.registry, outer.graph, mod, raiserPreludeCtx(), null as unknown as CancelCtx, 0);
 	clearSeedSymbols();
@@ -298,7 +308,7 @@ function compileProgramIntoEngine(program: Node, seeds: NamedSymbol[], exts: Ext
 	defer registerRaiserOnDemand(previousOnDemand);
 	enterEngineCompile();
 	defer leaveEngineCompile();
-	registerSeedSymbols(seeds, exts);
+	registerSeedSymbols(withMetaSeeds(seeds), exts);
 	const transformed = transformForEngine(program);
 	clearSeedSymbols();
 	// appendProgramToImage triggers on-demand helper compiles (ensureCompiledIntoEngine)
@@ -309,22 +319,6 @@ function compileProgramIntoEngine(program: Node, seeds: NamedSymbol[], exts: Ext
 	const idx = appendProgramToImage(_engine.image, _engine.funcMap, transformed, wantFn, wantSym);
 	_lastEngineCheckErrors = ownErrors;
 	return idx;
-}
-
-const WIRE_ENUMS = ["NodeKind", "DeclKind", "ExternKind"];
-
-function seedWireEnums(seeds: NamedSymbol[]): void {
-	let nodeSym: Symbol | null = null;
-	for (const s of seeds) if (isMetaNodeSym(s.sym)) nodeSym = s.sym;
-	if (nodeSym == null) return;
-	const nodeCtx = lookupModuleCtx(nodeSym.modulePath);
-	if (nodeCtx == null) return;
-	for (const s of moduleScopeNamed(nodeCtx.table)) {
-		if (!WIRE_ENUMS.includes(s.name)) continue;
-		let present = false;
-		for (const t of seeds) if (t.name == s.name) present = true;
-		if (!present) seeds.push(s);
-	}
 }
 
 export function compileMacroIntoEngine(program: Node, token: CheckerContext, macroFnName: string, declCtx: CheckerContext): EngineMacroResult {
@@ -344,7 +338,6 @@ function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnNa
 	for (const s of leadSeeds) seeds.push(s);
 	for (const s of moduleScopeNamed(declCtx.table)) seeds.push(s);
 	const exts = seedExtensionsOf(declCtx, null);
-	seedWireEnums(seeds);
 	const outerHelperErrors = _pendingHelperErrors;
 	_pendingHelperErrors = [];
 	const outerCompileErrors = takeRaiserCompileErrors();
@@ -478,7 +471,6 @@ export function evalProgramViaEngine(program: Node, token: CheckerContext, fnNam
 	};
 }
 
-import { isMetaNodeSym } from "../../compiler/meta/nodeSym";
 registerMacroEvaluator(evalASTFull);
 registerMacroCompiler(evalASTCompile);
 

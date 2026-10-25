@@ -59,7 +59,8 @@ import { forEachChild } from "../../ast/visitor";
 import { nextQuoteGensymSuffix } from "../../checker/template";
 import { isUnresolvedType } from "../../checker/types";
 import { lookupModuleCtx, declaringModuleCtx } from "../../checker/instantiate";
-import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "../../checker/symbol";
+import { lookupSymbol, lookupSymbolInDefiningScope, lookupStd, hasFlag, SymbolFlag } from "../../checker/symbol";
+import { metaTagged, metaNodeType, metaNodeKindType, metaDeclKindType, metaExternKindType } from "./stdTags";
 import { bindMetaBodyNames, metaIntrinsicOf } from "../../checker/bindNames";
 import { anyArgIsParametric, rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
 import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
@@ -247,10 +248,10 @@ function lowerQuoteExpr(node: Node): Node {
 
 // ===== nodeToASTLiteral: Node → ObjectLiteral AST =====
 //
-function bindSymHostOf(declCtx: CheckerContext, macroSym: Symbol): Symbol | null {
-	const nodeSym = lookupSymbolInDefiningScope(declCtx.table, macroSym.name, "Node");
-	const metaDir = nodeSym == null ? "" : nodeSym.modulePath.slice(0, nodeSym.modulePath.lastIndexOf("/") + 1);
-	const metaCtx = metaDir == "" ? null : lookupModuleCtx(metaDir + "index.ms");
+function bindSymHostOf(declCtx: CheckerContext): Symbol | null {
+	if (declCtx.moduleGraph == null) return null;
+	const bindSym = metaTagged(declCtx.moduleGraph, ["MetaBindSym"])[0];
+	const metaCtx = bindSym == null ? null : lookupModuleCtx(bindSym.modulePath);
 	return metaCtx == null ? null : lookupSymbol(metaCtx.table, "msMetaBindSym");
 }
 
@@ -263,7 +264,7 @@ function bindSymCall(hostSym: Symbol, name: string, bound: Symbol, loc: SourceLo
 			callee: callee,
 			arguments: [mkString(name, loc), mkNumber(registerBakedSym(bound), loc)],
 		}, loc),
-		asType: "Node",
+		asType: metaNodeType,
 	}, loc);
 }
 
@@ -287,7 +288,7 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst
 	const kindNum = node.kind as number;
 
 	keys.push("kind");
-	values.push(enumOrdinalAs("NodeKind", kindNum, loc));
+	values.push(enumOrdinalAs(metaNodeKindType, kindNum, loc));
 	keys.push("line");
 	values.push(mkNumber(node.location.line, loc));
 	keys.push("column");
@@ -523,7 +524,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addStrField(keys, values, "declName", d.declName, loc);
 		addStrField(keys, values, "declType", d.declType, loc);
 		addNodeField(keys, values, "initializer", d.initializer, loc);
-		addEnumField(keys, values, "declKind", "DeclKind", d.declKind as number, loc);
+		addEnumField(keys, values, "declKind", metaDeclKindType, d.declKind as number, loc);
 		return;
 	}
 	if (k == NodeKind.UnaryExpr) {
@@ -952,7 +953,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 	}
 	if (k == NodeKind.ExternDecl) {
 		const d = node.data as ExternDeclData;
-		addEnumField(keys, values, "externKind", "ExternKind", d.externKind as number, loc);
+		addEnumField(keys, values, "externKind", metaExternKindType, d.externKind as number, loc);
 		addStrField(keys, values, "externName", d.externName, loc);
 		addStrField(keys, values, "nativeName", d.nativeName, loc);
 		addStrField(keys, values, "externType", d.externType, loc);
@@ -1262,6 +1263,16 @@ function mkMember(obj: Node, prop: string, loc: SourceLocation): Node {
 	return createNodeAt(NodeKind.MemberExpr, { object: obj, property: prop, isOptional: false }, loc);
 }
 
+// `console` as the std declaration, so a user binding of the name cannot capture the warning's log call.
+function consoleIdent(loc: SourceLocation): Node {
+	const id = createNodeAt(NodeKind.Identifier, { name: "console" }, loc);
+	const sym = _metaScope == null ? null : lookupStd(_metaScope!.table, "console");
+	if (sym == null) throw new Error("internal: warning() has no std console declaration to log through");
+	id.resolvedSym = sym;
+	id.flags = id.flags.incl(NodeFlag.BoundSym);
+	return id;
+}
+
 function tryRewriteCompileError(node: Node): Node {
 	if (node == null || node.kind != NodeKind.ExprStmt) return node;
 	const ed = node.data as ExprStmtData;
@@ -1316,7 +1327,7 @@ function tryRewriteCompileError(node: Node): Node {
 		}, loc);
 	}
 	const logCallee = mkMember(
-		createNodeAt(NodeKind.Identifier, { name: "console" }, loc), "log", loc);
+		consoleIdent(loc), "log", loc);
 	const logCall = createNodeAt(NodeKind.CallExpr, {
 		callee: logCallee, arguments: [warnPayload],
 		isDirectCall: true, resolvedOverloadIdx: -1,
@@ -1452,9 +1463,9 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 			if (boundSym.symbolKind != SymbolKind.Macro) {
 				ensureShaped(boundSym, bindCtx);
 			}
-			const hostSym = bindSymHostOf(bindCtx, macroSym);
+			const hostSym = bindSymHostOf(bindCtx);
 			if (hostSym == null) {
-				addError(ctx, `Macro '${macroName}': bindSym('${symName}') needs 'Node' imported from "std/meta" in the macro's module`, node.location.line, node.location.column);
+				addError(ctx, `Macro '${macroName}': bindSym('${symName}') needs "std/meta" in the module graph`, node.location.line, node.location.column);
 				return node;
 			}
 			return bindSymCall(hostSym, symName, boundSym, node.location);
@@ -1486,10 +1497,10 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 				// Assert to Node so flat reads on the spliced literal resolve through the
 				// NodeData unique-field-name rule; a bare literal would type as its own
 				// anonymous struct and expose only the keys it happens to carry.
-				_bindSymHost = bindSymHostOf(declCtx, macroSym);
+				_bindSymHost = bindSymHostOf(declCtx);
 				const literal = nodeToASTLiteral(implementation, node.location, false);
 				_bindSymHost = null;
-				return createNodeAt(NodeKind.TypeAssertion, { asExpr: literal, asType: "Node" }, node.location);
+				return createNodeAt(NodeKind.TypeAssertion, { asExpr: literal, asType: metaNodeType }, node.location);
 			}
 		}
 		// getTypeArg() reads the explicit <T> written at THIS call site from the VM
@@ -1659,16 +1670,15 @@ function getOrCompileMacroBody(ctx: CheckerContext, regCtx: CheckerContext, macr
 		paramTypes.push(pti < declParamTypes.length ? declParamTypes[pti] : "");
 		pti = pti + 1;
 	}
-	if (params.length > decl.macroDeclParams.length) paramTypes.push("Node");
+	if (params.length > decl.macroDeclParams.length) paramTypes.push(metaNodeType);
 	const emptyDefaults: Node[] = [];
-	const nodeInScope = isMetaNodeSym(lookupSymbol(regCtx.table, "Node"));
 	const macroFn = createNode(NodeKind.FunctionDecl, {
 		fnName: "$macro:body",
 		params: params,
 		fnParamTypes: paramTypes,
 		fnBody: fnBody,
 		fnFlags: "",
-		fnReturnType: nodeInScope ? "Node" : "",
+		fnReturnType: metaNodeType,
 		fnDefaults: emptyDefaults,
 		nameLocation: loc,
 	}, synthToken(loc));
@@ -2184,7 +2194,6 @@ registerComptimeHelperPreparer((decl: Node, scope: CheckerContext): void => {
 
 import { makeSymbol, defineSymbol } from "../../checker/symbol";
 import { noneType } from "../../checker/types";
-import { isMetaNodeSym } from "./nodeSym";
 
 function metaTestScope(createNodeAtKind: string = "MetaCreateNodeAt"): CheckerContext {
 	const ctx = createContext();

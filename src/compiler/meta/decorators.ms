@@ -30,6 +30,7 @@ import { vmReleaseHeaps } from "../../raiser/vm";
 import { nodeToValue, valueToExpansion, takeWireRefusals } from "./bridge";
 import { nextQuoteGensymSuffix } from "../../checker/template";
 import { forEachChild } from "../../ast/visitor";
+import { metaNodeType, metaNodeKindType } from "./stdTags";
 
 // The names the wrapper binds; a decorator body placed inside it must not see them.
 const wrapperBindings = ["value", "kind", "name", "isStatic", "isPrivate", "metaKeys", "metaValues", "inheritedKeys", "inheritedValues", "init", "sink", "get", "set", "has", "__dec", "r0", "r"];
@@ -610,14 +611,16 @@ function wrapperSource(isMacro: boolean, signature: string, shape: int32, arity:
 	const memberExprKind = NodeKind.MemberExpr as int32;
 	const binaryExprKind = NodeKind.BinaryExpr as int32;
 	const boolLitKind = NodeKind.BooleanLiteral as int32;
-	let s = "function __decoratorApply(value: Node, kind: string, name: string, isStatic: boolean, isPrivate: boolean, metaKeys: string[], metaValues: Node[], inheritedKeys: string[], inheritedValues: Node[], init: Node" + (accessor ? ", accGet: Node, accSet: Node" : "") + ") {\n";
-	s = s + "\tconst sink: Node[] = [];\n";
-	s = s + `\tconst get = (recv: Node): Node => ({ kind: ${memberExprKind} as NodeKind, line: recv.line, column: recv.column, object: recv, property: name, isOptional: false });\n`;
-	s = s + `\tconst set = (recv: Node, v: Node): Node => ({ kind: ${binaryExprKind} as NodeKind, line: recv.line, column: recv.column, operator: "=", left: get(recv), right: v });\n`;
-	s = s + `\tconst has = (recv: Node): Node => ({ kind: ${boolLitKind} as NodeKind, line: recv.line, column: recv.column, boolValue: true });\n`;
+	const nodeT = metaNodeType;
+	const kindT = metaNodeKindType;
+	let s = `function __decoratorApply(value: ${nodeT}, kind: string, name: string, isStatic: boolean, isPrivate: boolean, metaKeys: string[], metaValues: ${nodeT}[], inheritedKeys: string[], inheritedValues: ${nodeT}[], init: ${nodeT}` + (accessor ? `, accGet: ${nodeT}, accSet: ${nodeT}` : ``) + `) {\n`;
+	s = s + `\tconst sink: ${nodeT}[] = [];\n`;
+	s = s + `\tconst get = (recv: ${nodeT}): ${nodeT} => ({ kind: ${memberExprKind} as ${kindT}, line: recv.line, column: recv.column, object: recv, property: name, isOptional: false });\n`;
+	s = s + `\tconst set = (recv: ${nodeT}, v: ${nodeT}): ${nodeT} => ({ kind: ${binaryExprKind} as ${kindT}, line: recv.line, column: recv.column, operator: "=", left: get(recv), right: v });\n`;
+	s = s + `\tconst has = (recv: ${nodeT}): ${nodeT} => ({ kind: ${boolLitKind} as ${kindT}, line: recv.line, column: recv.column, boolValue: true });\n`;
 	if (isMacro) s = s + `\tconst __dec = ${signature} => {};\n`;
 	const contextArg = arity >= 2
-		? ", { kind: kind, name: name, static: isStatic, private: isPrivate, metadata: { keys: metaKeys, values: metaValues, inheritedKeys: inheritedKeys, inheritedValues: inheritedValues }, addInitializer: (stmt: Node): void => { sink.push(stmt); }, access: { get: get, set: set, has: has } }"
+		? `, { kind: kind, name: name, static: isStatic, private: isPrivate, metadata: { keys: metaKeys, values: metaValues, inheritedKeys: inheritedKeys, inheritedValues: inheritedValues }, addInitializer: (stmt: ${nodeT}): void => { sink.push(stmt); }, access: { get: get, set: set, has: has } }`
 		: "";
 	if (accessor) s = s + "\tconst target" + (accessorType != "" ? ": " + accessorType : "") + " = { get: accGet, set: accSet };\n";
 	const call = "__callee__(" + (accessor ? "target" : "value") + contextArg + ")";
