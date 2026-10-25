@@ -5,6 +5,7 @@ import {
 	MemberExprData, BinaryExprData, SwitchStmtData, CallExprData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { isLogicalAssignOp } from "../ast/operators";
 import { RoutineFlag, routineFlagSet } from "../checker/symbol";
 import { routineKindFlag } from "../checker/context";
 import { TransformContext, ModuleFact, reportTransformError, mayContain } from "./context";
@@ -21,6 +22,10 @@ function routineFacts(flags: string): BitSet<ModuleFact> {
 	if (set.has(RoutineFlag.Async) || kind == "async" || kind == "async_generator") facts = facts.incl(ModuleFact.Async);
 	if (set.has(RoutineFlag.Generator)) facts = facts.incl(ModuleFact.Generator);
 	return facts;
+}
+
+function lowersAsNullish(op: string): boolean {
+	return op == "??" || isLogicalAssignOp(op);
 }
 
 function isSpawnCall(node: Node): boolean {
@@ -43,7 +48,7 @@ export function factsOf(node: Node): BitSet<ModuleFact> {
 		NodeKind.DeferStmt => NO_FACTS.incl(ModuleFact.Defer),
 		NodeKind.MemberExpr => factIf((node.data as MemberExprData).isOptional, ModuleFact.OptionalChain),
 		NodeKind.ConditionalExpr => factIf(sharedProbe(node) != null, ModuleFact.OptionalChain),
-		NodeKind.BinaryExpr => factIf((node.data as BinaryExprData).operator == "??", ModuleFact.Nullish),
+		NodeKind.BinaryExpr => factIf(lowersAsNullish((node.data as BinaryExprData).operator), ModuleFact.Nullish),
 		NodeKind.SpreadExpr => NO_FACTS.incl(ModuleFact.Spread),
 		NodeKind.SwitchStmt => factIf(!(node.data as SwitchStmtData).switchLowered, ModuleFact.Switch),
 		_ => NO_FACTS,
