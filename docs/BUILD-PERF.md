@@ -16,7 +16,7 @@ per program, so a change shows its own delta in about a minute.
 
 The runner's environment and program names are the header of `src/test/perf/run.ms`.
 
-**A/B recipe.** Build the candidate at the worktree root (`msc build src/index.ms --gc=drc --danger
+**A/B recipe.** Build the candidate at the worktree root (`msc build src/index.ms --danger
 --lto=off --output=msc`), keep the previous build as the base, then
 
 ```sh
@@ -49,9 +49,7 @@ both arms: that is the noise check, and every row of it should carry no mark.
 `--gc=drc --danger --lto=off`, `MSPERF_SELF=1`, `711`, 3 runs, load 63-73): no row marked; coverage
 97.0% of `phase.A` in leaf flows and 100.0% of the `msc total` in `phase.*` rows. `phase.setup`
 (session start, cache init, parser registration) is 4.1G of 30.5G instructions here against 1.1G in
-a warm run from the worktree, so it is a flow worth its own look. A compiler built without
-`--gc=drc` is an orc compiler and crashes in parallel emit (compiler inbox, `sharedTypeQueries`
-card); build both arms with `--gc=drc`.
+a warm run from the worktree, so it is a flow worth its own look.
 
 **Measured noise, 2026-10-25** (macOS arm64, installed `msc` v0.3.4 as both arms, `711` built with
 `--emit=c`, 3 runs, load average 100-140 during the run): process instructions 25.49G against 25.64G,

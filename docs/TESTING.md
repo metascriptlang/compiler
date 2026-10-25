@@ -275,7 +275,7 @@ last sync, and its link response file `msc_link.rsp` names that root in every
 removed from the repo, while the same source built by `./msc build` (the repo
 root) printed every byte.
 
-So the loop is: edit the repo → `./msc build src/index.ms --gc=drc --danger --cc=clang --output=msc`
+So the loop is: edit the repo → `./msc build src/index.ms --danger --cc=clang --output=msc`
 (`msc build` only when no `./msc` exists yet, then once more with `./msc`) →
 **test the candidate** → `./msc run --target=raiser tools/syncLocalBinary.ms`
 only once green (publish: candidate + repo std/runtime become the installed
