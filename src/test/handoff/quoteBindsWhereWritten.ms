@@ -42,14 +42,15 @@ function helper(): string { return "caller"; }
 class Box { w: string = "caller"; }
 `;
 
-function callerOf(decls: string, use: string): MapEntry {
-	return { entryPath: "test/main.ms", entrySource: `import { m } from "./lib";\n${decls}\nconst r: int32 = ${use};\nconsole.log(r);\n` };
+function callerOf(decls: string, use: string, type: string = "int32"): MapEntry {
+	return { entryPath: "test/main.ms", entrySource: `import { m } from "./lib";\n${decls}\nconst r: ${type} = ${use};\nconsole.log(r);\n` };
 }
 
 test "quoteBindsWhereWritten: a const, a call and a new in a quote name the macro module's declarations" {
 	const lib: MapEntry = { entryPath: "test/lib.ms", entrySource: libWith("LIMIT") };
 	const bad = failures([
 		buildFailure([lib, callerOf(callerNamesakes, "m(0)")], "const"),
+		buildFailure([lib, callerOf(callerNamesakes + "function inBody(): int32 { const LIMIT: string = \"local\"; return m(0); }\n", "inBody()")], "const in a function body"),
 		buildFailure([{ entryPath: "test/lib.ms", entrySource: libWith("helper()") }, callerOf(callerNamesakes, "m(0)")], "call"),
 		buildFailure([{ entryPath: "test/lib.ms", entrySource: libWith("new Box().v") }, callerOf(callerNamesakes, "m(0)")], "new"),
 	]);
@@ -121,15 +122,15 @@ test "quoteBindsWhereWritten: a quote naming a std value, namespace or function 
 		], "std value"),
 		buildFailure([
 			stdLib(`export macro m(x: Node): Node { return quote { Math.floor(2.5) }; }`),
-			callerOf(`const Math = { floor: (n: number): string => "caller" };`, "m(0)"),
+			callerOf(`const Math = { floor: (n: number): string => "caller" };`, "m(0)", "number"),
 		], "std namespace object"),
 		buildFailure([
 			stdLib(`export macro m(x: Node): Node { return quote { parseInt("5") }; }`),
-			callerOf(`function parseInt(s: string): string { return "caller"; }`, "m(0)"),
+			callerOf(`function parseInt(s: string): string { return "caller"; }`, "m(0)", "int64"),
 		], "std function"),
 		buildFailure([
 			stdLib(`export macro m(x: Node): Node { return quote { Math.floor(2.5) }; }`),
-			callerOf("", "m(0)"),
+			callerOf("", "m(0)", "number"),
 		], "std namespace object with no caller namesake"),
 	]);
 	assert bad == "", bad;

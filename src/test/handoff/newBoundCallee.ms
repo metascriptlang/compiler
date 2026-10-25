@@ -41,14 +41,16 @@ test "new of a bound class beside a caller class of the same name is the bound c
 	const map = lib("", "Map", "[]", "string, int32");
 	const boxUse = `import { mk } from "./lib";
 class Box { v: string = "s"; }
+console.log(new Box().v);
 const b = mk(0);
 const n: int32 = b.v;
 console.log(n);
 `;
 	const mapUse = `import { mk } from "./lib";
 class Map { size: string = "s"; }
+console.log(new Map().size);
 const m = mk(0);
-const n: int32 = m.size;
+const n: number = m.size;
 console.log(n);
 `;
 	assert problemOf(box, boxUse) == "", "Box: " + problemOf(box, boxUse);

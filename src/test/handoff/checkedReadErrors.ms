@@ -2,8 +2,8 @@ import { compileToJSWithStd } from "../helpers";
 
 test "checked reads: JavaScript iteration raises construct Error objects" {
 	const cases = [
-		{ source: "const xs: string[] = [\"a\", \"b\"]; for (const x of xs) { xs.pop(); }", raised: "throw new Error(\"the length of the array changed while iterating over it\")" },
-		{ source: "let text = \"ab\"; for (const ch of text) { text = text + \"c\"; }", raised: "throw new Error(\"the length of the string changed while iterating over it\")" },
+		{ source: "const xs: string[] = [\"a\", \"b\"]; for (const x of xs) { xs.pop(); }", raised: "throw new globalThis.Error(\"the length of the array changed while iterating over it\")" },
+		{ source: "let text = \"ab\"; for (const ch of text) { text = text + \"c\"; }", raised: "throw new globalThis.Error(\"the length of the string changed while iterating over it\")" },
 	];
 	for (const item of cases) {
 		const js = compileToJSWithStd(item.source);

@@ -57,11 +57,11 @@ test "decorator metadata chain: a grandparent the child module never names still
 }
 
 test "decorator metadata chain: a child module's own class named like the grandparent is not the grandparent" {
-	const problem = problemOf(childModule(`import { Parent } from "./b";`, "class Grand { z: int32 = 3; }", "Parent"));
+	const problem = problemOf(childModule(`import { Parent } from "./b";`, "class Grand { z: int32 = 3; }\nconsole.log(new Grand().z);", "Parent"));
 	assert problem == "", "namesake" + ": " + problem;
 }
 
 test "decorator metadata chain: the parent imported under an alias, beside a class named like it" {
-	const problem = problemOf(childModule(`import { Parent as P } from "./b";`, "class Parent { z: int32 = 3; }", "P"));
+	const problem = problemOf(childModule(`import { Parent as P } from "./b";`, "class Parent { z: int32 = 3; }\nconsole.log(new Parent().z);", "P"));
 	assert problem == "", "alias" + ": " + problem;
 }
