@@ -1,7 +1,7 @@
-import { compileToJS } from "../helpers";
+import { compileToJS, compileToJSWithStd } from "../helpers";
 
 test "a typed array the compiler emits is read through globalThis" {
-	const js = compileToJS("const a: float32[2] = [1.5, 2.5];\nconsole.log(a[1]);\n");
+	const js = compileToJSWithStd("const a: float32[2] = [1.5, 2.5];\nconsole.log(a[1]);\n");
 	assert js.ok;
 	assert js.value.contains("new globalThis.Float32Array(");
 	assert !js.value.contains("new Float32Array(");
