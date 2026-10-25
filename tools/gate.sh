@@ -2253,7 +2253,7 @@ run_sharded_lane() {
   local lane=$1 var=$2 runner=$3 n=$4 i rc=0 part prc claims="" name
   if [ "$lane" = guard ]; then
     claims="$OUT/guard.claims"
-    rm -rf "$claims" && mkdir -p "$claims/done"
+    rm -rf "$claims" && mkdir -p "$claims/done" "$claims/taken"
     guard_probe_names | while read -r name; do : >"$claims/$name"; done
   fi
   for ((i = 0; i < n; i++)); do
