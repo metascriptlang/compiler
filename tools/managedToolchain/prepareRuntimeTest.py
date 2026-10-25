@@ -377,8 +377,12 @@ else:
         isystem += " -isystem %%s/libc/include/%%s" %% (lib, d)
     triple = "aarch64-unknown-linux5.10.0-gnu2.31.0" if arm else "x86_64-unknown-linux5.10.0-gnu2.31.0"
     flags, cpu = "-fno-PIE -fPIC -D__GLIBC_MINOR__=31", "generic" if arm else "x86-64"
-    link = "ld.lld -z stack-size=1 -o %%s %%s --dynamic-linker /lib64/ld.so %%s --as-needed %%s %%s" %% (
-        out, make("crt1.o"), make(stem + ".o"), make("libc.so.6"), make("libc_nonshared.a"))
+    if "-shared" in sys.argv:
+        link = "ld.lld -shared %(extra)s-o %%s %%s %%s --as-needed %%s %%s" %% (
+            out, make("crti.o"), make(stem + ".o"), make("libc.so.6"), make("libc_nonshared.a"))
+    else:
+        link = "ld.lld -z stack-size=1 -o %%s %%s --dynamic-linker /lib64/ld.so %%s --as-needed %%s %%s" %% (
+            out, make("crt1.o"), make(stem + ".o"), make("libc.so.6"), make("libc_nonshared.a"))
 sys.stderr.write("ar rcs %%s/x.a\\n" %% cache)
 features = {"x86-64": "-Xclang -target-feature -Xclang -amx-transpose",
             "generic": "-Xclang -target-feature -Xclang -tme -Xclang -target-feature -Xclang +neon"}.get(
@@ -398,7 +402,8 @@ with open(sys.argv[3], "wb") as f:
 """
 
 
-class PipelineTest(TempCase):
+class ZigFixtureCase(TempCase):
+    """A fake Zig and engine with the unit-test patches of the checks that need a real engine."""
     def setUp(self):
         super().setUp()
         self.lib = self.path("zig", "lib")
@@ -408,8 +413,7 @@ class PipelineTest(TempCase):
                 "libc/wasi/" + n for n in pr.WASI_LICENSES):
             write(os.path.normpath(os.path.join(self.lib, rel)), "license " + rel)
         self.zig = self.path("zig", "zigfake")
-        write(self.zig, FAKE_ZIG % {"python": sys.executable, "lib": self.lib})
-        os.chmod(self.zig, 0o755)
+        self.writeZig()
         self.engine = self.path("engine")
         write(os.path.join(self.engine, "bin", "llvm-ar"), FAKE_LLVM_AR % {"python": sys.executable})
         os.chmod(os.path.join(self.engine, "bin", "llvm-ar"), 0o755)
@@ -419,6 +423,12 @@ class PipelineTest(TempCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+    def writeZig(self, extra=""):
+        write(self.zig, FAKE_ZIG % {"python": sys.executable, "lib": self.lib, "extra": extra})
+        os.chmod(self.zig, 0o755)
+
+
+class PipelineTest(ZigFixtureCase):
     def test_all_targets_produce_a_relocatable_payload(self):
         out = self.path("rt")
         pr.prepareRuntime(self.zig, self.engine, out, [])
@@ -1061,6 +1071,230 @@ class ProofHelperTest(TempCase):
             self.assertIn("newer", pr.glibcSymbolProblem("nm", "elf"))
         with mock.patch.object(pe, "run", return_value="  U puts@GLIBC_2.2.5\n"):
             self.assertIn("printf", pr.glibcSymbolProblem("nm", "elf"))
+
+
+ET_EXEC = 2
+
+
+def sharedElf(path, kind=pr.ET_DYN, interpreter=False, machine=62):
+    """A little-endian ELF64 of the given e_type with one program header, a PT_INTERP or a PT_LOAD."""
+    body = bytearray(b"\0" * (64 + 56))
+    body[:20] = b"\x7fELF\x02\x01\x01" + b"\0" * 11 + machine.to_bytes(2, "little")
+    body[16:18] = kind.to_bytes(2, "little")
+    body[32:40] = (64).to_bytes(8, "little")
+    body[54:58] = (56).to_bytes(2, "little") + (1).to_bytes(2, "little")
+    body[64:68] = (3 if interpreter else 1).to_bytes(4, "little")
+    with open(path, "wb") as f:
+        f.write(body)
+    return path
+
+
+class SharedProfileTest(TempCase):
+    def test_the_shared_targets_are_the_two_glibc_targets_and_the_executable_ones_are_unchanged(self):
+        self.assertEqual(pr.selectTargets([], pr.SHARED_TARGETS), ["x86_64-linux-gnu.2.31", "aarch64-linux-gnu.2.31"])
+        self.assertEqual(pr.selectTargets(["aarch64-linux-gnu.2.31"], pr.SHARED_TARGETS), ["aarch64-linux-gnu.2.31"])
+        for bad in (["wasm32-wasi"], ["x86_64-windows-gnu"], ["x86_64-linux-gnu"], ["x86_64-linux-gnu.2.31"] * 2):
+            with self.assertRaises(pe.EngineError, msg=bad):
+                pr.selectTargets(bad, pr.SHARED_TARGETS)
+        self.assertEqual(list(pr.TARGETS), ["wasm32-wasi", "x86_64-linux-gnu.2.31", "aarch64-linux-gnu.2.31"])
+        self.assertEqual(pr.TARGETS["x86_64-linux-gnu.2.31"]["driverFlags"], ["-no-pie"])
+
+    def test_the_config_names_the_shared_directory_and_carries_shared_without_startup(self):
+        compile_ = pr.parseCompileArgv(LINUX_COMPILE)
+        items = [("arg", "-shared"), ("input", "/c/crti.o"), ("user", None), ("arg", "--as-needed"),
+                 ("input", "/c/libc.so.6")]
+        for target in pr.SHARED_TARGETS:
+            directory = target + ".so"
+            text = pr.renderConfig(target, pr.SHARED_TARGETS[target], compile_, items, ["generic-glibc"], "..", "22",
+                                   directory)
+            lines = text.splitlines()
+            self.assertIn("--sysroot=<CFGDIR>/%s" % directory, lines)
+            self.assertIn("-Xlinker -L -Xlinker <CFGDIR>/%s" % directory, lines)
+            self.assertIn("-Xlinker <CFGDIR>/%s/crti.o" % directory, lines)
+            self.assertIn("-Xlinker <CFGDIR>/%s/libc.so.6" % directory, lines)
+            self.assertIn("-shared", lines)
+            self.assertIn("-Xlinker -shared", lines)
+            self.assertIn("-isystem <CFGDIR>/include/libc/generic-glibc", lines)
+            self.assertNotIn("-no-pie", lines)
+            self.assertFalse([l for l in lines if "dynamic-linker" in l or "--entry" in l or "-pie" in l or "crt1" in l], text)
+            self.assertNotIn("<CFGDIR>/%s/" % target, text)
+
+    def test_the_default_directory_is_the_target_so_executable_config_bytes_do_not_move(self):
+        compile_ = pr.parseCompileArgv(LINUX_COMPILE)
+        items = [("arg", "-z"), ("input", "/c/crt1.o"), ("user", None)]
+        target = "x86_64-linux-gnu.2.31"
+        spec = pr.TARGETS[target]
+        self.assertEqual(pr.renderConfig(target, spec, compile_, items, ["x86-linux-gnu"], "..", "22"),
+                         pr.renderConfig(target, spec, compile_, items, ["x86-linux-gnu"], "..", "22", target))
+
+    def test_a_shared_link_line_names_shared_once_and_carries_no_executable_startup(self):
+        pr.checkSharedLink("ld.lld -shared -o out crti.o x.o --no-undefined-version")
+        for line, text in (("ld.lld -o out x.o", "-shared 0 times"),
+                           ("ld.lld -shared -shared -o out", "-shared 2 times"),
+                           ("ld.lld -shared --dynamic-linker /l -o out", "--dynamic-linker"),
+                           ("ld.lld -shared --no-dynamic-linker -o out", "--no-dynamic-linker"),
+                           ("ld.lld -shared --entry _start -o out", "--entry"),
+                           ("ld.lld -shared -pie -o out", "-pie"),
+                           ("ld.lld -shared -soname libfixture.so -o out", "-soname")):
+            with self.assertRaisesRegex(pe.EngineError, text):
+                pr.checkSharedLink(line)
+
+    def test_headers_are_the_runtimes_when_every_file_matches(self):
+        zigLib, runtime = self.path("z", "lib"), self.path("rt")
+        for root in (os.path.join(zigLib, "libc", "include"), os.path.join(runtime, "include", "libc")):
+            write(os.path.join(root, "generic-glibc", "a", "h.h"), "same")
+            write(os.path.join(root, "x86-linux-gnu", "h.h"), "same")
+        isystem = [zigLib + "/include"] + ["%s/libc/include/%s" % (zigLib, n) for n in (
+            "x86-linux-gnu", "x86-linux-any", "generic-glibc")]
+        self.assertEqual(pr.sharedHeaders(isystem, runtime, zigLib), (["x86-linux-gnu", "generic-glibc"], ["x86-linux-any"]))
+        write(os.path.join(runtime, "include", "libc", "generic-glibc", "a", "h.h"), "other")
+        with self.assertRaisesRegex(pe.EngineError, "differs from"):
+            pr.sharedHeaders(isystem, runtime, zigLib)
+        shutil.rmtree(os.path.join(runtime, "include", "libc", "x86-linux-gnu"))
+        with self.assertRaisesRegex(pe.EngineError, "differs from"):
+            pr.sharedHeaders(isystem[:2], runtime, zigLib)
+        with self.assertRaisesRegex(pe.EngineError, "first include directory"):
+            pr.sharedHeaders(isystem[1:], runtime, zigLib)
+        with self.assertRaisesRegex(pe.EngineError, "not directly under"):
+            pr.sharedHeaders([zigLib + "/include", "/elsewhere/x86-linux-gnu"], runtime, zigLib)
+
+    def test_a_linked_library_must_be_a_shared_object_of_the_target_with_no_interpreter(self):
+        x64, arm = "x86_64-linux-gnu.2.31", "aarch64-linux-gnu.2.31"
+        self.assertIsNone(pr.elfSharedProblem(sharedElf(self.path("so")), x64))
+        self.assertIsNone(pr.elfSharedProblem(sharedElf(self.path("arm"), machine=183), arm))
+        self.assertIn("aarch64", pr.elfSharedProblem(sharedElf(self.path("so2")), arm))
+        self.assertIn("not a shared object", pr.elfSharedProblem(sharedElf(self.path("exec"), kind=ET_EXEC), x64))
+        self.assertIn("interpreter", pr.elfSharedProblem(sharedElf(self.path("pie"), interpreter=True), x64))
+
+    def test_the_fixture_export_is_found_among_defined_dynamic_symbols(self):
+        with mock.patch.object(pe, "run", return_value="0000000000001350 T addNumbers\n0000000000002000 D other\n"):
+            self.assertIsNone(pr.exportedSymbolProblem("nm", "lib", "addNumbers"))
+            self.assertIn("does not export missing", pr.exportedSymbolProblem("nm", "lib", "missing"))
+        with mock.patch.object(pe, "run", return_value="") as run:
+            self.assertIn("does not export", pr.exportedSymbolProblem("nm", "lib", "addNumbers"))
+            self.assertEqual(run.call_args[0][0], ["nm", "-D", "--defined-only", "lib"])
+
+
+class SharedRuntimeTest(ZigFixtureCase):
+    def setUp(self):
+        super().setUp()
+        self.runtime = self.path("rt")
+        pr.prepareRuntime(self.zig, self.engine, self.runtime, [])
+        patcher = mock.patch.object(pr, "verifySharedConfigs")
+        self.verify = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def rewriteZig(self, extra):
+        """A different fake Zig, with the base runtime's receipt naming it as its maker."""
+        self.writeZig(extra)
+        path = self.path("rt", "notices", "runtime-provenance.json")
+        write(path, json.dumps(dict(json.loads(read(path)), zig=pr.zigIdentity(self.zig))))
+
+    def snapshot(self):
+        return {os.path.relpath(os.path.join(d, n), self.runtime): pe.sha256File(os.path.join(d, n))
+                for d, _, names in os.walk(self.runtime) for n in names if not os.path.islink(os.path.join(d, n))}
+
+    def test_the_overlay_holds_only_the_shared_directory_config_and_receipt_of_each_target(self):
+        before = self.snapshot()
+        out, records = pr.prepareSharedRuntime(self.zig, self.engine, self.runtime, self.path("so"), [])
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(sorted(os.listdir(out)), ["aarch64-linux-gnu.2.31.so", "aarch64-linux-gnu.2.31.so.cfg", "notices",
+                                                    "x86_64-linux-gnu.2.31.so", "x86_64-linux-gnu.2.31.so.cfg"])
+        self.assertEqual(os.listdir(self.path("so", "notices")), ["runtime-shared-provenance.json"])
+        self.assertEqual(sorted(os.listdir(self.path("so", "x86_64-linux-gnu.2.31.so"))),
+                         ["crti.o", "libc.so", "libc.so.6", "libc_nonshared.a"])
+        self.assertEqual(os.readlink(self.path("so", "x86_64-linux-gnu.2.31.so", "libc.so")), "libc.so.6")
+        config = read(self.path("so", "x86_64-linux-gnu.2.31.so.cfg"))
+        lines = config.splitlines()
+        for expected in ("--sysroot=<CFGDIR>/x86_64-linux-gnu.2.31.so", "-shared", "-Xlinker -shared",
+                         "-Xlinker -L -Xlinker <CFGDIR>/x86_64-linux-gnu.2.31.so",
+                         "-Xlinker <CFGDIR>/x86_64-linux-gnu.2.31.so/crti.o",
+                         "-Xlinker <CFGDIR>/x86_64-linux-gnu.2.31.so/libc.so.6",
+                         "-isystem <CFGDIR>/include/libc/x86-linux-gnu", "-fno-PIE -fPIC", "--ld-path=<CFGDIR>/../engine/bin/ld.lld"):
+            self.assertIn(expected, lines)
+        self.assertFalse([l for l in lines if "dynamic-linker" in l or "crt1" in l or "-no-pie" in l], config)
+        self.assertNotIn(self.dir, config)
+        arm = read(self.path("so", "aarch64-linux-gnu.2.31.so.cfg"))
+        self.assertIn("-target aarch64-unknown-linux5.10.0-gnu2.31.0\n", arm)
+        self.assertIn("-isystem <CFGDIR>/include/libc/aarch64-linux-gnu\n", arm)
+        self.assertNotIn("-tme", arm)
+        receipt = json.loads(read(self.path("so", "notices", "runtime-shared-provenance.json")))
+        self.assertFalse(receipt["redistributionCertified"])
+        self.assertEqual(receipt["baseRuntimeProvenanceSha256"],
+                         pe.sha256File(self.path("rt", "notices", "runtime-provenance.json")))
+        self.assertEqual([r["target"] for r in receipt["targets"]], ["x86_64-linux-gnu.2.31", "aarch64-linux-gnu.2.31"])
+        self.assertEqual(receipt["targets"][0]["linkArgs"], [
+            "-shared", "$RT/x86_64-linux-gnu.2.31.so/crti.o", "$OBJECT", "--as-needed",
+            "$RT/x86_64-linux-gnu.2.31.so/libc.so.6", "$RT/x86_64-linux-gnu.2.31.so/libc_nonshared.a"])
+        self.assertEqual(self.verify.call_count, 1)
+
+    def test_one_target_makes_only_its_files(self):
+        out, _ = pr.prepareSharedRuntime(self.zig, self.engine, self.runtime, self.path("so"), ["aarch64-linux-gnu.2.31"])
+        self.assertEqual(sorted(os.listdir(out)), ["aarch64-linux-gnu.2.31.so", "aarch64-linux-gnu.2.31.so.cfg", "notices"])
+
+    def test_zig_runs_a_shared_link_for_the_target(self):
+        with mock.patch.object(pr, "runZig", wraps=pr.runZig) as run:
+            pr.prepareSharedRuntime(self.zig, self.engine, self.runtime, self.path("so"), ["x86_64-linux-gnu.2.31"])
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args[0][3]["zigArgs"], ["-shared"])
+        self.assertEqual(run.call_args[0][3]["zigLinkArgs"], ["-lm", "-lpthread"])
+
+    def test_an_executable_startup_token_in_the_shared_link_line_is_refused_and_leaves_nothing(self):
+        for extra, token in (("--dynamic-linker /lib64/ld.so ", "--dynamic-linker"), ("-soname libfixture.so ", "-soname"),
+                             ("--entry _start ", "--entry"), ("-pie ", "-pie")):
+            self.rewriteZig(extra)
+            with self.assertRaisesRegex(pe.EngineError, token):
+                pr.prepareSharedRuntime(self.zig, self.engine, self.runtime, self.path("so"), [])
+            self.assertEqual([n for n in os.listdir(self.dir) if n.startswith("so")], [])
+
+    def test_a_runtime_not_prepared_for_the_target_or_by_another_zig_or_already_holding_the_profile_is_refused(self):
+        with self.assertRaisesRegex(pe.EngineError, "never replaced"):
+            pr.prepareSharedRuntime(self.zig, self.engine, self.runtime, self.runtime, [])
+        write(self.path("bare", "notices", "other"))
+        with self.assertRaisesRegex(pe.EngineError, "no notices/runtime-provenance.json"):
+            pr.prepareSharedRuntime(self.zig, self.engine, self.path("bare"), self.path("so"), [])
+        receiptPath = self.path("rt", "notices", "runtime-provenance.json")
+        receipt = json.loads(read(receiptPath))
+        write(receiptPath, json.dumps(dict(receipt, targets=receipt["targets"][:2])))
+        with self.assertRaisesRegex(pe.EngineError, "was not prepared for aarch64-linux-gnu.2.31"):
+            pr.prepareSharedRuntime(self.zig, self.engine, self.runtime, self.path("so"), [])
+        write(receiptPath, json.dumps(dict(receipt, zig={"version": "0.16.0", "sha256": "0" * 64})))
+        with self.assertRaisesRegex(pe.EngineError, "prepared by Zig"):
+            pr.prepareSharedRuntime(self.zig, self.engine, self.runtime, self.path("so"), [])
+        write(receiptPath, json.dumps(receipt))
+        os.makedirs(self.path("rt", "x86_64-linux-gnu.2.31.so"))
+        with self.assertRaisesRegex(pe.EngineError, "already has x86_64-linux-gnu.2.31.so"):
+            pr.prepareSharedRuntime(self.zig, self.engine, self.runtime, self.path("so"), [])
+        self.assertFalse(os.path.exists(self.path("so")))
+
+    def test_a_header_directory_that_differs_from_the_runtimes_is_refused(self):
+        write(os.path.join(self.lib, "libc", "include", "generic-glibc", "h.h"), "changed")
+        with self.assertRaisesRegex(pe.EngineError, "differs from"):
+            pr.prepareSharedRuntime(self.zig, self.engine, self.runtime, self.path("so"), [])
+        self.assertEqual([n for n in os.listdir(self.dir) if n.startswith("so")], [])
+
+    def test_existing_output_is_never_replaced_even_when_claimed_while_producing(self):
+        out = self.path("so")
+        original = pr.writeSharedProvenance
+
+        def claimWhileProducing(*args):
+            os.makedirs(out)
+            original(*args)
+
+        with mock.patch.object(pr, "writeSharedProvenance", side_effect=claimWhileProducing):
+            with self.assertRaisesRegex(pe.EngineError, "never replaced"):
+                pr.prepareSharedRuntime(self.zig, self.engine, self.runtime, out, [])
+        self.assertEqual(os.listdir(out), [])
+        self.assertEqual([n for n in os.listdir(self.dir) if n.startswith("so.partial")], [])
+
+    def test_the_command_line_writes_the_overlay_and_reports_each_target(self):
+        argv = ["--shared", "--zig", self.zig, "--engine", self.engine, "--runtime", self.runtime,
+                "--output", self.path("so"), "--target", "x86_64-linux-gnu.2.31"]
+        self.assertEqual(pr.main(argv), 0)
+        self.assertTrue(os.path.isfile(self.path("so", "x86_64-linux-gnu.2.31.so.cfg")))
+        self.assertEqual(pr.main(argv), 1)
+        with self.assertRaises(SystemExit):
+            pr.main(["--shared", "--zig", self.zig, "--engine", self.engine, "--output", self.path("so2")])
 
 
 if __name__ == "__main__":

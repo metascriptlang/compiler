@@ -3,6 +3,7 @@
 
     prepareRuntime.py --zig ZIG --engine ENGINE_DIR --output NEW_DIR [--target T ...]
     prepareRuntime.py --prove --engine ENGINE_DIR --runtime RUNTIME_DIR [--zig ZIG] [--deny PATH ...]
+    prepareRuntime.py --shared --zig ZIG --engine ENGINE_DIR --runtime RUNTIME_DIR --output NEW_DIR [--target T ...]
 
 Production runs Zig once per target on a fixture with private caches, so every runtime file
 is attributable to that run, and copies the ordered inputs of the link line and the ordered
@@ -17,6 +18,12 @@ appends gets the standard empty `libm.a` beside it, made with the engine's `llvm
 receipt records it and verification refuses an archive that is not empty. The engine is found from the config file by a relative path
 (`--engine-relative`): siblings by default (`../engine`), or `..` when the runtime is a child of
 the engine root, as in a full bundle.
+
+`--shared` adds the shared-object profile of each glibc target to a prepared RUNTIME_DIR, which is only read. NEW_DIR
+receives an overlay of new paths: `<target>.so.cfg` (`clang --config RUNTIME/T.so.cfg -c x.c`, then `... x.o -o libx.so`),
+the `<target>.so/` directory of the link inputs of Zig's `-shared` link line, and
+`notices/runtime-shared-provenance.json`. The config carries `-shared` and no executable startup (no entry, no
+interpreter, no `-pie`); the libc headers are RUNTIME_DIR's, which must match Zig's file by file. Exe configs are not touched.
 
 The payload is a local proof from an installed Zig, not an upstream-controlled build; its
 provenance receipt says so and never certifies redistribution.
@@ -132,6 +139,16 @@ ELF_TARGETS = {
     "x86_64-linux-gnu.2.31": {"machine": 62, "name": "x86_64", "interpreter": "/lib64/ld-linux-x86-64.so.2"},
     "aarch64-linux-gnu.2.31": {"machine": 183, "name": "aarch64", "interpreter": "/lib/ld-linux-aarch64.so.1"},
 }
+# The shared-object profile of a glibc target: Zig's `-shared` link of a library that exports `addNumbers`.
+# Its directory `<target>.so` and config `<target>.so.cfg` are apart from the executable's.
+GNU_SHARED = dict(GNU_LINUX, fixture="runtimeLinuxShared.c", zigArgs=["-shared"], driverFlags=["-shared"],
+                  exportedSymbol="addNumbers")
+SHARED_TARGETS = {target: GNU_SHARED for target in ELF_TARGETS}
+SHARED_PROVENANCE = "notices/runtime-shared-provenance.json"
+# Executable startup on a link line of a shared object, and the soname of the fixture.
+SHARED_REFUSED = ("--dynamic-linker", "--no-dynamic-linker", "--entry", "-pie", "-soname")
+PT_INTERP = 3
+ET_DYN = 3
 
 
 def parseCompileArgv(line):
@@ -220,11 +237,11 @@ def selectLines(stderr, fixture, output):
     return compile_[0], link[0]
 
 
-def selectTargets(names):
-    chosen = list(names) if names else list(TARGETS)
+def selectTargets(names, allowed=TARGETS):
+    chosen = list(names) if names else list(allowed)
     for name in chosen:
-        if name not in TARGETS:
-            raise pe.EngineError("target %s is not supported; allowed: %s" % (name, ", ".join(TARGETS)))
+        if name not in allowed:
+            raise pe.EngineError("target %s is not supported; allowed: %s" % (name, ", ".join(allowed)))
     if len(set(chosen)) != len(chosen):
         raise pe.EngineError("duplicate target in %s" % chosen)
     return chosen
@@ -243,15 +260,17 @@ def configLine(tokens):
     return " ".join(tokens)
 
 
-def renderConfig(target, spec, compile_, items, directories, engineRelative, major):
+def renderConfig(target, spec, compile_, items, directories, engineRelative, major, directory=None):
     """Text of RUNTIME/<target>.cfg. Compile and link both read it; linker arguments travel
-    as -Xlinker pairs, which `-c` leaves alone and which stay safe around commas."""
+    as -Xlinker pairs, which `-c` leaves alone and which stay safe around commas. The target's
+    files are in RUNTIME/<directory>, which is the target itself unless the caller names another."""
+    directory = directory or target
     here = "<CFGDIR>"
     engine = "%s/%s" % (here, engineRelative)
     lines = [configLine(["-target", spec.get("clangTarget") or compile_["target"]]),
              configLine(["-Xclang", "-target-cpu", "-Xclang", compile_["cpu"]])]
     if target in ELF_TARGETS:
-        lines.append(configLine(["--sysroot=%s/%s" % (here, target)]))
+        lines.append(configLine(["--sysroot=%s/%s" % (here, directory)]))
     lines += [configLine(["-Xclang", "-target-feature", "-Xclang", f]) for f in compile_["features"]]
     if compile_["pic"]:
         lines.append(configLine(compile_["pic"]))
@@ -261,12 +280,12 @@ def renderConfig(target, spec, compile_, items, directories, engineRelative, maj
     lines += [configLine(["-isystem", "%s/include/libc/%s" % (here, d)]) for d in directories]
     lines += ["-nostdlib"] + [configLine([f]) for f in spec["driverFlags"]]
     lines.append(configLine(["--ld-path=%s/bin/%s" % (engine, spec["linker"])]))
-    lines.append(configLine(["-Xlinker", "-L", "-Xlinker", "%s/%s" % (here, target)]))
+    lines.append(configLine(["-Xlinker", "-L", "-Xlinker", "%s/%s" % (here, directory)]))
     for kind, value in items:
         if kind == "arg":
             lines.append(configLine(["-Xlinker", value]))
         elif kind == "input":
-            lines.append(configLine(["-Xlinker", "%s/%s/%s" % (here, target, checkName(os.path.basename(value)))]))
+            lines.append(configLine(["-Xlinker", "%s/%s/%s" % (here, directory, checkName(os.path.basename(value)))]))
     return "\n".join(lines) + "\n"
 
 
@@ -288,10 +307,10 @@ def translateFeatures(features, target, cpu, zigVersion, engineMajor):
     return carried, notCarried
 
 
-def runZig(zig, target, work):
+def runZig(zig, target, work, spec=None, directory=None):
     """One Zig compile and link of the target's fixture. Returns (stderr, cacheRoot, output)."""
-    spec = TARGETS[target]
-    private = os.path.join(work, target)
+    spec = spec or TARGETS[target]
+    private = os.path.join(work, directory or target)
     cache = os.path.join(private, "global")
     output = os.path.join(private, "fixture.out")
     os.makedirs(cache)
@@ -300,7 +319,7 @@ def runZig(zig, target, work):
                    "ZIG_GLOBAL_CACHE_DIR": cache, "ZIG_LOCAL_CACHE_DIR": os.path.join(private, "local"),
                    "ZIG_VERBOSE_CC": "1", "ZIG_VERBOSE_LINK": "1"}
     fixture = os.path.join(FIXTURES, spec["fixture"])
-    command = [zig, "cc", "-target", target, "-O2", fixture] + spec["zigLinkArgs"] + ["-o", output]
+    command = [zig, "cc", "-target", target, "-O2"] + spec.get("zigArgs", []) + [fixture] + spec["zigLinkArgs"] + ["-o", output]
     try:
         done = subprocess.run(command, cwd=private, env=environment, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, universal_newlines=True,
@@ -654,12 +673,190 @@ def prepareRuntime(zig, engine, output, targets, engineRelative="../engine"):
     return output, records
 
 
-def checkConfig(run, clang, config, target, work, absentMacroPrefixes, libraries=()):
+def sharedDirectory(target):
+    return target + ".so"
+
+
+def checkSharedLink(line):
+    """A link line of a shared object names `-shared` once and carries no executable startup,
+    so a config made from it cannot start a program or stamp the fixture's soname on a library."""
+    tokens = line.split()
+    if tokens.count("-shared") != 1:
+        raise pe.EngineError("shared link line names -shared %d times: %s" % (tokens.count("-shared"), line))
+    found = [t for t in tokens if t in SHARED_REFUSED]
+    if found:
+        raise pe.EngineError("shared link line carries %s: %s" % (", ".join(found), line))
+
+
+def treeHashes(directory):
+    """{relative path: sha256} of the files under directory, or None when it is not a directory."""
+    if not os.path.isdir(directory):
+        return None
+    return {os.path.relpath(os.path.join(d, n), directory): pe.sha256File(os.path.join(d, n))
+            for d, _, names in os.walk(directory) for n in names}
+
+
+def sharedHeaders(isystem, runtime, zigLib):
+    """The include directory names a shared config lists, in order. Each is a directory of Zig that the
+    runtime already holds under include/libc with the same files; a directory Zig lacks is skipped
+    as in the executable config. Returns (names, absent names)."""
+    if isystem[0] != os.path.join(zigLib, "include"):
+        raise pe.EngineError("first include directory %s is not %s/include" % (isystem[0], zigLib))
+    root = os.path.join(zigLib, "libc", "include")
+    names, absent = [], []
+    for directory in isystem[1:]:
+        if os.path.dirname(directory) != root:
+            raise pe.EngineError("include directory %s is not directly under %s" % (directory, root))
+        name = checkName(os.path.basename(directory))
+        if not os.path.isdir(directory):
+            absent.append(name)
+        elif treeHashes(directory) != treeHashes(os.path.join(runtime, "include", "libc", name)):
+            raise pe.EngineError("include directory %s differs from %s/include/libc/%s" % (directory, runtime, name))
+        else:
+            names.append(name)
+    return names, absent
+
+
+def produceSharedTarget(zig, zigVersion, engine, runtime, target, work, output, engineRelative, major):
+    spec, directory = SHARED_TARGETS[target], sharedDirectory(target)
+    stderr, cacheRoot, out = runZig(zig, target, work, spec, directory)
+    fixture = os.path.join(FIXTURES, spec["fixture"])
+    compileLine, linkLine = selectLines(stderr, fixture, out)
+    checkSharedLink(linkLine)
+    compile_ = parseCompileArgv(compileLine)
+    linker, items = parseLinkArgv(linkLine, out, os.path.splitext(spec["fixture"])[0] + ".o", cacheRoot)
+    if linker != spec["linker"]:
+        raise pe.EngineError("%s linked with %s, expected %s" % (directory, linker, spec["linker"]))
+    zigLib = os.path.dirname(compile_["isystem"][0])
+    if re.search(r"\s", zigLib):
+        raise pe.EngineError("Zig lib directory %s has whitespace" % zigLib)
+    directories, absent = sharedHeaders(compile_["isystem"], runtime, zigLib)
+    inputs = copyInputs(items, output, directory, engine)
+    aliases = linkLibraryAliases(os.path.join(output, directory), [i["name"] for i in inputs])
+    carried, notCarried = translateFeatures(compile_["features"], target, compile_["cpu"], zigVersion, major)
+    pe.writeText(os.path.join(output, directory + ".cfg"),
+                 renderConfig(target, spec, dict(compile_, features=carried), items, directories,
+                              engineRelative, major, directory))
+    return {
+        "target": target, "directory": directory, "config": directory + ".cfg",
+        "zigTarget": compile_["target"], "clangTarget": compile_["target"], "cpu": compile_["cpu"],
+        "cpuFeatures": compile_["features"], "cpuFeaturesNotCarried": notCarried,
+        "positionIndependence": compile_["pic"], "defines": compile_["defines"], "linker": linker,
+        "linkArgs": [value if kind == "arg" else "$RT/%s/%s" % (directory, os.path.basename(value))
+                     if kind == "input" else "$OBJECT" for kind, value in items],
+        "includeDirectories": directories, "includeDirectoriesAbsentInZig": absent,
+        "inputs": inputs, "libraryAliases": aliases,
+    }
+
+
+def elfSharedProblem(path, target):
+    """The ELF is a shared object (ET_DYN) of target with no PT_INTERP."""
+    problem = elfProblem(path, target)
+    if problem:
+        return problem
+    with open(path, "rb") as f:
+        data = f.read()
+    if int.from_bytes(data[16:18], "little") != ET_DYN:
+        return "not a shared object (e_type %d)" % int.from_bytes(data[16:18], "little")
+    offset, size, count = (int.from_bytes(data[a:a + n], "little") for a, n in ((32, 8), (54, 2), (56, 2)))
+    if any(int.from_bytes(data[offset + i * size:offset + i * size + 4], "little") == PT_INTERP for i in range(count)):
+        return "has an interpreter"
+    return None
+
+
+def exportedSymbolProblem(nm, path, symbol):
+    defined = [l.split()[-1] for l in pe.run([nm, "-D", "--defined-only", path]).splitlines() if l.strip()]
+    return None if symbol in defined else "does not export %s: %s" % (symbol, defined)
+
+
+def verifySharedConfigs(engine, runtime, overlay, engineRelative, records, work):
+    """Run checkConfig for each shared profile on a copy of the overlay that has runtime's headers beside it
+    and the engine where the config says, then check each linked library: ELF shared object of the
+    target, no interpreter, the fixture's export, glibc symbol versions within the ceiling."""
+    copy, link = placeEngine(engine, overlay, engineRelative, work, [("include", os.path.join(runtime, "include"))])
+    environment = {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "TMPDIR": work}
+    run = lambda command: subprocess.run(command, env=environment, stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE, universal_newlines=True)
+    nm = os.path.join(link, "bin", "llvm-nm")
+    for record in records:
+        spec = SHARED_TARGETS[record["target"]]
+        prefixes = [e["absentMacroPrefix"] for e in record["cpuFeaturesNotCarried"] if e["absentMacroPrefix"]]
+        binary = checkConfig(run, os.path.join(link, "bin", "clang"),
+                             ["--config", os.path.join(copy, record["config"])], record["target"], work, prefixes,
+                             libraryNames(record["libraryAliases"]), spec, record["directory"])
+        problem = (elfSharedProblem(binary, record["target"]) or exportedSymbolProblem(nm, binary, spec["exportedSymbol"])
+                   or glibcSymbolProblem(nm, binary))
+        if problem:
+            raise pe.EngineError("%s: %s" % (record["directory"], problem))
+
+
+def writeSharedProvenance(output, zigId, host, engineVersion, engineRelative, baseProvenanceSha256, records):
+    receipt = {
+        "kind": "local-zig-runtime-shared-proof",
+        "statement": "Produced by running a locally installed Zig once per target on a shared-object fixture, "
+                     "added to a runtime prepared by the same Zig. Not an upstream-controlled build and not "
+                     "bit-reproducible by this tool.",
+        "redistributionCertified": False,
+        "zig": zigId, "producerHost": host, "engineVersion": engineVersion,
+        "engineRelative": engineRelative, "baseRuntimeProvenanceSha256": baseProvenanceSha256,
+        "targets": records,
+    }
+    os.makedirs(os.path.join(output, "notices"), exist_ok=True)
+    pe.writeText(os.path.join(output, SHARED_PROVENANCE), json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+
+
+def prepareSharedRuntime(zig, engine, runtime, output, targets):
+    """Write the overlay of the shared-object profiles of targets for the prepared runtime; runtime is only read."""
+    zig, engine, runtime, output = (os.path.abspath(p) for p in (zig, engine, runtime, output))
+    targets = selectTargets(targets, SHARED_TARGETS)
+    if os.path.lexists(output):
+        raise pe.EngineError("output %s exists; it is never replaced" % output)
+    if not os.access(zig, os.X_OK):
+        raise pe.EngineError("--zig %s is not executable" % zig)
+    baseProvenance = os.path.join(runtime, "notices", "runtime-provenance.json")
+    if not os.path.isfile(baseProvenance):
+        raise pe.EngineError("runtime %s has no notices/runtime-provenance.json" % runtime)
+    with open(baseProvenance, encoding="utf-8") as f:
+        base = json.load(f)
+    engineRelative = base["engineRelative"]
+    checkEngineRelative(engineRelative)
+    for target in targets:
+        if target not in [r["target"] for r in base["targets"]]:
+            raise pe.EngineError("runtime %s was not prepared for %s" % (runtime, target))
+        taken = [n for n in (sharedDirectory(target), sharedDirectory(target) + ".cfg")
+                 if os.path.lexists(os.path.join(runtime, n))]
+        if taken:
+            raise pe.EngineError("runtime %s already has %s; it is never replaced" % (runtime, ", ".join(taken)))
+    host, version, major = engineMajor(engine)
+    zigId = zigIdentity(zig)
+    if base["zig"] != zigId:
+        raise pe.EngineError("runtime was prepared by Zig %s, not by %s" % (base["zig"], zigId))
+    os.makedirs(os.path.dirname(output), exist_ok=True)
+    partial = tempfile.mkdtemp(prefix=os.path.basename(output) + ".partial-", dir=os.path.dirname(output))
+    work = tempfile.mkdtemp(prefix="prepareSharedRuntime-")
+    try:
+        records = [produceSharedTarget(zig, zigId["version"], engine, runtime, t, work, partial, engineRelative, major)
+                   for t in targets]
+        verifySharedConfigs(engine, runtime, partial, engineRelative, records, work)
+        writeSharedProvenance(partial, zigId, host, version, engineRelative, pe.sha256File(baseProvenance), records)
+        os.chmod(partial, 0o755)
+        renameNoReplace(partial, output)
+    except BaseException:
+        shutil.rmtree(partial, ignore_errors=True)
+        raise
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return output, records
+
+
+def checkConfig(run, clang, config, target, work, absentMacroPrefixes, libraries=(), spec=None, name=None):
     """Compile and link the target's fixture through the config, then link it again with
     -l<name> for each of libraries. Any nonzero exit or any stderr (an unhonored CPU feature
-    warns) is an error. Returns the linked binary."""
-    fixture = os.path.join(FIXTURES, TARGETS[target]["fixture"])
-    obj, binary = os.path.join(work, target + ".o"), os.path.join(work, target + ".bin")
+    warns) is an error. The fixture is the target's executable one unless spec names a profile,
+    and name keeps the profile's files apart from the target's. Returns the linked binary."""
+    fixture = os.path.join(FIXTURES, (spec or TARGETS[target])["fixture"])
+    name = name or target
+    obj, binary = os.path.join(work, name + ".o"), os.path.join(work, name + ".bin")
     steps = [("compile", [clang] + config + ["-O2", "-c", fixture, "-o", obj]),
              ("link", [clang] + config + [obj, "-o", binary]),
              ("library search", [clang] + config + [obj] + ["-l" + n for n in libraries]
@@ -690,18 +887,27 @@ def linkEngineBeside(engine, directory, runtime):
         os.symlink(os.path.join(engine, name), entry)
 
 
-def verifyConfigs(engine, runtime, engineRelative, records, work):
-    """Run checkConfig for each produced target on a copy of the runtime whose engine path
-    resolves as the config says."""
+def placeEngine(engine, runtime, engineRelative, work, links=()):
+    """Copy runtime where a config's engine path resolves to engine, with each (name, source) of
+    links as a symlink in the copy. Returns (the copy, the engine as the copy reaches it)."""
     depth = checkEngineRelative(engineRelative)
     copy = os.path.join(work, "verify", *(["up"] * depth), "runtime")
     shutil.copytree(runtime, copy, symlinks=True)
+    for name, source in links:
+        os.symlink(source, os.path.join(copy, checkName(name)))
     link = os.path.normpath(os.path.join(copy, engineRelative))
     if os.path.lexists(link):
         linkEngineBeside(engine, link, copy)
     else:
         os.makedirs(os.path.dirname(link), exist_ok=True)
         os.symlink(engine, link)
+    return copy, link
+
+
+def verifyConfigs(engine, runtime, engineRelative, records, work):
+    """Run checkConfig for each produced target on a copy of the runtime whose engine path
+    resolves as the config says."""
+    copy, link = placeEngine(engine, runtime, engineRelative, work)
     environment = {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "TMPDIR": work}
     run = lambda command: subprocess.run(command, env=environment, stdout=subprocess.PIPE,
                                          stderr=subprocess.PIPE, universal_newlines=True)
@@ -846,12 +1052,21 @@ def main(argv):
     parser.add_argument("--engine-relative", default="../engine")
     parser.add_argument("--deny", action="append", default=[])
     parser.add_argument("--prove", action="store_true")
+    parser.add_argument("--shared", action="store_true")
     args = parser.parse_args(argv)
     try:
         if args.prove:
             if not args.runtime:
                 parser.error("--prove needs --runtime")
             prove(args.engine, args.runtime, args.deny, args.zig, args.target)
+        elif args.shared:
+            if not (args.zig and args.runtime and args.output):
+                parser.error("--shared needs --zig, --runtime and --output")
+            output, records = prepareSharedRuntime(args.zig, args.engine, args.runtime, args.output, args.target)
+            for record in records:
+                print("%s: %d inputs, %d include directories" % (
+                    record["directory"], len(record["inputs"]), len(record["includeDirectories"])))
+            print("shared runtime overlay written to %s" % output)
         else:
             if not (args.zig and args.output):
                 parser.error("--zig and --output are required")
