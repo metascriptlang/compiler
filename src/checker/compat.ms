@@ -1469,10 +1469,13 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 		|| dst.kind == TypeKind.Unknown;
 }
 
+function isPrimitiveBrand(t: Readonly<Type>): boolean {
+	return isBrandDistinct(t) && t.typeReturn != null && t.typeReturn.kind != TypeKind.Function;
+}
+
 function sameDistinct(a: Readonly<Type>, b: Readonly<Type>, c: SameTypeClosure = createSameTypeClosure()): boolean {
-	if (isBrandDistinct(a) || isBrandDistinct(b)) {
-		if (a.sym != null && b.sym != null) return sameNominalAux(a, b, c);
-		return a.typeName == b.typeName;
+	if (isPrimitiveBrand(a) || isPrimitiveBrand(b)) {
+		return isPrimitiveBrand(a) && isPrimitiveBrand(b) && a.typeName == b.typeName && sameTypeAux(a.typeReturn, b.typeReturn, c);
 	}
 	return sameNominalAux(a, b, c);
 }
