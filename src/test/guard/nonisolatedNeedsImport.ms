@@ -5,10 +5,10 @@
 // intrinsic went back to being recognised by its spelling.
 
 actor Srv {
-	@nonisolated // GUARD-REFUSED
+	@nonisolated
 	readonly name: string = "srv";
 	inside(): string { return this.name; }
 }
 
 const s = new Srv();
-console.log(s.name);
+console.log(s.name); // GUARD-REFUSED

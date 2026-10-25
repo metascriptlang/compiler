@@ -7,7 +7,9 @@ function local(n: int32): int32 {
 	class L {
 		static a: int32 = k + 1; // GUARD-REFUSED
 		static b: int32 = 0;
-		static { L.b = n; } // GUARD-REFUSED
+		static {
+			L.b = n; // GUARD-REFUSED
+		}
 	}
 	return L.a + L.b;
 }

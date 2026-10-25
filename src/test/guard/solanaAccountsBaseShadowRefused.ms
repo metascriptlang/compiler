@@ -55,7 +55,7 @@ function aliased(): Result<uint64, ProgramError> {
 }
 
 function near(): Result<uint64, ProgramError> {
-	struct NearBase { authority: Signer; } // GUARD-REFUSED
+	struct NearBase { authority: Signer; }
 	const x = try accounts<NearChild>();
 	return Result.ok(x.authority.lamports());
 }
