@@ -3,10 +3,9 @@
 //   a / b    → msDivI32(a, b)         (a zero divisor and MIN / -1 raise)
 //   a % b    → msModI32(a, b)
 //   a /= b   → msDivAssignI32(a, b)   (the left side is evaluated once)
-//   a ** b   → msPowI64(a, b)         (msPowWrapI64 under --danger; std/core/system, @inline)
+//   a ** b   → msPowI64(a, b)         (msPowWrapI64 under --danger)
 //   x ** y   → msPowF64(x, y)         (a float power, ECMAScript's NaN cases)
-//   a **= b  → msPowAssignI64(a, b)   (msPowAssignF64 on a float target, msPowWrapAssign under --danger;
-//                                      the integer ones are std/core/system functions taking `ref a`)
+//   a **= b  → msPowAssignI64(a, b)   (msPowAssignF64 on a float target, msPowWrapAssign under --danger)
 //   f %= b   → msModAssignF64(f, b)   (a float target; fmod, the left side evaluated once)
 //   n |= b   → msOrAssignF64(n, b)    (a number target of & | ^ << >> >>>, as n = n | b)
 //
@@ -16,7 +15,7 @@
 
 import { Node, NodeKind, NodeFlag, BinaryExprData, UnaryExprData, UpdateExprData, HiddenStdConvData, NumberLiteralData, Type, TypeKind } from "../../ast/node";
 import { peelStdConv } from "../../ast/shape";
-import { peelToRepr, createPrimitive } from "../../checker/types";
+import { peelToRepr, createPrimitive, typeDisplayName } from "../../checker/types";
 import { wrapInConv, isBitwiseBinaryOp, isBitwiseCompoundOp } from "../../checker/fit";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -181,15 +180,15 @@ function lowerPow(node: Node, d: BinaryExprData, ctx: TransformContext): Node {
 
 function lowerPowAssign(node: Node, d: BinaryExprData, ctx: TransformContext): Node {
 	const t = integerRepr(d.left.nodeType);
-	let helper = "msPowAssignF64";
-	if (t != null) helper = ownWidthSuffixed(ctx.rangeChecks ? "msPowAssign" : "msPowWrapAssign", t);
-	else if (!isFloatRepr(d.left.nodeType)) return node;
+	if (t == null && !isFloatRepr(d.left.nodeType)) return node;
+	const prefix = ctx.rangeChecks ? "msPowAssign" : "msPowWrapAssign";
+	const helper = t != null ? exactWidthName(prefix, t) : "msPowAssignF64";
 	const call = makeCall(runtimeRef(helper, node.location), [d.left, d.right], node.location);
 	call.nodeType = d.left.nodeType;
 	return call;
 }
 
-function ownWidthSuffixed(prefix: string, t: Type): string {
+function exactWidthName(prefix: string, t: Type): string {
 	const suffix = match (t.kind) {
 		TypeKind.Int8 => "I8",
 		TypeKind.Int16 => "I16",
@@ -201,7 +200,7 @@ function ownWidthSuffixed(prefix: string, t: Type): string {
 		TypeKind.Uint64 => "U64",
 		_ => "",
 	};
-	if (suffix == "") throw new Error("internal: integer power assignment on type kind " + t.kind);
+	if (suffix == "") throw new Error(`internal: '${prefix}' asked for the width of ${typeDisplayName(t)}, which is not an integer`);
 	return prefix + suffix;
 }
 
