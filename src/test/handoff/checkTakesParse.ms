@@ -20,7 +20,7 @@ function checksLoaderTrees(entries: MapEntry[], session: CheckSession | null): s
 	const graph = load(entries);
 	const trees: Node[] = [];
 	for (const e of entries) trees.push(findModule(graph, e.entryPath).program!);
-	checkModuleGraph(graph, "", ".cms", platform, hostTargetInfo(), GcMode.Orc, null, session);
+	checkModuleGraph(graph, "", ".cms", platform, hostTargetInfo(), GcMode.Drc, null, session);
 	for (let i = 0; i < entries.length; i += 1) {
 		const mod = findModule(graph, entries[i].entryPath);
 		if (mod.errors.length > 0) return `${mod.path}: ${mod.errors[0].message}`;
