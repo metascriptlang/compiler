@@ -683,7 +683,7 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 		collectColor(j, msRoots.data[i].ptr, msRoots.data[i].type, colToCollect);
 	}
 
-	MS_DRC_STAT(MS_DS_COLLECT, 1); MS_DRC_STAT(MS_DS_COLLECT_TRACED, j->touched);
+	MS_DRC_STAT_ADD(MS_DS_COLLECT, 1); MS_DRC_STAT_ADD(MS_DS_COLLECT_TRACED, j->touched);
 
 	/* Protect against re-entrancy: destructors may trigger registerCycle */
 	int32_t oldThreshold = msRootsThreshold;
@@ -701,7 +701,7 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 
 	msRootsThreshold = oldThreshold;
 	j->freed += j->toFree.len;
-	MS_DRC_STAT(MS_DS_COLLECT_FREED, j->toFree.len);
+	MS_DRC_STAT_ADD(MS_DS_COLLECT_FREED, j->toFree.len);
 	msCellSeqFree(&j->toFree);
 }
 

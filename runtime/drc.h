@@ -74,10 +74,10 @@ enum {
 };
 void msDrcStatAdd(int id, uint64_t n);
 void msDrcStatCycle(const msTypeInfo* type);
-#define MS_DRC_STAT(id, n) msDrcStatAdd((id), (uint64_t)(n))
+#define MS_DRC_STAT_ADD(id, n) msDrcStatAdd((id), (uint64_t)(n))
 #define MS_DRC_STAT_CYCLE(t) msDrcStatCycle(t)
 #else
-#define MS_DRC_STAT(id, n) ((void)0)
+#define MS_DRC_STAT_ADD(id, n) ((void)0)
 #define MS_DRC_STAT_CYCLE(t) ((void)0)
 #endif
 
@@ -219,7 +219,7 @@ static inline void* msAlloc(size_t size) {
 	h->rootIdx = -1;
 	h->allocSize = (uint32_t)total;
 	MS_LEDGER_ALLOC((void*)(h + 1), NULL);
-	MS_DRC_STAT(MS_DS_ALLOC, 1); MS_DRC_STAT(MS_DS_ALLOC_BYTES, total);
+	MS_DRC_STAT_ADD(MS_DS_ALLOC, 1); MS_DRC_STAT_ADD(MS_DS_ALLOC_BYTES, total);
 	return (void*)(h + 1);
 }
 
@@ -233,7 +233,7 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
 	MS_HCR_COUNT(type, 1);
 	h->allocSize = (uint32_t)total;
 	MS_LEDGER_ALLOC((void*)(h + 1), type);
-	MS_DRC_STAT(MS_DS_ALLOC, 1); MS_DRC_STAT(MS_DS_ALLOC_BYTES, total);
+	MS_DRC_STAT_ADD(MS_DS_ALLOC, 1); MS_DRC_STAT_ADD(MS_DS_ALLOC_BYTES, total);
 	return (void*)(h + 1);
 }
 
@@ -265,7 +265,7 @@ static inline void* msAllocUninit(size_t size) {
 	h->type = NULL;
 	h->allocSize = (uint32_t)total;
 	MS_LEDGER_ALLOC((void*)(h + 1), NULL);
-	MS_DRC_STAT(MS_DS_ALLOC, 1); MS_DRC_STAT(MS_DS_ALLOC_BYTES, total);
+	MS_DRC_STAT_ADD(MS_DS_ALLOC, 1); MS_DRC_STAT_ADD(MS_DS_ALLOC_BYTES, total);
 	return (void*)(h + 1);
 }
 
@@ -278,7 +278,7 @@ static inline void* msAllocTypedUninit(size_t size, const msTypeInfo* type) {
 	MS_HCR_COUNT(type, 1);
 	h->allocSize = (uint32_t)total;
 	MS_LEDGER_ALLOC((void*)(h + 1), type);
-	MS_DRC_STAT(MS_DS_ALLOC, 1); MS_DRC_STAT(MS_DS_ALLOC_BYTES, total);
+	MS_DRC_STAT_ADD(MS_DS_ALLOC, 1); MS_DRC_STAT_ADD(MS_DS_ALLOC_BYTES, total);
 	return (void*)(h + 1);
 }
 
@@ -288,7 +288,7 @@ static inline void* msAllocTypedUninit(size_t size, const msTypeInfo* type) {
 
 static inline void msIncRef(void* p) {
 	if (p != NULL) {
-		MS_DRC_STAT(MS_DS_RC_INC, 1);
+		MS_DRC_STAT_ADD(MS_DS_RC_INC, 1);
 		msHeader(p)->rc += MS_RC_INCREMENT;
 	}
 }
@@ -297,7 +297,7 @@ static inline void msIncRef(void* p) {
  * Uses relaxed ordering — sufficient for refcount increment (no data dependency). */
 static inline void msAtomicIncRef(void* p) {
 	if (p != NULL) {
-		MS_DRC_STAT(MS_DS_RC_INC_ATOMIC, 1);
+		MS_DRC_STAT_ADD(MS_DS_RC_INC_ATOMIC, 1);
 		atomic_fetch_add_explicit(&msHeader(p)->rc, MS_RC_INCREMENT, memory_order_relaxed);
 	}
 }
@@ -308,7 +308,7 @@ void msUnregisterCycle(void* p);
 
 static inline bool msDecRefIsLast(void* p) {
 	if (p == NULL) return false;
-	MS_DRC_STAT(MS_DS_RC_DEC, 1);
+	MS_DRC_STAT_ADD(MS_DS_RC_DEC, 1);
 	msRefHeader* h = msHeader(p);
 	/* Check count portion (upper bits) is zero — ignores ORC color/flag bits.
 	 * rc starts at 0 from msAlloc. (rc & ~MS_RC_MASK)==0 means sole owner.
@@ -332,7 +332,7 @@ static inline bool msDecRefIsLast(void* p) {
  * through the cycle collector even under --gc=orc. */
 static inline bool msAtomicDecRefIsLast(void* p) {
 	if (p == NULL) return false;
-	MS_DRC_STAT(MS_DS_RC_DEC_ATOMIC, 1);
+	MS_DRC_STAT_ADD(MS_DS_RC_DEC_ATOMIC, 1);
 	intptr_t old = atomic_fetch_sub_explicit(&msHeader(p)->rc, MS_RC_INCREMENT, memory_order_release);
 	if ((old & ~MS_RC_MASK) == MS_RC_INCREMENT) {
 		atomic_thread_fence(memory_order_acquire);
@@ -344,7 +344,7 @@ static inline bool msAtomicDecRefIsLast(void* p) {
 static inline void msDestroyAndDispose(void* p) {
 	if (p != NULL) {
 		msRefHeader* h = msHeader(p);
-		MS_DRC_STAT(MS_DS_FREE, 1);
+		MS_DRC_STAT_ADD(MS_DS_FREE, 1);
 #ifdef MSGC_ORC
 		/* Freeing a node that is still a registered cycle-root (rootIdx >= 0) must
 		 * scrub it from msRoots — every free path, including codegen's sole-owner
@@ -359,7 +359,7 @@ static inline void msDestroyAndDispose(void* p) {
 
 static inline void msDropDispose(msSlab* slab, void* p) {
 	msRefHeader* h = msHeader(p);
-	MS_DRC_STAT(MS_DS_FREE, 1);
+	MS_DRC_STAT_ADD(MS_DS_FREE, 1);
 #ifdef MSGC_ORC
 	if (h->rootIdx >= 0) msUnregisterCycle(p);
 #endif
@@ -460,7 +460,7 @@ static inline void msRememberCycle(bool isDestroy, void* p, const msTypeInfo* de
 
 static inline void msOrcIncRef(void* p) {
 	if (p == NULL) return;
-	MS_DRC_STAT(MS_DS_RC_INC_CYC, 1);
+	MS_DRC_STAT_ADD(MS_DS_RC_INC_CYC, 1);
 	msHeader(p)->rc += MS_RC_INCREMENT;
 }
 
@@ -468,7 +468,7 @@ static inline bool msOrcDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	msRefHeader* h = msHeader(p);
 	bool isLast = (h->rc & ~MS_COLOR_MASK) == 0;
-	MS_DRC_STAT(MS_DS_ORC_DEC_LAST, 1); MS_DRC_STAT(MS_DS_ORC_DEC_LAST_TRUE, isLast);
+	MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST, 1); MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST_TRUE, isLast);
 	if (!isLast) {
 		h->rc -= MS_RC_INCREMENT;
 	}
