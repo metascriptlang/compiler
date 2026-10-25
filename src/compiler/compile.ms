@@ -3681,9 +3681,8 @@ resetLiftedOps();
 
 	// Link and execute
 	ensureDir("out/debug");
-	const pathKey = hashContent(filePath);
 	const shardTag = opts.testsShards > 1 ? `_s${opts.testsShard}of${opts.testsShards}` : "";
-	const testBin = `out/debug/_test_${replaceExt(basename(filePath), "")}_${pathKey.slice(0, pathKey.indexOf("_"))}${shardTag}`;
+	const testBin = `out/debug/${testRootName(filePath)}${shardTag}`;
 	// Same link flags as cmdBuildC. cmdTest used to assemble its own and so
 	// silently dropped everything cliLinkFlags contributes: the per-target
 	// system libraries and --passL. On Windows that is fatal — without
@@ -3872,6 +3871,11 @@ export interface JsTreeResult {
 	testFuncs: string[][];
 }
 
+function testRootName(entryPath: string): string {
+	const key = hashContent(entryPath);
+	return `_test_${replaceExt(basename(entryPath), "")}_${key.slice(0, key.indexOf("_"))}`;
+}
+
 function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boolean, outRootOverride: string): JsTreeResult {
 	registerCoreParsers();
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
@@ -3889,7 +3893,8 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	if (!filePath.startsWith(projectRoot.endsWith("/") ? projectRoot : `${projectRoot}/`)) {
 		projectRoot = dirname(filePath);
 	}
-	const outRoot = outRootOverride != "" ? outRootOverride : `${projectRoot}/${outDirForMode(opts.mode)}`;
+	const modeRoot = `${projectRoot}/${outDirForMode(opts.mode)}`;
+	const outRoot = outRootOverride != "" ? outRootOverride : (isTestBuild ? `${modeRoot}/${testRootName(filePath)}_js` : modeRoot);
 	const stdRoot = config.stdPath;
 
 	const layout = createJsTreeLayout();
@@ -4483,4 +4488,10 @@ test "a prelude load never seeds the std graph from a deps file written for anot
 		if (prevHome == "") env.delete("HOME");
 		else env.set("HOME", prevHome);
 	}
+}
+
+test "a test run gets an out root of its own per test file" {
+	assert testRootName("/p/src/a.test.ms") != testRootName("/p/src/b.test.ms");
+	assert testRootName("/p/x/a.test.ms") != testRootName("/p/y/a.test.ms");
+	assert testRootName("/p/src/a.test.ms") == testRootName("/p/src/a.test.ms");
 }
