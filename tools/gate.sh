@@ -71,6 +71,14 @@ ignored); equal means a fixed point, otherwise the newer one becomes the candida
 is rebuilt once more. Still unequal after three generations is the red
 "self-host: no fixed point after 3 generations".
 
+For src/test-only changes, gen1 still runs the native build and its input checks.
+If its output is byte-identical to the unchanged builder, gen1 already proves the
+fixed point; otherwise the full bootstrap runs. --release and --record always
+run the full bootstrap. The identity shortcut requires the same physical support
+root; installed or symlinked builders use the full bootstrap. Response-based
+verification still regenerates gen1's link evidence. Current emit-RC scans and
+all selected test lanes still run.
+
 A GREEN run whose build lane produced the candidate for the clean src and std tree
 of HEAD makes that candidate the worktree builder ./msc (the old one stays as
 msc.prev, the tree key goes to msc.key); a failed swap prints "builder not
@@ -311,6 +319,16 @@ adopt_builder() {
 }
 
 file_digest() { if [ -f "$1" ]; then digest <"$1"; else echo none; fi; }
+
+same_bootstrap_root() (
+  local root out
+  [ "$BUILDER" = "$TOP/msc" ] && [ ! -L "$BUILDER" ] && [ ! -L "$CAND" ] \
+    && [ -f "$TOP/std/core/system/index.ms" ] \
+    && [ ! -e "$TOP/out/std/core/system/index.ms" ] \
+    && [ ! -e "$OUT/std/core/system/index.ms" ] || return 1
+  root=$(cd "$TOP" && pwd -P) && out=$(cd "$OUT" && pwd -P) || return 1
+  [ "$out" = "$root/out/gate" ]
+)
 
 resume_key() {
   local head base_sha
@@ -1903,6 +1921,7 @@ CASES
   adopt_cache_self_test || bad=1
   boot_self_test || bad=1
   bash "$TOP/tools/gateFailureFilterTest.sh" || bad=1
+  bash "$TOP/tools/gateBuildReuseTest.sh" || bad=1
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
 }
@@ -2363,15 +2382,36 @@ run_sharded_lane() {
 }
 
 build_lane() {
-  env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd build)" || return $?
-  if [ ! -f "${CAND}_link.rsp" ]; then
-    say "gate: gen1's link was cached and wrote no link response file, linking it again"
-    rm -f "$CAND" "${CAND%.exe}.pdb"
-    env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd build)" || return $?
+  local producer="" current="" candidate="" checked=""
+  if [ "$release" -eq 0 ] && [ "$record" -eq 0 ] \
+    && [ -n "$(printf '%s\n' "$paths" | grep -Ev "$INERT")" ] \
+    && ! printf '%s\n' "$paths" | grep -Ev "$INERT|^src/test/" | grep -q . \
+    && same_bootstrap_root; then
+    producer=$(file_digest "$BUILDER") || producer=""
   fi
-  self_host_boot "$CAND" "$CC_FLAG" || return $?
+  env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd build)" || return $?
+  if [ -n "$producer" ] && [ "$producer" != none ]; then
+    current=$(file_digest "$BUILDER") || return 1
+    [ "$current" = "$producer" ] || { say "FAIL self-host: builder changed during gen1"; return 1; }
+    if [ -x "$CAND" ] && same_bootstrap_root; then
+      candidate=$(file_digest "$CAND") || candidate=""
+    fi
+  fi
+  if [ -n "$candidate" ] && [ "$candidate" = "$producer" ]; then
+    say "gate: self-host gen1 = builder (byte-identical fixed point; native inputs checked)"
+  else
+    if [ ! -f "${CAND}_link.rsp" ]; then
+      say "gate: gen1's link was cached and wrote no link response file, linking it again"
+      rm -f "$CAND" "${CAND%.exe}.pdb"
+      env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd build)" || return $?
+    fi
+    self_host_boot "$CAND" "$CC_FLAG" || return $?
+  fi
   [ "$rcscan_on" -eq 1 ] || return 0
-  env -u NO_COLOR -u FORCE_COLOR "$CAND" run $CC_FLAG src/test/emitRcScan.ms "$CAND" $CC_FLAG
+  checked=$(file_digest "$CAND") || return 1
+  env -u NO_COLOR -u FORCE_COLOR "$CAND" run $CC_FLAG src/test/emitRcScan.ms "$CAND" $CC_FLAG || return $?
+  current=$(file_digest "$CAND") || return 1
+  [ "$current" = "$checked" ] || { say "FAIL self-host: candidate changed during the emit rc scan"; return 1; }
 }
 
 lane_body() {
