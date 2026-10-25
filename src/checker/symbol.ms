@@ -92,9 +92,19 @@ export enum RoutineFlag {
 	ReadonlyParams,
 }
 
+const decodedRoutineFlags: HashMap<string, BitSet<RoutineFlag>> = new HashMap<string, BitSet<RoutineFlag>>();
+
 export function routineFlagSet(text: string): BitSet<RoutineFlag> {
+	if (text == "") return 0 as BitSet<RoutineFlag>;
+	const known = decodedRoutineFlags.get(text);
+	if (known != null) return known;
+	const set = decodeRoutineFlags(text);
+	decodedRoutineFlags.set(text, set);
+	return set;
+}
+
+function decodeRoutineFlags(text: string): BitSet<RoutineFlag> {
 	let set = 0 as BitSet<RoutineFlag>;
-	if (text == "") return set;
 	let inTypeText = false;
 	for (const word of splitTopLevel(text, "|")) {
 		const colon = word.indexOf(":");
