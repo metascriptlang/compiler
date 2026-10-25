@@ -24,7 +24,9 @@ def read(path):
         return f.read()
 
 
-class BundleTest(unittest.TestCase):
+class BundleCase(unittest.TestCase):
+    runtimeReceipt = {"kind": "runtime"}
+
     def setUp(self):
         self.dir = os.path.realpath(tempfile.mkdtemp(prefix="prepareBundleTest-"))
         self.addCleanup(shutil.rmtree, self.dir)
@@ -56,7 +58,7 @@ class BundleTest(unittest.TestCase):
     def prepareRuntime(self, zig, engine, output, targets, engineRelative):
         self.runtimeCalls.append((zig, engine, output, targets, engineRelative))
         write(os.path.join(output, "x86_64-linux-gnu.2.31.cfg"), "-target x\n")
-        write(os.path.join(output, "notices", "runtime-provenance.json"), '{"kind": "runtime"}\n')
+        write(os.path.join(output, "notices", "runtime-provenance.json"), json.dumps(self.runtimeReceipt) + "\n")
         write(os.path.join(output, "x86_64-linux-gnu.2.31", "libm.so.6"), "stub\n")
         os.symlink("libm.so.6", os.path.join(output, "x86_64-linux-gnu.2.31", "libm.so"))
         write(os.path.join(output, "wasm32-wasi", "libm.a"), "!<arch>\n")
@@ -75,6 +77,8 @@ class BundleTest(unittest.TestCase):
         write(os.path.join(runtime, pc.PROVENANCE), '{"kind": "cpp"}\n')
         return {}
 
+
+class BundleTest(BundleCase):
     def test_the_bundle_keeps_engine_contents_at_the_root_and_the_runtime_as_a_child(self):
         out = self.path("out", "bundle")
         self.assertEqual(pb.prepareBundle(self.engine, "/z/zig", out, ["t"]), out)
@@ -265,6 +269,18 @@ class BundleTest(unittest.TestCase):
                 pb.prepareBundle(self.engine, "/z/zig", self.path("bundle"), [])
         self.assertEqual(sorted(os.listdir(self.dir)), ["engine"])
 
+    def test_an_output_reached_through_an_alias_into_the_engine_is_refused_before_any_copy(self):
+        os.symlink(self.engine, self.path("alias"))
+        self.assertEqual(os.path.realpath(self.path("alias", "out")), os.path.join(self.engine, "out"))
+        before = (pe.listFiles(self.engine), sorted(os.listdir(self.engine)))
+        for output in (self.path("alias", "out"), self.path("alias", "a", "b", "out")):
+            with mock.patch.object(pb.shutil, "copytree", side_effect=AssertionError("copy reached inside the source")):
+                with self.assertRaisesRegex(pe.EngineError, "inside the engine"):
+                    pb.prepareBundle(self.engine, "/z/zig", output, [])
+        self.assertEqual((pe.listFiles(self.engine), sorted(os.listdir(self.engine))), before)
+        self.assertEqual(self.runtimeCalls, [])
+        self.assertEqual([n for n in os.listdir(self.dir) if ".partial-" in n], [])
+
     def test_an_engine_that_already_has_a_runtime_is_refused_before_any_work(self):
         write(os.path.join(self.engine, "runtime", "x"))
         with self.assertRaisesRegex(pe.EngineError, "already has a runtime"):
@@ -289,6 +305,341 @@ class BundleTest(unittest.TestCase):
             with self.assertRaisesRegex(pe.EngineError, "hash mismatch"):
                 pb.prepareBundle(self.engine, "/z/zig", self.path("bundle"), [])
         self.assertEqual(sorted(os.listdir(self.dir)), ["engine"])
+
+
+X64, ARM = "x86_64-linux-gnu.2.31", "aarch64-linux-gnu.2.31"
+ZIG = {"version": "0.16.0", "sha256": "a" * 64}
+INCLUDES = {X64: "x86-linux-gnu", ARM: "aarch64-linux-gnu"}
+
+
+class AugmentCase(BundleCase):
+    runtimeReceipt = {"kind": "runtime", "zig": ZIG, "engineRelative": "..",
+                      "targets": [{"target": X64}, {"target": ARM}, {"target": "wasm32-wasi"}]}
+
+    def setUp(self):
+        super().setUp()
+        self.bundle = self.path("base")
+        pb.prepareBundle(self.engine, "/z/zig", self.bundle, [])
+        for name in INCLUDES.values():
+            write(os.path.join(self.bundle, "runtime", "include", "libc", name, "h.h"))
+        pe.writeContract(self.bundle, "aarch64-macos", "22.1.1")
+        self.baseHashes = self.hashes(self.bundle)
+        self.runtimeCalls.clear(), self.windowsCalls.clear(), self.cppCalls.clear(), self.verified.clear()
+        self.baseSha = pe.sha256File(os.path.join(self.bundle, "runtime", "notices", "runtime-provenance.json"))
+
+    def hashes(self, root):
+        return {rel: pe.sha256File(os.path.join(root, rel)) for rel in pe.listFiles(root)}
+
+    def overlay(self, name, targets=(X64,), **receiptFields):
+        root, records = self.path(name), []
+        for target in targets:
+            directory = pr.sharedDirectory(target)
+            inputs = []
+            for stub in ("crti.o", "libc.so.6"):
+                write(os.path.join(root, directory, stub), "%s %s\n" % (stub, target))
+                inputs.append({"name": stub, "sha256": pe.sha256File(os.path.join(root, directory, stub)),
+                               "bytes": os.path.getsize(os.path.join(root, directory, stub))})
+            os.symlink("libc.so.6", os.path.join(root, directory, "libc.so"))
+            write(os.path.join(root, directory + ".cfg"), "-shared\n-Xlinker <CFGDIR>/%s/crti.o\n" % directory)
+            records.append({"target": target, "directory": directory, "config": directory + ".cfg", "inputs": inputs,
+                            "libraryAliases": [{"alias": "libc.so", "target": "libc.so.6"}],
+                            "includeDirectories": [INCLUDES[target]]})
+        receipt = {"kind": pb.SHARED_RECEIPT_KIND, "statement": "local", "redistributionCertified": False,
+                   "zig": ZIG, "producerHost": "aarch64-macos", "engineVersion": "22.1.1", "engineRelative": "..",
+                   "baseRuntimeProvenanceSha256": self.baseSha, "targets": records}
+        receipt.update(receiptFields)
+        write(os.path.join(root, pr.SHARED_PROVENANCE), json.dumps(receipt) + "\n")
+        return root
+
+    def augment(self, *overlays, output="out"):
+        return pb.augmentBundle(self.bundle, list(overlays), self.path(output))
+
+    def assertRefused(self, pattern, *overlays, output="out"):
+        with self.assertRaisesRegex(pe.EngineError, pattern):
+            self.augment(*overlays, output=output)
+        self.assertFalse(os.path.exists(self.path(output)))
+        self.assertEqual([n for n in os.listdir(self.dir) if ".partial-" in n], [])
+        self.assertEqual(self.hashes(self.bundle), self.baseHashes)
+
+
+class AugmentBundleTest(AugmentCase):
+    def test_two_one_target_overlays_add_exactly_their_files_and_one_joined_receipt(self):
+        arm, x64 = self.overlay("arm", [ARM]), self.overlay("x64")
+        out = self.augment(arm, x64)
+        after, runtime = self.hashes(out), "runtime/"
+        added = sorted(set(after) - set(self.baseHashes))
+        self.assertEqual(added, sorted(runtime + n for n in (
+            "aarch64-linux-gnu.2.31.so.cfg", "aarch64-linux-gnu.2.31.so/crti.o", "aarch64-linux-gnu.2.31.so/libc.so",
+            "aarch64-linux-gnu.2.31.so/libc.so.6", "x86_64-linux-gnu.2.31.so.cfg", "x86_64-linux-gnu.2.31.so/crti.o",
+            "x86_64-linux-gnu.2.31.so/libc.so", "x86_64-linux-gnu.2.31.so/libc.so.6", pr.SHARED_PROVENANCE)))
+        changed = sorted(n for n in self.baseHashes if after[n] != self.baseHashes[n])
+        self.assertEqual(changed, ["notices/bundle-provenance.json"])
+        receipt = json.loads(read(os.path.join(out, "runtime", pr.SHARED_PROVENANCE)))
+        self.assertEqual([r["target"] for r in receipt["targets"]], [X64, ARM])
+        self.assertEqual({k: v for k, v in receipt.items() if k != "targets"},
+                         {k: json.loads(read(os.path.join(x64, pr.SHARED_PROVENANCE)))[k] for k in pb.SHARED_RECEIPT_COMMON})
+        self.assertEqual(os.readlink(os.path.join(out, "runtime", X64 + ".so", "libc.so")), "libc.so.6")
+        self.assertEqual(read(os.path.join(out, "runtime", ARM + ".so.cfg")), read(os.path.join(arm, ARM + ".so.cfg")))
+        self.assertEqual(self.runtimeCalls + self.windowsCalls + self.cppCalls, [])
+
+    def test_the_bundle_receipt_gains_the_shared_entries_and_keeps_everything_else(self):
+        before = json.loads(read(os.path.join(self.bundle, "notices", "bundle-provenance.json")))
+        out = self.augment(self.overlay("both", [X64, ARM]))
+        receipt = json.loads(read(os.path.join(out, "notices", "bundle-provenance.json")))
+        self.assertEqual({k: v for k, v in receipt.items() if k in before}, before)
+        self.assertEqual({k: v for k, v in receipt.items() if k not in before}, {
+            "baseBundleIdentity": read(os.path.join(self.bundle, "IDENTITY")).strip(),
+            "sharedRuntimeProvenance": "runtime/notices/runtime-shared-provenance.json", "sharedTargets": [X64, ARM]})
+        self.assertEqual(receipt["sourceEngineIdentity"], self.engineIdentity)
+        self.assertFalse(receipt["redistributionCertified"])
+
+    def test_the_contract_covers_every_file_and_the_clone_is_verified_before_publication(self):
+        out = self.augment(self.overlay("x64"))
+        listed = [l.split("  ", 1)[1] for l in read(os.path.join(out, "FILES.sha256")).splitlines()]
+        self.assertEqual(listed, pe.listFiles(out))
+        self.assertIn("runtime/x86_64-linux-gnu.2.31.so/libc.so", listed)
+        identity = read(os.path.join(out, "IDENTITY")).strip()
+        self.assertEqual(identity, hashlib.sha256(read(os.path.join(out, "FILES.sha256")).encode()).hexdigest())
+        self.assertNotEqual(identity, read(os.path.join(self.bundle, "IDENTITY")).strip())
+        self.assertEqual(self.verified[0], self.bundle)
+        self.assertTrue(self.verified[-1].startswith(out + ".partial-"))
+
+    def test_a_stub_alias_stays_a_relative_link_hashed_with_its_stub(self):
+        out = self.augment(self.overlay("x64"))
+        hashes = self.hashes(out)
+        self.assertEqual(hashes["runtime/x86_64-linux-gnu.2.31.so/libc.so"], hashes["runtime/x86_64-linux-gnu.2.31.so/libc.so.6"])
+
+    def test_an_overlay_holding_anything_beyond_its_receipt_is_refused(self):
+        for label, change in (
+                ("a file", lambda r: write(os.path.join(r, "extra.txt"))),
+                ("a file in the directory", lambda r: write(os.path.join(r, X64 + ".so", "crtbegin.o"))),
+                ("a notice", lambda r: write(os.path.join(r, "notices", "other.json"))),
+                ("a directory", lambda r: os.makedirs(os.path.join(r, "empty"))),
+                ("a missing config", lambda r: os.remove(os.path.join(r, X64 + ".so.cfg"))),
+                ("a missing input", lambda r: os.remove(os.path.join(r, X64 + ".so", "crti.o"))),
+                ("a changed input", lambda r: write(os.path.join(r, X64 + ".so", "crti.o"), "changed\n")),
+                ("a config link", lambda r: (os.remove(os.path.join(r, X64 + ".so.cfg")), os.symlink("/etc/hosts", os.path.join(r, X64 + ".so.cfg")))),
+                ("an input link", lambda r: (os.remove(os.path.join(r, X64 + ".so", "crti.o")), os.symlink("/etc/hosts", os.path.join(r, X64 + ".so", "crti.o")))),
+                ("an alias leaving the directory", lambda r: (os.remove(os.path.join(r, X64 + ".so", "libc.so")), os.symlink("../" + X64 + ".so.cfg", os.path.join(r, X64 + ".so", "libc.so")))),
+                ("an absolute alias", lambda r: (os.remove(os.path.join(r, X64 + ".so", "libc.so")), os.symlink("/etc/hosts", os.path.join(r, X64 + ".so", "libc.so")))),
+                ("a directory link", lambda r: os.symlink(self.dir, os.path.join(r, "linked")))):
+            overlay = self.overlay("overlay-" + label.replace(" ", "-"))
+            change(overlay)
+            with self.subTest(label):
+                self.assertRefused("overlay|differs|alias|not a regular", overlay)
+
+    def test_a_receipt_that_names_a_path_outside_the_fixed_layout_is_refused(self):
+        for label, edit in (("traversal name", lambda r: r["targets"][0]["inputs"][0].update(name="../crti.o")),
+                            ("slash name", lambda r: r["targets"][0]["inputs"][0].update(name="a/crti.o")),
+                            ("other directory", lambda r: r["targets"][0].update(directory="runtime")),
+                            ("other config", lambda r: r["targets"][0].update(config="x.cfg")),
+                            ("twice", lambda r: r["targets"][0]["inputs"].append(r["targets"][0]["inputs"][0])),
+                            ("unknown key", lambda r: r.update(extra=1)),
+                            ("wrong kind", lambda r: r.update(kind="local-zig-runtime-proof")),
+                            ("wasi target", lambda r: r["targets"][0].update(target="wasm32-wasi")),
+                            ("windows target", lambda r: r["targets"][0].update(target="x86_64-windows-gnu")),
+                            ("unversioned glibc", lambda r: r["targets"][0].update(target="x86_64-linux-gnu")),
+                            ("the same target twice", lambda r: r["targets"].append(r["targets"][0]))):
+            overlay = self.overlay("o-" + label.replace(" ", "-"))
+            path = os.path.join(overlay, pr.SHARED_PROVENANCE)
+            receipt = json.loads(read(path))
+            edit(receipt)
+            write(path, json.dumps(receipt))
+            with self.subTest(label):
+                self.assertRefused("overlay|not a|named|unsupported file name", overlay)
+
+    def editReceipt(self, name, edit, targets=(X64,)):
+        overlay = self.overlay(name, targets)
+        path = os.path.join(overlay, pr.SHARED_PROVENANCE)
+        receipt = json.loads(read(path))
+        edit(receipt)
+        write(path, json.dumps(receipt))
+        return overlay
+
+    def assertRefusedWithOverlaysUnchanged(self, pattern, *overlays):
+        before = [self.hashes(o) for o in overlays]
+        self.assertRefused(pattern, *overlays)
+        self.assertEqual([self.hashes(o) for o in overlays], before)
+
+    def test_an_include_directory_that_is_not_one_plain_name_is_refused_even_where_it_exists(self):
+        runtime = os.path.join(self.bundle, "runtime")
+        for value in ("/tmp", "../..", "..", ".", "", "x86-linux-gnu/..", "/"):
+            joined = os.path.join(runtime, "include", "libc", value)
+            self.assertTrue(os.path.isdir(joined), msg="%r must exist for the old gate to accept it" % value)
+            overlay = self.editReceipt("inc-" + (value.replace("/", "_") or "empty"),
+                                       lambda r: r["targets"][0].update(includeDirectories=[value]))
+            with self.subTest(value):
+                self.assertRefusedWithOverlaysUnchanged("unsupported file name", overlay)
+
+    def test_an_include_directory_after_a_valid_one_or_of_another_type_is_refused(self):
+        for label, value, pattern in (("second", ["x86-linux-gnu", "../.."], "unsupported file name"),
+                                      ("number", [5], "includeDirectories is not a list of names"),
+                                      ("string", "x86-linux-gnu", "includeDirectories is not a list of names"),
+                                      ("null", None, "includeDirectories is not a list of names")):
+            overlay = self.editReceipt("inc-" + label, lambda r: r["targets"][0].update(includeDirectories=value))
+            with self.subTest(label):
+                self.assertRefusedWithOverlaysUnchanged(pattern, overlay)
+
+    def test_an_overlay_that_names_no_target_is_refused_alone_or_beside_a_valid_one(self):
+        empty = self.editReceipt("empty", lambda r: None, targets=())
+        self.assertEqual(json.loads(read(os.path.join(empty, pr.SHARED_PROVENANCE)))["targets"], [])
+        self.assertRefusedWithOverlaysUnchanged("names no target", empty)
+        self.assertRefusedWithOverlaysUnchanged("names no target", self.overlay("valid", [ARM]), empty)
+
+    def test_an_overlay_that_certifies_redistribution_is_refused(self):
+        for value in (True, 1, "false", None):
+            overlay = self.editReceipt("cert-%s" % type(value).__name__ + str(value),
+                                       lambda r: r.update(redistributionCertified=value))
+            with self.subTest(value):
+                self.assertRefusedWithOverlaysUnchanged("certifies redistribution", overlay)
+
+    def test_an_overlay_of_another_base_zig_engine_or_host_is_refused(self):
+        for field, value in (("baseRuntimeProvenanceSha256", "0" * 64), ("zig", {"version": "0.16.0", "sha256": "b" * 64}),
+                             ("engineVersion", "22.1.2"), ("producerHost", "x86_64-macos"), ("engineRelative", "../engine")):
+            with self.subTest(field):
+                self.assertRefused("does not belong to this bundle: %s" % field, self.overlay("o-" + field, **{field: value}))
+
+    def test_overlays_that_disagree_or_repeat_a_target_or_an_overlay_are_refused(self):
+        self.assertRefused("differ in statement", self.overlay("a", [X64]), self.overlay("b", [ARM], statement="other"))
+        self.assertRefused("target %s is in two overlays" % X64, self.overlay("c", [X64]), self.overlay("d", [X64, ARM]))
+        same = self.overlay("e", [X64])
+        self.assertRefused("each overlay once", same, same)
+        self.assertRefused("each overlay once")
+
+    def test_a_bundle_that_cannot_take_the_overlay_is_refused(self):
+        overlay = self.overlay("x64")
+        runtime = os.path.join(self.bundle, "runtime")
+        receiptPath = os.path.join(self.bundle, "notices", "bundle-provenance.json")
+        original = read(receiptPath)
+
+        def rewrite(change):
+            receipt = json.loads(original)
+            change(receipt)
+            write(receiptPath, json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+            pe.writeContract(self.bundle, "aarch64-macos", "22.1.1")
+            self.baseHashes = self.hashes(self.bundle)
+
+        rewrite(lambda r: r.pop("runtimeProvenance"))
+        self.assertRefused("no prepared runtime", overlay)
+        rewrite(lambda r: r.update(sharedRuntimeProvenance="x"))
+        self.assertRefused("already has shared profiles", overlay)
+        write(receiptPath, original)
+        for rel, text in ((X64 + ".so/crti.o", "already there"), (X64 + ".so.cfg", "x"), (pr.SHARED_PROVENANCE, "{}")):
+            write(os.path.join(runtime, rel), text)
+            pe.writeContract(self.bundle, "aarch64-macos", "22.1.1")
+            self.baseHashes = self.hashes(self.bundle)
+            with self.subTest(rel):
+                self.assertRefused("already has", overlay)
+            shutil.rmtree(os.path.join(runtime, X64 + ".so"), ignore_errors=True)
+            for name in (X64 + ".so.cfg", pr.SHARED_PROVENANCE):
+                if os.path.exists(os.path.join(runtime, name)):
+                    os.remove(os.path.join(runtime, name))
+        pe.writeContract(self.bundle, "aarch64-macos", "22.1.1")
+        self.baseHashes = self.hashes(self.bundle)
+        shutil.rmtree(os.path.join(runtime, "include", "libc", "x86-linux-gnu"))
+        pe.writeContract(self.bundle, "aarch64-macos", "22.1.1")
+        self.baseHashes = self.hashes(self.bundle)
+        self.assertRefused("no include/libc/x86-linux-gnu", overlay)
+
+    def test_a_base_runtime_not_prepared_for_the_target_is_refused(self):
+        path = os.path.join(self.bundle, "runtime", "notices", "runtime-provenance.json")
+        receipt = dict(self.runtimeReceipt, targets=[{"target": X64}])
+        write(path, json.dumps(receipt) + "\n")
+        pe.writeContract(self.bundle, "aarch64-macos", "22.1.1")
+        self.baseHashes, self.baseSha = self.hashes(self.bundle), pe.sha256File(path)
+        self.assertRefused("not prepared for %s" % ARM, self.overlay("arm", [ARM]))
+
+    def test_the_output_is_never_replaced_or_placed_inside_the_bundle(self):
+        overlay = self.overlay("x64")
+        for make in (os.makedirs, write):
+            taken = self.path("taken")
+            make(taken)
+            with self.assertRaisesRegex(pe.EngineError, "never replaced"):
+                pb.augmentBundle(self.bundle, [overlay], taken)
+            shutil.rmtree(taken) if os.path.isdir(taken) else os.remove(taken)
+        with self.assertRaisesRegex(pe.EngineError, "inside the bundle"):
+            pb.augmentBundle(self.bundle, [overlay], os.path.join(self.bundle, "inner"))
+        self.assertEqual(self.hashes(self.bundle), self.baseHashes)
+
+    def test_an_output_reached_through_an_alias_into_the_bundle_is_refused_before_any_copy(self):
+        overlay = self.overlay("x64")
+        os.symlink(self.bundle, self.path("alias"))
+        self.assertEqual(os.path.realpath(self.path("alias", "out")), os.path.join(self.bundle, "out"))
+        before = sorted(os.listdir(self.bundle))
+        for output in (self.path("alias", "out"), self.path("alias", "a", "b", "out")):
+            with mock.patch.object(pb.shutil, "copytree", side_effect=AssertionError("copy reached inside the source")):
+                with self.assertRaisesRegex(pe.EngineError, "inside the bundle"):
+                    pb.augmentBundle(self.bundle, [overlay], output)
+        self.assertEqual(sorted(os.listdir(self.bundle)), before)
+        self.assertEqual(self.hashes(self.bundle), self.baseHashes)
+        self.assertEqual([n for n in os.listdir(self.dir) if ".partial-" in n], [])
+        self.assertEqual(self.verified, [])
+
+    def test_an_output_beside_the_bundle_through_a_link_that_leaves_it_is_still_allowed(self):
+        os.makedirs(self.path("elsewhere"))
+        os.symlink(self.path("elsewhere"), self.path("alias"))
+        out = pb.augmentBundle(self.bundle, [self.overlay("x64")], self.path("alias", "out"))
+        self.assertEqual(os.path.realpath(out), self.path("elsewhere", "out"))
+        self.assertEqual(self.hashes(self.bundle), self.baseHashes)
+
+    def test_an_output_claimed_while_assembling_is_never_replaced_and_leaves_no_partial(self):
+        out, original = self.path("out"), pe.writeContract
+
+        def claim(*args):
+            os.makedirs(out)
+            return original(*args)
+
+        overlay = self.overlay("x64")
+        with mock.patch.object(pe, "writeContract", side_effect=claim):
+            with self.assertRaisesRegex(pe.EngineError, "never replaced"):
+                pb.augmentBundle(self.bundle, [overlay], out)
+        self.assertEqual(os.listdir(out), [])
+        self.assertEqual([n for n in os.listdir(self.dir) if ".partial-" in n], [])
+
+    def test_a_clone_whose_final_verification_fails_is_not_published(self):
+        overlay = self.overlay("x64")
+
+        def refuse(root):
+            if ".partial-" in root:
+                raise pe.EngineError("hash mismatch")
+            return "aarch64-macos", "22.1.1", 0
+
+        with mock.patch.object(pe, "verifyEngine", side_effect=refuse):
+            with self.assertRaisesRegex(pe.EngineError, "hash mismatch"):
+                pb.augmentBundle(self.bundle, [overlay], self.path("out"))
+        self.assertFalse(os.path.exists(self.path("out")))
+        self.assertEqual([n for n in os.listdir(self.dir) if ".partial-" in n], [])
+        self.assertEqual(self.hashes(self.bundle), self.baseHashes)
+
+    def test_the_source_bundle_failing_verification_stops_before_any_clone(self):
+        overlay = self.overlay("x64")
+        with mock.patch.object(pe, "verifyEngine", side_effect=pe.EngineError("hash mismatch")):
+            with self.assertRaisesRegex(pe.EngineError, "hash mismatch"):
+                pb.augmentBundle(self.bundle, [overlay], self.path("out"))
+        self.assertEqual([n for n in os.listdir(self.dir) if n.startswith("out")], [])
+
+
+class BundleCommandLineTest(AugmentCase):
+    def test_bundle_with_shared_runtimes_augments_and_the_legacy_arguments_still_prepare(self):
+        arm, x64 = self.overlay("arm", [ARM]), self.overlay("x64")
+        self.assertEqual(pb.main(["--bundle", self.bundle, "--shared-runtime", arm, "--shared-runtime", x64,
+                                  "--output", self.path("out")]), 0)
+        self.assertEqual(json.loads(read(self.path("out", "notices", "bundle-provenance.json")))["sharedTargets"], [X64, ARM])
+        self.assertEqual(pb.main(["--bundle", self.bundle, "--shared-runtime", x64, "--output", self.path("out")]), 1)
+        self.assertEqual(pb.main(["--engine", self.engine, "--zig", "/z/zig", "--output", self.path("legacy")]), 0)
+        self.assertEqual(len(self.runtimeCalls), 1)
+
+    def test_the_two_modes_do_not_mix(self):
+        x64 = self.overlay("x64")
+        for argv in (["--bundle", self.bundle, "--output", "o"],
+                     ["--bundle", self.bundle, "--shared-runtime", x64, "--engine", self.engine, "--output", "o"],
+                     ["--bundle", self.bundle, "--shared-runtime", x64, "--zig", "/z/zig", "--output", "o"],
+                     ["--bundle", self.bundle, "--shared-runtime", x64, "--target", X64, "--output", "o"],
+                     ["--shared-runtime", x64, "--engine", self.engine, "--zig", "/z/zig", "--output", "o"],
+                     ["--engine", self.engine, "--output", "o"], ["--zig", "/z/zig", "--output", "o"]):
+            with self.subTest(argv), mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+                pb.main(argv)
+        self.assertEqual(self.runtimeCalls, [])
 
 
 class BundleLayoutTest(unittest.TestCase):
