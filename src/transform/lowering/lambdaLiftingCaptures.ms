@@ -97,13 +97,6 @@ function collectCaptures(node: Node, walk: CaptureWalk): void {
 	mapChildren(node, (child: Node): Node => { collectCaptures(child, walk); return child; });
 }
 
-export function refsRoutine(node: Node, routine: Symbol): boolean {
-	return anyDeep(node, (n: Node): int32 => {
-		if (n.kind == NodeKind.Identifier) return n.resolvedSym == routine ? DEEP_HIT : DEEP_SKIP;
-		return isFuncBoundary(n) ? DEEP_SKIP : DEEP_DESCEND;
-	});
-}
-
 export function findCapturedIdent(sym: Symbol, capturedIdents: Node[]): Node {
 	for (const n of capturedIdents) {
 		if (n.resolvedSym == sym) return n;

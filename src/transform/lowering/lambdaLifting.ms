@@ -44,7 +44,7 @@ import {
 	defineVar, defineLocalRoutines, defineParams, isModuleLevelVar, isDirectParentVar,
 } from "./lambdaLiftingScope";
 import {
-	isCaptureLastUse, computeLastUseCaptures, detectCaptures, refsRoutine, findCapturedIdent,
+	isCaptureLastUse, computeLastUseCaptures, detectCaptures, findCapturedIdent,
 } from "./lambdaLiftingCaptures";
 import {
 	UP_FIELD, freshEnvParamSym, freshEnvVarSym, envVarRef, envVarDeref, PendingEnvRewrite, LoopEnv, LiftState,
@@ -126,23 +126,6 @@ function rewriteRoutineSelfRefs(node: Node, routine: Symbol, closureOf: (ref: No
 	if (isFuncBoundary(node)) return node;
 	mapChildren(node, (child: Node): Node => rewriteRoutineSelfRefs(child, routine, closureOf));
 	return node;
-}
-
-function ownEnvClosure(liftedSym: Symbol, selfEnvSym: Symbol, envStructType: Type, ref: Node): Node {
-	const loc = ref.location;
-	const pair = makeObjectLiteral(["fn", "env"], [makeTypedIdentResolved(liftedSym, null, loc), envVarRef(selfEnvSym, envStructType, loc)], loc);
-	pair.flags = pair.flags.incl(NodeFlag.Closure);
-	pair.nodeType = ref.nodeType;
-	return pair;
-}
-
-function ownEnvDecl(selfEnvSym: Symbol, envParamSym: Symbol, envName: string, envStructType: Type, loc: SourceLocation): Node {
-	const typedEnv = createNode(NodeKind.TypeAssertion, { asExpr: makeTypedIdentResolved(envParamSym, null, loc), asType: envName }, syntheticToken(loc));
-	typedEnv.nodeType = createRef(envStructType);
-	const decl = makeVarDecl(selfEnvSym.name, typedEnv, DeclKind.Const, loc);
-	decl.resolvedSym = selfEnvSym;
-	decl.nodeType = createRef(envStructType);
-	return decl;
 }
 
 function collectRoutines(program: Node, state: LiftState): void {
@@ -288,40 +271,19 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 		rwChainNames = chain.names;
 		rwChainTypes = chain.types;
 	}
-	let selfEnvDecl: Node | null = null;
-	if (routine != null && refsRoutine(body, routine)) {
-		const selfEnvSym = freshEnvVarSym(state.ctx, `_self${counter}_`, envStructType);
-		const selfEnvType = envStructType;
-		selfEnvDecl = ownEnvDecl(selfEnvSym, envParamSym, envName, envStructType, loc);
-		rewriteRoutineSelfRefs(body, routine, (ref: Node): Node => ownEnvClosure(liftedSym, selfEnvSym, selfEnvType, ref));
+	if (routine != null) {
+		rewriteRoutineSelfRefs(body, routine, (ref: Node): Node => routineClosure(liftedSym, envPointerTo(state, envStructType, envName, envStructType, [], [], envParamSym, ref.location)!, ref));
 	}
-	const reachDecls: Node[] = [];
 	if (state.routines.items.length > 0) {
-		const reachTypes: Type[] = [];
-		const reachSyms: Symbol[] = [];
 		body = rewriteRoutineRefs(body, state, routine, (ref: Node, info: RoutineInfo): Node => {
 			const target = info.envStructType;
 			if (target == null) return routineClosure(info.liftedSym, makeNull(ref.location), ref);
-			let idx = -1;
-			for (let k = 0; k < reachTypes.length; k += 1) {
-				if (reachTypes[k] == target) idx = k;
+			const pointer = envPointerTo(state, target, envName, envStructType, rwChainNames, rwChainTypes, envParamSym, ref.location);
+			if (pointer == null) {
+				reportTransformError(state.ctx, `internal: the env of '${info.sym.name}' is not reachable from this closure`, ref.location);
+				return ref;
 			}
-			if (idx < 0) {
-				const pointer = envPointerTo(state, target, envName, envStructType, rwChainNames, rwChainTypes, envParamSym, loc);
-				if (pointer == null) {
-					reportTransformError(state.ctx, `internal: the env of '${info.sym.name}' is not reachable from this closure`, ref.location);
-					return ref;
-				}
-				const reachSym = freshEnvVarSym(state.ctx, `_reach${counter}_${reachTypes.length}_`, target);
-				const decl = makeVarDecl(reachSym.name, pointer, DeclKind.Const, loc);
-				decl.resolvedSym = reachSym;
-				decl.nodeType = createRef(target);
-				reachDecls.push(decl);
-				reachTypes.push(target);
-				reachSyms.push(reachSym);
-				idx = reachTypes.length - 1;
-			}
-			return routineClosure(info.liftedSym, envVarRef(reachSyms[idx], target, ref.location), ref);
+			return routineClosure(info.liftedSym, pointer, ref);
 		});
 	}
 	let rewrittenBody = rewriteNode(state, body, rewriteCaptures, envName, envStructType, rwChainNames, rwChainTypes, envParamSym);
@@ -329,14 +291,6 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 		rewrittenBody = makeBlock([], loc);
 	} else if (rewrittenBody.kind != NodeKind.BlockStmt) {
 		rewrittenBody = makeBlock([makeReturn(rewrittenBody, loc)], loc);
-	}
-	if (reachDecls.length > 0) {
-		const bd = rewrittenBody.data as BlockStmtData;
-		bd.statements = prependHoistedEnvDecls(reachDecls, bd.statements);
-	}
-	if (selfEnvDecl != null) {
-		const bd = rewrittenBody.data as BlockStmtData;
-		bd.statements = prependHoistedEnvDecls([selfEnvDecl], bd.statements);
 	}
 
 	// Create lifted function
