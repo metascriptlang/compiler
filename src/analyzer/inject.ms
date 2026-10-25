@@ -300,23 +300,9 @@ function ensureDestructionIfNeeded(node: Node, dctx: DrcContext): Node {
 	// Literals are compile-time constants (no heap allocation in C).
 	const k = node.kind;
 	if (k != NodeKind.CallExpr && k != NodeKind.ObjectLiteral && k != NodeKind.ArrayLiteral && k != NodeKind.NewExpr) return node;
-	if (isViewCall(node)) return node;
+	if (isViewCall(node) || node.flags.has(NodeFlag.Closure)) return node;
 	const exprType = node.nodeType;
-	if (exprType == null) {
-		// Null type is benign for void/synthetic calls and bare-fn closure pairs (`{fn, env:null}` —
-		// msClosureDestroy is null-env-safe). But an NF_CLOSURE pair with a NON-null env is a heap
-		// closure that LEAKS if not captured, and reaches here only when a transform built it without a
-		// nodeType (the closure leak this session). FAIL LOUD on that exact signature — narrow on
-		// purpose (a blanket warning fires ~800×/build on benign untyped calls). Surfaces via console
-		// like the existing DRC param warning; checkerCtx.errors does NOT print from Phase 4.
-		if (k == NodeKind.ObjectLiteral && node.flags.has(NodeFlag.Closure)) {
-			const od = node.data as ObjectLiteralData;
-			if (od.properties.length > 1 && od.properties[1] != null && od.properties[1].kind != NodeKind.NullLiteral) {
-				console.log("DRC INTERNAL ERROR: env-bearing closure reached DRC without a type at " + node.location.line + ":" + node.location.column + " — its captured env will leak (a transform built the closure-pair without setting nodeType)");
-			}
-		}
-		return node;
-	}
+	if (exprType == null) return node;
 	// Inside a non-RC binding/condition walk (skipAwaitableCapture), never capture a future:
 	// the await/spawn lowering's stepper owns awaited futures, so scope-exit destroy here
 	// double-frees (PARALOCK). A genuine discarded fire-and-forget future is captured by the
@@ -850,21 +836,15 @@ function processObjectLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node
 	// GenericInstance (monomorphized generic struct, e.g. Entry<int32, Box>) is treated as
 	// a named struct: its fields must sink so Ref field values transfer ownership to the
 	// struct instead of being decref'd at caller scope exit.
-	// A closure-pair literal (NF_CLOSURE) is heap-owning like a ref constructor: its env field must
-	// sink-in (COPY/incref) so the closure owns a counted ref to the env. Without this, setting the
-	// pair's nodeType to Function (needed so DRC captures + destroys the pair) flips the env field to
-	// a borrow (no incref) → the pair's scope-exit msClosureDestroy decrefs an env it doesn't own →
-	// double-free with the env-var's own lifecycle (lambda-lifting). The Function type alone is NOT
-	// isRefConstr, so the flag is what keeps the env a COPY.
 	// Anon structs included since they became OWNED values (DuVariant/(d') work):
 	// an owned literal whose fields only BORROW over-releases at its destroy — the
 	// capture of an inner fresh value (new Boxed in a field) and the literal's own
 	// destroy both released the same +1 (finding #4, holderonly ASan UAF).
-	const isRefConstr = t == null || t.kind == TypeKind.Ref
+	const isRefConstr = node.flags.has(NodeFlag.Closure) ? mode != DrcMode.Normal
+		: t == null || t.kind == TypeKind.Ref
 		|| t.kind == TypeKind.Struct
 		|| t.kind == TypeKind.GenericInstance
-		|| t.kind == TypeKind.Union
-		|| node.flags.has(NodeFlag.Closure);
+		|| t.kind == TypeKind.Union;
 	const fieldDefault = isRefConstr ? DrcMode.SinkArg
 		: (mode == DrcMode.Normal) ? DrcMode.Normal : DrcMode.SinkArg;
 	const marks: Node[] = [];
