@@ -65,3 +65,40 @@ test "type arguments are bound from a generic instance only of the same declarat
 	const own = problems(twoModules(a, "", "import { second, mk } from \"./a\";\nconsole.log(second(mk()));\n"));
 	assert own.length == 0, own.join(" | ");
 }
+
+const typedCalleeMacro = `import { Node, NodeKind, bindSym, getTypeArg } from "std/meta";
+import { Thing as Other, firstOf } from "./a";
+class Thing { tag: string = "local"; }
+macro viaOther(): Node {
+	return {
+		kind: NodeKind.CallExpr,
+		callee: { kind: NodeKind.TypeGeneric, typExprBase: bindSym("firstOf")!, typExprArgs: [getTypeArg()] },
+		arguments: [],
+		isDirectCall: false,
+		resolvedOverloadIdx: -1,
+	};
+}
+`;
+
+test "a type a macro passes through getTypeArg stays the declaration it was bound to when a same-spelled one is in scope" {
+	const a = "export class Thing { tag: string = \"a\"; }\nexport function firstOf<T>(): T[] { return []; }\n";
+	const direct = problems(twoModules(a, "", typedCalleeMacro + "const xs: Other[] = viaOther<Other>();\nconsole.log(xs.length, new Thing().tag);\n"));
+	assert direct.length == 0, direct.join(" | ");
+	const inGeneric = problems(twoModules(a, "", typedCalleeMacro + "function wrap<N>(n: N): Other[] { return viaOther<Other>(); }\nconst ys: Other[] = wrap(1);\nconsole.log(ys.length, new Thing().tag);\n"));
+	assert inGeneric.length == 0, inGeneric.join(" | ");
+	const wrong = problems(twoModules(a, "", typedCalleeMacro + "const zs: Thing[] = viaOther<Other>();\nconsole.log(zs.length);\n"));
+	assert wrong.length > 0, "the local Thing is not the imported Thing the macro bound";
+}
+
+test "a generic function taking a union slot stamps the slot of each same-spelled struct" {
+	const decl = "export struct P { x: int32; }\n";
+	for (const order of ["PA | PB", "PB | PA"]) {
+		const main = `import { P as PA } from "./a";\nimport { P as PB } from "./b";\ntype U = ${order};\nfunction show<T>(u: U, t: T): string { return "ok"; }\nfunction wrap<T>(t: T, u: U): string { return show(u, t); }\nconst pa: PA = { x: 1 };\nconst pb: PB = { x: 2 };\nconsole.log(show(pa, 1));\nconsole.log(show(pb, 1));\nconsole.log(wrap("s", pa));\nconsole.log(wrap("s", pb));\n`;
+		const entries = twoModules(decl, decl, main);
+		const c = compileProjectToCWithStd(entries, "test/main.ms");
+		assert !c.startsWith("ERROR:"), order + ": " + c;
+		assert c.indexOf("._tag=0, .v0=", 0) >= 0 && c.indexOf("._tag=1, .v1=", 0) >= 0, order + ": the two arguments share one slot";
+		const js = compileProjectToJSWithStd(entries, "test/main.ms");
+		assert !js.startsWith("ERROR:"), order + ": " + js;
+	}
+}
