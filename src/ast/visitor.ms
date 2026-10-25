@@ -53,10 +53,15 @@ export function noStop(n: Node): boolean {
 }
 
 export function anyDescendant(node: Node | null, test: (n: Node) => boolean, stop: (n: Node) => boolean): boolean {
-	if (node == null) return false;
-	if (test(node)) return true;
-	if (stop(node)) return false;
-	return anyChild(node, (child: Node): boolean => anyDescendant(child, test, stop));
+	let found = false;
+	const scan = (c: Node | null): void => {
+		if (found || c == null) return;
+		if (test(c)) { found = true; return; }
+		if (stop(c)) return;
+		forEachChild(c, scan);
+	};
+	scan(node);
+	return found;
 }
 
 function nameNode(name: string): Node {
