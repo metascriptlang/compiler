@@ -450,6 +450,15 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 	// Star re-export: export * from "module";
 	if (nextKind == TokenKind.Star) {
 		advance(state); // skip *
+		let nsAlias = "*";
+		if (current(state).kind == TokenKind.As) {
+			advance(state);
+			if (current(state).kind != TokenKind.Ident) {
+				return Result.err(`Expected namespace name after 'export * as' at line ${current(state).line}`);
+			}
+			nsAlias = current(state).value;
+			advance(state);
+		}
 		if (current(state).kind != TokenKind.From) {
 			return Result.err(`Expected 'from' after 'export *' at line ${current(state).line}`);
 		}
@@ -461,7 +470,7 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 		advance(state);
 		consumeSemicolon(state);
 		const importNode = withTypeModifier(createNode(NodeKind.ImportDecl, {
-			importNames: ["*"], importAliases: ["*"], importSource: source, nameLocations: [], importTypeNames: [],
+			importNames: ["*"], importAliases: [nsAlias], importSource: source, nameLocations: [], importTypeNames: [],
 		}, exportToken), typeModifier);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: importNode }, exportToken));
 	}
@@ -2133,6 +2142,20 @@ test "export star data" {
 	assert imp.importNames[0] == "*";
 	assert imp.importAliases[0] == "*";
 	assert imp.importSource == "./lib";
+}
+
+test "export star as namespace data" {
+	const ex = stmtAt("export * as JSX from \"./jsx\";", 0).data as ExportDeclData;
+	const imp = ex.exportedDecl.data as ImportDeclData;
+	assert imp.importNames[0] == "*";
+	assert imp.importAliases[0] == "JSX";
+	assert imp.importSource == "./jsx";
+}
+
+test "export type star as namespace" {
+	const imp = (stmtAt("export type * as T from \"./types\";", 0).data as ExportDeclData).exportedDecl.data as ImportDeclData;
+	assert imp.importNames[0] == "*";
+	assert imp.importAliases[0] == "T";
 }
 // Type alias — distinct paths: simple, generic, union, function type
 test "type simple" { assert programOk("type ID = number;"); }
