@@ -7,6 +7,7 @@
 // @ledger-slack(msRefArrayRefCell) 1
 // @ledger-slack(msFuture) 1
 // @skip-js: spawn on JS is a microtask that starts after main has left, and process.exit on node ends the process before it runs, so the task's line never prints there
+// @skip-raiser: a spawn on the Raiser VM is a strand that runs only when main yields, and process.exit ends the VM before it runs, the same as on JS
 // note: process.exit(0) while a task reads a deep Readonly module const with no rc op: the exit's pool shutdown lets the running task finish before the process tears down, so the const's cell, its child and its string stay valid for the task's whole read. The sibling where main returns instead is readonlyConstReadByTaskOutlivingMain.
 
 import { exit } from "std/process";
