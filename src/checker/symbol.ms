@@ -100,10 +100,21 @@ export enum RoutineFlag {
 
 const decodedRoutineFlags: HashMap<string, BitSet<RoutineFlag>> = new HashMap<string, BitSet<RoutineFlag>>();
 
+let _routineFlagsSealed = false;
+
+export function sealRoutineFlags(sealed: boolean): void {
+	_routineFlagsSealed = sealed;
+}
+
+export function refuseRoutineFlagDecodeWhileSealed(text: string): void {
+	if (_routineFlagsSealed) throw new Error(`internal: routine flags of ${text} decoded during emission`);
+}
+
 export function routineFlagSet(text: string): BitSet<RoutineFlag> {
 	if (text == "") return 0 as BitSet<RoutineFlag>;
 	const known = decodedRoutineFlags.get(text);
 	if (known != null) return known;
+	refuseRoutineFlagDecodeWhileSealed(text);
 	const set = decodeRoutineFlags(text);
 	decodedRoutineFlags.set(text, set);
 	return set;
@@ -720,6 +731,22 @@ test "routine flags keep a union receiver or constraint as one type text" {
 	const set = routineFlagSet("ext:x:A | B|gen:T:string | int32|overload");
 	assert set.has(RoutineFlag.Overload) && set.has(RoutineFlag.Generic);
 	assert !set.has(RoutineFlag.Extern);
+}
+
+test "a sealed routine flag table serves known texts and refuses a new one" {
+	const known = routineFlagSet("overload|template");
+	sealRoutineFlags(true);
+	const again = routineFlagSet("overload|template");
+	let refused = "";
+	try {
+		routineFlagSet("template|overload|extern");
+	} catch (e) {
+		refused = (e as Error).message;
+	}
+	sealRoutineFlags(false);
+	assert again == known;
+	assert refused == "internal: routine flags of template|overload|extern decoded during emission";
+	assert routineFlagSet("template|overload|extern").has(RoutineFlag.Extern);
 }
 
 test "an unknown routine flag word is an internal error" {
