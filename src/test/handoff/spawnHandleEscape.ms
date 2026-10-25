@@ -31,6 +31,9 @@ test "spawnHandleEscape: a borrowing handle carried out of its frame by any valu
 		{ name: "pushed into a parameter's array through a local", how: "an array this scope did not create", source: "function f(out: Promise<int32>[], n: Readonly<Node>): void { const a = out; a.push(spawn(() => leaf(n))); }" },
 		{ name: "element of a for..of", how: "passing it to 'parkedAll.push'", source: "function f(n: Readonly<Node>): void { const a = [spawn(() => leaf(n))]; for (const h of a) parkedAll.push(h); }" },
 		{ name: "captured by a closure", how: "capturing it in a closure", source: "function f(n: Readonly<Node>): () => int32 { const a = [spawn(() => leaf(n))]; return (): int32 => a.length; }" },
+		{ name: "combinator over local handles returned", how: "returning it", source: "function f(n: Readonly<Node>): Promise<int32[]> { const a = [spawn(() => leaf(n)), spawn(() => leaf(n))]; return Promise.all(a); }" },
+		{ name: "expression arrow body", how: "returning it", source: "function f(n: Readonly<Node>): int32 { const mk = (): Promise<int32> => spawn(() => leaf(n)); return await mk(); }" },
+		{ name: "expression arrow body array", how: "returning it", source: "function f(n: Readonly<Node>): int32 { const mk = (): Promise<int32>[] => [spawn(() => leaf(n))]; const hs = mk(); return await hs[0]; }" },
 		{ name: "yielded", how: "yielding it", source: "function* f(n: Readonly<Node>): Iterator<Promise<int32>> { yield spawn(() => leaf(n)); }" },
 	];
 	for (const c of cases) {

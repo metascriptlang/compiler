@@ -120,6 +120,7 @@ import "./macroReflection";
 import "./numericConstants";
 import "./numericLattice";
 import "./paralockLicences";
+import "./spawnHandleEscape";
 import "./constructorOrigin";
 import "./instanceSymbolIdentity";
 import "./loweredSymbolIdentity";
