@@ -16,6 +16,7 @@ import { bodyIsErrorBlind } from "../../checker/raises";
 import { isIterator, peelTransparentInstance } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { Spiller, lowerAssign } from "./operandOrder";
+import { sameType } from "../../checker/compat";
 import {
 	makeBlock, makeVarDecl, makeIdentResolved, makeBreak, makeSwitchWrapper, makeExprStmt,
 	extractBodyStmts, boolToDeclKind, makeNull, makeAssign,
@@ -31,6 +32,14 @@ interface InlineState {
 	fromCaller: HashSet<Node>;
 	localNames: HashSet<string>;
 	local: HashSet<Symbol>;
+	stored: HashMap<Symbol, StoredChain>;
+}
+
+interface StoredChain {
+	init: Node;
+	prelude: Node[];
+	loc: SourceLocation;
+	used: boolean;
 }
 
 interface InlineCall {
@@ -77,9 +86,49 @@ export function lowerIterInline(program: Node, ctx: TransformContext): Node {
 	for (const sym of forwarders.keys()) { local.add(sym); }
 	const st: InlineState = {
 		ctx, generators, recursive: recursiveGenerators(generators), expanding: new HashSet<Symbol>(), fromCaller: new HashSet<Node>(),
-		localNames, local,
+		localNames, local, stored: new HashMap<Symbol, StoredChain>(),
 	};
+	collectStored(program, st);
 	return walkNode(program, (node: Node): Node => inlineStmt(node, st));
+}
+
+function collectStored(node: Node, st: InlineState): void {
+	if (node.kind == NodeKind.Program) collectStoredIn((node.data as ProgramData).programStmts, st);
+	else if (node.kind == NodeKind.BlockStmt) collectStoredIn((node.data as BlockStmtData).statements, st);
+	forEachChild(node, (child: Node): void => { collectStored(child, st); });
+}
+
+function collectStoredIn(stmts: Node[], st: InlineState): void {
+	for (let i = 0; i < stmts.length; i += 1) {
+		const s = stmts[i];
+		if (singleUseChain(stmts, i, st)) {
+			const init = (s.data as VariableDeclData).initializer;
+			st.stored.set(s.resolvedSym!, { init, prelude: [], loc: s.location, used: false });
+		}
+	}
+}
+
+function singleUseChain(stmts: Node[], at: int32, st: InlineState): boolean {
+	const s = stmts[at];
+	const sym = s.resolvedSym;
+	if (s.kind != NodeKind.VariableDecl || sym == null || hasFlag(sym, SymbolFlag.Exported)) return false;
+	const d = s.data as VariableDeclData;
+	const init = d.initializer;
+	if (d.declKind != DeclKind.Const || init == null || !sameType(sym.symbolType, init.nodeType)) return false;
+	if (matchIterable(init, st) == null) return false;
+	let reads: int32 = 0;
+	let once = false;
+	for (let i = 0; i < stmts.length; i += 1) {
+		const n = readCount(stmts[i], sym);
+		reads += n;
+		if (i > at && n == 1) once = readOutsideLoops(stmts[i], sym);
+	}
+	return reads == 1 && once;
+}
+
+function storedRead(arg: Node, st: InlineState): StoredChain | null {
+	const sym = arg.kind == NodeKind.Identifier ? arg.resolvedSym : null;
+	return sym != null ? st.stored.get(sym) : null;
 }
 
 function keepBodies(decls: HashMap<Symbol, Node>, kept: HashMap<Symbol, Node>): void {
@@ -206,6 +255,10 @@ function inlineStmt(node: Node, st: InlineState): Node {
 		NodeKind.ForOfStmt => {
 			const d = node.data as ForOfStmtData;
 			const call = matchCall(d, st);
+			if (call != null && storedRead(d.forOfIterable, st) != null) {
+				d.forOfIterable = boundSource(d.forOfIterable, call, [], st, node.location);
+				return inlineStmt(node, st);
+			}
 			if (call != null) return isGenerator(call.decl) ? expand(node, d, call, st) : forwardFor(node, d, call, st);
 		},
 		NodeKind.ExprStmt => {
@@ -287,6 +340,19 @@ function spliceConsumerDecls(stmts: Node[], st: InlineState): Node[] {
 		for (const s of r.stmts) { out.push(s); }
 		out.push(stmt);
 	}
+	return withStoredPreludes(out, st);
+}
+
+function withStoredPreludes(stmts: Node[], st: InlineState): Node[] {
+	const out: Node[] = [];
+	for (const stmt of stmts) {
+		const stored = stmt.kind == NodeKind.VariableDecl && stmt.resolvedSym != null ? st.stored.get(stmt.resolvedSym) : null;
+		if (stored == null || !stored.used) {
+			out.push(stmt);
+			continue;
+		}
+		for (const s of stored.prelude) { out.push(s); }
+	}
 	return out;
 }
 
@@ -297,6 +363,8 @@ function matchCall(d: ForOfStmtData, st: InlineState): InlineCall | null {
 }
 
 function matchIterable(iterable: Node, st: InlineState): InlineCall | null {
+	const stored = storedRead(iterable, st);
+	if (stored != null) return matchIterable(stored.init, st);
 	if (iterable.kind != NodeKind.CallExpr) return null;
 	const iterType = iterable.nodeType != null ? peelTransparentInstance(iterable.nodeType) : null;
 	if (iterType == null || !isIterator(iterType)) return null;
@@ -542,7 +610,7 @@ function inlinedBody(call: InlineCall, out: Node[], st: InlineState, loc: Source
 		const param = params[i];
 		const arg = call.args[i];
 		const writes = writesTo(fd.fnBody, param);
-		if (!writes && isStableRead(arg)) {
+		if (!writes && isStableRead(arg) && storedRead(arg, st) == null) {
 			renames.set(param, arg.resolvedSym!);
 			continue;
 		}
@@ -619,6 +687,12 @@ function readOutsideLoops(node: Node, sym: Symbol): boolean {
 }
 
 function boundSource(arg: Node, source: InlineCall, out: Node[], st: InlineState, loc: SourceLocation): Node {
+	const stored = storedRead(arg, st);
+	if (stored != null) {
+		if (stored.used) throw new Error("internal: a single-use iterator const was read twice");
+		stored.used = true;
+		return boundSource(stored.init, source, stored.prelude, st, stored.loc);
+	}
 	if (!isGenerator(source.decl)) return forwardedSource(source, out, st, loc);
 	const fd = source.decl.data as FunctionDeclData;
 	const params = source.decl.paramSyms!;
@@ -627,7 +701,7 @@ function boundSource(arg: Node, source: InlineCall, out: Node[], st: InlineState
 		const a = source.args[i];
 		const p = params[i];
 		const inner = writesTo(fd.fnBody, p) ? null : chainSource(fd.fnBody, p, a, st);
-		if (isStableRead(a)) {
+		if (isStableRead(a) && storedRead(a, st) == null) {
 			bound.push(a);
 		} else if (inner != null) {
 			bound.push(boundSource(a, inner, out, st, loc));
@@ -1016,8 +1090,20 @@ test "a generator that calls itself keeps the closure path" {
 	assert stillForOf("function* g(n: int32): Iterator<int32> { for (const x of g(n)) { yield x; } }\nfor (const x of g(1)) { }");
 }
 
-test "a stored generator keeps the closure path" {
-	assert stillForOf("function* g(): Iterator<int32> { yield 1; }\nconst it = g();\nfor (const x of it) { }");
+test "a generator stored in a const that one for-of reads once is expanded at the read" {
+	assert !stillForOf("function* g(): Iterator<int32> { yield 1; }\nconst it = g();\nfor (const x of it) { }");
+	const prog = lowered("function* g(): Iterator<int32> { yield 1; }\nfunction f(c: boolean): void { const it = g(); if (c) { for (const x of it) { } } }");
+	const stmts = getStmts(prog);
+	assert countKind(stmts[stmts.length - 1], NodeKind.ForOfStmt) == 0;
+}
+
+test "a stored generator read twice, inside a loop, by a closure or through a let keeps the closure path" {
+	assert stillForOf("function* g(): Iterator<int32> { yield 1; }\nconst it = g();\nfor (const x of it) { }\nfor (const y of it) { }");
+	const looped = getStmts(lowered("function* g(): Iterator<int32> { yield 1; }\nconst it = g();\nfor (let k = 0; k < 2; k++) { for (const x of it) { } }"));
+	assert countKind(looped[looped.length - 1], NodeKind.ForOfStmt) == 1;
+	const closed = getStmts(lowered("function* g(): Iterator<int32> { yield 1; }\nconst it = g();\nconst f = (): void => { for (const x of it) { } };"));
+	assert countKind(closed[closed.length - 1], NodeKind.ForOfStmt) == 1;
+	assert stillForOf("function* g(): Iterator<int32> { yield 1; }\nlet it = g();\nfor (const x of it) { }");
 }
 
 const chainSrc = "function* count(n: int32): Iterator<int32> { for (let i = 0; i < n; i++) { yield i; } }\n";
@@ -1070,8 +1156,15 @@ test "a consumer assigned with a compound operator is expanded in place" {
 	assert lastStmtCalls(sumSrc + "function f(): int32 { let s = 1; s *= total(count(3)); return s; }") == 0;
 }
 
-test "a consumer of a stored iterator stays a call" {
-	assert lastStmtCalls(sumSrc + "function f(): int32 { const it = count(3); return total(it); }") == 2;
+test "a consumer of an iterator stored in a const read once is expanded in place" {
+	assert lastStmtCalls(sumSrc + "function f(): int32 { const it = count(3); return total(it); }") == 0;
+	assert lastStmtCalls(sumSrc + "function f(): int32 { const it = count(3); const s = total(it); return s; }") == 0;
+	const doubled = "function* doubled(it: Iterator<int32>): Iterator<int32> { for (const x of it) { yield x * 2; } }\n";
+	assert lastStmtCalls(sumSrc + doubled + "function f(): int32 { const a = count(3); const b = doubled(a); return total(b); }") == 0;
+}
+
+test "a consumer of an iterator stored in a const read twice stays a call" {
+	assert lastStmtCalls(sumSrc + "function f(): int32 { const it = count(3); const a = total(it); return a + total(it); }") == 3;
 }
 
 test "a consumer call inside a larger expression stays a call" {
