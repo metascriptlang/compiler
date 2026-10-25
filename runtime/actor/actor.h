@@ -1756,19 +1756,23 @@ static inline bool msActorPollEventLoop(void) {
     return msActorPollLocal();
 }
 
+extern pthread_once_t msActorSystemOnce;
+extern _Atomic(bool) msActorSystemLive;
+
+static inline void msActorSystemInit(void) {
+    msEnsureWakePipe();
+    msActorClaimEventLoopScheduler();
+    msThreadPool* p = msPoolGet();
+    int count = (p != NULL ? p->workerCount : 0) + 1;
+    msSchedulerCount = count > MS_MAX_SCHEDULERS ? MS_MAX_SCHEDULERS : count;
+    msPoolSetActorHooks(msActorPollLocal, msSetSchedulerID);
+    msCDInit();
+    msSetActorPollHook(msActorPollEventLoop);
+    atomic_store_explicit(&msActorSystemLive, true, memory_order_release);
+}
+
 static inline void msActorRegister(msActor* a) {
-    if (msSchedulerCount == 0) {
-        msEnsureWakePipe();  /* wake pipe must exist before any actor send */
-        msActorClaimEventLoopScheduler();
-        msSetActorPollHook(msActorPollEventLoop);
-        msThreadPool* p = msPoolGet();
-        msSchedulerCount = (p != NULL ? p->workerCount : 0) + 1;
-        if (msSchedulerCount > MS_MAX_SCHEDULERS) msSchedulerCount = MS_MAX_SCHEDULERS;
-        /* After the count: a worker that sees the hooks reads msSchedulerCount next. */
-        msPoolSetActorHooks(msActorPollLocal, msSetSchedulerID);
-        /* Create async cycle detector actor on scheduler 0 */
-        msCDInit();
-    }
+    pthread_once(&msActorSystemOnce, msActorSystemInit);
     /* Assignment: parent's sched → creator-thread's sched → RR fallback.
      * Pony-parity locality. Cross-thread IO completions (#88/#89) aren't wired
      * yet, so an actor accepted on thread A but running on B silently hangs
@@ -1922,6 +1926,7 @@ static inline bool msActorPollLocal(void) {
 
 /* Exit-poll: drain ALL run queues. Called at program exit to flush remaining messages. */
 static inline bool msActorPollAll(void) {
+    if (!atomic_load_explicit(&msActorSystemLive, memory_order_acquire)) return false;
     bool didWork = false;
     for (int s = 0; s < msSchedulerCount; s++) {
         msActor* a;

@@ -24,8 +24,9 @@
 #endif
 
 /* ===== Actor poll hook (set by actor runtime, NULL if no actors) ===== */
-static bool (*msActorPollHook)(void) = NULL;
-void msSetActorPollHook(bool (*hook)(void)) { msActorPollHook = hook; }
+typedef bool (*msActorPollFn)(void);
+static _Atomic(msActorPollFn) msActorPollHook = NULL;
+void msSetActorPollHook(bool (*hook)(void)) { atomic_store_explicit(&msActorPollHook, hook, memory_order_release); }
 
 /* Actor idle timeout cap: shortest actor idle timeout in ms (0 = no cap).
  * When > 0, msRunOnce caps its sleep to this value so idle timeouts fire on time. */
@@ -901,8 +902,9 @@ static bool msRunOnceIn(int timeoutMs) {
 	 * to the wake pipe. Processing them before the selector ensures the
 	 * selector sees any pending wake bytes from re-enqueue, avoiding a
 	 * 500ms stall when actor batches overflow. */
-	if (msActorPollHook != NULL) {
-		bool actorWork = msActorPollHook();
+	msActorPollFn actorPoll = atomic_load_explicit(&msActorPollHook, memory_order_acquire);
+	if (actorPoll != NULL) {
+		bool actorWork = actorPoll();
 		didWork = actorWork || didWork;
 	}
 

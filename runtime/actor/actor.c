@@ -35,6 +35,9 @@ MS_TLS_PUBLISH(msMySchedulerID)
 msSchedActors msSchedulers[MS_MAX_SCHEDULERS];
 int msSchedulerCount = 0;
 
+pthread_once_t msActorSystemOnce = PTHREAD_ONCE_INIT;
+_Atomic(bool) msActorSystemLive = false;
+
 /* Round-robin counter for actor → scheduler assignment. */
 _Atomic(int) msNextActorRR = 0;
 
