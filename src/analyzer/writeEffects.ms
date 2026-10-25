@@ -7,7 +7,7 @@
 import { Node, NodeKind, NodeFlag, ObjectLiteralData, Symbol, SymbolKind, SourceLocation, Type, TypeFlag, TypeKind, makeLoc, BinaryExprData, CallExprData, ClassDeclData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, MoveExprData, NewExprData, OutExprData, PropertyDeclData, ArrayAccessData, IdentifierData, ProgramData, ExportDeclData, ReturnStmtData, VariableDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, findOverloadImpl, hasFlag, makeSymbol, parentClassSymOf } from "../checker/symbol";
-import { CheckerContext, LIFECYCLE_HOOK_NAMES, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "../checker/context";
+import { CheckerContext, LIFECYCLE_HOOK_NAMES, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, lifecycleHookOp, nominalTypeSym } from "../checker/context";
 import { calledRoutine, isViewCall, routineBody, receiverOf, viewCallSources } from "../checker/effects";
 import { lookupInstanceHook, pickBodyCtx } from "../checker/instantiate";
 import { isMutatingArrayMethod } from "../checker/paramMutationAnalysis";
@@ -557,7 +557,7 @@ function hookRoutines(w: WriteEffects, t: Type, seen: HashSet<Type>, out: Symbol
 		_ => {},
 	};
 	for (const name of LIFECYCLE_HOOK_NAMES) {
-		const hook = lookupInstanceHook(t, name);
+		const hook = lookupInstanceHook(t, lifecycleHookOp(name));
 		if (hook != null) addHook(out, hook);
 	}
 	let owner = t.kind == TypeKind.Struct ? nominalTypeSym(t) : null;
