@@ -18,7 +18,7 @@ import { returnsBorrow } from "../codegen/c/types";
 import { makeNumber, makeString } from "../checker/literalNodes";
 import { classDistance, createArray, createFunction, int32Type, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
 import { isAssignable, sameType } from "../checker/compat";
-import { generatedRef, makeAssign, makeBlock, makeCall, makeFnDecl, makeIdentResolved, makeReturn } from "../transform/util";
+import { generatedRef, isRuntimeProcSym, makeAssign, makeBlock, makeCall, makeFnDecl, makeIdentResolved, makeReturn } from "../transform/util";
 import { cstringSource } from "../transform/native/cstringConvLower";
 
 const ELEMENT_SLOT = "E";
@@ -1054,9 +1054,12 @@ function callWrites(w: WriteEffects, call: Node, defs: LocalDefs | null): WriteS
 	return s;
 }
 
+const SUBMITS_JOINED_BEFORE_FRAME_EXIT = ["msSpawnSlotSubmit", "msSpawnTaskSubmit", "msSpawnHeldSubmit", "msSpawnIntoHeldSubmit"];
+
 export function retainsArg(w: WriteEffects, call: Node, ai: int32): boolean {
 	const called = call.resolvedSym;
 	if (!isRoutineSym(called)) return true;
+	if (SUBMITS_JOINED_BEFORE_FRAME_EXIT.some((name: string): boolean => isRuntimeProcSym(called, name))) return false;
 	const sym = findOverloadImpl(called!) ?? called!;
 	const fi = ai + (call.flags.has(NodeFlag.ExtCall) ? 1 : 0);
 	const formals = sym.symbolType != null && sym.symbolType.kind == TypeKind.Function ? sym.symbolType.typeChildren : null;
