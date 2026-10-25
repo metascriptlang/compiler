@@ -672,10 +672,13 @@ when (mscDeclaresRuntime) {
 	@compilerFunc
 	extern function msRaiseRangeError(v: int64, lo: int64, hi: int64): never;
 
-	@compilerFunc @inline
-	function msPowI32(a: int32, b: int32): int32 {
-		if (b < 0) msRaiseRangeError(b, 0, 2147483647);
-		let r: int32 = 1;
+	@compilerFunc
+	extern function msRaiseOverflow(): never;
+
+	@inline
+	function powChecked<T>(a: T, b: T, max: T): T {
+		if (b < 0) msRaiseRangeError(b as int64, 0, max as int64);
+		let r: T = 1;
 		let x = a;
 		let y = b;
 		while (true) {
@@ -686,30 +689,38 @@ when (mscDeclaresRuntime) {
 		}
 	}
 
+	@inline
+	function powWrap<T>(a: T, b: T): T {
+		let r: T = 1;
+		let x = a;
+		let y = b;
+		while (y != 0) {
+			if ((y & 1) != 0) r *= x;
+			y >>= 1;
+			x *= x;
+		}
+		return r;
+	}
+
+	@inline
+	function powWrapNegativeExponent<T>(a: T, b: T): T {
+		return a == 1 ? 1 : (a == -1 ? ((b & 1) != 0 ? -1 : 1) : 0);
+	}
+
+	@inline
+	function mulFitsU64(a: uint64, b: uint64): boolean {
+		if (b == 0) return true;
+		return a <= 18446744073709551615 / b;
+	}
+
 	@compilerFunc @inline
-	function msPowWrapI32(a: int32, b: int32): int32 {
-		if (b < 0) return a == 1 ? 1 : (a == -1 ? ((b & 1) != 0 ? -1 : 1) : 0);
-		return msPowWrapU32(a as uint32, b as uint32) as int32;
+	function msPowI32(a: int32, b: int32): int32 {
+		return powChecked(a, b, 2147483647);
 	}
 
 	@compilerFunc @inline
 	function msPowI64(a: int64, b: int64): int64 {
-		if (b < 0) msRaiseRangeError(b, 0, 9223372036854775807);
-		let r: int64 = 1;
-		let x = a;
-		let y = b;
-		while (true) {
-			if ((y & 1) != 0) r *= x;
-			y >>= 1;
-			if (y == 0) return r;
-			x *= x;
-		}
-	}
-
-	@compilerFunc @inline
-	function msPowWrapI64(a: int64, b: int64): int64 {
-		if (b < 0) return a == 1 ? 1 : (a == -1 ? ((b & 1) != 0 ? -1 : 1) : 0);
-		return msPowWrapU64(a as uint64, b as uint64) as int64;
+		return powChecked(a, b, 9223372036854775807);
 	}
 
 	@compilerFunc @inline
@@ -730,25 +741,6 @@ when (mscDeclaresRuntime) {
 	}
 
 	@compilerFunc @inline
-	function msPowWrapU32(a: uint32, b: uint32): uint32 {
-		let r: uint32 = 1;
-		let x = a;
-		let y = b;
-		while (y != 0) {
-			if ((y & 1) != 0) r *= x;
-			y >>= 1;
-			x *= x;
-		}
-		return r;
-	}
-
-	@inline
-	function mulFitsU64(a: uint64, b: uint64): boolean {
-		if (b == 0) return true;
-		return a <= 18446744073709551615 / b;
-	}
-
-	@compilerFunc @inline
 	function msPowU64(a: uint64, b: uint64): uint64 {
 		let r: uint64 = 1;
 		let x = a;
@@ -766,16 +758,25 @@ when (mscDeclaresRuntime) {
 	}
 
 	@compilerFunc @inline
+	function msPowWrapU32(a: uint32, b: uint32): uint32 {
+		return powWrap(a, b);
+	}
+
+	@compilerFunc @inline
 	function msPowWrapU64(a: uint64, b: uint64): uint64 {
-		let r: uint64 = 1;
-		let x = a;
-		let y = b;
-		while (y != 0) {
-			if ((y & 1) != 0) r *= x;
-			y >>= 1;
-			x *= x;
-		}
-		return r;
+		return powWrap(a, b);
+	}
+
+	@compilerFunc @inline
+	function msPowWrapI32(a: int32, b: int32): int32 {
+		if (b < 0) return powWrapNegativeExponent(a, b);
+		return msPowWrapU32(a as uint32, b as uint32) as int32;
+	}
+
+	@compilerFunc @inline
+	function msPowWrapI64(a: int64, b: int64): int64 {
+		if (b < 0) return powWrapNegativeExponent(a, b);
+		return msPowWrapU64(a as uint64, b as uint64) as int64;
 	}
 
 	@compilerFunc @inline
@@ -791,9 +792,6 @@ when (mscDeclaresRuntime) {
 		if (r < -32768 || r > 32767) msRaiseOverflow();
 		return r as int16;
 	}
-
-	@compilerFunc
-	extern function msRaiseOverflow(): never;
 
 	@compilerFunc @inline
 	function msPowAssignI8(ref lv: int8, b: int8): int8 {
