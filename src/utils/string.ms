@@ -2,6 +2,7 @@
 // Generic operations (charAt, slice, trim, contains) use extension methods directly.
 
 import { int64Bits } from "./stdBackport";
+import { isSpaceByte } from "std/core/string/shared";
 
 // Extract the part after the last occurrence of a delimiter.
 // "Kind.A" with "." → "A". "A" with "." → "A" (unchanged).
@@ -29,31 +30,34 @@ export function findChar(s: string, ch: string): int32 {
 }
 
 export function splitTopLevel(s: string, delim: string): string[] {
+	if (delim.byteLength != 1) throw new Error(`internal: splitTopLevel takes a one-byte delimiter, got '${delim}'`);
+	const d = delim.byteAt(0);
+	const b = s.asBytes();
 	const parts: string[] = [];
 	let depth = 0;
 	let start = 0;
-	for (let i = 0; i < s.length; i += 1) {
-		const c = s.charAt(i);
-		if (c == "<" || c == "(" || c == "{" || c == "[") { depth += 1; }
-		if (c == ">" || c == ")" || c == "}" || c == "]") {
-			// Don't count `>` that is the tail of an arrow-function `=>` — without
-			// this, splitting a type-arg list like `string, (s: string) => Result<string, string>`
-			// goes wrong: the arrow's `>` drops depth to -1, then the nested
-			// `Result<...>`'s comma is mistakenly treated as a top-level separator.
-			const prev = i > 0 ? s.charAt(i - 1) : "";
-			if (!(c == ">" && prev == "=")) {
-				depth -= 1;
-			}
+	for (let i = 0; i < b.length; i += 1) {
+		const c = b[i] as int32;
+		if (c == "<".code || c == "(".code || c == "{".code || c == "[".code) {
+			depth += 1;
+		} else if (c == ")".code || c == "}".code || c == "]".code || (c == ">".code && (i == 0 || (b[i - 1] as int32) != "=".code))) {
+			depth -= 1;
 		}
-		if (depth == 0 && c == delim) {
-			parts.push(s.slice(start, i).trim());
+		if (depth == 0 && c == d) {
+			parts.push(trimmedByteSlice(s, b, start, i));
 			start = i + 1;
 		}
 	}
-	if (start < s.length) {
-		parts.push(s.slice(start, s.length).trim());
-	}
+	if (start < b.length) parts.push(trimmedByteSlice(s, b, start, b.length));
 	return parts;
+}
+
+function trimmedByteSlice(s: string, b: Readonly<Span<uint8>>, from: int32, to: int32): string {
+	let a = from;
+	let e = to;
+	while (a < e && isSpaceByte(b[a] as int32)) { a += 1; }
+	while (e > a && isSpaceByte(b[e - 1] as int32)) { e -= 1; }
+	return s.byteSlice(a, e);
 }
 
 export function parseIntStr(s: string): int32 {
@@ -412,3 +416,40 @@ test "startsWith no match" { assert !"./foo".startsWith("std/"); }
 test "startsWith too short" { assert !"st".startsWith("std/"); }
 
 test "startsWith exact" { assert "abc".startsWith("abc"); }
+
+function sameParts(got: string[], want: string[]): boolean {
+	if (got.length != want.length) return false;
+	for (let i = 0; i < got.length; i += 1) {
+		if (got[i] != want[i]) return false;
+	}
+	return true;
+}
+
+test "splitTopLevel keeps every bracket kind whole" {
+	assert sameParts(splitTopLevel("a, b<c, d>, (e, f), [g, h], {i, j}", ","), ["a", "b<c, d>", "(e, f)", "[g, h]", "{i, j}"]);
+	assert sameParts(splitTopLevel("async|gen:T,U|ext:s:Map<K, V|W>", "|"), ["async", "gen:T,U", "ext:s:Map<K, V|W>"]);
+	assert sameParts(splitTopLevel("A<B<C, D>>, E", ","), ["A<B<C, D>>", "E"]);
+}
+
+test "splitTopLevel does not close a bracket on an arrow" {
+	assert sameParts(splitTopLevel("string, (s: string) => Result<string, string>", ","), ["string", "(s: string) => Result<string, string>"]);
+	assert sameParts(splitTopLevel("=>a,b", ","), ["=>a", "b"]);
+}
+
+test "splitTopLevel trims parts and keeps empty middles" {
+	assert sameParts(splitTopLevel("", ","), []);
+	assert sameParts(splitTopLevel("  ", ","), [""]);
+	assert sameParts(splitTopLevel(" a ,, b ,", ","), ["a", "", "b"]);
+	assert sameParts(splitTopLevel(",a", ","), ["", "a"]);
+	assert sameParts(splitTopLevel("\ta\n|\rb", "|"), ["a", "b"]);
+}
+
+test "splitTopLevel counts brackets inside quotes and below zero" {
+	assert sameParts(splitTopLevel("\"x,y\", z", ","), ["\"x", "y\"", "z"]);
+	assert sameParts(splitTopLevel("\"<\", z", ","), ["\"<\", z"]);
+	assert sameParts(splitTopLevel("a>,b", ","), ["a>,b"]);
+}
+
+test "splitTopLevel splits around multibyte text" {
+	assert sameParts(splitTopLevel("é, ü<ß, ñ>", ","), ["é", "ü<ß, ñ>"]);
+}
