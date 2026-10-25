@@ -4,7 +4,7 @@ import {
 	ForOfStmtData, ForInStmtData, TryCatchStmtData, VariableDeclData, DestructuringDeclData,
 	ArrayPatternData, ObjectPatternData, ObjectPatternPropData, SpreadExprData, MatchCaseData,
 	IdentifierData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData,
-	EnumDeclData, ClassDeclData, TypeAliasDeclData, CallExprData, MemberExprData,
+	EnumDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData, TypeAliasDeclData, CallExprData, MemberExprData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { inferredType } from "./types";
@@ -67,6 +67,11 @@ function boundUnlessLeftToPreludes(b: NameBinder, name: string): Symbol | null {
 	return scope.scopeKind == ScopeKind.Global && !sym.builtinKind.startsWith("Meta") ? null : sym;
 }
 
+function writtenSymbol(b: NameBinder, name: string): Symbol | null {
+	const sym = lookupSymbolInDefiningScope(b.ctx.table, b.metaDefiner, name);
+	return sym == null || sym.builtinKind.startsWith("Meta") || isFrameValue(sym) ? null : sym;
+}
+
 function bindIdentifier(b: NameBinder, node: Node): void {
 	if (node.flags.has(NodeFlag.BoundSym)) {
 		if (b.metaBound != null) b.metaBound.set(node, node.resolvedSym);
@@ -86,8 +91,10 @@ function bindIdentifier(b: NameBinder, node: Node): void {
 	if (b.metaBound != null) {
 		const outer = local != null ? local : boundUnlessLeftToPreludes(b, name);
 		b.metaBound.set(node, outer);
-		if (local == null && outer != null && b.quoted != null && b.quoteDepth > 0
-				&& !outer.builtinKind.startsWith("Meta") && !isFrameValue(outer)) b.quoted.set(node, outer);
+		if (local == null && b.quoted != null && b.quoteDepth > 0) {
+			const written = writtenSymbol(b, name);
+			if (written != null) b.quoted.set(node, written);
+		}
 		return;
 	}
 	if (local != null) {
@@ -181,8 +188,13 @@ function bindNode(b: NameBinder, node: Node): void {
 				b.quoteDepth -= 1;
 			}
 		},
-		NodeKind.MethodDecl | NodeKind.ConstructorDecl | NodeKind.ClassDecl | NodeKind.ActorDecl
-		| NodeKind.MacroDecl | NodeKind.ComptimeBlock => {},
+		NodeKind.ClassDecl | NodeKind.ActorDecl => {
+			if (b.quoteDepth > 0) forEachChild(node, (child: Node): void => { bindNode(b, child); });
+		},
+		NodeKind.MethodDecl | NodeKind.ConstructorDecl => {
+			if (b.quoteDepth > 0) bindNestedMetaBody(b, node);
+		},
+		NodeKind.MacroDecl | NodeKind.ComptimeBlock => {},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
 			bindNode(b, d.initializer);
@@ -276,6 +288,14 @@ function bindNestedMetaBody(b: NameBinder, node: Node): void {
 		NodeKind.FunctionExpr => {
 			params = (node.data as FunctionExprData).funcExprParams;
 			body = (node.data as FunctionExprData).funcExprBody;
+		},
+		NodeKind.MethodDecl => {
+			params = (node.data as MethodDeclData).methodParams;
+			body = (node.data as MethodDeclData).methodBody;
+		},
+		NodeKind.ConstructorDecl => {
+			params = (node.data as ConstructorDeclData).ctorParams;
+			body = (node.data as ConstructorDeclData).ctorBody;
 		},
 		_ => {},
 	};
