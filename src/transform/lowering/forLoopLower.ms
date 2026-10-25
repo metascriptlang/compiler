@@ -6,7 +6,7 @@
 // { let i = 0; while (i < 10) { body; i++; } }
 
 import { Node, NodeKind, SourceLocation, ForStmtData, BlockStmtData, IfStmtData, TryCatchStmtData, WhileStmtData, DoWhileStmtData, MatchStmtData, MatchCaseData, VariableDeclData, IdentifierData, BreakStmtData, ContinueStmtData, DeclKind, Symbol, createNode } from "../../ast/node";
-import { forEachChild, anyChild, anyDescendant } from "../../ast/visitor";
+import { forEachChild, anyChild, anyDescendant, Visit } from "../../ast/visitor";
 import { TransformContext, freshOwnedSym } from "../context";
 import { walkNode, mapChildren, isFuncBoundary } from "../walker";
 import { isRoutineOrTestNode } from "../../ast/shape";
@@ -102,7 +102,10 @@ export function bodySuspends(bodyStmts: Node[]): boolean {
 }
 
 function hasSuspendPoint(node: Node): boolean {
-	return anyDescendant(node, (n: Node): boolean => n.kind == NodeKind.YieldExpr || n.kind == NodeKind.AwaitExpr, isRoutineOrTestNode);
+	return anyDescendant(node, (n: Node): Visit => {
+		if (n.kind == NodeKind.YieldExpr || n.kind == NodeKind.AwaitExpr) return Visit.Hit;
+		return isRoutineOrTestNode(n) ? Visit.Skip : Visit.Descend;
+	});
 }
 
 // Rewrite continue → { update; continue; } at current loop level.
@@ -202,13 +205,14 @@ function isLoopNode(n: Node): boolean {
 		|| n.kind == NodeKind.ForOfStmt || n.kind == NodeKind.ForInStmt;
 }
 
-function isUnlabeledContinue(n: Node): boolean {
-	return n.kind == NodeKind.ContinueStmt && (n.data as ContinueStmtData).continueLabel == "";
+function continueVerdict(n: Node): Visit {
+	if (n.kind == NodeKind.ContinueStmt && (n.data as ContinueStmtData).continueLabel == "") return Visit.Hit;
+	return isFuncBoundary(n) || isLoopNode(n) ? Visit.Skip : Visit.Descend;
 }
 
 function hasOwnContinue(n: Node | null): boolean {
 	if (n == null) return false;
-	return anyDescendant(n, isUnlabeledContinue, (c: Node): boolean => isFuncBoundary(c) || isLoopNode(c));
+	return anyDescendant(n, continueVerdict);
 }
 
 function labelOwnBreaks(n: Node | null, label: string): boolean {

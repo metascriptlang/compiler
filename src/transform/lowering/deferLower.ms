@@ -13,7 +13,7 @@
 //   the body node in-place (data changes, pointer stays same).
 
 import { Node, NodeKind, SourceLocation, ProgramData, BlockStmtData, DeferStmtData, SwitchCaseData } from "../../ast/node";
-import { forEachChild, anyDescendant, noStop } from "../../ast/visitor";
+import { forEachChild, anyDescendant, Visit } from "../../ast/visitor";
 import { TransformContext } from "../context";
 import { makeBlock, makeExprStmt, makeTryFinally } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx } from "../testUtil";
@@ -148,7 +148,7 @@ test "multiple defers nest" {
 }
 
 function holdsDefer(node: Node): boolean {
-	return anyDescendant(node, (n: Node): boolean => n.kind == NodeKind.DeferStmt, noStop);
+	return anyDescendant(node, (n: Node): Visit => n.kind == NodeKind.DeferStmt ? Visit.Hit : Visit.Descend);
 }
 
 function deferLeftAfter(input: string): boolean {

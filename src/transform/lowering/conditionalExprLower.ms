@@ -33,10 +33,10 @@
 
 import { Node, NodeKind, DeclKind, TypeKind, Symbol, FunctionDeclData, BlockStmtData, createNode, SourceLocation, ExprStmtData, ConditionalExprData, VariableDeclData, ReturnStmtData, BinaryExprData, WhileStmtData, DoWhileStmtData, ArrayAccessData, MemberExprData, HiddenDerefData, UpdateExprData, OutExprData, IfStmtData, SwitchStmtData, SpreadExprData, CallExprData, NodeFlag, Type, ArrayLiteralData, ObjectLiteralData, ExportDeclData, MoveExprData, TypeAssertionData } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym, createTransformContextWithChecker, reportTransformError } from "../context";
-import { forEachChild } from "../../ast/visitor";
+import { forEachChild, anyDescendant, Visit } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { hasFlag, setFlag, SymbolFlag } from "../../checker/symbol";
-import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect, walkExpandBlocksHooked, anyDeep, DEEP_DESCEND, DEEP_HIT, DEEP_SKIP } from "../walker";
+import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect, walkExpandBlocksHooked } from "../walker";
 import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
@@ -369,24 +369,24 @@ function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], wr
 	return makeIdentResolved(sym, loc);
 }
 
-function callVerdict(n: Node): int32 {
-	if (isFunctionNode(n)) return DEEP_SKIP;
-	if (n.kind == NodeKind.CallExpr || n.kind == NodeKind.NewExpr) return DEEP_HIT;
-	return DEEP_DESCEND;
+function callVerdict(n: Node): Visit {
+	if (isFunctionNode(n)) return Visit.Skip;
+	if (n.kind == NodeKind.CallExpr || n.kind == NodeKind.NewExpr) return Visit.Hit;
+	return Visit.Descend;
 }
 
 function holdsCall(n: Node): boolean {
-	return anyDeep(n, callVerdict);
+	return anyDescendant(n, callVerdict);
 }
 
-function storageReadVerdict(n: Node): int32 {
-	if (isFunctionNode(n) || n.kind == NodeKind.HiddenAddr || n.kind == NodeKind.MoveExpr) return DEEP_SKIP;
-	if (readsBeforeHoist(n)) return DEEP_HIT;
-	return DEEP_DESCEND;
+function storageReadVerdict(n: Node): Visit {
+	if (isFunctionNode(n) || n.kind == NodeKind.HiddenAddr || n.kind == NodeKind.MoveExpr) return Visit.Skip;
+	if (readsBeforeHoist(n)) return Visit.Hit;
+	return Visit.Descend;
 }
 
 function holdsStorageRead(n: Node): boolean {
-	return anyDeep(n, storageReadVerdict);
+	return anyDescendant(n, storageReadVerdict);
 }
 
 function isLiteral(n: Node): boolean {
@@ -499,17 +499,17 @@ export function fitShortCircuitArm(arm: Node, resultType: Type | null, ctx: Tran
 // JS evaluates in place and skips the hoist, except where a width step must
 // read its operand twice: then the operand's effects are hoisted as on C, the
 // statement-level form of the reference's maybeMakeTempAssignable.
-function impureIntegerUpdateVerdict(n: Node): int32 {
-	if (isFunctionNode(n) || n.kind == NodeKind.BlockStmt) return DEEP_SKIP;
+function impureIntegerUpdateVerdict(n: Node): Visit {
+	if (isFunctionNode(n) || n.kind == NodeKind.BlockStmt) return Visit.Skip;
 	if (n.kind == NodeKind.UpdateExpr) {
 		const d = n.data as UpdateExprData;
-		if (needsIntegerUpdateRewrite(d) && cloneIfPure(d.updateArg) == null) return DEEP_HIT;
+		if (needsIntegerUpdateRewrite(d) && cloneIfPure(d.updateArg) == null) return Visit.Hit;
 	}
-	return DEEP_DESCEND;
+	return Visit.Descend;
 }
 
 function hasImpureIntegerUpdate(n: Node): boolean {
-	return anyDeep(n, impureIntegerUpdateVerdict);
+	return anyDescendant(n, impureIntegerUpdateVerdict);
 }
 
 // ===== Statement expansion =====
@@ -811,33 +811,33 @@ function expandSwitchDisc(stmt: Node, ctx: TransformContext): Node[] {
 	return pre;
 }
 
-function condLowersVerdict(n: Node): int32 {
-	if (isFunctionNode(n)) return DEEP_SKIP;
-	if (tdzFlagOf(n) != null) return DEEP_HIT;
+function condLowersVerdict(n: Node): Visit {
+	if (isFunctionNode(n)) return Visit.Skip;
+	if (tdzFlagOf(n) != null) return Visit.Hit;
 	if (n.kind == NodeKind.ConditionalExpr || n.kind == NodeKind.UpdateExpr || callCanRaise(n)
-		|| n.kind == NodeKind.ArrayLiteral || n.kind == NodeKind.ObjectLiteral) return DEEP_HIT;
+		|| n.kind == NodeKind.ArrayLiteral || n.kind == NodeKind.ObjectLiteral) return Visit.Hit;
 	if (n.kind == NodeKind.BinaryExpr) {
 		const op = (n.data as BinaryExprData).operator;
-		if (op == "&&" || op == "||") return DEEP_HIT;
+		if (op == "&&" || op == "||") return Visit.Hit;
 	}
-	return DEEP_DESCEND;
+	return Visit.Descend;
 }
 
 function condLowersToStatements(n: Node): boolean {
-	return anyDeep(n, condLowersVerdict);
+	return anyDescendant(n, condLowersVerdict);
 }
 
-function loopContinueVerdict(node: Node): int32 {
-	if (node.kind == NodeKind.ContinueStmt) return DEEP_HIT;
+function loopContinueVerdict(node: Node): Visit {
+	if (node.kind == NodeKind.ContinueStmt) return Visit.Hit;
 	if (node.kind == NodeKind.WhileStmt || node.kind == NodeKind.DoWhileStmt
 		|| node.kind == NodeKind.ForStmt || node.kind == NodeKind.ForOfStmt
 		|| node.kind == NodeKind.ForInStmt || node.kind == NodeKind.FunctionDecl
-		|| node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ArrowFunction) return DEEP_SKIP;
-	return DEEP_DESCEND;
+		|| node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ArrowFunction) return Visit.Skip;
+	return Visit.Descend;
 }
 
 function bodyHasLoopContinue(node: Node): boolean {
-	return anyDeep(node, loopContinueVerdict);
+	return anyDescendant(node, loopContinueVerdict);
 }
 
 // ===== Entry Point =====

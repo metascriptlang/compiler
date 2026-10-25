@@ -5,7 +5,7 @@
 // inner ?.b transforms first, outer ?.c sees the conditional result.
 
 import { Node, NodeKind, NodeFlag, MemberExprData, CallExprData, TypeAssertionData, BinaryExprData, ConditionalExprData, ExprStmtData } from "../../ast/node";
-import { anyDescendant, noStop } from "../../ast/visitor";
+import { anyDescendant, Visit } from "../../ast/visitor";
 import { TransformContext } from "../context";
 import { walkNode, walkExpandBlocks, walkWithinStatement, walkOutsideInstanceFieldInits } from "../walker";
 import { makeMember, makeNull, makeBinary, makeConditional, makeIdentResolved } from "../util";
@@ -53,7 +53,7 @@ function bindReadProbe(node: Node, ctx: TransformContext, temps: Node[]): Node {
 }
 
 function reads(tree: Node, shared: Node): boolean {
-	return anyDescendant(tree, (n: Node): boolean => n == shared, noStop);
+	return anyDescendant(tree, (n: Node): Visit => n == shared ? Visit.Hit : Visit.Descend);
 }
 
 // ===== Visitor =====

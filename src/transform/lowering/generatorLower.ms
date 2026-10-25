@@ -26,7 +26,7 @@ import {
 	isEmptyBlock, makeLoc,
 } from "../../ast/node";
 import { isScopeBoundary } from "../../ast/shape";
-import { forEachChild, anyChild, anyDescendant } from "../../ast/visitor";
+import { forEachChild, anyChild, anyDescendant, Visit } from "../../ast/visitor";
 import { mapChildren } from "../walker";
 import { setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult, getProperty } from "../../checker/types";
@@ -457,7 +457,10 @@ export function allocState(sc: StateCollector): number {
 // ===== Yield Detection =====
 
 export function containsYield(node: Node | null): boolean {
-	return anyDescendant(node, (n: Node): boolean => n.kind == NodeKind.YieldExpr, isScopeBoundary);
+	return anyDescendant(node, (n: Node): Visit => {
+		if (n.kind == NodeKind.YieldExpr) return Visit.Hit;
+		return isScopeBoundary(n) ? Visit.Skip : Visit.Descend;
+	});
 }
 
 function isDirectYield(expr: Node): boolean {

@@ -2,7 +2,7 @@
 // Two modes: walkNode (1:1 visitor) and walkBlockExpanding (1:N statement expansion, in blockExpand.ms)
 
 import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, HiddenDerefData, HiddenStdConvData, TypeAssertionData, PropertyDeclData } from "../ast/node";
-import { Visitor, mapChildren, isFuncBoundary, forEachChild } from "../ast/visitor";
+import { Visitor, mapChildren, isFuncBoundary } from "../ast/visitor";
 
 export { mapChildren, isFuncBoundary } from "../ast/visitor";
 export { hasEffect, walkOnceEvaluated, OnceEvalState, OnceEvalVisitor } from "./walkEffects";
@@ -176,25 +176,6 @@ export function replaceInExpr(node: Node, replacer: Visitor): Node {
 	};
 	mapExprChildren(node, walk);
 	return replacer(node);
-}
-
-export const DEEP_DESCEND = 0;
-export const DEEP_HIT = 1;
-export const DEEP_SKIP = 2;
-
-// Does any node in the subtree answer DEEP_HIT? A null node and a DEEP_SKIP subtree are not
-// entered. One closure serves the whole search, where a recursive predicate builds one per node.
-export function anyDeep(n: Node, verdict: (n: Node) => int32): boolean {
-	let found = false;
-	const scan = (c: Node): void => {
-		if (found || c == null) return;
-		const v = verdict(c);
-		if (v == DEEP_HIT) { found = true; return; }
-		if (v == DEEP_SKIP) return;
-		forEachChild(c, scan);
-	};
-	scan(n);
-	return found;
 }
 
 // True if the expression contains a CONDITIONALLY-evaluated sub-position: the RHS

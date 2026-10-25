@@ -37,7 +37,7 @@ import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import { positionalFieldsOf } from "../../checker/types";
 import { TransformContext, createTransformContext, freshTempSym } from "../context";
 import { walkExpandBlocks, replaceInExpr, containsConditionalEval } from "../walker";
-import { anyDescendant, noStop } from "../../ast/visitor";
+import { anyDescendant, Visit } from "../../ast/visitor";
 import { moveWhileTestIntoBody, wrapElseIfWhen } from "./jumpRetarget";
 import { makeVarDecl, makeIdentResolved, makeMember, makeAssign, makeExprStmt } from "../util";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
@@ -71,7 +71,7 @@ function hasPositionalNew(expr: Node): boolean {
 // whose conditional constructs hold no positional new (those keep native ternary
 // / short-circuit on JS). Walks expr AND stmt nodes via the child visitor.
 export function nodeHasPositionalNew(node: Node): boolean {
-	return anyDescendant(node, (n: Node): boolean => positionalStruct(n) != null, noStop);
+	return anyDescendant(node, (n: Node): Visit => positionalStruct(n) != null ? Visit.Hit : Visit.Descend);
 }
 
 // ===== Hoist =====

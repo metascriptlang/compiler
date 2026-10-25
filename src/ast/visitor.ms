@@ -48,16 +48,15 @@ export function anyChild(node: Node, test: (child: Node) => boolean): boolean {
 	return found;
 }
 
-export function noStop(n: Node): boolean {
-	return false;
-}
+export enum Visit { Descend, Hit, Skip }
 
-export function anyDescendant(node: Node | null, test: (n: Node) => boolean, stop: (n: Node) => boolean): boolean {
+export function anyDescendant(node: Node | null, verdict: (n: Node) => Visit): boolean {
 	let found = false;
 	const scan = (c: Node | null): void => {
 		if (found || c == null) return;
-		if (test(c)) { found = true; return; }
-		if (stop(c)) return;
+		const v = verdict(c);
+		if (v == Visit.Hit) { found = true; return; }
+		if (v == Visit.Skip) return;
 		forEachChild(c, scan);
 	};
 	scan(node);
@@ -74,6 +73,10 @@ function blockNode(stmts: Node[]): Node {
 
 function isNamed(n: Node, name: string): boolean {
 	return n.kind == NodeKind.Identifier && (n.data as IdentifierData).name == name;
+}
+
+function hitNamed(name: string): (n: Node) => Visit {
+	return (n: Node): Visit => isNamed(n, name) ? Visit.Hit : Visit.Descend;
 }
 
 test "anyChild: a match among the direct children" {
@@ -100,28 +103,26 @@ test "anyChild: stops testing after the first match" {
 
 test "anyDescendant: a match at any depth, the node itself included" {
 	const deep = blockNode([nameNode("a"), blockNode([blockNode([nameNode("b")])])]);
-	assert anyDescendant(deep, (n: Node): boolean => isNamed(n, "b"), noStop);
-	assert anyDescendant(nameNode("b"), (n: Node): boolean => isNamed(n, "b"), noStop);
+	assert anyDescendant(deep, hitNamed("b"));
+	assert anyDescendant(nameNode("b"), hitNamed("b"));
 }
 
 test "anyDescendant: no match, and a null node" {
 	const root = blockNode([nameNode("a"), blockNode([nameNode("b")])]);
-	assert !anyDescendant(root, (n: Node): boolean => isNamed(n, "z"), noStop);
-	assert !anyDescendant(null, (n: Node): boolean => true, noStop);
+	assert !anyDescendant(root, hitNamed("z"));
+	assert !anyDescendant(null, (n: Node): Visit => Visit.Hit);
 }
 
-test "anyDescendant: does not descend into a stop node but still tests it" {
-	const inner = blockNode([nameNode("b")]);
-	const root = blockNode([nameNode("a"), inner]);
-	const stopAtBlock = (n: Node): boolean => n.kind == NodeKind.BlockStmt && n != root;
-	assert !anyDescendant(root, (n: Node): boolean => isNamed(n, "b"), stopAtBlock);
-	assert anyDescendant(root, (n: Node): boolean => n == inner, stopAtBlock);
+test "anyDescendant: does not descend into a skipped node" {
+	const root = blockNode([nameNode("a"), blockNode([nameNode("b")])]);
+	const skipBlock = (n: Node): Visit => n.kind == NodeKind.BlockStmt && n != root ? Visit.Skip : isNamed(n, "b") ? Visit.Hit : Visit.Descend;
+	assert !anyDescendant(root, skipBlock);
 }
 
 test "anyDescendant: stops testing after the first match" {
 	const root = blockNode([nameNode("a"), nameNode("a"), blockNode([nameNode("a")])]);
 	let calls = 0;
-	assert anyDescendant(root, (n: Node): boolean => { calls += 1; return n.kind == NodeKind.Identifier; }, noStop);
+	assert anyDescendant(root, (n: Node): Visit => { calls += 1; return n.kind == NodeKind.Identifier ? Visit.Hit : Visit.Descend; });
 	assert calls == 2;
 }
 
