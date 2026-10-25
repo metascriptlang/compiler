@@ -1,8 +1,8 @@
 import { ModuleGraph, ImportEntry } from "../module/graph";
-import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, ProgramData, ImportDeclData, ExportDeclData, FunctionDeclData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, ProgramData, ImportDeclData, ExportDeclData, Type, TypeKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { lookupModuleCtx, lookupModuleProgram } from "./instantiate";
-import { CheckerContext, findExportedSymbol, isLifecycleHookName } from "./context";
+import { lookupModuleCtx, lookupModuleProgram, declaresInstanceHooks } from "./instantiate";
+import { CheckerContext, findExportedSymbol } from "./context";
 import { lookupSymbol } from "./symbol";
 
 interface RuntimeUse {
@@ -33,12 +33,57 @@ function namesOnlyAType(sym: Symbol): boolean {
 	return k == SymbolKind.Interface || k == SymbolKind.TypeAlias || k == SymbolKind.Struct;
 }
 
-function elidableBinding(sym: Symbol | null, use: RuntimeUse, reexport: boolean): boolean {
+function elidableBinding(sym: Symbol | null, use: RuntimeUse, reexport: boolean, reach: HookReach): boolean {
 	if (sym == null) return false;
-	if (reexport) return namesOnlyAType(sym);
+	if (reexport) return namesOnlyAType(sym) && !reachesUserHook(sym.symbolType, reach);
 	if (use.syms.has(sym)) return false;
 	const k = sym.symbolKind;
-	return namesOnlyAType(sym) || k == SymbolKind.Class || k == SymbolKind.Module;
+	if (k == SymbolKind.Module) return true;
+	return (namesOnlyAType(sym) || k == SymbolKind.Class) && !reachesUserHook(sym.symbolType, reach);
+}
+
+interface HookReach {
+	known: HashMap<Type, boolean>;
+	open: HashSet<Type>;
+}
+
+enum Reach { No, Yes, CutAtOpenType }
+
+function reachesUserHook(t: Type, reach: HookReach): boolean {
+	const answer = reachFrom(t, reach) == Reach.Yes;
+	reach.known.set(t, answer);
+	return answer;
+}
+
+function reachFrom(t: Type | null, reach: HookReach): Reach {
+	if (t == null || t.kind == TypeKind.Function || t.kind == TypeKind.Ptr) return Reach.No;
+	const known = reach.known.get(t);
+	if (known != null) return known ? Reach.Yes : Reach.No;
+	if (reach.open.has(t)) return Reach.CutAtOpenType;
+	if (ownsUserHook(t)) {
+		reach.known.set(t, true);
+		return Reach.Yes;
+	}
+	reach.open.add(t);
+	let result = Reach.No;
+	const parts: (Type | null)[] = [t.typeReturn, t.typeExtra];
+	for (const c of t.typeChildren) parts.push(c);
+	for (const part of parts) {
+		const r = reachFrom(part, reach);
+		if (r == Reach.Yes) {
+			result = Reach.Yes;
+			break;
+		}
+		if (r == Reach.CutAtOpenType) result = Reach.CutAtOpenType;
+	}
+	reach.open.delete(t);
+	if (result != Reach.CutAtOpenType) reach.known.set(t, result == Reach.Yes);
+	return result;
+}
+
+function ownsUserHook(t: Type): boolean {
+	for (const op of t.attachedOps) if (op != null) return true;
+	return t.sym != null && declaresInstanceHooks(t.sym);
 }
 
 function runsImplicitCode(program: Node): boolean {
@@ -46,7 +91,6 @@ function runsImplicitCode(program: Node): boolean {
 		let decl = stmt;
 		if (decl != null && decl.kind == NodeKind.ExportDecl) decl = (decl.data as ExportDeclData).exportedDecl;
 		if (decl == null) continue;
-		if (decl.kind == NodeKind.FunctionDecl && isLifecycleHookName((decl.data as FunctionDeclData).fnName)) return true;
 		if (decl.kind == NodeKind.MacroDecl && decl.flags.has(NodeFlag.Converter)) return true;
 	}
 	return false;
@@ -74,7 +118,7 @@ function sameBindings(entry: ImportEntry, d: ImportDeclData): boolean {
 	return entry.sourceSpecifier == d.importSource && entry.names.join(",") == d.importNames.join(",") && entry.aliases.join(",") == d.importAliases.join(",");
 }
 
-function typeOnlyEntry(entry: ImportEntry, reexport: boolean, ctx: CheckerContext, use: RuntimeUse, stdPath: string, implicit: HashMap<string, boolean>): boolean {
+function typeOnlyEntry(entry: ImportEntry, reexport: boolean, ctx: CheckerContext, use: RuntimeUse, stdPath: string, implicit: HashMap<string, boolean>, reach: HookReach): boolean {
 	if (entry.dynamic || entry.names.length == 0) return false;
 	if (entry.aliases.length == 1 && entry.aliases[0] == "*") return false;
 	if (stdPath != "" && entry.sourcePath.startsWith(stdPath)) return false;
@@ -86,13 +130,14 @@ function typeOnlyEntry(entry: ImportEntry, reexport: boolean, ctx: CheckerContex
 		const bound = entry.names[i] == "*" ? lookupSymbol(ctx.table, entry.aliases[i]) : null;
 		const exported = findExportedSymbol(ctx.exportRegistry, entry.sourcePath, entry.names[i]);
 		const sym = bound ?? (exported != null ? exported.sym : null);
-		if (!elidableBinding(sym, use, reexport)) return false;
+		if (!elidableBinding(sym, use, reexport, reach)) return false;
 	}
 	return true;
 }
 
 export function markTypeOnlyImports(graph: ModuleGraph, stdPath: string): void {
 	const implicit = new HashMap<string, boolean>();
+	const reach: HookReach = { known: new HashMap<Type, boolean>(), open: new HashSet<Type>() };
 	for (const mod of graph.modules) {
 		mod.runtimeDeps = [];
 		for (let i = 0; i < mod.imports.length; i += 1) mod.imports[i].typeOnly = false;
@@ -114,7 +159,7 @@ export function markTypeOnlyImports(graph: ModuleGraph, stdPath: string): void {
 				sites.push(site.decl);
 				if (site.reexport) reexport = true;
 			}
-			if (!typeOnlyEntry(entry, reexport, ctx, use, stdPath, implicit)) continue;
+			if (!typeOnlyEntry(entry, reexport, ctx, use, stdPath, implicit, reach)) continue;
 			mod.imports[i].typeOnly = true;
 			for (const decl of sites) decl.flags = decl.flags.incl(NodeFlag.TypeOnlyImport);
 		}
