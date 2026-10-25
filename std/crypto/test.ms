@@ -125,8 +125,9 @@ test "crypto codecs retain malformed input results" {
 		assert fromBase64(text) == "";
 	}
 	assert toHex(fromBase64("AB==")) == "00";
-	assert toHex(fromBase64("AA=A")) == "0000";
-	assert toHex(fromBase64("AA==AAAA")) == "000000000000";
+	for (const text of ["AA=A", "AA==AAAA", "AAA=AAAA", "AB=C", "A=AA", "AAAA=AAA", "AA=AAAAA"]) {
+		assert fromBase64(text) == "";
+	}
 }
 
 // ===== Known Test Vectors =====

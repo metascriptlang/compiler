@@ -90,15 +90,20 @@ export function decodeBase64(this text: string): uint8[] {
 	const inputLength = byteCount as EncodingIndex;
 	let length = byteCount / 4 * 3;
 	if (bytes[inputLength - 1] == "=".code) length -= 1;
-	if (bytes[inputLength - 2] == "=".code) length -= 1;
+	if (bytes[inputLength - 2] == "=".code) {
+		if (bytes[inputLength - 1] != "=".code) return [];
+		length -= 1;
+	}
 	const result = newDecodingOutput(length);
 	const outputLength = length as EncodingIndex;
+	const finalGroup = inputLength - 4;
 	let at: EncodingIndex = 0;
 	for (let i: EncodingIndex = 0; i < inputLength; i += 4) {
+		const padded = i == finalGroup;
 		const a = base64Digit(bytes[i] as int32);
 		const b = base64Digit(bytes[i + 1] as int32);
-		const c = bytes[i + 2] == "=".code ? 0 : base64Digit(bytes[i + 2] as int32);
-		const d = bytes[i + 3] == "=".code ? 0 : base64Digit(bytes[i + 3] as int32);
+		const c = padded && bytes[i + 2] == "=".code ? 0 : base64Digit(bytes[i + 2] as int32);
+		const d = padded && bytes[i + 3] == "=".code ? 0 : base64Digit(bytes[i + 3] as int32);
 		if (a < 0 || b < 0 || c < 0 || d < 0) return [];
 		const triple = (a << 18) | (b << 12) | (c << 6) | d;
 		if (at < outputLength) { result[at] = ((triple >> 16) & 255) as uint8; at += 1; }
@@ -130,15 +135,20 @@ when (c) {
 		if (count == 0 || count % 4 != 0) return emptyEncoding;
 		let length = count / 4 * 3;
 		if (data[count - 1] == "=".code) length -= 1;
-		if (data[count - 2] == "=".code) length -= 1;
+		if (data[count - 2] == "=".code) {
+			if (data[count - 1] != "=".code) return emptyEncoding;
+			length -= 1;
+		}
 		let result = newEncodingOutput(length);
 		const bytes = freshEncodingOutputBytes(result);
+		const finalGroup = count - 4;
 		let at: int64 = 0;
 		for (let i: int64 = 0; i < count; i += 4) {
+			const padded = i == finalGroup;
 			const a = base64Digit(data[i] as int32);
 			const b = base64Digit(data[i + 1] as int32);
-			const c = data[i + 2] == "=".code ? 0 : base64Digit(data[i + 2] as int32);
-			const d = data[i + 3] == "=".code ? 0 : base64Digit(data[i + 3] as int32);
+			const c = padded && data[i + 2] == "=".code ? 0 : base64Digit(data[i + 2] as int32);
+			const d = padded && data[i + 3] == "=".code ? 0 : base64Digit(data[i + 3] as int32);
 			if (a < 0 || b < 0 || c < 0 || d < 0) return emptyEncoding;
 			const triple = (a << 18) | (b << 12) | (c << 6) | d;
 			if (at < length) { bytes[at] = ((triple >> 16) & 255) as uint8; at += 1; }
@@ -241,12 +251,28 @@ test "base64 codec preserves binary data across all tail lengths" {
 	}
 }
 
-test "base64 decoder keeps existing alphabet length and padding behavior" {
+test "base64 decoder keeps existing alphabet and length behavior" {
 	for (const text of ["", "Zg", " Zg==", "Zg==\n", "====", "_w==", "AAA?", "AA\0A"]) {
 		assert text.decodeBase64().length == 0;
 	}
 	assert "/w==".decodeBase64().encodeHex() == "ff";
 	assert "AB==".decodeBase64().encodeHex() == "00";
-	assert "AA=A".decodeBase64().encodeHex() == "0000";
-	assert "AA==AAAA".decodeBase64().encodeHex() == "000000000000";
+	assert "AAAA".decodeBase64().encodeHex() == "000000";
+	assert "AAAAAA==".decodeBase64().encodeHex() == "00000000";
+}
+
+test "base64 decoder accepts padding only at the end of the final group" {
+	for (const text of ["AA=A", "AA==AAAA", "AAA=AAAA", "AB=C", "A=AA", "AAAA=AAA", "AA=AAAAA"]) {
+		assert text.decodeBase64().length == 0;
+	}
+}
+
+when (c) {
+	test "base64 string decoder accepts padding only at the end of the final group" {
+		for (const text of ["AA=A", "AA==AAAA", "AAA=AAAA", "AB=C", "A=AA", "AAAA=AAA", "AA=AAAAA"]) {
+			assert text.decodeBase64String() == "";
+		}
+		assert "AAAAAA==".decodeBase64String().length == 4;
+		assert "AAA=".decodeBase64String().length == 2;
+	}
 }
