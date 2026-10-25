@@ -65,6 +65,20 @@ test "spawnHandleEscape: a borrowing handle awaited, joined or held in a frame-l
 	}
 }
 
+test "spawnHandleEscape: every Promise combinator awaited in place keeps the handle in its frame on every backend" {
+	const cases = [
+		{ name: "Promise.all", source: "function f(n: Readonly<Node>): int32 { const r = await Promise.all([spawn(() => leaf(n)), spawn(() => leaf(n))]); return r[0] + r[1]; }" },
+		{ name: "Promise.race", source: "function f(n: Readonly<Node>): int32 { return await Promise.race([spawn(() => leaf(n)), spawn(() => leaf(n))]); }" },
+		{ name: "Promise.any", source: "function f(n: Readonly<Node>): int32 { return await Promise.any([spawn(() => leaf(n)), spawn(() => leaf(n))]); }" },
+	];
+	for (const c of cases) {
+		const got = outcome(c.source);
+		assert got == "compiled", c.name + ": " + got;
+		const js = outcomeJs(c.source);
+		assert js == "compiled", c.name + " (js): " + js;
+	}
+}
+
 test "spawnHandleEscape: a borrowing handle lent to a Readonly parameter that only reads it compiles" {
 	const cases = [
 		{ name: "awaited in the callee", source: BOTH + "async function f(): Promise<int32> { " + HANDLES + " return await both(xs); }" },
