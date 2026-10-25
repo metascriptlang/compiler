@@ -157,3 +157,41 @@ export macro m(x: Node): Node {
 	]);
 	assert bad == "", bad;
 }
+
+function typeCases(quoted: string, use: string, type: string, label: string): string {
+	const lib: MapEntry = { entryPath: "test/lib.ms", entrySource: libWith(quoted) };
+	return failures([
+		buildFailure([lib, callerOf(callerNamesakes, use, type)], label + " beside a caller namesake"),
+		buildFailure([lib, callerOf("", use, type)], label + " with no caller namesake"),
+	]);
+}
+
+test "quoteBindsWhereWritten: a type written in a quote names the macro module's declaration, not the caller's namesake" {
+	const bad = [
+		typeCases("(() => { const b: Box = new Box(); return b.v; })()", "m(0)", "int32", "variable annotation"),
+		typeCases("(new Box() as Box).v", "m(0)", "int32", "as"),
+		typeCases("(() => { const b: Box[] = [new Box()]; return b[0].v; })()", "m(0)", "int32", "nested array annotation"),
+		typeCases("(() => { const m = new Map<string, Box>(); m.set(\"a\", new Box()); return m.get(\"a\")!.v; })()", "m(0)", "int32", "new Map type arguments"),
+		typeCases("(() => { function id<T>(x: T): T { return x; } return id<Box>(new Box()).v; })()", "m(0)", "int32", "explicit type argument"),
+	].filter((r: string): boolean => r != "").join("\n");
+	assert bad == "", bad;
+}
+
+test "quoteBindsWhereWritten: a type naming a class declared in the quote resolves to that class" {
+	const lib = `import { Node } from "std/meta";
+export macro m(x: Node): Node {
+	return quote { (() => {
+		class Box { v: int32 = 7; }
+		const b: Box = new Box();
+		const m = new Map<string, Box>();
+		m.set("a", b);
+		return (m.get("a")! as Box).v;
+	})() };
+}
+`;
+	const bad = failures([
+		buildFailure([{ entryPath: "test/lib.ms", entrySource: lib }, callerOf(callerNamesakes, "m(0)")], "quote-local class beside a caller namesake"),
+		buildFailure([{ entryPath: "test/lib.ms", entrySource: lib }, callerOf("", "m(0)")], "quote-local class with no caller namesake"),
+	]);
+	assert bad == "", bad;
+}
