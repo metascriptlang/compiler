@@ -166,12 +166,7 @@ console.log(\`\${run()}\`);
 	assert (r.ok ? r.value : "").contains("msDecrefCyclic(a_");
 }
 
-const SETS = (call: string) => `
-class N { v: int32 = 1; next: N | null = null; setNext(x: N): void { this.next = x; } }
-async function main(): Promise<int32> {
-	const g = new N();
-	g.next = new N();
-	const make = () => spawn(() => {
+const SETS_TASK = (call: string) => `spawn(() => {
 		let sum = 0;
 		const own = new N();
 		for (let i = 0; i < 10; i += 1) {
@@ -180,9 +175,15 @@ async function main(): Promise<int32> {
 			if (view != null) sum += view.v;
 		}
 		return sum;
-	});
-	const t = make();
-	const u = make();
+	})`;
+
+const SETS = (call: string) => `
+class N { v: int32 = 1; next: N | null = null; setNext(x: N): void { this.next = x; } }
+async function main(): Promise<int32> {
+	const g = new N();
+	g.next = new N();
+	const t = ${SETS_TASK(call)};
+	const u = ${SETS_TASK(call)};
 	return (await t) + (await u);
 }
 console.log(\`\${await main()}\`);
