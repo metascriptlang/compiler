@@ -993,6 +993,15 @@ export function declaresField(ctx: CheckerContext, sym: Symbol, property: string
 	return t != null && (t.kind == TypeKind.Struct || t.kind == TypeKind.Union) && !isUnresolvedType(getProperty(t, property));
 }
 
+function newNamesExpected(ctx: CheckerContext, newSym: Symbol | null, expected: Type): boolean {
+	if (newSym == null) return true;
+	ensureShaped(newSym, ctx);
+	const bound = declaringSymOf(newSym.symbolType);
+	const wanted = declaringSymOf(expected);
+	if (bound == null || wanted == null) return true;
+	return bound == wanted || (bound.modulePath == wanted.modulePath && bound.name == wanted.name && bound.disamb == wanted.disamb);
+}
+
 export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | null): Type {
 	const d = node.data as NewExprData;
 	d.newArguments = expandTupleSpreads(ctx, inlineLiteralSpreads(d.newArguments));
@@ -1055,7 +1064,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		// Interface/value type: new HashMap() / new Array(32) with type from variable annotation
 		// Also handle Ref<Struct> and Ref<GenericInstance> (interface types are Ref-wrapped)
 		if (expected != null && (expected.kind == TypeKind.Struct || expected.kind == TypeKind.GenericInstance)
-				&& expected.typeName == id.name && (newSym == null || !hasFlag(newSym, SymbolFlag.HasConstructor))) {
+				&& expected.typeName == id.name && newNamesExpected(ctx, newSym, expected) && (newSym == null || !hasFlag(newSym, SymbolFlag.HasConstructor))) {
 			typeNewCallee(ctx, d.newCallee);
 			const built = newSym != null ? checkStructConstruction(ctx, node, expected) : null;
 			if (built != null) return built;
