@@ -1,12 +1,12 @@
 // Actor sendability + this-write isolation rules.
 
-import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
+import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, ThrowStmtData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, addError, addWarning, isOutsideResolvedStd } from "./context";
 import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, routineEffect, walkEffect, walkWithViews } from "./effects";
 import { constBindingInitializer } from "./constFold";
 import { ScopeKind, SymbolFlag, hasFlag, lookupSymbol, scopeHolding } from "./symbol";
-import { createArray, createGenericParam, createRef, createStruct, int32Type, isPrimitiveKind, isSendableFunction, isStructType, isAtomicRef, isNumeric, isReadonlyView, stringType, typeCarriesRef, typeDisplayName } from "./types";
+import { PEEL_ALIAS, createArray, createGenericParam, createRef, createStruct, int32Type, isAwaitable, isPrimitiveKind, peelThrough, isSendableFunction, isStructType, isAtomicRef, isNumeric, isReadonlyView, stringType, typeCarriesRef, typeDisplayName } from "./types";
 
 export function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
 	for (const n of actorSym.nonisolatedFields) {
@@ -533,10 +533,32 @@ function takesReferenceCapture(ctx: CheckerContext, node: Node | null): boolean 
 	return found;
 }
 
+interface HandleFrame {
+	ctx: CheckerContext;
+	ownSpawns: boolean;
+	returnsLeave: boolean;
+	locals: Symbol[];
+	holders: Symbol[];
+	binds: HandleFlow[];
+	stores: HandleFlow[];
+}
+
+interface HandleFlow {
+	sym: Symbol;
+	value: Node;
+	whole: boolean;
+}
+
 export function refuseBorrowingHandleEscapes(ctx: CheckerContext, body: Node): void {
-	const locals: Symbol[] = [];
-	collectFrameLocals(body, locals);
-	walkHandleUses(ctx, body, locals, []);
+	checkHandleFrame({ ctx, ownSpawns: true, returnsLeave: true, locals: [], holders: [], binds: [], stores: [] }, body);
+}
+
+function checkHandleFrame(f: HandleFrame, body: Node): void {
+	collectFrameLocals(body, f.locals);
+	collectHandleFlows(f, body);
+	let grew = true;
+	while (grew) grew = spreadHolders(f);
+	walkHandleUses(f, body);
 }
 
 function isNestedRoutine(n: Node): boolean {
@@ -546,28 +568,231 @@ function isNestedRoutine(n: Node): boolean {
 
 function collectFrameLocals(node: Node, out: Symbol[]): void {
 	if (isNestedRoutine(node)) return;
-	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null && !hasFlag(node.resolvedSym!, SymbolFlag.Global)) out.push(node.resolvedSym!);
+	if (node.kind == NodeKind.ArrayPattern || node.kind == NodeKind.ObjectPattern) {
+		collectPatternSyms(node, out);
+		return;
+	}
+	if ((node.kind == NodeKind.VariableDecl || node.kind == NodeKind.ForOfStmt) && node.resolvedSym != null && !hasFlag(node.resolvedSym!, SymbolFlag.Global)) out.push(node.resolvedSym!);
 	forEachChild(node, (child: Node): void => { collectFrameLocals(child, out); });
 }
 
-function isBorrowingHandle(n: Node | null, handles: Symbol[]): boolean {
-	const p = n != null ? peelHidden(n) : null;
-	if (p == null) return false;
-	if (p.kind == NodeKind.CallExpr && p.resolvedSym != null && p.resolvedSym.builtinKind == "PromiseSpawn") return !p.flags.has(NodeFlag.Isolated);
-	return p.kind == NodeKind.Identifier && p.resolvedSym != null && handles.includes(p.resolvedSym!);
+function collectPatternSyms(n: Node | null, out: Symbol[]): void {
+	if (n == null) return;
+	if (n.kind == NodeKind.Identifier) {
+		if (n.resolvedSym != null && !hasFlag(n.resolvedSym!, SymbolFlag.Global)) out.push(n.resolvedSym!);
+	} else if (n.kind == NodeKind.ArrayPattern) {
+		for (const e of (n.data as ArrayPatternData).patternElements) collectPatternSyms(e, out);
+	} else if (n.kind == NodeKind.ObjectPattern) {
+		for (const p of (n.data as ObjectPatternData).patternProps) collectPatternSyms(p, out);
+	} else if (n.kind == NodeKind.ObjectPatternProp) {
+		collectPatternSyms((n.data as ObjectPatternPropData).propAlias, out);
+	}
 }
 
-function isFrameLocal(n: Node, locals: Symbol[]): boolean {
-	const p = peelHidden(n);
-	if (p.kind == NodeKind.ArrayAccess) return isFrameLocal((p.data as ArrayAccessData).array, locals);
-	return p.kind == NodeKind.Identifier && p.resolvedSym != null && locals.includes(p.resolvedSym!);
+function bindElements(f: HandleFrame, pattern: Node | null, value: Node): void {
+	const syms: Symbol[] = [];
+	collectPatternSyms(pattern, syms);
+	for (const s of syms) f.binds.push({ sym: s, value, whole: false });
 }
 
-function keepsHandleInFrame(call: Node, locals: Symbol[]): boolean {
-	const kind = call.resolvedSym != null ? call.resolvedSym.builtinKind : "";
-	if (kind.startsWith("Promise")) return true;
-	const callee = (call.data as CallExprData).callee;
-	return callee.kind == NodeKind.MemberExpr && isFrameLocal((callee.data as MemberExprData).object, locals);
+function isAssignOp(op: string): boolean {
+	return op == "=" || op == "??=" || op == "||=" || op == "&&=";
+}
+
+function elementWriteRoot(target: Node): Symbol | null {
+	if (target.kind != NodeKind.ArrayAccess) return null;
+	const array = peelView((target.data as ArrayAccessData).array);
+	return array.kind == NodeKind.Identifier ? array.resolvedSym : null;
+}
+
+function arrayReceiver(call: Node): Symbol | null {
+	const callee = peelView((call.data as CallExprData).callee);
+	if (callee.kind != NodeKind.MemberExpr) return null;
+	const object = peelView((callee.data as MemberExprData).object);
+	if (object.kind != NodeKind.Identifier || object.resolvedSym == null) return null;
+	let t = peelThrough(object.resolvedSym!.symbolType, PEEL_ALIAS);
+	if (t != null && t.kind == TypeKind.Ref && t.typeReturn != null) t = peelThrough(t.typeReturn!, PEEL_ALIAS);
+	return t != null && t.kind == TypeKind.Array ? object.resolvedSym : null;
+}
+
+function collectHandleFlows(f: HandleFrame, node: Node | null): void {
+	if (node == null || isNestedRoutine(node)) return;
+	if (node.kind == NodeKind.VariableDecl) {
+		const init = (node.data as VariableDeclData).initializer;
+		if (init != null && node.resolvedSym != null) f.binds.push({ sym: node.resolvedSym!, value: init, whole: true });
+	} else if (node.kind == NodeKind.DestructuringDecl) {
+		const d = node.data as DestructuringDeclData;
+		bindElements(f, d.destrPattern, d.destrInit);
+	} else if (node.kind == NodeKind.ForOfStmt) {
+		const d = node.data as ForOfStmtData;
+		if (node.resolvedSym != null) f.binds.push({ sym: node.resolvedSym!, value: d.forOfIterable, whole: false });
+		bindElements(f, d.forOfPattern, d.forOfIterable);
+	} else if (node.kind == NodeKind.BinaryExpr && isAssignOp((node.data as BinaryExprData).operator)) {
+		const d = node.data as BinaryExprData;
+		const target = peelView(d.left);
+		if (target.kind == NodeKind.Identifier && target.resolvedSym != null) f.binds.push({ sym: target.resolvedSym!, value: d.right, whole: true });
+		const into = elementWriteRoot(target);
+		if (into != null) f.stores.push({ sym: into, value: d.right, whole: true });
+	} else if (node.kind == NodeKind.CallExpr) {
+		const into = arrayReceiver(node);
+		if (into != null) {
+			for (const a of (node.data as CallExprData).arguments) f.stores.push({ sym: into, value: a, whole: true });
+		}
+	}
+	forEachChild(node, (child: Node): void => { collectHandleFlows(f, child); });
+}
+
+function addHolder(f: HandleFrame, sym: Symbol): boolean {
+	if (!f.locals.includes(sym) || f.holders.includes(sym)) return false;
+	f.holders.push(sym);
+	return true;
+}
+
+function spreadHolders(f: HandleFrame): boolean {
+	let grew = false;
+	for (const b of f.binds) {
+		if (!f.holders.includes(b.sym)) {
+			if (carriesHandle(f, b.value) && addHolder(f, b.sym)) grew = true;
+		} else if (!isAwaitable(b.sym.symbolType) && holdAliasRoots(f, b.value)) {
+			grew = true;
+		}
+	}
+	for (const s of f.stores) {
+		if (carriesHandle(f, s.value) && addHolder(f, s.sym)) grew = true;
+	}
+	return grew;
+}
+
+function holdAliasRoots(f: HandleFrame, n: Node | null): boolean {
+	if (n == null) return false;
+	const p = peelView(n);
+	return match (p.kind) {
+		NodeKind.Identifier => p.resolvedSym != null && addHolder(f, p.resolvedSym!),
+		NodeKind.MemberExpr => holdAliasRoots(f, (p.data as MemberExprData).object),
+		NodeKind.ArrayAccess => holdAliasRoots(f, (p.data as ArrayAccessData).array),
+		NodeKind.MoveExpr => holdAliasRoots(f, (p.data as MoveExprData).moveArg),
+		NodeKind.CallExpr => {
+			const callee = peelView((p.data as CallExprData).callee);
+			return callee.kind == NodeKind.MemberExpr && holdAliasRoots(f, (callee.data as MemberExprData).object);
+		},
+		NodeKind.ConditionalExpr => {
+			const d = p.data as ConditionalExprData;
+			const a = holdAliasRoots(f, d.ternaryConsequent);
+			return holdAliasRoots(f, d.ternaryAlternate) || a;
+		},
+		NodeKind.BinaryExpr => {
+			const d = p.data as BinaryExprData;
+			if (isAssignOp(d.operator)) return holdAliasRoots(f, d.right);
+			if (d.operator != "??" && d.operator != "||" && d.operator != "&&") return false;
+			const a = holdAliasRoots(f, d.left);
+			return holdAliasRoots(f, d.right) || a;
+		},
+		_ => false,
+	};
+}
+
+function ownsContainer(f: HandleFrame, sym: Symbol, seen: Symbol[]): boolean {
+	if (!f.locals.includes(sym)) return false;
+	if (seen.includes(sym)) return true;
+	seen.push(sym);
+	for (const b of f.binds) {
+		if (b.sym == sym && (!b.whole || !isFreshContainer(f, b.value, seen))) return false;
+	}
+	return true;
+}
+
+function isFreshContainer(f: HandleFrame, n: Node, seen: Symbol[]): boolean {
+	const p = peelView(n);
+	if (p.kind == NodeKind.ArrayLiteral || p.kind == NodeKind.NullLiteral) return true;
+	if (p.kind == NodeKind.Identifier) return p.resolvedSym != null && ownsContainer(f, p.resolvedSym!, seen);
+	if (p.kind != NodeKind.ConditionalExpr) return false;
+	const d = p.data as ConditionalExprData;
+	return isFreshContainer(f, d.ternaryConsequent, seen) && isFreshContainer(f, d.ternaryAlternate, seen);
+}
+
+function holdsAwaitable(t: Type | null, seen: Type[]): boolean {
+	if (t == null || isAwaitable(t)) return true;
+	if (seen.includes(t) || !typeCarriesRef(t)) return false;
+	seen.push(t);
+	return match (t.kind) {
+		TypeKind.String | TypeKind.CString | TypeKind.StringLiteral | TypeKind.Ptr => false,
+		TypeKind.Alias | TypeKind.Ref | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Distinct
+			| TypeKind.Borrow | TypeKind.Lent | TypeKind.Sink | TypeKind.Var => holdsAwaitable(t.typeReturn, seen),
+		TypeKind.Union | TypeKind.Tuple | TypeKind.Struct | TypeKind.GenericInstance | TypeKind.Varargs => {
+			for (const c of t.typeChildren) { if (holdsAwaitable(c, seen)) return true; }
+			return false;
+		},
+		_ => true,
+	};
+}
+
+function isBorrowingSpawn(f: HandleFrame, p: Node): boolean {
+	return f.ownSpawns && p.kind == NodeKind.CallExpr && p.resolvedSym != null && p.resolvedSym.builtinKind == "PromiseSpawn" && !p.flags.has(NodeFlag.Isolated);
+}
+
+function keepsArgumentsInFrame(call: Node): boolean {
+	return call.resolvedSym != null && call.resolvedSym.builtinKind.startsWith("Promise");
+}
+
+function anyCarriesHandle(f: HandleFrame, nodes: Node[]): boolean {
+	for (const n of nodes) { if (carriesHandle(f, n)) return true; }
+	return false;
+}
+
+function carriesHandle(f: HandleFrame, n: Node | null): boolean {
+	if (n == null) return false;
+	const p = peelView(n);
+	return match (p.kind) {
+		NodeKind.Identifier => p.resolvedSym != null && f.holders.includes(p.resolvedSym!),
+		NodeKind.CallExpr => isBorrowingSpawn(f, p) || callCarriesHandle(f, p),
+		NodeKind.ArrayLiteral => anyCarriesHandle(f, (p.data as ArrayLiteralData).elements),
+		NodeKind.SpreadExpr => carriesHandle(f, (p.data as SpreadExprData).spreadArg),
+		NodeKind.MoveExpr => carriesHandle(f, (p.data as MoveExprData).moveArg),
+		NodeKind.ConditionalExpr => carriesHandle(f, (p.data as ConditionalExprData).ternaryConsequent) || carriesHandle(f, (p.data as ConditionalExprData).ternaryAlternate),
+		NodeKind.MatchExpr => {
+			for (const c of (p.data as MatchExprData).matchCases) {
+				const b = (c.data as MatchCaseData).caseBody;
+				if (b.kind != NodeKind.BlockStmt && carriesHandle(f, b)) return true;
+			}
+			return false;
+		},
+		NodeKind.BinaryExpr => {
+			const d = p.data as BinaryExprData;
+			if (isAssignOp(d.operator) || d.operator == ",") return carriesHandle(f, d.right);
+			return (d.operator == "??" || d.operator == "||" || d.operator == "&&") && (carriesHandle(f, d.left) || carriesHandle(f, d.right));
+		},
+		NodeKind.MemberExpr => carriesHandle(f, (p.data as MemberExprData).object) && holdsAwaitable(p.nodeType, []),
+		NodeKind.ArrayAccess => carriesHandle(f, (p.data as ArrayAccessData).array) && holdsAwaitable(p.nodeType, []),
+		NodeKind.AwaitExpr | NodeKind.NewExpr | NodeKind.ObjectLiteral | NodeKind.ArrowFunction | NodeKind.FunctionExpr
+			| NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral | NodeKind.NullLiteral | NodeKind.BigIntLiteral
+			| NodeKind.RegexLiteral | NodeKind.UnaryExpr | NodeKind.UpdateExpr => false,
+		_ => containsHandle(f, p) && holdsAwaitable(p.nodeType, []),
+	};
+}
+
+function callCarriesHandle(f: HandleFrame, call: Node): boolean {
+	if (!holdsAwaitable(call.nodeType, [])) return false;
+	const d = call.data as CallExprData;
+	const callee = peelView(d.callee);
+	if (callee.kind == NodeKind.MemberExpr && carriesHandle(f, (callee.data as MemberExprData).object)) return true;
+	return keepsArgumentsInFrame(call) && anyCarriesHandle(f, d.arguments);
+}
+
+function containsHandle(f: HandleFrame, n: Node | null): boolean {
+	if (n == null || isNestedRoutine(n)) return false;
+	if (n.kind == NodeKind.Identifier) return n.resolvedSym != null && f.holders.includes(n.resolvedSym!);
+	if (isBorrowingSpawn(f, n)) return true;
+	let found = false;
+	forEachChild(n, (child: Node): void => { if (!found) found = containsHandle(f, child); });
+	return found;
+}
+
+function capturedHolder(f: HandleFrame, n: Node | null): Node | null {
+	if (n == null) return null;
+	if (n.kind == NodeKind.Identifier) return n.resolvedSym != null && f.holders.includes(n.resolvedSym!) ? n : null;
+	let found: Node | null = null;
+	forEachChild(n, (child: Node): void => { if (found == null) found = capturedHolder(f, child); });
+	return found;
 }
 
 function refuseHandleEscape(ctx: CheckerContext, at: Node, how: string): void {
@@ -575,43 +800,92 @@ function refuseHandleEscape(ctx: CheckerContext, at: Node, how: string): void {
 		at.location.line, at.location.column);
 }
 
-function walkHandleUses(ctx: CheckerContext, node: Node | null, locals: Symbol[], handles: Symbol[]): void {
-	if (node == null || isNestedRoutine(node)) return;
+function refuseUnlessKept(f: HandleFrame, left: Node, value: Node): void {
+	const target = peelView(left);
+	if (target.kind == NodeKind.Identifier && target.resolvedSym != null && f.locals.includes(target.resolvedSym!)) return;
+	const into = elementWriteRoot(target);
+	if (into == null || !f.locals.includes(into)) refuseHandleEscape(f.ctx, value, "storing it in '" + describeExpr(left) + "'");
+	else if (!ownsContainer(f, into, [])) refuseHandleEscape(f.ctx, value, "storing it in '" + describeExpr(left) + "', an array this scope did not create,");
+}
+
+function checkHandleArguments(f: HandleFrame, call: Node): void {
+	if (keepsArgumentsInFrame(call)) return;
+	const d = call.data as CallExprData;
+	const into = arrayReceiver(call);
+	for (const a of d.arguments) {
+		if (!carriesHandle(f, a)) continue;
+		if (into == null || !f.locals.includes(into)) refuseHandleEscape(f.ctx, a, "passing it to '" + describeExpr(d.callee) + "'");
+		else if (!ownsContainer(f, into, [])) refuseHandleEscape(f.ctx, a, "passing it to '" + describeExpr(d.callee) + "', an array this scope did not create,");
+	}
+	const callee = peelView(d.callee);
+	if (callee.kind != NodeKind.MemberExpr || !carriesHandle(f, (callee.data as MemberExprData).object)) return;
+	for (const a of d.arguments) checkHandleCallback(f, a);
+}
+
+function checkHandleCallback(f: HandleFrame, arg: Node): void {
+	const p = peelView(arg);
+	if (p.kind == NodeKind.ArrowFunction || p.kind == NodeKind.FunctionExpr) {
+		const body = routineParamsAndBody(p).body;
+		if (body == null) return;
+		const g: HandleFrame = { ctx: f.ctx, ownSpawns: false, returnsLeave: false, locals: [], holders: [], binds: [], stores: [] };
+		if (p.paramSyms != null) {
+			for (const s of p.paramSyms!) { if (holdsAwaitable(s.symbolType, [])) g.holders.push(s); }
+		}
+		checkHandleFrame(g, body);
+		return;
+	}
+	const t = p.nodeType;
+	if (t == null || t.kind != TypeKind.Function) return;
+	for (const c of t.typeChildren) {
+		if (holdsAwaitable(c, [])) {
+			refuseHandleEscape(f.ctx, arg, "passing it to '" + describeExpr(arg) + "'");
+			return;
+		}
+	}
+}
+
+function walkHandleUses(f: HandleFrame, node: Node | null): void {
+	if (node == null) return;
+	if (isNestedRoutine(node)) {
+		const held = capturedHolder(f, node);
+		if (held != null) refuseHandleEscape(f.ctx, held, "capturing it in a closure");
+		return;
+	}
 	match (node.kind) {
 		NodeKind.VariableDecl => {
-			if (node.resolvedSym != null && locals.includes(node.resolvedSym!) && isBorrowingHandle((node.data as VariableDeclData).initializer, handles)) handles.push(node.resolvedSym!);
+			const init = (node.data as VariableDeclData).initializer;
+			if (node.resolvedSym != null && !f.locals.includes(node.resolvedSym!) && carriesHandle(f, init)) refuseHandleEscape(f.ctx, init!, "storing it in '" + (node.data as VariableDeclData).declName + "'");
 		},
 		NodeKind.ReturnStmt => {
 			const arg = (node.data as ReturnStmtData).argument;
-			if (isBorrowingHandle(arg, handles)) refuseHandleEscape(ctx, arg!, "returning it");
+			if (f.returnsLeave && carriesHandle(f, arg)) refuseHandleEscape(f.ctx, arg!, "returning it");
+		},
+		NodeKind.YieldExpr => {
+			const arg = (node.data as YieldExprData).yieldArg;
+			if (carriesHandle(f, arg)) refuseHandleEscape(f.ctx, arg, "yielding it");
+		},
+		NodeKind.ThrowStmt => {
+			const arg = (node.data as ThrowStmtData).throwArg;
+			if (carriesHandle(f, arg)) refuseHandleEscape(f.ctx, arg, "throwing it");
 		},
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
-			if (d.operator == "=" && isBorrowingHandle(d.right, handles)) {
-				if (!isFrameLocal(d.left, locals)) refuseHandleEscape(ctx, d.right, "storing it in '" + describeExpr(d.left) + "'");
-				else if (peelHidden(d.left).kind == NodeKind.Identifier) handles.push(peelHidden(d.left).resolvedSym!);
-			}
+			if (isAssignOp(d.operator) && carriesHandle(f, d.right)) refuseUnlessKept(f, d.left, d.right);
 		},
-		NodeKind.CallExpr => {
-			if (!keepsHandleInFrame(node, locals)) {
-				for (const a of (node.data as CallExprData).arguments) {
-					if (isBorrowingHandle(a, handles)) refuseHandleEscape(ctx, a, "passing it to '" + describeExpr((node.data as CallExprData).callee) + "'");
-				}
-			}
-		},
+		NodeKind.CallExpr => checkHandleArguments(f, node),
 		NodeKind.NewExpr => {
 			for (const a of (node.data as NewExprData).newArguments) {
-				if (isBorrowingHandle(a, handles)) refuseHandleEscape(ctx, a, "passing it to a constructor");
+				if (carriesHandle(f, a)) refuseHandleEscape(f.ctx, a, "passing it to a constructor");
 			}
 		},
 		NodeKind.ObjectLiteral => {
 			for (const p of (node.data as ObjectLiteralData).properties) {
-				if (isBorrowingHandle(p, handles)) refuseHandleEscape(ctx, p, "storing it in an object");
+				if (carriesHandle(f, p)) refuseHandleEscape(f.ctx, p, "storing it in an object");
 			}
 		},
 		_ => {},
 	};
-	forEachChild(node, (child: Node): void => { walkHandleUses(ctx, child, locals, handles); });
+	forEachChild(node, (child: Node): void => { walkHandleUses(f, child); });
 }
 
 function holdsView(t: Type | null, seen: Type[]): boolean {
