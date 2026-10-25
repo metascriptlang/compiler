@@ -184,7 +184,7 @@ export function bundleModuleEvaluator(plan: DynamicModulePlan): string {
 	for (let i = 0; i < plan.records.length; i += 1) {
 		const path = plan.records[i];
 		const lazy = plan.lazy.has(path);
-		table = table + `  { init: ${lazy ? lazyModuleInitName(path) : "null"}, requested: [${plan.requested[i].join(", ")}], status: ${lazy ? 0 : 2}, hasTLA: ${plan.topLevelAwait.has(path)}, failed: false, error: undefined, dfsIndex: 0, dfsAncestorIndex: 0, asyncEvaluation: false, asyncOrdinal: 0, pendingAsyncDeps: 0, asyncParents: [], cycleRoot: ${i}, waiters: [] },\n`;
+		table = table + `  { init: ${lazy ? lazyModuleInitName(path) : "null"}, requested: [${plan.requested[i].join(", ")}], status: ${lazy ? 0 : 2}, hasTLA: ${plan.topLevelAwait.has(path)}, failed: false, error: void 0, dfsIndex: 0, dfsAncestorIndex: 0, asyncEvaluation: false, asyncOrdinal: 0, pendingAsyncDeps: 0, asyncParents: [], cycleRoot: ${i}, waiters: [] },\n`;
 	}
 	return table + "];\n" + MODULE_EVALUATOR;
 }
@@ -239,7 +239,7 @@ const MODULE_EVALUATOR = "let msModuleNextAsyncOrdinal = 0;\n"
 	+ "function msModuleAsyncFulfilled(at) {\n"
 	+ "  const m = msModuleRecords[at];\n"
 	+ "  if (m.failed) return;\n"
-	+ "  if (m.status !== 3) throw new Error(\"internal: module evaluation finished on a module in status \" + m.status);\n"
+	+ "  if (m.status !== 3) throw new globalThis.Error(\"internal: module evaluation finished on a module in status \" + m.status);\n"
 	+ "  m.asyncEvaluation = false;\n"
 	+ "  m.status = 2;\n"
 	+ "  msModuleSettleWaiters(m);\n"
@@ -278,10 +278,10 @@ const MODULE_EVALUATOR = "let msModuleNextAsyncOrdinal = 0;\n"
 	+ "  } else if (m.failed) w.reject(m.error);\n"
 	+ "  else if (m.status === 3) m.waiters.push(w);\n"
 	+ "  else if (m.status === 2) w.resolve(1);\n"
-	+ "  else throw new Error(\"internal: import() met a module in status \" + m.status);\n"
+	+ "  else throw new globalThis.Error(\"internal: import() met a module in status \" + m.status);\n"
 	+ "}\n"
 	+ "function msModuleImport(at) {\n"
-	+ "  return new Promise((resolve, reject) => { Promise.resolve().then(() => msModuleEvaluateFor(at, { resolve, reject })); });\n"
+	+ "  return new globalThis.Promise((resolve, reject) => { globalThis.Promise.resolve().then(() => msModuleEvaluateFor(at, { resolve, reject })); });\n"
 	+ "}\n";
 
 // Register the dispatcher (lambda wrapper required — top-level fn is generic msClosure, typed var needs msClosureN)

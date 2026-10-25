@@ -34,7 +34,7 @@ export function emitAssertStmt(gen: JSGenerator, node: Node): void {
 		}
 		emit(gen, `, "${escapeJSString(gen.currentModulePath)}", ${node.location.line.toString()});`);
 	} else {
-		emit(gen, "throw new Error(\"assert failed: ");
+		emit(gen, "throw new globalThis.Error(\"assert failed: ");
 		const raw = d.assertMessage.length > 0 ? d.assertMessage : d.assertSource;
 		emit(gen, `${escapeJSString(raw)}");`);
 	}
@@ -296,7 +296,7 @@ export function emitThrowStmt(gen: JSGenerator, node: Node): void {
 	emitIndent(gen);
 	const argType = d.throwArg.nodeType;
 	if (argType != null && argType.kind == TypeKind.String) {
-		emit(gen, "throw new Error(");
+		emit(gen, "throw new globalThis.Error(");
 		emitNode(gen, d.throwArg);
 		emit(gen, ");\n");
 		return;

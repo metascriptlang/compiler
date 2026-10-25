@@ -3977,6 +3977,9 @@ resetLiftedOps();
 
 // ===== Run JS =====
 
+// A project path whose first segment starts with `_` goes under `_prj/`, so it
+// never lands in the trees the compiler owns (`_std`, `_ext`, `_inst`, `_test`);
+// every output under `_prj/` comes from such a path, so the move is injective.
 function outRelForModule(modPath: string, projectRoot: string, stdRoot: string): string {
 	if (stdRoot != "" && modPath.startsWith(stdRoot)) {
 		let rel = modPath.slice(stdRoot.length, modPath.length);
@@ -3985,9 +3988,17 @@ function outRelForModule(modPath: string, projectRoot: string, stdRoot: string):
 	}
 	const rootPrefix = projectRoot.endsWith("/") ? projectRoot : `${projectRoot}/`;
 	if (modPath.startsWith(rootPrefix)) {
-		return replaceExt(modPath.slice(rootPrefix.length, modPath.length), ".js");
+		const rel = modPath.slice(rootPrefix.length, modPath.length);
+		return replaceExt(rel.startsWith("_") ? `_prj/${rel}` : rel, ".js");
 	}
 	return `_ext/${mangleModuleName(buildModuleNameRoots(), modPath)}.js`;
+}
+
+test "a project folder spelled like a compiler tree gets its own output path" {
+	assert outRelForModule("/p/_std/core/system/index.ms", "/p", "/s") == "_prj/_std/core/system/index.js";
+	assert outRelForModule("/p/_prj/a.ms", "/p", "/s") == "_prj/_prj/a.js";
+	assert outRelForModule("/p/a.ms", "/p", "/s") == "a.js";
+	assert outRelForModule("/s/core/system/index.jms", "/p", "/s") == "_std/core/system/index.js";
 }
 
 interface JsInstanceFile {
@@ -4191,8 +4202,16 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 	const stdRoot = config.stdPath;
 
 	const layout = createJsTreeLayout();
+	const modulePathOfOutRel = new HashMap<string, string>();
 	for (const modPath of graph.loadOrder) {
-		layout.outRelOf.set(modPath, outRelForModule(modPath, projectRoot, stdRoot));
+		const outRel = outRelForModule(modPath, projectRoot, stdRoot);
+		const taken = modulePathOfOutRel.get(outRel);
+		if (taken != null) {
+			printDiag(`${error("error")}: ${taken} and ${modPath} would both be written to ${outRoot}/${outRel}`);
+			exit(1);
+		}
+		modulePathOfOutRel.set(outRel, modPath);
+		layout.outRelOf.set(modPath, outRel);
 	}
 
 	// Two phases for the same reason as cmdBuildJS: expand every module before

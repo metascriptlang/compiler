@@ -57,8 +57,8 @@ test "JS emits the fixed size for the literal" {
 		},
 	];
 	const js = compileProjectToJSWithStd(entries, "test/sizedLiteraljs.ms");
-	assert js.contains("sized614 = new Int32Array(4);"), js;
-	assert js.contains("pts614 = Array.from({ length: 2 }, () => ({ x: 0, y: 0 }));"), js;
+	assert js.contains("sized614 = new globalThis.Int32Array(4);"), js;
+	assert js.contains("pts614 = globalThis.Array.from({ length: 2 }, () => ({ x: 0, y: 0 }));"), js;
 }
 
 struct Bug614Point { x: int32; y: int32; }
