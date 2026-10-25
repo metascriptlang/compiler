@@ -1287,16 +1287,19 @@ for (const [a, b] of Iterator.zip([xs.values(), numbers()])) { ... }   // breaki
 
 A chain consumed where it is written, as the iterable of a `for..of` or as the receiver of a consumer
 (`reduce`, `toArray`, `some`, ...) in a declaration, assignment, `return` or expression statement,
-compiles to one loop with no iterator object, also across modules. A chain that is named, stored,
-returned or passed on runs through its iterator objects. Both give the same output; the difference is
-speed. A generator keeps the iterator path when its body uses `yield*`, reads a `yield` as a value,
+compiles to one loop with no iterator object, also across modules. So does a chain named by a `const`
+and read once at such a site, after its declaration and not inside a loop or function the declaration
+is outside of: its arguments and checks (`take(-1)` throws `RangeError`) still run at the declaration,
+its body where it is read. A chain read twice, read in such a loop, held by a `let`, exported, returned,
+or passed to a call that is not one of these sites runs through its iterator objects. Both give the same output; the difference is speed. A generator keeps the iterator path when its body uses `yield*`, reads a `yield` as a value,
 yields inside a `try` with a `catch` or inside a `finally`, calls itself, declares a function, or
 writes module state of another module.
 
 Measured 2026-10-25 on C (drc, orc, danger), `--target=js` and `--target=esm`; the ES2025 part prints
 what Node 24.1 prints (corpus `forOfClosesIteratorOnEarlyExit`, `iteratorHelpersMatchNode`,
 `arrayIterationHelpers`, `generatorInlinedInPlace`, `iteratorChainInlinedInPlace`,
-`iteratorConsumerInlinedInPlace`; lang `iteratorHelpers`, `iteratorStatics`). Not yet: `Iterator.from`,
+`iteratorConsumerInlinedInPlace`, `iteratorStoredChainInlinedInPlace`; lang `iteratorHelpers`,
+`iteratorStatics`). Not yet: `Iterator.from`,
 closing on a labelled `continue` of an outer loop, and `return()` on a helper that was never pulled,
 which closes its source in TS and closes nothing here. On the Raiser the helpers run until one closes
 its source, which stops the program with `Unknown host function: Maybe_fn_…` (an open Raiser bug).
