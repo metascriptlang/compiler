@@ -20,7 +20,7 @@ import {
 	sgGetSignatureContext, sgPickActiveOverload, sgCollectInlayHints,
 	sgFormatHoverDoc, sgExtractDocComment, sgBuiltinDoc,
 	sgQueryAtPosition, sgQueryBySym, sgQueryByName, sgQueryByDefiningModule,
-	sgFindCallExprByCalleeLocation,
+	sgFindCallExprByCalleeLocation, sgFieldDeclLine, FIELD_NO_CONTAINER,
 	SgDocumentSymbol,
 	SgSignatureInfo,
 	SgSymbolRef,
@@ -91,7 +91,15 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	} else {
 		source = dbGetSource(db, path);
 	}
-	let docComment = sgExtractDocComment(source, suggest.location.line);
+	let docLine = suggest.location.line;
+	if (suggest.kind == SymbolKind.Property && suggest.sym != null && suggest.sym.location != null && suggest.sym.location.line > 0) {
+		const declared = modPath != null && modPath != "" && modPath != path ? dbParse(db, modPath) : program;
+		if (declared != null) {
+			const fieldLine = sgFieldDeclLine(declared, suggest.sym.location, suggest.name);
+			if (fieldLine != FIELD_NO_CONTAINER) docLine = fieldLine;
+		}
+	}
+	let docComment = sgExtractDocComment(source, docLine);
 	// Fallback to built-in docs for well-known symbols (MDN-style)
 	if (docComment == "") {
 		docComment = sgBuiltinDoc(suggest.name, suggest.containerName);

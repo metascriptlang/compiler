@@ -1422,6 +1422,37 @@ function hoverShowsDeclarations(): LspScenario {
 	};
 }
 
+const FIELD_DOC_SOURCE = "/** The Box doc. */\ninterface Box {\n\t/** The n doc. */\n\tn: int32;\n\t/** The inner doc. */\n\tinner: Inner;\n}\n/** The Inner doc. */\ninterface Inner {\n\t/** The deep doc. */\n\tdeep: int32;\n}\n/** The Crate doc. */\nclass Crate {\n\t/** The weight doc. */\n\tweight: int32 = 1;\n}\nconst b: Box = { n: 1, inner: { deep: 2 } };\nconst x = b.n;\nconst y = b.inner.deep;\nconst k = new Crate();\nconst z = k.weight;\n";
+
+function hoverShowsTheFieldDocAtItsUses(): LspScenario {
+	const uri = "file:///lspwire/fielddoc.ms";
+	const field = (owner: string, name: string, doc: string, span: string): string =>
+		"```metascript\n(property) " + owner + "." + name + ": int32\n```\n\n---\n\n" + doc + " @ " + span;
+	return {
+		name: "hover on a field read answers the field's own doc, not its container's",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, FIELD_DOC_SOURCE))]),
+			frames([
+				request("10", "textDocument/hover", positionParams(uri, 3, 1)),
+				request("11", "textDocument/hover", positionParams(uri, 18, 12)),
+				request("12", "textDocument/hover", positionParams(uri, 19, 18)),
+				request("13", "textDocument/hover", positionParams(uri, 21, 12)),
+			]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("interface field at its declaration", field("Box", "n", "The n doc.", "3:1-3:2"), hoverSummary(r, "n:10")),
+			sameText("interface field at a read", field("Box", "n", "The n doc.", "18:12-18:13"), hoverSummary(r, "n:11")),
+			sameText("field of a field at a read", field("Inner", "deep", "The deep doc.", "19:18-19:22"), hoverSummary(r, "n:12")),
+			sameText("class field at a read", field("Crate", "weight", "The weight doc.", "21:12-21:18"), hoverSummary(r, "n:13")),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
 const TOKENS_SOURCE = "class Box {\n\tv: int32;\n\tconstructor(v: int32) {\n\t\tthis.v = v;\n\t}\n}\nfunction add(a: int32): int32 {\n\tconst k = 2;\n\treturn a + k;\n}\n";
 
 const TOKENS_URI = "file:///lspwire/tokens.ms";
@@ -1538,6 +1569,7 @@ export function lspScenarios(): LspScenario[] {
 		modulePassSurvivesProjectSwitch(),
 		signatureHelpFollowsTheArgument(),
 		hoverShowsDeclarations(),
+		hoverShowsTheFieldDocAtItsUses(),
 		insignificantEditsKeepAnswers(),
 		semanticTokensClassifyReadsAndDeclarations(),
 	];

@@ -116,6 +116,46 @@ function findCallExprHelper(node: Node, line: int32, col: int32): Node | null {
 	return found;
 }
 
+export const FIELD_NO_CONTAINER: int32 = -1;
+export const FIELD_NOT_DECLARED_HERE: int32 = 0;
+
+export function sgFieldDeclLine(program: Node, container: SourceLocation, field: string): int32 {
+	let decl: Node | null = null;
+	walkForContainer(program, container, (found: Node): void => {
+		if (decl == null) decl = found;
+	});
+	if (decl == null) return FIELD_NO_CONTAINER;
+	return fieldLineIn(decl, field);
+}
+
+function walkForContainer(node: Node, at: SourceLocation, found: (n: Node) => void): void {
+	if (node == null) return;
+	const isContainer = node.kind == NodeKind.InterfaceDecl || node.kind == NodeKind.StructDecl
+		|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.ActorDecl;
+	if (isContainer && node.location.line == at.line && node.location.column == at.column) {
+		found(node);
+		return;
+	}
+	forEachChild(node, (child: Node): void => walkForContainer(child, at, found));
+}
+
+function fieldLineIn(decl: Node, field: string): int32 {
+	if (decl.kind == NodeKind.InterfaceDecl || decl.kind == NodeKind.StructDecl) {
+		const d = decl.data as InterfaceDeclData;
+		for (let i = 0; i < d.interfaceFields.length; i += 1) {
+			if (d.interfaceFields[i] == field && decl.paramLocations != null && i < decl.paramLocations.length) return decl.paramLocations[i].line;
+		}
+		return FIELD_NOT_DECLARED_HERE;
+	}
+	const body = decl.kind == NodeKind.ClassDecl ? (decl.data as ClassDeclData).classBody : (decl.data as ActorDeclData).actorBody;
+	for (const member of body) {
+		let m = member;
+		if (m.kind == NodeKind.DecoratedDecl) m = (m.data as DecoratedDeclData).decoratedNode;
+		if (m.kind == NodeKind.PropertyDecl && (m.data as PropertyDeclData).propName == field) return m.location.line;
+	}
+	return FIELD_NOT_DECLARED_HERE;
+}
+
 // ===== sgQueryAtPosition — binary search on check-time records =====
 // Replaces the fragile AST walker (sgFindNodeAtPosition + sgGetSymbolAtCursor).
 // Records are sorted by (line, col) after check completes.
