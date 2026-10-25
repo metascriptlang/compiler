@@ -850,17 +850,20 @@ function lendTargets(call: Node): Symbol[] {
 
 function lendRefusal(f: HandleFrame, call: Node, i: int32): string | null {
 	const routines: Node[] = [];
+	const external: boolean[] = [];
 	for (const t of lendTargets(call)) {
 		const r = routineParts(t);
 		if (r == null || r.paramSyms == null) return "";
 		routines.push(r);
+		external.push(hasFlag(t, SymbolFlag.ImportC) || routineBody(r) == null);
 	}
 	if (routines.length == 0) return "";
-	for (const r of routines) {
+	for (let k = 0; k < routines.length; k += 1) {
+		const r = routines[k];
 		if (firstArgParam(r) + i >= r.paramSyms!.length) return "";
 		const formal = r.paramSyms![firstArgParam(r) + i];
 		if (!isReadonlyView(formal.symbolType)) return `, whose parameter '${formal.name}' is not Readonly<...>: declare it Readonly<...> to lend the handle for the call,`;
-		if (routineBody(r) == null) return ", which has no body to check,";
+		if (external[k]) return ", which has no body to check,";
 		if (isAsyncFunctionNode(r) && !f.awaited.includes(call)) return ", an async function whose call is not awaited in place,";
 	}
 	for (const r of routines) checkLentBody(f, call, r, r.paramSyms![firstArgParam(r) + i]);
