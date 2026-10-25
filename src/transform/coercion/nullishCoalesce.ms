@@ -2,14 +2,19 @@
 // Follows reference nullish_coalesce.zig
 //
 // Must run AFTER optionalChain so obj?.prop ?? fallback is already lowered.
+//
+// The statements `p ??= v`, `p ||= v` and `p &&= v` lower here on every target but JS, which
+// keeps them as written: the operands of the place `p` that are not simple are bound once,
+// then `if (test(p)) { p = v; }`.
 
-import { Node, NodeKind, BinaryExprData, ArrowFunctionData, TypeAssertionData, ConditionalExprData, ExprStmtData, TypeKind, DeclKind, SourceLocation, Type, createNodeAt } from "../../ast/node";
-import { isMaybeType, unwrapMaybeType, peelTransparentInstance, isNumeric, isBoolType, isStringLike, unknownType } from "../../checker/types";
+import { Node, NodeKind, BinaryExprData, ArrowFunctionData, TypeAssertionData, ConditionalExprData, ExprStmtData, MemberExprData, ArrayAccessData, HiddenDerefData, TypeKind, DeclKind, SourceLocation, Type, createNodeAt } from "../../ast/node";
+import { isLogicalAssignOp } from "../../ast/operators";
+import { isMaybeType, isCountedRef, unwrapMaybeType, peelTransparentInstance, isNumeric, isBoolType, isStringLike, unknownType } from "../../checker/types";
 import { fitJoinedBranch, nullishPayloadType } from "../../checker/fit";
 import { TransformContext, ModuleFact, freshOwnedSym, noteFact } from "../context";
 import { walkNode, walkExpandBlocks, walkWithinStatement, walkOutsideInstanceFieldInits, isFuncBoundary } from "../walker";
 import { forEachChild } from "../../ast/visitor";
-import { makeNull, makeAbsent, isActorHandle, makeBinary, makeConditional, makeMember, makeVarDecl, makeAssign, makeIdentResolved, makeBlock, makeReturn } from "../util";
+import { makeNull, makeAbsent, isActorHandle, makeBinary, makeUnary, makeConditional, makeMember, makeVarDecl, makeLocalDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeExprStmt, makeIf, makeBlock, makeReturn } from "../util";
 import { firstExprKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 import { cloneIfPure } from "./intArithJS";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
@@ -23,10 +28,77 @@ export function lowerNullishCoalesce(program: Node, ctx: TransformContext): Node
 }
 
 function lowerNullishStmt(stmt: Node, ctx: TransformContext): Node[] {
-	const temps: Node[] = [];
-	const lowered = walkWithinStatement(stmt, (node: Node): Node => lowerNullishNode(node, ctx, temps));
-	temps.push(lowered);
-	return temps;
+	const out: Node[] = [];
+	for (const piece of ctx.jsBackend ? [stmt] : lowerLogicalAssign(stmt, ctx)) {
+		const temps: Node[] = [];
+		const lowered = walkWithinStatement(piece, (node: Node): Node => lowerNullishNode(node, ctx, temps));
+		for (const temp of temps) out.push(temp);
+		out.push(lowered);
+	}
+	return out;
+}
+
+// ===== Logical assignment =====
+
+function lowerLogicalAssign(stmt: Node, ctx: TransformContext): Node[] {
+	if (stmt.kind != NodeKind.ExprStmt) return [stmt];
+	const assign = (stmt.data as ExprStmtData).expr;
+	if (assign == null || assign.kind != NodeKind.BinaryExpr) return [stmt];
+	const d = assign.data as BinaryExprData;
+	if (!isLogicalAssignOp(d.operator)) return [stmt];
+	const loc = stmt.location;
+	const out: Node[] = [];
+	bindPlaceOperandsOnce(d.left, ctx, out, loc);
+	if (d.operator == "??=" && neverNullish(d.left, ctx)) {
+		out.push(makeExprStmt(d.left, loc));
+		return out;
+	}
+	const test = match (d.operator) {
+		"??=" => makeBinary(cloneNodeKeepSem(d.left), "===", makeAbsent(d.left.nodeType, loc), loc),
+		"||=" => makeUnary("!", cloneNodeKeepSem(d.left), loc),
+		_ => cloneNodeKeepSem(d.left),
+	};
+	const write = makeExprStmt(makeAssign(d.left, d.right, loc), loc);
+	out.push(makeIf(test, makeBlock([write], loc), null, loc));
+	return out;
+}
+
+// A place is read for the test and written after it, and its object and index run once, as
+// when the reference binds them to temps: an object that is not a name and an index that is
+// not a name or a literal. A value aggregate has no object of its own to bind, so a field or
+// element of one stays a path that is re-read, which is what an lvalue is.
+function bindPlaceOperandsOnce(place: Node, ctx: TransformContext, out: Node[], loc: SourceLocation): void {
+	if (place.kind == NodeKind.MemberExpr) {
+		const d = place.data as MemberExprData;
+		d.object = placeOperand(d.object, ctx, out, loc);
+	} else if (place.kind == NodeKind.ArrayAccess) {
+		const d = place.data as ArrayAccessData;
+		d.array = placeOperand(d.array, ctx, out, loc);
+		if (!isSimpleOperand(d.index)) d.index = bindTemp(d.index, ctx, out, loc);
+	} else if (place.kind == NodeKind.HiddenDeref) {
+		const d = place.data as HiddenDerefData;
+		d.expr = placeOperand(d.expr, ctx, out, loc);
+	}
+}
+
+function placeOperand(operand: Node, ctx: TransformContext, out: Node[], loc: SourceLocation): Node {
+	if (operand.kind == NodeKind.Identifier) return operand;
+	const aggregate = (operand.kind == NodeKind.MemberExpr || operand.kind == NodeKind.ArrayAccess) && !isCountedRef(operand.nodeType);
+	if (aggregate || operand.kind == NodeKind.HiddenDeref) {
+		bindPlaceOperandsOnce(operand, ctx, out, loc);
+		return operand;
+	}
+	return bindTemp(operand, ctx, out, loc);
+}
+
+function isSimpleOperand(n: Node): boolean {
+	return n.kind == NodeKind.Identifier || n.kind == NodeKind.NumberLiteral || n.kind == NodeKind.StringLiteral;
+}
+
+function bindTemp(value: Node, ctx: TransformContext, out: Node[], loc: SourceLocation): Node {
+	const sym = freshOwnedSym(ctx, "once", value.nodeType);
+	out.push(makeLocalDecl(sym, value, value.nodeType!, loc));
+	return makeTypedIdentResolved(sym, value.nodeType, loc);
 }
 
 function readsNullishOperandTwice(node: Node): boolean {
@@ -80,6 +152,12 @@ export function asUnknown(n: Node, loc: SourceLocation): Node {
 	return checked;
 }
 
+function neverNullish(left: Node, ctx: TransformContext): boolean {
+	const leftType = left.nodeType != null ? peelTransparentInstance(left.nodeType) : null;
+	return leftType != null && !isMaybeType(leftType) && !isActorHandle(leftType)
+		&& (isNumeric(leftType) || isBoolType(leftType) || (!ctx.jsBackend && isStringLike(leftType)));
+}
+
 function nullishPresence(left: Node, loc: SourceLocation, ctx: TransformContext): Node {
 	let checked = left;
 	if (ctx.jsBackend) {
@@ -96,10 +174,7 @@ function lowerNullish(left: Node, right: Node, loc: SourceLocation, resultType: 
 	// A scalar or string left operand carries no null outside JS: TS keeps the
 	// expression legal and its value is the left operand.
 	const leftType = left.nodeType != null ? peelTransparentInstance(left.nodeType) : null;
-	if (leftType != null && !isMaybeType(leftType) && !isActorHandle(leftType)
-		&& (isNumeric(leftType) || isBoolType(leftType) || (!ctx.jsBackend && isStringLike(leftType)))) {
-		return left;
-	}
+	if (neverNullish(left, ctx)) return left;
 
 	// x ?? y → x !== null ? x : y
 	let cond = nullishPresence(left, loc, ctx);
