@@ -95,7 +95,47 @@ export function liftHcrState(program: Node, ctx: TransformContext, moduleId: str
 			out.push(initGlobal(g, stmt.location));
 		}
 	}
-	for (const out of pieces) for (const piece of out) kept.push(piece.node);
+	const lastRead = statementTempReads(pd.programStmts);
+	for (let i = 0; i < pd.programStmts.length; i += 1) {
+		if (statementTemp(pd.programStmts[i]) == null) {
+			for (const piece of pieces[i]) kept.push(piece.node);
+			continue;
+		}
+		const body: Node[] = [];
+		const guards: Symbol[] = [];
+		let unconditional = false;
+		let end = i;
+		let k = i;
+		while (k <= end && k < pd.programStmts.length) {
+			const temp = statementTemp(pd.programStmts[k]);
+			if (temp != null) {
+				const read = lastRead.get(temp);
+				if (read != null && read > end) end = read;
+				body.push(pd.programStmts[k]);
+			} else {
+				for (const piece of pieces[k]) {
+					if (!piece.runs) {
+						kept.push(piece.node);
+						continue;
+					}
+					body.push(piece.node);
+					if (piece.guards.length == 0) unconditional = true;
+					for (const guard of piece.guards) if (!guards.includes(guard)) guards.push(guard);
+				}
+			}
+			k += 1;
+		}
+		const loc = pd.programStmts[i].location;
+		if (unconditional) {
+			kept.push(makeBlock(body, loc));
+		} else {
+			if (guards.length == 0) guards.push(first);
+			let cond = makeIdentResolved(guards[0], loc);
+			for (let j = 1; j < guards.length; j += 1) cond = makeBinary(cond, "||", makeIdentResolved(guards[j], loc), loc);
+			kept.push(makeIf(cond, makeBlock(body, loc), null, loc));
+		}
+		i = k - 1;
+	}
 	let entries = "";
 	let names = "";
 	for (const g of globals) {
@@ -150,6 +190,30 @@ function initGlobal(g: HcrGlobal, loc: SourceLocation): HcrPiece {
 	return g.literalAlias ? always(init) : guarded(init, [g.fresh]);
 }
 
+function statementTemp(stmt: Node): Symbol | null {
+	if (stmt.kind != NodeKind.VariableDecl) return null;
+	const sym = stmt.resolvedSym;
+	if (sym == null || hasFlag(sym, SymbolFlag.Global)) return null;
+	return sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Temp ? sym : null;
+}
+
+function statementTempReads(stmts: Node[]): HashMap<Symbol, int32> {
+	const temps = new HashSet<Symbol>();
+	for (const stmt of stmts) {
+		const temp = statementTemp(stmt);
+		if (temp != null) temps.add(temp);
+	}
+	const lastRead = new HashMap<Symbol, int32>();
+	for (let i = 0; i < stmts.length; i += 1) {
+		const at = i as int32;
+		walkNode(stmts[i], (n: Node): Node => {
+			if (n.kind == NodeKind.Identifier && n.resolvedSym != null && temps.has(n.resolvedSym)) lastRead.set(n.resolvedSym, at);
+			return n;
+		});
+	}
+	return lastRead;
+}
+
 function flaggedBindings(globals: HcrGlobal[]): HashMap<Symbol, HcrGlobal> {
 	const byName = new HashMap<string, HcrGlobal>();
 	for (const g of globals) byName.set(g.sym.name, g);
@@ -194,7 +258,7 @@ function unwrapDeclaration(node: Node): Node {
 
 function extractGlobal(stmt: Node, ctx: TransformContext, index: int32): HcrGlobal {
 	const node = unwrapDeclaration(stmt);
-	if (node == null || node.kind != NodeKind.VariableDecl) return null as unknown as HcrGlobal;
+	if (node == null || node.kind != NodeKind.VariableDecl || statementTemp(stmt) != null) return null as unknown as HcrGlobal;
 	const d = node.data as VariableDeclData;
 
 	const sym = node.resolvedSym;
