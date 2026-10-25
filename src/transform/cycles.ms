@@ -16,7 +16,8 @@
 // The reference non-final rule (types.nim:433-435) is implemented via the
 // OpenClass bit on the Struct arm below — a class that is extended is cyclic. An interface
 // or unnamed record is open the same way, but only to the object types the checker accepted
-// behind it, so a hierarchy whose implementers cannot reach back stays acyclic.
+// behind it, so a hierarchy whose implementers cannot reach back and cannot form a cycle
+// themselves stays acyclic.
 
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { NameSet, createNameSet, nameSetAdd, nameSetContains } from "./context";
@@ -169,11 +170,33 @@ export function canFormAcycle(t: Type | null, cyclicCache: NameSet, acyclicCache
 		if (nameSetContains(acyclicCache, key)) return false;
 	}
 	const marker = createNameSet();
-	const result = cfaAux(subject, key, false, marker);
+	const result = cfaAux(subject, key, false, marker) || implementerCanFormAcycle(subject, cyclicCache);
 	if (key != "") {
 		if (result) { nameSetAdd(cyclicCache, key); } else { nameSetAdd(acyclicCache, key); }
 	}
 	return result;
+}
+
+// A cell typed by an interface is a cell of one of the types held beyond it, so it can form a
+// cycle whenever one of them can, even when no path returns to the interface itself.
+function implementerCanFormAcycle(t: Type, cyclicCache: NameSet): boolean {
+	const seen = createNameSet();
+	const slots: Type[] = [t];
+	while (slots.length > 0) {
+		const slot = slots.pop()!;
+		const inst = slot.kind == TypeKind.GenericInstance ? instanceBody(slot) : slot;
+		const body = inst != null && inst.kind == TypeKind.Ref ? inst.typeReturn : inst;
+		if (body == null || body.kind != TypeKind.Struct) continue;
+		for (const held of heldBeyond(body)) {
+			if (hasGenericParams(held) || !hasTypeIdentity(held)) return true;
+			const key = typeIdentity(held);
+			if (nameSetContains(seen, key)) continue;
+			nameSetAdd(seen, key);
+			if (nameSetContains(cyclicCache, key) || cfaAux(held, key, false, createNameSet())) return true;
+			slots.push(held);
+		}
+	}
+	return false;
 }
 
 export function isAcyclicRefElement(elem: Type | null, cyclicCache: NameSet, acyclicCache: NameSet): boolean {
@@ -285,6 +308,9 @@ function custodyEdgeFields(t: Type, cyclicCache: NameSet, acyclicCache: NameSet,
 	if (t.kind == TypeKind.Struct && custodyEdgeAux(base, true, cyclicCache, acyclicCache, marker)) return true;
 	for (const child of t.typeChildren) {
 		if (custodyEdgeAux(child, false, cyclicCache, acyclicCache, marker)) return true;
+	}
+	for (const held of heldBeyond(t)) {
+		if (hasGenericParams(held) || !hasTypeIdentity(held) || custodyEdgeAux(held, true, cyclicCache, acyclicCache, marker)) return true;
 	}
 	return false;
 }
