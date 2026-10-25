@@ -143,7 +143,6 @@ function lowerAwaitExpr(e: Node, pre: Node[]): Node {
 		const d = e.data as BinaryExprData;
 		if (dropsOperandEffects(e)) return lowerFoldedNullOperand(e, pre);
 		if (d.operator == "&&" || d.operator == "||") return lowerShortCircuit(e, pre);
-		if (d.operator == "&&=" || d.operator == "||=" || d.operator == "??=") return e;
 		if (isAssignOp(d.operator)) return lowerAssign(_sp, e, pre);
 		lowerOperandList(_sp, e, pre);
 	} else if (k == NodeKind.ConditionalExpr) {
