@@ -26,7 +26,7 @@ import { RaiserVM, execModule, execLoop, createVM, vmReleaseHeaps } from "../../
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction, makeTestModule } from "../../raiser/module";
 import { RaiserFuncMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
 import { moduleScopeNamed, enclosingScopeNamed, NamedSymbol, makeSymbolState, globalScope } from "../../checker/symbol";
-import { metaTypeSeeds } from "../../compiler/meta/stdTags";
+import { metaTypeSeeds, isMetaSeedName } from "../../compiler/meta/stdTags";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
 import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn, instanceArgsOf, instanceParamsOf } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
@@ -325,6 +325,20 @@ export function compileMacroIntoEngine(program: Node, token: CheckerContext, mac
 	return compileIntoEngineSeeded(program, token, macroFnName, declCtx, []);
 }
 
+function reservedNameErrors(seeds: NamedSymbol[], declCtx: CheckerContext): CheckerError[] {
+	const errors: CheckerError[] = [];
+	for (const s of seeds) {
+		if (!isMetaSeedName(s.name)) continue;
+		const at = s.sym.declNode;
+		errors.push({
+			message: `'${s.name}' is reserved for the compiler's macro programs and cannot be declared (${declCtx.modulePath})`,
+			line: at == null ? 0 : at.location.line, column: at == null ? 0 : at.location.column,
+			endLine: 0, endColumn: 0, fatal: false, severity: Severity.Error, tags: 0,
+		});
+	}
+	return errors;
+}
+
 function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnName: string, declCtx: CheckerContext, leadSeeds: NamedSymbol[]): EngineMacroResult {
 	const nested = engineCompiling();
 	if (!nested) {
@@ -337,6 +351,8 @@ function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnNa
 	const seeds: NamedSymbol[] = [];
 	for (const s of leadSeeds) seeds.push(s);
 	for (const s of moduleScopeNamed(declCtx.table)) seeds.push(s);
+	const reserved = reservedNameErrors(seeds, declCtx);
+	if (reserved.length > 0) return { vm: _engine.vm, funcIdx: -1, errors: reserved };
 	const exts = seedExtensionsOf(declCtx, null);
 	const outerHelperErrors = _pendingHelperErrors;
 	_pendingHelperErrors = [];

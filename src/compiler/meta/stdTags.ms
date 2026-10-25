@@ -15,6 +15,11 @@ const META_TYPE_TAGS: string[][] = [
 	[metaExternKindType, "MetaExternKind"],
 ];
 
+export function isMetaSeedName(name: string): boolean {
+	for (const entry of META_TYPE_TAGS) if (entry[0] == name) return true;
+	return false;
+}
+
 // One pass over the module scopes of the graph; a tag nothing in the graph carries stays null.
 export function metaTagged(graph: ModuleGraph, tags: string[]): (Symbol | null)[] {
 	const found: (Symbol | null)[] = [];
