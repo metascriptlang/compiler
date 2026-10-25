@@ -3933,9 +3933,9 @@ export function formatTypeBrief(t: Type | null): string {
 	return typeDisplayName(t);
 }
 
-export function refuseBareAsyncReturn(ctx: CheckerContext, routine: BitSet<RoutineFlag>, declared: Type | null, name: string, spelling: string, at: SourceLocation): void {
+export function refuseBareAsyncReturn(ctx: CheckerContext, routine: BitSet<RoutineFlag>, declared: Type | null, written: boolean, name: string, spelling: string, at: SourceLocation): void {
 	if (!routine.has(RoutineFlag.Async) || routine.has(RoutineFlag.Generator)) return;
-	if (declared == null || isUnresolvedType(declared) || declared.kind == TypeKind.Void || isAwaitable(declared)) return;
+	if (!written || declared == null || isUnresolvedType(declared) || isAwaitable(declared)) return;
 	const got = formatTypeBrief(declared);
 	addError(ctx,
 		"async function '" + name + "' must declare return type as Promise<" + got
@@ -4159,8 +4159,10 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	// is not a function or function pointer". `fitNode`'s named-fn → closure
 	// auto-wrap only fires for Identifier callees with SymbolKind.Function,
 	// so it doesn't catch this case for inline expression-form functions.
+	const asyncSpelling = name == "<arrow>" ? "async " : "async function";
+	if (returnTypeAnnotation == "void") refuseBareAsyncReturn(ctx, routine, voidType(), true, name, asyncSpelling, body.location);
 	if (explicitReturnType != null) {
-		if (returnTypeAnnotation != "") refuseBareAsyncReturn(ctx, routine, explicitReturnType, name, name == "<arrow>" ? "async " : "async function", body.location);
+		if (returnTypeAnnotation != "") refuseBareAsyncReturn(ctx, routine, explicitReturnType, true, name, asyncSpelling, body.location);
 		const closure = createClosureType(types, params, explicitReturnType);
 		if (predicate != null) closure.typeExtra = predicate.sentinel;
 		return closure;

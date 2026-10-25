@@ -1067,12 +1067,12 @@ function checkFunctionDeclBody(ctx: CheckerContext, node: Node, sym: Symbol): vo
 	}
 
 	// TS-strict: async functions must declare Promise<T> as return type
-	// (or leave it unannotated, which infers to void). An explicit bare type T
+	// (or leave it unannotated, which infers Promise<void>). An explicit bare type T
 	// produces a C signature / body type mismatch in codegen — catch it at the
 	// declaration site with a clear, actionable error. async_generator is exempt
 	// because it returns AsyncIterator<T>, not Promise<T>.
 	if (fnType != null && fnType.kind == TypeKind.Function) {
-		refuseBareAsyncReturn(ctx, routine, fnType.typeReturn, d.fnName, "async function " + d.fnName, d.nameLocation);
+		refuseBareAsyncReturn(ctx, routine, fnType.typeReturn, d.fnReturnType != "", d.fnName, "async function " + d.fnName, d.nameLocation);
 	}
 
 	// Reference parity (semProcAux): generic function bodies are NOT checked at declaration time.
@@ -2049,7 +2049,7 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 			const routine = routineFlagSet(d.methodFlags);
 			if (routine.has(RoutineFlag.Async)) setFlag(sym, SymbolFlag.Async);
 			const actorMethod = ctx.currentActor != null && ctx.currentActor.symbolType == classType;
-			if (!actorMethod && sym.symbolType.kind == TypeKind.Function) refuseBareAsyncReturn(ctx, routine, sym.symbolType.typeReturn, d.methodName, (d.methodIsStatic ? "static async " : "async ") + d.methodName, d.nameLocation);
+			if (!actorMethod && sym.symbolType.kind == TypeKind.Function) refuseBareAsyncReturn(ctx, routine, sym.symbolType.typeReturn, d.methodReturnType != "", d.methodName, (d.methodIsStatic ? "static async " : "async ") + d.methodName, d.nameLocation);
 			sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
 			refuseOrphanOverride(ctx, d, className, classType);
 			const overridden = d.methodIsStatic ? null : checkOverride(ctx, d, className, classType);
