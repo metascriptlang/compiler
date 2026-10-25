@@ -19,7 +19,7 @@ import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, s
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { copiesInline, inlineDeclOf } from "./forward";
-import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
+import { hasFlag, SymbolFlag, RoutineFlag, decodeRoutineFlags } from "../../checker/symbol";
 import { bakesIntoStaticCell, functionDeclIsAlive } from "../../checker/reachability";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
 
@@ -96,7 +96,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	if (sym != null && hasFlag(sym, SymbolFlag.CompileTime)) return;
 
 	// Module-qualified name (Standard reference implementation parity)
-	const isExternFn = (sym != null && hasFlag(sym, SymbolFlag.ImportC)) || routineFlagSet(d.fnFlags).has(RoutineFlag.Extern);
+	const isExternFn = (sym != null && hasFlag(sym, SymbolFlag.ImportC)) || decodeRoutineFlags(d.fnFlags).has(RoutineFlag.Extern);
 	const ovIdx = sym != null ? sym.overloadIdx : 0;
 	let name = mangledFunctionName(g.emissionFacts.moduleNameRoots!, sym, d.fnName, ovIdx);
 

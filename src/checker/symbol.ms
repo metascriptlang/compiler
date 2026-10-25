@@ -103,7 +103,7 @@ export function routineFlagSet(text: string): BitSet<RoutineFlag> {
 	return set;
 }
 
-function decodeRoutineFlags(text: string): BitSet<RoutineFlag> {
+export function decodeRoutineFlags(text: string): BitSet<RoutineFlag> {
 	let set = 0 as BitSet<RoutineFlag>;
 	let inTypeText = false;
 	for (const word of splitTopLevel(text, "|")) {
