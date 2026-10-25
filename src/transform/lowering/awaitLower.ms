@@ -38,7 +38,7 @@ import {
 } from "../../ast/node";
 import { TransformContext, ModuleFact, freshTempSym, freshOwnedSym, SymSet, createSymSet, symSetAdd, symSetContains, noteFact } from "../context";
 import { skipsModule } from "../moduleFacts";
-import { forEachChild } from "../../ast/visitor";
+import { forEachChild, anyDescendant, Visit } from "../../ast/visitor";
 import { walkExpandBlocksHooked, containsExprKind, walkNode } from "../walker";
 import { makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, makeAssign, makeDefaultValue, unboxVoidPtrToTyped, runtimeRef, attachedOpSym, makeTypedIdentResolved, isRuntimeProcSym, ownedInFuture, isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck, typedFutureReadFn, makeBool, makeUnary } from "../util";
 import { lowerDefer } from "./deferLower";
@@ -713,11 +713,10 @@ function holdSpawns(n: Node | null, ctx: TransformContext): void {
 }
 
 function hasOwnSpawn(n: Node | null): boolean {
-	if (n == null || isRoutineNode(n)) return false;
-	if (isSpawnNode(n)) return true;
-	let found = false;
-	forEachChild(n, (c: Node): void => { if (!found && hasOwnSpawn(c)) found = true; });
-	return found;
+	return anyDescendant(n, (c: Node): Visit => {
+		if (isRoutineNode(c)) return Visit.Skip;
+		return isSpawnNode(c) ? Visit.Hit : Visit.Descend;
+	});
 }
 
 function routineBodyBlock(n: Node): Node | null {
