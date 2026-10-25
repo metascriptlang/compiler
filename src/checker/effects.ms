@@ -163,12 +163,16 @@ export function routineBody(decl: Node | null): Node | null {
 	if (decl == null) return null;
 	return match (decl.kind) {
 		NodeKind.FunctionDecl => (decl.data as FunctionDeclData).fnBody,
-		NodeKind.MethodDecl => (decl.data as MethodDeclData).methodBody,
+		NodeKind.MethodDecl => declaredExtern((decl.data as MethodDeclData).methodFlags) ? null : (decl.data as MethodDeclData).methodBody,
 		NodeKind.ConstructorDecl => (decl.data as ConstructorDeclData).ctorBody,
 		NodeKind.ArrowFunction => (decl.data as ArrowFunctionData).arrowBody,
 		NodeKind.FunctionExpr => (decl.data as FunctionExprData).funcExprBody,
 		_ => null,
 	};
+}
+
+function declaredExtern(flags: string): boolean {
+	return flags.indexOf("extern", 0) >= 0;
 }
 
 function routineParams(decl: Node): string[] {
