@@ -27,6 +27,7 @@ import {
 	Type, TypeKind,
 } from "../../ast/node";
 import { TransformContext } from "../context";
+import { RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { walkExpandBlocksHooked } from "../walker";
 import { makeCall, makeExprStmt, makeNumber, makeNull, makeObjectLiteral, runtimeRef } from "../util";
 import { awaitedType, createPromise, createPtr, voidType } from "../../checker/types";
@@ -46,7 +47,7 @@ function isAsyncFn(node: Node): boolean {
 		NodeKind.FunctionExpr => (node.data as FunctionExprData).funcExprFlags,
 		_ => "",
 	};
-	return flags == "async" || flags == "async_generator";
+	return routineFlagSet(flags).has(RoutineFlag.Async);
 }
 
 // ===== Multi-Spawn Detection =====
