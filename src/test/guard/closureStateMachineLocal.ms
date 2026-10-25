@@ -51,8 +51,10 @@ async function main(): Promise<void> {
 	let oneState: int32 = 0;
 	let asyncOne: int32 = 0;
 	for (let n: int32 = 0; n < 200; n++) {
-		for (const v of smSpanning()) spanning = spanning + v;
-		for (const v of smOneState()) oneState = oneState + v;
+		let spanningMachine = smSpanning();
+		for (const v of spanningMachine) spanning = spanning + v;
+		let oneStateMachine = smOneState();
+		for (const v of oneStateMachine) oneState = oneState + v;
 		asyncOne = asyncOne + await smAsyncOneState();
 	}
 	console.log(`spanning=${spanning} oneState=${oneState} asyncOne=${asyncOne}`);
