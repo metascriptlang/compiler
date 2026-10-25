@@ -132,6 +132,67 @@ class ContractTest(TempCase):
             pe.listFiles(root)
 
 
+class ContainsPathTest(TempCase):
+    def caseInsensitive(self):
+        os.makedirs(self.path("Probe"))
+        return os.path.exists(self.path("probe"))
+
+    def test_a_path_under_a_symlink_alias_of_the_parent_is_contained(self):
+        os.makedirs(self.path("real"))
+        os.symlink(self.path("real"), self.path("alias"))
+        self.assertNotEqual(os.path.commonpath([self.path("real"), self.path("alias", "out")]), self.path("real"))
+        self.assertTrue(pe.containsPath(self.path("real"), self.path("alias", "out")))
+        self.assertTrue(pe.containsPath(self.path("real"), self.path("alias", "deep", "er", "out")))
+        self.assertTrue(pe.containsPath(self.path("alias"), self.path("real", "out")))
+
+    def test_a_chain_of_aliases_is_followed_to_the_directory_it_names(self):
+        os.makedirs(self.path("real", "inner"))
+        os.symlink(self.path("real"), self.path("first"))
+        os.symlink(self.path("first"), self.path("second"))
+        self.assertTrue(pe.containsPath(self.path("real", "inner"), self.path("second", "inner", "out")))
+        self.assertFalse(pe.containsPath(self.path("real", "inner"), self.path("second", "other", "out")))
+
+    def test_a_path_that_does_not_exist_yet_is_judged_by_its_existing_prefix(self):
+        os.makedirs(self.path("real"))
+        os.symlink(self.path("real"), self.path("alias"))
+        self.assertTrue(pe.containsPath(self.path("real"), self.path("alias", "not", "yet", "there")))
+        self.assertFalse(pe.containsPath(self.path("real"), self.path("nowhere", "not", "yet")))
+
+    def test_the_same_directory_is_contained_and_a_neighbour_or_an_ancestor_is_not(self):
+        os.makedirs(self.path("bundle", "inner"))
+        os.makedirs(self.path("bundle-two"))
+        self.assertTrue(pe.containsPath(self.path("bundle"), self.path("bundle")))
+        self.assertFalse(pe.containsPath(self.path("bundle"), self.path("bundle-two", "out")))
+        self.assertFalse(pe.containsPath(self.path("bundle", "inner"), self.path("bundle")))
+
+    def test_a_link_leading_out_of_the_parent_is_not_contained(self):
+        os.makedirs(self.path("bundle"))
+        os.makedirs(self.path("elsewhere"))
+        os.symlink(self.path("elsewhere"), self.path("bundle", "escape"))
+        self.assertFalse(pe.containsPath(self.path("bundle"), self.path("bundle", "escape", "out")))
+
+    def test_a_relative_path_is_judged_where_it_points(self):
+        os.makedirs(self.path("bundle"))
+        before = os.getcwd()
+        self.addCleanup(os.chdir, before)
+        os.chdir(self.dir)
+        self.assertTrue(pe.containsPath(self.path("bundle"), os.path.join("bundle", "out")))
+        self.assertFalse(pe.containsPath(self.path("bundle"), "other"))
+
+    def test_a_parent_that_does_not_exist_is_compared_by_resolved_name(self):
+        self.assertTrue(pe.containsPath(self.path("gone"), self.path("gone", "out")))
+        self.assertFalse(pe.containsPath(self.path("gone"), self.path("other", "out")))
+
+    def test_another_spelling_of_the_same_directory_is_the_same_directory(self):
+        if not self.caseInsensitive():
+            self.skipTest("this volume tells names apart by case")
+        os.makedirs(self.path("Bundle"))
+        self.assertNotEqual(os.path.realpath(self.path("bundle")), os.path.realpath(self.path("Bundle")))
+        self.assertTrue(pe.containsPath(self.path("Bundle"), self.path("bundle", "out")))
+        self.assertTrue(pe.containsPath(self.path("bundle"), self.path("Bundle", "inner", "out")))
+        self.assertFalse(pe.containsPath(self.path("Bundle"), self.path("Other", "out")))
+
+
 class SourceRootTest(TempCase):
     def fakeRoots(self, lldVersion="22.1.1", resource=True):
         llvm, lld = self.path("llvm"), self.path("lld")
@@ -184,6 +245,15 @@ class SourceRootTest(TempCase):
         llvm, lld = self.fakeRoots()
         with self.assertRaisesRegex(pe.EngineError, "inside a source root"):
             self.prepare(llvm, lld, os.path.join(llvm, "engine"))
+
+    @mock.patch.object(pe, "detectHost", return_value=("aarch64-macos", 0x0100000C))
+    def test_output_reached_through_an_alias_into_a_source_root_is_rejected(self, _):
+        llvm, lld = self.fakeRoots()
+        os.symlink(llvm, self.path("alias"))
+        for output in (os.path.join(self.path("alias"), "engine"), os.path.join(self.path("alias"), "a", "engine")):
+            with self.assertRaisesRegex(pe.EngineError, "inside a source root"):
+                self.prepare(llvm, lld, output)
+        self.assertEqual(sorted(os.listdir(llvm)), ["bin", "lib"])
 
     def test_unsupported_hosts_fail_loud(self):
         with mock.patch.object(pe.sys, "platform", "linux"):

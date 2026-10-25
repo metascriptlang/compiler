@@ -432,7 +432,16 @@ def verifyEngine(root):
 
 
 def containsPath(parent, child):
-    return os.path.commonpath([parent, child]) == parent
+    parent, child = os.path.realpath(parent), os.path.realpath(child)
+    if not os.path.exists(parent):
+        return child == parent or child.startswith(parent.rstrip(os.sep) + os.sep)
+    while True:
+        if os.path.exists(child) and os.path.samefile(child, parent):
+            return True
+        above = os.path.dirname(child)
+        if above == child:
+            return False
+        child = above
 
 
 def prepareEngine(llvmRoot, lldRoot, output):
