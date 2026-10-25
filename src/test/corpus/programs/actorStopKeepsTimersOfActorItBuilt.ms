@@ -10,6 +10,9 @@ actor Child {
 	constructor() {
 		this.id = setInterval(() => { this.ticks = this.ticks + 1; }, 1);
 	}
+	count(): int32 {
+		return this.ticks;
+	}
 	finish(): int32 {
 		clearInterval(this.id);
 		return this.ticks;
@@ -26,7 +29,9 @@ async function main(): Promise<void> {
 	const p = new Parent();
 	const c = await p.make();
 	stop(p.pid, ExitReason.Normal);
-	await sleepAsync(30);
-	console.log(`child ticks after parent stop: ${(await c.finish()) > 5}`);
+	const atStop = await c.count();
+	await sleepAsync(50);
+	console.log(`child ticks after parent stop: ${(await c.finish()) > atStop}`);
+	stop(c.pid, ExitReason.Normal);
 }
 main();
