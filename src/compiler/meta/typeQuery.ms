@@ -121,9 +121,9 @@ function hostGetType(args: RaiserValue[]): RaiserValue {
 	if (ctx == null || args.length < 1) return raiserNil();
 	const impl = args.length > 1 && args[1].kind == RaiserValueKind.Bool && args[1].intVal != 0;
 	const sym = boundSymOf(args[0]);
-	if (sym != null && hasFlag(sym, SymbolFlag.Forward)) return queryError(ctx, stillDecoratedMessage(sym.name));
+	if (impl && sym != null && hasFlag(sym, SymbolFlag.Forward)) return queryError(ctx, stillDecoratedMessage(sym.name));
 	const t = typeArgOf(args[0]);
-	if (t == null) return queryError(ctx, "node has no type");
+	if (t == null) return impl ? queryError(ctx, "node has no type") : raiserNil();
 	const loc = makeLoc(activeMetaLine(), activeMetaColumn());
 	const src = impl ? peelToImpl(t, ctx) : t;
 	if (src == null) return raiserNil();
