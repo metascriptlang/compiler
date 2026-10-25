@@ -1247,6 +1247,60 @@ emitted `catch` throws again (read from the emitted code, not run in a browser).
 `failedConversionInTryStops`, `failedIndexInTryStops`); before, JS caught both. The Raiser stops too
 but reports `raiser runtime error: …`, and does not yet check an enum range or a union member.
 
+### Iterators and Generators
+
+`Iterator<T>` is the TS protocol: `next()` and an optional `return()`. A generator returns one, and a
+`for..of` that leaves early (`break`, `return`, `throw`) calls `return()`, so the generator's `finally`
+runs before the code after the loop:
+
+```typescript
+function* numbers(): Iterator<int32> {
+    try {
+        for (let i: int32 = 0; i < 10; i++) yield i;
+    } finally {
+        console.log("closed");
+    }
+}
+for (const x of numbers()) {
+    if (x == 2) break;   // prints 0, 1, then "closed"
+    console.log(x);
+}
+```
+
+The TS iterator helpers are std methods on every `Iterator<T>`, lazy and single pass: `map filter take
+drop flatMap reduce toArray forEach some every find`, with the statics `Iterator.concat` and
+`Iterator.zip` (`shortest`, `longest` with a padding value per iterator, `strict`). Arrays have lazy
+`values()`, `keys()` and `entries()`, and `every` and `reduce`. Beyond TS, std adds `chunks`, `windows`,
+`cycle`, `stepBy`, `scan`, `peekable`, `sum`, `min`, `max` and `Iterator.range(start, end, step)`.
+A bad argument throws at the call, closes the receiver and names the error as TS does (`take(-1)` is a
+`RangeError` "-1 must be positive", `reduce` of an empty source without an initial value a `TypeError`).
+
+```typescript
+const xs: int32[] = [3, 1, 4, 1, 5, 9, 2, 6];
+const total = xs.values()
+    .map((v: int32, i: number): int32 => v * 2)
+    .filter((v: int32, i: number): boolean => v > 2)
+    .take(4)
+    .reduce((a: int32, v: int32, i: number): int32 => a + v, 0);   // 42
+for (const [a, b] of Iterator.zip([xs.values(), numbers()])) { ... }   // breaking closes both
+```
+
+A chain consumed where it is written, as the iterable of a `for..of` or as the receiver of a consumer
+(`reduce`, `toArray`, `some`, ...) in a declaration, assignment, `return` or expression statement,
+compiles to one loop with no iterator object, also across modules. A chain that is named, stored,
+returned or passed on runs through its iterator objects. Both give the same output; the difference is
+speed. A generator keeps the iterator path when its body uses `yield*`, reads a `yield` as a value,
+yields inside a `try` with a `catch` or inside a `finally`, calls itself, declares a function, or
+writes module state of another module.
+
+Measured 2026-10-25 on C (drc, orc, danger), `--target=js` and `--target=esm`; the ES2025 part prints
+what Node 24.1 prints (corpus `forOfClosesIteratorOnEarlyExit`, `iteratorHelpersMatchNode`,
+`arrayIterationHelpers`, `generatorInlinedInPlace`, `iteratorChainInlinedInPlace`,
+`iteratorConsumerInlinedInPlace`; lang `iteratorHelpers`, `iteratorStatics`). Not yet: `Iterator.from`,
+closing on a labelled `continue` of an outer loop, and `return()` on a helper that was never pulled,
+which closes its source in TS and closes nothing here. On the Raiser the helpers run until one closes
+its source, which stops the program with `Unknown host function: Maybe_fn_…` (an open Raiser bug).
+
 ## Type System
 
 ### Type Annotations
