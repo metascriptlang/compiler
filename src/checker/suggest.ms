@@ -156,42 +156,6 @@ function fieldLineIn(decl: Node, field: string): int32 {
 	return FIELD_NOT_DECLARED_HERE;
 }
 
-function isIdentByte(b: int32): boolean {
-	return (b >= "a".code && b <= "z".code) || (b >= "A".code && b <= "Z".code) || (b >= "0".code && b <= "9".code) || b == "_".code || b == "$".code || b >= 128;
-}
-
-function isWrittenWord(source: string, at: int32, name: string): boolean {
-	const end = at + name.byteLength;
-	if (name.byteLength == 0 || at < 0 || end > source.byteLength) return false;
-	for (let i = 0; i < name.byteLength; i += 1) {
-		if (source.byteAt(at + i) != name.byteAt(i)) return false;
-	}
-	if (at > 0 && isIdentByte(source.byteAt(at - 1))) return false;
-	return end == source.byteLength || !isIdentByte(source.byteAt(end));
-}
-
-export function sgQuerySourceAt(ctx: CheckerContext, source: string, line: int32, col: int32): SgSuggest {
-	if (ctx.symRecords == null || ctx.symRecords.length == 0) return null as unknown as SgSuggest;
-	const records = sortedRecords(ctx);
-	let lo = 0;
-	let hi = records.length - 1;
-	while (lo <= hi) {
-		const mid = (lo + hi) as int32 >> 1;
-		if (records[mid].line < line) {
-			lo = mid + 1;
-		} else {
-			hi = mid - 1;
-		}
-	}
-	const lineStart = sgGetLineOffset(source, line);
-	for (let i = lo; i < records.length && records[i].line == line; i += 1) {
-		const rec = records[i];
-		if (col < rec.col || col >= rec.colEnd) continue;
-		if (isWrittenWord(source, lineStart + rec.col - 1, rec.name)) return sgSuggestFromRecord(rec);
-	}
-	return null as unknown as SgSuggest;
-}
-
 // ===== sgQueryAtPosition — binary search on check-time records =====
 // Replaces the fragile AST walker (sgFindNodeAtPosition + sgGetSymbolAtCursor).
 // Records are sorted by (line, col) after check completes.
