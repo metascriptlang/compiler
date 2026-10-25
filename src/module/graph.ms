@@ -43,6 +43,14 @@ export interface ImportEntry {
 	typeOnly: boolean;
 }
 
+// A module's parse: its tree and the imports the parser saw, unresolved (sourcePath ""). A check that
+// takes the tree names itself in consumedBy; the imports stay readable after that.
+export interface ParsedModule {
+	program: Node;
+	imports: ImportEntry[];
+	consumedBy: string;
+}
+
 // ===== Module =====
 
 export class Module {
@@ -50,6 +58,7 @@ export class Module {
 	rawSource: string;         // source text as read; a C header's is its translation
 	source: string;            // source text the checker parses
 	program: Node | null;      // the loader's parse of `source`, until the check adopts it
+	parsedImports: ImportEntry[]; // the imports the parser saw in `program`, unresolved (sourcePath "")
 	state: ModuleState;        // loading state machine
 	exportNames: string[];     // names of exported symbols (for lookup)
 	imports: ImportEntry[];    // resolved import dependencies
@@ -105,6 +114,7 @@ export function createModule(path: string): Module {
 		rawSource: "",
 		source: "",
 		program: null,
+		parsedImports: [],
 		state: ModuleState.Unloaded,
 		exportNames: [],
 		imports: [],
