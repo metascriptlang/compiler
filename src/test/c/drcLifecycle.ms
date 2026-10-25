@@ -486,3 +486,34 @@ test "E2E C: a non-null asserted field bound while nothing writes its holder sta
 	assert c.value.contains("(d_1_ = (*h).a)");
 	assert !c.value.contains("msDecref(d_1_)");
 }
+
+test "E2E C: a returned module-level value is copied once" {
+	const c = compileToC(`
+		class Tag { n: int32 = 0; }
+		struct Plan { exe: string; args: string[]; tag: Tag; }
+		const NONE: Plan = { exe: "", args: [], tag: new Tag() };
+		const NAMES: string[] = ["a"];
+		function inBranch(bad: boolean): Plan {
+			if (bad) return NONE;
+			return { exe: "x", args: [], tag: new Tag() };
+		}
+		function inLoop(n: int32): Plan {
+			for (let i = 0; i < n; i++) {
+				if (i == 2) return NONE;
+			}
+			return { exe: "x", args: [], tag: new Tag() };
+		}
+		function inTry(n: int32): Plan {
+			try {
+				if (n > 0) return NONE;
+				return { exe: "x", args: [], tag: new Tag() };
+			} finally {
+				console.log("f");
+			}
+		}
+		function names(): string[] { return NAMES; }
+	`);
+	assert c.ok;
+	assert occurrences(c.value, "Copy((&(dollarborrow") == 3;
+	assert !c.value.contains(")), (&(dollarborrow");
+}
