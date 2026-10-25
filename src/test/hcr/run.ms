@@ -97,7 +97,43 @@ function sanRuntime(dir: string): void {
 	copy(`${resource}/lib/windows/${SAN_DLL}`, `${dir}/${SAN_DLL}`);
 }
 
-function msc(dir: string, args: string[]): ExecFileResult {
+const RUN_CAP_MS = 300000;
+
+function capNotice(capMs: int32): string {
+	return `hcr runner: msc run cut after ${capMs} ms`;
+}
+
+function boundedRun(dir: string, args: string[], capMs: int32): ExecFileResult {
+	const started = spawnChild(MSC, args, { cwd: dir, mergeStderr: true });
+	if (!started.ok) return execFileResult(MSC, args, dir);
+	const child = started.value;
+	let text = "";
+	let ended = false;
+	const deadline = performance.now() + capMs;
+	while (!ended && performance.now() < deadline) {
+		const got = child.read(ChildStream.Stdout, 200);
+		if (!got.ok) continue;
+		if (got.value.ended) ended = true;
+		else text += got.value.data;
+	}
+	const status = ended ? child.wait(30000) : child.kill();
+	const done = ended && status.ok;
+	if (!done) text += `\n${capNotice(capMs)}\n`;
+	const result: ExecFileResult = {
+		started: true,
+		pipeOk: done,
+		exitCode: status.ok ? status.value.code : -1,
+		signal: status.ok ? status.value.signal : 0,
+		output: text,
+		errorOutput: "",
+		startErrno: 0,
+	};
+	child.close();
+	return result;
+}
+
+function msc(dir: string, args: string[], capMs: int32 = RUN_CAP_MS): ExecFileResult {
+	if (args[0] == "run") return boundedRun(dir, args, capMs);
 	if (!SAN || args[0] != "build") return execFileResult(MSC, args, dir);
 	sanSetup();
 	const full: string[] = [];
@@ -550,6 +586,26 @@ function subdirModule(): void {
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
 		console.log(both(ran));
 		failWith(tag, "a module in a subdirectory did not load or reload under msc run --hcr");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function runBound(): void {
+	const tag = "hcrRunBound";
+	const cases = [
+		{ fixture: "typeError.ms", capMs: 30000, seen: "type error" },
+		{ fixture: "parseError.ms", capMs: 30000, seen: "Unexpected token" },
+	];
+	for (const c of cases) {
+		const dir = freshDir(`${TMP}/runBound_${c.fixture}`);
+		copy(`${FIXTURES}/runBound/${c.fixture}`, `${dir}/app.ms`);
+		const t0 = performance.now();
+		const ran = msc(dir, ["run", "--hcr", "app.ms"], c.capMs);
+		const took = performance.now() - t0;
+		if (succeeded(ran) || !both(ran).contains(capNotice(c.capMs)) || !both(ran).contains(c.seen) || took > c.capMs + 40000) {
+			console.log(both(ran));
+			failWith(tag, `${c.fixture}: msc run --hcr was not cut at ${c.capMs} ms with its output kept (took ${Math.round(took)} ms)`);
+		}
 	}
 	console.log(`ok   ${tag}`);
 }
@@ -2292,6 +2348,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrJsInstanceFiles", run: jsInstanceFiles },
 	{ name: "hcrRunKeys", run: runKeys },
 	{ name: "hcrRunEvents", run: runEvents },
+	{ name: "hcrRunBound", run: runBound },
 ];
 if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });
 
