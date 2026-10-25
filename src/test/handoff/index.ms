@@ -105,6 +105,7 @@ import "./moduleParsedOnce";
 import "./bitSetCaseLabel";
 import "./destructuringRestLast";
 import "./stringMutatorsRemoved";
+import "./checkTakesParse";
 import "./comptimeStatement";
 import "./comptimeValues";
 import "./declarationBoundaries";

@@ -66,8 +66,8 @@ import { collectTopLevel } from "../../checker/collectPass";
 import { Adoption, adoptDecls, adoptStmt, moduleSymbols, verifyAdoption } from "./adopt";
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { openScope, ScopeKind } from "../../checker/symbol";
-import { ImportDeclData, ExportDeclData, ProgramData } from "../../ast/node";
-import { ModuleGraph, createModule, createModuleGraph, addModule, findModule, findModuleIndex, ImportEntry, createImportEntry } from "../../module/graph";
+import { ProgramData, ClassDeclData } from "../../ast/node";
+import { ModuleGraph, createModule, createModuleGraph, addModule, findModule, findModuleIndex, ImportEntry, createImportEntry, ParsedModule } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
 import { headerModuleSource, createTaReadProvider, createFileSystemProvider, moduleIdentity, SourceProvider, MapEntry, createMapProvider, loadModuleGraph, collectImportCalls, parseModuleSourceLenient } from "../../module/loader";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
@@ -143,7 +143,8 @@ export class TransAmDb {
 	verifying: HashSet<string>;                // modules whose recorded imports are being rechecked for early cutoff
 	graph: ModuleGraph | null;                 // loaded graph whose modules this db checks
 	editGraph: ModuleGraph;                    // the graph of every module bound outside `graph`; one compilation for the db's life, a rebind replaces the module
-	trees: HashMap<int32, Node>;               // tree key → parsed, checked, transformed or analyzed tree
+	parses: HashMap<int32, ParsedModule>;      // fileId → its parse
+	trees: HashMap<int32, Node>;               // tree key → checked, transformed or analyzed tree
 	contexts: HashMap<int32, CheckerContext>;  // check key → checker context
 	bound: HashMap<string, BoundCheck>;         // bound and not finished: in progress, or bound on demand from an import cycle
 	routineDecls: RoutineDecls;
@@ -206,6 +207,7 @@ export function createTransAmDb(cacheCapacity: int32, kept: boolean = true): Tra
 		verifying: new HashSet<string>(),
 		graph: null,
 		editGraph: createModuleGraph(),
+		parses: new HashMap<int32, ParsedModule>(),
 		trees: new HashMap<int32, Node>(),
 		contexts: new HashMap<int32, CheckerContext>(),
 		bound: new HashMap<string, BoundCheck>(),
@@ -321,7 +323,7 @@ function globalImportClosures(db: TransAmDb): TaGlobalImportClosures {
 				walked.add(path);
 				modules.push(path);
 			}
-			for (const ie of buildImportEntries(db, path, dbParse(db, path))) pending.push(ie.sourcePath);
+			for (const ie of buildImportEntries(db, path)) pending.push(ie.sourcePath);
 		}
 		closures.push(owned);
 	}
@@ -353,7 +355,7 @@ function checkGlobalImports(db: TransAmDb, filePath: string, unchecked: string[]
 			unchecked.push(`internal: global import ${global.path} is still being checked when ${filePath} needs it`);
 			continue;
 		}
-		dbRecordDepImports(db, global.path, dbParse(db, global.path));
+		dbRecordDepImports(db, global.path);
 		const ctx = dbTypeCheck(db, global.path);
 		if (ctx == null) continue;
 		bindGlobalImportPasses(db, global, ctx);
@@ -517,21 +519,26 @@ function refreshInput(db: TransAmDb, key: TaQueryKey): boolean {
 		return true;
 	}
 	if (key.queryKind != TaQueryKind.Parse || (db.handedToCheck != null && db.handedToCheck.has(key.fileId))) return false;
-	dbParse(db, path);
+	dbParsed(db, path);
 	return true;
 }
 
-// Execute parse query for a file. Returns the parsed Node.
+// The tree of a file's parse, before any check took it.
 export function dbParse(db: TransAmDb, filePath: string): Node {
+	const parsed = dbParsed(db, filePath);
+	if (parsed == null) return null as unknown as Node;
+	if (db.handedToCheck != null && db.handedToCheck.has(getFileId(db.fileInput, filePath))) throw new Error(`internal: the parse tree of ${filePath} was handed to its check`);
+	if (parsed.consumedBy != "") throw new Error(`internal: dbParse read the parse of ${filePath} after ${parsed.consumedBy} took it`);
+	return parsed.program;
+}
+
+// Execute parse query for a file.
+function dbParsed(db: TransAmDb, filePath: string): ParsedModule | null {
 	const fileId = getFileId(db.fileInput, filePath);
-	if (fileId < 0) return null as unknown as Node;
-	if (db.handedToCheck != null && db.handedToCheck.has(fileId)) throw new Error(`internal: the parse tree of ${filePath} was handed to its check`);
+	if (fileId < 0) return null;
 	const key = createQueryKey(TaQueryKind.Parse, fileId);
 
-	// Try cache
-	if (dbMarkGreen(db, key)) {
-		return dbTree(db, parseNodeKey(fileId));
-	}
+	if (dbMarkGreen(db, key)) return db.parses.get(fileId) ?? null;
 
 	// Compute — get preprocessed source via the Preprocess query. This records
 	// deps on the file's own FileText AND any .h files it imports, so parse
@@ -546,24 +553,51 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 	const fileDur = getFileDurability(db.fileInput, fileId);
 	recordDurability(db.depStack, fileDur);
 
-	const program = adoptLoaderParse(db, filePath, source);
-	db.trees.set(parseNodeKey(fileId), program);
+	const parsed = adoptLoaderParse(db, filePath, source);
+	if (parsed != null) db.parses.set(fileId, parsed);
+	else db.parses.delete(fileId);
 	const preprocessEntry = cacheGet(db.cache, preprocessKey);
 	const changedAt = preprocessEntry != null ? preprocessEntry.changedAt : db.revision.value;
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, changedAt, true);
-	return program;
+	return parsed;
 }
 
-function adoptLoaderParse(db: TransAmDb, filePath: string, source: string): Node {
-	const graphMod = db.graph != null ? findModule(db.graph, filePath) : null;
-	if (graphMod != null && graphMod.program != null && graphMod.source == source) {
-		const parsed = graphMod.program!;
-		graphMod.program = null;
-		return parsed;
-	}
+function adoptLoaderParse(db: TransAmDb, filePath: string, source: string): ParsedModule | null {
+	const loaded = takeGraphParse(db, filePath, source);
+	if (loaded != null) return loaded;
 	// Use lenient parse: LSP needs partial ASTs from incomplete code (e.g. "config.")
 	const parseResult = parseModuleSourceLenient(source);
-	return parseResult.ok ? parseResult.value : null as unknown as Node;
+	return parseResult.ok ? parseResult.value : null;
+}
+
+function takeGraphParse(db: TransAmDb, filePath: string, source: string): ParsedModule | null {
+	const graphMod = db.graph != null ? findModule(db.graph, filePath) : null;
+	if (graphMod == null || graphMod.program == null || graphMod.source != source) return null;
+	const parsed: ParsedModule = { program: graphMod.program!, imports: graphMod.parsedImports, consumedBy: "" };
+	graphMod.program = null;
+	return parsed;
+}
+
+// The parse of a file as it was before any check. A loaded graph parses every module again on each
+// load, so a parse an earlier revision's check took is replaced by the graph's.
+function preCheckParse(db: TransAmDb, filePath: string, reader: string): ParsedModule | null {
+	const parsed = dbParsed(db, filePath);
+	if (parsed == null || parsed.consumedBy == "") return parsed;
+	const fileId = getFileId(db.fileInput, filePath);
+	const loaded = takeGraphParse(db, filePath, db.preprocessCache.get(fileId) ?? "");
+	if (loaded == null) throw new Error(`internal: ${reader} read the parse of ${filePath} after ${parsed.consumedBy} took it`);
+	db.parses.set(fileId, loaded);
+	return loaded;
+}
+
+// The tree a check of filePath mutates. A module outside the loaded graph is checked on a clone,
+// because the LSP reads its parse after the check and rechecks it after an edit elsewhere.
+function treeForCheck(db: TransAmDb, filePath: string, reader: string): Node {
+	const parsed = preCheckParse(db, filePath, reader);
+	if (parsed == null) return null as unknown as Node;
+	if (db.handedToCheck == null && (db.graph == null || findModule(db.graph, filePath) == null)) return cloneNodeForCheck(parsed.program);
+	parsed.consumedBy = reader;
+	return parsed.program;
 }
 
 // ===== Cross-Module Export Registration =====
@@ -599,21 +633,16 @@ function resolveProbing(db: TransAmDb, basePath: string, importSpec: string, pro
 	return "";
 }
 
-// Scan a parsed program's imports, resolve paths, load files, record dep edges.
+// Resolve a parse's import declarations, load their files, record dep edges.
 // Enables depth-first traversal in dbEnsureExportsRegistered.
-function dbRecordDepImports(db: TransAmDb, depPath: string, depProgram: Node): void {
+function dbRecordDepImports(db: TransAmDb, depPath: string): void {
 	const depFileId = getFileId(db.fileInput, depPath);
 	if (depFileId < 0) return;
-	if (depProgram == null || depProgram.kind != NodeKind.Program) return;
-	const pd = depProgram.data as ProgramData;
-	for (const rawStmt of pd.programStmts) {
-		let stmt = rawStmt;
-		if (stmt.kind == NodeKind.ExportDecl) {
-			stmt = (stmt.data as ExportDeclData).exportedDecl;
-		}
-		if (stmt.kind != NodeKind.ImportDecl) continue;
-		const imp = stmt.data as ImportDeclData;
-		const targetPath = dbResolveImport(db, depPath, imp.importSource);
+	const parsed = dbParsed(db, depPath);
+	if (parsed == null) return;
+	for (const imp of parsed.imports) {
+		if (imp.dynamic) continue;
+		const targetPath = dbResolveImport(db, depPath, imp.sourceSpecifier);
 		if (targetPath == "") continue;
 		dbEnsureFileLoaded(db, targetPath);
 		const targetId = getFileId(db.fileInput, targetPath);
@@ -634,8 +663,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return;
-	const program = dbParse(db, filePath);
-	if (program != null) dbRecordDepImports(db, filePath, program);
+	dbRecordDepImports(db, filePath);
 
 	const depIds = getDirectImports(db.moduleDeps, fileId);
 	for (const depId of depIds) {
@@ -655,8 +683,8 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 			continue;
 		}
 
-		const depProgram = dbParse(db, depPath);
-		if (depProgram == null) continue;
+		const depParse = preCheckParse(db, depPath, "dbEnsureExportsRegistered");
+		if (depParse == null) continue;
 		dbEnsureExportsRegistered(db, depPath, visited, startVersion);
 		const registeredAtNow = getRegisteredAt(db.moduleDeps, depId);
 		if (registeredAtNow != null && registeredAtNow >= db.revision.value) continue;
@@ -667,9 +695,9 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Has
 		const tmpCtx = createTempCollectContext(db, depPath);
 		tmpCtx.exportRegistry = db.exportRegistry;
 		const depMod = createModule(depPath);
-		depMod.imports = buildImportEntries(db, depPath, depProgram);
+		depMod.imports = buildImportEntries(db, depPath);
 		tmpCtx.currentModule = depMod;
-		const collected = cloneNodeForCheck(depProgram);
+		const collected = cloneNodeForCheck(depParse.program);
 		const adoption = earlyAdoptions(db, depPath);
 		tmpCtx.adoptedDecls = adoption.decls;
 		tmpCtx.adoptStmt = (stmt: Node): void => adoptStmt(adoption, stmt);
@@ -756,15 +784,15 @@ function createTempCollectContext(db: TransAmDb, modulePath: string): CheckerCon
 // Used by import completion when the target module hasn't been processed as a dependency yet.
 export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
 	if (findModuleExports(db.exportRegistry, filePath) != null) return;
-	const program = dbParse(db, filePath);
-	if (program == null) return;
+	const parsed = preCheckParse(db, filePath, "dbEnsureModuleExports");
+	if (parsed == null) return;
 	dbEnsureExportsRegistered(db, filePath, new HashSet<string>(), getCancelVersion(db.cancelCtx));
 	const tmpCtx = createTempCollectContext(db, filePath);
 	tmpCtx.exportRegistry = db.exportRegistry;
 	const depMod = createModule(filePath);
-	depMod.imports = buildImportEntries(db, filePath, program);
+	depMod.imports = buildImportEntries(db, filePath);
 	tmpCtx.currentModule = depMod;
-	const collected = cloneNodeForCheck(program);
+	const collected = cloneNodeForCheck(parsed.program);
 	collectTopLevel(tmpCtx, collected);
 	db.cache.collected += 1;
 	resolveDeclarations(tmpCtx, collected);
@@ -776,29 +804,14 @@ export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
 	dbRegisterMacroExpandedExports(db, filePath, depMod.imports, getCancelVersion(db.cancelCtx));
 }
 
-// Build ImportEntry[] from parsed program's import declarations + dep edge resolution
-function buildImportEntries(db: TransAmDb, filePath: string, program: Node, probed: int32[] | null = null): ImportEntry[] {
+// The parse's imports, resolved with the same resolver as everything else.
+function buildImportEntries(db: TransAmDb, filePath: string, probed: int32[] | null = null): ImportEntry[] {
 	const entries: ImportEntry[] = [];
-	if (program == null) return entries;
-	if (program.kind != NodeKind.Program) return entries;
-	const pd = program.data as ProgramData;
-	const fileId = getFileId(db.fileInput, filePath);
-
-	for (let i = 0; i < pd.programStmts.length; i = i + 1) {
-		let stmt = pd.programStmts[i];
-		// Unwrap ExportDecl (re-exports)
-		if (stmt.kind == NodeKind.ExportDecl) {
-			const ed = stmt.data as ExportDeclData;
-			stmt = ed.exportedDecl;
-		}
-		if (stmt.kind != NodeKind.ImportDecl) continue;
-		const imp = stmt.data as ImportDeclData;
-		// Resolve import specifier using the same resolver as everything else
-		const resolvedPath = resolveProbing(db, filePath, imp.importSource, probed);
-
-		entries.push(createImportEntry(imp.importNames, imp.importAliases, resolvedPath, imp.importSource));
+	const parsed = dbParsed(db, filePath);
+	if (parsed == null) return entries;
+	for (const imp of parsed.imports) {
+		entries.push(createImportEntry(imp.names, imp.aliases, resolveProbing(db, filePath, imp.sourceSpecifier, probed), imp.sourceSpecifier, imp.dynamic));
 	}
-	for (const specifier of collectImportCalls(program)) entries.push(createImportEntry([], [], resolveProbing(db, filePath, specifier, probed), specifier, true));
 	return entries;
 }
 
@@ -943,12 +956,11 @@ function dbBoundModule(modulePath: string): CheckerContext | null {
 	if (db.checkInProgress.has(filePath)) return null;
 	const unchecked: string[] = [];
 	const globals = checkGlobalImports(db, filePath, unchecked);
-	const cachedProgram = dbParse(db, filePath);
-	if (cachedProgram == null) return null;
-	const program = cloneNodeForCheck(cachedProgram);
+	const program = treeForCheck(db, filePath, "dbBoundModule");
+	if (program == null) return null;
 	const startVersion = getCancelVersion(db.cancelCtx);
 	dbEnsureExportsRegistered(db, filePath, new HashSet<string>(), startVersion);
-	const imports = buildImportEntries(db, filePath, program);
+	const imports = buildImportEntries(db, filePath);
 	db.checkInProgress.add(filePath);
 	let unit: BoundModule;
 	try {
@@ -1014,9 +1026,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const unchecked: string[] = [];
 	const globals = checkGlobalImports(db, filePath, unchecked);
 
-	// Get the cached parse tree (to source the clone).
-	const cachedProgram = dbParse(db, filePath);
-	if (cachedProgram == null) return null as unknown as CheckerContext;
+	if (dbParsed(db, filePath) == null) return null as unknown as CheckerContext;
 
 	const startVersion = getCancelVersion(db.cancelCtx);
 
@@ -1024,10 +1034,8 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const visitedPaths: HashSet<string> = new HashSet<string>();
 	dbEnsureExportsRegistered(db, filePath, visitedPaths, startVersion);
 
-	// A kept db clones the parse tree so its cached tree stays clean for other consumers
-	// (semantic tokens, syntax queries); a db that is not kept checks the tree itself.
 	const bound = reusableBound(db, filePath);
-	const program = bound != null ? bound.program : db.handedToCheck != null ? cachedProgram : cloneNodeForCheck(cachedProgram);
+	const program = bound != null ? bound.program : treeForCheck(db, filePath, "dbTypeCheck");
 
 	const depth = db.depStack.frames.length;
 	const entryDb = _checkingDb;
@@ -1039,7 +1047,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		// imports from (eval.ms lookupModuleCtx). Batch compile gets this for free
 		// from dep-order compilation; the db must do it on demand.
 		const probed: int32[] = [];
-		const imports = buildImportEntries(db, filePath, program, probed);
+		const imports = buildImportEntries(db, filePath, probed);
 		db.checkInProgress.add(filePath);
 		checkMacroDeps(db, filePath, imports);
 
@@ -1272,8 +1280,7 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 	}
 
 	// Ensure upstream queries are computed
-	const _cachedProg = dbParse(db, filePath);
-	if (_cachedProg == null) return null as unknown as Node;
+	if (dbParsed(db, filePath) == null) return null as unknown as Node;
 	const checkerCtx = checkedUnlessCancelled(db, filePath);
 	if (checkerCtx == null) return null as unknown as Node;
 
@@ -1305,8 +1312,7 @@ export function dbTransform(db: TransAmDb, filePath: string): Node {
 		return dbTree(db, transformNodeKey(fileId));
 	}
 
-	const _cachedProg2 = dbParse(db, filePath);
-	if (_cachedProg2 == null) return null as unknown as Node;
+	if (dbParsed(db, filePath) == null) return null as unknown as Node;
 	const checkerCtx = checkedUnlessCancelled(db, filePath);
 	if (checkerCtx == null) return null as unknown as Node;
 
@@ -2902,7 +2908,7 @@ test "a module created after an import found none is seen by its importer's next
 	dbSetFileText(db, "/miss/a.ms", 'import { x } from "./b";\nexport const y = x;\n');
 	assert dbTypeCheck(db, "/miss/a.ms").errors.length > 0;
 	dbSetFileText(db, "/miss/b.ms", "export const x = 1;");
-	dbRecordDepImports(db, "/miss/a.ms", dbParse(db, "/miss/a.ms"));
+	dbRecordDepImports(db, "/miss/a.ms");
 	const errors = dbTypeCheck(db, "/miss/a.ms").errors;
 	assert errors.length == 0, errors[0].message;
 }
@@ -2911,10 +2917,10 @@ test "a module created at a higher-priority path than the one an import resolved
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "/prio/a/index.ms", "export const v: int32 = 1;");
 	dbSetFileText(db, "/prio/use.ms", 'import { v } from "./a";\nexport const w: int32 = v;\n');
-	dbRecordDepImports(db, "/prio/use.ms", dbParse(db, "/prio/use.ms"));
+	dbRecordDepImports(db, "/prio/use.ms");
 	assert dbTypeCheck(db, "/prio/use.ms").errors.length == 0;
 	dbSetFileText(db, "/prio/a.ms", 'export const v: string = "s";');
-	dbRecordDepImports(db, "/prio/use.ms", dbParse(db, "/prio/use.ms"));
+	dbRecordDepImports(db, "/prio/use.ms");
 	assert dbTypeCheck(db, "/prio/use.ms").errors.length > 0;
 }
 
