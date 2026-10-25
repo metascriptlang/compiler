@@ -4,7 +4,8 @@
 //   to one outlive any cstring taken from them; as a call argument, a
 //   temporary, a const, a parameter or local the function never assigns, and
 //   a field, element or module variable the call keeps alive all live through
-//   the call; `as cstring` stays the author's explicit conversion.
+//   the call, also behind an `as` or `!` that only narrows; `as cstring` stays
+//   the author's explicit conversion.
 //
 // WHAT IT CATCHES: the check refusing a source that outlives its cstring,
 //   which would break every FFI call that passes a string parameter through.
@@ -48,6 +49,19 @@ function resetThenMeasure(c: cstring): int64 {
 	return strlen(c);
 }
 
+function pick(flag: boolean): string | null {
+	return flag ? "picked" : null;
+}
+
+function fromNarrowedConstCast(): int64 {
+	const mapped = pick(true);
+	return strlen(mapped as string) + strlen(mapped!);
+}
+
+function fromParameterCast(p: string | null): int64 {
+	return strlen(p as string);
+}
+
 function explicitConversion(n: int32): int64 {
 	const s: string = "value-" + n.toString();
 	return strlen(s as cstring);
@@ -58,6 +72,8 @@ if (strlen(literalLocal) != 3) { throw "GUARD RED: literal local"; }
 if (strlen("abcd") != 4) { throw "GUARD RED: literal argument"; }
 if (strlen(GREETING) != 5) { throw "GUARD RED: const argument"; }
 if (fromParameter("abcdef") != 12) { throw "GUARD RED: parameter"; }
+if (fromNarrowedConstCast() != 12) { throw "GUARD RED: cast of a narrowed const argument"; }
+if (fromParameterCast("abc") != 3) { throw "GUARD RED: cast of a parameter argument"; }
 if (explicitConversion(7) != 7) { throw "GUARD RED: explicit conversion"; }
 if (fromLocalArgument(3) != 7) { throw "GUARD RED: local argument"; }
 if (fromTemporaryArgument(4) != 7) { throw "GUARD RED: temporary argument"; }
