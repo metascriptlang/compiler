@@ -17,42 +17,41 @@ function addNumericToken(s: LexerState, val: string, line: int32, column: int32)
 	addToken(s, TokenKind.Number, val, line, column);
 }
 
+function scanRadixNumber(
+	s: LexerState,
+	prefix: string,
+	isRadixDigit: (ch: int32) => boolean,
+	missingDigit: string,
+	line: int32,
+	column: int32,
+): void {
+	let val = prefix;
+	skip(s, 2);
+	while (s.pos < s.source.byteLength && (isRadixDigit(peek(s)) || peek(s) == "_".code)) {
+		if (peek(s) != "_".code) val += s.source.byteSlice(s.pos, s.pos + 1);
+		advanceChar(s);
+	}
+	if (val == prefix) setLexError(s, missingDigit);
+	addNumericToken(s, val, line, column);
+}
+
 export function scanNumber(s: LexerState): void {
 	const startLine = s.line;
 	const startCol = s.column;
 	let val = "";
 
-	// Handle hex, binary, octal prefixes
 	if (peek(s) == "0".code) {
 		const next = peekAt(s, 1);
 		if (next == "x".code || next == "X".code) {
-			val = "0x";
-			skip(s, 2);
-			while (s.pos < s.source.byteLength && (isHexDigit(peek(s)) || peek(s) == "_".code)) {
-				if (peek(s) != "_".code) val += s.source.byteSlice(s.pos, s.pos + 1);
-				advanceChar(s);
-			}
-			addNumericToken(s, val, startLine, startCol);
+			scanRadixNumber(s, "0x", isHexDigit, "Hexadecimal digit expected", startLine, startCol);
 			return;
 		}
 		if (next == "b".code || next == "B".code) {
-			val = "0b";
-			skip(s, 2);
-			while (s.pos < s.source.byteLength && (isBinaryDigit(peek(s)) || peek(s) == "_".code)) {
-				if (peek(s) != "_".code) val += s.source.byteSlice(s.pos, s.pos + 1);
-				advanceChar(s);
-			}
-			addNumericToken(s, val, startLine, startCol);
+			scanRadixNumber(s, "0b", isBinaryDigit, "Binary digit expected", startLine, startCol);
 			return;
 		}
 		if (next == "o".code || next == "O".code) {
-			val = "0o";
-			skip(s, 2);
-			while (s.pos < s.source.byteLength && (isOctalDigit(peek(s)) || peek(s) == "_".code)) {
-				if (peek(s) != "_".code) val += s.source.byteSlice(s.pos, s.pos + 1);
-				advanceChar(s);
-			}
-			addNumericToken(s, val, startLine, startCol);
+			scanRadixNumber(s, "0o", isOctalDigit, "Octal digit expected", startLine, startCol);
 			return;
 		}
 	}
@@ -79,6 +78,7 @@ export function scanNumber(s: LexerState): void {
 				val += s.source.byteSlice(s.pos, s.pos + 1);
 				advanceChar(s);
 			}
+			if (!isDigit(peek(s))) setLexError(s, "Digit expected");
 		} else if (ch == "_".code) {
 			advanceChar(s); // skip underscore
 		} else {
@@ -242,6 +242,7 @@ export function scanString(s: LexerState, quote: int32): void {
 			advanceChar(s);
 		}
 	}
+	setLexError(s, "Unterminated string literal");
 }
 
 // ===== Template Literal Scanning =====
@@ -321,6 +322,7 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 			advanceChar(s);
 		}
 	}
+	setLexError(s, "Unterminated template literal");
 }
 
 // Check if a backtick-quoted string is an operator name.
@@ -389,6 +391,7 @@ export function scanBlockComment(s: LexerState): void {
 		}
 		advanceChar(s);
 	}
+	setLexError(s, "'*/' expected");
 }
 
 // ===== Regex Literal Scanning =====
@@ -401,10 +404,14 @@ function scanRegex(s: LexerState): void {
 	// The whole pattern (escapes included) is taken verbatim — one contiguous
 	// span instead of per-byte slices (multi-byte UTF-8 safety, see scanString).
 	const bodyStart = s.pos;
+	let inClass = false;
+	let closed = false;
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
-		if (ch == "/".code) {
+		if (ch == "\n".code || ch == "\r".code) break;
+		if (ch == "/".code && !inClass) {
 			advanceChar(s);
+			closed = true;
 			break;
 		}
 		if (ch == "\\".code) {
@@ -412,11 +419,13 @@ function scanRegex(s: LexerState): void {
 			if (s.pos < s.source.byteLength) advanceChar(s);
 			continue;
 		}
-		if (ch == "\n".code) {
-			// Regex cannot span lines
-			break;
-		}
+		if (ch == "[".code) inClass = true;
+		if (ch == "]".code) inClass = false;
 		advanceChar(s);
+	}
+	if (!closed) {
+		setLexError(s, "Unterminated regular expression literal");
+		return;
 	}
 
 	// Scan flags (g, i, m, s, u, y, d)

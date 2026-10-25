@@ -77,6 +77,12 @@ function lexOk(input: string): boolean {
 	return result.ok;
 }
 
+function lexError(input: string): string {
+	const result = lex(input);
+	if (result.ok) return "";
+	return result.error;
+}
+
 function lexCount(input: string): int32 {
 	const result = lex(input);
 	if (!result.ok) return 0;
@@ -186,6 +192,33 @@ test "strings" {
 	assert lexFirstVal("\"a\\tb\"") == "a\tb";
 	assert lexFirstVal("\"a\\\\b\"") == "a\\b";
 	assert lexFirstVal("\"escaped\\\"quote\"") == "escaped\"quote";
+}
+
+test "an unterminated literal or comment is a lex error that names it" {
+	assert lexError("\"abc").startsWith("Unterminated string literal");
+	for (const source of ["`abc", "`a${1}", "`a${1}b"]) {
+		assert lexError(source).startsWith("Unterminated template literal");
+	}
+	assert lexError("/* open").startsWith("'*/' expected");
+	assert lexError("/** a\n * b *").startsWith("'*/' expected");
+	assert lexError("x = /ab\n/").startsWith("Unterminated regular expression literal");
+	assert lexError("x = /[/").startsWith("Unterminated regular expression literal");
+}
+
+test "a radix prefix or an exponent without digits is a lex error" {
+	assert lexError("0x").startsWith("Hexadecimal digit expected");
+	assert lexError("0X_;").startsWith("Hexadecimal digit expected");
+	assert lexError("0b").startsWith("Binary digit expected");
+	assert lexError("0o;").startsWith("Octal digit expected");
+	assert lexError("1e").startsWith("Digit expected");
+	assert lexError("1.5e+;").startsWith("Digit expected");
+	assert lexError("1e-3") == "";
+}
+
+test "a slash inside a regex character class does not end the literal" {
+	assert lexFirstVal("/[/]/") == "/[/]/";
+	assert lexFirstVal("/[^/]+/g") == "/[^/]+/g";
+	assert lexFirstVal("/a\\/b/") == "/a\\/b/";
 }
 
 test "template strings" {
