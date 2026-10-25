@@ -58,6 +58,19 @@ console.log(run(mk()));
 	assert sameAsParam.length == 0, sameAsParam.join("\n");
 }
 
+test "a branded primitive is one type wherever its brand and base are spelled alike, and two types when the base differs" {
+	const decls = `type EntityId = string & { __brand: "EntityId" };
+type EntityAlias = string & { __brand: "EntityId" };
+type EntityCount = int32 & { __brand: "EntityId" };
+function entity(value: EntityId): string { return value as string; }
+`;
+	const errors = (use: string): string[] => checkProjectDiagnostics(one(decls + use), "test/main.ms").filter((m: string): boolean => !m.endsWith("is declared but never used"));
+	const same = errors(`console.log(entity("k" as EntityAlias));\n`);
+	assert same.length == 0, same.join("\n");
+	const other = errors(`console.log(entity(7 as EntityCount));\n`);
+	assert other.length == 1 && other[0].contains("EntityCount"), other.join("\n");
+}
+
 test "union variants holding two classes of one name from two modules differ in layout" {
 	const entries = (itemB: string, nameB: string): MapEntry[] => [
 		{ entryPath: "test/a.ms", entrySource: "export class Item { n: int32 = 1; }" },
