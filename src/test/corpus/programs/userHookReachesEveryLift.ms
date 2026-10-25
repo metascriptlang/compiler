@@ -1,6 +1,6 @@
 // @xfail(raiser): raiser runs no user lifecycle hooks (stdout misses its @stdout line)
 // @skip-js: C-only by design: user lifecycle hooks run where the DRC runs; JS has no destructors
-// @stdout: hooks ran fd fdArray fdField handle mapClass mapShared mapStruct name slot
+// @stdout: hooks ran fd fdArray fdField fieldStruct handle mapClass mapShared mapStruct name slot
 
 struct Handle { h: int32; }
 struct Slot<T> { v: T; }
@@ -11,6 +11,8 @@ type Fd = distinct int32;
 type Name = distinct string;
 struct Owner { fd: Fd; tag: string; }
 struct FdCell { fd: Fd; }
+struct Pane { plate: Plate; }
+struct Plate { id: int32; }
 
 let ran: string[] = [];
 
@@ -31,6 +33,7 @@ function onDestroy(this x: Fd): void {
 	if (n == 9 || n == 10) note("fdArray");
 }
 function onDestroy(this x: Name): void { note("name"); }
+function onDestroy(this x: Plate): void { note("fieldStruct"); }
 
 function open(n: int32): Fd { return n as Fd; }
 function label(s: string): Name { return s as Name; }
@@ -66,7 +69,13 @@ function distincts(): void {
 	console.log("distincts " + owner.tag + cells.length.toString());
 }
 
+function panes(): void {
+	const pane: Pane = { plate: { id: 3 } };
+	console.log("panes " + pane.plate.id.toString());
+}
+
 handles();
+panes();
 inMaps();
 inMapShared();
 distincts();

@@ -1183,20 +1183,6 @@ export function lifecycleHookOp(name: string): AttachedOp {
 	};
 }
 
-export function declaresLifecycleHook(ctx: CheckerContext, typeSym: Symbol): boolean {
-	const registry = ctx.extensionRegistry;
-	if (registry == null) return false;
-	for (const hookName of LIFECYCLE_HOOK_NAMES) {
-		for (const m of findAllExtensionsByName(registry, hookName)) {
-			const decl = m.sym != null ? m.sym.declNode : null;
-			if (m.isStatic || decl == null || decl.kind != NodeKind.FunctionDecl || m.sym!.modulePath != ctx.modulePath) continue;
-			const receiver = getExtReceiverType((decl.data as FunctionDeclData).fnFlags);
-			if (receiver != "" && lookupSymbol(ctx.table, receiver) == typeSym) return true;
-		}
-	}
-	return false;
-}
-
 export function getExtReceiverText(flags: string): string {
 	const seg = findFlagSegment(flags, "ext:");
 	if (seg == "") return "";

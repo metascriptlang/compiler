@@ -16,7 +16,7 @@ import { splitTopLevel } from "../utils/string";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
 import { fitNode } from "./fit";
-import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, isEngineCheckMode, nominalTypeSym, declaresLifecycleHook, newSym, stampItem, LIFECYCLE_HOOK_NAMES, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal } from "./context";
+import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, isEngineCheckMode, nominalTypeSym, newSym, stampItem, LIFECYCLE_HOOK_NAMES, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal } from "./context";
 import { createContext, resetDefaultsCheckedAtDeclaration } from "./context";
 import { monoCloneNode } from "../monomorphize/clone";
 import { mangleMonoName, monoInstanceNameOf } from "../monomorphize/registry";
@@ -254,12 +254,14 @@ export function lookupInstanceHook(type: Type, op: AttachedOp): Symbol | null {
 	return null;
 }
 
-export function declaresUserHook(t: Type, ctx: CheckerContext): boolean {
-	for (const hookName of LIFECYCLE_HOOK_NAMES) {
-		if (lookupInstanceHook(t, lifecycleHookOp(hookName)) != null) return true;
-	}
+export function declaresUserHook(t: Type): boolean {
 	const owner = nominalTypeSym(t);
-	return owner != null && declaresLifecycleHook(pickBodyCtx(owner.modulePath, ctx, owner, false), owner);
+	const slot = owner != null ? unwrapRef(owner.symbolType) : null;
+	for (const hookName of LIFECYCLE_HOOK_NAMES) {
+		const op = lifecycleHookOp(hookName);
+		if (lookupInstanceHook(t, op) != null || getAttachedOp(slot, op) != null) return true;
+	}
+	return false;
 }
 
 function instantiateInstanceHooks(owner: Symbol, classData: ClassDeclData, instanceName: string, params: Type[], types: Type[], ctx: CheckerContext, loc: SourceLocation): void {

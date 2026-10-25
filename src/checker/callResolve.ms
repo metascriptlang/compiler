@@ -1793,7 +1793,7 @@ function foldTypeTrait(ctx: CheckerContext, node: Node, callType: Type): Type {
 		node.nodeType = booleanType();
 		return node.nodeType;
 	}
-	const answer = trait.builtinKind == "IsPlainData" ? isPlainDataType(asked, (owner: Type): boolean => declaresUserHook(owner, ctx))
+	const answer = trait.builtinKind == "IsPlainData" ? isPlainDataType(asked, (owner: Type): boolean => declaresUserHook(owner))
 		: trait.builtinKind == "IsArray" ? isArrayType(asked)
 		: trait.builtinKind == "IsObject" ? isAssignable(asked, nonPrimitiveType())
 		: trait.builtinKind == "IsPlainObject" ? isPlainObjectType(asked)

@@ -23,7 +23,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt, CallingConvention } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext, createTransformContextWithChecker } from "../context";
 import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
-import { isPlainFunctionPointer, int32Type, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
+import { isPlainFunctionPointer, int32Type, propagateToOwner, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, resetHeldBeyond, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { lookupInstanceHook } from "../../checker/instantiate";
@@ -1620,7 +1620,12 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	// unconditionally-emitted per-field call, so the empty-body hook must exist to link.
 	// Primitive/string unions (`type X = "a" | "b"` → msString) still skip — their hooks
 	// would touch `_tag` on a non-tagged value.
-	if (!typeNeedsHooks(objType, lctx, loc) && !hasAnyUserHook(orig, lctx)) {
+	const needsHooks = typeNeedsHooks(objType, lctx, loc);
+	const userHook = hasAnyUserHook(orig, lctx);
+	for (const field of objType.typeChildren) propagateToOwner(objType, field);
+	if (userHook) objType.typeFlags = objType.typeFlags.incl(TypeFlag.HasAsgn);
+	if (hasAsgnFlag(objType)) orig.typeFlags = orig.typeFlags.incl(TypeFlag.HasAsgn);
+	if (!needsHooks && !userHook) {
 		const isPlainValueAggregate = !isClassOrInterface
 			&& (objType.kind == TypeKind.Struct || isTaggedUnion(objType));
 		if (!isPlainValueAggregate) {
