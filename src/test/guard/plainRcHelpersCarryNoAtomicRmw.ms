@@ -89,9 +89,10 @@ for (const [label, flag] of targets) {
 		const collector = body(drcListing, "msOrcCollect");
 		if (collector == "") report(`${label}: msOrcCollect not found in the assembly`);
 		else if (atomicIn(collector) != "") report(`${label}: msOrcCollect has an atomic instruction: ${atomicIn(collector)}`);
-		const adoption = body(drcListing, "msAdoptOrphanRoots");
-		if (adoption == "") report(`${label}: msAdoptOrphanRoots not found in the assembly, so the orphan-roots lock sits inside the collector`);
-		else if (!adoption.includes("pthread_mutex_lock")) report(`${label}: msAdoptOrphanRoots lost the lock that hands roots across threads`);
+		else if (collector.includes("pthread_mutex_lock")) report(`${label}: msOrcCollect takes the orphan-roots lock`);
+		const adoption = body(drcListing, "msRootsAdoptOrphans");
+		if (adoption == "") report(`${label}: msRootsAdoptOrphans not found in the assembly`);
+		else if (!adoption.includes("pthread_mutex_lock")) report(`${label}: msRootsAdoptOrphans lost the lock that hands roots across threads`);
 	}
 }
 
