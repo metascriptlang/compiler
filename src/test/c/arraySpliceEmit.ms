@@ -1,6 +1,6 @@
-// E2E: three-argument splice emit family — the element type picks the C
-// runtime helper. Value elements (number/string/boolean-uint8) go through
-// their typed Splice3 helpers; a ref element keeps msRefArraySplice3 (void*).
+// E2E: three-argument splice emit family — number, string and boolean (uint8)
+// elements go through their typed Splice3 helpers; every other element type
+// goes through the generic splice body, never the void* msRefArraySplice3.
 
 import { compileToC } from "../helpers";
 
@@ -43,7 +43,7 @@ test "E2E C: splice insert on boolean[] calls msUint8ArraySplice3" {
 	assert !c.value.contains("msRefArraySplice3(");
 }
 
-test "E2E C: splice insert on a ref array keeps msRefArraySplice3" {
+test "E2E C: splice insert on a ref array calls the generic splice body" {
 	const c = compileToC(`
 		interface Box { id: number }
 		function main(): void {
@@ -54,5 +54,24 @@ test "E2E C: splice insert on a ref array keeps msRefArraySplice3" {
 		}
 	`);
 	assert c.ok;
-	assert c.value.contains("msRefArraySplice3(");
+	assert c.value.contains("TXX_splice_");
+	assert !c.value.contains("msRefArraySplice3(");
+}
+
+test "E2E C: splice insert on int32, float32 and struct arrays calls the generic splice body" {
+	const c = compileToC(`
+		struct P { s: string; n: int32; }
+		function main(): void {
+			const xs: int32[] = [1, 2, 3];
+			xs.splice(-1, 1, 9);
+			const fs: float32[] = [1.5];
+			fs.splice(0, 0, 2.5);
+			const ps: P[] = [{ s: "a", n: 1 }];
+			ps.splice(0, 1, { s: "b", n: 2 });
+			console.log(xs[2].toString(), fs[0].toString(), ps[0].s);
+		}
+	`);
+	assert c.ok;
+	assert c.value.contains("TXX_splice_");
+	assert !c.value.contains("msRefArraySplice3("), c.value.slice(c.value.indexOf("msRefArraySplice3(") - 40, c.value.indexOf("msRefArraySplice3(") + 60);
 }
