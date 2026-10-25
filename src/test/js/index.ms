@@ -23,3 +23,4 @@ import "./byteViews";
 import "./externPattern";
 import "./armFromObject";
 import "./propertyNames";
+import "./logicalAssignment";

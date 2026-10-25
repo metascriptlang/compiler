@@ -94,3 +94,4 @@ import "./spawnCaptureCursor";
 import "./genericHolderSlots";
 import "./borrowedArgumentPins";
 import "./callbackReaderClones";
+import "./logicalAssignment";
