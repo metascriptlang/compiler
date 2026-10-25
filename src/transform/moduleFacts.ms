@@ -1,3 +1,4 @@
+import { env } from "std/process";
 import {
 	Node, NodeKind, NodeFlag,
 	FunctionDeclData, MethodDeclData, FunctionExprData, ArrowFunctionData,
@@ -6,7 +7,7 @@ import {
 import { forEachChild } from "../ast/visitor";
 import { RoutineFlag, routineFlagSet } from "../checker/symbol";
 import { routineKindFlag } from "../checker/context";
-import { ModuleFact } from "./context";
+import { TransformContext, ModuleFact, reportTransformError } from "./context";
 import { isRuntimeProcSym } from "./util";
 import { sharedProbe } from "./coercion/optionalChain";
 
@@ -55,4 +56,29 @@ export function collectFacts(node: Node | null): BitSet<ModuleFact> {
 	let facts = factsOf(node);
 	forEachChild(node, (child: Node): void => { facts = facts.union(collectFacts(child)); });
 	return facts;
+}
+
+let factsCheckOn = env.get("MSC_FACTS_CHECK") == "1";
+let factsMisses: int32 = 0;
+
+export function factsCheckEnabled(): boolean {
+	return factsCheckOn;
+}
+
+export function factsCheckEnable(on: boolean): void {
+	factsCheckOn = on;
+	factsMisses = 0;
+}
+
+export function factsCheckMisses(): int32 {
+	return factsMisses;
+}
+
+export function checkFactsAfter(program: Node, ctx: TransformContext, pass: string): void {
+	if (!factsCheckOn || !ctx.factsCollected) return;
+	const missing = collectFacts(program).difference(ctx.facts);
+	if (missing.isEmpty()) return;
+	factsMisses += 1;
+	reportTransformError(ctx, `internal: after ${pass} the module holds ${missing.toString()} but its facts lack it, so a gated pass would skip it (MSC_FACTS_CHECK)`, program.location);
+	ctx.facts = ctx.facts.union(missing);
 }
