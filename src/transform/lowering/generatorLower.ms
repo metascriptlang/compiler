@@ -39,7 +39,7 @@ import {
 	makeTryCatch, makeCatchSym, makeMoveExpr,
 	makeSwitch, makeSwitchCase, makeDefaultValue,
 } from "../util";
-import { int32Type, createPtr, createPrimitive, numberType, hasDestructor, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
+import { int32Type, createPtr, createPrimitive, numberType, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { isGenericFn } from "../../checker/context";
 import { isOnceLoop, collectIterationDecls, routineSyms, refsAnySym } from "./lambdaLiftingDetect";
@@ -162,7 +162,7 @@ function addressRoot(node: Node): Symbol | null {
 
 function outlivesSuspension(t: Type | null): boolean {
 	if (t == null) return false;
-	if (hasDestructor(t) || hasAsgnFlag(t) || isCountedRef(t)) return true;
+	if (hasAsgnFlag(t) || isCountedRef(t)) return true;
 	const base = peelTransparentInstance(t);
 	return base != t && outlivesSuspension(base);
 }

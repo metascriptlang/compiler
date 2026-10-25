@@ -3226,10 +3226,6 @@ export function setAttachedOp(t: Type | null, op: AttachedOp, sym: Symbol | null
 	t.attachedOps[op as number] = sym;
 }
 
-export function hasDestructor(t: Type | null): boolean {
-	return getAttachedOp(t, AttachedOp.AttachedDestructor) != null;
-}
-
 // Maybe<T> is judged by its payload: the JS backend erases the C `{ value, present }`
 // carrier to a native `T | null`, so a copy made for the carrier would deep-copy a
 // plain nullable string (corpus 015 "p1=[object Object]").
