@@ -310,7 +310,6 @@ static inline void msIncRef(void* p) {
 	if (p != NULL) {
 		MS_DRC_STAT_ADD(MS_DS_RC_INC, 1);
 		MS_LEDGER_COUNT(MS_LEDGER_RC_INC);
-		MS_DRC_STAT_ADD(MS_DS_RC_INC, 1);
 		msHeader(p)->rc += MS_RC_INCREMENT;
 	}
 }
@@ -321,7 +320,6 @@ static inline void msAtomicIncRef(void* p) {
 	if (p != NULL) {
 		MS_DRC_STAT_ADD(MS_DS_RC_INC_ATOMIC, 1);
 		MS_LEDGER_COUNT(MS_LEDGER_SHARE_INC);
-		MS_DRC_STAT_ADD(MS_DS_RC_INC_ATOMIC, 1);
 		__atomic_fetch_add(&msHeader(p)->rc, MS_RC_INCREMENT, __ATOMIC_RELAXED);
 	}
 }
@@ -332,7 +330,6 @@ static inline bool msDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	MS_DRC_STAT_ADD(MS_DS_RC_DEC, 1);
 	MS_LEDGER_COUNT(MS_LEDGER_RC_DEC);
-	MS_DRC_STAT_ADD(MS_DS_RC_DEC, 1);
 	msRefHeader* h = msHeader(p);
 	/* Check count portion (upper bits) is zero — ignores ORC color/flag bits.
 	 * rc starts at 0 from msAlloc. (rc & ~MS_RC_MASK)==0 means sole owner. */
@@ -353,7 +350,6 @@ static inline bool msAtomicDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	MS_DRC_STAT_ADD(MS_DS_RC_DEC_ATOMIC, 1);
 	MS_LEDGER_COUNT(MS_LEDGER_SHARE_DEC);
-	MS_DRC_STAT_ADD(MS_DS_RC_DEC_ATOMIC, 1);
 	intptr_t old = __atomic_fetch_sub(&msHeader(p)->rc, MS_RC_INCREMENT, __ATOMIC_RELEASE);
 	if ((old & ~MS_RC_MASK) == MS_RC_INCREMENT) {
 		__atomic_thread_fence(__ATOMIC_ACQUIRE);
@@ -486,7 +482,6 @@ static inline void msOrcIncRef(void* p) {
 	if (p == NULL) return;
 	MS_DRC_STAT_ADD(MS_DS_RC_INC_CYC, 1);
 	MS_LEDGER_COUNT(MS_LEDGER_RC_INC);
-	MS_DRC_STAT_ADD(MS_DS_RC_INC_CYC, 1);
 	msHeader(p)->rc += MS_RC_INCREMENT;
 }
 
