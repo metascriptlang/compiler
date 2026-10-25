@@ -4009,7 +4009,7 @@ function checkArrowExpr(ctx: CheckerContext, node: Node, expectedType: Type | nu
 	if (d.arrowBody != null && d.arrowBody.kind != NodeKind.BlockStmt
 		&& fnType.typeReturn != null && !isUnresolvedType(fnType.typeReturn)) {
 		let returnExpected = fnType.typeReturn;
-		if (d.arrowFlags == "async" || d.arrowFlags == "async_generator") returnExpected = asyncBodyType(returnExpected);
+		if (routineFlagSet(d.arrowFlags).has(RoutineFlag.Async)) returnExpected = asyncBodyType(returnExpected);
 		if (returnExpected.kind != TypeKind.Void) d.arrowBody = fitNode(ctx, d.arrowBody, returnExpected, d.arrowBody.nodeType);
 	}
 	return fnType;
