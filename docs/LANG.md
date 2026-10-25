@@ -3537,7 +3537,7 @@ struct with only `int32` fields, a generic instance of one and a `distinct int32
 declarations compiled and the hook never ran, and a struct or class holding a string lost its hook
 whenever a generic from another module (`Map<string, T>`) lifted the type first, because the
 per-module extension registry hides a hook from every module but the one that declares it. The
-hook is now found through the declaration of the type (`bindUserHook`, `checker/context.ms`).
+hook is now found through the declaration of the type (`bindLifecycleHook`, `checker/resolvePass.ms`).
 Corpus `userHookReachesEveryLift` prints the hooks that ran, `fd fdArray fdField handle mapClass
 mapShared mapStruct name slot` on C under `--gc=drc` and `--gc=orc`, and nothing on the control
 built from `99d28088c`. A hook on a distinct type replaces the base type's operation for that
