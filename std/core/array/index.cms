@@ -249,20 +249,35 @@ export function setLength<T>(this arr: T[], newLen: number): void {
 /** Returns the allocated capacity of the array buffer. */
 export extern function capacity<T>(this arr: Vec<T>): number from "&msGenericArrayCapacity";
 
-/** Removes deleteCount elements starting at index start. */
-export function splice<T>(this arr: T[], start: number, deleteCount: number): void {
-	const n = arr.length;
-	if (start < 0 || start >= n || deleteCount <= 0) return;
-	const k = start + deleteCount > n ? n - start : deleteCount;
-	let i = start;
-	while (i + k < n) {
-		arr[i] = arr[i + k];
-		i = i + 1;
-	}
-	arr.shrink((n - k) as int64);
+extern function rotate<T>(this arr: T[], lo: int64, mid: int64, hi: int64): void from "&msGenericArrayRotate";
+extern function swap<T>(this arr: T[], i: int64, j: int64): void from "&msGenericArraySwap";
+extern function swapWith<T>(this arr: T[], i: int64, other: T[], j: int64): void from "&msGenericArraySwapWith";
+extern function growEmpty<T>(this arr: T[], n: int64): void from "&msGenericArraySetLen";
+
+function spliceStart(start: number, n: int64): int64 {
+	if (start != start || start <= -(n as number)) return 0;
+	if (start >= (n as number)) return n;
+	const s = start as int64;
+	return s < 0 ? s + n : s;
 }
 
-/** Removes deleteCount elements at start, then inserts item at start. */
+function spliceCount(deleteCount: number, room: int64): int64 {
+	if (deleteCount != deleteCount || deleteCount <= 0) return 0;
+	if (deleteCount >= (room as number)) return room;
+	return deleteCount as int64;
+}
+
+/** Removes deleteCount elements starting at index start; a negative start counts from the end. */
+export function splice<T>(this arr: T[], start: number, deleteCount: number): void {
+	const n = arr.length as int64;
+	const s = spliceStart(start, n);
+	const k = spliceCount(deleteCount, n - s);
+	if (k == 0) return;
+	arr.rotate(s, s + k, n);
+	arr.shrink(n - k);
+}
+
+/** Removes deleteCount elements at start, then inserts item at start; a negative start counts from the end. */
 export extern function splice<T>(this arr: T[], start: number, deleteCount: number, item: T): void from "&msRefArraySplice3";
 
 /**
@@ -273,37 +288,39 @@ export extern function splice<T>(this arr: T[], start: number, deleteCount: numb
 function mergeRuns<T>(a: T[], b: T[], lo: int64, m: int64, hi: int64, cmp: (a: T, b: T) => number): void {
 	if (cmp(a[m], a[m + 1]) <= 0) return;
 	let j = lo;
-	let bb = 0;
+	let bb: int64 = 0;
 	while (j <= m) {
-		b[bb] = a[j];
+		b.swapWith(bb, a, j);
 		bb = bb + 1;
 		j = j + 1;
 	}
-	let i = 0;
+	let i: int64 = 0;
 	let k = lo;
-	while (k < j && j <= hi) {
-		if (cmp(b[i], a[j]) <= 0) {
-			a[k] = b[i];
-			i = i + 1;
-		} else {
-			a[k] = a[j];
-			j = j + 1;
+	try {
+		while (k < j && j <= hi) {
+			if (cmp(b[i], a[j]) <= 0) {
+				a.swapWith(k, b, i);
+				i = i + 1;
+			} else {
+				a.swap(k, j);
+				j = j + 1;
+			}
+			k = k + 1;
 		}
-		k = k + 1;
-	}
-	while (k < j) {
-		a[k] = b[i];
-		k = k + 1;
-		i = i + 1;
+	} finally {
+		while (k < j) {
+			a.swapWith(k, b, i);
+			k = k + 1;
+			i = i + 1;
+		}
 	}
 }
 
 export function sortBy<T>(this arr: T[], cmp: (a: T, b: T) => number): void {
-	const n = arr.length;
+	const n = arr.length as int64;
 	if (n < 2) return;
-	const half = n / 2;
 	const buf: T[] = [];
-	for (let q = 0; q < half; q = q + 1) buf.push(arr[0]);
+	buf.growEmpty((n + 1) / 2);
 	let s = 1;
 	while (s < n) {
 		let m = n - 1 - s;
@@ -444,12 +461,10 @@ export function fill<T>(this arr: T[], value: T): void {
 
 /** Reverses the array in place. */
 export function reverse<T>(this arr: T[]): void {
-	let lo = 0;
-	let hi = arr.length - 1;
+	let lo: int64 = 0;
+	let hi = (arr.length as int64) - 1;
 	while (lo < hi) {
-		const tmp = arr[lo];
-		arr[lo] = arr[hi];
-		arr[hi] = tmp;
+		arr.swap(lo, hi);
 		lo = lo + 1;
 		hi = hi - 1;
 	}
@@ -457,15 +472,9 @@ export function reverse<T>(this arr: T[]): void {
 
 /** Removes and returns the first element, shifting the rest down. */
 export function shift<T>(this arr: T[]): T {
-	const first = arr[0];
-	const n = arr.length;
-	let i = 1;
-	while (i < n) {
-		arr[i - 1] = arr[i];
-		i = i + 1;
-	}
-	arr.shrink((n - 1) as int64);
-	return first;
+	const n = arr.length as int64;
+	if (n > 1) arr.rotate(0, 1, n);
+	return arr.pop();
 }
 
 /** Returns a new array holding the elements of both arrays. */
