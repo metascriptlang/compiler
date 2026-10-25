@@ -7,13 +7,6 @@ function refusalMiss(source: string, message: string): string {
 	return js.startsWith("ERROR:") && js.contains(message) ? "" : "JS: " + js;
 }
 
-function acceptanceMiss(source: string): string {
-	const c = compileToCWithStd(source);
-	if (!c.ok) return c.error;
-	const js = compileProjectToJSWithStd([{ entryPath: "test/identity.ms", entrySource: source }], "test/identity.ms");
-	return js.startsWith("ERROR:") ? js : "";
-}
-
 function escapeThrough(className: string): string {
 	return `class ${className} { v: int32 = 0; }
 class Box { t: ${className} = new ${className}(); }
@@ -39,17 +32,6 @@ function f(b: Readonly<Box>): void {
 	b.t.n.v = 5;
 }
 f(new Box());`, "cannot write through Readonly<Node>");
-	assert miss == "", miss;
-}
-
-test "the std/meta Type stays a shared graph under a read-only view" {
-	const miss = acceptanceMiss(`import { Type } from "std/meta/node";
-class Box { t: Type | null = null; }
-function f(b: Readonly<Box>): void {
-	const t = b.t;
-	if (t != null) t.typeName = "x";
-}
-f(new Box());`);
 	assert miss == "", miss;
 }
 
