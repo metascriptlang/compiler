@@ -1,6 +1,7 @@
 import { Node, NodeKind, SymbolKind, Symbol, VariableDeclData, IdentifierData } from "../../ast/node";
 import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError } from "../context";
-import { mapChildren, isFuncBoundary, anyDeep, DEEP_DESCEND, DEEP_HIT, DEEP_SKIP } from "../walker";
+import { mapChildren, isFuncBoundary } from "../walker";
+import { anyDescendant, Visit } from "../../ast/visitor";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	ScopeStack, defineVar, isLocalVar, isOuterVar, isModuleLevelVar, isOuterFrameName,
@@ -11,9 +12,9 @@ import {
 // Used to determine if a capture can be moved instead of copied.
 
 function nodeRefsSym(node: Node, sym: Symbol): boolean {
-	return anyDeep(node, (n: Node): int32 => {
-		if (n.kind == NodeKind.Identifier) return n.resolvedSym == sym ? DEEP_HIT : DEEP_SKIP;
-		return isFuncBoundary(n) ? DEEP_SKIP : DEEP_DESCEND;
+	return anyDescendant(node, (n: Node): Visit => {
+		if (n.kind == NodeKind.Identifier) return n.resolvedSym == sym ? Visit.Hit : Visit.Skip;
+		return isFuncBoundary(n) ? Visit.Skip : Visit.Descend;
 	});
 }
 

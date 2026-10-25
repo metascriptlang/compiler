@@ -20,6 +20,7 @@ import {
 } from "../ast/node";
 import { Type, TypeKind, TypeFlag, Symbol } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { isAssignOp } from "../ast/operators";
 import { CheckerContext, addError } from "./context";
 import { RoutineFlag, routineFlagSet } from "./symbol";
 import { splitTopLevel, parseIntStr } from "../utils/string";
@@ -133,13 +134,6 @@ function getRootSym(node: Node | null): Symbol | null {
 		NodeKind.ArrayAccess => getRootSym((node.data as ArrayAccessData).array),
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => getRootSym((node.data as { expr: Node }).expr),
 		_ => null,
-	};
-}
-
-function isAssignOp(op: string): boolean {
-	return match (op) {
-		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "**=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
-		_ => false,
 	};
 }
 

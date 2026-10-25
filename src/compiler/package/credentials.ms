@@ -1,15 +1,13 @@
 // The registry token store: ~/.metascript/credentials, mode 0600.
 
 import { exists, readFile, writeFile, chmod } from "std/fs";
-import { env } from "std/process";
 import { join } from "std/fs/path";
+import { metascriptHome } from "../../utils/path";
 
 function credentialsPath(): string {
-	let home = env.get("HOME");
-	// Windows fallback — HOME isn't set by default there.
-	if (home == "") home = env.get("USERPROFILE");
-	if (home == "") return "";
-	return join(join(home, ".metascript"), "credentials");
+	const root = metascriptHome();
+	if (root == "") return "";
+	return join(root, "credentials");
 }
 
 export function loadToken(): string {

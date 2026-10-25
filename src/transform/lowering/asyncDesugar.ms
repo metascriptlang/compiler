@@ -13,10 +13,10 @@ import {
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { isGenericFn, routineKindFlag } from "../../checker/context";
-import { TransformContext } from "../context";
+import { TransformContext, ModuleFact, noteFact } from "../context";
 import { syntheticToken, makeReturn } from "../util";
 import { mapChildren, isFuncBoundary } from "../walker";
-import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
+import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx } from "../testUtil";
 
 // ===== Await → Yield Rewriting =====
 // Walk a function body, replacing AwaitExpr nodes with YieldExpr nodes.
@@ -41,35 +41,36 @@ function isAsyncFlags(flags: string): boolean {
 	return kind == "async" || kind == "async_generator";
 }
 
-function desugarAsyncBody(fn: Node, body: Node): void {
+function desugarAsyncBody(fn: Node, body: Node, ctx: TransformContext): void {
+	noteFact(ctx, ModuleFact.Generator);
 	fn.flags = fn.flags.incl(NodeFlag.WasAsync);
 	rewriteAwaits(body);
 }
 
-function walkAsync(node: Node | null): void {
+function walkAsync(node: Node | null, ctx: TransformContext): void {
 	if (node == null) return;
 	const k = node.kind;
 	if (k == NodeKind.FunctionDecl) {
 		const d = node.data as FunctionDeclData;
 		if (isGenericFn(d.fnFlags)) return;
-		walkAsync(d.fnBody);
+		walkAsync(d.fnBody, ctx);
 		if (isAsyncFlags(d.fnFlags)) {
-			desugarAsyncBody(node, d.fnBody);
+			desugarAsyncBody(node, d.fnBody, ctx);
 			d.fnFlags = "generator";
 		}
 	} else if (k == NodeKind.MethodDecl) {
 		const d = node.data as MethodDeclData;
 		if (isGenericFn(d.methodFlags)) return;
-		walkAsync(d.methodBody);
+		walkAsync(d.methodBody, ctx);
 		if (isAsyncFlags(d.methodFlags)) {
-			desugarAsyncBody(node, d.methodBody);
+			desugarAsyncBody(node, d.methodBody, ctx);
 			d.methodFlags = "generator";
 		}
 	} else if (k == NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
-		walkAsync(d.funcExprBody);
+		walkAsync(d.funcExprBody, ctx);
 		if (isAsyncFlags(d.funcExprFlags)) {
-			desugarAsyncBody(node, d.funcExprBody);
+			desugarAsyncBody(node, d.funcExprBody, ctx);
 			d.funcExprFlags = "generator";
 		}
 	} else if (k == NodeKind.ArrowFunction) {
@@ -78,20 +79,20 @@ function walkAsync(node: Node | null): void {
 			const ret = makeReturn(d.arrowBody, node.location);
 			d.arrowBody = createNode(NodeKind.BlockStmt, { statements: [ret] }, syntheticToken(node.location));
 		}
-		walkAsync(d.arrowBody);
+		walkAsync(d.arrowBody, ctx);
 		if (isAsyncFlags(d.arrowFlags)) {
-			desugarAsyncBody(node, d.arrowBody);
+			desugarAsyncBody(node, d.arrowBody, ctx);
 			d.arrowFlags = "generator";
 		}
 	} else {
-		forEachChild(node, (child: Node): void => { walkAsync(child); });
+		forEachChild(node, (child: Node): void => { walkAsync(child, ctx); });
 	}
 }
 
 // ===== Main Entry Point =====
 
 export function lowerAsync(program: Node, ctx: TransformContext): Node {
-	walkAsync(program);
+	walkAsync(program, ctx);
 	return program;
 }
 
@@ -107,3 +108,25 @@ test "async flag cleared" { assert firstStmtKindAfter("async function f() { awai
 test "async arrow unchanged count" { assert stmtCountAfter("const f = async () => await x;", lowerAsync) == 1; }
 
 test "non-async function preserved" { assert stmtCountAfter("function f() { return 1; }", lowerAsync) == 1; }
+
+test "desugaring an async routine notes the generator it leaves for lowerGenerator" {
+	for (const input of ["async function f() { await x; }", "const f = async () => await x;", "class C { async m() { await x; } }", "function g() { const h = async function () { await x; }; }"]) {
+		const parsed = parseInput(input);
+		assert parsed.ok, input;
+		if (parsed.ok) {
+			const ctx = makeCtx();
+			lowerAsync(parsed.value, ctx);
+			assert ctx.facts.has(ModuleFact.Generator), input;
+		}
+	}
+}
+
+test "a module without an async routine notes no generator" {
+	const parsed = parseInput("function f() { return 1; }");
+	assert parsed.ok;
+	if (parsed.ok) {
+		const ctx = makeCtx();
+		lowerAsync(parsed.value, ctx);
+		assert !ctx.facts.has(ModuleFact.Generator);
+	}
+}

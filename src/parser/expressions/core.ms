@@ -869,6 +869,16 @@ test "a regex literal is the right operand of ?? and of %=" {
 
 test "assign right assoc" { assert parseOk("a = b = c"); }
 
+test "logical assignments bind loosest and chain to the right" {
+	assert exprOp("a ??= b ?? c") == "??=";
+	assert exprOp("a ||= b || c") == "||=";
+	assert exprOp("a &&= b && c") == "&&=";
+	assert exprOp("a ??= b = c") == "??=";
+	assert binLeftKind("a ??= b ||= c") == NodeKind.Identifier;
+	assert binRightKind("a ??= b ||= c") == NodeKind.BinaryExpr;
+	assert binLeftKind("a.b[i] ||= c") == NodeKind.ArrayAccess;
+}
+
 test "bitwise compound assignments bind loosest" {
 	assert exprOp("a |= b | c") == "|=";
 	assert exprOp("a &= b & c") == "&=";

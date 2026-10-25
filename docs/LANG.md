@@ -291,9 +291,19 @@ int       float     double                       (reserved, not yet usable as ty
 | `<<=` | LT_LT_EQUALS | Left-shift-assign |
 | `>>=` | GT_GT_EQUALS | Right-shift-assign |
 | `>>>=` | GT_GT_GT_EQUALS | Unsigned-right-shift-assign |
+| `&&=` | AMP_AMP_EQUALS | Assign when truthy |
+| `\|\|=` | PIPE_PIPE_EQUALS | Assign when falsy |
+| `??=` | QUESTION_QUESTION_EQUALS | Assign when null |
 
 `x op= y` stores `x op y` into `x` and evaluates `x` once: `a[next()] |= 1` calls `next()` once
 (corpus `bitwiseCompoundAssignment` and, for `>>>=`, `940-unsignedShift`, on C, JS and Raiser).
+
+`p ??= v`, `p ||= v` and `p &&= v` test `p` and store `v` only when the test passes, so `v` is not
+evaluated otherwise; the object and index of `p` are evaluated once (`get().x ??= f()` calls `get()`
+once, and `f()` only when `x` is null), and a struct is stored as a copy, as with `=`. Like every
+assignment they are statements. A truthiness test of a struct place does not compile on C yet
+(inbox `2026-10-16-union-value-in-a-condition-is-not-tested-by-truthiness-on-c`). Corpus
+`logicalAssignment` on C, JS and Raiser.
 
 ### Comparison
 | Operator | Token | Description |

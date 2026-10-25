@@ -5,7 +5,7 @@
 // inner ?.b transforms first, outer ?.c sees the conditional result.
 
 import { Node, NodeKind, NodeFlag, MemberExprData, CallExprData, TypeAssertionData, BinaryExprData, ConditionalExprData, ExprStmtData } from "../../ast/node";
-import { anyDescendant, noStop } from "../../ast/visitor";
+import { anyDescendant, Visit } from "../../ast/visitor";
 import { TransformContext } from "../context";
 import { walkNode, walkExpandBlocks, walkWithinStatement, walkOutsideInstanceFieldInits } from "../walker";
 import { makeMember, makeNull, makeBinary, makeConditional, makeIdentResolved } from "../util";
@@ -30,7 +30,7 @@ function bindReadProbes(stmt: Node, ctx: TransformContext): Node[] {
 
 // The checker reads `x?.f` as `x !== null ? x.f : null` with one `x` node in both
 // places when `x` is not a name path.
-function sharedProbe(node: Node): Node | null {
+export function sharedProbe(node: Node): Node | null {
 	if (node.kind != NodeKind.ConditionalExpr) return null;
 	const arms = node.data as ConditionalExprData;
 	if (arms.ternaryCondition.kind != NodeKind.BinaryExpr) return null;
@@ -53,7 +53,7 @@ function bindReadProbe(node: Node, ctx: TransformContext, temps: Node[]): Node {
 }
 
 function reads(tree: Node, shared: Node): boolean {
-	return anyDescendant(tree, (n: Node): boolean => n == shared, noStop);
+	return anyDescendant(tree, (n: Node): Visit => n == shared ? Visit.Hit : Visit.Descend);
 }
 
 // ===== Visitor =====

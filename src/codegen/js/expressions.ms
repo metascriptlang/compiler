@@ -23,6 +23,7 @@ import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
 import { spreadStructOf } from "../../transform/desugar/objectSpreadLower";
 import { unwrapRefNullUnion, isMaybeType, isStringLike, numberLiteralSet, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind, peelThrough, PEEL_ALL, unwrapRef } from "../../checker/types";
 import { DYNAMIC_IMPORT } from "../../checker/importCall";
+import { isAssignOp, isLogicalAssignOp } from "../../ast/operators";
 import { enumMemberLiteral } from "../../checker/constFold";
 
 // ===== Literal Emitters =====
@@ -339,12 +340,13 @@ export function emitBinaryExpr(gen: JSGenerator, node: Node): void {
 			emit(gen, " = ");
 			emitCopyOnRead(gen, d.right);
 		}
-	} else if (isAssignmentOp(d.operator)) {
+	} else if (isAssignOp(d.operator)) {
 		emitNode(gen, d.left);
 		emit(gen, " ");
 		emit(gen, d.operator);
 		emit(gen, " ");
-		emitNode(gen, d.right);
+		if (isLogicalAssignOp(d.operator)) emitCopyOnRead(gen, d.right);
+		else emitNode(gen, d.right);
 	} else {
 		emit(gen, "(");
 		emitOperand(gen, d.left);
@@ -359,21 +361,13 @@ export function emitBinaryExpr(gen: JSGenerator, node: Node): void {
 // An assignment is emitted without parentheses, so as an operand it needs its own:
 // `(x = 5) + 1` read as `x = 5 + 1` otherwise.
 function emitOperand(gen: JSGenerator, node: Node): void {
-	if (node.kind == NodeKind.BinaryExpr && isAssignmentOp((node.data as BinaryExprData).operator)) {
+	if (node.kind == NodeKind.BinaryExpr && isAssignOp((node.data as BinaryExprData).operator)) {
 		emit(gen, "(");
 		emitNode(gen, node);
 		emit(gen, ")");
 		return;
 	}
 	emitNode(gen, node);
-}
-
-function isAssignmentOp(op: string): boolean {
-	return match (op) {
-		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "**=" => true,
-		"&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
-		_ => false,
-	};
 }
 
 // ===== Unary Expression =====
@@ -431,7 +425,7 @@ function emitPostfixBase(gen: JSGenerator, node: Node, formal: Type | null = nul
 	const k = base.kind;
 	const wrap = k == NodeKind.NumberLiteral || k == NodeKind.AwaitExpr || k == NodeKind.YieldExpr
 		|| k == NodeKind.UnaryExpr || k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr
-		|| (k == NodeKind.BinaryExpr && isAssignmentOp((base.data as BinaryExprData).operator));
+		|| (k == NodeKind.BinaryExpr && isAssignOp((base.data as BinaryExprData).operator));
 	if (wrap) emit(gen, "(");
 	emitNativeArg(gen, node, formal);
 	if (wrap) emit(gen, ")");

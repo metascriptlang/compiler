@@ -966,7 +966,7 @@ test "engine: several sleepers armed together each wait their own delay" {
 
 test "engine: two sleepers wake in deadline order, not spawn order" {
 	const vm = evalOrcVM(RAISER_TIER_SLEEP
-		+ " const b = spawn(() => { await nap(2); console.log(\"b\"); return 1; });"
+		+ " const b = spawn(() => { await nap(200); console.log(\"b\"); return 1; });"
 		+ " const a = spawn(() => { await nap(1); console.log(\"a\"); return 1; });"
 		+ " const c = spawn(() => { let n: int32 = 0; while (n < 100000) { n += 1; } return 1; });"
 		+ " const r = (await b) + (await a) + (await c); console.log(`done ${r}`);");

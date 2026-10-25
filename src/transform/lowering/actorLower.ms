@@ -15,7 +15,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, DeclKind, Type, TypeKind,
 	DoWhileStmtData, TryCatchStmtData,
 	ExprStmtData, ReturnStmtData, MemberExprData, HiddenDerefData, BinaryExprData,
 	Symbol, SymbolKind, createNode } from "../../ast/node";
-import { TransformContext, freshTempSym, freshOwnedSym, mintSym } from "../context";
+import { TransformContext, ModuleFact, freshTempSym, freshOwnedSym, mintSym, noteFact } from "../context";
 import { canFormAcycle } from "../cycles";
 import { containsExprKind, mapChildren } from "../walker";
 import { setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
@@ -1157,6 +1157,7 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 
 	// Append extracted _impl functions to program top-level
 	if (extracted.length > 0) {
+		noteFact(ctx, ModuleFact.Async);
 		for (const fn of extracted) {
 			pd.programStmts.push(fn);
 		}

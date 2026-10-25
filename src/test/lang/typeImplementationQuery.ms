@@ -239,3 +239,29 @@ test "macro layout queries retain generic alias and nested array identities" {
 	assert layoutMatches({ lead: 0, values: [], tail: 0 } as QueryLayoutAlias);
 	assert genericLayoutMatches<QueryWord>();
 }
+
+macro typeAnswer(value: Node): Node {
+	const queried = getType(value);
+	const field = value.nodeType;
+	let answer = "none";
+	if (queried != null) {
+		if (field == null || queried.kind != field.kind) error("getType and nodeType disagree on the type's kind", value);
+		answer = queried.kind == NodeKind.Identifier ? queried.name : "other";
+		if (field.kind == NodeKind.Identifier && field.name != answer) error("getType and nodeType disagree on the type's name", value);
+	} else if (field != null) {
+		error("getType answered null for a node that carries a type", value);
+	}
+	return { kind: NodeKind.StringLiteral, line: value.line, column: value.column, value: answer };
+}
+
+macro builtNodeTypeAnswer(value: Node): Node {
+	const built: Node = { kind: NodeKind.Identifier, line: value.line, column: value.column, name: "unbound" };
+	if (built.nodeType != null) error("a node a macro builds carries a type", value);
+	return { kind: NodeKind.BooleanLiteral, line: value.line, column: value.column, boolValue: getType(built) == null };
+}
+
+test "getType answers the type nodeType carries and null where nodeType is null" {
+	const integer: int32 = 3;
+	assert typeAnswer(integer) == "int32";
+	assert builtNodeTypeAnswer(integer);
+}

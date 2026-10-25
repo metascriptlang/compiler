@@ -1416,6 +1416,16 @@ function objectListKey(oFiles: string[]): string {
 	return hashContent(identity);
 }
 
+function imageObjectsKey(oFiles: string[]): string {
+	let identity = "";
+	for (const path of oFiles) identity = `${identity}${hashFile(path)}\n`;
+	return hashContent(identity);
+}
+
+function linkObjectsKey(oFiles: string[], image: string): string {
+	return image == "" ? objectListKey(oFiles) : imageObjectsKey(oFiles);
+}
+
 function externalInputKey(paths: string[]): string {
 	let identity = "";
 	for (const path of paths) identity = `${identity}${path.length}:${path}:${hashFile(path)}`;
@@ -1449,7 +1459,7 @@ export function isLinkCached(oFiles: string[], externalInputs: string[], linkFla
 	}
 
 	if (storedCmd != linkFlags) return false;
-	if (storedOFiles != objectListKey(oFiles)) return false;
+	if (storedOFiles != linkObjectsKey(oFiles, image)) return false;
 	if (storedInputs != externalInputKey(externalInputs)) return false;
 	if (!outputMatches(storedOutputHash, outputFile)) return false;
 	settleOutputLine(cFile, lines, storedOutputHash, outputFile);
@@ -1459,7 +1469,7 @@ export function isLinkCached(oFiles: string[], externalInputs: string[], linkFla
 // Write link cache after successful link step.
 export function writeLinkCache(oFiles: string[], externalInputs: string[], linkFlags: string, outputFile: string, image: string = ""): void {
 	let content = `${PRE_LINKCMD}${linkFlags}\n`;
-	content = content + `${PRE_OFILES}${objectListKey(oFiles)}\n`;
+	content = content + `${PRE_OFILES}${linkObjectsKey(oFiles, image)}\n`;
 	content = content + `${PRE_LINKINPUTS}${externalInputKey(externalInputs)}\n`;
 	content = content + `${PRE_OUTHASH}${outputIdentity(outputFile)}\n`;
 	atomicWriteFile(linkCacheFile(image), content);
@@ -1682,6 +1692,21 @@ test "a link output rewritten to the same size at once is not taken as cached" {
 	assert !isLinkCached([], [], "-flags", output, output);
 	remove(output);
 	remove(linkCacheFile(output));
+}
+
+test "an HCR image link is keyed by its objects' bytes, not their paths" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const stem = `${base}/msc-image-objects-${performance.now()}`;
+	const image = `${stem}.dylib`;
+	writeFile(image, "image");
+	writeFile(`${stem}.a.o`, "object");
+	writeFile(`${stem}.b.o`, "object");
+	writeLinkCache([`${stem}.a.o`], [], "-flags", image, image);
+	assert isLinkCached([`${stem}.b.o`], [], "-flags", image, image);
+	writeFile(`${stem}.b.o`, "changed");
+	assert !isLinkCached([`${stem}.b.o`], [], "-flags", image, image);
+	for (const path of [image, `${stem}.a.o`, `${stem}.b.o`]) remove(path);
+	remove(linkCacheFile(image));
 }
 
 test "a link output recorded inside the settle window is identified by its content" {
@@ -1978,12 +2003,14 @@ test "atomicWriteFile replaces existing content and leaves no tmp siblings" {
 // Disk mechanics only — wrapper orchestration lives in module/loader.ms
 // tests. Fixtures are real files under /tmp (same convention as bug043).
 
+const mshcDir = "/tmp/mshc-" + String(Math.floor(Math.random() * 1000000000));
+
 test "header cache: store → hit, dep content change → miss, restore → hit" {
-	ensureDir("/tmp/mshc");
-	const hpath = "/tmp/mshc/hcx.h";
+	ensureDir(mshcDir);
+	const hpath = mshcDir + "/hcx.h";
 	const orig = "extern int hcx(void);\n";
 	writeFile(hpath, orig);
-	const key = headerModuleKey("extern int hcx(void);", "/tmp/mshc/hcx.h", "linux-x86_64");
+	const key = headerModuleKey("extern int hcx(void);", mshcDir + "/hcx.h", "linux-x86_64");
 	storeHeaderModule(key, [`${hpath}\t${hashContent(orig)}`], "OUT-1");
 	assert lookupHeaderModule(key) == "OUT-1";
 	writeFile(hpath, "extern int hcx2(void);\n");
@@ -1993,9 +2020,9 @@ test "header cache: store → hit, dep content change → miss, restore → hit"
 }
 
 test "header cache: absent dep stays valid until the file appears" {
-	const gone = "/tmp/mshc/gone.h";
+	const gone = mshcDir + "/gone.h";
 	if (exists(gone)) remove(gone);
-	const key = headerModuleKey("extern int m(void);", "/tmp/mshc/gone.h", "linux-x86_64");
+	const key = headerModuleKey("extern int m(void);", mshcDir + "/gone.h", "linux-x86_64");
 	storeHeaderModule(key, [`${gone}\t-`], "OUT-2");
 	assert lookupHeaderModule(key) == "OUT-2";
 	writeFile(gone, "int x;\n");
@@ -2004,32 +2031,32 @@ test "header cache: absent dep stays valid until the file appears" {
 }
 
 test "header cache: deps under runtime//vendor/ skip disk re-verification" {
-	const key = headerModuleKey("extern int r(void);", "/tmp/mshc/r.h", "linux-x86_64");
+	const key = headerModuleKey("extern int r(void);", mshcDir + "/r.h", "linux-x86_64");
 	const stampedPath = `${resolveRuntimeDir()}/runtime/definitely-not-here.h`;
 	storeHeaderModule(key, [`${stampedPath}\tdeadbeef`], "OUT-3");
 	assert lookupHeaderModule(key) == "OUT-3";
 }
 
 test "header cache: malformed dep line is a miss, empty dep list is a hit" {
-	const keyA = headerModuleKey("extern int x1(void);", "/tmp/mshc/x1.h", "linux-x86_64");
+	const keyA = headerModuleKey("extern int x1(void);", mshcDir + "/x1.h", "linux-x86_64");
 	storeHeaderModule(keyA, ["nodep-newline"], "OUT-4");
 	assert lookupHeaderModule(keyA) == "";
-	const keyB = headerModuleKey("extern int x2(void);", "/tmp/mshc/x2.h", "linux-x86_64");
+	const keyB = headerModuleKey("extern int x2(void);", mshcDir + "/x2.h", "linux-x86_64");
 	storeHeaderModule(keyB, [], "OUT-5");
 	assert lookupHeaderModule(keyB) == "OUT-5";
 }
 
 test "header cache: a translation for one build target is not a hit for another" {
 	const src = "extern int t(void);";
-	const linux = headerModuleKey(src, "/tmp/mshc/t.h", "linux-x86_64");
-	const windows = headerModuleKey(src, "/tmp/mshc/t.h", "windows-x86_64");
+	const linux = headerModuleKey(src, mshcDir + "/t.h", "linux-x86_64");
+	const windows = headerModuleKey(src, mshcDir + "/t.h", "windows-x86_64");
 	assert linux != windows;
 	storeHeaderModule(linux, [], "OUT-LINUX");
 	assert lookupHeaderModule(windows) == "";
 }
 
 test "header cache: MSC_NO_HEADER_CACHE disables both directions" {
-	const key = headerModuleKey("extern int k(void);", "/tmp/mshc/k.h", "linux-x86_64");
+	const key = headerModuleKey("extern int k(void);", mshcDir + "/k.h", "linux-x86_64");
 	storeHeaderModule(key, [], "OUT-6");
 	assert lookupHeaderModule(key) == "OUT-6";
 	env.set("MSC_NO_HEADER_CACHE", "1");

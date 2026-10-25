@@ -5,6 +5,7 @@ import {
 	ArrowFunctionData, FunctionExprData, ProgramData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { isScopeBoundary } from "../ast/shape";
 import { hasFlag, SymbolFlag } from "./symbol";
 import { skipModifier, peelTransparentInstance, typeDisplayName, isReadonlyView, createReadonlyView, isValueStorage } from "./types";
 import { sameType, nonNullMemberOfNullable } from "./compat";
@@ -269,9 +270,8 @@ function escapeCall(u: EscapeUnit, node: Node): void {
 
 function escapeWalk(u: EscapeUnit, node: Node | null): void {
 	if (node == null) return;
+	if (isScopeBoundary(node) || node.kind == NodeKind.TestDecl) return;
 	match (node.kind) {
-		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr | NodeKind.ClassDecl
-			| NodeKind.MethodDecl | NodeKind.ConstructorDecl | NodeKind.TestDecl => { return; },
 		NodeKind.VariableDecl => {
 			const origin = frameAddress(u, (node.data as VariableDeclData).initializer);
 			if (origin != null) {

@@ -394,9 +394,11 @@ test "an import used by one module is still unused in another" {
 	for (const e of user.errors) assert e.message != "'foo' is imported but never used";
 }
 
+const scratchRoot = "/tmp/msc-orchestrator-" + String(Math.floor(Math.random() * 1000000000));
+
 function preludeDeclaresWhatMainBinds(backendExt: string): boolean {
 	const stdPath = join(resolveRuntimeDir(), "std");
-	const dir = `/tmp/msc-prelude-identity${backendExt}`;
+	const dir = `${scratchRoot}/prelude-identity${backendExt}`;
 	ensureDir(dir);
 	const mainPath = `${dir}/main.ms`;
 	writeFile(mainPath, "const n = Math.floor(2.5); const t = \" a \".trim();");
@@ -421,7 +423,7 @@ test "a module binds the prelude module's own declarations, never a second copy"
 
 function stdImportWithoutPreludeChecks(): boolean {
 	const stdPath = join(resolveRuntimeDir(), "std");
-	const dir = "/tmp/msc-prelude-marks";
+	const dir = `${scratchRoot}/prelude-marks`;
 	ensureDir(dir);
 	const mainPath = `${dir}/main.ms`;
 	writeFile(mainPath, "import { Math } from \"std/core/math\";\nconst n = Math.floor(2.5);\nconst t = \" a \".trim();\n");
@@ -444,7 +446,7 @@ test "a graph that imports a prelude module without loading the prelude still ch
 }
 
 test "an extra global import is matched by loader identity, never by spelling" {
-	const dir = "/tmp/msc-extra-global-import";
+	const dir = `${scratchRoot}/extra-global-import`;
 	ensureDir(dir);
 	writeFile(`${dir}/gi.ms`, "export const gi = 1;\n");
 	setExtraGlobalImports([`${dir}/gi`]);

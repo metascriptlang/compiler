@@ -117,3 +117,4 @@ import "./cases/declarationList";
 import "./cases/layoutOptions";
 import "./cases/constructorVisibility";
 import "./cases/headerComments";
+import "./cases/logicalAssignment";

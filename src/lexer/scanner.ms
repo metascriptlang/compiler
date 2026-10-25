@@ -498,13 +498,15 @@ export function scanOperator(s: LexerState): boolean {
 			return true;
 		},
 		"&".code => {
-			if (next == "&".code) { skip(s, 2); addToken(s, TokenKind.AmpAmp, "&&", startLine, startCol); }
+			if (next == "&".code && peekAt(s, 2) == "=".code) { skip(s, 3); addToken(s, TokenKind.AmpAmpEq, "&&=", startLine, startCol); }
+			else if (next == "&".code) { skip(s, 2); addToken(s, TokenKind.AmpAmp, "&&", startLine, startCol); }
 			else if (next == "=".code) { skip(s, 2); addToken(s, TokenKind.AmpEq, "&=", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Amp, "&", startLine, startCol); }
 			return true;
 		},
 		"|".code => {
-			if (next == "|".code) { skip(s, 2); addToken(s, TokenKind.PipePipe, "||", startLine, startCol); }
+			if (next == "|".code && peekAt(s, 2) == "=".code) { skip(s, 3); addToken(s, TokenKind.PipePipeEq, "||=", startLine, startCol); }
+			else if (next == "|".code) { skip(s, 2); addToken(s, TokenKind.PipePipe, "||", startLine, startCol); }
 			else if (next == ">".code) { skip(s, 2); addToken(s, TokenKind.PipeGt, "|>", startLine, startCol); }
 			else if (next == "=".code) { skip(s, 2); addToken(s, TokenKind.PipeEq, "|=", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Pipe, "|", startLine, startCol); }
@@ -512,6 +514,7 @@ export function scanOperator(s: LexerState): boolean {
 		},
 		"?".code => {
 			if (next == ".".code && !isDigit(peekAt(s, 2))) { skip(s, 2); addToken(s, TokenKind.QuestionDot, "?.", startLine, startCol); }
+			else if (next == "?".code && peekAt(s, 2) == "=".code) { skip(s, 3); addToken(s, TokenKind.QuestionQuestionEq, "??=", startLine, startCol); }
 			else if (next == "?".code) { skip(s, 2); addToken(s, TokenKind.QuestionQuestion, "??", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Question, "?", startLine, startCol); }
 			return true;

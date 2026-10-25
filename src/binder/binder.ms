@@ -9,6 +9,7 @@
 // Existing tests must still pass — the binder touches NO checker state.
 
 import { parseSource } from "../parser/statements/validation";
+import { isAssignOp, isLogicalAssignOp } from "../ast/operators";
 import {
 	Node, NodeKind, createNodeAt,
 	FlowNode, FlowFlag, FlowList,
@@ -856,12 +857,12 @@ function bindBinaryExpr(state: BinderState, node: Node): void {
 		bindLogicalExpr(state, node);
 		return;
 	}
+	if (isLogicalAssignOp(d.operator)) {
+		bindLogicalAssign(state, node);
+		return;
+	}
 	// Assignment operators mutate their LHS
-	if (d.operator == "=" || d.operator == "+=" || d.operator == "-="
-		|| d.operator == "*=" || d.operator == "/=" || d.operator == "%="
-		|| d.operator == "**=" || d.operator == "&=" || d.operator == "|="
-		|| d.operator == "^=" || d.operator == "<<=" || d.operator == ">>=" || d.operator == ">>>="
-		|| d.operator == "&&=" || d.operator == "||=" || d.operator == "??=") {
+	if (isAssignOp(d.operator)) {
 		if (d.left != null) bindExpression(state, d.left);
 		if (d.right != null) bindExpression(state, d.right);
 		state.currentFlow = createFlowMutation(state, FlowFlag.Assignment, state.currentFlow, node);
@@ -889,6 +890,24 @@ function bindLogicalExpr(state: BinderState, node: Node): void {
 	}
 	state.currentFlow = finishFlowLabel(rightLabel);
 	if (d.right != null) bindExpression(state, d.right);
+	addAntecedent(postLabel, state.currentFlow);
+	state.currentFlow = finishFlowLabel(postLabel);
+}
+
+// `a ||= b` and `a ??= b` run the write only when `a` is falsy (nullish), `a &&= b` only when it is
+// truthy: the write sits on one branch of the test of `a`, and the other branch skips it.
+function bindLogicalAssign(state: BinderState, node: Node): void {
+	const d = node.data as BinaryExprData;
+	const postLabel = createBranchLabel();
+	const writeLabel = createBranchLabel();
+	if (d.operator == "&&=") {
+		bindCondition(state, d.left, writeLabel, postLabel);
+	} else {
+		bindCondition(state, d.left, postLabel, writeLabel);
+	}
+	state.currentFlow = finishFlowLabel(writeLabel);
+	bindExpression(state, d.right);
+	state.currentFlow = createFlowMutation(state, FlowFlag.Assignment, state.currentFlow, node);
 	addAntecedent(postLabel, state.currentFlow);
 	state.currentFlow = finishFlowLabel(postLabel);
 }

@@ -21,7 +21,8 @@ import { truthinessTest } from "../coercion/stringTruthiness";
 import { shortCircuitLeftShare, shortCircuitRightRuns } from "../../checker/fit";
 import { shortCircuitShareArm, fitShortCircuitArm } from "./conditionalExprLower";
 import { foldedNullOperand, isNullExpr } from "./operatorLower";
-import { walkExpandBlocks, isFuncBoundary, anyDeep, DEEP_DESCEND, DEEP_HIT, DEEP_SKIP } from "../walker";
+import { walkExpandBlocks, isFuncBoundary } from "../walker";
+import { anyDescendant, Visit } from "../../ast/visitor";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts, checkedCtx } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
 
@@ -53,15 +54,15 @@ function isSpillPoint(node: Node): boolean {
 	return node.kind == NodeKind.AwaitExpr || dropsOperandEffects(node) || dropsNamespaceObject(node);
 }
 
-function spillVerdict(node: Node): int32 {
-	if (isSpillPoint(node)) return DEEP_HIT;
-	if (isRoutine(node)) return DEEP_SKIP;
-	return DEEP_DESCEND;
+function spillVerdict(node: Node): Visit {
+	if (isSpillPoint(node)) return Visit.Hit;
+	if (isRoutine(node)) return Visit.Skip;
+	return Visit.Descend;
 }
 
 function needsSpill(node: Node | null): boolean {
 	if (node == null) return false;
-	return anyDeep(node, spillVerdict);
+	return anyDescendant(node, spillVerdict);
 }
 
 function isInert(e: Node): boolean {
@@ -142,7 +143,6 @@ function lowerAwaitExpr(e: Node, pre: Node[]): Node {
 		const d = e.data as BinaryExprData;
 		if (dropsOperandEffects(e)) return lowerFoldedNullOperand(e, pre);
 		if (d.operator == "&&" || d.operator == "||") return lowerShortCircuit(e, pre);
-		if (d.operator == "&&=" || d.operator == "||=" || d.operator == "??=") return e;
 		if (isAssignOp(d.operator)) return lowerAssign(_sp, e, pre);
 		lowerOperandList(_sp, e, pre);
 	} else if (k == NodeKind.ConditionalExpr) {

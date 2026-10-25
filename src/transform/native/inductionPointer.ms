@@ -13,7 +13,7 @@ import { isRoutineNode } from "../../ast/shape";
 import { peelTransparentInstance, peelToRepr, createPtr, getSysType, isIntegerType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isComputedGotoMark } from "../../checker/computedGoto";
-import { forEachChild, anyChild, anyDescendant, noStop } from "../../ast/visitor";
+import { forEachChild, anyChild, anyDescendant, Visit } from "../../ast/visitor";
 import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, newLoweredSym } from "../context";
 import { walkNode, mapChildren } from "../walker";
 import { isAssignOp } from "../../ast/operators";
@@ -134,7 +134,7 @@ function isOffsetOperand(n: Node): boolean {
 }
 
 function mentions(n: Node, sym: Symbol): boolean {
-	return anyDescendant(n, (m: Node): boolean => m.kind == NodeKind.Identifier && m.resolvedSym == sym, noStop);
+	return anyDescendant(n, (m: Node): Visit => m.kind == NodeKind.Identifier && m.resolvedSym == sym ? Visit.Hit : Visit.Descend);
 }
 
 // The index variable `n` is a sum of, with every other term free of that variable and an

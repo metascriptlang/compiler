@@ -7,7 +7,7 @@ import {
 	Node, NodeKind, NodeFlag, SymbolKind,
 	ProgramData, ExportDeclData, DecoratedDeclData, VariableDeclData,
 } from "../../ast/node";
-import { TransformContext, mintSym } from "../context";
+import { TransformContext, ModuleFact, mintSym, noteFact } from "../context";
 import { makeFnDecl, makeBlock, makeExprStmt, makeAssign, makeCall, makeTypedIdentResolved, runtimeRef } from "../util";
 import { createFunction, createPromise, voidType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
@@ -61,6 +61,7 @@ export function lowerAsyncModuleBody(program: Node, ctx: TransformContext): Node
 	const fnType = createFunction([], [], createPromise(voidType()));
 	const fnSym = mintSym(ctx, SymbolKind.Function, "$moduleBody", fnType);
 	const fn = makeFnDecl(fnSym.name, [], [], makeBlock(body, loc), "async", "void", loc);
+	noteFact(ctx, ModuleFact.Async);
 	fn.nodeType = fnType;
 	fn.resolvedSym = fnSym;
 	fnSym.declNode = fn;

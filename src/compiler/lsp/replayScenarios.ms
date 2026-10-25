@@ -1453,6 +1453,47 @@ function hoverShowsTheFieldDocAtItsUses(): LspScenario {
 	};
 }
 
+const BUILT_BY_MACRO_USER = "const value: int32 = 3;\nconst a: int32 = callsHelper(value);\nconst b: int32 = forward(value);\n";
+const BUILT_BY_MACRO_MODULE = "import { Node, NodeKind, bindSym } from \"std/meta\";\n/** The helper doc. */\nexport function helper(v: int32): int32 {\n\treturn v;\n}\nexport macro callsHelper(n: Node): Node {\n\tconst callee = bindSym(\"helper\")!;\n\tcallee.line = n.line;\n\tcallee.column = n.column - 1;\n\treturn { kind: NodeKind.CallExpr, callee, arguments: [n], isDirectCall: false, resolvedOverloadIdx: -1 };\n}\nexport macro forward(n: Node): Node {\n\treturn quote { (${n}) };\n}\n";
+
+function positionsBuiltByAMacroAnswerNothing(): LspScenario {
+	const uri = PROJECT_URI + "user.ms";
+	const value = (span: string): string => "```metascript\nconst value: int32\n``` @ " + span;
+	return {
+		name: "a node a macro builds answers no hover or definition, an argument it forwards still does",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, BUILT_BY_MACRO_USER))]),
+			frames([
+				request("10", "textDocument/hover", positionParams(uri, 1, 17)),
+				request("11", "textDocument/hover", positionParams(uri, 1, 29)),
+				request("12", "textDocument/hover", positionParams(uri, 2, 25)),
+				request("13", "textDocument/definition", positionParams(uri, 1, 17)),
+				request("14", "textDocument/definition", positionParams(uri, 1, 29)),
+				request("15", "textDocument/hover", positionParams(uri, 1, 28)),
+				request("16", "textDocument/definition", positionParams(uri, 1, 28)),
+			]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("diagnostics", "[]", publishedAt(r, uri, 0)),
+			sameText("hover on the macro name", "```metascript\n(macro) callsHelper: unknown\n``` @ 1:17-1:28", hoverSummary(r, "n:10")),
+			sameText("hover on the argument beside a built callee", value("1:29-1:34"), hoverSummary(r, "n:11")),
+			sameText("hover on the argument a quote forwards", value("2:25-2:30"), hoverSummary(r, "n:12")),
+			sameText("definition on the macro name", "5:13-5:24", definitionSpan(r, "n:13")),
+			sameText("definition on the argument beside a built callee", "0:6-0:11", definitionSpan(r, "n:14")),
+			sameText("hover where only the built callee sits", "no hover: null", hoverSummary(r, "n:15")),
+			sameText("definition where only the built callee sits", "no location", definitionSpan(r, "n:16")),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: [
+			{ path: "build.ms", text: "const config = { globalImports: [\"./mac\"] };\nexport default config;\n" },
+			{ path: "mac.ms", text: BUILT_BY_MACRO_MODULE },
+		],
+	};
+}
+
 const TOKENS_SOURCE = "class Box {\n\tv: int32;\n\tconstructor(v: int32) {\n\t\tthis.v = v;\n\t}\n}\nfunction add(a: int32): int32 {\n\tconst k = 2;\n\treturn a + k;\n}\n";
 
 const TOKENS_URI = "file:///lspwire/tokens.ms";
@@ -1570,6 +1611,7 @@ export function lspScenarios(): LspScenario[] {
 		signatureHelpFollowsTheArgument(),
 		hoverShowsDeclarations(),
 		hoverShowsTheFieldDocAtItsUses(),
+		positionsBuiltByAMacroAnswerNothing(),
 		insignificantEditsKeepAnswers(),
 		semanticTokensClassifyReadsAndDeclarations(),
 	];

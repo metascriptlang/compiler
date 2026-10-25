@@ -16,8 +16,8 @@ import {
 } from "../../ast/node";
 import { isRoutineOrTestNode } from "../../ast/shape";
 import { SymSet, createSymSet, symSetAdd, symSetContains } from "../context";
-import { mapChildren, isFuncBoundary, anyDeep, DEEP_DESCEND, DEEP_HIT, DEEP_SKIP } from "../walker";
-import { forEachChild, initializerHoldsClosure } from "../../ast/visitor";
+import { mapChildren, isFuncBoundary } from "../walker";
+import { forEachChild, anyDescendant, initializerHoldsClosure, Visit } from "../../ast/visitor";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 import {
 	ScopeStack, createScopeStack, cloneScopeStack, pushFuncBoundary,
@@ -106,12 +106,12 @@ export function routineBindingSym(node: Node): Symbol | null {
 
 export function refsAnySym(n: Node | null, syms: Symbol[]): boolean {
 	if (n == null || syms.length == 0) return false;
-	return anyDeep(n, (c: Node): int32 => {
-		if (c.kind != NodeKind.Identifier) return DEEP_DESCEND;
+	return anyDescendant(n, (c: Node): Visit => {
+		if (c.kind != NodeKind.Identifier) return Visit.Descend;
 		for (const s of syms) {
-			if (c.resolvedSym == s) return DEEP_HIT;
+			if (c.resolvedSym == s) return Visit.Hit;
 		}
-		return DEEP_SKIP;
+		return Visit.Skip;
 	});
 }
 

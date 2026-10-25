@@ -314,9 +314,10 @@ function assignTargetCType(g: CGen, left: Readonly<Node>): string {
 
 function assignsInPlace(g: CGen, p: CProc, d: Readonly<BinaryExprData>): boolean {
 	if (d.operator != "=" || (d.right.kind != NodeKind.ObjectLiteral && d.right.kind != NodeKind.CallExpr)) return false;
+	if (d.right.kind == NodeKind.CallExpr && !isPlainStruct(d.left.nodeType)) return false;
 	const root = frameLocalRoot(d.left, p);
 	if (root == null || readsFrameLocal(p, root, d.right)) return false;
-	if (d.right.kind == NodeKind.CallExpr && !(isPlainStruct(d.left.nodeType) && storeIsUnobservable(p, d.right))) return false;
+	if (d.right.kind == NodeKind.CallExpr && !storeIsUnobservable(p, d.right)) return false;
 	const destCType = assignTargetCType(g, d.left);
 	return destCType != "" && buildsInPlace(g, d.right, destCType);
 }

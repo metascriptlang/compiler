@@ -1,10 +1,7 @@
-// Parser context - the cursor and angle scanners under one name, and the compilation's define table
+// Parser context - the compilation's define table and a call's type argument
 
 import { Node } from "../ast/node";
 import { DefineTable, createDefineTable } from "../compiler/defines";
-
-export * from "./cursor";
-export * from "./generics";
 
 export function findCallTypeArg(node: Node): string {
 	return node.typeArg;

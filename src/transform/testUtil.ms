@@ -5,7 +5,7 @@ import { Node, NodeKind, ProgramData, ExprStmtData, CallExprData, FunctionDeclDa
 import { TransformContext, createTransformContextWithChecker } from "./context";
 import { lex } from "../lexer/lexer";
 import { parseProgram } from "../parser/statements/core";
-import { createState } from "../parser/context";
+import { createState } from "../parser/cursor";
 import { CheckerContext, createContext } from "../checker/context";
 import { standalonePreludeCtx, checkProgram } from "../checker/checkPass";
 import { bindCompilerFuncs } from "./util";

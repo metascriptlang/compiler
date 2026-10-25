@@ -120,15 +120,11 @@ function classOperand(n: Node, ctx: TransformContext): Node | null {
 
 function writtenBinding(n: Node): Node | null {
 	let target: Node | null = null;
-	if (n.kind == NodeKind.BinaryExpr && isEagerAssignOpWithoutPow((n.data as BinaryExprData).operator)) target = (n.data as BinaryExprData).left;
+	if (n.kind == NodeKind.BinaryExpr && isEagerAssignOp((n.data as BinaryExprData).operator)) target = (n.data as BinaryExprData).left;
 	else if (n.kind == NodeKind.UpdateExpr) target = (n.data as UpdateExprData).updateArg;
 	else if (n.kind == NodeKind.HiddenAddr) target = (n.data as HiddenDerefData).expr;
 	else if (n.kind == NodeKind.OutExpr) target = (n.data as OutExprData).outArg;
 	return target != null && target.kind == NodeKind.Identifier ? target : null;
-}
-
-function isEagerAssignOpWithoutPow(op: string): boolean {
-	return isEagerAssignOp(op) && op != "**=";
 }
 
 function flagOf(n: Node, ctx: TransformContext): Symbol | null {

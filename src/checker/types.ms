@@ -4890,12 +4890,38 @@ function isMemberItself(member: Readonly<Type>, value: Readonly<Type>): boolean 
 	return member.sym != null && member.sym == value.sym;
 }
 
+const GENERIC_WALK_INLINE: int32 = 32;
+
+struct GenericWalk {
+	found: boolean;
+	exhausted: boolean;
+	left: int32;
+}
+
 export function hasGenericParams(t: Readonly<Type | null>): boolean {
-	if (t == null) return false;
-	if (t.kind == TypeKind.GenericParam) return true;
-	if (isDeclaredStruct(t)) return t.typeFlags.has(TypeFlag.HasGenericParam);
-	if (t.typeReturn == null && t.typeExtra == null && t.typeChildren.length == 0) return false;
+	const inline = genericWalkInline(t, GENERIC_WALK_INLINE);
+	if (!inline.exhausted) return inline.found;
 	return genericScan(t, new TypeVisitSet());
+}
+
+function genericWalkInline(t: Readonly<Type | null>, left: int32): GenericWalk {
+	if (t == null) return { found: false, exhausted: false, left: left };
+	if (t.kind == TypeKind.GenericParam) return { found: true, exhausted: false, left: left };
+	if (isDeclaredStruct(t)) return { found: t.typeFlags.has(TypeFlag.HasGenericParam), exhausted: false, left: left };
+	if (t.typeReturn == null && t.typeExtra == null && t.typeChildren.length == 0) return { found: false, exhausted: false, left: left };
+	if (left == 0) return { found: false, exhausted: true, left: 0 };
+	let walk: GenericWalk = { found: false, exhausted: false, left: left - 1 };
+	if (t.kind != TypeKind.GenericInstance) {
+		walk = genericWalkInline(t.typeReturn, walk.left);
+		if (walk.found || walk.exhausted) return walk;
+		walk = genericWalkInline(t.typeExtra, walk.left);
+		if (walk.found || walk.exhausted) return walk;
+	}
+	for (let i = 0; i < t.typeChildren.length; i += 1) {
+		walk = genericWalkInline(t.typeChildren[i], walk.left);
+		if (walk.found || walk.exhausted) return walk;
+	}
+	return walk;
 }
 
 function genericScan(t: Readonly<Type | null>, active: TypeVisitSet): boolean {
@@ -6113,6 +6139,34 @@ test "hasGenericParams false" {
 	assert !hasGenericParams(numberType());
 	assert !hasGenericParams(createArray(stringType()));
 	assert !hasGenericParams(createFunction([numberType()], ["a"], stringType()));
+}
+
+function nestedArrays(depth: int32, leaf: Type): Type {
+	let t = leaf;
+	for (let i = 0; i < depth; i += 1) t = createArray(t);
+	return t;
+}
+
+test "hasGenericParams finds a type parameter past the inline walk" {
+	assert hasGenericParams(nestedArrays(GENERIC_WALK_INLINE + 8, createGenericParam("T")));
+	assert !hasGenericParams(nestedArrays(GENERIC_WALK_INLINE + 8, numberType()));
+}
+
+test "hasGenericParams answers a union holding itself by its other members" {
+	const plain = createUnion([numberType(), stringType()]);
+	plain.typeChildren.push(createArray(plain));
+	assert !hasGenericParams(plain);
+	const generic = createUnion([numberType(), stringType()]);
+	generic.typeChildren.push(createArray(generic));
+	generic.typeChildren.push(createGenericParam("T"));
+	assert hasGenericParams(generic);
+}
+
+test "hasGenericParams sees a slot written after construction" {
+	const fn = createFunction([numberType()], ["a"], numberType());
+	assert !hasGenericParams(fn);
+	fn.typeReturn = createGenericParam("T");
+	assert hasGenericParams(fn);
 }
 
 test "default returns param count" {

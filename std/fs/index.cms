@@ -351,7 +351,12 @@ when (windows) {
 // syscall, before anything else runs.
 
 function removeErrno(path: string): int32 {
-	return cUnlink(path as cstring) == 0 ? 0 : errno;
+	if (cUnlink(path as cstring) == 0) return 0;
+	const err = errno;
+	when (windows) {
+		if (err == EACCES && cChmod(path as cstring, 438) == 0 && cUnlink(path as cstring) == 0) return 0;
+	}
+	return err;
 }
 function writeFileErrno(path: string, content: string, mode: string): int32 {
 	const file = cFopen(path as cstring, mode as cstring);

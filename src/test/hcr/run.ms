@@ -1,7 +1,7 @@
 // HCR runner: msc run --target=raiser src/test/hcr/run.ms, from the recompiler root.
 // Env: MSC=<path to msc> (default: ./msc, else installed msc).
 import { execFileResult, ExecFileResult, exit, env, cwd, platform } from "std/process";
-import { readFile, writeFile, readDir, exists, ensureDir, removeAll, copyFile } from "std/fs";
+import { readFile, writeFile, readDir, exists, ensureDir, remove, removeAll, copyFile } from "std/fs";
 import { sleepAsync } from "std/core/promise";
 import { spawn as spawnChild, ChildProcess, ChildStream } from "std/process/child";
 
@@ -97,24 +97,51 @@ function sanRuntime(dir: string): void {
 	copy(`${resource}/lib/windows/${SAN_DLL}`, `${dir}/${SAN_DLL}`);
 }
 
-// A failed first build leaves `msc run --hcr` waiting for an edit, so every call outside Windows gets a wall-clock bound.
-const MSC_SECONDS = "900";
-const BOUNDED = "my $t = shift; setpgrp(0, 0); my $pid = fork; if (!$pid) { exec @ARGV or exit 127 } $SIG{ALRM} = sub { print STDERR \"msc gave no answer within ${t}s\\n\"; kill \"KILL\", -$$ }; alarm $t; waitpid($pid, 0); exit($? >> 8)";
+const RUN_CAP_MS = 300000;
 
-function runMsc(args: string[], dir: string): ExecFileResult {
-	if (platform == "windows") return execFileResult(MSC, args, dir);
-	return execFileResult("perl", ["-e", BOUNDED, MSC_SECONDS, MSC, ...args], dir);
+function capNotice(capMs: int32): string {
+	return `hcr runner: msc run cut after ${capMs} ms`;
 }
 
-function msc(dir: string, args: string[]): ExecFileResult {
-	if (!SAN || args[0] != "build") return runMsc(args, dir);
+function boundedRun(dir: string, args: string[], capMs: int32): ExecFileResult {
+	const started = spawnChild(MSC, args, { cwd: dir, mergeStderr: true });
+	if (!started.ok) return execFileResult(MSC, args, dir);
+	const child = started.value;
+	let text = "";
+	let ended = false;
+	const deadline = performance.now() + capMs;
+	while (!ended && performance.now() < deadline) {
+		const got = child.read(ChildStream.Stdout, 200);
+		if (!got.ok) continue;
+		if (got.value.ended) ended = true;
+		else text += got.value.data;
+	}
+	const status = ended ? child.wait(30000) : child.kill();
+	const done = ended && status.ok;
+	if (!done) text += `\n${capNotice(capMs)}\n`;
+	const result: ExecFileResult = {
+		started: true,
+		pipeOk: done,
+		exitCode: status.ok ? status.value.code : -1,
+		signal: status.ok ? status.value.signal : 0,
+		output: text,
+		errorOutput: "",
+		startErrno: 0,
+	};
+	child.close();
+	return result;
+}
+
+function msc(dir: string, args: string[], capMs: int32 = RUN_CAP_MS): ExecFileResult {
+	if (args[0] == "run") return boundedRun(dir, args, capMs);
+	if (!SAN || args[0] != "build") return execFileResult(MSC, args, dir);
 	sanSetup();
 	const full: string[] = [];
 	for (const arg of args) full.push(arg);
 	full.push("--cc=clang");
 	full.push(`--passC=-O0 -g -fsanitize=address -DMS_SLAB_MAX=0 -Wno-error=incompatible-pointer-types${sanFlags}`);
 	full.push(`--passL=-fsanitize=address -pthread${sanFlags}`);
-	return runMsc(full, dir);
+	return execFileResult(MSC, full, dir);
 }
 
 // Build that must succeed: its log is printed before the verdict when it does not.
@@ -584,6 +611,26 @@ function subdirModule(): void {
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
 		console.log(both(ran));
 		failWith(tag, "a module in a subdirectory did not load or reload under msc run --hcr");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function runBound(): void {
+	const tag = "hcrRunBound";
+	const cases = [
+		{ fixture: "typeError.txt", capMs: 30000, seen: "type error" },
+		{ fixture: "parseError.txt", capMs: 30000, seen: "Unexpected token" },
+	];
+	for (const c of cases) {
+		const dir = freshDir(`${TMP}/runBound_${c.fixture}`);
+		copy(`${FIXTURES}/runBound/${c.fixture}`, `${dir}/app.ms`);
+		const t0 = performance.now();
+		const ran = msc(dir, ["run", "--hcr", "app.ms"], c.capMs);
+		const took = performance.now() - t0;
+		if (succeeded(ran) || !both(ran).contains(capNotice(c.capMs)) || !both(ran).contains(c.seen) || took > c.capMs + 40000) {
+			console.log(both(ran));
+			failWith(tag, `${c.fixture}: msc run --hcr was not cut at ${c.capMs} ms with its output kept (took ${Math.round(took)} ms)`);
+		}
 	}
 	console.log(`ok   ${tag}`);
 }
@@ -1132,6 +1179,46 @@ function stepCrash(): void {
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
 		console.log(both(ran));
 		failWith(tag, "a crash inside step() did not roll back to the previous generation and keep running");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function reloadLines(output: string): string[] {
+	const seen: string[] = [];
+	for (const line of lines(output)) {
+		if (line.startsWith("HCR reload module:")) seen.push(line);
+	}
+	return seen;
+}
+
+function unchangedObjectKeepsImage(): void {
+	const tag = "hcrUnchangedObjectKeepsImage";
+	const globalCache = env.get("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_NO_GLOBAL_CACHE", "1");
+	if (platform != "windows") {
+		const racy = freshDir(`${TMP}/unchangedRacyHeader`);
+		for (const f of readDir(`${FIXTURES}/step`)) copy(`${FIXTURES}/step/${f}`, `${racy}/${f}`);
+		need(tag, execFileResult("touch", ["-t", "203001010000", "hold.h"], racy).exitCode == 0, "cannot date hold.h into the future");
+		put(`${racy}/replay.txt`, "crashIndex.txt logic.ms\n");
+		const watched = mustBuild(tag, racy, ["build", "app.ms", "--hcr", "--watch-replay=replay.txt"], "the watch replay over a header dated in the future failed");
+		const seen = reloadLines(watched);
+		if (seen.join("\n") != "HCR reload module: implementation changed (logic)") {
+			console.log(watched);
+			failWith(tag, "an edit of logic.ms reloaded another module while a header the app includes was too new to record its object");
+		}
+	}
+	const lost = freshDir(`${TMP}/unchangedLostRecord`);
+	for (const f of readDir(`${FIXTURES}/step`)) copy(`${FIXTURES}/step/${f}`, `${lost}/${f}`);
+	mustBuild(tag, lost, ["build", "app.ms", "--hcr"], "the first build failed");
+	const cache = `${lost}/out/debug/.cache`;
+	for (const f of readDir(cache)) {
+		if (f.endsWith(".cfp")) remove(`${cache}/${f}`);
+	}
+	const rebuilt = mustBuild(tag, lost, ["build", "app.ms", "--hcr"], "the rebuild without object records failed");
+	env.set("MSC_NO_GLOBAL_CACHE", globalCache);
+	if (reloadLines(rebuilt).length != 0) {
+		console.log(rebuilt);
+		failWith(tag, "recompiling unchanged sources after their object records were lost reported a module as changed");
 	}
 	console.log(`ok   ${tag}`);
 }
@@ -2309,6 +2396,119 @@ function runKeys(): void {
 	console.log(`ok   ${tag}`);
 }
 
+
+function eventsOf(path: string): string[] {
+	const out: string[] = [];
+	for (const line of lines(read(path))) {
+		if (line != "") out.push(line);
+	}
+	return out;
+}
+
+function eventAt(events: string[], from: int32, needle: string): int32 {
+	for (let i = from; i < events.length; i += 1) {
+		if (events[i].contains(needle)) return i;
+	}
+	return -1;
+}
+
+function startEvents(tag: string, name: string, events: string): ChildProcess {
+	const dir = freshDir(`${TMP}/${name}`);
+	for (const f of readDir(`${FIXTURES}/runEvents`)) copy(`${FIXTURES}/runEvents/${f}`, `${dir}/${f}`);
+	const started = spawnChild(MSC, ["run", "--hcr", `--events=${events}`, "app.ms"], { cwd: dir, mergeStderr: true });
+	if (!started.ok) {
+		console.log(`FAIL ${tag}: cannot start ${MSC}`);
+		exit(1);
+	}
+	return started.value;
+}
+
+function runEvents(): void {
+	const tag = "hcrRunEvents";
+	const globalCache = env.get("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_NO_GLOBAL_CACHE", "1");
+	const dir = `${TMP}/runEvents`;
+	const child = startEvents(tag, "runEvents", "events.jsonl");
+	const seen = [""];
+	const stage = (marker: string, why: string): void => {
+		const got = readUntil(child, seen, marker, 120000);
+		if (!got) console.log(seen[0]);
+		need(tag, got, why);
+	};
+	stage("EVENTS start 7 1", "the program did not start on the first build");
+	copy(`${dir}/logicEdited.ms`, `${dir}/logic.ms`);
+	stage("EVENTS reloaded 9", "the body edit did not reload");
+	copy(`${dir}/logicBroken.ms`, `${dir}/logic.ms`);
+	stage("stopping before codegen", "the type error did not stop the build");
+	copy(`${dir}/modelGrown.ms`, `${dir}/model.ms`);
+	copy(`${dir}/logicEdited.ms`, `${dir}/logic.ms`);
+	stage("; press R to restart", "a field added to a live class did not ask for a restart");
+	child.write("q\n", 5000);
+	const ended = child.wait(30000);
+	if (!ended.ok) console.log(seen[0]);
+	need(tag, ended.ok, "q did not end msc");
+	readUntil(child, seen, "watch: quit", 2000);
+	child.close();
+
+	const human = [
+		"error: Type 'int32' is not assignable to type 'string'",
+		`  --> ${dir}/logic.ms:1:42`,
+		"    |",
+		"1 | export function value(): string { return 1; }",
+		`    | ${"".padStart(41, " ")}^`,
+		"",
+		"error: 1 type error(s) found, stopping before codegen",
+	].join("\n");
+	need(tag, seen[0].replaceAll("\r", "").contains(human), "the human type-error lines differ from the pinned rendering");
+
+	const ev = eventsOf(`${dir}/events.jsonl`);
+	for (const line of ev) {
+		need(tag, line.startsWith("{\"v\":1,\"t\":") && line.endsWith("}"), `not an event envelope: ${line}`);
+	}
+	const first = eventAt(ev, 0, "\"event\":\"build.done\"");
+	need(tag, first >= 0, "no build.done for the first build");
+	const start2 = eventAt(ev, first + 1, "\"event\":\"build.start\"");
+	need(tag, start2 > first, "no build.start for the body edit");
+	need(tag, eventAt(ev, start2, "\"event\":\"build.start\",\"build\":2,\"changed\":[\"logic.ms\"]") > start2, "no build.start naming logic.ms as changed");
+	const done2 = eventAt(ev, start2, "\"event\":\"build.done\"");
+	need(tag, done2 > start2, "no build.done after the body edit");
+	const reloaded = eventAt(ev, done2, "\"event\":\"reload\",\"source\":\"runtime\",\"kind\":\"reloaded\"");
+	need(tag, reloaded > done2, "no runtime reload event of kind reloaded after the body edit");
+	const failed = eventAt(ev, reloaded, "\"event\":\"build.failed\"");
+	need(tag, failed > reloaded, "no build.failed for the type error");
+	const located = `"file":"${dir}/logic.ms","line":1,"col":42,"severity":"error","message":"Type 'int32' is not assignable to type 'string'"`;
+	need(tag, ev[failed].contains(located), `build.failed does not carry the diagnostic location: ${ev[failed]}`);
+	const restart = eventAt(ev, failed, "\"event\":\"reload\",\"source\":\"runtime\",\"kind\":\"restartRequired\"");
+	need(tag, restart > failed && ev[restart].contains("\"modules\":[\"model\"]") && ev[restart].contains("live values"), "no runtime restartRequired naming the model module and its live values");
+	need(tag, eventAt(ev, restart, "\"event\":\"exit\",\"code\":") > restart, "no exit event");
+	need(tag, seen[0].contains("watch: type 'Box'"), "the restart hint does not carry the engine's reason");
+
+	const onStdout = startEvents(tag, "runEventsStdout", "-");
+	const out = [""];
+	const got = readUntil(onStdout, out, "EVENTS start 7 1", 120000);
+	if (!got) console.log(out[0]);
+	need(tag, got, "--events=- : the program did not start");
+	onStdout.write("q\n", 5000);
+	onStdout.wait(30000);
+	readUntil(onStdout, out, "watch: quit", 2000);
+	onStdout.close();
+	need(tag, out[0].contains("{\"v\":1,\"t\":") && out[0].contains("\"event\":\"build.done\"") && out[0].contains("watch: build 0 built"), "--events=- : events and human lines are not both on stdout");
+
+	const bad = startEvents(tag, "runEventsMalformed", "events.jsonl");
+	const badSeen = [""];
+	const up = readUntil(bad, badSeen, "EVENTS start 7 1", 120000);
+	if (!up) console.log(badSeen[0]);
+	need(tag, up, "malformed case: the program did not start");
+	const verdicts = `${TMP}/runEventsMalformed/out/hcr/app.reload.jsonl`;
+	need(tag, writeFile(verdicts, "this is not json\n").ok, `cannot write ${verdicts}`);
+	readUntil(bad, badSeen, "is not JSON", 20000);
+	const died = bad.wait(30000);
+	bad.close();
+	need(tag, badSeen[0].contains("app.reload.jsonl line 1 is not JSON"), `a malformed verdict line was not named: ${badSeen[0]}`);
+	need(tag, died.ok && died.value.code == 1, "a malformed verdict line did not end msc with code 1");
+	env.set("MSC_NO_GLOBAL_CACHE", globalCache);
+	console.log(`ok   ${tag}`);
+}
 const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrFsWatch", run: fsWatch },
 	{ name: "hcrModuleAbi", run: moduleAbi },
@@ -2340,6 +2540,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrStaticField", run: staticField },
 	{ name: "hcrSharedNativeFlags", run: sharedNativeFlags },
 	{ name: "hcrStepCrash", run: stepCrash },
+	{ name: "hcrUnchangedObjectKeepsImage", run: unchangedObjectKeepsImage },
 	{ name: "hcrStepJoinCrash", run: stepJoinCrash },
 	{ name: "hcrStepSpareCrash", run: stepSpareCrash },
 	{ name: "hcrCrossImageNew", run: crossImageNew },
@@ -2380,6 +2581,8 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrDynamicImportParity", run: dynamicImportParity },
 	{ name: "hcrJsInstanceFiles", run: jsInstanceFiles },
 	{ name: "hcrRunKeys", run: runKeys },
+	{ name: "hcrRunEvents", run: runEvents },
+	{ name: "hcrRunBound", run: runBound },
 ];
 if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });
 

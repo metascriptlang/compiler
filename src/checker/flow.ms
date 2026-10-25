@@ -20,6 +20,7 @@ import {
 	FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { isLogicalAssignOp } from "../ast/operators";
 import {
 	createUnion, createUnionInOrder, inferredType, nullType, neverType,
 	createStringLiteral, createNumberLiteral, integerLiteralName, fractionLiteralName, numberLiteralBase, isFloatType, float64Type, int32Type,
@@ -1283,7 +1284,7 @@ function narrowByAssignment(node: Node | null, refNode: Node, declared: Type): T
 		const d = node.data as BinaryExprData;
 		if (d.left == null) return null;
 		if (patternWritesInto(d.left, refNode)) return declared;
-		if (d.operator != "=") return null;
+		if (d.operator != "=" && !isLogicalAssignOp(d.operator)) return null;
 		if (d.left.kind == NodeKind.Identifier && d.left.resolvedSym == null) {
 			throw new Error(`internal: assignment to '${(d.left.data as IdentifierData).name}' at ${d.left.location.line}:${d.left.location.column} reached flow narrowing with no symbol bound by position`);
 		}

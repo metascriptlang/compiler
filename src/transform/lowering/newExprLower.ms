@@ -30,14 +30,15 @@
 // the same shape conditionalExprLower uses for a ternary in that position.
 
 import {
-	Node, NodeKind, NewExprData, VariableDeclData, ExprStmtData, IfStmtData,
-	ReturnStmtData, WhileStmtData, DeclKind, Type,
+	Node, NodeKind, NewExprData, ExprStmtData, IfStmtData,
+	WhileStmtData, DeclKind, Type,
 } from "../../ast/node";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import { positionalFieldsOf } from "../../checker/types";
 import { TransformContext, createTransformContext, freshTempSym } from "../context";
 import { walkExpandBlocks, replaceInExpr, containsConditionalEval } from "../walker";
-import { anyDescendant, noStop } from "../../ast/visitor";
+import { hoistStmtValue } from "../blockExpand";
+import { anyDescendant, Visit } from "../../ast/visitor";
 import { moveWhileTestIntoBody, wrapElseIfWhen } from "./jumpRetarget";
 import { makeVarDecl, makeIdentResolved, makeMember, makeAssign, makeExprStmt } from "../util";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
@@ -71,7 +72,7 @@ function hasPositionalNew(expr: Node): boolean {
 // whose conditional constructs hold no positional new (those keep native ternary
 // / short-circuit on JS). Walks expr AND stmt nodes via the child visitor.
 export function nodeHasPositionalNew(node: Node): boolean {
-	return anyDescendant(node, (n: Node): boolean => positionalStruct(n) != null, noStop);
+	return anyDescendant(node, (n: Node): Visit => positionalStruct(n) != null ? Visit.Hit : Visit.Descend);
 }
 
 // ===== Hoist =====
@@ -111,34 +112,9 @@ function hoistPositionalNews(expr: Node, hoisted: Node[], ctx: TransformContext)
 
 // ===== Statement expanders =====
 
-function expandVarDecl(stmt: Node, ctx: TransformContext): Node[] {
-	const d = stmt.data as VariableDeclData;
-	if (d.initializer == null || containsConditionalEval(d.initializer)) return [stmt];
-	const hoisted: Node[] = [];
-	d.initializer = hoistPositionalNews(d.initializer, hoisted, ctx);
-	if (hoisted.length == 0) return [stmt];
-	hoisted.push(stmt);
-	return hoisted;
-}
-
-function expandExprStmt(stmt: Node, ctx: TransformContext): Node[] {
-	const ed = stmt.data as ExprStmtData;
-	if (ed.expr == null || containsConditionalEval(ed.expr)) return [stmt];
-	const hoisted: Node[] = [];
-	ed.expr = hoistPositionalNews(ed.expr, hoisted, ctx);
-	if (hoisted.length == 0) return [stmt];
-	hoisted.push(stmt);
-	return hoisted;
-}
-
-function expandReturn(stmt: Node, ctx: TransformContext): Node[] {
-	const rd = stmt.data as ReturnStmtData;
-	if (rd.argument == null || containsConditionalEval(rd.argument)) return [stmt];
-	const hoisted: Node[] = [];
-	rd.argument = hoistPositionalNews(rd.argument, hoisted, ctx);
-	if (hoisted.length == 0) return [stmt];
-	hoisted.push(stmt);
-	return hoisted;
+function hoistUnlessConditional(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
+	if (containsConditionalEval(expr)) return expr;
+	return hoistPositionalNews(expr, hoisted, ctx);
 }
 
 function altChainHasPositionalNew(alt: Node): boolean {
@@ -179,9 +155,7 @@ function expandWhile(stmt: Node, ctx: TransformContext): Node[] {
 
 function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 	return match (stmt.kind) {
-		NodeKind.VariableDecl => expandVarDecl(stmt, ctx),
-		NodeKind.ExprStmt => expandExprStmt(stmt, ctx),
-		NodeKind.ReturnStmt => expandReturn(stmt, ctx),
+		NodeKind.VariableDecl | NodeKind.ExprStmt | NodeKind.ReturnStmt => hoistStmtValue(stmt, hoistUnlessConditional, ctx),
 		NodeKind.IfStmt => expandIf(stmt, ctx),
 		NodeKind.WhileStmt => expandWhile(stmt, ctx),
 		_ => [stmt],

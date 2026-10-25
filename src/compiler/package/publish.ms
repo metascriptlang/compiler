@@ -8,6 +8,7 @@
 //   --dry-run    Build the archive, print the file list, exit without uploading.
 
 import { exists, readFile } from "std/fs";
+import { JsonValue, jsonObject, jsonString, jsonArray, stringify } from "std/core/json";
 import { join } from "std/fs/path";
 import { loadBuildConfig, PackageSection } from "../buildConfig";
 import { loadToken } from "./credentials";
@@ -70,75 +71,25 @@ function buildManifestJson(pkg: PackageSection, version: string): string {
 // The registry's publishSchema (landing apps/api/src/routes/packages.ts) is a
 // plain z.object — strip mode: unknown fields are dropped, never rejected.
 function buildMetadataJson(pkg: PackageSection, version: string): string {
-	let out = "{";
-	out = out + "\"name\":" + jsonEscape(pkg.name);
-	out = out + ",\"version\":" + jsonEscape(version);
-	if (pkg.description.length > 0) out = out + ",\"description\":" + jsonEscape(pkg.description);
-	if (pkg.license.length > 0) out = out + ",\"license\":" + jsonEscape(pkg.license);
-	if (pkg.repository.length > 0) out = out + ",\"repository\":" + jsonEscape(pkg.repository);
-	if (pkg.homepage.length > 0) out = out + ",\"homepage\":" + jsonEscape(pkg.homepage);
+	const keys: string[] = ["name", "version"];
+	const values: JsonValue[] = [jsonString(pkg.name), jsonString(version)];
+	if (pkg.description.length > 0) { keys.push("description"); values.push(jsonString(pkg.description)); }
+	if (pkg.license.length > 0) { keys.push("license"); values.push(jsonString(pkg.license)); }
+	if (pkg.repository.length > 0) { keys.push("repository"); values.push(jsonString(pkg.repository)); }
+	if (pkg.homepage.length > 0) { keys.push("homepage"); values.push(jsonString(pkg.homepage)); }
 	if (pkg.keywords.length > 0) {
-		out = out + ",\"keywords\":[";
-		let i = 0;
-		while (i < pkg.keywords.length) {
-			if (i > 0) out = out + ",";
-			out = out + jsonEscape(pkg.keywords[i]);
-			i = i + 1;
-		}
-		out = out + "]";
+		const words: JsonValue[] = [];
+		for (const w of pkg.keywords) words.push(jsonString(w));
+		keys.push("keywords");
+		values.push(jsonArray(words));
 	}
 	if (pkg.bin.keys.length > 0) {
-		out = out + ",\"bin\":{";
-		let b = 0;
-		while (b < pkg.bin.keys.length) {
-			if (b > 0) out = out + ",";
-			out = out + jsonEscape(pkg.bin.keys[b]) + ":" + jsonEscape(pkg.bin.values[b]);
-			b = b + 1;
-		}
-		out = out + "}";
+		const binValues: JsonValue[] = [];
+		for (const v of pkg.bin.values) binValues.push(jsonString(v));
+		keys.push("bin");
+		values.push(jsonObject(pkg.bin.keys, binValues));
 	}
-	out = out + "}";
-	return out;
-}
-
-// JSON-encode a string value with surrounding double quotes. Only escapes
-// the minimal required characters.
-function jsonEscape(s: string): string {
-	let out = "\"";
-	let i = 0;
-	while (i < s.length) {
-		const ch = s.charAt(i);
-		const code = s.charCodeAt(i);
-		if (ch == "\\") { out = out + "\\\\"; }
-		else if (ch == "\"") { out = out + "\\\""; }
-		else if (ch == "\n") { out = out + "\\n"; }
-		else if (ch == "\r") { out = out + "\\r"; }
-		else if (ch == "\t") { out = out + "\\t"; }
-		else if (code < 32) {
-			// Other control chars → \u00XX
-			out = out + "\\u00" + hexByte(code);
-		} else {
-			out = out + ch;
-		}
-		i = i + 1;
-	}
-	out = out + "\"";
-	return out;
-}
-
-function hexByte(b: number): string {
-	const hi = (b - b % 16) / 16;
-	const lo = b % 16;
-	return hexDigit(hi) + hexDigit(lo);
-}
-
-function hexDigit(d: number): string {
-	return match (d) {
-		0 => "0", 1 => "1", 2 => "2", 3 => "3",
-		4 => "4", 5 => "5", 6 => "6", 7 => "7",
-		8 => "8", 9 => "9", 10 => "a", 11 => "b",
-		12 => "c", 13 => "d", 14 => "e", _ => "f",
-	};
+	return stringify(jsonObject(keys, values));
 }
 
 import { extractJsonField } from "./json";
@@ -374,12 +325,6 @@ test "humanSize formatting" {
 	assert humanSize(10 * 1024 * 1024) == "10.0 MB";
 }
 
-test "hexByte" {
-	assert hexByte(0) == "00";
-	assert hexByte(15) == "0f";
-	assert hexByte(16) == "10";
-	assert hexByte(255) == "ff";
-}
 test "buildMetadataJson minimal" {
 	const pkg: PackageSection = {
 		name: "cool-json",
@@ -454,4 +399,23 @@ test "buildManifestJson" {
 	};
 	const manifest = buildManifestJson(pkg, "1.0.0");
 	assert manifest == "{\"name\":\"x\",\"version\":\"1.0.0\"}";
+}
+
+test "buildMetadataJson escapes a description and keeps bin and field order" {
+	const pkg: PackageSection = {
+		name: "x",
+		version: "0.1.0",
+		description: "q\" b\\ n\n u\u0001 \u0008\u000c \u{1F600}",
+		license: "MIT",
+		repository: "r",
+		homepage: "h",
+		keywords: ["k"],
+		author: "",
+		files: [],
+		ignore: [],
+		bin: { keys: ["a", "b"], values: ["a.ms", "b.ms"] },
+		valid: true,
+	};
+	const js = buildMetadataJson(pkg, "0.1.0");
+	assert js == "{\"name\":\"x\",\"version\":\"0.1.0\",\"description\":\"q\\\" b\\\\ n\\n u\\u0001 \\b\\f \u{1F600}\",\"license\":\"MIT\",\"repository\":\"r\",\"homepage\":\"h\",\"keywords\":[\"k\"],\"bin\":{\"a\":\"a.ms\",\"b\":\"b.ms\"}}";
 }

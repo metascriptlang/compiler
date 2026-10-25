@@ -1,5 +1,5 @@
 import { Node, NodeKind, Symbol, SymbolKind, IdentifierData, VariableDeclData, TryCatchStmtData } from "../ast/node";
-import { forEachChild } from "../ast/visitor";
+import { forEachChild, isFuncBoundary } from "../ast/visitor";
 import { makeSymbol } from "../checker/symbol";
 import { noneType } from "../checker/types";
 import { parseInput } from "../transform/testUtil";
@@ -28,8 +28,6 @@ export function attachSymAll(node: Node, name: string, sym: Symbol): void {
 	if (node.kind == NodeKind.TryCatchStmt) {
 		if ((node.data as TryCatchStmtData).catchName == name) node.resolvedSym = sym;
 	}
-	if (node.kind == NodeKind.FunctionDecl
-		|| node.kind == NodeKind.ArrowFunction
-		|| node.kind == NodeKind.FunctionExpr) return;
+	if (isFuncBoundary(node)) return;
 	forEachChild(node, (c: Node): void => { attachSymAll(c, name, sym); });
 }

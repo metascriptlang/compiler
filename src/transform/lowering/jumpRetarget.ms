@@ -13,7 +13,7 @@
 import { Node, NodeKind, BreakStmtData, ContinueStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, IfStmtData } from "../../ast/node";
 import { isRoutineOrTestNode } from "../../ast/shape";
 import { TransformContext } from "../context";
-import { forEachChild, anyDescendant } from "../../ast/visitor";
+import { forEachChild, anyDescendant, Visit } from "../../ast/visitor";
 import { mapChildren } from "../walker";
 import { makeBreak, makeBool, makeBlock, makeIf, makeUnary, makeSwitchWrapper, extractBodyStmts } from "../util";
 
@@ -58,12 +58,13 @@ function isSwitchWrapper(node: Node): boolean {
 function continuesLoop(node: Node, loopLabel: string): boolean {
 	return anyDescendant(
 		node,
-		(n: Node): boolean => {
-			if (n.kind != NodeKind.ContinueStmt) return false;
-			const label = (n.data as ContinueStmtData).continueLabel;
-			return label == "" || label == loopLabel;
-		},
-		(n: Node): boolean => isRoutineOrTestNode(n) || (isLoopKind(n.kind) && !isSwitchWrapper(n)));
+		(n: Node): Visit => {
+			if (n.kind == NodeKind.ContinueStmt) {
+				const label = (n.data as ContinueStmtData).continueLabel;
+				if (label == "" || label == loopLabel) return Visit.Hit;
+			}
+			return isRoutineOrTestNode(n) || (isLoopKind(n.kind) && !isSwitchWrapper(n)) ? Visit.Skip : Visit.Descend;
+		});
 }
 
 export function hasLoopContinue(stmts: Node[], loopLabel: string): boolean {

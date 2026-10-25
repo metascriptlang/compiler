@@ -1,5 +1,5 @@
 import { Node, NodeKind, BinaryExprData, ForStmtData, IfStmtData, ConditionalExprData } from "../ast/node";
-import { forEachChild, anyDescendant, isFuncBoundary } from "../ast/visitor";
+import { forEachChild, anyDescendant, isFuncBoundary, Visit } from "../ast/visitor";
 import { isAssignOp } from "../ast/operators";
 
 function isEffectNode(n: Node): boolean {
@@ -8,8 +8,13 @@ function isEffectNode(n: Node): boolean {
 	return n.kind == NodeKind.BinaryExpr && isAssignOp((n.data as BinaryExprData).operator);
 }
 
+function effectVerdict(n: Node): Visit {
+	if (isEffectNode(n)) return Visit.Hit;
+	return isFuncBoundary(n) ? Visit.Skip : Visit.Descend;
+}
+
 export function hasEffect(n: Node): boolean {
-	return anyDescendant(n, isEffectNode, isFuncBoundary);
+	return anyDescendant(n, effectVerdict);
 }
 
 export interface OnceEvalState {

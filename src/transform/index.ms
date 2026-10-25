@@ -30,10 +30,11 @@
 import { Node, NodeKind, ProgramData, SymbolKind } from "../ast/node";
 import { CheckerContext } from "../checker/context";
 import { hasFlag, setFlag, SymbolFlag } from "../checker/symbol";
-import { createTransformContextWithChecker, TransformContext } from "./context";
+import { createTransformContextWithChecker, TransformContext, ModuleFact } from "./context";
 import { WriteSummaries } from "../analyzer/writeEffects";
 import { bindCompilerFuncs } from "./util";
-import { flowLap, flowMark } from "../compiler/flows";
+import { skipsModule } from "./moduleFacts";
+import { flowLap, flowMark, flowTally } from "../compiler/flows";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerBitSet } from "./lowering/bitSetLower";
 import { lowerConstFold } from "./coercion/constantFolding";
@@ -115,9 +116,20 @@ import { lowerEnumToString } from "./native/enumToStringLower";
 // expression also spills what a folded null comparison would drop.
 function lowerFieldInitializers(program: Node, ctx: TransformContext): Node {
 	const inits: Node[] = ctx.jsBackend ? [] : instanceFieldInitializers(program);
-	const moved = lowerMovedFieldInitTruthiness(lowerCtorInit(program, ctx), ctx, inits);
-	const result = lowerNullishCoalesce(lowerOptionalChain(moved, ctx), ctx);
+	let result = lowerMovedFieldInitTruthiness(lowerCtorInit(program, ctx), ctx, inits);
+	if (runs(result, ctx, fact(ModuleFact.OptionalChain), "pass.lowerFieldInitializers.lowerOptionalChain")) result = lowerOptionalChain(result, ctx);
+	if (runs(result, ctx, fact(ModuleFact.Nullish), "pass.lowerFieldInitializers.lowerNullishCoalesce")) result = lowerNullishCoalesce(result, ctx);
 	return ctx.jsBackend ? result : lowerAwaitSpill(result, ctx);
+}
+
+function fact(f: ModuleFact): BitSet<ModuleFact> {
+	return (0 as BitSet<ModuleFact>).incl(f);
+}
+
+function runs(program: Node, ctx: TransformContext, need: BitSet<ModuleFact>, pass: string): boolean {
+	if (!skipsModule(program, ctx, need, pass)) return true;
+	flowTally(`skip.${pass}`, 1);
+	return false;
 }
 
 export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean, reloadableModules: string[] = [], asyncModuleBody: boolean = false, liftTables: WriteSummaries | null = null): Node {
@@ -127,7 +139,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	ctx.reloadableModules = reloadableModules;
 	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	flowMark();
-	let result = eraseBrandTypes(program);
+	let result = eraseBrandTypes(program, ctx);
 	flowLap("pass.eraseBrandTypes");
 	if (!jsBackend) { result = lowerActorHandles(result, ctx); flowLap("pass.lowerActorHandles"); }
 	if (!jsBackend) { result = planModuleTdz(result, ctx); flowLap("pass.planModuleTdz"); }
@@ -137,20 +149,23 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	flowLap("pass.lowerImplicitConv");
 	result = jsBackend ? lowerPowerAssert(result, ctx) : lowerAssert(result, ctx);
 	flowLap(jsBackend ? "pass.lowerPowerAssert" : "pass.lowerAssert");
-	result = lowerDefer(result, ctx);
+	if (runs(result, ctx, fact(ModuleFact.Defer), "pass.lowerDefer")) result = lowerDefer(result, ctx);
 	flowLap("pass.lowerDefer");
 	result = lowerConstFold(result, ctx);
 	flowLap("pass.lowerConstFold");
 	if (!jsBackend) { result = lowerStaticInit(result, ctx); flowLap("pass.lowerStaticInit"); }
 	result = lowerVoidBind(result, ctx);
 	flowLap("pass.lowerVoidBind");
-	result = lowerObjectSpread(result, ctx);
+	if (runs(result, ctx, fact(ModuleFact.Spread), "pass.lowerObjectSpread")) result = lowerObjectSpread(result, ctx);
 	flowLap("pass.lowerObjectSpread");
-	if (!jsBackend) { result = lowerArraySpread(result, ctx); flowLap("pass.lowerArraySpread"); }
+	if (!jsBackend) {
+		if (runs(result, ctx, fact(ModuleFact.Spread), "pass.lowerArraySpread")) result = lowerArraySpread(result, ctx);
+		flowLap("pass.lowerArraySpread");
+	}
 	if (!jsBackend) { result = lowerStringConcatFlatten(result, ctx); flowLap("pass.lowerStringConcatFlatten"); }
-	result = lowerOptionalChain(result, ctx);
+	if (runs(result, ctx, fact(ModuleFact.OptionalChain), "pass.lowerOptionalChain")) result = lowerOptionalChain(result, ctx);
 	flowLap("pass.lowerOptionalChain");
-	result = lowerNullishCoalesce(result, ctx);
+	if (runs(result, ctx, fact(ModuleFact.Nullish), "pass.lowerNullishCoalesce")) result = lowerNullishCoalesce(result, ctx);
 	flowLap("pass.lowerNullishCoalesce");
 	result = materializeMaybeReads(result, ctx);
 	flowLap("pass.materializeMaybeReads");
@@ -169,7 +184,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	flowLap("pass.lowerResultConstructors");
 	result = lowerTypeof(result, ctx);
 	flowLap("pass.lowerTypeof");
-	result = lowerSwitch(result, ctx);
+	if (runs(result, ctx, fact(ModuleFact.Switch), "pass.lowerSwitch")) result = lowerSwitch(result, ctx);
 	flowLap("pass.lowerSwitch");
 	result = lowerMatch(result, ctx);
 	flowLap("pass.lowerMatch");
@@ -185,17 +200,36 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerAwaitSpill(result, ctx); flowLap("pass.lowerAwaitSpill"); }
 	if (!jsBackend) { result = lowerNamespaceValues(result); flowLap("pass.lowerNamespaceValues"); }
 	if (!jsBackend) { result = lowerActorPre(result, ctx); flowLap("pass.lowerActorPre"); }
-	if (!jsBackend) { result = lowerSpawnGroup(result, ctx); flowLap("pass.lowerSpawnGroup"); }
+	if (!jsBackend) {
+		if (runs(result, ctx, fact(ModuleFact.Await), "pass.lowerSpawnGroup")) result = lowerSpawnGroup(result, ctx);
+		flowLap("pass.lowerSpawnGroup");
+	}
 	if (!jsBackend) { result = lowerHeldSpawns(result, ctx); flowLap("pass.lowerHeldSpawns"); }
 	result = lowerPointerAddresses(result, ctx, !jsBackend);
 	flowLap("pass.lowerPointerAddresses");
-	if (!jsBackend) { result = lowerAsync(result, ctx); flowLap("pass.lowerAsync"); }
-	if (!jsBackend) { result = lowerAsyncBridge(result, ctx); flowLap("pass.lowerAsyncBridge"); }
-	if (!jsBackend) { result = lowerGenerator(result, ctx); flowLap("pass.lowerGenerator"); }
-	if (!jsBackend) { result = lowerSpawn(result, ctx); flowLap("pass.lowerSpawn"); }
+	if (!jsBackend) {
+		if (runs(result, ctx, fact(ModuleFact.Async), "pass.lowerAsync")) result = lowerAsync(result, ctx);
+		flowLap("pass.lowerAsync");
+	}
+	if (!jsBackend) {
+		if (runs(result, ctx, fact(ModuleFact.Async), "pass.lowerAsyncBridge")) result = lowerAsyncBridge(result, ctx);
+		flowLap("pass.lowerAsyncBridge");
+	}
+	// lowerAsyncBridge leaves its split diagnostics and loop locals for lowerGenerator to report.
+	if (!jsBackend) {
+		if (runs(result, ctx, fact(ModuleFact.Generator).incl(ModuleFact.Async), "pass.lowerGenerator")) result = lowerGenerator(result, ctx);
+		flowLap("pass.lowerGenerator");
+	}
+	if (!jsBackend) {
+		if (runs(result, ctx, fact(ModuleFact.Spawn), "pass.lowerSpawn")) result = lowerSpawn(result, ctx);
+		flowLap("pass.lowerSpawn");
+	}
 	// lowerSpawn boxes a thunk's return value around its await; spill that before lowerAwait.
 	if (!jsBackend) { result = lowerAwaitSpill(result, ctx); flowLap("pass.lowerAwaitSpill#2"); }
-	if (!jsBackend) { result = lowerAwait(result, ctx); flowLap("pass.lowerAwait"); }
+	if (!jsBackend) {
+		if (runs(result, ctx, fact(ModuleFact.Await).incl(ModuleFact.Spawn), "pass.lowerAwait")) result = lowerAwait(result, ctx);
+		flowLap("pass.lowerAwait");
+	}
 	if (!jsBackend) { result = lowerFieldInitializers(result, ctx); flowLap("pass.lowerFieldInitializers"); }
 	if (!jsBackend) { result = lowerActor(result, ctx); flowLap("pass.lowerActor"); }
 	if (!jsBackend) { result = lowerVarHoist(result, ctx); flowLap("pass.lowerVarHoist"); }

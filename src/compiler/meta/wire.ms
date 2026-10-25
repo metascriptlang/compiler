@@ -10,5 +10,5 @@ export function isNodeWireMetaField(name: string): boolean {
 	return name == "kind" || name == "line" || name == "column"
 		|| name == "endLine" || name == "endColumn"
 		|| name == "nodeType" || name == "resolvedSym" || name == "symHandle" || name == "typeHandle" || name == "gensym"
-		|| name == "declSymHandle" || name == "paramSymHandles";
+		|| name == "declSymHandle" || name == "paramSymHandles" || name == "argOrigin";
 }

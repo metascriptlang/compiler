@@ -408,9 +408,20 @@ test "bitwise compound assignments are one token each" {
 	assert lexKindAt("a>>=b", 1) == TokenKind.GtGtEq;
 	assert lexKindAt("a>>>=b", 1) == TokenKind.GtGtGtEq;
 	assert lexKindAt("a>>>=b", 2) == TokenKind.Ident;
-	assert lexKindAt("a&&=b", 1) == TokenKind.AmpAmp;
-	assert lexKindAt("a||b", 1) == TokenKind.PipePipe;
 	assert lexKindAt("a|>b", 1) == TokenKind.PipeGt;
+}
+
+test "logical assignments are one token each and keep their two-character prefixes" {
+	assert lexKindAt("a&&=b", 1) == TokenKind.AmpAmpEq;
+	assert lexKindAt("a||=b", 1) == TokenKind.PipePipeEq;
+	assert lexKindAt("a??=b", 1) == TokenKind.QuestionQuestionEq;
+	assert lexKindAt("a??=b", 2) == TokenKind.Ident;
+	assert lexKindAt("a&&b", 1) == TokenKind.AmpAmp;
+	assert lexKindAt("a||b", 1) == TokenKind.PipePipe;
+	assert lexKindAt("a??b", 1) == TokenKind.QuestionQuestion;
+	assert lexKindAt("a?.b", 1) == TokenKind.QuestionDot;
+	assert lexKindAt("a&=b", 1) == TokenKind.AmpEq;
+	assert lexKindAt("a|=b", 1) == TokenKind.PipeEq;
 }
 
 test "a regex may follow a bitwise compound assignment" {

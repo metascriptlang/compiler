@@ -30,6 +30,7 @@ export function startsExprAfter(kind: TokenKind): boolean {
 		| TokenKind.PlusEq | TokenKind.MinusEq | TokenKind.StarEq | TokenKind.StarStarEq | TokenKind.SlashEq
 		| TokenKind.AmpEq | TokenKind.PipeEq | TokenKind.CaretEq | TokenKind.LtLtEq | TokenKind.GtGtEq | TokenKind.GtGtGtEq
 		| TokenKind.EqEq | TokenKind.EqEqEq | TokenKind.BangEq | TokenKind.BangEqEq
+		| TokenKind.AmpAmpEq | TokenKind.PipePipeEq | TokenKind.QuestionQuestionEq
 		| TokenKind.PercentEq | TokenKind.AmpAmp | TokenKind.PipePipe | TokenKind.QuestionQuestion | TokenKind.Question
 		| TokenKind.Colon | TokenKind.Comma | TokenKind.Semicolon
 		| TokenKind.LParen | TokenKind.LBracket | TokenKind.LBrace
@@ -170,6 +171,9 @@ export function tokenKindToString(kind: TokenKind): string {
 		TokenKind.MinusEq => "MINUS_EQ",
 		TokenKind.StarEq => "STAR_EQ",
 		TokenKind.StarStarEq => "STAR_STAR_EQ",
+		TokenKind.AmpAmpEq => "AMP_AMP_EQ",
+		TokenKind.PipePipeEq => "PIPE_PIPE_EQ",
+		TokenKind.QuestionQuestionEq => "QUESTION_QUESTION_EQ",
 		TokenKind.SlashEq => "SLASH_EQ",
 		TokenKind.PercentEq => "PERCENT_EQ",
 		TokenKind.AmpEq => "AMP_EQ",

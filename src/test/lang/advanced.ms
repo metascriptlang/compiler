@@ -227,7 +227,7 @@ function buildLargeString(lines: number): string {
 
 test "large file I/O" {
 	const content = buildLargeString(100);
-	const path = "/tmp/ms_large_test.txt";
+	const path = "/tmp/ms_large_test-" + String(Math.floor(Math.random() * 1000000000)) + ".txt";
 	const wr = writeFile(path, content);
 	assert wr.ok;
 	const rr = readFile(path);

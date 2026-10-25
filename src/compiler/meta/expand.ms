@@ -72,7 +72,7 @@ import { RaiserContext } from "../../raiser/context";
 import { RaiserVM, vmReleaseHeaps } from "../../raiser/vm";
 import { callWithComptimeHostPolicy } from "./hostPolicy";
 import { bindExpandedSubtree } from "../../binder/binder";
-import { takeWireRefusals, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBakedSym, registerBakedType, valueToExpansion, boundMark, releaseBound } from "./bridge";
+import { takeWireRefusals, nodeToValue, builtNodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBakedSym, registerBakedType, valueToExpansion, boundMark, releaseBound } from "./bridge";
 import { symbolCarried } from "../../checker/symbol";
 import { ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
 import { parseIntStr } from "../../utils/string";
@@ -1771,7 +1771,7 @@ export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 		if (at == null) return node;
 		const implementation = mapTypeToAst(at, node.location, true);
 		implementation.nodeType = argType;
-		marshalArgs.push(nodeToValue(implementation, vm.objectHeap, vm.arrayHeap));
+		marshalArgs.push(builtNodeToValue(implementation, vm.objectHeap, vm.arrayHeap));
 	}
 	const macroSourcePath = macroSym.modulePath != "" ? macroSym.modulePath : regCtx.modulePath;
 	pushActiveMetaCtx(ctx, node.location.line, node.location.column);

@@ -670,7 +670,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 		flags = appendFlag(flags, "-D_GNU_SOURCE");
 	}
 	if (opts.targetOs == "windows" && !isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary))) {
-		flags = appendFlag(flags, "-D_WIN32_WINNT=0x0600");
+		flags = appendFlag(flags, "-D_WIN32_WINNT=0x0A00");
 	}
 	if (opts.sanitize != "") flags = appendFlag(flags, `-fsanitize=${opts.sanitize}`);
 	// Linker DCE: place each function/data in its own section so the linker can strip unused ones

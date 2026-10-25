@@ -25,7 +25,8 @@ export function getPrecedence(kind: TokenKind): int32 {
 		TokenKind.Assign | TokenKind.PlusEq | TokenKind.MinusEq |
 		TokenKind.StarEq | TokenKind.StarStarEq | TokenKind.SlashEq | TokenKind.PercentEq |
 		TokenKind.AmpEq | TokenKind.PipeEq | TokenKind.CaretEq |
-		TokenKind.LtLtEq | TokenKind.GtGtEq | TokenKind.GtGtGtEq => 5,
+		TokenKind.LtLtEq | TokenKind.GtGtEq | TokenKind.GtGtGtEq |
+		TokenKind.AmpAmpEq | TokenKind.PipePipeEq | TokenKind.QuestionQuestionEq => 5,
 		TokenKind.PipeGt => 3,
 		_ => 0,
 	};
@@ -45,7 +46,8 @@ export function isBinaryOperator(token: Token): boolean {
 		TokenKind.Assign | TokenKind.PlusEq | TokenKind.MinusEq |
 		TokenKind.StarEq | TokenKind.StarStarEq | TokenKind.SlashEq | TokenKind.PercentEq |
 		TokenKind.AmpEq | TokenKind.PipeEq | TokenKind.CaretEq |
-		TokenKind.LtLtEq | TokenKind.GtGtEq | TokenKind.GtGtGtEq => true,
+		TokenKind.LtLtEq | TokenKind.GtGtEq | TokenKind.GtGtGtEq |
+		TokenKind.AmpAmpEq | TokenKind.PipePipeEq | TokenKind.QuestionQuestionEq => true,
 		_ => false,
 	};
 }
@@ -58,7 +60,8 @@ export function isRightAssociative(kind: TokenKind): boolean {
 		TokenKind.Assign | TokenKind.PlusEq | TokenKind.MinusEq |
 		TokenKind.StarEq | TokenKind.StarStarEq | TokenKind.SlashEq | TokenKind.PercentEq |
 		TokenKind.AmpEq | TokenKind.PipeEq | TokenKind.CaretEq |
-		TokenKind.LtLtEq | TokenKind.GtGtEq | TokenKind.GtGtGtEq => true,
+		TokenKind.LtLtEq | TokenKind.GtGtEq | TokenKind.GtGtGtEq |
+		TokenKind.AmpAmpEq | TokenKind.PipePipeEq | TokenKind.QuestionQuestionEq => true,
 		_ => false,
 	};
 }

@@ -10,6 +10,7 @@ import { nonNullMemberOfNullable } from "../../checker/compat";
 import { ctorFormalTypes } from "../../checker/ctorRoutine";
 import { TransformContext, freshTempSym, reportTransformError } from "../context";
 import { mapChildren } from "../walker";
+import { isRoutineNode } from "../../ast/shape";
 import { makeIdentResolved, makeNumber, makeArrayAccess, makeBinary, makeVarDecl, makeBlock, makeReturn } from "../util";
 
 function bare(t: Type | null): Type | null {
@@ -106,8 +107,7 @@ function convert(value: Node, target: Type | null, run: PointerRun): Node {
 function rewrite(node: Node, run: PointerRun): Node {
 	const ctx = run.ctx;
 	if (node == null) return node;
-	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr
-		|| node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ConstructorDecl) {
+	if (isRoutineNode(node)) {
 		const t = node.resolvedSym != null ? node.resolvedSym.symbolType : node.nodeType;
 		run.returnTypes.push(t != null ? t.typeReturn : null);
 		run.tempScopes.push([]);

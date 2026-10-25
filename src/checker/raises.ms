@@ -383,6 +383,14 @@ export function inferredCallRaises(call: Readonly<Node>): boolean {
 	throw new Error(`internal: a call at ${call.location.line}:${call.location.column} reached emission without a raises verdict`);
 }
 
+export function callMayRaise(call: Readonly<Node>): boolean {
+	return classifyCall(call) != CallRaise.Never;
+}
+
+export function newMayRaise(node: Readonly<Node>): boolean {
+	return classifyNew(node) != CallRaise.Never;
+}
+
 // A value the inference never saw keeps the check after a top-level call.
 export function statementCanRaise(value: Readonly<Node>): boolean {
 	if (value == null) return false;

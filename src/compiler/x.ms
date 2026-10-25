@@ -176,7 +176,7 @@ export function syncShims(projectRoot: string, shimDir: string): boolean {
 
 test "pruneStaleShims removes stale shims and leaves foreign files" {
 	const base = env.get("TMPDIR");
-	const dir = join(base != "" ? base : "/tmp", "msc-prune-shims-test");
+	const dir = join(base != "" ? base : "/tmp", "msc-prune-shims-test-" + String(Math.floor(Math.random() * 1000000000)));
 	removeAll(dir);
 	ensureDir(dir);
 	writeFile(join(dir, "greet"), "#!/bin/sh\n# msc shim v1\nexec msc x 'greeter:greet' \"$@\"\n");

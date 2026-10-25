@@ -5,6 +5,7 @@ import { refuseUnassignedRead, refuseHookValue, requiresInit, noDefaultReason, h
 import { callCheckStmt, checkInTypeSlot, registerCheckExpr, callDemandReturn, callDemandBinding, callUndefinedVariableMessage, callExpandMacroInvocation, callEvalComptimeBlock, callInstantiateGeneric } from "./checkerCallbacks";
 import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData } from "../ast/node";
 import { getIdentId } from "./idents";
+import { isAssignOp, isLogicalAssignOp } from "../ast/operators";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { genericParamsOf, peelTransparentInstance, isStdCollection, isTagCarriedUnion, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createPrimitive, anonStructName, isNumeric, isIntegerType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByStringDiscriminant, findSharedStringDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, hasGenericParams, getMinArity, setMinArity, skipModifier, createPromise, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isResult, getResultOkType, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, spelled, peelThrough, PEEL_ALL, PEEL_ALIAS, literalBase, getResultErrType, isValuePointee, classParentOf, isNullableShape, isOutParam, distinctBody, genericInstanceMembers, functionSlotOf, holdsInferred, createNumberLiteral, numberLiteralBase, integerLiteralName, fractionLiteralName, widenNumberLiteralType, isIterator, isLockedRef, getIteratorYieldType, getBuiltinKind, withoutNullMember, nullableUnionOf, createUnion, createArc, createTypeRef, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, createGenericInstance, getReturnType, unwrapVarargs, detectUnionDiscriminant, collectStringDiscriminantValues, unionVariantHasProperty, findVariantByFieldName, duSharedFieldOffsetDiffers, createUnifyBindings, mergeUnifyBindings, UnifyBindings, isNarrowingIntConv, integerRank, createSpawnHandle, createEnumLiteral, isBrandDistinct, isSendableFunction, copyTypeShallow } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, classDeclNodeOf, parentClassSymOf, isVisibleSymbol, Scope, RoutineFlag, routineFlagSet } from "./symbol";
@@ -394,7 +395,10 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type | 
 		: (expectedType != null && (expectedType.kind == TypeKind.Sink || expectedType.kind == TypeKind.Lent) && expectedType.typeReturn != null)
 		? expectedType.typeReturn
 		: expectedType;
+	const recordsWereOff = ctx.symRecordsOff;
+	ctx.symRecordsOff = node.flags.has(NodeFlag.FromTemplate);
 	checkExprInner(ctx, node, slotType);
+	ctx.symRecordsOff = recordsWereOff;
 	viewThroughReadonlyBase(node);
 	node.flags = node.flags.incl(NodeFlag.Sem);
 	derefBorrowResult(node);
@@ -1232,10 +1236,8 @@ function lowerLengthAssignment(ctx: CheckerContext, node: Node, arr: Node, n: No
 function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const d = node.data as BinaryExprData;
 	// Ref parity: leftPartOfAsgn
-	const isAsgn = d.operator == "=" || d.operator == "+=" || d.operator == "-=" ||
-		d.operator == "*=" || d.operator == "/=" || d.operator == "%=" || d.operator == "**=" ||
-		d.operator == "&&=" || d.operator == "||=" || d.operator == "??=" ||
-		isBitwiseCompoundOp(d.operator);
+	const isAsgn = isAssignOp(d.operator);
+	const storesRight = d.operator == "=" || isLogicalAssignOp(d.operator);
 	if (isAsgn && node != ctx.stmtPosExpr) {
 		addError(ctx, "assignment is a statement, not an expression - assign first, then use the variable: 'x = f(); while (x !== null) { ... }'", node.location.line, node.location.column);
 	}
@@ -1269,7 +1271,7 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 	}
 	if (d.operator == "=" && d.left.kind == NodeKind.Identifier) ctx.initTracker.assignTarget = d.left;
 	const savedDefinite = ctx.initTracker.definiteTarget;
-	if (d.operator == "=" || d.operator == "&&=" || d.operator == "||=" || d.operator == "??=") ctx.initTracker.definiteTarget = d.left;
+	if (storesRight) ctx.initTracker.definiteTarget = d.left;
 	if (isAsgn && d.left.kind == NodeKind.ArrayLiteral) {
 		if (d.operator != "=") addError(ctx, "a destructuring pattern can only be assigned with '='", d.left.location.line, d.left.location.column);
 		checkAssignTarget(ctx, d.left);
@@ -1318,7 +1320,7 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 				d.left.location.line, d.left.location.column);
 		}
 	}
-	const rightExpected = d.operator == "=" ? leftType : (d.operator == "??" ? nullishArmExpected(expectedType) : wideOperandLiteralSlot(d.right));
+	const rightExpected = storesRight ? leftType : (d.operator == "??" ? nullishArmExpected(expectedType) : wideOperandLiteralSlot(d.right));
 	const rhsGuarded = d.operator == "&&" || d.operator == "||" || d.operator == "??";
 	if (rhsGuarded) ctx.condEvalDepth = ctx.condEvalDepth + 1;
 	if (d.operator == "instanceof") checkInTypeSlot(ctx, d.right);
@@ -1352,7 +1354,7 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		}
 	}
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing assignment
-	if (d.operator == "=" && leftType != null) {
+	if (storesRight && leftType != null) {
 		d.right = fitNode(ctx, d.right, leftType, rightType);
 	}
 	// Null RHS routes through the same relation as literal-field init
