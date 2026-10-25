@@ -3957,7 +3957,7 @@ resetLiftedOps();
 
 	if (opts.verbose) verboseLog("linking → " + outBinary);
 	if (opts.appMode == "staticlib") {
-		const arRes = archiveStatic(oFiles, outBinary);
+		const arRes = archiveStatic(oFiles, outBinary, opts.ccCompiler, opts.ccBinary);
 		if (!arRes.ok) {
 			printError(`ar failed ${dim(`(exit ${arRes.error.exitCode})`)}`);
 			if (arRes.error.errorOutput != "") printDiag(arRes.error.errorOutput);

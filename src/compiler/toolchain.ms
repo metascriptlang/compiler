@@ -277,12 +277,12 @@ function validateNativeToolchain(path: string): Result<NativeToolchain, string> 
 	return Result.ok({ root, version, identity });
 }
 
-function nativeRuntimeConfig(targetOs: string, cpu: string, shared: boolean = false): string {
+function nativeRuntimeConfig(targetOs: string, cpu: string): string {
 	if (targetOs == "wasm" && cpu == "wasm32") return "wasm32-wasi.cfg";
 	if (targetOs == "linux" && (cpu == "amd64" || cpu == "x86_64")) return "x86_64-linux-gnu.2.31.cfg";
 	if (targetOs == "linux" && (cpu == "arm64" || cpu == "aarch64")) return "aarch64-linux-gnu.2.31.cfg";
-	if (targetOs == "windows" && (cpu == "amd64" || cpu == "x86_64")) return shared ? "windows/x86_64-windows-gnu.dll.cfg" : "windows/x86_64-windows-gnu.cfg";
-	if (targetOs == "windows" && (cpu == "arm64" || cpu == "aarch64")) return shared ? "windows/aarch64-windows-gnu.dll.cfg" : "windows/aarch64-windows-gnu.cfg";
+	if (targetOs == "windows" && (cpu == "amd64" || cpu == "x86_64")) return "windows/x86_64-windows-gnu.cfg";
+	if (targetOs == "windows" && (cpu == "arm64" || cpu == "aarch64")) return "windows/aarch64-windows-gnu.cfg";
 	return "";
 }
 
@@ -298,11 +298,10 @@ function selectNativeToolchain(opts: CliOptions, path: string): Result<void, str
 		return Result.ok(null);
 	}
 	const cpu = buildCpu(opts.targetOs, opts.cpuTarget);
-	const shared = opts.isHcr || opts.appMode == "lib";
-	const name = nativeRuntimeConfig(opts.targetOs, cpu, shared);
+	const name = nativeRuntimeConfig(opts.targetOs, cpu);
 	const config = join(bundle.root, `runtime/${name}`);
 	if (name == "" || !exists(config)) return Result.err(`native toolchain: prepared runtime for ${opts.targetOs}/${cpu} is not installed in ${bundle.root}`);
-	if (opts.isHcr || opts.appMode == "staticlib" || (shared && opts.targetOs != "windows")) return Result.err(`native toolchain: ${name} does not supply ${opts.isHcr ? "HCR" : opts.appMode} startup`);
+	if ((opts.isHcr || opts.appMode != "console") && opts.targetOs != "linux" && opts.targetOs != "windows") return Result.err(`native toolchain: ${name} does not supply ${opts.isHcr ? "HCR" : opts.appMode} startup`);
 	opts.ccBinary = `${opts.ccBinary} --config=${quoteCcArg(config)}`;
 	return Result.ok(null);
 }
@@ -315,11 +314,8 @@ test "prepared runtimes are selected by both OS and CPU" {
 	assert nativeRuntimeConfig("linux", "aarch64") == "aarch64-linux-gnu.2.31.cfg";
 	assert nativeRuntimeConfig("linux", "arm") == "";
 	assert nativeRuntimeConfig("windows", "amd64") == "windows/x86_64-windows-gnu.cfg";
-	assert nativeRuntimeConfig("windows", "x86_64", true) == "windows/x86_64-windows-gnu.dll.cfg";
 	assert nativeRuntimeConfig("windows", "arm64") == "windows/aarch64-windows-gnu.cfg";
-	assert nativeRuntimeConfig("windows", "aarch64", true) == "windows/aarch64-windows-gnu.dll.cfg";
 	assert nativeRuntimeConfig("windows", "arm") == "";
-	assert nativeRuntimeConfig("windows", "arm", true) == "";
 	assert nativeRuntimeConfig("wasm", "arm64") == "";
 }
 

@@ -793,8 +793,12 @@ test "prepared DLL config pairs and SDK-only C++ commands keep their native shap
 
 function compilerCommand(ccOption: number, ccBinary: string, isCpp: boolean): Result<ToolCommand, ProcessError> {
 	const r = compilerInvocation(ccOption, ccBinary);
-	if (!r.ok || !isCpp) return r;
-	const command = r.value;
+	if (!r.ok) return r;
+	return compilerLanguageCommand(ccOption, r.value, isCpp);
+}
+
+function compilerLanguageCommand(ccOption: number, command: ToolCommand, isCpp: boolean): Result<ToolCommand, ProcessError> {
+	if (!isCpp) return Result.ok(command);
 	if (command.args.length > 0 && command.args[0] == "cc") {
 		command.args[0] = "c++";
 		return Result.ok(command);
@@ -1386,6 +1390,52 @@ function resolveCppLibraries(args: string[], targetOs: string): boolean {
 	return requested;
 }
 
+function nativeLinkInvocation(command: ToolCommand, targetOs: string, shared: boolean): Result<ToolCommand, ProcessError> {
+	if (targetOs != "linux" && targetOs != "windows") return Result.ok(command);
+	const args: string[] = [];
+	for (const arg of command.args) {
+		if (!arg.startsWith("--config=")) {
+			args.push(arg);
+			continue;
+		}
+		if (!arg.endsWith(".cfg")) return Result.err(processError(ProcessErrorKind.Unknown, command.path, `prepared link config requires a .cfg target: ${arg}`));
+		let stem = arg.slice(0, arg.length - 4);
+		if (stem.endsWith(".dll")) stem = stem.slice(0, stem.length - 4);
+		else if (stem.endsWith(".so")) stem = stem.slice(0, stem.length - 3);
+		args.push(stem + (shared ? targetOs == "windows" ? ".dll.cfg" : ".so.cfg" : ".cfg"));
+	}
+	return Result.ok({ path: command.path, args });
+}
+
+test "prepared link startup follows each link mode instead of the original config" {
+	for (const target of ["linux", "windows"]) {
+		const suffix = target == "windows" ? ".dll.cfg" : ".so.cfg";
+		const shared = linkCommand("-shared", CC_PREPARED, "/prepared/clang --no-default-config --config=/prepared/target.cfg", target);
+		assert shared.ok;
+		assert shared.value.command.args.includes("--config=/prepared/target" + suffix);
+		assert !shared.value.command.args.includes("--config=/prepared/target.cfg");
+		const exe = linkCommand("", CC_PREPARED, "/prepared/clang --no-default-config --config=/prepared/target" + suffix, target);
+		assert exe.ok;
+		assert exe.value.command.args.includes("--config=/prepared/target.cfg");
+		assert !exe.value.command.args.includes("--config=/prepared/target" + suffix);
+	}
+}
+
+test "prepared shared C++ keeps its config order and explicit compilers keep their invocation" {
+	const invocation = "/prepared/clang --no-default-config --config=/prepared/target.cfg";
+	const cpp = linkCommand("-shared -lc++", CC_PREPARED, invocation, "linux");
+	assert cpp.ok;
+	const args = cpp.value.command.args;
+	assert args.includes("--config=/prepared/target.so.cxx.cfg");
+	assert args.includes("--config=/prepared/target.so.cfg");
+	assert args.indexOf("--config=/prepared/target.so.cxx.cfg") < args.indexOf("--config=/prepared/target.so.cfg");
+	assert cpp.value.flagArgs.includes("-lc++");
+	const explicit = linkCommand("-shared", 0, invocation, "linux");
+	assert explicit.ok;
+	assert explicit.value.command.args.includes("--config=/prepared/target.cfg");
+	assert !explicit.value.command.args.includes("--config=/prepared/target.so.cfg");
+}
+
 function linkCommand(extraFlags: string, ccOption: number, ccBinary: string, targetOs: string): Result<LinkCommand, ProcessError> {
 	const base = compilerInvocation(ccOption, ccBinary);
 	if (!base.ok) return Result.err(base.error);
@@ -1394,7 +1444,13 @@ function linkCommand(extraFlags: string, ccOption: number, ccBinary: string, tar
 	if (!flags.ok) return Result.err(flags.error);
 	const cppLibraries = ccOption == CC_PREPARED && resolveCppLibraries(flagArgs, targetOs);
 	const needsCpp = _hasCppCompile || cppLibraries;
-	const resolved = compilerCommand(ccOption, ccBinary, needsCpp);
+	let selected = base.value;
+	if (ccOption == CC_PREPARED) {
+		const native = nativeLinkInvocation(selected, targetOs, flagArgs.includes("-shared"));
+		if (!native.ok) return Result.err(native.error);
+		selected = native.value;
+	}
+	const resolved = compilerLanguageCommand(ccOption, selected, needsCpp);
 	if (!resolved.ok) return Result.err(resolved.error);
 	const command = resolved.value;
 	const prefix = command.args;
@@ -1444,12 +1500,19 @@ export function linkObjects(oFiles: string[], outBinary: string, extraFlags: str
 	return Result.ok(null);
 }
 
-export function archiveStatic(oFiles: string[], outArchive: string): Result<void, ProcessError> {
+export function archiveStatic(oFiles: string[], outArchive: string, ccOption: number = 0, ccBinary: string = ""): Result<void, ProcessError> {
+	let archiver = "ar";
+	if (ccOption == CC_PREPARED) {
+		const compiler = compilerInvocation(ccOption, ccBinary);
+		if (!compiler.ok) return Result.err(compiler.error);
+		const path = compiler.value.path;
+		archiver = join(dirname(path), path.endsWith(".exe") ? "llvm-ar.exe" : "llvm-ar");
+	}
 	ensureDir(dirname(outArchive));
 	if (exists(outArchive)) remove(outArchive);
 	const args = ["rcs", outArchive];
 	for (const oFile of oFiles) args.push(oFile);
-	const r = execFileCapture("ar", args);
+	const r = execFileCapture(archiver, args);
 	if (!r.ok) return Result.err(r.error);
 	return Result.ok(null);
 }

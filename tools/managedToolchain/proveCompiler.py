@@ -88,8 +88,8 @@ def prove(compiler, engine):
         environment["PATH"] = "/usr/bin:/bin"
         profile = work / "deny.sb"
         denied = [str(engine), "/opt/homebrew", str(Path.home() / ".metascript")]
-        system_compilers = ["/usr/bin/" + name for name in ("clang", "clang++", "cc", "c++", "gcc", "g++", "ld")]
-        for tool in ("clang", "clang++", "ld"):
+        system_compilers = ["/usr/bin/" + name for name in ("clang", "clang++", "cc", "c++", "gcc", "g++", "ld", "ar")]
+        for tool in ("clang", "clang++", "ld", "ar"):
             located = subprocess.run(["/usr/bin/xcrun", "--find", tool], check=True,
                                      capture_output=True, text=True).stdout.strip()
             system_compilers.append(located)
@@ -101,6 +101,13 @@ def prove(compiler, engine):
                                  capture_output=True, text=True)
         if control.returncode == 0:
             raise RuntimeError("sandbox did not deny the system compiler")
+        archive = work / "system-ar-control.a"
+        archive.write_bytes(b"!<arch>\n")
+        ar = ["/usr/bin/ar", "-t", str(archive)]
+        run(ar, environment)
+        control = subprocess.run(sandbox + ar, env=environment, capture_output=True, text=True)
+        if control.returncode == 0:
+            raise RuntimeError("sandbox did not deny the system archiver")
         run(sandbox + command, environment)
         run([str(work / "consumer")], environment, contains="native-consumer-ok 42")
         for name in ("companion.h", "companion.cpp", "companionConsumer.ms"):
