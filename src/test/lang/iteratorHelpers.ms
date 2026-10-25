@@ -1,3 +1,5 @@
+import { joinAll, doubledSum } from "./fixtures/iteratorChainInstances";
+
 struct Point {
 	x: int32;
 	y: int32;
@@ -666,6 +668,25 @@ test "iterator consumer: a compound assignment reads its target before the chain
 	}, 0);
 	assert t == 22;
 	const words: string[] = ["b", "c"];
+	let s = "a";
+	s += words.values().reduce((acc: string, x: string, i: number): string => {
+		s = "z";
+		return acc + x;
+	}, "");
+	assert s == "abc";
+}
+
+test "iterator consumer: a chain expands in place when an imported module expands the same instance" {
+	const nums: int32[] = [1, 2, 3];
+	assert doubledSum(nums) == 12;
+	let t: int32 = 10;
+	t += nums.values().map((x: int32, i: number): int32 => x * 2).reduce((acc: int32, x: int32, i: number): int32 => {
+		t = 100;
+		return acc + x;
+	}, 0);
+	assert t == 22;
+	const words: string[] = ["b", "c"];
+	assert joinAll(words) == "bc";
 	let s = "a";
 	s += words.values().reduce((acc: string, x: string, i: number): string => {
 		s = "z";
