@@ -25,7 +25,7 @@ import { ModuleGraph, createModuleGraph } from "../../module/graph";
 import { RaiserVM, execModule, execLoop, createVM, vmReleaseHeaps } from "../../raiser/vm";
 import { RaiserModule, RaiserFunction, createRaiserModule, createRaiserFunction, makeTestModule } from "../../raiser/module";
 import { RaiserFuncMap, createFuncMap, registerRaiserOnDemand, isRoutineSym, takeRaiserCompileErrors, restoreRaiserCompileErrors } from "./context";
-import { moduleScopeSymbols, enclosingTypeAliases, makeSymbolState, globalScope } from "../../checker/symbol";
+import { moduleScopeNamed, enclosingScopeNamed, NamedSymbol, makeSymbolState, globalScope } from "../../checker/symbol";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
 import { lookupModuleCtx, preludeModuleCtx, preludeBodyCtx, registerEngineBodyCtxFn, instanceArgsOf, instanceParamsOf } from "../../checker/instantiate";
 import { synthToken } from "../../compiler/meta/bridge";
@@ -268,7 +268,7 @@ function engineBodyCtx(definingModulePath: string, owner: Symbol | null): Checke
 	if (declCtx == null) return null;
 	const known = _engine.bodyCtxs.get(declCtx);
 	if (known != null) return known;
-	registerSeedSymbols(moduleScopeSymbols(declCtx.table), seedExtensionsOf(declCtx, null));
+	registerSeedSymbols(moduleScopeNamed(declCtx.table), seedExtensionsOf(declCtx, null));
 	const empty = createNode(NodeKind.Program, { programStmts: [] }, synthToken(makeLoc(1, 1)));
 	const bodyCtx = checkProgramWithRegistryCancellable(empty, outer.registry, outer.graph, mod, raiserPreludeCtx(), null as unknown as CancelCtx, 0);
 	clearSeedSymbols();
@@ -276,24 +276,24 @@ function engineBodyCtx(definingModulePath: string, owner: Symbol | null): Checke
 	return bodyCtx;
 }
 
-function vmStdSeeds(sym: Symbol): Symbol[] {
+function vmStdSeeds(sym: Symbol): NamedSymbol[] {
 	const prelude = raiserPreludeCtx();
-	const seeds: Symbol[] = [];
+	const seeds: NamedSymbol[] = [];
 	const home = prelude.preludeModuleScopes.get(sym.modulePath);
 	if (home != null) {
 		for (const s of home) {
-			if (s.name != sym.name) seeds.push(s);
+			if (s.name != sym.name) seeds.push({ name: s.name, sym: s });
 		}
 	}
 	for (const s of globalScope(prelude.table).symbols.values()) {
-		if (s.name != sym.name && !isPreludeExport(prelude, s)) seeds.push(s);
+		if (s.name != sym.name && !isPreludeExport(prelude, s)) seeds.push({ name: s.name, sym: s });
 	}
 	return seeds;
 }
 
 registerEngineBodyCtxFn(engineBodyCtx);
 
-function compileProgramIntoEngine(program: Node, seeds: Symbol[], exts: ExtensionMethod[], wantFn: string, wantSym: Symbol | null = null): int32 {
+function compileProgramIntoEngine(program: Node, seeds: NamedSymbol[], exts: ExtensionMethod[], wantFn: string, wantSym: Symbol | null = null): int32 {
 	const previousOnDemand = registerRaiserOnDemand(ensureCompiledIntoEngine);
 	defer registerRaiserOnDemand(previousOnDemand);
 	enterEngineCompile();
@@ -313,13 +313,13 @@ function compileProgramIntoEngine(program: Node, seeds: Symbol[], exts: Extensio
 
 const WIRE_ENUMS = ["NodeKind", "DeclKind", "ExternKind"];
 
-function seedWireEnums(seeds: Symbol[]): void {
+function seedWireEnums(seeds: NamedSymbol[]): void {
 	let nodeSym: Symbol | null = null;
-	for (const s of seeds) if (isMetaNodeSym(s)) nodeSym = s;
+	for (const s of seeds) if (isMetaNodeSym(s.sym)) nodeSym = s.sym;
 	if (nodeSym == null) return;
 	const nodeCtx = lookupModuleCtx(nodeSym.modulePath);
 	if (nodeCtx == null) return;
-	for (const s of moduleScopeSymbols(nodeCtx.table)) {
+	for (const s of moduleScopeNamed(nodeCtx.table)) {
 		if (!WIRE_ENUMS.includes(s.name)) continue;
 		let present = false;
 		for (const t of seeds) if (t.name == s.name) present = true;
@@ -331,7 +331,7 @@ export function compileMacroIntoEngine(program: Node, token: CheckerContext, mac
 	return compileIntoEngineSeeded(program, token, macroFnName, declCtx, []);
 }
 
-function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnName: string, declCtx: CheckerContext, leadSeeds: Symbol[]): EngineMacroResult {
+function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnName: string, declCtx: CheckerContext, leadSeeds: NamedSymbol[]): EngineMacroResult {
 	const nested = engineCompiling();
 	if (!nested) {
 		if (!inEngineCompilation(token)) {
@@ -340,9 +340,9 @@ function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnNa
 		}
 		_engineToken = token;
 	}
-	const seeds: Symbol[] = [];
+	const seeds: NamedSymbol[] = [];
 	for (const s of leadSeeds) seeds.push(s);
-	for (const s of moduleScopeSymbols(declCtx.table)) seeds.push(s);
+	for (const s of moduleScopeNamed(declCtx.table)) seeds.push(s);
 	const exts = seedExtensionsOf(declCtx, null);
 	seedWireEnums(seeds);
 	const outerHelperErrors = _pendingHelperErrors;
@@ -377,14 +377,14 @@ function seedCtxForSym(sym: Symbol): CheckerContext {
 	return null as unknown as CheckerContext;
 }
 
-function instanceTypeParamSeeds(sym: Symbol): Symbol[] {
-	const seeds: Symbol[] = [];
+function instanceTypeParamSeeds(sym: Symbol): NamedSymbol[] {
+	const seeds: NamedSymbol[] = [];
 	const generic = sym.instantiatedFrom;
 	if (generic == null) return seeds;
 	const params = instanceParamsOf(sym);
 	const args = instanceArgsOf(sym);
 	for (let i = 0; i < params.length; i += 1) {
-		seeds.push(makeSymbolState(params[i].typeName, SymbolKind.TypeAlias, args[i], false, SymbolState.Shaped));
+		seeds.push({ name: params[i].typeName, sym: makeSymbolState(params[i].typeName, SymbolKind.TypeAlias, args[i], false, SymbolState.Shaped) });
 	}
 	return seeds;
 }
@@ -410,12 +410,12 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 		return compileCheckedBodyIntoEngine(sym, sym.declNode, isClass ? name : "$comptime:helper");
 	}
 	const seedCtx = seedCtxForSym(sym);
-	const seeds: Symbol[] = instanceTypeParamSeeds(sym);
+	const seeds = instanceTypeParamSeeds(sym);
 	let exts: ExtensionMethod[] = [];
 	if (vmStd) {
 		for (const s of vmStdSeeds(sym)) seeds.push(s);
 	} else if (seedCtx != null) {
-		for (const s of moduleScopeSymbols(seedCtx.table)) {
+		for (const s of moduleScopeNamed(seedCtx.table)) {
 			if (!isClass || s.name != sym.name) seeds.push(s);
 		}
 		exts = seedExtensionsOf(seedCtx, isClass ? sym : null);
@@ -447,7 +447,7 @@ export function releaseEngineHeaps(): void {
 }
 
 export function evalProgramViaEngine(program: Node, token: CheckerContext, fnName: string): RaiserContext {
-	const result = compileIntoEngineSeeded(program, token, fnName, token, enclosingTypeAliases(token.table));
+	const result = compileIntoEngineSeeded(program, token, fnName, token, enclosingScopeNamed(token.table));
 	if (result == null as unknown as EngineMacroResult) return createContext();
 	let refused = false;
 	if (result.errors != null) {

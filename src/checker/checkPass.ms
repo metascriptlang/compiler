@@ -8,7 +8,7 @@ import { linkFlags, linkObjects } from "../utils/linkState";
 
 import { errorType, booleanType, inferredType, noneType, isUnresolvedType, charType, createReadonlyView, propagateReadonlyView, isReadonlyView, float64Type, voidType, nullType, createFunction, createClosureType, closureStorageType, createPromise, typeDisplayName, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isIterator, getIteratorYieldType, isResult, detectUnionDiscriminant, collectStringDiscriminantValues, destrPositionalElemType, destrNamedFieldType, destrRestElemType, destrObjectRestType, destrDefaultedType, PEEL_MAX_DEPTH, isMaybeType, peelToStructOrUnion, hasGenericParams, createArray, substituteParams, unwrapRef, numberType, findViewType, ownedAlternativeOf, getProperty, declGenericParams, duVariantMark, duVariantsFrom, replayDuVariants, peelTransparentInstance, withoutReadonlyView, symGenericParams, classParentOf, isOutParam } from "./types";
 import { AffineTracker, saveConsumeState, restoreConsumeState, collectNewConsumes, mergeConsumeBranches, isConsumedName, removeConsumedName, symbolConsumeKey, leaveConsumeScope, markConsumedName } from "./spawnAffinity";
-import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet, lookupStd } from "./symbol";
+import { Scope, ScopeKind, SymbolTable, classDeclNodeOf, defineSymbol, lookupSymbol, lookupLocal, isFrameValue, makeSymbol, openScope, closeScope, addSymbolToScope, setFlag, hasFlag, markConsumed, SymbolFlag, globalScope, moduleScopeSymbols, RoutineFlag, routineFlagSet, lookupStd, NamedSymbol } from "./symbol";
 import { findAllExtensionsByName, getExtFnType, getExtTypeName, isStaticExtensionFlag, markUsedIn, CheckerContext, DispatchRecords, startDispatchCapture, endDispatchCapture, replayDispatchRecords, isExportedBy, isPreludeExport, CancelCtx, addRuntimeConverter, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, reexportExt, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, findModuleExports, buildExportInfo, collectExports, isCancelled, stopForInput, isGenericFn, sgRecordSym, isEngineCheckMode, dispatchOverriddenEntry, dispatchDeclaredEntry, DispMethodEntry, isLifecycleHookName, ACTOR_HOOK_NAMES, getExtReceiverType, stampOwner, nextDisamb, noteDefaultCheckedAtDeclaration } from "./context";
 import { collectFunction, collectClass, collectActor, collectInterface, collectStruct, collectEnumDecl, collectTypeAlias, collectExtern, collectMacro, collectExport, collectDecorated, collectVariable, mintClass, fillClass, mintActor, fillActor, collectTopLevel, collectTopLevelStmt, isComptimeNodeAliasDecl, defineOrError, declSymbol, registerConverter, getDeclName, classMemberDecl, declOfStatement } from "./collectPass";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
@@ -4173,10 +4173,10 @@ function appendDirectiveLines(lines: string, more: string): string {
 	return lines == "" ? more : lines + "\n" + more;
 }
 
-let _pendingSeedSymbols: Symbol[] = [];
+let _pendingSeedSymbols: NamedSymbol[] = [];
 let _pendingSeedExtensions: ExtensionMethod[] = [];
 
-export function registerSeedSymbols(syms: Symbol[], exts: ExtensionMethod[]): void {
+export function registerSeedSymbols(syms: NamedSymbol[], exts: ExtensionMethod[]): void {
 	_pendingSeedSymbols = syms;
 	_pendingSeedExtensions = exts;
 }
@@ -4188,10 +4188,10 @@ export function clearSeedSymbols(): void {
 
 function drainSeedSymbols(ctx: CheckerContext): void {
 	const table = ctx.table;
-	for (const sym of _pendingSeedSymbols) {
-		const innerNameId = getIdentId(table.identCache, sym.name);
+	for (const seed of _pendingSeedSymbols) {
+		const innerNameId = getIdentId(table.identCache, seed.name);
 		if (!table.current.symbols.has(innerNameId)) {
-			table.current.symbols.set(innerNameId, sym);
+			table.current.symbols.set(innerNameId, seed.sym);
 		}
 	}
 	for (const ext of _pendingSeedExtensions) {

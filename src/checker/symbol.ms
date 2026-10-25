@@ -383,29 +383,35 @@ export function moduleScopeSymbols(table: SymbolTable): Symbol[] {
 	return out;
 }
 
+export interface NamedSymbol {
+	name: string;
+	sym: Symbol;
+}
+
+function appendScopeNamed(table: SymbolTable, scope: Scope, out: NamedSymbol[]): void {
+	for (const entry of scope.symbols.entries) {
+		out.push({ name: identName(table.identCache, entry.key), sym: entry.value });
+	}
+}
+
 // Module-scope names (as written there, so an `import { X as Y }` gives `Y`) with their symbols.
-export function moduleScopeNamed(table: SymbolTable): { name: string, sym: Symbol }[] {
+export function moduleScopeNamed(table: SymbolTable): NamedSymbol[] {
 	let scope = table.current;
 	while (scope != null && scope.scopeKind != ScopeKind.Module) {
 		scope = scope.parent;
 	}
-	const out: { name: string, sym: Symbol }[] = [];
-	if (scope == null) return out;
-	for (const entry of scope.symbols.entries) {
-		out.push({ name: identName(table.identCache, entry.key), sym: entry.value });
-	}
+	const out: NamedSymbol[] = [];
+	if (scope != null) appendScopeNamed(table, scope, out);
 	return out;
 }
 
-// Type aliases bound between the current scope and the module scope: a generic
-// instance's parameters (`T` = the concrete type) and local aliases.
-export function enclosingTypeAliases(table: SymbolTable): Symbol[] {
-	const out: Symbol[] = [];
+// Every name bound between the current scope and the module scope (a generic instance's
+// parameters, locals, parameters), innermost scope first so a local precedes a module namesake.
+export function enclosingScopeNamed(table: SymbolTable): NamedSymbol[] {
+	const out: NamedSymbol[] = [];
 	let scope = table.current;
 	while (scope != null && scope.scopeKind != ScopeKind.Module) {
-		for (const sym of scope.symbols.values()) {
-			if (sym.symbolKind == SymbolKind.TypeAlias) out.push(sym);
-		}
+		appendScopeNamed(table, scope, out);
 		scope = scope.parent;
 	}
 	return out;
