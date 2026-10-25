@@ -452,8 +452,29 @@ export function refuseUsedSuspendingViewParams(ctx: CheckerContext, paramSyms: S
 	}
 }
 
+// The Types a macro bound into a call's `base<operands>` callee: they travel on the call
+// as `typeExprs` (operands that already carry their `nodeType`), never as spelling.
+export function suppliedTypeArgs(node: Node): Type[] | null {
+	if (node.typeExprs == null) return null;
+	const out: Type[] = [];
+	for (const operand of node.typeExprs) {
+		if (operand.nodeType == null) throw new Error("internal: a call's supplied type argument carries no bound type");
+		out.push(operand.nodeType);
+	}
+	return out;
+}
+
+export function hasExplicitTypeArgs(node: Node): boolean {
+	return node.typeExprs != null || findCallTypeArg(node) != "";
+}
+
 export function explicitTypeArgs(node: Node, ctx: CheckerContext, limit: int32): (Type | null)[] {
 	const out: (Type | null)[] = [];
+	const supplied = suppliedTypeArgs(node);
+	if (supplied != null) {
+		for (let i = 0; i < limit && i < supplied.length; i += 1) out.push(isUnresolvedType(supplied[i]) ? null : supplied[i]);
+		return out;
+	}
 	const explicitStr = findCallTypeArg(node);
 	if (explicitStr == "") return out;
 	const argNames = splitTopLevel(explicitStr, ",");
@@ -477,11 +498,15 @@ export function bindFromExplicitTypeArgs(node: Node, params: Type[], ctx: Checke
 }
 
 export function checkExplicitTypeArgArity(ctx: CheckerContext, node: Node, paramNames: string[], calleeName: string): boolean {
-	const explicitStr = findCallTypeArg(node);
-	if (explicitStr == "") return true;
+	if (!hasExplicitTypeArgs(node)) return true;
 	let given: int32 = 0;
-	for (const a of splitTopLevel(explicitStr, ",")) {
-		if (a.trim() != "") given += 1;
+	const supplied = suppliedTypeArgs(node);
+	if (supplied != null) {
+		given = supplied.length;
+	} else {
+		for (const a of splitTopLevel(findCallTypeArg(node), ",")) {
+			if (a.trim() != "") given += 1;
+		}
 	}
 	if (given == paramNames.length) return true;
 	addError(ctx, `Wrong number of type arguments to '${calleeName}': expected ${paramNames.length}, got ${given}`, node.location.line, node.location.column);

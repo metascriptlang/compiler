@@ -4,7 +4,7 @@
 import { fieldDeclarer, refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import { AwaitExprData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, DeclKind, createNode, createNodeAt } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
-import { cloneNodeForCheck, cloneNodeKeepSem, monoConcreteTypeName } from "../monomorphize/clone";
+import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
 import { findCallTypeArg } from "../parser/context";
 import { findChar, splitTopLevel } from "../utils/string";
@@ -20,11 +20,11 @@ import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, markInitialized, mergeInitBranches, restoreInitState, saveInitState, unwrittenOutParam } from "./initTracker";
 import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
 import { ctorRoutineOf, ctorRoutineFor, ctorFormalTypes } from "./ctorRoutine";
-import { bindFromExplicitTypeArgs, explicitTypeArgs, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation, builtinTypeNamed, thenSignatureOf, thenablePromised } from "./resolvePass";
+import { bindFromExplicitTypeArgs, explicitTypeArgs, hasExplicitTypeArgs, suppliedTypeArgs, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation, builtinTypeNamed, thenSignatureOf, thenablePromised } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isContextSensitive, isLiteralTree } from "./speculate";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, moduleScopeNamed, enumMemberName, lookupStd } from "./symbol";
+import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName, lookupStd } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
 import { TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase } from "./types";
@@ -1735,13 +1735,14 @@ export function typeTraitOf(node: Node): Symbol | null {
 function foldTypeTrait(ctx: CheckerContext, node: Node, callType: Type): Type {
 	const trait = typeTraitOf(node);
 	if (trait == null) return callType;
+	const supplied = suppliedTypeArgs(node);
 	const typeArg = findCallTypeArg(node);
-	if (typeArg == "" || (node.data as CallExprData).arguments.length > 0) {
+	if ((supplied != null ? supplied.length != 1 : typeArg == "") || (node.data as CallExprData).arguments.length > 0) {
 		addError(ctx, `'${trait.name}' asks a type and takes no value: write ${trait.name}<T>()`, node.location.line, node.location.column);
 		node.nodeType = errorType();
 		return node.nodeType;
 	}
-	const asked = resolveAnnotation(typeArg, ctx, node.location.line, node.location.column);
+	const asked = supplied != null ? supplied[0] : resolveAnnotation(typeArg, ctx, node.location.line, node.location.column);
 	if (asked.kind == TypeKind.GenericParam || hasGenericParams(asked)) {
 		node.nodeType = booleanType();
 		return node.nodeType;
@@ -1830,41 +1831,22 @@ export function keepFoldedType(node: Node, expanded: Node): void {
 	node.flags = node.flags.incl(NodeFlag.Folded);
 	node.nodeType = expanded.nodeType;
 }
-function isBareName(text: string): boolean {
-	return text != "" && text.indexOf("<", 0) < 0 && text.indexOf("[", 0) < 0 && text.indexOf(" ", 0) < 0 && text.indexOf(".", 0) < 0;
-}
-
-// The name a module-scope type symbol gives `bound` (a private type reached through an exported alias).
-function visibleNameOf(ctx: CheckerContext, bound: Type): string {
-	for (const entry of moduleScopeNamed(ctx.table)) {
-		if (!isTypeSymbol(entry.sym)) continue;
-		ensureShaped(entry.sym, ctx);
-		if (entry.sym.symbolType != null && sameType(entry.sym.symbolType, bound)) return entry.name;
-	}
-	return "";
-}
-
 // A macro replacement owns its type arguments as bound typed operands: the callee
 // `base<operands>` is lowered here to the ordinary explicit generic call `base<T>(...)`.
 function lowerTypedCallee(ctx: CheckerContext, node: Node, d: CallExprData): boolean {
 	const callee = d.callee;
 	if (callee.kind != NodeKind.TypeGeneric) return true;
 	const g = callee.data as TypeGenericData;
-	const spelled: string[] = [];
 	for (const operand of g.typExprArgs) {
-		const bound = operand.nodeType;
-		if (bound == null) {
+		if (operand.nodeType == null) {
 			addError(ctx, "a generic callee's type operand carries no bound type (a macro must pass getTypeArg())", operand.location.line, operand.location.column);
 			return false;
 		}
-		const written = monoConcreteTypeName(bound);
-		const seen = isBareName(written) && lookupSymbol(ctx.table, written) == null ? visibleNameOf(ctx, bound) : "";
-		const name = seen != "" ? seen : written;
-		spelled.push(name);
 	}
 	d.callee = g.typExprBase;
 	d.callee.location = callee.location;
-	node.typeArg = spelled.join(", ");
+	node.typeExprs = g.typExprArgs;
+	node.typeArg = "";
 	return true;
 }
 
@@ -2424,13 +2406,12 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		}
 		// Explicit type arg resolution for generic methods (e.g. JSON.parse<Person>)
 		if (hasGenericParams(calleeType)) {
-			const explicitArg = findCallTypeArg(node);
-			if (explicitArg != "") {
+			if (hasExplicitTypeArgs(node)) {
 				// Static class method mono is handled at the top of the
 				// extPreResolved block (uniform for both explicit `<T>` and
 				// arg-driven inference). If we reach here, mono didn't fire —
 				// fall through to standard explicit-arg return type computation.
-				return inferGenericReturnWithExplicit(calleeType!, argTypes, expectedType, explicitArg, ctx, node);
+				return inferGenericReturnWithExplicit(calleeType!, argTypes, expectedType, ctx, node);
 			}
 		}
 		// Sendable check for extension-resolved actor method calls
@@ -2553,9 +2534,8 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		}
 		// If explicit type args (<T>) and generic params, resolve type args at checker time
 		if (hasGenericParams(calleeType)) {
-			const explicitArg = findCallTypeArg(node);
-			if (explicitArg != "") {
-				return inferGenericReturnWithExplicit(calleeType!, argTypes, expectedType, explicitArg, ctx, node);
+			if (hasExplicitTypeArgs(node)) {
+				return inferGenericReturnWithExplicit(calleeType!, argTypes, expectedType, ctx, node);
 			}
 		}
 		// Assertion function narrowing: `asserts x is T`. Applied on the
@@ -3006,7 +2986,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 	}
 }
 
-function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expectedType: Type | null, explicitArg: string, ctx: CheckerContext, node: Node): Type {
+function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expectedType: Type | null, ctx: CheckerContext, node: Node): Type {
 	let returnType = fnType.typeReturn;
 	if (returnType == null) return inferredType();
 	// Multi-arg form `f<A, B>(...)` binds generic params positionally (parity:
@@ -3014,8 +2994,11 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 	// the reference). The single-arg path below only binds the first generic
 	// param found in the return type, so route multi-arg through explicit
 	// positional bindings instead — `Result.ok<int32, string>(5)` needs both.
-	const argNames = splitTopLevel(explicitArg, ",");
-	if (argNames.length > 1) {
+	const supplied = suppliedTypeArgs(node);
+	const explicitArg = findCallTypeArg(node);
+	const argNames = supplied != null ? [] : splitTopLevel(explicitArg, ",");
+	const given = supplied != null ? supplied.length : argNames.length;
+	if (given > 1) {
 		let params: Type[] = [];
 		if (node.resolvedSym != null) {
 			params = ownTypeParams(node.resolvedSym, extractGenericNames(getGenericDeclFlags(node.resolvedSym.declNode)));
@@ -3035,10 +3018,9 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 			return inferGenericReturn(ctx, fnType, argTypes, expectedType, node);
 		}
 		const eb = createUnifyBindings();
-		for (let i = 0; i < argNames.length && i < params.length; i += 1) {
-			const argName = argNames[i].trim();
-			if (argName == "") continue;
-			const resolved = resolveAnnotation(argName, ctx, node.location.line, node.location.column);
+		for (let i = 0; i < given && i < params.length; i += 1) {
+			if (supplied == null && argNames[i].trim() == "") continue;
+			const resolved = supplied != null ? supplied[i] : resolveAnnotation(argNames[i].trim(), ctx, node.location.line, node.location.column);
 			if (resolved != null && !isUnresolvedType(resolved)) bindParam(eb, params[i], resolved);
 		}
 		if (eb.names.length == 0) {
@@ -3060,12 +3042,12 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 		return returnType;
 	}
 	// Resolve the explicit type arg to an actual type
-	const resolvedSym = lookupSymbol(ctx.table, explicitArg);
-	if (resolvedSym == null) return inferGenericReturn(ctx, fnType, argTypes, expectedType, node);
-	ensureShaped(resolvedSym, ctx);
-	const concreteType = resolvedSym.symbolType;
+	const resolvedSym = supplied != null ? null : lookupSymbol(ctx.table, explicitArg);
+	if (supplied == null && resolvedSym == null) return inferGenericReturn(ctx, fnType, argTypes, expectedType, node);
+	if (resolvedSym != null) ensureShaped(resolvedSym, ctx);
+	const concreteType = supplied != null ? supplied[0] : resolvedSym!.symbolType;
 	// Record the type arg as a symbol reference for LSP hover/goto-def
-	if (node != null) {
+	if (resolvedSym != null) {
 		const typeArgCol = computeTypeArgCol(node);
 		if (typeArgCol > 0) {
 			const symKind = resolvedSym.symbolKind == SymbolKind.Interface ? SymbolKind.Interface

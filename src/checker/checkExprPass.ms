@@ -20,7 +20,7 @@ import { distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, isKeyConstraint, inde
 import { isLocation, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, WriteSite } from "./assignable";
 import { boundAnnotationType, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
-import { cloneNodeForCheck, cloneNodeKeepSem, monoConcreteTypeName } from "../monomorphize/clone";
+import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { findChar, splitTopLevel, fitsInt64Decimal, parseNumberLiteral } from "../utils/string";
 import { basename, join } from "std/fs/path";
 import { checkPointerAddress } from "./pointerAddress";
@@ -413,6 +413,7 @@ function derefBorrowResult(node: Node): void {
 	call.flags = node.flags;
 	call.typeExpr = node.typeExpr;
 	call.typeArg = node.typeArg;
+	call.typeExprs = node.typeExprs;
 	call.flowNode = node.flowNode;
 	node.kind = NodeKind.HiddenDeref;
 	node.data = { expr: call };
@@ -1121,6 +1122,7 @@ function checkOptionalChain(ctx: CheckerContext, node: Node, expectedType: Type 
 	const chain = createNodeAt(node.kind, node.data, loc);
 	chain.flags = node.flags;
 	chain.typeArg = node.typeArg;
+	chain.typeExprs = node.typeExprs;
 	chain.typeExpr = node.typeExpr;
 	const cond = createNodeAt(NodeKind.BinaryExpr, { operator: "!==", left: probe, right: typedNull(loc) }, loc);
 	cond.nodeType = booleanType();
@@ -1132,6 +1134,7 @@ function checkOptionalChain(ctx: CheckerContext, node: Node, expectedType: Type 
 	node.data = arms;
 	node.resolvedSym = null;
 	node.typeArg = "";
+	node.typeExprs = null;
 	node.typeExpr = null;
 	node.nodeType = fitConditionalArms(ctx, arms, expectedType, false);
 }
@@ -4275,6 +4278,7 @@ function bodyIntoBlock(body: Node, temps: Node[]): void {
 	value.flags = body.flags;
 	value.variantSlot = body.variantSlot;
 	value.typeArg = body.typeArg;
+	value.typeExprs = body.typeExprs;
 	value.typeExpr = body.typeExpr;
 	value.flowNode = body.flowNode;
 	const valueless = body.nodeType == null || body.nodeType.kind == TypeKind.Void || body.nodeType.kind == TypeKind.Never;
@@ -4289,6 +4293,7 @@ function bodyIntoBlock(body: Node, temps: Node[]): void {
 	body.nodeType = null;
 	body.resolvedSym = null;
 	body.typeArg = "";
+	body.typeExprs = null;
 	body.typeExpr = null;
 	body.flowNode = null;
 }

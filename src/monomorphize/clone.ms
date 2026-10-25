@@ -6,7 +6,7 @@
 // (src/checker/instantiate.ms) and the monomorphize collect pass
 // (src/monomorphize/collect.ms) can use them without a circular import.
 
-import { Node, NodeFlag, makeLocRange, createNodeAt, SourceLocation, Symbol, SymbolKind, Type, TypeKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, makeLocRange, createNodeAt, SourceLocation, Symbol, SymbolKind, Type, TypeKind } from "../ast/node";
 import { isResult, getResultOkType, getResultErrType, refSubstInner, refWrapperName, emptyType } from "../checker/types";
 import { FieldXform, rebuildNodeData, pkSamples, pkDumpNode } from "../ast/fieldspec";
 import { isFrameValue } from "../checker/symbol";
@@ -126,6 +126,7 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 		// side channel that still holds the original "K, V" strings, defeating
 		// substitution. replaceTypeVars substitutes this field in substNodeLocal.
 		dst.typeArg = src.typeArg;
+		if (src.kind == NodeKind.CallExpr) dst.typeExprs = src.typeExprs;
 	} else {
 		// Check mode: preserve all parse-time side channels the checker reads
 		// (typeExpr/typeExprs for resolvePass, paramLocations for function
