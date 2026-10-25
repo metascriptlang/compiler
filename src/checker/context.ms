@@ -1,7 +1,7 @@
 import { platform } from "std/process";
 import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf, declaredBasesOf, classDeclaredParentOf, distinctWidenBody, isArrayShaped } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore, typeRelation, TypeRelation } from "./compat";
-import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, lookupStd, markUsed, makeSymbol } from "./symbol";
+import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, lookupStd, markUsed, makeSymbol, RoutineFlag, routineFlagSet } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
 import { Node, NodeKind, NodeFlag, SourceLocation, makeLoc, createNodeAt, DeclKind, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData, ArrowFunctionData, FunctionExprData, DecoratedDeclData, AttachedOp } from "../ast/node";
@@ -1015,21 +1015,61 @@ function overridesAmong(entries: DispMethodEntry[], classSym: Symbol, methodName
 }
 
 // ===== Extension Flag Helpers =====
-// Parse "ext:receiverName:receiverType" and "sext:TypeName" from pipe-delimited fnFlags.
-// Segment-aware: works for "async|ext:s:string", not just prefix-only.
 
-function findFlagSegment(flags: string, prefix: string): string {
-	if (flags == "") return "";
+interface RoutineFlagText {
+	kind: string;
+	extSegment: string;
+	extReceiverText: string;
+	extReceiverType: string;
+	sextSegment: string;
+}
+
+const decodedRoutineFlagTexts: HashMap<string, RoutineFlagText> = new HashMap<string, RoutineFlagText>();
+
+const noRoutineFlagText: RoutineFlagText = { kind: "", extSegment: "", extReceiverText: "", extReceiverType: "", sextSegment: "" };
+
+function routineFlagText(flags: string): RoutineFlagText {
+	if (flags == "") return noRoutineFlagText;
+	const known = decodedRoutineFlagTexts.get(flags);
+	if (known != null) return known;
 	const parts = splitTopLevel(flags, "|");
-	for (let i = 0; i < parts.length; i += 1) {
-		const p = parts[i].trim();
-		if (p.length >= prefix.length && p.slice(0, prefix.length) == prefix) return p;
+	const ext = firstSegmentWith(parts, "ext:");
+	const extReceiverText = extReceiverTextOf(ext);
+	const decoded: RoutineFlagText = {
+		kind: routineKindOf(parts),
+		extSegment: ext,
+		extReceiverText: extReceiverText,
+		extReceiverType: extReceiverText == "" ? "" : receiverBaseName(varPointeeText(extReceiverText)),
+		sextSegment: firstSegmentWith(parts, "sext:"),
+	};
+	decodedRoutineFlagTexts.set(flags, decoded);
+	return decoded;
+}
+
+function firstSegmentWith(parts: string[], prefix: string): string {
+	for (const p of parts) {
+		if (p.startsWith(prefix)) return p;
 	}
 	return "";
 }
 
+function routineKindOf(parts: string[]): string {
+	if (firstSegmentWith(parts, "async_generator") == "async_generator") return "async_generator";
+	if (firstSegmentWith(parts, "generator") == "generator") return "generator";
+	if (firstSegmentWith(parts, "async") == "async") return "async";
+	return "";
+}
+
+function extReceiverTextOf(seg: string): string {
+	if (seg == "") return "";
+	const rest = seg.slice(4, seg.length);
+	const colonPos = findChar(rest, ":");
+	if (colonPos <= 0) return "";
+	return rest.slice(colonPos + 1, rest.length).trim();
+}
+
 export function isExtensionFlag(flags: string): boolean {
-	return findFlagSegment(flags, "ext:") != "";
+	return routineFlagText(flags).extSegment != "";
 }
 
 function declaredName(sym: Symbol): string {
@@ -1097,12 +1137,11 @@ export function addRuntimeConverter(ctx: CheckerContext, sym: Symbol): void {
 // truth for "is this a generic decl?" — used by checker (mono dispatch),
 // codegen (skip generic body emission), and extension resolution.
 export function isGenericFn(flags: string): boolean {
-	return findFlagSegment(flags, "gen:") != "";
+	return routineFlagSet(flags).has(RoutineFlag.Generic);
 }
 
 export function isGeneratorFlags(flags: string): boolean {
-	return findFlagSegment(flags, "generator") == "generator" ||
-		findFlagSegment(flags, "async_generator") == "async_generator";
+	return routineFlagSet(flags).has(RoutineFlag.Generator);
 }
 
 export function routineFlags(decl: Node | null): string {
@@ -1126,10 +1165,7 @@ export function routineSuspends(fn: Symbol | null): boolean {
 }
 
 export function routineKindFlag(flags: string): string {
-	if (findFlagSegment(flags, "async_generator") == "async_generator") return "async_generator";
-	if (findFlagSegment(flags, "generator") == "generator") return "generator";
-	if (findFlagSegment(flags, "async") == "async") return "async";
-	return "";
+	return routineFlagText(flags).kind;
 }
 
 // Cross-module generic monomorphization: a method must carry its body (declNode)
@@ -1148,11 +1184,12 @@ export function methodCarriesMonoBody(symType: Type): boolean {
 }
 
 export function isStaticExtensionFlag(flags: string): boolean {
-	return findFlagSegment(flags, "sext:") != "";
+	return routineFlagText(flags).sextSegment != "";
 }
 
 export function isExtensionRoutine(flags: string): boolean {
-	return isExtensionFlag(flags) || isStaticExtensionFlag(flags);
+	const text = routineFlagText(flags);
+	return text.extSegment != "" || text.sextSegment != "";
 }
 
 export function isStaticExtensionSym(sym: Symbol): boolean {
@@ -1184,17 +1221,11 @@ export function lifecycleHookOp(name: string): AttachedOp {
 }
 
 export function getExtReceiverText(flags: string): string {
-	const seg = findFlagSegment(flags, "ext:");
-	if (seg == "") return "";
-	const rest = seg.slice(4, seg.length);
-	const colonPos = findChar(rest, ":");
-	if (colonPos <= 0) return "";
-	return rest.slice(colonPos + 1, rest.length).trim();
+	return routineFlagText(flags).extReceiverText;
 }
 
 export function getExtReceiverType(flags: string): string {
-	const text = getExtReceiverText(flags);
-	return text == "" ? "" : receiverBaseName(varPointeeText(text));
+	return routineFlagText(flags).extReceiverType;
 }
 
 function varPointeeText(typeText: string): string {
@@ -1215,9 +1246,8 @@ export function receiverBaseName(typeText: string): string {
 }
 
 export function getStaticExtTypeName(flags: string): string {
-	const seg = findFlagSegment(flags, "sext:");
-	if (seg == "") return "";
-	return seg.slice(5, seg.length);
+	const seg = routineFlagText(flags).sextSegment;
+	return seg == "" ? "" : seg.slice(5, seg.length);
 }
 
 // Unified: returns receiver type name for either instance or static extensions, "" if not an extension.
