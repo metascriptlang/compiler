@@ -36,7 +36,7 @@ import {
 	AwaitExprData, CallExprData, ObjectLiteralData, ExportDeclData, ProgramData,
 	Type, NodeData, createNodeAt,
 } from "../../ast/node";
-import { TransformContext, ModuleFact, freshTempSym, freshOwnedSym, SymSet, createSymSet, symSetAdd, symSetContains, noteFact } from "../context";
+import { TransformContext, ModuleFact, freshTempSym, freshOwnedSym, SymSet, createSymSet, symSetAdd, symSetContains, mayContain, noteFact } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { walkExpandBlocksHooked, containsExprKind, walkNode } from "../walker";
 import { makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, makeAssign, makeDefaultValue, unboxVoidPtrToTyped, runtimeRef, attachedOpSym, makeTypedIdentResolved, isRuntimeProcSym, ownedInFuture, isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck, typedFutureReadFn, makeBool, makeUnary } from "../util";
@@ -771,6 +771,6 @@ export function lowerHeldSpawns(program: Node, ctx: TransformContext): Node {
 	_heldFrame = { held: null, awaitOnly: null };
 	_heldUsed = false;
 	holdSpawns(program, ctx);
-	lowerDefer(program, ctx);
+	if (mayContain(ctx, (0 as BitSet<ModuleFact>).incl(ModuleFact.Defer))) lowerDefer(program, ctx);
 	return program;
 }
