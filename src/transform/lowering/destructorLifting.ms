@@ -1357,7 +1357,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	const releasesAfterHook = hookSym != null && hook == "destroy";
 	const held = releasesAfterHook && classType != null ? heldCount(s1, lctx, buf, loc) : null;
 	const outerDropOwner = lctx.dropOwner;
-	lctx.dropOwner = hook == "destroy" && hookSym == null && classType != null && !lctx.jsBackend ? s1 : null;
+	lctx.dropOwner = hook == "destroy" && (hookSym == null || releasesAfterHook) && classType != null && !lctx.jsBackend ? s1 : null;
 	if (hookSym != null) {
 		const hookIdent = makeIdentResolved(hookSym, loc);
 		hookIdent.flags = hookIdent.flags.incl(NodeFlag.NoDispatch);
@@ -1366,6 +1366,7 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1, makeIdentResolved(s2, loc)], loc), loc));
 		} else if (isUnary) {
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1], loc), loc));
+			if (held != null) buf.items.push(makeExprStmt(makeCall(runtimeRef("msDestroyLeftNoRef", loc), [makeIdentResolved(s1, loc), held], loc), loc));
 		} else {
 			const u2 = userHookArg(hookSym, 1, s2, classType, loc);
 			buf.items.push(makeExprStmt(makeCall(hookIdent, [u1, u2], loc), loc));
@@ -1423,7 +1424,6 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 			}
 		}
 	}
-	if (held != null) buf.items.push(makeExprStmt(makeCall(runtimeRef("msDestroyLeftNoRef", loc), [makeIdentResolved(s1, loc), held], loc), loc));
 	if (lctx.dropOwner != null && classType != null) {
 		buf.items = deferAfterDropEdges(buf.items, s1, classType, cName, lctx, loc);
 	}
