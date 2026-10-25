@@ -96,37 +96,6 @@ export function splitLines(s: string): string[] {
 	return lines;
 }
 
-// Describe the formatting difference between an original and formatted line.
-export function describeFmtDiff(orig: string, fmt: string): string {
-	// Both empty — no difference worth reporting
-	if (orig.byteLength == 0 && fmt.byteLength == 0) return "";
-	// Blank original, non-blank formatted — missing content
-	if (orig.byteLength == 0) return "Unexpected blank line";
-	// Deleted line (formatted version removed it entirely)
-	if (fmt.byteLength == 0) return "Delete this line";
-	// Check indentation difference
-	let origIndent = 0;
-	while (origIndent < orig.byteLength && (orig[origIndent] == " " || orig[origIndent] == "\t")) {
-		origIndent = origIndent + 1;
-	}
-	let fmtIndent = 0;
-	while (fmtIndent < fmt.byteLength && (fmt[fmtIndent] == " " || fmt[fmtIndent] == "\t")) {
-		fmtIndent = fmtIndent + 1;
-	}
-	if (origIndent != fmtIndent) {
-		if (fmtIndent > origIndent) return "Indent this line";
-		return "Unindent this line";
-	}
-	// Check trailing whitespace
-	let origEnd = orig.byteLength;
-	while (origEnd > 0 && (orig[origEnd - 1] == " " || orig[origEnd - 1] == "\t")) {
-		origEnd = origEnd - 1;
-	}
-	if (origEnd < orig.byteLength) return "Remove trailing whitespace";
-	// Generic
-	return "Reformat this line";
-}
-
 // Shared indent/trailing-whitespace detection — used by both diagnostics and code actions.
 // Uses the "tabs for indentation, spaces for alignment" model (EditorConfig/Go convention):
 //   - Tabs-mode: tabs first, then optional trailing spaces for alignment -> valid.
