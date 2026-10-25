@@ -107,6 +107,7 @@ import "./destructuringRestLast";
 import "./stringMutatorsRemoved";
 import "./checkTakesParse";
 import "./hostCallbackBeforeBody";
+import "./engineHelperCheckedOnce";
 import "./comptimeStatement";
 import "./comptimeValues";
 import "./declarationBoundaries";
