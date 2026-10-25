@@ -50,7 +50,7 @@ import { jsEnumObject } from "../codegen/js/declarations";
 import { KeyedOp, getSimpleTypeDesc, sealHookSyms, opCName, opMark, opsFrom, replayOps, reuseOps, rankOpModules, enterModuleOps, leaveModuleOps } from "../codegen/c/types";
 import { sealRuntimeProcs, compilerFuncSym } from "../transform/util";
 import { TargetInfo, hostTargetInfo, hasGenericParams, isAwaitable, setConcurrentTypeQueries } from "../checker/types";
-import { SymbolFlag, hasFlag } from "../checker/symbol";
+import { SymbolFlag, hasFlag, sealRoutineFlags } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
 import { transformForRaiser } from "../transform/raiserLowering";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
@@ -938,6 +938,7 @@ function emitModulesBounded(jobs: ModuleEmissionJob[], aliveSet: Readonly<AliveS
 	let failed = false;
 	sealRuntimeProcs(true);
 	sealHookSyms(true);
+	sealRoutineFlags(true);
 	while (true) {
 		while (!failed && next < order.length && next - head < workers) {
 			const job = jobs[order[next]];
@@ -952,6 +953,7 @@ function emitModulesBounded(jobs: ModuleEmissionJob[], aliveSet: Readonly<AliveS
 	}
 	sealRuntimeProcs(false);
 	sealHookSyms(false);
+	sealRoutineFlags(false);
 	return results;
 }
 
