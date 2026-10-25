@@ -4,14 +4,10 @@
 // modules in EVERY msc process (~150-250 ms after A0). This pack persists the
 // checked symbol table so a warm build starts from the finished scope:
 //
-//   toolStamp = msc binary + runtime/ + vendor/ content (same inputs the
-//               object cache's toolchainStamp uses, recomputed locally — this
-//               module is deliberately self-contained: checker/ must not
-//               import compiler/, only compiler/meta/callbacks-style bridges
-//               are sanctioned)
-//   stdTreeHash = content hash of the whole std/ tree (covers sub-modules,
-//               std-local headers, per-backend variants — over-invalidation
-//               on unused files is accepted for v1)
+//   toolStamp = content hash of the msc binary
+//   stdTreeHash = content hash of the whole std/ tree (covers sub-modules and
+//               per-backend variants — over-invalidation on unused files is
+//               accepted for v1)
 //
 // v2 (2026-09-02): the pack is a SELF-CONTAINED closure — symbols, types AND
 // the AST (declNode/defaultParams/macro bodies) serialize together in ONE
@@ -67,9 +63,9 @@ let _toolStamp = "";
 let _toolStampFn: (() => string) | null = null;
 let _stdStampFn: ((stdPath: string) => string) | null = null;
 
-// compile.ms registers compiler/cache.toolchainStamp at load (memoized there
-// — one stamp computation per process shared with the object cache). Without
-// registration (standalone tests) a local equivalent is computed, for the std tree as well.
+// compile.ms registers compiler/cache.compilerStamp and stdTreeStamp at load (memoized
+// there, shared with the object cache). Without registration (standalone tests) a local
+// equivalent is computed.
 export function registerPreludeStampFn(fn: () => string, stdFn: (stdPath: string) => string): void {
 	_toolStampFn = fn;
 	_stdStampFn = stdFn;
@@ -81,13 +77,7 @@ function toolStamp(): string {
 		_toolStamp = _toolStampFn();
 		return _toolStamp;
 	}
-	let acc = hashFile(resolveArgv0(argv[0]));
-	const root = resolveRuntimeDir();
-	if (root != "") {
-		acc = stampTreePack(acc, join(root, "runtime"), "runtime/");
-		acc = stampTreePack(acc, join(root, "vendor"), "vendor/");
-	}
-	_toolStamp = hashContent(acc);
+	_toolStamp = hashFile(resolveArgv0(argv[0]));
 	return _toolStamp;
 }
 
