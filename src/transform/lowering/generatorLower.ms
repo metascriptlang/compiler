@@ -32,7 +32,7 @@ import { forEachChild, anyChild, anyDescendant, Visit } from "../../ast/visitor"
 import { mapChildren } from "../walker";
 import { setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult, getProperty } from "../../checker/types";
-import { wrapMaybeValue } from "../native/nullableLower";
+import { wrapMaybeValue } from "../maybeCarrier";
 import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, newLoweredSym } from "../context";
 import {
 	makeIdentResolved, makeTypedIdent, makeTypedIdentResolved, makeNull, makeNumber, makeBool,
@@ -1063,7 +1063,7 @@ export function convertDeclsToAssigns(stmts: Node[], lifted: SymSet, loc: Source
 }
 
 function convertNestedDeclsToAssigns(node: Node, lifted: SymSet, loc: SourceLocation): void {
-	if (node == null || isFnBoundary(node)) return;
+	if (node == null || isScopeBoundary(node)) return;
 	match (node.kind) {
 		NodeKind.BlockStmt => {
 			convertDeclsToAssigns((node.data as BlockStmtData).statements, lifted, loc);
@@ -1111,7 +1111,7 @@ function eachStateAssign(list: Node[], stateSym: Symbol, f: StateAssignVisitor):
 }
 
 function eachNestedStateAssign(node: Node, stateSym: Symbol, f: StateAssignVisitor): void {
-	if (node == null || isFnBoundary(node)) return;
+	if (node == null || isScopeBoundary(node)) return;
 	match (node.kind) {
 		NodeKind.BlockStmt => {
 			eachStateAssign((node.data as BlockStmtData).statements, stateSym, f);
@@ -1165,7 +1165,7 @@ function inlineStates(list: Node[], sc: StateCollector, inline: boolean[]): Node
 }
 
 function inlineNestedStates(node: Node, sc: StateCollector, inline: boolean[]): void {
-	if (node == null || isFnBoundary(node)) return;
+	if (node == null || isScopeBoundary(node)) return;
 	match (node.kind) {
 		NodeKind.BlockStmt => {
 			const bd = node.data as BlockStmtData;

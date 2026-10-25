@@ -10,7 +10,8 @@ import { TransformContext, freshTempSym, freshOwnedSym, newLoweredSym } from "..
 import { walkNode, mapChildren } from "../walker";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
-import { isFnBoundary, isLoopKind } from "./jumpRetarget";
+import { isLoopKind } from "./jumpRetarget";
+import { isRoutineOrTestNode } from "../../ast/shape";
 import { hasFlag } from "../../checker/symbol";
 import { bodyIsErrorBlind } from "../../checker/raises";
 import { isIterator, peelTransparentInstance } from "../../checker/types";
@@ -400,7 +401,7 @@ function forwards(decl: Node): boolean {
 
 function holdsReturn(node: Node): boolean {
 	if (node.kind == NodeKind.ReturnStmt) return true;
-	if (isFnBoundary(node.kind)) return false;
+	if (isRoutineOrTestNode(node)) return false;
 	let found = false;
 	forEachChild(node, (child: Node): void => {
 		if (!found && holdsReturn(child)) found = true;
@@ -678,7 +679,7 @@ function leavesAfterRead(s: Node, param: Symbol): boolean {
 function readOutsideLoops(node: Node, sym: Symbol): boolean {
 	if (node.kind == NodeKind.Identifier && node.resolvedSym == sym) return true;
 	if (node.kind == NodeKind.ForOfStmt && readOutsideLoops((node.data as ForOfStmtData).forOfIterable, sym)) return true;
-	if (isFnBoundary(node.kind) || (isLoopKind(node.kind) && !isWrapper(node))) return false;
+	if (isRoutineOrTestNode(node) || (isLoopKind(node.kind) && !isWrapper(node))) return false;
 	let found = false;
 	forEachChild(node, (child: Node): void => {
 		if (!found && readOutsideLoops(child, sym)) found = true;
@@ -742,7 +743,7 @@ function isAssignOp(op: string): boolean {
 
 function holdsYield(node: Node): boolean {
 	if (node.kind == NodeKind.YieldExpr) return true;
-	if (isFnBoundary(node.kind)) return false;
+	if (isRoutineOrTestNode(node)) return false;
 	let found = false;
 	forEachChild(node, (child: Node): void => {
 		if (!found && holdsYield(child)) found = true;
@@ -935,7 +936,7 @@ function replaceYields(node: Node, d: ForOfStmtData, bindingSym: Symbol | null, 
 		}
 	}
 	if (node.kind == NodeKind.ReturnStmt) return returnAsBreak(node, null, plan.endLabel);
-	if (isFnBoundary(node.kind)) return node;
+	if (isRoutineOrTestNode(node)) return node;
 	mapChildren(node, (child: Node): Node => replaceYields(child, d, bindingSym, plan, ctx));
 	return node;
 }
@@ -943,7 +944,7 @@ function replaceYields(node: Node, d: ForOfStmtData, bindingSym: Symbol | null, 
 function returnsAsBreaks(node: Node, result: Symbol | null, endLabel: string): Node {
 	if (node == null) return node;
 	if (node.kind == NodeKind.ReturnStmt) return returnAsBreak(node, result, endLabel);
-	if (isFnBoundary(node.kind)) return node;
+	if (isRoutineOrTestNode(node)) return node;
 	mapChildren(node, (child: Node): Node => returnsAsBreaks(child, result, endLabel));
 	return node;
 }
@@ -1025,7 +1026,7 @@ function retargetConsumer(node: Node, plan: JumpPlan, inLoop: boolean, inSwitch:
 		},
 		_ => {},
 	};
-	if (isFnBoundary(node.kind)) return node;
+	if (isRoutineOrTestNode(node)) return node;
 	const wrapper = isWrapper(node);
 	const loop = isLoopKind(node.kind) && !wrapper;
 	const switching = wrapper || node.kind == NodeKind.SwitchStmt;
