@@ -11,7 +11,7 @@ import { cloneIfPure } from "../place";
 import { resolveOperatorCall, ExtensionMethod, getExtFnType, declaredKeyHash, createContext, createExtensionRegistry, registerExtension } from "../../checker/context";
 import { defineSymbol, makeSymbol, lookupSymbol, SymbolTable } from "../../checker/symbol";
 import { forEachChild } from "../../ast/visitor";
-import { parseInput, getStmts, firstExprKind } from "../testUtil";
+import { parseInput, getStmts, firstExprKind, bindCStd } from "../testUtil";
 
 // The checker binds every operator a routine in scope is declared for; an operator that reaches
 // lowering unbound calls a prelude or extension operator, the same one in every scope.
@@ -640,6 +640,7 @@ test "tuple === is refused at lowering: the checker routes it to the std equalit
 }
 
 function lowerClosuresOf(src: string, operand: Type, jsBackend: boolean): Node[] {
+	bindCStd();
 	const checkerCtx = createContext();
 	checkerCtx.extensionRegistry = createExtensionRegistry();
 	defineSymbol(checkerCtx.table, makeSymbol("a", SymbolKind.Variable, operand, false));
