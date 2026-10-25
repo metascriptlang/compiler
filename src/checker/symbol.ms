@@ -2,6 +2,7 @@ import { Node, NodeKind, NodeFlag, Symbol, SymbolFlag, SymbolKind, SymbolState, 
 export { SymbolFlag } from "../ast/node";
 import { noneType } from "./types";
 import { IdentCache, createIdentCache, findIdentId, getIdentId, identName } from "./idents";
+import { splitTopLevel } from "../utils/string";
 
 // A bindSym identifier and a checked enum member cross the macro wire as their
 // Symbol: the enum member's checked form is an identifier spelled with a mangled
@@ -79,6 +80,44 @@ export function enumMemberName(enumSym: Readonly<Symbol> | null, enumName: strin
 
 export function setFlag(sym: Symbol, flag: SymbolFlag): void {
 	sym.symFlags = sym.symFlags.incl(flag);
+}
+
+export enum RoutineFlag {
+	Async,
+	Generator,
+	Extern,
+	Overload,
+	Template,
+	Generic,
+	ReadonlyParams,
+}
+
+export function routineFlagSet(text: string): BitSet<RoutineFlag> {
+	let set = 0 as BitSet<RoutineFlag>;
+	if (text == "") return set;
+	let inTypeText = false;
+	for (const word of splitTopLevel(text, "|")) {
+		const colon = word.indexOf(":");
+		const key = colon > 0 ? word.slice(0, colon + 1) : word;
+		match (key) {
+			"async" | "async_actor" => { set = set.incl(RoutineFlag.Async); }
+			"generator" => { set = set.incl(RoutineFlag.Generator); }
+			"async_generator" => { set = set.incl(RoutineFlag.Async).incl(RoutineFlag.Generator); }
+			"extern" => { set = set.incl(RoutineFlag.Extern); }
+			"extern_async" => { set = set.incl(RoutineFlag.Extern).incl(RoutineFlag.Async); }
+			"overload" => { set = set.incl(RoutineFlag.Overload); }
+			"template" => { set = set.incl(RoutineFlag.Template); }
+			"gen:" => { set = set.incl(RoutineFlag.Generic); }
+			"rdonly:" => { set = set.incl(RoutineFlag.ReadonlyParams); }
+			"ext:" | "sext:" | "out:" | "ref:" | "sink:" => {}
+			_ => {
+				if (!inTypeText) throw new Error(`internal: unknown function flag '${word}'`);
+				continue;
+			}
+		}
+		inTypeText = key == "gen:" || key == "ext:" || key == "sext:";
+	}
+	return set;
 }
 
 export function overloadWinner(set: Symbol, idx: number): Symbol {
@@ -598,4 +637,36 @@ test "lookupExport skips non-exported" {
 	defineSymbol(table, makeSymbol("bar", SymbolKind.Variable, noneType(), false));
 	const found = lookupExport(table, "bar");
 	assert found == null;
+}
+
+test "routine flags read whole words, so a receiver or generic name holding one sets nothing" {
+	assert routineFlagSet("ext:externBox:Box").isEmpty();
+	assert routineFlagSet("ext:asyncBox:Box|gen:overloadT").has(RoutineFlag.Generic);
+	assert !routineFlagSet("ext:asyncBox:Box|gen:overloadT").has(RoutineFlag.Async);
+	assert !routineFlagSet("ext:generatorBox:Box").has(RoutineFlag.Generator);
+}
+
+test "routine flags split combined words" {
+	const both = routineFlagSet("async_generator|ext:b:Bag");
+	assert both.has(RoutineFlag.Async) && both.has(RoutineFlag.Generator);
+	const externAsync = routineFlagSet("extern_async");
+	assert externAsync.has(RoutineFlag.Extern) && externAsync.has(RoutineFlag.Async);
+	assert routineFlagSet("generator|overload|template").has(RoutineFlag.Overload);
+}
+
+test "routine flags keep a union receiver or constraint as one type text" {
+	const set = routineFlagSet("ext:x:A | B|gen:T:string | int32|overload");
+	assert set.has(RoutineFlag.Overload) && set.has(RoutineFlag.Generic);
+	assert !set.has(RoutineFlag.Extern);
+}
+
+test "an unknown routine flag word is an internal error" {
+	let message = "";
+	try {
+		const set = routineFlagSet("asyncish");
+		message = set.toString();
+	} catch (e) {
+		message = (e as Error).message;
+	}
+	assert message == "internal: unknown function flag 'asyncish'", message;
 }
