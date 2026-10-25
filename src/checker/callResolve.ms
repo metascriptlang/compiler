@@ -4299,12 +4299,12 @@ function firstApplicable(scores: CandidateScore[], syms: Symbol[]): int32 {
 
 function literalSignaturesFirst(syms: Symbol[], count: int32): int32[] {
 	const order: int32[] = [];
+	const rest: int32[] = [];
 	for (let ci = 0; ci < count; ci += 1) {
 		if (ci < syms.length && writesLiteralParam(syms[ci])) order.push(ci);
+		else rest.push(ci);
 	}
-	for (let ci = 0; ci < count; ci += 1) {
-		if (!(ci < syms.length && writesLiteralParam(syms[ci]))) order.push(ci);
-	}
+	for (const ci of rest) order.push(ci);
 	return order;
 }
 
