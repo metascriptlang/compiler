@@ -14,11 +14,13 @@
 // and its result is converted back, so it wraps at its own width.
 
 import { Node, NodeKind, NodeFlag, BinaryExprData, UnaryExprData, UpdateExprData, HiddenStdConvData, NumberLiteralData, Type, TypeKind } from "../../ast/node";
+import { peelStdConv } from "../../ast/shape";
 import { peelToRepr, createPrimitive } from "../../checker/types";
 import { wrapInConv, isBitwiseBinaryOp, isBitwiseCompoundOp } from "../../checker/fit";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, runtimeRef, makeNumber } from "../util";
+import { is64Kind, isSignedKind, isFloatKind } from "../numKinds";
 
 export function lowerNumberBitwiseOperands(program: Node, ctx: TransformContext): Node {
 	walkNode(program, (n: Node): Node => toInt32Visitor(n));
@@ -48,7 +50,7 @@ function toInt32Operand(operand: Node): Node {
 	const dest = peelToRepr(d.convType);
 	if (dest == null || dest.kind != TypeKind.Int32 || d.convExpr == null) return operand;
 	const src = peelToRepr(d.convExpr.nodeType);
-	if (src == null || !(src.kind == TypeKind.Number || src.kind == TypeKind.Float64 || src.kind == TypeKind.Float32)) return operand;
+	if (src == null || !isFloatKind(src.kind)) return operand;
 	const call = makeCall(runtimeRef("msToInt32", operand.location), [d.convExpr], operand.location);
 	call.nodeType = d.convType;
 	return call;
@@ -143,15 +145,13 @@ function typedCall(name: string, args: Node[], node: Node): Node {
 }
 
 function isLiteral(n: Node): boolean {
-	let e = n;
-	while (e.kind == NodeKind.HiddenStdConv) e = (e.data as HiddenStdConvData).convExpr;
-	return e.kind == NodeKind.NumberLiteral;
+	return peelStdConv(n).kind == NodeKind.NumberLiteral;
 }
 
 function floatAssignHelper(d: BinaryExprData): string {
 	const t = peelToRepr(d.left.nodeType);
 	if (t == null) return "";
-	const isFloat = t.kind == TypeKind.Number || t.kind == TypeKind.Float64 || t.kind == TypeKind.Float32;
+	const isFloat = isFloatKind(t.kind);
 	if (d.operator == "%=") return isFloat ? "msModAssignF64" : "";
 	if (t.kind != TypeKind.Number) return "";
 	return match (d.operator) {
@@ -191,7 +191,7 @@ function lowerPowAssign(node: Node, d: BinaryExprData, ctx: TransformContext): N
 
 function isFloatRepr(t: Type | null): boolean {
 	const r = peelToRepr(t);
-	return r != null && (r.kind == TypeKind.Number || r.kind == TypeKind.Float64 || r.kind == TypeKind.Float32);
+	return r != null && isFloatKind(r.kind);
 }
 
 function isPointerRepr(t: Type | null): boolean {
@@ -216,7 +216,7 @@ function isChar(t: Type | null): boolean {
 
 function signedRepr(t: Type | null): Type | null {
 	const r = integerRepr(t);
-	return r != null && isSigned(r.kind) ? r : null;
+	return r != null && isSignedKind(r.kind) ? r : null;
 }
 
 function isSubIntSigned(kind: TypeKind): boolean {
@@ -233,17 +233,9 @@ function ownWidthName(prefix: string, t: Type): string {
 	return prefix + suffix;
 }
 
-function isSigned(kind: TypeKind): boolean {
-	return kind == TypeKind.Int8 || kind == TypeKind.Int16 || kind == TypeKind.Int32 || kind == TypeKind.Int64;
-}
-
-function is64(kind: TypeKind): boolean {
-	return kind == TypeKind.Int64 || kind == TypeKind.Uint64;
-}
-
 function helperKind(t: Type): TypeKind {
-	if (is64(t.kind)) return t.kind;
-	return isSigned(t.kind) ? TypeKind.Int32 : TypeKind.Uint32;
+	if (is64Kind(t.kind)) return t.kind;
+	return isSignedKind(t.kind) ? TypeKind.Int32 : TypeKind.Uint32;
 }
 
 function helperName(prefix: string, t: Type): string {
@@ -268,11 +260,10 @@ function atOwnWidth(call: Node, t: Type, node: Node): Node {
 
 // A literal divisor other than 0 and -1 can neither be zero nor overflow MIN / -1.
 function cannotRaise(divisor: Node, t: Type): boolean {
-	let n = divisor;
-	while (n.kind == NodeKind.HiddenStdConv) n = (n.data as HiddenStdConvData).convExpr;
+	const n = peelStdConv(divisor);
 	if (n.kind != NodeKind.NumberLiteral) return false;
 	const lit = n.data as NumberLiteralData;
 	if (lit.isFloat) return false;
 	if (lit.intVal == 0) return false;
-	return !(isSigned(t.kind) && lit.intVal == -1);
+	return !(isSignedKind(t.kind) && lit.intVal == -1);
 }

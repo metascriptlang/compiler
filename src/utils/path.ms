@@ -4,6 +4,36 @@ import { argv, cwd, env, platform } from "std/process";
 import { exists, realpath, ensureDir, writeFile, remove, removeAll, symlink } from "std/fs";
 import { dirname, join, isAbsolute, normalize } from "std/fs/path";
 
+// ~/.metascript. HOME wins over USERPROFILE on every host, so a Git-bash session on
+// Windows resolves the same root as a POSIX one; "" when neither is set.
+export function metascriptHome(): string {
+	let home = env.get("HOME");
+	if (home == "") home = env.get("USERPROFILE");
+	if (home == "") return "";
+	return join(home, ".metascript");
+}
+
+function firstSet(names: string[], fallback: string): string {
+	for (const name of names) {
+		const value = env.get(name);
+		if (value != "") return value;
+	}
+	return fallback;
+}
+
+function posixTmpDir(): string {
+	return firstSet(["TMPDIR"], "/tmp");
+}
+
+function windowsTmpDir(): string {
+	return firstSet(["TMP", "TEMP", "USERPROFILE"], "C:\\Temp");
+}
+
+// The OS temp directory in std/os's order, without std/os, whose header cannot be included on Windows.
+export function tmpDir(): string {
+	return platform == "windows" ? windowsTmpDir() : posixTmpDir();
+}
+
 // Find the project root by walking up looking for build.ms.
 // If entryFile is given (a relative one against CWD), walks up from its directory first.
 // Falls back to walking up from CWD. Returns CWD if build.ms not found anywhere.
@@ -11,7 +41,7 @@ import { dirname, join, isAbsolute, normalize } from "std/fs/path";
 export function findProjectRoot(entryFile: string = ""): string {
 	// Strategy 1: walk up from entry file's directory
 	if (entryFile != "") {
-		let dir = dirname(isAbsolute(entryFile) ? entryFile : normalize(join(cwd(), entryFile)));
+		let dir = dirname(normalize(isAbsolute(entryFile) ? entryFile : join(cwd(), entryFile)));
 		let depth = 0;
 		while (depth < 20) {
 			if (exists(join(dir, "build.ms"))) return dir;
@@ -21,16 +51,17 @@ export function findProjectRoot(entryFile: string = ""): string {
 		}
 	}
 	// Strategy 2: walk up from CWD
-	let dir = cwd();
+	const here = normalize(cwd());
+	let dir = here;
 	let depth = 0;
 	while (depth < 20) {
 		if (exists(join(dir, "build.ms"))) return dir;
 		const parent = dirname(dir);
-		if (parent == dir) return cwd();
+		if (parent == dir) return here;
 		dir = parent;
 		depth = depth + 1;
 	}
-	return cwd();
+	return here;
 }
 
 // Resolve bare argv[0] (e.g. "msc") to full path by searching $PATH.
@@ -174,6 +205,55 @@ test "findProjectRoot walks up from a relative entry's own directory" {
 	assert nested == direct;
 }
 
+test "findProjectRoot spells every root the way module paths are spelled" {
+	assert !findProjectRoot("out/noRootProbe/main.ms").includes("\\");
+	assert !findProjectRoot().includes("\\");
+}
+
 test "canonicalRootDir — an already-clean root is unchanged" {
 	assert canonicalRootDir("C:/proj/compiler") == "C:/proj/compiler";
+}
+
+test "metascriptHome prefers HOME, falls back to USERPROFILE, and is empty without both" {
+	const home = env.get("HOME");
+	const profile = env.get("USERPROFILE");
+	env.set("HOME", "/h");
+	env.set("USERPROFILE", "/u");
+	assert metascriptHome() == "/h/.metascript";
+	env.set("HOME", "");
+	assert metascriptHome() == "/u/.metascript";
+	env.set("USERPROFILE", "");
+	assert metascriptHome() == "";
+	env.set("HOME", home);
+	env.set("USERPROFILE", profile);
+}
+
+test "the POSIX temp directory is TMPDIR, then /tmp" {
+	const saved = [env.get("TMPDIR"), env.get("TMP")];
+	env.set("TMP", "/ignored");
+	env.set("TMPDIR", "");
+	assert posixTmpDir() == "/tmp";
+	env.set("TMPDIR", "/a");
+	assert posixTmpDir() == "/a";
+	env.set("TMPDIR", saved[0]);
+	env.set("TMP", saved[1]);
+}
+
+test "the Windows temp directory is TMP, then TEMP, then USERPROFILE, then the std fallback" {
+	const saved = [env.get("TMP"), env.get("TEMP"), env.get("USERPROFILE"), env.get("TMPDIR")];
+	env.set("TMPDIR", "/ignored");
+	env.set("TMP", "");
+	env.set("TEMP", "");
+	env.set("USERPROFILE", "");
+	assert windowsTmpDir() == "C:\\Temp";
+	env.set("USERPROFILE", "/c");
+	assert windowsTmpDir() == "/c";
+	env.set("TEMP", "/b");
+	assert windowsTmpDir() == "/b";
+	env.set("TMP", "/a");
+	assert windowsTmpDir() == "/a";
+	env.set("TMP", saved[0]);
+	env.set("TEMP", saved[1]);
+	env.set("USERPROFILE", saved[2]);
+	env.set("TMPDIR", saved[3]);
 }

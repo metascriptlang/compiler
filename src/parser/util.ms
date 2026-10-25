@@ -1,14 +1,15 @@
 // Parser Utilities - Shared helpers used by both expression and statement parsers
 // Lives at parser/ level to avoid circular imports between expressions/ and statements/
 
-import { Token, TokenKind } from "../lexer/token";
+import { Token, TokenKind, isIdentLikeKind, isIdentOrKeyword } from "../lexer/token";
 import { Node, NodeKind, SourceLocation, makeLoc, createNode, createNodeAt, NumberLiteralData, BlockStmtData } from "../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, takePendingComments, collectTokenText, addError } from "./context";
+import { ParserState, createState, current, advance, peek, isAtEnd, takePendingComments, addError } from "./cursor";
 import { optionalizeTypeString } from "../utils/string";
-import { skipTypeAnnotation, parseTypeExpr } from "./typeAnnotation";
+import { skipTypeAnnotation, captureType } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
 import { isBinaryOperator } from "./expressions/precedence";
-import { callExprParser, callObjectPatternParser, callArrayPatternParser } from "./statements/callbacks";
+import { parseExpressionFromState } from "./expressions/core";
+import { parseObjectPattern, parseArrayPattern } from "./statements/declaration";
 
 
 // ===== Comment Preservation =====
@@ -56,53 +57,29 @@ export function captureOptionalType(state: ParserState): string {
 		// Assertion function: `asserts paramName is Type`. Detected before
 		// regular predicates. `asserts` is a contextual keyword (TokenKind.Asserts).
 		if (current(state).kind == TokenKind.Asserts
-				&& state.position + 2 < state.tokens.length
-				&& (state.tokens[state.position + 1].kind == TokenKind.Ident || isIdentLike(state.tokens[state.position + 1]))
-				&& state.tokens[state.position + 2].kind == TokenKind.Is) {
+				&& (peek(state, 1).kind == TokenKind.Ident || isIdentLike(peek(state, 1)))
+				&& peek(state, 2).kind == TokenKind.Is) {
 			advance(state); // `asserts`
 			const assertParamName = current(state).value;
 			advance(state); // param name
 			advance(state); // `is`
-			const assertTargetStart = state.position;
-			skipTypeAnnotation(state);
-			const assertTargetEnd = state.position;
-			const assertTargetText = collectTokenText(state, assertTargetStart, assertTargetEnd);
-			const assertSavedPos = state.position;
-			state.position = assertTargetStart;
-			_lastTypeExpr = parseTypeExpr(state);
-			state.position = assertSavedPos;
-			return `asserts ${assertParamName} is ${assertTargetText}`;
+			const assertTarget = captureType(state);
+			_lastTypeExpr = assertTarget.expr;
+			return `asserts ${assertParamName} is ${assertTarget.text}`;
 		}
 		// Type predicate: `paramName is Type`.
 		if (current(state).kind == TokenKind.Ident
-				&& state.position + 1 < state.tokens.length
-				&& state.tokens[state.position + 1].kind == TokenKind.Is) {
+				&& peek(state, 1).kind == TokenKind.Is) {
 			const paramName = current(state).value;
 			advance(state); // param name
 			advance(state); // `is`
-			const targetStart = state.position;
-			skipTypeAnnotation(state);
-			const targetEnd = state.position;
-			const targetText = collectTokenText(state, targetStart, targetEnd);
-			// Re-parse target for positioned TypeExpr so LSP symbol recording works.
-			const savedPos = state.position;
-			state.position = targetStart;
-			_lastTypeExpr = parseTypeExpr(state);
-			state.position = savedPos;
-			return `${paramName} is ${targetText}`;
+			const target = captureType(state);
+			_lastTypeExpr = target.expr;
+			return `${paramName} is ${target.text}`;
 		}
-		const typeStart = state.position;
-		// Skip using the battle-tested skip path (never changes parser behavior)
-		skipTypeAnnotation(state);
-		const typeEnd = state.position;
-		const text = collectTokenText(state, typeStart, typeEnd);
-		// Build positioned TypeExpr tree by re-parsing the same token range
-		// This is safe: parseTypeExpr only reads tokens[typeStart..typeEnd], no side effects
-		const savedPos = state.position;
-		state.position = typeStart;
-		_lastTypeExpr = parseTypeExpr(state);
-		state.position = savedPos; // Restore to skip endpoint (authoritative)
-		return text;
+		const captured = captureType(state);
+		_lastTypeExpr = captured.expr;
+		return captured.text;
 	}
 	return "";
 }
@@ -128,39 +105,13 @@ export function continuesIdentifier(token: Token): boolean {
 // Returns true if the token is an identifier or a contextual keyword
 // that can be used in identifier positions (variable names, fields, etc.)
 export function isIdentLike(token: Token): boolean {
-	const k = token.kind;
-	if (k == TokenKind.Ident) { return true; }
-	// Keywords from Abstract onwards are contextual (can be used as variable/param names)
-	return (k as number) >= (TokenKind.Abstract as number) && k != TokenKind.Comment && k != TokenKind.Eof && (k as number) < (TokenKind.JsxTagStart as number);
+	return isIdentLikeKind(token.kind);
 }
 
 // Property/method name position — allows ALL keywords (TypeScript parity).
 // In TypeScript: promise.catch(), map.delete(), set.has() are all valid.
 export function isPropertyName(token: Token): boolean {
-	const k = token.kind;
-	if (k == TokenKind.Ident) return true;
-	// Any keyword can be a property/method name
-	return (k as number) >= (TokenKind.Break as number) && k != TokenKind.Comment && k != TokenKind.Eof && (k as number) < (TokenKind.JsxTagStart as number);
-}
-
-// ===== Initializer/Default Value Skip =====
-// Skips an expression value (consumed but not stored, Phase 1)
-// Tracks balanced parens, brackets, braces; stops at comma, semicolon, or unbalanced closer
-// Used for: default param values, enum member values, class property initializers
-
-export function skipDefaultValue(state: ParserState): void {
-	let depth = 0;
-	while (!isAtEnd(state)) {
-		if (current(state).kind == TokenKind.LParen || current(state).kind == TokenKind.LBracket || current(state).kind == TokenKind.LBrace) {
-			depth += 1;
-		}
-		if (current(state).kind == TokenKind.RParen || current(state).kind == TokenKind.RBracket || current(state).kind == TokenKind.RBrace) {
-			if (depth == 0) { break; }
-			depth -= 1;
-		}
-		if ((current(state).kind == TokenKind.Comma || current(state).kind == TokenKind.Semicolon) && depth == 0) { break; }
-		advance(state);
-	}
+	return isIdentOrKeyword(token.kind);
 }
 
 // ===== Parameter List Parser =====
@@ -241,7 +192,7 @@ function parseDefaultValue(state: ParserState): Result<Node, string> {
 	const typeExprs = _lastParamTypeExprs;
 	const locations = _lastParamLocations;
 	const patterns = _lastParamPatterns;
-	const value = callExprParser(state);
+	const value = parseExpressionFromState(state);
 	_lastDefaults = defaults;
 	_lastParamTypeExprs = typeExprs;
 	_lastParamLocations = locations;
@@ -375,7 +326,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 		if (current(state).kind == TokenKind.LBrace || current(state).kind == TokenKind.LBracket) {
 			const destToken = current(state);
 			_lastParamLocations.push(makeLoc(destToken.line, destToken.column));
-			const patResult = destToken.kind == TokenKind.LBrace ? callObjectPatternParser(state) : callArrayPatternParser(state);
+			const patResult = destToken.kind == TokenKind.LBrace ? parseObjectPattern(state) : parseArrayPattern(state);
 			if (!patResult.ok) { break; }
 			const slot = params.length / 2;
 			while (_lastParamPatterns.length < slot) { _lastParamPatterns.push(null as unknown as Node); }
@@ -453,6 +404,7 @@ export function extractParamTypes(raw: string[]): string[] {
 }
 
 // ===== Tests =====
+
 
 function parseParams(input: string, fnName: string): string[] {
 	const lr = lex(input);

@@ -55,7 +55,7 @@ test "try-catch fallback at root level compiles" {
 }
 
 test "try inside Result<number, string> fn compiles" {
-	const src = "function compute(): Result<number, string> {\nconst x = try JSON.parse<number>(\"42\");\nreturn Result.ok(x + 1);\n}\nconst r = compute();";
+	const src = "interface Box { n: number; }\nfunction compute(): Result<number, string> {\nconst x = try JSON.parse<Box>(\"{\\\"n\\\":42}\");\nreturn Result.ok(x.n + 1);\n}\nconst r = compute();";
 	const result = compileToC(src);
 	assert result.ok;
 }

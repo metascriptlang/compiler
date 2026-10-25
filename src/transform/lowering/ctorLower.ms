@@ -124,6 +124,7 @@ function synthesizeCtor(classNode: Node, cd: ClassDeclData, ctx: TransformContex
 		ctorParamTypes: [],
 		ctorBody: makeBlock(stmts, loc),
 		ctorDefaults: [],
+		ctorVisibility: "",
 	}, loc);
 	// methodToFunction widens typeChildren with the receiver only when a Function
 	// type is already present; without it `this` lifts as void*.

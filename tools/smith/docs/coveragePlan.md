@@ -123,7 +123,7 @@ state. A single syntax hit does not verify a row.
 | C1 | async/await/Promise/typed async Result; owned values across suspension and failure | P/S when deterministic; I for task invariants; R5/R6/R7 is safety guidance only | Not implemented. |
 | C2 | spawn/join, move/Readonly/Arc/Locked, affine scope rules, parallel effects | Native P/S + I + D; bound tasks and work, no worker-order prints | Not implemented. |
 | C3 | actors, SEND/CALL/state isolation, per-sender order, shutdown/drain and orphan errors | Native P/S + I + D; use logical IDs and final state, not arrival order | Not implemented. |
-| C4 | cancellation, rejection, racing promises and timeout fusion | I/D; bounded logical outcomes, no timers in the parity program | Not implemented; do not treat different legal winners as wrong code. |
+| C4 | cancellation, rejection, racing promises and timeout fusion | I/D; bounded logical outcomes; a timer only as a bounded gap between a winner and a loser (decided 2026-10-20) | Not implemented; do not treat different legal winners as wrong code. |
 | M1 | comptime blocks/functions, macros/quotes/splices, converters and decorators, compile-time reflection/symbol binding | P/S for expanded consumer vs plain equivalent, D for invalid boundaries; R1/R6 | Not implemented. |
 | M2 | JSX elements/fragments/text/attributes/spreads consumed by a macro | P via a deterministic test macro and plain equivalent, D for illegal runtime Node escape | Not implemented; no UI/browser dependency needed. |
 | N1 | Ptr/Ref/Borrow/cursor/cstring, sizeof/extern/header import, ref/out/sink ABI and callback ownership | Native P/S + I/D, live owned backing and explicit provenance; R5/R7 | Not implemented. Managed safety alone does not cover raw pointers. |
@@ -147,7 +147,8 @@ no Raiser) on installed `msc` v0.3.4 (BUILD `c235d7de9`), plus the r1 batches
 named in a row (Raiser lane on). Cards are `~/metascript/.inbox/compiler/` file
 names without the date; each one names the generator site it parks.
 
-**No row is verified under the acceptance above.** Every row either lacks the
+**No row is verified under the acceptance above** (strict reading; §End-game
+applies the criterion decided on 2026-10-20). Every row either lacks the
 batch report of construct hits for an axis (the report exists since `ffd7c8e01`;
 r0 predates it), or has an axis that is not generated. Every gap below has one
 of three dispositions: a card with a "Done when" (the reopen condition is that
@@ -162,41 +163,141 @@ waits for the person (the last section).
 | H4 | if, match, switch, for, while, do, for-of, break/continue, early return, `unreachable` | core 30/30 | for-in: refused (`'for...in' is not supported`, `src/checker/checkPass.ms` `checkForInStmt`); labels: card `a-labelled-loop-does-not-parse` |
 | H5 | arrows, closures, defaults, rest, overloads, recursion, function values, `void` values (`w.core.void`) | mixed/swarm only in r0 | held out behind cards: a routine in a static block (`function-declared-in-a-static-block-is-undefined`), a spread over a fixed parameter (`a-spread-argument-over-a-fixed-parameter-breaks-every-backend`), a generic function as a value (`a-generic-function-read-as-a-value-…`) |
 | H6 | `fams=cls,agg,gcls`; abstract classes, `static {}` (`w.cls.decl.abstract`, `.block`), object spread (`w.agg.spread`) | cls 23/30, plant 2/2, SAN 5/5; gcls 27/30 | `override`, abstract methods, `new` of an abstract class: card `abstract-class-can-be-constructed-and-override-is-a-parse-error`; class-typed spread: card `spreading-a-class-instance-into-a-class-typed-literal-…` |
-| H7 | `fams=enum`; intersections and conditional types (`w.enum.inter`, `.cond`) | enum 28/30, plant 2/2; no SAN | intersection member positions: card `an-intersection-value-is-not-assignable-to-its-second-member`; `keyof` annotations: card `keyof-parses-only-as-a-constraint`; mapped and utility types other than `Readonly`: planned in `docs/LANG.md`, reopen when they ship; D for type refusals: not in the Q1 catalogue |
+| H7 | `fams=enum`; intersections and conditional types (`w.enum.inter`, `.cond`); string and numeric literal unions (integer, negative, fractional) | enum 28/30, plant 2/2; no SAN | a literal-typed value into an `int64` / `uint*` parameter: card `number-literal-typed-value-refused-by-a-wider-integer-parameter`; a compound store into a literal slot: refused by design, only whole assignments are generated; intersection member positions: card `an-intersection-value-is-not-assignable-to-its-second-member`; `keyof` annotations: card `keyof-parses-only-as-a-constraint`; mapped and utility types other than `Readonly`: planned in `docs/LANG.md`, reopen when they ship; D for type refusals: not in the Q1 catalogue |
 | H8 | `fams=union,exc`; `Result` | exc 27/30, plant 2/2, SAN 5/5 | object pattern in `match`: card `an-object-pattern-in-match-does-not-parse` |
 | H9 | `fams=generic,gcls`; inferred calls and bounds (`w.generic.infer`, `.bound`, `w.gcls.infer`) | gcls 27/30, plant 2/2, SAN 4/5 | literal, nullable and tuple inference: card `generic-inference-refusals-on-legal-typescript`; `new C(..)` without type arguments: refused (`requires explicit type arguments`) |
 | H10 | `fams=coll,seq` | seq 26/30, plant 2/2, SAN 5/5; coll via mixed | Record and index signatures: card `an-index-signature-object-breaks-on-c-and-js`; tuple spread: `c-spreading-a-tuple-fails-clang`; Set and Map spread: `set-and-map-spread-is-an-internal-error-on-c`; nested destructuring: `nested-array-destructuring-binds-no-inner-names`; `reverse`: `raiser-array-has-no-reverse`. The `gen.ms` test `no program names a shape that is parked behind an open compiler card` holds them out |
 | H11 | `fams=conv` | conv 27/30, plant 2/2, SAN 5/5 | D for illegal conversions: not in the Q1 catalogue |
 | H12 | `fams=own`; `Readonly<T>` views, frozen snapshots, `readonly` fields (`w.own.view`, `.freeze`, `.ro`) | no standalone or SAN batch in r0 | readonly array operator: card `readonly-array-type-operator-does-not-parse`; borrow/cursor: N1 |
-| H13 | `fams=exc`: throw, catch, finally, defer, rethrow, unwinding | exc 27/30, plant 2/2, SAN 5/5 | throwing constructor: card `c-a-throwing-constructor-is-not-checked-after-new` |
+| H13 | `fams=exc`: throw, catch, finally, defer, rethrow, unwinding; the finally paths run on the Raiser too | exc 27/30, plant 2/2, SAN 5/5 | throwing constructor: card `c-a-throwing-constructor-is-not-checked-after-new` |
 | H14 | `fams=iter` | iter 28/30, plant 2/2; no SAN in r0; r1 iter 28/30 with the Raiser | `yield*`: card `yield-star-is-not-lowered-…`; finally in a generator: card `for-of-exit-skips-the-generators-finally` |
-| H15 | `modules=N`, alias, namespace, re-export, star, cycle, init, `select` (`when (js)` / `when (c)` per module) | proj 14/20, proj-cycle 14/20, proj-hub 15/20, plant 2/2, SAN 2/5 | per-backend files (`.jms` / `.cms`): the bundle layout accepts `.ms` names only (`drive.ms`), open inside the approved manifest scope |
+| H15 | `modules=N`, alias, namespace, re-export, star, cycle, init, `select` (`when (js)` / `when (c)` per module) | proj 14/20; proj-cycle 15/20, proj-hub 15/20 (r6, installed msc `794e1579a`: no cross-module `cdC` / `CdUnbox` failure left after the `infer`-through-an-alias fix; new cards `a-module-that-exports-a-macro-loses-its-functions-across-an-import-cycle`, `a-namespace-qualified-generic-class-as-a-type-argument-stays-unresolved`); plant 2/2, SAN 2/5 | per-backend files (`.jms` / `.cms`): the bundle layout accepts `.ms` names only (`drive.ms`), open inside the approved manifest scope |
 | B1 | `fams=meta`: `when`, traits, `@inline` / `@noinline`; build modes through `plant=opt` | meta 29/30, plant 2/2 | `when (true)`: card `when-true-is-refused-…`; D for illegal forms: not in the Q1 catalogue |
-| C1 | `fams=async` (opt-in); `Promise<Result<…>>` (`w.async.result`) | async 29/30, plant 2/2, SAN 5/5; mixed-async 6/20 | `int64` across `await` held out: card `an-awaited-int64-from-an-async-function-is-cut-to-int32-on-c` |
-| C2 | `fams=spawn` (opt-in), model oracle | spawn 30/30, plant 2/2 (model), SAN 5/5 | `Locked` and `Arc` scenarios skip the Raiser lane |
-| C3 | `fams=actor` (opt-in), model oracle | actor 30/30, plant 2/2 (model), SAN 4/5 | shutdown and orphan-error D rows: not in the Q1 catalogue |
-| C4 | `fams=race` (opt-in), model oracle | race 30/30, plant 2/2 (model); no SAN | `raceTimer` sleeps 100–150 ms against "no timers": decision below |
+| C1 | `fams=async` (opt-in); `Promise<Result<…>>` (`w.async.result`); 64-bit scalars and payloads across `await`; overlapping calls and `Promise.all` at module level | async 29/30, plant 2/2, SAN 5/5; mixed-async 6/20 | `Promise.all` skips the Raiser lane (`msPromiseAll` has no host bridge); calls started together skip it too, card `raiser-async-call-runs-inline` |
+| C2 | `fams=spawn` (opt-in), model oracle; 64-bit values cross a future | spawn 30/30, plant 2/2 (model), SAN 5/5 | `Locked` and `Arc` scenarios skip the Raiser lane |
+| C3 | `fams=actor` (opt-in), model oracle; 64-bit values cross a reply | actor 30/30, plant 2/2 (model), SAN 4/5 | shutdown and orphan-error D rows: not in the Q1 catalogue |
+| C4 | `fams=race` (opt-in), model oracle | race 30/30, plant 2/2 (model); no SAN | `raceTimer` stays: a bounded timer gap is allowed (decision below) |
 | M1 | `fams=meta`: comptime, macros, quote/splice, decorators, reflection; meta pair oracle | meta 29/30, plant 2/2 (meta) | D for invalid boundaries: not in the Q1 catalogue |
 | M2 | `fams=meta` JSX; non-empty spread (`w.meta.spread`) | same batches as M1 | D for an illegal runtime `Node` escape: not in the Q1 catalogue |
 | N1 | `fams=native` (opt-in): `Ptr`, `Ref`, `Borrow`, `Cursor`, `cstring`, `sizeof`, libc | native 30/30, plant 2/2 (opt), SAN 5/5, mixed-native 20/20 | callback into C: card `a-function-passed-to-a-c-function-pointer-fails-at-clang`; header import: needs a project fixture (approved manifest scope, open) |
 | N2 | `@include` of libc headers and extern functions only | same as N1 | compile/link/`passC`/`passL`/raw emit: open inside the approved manifest scope |
 | Q1 | `diag`: 12 kinds × 6 places, message + line + column pinned through `msc check` | 200 seeds: 187 pinned; 11 `extra-errors` (card `an-undeclared-name-adds-a-second-error-after-the-first`), 2 `false-alarm` from a comptime string index in the legal twin (card `raiser-string-index-expects-array`); plant 29/29 | the D rows named in H7, H11, B1, C3, M1, M2 |
-| T1 | nothing | — | needs a target adapter: decision below |
-| T2 | nothing | — | needs an HCR adapter: decision below |
+| T1 | nothing | — | out of this arc: needs a target adapter (NEW MECHANISM, decision below) |
+| T2 | nothing | — | out of this arc: needs an HCR adapter (NEW MECHANISM, decision below) |
 | T3 | macOS / clang only | r0 and r1 ran on this host | environment: Linux, Windows and the gcc/zig toolchain axes are unavailable here, reported as unavailable, never as clean |
 
-### Waiting for the person
+### Campaign r1 — measured 2026-10-20
 
-- **Verified criterion.** Strict reading (every axis of the row) leaves every row
-  partial. A relaxed reading, "verified for the generated axes" with standalone,
-  SAN and plant batches plus a hits report, would admit H13, H11 and H6 after r1.
-- **T1 / T2 adapters (NEW MECHANISM).** T1 drives a target program through
-  `src/test/guard` (bare, solana) or `tools/solana`; T2 emits an init/reload
-  fixture for `src/test/hcr/run.ms` and compares cold run with reload run. Each
-  adds a Smith-side adapter; risk: build-only green or a missing SDK read as an
-  execution pass.
-- **Race timer.** `raceTimer` measured 0/144 flaky; either the plan allows
-  bounded timers in a race scenario, or the scenario leaves the generator.
+74 batches of `out/smith/g7/batches.txt`, Raiser lane on, logs and the hits line
+per batch in `out/smith/g7/<batch>.log`. The installed `msc` was synced six
+times during the run (`c235d7de9`, `5d46e5b43`, `733aafe43`, `f6102cd1c`,
+`940c41a44`, `ca1cc0d55`); each bundle records its build. Clean/programs:
+
+| rows | standalone | SAN | hits |
+|---|---|---|---|
+| H1, H3, H4 | core 30/30 | 5/5 | — |
+| H2 | str 1/30; after the `strExpr` park 5/30 | 0/5 | str 34/34 |
+| H5 | closure 28/30 | — | — |
+| H6 | cls 25/30, agg 27/30, gcls 27/30 | 5/5, 5/5, 5/5 | cls 13/13, agg 11/14, gcls 36/38 |
+| H7 | enum 24/30; rerun after the `ixAt` fix 26/30 | 5/5 | enum 43/45 |
+| H8, H13 | union 28/30, exc 29/30 | exc 5/5 | exc 12/12 |
+| H9 | generic 25/30 | — | generic 3/3 |
+| H10 | coll 28/30, seq 24/30 | 5/5, 5/5 | coll 18/26, seq 11/38 (SAN) |
+| H11 | conv 27/30 | 5/5 | conv 8/8 |
+| H12 | own 29/30 | 5/5 | own 9/16 |
+| H14 | iter 28/30 | 5/5 | iter 13/14 (SAN) |
+| H15 | proj 14/20, proj-cycle 11/20, proj-hub 14/20, proj-fams 14/20 | 4/5 | — |
+| B1, M1, M2 | meta 26/30; rerun after the OptBox fix 28/30 | 4/5 | meta 33/33 |
+| C1 | async 25/30, mixed-async 7/20 | 5/5 | async 18/18 |
+| C2, C3, C4 | spawn 30/30, actor 30/30, race 30/30 | 5/5, 4/5, 5/5 | spawn 9/9, actor 6/6, race 6/6 |
+| N1, N2 | native 29/30, mixed-native 20/20 | 5/5 | native 48/51 |
+
+Every plant batch caught its planted defect (23 batches, 0 clean), but in five
+programs the C build failed first on `ternary-hoist-lost-when-else-holds-a-nested-ternary`
+(plant-str 2, plant-generic 1, plant-proj 1, plant-san 1). The same card failed
+24 of 30 str programs and all 5 str SAN programs, because a string test is
+always a hoisted call; `Gen.strExpr` now builds both arms with no ternary
+(str rerun: 2 of 30). The Raiser lane of the str family stays blind on
+`raiser-string-index-expects-array` (23 of 30 after the park; held out only
+with the async family). One generic program timed out on the Raiser beside a
+gate and finished in 0.3–0.7 s alone: not a finding.
+
+New cards from r1: `infer-against-an-interface-imported-under-an-alias-gives-never`
+(H15), `raiser-power-assign-on-a-module-let-declared-after-an-arrow-cannot-compile`
+(H3), `logical-assignment-operators-do-not-parse` (H3: `??=`, `||=`, `&&=` are not
+generated). The other findings are sightings of open cards or generator defects
+fixed in `24867fb86`, `2c69e0f28`, `04def4312` and `f5dffc177`.
+
+### Decisions — 2026-10-20
+
+The person handed these to the session ("làm một mạch tới end-game"); each
+follows the recommendation that had been put to them.
+
+- **Verified means verified for the generated axes**: a standalone batch with at
+  least 25 of 30 clean and every other program on an open card, a SAN batch 5/5,
+  a plant batch 2/2, a hits report that reaches every construct of the family,
+  and no requested lane skipped by every program of the family. An axis that
+  is not generated is parked under its card and does not count against the row.
+- **T1 and T2 leave this arc.** Each needs a Smith-side adapter (T1 through
+  `src/test/guard` bare/solana or `tools/solana`; T2 through an init/reload
+  fixture for `src/test/hcr/run.ms`), a NEW MECHANISM whose risk is a build-only
+  green or a missing SDK read as an execution pass. Reopen when an adapter is
+  approved on its own.
+- **A race may hold a bounded timer.** `raceTimer` (100–150 ms gap between the
+  winner and the loser) measured 0/144 flaky, so the C4 oracle allows it.
+
+## End-game — 2026-10-20
+
+**Graduation.** A real Smith finding went the whole way: the card
+`an-awaited-int64-from-an-async-function-is-cut-to-int32-on-c` (Smith G7 scout)
+was fixed in the compiler and pinned by corpus `futureKeepsIntegerWidth`. Two
+more cards with Smith park sites closed the same way:
+`raiser-loses-a-finally-when-a-raise-starts-in-catch-or-finally` (pins
+`finallyRunsAtEveryExit`, `961-finallyPathsOwnException`) and
+`numeric-literal-type-annotation-unresolved` (pins `numericLiteralTypes` and
+three corpus programs). The fixing sessions' unpark notes named the sites;
+`gen.ms` now generates 64-bit scalars and payloads across `await`, futures and
+actor replies, overlapping calls and `Promise.all` at module level, finally
+paths on the Raiser, and integer, negative and fractional literal unions.
+
+Probe of the unparked axes, two seeds each, installed `msc` BUILD `ebe16a0cf`,
+Raiser on:
+
+| vector | clean | the other program |
+|---|---|---|
+| `fams=async types=int32,int64,uint64,float64` | 1/2 | JS `(-(-g2))` emitted as `--g2`: card `js-double-negation-emits-decrement` |
+| `fams=enum` | 1/2 | JS `i0 is not defined`: card `js-a-wide-bitset-update-in-a-conditional-branch-moves-the-for-loop-update-before-the-loop` |
+| `fams=exc`, finally / rethrow / recover weights 60 | 2/2 | — (20 finally blocks, no Raiser skip) |
+| `fams=spawn,actor,race types=int64,uint64,int8` | 2/2 | — |
+
+Not measured: a 30-seed batch per unparked axis (`out/smith/g7/batches.r2.txt`
+waits for a quiet machine) and SAN over them.
+
+**Row verdicts** under the criterion in §Decisions, from the r1 numbers:
+
+| rows | verdict | what holds the row (reopen when it changes) |
+|---|---|---|
+| H6 (`cls`), H11, H13, C1, C2, C4 | verified for the generated axes | — (the C1 64-bit axis has only the probe above) |
+| H6 (`agg`, `gcls`), H7, H10, H12, H14, N1, N2 | parked | hits short of every construct (agg 11/14, gcls 36/38, enum 43/45, coll 18/26, seq 11/38, own 9/16, iter 13/14, native 48/51) |
+| H1, H3, H4 | parked | the core family has no hits report, and the r1 core batch named `bigint`, so the Raiser skipped all of it |
+| H2 | parked | C lane blind on `ternary-hoist-lost-when-else-holds-a-nested-ternary` until the `strExpr` park; Raiser blind on `raiser-string-index-expects-array` |
+| H5, H8, H9 | parked | no SAN batch for `closure`, `union`, `generic`; generic C builds fail on the ternary-hoist card |
+| H15 | parked | project batches 11–14 of 20 clean, no hits report |
+| B1, M1, M2 | parked | meta SAN 4/5 |
+| C3 | parked | every actor program skips the Raiser (no actor constructor there); SAN 4/5 on the `stop-right-after-spawn` use-after-free card |
+| Q1 | parked | the D rows of H7, H11, B1, C3, M1, M2 are not in the catalogue |
+| T1, T2 | out of this arc | the adapters in §Decisions |
+| T3 | environment | only macOS / clang here |
+
+Every gap inside a parked row carries its card or refusal in §G7 row
+dispositions; a parked row reopens when that card lands or the missing batch
+runs.
+
+**Running campaigns.** `tools/smith/campaign.sh <batch file> <run dir>` runs
+`run` batches one at a time on a quiet machine; `tools/smith/campaign.txt` is
+the matrix campaign (r1's 71 batches). Each batch leaves `<name>.log` and
+`<name>.new` (the bundles it wrote) in the run dir; `touch <run dir>/hold`
+before editing `tools/smith/` pauses the next batch.
 
 ## Audit gaps before hardening
 

@@ -160,6 +160,9 @@ refresh_main_builder() {
   if cp "$src" "$tmp" 2>/dev/null && { [ ! -e "$dest" ] || { rm -f "$prev"; mv "$dest" "$prev" 2>/dev/null; }; } \
     && mv "$tmp" "$dest" 2>/dev/null && printf '%s\n' "$key" >"${dest%.exe}.key"; then
     say "land: main builder refreshed from $w (previous kept as ${prev##*/})"
+    if [ "$dest" != "$MAIN/msc" ] && [ -n "$(find "$MAIN" -maxdepth 1 -type f -name msc)" ]; then
+      cp "$dest" "$MAIN/msc.new" && mv -f "$MAIN/msc.new" "$MAIN/msc" || say "land: $MAIN/msc NOT REFRESHED beside $dest; builders picked from it stay stale"
+    fi
   else
     [ -e "$dest" ] || { [ ! -e "$prev" ] || mv "$prev" "$dest" 2>/dev/null; }
     rm -f "$tmp" 2>/dev/null
@@ -483,12 +486,22 @@ commit_pruned_known() {
   say "land: committed the known-red set without the entries the gate saw green ($(git -C "$w" rev-parse --short "$new"))"
 }
 
+local_verdict() {
+  local f=$1 w=$2 old=$3 new=$4 tip base checked _
+  [ -f "$f" ] && read -r tip base _ <"$f" || return 1
+  [ "$tip $base" = "$new $old" ] && return 0
+  git -C "$w" merge-base --is-ancestor "$base" "$old" 2>/dev/null || return 1
+  checked=$(git -C "$w" diff -U0 --no-renames "$base" "$tip" | git patch-id --verbatim | cut -d' ' -f1)
+  [ -n "$checked" ] && [ "$checked" = "$(git -C "$w" diff -U0 --no-renames "$old" "$new" | git patch-id --verbatim | cut -d' ' -f1)" ]
+}
+
 remote_verdict() {
-  local f="${MSC_REMOTE_VERDICTS:-$HOME/metascript/.wt/verdicts}/$1" w=$2 old=$3 new=$4 base
+  local f="${MSC_REMOTE_VERDICTS:-$HOME/metascript/.wt/verdicts}/$1" w=$2 old=$3 new=$4 base checked
   [ -f "$f" ] && [ "$(sed -n 's/^result=//p' "$f")" = GREEN ] || return 1
   base=$(sed -n 's/^base=//p' "$f")
   git -C "$w" merge-base --is-ancestor "$base" "$old" 2>/dev/null || return 1
-  [ "$(git -C "$w" diff -U0 --no-renames "$old" "$new" | git patch-id --stable | cut -d' ' -f1)" = "$(sed -n 's/^patch=//p' "$f")" ] || return 1
+  checked=$(sed -n 's/^patch_verbatim=//p' "$f")
+  [ -n "$checked" ] && [ "$(git -C "$w" diff -U0 --no-renames "$old" "$new" | git patch-id --verbatim | cut -d' ' -f1)" = "$checked" ] || return 1
   printf '%s on %s' "$(sed -n 's/^host=//p' "$f")" "$(git -C "$w" rev-parse --short "$base")"
 }
 
@@ -543,7 +556,7 @@ cmd_land() {
       exit 0
     fi
     queued_for "$qd" "$name" item | while IFS= read -r p; do rm -f "$p"; done
-    rm -f "$qd/$name.done" "$qd/$name.red" "$qd/$name.land.log"
+    rm -f "$qd/$name.done" "$qd/$name.red"
     item="$qd/$(date +%s)-$$.item"
     printf 'name=%s\nworktree=%s\n' "$name" "$w" >"$item.tmp" && mv "$item.tmp" "$item"
     start_runner
@@ -559,8 +572,7 @@ $(printf '%s\n' "$clash" | sed 's/^/  /')"
     pick_builder "$w" || die "land: no builder can check src/index.ms at this rev (set MSC_BUILDER)"
   fi
   verdict="$(git -C "$w" rev-parse --absolute-git-dir)/wt-land-verdict"
-  if [ "$gate" -eq 1 ] && [ "${#also[@]}" -eq 0 ] && [ -f "$verdict" ] \
-    && [ "$(awk '{print $1, $2}' "$verdict")" = "$new $old" ]; then
+  if [ "$gate" -eq 1 ] && [ "${#also[@]}" -eq 0 ] && local_verdict "$verdict" "$w" "$old" "$new"; then
     say "land: reusing the green gate of $(awk '{print $3}' "$verdict") for $(git -C "$w" rev-parse --short "$new") on $BASE $(git -C "$MAIN" rev-parse --short "$old")"
   elif [ "$gate" -eq 1 ] && [ "${#also[@]}" -eq 0 ] && remote=$(remote_verdict "$name" "$w" "$old" "$new"); then
     say "land: reusing the green remote gate of $remote for $(git -C "$w" rev-parse --short "$new") on $BASE $(git -C "$MAIN" rev-parse --short "$old")"

@@ -25,7 +25,7 @@
 
 import { Node, NodeKind, FunctionDeclData, Symbol, CallExprData, ObjectLiteralData, ArrayLiteralData, Type, TypeKind, DeclKind, BlockStmtData } from "../../ast/node";
 import { createPtr, getSysType, createSpan, copyTypeShallow } from "../../checker/types";
-import { SymbolFlag, hasFlag } from "../../checker/symbol";
+import { SymbolFlag, hasFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { secondRead } from "../lowering/spanLower";
 import { TransformContext, reportTransformError } from "../context";
 import { walkNode } from "../walker";
@@ -111,7 +111,7 @@ function flattenSpanFormals(fnType: Type, spanParams: ExpandedParam[]): Type {
 
 function expandFunctionDecl(node: Node): void {
 	const d = node.data as FunctionDeclData;
-	if (d.fnFlags.indexOf("extern", 0) < 0) return;
+	if (!routineFlagSet(d.fnFlags).has(RoutineFlag.Extern)) return;
 	const fnType = node.nodeType;
 	if (fnType == null) return;
 	if (fnType.kind != TypeKind.Function) return;

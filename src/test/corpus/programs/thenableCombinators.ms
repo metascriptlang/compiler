@@ -1,5 +1,4 @@
 // @stdout: all 1,2,3|race 4|any 6
-// @xfail(raiser): raiser runtime error: Unknown host function: msPromiseAll
 // @exit: 0
 // note: `Promise.all`, `race` and `any` adopt each thenable in an array literal as `await` does, next to promises.
 

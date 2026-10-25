@@ -7,9 +7,10 @@ import { CToken, CTokenKind, LitKind, makeEofToken } from "./token";
 import { Diagnostic, DiagSeverity, makeDiag } from "./error";
 import { TargetInfo, predefinedMacros, targetFor } from "./target";
 import { tokenizeFile, convertPPTokens } from "./tokenize";
+import { evalConstExpr } from "./eval";
 import { readFile } from "std/fs";
 import { dirname } from "std/fs/path";
-import { djb2, fingerprint, hashToHex } from "std/hash";
+import { hashContent } from "../../utils/contentHash";
 
 export interface PreprocessResult {
 	head: CToken;
@@ -65,11 +66,6 @@ interface PPContext {
 	counter: int32;           // for __COUNTER__
 	arena: CToken[];          // owns all tokens this preprocess session creates
 	readLog: string[] | null;        // null normally; when set, every file probe/read is recorded as "<path>\t<hash>" / "<path>\t-" for the caller's dep cache
-}
-
-// Same dual-hash as compiler/cache.ms hashContent — dep-cache entries keyed by it.
-function headerDepHash(s: string): string {
-	return `${hashToHex(djb2(s))}_${hashToHex(fingerprint(s))}`;
 }
 
 // ===== Token Utilities =====
@@ -611,187 +607,10 @@ function skipCondIncl(tok: CToken): CToken {
 	return tok;
 }
 
-// ===== Minimal #if Expression Evaluator =====
-
-// Evaluate a preprocessor constant expression. Handles:
-// integer literals, defined(X), !, &&, ||, ==, !=, <, >, <=, >=, +, -, *, /, %, &, |, ^, ~, (, ), ?:
-// Undefined identifiers evaluate to 0 (C spec).
-
-interface EvalState {
-	tok: CToken;
-}
-
-function evalNext(es: EvalState): void {
-	es.tok = es.tok.next;
-}
-
-function evalTernary(es: EvalState, ctx: PPContext): int32 {
-	let val = evalOr(es, ctx);
-	if (es.tok.stringVal == "?") {
-		evalNext(es);
-		const thenVal = evalTernary(es, ctx);
-		if (es.tok.stringVal != ":") {
-			ctx.diags.push(makeDiag(DiagSeverity.Error, es.tok.file, es.tok.line, es.tok.col, "expected ':' in ternary"));
-		} else { evalNext(es); }
-		const elseVal = evalTernary(es, ctx);
-		return val != 0 ? thenVal : elseVal;
-	}
-	return val;
-}
-
-function evalOr(es: EvalState, ctx: PPContext): int32 {
-	let val = evalAnd(es, ctx);
-	while (es.tok.stringVal == "||") {
-		evalNext(es);
-		const rhs = evalAnd(es, ctx);
-		val = (val != 0 || rhs != 0) ? 1 : 0;
-	}
-	return val;
-}
-
-function evalAnd(es: EvalState, ctx: PPContext): int32 {
-	let val = evalBitOr(es, ctx);
-	while (es.tok.stringVal == "&&") {
-		evalNext(es);
-		const rhs = evalBitOr(es, ctx);
-		val = (val != 0 && rhs != 0) ? 1 : 0;
-	}
-	return val;
-}
-
-function evalBitOr(es: EvalState, ctx: PPContext): int32 {
-	let val = evalBitXor(es, ctx);
-	while (es.tok.stringVal == "|") {
-		evalNext(es);
-		val = val | evalBitXor(es, ctx);
-	}
-	return val;
-}
-
-function evalBitXor(es: EvalState, ctx: PPContext): int32 {
-	let val = evalBitAnd(es, ctx);
-	while (es.tok.stringVal == "^") {
-		evalNext(es);
-		val = val ^ evalBitAnd(es, ctx);
-	}
-	return val;
-}
-
-function evalBitAnd(es: EvalState, ctx: PPContext): int32 {
-	let val = evalEquality(es, ctx);
-	while (es.tok.stringVal == "&") {
-		evalNext(es);
-		val = val & evalEquality(es, ctx);
-	}
-	return val;
-}
-
-function evalEquality(es: EvalState, ctx: PPContext): int32 {
-	let val = evalRelational(es, ctx);
-	while (es.tok.stringVal == "==" || es.tok.stringVal == "!=") {
-		const op = es.tok.stringVal;
-		evalNext(es);
-		const rhs = evalRelational(es, ctx);
-		if (op == "==") val = val == rhs ? 1 : 0;
-		else val = val != rhs ? 1 : 0;
-	}
-	return val;
-}
-
-function evalRelational(es: EvalState, ctx: PPContext): int32 {
-	let val = evalShift(es, ctx);
-	while (es.tok.stringVal == "<" || es.tok.stringVal == ">" ||
-		   es.tok.stringVal == "<=" || es.tok.stringVal == ">=") {
-		const op = es.tok.stringVal;
-		evalNext(es);
-		const rhs = evalShift(es, ctx);
-		val = match (op) {
-			"<" => val < rhs ? 1 : 0,
-			">" => val > rhs ? 1 : 0,
-			"<=" => val <= rhs ? 1 : 0,
-			_ => val >= rhs ? 1 : 0,
-		};
-	}
-	return val;
-}
-
-function evalShift(es: EvalState, ctx: PPContext): int32 {
-	let val = evalAdd(es, ctx);
-	while (es.tok.stringVal == "<<" || es.tok.stringVal == ">>") {
-		const op = es.tok.stringVal;
-		evalNext(es);
-		const rhs = evalAdd(es, ctx);
-		if (op == "<<") val = val << rhs;
-		else val = val >> rhs;
-	}
-	return val;
-}
-
-function evalAdd(es: EvalState, ctx: PPContext): int32 {
-	let val = evalMul(es, ctx);
-	while (es.tok.stringVal == "+" || es.tok.stringVal == "-") {
-		const op = es.tok.stringVal;
-		evalNext(es);
-		const rhs = evalMul(es, ctx);
-		if (op == "+") val = val + rhs;
-		else val = val - rhs;
-	}
-	return val;
-}
-
-function evalMul(es: EvalState, ctx: PPContext): int32 {
-	let val = evalUnary(es, ctx);
-	while (es.tok.stringVal == "*" || es.tok.stringVal == "/" || es.tok.stringVal == "%") {
-		const op = es.tok.stringVal;
-		evalNext(es);
-		const rhs = evalUnary(es, ctx);
-		if (op == "*") val = val * rhs;
-		else if (op == "/" && rhs != 0) val = (val / rhs) | 0; // integer division
-		else if (op == "%" && rhs != 0) val = val % rhs;
-	}
-	return val;
-}
-
-function evalUnary(es: EvalState, ctx: PPContext): int32 {
-	return match (es.tok.stringVal) {
-		"!" => { evalNext(es); return evalUnary(es, ctx) == 0 ? 1 : 0; },
-		"~" => { evalNext(es); return ~evalUnary(es, ctx); },
-		"-" => { evalNext(es); return -evalUnary(es, ctx); },
-		"+" => { evalNext(es); return evalUnary(es, ctx); },
-		_ => evalPrimary(es, ctx),
-	};
-}
-
-function evalPrimary(es: EvalState, ctx: PPContext): int32 {
-	const tok = es.tok;
-
-	// Parenthesized expression
-	if (tok.stringVal == "(") {
-		evalNext(es);
-		const val = evalTernary(es, ctx);
-		if (es.tok.stringVal == ")") evalNext(es);
-		return val;
-	}
-
-	// Numeric literal (includes character literals stored as Num)
-	if (tok.kind == CTokenKind.Num) {
-		const val = tok.intVal as int32;
-		evalNext(es);
-		return val;
-	}
-
-	// Undefined identifier → 0 (C spec)
-	if (tok.kind == CTokenKind.Ident) {
-		evalNext(es);
-		return 0;
-	}
-
-	evalNext(es);
-	return 0;
-}
+// ===== #if Expressions =====
 
 // Evaluate #if expression: preprocess tokens, handle defined(), eval.
-function evalConstExpr(tok: CToken, ctx: PPContext): number {
+function evalCondition(tok: CToken, ctx: PPContext): int64 {
 	// Copy line and preprocess it
 	const parts = copyLine(ctx, tok);
 	let line = parts[0];
@@ -836,19 +655,11 @@ function evalConstExpr(tok: CToken, ctx: PPContext): number {
 
 	convertPPTokens(expanded, ctx.diags);
 
-	// Replace remaining identifiers with 0
-	let et = expanded;
-	while (et.kind != CTokenKind.Eof) {
-		if (et.kind == CTokenKind.Ident) {
-			et.kind = CTokenKind.Num;
-			et.intVal = 0 as int64;
-			et.stringVal = "0";
-		}
-		et = et.next;
+	const r = evalConstExpr(expanded, new HashMap<string, int64>());
+	if (!r.ok) {
+		ctx.diags.push(makeDiag(DiagSeverity.Error, tok.file, tok.line, tok.col, r.error));
 	}
-
-	const es: EvalState = { tok: expanded };
-	return evalTernary(es, ctx);
+	return r.value;
 }
 
 // Preprocess a token list (for macro expansion in #if expressions).
@@ -879,7 +690,7 @@ function preprocessTokens(tok: CToken, ctx: PPContext): CToken {
 function probeReadFile(path: string, ctx: PPContext): string {
 	const content = try readFile(path) catch "";
 	if (ctx.readLog != null) {
-		ctx.readLog.push(content != "" ? `${path}\t${headerDepHash(content)}` : `${path}\t-`);
+		ctx.readLog.push(content != "" ? `${path}\t${hashContent(content)}` : `${path}\t-`);
 	}
 	return content;
 }
@@ -1042,7 +853,7 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 
 		// #if
 		if (dir.stringVal == "if") {
-			const val = evalConstExpr(dir.next, ctx);
+			const val = evalCondition(dir.next, ctx);
 			pushCondIncl(ctx, val != 0);
 			if (val == 0) {
 				tok = skipCondIncl(skipLine(dir.next));
@@ -1093,7 +904,7 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 				tok = skipCondIncl(skipLine(dir.next));
 				continue;
 			}
-			const val = evalConstExpr(dir.next, ctx);
+			const val = evalCondition(dir.next, ctx);
 			if (val != 0) {
 				ctx.condStack.included = true;
 				tok = skipLine(dir.next);
@@ -1142,6 +953,22 @@ function preprocess2(tok: CToken, ctx: PPContext): CToken {
 		if (dir.stringVal == "pragma" && dir.next.stringVal == "once") {
 			ctx.pragmaOnce.set(tok.file, true);
 			tok = skipLine(dir.next);
+			continue;
+		}
+
+		if (dir.stringVal == "pragma" && dir.next.stringVal == "pack" && !dir.next.atBol) {
+			const marker = copyToken(ctx, dir);
+			marker.stringVal = "#pragma";
+			cur.next = marker;
+			cur = marker;
+			let t = dir.next;
+			while (t.kind != CTokenKind.Eof && !t.atBol) {
+				const c = copyToken(ctx, t);
+				cur.next = c;
+				cur = c;
+				t = t.next;
+			}
+			tok = t;
 			continue;
 		}
 
@@ -1377,6 +1204,37 @@ test "preprocess if with bitwise expression" {
 	const r0 = tokenizeFile("#if (1 << 2) == 4\nyes\n#endif", "test.h");
 	const r = preprocess(r0.head, targetFor("linux", "x86_64"), []);
 	assert r.head.stringVal == "yes";
+}
+
+test "preprocess if compares at 64 bits" {
+	const r0 = tokenizeFile("#if 0x100000000 > 1\nyes\n#else\nno\n#endif", "test.h");
+	const r = preprocess(r0.head, targetFor("linux", "x86_64"), []);
+	assert r.head.stringVal == "yes";
+}
+
+test "preprocess if adds past 32 bits" {
+	const r0 = tokenizeFile("#if (0x100000000 + 1) == 1\nno\n#else\nyes\n#endif", "test.h");
+	const r = preprocess(r0.head, targetFor("linux", "x86_64"), []);
+	assert r.head.stringVal == "yes";
+}
+
+test "preprocess if shifts past 32 bits" {
+	const r0 = tokenizeFile("#if ((1ULL << 40) >> 40) == 1\nyes\n#else\nno\n#endif", "test.h");
+	const r = preprocess(r0.head, targetFor("linux", "x86_64"), []);
+	assert r.head.stringVal == "yes";
+}
+
+test "preprocess if reads a ternary with a defined operand" {
+	const r0 = tokenizeFile("#define A 1\n#if defined(A) ? 0 : 1\nno\n#else\nyes\n#endif", "test.h");
+	const r = preprocess(r0.head, targetFor("linux", "x86_64"), []);
+	assert r.head.stringVal == "yes";
+}
+
+test "preprocess if without the ternary colon is reported" {
+	const r0 = tokenizeFile("#if 1 ? 2\nx\n#endif", "test.h");
+	const r = preprocess(r0.head, targetFor("linux", "x86_64"), []);
+	assert r.diagnostics.length == 1;
+	assert r.diagnostics[0].message == "expected ':' in ternary";
 }
 
 test "preprocess if with logical and" {

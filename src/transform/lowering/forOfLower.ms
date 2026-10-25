@@ -9,19 +9,20 @@
 //                             if (arr.length != $len) throw "..." } }
 
 import {
-	Node, NodeKind, NodeData, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol, createNodeAt,
+	Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol, createNodeAt,
 	BlockStmtData, WhileStmtData, IfStmtData, ThrowStmtData, StringLiteralData, VariableDeclData, CallExprData, TypeAssertionData, HiddenStdConvData, HiddenDerefData,
-	ArrayAccessData, NumberLiteralData,
+	ArrayAccessData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { appendLoopTail, bodySuspends } from "./forLoopLower";
-import { int32Type, charType, stringType, noneType, createArray, createSizedArray, createRef, isIterator, isMaybeType, getIteratorNextFnType, peelTransparentInstance } from "../../checker/types";
+import { int32Type, charType, stringType, noneType, createArray, createSizedArray, createRef, isIterator, getIteratorNextFnType, peelTransparentInstance } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { walkNode } from "../walker";
+import { clonePlace, isVariantRead } from "../place";
 import {
-	makeIdentResolved, cloneIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
+	makeIdentResolved, makeNumber, makeBlock, makeVarDecl, makeWhile,
 	makeBinary, makeUnary, makeAssign, makeExprStmt, makeMember, makeArrayAccess, makeCall,
-	makeIf, makeString, makeHiddenDeref, runtimeRef, extractBodyStmts, boolToDeclKind, counterType, makeCounterStep,
+	makeIf, makeString, runtimeRef, extractBodyStmts, boolToDeclKind, counterType, makeCounterStep,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx } from "../testUtil";
 
@@ -173,7 +174,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		// Destructured: const $elem = <iter>[$idx]; const a = $elem[0]; const b = $elem[1]; ...
 		const elemType = elemArrType != null && elemArrType.typeReturn != null ? elemArrType.typeReturn : noneType();
 		const elemSym = freshTempSym(ctx, "elem", elemType);
-		const elemAccess = makeArrayAccess(cloneExpr(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
+		const elemAccess = makeArrayAccess(clonePlace(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
 		const elemDecl = makeVarDecl(elemSym.name, elemAccess, DeclKind.Const, loc);
 		elemDecl.resolvedSym = elemSym;
 		// Propagate element type for nativeLower (tuple → member access)
@@ -195,8 +196,8 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	} else {
 		// Simple binding: const item = <iter>[$idx];
 		const itemAccess = isString
-			? makeCall(runtimeRef("msStringByteAt", loc), [cloneExpr(iterExpr, loc), makeIdentResolved(idxSym, loc)], loc)
-			: makeArrayAccess(cloneExpr(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
+			? makeCall(runtimeRef("msStringByteAt", loc), [clonePlace(iterExpr, loc), makeIdentResolved(idxSym, loc)], loc)
+			: makeArrayAccess(clonePlace(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
 		const itemDecl = makeVarDecl(d.forOfBinding, itemAccess, itemDk, loc);
 		if (bindingSym != null) {
 			itemDecl.resolvedSym = bindingSym;
@@ -244,8 +245,8 @@ function lengthCheck(iterExpr: Node, lenSym: Symbol, isString: boolean, loc: Sou
 }
 
 function lengthOf(iterExpr: Node, isString: boolean, loc: SourceLocation): Node {
-	if (!isString) return makeMember(cloneExpr(iterExpr, loc), "length", loc);
-	const call = makeCall(runtimeRef("msStringByteLength", loc), [cloneExpr(iterExpr, loc)], loc);
+	if (!isString) return makeMember(clonePlace(iterExpr, loc), "length", loc);
+	const call = makeCall(runtimeRef("msStringByteLength", loc), [clonePlace(iterExpr, loc)], loc);
 	call.nodeType = int32Type();
 	return call;
 }
@@ -281,62 +282,6 @@ function hoistIndices(node: Node, ctx: TransformContext, out: Node[], loc: Sourc
 	atDecl.resolvedSym = atSym;
 	out.push(atDecl);
 	d.index = makeIdentResolved(atSym, loc);
-}
-
-function isVariantRead(node: Node): boolean {
-	if (node.kind != NodeKind.HiddenSubConv || node.variantSlot <= 0) return false;
-	const d = node.data as HiddenStdConvData;
-	const from = d.convExpr.nodeType;
-	return from != null && from.kind == TypeKind.Union
-		&& d.convType.kind != TypeKind.Union && !isMaybeType(d.convType);
-}
-
-function cloneExpr(node: Node, loc: SourceLocation): Node {
-	if (node.kind == NodeKind.Identifier) {
-		return cloneIdent(node, loc);
-	}
-	if (node.kind == NodeKind.MemberExpr) {
-		const d = node.data as MemberExprData;
-		const clone = makeMember(cloneExpr(d.object, loc), d.property, loc);
-		clone.nodeType = node.nodeType;
-		clone.resolvedSym = node.resolvedSym;
-		return clone;
-	}
-	if (node.kind == NodeKind.HiddenDeref) {
-		const clone = makeHiddenDeref(cloneExpr((node.data as HiddenDerefData).expr, loc), loc);
-		clone.nodeType = node.nodeType;
-		return clone;
-	}
-	if (node.kind == NodeKind.TypeAssertion) {
-		const d = node.data as TypeAssertionData;
-		const clone = createNodeAt(NodeKind.TypeAssertion, { asExpr: cloneExpr(d.asExpr, loc), asType: d.asType } as TypeAssertionData, loc);
-		clone.nodeType = node.nodeType;
-		clone.flags = node.flags;
-		return clone;
-	}
-	if (isVariantRead(node)) {
-		const d = node.data as HiddenStdConvData;
-		const clone = createNodeAt(NodeKind.HiddenSubConv, { convExpr: cloneExpr(d.convExpr, loc), convType: d.convType } as NodeData, loc);
-		clone.nodeType = node.nodeType;
-		clone.flags = node.flags;
-		clone.variantSlot = node.variantSlot;
-		return clone;
-	}
-	if (node.kind == NodeKind.ArrayAccess) {
-		const d = node.data as ArrayAccessData;
-		const clone = makeArrayAccess(cloneExpr(d.array, loc), cloneExpr(d.index, loc), loc);
-		clone.nodeType = node.nodeType;
-		clone.flags = node.flags;
-		return clone;
-	}
-	if (node.kind == NodeKind.NumberLiteral) {
-		const d = node.data as NumberLiteralData;
-		const clone = createNodeAt(NodeKind.NumberLiteral, { value: d.value, isFloat: d.isFloat, intVal: d.intVal, outOfRangeText: d.outOfRangeText, isBitPattern: d.isBitPattern } as NumberLiteralData, loc);
-		clone.nodeType = node.nodeType;
-		clone.flags = node.flags;
-		return clone;
-	}
-	throw new Error(`internal: for-of re-reads an iterable that is not a symbol path (node kind ${node.kind})`);
 }
 
 // ===== Pattern Expansion Helper =====

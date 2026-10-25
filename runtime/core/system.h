@@ -67,6 +67,19 @@ typedef struct {
 } msClosure;
 #endif
 
+static inline msClosure msClosureAdaptee(msClosure c) {
+	while (c.env != NULL && msHeader(c.env)->type != NULL && (msHeader(c.env)->type->flags & MS_TYPE_FLAG_ARITY_ADAPTER)) {
+		c = *(msClosure*)c.env;
+	}
+	return c;
+}
+
+static inline MS_BOOL msClosureSame(msClosure a, msClosure b) {
+	a = msClosureAdaptee(a);
+	b = msClosureAdaptee(b);
+	return a.fn == b.fn && a.env == b.env;
+}
+
 /* Closure array: msClosure structs stored INLINE (16B stride). Single
  * typed helper works for ALL closure types — closure layout is uniform
  * (per-env-type cleanup is virtual-dispatched via env's typeInfo, not
@@ -234,7 +247,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 } while(0)
 #define msArrayCopy_GET(_1, _2, NAME, ...) NAME
 #define msArrayCopy(...) msArrayCopy_GET(__VA_ARGS__, msArrayCopy2, msArrayCopy1)(__VA_ARGS__)
-#define msArraySetLen(d, s)            msArraySetLenGeneric(&(d), (s).len, sizeof((s).p->data[0]))
+#define msArraySetLen(d, s)            msGenericArraySetLen(&(d), (s).len)
 
 /* --- Legacy aliases (used by classify.ms for DRC injection layer) --- */
 #define msArrayNumberWasMoved(arr)     msArrayWasMoved(arr)
@@ -401,6 +414,26 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msDecrefCyclic(p)     msDecref(p)
 #endif
 
+#define MS_DECREF_EDGE(owner, p, isLast) ({ \
+	void* __msEdgeP = (void*)(p); \
+	bool __msEdgeQueued = false; \
+	if (__msEdgeP != NULL) { \
+		const msTypeInfo* __t = msHeader(__msEdgeP)->type; \
+		if (__t != NULL && (__t->flags & MS_TYPE_FLAG_FUTURE)) { \
+			msFutureDeferredRelease(__msEdgeP); \
+		} else if (isLast(__msEdgeP)) { \
+			__msEdgeQueued = msDropEdgeLast((void*)(owner), __msEdgeP); \
+		} \
+	} \
+	__msEdgeQueued; \
+})
+#define msDecrefEdge(owner, p) MS_DECREF_EDGE(owner, p, msDecRefIsLast)
+#ifdef MSGC_ORC
+#define msDecrefCyclicEdge(owner, p) MS_DECREF_EDGE(owner, p, msOrcDecRefIsLast)
+#else
+#define msDecrefCyclicEdge(owner, p) MS_DECREF_EDGE(owner, p, msDecRefIsLast)
+#endif
+
 /* --- Cyclic ref =copy: incref new, assign, decref old AFTER assign (Nim attachedAsgn
  * isCyclic order — old's destroy may collect; dest must already hold the new value) --- */
 #define msRefCopyCyclic(d, s) do { \
@@ -468,7 +501,6 @@ static inline msString msUnboxString(void* p) {
 #define msFuture_msString_DEFINED
 MS_FUTURE_STRUCT(msFuture_msString, msString);
 MS_DEFINE_FUTURE_THEN(msFutureThen_msString, msFuture_msString, msString, msString, MS_DROP_STRING_SLOT)
-MS_DEFINE_FUTURE_FINALLY(msFutureFinally_msString, msFuture_msString)
 
 /* Typed .catch — the error handler receives the Error the future failed with.
  * Success path propagates typed value via msFutureCompleteT. */
@@ -579,6 +611,8 @@ _Noreturn void msRaiseUnreachable(const char* text);
 _Noreturn void msRaiseObjectConversionError(void* p, const msTypeInfo* target);
 _Noreturn void msRaiseStrLitError(msString s, msString target);
 msString msStrLitConv(msString s, msString members, msString target);
+_Noreturn void msRaiseNumLitError(double v, msString target);
+double msNumLitConv(double v, const double* members, int64_t n, msString target);
 
 static inline void* msObjDownConv(void* p, const msTypeInfo* target) {
 	if (p != NULL && !msIsInstance(p, target)) msRaiseObjectConversionError(p, target);

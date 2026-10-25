@@ -8,14 +8,11 @@ import {
 	ClassDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
-import { classDeclNodeOf, parentClassSymOf, hasFlag } from "../../checker/symbol";
-import { isGenericFn } from "../../checker/context";
-import { hasGenericParams, classParentOf } from "../../checker/types";
 import { parseSource } from "../../parser/statements/validation";
-import { RaiserOpcode, RaiserInstruction, raiserABC } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserInstruction, RaiserRegClass, raiserABC } from "../../raiser/bytecode";
 import {
-	RaiserValue, RaiserValueKind, raiserNil, raiserString,
-	heapObjectGetField, heapObjectGetString, heapObjectGetObjectHandle,
+	RaiserValue, RaiserValueKind, raiserNil, raiserConstString,
+	heapObjectGetField, heapObjectGetString, heapObjectGetObjectHandle, heapStringText,
 	heapArrayGet, heapArrayLen
 } from "../../raiser/value";
 import {
@@ -28,15 +25,16 @@ import { forEachChild } from "../../ast/visitor";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import {
 	RaiserFuncMap, RaiserGlobalMap, createFuncMap,
-	createCompState, emitInst, emitLoadConst, emitRet, emitImplicitReturn, allocReg, raiserClassKey,
+	createCompState, emitInst, emitLoadConst, emitRet, emitImplicitReturn, allocRef, allocDyn, raiserClassKey,
 	addConst, declareLocal, declaredSymbol, resetTemps, emitClosurePair,
 	registerRaiserFuncDemand, clearRaiserFuncDemand,
 	setRaiserModulePath, getRaiserModulePath,
 	resolveRoutine, RaiserCompState,
+	isScalarClass
 } from "./context";
 import { compileStmt } from "./statements";
-import { compileExpr, classTargetKey } from "./expressions";
-import { emitZeroValue } from "./valueCopy";
+import { compileExpr, classTargetKey, emitsRoutine, classTypeOperand } from "./expressions";
+import { emitZeroValue, allocFor, regClassOf, zeroScalar, fieldInst } from "./valueCopy";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { checkProgram } from "../../checker/checkPass";
 import { transformForRaiser } from "../../transform/raiserLowering";
@@ -94,11 +92,6 @@ function isExpressionBody(node: Node): boolean {
 		k != NodeKind.DoWhileStmt;
 }
 
-function emitsRoutine(decl: Node, flags: string): boolean {
-	const sym = decl.resolvedSym;
-	if (sym != null && (hasFlag(sym, SymbolFlag.OverloadSig) || hasFlag(sym, SymbolFlag.Borrow))) return false;
-	return !isGenericFn(flags) && (decl.nodeType == null || !hasGenericParams(decl.nodeType));
-}
 
 function paramSymbolsOf(decl: Node, name: string): Symbol[] {
 	if (decl.paramSyms == null) throw new Error(`internal: the Raiser routine '${name}' reached codegen without parameter symbols`);
@@ -131,7 +124,7 @@ export function compileFuncBody(funcMap: RaiserFuncMap, fnName: string, paramSym
 
 	// Declare params as locals R[0..arity-1]
 	for (const paramSym of paramSyms) {
-		declareLocal(s, paramSym, allocReg(s));
+		declareLocal(s, paramSym, allocFor(s, paramSym.symbolType));
 	}
 
 	// Expression-body functions (e.g., arrow `(x) => x * 2` lifted to FunctionDecl):
@@ -145,7 +138,7 @@ export function compileFuncBody(funcMap: RaiserFuncMap, fnName: string, paramSym
 
 	emitImplicitReturn(s);
 
-	const compiled = createRaiserFunction(fnName, s.code, s.constants, paramSyms.length, 0, s.maxRegSeen);
+	const compiled = createRaiserFunction(fnName, s.code, s.constants, paramSyms.length, 0, s.regClasses.length, s.regClasses);
 	compiled.copyPlans = s.copyPlans;
 	compiled.classTypes = s.classTypes;
 	return compiled;
@@ -155,35 +148,15 @@ export function compileFuncBody(funcMap: RaiserFuncMap, fnName: string, paramSym
 // Creates ClassName_new(params...): allocates object, sets property defaults,
 // stores method closures, executes ctor body, returns this.
 
-function storeMethodClosures(s: RaiserCompState, thisReg: int32, className: string, classBody: Node[]): void {
-	for (const member of classBody) {
-		if (member.kind != NodeKind.MethodDecl || !emitsRoutine(member, (member.data as MethodDeclData).methodFlags)) continue;
-		const md = member.data as MethodDeclData;
-		const methodIdx = resolveRoutine(s, declaredSymbol(member, `${className}.${md.methodName}`));
-		if (methodIdx < 0) continue;
-		const closureReg = emitClosurePair(s, methodIdx, -1);
-		const methodNameIdx = addConst(s, raiserString(md.methodName));
-		emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, methodNameIdx, closureReg));
-	}
-}
 
-function storeInheritedClosures(s: RaiserCompState, thisReg: int32, classSym: Symbol | null, depth: int32): void {
-	const parent = classSym != null && depth < 64 ? parentClassSymOf(classSym) : null;
-	if (parent == null) return;
-	storeInheritedClosures(s, thisReg, parent, depth + 1);
-	const decl = classDeclNodeOf(parent);
-	if (decl == null || decl.kind != NodeKind.ClassDecl) return;
-	const pd = decl.data as ClassDeclData;
-	storeMethodClosures(s, thisReg, pd.className, pd.classBody);
-}
 
-function storeZeroFields(s: RaiserCompState, thisReg: int32, classBody: Node[]): void {
+function storeZeroFields(s: RaiserCompState, thisReg: int32, thisType: Type | null, classBody: Node[]): void {
 	for (let ci = 0; ci < classBody.length; ci += 1) {
 		if (classBody[ci].kind == NodeKind.PropertyDecl) {
 			const pd = classBody[ci].data as PropertyDeclData;
 			const fieldReg = pd.propIsStatic ? emitZeroValue(s, null) : emitZeroValue(s, classBody[ci].nodeType);
-			const nameIdx = addConst(s, raiserString(pd.propName));
-			emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, nameIdx, fieldReg));
+			const nameIdx = addConst(s, raiserConstString(pd.propName));
+			emitInst(s, fieldInst(s, thisType, pd.propName, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, thisReg, nameIdx, fieldReg));
 		}
 	}
 }
@@ -196,34 +169,22 @@ function compileClassInit(
 	const s = createCompState();
 	s.funcMap = funcMap;
 	if (globals != null) s.globals = globals;
-	const thisReg = allocReg(s);
+	const thisReg = allocRef(s);
 	s.receiverReg = thisReg;
 	for (let i = 0; i < ctorSyms.length; i += 1) {
-		declareLocal(s, ctorSyms[i], i == 0 ? thisReg : allocReg(s));
+		declareLocal(s, ctorSyms[i], i == 0 ? thisReg : allocFor(s, ctorSyms[i].symbolType));
 	}
-	storeZeroFields(s, thisReg, classBody);
+	storeZeroFields(s, thisReg, ctorSyms.length > 0 ? ctorSyms[0].symbolType : null, classBody);
 	if (ctorBody != null) {
 		compileStmt(s, ctorBody);
 	}
 	emitImplicitReturn(s);
-	const compiled = createRaiserFunction(className + "_init", s.code, s.constants, ctorArity(ctorSyms) + 1, 0, s.maxRegSeen);
+	const compiled = createRaiserFunction(className + "_init", s.code, s.constants, ctorArity(ctorSyms) + 1, 0, s.regClasses.length, s.regClasses);
 	compiled.copyPlans = s.copyPlans;
 	compiled.classTypes = s.classTypes;
 	return compiled;
 }
 
-function classTypeOperand(s: RaiserCompState, className: string, classSym: Symbol | null): int32 {
-	if (classSym == null) return 0;
-	const chain: string[] = [raiserClassKey(classSym)];
-	let up = classParentOf(classSym.symbolType);
-	while (up != null && classTargetKey(up) != "") {
-		if (chain.length == 64) throw new Error(`internal: the class chain of '${className}' is deeper than 64`);
-		chain.push(classTargetKey(up));
-		up = classParentOf(up);
-	}
-	s.classTypes.push({ name: className, chain });
-	return s.classTypes.length;
-}
 
 function compileClassConstructor(
 	funcMap: RaiserFuncMap,
@@ -238,18 +199,16 @@ function compileClassConstructor(
 	// Declare ctor params
 	const arity = ctorArity(ctorSyms);
 	for (let i = 1; i < ctorSyms.length; i += 1) {
-		declareLocal(s, ctorSyms[i], allocReg(s));
+		declareLocal(s, ctorSyms[i], allocFor(s, ctorSyms[i].symbolType));
 	}
 
 	// Create this object
-	const thisReg = allocReg(s);
+	const thisReg = allocRef(s);
 	emitInst(s, raiserABC(RaiserOpcode.NewObject, thisReg, classTypeOperand(s, className, classSym), 0));
 	s.receiverReg = thisReg;
 	if (ctorSyms.length > 0) declareLocal(s, ctorSyms[0], thisReg);
 
-	storeZeroFields(s, thisReg, classBody);
-	storeInheritedClosures(s, thisReg, classSym, 0);
-	storeMethodClosures(s, thisReg, className, classBody);
+	storeZeroFields(s, thisReg, ctorSyms.length > 0 ? ctorSyms[0].symbolType : null, classBody);
 
 	// Execute constructor body
 	if (ctorBody != null) {
@@ -259,7 +218,7 @@ function compileClassConstructor(
 	// Always return this
 	emitRet(s, thisReg);
 
-	const compiled = createRaiserFunction(className + "_new", s.code, s.constants, arity, 0, s.maxRegSeen);
+	const compiled = createRaiserFunction(className + "_new", s.code, s.constants, arity, 0, s.regClasses.length, s.regClasses);
 	compiled.copyPlans = s.copyPlans;
 	compiled.classTypes = s.classTypes;
 	return compiled;
@@ -542,11 +501,11 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 			}
 		}
 
-		const nilReg = allocReg(s);
+		const nilReg = allocDyn(s);
 		emitLoadConst(s, nilReg, raiserNil());
 		emitRet(s, nilReg);
 
-		const initFunc = createRaiserFunction("__init_" + mi, s.code, s.constants, 0, 0, s.maxRegSeen);
+		const initFunc = createRaiserFunction("__init_" + mi, s.code, s.constants, 0, 0, s.regClasses.length, s.regClasses);
 		initFunc.copyPlans = s.copyPlans;
 		initFunc.classTypes = s.classTypes;
 		functions.push(initFunc);
@@ -560,20 +519,25 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 	let lastResultReg = 0;
 	for (let ii = 0; ii < initIndices.length; ii += 1) {
 		if (plan.lazy.has(modules[ii].modulePath)) continue;
-		const destReg = allocReg(entryS);
+		const destReg = allocDyn(entryS);
 		emitInst(entryS, raiserABC(RaiserOpcode.Call, destReg, initIndices[ii], 0));
 		lastResultReg = destReg;
 	}
 	if (initIndices.length == 0) {
-		emitLoadConst(entryS, 0, raiserNil());
+		emitLoadConst(entryS, allocRef(entryS), raiserNil());
 	}
 	emitInst(entryS, raiserABC(RaiserOpcode.Halt, lastResultReg, 0, 0));
-	const entryFunc = createRaiserFunction("__entry", entryS.code, entryS.constants, 0, 0, entryS.maxRegSeen);
+	const entryFunc = createRaiserFunction("__entry", entryS.code, entryS.constants, 0, 0, entryS.regClasses.length, entryS.regClasses);
 	functions.push(entryFunc);
 
 	const compiled = createRaiserModule("project", functions, functions.length - 1);
 	compiled.globalCount = globalCount;
 	compiled.exports = exports;
+	const zeroState = createCompState();
+	for (let gi = 0; gi < globalCount; gi += 1) compiled.globalInit.push(raiserNil());
+	for (const entry of globals.items) {
+		if (isScalarClass(regClassOf(zeroState, entry.symbol.symbolType))) compiled.globalInit[entry.index] = zeroScalar(entry.symbol.symbolType);
+	}
 	for (let ri = 0; ri < plan.records.length; ri += 1) {
 		const path = plan.records[ri];
 		let init: number = -1;
@@ -800,7 +764,7 @@ test "multiple function calls" {
 
 test "string literal return" {
 	const ctx = evalRaiser("return \"hello\";");
-	assert ctx.lastResult.strVal == "hello";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "hello";
 }
 
 test "console.log string" {
@@ -810,17 +774,17 @@ test "console.log string" {
 
 test "number toString" {
 	const ctx = evalRaiser("const x = 42; return x.toString();");
-	assert ctx.lastResult.strVal == "42";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "42";
 }
 
 test "bool toString" {
 	const ctx = evalRaiser("const b = true; return b.toString();");
-	assert ctx.lastResult.strVal == "true";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "true";
 }
 
 test "toString in concat" {
 	const ctx = evalRaiser("const x = 7; return \"n=\" + x.toString();");
-	assert ctx.lastResult.strVal == "n=7";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "n=7";
 }
 
 test "true && value" {
@@ -1035,12 +999,12 @@ test "array in object" {
 
 test "string concat" {
 	const ctx = evalRaiser("return \"hello\" + \" world\";");
-	assert ctx.lastResult.strVal == "hello world";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "hello world";
 }
 
 test "string concat with variable" {
 	const ctx = evalRaiser("const s = \"hi\"; return s + \"!\";");
-	assert ctx.lastResult.strVal == "hi!";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "hi!";
 }
 
 test "string equality true" {
@@ -1060,17 +1024,17 @@ test "string inequality" {
 
 test "string + number coercion" {
 	const ctx = evalRaiser("return \"value: \" + 42;");
-	assert ctx.lastResult.strVal == "value: 42";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "value: 42";
 }
 
 test "function returning string" {
 	const ctx = evalRaiser("function greet(name) { return \"Hello, \" + name; } return greet(\"world\");");
-	assert ctx.lastResult.strVal == "Hello, world";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "Hello, world";
 }
 
 test "multi-concat chain" {
 	const ctx = evalRaiser("return \"a\" + \"b\" + \"c\";");
-	assert ctx.lastResult.strVal == "abc";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "abc";
 }
 
 test "console.log string concat" {
@@ -1165,7 +1129,7 @@ test "+= in loop" {
 
 test "+= string concat" {
 	const ctx = evalRaiser("let s = \"hello\"; s += \" world\"; return s;");
-	assert ctx.lastResult.strVal == "hello world";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "hello world";
 }
 
 test "enum member access" {
@@ -1220,22 +1184,22 @@ test "empty string .length" {
 
 test "charAt" {
 	const ctx = evalRaiser("return \"hello\".charAt(1);");
-	assert ctx.lastResult.strVal == "e";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "e";
 }
 
 test "charAt variable" {
 	const ctx = evalRaiser("const s = \"world\"; return s.charAt(0);");
-	assert ctx.lastResult.strVal == "w";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "w";
 }
 
 test "slice" {
 	const ctx = evalRaiser("return \"hello world\".slice(0, 5);");
-	assert ctx.lastResult.strVal == "hello";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "hello";
 }
 
 test "slice variable" {
 	const ctx = evalRaiser("const s = \"abcdef\"; return s.slice(2, 4);");
-	assert ctx.lastResult.strVal == "cd";
+	assert heapStringText(ctx.arrayHeap, ctx.lastResult) == "cd";
 }
 
 test "string length in condition" {
@@ -1244,77 +1208,77 @@ test "string length in condition" {
 }
 
 test "a catch binding ends with its clause" {
-	const ctx = evalRaiser("let r = 0; try { throw 1; } catch (e) { try { throw 2; } catch (e) { r = r + e; } r = r * 10 + e; } return r;");
-	assert ctx.lastResult.intVal == 21;
+	const ctx = evalRaiser("class E { n: number; constructor(n: number) { this.n = n; } } let r = 0; try { throw new E(1); } catch (e) { try { throw new E(2); } catch (e) { r = r + (e as E).n; } r = r * 10 + (e as E).n; } return r;");
+	assert unboxFloat(ctx.lastResult) == 21;
 }
 
 test "non-capturing closure" {
-	const ctx = evalRaiser("function lifted(_e) { return 42; } const f = { fn: lifted, env: {} }; return f();");
+	const ctx = evalRaiser("function lifted(_e: { k: number }) { return 42; } const f = { fn: lifted as unknown, env: { k: 0 } }; return f();");
 	assert ctx.lastResult.intVal == 42;
 }
 
 // Reference parity: environment parameter is LAST
 test "closure with capture" {
-	const ctx = evalRaiser("function lifted(y, _e) { return _e.x + y; } const e = { x: 5 }; const f = { fn: lifted, env: e }; return f(3);");
+	const ctx = evalRaiser("function lifted(y, _e: { x: int32 }) { return _e.x + y; } const e = { x: 5 }; const f = { fn: lifted as unknown, env: e }; return f(3);");
 	assert ctx.lastResult.intVal == 8;
 }
 
 test "higher-order: makeAdder" {
-	const ctx = evalRaiser("function liftedAdd(x, _e) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd, env: { n: n } }; } const add5 = makeAdder(5); return add5(3);");
+	const ctx = evalRaiser("function liftedAdd(x, _e: { n: int32 }) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd as unknown, env: { n: n } }; } const add5 = makeAdder(5); return add5(3);");
 	assert ctx.lastResult.intVal == 8;
 }
 
 test "multiple captures" {
-	const ctx = evalRaiser("function lifted(_e) { return _e.a + _e.b; } const f = { fn: lifted, env: { a: 3, b: 7 } }; return f();");
-	assert ctx.lastResult.intVal == 10;
+	const ctx = evalRaiser("function lifted(_e: { a: number; b: number }) { return _e.a + _e.b; } const f = { fn: lifted as unknown, env: { a: 3, b: 7 } }; return f();");
+	assert unboxFloat(ctx.lastResult) == 10;
 }
 
 test "chained call: makeAdder(5)(3)" {
-	const ctx = evalRaiser("function liftedAdd(x, _e) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd, env: { n: n } }; } return makeAdder(5)(3);");
+	const ctx = evalRaiser("function liftedAdd(x, _e: { n: int32 }) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd as unknown, env: { n: n } }; } return makeAdder(5)(3);");
 	assert ctx.lastResult.intVal == 8;
 }
 
 test "closure in loop" {
-	const ctx = evalRaiser("function lifted(_e) { return _e.i; } let sum = 0; let i = 0; while (i < 5) { const f = { fn: lifted, env: { i: i } }; sum = sum + f(); i = i + 1; } return sum;");
+	const ctx = evalRaiser("function lifted(_e: { i: int32 }) { return _e.i; } let sum = 0; let i = 0; while (i < 5) { const f = { fn: lifted as unknown, env: { i: i } }; sum = sum + f(); i = i + 1; } return sum;");
 	assert ctx.lastResult.intVal == 10;
 }
 
 test "closure returning closure" {
-	const ctx = evalRaiser("function inner(_e2) { return _e2.x + _e2.y; } function outer(_e1) { return { fn: inner, env: { x: _e1.a, y: _e1.b } }; } const f = { fn: outer, env: { a: 3, b: 7 } }; const g = f(); return g();");
+	const ctx = evalRaiser("function inner(_e2) { return _e2.x + _e2.y; } function outer(_e1) { return { fn: inner as unknown, env: { x: _e1.a, y: _e1.b } }; } const f = { fn: outer as unknown, env: { a: 3, b: 7 } }; const g = f(); return g();");
 	assert ctx.lastResult.intVal == 10;
 }
 
 test "lambda-lifted capture pattern" {
-	const ctx = evalRaiser("function lifted1(_envP) { return _envP.x; } const x = 99; const f = { fn: lifted1, env: { x: x } }; return f();");
+	const ctx = evalRaiser("function lifted1(_envP: { x: int32 }) { return _envP.x; } const x = 99; const f = { fn: lifted1 as unknown, env: { x: x } }; return f();");
 	assert ctx.lastResult.intVal == 99;
 }
 
 test "lambda-lifted capture with args" {
-	const ctx = evalRaiser("function lifted1(y, _envP) { return _envP.x + y; } const x = 10; const f = { fn: lifted1, env: { x: x } }; return f(32);");
+	const ctx = evalRaiser("function lifted1(y, _envP: { x: int32 }) { return _envP.x + y; } const x = 10; const f = { fn: lifted1 as unknown, env: { x: x } }; return f(32);");
 	assert ctx.lastResult.intVal == 42;
 }
 
 test "lambda-lifted capture inside function" {
-	const ctx = evalRaiser("function lifted1(_envP) { return _envP.x; } function make() { const x = 42; const f = { fn: lifted1, env: { x: x } }; return f(); } return make();");
+	const ctx = evalRaiser("function lifted1(_envP: { x: int32 }) { return _envP.x; } function make() { const x = 42; const f = { fn: lifted1 as unknown, env: { x: x } }; return f(); } return make();");
 	assert ctx.lastResult.intVal == 42;
 }
 
 test "lambda-lifted multiple captures" {
-	const ctx = evalRaiser("function lifted1(_envP: { a: int32; b: int32; c: int32 }): int32 { return _envP.a * _envP.b + _envP.c; } const a: int32 = 3; const b: int32 = 4; const c: int32 = 5; const f = { fn: lifted1, env: { a: a, b: b, c: c } }; return f();");
+	const ctx = evalRaiser("function lifted1(_envP: { a: int32; b: int32; c: int32 }): int32 { return _envP.a * _envP.b + _envP.c; } const a: int32 = 3; const b: int32 = 4; const c: int32 = 5; const f = { fn: lifted1 as unknown, env: { a: a, b: b, c: c } }; return f();");
 	assert ctx.lastResult.intVal == 17;
 }
 
-test "non-capturing closure pair with -1 sentinel" {
-	const ctx = evalRaiser("function add(a, b) { return a + b; } const f = { fn: add, env: -1 }; return f(10, 20);");
+test "non-capturing closure pair with a nil env" {
+	const ctx = evalRaiser("function add(a, b) { return a + b; } const f = { fn: add as unknown, env: null }; return f(10, 20);");
 	assert ctx.lastResult.intVal == 30;
 }
 
 test "object as return value" {
 	const ctx = evalRaiser("return { root: \"src/main.ms\", target: \"native\" };");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
+	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/main.ms";
-	const target = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "target");
+	const target = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "target");
 	assert target == "native";
 }
 
@@ -1323,9 +1287,9 @@ test "nested object config" {
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
 	const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
 	assert buildHandle >= 0;
-	const target = heapObjectGetString(ctx.objectHeap, buildHandle, "target");
+	const target = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "target");
 	assert target == "native";
-	const outDir = heapObjectGetString(ctx.objectHeap, buildHandle, "outDir");
+	const outDir = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "outDir");
 	assert outDir == "out";
 }
 
@@ -1337,36 +1301,36 @@ test "config with array of objects" {
 	assert heapArrayLen(ctx.arrayHeap, arrField.intVal) == 1;
 	const elem = heapArrayGet(ctx.arrayHeap, arrField.intVal, 0);
 	assert elem.kind == RaiserValueKind.Object;
-	const name = heapObjectGetString(ctx.objectHeap, elem.intVal, "name");
+	const name = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, elem.intVal, "name");
 	assert name == "var_hoist";
 }
 
 test "nested config object" {
 	const ctx = evalRaiser("return { root: \"src/main.ms\", build: { target: \"native\" } };");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
+	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/main.ms";
 	const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
 	assert buildHandle >= 0;
-	const target = heapObjectGetString(ctx.objectHeap, buildHandle, "target");
+	const target = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "target");
 	assert target == "native";
 }
 
 test "export default object" {
 	const ctx = evalRaiser("export default { root: \"src/main.ms\" };");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
+	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/main.ms";
 }
 
 test "export default nested object" {
 	const ctx = evalRaiser("export default { root: \"app.ms\", build: { target: \"native\", outDir: \"out\" } };");
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
-	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
+	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "app.ms";
 	const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
 	assert buildHandle >= 0;
-	const outDir = heapObjectGetString(ctx.objectHeap, buildHandle, "outDir");
+	const outDir = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "outDir");
 	assert outDir == "out";
 }
 
@@ -1375,7 +1339,7 @@ test "real: neon/build.ms" {
 	const ctx = evalRaiser(src);
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
 	// root
-	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
+	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/index.ms";
 	// format.tabWidth
 	const fmtHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "format");
@@ -1390,12 +1354,12 @@ test "real: neon/build.ms" {
 	assert heapArrayLen(ctx.arrayHeap, targets.intVal) == 2;
 	// targets[0].target === "native"
 	const t0 = heapArrayGet(ctx.arrayHeap, targets.intVal, 0);
-	assert heapObjectGetString(ctx.objectHeap, t0.intVal, "target") == "native";
-	assert heapObjectGetString(ctx.objectHeap, t0.intVal, "outDir") == "build/c";
+	assert heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, t0.intVal, "target") == "native";
+	assert heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, t0.intVal, "outDir") == "build/c";
 	// targets[1].target === "js"
 	const t1 = heapArrayGet(ctx.arrayHeap, targets.intVal, 1);
-	assert heapObjectGetString(ctx.objectHeap, t1.intVal, "target") == "js";
-	assert heapObjectGetString(ctx.objectHeap, t1.intVal, "outDir") == "build/js";
+	assert heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, t1.intVal, "target") == "js";
+	assert heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, t1.intVal, "outDir") == "build/js";
 }
 
 test "float arithmetic: add" {
@@ -1445,21 +1409,21 @@ test "real: void/build.ms" {
 	const ctx = evalRaiser(src);
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
 	// root
-	const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
+	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/index.ms";
 	// build.target
 	const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
 	assert buildHandle >= 0;
-	const target = heapObjectGetString(ctx.objectHeap, buildHandle, "target");
+	const target = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "target");
 	assert target == "native";
 	// build.outDir
-	const outDir = heapObjectGetString(ctx.objectHeap, buildHandle, "outDir");
+	const outDir = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "outDir");
 	assert outDir == "out";
 	// build.outFile
-	const outFile = heapObjectGetString(ctx.objectHeap, buildHandle, "outFile");
+	const outFile = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "outFile");
 	assert outFile == "void";
 	// build.optimize
-	const optimize = heapObjectGetString(ctx.objectHeap, buildHandle, "optimize");
+	const optimize = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, buildHandle, "optimize");
 	assert optimize == "debug";
 }
 
@@ -1529,7 +1493,7 @@ test "new carries every positional argument" {
 }
 
 test "new with no arguments reaches methods" {
-	const ctx = evalRaiser("class Box { answer() { return 42; } } const b = new Box(); return b.answer();");
+	const ctx = evalLowered("class Box { answer(): int32 { return 42; } } const b = new Box(); return b.answer();");
 	assert ctx.lastResult.intVal == 42;
 }
 
@@ -1559,7 +1523,7 @@ test "method with params" {
 }
 
 test "closure env mutation" {
-	const ctx = evalRaiser("function inc(_e) { _e.n = _e.n + 1; } const obj = { n: 0 }; const f = { fn: inc, env: obj }; f(); return obj.n;");
+	const ctx = evalRaiser("function inc(_e: { n: int32 }) { _e.n = _e.n + 1; } const obj = { n: 0 }; const f = { fn: inc as unknown, env: obj }; f(); return obj.n;");
 	assert ctx.lastResult.intVal == 1;
 }
 
@@ -1691,6 +1655,21 @@ test "trap: unresolved identifier errors at runtime" {
 	assert ctx.lastError.indexOf("cannot evaluate 'mysteryVar'") >= 0;
 }
 
+test "an extern let or const is refused by its name in a bitwise, arithmetic or comparison operand of any width" {
+	const uses = [
+		"extern const K: uint32; function f(m: uint32): boolean { return (m & K) == 0; } return f(5);",
+		"extern const K: int32; function f(m: int32): int32 { return m + K; } return f(5);",
+		"extern const K: float64; function f(m: float64): boolean { return m < K; } return f(5.0);",
+		"extern let K: int32; function f(): int32 { let e: int32 = 0; e = K != 0 ? K : 1; return e; } return f();",
+		"extern const K: uint32; function f(m: uint32): uint32 { return m + K; } return f(5);",
+		"extern const K: float64; function f(m: float64): float64 { return m * K; } return f(5.0);",
+	];
+	for (const use of uses) {
+		const ctx = evalLowered(use);
+		assert ctx.lastError.indexOf("cannot read extern 'K'") >= 0, `${use}: ${ctx.lastError}`;
+	}
+}
+
 test "trap: unsupported node kind errors at runtime" {
 	const ctx = evalRaiser("return match (1) { _ => 2 };");
 	assert ctx.lastError.indexOf("cannot compile node kind") >= 0;
@@ -1717,4 +1696,31 @@ test "update on a member target stores through the object" {
 test "trap: new without constructor errors at runtime" {
 	const ctx = evalRaiser("return new Mystery(1);");
 	assert ctx.lastError.indexOf("no matching constructor") >= 0;
+}
+
+function directCallReturnMismatches(code: string): int32 {
+	const parseResult = parseSource(code);
+	if (!parseResult.ok) {
+		unreachable;
+		return -1;
+	}
+	checkProgram(parseResult.value);
+	const mod = generateRaiser(parseResult.value);
+	let mismatches: int32 = 0;
+	for (const func of mod.functions) {
+		for (const call of func.code) {
+			if ((call.op != RaiserOpcode.Call && call.op != RaiserOpcode.CallDirect) || call.b < 0 || call.b >= mod.functions.length) continue;
+			for (const ret of mod.functions[call.b].code) {
+				if (ret.op == RaiserOpcode.Ret && ((ret.a as int32) & 7) != ((call.a as int32) & 7)) mismatches += 1;
+			}
+		}
+	}
+	return mismatches;
+}
+
+test "every Ret of a direct callee returns the class its call site allocates" {
+	assert directCallReturnMismatches("let n = 0; function bump(): void { n = n + 1; } function early(x: number): void { if (x > 0) return; n = 2; } bump(); early(1); console.log(n);") == 0;
+	assert directCallReturnMismatches("class A { x: number; constructor(x: number) { this.x = x; } } class B extends A { constructor() { super(3); } } console.log(new B().x);") == 0;
+	assert directCallReturnMismatches("class A { x: number = 0; constructor(x: number) { if (x < 0) return; this.x = x; } } class B extends A { constructor() { super(3); } } console.log(new B().x);") == 0;
+	assert directCallReturnMismatches("function n(x: number): number { return x + 1; } function s(): string { return 'a'; } console.log(n(1) + s().length);") == 0;
 }

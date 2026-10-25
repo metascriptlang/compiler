@@ -6,14 +6,12 @@
 // Used by DRC injection to determine if a variable use is the last read,
 // enabling MOVE instead of COPY. Handles branches, loops, returns.
 
-import { Node, NodeKind, ProgramData, Symbol, IdentifierData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, UpdateExprData, TypeAssertionData, MoveExprData, HiddenDerefData, HiddenStdConvData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, BlockStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ThrowStmtData, DoWhileStmtData, ExportDeclData, ForStmtData, ForOfStmtData, BreakStmtData, ContinueStmtData, SymbolKind } from "../ast/node";
+import { Node, NodeKind, ProgramData, Symbol, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, UpdateExprData, TypeAssertionData, MoveExprData, HiddenDerefData, HiddenStdConvData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, BlockStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ThrowStmtData, DoWhileStmtData, ExportDeclData, ForStmtData, ForOfStmtData, BreakStmtData, ContinueStmtData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { AliasKind, aliases, getRootSym } from "./alias";
-import { makeSymbol } from "../checker/symbol";
-import { noneType } from "../checker/types";
 
 import { makeIdentResolved } from "../transform/util";
-import { parseInput } from "../transform/testUtil";
+import { getBody, makeTestSym, attachSymAll } from "./testSupport";
 
 // ===== Data Structures =====
 
@@ -585,12 +583,6 @@ export function isLastReadCfgNodeCached(rootSym: Symbol, queryNode: Node, funcBo
 
 // ===== Test Helpers =====
 
-function getBody(code: string): Node {
-	const result = parseInput(code);
-	if (!result.ok) return null as unknown as Node;
-	return result.value;
-}
-
 function buildCfgForName(body: Node, name: string): Cfg {
 	const sym = makeTestSym(name);
 	attachSymAll(body, name, sym);
@@ -778,42 +770,12 @@ test "a catch binding is defined afresh each time its handler runs" {
 
 // ===== Field-Level Tests (Phase B: alias-aware BFS) =====
 
-function makeTestSym(name: string): Symbol {
-	return makeSymbol(name, SymbolKind.Variable, noneType(), false);
-}
-
-// Test helper: walk a subtree and attach `sym` to every Identifier whose
-// name matches `name`. Also tags matching VariableDecl nodes directly.
-// Scope boundaries (nested function bodies) terminate recursion.
-function attachSymAll(node: Node, name: string, sym: Symbol): void {
-	if (node == null) return;
-	if (node.kind == NodeKind.Identifier) {
-		if ((node.data as IdentifierData).name == name) node.resolvedSym = sym;
-		return;
-	}
-	if (node.kind == NodeKind.VariableDecl) {
-		if ((node.data as VariableDeclData).declName == name) node.resolvedSym = sym;
-	}
-	if (node.kind == NodeKind.TryCatchStmt) {
-		if ((node.data as TryCatchStmtData).catchName == name) node.resolvedSym = sym;
-	}
-	if (node.kind == NodeKind.FunctionDecl
-		|| node.kind == NodeKind.ArrowFunction
-		|| node.kind == NodeKind.FunctionExpr) return;
-	forEachChild(node, (c: Node): void => { attachSymAll(c, name, sym); });
-}
-
-// Test helper alias kept for backward compatibility with existing test call sites.
-function attachSymToStmts(body: Node, name: string, sym: Symbol): void {
-	attachSymAll(body, name, sym);
-}
-
 test "field-level: x.b last-read when only x.a used later" {
 	const ts = "foo(x.b); bar(x.a);";
 	const body = getBody(ts);
 	if (body == null) { assert false; return; }
 	const symX = makeTestSym("x");
-	attachSymToStmts(body, "x", symX);
+	attachSymAll(body, "x", symX);
 	const cfg = buildCfgForSym(body, symX);
 	// Find the x.b use node (first arg of first call)
 	const d = (body.data as ProgramData).programStmts;
@@ -826,7 +788,7 @@ test "field-level: x.f last-read when x is redeclared each loop iteration" {
 	const body = getBody(ts);
 	if (body == null) { assert false; return; }
 	const symX = makeTestSym("x");
-	attachSymToStmts(body, "x", symX);
+	attachSymAll(body, "x", symX);
 	const cfg = buildCfgForSym(body, symX);
 	const d = (body.data as ProgramData).programStmts;
 	const loopBody = (d[0].data as WhileStmtData).whileBody;
@@ -840,7 +802,7 @@ test "field-level: x.a not last-read when x.a used again" {
 	const body = getBody(ts);
 	if (body == null) { assert false; return; }
 	const symX = makeTestSym("x");
-	attachSymToStmts(body, "x", symX);
+	attachSymAll(body, "x", symX);
 	const cfg = buildCfgForSym(body, symX);
 	const d = (body.data as ProgramData).programStmts;
 	const firstArg = ((d[0].data as ExprStmtData).expr.data as CallExprData).arguments[0];
@@ -852,7 +814,7 @@ test "field-level: x.a not last-read when whole x used later" {
 	const body = getBody(ts);
 	if (body == null) { assert false; return; }
 	const symX = makeTestSym("x");
-	attachSymToStmts(body, "x", symX);
+	attachSymAll(body, "x", symX);
 	const cfg = buildCfgForSym(body, symX);
 	const d = (body.data as ProgramData).programStmts;
 	const firstArg = ((d[0].data as ExprStmtData).expr.data as CallExprData).arguments[0];
@@ -864,7 +826,7 @@ test "field-level: x.f last-read when x.g assigned later" {
 	const body = getBody(ts);
 	if (body == null) { assert false; return; }
 	const symX = makeTestSym("x");
-	attachSymToStmts(body, "x", symX);
+	attachSymAll(body, "x", symX);
 	const cfg = buildCfgForSym(body, symX);
 	const d = (body.data as ProgramData).programStmts;
 	const firstArg = ((d[0].data as ExprStmtData).expr.data as CallExprData).arguments[0];

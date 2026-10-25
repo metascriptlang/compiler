@@ -2,11 +2,11 @@
 //
 // Pipeline: parse → check → transform → **analyze** → codegen
 //
-// Re-exports the public API from all sub-modules.
 // analyzeProgram is the main entry point called from src/index.ms.
 
 import { Node, NodeKind, NodeFlag, ProgramData, BlockStmtData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { flowLap, flowMark } from "../compiler/flows";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { CheckerContext, GcMode } from "../checker/context";
 import { createTransformContextWithChecker } from "../transform/context";
@@ -14,8 +14,6 @@ import { createDrcContext, pushScope, popScope } from "./scope";
 import { injectProgram } from "./inject";
 import { optimizeDrc } from "./optimize";
 import { classifyType, RcKind, noRcInfo } from "./classify";
-import { isLastReadInBlock } from "./lastRead";
-import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, skipConvDfa, getRootSym } from "./alias";
 
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
@@ -26,23 +24,16 @@ import { transformProgram } from "../transform/index";
 export function analyzeProgram(program: Node, checkerCtx: CheckerContext): Node {
 	if (checkerCtx == null) return program;  // test mode — skip analysis
 	if (checkerCtx.gcMode == GcMode.None || checkerCtx.gcMode == GcMode.Manual) return program;
+	flowMark();
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const dctx = createDrcContext(ctx);
+	flowLap("analyze.context");
 	const injected = injectProgram(program, dctx);
-	return optimizeDrc(injected);
+	flowLap("analyze.inject");
+	const optimized = optimizeDrc(injected);
+	flowLap("analyze.optimize");
+	return optimized;
 }
-
-// ===== Re-exports =====
-
-export { classifyType, RcKind, noRcInfo } from "./classify";
-export { isLastReadInBlock } from "./lastRead";
-export { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, skipConvDfa, getRootSym } from "./alias";
-export { injectProgram } from "./inject";
-export { optimizeDrc } from "./optimize";
-export {
-	DrcContext, createDrcContext, pushScope, popScope, currentScope,
-	registerVar, recordMove,
-} from "./scope";
 
 // ===== Integration Tests =====
 

@@ -209,6 +209,7 @@ static void* msPoolWorkerLoop(void* arg) {
 		 * If actor work was found, loop back immediately to check for more
 		 * (actor re-enqueue may have added new work during processing). */
 		if (msPoolActorPollFn != NULL) {
+			if (msPoolSchedIdSetterFn != NULL) msPoolSchedIdSetterFn(mySchedID);
 			atomic_fetch_add_explicit(&msPoolPendingCount, 1, memory_order_relaxed);
 			bool polled = msPoolActorPollFn();
 			atomic_fetch_sub_explicit(&msPoolPendingCount, 1, memory_order_release);

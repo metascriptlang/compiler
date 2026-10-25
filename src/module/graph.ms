@@ -1,12 +1,8 @@
 // Module Graph — core data structures for compilation
 //
 // Arrays passed by pointer — bare T[] types (wrappers removed).
-//
-// IMPORTANT: No imports from ast/ or checker/ — DRC lifecycle mangling bug generates
-// Node_destroy with wrong module path when Node appears as a field type here.
-// AST, SymbolTable, and Symbol[] are managed separately by the loader/checker via
-// parallel arrays indexed by module position in the graph.
 
+import { Node } from "../ast/node";
 
 // ===== Module State Machine =====
 
@@ -44,18 +40,20 @@ export interface ImportEntry {
 	sourcePath: string;        // resolved absolute path of source module
 	sourceSpecifier: string;   // original import specifier (for diagnostics)
 	dynamic: boolean;
+	typeOnly: boolean;
 }
 
 // ===== Module =====
-// Lightweight — no ast/checker types. Complex data stored in parallel arrays.
 
 export class Module {
 	path: string;              // absolute file path (canonical key)
-	rawSource: string;         // source text as read, before C headers are inlined
-	source: string;            // source text with C headers inlined
+	rawSource: string;         // source text as read; a C header's is its translation
+	source: string;            // source text the checker parses
+	program: Node | null;      // the loader's parse of `source`, until the check adopts it
 	state: ModuleState;        // loading state machine
 	exportNames: string[];     // names of exported symbols (for lookup)
 	imports: ImportEntry[];    // resolved import dependencies
+	runtimeDeps: string[];
 	errors: ModuleError[];     // per-module errors (structured)
 	stdPrelude: boolean;
 	preludeSpecifier: string;
@@ -78,10 +76,12 @@ export class CircularDep {
 export class ModuleGraph {
 	modules: Module[];         // all loaded modules
 	modulePaths: string[];     // parallel: absolute paths (for lookup)
+	moduleIndex: HashMap<string, int32>;
 	loadOrder: string[];       // topological order for checking
 	importStack: string[];     // current loading stack (cycle detection)
 	errors: string[];          // graph-level errors
 	circularDeps: CircularDep[];  // detected circular imports (for LSP warnings)
+	headerShapes: HashMap<string, string>;  // C header path -> "<hash of its declarations>\t<header that read it first>"
 }
 
 // ===== Constructors =====
@@ -90,10 +90,12 @@ export function createModuleGraph(): ModuleGraph {
 	return {
 		modules: [],
 		modulePaths: [],
+		moduleIndex: new HashMap<string, int32>(),
 		loadOrder: [],
 		importStack: [],
 		errors: [],
 		circularDeps: [],
+		headerShapes: new HashMap<string, string>(),
 	};
 }
 
@@ -102,9 +104,11 @@ export function createModule(path: string): Module {
 		path,
 		rawSource: "",
 		source: "",
+		program: null,
 		state: ModuleState.Unloaded,
 		exportNames: [],
 		imports: [],
+		runtimeDeps: [],
 		errors: [],
 		stdPrelude: false,
 		preludeSpecifier: "",
@@ -113,7 +117,7 @@ export function createModule(path: string): Module {
 }
 
 export function createImportEntry(names: string[], aliases: string[], sourcePath: string, sourceSpecifier: string, dynamic: boolean = false): ImportEntry {
-	return { names, aliases, sourcePath, sourceSpecifier, dynamic };
+	return { names, aliases, sourcePath, sourceSpecifier, dynamic, typeOnly: false };
 }
 
 // ===== Module Lookup =====
@@ -125,10 +129,13 @@ export function findModule(graph: ModuleGraph, path: string): Module {
 }
 
 export function findModuleIndex(graph: ModuleGraph, path: string): int32 {
-	for (let i = 0; i < graph.modulePaths.length; i += 1) {
-		if (graph.modulePaths[i] == path) return i;
+	if (graph.moduleIndex.size != graph.modulePaths.length) {
+		const held = graph.moduleIndex.size;
+		const count = graph.modulePaths.length;
+		throw new Error(`internal: module index holds ${held} paths for ${count} modules; append through addModule`);
 	}
-	return -1;
+	const at = graph.moduleIndex.get(path);
+	return at != null ? at : -1;
 }
 
 export function hasModule(graph: ModuleGraph, path: string): boolean {
@@ -136,6 +143,8 @@ export function hasModule(graph: ModuleGraph, path: string): boolean {
 }
 
 export function addModule(graph: ModuleGraph, mod: Module): void {
+	if (graph.moduleIndex.has(mod.path)) throw new Error(`internal: module '${mod.path}' added twice`);
+	graph.moduleIndex.set(mod.path, graph.modules.length as int32);
 	graph.modules.push(mod);
 	graph.modulePaths.push(mod.path);
 }
@@ -159,25 +168,6 @@ export function popImportStack(graph: ModuleGraph): void {
 	}
 }
 
-// ===== Circular Dependency Queries =====
-
-export function isCircularImport(graph: ModuleGraph, path: string): boolean {
-	for (const dep of graph.circularDeps) {
-		if (dep.fromPath == path || dep.toPath == path) return true;
-	}
-	return false;
-}
-
-export function getCircularDepsFor(graph: ModuleGraph, path: string): CircularDep[] {
-	const result: CircularDep[] = [];
-	for (const dep of graph.circularDeps) {
-		if (dep.fromPath == path || dep.toPath == path) {
-			result.push(dep);
-		}
-	}
-	return result;
-}
-
 // ===== Export Name Lookup =====
 
 export function hasExportName(mod: Module, name: string): boolean {
@@ -198,15 +188,38 @@ export class DynamicModulePlan {
 	topLevelAwait: HashSet<string> = new HashSet<string>();
 }
 
+function evaluates(imp: ImportEntry): boolean {
+	return !imp.dynamic && !imp.typeOnly;
+}
+
+function evaluationClosure(graph: ModuleGraph, roots: string[]): HashSet<string> {
+	const closed = new HashSet<string>();
+	const pending: string[] = [];
+	for (const root of roots) pending.push(root);
+	while (pending.length > 0) {
+		const path = pending.pop();
+		if (closed.has(path)) continue;
+		closed.add(path);
+		const mod = findModule(graph, path);
+		if (mod == null) continue;
+		for (const imp of mod.imports) if (evaluates(imp)) pending.push(imp.sourcePath);
+		for (const dep of mod.runtimeDeps) pending.push(dep);
+	}
+	return closed;
+}
+
 export function planDynamicModules(graph: ModuleGraph, entryPath: string, order: string[], stdPath: string): DynamicModulePlan {
 	const plan = new DynamicModulePlan();
-	const targets = new HashSet<string>();
+	const targets: string[] = [];
+	let typeOnlyEdges = false;
 	for (const mod of graph.modules) {
-		for (const imp of mod.imports) if (imp.dynamic) targets.add(imp.sourcePath);
+		for (const imp of mod.imports) {
+			if (imp.dynamic && !targets.includes(imp.sourcePath)) targets.push(imp.sourcePath);
+			if (imp.typeOnly) typeOnlyEdges = true;
+		}
 	}
-	if (targets.size == 0) return plan;
+	if (targets.length == 0 && !typeOnlyEdges) return plan;
 	const reached = new HashSet<string>();
-	const eager = new HashSet<string>();
 	const pending: string[] = [entryPath];
 	while (pending.length > 0) {
 		const path = pending.pop();
@@ -215,21 +228,19 @@ export function planDynamicModules(graph: ModuleGraph, entryPath: string, order:
 		const mod = findModule(graph, path);
 		if (mod != null) for (const imp of mod.imports) pending.push(imp.sourcePath);
 	}
-	pending.push(entryPath);
+	const roots: string[] = [entryPath];
 	for (const path of order) {
-		if (!reached.has(path) || (stdPath != "" && path.startsWith(stdPath))) pending.push(path);
+		if (!reached.has(path) || (stdPath != "" && path.startsWith(stdPath))) roots.push(path);
 	}
-	while (pending.length > 0) {
-		const path = pending.pop();
-		if (eager.has(path)) continue;
-		eager.add(path);
-		const mod = findModule(graph, path);
-		if (mod != null) for (const imp of mod.imports) if (!imp.dynamic) pending.push(imp.sourcePath);
-	}
+	const eager = evaluationClosure(graph, roots);
+	const importable = evaluationClosure(graph, targets);
 	const recordAt = new HashMap<string, int32>();
 	for (const path of order) {
-		if (!eager.has(path)) plan.lazy.add(path);
-		if (!eager.has(path) || targets.has(path)) {
+		if (eager.has(path)) continue;
+		plan.lazy.add(path);
+	}
+	for (const path of order) {
+		if (targets.includes(path) || (!eager.has(path) && importable.has(path))) {
 			recordAt.set(path, plan.records.length);
 			plan.records.push(path);
 		}
@@ -238,9 +249,12 @@ export function planDynamicModules(graph: ModuleGraph, entryPath: string, order:
 		const requested: int32[] = [];
 		const mod = findModule(graph, path);
 		if (plan.lazy.has(path) && mod != null) {
-			for (const imp of mod.imports) {
-				const at = recordAt.get(imp.sourcePath);
-				if (imp.dynamic || at == null || !plan.lazy.has(imp.sourcePath) || requested.includes(at)) continue;
+			const deps: string[] = [];
+			for (const imp of mod.imports) if (evaluates(imp)) deps.push(imp.sourcePath);
+			for (const dep of mod.runtimeDeps) deps.push(dep);
+			for (const dep of deps) {
+				const at = recordAt.get(dep);
+				if (at == null || !plan.lazy.has(dep) || requested.includes(at)) continue;
 				requested.push(at);
 			}
 		}
@@ -370,4 +384,20 @@ test "planDynamicModules is empty without import()" {
 	const g = createModuleGraph();
 	addModule(g, createModule("/main.ms"));
 	assert planDynamicModules(g, "/main.ms", ["/main.ms"], "").records.length == 0;
+}
+
+test "planDynamicModules leaves a module reached only through type-only imports unevaluated" {
+	const g = createModuleGraph();
+	const paths = ["/gpu.ms", "/types.ms", "/main.ms"];
+	for (const p of paths) addModule(g, createModule(p));
+	const typeOnly = createImportEntry(["Rgba"], ["Rgba"], "/types.ms", "./types");
+	typeOnly.typeOnly = true;
+	findModule(g, "/main.ms").imports.push(typeOnly);
+	findModule(g, "/types.ms").imports.push(createImportEntry(["slots"], ["slots"], "/gpu.ms", "./gpu"));
+	const plan = planDynamicModules(g, "/main.ms", paths, "");
+	assert plan.lazy.has("/types.ms") && plan.lazy.has("/gpu.ms") && plan.lazy.size == 2;
+	assert plan.records.length == 0;
+	findModule(g, "/main.ms").runtimeDeps.push("/gpu.ms");
+	const reached = planDynamicModules(g, "/main.ms", paths, "");
+	assert reached.lazy.has("/types.ms") && reached.lazy.size == 1;
 }

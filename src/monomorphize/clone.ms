@@ -142,10 +142,9 @@ function copyNodeMeta(src: Node, dst: Node): Node {
 	// Enum member access was rewritten by the checker from `E.M` (MemberExpr)
 	// to `Identifier "E_M"` whose mangled name is deliberately never bound in
 	// scope — its only resolution path is this resolvedSym. Both clone modes must
-	// carry it by reference (Nim freshGenSyms leaves non-gensym syms untouched):
-	// Check mode for comptime/macro re-check, Mono mode for generic instantiation
-	// (else a cloned `E.M` in a generic body re-resolves by name and fails).
-	// See NIM-REF CK-22 "Enum member repr & generic-instantiation survival".
+	// carry it by reference: Check mode for comptime/macro re-check, Mono mode for
+	// generic instantiation (else a cloned `E.M` in a generic body re-resolves by
+	// name and fails).
 	if (src.resolvedSym != null && src.resolvedSym.symbolKind == SymbolKind.EnumMember) {
 		dst.resolvedSym = src.resolvedSym;
 		dst.nodeType = src.nodeType;

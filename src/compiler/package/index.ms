@@ -1,63 +1,29 @@
-// Package Manager — public hub.
+// Package commands that need nothing from the driver: login, logout, whoami, publish, org.
 //
-// Re-exports the package manager API. Individual submodules live in sibling
-// files (version, mvs, manifest, lockfile, cache, registry, auth, etc.) and
-// are wired up as the package manager commands (msc add, install, publish)
-// are implemented.
-//
-// Importing this hub from src/index.ms ensures the submodules' inline tests
-// are discovered by the main test runner (msc test src/index.ms).
+// add, remove and install sync command shims through compiler/x, so src/index.ms dispatches them.
+// They are imported here so the test runner finds their tests.
 
-export {
-	ParsedVersion,
-	parseVersion,
-	isValidVersion,
-	compareVersions,
-	compareVersionStrings,
-	maxVersion,
-	SourceKind,
-	ParsedGitSpec,
-	parseGitSpec,
-	parseSourceSpec,
-} from "./version";
+import { error } from "../../utils/color";
+import { cmdLogin, cmdLogout, cmdWhoami } from "./login";
+import { cmdPublish } from "./publish";
+import { cmdOrg } from "./org";
+import "./add";
+import "./remove";
+import "./install";
 
-export {
-	DepEntry,
-	BuildListEntry,
-	mvsResolve,
-	findInBuildList,
-} from "./mvs";
-
-export {
-	HostConfig,
-	KNOWN_HOSTS,
-	detectHost,
-	archiveUrl,
-} from "./gitsource";
-
-export {
-	LockEntry,
-	Lockfile,
-	readLockfile,
-	writeLockfile,
-	findEntry,
-	entryName,
-} from "./lockfile";
-
-export {
-	cacheRoot,
-	registrySrcPath,
-	registryDownloadPath,
-	gitSrcPath,
-	gitDownloadPath,
-	isCached,
-} from "./cache";
-
-export { cmdAdd } from "./add";
-export { cmdRemove } from "./remove";
-export { cmdInstall } from "./install";
-export { cmdLogin, cmdLogout, cmdWhoami } from "./login";
-export { cmdPublish } from "./publish";
-export { cmdOrg } from "./org";
-export { downloadPackage } from "./download";
-export { addDepToManifest, removeDepFromManifest, readManifest } from "./manifest";
+// Runs one package command; false means it failed and the process exits 1.
+export async function runPackageCommand(cmd: string, inputFile: string, extraArgs: string[], projectRoot: string): Promise<boolean> {
+	return match (cmd) {
+		"login" => {
+			return await cmdLogin(projectRoot);
+		},
+		"logout" => cmdLogout(),
+		"whoami" => cmdWhoami(extraArgs),
+		"publish" => cmdPublish(projectRoot, extraArgs),
+		"org" => cmdOrg(inputFile == "" ? extraArgs : [inputFile].concat(extraArgs)),
+		_ => {
+			console.log(`${error("error")}: ${cmd} is not a package command`);
+			return false;
+		},
+	};
+}

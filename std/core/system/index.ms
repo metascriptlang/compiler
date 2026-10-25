@@ -216,6 +216,9 @@ extern function msUnionWrapMaybe(v: Ptr<void>, tag: int32): Ptr<void>;
 @compilerFunc
 extern function msMaybeGet(v: Ptr<void>, head: string, labels: string): Ptr<void>;
 
+@compilerFunc
+extern function msClosureSame(a: () => void, b: () => void): boolean;
+
 export class AbortSignal {
 	aborted: boolean;
 	reason: string;
@@ -272,6 +275,15 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msDecrefCyclic(p: Ptr<void>): void;
+
+	@compilerFunc
+	extern function msDecrefEdge(owner: Ptr<void>, p: Ptr<void>): boolean;
+
+	@compilerFunc
+	extern function msDecrefCyclicEdge(owner: Ptr<void>, p: Ptr<void>): boolean;
+
+	@compilerFunc
+	extern function msDropDefer(owner: Ptr<void>, fn: Ptr<void>, resume: int32): void;
 
 	@compilerFunc
 	extern function msAtomicIncref(p: Ptr<void>): void;
@@ -880,22 +892,22 @@ when (mscDeclaresRuntime) {
 	extern function msHcrVariableStorage(cell: Ptr<void>): Ptr<void>;
 
 	@compilerFunc
-	extern function msMsgReplyChainDouble(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msActorSuspendReplyDouble(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msMsgReplyChainInt32(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msActorSuspendReplyInt32(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msMsgReplyChainInt64(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msActorSuspendReplyInt64(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msMsgReplyChainBool(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msActorSuspendReplyBool(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msMsgReplyChainString(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msActorSuspendReplyString(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
 
 	@compilerFunc
-	extern function msMsgReplyChainPtr(src: Ptr<void>, dst: Ptr<void>): void;
+	extern function msActorSuspendReplyPtr(a: Ptr<void>, implFut: Ptr<void>, replyFut: Ptr<void>): void;
 
 	@compilerFunc
 	extern function msFutureThen_double(input: Ptr<void>, onFulfilled: () => void): Ptr<void>;
@@ -956,24 +968,6 @@ when (mscDeclaresRuntime) {
 
 	@compilerFunc
 	extern function msFutureCatch_ptr(input: Ptr<void>, onRejected: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureFinally_double(input: Ptr<void>, onSettled: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureFinally_int32(input: Ptr<void>, onSettled: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureFinally_int64(input: Ptr<void>, onSettled: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureFinally_bool(input: Ptr<void>, onSettled: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureFinally_msString(input: Ptr<void>, onSettled: () => void): Ptr<void>;
-
-	@compilerFunc
-	extern function msFutureFinally_ptr(input: Ptr<void>, onSettled: () => void): Ptr<void>;
 
 	@compilerFunc
 	extern function msFutureFinally(input: Ptr<void>, onSettled: () => void): Ptr<void>;

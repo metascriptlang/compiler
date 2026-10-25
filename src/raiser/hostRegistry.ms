@@ -5,31 +5,33 @@
 // auto-generated host table (codegen/raiser/hostTable.ms emits MS source
 // that calls registerHostFn for every reachable extern).
 //
-// Linear-scan lookup is fine for the expected size range (~50-200 entries).
-// Swap to a hash map if profiling shows it matters.
+import { RaiserValue, RaiserObjectHeap, RaiserArrayHeap, createStructHeap, createArrayHeap } from "./value";
 
-import { RaiserHostFn } from "./marshal";
-import { RaiserObjectHeap, RaiserArrayHeap } from "./value";
+// Every registered host call has this shape. Wrappers handle per-native
+// type-specific marshalling internally.
+export type RaiserHostFn = (args: RaiserValue[]) => RaiserValue;
 
 export enum HostCapability {
 	Unsafe,
 	Pure,
 	FileRead,
+	ChildProcess,
 }
 
-interface HostEntry {
+export interface HostEntry {
 	name: string;
 	fn: RaiserHostFn;
 	capability: HostCapability;
+	live: boolean;  // false once _resetHostRegistryForTests dropped it, so a call site that cached it resolves again
 }
 
 interface HostRegistry {
-	entries: HostEntry[];
+	entries: Map<string, HostEntry>;
 	initialized: boolean;
 }
 
 // Module-level singleton. Initialized empty; populated by registerHostFn.
-const _registry: HostRegistry = { entries: [], initialized: false };
+const _registry: HostRegistry = { entries: new Map<string, HostEntry>(), initialized: false };
 
 // --- Public API ---
 
@@ -38,35 +40,28 @@ export function registerHostFn(
 	fn: RaiserHostFn,
 	capability: HostCapability = HostCapability.Unsafe,
 ): void {
-	// Allow re-registration (last write wins) — Phase 5 may re-populate
-	// across compiler reruns in long-running build processes.
-	for (const entry of _registry.entries) {
-		if (entry.name == name) {
-			entry.fn = fn;
-			entry.capability = capability;
-			return;
-		}
+	// Last write wins and the entry object stays, so a call site that cached it sees the new fn.
+	if (_registry.entries.has(name)) {
+		const entry = _registry.entries.get(name)!;
+		entry.fn = fn;
+		entry.capability = capability;
+		return;
 	}
-	const newEntry: HostEntry = { name, fn, capability };
-	_registry.entries.push(newEntry);
+	const newEntry: HostEntry = { name, fn, capability, live: true };
+	_registry.entries.set(name, newEntry);
 }
 
-export function lookupHostFn(name: string): RaiserHostFn {
-	for (const entry of _registry.entries) {
-		if (entry.name == name) {
-			return entry.fn;
-		}
-	}
-	return null as unknown as RaiserHostFn;
+export function lookupHost(name: string): HostEntry | null {
+	if (!_registry.entries.has(name)) return null;
+	return _registry.entries.get(name)!;
 }
 
-export function hostFnAllowedInRestrictedMode(name: string): boolean {
-	for (const entry of _registry.entries) {
-		if (entry.name != name) continue;
-		return entry.capability == HostCapability.Pure
-			|| entry.capability == HostCapability.FileRead;
-	}
-	return false;
+export function hostEntryAllowedInRestrictedMode(entry: HostEntry): boolean {
+	return entry.capability == HostCapability.Pure || entry.capability == HostCapability.FileRead;
+}
+
+export function hostEntrySpawnsChild(entry: HostEntry): boolean {
+	return entry.capability == HostCapability.ChildProcess;
 }
 
 export function isHostRegistryInitialized(): boolean {
@@ -78,7 +73,7 @@ export function markHostRegistryInitialized(): void {
 }
 
 export function hostRegistrySize(): number {
-	return _registry.entries.length;
+	return _registry.entries.size;
 }
 
 // --- Active VM heaps ---
@@ -134,10 +129,11 @@ export function activeProgramArgv(): string[] | null {
 
 // Test-only: reset state between test runs.
 export function _resetHostRegistryForTests(): void {
-	_registry.entries.length = 0;
+	for (const name of _registry.entries) _registry.entries.get(name)!.live = false;
+	_registry.entries.clear();
 	_registry.initialized = false;
-	_activeObjectHeap = null;
-	_activeArrayHeap = null;
+	_activeObjectHeap = createStructHeap();
+	_activeArrayHeap = createArrayHeap();
 	_activeProgramArgv = null;
 	_hostRaise = null;
 	_hostRaiseFatal = false;
@@ -145,8 +141,7 @@ export function _resetHostRegistryForTests(): void {
 
 // --- Tests ---
 
-import { RaiserValue } from "./value";
-import { raiserString, raiserInt, RaiserValueKind, createStructHeap, createArrayHeap } from "./value";
+import { raiserConstString, raiserInt, RaiserValueKind, heapStringText } from "./value";
 
 test "register and lookup host fn" {
 	_resetHostRegistryForTests();
@@ -154,17 +149,16 @@ test "register and lookup host fn" {
 		return args[0];
 	};
 	registerHostFn("echo", echoFn);
-	const fn = lookupHostFn("echo");
-	assert fn != null;
-	const result = fn([raiserString("hello")]);
+	const entry = lookupHost("echo");
+	assert entry != null;
+	const result = entry!.fn([raiserConstString("hello")]);
 	assert result.kind == RaiserValueKind.String;
-	assert result.strVal == "hello";
+	assert heapStringText(createArrayHeap(), result) == "hello";
 }
 
 test "lookup missing returns null" {
 	_resetHostRegistryForTests();
-	const fn = lookupHostFn("nonexistent");
-	assert fn == null;
+	assert lookupHost("nonexistent") == null;
 }
 
 test "registry size tracks entries" {
@@ -184,9 +178,16 @@ test "re-registration overwrites" {
 	registerHostFn("dup", fnA);
 	registerHostFn("dup", fnB);
 	assert hostRegistrySize() == 1;
-	const fn = lookupHostFn("dup");
-	const result = fn([]);
-	assert result.intVal == 2;
+	const first = lookupHost("dup")!;
+	registerHostFn("dup", fnA);
+	assert first.fn([]).intVal == 1;
+	assert lookupHost("dup")!.fn([]).intVal == 1;
+	registerHostFn("dup", fnB);
+	assert first.fn([]).intVal == 2;
+	assert first.live;
+	_resetHostRegistryForTests();
+	assert !first.live;
+	assert lookupHost("dup") == null;
 }
 
 test "initialized flag" {
@@ -202,10 +203,10 @@ test "restricted host access allows only classified pure and file-read hosts" {
 	registerHostFn("unsafe", fn);
 	registerHostFn("pure", fn, HostCapability.Pure);
 	registerHostFn("read", fn, HostCapability.FileRead);
-	assert !hostFnAllowedInRestrictedMode("unsafe");
-	assert hostFnAllowedInRestrictedMode("pure");
-	assert hostFnAllowedInRestrictedMode("read");
-	assert !hostFnAllowedInRestrictedMode("missing");
+	assert !hostEntryAllowedInRestrictedMode(lookupHost("unsafe")!);
+	assert hostEntryAllowedInRestrictedMode(lookupHost("pure")!);
+	assert hostEntryAllowedInRestrictedMode(lookupHost("read")!);
+	assert lookupHost("missing") == null;
 }
 
 test "active host heaps publish and read back" {

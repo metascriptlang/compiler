@@ -218,6 +218,7 @@ void msFutureDropError(msFutureBase* f);
 static inline void msFutureDestroyInner(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
 	if (f == NULL) return;
+	MS_DESTROY_DISPATCH(msHeader(fp)->type, fp);
 	if (f->valueDestructor != NULL) {
 		/* Value is the first field after base — access via msFuture_ptr layout */
 		void* val = ((msFuture_ptr*)fp)->value;

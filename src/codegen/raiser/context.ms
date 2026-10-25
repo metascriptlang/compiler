@@ -2,10 +2,10 @@
 // Register allocator, constant pool builder, instruction emitter.
 
 import {
-	RaiserOpcode, RaiserInstruction,
+	RaiserOpcode, RaiserInstruction, RaiserRegClass, RaiserRole, RaiserConvClass, opRole, convOperand,
 	raiserABC, raiserABx, raiserAx, getSignedAx, fitsImm, immField, isBranchI64, branchField, branchOffset
 } from "../../raiser/bytecode";
-import { RaiserValue, RaiserValueKind, RaiserClassType, raiserInt, raiserString, raiserNil } from "../../raiser/value";
+import { RaiserValue, RaiserValueKind, RaiserClassType, createClassType, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserNil } from "../../raiser/value";
 import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind } from "../../ast/node";
 import { RaiserCopyPlan } from "../../raiser/valueCopy";
 import { CheckerError, Severity } from "../../checker/context";
@@ -116,13 +116,7 @@ export interface RaiserCompState {
 	code: RaiserInstruction[];
 	constants: RaiserValue[];
 	nextReg: int32;
-	// High-water mark of registers ever allocated. resetTemps shrinks
-	// nextReg back to (max local reg + 1) between statements, so the
-	// final value of nextReg reflects only the live locals, NOT the peak
-	// register count needed at runtime. The VM uses this to size each
-	// function's call frame — without an accurate peak, it would either
-	// over-allocate (waste) or under-allocate (out-of-bounds on temp regs).
-	maxRegSeen: int32;
+	regClasses: RaiserRegClass[];
 	locals: RaiserLocals;
 	loopStack: RaiserLoopStack;
 	funcMap: RaiserFuncMap;
@@ -146,7 +140,7 @@ export function createCompState(): RaiserCompState {
 	const locals: RaiserLocals = { items: localItems };
 	const loopItems: RaiserLoopInfo[] = [];
 	const loopStack: RaiserLoopStack = { items: loopItems };
-	return { code, constants, nextReg: 0, maxRegSeen: 0, locals, loopStack,
+	return { code, constants, nextReg: 0, regClasses: [], locals, loopStack,
 		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, tries: [] };
 }
 
@@ -155,6 +149,18 @@ export function classSymOfType(t: Type | null): Symbol | null {
 	if (cur != null && cur.kind == TypeKind.Ref && cur.typeReturn != null) cur = cur.typeReturn;
 	if (cur == null || cur.sym == null) return null;
 	return cur.sym;
+}
+
+const _classIds = new Map<string, int64>();
+
+// A class key keeps one id for the life of the process, so a class compiled into a live image
+// after its ancestors carries the ancestors' ids.
+export function raiserClassId(key: string): int64 {
+	const known = _classIds.get(key);
+	if (known != null) return known;
+	const id = _classIds.size + 1;
+	_classIds.set(key, id);
+	return id;
 }
 
 export function raiserClassKey(classSym: Symbol): string {
@@ -180,7 +186,90 @@ export function resolveStaticInitGuard(s: RaiserCompState, sym: Symbol | null): 
 	return -1;
 }
 
+// Opcodes whose A operand is the register they write, in the class their role names.
+function writesA(op: RaiserOpcode): boolean {
+	return match (op) {
+		RaiserOpcode.LoadInt | RaiserOpcode.AddI64 | RaiserOpcode.SubI64 | RaiserOpcode.MulI64 | RaiserOpcode.DivI64 | RaiserOpcode.ModI64 | RaiserOpcode.NegI64
+			| RaiserOpcode.AddU64 | RaiserOpcode.SubU64 | RaiserOpcode.MulU64 | RaiserOpcode.DivU64 | RaiserOpcode.ModU64
+			| RaiserOpcode.AddF64 | RaiserOpcode.SubF64 | RaiserOpcode.MulF64 | RaiserOpcode.DivF64 | RaiserOpcode.NegF64
+			| RaiserOpcode.BitAnd | RaiserOpcode.BitOr | RaiserOpcode.BitXor | RaiserOpcode.BitNot
+			| RaiserOpcode.ShiftLeft | RaiserOpcode.ShiftRight | RaiserOpcode.ShiftRightU | RaiserOpcode.AddI64Imm | RaiserOpcode.SubI64Imm
+			| RaiserOpcode.Conv | RaiserOpcode.ArrayLen | RaiserOpcode.StrLen | RaiserOpcode.StrByteLen
+			| RaiserOpcode.IsKind | RaiserOpcode.InstanceOf | RaiserOpcode.SameLoc
+			| RaiserOpcode.ConcatStr | RaiserOpcode.ConcatStrR | RaiserOpcode.StrByteAt | RaiserOpcode.StrCharCodeAt | RaiserOpcode.StrCharAt | RaiserOpcode.StrSlice | RaiserOpcode.NewObject | RaiserOpcode.ArraySlice | RaiserOpcode.NewArray => true,
+		_ => false,
+	};
+}
+
+// The class a fixed operand role names; Dyn for a role that leaves the class open.
+function roleClass(role: RaiserRole): RaiserRegClass {
+	return match (role) {
+		RaiserRole.Int | RaiserRole.IntLike => RaiserRegClass.Word,
+		RaiserRole.Float => RaiserRegClass.Float,
+		RaiserRole.Bool => RaiserRegClass.Bool,
+		RaiserRole.Ref => RaiserRegClass.Ref,
+		_ => RaiserRegClass.Dyn,
+	};
+}
+
+export function convDestClass(convClass: number): RaiserRegClass {
+	if (convClass == (RaiserConvClass.F64 as number) || convClass == (RaiserConvClass.F32 as number)) return RaiserRegClass.Float;
+	return convClass == (RaiserConvClass.Str as number) ? RaiserRegClass.Ref : RaiserRegClass.Word;
+}
+
+// The integer compares read the payload of a Dyn operand whatever its kind, as a compare of two
+// slots does: a union equality has a string, an object or nil on either side.
+function comparesPayload(op: RaiserOpcode): boolean {
+	return isBranchI64(op) || match (op) {
+		RaiserOpcode.BeqI64 | RaiserOpcode.BneI64 | RaiserOpcode.BltI64 | RaiserOpcode.BleI64 | RaiserOpcode.BgtI64 | RaiserOpcode.BgeI64
+			| RaiserOpcode.BeqI64Imm | RaiserOpcode.BneI64Imm | RaiserOpcode.BltI64Imm | RaiserOpcode.BleI64Imm | RaiserOpcode.BgtI64Imm | RaiserOpcode.BgeI64Imm => true,
+		_ => false,
+	};
+}
+
+const PAYLOAD_WORD = 1;
+
+function unboxedAs(s: RaiserCompState, reg: number, cls: RaiserRegClass, how: number): number {
+	if (classOfReg(s, reg as int32) != RaiserRegClass.Dyn) return reg;
+	const plain = allocReg(s, cls);
+	s.code.push(raiserABC(RaiserOpcode.Unbox, plain, reg, how));
+	return plain;
+}
+
+// A Dyn register holds a box or nil and every other class holds the plain value, so a Move
+// between the two sides is the Box or Unbox that crosses them, and an opcode whose operand role
+// names a class reads a register of that class: a Dyn operand is unboxed into one first, and a
+// Dyn destination is written through one and boxed after. A Move of an integer into a number register
+// is the widening Conv, as TypeScript reads an integer where a number is wanted.
 export function emitInst(s: RaiserCompState, inst: RaiserInstruction): void {
+	if (inst.op == RaiserOpcode.Move) {
+		const toDyn = classOfReg(s, inst.a as int32) == RaiserRegClass.Dyn;
+		if (toDyn != (classOfReg(s, inst.b as int32) == RaiserRegClass.Dyn)) inst.op = toDyn ? RaiserOpcode.Box : RaiserOpcode.Unbox;
+		else if (classOfReg(s, inst.a as int32) == RaiserRegClass.Float && classOfReg(s, inst.b as int32) == RaiserRegClass.Word) {
+			inst.op = RaiserOpcode.Conv;
+			inst.c = convOperand(RaiserConvClass.F64, RaiserConvClass.I64 as int32);
+		}
+	}
+	const op = inst.op;
+	const how = comparesPayload(op) ? PAYLOAD_WORD : 0;
+	const dest = writesA(op);
+	for (let slot = dest ? 1 : 0; slot < 3; slot += 1) {
+		const cls = roleClass(opRole(op, slot));
+		if (cls == RaiserRegClass.Dyn) continue;
+		if (slot == 0) inst.a = unboxedAs(s, inst.a, cls, how);
+		else if (slot == 1) inst.b = unboxedAs(s, inst.b, cls, how);
+		else inst.c = unboxedAs(s, inst.c, cls, how);
+	}
+	if (dest) {
+		const produced = op == RaiserOpcode.Conv ? convDestClass(inst.c) : roleClass(opRole(op, 0));
+		if (classOfReg(s, inst.a as int32) == RaiserRegClass.Dyn) {
+			const held = inst.a;
+			inst.a = allocReg(s, produced);
+			s.code.push(inst);
+			s.code.push(raiserABC(RaiserOpcode.Box, held, inst.a, 0));
+			return;
+		}
+	}
 	s.code.push(inst);
 }
 
@@ -190,13 +279,54 @@ export function addConst(s: RaiserCompState, val: RaiserValue): int32 {
 	return idx;
 }
 
-export function allocReg(s: RaiserCompState): int32 {
-	const r = s.nextReg;
-	s.nextReg = s.nextReg + 1;
-	// Track high-water mark — resetTemps() will lower nextReg back, but the
-	// VM needs to know the peak we ever reached to size each call frame.
-	if (s.nextReg > s.maxRegSeen) s.maxRegSeen = s.nextReg;
+export function allocReg(s: RaiserCompState, cls: RaiserRegClass): int32 {
+	let r = s.nextReg;
+	while (r < s.regClasses.length && s.regClasses[r] != cls) r = r + 1;
+	if (r == s.regClasses.length) s.regClasses.push(cls);
+	s.nextReg = r + 1;
 	return r;
+}
+
+export function allocBlock(s: RaiserCompState, classes: RaiserRegClass[]): int32 {
+	let start = s.nextReg;
+	while (!blockFits(s, start, classes)) start = start + 1;
+	for (let i = 0; i < classes.length; i = i + 1) {
+		if (start + i == s.regClasses.length) s.regClasses.push(classes[i]);
+	}
+	s.nextReg = start + classes.length;
+	return start;
+}
+
+function blockFits(s: RaiserCompState, start: int32, classes: RaiserRegClass[]): boolean {
+	for (let i = 0; i < classes.length; i = i + 1) {
+		if (start + i < s.regClasses.length && s.regClasses[start + i] != classes[i]) return false;
+	}
+	return true;
+}
+
+export function allocWord(s: RaiserCompState): int32 {
+	return allocReg(s, RaiserRegClass.Word);
+}
+
+export function allocRef(s: RaiserCompState): int32 {
+	return allocReg(s, RaiserRegClass.Ref);
+}
+
+export function allocFloat(s: RaiserCompState): int32 {
+	return allocReg(s, RaiserRegClass.Float);
+}
+
+export function allocBool(s: RaiserCompState): int32 {
+	return allocReg(s, RaiserRegClass.Bool);
+}
+
+export function allocDyn(s: RaiserCompState): int32 {
+	return allocReg(s, RaiserRegClass.Dyn);
+}
+
+export function classOfReg(s: RaiserCompState, reg: int32): RaiserRegClass {
+	if (reg < 0 || reg >= s.regClasses.length) throw new Error(`internal: register R${reg} was never allocated`);
+	return s.regClasses[reg];
 }
 
 // Reset temporary registers after each statement.
@@ -219,7 +349,35 @@ export function resetTemps(s: RaiserCompState): void {
 
 // --- Typed emit helpers ---
 
-export function emitLoadConst(s: RaiserCompState, reg: int32, val: RaiserValue): void {
+export function isScalarClass(cls: RaiserRegClass): boolean {
+	return cls != RaiserRegClass.Ref && cls != RaiserRegClass.Dyn;
+}
+
+export function classOfConstant(val: RaiserValue): RaiserRegClass {
+	return match (val.kind) {
+		RaiserValueKind.Int => RaiserRegClass.Word,
+		RaiserValueKind.Float => RaiserRegClass.Float,
+		RaiserValueKind.Bool => RaiserRegClass.Bool,
+		_ => RaiserRegClass.Ref,
+	};
+}
+
+// A constant of the kind the register's class holds; an integer constant for a number or boolean register reads as that.
+function constantFor(cls: RaiserRegClass, val: RaiserValue): RaiserValue {
+	if (cls == RaiserRegClass.Float && val.kind == RaiserValueKind.Int) return raiserFloat(val.intVal as number);
+	if (cls == RaiserRegClass.Bool && val.kind == RaiserValueKind.Int) return raiserBool(val.intVal != 0);
+	return val;
+}
+
+export function emitLoadConst(s: RaiserCompState, reg: int32, value: RaiserValue): void {
+	const dest = classOfReg(s, reg);
+	if (value.kind != RaiserValueKind.Nil && dest == RaiserRegClass.Dyn) {
+		const plain = allocReg(s, classOfConstant(value));
+		emitLoadConst(s, plain, value);
+		emitInst(s, raiserABC(RaiserOpcode.Move, reg, plain, 0));
+		return;
+	}
+	const val = constantFor(dest, value);
 	if (val.kind == RaiserValueKind.Int && fitsImm(val.intVal)) {
 		emitInst(s, raiserABC(RaiserOpcode.LoadInt, reg, immField(val.intVal), 0));
 		return;
@@ -387,25 +545,40 @@ export function resolveClassInit(s: RaiserCompState, classSym: Symbol): int32 {
 // --- Builtin helpers ---
 
 // --- Closure pair helpers ---
-// Emit a closure pair object { fn: funcIdx, env: envReg | -1 } into destReg.
-// envVal = -1 sentinel means non-capturing (no env), otherwise envVal is a register holding the env.
+// The NewObject operand of a typed object that has no class: its layout alone.
+export function layoutOperand(s: RaiserCompState, fields: string[], kinds: RaiserRegClass[]): int32 {
+	if (fields.length == 0) return 0;
+	s.classTypes.push(createClassType("", -1, [], fields, kinds));
+	return s.classTypes.length;
+}
+
+export const CLOSURE_PAIR: string[] = ["fn", "env"];
+export const CLOSURE_PAIR_KINDS: RaiserRegClass[] = [RaiserRegClass.Word, RaiserRegClass.Ref];
+
+export function slotInst(op: RaiserOpcode, a: number, b: number, c: number, slot: number): RaiserInstruction {
+	const inst = raiserABC(op, a, b, c);
+	inst.slot = slot;
+	return inst;
+}
+
+// Emit a closure pair object { fn: funcIdx, env: envReg | nil } into destReg.
+// A negative envReg means non-capturing (a nil env), otherwise envReg is the register holding the env.
 
 export function emitClosurePair(s: RaiserCompState, funcIdx: int32, envReg: int32): int32 {
-	const pairReg = allocReg(s);
-	emitInst(s, raiserABC(RaiserOpcode.NewObject, pairReg, 0, 0));
-	const fnReg = allocReg(s);
+	const pairReg = allocRef(s);
+	emitInst(s, raiserABC(RaiserOpcode.NewObject, pairReg, layoutOperand(s, CLOSURE_PAIR, CLOSURE_PAIR_KINDS), 0));
+	const fnReg = allocWord(s);
 	emitLoadConst(s, fnReg, raiserInt(funcIdx));
-	const fnConst = addConst(s, raiserString("fn"));
-	emitInst(s, raiserABC(RaiserOpcode.StoreField, pairReg, fnConst, fnReg));
-	const envConst = addConst(s, raiserString("env"));
+	const fnConst = addConst(s, raiserConstString("fn"));
+	emitInst(s, slotInst(RaiserOpcode.StoreSlot, pairReg, fnConst, fnReg, 0));
+	const envConst = addConst(s, raiserConstString("env"));
 	if (envReg < 0) {
-		// Non-capturing: store -1 sentinel
-		const sentinelReg = allocReg(s);
-		emitLoadConst(s, sentinelReg, raiserInt(-1));
-		emitInst(s, raiserABC(RaiserOpcode.StoreField, pairReg, envConst, sentinelReg));
+		const nilReg = allocRef(s);
+		emitLoadConst(s, nilReg, raiserNil());
+		emitInst(s, slotInst(RaiserOpcode.StoreSlot, pairReg, envConst, nilReg, 1));
 	} else {
 		// Capturing: store actual env register
-		emitInst(s, raiserABC(RaiserOpcode.StoreField, pairReg, envConst, envReg));
+		emitInst(s, slotInst(RaiserOpcode.StoreSlot, pairReg, envConst, envReg, 1));
 	}
 	return pairReg;
 }
@@ -475,10 +648,13 @@ export function callRaiserStmtCompiler(s: RaiserCompState, stmt: Node): void {
 	_raiserStmtCompiler(s, stmt);
 }
 
+export function emitTrap(s: RaiserCompState, message: string): void {
+	emitInst(s, raiserABx(RaiserOpcode.Trap, 0, addConst(s, raiserConstString(message))));
+}
+
 export function emitTrapNil(s: RaiserCompState, message: string): int32 {
-	const cIdx = addConst(s, raiserString(message));
-	emitInst(s, raiserABx(RaiserOpcode.Trap, 0, cIdx));
-	const reg = allocReg(s);
+	emitTrap(s, message);
+	const reg = allocRef(s);
 	emitLoadConst(s, reg, raiserNil());
 	return reg;
 }
@@ -494,7 +670,7 @@ function writesResultAfterReading(op: RaiserOpcode): boolean {
 			| RaiserOpcode.AddF64 | RaiserOpcode.SubF64 | RaiserOpcode.MulF64 | RaiserOpcode.DivF64 | RaiserOpcode.NegF64
 			| RaiserOpcode.BitAnd | RaiserOpcode.BitOr | RaiserOpcode.BitXor | RaiserOpcode.BitNot
 			| RaiserOpcode.ShiftLeft | RaiserOpcode.ShiftRight | RaiserOpcode.ShiftRightU
-			| RaiserOpcode.Conv | RaiserOpcode.ArrayLen | RaiserOpcode.StrLen | RaiserOpcode.StrCharAt
+			| RaiserOpcode.Conv | RaiserOpcode.ArrayLen | RaiserOpcode.StrLen | RaiserOpcode.StrCharAt | RaiserOpcode.ConcatStr | RaiserOpcode.ConcatStrR | RaiserOpcode.StrByteAt
 			| RaiserOpcode.IsKind => true,
 		_ => false,
 	};
@@ -508,13 +684,13 @@ function skipsInstructions(op: RaiserOpcode): boolean {
 			| RaiserOpcode.BgtI64Imm | RaiserOpcode.BgeI64Imm
 			| RaiserOpcode.BeqF64 | RaiserOpcode.BneF64 | RaiserOpcode.BltF64 | RaiserOpcode.BleF64
 			| RaiserOpcode.BgtF64 | RaiserOpcode.BgeF64
-			| RaiserOpcode.EqStr | RaiserOpcode.NeStr | RaiserOpcode.LtStr | RaiserOpcode.LeStr
+			| RaiserOpcode.EqVal | RaiserOpcode.NeVal | RaiserOpcode.EqStr | RaiserOpcode.NeStr | RaiserOpcode.LtStr | RaiserOpcode.LeStr
 			| RaiserOpcode.BltU64 | RaiserOpcode.BleU64 | RaiserOpcode.BTruthy => true,
 		_ => false,
 	};
 }
 
-function landsPast(inst: RaiserInstruction, at: int32, limit: int32): boolean {
+export function landsPast(inst: RaiserInstruction, at: int32, limit: int32): boolean {
 	if (inst.op == RaiserOpcode.Jump) return at + 1 + getSignedAx(inst) >= limit;
 	if (isBranchI64(inst.op)) return at + 1 + (branchOffset(inst.c) as int32) >= limit;
 	return skipsInstructions(inst.op) && at + 1 + inst.c >= limit;
@@ -554,7 +730,7 @@ function lastWriteTail(s: RaiserCompState, startPc: int32, reg: int32): int32 {
 // that expression could allocate: the value is moved to `target` unless its writer can aim there.
 export function landResult(s: RaiserCompState, target: number, startPc: int32, firstTemp: int32, reg: int32): void {
 	if (reg == target) return;
-	const tail = reg >= firstTemp ? lastWriteTail(s, startPc, reg) : 0;
+	const tail = reg >= firstTemp && classOfReg(s, reg) == classOfReg(s, target as int32) ? lastWriteTail(s, startPc, reg) : 0;
 	if (tail > 0) {
 		const end = s.code.length;
 		s.code[end - tail].a = target;
@@ -583,7 +759,16 @@ function endIsUnreachable(s: RaiserCompState): boolean {
 
 export function emitImplicitReturn(s: RaiserCompState): void {
 	if (endIsUnreachable(s)) return;
-	const nilReg = allocReg(s);
+	emitReturnNothing(s);
+}
+
+// A void call's destination is Dyn, and a class initializer's is its receiver's Ref.
+export function emitReturnNothing(s: RaiserCompState): void {
+	if (s.receiverReg >= 0) {
+		emitRet(s, s.receiverReg);
+		return;
+	}
+	const nilReg = allocDyn(s);
 	emitLoadConst(s, nilReg, raiserNil());
 	emitRet(s, nilReg);
 }

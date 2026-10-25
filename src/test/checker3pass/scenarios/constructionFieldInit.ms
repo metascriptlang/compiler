@@ -98,6 +98,23 @@ test "new of a class without a constructor is refused when a field has no defaul
 	assert !hasLine(errors, "'init'", NEW_LEAVES), errors.join("\n");
 }
 
+test "new of a struct is refused when it leaves out a field whose type has no default value" {
+	const src = `
+struct Holds { tag: string; xs: int32[]; }
+struct Box<T> { v: T; items: T[]; }
+const a = new Holds();
+const b = new Holds("t");
+const c = new Box<int32>(1);
+const d = new Holds("t", [1]);
+`;
+	const errors = checkOnly(src).errors;
+	let refusals = 0;
+	for (const e of errors) if (e.contains("field 'xs'") && e.contains(LITERAL)) refusals += 1;
+	assert refusals == 2, errors.join("\n");
+	assert hasLine(errors, "field 'items'", LITERAL), errors.join("\n");
+	assert errors.length == 3, errors.join("\n");
+}
+
 test "new is accepted when every such field has an initializer or a constructor assigns it" {
 	const errors = checkOnly(SRC_NEW_ACCEPTED).errors;
 	assert errors.length == 0, errors.join("\n");
@@ -115,5 +132,57 @@ function g(c: boolean): int32 {
 }
 `;
 	const errors = checkOnly(src).errors;
+	assert errors.length == 0, errors.join("\n");
+}
+
+const SRC_ALIAS_REFUSED = `
+interface Store { serial: int32; }
+type Getter<T> = () => T;
+type D<T> = distinct (() => T);
+type DPlain = distinct (() => string);
+type Handle = distinct Store;
+interface Owner { store: Store; count: int32; }
+interface ViaGeneric { label: string; suffix: Getter<string>; }
+interface ViaDistinct { label: string; suffix: D<string>; }
+interface ViaPlain { label: string; suffix: DPlain; }
+interface ViaHandle { label: string; h: Handle; }
+interface Outer { inner: Owner; }
+const a: Owner = { count: 1 };
+const b: ViaGeneric = { label: "a" };
+const c: ViaDistinct = { label: "a" };
+const d: ViaPlain = { label: "a" };
+const e: ViaHandle = { label: "a" };
+const f: Outer = { inner: { count: 1 } };
+`;
+
+const SRC_ALIAS_ACCEPTED = `
+interface Store { serial: int32; }
+type Getter<T> = () => T;
+type D<T> = distinct (() => T);
+type Id = distinct int32;
+class Fresh { v: int32 = 1; }
+interface Owner { store: Store; count: int32; name: string; id: Id; }
+interface Loose { store?: Store; other: Store | null; get?: Getter<string>; dist: D<string> | null; }
+class Holder { fresh: Fresh = new Fresh(); count: int32; }
+const s: Store = { serial: 1 };
+const a: Owner = { store: s, count: 1 };
+const b: Loose = {};
+const h: Holder = { count: 1 };
+const g: Getter<string> = (): string => "x";
+const d: D<string> = g as D<string>;
+const c: Loose = { dist: d, get: g };
+`;
+
+test "an omitted interface field is refused, and so is a function behind a generic alias or distinct" {
+	const errors = checkOnly(SRC_ALIAS_REFUSED).errors;
+	assert hasLine(errors, "field 'store'", LITERAL), errors.join("\n");
+	for (const shown of ["Getter<string>", "D<string>", "DPlain", "Handle"]) {
+		assert hasLine(errors, `type '${shown}' has no default value`, LITERAL), `'${shown}' must be refused: ` + errors.join("\n");
+	}
+	assert !hasLine(errors, "field 'label'", LITERAL), errors.join("\n");
+}
+
+test "given, optional and nullable interface and function fields, and a distinct value field, are accepted" {
+	const errors = checkOnly(SRC_ALIAS_ACCEPTED).errors;
 	assert errors.length == 0, errors.join("\n");
 }

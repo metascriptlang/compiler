@@ -20,14 +20,10 @@ import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { collectStaleEntries, nowSeconds } from "../utils/stampDirs";
 import { ensureDir, atomicWriteFile, renameReplace } from "./io";
 import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey, buildPch } from "./cc";
-import { djb2, fingerprint, hashToHex } from "std/hash";
+import { hashContent, collectFilesSorted } from "../utils/contentHash";
 import { VERSION } from "./usage";
 
 // ===== Hash Functions =====
-
-// Dual hash of string content → "hexHash_hexFingerprint" (stable, 64-bit effective).
-export function hashContent(s: string): string {	return `${hashToHex(djb2(s))}_${hashToHex(fingerprint(s))}`;
-}
 
 // Hash a file's content. Returns "hash:byteLength" string.
 function hashFileContent(path: string): string {
@@ -72,31 +68,6 @@ function hashFile(path: string): string {
 // x25519 → monocypher.h) and std modules @compile vendor .c directly.
 let _toolchainStamp = "";
 let _objectStamp = "";
-
-// readDir order is filesystem-dependent; the stamp must be stable across runs.
-function collectFilesSorted(dir: string, prefix: string, outPaths: string[]): void {
-	const entries = readDir(dir);
-	let i = 1;
-	while (i < entries.length) {
-		const key = entries[i];
-		let j = i - 1;
-		while (j >= 0 && entries[j] > key) {
-			entries[j + 1] = entries[j];
-			j = j - 1;
-		}
-		entries[j + 1] = key;
-		i = i + 1;
-	}
-	for (const e of entries) {
-		if (e.length == 0) continue;
-		if (e.charAt(e.length - 1) == "/") {
-			const name = e.slice(0, e.length - 1);
-			collectFilesSorted(join(dir, name), `${prefix}${name}/`, outPaths);
-		} else {
-			outPaths.push(`${prefix}${e}`);
-		}
-	}
-}
 
 // Content-hash every file under one support tree into the stamp accumulator.
 // Keys are prefixed with the tree name so runtime/x.h and vendor/x.h can never
@@ -175,10 +146,20 @@ export function objectStamp(): string {
 
 export function supportTreesStamp(root: string): string {
 	if (root == "") return hashContent("");
+	return treesStamp(root, [join(root, "runtime"), join(root, "vendor")], ["runtime/", "vendor/"]);
+}
+
+// Content stamp of the std tree the prelude pack is built from, remembered by the files'
+// change stamps exactly as the support trees are.
+export function stdTreeStamp(stdPath: string): string {
+	if (stdPath == "") return hashContent("");
+	return treesStamp(`std:${stdPath}`, [stdPath], ["std/"]);
+}
+
+function treesStamp(subject: string, dirs: string[], prefixes: string[]): string {
 	const paths: string[] = [];
 	const names: string[] = [];
-	collectTreeFiles(join(root, "runtime"), "runtime/", paths, names);
-	collectTreeFiles(join(root, "vendor"), "vendor/", paths, names);
+	for (let t: int32 = 0; t < dirs.length; t += 1) collectTreeFiles(dirs[t], prefixes[t], paths, names);
 	const stamps: string[] = [];
 	const listed: string[] = [];
 	let stamped = true;
@@ -189,10 +170,10 @@ export function supportTreesStamp(root: string): string {
 		listed.push(`${names[i]}\t${stamp}`);
 	}
 	const listing = hashContent(listed.join("\n"));
-	const sumPath = hashMemoPath(root, "sum");
+	const sumPath = hashMemoPath(subject, "sum");
 	const sum = readSealed(sumPath);
 	if (stamped && sum.length == 2 && sum[0] == listing) return sum[1];
-	const memo = hashMemoPath(root, "files");
+	const memo = hashMemoPath(subject, "files");
 	loadHashMemo(memo);
 	const writes = _hashMemoWrites;
 	const parts: string[] = [""];
@@ -915,8 +896,8 @@ export function writeCompileCache(oFile: string, fp: string): void {
 
 const CACHE_VERSION = "v4";
 
-function projectCacheFile(inputs: string, outputFile: string, command: string): string {
-	const key = objectListKey([cwd(), join(cwd(), outputFile), command, inputs]);
+function projectCacheFile(outputFile: string, command: string): string {
+	const key = objectListKey([cwd(), join(cwd(), outputFile), command]);
 	return `${getCacheDir()}/project.${key}.cache`;
 }
 
@@ -1010,31 +991,19 @@ function storedDepPath(entry: string): string {
 	return "";
 }
 
-// Check if the project needs rebuilding.
-// Reference-aligned: changeDetectedViaJsonBuildInstructions.
-// Returns true if anything changed (= must rebuild). Returns false if up-to-date.
-export function projectCacheChanged(
-	depPaths: string[],
-	outputFile: string,
-	ccOption: number,
-	ccBinary: string,
-	mode: number,
-	flags: string
-): boolean {
-	const currentCmd = buildCmdFingerprint(ccOption, ccBinary, mode, flags);
-	const inputs = objectListKey(depPaths);
-	const cacheFile = projectCacheFile(inputs, outputFile, currentCmd);
-	_projectInputKey = cacheFile;
-	_projectInputHashes = [];
-	for (const path of depPaths) _projectInputHashes.push(hashFile(path));
-	if (_forceRebuild) return true;
-	if (!exists(cacheFile) || !exists(outputFile)) return true;
+interface ProjectRecord {
+	inputs: string;
+	deps: string[];
+}
+
+function readProjectRecord(cacheFile: string, outputFile: string, command: string): ProjectRecord | null {
+	if (!exists(cacheFile) || !exists(outputFile)) return null;
 	const cacheResult = readFile(cacheFile);
-	if (!cacheResult.ok) return true;
+	if (!cacheResult.ok) return null;
 	const newline = cacheResult.value.indexOf("\n", 0);
-	if (newline < 0) return true;
+	if (newline < 0) return null;
 	const body = cacheResult.value.slice(newline + 1, cacheResult.value.length);
-	if (cacheResult.value.slice(0, newline) != hashContent(body)) return true;
+	if (cacheResult.value.slice(0, newline) != hashContent(body)) return null;
 	const lines = splitLines(body);
 
 	let storedVersion = "";
@@ -1062,13 +1031,59 @@ export function projectCacheChanged(
 		if (val != "") { storedDeps.push(val); }
 	}
 
-	if (storedVersion != CACHE_VERSION) return true;
-	if (storedOutput != join(cwd(), outputFile)) return true;
-	if (storedCmd != currentCmd) return true;
-	if (storedCwd != cwd()) return true;
-	if (storedInputs != inputs) return true;
-	if (!outputMatches(storedOutputHash, outputFile)) return true;
+	if (storedVersion != CACHE_VERSION) return null;
+	if (storedOutput != join(cwd(), outputFile)) return null;
+	if (storedCmd != command) return null;
+	if (storedCwd != cwd()) return null;
+	if (!outputMatches(storedOutputHash, outputFile)) return null;
+	return { inputs: storedInputs, deps: storedDeps };
+}
 
+function storedDepCurrent(entry: string): boolean {
+	const path = storedDepPath(entry);
+	return path != "" && entry == `${path}=${hashFile(path)}`;
+}
+
+export function projectRecordCurrent(
+	outputFile: string,
+	ccOption: number,
+	ccBinary: string,
+	mode: number,
+	flags: string
+): boolean {
+	if (_forceRebuild) return false;
+	const command = buildCmdFingerprint(ccOption, ccBinary, mode, flags);
+	const record = readProjectRecord(projectCacheFile(outputFile, command), outputFile, command);
+	if (record == null || record.deps.length == 0) return false;
+	for (const entry of record.deps) {
+		if (!storedDepCurrent(entry)) return false;
+	}
+	return true;
+}
+
+// Check if the project needs rebuilding.
+// Reference-aligned: changeDetectedViaJsonBuildInstructions.
+// Returns true if anything changed (= must rebuild). Returns false if up-to-date.
+export function projectCacheChanged(
+	depPaths: string[],
+	outputFile: string,
+	ccOption: number,
+	ccBinary: string,
+	mode: number,
+	flags: string
+): boolean {
+	const currentCmd = buildCmdFingerprint(ccOption, ccBinary, mode, flags);
+	const inputs = objectListKey(depPaths);
+	const cacheFile = projectCacheFile(outputFile, currentCmd);
+	_projectInputKey = cacheFile;
+	_projectInputHashes = [];
+	for (const path of depPaths) _projectInputHashes.push(hashFile(path));
+	if (_forceRebuild) return true;
+	const record = readProjectRecord(cacheFile, outputFile, currentCmd);
+	if (record == null) return true;
+	if (record.inputs != inputs) return true;
+
+	const storedDeps = record.deps;
 	if (storedDeps.length < depPaths.length) return true;
 	let di = 0;
 	while (di < depPaths.length) {
@@ -1077,8 +1092,7 @@ export function projectCacheChanged(
 		di = di + 1;
 	}
 	while (di < storedDeps.length) {
-		const path = storedDepPath(storedDeps[di]);
-		if (path == "" || storedDeps[di] != `${path}=${hashFile(path)}`) return true;
+		if (!storedDepCurrent(storedDeps[di])) return true;
 		di = di + 1;
 	}
 
@@ -1102,7 +1116,7 @@ export function writeProjectCache(
 	if (!exists(outputFile)) return;
 	const command = buildCmdFingerprint(ccOption, ccBinary, mode, flags);
 	const inputs = objectListKey(depPaths);
-	const record = projectCacheFile(inputs, outputFile, command);
+	const record = projectCacheFile(outputFile, command);
 	const seen = new HashSet<string>();
 	let dependencies = "";
 	for (let i = 0; i < depPaths.length; i++) {
@@ -1215,10 +1229,30 @@ test "project records reject changed outputs, dependencies and corrupt metadata 
 		assert !projectCacheChanged([depB], outB, 0, "", 0, "-O0");
 		writeFile(depA, "entry-a");
 		assert !projectCacheChanged([depA], outA, 0, "", 0, "-O0");
-		const record = projectCacheFile(objectListKey([depA]), outA, buildCmdFingerprint(0, "", 0, "-O0"));
+		const record = projectCacheFile(outA, buildCmdFingerprint(0, "", 0, "-O0"));
 		writeFile(record, "corrupt");
 		assert projectCacheChanged([depA], outA, 0, "", 0, "-O0");
 		assert !projectCacheChanged([depB], outB, 0, "", 0, "-O0");
+	});
+}
+
+test "a project record answers from its own dependency list" {
+	withProjectRecordFixture("early", (dir: string): void => {
+		const entry = `${dir}/entry.ms`;
+		const imported = `${dir}/imported.ms`;
+		const out = `${dir}/app`;
+		writeFile(entry, "entry");
+		writeFile(imported, "imported");
+		writeFile(out, "output");
+		writeProjectCache([entry, imported], out, 0, "", 0, "-O0");
+		assert projectRecordCurrent(out, 0, "", 0, "-O0");
+		assert !projectRecordCurrent(out, 0, "", 0, "-O0 -DOTHER");
+		writeFile(imported, "imported edited");
+		assert !projectRecordCurrent(out, 0, "", 0, "-O0");
+		writeFile(imported, "imported");
+		assert projectRecordCurrent(out, 0, "", 0, "-O0");
+		remove(imported);
+		assert !projectRecordCurrent(out, 0, "", 0, "-O0");
 	});
 }
 
@@ -1431,16 +1465,12 @@ export function writeLinkCache(oFiles: string[], externalInputs: string[], linkF
 	atomicWriteFile(linkCacheFile(image), content);
 }
 
-// ===== Header Inline Cache (Layer 5) =====
+// ===== Header Module Cache (Layer 5) =====
 //
-// Caches the output of the loader's inlineHeaderImports transform — the
-// chibicc translation of every `import { ... } from "*.h"` in a module
-// source — on disk, content-hash keyed. Model: ccache / Zig @cImport's
-// content-addressed translate cache (the reference compiler has no
-// header-translation step at all; its FFI is hand-written declarations, so
-// this caches the one transform that is OUR divergence from it).
+// Caches the module source the loader translates from a C header, on disk,
+// content-hash keyed (ccache-style).
 //
-// Key folds: module source, modulePath, compact flag, VERSION, platform,
+// Key folds: header source, header path, target, VERSION, platform,
 // compiler root (resolveRuntimeDir — the emitted @include paths and include
 // search roots embed it) and toolchainStamp (msc binary + every file under
 // runtime/ and vendor/). Headers OUTSIDE the stamped trees (user projects,
@@ -1456,7 +1486,7 @@ export function writeLinkCache(oFiles: string[], externalInputs: string[], linkF
 // recomputes next time so the diagnostics re-surface (loader-side gate).
 // MSC_NO_HEADER_CACHE=1 disables both lookup and store.
 
-const HEADER_ENTRY_MAGIC = "MSHI1";
+const HEADER_ENTRY_MAGIC = "MSHM1";
 
 // Global when available, else the local cache dir (exotic environments).
 function headersCacheDir(): string {
@@ -1465,8 +1495,8 @@ function headersCacheDir(): string {
 	return `${getCacheDir()}/headers`;
 }
 
-export function headerInlineKey(source: string, modulePath: string, compact: boolean, target: string): string {
-	return hashContent(`${VERSION}:${platform}:${target}:${compact ? "C" : "F"}:${resolveRuntimeDir()}:${modulePath}\n${source}\n${toolchainStamp()}`);
+export function headerModuleKey(source: string, headerPath: string, target: string): string {
+	return hashContent(`${VERSION}:${platform}:${target}:${resolveRuntimeDir()}:${headerPath}\n${source}\n${toolchainStamp()}`);
 }
 
 function depUnderStampedTrees(path: string): boolean {
@@ -1488,11 +1518,11 @@ function verifyHeaderDep(dep: string): boolean {
 	return content != "" && hashContent(content) == hash;
 }
 
-// Lookup a cached inlineHeaderImports output. Entry layout:
-//   "MSHI1\n<dep>\n...\n--\n<output>"
+// Lookup a cached header module. Entry layout:
+//   "MSHM1\n<dep>\n...\n--\n<output>"
 // Returns "" on miss, disabled, corrupt entry, or any dep that no longer
 // verifies. A miss never deletes the entry — concurrent readers first.
-export function lookupHeaderInline(key: string): string {
+export function lookupHeaderModule(key: string): string {
 	if (env.get("MSC_NO_HEADER_CACHE") != "") return "";
 	const body = try readFile(`${headersCacheDir()}/${key}.hi`) catch "";
 	if (!body.startsWith(`${HEADER_ENTRY_MAGIC}\n`)) return "";
@@ -1509,10 +1539,10 @@ export function lookupHeaderInline(key: string): string {
 	return body.slice(pos, body.length);
 }
 
-// Publish an inlineHeaderImports output atomically (tmp + rename). Deps are
+// Publish a header module atomically (tmp + rename). Deps are
 // the recorded read set (path+hash / path+absent lines). Deterministic
 // content for a given key, so concurrent publishers write identical bytes.
-export function storeHeaderInline(key: string, deps: string[], output: string): void {
+export function storeHeaderModule(key: string, deps: string[], output: string): void {
 	if (env.get("MSC_NO_HEADER_CACHE") != "") return;
 	const dir = headersCacheDir();
 	ensureDir(dir);
@@ -1711,7 +1741,7 @@ function settledSupportTree(tag: string): string {
 	if (_settledTreesBase == "") {
 		const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
 		_settledTreesBase = `${base}/msc-support-memo-${performance.now()}`;
-		for (const t of ["edit", "seal", "add"]) {
+		for (const t of ["edit", "seal", "add", "std"]) {
 			ensureDir(`${_settledTreesBase}/${t}/runtime`);
 			ensureDir(`${_settledTreesBase}/${t}/vendor/lib`);
 			writeFile(`${_settledTreesBase}/${t}/runtime/core.h`, "#define A 1\n");
@@ -1756,6 +1786,29 @@ test "a support-tree stamp is served from disk to the next process and moves on 
 	assert edited != first;
 	assert edited == uncachedStamp(root);
 	forgetSupportMemo(root);
+}
+
+test "a std-tree stamp is served from disk to the next process and moves on a same-size edit" {
+	if (globalCacheRoot() == "") return;
+	const dir = `${settledSupportTree("std")}/vendor`;
+	const subject = `std:${dir}`;
+	_hashByStamp.clear();
+	const first = stdTreeStamp(dir);
+	assert readSealed(hashMemoPath(subject, "sum")).length == 2;
+	assert readSealed(hashMemoPath(subject, "files")).length == 1;
+	_hashByStamp.clear();
+	assert stdTreeStamp(dir) == first;
+	writeFile(`${dir}/lib/x.h`, "#define B 2\n");
+	_hashByStamp.clear();
+	const edited = stdTreeStamp(dir);
+	assert edited != first;
+	remove(hashMemoPath(subject, "sum"));
+	remove(hashMemoPath(subject, "files"));
+	_hashByStamp.clear();
+	assert stdTreeStamp(dir) == edited;
+	remove(hashMemoPath(subject, "sum"));
+	remove(hashMemoPath(subject, "files"));
+	removeAll(dir);
 }
 
 test "a support-tree memo whose seal does not match its body is ignored" {
@@ -1920,7 +1973,7 @@ test "atomicWriteFile replaces existing content and leaves no tmp siblings" {
 	remove(p);
 }
 
-// ===== Header Inline Cache (Layer 5) tests =====
+// ===== Header Module Cache (Layer 5) tests =====
 //
 // Disk mechanics only — wrapper orchestration lives in module/loader.ms
 // tests. Fixtures are real files under /tmp (same convention as bug043).
@@ -1930,63 +1983,63 @@ test "header cache: store → hit, dep content change → miss, restore → hit"
 	const hpath = "/tmp/mshc/hcx.h";
 	const orig = "extern int hcx(void);\n";
 	writeFile(hpath, orig);
-	const key = headerInlineKey("import { hcx } from \"./hcx.h\";", "/tmp/mshc/m.ms", false, "linux-x86_64");
-	storeHeaderInline(key, [`${hpath}\t${hashContent(orig)}`], "OUT-1");
-	assert lookupHeaderInline(key) == "OUT-1";
+	const key = headerModuleKey("extern int hcx(void);", "/tmp/mshc/hcx.h", "linux-x86_64");
+	storeHeaderModule(key, [`${hpath}\t${hashContent(orig)}`], "OUT-1");
+	assert lookupHeaderModule(key) == "OUT-1";
 	writeFile(hpath, "extern int hcx2(void);\n");
-	assert lookupHeaderInline(key) == "";
+	assert lookupHeaderModule(key) == "";
 	writeFile(hpath, orig);
-	assert lookupHeaderInline(key) == "OUT-1";
+	assert lookupHeaderModule(key) == "OUT-1";
 }
 
 test "header cache: absent dep stays valid until the file appears" {
 	const gone = "/tmp/mshc/gone.h";
 	if (exists(gone)) remove(gone);
-	const key = headerInlineKey("import { m } from \"./gone.h\";", "/tmp/mshc/gone.ms", false, "linux-x86_64");
-	storeHeaderInline(key, [`${gone}\t-`], "OUT-2");
-	assert lookupHeaderInline(key) == "OUT-2";
+	const key = headerModuleKey("extern int m(void);", "/tmp/mshc/gone.h", "linux-x86_64");
+	storeHeaderModule(key, [`${gone}\t-`], "OUT-2");
+	assert lookupHeaderModule(key) == "OUT-2";
 	writeFile(gone, "int x;\n");
-	assert lookupHeaderInline(key) == "";
+	assert lookupHeaderModule(key) == "";
 	if (exists(gone)) remove(gone);
 }
 
 test "header cache: deps under runtime//vendor/ skip disk re-verification" {
-	const key = headerInlineKey("import { r } from \"./r.h\";", "/tmp/mshc/stamped.ms", false, "linux-x86_64");
+	const key = headerModuleKey("extern int r(void);", "/tmp/mshc/r.h", "linux-x86_64");
 	const stampedPath = `${resolveRuntimeDir()}/runtime/definitely-not-here.h`;
-	storeHeaderInline(key, [`${stampedPath}\tdeadbeef`], "OUT-3");
-	assert lookupHeaderInline(key) == "OUT-3";
+	storeHeaderModule(key, [`${stampedPath}\tdeadbeef`], "OUT-3");
+	assert lookupHeaderModule(key) == "OUT-3";
 }
 
 test "header cache: malformed dep line is a miss, empty dep list is a hit" {
-	const keyA = headerInlineKey("import { x1 } from \"./x1.h\";", "/tmp/mshc/bad.ms", false, "linux-x86_64");
-	storeHeaderInline(keyA, ["nodep-newline"], "OUT-4");
-	assert lookupHeaderInline(keyA) == "";
-	const keyB = headerInlineKey("import { x2 } from \"./x2.h\";", "/tmp/mshc/empty.ms", false, "linux-x86_64");
-	storeHeaderInline(keyB, [], "OUT-5");
-	assert lookupHeaderInline(keyB) == "OUT-5";
+	const keyA = headerModuleKey("extern int x1(void);", "/tmp/mshc/x1.h", "linux-x86_64");
+	storeHeaderModule(keyA, ["nodep-newline"], "OUT-4");
+	assert lookupHeaderModule(keyA) == "";
+	const keyB = headerModuleKey("extern int x2(void);", "/tmp/mshc/x2.h", "linux-x86_64");
+	storeHeaderModule(keyB, [], "OUT-5");
+	assert lookupHeaderModule(keyB) == "OUT-5";
 }
 
 test "header cache: a translation for one build target is not a hit for another" {
-	const src = "import { t } from \"./t.h\";";
-	const linux = headerInlineKey(src, "/tmp/mshc/t.ms", false, "linux-x86_64");
-	const windows = headerInlineKey(src, "/tmp/mshc/t.ms", false, "windows-x86_64");
+	const src = "extern int t(void);";
+	const linux = headerModuleKey(src, "/tmp/mshc/t.h", "linux-x86_64");
+	const windows = headerModuleKey(src, "/tmp/mshc/t.h", "windows-x86_64");
 	assert linux != windows;
-	storeHeaderInline(linux, [], "OUT-LINUX");
-	assert lookupHeaderInline(windows) == "";
+	storeHeaderModule(linux, [], "OUT-LINUX");
+	assert lookupHeaderModule(windows) == "";
 }
 
 test "header cache: MSC_NO_HEADER_CACHE disables both directions" {
-	const key = headerInlineKey("import { k } from \"./k.h\";", "/tmp/mshc/k.ms", false, "linux-x86_64");
-	storeHeaderInline(key, [], "OUT-6");
-	assert lookupHeaderInline(key) == "OUT-6";
+	const key = headerModuleKey("extern int k(void);", "/tmp/mshc/k.h", "linux-x86_64");
+	storeHeaderModule(key, [], "OUT-6");
+	assert lookupHeaderModule(key) == "OUT-6";
 	env.set("MSC_NO_HEADER_CACHE", "1");
 	try {
-		assert lookupHeaderInline(key) == "";
-		storeHeaderInline(key, [], "OUT-7");
+		assert lookupHeaderModule(key) == "";
+		storeHeaderModule(key, [], "OUT-7");
 	} finally {
 		env.delete("MSC_NO_HEADER_CACHE");
 	}
-	assert lookupHeaderInline(key) == "OUT-6";
+	assert lookupHeaderModule(key) == "OUT-6";
 }
 
 test "the C compiler identity moves with its path, size, mtime and version" {

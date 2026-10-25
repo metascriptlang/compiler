@@ -7,7 +7,6 @@ import {
 	SpreadExprData, MoveExprData, OutExprData, HiddenStdConvData, HiddenDerefData,
 	AwaitExprData, CallExprData,
 } from "../../ast/node";
-import { forEachChild } from "../../ast/visitor";
 import { booleanType } from "../../checker/types";
 import { TransformContext } from "../context";
 import {
@@ -22,7 +21,7 @@ import { truthinessTest } from "../coercion/stringTruthiness";
 import { shortCircuitLeftShare, shortCircuitRightRuns } from "../../checker/fit";
 import { shortCircuitShareArm, fitShortCircuitArm } from "./conditionalExprLower";
 import { foldedNullOperand, isNullExpr } from "./operatorLower";
-import { walkExpandBlocks, isFuncBoundary } from "../walker";
+import { walkExpandBlocks, isFuncBoundary, anyDeep, DEEP_DESCEND, DEEP_HIT, DEEP_SKIP } from "../walker";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 
 let _sp: Spiller = { ctx: null as unknown as TransformContext, has: needsSpill, lower: lowerAwaitExpr };
@@ -53,15 +52,15 @@ function isSpillPoint(node: Node): boolean {
 	return node.kind == NodeKind.AwaitExpr || dropsOperandEffects(node) || dropsNamespaceObject(node);
 }
 
+function spillVerdict(node: Node): int32 {
+	if (isSpillPoint(node)) return DEEP_HIT;
+	if (isRoutine(node)) return DEEP_SKIP;
+	return DEEP_DESCEND;
+}
+
 function needsSpill(node: Node | null): boolean {
 	if (node == null) return false;
-	if (isSpillPoint(node)) return true;
-	if (isRoutine(node)) return false;
-	let found = false;
-	forEachChild(node, (child: Node): void => {
-		if (!found && needsSpill(child)) found = true;
-	});
-	return found;
+	return anyDeep(node, spillVerdict);
 }
 
 function isInert(e: Node): boolean {

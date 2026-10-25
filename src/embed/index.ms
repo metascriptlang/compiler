@@ -1,14 +1,14 @@
 import { compileRaiser, runRaiser, setDiagnosticHook } from "../compiler/compile";
 import { setRecoverableBuild, BUILD_STOPPED } from "../compiler/io";
 import { CliOptions, newCliOptions } from "../compiler/options";
-import { defaultResolveSection } from "../compiler/buildConfig";
+import { ResolveSection, defaultResolveSection } from "../compiler/buildConfig";
 import { BuildSession, createBuildSession } from "../compiler/buildSession";
 import { ModuleError, ErrorSeverity } from "../module/graph";
 import { RaiserModule } from "../raiser/module";
 import { RaiserContext } from "../raiser/context";
 import { RaiserValue, RaiserValueKind } from "../raiser/value";
-import { RaiserHostFn } from "../raiser/marshal";
-import { registerHostFn } from "../raiser/hostRegistry";
+import { RaiserHostFn, RaiserHostValue, copyToHost, copyToVm } from "../raiser/marshal";
+import { registerHostFn, activeHostArrayHeap, activeHostObjectHeap } from "../raiser/hostRegistry";
 import { vmCallFunction, vmDumpStack } from "../raiser/vm";
 import { setHostRuntimeDir, resolveRuntimeDir } from "../utils/path";
 import { writeFile, ensureDir, removeAll, exists } from "std/fs";
@@ -30,6 +30,7 @@ export interface Evaluation {
 
 export interface Interpreter {
 	opts: CliOptions;
+	resolve: ResolveSection;
 	session: BuildSession;
 	run: RaiserContext | null;
 	output: string[];
@@ -43,14 +44,38 @@ export interface Routine {
 }
 
 export { RaiserValue, RaiserValueKind } from "../raiser/value";
-export { RaiserHostFn, boxInt, boxFloat, boxString, boxBool, boxVoid, unboxInt, unboxFloat, unboxString, unboxBool } from "../raiser/marshal";
+export {
+	RaiserHostFn,
+	RaiserHostValue,
+	boxInt,
+	boxFloat,
+	boxString,
+	boxBool,
+	boxVoid,
+	unboxInt,
+	unboxFloat,
+	unboxString,
+	unboxBool,
+	hostValue,
+	hostObject,
+	hostArray,
+	field,
+	length,
+	at,
+	text,
+} from "../raiser/marshal";
 
-export function createInterpreter(runtimeRoot: string): Result<Interpreter, string> {
+export function createInterpreter(runtimeRoot: string, searchPaths: string[] = []): Result<Interpreter, string> {
 	if (!exists(join(runtimeRoot, "std/core/system/index.ms"))) {
 		return Result.err(`no MetaScript std under ${runtimeRoot}: expected ${runtimeRoot}/std/core/system/index.ms`);
 	}
+	const resolve = defaultResolveSection();
+	for (const dir of searchPaths) {
+		if (!exists(dir)) return Result.err(`no search path ${dir}: the directory does not exist`);
+		resolve.searchPaths.push(dir);
+	}
 	setHostRuntimeDir(runtimeRoot);
-	return Result.ok({ opts: newCliOptions(), session: createBuildSession(true), run: null, output: [] });
+	return Result.ok({ opts: newCliOptions(), resolve, session: createBuildSession(true), run: null, output: [] });
 }
 
 function errorAt(file: string, message: string): Diagnostic {
@@ -66,7 +91,7 @@ export function evalModule(interp: Interpreter, path: string): Result<Evaluation
 	interp.run = null;
 	let compiled: RaiserModule | null = null;
 	try {
-		compiled = compileRaiser(path, interp.opts, defaultResolveSection(), interp.session, true);
+		compiled = compileRaiser(path, interp.opts, interp.resolve, interp.session, true);
 	} catch (e) {
 		if (e.message != BUILD_STOPPED) {
 			diagnostics.push(errorAt(path, `internal: ${e.message}`));
@@ -106,18 +131,34 @@ export function selectRoutine(interp: Interpreter, name: string): Result<Routine
 	return Result.ok(found);
 }
 
-export function callRoutine(interp: Interpreter, routine: Routine, args: RaiserValue[]): Result<RaiserValue, string> {
+export function callRoutine(interp: Interpreter, routine: Routine, args: RaiserHostValue[]): Result<RaiserHostValue, string> {
 	const run = interp.run;
 	if (run == null || run.mod != routine.mod) return Result.err(`'${routine.name}' was selected before the last evalModule; select it again`);
 	if (args.length != routine.arity) return Result.err(`'${routine.name}' takes ${routine.arity} argument(s), got ${args.length}`);
 	const vm = run.vm!;
-	const result = vmCallFunction(vm, routine.funcIdx, args);
+	const passed: RaiserValue[] = [];
+	for (const arg of args) passed.push(copyToVm(vm.arrayHeap, vm.objectHeap, arg));
+	const result = vmCallFunction(vm, routine.funcIdx, passed);
 	if (vm.error != "") return Result.err(`raiser runtime error in '${routine.name}': ${vm.error}\n${vmDumpStack(vm)}`);
-	return Result.ok(result);
+	return Result.ok(copyToHost(vm.arrayHeap, vm.objectHeap, result));
 }
 
 export function implementRoutine(nativeName: string, impl: RaiserHostFn): void {
 	registerHostFn(nativeName, impl);
+}
+
+export function unboxValue(v: RaiserValue): RaiserHostValue {
+	const arrays = activeHostArrayHeap();
+	const objects = activeHostObjectHeap();
+	if (arrays == null || objects == null) throw new Error("unboxValue reads an argument of a host routine, and no script has called one");
+	return copyToHost(arrays, objects, v);
+}
+
+export function boxValue(v: RaiserHostValue): RaiserValue {
+	const arrays = activeHostArrayHeap();
+	const objects = activeHostObjectHeap();
+	if (arrays == null || objects == null) throw new Error("boxValue builds the result of a host routine, and no script has called one");
+	return copyToVm(arrays, objects, v);
 }
 
 function scratchDir(): string {
@@ -126,8 +167,8 @@ function scratchDir(): string {
 	return dir;
 }
 
-function testInterpreter(): Interpreter {
-	const created = createInterpreter(resolveRuntimeDir());
+function testInterpreter(searchPaths: string[] = []): Interpreter {
+	const created = createInterpreter(resolveRuntimeDir(), searchPaths);
 	if (!created.ok) throw new Error(created.error);
 	return created.value;
 }
@@ -222,6 +263,54 @@ test "evalModule returns a runtime error and an exit code without leaving the ho
 	removeAll(dir);
 }
 
+function writePackageShape(dir: string, fontField: string): void {
+	ensureDir(`${dir}/pkgs/haro`);
+	ensureDir(`${dir}/cfg`);
+	ensureDir(`${dir}/run`);
+	writeFile(`${dir}/pkgs/haro/index.ms`, `export interface HaroConfig {\n\tfontFamily?: string[];\n\tfontSize?: number;\n}\n`);
+	writeFile(`${dir}/pkgs/theme.ms`, `export const accent = "teal";\n`);
+	writeFile(`${dir}/cfg/config.ms`, `import { HaroConfig } from "haro";\nexport const config: HaroConfig = { fontFamily: ["Menlo"], ${fontField}: 13 };\n`);
+	writeFile(`${dir}/run/main.ms`, `import { config } from "../cfg/config";\nimport { accent } from "theme";\nconsole.log(\`\${JSON.stringify(config)} \${accent}\`);\n`);
+}
+
+test "evalModule resolves a bare import in the entry and in a nested module through a search path the host names" {
+	const dir = scratchDir();
+	writePackageShape(dir, "fontSize");
+	const interp = testInterpreter([`${dir}/pkgs`]);
+	assert outputOf(interp, `${dir}/run/main.ms`) == `{"fontFamily":["Menlo"],"fontSize":13} teal\n`;
+	removeAll(dir);
+}
+
+test "a misspelt field of a package's interface comes back with its file, line and column" {
+	const dir = scratchDir();
+	writePackageShape(dir, "fontSiz");
+	const r = evalModule(testInterpreter([`${dir}/pkgs`]), `${dir}/run/main.ms`);
+	assert !r.ok;
+	if (!r.ok) {
+		assert r.error.length == 1;
+		assert r.error[0].file.endsWith("/cfg/config.ms");
+		assert r.error[0].line == 2;
+		assert r.error[0].column > 0;
+		assert r.error[0].message.includes("'fontSiz' does not exist in type 'HaroConfig'");
+	}
+	removeAll(dir);
+}
+
+test "a package no search path holds is a diagnostic, and a search path that does not exist is refused" {
+	const dir = scratchDir();
+	writePackageShape(dir, "fontSize");
+	const interp = testInterpreter();
+	const r = evalModule(interp, `${dir}/run/main.ms`);
+	assert !r.ok;
+	if (!r.ok) assert r.error[0].message.includes("Cannot resolve module");
+	writeFile(`${dir}/run/main.ms`, `console.log("still here");\n`);
+	assert outputOf(interp, `${dir}/run/main.ms`) == "still here\n";
+	const missing = createInterpreter(resolveRuntimeDir(), [`${dir}/nowhere`]);
+	assert !missing.ok;
+	if (!missing.ok) assert missing.error.includes("no search path");
+	removeAll(dir);
+}
+
 function evaluatedInterpreter(path: string): Interpreter {
 	const interp = testInterpreter();
 	const r = evalModule(interp, path);
@@ -235,10 +324,10 @@ function routineOf(interp: Interpreter, name: string): Routine {
 	return selected.value;
 }
 
-function intCall(interp: Interpreter, routine: Routine, args: RaiserValue[]): number {
+function intCall(interp: Interpreter, routine: Routine, args: RaiserHostValue[]): number {
 	const r = callRoutine(interp, routine, args);
 	if (!r.ok) throw new Error(r.error);
-	return unboxInt(r.value);
+	return unboxInt(r.value.root);
 }
 
 test "callRoutine calls an exported function again and again over the module's state" {
@@ -246,10 +335,10 @@ test "callRoutine calls an exported function again and again over the module's s
 	writeFile(`${dir}/main.ms`, `let total: int32 = 100;\nexport function add(n: int32): int32 { total += n; return total; }\n`);
 	const interp = evaluatedInterpreter(`${dir}/main.ms`);
 	const add = routineOf(interp, "add");
-	assert intCall(interp, add, [boxInt(2)]) == 102;
-	assert intCall(interp, add, [boxInt(3)]) == 105;
-	for (let i = 0; i < 1000; i += 1) intCall(interp, add, [boxInt(1)]);
-	assert intCall(interp, add, [boxInt(0)]) == 1105;
+	assert intCall(interp, add, [hostValue(boxInt(2))]) == 102;
+	assert intCall(interp, add, [hostValue(boxInt(3))]) == 105;
+	for (let i = 0; i < 1000; i += 1) intCall(interp, add, [hostValue(boxInt(1))]);
+	assert intCall(interp, add, [hostValue(boxInt(0))]) == 1105;
 	removeAll(dir);
 }
 
@@ -258,12 +347,12 @@ test "callRoutine passes floats and strings and returns them" {
 	writeFile(`${dir}/main.ms`, `export function step(x: number, dt: number): number { return x + 2.5 * dt; }\n`
 		+ `export function greet(who: string): string { return \`hi \${who}\`; }\n`);
 	const interp = evaluatedInterpreter(`${dir}/main.ms`);
-	const step = callRoutine(interp, routineOf(interp, "step"), [boxFloat(1.0), boxFloat(0.5)]);
+	const step = callRoutine(interp, routineOf(interp, "step"), [hostValue(boxFloat(1.0)), hostValue(boxFloat(0.5))]);
 	assert step.ok;
-	if (step.ok) assert unboxFloat(step.value) == 2.25;
-	const greet = callRoutine(interp, routineOf(interp, "greet"), [boxString("haro")]);
+	if (step.ok) assert unboxFloat(step.value.root) == 2.25;
+	const greet = callRoutine(interp, routineOf(interp, "greet"), [hostValue(boxString("haro"))]);
 	assert greet.ok;
-	if (greet.ok) assert unboxString(greet.value) == "hi haro";
+	if (greet.ok) assert greet.value.text() == "hi haro";
 	removeAll(dir);
 }
 
@@ -300,10 +389,10 @@ test "callRoutine refuses a wrong arity and a routine selected before a reload" 
 	if (!wrong.ok) assert wrong.error.includes("takes 1 argument(s), got 0");
 	writeFile(`${dir}/main.ms`, `export function twice(n: int32): int32 { return n * 3; }\n`);
 	assert evalModule(interp, `${dir}/main.ms`).ok;
-	const stale = callRoutine(interp, twice, [boxInt(5)]);
+	const stale = callRoutine(interp, twice, [hostValue(boxInt(5))]);
 	assert !stale.ok;
 	if (!stale.ok) assert stale.error.includes("select it again");
-	assert intCall(interp, routineOf(interp, "twice"), [boxInt(5)]) == 15;
+	assert intCall(interp, routineOf(interp, "twice"), [hostValue(boxInt(5))]) == 15;
 	removeAll(dir);
 }
 
@@ -312,10 +401,10 @@ test "callRoutine returns a runtime error of the routine and the host keeps call
 	writeFile(`${dir}/main.ms`, `const xs: int32[] = [1, 2];\nexport function at(i: int32): int32 { return xs[i]; }\n`);
 	const interp = evaluatedInterpreter(`${dir}/main.ms`);
 	const at = routineOf(interp, "at");
-	const bad = callRoutine(interp, at, [boxInt(7)]);
+	const bad = callRoutine(interp, at, [hostValue(boxInt(7))]);
 	assert !bad.ok;
 	if (!bad.ok) assert bad.error.startsWith("raiser runtime error in 'at'");
-	assert intCall(interp, at, [boxInt(1)]) == 2;
+	assert intCall(interp, at, [hostValue(boxInt(1))]) == 2;
 	removeAll(dir);
 }
 
@@ -328,10 +417,90 @@ test "a script calls a function the host implements" {
 	const dir = scratchDir();
 	writeFile(`${dir}/main.ms`, `extern function record(n: int32): void from "embedTest.record";\nrecord(1);\nexport function tick(n: int32): void { record(n * 10); }\n`);
 	const interp = evaluatedInterpreter(`${dir}/main.ms`);
-	const r = callRoutine(interp, routineOf(interp, "tick"), [boxInt(4)]);
+	const r = callRoutine(interp, routineOf(interp, "tick"), [hostValue(boxInt(4))]);
 	assert r.ok;
 	assert seen.length == 2;
 	assert seen[0] == 1;
 	assert seen[1] == 40;
+	removeAll(dir);
+}
+
+function routineValue(interp: Interpreter, name: string, args: RaiserHostValue[]): RaiserHostValue {
+	const r = callRoutine(interp, routineOf(interp, name), args);
+	if (!r.ok) throw new Error(r.error);
+	return r.value;
+}
+
+function keyEvent(code: string, mods: number): RaiserHostValue {
+	return hostObject(["code", "mods"], [hostValue(boxString(code)), hostValue(boxInt(mods))]);
+}
+
+const HARO_SCRIPT = `export interface Bind { keys: string; text: string; }\n`
+	+ `export interface HaroConfig { fontFamily: string[]; fontSize?: number; mode?: "alt" | "~alt"; binds: Bind[]; }\n`
+	+ `export const config: HaroConfig = { fontFamily: ["Operator Mono", "Menlo"], mode: "alt", `
+	+ `binds: [{ keys: "ctrl+a", text: "home" }, { keys: "ctrl+e", text: "end" }] };\n`
+	+ `export function current(): HaroConfig { return config; }\n`
+	+ `export function onKey(e: { code: string; mods: int32 }): { handled: boolean; send: string } {\n`
+	+ `\treturn { handled: e.mods == 2, send: \`\${e.code}:\${e.mods}\` };\n}\n`;
+
+test "callRoutine returns a struct whose array of structs, absent optional and literal-union field the host reads" {
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, HARO_SCRIPT);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const config = routineValue(interp, "current", []);
+	const fonts = config.field("fontFamily");
+	assert fonts.length() == 2;
+	assert fonts.at(1).text() == "Menlo";
+	assert config.field("fontSize").root.kind == RaiserValueKind.Nil;
+	assert config.field("mode").text() == "alt";
+	const binds = config.field("binds");
+	assert binds.length() == 2;
+	assert binds.at(1).field("keys").text() == "ctrl+e";
+	assert binds.at(1).field("text").text() == "end";
+	removeAll(dir);
+}
+
+test "callRoutine passes a struct the host built and the struct it returns outlives the next call" {
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, HARO_SCRIPT);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const key = keyEvent("KeyA", 2);
+	const first = routineValue(interp, "onKey", [key]);
+	assert unboxBool(first.field("handled").root);
+	assert first.field("send").text() == "KeyA:2";
+	const second = routineValue(interp, "onKey", [keyEvent("KeyB", 0)]);
+	assert !unboxBool(second.field("handled").root);
+	assert first.field("send").text() == "KeyA:2";
+	assert routineValue(interp, "onKey", [key]).field("send").text() == "KeyA:2";
+	const vm = interp.run!.vm!;
+	const objects = vm.objectHeap.objects.length;
+	const arrays = vm.arrayHeap.arrays.length;
+	for (let i = 0; i < 2000; i += 1) {
+		routineValue(interp, "onKey", [key]);
+		routineValue(interp, "current", []);
+	}
+	assert vm.objectHeap.objects.length == objects;
+	assert vm.arrayHeap.arrays.length == arrays;
+	removeAll(dir);
+}
+
+test "a host routine receives a nested struct with a nullable field and returns a struct" {
+	implementRoutine("embedTest.decorate", (args: RaiserValue[]): RaiserValue => {
+		const d = unboxValue(args[0]);
+		const color = d.field("style").field("color");
+		const shown = color.root.kind == RaiserValueKind.Nil ? "none" : color.text();
+		const echo = `${unboxInt(d.field("row").root)} ${unboxBool(d.field("style").field("bold").root)} ${shown}`;
+		return boxValue(hostObject(["accepted", "echo"], [hostValue(boxBool(true)), hostValue(boxString(echo))]));
+	});
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, `extern function decorate(d: { row: int32; style: { bold: boolean; color: string | null } }): `
+		+ `{ accepted: boolean; echo: string } from "embedTest.decorate";\n`
+		+ `export function paint(row: int32, color: string | null): string {\n`
+		+ `\tconst r = decorate({ row, style: { bold: row > 1, color } });\n\treturn \`\${r.accepted} \${r.echo}\`;\n}\n`);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const teal = routineValue(interp, "paint", [hostValue(boxInt(3)), hostValue(boxString("teal"))]);
+	assert teal.text() == "true 3 true teal";
+	const plain = routineValue(interp, "paint", [hostValue(boxInt(1)), hostValue(boxVoid())]);
+	assert plain.text() == "true 1 false none";
 	removeAll(dir);
 }

@@ -6,6 +6,7 @@ import { exists, ensureDir, remove } from "std/fs";
 import { join } from "std/fs/path";
 import { readLine, writeStderr } from "std/io";
 import { CliOptions } from "./options";
+import { metascriptHome } from "../utils/path";
 
 function eprintln(msg: string): void {
 	writeStderr(msg + "\n");
@@ -13,13 +14,6 @@ function eprintln(msg: string): void {
 
 const ZIG_VERSION = "0.16.0";
 const ZIG_BASE = "https://ziglang.org/download/0.16.0/";
-
-function metascriptHome(): string {
-	let h = env.get("HOME");
-	if (h == "") h = env.get("USERPROFILE");
-	if (h == "") return "";
-	return join(h, ".metascript");
-}
 
 function managedZigDir(): string {
 	const home = metascriptHome();

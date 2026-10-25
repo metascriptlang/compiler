@@ -1,11 +1,11 @@
 // Control Flow Statements - if, while, for, break, continue, return
-// Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, StringLiteralData, SwitchCaseData, SwitchStmtData, createNode, makeLoc } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, consumeSemicolon, stampEnd, takePendingComments } from "../context";
+import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, stampEnd, takePendingComments, takeTrailingDecls } from "../cursor";
 import { captureOptionalType, getLastTypeExpr, isIdentLike } from "../util";
-import { callBlockParser, callExprParser, callStmtParser } from "./callbacks";
+import { parseBlockStmt, parseStatement } from "./core";
+import { parseExpressionFromState } from "../expressions/core";
 import { parseArrayPattern, parseObjectPattern } from "./declaration";
 import { programOk, stmtKind, stmtAt } from "./validation";
 
@@ -17,11 +17,13 @@ type NodeResult = Result<Node, string>;
 
 function parseBodyOrStmt(state: ParserState): NodeResult {
 	if (current(state).kind == TokenKind.LBrace) {
-		return callBlockParser(state);
+		return parseBlockStmt(state);
 	}
 	const tok = current(state);
-	const stmt = try callStmtParser(state);
-	return Result.ok(createNode(NodeKind.BlockStmt, { statements: [stmt] }, tok));
+	const mark = state.trailingDecls.length;
+	const stmts = [try parseStatement(state)];
+	for (const t of takeTrailingDecls(state, mark)) stmts.push(t);
+	return Result.ok(createNode(NodeKind.BlockStmt, { statements: stmts }, tok));
 }
 
 // ===== If Statement =====
@@ -42,7 +44,7 @@ export function parseIfStmt(state: ParserState): NodeResult {
 	}
 
 	advance(state);
-	const condition = try callExprParser(state);
+	const condition = try parseExpressionFromState(state);
 	if (current(state).kind != TokenKind.RParen) {
 		return Result.err(`Expected ')' after if condition at line ${current(state).line}`);
 	}
@@ -88,7 +90,7 @@ export function parseWhileStmt(state: ParserState): NodeResult {
 	}
 
 	advance(state);
-	const condition = try callExprParser(state);
+	const condition = try parseExpressionFromState(state);
 	if (current(state).kind != TokenKind.RParen) {
 		return Result.err(`Expected ')' after while condition at line ${current(state).line}`);
 	}
@@ -131,7 +133,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 			// Now expect 'of' or 'in'
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Of) {
 				advance(state); // consume 'of'
-				const iterable = try callExprParser(state);
+				const iterable = try parseExpressionFromState(state);
 				if (current(state).kind != TokenKind.RParen) {
 					return Result.err(`Expected ')' after for-of iterable at line ${current(state).line}`);
 				}
@@ -148,7 +150,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 			}
 			if (!isAtEnd(state) && current(state).kind == TokenKind.In) {
 				advance(state); // consume 'in'
-				const obj = try callExprParser(state);
+				const obj = try parseExpressionFromState(state);
 				if (current(state).kind != TokenKind.RParen) {
 					return Result.err(`Expected ')' after for-in object at line ${current(state).line}`);
 				}
@@ -167,12 +169,12 @@ export function parseForStmt(state: ParserState): NodeResult {
 		const nameToken = current(state);
 		if (isIdentLike(nameToken)) {
 			// Peek ahead: is this "name of" (for-of), "name in" (for-in), or "name =" (C-style for)?
-			const afterName = state.position + 1;
-			if (afterName < state.tokens.length && state.tokens[afterName].kind == TokenKind.Of) {
+			const afterName = peek(state, 1).kind;
+			if (afterName == TokenKind.Of) {
 				// for-of loop
 				advance(state); // consume name
 				advance(state); // consume 'of'
-				const iterable = try callExprParser(state);
+				const iterable = try parseExpressionFromState(state);
 				if (current(state).kind != TokenKind.RParen) {
 					return Result.err(`Expected ')' after for-of iterable at line ${current(state).line}`);
 				}
@@ -188,11 +190,11 @@ export function parseForStmt(state: ParserState): NodeResult {
 					forOfLabel: "",
 				}, forToken));
 			}
-			if (afterName < state.tokens.length && state.tokens[afterName].kind == TokenKind.In) {
+			if (afterName == TokenKind.In) {
 				// for-in loop
 				advance(state); // consume name
 				advance(state); // consume 'in'
-				const obj = try callExprParser(state);
+				const obj = try parseExpressionFromState(state);
 				if (current(state).kind != TokenKind.RParen) {
 					return Result.err(`Expected ')' after for-in object at line ${current(state).line}`);
 				}
@@ -226,7 +228,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 		const initNode = createNode(NodeKind.VariableDecl, {
 			declName: varName.value,
 			declType,
-			initializer: try callExprParser(state),
+			initializer: try parseExpressionFromState(state),
 			declKind: match (bindingToken.kind) { TokenKind.Const => DeclKind.Const, TokenKind.Var => DeclKind.Var, _ => DeclKind.Let },
 			nameLocation: makeLoc(varName.line, varName.column),
 		}, bindingToken);
@@ -237,13 +239,13 @@ export function parseForStmt(state: ParserState): NodeResult {
 		}
 
 		advance(state);
-		const cond = try callExprParser(state);
+		const cond = try parseExpressionFromState(state);
 		if (current(state).kind != TokenKind.Semicolon) {
 			return Result.err(`Expected ';' after for condition at line ${current(state).line}`);
 		}
 
 		advance(state);
-		const update = try callExprParser(state);
+		const update = try parseExpressionFromState(state);
 		if (current(state).kind != TokenKind.RParen) {
 			return Result.err(`Expected ')' after for clauses at line ${current(state).line}`);
 		}
@@ -260,7 +262,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 
 	// C-style for with expression init: for (i = 0; ...)
 	const exprInitToken = current(state);
-	const exprInit = try callExprParser(state);
+	const exprInit = try parseExpressionFromState(state);
 	const exprInitNode = createNode(NodeKind.ExprStmt, { expr: exprInit }, exprInitToken);
 	stampEnd(state, exprInitNode);
 	if (current(state).kind != TokenKind.Semicolon) {
@@ -268,13 +270,13 @@ export function parseForStmt(state: ParserState): NodeResult {
 	}
 
 	advance(state);
-	const exprCond = try callExprParser(state);
+	const exprCond = try parseExpressionFromState(state);
 	if (current(state).kind != TokenKind.Semicolon) {
 		return Result.err(`Expected ';' after for condition at line ${current(state).line}`);
 	}
 
 	advance(state);
-	const exprUpdate = try callExprParser(state);
+	const exprUpdate = try parseExpressionFromState(state);
 	if (current(state).kind != TokenKind.RParen) {
 		return Result.err(`Expected ')' after for clauses at line ${current(state).line}`);
 	}
@@ -319,7 +321,7 @@ export function parseReturnStmt(state: ParserState): NodeResult {
 		}
 		return Result.ok(createNode(NodeKind.ReturnStmt, { argument: null as unknown as Node }, retToken));
 	}
-	const value = try callExprParser(state);
+	const value = try parseExpressionFromState(state);
 	consumeSemicolon(state);
 	return Result.ok(createNode(NodeKind.ReturnStmt, { argument: value }, retToken));
 }
@@ -330,7 +332,7 @@ export function parseReturnStmt(state: ParserState): NodeResult {
 export function parseDoWhileStmt(state: ParserState): NodeResult {
 	const doToken = current(state);
 	advance(state); // consume 'do'
-	const body = try callBlockParser(state);
+	const body = try parseBlockStmt(state);
 
 	if (isAtEnd(state) || current(state).kind != TokenKind.While) {
 		return Result.err(`Expected 'while' after 'do' body at line ${doToken.line}`);
@@ -342,7 +344,7 @@ export function parseDoWhileStmt(state: ParserState): NodeResult {
 	}
 
 	advance(state);
-	const condition = try callExprParser(state);
+	const condition = try parseExpressionFromState(state);
 	if (current(state).kind != TokenKind.RParen) {
 		return Result.err(`Expected ')' after do-while condition at line ${current(state).line}`);
 	}
@@ -370,7 +372,7 @@ export function parseSwitchStmt(state: ParserState): NodeResult {
 	}
 
 	advance(state);
-	const disc = try callExprParser(state);
+	const disc = try parseExpressionFromState(state);
 	if (current(state).kind != TokenKind.RParen) {
 		return Result.err(`Expected ')' after switch discriminant at line ${current(state).line}`);
 	}
@@ -431,7 +433,7 @@ function parseSwitchCase(state: ParserState): NodeResult {
 
 	advance(state); // consume 'case'
 	const tests: Node[] = [];
-	const firstTest = try callExprParser(state);
+	const firstTest = try parseExpressionFromState(state);
 	tests.push(firstTest);
 	if (current(state).kind == TokenKind.Colon) {
 		advance(state);
@@ -457,10 +459,10 @@ function parseCaseBody(state: ParserState): NodesResult {
 			advance(state);
 			continue;
 		}
-		// Use callBlockParser for block statements, callExprParser for expressions
-		// But we need the full statement parser here. Use the registered stmt parser.
-		const stmt = try callStmtParser(state);
+		const mark = state.trailingDecls.length;
+		const stmt = try parseStatement(state);
 		stmts.push(stmt);
+		for (const t of takeTrailingDecls(state, mark)) stmts.push(t);
 	}
 	return Result.ok(stmts);
 }
@@ -472,10 +474,10 @@ export function parseDeferStmt(state: ParserState): NodeResult {
 	const deferToken = current(state);
 	advance(state);
 	if (!isAtEnd(state) && current(state).kind == TokenKind.LBrace) {
-		const body = try callBlockParser(state);
+		const body = try parseBlockStmt(state);
 		return Result.ok(createNode(NodeKind.DeferStmt, { deferExpr: body }, deferToken));
 	}
-	const deferVal = try callExprParser(state);
+	const deferVal = try parseExpressionFromState(state);
 	consumeSemicolon(state);
 	return Result.ok(createNode(NodeKind.DeferStmt, { deferExpr: deferVal }, deferToken));
 }
@@ -514,7 +516,7 @@ export function parseTestDecl(state: ParserState): NodeResult {
 	const name = current(state).value;
 	advance(state); // consume string
 
-	const body = try callBlockParser(state);
+	const body = try parseBlockStmt(state);
 	return Result.ok(createNode(NodeKind.TestDecl, { testName: name, testBody: body }, testToken));
 }
 
@@ -530,13 +532,14 @@ export function parseAssertStmt(state: ParserState): NodeResult {
 
 	// Record token range to reconstruct source text
 	const startPos = state.position;
-	const assertExpr = try callExprParser(state);
+	const assertExpr = try parseExpressionFromState(state);
 	const endPos = state.position;
 
 	// Reconstruct source text from tokens
 	let source = "";
 	for (let i = startPos; i < endPos; i += 1) {
-		if (i > startPos) source = source + " ";
+		if (state.tokens[i].kind == TokenKind.Comment) continue;
+		if (source != "") source = source + " ";
 		source = source + state.tokens[i].value;
 	}
 
@@ -546,7 +549,7 @@ export function parseAssertStmt(state: ParserState): NodeResult {
 	let messageExpr: Node | null = null;
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Comma) {
 		advance(state); // consume ','
-		const msgNode = try callExprParser(state);
+		const msgNode = try parseExpressionFromState(state);
 		if (msgNode.kind == NodeKind.StringLiteral) {
 			message = (msgNode.data as StringLiteralData).value;
 		} else {
@@ -662,4 +665,22 @@ test "assert stmt no message" {
 	const pd = pr.value.data as ProgramData;
 	const d = pd.programStmts[0].data as AssertStmtData;
 	assert d.assertMessage == "";
+}
+
+test "a comment between a for binding and of leaves a for-of" {
+	assert stmtKind("for (const x /* c */ of xs) { }") == NodeKind.ForOfStmt;
+	assert stmtKind("for (const x // c\nof xs) { }") == NodeKind.ForOfStmt;
+}
+
+test "a comment between a for binding and in leaves a for-in" {
+	assert stmtKind("for (const k /* c */ in o) { }") == NodeKind.ForInStmt;
+	assert stmtKind("for (const k // c\nin o) { }") == NodeKind.ForInStmt;
+}
+
+test "assert source text leaves out the comments inside the asserted expression" {
+	const pr = parseSource("assert /* c */ a /* c */ > // c\nb;");
+	assert pr.ok;
+	const pd = pr.value.data as ProgramData;
+	const d = pd.programStmts[0].data as AssertStmtData;
+	assert d.assertSource == "a > b";
 }

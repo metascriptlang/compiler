@@ -27,9 +27,10 @@ import {
 	Type, TypeKind,
 } from "../../ast/node";
 import { TransformContext } from "../context";
+import { RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { walkExpandBlocksHooked } from "../walker";
 import { makeCall, makeExprStmt, makeNumber, makeNull, makeObjectLiteral, runtimeRef } from "../util";
-import { awaitedType, createPtr, voidType } from "../../checker/types";
+import { awaitedType, createPromise, createPtr, voidType } from "../../checker/types";
 import { getSpawnInfo, makeTempDecl, emitAwaitGroupWait, makeUnboxCall, VOID_PTR_TYPE } from "./awaitLower";
 import { injectCancelSafePoints } from "./cancelSafePoints";
 import { boxReturns, boxForType } from "./spawnLower";
@@ -46,7 +47,7 @@ function isAsyncFn(node: Node): boolean {
 		NodeKind.FunctionExpr => (node.data as FunctionExprData).funcExprFlags,
 		_ => "",
 	};
-	return flags == "async" || flags == "async_generator";
+	return routineFlagSet(flags).has(RoutineFlag.Async);
 }
 
 // ===== Multi-Spawn Detection =====
@@ -95,7 +96,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 	if (isAsync) {
 		doneFut = makeTempDecl(ctx, "doneFut",
 			makeCall(runtimeRef("msFutureCreate", loc), [], loc),
-			VOID_PTR_TYPE, loc);
+			createPromise(voidType()), loc);
 		stmts.push(doneFut.decl);
 		stmts.push(makeExprStmt(
 			makeCall(runtimeRef("msAwaitGroupSetDoneFut", loc), [ag.ident, doneFut.ident], loc), loc));

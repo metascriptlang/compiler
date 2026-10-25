@@ -6,7 +6,7 @@
 // top of the main lex loop; it returns true when it fully handled the iteration.
 
 import { LexerState, JsxMode, peek, peekAt, advanceChar, addToken } from "./state";
-import { TokenKind } from "./token";
+import { TokenKind, startsExprAfter } from "./token";
 import { isLetter, isDigit, isWhitespace, isNewline } from "./chars";
 import { scanString, scanTemplateContinuation } from "./scanner";
 
@@ -14,18 +14,7 @@ import { scanString, scanTemplateContinuation } from "./scanner";
 // `Eof` covers start-of-input. Comparison/closing-generic `Gt` deliberately excluded so
 // `foo<T>()` and `a < b` stay arithmetic.
 function isExprPositionToken(k: TokenKind): boolean {
-	return match (k) {
-		TokenKind.Eof | TokenKind.Assign
-		| TokenKind.PlusEq | TokenKind.MinusEq | TokenKind.StarEq | TokenKind.StarStarEq | TokenKind.SlashEq | TokenKind.PercentEq
-		| TokenKind.AmpEq | TokenKind.PipeEq | TokenKind.CaretEq | TokenKind.LtLtEq | TokenKind.GtGtEq | TokenKind.GtGtGtEq
-		| TokenKind.EqEq | TokenKind.EqEqEq | TokenKind.BangEq | TokenKind.BangEqEq
-		| TokenKind.AmpAmp | TokenKind.PipePipe | TokenKind.Question | TokenKind.QuestionQuestion
-		| TokenKind.Colon | TokenKind.Comma | TokenKind.Semicolon
-		| TokenKind.LParen | TokenKind.LBracket | TokenKind.LBrace
-		| TokenKind.Arrow | TokenKind.Return | TokenKind.Yield | TokenKind.Case
-		| TokenKind.TemplateHead | TokenKind.TemplateMiddle => true,
-		_ => false,
-	};
+	return startsExprAfter(k) || k == TokenKind.TemplateHead || k == TokenKind.TemplateMiddle;
 }
 
 function isJsxStart(s: LexerState): boolean {

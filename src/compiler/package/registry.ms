@@ -7,9 +7,11 @@
 // API reference: ~/metascript/landing/apps/api/src/routes/packages.ts
 
 import { HttpError, httpError, HttpErrorKind, invalidResponse } from "std/http/errors";
-import { parseJson, JsonValue, JsonKind } from "std/core/json";
+import { HttpResponse } from "std/http/types";
+import { createHeaders, setHeader } from "std/http/headers";
+import { parseJson, JsonValue, JsonKind, getDynamicField, asString } from "std/core/json";
+import { arrayField, depsOf } from "./json";
 
-// Default registry URL — override via METASCRIPT_REGISTRY env var.
 const DEFAULT_REGISTRY = "https://api.metascriptlang.org";
 
 // ===== Types =====
@@ -34,68 +36,13 @@ export interface RegistryPackage {
 	versions: RegistryVersion[];
 }
 
-// ===== JSON Helpers =====
-
-function getStr(obj: JsonValue, field: string): string {
-	if (obj == null || obj.kind != JsonKind.Object) return "";
-	let i = 0;
-	while (i < obj.keys.length) {
-		if (obj.keys[i] == field && i < obj.values.length) {
-			const v = obj.values[i];
-			if (v != null && v.kind == JsonKind.String) return v.strVal;
-		}
-		i = i + 1;
-	}
-	return "";
-}
-
-function getObj(obj: JsonValue, field: string): JsonValue {
-	if (obj == null || obj.kind != JsonKind.Object) return null as unknown as JsonValue;
-	let i = 0;
-	while (i < obj.keys.length) {
-		if (obj.keys[i] == field && i < obj.values.length) return obj.values[i];
-		i = i + 1;
-	}
-	return null as unknown as JsonValue;
-}
-
-function getArray(obj: JsonValue, field: string): JsonValue[] {
-	const empty: JsonValue[] = [];
-	const arr = getObj(obj, field);
-	if (arr == null || arr.kind != JsonKind.Array) return empty;
-	return arr.items;
-}
-
-// Flatten a JSON object into parallel key/value arrays of strings.
-function parseDeps(depsObj: JsonValue): { keys: string[], values: string[] } {
-	const keys: string[] = [];
-	const values: string[] = [];
-	if (depsObj == null || depsObj.kind != JsonKind.Object) return { keys: keys, values: values };
-	let i = 0;
-	while (i < depsObj.keys.length) {
-		keys.push(depsObj.keys[i]);
-		if (i < depsObj.values.length) {
-			const el = depsObj.values[i];
-			if (el != null && el.kind == JsonKind.String) {
-				values.push(el.strVal);
-			} else {
-				values.push("");
-			}
-		} else {
-			values.push("");
-		}
-		i = i + 1;
-	}
-	return { keys: keys, values: values };
-}
-
 function parseVersionRecord(v: JsonValue): RegistryVersion {
-	const deps = parseDeps(getObj(v, "dependencies"));
+	const deps = depsOf(v.getDynamicField("dependencies"));
 	return {
-		version: getStr(v, "version"),
-		integrity: getStr(v, "integrity"),
-		archiveUrl: getStr(v, "archiveUrl"),
-		publishedAt: getStr(v, "publishedAt"),
+		version: v.getDynamicField("version").asString(),
+		integrity: v.getDynamicField("integrity").asString(),
+		archiveUrl: v.getDynamicField("archiveUrl").asString(),
+		publishedAt: v.getDynamicField("publishedAt").asString(),
 		depKeys: deps.keys,
 		depValues: deps.values,
 	};
@@ -103,9 +50,32 @@ function parseVersionRecord(v: JsonValue): RegistryVersion {
 
 // ===== Public API =====
 
-// Return the registry base URL (from METASCRIPT_REGISTRY env or default).
 export function registryBaseUrl(): string {
 	return DEFAULT_REGISTRY;
+}
+
+// One call to the registry API. `token` "" sends no authorization header, `contentType` ""
+// sends no content-type. A registry call never follows a redirect, so the bearer token
+// cannot be forwarded to another host.
+export function registryRequest(method: string, path: string, body: string, token: string, contentType: string = "", timeout: int32 = 30000): Result<HttpResponse, HttpError> {
+	const headers = createHeaders();
+	if (token != "") setHeader(headers, "authorization", "Bearer " + token);
+	if (contentType != "") setHeader(headers, "content-type", contentType);
+	return fetch(registryBaseUrl() + path, {
+		method: method,
+		body: body,
+		headers: headers,
+		timeout: timeout,
+		maxRedirects: 0,
+	});
+}
+
+// The message of a non-2xx response: its JSON "error" field, else the whole body.
+export function registryErrorText(resp: HttpResponse): string {
+	const parsed = parseJson(resp.body);
+	if (!parsed.ok) return resp.body;
+	const message = parsed.value.getDynamicField("error").asString();
+	return message != "" ? message : resp.body;
 }
 
 // Build the API path for a package name, handling scoped names.
@@ -150,34 +120,96 @@ export function fetchPackageInfo(name: string): Result<RegistryPackage, HttpErro
 	}
 	const obj = parsed.value;
 
-	const versionItems = getArray(obj, "versions");
+	const versionItems = arrayField(obj, "versions");
 	const versions: RegistryVersion[] = [];
 	for (const item of versionItems) {
 		versions.push(parseVersionRecord(item));
 	}
 
 	return Result.ok({
-		name: getStr(obj, "name"),
-		description: getStr(obj, "description"),
-		license: getStr(obj, "license"),
-		repository: getStr(obj, "repository"),
-		homepage: getStr(obj, "homepage"),
+		name: obj.getDynamicField("name").asString(),
+		description: obj.getDynamicField("description").asString(),
+		license: obj.getDynamicField("license").asString(),
+		repository: obj.getDynamicField("repository").asString(),
+		homepage: obj.getDynamicField("homepage").asString(),
 		versions: versions,
 	});
 }
 
 // Find a specific version in a RegistryPackage. Returns null if not found.
-export function findVersion(pkg: RegistryPackage, version: string): RegistryVersion {
-	let i = 0;
-	while (i < pkg.versions.length) {
-		if (pkg.versions[i].version == version) return pkg.versions[i];
-		i = i + 1;
+export function findVersion(pkg: RegistryPackage, version: string): RegistryVersion | null {
+	for (const v of pkg.versions) {
+		if (v.version == version) return v;
 	}
-	return null as unknown as RegistryVersion;
+	return null;
 }
 
 // Get the latest version (first in the versions array — server orders by publishedAt DESC).
-export function latestVersion(pkg: RegistryPackage): RegistryVersion {
-	if (pkg.versions.length == 0) return null as unknown as RegistryVersion;
+export function latestVersion(pkg: RegistryPackage): RegistryVersion | null {
+	if (pkg.versions.length == 0) return null;
 	return pkg.versions[0];
+}
+
+function testResponse(body: string): HttpResponse {
+	return { status: 400, statusText: "Bad Request", headers: createHeaders(), body: body };
+}
+
+function testPackage(versions: string[]): RegistryPackage {
+	const records: RegistryVersion[] = [];
+	for (const v of versions) {
+		records.push({
+			version: v,
+			integrity: "",
+			archiveUrl: "",
+			publishedAt: "",
+			depKeys: [],
+			depValues: [],
+		});
+	}
+	return {
+		name: "demo",
+		description: "",
+		license: "",
+		repository: "",
+		homepage: "",
+		versions: records,
+	};
+}
+
+test "findVersion returns the matching record or null" {
+	const pkg = testPackage(["2.0.0", "1.0.0"]);
+	const hit = findVersion(pkg, "1.0.0");
+	assert hit != null;
+	if (hit != null) assert hit.version == "1.0.0";
+	assert findVersion(pkg, "3.0.0") == null;
+}
+
+test "latestVersion is the first record, or null for a package with none" {
+	const latest = latestVersion(testPackage(["2.0.0", "1.0.0"]));
+	assert latest != null;
+	if (latest != null) assert latest.version == "2.0.0";
+	assert latestVersion(testPackage([])) == null;
+}
+
+test "a version record with mistyped fields reads as empty" {
+	const parsed = parseJson('{ "version": 2, "integrity": null, "archiveUrl": "u", "publishedAt": 1.5,' +
+		' "dependencies": { "a": "1.0.0", "b": 3 } }');
+	assert parsed.ok;
+	if (parsed.ok) {
+		const rec = parseVersionRecord(parsed.value);
+		assert rec.version == "" && rec.integrity == "" && rec.publishedAt == "";
+		assert rec.archiveUrl == "u";
+		assert rec.depKeys.length == 2 && rec.depValues[0] == "1.0.0" && rec.depValues[1] == "";
+	}
+	const bare = parseJson('{ "dependencies": [1] }');
+	assert bare.ok;
+	if (bare.ok) assert parseVersionRecord(bare.value).depKeys.length == 0;
+}
+
+test "registryErrorText reads the error field, else the body" {
+	assert registryErrorText(testResponse('{"error":"name taken"}')) == "name taken";
+	assert registryErrorText(testResponse('{"error":"say \\"no\\""}')) == 'say "no"';
+	assert registryErrorText(testResponse('{"message":"x"}')) == '{"message":"x"}';
+	assert registryErrorText(testResponse("Bad Gateway")) == "Bad Gateway";
+	assert registryErrorText(testResponse("")) == "";
 }

@@ -1,8 +1,18 @@
 // LSP Lifecycle Handlers + Dispatch Router + Tests
 // handleInitialize, handleDidOpen, handleDidChange, handleDidClose, lspDispatch
 
-import { TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbForgetAllTypeChecks, getFileId, invalidateFile } from "../../transam/index";
-import { requestCancel } from "../../transam/cancel";
+import {
+	TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbCheckIsCurrent,
+	dbForgetAllTypeChecks, getFileId, getFilePath, invalidateFile, recordModuleImport,
+	cacheGet, createQueryKey, TaQueryKind, getTransitiveDependents,
+} from "../../transam/index";
+import { lookupLocal } from "../../../checker/symbol";
+import { lookupModuleCtx } from "../../../checker/instantiate";
+import { typeDisplayName } from "../../../checker/types";
+import { requestCancel, resetCancel } from "../../transam/cancel";
+import { parseJson } from "std/serialize/json/parser";
+import { JsonKind, JsonValue } from "std/serialize/json/types";
+import { getDynamicField, asString, asInt32 } from "std/serialize/json/accessors";
 import { writeStderr } from "std/io";
 import { readFile, writeFile, mkdir, remove } from "std/fs";
 import { env } from "std/process";
@@ -10,17 +20,18 @@ import { normalize } from "std/fs/path";
 import {
 	lspJsonString, lspGetField, lspGetNumberField, lspGetObjectField,
 	lspResponse, lspNotification, lspFormatMessage, lspUriToPath,
-	lspPathToUri, lspGetArrayItems, lspGetBoolField, lspRequest,
+	lspPathToUri, lspGetArrayItems, lspGetBoolField, lspRequest, lspParseContentLength,
 } from "../protocol";
 import { lspFmtPublishDiagnostics } from "../format";
+import { lineOffset } from "../../fmt/edit";
 import {
-	CompletionCache, createCompletionCache, markFileChanged, drainChangedFiles,
+	CompletionCache, ChangedFile, createCompletionCache, markFileChanged, drainChangedFiles,
 	markDocumentOpen, markDocumentClosed, isDocumentOpen, openDocuments,
-	markDependentsStale, drainStaleDependents, lspReloadFromDisk, dbGetSource,
+	markDependentsStale, drainStaleDependents, lspReloadFromDisk, dbGetSource, lspDocumentUri,
 } from "./shared";
 import {
 	buildDiagnosticsJson, buildTransitiveDiagnosticsWire, recordImportsForFile,
-	resetFormatOptions, resetLspTargetCache, forgetPublishedDiagnostics,
+	resetFormatOptions, resetLspTargetCache, forgetPublishedDiagnostics, recordPublishedDiagnostics,
 } from "./diagnostics";
 import { prebuildCompletionCache, handleCompletion, handleCompletionResolve } from "./completion";
 import { handleDefinition } from "./definition";
@@ -39,32 +50,72 @@ import { handleCodeAction, handleFormatting, handleRangeFormatting } from "./for
 
 // ===== Deferred Diagnostics (post-drain) =====
 
+export function checkDependentsUnlessStopped(db: TransAmDb, path: string): boolean {
+	const fileId = getFileId(db.fileInput, path);
+	if (fileId < 0) return true;
+	for (const dep of getTransitiveDependents(db.moduleDeps, fileId)) {
+		const depPath = getFilePath(db.fileInput, dep);
+		if (depPath == "") continue;
+		dbTypeCheck(db, depPath);
+		if (db.cancelCtx.stoppedForInput) return false;
+	}
+	return true;
+}
+
 export function publishPendingDiagnostics(db: TransAmDb): string {
 	const changed = drainChangedFiles();
+	const stale = drainStaleDependents();
 	let result = "";
-	for (const entry of changed) {
-		const path = entry[0];
-		const uri = entry[1];
+	for (let i = 0; i < changed.length; i++) {
+		const path = changed[i].path;
+		const uri = changed[i].uri;
 		try {
+			const t0 = performance.now();
+			dbTypeCheck(db, path);
+			const t1 = performance.now();
+			if (db.cancelCtx.stoppedForInput) {
+				requeueDiagnostics(changed, i, stale, 0);
+				return result;
+			}
 			prebuildCompletionCache(db, path, uri);
-			const diagParams = buildDiagnosticsJson(uri, db, path);
+			const t2 = performance.now();
+			const diagParams = recordPublishedDiagnostics(path, buildDiagnosticsJson(uri, db, path));
 			result = result + lspFormatMessage(lspNotification("textDocument/publishDiagnostics", diagParams));
+			const t3 = performance.now();
+			if (!checkDependentsUnlessStopped(db, path)) {
+				markDependentsStale(path);
+				requeueDiagnostics(changed, i + 1, stale, 0);
+				return result;
+			}
 			result = result + buildTransitiveDiagnosticsWire(db, path);
+			const t4 = performance.now();
+			writeStderr(`[LSP-CHANGE] ${path} check=${t1 - t0}ms cache=${t2 - t1}ms`
+				+ ` diag=${t3 - t2}ms dependents=${t4 - t3}ms total=${t4 - t0}ms\n`);
 		} catch (e) {
 			const fileId = getFileId(db.fileInput, path);
 			if (fileId >= 0) invalidateFile(db.cache, db.moduleDeps, fileId);
 			writeStderr("[LSP] type check failed for " + path + ": " + e + "\n");
-			result = result + lspFormatMessage(lspNotification("textDocument/publishDiagnostics", lspFmtPublishDiagnostics(uri, "[]")));
+			const emptyParams = recordPublishedDiagnostics(path, lspFmtPublishDiagnostics(uri, "[]"));
+			result = result + lspFormatMessage(lspNotification("textDocument/publishDiagnostics", emptyParams));
 		}
 	}
-	for (const path of drainStaleDependents()) {
+	for (let i = 0; i < stale.length; i++) {
 		try {
-			result = result + buildTransitiveDiagnosticsWire(db, path);
+			if (!checkDependentsUnlessStopped(db, stale[i])) {
+				requeueDiagnostics(changed, changed.length, stale, i);
+				return result;
+			}
+			result = result + buildTransitiveDiagnosticsWire(db, stale[i]);
 		} catch (e) {
-			writeStderr("[LSP] dependents check failed for " + path + ": " + e + "\n");
+			writeStderr("[LSP] dependents check failed for " + stale[i] + ": " + e + "\n");
 		}
 	}
 	return result;
+}
+
+function requeueDiagnostics(changed: ChangedFile[], fromChanged: int32, stale: string[], fromStale: int32): void {
+	for (let i = fromChanged; i < changed.length; i++) markFileChanged(changed[i].path, changed[i].uri);
+	for (let i = fromStale; i < stale.length; i++) markDependentsStale(stale[i]);
 }
 
 // ===== Initialize =====
@@ -106,9 +157,8 @@ export function handleShutdown(id: string): string {
 
 export function handleDidOpen(params: string, db: TransAmDb): string {
 	const t0 = performance.now();
-	const textDoc = lspGetObjectField(params, "textDocument");
-	const uri = lspGetField(textDoc, "uri");
-	const text = lspGetField(textDoc, "text");
+	const uri = lspDocumentUri(params);
+	const text = lspGetField(lspGetObjectField(params, "textDocument"), "text");
 	const path = lspUriToPath(uri);
 	markDocumentOpen(path);
 
@@ -119,10 +169,14 @@ export function handleDidOpen(params: string, db: TransAmDb): string {
 	recordImportsForFile(db, path, program);
 	const t3 = performance.now();
 	dbTypeCheck(db, path);
+	if (db.cancelCtx.stoppedForInput) {
+		markFileChanged(path, uri);
+		return "";
+	}
 	const t4 = performance.now();
 	prebuildCompletionCache(db, path, uri);
 	const t5 = performance.now();
-	const diagParams = buildDiagnosticsJson(uri, db, path);
+	const diagParams = recordPublishedDiagnostics(path, buildDiagnosticsJson(uri, db, path));
 	const t6 = performance.now();
 	writeStderr(`[LSP-OPEN] ${path} parse=${t2 - t1}ms imports=${t3 - t2}ms check=${t4 - t3}ms cache=${t5 - t4}ms diag=${t6 - t5}ms total=${t6 - t0}ms\n`);
 	return lspNotification("textDocument/publishDiagnostics", diagParams);
@@ -131,8 +185,7 @@ export function handleDidOpen(params: string, db: TransAmDb): string {
 // ===== Did Change =====
 
 export function handleDidChange(params: string, db: TransAmDb): string {
-	const textDoc = lspGetObjectField(params, "textDocument");
-	const uri = lspGetField(textDoc, "uri");
+	const uri = lspDocumentUri(params);
 	// Two-step extraction: scope search to contentChanges array (avoids matching "text" elsewhere)
 	const contentChanges = lspGetObjectField(params, "contentChanges");
 	const changes = lspGetField(contentChanges, "text");
@@ -149,8 +202,7 @@ export function handleDidChange(params: string, db: TransAmDb): string {
 // ===== Did Close =====
 
 export function handleDidClose(params: string, db: TransAmDb): string {
-	const textDoc = lspGetObjectField(params, "textDocument");
-	const uri = lspGetField(textDoc, "uri");
+	const uri = lspDocumentUri(params);
 	const path = lspUriToPath(uri);
 	markDocumentClosed(path);
 	forgetPublishedDiagnostics(path);
@@ -224,8 +276,7 @@ export function watchedFilesRegistration(): string {
 // ===== Did Save =====
 
 export function handleDidSave(params: string, db: TransAmDb): string {
-	const textDoc = lspGetObjectField(params, "textDocument");
-	const uri = lspGetField(textDoc, "uri");
+	const uri = lspDocumentUri(params);
 	const path = lspUriToPath(uri);
 	// Reload format config when build.ms or msc.json is saved
 	if (path.endsWith("/build.ms") || path.endsWith("/msc.json")) {
@@ -972,53 +1023,488 @@ test "didChange publishes diagnostics post-drain" {
 	assert diag.indexOf(uri) >= 0;
 }
 
+function testDiagnosticItems(json: string, uri: string): JsonValue[] {
+	const parsed = parseJson(json);
+	if (!parsed.ok) throw new Error(parsed.error);
+	const message = parsed.value;
+	if (message.getDynamicField("jsonrpc").asString() != "2.0"
+		|| message.getDynamicField("method").asString() != "textDocument/publishDiagnostics") {
+		throw new Error("Expected publishDiagnostics: " + json);
+	}
+	const params = message.getDynamicField("params");
+	if (params.getDynamicField("uri").asString() != uri) throw new Error("Wrong diagnostics URI: " + json);
+	const diagnostics = params.getDynamicField("diagnostics");
+	if (diagnostics.kind != JsonKind.Array) throw new Error("Expected diagnostics array: " + json);
+	return diagnostics.items;
+}
+
+function testPublishedItems(wire: string, uri: string): JsonValue[] {
+	let remaining = wire;
+	let found = false;
+	let items: JsonValue[] = [];
+	while (remaining.byteLength > 0) {
+		const headerEnd = remaining.indexOf("\r\n\r\n");
+		if (headerEnd < 0) throw new Error("Missing diagnostics frame header");
+		const size = lspParseContentLength(remaining.byteSlice(0, headerEnd));
+		const bodyStart = headerEnd + 4;
+		if (size < 0 || bodyStart + size > remaining.byteLength) throw new Error("Invalid diagnostics frame length");
+		const json = remaining.byteSlice(bodyStart, bodyStart + size);
+		if (lspGetField(json, "uri") == uri) {
+			if (found) throw new Error("Duplicate diagnostics notification: " + uri);
+			items = testDiagnosticItems(json, uri);
+			found = true;
+		}
+		remaining = remaining.byteSlice(bodyStart + size, remaining.byteLength);
+	}
+	if (!found) throw new Error("Missing diagnostics notification: " + uri);
+	return items;
+}
+
 test "didChange with error then fix clears diagnostics" {
-	const uri = "file:///test.ms";
+	const uri = "file:///lsp-clear.ms";
 	const db = createTransAmDb(100);
-	handleDidOpen(didOpenParams(uri, "const x: number = \"wrong\";"), db);
-	// Edit to fix the error
-	handleDidChange(didChangeParams(uri, "const x: number = 42;"), db);
-	const diag = publishPendingDiagnostics(db);
-	assert diag.indexOf("diagnostics") >= 0;
+	const before = testDiagnosticItems(handleDidOpen(didOpenParams(uri, "export const value: int32 = \"wrong\";"), db), uri);
+	assert before.length == 1;
+	assert before[0].getDynamicField("message").asString() == "Type 'string' is not assignable to type 'int32'";
+	assert before[0].getDynamicField("severity").asInt32(-1) == 1;
+	assert before[0].getDynamicField("source").asString() == "metascript";
+	handleDidChange(didChangeParams(uri, "export const value: int32 = 42;"), db);
+	assert testPublishedItems(publishPendingDiagnostics(db), uri).length == 0;
+	assert publishPendingDiagnostics(db) == "";
+}
+
+test "didChange publishes a new error after clearing the previous one" {
+	const uri = "file:///lsp-clear-again.ms";
+	const db = createTransAmDb(100);
+	assert testDiagnosticItems(handleDidOpen(didOpenParams(uri, "export const value: int32 = true;"), db), uri).length == 1;
+	handleDidChange(didChangeParams(uri, "export const value: int32 = 42;"), db);
+	assert testPublishedItems(publishPendingDiagnostics(db), uri).length == 0;
+	handleDidChange(didChangeParams(uri, "export const value: int32 = \"wrong\";"), db);
+	const after = testPublishedItems(publishPendingDiagnostics(db), uri);
+	assert after.length == 1;
+	assert after[0].getDynamicField("message").asString() == "Type 'string' is not assignable to type 'int32'";
 }
 
 test "multi-file: edit B updates A diagnostics" {
 	const db = createTransAmDb(100);
-	dbSetFileText(db, "/src/b.ms", "export function foo(): number { return 1; }");
-	dbParse(db, "/src/b.ms");
-	dbSetFileText(db, "/src/a.ms", "import { foo } from \"./b\";\nconst x = foo();");
-	const progA = dbParse(db, "/src/a.ms");
-	recordImportsForFile(db, "/src/a.ms", progA);
-	const ctx = dbTypeCheck(db, "/src/a.ms");
-	assert ctx != null;
+	const depUri = "file:///lsp-import/b.ms";
+	const uri = "file:///lsp-import/a.ms";
+	const good = "export function foo(): int32 { return 1; }";
+	handleDidOpen(didOpenParams(depUri, good), db);
+	assert testDiagnosticItems(handleDidOpen(didOpenParams(uri, "import { foo } from \"./b\";\nexport const x: int32 = foo();"), db), uri).length == 0;
+	handleDidChange(didChangeParams(depUri, "export function foo(): string { return \"wrong\"; }"), db);
+	const after = testPublishedItems(publishPendingDiagnostics(db), uri);
+	assert after.length == 1;
+	assert after[0].getDynamicField("message").asString() == "Type 'string' is not assignable to type 'int32'";
+	assert after[0].getDynamicField("severity").asInt32(-1) == 1;
+	handleDidChange(didChangeParams(depUri, good), db);
+	assert testPublishedItems(publishPendingDiagnostics(db), uri).length == 0;
 }
 
-test "cancelled type check returns without crash" {
+test "cancelled type check is not cached and retry checks the same text" {
 	const db = createTransAmDb(100);
-	dbSetFileText(db, "/test.ms", "const x = 1;");
+	const path = "/lsp-cancel.ms";
+	const uri = "file:///lsp-cancel.ms";
+	dbSetFileText(db, path, "export const value: int32 = \"wrong\";");
 	requestCancel(db.cancelCtx);
-	const ctx = dbTypeCheck(db, "/test.ms");
-	// Should not crash — ctx may be null or partial
-	assert true;
+	dbTypeCheck(db, path);
+	assert !dbCheckIsCurrent(db, path);
+	assert db.depStack.frames.length == 0;
+	assert !db.checkInProgress.has(path);
+	resetCancel(db.cancelCtx);
+	const diagnostics = testDiagnosticItems(lspNotification("textDocument/publishDiagnostics", buildDiagnosticsJson(uri, db, path)), uri);
+	assert diagnostics.length == 1;
+	assert diagnostics[0].getDynamicField("message").asString() == "Type 'string' is not assignable to type 'int32'";
+	assert dbCheckIsCurrent(db, path);
 }
 
-test "first type check on a fresh db stays under 1500ms" {
-	const db = testDb("file:///test.ms", "function foo(x: number): number { return x + 1; }\nconst y = foo(42);");
-	const t0 = performance.now();
-	dbTypeCheck(db, lspUriToPath("file:///test.ms"));
-	const elapsed = performance.now() - t0;
-	assert elapsed < 1500;
+function stopAtProbe(db: TransAmDb, probe: int32): int32[] {
+	const probes: int32[] = [0];
+	db.cancelCtx.inputPending = () => {
+		probes[0] += 1;
+		return probes[0] == probe;
+	};
+	return probes;
 }
 
-test "re-checking an edited file stays under 50ms" {
-	const path = lspUriToPath("file:///test.ms");
-	const db = testDb("file:///test.ms", "function foo(x: number): number { return x + 1; }\nconst y = foo(42);");
+const STOP_SOURCE = "const a = 1;\nconst b = a;\nexport const value: int32 = \"wrong\";";
+const STOP_HOVER = "{\"textDocument\":{\"uri\":\"file:///lsp-stop.ms\"},\"position\":{\"line\":2,\"character\":14}}";
+
+test "a check stopped for input at a top-level statement is not cached and the re-run matches an uninterrupted check" {
+	const uri = "file:///lsp-stop.ms";
+	const path = "/lsp-stop.ms";
+	const fresh = createTransAmDb(100);
+	dbSetFileText(fresh, path, STOP_SOURCE);
+	const wanted = buildDiagnosticsJson(uri, fresh, path);
+	const wantedHover = handleHover("1", STOP_HOVER, fresh);
+	const db = createTransAmDb(100);
+	dbSetFileText(db, path, STOP_SOURCE);
+	const probes = stopAtProbe(db, 3);
 	dbTypeCheck(db, path);
-	dbSetFileText(db, path, "function foo(x: number): number { return x + 2; }\nconst y = foo(42);");
-	const t0 = performance.now();
+	assert probes[0] == 3;
+	assert db.cancelCtx.stoppedForInput;
+	assert !dbCheckIsCurrent(db, path);
+	assert db.depStack.frames.length == 0;
+	assert !db.checkInProgress.has(path);
+	resetCancel(db.cancelCtx);
+	db.cancelCtx.inputPending = null;
+	assert buildDiagnosticsJson(uri, db, path) == wanted;
+	assert handleHover("1", STOP_HOVER, db) == wantedHover;
+	assert dbCheckIsCurrent(db, path);
+}
+
+test "a check stopped for input leaves the module context of the last finished check registered" {
+	const path = "/lsp-stop-ctx.ms";
+	const db = createTransAmDb(100);
+	dbSetFileText(db, path, STOP_SOURCE);
 	dbTypeCheck(db, path);
-	const elapsed = performance.now() - t0;
-	assert elapsed < 50;
+	const finished = lookupModuleCtx(path);
+	assert finished != null;
+	dbSetFileText(db, path, STOP_SOURCE + "\nexport const more = 1;");
+	stopAtProbe(db, 2);
+	dbTypeCheck(db, path);
+	assert db.cancelCtx.stoppedForInput;
+	assert lookupModuleCtx(path) == finished;
+}
+
+test "a check stopped for input registers no module context for a module never checked before" {
+	const path = "/lsp-stop-first.ms";
+	const db = createTransAmDb(100);
+	dbSetFileText(db, path, STOP_SOURCE);
+	stopAtProbe(db, 2);
+	dbTypeCheck(db, path);
+	assert db.cancelCtx.stoppedForInput;
+	assert lookupModuleCtx(path) == null;
+}
+
+test "diagnostics stopped for input stay pending and publish the same once input is read" {
+	const uri = "file:///lsp-stop-pending.ms";
+	const db = createTransAmDb(100);
+	handleDidOpen(didOpenParams(uri, "export const value: int32 = 1;"), db);
+	handleDidChange(didChangeParams(uri, STOP_SOURCE), db);
+	stopAtProbe(db, 2);
+	assert publishPendingDiagnostics(db) == "";
+	assert db.cancelCtx.stoppedForInput;
+	resetCancel(db.cancelCtx);
+	db.cancelCtx.inputPending = null;
+	const items = testPublishedItems(publishPendingDiagnostics(db), uri);
+	assert items.length == 1;
+	assert items[0].getDynamicField("message").asString() == "Type 'string' is not assignable to type 'int32'";
+	assert publishPendingDiagnostics(db) == "";
+}
+
+test "position-only edits preserve UTF-16 diagnostic spans through undo" {
+	const db = createTransAmDb(100);
+	const uri = "file:///lsp-position.ms";
+	const source = "export const value: int32 = \"wrong\";";
+	assert testDiagnosticItems(handleDidOpen(didOpenParams(uri, source), db), uri).length == 1;
+	const prefixes = [
+		"\n", "\r\n\r\n", "\n// moved\n", "", "/*a*/ ", "/*é*/ ",
+		"/*😀*/ ", "\n/*é*/ ", "\r\n\r\n/*😀*/ ", "",
+	];
+	const lines = [1, 2, 2, 0, 0, 0, 0, 1, 2, 0];
+	const characters = [28, 28, 28, 28, 34, 34, 35, 34, 35, 28];
+	for (let i = 0; i < prefixes.length; i += 1) {
+		const text = prefixes[i] + source;
+		handleDidChange(didChangeParams(uri, text), db);
+		const warm = testPublishedItems(publishPendingDiagnostics(db), uri);
+		assert warm.length == 1;
+		const cold = testDiagnosticItems(handleDidOpen(didOpenParams(uri, text), createTransAmDb(100)), uri);
+		assert cold.length == 1;
+		for (const diagnostic of [warm[0], cold[0]]) {
+			assert diagnostic.getDynamicField("message").asString()
+				== "Type 'string' is not assignable to type 'int32'";
+			assert diagnostic.getDynamicField("severity").asInt32(-1) == 1;
+			assert diagnostic.getDynamicField("source").asString() == "metascript";
+			const range = diagnostic.getDynamicField("range");
+			const start = range.getDynamicField("start");
+			const end = range.getDynamicField("end");
+			assert start.getDynamicField("line").asInt32(-1) == lines[i];
+			assert start.getDynamicField("character").asInt32(-1) == characters[i];
+			assert end.getDynamicField("line").asInt32(-1) == lines[i];
+			assert end.getDynamicField("character").asInt32(-1) == characters[i] + 1;
+		}
+	}
+}
+
+function utf16Span(item: string): string {
+	const range = lspGetObjectField(item, "range");
+	const start = lspGetObjectField(range, "start");
+	const end = lspGetObjectField(range, "end");
+	if (lspGetNumberField(start, "line") != lspGetNumberField(end, "line")) return "multiline:" + range;
+	return (lspGetNumberField(start, "line") as int32) + ":" + (lspGetNumberField(start, "character") as int32)
+		+ "-" + (lspGetNumberField(end, "character") as int32);
+}
+
+function utf16SpansMatch(label: string, items: string[], expected: string[]): boolean {
+	const spans: string[] = [];
+	for (const item of items) spans.push(utf16Span(item));
+	let matched = spans.length == expected.length;
+	for (const span of expected) {
+		if (spans.indexOf(span) < 0) matched = false;
+	}
+	if (!matched) writeStderr(label + ": expected " + expected.join(",") + " got " + spans.join(",") + "\n");
+	return matched;
+}
+
+test "queries read and answer UTF-16 positions after non-ASCII text" {
+	const prefixes = ["", "/*é*/ ", "/*😀*/ ", "/*é*/\n/*😀*/ ", "/*é*/\r\n/*😀*/ ", ""];
+	const gaps = ["", "", "", "", "", "/*é😀*/ "];
+	const lines = [0, 0, 0, 1, 1, 0];
+	const declarations = [6, 12, 13, 13, 13, 6];
+	const uses = [23, 29, 30, 30, 30, 31];
+	const uri = "file:///query-utf16.ms";
+	for (let i = 0; i < prefixes.length; i++) {
+		const db = testDb(uri, prefixes[i] + "const s = 1; " + gaps[i] + "const t = s;");
+		const decl = lines[i] + ":" + declarations[i] + "-" + (declarations[i] + 1);
+		const use = lines[i] + ":" + uses[i] + "-" + (uses[i] + 1);
+		const params = "{\"textDocument\":{\"uri\":" + lspJsonString(uri) + "},\"position\":{\"line\":"
+			+ lines[i] + ",\"character\":" + uses[i] + "}";
+		const label = "utf16 case " + i;
+		assert utf16SpansMatch(label + " definition", lspGetArrayItems(lspGetObjectField(handleDefinition("80", params + "}", db), "result")), [decl]);
+		assert utf16SpansMatch(label + " hover", [lspGetObjectField(handleHover("81", params + "}", db), "result")], [use]);
+		assert utf16SpansMatch(label + " references", lspGetArrayItems(lspGetObjectField(handleReferences("82", params + "}", db), "result")), [decl, use]);
+		assert utf16SpansMatch(label + " highlight", lspGetArrayItems(lspGetObjectField(handleDocumentHighlight("83", params + "}", db), "result")), [decl, use]);
+		const rename = handleRename("84", params + ",\"newName\":\"v\"}", db);
+		const edits = lspGetArrayItems(lspGetObjectField(lspGetObjectField(lspGetObjectField(rename, "result"), "changes"), uri));
+		assert utf16SpansMatch(label + " rename", edits, [decl, use]);
+		for (const edit of edits) assert lspGetField(edit, "newText") == "v";
+	}
+}
+
+test "semantic UTF-16 deltas survive prefix and gap edits and undo" {
+	const initialized = parseJson(handleInitialize("71"));
+	assert initialized.ok;
+	if (initialized.ok) {
+		const legend = initialized.value.getDynamicField("result")
+			.getDynamicField("capabilities").getDynamicField("semanticTokensProvider")
+			.getDynamicField("legend");
+		const types = legend.getDynamicField("tokenTypes");
+		const modifiers = legend.getDynamicField("tokenModifiers");
+		if (types.kind != JsonKind.Array) throw new Error("Expected semantic token types");
+		if (modifiers.kind != JsonKind.Array) throw new Error("Expected semantic token modifiers");
+		assert types.items.length > 8;
+		assert modifiers.items.length > 2;
+		assert types.items[8].asString() == "variable";
+		assert modifiers.items[0].asString() == "declaration";
+		assert modifiers.items[2].asString() == "readonly";
+	}
+	const db = createTransAmDb(100);
+	const path = "/semantic-token-utf16.ms";
+	const uri = "file:///semantic-token-utf16.ms";
+	const params = "{\"textDocument\":{\"uri\":" + lspJsonString(uri) + "}}";
+	const prefixes = [
+		"", "/*a*/ ", "/*é*/ ", "/*😀*/ ", "\n/*é*/ ", "\r\n\r\n/*😀*/ ", "", "", "",
+	];
+	const gaps = ["", "", "", "", "", "", "/*é*/ ", "/*😀*/ ", ""];
+	const lines = [0, 0, 0, 0, 1, 2, 0, 0, 0];
+	const characters = [6, 12, 12, 13, 12, 13, 6, 6, 6];
+	const deltas = [17, 17, 17, 17, 17, 17, 23, 24, 17];
+	for (let i = 0; i < prefixes.length; i++) {
+		const source = prefixes[i] + "const first = 1; " + gaps[i] + "const second = first;";
+		assert dbSetFileText(db, path, source);
+		const response = handleSemanticTokensFull("71", params, db);
+		assert dbTypeCheck(db, path).errors.length == 0;
+		const parsed = parseJson(response);
+		assert parsed.ok;
+		if (parsed.ok) {
+			assert parsed.value.getDynamicField("jsonrpc").asString() == "2.0";
+			assert parsed.value.getDynamicField("id").asInt32(-1) == 71;
+			const data = parsed.value.getDynamicField("result").getDynamicField("data");
+			if (data.kind != JsonKind.Array) throw new Error("Expected semantic token data");
+			const expected = [
+				lines[i], characters[i], 5, 8, 5,
+				0, deltas[i], 6, 8, 5,
+				0, 9, 5, 8, 4,
+			];
+			assert data.items.length == expected.length;
+			for (let j = 0; j < expected.length; j++) {
+				assert data.items[j].asInt32(-1) == expected[j];
+			}
+		}
+		assert handleSemanticTokensFull("71", params, db) == response;
+		const revision = db.revision.value;
+		assert !dbSetFileText(db, path, source);
+		assert db.revision.value == revision;
+		assert handleSemanticTokensFull("71", params, db) == response;
+	}
+}
+
+const RECHECK_SOURCE = "import { Result } from \"std/core/system\";\n"
+	+ "import { bump } from \"./dep\";\n"
+	+ "function foo(x: number): number { return bump(x) + 1; }\nconst y = foo(42);";
+
+function recheckDb(dir: string): TransAmDb {
+	const db = testDb(`file://${dir}/test.ms`, RECHECK_SOURCE);
+	dbSetFileText(db, `${dir}/dep.ms`, "export function bump(x: number): number { return x + 1; }");
+	const user = getFileId(db.fileInput, `${dir}/test.ms`);
+	recordModuleImport(db.moduleDeps, user, getFileId(db.fileInput, `${dir}/dep.ms`));
+	return db;
+}
+
+function bindWork(db: TransAmDb): string {
+	return `bound=${db.cache.bound} collected=${db.cache.collected}`;
+}
+
+function recomputedSince(db: TransAmDb, revision: int32): string[] {
+	const keys: string[] = [];
+	for (const entry of db.cache.entries) {
+		if (entry.computedAt < revision) continue;
+		const path = getFilePath(db.fileInput, entry.key.fileId);
+		keys.push(`${entry.key.queryKind.toString()} ${path}`);
+	}
+	return keys;
+}
+
+function recomputeCount(db: TransAmDb): int32 {
+	let total = 0;
+	for (const count of db.cache.recomputed) total += count;
+	return total;
+}
+
+function checkedType(db: TransAmDb, path: string, name: string): string {
+	const ctx = dbTypeCheck(db, path);
+	if (ctx.errors.length > 0) return `${ctx.errors.length} errors`;
+	const sym = lookupLocal(ctx.table, name);
+	return sym != null ? typeDisplayName(sym.symbolType) : "";
+}
+
+test "a fresh check computes each query of the file and its import once" {
+	const db = recheckDb("/fresh");
+	assert checkedType(db, "/fresh/test.ms", "y") == "number";
+	const recomputed = recomputedSince(db, 0).join(",");
+	const expected = "Preprocess /fresh/test.ms,Parse /fresh/test.ms,Preprocess /fresh/dep.ms,Parse /fresh/dep.ms"
+		+ ",TypeCheck /fresh/test.ms";
+	assert recomputed == expected, recomputed;
+	assert recomputeCount(db) == 5;
+	assert bindWork(db) == "bound=2 collected=1", bindWork(db);
+}
+
+test "re-checking a body edit recomputes only the edited file's parse and check" {
+	const path = "/body/test.ms";
+	const db = recheckDb("/body");
+	assert checkedType(db, path, "y") == "number";
+	const entries = db.cache.entries.length;
+	const bound = db.cache.bound;
+	const collected = db.cache.collected;
+	assert dbSetFileText(db, path, RECHECK_SOURCE.replace("bump(x) + 1", "bump(x) + 2"));
+	const revision = db.revision.value;
+	const before = recomputeCount(db);
+	assert checkedType(db, path, "y") == "number";
+	const recomputed = recomputedSince(db, revision);
+	const expected = `Preprocess ${path},Parse ${path},TypeCheck ${path}`;
+	assert recomputed.join(",") == expected, recomputed.join(",");
+	assert recomputeCount(db) - before == 3;
+	assert db.cache.entries.length == entries;
+	assert db.cache.bound - bound == 1 && db.cache.collected - collected == 0, bindWork(db);
+	const hits = db.cache.hits;
+	const ctx = dbTypeCheck(db, path);
+	assert dbTypeCheck(db, path) == ctx;
+	assert db.cache.hits - hits == 2;
+	assert recomputeCount(db) - before == 3;
+	assert db.cache.bound - bound == 1 && db.cache.collected - collected == 0, bindWork(db);
+}
+
+// util.ms is checked by another db, as the prelude db checks a build.ms global import;
+// mid.ms imports it, and an edit elsewhere must leave mid.ms and its importer verified.
+function heldImportDb(): TransAmDb {
+	const util = "export function ut(x: number): number { return x; }";
+	const other = createTransAmDb(100);
+	dbSetFileText(other, "/held/util.ms", util);
+	dbTypeCheck(other, "/held/util.ms");
+	const db = testDb("file:///held/main.ms", "const z = 1;");
+	dbSetFileText(db, "/held/util.ms", util);
+	dbSetFileText(db, "/held/mid.ms", "import { ut } from \"./util\";\nexport const y = ut(1);");
+	dbSetFileText(db, "/held/top.ms", "import { y } from \"./mid\";\nconst w = y;");
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, "/held/mid.ms"), getFileId(db.fileInput, "/held/util.ms"));
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, "/held/top.ms"), getFileId(db.fileInput, "/held/mid.ms"));
+	return db;
+}
+
+test "an edit elsewhere leaves verified a module whose import another db checked" {
+	const db = heldImportDb();
+	assert checkedType(db, "/held/mid.ms", "y") == "number";
+	assert dbSetFileText(db, "/held/main.ms", "const z = 2;");
+	const before = recomputeCount(db);
+	assert dbCheckIsCurrent(db, "/held/mid.ms");
+	assert recomputeCount(db) == before;
+}
+
+test "an edit elsewhere leaves verified the importer of a module whose import another db checked" {
+	const db = heldImportDb();
+	assert checkedType(db, "/held/mid.ms", "y") == "number";
+	assert checkedType(db, "/held/top.ms", "w") == "number";
+	assert dbSetFileText(db, "/held/main.ms", "const z = 2;");
+	assert dbCheckIsCurrent(db, "/held/top.ms");
+}
+
+// mid.ms imports dep.ms, which this db only binds, and dep.ms imports leaf.ms.
+function boundImportDb(root: string): TransAmDb {
+	const db = testDb(`file://${root}/main.ms`, "const z = 1;");
+	dbSetFileText(db, `${root}/leaf.ms`, "export function base(x: number): number { return x; }");
+	dbSetFileText(db, `${root}/dep.ms`, "import { base } from \"./leaf\";\nexport function bump(x: number) { return base(x); }");
+	dbSetFileText(db, `${root}/mid.ms`, "import { bump } from \"./dep\";\nexport const y = bump(1);");
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, `${root}/mid.ms`), getFileId(db.fileInput, `${root}/dep.ms`));
+	return db;
+}
+
+test "an edit elsewhere leaves verified a module whose import this db only binds" {
+	const root = "/boundElsewhere";
+	const db = boundImportDb(root);
+	assert checkedType(db, `${root}/mid.ms`, "y") == "number";
+	assert dbSetFileText(db, `${root}/main.ms`, "const z = 2;");
+	const before = recomputeCount(db);
+	assert dbCheckIsCurrent(db, `${root}/mid.ms`);
+	assert recomputeCount(db) == before;
+}
+
+test "an edit below a bound import re-checks the module that reads it" {
+	const root = "/boundBelow";
+	const db = boundImportDb(root);
+	assert checkedType(db, `${root}/mid.ms`, "y") == "number";
+	assert dbSetFileText(db, `${root}/leaf.ms`, "export function base(x: number): string { return \"s\"; }");
+	assert !dbCheckIsCurrent(db, `${root}/mid.ms`);
+	assert checkedType(db, `${root}/mid.ms`, "y") == "string", checkedType(db, `${root}/mid.ms`, "y");
+}
+
+test "re-checking after an edit two imports down rebinds the unchanged import between" {
+	const path = "/chain/test.ms";
+	const db = testDb(`file://${path}`, "import { bump } from \"./dep\";\nconst y = bump(1);");
+	dbSetFileText(db, "/chain/dep.ms", "import { base } from \"./leaf\";\nexport function bump(x: number) { return base(x); }");
+	dbSetFileText(db, "/chain/leaf.ms", "export function base(x: number): number { return x; }");
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, path), getFileId(db.fileInput, "/chain/dep.ms"));
+	assert checkedType(db, path, "y") == "number";
+	assert dbSetFileText(db, path, "import { bump } from \"./dep\";\nconst y = bump(2);");
+	assert checkedType(db, path, "y") == "number";
+	assert dbSetFileText(db, "/chain/leaf.ms", "export function base(x: number): string { return \"s\"; }");
+	assert checkedType(db, path, "y") == "string", checkedType(db, path, "y");
+}
+
+test "re-checking an importer after a dependency body edit reuses the importer's parse" {
+	const dep = "/recheck/dep.ms";
+	const user = "/recheck/user.ms";
+	const db = createTransAmDb(100);
+	dbSetFileText(db, dep, "export function one(): int32 { return 1; }");
+	dbSetFileText(db, user, "import { one } from \"./dep\";\nexport const n = one();");
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, user), getFileId(db.fileInput, dep));
+	dbParse(db, dep);
+	assert checkedType(db, user, "n") == "int32";
+	assert bindWork(db) == "bound=2 collected=1", bindWork(db);
+	const marked = db.cache.marked;
+	assert dbSetFileText(db, dep, "export function one(): int32 { return 2; }");
+	assert db.cache.marked - marked == 5;
+	const revision = db.revision.value;
+	const before = recomputeCount(db);
+	dbParse(db, dep);
+	assert checkedType(db, user, "n") == "int32";
+	const recomputed = recomputedSince(db, revision);
+	const expected = `Preprocess ${dep},Parse ${dep},TypeCheck ${user}`;
+	assert recomputed.join(",") == expected, recomputed.join(",");
+	assert recomputeCount(db) - before == 3;
+	const parseKey = createQueryKey(TaQueryKind.Parse, getFileId(db.fileInput, user));
+	const userParse = cacheGet(db.cache, parseKey);
+	assert userParse.computedAt < revision && userParse.verifiedAt == db.revision.value;
+	assert bindWork(db) == "bound=4 collected=2", bindWork(db);
 }
 
 const DEP_WITH_PCT = "export struct Dice { seed: int32; }\nexport function pct(this dice: Dice, k: int32): int32 { return dice.seed + k; }\n";
@@ -1066,6 +1552,21 @@ test "a dependency changed on disk re-checks an open importer" {
 	handleDidChangeWatchedFiles(syncWatchedParams(depPath, 2), db);
 	publishPendingDiagnostics(db);
 	assert !syncReportsMissingPercent(db, usePath);
+	markDocumentClosed(usePath);
+}
+
+test "an importer published on open is not republished while its diagnostics stay the same" {
+	const dir = syncTmpDir("opened");
+	const depPath = dir + "/dep.ms";
+	const usePath = dir + "/use.ms";
+	writeFile(depPath, DEP_WITH_PERCENT);
+	writeFile(usePath, USE_PERCENT);
+	const db = createTransAmDb(100);
+	handleDidOpen(syncOpenParams(depPath, DEP_WITH_PERCENT), db);
+	handleDidOpen(syncOpenParams(usePath, USE_PERCENT), db);
+	assert !syncReportsMissingPercent(db, usePath);
+	assert buildTransitiveDiagnosticsWire(db, depPath) == "";
+	markDocumentClosed(depPath);
 	markDocumentClosed(usePath);
 }
 
@@ -1158,16 +1659,6 @@ test "watched files are registered only for clients that support it" {
 	assert request.indexOf("workspace/didChangeWatchedFiles") >= 0;
 }
 
-function lineStartOffset(source: string, line: int32): int32 {
-	let current: int32 = 0;
-	let pos: int32 = 0;
-	while (pos < source.byteLength && current < line) {
-		if (source.byteAt(pos) == "\n".code) current = current + 1;
-		pos = pos + 1;
-	}
-	return pos;
-}
-
 function applyRangeFormatting(source: string, line: number, character: number): string {
 	const db = testDb("file:///rangefmt.ms", source);
 	const pos = `{"line":${line},"character":${character}}`;
@@ -1182,8 +1673,8 @@ function applyRangeFormatting(source: string, line: number, character: number): 
 		const range = lspGetObjectField(items[i], "range");
 		const s = lspGetObjectField(range, "start");
 		const e = lspGetObjectField(range, "end");
-		const from = lineStartOffset(out, lspGetNumberField(s, "line") as int32) + (lspGetNumberField(s, "character") as int32);
-		const to = lineStartOffset(out, lspGetNumberField(e, "line") as int32) + (lspGetNumberField(e, "character") as int32);
+		const from = lineOffset(out, (lspGetNumberField(s, "line") as int32) + 1) + (lspGetNumberField(s, "character") as int32);
+		const to = lineOffset(out, (lspGetNumberField(e, "line") as int32) + 1) + (lspGetNumberField(e, "character") as int32);
 		out = out.byteSlice(0, from) + lspGetField(items[i], "newText") + out.byteSlice(to, out.byteLength);
 		i = i - 1;
 	}

@@ -7,6 +7,7 @@
 import { Symbol, SymbolKind } from "../../ast/node";
 import { hasFlag, setFlag, SymbolFlag, makeSymbol } from "../../checker/symbol";
 import { noneType } from "../../checker/types";
+import { isAbsolute, relative } from "std/fs/path";
 
 
 // ===== C Keywords — identifiers that need escaping =====
@@ -25,31 +26,6 @@ function isCKeyword(name: string): boolean {
 		"bool" | "true" | "false" | "NULL" | "main" => true,
 		_ => false,
 	};
-}
-
-// ===== Character Classification (string-based, single char) =====
-
-function isAlphaChar(ch: string): boolean {
-	return match (ch) {
-		"a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" => true,
-		"k" | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" => true,
-		"u" | "v" | "w" | "x" | "y" | "z" => true,
-		"A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" => true,
-		"K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" => true,
-		"U" | "V" | "W" | "X" | "Y" | "Z" => true,
-		_ => false,
-	};
-}
-
-function isDigitChar(ch: string): boolean {
-	return match (ch) {
-		"0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => true,
-		_ => false,
-	};
-}
-
-function isAlnumChar(ch: string): boolean {
-	return isAlphaChar(ch) || isDigitChar(ch);
 }
 
 // ===== Special Character Replacement =====
@@ -86,23 +62,22 @@ function specialCharName(ch: string): string {
 
 export function mangle(name: string): string {
 	if (name.length == 0) return "empty_";
+	const leadingDigit = isAsciiDigit(name.byteAt(0));
+	if (!leadingDigit && isAsciiWord(name)) return name;
 	let result = "";
 	let start = 0;
 	let requiresUnderscore = false;
 
 	// Leading digit: prefix with X
-	const first = name.charAt(0);
-	if (isDigitChar(first)) {
-		result = "X" + first;
+	if (leadingDigit) {
+		result = "X" + name.charAt(0);
 		start = 1;
 	}
 
 	for (let i = start; i < name.byteLength; i += 1) {
 		const ch = name.charAt(i);
-		if (isAlnumChar(ch)) {
+		if (isAsciiWordChar(ch)) {
 			result = result + ch;
-		} else if (ch == "_") {
-			result = result + "_";
 		} else {
 			result = result + specialCharName(ch);
 			requiresUnderscore = true;
@@ -117,8 +92,24 @@ export function mangle(name: string): string {
 
 const ESCAPED_PREFIX = "X_";
 
+function isAsciiDigit(b: int32): boolean {
+	return b >= "0".code && b <= "9".code;
+}
+
 function isAsciiAlnum(b: int32): boolean {
-	return (b >= "a".code && b <= "z".code) || (b >= "A".code && b <= "Z".code) || (b >= "0".code && b <= "9".code);
+	return (b >= "a".code && b <= "z".code) || (b >= "A".code && b <= "Z".code) || isAsciiDigit(b);
+}
+
+function isAsciiWordChar(ch: string): boolean {
+	return ch.byteLength == 1 && (isAsciiAlnum(ch.byteAt(0)) || ch.byteAt(0) == "_".code);
+}
+
+function isAsciiWord(name: string): boolean {
+	for (let i = 0; i < name.byteLength; i += 1) {
+		const b = name.byteAt(i);
+		if (!(isAsciiAlnum(b) || b == "_".code)) return false;
+	}
+	return true;
 }
 
 function keepsMangledSpelling(name: string): boolean {
@@ -186,7 +177,52 @@ function isLowerOrDigit(ch: string): boolean {
 // a-z, 0-9 pass through; / → Z; . → O;
 // everything else (A-Z, _, special) → ord(c) as decimal string.
 
+export interface ModuleNameRoots {
+	compiler: string;
+	packages: string;
+	project: string;
+}
+
+let moduleNameRoots: ModuleNameRoots = { compiler: "", packages: "", project: "" };
+
+export function setModuleNameRoots(roots: ModuleNameRoots): void {
+	moduleNameRoots = roots;
+}
+
+function pathUnder(path: string, root: string): string {
+	if (root == "" || !path.startsWith(`${root}/`)) return "";
+	return path.slice(root.byteLength + 1, path.byteLength);
+}
+
+interface RootedModulePath {
+	mark: string;
+	path: string;
+}
+
+function rootModulePath(modulePath: string, roots: ModuleNameRoots): RootedModulePath {
+	if (!isAbsolute(modulePath)) return { mark: "", path: modulePath };
+	const inCompiler = pathUnder(modulePath, roots.compiler);
+	if (inCompiler != "") return { mark: "S", path: inCompiler };
+	const inPackages = pathUnder(modulePath, roots.packages);
+	if (inPackages != "") return { mark: "P", path: inPackages };
+	if (roots.project == "") return { mark: "", path: modulePath };
+	return { mark: "", path: relative(roots.project, modulePath) };
+}
+
+export function moduleDisplayPath(modulePath: string): string {
+	return rootModulePath(modulePath, moduleNameRoots).path;
+}
+
 export function mangleModuleName(modulePath: string): string {
+	return mangleRootedModuleName(modulePath, moduleNameRoots);
+}
+
+function mangleRootedModuleName(modulePath: string, roots: ModuleNameRoots): string {
+	const rooted = rootModulePath(modulePath, roots);
+	return rooted.mark + encodeModulePath(rooted.path);
+}
+
+function encodeModulePath(modulePath: string): string {
 	let result = "";
 	for (let i = 0; i < modulePath.byteLength; i += 1) {
 		const ch = modulePath.charAt(i);
@@ -235,19 +271,9 @@ export function mangleProcName(name: string, moduleName: string, id: number): st
 // Reference parity: Nim getTypeName — the C type name carries the declaring
 // symbol's identity (Nim appends sigHash; here the module qualifier, matching
 // the proc/global convention). extern/ImportC types keep the raw C name
-// (Nim sfImportc/sfExportc rule). Monomorphized instances ("__") and
-// compiler-generated ("$") names keep their existing spelling.
-
-// One globally cached object per shape, shared by every module, name already
-// encoding its content — so the sym it happens to carry is whichever module
-// created it first, not an owner. Same carve-out as "$" and mono "__" above.
-export function isSharedStructuralName(name: string): boolean {
-	if (name.length > 6 && name.slice(0, 6) == "Maybe_") return true;
-	if (name.length > 8 && name.slice(0, 8) == "msTuple_") return true;
-	if (name.length > 7 && name.slice(0, 7) == "msAnon_") return true;
-	if (name.length > 8 && name.slice(0, 8) == "msUnion_") return true;
-	return false;
-}
+// (Nim sfImportc/sfExportc rule). An instance symbol's name already carries the
+// generic's owner, and a type without a declaring symbol is named by the
+// compiler from its content, so both keep their spelling.
 
 export function ownedGeneratedName(sym: Readonly<Symbol> | null): boolean {
 	return sym != null && sym.modulePath != "";
@@ -259,9 +285,7 @@ export function mangledTypeName(sym: Readonly<Symbol> | null, name: string): str
 		if (early != "") return early;
 	}
 	if (name.length > 0 && name.slice(0, 1) == "$") return ownedGeneratedName(sym) ? mangleQualified(name, mangleModuleName(sym!.modulePath)) : mangle(name);
-	if (name.indexOf("__", 0) >= 0) return mangle(name);
-	if (isSharedStructuralName(name)) return mangle(name);
-	if (sym != null && sym.modulePath != "") {
+	if (sym != null && sym.modulePath != "" && sym.instantiatedFrom == null) {
 		return mangleQualified(name, mangleModuleName(sym.modulePath));
 	}
 	return mangle(name);
@@ -469,6 +493,13 @@ test "simple names pass through" {
 
 test "leading digit" { assert mangle("3d") == "X3d"; }
 
+test "a name of letters, digits and underscores keeps its spelling unless a digit leads" {
+	assert mangle("_x9_") == "_x9_";
+	assert mangle("A1_b") == "A1_b";
+	assert mangle("9a_") == "X9a_";
+	assert mangle("9a+") == "X9aplus_";
+}
+
 test "special chars get word replacements" {
 	assert mangle("a+b") == "aplusb_";
 	assert mangle("x=y") == "xeqy_";
@@ -669,3 +700,13 @@ test "windows drive letter does not produce digit-leading identifier" {
 test "underscore becomes ordinal" { assert mangleModuleName("my_mod") == "my95mod"; }
 
 test "full path with mixed case" { assert mangleModuleName("src/codegen/MyGen") == "srcZcodegenZ77y71en"; }
+
+test "a module name is spelled from its root, so a std module and a same-named project module stay apart" {
+	const roots: ModuleNameRoots = { compiler: "/msc", packages: "/pkgs", project: "/proj" };
+	assert mangleRootedModuleName("/msc/std/a.ms", roots) == "SstdZaOms";
+	assert mangleRootedModuleName("/proj/std/a.ms", roots) == "stdZaOms";
+	assert mangleRootedModuleName("/pkgs/p/a.ms", roots) == "PpZaOms";
+	assert mangleRootedModuleName("/proj/sub/a.ms", roots) == "subZaOms";
+	assert mangleRootedModuleName("/other/a.ms", roots) == "OOZotherZaOms";
+	assert mangleRootedModuleName("/proj/std/a.ms", { compiler: "", packages: "", project: "" }) == "ZprojZstdZaOms";
+}

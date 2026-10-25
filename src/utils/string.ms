@@ -199,8 +199,7 @@ export function integerLiteralFits(s: string): boolean {
 
 // Hex/binary/octal literals denote a BIT PATTERN, so they may fill the whole
 // unsigned width of the target and still be legal (0x80 as int8 is -128).
-// Decimal literals get the signed range instead. Nim draws the same line, and
-// says so at lexer.nim:494-497.
+// Decimal literals get the signed range instead.
 export function integerLiteralIsBitPattern(s: string): boolean {
 	return scanInteger(s).bitPattern;
 }
@@ -353,20 +352,6 @@ export function appendFlag(flags: string, flag: string): string {
 	return flag;
 }
 
-// Prepend a space-separated flag (no dedup — matches reference linker behavior).
-export function prependFlag(flags: string, flag: string): string {
-	if (flag == "") return flags;
-	if (flags != "") return flag + " " + flags;
-	return flag;
-}
-
-// Concat a space-separated flag without dedup (matches reference @passL behavior).
-export function concatFlag(flags: string, flag: string): string {
-	if (flag == "") return flags;
-	if (flags != "") return flags + " " + flag;
-	return flag;
-}
-
 export function optionalizeTypeString(typeStr: string): string {
 	const trimmed = typeStr.trim();
 	if (trimmed == "" || trimmed == "null") return trimmed;
@@ -427,10 +412,3 @@ test "startsWith no match" { assert !"./foo".startsWith("std/"); }
 test "startsWith too short" { assert !"st".startsWith("std/"); }
 
 test "startsWith exact" { assert "abc".startsWith("abc"); }
-
-// ===== Hash (re-exported from std/hash) =====
-
-import { djb2, hashStringSigned } from "std/hash";
-
-export function djb2Hash(s: string): int64 { return djb2(s); }
-export function djb2HashSigned(s: string): int32 { return hashStringSigned(s); }

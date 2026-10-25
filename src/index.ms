@@ -1,28 +1,24 @@
 // MetaScript Compiler CLI — Entry point (dispatch only)
 
-import { platform } from "std/process";
-import { CliOptions, Target, parseArgs, applyBuildTarget, seedOptionDefines, MODE_DEBUG, MODE_RELEASE } from "./compiler/options";
-import { setParserDefines } from "./parser/context";
-import { applyConfigDefines, defineSymbol, formatDefines, seedProjectDir } from "./compiler/defines";
+import { CliOptions, Target, parseArgs, applyProjectConfig } from "./compiler/options";
+import { defineSymbol, formatDefines } from "./compiler/defines";
 import { VERSION, printUsage } from "./compiler/usage";
 import { cmdBuildJS, cmdBuildC, cmdWatchC, cmdRunHcr, cmdRunJS, cmdRunRaiser, cmdTest, cmdTestJS } from "./compiler/compile";
 import { cmdCheck, cmdDumpTokens, cmdDumpAst, cmdPipeline, cmdRun, cmdFmt, cmdInit, cmdClean } from "./compiler/commands";
 import { lspRunServer } from "./compiler/lsp/server";
-import { loadBuildConfig, loadFmtSection, resolveCcForTarget } from "./compiler/buildConfig";
+import { resolveCcForTarget } from "./compiler/buildConfig";
 import { verboseLog } from "./compiler/io";
 import { error, bold, green, cyan } from "./utils/color";
 import { findProjectRoot } from "./utils/path";
 import "./ast/childTableGuard";
 import "./ast/childSlotGuard";
-import { join, isAbsolute, normalize } from "std/fs/path";
+import "./compiler/lsp/handlers/positionsTest";
 import { exists } from "std/fs";
-import { setExtraGlobalImports, setModulePasses } from "./checker/prelude";
-// Import the package manager hub for test discovery. Individual commands
-// (msc add, install, publish, ...) are wired up from this module as they land.
-// NOTE: imported so test discovery finds these modules' inline tests; any link
-// errors from OTHER files in the working tree are pre-existing, not caused by
-// this import.
-import { cmdAdd, cmdRemove, cmdInstall, cmdLogin, cmdLogout, cmdWhoami, cmdPublish, cmdOrg } from "./compiler/package/index";
+import { join } from "std/fs/path";
+import { runPackageCommand } from "./compiler/package/index";
+import { cmdAdd } from "./compiler/package/add";
+import { cmdRemove } from "./compiler/package/remove";
+import { cmdInstall } from "./compiler/package/install";
 import { cmdX, syncShims, projectShimDir, cmdInstallGlobal, globalManifestRoot, globalShimDir } from "./compiler/x";
 import { maybeShowUpdateNotice, cmdUpgrade, sweepUpgradeBackups } from "./compiler/upgrade";
 import { collectGlobalCache } from "./compiler/cache";
@@ -35,10 +31,33 @@ function requireFile(opts: CliOptions): void {
 	}
 }
 
-function globalImportEntry(projectRoot: string, gi: string): string {
-	if (gi.length > 4 && gi.slice(0, 4) == "std/") return gi;
-	if (isAbsolute(gi)) return normalize(gi);
-	return normalize(join(projectRoot, gi));
+// add, remove and install re-sync the command shims; -g moves remove and install to the global manifest.
+function commandArgs(opts: CliOptions): string[] {
+	const args: string[] = [];
+	if (opts.inputFile != "") args.push(opts.inputFile);
+	for (const arg of opts.extraArgs) args.push(arg);
+	return args;
+}
+
+function runShimCommand(cmd: string, opts: CliOptions, projectRoot: string): boolean {
+	const global = opts.extraArgs.includes("-g") || opts.extraArgs.includes("--global");
+	if (cmd == "install" && global) return cmdInstallGlobal(opts.inputFile);
+	let root = projectRoot;
+	let shimDir = projectShimDir(projectRoot);
+	if (cmd == "remove" && global) {
+		root = globalManifestRoot();
+		if (root == "" || !exists(join(root, "build.ms"))) {
+			console.log(`${error("error")}: no global manifest — nothing was installed with ${cyan("install -g")}`);
+			return false;
+		}
+		shimDir = globalShimDir();
+	}
+	const ok = match (cmd) {
+		"add" => cmdAdd(root, commandArgs(opts)),
+		"remove" => cmdRemove(root, opts.inputFile != "" ? [opts.inputFile] : []),
+		_ => cmdInstall(root),
+	};
+	return ok && syncShims(root, shimDir);
 }
 
 export function main(): int32 {
@@ -51,59 +70,19 @@ export function main(): int32 {
 	const opts = parseArgs();
 	const cmd = opts.command;
 
-	// Hand the define table to the parser before any source is read: `when` chains
-	// resolve at parse (see parseWhenChain), so the flags must be in place first.
-	setParserDefines(opts.defines);
-
 	// Find project root by walking up from the entry file (or CWD) looking for
 	// build.ms. Go/Rust convention: the manifest defines the project root.
 	// All manifest operations (build.ms, msc.lock) are relative to this directory.
 	const projectRoot = findProjectRoot(opts.inputFile);
-	const buildMsPath = join(projectRoot, "build.ms");
-	opts.projectRoot = projectRoot;
-
-	// build.ms defines go in before any source is parsed, under the command line's -d: switches.
-	const projectConfig = projectRoot != "" ? loadBuildConfig(buildMsPath, false) : null;
-	if (projectConfig != null && projectConfig.valid) {
-		const targeted = applyBuildTarget(opts, projectConfig.build.target);
-		if (!targeted.ok) {
-			console.log(`${error("error")}: ${buildMsPath}: build.target: ${targeted.error}`);
-			process.exit(1);
-		}
-		if (cmd == "build" && opts.mode == MODE_DEBUG && projectConfig.build.optimize == "release") opts.mode = MODE_RELEASE;
+	const applied = applyProjectConfig(opts, projectRoot);
+	if (!applied.ok) {
+		console.log(`${error("error")}: ${applied.error}`);
+		process.exit(1);
 	}
-	seedOptionDefines(opts);
-	if (projectConfig != null && projectConfig.valid) seedProjectDir(opts.defines, projectRoot);
-	if (projectConfig != null && projectConfig.valid) {
-		if (projectConfig.defines.refused.length > 0) {
-			console.log(`${error("error")}: ${buildMsPath}: define '${projectConfig.defines.refused[0]}' must be a string, a number or a boolean`);
-			process.exit(1);
-		}
-		const reserved = applyConfigDefines(opts.defines, projectConfig.defines.keys, projectConfig.defines.values);
-		if (reserved != "") {
-			console.log(`${error("error")}: ${buildMsPath}: define '${reserved}' is a name msc sets from its own options (backend, --os, --cpu, --gc, the build mode); give the project's define another name`);
-			process.exit(1);
-		}
-	}
+	const cfg = applied.value;
 	if (opts.showDefines) {
 		console.log(formatDefines(opts.defines));
 		process.exit(0);
-	}
-
-	// build.ms globalImports — every command that checks code must see them,
-	// so this runs before dispatch, not inside run/build. Entries are
-	// extension-less module paths: std/ specifiers pass through, project
-	// paths become absolute against projectRoot.
-	if (projectRoot != "") {
-		const giCfg = loadBuildConfig(buildMsPath, false);
-		if (giCfg.valid && giCfg.globalImports.length > 0) {
-			const extras: string[] = [];
-			for (const gi of giCfg.globalImports) extras.push(globalImportEntry(projectRoot, gi));
-			setExtraGlobalImports(extras, buildMsPath);
-			const passFrom: string[] = [];
-			for (const from of giCfg.modulePassFrom) passFrom.push(globalImportEntry(projectRoot, from));
-			setModulePasses(passFrom, giCfg.modulePassMacro);
-		}
 	}
 
 	match (cmd) {
@@ -114,25 +93,22 @@ export function main(): int32 {
 		"version" => console.log(`${bold("Metascript")} ${green(`v${VERSION}`)}`),
 		"check" => {
 			requireFile(opts);
-			cmdCheck(opts.inputFile, opts, loadBuildConfig(buildMsPath, opts.showTime).resolve);
+			cmdCheck(opts.inputFile, opts, cfg.resolve);
 		},
 		"dump-tokens" => { requireFile(opts); cmdDumpTokens(opts.inputFile); },
 		"dump-ast" => { requireFile(opts); cmdDumpAst(opts.inputFile); },
 		"pipeline" => { requireFile(opts); cmdPipeline(opts.inputFile); },
-		"fmt" => { requireFile(opts); cmdFmt(opts.inputFile, opts, loadFmtSection(".")); },
+		"fmt" => { requireFile(opts); cmdFmt(opts.inputFile, opts, cfg.fmt); },
 		"run" => {
 			// argv path overrides build.ms root; fallback to build.ms when no argv
-			if (opts.inputFile == "") {
-				const cfg = loadBuildConfig(buildMsPath, opts.showTime);
-				if (cfg.valid && cfg.entry.length > 0) { opts.inputFile = cfg.entry; }
-			}
+			if (opts.inputFile == "" && cfg.valid && cfg.entry.length > 0) { opts.inputFile = cfg.entry; }
 			requireFile(opts);
 			if (opts.target == Target.JS) {
 				cmdRunJS(opts.inputFile, opts);
 			} else if (opts.target == Target.Raiser) {
-				cmdRunRaiser(opts.inputFile, opts);
+				cmdRunRaiser(opts.inputFile, opts, cfg.resolve);
 			} else if (opts.isHcr) {
-				cmdRunHcr(opts.inputFile, opts);
+				cmdRunHcr(opts.inputFile, opts, cfg.resolve);
 			} else {
 				cmdRun(opts.inputFile, opts);
 			}
@@ -147,8 +123,6 @@ export function main(): int32 {
 			}
 		},
 		"build" => {
-			// Load build.ms for config (target, optimize, outDir, etc.)
-			const cfg = loadBuildConfig(buildMsPath, opts.showTime);
 			// argv path overrides build.ms root
 			if (opts.inputFile == "" && cfg.valid && cfg.entry.length > 0) {
 				opts.inputFile = cfg.entry;
@@ -176,74 +150,14 @@ export function main(): int32 {
 				else cmdBuildC(opts.inputFile, opts, cfg.resolve);
 			}
 		},
-		"add" => {
-			const addArgs: string[] = [];
-			if (opts.inputFile != "") addArgs.push(opts.inputFile);
-			for (const ea of opts.extraArgs) { addArgs.push(ea); }
-			if (!cmdAdd(projectRoot, addArgs)) process.exit(1);
-			if (!syncShims(projectRoot, projectShimDir(projectRoot))) process.exit(1);
+		"add" | "remove" | "install" => {
+			if (!runShimCommand(cmd, opts, projectRoot)) process.exit(1);
 		},
-		"remove" => {
-			let globalRemove = false;
-			for (const ea of opts.extraArgs) {
-				if (ea == "-g" || ea == "--global") globalRemove = true;
-			}
-			if (globalRemove) {
-				const root = globalManifestRoot();
-				if (root == "" || !exists(join(root, "build.ms"))) {
-					console.log(`${error("error")}: no global manifest — nothing was installed with ${cyan("install -g")}`);
-					process.exit(1);
-				}
-				const grArgs: string[] = [];
-				if (opts.inputFile != "") grArgs.push(opts.inputFile);
-				if (!cmdRemove(root, grArgs)) process.exit(1);
-				if (!syncShims(root, globalShimDir())) process.exit(1);
-			} else {
-				const rmArgs: string[] = [];
-				if (opts.inputFile != "") rmArgs.push(opts.inputFile);
-				if (!cmdRemove(projectRoot, rmArgs)) process.exit(1);
-				if (!syncShims(projectRoot, projectShimDir(projectRoot))) process.exit(1);
-			}
-		},
-		"install" => {
-			let globalInstall = false;
-			for (const ea of opts.extraArgs) {
-				if (ea == "-g" || ea == "--global") globalInstall = true;
-			}
-			if (globalInstall) {
-				if (!cmdInstallGlobal(opts.inputFile)) process.exit(1);
-			} else {
-				if (!cmdInstall(projectRoot)) process.exit(1);
-				if (!syncShims(projectRoot, projectShimDir(projectRoot))) process.exit(1);
-			}
-		},
-		"login" => {
-			if (!cmdLogin(projectRoot)) process.exit(1);
-		},
-		"logout" => {
-			if (!cmdLogout()) process.exit(1);
-		},
-		"whoami" => {
-			const whoArgs: string[] = [];
-			for (const ea of opts.extraArgs) { whoArgs.push(ea); }
-			if (!cmdWhoami(whoArgs)) process.exit(1);
-		},
-		"publish" => {
-			const pubArgs: string[] = [];
-			for (const ea of opts.extraArgs) { pubArgs.push(ea); }
-			if (!cmdPublish(projectRoot, pubArgs)) process.exit(1);
-		},
-		"org" => {
-			const orgArgs: string[] = [];
-			if (opts.inputFile != "") orgArgs.push(opts.inputFile);
-			for (const ea of opts.extraArgs) { orgArgs.push(ea); }
-			if (!cmdOrg(orgArgs)) process.exit(1);
+		"login" | "logout" | "whoami" | "publish" | "org" => {
+			if (!await runPackageCommand(cmd, opts.inputFile, opts.extraArgs, projectRoot)) process.exit(1);
 		},
 		"x" => {
-			const xArgs: string[] = [];
-			if (opts.inputFile != "") xArgs.push(opts.inputFile);
-			for (const ea of opts.extraArgs) { xArgs.push(ea); }
-			if (!cmdX(projectRoot, xArgs, opts)) process.exit(1);
+			if (!cmdX(projectRoot, commandArgs(opts), opts)) process.exit(1);
 		},
 		"upgrade" => { process.exit(cmdUpgrade(opts)); },
 		_ => {

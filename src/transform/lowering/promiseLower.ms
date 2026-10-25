@@ -10,7 +10,7 @@
 //
 // What lives here:
 //   - per-T suffix/dispatch helpers (futureTypedSuffix, futureThenFnForInner,
-//     futureCatchFnForInner, futureFinallyFnForInner, promiseAllFnForInner)
+//     futureCatchFnForInner, promiseAllFnForInner)
 //   - box/unbox helpers for primitive values flowing through msFuture* slots
 //   - typeTagFor (int/double/string/ptr tag dispatch for msFutureThenTyped etc.)
 //   - handlers for PromiseThen / PromiseCatch / PromiseFinally / PromiseResolve
@@ -22,7 +22,7 @@
 // of them would create a circular import.
 
 import { Node, NodeKind, SourceLocation, CallExprData, MemberExprData, NewExprData, Type, TypeKind, SymbolKind } from "../../ast/node";
-import { isAwaitable, awaitedType, unwrapRef, createFunction, typeDisplayName } from "../../checker/types";
+import { isAwaitable, awaitedType, unwrapRef, createFunction, typeDisplayName, literalBase } from "../../checker/types";
 import { TransformContext, mintSym } from "../context";
 import { promisePendingAlloc, makeRetFutAlloc, ownedCompletion } from "./asyncBridge";
 import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeRef, generatedProcSym, makeTypedIdentResolved, makeValueShareFn, makeLocalDecl, makeReturn, makeBlock, makeFnDecl, generatedFnCount, addGeneratedFn } from "../util";
@@ -33,7 +33,7 @@ import { makeCall, makeNumber, makeNull, inlineInFuture, boxedInFuture, runtimeR
 // MS_TYPETAG_* in runtime/promise/combinator.h (0=ptr, 1=int, 2=double, 3=string, 4=void).
 function typeTagFor(t: Type | null): number {
 	if (t == null) return 0;
-	return match (t.kind) {
+	return match (literalBase(t).kind) {
 		TypeKind.Void => 4,
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => 2,
 		TypeKind.String => 3,
@@ -50,7 +50,7 @@ function typeTagFor(t: Type | null): number {
 // Correct for futures with inline typed storage (populated via msFutureCompleteT).
 function futureTypedSuffix(t: Type | null): string {
 	if (t == null) return "";
-	return match (t.kind) {
+	return match (literalBase(t).kind) {
 		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "double",
 		TypeKind.Int32 | TypeKind.Int16 | TypeKind.Int8
 			| TypeKind.Uint32 | TypeKind.Uint16 | TypeKind.Uint8
@@ -72,11 +72,6 @@ function futureThenFnForInner(t: Type | null): string {
 function futureCatchFnForInner(t: Type | null): string {
 	const suffix = futureTypedSuffix(t);
 	return suffix == "" ? "" : "msFutureCatch_" + suffix;
-}
-
-function futureFinallyFnForInner(t: Type | null): string {
-	const suffix = futureTypedSuffix(t);
-	return suffix == "" ? "" : "msFutureFinally_" + suffix;
 }
 
 // Per-type Promise.all variant name — picks msPromiseAllFor_msFuture_<suffix>
@@ -109,7 +104,7 @@ function mkTypedCall(fnName: string, args: Node[], nodeType: Type | null, loc: S
 // ===== Builtin handlers =====
 
 // Promise.then/catch/finally — rewrite to typed C runtime calls.
-// Typed variants (msFutureThen_<T>, msFutureCatch_<T>, msFutureFinally_<T>)
+// Typed variants (msFutureThen_<T>, msFutureCatch_<T>)
 // read input.value via the correct typed struct cast, preserving msString
 // (16B) and primitive widths on pass-through. Struct/array/void/unknown
 // fall back to the legacy tag-dispatch path.
@@ -144,10 +139,9 @@ function lowerPromiseThenCatchFinally(node: Node, builtinKind: string, loc: Sour
 		},
 		_ => {
 			// PromiseFinally — wildcard is safe: outer dispatch restricts to these three.
-			const typedFn = futureFinallyFnForInner(innerType);
 			const finallyArgs: Node[] = [receiver];
 			for (const a of handlers) { finallyArgs.push(a); }
-			return mkTypedCall(typedFn != "" ? typedFn : "msFutureFinally", finallyArgs, node.nodeType, loc);
+			return mkTypedCall("msFutureFinally", finallyArgs, node.nodeType, loc);
 		},
 	};
 }

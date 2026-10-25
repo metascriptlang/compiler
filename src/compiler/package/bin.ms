@@ -33,12 +33,20 @@ export function commandNameError(cmd: string): string {
 	return "";
 }
 
+export function isAbsoluteEntry(entry: string): boolean {
+	return entry.charAt(0) == "/" || entry.contains(":\\") || entry.contains("\\");
+}
+
+export function leavesPackage(entry: string): boolean {
+	return entry.contains("..");
+}
+
 export function commandEntryError(cmd: string, entry: string): string {
 	if (entry.length == 0) return `command '${cmd}': needs an entry path`;
-	if (entry.charAt(0) == "/" || entry.contains(":\\") || entry.contains("\\")) {
+	if (isAbsoluteEntry(entry)) {
 		return `command '${cmd}': entry '${entry}' must be a relative path inside the package`;
 	}
-	if (entry.contains("..")) {
+	if (leavesPackage(entry)) {
 		return `command '${cmd}': entry '${entry}' cannot leave the package with '..'`;
 	}
 	if (!entry.endsWith(".ms")) {

@@ -18,13 +18,13 @@
 ## Rules
 
 - **`std/` never imports `src/`** — `std/` is copied standalone to `~/.metascript/std` at install and `src/` is not, so an `import ... from "../../src/..."` resolves in the repo tree and breaks every installed `msc` (the prelude chain loads for all programs). Shared types live in `std/` (`std/meta/node.ms`, `std/meta/token.ms`) and `src/` re-exports them. Incident: `std/meta/node.ms` imported `src/lexer/token` from 2026-03-31 to 2026-07-03, unseen because every gate runs inside the repo.
-- **Prefer `.ms` over `.cms`** — a `.cms` is for real C/POSIX calls (file I/O, syscalls, malloc); pure string, array and number logic is `.ms` with inline tests.
+- **Prefer `.ms` over `.cms`** — a `.cms` is for real C/POSIX calls (file I/O, syscalls, malloc); pure string, array and number logic is `.ms` with inline tests. Exception: string search and result building whose `.ms` form measured far slower than the runtime kernel bind the kernel (`byteIndexOf`, `byteSlice`, `split`, `replace`, `replaceAll`: on 2026-10-21 the `.ms` `replaceAll` took 0.75 s CPU against the kernel's 0.28 s for 1M dense-match calls), and the Raiser reaches the same kernels through host bridges.
 - **A module directory's entry is its `index.*`** — `import { readFile } from "std/fs"` resolves to `std/fs/index.cms` on C; a sub-module imports directly (`import { dirname } from "std/fs/path"`).
 - **The C binding is private, the MS function is the API** — `@include` the header, declare `extern function msDoThing(...)` (a C struct as `extern struct`), export a wrapper `doThing(...)` that calls it.
 - **A `.cms` never imports from a `.h`** — `import { … } from "x.h"` runs the header parser, which is the user FFI path; std has to build for every `--os` without it. `std/os` and `std/compress` imported headers until 2026-09-26 and failed on every host.
 - **C names are `ms` + PascalCase module + method** — `msFsReadFile`, `msStringIndexOf`, `msProcessCwd`.
 - **`&` in the `from` string marks a C function that mutates its receiver** — `extern function push(this arr: number[], sink value: number): void from "&msNumberArrayPush"`; `this` on the first parameter makes it an extension method.
-- **The `.cms` wrapper converts the C return into the MS type** — `export function exists(path: string): boolean { return msFsExists(path) == 1; }`.
+- **The `.cms` wrapper converts the C return into the MS type** — `function existsKernel(path: string): boolean { return msFsExists(path) == 1; }`.
 
 | MS return | C return | On failure |
 |-----------|----------|------------|

@@ -11,7 +11,8 @@ import { integerRank, isIntegerType, peelToRepr, enumOrdinalBounds, createPrimit
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeNumber, runtimeRef } from "../util";
-import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts, checkedCtx } from "../testUtil";
+import { isFloatKind } from "../numKinds";
+import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts, checkedCtx, castOf } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
 
 // ===== Helpers =====
@@ -104,7 +105,7 @@ function isNumericSource(src: Type | null): boolean {
 function isFloatSource(src: Type | null): boolean {
 	const s = peelToRepr(src);
 	if (s == null) return false;
-	return s.kind == TypeKind.Float32 || s.kind == TypeKind.Float64 || s.kind == TypeKind.Number;
+	return isFloatKind(s.kind);
 }
 
 function isUint64Source(src: Type | null): boolean {
@@ -259,10 +260,6 @@ function rangeHelperOf(input: string): string {
 		return n;
 	});
 	return name;
-}
-
-function castOf(target: string): string {
-	return "function f(v: float64): void { const r = v as " + target + "; }";
 }
 
 function parsedAsType(input: string): string {

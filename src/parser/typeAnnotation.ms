@@ -8,13 +8,11 @@
 // plus TypeGeneric, TypeArray, TypeUnion, TypeFunction, TypeObject for structural types.
 // Every node carries .location from the token it was parsed from, enabling LSP symbol recording.
 
-import { Token, TokenKind } from "../lexer/token";
-import { Node, NodeKind, createNode, createNodeAt, TypeAnnotationData, IdentifierData, TypeGenericData, TypeObjectData } from "../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, skipBalanced, skipGenericParams, splitAngleAssign, collectTokenText, addError, genericCallParenOffset } from "./context";
+import { TokenKind, isIdentLikeKind } from "../lexer/token";
+import { Node, NodeKind, createNode, createNodeAt, IdentifierData, TypeGenericData, TypeObjectData, TypeFunctionData } from "../ast/node";
+import { ParserState, createState, current, advance, peek, tokenAt, skipComments, isAtEnd, skipBalanced, collectTokenText, addError } from "./cursor";
+import { skipGenericParams, splitAngleAssign, genericCallParenOffset } from "./generics";
 import { lex } from "../lexer/lexer";
-
-
-type NodeResult = Result<Node, string>;
 
 export function distinctMisplacedMessage(line: int32): string {
 	return `'distinct' is only allowed at the start of a type alias right-hand side (type X = distinct Y) at line ${line}`;
@@ -22,73 +20,68 @@ export function distinctMisplacedMessage(line: int32): string {
 
 // ===== Type Annotation Skipping =====
 
-// Skip the trailing `& T & U` of an intersection chain after an atom has already
-// been consumed. Reused by the top-level skipper and by each union member.
 // Erasure-tier — accepted by parser, collapsed by resolver to first operand.
-function skipIntersectionTail(state: ParserState): void {
+function skipIntersectionType(state: ParserState, leavesQuestion: boolean): void {
+	if (leavesQuestion) skipTypeAtomNoOptional(state); else skipTypeAtom(state);
 	while (!isAtEnd(state) && current(state).kind == TokenKind.Amp) {
 		advance(state);
-		skipTypeAtom(state);
+		if (leavesQuestion) skipTypeAtomNoOptional(state); else skipTypeAtom(state);
+	}
+}
+
+function skipUnionType(state: ParserState, leavesQuestion: boolean): void {
+	if (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
+		advance(state);
+	}
+	skipIntersectionType(state, leavesQuestion);
+	while (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
+		advance(state);
+		skipIntersectionType(state, leavesQuestion);
 	}
 }
 
 export function skipTypeAnnotation(state: ParserState): void {
-	// Leading pipe for discriminated union types: | { ... } | { ... }
-	if (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
-		advance(state);
-	}
-	skipTypeAtom(state);
-
-	// Intersection: T & U & V (binds tighter than union and conditional)
-	skipIntersectionTail(state);
-
-	// Tier 3: Conditional type: T extends U ? A : B
-	// Must be checked BEFORE union pipe so `T extends U ? A : B` isn't split as `T extends U ? A` | `B`
+	skipUnionType(state, false);
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Extends) {
-		advance(state); // consume 'extends'
-		// Skip constraint type WITHOUT consuming '?' (which skipTypeAtom would eat as optional marker)
-		skipTypeAtomNoOptional(state);
+		advance(state);
+		skipUnionType(state, true);
 		if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
-			advance(state); // consume '?'
-			skipTypeAnnotation(state); // skip true branch (recursive — handles nested conditionals)
+			advance(state);
+			skipTypeAnnotation(state);
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Colon) {
-				advance(state); // consume ':'
-				skipTypeAnnotation(state); // skip false branch
+				advance(state);
+				skipTypeAnnotation(state);
 			}
 		}
-		return;
-	}
-
-	// Union types: T | U | V — each member may itself be an intersection (T & U).
-	while (!isAtEnd(state) && current(state).kind == TokenKind.Pipe) {
-		advance(state);
-		skipTypeAtom(state);
-		skipIntersectionTail(state);
 	}
 }
 
-// ===== Type Annotation Parsing =====
-// Captures the type text and returns a TypeAnnotation node.
+export struct CapturedType {
+	text: string;
+	expr: Node;
+}
 
-export function parseTypeAnnotation(state: ParserState): NodeResult {
-	const startToken = current(state);
-	const startPos = state.position;
+// Scan one type annotation, then parse the same tokens again for the positioned tree; the cursor ends where the scan did.
+export function captureType(state: ParserState): CapturedType {
+	const start = state.position;
 	skipTypeAnnotation(state);
-	const endPos = state.position;
-	const typeText = collectTokenText(state, startPos, endPos);
-	return Result.ok(createNode(NodeKind.TypeAnnotation, { annotationType: typeText }, startToken));
+	const end = state.position;
+	const text = collectTokenText(state, start, end);
+	state.position = start;
+	const expr = parseTypeExpr(state);
+	state.position = end;
+	return { text, expr };
+}
+
+export function captureTypeText(state: ParserState): string {
+	const start = state.position;
+	skipTypeAnnotation(state);
+	return collectTokenText(state, start, state.position);
 }
 
 // ===== Positioned Type Expression Parser =====
 // Builds a TypeExpr AST tree with position info for every type identifier.
 // Standard parity: semTypeNode dispatches on Identifier/GenericType etc.
-
-function isTypeIdent(token: Token): boolean {
-	const k = token.kind;
-	if (k == TokenKind.Ident) return true;
-	// Contextual keywords usable as type names (string, number, boolean, void, etc.)
-	return (k as number) >= (TokenKind.Abstract as number) && k != TokenKind.Comment && k != TokenKind.Eof && (k as number) < (TokenKind.JsxTagStart as number);
-}
 
 // Given an already-parsed leading atom, fold any trailing `& T & U` into a
 // TypeIntersection node. If no `&` follows, returns `first` unchanged.
@@ -133,8 +126,7 @@ export function parseTypeExpr(state: ParserState): Node {
 }
 
 function isNegativeNumberAhead(state: ParserState): boolean {
-	return current(state).kind == TokenKind.Minus && state.position + 1 < state.tokens.length
-		&& state.tokens[state.position + 1].kind == TokenKind.Number;
+	return current(state).kind == TokenKind.Minus && peek(state, 1).kind == TokenKind.Number;
 }
 
 function parseTypeAtom(state: ParserState): Node {
@@ -150,7 +142,7 @@ function parseTypeAtom(state: ParserState): Node {
 		const operandAt = state.position;
 		skipTypeQueryOperand(state);
 		const operandText = collectTokenText(state, operandAt, state.position);
-		return createNode(NodeKind.Identifier, { name: operandText }, state.tokens[operandAt]);
+		return createNode(NodeKind.Identifier, { name: operandText }, tokenAt(state, skipComments(state, operandAt)));
 	}
 
 	// Function type: (a: T, b: U) => R
@@ -180,7 +172,7 @@ function parseTypeAtom(state: ParserState): Node {
 	}
 
 	// Named type: identifier (possibly with generics and array suffix)
-	if (!isTypeIdent(token)) {
+	if (!isIdentLikeKind(token.kind)) {
 		// Fallback: create an Identifier with whatever token we have
 		advance(state);
 		return createNode(NodeKind.Identifier, { name: token.value }, token);
@@ -194,7 +186,7 @@ function parseTypeAtom(state: ParserState): Node {
 	// splitting on ".", and resolveTypeExpr can walk the MemberExpr for LSP recording.
 	while (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 		advance(state); // consume .
-		if (isAtEnd(state) || !isTypeIdent(current(state))) break;
+		if (isAtEnd(state) || !isIdentLikeKind(current(state).kind)) break;
 		const memberToken = current(state);
 		advance(state);
 		result = createNode(NodeKind.MemberExpr, { object: result, property: memberToken.value, isOptional: false }, token);
@@ -222,15 +214,9 @@ function parseTypeAtom(state: ParserState): Node {
 function applyArraySuffix(state: ParserState, result: Node): Node {
 	while (!isAtEnd(state) && current(state).kind == TokenKind.LBracket) {
 		const brackToken = current(state);
-		advance(state); // consume [
-		let size = -1;
-		if (!isAtEnd(state) && current(state).kind == TokenKind.Number) {
-			size = parseFloat(current(state).value) as int32;
-			advance(state);
-		}
-		if (!isAtEnd(state) && current(state).kind == TokenKind.RBracket) {
-			advance(state);
-		}
+		const literalSize = peek(state, 1).kind == TokenKind.Number && peek(state, 2).kind == TokenKind.RBracket;
+		const size = literalSize ? parseFloat(peek(state, 1).value) as int32 : -1;
+		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
 		result = createNode(NodeKind.TypeArray, { typExprElement: result, typExprSize: size }, brackToken);
 	}
 	return result;
@@ -308,12 +294,11 @@ function parseTypeFunctionOrParen(state: ParserState): Node {
 
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RParen) {
 		// Param name (optional — could be just types)
-		if (isTypeIdent(current(state))) {
+		if (isIdentLikeKind(current(state).kind)) {
 			const nameToken = current(state);
-			const nextKind = state.position + 1 < state.tokens.length ? state.tokens[state.position + 1].kind : TokenKind.Eof;
+			const nextKind = peek(state, 1).kind;
 			// `name?: Type` is an optional parameter; the type text keeps its `?`
-			const optionalMark = nextKind == TokenKind.Question && state.position + 2 < state.tokens.length
-				&& state.tokens[state.position + 2].kind == TokenKind.Colon;
+			const optionalMark = nextKind == TokenKind.Question && peek(state, 2).kind == TokenKind.Colon;
 			// If followed by ':', it's "name: Type"
 			if (nextKind == TokenKind.Colon || optionalMark) {
 				paramNames.push(nameToken.value);
@@ -373,6 +358,7 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 	advance(state); // consume {
 
 	const fieldNames: string[] = [];
+	const optionalFields: string[] = [];
 	const fieldTypes: Node[] = [];
 	let indexKey: Node = null as unknown as Node;
 	let indexValue: Node = null as unknown as Node;
@@ -399,7 +385,7 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 			}
 			advance(state); // consume [
 			// Consume the binding name (we only care about the key TYPE, not the name)
-			if (!isAtEnd(state) && isTypeIdent(current(state))) {
+			if (!isAtEnd(state) && isIdentLikeKind(current(state).kind)) {
 				advance(state); // consume key binding name
 			}
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Colon) {
@@ -423,11 +409,12 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 			continue;
 		}
 
-		if (isTypeIdent(current(state)) && !hasIndexSig) {
-			fieldNames.push(current(state).value);
+		if (isIdentLikeKind(current(state).kind) && !hasIndexSig) {
+			const fieldName = current(state).value;
+			fieldNames.push(fieldName);
 			advance(state); // consume field name
-			// Optional ? marker
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Question) {
+				optionalFields.push(fieldName);
 				advance(state);
 			}
 			if (!isAtEnd(state) && current(state).kind == TokenKind.Colon) {
@@ -459,6 +446,7 @@ function parseTypeObjectLiteral(state: ParserState): Node {
 		typExprIndexValue: indexValue,
 		typExprFieldDecorators: emptyDecorators,
 		typExprTypeName: "",
+		typExprOptionalFields: optionalFields,
 	}, braceToken);
 }
 
@@ -480,7 +468,7 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 	// Tier 3: infer X — consume keyword + identifier name
 	if (token.kind == TokenKind.Infer) {
 		advance(state); // consume 'infer'
-		if (!isAtEnd(state) && isTypeIdent(current(state))) {
+		if (!isAtEnd(state) && isIdentLikeKind(current(state).kind)) {
 			advance(state); // consume the inferred type name
 		}
 		return;
@@ -510,7 +498,7 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 	advance(state);
 	while (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 		advance(state);
-		if (isAtEnd(state) || !isTypeIdent(current(state))) break;
+		if (isAtEnd(state) || !isIdentLikeKind(current(state).kind)) break;
 		advance(state);
 	}
 	skipGenericParams(state);
@@ -521,11 +509,11 @@ function skipTypeAtomNoOptional(state: ParserState): void {
 }
 
 function skipTypeQueryOperand(state: ParserState): void {
-	if (isAtEnd(state) || !isTypeIdent(current(state))) return;
+	if (isAtEnd(state) || !isIdentLikeKind(current(state).kind)) return;
 	advance(state);
 	while (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 		advance(state);
-		if (isAtEnd(state) || !isTypeIdent(current(state))) return;
+		if (isAtEnd(state) || !isIdentLikeKind(current(state).kind)) return;
 		advance(state);
 	}
 }
@@ -554,7 +542,7 @@ function skipTypeAtom(state: ParserState): void {
 	// Tier 3: infer X — consume keyword + identifier name
 	if (token.kind == TokenKind.Infer) {
 		advance(state);
-		if (!isAtEnd(state) && isTypeIdent(current(state))) {
+		if (!isAtEnd(state) && isIdentLikeKind(current(state).kind)) {
 			advance(state);
 		}
 		return;
@@ -600,7 +588,7 @@ function skipTypeAtom(state: ParserState): void {
 	// Qualified/enum-literal type: K.A — consume .Ident chain greedily
 	while (!isAtEnd(state) && current(state).kind == TokenKind.Dot) {
 		advance(state); // consume .
-		if (isAtEnd(state) || !isTypeIdent(current(state))) break;
+		if (isAtEnd(state) || !isIdentLikeKind(current(state).kind)) break;
 		advance(state); // consume member name
 	}
 	// Generic type arguments: Type<A, B> — handles >> and >>> for nested generics
@@ -728,34 +716,35 @@ test "union of generics" { assert skipsType("Result<A, B> | Error"); }
 
 test "optional generic array" { assert skipsType("HashMap<string, number>[]?"); }
 
-// ===== TypeAnnotation Node Tests =====
-
-function annotationKind(typeStr: string): NodeKind {
-	const lr = lex(typeStr + " = x");
-	if (!lr.ok) return NodeKind.ExprStmt;
-	const state = createState(lr.value);
-	const result = parseTypeAnnotation(state);
-	if (!result.ok) return NodeKind.ExprStmt;
-	return result.value.kind;
+test "a conditional type's check and extends types are unions" {
+	assert skipsType("V extends string | number ? \"leaf\" : \"node\"");
+	assert skipsType("V extends string | number | boolean ? 1 : 2");
+	assert skipsType("V extends (string | number) ? 1 : 2");
+	assert skipsType("V extends A & B | C[] ? 1 : V extends D ? 2 : 3");
+	assert skipsType("V | null extends string ? 1 : 2");
 }
+
+// ===== Type Annotation Text Tests =====
 
 function annotationText(typeStr: string): string {
 	const lr = lex(typeStr + " = x");
 	if (!lr.ok) return "";
 	const state = createState(lr.value);
-	const result = parseTypeAnnotation(state);
-	if (!result.ok) return "";
-	const data = result.value.data as TypeAnnotationData;
-	return data.annotationType;
+	return captureTypeText(state);
 }
-
-test "kind is TypeAnnotation" { assert annotationKind("number") == NodeKind.TypeAnnotation; }
 
 test "simple type text" { assert annotationText("number") == "number"; }
 
 test "generic type text" { assert annotationText("Result<Node, string>") != ""; }
 
 test "union type text" { assert annotationText("string | number") != ""; }
+
+test "a type operator keeps its space before a bracketed operand" {
+	assert annotationText("T extends (infer E)[] ? E : never").startsWith("T extends (infer E)[]?");
+	assert annotationText("T extends [int32, string] ? 1 : 2").startsWith("T extends [int32, string]?");
+	assert annotationText("keyof (Pair)") == "keyof (Pair)";
+	assert annotationText("Array<T>[]") == "Array<T>[]";
+}
 
 // ===== TypeExpr AST Tests =====
 
@@ -807,6 +796,22 @@ test "generic call lookahead consumes tuple array type arguments" {
 	const state = createState(lr.value);
 	assert isGenericCallAhead(state);
 	assert state.position == 0;
+}
+
+function genericCallAhead(typeArgsThenCall: string): boolean {
+	const lr = lex("f" + typeArgsThenCall);
+	if (!lr.ok) return false;
+	const state = createState(lr.value);
+	advance(state);
+	const ahead = isGenericCallAhead(state);
+	return ahead && state.position == 1;
+}
+
+test "generic call lookahead consumes an indexed access type argument" {
+	assert genericCallAhead("<T[K]>(t)");
+	assert genericCallAhead("<Box<T[K]>>(t)");
+	assert genericCallAhead("<T[\"a\" | \"b\"], int32[N + 1]>(t)");
+	assert !genericCallAhead("< b[k] && a > (y)");
 }
 
 test "typeExpr union" {
@@ -924,4 +929,37 @@ test "a function type refuses a required parameter after an optional one" {
 	const errs = typeExprErrors("(a?: int32, b: int32) => int32");
 	assert errs.length == 1;
 	assert errs[0].indexOf("A required parameter cannot follow an optional parameter") >= 0;
+}
+
+function functionTypeParamNames(typeStr: string): string {
+	const lr = lex(typeStr + " = x");
+	if (!lr.ok) return "";
+	const state = createState(lr.value);
+	const node = parseTypeExpr(state);
+	if (node.kind != NodeKind.TypeFunction) return "";
+	return (node.data as TypeFunctionData).typExprParamNames.join("|");
+}
+
+test "function type parameter names survive a block comment before the colon or question mark" {
+	assert functionTypeParamNames("(a /* c */ : int32, b /* c */ ? /* c */ : int32) => int32") == "a|b";
+}
+
+test "function type parameter names survive a line comment before the colon or question mark" {
+	assert functionTypeParamNames("(a // c\n: int32, b ? // c\n: int32) => int32") == "a|b";
+}
+
+test "a negative literal type survives a comment between the sign and the digits" {
+	assert typeExprName("-1") == "-1";
+	assert typeExprName("- /* c */ 1") == "-1";
+	assert typeExprName("- // c\n 1") == "-1";
+}
+
+test "a typeof operand is located at its own token, not at a comment before it" {
+	const lr = lex("typeof /* c */ x = y");
+	assert lr.ok;
+	if (!lr.ok) return;
+	const node = parseTypeExpr(createState(lr.value));
+	assert node.kind == NodeKind.Identifier;
+	assert (node.data as IdentifierData).name == "x";
+	assert node.location.column == lr.value[2].column;
 }

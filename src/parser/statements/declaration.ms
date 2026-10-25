@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, MacroInvocationData, InterfaceDeclData, FunctionDeclData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData, PropertyDeclData, DecoratedDeclData, NumberLiteralData, UnaryExprData } from "../../ast/node";
-import { takePendingComments, ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, collectTokenText } from "../context";
+import { takePendingComments, ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, collectTokenText, stampEnd } from "../context";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, isPropertyName } from "../util";
@@ -19,16 +19,30 @@ function makeLocFromToken(token: Token): SourceLocation {
 
 // Shared specifier list parser for import/export: { name as alias, ... }
 // Assumes opening '{' already consumed. Consumes up to but not including '}'.
-interface SpecifierList { names: string[]; aliases: string[]; locations: SourceLocation[]; }
+interface SpecifierList { names: string[]; aliases: string[]; locations: SourceLocation[]; typeNames: string[]; }
+
+function writesTypeModifier(state: ParserState): boolean {
+	const next = peek(state, 1).kind;
+	return next != TokenKind.As && next != TokenKind.Comma && next != TokenKind.RBrace && next != TokenKind.From && next != TokenKind.Eof;
+}
+
+function withTypeModifier(node: Node, typeModifier: boolean): Node {
+	if (typeModifier) node.flags = node.flags.incl(NodeFlag.TypeModifier);
+	return node;
+}
 
 function parseSpecifierList(state: ParserState): SpecifierList {
 	const names: string[] = [];
 	const aliases: string[] = [];
 	const locations: SourceLocation[] = [];
+	const typeNames: string[] = [];
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
+		const typed = current(state).kind == TokenKind.Type && writesTypeModifier(state);
+		if (typed) advance(state);
 		const specifier = current(state);
 		if (!isIdentOrKeyword(specifier.kind)) { break; }
 		const specName = specifier.value;
+		if (typed) typeNames.push(specName);
 		locations.push(makeLoc(specifier.line, specifier.column));
 		advance(state);
 		if (!isAtEnd(state) && current(state).kind == TokenKind.As) {
@@ -45,7 +59,7 @@ function parseSpecifierList(state: ParserState): SpecifierList {
 			break;
 		}
 	}
-	return { names, aliases, locations };
+	return { names, aliases, locations, typeNames };
 }
 
 // ===== Variable Declaration =====
@@ -60,15 +74,31 @@ export function parseStaticVariableDecl(state: ParserState): NodeResult {
 	if (k != TokenKind.Const && k != TokenKind.Let && k != TokenKind.Var) {
 		return Result.err(`Expected 'const', 'let' or 'var' after 'static' at line ${current(state).line}`);
 	}
+	const mark = state.trailingDecls.length;
 	const decl = try parseVariableDecl(state);
 	decl.flags = decl.flags.incl(NodeFlag.StaticStorage);
+	for (let i = mark; i < state.trailingDecls.length; i += 1) {
+		state.trailingDecls[i].flags = state.trailingDecls[i].flags.incl(NodeFlag.StaticStorage);
+	}
 	return Result.ok(decl);
 }
 
 export function parseVariableDecl(state: ParserState): NodeResult {
 	const keyword = current(state);
 	advance(state);
+	const first = try parseDeclarator(state, keyword, keyword);
+	while (current(state).kind == TokenKind.Comma) {
+		advance(state);
+		const next = try parseDeclarator(state, keyword, current(state));
+		stampEnd(state, next);
+		next.flags = next.flags.incl(NodeFlag.ContinuesList);
+		state.trailingDecls.push(next);
+	}
+	consumeSemicolon(state);
+	return Result.ok(first);
+}
 
+function parseDeclarator(state: ParserState, keyword: Token, at: Token): NodeResult {
 	// Destructuring: const { a, b } = ... or const [ x, y ] = ...
 	if (current(state).kind == TokenKind.LBrace) {
 		const pattern = try parseObjectPattern(state);
@@ -78,12 +108,11 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 		}
 		advance(state);
 		const init = try callExprParser(state);
-		consumeSemicolon(state);
 		return Result.ok(createNode(NodeKind.DestructuringDecl, {
 			destrPattern: pattern,
 			destrInit: init,
 			destrIsConst: keyword.kind == TokenKind.Const,
-		}, keyword));
+		}, at));
 	}
 
 	if (current(state).kind == TokenKind.LBracket) {
@@ -94,12 +123,11 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 		}
 		advance(state);
 		const init = try callExprParser(state);
-		consumeSemicolon(state);
 		return Result.ok(createNode(NodeKind.DestructuringDecl, {
 			destrPattern: pattern,
 			destrInit: init,
 			destrIsConst: keyword.kind == TokenKind.Const,
-		}, keyword));
+		}, at));
 	}
 
 	const nameToken = current(state);
@@ -122,7 +150,6 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 	} else if (keyword.kind == TokenKind.Const) {
 		return Result.err(`'const' declaration must be initialized at line ${current(state).line}`);
 	}
-	consumeSemicolon(state);
 
 	const varNode = createNode(NodeKind.VariableDecl, {
 		declName: nameToken.value,
@@ -130,7 +157,7 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 		initializer: init as Node,
 		declKind: match (keyword.kind) { TokenKind.Const => DeclKind.Const, TokenKind.Var => DeclKind.Var, _ => DeclKind.Let },
 		nameLocation: makeLocFromToken(nameToken),
-	}, keyword);
+	}, at);
 	varNode.typeExpr = declTypeExpr;
 	return Result.ok(varNode);
 }
@@ -315,6 +342,9 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 export function parseImportDecl(state: ParserState): NodeResult {
 	const importToken = current(state);
 	advance(state);
+	const next = peek(state, 1).kind;
+	const typeModifier = current(state).kind == TokenKind.Type && (next == TokenKind.LBrace || next == TokenKind.Star || next == TokenKind.Ident);
+	if (typeModifier) advance(state);
 
 	// Side-effect import: import "module";
 	if (current(state).kind == TokenKind.String) {
@@ -326,6 +356,7 @@ export function parseImportDecl(state: ParserState): NodeResult {
 			importAliases: [],
 			importSource: source,
 			nameLocations: [],
+			importTypeNames: [],
 		}, importToken));
 	}
 
@@ -351,9 +382,9 @@ export function parseImportDecl(state: ParserState): NodeResult {
 		const source = current(state).value;
 		advance(state);
 		consumeSemicolon(state);
-		return Result.ok(createNode(NodeKind.ImportDecl, {
-			importNames: ["*"], importAliases: [nsName], importSource: source, nameLocations: [],
-		}, importToken));
+		return Result.ok(withTypeModifier(createNode(NodeKind.ImportDecl, {
+			importNames: ["*"], importAliases: [nsName], importSource: source, nameLocations: [], importTypeNames: [],
+		}, importToken), typeModifier));
 	}
 
 	if (current(state).kind != TokenKind.LBrace) {
@@ -383,12 +414,13 @@ export function parseImportDecl(state: ParserState): NodeResult {
 	advance(state);
 	consumeSemicolon(state);
 
-	return Result.ok(createNode(NodeKind.ImportDecl, {
+	return Result.ok(withTypeModifier(createNode(NodeKind.ImportDecl, {
 		importNames: names,
 		importAliases: aliases,
 		importSource: source,
 		nameLocations: specs.locations,
-	}, importToken));
+		importTypeNames: specs.typeNames,
+	}, importToken), typeModifier));
 }
 
 // ===== Export Declaration =====
@@ -411,6 +443,8 @@ export function parseExportDecl(state: ParserState): NodeResult {
 
 function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 	// Each branch uses const + immediate return to avoid DRC try aliasing bug
+	const typeModifier = current(state).kind == TokenKind.Type && (peek(state, 1).kind == TokenKind.LBrace || peek(state, 1).kind == TokenKind.Star);
+	if (typeModifier) advance(state);
 	const nextKind = current(state).kind;
 	// Star re-export: export * from "module";
 	if (nextKind == TokenKind.Star) {
@@ -425,9 +459,9 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 		const source = current(state).value;
 		advance(state);
 		consumeSemicolon(state);
-		const importNode = createNode(NodeKind.ImportDecl, {
-			importNames: ["*"], importAliases: ["*"], importSource: source, nameLocations: [],
-		}, exportToken);
+		const importNode = withTypeModifier(createNode(NodeKind.ImportDecl, {
+			importNames: ["*"], importAliases: ["*"], importSource: source, nameLocations: [], importTypeNames: [],
+		}, exportToken), typeModifier);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: importNode }, exportToken));
 	}
 	// Re-export: export { X, Y } from "module";
@@ -447,9 +481,9 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 		const source = current(state).value;
 		advance(state);
 		consumeSemicolon(state);
-		const importNode = createNode(NodeKind.ImportDecl, {
-			importNames: names, importAliases: aliases, importSource: source, nameLocations: specs.locations,
-		}, exportToken);
+		const importNode = withTypeModifier(createNode(NodeKind.ImportDecl, {
+			importNames: names, importAliases: aliases, importSource: source, nameLocations: specs.locations, importTypeNames: specs.typeNames,
+		}, exportToken), typeModifier);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: importNode }, exportToken));
 	}
 
@@ -459,7 +493,11 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 	}
 
 	if (nextKind == TokenKind.Const || nextKind == TokenKind.Let) {
+		const mark = state.trailingDecls.length;
 		const decl = try parseVariableDecl(state);
+		for (let i = mark; i < state.trailingDecls.length; i += 1) {
+			state.trailingDecls[i] = createNode(NodeKind.ExportDecl, { exportedDecl: state.trailingDecls[i] }, exportToken);
+		}
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
@@ -477,7 +515,13 @@ function parseExportBody(state: ParserState, exportToken: Token): NodeResult {
 		const mark = state.trailingDecls.length;
 		const decl = try parseStructDecl(state);
 		for (let i = mark; i < state.trailingDecls.length; i += 1) {
-			state.trailingDecls[i] = createNode(NodeKind.ExportDecl, { exportedDecl: state.trailingDecls[i] }, exportToken);
+			const getter = state.trailingDecls[i];
+			if (getter.kind == NodeKind.DecoratedDecl) {
+				const dd = getter.data as DecoratedDeclData;
+				dd.decoratedNode = createNode(NodeKind.ExportDecl, { exportedDecl: dd.decoratedNode }, exportToken);
+			} else {
+				state.trailingDecls[i] = createNode(NodeKind.ExportDecl, { exportedDecl: getter }, exportToken);
+			}
 		}
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
@@ -854,12 +898,14 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 	const fieldLocations: SourceLocation[] = [];
 	const fieldVisibility: string[] = [];
 	const fieldDecorators: Node[][] = [];
+	const optionalFields: string[] = [];
 	while (!isAtEnd(state) && current(state).kind != TokenKind.RBrace) {
 		if (nodeKind == NodeKind.StructDecl && (current(state).kind == TokenKind.Get || current(state).kind == TokenKind.Set)
 				&& isIdentLike(peek(state, 1)) && peek(state, 2).kind == TokenKind.LParen) {
 			state.trailingDecls.push(try parseStructAccessor(state, name, genericNames));
 			continue;
 		}
+		const decoratorToken = current(state);
 		const decorators: Node[] = [];
 		while (!isAtEnd(state) && current(state).kind == TokenKind.At) {
 			const dec = try parseMacroInvocation(state);
@@ -870,7 +916,9 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		}
 		if (decorators.length > 0 && nodeKind == NodeKind.StructDecl && (current(state).kind == TokenKind.Get || current(state).kind == TokenKind.Set)
 				&& isIdentLike(peek(state, 1)) && peek(state, 2).kind == TokenKind.LParen) {
-			return Result.err(`Decorated getter '${peek(state, 1).value}' at line ${current(state).line} is not supported: a struct getter takes no decorators`);
+			const getter = try parseStructAccessor(state, name, genericNames);
+			state.trailingDecls.push(createNode(NodeKind.DecoratedDecl, { decorators, decoratedNode: getter }, decoratorToken));
+			continue;
 		}
 		let visibility = "";
 		const modifier = current(state);
@@ -902,6 +950,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 				return Result.err(`Optional field '${field.value}?' in struct at line ${field.line}: '?' means '| null' and a struct field is a value type — write the nullable union type explicitly`);
 			}
 			fieldIsOptional = true;
+			optionalFields.push(field.value);
 			advance(state);
 		}
 
@@ -929,6 +978,8 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		nameLocation: nameLoc != null ? nameLoc : makeLocFromToken(token),
 		interfaceFieldVisibility: fieldVisibility,
 		interfaceFieldDecorators: fieldDecorators,
+		interfaceOptionalFields: optionalFields,
+		nativeName: "",
 	}, token);
 	ifaceNode.typeArg = genericNames;
 	ifaceNode.typeExprs = fieldTypeExprs;
@@ -990,6 +1041,8 @@ function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: Node
 			nameLocation: nameLoc,
 			interfaceFieldVisibility: [],
 			interfaceFieldDecorators: [],
+			interfaceOptionalFields: [],
+			nativeName: "",
 		}, token);
 		aliasNode.typeArg = genericNames;
 		aliasNode.typeExprs = [];
@@ -1056,8 +1109,8 @@ export function parseClassDecl(state: ParserState): NodeResult {
 		}
 	}
 
-	// Optional implements: class Foo implements Bar, Baz<T> — kept as written for the formatter;
-	// the checker relates a class to an interface by shape, not by this list.
+	// Optional implements: class Foo implements Bar, Baz<T> — kept as written; the checker
+	// resolves each entry in the class's scope.
 	const implementsNames: string[] = [];
 	if (!isAtEnd(state) && current(state).kind == TokenKind.Implements) {
 		advance(state);
@@ -1250,7 +1303,7 @@ function parseClassMember(state: ParserState): NodeResult {
 
 	// Constructor — early return, own scope for try
 	if (current(state).kind == TokenKind.Constructor) {
-		return parseClassConstructor(state);
+		return parseClassConstructor(state, memberVisibility);
 	}
 
 	// Get/Set accessors — early return
@@ -1311,13 +1364,14 @@ function parseClassMember(state: ParserState): NodeResult {
 	}, nameToken);
 	propNode.typeExpr = propTypeExpr;
 	if (autoAccessor) propNode.flags = propNode.flags.incl(NodeFlag.AutoAccessor);
+	if (memberIsOptional) propNode.flags = propNode.flags.incl(NodeFlag.Optional);
 	return Result.ok(propNode);
 }
 
 // parseParamList and skipDefaultValue imported from ../util
 
 
-function parseClassConstructor(state: ParserState): NodeResult {
+function parseClassConstructor(state: ParserState, visibility: string): NodeResult {
 	const ctorToken = current(state);
 	advance(state);
 	const raw = parseParamList(state, "constructor");
@@ -1333,6 +1387,7 @@ function parseClassConstructor(state: ParserState): NodeResult {
 		ctorParamTypes,
 		ctorBody: body,
 		ctorDefaults,
+		ctorVisibility: visibility,
 	}, ctorToken);
 	ctorNode.typeExprs = ctorParamTypeExprs;
 	ctorNode.paramLocations = ctorParamLocs;
@@ -1818,6 +1873,16 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	// Extern interface with field body: parse as InterfaceDecl with ExternC flag.
 	// Reuses the full interface resolution pipeline (fields, types, generics).
 	// Only applies when body contains fields (name: Type), not methods (name(): Type).
+	const structNativeName = externKind == ExternKind.Struct ? parseOptionalFromClause(state) : "";
+	if (structNativeName != "" && (isAtEnd(state) || current(state).kind != TokenKind.LBrace)) {
+		consumeSemicolon(state);
+		return Result.ok(createNode(NodeKind.ExternDecl, {
+			externKind,
+			externName: nameToken.value,
+			nativeName: structNativeName,
+			externType: "",
+		}, externToken));
+	}
 	if ((externKind == ExternKind.Interface || externKind == ExternKind.Struct) && !isAtEnd(state) && current(state).kind == TokenKind.LBrace) {
 		const bodyNodeKind = externKind == ExternKind.Struct ? NodeKind.StructDecl : NodeKind.InterfaceDecl;
 		// Peek ahead to determine if body has fields or methods
@@ -1838,9 +1903,16 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		if (hasFieldBody) {
 			const ifaceResult = parseInterfaceBody(state, nameToken.value, externToken, genericNames, bodyNodeKind, makeLocFromToken(nameToken));
 			if (ifaceResult.ok) {
+				if (!isAtEnd(state) && current(state).kind == TokenKind.From) {
+					return Result.err(`extern ${kindToken.value} '${nameToken.value}': write 'from "<C name>"' before the field list, not after it, at line ${current(state).line}`);
+				}
 				ifaceResult.value.flags = ifaceResult.value.flags.incl(NodeFlag.ExternC);
+				(ifaceResult.value.data as InterfaceDeclData).nativeName = structNativeName;
 				return ifaceResult;
 			}
+		}
+		if (structNativeName != "") {
+			return Result.err(`extern struct '${nameToken.value}' from "${structNativeName}": the body must be a field list (name: Type) at line ${nameToken.line}`);
 		}
 	}
 
@@ -1994,10 +2066,12 @@ export function parseConverterDecl(state: ParserState): NodeResult {
 }
 
 function parseRuntimeConverterDecl(state: ParserState): NodeResult {
+	const nameAt = peek(state, 1).kind == TokenKind.Star ? 2 : 1;
+	const generic = peek(state, nameAt + 1).kind == TokenKind.Lt;
 	const decl = try parseFunctionDecl(state);
 	const fd = decl.data as FunctionDeclData;
 	const where = `at line ${fd.nameLocation.line}`;
-	if (fd.fnFlags.indexOf("gen:", 0) >= 0) {
+	if (generic) {
 		return Result.err(`converter '${fd.fnName}' cannot be generic ${where}`);
 	}
 	if (fd.params.length != 1) {
@@ -2014,6 +2088,8 @@ function parseRuntimeConverterDecl(state: ParserState): NodeResult {
 }
 
 // ===== Tests =====
+
+import "./core"; // registers parser callbacks
 // Variable — const vs let
 test "const decl" { assert programOk("const x = 42;"); }
 
@@ -2093,6 +2169,23 @@ test "export struct" { assert programOk("export struct Vec2 { x: number; y: numb
 test "exported distinct modifier rejected" { assert !programOk("export distinct type EntityId = number;"); }
 
 test "extern struct" { assert programOk("extern struct NativePoint { x: float64; y: float64; }"); }
+
+test "an extern struct names its C tag with from before its field list" {
+	const n = stmtAt("extern struct Stat from \"struct stat\" { st_mode: uint32; st_size: int64; }", 0);
+	assert n.kind == NodeKind.StructDecl;
+	assert n.flags.has(NodeFlag.ExternC);
+	const d = n.data as InterfaceDeclData;
+	assert d.nativeName == "struct stat";
+	assert d.interfaceFields.length == 2;
+	assert (stmtAt("extern struct Pt { x: int32; }", 0).data as InterfaceDeclData).nativeName == "";
+	const opaque = stmtAt("extern struct Tag from \"struct T\";", 0);
+	assert opaque.kind == NodeKind.ExternDecl && (opaque.data as ExternDeclData).nativeName == "struct T";
+}
+
+test "an extern struct refuses from after its field list or over a method body" {
+	assert parseError("extern struct Stat { st_mode: uint32; } from \"struct stat\";").indexOf("before the field list") >= 0;
+	assert parseError("extern struct Stat from \"struct stat\" { size(): int64; }").indexOf("must be a field list") >= 0;
+}
 
 test "struct field decorators keep name, arguments and order, one row per field" {
 	const d = stmtAt("struct S { @a @b(1, x) f: int32; g: int32; }", 0).data as InterfaceDeclData;

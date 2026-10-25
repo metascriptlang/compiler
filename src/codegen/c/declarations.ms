@@ -15,12 +15,12 @@ import {
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, readonlyDataBracedInit, resolveEmitArgs } from "./statements";
 import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, staticFieldCName, isModuleGlobalVar } from "./names";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, typeInfoRef, ensureRefArrayCellTypeInfo, isHcrImageModule, isNilableValueType, procHeader, isOpenArrayParam, openArrayDataName, openArrayLenName, isTypeBoundOp, enumCTypeName, hcrTypeInfoRef, zeroInit, defineDeferredElements } from "./types";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, typeInfoRef, ensureRefArrayCellTypeInfo, isHcrImageModule, isNilableValueType, procHeader, assertExternLayout, isOpenArrayParam, returnsBorrow, openArrayDataName, openArrayLenName, isTypeBoundOp, enumCTypeName, hcrTypeInfoRef, zeroInit, defineDeferredElements } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { copiesInline, inlineDeclOf } from "./forward";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { isBakeableAggregateConst, functionDeclIsAlive } from "../../checker/reachability";
+import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
+import { bakesIntoStaticCell, functionDeclIsAlive } from "../../checker/reachability";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
 
 // ===== genDecl — main declaration dispatcher =====
@@ -96,7 +96,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	if (sym != null && hasFlag(sym, SymbolFlag.CompileTime)) return;
 
 	// Module-qualified name (Standard reference implementation parity)
-	const isExternFn = (sym != null && hasFlag(sym, SymbolFlag.ImportC)) || d.fnFlags == "extern" || d.fnFlags.indexOf("extern", 0) >= 0;
+	const isExternFn = (sym != null && hasFlag(sym, SymbolFlag.ImportC)) || routineFlagSet(d.fnFlags).has(RoutineFlag.Extern);
 	const ovIdx = sym != null ? sym.overloadIdx : 0;
 	let name = mangledFunctionName(sym, d.fnName, ovIdx);
 
@@ -173,7 +173,7 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 			scopeMangledParam(p, safeName(d.params[pi]));
 			if (paramSym != null) setLocalSymName(p, paramSym, safeName(d.params[pi]));
 			const isMutated = (mutBits & (1 << (pi as int32))) != 0;
-			const bodyPromote = pi < fnType.typeChildren.length && (isDrcHookFn ? ccgIntroducedPtr(g.target, fnType.typeChildren[pi]) : shouldIndirectParam(g.target, fnType.typeChildren[pi], isMutated));
+			const bodyPromote = pi < fnType.typeChildren.length && (isDrcHookFn ? ccgIntroducedPtr(g.target, fnType.typeChildren[pi]) : shouldIndirectParam(g.target, fnType.typeChildren[pi], isMutated, pi == 0 && returnsBorrow(fnType)));
 			if (bodyPromote) {
 				p.indirectParams.push(d.params[pi]);
 				if (paramSym != null) p.indirectSyms.push(paramSym);
@@ -274,7 +274,11 @@ function genInterfaceDecl(g: CGen, node: Readonly<Node>): void {
 
 	// Extern interface: type defined externally — skip struct emission.
 	// Reference parity: isImportedType() skips forward decl + struct body.
-	if (node.flags.has(NodeFlag.ExternC)) return;
+	if (node.flags.has(NodeFlag.ExternC)) {
+		const sym = declTypeSym(node);
+		if (sym != null && sym.symbolType != null) assertExternLayout(g, sym.symbolType);
+		return;
+	}
 
 	// Skip uninstantiated generic interfaces (prelude templates with K, V, T params)
 	const declType = node.nodeType;
@@ -583,11 +587,13 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 				return;
 			}
 		}
-		if (init.kind == NodeKind.ObjectLiteral && node.nodeType != null && isBakeableAggregateConst(node)) {
-			if (genBakedConstCell(g, node, varName, staticPfx, cType)) return;
-		}
-		if ((init.kind == NodeKind.ArrayLiteral || init.kind == NodeKind.CallExpr) && node.nodeType != null && isBakeableAggregateConst(node)) {
-			if (genBakedConstArrayCell(g, node, varName, staticPfx, cType)) return;
+		if (bakesIntoStaticCell(node)) {
+			if (init.kind == NodeKind.ObjectLiteral) {
+				genBakedConstCell(g, node, varName, staticPfx, cType);
+			} else {
+				genBakedConstArrayCell(g, node, varName, staticPfx, cType);
+			}
+			return;
 		}
 	}
 	// Always emit uninitialized declaration to GlobalVars
@@ -639,22 +645,25 @@ function genGlobalVar(g: CGen, node: Readonly<Node>): void {
 	}
 }
 
-function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, staticPfx: string, cType: string): boolean {
-	if (cType.length < 2 || cType.slice(cType.length - 1, cType.length) != "*") return false;
+function refuseBake(g: CGen, node: Readonly<Node>, why: string): void {
 	const d = node.data as VariableDeclData;
-	if (g.aliveSet.computed && !aliveSetHasDecl(g.aliveSet, node.resolvedSym, d.declName)) return true;
+	addCGenError(g, `internal: module constant '${d.declName}' was chosen for a static cell, but ${why} in ${g.modulePath}`, node.location.line, node.location.column);
+}
+
+function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, staticPfx: string, cType: string): void {
+	if (cType.length < 2 || cType.slice(cType.length - 1, cType.length) != "*") return refuseBake(g, node, `its C type '${cType}' is not a pointer`);
+	const d = node.data as VariableDeclData;
+	if (g.aliveSet.computed && !aliveSetHasDecl(g.aliveSet, node.resolvedSym, d.declName)) return;
 	const body = cType.slice(0, cType.length - 1);
-	if (isHcrImageModule(g, g.modulePath) && g.emissionFacts.hcrTypeInfoOwners.has(body)) return false;
+	if (isHcrImageModule(g, g.modulePath) && g.emissionFacts.hcrTypeInfoOwners.has(body)) return refuseBake(g, node, `its TypeInfo '${body}' belongs to a reloadable image`);
 	const od = d.initializer.data as ObjectLiteralData;
 	const p = g.initProc;
 	let braced = "";
 	let closuresOk = true;
-	let literalsOk = true;
 	const owner = peelToStructOrUnion(node.nodeType);
 	let i = 0;
 	for (const prop of od.properties) {
 		if (owner != null && owner.kind == TypeKind.Struct && storesNothing(owner, getProperty(owner, od.keys[i]))) {
-			if (prop.kind != NodeKind.BooleanLiteral) literalsOk = false;
 			i = i + 1;
 			continue;
 		}
@@ -670,32 +679,30 @@ function genBakedConstCell(g: CGen, node: Readonly<Node>, varName: string, stati
 	const bakeLocals = readProcLocals(p);
 	const bakeStmts = readProcStmts(p);
 	clearProcBuffers(p);
-	if (!closuresOk || !literalsOk || bakeLocals.length > 0 || bakeStmts.length > 0) return false;
+	if (!closuresOk) return refuseBake(g, node, "a closure field carries an environment");
+	if (bakeLocals.length > 0 || bakeStmts.length > 0) return refuseBake(g, node, "its fields need initialization code");
 	const typeInfo = typeInfoRef(g, node.nodeType);
 	const viaRegistry = isHcrImageModule(g, g.modulePath);
-	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${body} b; } ${varName}_konst_ = { { 1 << 30, -1, ${viaRegistry ? "NULL" : typeInfo}, 0 }, { ${braced} } };`);
+	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${body} b; } ${varName}_konst_ = { { .rc = 1 << 30, .type = ${viaRegistry ? "NULL" : typeInfo}, .rootIdx = -1, .allocSize = 0 }, { ${braced} } };`);
 	if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${varName}_konst_.h.type = ${typeInfo};`);
 	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = &${varName}_konst_.b;`);
 	nameSetAdd(g.declaredGlobals, varName);
-	return true;
 }
 
-function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, staticPfx: string, cType: string): boolean {
-	if (cType.length < 2 || cType.slice(cType.length - 1, cType.length) != "*") return false;
-	const t0 = node.nodeType;
-	if (t0 == null) return false;
+function genBakedConstArrayCell(g: CGen, node: Readonly<Node>, varName: string, staticPfx: string, cType: string): void {
+	if (cType.length < 2 || cType.slice(cType.length - 1, cType.length) != "*") return refuseBake(g, node, `its C type '${cType}' is not a pointer`);
+	const t0 = node.nodeType!;
 	const arrT = t0.kind == TypeKind.Ref ? t0.typeReturn : t0;
-	if (arrT == null || arrT.kind != TypeKind.Array) return false;
+	if (arrT == null || arrT.kind != TypeKind.Array) return refuseBake(g, node, "its type is not a reference array");
 	const d = node.data as VariableDeclData;
-	if (g.aliveSet.computed && !aliveSetHasDecl(g.aliveSet, node.resolvedSym, d.declName)) return true;
+	if (g.aliveSet.computed && !aliveSetHasDecl(g.aliveSet, node.resolvedSym, d.declName)) return;
 	const arrCType = cType.slice(0, cType.length - 1);
 	const typeInfo = ensureRefArrayCellTypeInfo(g, arrT);
 	const viaRegistry = isHcrImageModule(g, g.modulePath);
-	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${arrCType} b; } ${varName}_konst_ = { { 1 << 30, -1, ${viaRegistry ? "NULL" : typeInfo}, 0 }, { 0, NULL } };`);
+	addLine(sec(g, CSection.GlobalVars), `static struct { msRefHeader h; ${arrCType} b; } ${varName}_konst_ = { { .rc = 1 << 30, .type = ${viaRegistry ? "NULL" : typeInfo}, .rootIdx = -1, .allocSize = 0 }, { 0, NULL } };`);
 	if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${varName}_konst_.h.type = ${typeInfo};`);
 	addLine(sec(g, CSection.GlobalVars), `${staticPfx}${cType} ${varName} = &${varName}_konst_.b;`);
 	nameSetAdd(g.declaredGlobals, varName);
-	return true;
 }
 
 function readonlyDataBracedInit(g: CGen, init: Readonly<Node>, t: Type | null): string {

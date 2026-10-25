@@ -5,9 +5,9 @@
 // arrives already converted by the checker's std dump call.
 
 import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { getBuiltinKind, isNumeric, isWideInteger, stringType, booleanType, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, isStringLike, isNullableBigInt, createFunction } from "../../checker/types";
+import { getBuiltinKind, isNumeric, isWideInteger, stringType, booleanType, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, isStringLike, isNullableBigInt, createFunction, unwrapRefNullUnion } from "../../checker/types";
 import { TransformContext, mintSym } from "../context";
-import { makeIdentResolved, makeTypedIdentResolved, compilerFuncSym, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, runtimeRef, makeFnDecl, makeBlock, makeReturn } from "../util";
+import { makeIdentResolved, makeTypedIdentResolved, compilerFuncSym, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, runtimeRef, makeFnDecl, makeBlock, makeReturn, makeNull } from "../util";
 import { charToString } from "./stringOpLower";
 
 function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): Node {
@@ -76,6 +76,7 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 		call.nodeType = stringType();
 		return call;
 	}
+	if (t.kind == TypeKind.Null) return evaluatedPlaceholder(arg, t, "null", loc, ctx);
 	return evaluatedPlaceholder(arg, t, "<" + (t.typeName != "" ? t.typeName : "object") + ">", loc, ctx);
 }
 
@@ -87,18 +88,30 @@ export function takePlaceholderFns(): Node[] {
 	return out;
 }
 
+function nullableSlotType(arg: Node, t: Type): Type {
+	const declared = t.kind == TypeKind.Null && arg.resolvedSym != null ? arg.resolvedSym.symbolType : t;
+	return declared != null && declared.kind == TypeKind.Union && unwrapRefNullUnion(declared) != null ? declared : t;
+}
+
 export function evaluatedPlaceholder(arg: Node, t: Type, text: string, loc: SourceLocation, ctx: TransformContext): Node {
 	if (t.kind == TypeKind.Void || t.kind == TypeKind.Never) {
 		const unevaluated = makeString(text, loc);
 		unevaluated.nodeType = stringType();
 		return unevaluated;
 	}
+	const slotType = nullableSlotType(arg, t);
 	const sym = mintSym(ctx, SymbolKind.Function, "$placeholder" + _placeholderFnDecls.length.toString(), null);
-	const valueSym = mintSym(ctx, SymbolKind.Parameter, "x", t);
-	const placeholder = makeString(text, loc);
+	const valueSym = mintSym(ctx, SymbolKind.Parameter, "x", slotType);
+	let placeholder = makeString(text, loc);
 	placeholder.nodeType = stringType();
+	if (t.kind != TypeKind.Null && slotType.kind == TypeKind.Union) {
+		const absent = makeString("null", loc);
+		absent.nodeType = stringType();
+		placeholder = makeConditional(makeBinary(makeTypedIdentResolved(valueSym, slotType, loc), "==", makeNull(loc), loc), absent, placeholder, loc);
+		placeholder.nodeType = stringType();
+	}
 	const fnNode = makeFnDecl(sym.name, [valueSym], ["unknown"], makeBlock([makeReturn(placeholder, loc)], loc), "", "string", loc);
-	fnNode.nodeType = createFunction([t], ["x"], stringType());
+	fnNode.nodeType = createFunction([slotType], ["x"], stringType());
 	sym.symbolType = fnNode.nodeType;
 	fnNode.resolvedSym = sym;
 	_placeholderFnDecls.push(fnNode);

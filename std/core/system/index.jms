@@ -58,6 +58,9 @@ export class SyntaxError extends Error {
 @builtin("compilerFunc")
 export extern function compilerFunc(): void;
 
+@builtin("throws")
+export extern function throws(): void;
+
 @builtin("delegate")
 export extern function delegate(): void;
 
@@ -100,6 +103,18 @@ function msUnionReadMaybe(u: unknown, slots: int32[], head: string, labels: stri
 @compilerFunc
 function msUnionWrapMaybe(v: unknown, tag: int32): unknown {
 	@emit(`return ${v} == null ? null : { $tag: ${tag}, $v: ${v} };`);
+	unreachable;
+}
+
+@compilerFunc
+function msClosureSame(a: unknown, b: unknown): boolean {
+	@emit(`let x = ${a}; let y = ${b}; while (typeof x === "function" && x.$adaptee !== undefined) x = x.$adaptee; while (typeof y === "function" && y.$adaptee !== undefined) y = y.$adaptee; return x === y;`);
+	unreachable;
+}
+
+@compilerFunc
+function msClosureAdapt(source: unknown, thunk: unknown): unknown {
+	@emit(`const adapted = (...args) => ${thunk}(${source}, ...args); adapted.$adaptee = ${source}; return adapted;`);
 	unreachable;
 }
 
@@ -419,9 +434,8 @@ function msChkIndex(i: int64, len: int64): int64 {
 
 @compilerFunc
 function msChkCount(n: int64): int64 {
-	@emit(`if (${n} < 0) ${msDefect}("value " + ${n} + " not in range 0 .. 9223372036854775807");
-	if (${n} > 4294967295) ${msDefect}("over- or underflow");
-	return ${n};`);
+	@emit(`if (${n} < 0 || ${n} > 2147483647) ${msDefect}("value " + ${n} + " not in range 0 .. 2147483647");
+	return Number(${n});`);
 	unreachable;
 }
 

@@ -18,14 +18,14 @@ import { Node, NodeKind, NodeFlag, SourceLocation, DeclKind, Type, TypeKind,
 import { TransformContext, freshTempSym, mintSym } from "../context";
 import { canFormAcycle } from "../cycles";
 import { containsExprKind } from "../walker";
-import { setFlag, SymbolFlag } from "../../checker/symbol";
+import { setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import {
 	syntheticToken, makeIdentResolved, makeTypedIdentResolved, makeCall, makeExprStmt, makeReturn,
 	makeVarDecl, makeMember, makeNumber, makeNull, makeBlock, makeBinary,
 	isValueLayoutType, makeHiddenAddr, makeTryFinally, runtimeRef,
 } from "../util";
 import { voidType, noneType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, getSysType, isStructType, isAtomicRef, instantiateGenericBody, typeDisplayName } from "../../checker/types";
-import { genericParamsOf } from "../../checker/types";
+import { genericParamsOf, literalBase } from "../../checker/types";
 import { ctorRoutineFor } from "../../checker/ctorRoutine";
 
 // msMessage.data[56] holds 7 pointer-sized slots (56 / 8 on 64-bit).
@@ -49,6 +49,7 @@ function typeMsgKind(t: Type | null): string {
 	ensureGIBody(t);
 	if (isValueLayoutType(t)) return "struct";
 	if (t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias) return typeMsgKind(t.typeReturn);
+	if (literalBase(t) != t) return typeMsgKind(literalBase(t));
 	const result = match (t.kind) {
 		TypeKind.String => "string",
 		TypeKind.Array => "array",
@@ -106,21 +107,21 @@ function msgCompleteName(mk: string): string {
 	};
 }
 
-function replyChainFn(mk: string): string {
+function suspendReplyFn(mk: string): string {
 	return match (mk) {
-		"double" => "msMsgReplyChainDouble",
-		"int32"  => "msMsgReplyChainInt32",
-		"int64"  => "msMsgReplyChainInt64",
-		"bool"   => "msMsgReplyChainBool",
-		"string" => "msMsgReplyChainString",
-		_ => "msMsgReplyChainPtr",
+		"double" => "msActorSuspendReplyDouble",
+		"int32"  => "msActorSuspendReplyInt32",
+		"int64"  => "msActorSuspendReplyInt64",
+		"bool"   => "msActorSuspendReplyBool",
+		"string" => "msActorSuspendReplyString",
+		_ => "msActorSuspendReplyPtr",
 	};
 }
 
-function replyChainFnForReturn(retType: Type | null): string {
-	if (retType == null) return "msMsgReplyChainPtr";
+function suspendReplyFnForReturn(retType: Type | null): string {
+	if (retType == null) return "msActorSuspendReplyPtr";
 	const inner = retType.typeReturn != null ? retType.typeReturn : retType;
-	return replyChainFn(typeMsgKind(inner));
+	return suspendReplyFn(typeMsgKind(inner));
 }
 
 // "string" = 2 slots (16B inlined); "array"/"struct" = 1 slot (heap-boxed).
@@ -222,7 +223,7 @@ function buildCallProxy(kind: number, params: Symbol[], paramTypes: Type[], retT
 	// Only String needs typed-sized future (msMsgCompleteString writes the
 	// 16-byte payload inline). Struct/Tuple/value-GI returns are heap-boxed
 	// in the dispatch body, so they fit the generic 8-byte msFutureCreate.
-	const isStringReturn = retType != null && retType.kind == TypeKind.String;
+	const isStringReturn = retType != null && literalBase(retType).kind == TypeKind.String;
 	let futCreate: Node;
 	if (isStringReturn) {
 		futCreate = makeCall(runtimeRef("msFutureCreateInline", loc), [], loc);
@@ -345,19 +346,18 @@ function buildDispatchBody(methods: Node[], actorRefType: Type, thisSym: Symbol,
 			implFutDecl.resolvedSym = implFutSym;
 			bodyStmts.push(implFutDecl);
 			let replyFutArg: Node = makeNull(loc);
+			let suspendFn = "msActorSuspend";
 			if (!isVoid) {
-				// CALL: store reply future, chain _impl's future → reply future.
-				// Select typed chain variant based on method's declared return type
-				// so msString (16B) and other typed values are copied correctly.
-				const chainFn = replyChainFnForReturn(m.nodeType);
+				// CALL: the resume moves _impl's value into the reply future; the typed
+				// variant follows the declared return type so msString (16B) and other
+				// typed values are moved whole.
+				suspendFn = suspendReplyFnForReturn(m.nodeType);
 				const futAccessCall = makeCall(runtimeRef("msMsgReplyFuture", loc), [makeTypedIdentResolved(msgParamSym, null, loc)], loc);
 				const replyFutSym = mintSym(ctx, SymbolKind.Variable, "_replyFut", VOID_PTR);
 				const replyDecl = makeVarDecl(replyFutSym.name, futAccessCall, DeclKind.Const, loc);
 				replyDecl.nodeType = VOID_PTR;
 				replyDecl.resolvedSym = replyFutSym;
 				bodyStmts.push(replyDecl);
-				bodyStmts.push(makeExprStmt(
-					makeCall(runtimeRef(chainFn, loc), [makeIdentResolved(implFutSym, loc), makeIdentResolved(replyFutSym, loc)], loc), loc));
 				replyFutArg = makeIdentResolved(replyFutSym, loc);
 			}
 			// Derive msActor* from _self.pid, pass reply future for R1 stop
@@ -367,7 +367,7 @@ function buildDispatchBody(methods: Node[], actorRefType: Type, thisSym: Symbol,
 				selfPid,
 			], loc);
 			bodyStmts.push(makeExprStmt(
-				makeCall(runtimeRef("msActorSuspend", loc), [actorPtr, makeIdentResolved(implFutSym, loc), replyFutArg], loc), loc));
+				makeCall(runtimeRef(suspendFn, loc), [actorPtr, makeIdentResolved(implFutSym, loc), replyFutArg], loc), loc));
 			body = makeBlock(bodyStmts, loc);
 		} else if (isVoid) {
 			body = makeBlock([makeExprStmt(handlerCall, loc)], loc);
@@ -440,6 +440,7 @@ function emitActorStruct(node: Node, d: ActorDeclData, ctx: TransformContext, lo
 				ctorParamTypes: cd.ctorParamTypes,
 				ctorBody: makeBlock([], loc),
 				ctorDefaults: cd.ctorDefaults,
+				ctorVisibility: cd.ctorVisibility,
 			}, syntheticToken(loc));
 			emptyCtor.resolvedSym = m.resolvedSym;
 			emptyCtor.nodeType = m.nodeType;
@@ -985,6 +986,7 @@ function wireActorConstructor(classNode: Node, actor: ActorLowered, actorType: T
 			ctorParamTypes: [],
 			ctorBody: makeBlock([], loc),
 			ctorDefaults: [],
+			ctorVisibility: "",
 		}, syntheticToken(loc));
 		ctor.nodeType = createFunction([], [], voidType());
 		ctor.resolvedSym = ctorRoutineFor(ctx.checkerCtx, actor.actorSym);
@@ -1091,7 +1093,7 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 			};
 			if (isLifecycle) continue;
 			// Detect: method is explicitly async OR its body contains await
-			const isAsync = md.methodFlags == "async" || bodyContainsAwait(md.methodBody);
+			const isAsync = routineFlagSet(md.methodFlags).has(RoutineFlag.Async) || bodyContainsAwait(md.methodBody);
 			if (!isAsync) continue;
 
 			// Extract as top-level FunctionDecl with fnFlags: "async"

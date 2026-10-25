@@ -1,14 +1,14 @@
 // forEachChild — canonical read-only child enumerator for all NodeKinds.
 // Single source of truth for "what are the child nodes of this NodeKind?"
 // Used by analysis passes (reachability, DCE, LSP suggest, validate).
-// For MUTATING traversal (transform passes), use mapChildren in transform/walker.ms.
-// SYNC: mapChildren in transform/walker.ms must handle the same NodeKinds.
+// mapChildren, at the end of this file, is the MUTATING variant used by transform passes.
+// SYNC: mapChildren must handle the same NodeKinds as forEachChild.
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, createNodeAt, makeLoc, IdentifierData,
 	ProgramData, BlockStmtData, IfStmtData, WhileStmtData, ForStmtData,
 	ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
-	FunctionDeclData, ArrowFunctionData, FunctionExprData,
+	FunctionDeclData, ArrowFunctionData, FunctionExprData, EnumDeclData,
 	ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData,
 	ExportDeclData, DecoratedDeclData, MacroDeclData,
 	VariableDeclData, ReturnStmtData, ThrowStmtData, ExprStmtData,
@@ -30,439 +30,604 @@ import {
 
 type ChildVisitor = (child: Node) => void;
 
-// Visit all child nodes of a given node (read-only, no mutation).
-export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
-	if (node == null) return;
-	const cb = (n: Node): void => {
-		if (n != null) cbRaw(n);
+// Visitor function: takes a node, returns replacement (or same node if unchanged)
+export type Visitor = (node: Node) => Node;
+
+// Check if a node is a function boundary (FunctionDecl, ArrowFunction, FunctionExpr)
+export function isFuncBoundary(node: Node): boolean {
+	return node.kind == NodeKind.FunctionDecl ||
+		node.kind == NodeKind.ArrowFunction ||
+		node.kind == NodeKind.FunctionExpr;
+}
+
+export function anyChild(node: Node, test: (child: Node) => boolean): boolean {
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && test(child)) found = true;
+	});
+	return found;
+}
+
+export function noStop(n: Node): boolean {
+	return false;
+}
+
+export function anyDescendant(node: Node | null, test: (n: Node) => boolean, stop: (n: Node) => boolean): boolean {
+	let found = false;
+	const scan = (c: Node | null): void => {
+		if (found || c == null) return;
+		if (test(c)) { found = true; return; }
+		if (stop(c)) return;
+		forEachChild(c, scan);
 	};
+	scan(node);
+	return found;
+}
+
+function nameNode(name: string): Node {
+	return createNodeAt(NodeKind.Identifier, { name }, makeLoc(1, 1));
+}
+
+function blockNode(stmts: Node[]): Node {
+	return createNodeAt(NodeKind.BlockStmt, { statements: stmts }, makeLoc(1, 1));
+}
+
+function isNamed(n: Node, name: string): boolean {
+	return n.kind == NodeKind.Identifier && (n.data as IdentifierData).name == name;
+}
+
+test "anyChild: a match among the direct children" {
+	const root = blockNode([nameNode("a"), nameNode("b")]);
+	assert anyChild(root, (c: Node): boolean => isNamed(c, "b"));
+}
+
+test "anyChild: a match one level down is not a direct child" {
+	const root = blockNode([nameNode("a"), blockNode([nameNode("b")])]);
+	assert !anyChild(root, (c: Node): boolean => isNamed(c, "b"));
+}
+
+test "anyChild: no match, and a leaf has no children" {
+	assert !anyChild(blockNode([nameNode("a")]), (c: Node): boolean => isNamed(c, "z"));
+	assert !anyChild(nameNode("a"), (c: Node): boolean => true);
+}
+
+test "anyChild: stops testing after the first match" {
+	const root = blockNode([nameNode("a"), nameNode("a"), nameNode("a")]);
+	let calls = 0;
+	assert anyChild(root, (c: Node): boolean => { calls += 1; return true; });
+	assert calls == 1;
+}
+
+test "anyDescendant: a match at any depth, the node itself included" {
+	const deep = blockNode([nameNode("a"), blockNode([blockNode([nameNode("b")])])]);
+	assert anyDescendant(deep, (n: Node): boolean => isNamed(n, "b"), noStop);
+	assert anyDescendant(nameNode("b"), (n: Node): boolean => isNamed(n, "b"), noStop);
+}
+
+test "anyDescendant: no match, and a null node" {
+	const root = blockNode([nameNode("a"), blockNode([nameNode("b")])]);
+	assert !anyDescendant(root, (n: Node): boolean => isNamed(n, "z"), noStop);
+	assert !anyDescendant(null, (n: Node): boolean => true, noStop);
+}
+
+test "anyDescendant: does not descend into a stop node but still tests it" {
+	const inner = blockNode([nameNode("b")]);
+	const root = blockNode([nameNode("a"), inner]);
+	const stopAtBlock = (n: Node): boolean => n.kind == NodeKind.BlockStmt && n != root;
+	assert !anyDescendant(root, (n: Node): boolean => isNamed(n, "b"), stopAtBlock);
+	assert anyDescendant(root, (n: Node): boolean => n == inner, stopAtBlock);
+}
+
+test "anyDescendant: stops testing after the first match" {
+	const root = blockNode([nameNode("a"), nameNode("a"), blockNode([nameNode("a")])]);
+	let calls = 0;
+	assert anyDescendant(root, (n: Node): boolean => { calls += 1; return n.kind == NodeKind.Identifier; }, noStop);
+	assert calls == 2;
+}
+
+function numNode(v: number): Node {
+	return createNodeAt(NodeKind.NumberLiteral, { value: v, isFloat: false }, makeLoc(1, 1));
+}
+
+function childrenOf(n: Node): Node[] {
+	const out: Node[] = [];
+	forEachChild(n, (c: Node): void => { out.push(c); });
+	return out;
+}
+
+test "forEachChild: an enum visits each member initialiser and skips a member without one" {
+	const a = numNode(1);
+	const b = numNode(2);
+	const none = null as unknown as Node;
+	const decl = createNodeAt(NodeKind.EnumDecl, { enumName: "E", enumMembers: ["A", "B", "C"], enumValues: [1, 0, 2], nameLocation: makeLoc(1, 1), memberLocations: [], enumInits: [a, none, b] }, makeLoc(1, 1));
+	const seen = childrenOf(decl);
+	assert seen.length == 2 && seen[0] == a && seen[1] == b;
+}
+
+test "mapChildren: an enum rewrites each member initialiser in place" {
+	const a = numNode(1);
+	const none = null as unknown as Node;
+	const repl = numNode(9);
+	const decl = createNodeAt(NodeKind.EnumDecl, { enumName: "E", enumMembers: ["A", "B"], enumValues: [1, 0], nameLocation: makeLoc(1, 1), memberLocations: [], enumInits: [a, none] }, makeLoc(1, 1));
+	mapChildren(decl, (n: Node): Node => repl);
+	const inits = (decl.data as EnumDeclData).enumInits;
+	assert inits[0] == repl && inits[1] == null;
+}
+
+test "forEachChild: a decorated declaration visits its decorators before the declaration" {
+	const dec = createNodeAt(NodeKind.MacroInvocation, { macroName: "tag", macroArgs: [], macroHasParens: false }, makeLoc(1, 1));
+	const inner = blockNode([]);
+	const decorated = createNodeAt(NodeKind.DecoratedDecl, { decorators: [dec], decoratedNode: inner }, makeLoc(1, 1));
+	const seen = childrenOf(decorated);
+	assert seen.length == 2 && seen[0] == dec && seen[1] == inner;
+}
+
+test "mapChildren: a decorated declaration rewrites its decorators and the declaration" {
+	const dec = createNodeAt(NodeKind.MacroInvocation, { macroName: "tag", macroArgs: [], macroHasParens: false }, makeLoc(1, 1));
+	const inner = blockNode([]);
+	const decorated = createNodeAt(NodeKind.DecoratedDecl, { decorators: [dec], decoratedNode: inner }, makeLoc(1, 1));
+	const repl = nameNode("r");
+	mapChildren(decorated, (n: Node): Node => repl);
+	const d = decorated.data as DecoratedDeclData;
+	assert d.decorators[0] == repl && d.decoratedNode == repl;
+}
+
+export function literalHeldClosures(init: Node, out: Node[]): void {
+	if (init.kind == NodeKind.ArrowFunction || init.kind == NodeKind.FunctionExpr) {
+		out.push(init);
+	} else if (init.kind == NodeKind.ObjectLiteral) {
+		for (const p of (init.data as ObjectLiteralData).properties) literalHeldClosures(p, out);
+	} else if (init.kind == NodeKind.ArrayLiteral) {
+		for (const e of (init.data as ArrayLiteralData).elements) literalHeldClosures(e, out);
+	}
+}
+
+export function initializerHoldsClosure(init: Node | null): boolean {
+	if (init == null) return false;
+	const held: Node[] = [];
+	literalHeldClosures(init, held);
+	return held.length > 0;
+}
+
+// Visit all child nodes of a given node (read-only, no mutation).
+function visitChild(cb: ChildVisitor, n: Node): void {
+	if (n != null) cb(n);
+}
+
+export function forEachChild(node: Node, cb: ChildVisitor): void {
+	if (node == null) return;
 	match (node.kind) {
 		// Program root
 		NodeKind.Program => {
-			const d = node.data as ProgramData;
+			const d: Cursor<ProgramData> = node.data as ProgramData;
 			let i = 0;
 			while (i < d.programStmts.length) {
-				cb(d.programStmts[i]);
+				visitChild(cb, d.programStmts[i]);
 				i += 1;
 			}
 		},
 		// SpliceMany — A2 macro multi-decl emission
 		NodeKind.SpliceMany => {
-			const d = node.data as SpliceManyData;
-			for (const child of d.spliceNodes) cb(child);
+			const d: Cursor<SpliceManyData> = node.data as SpliceManyData;
+			for (const child of d.spliceNodes) visitChild(cb, child);
 		},
 		// Block
 		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
+			const d: Cursor<BlockStmtData> = node.data as BlockStmtData;
 			let i = 0;
 			while (i < d.statements.length) {
-				cb(d.statements[i]);
+				visitChild(cb, d.statements[i]);
 				i += 1;
 			}
 		},
 		// Statements with child nodes
 		NodeKind.IfStmt => {
-			const d = node.data as IfStmtData;
-			cb(d.condition);
-			cb(d.consequent);
-			cb(d.alternate);
+			const d: Cursor<IfStmtData> = node.data as IfStmtData;
+			visitChild(cb, d.condition);
+			visitChild(cb, d.consequent);
+			visitChild(cb, d.alternate);
 		},
 		NodeKind.WhileStmt => {
-			const d = node.data as WhileStmtData;
-			cb(d.whileCondition);
-			cb(d.whileBody);
+			const d: Cursor<WhileStmtData> = node.data as WhileStmtData;
+			visitChild(cb, d.whileCondition);
+			visitChild(cb, d.whileBody);
 		},
 		NodeKind.ForStmt => {
-			const d = node.data as ForStmtData;
-			cb(d.forInit);
-			cb(d.forCondition);
-			cb(d.forUpdate);
-			cb(d.forBody);
+			const d: Cursor<ForStmtData> = node.data as ForStmtData;
+			visitChild(cb, d.forInit);
+			visitChild(cb, d.forCondition);
+			visitChild(cb, d.forUpdate);
+			visitChild(cb, d.forBody);
 		},
 		NodeKind.ForOfStmt => {
-			const d = node.data as ForOfStmtData;
-			cb(d.forOfIterable);
-			cb(d.forOfBody);
-			if (d.forOfPattern != null) { cb(d.forOfPattern); }
+			const d: Cursor<ForOfStmtData> = node.data as ForOfStmtData;
+			visitChild(cb, d.forOfIterable);
+			visitChild(cb, d.forOfBody);
+			if (d.forOfPattern != null) { visitChild(cb, d.forOfPattern); }
 		},
 		NodeKind.ForInStmt => {
-			const d = node.data as ForInStmtData;
-			cb(d.forInObject);
-			cb(d.forInBody);
+			const d: Cursor<ForInStmtData> = node.data as ForInStmtData;
+			visitChild(cb, d.forInObject);
+			visitChild(cb, d.forInBody);
 		},
 		NodeKind.DoWhileStmt => {
-			const d = node.data as DoWhileStmtData;
-			cb(d.doBody);
-			cb(d.doCondition);
+			const d: Cursor<DoWhileStmtData> = node.data as DoWhileStmtData;
+			visitChild(cb, d.doBody);
+			visitChild(cb, d.doCondition);
 		},
 		NodeKind.SwitchStmt => {
-			const d = node.data as SwitchStmtData;
-			cb(d.switchDisc);
+			const d: Cursor<SwitchStmtData> = node.data as SwitchStmtData;
+			visitChild(cb, d.switchDisc);
 			let i = 0;
 			while (i < d.switchCases.length) {
-				cb(d.switchCases[i]);
+				visitChild(cb, d.switchCases[i]);
 				i += 1;
 			}
 		},
 		NodeKind.SwitchCase => {
-			const d = node.data as SwitchCaseData;
+			const d: Cursor<SwitchCaseData> = node.data as SwitchCaseData;
 			let i = 0;
 			while (i < d.caseTests.length) {
-				cb(d.caseTests[i]);
+				visitChild(cb, d.caseTests[i]);
 				i += 1;
 			}
 			let j = 0;
 			while (j < d.caseStmts.length) {
-				cb(d.caseStmts[j]);
+				visitChild(cb, d.caseStmts[j]);
 				j += 1;
 			}
 		},
 		NodeKind.MatchStmt => {
-			const d = node.data as MatchStmtData;
-			cb(d.matchStmtDisc);
+			const d: Cursor<MatchStmtData> = node.data as MatchStmtData;
+			visitChild(cb, d.matchStmtDisc);
 			let i = 0;
 			while (i < d.matchStmtCases.length) {
-				cb(d.matchStmtCases[i]);
+				visitChild(cb, d.matchStmtCases[i]);
 				i += 1;
 			}
 		},
 		NodeKind.MatchExpr => {
-			const d = node.data as MatchExprData;
-			cb(d.matchDisc);
+			const d: Cursor<MatchExprData> = node.data as MatchExprData;
+			visitChild(cb, d.matchDisc);
 			let i = 0;
 			while (i < d.matchCases.length) {
-				cb(d.matchCases[i]);
+				visitChild(cb, d.matchCases[i]);
 				i += 1;
 			}
 		},
 		NodeKind.MatchCase => {
-			const d = node.data as MatchCaseData;
+			const d: Cursor<MatchCaseData> = node.data as MatchCaseData;
 			let i = 0;
 			while (i < d.casePatterns.length) {
-				cb(d.casePatterns[i]);
+				visitChild(cb, d.casePatterns[i]);
 				i += 1;
 			}
-			if (d.caseGuard != null) { cb(d.caseGuard); }
-			cb(d.caseBody);
+			if (d.caseGuard != null) { visitChild(cb, d.caseGuard); }
+			visitChild(cb, d.caseBody);
 		},
 		// Declarations with bodies
 		NodeKind.FunctionDecl => {
-			const d = node.data as FunctionDeclData;
-			cb(d.fnBody);
+			const d: Cursor<FunctionDeclData> = node.data as FunctionDeclData;
+			visitChild(cb, d.fnBody);
 		},
 		NodeKind.ArrowFunction => {
-			const d = node.data as ArrowFunctionData;
-			cb(d.arrowBody);
+			const d: Cursor<ArrowFunctionData> = node.data as ArrowFunctionData;
+			visitChild(cb, d.arrowBody);
 		},
 		NodeKind.FunctionExpr => {
-			const d = node.data as FunctionExprData;
-			cb(d.funcExprBody);
+			const d: Cursor<FunctionExprData> = node.data as FunctionExprData;
+			visitChild(cb, d.funcExprBody);
 		},
 		NodeKind.ClassDecl => {
-			const d = node.data as ClassDeclData;
+			const d: Cursor<ClassDeclData> = node.data as ClassDeclData;
 			let i = 0;
 			while (i < d.classBody.length) {
-				cb(d.classBody[i]);
+				visitChild(cb, d.classBody[i]);
 				i += 1;
 			}
 		},
 		NodeKind.MethodDecl => {
-			const d = node.data as MethodDeclData;
-			cb(d.methodBody);
+			const d: Cursor<MethodDeclData> = node.data as MethodDeclData;
+			visitChild(cb, d.methodBody);
 		},
 		NodeKind.ConstructorDecl => {
-			const d = node.data as ConstructorDeclData;
-			cb(d.ctorBody);
+			const d: Cursor<ConstructorDeclData> = node.data as ConstructorDeclData;
+			visitChild(cb, d.ctorBody);
 		},
 		NodeKind.ExportDecl => {
-			const d = node.data as ExportDeclData;
-			cb(d.exportedDecl);
+			const d: Cursor<ExportDeclData> = node.data as ExportDeclData;
+			visitChild(cb, d.exportedDecl);
 		},
 		NodeKind.DecoratedDecl => {
-			const d = node.data as DecoratedDeclData;
-			cb(d.decoratedNode);
+			const d: Cursor<DecoratedDeclData> = node.data as DecoratedDeclData;
+			for (const dec of d.decorators) visitChild(cb, dec);
+			visitChild(cb, d.decoratedNode);
+		},
+		NodeKind.EnumDecl => {
+			const d: Cursor<EnumDeclData> = node.data as EnumDeclData;
+			for (const init of d.enumInits) visitChild(cb, init);
 		},
 		NodeKind.MacroDecl => {
-			const d = node.data as MacroDeclData;
-			cb(d.macroDeclBody);
+			const d: Cursor<MacroDeclData> = node.data as MacroDeclData;
+			visitChild(cb, d.macroDeclBody);
 		},
 		// Simple statements with one child
 		NodeKind.VariableDecl => {
-			const d = node.data as VariableDeclData;
-			cb(d.initializer);
+			const d: Cursor<VariableDeclData> = node.data as VariableDeclData;
+			visitChild(cb, d.initializer);
 		},
 		NodeKind.ReturnStmt => {
-			const d = node.data as ReturnStmtData;
-			cb(d.argument!);
+			const d: Cursor<ReturnStmtData> = node.data as ReturnStmtData;
+			visitChild(cb, d.argument!);
 		},
 		NodeKind.ThrowStmt => {
-			const d = node.data as ThrowStmtData;
-			cb(d.throwArg);
+			const d: Cursor<ThrowStmtData> = node.data as ThrowStmtData;
+			visitChild(cb, d.throwArg);
 		},
 		NodeKind.ExprStmt => {
-			const d = node.data as ExprStmtData;
-			cb(d.expr);
+			const d: Cursor<ExprStmtData> = node.data as ExprStmtData;
+			visitChild(cb, d.expr);
 		},
 		NodeKind.DeferStmt => {
-			const d = node.data as DeferStmtData;
-			cb(d.deferExpr);
+			const d: Cursor<DeferStmtData> = node.data as DeferStmtData;
+			visitChild(cb, d.deferExpr);
 		},
 		NodeKind.TryCatchStmt => {
-			const d = node.data as TryCatchStmtData;
-			cb(d.tryBody);
-			cb(d.catchBody);
-			cb(d.finallyBody);
+			const d: Cursor<TryCatchStmtData> = node.data as TryCatchStmtData;
+			visitChild(cb, d.tryBody);
+			visitChild(cb, d.catchBody);
+			visitChild(cb, d.finallyBody);
 		},
 		// Expressions
 		NodeKind.BinaryExpr => {
-			const d = node.data as BinaryExprData;
-			cb(d.left);
-			cb(d.right);
+			const d: Cursor<BinaryExprData> = node.data as BinaryExprData;
+			visitChild(cb, d.left);
+			visitChild(cb, d.right);
 		},
 		NodeKind.UnaryExpr => {
-			const d = node.data as UnaryExprData;
-			cb(d.operand);
+			const d: Cursor<UnaryExprData> = node.data as UnaryExprData;
+			visitChild(cb, d.operand);
 		},
 		NodeKind.UpdateExpr => {
-			const d = node.data as UpdateExprData;
-			cb(d.updateArg);
+			const d: Cursor<UpdateExprData> = node.data as UpdateExprData;
+			visitChild(cb, d.updateArg);
 		},
 		NodeKind.CallExpr => {
-			const d = node.data as CallExprData;
-			cb(d.callee);
+			const d: Cursor<CallExprData> = node.data as CallExprData;
+			visitChild(cb, d.callee);
 			let i = 0;
 			while (i < d.arguments.length) {
-				cb(d.arguments[i]);
+				visitChild(cb, d.arguments[i]);
 				i += 1;
 			}
 		},
 		NodeKind.MemberExpr => {
-			const d = node.data as MemberExprData;
-			cb(d.object);
+			const d: Cursor<MemberExprData> = node.data as MemberExprData;
+			visitChild(cb, d.object);
 		},
 		NodeKind.ArrayAccess => {
-			const d = node.data as ArrayAccessData;
-			cb(d.array);
-			cb(d.index);
+			const d: Cursor<ArrayAccessData> = node.data as ArrayAccessData;
+			visitChild(cb, d.array);
+			visitChild(cb, d.index);
 		},
 		NodeKind.ObjectLiteral => {
-			const d = node.data as ObjectLiteralData;
+			const d: Cursor<ObjectLiteralData> = node.data as ObjectLiteralData;
 			let i = 0;
 			while (i < d.properties.length) {
-				cb(d.properties[i]);
+				visitChild(cb, d.properties[i]);
 				i += 1;
 			}
 		},
 		NodeKind.ArrayLiteral => {
-			const d = node.data as ArrayLiteralData;
+			const d: Cursor<ArrayLiteralData> = node.data as ArrayLiteralData;
 			let i = 0;
 			while (i < d.elements.length) {
-				cb(d.elements[i]);
+				visitChild(cb, d.elements[i]);
 				i += 1;
 			}
 		},
 		NodeKind.ConditionalExpr => {
-			const d = node.data as ConditionalExprData;
-			cb(d.ternaryCondition);
-			cb(d.ternaryConsequent);
-			cb(d.ternaryAlternate);
+			const d: Cursor<ConditionalExprData> = node.data as ConditionalExprData;
+			visitChild(cb, d.ternaryCondition);
+			visitChild(cb, d.ternaryConsequent);
+			visitChild(cb, d.ternaryAlternate);
 		},
 		NodeKind.SpreadExpr => {
-			const d = node.data as SpreadExprData;
-			cb(d.spreadArg);
+			const d: Cursor<SpreadExprData> = node.data as SpreadExprData;
+			visitChild(cb, d.spreadArg);
 		},
 		NodeKind.NewExpr => {
-			const d = node.data as NewExprData;
-			cb(d.newCallee);
+			const d: Cursor<NewExprData> = node.data as NewExprData;
+			visitChild(cb, d.newCallee);
 			let i = 0;
 			while (i < d.newArguments.length) {
-				cb(d.newArguments[i]);
+				visitChild(cb, d.newArguments[i]);
 				i += 1;
 			}
 		},
 		NodeKind.TryExpr => {
-			const d = node.data as TryExprData;
-			cb(d.tryArg);
-			if (d.hasCatch) { cb(d.catchVal); }
+			const d: Cursor<TryExprData> = node.data as TryExprData;
+			visitChild(cb, d.tryArg);
+			if (d.hasCatch) { visitChild(cb, d.catchVal); }
 		},
 		NodeKind.AwaitExpr => {
-			const d = node.data as AwaitExprData;
-			cb(d.awaitArg);
+			const d: Cursor<AwaitExprData> = node.data as AwaitExprData;
+			visitChild(cb, d.awaitArg);
 		},
 		NodeKind.YieldExpr => {
-			const d = node.data as YieldExprData;
-			cb(d.yieldArg);
+			const d: Cursor<YieldExprData> = node.data as YieldExprData;
+			visitChild(cb, d.yieldArg);
 		},
 		NodeKind.MoveExpr => {
-			const d = node.data as MoveExprData;
-			cb(d.moveArg);
+			const d: Cursor<MoveExprData> = node.data as MoveExprData;
+			visitChild(cb, d.moveArg);
 		},
 		NodeKind.OutExpr => {
-			const d = node.data as OutExprData;
-			cb(d.outArg);
+			const d: Cursor<OutExprData> = node.data as OutExprData;
+			visitChild(cb, d.outArg);
 		},
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
-			const d = node.data as HiddenDerefData;
-			cb(d.expr);
+			const d: Cursor<HiddenDerefData> = node.data as HiddenDerefData;
+			visitChild(cb, d.expr);
 		},
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
-			const d = node.data as HiddenStdConvData;
-			cb(d.convExpr);
+			const d: Cursor<HiddenStdConvData> = node.data as HiddenStdConvData;
+			visitChild(cb, d.convExpr);
 		},
 		NodeKind.TypeAssertion => {
-			const d = node.data as TypeAssertionData;
-			cb(d.asExpr);
+			const d: Cursor<TypeAssertionData> = node.data as TypeAssertionData;
+			visitChild(cb, d.asExpr);
 		},
 		NodeKind.DestructuringDecl => {
-			const d = node.data as DestructuringDeclData;
-			cb(d.destrPattern);
-			cb(d.destrInit);
+			const d: Cursor<DestructuringDeclData> = node.data as DestructuringDeclData;
+			visitChild(cb, d.destrPattern);
+			visitChild(cb, d.destrInit);
 		},
 		NodeKind.QuoteExpr => {
-			const d = node.data as QuoteExprData;
-			cb(d.quoteBody);
+			const d: Cursor<QuoteExprData> = node.data as QuoteExprData;
+			visitChild(cb, d.quoteBody);
 		},
 		NodeKind.ComptimeBlock => {
-			const d = node.data as ComptimeBlockData;
-			cb(d.comptimeBody);
+			const d: Cursor<ComptimeBlockData> = node.data as ComptimeBlockData;
+			visitChild(cb, d.comptimeBody);
 		},
 		NodeKind.MacroInvocation => {
-			const d = node.data as MacroInvocationData;
+			const d: Cursor<MacroInvocationData> = node.data as MacroInvocationData;
 			let i = 0;
 			while (i < d.macroArgs.length) {
-				cb(d.macroArgs[i]);
+				visitChild(cb, d.macroArgs[i]);
 				i += 1;
 			}
 		},
 		NodeKind.TestDecl => {
-			const d = node.data as TestDeclData;
-			cb(d.testBody);
+			const d: Cursor<TestDeclData> = node.data as TestDeclData;
+			visitChild(cb, d.testBody);
 		},
 		NodeKind.AssertStmt => {
-			const d = node.data as AssertStmtData;
-			cb(d.assertExpr);
-			if (d.assertMessageExpr != null) cb(d.assertMessageExpr);
+			const d: Cursor<AssertStmtData> = node.data as AssertStmtData;
+			visitChild(cb, d.assertExpr);
+			if (d.assertMessageExpr != null) visitChild(cb, d.assertMessageExpr);
 		},
 		NodeKind.ActorDecl => {
-			const d = node.data as ActorDeclData;
+			const d: Cursor<ActorDeclData> = node.data as ActorDeclData;
 			let i = 0;
 			while (i < d.actorBody.length) {
-				cb(d.actorBody[i]);
+				visitChild(cb, d.actorBody[i]);
 				i += 1;
 			}
 		},
 		NodeKind.PropertyDecl => {
-			const d = node.data as PropertyDeclData;
-			if (d.propInitializer != null) { cb(d.propInitializer); }
+			const d: Cursor<PropertyDeclData> = node.data as PropertyDeclData;
+			if (d.propInitializer != null) { visitChild(cb, d.propInitializer); }
 		},
 		NodeKind.ArrayPattern => {
-			const d = node.data as ArrayPatternData;
+			const d: Cursor<ArrayPatternData> = node.data as ArrayPatternData;
 			let i = 0;
 			while (i < d.patternElements.length) {
-				cb(d.patternElements[i]);
+				visitChild(cb, d.patternElements[i]);
 				i += 1;
 			}
 			i = 0;
 			while (i < d.patternDefaults.length) {
-				if (d.patternDefaults[i] != null) { cb(d.patternDefaults[i]); }
+				if (d.patternDefaults[i] != null) { visitChild(cb, d.patternDefaults[i]); }
 				i += 1;
 			}
 		},
 		NodeKind.ObjectPattern => {
-			const d = node.data as ObjectPatternData;
+			const d: Cursor<ObjectPatternData> = node.data as ObjectPatternData;
 			let i = 0;
 			while (i < d.patternProps.length) {
-				cb(d.patternProps[i]);
+				visitChild(cb, d.patternProps[i]);
 				i += 1;
 			}
 		},
 		NodeKind.ObjectPatternProp => {
-			const d = node.data as ObjectPatternPropData;
-			if (d.propAlias != null) { cb(d.propAlias); }
-			if (d.propDefault != null) { cb(d.propDefault); }
+			const d: Cursor<ObjectPatternPropData> = node.data as ObjectPatternPropData;
+			if (d.propAlias != null) { visitChild(cb, d.propAlias); }
+			if (d.propDefault != null) { visitChild(cb, d.propDefault); }
 		},
 		NodeKind.TypeGeneric => {
-			const d = node.data as TypeGenericData;
-			cb(d.typExprBase);
+			const d: Cursor<TypeGenericData> = node.data as TypeGenericData;
+			visitChild(cb, d.typExprBase);
 			let i = 0;
 			while (i < d.typExprArgs.length) {
-				cb(d.typExprArgs[i]);
+				visitChild(cb, d.typExprArgs[i]);
 				i += 1;
 			}
 		},
 		NodeKind.TypeArray => {
-			const d = node.data as TypeArrayData;
-			cb(d.typExprElement);
+			const d: Cursor<TypeArrayData> = node.data as TypeArrayData;
+			visitChild(cb, d.typExprElement);
 		},
 		NodeKind.TypeUnion => {
-			const d = node.data as TypeUnionData;
+			const d: Cursor<TypeUnionData> = node.data as TypeUnionData;
 			let i = 0;
 			while (i < d.typExprMembers.length) {
-				cb(d.typExprMembers[i]);
+				visitChild(cb, d.typExprMembers[i]);
 				i += 1;
 			}
 		},
 		NodeKind.TypeIntersection => {
-			const d = node.data as TypeIntersectionData;
+			const d: Cursor<TypeIntersectionData> = node.data as TypeIntersectionData;
 			for (const member of d.typExprMembers) {
-				cb(member);
+				visitChild(cb, member);
 			}
 		},
 		NodeKind.TypeFunction => {
-			const d = node.data as TypeFunctionData;
+			const d: Cursor<TypeFunctionData> = node.data as TypeFunctionData;
 			let i = 0;
 			while (i < d.typExprParams.length) {
-				cb(d.typExprParams[i]);
+				visitChild(cb, d.typExprParams[i]);
 				i += 1;
 			}
-			if (d.typExprReturn != null) { cb(d.typExprReturn); }
+			if (d.typExprReturn != null) { visitChild(cb, d.typExprReturn); }
 		},
 		NodeKind.TypeObject => {
-			const d = node.data as TypeObjectData;
+			const d: Cursor<TypeObjectData> = node.data as TypeObjectData;
 			let i = 0;
 			while (i < d.typExprFieldTypes.length) {
-				cb(d.typExprFieldTypes[i]);
+				visitChild(cb, d.typExprFieldTypes[i]);
 				i += 1;
 			}
-			if (d.typExprIndexKey != null) { cb(d.typExprIndexKey); }
-			if (d.typExprIndexValue != null) { cb(d.typExprIndexValue); }
+			if (d.typExprIndexKey != null) { visitChild(cb, d.typExprIndexKey); }
+			if (d.typExprIndexValue != null) { visitChild(cb, d.typExprIndexValue); }
 			// Per-field decorators (V2): each inner array holds 0+ decorator nodes
 			let di = 0;
 			while (di < d.typExprFieldDecorators.length) {
 				const decs = d.typExprFieldDecorators[di];
 				let dj = 0;
 				while (dj < decs.length) {
-					cb(decs[dj]);
+					visitChild(cb, decs[dj]);
 					dj += 1;
 				}
 				di += 1;
 			}
 		},
 		NodeKind.JSXElement => {
-			const d = node.data as JSXElementData;
-			for (const a of d.jsxAttrs) { cb(a); }
-			for (const c of d.jsxChildren) { cb(c); }
+			const d: Cursor<JSXElementData> = node.data as JSXElementData;
+			for (const a of d.jsxAttrs) { visitChild(cb, a); }
+			for (const c of d.jsxChildren) { visitChild(cb, c); }
 		},
 		NodeKind.JSXFragment => {
-			const d = node.data as JSXFragmentData;
-			for (const c of d.jsxFragChildren) { cb(c); }
+			const d: Cursor<JSXFragmentData> = node.data as JSXFragmentData;
+			for (const c of d.jsxFragChildren) { visitChild(cb, c); }
 		},
 		NodeKind.JSXExpressionContainer => {
-			const d = node.data as JSXExpressionContainerData;
-			cb(d.jsxExpr);
+			const d: Cursor<JSXExpressionContainerData> = node.data as JSXExpressionContainerData;
+			visitChild(cb, d.jsxExpr);
 		},
 		NodeKind.JSXAttribute => {
-			const d = node.data as JSXAttributeData;
-			cb(d.jsxAttrValue);
+			const d: Cursor<JSXAttributeData> = node.data as JSXAttributeData;
+			visitChild(cb, d.jsxAttrValue);
 		},
 		NodeKind.JSXSpreadAttribute => {
-			const d = node.data as JSXSpreadAttributeData;
-			cb(d.jsxSpreadArg);
+			const d: Cursor<JSXSpreadAttributeData> = node.data as JSXSpreadAttributeData;
+			visitChild(cb, d.jsxSpreadArg);
 		},
 		NodeKind.ComputedProperty => {
-			const d = node.data as ComputedPropertyData;
-			cb(d.computedKey);
-			cb(d.computedValue);
+			const d: Cursor<ComputedPropertyData> = node.data as ComputedPropertyData;
+			visitChild(cb, d.computedKey);
+			visitChild(cb, d.computedValue);
 		},
 		// Genuine leaves (no Node children). Listed explicitly (not via `_`) so
 		// adding a new NodeKind forces an exhaustiveness error here, preventing
@@ -471,7 +636,473 @@ export function forEachChild(node: Node, cbRaw: ChildVisitor): void {
 			| NodeKind.NullLiteral | NodeKind.BigIntLiteral | NodeKind.RegexLiteral
 			| NodeKind.Identifier | NodeKind.TypeAnnotation | NodeKind.SizeofExpr
 			| NodeKind.BreakStmt | NodeKind.ContinueStmt | NodeKind.UnreachableStmt
-			| NodeKind.ImportDecl | NodeKind.TypeAliasDecl | NodeKind.EnumDecl
+			| NodeKind.ImportDecl | NodeKind.TypeAliasDecl
+			| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ExternDecl
+			| NodeKind.JSXText => {},
+	};
+}
+
+// Apply f to all child nodes of a given node (mutates in place).
+// Core dispatch used by walkChildren, and directly by bounded walkers
+// that stop at function boundaries.
+// SYNC: forEachChild must handle the same NodeKinds (read-only variant).
+export function mapChildren(node: Node, f: Visitor): void {
+	match (node.kind) {
+		// Program root
+		NodeKind.Program => {
+			const d: Cursor<ProgramData> = node.data as ProgramData;
+			let i = 0;
+			while (i < d.programStmts.length) {
+				d.programStmts[i] = f(d.programStmts[i]);
+				i += 1;
+			}
+		},
+		// SpliceMany — A2 macro multi-decl emission
+		NodeKind.SpliceMany => {
+			const d: Cursor<SpliceManyData> = node.data as SpliceManyData;
+			let i = 0;
+			for (const child of d.spliceNodes) {
+				d.spliceNodes[i] = f(child);
+				i += 1;
+			}
+		},
+		// Block
+		NodeKind.BlockStmt => {
+			const d: Cursor<BlockStmtData> = node.data as BlockStmtData;
+			let i = 0;
+			while (i < d.statements.length) {
+				d.statements[i] = f(d.statements[i]);
+				i += 1;
+			}
+		},
+		// Statements with child nodes
+		NodeKind.IfStmt => {
+			const d: Cursor<IfStmtData> = node.data as IfStmtData;
+			d.condition = f(d.condition);
+			d.consequent = f(d.consequent);
+			d.alternate = f(d.alternate);
+		},
+		NodeKind.WhileStmt => {
+			const d: Cursor<WhileStmtData> = node.data as WhileStmtData;
+			d.whileCondition = f(d.whileCondition);
+			d.whileBody = f(d.whileBody);
+		},
+		NodeKind.ForStmt => {
+			const d: Cursor<ForStmtData> = node.data as ForStmtData;
+			d.forInit = f(d.forInit);
+			d.forCondition = f(d.forCondition);
+			d.forUpdate = f(d.forUpdate);
+			d.forBody = f(d.forBody);
+		},
+		NodeKind.ForOfStmt => {
+			const d: Cursor<ForOfStmtData> = node.data as ForOfStmtData;
+			d.forOfIterable = f(d.forOfIterable);
+			d.forOfBody = f(d.forOfBody);
+			if (d.forOfPattern != null) { d.forOfPattern = f(d.forOfPattern); }
+		},
+		NodeKind.ForInStmt => {
+			const d: Cursor<ForInStmtData> = node.data as ForInStmtData;
+			d.forInObject = f(d.forInObject);
+			d.forInBody = f(d.forInBody);
+		},
+		NodeKind.DoWhileStmt => {
+			const d: Cursor<DoWhileStmtData> = node.data as DoWhileStmtData;
+			d.doBody = f(d.doBody);
+			d.doCondition = f(d.doCondition);
+		},
+		NodeKind.SwitchStmt => {
+			const d: Cursor<SwitchStmtData> = node.data as SwitchStmtData;
+			d.switchDisc = f(d.switchDisc);
+			let i = 0;
+			while (i < d.switchCases.length) {
+				d.switchCases[i] = f(d.switchCases[i]);
+				i += 1;
+			}
+		},
+		NodeKind.SwitchCase => {
+			const d: Cursor<SwitchCaseData> = node.data as SwitchCaseData;
+			let i = 0;
+			while (i < d.caseTests.length) {
+				d.caseTests[i] = f(d.caseTests[i]);
+				i += 1;
+			}
+			let j = 0;
+			while (j < d.caseStmts.length) {
+				d.caseStmts[j] = f(d.caseStmts[j]);
+				j += 1;
+			}
+		},
+		NodeKind.MatchStmt => {
+			const d: Cursor<MatchStmtData> = node.data as MatchStmtData;
+			d.matchStmtDisc = f(d.matchStmtDisc);
+			let i = 0;
+			while (i < d.matchStmtCases.length) {
+				d.matchStmtCases[i] = f(d.matchStmtCases[i]);
+				i += 1;
+			}
+		},
+		NodeKind.MatchExpr => {
+			const d: Cursor<MatchExprData> = node.data as MatchExprData;
+			d.matchDisc = f(d.matchDisc);
+			let i = 0;
+			while (i < d.matchCases.length) {
+				d.matchCases[i] = f(d.matchCases[i]);
+				i += 1;
+			}
+		},
+		NodeKind.MatchCase => {
+			const d: Cursor<MatchCaseData> = node.data as MatchCaseData;
+			let i = 0;
+			while (i < d.casePatterns.length) {
+				d.casePatterns[i] = f(d.casePatterns[i]);
+				i += 1;
+			}
+			if (d.caseGuard != null) { d.caseGuard = f(d.caseGuard); }
+			d.caseBody = f(d.caseBody);
+		},
+		// Declarations with bodies
+		NodeKind.FunctionDecl => {
+			const d: Cursor<FunctionDeclData> = node.data as FunctionDeclData;
+			d.fnBody = f(d.fnBody);
+		},
+		NodeKind.ArrowFunction => {
+			const d: Cursor<ArrowFunctionData> = node.data as ArrowFunctionData;
+			d.arrowBody = f(d.arrowBody);
+		},
+		NodeKind.FunctionExpr => {
+			const d: Cursor<FunctionExprData> = node.data as FunctionExprData;
+			d.funcExprBody = f(d.funcExprBody);
+		},
+		NodeKind.ClassDecl => {
+			const d: Cursor<ClassDeclData> = node.data as ClassDeclData;
+			let i = 0;
+			while (i < d.classBody.length) {
+				d.classBody[i] = f(d.classBody[i]);
+				i += 1;
+			}
+		},
+		NodeKind.ActorDecl => {
+			const d: Cursor<ActorDeclData> = node.data as ActorDeclData;
+			let i = 0;
+			while (i < d.actorBody.length) {
+				d.actorBody[i] = f(d.actorBody[i]);
+				i += 1;
+			}
+		},
+		NodeKind.MethodDecl => {
+			const d: Cursor<MethodDeclData> = node.data as MethodDeclData;
+			d.methodBody = f(d.methodBody);
+		},
+		NodeKind.ConstructorDecl => {
+			const d: Cursor<ConstructorDeclData> = node.data as ConstructorDeclData;
+			d.ctorBody = f(d.ctorBody);
+		},
+		NodeKind.ExportDecl => {
+			const d: Cursor<ExportDeclData> = node.data as ExportDeclData;
+			d.exportedDecl = f(d.exportedDecl);
+		},
+		NodeKind.DecoratedDecl => {
+			const d: Cursor<DecoratedDeclData> = node.data as DecoratedDeclData;
+			let i = 0;
+			while (i < d.decorators.length) {
+				d.decorators[i] = f(d.decorators[i]);
+				i += 1;
+			}
+			d.decoratedNode = f(d.decoratedNode);
+		},
+		NodeKind.EnumDecl => {
+			const d: Cursor<EnumDeclData> = node.data as EnumDeclData;
+			let i = 0;
+			while (i < d.enumInits.length) {
+				if (d.enumInits[i] != null) { d.enumInits[i] = f(d.enumInits[i]); }
+				i += 1;
+			}
+		},
+		NodeKind.MacroDecl => {
+			const d: Cursor<MacroDeclData> = node.data as MacroDeclData;
+			d.macroDeclBody = f(d.macroDeclBody);
+		},
+		// Simple statements with one child
+		NodeKind.VariableDecl => {
+			const d: Cursor<VariableDeclData> = node.data as VariableDeclData;
+			if (d.initializer != null) d.initializer = f(d.initializer);
+		},
+		NodeKind.ReturnStmt => {
+			const d: Cursor<ReturnStmtData> = node.data as ReturnStmtData;
+			d.argument = f(d.argument!);
+		},
+		NodeKind.ThrowStmt => {
+			const d: Cursor<ThrowStmtData> = node.data as ThrowStmtData;
+			d.throwArg = f(d.throwArg);
+		},
+		NodeKind.ExprStmt => {
+			const d: Cursor<ExprStmtData> = node.data as ExprStmtData;
+			d.expr = f(d.expr);
+		},
+		NodeKind.DeferStmt => {
+			const d: Cursor<DeferStmtData> = node.data as DeferStmtData;
+			d.deferExpr = f(d.deferExpr);
+		},
+		NodeKind.TryCatchStmt => {
+			const d: Cursor<TryCatchStmtData> = node.data as TryCatchStmtData;
+			d.tryBody = f(d.tryBody);
+			d.catchBody = f(d.catchBody);
+			d.finallyBody = f(d.finallyBody);
+		},
+		// Expressions
+		NodeKind.BinaryExpr => {
+			const d: Cursor<BinaryExprData> = node.data as BinaryExprData;
+			d.left = f(d.left);
+			d.right = f(d.right);
+		},
+		NodeKind.UnaryExpr => {
+			const d: Cursor<UnaryExprData> = node.data as UnaryExprData;
+			d.operand = f(d.operand);
+		},
+		NodeKind.UpdateExpr => {
+			const d: Cursor<UpdateExprData> = node.data as UpdateExprData;
+			d.updateArg = f(d.updateArg);
+		},
+		NodeKind.CallExpr => {
+			const d: Cursor<CallExprData> = node.data as CallExprData;
+			d.callee = f(d.callee);
+			let i = 0;
+			while (i < d.arguments.length) {
+				d.arguments[i] = f(d.arguments[i]);
+				i += 1;
+			}
+		},
+		NodeKind.MemberExpr => {
+			const d: Cursor<MemberExprData> = node.data as MemberExprData;
+			d.object = f(d.object);
+		},
+		NodeKind.ArrayAccess => {
+			const d: Cursor<ArrayAccessData> = node.data as ArrayAccessData;
+			d.array = f(d.array);
+			d.index = f(d.index);
+		},
+		NodeKind.ObjectLiteral => {
+			const d: Cursor<ObjectLiteralData> = node.data as ObjectLiteralData;
+			let i = 0;
+			while (i < d.properties.length) {
+				d.properties[i] = f(d.properties[i]);
+				i += 1;
+			}
+		},
+		NodeKind.ArrayLiteral => {
+			const d: Cursor<ArrayLiteralData> = node.data as ArrayLiteralData;
+			let i = 0;
+			while (i < d.elements.length) {
+				d.elements[i] = f(d.elements[i]);
+				i += 1;
+			}
+		},
+		NodeKind.ConditionalExpr => {
+			const d: Cursor<ConditionalExprData> = node.data as ConditionalExprData;
+			d.ternaryCondition = f(d.ternaryCondition);
+			d.ternaryConsequent = f(d.ternaryConsequent);
+			d.ternaryAlternate = f(d.ternaryAlternate);
+		},
+		NodeKind.SpreadExpr => {
+			const d: Cursor<SpreadExprData> = node.data as SpreadExprData;
+			d.spreadArg = f(d.spreadArg);
+		},
+		NodeKind.NewExpr => {
+			const d: Cursor<NewExprData> = node.data as NewExprData;
+			d.newCallee = f(d.newCallee);
+			let i = 0;
+			while (i < d.newArguments.length) {
+				d.newArguments[i] = f(d.newArguments[i]);
+				i += 1;
+			}
+		},
+		NodeKind.TryExpr => {
+			const d: Cursor<TryExprData> = node.data as TryExprData;
+			d.tryArg = f(d.tryArg);
+			if (d.hasCatch) { d.catchVal = f(d.catchVal); }
+		},
+		NodeKind.AwaitExpr => {
+			const d: Cursor<AwaitExprData> = node.data as AwaitExprData;
+			d.awaitArg = f(d.awaitArg);
+		},
+		NodeKind.YieldExpr => {
+			const d: Cursor<YieldExprData> = node.data as YieldExprData;
+			d.yieldArg = f(d.yieldArg);
+		},
+		NodeKind.MoveExpr => {
+			const d: Cursor<MoveExprData> = node.data as MoveExprData;
+			d.moveArg = f(d.moveArg);
+		},
+		NodeKind.OutExpr => {
+			const d: Cursor<OutExprData> = node.data as OutExprData;
+			d.outArg = f(d.outArg);
+		},
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
+			const d: Cursor<HiddenDerefData> = node.data as HiddenDerefData;
+			d.expr = f(d.expr);
+		},
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
+			const d: Cursor<HiddenStdConvData> = node.data as HiddenStdConvData;
+			d.convExpr = f(d.convExpr);
+		},
+		NodeKind.TypeAssertion => {
+			const d: Cursor<TypeAssertionData> = node.data as TypeAssertionData;
+			d.asExpr = f(d.asExpr);
+		},
+		NodeKind.DestructuringDecl => {
+			const d: Cursor<DestructuringDeclData> = node.data as DestructuringDeclData;
+			d.destrPattern = f(d.destrPattern);
+			d.destrInit = f(d.destrInit);
+		},
+		NodeKind.QuoteExpr => {
+			const d: Cursor<QuoteExprData> = node.data as QuoteExprData;
+			d.quoteBody = f(d.quoteBody);
+		},
+		NodeKind.ComptimeBlock => {
+			const d: Cursor<ComptimeBlockData> = node.data as ComptimeBlockData;
+			d.comptimeBody = f(d.comptimeBody);
+		},
+		NodeKind.MacroInvocation => {
+			const d: Cursor<MacroInvocationData> = node.data as MacroInvocationData;
+			let i = 0;
+			while (i < d.macroArgs.length) {
+				d.macroArgs[i] = f(d.macroArgs[i]);
+				i += 1;
+			}
+		},
+		NodeKind.TestDecl => {
+			const d: Cursor<TestDeclData> = node.data as TestDeclData;
+			d.testBody = f(d.testBody);
+		},
+		NodeKind.AssertStmt => {
+			const d: Cursor<AssertStmtData> = node.data as AssertStmtData;
+			d.assertExpr = f(d.assertExpr);
+			if (d.assertMessageExpr != null) { d.assertMessageExpr = f(d.assertMessageExpr); }
+		},
+		NodeKind.PropertyDecl => {
+			const d: Cursor<PropertyDeclData> = node.data as PropertyDeclData;
+			if (d.propInitializer != null) { d.propInitializer = f(d.propInitializer); }
+		},
+		NodeKind.ArrayPattern => {
+			const d: Cursor<ArrayPatternData> = node.data as ArrayPatternData;
+			let i = 0;
+			while (i < d.patternElements.length) {
+				d.patternElements[i] = f(d.patternElements[i]);
+				i += 1;
+			}
+			i = 0;
+			while (i < d.patternDefaults.length) {
+				if (d.patternDefaults[i] != null) { d.patternDefaults[i] = f(d.patternDefaults[i]); }
+				i += 1;
+			}
+		},
+		NodeKind.ObjectPattern => {
+			const d: Cursor<ObjectPatternData> = node.data as ObjectPatternData;
+			let i = 0;
+			while (i < d.patternProps.length) {
+				d.patternProps[i] = f(d.patternProps[i]);
+				i += 1;
+			}
+		},
+		NodeKind.ObjectPatternProp => {
+			const d: Cursor<ObjectPatternPropData> = node.data as ObjectPatternPropData;
+			if (d.propAlias != null) { d.propAlias = f(d.propAlias); }
+			if (d.propDefault != null) { d.propDefault = f(d.propDefault); }
+		},
+		NodeKind.TypeGeneric => {
+			const d: Cursor<TypeGenericData> = node.data as TypeGenericData;
+			d.typExprBase = f(d.typExprBase);
+			let i = 0;
+			while (i < d.typExprArgs.length) {
+				d.typExprArgs[i] = f(d.typExprArgs[i]);
+				i += 1;
+			}
+		},
+		NodeKind.TypeArray => {
+			const d: Cursor<TypeArrayData> = node.data as TypeArrayData;
+			d.typExprElement = f(d.typExprElement);
+		},
+		NodeKind.TypeUnion => {
+			const d: Cursor<TypeUnionData> = node.data as TypeUnionData;
+			let i = 0;
+			while (i < d.typExprMembers.length) {
+				d.typExprMembers[i] = f(d.typExprMembers[i]);
+				i += 1;
+			}
+		},
+		NodeKind.TypeIntersection => {
+			const d: Cursor<TypeIntersectionData> = node.data as TypeIntersectionData;
+			for (let i = 0; i < d.typExprMembers.length; i += 1) {
+				d.typExprMembers[i] = f(d.typExprMembers[i]);
+			}
+		},
+		NodeKind.TypeFunction => {
+			const d: Cursor<TypeFunctionData> = node.data as TypeFunctionData;
+			let i = 0;
+			while (i < d.typExprParams.length) {
+				d.typExprParams[i] = f(d.typExprParams[i]);
+				i += 1;
+			}
+			if (d.typExprReturn != null) { d.typExprReturn = f(d.typExprReturn); }
+		},
+		NodeKind.TypeObject => {
+			const d: Cursor<TypeObjectData> = node.data as TypeObjectData;
+			let i = 0;
+			while (i < d.typExprFieldTypes.length) {
+				d.typExprFieldTypes[i] = f(d.typExprFieldTypes[i]);
+				i += 1;
+			}
+			if (d.typExprIndexKey != null) { d.typExprIndexKey = f(d.typExprIndexKey); }
+			if (d.typExprIndexValue != null) { d.typExprIndexValue = f(d.typExprIndexValue); }
+			// Per-field decorators (V2): walk each decorator node in place
+			let di = 0;
+			while (di < d.typExprFieldDecorators.length) {
+				const decs = d.typExprFieldDecorators[di];
+				let dj = 0;
+				while (dj < decs.length) {
+					decs[dj] = f(decs[dj]);
+					dj += 1;
+				}
+				di += 1;
+			}
+		},
+		NodeKind.JSXElement => {
+			const d: Cursor<JSXElementData> = node.data as JSXElementData;
+			let i = 0;
+			while (i < d.jsxAttrs.length) { d.jsxAttrs[i] = f(d.jsxAttrs[i]); i += 1; }
+			let j = 0;
+			while (j < d.jsxChildren.length) { d.jsxChildren[j] = f(d.jsxChildren[j]); j += 1; }
+		},
+		NodeKind.JSXFragment => {
+			const d: Cursor<JSXFragmentData> = node.data as JSXFragmentData;
+			let i = 0;
+			while (i < d.jsxFragChildren.length) { d.jsxFragChildren[i] = f(d.jsxFragChildren[i]); i += 1; }
+		},
+		NodeKind.JSXExpressionContainer => {
+			const d: Cursor<JSXExpressionContainerData> = node.data as JSXExpressionContainerData;
+			d.jsxExpr = f(d.jsxExpr);
+		},
+		NodeKind.JSXAttribute => {
+			const d: Cursor<JSXAttributeData> = node.data as JSXAttributeData;
+			d.jsxAttrValue = f(d.jsxAttrValue);
+		},
+		NodeKind.JSXSpreadAttribute => {
+			const d: Cursor<JSXSpreadAttributeData> = node.data as JSXSpreadAttributeData;
+			d.jsxSpreadArg = f(d.jsxSpreadArg);
+		},
+		NodeKind.ComputedProperty => {
+			const d: Cursor<ComputedPropertyData> = node.data as ComputedPropertyData;
+			d.computedKey = f(d.computedKey);
+			d.computedValue = f(d.computedValue);
+		},
+		// Genuine leaves (no Node children). Listed explicitly (not via `_`) so
+		// adding a new NodeKind forces an exhaustiveness error here — keeping
+		// this walker in sync with the AST by construction.
+		NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral
+			| NodeKind.NullLiteral | NodeKind.BigIntLiteral | NodeKind.RegexLiteral
+			| NodeKind.Identifier | NodeKind.TypeAnnotation | NodeKind.SizeofExpr
+			| NodeKind.BreakStmt | NodeKind.ContinueStmt | NodeKind.UnreachableStmt
+			| NodeKind.ImportDecl | NodeKind.TypeAliasDecl
 			| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ExternDecl
 			| NodeKind.JSXText => {},
 	};

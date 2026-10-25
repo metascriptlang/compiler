@@ -3,6 +3,8 @@
 // @maxrss: 40
 // @stdout: leak-moved-arg done r=8488890
 // @serial
+// @ledger-slack(Sink) 1
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: FIXED (analyzer inject.ms processMove honored the consuming position's
 // DrcMode). MS callee convention is "params are borrows, caller owns" (ea38c2a —
 // no sink params; the only consumed positions are the hardcoded runtime sinks:

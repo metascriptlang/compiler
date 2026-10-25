@@ -33,55 +33,15 @@ int32_t msFsLastErrno(void);
  * Returns MS_EMPTY_STRING on failure. */
 msString msFsReadFile(msString path);
 
-/* Write string to file. mode = "wb" (truncate) or "ab" (append).
- * Returns 1.0 on success, 0.0 on failure. */
-double msFsWriteFileMode(msString path, msString content, msString mode);
-
-/* chmod(path, mode). No-op on Windows. Returns 1.0/0.0. */
-double msFsChmod(msString path, int32_t mode);
-
-/* Stat predicates. Return 1.0 (true) or 0.0 (false). */
-double msFsExists(msString path);
-double msFsIsFile(msString path);
-double msFsIsDir(msString path);
-
-/* Executable bit check (POSIX: access(path, X_OK); Windows: file-exists-and-regular,
- * since Windows has no exec bit and delegates to PATHEXT/extension). Used by
- * findOnPath to match shutil.which / exec.LookPath / Bun.which semantics. */
-double msFsIsExecutable(msString path);
-
-msString msFsRealPath(msString path);
-
-/* File size in bytes. Returns -1.0 on error. */
-double msFsFileSize(msString path);
-
-/* Last modification time in seconds since the epoch, or -1.0. */
-double msFsModifiedTime(msString path);
-
-/* Identity of a file's current content generation: device, file id, size, last-write and
- * change time at the filesystem's full resolution. Empty when the file is absent or the
- * filesystem keeps no change time, so a caller must then read the file. */
-msString msFsChangeStamp(msString path);
-
-/* Create directory (0755 on POSIX). Returns 1.0 on success or EEXIST, 0.0 on failure. */
-double msFsMkdir(msString path);
-
-/* Remove empty directory. Returns 1.0/0.0. */
-double msFsRmdir(msString path);
-
 /* List directory entries as "\n"-joined string.
  * Directories have trailing "/". "." and ".." excluded.
  * Returns MS_EMPTY_STRING on error (check msFsLastErrno). */
 msString msFsReadDirEntries(msString path);
 
-/* Remove a file. Returns 1.0/0.0. */
-double msFsRemove(msString path);
-
-/* Rename/move a file or directory. Returns 1.0/0.0. */
-double msFsRename(msString oldPath, msString newPath);
-
-/* Create `path` as a symbolic link to `target`. Returns 1.0/0.0. */
-double msFsSymlink(msString target, msString path);
+#ifdef _WIN32
+/* Win32 error code as the errno POSIX reports for the same failure. */
+int32_t msFsErrnoFromWin32(uint32_t code);
+#endif
 
 #ifdef __cplusplus
 }

@@ -72,18 +72,20 @@ function pointerEqual(left: Node, right: Node, negate: boolean, objectPointee: b
 	return negate ? createNodeAt(NodeKind.UnaryExpr, { unaryOp: "!", operand: same }, loc) : same;
 }
 
-let pointerCtx: TransformContext = null as unknown as TransformContext;
-let returnTypes: (Type | null)[] = [];
-let tempScopes: Node[][] = [];
+interface PointerRun {
+	ctx: TransformContext;
+	returnTypes: (Type | null)[];
+	tempScopes: Node[][];
+}
 
-function convert(value: Node, target: Type | null): Node {
-	const ctx = pointerCtx;
+function convert(value: Node, target: Type | null, run: PointerRun): Node {
+	const ctx = run.ctx;
 	const source = bare(value.nodeType);
 	const dest = bare(target);
-	if (source == null || dest == null || value.kind == NodeKind.NullLiteral) return rewrite(value);
+	if (source == null || dest == null || value.kind == NodeKind.NullLiteral) return rewrite(value, run);
 	if (typedPointer(dest) && !typedPointer(source) && source.kind == TypeKind.Ref) {
 		const loc = value.location;
-		const once = hoisted(rewrite(value), ctx, tempScopes[tempScopes.length - 1]);
+		const once = hoisted(rewrite(value, run), ctx, run.tempScopes[run.tempScopes.length - 1]);
 		const nil = createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, loc);
 		const cell = createNodeAt(NodeKind.ArrayLiteral, { elements: [once[1]] }, loc);
 		const result = createNodeAt(NodeKind.ConditionalExpr, {
@@ -94,23 +96,23 @@ function convert(value: Node, target: Type | null): Node {
 		return result;
 	}
 	if (typedPointer(source) && dest.kind == TypeKind.Ref) {
-		const result = pointerPlace(rewrite(value), ctx, tempScopes[tempScopes.length - 1]);
+		const result = pointerPlace(rewrite(value, run), ctx, run.tempScopes[run.tempScopes.length - 1]);
 		result.nodeType = target;
 		return result;
 	}
-	return rewrite(value);
+	return rewrite(value, run);
 }
 
-function rewrite(node: Node): Node {
-	const ctx = pointerCtx;
+function rewrite(node: Node, run: PointerRun): Node {
+	const ctx = run.ctx;
 	if (node == null) return node;
 	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr
 		|| node.kind == NodeKind.MethodDecl || node.kind == NodeKind.ConstructorDecl) {
 		const t = node.resolvedSym != null ? node.resolvedSym.symbolType : node.nodeType;
-		returnTypes.push(t != null ? t.typeReturn : null);
-		tempScopes.push([]);
-		mapChildren(node, rewrite);
-		const temps = tempScopes.pop()!;
+		run.returnTypes.push(t != null ? t.typeReturn : null);
+		run.tempScopes.push([]);
+		mapChildren(node, (child: Node): Node => rewrite(child, run));
+		const temps = run.tempScopes.pop()!;
 		if (temps.length > 0) {
 			let body: Node;
 			if (node.kind == NodeKind.FunctionDecl) body = (node.data as FunctionDeclData).fnBody;
@@ -128,21 +130,21 @@ function rewrite(node: Node): Node {
 				(node.data as ArrowFunctionData).arrowBody = body;
 			}
 		}
-		returnTypes.pop();
+		run.returnTypes.pop();
 		return node;
 	}
 	if (node.kind == NodeKind.TypeAssertion || node.kind == NodeKind.HiddenStdConv || node.kind == NodeKind.HiddenSubConv) {
 		const assertion = node.kind == NodeKind.TypeAssertion;
 		const value = assertion ? (node.data as TypeAssertionData).asExpr : (node.data as HiddenStdConvData).convExpr;
 		const target = assertion ? node.nodeType : (node.data as HiddenStdConvData).convType;
-		if (typedPointer(target) || typedPointer(value.nodeType)) return convert(value, target);
-		mapChildren(node, rewrite);
+		if (typedPointer(target) || typedPointer(value.nodeType)) return convert(value, target, run);
+		mapChildren(node, (child: Node): Node => rewrite(child, run));
 		return node;
 	}
 	if (node.kind == NodeKind.HiddenDeref) {
 		const d = node.data as HiddenDerefData;
 		if (typedPointer(d.expr.nodeType)) {
-			const result = pointerPlace(rewrite(d.expr), ctx, tempScopes[tempScopes.length - 1]);
+			const result = pointerPlace(rewrite(d.expr, run), ctx, run.tempScopes[run.tempScopes.length - 1]);
 			result.nodeType = node.nodeType;
 			return result;
 		}
@@ -154,7 +156,7 @@ function rewrite(node: Node): Node {
 				reportTransformError(ctx, "internal: a pointer index other than 0 reached the JS pointer lowering; the checker refuses it on JS", node.location);
 				return node;
 			}
-			const result = pointerPlace(rewrite(d.array), ctx, tempScopes[tempScopes.length - 1]);
+			const result = pointerPlace(rewrite(d.array, run), ctx, run.tempScopes[run.tempScopes.length - 1]);
 			result.nodeType = node.nodeType;
 			return result;
 		}
@@ -163,7 +165,7 @@ function rewrite(node: Node): Node {
 		const d = node.data as MemberExprData;
 		const source = bare(d.object.nodeType);
 		if (typedPointer(source)) {
-			const object = pointerPlace(rewrite(d.object), ctx, tempScopes[tempScopes.length - 1]);
+			const object = pointerPlace(rewrite(d.object, run), ctx, run.tempScopes[run.tempScopes.length - 1]);
 			object.nodeType = source != null ? source.typeReturn : null;
 			d.object = object;
 			return node;
@@ -174,8 +176,8 @@ function rewrite(node: Node): Node {
 		const lp = typedPointer(d.left.nodeType);
 		const rp = typedPointer(d.right.nodeType);
 		if (d.operator == "=") {
-			d.right = convert(d.right, d.left.nodeType);
-			d.left = rewrite(d.left);
+			d.right = convert(d.right, d.left.nodeType, run);
+			d.left = rewrite(d.left, run);
 			return node;
 		}
 		if (lp || rp) {
@@ -186,7 +188,7 @@ function rewrite(node: Node): Node {
 				if (lt != null && rt != null && lt.kind != TypeKind.Null && rt.kind != TypeKind.Null) {
 					const pt = lt != null ? bare(lt.typeReturn) : null;
 					const object = pt != null && (pt.kind == TypeKind.Struct || pt.kind == TypeKind.Ref || pt.kind == TypeKind.Array || pt.kind == TypeKind.SizedArray || pt.kind == TypeKind.Tuple);
-					result = pointerEqual(rewrite(d.left), rewrite(d.right), d.operator == "!=" || d.operator == "!==", object, ctx, tempScopes[tempScopes.length - 1]);
+					result = pointerEqual(rewrite(d.left, run), rewrite(d.right, run), d.operator == "!=" || d.operator == "!==", object, ctx, run.tempScopes[run.tempScopes.length - 1]);
 				}
 			} else {
 				reportTransformError(ctx, "internal: pointer operator '" + d.operator + "' reached the JS pointer lowering; the checker refuses it on JS", node.location);
@@ -199,28 +201,28 @@ function rewrite(node: Node): Node {
 	}
 	if (node.kind == NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
-		if (d.initializer != null) d.initializer = convert(d.initializer, node.nodeType);
+		if (d.initializer != null) d.initializer = convert(d.initializer, node.nodeType, run);
 		return node;
 	}
 	if (node.kind == NodeKind.ReturnStmt) {
 		const d = node.data as ReturnStmtData;
-		if (d.argument != null) d.argument = convert(d.argument, returnTypes.length > 0 ? returnTypes[returnTypes.length - 1] : null);
+		if (d.argument != null) d.argument = convert(d.argument, run.returnTypes.length > 0 ? run.returnTypes[run.returnTypes.length - 1] : null, run);
 		return node;
 	}
 	if (node.kind == NodeKind.CallExpr) {
 		const d = node.data as CallExprData;
 		const t = d.callee.nodeType != null ? d.callee.nodeType : d.callee.resolvedSym != null ? d.callee.resolvedSym.symbolType : null;
 		for (let i = 0; i < d.arguments.length; i += 1) {
-			d.arguments[i] = convert(d.arguments[i], t != null && t.kind == TypeKind.Function && i < t.typeChildren.length ? t.typeChildren[i] : null);
+			d.arguments[i] = convert(d.arguments[i], t != null && t.kind == TypeKind.Function && i < t.typeChildren.length ? t.typeChildren[i] : null, run);
 		}
-		d.callee = rewrite(d.callee);
+		d.callee = rewrite(d.callee, run);
 		return node;
 	}
 	if (node.kind == NodeKind.NewExpr) {
 		const d = node.data as NewExprData;
 		const formals = ctorFormalTypes(node.resolvedSym);
-		for (let i = 0; i < d.newArguments.length; i += 1) d.newArguments[i] = convert(d.newArguments[i], formals != null && i < formals.length ? formals[i] : null);
-		d.newCallee = rewrite(d.newCallee);
+		for (let i = 0; i < d.newArguments.length; i += 1) d.newArguments[i] = convert(d.newArguments[i], formals != null && i < formals.length ? formals[i] : null, run);
+		d.newCallee = rewrite(d.newCallee, run);
 		return node;
 	}
 	if (node.kind == NodeKind.ObjectLiteral) {
@@ -234,7 +236,7 @@ function rewrite(node: Node): Node {
 					if (t.typeNames[j] == d.keys[i]) field = t.typeChildren[j];
 				}
 			}
-			d.properties[i] = convert(d.properties[i], field);
+			d.properties[i] = convert(d.properties[i], field, run);
 		}
 		return node;
 	}
@@ -242,33 +244,28 @@ function rewrite(node: Node): Node {
 		const d = node.data as ArrayLiteralData;
 		let t = bare(node.nodeType);
 		if (t != null && t.kind == TypeKind.Ref) t = bare(t.typeReturn);
-		for (let i = 0; i < d.elements.length; i += 1) d.elements[i] = convert(d.elements[i], t != null ? t.typeReturn : null);
+		for (let i = 0; i < d.elements.length; i += 1) d.elements[i] = convert(d.elements[i], t != null ? t.typeReturn : null, run);
 		return node;
 	}
 	if (node.kind == NodeKind.ConditionalExpr) {
 		const d = node.data as ConditionalExprData;
-		d.ternaryCondition = rewrite(d.ternaryCondition);
-		d.ternaryConsequent = convert(d.ternaryConsequent, node.nodeType);
-		d.ternaryAlternate = convert(d.ternaryAlternate, node.nodeType);
+		d.ternaryCondition = rewrite(d.ternaryCondition, run);
+		d.ternaryConsequent = convert(d.ternaryConsequent, node.nodeType, run);
+		d.ternaryAlternate = convert(d.ternaryAlternate, node.nodeType, run);
 		return node;
 	}
-	mapChildren(node, rewrite);
+	mapChildren(node, (child: Node): Node => rewrite(child, run));
 	return node;
 }
 
 export function lowerJsPointers(program: Node, ctx: TransformContext): Node {
-	pointerCtx = ctx;
-	returnTypes = [];
-	tempScopes = [[]];
-	const result = rewrite(program);
-	if (result.kind == NodeKind.Program && tempScopes[0].length > 0) {
+	const run: PointerRun = { ctx, returnTypes: [], tempScopes: [[]] };
+	const result = rewrite(program, run);
+	if (result.kind == NodeKind.Program && run.tempScopes[0].length > 0) {
 		const d = result.data as ProgramData;
-		const stmts = tempScopes[0];
+		const stmts = run.tempScopes[0];
 		for (const s of d.programStmts) stmts.push(s);
 		d.programStmts = stmts;
 	}
-	pointerCtx = null as unknown as TransformContext;
-	returnTypes = [];
-	tempScopes = [];
 	return result;
 }

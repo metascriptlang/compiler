@@ -2,13 +2,13 @@
 // Split out of checkExprPass.ms — depends on the expression dispatcher only
 // through the checkerCallbacks door.
 
-import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, TypeFlag, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, ObjectLiteralData, SymbolKind } from "../ast/node";
+import { ArrayAccessData, BinaryExprData, CallingConvention, FunctionDeclData, IdentifierData, MemberExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, SourceLocation, Symbol, Type, TypeAssertionData, TypeKind, TypeFlag, UnaryExprData, VariableDeclData, createNode, createNodeAt, CallExprData, StringLiteralData, YieldExprData, ArrayLiteralData, ConditionalExprData, ObjectLiteralData, SymbolKind, SymbolFlag, SizeofExprData } from "../ast/node";
 import { refusePrivateField, hiddenPrivateField, declaringSymOf } from "./visibility";
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal } from "./compat";
-import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, resolveUserOperator, extDeclaresReceiver, isGeneratorFlags } from "./context";
+import { variantIndexInUnion, TypeRelation, maybePayloadWidenSlot, structuralMemberIndex, sameNominal, typeRelation, convertsImplicitly, numericConvRefuses, numericRefusalReason, refusesIntConv, isUnsignedIntegerType, dropsReadonlyView, explainStructuralPrefix, isAnonStructAdoption, isAssignable, isValueStructDecl, valueStructBaseDepth, isNominalMismatch, isReinterpretUnsafe, isStructIntoPtr, needsStdConv, nonNullMemberOfNullable, sameType, unionOrderHint, isStructIntoRef, isRefIntoValue, isAnonLiteralName, crossesCharBoundary, returnReprRefusal, arityAdapts, runtimeParams } from "./compat";
+import { CheckerContext, Severity, ExtensionMethod, isGenericFn, addError, addWarning, findAllExtensionsByName, findFirstMatchingExt, getExtFnType, resolveOperatorCall, resolveUserOperator, extDeclaresReceiver } from "./context";
 import { unionOfTypes, canonicalizeBranchJoin, isPointerKindJoinPair, joinedPointerMember } from "./flow";
-import { peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType, matchUnionBehindInstance, literalUnionBase, holdsNumberLiteral, widenNumberLiteralType } from "./types";
+import { isVarargs, peelTransparentInstance, isNullableShape, errorType, createUnifyBindings, unifyType, closureStorageType, isTagCarriedUnion, inlineVariantStruct, BITSET_MAX_MEMBERS, bitSetElemType, createBitSet, isOrdinalEnum, booleanType, createMaybeType, createPrimitive, createUnion, findUnionVariant, float64Type, hasGenericParams, inferredType, int32Type, integerRank, isAtomicRef, isFloatType, isIntegerType, isMaybeType, isMaybeWrappable, isNarrowingIntConv, isNumeric, unknownRefusal, unknownRefusalText, UnknownRefusal, isWideningInt64Conv, isPrimitiveUnionMember, isStringLike, isUnknownType, isUnresolvedType, nullType, numberType, peelToStructOrUnion, skipModifier, stringType, typeDisplayName, unwrapRef, unwrapRefNullUnion, voidType, withoutReadonlyView, typeNameOf, distinctWidenBody, distinctBody, PEEL_MAX_DEPTH, PEEL_ALIAS, peelThrough, isAwaitable, isResult, runtimeClassSym, objectConversion, ObjConv, enumOrdinalBounds, literalBase, classAncestorInstance, createIterator, maybePayloadWidenSlot, anonStructName, createRef, createStruct, createArray, primitiveMemberIndexInUnion, isDiscriminatedUnion, jsMemberKind, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant, createStringLiteral, primitiveMemberHits, typeofResultType, isTypeofResultType, isPrimitiveKindName, holdsNoExactKind, variantIndexInUnion, typeofTagOf, primitiveKindName, classParentOf, unionMemberDisplay, isArrayShaped, holdsFalsyValue, unwrapMaybeType, matchUnionBehindInstance, literalUnionBase, holdsNumberLiteral, widenNumberLiteralType, numberLiteralSet } from "./types";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callInstantiateGeneric } from "./checkerCallbacks";
 import { ensureShaped } from "./resolvePass";
@@ -245,6 +245,25 @@ function rearmLiteral(lit: Node): void {
 	}
 }
 
+export function literalArmJoinsInto(literal: Node, other: Type | null): boolean {
+	if (literal == null || literal.kind != NodeKind.ObjectLiteral || other == null) return false;
+	const lit = anonLiteralStruct(literal.nodeType);
+	if (lit == null || anonLiteralStruct(other) != null || hasGenericParams(other)) return false;
+	const named = peelToStructOrUnion(other);
+	if (named == null || named.kind != TypeKind.Struct || named.typeName == "" || isMaybeType(other)) return false;
+	if (named.typeNames.length != lit.typeNames.length) return false;
+	for (let i = 0; i < lit.typeNames.length; i++) {
+		const at = named.typeNames.indexOf(lit.typeNames[i]);
+		if (at < 0 || at >= named.typeChildren.length || slotRefuses(lit.typeChildren[i], named.typeChildren[at])) return false;
+	}
+	return true;
+}
+
+export function fitLiteralArmInto(ctx: CheckerContext, literal: Node, named: Type): void {
+	rearmLiteral(literal);
+	callCheckExpr(ctx, literal, named);
+}
+
 export function fitJoinedBranch(ctx: CheckerContext, expr: Node, joined: Type | null): Node {
 	if (expr == null || joined == null || isUnresolvedType(joined)) return expr;
 	const bt = expr.nodeType;
@@ -305,6 +324,33 @@ function equalityEntry(ctx: CheckerContext, left: Type, right: Type): string {
 	return "";
 }
 
+// A value of one member of a union, taken into the union as a call argument is, so a comparison
+// reads both sides as the union and compares the member each holds.
+export function widenToSlotUnion(ctx: CheckerContext, member: Node, union: Type): Node {
+	const held = member.nodeType;
+	if (held == null || held.kind == TypeKind.Null || isUnresolvedType(held)) return member;
+	const peeled = peelTransparentInstance(held);
+	if (isSlotUnion(peeled) || !slotTakesValue(held, union)) return member;
+	return fitNode(ctx, member, union, held);
+}
+
+export function comparedUnion(t: Type | null): Type | null {
+	if (t == null) return null;
+	const peeled = peelTransparentInstance(t);
+	return isSlotUnion(peeled) && !hasGenericParams(peeled) ? peeled : null;
+}
+
+export function widenEqualityOperand(ctx: CheckerContext, d: BinaryExprData): void {
+	const op = d.operator;
+	if (op != "==" && op != "===" && op != "!=" && op != "!==") return;
+	const left = comparedUnion(d.left.nodeType);
+	const right = comparedUnion(d.right.nodeType);
+	if ((left == null) == (right == null)) return;
+	if (ctx.extensionRegistry != null && resolveUserOperator(ctx, "==", [d.left.nodeType!, d.right.nodeType!]) != null) return;
+	if (left != null) d.right = widenToSlotUnion(ctx, d.right, left);
+	else d.left = widenToSlotUnion(ctx, d.left, right!);
+}
+
 export function boundCallOf(sym: Symbol, args: Node[], loc: SourceLocation): Node {
 	const callee = createNodeAt(NodeKind.Identifier, { name: sym.name }, loc);
 	callee.resolvedSym = sym;
@@ -360,13 +406,265 @@ export function synthValueEquality(ctx: CheckerContext, node: Node, d: BinaryExp
 	if (entry == "nullableEquals") {
 		const a = valueShape(leftType);
 		const b = valueShape(rightType);
-		if (!isMaybeType(a)) left = synthMaybeWrap(left, b, leftType);
-		if (!isMaybeType(b)) right = synthMaybeWrap(right, a, rightType);
+		if (!isMaybeType(a)) left = synthMaybeWrap(left, b, leftType, ctx);
+		if (!isMaybeType(b)) right = synthMaybeWrap(right, a, rightType, ctx);
 	}
 	const call = boundCall(ctx, entry, [left, right], loc);
 	callCheckExpr(ctx, call, null);
 	replaceWithCall(node, call, negated);
 	return true;
+}
+
+function isMatchStruct(t: Type): boolean {
+	if (!isDiscriminatedUnion(t)) return false;
+	for (const arm of t.typeChildren) {
+		if (inlineVariantStruct(arm) != null) return true;
+	}
+	return false;
+}
+
+function declaresComparison(ctx: CheckerContext, ops: string[], pair: Type[]): boolean {
+	if (ctx.extensionRegistry == null) return false;
+	for (const op of ops) {
+		if (resolveUserOperator(ctx, op, pair) != null) return true;
+	}
+	return false;
+}
+
+function unequalMatchStruct(ctx: CheckerContext, t: Type, seen: Type[]): Type | null {
+	const s = valueShape(t);
+	const body = s.kind == TypeKind.GenericInstance && s.typeReturn != null ? s.typeReturn : s;
+	const matched = !isResult(s) && isMatchStruct(body);
+	if ((!matched && !comparedByFields(s)) || hasGenericParams(s) || seen.indexOf(s) >= 0) return null;
+	seen.push(s);
+	if (resolveUserOperator(ctx, "==", [t, t]) != null) return null;
+	if (matched) return t;
+	if (body.kind == TypeKind.SizedArray) return body.typeReturn != null ? unequalMatchStruct(ctx, body.typeReturn, seen) : null;
+	for (const part of body.typeChildren) {
+		if (part == null) continue;
+		const found = unequalMatchStruct(ctx, part, seen);
+		if (found != null) return found;
+	}
+	return null;
+}
+
+function declaredName(t: Type): string {
+	return t.sym != null && t.sym.name != "" ? t.sym.name : typeDisplayName(t);
+}
+
+export function refuseMatchStructEquality(ctx: CheckerContext, node: Node, d: BinaryExprData, left: Type, right: Type): boolean {
+	if (left.kind == TypeKind.Null || right.kind == TypeKind.Null || d.left.kind == NodeKind.NullLiteral || d.right.kind == NodeKind.NullLiteral) return false;
+	const pair = [left, right];
+	if (resolveUserOperator(ctx, "==", pair) != null || resolveUserOperator(ctx, d.operator, pair) != null) return false;
+	const fromLeft = unequalMatchStruct(ctx, left, []);
+	const side = fromLeft != null ? left : right;
+	const found = fromLeft ?? unequalMatchStruct(ctx, right, []);
+	if (found == null) return false;
+	const named = declaredName(found);
+	const shown = declaredName(side);
+	const held = shown == named ? "" : "it holds '" + named + "', ";
+	addError(ctx, "cannot compare '" + shown + "' with '" + d.operator + "': " + held + "a match struct has no built-in equality; declare `==`(this a: "
+		+ named + ", b: " + named + "): boolean for it", node.location.line, node.location.column);
+	return true;
+}
+
+function distinctBase(t: Type): Type | null {
+	let base = distinctBody(skipModifier(t));
+	for (let depth = 0; base != null && depth < PEEL_MAX_DEPTH; depth += 1) {
+		const inner = distinctBody(skipModifier(base));
+		if (inner == null) return base;
+		base = inner;
+	}
+	return base;
+}
+
+function namedFunction(t: Type): boolean {
+	const s = skipModifier(t) ?? t;
+	return s.kind == TypeKind.Function && s.callConv != CallingConvention.CcClosure;
+}
+
+function asClosure(expr: Node, t: Type): Node {
+	const s = skipModifier(t) ?? t;
+	const thunk = synthClosureThunk(expr, closureStorageType(s), s);
+	return thunk != null ? thunk : expr;
+}
+
+export function fitComparedOperands(ctx: CheckerContext, d: BinaryExprData, leftType: Type, rightType: Type): boolean {
+	const equality = binaryOperandClass(d.operator) == "eq";
+	const leftBase = distinctBase(leftType);
+	const rightBase = distinctBase(rightType);
+	const left = leftBase ?? leftType;
+	const right = rightBase ?? rightType;
+	const bothFn = equality && (skipModifier(left) ?? left).kind == TypeKind.Function && (skipModifier(right) ?? right).kind == TypeKind.Function;
+	const leftNamed = bothFn && namedFunction(left) && !namedFunction(right);
+	const rightNamed = bothFn && namedFunction(right) && !namedFunction(left);
+	if (leftBase == null && rightBase == null && !leftNamed && !rightNamed) return false;
+	const ops = equality ? ["==", "!=", "===", "!=="] : ["<", "<=", ">", ">="];
+	if (hasGenericParams(leftType) || hasGenericParams(rightType) || declaresComparison(ctx, ops, [leftType, rightType])) return false;
+	if (relationalOperandsFail(ctx, d.operator, left, right) || binaryOperandsFail(ctx, d.operator, left, right)) return false;
+	if (leftBase != null) d.left = wrapInConv(d.left, leftBase);
+	if (rightBase != null) d.right = wrapInConv(d.right, rightBase);
+	if (leftNamed) d.left = asClosure(d.left, left);
+	if (rightNamed) d.right = asClosure(d.right, right);
+	return true;
+}
+
+export function builtinComparisonHolds(ctx: CheckerContext, op: string, left: Type, right: Type): boolean {
+	if (ownDistinct(left) || ownDistinct(right)) return false;
+	if (op == "==") return unequalMatchStruct(ctx, left, []) == null && unequalMatchStruct(ctx, right, []) == null && !binaryOperandsFail(ctx, op, left, right);
+	return (op == "<" || op == "<=") && !relationalOperandsFail(ctx, op, left, right);
+}
+
+function delegateBases(sym: Symbol): Type[] | null {
+	const fnType = sym.symbolType;
+	if (fnType == null || fnType.kind != TypeKind.Function || fnType.typeChildren.length != 2) return null;
+	const bases: Type[] = [];
+	let hasDistinct = false;
+	for (const param of fnType.typeChildren) {
+		const base = distinctBody(param);
+		if (base != null) hasDistinct = true;
+		bases.push(base ?? param);
+	}
+	return hasDistinct ? bases : null;
+}
+
+export function comparesAtBase(ctx: CheckerContext, sym: Symbol | null): boolean {
+	if (sym == null || !hasFlag(sym, SymbolFlag.Borrow)) return false;
+	if (sym.name != "==" && sym.name != "<" && sym.name != "<=") return false;
+	const bases = delegateBases(sym);
+	if (bases == null) return false;
+	const chained = ctx.extensionRegistry != null ? resolveUserOperator(ctx, sym.name, bases) : null as unknown as ExtensionMethod;
+	if (chained == null || chained.sym == null) return builtinComparisonHolds(ctx, sym.name, bases[0], bases[1]);
+	if (!hasFlag(chained.sym, SymbolFlag.Borrow)) return true;
+	return chained.sym != sym && comparesAtBase(ctx, chained.sym);
+}
+
+function primaryComparison(op: string): string {
+	if (op == "!=" || op == "===" || op == "!==") return "==";
+	if (op == ">") return "<";
+	if (op == ">=") return "<=";
+	return op;
+}
+
+function declaredComparison(ctx: CheckerContext, op: string, pair: Type[]): ExtensionMethod | null {
+	if (ctx.extensionRegistry == null) return null;
+	const ext = resolveUserOperator(ctx, op, pair);
+	return ext != null ? ext : null;
+}
+
+export enum DistinctComparison { None, AtBase, Bound, Refused }
+
+export function fitDistinctComparison(ctx: CheckerContext, node: Node, d: BinaryExprData, leftType: Type, rightType: Type): DistinctComparison {
+	if (!ownDistinct(leftType) && !ownDistinct(rightType)) return DistinctComparison.None;
+	if (hasGenericParams(leftType) || hasGenericParams(rightType)) return DistinctComparison.None;
+	const op = d.operator;
+	if (primaryComparison(op) == "==" && (leftType.kind == TypeKind.Null || rightType.kind == TypeKind.Null || d.left.kind == NodeKind.NullLiteral || d.right.kind == NodeKind.NullLiteral)) return DistinctComparison.None;
+	const own = declaredComparison(ctx, op, [leftType, rightType]);
+	if (own != null && !comparesAtBase(ctx, own.sym)) return DistinctComparison.None;
+	const primary = primaryComparison(op);
+	const swapped = op == ">" || op == ">=";
+	const pair = swapped ? [rightType, leftType] : [leftType, rightType];
+	const found = own != null ? own : declaredComparison(ctx, primary, pair);
+	if (found == null) {
+		refuseDistinctComparison(ctx, node, op, primary, leftType, rightType);
+		return DistinctComparison.Refused;
+	}
+	if (comparesAtBase(ctx, found.sym)) {
+		const leftBase = distinctBase(leftType);
+		const rightBase = distinctBase(rightType);
+		if (leftBase != null) d.left = wrapInConv(d.left, leftBase);
+		if (rightBase != null) d.right = wrapInConv(d.right, rightBase);
+		return DistinctComparison.AtBase;
+	}
+	if (op == "==" || op == "===") return DistinctComparison.None;
+	if (swapped) {
+		const first = d.left;
+		d.left = d.right;
+		d.right = first;
+		d.operator = primary;
+		return DistinctComparison.Bound;
+	}
+	const direct = boundCallOf(found.sym!, [d.left, d.right], node.location);
+	callCheckExpr(ctx, direct, null);
+	replaceWithCall(node, direct, true);
+	return DistinctComparison.Bound;
+}
+
+function refuseUncomparable(ctx: CheckerContext, op: string, primary: string, leftType: Type, rightType: Type, node: Node): boolean {
+	if (primary == "==") return checkBinaryOperands(ctx, op, leftType, rightType, node);
+	if (!relationalOperandsFail(ctx, op, leftType, rightType)) return false;
+	checkRelationalOperands(ctx, op, leftType, rightType, node);
+	return true;
+}
+
+function refuseDistinctComparison(ctx: CheckerContext, node: Node, op: string, primary: string, leftType: Type, rightType: Type): void {
+	const at = node.location;
+	const left = typeDisplayName(leftType);
+	const right = typeDisplayName(rightType);
+	if (!sameType(skipModifier(leftType), skipModifier(rightType))) {
+		const basesCompare = builtinComparisonHolds(ctx, primary, distinctBase(leftType) ?? leftType, distinctBase(rightType) ?? rightType);
+		if (!basesCompare && refuseUncomparable(ctx, op, primary, leftType, rightType, node)) return;
+		addError(ctx, `operator '${op}' cannot compare '${left}' with '${right}': a distinct type compares only with itself — convert one side with \`as\``, at.line, at.column);
+		return;
+	}
+	if (hiddenFromInstance(ctx, primary, leftType)) {
+		addError(ctx, `operator '${op}' cannot be applied to type '${left}' here: its \`${primary}\` is not exported, and a generic routine sees only exported operators — export it`, at.line, at.column);
+		return;
+	}
+	const base = distinctBody(skipModifier(leftType));
+	const follows = primary != op && op != "===" ? ` (\`${op}\` follows from \`${primary}\`)` : "";
+	const fix = base != null && builtinComparisonHolds(ctx, primary, base, base)
+		? `add \`@delegate function \`${primary}\`(this a: ${left}, b: ${left}): boolean;\` to compare as '${typeDisplayName(base)}'`
+		: `declare \`function \`${primary}\`(this a: ${left}, b: ${left}): boolean { … }\``;
+	addError(ctx, `operator '${op}' cannot be applied to type '${left}': a distinct type does not inherit the comparisons of its base; ${fix}${follows}`, at.line, at.column);
+}
+
+function hiddenFromInstance(ctx: CheckerContext, op: string, operand: Type): boolean {
+	if (ctx.instantiatingCtx == null) return false;
+	const set = lookupSymbol(ctx.instantiatingCtx.table, op);
+	if (set == null) return false;
+	const cands: Symbol[] = [set];
+	for (const o of set.overloads) cands.push(o);
+	for (const cand of cands) {
+		const ft = cand.symbolType;
+		if (ft == null || ft.kind != TypeKind.Function || ft.typeChildren.length != 2 || hasFlag(cand, SymbolFlag.Exported)) continue;
+		if (sameType(ft.typeChildren[0], operand) && sameType(ft.typeChildren[1], operand)) return true;
+	}
+	return false;
+}
+
+function brandBase(t: Type | null): Type | null {
+	let base = distinctWidenBody(skipModifier(t));
+	for (let depth = 0; base != null && depth < PEEL_MAX_DEPTH; depth += 1) {
+		const inner = distinctWidenBody(skipModifier(base));
+		if (inner == null) break;
+		base = inner;
+	}
+	return base != null && skipModifier(base).kind != TypeKind.Function ? base : null;
+}
+
+function textOperandOrBase(op: string, t: Type, other: Type): Type | null {
+	const base = brandBase(t);
+	if (base == null || op != "+" || isStringLike(base)) return base;
+	return isStringLike(brandBase(other) ?? other) ? null : base;
+}
+
+export function widenBrandOperands(ctx: CheckerContext, d: BinaryExprData, leftType: Type | null, rightType: Type | null): boolean {
+	if (binaryOperandClass(d.operator) != "arith" && !isBitwiseBinaryOp(d.operator)) return false;
+	if (leftType == null || rightType == null) return false;
+	const leftBase = textOperandOrBase(d.operator, leftType, rightType);
+	const rightBase = textOperandOrBase(d.operator, rightType, leftType);
+	if (leftBase == null && rightBase == null) return false;
+	if (declaresComparison(ctx, [d.operator], [leftType, rightType])) return false;
+	if (leftBase != null) d.left = wrapInConv(d.left, leftBase);
+	if (rightBase != null) d.right = wrapInConv(d.right, rightBase);
+	return true;
+}
+
+function ownDistinct(t: Type | null): boolean {
+	if (t == null) return false;
+	const s = skipModifier(t);
+	return distinctBody(s) != null && brandBase(s) == null;
 }
 
 export function refuseNamespaceText(ctx: CheckerContext, expr: Node): boolean {
@@ -407,9 +705,14 @@ export function distinctTextRefusal(t: Type): string {
 		+ typeDisplayName(distinctBody(t)) + "), or declare function toString(this x: " + shown + "): string with a body or with @delegate";
 }
 
+function textsAsItsBase(t: Type): boolean {
+	const base = distinctWidenBody(t);
+	return base != null && base.kind != TypeKind.Function;
+}
+
 export function distinctText(ctx: CheckerContext, expr: Node, t: Type): Node | null {
 	const text = declaredToString(ctx, expr);
-	if (text == null) addError(ctx, distinctTextRefusal(t), expr.location.line, expr.location.column);
+	if (text == null && !textsAsItsBase(t)) addError(ctx, distinctTextRefusal(t), expr.location.line, expr.location.column);
 	return text;
 }
 
@@ -534,6 +837,10 @@ function taggedByLiteral(u: Type): boolean {
 function dumpedShape(t: Type, shape: Type): boolean {
 	if (shape.kind == TypeKind.Tuple || shape.kind == TypeKind.SizedArray || isResult(shape)) return true;
 	if (shape.kind == TypeKind.Union && foldableUnion(shape)) return true;
+	if (shape.kind == TypeKind.Union) {
+		const held = unwrapRefNullUnion(shape);
+		if (held != null) return dumpedShape(held, valueShape(held));
+	}
 	if (isValueStructShape(shape)) return true;
 	if (isMaybeType(shape) && shape.typeReturn != null && isValueStructShape(valueShape(shape.typeReturn))) return true;
 	const bare = skipModifier(t) ?? t;
@@ -762,15 +1069,15 @@ export function instantiateGenericFnValue(ctx: CheckerContext, expr: Node, forma
 	const raw = createUnifyBindings();
 	for (let i = 0; i < fnType.typeChildren.length && i < target.typeChildren.length; i += 1) unifyType(fnType.typeChildren[i], target.typeChildren[i], raw);
 	unifyType(fnType.typeReturn, target.typeReturn, raw);
-	const names: string[] = [];
+	const params: Type[] = [];
 	const types: Type[] = [];
-	for (let bi = 0; bi < raw.names.length; bi += 1) {
+	for (let bi = 0; bi < raw.params.length; bi += 1) {
 		if (hasGenericParams(raw.types[bi])) continue;
-		names.push(raw.names[bi]);
+		params.push(raw.params[bi]);
 		types.push(raw.types[bi]);
 	}
-	if (names.length == 0) return false;
-	const inst = callInstantiateGeneric(sym, names, types, ctx, expr.location);
+	if (params.length == 0) return false;
+	const inst = callInstantiateGeneric(sym, params, types, ctx, expr.location);
 	if (inst == null || inst.symbolType == null) return false;
 	expr.resolvedSym = inst;
 	expr.nodeType = inst.symbolType;
@@ -780,13 +1087,65 @@ export function instantiateGenericFnValue(ctx: CheckerContext, expr: Node, forma
 // Direct function → closure auto-wrap: a named function (CcDefault) flowing into a
 // closure-typed slot (CcClosure) is a hidden conversion; the transform entry
 // materializes it as the `{fn, env}` closure pair.
-export function synthClosureThunk(expr: Node, formal: Type, exprType: Type): Node {
+export function synthClosureThunk(expr: Node, formal: Type, exprType: Type, ctx: CheckerContext | null = null): Node {
+	if (arityAdapts(exprType, formal)) return arityAdapterConv(ctx, expr, formal, exprType);
 	if (formal.kind != TypeKind.Function || exprType.kind != TypeKind.Function
 		|| formal.callConv != CallingConvention.CcClosure
 		|| exprType.callConv == CallingConvention.CcClosure
 		|| !isAssignable(exprType, formal)) {
 		return null as unknown as Node;
 	}
+	return hiddenFnConv(expr, formal);
+}
+
+function arityAdapterConv(ctx: CheckerContext | null, expr: Node, formal: Type, exprType: Type): Node {
+	if (ctx == null) {
+		throw new Error(`internal: a function value adapted to a slot of another arity at ${expr.location.line}:${expr.location.column} reached a fit without a checker context`);
+	}
+	const slotParams = runtimeParams(formal);
+	const sourceParams = runtimeParams(exprType);
+	const takesRest = sourceParams.length > 0 && isVarargs(sourceParams[sourceParams.length - 1]);
+	const sourceCount = takesRest ? sourceParams.length - 1 : sourceParams.length;
+	const params: Symbol[] = [];
+	const args: Node[] = [];
+	for (let i = 0; i < slotParams.length; i += 1) {
+		const sym = makeSymbol("a" + String(i), SymbolKind.Parameter, slotParams[i], false);
+		params.push(sym);
+		if (i < sourceCount || takesRest) args.push(boundParamRead(sym, expr.location));
+	}
+	const call = createNodeAt(NodeKind.CallExpr, { callee: cloneNodeKeepSem(expr), arguments: args } as NodeData, expr.location);
+	callCheckExpr(ctx, call, null);
+	(call.data as CallExprData).callee = expr;
+	const filled = (call.data as CallExprData).arguments.length;
+	if (filled < sourceCount) {
+		addError(ctx, "parameter '" + runtimeParamName(exprType, filled) + "' of this function value has no value in a slot of " + String(slotParams.length)
+			+ " parameter(s): a default does not travel with a function value, so only an optional parameter can be left out", expr.location.line, expr.location.column);
+	}
+	const conv = hiddenFnConv(call, formal);
+	conv.paramSyms = params;
+	return conv;
+}
+
+function runtimeParamName(fn: Type, index: int32): string {
+	let ri = 0;
+	for (let i = 0; i < fn.typeChildren.length; i += 1) {
+		const param = fn.typeChildren[i];
+		if (param != null && param.kind == TypeKind.Void) continue;
+		if (ri == index) return i < fn.typeNames.length ? fn.typeNames[i] : String(index);
+		ri += 1;
+	}
+	return String(index);
+}
+
+function boundParamRead(sym: Symbol, loc: SourceLocation): Node {
+	const id = createNodeAt(NodeKind.Identifier, { name: sym.name } as IdentifierData, loc);
+	id.resolvedSym = sym;
+	id.nodeType = sym.symbolType;
+	id.flags = id.flags.incl(NodeFlag.Sem).incl(NodeFlag.BoundSym);
+	return id;
+}
+
+function hiddenFnConv(expr: Node, formal: Type): Node {
 	const wrapTok = createToken(TokenKind.Ident, "", expr.location.line);
 	const wrapped = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: formal } as NodeData, wrapTok);
 	wrapped.nodeType = formal;
@@ -794,17 +1153,17 @@ export function synthClosureThunk(expr: Node, formal: Type, exprType: Type): Nod
 	return wrapped;
 }
 
-export function synthMaybeWrap(expr: Node, formal: Type, exprType: Type): Node {
+export function synthMaybeWrap(expr: Node, formal: Type, exprType: Type, ctx: CheckerContext | null = null): Node {
 	if (expr.kind == NodeKind.NullLiteral || exprType.kind == TypeKind.Null) {
 		expr.nodeType = formal;
 		return expr;
 	}
 	let payload = expr;
 	if (formal.typeReturn != null) {
-		const thunk = synthClosureThunk(expr, formal.typeReturn, exprType);
+		const thunk = synthClosureThunk(expr, formal.typeReturn, exprType, ctx);
 		if (thunk != null as unknown as Node) payload = thunk;
 		if (formal.typeReturn.kind == TypeKind.Union && (exprType.kind != TypeKind.Union || isLiteralSet(exprType)) && isTagCarriedUnion(formal.typeReturn)) {
-			const injected = widenVariantToUnion(payload, formal.typeReturn, exprType);
+			const injected = widenVariantToUnion(payload, formal.typeReturn, exprType, ctx);
 			if (injected != null as unknown as Node) payload = injected;
 		}
 		const upcast = tryStructUpcast(payload, formal.typeReturn, exprType);
@@ -860,9 +1219,9 @@ function reportBitSetMismatch(ctx: CheckerContext, op: string, leftType: Type, r
 		addError(ctx, "BitSet holds at most " + BITSET_MAX_MEMBERS.toString() + " members; enum '" + sizedElem.typeName + "' has " + sizedElem.typeNames.length.toString(), node.location.line, node.location.column);
 		return true;
 	}
-	const leftName = leftElem != null ? leftElem.typeName : (leftType != null && leftType.kind == TypeKind.Enum ? leftType.typeName : "");
-	const rightName = rightElem != null ? rightElem.typeName : (rightType != null && rightType.kind == TypeKind.Enum ? rightType.typeName : "");
-	if (leftName != "" && leftName == rightName) return false;
+	const leftEnum = leftElem != null ? leftElem : (leftType != null && leftType.kind == TypeKind.Enum ? leftType : null);
+	const rightEnum = rightElem != null ? rightElem : (rightType != null && rightType.kind == TypeKind.Enum ? rightType : null);
+	if (leftEnum != null && rightEnum != null && sameNominal(leftEnum, rightEnum)) return false;
 	addError(ctx, "bitwise operator '" + op + "' on '" + typeDisplayName(leftType) + "' and '" + typeDisplayName(rightType) + "' mixes different enum sets", node.location.line, node.location.column);
 	return true;
 }
@@ -1072,7 +1431,7 @@ function binaryOperandSkip(t: Type): boolean {
 	return k == TypeKind.Error || k == TypeKind.Null
 		|| k == TypeKind.GenericParam || k == TypeKind.GenericInstance
 		|| k == TypeKind.TypeReference || k == TypeKind.Inferred || k == TypeKind.None
-		|| k == TypeKind.Varargs || k == TypeKind.Alias || k == TypeKind.Conditional || k == TypeKind.IndexedAccess || k == TypeKind.KeyOf
+		|| k == TypeKind.Varargs || k == TypeKind.Alias || k == TypeKind.Conditional || k == TypeKind.IndexedAccess || k == TypeKind.KeyOf || k == TypeKind.Mapped
 		|| k == TypeKind.Result || k == TypeKind.BigInt;
 }
 
@@ -1213,13 +1572,19 @@ function isTextlessScalar(t: Type): boolean {
 }
 
 export function scalarConversionRefusal(src: Type, target: Type): string {
-	const head = "cannot convert " + typeDisplayName(src) + " to " + typeDisplayName(target) + " — ";
+	const reason = scalarConversionReason(src, target);
+	return reason == "" ? "" : "cannot convert " + typeDisplayName(src) + " to " + typeDisplayName(target) + " — " + reason;
+}
+
+export function scalarConversionReason(src: Type, target: Type): string {
+	const toBoolean = target.kind == TypeKind.Boolean || target.kind == TypeKind.BooleanLiteral;
 	if (isStringLike(src) && isTextlessScalar(target) && target.kind != TypeKind.BigInt) {
-		if (target.kind == TypeKind.Boolean || target.kind == TypeKind.BooleanLiteral) return head + "a string is not a boolean; compare it instead (s != \"\")";
-		return head + "a string is not a number; read a character code with s.charCodeAt(i), a byte with s.byteAt(i), or parse the text";
+		if (toBoolean) return "a string is not a boolean; compare it instead (s != \"\")";
+		return "a string is not a number; read a character code with s.charCodeAt(i), a byte with s.byteAt(i), or parse the text";
 	}
-	if (isTextlessScalar(src) && isStringLike(target)) return head + "format it with String(x) or x.toString()";
-	if ((src.kind == TypeKind.Boolean || src.kind == TypeKind.BooleanLiteral) && isNumeric(target)) return head + "a boolean is not a number; pick one with a conditional (b ? 1 : 0)";
+	if (isTextlessScalar(src) && isStringLike(target)) return "format it with String(x) or x.toString()";
+	if ((src.kind == TypeKind.Boolean || src.kind == TypeKind.BooleanLiteral) && isNumeric(target)) return "a boolean is not a number; pick one with a conditional (b ? 1 : 0)";
+	if (isNumeric(widenNumberLiteralType(src)) && toBoolean) return "a number is not a boolean; compare it instead (x != 0)";
 	return "";
 }
 
@@ -1257,7 +1622,8 @@ export function binaryOperandsFail(ctx: CheckerContext, op: string, leftType: Ty
 		return ctx.extensionRegistry == null
 			|| resolveOperatorCall(ctx.table, ctx.extensionRegistry, bop, [leftType, rightType]) == null;
 	}
-	const ok = cls == "arith" ? arithOperandsOk(bop, a, b) : equalityOperandsOk(leftType, rightType);
+	const ownArith = cls == "arith" && (ownDistinct(leftType) || ownDistinct(rightType)) && !isStringLike(a) && !isStringLike(b);
+	const ok = cls == "arith" ? !ownArith && arithOperandsOk(bop, a, b) : equalityOperandsOk(leftType, rightType);
 	if (ok) return false;
 	return ctx.extensionRegistry == null
 		|| resolveOperatorCall(ctx.table, ctx.extensionRegistry, bop, [leftType, rightType]) == null;
@@ -1276,7 +1642,7 @@ function numericLikeOperand(s: Type): boolean {
 export function unaryArithFails(ctx: CheckerContext, op: string, t: Type | null): boolean {
 	if (t == null) return false;
 	const s = operandShape(t);
-	if (s == null || binaryOperandSkip(s) || numericLikeOperand(s)) return false;
+	if (s == null || binaryOperandSkip(s) || (numericLikeOperand(s) && !ownDistinct(t))) return false;
 	return ctx.extensionRegistry == null || resolveOperatorCall(ctx.table, ctx.extensionRegistry, op, [t]) == null;
 }
 
@@ -1915,10 +2281,6 @@ export function hasValueOfProtocol(ctx: CheckerContext, t: Type | null): boolean
 
 export function slotTakesValue(exprType: Type, formal: Type): boolean {
 	if (isAssignable(exprType, formal) && !isNominalMismatch(exprType, formal)) return true;
-	if (formal.kind == TypeKind.Function) {
-		const widened = distinctWidenBody(exprType);
-		if (widened != null && isAssignable(widened, formal)) return true;
-	}
 	if (isMaybeType(formal) && formal.typeReturn != null) return slotTakesValue(exprType, formal.typeReturn);
 	if (formal.kind == TypeKind.Union) {
 		for (const member of formal.typeChildren) {
@@ -2210,7 +2572,7 @@ function slotHoldsStructByValue(member: Type): boolean {
 	return inlineVariantStruct(member) != null;
 }
 
-export function widenVariantToUnion(expr: Node, formalSlot: Type, exprType: Type): Node {
+export function widenVariantToUnion(expr: Node, formalSlot: Type, exprType: Type, ctx: CheckerContext | null = null): Node {
 	const formal = matchUnionBehindInstance(formalSlot);
 	if (matchUnionBehindInstance(exprType) != exprType || unwrapRefNullUnion(formal) != null) return null as unknown as Node;
 	// A flow-narrowed reference types as the variant, but its storage is the
@@ -2230,7 +2592,7 @@ export function widenVariantToUnion(expr: Node, formalSlot: Type, exprType: Type
 		}
 		const projected = projectTagUnionMember(expr, declared, exprType);
 		if (projected == null as unknown as Node) return null as unknown as Node;
-		return widenVariantToUnion(projected, formalSlot, exprType);
+		return widenVariantToUnion(projected, formalSlot, exprType, ctx);
 	}
 	const valueType = unwrapRef(exprType);
 	const exactSlot = unionSlotOf(formal, exprType);
@@ -2243,7 +2605,7 @@ export function widenVariantToUnion(expr: Node, formalSlot: Type, exprType: Type
 	// handing the pointer to the conversion makes the analyzer sink it
 	// (wasMoved) and the heap cell is then destroyed by nobody.
 	let operand = expr;
-	const thunk = synthClosureThunk(expr, formal.typeChildren[vi], exprType);
+	const thunk = synthClosureThunk(expr, formal.typeChildren[vi], exprType, ctx);
 	if (thunk != null as unknown as Node) operand = thunk;
 	if (valueType != exprType && slotHoldsStructByValue(formal.typeChildren[vi])) {
 		const drefNode = createNode(NodeKind.HiddenDeref, { expr: expr }, convTok);
@@ -2542,13 +2904,24 @@ export function widenNumberLiteral(node: Node): Node {
 	if (held == null) return node;
 	const widened = widenNumberLiteralType(held);
 	if (widened == held) return node;
-	let read = node;
-	if (declaredTagUnionOf(node) != null) {
-		const projected = narrowUnionToVariant(node, held);
-		if (projected != null as unknown as Node) read = projected;
+	if (node.flags.has(NodeFlag.ConvCheck)) {
+		const read = createNodeAt(NodeKind.TypeAssertion, { asExpr: node, asType: "" } as TypeAssertionData, node.location);
+		read.nodeType = widened;
+		read.flags = read.flags.incl(NodeFlag.Sem);
+		return read;
 	}
+	const read = projectNarrowedRead(node);
 	read.nodeType = widened;
 	return read;
+}
+
+export function projectNarrowedRead(node: Node): Node {
+	const held = node.nodeType;
+	if (held == null || widenNumberLiteralType(held) == held || declaredTagUnionOf(node) == null) return node;
+	const projected = narrowUnionToVariant(node, held);
+	if (projected == null as unknown as Node) return node;
+	projected.nodeType = held;
+	return projected;
 }
 
 export function tagUnionMemberSlot(declared: Type, exprType: Type): int32 {
@@ -2641,7 +3014,26 @@ export function assertionNarrows(srcType: Type, target: Type): boolean {
 	const from = assertionPayload(srcType);
 	const to = assertionPayload(target);
 	if (isSlotUnion(from) && tagUnionMemberSlot(from, to) >= 0) return true;
-	return from.kind == TypeKind.String && isLiteralSet(to);
+	if (!isLiteralSet(to)) return false;
+	if (isStringLike(to)) return from.kind == TypeKind.String || (isStringLike(from) && !literalSetHolds(to, from));
+	return numberLiteralSet(to) != null && (isNumeric(from) || numberLiteralSet(from) != null) && !literalSetHolds(to, from);
+}
+
+function literalMembers(t: Type): Type[] {
+	if (t.kind == TypeKind.StringLiteral || t.kind == TypeKind.NumberLiteral) return [t];
+	return literalUnionBase(t) != null ? t.typeChildren : [];
+}
+
+function literalSetHolds(to: Type, from: Type): boolean {
+	const held = literalMembers(to);
+	const members = literalMembers(from);
+	if (members.length == 0) return false;
+	for (const m of members) {
+		let found = false;
+		for (const h of held) if (h.kind == m.kind && h.typeName == m.typeName) found = true;
+		if (!found) return false;
+	}
+	return true;
 }
 
 export function checkedAssertion(expr: Node, target: Type): Node {
@@ -2863,7 +3255,7 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	const upcast = tryStructUpcast(expr, formal, exprType);
 	if (upcast != null as unknown as Node) return upcast;
 	if (instantiateGenericFnValue(ctx, expr, formal)) return fitNode(ctx, expr, formal, expr.nodeType);
-	const thunk = synthClosureThunk(expr, formal, exprType);
+	const thunk = synthClosureThunk(expr, formal, exprType, ctx);
 	if (thunk != null as unknown as Node) return thunk;
 	if (isMaybeType(formal)) {
 		const widenedMaybe = widenMaybePayload(expr, formal, exprType);
@@ -2885,14 +3277,14 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 			addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal.typeReturn) + " | null'" + explainStructuralPrefix(exprType, formal.typeReturn), expr.location.line, expr.location.column);
 			return expr;
 		}
-		return synthMaybeWrap(expr, formal, exprType);
+		return synthMaybeWrap(expr, formal, exprType, ctx);
 	}
 	if (exprType.kind == TypeKind.Null && formal.kind == TypeKind.Union && flatUnionTakesNull(formal)) {
 		expr.nodeType = formal;
 		return expr;
 	}
 	if (exprType.kind != TypeKind.GenericInstance && exprType.kind != TypeKind.Union && matchUnionBehindInstance(formal) != formal) {
-		const widened = widenVariantToUnion(expr, formal, exprType);
+		const widened = widenVariantToUnion(expr, formal, exprType, ctx);
 		if (widened != null as unknown as Node) return widened;
 	}
 	// A variant value meeting a union formal converts HERE so every fit
@@ -2901,7 +3293,7 @@ function fitSlot(ctx: CheckerContext, expr: Node, formal: Type | null, exprType:
 	// bare pointer and take no tag.
 	if (formal.kind == TypeKind.Union && (exprType.kind != TypeKind.Union || isLiteralSet(exprType))
 		&& unwrapRefNullUnion(formal) == null) {
-		const widened = widenVariantToUnion(expr, formal, exprType);
+		const widened = widenVariantToUnion(expr, formal, exprType, ctx);
 		if (widened != null as unknown as Node) return widened;
 		const numeric = fitNumericIntoUnion(ctx, expr, exprType, formal);
 		if (numeric != null) return numeric;
@@ -3012,7 +3404,7 @@ function refusingNumericMember(exprType: Type, formal: Type): Type | null {
 
 export function slotRefuses(exprType: Type, formal: Type): boolean {
 	if (hasGenericParams(formal) || hasGenericParams(exprType)) return false;
-	return !isAssignable(exprType, formal) && !convertsImplicitly(exprType, formal);
+	return !isAssignable(exprType, formal) && !convertsImplicitly(exprType, formal) && !arityAdapts(exprType, formal);
 }
 
 export function branchFitsSlot(ctx: CheckerContext, exprType: Type | null, formal: Type | null): boolean {
@@ -3162,7 +3554,7 @@ export function fitNumericIntoUnion(ctx: CheckerContext, expr: Node, exprType: T
 			expr.location.line, expr.location.column);
 		return expr;
 	}
-	const widened = widenVariantToUnion(wrapInConv(expr, members[0]), formal, members[0]);
+	const widened = widenVariantToUnion(wrapInConv(expr, members[0]), formal, members[0], ctx);
 	return widened != null ? widened : none;
 }
 
@@ -3247,7 +3639,7 @@ function declaredConstantName(expr: Node): string {
 function constantRefusal(expr: Node, from: Type, target: Type): string {
 	const asTarget = "an explicit 'as " + typeDisplayName(target) + "'";
 	const folded = foldedNumber(expr);
-	if (folded == null) return "";
+	if (folded == null) return cLayoutSizeofRefusal(expr, asTarget);
 	if (constHoldsFloat(folded)) {
 		const v = constFloatValue(folded);
 		const text = floatValueText(v);
@@ -3275,6 +3667,14 @@ function constantRefusal(expr: Node, from: Type, target: Type): string {
 	return typedConstantRefusal(expr, from, target, text);
 }
 
+function cLayoutSizeofRefusal(expr: Node, asTarget: string): string {
+	if (expr.kind != NodeKind.SizeofExpr) return "";
+	const d = expr.data as SizeofExprData;
+	if (d.sizeofResolved == null || !layoutFromC(d.sizeofResolved)) return "";
+	return "takes 'sizeof " + d.sizeofType + "', which is not a constant: '" + d.sizeofType + "' has C's layout, which msc folds only on the C backend "
+		+ "for a header struct whose every field translates exactly (no bitfield, anonymous, packed or aligned member), so only the C compiler knows its size — write " + asTarget;
+}
+
 function typedConstantRefusal(expr: Node, from: Type, target: Type, text: string): string {
 	if (isUntypedConstant(expr, 0)) return "";
 	const name = declaredConstantName(expr);
@@ -3295,7 +3695,8 @@ function isNullAssertion(node: Node): boolean {
 }
 
 export function isSyncGeneratorFlags(flags: string): boolean {
-	return isGeneratorFlags(flags) && flags.indexOf("async") < 0;
+	const routine = routineFlagSet(flags);
+	return routine.has(RoutineFlag.Generator) && !routine.has(RoutineFlag.Async);
 }
 
 export function settleYields(ctx: CheckerContext, name: string, at: SourceLocation): Type {
@@ -3312,7 +3713,7 @@ export function settleYields(ctx: CheckerContext, name: string, at: SourceLocati
 	return createIterator(elem);
 }
 
-import { makeSymbol } from "./symbol";
+import { makeSymbol, hasFlag, lookupSymbol, RoutineFlag, routineFlagSet } from "./symbol";
 
 function declaredStruct(name: string, names: string[], types: Type[], isValue: boolean): Type {
 	const t = createStruct(name, names, types, isValue);
@@ -3340,4 +3741,23 @@ test "a union whose members the value names keeps no tag" {
 	assert !storesUnionTag(createUnion([numberType(), stringType()]));
 	const p = declaredStruct("P", ["a"], [int32Type()], false);
 	assert !storesUnionTag(createUnion([p, stringType()]));
+}
+
+import { createNumberLiteral, layoutFromC } from "./types";
+
+test "an as into a literal union is checked only when the source can hold a value outside it" {
+	const narrow = createUnion([createStringLiteral("a"), createStringLiteral("b")]);
+	const wide = createUnion([createStringLiteral("a"), createStringLiteral("b"), createStringLiteral("c")]);
+	assert assertionNarrows(wide, narrow);
+	assert assertionNarrows(stringType(), narrow);
+	assert !assertionNarrows(narrow, wide);
+	assert !assertionNarrows(createStringLiteral("a"), narrow);
+	const narrowN = createUnion([createNumberLiteral("1", int32Type()), createNumberLiteral("2", int32Type())]);
+	const wideN = createUnion([createNumberLiteral("1", int32Type()), createNumberLiteral("2", int32Type()), createNumberLiteral("3", int32Type())]);
+	assert assertionNarrows(wideN, narrowN);
+	assert assertionNarrows(int32Type(), narrowN);
+	assert !assertionNarrows(narrowN, wideN);
+	assert !assertionNarrows(createNumberLiteral("2", int32Type()), narrowN);
+	assert !assertionNarrows(createMaybeType(narrow), createMaybeType(wide));
+	assert assertionNarrows(createMaybeType(wide), createMaybeType(narrow));
 }

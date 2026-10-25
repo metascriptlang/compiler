@@ -20,21 +20,22 @@
 //   =dup       TypeName_dup(src): TypeName       — clone (init + copy, return)
 //   =trace     TypeName_trace(self, callback)    — ORC cycle tracing (cyclic types only)
 
-import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, ExprStmtData, WhileStmtData, DoWhileStmtData, IfStmtData, BinaryExprData, ForStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind, TypeFlag, AttachedOp, Symbol, SymbolKind, SymbolState, createNodeAt } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContext, createTransformContextWithChecker } from "../context";
-import { attachedOpSym, isRuntimeProcSym, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
-import { peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, setAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
+import { attachedOpSym, isRuntimeProcSym, isRuntimeProcCall, makeIdentResolved, makeTypedIdentResolved, makeTypedIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeHiddenSubConv, makeWhile, makeArrayAccess, runtimeRef, makeIdent } from "../util";
+import { int32Type, peelTransparentInstance, distinctBody, isPrimitiveKind, isNumeric, isPrimitiveUnionMember, getAttachedOp, unwrapRef, unwrapRefNullUnion, hasAsgnFlag, isAllStringLiteralUnion, createArray, createPtr, createVar, createPrimitive, createRef, stringType, isStringLike, createStruct, isStructType, isAwaitable, isAtomicRef, instantiateGenericBody, instantiatedBodyCount, inlineVariantStruct, tupleTypeName, typeNameOf, voidType, hasGenericParams, isTagCarriedUnion, isMaybeType, unwrapMaybeType, numberType, arrayElementNeedsCleanup, isUncountedPtrElement, setRepr, hasTypeIdentity, spelled, genericParamsOf, classParentOf, createUnionInOrder, storesNothing, isNullableBigInt } from "../../checker/types";
 import { anonTypeName, isAnonTypeName, arrayCTypeName, refArrayCellName, hookBaseCName, resetHookSyms, anonUnionCName, setOpByKey, aliasOpByKey, requireOpByKey, getOpByKey, opPrototype, bindOpByKey, arrayOpElement, isRuntimeArrayFamily, liftedOp, opKey, opTypeKey, hasLiftedOp } from "../../codegen/c/types";
 import { monoInstanceName } from "../../monomorphize/registry";
-import { lookupInstanceHook, pickBodyCtx } from "../../checker/instantiate";
+import { lookupInstanceHook } from "../../checker/instantiate";
 import { walkNode } from "../walker";
 import { canFormAcycle } from "../cycles";
 import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
-import { CheckerContext, newSym, extReceiverSym, findAllExtensionsByName, hasExtensionByName, getExtFnType, addError } from "../../checker/context";
+import { CheckerContext, newSym, addError } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput, checkedCtx } from "../testUtil";
 import { lowerOperators } from "./operatorLower";
 import { sizedArrayHookName } from "../../analyzer/classify";
+import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
 let _jsProgramScope = false;
 
@@ -65,7 +66,9 @@ class LiftCtx {
 	scannedTypes: HashSet<Type>;
 	arrayRootEpochs: HashMap<Type, int32>;
 	refusedArrayElems: HashSet<Type>;
+	hookFreeTypes: HashSet<Type>;
 	jsBackend: boolean;
+	dropOwner: Symbol | null;
 }
 
 // NodeBuf: heap-allocated buffer for accumulating AST nodes.
@@ -267,7 +270,9 @@ function attachedOpOf(hook: string): AttachedOp {
 		"copy" => AttachedOp.AttachedAsgn,
 		"sink" => AttachedOp.AttachedSink,
 		"wasMoved" => AttachedOp.AttachedWasMoved,
-		_ => AttachedOp.AttachedTrace,
+		"dup" => AttachedOp.AttachedDup,
+		"trace" => AttachedOp.AttachedTrace,
+		_ => { throw new Error(`internal: '${hook}' names no type-bound operation`); },
 	};
 }
 
@@ -377,6 +382,8 @@ function genElementLoop(hook: string, elemType: Type, bound: Node | null, xf: No
 	const xi = makeArrayAccess(xClone, makeTypedIdentResolved(counterSym, null, loc), loc);
 	const bodyBuf = newBuf();
 	const visited: NameSet = createNameSet();
+	const dropOwner = lctx.dropOwner;
+	lctx.dropOwner = null;
 
 	if (hook == "trace") {
 		// Reference: trace passes raw callback (y), not y[i]
@@ -389,6 +396,7 @@ function genElementLoop(hook: string, elemType: Type, bound: Node | null, xf: No
 	} else {
 		fillBody(hook, xi, xi, "", elemType, lctx, bodyBuf, visited, loc);
 	}
+	lctx.dropOwner = dropOwner;
 	if (bodyBuf.items.length == 0) return;
 	buf.items.push(counterDecl);
 
@@ -399,6 +407,27 @@ function genElementLoop(hook: string, elemType: Type, bound: Node | null, xf: No
 		loc
 	), loc));
 
+	buf.items.push(makeWhile(cond, makeBlock(bodyBuf.items, loc), loc));
+}
+
+function genShrinkLoop(elemType: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	const ctr = lctx.tempCounter;
+	lctx.tempCounter = ctr + 1;
+	const counterName = "$i_" + ctr.toString();
+	const counterSym = liftTempSym(lctx, counterName, numberType());
+	const counterDecl = makeVarDecl(counterName, makeMember(clonePath(xf, loc), "length", loc), DeclKind.Let, loc);
+	counterDecl.resolvedSym = counterSym;
+	const cond = makeBinary(makeTypedIdentResolved(counterSym, null, loc), ">", makeMember(clonePath(yf, loc), "length", loc), loc);
+	const bodyBuf = newBuf();
+	bodyBuf.items.push(makeExprStmt(makeAssign(
+		makeTypedIdentResolved(counterSym, null, loc),
+		makeBinary(makeTypedIdentResolved(counterSym, null, loc), "-", makeNumber(1, loc), loc),
+		loc
+	), loc));
+	const xi = makeArrayAccess(clonePath(xf, loc), makeTypedIdentResolved(counterSym, null, loc), loc);
+	fillBody("destroy", xi, xi, "", elemType, lctx, bodyBuf, createNameSet(), loc);
+	if (bodyBuf.items.length == 1) return;
+	buf.items.push(counterDecl);
 	buf.items.push(makeWhile(cond, makeBlock(bodyBuf.items, loc), loc));
 }
 
@@ -464,6 +493,7 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 				// C temporary instead of the array slot (msArrayAccess returns by value).
 				genCall("msArrayStringCopy", hook, xf, yf, buf, loc);
 			} else if (needsElemLoop) {
+				genShrinkLoop(elem, xf, yf, lctx, buf, loc);
 				genCall("msArraySetLen", hook, xf, yf, buf, loc);
 				genArrayLoop("copy", elem, xf, yf, lctx, buf, loc);
 			} else {
@@ -504,7 +534,14 @@ function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: bo
 	const decrefFn = atomic ? "msAtomicDecref" : (isCyclic ? "msDecrefCyclic" : "msDecref");
 	const increfFn = atomic ? "msAtomicIncref" : (isCyclic ? "msIncrefCyclic" : "msIncref");
 	match (hook) {
-		"destroy" => { genCall(decrefFn, hook, xf, yf, buf, loc); },
+		"destroy" => {
+			const owner = lctx.dropOwner;
+			if (owner != null && isCyclic && !atomic) {
+				buf.items.push(makeExprStmt(makeCall(runtimeRef("msDecrefCyclicEdge", loc), [makeIdentResolved(owner, loc), xf], loc), loc));
+			} else {
+				genCall(decrefFn, hook, xf, yf, buf, loc);
+			}
+		},
 		"copy" => { genCopyRef(increfFn, xf, yf, fieldName, buf, loc); },
 		"sink" => {
 			if (isCyclic && !atomic) {
@@ -675,19 +712,8 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 		},
 		TypeKind.GenericInstance => {
-			// Promise<T> is exempt from generated Promise__T_destroy hooks (codegen
-			// emits msFuture_<T> directly, not via per-type hook). But Promise FIELDS
-			// inside other types (e.g. async fn envs $Env_X_shared with $retFut/$yf0)
-			// MUST emit msFutureDrcDestroy at the container's destroy hook — otherwise
-			// futures held by the env leak when the env's destroyFn runs. Combined
-			// with the markReturnedVarsMoved MemberExpr fix and the msAsyncCb NULL
-			// decref, this completes the async fn cleanup chain.
 			if (isAwaitable(fieldType)) {
-				match (hook) {
-					"destroy" => { genCall("msFutureDrcDestroy", hook, xf, yf, buf, loc); },
-					"copy" | "sink" => { defaultOp(hook, xf, yf, buf, loc); },
-					_ => {},
-				};
+				refOp(hook, xf, yf, fieldName, false, false, lctx, buf, loc);
 				return;
 			}
 			const distinctInner = distinctBody(fieldType);
@@ -919,54 +945,18 @@ function ensureClassHooks(body: Type, lctx: LiftCtx, loc: SourceLocation): void 
 }
 
 // ===== User-Defined Hook Dispatch (Reference considerUserDefinedOp) =====
-// Maps each lifecycle op to its user-facing method name. A user hook is any
-// method/extension with that name on the receiver type — class methods and
-// free-function extensions both land in the extension registry (collectPass),
-// each with the real callable sym attached; the receiver is the extension's first-parameter type.
-// Reference: Nim binds `=destroy`/`=copy`/… to the type and getAttachedOp
-// retrieves by type — never by reconstructing a symbol name.
 
-function userHookMethodName(hook: string): string {
-	return match (hook) {
-		"destroy" => "onDestroy",
-		"copy" => "onCopy",
-		"sink" => "onMove",
-		"wasMoved" => "onMoved",
-		"dup" => "onClone",
-		"trace" => "onTrace",
-		_ => "",
-	};
-}
-
-function getUserDefinedHookSym(type: Type, hook: string, lctx: LiftCtx): Symbol | null {
-	const methodName = userHookMethodName(hook);
-	if (methodName == "") return null;
-	const instHook = lookupInstanceHook(type, methodName);
+function getUserDefinedHookSym(type: Type, op: AttachedOp, lctx: LiftCtx): Symbol | null {
+	const instHook = lookupInstanceHook(type, op);
 	if (instHook != null) return instHook;
-	const declSym = unwrapRef(type).sym;
-	if (lctx.checkerCtx == null) return null;
-	// A type may carry duplicate registry entries reached through different import
-	// paths — distinct Symbol instances whose modulePath differs only by spelling
-	// (e.g. `crypto/index` vs `crypto/tls/../index`), each mangling to a different
-	// C name. Reference rule: a type-bound op is defined in the type's own module.
-	// Prefer the sym whose module matches the type's so the emitted call resolves
-	// to the emitted definition (a stale-path sym links to an undefined symbol).
-	const typeModulePath = declSym != null ? declSym.modulePath : "";
-	const registry = pickBodyCtx(typeModulePath, lctx.checkerCtx).extensionRegistry;
-	if (registry == null) return null;
-	let fallback: Symbol | null = null;
-	for (const m of findAllExtensionsByName(registry, methodName)) {
-		if (m.isStatic || m.sym == null) continue;
-		if (declSym == null || extReceiverSym(m) != declSym) continue;
-		if (typeModulePath != "" && m.sym.modulePath == typeModulePath) return m.sym;
-		if (fallback == null) fallback = m.sym;
-	}
-	if (fallback != null) return fallback;
-	return null;
+	const declared = unwrapRef(type);
+	const declSym = declared.sym;
+	if (declSym == null || declared.kind == TypeKind.GenericInstance || declSym.instantiatedFrom != null || lctx.checkerCtx == null) return null;
+	return getAttachedOp(unwrapRef(declSym.symbolType), op);
 }
 
 function hasUserDefinedHook(type: Type, hook: string, lctx: LiftCtx): boolean {
-	return getUserDefinedHookSym(type, hook, lctx) != null;
+	return getUserDefinedHookSym(type, attachedOpOf(hook), lctx) != null;
 }
 
 // Reference parity: declaring any lifecycle hook makes the type need lifecycle
@@ -1304,7 +1294,9 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	// overflows the stack (see resolvePass owning-self-referential-field warning) —
 	// a user hook lets the author traverse iteratively instead. The author is
 	// therefore responsible for ALL owned fields. Same for copy/sink/wasMoved/trace.
-	const hookSym = getUserDefinedHookSym(subject, hook, lctx);
+	const hookSym = getUserDefinedHookSym(subject, attachedOpOf(hook), lctx);
+	const outerDropOwner = lctx.dropOwner;
+	lctx.dropOwner = hook == "destroy" && hookSym == null && classType != null && !lctx.jsBackend ? s1 : null;
 	if (hookSym != null) {
 		const hookIdent = makeIdentResolved(hookSym, loc);
 		const u1 = userHookArg(hookSym, 0, s1, classType, loc);
@@ -1372,11 +1364,12 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	// this object's already-freed, not-yet-nulled slots (UAF). The guard defers collection until
 	// the whole teardown unwinds. Destroy hooks are single-exit (no early return), so bracketing
 	// the statement list is sufficient. No-op under --gc=drc.
+	if (lctx.dropOwner != null && classType != null) {
+		buf.items = deferAfterDropEdges(buf.items, s1, classType, cName, lctx, loc);
+	}
+	lctx.dropOwner = outerDropOwner;
 	if (hook == "destroy") {
-		const wrapped: Node[] = [makeExprStmt(makeCall(runtimeRef("msOrcBeginTeardown", loc), [], loc), loc)];
-		for (const it of buf.items) { wrapped.push(it); }
-		wrapped.push(makeExprStmt(makeCall(runtimeRef("msOrcEndTeardown", loc), [], loc), loc));
-		buf.items = wrapped;
+		buf.items = bracketTeardown(buf.items, loc);
 	}
 
 	const suffix = hookSuffix(hook);
@@ -1403,6 +1396,66 @@ function generateHook(hook: string, typeName: string, cName: string, objType: Ty
 	const sym = liftOp(fnNode, objType, objType, attachedOpOf(hook), cName + suffix);
 	lctx.collector.push(fnNode);
 	return sym;
+}
+
+function bracketTeardown(items: Node[], loc: SourceLocation): Node[] {
+	const wrapped: Node[] = [makeExprStmt(makeCall(runtimeRef("msOrcBeginTeardown", loc), [], loc), loc)];
+	for (const it of items) { wrapped.push(it); }
+	wrapped.push(makeExprStmt(makeCall(runtimeRef("msOrcEndTeardown", loc), [], loc), loc));
+	return wrapped;
+}
+
+function dropEdgeCall(stmt: Node): Node | null {
+	if (stmt.kind != NodeKind.ExprStmt) return null;
+	const call = (stmt.data as ExprStmtData).expr;
+	return isRuntimeProcCall(call, "msDecrefCyclicEdge") ? call : null;
+}
+
+function deferAfterDropEdges(items: Node[], self: Symbol, classType: Type, cName: string, lctx: LiftCtx, loc: SourceLocation): Node[] {
+	let edges = 0;
+	for (let i = 0; i + 1 < items.length; i += 1) if (dropEdgeCall(items[i]) != null) edges += 1;
+	if (edges == 0) return items;
+	const restName = cName + "DestroyRest";
+	const ownerSym = liftSym(lctx, SymbolKind.Variable, "owner", createPtr(voidType()));
+	const resumeSym = liftSym(lctx, SymbolKind.Variable, "resume", int32Type());
+	const restFn = makeFnDecl(restName, [ownerSym, resumeSym], ["Ptr<void>", "int32"], null, "", "void", loc);
+	setHookParamType(restFn, 0, createPtr(voidType()));
+	setHookParamType(restFn, 1, int32Type());
+	const restSym = liftHelperOp(restFn, restName, "", lctx);
+	const selfDecl = makeVarDecl(self.name, makeHiddenSubConv(makeIdentResolved(ownerSym, loc), classType, loc), DeclKind.Const, loc);
+	selfDecl.resolvedSym = self;
+	const head: Node[] = [];
+	const rest: Node[] = [makeExprStmt(makeCall(runtimeRef("msOrcBeginTeardown", loc), [], loc), loc), selfDecl];
+	let segment: Node[] = [];
+	let resume = 0;
+	for (let i = 0; i < items.length; i += 1) {
+		const edge = i + 1 < items.length ? dropEdgeCall(items[i]) : null;
+		if (edge == null) {
+			head.push(items[i]);
+			if (resume > 0) segment.push(cloneNodeKeepSem(items[i]));
+			continue;
+		}
+		resume += 1;
+		const deferred: Node[] = [
+			makeExprStmt(makeCall(runtimeRef("msDropDefer", loc), [makeIdentResolved(self, loc), makeIdentResolved(restSym, loc), makeNumber(resume, loc)], loc), loc),
+			makeExprStmt(makeCall(runtimeRef("msOrcEndTeardown", loc), [], loc), loc),
+			makeReturn(null as unknown as Node, loc),
+		];
+		const guard = makeIf(edge, makeBlock(deferred, loc), null as unknown as Node, loc);
+		if (resume == 1) {
+			head.push(guard);
+		} else {
+			segment.push(cloneNodeKeepSem(guard));
+			rest.push(makeIf(makeBinary(makeIdentResolved(resumeSym, loc), "<", makeNumber(resume, loc), loc), makeBlock(segment, loc), null as unknown as Node, loc));
+			segment = [];
+			head.push(guard);
+		}
+	}
+	for (const it of segment) rest.push(it);
+	rest.push(makeExprStmt(makeCall(runtimeRef("msOrcEndTeardown", loc), [], loc), loc));
+	(restFn.data as FunctionDeclData).fnBody = makeBlock(rest, loc);
+	lctx.collector.push(restFn);
+	return head;
 }
 
 // ===== Ensure Type Hooks — unified entry (handles named class/interface,
@@ -1523,27 +1576,20 @@ function ensureHooks(typeName: string, objType: Type, refType: Type, orig: Type,
 	setOpByKey(objType, AttachedOp.AttachedSink, sinkSym);
 	const wasMovedSym = generateHook("wasMoved", typeName, cName, objType, orig, classType, lctx, loc);
 	setOpByKey(objType, AttachedOp.AttachedWasMoved, wasMovedSym);
-	setAttachedOp(objType, AttachedOp.AttachedDestructor, destroySym);
-	setAttachedOp(objType, AttachedOp.AttachedAsgn,       copySym);
-	setAttachedOp(objType, AttachedOp.AttachedSink,       sinkSym);
-	setAttachedOp(objType, AttachedOp.AttachedWasMoved,   wasMovedSym);
 
 	const visited: NameSet = createNameSet();
 	hasCycles = isCyclicType(objType, lctx, visited);
 	if (hasCycles) {
 		const traceSym = generateHook("trace", typeName, cName, objType, orig, classType, lctx, loc);
 		setOpByKey(objType, AttachedOp.AttachedTrace, traceSym);
-		setAttachedOp(objType, AttachedOp.AttachedTrace, traceSym);
 	}
 
-	const userDup = getUserDefinedHookSym(orig, "dup", lctx);
+	const userDup = getUserDefinedHookSym(orig, AttachedOp.AttachedDup, lctx);
 	if (userDup != null) {
 		bindOpByKey(objType, AttachedOp.AttachedDup, userDup);
-		setAttachedOp(objType, AttachedOp.AttachedDup, userDup);
 	} else {
 		const dupSym = emitDup(typeName, cName, objType, classType, isClassOrInterface, lctx, loc);
 		setOpByKey(objType, AttachedOp.AttachedDup, dupSym);
-		setAttachedOp(objType, AttachedOp.AttachedDup, dupSym);
 	}
 	aliasLiftedOps(orig, objType);
 
@@ -1661,12 +1707,9 @@ function tupleNeedsHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): boolean {
 // No-RC tuples generate nothing — classify.ms returns noRcInfo, so no hook is referenced.
 function ensureAnonUnionHooks(t: Type, lctx: LiftCtx, loc: SourceLocation): string {
 	if (t.typeName != "" || t.typeChildren == null || t.typeChildren.length < 2) return "";
-	let allPrimitive = true;
 	for (const c of t.typeChildren) {
 		if (c == null || c.kind == TypeKind.Null || c.kind == TypeKind.Ptr) return "";
-		if (!isPrimitiveUnionMember(c)) allPrimitive = false;
 	}
-	if (allPrimitive) return "";
 	const name = anonUnionCName(t);
 	if (!nameSetContains(lctx.generated, opTypeKey(t)) && !hasLiftedOp(t, AttachedOp.AttachedDestructor)) {
 		if (!typeNeedsHooks(t, lctx, loc)) return "";
@@ -2045,7 +2088,7 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx): void {
 }
 
 function hookedDistinctElement(t: Type | null, lctx: LiftCtx, seen: HashSet<Type>): Type | null {
-	if (t == null || seen.has(t)) return null;
+	if (t == null || seen.has(t) || lctx.hookFreeTypes.has(t)) return null;
 	seen.add(t);
 	const elem = t.kind == TypeKind.Array ? t.typeReturn : null;
 	if (elem != null && elem.kind == TypeKind.Distinct && hasAnyUserHook(elem, lctx)) return elem;
@@ -2058,7 +2101,9 @@ function hookedDistinctElement(t: Type | null, lctx: LiftCtx, seen: HashSet<Type
 
 function refuseArrayOfHookedDistinct(t: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	if (lctx.jsBackend || lctx.checkerCtx == null) return;
-	const elem = hookedDistinctElement(t, lctx, new HashSet<Type>());
+	const seen = new HashSet<Type>();
+	const elem = hookedDistinctElement(t, lctx, seen);
+	if (elem == null) seen.forEach((v: Type): void => { lctx.hookFreeTypes.add(v); });
 	if (elem == null || lctx.refusedArrayElems.has(elem)) return;
 	lctx.refusedArrayElems.add(elem);
 	addError(lctx.checkerCtx, "an array of the distinct type '" + elem.typeName + "' would never run its lifecycle hooks, because it is stored as an array of its base type: keep the values in a struct and make the array of those", loc.line, loc.column);
@@ -2191,26 +2236,6 @@ function processDecl(stmt: Node, lctx: LiftCtx): void {
 	};
 }
 
-// A user hook declared for a distinct type binds to that type (reference bindHookToType accepts
-// tyDistinct), so the distinct owns lifted ops of its own, lifted in the module that declares it.
-function liftDistinctUserHooks(lctx: LiftCtx): void {
-	const cc = lctx.checkerCtx;
-	if (cc == null || cc.extensionRegistry == null) return;
-	for (const hook of ["destroy", "copy", "sink", "wasMoved", "trace"]) {
-		const methodName = userHookMethodName(hook);
-		if (!hasExtensionByName(cc.extensionRegistry, methodName)) continue;
-		for (const m of findAllExtensionsByName(cc.extensionRegistry, methodName)) {
-			if (m.isStatic || m.sym == null || m.sym.modulePath != cc.modulePath) continue;
-			const fnType = getExtFnType(m);
-			if (fnType.kind != TypeKind.Function || fnType.typeChildren.length == 0) continue;
-			let formal = fnType.typeChildren[0];
-			while ((formal.kind == TypeKind.Var || formal.kind == TypeKind.Ref) && formal.typeReturn != null) formal = formal.typeReturn;
-			if (formal.kind != TypeKind.Distinct || formal.sym == null || formal.sym.modulePath != cc.modulePath) continue;
-			ensureHooks(formal.sym.name, formal, null as unknown as Type, formal, true, lctx, makeLoc(0, 0));
-		}
-	}
-}
-
 // ===== Main Entry Point =====
 
 function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
@@ -2229,7 +2254,9 @@ function newLiftCtx(ctx: TransformContext, jsBackend: boolean): LiftCtx {
 		scannedTypes: new HashSet<Type>(),
 		arrayRootEpochs: new HashMap<Type, int32>(),
 		refusedArrayElems: new HashSet<Type>(),
+		hookFreeTypes: new HashSet<Type>(),
 		jsBackend: jsBackend,
+		dropOwner: null,
 	};
 }
 
@@ -2270,7 +2297,6 @@ export function liftDestructors(program: Node, ctx: TransformContext, withHooks:
 		for (const stmt of pd.programStmts) {
 			processDecl(stmt, lctx);
 		}
-		liftDistinctUserHooks(lctx);
 
 		// Scan for anonymous struct types (from ObjectLiterals with no declaration).
 		// These have typeName like "__anon..." set by the checker but no InterfaceDecl.

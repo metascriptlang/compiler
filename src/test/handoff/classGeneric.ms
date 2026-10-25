@@ -106,7 +106,7 @@ test "E2E C: generic class instantiation compiles" {
 	const src = "class Box<T> { value: T; }\nconst b = new Box<number>(42);";
 	const result = compileToC(src);
 	assert result.ok;
-	assert result.value.indexOf("Box_") >= 0 && result.value.indexOf("__number") >= 0;
+	assert result.value.indexOf("Box_") >= 0 && result.value.indexOf("__float64") >= 0;
 }
 
 // ===== Regression: extension method receiver not dropped =====
@@ -124,9 +124,9 @@ test "E2E C: trim keeps receiver" {
 	const src = "const s = \"  hi  \";\nconst t = s.trim();";
 	const result = compileToC(src);
 	assert result.ok;
-	// Must keep receiver s — NOT msStringTrim(). Module-level const s is path-mangled,
-	// so match the receiver prefix only.
-	assert result.value.indexOf("msStringTrim(s") >= 0;
+	// Must keep receiver s as the argument of the std trim. Module-level const s is
+	// path-mangled, so match the receiver prefix only.
+	assert result.value.contains("_u0(s__");
 }
 
 // ===== Multi-param generics =====

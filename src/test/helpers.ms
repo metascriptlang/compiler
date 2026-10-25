@@ -27,6 +27,7 @@ import { analyzeProgram } from "../analyzer/index";
 import { CModuleOutput, generateCModule, generateCModuleOutput, genProjectDispatcher, prepareCModuleEmission } from "../codegen/c/index";
 import { AliveSet, createAliveSet, CEmissionFacts } from "../codegen/c/context";
 import { generateJS, generateJSModule } from "../codegen/js/jsgen";
+import { createJsTreeLayout } from "../codegen/js/emit";
 import { MapEntry, createMapProvider, loadModuleGraph, loadModuleGraphWithConfig, canonicalModulePath, loadModule, SourceProvider } from "../module/loader";
 import { createDefaultConfig, Backend, ResolverConfig } from "../module/resolver";
 import { resolveRuntimeDir } from "../utils/path";
@@ -98,7 +99,7 @@ function placeOwnedInstances(units: CheckedUnit[], classesBesideGeneric: boolean
 	}
 }
 
-export function compileToC(source: string, target: TargetInfo = hostTargetInfo(), manualGc: boolean = false, lowerAccess: boolean = false): CompileResult {
+export function compileToC(source: string, target: TargetInfo = hostTargetInfo(), manualGc: boolean = false, lowerAccess: boolean = false, danger: boolean = false): CompileResult {
 	resetBuildState();
 	// loadModule canonicalizes the entry path to absolute (loader.ms:393) —
 	// findModule uses string equality, so we must canonicalize here too.
@@ -132,6 +133,11 @@ export function compileToC(source: string, target: TargetInfo = hostTargetInfo()
 
 	const transformed = transformProgram(macroExpanded, checkerCtx, false);
 	const nativeCtx = createTransformContextWithChecker(checkerCtx);
+	if (danger) {
+		nativeCtx.rangeChecks = false;
+		nativeCtx.boundChecks = false;
+		nativeCtx.objChecks = false;
+	}
 	const nativeTransformed = transformForNative(transformed, nativeCtx);
 	const preAnErrors = checkerCtx.errors.length;
 	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
@@ -350,7 +356,7 @@ export function compileTestBuildToJS(source: string): CompileResult {
 
 	const transformed = transformProgram(unit.program, checkerCtx, true);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "transform:"));
-	const res = generateJSModule(transformed, [], modPath, [], [], [], [], [], [], [], true, false);
+	const res = generateJSModule(transformed, [], modPath, modPath, createJsTreeLayout(), [], [], [], [], [], true, false);
 	return Result.ok(res.code);
 }
 

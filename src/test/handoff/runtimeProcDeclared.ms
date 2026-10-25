@@ -17,7 +17,9 @@ function undeclared(backendExt: string, names: string[]): string[] {
 test "the C prelude declares every runtime routine the lowerings synthesize" {
 	const names: string[] = [
 	"__FILE__", "msActorCreatePid", "msActorFromPid", "msActorPollAll", "msActorRegister", "msActorSend",
-	"msActorSuspend", "msArrayCopy", "msArrayDestroy", "msArrayNumberSink", "msArrayNumberWasMoved",
+	"msActorSuspend", "msActorSuspendReplyBool", "msActorSuspendReplyDouble", "msActorSuspendReplyInt32",
+	"msActorSuspendReplyInt64", "msActorSuspendReplyPtr", "msActorSuspendReplyString",
+	"msArrayCopy", "msArrayDestroy", "msArrayNumberSink", "msArrayNumberWasMoved",
 	"msArrayRefCopy", "msArrayRefDestroy", "msArrayRefSink", "msArrayRefWasMoved", "msArraySetLen",
 	"msArrayStringCopy", "msArrayStringDestroy", "msArrayStringSink", "msArrayStringWasMoved",
 	"msArrayUint8Copy", "msArrayUint8Destroy", "msArrayUint8Sink", "msArrayUint8WasMoved", "msArrayWasMoved",

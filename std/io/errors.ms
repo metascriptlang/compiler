@@ -74,6 +74,7 @@ export function ioErrorFromErrno(errnum: number, path: string): IoError {
 		17 => alreadyExists(path),     // EEXIST
 		20 => notDirectory(path),      // ENOTDIR
 		21 => isDirectory(path),       // EISDIR
+		27 => ioError(IoErrorKind.Unknown, path, `file too large: ${path}`), // EFBIG
 		_ => ioError(IoErrorKind.Unknown, path, `I/O error (errno ${errnum}): ${path}`),
 	};
 }

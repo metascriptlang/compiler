@@ -18,7 +18,7 @@ import {
 } from "../doc";
 import { callPrintNode } from "./callbacks";
 import { rawTemplateAt, rawObjectKeyAt, rawGenericsAt, sourceByteAt } from "./literals";
-import { flagHas, buildParamList, paramListInParens, wrapNodeComments, isParamPatternDecl } from "./statements";
+import { flagHas, buildParamList, paramListInParens, wrapNodeComments, isParamPatternDecl, headerAsWritten } from "./statements";
 
 export function printBinaryExpr(node: Node, options: FormatOptions): Doc {
 	const template = rawTemplateAt(node, options);
@@ -393,6 +393,9 @@ function writtenArrowBody(body: Node, options: FormatOptions): Node {
 export function printArrowFunction(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ArrowFunctionData;
 	const isAsync = flagHas(d.arrowFlags, "async") || flagHas(d.arrowFlags, "async_generator");
+	const blockBody = sourceByteAt(options.source, d.arrowBody.location.line, d.arrowBody.location.column) == "{".code;
+	const asWritten = blockBody ? headerAsWritten(node, d.arrowBody, options, null) : null;
+	if (asWritten != null) return docGroup([docText(isAsync ? "async " : ""), asWritten, callPrintNode(writtenArrowBody(d.arrowBody, options), options)]);
 	const parts: Doc[] = isAsync ? [docText("async ")] : [];
 	const bare = !isAsync && d.arrowParams.length == 1 && d.arrowReturnType == ""
 		&& sourceByteAt(options.source, node.location.line, node.location.column) != "(".code
@@ -600,6 +603,8 @@ export function printMacroInvocation(node: Node, options: FormatOptions): Doc {
 
 export function printFunctionExpr(node: Node, options: FormatOptions): Doc {
 	const d = node.data as FunctionExprData;
+	const asWritten = headerAsWritten(node, d.funcExprBody, options, null);
+	if (asWritten != null) return docGroup([asWritten, callPrintNode(d.funcExprBody, options)]);
 	// `async`, `generator`, and `async_generator` are encoded in funcExprFlags.
 	const isAsync = flagHas(d.funcExprFlags, "async") || flagHas(d.funcExprFlags, "async_generator");
 	const isGen = flagHas(d.funcExprFlags, "generator") || flagHas(d.funcExprFlags, "async_generator");

@@ -37,7 +37,7 @@ export function registerMacroCompiler(fn: MacroCompilerFn): void {
 }
 
 // Comptime engine: compile a macro wrapper into the ONE shared project-wide image
-// (Nim's graph.vm + PCtx.code) and return the persistent VM plus the absolute
+// and return the persistent VM plus the absolute
 // funcIdx of `macroFnName`. `token` scopes the engine to one compilation.
 export interface EngineMacroResult {
 	vm: RaiserVM;

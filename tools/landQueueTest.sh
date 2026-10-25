@@ -79,8 +79,9 @@ mkwt() {
 
 remotegreen() {
   mkdir -p "$MSC_REMOTE_VERDICTS"
-  printf 'patch=%s\nbase=%s\nhost=test-host\nresult=GREEN\n' \
-    "$(git -C "$R" diff -U0 --no-renames main "wt/$1" | git patch-id --stable | cut -d' ' -f1)" "$(git -C "$R" rev-parse main)" >"$MSC_REMOTE_VERDICTS/$1"
+  printf 'patch=%s\npatch_verbatim=%s\nbase=%s\nhost=test-host\nresult=GREEN\n' \
+    "$(git -C "$R" diff -U0 --no-renames main "wt/$1" | git patch-id --stable | cut -d' ' -f1)" \
+    "$(git -C "$R" diff -U0 --no-renames main "wt/$1" | git patch-id --verbatim | cut -d' ' -f1)" "$(git -C "$R" rev-parse main)" >"$MSC_REMOTE_VERDICTS/$1"
 }
 setverdict() { printf '%s\n' "$2" >"$T/ws/.wt/wt-$1/verdict"; git -C "$T/ws/.wt/wt-$1" commit -qam "verdict $2"; }
 sbwt() { env -u WT_CWD -u CLAUDE_PROJECT_DIR bash "$WT" "$@"; }
@@ -341,6 +342,92 @@ echo more >"$T/ws/.wt/wt-rp/more.txt"; git -C "$T/ws/.wt/wt-rp" add more.txt; gi
 enqueue rp
 rr=$(waitfor rp 60)
 check "S25 rp landed after a local gate" '[ "$rr" = 0 ] && onmain more.txt && grep -q "^wt/rp " "$T/ctl/gates.log"'
+
+for variant in same other shared changed whitespace conflict dirty; do
+  echo "== S26 local GREEN survives a refused land ($variant)"
+  setup
+  printf '1\n2\n3\n4\n5\n' >"$R/shared.txt"; git -C "$R" add shared.txt; git -C "$R" commit -qm "add shared"
+  mkwt lr hold
+  printf 'one\n2\n3\n4\n5\n' >"$T/ws/.wt/wt-lr/shared.txt"; git -C "$T/ws/.wt/wt-lr" commit -qam "edit shared top"
+  enqueue lr
+  for i in $(seq 1 40); do [ -e "$LQ_TEST/holding.lr" ] && break; sleep 0.25; done
+  printf 'held\n' >"$R/lr.txt"
+  touch "$LQ_TEST/release"
+  rr=$(waitfor lr 60)
+  check "S26 $variant GREEN recorded before main checkout refused land" '[ "$rr" = 1 ] && ! onmain lr.txt && grep -q "the green gate is recorded" "$MSC_LAND_QUEUE/lr.land.log" && [ -s "$(git -C "$T/ws/.wt/wt-lr" rev-parse --absolute-git-dir)/wt-land-verdict" ]'
+  rm -f "$R/lr.txt"
+  case "$variant" in
+    other) printf 'other\n' >"$R/other.txt"; git -C "$R" add other.txt; git -C "$R" commit -qm "add other on main" ;;
+    shared) printf '1\n2\nthree\n4\n5\n' >"$R/shared.txt"; git -C "$R" commit -qam "edit shared next line on main" ;;
+    changed) printf 'more\n' >>"$T/ws/.wt/wt-lr/lr.txt"; git -C "$T/ws/.wt/wt-lr" commit -qam "change patch" ;;
+    whitespace) printf 'l r\n' >"$T/ws/.wt/wt-lr/lr.txt"; git -C "$T/ws/.wt/wt-lr" commit -qam "change patch whitespace" ;;
+    conflict) printf 'uno\n2\n3\n4\n5\n' >"$R/shared.txt"; git -C "$R" commit -qam "edit the same line on main" ;;
+    dirty) printf 'dirty\n' >>"$T/ws/.wt/wt-lr/lr.txt" ;;
+  esac
+  enqueue lr; enq=$?
+  case "$variant" in
+    conflict|dirty)
+      check "S26 $variant refused without another gate" '[ "$enq" = 1 ] && ! onmain lr.txt && grep -Eq "conflicts|uncommitted" "$T/ctl/enq.lr" && [ "$(grep -c "^wt/lr " "$T/ctl/gates.log")" = 1 ]' ;;
+    *)
+      rr=$(waitfor lr 60)
+      check "S26 $variant landed" '[ "$rr" = 0 ] && onmain lr.txt'
+      case "$variant" in
+        changed|whitespace) check "S26 $variant invalidates the old GREEN" '[ "$(grep -c "^wt/lr " "$T/ctl/gates.log")" = 2 ]' ;;
+        *) check "S26 $variant reuses the old GREEN" '[ "$(grep -c "^wt/lr " "$T/ctl/gates.log")" = 1 ]' ;;
+      esac ;;
+  esac
+done
+
+echo "== S27 manual re-enqueue preserves history without replaying old BUSY"
+setup; mkwt history busyred
+enqueue history
+rr=$(waitfor history)
+check "S27 initial BUSY then RED" '[ "$rr" = 1 ] && [ "$(cat "$T/ctl/count.history")" = 2 ]'
+enqueue history
+rr=$(waitfor history)
+check "S27 old BUSY cannot retry the new RED" '[ "$rr" = 1 ] && [ "$(cat "$T/ctl/count.history")" = 3 ]'
+check "S27 prior BUSY evidence survives" 'grep -q "^gate: BUSY load" "$MSC_LAND_QUEUE/history.land.log"'
+check "S27 both RED attempts survive" '[ "$(grep -c "^gate: RED" "$MSC_LAND_QUEUE/history.land.log")" = 2 ]'
+setverdict history green
+enqueue history
+rr=$(waitfor history)
+check "S27 fixed slice lands" '[ "$rr" = 0 ] && onmain history.txt'
+check "S27 GREEN preserves all four attempts" '[ "$(grep -c "^===== " "$MSC_LAND_QUEUE/history.land.log")" = 4 ]'
+check "S27 result state is current, not historical" '[ -e "$MSC_LAND_QUEUE/history.done" ] && [ ! -e "$MSC_LAND_QUEUE/history.red" ] && [ "$(cat "$T/ctl/count.history")" = 4 ]'
+
+for variant in legacy empty verbatim-only space tab space-red; do
+  echo "== S28 remote verdict keeps significant whitespace ($variant)"
+  setup; verdict=green; [ "$variant" != space-red ] || verdict=red
+  mkwt rv "$verdict"
+  printf 'console.log("ab")\n' >"$T/ws/.wt/wt-rv/value.ms"
+  git -C "$T/ws/.wt/wt-rv" add value.ms; git -C "$T/ws/.wt/wt-rv" commit -qm "add literal"
+  remotegreen rv
+  case "$variant" in
+    legacy|verbatim-only)
+      field=patch_verbatim; [ "$variant" != verbatim-only ] || field=patch
+      grep -v "^$field=" "$MSC_REMOTE_VERDICTS/rv" >"$MSC_REMOTE_VERDICTS/rv.tmp"
+      mv "$MSC_REMOTE_VERDICTS/rv.tmp" "$MSC_REMOTE_VERDICTS/rv" ;;
+    empty)
+      sed -i.bak 's/^patch_verbatim=.*/patch_verbatim=/' "$MSC_REMOTE_VERDICTS/rv"
+      rm -f "$MSC_REMOTE_VERDICTS/rv.bak" ;;
+    space|tab|space-red)
+      whitespace=' '; [ "$variant" != tab ] || whitespace=$'\t'
+      printf 'console.log("a%sb")\n' "$whitespace" >"$T/ws/.wt/wt-rv/value.ms"
+      git -C "$T/ws/.wt/wt-rv" commit -qam "change literal whitespace" ;;
+  esac
+  enqueue rv
+  rr=$(waitfor rv 60)
+  if [ "$variant" = space-red ]; then
+    check "S28 changed whitespace cannot bypass a RED gate" '[ "$rr" = 1 ] && ! onmain value.ms'
+  else
+    check "S28 $variant landed" '[ "$rr" = 0 ] && onmain value.ms'
+  fi
+  if [ "$variant" = verbatim-only ]; then
+    check "S28 verbatim alone is sufficient" '! grep -q "^wt/rv " "$T/ctl/gates.log" 2>/dev/null'
+  else
+    check "S28 $variant cannot reuse the remote GREEN" '[ "$(grep -c "^wt/rv " "$T/ctl/gates.log" 2>/dev/null)" = 1 ]'
+  fi
+done
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

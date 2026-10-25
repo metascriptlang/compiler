@@ -505,12 +505,6 @@ function bindMatchStmt(state: BinderState, node: Node): void {
 	while (i < d.matchStmtCases.length) {
 		const caseNode = d.matchStmtCases[i];
 		const cd = caseNode.data as MatchCaseData;
-		// Synthesize a narrowing condition so the flow graph carries the
-		// match-arm narrowing into the arm body. For single-pattern arms
-		// (the common case), we emit `disc === pattern` as a TrueCondition
-		// so getFlowTypeOfReference walks back through it. Multi-pattern
-		// arms (a | b) fall back to preMatch (no narrowing) — Phase 6 can
-		// synthesize an OR-chain if needed.
 		state.currentFlow = synthesizeMatchArmFlow(preMatch, d.matchStmtDisc, cd);
 		bindMatchCase(state, caseNode);
 		addAntecedent(postLabel, state.currentFlow);
@@ -528,34 +522,17 @@ function bindMatchCase(state: BinderState, caseNode: Node): void {
 	if (d.caseBody != null) bindStatement(state, d.caseBody);
 }
 
-// Synthesize a TrueCondition FlowNode representing `disc === pattern` for a
-// single-pattern match arm. Emits a synthetic BinaryExpr AST node so the
-// existing narrowType dispatcher (flow.ms) handles it uniformly with `if`
-// narrowing. Returns `preMatch` unchanged for wildcard, guarded, or
-// multi-pattern arms (Phase 6 can refine those cases).
 function synthesizeMatchArmFlow(preMatch: FlowNode, disc: Node, cd: MatchCaseData): FlowNode {
 	if (disc == null) return preMatch;
-	if (cd.caseGuard != null) return preMatch;  // guarded arms — Phase 6
-	if (cd.casePatterns.length != 1) return preMatch;  // OR patterns — Phase 6
-	const pat = cd.casePatterns[0];
-	if (pat == null) return preMatch;
-	// Wildcard `_` and bare identifiers are bindings, not comparisons.
-	if (pat.kind == NodeKind.Identifier) {
-		const id = pat.data as IdentifierData;
-		if (id.name == "_") return preMatch;
-		// Bare identifier patterns can be either a binding (narrow lost)
-		// or an enum-member reference (`K.A`) — we only narrow on the
-		// enum-member form, which the parser represents as MemberExpr.
-		return preMatch;
+	if (cd.caseGuard != null) return preMatch;
+	let test: Node | null = null;
+	for (const pat of cd.casePatterns) {
+		if (pat == null || pat.kind == NodeKind.Identifier) return preMatch;
+		const equality = createNodeAt(NodeKind.BinaryExpr, { operator: "===", left: disc, right: pat }, pat.location);
+		test = test == null ? equality : createNodeAt(NodeKind.BinaryExpr, { operator: "||", left: test, right: equality }, pat.location);
 	}
-	// Wrap in a synthetic BinaryExpr === so the flow query uses existing
-	// narrowTypeByEquality / narrowTypeByDiscriminantProperty logic.
-	const syntheticEq = createNodeAt(NodeKind.BinaryExpr, {
-		operator: "===",
-		left: disc,
-		right: pat,
-	}, pat.location);
-	return createFlowCondition(FlowFlag.TrueCondition, preMatch, syntheticEq);
+	if (test == null) return preMatch;
+	return createFlowCondition(FlowFlag.TrueCondition, preMatch, test);
 }
 
 function bindReturnStmt(state: BinderState, node: Node): void {
@@ -799,10 +776,12 @@ function bindExpression(state: BinderState, node: Node): void {
 		NodeKind.MatchExpr => bindMatchExpr(state, node),
 		NodeKind.ArrowFunction => {
 			const d = node.data as ArrowFunctionData;
+			node.flowNode = state.currentFlow;
 			bindContainer(state, node, d.arrowBody);
 		},
 		NodeKind.FunctionExpr => {
 			const d = node.data as FunctionExprData;
+			node.flowNode = state.currentFlow;
 			bindContainer(state, node, d.funcExprBody);
 		},
 		NodeKind.HiddenDeref => {

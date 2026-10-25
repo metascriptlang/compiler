@@ -6,7 +6,7 @@
 // @stdout: any 5
 // @stdout: allSettled done
 // @serial
-// @xfail(raiser): raiser runtime error: Unknown host function: msPromiseRace (no host bridge registers it in hostTable.ms)
+// @xfail(raiser): raiser runtime error: unhandled exception: no (an async call runs inline and its throw raises in the caller, inbox 2026-10-15-raiser-async-call-runs-inline; Promise.allSettled has no Raiser opcode)
 
 // note: A combinator keeps its result future alive until its last input has settled,
 //   whether or not the caller kept the result. A dropped race/all/any/allSettled result

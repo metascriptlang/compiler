@@ -21,8 +21,8 @@ import { genDecl, registerDeclCName, emitInlineCopies } from "./declarations";
 import { mangleModuleName, mangledFunctionName, mangledTypeName } from "./names";
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable } from "./test";
-import { emitIncludeDirectives } from "./context";
-import { emitOwnedTypeInfos, refArrayCellName, arcCellName, promiseAllCellName, typeInfoCName, defineDeferredElements, isHcrImageModule, objectTypeInfoKey } from "./types";
+import { emitIncludeDirectives, emitIncludes } from "./context";
+import { emitOwnedTypeInfos, refArrayCellName, arcCellName, typeInfoCName, defineDeferredElements, isHcrImageModule, objectTypeInfoKey } from "./types";
 import { collectModuleTypeInfoDemands } from "../../checker/reachability";
 import { DynamicModulePlan } from "../../module/graph";
 
@@ -93,7 +93,6 @@ function registerTypeInfoDemands(demands: AliveSet, facts: CEmissionFacts): void
 		info.cName = match (info.kind) {
 			TypeInfoKind.RefArrayCell => refArrayCellName(info.subject.typeReturn!),
 			TypeInfoKind.ArcCell => arcCellName(info.subject),
-			TypeInfoKind.PromiseAllCell => promiseAllCellName(info.subject),
 			_ => typeInfoCName(info.subject),
 		};
 		facts.typeInfos.set(info.key, info);
@@ -204,6 +203,7 @@ export function generatePreparedCModuleOutput(program: Readonly<Node>, ctx: Read
 
 	defineDeferredElements(g);
 	emitStringPoolDecls(g.stringPool, sec(g, CSection.StringPool));
+	emitIncludes(g);
 	undefPlatformMacros(g);
 
 	output.code = assembleOutput(g);
@@ -768,9 +768,9 @@ test "TypeInfo demands merge by canonical key and take the object's C name" {
 	body.sym.modulePath = "owner.ms";
 	const first = createAliveSet();
 	const second = createAliveSet();
-	const key = objectTypeInfoKey(body, "user.ms");
-	first.typeInfos.push({ kind: TypeInfoKind.Object, subject: body, key, owner: "owner.ms", cName: "", destroy: null, trace: null, baseKey: "", moduleLocal: false });
-	second.typeInfos.push({ kind: TypeInfoKind.Object, subject: body, key, owner: "other.ms", cName: "", destroy: null, trace: null, baseKey: "", moduleLocal: false });
+	const key = objectTypeInfoKey(body);
+	first.typeInfos.push({ kind: TypeInfoKind.Object, subject: body, key, owner: "owner.ms", cName: "", destroy: null, trace: null, baseKey: "" });
+	second.typeInfos.push({ kind: TypeInfoKind.Object, subject: body, key, owner: "other.ms", cName: "", destroy: null, trace: null, baseKey: "" });
 	const facts = new CEmissionFacts();
 	registerTypeInfoDemands(first, facts);
 	registerTypeInfoDemands(second, facts);

@@ -1,10 +1,10 @@
 import { platform } from "std/process";
-import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf } from "./types";
+import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf, declaredBasesOf } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore, typeRelation, TypeRelation } from "./compat";
 import { Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, markUsed, makeSymbol } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
-import { Node, NodeKind, NodeFlag, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData, AttachedOp } from "../ast/node";
 import { findChar, splitTopLevel } from "../utils/string";
 import { InitTracker, createInitTracker } from "./initTracker";
 import { AffineTracker, createAffineTracker } from "./spawnAffinity";
@@ -38,10 +38,13 @@ export interface ModuleExports {
 export interface ExportRegistry {
 	entries: ModuleExports[];
 	moduleIndex: HashMap<string, number>;  // modulePath → index in entries[]
+	// An incomplete C struct or union is one type per tag across every translation unit
+	// (C11 6.2.7), so every header that names it declares the same symbol.
+	cTags: HashMap<string, Symbol>;
 }
 
 export function createExportRegistry(): ExportRegistry {
-	return { entries: [], moduleIndex: new HashMap<string, number>() };
+	return { entries: [], moduleIndex: new HashMap<string, number>(), cTags: new HashMap<string, Symbol>() };
 }
 
 export function registerModuleExports(registry: ExportRegistry, modulePath: string, exports: ExportedSymInfo[]): void {
@@ -252,29 +255,29 @@ export function defaultCheckedAtDeclaration(def: Node): boolean {
 }
 
 export function registerExtension(registry: ExtensionRegistry, method: ExtensionMethod): void {
-	// Dedup by sym identity first (cheap fast-path).
-	if (method.sym != null) {
-		for (const existing of registry.methods) {
-			if (existing.sym == method.sym && existing.methodName == method.methodName) return;
-		}
-	}
-	// Stronger dedup: same logical extension may register through multiple
-	// import / re-export paths producing distinct Symbol instances for the
-	// same definition (same name + modulePath + receiver + location). Without this,
-	// `obj.asNumber()` reports "Ambiguous overloaded extension method" even
-	// though only one definition exists. Fast path skips this loop when
-	// the sym lacks a stable identity (modulePath empty).
-	if (method.sym != null && method.sym.modulePath != "") {
-		for (const other of registry.methods) {
-			if (other.sym != null
-					&& other.methodName == method.methodName
-					&& other.sym.name == method.sym.name
-					&& other.sym.modulePath == method.sym.modulePath
-					&& other.isStatic == method.isStatic
-					&& other.sym.location.line == method.sym.location.line
-					&& other.sym.location.column == method.sym.location.column) {
-				return;
+	// Both dedup rules need an equal methodName, so only that name's chain is scanned.
+	// The second rule: the same logical extension may register through several import /
+	// re-export paths producing distinct Symbol instances for one definition (same name,
+	// modulePath, kind and location); without it `obj.asNumber()` reports "Ambiguous
+	// overloaded extension method" though only one definition exists.
+	const msym = method.sym;
+	if (msym != null) {
+		let ci = registry.byNameHead.get(method.methodName) ?? -1;
+		while (ci >= 0) {
+			const other = registry.methods[ci];
+			const osym = other.sym;
+			if (osym != null) {
+				if (osym == msym) return;
+				if (msym.modulePath != ""
+						&& osym.name == msym.name
+						&& osym.modulePath == msym.modulePath
+						&& other.isStatic == method.isStatic
+						&& osym.location.line == msym.location.line
+						&& osym.location.column == msym.location.column) {
+					return;
+				}
 			}
+			ci = registry.byNameNext[ci];
 		}
 	}
 	const idx = registry.methods.length;
@@ -333,13 +336,10 @@ export function findExtensionBySym(registry: ExtensionRegistry, sym: Symbol, nam
 // Standard reference pattern: candidates are collected by name, then filtered by type compatibility
 // at the call site using isAssignable (not a name comparison).
 let _faeCount: float64 = 0;
-let _faeTime: float64 = 0;
-export function findAllExtensionsByNameProfile(): float64[] { return [_faeCount, _faeTime]; }
+export function findAllExtensionsByNameProfile(): float64[] { return [_faeCount]; }
 export function findAllExtensionsByName(registry: ExtensionRegistry, methodName: string): ExtensionMethod[] {
 	_faeCount = _faeCount + 1;
-	const _e0 = performance.now();
 	const r = findAllExtensionsByNameInner(registry, methodName);
-	_faeTime = _faeTime + (performance.now() - _e0);
 	return r;
 }
 function findAllExtensionsByNameInner(registry: ExtensionRegistry, methodName: string): ExtensionMethod[] {
@@ -615,6 +615,16 @@ export function declaredTypeSym(t: Type): Symbol | null {
 	return null;
 }
 
+export function hookReceiverFormal(recv: Type): Type {
+	return addressed(withoutReadonlyView(recv));
+}
+
+export function hookReceiverSym(recv: Type): Symbol | null {
+	const formal = hookReceiverFormal(recv);
+	if (formal.kind != TypeKind.GenericInstance && hasGenericParams(formal)) return null;
+	return declaredTypeSym(formal);
+}
+
 // The declaration that owns the extension's receiver: its first parameter's type, never a spelling.
 export function extReceiverSym(ext: ExtensionMethod): Symbol | null {
 	const formal = extReceiverFormal(ext);
@@ -643,20 +653,15 @@ export function extReceiverDisplay(ext: ExtensionMethod): string {
 
 export function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type | null): ExtensionMethod[] {
 	const results: ExtensionMethod[] = [];
-	let cur: Type | null = objType;
-	let depth = 0;
-	while (depth < 64) {
-		let i = 0;
-		while (i < exts.length) {
-			if (isReceiverMatch(exts[i], cur)) {
-				results.push(exts[i]);
+	let level: (Type | null)[] = [objType];
+	for (let depth = 0; level.length > 0 && depth < 64; depth += 1) {
+		for (const cur of level) {
+			for (const ext of exts) {
+				if (results.indexOf(ext) < 0 && isReceiverMatch(ext, cur)) results.push(ext);
 			}
-			i = i + 1;
 		}
-		if (results.length > 0 || cur == null) return results;
-		cur = classBaseStruct(cur);
-		if (cur == null) return results;
-		depth += 1;
+		if (results.length > 0) return results;
+		level = parentLevel(level);
 	}
 	return results;
 }
@@ -679,34 +684,55 @@ export function hasConcreteReceiver(ext: ExtensionMethod): boolean {
 	return !isUnresolvedType(receiver) && receiver.kind != TypeKind.Unknown && receiver.kind != TypeKind.GenericParam;
 }
 
+export function declaredKeyHash(registry: ExtensionRegistry, keyType: Type): Symbol | null {
+	for (const ext of findAllExtensionsByName(registry, "hash")) {
+		if (ext.sym != null && hasConcreteReceiver(ext) && isReceiverMatch(ext, keyType)) return ext.sym;
+	}
+	return null;
+}
+
 export function findFirstMatchingExt(exts: ExtensionMethod[], objType: Type): ExtensionMethod {
-	let cur: Type | null = objType;
-	let depth = 0;
-	while (cur != null && depth < 64) {
+	let level: (Type | null)[] = [objType];
+	for (let depth = 0; level.length > 0 && depth < 64; depth += 1) {
 		let catchAll: ExtensionMethod | null = null;
-		for (const ext of exts) {
-			if (!isReceiverMatch(ext, cur)) continue;
-			if (hasConcreteReceiver(ext)) return ext;
-			if (catchAll == null) catchAll = ext;
+		for (const cur of level) {
+			for (const ext of exts) {
+				if (!isReceiverMatch(ext, cur)) continue;
+				if (hasConcreteReceiver(ext)) return ext;
+				if (catchAll == null) catchAll = ext;
+			}
 		}
 		if (catchAll != null) return catchAll;
-		cur = classBaseStruct(cur);
-		depth += 1;
+		level = parentLevel(level);
 	}
 	return null as unknown as ExtensionMethod;
 }
 
 export function findDeclaredExt(exts: ExtensionMethod[], objType: Type): ExtensionMethod {
-	let cur: Type | null = objType;
-	let depth = 0;
-	while (cur != null && depth < 64) {
-		for (const ext of exts) {
-			if (extDeclaresReceiver(ext, cur) && isReceiverMatch(ext, cur)) return ext;
+	let level: (Type | null)[] = [objType];
+	for (let depth = 0; level.length > 0 && depth < 64; depth += 1) {
+		for (const cur of level) {
+			for (const ext of exts) {
+				if (cur != null && extDeclaresReceiver(ext, cur) && isReceiverMatch(ext, cur)) return ext;
+			}
 		}
-		cur = classBaseStruct(cur);
-		depth += 1;
+		level = parentLevel(level);
 	}
 	return null as unknown as ExtensionMethod;
+}
+
+function parentLevel(level: (Type | null)[]): (Type | null)[] {
+	const parents: (Type | null)[] = [];
+	for (const t of level) {
+		if (t == null) continue;
+		const parent = classBaseStruct(t);
+		if (parent != null) {
+			parents.push(parent);
+			continue;
+		}
+		for (const base of declaredBasesOf(t)) parents.push(base);
+	}
+	return parents;
 }
 
 function classBaseStruct(t: Type): Type | null {
@@ -1024,6 +1050,18 @@ export function isLifecycleHookName(name: string): boolean {
 	return LIFECYCLE_HOOK_NAMES.includes(name);
 }
 
+export function lifecycleHookOp(name: string): AttachedOp {
+	return match (name) {
+		"onDestroy" => AttachedOp.AttachedDestructor,
+		"onCopy" => AttachedOp.AttachedAsgn,
+		"onMove" => AttachedOp.AttachedSink,
+		"onMoved" => AttachedOp.AttachedWasMoved,
+		"onClone" => AttachedOp.AttachedDup,
+		"onTrace" => AttachedOp.AttachedTrace,
+		_ => { throw new Error(`internal: '${name}' is not a lifecycle hook, so it binds no type-bound operation`); },
+	};
+}
+
 export function declaresLifecycleHook(ctx: CheckerContext, typeSym: Symbol): boolean {
 	const registry = ctx.extensionRegistry;
 	if (registry == null) return false;
@@ -1143,6 +1181,17 @@ export function stripGenFlag(flags: string): string {
 export class CancelCtx {
 	version: int32;
 	cancelled: boolean;
+	inputPending: (() => boolean) | null;
+	stoppedForInput: boolean;
+}
+
+export function stopForInput(cancel: CancelCtx): boolean {
+	if (cancel == null) return false;
+	const pending = cancel.inputPending;
+	if (pending == null || !pending()) return false;
+	cancel.cancelled = true;
+	cancel.stoppedForInput = true;
+	return true;
 }
 
 export function isCancelled(cancel: CancelCtx, startVersion: int32): boolean {
@@ -1179,21 +1228,52 @@ export function sgRecordSym(
 	ctx.symRecords.push(rec);
 }
 
-// Insertion sort by (line, col) — called once after check completes.
+// Stable bottom-up merge sort by (line, col) — called once after check completes.
 export function sgSortRecords(records: SgSymRecord[]): void {
-	let i = 1;
-	while (i < records.length) {
-		const rec = records[i];
-		let j = i - 1;
-		while (j >= 0) {
-			const other = records[j];
-			if (other.line < rec.line) break;
-			if (other.line == rec.line && other.col <= rec.col) break;
-			records[j + 1] = records[j];
-			j = j - 1;
+	const n = records.length;
+	let sorted = true;
+	for (let k = 1; k < n; k += 1) {
+		const a = records[k - 1];
+		const b = records[k];
+		if (b.line < a.line || (b.line == a.line && b.col < a.col)) { sorted = false; break; }
+	}
+	if (sorted) return;
+	const tmp: SgSymRecord[] = [];
+	for (let k = 0; k < n; k += 1) tmp.push(records[k]);
+	let from = records;
+	let into = tmp;
+	let width = 1;
+	while (width < n) {
+		let lo = 0;
+		while (lo < n) {
+			const mid = lo + width < n ? lo + width : n;
+			const hi = lo + 2 * width < n ? lo + 2 * width : n;
+			let l = lo;
+			let r = mid;
+			let o = lo;
+			while (l < mid && r < hi) {
+				const a = from[l];
+				const b = from[r];
+				if (b.line < a.line || (b.line == a.line && b.col < a.col)) {
+					into[o] = b;
+					r += 1;
+				} else {
+					into[o] = a;
+					l += 1;
+				}
+				o += 1;
+			}
+			while (l < mid) { into[o] = from[l]; l += 1; o += 1; }
+			while (r < hi) { into[o] = from[r]; r += 1; o += 1; }
+			lo = hi;
 		}
-		records[j + 1] = rec;
-		i = i + 1;
+		const spent = from;
+		from = into;
+		into = spent;
+		width = width * 2;
+	}
+	if (from != records) {
+		for (let k = 0; k < n; k += 1) records[k] = from[k];
 	}
 }
 
@@ -1313,10 +1393,12 @@ export class CheckerContext {
 	pendingLocalTypeDecls: Node[]; // admitted local type decls, appended to programStmts after body checking — destructorLifting and codegen discover types by walking module statements only, so a body-only decl would never get DRC hooks or TypeInfo
 	liftedLocalTypeDecls: Node[];
 	preludeCtx: CheckerContext;  // access private prelude symbols during instantiation
+	globalImportsCtx: CheckerContext | null;
 	instantiatingCtx: CheckerContext;
 	interf: Symbol[];
 	interfSet: HashSet<Symbol>;
 	interfNames: HashMap<Symbol, string[]>;
+	explicitExportNames: HashSet<string>;
 	importSet: HashSet<Symbol>;
 	shadowedImports: HashMap<Symbol, Symbol>;
 	usedImports: HashSet<Symbol>;
@@ -1405,10 +1487,12 @@ export function createContext(): CheckerContext {
 		conversionOperand: null as unknown as Node,
 		conversionTarget: null as unknown as Type,
 		preludeCtx: null as unknown as CheckerContext,
+		globalImportsCtx: null,
 		instantiatingCtx: null as unknown as CheckerContext,
 		interf: [],
 		interfSet: new HashSet<Symbol>(),
 		interfNames: new HashMap<Symbol, string[]>(),
+		explicitExportNames: new HashSet<string>(),
 		importSet: new HashSet<Symbol>(),
 		shadowedImports: new HashMap<Symbol, Symbol>(),
 		usedImports: new HashSet<Symbol>(),
@@ -1650,6 +1734,49 @@ test "extension name lookups keep registration order across truncation" {
 	registerExtension(r, c);
 	assert findAllExtensionsByName(r, "m").length == 1;
 	assert findAllExtensionsByName(r, "m")[0] == c;
+}
+
+function extAt(name: string, line: int32, col: int32, isStatic: boolean): ExtensionMethod {
+	const sym = makeSymbol("m", SymbolKind.Function, noneType(), false);
+	sym.modulePath = "/a.ms";
+	sym.location.line = line;
+	sym.location.column = col;
+	return { methodName: name, sourcePath: "/a.ms", isStatic, sym };
+}
+
+test "registerExtension dedups by symbol, then by definition site, within one name" {
+	const r = createExtensionRegistry();
+	const first = extAt("m", 3, 1, false);
+	registerExtension(r, first);
+	registerExtension(r, extAt("other", 3, 1, false));
+	registerExtension(r, first);
+	registerExtension(r, extAt("m", 3, 1, false));
+	assert r.methods.length == 2;
+	registerExtension(r, extAt("m", 4, 1, false));
+	registerExtension(r, extAt("m", 3, 1, true));
+	registerExtension(r, extAt("m", 4, 1, false));
+	const all = findAllExtensionsByName(r, "m");
+	assert all.length == 3;
+	assert all[0] == first;
+	assert all[1].sym!.location.line == 4;
+	assert all[2].isStatic;
+}
+
+test "sgSortRecords is stable and sorts many records" {
+	const records: SgSymRecord[] = [];
+	const dummySym = null as unknown as Symbol;
+	const dummyType = noneType();
+	for (let i = 0; i < 101; i += 1) {
+		records.push({ line: (i * 7) % 5, col: (i * 3) % 4, colEnd: i, sym: dummySym, symType: dummyType, kind: SymbolKind.Variable, name: `${i}`, containerName: "", isDecl: false });
+	}
+	sgSortRecords(records);
+	for (let i = 1; i < records.length; i += 1) {
+		const a = records[i - 1];
+		const b = records[i];
+		assert a.line < b.line || (a.line == b.line && a.col <= b.col);
+		if (a.line == b.line && a.col == b.col) assert a.colEnd < b.colEnd;
+	}
+	assert records.length == 101;
 }
 
 function staticExtOf(owner: Symbol | null): ExtensionMethod {

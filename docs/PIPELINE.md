@@ -20,7 +20,7 @@ Recursive-descent + Pratt precedence. Produces the full AST (named-field discrim
 union `NodeData`, not a generic child array). Module loading resolves imports
 eagerly (`loadSourceModule` → lex → `callStateProgramParser` → walk import decls).
 
-`.h` C-header imports are inlined as `extern` decls before parsing (`inlineHeaderImports`).
+A `.h` import is a module whose source `headerModuleSource` translates from the C header before it is lexed (see [`src/module/CLAUDE.md`](../src/module/CLAUDE.md)).
 
 ## Phase 2 — Macro Expansion + Type Checking (`src/checker`, `src/compiler/meta`)
 
@@ -49,7 +49,7 @@ operator logic in a helper in `fit.ms` (like `checkBitwiseOperands`), called onc
 existing `effLeft`/`effRight` reads. A build at 100% CPU with flat RSS and no clang child is
 hung: `sample <pid>` it.
 
-Cross-module symbol resolution via `ExportRegistry`. Flat `Type` interface (all fields
+Cross-module symbol resolution via `ExportRegistry`. Flat `Type` class (all fields
 present, unused empty) to avoid self-referencing-struct codegen bugs.
 
 ## Phase 3 — Transforms + Normalization (`src/transform`)
@@ -57,27 +57,35 @@ present, unused empty) to avoid self-referencing-struct codegen bugs.
 Lowers rich syntax to a minimal shape so Phases 4–5 see simple forms. **This is where
 complex expressions are lowered to STATEMENTS**, rather than handled inline in the analyzer.
 
-### Infrastructure (`src/transform/`)
-- **walker.ms** — three walk modes:
-  - `walkNode(node, visitor)` — bottom-up 1:1 (coercions, folding).
-  - `walkExpandBlocks(node, expander, ctx)` — 1:N statement-list expansion + recursive
-    descent into bodies. The splice-siblings primitive (used by resultDesugar, callHoist).
-  - `replaceInExpr(node, replacer)` — bottom-up expression-only rewrite.
-- **context.ms** — `TransformContext{tempCounter, errors, fnDeclNames}`; `freshTempSym`
-  mints `$prefix_N` symbols; `freshOwnedSym` mints `__prefix_N` for locals the analyzer
-  must own — the non-`$` name is load-bearing, `analyzer/inject.ms:1691,1971` treat a
-  `$`-prefixed local initialized from an identifier as a cursor and never destroy it.
-- **util.ms** — node builders (`makeVarDecl`, `makeIf`, `makeCall`, …) + `evalOnce`
-  (capture expr in a temp) + `extractBodyStmts`.
+### Infrastructure
 
-### Ordered general pipeline (`index.ms`) — load-bearing order
-defer → … → forLoopLower → forOfLower → matchLower → tailCall → paramReassign → asyncDesugar →
-generatorLower → spawn/await/actor lowering → varHoist → lambdaLifting → **callHoist** →
-builtinLower → operator/string/subscript lowering → conditionalExprLower → updateExpr →
-restParam → … . Order is a contract: e.g. `for`→`while` before `for-of`; `match`→`if`
-before generators; `generatorLower` runs before `lambdaLifting` (intentional reversal — see
-CONTRIBUTING.md; a nested routine is rebuilt at each resume rather than stored in the frame, NIM-REF TR-35). C-backend-only sub-pipeline runs after: closureCallMarker, pointerParam,
-rangeCheckInject, optionalCoercion.
+- **Walks.** `ast/visitor.ms` owns the child traversal that transform and analyzer share: `forEachChild`,
+  `mapChildren`, and `anyChild` / `anyDescendant` (a search with early exit, in place of a
+  found-flag walk). `transform/walker.ms` builds the bottom-up 1:1 rewrites on it (`walkNode`,
+  `replaceInExpr`); `blockExpand.ms` is the 1:N statement-list walk, the primitive for a pass
+  that splices siblings (`walkExpandBlocks`); `walkEffects.ms` answers evaluation-order
+  questions (`hasEffect`, `walkOnceEvaluated`). `walker.ms` re-exports the other two, so a pass
+  imports one module.
+- **context.ms** — `TransformContext` carries the temp counter, the errors, the checker
+  context, the backend flags, and one hand-off field per pass pair (a pass that records what a
+  later pass must emit). `freshTempSym` mints `$prefix_N` temps and `freshOwnedSym` mints
+  `__prefix_N` locals that own a value.
+- **util.ms** — node builders (`makeVarDecl`, `makeIf`, `makeCall`, …) and `evalOnce` (capture
+  an expression in a temp). `place.ms` clones a place expression for a second read or write;
+  `numKinds.ms` and `maybeCarrier.ms` hold the numeric-kind and `Maybe` facts several passes
+  share. A pass that needs one imports it from there rather than copying it.
+
+### Order of passes
+
+The order is the code: `transformProgram` in `src/transform/index.ms` (one list, each
+step gated by `jsBackend` where a backend needs it) and, for C only, `transformForNative` in
+`src/transform/native/index.ms`. Do not copy the list into a doc. Order is a contract, and these edges hold in `index.ms` at `99ff1ce60`:
+`for` lowers to `while` before `for-of`; `switch` and `match` lower to `if` before `async` and
+generators; `async` lowers before `generatorLower`; `generatorLower` runs before `lambdaLifting`
+(the reverse of the usual order, on purpose: the generator creates `$state` and a function
+expression, and lifting then captures `$state` into the environment; a nested routine is rebuilt
+at each resume rather than stored in the frame); `callHoist` runs after `lambdaLifting`;
+`destructorLifting` is the last step of `transformProgram`; on C the `native/` tail follows it.
 
 ### What Phase 4 (Analyzer) requires Phase 3 to have done
 `defer`→try/finally · all `for`→`while` · all `match`→if/else, or a C `switch` when the
@@ -89,23 +97,27 @@ If the analyzer needs to know something the source still encodes structurally, t
 
 ## Phase 4 — Analyze: DRC Injection (C backend only) (`src/analyzer`)
 
-Deterministic Reference Counting: walks the post-transform AST, inserts
-`=destroy/=copy/=sink/=wasMoved` calls at the right points. Direct AST rewrite + scope-based
-cleanup + conservative last-read (Mohnen graph-free CFG). Three stages: hook lifting
-(`destructorLifting`) → injection (`inject.ms` + `classify` + `scope` + `lastRead`) →
-optimization (`optimize.ms`, redundant-op elimination). See [`ANALYZER.md`](ANALYZER.md)
-for the RC insertion-point table and the moveOrCopy decision tree. DRC convention:
-`msAlloc` returns rc=0 = sole owner; `msDecRefIsLast` true at rc==0 (rc counts the owners beyond the first).
+Deterministic Reference Counting: `analyzeProgram` (`src/analyzer/index.ms`) walks the
+post-transform AST and inserts `=destroy/=copy/=sink/=wasMoved` calls at the right points
+(`injectProgram`, with `classify` deciding what each type needs and `scope` tracking the
+cleanup owed per scope), then `optimizeDrc` removes the redundant pairs. Two analyses feed the
+injector: cursor inference (`cursors.ms`, which variables only borrow) and last-read over a
+graph-free CFG (`cfg.ms`, with `alias.ms` for path aliasing). A cursor is found by that
+inference, not by a `$` name: a user local `$t = s` and `t = s` emit the same C. Per-type hook
+bodies are not made here: `destructorLifting` makes them at the end of Phase 3. See
+[`ANALYZER.md`](ANALYZER.md) for the RC insertion-point table and the moveOrCopy decision tree.
+The reference-count convention (`msAlloc` returns rc=0 for a sole owner) is in `runtime/drc.h`.
 
 ### After DRC, before codegen (C only) — `transform/native/nativeLower.ms`
 
-`lowerNativeAccess` rewrites array and string access to runtime macros. Before it,
-`blockReduce.ms` versions a checked signed-integer reduction whose loop body is only
-`acc += xs[i]`, `acc -= x` or `acc += a[i] * b[i]` into blocks of 1024 elements: a read-only
-pass proves `|acc| + n·max|term| <= MAX`, so the block runs as a plain sum; otherwise the
-unchanged checked body runs and stops at the exact element. It runs after DRC because the
-cursor analysis counts any pointer passed to a call as a possible mutation and would then own
-the borrowed array. Pins: `src/test/c/blockReduce.ms`, `src/test/corpus/programs/blockReduce*`.
+The C driver's order is `transformProgram` → `transformForNative` → `analyzeProgram` →
+`lowerNativeAccess` (`src/compiler/compile.ms`). `lowerNativeAccess` rewrites array and string
+access to runtime macros. Before it, `blockReduce.ms` versions a checked signed-integer
+reduction (`acc += xs[i]`, `acc -= x`, `acc += a[i] * b[i]`) into guarded blocks: a block whose
+sum provably cannot overflow runs as a plain sum, otherwise the unchanged checked body runs and
+stops at the exact element. It runs after DRC because the cursor analysis counts any pointer
+passed to a call as a possible mutation and would then own the borrowed array. Pins:
+`src/test/c/blockReduce.ms`, `src/test/corpus/programs/blockReduce*`.
 
 ## Phase 5 — Backend Codegen (`src/codegen/c`, `src/codegen/js`)
 
@@ -120,7 +132,7 @@ structs, per-type lifecycle hooks, etc.
 
 ## AST node kinds by phase (orientation)
 
-Phase 1 introduces the full surface syntax (~58 NodeKinds: literals, expressions, statements,
+Phase 1 introduces the full surface syntax (`NodeKind` in `std/meta/node.ms`: literals, expressions, statements,
 declarations, error-handling). Phase 2 adds macro/check synthetic kinds. Phase 3 *removes*
 rich kinds (match, for, defer, try-expr, ternary-in-stmt) and adds lowered forms (while,
 if/else, ordinal switch, state machines, lifted functions, temps). Phases 4–5 add ~0 new kinds — they
@@ -135,11 +147,10 @@ and whole programs under `msc run --target=raiser`. It consumes the **post-trans
 (`transformForRaiser`) and skips Phase 4 and Phase 5.
 
 **Core architecture:**
-- **Register-based** instruction set; the register file starts at 256 slots and grows.
-- **`if` / `else if` dispatch** in `src/raiser/vm.ms`, one arm per opcode; there is no C dispatch.
+- **Register-based** instruction set; the word file and the ref file each start at 256 slots and grow.
+- **One `switch` dispatch** in `src/raiser/vm.ms`, one arm per opcode.
 - **Handle-based heaps** (`ObjectHeap`/`ArrayHeap`), one per strand: arena by default,
   refcount + cycle collector under `gcMode = "orc"`.
-- **Flat tagged `RaiserValue`** (Nil/Bool/Int/Float/String/Array/Object), kind-dispatched.
 
 Design, measured status and what is not built: [`RAISER.md`](RAISER.md).
 
@@ -155,13 +166,13 @@ them through a **name-keyed registry of MS host functions** — no dlopen, no ge
 **Two layers:**
 - **Layer 1** — pure-MS wrappers in `std/*` (`readFile`, `exec`, `env`), compiled to bytecode,
   run inside the VM.
-- **Layer 2** — host bridges: `src/compiler/meta/hostTable.ms` registers 105
+- **Layer 2** — host bridges: `src/compiler/meta/hostTable.ms` registers
   `RaiserHostFn` wrappers under the extern's native name
   (`registerHostFn("msFsReadFile", …)`).
 
 **Mechanism:**
 - Loading (lazy): the first `@comptime`/macro evaluation calls
-  `ensureHostTableLoaded()` (`codegen/raiser/eval.ms`), which populates the
+  `ensureHostTableLoaded()` (`codegen/raiser/eval.ms` calls it, `compiler/meta/hostTable.ms` defines it), which populates the
   registry in `src/raiser/hostRegistry.ms` once per process.
 - Checking: macros always check against the `.rms` prelude
   (`buildPreludeContext(stdPath, ".rms")`) regardless of the build target, so
@@ -183,21 +194,23 @@ current mechanism.
 
 ---
 
-## Trans-Am — incremental computation (`src/transam`)
+## Trans-Am — incremental computation (`src/compiler/transam`)
 
-Memoized query engine (incremental rebuild): caches phase results keyed by content hash so
-re-compilation only recomputes what changed. Used by the LSP and watch builds.
+Memoized query engine (incremental rebuild): each phase result is a cache entry keyed by
+(query kind, file id), and a dependency recomputed to the same output hash leaves its dependents
+valid, so re-compilation only recomputes what changed. `checkModuleGraph` and the LSP use it.
+Design: [`TRANSAM.md`](TRANSAM.md).
 
 ---
 
 ## Module dependency rules
 
-Each module dir has an `index.ms` hub re-exporting its public API. Circular imports between
-sub-parsers are broken via **callback injection** (`callbacks.ms` holds function pointers;
-`core.ms` registers real implementations at load) — sub-parsers import only from
-`callbacks.ms`. The checker breaks its cycles the same way (`checker/checkerCallbacks.ms`), so a
-new import edge that reorders module init can read a callback before it is registered: an
-import of `checker/checkExprPass` from a pass under `src/transform/` built clean and then
-SIGSEGV'd every C compile while JS compiles kept working (observed 2026-08-01, not re-measured).
+Circular imports are broken by **callback injection**: a `callbacks.ms` holds function slots and
+the module that owns the real implementation registers it at load. There are four:
+`parser/statements/callbacks.ms`, `checker/checkerCallbacks.ms`,
+`compiler/meta/callbacks.ms`, `compiler/fmt/printer/callbacks.ms`. A new import edge that
+reorders module init can read a callback before it is registered: an import of
+`checker/checkExprPass` from a pass under `src/transform/` built clean and then SIGSEGV'd every
+C compile while JS compiles kept working (observed 2026-08-01, not re-measured).
 Target source is parsed by our own parser as raw strings, so parse bugs
 are always in `src/parser`.

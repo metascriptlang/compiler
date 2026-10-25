@@ -51,9 +51,9 @@ import {
 	TypeAliasDeclData, EnumDeclData, InterfaceDeclData, ActorDeclData, ExternDeclData, MacroDeclData,
 	TestDeclData, AssertStmtData,
 	// SymbolKind for Case 2 enum-member rewrite (Bug B Layer 2)
-	SymbolKind, NodeFlag, Symbol, TypeKind,
+	SymbolKind, NodeFlag, Symbol,
 } from "../../ast/node";
-import { CheckerContext, Severity, addError, addErrorFullRange, createContext } from "../../checker/context";
+import { CheckerContext, CheckerError, Severity, addError, addErrorFullRange, createContext } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
 import { forEachChild } from "../../ast/visitor";
 import { nextQuoteGensymSuffix } from "../../checker/template";
@@ -72,7 +72,7 @@ import { RaiserContext } from "../../raiser/context";
 import { RaiserVM, vmReleaseHeaps } from "../../raiser/vm";
 import { callWithComptimeHostPolicy } from "./hostPolicy";
 import { bindExpandedSubtree } from "../../binder/binder";
-import { takeWireRefusals, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym, registerBoundType, valueToExpansion } from "./bridge";
+import { takeWireRefusals, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBakedSym, registerBakedType, valueToExpansion, boundMark, releaseBound } from "./bridge";
 import { symbolCarried } from "../../checker/symbol";
 import { ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
 import { parseIntStr } from "../../utils/string";
@@ -261,7 +261,7 @@ function bindSymCall(hostSym: Symbol, name: string, bound: Symbol, loc: SourceLo
 	return createNodeAt(NodeKind.TypeAssertion, {
 		asExpr: createNodeAt(NodeKind.CallExpr, {
 			callee: callee,
-			arguments: [mkString(name, loc), mkNumber(registerBoundSym(bound), loc)],
+			arguments: [mkString(name, loc), mkNumber(registerBakedSym(bound), loc)],
 		}, loc),
 		asType: "Node",
 	}, loc);
@@ -296,19 +296,17 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst
 		keys.push("gensym");
 		values.push(mkBool(true, loc));
 	}
-	if (node.location.endLine > 0) {
-		keys.push("endLine");
-		values.push(mkNumber(node.location.endLine, loc));
-		keys.push("endColumn");
-		values.push(mkNumber(node.location.endColumn, loc));
-	}
+	keys.push("endLine");
+	values.push(mkNumber(node.location.endLine, loc));
+	keys.push("endColumn");
+	values.push(mkNumber(node.location.endColumn, loc));
 
 	// Append kind-specific fields
 	addKindFields(node, keys, values, loc);
 
 	if (node.nodeType != null) {
 		keys.push("typeHandle");
-		values.push(mkNumber(registerBoundType(node.nodeType), loc));
+		values.push(mkNumber(registerBakedType(node.nodeType), loc));
 		if (includeTypeAst) {
 			const typeAst = mapTypeToAst(node.nodeType, loc);
 			keys.push("nodeType");
@@ -341,7 +339,7 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst
 	const carried = symbolCarried(node);
 	if (carried != null) {
 		keys.push("symHandle");
-		values.push(mkNumber(registerBoundSym(carried), loc));
+		values.push(mkNumber(registerBakedSym(carried), loc));
 	}
 
 	return createNodeAt(NodeKind.ObjectLiteral, {
@@ -585,6 +583,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		if (d.typExprIndexValue != null) addNodeField(keys, values, "typExprIndexValue", d.typExprIndexValue, loc, false);
 		addNodeArrayArrayField(keys, values, "typExprFieldDecorators", d.typExprFieldDecorators, loc);
 		addStrField(keys, values, "typExprTypeName", d.typExprTypeName, loc);
+		addStrArrayField(keys, values, "typExprOptionalFields", d.typExprOptionalFields, loc);
 		return;
 	}
 	if (k == NodeKind.TypeArray) {
@@ -879,6 +878,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addStrArrayField(keys, values, "importNames", d.importNames, loc);
 		addStrArrayField(keys, values, "importAliases", d.importAliases, loc);
 		addStrField(keys, values, "importSource", d.importSource, loc);
+		addStrArrayField(keys, values, "importTypeNames", d.importTypeNames, loc);
 		return;
 	}
 	if (k == NodeKind.ExportDecl) {
@@ -905,6 +905,8 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addStrArrayField(keys, values, "interfaceFields", d.interfaceFields, loc);
 		addStrArrayField(keys, values, "interfaceFieldTypes", d.interfaceFieldTypes, loc);
 		addNodeArrayArrayField(keys, values, "interfaceFieldDecorators", d.interfaceFieldDecorators, loc);
+		addStrArrayField(keys, values, "interfaceOptionalFields", d.interfaceOptionalFields, loc);
+		addStrField(keys, values, "nativeName", d.nativeName, loc);
 		return;
 	}
 	if (k == NodeKind.ClassDecl) {
@@ -1177,185 +1179,6 @@ function hasUserMacroInvocation(node: Node | null, ctx: CheckerContext): boolean
 }
 
 // ===== Phase D: Macro-author sugar — preprocessMacroBody =====
-//
-// Macro bodies execute in the Raiser VM, which doesn't have access to
-// `std/meta/node.ms` exports. Without preprocessing, macro authors would have
-// to write `kind: 0` instead of `kind: NodeKind.NumberLiteral`. This pass
-// rewrites recognized patterns at preparation time:
-//
-//   NodeKind.X      →  <integer ordinal> as NodeKind     (for all NodeKind variants)
-//   DeclKind.X      →  <integer ordinal> as DeclKind
-//
-// The rewrite is in-place, so the macro body in the registry is mutated once
-// and reused on subsequent invocations. Mutation is idempotent — re-running on
-// already-rewritten code is a no-op (the cast literal stays a cast literal).
-//
-// Limitations (acceptable for v1, document them):
-//   - `NodeKind` cannot be used as a value: `const k = NodeKind.X` won't work.
-//     Only direct member access: `kind: NodeKind.X` is rewritten.
-//   - createNodeAt(K, D, L) calls are NOT rewritten (would need location-field
-//     unification — separate phase).
-
-// Map NodeKind member name to its integer ordinal.
-// Uses match on the member name string. The actual ordinal comes from the
-// imported NodeKind enum, so we don't hardcode integers.
-function nodeKindOrdinal(name: string): number {
-	return match (name) {
-		"NumberLiteral" => NodeKind.NumberLiteral as number,
-		"StringLiteral" => NodeKind.StringLiteral as number,
-		"BooleanLiteral" => NodeKind.BooleanLiteral as number,
-		"NullLiteral" => NodeKind.NullLiteral as number,
-		"BigIntLiteral" => NodeKind.BigIntLiteral as number,
-		"RegexLiteral" => NodeKind.RegexLiteral as number,
-		"Identifier" => NodeKind.Identifier as number,
-		"BinaryExpr" => NodeKind.BinaryExpr as number,
-		"UnaryExpr" => NodeKind.UnaryExpr as number,
-		"UpdateExpr" => NodeKind.UpdateExpr as number,
-		"CallExpr" => NodeKind.CallExpr as number,
-		"MemberExpr" => NodeKind.MemberExpr as number,
-		"ArrayAccess" => NodeKind.ArrayAccess as number,
-		"ObjectLiteral" => NodeKind.ObjectLiteral as number,
-		"ArrayLiteral" => NodeKind.ArrayLiteral as number,
-		"ArrowFunction" => NodeKind.ArrowFunction as number,
-		"FunctionExpr" => NodeKind.FunctionExpr as number,
-		"TypeAssertion" => NodeKind.TypeAssertion as number,
-		"ConditionalExpr" => NodeKind.ConditionalExpr as number,
-		"SpreadExpr" => NodeKind.SpreadExpr as number,
-		"NewExpr" => NodeKind.NewExpr as number,
-		"TryExpr" => NodeKind.TryExpr as number,
-		"MatchExpr" => NodeKind.MatchExpr as number,
-		"MatchCase" => NodeKind.MatchCase as number,
-		"AwaitExpr" => NodeKind.AwaitExpr as number,
-		"YieldExpr" => NodeKind.YieldExpr as number,
-		"MoveExpr" => NodeKind.MoveExpr as number,
-		"OutExpr" => NodeKind.OutExpr as number,
-		"TypeAnnotation" => NodeKind.TypeAnnotation as number,
-		"ArrayPattern" => NodeKind.ArrayPattern as number,
-		"ObjectPattern" => NodeKind.ObjectPattern as number,
-		"ObjectPatternProp" => NodeKind.ObjectPatternProp as number,
-		"DestructuringDecl" => NodeKind.DestructuringDecl as number,
-		"VariableDecl" => NodeKind.VariableDecl as number,
-		"IfStmt" => NodeKind.IfStmt as number,
-		"WhileStmt" => NodeKind.WhileStmt as number,
-		"ForStmt" => NodeKind.ForStmt as number,
-		"ForOfStmt" => NodeKind.ForOfStmt as number,
-		"ForInStmt" => NodeKind.ForInStmt as number,
-		"BlockStmt" => NodeKind.BlockStmt as number,
-		"ExprStmt" => NodeKind.ExprStmt as number,
-		"ReturnStmt" => NodeKind.ReturnStmt as number,
-		"BreakStmt" => NodeKind.BreakStmt as number,
-		"ContinueStmt" => NodeKind.ContinueStmt as number,
-		"FunctionDecl" => NodeKind.FunctionDecl as number,
-		"DoWhileStmt" => NodeKind.DoWhileStmt as number,
-		"SwitchStmt" => NodeKind.SwitchStmt as number,
-		"SwitchCase" => NodeKind.SwitchCase as number,
-		"UnreachableStmt" => NodeKind.UnreachableStmt as number,
-		"MatchStmt" => NodeKind.MatchStmt as number,
-		"ImportDecl" => NodeKind.ImportDecl as number,
-		"ExportDecl" => NodeKind.ExportDecl as number,
-		"TypeAliasDecl" => NodeKind.TypeAliasDecl as number,
-		"EnumDecl" => NodeKind.EnumDecl as number,
-		"InterfaceDecl" => NodeKind.InterfaceDecl as number,
-		"StructDecl" => NodeKind.StructDecl as number,
-		"ClassDecl" => NodeKind.ClassDecl as number,
-		"PropertyDecl" => NodeKind.PropertyDecl as number,
-		"MethodDecl" => NodeKind.MethodDecl as number,
-		"ConstructorDecl" => NodeKind.ConstructorDecl as number,
-		"ThrowStmt" => NodeKind.ThrowStmt as number,
-		"TryCatchStmt" => NodeKind.TryCatchStmt as number,
-		"MacroInvocation" => NodeKind.MacroInvocation as number,
-		"DecoratedDecl" => NodeKind.DecoratedDecl as number,
-		"DeferStmt" => NodeKind.DeferStmt as number,
-		"TestDecl" => NodeKind.TestDecl as number,
-		"AssertStmt" => NodeKind.AssertStmt as number,
-		"ExternDecl" => NodeKind.ExternDecl as number,
-		"MacroDecl" => NodeKind.MacroDecl as number,
-		"QuoteExpr" => NodeKind.QuoteExpr as number,
-		"ComptimeBlock" => NodeKind.ComptimeBlock as number,
-		"Program" => NodeKind.Program as number,
-		"ActorDecl" => NodeKind.ActorDecl as number,
-		// Type-AST kinds (synthesized by mapTypeToAst, read by codec macros)
-		"TypeGeneric" => NodeKind.TypeGeneric as number,
-		"TypeArray" => NodeKind.TypeArray as number,
-		"TypeUnion" => NodeKind.TypeUnion as number,
-		"TypeIntersection" => NodeKind.TypeIntersection as number,
-		"TypeFunction" => NodeKind.TypeFunction as number,
-		"TypeObject" => NodeKind.TypeObject as number,
-		// SERIALIZE A2 — multi-decl emission
-		"SpliceMany" => NodeKind.SpliceMany as number,
-		// JSX (compile-time only — for NodeKind.JSXElement rewriting in macro bodies)
-		"JSXElement" => NodeKind.JSXElement as number,
-		"JSXFragment" => NodeKind.JSXFragment as number,
-		"JSXText" => NodeKind.JSXText as number,
-		"JSXExpressionContainer" => NodeKind.JSXExpressionContainer as number,
-		"JSXAttribute" => NodeKind.JSXAttribute as number,
-		"JSXSpreadAttribute" => NodeKind.JSXSpreadAttribute as number,
-		// Self-hosting / hidden conversions (rare but technically constructable)
-		"SizeofExpr" => NodeKind.SizeofExpr as number,
-		"HiddenDeref" => NodeKind.HiddenDeref as number,
-		"HiddenAddr" => NodeKind.HiddenAddr as number,
-		"HiddenStdConv" => NodeKind.HiddenStdConv as number,
-		"HiddenSubConv" => NodeKind.HiddenSubConv as number,
-		_ => -1,
-	};
-}
-
-function declKindOrdinal(name: string): number {
-	return match (name) {
-		"Const" => DeclKind.Const as number,
-		"Let" => DeclKind.Let as number,
-		"Var" => DeclKind.Var as number,
-		_ => -1,
-	};
-}
-
-// Lookup a member ordinal for our known macro-facing enums. Returns -1 for
-// unknown enum names so callers can no-op.
-function macroEnumOrdinal(enumKind: string, memberName: string): number {
-	return match (enumKind) {
-		"MetaNodeKind" => nodeKindOrdinal(memberName),
-		"MetaDeclKind" => declKindOrdinal(memberName),
-		_ => -1,
-	};
-}
-
-// Try to rewrite a known enum-member access to its integer ordinal cast to the enum.
-// Returns the new node if rewritten, or the original node unchanged.
-//
-// Two surface forms must be handled — they look identical in source but the
-// checker resolves them differently depending on when preprocessing runs:
-//
-//   1. Raw MemberExpr(Identifier("NodeKind"), "TypeObject") — pre-check form.
-//      Matches macro bodies that get preprocessed BEFORE the checker walks
-//      them (preprocessMacroBody on the macro body in expandMacroInvocation).
-//
-//   2. Resolved Identifier with resolvedSym.symbolKind=EnumMember — post-check
-//      form. Matches injected helper bodies whose source module was already
-//      checked when its file was first compiled (checkExprPass.ms:3573 mutates
-//      the node in place: kind→Identifier, data→{name:mangledName},
-//      resolvedSym→memberSym). Without this case, helpers like
-//      detectUnionDisc calling peelVariant see `NodeKind.TypeObject` as a
-//      mangled Identifier the Raiser VM can't look up (evaluates to nil), and
-//      `v0.kind === NodeKind.TypeObject` always returns false (Bug B Layer 2).
-function tryRewriteEnumMember(node: Node): Node {
-	if (node == null) return node;
-	if (node.kind == NodeKind.MemberExpr) {
-		const d = node.data as MemberExprData;
-		if (d.object == null || d.object.kind != NodeKind.Identifier) return node;
-		const enumName = (d.object.data as IdentifierData).name;
-		const ord = macroEnumOrdinal(metaKind(d.object), d.property);
-		return ord >= 0 ? enumOrdinalAs(enumName, ord, node.location) : node;
-	}
-	if (node.kind == NodeKind.Identifier && node.resolvedSym != null) {
-		const sym = node.resolvedSym;
-		if (sym.symbolKind == SymbolKind.EnumMember && sym.symbolType != null) {
-			const enumTy = sym.symbolType.kind == TypeKind.EnumLiteral ? sym.symbolType.typeReturn : sym.symbolType;
-			const ord = enumTy != null && enumTy.sym != null ? macroEnumOrdinal(enumTy.sym.builtinKind, sym.name) : -1;
-			if (ord >= 0) return enumOrdinalAs(sym.symbolType.typeName, ord, node.location);
-		}
-	}
-	return node;
-}
 
 function enumOrdinalAs(enumName: string, ord: number, loc: SourceLocation): Node {
 	return createNode(NodeKind.TypeAssertion, { asExpr: mkNumber(ord, loc), asType: enumName }, synthToken(loc));
@@ -1518,9 +1341,6 @@ function applyPreprocessRewrites(node: Node): Node {
 	const errorRewrite = tryRewriteCompileError(node);
 	if (errorRewrite != node) return errorRewrite;
 
-	const enumRewrite = tryRewriteEnumMember(node);
-	if (enumRewrite != node) return enumRewrite;
-
 	const callRewrite = tryRewriteCreateNodeAt(node);
 	if (callRewrite != node) return callRewrite;
 
@@ -1529,15 +1349,7 @@ function applyPreprocessRewrites(node: Node): Node {
 
 // Walk the macro body in place, rewriting recognized patterns.
 // Order: recurse into children FIRST (via walkNode's post-order), then
-// applyPreprocessRewrites at each node. This ensures
-// `createNodeAt(NodeKind.X, ...)` has its NodeKind.X already rewritten to
-// an integer by the time tryRewriteCreateNodeAt sees it.
-//
-// Reuses src/transform/walker.ms walkNode/mapChildren — single source of
-// truth for AST traversal across all NodeKinds (including ForOfStmt/MatchCase
-// /TryCatchStmt etc.). Avoids the historical drift where preprocessNode
-// silently skipped kinds and caused NodeKind.X access inside for..of bodies
-// to evaluate as a runtime MemberExpr (returning nil).
+// applyPreprocessRewrites at each node.
 function preprocessNode(node: Node): Node {
 	return walkNode(node, applyPreprocessRewrites);
 }
@@ -1551,9 +1363,9 @@ function preprocessMacroBody(body: Node, scope: CheckerContext, definer: string,
 	leaveMetaScope(outer);
 }
 
-function bakeMacroBody(body: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string, typeArg: string, params: string[], typeArgParams: string[] | null): Node {
+function bakeMacroBody(body: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string, hasTypeArg: boolean, params: string[], typeArgParams: string[] | null): Node {
 	const outer = enterMetaScope(macroScopeOf(ctx, macroSym), macroSym.name, params, body);
-	const baked = bakeTypeIntrinsics(body, ctx, macroSym, macroName, typeArg, typeArgParams);
+	const baked = bakeTypeIntrinsics(body, ctx, macroSym, macroName, hasTypeArg, typeArgParams);
 	leaveMetaScope(outer);
 	return baked;
 }
@@ -1613,7 +1425,7 @@ function atCallSite(): SourceLocation {
 // Safe to bake into the shared body: the compiled-macro cache is keyed by macro
 // name, and a named type does not vary per call site. Mutation is idempotent —
 // a second pass finds literals, not calls.
-function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string, typeArg: string, typeArgParams: string[] | null = null): Node {
+function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string, hasTypeArg: boolean, typeArgParams: string[] | null = null): Node {
 	if (node == null) return node;
 	if (node.kind == NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;
@@ -1680,23 +1492,16 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 				return createNodeAt(NodeKind.TypeAssertion, { asExpr: literal, asType: "Node" }, node.location);
 			}
 		}
-		// getTypeArg() — the explicit <T> written at THIS call site. Resolved in the
-		// CALL SITE scope (that is where the user spelled the name), unlike
-		// getTypeImpl which resolves in the macro's own module.
+		// getTypeArg() reads the explicit <T> written at THIS call site from the VM
+		// argument, so one compiled body serves every T; invokeMacro resolves T in
+		// the CALL SITE scope per call, unlike getTypeImpl which resolves in the
+		// macro's own module.
 		if (intrinsic == "MetaGetTypeArg" && cd.arguments.length == 0) {
-			if (typeArg == "") {
+			if (!hasTypeArg) {
 				addError(ctx, `Macro '${macroName}': getTypeArg() needs an explicit type argument at the call site — write ${macroName}<T>(...)`, node.location.line, node.location.column);
 				return node;
 			}
-			if (typeArg.indexOf(",", 0) >= 0) {
-				addError(ctx, `Macro '${macroName}': getTypeArg() supports a single type argument, got '${typeArg}'`, node.location.line, node.location.column);
-				return node;
-			}
-			const argType = resolveAnnotation(typeArg, ctx, 0, 0);
-			if (argType == null || isUnresolvedType(argType)) {
-				addError(ctx, `Macro '${macroName}': getTypeArg() cannot resolve type '${typeArg}' at the call site`, node.location.line, node.location.column);
-				return node;
-			}
+			_typeArgSite = node.location;
 			if (typeArgParams != null) {
 				const params: string[] = typeArgParams;
 				if (!params.includes("$macro:typeArg")) params.push("$macro:typeArg");
@@ -1704,7 +1509,7 @@ function bakeTypeIntrinsics(node: Node, ctx: CheckerContext, macroSym: Symbol, m
 			return createNodeAt(NodeKind.Identifier, { name: "$macro:typeArg" }, node.location);
 		}
 	}
-	mapChildren(node, (child: Node): Node => bakeTypeIntrinsics(child, ctx, macroSym, macroName, typeArg, typeArgParams));
+	mapChildren(node, (child: Node): Node => bakeTypeIntrinsics(child, ctx, macroSym, macroName, hasTypeArg, typeArgParams));
 	return node;
 }
 
@@ -1716,15 +1521,32 @@ interface CompiledMacro {
 	vm: RaiserVM;
 	funcIdx: number;
 	typeArgInput: boolean;
+	typeArgSite: SourceLocation;
 }
+
+let _typeArgSite: SourceLocation = makeLoc(0, 0);
 
 // A null `compiled` marks a macro whose body or helpers failed to check: it is
 // never executed, since its bytecode is garbage and running it turns one precise
-// diagnostic into a VM panic or a wrong AST. Reported once, then refused silently
-// for every later call site.
+// diagnostic into a VM panic or a wrong AST. Its errors are reported once per checking
+// context, then the macro is refused silently for that context's later call sites.
 interface MacroBuild {
-	typeArg: string;
+	hasTypeArg: boolean;
 	compiled: CompiledMacro | null;
+	errors: CheckerError[];
+	reportedIn: CheckerContext | null;
+}
+
+function failedBuild(hasTypeArg: boolean, ctx: CheckerContext, mark: int32): MacroBuild {
+	const errors: CheckerError[] = [];
+	for (let i = mark; i < ctx.errors.length; i += 1) errors.push(ctx.errors[i]);
+	return { hasTypeArg, compiled: null, errors, reportedIn: ctx };
+}
+
+function replayBuildErrors(build: MacroBuild, ctx: CheckerContext): void {
+	if (build.compiled != null || build.reportedIn == ctx) return;
+	for (const e of build.errors) ctx.errors.push(e);
+	build.reportedIn = ctx;
 }
 
 // One cache per compilation, as the reference keeps a macro's code on the module graph's VM: the
@@ -1732,6 +1554,17 @@ interface MacroBuild {
 let _macroBuilds: HashMap<Symbol, MacroBuild[]> = new HashMap<Symbol, MacroBuild[]>();
 let _macroBuildsGraph: ModuleGraph = null as unknown as ModuleGraph;
 let _macroBuildsCtx: CheckerContext = null as unknown as CheckerContext;
+let _macroCompiles: int32 = 0;
+let _macroPreprocesses: int32 = 0;
+let _preprocessedMacros: HashSet<Symbol> = new HashSet<Symbol>();
+
+export function macroPreprocessCount(): int32 {
+	return _macroPreprocesses;
+}
+
+export function macroCompileCount(): int32 {
+	return _macroCompiles;
+}
 
 function inMacroBuildsCompilation(ctx: CheckerContext): boolean {
 	if (engineCompiling()) return true;
@@ -1746,21 +1579,44 @@ function errorsSince(ctx: CheckerContext, mark: int32): boolean {
 	return false;
 }
 
+function enterMacroBuildsCompilation(ctx: CheckerContext): void {
+	if (inMacroBuildsCompilation(ctx)) return;
+	_macroBuilds = new HashMap<Symbol, MacroBuild[]>();
+	_preprocessedMacros = new HashSet<Symbol>();
+	_macroBuildsGraph = ctx.moduleGraph;
+	_macroBuildsCtx = ctx;
+}
+
+// The compiled body takes <T> as an argument, so each call site checks its own T.
 function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym: Symbol, macroName: string, decl: MacroDeclData, typeArg: string): CompiledMacro | null {
-	if (!inMacroBuildsCompilation(ctx)) {
-		_macroBuilds = new HashMap<Symbol, MacroBuild[]>();
-		_macroBuildsGraph = ctx.moduleGraph;
-		_macroBuildsCtx = ctx;
+	const cm = getOrCompileMacroBody(ctx, regCtx, macroSym, macroName, decl, typeArg != "");
+	if (cm == null || !cm.typeArgInput) return cm;
+	const at = cm.typeArgSite;
+	if (typeArg.indexOf(",", 0) >= 0) {
+		addError(ctx, `Macro '${macroName}': getTypeArg() supports a single type argument, got '${typeArg}'`, at.line, at.column);
+		return null;
 	}
+	const argType = resolveAnnotation(typeArg, ctx, 0, 0);
+	if (argType == null || isUnresolvedType(argType)) {
+		addError(ctx, `Macro '${macroName}': getTypeArg() cannot resolve type '${typeArg}' at the call site`, at.line, at.column);
+		return null;
+	}
+	return cm;
+}
+
+function getOrCompileMacroBody(ctx: CheckerContext, regCtx: CheckerContext, macroSym: Symbol, macroName: string, decl: MacroDeclData, hasTypeArg: boolean): CompiledMacro | null {
+	enterMacroBuildsCompilation(ctx);
 	const known = _macroBuilds.get(macroSym);
 	const builds: MacroBuild[] = known != null ? known : [];
 	if (known == null) _macroBuilds.set(macroSym, builds);
 	for (let bi = 0; bi < builds.length; bi += 1) {
-		if (builds[bi].typeArg == typeArg) return builds[bi].compiled;
+		if (builds[bi].hasTypeArg != hasTypeArg) continue;
+		replayBuildErrors(builds[bi], ctx);
+		return builds[bi].compiled;
 	}
 	let body = decl.macroDeclBody;
 	let params = decl.macroDeclParams;
-	if (typeArg != "") {
+	if (hasTypeArg) {
 		params = [];
 		for (const param of decl.macroDeclParams) params.push(param);
 	}
@@ -1768,14 +1624,16 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 	// Bake into a CLONE when the call site supplies a type argument: the declared
 	// body is shared by every call site, and getTypeArg() resolves per site.
 	let workBody = body;
-	if (typeArg != "") workBody = cloneNodeForCheck(body);
+	if (hasTypeArg) workBody = cloneNodeForCheck(body);
 	const bakeMark = ctx.errors.length;
-	bakeMacroBody(workBody, ctx, macroSym, macroName, typeArg, decl.macroDeclParams, params);
+	_typeArgSite = atCallSite();
+	bakeMacroBody(workBody, ctx, macroSym, macroName, hasTypeArg, decl.macroDeclParams, params);
 	if (errorsSince(ctx, bakeMark)) {
-		builds.push({ typeArg, compiled: null });
+		builds.push(failedBuild(hasTypeArg, ctx, bakeMark));
 		return null;
 	}
 	body = workBody;
+	const typeArgSite = _typeArgSite;
 
 	const loc = body.location;
 	const wrapperStmts: Node[] = [];
@@ -1818,8 +1676,9 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 
 	const program = createNode(NodeKind.Program, { programStmts: wrapperStmts }, synthToken(loc));
 
+	_macroCompiles += 1;
 	const result = callMacroEngineCompiler(program, ctx, "$macro:body", regCtx);
-	if (result == null as unknown as EngineMacroResult || result.funcIdx < 0) return null;
+	if (result == null as unknown as EngineMacroResult) return null;
 	let broken = false;
 	if (result.errors != null && result.errors.length > 0) {
 		for (const e of result.errors) {
@@ -1829,12 +1688,13 @@ function getOrCompileMacro(ctx: CheckerContext, regCtx: CheckerContext, macroSym
 		}
 	}
 	if (broken) {
-		builds.push({ typeArg, compiled: null });
+		builds.push(failedBuild(hasTypeArg, ctx, bakeMark));
 		return null;
 	}
+	if (result.funcIdx < 0) return null;
 
-	const cm: CompiledMacro = { vm: result.vm, funcIdx: result.funcIdx, typeArgInput: params.length > decl.macroDeclParams.length };
-	builds.push({ typeArg, compiled: cm });
+	const cm: CompiledMacro = { vm: result.vm, funcIdx: result.funcIdx, typeArgInput: params.length > decl.macroDeclParams.length, typeArgSite };
+	builds.push({ hasTypeArg, compiled: cm, errors: [], reportedIn: null });
 	return cm;
 }
 
@@ -1864,10 +1724,12 @@ export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 	const body = decl.macroDeclBody;
 	const params = decl.macroDeclParams;
 
-	// Phase D: Preprocess the body to rewrite NodeKind.X / DeclKind.X member
-	// access to integer literals. Mutation is in-place and idempotent — running
-	// on already-preprocessed code is a no-op, so it's safe to call repeatedly.
-	preprocessMacroBody(body, regCtx, macroSym.name, params);
+	enterMacroBuildsCompilation(ctx);
+	if (!_preprocessedMacros.has(macroSym)) {
+		_macroPreprocesses += 1;
+		preprocessMacroBody(body, regCtx, macroSym.name, params);
+		_preprocessedMacros.add(macroSym);
+	}
 
 	// Validate arity
 	if (d.macroArgs.length != params.length) {
@@ -1895,6 +1757,8 @@ export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 		return node;
 	}
 	const vm = cm.vm;
+	const handles = boundMark();
+	defer releaseBound(handles);
 	const marshalArgs: RaiserValue[] = [];
 	for (const arg of d.macroArgs) {
 		const av = nodeToValue(stripMacroArgWrappers(arg), vm.objectHeap, vm.arrayHeap);
@@ -2310,7 +2174,7 @@ registerMacroBodyPreparer((body: Node, ctx: CheckerContext, macroSym: Symbol, ma
 	const decl = macroDeclOf(macroSym);
 	const params: string[] = decl != null ? decl.macroDeclParams : [];
 	preprocessMacroBody(body, macroScopeOf(ctx, macroSym), macroSym.name, params);
-	return bakeMacroBody(body, ctx, macroSym, macroName, "", params, null);
+	return bakeMacroBody(body, ctx, macroSym, macroName, false, params, null);
 });
 registerComptimeHelperPreparer((decl: Node, scope: CheckerContext): void => {
 	preprocessMacroBody(decl, scope, "", []);
@@ -2367,69 +2231,24 @@ test "isBuiltinDirective recognizes well-known names" {
 	assert !isBuiltinDirective("answer");
 }
 
-// Phase D regression tests — NodeKind/DeclKind preprocessing
+// Phase D regression tests — createNodeAt preprocessing
 
-test "nodeKindOrdinal returns correct ordinals" {
-	assert nodeKindOrdinal("NumberLiteral") == (NodeKind.NumberLiteral as number);
-	assert nodeKindOrdinal("BinaryExpr") == (NodeKind.BinaryExpr as number);
-	assert nodeKindOrdinal("Identifier") == (NodeKind.Identifier as number);
-	assert nodeKindOrdinal("ClassDecl") == (NodeKind.ClassDecl as number);
-	assert nodeKindOrdinal("Program") == (NodeKind.Program as number);
-	assert nodeKindOrdinal("UnknownThing") == -1;
-}
-
-test "declKindOrdinal returns correct ordinals" {
-	assert declKindOrdinal("Const") == (DeclKind.Const as number);
-	assert declKindOrdinal("Let") == (DeclKind.Let as number);
-	assert declKindOrdinal("Var") == (DeclKind.Var as number);
-	assert declKindOrdinal("Other") == -1;
-}
-
-test "tryRewriteEnumMember rewrites NodeKind.X to its ordinal cast to NodeKind" {
+test "preprocessMacroBody leaves a NodeKind member access for its resolved symbol" {
 	const loc = makeLoc(1, 0);
 	const obj = createNode(NodeKind.Identifier, { name: "NodeKind" }, synthToken(loc));
 	const member = createNode(NodeKind.MemberExpr, {
-		object: obj, property: "NumberLiteral", isOptional: false,
-	}, synthToken(loc));
-	const outer = enterMetaScope(metaTestScope(), "", [], member);
-	const result = tryRewriteEnumMember(member);
-	leaveMetaScope(outer);
-	assert result.kind == NodeKind.TypeAssertion && (result.data as TypeAssertionData).asType == "NodeKind";
-	assert ((result.data as TypeAssertionData).asExpr.data as NumberLiteralData).value == (NodeKind.NumberLiteral as number);
-}
-
-test "tryRewriteEnumMember leaves non-enum member unchanged" {
-	const loc = makeLoc(1, 0);
-	const obj = createNode(NodeKind.Identifier, { name: "someVar" }, synthToken(loc));
-	const member = createNode(NodeKind.MemberExpr, {
-		object: obj, property: "field", isOptional: false,
-	}, synthToken(loc));
-	const outer = enterMetaScope(metaTestScope(), "", [], member);
-	const result = tryRewriteEnumMember(member);
-	leaveMetaScope(outer);
-	assert result == member;
-	assert result.kind == NodeKind.MemberExpr;
-}
-
-test "preprocessMacroBody rewrites NodeKind in nested ReturnStmt" {
-	const loc = makeLoc(1, 0);
-	const obj = createNode(NodeKind.Identifier, { name: "NodeKind" }, synthToken(loc));
-	const member = createNode(NodeKind.MemberExpr, {
-		object: obj, property: "BinaryExpr", isOptional: false,
+		object: obj, property: "ComputedProperty", isOptional: false,
 	}, synthToken(loc));
 	const ret = createNode(NodeKind.ReturnStmt, { argument: member }, synthToken(loc));
 	const body = createNode(NodeKind.BlockStmt, { statements: [ret] }, synthToken(loc));
 	preprocessMacroBody(body, metaTestScope(), "", []);
-	const stmts = (body.data as BlockStmtData).statements;
-	const retData = stmts[0].data as ReturnStmtData;
-	assert retData.argument.kind == NodeKind.TypeAssertion;
-	assert ((retData.argument.data as TypeAssertionData).asExpr.data as NumberLiteralData).value == (NodeKind.BinaryExpr as number);
+	const retData = (body.data as BlockStmtData).statements[0].data as ReturnStmtData;
+	assert retData.argument == member;
 }
 
 test "tryRewriteCreateNodeAt converts call to ObjectLiteral" {
 	const loc = makeLoc(1, 0);
 	// Build: createNodeAt(NodeKind.NumberLiteral, { value: 42, isFloat: false }, x)
-	// First, the kind argument is already an integer (post NodeKind preprocessing)
 	const kindArg = mkNumber(NodeKind.NumberLiteral as number, loc);
 	// Data: { value: 42, isFloat: false }
 	const dataLit = createNode(NodeKind.ObjectLiteral, {
@@ -2532,12 +2351,8 @@ test "nodeToASTLiteral builds ObjectLiteral for NumberLiteral" {
 	const literal = nodeToASTLiteral(numNode, loc);
 	assert literal.kind == NodeKind.ObjectLiteral;
 	const d = literal.data as ObjectLiteralData;
-	// Should have kind, line, column, value
-	assert d.keys.length == 4;
-	assert d.keys[0] == "kind";
-	assert d.keys[3] == "value";
-	// Value at index 3 should be a NumberLiteral with the right value
-	const valueNode = d.properties[3];
+	assert d.keys.join(",") == "kind,line,column,endLine,endColumn,value";
+	const valueNode = d.properties[5];
 	assert valueNode.kind == NodeKind.NumberLiteral;
 	assert (valueNode.data as NumberLiteralData).value == 42;
 }
@@ -2548,9 +2363,7 @@ test "nodeToASTLiteral builds ObjectLiteral for Identifier" {
 	const literal = nodeToASTLiteral(idNode, loc);
 	assert literal.kind == NodeKind.ObjectLiteral;
 	const d = literal.data as ObjectLiteralData;
-	// Should have kind, line, column, name
-	assert d.keys.length == 4;
-	assert d.keys[3] == "name";
+	assert d.keys.join(",") == "kind,line,column,endLine,endColumn,name";
 }
 
 test "nodeToASTLiteral writes the explicit type arguments of a call" {
@@ -2648,7 +2461,7 @@ test "hasUserMacroInvocation detects macro in DecoratedDecl decorators" {
 	defineTestMacro(ctx, "myDeco", loc);
 	const inv = createNode(NodeKind.MacroInvocation, { macroName: "myDeco", macroArgs: [], macroHasParens: false }, synthToken(loc));
 	const inner = createNode(NodeKind.InterfaceDecl, {
-		interfaceName: "X", interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: [],
+		interfaceName: "X", interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [] as string[], nameLocation: loc, interfaceFieldVisibility: [] as string[], interfaceFieldDecorators: [], interfaceOptionalFields: [] as string[], nativeName: "",
 	}, synthToken(loc));
 	const dec = createNode(NodeKind.DecoratedDecl, {
 		decorators: [inv], decoratedNode: inner,
@@ -2721,44 +2534,5 @@ test "walkExpandArray no-op when no SpliceMany present" {
 	assert arr.length == 2;
 	assert (arr[0].data as VariableDeclData).declName == "v0";
 	assert (arr[1].data as VariableDeclData).declName == "v1";
-}
-
-// Regression: preprocessNode rewrites `NodeKind.X` member access to integer
-// ordinals throughout the macro body. Previously had its own ad-hoc walker
-// that missed ForOfStmt/SwitchStmt/MatchExpr etc. — `kind: NodeKind.NumberLiteral`
-// inside `for (const f of fields) { ... }` stayed as MemberExpr at runtime,
-// returning nil, so heap objects had no `kind` field and valueToNode fell back
-// to deserializeObjectLiteral. Now uses walker.ms walkNode (single source of
-// truth). This test verifies preprocessNode descends into a ForOfStmt body.
-test "preprocessNode rewrites NodeKind.X inside ForOfStmt body" {
-	const loc = makeLoc(1, 1);
-	// Build: for (const f of fields) { let x = NodeKind.NumberLiteral; }
-	// Using literal ObjectLiteral construction to avoid parser dependency.
-	const memberExpr = createNodeAt(NodeKind.MemberExpr, {
-		object: createNodeAt(NodeKind.Identifier, { name: "NodeKind" }, loc),
-		property: "NumberLiteral",
-		isOptional: false,
-	}, loc);
-	const innerDecl = createNodeAt(NodeKind.VariableDecl, {
-		declName: "x", declType: "", initializer: memberExpr,
-		declKind: DeclKind.Let, nameLocation: loc,
-	}, loc);
-	const body = createNodeAt(NodeKind.BlockStmt, { statements: [innerDecl] }, loc);
-	const fields = createNodeAt(NodeKind.Identifier, { name: "fields" }, loc);
-	const forOf = createNodeAt(NodeKind.ForOfStmt, {
-		forOfBinding: "f", forOfIsConst: true,
-		forOfIterable: fields, forOfBody: body,
-		forOfPattern: null as unknown as Node, bindingLocation: loc, forOfLabel: "",
-	}, loc);
-
-	preprocessMacroBody(forOf, metaTestScope(), "", []);
-
-	// After preprocessing, the inner VariableDecl's initializer should be a
-	// cast of the NodeKind.NumberLiteral ordinal (=0) to NodeKind, not a
-	// MemberExpr. If preprocessNode still skipped ForOfStmt body, this would
-	// remain a MemberExpr and the assertion fails.
-	const rewrittenInit = (innerDecl.data as VariableDeclData).initializer;
-	assert rewrittenInit.kind == NodeKind.TypeAssertion;
-	assert ((rewrittenInit.data as TypeAssertionData).asExpr.data as NumberLiteralData).value == (NodeKind.NumberLiteral as number);
 }
 

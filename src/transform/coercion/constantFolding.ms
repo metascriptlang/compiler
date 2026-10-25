@@ -16,13 +16,15 @@ import { Node, NodeKind, BinaryExprData, UnaryExprData, MemberExprData, StringLi
 import { foldConstantExpression, foldBinaryLiterals, foldUnaryLiteral, foldConstInitializer } from "../../checker/constFold";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
+import { forEachChild } from "../../ast/visitor";
 import { makeNumber } from "../util";
 import { firstExprKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
 
 export function lowerConstFold(program: Node, ctx: TransformContext): Node {
-	walkNode(program, ctx.preserveModuleConstants ? foldReloadableNode : foldNode);
+	const reloadable = ctx.reloadableModules;
+	walkNode(program, reloadable.length == 0 ? foldNode : (n: Node): Node => foldReloadableNode(n, reloadable));
 	return program;
 }
 
@@ -44,12 +46,21 @@ function foldConstDecl(node: Node): Node {
 	return node;
 }
 
-function foldReloadableNode(node: Node): Node {
+function readsReloadable(node: Node, reloadable: string[]): boolean {
+	const sym = node.resolvedSym;
+	if (sym != null && reloadable.includes(sym.modulePath)) return true;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && readsReloadable(child, reloadable)) found = true;
+	});
+	return found;
+}
+
+function foldReloadableNode(node: Node, reloadable: string[]): Node {
 	match (node.kind) {
-		NodeKind.Identifier | NodeKind.TypeAssertion | NodeKind.HiddenStdConv | NodeKind.VariableDecl => { return node; },
-		NodeKind.MemberExpr => {
-			const d = node.data as MemberExprData;
-			return d.object.kind == NodeKind.StringLiteral && d.property == "code" ? foldMember(node) : node;
+		NodeKind.VariableDecl => { return node; },
+		NodeKind.Identifier | NodeKind.TypeAssertion | NodeKind.HiddenStdConv | NodeKind.MemberExpr => {
+			return readsReloadable(node, reloadable) ? node : foldNode(node);
 		},
 		_ => { return foldNode(node); },
 	};

@@ -282,7 +282,7 @@ static HANDLE msFirstLoopIocp(void) {
  * any thread has a target") spelled in IOCP terms. Name kept because actor.h
  * declares one symbol for both platforms. */
 void msEnsureWakePipe(void) {
-	(void)msGetDispatcher();
+	if (!msIsPoolWorker) (void)msGetDispatcher();
 }
 
 /* Wake the event loop(s) from another thread — the IOCP twin of POSIX's 1-byte
@@ -369,7 +369,33 @@ void msCompletionQueuePushReleaseBatch(void** futs, int count) {
 	}
 }
 
-bool msCompletionQueueDrain(void) { return false; }
+static void msIocpDispatchMsg(msCompletionMsg* msg) {
+	if (msg->kind == -3) {
+		msReleaseEnvOnLoop(msg->value);
+	} else if (msg->kind == -2) {
+		if (msg->value != NULL) msFutureDrcDestroy(msg->value);
+	} else if (msg->fut != NULL) {
+		msFutureFireCallbacks((msFutureBase*)msg->fut);
+		msFutureDrcDestroy(msg->fut);
+	}
+	free(msg);
+}
+
+bool msCompletionQueueDrain(void) {
+	if (gDispatcher == NULL || gDispatcher->iocp == NULL) return false;
+	bool didWork = false;
+	OVERLAPPED_ENTRY entries[64];
+	ULONG count = 0;
+	while (GetQueuedCompletionStatusEx(gDispatcher->iocp, entries, 64, &count, 0, FALSE)) {
+		for (ULONG i = 0; i < count; i++) {
+			msCompletionMsg* msg = (msCompletionMsg*)entries[i].lpOverlapped;
+			if (msg == NULL) continue;
+			didWork = true;
+			msIocpDispatchMsg(msg);
+		}
+	}
+	return didWork;
+}
 
 #else
 /* POSIX: MPSC queue for cross-thread completion + wake-only self-pipe.
@@ -629,6 +655,17 @@ static msTimer msTimerPop(msTimerHeap* h) {
 /* Standard reference processTimers pattern
  * Pop expired timers, complete their futures.
  * Returns ms until next timer (+1 margin like standard reference), or -1 if no timers. */
+static int msTimerDelayFrom(int64_t now) {
+	msTimerLock();
+	int64_t nextAt = gTimers.len > 0 ? gTimers.data[0].finishAtMs : -1;
+	msTimerUnlock();
+	if (nextAt >= 0) {
+		int64_t diff = nextAt - now;
+		return (int)(diff > 0 ? diff : 0); /* No margin — step 3 re-processes timers after poll */
+	}
+	return -1; /* no timers */
+}
+
 int msProcessTimers(msDispatcher* d, bool* didWork) {
 	/* timers are process-global here — see gTimers; `d` is the caller's
 	 * callback queue, drained after every fired timer */
@@ -666,14 +703,11 @@ int msProcessTimers(msDispatcher* d, bool* didWork) {
 		}
 		msProcessCallbacks(d, didWork);
 	}
-	msTimerLock();
-	int64_t nextAt = gTimers.len > 0 ? gTimers.data[0].finishAtMs : -1;
-	msTimerUnlock();
-	if (nextAt >= 0) {
-		int64_t diff = nextAt - now;
-		return (int)(diff > 0 ? diff : 0); /* No margin — step 3 re-processes timers after poll */
-	}
-	return -1; /* no timers */
+	return msTimerDelayFrom(now);
+}
+
+int msNextTimerDelayMs(void) {
+	return msTimerDelayFrom(msMonoTimeMs());
 }
 
 /* Standard reference processPendingCallbacks pattern
@@ -744,36 +778,12 @@ bool msRunOnce(int timeoutMs) {
 				/* NULL = a cross-thread wake (msActorWakeEventLoop - the same
 				 * Amendment B IOCP-arm primitive msIoEngineWake uses). Nothing
 				 * to dispatch; engineIOCP.c's poll skips these identically.
-				 * Not counted as work: a wake-only batch leaves the loop free
-				 * to re-poll, exactly like POSIX draining wake-pipe bytes
-				 * without setting didWork. */
-				if (msg == NULL) continue;
+				 * Counted as work, as POSIX counts a ready wake pipe: wakes
+				 * share the port with completions and can fill a whole batch
+				 * ahead of them, so a wake-only batch is not an idle loop. */
 				didWork = true;
-				if (msg->kind == -3) {
-					/* Deferred env release (Amendment H parity with the POSIX
-					 * kind=-3 drain): decref on the loop thread — the env's rc
-					 * field is non-atomic. Same destroy sequence as the POSIX
-					 * branch in msCompletionQueueDrain. */
-					msReleaseEnvOnLoop(msg->value);
-					free(msg);
-					continue;
-				}
-				if (msg->kind == -2) {
-					/* Deferred future release (Amendment H parity with the
-					 * POSIX kind=-2 drain): the owner thread's deferred decref
-					 * pushed by msCompletionQueuePushReleaseBatch. Runs here,
-					 * serialized with the drain's own decref — never racy. */
-					if (msg->value != NULL) msFutureDrcDestroy(msg->value);
-					free(msg);
-					continue;
-				}
-				if (msg->fut != NULL) {
-					msFutureFireCallbacks((msFutureBase*)msg->fut);
-					/* Release the queue's in-flight ref, paired with the incref in
-					 * msPostCompletion - same contract as the POSIX drain above. */
-					msFutureDrcDestroy(msg->fut);
-				}
-				free(msg);
+				if (msg == NULL) continue;
+				msIocpDispatchMsg(msg);
 			}
 		}
 	} else if (adj > 0 && msDequeLen(&d->callbacks) == 0) {

@@ -3,10 +3,12 @@ import {
 	VariableDeclData, ClassDeclData, PropertyDeclData, CallExprData, MemberExprData, NewExprData,
 	ExprStmtData, BinaryExprData, UpdateExprData, HiddenDerefData, OutExprData,
 } from "../../ast/node";
-import { forEachChild } from "../../ast/visitor";
+import { isRoutineNode } from "../../ast/shape";
+import { forEachChild, anyChild } from "../../ast/visitor";
+import { isEagerAssignOp } from "../../ast/operators";
 import { booleanType } from "../../checker/types";
 import { setFlag } from "../../checker/symbol";
-import { ModuleGraph, Module } from "../../module/graph";
+import { ModuleGraph, Module, findModuleIndex } from "../../module/graph";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { mapChildren, hasEffect } from "../walker";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
@@ -79,7 +81,7 @@ export function guardModuleTdzRaiser(program: Node, ctx: TransformContext): Node
 
 function guardUses(n: Node, inFunction: boolean, ctx: TransformContext): Node {
 	if (n == null) return n;
-	const deferred = inFunction || isFunctionLike(n)
+	const deferred = inFunction || isRoutineNode(n)
 		|| (n.kind == NodeKind.PropertyDecl && !(n.data as PropertyDeclData).propIsStatic);
 	if (deferred) {
 		const cls = classOperand(n, ctx);
@@ -118,19 +120,15 @@ function classOperand(n: Node, ctx: TransformContext): Node | null {
 
 function writtenBinding(n: Node): Node | null {
 	let target: Node | null = null;
-	if (n.kind == NodeKind.BinaryExpr && isAssignOperator((n.data as BinaryExprData).operator)) target = (n.data as BinaryExprData).left;
+	if (n.kind == NodeKind.BinaryExpr && isEagerAssignOpWithoutPow((n.data as BinaryExprData).operator)) target = (n.data as BinaryExprData).left;
 	else if (n.kind == NodeKind.UpdateExpr) target = (n.data as UpdateExprData).updateArg;
 	else if (n.kind == NodeKind.HiddenAddr) target = (n.data as HiddenDerefData).expr;
 	else if (n.kind == NodeKind.OutExpr) target = (n.data as OutExprData).outArg;
 	return target != null && target.kind == NodeKind.Identifier ? target : null;
 }
 
-function isAssignOperator(op: string): boolean {
-	return match (op) {
-		"=" | "+=" | "-=" | "*=" | "/=" | "%=" => true,
-		"&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
-		_ => false,
-	};
+function isEagerAssignOpWithoutPow(op: string): boolean {
+	return isEagerAssignOp(op) && op != "**=";
 }
 
 function flagOf(n: Node, ctx: TransformContext): Symbol | null {
@@ -222,18 +220,13 @@ function isLexicalBindingSym(sym: Symbol): boolean {
 	return sym.symbolKind == SymbolKind.Variable && decl != null && decl.resolvedSym == sym && lexicalBindingOf(decl) == sym;
 }
 
-function isFunctionLike(n: Node): boolean {
-	return n.kind == NodeKind.FunctionDecl || n.kind == NodeKind.FunctionExpr || n.kind == NodeKind.ArrowFunction
-		|| n.kind == NodeKind.MethodDecl || n.kind == NodeKind.ConstructorDecl;
-}
-
 function collectDeferredUses(n: Node, inFunction: boolean, uses: HashSet<Symbol>, order: Symbol[]): void {
 	if (n == null) return;
 	if (inFunction && n.kind == NodeKind.Identifier && n.resolvedSym != null && !uses.has(tdzBindingOf(n.resolvedSym))) {
 		uses.add(tdzBindingOf(n.resolvedSym));
 		order.push(tdzBindingOf(n.resolvedSym));
 	}
-	const deferred = inFunction || isFunctionLike(n)
+	const deferred = inFunction || isRoutineNode(n)
 		|| (n.kind == NodeKind.PropertyDecl && !(n.data as PropertyDeclData).propIsStatic);
 	forEachChild(n, (c: Node): void => collectDeferredUses(c, deferred, uses, order));
 }
@@ -274,9 +267,7 @@ function reachesLocalCode(n: Node, modulePath: string): boolean {
 			return true;
 		}
 	}
-	let found = false;
-	forEachChild(n, (c: Node): void => { if (!found && reachesLocalCode(c, modulePath)) found = true; });
-	return found;
+	return anyChild(n, (c: Node): boolean => reachesLocalCode(c, modulePath));
 }
 
 function importsByName(mod: Module, from: string, name: string): boolean {
@@ -329,10 +320,10 @@ function visitScc(w: SccWalk, path: string): void {
 	w.stack.push(path);
 	w.onStack.add(path);
 	let low = own;
-	const at = w.graph.modulePaths.indexOf(path);
+	const at = findModuleIndex(w.graph, path);
 	for (const entry of w.graph.modules[at].imports) {
 		const next = entry.sourcePath;
-		if (w.graph.modulePaths.indexOf(next) < 0) continue;
+		if (findModuleIndex(w.graph, next) < 0) continue;
 		if (!w.index.has(next)) {
 			visitScc(w, next);
 			const nextLow = w.low.get(next)!;

@@ -2,21 +2,21 @@
 // Reference parallel implementation
 
 import { platform } from "std/process";
-import { Node, NodeKind, VariableDeclData, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, VariableDeclData, Symbol } from "../ast/node";
 import { CheckerContext, Severity, GcMode, ExportRegistry, collectExports, isStaticExtensionSym } from "./context";
 import { lookupLocal } from "./symbol";
 import { ModuleGraph, Module, findModule, createModuleError, ErrorSeverity } from "../module/graph";
-import { threePassTimings, buildPreludeContext, preludeContextFor, createGraphPreludeContext, promoteModuleIntoPrelude, promoteStdModuleIntoPrelude, registerGraphPreludeFn, setSlowTrace } from "./checkPass";
-import { defaultGlobalImports, extraGlobalImports, extraGlobalImportsBuildFile, hasExtraGlobalImports, setExtraGlobalImports, modulePasses, setModulePassExempt, ModulePassState } from "./prelude";
+import { threePassTimings, buildPreludeContext, preludeContextFor, createGraphPreludeContext, promoteModuleIntoPrelude, promoteStdModuleIntoPrelude, bindModulePassesFrom, setSlowTrace } from "./checkPass";
+import { defaultGlobalImports, extraGlobalImports, extraGlobalImportsBuildFile, hasExtraGlobalImports, setExtraGlobalImports, modulePasses, setModulePassExempt } from "./prelude";
 import { createModuleGraph } from "../module/graph";
 import { createFileSystemProvider, provideSource, loadModule, moduleIdentity, SourceProvider } from "../module/loader";
 import { backendOfExtension, createDefaultConfig, resolveImportWithConfig, ResolverConfig } from "../module/resolver";
 import { preludePackStats } from "./preludePack";
 import { isAssignableProfile } from "./compat";
-import { TargetInfo, hostTargetInfo, unifyTypeProfile, substituteTypeProfile, typeNameOfProfile, typeDisplayNameProfile, getPropertyProfile, findVariantByFieldNameProfile } from "./types";
+import { TargetInfo, hostTargetInfo, unifyTypeProfile, substituteParamsProfile, typeNameOfProfile, typeDisplayNameProfile, getPropertyProfile, findVariantByFieldNameProfile } from "./types";
 import { findAllExtensionsByNameProfile } from "./context";
 import { checkCallExprProfile } from "./callResolve";
-import { instantiateProfile, instantiateTimings, lookupModuleCtx } from "./instantiate";
+import { instantiateProfile, instantiateTimings, lookupModuleCtx, resetInstantiationState } from "./instantiate";
 import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbTypeCheck, TransAmDb } from "../compiler/transam/index";
 import { opMark, opsFrom, replayOps, KeyedOp } from "../codegen/c/types";
 
@@ -113,19 +113,6 @@ export function noteStdGlobalImportModules(graph: ModuleGraph, provider: SourceP
 export function loadExtraGlobalImportModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig): void {
 	for (const entry of extraGlobalImports()) loadGlobalImportModule(graph, provider, config, entry, true);
 }
-
-export function preludeGraphContext(stdPath: string, backendExt: string): CheckerContext {
-	if (!hasExtraGlobalImports()) return buildPreludeContext(stdPath, backendExt);
-	const config = createDefaultConfig(backendOfExtension(backendExt), stdPath);
-	const graph = createModuleGraph();
-	const provider = createFileSystemProvider();
-	loadStdGlobalImportModules(graph, provider, config);
-	loadExtraGlobalImportModules(graph, provider, config);
-	const _registry = checkModuleGraph(graph, stdPath, backendExt);
-	return lastPreludeCtx;
-}
-
-registerGraphPreludeFn(preludeGraphContext);
 
 // Sub-phase timing for the graph check, mirroring cmdBuildC's phase timers.
 // Off unless the caller asked for -t, so a normal build pays nothing.
@@ -225,16 +212,16 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		console.log(`    instantiate: calls=${ip[0]} hits=${ip[1]} misses=${ip[2]} totalTime=${it[0]}ms bodyCheck=${it[1]}ms`);
 		const isa = isAssignableProfile();
 		const uni = unifyTypeProfile();
-		const sub = substituteTypeProfile();
+		const sub = substituteParamsProfile();
 		const tno = typeNameOfProfile();
 		const tdn = typeDisplayNameProfile();
 		const cce = checkCallExprProfile();
-		console.log(`    isAssignable: n=${isa[0]} t=${isa[1]}ms | unifyType: n=${uni[0]} t=${uni[1]}ms | substituteType: n=${sub[0]} t=${sub[1]}ms`);
-		console.log(`    typeNameOf: n=${tno[0]} t=${tno[1]}ms | typeDisplayName: n=${tdn[0]} t=${tdn[1]}ms | checkCallExpr: n=${cce[0]} t=${cce[1]}ms`);
+		console.log(`    isAssignable: n=${isa[0]} | unifyType: n=${uni[0]} | substituteParams: n=${sub[0]}`);
+		console.log(`    typeNameOf: n=${tno[0]} | typeDisplayName: n=${tdn[0]} | checkCallExpr: n=${cce[0]}`);
 		const gp = getPropertyProfile();
 		const fvb = findVariantByFieldNameProfile();
 		const fae = findAllExtensionsByNameProfile();
-		console.log(`    getProperty: n=${gp[0]} t=${gp[1]}ms | findVariantByFieldName: n=${fvb[0]} t=${fvb[1]}ms | findAllExtByName: n=${fae[0]} t=${fae[1]}ms`);
+		console.log(`    getProperty: n=${gp[0]} | findVariantByFieldName: n=${fvb[0]} | findAllExtByName: n=${fae[0]}`);
 	}
 	return db.exportRegistry;
 }
@@ -259,21 +246,7 @@ function globalImportClosure(graph: ModuleGraph): HashSet<string> {
 }
 
 function bindModulePasses(mod: Module, ctx: CheckerContext): void {
-	for (const pass of modulePasses()) {
-		if (pass.modulePath != mod.path) continue;
-		let found: Symbol | null = null;
-		for (const e of collectExports(ctx, mod.path)) {
-			if (e.name == pass.macro && e.sym.symbolKind == SymbolKind.Macro) found = e.sym;
-		}
-		if (found != null) {
-			pass.sym = found;
-			pass.state = ModulePassState.Bound;
-		} else {
-			pass.sym = null;
-			pass.state = ModulePassState.Broken;
-			mod.errors.push(createModuleError(`globalImports names modulePass '${pass.macro}', but this module exports no macro '${pass.macro}'`, 1, 1, ErrorSeverity.Error));
-		}
-	}
+	for (const message of bindModulePassesFrom(mod.path, ctx)) mod.errors.push(createModuleError(message, 1, 1, ErrorSeverity.Error));
 }
 
 function mirrorModuleErrors(mod: Module, ctx: CheckerContext): void {
@@ -628,12 +601,12 @@ function unionReceiverErrorsWith(mainSource: string): int32 {
 	return errors;
 }
 
-test "a union's extension and dynamic-field read reach only a receiver of that union, never a variant narrowed out of it" {
+test "a union's dynamic-field read reaches only a receiver of that union, while its named extension also reaches a variant narrowed out of it" {
 	assert unionReceiverErrorsWith("function r(c: Cell): number { return c.zzz; }") == 0;
 	assert unionReceiverErrorsWith("function d(c: Cell): string { return c.describe(); }") == 0;
 	assert unionReceiverErrorsWith("function n(c: Cell): number { if (c.kind === \"a\") { const v = c.y; return 0; } return 0; }") > 0;
 	assert unionReceiverErrorsWith("function n(c: Cell): void { match (c.kind) { \"a\" => { const v = c.y; }, _ => {} }; }") > 0;
-	assert unionReceiverErrorsWith("function n(c: Cell): string { if (c.kind === \"a\") { return c.describe(); } return \"\"; }") > 0;
+	assert unionReceiverErrorsWith("function n(c: Cell): string { if (c.kind === \"a\") { return c.describe(); } return \"\"; }") == 0;
 }
 
 function aliasReceiverErrorWith(mainSource: string): string {
@@ -808,18 +781,20 @@ test "parse error in dependency doesn't block dependent" {
 	assert modA.errors.length == 0;
 }
 
-test "C header import synthesizes exports" {
-	// .h imports are inlined into the consuming module (reference parity)
+test "C header import is a module of its exports" {
 	const entries: MapEntry[] = [];
 	entries.push({ entryPath: "/src/lib.h", entrySource: "void foo(int x);" });
 	entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo } from \"./lib.h\"; const x = foo;" });
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
-	// No separate .h module — declarations inlined into /src/a.ms
-	assert graph.modules.length == 1;
+	checkModuleGraph(graph, "");
+	assert graph.modules.length == 2;
 	const modA = findModule(graph, "/src/a.ms");
 	assert modA != null;
-	assert modA.source.indexOf("extern") >= 0;
+	assert modA.errors.length == 0;
+	const lib = findModule(graph, "/src/lib.h");
+	assert lib != null;
+	assert lib.source.indexOf("export extern function foo") >= 0;
 }
 
 // ===== Circular Import Tests =====
@@ -892,6 +867,7 @@ function sharedPreludeShape(ctx: CheckerContext): string {
 }
 
 test "a graph check leaves the prelude every build shares as it found it" {
+	resetInstantiationState();
 	const shared = preludeContextFor("", ".cms");
 	const before = sharedPreludeShape(shared);
 	const entries: MapEntry[] = [];
@@ -901,4 +877,12 @@ test "a graph check leaves the prelude every build shares as it found it" {
 	assert findModule(graph, "/src/a.ms")!.errors.length == 0;
 	assert getPreludeContext().table == shared.table;
 	assert sharedPreludeShape(shared) == before;
+}
+
+test "a std module of the shared prelude reads the std modules it imports" {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/b.ms", entrySource: "interface Todo { title: string; }\nconst todo: Todo = { title: \"a\" };\nconsole.log(Reflect.has(todo, \"title\"), Reflect.has([1, 2], 0));\n" });
+	const graph = loadModuleGraph("/src/b.ms", createMapProvider(entries));
+	checkModuleGraph(graph, "");
+	assert findModule(graph, "/src/b.ms")!.errors.length == 0;
 }

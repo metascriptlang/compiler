@@ -15,7 +15,7 @@ import {
 import { Token } from "../../../lexer/token";
 import { callPrintNode } from "./callbacks";
 import { sourceByteAt, sourceSpan, writtenCommaBetween, writtenInitializer, writtenOptional, writtenTypeAfterOptional, unoptionalized } from "./literals";
-import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, writtenName, commentedList, paramListComments, printBlock, wrapNodeComments, isSynthesized, takeStructAccessors } from "./statements";
+import { flagHas, flagGet, buildParamList, paramListInParens, wrapGenerics, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printBlock, wrapNodeComments, isSynthesized, takeStructAccessors } from "./statements";
 
 function commentedSpecifiers(names: Doc[], locs: SourceLocation[], node: Node): Doc | null {
 	const endLine = node.location.endLine > 0 ? node.location.endLine : 999999;
@@ -30,6 +30,23 @@ function commentedSpecifiers(names: Doc[], locs: SourceLocation[], node: Node): 
 	return commentedList(names, locs, inner, "{", "}");
 }
 
+function typeModifier(node: Node): string {
+	return node.flags.has(NodeFlag.TypeModifier) ? "type " : "";
+}
+
+function specifierDocs(d: ImportDeclData): Doc[] {
+	const names: Doc[] = [];
+	for (let i = 0; i < d.importNames.length; i += 1) {
+		const name = d.importTypeNames.includes(d.importNames[i]) ? "type " + d.importNames[i] : d.importNames[i];
+		if (d.importAliases[i] != "" && d.importAliases[i] != d.importNames[i]) {
+			names.push(docText(name + " as " + d.importAliases[i]));
+		} else {
+			names.push(docText(name));
+		}
+	}
+	return names;
+}
+
 export function printImportDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ImportDeclData;
 	// Namespace import: `import * as M from "..."` — single `*` specifier with alias.
@@ -37,20 +54,13 @@ export function printImportDecl(node: Node, options: FormatOptions): Doc {
 		let q = "\"";
 		if (options.singleQuote) q = "'";
 		const alias = d.importAliases[0];
-		const head = alias != "" && alias != "*" ? "import * as " + alias + " from " : "import * from ";
+		const head = "import " + typeModifier(node) + (alias != "" && alias != "*" ? "* as " + alias + " from " : "* from ");
 		const tail = options.semi ? ";" : "";
 		return docGroup([docText(head + q + d.importSource + q + tail)]);
 	}
-	const parts: Doc[] = [docText("import ")];
+	const parts: Doc[] = [docText("import " + typeModifier(node))];
 	if (d.importNames.length > 0) {
-		const names: Doc[] = [];
-		for (let i = 0; i < d.importNames.length; i += 1) {
-			if (d.importAliases[i] != "" && d.importAliases[i] != d.importNames[i]) {
-				names.push(docText(d.importNames[i] + " as " + d.importAliases[i]));
-			} else {
-				names.push(docText(d.importNames[i]));
-			}
-		}
+		const names = specifierDocs(d);
 		// Prettier pattern: single specifier stays inline, multiple use group + indent + line
 		const commented = commentedSpecifiers(names, d.nameLocations, node);
 		if (commented != null) {
@@ -135,20 +145,13 @@ function printReExport(inner: Node, outer: Node, options: FormatOptions): Doc {
 	// Star re-export: `export * from "..."` — single `*` specifier (no alias).
 	if (id.importNames.length == 1 && id.importNames[0] == "*") {
 		const alias = id.importAliases[0];
-		const head = alias != "" && alias != "*" ? "export * as " + alias + " from " : "export * from ";
+		const head = "export " + typeModifier(inner) + (alias != "" && alias != "*" ? "* as " + alias + " from " : "* from ");
 		const tail = options.semi ? ";" : "";
 		return docGroup([docText(head + q + id.importSource + q + tail)]);
 	}
-	const parts: Doc[] = [docText("export ")];
+	const parts: Doc[] = [docText("export " + typeModifier(inner))];
 	if (id.importNames.length > 0) {
-		const names: Doc[] = [];
-		for (let i = 0; i < id.importNames.length; i += 1) {
-			if (id.importAliases[i] != "" && id.importAliases[i] != id.importNames[i]) {
-				names.push(docText(id.importNames[i] + " as " + id.importAliases[i]));
-			} else {
-				names.push(docText(id.importNames[i]));
-			}
-		}
+		const names = specifierDocs(id);
 		const commented = commentedSpecifiers(names, id.nameLocations, outer);
 		if (commented != null) {
 			parts.push(commented);
@@ -289,7 +292,7 @@ export function printEnumDecl(node: Node, options: FormatOptions): Doc {
 function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions): Doc {
 	const d = node.data as InterfaceDeclData;
 	const extendsClause = d.interfaceExtends.length > 0 ? " extends " + d.interfaceExtends.join(", ") : "";
-	const head = keyword + " " + d.interfaceName + genericsFor(options, d.nameLocation, d.interfaceName, node.typeArg) + extendsClause;
+	const head = keyword + " " + d.interfaceName + genericsFor(options, d.nameLocation, d.interfaceName, node.typeArg) + extendsClause + (d.nativeName != "" ? " from \"" + d.nativeName + "\"" : "");
 	const accessors = keyword == "struct" ? takeStructAccessors() : [];
 	let accessorIdx = 0;
 	if (d.interfaceFields.length == 0 && accessors.length == 0) return docText(head + " {}");
@@ -398,10 +401,22 @@ function printStructLikeDecl(node: Node, keyword: string, options: FormatOptions
 	]);
 }
 
-function printStructGetter(fn: Node, options: FormatOptions): Doc {
+function printStructGetter(getter: Node, options: FormatOptions): Doc {
+	const parts: Doc[] = [];
+	let fn = getter;
+	if (getter.kind == NodeKind.DecoratedDecl) {
+		const dd = getter.data as DecoratedDeclData;
+		fn = dd.decoratedNode.kind == NodeKind.ExportDecl ? (dd.decoratedNode.data as ExportDeclData).exportedDecl : dd.decoratedNode;
+		for (const dec of dd.decorators) {
+			parts.push(callPrintNode(dec, options));
+			parts.push(dec.location.line != fn.location.line ? docHardLine() : docText(" "));
+		}
+	}
 	const fd = fn.data as FunctionDeclData;
 	const ret = fd.fnReturnType != "" ? ": " + fd.fnReturnType : "";
-	return docGroup([docText("get " + fd.fnName.slice(4, fd.fnName.length) + "()" + ret + " "), callPrintNode(fd.fnBody, options)]);
+	parts.push(docText("get " + fd.fnName.slice(4, fd.fnName.length) + "()" + ret + " "));
+	parts.push(callPrintNode(fd.fnBody, options));
+	return docGroup(parts);
 }
 
 export function printInterfaceDecl(node: Node, options: FormatOptions): Doc {
@@ -641,8 +656,11 @@ export function printMacroDecl(node: Node, options: FormatOptions): Doc {
 
 export function printConstructorDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ConstructorDeclData;
+	const visibility = d.ctorVisibility != "" ? d.ctorVisibility + " " : "";
+	const asWritten = headerAsWritten(node, d.ctorBody, options, null);
+	if (asWritten != null) return docGroup([docText(visibility), asWritten, callPrintNode(d.ctorBody, options)]);
 	const params = buildParamList(d.ctorParams, d.ctorParamTypes, d.ctorDefaults, options, node.paramLocations);
-	const parts: Doc[] = [docText("constructor")];
+	const parts: Doc[] = [docText(visibility + "constructor")];
 	for (const p of paramListInParens(params, options)) parts.push(p);
 	parts.push(docText(" "));
 	parts.push(callPrintNode(d.ctorBody, options));
@@ -657,13 +675,16 @@ export function printMethodDecl(node: Node, options: FormatOptions): Doc {
 	const isAsync = flagHas(d.methodFlags, "async") || flagHas(d.methodFlags, "async_generator") || flagHas(d.methodFlags, "async_actor");
 	const isGen = flagHas(d.methodFlags, "generator") || flagHas(d.methodFlags, "async_generator");
 
-	const head = (d.methodVisibility != "" ? d.methodVisibility + " " : "")
+	const modifiers = (d.methodVisibility != "" ? d.methodVisibility + " " : "")
 		+ (d.methodIsStatic ? "static " : "")
 		+ (isExtern ? "extern " : "")
 		+ (isAsync ? "async " : "")
-		+ (isGen ? "*" : "")
+		+ (isGen ? "*" : "");
+	const head = modifiers
 		+ (node.flags.has(NodeFlag.Accessor) ? d.methodName.slice(0, 3) + " " + d.methodName.slice(4, d.methodName.length) : writtenName(options, d.nameLocation, d.methodName)) + genericsFor(options, d.nameLocation, writtenName(options, d.nameLocation, d.methodName), flagGet(d.methodFlags, "gen"));
 
+	const asWritten = headerAsWritten(node, d.methodBody, options, node.paramLocations);
+	if (asWritten != null) return docGroup([docText(modifiers), asWritten, callPrintNode(d.methodBody, options)]);
 	const parts: Doc[] = [docText(head)];
 	const params = buildParamList(d.methodParams, d.methodParamTypes, d.methodDefaults, options, node.paramLocations);
 	const paramComments = paramListComments(node, d.methodBody);

@@ -1,6 +1,7 @@
 import { Node, NodeKind, NodeFlag, SymbolKind, Type, TypeKind, TypeAssertionData, HiddenDerefData, MemberExprData, OutExprData, BinaryExprData, UpdateExprData, createNodeAt } from "../../ast/node";
 import { TransformContext } from "../context";
-import { walkNode, isAssignOp } from "../walker";
+import { walkNode } from "../walker";
+import { isAssignOp } from "../../ast/operators";
 import { skipModifier, unwrapRefNullUnion, isUnknownType, isUnresolvedType, getProperty } from "../../checker/types";
 import { GcMode } from "../../checker/context";
 

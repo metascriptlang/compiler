@@ -1,5 +1,4 @@
 // @stdout: nested: rS3S4 4
-// @xfail(raiser): Raiser keeps the eager spread lowering (no conditional-expression pass), so a conditional or per-iteration spread runs once, first
 let log = "";
 function side(v: int32): int32 { log = log + "S" + v.toString(); return v; }
 function lead(): int32 { log = log + "a"; return 1; }

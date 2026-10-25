@@ -12,7 +12,7 @@
 #include <string.h>
 
 /* mbedTLS AES — only need the core AES module */
-#include "mbedtls/aes.h"
+#include "mbedtls/private/aes.h"
 
 /* ===== Random IV Generation ===== */
 
@@ -221,10 +221,10 @@ msString msCryptoAesSeal(msString key, msString plainText, msString aad) {
 	return result;
 }
 
-msString msCryptoAesOpen(msString key, msString sealed, msString aad) {
+int64_t msCryptoAesOpen(msString key, msString sealed, msString aad, msString* plainTextOut) {
 	int keyBits = (int)key.len * 8;
-	if (keyBits != 128 && keyBits != 256) return MS_EMPTY_STRING;
-	if (sealed.len < 28) return MS_EMPTY_STRING; /* minimum: 12 nonce + 0 ct + 16 tag */
+	if (keyBits != 128 && keyBits != 256) return 0;
+	if (sealed.len < 28) return 0; /* minimum: 12 nonce + 0 ct + 16 tag */
 
 	const uint8_t* keyData = (const uint8_t*)msStringToCString(key);
 	const uint8_t* sealedData = (const uint8_t*)msStringToCString(sealed);
@@ -237,14 +237,14 @@ msString msCryptoAesOpen(msString key, msString sealed, msString aad) {
 	const uint8_t* ct = sealedData + 12;
 	const uint8_t* expectedTag = sealedData + 12 + ctLen;
 
-	uint8_t* plainText = (uint8_t*)malloc(ctLen);
-	if (!plainText) return MS_EMPTY_STRING;
+	uint8_t* plainText = (uint8_t*)malloc(ctLen > 0 ? ctLen : 1);
+	if (!plainText) return 0;
 
 	uint8_t computedTag[16];
 	if (!aesGcmCrypt(keyBits, keyData, ct, ctLen, nonce, 12,
 	                 aadData, aadLen, plainText, computedTag, 0)) {
 		free(plainText);
-		return MS_EMPTY_STRING;
+		return 0;
 	}
 
 	/* Constant-time tag comparison */
@@ -252,76 +252,13 @@ msString msCryptoAesOpen(msString key, msString sealed, msString aad) {
 	for (int i = 0; i < 16; i++) diff |= computedTag[i] ^ expectedTag[i];
 	if (diff != 0) {
 		free(plainText);
-		return MS_EMPTY_STRING;
+		return 0;
 	}
 
-	msString result = msStringNew((const char*)plainText, (int64_t)ctLen);
+	msStringDestroy(*plainTextOut);
+	*plainTextOut = msStringNew((const char*)plainText, (int64_t)ctLen);
 	free(plainText);
-	return result;
-}
-
-msString msCryptoAesGcmEncrypt(msString key, msString plainText, msString iv, msString aad, msString* tagOut) {
-	int keyBits = (int)key.len * 8;
-	if (keyBits != 128 && keyBits != 256) return MS_EMPTY_STRING;
-
-	const uint8_t* keyData = (const uint8_t*)msStringToCString(key);
-	const uint8_t* ptData = (const uint8_t*)msStringToCString(plainText);
-	size_t ptLen = (size_t)plainText.len;
-	const uint8_t* ivData = (const uint8_t*)msStringToCString(iv);
-	size_t ivLen = (size_t)iv.len;
-	const uint8_t* aadData = aad.len > 0 ? (const uint8_t*)msStringToCString(aad) : NULL;
-	size_t aadLen = (size_t)aad.len;
-
-	uint8_t* ct = (uint8_t*)malloc(ptLen);
-	if (!ct) return MS_EMPTY_STRING;
-
-	uint8_t tag[16];
-	if (!aesGcmCrypt(keyBits, keyData, ptData, ptLen, ivData, ivLen,
-	                 aadData, aadLen, ct, tag, 1)) {
-		free(ct);
-		return MS_EMPTY_STRING;
-	}
-
-	*tagOut = msStringNew((const char*)tag, 16);
-	msString result = msStringNew((const char*)ct, (int64_t)ptLen);
-	free(ct);
-	return result;
-}
-
-msString msCryptoAesGcmDecrypt(msString key, msString cipherText, msString iv, msString aad, msString authTag) {
-	int keyBits = (int)key.len * 8;
-	if (keyBits != 128 && keyBits != 256) return MS_EMPTY_STRING;
-	if (authTag.len != 16) return MS_EMPTY_STRING;
-
-	const uint8_t* keyData = (const uint8_t*)msStringToCString(key);
-	const uint8_t* ctData = (const uint8_t*)msStringToCString(cipherText);
-	size_t ctLen = (size_t)cipherText.len;
-	const uint8_t* ivData = (const uint8_t*)msStringToCString(iv);
-	size_t ivLen = (size_t)iv.len;
-	const uint8_t* aadData = aad.len > 0 ? (const uint8_t*)msStringToCString(aad) : NULL;
-	size_t aadLen = (size_t)aad.len;
-
-	uint8_t* pt = (uint8_t*)malloc(ctLen);
-	if (!pt) return MS_EMPTY_STRING;
-
-	uint8_t computedTag[16];
-	if (!aesGcmCrypt(keyBits, keyData, ctData, ctLen, ivData, ivLen,
-	                 aadData, aadLen, pt, computedTag, 0)) {
-		free(pt);
-		return MS_EMPTY_STRING;
-	}
-
-	volatile uint8_t diff = 0;
-	const uint8_t* expectedTag = (const uint8_t*)msStringToCString(authTag);
-	for (int i = 0; i < 16; i++) diff |= computedTag[i] ^ expectedTag[i];
-	if (diff != 0) {
-		free(pt);
-		return MS_EMPTY_STRING;
-	}
-
-	msString result = msStringNew((const char*)pt, (int64_t)ctLen);
-	free(pt);
-	return result;
+	return 1;
 }
 
 msString msCryptoAesCbcEncrypt(msString key, msString plainText, msString iv) {

@@ -23,7 +23,7 @@
 //
 // Env: MSC=<path to msc> (default: ./msc, else installed msc)   GUARD_GC="drc orc" (default both)
 import { execFileResult, ExecFileResult, exit, env, cwd, cmdExists, platform, arch } from "std/process";
-import { readFile, writeFile, readDir, exists, ensureDir, remove, removeAll, symlink } from "std/fs";
+import { readFile, writeFile, readDir, exists, ensureDir, remove, removeAll, rename, symlink } from "std/fs";
 
 function slashes(p: string): string {
 	return p.replaceAll("\\", "/");
@@ -66,7 +66,9 @@ const CLAIMS = envOr("GUARD_CLAIMS", "");
 
 function claimProbe(probe: Probe, i: int32): boolean {
 	if (CLAIMS == "") return i % SHARD_COUNT == SHARD_INDEX;
-	return remove(`${CLAIMS}/${probe.name}`).ok;
+	// APFS lets two processes both unlink one file successfully (measured 2026-10-25, 211-826 of
+	// 3000); rename(2) stays exclusive there, so a claim is a rename, never a remove.
+	return rename(`${CLAIMS}/${probe.name}`, `${CLAIMS}/taken/${probe.name}.${SHARD_INDEX}`).ok;
 }
 const BIN_DIR = `${OUT}/bin`;
 const LOG_DIR = `${OUT}/logs`;

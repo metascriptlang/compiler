@@ -18,6 +18,7 @@
  * normalization. Runs before main via the constructor the runtime already
  * relies on elsewhere. */
 __attribute__((constructor)) static void msStdStreamsBinaryMode(void) {
+	_setmode(_fileno(stdin), _O_BINARY);
 	_setmode(_fileno(stdout), _O_BINARY);
 	_setmode(_fileno(stderr), _O_BINARY);
 }
@@ -44,6 +45,17 @@ MS_TLS_PUBLISH(msErrPayload)
  * never run (lost wakeup; proven by the spawn-inside-actor hang, 2026-09-05).
  * Held only for list-pointer swaps, never while callbacks execute. */
 _Atomic(int) gMsFutCbLock = 0;
+
+/* One spawn lock for the whole program (see _msSpawnCreateLock in runtime/process.h).
+ * std/process and std/process/child each include that header into their own C file, so a
+ * lock defined there would be one per file and would serialize nothing between them. */
+#ifdef _WIN32
+#include <windows.h>
+SRWLOCK _msSpawnCreateLock = SRWLOCK_INIT;
+#elif !defined(__EMSCRIPTEN__) && !defined(__wasi__)
+#include <pthread.h>
+pthread_mutex_t _msSpawnCreateLock = PTHREAD_MUTEX_INITIALIZER;
+#endif
 
 void msPrintln(msString s) {
 	if (s.p != NULL && s.len > 0) {
@@ -254,6 +266,21 @@ msString msStrLitConv(msString s, msString members, msString target) {
 		i += n;
 	}
 	msRaiseStrLitError(s, target);
+}
+
+_Noreturn void msRaiseNumLitError(double v, msString target) {
+	msString shown = msNumberToString(v);
+	fprintf(stderr, "Error: invalid union conversion: %.*s is not %.*s\n", (int)shown.len, shown.p != NULL ? shown.p->data : "",
+		(int)target.len, target.p != NULL ? target.p->data : "");
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
+double msNumLitConv(double v, const double* members, int64_t n, msString target) {
+	for (int64_t i = 0; i < n; i += 1) {
+		if (members[i] == v) return v;
+	}
+	msRaiseNumLitError(v, target);
 }
 
 _Noreturn void msRaiseUnreachable(const char* text) {

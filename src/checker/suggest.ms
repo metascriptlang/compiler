@@ -7,8 +7,8 @@
 import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, ArrayAccessData, BinaryExprData, ConditionalExprData, TypeAssertionData, UpdateExprData, VariableDeclData, FunctionDeclData, ObjectLiteralData, TryExprData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenStdConvData, HiddenDerefData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, DecoratedDeclData, MacroDeclData, TestDeclData, ExternDeclData, ExternKind, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, SpreadExprData, NodeFlag, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { typeNameOf, unwrapRef, numberType, stringType, booleanType, voidType, nullType, noneType, isUnresolvedType, neverType, errorType, isResult, getResultOkType, getResultErrType, isAffineAwaitable, isMaybeType } from "./types";
-import { ScopeKind, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, filterStaticExtsByOwner, getExtFnType, stripReceiverParam, SgSymRecord } from "./context";
+import { ScopeKind, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
+import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, filterStaticExtsByOwner, getExtFnType, stripReceiverParam, SgSymRecord, sgSortRecords } from "./context";
 // (utils/string imports removed — using native .slice/.charAt)
 import { checkProgram } from "./checkPass";
 import { parseSource, parseSourceLenient } from "../parser/statements/validation";
@@ -85,19 +85,13 @@ export interface SgSignatureInfo {
 // Cost: O(nodes in the file). Acceptable at hover latency targets; the
 // cursor is a single position and the walker short-circuits on the first hit.
 
-let _callExprWalkDepth: int32 = 0;
-const CALL_EXPR_WALK_LIMIT: int32 = 200;
-
 export function sgFindCallExprByCalleeLocation(program: Node, line: int32, col: int32): Node | null {
 	if (program == null) return null;
-	_callExprWalkDepth = 0;
 	return findCallExprHelper(program, line, col);
 }
 
 function findCallExprHelper(node: Node, line: int32, col: int32): Node | null {
 	if (node == null) return null;
-	if (_callExprWalkDepth >= CALL_EXPR_WALK_LIMIT) return null;
-	_callExprWalkDepth = _callExprWalkDepth + 1;
 	if (node.kind == NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;
 		if (cd.callee != null && cd.callee.location != null
@@ -122,13 +116,58 @@ function findCallExprHelper(node: Node, line: int32, col: int32): Node | null {
 	return found;
 }
 
+export const FIELD_NO_CONTAINER: int32 = -1;
+export const FIELD_NOT_DECLARED_HERE: int32 = 0;
+
+export function sgFieldDeclLine(program: Node, container: SourceLocation, field: string): int32 {
+	let decl: Node | null = null;
+	walkForContainer(program, container, (found: Node): void => {
+		if (decl == null) decl = found;
+	});
+	if (decl == null) return FIELD_NO_CONTAINER;
+	return fieldLineIn(decl, field);
+}
+
+function walkForContainer(node: Node, at: SourceLocation, found: (n: Node) => void): void {
+	if (node == null) return;
+	const isContainer = node.kind == NodeKind.InterfaceDecl || node.kind == NodeKind.StructDecl
+		|| node.kind == NodeKind.ClassDecl || node.kind == NodeKind.ActorDecl;
+	if (isContainer && node.location.line == at.line && node.location.column == at.column) {
+		found(node);
+		return;
+	}
+	forEachChild(node, (child: Node): void => walkForContainer(child, at, found));
+}
+
+function fieldLineIn(decl: Node, field: string): int32 {
+	if (decl.kind == NodeKind.InterfaceDecl || decl.kind == NodeKind.StructDecl) {
+		const d = decl.data as InterfaceDeclData;
+		for (let i = 0; i < d.interfaceFields.length; i += 1) {
+			if (d.interfaceFields[i] == field && decl.paramLocations != null && i < decl.paramLocations.length) return decl.paramLocations[i].line;
+		}
+		return FIELD_NOT_DECLARED_HERE;
+	}
+	const body = decl.kind == NodeKind.ClassDecl ? (decl.data as ClassDeclData).classBody : (decl.data as ActorDeclData).actorBody;
+	for (const member of body) {
+		let m = member;
+		if (m.kind == NodeKind.DecoratedDecl) m = (m.data as DecoratedDeclData).decoratedNode;
+		if (m.kind == NodeKind.PropertyDecl && (m.data as PropertyDeclData).propName == field) return m.location.line;
+	}
+	return FIELD_NOT_DECLARED_HERE;
+}
+
 // ===== sgQueryAtPosition — binary search on check-time records =====
 // Replaces the fragile AST walker (sgFindNodeAtPosition + sgGetSymbolAtCursor).
 // Records are sorted by (line, col) after check completes.
 
+function sortedRecords(ctx: CheckerContext): SgSymRecord[] {
+	sgSortRecords(ctx.symRecords);
+	return ctx.symRecords;
+}
+
 export function sgQueryAtPosition(ctx: CheckerContext, line: int32, col: int32): SgSuggest {
 	if (ctx.symRecords == null || ctx.symRecords.length == 0) return null as unknown as SgSuggest;
-	const records = ctx.symRecords;
+	const records = sortedRecords(ctx);
 	// Binary search for first record on this line
 	let lo = 0;
 	let hi = records.length - 1;
@@ -158,7 +197,7 @@ export function sgQueryAtPosition(ctx: CheckerContext, line: int32, col: int32):
 // contextual type when completing object fields.
 export function sgQueryContextualTypeAt(ctx: CheckerContext, line: int32, col: int32): SgSuggest {
 	if (ctx.symRecords == null || ctx.symRecords.length == 0) return null as unknown as SgSuggest;
-	const records = ctx.symRecords;
+	const records = sortedRecords(ctx);
 	let lo = 0;
 	let hi = records.length - 1;
 	while (lo <= hi) {
@@ -213,7 +252,7 @@ function sgSuggestFromRecord(rec: SgSymRecord): SgSuggest {
 export function sgQueryBySym(ctx: CheckerContext, targetSym: Symbol | null): SgSymbolRef[] {
 	const result: SgSymbolRef[] = [];
 	if (ctx.symRecords == null || targetSym == null) return result;
-	const records = ctx.symRecords;
+	const records = sortedRecords(ctx);
 	let i = 0;
 	while (i < records.length) {
 		const rec = records[i];
@@ -229,7 +268,7 @@ export function sgQueryBySym(ctx: CheckerContext, targetSym: Symbol | null): SgS
 export function sgQueryByName(ctx: CheckerContext, name: string, modulePath: string): SgSymbolRef[] {
 	const result: SgSymbolRef[] = [];
 	if (ctx.symRecords == null) return result;
-	const records = ctx.symRecords;
+	const records = sortedRecords(ctx);
 	let i = 0;
 	while (i < records.length) {
 		const rec = records[i];
@@ -244,11 +283,11 @@ export function sgQueryByName(ctx: CheckerContext, name: string, modulePath: str
 }
 
 // Strict cross-module match: name AND defining module must match exactly.
-// Rust-analyzer two-pass: fast text match + precise semantic confirmation.
+// Two-pass: fast text match + precise semantic confirmation.
 export function sgQueryByDefiningModule(ctx: CheckerContext, name: string, defModule: string): SgSymbolRef[] {
 	const result: SgSymbolRef[] = [];
 	if (ctx.symRecords == null) return result;
-	const records = ctx.symRecords;
+	const records = sortedRecords(ctx);
 	let i = 0;
 	while (i < records.length) {
 		const rec = records[i];
@@ -1103,7 +1142,7 @@ function sgPrefixMatch(prefix: string, name: string): number {
 function sgCountSymUsages(ctx: CheckerContext, targetSym: Symbol): number {
 	if (ctx.symRecords == null || targetSym == null) return 0;
 	let count = 0;
-	const records = ctx.symRecords;
+	const records = sortedRecords(ctx);
 	for (let i = 0; i < records.length; i = i + 1) {
 		if (records[i].sym == targetSym) count = count + 1;
 	}
@@ -1917,8 +1956,16 @@ function sgJoinFieldNames(names: string[]): string {
 	return result;
 }
 
-function sgGetSymbolDetail(ctx: CheckerContext, name: string): string {
-	const sym = lookupSymbol(ctx.table, name);
+function sgDeclaredSymAt(ctx: CheckerContext, loc: SourceLocation): Symbol | null {
+	if (ctx.symRecords == null || loc == null) return null;
+	for (const rec of ctx.symRecords) {
+		if (rec.isDecl && rec.line == loc.line && rec.col == loc.column) return rec.sym;
+	}
+	return null;
+}
+
+function sgGetSymbolDetail(ctx: CheckerContext, loc: SourceLocation): string {
+	const sym = sgDeclaredSymAt(ctx, loc);
 	if (sym == null) return "";
 	if (sym.symbolType == null) return "";
 	return sgTypeToString(sym.symbolType);
@@ -1984,7 +2031,7 @@ function sgCollectPatternNames(pattern: Node, isMutable: boolean, ctx: CheckerCo
 	if (pattern.kind == NodeKind.Identifier) {
 		const id = pattern.data as IdentifierData;
 		if (id.name == "_") return;
-		const dt = sgGetSymbolDetail(ctx, id.name);
+		const dt = sgGetSymbolDetail(ctx, pattern.location);
 		result.push({ name: id.name, kind: SymbolKind.Variable, location: pattern.location, detail: dt, isMutable, children: [] });
 		return;
 	}
@@ -2015,14 +2062,14 @@ function sgCollectOneSymbol(node: Node, ctx: CheckerContext, result: SgDocumentS
 
 	if (node.kind == NodeKind.FunctionDecl) {
 		const fd = node.data as FunctionDeclData;
-		const dt = sgGetSymbolDetail(ctx, fd.fnName);
+		const dt = sgGetSymbolDetail(ctx, fd.nameLocation);
 		const item: SgDocumentSymbol = { name: fd.fnName, kind: SymbolKind.Function, location: node.location, detail: dt, isMutable: false, children: [] };
 		result.push(item);
 		return;
 	}
 	if (node.kind == NodeKind.VariableDecl) {
 		const vd = node.data as VariableDeclData;
-		const dt = sgGetSymbolDetail(ctx, vd.declName);
+		const dt = sgGetSymbolDetail(ctx, vd.nameLocation);
 		const mut = vd.declKind != DeclKind.Const;
 		const item: SgDocumentSymbol = { name: vd.declName, kind: SymbolKind.Variable, location: node.location, detail: dt, isMutable: mut, children: [] };
 		result.push(item);
@@ -2061,7 +2108,7 @@ function sgCollectOneSymbol(node: Node, ctx: CheckerContext, result: SgDocumentS
 	}
 	if (node.kind == NodeKind.TypeAliasDecl) {
 		const td = node.data as TypeAliasDeclData;
-		const dt = sgGetSymbolDetail(ctx, td.aliasName);
+		const dt = sgGetSymbolDetail(ctx, td.nameLocation);
 		const item: SgDocumentSymbol = { name: td.aliasName, kind: SymbolKind.TypeAlias, location: node.location, detail: dt, isMutable: false, children: [] };
 		result.push(item);
 		return;
@@ -2375,10 +2422,7 @@ function sgCollectVarTypeHint(
 	// Only show hint if no explicit type annotation
 	if (vd.declType.length > 0) return;
 
-	// Use resolvedSym from the checked AST node (set during semantic analysis).
-	// Scope-based lookupSymbol is unreliable after checker finishes — function scopes
-	// are closed, so prelude extensions with the same name could shadow local variables.
-	const sym = node.resolvedSym != null ? node.resolvedSym : lookupSymbol(ctx.table, vd.declName);
+	const sym = node.resolvedSym;
 	if (sym == null) return;
 	if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Parameter) return;
 	if (sym.symbolType == null) return;
@@ -2466,7 +2510,7 @@ function sgCollectReturnTypeHint(
 	// Only show hint if no explicit return type annotation
 	if (fd.fnReturnType.length > 0) return;
 
-	const sym = lookupSymbol(ctx.table, fd.fnName);
+	const sym = node.resolvedSym;
 	if (sym == null) return;
 	if (sym.symbolType == null) return;
 	const retType = sym.symbolType.typeReturn;
@@ -2499,14 +2543,7 @@ function sgCollectCallParamHints(
 	if (node.location.line < startLine) return;
 	if (node.location.line > endLine) return;
 
-	let calleeName = "";
-	if (cd.callee != null && cd.callee.kind == NodeKind.Identifier) {
-		const cid = cd.callee.data as IdentifierData;
-		calleeName = cid.name;
-	}
-	if (calleeName == "") return;
-
-	const sym = lookupSymbol(ctx.table, calleeName);
+	const sym = sgCalleeSym(node);
 	if (sym == null) return;
 	if (sym.symbolType == null) return;
 	if (sym.symbolType.kind != TypeKind.Function) return;
@@ -2609,20 +2646,25 @@ function sgLeftmostLocation(node: Node): SourceLocation {
 // ===== Exception Inlay Hints =====
 
 // Infer the return type of a call expression's callee.
+function sgCalleeSym(call: Node): Symbol | null {
+	const cd = call.data as CallExprData;
+	if (cd.callee == null || cd.callee.kind != NodeKind.Identifier) return null;
+	const sym = cd.callee.resolvedSym;
+	if (sym == null) return null;
+	const idx = cd.resolvedOverloadIdx;
+	if (sym.overloads != null && idx > 0 && idx - 1 < sym.overloads.length) return sym.overloads[idx - 1];
+	return sym;
+}
+
 function inferCalleeReturnType(ctx: CheckerContext, node: Node): Type | null {
 	if (node.kind == NodeKind.CallExpr) {
-		const cd = node.data as CallExprData;
-		if (cd.callee != null && cd.callee.kind == NodeKind.Identifier) {
-			const id = cd.callee.data as IdentifierData;
-			const sym = lookupSymbol(ctx.table, id.name);
-			if (sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function) {
-				return sym.symbolType.typeReturn;
-			}
+		const sym = sgCalleeSym(node);
+		if (sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function) {
+			return sym.symbolType.typeReturn;
 		}
 	}
 	if (node.kind == NodeKind.Identifier) {
-		const id = node.data as IdentifierData;
-		const sym = lookupSymbol(ctx.table, id.name);
+		const sym = node.resolvedSym;
 		if (sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function) {
 			return sym.symbolType.typeReturn;
 		}
@@ -2703,9 +2745,35 @@ export interface SgSemanticToken {
 
 export function sgCollectSemanticTokens(ctx: CheckerContext, program: Node): SgSemanticToken[] {
 	const result: SgSemanticToken[] = [];
+	const recorded = new HashSet<string>();
+	if (ctx.symRecords != null) {
+		for (const rec of sortedRecords(ctx)) {
+			const sym = rec.sym;
+			if (sym == null || rec.colEnd <= rec.col || isKeywordRecord(rec)) continue;
+			const at = `${rec.line}:${rec.col}`;
+			if (recorded.has(at)) continue;
+			recorded.add(at);
+			result.push({ line: rec.line, col: rec.col, length: rec.colEnd - rec.col, tokenType: sgSymbolToTokenType(rec.kind), modifiers: recordModifiers(rec, sym) });
+		}
+	}
 	if (program == null) return result;
-	sgCollectTokensInNode(ctx, program, result);
+	const walked: SgSemanticToken[] = [];
+	sgCollectTokensInNode(ctx, program, walked);
+	for (const tok of walked) {
+		if (!recorded.has(`${tok.line}:${tok.col}`)) result.push(tok);
+	}
 	return result;
+}
+
+function isKeywordRecord(rec: SgSymRecord): boolean {
+	return rec.name == "this" || (rec.isDecl && rec.kind == SymbolKind.Method && rec.name == "constructor");
+}
+
+function recordModifiers(rec: SgSymRecord, sym: Symbol): int32 {
+	let mods: int32 = rec.isDecl ? 1 : 0;
+	if (rec.kind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Mutable)) mods = mods | 4;
+	if (sym.builtinKind.length > 0) mods = mods | 16;
+	return mods;
 }
 
 // Map SymbolKind to semantic token type index
@@ -2726,21 +2794,7 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 	if (node == null) return;
 	const loc = node.location;
 
-	// Identifiers: look up symbol for semantic classification
-	if (node.kind == NodeKind.Identifier) {
-		const id = node.data as IdentifierData;
-		if (id.name.length == 0) return;
-		const sym = lookupSymbol(ctx.table, id.name);
-		if (sym != null) {
-			const tt = sgSymbolToTokenType(sym.symbolKind);
-			let mods: int32 = 0;
-			if (!hasFlag(sym, SymbolFlag.Mutable) && sym.symbolKind == SymbolKind.Variable) mods = 4; // readonly bit 2
-			if (sym.builtinKind.length > 0) mods = mods | 16; // defaultLibrary bit 4
-			const tok: SgSemanticToken = { line: loc.line, col: loc.column, length: id.name.length, tokenType: tt, modifiers: mods };
-			tokens.push(tok);
-		}
-		return;
-	}
+	if (node.kind == NodeKind.Identifier) return;
 
 	// Declaration names get declaration modifier (bit 0)
 	if (node.kind == NodeKind.FunctionDecl) {
@@ -2853,25 +2907,7 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 		return;
 	}
 
-	// ImportDecl: classify each imported name by its resolved symbol kind
-	if (node.kind == NodeKind.ImportDecl) {
-		const imp = node.data as ImportDeclData;
-		for (let ii = 0; ii < imp.importNames.length; ii += 1) {
-			const name = imp.importNames[ii];
-			if (ii >= imp.nameLocations.length) continue;
-			const nameLoc = imp.nameLocations[ii];
-			if (name.length == 0 || nameLoc == null) continue;
-			const alias = imp.importAliases[ii];
-			const lookupName = (alias != "" && alias != name) ? alias : name;
-			const sym = lookupSymbol(ctx.table, lookupName);
-			if (sym != null) {
-				const tt = sgSymbolToTokenType(sym.symbolKind);
-				const tok: SgSemanticToken = { line: nameLoc.line, col: nameLoc.column, length: name.length, tokenType: tt, modifiers: 0 };
-				tokens.push(tok);
-			}
-		}
-		return;
-	}
+	if (node.kind == NodeKind.ImportDecl) return;
 
 	// ExternDecl: skip — tree-sitter handles extern keyword highlighting.
 	if (node.kind == NodeKind.ExternDecl) return;
@@ -3845,6 +3881,7 @@ test "import line: cursor in path triggers ImportPath" {
 		importNames: ["BuildConfig"],
 		importAliases: ["BuildConfig"],
 		importSource: "std/build",
+		importTypeNames: [],
 		nameLocations: [makeLoc(1, 10)],
 	}, makeLoc(1, 1));
 	assert importContextFromAST(importNode, 30) == "path";
@@ -3856,6 +3893,7 @@ test "import line: cursor in braces triggers ImportName" {
 		importNames: ["BuildConfig"],
 		importAliases: ["BuildConfig"],
 		importSource: "std/build",
+		importTypeNames: [],
 		nameLocations: [makeLoc(1, 10)],
 	}, makeLoc(1, 1));
 	assert importContextFromAST(importNode, 12) == "names";
@@ -3879,4 +3917,49 @@ test "empty line inside NESTED ObjectLiteral triggers ObjectField" {
 	const obj = findEnclosingObjectLiteral(pr.value, 4, 1);
 	assert obj != null;
 	assert sgDetectCompletionContext(pr.value, 4, 1) == SgCompletionKind.ObjectField;
+}
+
+test "call lookup finds a callee after many visited nodes" {
+	let src = "";
+	for (let i = 0; i < 300; i++) {
+		src = src + "const v" + i.toString() + " = " + i.toString() + ";\n";
+	}
+	src = src + "area(1);";
+	const pr = parseSource(src);
+	if (!pr.ok) { assert false; return; }
+	const call = sgFindCallExprByCalleeLocation(pr.value, 301, 1);
+	assert call != null;
+}
+
+function hintRows(src: string): string {
+	const pr = parseSource(src);
+	if (!pr.ok) return "unparsed";
+	const ctx = checkProgram(pr.value);
+	const rows: string[] = [];
+	for (const h of sgCollectInlayHints(ctx, pr.value, 1, 20)) rows.push(`${h.line}:${h.col} ${h.label}`);
+	return rows.join(", ");
+}
+
+function symbolDetails(src: string): string {
+	const pr = parseSource(src);
+	if (!pr.ok) return "unparsed";
+	const ctx = checkProgram(pr.value);
+	const rows: string[] = [];
+	for (const s of sgCollectSymbolsInFile(ctx, pr.value)) rows.push(`${s.name}=${s.detail}`);
+	return rows.join(", ");
+}
+
+test "a nested function's return hint and its calls' parameter hints come from its own symbol" {
+	const rows = hintRows("function outer(): int32 {\n\tfunction inner(n: int32) { return n + 1; }\n\tconst r = inner(2);\n\treturn r;\n}\n");
+	assert rows == "2:16 : (n: int32) => int32, 3:9 : int32, 3:18 n:", rows;
+}
+
+test "a call to an overload takes the parameter hints of the overload it resolved to" {
+	const rows = hintRows("function f(a: int32): int32 { return a; }\nfunction f(s: string): string { return s; }\nconst x = f(\"t\");\n");
+	assert rows == "3:8 : string, 3:13 s:", rows;
+}
+
+test "each overload and each destructured name details the symbol declared at its name" {
+	const details = symbolDetails("function f(a: int32): int32 { return a; }\nfunction f(s: string): string { return s; }\nconst [p, q] = [1, 2];\ntype Id = int32;\n");
+	assert details == "f=(a: int32) => int32, f=(s: string) => string, p=int32, q=int32, Id=int32", details;
 }

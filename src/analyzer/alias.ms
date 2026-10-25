@@ -12,11 +12,10 @@
 //   skipConvDfa(n): Node               — strip transparent wrappers
 
 import { Node, NodeKind, Symbol, Type, TypeKind, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, HiddenDerefData, HiddenStdConvData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, NewExprData, SpreadExprData, BinaryExprData, UnaryExprData, ConditionalExprData, ExprStmtData, MoveExprData, OutExprData, SymbolKind } from "../ast/node";
-import { forEachChild } from "../ast/visitor";
 import { SymbolFlag, hasFlag, setFlag, isCursorSym, makeSymbol } from "../checker/symbol";
 import { noneType, peelToStructOrUnion, isDiscriminatedUnion, getDiscriminantName, findSharedStringDiscriminant, findSharedBooleanDiscriminant, findSharedEnumDiscriminant } from "../checker/types";
 import { makeHiddenDeref } from "../transform/util";
-import { parseInput } from "../transform/testUtil";
+import { getBody, makeTestSym, attachSymAll } from "./testSupport";
 
 // ===== AliasKind =====
 
@@ -283,14 +282,9 @@ export function deepAliases(dest: Node, ri: Node): boolean {
 
 // ===== Test Helpers =====
 
-function makeTestSym(name: string): Symbol {
-	return makeSymbol(name, SymbolKind.Variable, noneType(), false);
-}
-
 function getExpr(input: string): Node {
-	const result = parseInput(input);
-	if (!result.ok) return null as unknown as Node;
-	const prog = result.value;
+	const prog = getBody(input);
+	if (prog == null) return null as unknown as Node;
 	const d = prog.data as { programStmts: Node[] };
 	if (d.programStmts.length == 0) return null as unknown as Node;
 	const stmt = d.programStmts[0];
@@ -298,38 +292,24 @@ function getExpr(input: string): Node {
 	return (stmt.data as ExprStmtData).expr;
 }
 
-// Test helper: walk a subtree and attach `sym` to every matching Identifier.
-// Nested function bodies are scope boundaries (not recursed into).
-function attachSymToNodeAlias(node: Node, name: string, sym: Symbol): void {
-	if (node == null) return;
-	if (node.kind == NodeKind.Identifier) {
-		if ((node.data as IdentifierData).name == name) node.resolvedSym = sym;
-		return;
-	}
-	if (node.kind == NodeKind.FunctionDecl
-		|| node.kind == NodeKind.ArrowFunction
-		|| node.kind == NodeKind.FunctionExpr) return;
-	forEachChild(node, (c: Node): void => { attachSymToNodeAlias(c, name, sym); });
-}
-
 test "isAnalysableFieldAccess: field of a local = true" {
 	const n = getExpr("x.f;");
-	attachSymToNodeAlias(n, "x", makeTestSym("x"));
+	attachSymAll(n, "x", makeTestSym("x"));
 	assert isAnalysableFieldAccess(n);
 }
 
 test "isAnalysableFieldAccess: field of a parameter = false" {
 	const n = getExpr("x.f;");
-	attachSymToNodeAlias(n, "x", makeSymbol("x", SymbolKind.Parameter, noneType(), false));
+	attachSymAll(n, "x", makeSymbol("x", SymbolKind.Parameter, noneType(), false));
 	assert !isAnalysableFieldAccess(n);
 }
 
 test "isAnalysableFieldAccess: static field of a class or module = false" {
 	const n = getExpr("x.f;");
-	attachSymToNodeAlias(n, "x", makeSymbol("x", SymbolKind.Class, noneType(), false));
+	attachSymAll(n, "x", makeSymbol("x", SymbolKind.Class, noneType(), false));
 	assert !isAnalysableFieldAccess(n);
 	const m = getExpr("x.f;");
-	attachSymToNodeAlias(m, "x", makeSymbol("x", SymbolKind.Module, noneType(), false));
+	attachSymAll(m, "x", makeSymbol("x", SymbolKind.Module, noneType(), false));
 	assert !isAnalysableFieldAccess(m);
 }
 
@@ -337,14 +317,14 @@ test "isAnalysableFieldAccess: field of a global = false" {
 	const n = getExpr("x.f;");
 	const sym = makeTestSym("x");
 	setFlag(sym, SymbolFlag.Global);
-	attachSymToNodeAlias(n, "x", sym);
+	attachSymAll(n, "x", sym);
 	assert !isAnalysableFieldAccess(n);
 }
 
 test "isAnalysableFieldAccess: static of a class or member of a namespace = false" {
 	for (const kind of [SymbolKind.Class, SymbolKind.Module]) {
 		const n = getExpr("x.f;");
-		attachSymToNodeAlias(n, "x", makeSymbol("x", kind, noneType(), false));
+		attachSymAll(n, "x", makeSymbol("x", kind, noneType(), false));
 		assert !isAnalysableFieldAccess(n);
 	}
 }
@@ -353,13 +333,13 @@ test "isAnalysableFieldAccess: field of a cursor = false" {
 	const n = getExpr("x.f;");
 	const sym = makeTestSym("x");
 	setFlag(sym, SymbolFlag.Cursor);
-	attachSymToNodeAlias(n, "x", sym);
+	attachSymAll(n, "x", sym);
 	assert !isAnalysableFieldAccess(n);
 }
 
 test "isAnalysableFieldAccess: field behind a deref = false" {
 	const n = getExpr("x.f;");
-	attachSymToNodeAlias(n, "x", makeTestSym("x"));
+	attachSymAll(n, "x", makeTestSym("x"));
 	const md = n.data as MemberExprData;
 	md.object = makeHiddenDeref(md.object, n.location);
 	assert !isAnalysableFieldAccess(n);
@@ -388,7 +368,7 @@ test "skipConvDfa null safety" {
 test "aliases: x -> x = Yes" {
 	const expr = getExpr("x;");
 	const symX = makeTestSym("x");
-	attachSymToNodeAlias(expr, "x", symX);
+	attachSymAll(expr, "x", symX);
 	assert aliases(expr, expr) == AliasKind.Yes;
 }
 
@@ -396,8 +376,8 @@ test "aliases: x -> x.f = Yes (x contains x.f)" {
 	const obj = getExpr("x;");
 	const field = getExpr("x.f;");
 	const symX = makeTestSym("x");
-	attachSymToNodeAlias(obj, "x", symX);
-	attachSymToNodeAlias(field, "x", symX);
+	attachSymAll(obj, "x", symX);
+	attachSymAll(field, "x", symX);
 	assert aliases(obj, field) == AliasKind.Yes;
 }
 
@@ -405,8 +385,8 @@ test "aliases: x.f -> x = No (field doesn't contain parent)" {
 	const obj = getExpr("x.f;");
 	const field = getExpr("x;");
 	const symX = makeTestSym("x");
-	attachSymToNodeAlias(obj, "x", symX);
-	attachSymToNodeAlias(field, "x", symX);
+	attachSymAll(obj, "x", symX);
+	attachSymAll(field, "x", symX);
 	assert aliases(obj, field) == AliasKind.No;
 }
 
@@ -414,8 +394,8 @@ test "aliases: x.f -> x.f = Yes" {
 	const a = getExpr("x.f;");
 	const b = getExpr("x.f;");
 	const symX = makeTestSym("x");
-	attachSymToNodeAlias(a, "x", symX);
-	attachSymToNodeAlias(b, "x", symX);
+	attachSymAll(a, "x", symX);
+	attachSymAll(b, "x", symX);
 	assert aliases(a, b) == AliasKind.Yes;
 }
 
@@ -423,8 +403,8 @@ test "aliases: x.f -> x.g = No (different fields)" {
 	const a = getExpr("x.f;");
 	const b = getExpr("x.g;");
 	const symX = makeTestSym("x");
-	attachSymToNodeAlias(a, "x", symX);
-	attachSymToNodeAlias(b, "x", symX);
+	attachSymAll(a, "x", symX);
+	attachSymAll(b, "x", symX);
 	assert aliases(a, b) == AliasKind.No;
 }
 
@@ -432,8 +412,8 @@ test "aliases: x[0] -> x[0] = Yes" {
 	const a = getExpr("x[0];");
 	const b = getExpr("x[0];");
 	const symX = makeTestSym("x");
-	attachSymToNodeAlias(a, "x", symX);
-	attachSymToNodeAlias(b, "x", symX);
+	attachSymAll(a, "x", symX);
+	attachSymAll(b, "x", symX);
 	assert aliases(a, b) == AliasKind.Yes;
 }
 
@@ -441,8 +421,8 @@ test "aliases: x[0] -> x[1] = No (different literal indices)" {
 	const a = getExpr("x[0];");
 	const b = getExpr("x[1];");
 	const symX = makeTestSym("x");
-	attachSymToNodeAlias(a, "x", symX);
-	attachSymToNodeAlias(b, "x", symX);
+	attachSymAll(a, "x", symX);
+	attachSymAll(b, "x", symX);
 	assert aliases(a, b) == AliasKind.No;
 }
 
@@ -450,8 +430,8 @@ test "aliases: x -> x[i] = Yes (x contains x[i])" {
 	const obj = getExpr("x;");
 	const field = getExpr("x[i];");
 	const symX = makeTestSym("x");
-	attachSymToNodeAlias(obj, "x", symX);
-	attachSymToNodeAlias(field, "x", symX);
+	attachSymAll(obj, "x", symX);
+	attachSymAll(field, "x", symX);
 	assert aliases(obj, field) == AliasKind.Yes;
 }
 
@@ -459,8 +439,8 @@ test "aliases: x[i] -> x = No (element doesn't contain parent)" {
 	const obj = getExpr("x[i];");
 	const field = getExpr("x;");
 	const symX = makeTestSym("x");
-	attachSymToNodeAlias(obj, "x", symX);
-	attachSymToNodeAlias(field, "x", symX);
+	attachSymAll(obj, "x", symX);
+	attachSymAll(field, "x", symX);
 	assert aliases(obj, field) == AliasKind.No;
 }
 
@@ -468,8 +448,8 @@ test "aliases: x[i] -> x[j] = Maybe (runtime indices)" {
 	const a = getExpr("x[i];");
 	const b = getExpr("x[j];");
 	const symX = makeTestSym("x");
-	attachSymToNodeAlias(a, "x", symX);
-	attachSymToNodeAlias(b, "x", symX);
+	attachSymAll(a, "x", symX);
+	attachSymAll(b, "x", symX);
 	assert aliases(a, b) == AliasKind.Maybe;
 }
 
@@ -478,8 +458,8 @@ test "aliases: different variables = No" {
 	const b = getExpr("y;");
 	const symX = makeTestSym("x");
 	const symY = makeTestSym("y");
-	attachSymToNodeAlias(a, "x", symX);
-	attachSymToNodeAlias(b, "y", symY);
+	attachSymAll(a, "x", symX);
+	attachSymAll(b, "y", symY);
 	assert aliases(a, b) == AliasKind.No;
 }
 
@@ -491,8 +471,8 @@ test "aliases: x.f.g -> x.f.g = Yes (deep match)" {
 	const a = getExpr("x.f.g;");
 	const b = getExpr("x.f.g;");
 	const symX = makeTestSym("x");
-	attachSymToNodeAlias(a, "x", symX);
-	attachSymToNodeAlias(b, "x", symX);
+	attachSymAll(a, "x", symX);
+	attachSymAll(b, "x", symX);
 	assert aliases(a, b) == AliasKind.Yes;
 }
 
@@ -500,8 +480,8 @@ test "aliases: x.f.g -> x.f.h = No (deep diverge at leaf)" {
 	const a = getExpr("x.f.g;");
 	const b = getExpr("x.f.h;");
 	const symX = makeTestSym("x");
-	attachSymToNodeAlias(a, "x", symX);
-	attachSymToNodeAlias(b, "x", symX);
+	attachSymAll(a, "x", symX);
+	attachSymAll(b, "x", symX);
 	assert aliases(a, b) == AliasKind.No;
 }
 
@@ -509,8 +489,8 @@ test "aliases: x.f -> x.f.g = Yes (containment at depth 2)" {
 	const obj = getExpr("x.f;");
 	const field = getExpr("x.f.g;");
 	const symX = makeTestSym("x");
-	attachSymToNodeAlias(obj, "x", symX);
-	attachSymToNodeAlias(field, "x", symX);
+	attachSymAll(obj, "x", symX);
+	attachSymAll(field, "x", symX);
 	assert aliases(obj, field) == AliasKind.Yes;
 }
 
@@ -518,8 +498,8 @@ test "aliases: x.f.g -> x.f = No (deeper doesn't contain shallower)" {
 	const obj = getExpr("x.f.g;");
 	const field = getExpr("x.f;");
 	const symX = makeTestSym("x");
-	attachSymToNodeAlias(obj, "x", symX);
-	attachSymToNodeAlias(field, "x", symX);
+	attachSymAll(obj, "x", symX);
+	attachSymAll(field, "x", symX);
 	assert aliases(obj, field) == AliasKind.No;
 }
 
@@ -529,9 +509,9 @@ test "deepAliases: x in f(x) = true" {
 	const dest = getExpr("x;");
 	const call = getExpr("f(x);");
 	const symX = makeTestSym("x");
-	attachSymToNodeAlias(dest, "x", symX);
-	attachSymToNodeAlias(call, "x", symX);
-	attachSymToNodeAlias(call, "f", makeTestSym("f"));
+	attachSymAll(dest, "x", symX);
+	attachSymAll(call, "x", symX);
+	attachSymAll(call, "f", makeTestSym("f"));
 	assert deepAliases(dest, call);
 }
 
@@ -540,9 +520,9 @@ test "deepAliases: x not in f(y) = false" {
 	const call = getExpr("f(y);");
 	const symX = makeTestSym("x");
 	const symY = makeTestSym("y");
-	attachSymToNodeAlias(dest, "x", symX);
-	attachSymToNodeAlias(call, "y", symY);
-	attachSymToNodeAlias(call, "f", makeTestSym("f"));
+	attachSymAll(dest, "x", symX);
+	attachSymAll(call, "y", symY);
+	attachSymAll(call, "f", makeTestSym("f"));
 	assert !deepAliases(dest, call);
 }
 
@@ -550,8 +530,8 @@ test "deepAliases: x.f vs g(x.g) = false (different fields)" {
 	const dest = getExpr("x.f;");
 	const call = getExpr("g(x.g);");
 	const symX = makeTestSym("x");
-	attachSymToNodeAlias(dest, "x", symX);
-	attachSymToNodeAlias(call, "x", symX);
+	attachSymAll(dest, "x", symX);
+	attachSymAll(call, "x", symX);
 	// x.f aliases with x.g? No (different fields) — so deepAliases returns false
 	assert !deepAliases(dest, call);
 }
@@ -560,8 +540,8 @@ test "deepAliases: x in [x, 1] = true" {
 	const dest = getExpr("x;");
 	const arr = getExpr("[x, 1];");
 	const symX = makeTestSym("x");
-	attachSymToNodeAlias(dest, "x", symX);
-	attachSymToNodeAlias(arr, "x", symX);
+	attachSymAll(dest, "x", symX);
+	attachSymAll(arr, "x", symX);
 	assert deepAliases(dest, arr);
 }
 
@@ -570,17 +550,17 @@ test "deepAliases: x behind a move or out argument = true" {
 	const symF = makeTestSym("f");
 	const symG = makeTestSym("g");
 	const dest = getExpr("x;");
-	attachSymToNodeAlias(dest, "x", symX);
+	attachSymAll(dest, "x", symX);
 	for (const src of ["f(move x);", "f(g(move x));", "f(out x);"]) {
 		const call = getExpr(src);
-		attachSymToNodeAlias(call, "x", symX);
-		attachSymToNodeAlias(call, "f", symF);
-		attachSymToNodeAlias(call, "g", symG);
+		attachSymAll(call, "x", symX);
+		attachSymAll(call, "f", symF);
+		attachSymAll(call, "g", symG);
 		assert deepAliases(dest, call), src;
 	}
 	const other = getExpr("f(move y);");
-	attachSymToNodeAlias(other, "y", makeTestSym("y"));
-	attachSymToNodeAlias(other, "f", symF);
+	attachSymAll(other, "y", makeTestSym("y"));
+	attachSymAll(other, "f", symF);
 	assert !deepAliases(dest, other);
 }
 

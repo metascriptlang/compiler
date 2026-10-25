@@ -2,6 +2,8 @@ import { readFile } from "std/fs";
 
 const NODE_SRC = "std/meta/node.ms";
 
+const MAP_CHILDREN_DECL = "export function mapChildren(";
+
 const TABLE_NAMES: string[] = ["visitor", "walker", "clone", "hash", "printer", "bridge"];
 
 // The per-kind tables. "clone" and "printer" point at fieldspec.ms since
@@ -10,39 +12,22 @@ const TABLE_NAMES: string[] = ["visitor", "walker", "clone", "hash", "printer", 
 // is a generic sink-driven dump.
 const TABLE_PATHS: string[] = [
 	"src/ast/visitor.ms",
-	"src/transform/walker.ms",
+	"src/ast/visitor.ms",
 	"src/ast/fieldspec.ms",
 	"src/compiler/transam/hash.ms",
 	"src/ast/fieldspec.ms",
 	"src/compiler/meta/bridge.ms",
 ];
 
+// Parked: ~/metascript/.inbox/compiler/2026-10-25-a-parameter-default-and-a-field-decorator-stay-untyped-in-the-tree.md
 const KNOWN_GAPS: string[] = [
-	"visitor:arrowDefaults", "visitor:ctorDefaults",
-	"visitor:decorators", "visitor:enumInits", "visitor:fnDefaults", "visitor:interfaceFieldDecorators",
+	"visitor:arrowDefaults", "visitor:ctorDefaults", "visitor:fnDefaults", "visitor:interfaceFieldDecorators",
 	"visitor:methodDefaults",
-	"walker:arrowDefaults", "walker:ctorDefaults",
-	"walker:decorators", "walker:enumInits", "walker:fnDefaults", "walker:interfaceFieldDecorators",
+	"walker:arrowDefaults", "walker:ctorDefaults", "walker:fnDefaults", "walker:interfaceFieldDecorators",
 	"walker:methodDefaults",
 	"hash:arrowDefaults", "hash:ctorDefaults", "hash:typExprFieldDecorators",
 	"bridge:arrowDefaults", "bridge:enumInits",
 ];
-
-function endsWith(s: string, suffix: string): boolean {
-	if (s.length < suffix.length) return false;
-	return s.slice(s.length - suffix.length, s.length) == suffix;
-}
-
-function trim(s: string): string {
-	// "\r" is load-bearing on Windows: git checkouts there use CRLF line
-	// endings, and without it every field name keeps a "\r\n\t" prefix —
-	// tableMentions then never matches and all 6 tables fail spuriously.
-	let a = 0;
-	let b = s.length;
-	while (a < b && (s.slice(a, a + 1) == " " || s.slice(a, a + 1) == "\t" || s.slice(a, a + 1) == "\n" || s.slice(a, a + 1) == "\r")) a = a + 1;
-	while (b > a && (s.slice(b - 1, b) == " " || s.slice(b - 1, b) == "\t" || s.slice(b - 1, b) == "\n" || s.slice(b - 1, b) == "\r")) b = b - 1;
-	return s.slice(a, b);
-}
 
 function refersToNode(t: string): boolean {
 	let p = 0;
@@ -61,7 +46,7 @@ function collectFieldsInto(body: string, out: string[]): void {
 	for (const part of body.split(",")) {
 		const colon = part.indexOf(":", 0);
 		if (colon < 0) continue;
-		const name = trim(part.slice(0, colon));
+		const name = part.slice(0, colon).trim();
 		const ty = part.slice(colon + 1, part.length);
 		if (name.length == 0) continue;
 		if (!refersToNode(ty)) continue;
@@ -81,8 +66,8 @@ export function nodeFieldNames(src: string): string[] {
 		if (brace < 0) break;
 		const end = src.indexOf("};", brace);
 		if (end < 0) break;
-		const alias = trim(src.slice(i + 12, brace));
-		if (endsWith(alias, "Data")) collectFieldsInto(src.slice(brace + 4, end), out);
+		const alias = src.slice(i + 12, brace).trim();
+		if (alias.endsWith("Data")) collectFieldsInto(src.slice(brace + 4, end), out);
 		pos = end + 2;
 	}
 	return out;
@@ -101,6 +86,15 @@ function readOrEmpty(path: string): string {
 function firstUnreadable(paths: string[]): string {
 	for (const p of paths) { if (readOrEmpty(p).length == 0) return p; }
 	return "";
+}
+
+// visitor.ms holds two tables: forEachChild before mapChildren, mapChildren from its declaration on.
+function tableSource(path: string, table: string): string {
+	const src = readOrEmpty(path);
+	if (table != "visitor" && table != "walker") return src;
+	const at = src.indexOf(MAP_CHILDREN_DECL, 0);
+	if (at < 0) return "";
+	return table == "visitor" ? src.slice(0, at) : src.slice(at, src.length);
 }
 
 function isKnownGap(key: string): boolean {
@@ -127,8 +121,8 @@ test "child-table guard: every Node-typed field is handled by every table" {
 	let count = 0;
 	let ti = 0;
 	while (ti < TABLE_PATHS.length) {
-		const src = readOrEmpty(TABLE_PATHS[ti]);
 		const table = TABLE_NAMES[ti];
+		const src = tableSource(TABLE_PATHS[ti], table);
 		for (const f of names) {
 			if (tableMentions(src, f)) continue;
 			const key = table + ":" + f;
@@ -148,8 +142,8 @@ test "child-table guard: KNOWN_GAPS has no stale entry" {
 	let count = 0;
 	let ti = 0;
 	while (ti < TABLE_PATHS.length) {
-		const src = readOrEmpty(TABLE_PATHS[ti]);
 		const table = TABLE_NAMES[ti];
+		const src = tableSource(TABLE_PATHS[ti], table);
 		for (const f of names) {
 			if (!tableMentions(src, f)) continue;
 			const key = table + ":" + f;

@@ -11,11 +11,14 @@
 // at the exact element. Any other loop is left alone.
 
 import { Node, NodeKind, Symbol, Type, TypeKind, DeclKind, SourceLocation, BinaryExprData, CallExprData, BlockStmtData, ExprStmtData, VariableDeclData, MemberExprData, ArrayAccessData, IfStmtData, WhileStmtData, HiddenStdConvData, HiddenDerefData, NumberLiteralData } from "../../ast/node";
+import { peelStdConv } from "../../ast/shape";
 import { peelToRepr, getSysType, booleanType } from "../../checker/types";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, runtimeRef, makeIdentResolved, cloneIdent, makeVarDecl, makeBlock, makeWhile, makeIf, makeBinary, makeAssign, makeExprStmt, makeMember, makeHiddenDeref, makeHiddenStdConv, isRuntimeProcCall } from "../util";
+import { makeCall, runtimeRef, makeIdentResolved, cloneIdent, makeVarDecl, makeBlock, makeWhile, makeIf, makeBinary, makeAssign, makeExprStmt, makeHiddenDeref, makeHiddenStdConv, isRuntimeProcCall } from "../util";
 import { makeIntNumber } from "../../checker/literalNodes";
+import { clonePlace } from "../place";
+import { isSignedKind, bitsOfKind } from "../numKinds";
 
 type Reduce = { acc: Node, op: string, term: Node };
 type Reduction = { acc: Node, op: string, arrays: Node[], index: Node, len: Node, widthTag: string };
@@ -32,7 +35,7 @@ function versionLoop(loop: Node, ctx: TransformContext): Node {
 	const loc = loop.location;
 	const i64 = getSysType(TypeKind.Int64);
 	const endSym = freshTempSym(ctx, "end", i64);
-	const endCall = makeCall(runtimeRef("msBlockEnd", loc), [ident(r.index, loc), cloneLen(r.len, loc)], loc);
+	const endCall = makeCall(runtimeRef("msBlockEnd", loc), [ident(r.index, loc), clonePlace(r.len, loc)], loc);
 	endCall.nodeType = i64;
 	const endDecl = makeVarDecl(endSym.name, endCall, DeclKind.Const, loc);
 	endDecl.resolvedSym = endSym;
@@ -141,7 +144,7 @@ function widened(term: Node, acc: Node): Node | null {
 	const to = peelToRepr(d.convType);
 	const from = signedKind(d.convExpr.nodeType);
 	const accKind = signedKind(acc.nodeType);
-	if (to == null || from == null || accKind == null || to.kind != accKind || width(from) > width(accKind)) return null;
+	if (to == null || from == null || accKind == null || to.kind != accKind || bitsOfKind(from) > bitsOfKind(accKind)) return null;
 	return d.convExpr;
 }
 
@@ -217,8 +220,7 @@ function isLengthCheck(stmt: Node, array: Node, len: Node): boolean {
 }
 
 function isOne(n: Node): boolean {
-	let e = n;
-	while (e.kind == NodeKind.HiddenStdConv) e = (e.data as HiddenStdConvData).convExpr;
+	const e = peelStdConv(n);
 	if (e.kind != NodeKind.NumberLiteral) return false;
 	const d = e.data as NumberLiteralData;
 	return !d.isFloat && d.intVal == 1;
@@ -245,7 +247,7 @@ function distinctFrom(acc: Node, others: Node[]): boolean {
 function sumTag(acc: Node, array: Node): string {
 	const a = signedKind(acc.nodeType);
 	const e = signedKind(elementType(array));
-	if (a == null || e == null || width(e) > width(a)) return "";
+	if (a == null || e == null || bitsOfKind(e) > bitsOfKind(a)) return "";
 	return widthName(a) + widthName(e);
 }
 
@@ -258,20 +260,11 @@ function dotTag(acc: Node, product: Node, a: Node, b: Node): string {
 function signedKind(t: Type | null): TypeKind | null {
 	const r = peelToRepr(t);
 	if (r == null) return null;
-	return r.kind == TypeKind.Int8 || r.kind == TypeKind.Int16 || r.kind == TypeKind.Int32 || r.kind == TypeKind.Int64 ? r.kind : null;
-}
-
-function width(k: TypeKind): number {
-	return match (k) {
-		TypeKind.Int8 => 8,
-		TypeKind.Int16 => 16,
-		TypeKind.Int32 => 32,
-		_ => 64,
-	};
+	return isSignedKind(r.kind) ? r.kind : null;
 }
 
 function widthName(k: TypeKind): string {
-	return `I${width(k)}`;
+	return `I${bitsOfKind(k)}`;
 }
 
 function maxOf(k: TypeKind): int64 {
@@ -288,24 +281,8 @@ function ident(n: Node, loc: SourceLocation): Node {
 	return cloneIdent(n, loc);
 }
 
-function cloneLen(len: Node, loc: SourceLocation): Node {
-	if (len.kind == NodeKind.Identifier) return cloneIdent(len, loc);
-	const d = len.data as MemberExprData;
-	const m = makeMember(cloneArray(d.object, loc), "length", loc);
-	m.nodeType = len.nodeType;
-	m.resolvedSym = len.resolvedSym;
-	return m;
-}
-
-function cloneArray(a: Node, loc: SourceLocation): Node {
-	if (a.kind == NodeKind.Identifier) return cloneIdent(a, loc);
-	const inner = makeHiddenDeref(cloneIdent((a.data as HiddenDerefData).expr, loc), loc);
-	inner.nodeType = a.nodeType;
-	return inner;
-}
-
 function arrayValue(a: Node, loc: SourceLocation): Node {
-	const c = cloneArray(a, loc);
+	const c = clonePlace(a, loc);
 	if (c.nodeType != null && c.nodeType.kind == TypeKind.Ref) return makeHiddenDeref(c, loc);
 	return c;
 }

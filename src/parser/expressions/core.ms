@@ -1,10 +1,10 @@
 // Core Expression Parser - Pratt parsing with operator precedence
-// Pattern: ~/projects/metascript/src/parser/parser.zig parseExpression()
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData, AwaitExprData, IdentifierData, MemberExprData, NumberLiteralData, BinaryExprData } from "../../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, captureGenericTypeArgs, collectTokenText, stampEnd, takePendingComments, parenGroupThen, expectCloser } from "../context";
-import { skipTypeAnnotation, parseTypeExpr, isGenericCallAhead } from "../typeAnnotation";
+import { ParserState, createState, current, advance, peek, isAtEnd, stampEnd, takePendingComments, parenGroupThen, expectCloser } from "../cursor";
+import { captureGenericTypeArgs } from "../generics";
+import { captureType, captureTypeText, isGenericCallAhead } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, continuesIdentifier } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
 import { parseMatchExpr } from "./match";
@@ -13,26 +13,12 @@ import { parseObjectLiteral } from "./object";
 import { parseJsxRoot } from "./jsx";
 import { parseExprList, parseCallExpr, takeListEndComments } from "./call";
 import { parseTemplateLiteral } from "./template";
-import { registerParseExpr, parseOk, exprKind, exprNode, exprOp, binLeftKind, tryParseLiteralKeyword } from "./util";
-import { parseNumberLiteral, parseIntegerLiteral, integerLiteralFits, integerLiteralIsBitPattern, numericLiteralIsFloat } from "../../utils/string";
+import { parseBlockStmt } from "../statements/core";
+import { tryParseLiteralKeyword, numberLiteralNode } from "./util";
+import { parseOk, exprKind, exprNode, exprOp, binLeftKind, binRightKind } from "./testUtil";
 
 
 type ExprResult = Result<Expression, string>;
-
-// ===== Block Parser Callback =====
-// Arrow functions with block bodies need parseBlockStmt from statement.ms,
-// but importing from statement.ms would create a circular dependency.
-// statement.ms registers its block parser at module load time.
-
-type BlockParserFn = (state: ParserState) => ExprResult;
-
-let blockParser: BlockParserFn = (state: ParserState): ExprResult => {
-	return Result.err("Block parser not registered");
-};
-
-export function registerBlockParser(parser: BlockParserFn): void {
-	blockParser = parser;
-}
 
 // ===== Main Parse Functions =====
 
@@ -47,23 +33,14 @@ export function parseExpressionFromState(state: ParserState): ExprResult {
 	return result;
 }
 
-// Register parseExpression into util.ms for sub-module integration tests.
-// Wrap in lambda to ensure proper closure calling convention.
-registerParseExpr((tokens: Token[]): ExprResult => { return parseExpression(tokens); });
 
 const NO_BINARY_PREC: int32 = 100;
 
 function parseAsType(state: ParserState, left: Node, token: Token): Node {
 	advance(state);
-	const asStart = state.position;
-	skipTypeAnnotation(state);
-	const asType = collectTokenText(state, asStart, state.position);
-	const asSavedPos = state.position;
-	state.position = asStart;
-	const asTypeExpr = parseTypeExpr(state);
-	state.position = asSavedPos;
-	const asNode = createNode(NodeKind.TypeAssertion, { asExpr: left, asType }, token);
-	asNode.typeExpr = asTypeExpr;
+	const captured = captureType(state);
+	const asNode = createNode(NodeKind.TypeAssertion, { asExpr: left, asType: captured.text }, token);
+	asNode.typeExpr = captured.expr;
 	return asNode;
 }
 
@@ -268,7 +245,7 @@ function parseFuncExprBody(state: ParserState, token: Token, feFlags: string): E
 	// Optional return type
 	const funcExprReturnType = captureOptionalType(state);
 	const funcExprRetTypeExpr = getLastTypeExpr();
-	const feBody = prependParamPatterns(try blockParser(state), fePatterns, feParamLocs);
+	const feBody = prependParamPatterns(try parseBlockStmt(state), fePatterns, feParamLocs);
 	const feNode = createNode(NodeKind.FunctionExpr, { funcExprParams, funcExprParamTypes, funcExprBody: feBody, funcExprFlags: feFlags, funcExprReturnType }, token);
 	feNode.typeExpr = funcExprRetTypeExpr;
 	feNode.typeExprs = feParamTypeExprs;
@@ -314,11 +291,7 @@ function parsePrimary(state: ParserState): ExprResult {
 
 	if (token.kind == TokenKind.Number) {
 		advance(state);
-		const isFloat = numericLiteralIsFloat(token.value);
-		const intVal = isFloat ? 0 as int64 : parseIntegerLiteral(token.value);
-		const outOfRangeText = isFloat || integerLiteralFits(token.value) ? "" : token.value;
-		const isBitPattern = !isFloat && integerLiteralIsBitPattern(token.value);
-		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseNumberLiteral(token.value), isFloat, intVal, outOfRangeText, isBitPattern }, token));
+		return Result.ok(numberLiteralNode(token));
 	}
 
 	if (token.kind == TokenKind.String) {
@@ -359,7 +332,7 @@ function parsePrimary(state: ParserState): ExprResult {
 	// trailing `=>` belongs to the match arm, so `2 when flag => 200` must parse
 	// the guard as `flag`, not as the arrow function `flag => 200`.
 	if (token.kind == TokenKind.Ident && peek(state, 1).kind == TokenKind.Arrow && state.noBareArrow == 0) {
-		return parseBareIdentArrow(state, parseExprWithPrec, blockParser, "", allowArrowReturnType);
+		return parseBareIdentArrow(state, parseExprWithPrec, parseBlockStmt, "", allowArrowReturnType);
 	}
 
 	if (token.kind == TokenKind.Import && peek(state, 1).kind == TokenKind.LParen) {
@@ -379,10 +352,10 @@ function parsePrimary(state: ParserState): ExprResult {
 	if (token.kind == TokenKind.LParen) {
 		const shape = arrowShape(state);
 		if (shape == ArrowShape.Yes) {
-			return parseArrowFunction(state, parseExprWithPrec, blockParser, "");
+			return parseArrowFunction(state, parseExprWithPrec, parseBlockStmt, "");
 		}
 		if (shape == ArrowShape.Maybe) {
-			const arrow = tryParseArrowFunction(state, parseExprWithPrec, blockParser, "", allowArrowReturnType);
+			const arrow = tryParseArrowFunction(state, parseExprWithPrec, parseBlockStmt, "", allowArrowReturnType);
 			if (!arrow.ok || arrow.value != null) return arrow;
 		}
 		advance(state);
@@ -413,7 +386,7 @@ function parsePrimary(state: ParserState): ExprResult {
 	// Only if '(' ... ')' is followed by '{' — otherwise 'match' is used as identifier
 	if (token.kind == TokenKind.Match) {
 		if (parenGroupThen(state, 1, TokenKind.LBrace)) {
-			return parseMatchExpr(state, parseExprWithPrec, blockParser);
+			return parseMatchExpr(state, parseExprWithPrec, parseBlockStmt);
 		}
 		advance(state);
 		return Result.ok(createNode(NodeKind.Identifier, { name: token.value }, token));
@@ -501,10 +474,7 @@ function parsePrimary(state: ParserState): ExprResult {
 	// Sizeof expression: sizeof Type
 	if (token.kind == TokenKind.Sizeof) {
 		advance(state);
-		const sStart = state.position;
-		skipTypeAnnotation(state);
-		const sEnd = state.position;
-		const sizeofType = collectTokenText(state, sStart, sEnd);
+		const sizeofType = captureTypeText(state);
 		if (sizeofType == "") {
 			return Result.err(`Expected type after sizeof at line ${token.line}`);
 		}
@@ -533,8 +503,7 @@ function parsePrimary(state: ParserState): ExprResult {
 	// Async: async function expr or async arrow
 	if (token.kind == TokenKind.Async) {
 		// async function expression: async function() {} or async function*() {}
-		if (state.position + 1 < state.tokens.length &&
-			state.tokens[state.position + 1].kind == TokenKind.Function) {
+		if (peek(state, 1).kind == TokenKind.Function) {
 			advance(state); // consume 'async'
 			advance(state); // consume 'function'
 			let feFlags = "async";
@@ -548,17 +517,17 @@ function parsePrimary(state: ParserState): ExprResult {
 		// as the plain bare-ident arrow above — match-guard `=>` ownership)
 		if (isIdentLike(peek(state, 1)) && peek(state, 2).kind == TokenKind.Arrow && state.noBareArrow == 0) {
 			advance(state); // consume 'async'
-			return parseBareIdentArrow(state, parseExprWithPrec, blockParser, "async", allowArrowReturnType);
+			return parseBareIdentArrow(state, parseExprWithPrec, parseBlockStmt, "async", allowArrowReturnType);
 		}
 		// async arrow: async () => ... or async (x) => ...; `async(x)` alone is a call
 		if (peek(state, 1).kind == TokenKind.LParen) {
 			advance(state); // consume 'async'
 			const shape = arrowShape(state);
 			if (shape == ArrowShape.Yes) {
-				return parseArrowFunction(state, parseExprWithPrec, blockParser, "async");
+				return parseArrowFunction(state, parseExprWithPrec, parseBlockStmt, "async");
 			}
 			if (shape == ArrowShape.Maybe) {
-				const arrow = tryParseArrowFunction(state, parseExprWithPrec, blockParser, "async", allowArrowReturnType);
+				const arrow = tryParseArrowFunction(state, parseExprWithPrec, parseBlockStmt, "async", allowArrowReturnType);
 				if (!arrow.ok || arrow.value != null) return arrow;
 			}
 			return Result.ok(createNode(NodeKind.Identifier, { name: token.value }, token));
@@ -581,11 +550,10 @@ function parsePrimary(state: ParserState): ExprResult {
 
 	// Comptime expression: @comptime { ... }
 	if (token.kind == TokenKind.At) {
-		if (state.position + 1 < state.tokens.length &&
-			state.tokens[state.position + 1].value == "comptime") {
+		if (peek(state, 1).value == "comptime") {
 			advance(state); // consume '@'
 			advance(state); // consume 'comptime'
-			const comptimeBlock = try blockParser(state);
+			const comptimeBlock = try parseBlockStmt(state);
 			return Result.ok(createNode(NodeKind.ComptimeBlock, { comptimeBody: comptimeBlock }, token));
 		}
 	}
@@ -593,10 +561,9 @@ function parsePrimary(state: ParserState): ExprResult {
 	// Quote expression: quote { ... }
 	// Only if followed by '{' — otherwise 'quote' is used as identifier
 	if (token.kind == TokenKind.Quote) {
-		if (state.position + 1 < state.tokens.length &&
-			state.tokens[state.position + 1].kind == TokenKind.LBrace) {
+		if (peek(state, 1).kind == TokenKind.LBrace) {
 			advance(state);
-			const quoteBlock = try blockParser(state);
+			const quoteBlock = try parseBlockStmt(state);
 			return Result.ok(createNode(NodeKind.QuoteExpr, { quoteBody: quoteBlock }, token));
 		}
 		advance(state);
@@ -664,6 +631,7 @@ function parsePrimary(state: ParserState): ExprResult {
 }
 
 // ===== Core Expression Tests =====
+
 
 // --- Structural: verify AST node kinds, operators, precedence tree shape ---
 // Kind verification
@@ -894,6 +862,11 @@ test "** right assoc" { assert parseOk("a ** b ** c"); }
 
 test "**= binds loosest" { assert exprOp("a **= b ** 2") == "**="; }
 
+test "a regex literal is the right operand of ?? and of %=" {
+	assert binRightKind("a ?? /x/g") == NodeKind.RegexLiteral;
+	assert binRightKind("n %= /x/") == NodeKind.RegexLiteral;
+}
+
 test "assign right assoc" { assert parseOk("a = b = c"); }
 
 test "bitwise compound assignments bind loosest" {
@@ -947,4 +920,19 @@ test "explicit type arguments before a call stay a call" {
 	assert exprKind("id<Array<int32>>(x)") == NodeKind.CallExpr;
 	assert exprKind("id<Map<string, Array<int32>>>(x)") == NodeKind.CallExpr;
 	assert exprKind("id<int32 | string>(x)") == NodeKind.CallExpr;
+}
+
+test "a comment after async leaves an async function expression" {
+	assert exprKind("async /* c */ function() {}") == NodeKind.FunctionExpr;
+	assert exprKind("async // c\nfunction() {}") == NodeKind.FunctionExpr;
+}
+
+test "a comment between @ and comptime leaves a comptime block" {
+	assert exprKind("@ /* c */ comptime { 1; }") == NodeKind.ComptimeBlock;
+	assert exprKind("@ // c\ncomptime { 1; }") == NodeKind.ComptimeBlock;
+}
+
+test "a comment between quote and its brace leaves a quote expression" {
+	assert exprKind("quote /* c */ { const x = 1; }") == NodeKind.QuoteExpr;
+	assert exprKind("quote // c\n{ const x = 1; }") == NodeKind.QuoteExpr;
 }

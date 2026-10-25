@@ -18,7 +18,7 @@ export class TransformContext {
 	checkerCtx: CheckerContext;  // type info from Phase 2 (null in test mode)
 	jsBackend: boolean;
 	raiserBackend: boolean;
-	preserveModuleConstants: boolean;
+	reloadableModules: string[];
 	rangeChecks: boolean;
 	boundChecks: boolean;
 	objChecks: boolean;
@@ -39,7 +39,7 @@ export interface EnumToStringCopy {
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, raiserBackend: false, preserveModuleConstants: false, rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingUnionEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [], tdzFlags: new HashMap<Symbol, Symbol>() };
+	return { tempCounter: 0, errors: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, raiserBackend: false, reloadableModules: [], rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingUnionEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [], tdzFlags: new HashMap<Symbol, Symbol>() };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {
@@ -121,6 +121,7 @@ export function freshTemp(ctx: TransformContext, prefix: string): string {
 export function mintSym(ctx: TransformContext, kind: SymbolKind, name: string, t: Type | null): Symbol {
 	const sym = newSym(mintingChecker(ctx, name), kind, name, t);
 	sym.state = SymbolState.Checked;
+	setFlag(sym, SymbolFlag.Anon);
 	return sym;
 }
 

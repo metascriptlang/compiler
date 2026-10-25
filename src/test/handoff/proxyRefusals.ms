@@ -67,3 +67,20 @@ test "'in' on a Proxy and for-of over a Proxy of an object are refused" {
 	assert hasError(HEAD + "console.log(\"title\" in p);", "'in' on a Proxy<Todo, Traps> would skip its 'has' trap");
 	assert hasError(HEAD + "for (const x of p) {}", "for-of over a Proxy needs an array target; 'Todo' is not one");
 }
+
+const CACHED = HEAD + "const cache = new Map<Todo, Proxy<Todo, Traps> >();\ncache.set(todo, p);\n";
+
+test "a Proxy narrowed from a nullable reads and writes through its traps" {
+	assert strictErrorCount(CACHED + "const q = cache.get(todo);\nif (q !== null) { const s: string = q.title; q.title += \"b\"; q.done = true; }") == 0;
+	assert strictErrorCount(CACHED + "function first(): string {\n\tconst q = cache.get(todo);\n\tif (q === null) { return \"\"; }\n\treturn q.title;\n}") == 0;
+}
+
+const FN = "export class H<T> { get<K extends keyof T>(target: T, key: K): T[K] { return Reflect.get(target, key); } }\nfunction wrapped<V>(v: V): Proxy<V, H<V> > { return new Proxy(v, new H<V>()); }\n";
+
+test "a Proxy of a function is not callable" {
+	assert hasError(FN + "const f = wrapped((): number => 1);\nf();", "This expression is not callable: type 'Proxy<");
+	assert hasError(FN + "class Holder { f: Proxy<() => number, H<() => number> >; constructor(f: Proxy<() => number, H<() => number> >) { this.f = f; } }\nconst h = new Holder(wrapped((): number => 1));\nh.f();", "This expression is not callable: type 'Proxy<");
+	assert hasError(FN + "wrapped((x: number): number => x + 1)(2);", "This expression is not callable: type 'Proxy<");
+	assert hasError("class Box<T> { v: T; constructor(v: T) { this.v = v; } }\nconst b = new Box<number>(1);\nb();", "This expression is not callable: type 'Box<");
+	assert strictErrorCount(FN + "interface Box { fn: () => number; }\nconst p = wrapped<Box>({ fn: (): number => 7 });\nconst n: number = p.fn();") == 0;
+}

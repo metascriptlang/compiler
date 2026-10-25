@@ -3,7 +3,6 @@
 // Invokes clang to compile generated C source into native binaries.
 
 import {
-	exec,
 	env,
 	cmdExists,
 	findOnPath,
@@ -91,7 +90,7 @@ function homeDir(): string {
 // `grep` does not exist on Windows and `2>/dev/null` is not cmd.exe syntax, so
 // the old probe returned false on every Windows host.
 function sbfRefusal(binary: string): string {
-	return printedTargetsRefusal(exec(`"${binary}" --print-targets`));
+	return printedTargetsRefusal(execFileCapture(binary, ["--print-targets"]));
 }
 
 function printedTargetsRefusal(printed: Result<string, ProcessError>): string {
@@ -1433,6 +1432,7 @@ test "an MSC_SBF_CLANG that cannot run stops the build instead of falling throug
 
 test "a clang is refused for SBF, with the reason, unless its target list names sbf" {
 	assert printedTargetsRefusal(Result.err(notFound("\"/nonexistent/clang\" --print-targets"))) == "was not found";
+	assert sbfRefusal("/nonexistent/clang") == "was not found";
 	assert printedTargetsRefusal(Result.ok("  Registered Targets:\n    bpf        - BPF (host endian)\n    bpfel      - BPF (little endian)\n")) == "has no sbf target";
 	assert printedTargetsRefusal(Result.ok("  Registered Targets:\n    sbf        - SBF new (little endian)\n")) == "";
 }

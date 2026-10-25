@@ -8,8 +8,7 @@
 // Result is never walked, never registered for destroy, and leaks once per
 // evaluation.
 //
-// Fix (statement-level hoist, the MetaScript equivalent of Nim's
-// nkStmtListExpr in injectdestructors.nim — MetaScript has no such node):
+// Fix (statement-level hoist; MetaScript has no statement-list expression node):
 //
 //   const has = provide(path).ok;
 //     →
@@ -40,15 +39,16 @@
 // Short-circuit operands in an if / while condition (`if (a && f().ok)`) are
 // handled too (b3b): f() there runs only sometimes, so instead of an eager hoist
 // the condition is lowered to a flag + nested-if that preserves short-circuit
-// (what Nim does for `and`/`or`) — see lowerShortCircuit. A fresh call inside a
+// — see lowerShortCircuit. A fresh call inside a
 // ternary branch is still left untouched (a flag rewrite can't express it), and
 // short-circuit in a VariableDecl/assignment initializer is left to the analyzer.
 
 import { Node, NodeKind, DeclKind, Symbol, SourceLocation, VariableDeclData, BinaryExprData, ExprStmtData, IfStmtData, WhileStmtData, ConditionalExprData, Type, TypeKind } from "../../ast/node";
 import { isResult, isAwaitable, noneType, booleanType } from "../../checker/types";
 import { TransformContext, freshTempSym } from "../context";
-import { walkExpandBlocks, replaceInExpr } from "../walker";
-import { makeVarDecl, makeIdentResolved, makeIf, makeBlock, makeBreak, makeUnary, makeBool, makeBinary, makeAssign, makeExprStmt, makeDefaultValue, extractBodyStmts } from "../util";
+import { walkExpandBlocks, replaceInExpr, containsConditionalEval } from "../walker";
+import { moveWhileTestIntoBody, wrapElseIfWhen } from "./jumpRetarget";
+import { makeVarDecl, makeIdentResolved, makeIf, makeBlock, makeUnary, makeBool, makeBinary, makeAssign, makeExprStmt, makeDefaultValue } from "../util";
 
 // A boolean condition lowered to: run `pre` statements (unconditionally, in order),
 // then test `expr` (a pure boolean with no fresh RC call left in a conditional spot).
@@ -78,25 +78,6 @@ function isRcReturning(t: Type | null): boolean {
 		TypeKind.String | TypeKind.Array | TypeKind.SizedArray | TypeKind.Ref | TypeKind.Function => true,
 		_ => false,
 	};
-}
-
-// True if the expression contains a CONDITIONALLY-evaluated sub-position: the RHS
-// of a short-circuit `&&`/`||`, or a ternary branch. A fresh call there runs only
-// sometimes — hoisting it to a preceding statement would evaluate it eagerly and
-// break the guard (proven: `if (xs.length>0 && xs[0].slice(...))` hoisted the slice
-// before the length guard → crash). Such inits are skipped until the nested-if
-// lowering (which preserves short-circuit) is in place.
-export function containsConditionalEval(expr: Node): boolean {
-	let found = false;
-	replaceInExpr(expr, (node: Node): Node => {
-		if (node.kind == NodeKind.ConditionalExpr) { found = true; }
-		if (node.kind == NodeKind.BinaryExpr) {
-			const op = (node.data as BinaryExprData).operator;
-			if (op == "&&" || op == "||") { found = true; }
-		}
-		return node;
-	});
-	return found;
 }
 
 // Hoist every fresh RC-returning Call/New out of an expression tree into preceding
@@ -168,9 +149,8 @@ function assignBlock(sym: Symbol, ty: Type, lowered: CondLower, loc: SourceLocat
 
 // Lower a boolean condition that contains a fresh RC call in a SHORT-CIRCUIT
 // operand (`a && f().ok`, `a || f().ok`) into preceding statements + a pure flag,
-// preserving short-circuit evaluation. This is what Nim does (it lowers `and`/`or`
-// to nested-if so injectdestructors sees the conditional fresh value); MetaScript
-// has no nkStmtListExpr, so the flag + if is emitted as real statements.
+// preserving short-circuit evaluation. MetaScript has no statement-list expression
+// node, so the flag + if is emitted as real statements.
 //
 //   a && f().ok   →   let $flag = false; if (a) { const $t = f(); $flag = $t.ok; }   test $flag
 //   a || f().ok   →   let $flag = true;  if (!(a)) { const $t = f(); $flag = $t.ok; } test $flag
@@ -299,9 +279,7 @@ function expandIf(stmt: Node, ctx: TransformContext): Node[] {
 	// `else if (f().ok)` is the `.alternate`, never a statement-list entry, so expandStmt
 	// can't reach its condition. Wrap a fresh-cond else-if in a block so the walker
 	// descends and lowers the now-listed inner if; deeper else-ifs cascade the same way.
-	if (ifd.alternate != null && ifd.alternate.kind == NodeKind.IfStmt && altChainHasFreshCond(ifd.alternate)) {
-		ifd.alternate = makeBlock([ifd.alternate], ifd.alternate.location);
-	}
+	wrapElseIfWhen(ifd, altChainHasFreshCond);
 	// Plain once-eval conditions are captured by the analyzer (processIf walks the condition).
 	// callHoist only keeps the conditional-eval (short-circuit) main condition; the wrap above
 	// still routes a short-circuit else-if through the walker while a plain one falls to the analyzer.
@@ -323,12 +301,7 @@ function expandWhile(stmt: Node, ctx: TransformContext): Node[] {
 	const wd = stmt.data as WhileStmtData;
 	const lowered = lowerBoolCond(wd.whileCondition, ctx);
 	if (lowered == null) return [stmt];
-	const loc = stmt.location;
-	const body = lowered.pre;
-	body.push(makeIf(makeUnary("!", lowered.expr, loc), makeBlock([makeBreak(loc)], loc), null as unknown as Node, loc));
-	for (const s of extractBodyStmts(wd.whileBody)) { body.push(s); }
-	wd.whileCondition = makeBool(true, loc);
-	wd.whileBody = makeBlock(body, loc);
+	moveWhileTestIntoBody(stmt, lowered.pre, lowered.expr);
 	return [stmt];
 }
 

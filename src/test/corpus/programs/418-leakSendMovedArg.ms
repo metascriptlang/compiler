@@ -3,6 +3,8 @@
 // @maxrss: 30
 // @stdout: leak-send-moved-arg done
 // @serial
+// @ledger-slack(Sink) 1
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: FIXED (actorLower wrapImplBodyWithShareRelease): a fire-and-forget SEND of
 //   a moved plain ref transfers ownership into the message; the void _impl now
 //   releases it in its try/finally (msDecref, or msDecrefCyclic for cycle-capable

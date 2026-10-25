@@ -3,34 +3,32 @@
 // the target when H declares none (docs/LANG.md "Proxy"). The trap call is built at the use
 // site, so the handler's methods resolve as any method call written there would.
 
-import { ArrayAccessData, BinaryExprData, CallExprData, ClassDeclData, DeclKind, DecoratedDeclData, ExportDeclData, ForOfStmtData, HiddenDerefData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, SourceLocation, StringLiteralData, Type, TypeKind, UpdateExprData, createNodeAt } from "../ast/node";
-import { cloneNodeForCheck } from "../monomorphize/clone";
+import { ArrayAccessData, BinaryExprData, CallExprData, ClassDeclData, DeclKind, DecoratedDeclData, ExportDeclData, ForOfStmtData, HiddenDerefData, IdentifierData, MemberExprData, MethodDeclData, NewExprData, Node, NodeFlag, NodeKind, SourceLocation, StringLiteralData, Symbol, Type, TypeKind, UpdateExprData, createNodeAt } from "../ast/node";
+import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr, callCheckStmt } from "./checkerCallbacks";
 import { CheckerContext, addError, findAllExtensionsByName, findFirstMatchingExt } from "./context";
 import { lookupSymbol } from "./symbol";
 import { peelTransparentInstance, errorType, isArrayType, isNumeric, peelToStruct, skipModifier, typeDisplayName, typeNameOf } from "./types";
 import { declaringSymOf } from "./visibility";
 
-function isStdProxy(ctx: CheckerContext): boolean {
-	const sym = lookupSymbol(ctx.table, "Proxy");
-	return sym != null && sym.modulePath.endsWith("std/core/proxy/index.ms");
+function isStdProxy(sym: Symbol | null): boolean {
+	return sym != null && sym.builtinKind == "Proxy";
 }
 
 // The target and handler types of a `Proxy<T, H>`, null for any other type.
 export function proxyPartsOf(ctx: CheckerContext, t: Type | null): Type[] | null {
 	const held = skipModifier(t);
 	const s = held != null ? peelTransparentInstance(held) : null;
-	if (s == null || s.kind != TypeKind.GenericInstance || s.typeName != "Proxy" || s.typeChildren.length != 2) return null;
-	return isStdProxy(ctx) ? s.typeChildren : null;
+	if (s == null || s.kind != TypeKind.GenericInstance || s.typeChildren.length != 2) return null;
+	return isStdProxy(declaringSymOf(s)) ? s.typeChildren : null;
 }
 
 // `new Proxy(target, handler)` is `newProxy(target, handler)`.
 export function checkNewProxy(ctx: CheckerContext, node: Node, expected: Type | null): boolean {
-	if (!isStdProxy(ctx)) return false;
 	const d = node.data as NewExprData;
-	const callee = createNodeAt(NodeKind.Identifier, { name: "newProxy" }, d.newCallee.location);
+	if (d.newCallee.kind != NodeKind.Identifier || !isStdProxy(lookupSymbol(ctx.table, (d.newCallee.data as IdentifierData).name))) return false;
 	node.kind = NodeKind.CallExpr;
-	node.data = { callee: callee, arguments: d.newArguments, isDirectCall: true, resolvedOverloadIdx: -1 };
+	node.data = call(ctx, "newProxy", d.newArguments, d.newCallee.location).data;
 	node.flags = node.flags.excl(NodeFlag.Sem);
 	node.nodeType = null;
 	callCheckExpr(ctx, node, expected);
@@ -75,8 +73,6 @@ function classDeclares(handler: Type, trap: string): boolean {
 }
 
 function callableHere(ctx: CheckerContext, handler: Type, trap: string): boolean {
-	const name = typeNameOf(handler);
-	if (name != "" && lookupSymbol(ctx.table, name + "_" + trap) != null) return true;
 	return ctx.extensionRegistry != null && findFirstMatchingExt(findAllExtensionsByName(ctx.extensionRegistry, trap), handler) != null;
 }
 
@@ -110,9 +106,21 @@ function readsWithoutEffect(n: Node): boolean {
 	return n.kind == NodeKind.MemberExpr && !(n.data as MemberExprData).isOptional && readsWithoutEffect((n.data as MemberExprData).object);
 }
 
-function call(name: string, args: Node[], loc: SourceLocation): Node {
-	const callee = createNodeAt(NodeKind.Identifier, { name: name }, loc);
-	return createNodeAt(NodeKind.CallExpr, { callee: callee, arguments: args, isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
+function stdDecl(ctx: CheckerContext, name: string): Symbol {
+	const sym = ctx.compilerFuncs.get(name);
+	if (sym == null) throw new Error(`internal: std/core/proxy declares no @compilerFunc ${name}`);
+	return sym;
+}
+
+function stdIdent(ctx: CheckerContext, name: string, loc: SourceLocation): Node {
+	const id = ident(name, loc);
+	id.resolvedSym = stdDecl(ctx, name);
+	id.flags = id.flags.incl(NodeFlag.BoundSym);
+	return id;
+}
+
+function call(ctx: CheckerContext, name: string, args: Node[], loc: SourceLocation): Node {
+	return createNodeAt(NodeKind.CallExpr, { callee: stdIdent(ctx, name, loc), arguments: args, isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
 }
 
 function methodCall(object: Node, method: string, args: Node[], loc: SourceLocation): Node {
@@ -154,22 +162,22 @@ function routine(params: string[], body: Node, loc: SourceLocation): Node {
 }
 
 // `proxyHandler(p).<trap>(proxyTarget(p), ...args)` for a receiver read without effect.
-function handlerCall(proxy: Node, trap: string, args: Node[], loc: SourceLocation): Node {
-	const callArgs: Node[] = [call("proxyTarget", [cloneNodeForCheck(proxy)], loc)].concat(args);
-	return methodCall(call("proxyHandler", [proxy], loc), trap, callArgs, loc);
+function handlerCall(ctx: CheckerContext, proxy: Node, trap: string, args: Node[], loc: SourceLocation): Node {
+	const callArgs: Node[] = [call(ctx, "proxyTarget", [cloneNodeKeepSem(proxy)], loc)].concat(args);
+	return methodCall(call(ctx, "proxyHandler", [proxy], loc), trap, callArgs, loc);
 }
 
 // `Reflect.<op>(proxyTarget(p), ...args)`: what a trap the handler leaves out does.
-function reflectCall(proxy: Node, op: string, args: Node[], loc: SourceLocation): Node {
-	return methodCall(ident("Reflect", loc), op, [call("proxyTarget", [proxy], loc)].concat(args), loc);
+function reflectCall(ctx: CheckerContext, proxy: Node, op: string, args: Node[], loc: SourceLocation): Node {
+	return methodCall(stdIdent(ctx, "Reflect", loc), op, [call(ctx, "proxyTarget", [proxy], loc)].concat(args), loc);
 }
 
 const RECEIVER = "$proxy";
 const KEY = "$key";
 
 // `proxyWith(p, ($proxy) => body)`: a receiver with effects is read once, into the parameter.
-function readOnce(proxy: Node, body: Node, loc: SourceLocation): Node {
-	return call("proxyWith", [proxy, routine([RECEIVER], body, loc)], loc);
+function readOnce(ctx: CheckerContext, proxy: Node, body: Node, loc: SourceLocation): Node {
+	return call(ctx, "proxyWith", [proxy, routine([RECEIVER], body, loc)], loc);
 }
 
 function adopt(node: Node, from: Node): Type {
@@ -183,10 +191,10 @@ function adopt(node: Node, from: Node): Type {
 }
 
 // The read of `recv[key]` through `get`, or through `Reflect.get` when H declares none.
-function readOf(recv: Node, key: Node, route: Route, loc: SourceLocation): Node {
-	if (route == "trap") return handlerCall(recv, "get", [key], loc);
-	if (key.kind == NodeKind.StringLiteral) return member(call("proxyTarget", [recv], loc), (key.data as StringLiteralData).value, loc);
-	return reflectCall(recv, "get", [key], loc);
+function readOf(ctx: CheckerContext, recv: Node, key: Node, route: Route, loc: SourceLocation): Node {
+	if (route == "trap") return handlerCall(ctx, recv, "get", [key], loc);
+	if (key.kind == NodeKind.StringLiteral) return member(call(ctx, "proxyTarget", [recv], loc), (key.data as StringLiteralData).value, loc);
+	return reflectCall(ctx, recv, "get", [key], loc);
 }
 
 function readThrough(ctx: CheckerContext, node: Node, recv: Node, key: Node, handler: Type, expected: Type | null): Type {
@@ -194,8 +202,8 @@ function readThrough(ctx: CheckerContext, node: Node, recv: Node, key: Node, han
 	const route = routeOf(ctx, handler, "get", loc);
 	if (route == "refused") return errorType();
 	const read = route == "trap" && !readsWithoutEffect(recv)
-		? readOnce(recv, readOf(ident(RECEIVER, loc), key, route, loc), loc)
-		: readOf(recv, key, route, loc);
+		? readOnce(ctx, recv, readOf(ctx, ident(RECEIVER, loc), key, route, loc), loc)
+		: readOf(ctx, recv, key, route, loc);
 	callCheckExpr(ctx, read, expected);
 	return adopt(node, read);
 }
@@ -217,24 +225,24 @@ export function readIndexThroughProxy(ctx: CheckerContext, node: Node, expected:
 
 // The write of `value` to `recv[key]`: `set`, whose false fails the write, or `Reflect.set`
 // on an array target, or the field of the target.
-function writeTo(recv: Node, key: Node, value: Node, route: Route, onArray: boolean, loc: SourceLocation): Node {
-	if (route == "trap") return call("proxyChecked", [handlerCall(recv, "set", [key, value], loc), keyLiteral("set", loc), cloneNodeForCheck(key)], loc);
-	if (onArray) return reflectCall(recv, "set", [key, value], loc);
-	const field = member(call("proxyTarget", [recv], loc), (key.data as StringLiteralData).value, loc);
+function writeTo(ctx: CheckerContext, recv: Node, key: Node, value: Node, route: Route, onArray: boolean, loc: SourceLocation): Node {
+	if (route == "trap") return call(ctx, "proxyChecked", [handlerCall(ctx, recv, "set", [key, value], loc), keyLiteral("set", loc), cloneNodeKeepSem(key)], loc);
+	if (onArray) return reflectCall(ctx, recv, "set", [key, value], loc);
+	const field = member(call(ctx, "proxyTarget", [recv], loc), (key.data as StringLiteralData).value, loc);
 	return createNodeAt(NodeKind.BinaryExpr, { left: field, operator: "=", right: value }, loc);
 }
 
 // The read `recv[key]` written again, so a compound write's read goes through `get` like any read.
 function rereadOf(recv: Node, key: Node, loc: SourceLocation): Node {
-	if (key.kind == NodeKind.StringLiteral) return member(cloneNodeForCheck(recv), (key.data as StringLiteralData).value, loc);
-	return createNodeAt(NodeKind.ArrayAccess, { array: cloneNodeForCheck(recv), index: cloneNodeForCheck(key) }, loc);
+	if (key.kind == NodeKind.StringLiteral) return member(cloneNodeKeepSem(recv), (key.data as StringLiteralData).value, loc);
+	return createNodeAt(NodeKind.ArrayAccess, { array: cloneNodeKeepSem(recv), index: cloneNodeKeepSem(key) }, loc);
 }
 
 // `recv[key] op= v` is the write of `recv[key] op v`.
-function compoundWrite(recv: Node, key: Node, op: string, right: Node, route: Route, onArray: boolean, loc: SourceLocation): Node {
+function compoundWrite(ctx: CheckerContext, recv: Node, key: Node, op: string, right: Node, route: Route, onArray: boolean, loc: SourceLocation): Node {
 	const value = op == "=" ? right
 		: createNodeAt(NodeKind.BinaryExpr, { left: rereadOf(recv, key, loc), operator: op.slice(0, op.length - 1), right: right }, loc);
-	return writeTo(recv, key, value, route, onArray, loc);
+	return writeTo(ctx, recv, key, value, route, onArray, loc);
 }
 
 // `p.key = v`, `p[i] = v` and their compound forms; a receiver or index with effects is read once.
@@ -258,11 +266,11 @@ export function writeThroughProxy(ctx: CheckerContext, node: Node): boolean {
 	const route: Route = unknown ? "refused" : routeOf(ctx, parts[1], "set", loc);
 	if (route == "refused") { node.nodeType = errorType(); return true; }
 	let write: Node;
-	if (readsWithoutEffect(recv) && readsWithoutEffect(key)) write = compoundWrite(recv, key, d.operator, d.right, route, onArray, loc);
-	else if (key.kind == NodeKind.StringLiteral) write = readOnce(recv, block([statement(compoundWrite(ident(RECEIVER, loc), key, d.operator, d.right, route, onArray, loc))], loc), loc);
+	if (readsWithoutEffect(recv) && readsWithoutEffect(key)) write = compoundWrite(ctx, recv, key, d.operator, d.right, route, onArray, loc);
+	else if (key.kind == NodeKind.StringLiteral) write = readOnce(ctx, recv, block([statement(compoundWrite(ctx, ident(RECEIVER, loc), key, d.operator, d.right, route, onArray, loc))], loc), loc);
 	else {
-		const body = block([statement(compoundWrite(ident(RECEIVER, loc), ident(KEY, loc), d.operator, d.right, route, onArray, loc))], loc);
-		write = call("proxyWithKey", [recv, key, routine([RECEIVER, KEY], body, loc)], loc);
+		const body = block([statement(compoundWrite(ctx, ident(RECEIVER, loc), ident(KEY, loc), d.operator, d.right, route, onArray, loc))], loc);
+		write = call(ctx, "proxyWithKey", [recv, key, routine([RECEIVER, KEY], body, loc)], loc);
 	}
 	if (write.kind == NodeKind.BinaryExpr) {
 		node.data = write.data;
@@ -370,12 +378,12 @@ function step(kind: string, handler: Type, ctx: CheckerContext, loc: SourceLocat
 		return routine(["$p", "$n"], block([statement(write)], loc), loc);
 	}
 	if (kind == "has") {
-		const has = routeOf(ctx, handler, "has", loc) == "trap" ? handlerCall(p, "has", [k], loc) : reflectCall(p, "has", [k], loc);
+		const has = routeOf(ctx, handler, "has", loc) == "trap" ? handlerCall(ctx, p, "has", [k], loc) : reflectCall(ctx, p, "has", [k], loc);
 		return routine(["$p", "$k"], has, loc);
 	}
 	const del = routeOf(ctx, handler, "deleteProperty", loc) == "trap"
-		? call("proxyChecked", [handlerCall(p, "deleteProperty", [k], loc), keyLiteral("deleteProperty", loc), cloneNodeForCheck(k)], loc)
-		: reflectCall(p, "deleteProperty", [k], loc);
+		? call(ctx, "proxyChecked", [handlerCall(ctx, p, "deleteProperty", [k], loc), keyLiteral("deleteProperty", loc), cloneNodeKeepSem(k)], loc)
+		: reflectCall(ctx, p, "deleteProperty", [k], loc);
 	return routine(["$p", "$k"], block([statement(del)], loc), loc);
 }
 
@@ -405,14 +413,14 @@ export function callThroughProxy(ctx: CheckerContext, node: Node, expected: Type
 	const overrides = TRAPS.indexOf(method) < 0 && classDeclares(parts[1], method);
 	if (overrides) {
 		if (routeOf(ctx, parts[1], method, loc) == "refused") { node.nodeType = errorType(); return true; }
-		built = readsWithoutEffect(md.object) ? handlerCall(md.object, method, d.arguments, loc)
-			: readOnce(md.object, handlerCall(ident(RECEIVER, loc), method, d.arguments, loc), loc);
+		built = readsWithoutEffect(md.object) ? handlerCall(ctx, md.object, method, d.arguments, loc)
+			: readOnce(ctx, md.object, handlerCall(ctx, ident(RECEIVER, loc), method, d.arguments, loc), loc);
 	} else if (isArrayType(parts[0])) {
 		const chain = chainOf(method, d.arguments.length as int32);
 		if (chain != null) {
 			const args: Node[] = [md.object];
 			for (const s of chain.steps) args.push(step(s, parts[1], ctx, loc));
-			built = call(chain.fn, args.concat(d.arguments), loc);
+			built = call(ctx, chain.fn, args.concat(d.arguments), loc);
 		}
 	}
 	if (built == null) {

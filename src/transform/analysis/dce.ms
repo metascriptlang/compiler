@@ -1,31 +1,13 @@
-// Dead Code Elimination — Standard reference two-tier design
-//
-// Level 1 (this file): Statement-level AST transform
-//   - endsInNoReturn: recursive path analysis (Standard reference pattern)
-//   - Never-returning call detection (Standard reference pattern / TypeScript's `: never`)
-//   - Strips unreachable statements after terminators AND compound no-return nodes
-//   - Eliminates dead branches: if(true) → consequent, if(false) → alternate
-//   - Eliminates dead while: while(false) → empty block
-//   - Preserves hoisted declarations (function, class, enum, interface, etc.)
-//
-// Level 2 (this file): Symbol-level dead declaration elimination
-//   Mark-sweep reachability: seed entry points → transitive closure → sweep dead decls
-//
-// Pipeline position: step 19 of 20 (after constantFolding, matchLower, lambdaLifting;
-// before destructorLifting). By this point if(true)/if(false) conditions are already
-// BooleanLiteral nodes from constant folding at step 2.
+// Dead code elimination, statement level: strips unreachable statements after
+// terminators and never-returning calls, folds if(true)/if(false) and while(false).
+// Hoisted declarations stay. lowerDCE then runs the symbol sweep (sweepDecls.ms).
 
-import { AttachedOp, Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, TestDeclData, ExportDeclData, ClassDeclData, EnumDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, VariableDeclData, ReturnStmtData, BinaryExprData, MemberExprData, IdentifierData, Symbol, TypeKind, SymbolKind, Type } from "../../ast/node";
-import { TransformContext, createTransformContextWithChecker, reportTransformError } from "../context";
-import { forEachChild } from "../../ast/visitor";
-import { findSharedBooleanDiscriminant, findSharedStringDiscriminant } from "../../checker/types";
-import { checkProgram } from "../../checker/checkPass";
-import { getDeclName } from "../../checker/collectPass";
+import { Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, TestDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, VariableDeclData, ReturnStmtData, BinaryExprData, MemberExprData, TypeKind } from "../../ast/node";
+import { TransformContext } from "../context";
 import { makeBlock, makeExprStmt } from "../util";
+import { sweepDeadDecls } from "./sweepDecls";
 import { overloadWinner } from "../../checker/symbol";
-import { getOpByKey } from "../../codegen/c/types";
-import { lowerBuiltins } from "../native/builtinLower";
-import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
+import { stmtCountAfter, firstStmtKindAfter, checkedStmtCount } from "../testUtil";
 
 // ===== Helpers =====
 
@@ -59,146 +41,6 @@ function isNeverCall(node: Node): boolean {
 	if (sym.symbolType == null || sym.symbolType.kind != TypeKind.Function) return false;
 	const ret = sym.symbolType.typeReturn;
 	return ret != null && ret.kind == TypeKind.Never;
-}
-
-// ===== Level 2: Symbol-level Dead Declaration Elimination =====
-// Mark-sweep reachability on top-level declarations.
-// Standard reference equivalent: mark-sweep worklist
-// Reference equivalent: transform/dce.zig (computeAliveSymsMultiModule)
-
-// Every symbol a subtree references. An enum member use references its enum,
-// and so does a type that names it: a generic instance bound to the enum
-// may call its toString from another module.
-function collectRefs(node: Node, refs: HashSet<Symbol>, seen: HashSet<Type>): void {
-	if (node == null) return;
-	collectEnumsOfType(node.nodeType, refs, seen);
-	const sym = node.resolvedSym;
-	if (sym != null) {
-		refs.add(sym);
-		const owner = enumOwnerOf(sym);
-		if (owner != null) refs.add(owner);
-	}
-	if (node.kind == NodeKind.Identifier) return;
-	forEachChild(node, (child: Node): void => {
-		collectRefs(child, refs, seen);
-	});
-}
-
-function collectEnumsOfType(t: Type | null, refs: HashSet<Symbol>, seen: HashSet<Type>): void {
-	if (t == null || seen.has(t)) return;
-	seen.add(t);
-	if (t.kind == TypeKind.Enum) {
-		if (t.sym != null) refs.add(t.sym);
-		return;
-	}
-	collectEnumsOfType(t.typeReturn, refs, seen);
-	collectEnumsOfType(t.typeExtra, refs, seen);
-	if (t.typeChildren != null) {
-		for (const c of t.typeChildren) collectEnumsOfType(c, refs, seen);
-	}
-}
-
-function enumOwnerOf(sym: Symbol): Symbol | null {
-	if (sym.symbolKind == SymbolKind.Function) return enumOfToStringOp(sym);
-	if (sym.symbolKind != SymbolKind.EnumMember) return null;
-	let t: Type | null = sym.symbolType;
-	if (t != null && t.kind == TypeKind.EnumLiteral) t = t.typeReturn;
-	return t != null && t.kind == TypeKind.Enum ? t.sym : null;
-}
-
-function enumOfToStringOp(sym: Symbol): Symbol | null {
-	const ft = sym.symbolType;
-	if (ft == null || ft.kind != TypeKind.Function || ft.typeChildren == null || ft.typeChildren.length != 1) return null;
-	const t = ft.typeChildren[0];
-	if (t.kind != TypeKind.Enum || t.sym == null) return null;
-	return getOpByKey(t, AttachedOp.AttachedToString) == sym ? t.sym : null;
-}
-
-// Returns true for declarations that can be eliminated if unreferenced.
-// Reference parity: function-level DCE is handled by codegen (functionDeclIsAlive with
-// cross-module visibility), NOT by transform-level DCE (per-module, no cross-module refs).
-// Only type aliases and enums are safe to eliminate at transform level.
-//
-// Exception: TypeAliasDecls that resolve to discriminated unions (match-type or
-// TS-style with shared literal discriminator) need destructor lifting to emit
-// per-variant hooks. DCE's identifier walker doesn't track type-level references
-// (annotation strings, not Identifier nodes), so any DU alias would be eliminated
-// before destructorLifting can emit `<Name>Destroy`. Keep them alive.
-function isEliminable(node: Node): boolean {
-	if (node.kind == NodeKind.EnumDecl) return true;
-	if (node.kind == NodeKind.TypeAliasDecl) {
-		// Discriminated-union aliases need destructor lifting to emit per-variant
-		// hooks. DCE's identifier walker can't track type-level references
-		// (annotation strings, not Identifier nodes), so any DU alias would be
-		// eliminated before destructorLifting saw it, leaving `<Name>Destroy`
-		// undefined at link time. Detect three DU shapes:
-		//  - Stamped (typeNames[0] + typeExtra): match-type or boolean DU.
-		//  - Boolean-discriminator union: detected via findSharedBooleanDiscriminant.
-		//  - String-discriminator union: detected via findSharedStringDiscriminant.
-		// Other aliases stay eliminable (transparent to the C emitter).
-		const sym = node.resolvedSym;
-		if (sym != null && sym.symbolType != null) {
-			const t = sym.symbolType;
-			if (t.kind == TypeKind.Union) {
-				if (t.typeNames != null && t.typeNames.length > 0 && t.typeExtra != null) return false;
-				if (findSharedBooleanDiscriminant(t) != "") return false;
-				if (findSharedStringDiscriminant(t) != "") return false;
-			}
-		}
-		return true;
-	}
-	return false;
-}
-
-// Main Level 2 algorithm: mark-sweep reachability on top-level declarations.
-function sweepDeadDecls(program: Node, ctx: TransformContext): void {
-	if (program.kind != NodeKind.Program) return;
-	const pd = program.data as ProgramData;
-	const stmts = pd.programStmts;
-	if (stmts.length == 0) return;
-
-	const declSyms: (Symbol | null)[] = [];
-	let anyEliminable = false;
-	for (const stmt of stmts) {
-		if (!isEliminable(stmt)) {
-			declSyms.push(null);
-			continue;
-		}
-		if (stmt.resolvedSym == null) {
-			reportTransformError(ctx, `internal: dead-declaration sweep met '${getDeclName(stmt)}' without a symbol`, stmt.location);
-			return;
-		}
-		declSyms.push(stmt.resolvedSym);
-		anyEliminable = true;
-	}
-	if (!anyEliminable) return;
-
-	const refs = new HashSet<Symbol>();
-	const seen = new HashSet<Type>();
-	for (let si = 0; si < stmts.length; si += 1) {
-		if (declSyms[si] == null) collectRefs(stmts[si], refs, seen);
-	}
-
-	const alive = new HashSet<Symbol>();
-	let changed = true;
-	while (changed) {
-		changed = false;
-		for (let di = 0; di < stmts.length; di += 1) {
-			const sym = declSyms[di];
-			if (sym != null && refs.has(sym) && !alive.has(sym)) {
-				alive.add(sym);
-				collectRefs(stmts[di], refs, seen);
-				changed = true;
-			}
-		}
-	}
-
-	const result: Node[] = [];
-	for (let fi = 0; fi < stmts.length; fi += 1) {
-		const sym = declSyms[fi];
-		if (sym == null || alive.has(sym)) result.push(stmts[fi]);
-	}
-	pd.programStmts = result;
 }
 
 // ===== endsInNoReturn — recursive path analysis =====
@@ -501,18 +343,9 @@ function dceInNode(node: Node, ctx: TransformContext): void {
 // ===== Main Entry Point =====
 
 export function lowerDCE(program: Node, ctx: TransformContext): Node {
-	dceInNode(program, ctx);         // Level 1: statement-level DCE
-	sweepDeadDecls(program, ctx);    // Level 2: symbol-level DCE
+	dceInNode(program, ctx);
+	sweepDeadDecls(program, ctx);
 	return program;
-}
-
-// ===== Test Helper: DCE with checker context =====
-
-function checkedStmtCount(input: string): int32 {
-	const result = parseInput(input);
-	if (!result.ok) return -1;
-	const cc = checkProgram(result.value);
-	return getStmts(lowerDCE(result.value, createTransformContextWithChecker(cc))).length;
 }
 
 // ===== Tests =====
@@ -532,7 +365,7 @@ test "hoisted class kept at transform level" {
 }
 
 test "function body dead code removed" {
-	// foo() call keeps the function alive; Level 1 strips dead const inside body
+	// foo() call keeps the function alive; the statement pass strips dead const inside body
 	assert stmtCountAfter("function foo() { return 1; const dead = 2; } foo();", lowerDCE) == 2;
 	assert firstStmtKindAfter("function foo() { return 1; const dead = 2; } foo();", lowerDCE) == NodeKind.FunctionDecl;
 }
@@ -582,11 +415,11 @@ test "else-if chain missing else" {
 	assert stmtCountAfter(code, lowerDCE) == 2;
 }
 
-test "never call strips after" { assert checkedStmtCount("function fail(): never { throw 1; } fail(); const dead = 2;") == 2; }
+test "never call strips after" { assert checkedStmtCount("function fail(): never { throw 1; } fail(); const dead = 2;", lowerDCE) == 2; }
 
-test "void call keeps after" { assert checkedStmtCount("function log(): void {} log(); const alive = 2;") == 3; }
+test "void call keeps after" { assert checkedStmtCount("function log(): void {} log(); const alive = 2;", lowerDCE) == 3; }
 
-test "unknown function keeps after" { assert checkedStmtCount("mystery(); const alive = 2;") == 2; }
+test "unknown function keeps after" { assert checkedStmtCount("mystery(); const alive = 2;", lowerDCE) == 2; }
 
 test "null checker graceful" {
 	// stmtCountAfter uses null checkerCtx — must not crash
@@ -609,33 +442,7 @@ test "used class kept" { assert stmtCountAfter("class Alive {} const x = Alive;"
 
 test "transitive liveness" { assert stmtCountAfter("function helper() { return 1; } function api() { return helper(); } api();", lowerDCE) == 3; }
 
-function sweptStmtCount(input: string): int32 {
-	const pr = parseInput(input);
-	if (!pr.ok) return -1;
-	const cc = checkProgram(pr.value);
-	return getStmts(lowerDCE(pr.value, createTransformContextWithChecker(cc))).length;
-}
-
-test "unused enum removed" { assert sweptStmtCount("enum Color { Red, Green } const x = 1;") == 1; }
-
-test "an enum used only through a member stays" { assert sweptStmtCount("enum Color { Red, Green } const x = Color.Green;") == 2; }
-
-test "an enum reached only through its toString op stays" {
-	const pr = parseInput("enum Shade { Lo, Hi } const a: int32 = 1; const s: string = Shade[a];");
-	assert pr.ok;
-	const ctx = createTransformContextWithChecker(checkProgram(pr.value));
-	assert getStmts(lowerDCE(lowerBuiltins(pr.value, ctx), ctx)).length == 3;
-}
-
-test "an enum named only by a type stays" {
-	assert sweptStmtCount("enum Shade { Lo, Hi } const n: int32 = 1; const s = n as Shade;") == 3;
-	assert sweptStmtCount("enum Shade { Lo, Hi } struct Lamp { shade: BitSet<Shade>; } const n: int32 = 1;") == 3;
-	assert sweptStmtCount("enum Shade { Lo, Hi } function lit(s: Shade): int32 { return s as int32; } const n: int32 = 1;") == 3;
-}
-
-test "a local that shares an enum's name does not keep the enum" {
-	assert sweptStmtCount("enum Color { Red } function f(): number { const Color = 1; return Color; } f();") == 2;
-}
+test "an unused enum is swept by the entry" { assert checkedStmtCount("enum Color { Red, Green } const x = 1;", lowerDCE) == 1; }
 
 test "variable decl always kept" {
 	// Variable declarations have side effects (initializer runs)

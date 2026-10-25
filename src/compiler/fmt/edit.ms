@@ -3,6 +3,9 @@ import { Token } from "../../lexer/token";
 import { forEachChild } from "../../ast/visitor";
 import { FormatOptions } from "./options";
 import { formatNodeAt } from "./printer/index";
+import { LineIndex, lineOffset } from "../../utils/sourceLines";
+
+export { lineOffset } from "../../utils/sourceLines";
 
 export interface FmtPos {
 	line: int32;
@@ -31,16 +34,6 @@ function commentEnd(c: Token): FmtPos {
 		}
 	}
 	return { line, column };
-}
-
-export function lineOffset(source: string, line: int32): int32 {
-	let current = 1;
-	let pos = 0;
-	while (pos < source.byteLength && current < line) {
-		if (source.byteAt(pos) == "\n".code) current += 1;
-		pos += 1;
-	}
-	return pos;
 }
 
 function leadingWhitespace(source: string, line: int32): string {
@@ -75,8 +68,9 @@ export function formatStatementEdit(stmt: Node, source: string, options: FormatO
 }
 
 export function applyEdit(source: string, edit: FmtEdit): string {
-	const from = lineOffset(source, edit.start.line) + edit.start.column - 1;
-	const to = lineOffset(source, edit.end.line) + edit.end.column - 1;
+	const lines = LineIndex.build(source);
+	const from = lines.lineStart(edit.start.line) + edit.start.column - 1;
+	const to = lines.lineStart(edit.end.line) + edit.end.column - 1;
 	return source.byteSlice(0, from) + edit.newText + source.byteSlice(to, source.byteLength);
 }
 

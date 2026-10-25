@@ -1,6 +1,10 @@
 import { checkProjectDiagnostics, compileProjectToCWithStd, compileProjectToJSWithStd, compileToC, compileToJS, MapEntry } from "../helpers";
 import { checkSource } from "./helpers";
 import { Severity } from "../../checker/context";
+import { lookupInstanceHook } from "../../checker/instantiate";
+import { lookupSymbol } from "../../checker/symbol";
+import { hasAsgnFlag } from "../../checker/types";
+import { AttachedOp } from "../../ast/node";
 
 const hooks = ["onDestroy", "onCopy", "onMove", "onMoved", "onTrace", "onClone"];
 
@@ -231,4 +235,73 @@ test "hook declarations: a class takes no hook that copies, moves, resets or clo
 	expectAccepted(problems, "onDestroy on a class", "function onDestroy(this x: C): void { }\n");
 	expectAccepted(problems, "onTrace on a class", "function onTrace(this x: C, env: Ptr<void>): void { }\n");
 	assert problems.length == 0, problems.join("\n");
+}
+
+function expectSecondBindingRefused(problems: string[], label: string, source: string, hook: string, owner: string): void {
+	const wanted = "cannot bind another '" + hook + "' to '" + owner + "'";
+	for (const error of errorsOf(shapes + source)) {
+		if (error.indexOf(wanted) >= 0) return;
+	}
+	problems.push(label + ": no '" + wanted + "' among " + errorsOf(shapes + source).join(" | "));
+}
+
+test "hook declarations: a second hook of one operation on one type is refused where it is declared" {
+	const problems: string[] = [];
+	expectSecondBindingRefused(problems, "two onDestroy on a struct", "function onDestroy(this x: S): void { }\nfunction onDestroy(this x: S): void { }\n", "onDestroy", "S");
+	expectSecondBindingRefused(problems, "two onCopy on a struct", "function onCopy(this ref x: S, y: S): void { }\nfunction onCopy(this ref x: S, y: S): void { }\n", "onCopy", "S");
+	expectSecondBindingRefused(problems, "two onTrace on a class", "function onTrace(this x: C, env: Ptr<void>): void { }\nfunction onTrace(this x: C, env: Ptr<void>): void { }\n", "onTrace", "C");
+	expectSecondBindingRefused(problems, "a method and an extension onDestroy on a class", "class T { onDestroy(): void { } }\nfunction onDestroy(this x: T): void { }\n", "onDestroy", "T");
+	expectSecondBindingRefused(problems, "two onDestroy on a distinct type", "type Fd = distinct int32;\nfunction onDestroy(this x: Fd): void { }\nfunction onDestroy(this x: Fd): void { }\n", "onDestroy", "Fd");
+	expectAccepted(problems, "one hook per operation", "function onDestroy(this x: S): void { }\nfunction onCopy(this ref x: S, y: S): void { }\nfunction onDestroy(this x: C): void { }\n");
+	assert problems.length == 0, problems.join("\n");
+}
+
+test "hook declarations: a hook declared before its type is the one the scope exit calls" {
+	const src = "function onDestroy(this x: Handle): void { console.log(\"closed\"); }\n"
+		+ "struct Handle { h: int32; }\n"
+		+ "function use(): void { const a: Handle = { h: 1 }; console.log(a.h.toString()); }\n"
+		+ "use();\n";
+	const c = compileToC(src);
+	assert c.ok, c.error;
+	assert destroyCallsOf(c.value, "Handle") >= 1, "the scope exit never calls a destroy hook declared before its type";
+}
+
+test "hook declarations: a second hook of one operation on one generic type is refused where it is declared" {
+	const problems: string[] = [];
+	const box = "struct Box<T> { v: T; }\nclass Bag<T> { v: T; constructor(v: T) { this.v = v; } onDestroy(): void { } }\n";
+	expectSecondBindingRefused(problems, "two generic onDestroy on a struct", box + "function onDestroy<T>(this x: Box<T>): void { }\nfunction onDestroy<T>(this x: Box<T>): void { }\n", "onDestroy", "Box");
+	expectSecondBindingRefused(problems, "two generic onCopy on a struct", box + "function onCopy<T>(this ref x: Box<T>, y: Box<T>): void { }\nfunction onCopy<U>(this ref x: Box<U>, y: Box<U>): void { }\n", "onCopy", "Box");
+	expectSecondBindingRefused(problems, "a generic class method and a generic extension onDestroy", box + "function onDestroy<T>(this x: Bag<T>): void { }\n", "onDestroy", "Bag");
+	expectSecondBindingRefused(problems, "an instance hook after the generic one", box + "function onDestroy<T>(this x: Box<T>): void { }\nfunction onDestroy(this x: Box<int32>): void { }\n", "onDestroy", "Box<int32>");
+	expectSecondBindingRefused(problems, "two hooks for one instance", box + "function onDestroy(this x: Box<int32>): void { }\nfunction onDestroy(this x: Box<int32>): void { }\n", "onDestroy", "Box<int32>");
+	expectAccepted(problems, "an instance hook before the generic one", box + "function onDestroy(this x: Box<int32>): void { }\nfunction onDestroy<T>(this x: Box<T>): void { }\n");
+	assert problems.length == 0, problems.join("\n");
+}
+
+test "hook declarations: an instance hook declared before the generic one is the hook of that instance only" {
+	const ctx = checkSource("struct Box<T> { v: T; }\n"
+		+ "function onDestroy(this x: Box<int32>): void { console.log(\"n\"); }\n"
+		+ "function onDestroy<T>(this x: Box<T>): void { console.log(\"g\"); }\n"
+		+ "const n: Box<int32> = { v: 1 };\nconst s: Box<string> = { v: \"s\" };\n");
+	assert ctx != null && ctx.errors.length == 0;
+	const own = lookupInstanceHook(lookupSymbol(ctx.table, "n")!.symbolType, AttachedOp.AttachedDestructor);
+	const generic = lookupInstanceHook(lookupSymbol(ctx.table, "s")!.symbolType, AttachedOp.AttachedDestructor);
+	assert own != null && own.instantiatedFrom == null && own.location.line == 2, "Box<int32> does not take the hook declared for it";
+	assert generic != null && generic.instantiatedFrom != null && generic.instantiatedFrom!.location.line == 3, "Box<string> does not take the generic hook";
+}
+
+test "hook declarations: a generic hook declared after an instance is seen still reaches that instance" {
+	const ctx = checkSource("struct Box<T> { v: T; }\n"
+		+ "struct Holder { b: Box<int32>; }\n"
+		+ "function use(b: Box<int32>): void { console.log(b.v.toString()); }\n"
+		+ "class Bag<T> { v: T; constructor(v: T) { this.v = v; } }\n"
+		+ "function keep(b: Bag<int32>): void { }\n"
+		+ "function onDestroy<T>(this x: Box<T>): void { console.log(\"late\"); }\n"
+		+ "function onDestroy<T>(this x: Bag<T>): void { console.log(\"late\"); }\n");
+	assert ctx != null && ctx.errors.length == 0;
+	const early = lookupSymbol(ctx.table, "use")!.symbolType.typeChildren[0];
+	assert lookupInstanceHook(early, AttachedOp.AttachedDestructor) != null, "Box<int32> seen before the hook never takes it";
+	assert hasAsgnFlag(early), "Box<int32> seen before the hook is not managed";
+	const bag = lookupSymbol(ctx.table, "keep")!.symbolType.typeChildren[0];
+	assert lookupInstanceHook(bag, AttachedOp.AttachedDestructor) != null, "Bag<int32> seen before the hook never takes it";
 }

@@ -10,7 +10,7 @@ import {
 	lspResponse
 } from "../protocol";
 import {
-	lspFmtCompletionItem, lspFmtMultiLineTextEdit,
+	lspFmtCompletionItem, lspFmtLeanCompletionItem, lspFmtMultiLineTextEdit,
 } from "../format";
 import {
 	sgTypeToString, sgDetectCompletionContext, sgGetPrefix, sgGetCompletionCandidates,
@@ -18,7 +18,6 @@ import {
 	sgFindImportBySource, sgExtractImportPath, sgExtractImportSource, sgExtractExistingImportNames,
 	sgComputeImportEdit, sgQueryAtPosition, sgQueryContextualTypeAt, sgObjectFieldPathAST, sgCompleteObjectFields,
 	findEnclosingObjectLiteral, findNodeAtPosition,
-	sgGetLineOffset,
 	SgSuggest, SgCompletionKind
 } from "../../../checker/suggest";
 import { CheckerContext, findModuleExports } from "../../../checker/context";
@@ -27,6 +26,7 @@ import { SymbolFlag, hasFlag } from "../../../checker/symbol";
 import { createTypeRef } from "../../../checker/types";
 import { Node, MemberExprData, ObjectLiteralData, VariableDeclData, NodeKind, Type, Symbol, SymbolKind } from "../../../ast/node";
 import { forEachChild } from "../../../ast/visitor";
+import { lineOffset } from "../../../utils/sourceLines";
 import { isMsModuleExtension, stripMsModuleExtension } from "../../../module/resolver";
 import {
 	dbGetSource, lspExtractPosition, lspEnsureFileLoaded,
@@ -65,12 +65,12 @@ export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null);
 	const items: string[] = [];
 	for (const kw of STMT_KEYWORDS) {
-		items.push("{\"label\":" + lspJsonString(kw) + ",\"kind\":" + KEYWORD_COMPLETION_KIND + ",\"sortText\":\"16\"}");
+		items.push(lspFmtLeanCompletionItem(kw, KEYWORD_COMPLETION_KIND, "16"));
 	}
 	for (const c of candidates) {
 		const kindNum = lspCompletionItemKind(c.kind, c.isMutable);
 		const sortText = lspCompletionSortText(c);
-		items.push("{\"label\":" + lspJsonString(c.name) + ",\"kind\":" + kindNum + ",\"sortText\":" + lspJsonString(sortText) + "}");
+		items.push(lspFmtLeanCompletionItem(c.name, kindNum, sortText));
 	}
 	// Cross-module candidates (also minimal — just label + kind)
 	if (db.exportRegistry != null) {
@@ -82,7 +82,7 @@ export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string
 				if (sym.name.length == 0 || inScopeSet.has(sym.name)) continue;
 				if (sym.ext != null) continue;
 				const kindNum = lspCompletionItemKind(sym.sym.symbolKind, false);
-				items.push("{\"label\":" + lspJsonString(sym.name) + ",\"kind\":" + kindNum + ",\"sortText\":\"25\"}");
+				items.push(lspFmtLeanCompletionItem(sym.name, kindNum, "25"));
 			}
 		}
 	}
@@ -95,95 +95,42 @@ export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string
 
 // ===== Object Literal Type Resolution (AST-Based) =====
 
-// Find the root struct type for an object literal by walking the AST.
-// Finds the outermost ObjectLiteral ancestor, then looks for the VariableDecl
-// that contains it to get the declared type via sgRecords.
-function lspFindObjectLiteralTypeAST(program: Node, line: int32, col: int32, ctx: CheckerContext): Type | null {
-	// Find the outermost ObjectLiteral ancestor at cursor position
-	const rootObj = lspFindRootObjectLiteral(program, line, col);
-	if (rootObj == null) return null;
-	// Find the VariableDecl that contains this ObjectLiteral
-	const varDecl = lspFindParentVarDecl(program, rootObj);
-	if (varDecl == null) return null;
-	// Query sgRecords for the variable's type — use nameLocation (identifier position), not node location (keyword position)
-	const vd = varDecl.data as VariableDeclData;
-	const sg = sgQueryAtPosition(ctx, vd.nameLocation.line, vd.nameLocation.column);
-	if (sg != null) return sg.symType;
-	return null;
+// Nodes from root down to target, both included; empty when target is not under root.
+function lspPathTo(root: Node, target: Node): Node[] {
+	const path: Node[] = [];
+	lspCollectPath(root, target, path);
+	return path;
 }
 
-// Find the outermost ObjectLiteral containing the cursor.
-// If nested `{ fmt: { | } }`, returns the outer `{ }`.
-// Uses findEnclosingObjectLiteral (from suggest.ms) which has subtree-touch validation,
-// then walks up to find the outermost ancestor ObjectLiteral.
-function lspFindRootObjectLiteral(root: Node, line: int32, col: int32): Node | null {
-	// Find the innermost ObjectLiteral first (validated by subtree check)
-	const innermost = findEnclosingObjectLiteral(root, line, col);
-	if (innermost == null) return null;
-	// Walk from root to find the outermost ObjectLiteral that is an ancestor of innermost
-	const outermost = lspFindOutermostObjLitAncestor(root, innermost);
-	return outermost != null ? outermost : innermost;
-}
-
-// Find the outermost ObjectLiteral node that is an ancestor of target.
-function lspFindOutermostObjLitAncestor(root: Node, target: Node): Node | null {
-	if (root == null) return null;
-	if (root == target) return null;
-	let isAncestor = false;
-	let childResult: Node | null = null;
-	forEachChild(root, (child: Node): void => {
-		if (!isAncestor) {
-			if (child == target) {
-				isAncestor = true;
-			} else {
-				const r = lspFindOutermostObjLitAncestor(child, target);
-				if (r != null) {
-					childResult = r;
-					isAncestor = true;
-				} else if (sgNodeContains(child, target)) {
-					isAncestor = true;
-				}
-			}
-		}
-	});
-	if (isAncestor && root.kind == NodeKind.ObjectLiteral) {
-		return root;
-	}
-	return childResult;
-}
-
-// Check if node contains target anywhere in its subtree.
-function sgNodeContains(node: Node, target: Node): boolean {
-	if (node == null) return false;
+function lspCollectPath(node: Node, target: Node, path: Node[]): boolean {
+	path.push(node);
 	if (node == target) return true;
 	let found = false;
 	forEachChild(node, (child: Node): void => {
-		if (!found && sgNodeContains(child, target)) {
-			found = true;
-		}
+		if (!found && lspCollectPath(child, target, path)) found = true;
 	});
+	if (!found) path.pop();
 	return found;
 }
 
-// Find the VariableDecl AST node that contains a given ObjectLiteral node.
-function lspFindParentVarDecl(root: Node, target: Node): Node | null {
-	if (root == null) return null;
-	if (root.kind == NodeKind.VariableDecl) {
-		const vd = root.data as VariableDeclData;
-		if (vd.initializer == target) {
-			return root;
-		}
-	}
-	let found: Node | null = null;
-	forEachChild(root, (child: Node): void => {
-		if (found == null) {
-			const r = lspFindParentVarDecl(child, target);
-			if (r != null) {
-				found = r;
-			}
-		}
-	});
-	return found;
+// Find the root struct type for an object literal: the outermost ObjectLiteral around the
+// cursor (`{ fmt: { | } }` gives the outer one) and the VariableDecl it initializes, whose
+// declared type sgRecords holds.
+function lspFindObjectLiteralTypeAST(program: Node, line: int32, col: int32, ctx: CheckerContext): Type | null {
+	const innermost = findEnclosingObjectLiteral(program, line, col);
+	if (innermost == null) return null;
+	const path = lspPathTo(program, innermost);
+	let root = 0;
+	while (root < path.length && path[root].kind != NodeKind.ObjectLiteral) root++;
+	if (root == 0 || root == path.length) return null;
+	const varDecl = path[root - 1];
+	if (varDecl.kind != NodeKind.VariableDecl) return null;
+	const vd = varDecl.data as VariableDeclData;
+	if (vd.initializer != path[root]) return null;
+	// Use nameLocation (identifier position), not node location (keyword position)
+	const sg = sgQueryAtPosition(ctx, vd.nameLocation.line, vd.nameLocation.column);
+	if (sg != null) return sg.symType;
+	return null;
 }
 
 // ===== Completion =====
@@ -392,8 +339,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 
 	// Prebuilt cache hit: return pre-computed items instantly.
 	// Skip for member access (char before cursor is '.') and import triggers.
-	const lineOffset = sgGetLineOffset(source, pos.line);
-	const charBefore = pos.col > 0 ? source.byteAt(lineOffset + pos.col - 1) : 0;
+	const charBefore = pos.col > 0 ? source.byteAt(lineOffset(source, pos.line) + pos.col - 1) : 0;
 	const prebuiltItems = _prebuiltCache.has(pos.uri) ? _prebuiltCache.get(pos.uri) : null;
 	if (prefix.length == 0 && charBefore != ".".code && prebuiltItems != null && prebuiltItems.length > 0) {
 		const limited = prebuiltItems.length > 100 ? prebuiltItems.slice(0, 100) : prebuiltItems;
@@ -433,12 +379,12 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	let staticOwner: Symbol | null = null;
 	if (kind == SgCompletionKind.MemberAccess) {
 		// Find the dot position by scanning source backward from cursor
-		const lineOffset = sgGetLineOffset(source, pos.line);
+		const lineStart = lineOffset(source, pos.line);
 		let dotCol = pos.col; // 0-based col of cursor
-		while (dotCol > 0 && source.byteAt(lineOffset + dotCol - 1) != ".".code) {
+		while (dotCol > 0 && source.byteAt(lineStart + dotCol - 1) != ".".code) {
 			dotCol = dotCol - 1;
 		}
-		// dotCol: scan stopped here. byteAt(lineOffset + dotCol - 1) === "."
+		// dotCol: scan stopped here. byteAt(lineStart + dotCol - 1) === "."
 		// So dot is at 0-based col (dotCol - 1), char before dot at 0-based col (dotCol - 2)
 		// sgQueryAtPosition uses 1-based col -> (dotCol - 2) + 1 = dotCol - 1
 		if (dotCol > 1) {

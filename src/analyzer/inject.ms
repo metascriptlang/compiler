@@ -9,10 +9,11 @@
 //
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
+import { bakesIntoStaticCell } from "../checker/reachability";
 import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { createPrimitive, unwrapRefNullUnion, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType } from "../checker/types";
-import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol } from "../checker/symbol";
+import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol, RoutineFlag, routineFlagSet } from "../checker/symbol";
 import { TransformContext, createTransformContext, freshTempSym } from "../transform/context";
 import {
 	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
@@ -526,6 +527,9 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	keepOperandOrder(cd.arguments, marks, dctx);
 	// ensureDestruction on the call's return value is consolidated in processNode (Normal mode) —
 	// NOT applied to individual arguments (each nested call arg gets its own via the recursive walk).
+	if ((mode == DrcMode.SinkArg || mode == DrcMode.Consumed) && isCursorSlot(node.nodeType)) {
+		return passCopyToSink(node, dctx, mode == DrcMode.SinkArg);
+	}
 	return node;
 }
 
@@ -745,6 +749,10 @@ function processArrayAccess(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	return node;
 }
 
+function isCursorSlot(t: Type | null): boolean {
+	return t != null && t.kind == TypeKind.Cursor;
+}
+
 function isPtrField(objType: Type | null, fieldName: string): boolean {
 	if (objType == null) return false;
 	let t = objType;
@@ -828,7 +836,7 @@ function processNew(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// A constructor's parameters are owned (see isCtorRoutine): the arguments are sunk, a last
 	// use or a temporary moves in and anything still live is copied.
 	const marks: Node[] = [];
-	const argMode = isCtorRoutine(node.resolvedSym) ? DrcMode.SinkArg : DrcMode.Normal;
+	const argMode = isCtorRoutine(node.resolvedSym) || isAtomicRef(node.nodeType) ? DrcMode.SinkArg : DrcMode.Normal;
 	for (let i = 0; i < nd.newArguments.length; i += 1) {
 		nd.newArguments[i] = processNode(nd.newArguments[i], dctx, isRestArg(node.resolvedSym, i, nd.newArguments.length) ? DrcMode.Normal : argMode);
 		marks.push(markOperandEnd(dctx, node.location));
@@ -1781,7 +1789,7 @@ function registerFuncParams(paramNames: string[], paramTypes: Type[], paramSyms:
 			// Params are borrows registered as cursors: the caller owns the value and a
 			// store inside the callee copies at the assignment point. A constructor's
 			// parameters from `ownedFrom` on are owned: its callers sink them.
-			registerVar(dctx, pRcInfo, ownedFrom < 0 || pi < ownedFrom || paramTypes[pi].kind == TypeKind.Varargs, paramSyms != null && pi < paramSyms.length ? paramSyms[pi] : noSym);
+			registerVar(dctx, pRcInfo, (paramTypes[pi].kind != TypeKind.Sink && (ownedFrom < 0 || pi < ownedFrom)) || paramTypes[pi].kind == TypeKind.Varargs, paramSyms != null && pi < paramSyms.length ? paramSyms[pi] : noSym);
 		}
 	}
 }
@@ -1863,6 +1871,9 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	const outerFinallyVars = dctx.finallyProtectedVars;
 	const outerBody = dctx.currentFuncBody;
 	const outerCache = dctx.cfgCache;
+	const outerResultIsCursor = dctx.resultIsCursor;
+	const fnType = ownerSym != null && ownerSym.symbolType != null && ownerSym.symbolType.kind == TypeKind.Function ? ownerSym.symbolType : funcNodeType;
+	dctx.resultIsCursor = fnType != null && fnType.kind == TypeKind.Function && isCursorSlot(fnType.typeReturn);
 
 	// Phase A: scan finally blocks for protected variables
 	dctx.finallyProtectedVars = collectFinallyVars(body);
@@ -1900,6 +1911,7 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	dctx.finallyProtectedVars = outerFinallyVars;
 	dctx.currentFuncBody = outerBody;
 	dctx.cfgCache = outerCache;
+	dctx.resultIsCursor = outerResultIsCursor;
 
 	return makeBlock(assembleScope(processed, cleanup, scope, loc), loc);
 }
@@ -2082,6 +2094,26 @@ function stabilizeLocation(n: Node, dctx: DrcContext): Node {
 	return evalOnceTemp(n, n.nodeType, "recvTmp", dctx);
 }
 
+function processAssignedValue(
+	rhs: Node,
+	mode: DrcMode,
+	mocFlags: int32,
+	idx: number,
+	stmts: Node[],
+	dctx: DrcContext,
+): Node {
+	const initializes = (mocFlags & MOC_IS_DECL) != 0;
+	return !initializes && copiesInPlace(rhs, idx, stmts, dctx) ? rhs : processNode(rhs, dctx, mode);
+}
+
+function copiesInPlace(rhs: Node, idx: number, stmts: Node[], dctx: DrcContext): boolean {
+	const sym = rhs.resolvedSym;
+	if (rhs.kind != NodeKind.Identifier || sym == null) return false;
+	if (sym.symbolKind == SymbolKind.Function || sym.symbolKind == SymbolKind.Method) return false;
+	return classifyRc(sym.symbolType, dctx).needsCleanup &&
+		!isLastReadSafe(sym, rhs, idx, stmts, dctx);
+}
+
 // Reference parity: DRC lifecycle hooks (_copy, _sink, _destroy, _wasMoved) are generated by
 // destructorLifting with their own RC operations. The DRC analyzer must NOT wrap field
 // assignments inside hooks with save-assign-destroy — that would double-count references.
@@ -2104,7 +2136,7 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 			return stmt;
 		}
 		bd.left = stabilizeLocation(bd.left, dctx);
-		bd.right = processNode(bd.right, dctx, DrcMode.SinkArg);
+		bd.right = processAssignedValue(bd.right, DrcMode.SinkArg, fieldFlags, idx, stmts, dctx);
 		return moveOrCopy(stmt, bd.left, bd.right, rcInfo, fieldFlags, idx, stmts, dctx, loc);
 	}
 
@@ -2116,7 +2148,7 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 			return stmt;
 		}
 		bd.left = stabilizeLocation(bd.left, dctx);
-		bd.right = processNode(bd.right, dctx, DrcMode.SinkArg);
+		bd.right = processAssignedValue(bd.right, DrcMode.SinkArg, fieldFlags, idx, stmts, dctx);
 		return moveOrCopy(stmt, bd.left, bd.right, rcInfo, fieldFlags, idx, stmts, dctx, loc);
 	}
 
@@ -2127,7 +2159,7 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 			return stmt;
 		}
 		bd.left = stabilizeLocation(bd.left, dctx);
-		bd.right = processNode(bd.right, dctx, DrcMode.SinkArg);
+		bd.right = processAssignedValue(bd.right, DrcMode.SinkArg, fieldFlags, idx, stmts, dctx);
 		return moveOrCopy(stmt, bd.left, bd.right, rcInfo, fieldFlags, idx, stmts, dctx, loc);
 	}
 
@@ -2167,7 +2199,7 @@ function processAssignment(stmt: Node, idx: number, stmts: Node[], dctx: DrcCont
 	// (e.g. a `return x` in a sibling branch — flow-insensitive move record).
 	const movedBeforeRhs = !isFirstWrite && varMovedInContext(dctx, sym);
 
-	bd.right = processNode(bd.right, dctx, rhsMode(bd.right));
+	bd.right = processAssignedValue(bd.right, rhsMode(bd.right), MOC_NONE, idx, stmts, dctx);
 
 	// Reference parity: when dest appears in the RHS (e.g., result = f(result)),
 	// processNode emits wasMoved(dest) as pending because isLastRead is true
@@ -2333,6 +2365,11 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 
 	setNeedsTryAll(dctx);
 
+	if (d.argument != null && d.argument.nodeType != null && d.argument.nodeType.kind == TypeKind.Borrow) {
+		d.argument = processNode(d.argument, dctx, DrcMode.Normal);
+		return stmt;
+	}
+
 	if (d.argument != null) {
 		// Capture the ORIGINAL argument shape before processNode can rewrite it.
 		// processNode(Consumed) on an identifier may return a freshly-created
@@ -2343,6 +2380,10 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 		const origKind = d.argument.kind;
 		const origSym = origKind == NodeKind.Identifier ? d.argument.resolvedSym : noSym;
 
+		if (dctx.resultIsCursor) {
+			d.argument = processNode(d.argument, dctx, DrcMode.Normal);
+			return stmt;
+		}
 		d.argument = processNode(d.argument, dctx, returnMode(d.argument, dctx));
 
 		// Borrowed RC pointer return: wrap in temp + incref to prevent use-after-free
@@ -2399,7 +2440,7 @@ function processFuncDecl(stmt: Node, dctx: DrcContext, loc: SourceLocation): Nod
 	// Generic template: its T-unbound body never reaches codegen (monomorphization emits the
 	// concrete instances, with the `gen:` flag stripped). RC-injecting the template is meaningless
 	// — its members are untyped — so skip it; only real instances get DRC.
-	if (d.fnFlags.indexOf("gen:") >= 0) return stmt;
+	if (routineFlagSet(d.fnFlags).has(RoutineFlag.Generic)) return stmt;
 	d.fnBody = processFuncBodyWithParams(d.fnBody, stmt.resolvedSym, d.fnName, d.params, stmt.paramSyms, dctx, loc, stmt.nodeType!);
 	return stmt;
 }
@@ -2587,6 +2628,19 @@ function destroyHcrCell(cell: Symbol, loc: SourceLocation, dctx: DrcContext): No
 	return [tmp, makeDestroyCall(tmpSym, rcInfo, loc)];
 }
 
+function destroyBakedCell(cell: Symbol, loc: SourceLocation, dctx: DrcContext): Node[] {
+	const valueType = cell.symbolType!.typeReturn!;
+	const rcInfo = classifyRc(valueType, dctx);
+	if (!rcInfo.needsCleanup) return [];
+	const value = makeHiddenDeref(makeIdentResolved(cell, loc), loc);
+	value.nodeType = valueType;
+	const tmpSym = freshTempSym(dctx.ctx, "bakedExit", valueType);
+	const tmp = makeVarDecl(tmpSym.name, value, DeclKind.Const, loc);
+	tmp.nodeType = valueType;
+	tmp.resolvedSym = tmpSym;
+	return [tmp, makeDestroyCall(tmpSym, rcInfo, loc)];
+}
+
 export function injectProgram(program: Node, dctx: DrcContext): Node {
 	if (program.kind != NodeKind.Program) return program;
 	const d = program.data as ProgramData;
@@ -2598,6 +2652,11 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	for (const s of d.programStmts) {
 		if (s.kind == NodeKind.VariableDecl && s.resolvedSym != null && hasFlag(s.resolvedSym, SymbolFlag.HcrCell)) cells.push(s.resolvedSym);
 	}
+	const baked: Symbol[] = [];
+	for (const s of d.programStmts) {
+		const decl = s.kind == NodeKind.ExportDecl ? (s.data as ExportDeclData).exportedDecl : s;
+		if (decl.kind == NodeKind.VariableDecl && decl.resolvedSym != null && bakesIntoStaticCell(decl)) baked.push(decl.resolvedSym);
+	}
 	pushScope(dctx, false, false);
 	dctx.finallyProtectedVars = collectFinallyVars(program);
 	inferCursors(program);
@@ -2607,9 +2666,15 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	const moduleScope = popScope(dctx);
 	for (const s of generateCleanup(moduleScope, program.location)) d.programStmts.push(s);
 	const exits: Node[] = [];
-	if (dctx.globalsToDestroy.length > 0) {
-		const exitScope: DrcScope = { varsToCleanup: dctx.globalsToDestroy, wasMoved: [], preStmts: [], pendingStmts: [], needsTry: false, isLoop: false, isFunction: false };
-		for (const s of generateCleanup(exitScope, program.location)) exits.push(s);
+	let g = dctx.globalsToDestroy.length;
+	while (g > 0) {
+		g -= 1;
+		const vi = dctx.globalsToDestroy[g];
+		if (baked.includes(vi.sym)) {
+			for (const s of destroyBakedCell(vi.sym, program.location, dctx)) exits.push(s);
+		} else if (!vi.isCursor && vi.rcInfo.destroyFn != null) {
+			exits.push(makeDestroyCall(vi.sym, vi.rcInfo, program.location));
+		}
 	}
 	for (let i = cells.length - 1; i >= 0; i -= 1) {
 		for (const s of destroyHcrCell(cells[i], program.location, dctx)) exits.push(s);

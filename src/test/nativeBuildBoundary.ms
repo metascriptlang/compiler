@@ -16,13 +16,7 @@ interface Ran {
 }
 
 function scriptArgs(): string[] {
-	const rest: string[] = [];
-	let seen = false;
-	for (const a of argv) {
-		if (seen && !a.startsWith("--")) rest.push(a);
-		if (a.endsWith("nativeBuildBoundary.ms")) seen = true;
-	}
-	return rest;
+	return argv.slice(1).filter((a: string): boolean => !a.startsWith("--"));
 }
 
 function absolute(path: string): string {
@@ -33,8 +27,8 @@ function absolute(path: string): string {
 const params = scriptArgs();
 const compiler = absolute(params.length > 0 ? params[0] : "msc");
 const group = params.length > 1 ? params[1] : "all";
-if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, or all");
+if (group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, or all");
 	exit(2);
 }
 
@@ -424,6 +418,33 @@ function runProjectCache(): void {
 	if (savedDisabled == "") env.delete("MSC_NO_GLOBAL_CACHE"); else env.set("MSC_NO_GLOBAL_CACHE", savedDisabled);
 }
 
+function loadedGraph(dir: string, label: string, flags: string[]): string {
+	const args: string[] = ["--verbose"];
+	for (const f of flags) args.push(f);
+	need(build(dir, label, "probe", args) == 0, `${label} build`);
+	const log = readFile(`${dir}/${label}.log`);
+	need(log.ok, `${label} log`);
+	return log.ok && log.value.indexOf("loading module graph", 0) >= 0 ? "loaded" : "skipped";
+}
+
+function runRecordSkip(): void {
+	const dir = `${root}/record skip`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/lib.ms`, "export function probeValue(): int32 { return 71; }\n");
+	put(`${dir}/main.ms`, "import { probeValue } from \"./lib\";\nconsole.log(probeValue());\n");
+	waitForNextSecond();
+	need(build(dir, "record-first") == 0, "record first build");
+	record("an unchanged project answers before loading its module graph", "skipped", loadedGraph(dir, "record-unchanged", []));
+	put(`${dir}/lib.ms`, "export function probeValue(): int32 { return 73; }\n");
+	record("an edited imported module loads the module graph", "loaded", loadedGraph(dir, "record-imported-edit", []));
+	record("an edited imported module rebuilds", "73", value(dir));
+	waitForNextSecond();
+	need(build(dir, "record-settled") == 0, "record settled build");
+	record("a define absent from the record loads the module graph", "loaded", loadedGraph(dir, "record-define", ["-d:recordProbe"]));
+	record("a gc mode absent from the record loads the module graph", "loaded", loadedGraph(dir, "record-gc", ["--gc=drc"]));
+}
+
 function runAudit(): void {
 	const linkOptions = fixture("link options", "", "");
 	const firstArchive = makeArchive(linkOptions, "first", 41);
@@ -558,6 +579,21 @@ function runComptimeCache(): void {
 	record("compile-time read of a removed file", "missingd", builtValue(reads, build(reads, "read-removed")));
 	put(`${reads}/first.txt`, "");
 	record("compile-time read of a file created empty", "d", builtValue(reads, build(reads, "read-created-empty")));
+
+	const meta = `${root}/comptime-meta`;
+	ensureDir(meta);
+	put(`${meta}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${meta}/lib.ms`, "import { Node, NodeKind, readFile } from \"std/meta\";\n\nexport macro third(): Node {\n\treturn { kind: NodeKind.StringLiteral, line: 1, column: 1, value: readFile(\"third.txt\") };\n}\n");
+	put(`${meta}/main.ms`, "import { readFile } from \"std/meta\";\nimport { third } from \"./lib\";\n\nconst FIRST: string = @comptime { return readFile(\"first.txt\"); };\n\nconsole.log(FIRST + third());\n");
+	put(`${meta}/first.txt`, "a");
+	put(`${meta}/third.txt`, "b");
+	need(build(meta, "meta-baseline") == 0, "std/meta baseline");
+	need(build(meta, "meta-unchanged") == 0, "std/meta unchanged rebuild");
+	need(value(meta) == "ab", "std/meta baseline value");
+	put(`${meta}/first.txt`, "c");
+	record("std/meta readFile edit read by a compile-time block", "cb", builtValue(meta, build(meta, "meta-block-change")));
+	put(`${meta}/third.txt`, "d");
+	record("std/meta readFile edit read by a macro declared in another module", "cd", builtValue(meta, build(meta, "meta-macro-change")));
 
 	const outside = `${root}/comptime-outside`;
 	comptimeFixture(`${outside}/app`);
@@ -707,6 +743,25 @@ function runDirectivePaths(): void {
 	put(`${abs}/main.ms`, "import { probeValue } from \"./api.h\";\n@link(\"" + abs + "/libnative.a\");\nconsole.log(probeValue());\n");
 	need(build(abs, "link-absolute") == 0, "link absolute build");
 	record("@link with absolute archive path", "61", value(abs));
+
+	const bare = fixture("user-bare-compile", "@compile(\"native.c\");", "int probeValue(void) { return 71; }\n");
+	need(build(bare, "user-bare-compile") == 0, "user bare @compile build");
+	record("a user module's bare @compile path still resolves in its project", "71", value(bare));
+
+	supportTreeOverDecoy("std @compile", "runtime/core/string.c", "console.log(\"ab\".includes(\"b\"));\n", "true");
+	supportTreeOverDecoy("platform runtime list", "runtime/promise/drain.c", "console.log(\"ab\".includes(\"b\"));\n", "true");
+	supportTreeOverDecoy("std @passC -I", "vendor/mbedtls/tf-psa-crypto/drivers/builtin/include/mbedtls/private/bignum.h", "console.log((12345678901234567890n * 3n).toString());\n", "37037036703703703670");
+}
+
+function supportTreeOverDecoy(site: string, decoy: string, program: string, expected: string): void {
+	const dir = `${root}/decoy-${decoy.split("/").join("-")}`;
+	const slash = decoy.lastIndexOf("/");
+	ensureDir(`${dir}/${decoy.slice(0, slash)}`);
+	put(`${dir}/${decoy}`, "#error the cwd checkout's support tree was compiled\n");
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/main.ms`, program);
+	const code = build(dir, "decoy", "probe", ["--passC=-DMSC_SUPPORT_DECOY"]);
+	record(`a ${site} path reads the support tree beside the compiler, not the cwd's ${decoy}`, expected, code == 0 ? value(dir) : `build exit ${code}`);
 }
 
 function runUpcastCast(): void {
@@ -737,8 +792,88 @@ function runUpcastCast(): void {
 	record("a derived interface, a structural match and a class reach their base as a cast pointer", "1 1 5 4 4", value(dir));
 }
 
+function moduleNamesTree(parent: string): string {
+	const app = `${parent}/app`;
+	ensureDir(`${app}/sub`);
+	ensureDir(`${parent}/shared`);
+	put(`${app}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${app}/lib.ms`, "export class Point {\n\tx: number = 1;\n}\nexport function make(): Point { return new Point(); }\n");
+	put(`${app}/sub/lib.ms`, "export class Point {\n\tx: number = 2;\n}\nexport function make(): Point { return new Point(); }\n");
+	put(`${parent}/shared/lib.ms`, "export function shared(): string { return \"three\"; }\n");
+	put(`${app}/main.ms`, [
+		"import { make } from \"./lib\";",
+		"import { make as makeSub } from \"./sub/lib\";",
+		"import { shared } from \"../shared/lib\";",
+		"console.log(`${make().x.toString()} ${makeSub().x.toString()} ${shared()}`);",
+		"",
+	].join("\n"));
+	return app;
+}
+
+function builtText(path: string): string {
+	const r = readFile(path);
+	need(r.ok, `read ${path}`);
+	return r.ok ? r.value : "";
+}
+
+function runModuleNames(): void {
+	const short = moduleNamesTree(`${root}/a`);
+	const long = moduleNamesTree(`${root}/a-much-longer-directory-name`);
+	need(command(short, "js-short", compiler, ["build", "--target=js", "--output=out.js", "main.ms"]).code == 0, "module-names short js build");
+	need(command(long, "js-long", compiler, ["build", "--target=js", "--output=out.js", "main.ms"]).code == 0, "module-names long js build");
+	const shortJs = builtText(`${short}/out.js`);
+	recordTrue("one program builds to the same JS bytes in directories of different lengths", shortJs == builtText(`${long}/out.js`));
+	recordTrue("the JS bundle names no directory of the build machine", shortJs.indexOf("msc45native45boundary", 0) < 0 && shortJs.indexOf("msc-native-boundary", 0) < 0);
+	const ran = command(short, "js-run", "node", ["out.js"]);
+	record("same-basename modules and a module outside the project keep their own names on JS", "1 2 three", ran.code == 0 ? ran.stdout.trim() : `exit ${ran.code}`);
+	need(build(long, "c-long") == 0, "module-names c build");
+	recordTrue("the C binary's symbols name no directory of the build machine", builtText(`${long}/probe`).indexOf("msc45native45boundary", 0) < 0);
+	record("same-basename modules and a module outside the project keep their own names on C", "1 2 three", value(long));
+}
+
 function toolPresent(exe: string): boolean {
 	return execFileCapture(exe, ["--version"]).ok;
+}
+
+function runWasiPlatform(): void {
+	if (!toolPresent("node")) {
+		need(group != "wasi-platform", "wasi-platform requires node on PATH");
+		console.log("skip wasi-platform: node is required on PATH");
+		return;
+	}
+	const dir = `${root}/wasi-platform`;
+	const fixtures = absolute("src/test/fixtures/wasiPlatform");
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	for (const name of [
+		"minimal.ms",
+		"console.ms",
+		"hostCall.ms",
+		"hostCall.h",
+		"platform.ms",
+		"platformProbe.h",
+		"run.cjs",
+	]) {
+		need(copyFile(`${fixtures}/${name}`, `${dir}/${name}`).ok, `copy WASI fixture ${name}`);
+	}
+	for (const name of ["minimal", "console", "hostCall", "platform"]) {
+		const built = command(dir, `build-${name}`, compiler, [
+			"build",
+			`${name}.ms`,
+			"--os=wasm",
+			`--output=${name}.wasm`,
+		]);
+		need(built.code == 0, `WASI ${name} build`);
+	}
+	const names = ["minimal", "console", "hostCall", "platform", "platform"];
+	const modes = ["plain", "plain", "host", "platform", "clockFailure"];
+	const expected = ["", "7", "host=7", "1\n1234", "1\nclock failure trapped"];
+	for (let i = 0; i < names.length; i++) {
+		const label = `run-${names[i]}-${modes[i]}`;
+		const ran = command(dir, label, "node", ["run.cjs", `${names[i]}.wasm`, modes[i]]);
+		record(`${label} exit`, "0", `${ran.code}`);
+		record(label, expected[i], ran.stdout.trim());
+	}
 }
 
 function runEmccArgvFs(): void {
@@ -854,19 +989,144 @@ function runEmccWatchProcess(): void {
 	record("the same program on the host watches and spawns", "watch ok|exec hi|execFile hi", ran.stdout.trim());
 }
 
+function sdkPath(sdk: string): string {
+	const r = execFileCapture("xcrun", ["--sdk", sdk, "--show-sdk-path"]);
+	return r.ok ? r.value.trim() : "";
+}
+
+function bootedSimulator(): string {
+	const r = execFileCapture("xcrun", ["simctl", "list", "devices", "booted"]);
+	if (!r.ok) return "";
+	for (const line of r.value.split("\n")) {
+		const state = line.indexOf(" (Booted)");
+		if (state < 0) continue;
+		const open = line.lastIndexOf("(", state - 1);
+		if (open >= 0) return line.slice(open + 1, state - 1);
+	}
+	return "";
+}
+
+function iosBuild(dir: string, label: string, target: string, sdk: string, output: string): number {
+	const clang = execFileCapture("xcrun", ["--find", "clang"]);
+	if (!clang.ok) {
+		need(false, "xcrun --find clang");
+		return -1;
+	}
+	const flags = `-target ${target} -isysroot ${sdk}`;
+	return command(dir, label, compiler, ["build", "main.ms", "--os=ios", "--cpu=arm64", `--cc=${clang.value.trim()}`, `--passC=${flags}`, `--passL=${flags} ${dir}/host.c`, `--output=${output}`]).code;
+}
+
+const IOS_PROCESS_EXPECTED = "echo hi|path echo hi|cwd ok|path cwd ok|missing program not started 2|missing cwd not started 2|missing program without cwd not started 2|spawn cwd ok 0|spawnSync /bin/echo ENOENT|exec hi|true true";
+
+function runIosProcess(): void {
+	const device = platform == "darwin" ? sdkPath("iphoneos") : "";
+	const simulator = platform == "darwin" ? sdkPath("iphonesimulator") : "";
+	if (device == "" || simulator == "") {
+		console.log("skip ios-process: xcrun with the iphoneos and iphonesimulator SDKs is required");
+		return;
+	}
+	const dir = `${root}/ios-process`;
+	ensureDir(dir);
+	put(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
+	put(`${dir}/host.c`, "void MsMain(void);\nvoid msDrainUntilIdle(void);\nint main(void) { MsMain(); msDrainUntilIdle(); return 0; }\n");
+	put(`${dir}/main.ms`, [
+		"import { argv, cwd, env, exec, execFileResult, spawn, ChildStream, ExecFileResult } from \"std/process\";",
+		"const here = argv[argv.length - 1];",
+		"env.set(\"PATH\", \"/usr/bin:/bin\");",
+		"function ran(label: string, r: ExecFileResult): string {",
+		"\treturn r.started ? `${label} ${r.output.trim()}` : `${label} not started ${r.startErrno}`;",
+		"}",
+		"function inHere(label: string, r: ExecFileResult): string {",
+		"\treturn r.started && r.output.trim().endsWith(\"/ios-process\") ? `${label} ok` : ran(label, r);",
+		"}",
+		"const child = spawn(\"/bin/pwd\", [\"-P\"], { cwd: here });",
+		"let childText = \"\";",
+		"if (child.ok) {",
+		"\tconst out = child.value.read(ChildStream.Stdout, 5000);",
+		"\tconst done = child.value.wait(5000);",
+		"\tchildText = `spawn cwd ${out.ok && out.value.data.trim().endsWith(\"/ios-process\") ? \"ok\" : \"elsewhere\"} ${done.ok ? done.value.code : -1}`;",
+		"} else childText = child.error.message;",
+		"const childMissing = spawn(\"/bin/echo\", [\"hi\"], { cwd: `${here}/no-such-dir` });",
+		"const shell = exec(\"echo hi\");",
+		"console.log([",
+		"\tran(\"echo\", execFileResult(\"/bin/echo\", [\"hi\"])),",
+		"\tran(\"path echo\", execFileResult(\"echo\", [\"hi\"])),",
+		"\tinHere(\"cwd\", execFileResult(\"/bin/pwd\", [\"-P\"], here)),",
+		"\tinHere(\"path cwd\", execFileResult(\"pwd\", [\"-P\"], here)),",
+		"\tran(\"missing program\", execFileResult(\"/no/such/program\", [], here)),",
+		"\tran(\"missing cwd\", execFileResult(\"/bin/echo\", [\"hi\"], `${here}/no-such-dir`)),",
+		"\tran(\"missing program without cwd\", execFileResult(\"/no/such/program\", [])),",
+		"\tchildText,",
+		"\tchildMissing.ok ? \"spawn missing cwd started\" : childMissing.error.message,",
+		"\tshell.ok ? `exec ${shell.value.trim()}` : shell.error.message,",
+		"\t`${cwd() != \"\"} ${env.get(\"HOME\") != \"\"}`,",
+		"].join(\"|\"));",
+		"",
+	].join("\n"));
+	record("an iOS device program that spawns, with and without a cwd, builds", "0", `${iosBuild(dir, "ios-device", "arm64-apple-ios15.0", device, "device")}`);
+	record("the same program builds for the iOS simulator", "0", `${iosBuild(dir, "ios-simulator", "arm64-apple-ios15.0-simulator", simulator, "simulator")}`);
+	const booted = bootedSimulator();
+	if (booted == "") {
+		console.log("skip ios-process simulator run: no booted simulator (xcrun simctl boot <device>)");
+	} else {
+		const ran = command(dir, "ios-simulator-run", "xcrun", ["simctl", "spawn", booted, `${dir}/simulator`, dir]);
+		record("on the iOS simulator a spawn runs in its cwd and a missing program or cwd reports its errno", IOS_PROCESS_EXPECTED, ran.stdout.trim());
+	}
+	need(command(dir, "ios-process-native", compiler, ["build", "main.ms", "--cc=clang", "--output=native"]).code == 0, "ios-process native build");
+	record("the same program on macOS through posix_spawn", IOS_PROCESS_EXPECTED, command(dir, "ios-process-native-run", `${dir}/native`, [dir]).stdout.trim());
+	need(command(dir, "ios-process-fork", compiler, ["build", "main.ms", "--cc=clang", "--passC=-DMS_TEST_SPAWN_FORK", "--output=fork"]).code == 0, "ios-process fork-shim build");
+	record("the same program on macOS through the fork shim iOS uses for a cwd", IOS_PROCESS_EXPECTED, command(dir, "ios-process-fork-run", `${dir}/fork`, [dir]).stdout.trim());
+}
+
+function flowRow(rows: string, flow: string, metric: string): number {
+	for (const line of rows.split("\n")) {
+		const cols = line.split("\t");
+		if (cols.length == 4 && cols[0] == "msc" && cols[1] == flow && cols[2] == metric) return parseFloat(cols[3]);
+	}
+	return -1;
+}
+
+function runFlows(): void {
+	const dir = `${root}/flows`;
+	ensureDir(dir);
+	put(`${dir}/main.ms`, "console.log(1 + 2);\n");
+	const rowsFile = `${dir}/flows.tsv`;
+	env.set("MSC_FLOWS", rowsFile);
+	const built = command(dir, "flows-build", compiler, ["build", "main.ms", "--emit=c", "--output=out"]);
+	env.delete("MSC_FLOWS");
+	need(built.code == 0, "flows build");
+	const read = readFile(rowsFile);
+	const rows = read.ok ? read.value : "";
+	let passMs: number = 0;
+	for (const line of rows.split("\n")) {
+		const cols = line.split("\t");
+		if (cols.length == 4 && cols[1].startsWith("pass.") && cols[2] == "ms") passMs = passMs + parseFloat(cols[3]);
+	}
+	recordTrue("MSC_FLOWS writes the total, setup, phase A and emit rows of a build", flowRow(rows, "total", "ms") > 0 && flowRow(rows, "phase.setup", "ms") > 0 && flowRow(rows, "phase.A", "ms") > 0 && flowRow(rows, "emit.module", "ms") > 0);
+	recordTrue("the pass rows of a build fit inside its phase A", passMs > 0 && passMs <= flowRow(rows, "phase.A", "ms"));
+	record("a build lowers each module once under a2.xform", "true", `${flowRow(rows, "a2.xform", "count") > 0}`);
+}
+
 if (group == "argv" || group == "all") runArgv();
 if (group == "compile-cache" || group == "all") runCompileCache();
 if (group == "link-cache" || group == "all") runLinkCache();
 if (group == "audit" || group == "all") runAudit();
 if (group == "comptime-cache" || group == "all") runComptimeCache();
 if (group == "object-store" || group == "all") runObjectStore();
-if (group == "project-cache" || group == "all") runProjectCache();
+if (group == "project-cache" || group == "all") {
+	runProjectCache();
+	runRecordSkip();
+}
 if (group == "directive-paths" || group == "all") runDirectivePaths();
 if (group == "spawn-drain" || group == "all") runSpawnDrain();
 if (group == "upcast-cast" || group == "all") runUpcastCast();
 if (group == "emcc-argv-fs" || group == "all") runEmccArgvFs();
 if (group == "emcc-watch-process" || group == "all") runEmccWatchProcess();
 if (group == "emcc-jspi" || group == "all") runEmccJspi();
+if (group == "module-names" || group == "all") runModuleNames();
+if (group == "wasi-platform" || group == "all") runWasiPlatform();
+if (group == "ios-process" || group == "all") runIosProcess();
+if (group == "flows" || group == "all") runFlows();
 
 let failures = 0;
 console.log(`root ${root}`);

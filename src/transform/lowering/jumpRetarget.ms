@@ -7,12 +7,13 @@
 // jump targets and labels the jumps that cross a capturing construct; jumps
 // already correct stay bare, so emitted code for the common cases is unchanged.
 //
-// Reference model: transf.nim transformLoopBody — loop-crossing jumps become
-// labeled breaks resolved at lowering time; codegen only translates labels.
+// Loop-crossing jumps become labeled breaks resolved at lowering time; codegen
+// only translates labels.
 
-import { Node, NodeKind, BreakStmtData, ContinueStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData } from "../../ast/node";
+import { Node, NodeKind, BreakStmtData, ContinueStmtData, WhileStmtData, DoWhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, IfStmtData } from "../../ast/node";
+import { isRoutineOrTestNode } from "../../ast/shape";
 import { TransformContext } from "../context";
-import { forEachChild } from "../../ast/visitor";
+import { forEachChild, anyDescendant } from "../../ast/visitor";
 import { mapChildren } from "../walker";
 import { makeBreak, makeBool, makeBlock, makeIf, makeUnary, makeSwitchWrapper, extractBodyStmts } from "../util";
 
@@ -36,15 +37,6 @@ export function retargetJumps(program: Node, ctx: TransformContext): Node {
 	return program;
 }
 
-export function isFnBoundary(kind: NodeKind): boolean {
-	return kind == NodeKind.FunctionDecl
-		|| kind == NodeKind.FunctionExpr
-		|| kind == NodeKind.ArrowFunction
-		|| kind == NodeKind.MethodDecl
-		|| kind == NodeKind.ConstructorDecl
-		|| kind == NodeKind.TestDecl;
-}
-
 export function isLoopKind(kind: NodeKind): boolean {
 	return kind == NodeKind.WhileStmt
 		|| kind == NodeKind.DoWhileStmt
@@ -64,16 +56,14 @@ function isSwitchWrapper(node: Node): boolean {
 }
 
 function continuesLoop(node: Node, loopLabel: string): boolean {
-	if (node.kind == NodeKind.ContinueStmt) {
-		const label = (node.data as ContinueStmtData).continueLabel;
-		return label == "" || label == loopLabel;
-	}
-	if (isFnBoundary(node.kind) || (isLoopKind(node.kind) && !isSwitchWrapper(node))) return false;
-	let found = false;
-	forEachChild(node, (child: Node): void => {
-		if (!found && continuesLoop(child, loopLabel)) found = true;
-	});
-	return found;
+	return anyDescendant(
+		node,
+		(n: Node): boolean => {
+			if (n.kind != NodeKind.ContinueStmt) return false;
+			const label = (n.data as ContinueStmtData).continueLabel;
+			return label == "" || label == loopLabel;
+		},
+		(n: Node): boolean => isRoutineOrTestNode(n) || (isLoopKind(n.kind) && !isSwitchWrapper(n)));
 }
 
 export function hasLoopContinue(stmts: Node[], loopLabel: string): boolean {
@@ -101,7 +91,7 @@ export function retargetLoopJumps(node: Node, jumps: LoopJumps, inSwitch: boolea
 		return node;
 	}
 	const wrapper = isSwitchWrapper(node);
-	if (isFnBoundary(node.kind) || (isLoopKind(node.kind) && !wrapper)) return node;
+	if (isRoutineOrTestNode(node) || (isLoopKind(node.kind) && !wrapper)) return node;
 	const childInSwitch = inSwitch || wrapper || node.kind == NodeKind.SwitchStmt;
 	mapChildren(node, (child: Node): Node => retargetLoopJumps(child, jumps, childInSwitch));
 	return node;
@@ -126,6 +116,20 @@ export function moveDoWhileTestIntoBody(stmt: Node, pre: Node[], cond: Node, ctx
 	body.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null as unknown as Node, loc));
 	wd.doCondition = makeBool(true, loc);
 	wd.doBody = makeBlock(body, loc);
+}
+
+export function moveWhileTestIntoBody(stmt: Node, pre: Node[], cond: Node): void {
+	const wd = stmt.data as WhileStmtData;
+	const loc = stmt.location;
+	pre.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null as unknown as Node, loc));
+	for (const s of extractBodyStmts(wd.whileBody)) pre.push(s);
+	wd.whileCondition = makeBool(true, loc);
+	wd.whileBody = makeBlock(pre, loc);
+}
+
+export function wrapElseIfWhen(d: IfStmtData, alternateNeedsWalk: (alternate: Node) => boolean): void {
+	const alt = d.alternate;
+	if (alt != null && alt.kind == NodeKind.IfStmt && alternateNeedsWalk(alt)) d.alternate = makeBlock([alt], alt.location);
 }
 
 function ensureLoopLabel(target: JumpTarget, ctx: TransformContext): string {
@@ -222,7 +226,7 @@ function walk(node: Node, st: RetargetState): void {
 		retargetContinue(node, st);
 		return;
 	}
-	if (isFnBoundary(kind)) {
+	if (isRoutineOrTestNode(node)) {
 		const savedStack = st.stack;
 		st.stack = [];
 		forEachChild(node, (child: Node) => { walk(child, st); });

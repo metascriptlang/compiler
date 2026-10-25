@@ -1,15 +1,17 @@
 // LSP Handlers — Shared state, caches, and helpers used across handler modules.
 //
-// Extracted from handlers.ms. Contains CompletionCache, deferred diagnostics
-// publishing, cursor extraction, source text access, and import resolution.
+// Contains CompletionCache, deferred diagnostics publishing, cursor extraction,
+// source text access, and import resolution.
 
 import { TransAmDb, dbSetFileText, getFileText, getFileId } from "../../transam/index";
 import { readFile } from "std/fs";
-import { translateCHeader } from "../../../module/cimport/emit";
 import { writeStderr } from "std/io";
 import {
-	lspGetField, lspGetNumberField, lspGetObjectField,
+	lspGetField, lspGetNumberField, lspGetObjectField, lspUriToPath,
 } from "../protocol";
+import { lspByteColumn } from "../position";
+
+export { lspCharacter } from "../position";
 
 
 // ===== Completion Cache =====
@@ -42,31 +44,27 @@ export function createCompletionCache(): CompletionCache {
 }
 
 // Deferred diagnostics: didChange marks files as changed. Post-drain publishes diagnostics.
-let _changedFiles: string[] = [];
-let _changedUris: string[] = [];
+export struct ChangedFile {
+	path: string;
+	uri: string;
+}
+
+let _changedFiles: ChangedFile[] = [];
+let _changedPaths: HashSet<string> = new HashSet<string>();
 
 export function markFileChanged(path: string, uri: string): void {
 	// Clear resolve cache on edit — stale textEdits from previous content
 	_resolveCache = new HashMap<string, string>();
-	let found = false;
-	for (let ci = 0; ci < _changedFiles.length; ci += 1) {
-		if (_changedFiles[ci] == path) { found = true; break; }
-	}
-	if (!found) {
-		_changedFiles.push(path);
-		_changedUris.push(uri);
-	}
+	if (_changedPaths.has(path)) return;
+	_changedPaths.add(path);
+	_changedFiles.push({ path, uri });
 }
 
-export function drainChangedFiles(): string[][] {
-	if (_changedFiles.length == 0) return [];
-	const result: string[][] = [];
-	for (let i = 0; i < _changedFiles.length; i += 1) {
-		result.push([_changedFiles[i], _changedUris[i]]);
-	}
+export function drainChangedFiles(): ChangedFile[] {
+	const drained = _changedFiles;
 	_changedFiles = [];
-	_changedUris = [];
-	return result;
+	_changedPaths = new HashSet<string>();
+	return drained;
 }
 
 // ===== Shared Helpers =====
@@ -78,15 +76,19 @@ export interface LspCursorParams {
 	col1: int32;   // 1-based (for AST node position matching)
 }
 
-export function lspExtractPosition(params: string): LspCursorParams {
-	const textDoc = lspGetObjectField(params, "textDocument");
-	const uri = lspGetField(textDoc, "uri");
-	const position = lspGetObjectField(params, "position");
-	const col0 = lspGetNumberField(position, "character") as int32;
-	return { uri, line: (lspGetNumberField(position, "line") as int32) + 1, col: col0, col1: col0 + 1 };
+export function lspDocumentUri(params: string): string {
+	return lspGetField(lspGetObjectField(params, "textDocument"), "uri");
 }
 
-// Simple linear search for dedup (O(n^2) acceptable for typical reference counts).
+export function lspExtractPosition(params: string, db: TransAmDb | null = null): LspCursorParams {
+	const uri = lspDocumentUri(params);
+	const position = lspGetObjectField(params, "position");
+	const line = (lspGetNumberField(position, "line") as int32) + 1;
+	const character = lspGetNumberField(position, "character") as int32;
+	const col1 = db != null ? lspByteColumn(dbGetSource(db, lspUriToPath(uri)), line, character) : character + 1;
+	return { uri, line, col: col1 - 1, col1 };
+}
+
 // Get raw source text from Trans-Am DB for a given path.
 // Used by handlers that need text scanning (completion prefix, callee detection).
 export function dbGetSource(db: TransAmDb, path: string): string {
@@ -99,8 +101,7 @@ export function dbGetSource(db: TransAmDb, path: string): string {
 export function lspReadDiskSource(filePath: string): Result<string, string> {
 	const readResult = readFile(filePath);
 	if (!readResult.ok) { return Result.err(filePath); }
-	const isHeader = filePath.length >= 2 && filePath.slice(filePath.length - 2, filePath.length) == ".h";
-	return Result.ok(isHeader ? translateCHeader(readResult.value, []) : readResult.value);
+	return Result.ok(readResult.value);
 }
 
 export function lspEnsureFileLoaded(db: TransAmDb, filePath: string): void {
@@ -122,15 +123,18 @@ export function lspReloadFromDisk(db: TransAmDb, filePath: string): boolean {
 	return dbSetFileText(db, filePath, source.value);
 }
 
+// Insertion order is the order reresolveOpenDocuments publishes in; the set answers membership.
 let _openDocuments: string[] = [];
+let _openDocumentSet: HashSet<string> = new HashSet<string>();
 
 export function markDocumentOpen(path: string): void {
-	if (!isDocumentOpen(path)) {
-		_openDocuments.push(path);
-	}
+	if (_openDocumentSet.has(path)) return;
+	_openDocumentSet.add(path);
+	_openDocuments.push(path);
 }
 
 export function markDocumentClosed(path: string): void {
+	if (!_openDocumentSet.delete(path)) return;
 	const kept: string[] = [];
 	for (const open of _openDocuments) {
 		if (open != path) {
@@ -141,10 +145,7 @@ export function markDocumentClosed(path: string): void {
 }
 
 export function isDocumentOpen(path: string): boolean {
-	for (const open of _openDocuments) {
-		if (open == path) return true;
-	}
-	return false;
+	return _openDocumentSet.has(path);
 }
 
 export function openDocuments(): string[] {

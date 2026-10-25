@@ -153,6 +153,25 @@ test "aggregate relation: finite nesting is not a relation cycle" {
 	assert strictErrorCount(recursive) == 0;
 }
 
+function nestedWrappers(depth: int32): string {
+	let typeName = "int32";
+	for (let i = 0; i < depth; i += 1) {
+		typeName = match (i % 3) {
+			0 => "Array<" + typeName + ">",
+			1 => "(" + typeName + ")[]",
+			_ => "Vec<" + typeName + ">",
+		};
+	}
+	return typeName;
+}
+
+test "aggregate relation: annotation nesting depth costs no checker stack per level" {
+	for (const typeName of [nestedArray(400), nestedWrappers(400)]) {
+		assert strictErrorCount("function f(x: " + typeName + "): int32 { return 0; }") == 0, typeName.slice(0, 40);
+		assert strictErrorCount("function f(x: " + typeName + "): int32 { return x; }") == 1, typeName.slice(0, 40);
+	}
+}
+
 test "aggregate relation: equivalent nested object shapes reach overload consumers" {
 	const pre = "enum Kind { A, B } type Data = { a: int32, x: { q: string } } | { b: string }; type AData = { a: int32, x: { q: string } }; type BData = { b: string }; function make(k: Kind.A, d: AData): string; function make(k: Kind.B, d: BData): string; function make(k: Kind, d: Data): string { return \"ok\"; }\n";
 	for (const body of [
@@ -175,8 +194,11 @@ test "aggregate relation: structural fitting requires a layout prefix, not just 
 		{ source: "{ w: int32; v: string }", target: "{ v: string }", accepted: false },
 		{ source: "Leaf", target: "{ v: string }", accepted: false },
 		{ source: "Face", target: "Mask", accepted: true },
-		{ source: "Thing", target: "Peer", accepted: true },
-		{ source: "Crate<int32>", target: "Bin<int32>", accepted: true },
+		{ source: "Leaf", target: "{ w: int32 }", accepted: true },
+		{ source: "Kin", target: "Thing", accepted: true },
+		{ source: "Thing", target: "Peer", accepted: false },
+		{ source: "Fill<int32>", target: "Crate<int32>", accepted: true },
+		{ source: "Crate<int32>", target: "Bin<int32>", accepted: false },
 		{ source: "Crate<int32>", target: "Bin<string>", accepted: false },
 	];
 	for (const pair of pairs) {
@@ -186,6 +208,7 @@ test "aggregate relation: structural fitting requires a layout prefix, not just 
 			+ "interface Face { w: int32; v: string; } interface Mask { w: int32; v: string; } "
 			+ "class Thing { w: int32 = 7; v: string = \"p\"; } "
 			+ "class Peer { w: int32 = 7; v: string = \"p\"; } "
+			+ "class Kin extends Thing { } class Fill<T> extends Crate<T> { } "
 			+ "type Target = " + pair.target + "; ";
 		for (const body of [
 			"function f(value: " + pair.source + "): void { const slot: Target = value; }",
@@ -199,11 +222,14 @@ test "aggregate relation: structural fitting requires a layout prefix, not just 
 		"interface Face { w: int32; v: string; } interface Mask { w: int32; v: string; } "
 			+ "const face: Face = { w: 1, v: \"p\" }; const mask: Mask = face;",
 		"class Thing { w: int32 = 7; v: string = \"p\"; } "
-			+ "class Peer { w: int32 = 7; v: string = \"p\"; } "
-			+ "const thing = new Thing(); const peer: Peer = thing;",
+			+ "class Kin extends Thing { } "
+			+ "const kin = new Kin(); const thing: Thing = kin;",
 		"class Crate<T> { w: T; constructor(w: T) { this.w = w; } } "
-			+ "class Bin<T> { w: T; constructor(w: T) { this.w = w; } } "
-			+ "const crate = new Crate<int32>(7); const bin: Bin<int32> = crate;",
+			+ "class Fill<T> extends Crate<T> { } "
+			+ "const fill = new Fill<int32>(7); const crate: Crate<int32> = fill;",
+		"class Thing { w: int32 = 7; v: string = \"p\"; } "
+			+ "type Head = { w: int32 }; "
+			+ "const thing = new Thing(); const head: Head = thing;",
 	];
 	for (const source of related) {
 		const c = compileToC(source);

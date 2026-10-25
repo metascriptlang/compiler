@@ -189,3 +189,26 @@ test "a number literal receiver is its base for toString, in text and with a rad
 	const big: 3000000000 = 3000000000;
 	assert big.toString(16) == "b2d05e00";
 }
+
+function widenTo64(v: int64): int64 { return v * 3000000000; }
+function widenToF64(v: float64): float64 { return v / 2; }
+function widenedReturn(k: 1 | 2): int64 { return k; }
+
+type Holder = { v: 1 | 2 };
+
+test "number literal types: a value of a literal type widens through its base into a wider parameter" {
+	const a: 1 | 2 = 1;
+	const k: int32 = 1;
+	const m: -1 | 1 = -1;
+	const one: 1 = 1;
+	const h: Holder = { v: 2 };
+	assert widenTo64(a) == widenTo64(k);
+	assert widenTo64(a) == 3000000000;
+	assert widenTo64(m) == -3000000000;
+	assert widenTo64(one) == 3000000000;
+	assert widenTo64(h.v) == 6000000000;
+	assert widenToF64(a) == 0.5;
+	const w: int64 = a;
+	assert w == 1;
+	assert widenedReturn(2) == 2;
+}

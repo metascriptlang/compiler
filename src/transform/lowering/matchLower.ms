@@ -23,7 +23,7 @@ import {
 	makeCall, makeNumber, makeSwitch, makeSwitchCase, isCSwitchableType, runtimeRef,
 } from "../util";
 import { booleanType, int32Type } from "../../checker/types";
-import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
+import { stmtCountAfter, firstStmtKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 import { hashStringSigned } from "std/hash";
 import { endsInNoReturn } from "../analysis/dce";
 
@@ -492,7 +492,7 @@ function moveInto(node: Node, mode: string, assignSym: Symbol | null, loc: Sourc
 }
 
 // Emit the final result: either return expr or assignSym = expr.
-// A noreturn arm yields no value (Nim endsInNoReturn) — emit the bare call.
+// A noreturn arm yields no value — emit the bare call.
 function emitResult(expr: Node, mode: string, assignSym: Symbol | null, loc: SourceLocation): Node {
 	if (expr.nodeType != null && expr.nodeType.kind == TypeKind.Never) {
 		return makeExprStmt(expr, loc);
@@ -601,7 +601,7 @@ function makePatternTest(pattern: Node, matchSym: Symbol, discType: Type, loc: S
 }
 
 // ===== String Hash Dispatch =====
-// When ALL non-wildcard/non-binding arms are string literals and count > 8,
+// When ALL non-wildcard/non-binding arms are string literals and they hold > 8 labels,
 // emit switch(djb2(disc)) with equality guards instead of if-else chain.
 // Matches standard string-case optimization pattern.
 
@@ -624,7 +624,7 @@ function isAllStringCases(cases: Node[]): boolean {
 		for (let j = 0; j < caseData.casePatterns.length; j += 1) {
 			if (caseData.casePatterns[j].kind != NodeKind.StringLiteral) return false;
 		}
-		stringCount = stringCount + 1;
+		stringCount = stringCount + caseData.casePatterns.length;
 	}
 	return stringCount > STRING_HASH_THRESHOLD;
 }
@@ -729,6 +729,17 @@ test "few string arms stay as if-else" {
 	const src = "match (x) { \"a\" => 1, \"b\" => 2, _ => 0 }";
 	// 2 string arms <= threshold → stays as if-else chain
 	assert stmtCountAfter(src, lowerMatch) == 2;
+}
+
+function loweredMatchKind(src: string): NodeKind {
+	const parsed = parseInput(src);
+	if (!parsed.ok) return NodeKind.Program;
+	return getStmts(lowerMatch(parsed.value, makeCtx()))[1].kind;
+}
+
+test "string hash dispatch counts labels, not arms" {
+	assert loweredMatchKind("match (x) { \"a\" | \"b\" | \"c\" => 1, \"d\" | \"e\" | \"f\" => 2, \"g\" | \"h\" | \"i\" => 3, _ => 0 }") == NodeKind.BlockStmt;
+	assert loweredMatchKind("match (x) { \"a\" | \"b\" | \"c\" | \"d\" => 1, \"e\" | \"f\" | \"g\" | \"h\" => 2, _ => 0 }") == NodeKind.IfStmt;
 }
 
 test "hash switch stmt mode lowers into one block" {

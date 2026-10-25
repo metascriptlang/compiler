@@ -1,10 +1,10 @@
 import { checkSource } from "./helpers";
 import { lookupSymbol, makeSymbol } from "../../checker/symbol";
 import { createContext } from "../../checker/context";
-import { checkedInstanceOf, sameCheckedInstance, distinctInstances, retainCheckedInstances, lookupInstanceHook } from "../../checker/instantiate";
+import { instanceArgsOf, sameCheckedInstance, distinctInstances, retainCheckedInstances, lookupInstanceHook } from "../../checker/instantiate";
 import { createGenericInstance, createReadonlyView, unwrapRef, hasAsgnFlag } from "../../checker/types";
 import { ctorRoutineOf } from "../../checker/ctorRoutine";
-import { NodeKind, SymbolKind, FunctionDeclData, createNodeAt, makeLoc } from "../../ast/node";
+import { NodeKind, SymbolKind, FunctionDeclData, createNodeAt, makeLoc, AttachedOp } from "../../ast/node";
 import { makeIdentResolved, makeExprStmt } from "../../transform/util";
 import { computeAliveSet } from "../../checker/reachability";
 import { aliveSetHasSym } from "../../codegen/c/context";
@@ -29,7 +29,7 @@ test "instanceHookIdentity: placement keeps phantom arguments even when signatur
 	(second.declNode!.data as FunctionDeclData).fnName = first.name;
 	assert !sameCheckedInstance(first, second);
 	assert distinctInstances([first.declNode!, second.declNode!]).length == 2;
-	assert checkedInstanceOf(first) == instances[0];
+	assert instanceArgsOf(first) == instances[0].concreteTypes;
 }
 
 test "instanceHookIdentity: independent requesters retain checked records without recreating signature arguments" {
@@ -66,7 +66,7 @@ function change(value: Cell): int32 { const box = new Box<Cell>(value); box.valu
 		const ctor = ctorRoutineOf(instance.sym)!;
 		assert ctor.symbolKind == SymbolKind.Function;
 		assert ctor.instantiatedFrom == ctorRoutineOf(generic);
-		assert checkedInstanceOf(ctor).concreteTypes == instance.concreteTypes;
+		assert instanceArgsOf(ctor) == instance.concreteTypes;
 	}
 }
 
@@ -83,11 +83,11 @@ function change(value: Cell): int32 { const slot: Slot<Cell> = { item: value, ta
 	const cell = lookupSymbol(ctx.table, "Cell")!;
 	const mutable = createGenericInstance(unwrapRef(owner.symbolType), [cell.symbolType]);
 	const readonly = createGenericInstance(unwrapRef(owner.symbolType), [createReadonlyView(cell.symbolType)]);
-	const mutableHook = lookupInstanceHook(mutable, "onDestroy");
-	const readonlyHook = lookupInstanceHook(readonly, "onDestroy");
+	const mutableHook = lookupInstanceHook(mutable, AttachedOp.AttachedDestructor);
+	const readonlyHook = lookupInstanceHook(readonly, AttachedOp.AttachedDestructor);
 	assert mutableHook != null && readonlyHook != null;
 	assert !sameCheckedInstance(mutableHook, readonlyHook);
-	assert lookupInstanceHook(mutable, "onCopy") == null;
+	assert lookupInstanceHook(mutable, AttachedOp.AttachedAsgn) == null;
 }
 
 test "instanceHookIdentity: DCE follows an independent requester copy by phantom arguments rather than name" {
@@ -124,8 +124,8 @@ const second: Ticket<int32> = { value: 4, tag: 2 };
 	const first = lookupSymbol(ctx.table, "first")!.symbolType;
 	const second = lookupSymbol(ctx.table, "second")!.symbolType;
 	assert hasAsgnFlag(first) && hasAsgnFlag(second);
-	assert lookupInstanceHook(first, "onDestroy") != null;
-	assert lookupInstanceHook(first, "onDestroy") == lookupInstanceHook(second, "onDestroy");
+	assert lookupInstanceHook(first, AttachedOp.AttachedDestructor) != null;
+	assert lookupInstanceHook(first, AttachedOp.AttachedDestructor) == lookupInstanceHook(second, AttachedOp.AttachedDestructor);
 }
 
 test "instanceHookIdentity: same-spelled nominal arguments from sibling scopes have distinct emitted class names" {

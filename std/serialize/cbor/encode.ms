@@ -21,7 +21,15 @@
 // std/serialize/discDetect.ms and is shared with JSON encode.
 
 import { Node, NodeKind } from "std/meta";
-import { detectUnionDisc, namesStruct, parseDiscKey, unwrapType, implementationOf } from "../discDetect";
+import {
+	detectUnionDisc,
+	namesStruct,
+	parseDiscKey,
+	unwrapType,
+	implementationOf,
+	literalCarrier,
+	literalMembers,
+} from "../discDetect";
 // bindSym targets — the macros bind every emitted name in THIS module's scope,
 // so the user imports nothing but the entry macro. encode lives in encoder.ms
 // (not the index hub) precisely so binding it cannot cycle. See SERIALIZE.md §11.
@@ -169,6 +177,23 @@ export macro cborValueOf(t: Node): Node {
 		};
 	}
 
+	const literals = literalMembers(tt);
+	if (literals.length > 0) {
+		const carrier = literalCarrier(literals[0]);
+		let literalCallee: Node = bindSym("cborInt");
+		if (carrier == "string") { literalCallee = bindSym("cborText"); }
+		else if (carrier == "boolean") { literalCallee = bindSym("cborBool"); }
+		else if (carrier == "float") { literalCallee = bindSym("cborFloat"); }
+		const literalArg: Node = carrier == "int"
+			? { kind: NodeKind.TypeAssertion, line: t.line, column: t.column, asExpr: t, asType: "int64" }
+			: t;
+		return {
+			kind: NodeKind.CallExpr, line: t.line, column: t.column,
+			callee: literalCallee,
+			arguments: [literalArg],
+		};
+	}
+
 	// V3 — Tagged union (DU) encoding. Mirror JSON encode B-1 shape:
 	// MatchExpr dispatching on disc field, per-variant cborTextMap with
 	// disc literal + payload values via recursive cborValueOf(t.field).
@@ -296,27 +321,6 @@ export macro cborValueOf(t: Node): Node {
 					{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: ords },
 					{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: names },
 				],
-			};
-		}
-		// Literal-typed field (TS-style DU disc, e.g. `kind: "circle"`).
-		// Bridge emits StringLiteral/BooleanLiteral nodes for these — runtime
-		// value is just a regular string/bool, so route to cborText/cborBool.
-		// Without this branch they fell through to the Identifier path below,
-		// got tn="circle", missed the atomic match, and landed in cborInt
-		// with a bad msString-as-int64 cast. Mirrors JSON encode Bug A fix.
-		const literalBuilder: string = match (tt.kind) {
-			NodeKind.StringLiteral => "cborText",
-			NodeKind.BooleanLiteral => "cborBool",
-			_ => "",
-		};
-		if (literalBuilder != "") {
-			const litCallee: Node = literalBuilder == "cborText"
-				? bindSym("cborText")
-				: bindSym("cborBool");
-			return {
-				kind: NodeKind.CallExpr, line: t.line, column: t.column,
-				callee: litCallee,
-				arguments: [t],
 			};
 		}
 		// V1 supports atomic types and atomic-element arrays. Unions /

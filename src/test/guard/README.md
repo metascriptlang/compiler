@@ -78,6 +78,10 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   FREESTANDING E02 at the binding, in the entry and in an imported module.
   Proven RED on `8be46044`; `solanaWritableBinding` alone RED with only the E02
   report in `compile.ms` removed.
+  `solanaStdWritableBinding`, `solanaStdWritableBindingRelease` hold the same for a std module
+  (`std/solana/writableBindingFixture.ms`) on debug and `--release`, and `solanaStdHostBindingLinks`
+  that a std binding no SBF code reaches stays accepted. Proven RED on `5d59ac66e`, where std was
+  exempt: the debug link failed on the discarded `.data`, the release build linked.
   - **Known gap:** the sibling `monoTypeKey` collapse is NOT guarded — its
     function case is *benign* (uniform `msClosure` repr → a collapsed
     `Holder__function` still runs correct), and its only RED case (anon-union

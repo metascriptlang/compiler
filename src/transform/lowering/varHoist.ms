@@ -22,9 +22,7 @@ import {
 import { TransformContext } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { makeVarDecl, makeTypedIdentResolved, makeNull, makeAssign, makeExprStmt, makeBlock } from "../util";
-import { stmtCountAfter, firstStmtKindAfter, fnBodyStmtCount, parseInput, getStmts } from "../testUtil";
-import { checkProgram } from "../../checker/checkPass";
-import { createTransformContextWithChecker } from "../context";
+import { stmtCountAfter, firstStmtKindAfter, fnBodyStmtCount, checkedFnBodyCount } from "../testUtil";
 
 // ===== Conversion =====
 // Replace var decls with assignments (or drop if no init). Recurse into nested blocks.
@@ -219,27 +217,18 @@ test "let unchanged" { assert stmtCountAfter("let x = 1;", lowerVarHoist) == 1; 
 
 test "module var stays" { assert firstStmtKindAfter("var x = 1;", lowerVarHoist) == NodeKind.VariableDecl; }
 
-function checkedFnBodyCount(input: string): int32 {
-	const pr = parseInput(input);
-	if (!pr.ok) return -1;
-	const cc = checkProgram(pr.value);
-	const stmts = getStmts(lowerVarHoist(pr.value, createTransformContextWithChecker(cc)));
-	if (stmts.length == 0 || stmts[0].kind != NodeKind.FunctionDecl) return -1;
-	return ((stmts[0].data as FunctionDeclData).fnBody.data as BlockStmtData).statements.length;
-}
-
 test "no var passthrough" { assert stmtCountAfter("function f() { let x = 1; }", lowerVarHoist) == 1; }
 
 test "stmt count preserved" { assert stmtCountAfter("let a = 1; let b = 2;", lowerVarHoist) == 2; }
 
 test "var hoisted adds let at top" {
-	assert checkedFnBodyCount("function f() { var x = 1; }") == 2;
+	assert checkedFnBodyCount("function f() { var x = 1; }", lowerVarHoist) == 2;
 }
 
 test "two sibling vars hoist one let each" {
-	assert checkedFnBodyCount("function f(c: boolean) { if (c) { var x = 1; } else { var y = 2; } }") == 3;
+	assert checkedFnBodyCount("function f(c: boolean) { if (c) { var x = 1; } else { var y = 2; } }", lowerVarHoist) == 3;
 }
 
 test "nested fn var not hoisted to outer" {
-	assert checkedFnBodyCount("function f() { function g() { var x = 1; } }") == 1;
+	assert checkedFnBodyCount("function f() { function g() { var x = 1; } }", lowerVarHoist) == 1;
 }

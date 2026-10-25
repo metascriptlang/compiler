@@ -13,170 +13,90 @@ import {
 } from "../format";
 import { sgGetPrefix, sgFindImportSource, sgFindExportedDecl, sgQueryAtPosition } from "../../../checker/suggest";
 import { SymbolFlag, hasFlag } from "../../../checker/symbol";
-import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData, SourceLocation, makeLoc, SymbolKind } from "../../../ast/node";
+import { SourceLocation, makeLoc, SymbolKind } from "../../../ast/node";
 import { lspExtractPosition, dbGetSource, lspEnsureFileLoaded } from "./shared";
+import { lspCharacter, lspCharacterIn } from "../position";
 import { dbResolveImport } from "../../transam/index";
+import { isAlphanumeric } from "../../../lexer/chars";
+import { LineIndex, lineStart, lineOf } from "../../../utils/sourceLines";
 
 
-// Find the 0-based column of `name` as a whole word on 0-based `targetLine`.
-function lspFindNameCol(src: string, targetLine: int32, name: string): int32 {
-	// Navigate to target line
-	let lineNum = 0;
-	let lineStart = 0;
-	let i = 0;
-	while (i < src.byteLength && lineNum < targetLine) {
-		if (src[i] == "\n") {
-			lineNum = lineNum + 1;
-			lineStart = i + 1;
-		}
-		i = i + 1;
-	}
-	if (lineNum != targetLine) return -1;
-	// Scan line for word-boundary match
-	let j = lineStart;
-	while (j < src.byteLength && src[j] != "\n") {
-		if (src.slice(j, j + name.byteLength) == name) {
-			const before = j == lineStart || !lspIsWordChar(src[j - 1]);
-			const endIdx = j + name.byteLength;
-			const after = endIdx >= src.byteLength || src[endIdx] == "\n" || !lspIsWordChar(src[endIdx]);
-			if (before && after) return j - lineStart;
-		}
-		j = j + 1;
+// Byte offset of the first whole-word `word` that lies inside [from, to), or -1.
+function findWord(src: string, word: string, from: int32, to: int32): int32 {
+	const width = word.byteLength;
+	if (width == 0) return -1;
+	let at = src.byteIndexOf(word, from);
+	while (at >= 0 && at + width <= to) {
+		const end = at + width;
+		const startsWord = at == 0 || !isAlphanumeric(src.byteAt(at - 1));
+		const endsWord = end >= src.byteLength || !isAlphanumeric(src.byteAt(end));
+		if (startsWord && endsWord) return at;
+		at = src.byteIndexOf(word, at + 1);
 	}
 	return -1;
 }
 
-function lspIsWordChar(ch: string): boolean {
-	return (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || (ch >= "0" && ch <= "9") || ch == "_";
+function lineEnd(src: string, start: int32): int32 {
+	const newline = src.byteIndexOf("\n", start);
+	return newline < 0 ? src.byteLength : newline;
 }
 
-// Find field declaration within an interface/struct body.
-// Scans from startLine+1 looking for `fieldName` followed by `:` (field declaration pattern).
-// Returns 0-based {line, col} or {-1, -1} if not found.
-function lspFindFieldLine(src: string, startLine: number, fieldName: string): SourceLocation {
-	let lineNum = 0;
-	let lineStart = 0;
-	let i = 0;
-	// Skip to startLine + 1 (body starts after declaration line)
-	const bodyStart = startLine + 1;
-	while (i < src.byteLength && lineNum < bodyStart) {
-		if (src[i] == "\n") {
-			lineNum = lineNum + 1;
-			lineStart = i + 1;
-		}
-		i = i + 1;
-	}
-	// Scan lines looking for field declaration
-	while (i < src.byteLength) {
-		// Check if this line contains fieldName as a word followed by : or ?:
-		let j = lineStart;
-		while (j < src.byteLength && src[j] != "\n") {
-			if (src.slice(j, j + fieldName.byteLength) == fieldName) {
-				const before = j == lineStart || !lspIsWordChar(src[j - 1]);
-				const endIdx = j + fieldName.byteLength;
-				const after = endIdx < src.byteLength && !lspIsWordChar(src[endIdx]);
-				if (before && after) {
-					// Check for ':' or '?:' after the field name (skip whitespace)
-					let k = endIdx;
-					while (k < src.byteLength && (src[k] == " " || src[k] == "\t")) {
-						k = k + 1;
-					}
-					if (k < src.byteLength && (src[k] == ":" || src[k] == "?")) {
-						return makeLoc(lineNum, j - lineStart);
-					}
-				}
+// 0-based line and LSP character of a byte offset.
+function locationAt(src: string, offset: int32): SourceLocation {
+	const lines = LineIndex.build(src);
+	const line = lines.lineOf(offset);
+	return makeLoc(line - 1, lspCharacterIn(lines, src, line, offset - lines.lineStart(line) + 1));
+}
+
+// Find the 0-based column of `name` as a whole word on 0-based `targetLine`.
+function lspFindNameCol(src: string, targetLine: int32, name: string): int32 {
+	if (targetLine < 0) return -1;
+	const lines = LineIndex.build(src);
+	const start = lines.lineStart(targetLine + 1);
+	const at = findWord(src, name, start, lineEnd(src, start));
+	return at < 0 ? -1 : lspCharacterIn(lines, src, targetLine + 1, at - start + 1);
+}
+
+// Find a field declaration (`name:` or `name?`) in the lines after `startLine`, stopping at the
+// first line that closes a brace. Returns 0-based {line, col}, or {-1, -1}.
+function lspFindFieldLine(src: string, startLine: int32, fieldName: string): SourceLocation {
+	let line = startLine + 1;
+	const lines = LineIndex.build(src);
+	let start = lines.lineStart(line + 1);
+	while (start < src.byteLength) {
+		const end = lineEnd(src, start);
+		let at = findWord(src, fieldName, start, end);
+		while (at >= 0) {
+			let next = at + fieldName.byteLength;
+			while (next < src.byteLength && (src.byteAt(next) == " ".code || src.byteAt(next) == "\t".code)) {
+				next++;
 			}
-			j = j + 1;
+			if (next < src.byteLength && (src.byteAt(next) == ":".code || src.byteAt(next) == "?".code)) {
+				return makeLoc(line, lspCharacterIn(lines, src, line + 1, at - start + 1));
+			}
+			at = findWord(src, fieldName, at + 1, end);
 		}
-		// Hit closing brace — stop searching
-		let b = lineStart;
-		while (b < src.byteLength && b <= j) {
-			if (src[b] == "}") return makeLoc(-1, -1);
-			b = b + 1;
-		}
-		// Advance to next line
-		i = j + 1;
-		lineNum = lineNum + 1;
-		lineStart = i;
+		const brace = src.byteIndexOf("}", start);
+		if (brace >= 0 && brace < end) return makeLoc(-1, -1);
+		line++;
+		start = end + 1;
 	}
 	return makeLoc(-1, -1);
 }
 
-// Find an enum member declaration: search for "enum ContainerName" then the member within the block.
+// Find an enum member declaration: the `enum ContainerName` line, then the member before the
+// closing brace. A member that is not found resolves to the enum declaration itself.
 function lspFindEnumMemberLine(src: string, containerName: string, memberName: string): SourceLocation {
-	// First find the line containing "enum ContainerName"
-	const enumPattern = "enum " + containerName;
-	let lineNum = 0;
-	let lineStart = 0;
-	let enumLine = -1;
-	let i = 0;
-	while (i < src.byteLength) {
-		if (src[i] == "\n") {
-			lineNum = lineNum + 1;
-			lineStart = i + 1;
-		} else {
-			// Check if this position starts the pattern
-			if (i >= lineStart && i + enumPattern.byteLength <= src.byteLength) {
-				if (src.slice(i, i + enumPattern.byteLength) == enumPattern) {
-					const endIdx = i + enumPattern.byteLength;
-					const before = i == lineStart || !lspIsWordChar(src[i - 1]);
-					const after = endIdx >= src.byteLength || !lspIsWordChar(src[endIdx]);
-					if (before && after) {
-						enumLine = lineNum;
-						// Now search for member within the enum block
-						let j = endIdx;
-						let memberLineNum = lineNum;
-						let memberLineStart = lineStart;
-						while (j < src.byteLength) {
-							if (src[j] == "\n") {
-								memberLineNum = memberLineNum + 1;
-								memberLineStart = j + 1;
-							} else if (src[j] == "}") {
-								// End of enum block — member not found
-								return makeLoc(enumLine, i - lineStart);
-							} else if (j + memberName.byteLength <= src.byteLength && src.slice(j, j + memberName.byteLength) == memberName) {
-								const mb = j == memberLineStart || !lspIsWordChar(src[j - 1]);
-								const me = j + memberName.byteLength >= src.byteLength || !lspIsWordChar(src[j + memberName.byteLength]);
-								if (mb && me) {
-									return makeLoc(memberLineNum, j - memberLineStart);
-								}
-							}
-							j = j + 1;
-						}
-						return makeLoc(enumLine, i - lineStart);
-					}
-				}
-			}
-		}
-		i = i + 1;
-	}
-	return makeLoc(-1, -1);
+	const enumAt = findWord(src, "enum " + containerName, 0, src.byteLength);
+	if (enumAt < 0) return makeLoc(-1, -1);
+	const enumEnd = enumAt + "enum ".length + containerName.byteLength;
+	const memberAt = findWord(src, memberName, enumEnd, src.byteLength);
+	const brace = src.byteIndexOf("}", enumEnd);
+	const found = memberAt >= 0 && (brace < 0 || memberAt < brace) ? memberAt : enumAt;
+	return locationAt(src, found);
 }
 
 // ===== Extern -> Native Header Navigation =====
-
-// Collect .h import paths from the parsed AST (ImportDecl nodes with .h source)
-function lspCollectHeaderImports(program: Node): string {
-	if (program == null) return "";
-	const pd = program.data as ProgramData;
-	let result = "";
-	for (const stmt of pd.programStmts) {
-		let importNode = stmt;
-		if (importNode.kind == NodeKind.ExportDecl) {
-			const ed = importNode.data as ExportDeclData;
-			importNode = ed.exportedDecl;
-		}
-		if (importNode != null && importNode.kind == NodeKind.ImportDecl) {
-			const id = importNode.data as ImportDeclData;
-			if (id.importSource.length > 2
-				&& id.importSource.slice(id.importSource.length - 2, id.importSource.length) == ".h") {
-				if (result != "") { result = result + "\n"; }
-				result = result + id.importSource;
-			}
-		}
-	}
-	return result;
-}
 
 function lspFindNativeDefinition(nativeName: string, headerPath: string, modulePath: string): string {
 	// headerPath may contain multiple paths (newline-separated). Search each.
@@ -212,38 +132,19 @@ function lspSearchHeaderForName(nativeName: string, headerRelPath: string, modul
 	const hPath = lspResolveHeaderPath(headerRelPath, modulePath);
 	const hResult = readFile(hPath);
 	if (!hResult.ok) return "";
-	const hSrc = hResult.value;
-	let lineNum = 0;
-	let lineStart = 0;
-	let i = 0;
-	while (i < hSrc.byteLength) {
-		if (hSrc.charCodeAt(i) == "\n".code) {
-			lineNum = lineNum + 1;
-			lineStart = i + 1;
-			i = i + 1;
-			continue;
-		}
-		if (i + nativeName.byteLength <= hSrc.byteLength) {
-			if (hSrc.slice(i, i + nativeName.byteLength) == nativeName) {
-				const endIdx = i + nativeName.byteLength;
-				const before = i == 0 || !lspIsWordChar(hSrc.charAt(i - 1));
-				const after = endIdx >= hSrc.byteLength || !lspIsWordChar(hSrc.charAt(endIdx));
-				if (before && after) {
-					const col = i - lineStart;
-					const hUri = lspPathToUri(hPath);
-					return lspFmtLocation(hUri, lineNum, col, lineNum, col + nativeName.byteLength);
-				}
-			}
-		}
-		i = i + 1;
-	}
-	return "";
+	const at = findWord(hResult.value, nativeName, 0, hResult.value.byteLength);
+	if (at < 0) return "";
+	const start = locationAt(hResult.value, at);
+	const hUri = lspPathToUri(hPath);
+	return lspFmtLocation(
+		hUri, start.line, start.column, start.line, start.column + nativeName.byteLength,
+	);
 }
 
 // ===== Definition =====
 
 export function handleDefinition(id: string, params: string, db: TransAmDb): string {
-	const pos = lspExtractPosition(params);
+	const pos = lspExtractPosition(params, db);
 	const path = lspUriToPath(pos.uri);
 
 	const program = dbParse(db, path);
@@ -263,19 +164,13 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 		writeStderr("[LSP-DEF] id=" + id + " null: no sgQuery at " + pos.line + ":" + pos.col1 + " in " + path + "\n");
 	}
 	if (suggest != null) {
-		// Extern symbol -> navigate to C definition in the .h file
-		// The .h file is treated as a module: inlineHeaderImports synthesizes @include
-		// directives during preprocessing, stampHeaderPaths stamps the path on symbols,
-		// and we search the raw C source for the native name (since translated MetaScript
-		// positions don't map to original C positions).
+		// Extern symbol -> navigate to C definition: a header's declarations are the
+		// module of the header that writes them; a hand-written extern names its
+		// headers in @include. The raw C source is searched for the native name.
 		if (suggest.sym != null && hasFlag(suggest.sym, SymbolFlag.ImportC)
 			&& suggest.sym.nativeName != "") {
 			const externModPath = suggest.sym.modulePath != null && suggest.sym.modulePath != "" ? suggest.sym.modulePath : path;
-			// Prefer module's own .h imports (most specific), fall back to sym.headerPath
-			// which includes all @include directives (module + prelude).
-			const externProgram = dbParse(db, externModPath);
-			const moduleHdrs = lspCollectHeaderImports(externProgram);
-			const hdrPath = moduleHdrs != "" ? moduleHdrs : suggest.sym.headerPath;
+			const hdrPath = externModPath.endsWith(".h") ? externModPath : suggest.sym.headerPath;
 			if (hdrPath != "") {
 				const nativeResult = lspFindNativeDefinition(suggest.sym.nativeName, hdrPath, externModPath);
 				if (nativeResult != "") return lspResponse(id, "[" + nativeResult + "]");
@@ -299,6 +194,7 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 
 		// Refine line/col using source text
 		if (defSrc != "") {
+			defCol = lspCharacter(defSrc, defLine + 1, defCol + 1);
 			if (suggest.kind == SymbolKind.EnumMember && suggest.containerName != "") {
 				// Enum member: search for "enum ContainerName" then member within block
 				const enumLoc = lspFindEnumMemberLine(defSrc, suggest.containerName, suggest.name);
@@ -320,7 +216,7 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 				if (nameCol >= 0) defCol = nameCol;
 			}
 		}
-		const location = lspFmtLocation(defUri, defLine, defCol, defLine, defCol + suggest.name.byteLength);
+		const location = lspFmtLocation(defUri, defLine, defCol, defLine, defCol + suggest.name.length);
 		return lspResponse(id, "[" + location + "]");
 	}
 
@@ -348,8 +244,50 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 	let tCol = declLoc.column - 1;
 	const targetSrc = dbGetSource(db, targetPath);
 	if (targetSrc != "") {
+		tCol = lspCharacter(targetSrc, tLine + 1, tCol + 1);
 		const tNameCol = lspFindNameCol(targetSrc, tLine, identName);
 		if (tNameCol >= 0) tCol = tNameCol;
 	}
 	return lspResponse(id, "[" + lspFmtLocation(targetUri, tLine, tCol, tLine, tCol + identName.length) + "]");
+}
+
+// ===== Tests =====
+
+test "findWord matches only at word boundaries" {
+	const src = "fooBar foo foo_x foo";
+	assert findWord(src, "foo", 0, src.byteLength) == 7;
+	assert findWord(src, "foo", 8, src.byteLength) == 17;
+	assert findWord(src, "foo", 0, 10) == 7;
+	assert findWord(src, "foo", 0, 9) == -1;
+	assert findWord(src, "bar", 0, src.byteLength) == -1;
+}
+
+test "findWord offsets are bytes after multibyte text" {
+	const src = "// héllo\nname";
+	assert findWord(src, "name", 0, src.byteLength) == 10;
+	assert findWord(src, "héllo", 0, src.byteLength) == 3;
+	assert findWord(src, "", 0, src.byteLength) == -1;
+}
+
+test "lspFindNameCol reports the LSP character after multibyte text" {
+	const src = "let é = name;\nname";
+	assert lspFindNameCol(src, 0, "name") == 8;
+	assert lspFindNameCol(src, 1, "name") == 0;
+	assert lspFindNameCol(src, 2, "name") == -1;
+	assert lspFindNameCol(src, -1, "name") == -1;
+}
+
+test "lspFindFieldLine stops at the closing brace" {
+	const src = "interface A {\n\tx: int32;\n\ty?: int32;\n}\nconst y: int32 = 1;";
+	assert lspFindFieldLine(src, 0, "y").line == 2;
+	assert lspFindFieldLine(src, 0, "y").column == 1;
+	assert lspFindFieldLine(src, 0, "z").line == -1;
+}
+
+test "lspFindEnumMemberLine falls back to the enum line" {
+	const src = "enum Color {\n\tRed,\n\tBlue,\n}\nenum ColorX {\n\tGreen,\n}";
+	assert lspFindEnumMemberLine(src, "Color", "Blue").line == 2;
+	assert lspFindEnumMemberLine(src, "Color", "Green").line == 0;
+	assert lspFindEnumMemberLine(src, "ColorX", "Green").line == 5;
+	assert lspFindEnumMemberLine(src, "Nope", "Red").line == -1;
 }

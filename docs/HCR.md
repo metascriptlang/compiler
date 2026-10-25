@@ -1075,6 +1075,50 @@ opening the smoke page was invalid and the next edit repaired it. The plugin doe
 disable the overlay or patch that policy. A framework-owned overlay is a separate
 adapter concern.
 
+**Generic instances.** Until 2026-10-12 a generic instance was written into the ES module
+of the module declaring the generic, so an app edit that instantiated a library generic at a
+new type rewrote a library file, and Vite, finding no HMR boundary on it, reloaded the page.
+On the split tree (`--target=js --split`, also what `msc run --target=js` executes) an
+instance that only other modules ask for is now a file of its own,
+`_inst/<name>.<hash>.js`, listed under `instances` in `_manifest.json` with the declaring
+module as its `source`. Its name and its class are unchanged: the class of `Box<int32>` is
+the class object of that one file, which a hot update of the module using it does not
+evaluate again. The plugin gives the file the id `<declaring source>?instance=<file stem>`,
+because the emitted path lies under `node_modules`, where Vite 5 serves a module as an
+immutable dependency. A split file also exports every module-level binding it declares, and
+a function the lowerings add for an instance's body (a struct's equality, an enum's
+`toString`) is written into the instance file, so neither the first instance of a generic
+nor the first instance over a new type adds anything to the declaring module's file.
+
+Measured on 2026-10-12, Windows, Vite 5.4.21, headless Chrome, candidate `e624f160`
+against `e8c024c8`, on a copy of Neon's `examples/refreshVite` (Neon `fd576fb`). Adding
+`const [step, setStep] = createSignal(2);` and `step()` to `counter.ms`, then a first
+`createSignal(false)`, each logged `hmr update /counter.ms` with the click count 8, the
+sibling's tally and the page session kept; on `e8c024c8` each logged
+`page reload counter.ms` and the count returned to 0. After each of the two edits the
+browser requested `counter.ms` and the new instance files only (4, then 8); none of the 95
+instance modules it had loaded was requested again. A signal over a new struct, then a
+field added to that struct (6 existing instance files changed in place), also updated
+without a reload. In the emitted tree those edits, a first `createMemo`, a first `<Show>`
+and a first `<For>` changed `counter.js` alone among the files that already existed.
+`hcrJsInstanceFiles` holds the tree property: second type, first use of a generic, struct
+equality and enum `toString` in an instance body, an instance the library also uses, and a
+checked `as` that still refuses the wrong instance. Cost on that example: the split tree
+grew from 932,842 to 1,025,951 bytes of JS (95 modules, 124 instance files) and the dev
+page from 67 to 160 requests; the `vite build` bundle stayed at 80,858 bytes and the single
+`--target=js` bundle is byte-identical.
+
+Still written into the declaring module, so a new one still rewrites its file: an instance
+whose body assigns a module-level variable, because an ES module cannot assign another
+module's binding (inbox card `2026-10-12-js-split-assign-imported-variable`), and an
+instance the declaring module's own code asks for. One more edit still rewrites a library
+file: an app module that exports a function under a name a library module exports renames
+the library's binding (`describe` became `describe_u0` in a two-module probe). Not
+verified: other Vite versions and bundlers, macOS and Linux, an edit that removes and later
+restores an instance while the page stays open, and a `static` local in a generic body (it
+already fails to load on the split tree, inbox card
+`2026-10-12-js-split-static-in-generic-body`).
+
 This transport does not promise state preservation without a consumer's HMR boundary.
 Component/template signatures, surviving state scopes and refresh cleanup belong to
 Neon; the compiler plugin knows none of them. Other Vite versions, other bundlers and

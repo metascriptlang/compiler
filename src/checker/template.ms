@@ -21,20 +21,20 @@ import {
 	Type, TypeKind, Symbol, createNodeAt, NodeFlag,
 } from "../ast/node";
 import { CheckerContext, addError, extractGenericNames } from "./context";
-import { inferredType, errorType, voidType, typeDisplayName, hasGenericParams, isUnknownType, isUnresolvedType } from "./types";
+import { RoutineFlag, routineFlagSet } from "./symbol";
+import { inferredType, errorType, voidType, typeDisplayName, hasGenericParams, isUnknownType, isUnresolvedType, boundSlot, bindParam } from "./types";
 import { isAssignable, unmetConstraint, foldTypeParamCandidates } from "./compat";
 import { bindFromExplicitTypeArgs, checkExplicitTypeArgArity } from "./resolvePass";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { callCheckExpr } from "./checkerCallbacks";
-import { mapChildren } from "../transform/walker";
-import { forEachChild } from "../ast/visitor";
+import { forEachChild, mapChildren } from "../ast/visitor";
 
 // Check if a function symbol is a template (has "template" in fnFlags).
 export function isTemplateSym(sym: Symbol): boolean {
 	if (sym == null || sym.declNode == null) return false;
 	if (sym.declNode.kind != NodeKind.FunctionDecl) return false;
 	const flags = (sym.declNode.data as FunctionDeclData).fnFlags;
-	return flags.indexOf("template", 0) >= 0;
+	return routineFlagSet(flags).has(RoutineFlag.Template);
 }
 
 let _templateDepth: int32 = 0;
@@ -204,25 +204,18 @@ function templateArgsFit(ctx: CheckerContext, sym: Symbol, fd: FunctionDeclData,
 	}
 	const genNames = extractGenericNames(fd.fnFlags);
 	if (!checkExplicitTypeArgArity(ctx, callNode, genNames, sym.name)) return false;
-	const boundNames: string[] = [];
-	const boundTypes: Type[] = [];
-	const boundFrom: int32[] = [];
-	const explicit = bindFromExplicitTypeArgs(callNode, genNames, ctx);
-	for (let ei = 0; ei < explicit.names.length; ei += 1) {
-		boundNames.push(explicit.names[ei]);
-		boundTypes.push(explicit.types[ei]);
-		boundFrom.push(-1);
-	}
-	const candNames: string[] = [];
+	const own = sym.typeParams.length == genNames.length ? sym.typeParams : [];
+	const bound = bindFromExplicitTypeArgs(callNode, own, ctx);
+	const boundFrom: int32[] = bound.params.map((_p: Type): int32 => -1);
+	const candParams: Type[] = [];
 	const candTypes: Type[] = [];
 	const candFrom: int32[] = [];
 	for (let i: int32 = 0; i < args.length; i++) {
 		const declared = symType.typeChildren[i + offset];
 		const argT = args[i].nodeType;
 		if (declared == null || argT == null) continue;
-		const dn = declared.kind == TypeKind.GenericParam ? declared.typeName : "";
-		if (dn != "" && nameIndex(genNames, dn) >= 0) {
-			candNames.push(dn);
+		if (own.indexOf(declared) >= 0) {
+			candParams.push(declared);
 			candTypes.push(argT);
 			candFrom.push(i);
 			continue;
@@ -234,28 +227,26 @@ function templateArgsFit(ctx: CheckerContext, sym: Symbol, fd: FunctionDeclData,
 			return false;
 		}
 	}
-	const skip: boolean[] = [];
-	for (let ci = 0; ci < candNames.length; ci += 1) skip.push(false);
-	const fold = foldTypeParamCandidates(candNames, candTypes, skip, explicit.names, explicit.types);
-	for (let k = 0; k < fold.names.length; k += 1) {
-		if (nameIndex(boundNames, fold.names[k]) >= 0) continue;
-		boundNames.push(fold.names[k]);
-		boundTypes.push(fold.types[k]);
+	const skip: boolean[] = candParams.map((_p: Type): boolean => false);
+	const fold = foldTypeParamCandidates(candParams, candTypes, skip, bound);
+	for (let k = 0; k < fold.params.length; k += 1) {
+		if (boundSlot(bound, fold.params[k]) >= 0) continue;
+		bindParam(bound, fold.params[k], fold.types[k]);
 		boundFrom.push(fold.chosen[k] >= 0 ? candFrom[fold.chosen[k]] : -1);
 	}
 	if (fold.misfits.length > 0) {
 		const m = fold.misfits[0];
-		const bidx = nameIndex(boundNames, candNames[m]);
-		const origin = boundFrom[bidx] >= 0 ? ` — '${candNames[m]}' was bound by argument ${boundFrom[bidx]}` : "";
-		addError(ctx, `Argument type mismatch in '${sym.name}' arg ${candFrom[m]}: got ${typeDisplayName(candTypes[m])}, expected ${typeDisplayName(boundTypes[bidx])}${origin}`,
+		const bidx = boundSlot(bound, candParams[m]);
+		const origin = boundFrom[bidx] >= 0 ? ` — '${candParams[m].typeName}' was bound by argument ${boundFrom[bidx]}` : "";
+		addError(ctx, `Argument type mismatch in '${sym.name}' arg ${candFrom[m]}: got ${typeDisplayName(candTypes[m])}, expected ${typeDisplayName(bound.types[bidx])}${origin}`,
 			args[candFrom[m]].location.line, args[candFrom[m]].location.column);
 		return false;
 	}
-	for (let bi = 0; bi < boundNames.length; bi += 1) {
-		const unmet = unmetConstraint(symType, boundNames[bi], boundTypes[bi], boundNames, boundTypes);
+	for (let bi = 0; bi < bound.params.length; bi += 1) {
+		const unmet = unmetConstraint(bound.params[bi], bound.types[bi], bound.params, bound.types);
 		if (unmet == null) continue;
 		const at = boundFrom[bi] >= 0 ? args[boundFrom[bi]].location : callNode.location;
-		addError(ctx, `Type '${typeDisplayName(boundTypes[bi])}' does not satisfy constraint '${typeDisplayName(unmet)}' for type parameter '${boundNames[bi]}' in '${sym.name}'`,
+		addError(ctx, `Type '${typeDisplayName(bound.types[bi])}' does not satisfy constraint '${typeDisplayName(unmet)}' for type parameter '${bound.params[bi].typeName}' in '${sym.name}'`,
 			at.line, at.column);
 		return false;
 	}

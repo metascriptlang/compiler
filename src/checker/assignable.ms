@@ -8,7 +8,7 @@
 // caller's storage. Rebinding a parameter (CK-18) or a loop binding (CK-30)
 // stays legal. A Borrow<T> root refuses every write, through a reference too.
 
-import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, BinaryExprData, HiddenDerefData, OutExprData, TypeAssertionData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, BinaryExprData, HiddenDerefData, HiddenStdConvData, OutExprData, TypeAssertionData, Type, TypeKind, TypeFlag, Symbol, SymbolKind } from "../ast/node";
 import { SymbolFlag, hasFlag } from "./symbol";
 import { isReadonlyView, isAtomicRef, isSharedGraphType, isNodeGraphType, isStringLike } from "./types";
 import { isValueAggregateParam } from "./paramMutationAnalysis";
@@ -43,6 +43,7 @@ function isDeclaredValueStorage(t: Type | null): boolean {
 	return match (t.kind) {
 		TypeKind.GenericInstance => t.typeExtra != null && isDeclaredValueStorage(t.typeExtra),
 		TypeKind.Array => true,
+		TypeKind.Union => t.typeFlags.has(TypeFlag.ValueUnion),
 		_ => holdsInlineValue(t),
 	};
 }
@@ -89,6 +90,14 @@ function borrowRoot(target: Node): Symbol | null {
 	return sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Borrow ? sym : null;
 }
 
+function peelAddressableConv(n: Node | null): Node | null {
+	while (n != null && (n.kind == NodeKind.HiddenSubConv || n.kind == NodeKind.HiddenStdConv)
+			&& n.nodeType != null && (n.nodeType.kind == TypeKind.Struct || n.nodeType.kind == TypeKind.Tuple)) {
+		n = (n.data as HiddenStdConvData).convExpr;
+	}
+	return n;
+}
+
 export function checkWrite(target: Node, site: WriteSite): WriteCheck {
 	const borrowed = borrowRoot(target);
 	if (borrowed != null) return { verdict: WriteVerdict.BorrowView, root: borrowed };
@@ -105,6 +114,7 @@ export function checkWrite(target: Node, site: WriteSite): WriteCheck {
 		let base: Node | null = null;
 		if (cur.kind == NodeKind.MemberExpr) base = (cur.data as MemberExprData).object;
 		else if (cur.kind == NodeKind.ArrayAccess) base = sliceSource((cur.data as ArrayAccessData).array);
+		base = peelAddressableConv(base);
 		if (base == null || !isValueAggregateParam(base.nodeType)) return { verdict: WriteVerdict.Writable, root: null };
 		interior = true;
 		if (!isDeclaredValueStorage(base.nodeType)) deep = false;

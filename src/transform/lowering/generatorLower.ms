@@ -25,10 +25,11 @@ import {
 	IdentifierData, Symbol, SymbolKind, HiddenDerefData, HiddenStdConvData, MemberExprData, ArrayAccessData, TypeAssertionData,
 	isEmptyBlock, makeLoc,
 } from "../../ast/node";
-import { forEachChild } from "../../ast/visitor";
+import { isScopeBoundary } from "../../ast/shape";
+import { forEachChild, anyChild, anyDescendant } from "../../ast/visitor";
 import { mapChildren } from "../walker";
-import { setFlag, SymbolFlag } from "../../checker/symbol";
-import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult } from "../../checker/types";
+import { setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
+import { isIterator, getIteratorYieldType, getIteratorNextFnType, hasGenericParams, createIteratorResult, getProperty } from "../../checker/types";
 import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, newLoweredSym } from "../context";
 import {
 	makeIdentResolved, makeTypedIdent, makeTypedIdentResolved, makeNull, makeNumber, makeBool,
@@ -38,7 +39,7 @@ import {
 	makeTryCatch, makeCatchSym, makeMoveExpr,
 	makeSwitch, makeSwitchCase, makeDefaultValue,
 } from "../util";
-import { int32Type, createPtr, createPrimitive, numberType, hasDestructor, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
+import { int32Type, createPtr, createPrimitive, numberType, hasAsgnFlag, isCountedRef, peelTransparentInstance, skipModifier } from "../../checker/types";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { isGenericFn } from "../../checker/context";
 import { isOnceLoop, collectIterationDecls, routineSyms, refsAnySym } from "./lambdaLiftingDetect";
@@ -114,15 +115,9 @@ function noteSplitLoopLocals(stmts: Node[]): void {
 
 // ===== Helpers =====
 
-function isFnBoundary(node: Node): boolean {
-	return node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction
-		|| node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.MethodDecl
-		|| node.kind == NodeKind.ConstructorDecl || node.kind == NodeKind.ClassDecl;
-}
-
 // Reference parity (captureVar): env fields always carry their original type.
 function collectDeclTypes(node: Node, syms: Symbol[], types: Type[]): void {
-	if (node == null || isFnBoundary(node)) return;
+	if (node == null || isScopeBoundary(node)) return;
 	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null) {
 		const d = node.data as VariableDeclData;
 		let t = node.nodeType;
@@ -136,9 +131,9 @@ function collectDeclTypes(node: Node, syms: Symbol[], types: Type[]): void {
 	forEachChild(node, (child: Node): void => { collectDeclTypes(child, syms, types); });
 }
 
-// A local without its symbol cannot be told from another of its spelling (NIM-REF TR-1).
+// A local without its symbol cannot be told from another of its spelling.
 export function collectStateLocals(node: Node | null, ctx: TransformContext, out: SymSet): void {
-	if (node == null || isFnBoundary(node)) return;
+	if (node == null || isScopeBoundary(node)) return;
 	if (node.kind == NodeKind.VariableDecl) {
 		if (node.resolvedSym != null) {
 			symSetAdd(out, node.resolvedSym);
@@ -167,13 +162,13 @@ function addressRoot(node: Node): Symbol | null {
 
 function outlivesSuspension(t: Type | null): boolean {
 	if (t == null) return false;
-	if (hasDestructor(t) || hasAsgnFlag(t) || isCountedRef(t)) return true;
+	if (hasAsgnFlag(t) || isCountedRef(t)) return true;
 	const base = peelTransparentInstance(t);
 	return base != t && outlivesSuspension(base);
 }
 
 function extendStateLifetimes(node: Node | null, locals: SymSet, live: Symbol[], lifted: SymSet, ctx: TransformContext): void {
-	if (node == null || isFnBoundary(node)) return;
+	if (node == null || isScopeBoundary(node)) return;
 	if (node.kind == NodeKind.YieldExpr) {
 		for (const sym of live) {
 			if (outlivesSuspension(sym.symbolType)) symSetAdd(lifted, sym);
@@ -314,7 +309,7 @@ function makeIterResult(value: Node, done: boolean, loc: SourceLocation, resultT
 }
 
 function makeDoneResult(loc: SourceLocation, resultType: Type | null): Node {
-	return makeIterResult(makeNull(loc), true, loc, resultType);
+	return makeIterResult(resultType != null ? makeDefaultValue(getProperty(resultType, "value"), loc) : makeNull(loc), true, loc, resultType);
 }
 
 export function makeStateAssign(stateNum: number, loc: SourceLocation, stateSym: Symbol): Node {
@@ -391,7 +386,7 @@ function inlineCrossedFinallies(sc: StateCollector, frameIdx: number, out: Node[
 // The emitted `continue` must reach the state dispatcher: a jump nested in a C
 // loop of its own is split instead (hasEscapingJump).
 function rewriteJumps(node: Node, sc: StateCollector, capBreak: boolean, capContinue: boolean, loc: SourceLocation): Node {
-	if (node == null || isFnBoundary(node)) return node;
+	if (node == null || isScopeBoundary(node)) return node;
 	if (node.kind == NodeKind.ReturnStmt) {
 		if (sc.genReturns != true) return node;
 		const out: Node[] = [];
@@ -425,7 +420,7 @@ function rewriteJumps(node: Node, sc: StateCollector, capBreak: boolean, capCont
 }
 
 function hasEscapingJump(node: Node, sc: StateCollector, capBreak: boolean, capContinue: boolean, inCLoop: boolean): boolean {
-	if (node == null || isFnBoundary(node)) return false;
+	if (node == null || isScopeBoundary(node)) return false;
 	if (node.kind == NodeKind.ReturnStmt) return sc.genReturns == true && crossesYieldFinally(sc, -1);
 	if (node.kind == NodeKind.BreakStmt || node.kind == NodeKind.ContinueStmt) {
 		const idx = jumpFrame(sc, node, capBreak, capContinue);
@@ -445,11 +440,7 @@ function hasEscapingJump(node: Node, sc: StateCollector, capBreak: boolean, capC
 	} else if (node.kind == NodeKind.SwitchStmt) {
 		cb = true;
 	}
-	let found = false;
-	forEachChild(node, (child: Node): void => {
-		if (!found && hasEscapingJump(child, sc, cb, cc, inLoop)) found = true;
-	});
-	return found;
+	return anyChild(node, (child: Node): boolean => hasEscapingJump(child, sc, cb, cc, inLoop));
 }
 
 function needsSplit(stmt: Node, sc: StateCollector): boolean {
@@ -463,22 +454,10 @@ export function allocState(sc: StateCollector): number {
 	return idx;
 }
 
-function isGeneratorFlag(flags: string): boolean {
-	if (flags == "generator" || flags == "async_generator") return true;
-	return flags.indexOf("generator") >= 0;
-}
-
 // ===== Yield Detection =====
 
 export function containsYield(node: Node | null): boolean {
-	if (node == null) return false;
-	if (node.kind == NodeKind.YieldExpr) return true;
-	if (isFnBoundary(node)) return false;
-	let found = false;
-	forEachChild(node, (child: Node): void => {
-		if (!found && containsYield(child)) found = true;
-	});
-	return found;
+	return anyDescendant(node, (n: Node): boolean => n.kind == NodeKind.YieldExpr, isScopeBoundary);
 }
 
 function isDirectYield(expr: Node): boolean {
@@ -1155,7 +1134,7 @@ function walkGenerators(node: Node, ctx: TransformContext): void {
 			const d = node.data as FunctionDeclData;
 			if (isGenericFn(d.fnFlags)) return;
 			walkGenerators(d.fnBody, ctx);
-			if (isGeneratorFlag(d.fnFlags)) {
+			if (routineFlagSet(d.fnFlags).has(RoutineFlag.Generator)) {
 				// Skip generic templates — only monomorphized instances should be lowered.
 				// Generic templates have unresolved type params that produce void in C.
 				const fnType = node.resolvedSym != null ? node.resolvedSym.symbolType : null;
@@ -1184,7 +1163,7 @@ function walkGenerators(node: Node, ctx: TransformContext): void {
 			if (isGenericFn(d.methodFlags)) return;
 			walkGenerators(d.methodBody, ctx);
 			const fnType = node.resolvedSym != null ? node.resolvedSym.symbolType : null;
-			if (d.methodBody != null && isGeneratorFlag(d.methodFlags) && (fnType == null || !hasGenericParams(fnType))) {
+			if (d.methodBody != null && routineFlagSet(d.methodFlags).has(RoutineFlag.Generator) && (fnType == null || !hasGenericParams(fnType))) {
 				d.methodBody = transformGeneratorFn(
 					d.methodParams, d.methodParamTypes, d.methodBody,
 					d.methodFlags, d.methodReturnType, fnType != null ? fnType.typeReturn : null, ctx, node.location,
@@ -1209,7 +1188,7 @@ function walkCheckFuncExpr(node: Node, ctx: TransformContext): void {
 	if (node.kind == NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
 		walkGenerators(d.funcExprBody, ctx);
-		if (isGeneratorFlag(d.funcExprFlags)) {
+		if (routineFlagSet(d.funcExprFlags).has(RoutineFlag.Generator)) {
 			d.funcExprBody = transformGeneratorFn(
 				d.funcExprParams, d.funcExprParamTypes, d.funcExprBody,
 				d.funcExprFlags, d.funcExprReturnType, node.nodeType != null ? node.nodeType.typeReturn : null, ctx, node.location,

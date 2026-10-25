@@ -14,13 +14,12 @@
 
 import {
 	Node, NodeKind, DeclKind, SourceLocation, createNode,
-	ArrayLiteralData, SpreadExprData, IdentifierData, BinaryExprData, Type, TypeKind,
+	ArrayLiteralData, SpreadExprData, IdentifierData, Type, TypeKind,
 } from "../../ast/node";
-import { TransformContext, freshTempSym } from "../context";
-import { int32Type, peelTransparentInstance } from "../../checker/types";
+import { TransformContext, freshTempSym, reportTransformError } from "../context";
+import { int32Type, peelTransparentInstance, typeDisplayName } from "../../checker/types";
 import { Symbol } from "../../ast/node";
 import { walkExpandBlocks, walkOnceEvaluated, OnceEvalState } from "../walker";
-import { forEachChild } from "../../ast/visitor";
 import {
 	makeVarDecl, makeIdentResolved, makeIdent, makeCall, makeMember, makeExprStmt, makeBlock,
 	makeWhile, makeBinary, makeNumber, makeArrayAccess, makeHiddenAddr, makeHiddenDeref, syntheticToken, runtimeRef, counterType, makeCounterStep,
@@ -38,26 +37,6 @@ export function isLowerableSpreadLiteral(node: Node): boolean {
 		if (e != null && e.kind == NodeKind.SpreadExpr) return true;
 	}
 	return false;
-}
-
-function isAssignedPattern(parent: Node, child: Node): boolean {
-	if (parent.kind != NodeKind.BinaryExpr || child.kind != NodeKind.ArrayLiteral) return false;
-	const bd = parent.data as BinaryExprData;
-	return bd.operator == "=" && bd.left == child;
-}
-
-function collectEverySpreadLiteral(node: Node, out: Node[]): void {
-	if (node == null) return;
-	forEachChild(node, (c: Node): void => {
-		if (c == null) return;
-		const k = c.kind;
-		if (k == NodeKind.ArrowFunction || k == NodeKind.FunctionExpr
-			|| k == NodeKind.FunctionDecl || k == NodeKind.MethodDecl
-			|| k == NodeKind.BlockStmt) return;
-		if (isAssignedPattern(node, c)) return;
-		collectEverySpreadLiteral(c, out);
-	});
-	if (isLowerableSpreadLiteral(node)) out.push(node);
 }
 
 function collectLeadingSpreadLiterals(stmt: Node, out: Node[]): void {
@@ -84,6 +63,16 @@ function bareArrayType(t: Type | null): Type | null {
 	return u.kind == TypeKind.Ref && u.typeReturn != null ? u.typeReturn : u;
 }
 
+function tupleSource(t: Type | null): Type | null {
+	const u = t != null ? peelTransparentInstance(t) : null;
+	return u != null && u.kind == TypeKind.Tuple ? u : null;
+}
+
+function isIndexedSource(t: Type | null): boolean {
+	const u = bareArrayType(t);
+	return u != null && (u.kind == TypeKind.Array || u.kind == TypeKind.SizedArray || u.kind == TypeKind.Span || u.kind == TypeKind.String);
+}
+
 function viewRef(sym: Symbol, t: Type | null, loc: SourceLocation): Node {
 	if (!isRefArray(t)) return typedRef(sym, t, loc);
 	const deref = makeHiddenDeref(typedRef(sym, t, loc), loc);
@@ -91,11 +80,7 @@ function viewRef(sym: Symbol, t: Type | null, loc: SourceLocation): Node {
 	return deref;
 }
 
-function pushStmt(accSym: Symbol, accT: Type | null, arg: Node, loc: SourceLocation, ctx: TransformContext): Node {
-	if (ctx.keepBuiltinMemberCalls) {
-		const receiver = typedRef(accSym, accT, loc);
-		return makeExprStmt(makeCall(makeMember(receiver, "push", loc), [arg], loc), loc);
-	}
+function pushStmt(accSym: Symbol, accT: Type | null, arg: Node, loc: SourceLocation): Node {
 	const args: Node[] = [];
 	if (isRefArray(accT)) {
 		args.push(typedRef(accSym, accT, loc));
@@ -120,16 +105,29 @@ export function expandSpreadLiteral(lit: Node, ctx: TransformContext, out: Node[
 	for (const e of d.elements) {
 		if (e == null) continue;
 		if (e.kind != NodeKind.SpreadExpr) {
-			out.push(pushStmt(accSym, litT, e, loc, ctx));
+			out.push(pushStmt(accSym, litT, e, loc));
 			continue;
 		}
 		const sd = e.data as SpreadExprData;
 		const srcT = sd.spreadArg.nodeType;
+		const tuple = tupleSource(srcT);
+		if (tuple == null && !isIndexedSource(srcT)) {
+			reportTransformError(ctx, `a spread of '${typeDisplayName(srcT)}' is unsupported on this backend: spread an array, a tuple or a string`, sd.spreadArg.location);
+			continue;
+		}
 		const srcSym = freshTempSym(ctx, "sprs", srcT);
 		const srcDecl = makeVarDecl(srcSym.name, sd.spreadArg, DeclKind.Const, loc);
 		srcDecl.resolvedSym = srcSym;
 		srcDecl.nodeType = srcT;
 		out.push(srcDecl);
+		if (tuple != null) {
+			for (let i = 0; i < tuple.typeChildren.length; i += 1) {
+				const item = makeArrayAccess(typedRef(srcSym, srcT, loc), makeNumber(i, loc), loc);
+				item.nodeType = tuple.typeChildren[i];
+				out.push(pushStmt(accSym, litT, item, loc));
+			}
+			continue;
+		}
 		const indexType = counterType(ctx);
 		const iSym = freshTempSym(ctx, "spri", indexType);
 		const iDecl = makeVarDecl(iSym.name, makeNumber(0, loc), DeclKind.Let, loc);
@@ -140,7 +138,7 @@ export function expandSpreadLiteral(lit: Node, ctx: TransformContext, out: Node[
 		const bareSrc = bareArrayType(srcT);
 		elemAccess.nodeType = bareSrc != null ? bareSrc.typeReturn : null;
 		const bodyStmts: Node[] = [];
-		bodyStmts.push(pushStmt(accSym, litT, elemAccess, loc, ctx));
+		bodyStmts.push(pushStmt(accSym, litT, elemAccess, loc));
 		bodyStmts.push(makeCounterStep(iSym, indexType, loc));
 		const lenMember = makeMember(viewRef(srcSym, srcT, loc), "length", loc);
 		lenMember.nodeType = int32Type();
@@ -159,12 +157,6 @@ function expandLeading(stmt: Node, ctx: TransformContext): Node[] {
 	return expandBefore(stmt, lits, ctx);
 }
 
-function expandEvery(stmt: Node, ctx: TransformContext): Node[] {
-	const lits: Node[] = [];
-	collectEverySpreadLiteral(stmt, lits);
-	return expandBefore(stmt, lits, ctx);
-}
-
 function expandBefore(stmt: Node, lits: Node[], ctx: TransformContext): Node[] {
 	if (lits.length == 0) return [stmt];
 	const out: Node[] = [];
@@ -175,10 +167,5 @@ function expandBefore(stmt: Node, lits: Node[], ctx: TransformContext): Node[] {
 
 export function lowerArraySpread(program: Node, ctx: TransformContext): Node {
 	walkExpandBlocks(program, expandLeading, ctx);
-	return program;
-}
-
-export function lowerArraySpreadEager(program: Node, ctx: TransformContext): Node {
-	walkExpandBlocks(program, expandEvery, ctx);
 	return program;
 }

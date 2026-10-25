@@ -14,7 +14,15 @@
 // Nested struct fields deferred until typeName is surfaced on TypeObjectData
 // (needed to construct the inner-type witness for recursive macro call).
 import { Node, NodeKind, TypeKind, typeKind } from "std/meta";
-import { detectUnionDisc, namesStruct, parseDiscKey, pickAtomicAccessor, unwrapType, implementationOf } from "../discDetect";
+import {
+	detectUnionDisc,
+	namesStruct,
+	parseDiscKey,
+	pickAtomicAccessor,
+	unwrapType,
+	implementationOf,
+	literalMembers,
+} from "../discDetect";
 
 // Macro: jv must be a JsonValue. Witness expression must be typed `T | null`
 // (e.g., user passes `null as Person | null`). Honest nullable typing — null
@@ -769,6 +777,22 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 		error("jsonValueToStructE: target type must be a struct/interface; atomic types not supported", witness);
 	}
 
+	const literalRead = (members: Node[], fnameLit: Node): Node => ({
+		kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+		callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonLiteralE" },
+		arguments: [
+			{
+				kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+				callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
+				arguments: [jv, fnameLit],
+			},
+			{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: members },
+			errs,
+			pfx,
+			fnameLit,
+		],
+	});
+
 	const fields: string[] = tt.typExprFieldNames;
 	const fieldTypes: Node[] = tt.typExprFieldTypes;
 	const keyNodes: string[] = [];
@@ -798,6 +822,15 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 					}
 				}
 			}
+		}
+
+		const literals = literalMembers(fcore);
+		if (literals.length > 0
+			&& (fcore.kind == NodeKind.TypeUnion || fcore.kind == NodeKind.NumberLiteral)) {
+			keyNodes.push(fname);
+			valueNodes.push(literalRead(literals, fnameLit));
+			i = i + 1;
+			continue;
 		}
 
 		// Nullable field — `X | null` (the bridge maps the Maybe carrier back
@@ -885,6 +918,28 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 							],
 						},
 					},
+				});
+				i = i + 1;
+				continue;
+			}
+			const optLiterals: Node[] = optSawNull && optCount == 1 && optMember != null
+				? literalMembers(optMember)
+				: [];
+			if (optLiterals.length > 0) {
+				keyNodes.push(fname);
+				valueNodes.push({
+					kind: NodeKind.ConditionalExpr, line: jv.line, column: jv.column,
+					ternaryCondition: {
+						kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+						callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonIsNull" },
+						arguments: [{
+							kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+							callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
+							arguments: [jv, fnameLit],
+						}],
+					},
+					ternaryConsequent: { kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true },
+					ternaryAlternate: literalRead(optLiterals, fnameLit),
 				});
 				i = i + 1;
 				continue;

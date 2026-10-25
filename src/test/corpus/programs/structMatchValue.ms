@@ -27,21 +27,21 @@ function eitherValue(e: Either<string, int32>): string { return e.ok ? e.value :
 
 function boolean(): string {
 	const a = mkPair();
-	const b = a;
+	let b = a;
 	if (b.ok) b.value = "z";
 	return valueOf(a) + " " + valueOf(b);
 }
 
 function enumDisc(): string {
 	const a = mkShape();
-	const b = a;
+	let b = a;
 	if (b.kind == K.A) b.name = "z";
 	return nameOf(a) + " " + nameOf(b);
 }
 
 function generic(): string {
 	const a = mkEither();
-	const b = a;
+	let b = a;
 	if (b.ok) b.value = "z";
 	return eitherValue(a) + " " + eitherValue(b);
 }
@@ -62,7 +62,7 @@ function armChanged(): string {
 
 function held(): string {
 	const h: Holder = { pair: mkPair(), n: 1 };
-	const g = h;
+	let g = h;
 	if (g.pair.ok) g.pair.value = "z";
 	return valueOf(h.pair) + " " + valueOf(g.pair);
 }

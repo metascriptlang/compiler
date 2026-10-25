@@ -12,7 +12,8 @@ import { TransformContext } from "../context";
 import { makeIdent, makeBlock, makeExprStmt, makeMatchStmt, makeMatchCase, makeSwitchWrapper, isCSwitchableType } from "../util";
 import { walkExpandBlocks } from "../walker";
 import { lowerMatchStmt } from "./matchLower";
-import { isFnBoundary, isLoopKind } from "./jumpRetarget";
+import { isLoopKind } from "./jumpRetarget";
+import { isRoutineOrTestNode } from "../../ast/shape";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 export function lowerSwitch(program: Node, ctx: TransformContext): Node {
@@ -76,7 +77,7 @@ function collectOwnedInStmt(s: Node, out: Node[]): void {
 		}
 		return;
 	}
-	if (s.kind == NodeKind.SwitchStmt || isLoopKind(s.kind) || isFnBoundary(s.kind)) return;
+	if (s.kind == NodeKind.SwitchStmt || isLoopKind(s.kind) || isRoutineOrTestNode(s)) return;
 	forEachChild(s, (child: Node): void => { collectOwnedInStmt(child, out); });
 }
 

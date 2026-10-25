@@ -7,7 +7,7 @@ import { peelToRepr, createPrimitive } from "../../checker/types";
 import { addError } from "../../checker/context";
 import { walkNode } from "../walker";
 import { makeBinary, makeCall, makeMember, makeArrayAccess, makeNumber, generatedRef } from "../util";
-import { cloneIfPure } from "./intArithJS";
+import { cloneIfPure } from "../place";
 
 export function lowerFloat32JS(program: Node, ctx: TransformContext): Node {
 	const postfixReads = new HashSet<Node>();

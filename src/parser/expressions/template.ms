@@ -1,11 +1,10 @@
 // Template Literal Desugaring
 // `hello ${name}, age ${age}!` → "hello " + name + ", age " + age + "!"
-// Pattern: ~/projects/metascript/src/parser/parser.zig parseTemplateExpression()
 
 import { TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd } from "../context";
-import { parseOk } from "./util";
+import { ParserState, current, advance, isAtEnd } from "../cursor";
+import { parseOk } from "./testUtil";
 
 
 type ExprResult = Result<Expression, string>;
@@ -64,6 +63,7 @@ export function parseTemplateLiteral(state: ParserState, parsePrec: PrecParserFn
 }
 
 // ===== Tests =====
+
 test "no substitution" { assert parseOk("`hello`"); }
 
 test "single interpolation" { assert parseOk("`hello ${name}`"); }

@@ -32,11 +32,17 @@
 //
 // GUARD-JS
 
+// Each carrier comes back from `carry`, so the initializer does not narrow the
+// declared union and every comparison below reads the carrier at run time.
+function carry<T>(v: T): T {
+	return v;
+}
+
 function main(): void {
-	let c: number | null = 200;
-	let d: string | null = "x";
-	let g: "row" | "column" | null = "column";
-	let absent: number | null = null;
+	let c: number | null = carry<number | null>(200);
+	let d: string | null = carry<string | null>("x");
+	let g: "row" | "column" | null = carry<"row" | "column" | null>("column");
+	let absent: number | null = carry<number | null>(null);
 
 	console.log("c=" + (c == 200));
 	console.log("d=" + (d == "x"));
@@ -51,26 +57,27 @@ function main(): void {
 	if (absent == 200) { throw "GUARD RED: an absent carrier compared equal to a member"; }
 	if (c == 201) { throw "GUARD RED: unequal member compared equal"; }
 
-	let w: number | string | null = 200;
-	let sameW: number | string | null = 200;
-	let pct: number | string | null = "50%";
-	let samePct: number | string | null = "50%";
-	let otherPct: number | string | null = "60%";
-	let unset: number | string | null = null;
-	let alsoUnset: number | string | null = null;
+	let w: number | string | null = carry<number | string | null>(200);
+	let sameW: number | string | null = carry<number | string | null>(200);
+	let pct: number | string | null = carry<number | string | null>("50%");
+	let samePct: number | string | null = carry<number | string | null>("50%");
+	let otherPct: number | string | null = carry<number | string | null>("60%");
+	let unset: number | string | null = carry<number | string | null>(null);
+	let alsoUnset: number | string | null = carry<number | string | null>(null);
 
 	console.log("w=" + (w == 200));
 	console.log("pct=" + (pct == "50%"));
 	console.log("crossTag=" + (w == pct));
 	console.log("bothUnset=" + (unset == alsoUnset));
 
+	// Before the equality checks below, which narrow `w` and `pct` to one member each.
+	if (w == pct) { throw "GUARD RED: different tags compared equal"; }
+	if (w == "50%") { throw "GUARD RED: number slot matched a string literal"; }
 	if (!(w == 200)) { throw "GUARD RED: number slot of a union payload"; }
 	if (!(w == sameW)) { throw "GUARD RED: two carriers holding the same number"; }
 	if (!(pct == "50%")) { throw "GUARD RED: string slot of a union payload"; }
 	if (!(pct == samePct)) { throw "GUARD RED: two carriers holding the same string"; }
 	if (pct == otherPct) { throw "GUARD RED: different strings compared equal"; }
-	if (w == pct) { throw "GUARD RED: different tags compared equal"; }
-	if (w == "50%") { throw "GUARD RED: number slot matched a string literal"; }
 	if (!(unset == alsoUnset)) { throw "GUARD RED: two absent payloads compared unequal"; }
 	if (unset == w) { throw "GUARD RED: an absent payload matched a live one"; }
 

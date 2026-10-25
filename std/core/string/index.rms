@@ -2,7 +2,7 @@
 // Shape-mirrors std/core/string/index.cms minus the C-only surface
 // (@include/@compile, in-place mutation, capacity). Kernels only where the
 // Raiser side has a real fast path: charAt/slice are opcode-intercepted,
-// charCodeAt/asBytes/asString and the byte tier go through host bridges,
+// charCodeAt/asBytes/asString, the byte tier, split and replace go through host bridges,
 // everything else is the shared Tier-2 byte-loop source.
 
 // ===== Operators =====
@@ -39,6 +39,9 @@ export function substring(this s: string, start: int32, end: int32 = 2147483647)
 export { asBytes, byteLength, byteAt, byteSlice, byteIndexOf, byteLastIndexOf } from "./bytes";
 
 // ===== Transformation =====
+export extern function split(this s: string, delimiter: string): string[] from "msStringSplit";
+export extern function replace(this s: string, search: string, replacement: string): string from "msStringReplace";
+export extern function replaceAll(this s: string, search: string, replacement: string): string from "msStringReplaceAll";
 export extern function padStart(this s: string, targetLen: int32, pad: string): string from "msStringPadStart";
 export extern function padEnd(this s: string, targetLen: int32, pad: string): string from "msStringPadEnd";
 
@@ -63,4 +66,5 @@ export function fromCharCode(this typeof String, ...codes: int32[]): string {
 
 import { clampIndex } from "./shared";
 import { parseFloatPrefix, parseIntPrefix } from "../number/parse";
-export { startsWith, endsWith, contains, count, trim, trimStart, trimEnd, split, toLowerCase, toUpperCase, replace, replaceAll, repeat, reverse, equalsIgnoreCase, asciiLower, asciiUpper, isSpaceByte } from "./shared";
+export { trim, trimStart, trimEnd, toLowerCase, toUpperCase, repeat, reverse, equalsIgnoreCase, asciiLower, asciiUpper, isSpaceByte } from "./shared";
+export { startsWith, endsWith, includes, contains, count } from "./search";

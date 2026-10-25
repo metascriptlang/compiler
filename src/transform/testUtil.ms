@@ -7,7 +7,7 @@ import { lex } from "../lexer/lexer";
 import { parseProgram } from "../parser/statements/core";
 import { createState } from "../parser/context";
 import { CheckerContext, createContext } from "../checker/context";
-import { standalonePreludeCtx } from "../checker/checkPass";
+import { standalonePreludeCtx, checkProgram } from "../checker/checkPass";
 import { bindCompilerFuncs } from "./util";
 
 export function parseInput(input: string): Result<Node, string> {
@@ -52,6 +52,37 @@ function transformStmts(input: string, transform: (prog: Node, ctx: TransformCon
 	if (!result.ok) return [];
 	const lowered = transform(result.value, makeCtx());
 	return getStmts(lowered);
+}
+
+// Parse and type-check `input`, run `transform` under the checker's context, and return the
+// program statements; null when the input does not parse.
+export function checkedStmtsAfter(input: string, transform: (prog: Node, ctx: TransformContext) => Node): Node[] | null {
+	const result = parseInput(input);
+	if (!result.ok) return null;
+	const cc = checkProgram(result.value);
+	return getStmts(transform(result.value, createTransformContextWithChecker(cc)));
+}
+
+export function checkedStmtCount(input: string, transform: (prog: Node, ctx: TransformContext) => Node): number {
+	const stmts = checkedStmtsAfter(input, transform);
+	return stmts == null ? -1 : stmts.length;
+}
+
+// The body statements of the first FunctionDecl after a checked transform; null when the input
+// does not parse or does not open with a function.
+export function checkedFnBodyStmts(input: string, transform: (prog: Node, ctx: TransformContext) => Node): Node[] | null {
+	const stmts = checkedStmtsAfter(input, transform);
+	if (stmts == null || stmts.length == 0 || stmts[0].kind != NodeKind.FunctionDecl) return null;
+	return ((stmts[0].data as FunctionDeclData).fnBody.data as BlockStmtData).statements;
+}
+
+export function checkedFnBodyCount(input: string, transform: (prog: Node, ctx: TransformContext) => Node): number {
+	const body = checkedFnBodyStmts(input, transform);
+	return body == null ? -1 : body.length;
+}
+
+export function castOf(target: string): string {
+	return "function f(v: float64): void { const r = v as " + target + "; }";
 }
 
 export function stmtCountAfter(input: string, transform: (prog: Node, ctx: TransformContext) => Node): number {

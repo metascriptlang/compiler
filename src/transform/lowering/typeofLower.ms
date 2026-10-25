@@ -10,7 +10,8 @@ import { hashToBase36, typeKey } from "../../codegen/c/types";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { mapChildren } from "../walker";
 import { makeBinary, makeBlock, makeCall, makeFnDecl, makeIf, makeReturn, makeString, makeBool, makeTypedIdentResolved, makeNull, makeUnary } from "../util";
-import { cloneIfPure } from "../coercion/intArithJS";
+import { cloneIfPure } from "../place";
+import { is64Kind } from "../numKinds";
 import { armOrder, holdsMember } from "./unionConvLower";
 
 let _routineNames: string[] = [];
@@ -290,7 +291,7 @@ function lowerTagRead(node: Node, ctx: TransformContext): Node {
 function isWideInteger(m: Type): boolean {
 	const v = peelTransparentInstance(m);
 	const repr = v.kind == TypeKind.Set ? setRepr(v) : v;
-	return repr != null && (repr.kind == TypeKind.Int64 || repr.kind == TypeKind.Uint64);
+	return repr != null && is64Kind(repr.kind);
 }
 
 function rawTypeof(x: Symbol, t: Type, loc: SourceLocation): Node {

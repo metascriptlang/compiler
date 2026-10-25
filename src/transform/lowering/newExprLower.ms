@@ -11,8 +11,7 @@
 // Positional new without a constructor is a MetaScript extension (TS rejects
 // the args). Before this pass the C backend carried an inline positional
 // branch in codegen and JS had nothing — `new Pt(1, 2)` silently dropped both
-// args on JS. One statement-splice lowering here serves both backends: the
-// materialize-once shape Nim uses at sem (defaultFieldsForTheUninitialized).
+// args on JS. One statement-splice lowering here serves both backends.
 // The 0-arg `new` runs <Class>_init (super chain + field defaults, ctorLower),
 // then the positional assignments override — same order the C branch had.
 //
@@ -32,14 +31,15 @@
 
 import {
 	Node, NodeKind, NewExprData, VariableDeclData, ExprStmtData, IfStmtData,
-	ReturnStmtData, WhileStmtData, DeclKind, Type, TypeKind,
+	ReturnStmtData, WhileStmtData, DeclKind, Type,
 } from "../../ast/node";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
+import { positionalFieldsOf } from "../../checker/types";
 import { TransformContext, createTransformContext, freshTempSym } from "../context";
-import { walkExpandBlocks, replaceInExpr } from "../walker";
-import { forEachChild } from "../../ast/visitor";
-import { containsConditionalEval } from "./callHoist";
-import { makeVarDecl, makeIdentResolved, makeMember, makeAssign, makeExprStmt, makeBlock, makeIf, makeUnary, makeBreak, makeBool, extractBodyStmts } from "../util";
+import { walkExpandBlocks, replaceInExpr, containsConditionalEval } from "../walker";
+import { anyDescendant, noStop } from "../../ast/visitor";
+import { moveWhileTestIntoBody, wrapElseIfWhen } from "./jumpRetarget";
+import { makeVarDecl, makeIdentResolved, makeMember, makeAssign, makeExprStmt } from "../util";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 
 // ===== Gate =====
@@ -53,11 +53,8 @@ function positionalStruct(node: Node): Type | null {
 	if (d.newArguments.length == 0) return null;
 	const sym = d.newCallee.resolvedSym;
 	if (sym == null || hasFlag(sym, SymbolFlag.HasConstructor)) return null;
-	const classType = node.nodeType;
-	if (classType == null) return null;
-	const inner = (classType.kind == TypeKind.Ref || classType.kind == TypeKind.Ptr) ? classType.typeReturn : classType;
-	if (inner == null) return null;
-	if (inner.typeNames == null || d.newArguments.length > inner.typeNames.length) return null;
+	const inner = positionalFieldsOf(node.nodeType);
+	if (inner == null || d.newArguments.length > inner.typeNames.length) return null;
 	return inner;
 }
 
@@ -74,14 +71,7 @@ function hasPositionalNew(expr: Node): boolean {
 // whose conditional constructs hold no positional new (those keep native ternary
 // / short-circuit on JS). Walks expr AND stmt nodes via the child visitor.
 export function nodeHasPositionalNew(node: Node): boolean {
-	let found = false;
-	function visit(n: Node): void {
-		if (found || n == null) return;
-		if (positionalStruct(n) != null) { found = true; return; }
-		forEachChild(n, visit);
-	}
-	visit(node);
-	return found;
+	return anyDescendant(node, (n: Node): boolean => positionalStruct(n) != null, noStop);
 }
 
 // ===== Hoist =====
@@ -165,9 +155,7 @@ function altChainHasPositionalNew(alt: Node): boolean {
 // now-listed inner if (same trick as callHoist expandIf).
 function expandIf(stmt: Node, ctx: TransformContext): Node[] {
 	const ifd = stmt.data as IfStmtData;
-	if (ifd.alternate != null && ifd.alternate.kind == NodeKind.IfStmt && altChainHasPositionalNew(ifd.alternate)) {
-		ifd.alternate = makeBlock([ifd.alternate], ifd.alternate.location);
-	}
+	wrapElseIfWhen(ifd, altChainHasPositionalNew);
 	if (containsConditionalEval(ifd.condition)) return [stmt];
 	const hoisted: Node[] = [];
 	ifd.condition = hoistPositionalNews(ifd.condition, hoisted, ctx);
@@ -185,11 +173,7 @@ function expandWhile(stmt: Node, ctx: TransformContext): Node[] {
 	const pre: Node[] = [];
 	const cond = hoistPositionalNews(wd.whileCondition, pre, ctx);
 	if (pre.length == 0) return [stmt];
-	const loc = stmt.location;
-	pre.push(makeIf(makeUnary("!", cond, loc), makeBlock([makeBreak(loc)], loc), null as unknown as Node, loc));
-	for (const s of extractBodyStmts(wd.whileBody)) { pre.push(s); }
-	wd.whileCondition = makeBool(true, loc);
-	wd.whileBody = makeBlock(pre, loc);
+	moveWhileTestIntoBody(stmt, pre, cond);
 	return [stmt];
 }
 

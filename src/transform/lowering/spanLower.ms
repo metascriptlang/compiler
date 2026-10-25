@@ -14,9 +14,8 @@ import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExp
 import { createSizedArray, createArray, createPtr, createPrimitive, peelToStructOrUnion } from "../../checker/types";
 import { takesAddressAtCArg, nonNullMemberOfNullable } from "../../checker/compat";
 import { TransformContext, freshTempSym, freshOwnedSym } from "../context";
-import { walkNode, walkExpandBlocks, replaceInExpr } from "../walker";
-import { cloneIfPure } from "../coercion/intArithJS";
-import { containsConditionalEval } from "./callHoist";
+import { walkNode, walkExpandBlocks, replaceInExpr, containsConditionalEval } from "../walker";
+import { cloneIfPure } from "../place";
 import {
 	makeMember, makeTypedObjectLiteral, makeNumber, makeBinary, makeCall, makeIdent,
 	makeVarDecl, makeIdentResolved, makeHiddenAddr, makeObjectLiteral,
@@ -104,10 +103,9 @@ export function spanLower(program: Node, ctx: TransformContext, final: boolean):
 // over a Ref names the referent itself, so a slot holding a Ref is a Ptr to a
 // Ptr of what the Ref points at.
 // ===== Source stabilization =====
-// Reference (openArrayLoc, ccgcalls.nim): the argument is evaluated once into a
-// location, and data and len read that location — a call inside it becomes a
-// temp (`T3_ = at()`), the remaining path is read twice. Here a statement's
-// span sources are made pure paths before the split, which then reads each
+// The argument is evaluated once into a location, and data and len read that
+// location — a call inside it becomes a temp (`T3_ = at()`), the remaining path
+// is read twice. A statement's span sources are made pure paths before the split, which then reads each
 // path through its own copy, so the tree stays a tree.
 
 // `a[s..e]` as a Span: its own arm stabilizes the array and the start.

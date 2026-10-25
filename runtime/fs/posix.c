@@ -30,6 +30,7 @@ msString msFsReadFile(msString path) {
 	off_t sz = ftello(f);
 	if (sz < 0 || fseeko(f, 0, SEEK_SET) != 0) { _msFsLastErrno = errno; fclose(f); return MS_EMPTY_STRING; }
 	if (sz == 0) { fclose(f); return MS_EMPTY_STRING; }
+	if (sz > MS_LEN_MAX) { _msFsLastErrno = EFBIG; fclose(f); return MS_EMPTY_STRING; }
 	char* buf = (char*)malloc((size_t)sz + 1);
 	if (!buf) { _msFsLastErrno = ENOMEM; fclose(f); return MS_EMPTY_STRING; }
 	errno = 0;
@@ -47,113 +48,7 @@ msString msFsReadFile(msString path) {
 	return result;
 }
 
-/* ===== Write ===== */
-
-double msFsWriteFileMode(msString path, msString content, msString mode) {
-	_msFsLastErrno = 0;
-	FILE* f = fopen(msStringToCString(path), msStringToCString(mode));
-	if (!f) { _msFsLastErrno = errno; return 0.0; }
-	size_t written = fwrite(msStringToCString(content), 1, content.len, f);
-	fclose(f);
-	return (written == (size_t)content.len) ? 1.0 : 0.0;
-}
-
-/* ===== Permissions ===== */
-
-double msFsChmod(msString path, int32_t mode) {
-	_msFsLastErrno = 0;
-	if (chmod(msStringToCString(path), (mode_t)mode) != 0) {
-		_msFsLastErrno = errno;
-		return 0.0;
-	}
-	return 1.0;
-}
-
-/* ===== Stat ===== */
-
-double msFsExists(msString path) {
-	struct stat st;
-	return (stat(msStringToCString(path), &st) == 0) ? 1.0 : 0.0;
-}
-
-msString msFsRealPath(msString path) {
-	char* resolved = realpath(msStringToCString(path), NULL);
-	if (!resolved) return MS_EMPTY_STRING;
-	msString result = msStringFromCStr(resolved);
-	free(resolved);
-	return result;
-}
-
-double msFsIsFile(msString path) {
-	struct stat st;
-	if (stat(msStringToCString(path), &st) != 0) return 0.0;
-	return S_ISREG(st.st_mode) ? 1.0 : 0.0;
-}
-
-double msFsIsDir(msString path) {
-	struct stat st;
-	if (stat(msStringToCString(path), &st) != 0) return 0.0;
-	return S_ISDIR(st.st_mode) ? 1.0 : 0.0;
-}
-
-double msFsIsExecutable(msString path) {
-	/* POSIX: access(X_OK) checks if current UID/GID has execute permission.
-	 * Matches Bun.which's isExecutableFilePath and shutil.which behaviour. */
-#if defined(__wasi__)
-	/* WASI has no execute permission: access(X_OK) only tests existence. */
-	(void)path;
-	return 0.0;
-#else
-	return (access(msStringToCString(path), X_OK) == 0) ? 1.0 : 0.0;
-#endif
-}
-
-double msFsFileSize(msString path) {
-	struct stat st;
-	if (stat(msStringToCString(path), &st) != 0) return -1.0;
-	return (double)st.st_size;
-}
-
-double msFsModifiedTime(msString path) {
-	struct stat st;
-	if (stat(msStringToCString(path), &st) != 0) return -1.0;
-	return (double)st.st_mtime;
-}
-
-msString msFsChangeStamp(msString path) {
-	struct stat st;
-	if (stat(msStringToCString(path), &st) != 0) return MS_EMPTY_STRING;
-#if defined(__APPLE__)
-	long long mSec = (long long)st.st_mtimespec.tv_sec, mNsec = (long long)st.st_mtimespec.tv_nsec;
-	long long cSec = (long long)st.st_ctimespec.tv_sec, cNsec = (long long)st.st_ctimespec.tv_nsec;
-#else
-	long long mSec = (long long)st.st_mtim.tv_sec, mNsec = (long long)st.st_mtim.tv_nsec;
-	long long cSec = (long long)st.st_ctim.tv_sec, cNsec = (long long)st.st_ctim.tv_nsec;
-#endif
-	if (cSec == 0 && cNsec == 0) return MS_EMPTY_STRING;
-	char buf[192];
-	int n = snprintf(buf, sizeof buf, "%llu:%llu:%lld:%lld.%09lld:%lld.%09lld",
-	                 (unsigned long long)st.st_dev, (unsigned long long)st.st_ino, (long long)st.st_size,
-	                 mSec, mNsec, cSec, cNsec);
-	return msStringNew(buf, n);
-}
-
 /* ===== Directory ===== */
-
-double msFsMkdir(msString path) {
-	_msFsLastErrno = 0;
-	int r = mkdir(msStringToCString(path), 0755);
-	if (r == 0 || errno == EEXIST) return 1.0;
-	_msFsLastErrno = errno;
-	return 0.0;
-}
-
-double msFsRmdir(msString path) {
-	_msFsLastErrno = 0;
-	if (rmdir(msStringToCString(path)) == 0) return 1.0;
-	_msFsLastErrno = errno;
-	return 0.0;
-}
 
 msString msFsReadDirEntries(msString path) {
 	_msFsLastErrno = 0;
@@ -225,29 +120,6 @@ msString msFsReadDirEntries(msString path) {
 	msString result = msStringNew(buf, (int64_t)len);
 	free(buf);
 	return result;
-}
-
-/* ===== Remove / Rename ===== */
-
-double msFsRemove(msString path) {
-	_msFsLastErrno = 0;
-	if (unlink(msStringToCString(path)) == 0) return 1.0;
-	_msFsLastErrno = errno;
-	return 0.0;
-}
-
-double msFsRename(msString oldPath, msString newPath) {
-	_msFsLastErrno = 0;
-	if (rename(msStringToCString(oldPath), msStringToCString(newPath)) == 0) return 1.0;
-	_msFsLastErrno = errno;
-	return 0.0;
-}
-
-double msFsSymlink(msString target, msString path) {
-	_msFsLastErrno = 0;
-	if (symlink(msStringToCString(target), msStringToCString(path)) == 0) return 1.0;
-	_msFsLastErrno = errno;
-	return 0.0;
 }
 
 /* end of posix.c */

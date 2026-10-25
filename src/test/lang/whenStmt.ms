@@ -210,6 +210,15 @@ function main(): void { console.log("ok"); }
 	if (!r.ok) { assert r.error.contains("retired"); }
 }
 
+test "when: the body of a function in a retired @target block is still checked" {
+	const r = compileToC(`
+@target("c") { function f(): number { const s: string = 1; return 1; } }
+function main(): void { console.log("ok"); }
+`);
+	assert !r.ok;
+	if (!r.ok) { assert r.error.contains("retired") && r.error.contains("not assignable"), r.error; }
+}
+
 test "when: @platform is retired with a migration message" {
 	const r = compileToC(`
 @platform("macos") { @passL("-framework Foundation"); }

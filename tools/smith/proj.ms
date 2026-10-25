@@ -180,6 +180,7 @@ class Unit {
 	pre: string = "";
 	text: string = "";
 	glue: boolean = false;
+	exported: boolean = false;
 	fragile: boolean = false;
 	ext: boolean = false;
 	lent: boolean = false;
@@ -253,6 +254,7 @@ function unitHead(line: string): Result<Unit, string> {
 		const word = identAfter(line, at);
 		if (word == "") { return Result.err("project mode does not understand the declaration '" + line.slice(0, 60) + "'"); }
 		at = skipSpaceForward(line, at) + word.byteLength;
+		if (word == "export") { u.exported = true; }
 		if (!MODIFIERS.includes(word)) { kind = word; }
 	}
 	if (kind == "function" && codeAt(line, at) == 42) { at++; }
@@ -592,7 +594,6 @@ class Splitter {
 		for (const u of this.units) {
 			if (u.kind != "class" && u.kind != "interface") { continue; }
 			const line = u.text.split("\n")[0];
-			if (u.kind == "class" && line.contains(u.name + "<")) { this.fixed.add(u.name); }
 			for (const word of [" extends ", " implements "]) {
 				const at = line.indexOf(word);
 				if (at >= 0) { this.fixed.add(identAfter(line, at + word.length)); }
@@ -1048,7 +1049,7 @@ class Splitter {
 		text += (m == k ? this.loadFirst() : "") + rw.imports + (m == k ? this.selectImport : "") + this.hubLines(m);
 		if (m < k && this.shapes.has(Mod.Init)) { text += "console.log(\"init m" + String(m) + "\");\n"; }
 		for (const u of this.units) {
-			if (u.module == m) { text += u.pre + (u.shown || u.glue || u.ext || u.kind == "converter" ? "export " : "") + rewrite(u.text, u.toks, rw.from, rw.to); }
+			if (u.module == m) { text += u.pre + (!u.exported && (u.shown || u.glue || u.ext || u.kind == "converter") ? "export " : "") + rewrite(u.text, u.toks, rw.from, rw.to); }
 		}
 		if (m == this.selectHost) { text += this.selectDecl; }
 		return m == k ? text + rewrite(this.mainText, this.mainToks, rw.from, rw.to) + this.selectUse : text;
@@ -1269,6 +1270,19 @@ test "modules=0 is the single-file program, byte for byte" {
 			assert files[0].text == generate(seed as uint64, f.value);
 		}
 	}
+}
+
+test "a declaration that is already exported is exported once, after its decorators" {
+	let operators = 0;
+	for (let seed = 1; seed <= 10; seed++) {
+		for (const f of projectOf(seed as uint64, "fams=enum stmts=8 w.stmt.fam=80 w.expr.fam=40 modules=3")) {
+			for (const line of f.text.split("\n")) {
+				assert !line.startsWith("export export ") && !line.startsWith("export @");
+				if (line.startsWith("@delegate export function `") || line.startsWith("export function `")) { operators++; }
+			}
+		}
+	}
+	assert operators > 10;
 }
 
 test "a split project is deterministic, holds every declaration once and imports only its own modules" {
@@ -1715,9 +1729,10 @@ test "a function with a default parameter is never called through a namespace im
 	assert defaults > 0;
 }
 
-test "a generic class is never renamed on import, because an aliased generic class cannot be instantiated" {
+test "the alias shape renames a generic class on import too" {
 	let generics = 0;
 	let aliased = 0;
+	let genericAliased = 0;
 	for (const vector of ["fams=gcls", "fams=generic", "fams=gcls,generic,cls"]) {
 		for (let seed = 1; seed <= 20; seed++) {
 			const files = projectOf(seed as uint64, vector + " modules=4 modshapes=alias");
@@ -1736,11 +1751,11 @@ test "a generic class is never renamed on import, because an aliased generic cla
 					if (!line.startsWith("import {")) { continue; }
 					for (const name of importedNames(line)) {
 						if (name.contains(" as ")) { aliased++; }
-						for (const g of names) { assert !name.startsWith(g + " as "); }
+						for (const g of names) { if (name.startsWith(g + " as ")) { genericAliased++; } }
 					}
 				}
 			}
 		}
 	}
-	assert generics > 10 && aliased > 10;
+	assert generics > 10 && aliased > 10 && genericAliased > 0;
 }

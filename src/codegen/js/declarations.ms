@@ -4,15 +4,15 @@ import {
 	Node, NodeKind, NodeFlag, DeclKind, TypeKind, FunctionDeclData, EnumDeclData, ClassDeclData, MethodDeclData,
 	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, ActorDeclData, ExprStmtData, createNodeAt, SymbolKind,
 } from "../../ast/node";
-import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync, escapeJSString } from "./emit";
-import { safeJsName, jsSymbolName, jsMethodMemberName } from "./expressions";
+import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync, escapeJSString, declareBinding } from "./emit";
+import { safeJsName, jsSymbolName, jsMethodMemberName, jsExportedFunctionName, jsEnumMemberName } from "./expressions";
 import { useActorRuntime } from "./actorMailbox";
 import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
 import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/context";
 import { jsDefaultValue, emitCopyOnRead } from "./valueCopy";
 import { mangleQualified, mangleModuleName } from "../c/names";
 import { monoInstanceName } from "../../monomorphize/registry";
-import { enumMemberName, hasFlag, SymbolFlag } from "../../checker/symbol";
+import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 
 // ===== Function Declaration =====
 
@@ -26,6 +26,7 @@ function emitFunctionDeclInner(gen: JSGenerator, node: Node): void {
 		_ => { emit(gen, autoAsync ? "async function " : "function "); },
 	};
 	const fnEmitted = jsSymbolName(gen, node.resolvedSym, d.fnName);
+	declareBinding(gen, fnEmitted);
 	if (fnEmitted != d.fnName) markNamed(gen, node, d.fnName);
 	emit(gen, fnEmitted);
 	emit(gen, "(");
@@ -40,17 +41,6 @@ function emitFunctionDeclInner(gen: JSGenerator, node: Node): void {
 
 function receiverSafeJsName(name: string): string {
 	return name == "this" ? "$this" : safeJsName(name);
-}
-
-// Check if fnFlags contains "extern" (may also have gen:/ext: segments)
-function isExternFlag(flags: string): boolean {
-	if (flags == "extern") return true;
-	if (flags.length < 6) return false;
-	// Check for "extern|..." or "...|extern|..." or "...|extern"
-	if (flags.startsWith("extern|")) return true;
-	if (flags.indexOf("|extern|") >= 0) return true;
-	if (flags.endsWith("|extern")) return true;
-	return false;
 }
 
 function isGenericRoutine(node: Node, flags: string): boolean {
@@ -78,7 +68,7 @@ function classEmitsShell(node: Node): boolean {
 
 function emittableFunctionDecl(node: Node): boolean {
 	const d = node.data as FunctionDeclData;
-	if (isExternFlag(d.fnFlags) || d.fnFlags.indexOf("overload", 0) >= 0 || isGenericFn(d.fnFlags)) return false;
+	if (routineFlagSet(d.fnFlags).has(RoutineFlag.Extern) || routineFlagSet(d.fnFlags).has(RoutineFlag.Overload) || isGenericFn(d.fnFlags)) return false;
 	if (node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.CompileTime)) return false;
 	return node.nodeType == null || !hasGenericParams(node.nodeType);
 }
@@ -114,7 +104,9 @@ function emitEnumDeclInner(gen: JSGenerator, node: Node, linePrefix: string): vo
 	// already spent its own `export ` on member zero.
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
 		if (i > 0) { emitIndent(gen); emit(gen, linePrefix); }
-		emit(gen, `var ${enumMemberName(node.resolvedSym, safeJsName(d.enumName), d.enumMembers[i])} = ${enumMemberValue(d, i)};\n`);
+		const member = jsEnumMemberName(gen, node.resolvedSym, d.enumName, d.enumMembers[i]);
+		declareBinding(gen, member);
+		emit(gen, `var ${member} = ${enumMemberValue(d, i)};\n`);
 	}
 }
 
@@ -172,6 +164,7 @@ function emitClassDeclInner(gen: JSGenerator, node: Node, assigned: boolean = fa
 	}
 	const generic = isGenericClass(node);
 	const name = jsSymbolName(gen, node.resolvedSym, d.className);
+	declareBinding(gen, name);
 	emit(gen, assigned ? `${name} = class ` : "class ");
 	emit(gen, name);
 	if (d.classExtends != "") {
@@ -273,8 +266,8 @@ export function emitDeferredClassValue(gen: JSGenerator, node: Node): void {
 
 function emitStaticMethodFn(gen: JSGenerator, className: string, member: Node): void {
 	const d = member.data as MethodDeclData;
-	if (isExternFlag(d.methodFlags)) return;
-	if (d.methodFlags.indexOf("overload", 0) >= 0) return;
+	if (routineFlagSet(d.methodFlags).has(RoutineFlag.Extern)) return;
+	if (routineFlagSet(d.methodFlags).has(RoutineFlag.Overload)) return;
 	if (isGenericRoutine(member, d.methodFlags)) return;
 	emitIndent(gen);
 	const autoAsync = needsAutoAsync(d.methodFlags, d.methodBody);
@@ -284,7 +277,9 @@ function emitStaticMethodFn(gen: JSGenerator, className: string, member: Node): 
 		"async_generator" => { emit(gen, "async function* "); },
 		_ => { emit(gen, autoAsync ? "async function " : "function "); },
 	};
-	emit(gen, jsSymbolName(gen, member.resolvedSym, className + "_" + d.methodName));
+	const fnEmitted = jsSymbolName(gen, member.resolvedSym, className + "_" + d.methodName);
+	declareBinding(gen, fnEmitted);
+	emit(gen, fnEmitted);
 	emit(gen, "(");
 	emitJoinedSafeParams(gen, member, skipThisParams(d.methodParams), ", ", safeJsName);
 	emit(gen, ") ");
@@ -353,8 +348,8 @@ export function emitMethodDecl(gen: JSGenerator, node: Node): void {
 
 function emitMethodDeclNamed(gen: JSGenerator, node: Node, memberName: string): void {
 	const d = node.data as MethodDeclData;
-	if (isExternFlag(d.methodFlags)) return;
-	if (d.methodFlags.indexOf("overload", 0) >= 0) return;
+	if (routineFlagSet(d.methodFlags).has(RoutineFlag.Extern)) return;
+	if (routineFlagSet(d.methodFlags).has(RoutineFlag.Overload)) return;
 	if (isGenericRoutine(node, d.methodFlags)) return;
 	emitIndent(gen);
 	if (d.methodIsStatic) { emit(gen, "static "); }
@@ -375,7 +370,7 @@ function emitMethodDeclNamed(gen: JSGenerator, node: Node, memberName: string): 
 
 function isActorMessage(node: Node): boolean {
 	const d = node.data as MethodDeclData;
-	if (isExternFlag(d.methodFlags) || d.methodFlags.indexOf("overload", 0) >= 0) return false;
+	if (routineFlagSet(d.methodFlags).has(RoutineFlag.Extern) || routineFlagSet(d.methodFlags).has(RoutineFlag.Overload)) return false;
 	return d.methodName != "onTerminate" && d.methodName != "onExit" && d.methodName != "onDown" && d.methodName != "onIdle";
 }
 
@@ -414,15 +409,11 @@ export function emitConstructorDecl(gen: JSGenerator, node: Node): void {
 
 export function emitImportDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as ImportDeclData;
-	// .h imports have no JavaScript counterpart — their extern decls are
-	// inlined alongside the ImportDecl by inlineHeaderImports, and the JS
-	// backend doesn't consume C headers. Skip emission entirely.
-	if (d.importSource.length >= 2 && d.importSource.slice(d.importSource.length - 2, d.importSource.length) == ".h") return;
 	// std/meta is the compile-time AST/macro API — no runtime JS counterpart.
 	if (d.importSource == "std/meta" || (d.importSource.length >= 9 && d.importSource.slice(0, 9) == "std/meta/")) return;
 	// Bundle: every module shares one flat scope and names carry module
 	// identity, so cross-module references need no binding statement.
-	if (gen.bundleMode) return;
+	if (gen.bundleMode || node.flags.has(NodeFlag.TypeOnlyImport)) return;
 	// Multi-file: named bindings are derived from actual references
 	// (recordNeededImport), so the source import contributes only module
 	// evaluation order — a bare side-effect import.
@@ -497,6 +488,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	const inner = d.exportedDecl;
 	// Star re-export: export * from "path"
 	if (inner.kind == NodeKind.ImportDecl) {
+		if (inner.flags.has(NodeFlag.TypeOnlyImport)) return;
 		const imp = inner.data as ImportDeclData;
 		// Multi-file: every re-export form emits as `export * from` — a named
 		// list can mix runtime values with types, and naming a type binding
@@ -548,6 +540,18 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	// Non-bundle: ES module export
 	if (inner.kind == NodeKind.ClassDecl && classEmitsNoJs(inner)) return;
 	if (inner.kind == NodeKind.ActorDecl && inner.flags.has(NodeFlag.ExternC)) return;
+	if (gen.multiFile && !isDefault && inner.kind == NodeKind.FunctionDecl && inner.resolvedSym != null) {
+		const fnName = (inner.data as FunctionDeclData).fnName;
+		const own = jsSymbolName(gen, inner.resolvedSym, fnName);
+		const exported = jsExportedFunctionName(gen, inner.resolvedSym, fnName);
+		if (own != exported) {
+			gen.exportedNames.push(exported);
+			gen.aliasedExports.push(`${own} as ${exported}`);
+			emitIndent(gen);
+			emitFunctionDeclInner(gen, inner);
+			return;
+		}
+	}
 	emitIndent(gen);
 	emit(gen, isDefault ? "export default " : "export ");
 	if (isDefault && inner.kind == NodeKind.ExprStmt) {
@@ -578,7 +582,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 		NodeKind.EnumDecl => {
 			const ed = inner.data as EnumDeclData;
 			if (gen.multiFile) {
-				for (const m of ed.enumMembers) { gen.exportedNames.push(enumMemberName(inner.resolvedSym, safeJsName(ed.enumName), m)); }
+				for (const m of ed.enumMembers) { gen.exportedNames.push(jsEnumMemberName(gen, inner.resolvedSym, ed.enumName, m)); }
 			}
 			emitEnumDeclInner(gen, inner, gen.multiFile ? "export " : "");
 			if (gen.multiFile) {

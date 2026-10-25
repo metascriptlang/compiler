@@ -22,10 +22,11 @@
 import { Node, NodeKind, BinaryExprData, UnaryExprData, UpdateExprData, BigIntLiteralData, ExprStmtData, MemberExprData, TypeAssertionData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { addError } from "../../checker/context";
 import { booleanType, createPrimitive, int32Type, isNumeric, peelToRepr, typeDisplayName, isNullableBigInt } from "../../checker/types";
-import { isNullExpr } from "../lowering/operatorLower";
-import { nullAccessHead } from "./nullableLower";
+import { isNullExpr } from "../../ast/shape";
+import { nullAccessHead } from "../maybeCarrier";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
+import { isFloatKind } from "../numKinds";
 import { makeAssign, makeBinary, makeCall, makeNumber, makeString, makeUnary, runtimeRef } from "../util";
 import { parseInput, checkedCtx } from "../testUtil";
 import { CallExprData, IdentifierData, VariableDeclData } from "../../ast/node";
@@ -70,7 +71,7 @@ function nullableBigOperator(node: Node, d: BinaryExprData, ctx: TransformContex
 
 function isFractionalSource(t: Type | null): boolean {
 	const r = peelToRepr(t);
-	return r != null && (r.kind == TypeKind.Float32 || r.kind == TypeKind.Float64 || r.kind == TypeKind.Number);
+	return r != null && isFloatKind(r.kind);
 }
 
 function bigType(): Type {

@@ -115,11 +115,16 @@ static inline int32_t msStringHash(msString s) {
 	return (int32_t)h;
 }
 
+/* `.length` is int32 on every backend, so no string, array or buffer grows past
+   it: the allocation sites refuse a larger count instead of wrapping the length. */
+#define MS_LEN_MAX INT32_MAX
+
 /* Capacity growth — Standard reference resize pattern */
 static inline int64_t msStringResizeCap(int64_t old) {
 	if (old <= 0) return 4;
 	if (old <= 32767) return old * 2;
-	return old + old / 2;  /* x3/2 for large strings */
+	int64_t grown = old + old / 2;  /* x3/2 for large strings */
+	return grown < MS_LEN_MAX ? grown : MS_LEN_MAX;
 }
 
 /* Content size including null terminator + payload header */
@@ -145,7 +150,11 @@ msString msStringNewCap(int64_t cap);
 msString msStringNewLen(int64_t len);
 
 /* Free if not literal */
-void msStringDestroy(msString s);
+static inline void msStringDestroy(msString s) {
+	if (!msIsLiteral(s)) {
+		free(s.p);
+	}
+}
 
 /* Force-free a cache-owned msString that has MS_STRLIT_FLAG set.
  * Caches (e.g. static response cache in net/socket.h) flag their entries as
@@ -156,9 +165,6 @@ void msStringDestroy(msString s);
 static inline void msStringDestroyForce(msString s) {
 	if (s.p != NULL) free(s.p);
 }
-
-/* Deep copy assignment */
-void msStringAssign(msString* a, msString b);
 
 /* COW: copy literal before mutation */
 void msStringPrepareMutation(msString* s);
@@ -218,11 +224,11 @@ static inline void msStringAppendChar(msString* dest, char c) {
 /* Byte-equal comparison */
 bool msStringEquals(msString a, msString b);
 
-/* Case-insensitive equality */
-bool msStringEqualsIgnoreCase(msString a, msString b);
-
-/* Lexicographic compare (< 0, 0, > 0) */
+/* Ordering in UTF-16 code units (< 0, 0, > 0) */
 int msStringCompare(msString a, msString b);
+
+/* Ordering in raw bytes, for binary data held in a string */
+int msStringCompareBytes(msString a, msString b);
 
 /* Operator overload helpers — prelude `<` and `<=` base operators */
 static inline bool msStringCompareLt(msString a, msString b) { return msStringCompare(a, b) < 0; }
@@ -241,6 +247,9 @@ bool msStringContains(msString s, msString sub);
 
 /* Find first occurrence, starting from `start`. Returns -1 if not found. */
 int64_t msStringIndexOf(msString s, msString sub, int64_t start);
+
+/* Byte offsets in and out; an empty `sub` answers `start`. */
+int64_t msStringByteIndexOf(msString s, msString sub, int64_t start);
 
 /* Find last occurrence. startIdx=-1 means search from end (JS parity). */
 int64_t msStringLastIndexOf(msString s, msString sub, int64_t startIdx);
@@ -274,8 +283,8 @@ int64_t msStringCharCodeAt(msString s, int64_t idx);
 /* Raw byte at byte offset. Returns -1 if out of range. */
 int64_t msStringByteAt(msString s, int64_t idx);
 
-/* Single byte as new string (byte-level, for lexer/scanner). */
-msString msStringByteCharAt(msString s, int64_t idx);
+/* Farmhash64 of the string's bytes, as the signed bits std's Map/Set hash starts from. */
+int64_t msStringHashFarm(msString s);
 
 /* Create a string from a Unicode codepoint (UTF-8 encoded). */
 msString msStringFromCodePoint(int64_t cp);
@@ -294,7 +303,6 @@ msString msStringToUpper(msString s);
 msString msStringTrim(msString s);
 msString msStringTrimStart(msString s);
 msString msStringTrimEnd(msString s);
-msString msStringRepeat(msString s, int64_t count);
 msString msStringReplace(msString s, msString search, msString replacement);
 msString msStringReplaceAll(msString s, msString search, msString replacement);
 msString msStringReverse(msString s);

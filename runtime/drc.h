@@ -42,9 +42,9 @@
 /* ===== Reference Header ===== */
 
 typedef struct {
-	_Atomic(int32_t) rc;     /* Reference count (0 = unique, >0 = shared). Atomic for thread safety. */
-	int32_t rootIdx;         /* ORC rootset index (-1 = not registered) */
+	_Atomic(intptr_t) rc;    /* Reference count (0 = unique, >0 = shared). Atomic for thread safety. */
 	const msTypeInfo* type;  /* RTTI (NULL for untyped allocs) */
+	int32_t rootIdx;         /* ORC rootset index (-1 = not registered) */
 	uint32_t allocSize;      /* Total allocation size (header + payload) — for slab recycling */
 } msRefHeader;
 
@@ -61,6 +61,26 @@ static inline bool msIsInstance(void* p, const msTypeInfo* target) {
 		&& t->display[target->depth] == target;
 }
 
+/* ===== DRC flow counters (perf-only, -DMS_DRC_STAT) ===== */
+/* Off by default: every hook expands to nothing. Built with -DMS_DRC_STAT and run with
+ * MS_DRC_STAT=<file>, the process appends "drc<TAB>flow<TAB>metric<TAB>value" rows at exit. */
+#ifdef MS_DRC_STAT
+enum {
+	MS_DS_ALLOC, MS_DS_ALLOC_BYTES, MS_DS_FREE,
+	MS_DS_RC_INC, MS_DS_RC_DEC, MS_DS_RC_INC_ATOMIC, MS_DS_RC_DEC_ATOMIC, MS_DS_RC_INC_CYC,
+	MS_DS_ORC_DEC_LAST, MS_DS_ORC_DEC_LAST_TRUE,
+	MS_DS_CYC_REG, MS_DS_COLLECT, MS_DS_COLLECT_TRACED, MS_DS_COLLECT_FREED,
+	MS_DS_COUNT
+};
+void msDrcStatAdd(int id, uint64_t n);
+void msDrcStatCycle(const msTypeInfo* type);
+#define MS_DRC_STAT_ADD(id, n) msDrcStatAdd((id), (uint64_t)(n))
+#define MS_DRC_STAT_CYCLE(t) msDrcStatCycle(t)
+#else
+#define MS_DRC_STAT_ADD(id, n) ((void)0)
+#define MS_DRC_STAT_CYCLE(t) ((void)0)
+#endif
+
 /* ===== DRC Ledger (test-only lifecycle guard) ===== */
 /* Built with -DMS_DRC_LEDGER (off by default → zero cost in normal builds).
  * Records alloc/destroy events to catch double-destroy (abort on the 2nd
@@ -69,6 +89,16 @@ static inline bool msIsInstance(void* p, const msTypeInfo* target) {
  * destroyFn dispatch routes through MS_DESTROY_DISPATCH so the ledger sees
  * exactly one finalize per object; a second is the drift signal.
  * See src/test/guard/ and the /nim-guard skill. */
+#if defined(MS_HCR_CORE) || defined(MS_HCR_MODULE)
+void msHcrCountAdd(const msTypeInfo* type, int32_t delta);
+#define MS_HCR_COUNT(t, delta) do { \
+	const msTypeInfo* __ct = (t); \
+	if (__ct != NULL && (__ct->flags & MS_TYPE_FLAG_HCR)) msHcrCountAdd(__ct, (delta)); \
+} while (0)
+#else
+#define MS_HCR_COUNT(t, delta) ((void)0)
+#endif
+
 #ifdef MS_DRC_LEDGER
 void msLedgerAlloc(void* p, const msTypeInfo* type);
 void msLedgerDestroy(void* p, const msTypeInfo* type);
@@ -100,9 +130,24 @@ void msLedgerDestroy(void* p, const msTypeInfo* type);
 #define MS_SLAB_BUCKETS 4
 #define MS_SLAB_LIMIT 256      /* max cached entries per bucket (prevents unbounded growth) */
 
+/* Keep the range test: a stack pointer above floor + span (an alternate signal stack, a
+ * stack the thread did not report) has no known headroom and must drain, never recurse. */
+typedef void (*msDropCont)(void* owner, int32_t resume);
+typedef union { void* p; msDropCont fn; intptr_t n; } msDropSlot;
+typedef struct {
+	uintptr_t floor;
+	uintptr_t span;
+	void* cur;
+	msDropSlot* data;
+	int32_t len;
+	int32_t cap;
+	int32_t base;
+} msDropState;
+
 typedef struct msSlab {
 	void* free[MS_SLAB_BUCKETS];       /* free-list heads per bucket */
 	int32_t count[MS_SLAB_BUCKETS];    /* entries per bucket */
+	msDropState drop;
 } msSlab;
 
 MS_TLS_EXTERN(msSlab, msSlabTLS);
@@ -174,6 +219,7 @@ static inline void* msAlloc(size_t size) {
 	h->rootIdx = -1;
 	h->allocSize = (uint32_t)total;
 	MS_LEDGER_ALLOC((void*)(h + 1), NULL);
+	MS_DRC_STAT_ADD(MS_DS_ALLOC, 1); MS_DRC_STAT_ADD(MS_DS_ALLOC_BYTES, total);
 	return (void*)(h + 1);
 }
 
@@ -184,8 +230,10 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
 	msRefHeader* h = (msRefHeader*)msSlabAlloc(total);   /* full zero */
 	h->rootIdx = -1;
 	h->type = type;
+	MS_HCR_COUNT(type, 1);
 	h->allocSize = (uint32_t)total;
 	MS_LEDGER_ALLOC((void*)(h + 1), type);
+	MS_DRC_STAT_ADD(MS_DS_ALLOC, 1); MS_DRC_STAT_ADD(MS_DS_ALLOC_BYTES, total);
 	return (void*)(h + 1);
 }
 
@@ -217,6 +265,7 @@ static inline void* msAllocUninit(size_t size) {
 	h->type = NULL;
 	h->allocSize = (uint32_t)total;
 	MS_LEDGER_ALLOC((void*)(h + 1), NULL);
+	MS_DRC_STAT_ADD(MS_DS_ALLOC, 1); MS_DRC_STAT_ADD(MS_DS_ALLOC_BYTES, total);
 	return (void*)(h + 1);
 }
 
@@ -226,8 +275,10 @@ static inline void* msAllocTypedUninit(size_t size, const msTypeInfo* type) {
 	h->rc = 0;
 	h->rootIdx = -1;
 	h->type = type;
+	MS_HCR_COUNT(type, 1);
 	h->allocSize = (uint32_t)total;
 	MS_LEDGER_ALLOC((void*)(h + 1), type);
+	MS_DRC_STAT_ADD(MS_DS_ALLOC, 1); MS_DRC_STAT_ADD(MS_DS_ALLOC_BYTES, total);
 	return (void*)(h + 1);
 }
 
@@ -237,6 +288,7 @@ static inline void* msAllocTypedUninit(size_t size, const msTypeInfo* type) {
 
 static inline void msIncRef(void* p) {
 	if (p != NULL) {
+		MS_DRC_STAT_ADD(MS_DS_RC_INC, 1);
 		msHeader(p)->rc += MS_RC_INCREMENT;
 	}
 }
@@ -245,6 +297,7 @@ static inline void msIncRef(void* p) {
  * Uses relaxed ordering — sufficient for refcount increment (no data dependency). */
 static inline void msAtomicIncRef(void* p) {
 	if (p != NULL) {
+		MS_DRC_STAT_ADD(MS_DS_RC_INC_ATOMIC, 1);
 		atomic_fetch_add_explicit(&msHeader(p)->rc, MS_RC_INCREMENT, memory_order_relaxed);
 	}
 }
@@ -255,12 +308,13 @@ void msUnregisterCycle(void* p);
 
 static inline bool msDecRefIsLast(void* p) {
 	if (p == NULL) return false;
+	MS_DRC_STAT_ADD(MS_DS_RC_DEC, 1);
 	msRefHeader* h = msHeader(p);
 	/* Check count portion (upper bits) is zero — ignores ORC color/flag bits.
 	 * rc starts at 0 from msAlloc. (rc & ~MS_RC_MASK)==0 means sole owner.
 	 * Under --gc=drc, MS_RC_MASK=0 so this reduces to h->rc==0. */
 	if ((h->rc & ~MS_RC_MASK) != 0) {
-		int32_t before = atomic_fetch_sub(&h->rc, MS_RC_INCREMENT);
+		intptr_t before = atomic_fetch_sub(&h->rc, MS_RC_INCREMENT);
 		bool concurrentDecrefLeftUsLast = (before & ~MS_RC_MASK) == 0;
 		if (!concurrentDecrefLeftUsLast) return false;
 		h->rc += MS_RC_INCREMENT;
@@ -278,7 +332,8 @@ static inline bool msDecRefIsLast(void* p) {
  * through the cycle collector even under --gc=orc. */
 static inline bool msAtomicDecRefIsLast(void* p) {
 	if (p == NULL) return false;
-	int32_t old = atomic_fetch_sub_explicit(&msHeader(p)->rc, MS_RC_INCREMENT, memory_order_release);
+	MS_DRC_STAT_ADD(MS_DS_RC_DEC_ATOMIC, 1);
+	intptr_t old = atomic_fetch_sub_explicit(&msHeader(p)->rc, MS_RC_INCREMENT, memory_order_release);
 	if ((old & ~MS_RC_MASK) == MS_RC_INCREMENT) {
 		atomic_thread_fence(memory_order_acquire);
 		return true;
@@ -289,6 +344,7 @@ static inline bool msAtomicDecRefIsLast(void* p) {
 static inline void msDestroyAndDispose(void* p) {
 	if (p != NULL) {
 		msRefHeader* h = msHeader(p);
+		MS_DRC_STAT_ADD(MS_DS_FREE, 1);
 #ifdef MSGC_ORC
 		/* Freeing a node that is still a registered cycle-root (rootIdx >= 0) must
 		 * scrub it from msRoots — every free path, including codegen's sole-owner
@@ -296,8 +352,59 @@ static inline void msDestroyAndDispose(void* p) {
 		 * walks a dangling root (UAF in markGray/getColor). */
 		if (h->rootIdx >= 0) msUnregisterCycle(p);
 #endif
+		MS_HCR_COUNT(h->type, -1);
 		msSlabFree(h, h->allocSize);
 	}
+}
+
+static inline void msDropDispose(msSlab* slab, void* p) {
+	msRefHeader* h = msHeader(p);
+	MS_DRC_STAT_ADD(MS_DS_FREE, 1);
+#ifdef MSGC_ORC
+	if (h->rootIdx >= 0) msUnregisterCycle(p);
+#endif
+	MS_HCR_COUNT(h->type, -1);
+	int b = msSlabBucket(h->allocSize);
+	if (b >= 0 && slab->count[b] < MS_SLAB_LIMIT) {
+		*(void**)h = slab->free[b];
+		slab->free[b] = h;
+		slab->count[b]++;
+		return;
+	}
+	free(h);
+}
+
+static inline __attribute__((always_inline)) uintptr_t msStackPointer(void) {
+	uintptr_t sp;
+#if defined(__APPLE__) && defined(__aarch64__)
+	sp = (uintptr_t)__builtin_frame_address(0);
+#elif defined(__aarch64__)
+	__asm__("mov %0, sp" : "=r"(sp));
+#elif defined(__x86_64__)
+	__asm__("mov %%rsp, %0" : "=r"(sp));
+#else
+	sp = (uintptr_t)__builtin_frame_address(0);
+#endif
+	return sp;
+}
+
+
+bool msDropEdgeSlow(void* owner, void* p);
+void msDropDefer(void* owner, msDropCont fn, int32_t resume);
+void msDropRestore(const msDropState* saved);
+
+static inline bool msDropHasRoom(void) {
+	return msStackPointer() - msSlabTLS.drop.floor < msSlabTLS.drop.span;
+}
+
+static inline bool msDropEdgeLast(void* owner, void* p) {
+	msSlab* s = &msSlabTLS;
+	if (msStackPointer() - s->drop.floor < s->drop.span) {
+		MS_DESTROY_DISPATCH(msHeader(p)->type, p);
+		msDropDispose(s, p);
+		return false;
+	}
+	return msDropEdgeSlow(owner, p);
 }
 
 #define msWasMoved(p) ((p) = NULL)
@@ -353,6 +460,7 @@ static inline void msRememberCycle(bool isDestroy, void* p, const msTypeInfo* de
 
 static inline void msOrcIncRef(void* p) {
 	if (p == NULL) return;
+	MS_DRC_STAT_ADD(MS_DS_RC_INC_CYC, 1);
 	msHeader(p)->rc += MS_RC_INCREMENT;
 }
 
@@ -360,6 +468,7 @@ static inline bool msOrcDecRefIsLast(void* p) {
 	if (p == NULL) return false;
 	msRefHeader* h = msHeader(p);
 	bool isLast = (h->rc & ~MS_COLOR_MASK) == 0;
+	MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST, 1); MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST_TRUE, isLast);
 	if (!isLast) {
 		h->rc -= MS_RC_INCREMENT;
 	}
@@ -401,8 +510,8 @@ typedef struct {
 	msCellSeq toFree;
 	int32_t freed;
 	int32_t touched;
-	int32_t edges;
-	int32_t rcSum;
+	intptr_t edges;
+	intptr_t rcSum;
 	bool keepThreshold;
 } msGcEnv;
 

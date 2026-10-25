@@ -7,61 +7,10 @@
 // ⚠ Every COMPUTED push must cast `as uint8` (a number-typed arg silently
 // binds the number[] overload on C — §2 push-dispatch facet).
 
-import { asBytes, byteSlice, byteIndexOf } from "./bytes";
-
-export function startsWith(this s: string, prefix: string): boolean {
-	const sb = s.asBytes();
-	const pb = prefix.asBytes();
-	if (pb.length == 0) return true;
-	if (sb.length < pb.length) return false;
-	let i = 0;
-	while (i < pb.length) {
-		if (sb[i] != pb[i]) return false;
-		i = i + 1;
-	}
-	return true;
-}
-
-export function endsWith(this s: string, suffix: string): boolean {
-	const sb = s.asBytes();
-	const xb = suffix.asBytes();
-	if (xb.length == 0) return true;
-	if (sb.length < xb.length) return false;
-	const off = sb.length - xb.length;
-	let i = 0;
-	while (i < xb.length) {
-		if (sb[off + i] != xb[i]) return false;
-		i = i + 1;
-	}
-	return true;
-}
+import { asBytes, byteSlice } from "./bytes";
 
 export function clampIndex(i: int32, len: int32): int32 {
 	return i < 0 ? 0 : i > len ? len : i;
-}
-
-export function includes(this s: string, sub: string): boolean {
-	return s.contains(sub);
-}
-
-export function contains(this s: string, sub: string): boolean {
-	return s.byteIndexOf(sub, 0) >= 0;
-}
-
-// Non-overlapping occurrences. An empty needle counts every gap: byteLength + 1.
-export function count(this s: string, sub: string): int32 {
-	const sb = s.asBytes();
-	const xb = sub.asBytes();
-	if (xb.length == 0) return sb.length + 1;
-	let n: int32 = 0;
-	let pos = 0;
-	while (pos <= sb.length - xb.length) {
-		const found = s.byteIndexOf(sub, pos);
-		if (found < 0) break;
-		n = n + 1;
-		pos = found + xb.length;
-	}
-	return n;
 }
 
 export function trim(this s: string): string {
@@ -90,26 +39,6 @@ export function trimEnd(this s: string): string {
 	return s.byteSlice(0, b);
 }
 
-export function split(this s: string, delimiter: string): string[] {
-	const sb = s.asBytes();
-	const db = delimiter.asBytes();
-	const parts: string[] = [];
-	if (sb.length == 0) { parts.push(""); return parts; }
-	if (db.length == 0) {
-		let c = 0;
-		while (c < sb.length) { parts.push(s.byteSlice(c, c + 1)); c = c + 1; }
-		return parts;
-	}
-	let pos = 0;
-	while (pos <= sb.length) {
-		const found = s.byteIndexOf(delimiter, pos);
-		if (found < 0) { parts.push(s.byteSlice(pos, sb.length)); break; }
-		parts.push(s.byteSlice(pos, found));
-		pos = found + db.length;
-	}
-	return parts;
-}
-
 export function toLowerCase(this s: string): string {
 	const sb = s.asBytes();
 	const result: uint8[] = [];
@@ -123,43 +52,6 @@ export function toUpperCase(this s: string): string {
 	const result: uint8[] = [];
 	let i = 0;
 	while (i < sb.length) { result.push(asciiUpper(sb[i] as int32) as uint8); i = i + 1; }
-	return result.asString();
-}
-
-export function replace(this s: string, search: string, replacement: string): string {
-	const sb = s.asBytes();
-	const xb = search.asBytes();
-	if (sb.length == 0 || xb.length == 0) return s.byteSlice(0, sb.length);
-	const pos = s.byteIndexOf(search, 0);
-	if (pos < 0) return s.byteSlice(0, sb.length);
-	const rb = replacement.asBytes();
-	const result: uint8[] = [];
-	let i = 0;
-	while (i < pos) { result.push(sb[i]); i = i + 1; }
-	let j = 0;
-	while (j < rb.length) { result.push(rb[j]); j = j + 1; }
-	i = pos + xb.length;
-	while (i < sb.length) { result.push(sb[i]); i = i + 1; }
-	return result.asString();
-}
-
-export function replaceAll(this s: string, search: string, replacement: string): string {
-	const sb = s.asBytes();
-	const xb = search.asBytes();
-	if (sb.length == 0 || xb.length == 0) return s.byteSlice(0, sb.length);
-	const rb = replacement.asBytes();
-	const result: uint8[] = [];
-	let pos = 0;
-	while (pos <= sb.length - xb.length) {
-		const found = s.byteIndexOf(search, pos);
-		if (found < 0) break;
-		let k = pos;
-		while (k < found) { result.push(sb[k]); k = k + 1; }
-		let j = 0;
-		while (j < rb.length) { result.push(rb[j]); j = j + 1; }
-		pos = found + xb.length;
-	}
-	while (pos < sb.length) { result.push(sb[pos]); pos = pos + 1; }
 	return result.asString();
 }
 

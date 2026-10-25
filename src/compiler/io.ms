@@ -3,6 +3,7 @@
 import { exit, platform } from "std/process";
 import { readFile, writeFile, ensureDir as fsEnsureDir, rename, remove } from "std/fs";
 import { error, green, bold, dim } from "../utils/color";
+import { msModuleExtensions, stripMsModuleExtension } from "../module/resolver";
 
 
 // -- Shared timing + verbose helpers --
@@ -22,17 +23,12 @@ export function verboseLog(msg: string): void {
 
 // -- Path utilities --
 
-// Replace .ms extension with newExt (or append if not .ms).
+// Replace a MetaScript source extension with newExt (or append if there is none).
 // replaceExt("foo.ms", ".c") → "foo.c"
 // replaceExt("foo.ms", "") → "foo"
 export function replaceExt(inputFile: string, newExt: string): string {
-	if (inputFile.endsWith(".jms") || inputFile.endsWith(".cms")) {
-		return inputFile.slice(0, inputFile.length - 4) + newExt;
-	}
-	if (inputFile.endsWith(".ms")) {
-		return inputFile.slice(0, inputFile.length - 3) + newExt;
-	}
-	return inputFile + newExt;
+	const stem = stripMsModuleExtension(inputFile);
+	return (stem != "" ? stem : inputFile) + newExt;
 }
 
 // Path utilities live in std/fs/path — import there. This module keeps only
@@ -142,3 +138,15 @@ test "replaceExt .ms to .js" { assert replaceExt("foo.ms", ".js") == "foo.js"; }
 test "replaceExt .ms to empty" { assert replaceExt("foo.ms", "") == "foo"; }
 
 test "replaceExt no .ms" { assert replaceExt("foo", ".js") == "foo.js"; }
+
+test "replaceExt strips every MetaScript source extension" {
+	for (const ext of msModuleExtensions) {
+		assert replaceExt("dir/foo" + ext, ".c") == "dir/foo.c";
+		assert replaceExt("dir/foo" + ext, "") == "dir/foo";
+	}
+}
+
+test "replaceExt appends to a non-MetaScript name" {
+	assert replaceExt("foo.ts", ".c") == "foo.ts.c";
+	assert replaceExt("foo.rs", "") == "foo.rs";
+}

@@ -35,8 +35,8 @@ import { Node, NodeKind, DeclKind, TypeKind, Symbol, FunctionDeclData, BlockStmt
 import { TransformContext, freshTempSym, freshOwnedSym, createTransformContextWithChecker, reportTransformError } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
-import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect, walkExpandBlocksHooked } from "../walker";
+import { hasFlag, setFlag, SymbolFlag } from "../../checker/symbol";
+import { walkExpandBlocks, expandingInsideTry, mapExprChildren, mapChildren, hasEffect, walkExpandBlocksHooked, anyDeep, DEEP_DESCEND, DEEP_HIT, DEEP_SKIP } from "../walker";
 import { makeIf, makeBlock, makeExprStmt, makeVarDecl, makeAssign, makeIdentResolved, makeTypedIdentResolved, makeNull, makeReturn, makeBool, makeBreak, makeUnary, extractBodyStmts, syntheticToken, makeMember, makeArrayAccess, makeNumber, makeObjectLiteral, makeString, makeCallResolved, compilerFuncSym } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
@@ -174,6 +174,7 @@ function shallowCopy(expr: Node): Node {
 function bindToStatement(expr: Node, prefix: string, hoisted: Node[], ctx: TransformContext): Node {
 	const loc = expr.location;
 	const sym = freshOwnedSym(ctx, prefix, expr.nodeType);
+	if (prefix == "call") setFlag(sym, SymbolFlag.HoistedCall);
 	const value = shallowCopy(expr);
 	const decl = makeVarDecl(sym.name, value, DeclKind.Const, loc);
 	decl.resolvedSym = sym;
@@ -198,7 +199,7 @@ function hoistLiteral(lit: Node, hoisted: Node[], ctx: TransformContext): Node {
 		expandSpreadLiteral(lit, ctx, hoisted);
 		return lit;
 	}
-	return lit.kind == NodeKind.ObjectLiteral ? expandObjectSpread(lit) : lit;
+	return lit.kind == NodeKind.ObjectLiteral ? expandObjectSpread(lit, ctx) : lit;
 }
 
 function aggregateInitType(expr: Node): Type | null {
@@ -362,20 +363,24 @@ function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], wr
 	return makeIdentResolved(sym, loc);
 }
 
+function callVerdict(n: Node): int32 {
+	if (isFunctionNode(n)) return DEEP_SKIP;
+	if (n.kind == NodeKind.CallExpr || n.kind == NodeKind.NewExpr) return DEEP_HIT;
+	return DEEP_DESCEND;
+}
+
 function holdsCall(n: Node): boolean {
-	if (n == null || isFunctionNode(n)) return false;
-	if (n.kind == NodeKind.CallExpr || n.kind == NodeKind.NewExpr) return true;
-	let found = false;
-	forEachChild(n, (c: Node): void => { if (!found && holdsCall(c)) found = true; });
-	return found;
+	return anyDeep(n, callVerdict);
+}
+
+function storageReadVerdict(n: Node): int32 {
+	if (isFunctionNode(n) || n.kind == NodeKind.HiddenAddr || n.kind == NodeKind.MoveExpr) return DEEP_SKIP;
+	if (readsBeforeHoist(n)) return DEEP_HIT;
+	return DEEP_DESCEND;
 }
 
 function holdsStorageRead(n: Node): boolean {
-	if (n == null || isFunctionNode(n) || n.kind == NodeKind.HiddenAddr || n.kind == NodeKind.MoveExpr) return false;
-	if (readsBeforeHoist(n)) return true;
-	let found = false;
-	forEachChild(n, (c: Node): void => { if (!found && holdsStorageRead(c)) found = true; });
-	return found;
+	return anyDeep(n, storageReadVerdict);
 }
 
 function isLiteral(n: Node): boolean {
@@ -488,15 +493,17 @@ export function fitShortCircuitArm(arm: Node, resultType: Type | null, ctx: Tran
 // JS evaluates in place and skips the hoist, except where a width step must
 // read its operand twice: then the operand's effects are hoisted as on C, the
 // statement-level form of the reference's maybeMakeTempAssignable.
-function hasImpureIntegerUpdate(n: Node): boolean {
-	if (n == null || isFunctionNode(n) || n.kind == NodeKind.BlockStmt) return false;
+function impureIntegerUpdateVerdict(n: Node): int32 {
+	if (isFunctionNode(n) || n.kind == NodeKind.BlockStmt) return DEEP_SKIP;
 	if (n.kind == NodeKind.UpdateExpr) {
 		const d = n.data as UpdateExprData;
-		if (needsIntegerUpdateRewrite(d) && cloneIfPure(d.updateArg) == null) return true;
+		if (needsIntegerUpdateRewrite(d) && cloneIfPure(d.updateArg) == null) return DEEP_HIT;
 	}
-	let found = false;
-	forEachChild(n, (c: Node): void => { if (!found && hasImpureIntegerUpdate(c)) found = true; });
-	return found;
+	return DEEP_DESCEND;
+}
+
+function hasImpureIntegerUpdate(n: Node): boolean {
+	return anyDeep(n, impureIntegerUpdateVerdict);
 }
 
 // ===== Statement expansion =====
@@ -798,34 +805,33 @@ function expandSwitchDisc(stmt: Node, ctx: TransformContext): Node[] {
 	return pre;
 }
 
-function condLowersToStatements(n: Node): boolean {
-	if (n == null || isFunctionNode(n)) return false;
-	if (tdzFlagOf(n) != null) return true;
+function condLowersVerdict(n: Node): int32 {
+	if (isFunctionNode(n)) return DEEP_SKIP;
+	if (tdzFlagOf(n) != null) return DEEP_HIT;
 	if (n.kind == NodeKind.ConditionalExpr || n.kind == NodeKind.UpdateExpr || callCanRaise(n)
-		|| n.kind == NodeKind.ArrayLiteral || n.kind == NodeKind.ObjectLiteral) return true;
+		|| n.kind == NodeKind.ArrayLiteral || n.kind == NodeKind.ObjectLiteral) return DEEP_HIT;
 	if (n.kind == NodeKind.BinaryExpr) {
 		const op = (n.data as BinaryExprData).operator;
-		if (op == "&&" || op == "||") return true;
+		if (op == "&&" || op == "||") return DEEP_HIT;
 	}
-	let found = false;
-	forEachChild(n, (c: Node): void => {
-		if (!found && condLowersToStatements(c)) { found = true; }
-	});
-	return found;
+	return DEEP_DESCEND;
 }
 
-function bodyHasLoopContinue(node: Node): boolean {
-	if (node == null) return false;
-	if (node.kind == NodeKind.ContinueStmt) return true;
+function condLowersToStatements(n: Node): boolean {
+	return anyDeep(n, condLowersVerdict);
+}
+
+function loopContinueVerdict(node: Node): int32 {
+	if (node.kind == NodeKind.ContinueStmt) return DEEP_HIT;
 	if (node.kind == NodeKind.WhileStmt || node.kind == NodeKind.DoWhileStmt
 		|| node.kind == NodeKind.ForStmt || node.kind == NodeKind.ForOfStmt
 		|| node.kind == NodeKind.ForInStmt || node.kind == NodeKind.FunctionDecl
-		|| node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ArrowFunction) return false;
-	let found = false;
-	forEachChild(node, (child: Node): void => {
-		if (!found && bodyHasLoopContinue(child)) { found = true; }
-	});
-	return found;
+		|| node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ArrowFunction) return DEEP_SKIP;
+	return DEEP_DESCEND;
+}
+
+function bodyHasLoopContinue(node: Node): boolean {
+	return anyDeep(node, loopContinueVerdict);
 }
 
 // ===== Entry Point =====

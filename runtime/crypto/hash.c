@@ -6,6 +6,7 @@
  */
 
 #include "runtime/crypto/hash.h"
+#include "runtime/core/system.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -261,6 +262,7 @@ static int fill_random(uint8_t* buf, size_t len) {
 
 msString msCryptoRandomBytes(int64_t size) {
 	if (size <= 0) return MS_EMPTY_STRING;
+	if (size > MS_LEN_MAX) msRaiseRangeError(size, 0, MS_LEN_MAX);
 
 	msStrPayload* p = (msStrPayload*)calloc(1, sizeof(msStrPayload) + size + 1);
 	if (!p) return MS_EMPTY_STRING;

@@ -1,5 +1,146 @@
 # Build Performance — Roadmap
 
+## Measuring by flow
+
+A whole-compiler A/B costs 45-60 minutes and names no flow. Every instrument below writes rows
+`<source>\t<flow>\t<metric>\t<value>` (source `msc` `drc` `emit` `proc`; metric `ms` `instr` `count`
+`bytes`), and `src/test/perf/run.ms` turns the rows of a base and a candidate compiler into one table
+per program, so a change shows its own delta in about a minute.
+
+| Instrument | Measures | Switch on |
+|---|---|---|
+| `msc` rows | the compiler's passes, analyzer steps, phases, emit and cc | env `MSC_FLOWS=<file>` |
+| `drc` rows | allocations, rc operations, cycle registrations and collections of a program | build with `--passC=-DMS_DRC_STAT`, run with env `MS_DRC_STAT=<file>`; an `msc` built that way reports its own runtime flows |
+| `emit` rows | per function counts in emitted C (rc ops, pins, atomics) | `msc run src/test/perf/emitCostScan.ms <emit dir>`, or `--diff A B` for a ranked table |
+| `proc` rows | whole process: instructions retired, wall, max rss | the runner adds them itself |
+
+The runner's environment and program names are the header of `src/test/perf/run.ms`.
+
+**A/B recipe.** Build the candidate at the worktree root (`msc build src/index.ms --gc=drc --danger
+--lto=off --output=msc`), keep the previous build as the base, then
+
+```sh
+MSPERF_BASE=/path/to/previous/msc MSPERF_PROGRAMS=711,self nice -n 10 msc run src/test/perf/run.ms
+```
+
+Check `uptime` first and do not start a second compile beside it. `MSPERF_SELF=1` runs one binary as
+both arms: that is the noise check, and every row of it should carry no mark.
+
+**Reading the table.** Rows sort by the size of the instruction delta, then the count delta.
+
+- Counts and non-process bytes are exact: they do not depend on load or host. `=` means identical in
+  every run of both arms; `≠` means the change moved the number. An exact row that varies inside one
+  arm is read as timed.
+- Timed rows (`ms`, `instr`, process bytes) compare medians. `*` marks an `instr` or bytes delta over
+  3 times the noise (the larger sample coefficient of variation of the two arms), over 1% and, for
+  `instr`, over 5M instructions; `ms` rows are wall time under load and are never marked. No mark
+  means the move is not shown to be real. Resolution is about 2%: on 19 runs of one binary on 711
+  (2026-10-25, load 50-90) the rows of 1G and more spread 0.37% (sd, median), a 2% move on them was
+  caught 81% of the time at 5 runs, and with the 5M floor no 3-vs-3 or 5-vs-5 split of those runs
+  carried a false mark (32% of the 3-vs-3 tables did without it). A claimed 1% move needs a rerun of
+  that program with about 15 runs per arm.
+- `new` / `gone` is a flow only one arm wrote. A header line names the sources each arm produced:
+  a compiler without `MSC_FLOWS` yields only `proc` rows.
+- Coverage: the leaf flows of phase A (`pass.*`, `analyze.*`, `a2.mono`, `a2.macro`, `a2.lower`) over
+  `phase.A`, and the `phase.*` rows over the `msc total`. A low share means the table leaves a flow
+  out and its delta cannot be located in it.
+
+**Self check on the merged instruments, 2026-10-25** (`msc-cand` of `wt/perf-flows` built
+`--gc=drc --danger --lto=off`, `MSPERF_SELF=1`, `711`, 3 runs, load 63-73): no row marked; coverage
+97.0% of `phase.A` in leaf flows and 100.0% of the `msc total` in `phase.*` rows. `phase.setup`
+(session start, cache init, parser registration) is 4.1G of 30.5G instructions here against 1.1G in
+a warm run from the worktree, so it is a flow worth its own look. A compiler built without
+`--gc=drc` is an orc compiler and crashes in parallel emit (compiler inbox, `sharedTypeQueries`
+card); build both arms with `--gc=drc`.
+
+**Measured noise, 2026-10-25** (macOS arm64, installed `msc` v0.3.4 as both arms, `711` built with
+`--emit=c`, 3 runs, load average 100-140 during the run): process instructions 25.49G against 25.64G,
+median difference +0.6% at noise 0.3% (no mark); wall time noise 17% and max rss noise 11%, so wall
+time and rss under that load show nothing. Not measured: Linux (`perf stat` and the `/usr/bin/time -f`
+fallback are written, not run), and `rt:` programs.
+
+## Measured 2026-10-22 — four more front-end fixes
+
+Same methods as 2026-10-21 below. All four leave emitted C of `src/index.ms` identical
+(0 of 376 files differ).
+
+| fix | workload (Mac, thin LTO) | rounds | instructions | user |
+|---|---|---|---|---|
+| 4 `std/fs/path.ms` `normalize` returns a path already in normal form; `relative` slices a descendant | emit-only | 3 | 335.1G → 318.9G (−4.8%) | noise |
+| 5 `ast/visitor.ms` `forEachChild` without a closure per call | emit-only, on top of 4 | 3 | 319.4G → 311.0G (−2.6%) | 31.84 → 30.15 s |
+| 6 `module/loader.ms` header-import scan by byte | `check src/index.ms`, on top of 5 | 5 | 62.96G → 62.00G (−1.5%) | 4.79 → 4.52 s |
+| 7 `transform/walker.ms` one closure per walk, not per node | emit-only, on top of 6 | 3 | 313.1G → 303.4G (−3.1%) | 37.82 → 36.68 s (load 45–115) |
+
+lc-1 (load 0.1–7), `main` = `301653fce`, `cand` = `main` + fixes 4–6, both built by one builder
+with `--gc=drc --danger`; same cells as the baseline, min user CPU, wall in brackets:
+
+| cell | rounds | main | cand |
+|---|---|---|---|
+| check | 5 / 5 | 13.00 s (13.9) | 13.05 s (14.0) |
+| emit-only | 5 / 5 | 59.70 s (54.4) | 57.30 s (53.2) |
+| rebuild 1 file | 3 / 3 | 59.70 s (54.4) | 57.72 s (52.4) |
+| cold | 2 / 2 | 595.2 s (2:31) | 591.2 s (2:29) |
+
+- Fixes 4–6 take 4.0% off emit-only and 3.3% off a one-file rebuild on lc-1; `check` does not
+  move there, so fix 6's Mac gain is below that host's noise.
+- Not verified: fix 7 on lc-1; Windows.
+
+## Measured 2026-10-21 — self-host baseline, and three front-end fixes
+
+**Baseline, Linux x64 (lc-1, 8 cores, load 1.1–5.5).** Two stage-2 compilers, each built by
+its own stage 1 with `--gc=drc --danger --lto=off`: `main` = `d64faf905`, `cand` = `main` + the
+string-match label count (fix 1 below). Every command ran from a clone of `main` with
+`MSC_NO_GLOBAL_CACHE=1` and a private `out/`; rounds interleave the two binaries; the table
+gives min user CPU (`/usr/bin/time -v`), wall in brackets. `perf` is not permitted on that
+host, so there are no instruction counts.
+
+| cell | command | rounds | main | cand |
+|---|---|---|---|---|
+| check | `msc check src/index.ms` | 7 / 5 | 14.34 s (15.4) | 14.20 s (15.2) |
+| no-change | `build src/index.ms --gc=drc --danger --lto=off --output=… --time`, record settled | 5 / 5 | 14.80 s (16.1) | 14.83 s (16.1) |
+| rebuild 1 file | same, after appending a comment to `src/utils/string.ms` | 5 / 5 | 57.73 s (52.7) | 62.40 s (57.3) |
+| cold | same, `out/` moved aside | 3 / 3 | 604.3 s (2:35) | 602.5 s (2:34) |
+| test | `msc test src/index.ms` | 1 / 1 | 631.1 s (6:12) | 630.1 s (6:09) |
+
+- A no-change build costs one `check`: it stops at "Up to date" after graph load and check.
+- Rebuilding one file reruns the whole front end: phase A 31 s wall (`graph load+check` 15 s),
+  DCE 7 s; of a cold build's 2:35, phase C (codegen + clang) is 99 s.
+- Within one binary, rebuild-1-file rounds spread 57.7–69.0 s, so main vs cand there is noise.
+  Fix 1 shows no gain on this host in any cell; on the Mac it does (below).
+- `test` is red on both binaries in the same 11 cases (`preludePack`, the prelude seed tests of
+  `compile.ms`): they need the global cache that `MSC_NO_GLOBAL_CACHE=1` turns off.
+- A build started within the same second as the last source edit drops the project record
+  (`writeProjectCache`, the `modifiedTime(path) >= _buildStartedSeconds` guard), so the
+  next build reruns the whole front end: 57–69 s here instead of 15 s. A first battery that
+  rebuilt right after `git checkout` measured that, not a no-change build.
+
+**Fixes, macOS arm64 (load 8–44; min of interleaved rounds, `time -l` instructions retired as
+the load-independent number).** Binaries built by one builder with the same flags, A = before,
+B = after; emitted C of `src/index.ms` compared file by file.
+
+| fix | workload | rounds | instructions | user |
+|---|---|---|---|---|
+| 1 `matchLower.ms` counts string labels, not arms | emit-only, stage 2, `--lto=off` | 3 | 468.0G → 368.4G (−21%) | 45.37 → 30.80 s |
+| 1 | emit-only, stage 2, thin LTO (shipping config) | 3 | 349.2G → 342.4G (−1.9%) | 29.70 → 26.14 s |
+| 2 `loader.ms` line starts in one `split` | `check src/index.ms`, thin | 5 | 74.83G → 70.16G (−6.2%) | 4.77 → 4.52 s |
+| 3 `scanner.ms` identifier sliced once | `check src/index.ms`, thin, on top of 2 | 5 | 70.25G → 64.20G (−8.6%) | 4.37 → 4.13 s |
+
+- Fix 1 changes emitted C on purpose (15 of 375 modules gain `switch` on `msStringHash`); it
+  reaches the compiler binary only at stage 2, so a published binary carries it one sync later.
+  Thin LTO inlines `msStringEquals`, which hides most of the chain it removes.
+- Fixes 2 and 3 leave emitted C identical (0 of 375 files differ). Fix 2: on a non-ASCII source
+  `indexOf(s, from)` re-walks UTF-8 from the start, so the old newline loop was quadratic;
+  `inlineHeader` time over 404 modules fell 422 → 86 ms.
+- LTO axis, same source: thin vs off is −7.5% instructions on `check` (81.1G → 75.0G) and
+  −7.2% on emit-only (368.6G → 341.9G); user 5.75 → 5.34 s and 32.54 → 28.78 s at load
+  19–45. This contradicts the 2026-09-27 "within noise" below, which compared user time only.
+  Default cc vs clang at `--lto=off`: 81.9G vs 81.2G.
+
+Tried and dropped (no time gain): `memchr` in the non-ASCII `msStringIndexOf` path (−0.7%
+`check` instructions); caching disk reads per source provider plus one module identity per
+import edge (75.14G vs 75.27G). Not verified: Windows; fixes 2 and 3 on lc-1 (written after
+its battery started); `test` and cold builds with fixes 2 and 3.
+
 ## Measured 2026-10-05 — output identity inside the filesystem settle window (Windows x64)
 
 The link-cache rewrite invariant failed during integration on `e8bf07ba`; its

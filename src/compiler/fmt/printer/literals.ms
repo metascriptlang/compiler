@@ -3,6 +3,8 @@
 import { Node, SourceLocation, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BigIntLiteralData, RegexLiteralData } from "../../../ast/node";
 import { FormatOptions } from "../options";
 import { Doc, docText } from "../doc";
+import { LineIndex, lineStart } from "../../../utils/sourceLines";
+import { isDigit } from "../../../lexer/chars";
 
 export function printNullLiteral(node: Node, options: FormatOptions): Doc {
 	const pos = sourceOffset(options.source, node.location.line, node.location.column - 1);
@@ -17,13 +19,9 @@ export function printNumberLiteral(node: Node, options: FormatOptions): Doc {
 	return docText(raw != "" ? raw : d.value.toString());
 }
 
-function isDigitByte(ch: int32): boolean {
-	return ch >= "0".code && ch <= "9".code;
-}
-
 function rawNumberAt(node: Node, source: string): string {
 	const start = sourceOffset(source, node.location.line, node.location.column - 1);
-	if (start < 0 || !isDigitByte(source.byteAt(start))) return "";
+	if (start < 0 || !isDigit(source.byteAt(start))) return "";
 	const hex = source.byteAt(start) == "0".code && start + 1 < source.byteLength
 		&& (source.byteAt(start + 1) == "x".code || source.byteAt(start + 1) == "X".code);
 	let end = start;
@@ -31,8 +29,8 @@ function rawNumberAt(node: Node, source: string): string {
 		const ch = source.byteAt(end);
 		const prev = end > start ? source.byteAt(end - 1) : 0;
 		const exponentSign = !hex && (ch == "+".code || ch == "-".code) && (prev == "e".code || prev == "E".code);
-		const fraction = ch == ".".code && end + 1 < source.byteLength && isDigitByte(source.byteAt(end + 1));
-		if (!(isDigitByte(ch) || (ch >= "a".code && ch <= "z".code) || (ch >= "A".code && ch <= "Z".code)
+		const fraction = ch == ".".code && end + 1 < source.byteLength && isDigit(source.byteAt(end + 1));
+		if (!(isDigit(ch) || (ch >= "a".code && ch <= "z".code) || (ch >= "A".code && ch <= "Z".code)
 			|| ch == "_".code || fraction || exponentSign)) break;
 		end = end + 1;
 	}
@@ -104,18 +102,15 @@ function extractRawStringToken(source: string, line: int32, col: int32): string 
 	return source.byteSlice(pos, end);
 }
 
-let lineStarts: int32[] = [];
+let lines = LineIndex.build("");
 
 export function indexSourceLines(source: string): void {
-	lineStarts = [0];
-	for (let i = 0; i < source.byteLength; i += 1) {
-		if (source.byteAt(i) == "\n".code) lineStarts.push(i + 1);
-	}
+	lines = LineIndex.build(source);
 }
 
 function sourceOffset(source: string, line: int32, col: int32): int32 {
-	if (source == "" || line < 1 || line > lineStarts.length) return -1;
-	const pos = lineStarts[line - 1] + col;
+	if (source == "" || line < 1 || line > lines.starts.length) return -1;
+	const pos = lines.lineStart(line) + col;
 	return pos < source.byteLength ? pos : -1;
 }
 

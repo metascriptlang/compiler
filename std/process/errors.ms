@@ -1,5 +1,5 @@
 // Process Errors — Unified error type for subprocess operations.
-// Used by exec(), and future spawn/execFile/kill operations.
+// Used by exec(), execFile*() and spawn().
 // Follows the flat-interface pattern from std/io/errors.ms.
 
 // ===== Error Kind =====
@@ -11,6 +11,9 @@ export enum ProcessErrorKind {
 	SignalTerminated,  // POSIX: child killed by signal (SIGTERM, SIGSEGV, etc.)
 	PipeError,         // failed reading stdout/stderr from child
 	Unknown,           // catch-all for unmapped conditions
+	Timeout,           // a deadline passed; the child keeps running
+	PipeClosed,        // the pipe is closed: the child closed stdin, or the handle was closed
+	OutputOverflow,    // a stream buffer filled while unread; its bytes are kept
 }
 
 // ===== Error Interface =====
@@ -93,6 +96,7 @@ export function errnoName(errnum: int32): string {
 		12 => "ENOMEM",
 		13 => "EACCES",
 		20 => "ENOTDIR",
+		4028 => "EFTYPE",
 		_ => `UNKNOWN (errno ${errnum})`,
 	};
 }
@@ -131,6 +135,22 @@ export function pipeError(command: string, reason: string): ProcessError {
 		errorOutput: "",
 		message: `pipe error: ${reason}`,
 	};
+}
+
+export function timedOut(command: string, what: string): ProcessError {
+	return processError(ProcessErrorKind.Timeout, command, `timed out: ${what}`);
+}
+
+export function pipeClosed(command: string, what: string): ProcessError {
+	return processError(ProcessErrorKind.PipeClosed, command, `pipe closed: ${what}`);
+}
+
+export function outputOverflow(command: string, stream: string): ProcessError {
+	return processError(
+		ProcessErrorKind.OutputOverflow,
+		command,
+		`${stream} filled its buffer unread; the child is blocked until it is read`,
+	);
 }
 
 // ===== Classification =====
@@ -194,7 +214,16 @@ test "startFailed names the program and the start error" {
 	const denied = startFailed("/tmp", errnoName(13));
 	assert denied.kind == ProcessErrorKind.SpawnFailed && denied.exitCode == 126;
 	assert denied.message == "spawnSync /tmp EACCES";
+	assert errnoName(4028) == "EFTYPE";
+	assert errnoName(79) == "UNKNOWN (errno 79)";
 	assert errnoName(99) == "UNKNOWN (errno 99)";
+}
+
+test "child-process kinds carry their kind and command" {
+	assert timedOut("cat", "wait after 100 ms").kind == ProcessErrorKind.Timeout;
+	assert pipeClosed("cat", "stdin").kind == ProcessErrorKind.PipeClosed;
+	const full = outputOverflow("yes", "stdout");
+	assert full.kind == ProcessErrorKind.OutputOverflow && full.command == "yes";
 }
 
 test "isNotFound classification" {

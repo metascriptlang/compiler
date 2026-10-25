@@ -4,19 +4,27 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { TargetInfo, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, skipModifier, isAwaitable, awaitedType, isResult, substituteType, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, hasDestructor, getAttachedOp, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType } from "../../checker/types";
+import { TargetInfo, unwrapVarargs, genericInstanceAbiRepr, isStructType, emptyType, assignType, sizeOfType, alignOfType, offsetOfField, skipModifier, isAwaitable, awaitedType, isResult, substituteInstanceArgs, createStruct, createArray, createRef, needsRC, hasAsgnFlag, isNumeric, isPrimitiveUnionMember, isStringLike, unwrapRefNullUnion, peelToStructOrUnion, peelTransparentInstance, distinctInstanceRepr, distinctBody, isAtomicRef, setRepr, arrayElementNeedsCleanup, tupleTypeName, inlineVariantStruct, spelled, genericParamsOf, nominalTypeKey, isNominalKind, isUncountedPtrElement, enumStorageKind, peelToRepr, isValueStorage, classParentOf, runtimeClassSym, typeDisplayName, storesNothing, createPrimitive, createEnum, createTuple, createFunction, createDistinct, literalUnionBase, numberLiteralBase, createGenericInstance, isIntegerType } from "../../checker/types";
 import { AttachedOp, Node, NodeKind, NodeFlag, CallExprData, ObjectLiteralData, Type, TypeKind, TypeFlag, SymbolKind, SymbolState, Symbol } from "../../ast/node";
 import { monoInstanceName } from "../../monomorphize/registry";
 import { splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { CGen, CSection, CTypeInfoDemand, TypeInfoKind, DeferredStructDef, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, nameSetAdd, addCGenError, NameSet, createNameSet, useHeader, createCGen } from "./context";
+import { passedByValue } from "../../checker/varPartitions";
 import { SymbolFlag, hasFlag, makeSymbol, setFlag, lookupSymbolReadonly } from "../../checker/symbol";
 import { mangle, mangledTypeName, ownedGeneratedName, mangledFunctionName, mangleFieldName, safeName, resolveOverloadWinner, OverloadWinner, mangleQualified, mangleModuleName } from "./names";
 import { CheckerContext, newSym, GcMode, addError, createContext } from "../../checker/context";
 import { cStringLiteral, escapeCString } from "./literals";
 
+function namingSym(t: Type): Symbol | null {
+	if (t.sym != null && hasFlag(t.sym, SymbolFlag.Anon)) return t.sym;
+	return t.typeFlags.has(TypeFlag.Spelled) ? null : t.sym;
+}
+
 export function resolvedTypeCName(t: Type, hasCheckerCtx: boolean): string {
-	if (t.sym != null) return mangledTypeName(t.sym, t.typeName);
+	const owner = namingSym(t);
+	if (owner != null && t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(owner, t.typeName) + "_" + hashToBase36(nominalTypeKey(t));
+	if (owner != null) return mangledTypeName(owner, t.typeName);
 	if (hasCheckerCtx && t.typeName != "" && isNominalKind(t.kind)) nominalTypeKey(t);
 	return mangledTypeName(null, t.typeName);
 }
@@ -29,24 +37,11 @@ function typeIdentityName(g: CGen, t: Type): string {
 // definitions + ownership keys) and the analyzer (call sites). Both must spell a
 // type the way codegen spells its struct, or one module's hooks answer for
 // another module's same-named type.
-export function hookBaseCNameOfSym(typeName: string, sym: Symbol | null): string {
-	if (typeName == "") return "";
-	// Compiler-generated spellings ($Env_*, msAnon_*, monomorphized "__") are already
-	// unique and get mangled once at emission; mangling them here too would spell the
-	// definition and its references differently.
-	if (typeName.slice(0, 1) == "$") return ownedGeneratedName(sym) ? mangledTypeName(sym, typeName) : typeName;
-	if (typeName.indexOf("__", 0) >= 0) return typeName;
-	if (sym != null) return mangledTypeName(sym, typeName);
-	return typeName;
-}
-
 export function hookBaseCName(typeName: string, t: Type | null, cc: Readonly<CheckerContext> | null): string {
 	if (typeName == "") return "";
 	if (typeName.slice(0, 1) == "$") return t != null && t.typeName == typeName && ownedGeneratedName(t.sym) ? mangledTypeName(t.sym, typeName) : typeName;
-	if (typeName.indexOf("__", 0) >= 0) return typeName;
 	const named = t != null && t.typeName == typeName;
 	if (named && t.typeInst != null) return monoInstanceName(t.typeInst);
-	if (named && t.sym != null) return mangledTypeName(t.sym, typeName);
 	if (named) return resolvedTypeCName(t, cc != null);
 	return typeName;
 }
@@ -262,7 +257,7 @@ export function procHeader(g: CGen, name: string, fnType: Type, paramNames: Read
 		}
 		let pType = typed ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
 		const mut = (mutBits & (1 << (i as int32))) != 0;
-		const promote = typed && (hookAbi ? ccgIntroducedPtr(g.target, fnType.typeChildren[i]) : shouldIndirectParam(g.target, fnType.typeChildren[i], mut));
+		const promote = typed && (hookAbi ? ccgIntroducedPtr(g.target, fnType.typeChildren[i]) : shouldIndirectParam(g.target, fnType.typeChildren[i], mut, i == 0 && returnsBorrow(fnType)));
 		if (promote && pType.byteLength > 0 && pType.charAt(pType.byteLength - 1) != "*") {
 			pType = (!hookAbi && shouldConstParam(fnType.typeChildren[i], mut)) ? "const " + pType + "*" : pType + "*";
 		}
@@ -358,9 +353,9 @@ function anonFieldKey(t: Type | null, open: Type[]): string {
 	return match (t.kind) {
 		TypeKind.Struct => {
 			if (t.typeName.length == 0) return anonStructKeyIn(t, open);
-			return t.typeName;
+			return structKeyIdentity(t);
 		},
-		TypeKind.Enum => "enum:" + t.typeName,
+		TypeKind.Enum => "enum:" + mangledTypeName(t.sym, t.typeName),
 		TypeKind.GenericInstance => "ginst:" + monoInstanceName(t),
 		TypeKind.Array => "arr:" + anonFieldKey(t.typeReturn, open),
 		TypeKind.Function => {
@@ -512,9 +507,10 @@ export function annotationToC(annotation: string): string {
 // Generates a unique string key for a Type (used for cache lookups).
 
 function structKeyIdentity(t: Type): string {
-	if (t.sym != null) return mangledTypeName(t.sym, t.typeName);
-	nominalTypeKey(t);
-	return mangledTypeName(null, t.typeName);
+	const owner = namingSym(t);
+	if (owner == null && t.typeFlags.has(TypeFlag.Spelled)) return mangledTypeName(null, t.typeName);
+	if (owner != null && !t.typeFlags.has(TypeFlag.DuVariant)) return mangledTypeName(owner, t.typeName);
+	return mangledTypeName(null, nominalTypeKey(t));
 }
 
 export function anonUnionCName(t: Type): string {
@@ -725,6 +721,8 @@ export function ccgIntroducedPtr(tg: TargetInfo, t: Type): boolean {
 	if (isStructType(inner)) return sizeOfType(tg, inner) > ptrThreshold(tg);
 	// Union(Ref<T>, Null) collapses to T* in C — the pointer IS the value, no struct-via-pointer.
 	if (inner.kind == TypeKind.Union && unwrapRefNullUnion(inner) != null) return false;
+	const carried = literalUnionBase(inner);
+	if (carried != null) return ccgIntroducedPtr(tg, carried);
 	return match (inner.kind) {
 		TypeKind.Tuple => sizeOfType(tg, inner) > ptrThreshold(tg),
 		TypeKind.Array => true,  // arrays always by pointer: mutable by default, realloc invalidates caller copy
@@ -748,14 +746,20 @@ export function openArrayLenName(param: string): string { return param + "Len_0"
 
 // Mutation forces T* for Struct, Function (msClosure 16B), and small Tuple.
 // Actor lowering sets mutation bits via markValueLayoutParamsAsMutated.
-export function shouldIndirectParam(tg: TargetInfo, paramType: Type, isMutated: boolean): boolean {
-	if (paramType == null) return false;
+export function returnsBorrow(fnType: Type | null): boolean {
+	return fnType != null && fnType.kind == TypeKind.Function && fnType.typeReturn != null && fnType.typeReturn.kind == TypeKind.Borrow;
+}
+
+export function shouldIndirectParam(tg: TargetInfo, declared: Type, isMutated: boolean, lentFirst: boolean = false): boolean {
+	if (declared == null) return false;
+	const paramType = unwrapVarargs(declared);
 	// Var params: the `*` is in the type (getTypeDesc); body derefs come from
 	// HiddenDeref nodes. Never indirect — not even when mutated (an out param
 	// is mutated by definition; the struct-mutation branch must not see
 	// through Var via skipModifier).
 	if (paramType.kind == TypeKind.Var) return false;
 	const inner = paramAbiType(paramType);
+	if (lentFirst && passedByValue(inner)) return true;
 	if (inner != null && isStructType(inner)) {
 		if (isMutated) return true;
 		return sizeOfType(tg, inner) > ptrThreshold(tg);
@@ -949,13 +953,8 @@ export function typeInfoCName(subject: Type): string {
 	return resolvedTypeCName(subject, true);
 }
 
-export function isPrivateTypeInfoSubject(subject: Type): boolean {
-	return subject.typeName.startsWith("$") || subject.typeName.startsWith("dollarEnv_");
-}
-
-export function objectTypeInfoKey(subject: Type, modulePath: string): string {
-	const cName = typeInfoCName(subject);
-	return isPrivateTypeInfoSubject(subject) ? `obj|${modulePath}|${cName}` : `obj|${cName}`;
+export function objectTypeInfoKey(subject: Type): string {
+	return `obj|${typeInfoCName(subject)}`;
 }
 
 export function arcCellKey(pointee: Type): string {
@@ -1005,20 +1004,12 @@ export function hasUnionEq(t: Type): boolean {
 	return true;
 }
 
-export function promiseAllCellKey(arrT: Type): string {
-	return "pall|" + opTypeKey(arrT);
-}
-
-export function promiseAllCellName(arrT: Type): string {
-	return "msPromiseAllCell_" + hashToBase36(opTypeKey(arrT));
-}
-
 function typeInfoPointer(g: CGen, info: Readonly<CTypeInfoDemand>): string {
-	if (!info.moduleLocal && hcrTypeInfoRef(g, info.cName)) return `&${info.cName}TypeInfo`;
+	if (hcrTypeInfoRef(g, info.cName)) return `&${info.cName}TypeInfo`;
 	const forwKey = "typeInfo:" + info.cName;
 	if (!typeCacheHas(g.forwTypeCache, forwKey)) {
 		typeCacheSet(g.forwTypeCache, forwKey, info.cName);
-		addLine(sec(g, CSection.ForwardDecls), `${info.moduleLocal ? "static" : "extern"} msTypeInfo ${info.cName}TypeInfo;`);
+		addLine(sec(g, CSection.ForwardDecls), `extern msTypeInfo ${info.cName}TypeInfo;`);
 	}
 	return `&${info.cName}TypeInfo`;
 }
@@ -1039,19 +1030,13 @@ export function typeInfoRef(g: CGen, type: Type | null): string {
 		addCGenError(g, `internal: a TypeInfo was requested in ${g.modulePath} for a type that has none`, 0, 0);
 		return "NULL";
 	}
-	const info = demandedTypeInfo(g, objectTypeInfoKey(subject, g.modulePath), "object");
+	const info = demandedTypeInfo(g, objectTypeInfoKey(subject), "object");
 	return info == null ? "NULL" : typeInfoPointer(g, info);
 }
 
 export function ensureArcCellTypeInfo(g: CGen, pointeeType: Type): string {
 	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
 	const info = demandedTypeInfo(g, arcCellKey(pointeeType), "Arc cell");
-	return info == null ? "NULL" : typeInfoPointer(g, info);
-}
-
-export function ensurePromiseAllCellTypeInfo(g: CGen, arrT: Type): string {
-	if (g.checkerCtx != null && g.checkerCtx.gcMode == GcMode.Manual) return "NULL";
-	const info = demandedTypeInfo(g, promiseAllCellKey(arrT), "Promise.all cell");
 	return info == null ? "NULL" : typeInfoPointer(g, info);
 }
 
@@ -1103,16 +1088,9 @@ function refArrayCellLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 	return (bare != "" ? getArrayTypeName(bare) : arrCType) + "RefCell";
 }
 
-function promiseAllCellLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
-	const arrCType = getTypeDesc(g, info.subject);
-	const elemCName = arrCType.slice(0, arrCType.length - 5);
-	const bare = typeCacheGet(g.typeCache, "bare:" + elemCName);
-	return (bare != "" ? getArrayTypeName(bare) : arrCType) + "PallCell";
-}
-
 function objectTypeInfoLabel(info: Readonly<CTypeInfoDemand>): string {
 	const t = info.subject;
-	if (t.kind == TypeKind.GenericInstance || t.sym == null || t.typeName.indexOf("__", 0) >= 0 || isAnonTypeName(t.typeName)) return info.cName;
+	if (t.kind == TypeKind.GenericInstance || t.sym == null || t.sym.instantiatedFrom != null || isAnonTypeName(t.typeName)) return info.cName;
 	return mangle(t.typeName);
 }
 
@@ -1121,8 +1099,16 @@ function typeInfoLabel(g: CGen, info: Readonly<CTypeInfoDemand>): string {
 		TypeInfoKind.RefArrayCell => refArrayCellLabel(g, info),
 		TypeInfoKind.Object => objectTypeInfoLabel(info),
 		TypeInfoKind.ArcCell => mangle(getTypeDesc(g, info.subject)) + "Arc",
-		TypeInfoKind.PromiseAllCell => promiseAllCellLabel(g, info),
 	};
+}
+
+function emitRttiHook(g: CGen, name: string, hook: Symbol, trace: boolean): string {
+	const hookName = opCName(hook);
+	ensureDrcProto(g, hookName, hook);
+	const params = trace ? "void* dest, void* env" : "void* dest";
+	addLine(sec(g, CSection.ProcHeaders), `static void ${name}(${params});`);
+	addLine(sec(g, CSection.Procs), `static void ${name}(${params}) { ${hookName}(dest${trace ? ", env" : ""}); }`);
+	return name;
 }
 
 export function emitOwnedTypeInfos(g: CGen): void {
@@ -1131,31 +1117,25 @@ export function emitOwnedTypeInfos(g: CGen): void {
 	for (const info of g.emissionFacts.typeInfoOrder) {
 		if (info.owner != g.modulePath) continue;
 		let destroyName = "NULL";
-		if (info.destroy != null) {
-			destroyName = opCName(info.destroy);
-			ensureDrcProto(g, destroyName, info.destroy);
-		}
+		if (info.destroy != null) destroyName = emitRttiHook(g, info.cName + "RttiDestroy", info.destroy, false);
 		let traceName = "NULL";
-		if (info.trace != null) {
-			traceName = opCName(info.trace);
-			ensureDrcProto(g, traceName, info.trace);
-		}
+		if (info.trace != null) traceName = emitRttiHook(g, info.cName + "RttiTrace", info.trace, true);
 		let baseRef = "NULL";
 		if (info.baseKey != "") {
 			const base = demandedTypeInfo(g, info.baseKey, "base class");
 			if (base != null) baseRef = typeInfoPointer(g, base);
 		}
 		const label = typeInfoLabel(g, info);
-		const shown = info.kind == TypeInfoKind.Object ? typeDisplayName(info.subject) : "";
+		const shown = info.kind != TypeInfoKind.Object ? "" : runtimeClassSym(info.subject) != null ? typeDisplayName(info.subject) : "Object";
 		const fields = `.name = "${label}", .isCyclic = ${info.trace != null ? "MS_TRUE" : "MS_FALSE"}, `
-			+ `.traceFn = (msTraceProc)${traceName}, .destroyFn = (msDestroyProc)${destroyName}, .flags = 0, .base = ${baseRef}`
+			+ `.traceFn = ${traceName}, .destroyFn = ${destroyName}, .flags = ${typeInfoFlags(info.subject)}${viaRegistry && info.kind == TypeInfoKind.Object ? " | MS_TYPE_FLAG_HCR" : ""}, .base = ${baseRef}`
 			+ (shown != "" && shown != label ? `, .displayName = "${escapeCString(shown)}"` : "");
-		if (viaRegistry && !info.moduleLocal && !hcrTypeInfoRef(g, info.cName)) {
+		if (viaRegistry && !hcrTypeInfoRef(g, info.cName)) {
 			addCGenError(g, `internal: HCR image ${g.modulePath} owns TypeInfo ${info.cName} but no image module registers it`, 0, 0);
 			continue;
 		}
-		if (viaRegistry && !info.moduleLocal) addLine(sec(g, CSection.DatInit), `  ${info.cName}TypeInfo = (msTypeInfo){ ${fields} };`);
-		else addLine(sec(g, CSection.GlobalVars), `${info.moduleLocal ? "static " : ""}msTypeInfo ${info.cName}TypeInfo = { ${fields} };`);
+		if (viaRegistry) addLine(sec(g, CSection.DatInit), `  ${info.cName}TypeInfo = (msTypeInfo){ ${fields} };`);
+		else addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${info.cName}TypeInfo = { ${fields} };`);
 		if (info.kind == TypeInfoKind.Object) emitTypeInfoDisplay(g, info);
 	}
 }
@@ -1190,6 +1170,10 @@ function emitTypeInfoDisplay(g: CGen, info: Readonly<CTypeInfoDemand>): void {
 function gateFlaglessUnknown(g: CGen, t: Type): void {
 	const pn = g.currentProc != null ? g.currentProc.name : "<toplevel>";
 	addCGenError(g, "internal: unresolved type (kind=" + (t.kind as number).toString() + ") reached codegen in " + g.modulePath + " proc " + pn, 0, 0);
+}
+
+function typeInfoFlags(subject: Type | null): string {
+	return subject != null && subject.typeFlags.has(TypeFlag.ArityAdapter) ? "MS_TYPE_FLAG_ARITY_ADAPTER" : "0";
 }
 
 export function getTypeDesc(g: CGen, t: Type | null): string {
@@ -1340,14 +1324,8 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 				// Substitute generic params in fields with concrete type args
 				const genericDecl = genericParamsOf(t);
 				if (genericDecl != "") {
-					const paramNames = splitTopLevel(genericDecl, ",");
-					let concType: Type = baseType;
-					for (let pi = 0; pi < paramNames.length; pi += 1) {
-						if (pi < t.typeChildren.length) {
-							concType = substituteType(concType, paramNames[pi].trim(), t.typeChildren[pi]);
-						}
-					}
-					// If substituteType returned the same object, clone to avoid mutating the shared base
+					let concType: Type = substituteInstanceArgs(t, baseType);
+					// If substitution returned the same object, clone to avoid mutating the shared base
 					if (concType == baseType) {
 						const newChildren: Type[] = [];
 						for (const c of concType.typeChildren) newChildren.push(c);
@@ -1368,13 +1346,7 @@ export function getTypeDesc(g: CGen, t: Type | null): string {
 			if (baseType != null && baseType.kind == TypeKind.Union) {
 				const genericDecl = genericParamsOf(t);
 				if (genericDecl != "") {
-					const paramNames = splitTopLevel(genericDecl, ",");
-					let concType: Type = baseType;
-					for (let pi = 0; pi < paramNames.length; pi += 1) {
-						if (pi < t.typeChildren.length) {
-							concType = substituteType(concType, paramNames[pi].trim(), t.typeChildren[pi]);
-						}
-					}
+					let concType: Type = substituteInstanceArgs(t, baseType);
 					// Stamp instance name so genUnionType caches under it (Phase 1b emits typedef)
 					if (concType != baseType) {
 						concType.typeName = instName;
@@ -1502,6 +1474,21 @@ function genObjectType(g: CGen, t: Type): string {
 function layoutAssert(g: CGen, t: Type, cType: string): string {
 	const size = sizeOfType(g.target, t);
 	return size < 0 ? "" : `_Static_assert(sizeof(${cType}) == ${size}, "${cType} layout");\n`;
+}
+
+export function assertExternLayout(g: CGen, t: Type): void {
+	if (t.sym == null || !t.typeFlags.has(TypeFlag.CompleteStruct)) return;
+	const cType = t.sym.nativeName;
+	const size = sizeOfType(g.target, t);
+	if (size < 0 || nameSetHas(g.declaredThings, "layout:" + cType)) return;
+	nameSetAdd(g.declaredThings, "layout:" + cType);
+	useImportedTypeHeader(g, t);
+	let asserts = layoutAssert(g, t, cType)
+		+ `_Static_assert(_Alignof(${cType}) == ${alignOfType(g.target, t)}, "${cType} alignment");\n`;
+	for (const field of t.typeNames) {
+		asserts = asserts + `_Static_assert(offsetof(${cType}, ${field}) == ${offsetOfField(g.target, t, field)}, "${cType}.${field} offset");\n`;
+	}
+	add(sec(g, CSection.Types), asserts);
 }
 
 // ===== Union Type Generation =====
@@ -2028,7 +2015,7 @@ export function ensurePromiseAllInstance(g: CGen, innerType: Type): string {
 	if (shape == PromiseAllShape.None) return "";
 	const arrT = createArray(innerType);
 	genArrayType(g, arrT);
-	const arrTypeInfo = ensurePromiseAllCellTypeInfo(g, arrT);
+	const arrTypeInfo = ensureRefArrayCellTypeInfo(g, arrT);
 	if (shape == PromiseAllShape.Int32) {
 		emitPromiseAllInstance(g, "msFuture_int32", "int32_t", "int32_t", "int32_tArray", "int32_tArray__Content", "MS_COPY_SAME", arrTypeInfo);
 		return "msPromiseAllFor_msFuture_int32";
@@ -2070,8 +2057,7 @@ export function ensureFutureThenBoxedInstance(g: CGen, innerType: Type, byRef: b
 	const name = (byRef ? "msFutureThenBoxedRef_" : "msFutureThenBoxed_") + mangle(innerDesc);
 	let drop = "MS_NO_DROP";
 	if (hasAsgnFlag(innerType)) {
-		const attached = getAttachedOp(innerType, AttachedOp.AttachedDestructor);
-		const hook = attached != null ? attached : getOpByKey(innerType, AttachedOp.AttachedDestructor);
+		const hook = getOpByKey(innerType, AttachedOp.AttachedDestructor);
 		if (hook != null) {
 			drop = opCName(hook);
 			ensureDrcProto(g, drop, hook);
@@ -2534,15 +2520,13 @@ test "a TypeInfo requested for a type that has none is an error" {
 	assert g.errors.length == 1;
 }
 
-test "a generated $ type is spelled by its module-owned symbol in both hook base names" {
+test "a generated $ type is spelled by its module-owned symbol in its hook base name" {
 	const owned = declaredHere(createStruct("$Env_probe_1", ["v"], [createPrimitive(TypeKind.String)], false));
 	owned.sym.modulePath = "/m/owner.ms";
 	const want = mangledTypeName(owned.sym, "$Env_probe_1");
 	assert hookBaseCName("$Env_probe_1", owned, null) == want;
-	assert hookBaseCNameOfSym("$Env_probe_1", owned.sym) == want;
 	const ownerless = declaredHere(createStruct("$Env_probe_2", ["v"], [createPrimitive(TypeKind.String)], false));
 	assert hookBaseCName("$Env_probe_2", ownerless, null) == "$Env_probe_2";
-	assert hookBaseCNameOfSym("$Env_probe_2", ownerless.sym) == "$Env_probe_2";
 }
 
 test "a hook base name comes from the type's own symbol, not from a table lookup by name" {

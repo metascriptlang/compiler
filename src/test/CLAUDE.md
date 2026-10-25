@@ -31,16 +31,21 @@ Examples per tier, the corpus directive contract, the two-tree convention and th
 
 ## Running
 
-**Run `tools/gate.sh`.** It picks the lanes from the paths a change touches and compares every red with `src/test/known-red.json`; `--dry-run` prints the choice, `--release` runs the full ladder. Reach for a row by hand only inside a debug loop.
+**During an edit, check the changed contract with its smallest real consumer.** Build one candidate when compiler code changed, then prove the regression red on the old compiler and green on the candidate, including the required backend variants. A path suggests checks; it does not justify running every lane after every edit.
 
-| Situation | Command |
+**When the slice is ready to land, queue `~/nerdtools/claude/tools/wt.sh land <name> --async` and wait in the background with `land <name> --wait`.** The land runs the acceptance gate once or reuses a valid verdict; do not run a separate gate first, because that duplicates the land's verification. `tools/gate.sh --dry-run` proposes lanes to compare with the changed contract; `--release` belongs to cutting a release. Follow the root `CLAUDE.md` for commit checks and verdict reuse.
+
+| Debug-loop contract | Focused check |
 |---|---|
-| Inner loop — any compiler edit | `msc test src/index.ms`, or `msc test <file>` for that file plus its transitive dep tests |
-| Same, under the cycle collector | `msc test src/index.ms --gc=orc` |
-| Touched codegen / DRC / runtime / transform | + `msc run src/test/corpus/run.ms` |
-| Touched DRC hooks, lifetimes, ownership | + `MSCORPUS_SAN=1 msc run src/test/corpus/run.ms` and `msc run --target=raiser src/test/guard/run.ms` |
-| Touched `std/solana`, `runtime/solana` or the compiler paths the SDK expands through | the gate's `solana` lane (about 150 s host-only; replays under `--release`), see `docs/TESTING.md` |
-| Touched `std/` or anything users compile against | rebuild + `tools/syncLocalBinary.ms` first, then re-run the above |
+| Function or language invariant | Candidate `test <owner-file>`; use `--tests-in-dir` for the owning test directory when dependencies are outside the claim |
+| Same invariant under the cycle collector | Same focused test with `--gc=orc` |
+| Program output, exit status or lifetime | `MSC=<candidate> MSCORPUS_ONLY=<exact,names> msc run src/test/corpus/run.ms`; add `MSCORPUS_SAN=1` for its SAN contract |
+| Lifecycle guard failure | The runner's named guard/shard reproduction; preserve its GC modes and ledger oracle (`guard/README.md`) |
+| Solana, native boundary, HCR or formatter failure | The named failing consumer and its required host/backend configuration; recipes in `docs/TESTING.md` |
+| Performance of one flow | `MSPERF_BASE=<previous msc> MSPERF_PROGRAMS=711 msc run src/test/perf/run.ms` (candidate `./msc`); reading: `docs/BUILD-PERF.md` §Measuring by flow |
+| Changed `std/` or `runtime/` inputs | Check with a candidate beside the changed support trees; publication via `tools/syncLocalBinary.ms` belongs to delivery, not the edit loop |
+
+**After a RED land, rerun the named failures in the owning worktree before requeueing.** Fix new reds before requeueing; let the existing known-now-green pruning handle entries the gate proved green. Do not use another full gate to find out whether the same failure remains. A BUSY result is not a RED: the queue retries it with eligible green lanes kept. Reuse completed evidence only while its checked code, inputs, toolchain and settings still match.
 
 - **A compiler reads `std/` and `runtime/` from beside its own binary** — `./msc` is the candidate with this repo's trees, `msc` on `PATH` is the last published build with `~/.metascript/`.
 - **Runners test `./msc` when it exists, else the installed `msc`** — `MSC=<path>` overrides, and the runner header prints the choice.
@@ -56,6 +61,6 @@ Examples per tier, the corpus directive contract, the two-tree convention and th
 3. Add a contract to the owner module under `lang/`, `handoff/`, `c/` or `js/`, or create a semantic family there when no owner exists. Import new runnable modules in the tier index.
 4. If the bug changes program output or exit status, add a standalone semantic corpus consumer with an absolute expected oracle, and exercise its required backends. A duplicate of the same owner and oracle is not a new contract.
 5. If found by self-host, prove the user-visible path with a focused language test.
-6. Run the changed file and its owning tier index, then `tools/gate.sh`; no new red.
+6. Run the focused regression and any owning-tier check needed for discovery or integration. When the slice is ready, queue the land as above; its gate must have no new red. Do not add a standalone gate between the focused checks and the land.
 
 A user-visible feature lands together with the corpus programs that pin its observable behaviour through every lane.

@@ -20,6 +20,7 @@ import { walkNode } from "../walker";
 import { createToken, TokenKind } from "../../lexer/token";
 import { hasFlag, SymbolFlag, overloadWinner } from "../../checker/symbol";
 import { ctorFormalTypes } from "../../checker/ctorRoutine";
+import { peelTransparentInstance } from "../../checker/types";
 
 export function lowerRestParams(program: Node, _ctx: TransformContext): Node {
 	walkNode(program, lowerRest);
@@ -34,7 +35,7 @@ function makeArrayLit(elements: Node[], restType: Type, line: int32): Node {
 	const arr = createNode(NodeKind.ArrayLiteral,
 		{ elements },
 		createToken(TokenKind.LBracket, "[", line));
-	if (restType != null) arr.nodeType = restType;
+	if (restType != null) arr.nodeType = peelTransparentInstance(restType).kind == TypeKind.Tuple ? peelTransparentInstance(restType) : restType;
 	return arr;
 }
 

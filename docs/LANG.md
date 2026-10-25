@@ -42,7 +42,8 @@ checker rejects it and names the alternative.
   cycle through an `unknown` field is collected under `--gc=orc`.
 - Reads need a cast. `u as C` for a class `C` is tested at run time on C and JS, and so is
   `base as Derived`: a wrong class stops the program with
-  `Error: invalid object conversion: <runtime class> is not C`, exit 1; `null` passes.
+  `Error: invalid object conversion: <runtime class> is not C`, exit 1, naming a value without a
+  class (an object literal) `Object` on C, JS and the Raiser; `null` passes.
   `--danger` drops this test, as it drops bound checks, and `--gc=manual` has no type
   header to test. `u as C` has no unchecked spelling and `--danger` is its only switch; a
   `Ptr<void>` read (`(u as Ptr<void>) as C`) is the one untested path, as below.
@@ -790,7 +791,9 @@ const h: Handler = { tag: 1 };            // cb omitted → null
 if (h.cb !== null) { h.cb(7); }           // narrow, then call
 ```
 
-**Fields without a default value** (measured 2026-10-06 on C, JS and the Raiser; checker3pass `constructionFieldInit`, corpus `constructionGivesEveryField`, `classFieldZeroValue`): a field whose type has no default — an array, a class instance, a `Map`, a function, or a struct holding one — must be given wherever the object is built. An object literal that omits one is an error (`field 'items' must be initialized: type 'int32[]' has no default value`) unless the class declares an initializer for it. `new C()` of a class without a constructor is an error when such a field, its own or a parent's, has no initializer (`'new Rec()' leaves 'items' without a value`). Value fields (numbers, `boolean`, `string`, a struct of those) keep their zero value; `?` and `| null` opt out, and a nullable function defaults to `null`. Before this rule the omitted field read as nil: `b.items.length` crashed on C, JS and the Raiser. `tsc` refuses every omitted non-optional property (TS2739/TS2741), value fields included; MS keeps the zero value for those. A class field without initializer, a struct-valued one included, reads its zero value after `new` on JS as on C (it read `undefined` before).
+`JSON.stringify` leaves out an optional field that holds `null`, as TypeScript leaves out an absent property: `interface P { name: string; nick?: string; nul: string | null }` writes `{ name: "a", nul: null }` as `{"name":"a","nul":null}`. A field typed `T | null` without `?` still writes `null`, and `nick?: string | null` holding `null` is left out, because MS cannot tell it from absent. The mark reaches nested, array, class, inherited, generic, intersection, anonymous, union-variant and imported shapes; `JSON.parse` reads a missing optional key as `null` (measured 2026-10-21 on C, JS and the Raiser; corpus `jsonOptionalFieldOmitted`). Not measured: the CBOR encoder, which does not read the mark.
+
+**Fields without a default value** (measured 2026-10-06 on C, JS and the Raiser; checker3pass `constructionFieldInit`, corpus `constructionGivesEveryField`, `classFieldZeroValue`): a field whose type has no default — an array, a class instance, a `Map`, a function, or a struct holding one — must be given wherever the object is built. An object literal that omits one is an error (`field 'items' must be initialized: type 'int32[]' has no default value`) unless the class declares an initializer for it. `new C()` of a class without a constructor is an error when such a field, its own or a parent's, has no initializer (`'new Rec()' leaves 'items' without a value`). Value fields (numbers, `boolean`, `string`, a struct of those) keep their zero value; `?` and `| null` opt out, and a nullable function defaults to `null`. Before this rule the omitted field read as nil: `b.items.length` crashed on C, JS and the Raiser. `tsc` refuses every omitted non-optional property (TS2739/TS2741), value fields included; MS keeps the zero value for those. A class field without initializer, a struct-valued one included, reads its zero value after `new` on JS as on C (it read `undefined` before). `new S(a, b)` on a struct is the object literal `{ f0: a, f1: b }` of its first fields and is checked as that literal, so `new Holds("t")` of `struct Holds { tag: string; xs: int32[]; }` is `field 'xs' must be initialized`, and `new Proof()` of another module's struct with a private field is refused as `{}` is; `new S()` of a struct of value fields gives the zero value (measured 2026-10-22 on C, JS and the Raiser; corpus `positionalNewStruct`, `positionalNewNestedStruct`, checker3pass `constructionFieldInit`, handoff `fieldVisibility`; before, JS threw `S is not defined`, the Raiser had no constructor, and C built the omitted array as nil).
 
 **Field initializers in an object literal** (measured 2026-10-07 on C, JS and the Raiser, ASan clean; corpus `literalFieldInitializer`, checker3pass `constructionFieldInit`): an object literal of a class type runs the initializer of every field it omits, own or inherited, the same initializer `new C()` runs. `class C { k: int32 = 5; xs: int32[] = [1, 2]; }` gives `{}` → `k` 5, `xs` `[1, 2]` (before: `k` read 0, an omitted `xs` crashed). Each literal runs its own copy, once, after the fields it names, so a call in an initializer runs per literal and not at all when the literal gives the field; names in the initializer resolve in the class's module (a private constant of another module works, a local of the same name at the literal does not capture it). Generic classes (`G<string>`, and `G<T>` inside a generic function) and nested literals (`inner: Inner = {}`) take them too. An initializer that reads `this` is refused at the literal (`field 'b' of 'T' has an initializer that reads 'this', which an object literal cannot run`); today such an initializer is already refused at its declaration. A class that declares a constructor takes them too, without running the constructor. A literal with a spread takes no initializers. Not measured: a spread whose source lacks an initialized field. A `struct` field takes no initializer, so a struct literal is unchanged.
 
@@ -1573,10 +1576,10 @@ In each branch the compiler narrows the union to a single variant, so accessing 
 
 #### C Backend
 
-All three forms lower to a wrapper struct with a numeric `_tag` plus an anonymous union with one slot per variant. A slot holds its variant in the variant's own representation: a `match`-type arm payload is a value, so it sits inline; a TS-style variant written as `{ ... }` or as an interface is a reference, so its slot holds the pointer (`msAnon_<hash>* v0;`, `Circle* v0;`). The `match`-type form:
+All three forms lower to a wrapper struct with a numeric `_tag` plus an anonymous union with one slot per variant. A slot holds its variant in the variant's own representation. An arm of `type X = match` is an anonymous object type, a reference like a TS-style variant written as `{ ... }` or as an interface, so its slot holds the pointer (`msAnon_<hash>* v0;`, `Circle* v0;`) and a copy of the union shares the arm with the original. Declared as `struct X = match`, each arm is a value: its slot holds the payload inline and a copy is independent. Measured 2026-10-22 with installed `msc` 682604d01 on C and `--target=js`, an enum and a boolean discriminator each: copying the union, narrowing the copy and writing `2.5` into its arm leaves the original reading `2.5` for `type` and `1.5` for `struct`, and the emitted slots are `msAnon_…* v0` for `type` and `X_v0 v0` for `struct`, 16 bytes in all four. Not measured: a generic match union. The `struct X = match` form:
 
 ```c
-// Generated C for NodeData (enum-disc match-type):
+// Generated C for `struct NodeData = match (kind: NodeKind) { ... }`:
 typedef struct {
     NodeKind _tag;          // enum type for match-type with enum disc
     union {
@@ -1587,7 +1590,11 @@ typedef struct {
 } NodeData;
 ```
 
-For boolean-disc and TS-style DUs, `_tag` is `int32_t` (variant index), and reading `r.ok` on the union reads `_tag`. On C, a field whose type has one value (`ok: true`, `ok: false`) in an anonymous object type is stored nowhere: a read gives the literal and a write evaluates both sides and stores nothing. Each `match` arm and both variants of `Result<T, E>` are such types, so the payload starts at the union's alignment, and the variant has that one layout wherever it goes, inside the union or narrowed and passed to `JSON.stringify` or a generic. `Result<Key, Failure>` with a 32-byte `Key` of alignment 1 and an 8-byte `Failure` is 40 bytes with the payload at offset 8, where it was 48 with the payload at 9 when each variant stored `ok`. A named struct (`struct Hit { ok: true; at: uint8 }` in `Hit | Miss`) and a tuple element of type `true` keep their storage, and JS keeps every field. Measured 2026-10-16 on C and `--target=js` with corpus `resultDiscriminantOnce`: `sizeof` 40, 40, 24, 56 and 32 for `Result<Key, Failure>`, `Result<Failure, Key>`, `Result<int32, string>`, a `match (ok: boolean)` union and `Hit | Miss`, and the same output on both backends for a narrowed variant through `JSON.stringify`, a generic, object rest and spread, and `{ ok: true; n: int32 }` beside `{ ok: boolean; n: int32 }`. Not measured: a one-value enum member or string literal field, which stays stored.
+For boolean-disc and TS-style DUs, `_tag` is `int32_t` (variant index), and reading `r.ok` on the union reads `_tag`. On C, a variant's field whose type has one value (`ok: true`, `ok: false`, `kind: K.A`) is stored nowhere in the inline arm of a by-value union: a read gives the literal. The `struct X = match` arms and both variants of `Result<T, E>` are such arms, so the payload starts at the union's alignment. Any object of the same shape outside such an arm stores every field: an arm of `type X = match`, an object literal or `{ ...p }`, a class and a named struct (`struct Hit { ok: true; at: uint8 }`, 2 bytes). `Result<Key, Failure>` with a 32-byte `Key` of alignment 1 and an 8-byte `Failure` is 40 bytes with the payload at offset 8, where it was 48 with the payload at 9 when each variant stored `ok`. JS keeps every field. Measured with installed `msc` 6b8655024 on C, `--target=js` and `--target=raiser`: `sizeof` 40, 40, 24 and 8 for `Result<Key, Failure>`, `Result<Failure, Key>`, `Result<int32, string>` and `Hit | Miss`; with `uint8` payloads the emitted arm is `{ uint8_t v; }` (1 byte) for `struct S = match (ok: boolean)` and for `struct S = match (kind: K)`, while the object `{ ok: true; at: uint8 }`, `{ k: K.A; at: uint8 }` and each arm of `type T = match` store the discriminator beside the `uint8_t` payload (`MS_BOOL` or `K`), 2 bytes. Not measured: a write to the field, and a one-value string literal field.
+
+A narrowed variant of a value union is a value, so it does not go where an object type (a reference) is expected: `if (s.ok) f(s)` with `f(p: { ok: true; v: int32 })` is refused with `'s' is a value of 'S' (ok: true); ... takes an object (a reference). Copy it with '{ ...s }', take the parameter as 'S', or declare 'S' with 'type' to share it.` on C, `--target=js` and `--target=raiser`. `f({ ...s })`, and the same call with `S` declared `type S = match`, compile and print the same on all three. Not measured: a generic parameter.
+
+A value union is written only through a writable place, as a plain struct is: a write through a parameter, a `const` binding or a `for..of` binding is refused (`cannot mutate value-type parameter 'x': value parameters are read-only views; copy it locally first`, `cannot write '….value' — 'b' is const (use 'let')`, `cannot mutate value-type loop variable 'p'`), while the same writes on `type X = match` compile and reach the shared object (`changed` on all three). Measured with installed `msc` 38009de37 on C, `--target=js` and `--target=raiser`; pins handoff `valueUnionParamWrite`, `raiserValueUnionCopy`.
 
 `sizeof` folds to the size C gives, and C checks it: each anonymous struct, union arm and union is emitted with `_Static_assert(sizeof(T) == n)`, so a size the compiler computes differently from C stops the build instead of folding a wrong number. A `string`, an array and a span are a length and a pointer, `{ int64_t len; ptr }`: 16 bytes on 64-bit targets, arm and wasm32, 12 on i386. A union of string literals is held in a `string`. Measured 2026-10-16: `type Align = "auto" | "center"` with `struct Holder { a: Align | null }` prints `16 24` for `sizeof(Align)` and `sizeof(Holder)` on C and `--target=js` (it printed `24 32`); `sizeof(string)` and `sizeof(Result<int32, string>)` fold to 16 and 24 with `--cpu=arm`, 12 and 16 with `--cpu=i386`; a probe of 40 anonymous structs and unions over every field kind passes its asserts under `zig cc -fsyntax-only` for i386, arm, wasm32, x86_64 and aarch64. Not run: a 32-bit binary (the runtime does not yet compile for i386 and arm).
 
@@ -1624,6 +1631,10 @@ function handleAorB(k: K.A | K.B): void { }
 const k: K.A = K.A;    // k: K.A (literal)
 const k2 = K.A;        // k2: K (widened — no annotation)
 ```
+
+### Number Literal Types
+
+A number literal is a type: `type A = 1 | 2`, `-1 | 1`, `1 | 1.5`. A union of literals of one base is stored as that base: integer literals in an `int32` and fractional ones in a `float64`, a mix of the two as a tagged union. Measured with installed `msc` 6b8655024 on C, `--target=js` and `--target=raiser`: `sizeof` 4 and 4 for `1 | 2` and `-1 | 1`, 8 for `1.5 | 2.5` and 16 for `1 | 1.5` (`{ int32_t _tag; union { int32_t v0; double v1; }; }`), and `let c: 1 | 1.5 = 1.5` prints `1.5` on all three. A compound store into a literal-typed slot is refused, because the result is not one of the literals: `a += 1` on `a: 1 | 2` fails with `'+=' would store a 'int32' in '1 | 2': assign a literal of that type instead`, and `a++` fails with `increment/decrement needs a numeric operand, got '1'`. Not measured: `-=`, `*=` and the other compound operators.
 
 ### Function Overload Signatures
 
@@ -1668,6 +1679,12 @@ Use a single wide signature with a union param type instead — the caller can
 add an `as XxxData` cast if needed. Tier 3 generic aliases
 (`createNodeAt<K extends NodeKind>(kind: K, data: DataFor<K>, loc): Node`)
 will be the proper long-term solution.
+
+A callback argument whose parameter types come from the overload (an unannotated arrow) ranks
+the overloads once it is typed: a block that returns nothing takes a `(…) => void` overload over a
+generic `(…) => U` one in either declaration order, and a callback that returns a value takes the
+generic one, for functions, class methods and extension methods. Measured 2026-10-20 on the
+wt/root-sweep candidate, C (drc, orc, danger) and JS: corpus `overloadContextArgRanksByItsType`.
 
 ### Conditional Types
 
@@ -1806,14 +1823,38 @@ type Box<T> = { value: T };
 
 ### Utility Types
 ```ms
-Partial<T>           // All properties optional (planned)
-Required<T>          // All properties required (planned)
-Readonly<T>          // Read-only view of T (shipped) — deep, never converts back to T; `readonly T[]` for arrays.
+Partial<T>           // Every property optional: `{ [P in keyof T]?: T[P] }`
+Required<T>          // Every property required: `{ [P in keyof T]-?: T[P] }`
+Readonly<T>          // Read-only view of T — deep, never converts back to T; `readonly T[]` for arrays.
                      // Not the `readonly` parameter modifier above (that one is an explicit copy). See Spawn.
-Record<K, V>         // Object type with keys K and values V (planned)
-Pick<T, K>           // Subset of properties (planned)
-Omit<T, K>           // Exclude properties (planned)
+Record<K, V>         // Literal keys K give an object type; `string` or `number` keys give Map<K, V>
+Pick<T, K>           // The properties of T named by K; K must be a subset of keyof T
+Omit<T, K>           // The properties of T not named by K
+Exclude<T, U>        // The members of the union T not assignable to U
+Extract<T, U>        // The members of the union T assignable to U
 ```
+
+A property written `x?: T` is optional, which MetaScript stores as `T | null`. The field
+remembers that it was declared optional, so `Required<T>` and the `-?` modifier make it
+required again and take the `null` out. Because `undefined` is an alias of `null` here,
+`Required<{ a?: string | null }>` also gives `a: string`, where TypeScript keeps `null`.
+
+When a spread gives a property that was declared optional, a `null` value keeps the value
+written or spread before it, so a patch merges the way it does in TypeScript:
+
+```ms
+interface User { id: int32; name: string }
+const base: User = { id: 1, name: "ann" };
+const patch: Partial<User> = {};
+const merged = { ...base, ...patch };   // merged.name is "ann"
+```
+
+Measured 2026-10-21 on C, JavaScript and the Raiser, with the same output on each: the corpus
+programs `partialSpreadMerge`, `requiredDropsOptional`, `pickOmitKeys`, `recordKeys` and
+`userMappedType`. Refusals pinned in `src/test/checker3pass/scenarios/mappedTypeRefusals.ms`.
+A value of `User` does not pass where `Pick<User, "id">` or `Required<User>` is expected:
+MetaScript does not accept an object type with a different set of fields as a wider type.
+Not verified: `Record<K, V>` with `K` a type parameter later bound to `string`.
 
 `Readonly<T>` can widen into a union through a compatible read-only member. A mutable
 member, or an unrelated read-only member beside a mutable one, does not allow the view
@@ -1828,10 +1869,19 @@ The complete compatibility module's JavaScript tests were not run: its unchanged
 
 ### Mapped Types
 ```ms
-// Planned — not yet implemented
 type MyPartial<T> = { [K in keyof T]?: T[K] };
 type Nullable<T> = { [K in keyof T]: T[K] | null };
+type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+type Strict<T> = { [K in keyof T]-?: T[K] };
+type NoEmail<T> = { [K in keyof T as Exclude<K, "email">]: T[K] };
+type Flags<K extends string> = { [P in K]: int32 };
 ```
+
+The modifiers `?`, `-?`, `readonly` and `-readonly` and the `as` key clause follow TypeScript.
+Over `keyof T` the mapped type keeps each property's optional mark, maps an array or tuple
+element by element, and returns a primitive unchanged. `readonly` makes the whole object a
+read-only view rather than marking single properties. Keys must be string literal types;
+a mapped type with other members in the same braces is refused, as in TypeScript.
 
 ### Type Assertions
 ```typescript
@@ -2067,11 +2117,23 @@ fetchUser(42)
 | Method | Callback Signature | Returns | Behavior |
 |--------|-------------------|---------|----------|
 | `.then(fn)` | `(value: T) => void` | `Promise<void>` | Called on fulfillment, rejection propagates |
+| `.then(fn)` | `(value: T) => U` | `Promise<U>` | Resolves with what `fn` returns |
+| `.then(fn)` | `(value: T) => Promise<U>` | `Promise<U>` | Adopts the promise `fn` returns, one level as in TS |
 | `.then(fn, onRejected)` | `(value: T) => void`, `(error: Error) => void` | `Promise<void>` | `onRejected` is called on the input's rejection only; a throw from `fn` rejects the output |
-| `.catch(fn)` | `(error: Error) => void` | `Promise<T>` | Called on rejection, fulfillment passes through |
-| `.finally(fn)` | `() => void` | `Promise<T>` | Called always, original value/error preserved |
+| `.then(fn, onRejected)` | `(value: T) => U`, `(error: Error) => U` | `Promise<U>` | Resolves with the result of the callback that ran; a throw from `fn` skips `onRejected` and rejects the output |
+| `.catch(fn)` | `(error: Error) => void` | `Promise<void>` | Called on rejection |
+| `.catch(fn)` | `(error: Error) => T` | `Promise<T>` | Resolves with the input's value, or with `fn`'s on a rejection |
+| `.finally(fn)` | `() => void` | `Promise<T>` | Called always, original value/error preserved; a throw from `fn` rejects the output |
 
-All three return a new `Promise`, enabling chaining. Exceptions thrown inside callbacks are captured and propagate as rejections on the output promise.
+All of them return a new `Promise`, enabling chaining. Exceptions thrown inside callbacks are captured and propagate as rejections on the output promise.
+
+The callback picks the row: a block that returns nothing takes the `void` row, which the runtime
+calls directly, and a callback that returns a value takes the `U` (or `T`) row, an async method of
+`Promise`. Measured 2026-10-20 on the wt/root-sweep candidate, C (drc, orc, danger) and JS: corpus
+`promiseThenValue`, `promiseThenFlattens`, `promiseThenOverload`, `promiseThenNoValue`,
+`promiseThenStruct`, `promiseThenRegistersArguments`, `promiseThenValueOwned`,
+`promiseCatchFinallyValues`, `promiseRejectThroughThen` and `promiseFinallyHandlerThrowRejects`
+print their pinned lines; all but the last also under SAN. Not run: the Raiser.
 
 Every rejection reaches its reader as an `Error`: `try { await p } catch (e)`, `.catch` and the
 second callback of `.then` see the same object, a string reason having become an `Error` whose
@@ -2133,7 +2195,19 @@ fit, because a callback taking `Error` and one taking `string | Error` are calle
 `reject(42)` is refused as an argument mismatch (`got int32, expected Error | string`), not with
 throw's wording, because `reject` is an ordinary callback parameter.
 
-The executor runs **synchronously**. Only the first call to `resolve` or `reject` takes effect — subsequent calls are ignored (settled flag). The constructor is lowered to `msPromiseNew(executor)` by the compiler.
+An unannotated `(resolve, reject) =>` takes its types from the constructor, and `T` comes from
+`<T>` or from the type the expression is assigned or returned to: `const p: Promise<string> = new
+Promise((resolve, reject) => …)` and `return new Promise((resolve) => resolve(7))` in a function
+returning `Promise<int32>` both check. For `Promise<void>`, call `resolve()`.
+
+The executor runs **synchronously**, and a `throw` inside it rejects the promise. Only the first
+call to `resolve` or `reject` takes effect; later calls are ignored (settled flag). The constructor
+is lowered to `msPromiseNew(executor)` by the compiler.
+
+Measured 2026-10-21 with msc afcd22f19 on C, JS and the Raiser: `reject("failed")` and
+`reject(new Error("boom"))` are caught with those messages, a `throw` in the executor is caught,
+`resolve()` settles a `Promise<void>`, `resolve(1); resolve(2); reject("late")` awaits `1`, and
+both contextual-`T` forms above print their values.
 
 #### Promise.withResolvers (ES2024)
 
@@ -2553,6 +2627,8 @@ actor Unsafe {
 ```
 
 Actors also support cooperative suspension — async actor methods (`CALL` pattern) suspend the actor while awaiting an internal future, freeing the scheduler to process other actors' mailboxes.
+
+The suspended actor's own mailbox waits: a send or CALL that reaches it while one of its methods awaits runs after that method has finished, so the actor's fields stay as the method left them across its await (measured 2026-10-20 on C and JS: an awaited CALL and a timer in corpus `actorCallsIntoASuspendedActorWaitForIt`, a spawn in corpus 1113). A mailbox is unbounded and a send never pauses its sender; a sender that awaits a CALL to its receiver after each burst has at most one burst queued there (measured 2026-10-20 on C: 1M sends to a busy actor peaked at 33.7 MB, and at 2.2 MB with a CALL after every 200).
 
 #### Supervision (Erlang OTP)
 
@@ -3765,11 +3841,9 @@ Refused, each at its site with the reason:
 - a `then` whose first parameter is not a callback, or whose `onRejected` takes something other than
   `Error` or a subclass (`unknown`, `string`), since a rejection is an `Error` as in `Promise.reject`;
 - `Promise<T>` with a thenable `T`, written or made by a call (`new Promise<Thenable>(…)`, a generic
-  instantiated with one): write `Promise<U>`;
+  instantiated with one, a `.then` callback returning one): write `Promise<U>`;
 - `return thenable` inside a `try` that has a catch or finally, since the catch would not see the
   rejection: write `return await`;
-- a `.then` callback whose expression body is a thenable, since `.then` gives `Promise<void>` and drops
-  what the callback returns;
 - an executor's `resolve(thenable)`: `resolve` takes a value of the promised type, as it refuses a
   promise; and a combinator over a `Thenable[]` variable: thenables are adopted from an array literal.
 
@@ -4018,7 +4092,8 @@ console.log(msg); // msg is pair._0 in C
 ```
 
 ### 4. Record<K, V>
-A TypeScript utility type that is semantically identical to `Map<K, V>` in MetaScript.
+With `string` or `number` keys, `Record<K, V>` is `Map<K, V>`. With string literal keys
+(`Record<"x" | "y", int32>`) it is an object type with those properties.
 
 ```typescript
 const registry: Record<string, number> = new Map();
@@ -4252,6 +4327,76 @@ test files pin `$1`, `$$`, the refused `$2`, the plain JS name, the literal char
 `#`-after-`@` refusal. Not measured: extern class methods with a pattern, which the count check
 does not cover (the C refusal does).
 
+#### Extern structs
+
+```ms
+@include("sys/stat.h");
+extern struct Stat from "struct stat" {   // a C struct tag, only the fields read
+	st_mode: uint32;
+	st_size: int64;
+	st_mtime: int64;
+}
+extern struct Pair { b: int64; }           // a C typedef named like the struct
+extern struct DIR;                         // opaque: only `Ptr<DIR>` crosses
+extern function cStat(path: cstring, ref buf: Stat): int32 from "stat";
+```
+
+An `extern struct` with a field list declares a struct the header defines. `from "<C name>"`
+goes before the field list (after it is a parse error); without `from` the C name is the declared
+name. The header owns the layout: no struct is emitted, a value is declared with the C name
+(`struct stat st`), a field is read and written by its C name (so a field that is a C macro, like
+`st_mtime` on macOS, works), and the fields declared may be any subset of the C fields, in any
+order. A literal zero-fills the whole C struct (`memset(&v, 0, sizeof(struct stat))`) before it
+sets the fields it names. `sizeof S` is C's `sizeof`, never a size computed from the declared
+fields; on JS, where no C layout exists, `sizeof S` is refused. A field declared `cstring` over a
+C `char[N]` array reads the array as a C string (`e.d_name as string` for `struct dirent`).
+
+Measured 2026-10-21 on `wt/fix-extern-struct-tag`: corpus `1140-externStructTag` prints
+`dir true | file 6 true | missing|f.txt:8` (`struct stat` through `stat`, `struct dirent` through
+`readdir`) and `15 8 2 1 23 800 true true` (a non-prefix subset of fields copied by value and
+passed as `Ptr<S>`; `sizeof` equal to C's for a tag and for a typedef) on C drc, C orc, `--danger`
+and under ASan; the compiler before the change failed to parse the tag form and folded `sizeof`
+of a 24-byte typedef struct declaring one `int32` to `4`. On JS and raiser an extern struct is a plain object: a three-line program that builds a
+`Stat`, adds 1 to `st_mode` and prints it prints `8` on both; on C the same program without the
+`@include` fails in the C compiler (`struct stat` is incomplete). Not measured: a field whose name
+is a C keyword.
+
+A struct imported from a C header (`import { S } from "./s.h"`) is an extern struct with every C
+field, and on the C backend its layout is MetaScript's when every field translates exactly: an
+integer, float or `bool` of the same width, an enum of `int` size, a data pointer, a fixed array
+of such fields (`char c[5]` is `int8[5]`), or a nested struct or union of the same kind. A header
+union of such members is laid out as C lays it out: every member at offset 0, its size the largest
+member rounded up to the strictest member alignment. Then `sizeof S` is a constant that fits a
+`size_t` field with no cast (`const o: S = { size: sizeof S, … }`, the versioned-struct idiom),
+the struct can be embedded in a MetaScript struct, and the build asserts its size, alignment and
+each field offset against C (`_Static_assert`), so a wrong translation stops the C compile. A
+header struct that is or holds a bitfield, an anonymous member (an unnamed `union { … };` too), a flexible array, a
+`packed` or `aligned` attribute, `_Alignas`, a `#pragma pack` other than the default, a function
+pointer, or a field whose C width has no exact MetaScript type keeps C's layout: `sizeof S` is
+C's `sizeof`, an `int32` that is not a constant, and storing it in a `uint64` field needs
+`sizeof S as uint64`; the refusal names the `sizeof`. Only 64-bit targets fold. JS and raiser
+refuse `sizeof` of any header struct.
+
+Measured 2026-10-22 on `wt/fix-header-sizeof`: corpus `1141-headerStructSizeof` prints
+`24 true 7 true | 64 true` and `152 152 | 32 3 | 8 true` (a module-level and a local versioned
+initializer whose `size` is `24ULL` in the emitted C, a 64-byte struct nesting it passed by value
+to C and through a MetaScript function, an embedding MetaScript struct of 32 bytes, and a union
+through `as uint64`) on C drc, C orc, `--danger` and under ASan; the compiler before the change
+refused both initializers. Haro's libghostty-vt imports fold 9 of their 10 `size: sizeof …`
+sites; `GhosttyStyle` held a union and needed `as uint64` (msc 0.3.3 folded it to 96, C says 72).
+
+Measured 2026-10-22 on `wt/fix-header-union-sizeof`: corpus `1143-headerUnionSizeof` prints
+`8 true | 48 true 6` and `24 true | 8 true | 12 true | 24 true | 88 true`, each equal to clang's
+`sizeof` on arm64 macOS: a top-level union, a struct holding a union of a 3-byte struct (the
+`GhosttyStyle` shape, passed to C), a union of a padded struct, `char[5]` + `int64`, `char[9]` +
+`int32` rounded to 12, a union nested in a union, and a struct holding them all, every one stored
+into a `size_t` or `uint64` slot with no cast, on C drc, C orc, `--danger` and under ASan; the
+compiler before the change refused them. A /tmp copy of `GhosttyStyle` folds to `72`.
+The per-shape decision (sizes measured with clang for arm64 macOS and x86_64 Linux) is pinned by
+the tests in `src/module/cimport/emit.ms`. Not
+measured: a 32-bit target, Windows, and system structs such as `struct stat`, which cparse does
+not translate (its include stubs declare no fields), so they stay opaque or hand-written.
+
 ### Distinct Types
 ```typescript
 type UserId = distinct number;    // Nominal typing wrapper
@@ -4298,6 +4443,33 @@ generic distinct whose base does not depend on its type parameter can delegate;
 the concrete base function is still not generic.
 
 The public spelling is `@delegate`; `@borrow` is not a compatibility alias.
+
+#### Comparing a distinct
+
+A distinct type does not inherit its base's comparisons. `==`, `!=`, `===`, `!==`, `<`, `<=`,
+`>` and `>=` on two values of `type UserId = distinct int32` are refused until the program
+declares or delegates one, and the refusal names the line to write:
+
+```ms
+type UserId = distinct int32;
+@delegate function `==`(this a: UserId, b: UserId): boolean;
+@delegate function `<`(this a: UserId, b: UserId): boolean;
+```
+
+`==` gives `!=`, `===` and `!==`; `<` gives `>`; `<=` gives `>=`. Delegating `!=`, `>` or `>=`
+itself is refused (`no !=(int32, int32) to delegate to`). A delegated comparison is the
+base's own: built in for numbers, strings, enums and structs, or the routine the base declares.
+A distinct compared with its base, a literal or another distinct is refused with or without a
+delegate (`a distinct type compares only with itself — convert one side with as`). A brand
+(`int32 & { __brand: "Id" }`) compares as its base. A struct with a distinct field compares
+that field through the field type's comparison; the std routine that folds the fields sees the
+delegate only when it is exported.
+
+Measured 2026-10-21 on C, JS and the Raiser with the candidate of `wt/trace-distinct-compare`:
+corpus `distinctDelegatedComparison` (string, int32, struct, enum, phantom generic, distinct of a
+distinct, struct field, a declared routine and a delegate to the base's routine) prints the same
+on all three, and handoff `distinctComparison` pins the refusals. Not measured: a distinct of a
+class or of a nullable type.
 This does not rename `Handle.borrow` or other ownership-borrowing APIs.
 
 The intrinsic symbol is exported by the system prelude:

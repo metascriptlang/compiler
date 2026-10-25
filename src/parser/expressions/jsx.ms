@@ -7,8 +7,8 @@ import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode,
 	JSXElementData, JSXFragmentData, JSXTextData,
 	JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd } from "../context";
-import { exprNode, exprKind, parseOk } from "./util";
+import { ParserState, current, advance, isAtEnd } from "../cursor";
+import { exprNode, exprKind, parseOk } from "./testUtil";
 
 type ExprResult = Result<Expression, string>;
 type ExprParser = (state: ParserState, minPrec: int32) => ExprResult;
@@ -180,6 +180,7 @@ export function parseJsxRoot(state: ParserState, parseExpr: ExprParser): ExprRes
 }
 
 // ===== JSX Parser Tests (docs/JSX-ROADMAP.md Phase 3) =====
+
 
 test "jsx parse self-closing element" {
 	assert exprKind("<a/>") == NodeKind.JSXElement;

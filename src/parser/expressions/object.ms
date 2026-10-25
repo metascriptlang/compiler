@@ -3,9 +3,9 @@
 
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, ObjectLiteralData, StringLiteralData, SourceLocation, makeLoc } from "../../ast/node";
-import { ParserState, createState, current, advance, isAtEnd, takePendingComments, expectCloser } from "../context";
+import { ParserState, createState, current, advance, isAtEnd, takePendingComments, expectCloser } from "../cursor";
 import { lex } from "../../lexer/lexer";
-import { parseOk, mockExpr } from "./util";
+import { parseOk, mockExpr } from "./testUtil";
 import { isPropertyName, attachComments } from "../util";
 
 
@@ -122,6 +122,7 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 }
 
 // ===== Tests =====
+
 
 function objKeyCount(input: string): int32 {
 	const lr = lex(input);

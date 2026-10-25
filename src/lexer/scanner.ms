@@ -1,5 +1,4 @@
 // Scanner — Tokenization of numbers, strings, identifiers, operators, comments
-// Pattern: ~/projects/metascript/src/lexer/lexer.zig
 
 import { TokenKind, identToKeyword } from "./token";
 import { LexerState, JsxMode, peek, peekAt, advanceChar, skip, addToken, addComment, allowsRegexAfter, setLexError } from "./state";
@@ -349,18 +348,18 @@ function isOperatorName(name: string): boolean {
 export function scanIdentifier(s: LexerState): void {
 	const startLine = s.line;
 	const startCol = s.column;
-	let ident = "";
+	const runStart = s.pos;
 
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
 		if (isLetter(ch) || isDigit(ch) || ch == "_".code || ch == "$".code) {
-			ident += s.source.byteSlice(s.pos, s.pos + 1);
 			advanceChar(s);
 		} else {
 			break;
 		}
 	}
 
+	const ident = s.source.byteSlice(runStart, s.pos);
 	const keyword = identToKeyword(ident);
 	addToken(s, keyword, ident, startLine, startCol);
 }

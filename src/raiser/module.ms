@@ -1,21 +1,32 @@
 // Raiser VM — Module and Function structures
 
-import { RaiserInstruction, RaiserOpcode, raiserABC, raiserABx, packInstruction } from "./bytecode";
-import { RaiserValue, RaiserClassType, raiserInt } from "./value";
+import { RaiserInstruction, RaiserOpcode, RaiserRegClass, raiserABC, raiserABx, packInstruction, inRefFile } from "./bytecode";
+import { RaiserValue, RaiserValueKind, RaiserClassType, raiserInt, constStringText } from "./value";
 import { RaiserCopyPlan } from "./valueCopy";
+import { layoutRegisters } from "./regs";
+import { HostEntry } from "./hostRegistry";
 
 // --- Function ---
 
 export interface RaiserFunction {
 	name: string;
-	code: RaiserInstruction[];  // disasm, tests and codegen only: the VM reads `packed`
+	code: RaiserInstruction[];  // registers renumbered into ranks; disasm and tests read it, the VM reads `packed`
 	packed: int64[];      // code, packed once by createRaiserFunction
 	lines: int32[];       // source line per instruction, 0 = unknown
 	fieldCache: int32[];  // LoadField/StoreField cached field index per instruction, -1 = miss
 	constants: RaiserValue[];
+	hostCache: (HostEntry | null)[];  // CallHost entry resolved once per constant index, null = not resolved yet
+	nameIds: int64[];     // the interned handle of constants[i] when it is a string, -1 otherwise, so a cached field access compares integers
+	names: string[];      // constants[i] read as text, "" for a non-string; a cache miss in LoadField and StoreField compares it
 	arity: number;
 	localsCount: number;
-	maxRegs: number;
+	wordRegs: int32;      // registers of the word file the frame holds
+	refRegs: int32;       // registers of the ref file the frame holds
+	paramRefs: int32;     // the leading ref registers that hold its parameters, which are the caller's argument registers
+	regClasses: RaiserRegClass[];   // class of each register in the numbering the function was built with
+	regOps: int32[];      // the tagged operand of each of those registers
+	blocks: int64[];      // site table: word start, ref start, argument count, class signature, then a tagged operand per argument
+	sigs: int64[];        // sigs[n] is the class signature of the first n registers
 	copyPlans: RaiserCopyPlan[];
 	classTypes: RaiserClassType[];
 }
@@ -46,26 +57,72 @@ export interface RaiserModule {
 	functions: RaiserFunction[];
 	entry: number;
 	globalCount: int32;
+	globalInit: RaiserValue[];
 	records: RaiserModuleRecord[];
 	exports: RaiserExport[];
 }
 
 // --- Constructors ---
 
-export function createRaiserFunction(name: string, code: RaiserInstruction[], constants: RaiserValue[], arity: number, localsCount: number, maxRegs: number): RaiserFunction {
+export function createRaiserFunction(name: string, code: RaiserInstruction[], constants: RaiserValue[], arity: number, localsCount: number, regCount: number, classes: RaiserRegClass[] | null = null): RaiserFunction {
+	const layout = layoutRegisters(name, code, constants, regCount as int32, classes);
 	const packed: int64[] = [];
 	const lines: int32[] = [];
 	const fieldCache: int32[] = [];
-	for (const inst of code) {
+	for (const inst of layout.code) {
 		packed.push(packInstruction(inst));
 		lines.push(inst.line as int32);
 		fieldCache.push(-1);
 	}
-	return { name, code, packed, lines, fieldCache, constants, arity, localsCount, maxRegs, copyPlans: [], classTypes: [] };
+	const names: string[] = [];
+	const hostCache: (HostEntry | null)[] = [];
+	const nameIds: int64[] = [];
+	for (const c of constants) {
+		names.push(c.kind == RaiserValueKind.String ? constStringText(c) : "");
+		hostCache.push(null);
+		nameIds.push(c.kind == RaiserValueKind.String ? c.intVal : -1);
+	}
+	let paramRefs: int32 = 0;
+	for (let r = 0; r < arity && r < layout.regOps.length; r += 1) if (inRefFile((layout.regOps[r] & 7) as RaiserRegClass)) paramRefs += 1;
+	const func: RaiserFunction = { name, code: layout.code, packed, lines, fieldCache, constants, hostCache, nameIds, names, arity, localsCount, wordRegs: layout.wordRegs, refRegs: layout.refRegs, paramRefs, regClasses: layout.regClasses, regOps: layout.regOps, blocks: layout.blocks, sigs: layout.sigs, copyPlans: [], classTypes: [] };
+	bindReturns(func);
+	return func;
 }
 
 export function createRaiserModule(name: string, functions: RaiserFunction[], entry: number): RaiserModule {
-	return { name, functions, entry, globalCount: 0, records: [], exports: [] };
+	for (const func of functions) {
+		assertPacked(func);
+		bindDirectCalls(func, functions);
+	}
+	return { name, functions, entry, globalCount: 0, globalInit: [], records: [], exports: [] };
+}
+
+function bindDirectCalls(func: RaiserFunction, functions: RaiserFunction[]): void {
+	for (let pc = 0; pc < func.code.length; pc += 1) {
+		const inst = func.code[pc];
+		if (inst.op != RaiserOpcode.Call || inst.b < 0 || inst.b >= functions.length) continue;
+		const callee = functions[inst.b];
+		const site = inst.c as int32;
+		const argc = func.blocks[site + 2];
+		if (argc >= callee.sigs.length || callee.sigs[argc as int32] != func.blocks[site + 3]) continue;
+		inst.op = RaiserOpcode.CallDirect;
+		func.packed[pc] = packInstruction(inst);
+	}
+}
+
+// A packed Ret carries what its frame releases: B the first owned ref, C the owned count times two,
+// plus one when the function opens a handler and the Ret must check for one still open.
+function bindReturns(func: RaiserFunction): void {
+	let opensHandler: int32 = 0;
+	for (const inst of func.code) {
+		if (inst.op == RaiserOpcode.Try) opensHandler = 1;
+	}
+	const owned = func.refRegs - func.paramRefs;
+	for (let pc = 0; pc < func.code.length; pc += 1) {
+		const inst = func.code[pc];
+		if (inst.op != RaiserOpcode.Ret) continue;
+		func.packed[pc] = packInstruction(raiserABC(RaiserOpcode.Ret, inst.a, func.paramRefs, owned * 2 + opensHandler));
+	}
 }
 
 // --- Test Helper ---
@@ -122,7 +179,7 @@ test "create function" {
 	assert getFuncCodeLen(func) == 1;
 	assert getFuncConstLen(func) == 0;
 	assert func.arity == 0;
-	assert func.maxRegs == 4;
+	assert func.wordRegs + func.refRegs == 4;
 }
 
 test "function with constants" {

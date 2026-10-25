@@ -1,8 +1,8 @@
 // Type Compatibility - table-driven assignability checking
 
-import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention } from "../ast/node";
-import { makeSymbol } from "./symbol";
-import { isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteAllParams, typeParamConstraint, typeDisplayName, isValuePointee, classAncestorInstance, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type } from "./types";
+import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, ClassDeclData, MethodDeclData, DecoratedDeclData } from "../ast/node";
+import { makeSymbol, classDeclNodeOf } from "./symbol";
+import { classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, isSharedGraphType, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, peelToStructOrUnion, isVarargs, isVarargs, unwrapVarargs, UnifyBindings } from "./types";
 
 
 function isOpenElement(t: Type): boolean {
@@ -280,7 +280,7 @@ export function unionOrderHint(source: Type | null, target: Type | null): string
 // Field-level repr gate for structurally-compatible objects. Lenient outside the
 // union/numeric classes — everything else is either caught by the recursive
 // isReinterpretUnsafe walk or is an intentional divergence (Ref→Ptr cursor).
-function fieldReprMismatch(a: Type | null, b: Type | null): boolean {
+export function fieldReprMismatch(a: Type | null, b: Type | null): boolean {
 	a = skipModifier(a);
 	b = skipModifier(b);
 	if (a == null || b == null) return false;
@@ -319,13 +319,12 @@ function pairOnStack(sources: Type[], targets: Type[], source: Type | null, targ
 const _assignSources: Type[] = [];
 const _assignTargets: Type[] = [];
 let _isaCount: float64 = 0;
-let _isaTime: float64 = 0;
-export function isAssignableProfile(): float64[] { return [_isaCount, _isaTime]; }
-export function unmetConstraint(owner: Type, name: string, bound: Type, names: string[], types: Type[]): Type | null {
+export function isAssignableProfile(): float64[] { return [_isaCount]; }
+export function unmetConstraint(param: Type, bound: Type, params: Type[], types: Type[]): Type | null {
 	if (bound == null || bound.kind == TypeKind.Error || isUnresolvedType(bound) || isUnknownType(bound) || hasGenericParams(bound)) return null;
-	const raw = typeParamConstraint(owner, name, 0);
+	const raw = param.typeExtra;
 	if (raw == null) return null;
-	const constraint = substituteAllParams(raw, names, types);
+	const constraint = substituteParams(raw, params, types);
 	if (constraint == null || isUnresolvedType(constraint) || hasGenericParams(constraint)) return null;
 	return isAssignable(bound, constraint) ? null : constraint;
 }
@@ -338,9 +337,7 @@ export function isAssignable(source: Type | null, target: Type | null): boolean 
 	_isaCount = _isaCount + 1;
 	_assignSources.push(source);
 	_assignTargets.push(target);
-	const _isa0 = performance.now();
 	const result = isAssignableInner(source, target);
-	_isaTime = _isaTime + (performance.now() - _isa0);
 	_assignSources.pop();
 	_assignTargets.pop();
 	return result;
@@ -425,6 +422,9 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	const openNullableTarget = openNullableUnionPayload(target, source);
 	if (openNullableTarget != null) return isAssignable(source.typeReturn, openNullableTarget);
 
+	if (classOutsideLineage(source, target)) return false;
+	if (missingRoutine(source, target) != "") return false;
+
 	// Same kind is always compatible
 	if (source.kind == target.kind) {
 		return match (source.kind) {
@@ -444,7 +444,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 					&& (sameNominal(source.typeReturn, target.typeReturn) || isOwnGenericBase(source.typeReturn, target.typeReturn))) {
 					return true;
 				}
-				return isAssignable(source.typeReturn, target.typeReturn);
+				return isAssignable(source.typeReturn, isReadonlyView(target) ? createReadonlyView(target.typeReturn) : target.typeReturn);
 			},
 			TypeKind.Function => isFunctionAssignable(source, target),
 			TypeKind.Struct => isObjectAssignable(source, target),
@@ -474,11 +474,12 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 
 	if ((target.kind == TypeKind.GenericInstance && source.kind == TypeKind.Struct)
 			|| (target.kind == TypeKind.Struct && source.kind == TypeKind.GenericInstance)) {
+		if (isAwaitable(source) != isAwaitable(target)) return false;
 		const ancestor = classAncestorInstance(source, target);
 		if (ancestor != null) return isAssignable(ancestor, target);
 		const sBody = structBodyOf(source);
 		const tBody = structBodyOf(target);
-		if (sBody != null && tBody != null) return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && objectLayoutFits(unwrapRefBase(sBody), unwrapRefBase(tBody));
+		if (sBody != null && tBody != null) return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && objectLayoutFits(unwrapRefBase(sBody), unwrapRefBase(tBody), isReadonlyView(target));
 	}
 
 	if (target.kind == TypeKind.GenericInstance && source.kind != TypeKind.GenericInstance && source.kind != TypeKind.Union) {
@@ -909,12 +910,16 @@ function leavesInlineConv(source: Type, target: Type): boolean {
 	return source.callConv == CallingConvention.CcInline && target.callConv != CallingConvention.CcInline;
 }
 
-function runtimeParams(fn: Type): Type[] {
+export function runtimeParams(fn: Type): Type[] {
 	const params: Type[] = [];
 	for (const param of fn.typeChildren) {
 		if (param == null || param.kind != TypeKind.Void) params.push(param);
 	}
 	return params;
+}
+
+export function sinkModeDiffers(a: Type, b: Type): boolean {
+	return (a.kind == TypeKind.Sink) != (b.kind == TypeKind.Sink);
 }
 
 // Function assignability: contravariant params, covariant return
@@ -927,7 +932,7 @@ function isFunctionAssignable(source: Type | null, target: Type | null): boolean
 	// Check params (contravariant: target params assignable to source params)
 	let i = 0;
 	for (const sourceParam of sourceParams) {
-		if (!isAssignable(targetParams[i], sourceParam)) return false;
+		if (sinkModeDiffers(sourceParam, targetParams[i]) || !isAssignable(targetParams[i], sourceParam)) return false;
 		i += 1;
 	}
 	// Repr invariance (Nim tyProc: params AND return invariant via
@@ -948,9 +953,80 @@ function isFunctionAssignable(source: Type | null, target: Type | null): boolean
 	return true;
 }
 
+export function arityAdapts(source: Type | null, target: Type | null): boolean {
+	if (source == null || target == null || source.kind != TypeKind.Function || target.kind != TypeKind.Function) return false;
+	if (target.callConv != CallingConvention.CcClosure || hasGenericParams(source) || hasGenericParams(target)) return false;
+	const sourceParams = runtimeParams(source);
+	const targetParams = runtimeParams(target);
+	if (takesVarargs(targetParams) || runtimeMinArity(source) > targetParams.length) return false;
+	if (takesVarargs(sourceParams)) return restTakesSlot(source, sourceParams, target, targetParams);
+	if (sourceParams.length == targetParams.length) return false;
+	const shared = sourceParams.length < targetParams.length ? sourceParams.length : targetParams.length;
+	return isFunctionAssignable(leadingParams(source, shared), leadingParams(target, shared));
+}
+
+function adaptedRelation(formal: Type, actual: Type, formalParams: Type[], actualParams: Type[]): TypeRelation {
+	let shared = formalParams.length < actualParams.length ? formalParams.length : actualParams.length;
+	if (takesVarargs(actualParams)) shared = actualParams.length - 1 < shared ? actualParams.length - 1 : shared;
+	return typeRelation(leadingParams(formal, shared), leadingParams(actual, shared));
+}
+
+function restTakesSlot(source: Type, sourceParams: Type[], target: Type, targetParams: Type[]): boolean {
+	const fixed = sourceParams.length - 1;
+	if (!isVarargs(sourceParams[fixed])) return false;
+	const shared = fixed < targetParams.length ? fixed : targetParams.length;
+	if (!isFunctionAssignable(leadingParams(source, shared), leadingParams(target, shared))) return false;
+	const array = unwrapRef(unwrapVarargs(sourceParams[fixed]));
+	const element = array.kind == TypeKind.Array ? array.typeReturn : null;
+	if (element == null) return false;
+	for (let i = fixed; i < targetParams.length; i += 1) {
+		if (sinkModeDiffers(targetParams[i], element) || !isAssignable(targetParams[i], element)) return false;
+	}
+	return true;
+}
+
+export function runtimeMinArity(fn: Type): int32 {
+	const required = getMinArity(fn);
+	let n = 0;
+	for (let i = 0; i < fn.typeChildren.length && i < required; i += 1) {
+		const param = fn.typeChildren[i];
+		if (param == null || (param.kind != TypeKind.Void && !isVarargs(param))) n += 1;
+	}
+	return n;
+}
+
+function leadingParams(fn: Type, count: int32): Type {
+	const params = runtimeParams(fn);
+	const leading: Type[] = [];
+	const names: string[] = [];
+	for (let i = 0; i < count; i += 1) {
+		leading.push(params[i]);
+		names.push("p" + String(i));
+	}
+	const prefix = createFunction(leading, names, fn.typeReturn);
+	prefix.callConv = fn.callConv;
+	return prefix;
+}
+
+function takesVarargs(params: Type[]): boolean {
+	for (const param of params) {
+		if (isVarargs(param)) return true;
+	}
+	return false;
+}
+
+function restSlotRefusal(sourceParams: Type[], targetParams: Type[]): string {
+	const restAt = targetParams.length - 1;
+	if (restAt < 0 || !isVarargs(targetParams[restAt]) || takesVarargs(sourceParams) || sourceParams.length <= restAt) return "";
+	return " — the expected function passes its arguments from position " + String(restAt + 1)
+		+ " on as a rest parameter, which can hold none, so a fixed parameter there has no guaranteed argument; declare it as a rest parameter";
+}
+
 function paramRefusal(source: Type | null, target: Type | null): string {
 	if (source == null || target == null || source.kind != TypeKind.Function || target.kind != TypeKind.Function) return "";
 	const targetParams = runtimeParams(target);
+	const rest = restSlotRefusal(runtimeParams(source), targetParams);
+	if (rest != "") return rest;
 	let ri = 0;
 	let ni = 0;
 	for (const taken of source.typeChildren) {
@@ -998,7 +1074,7 @@ export function isAnonLiteralName(name: string): boolean {
 
 export function isValueStructDecl(t: Type | null): boolean {
 	if (t == null) return false;
-	return t.sym != null && t.sym.symbolType != null && t.sym.symbolType.kind == TypeKind.Struct;
+	return t.sym != null && t.sym.symbolType != null && t.sym.symbolType.kind == TypeKind.Struct && !t.typeFlags.has(TypeFlag.DuVariant);
 }
 
 export function valueStructBaseDepth(source: Type, target: Type): int32 {
@@ -1018,10 +1094,62 @@ function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	if (source == target) return true;
 	if (source == null || target == null) return false;
 	if (sameNominal(source, target)) return true;
-	return objectLayoutFits(source, target);
+	return objectLayoutFits(source, target, isReadonlyView(target));
 }
 
-function objectLayoutFits(source: Type, target: Type): boolean {
+// A writable target field aliases the source's slot, so it must hold the same type
+// (a field read through the view may be widened only when nothing can write it back).
+function invariantFieldFits(sField: Type | null, tField: Type | null, readonlyTarget: boolean): boolean {
+	if (readonlyTarget || sField == null || tField == null || isOpenSlot(sField) || isOpenSlot(tField)) return true;
+	return slotWritesFit(sField, tField);
+}
+
+// A write of any value the target admits fits the source slot: strings, booleans, enum
+// members and numbers of one representation (fieldReprMismatch refuses the widths that
+// differ), and objects whose every field is such a slot.
+function isUnnamedShape(t: Type): boolean {
+	return t.typeName == "" || isAnonLiteralName(t.typeName);
+}
+
+function slotWritesFit(a: Type, b: Type): boolean {
+	if (sameType(a, b)) return true;
+	if (isStringRepr(a) && isStringRepr(b)) return true;
+	const aBool = a.kind == TypeKind.Boolean || a.kind == TypeKind.BooleanLiteral;
+	const bBool = b.kind == TypeKind.Boolean || b.kind == TypeKind.BooleanLiteral;
+	if (aBool && bBool) return true;
+	if ((isNumeric(a) || a.kind == TypeKind.NumberLiteral) && (isNumeric(b) || b.kind == TypeKind.NumberLiteral)) return true;
+	if ((a.kind == TypeKind.EnumLiteral || a.kind == TypeKind.Enum) && (b.kind == TypeKind.EnumLiteral || b.kind == TypeKind.Enum)) return true;
+	const sa = unwrapRefBase(a);
+	const sb = unwrapRefBase(b);
+	if (sa.kind != TypeKind.Struct || sb.kind != TypeKind.Struct || (a.kind == TypeKind.Ref) != (b.kind == TypeKind.Ref)) return false;
+	if (!isUnnamedShape(sa) || !isUnnamedShape(sb)) return false;
+	if (sb.typeNames.length > sa.typeNames.length || sa.typeChildren.length < sb.typeChildren.length) return false;
+	for (let i = 0; i < sb.typeNames.length; i += 1) {
+		if (sa.typeNames[i] != sb.typeNames[i] || !slotWritesFit(sa.typeChildren[i], sb.typeChildren[i])) return false;
+	}
+	return true;
+}
+
+// The first field a view would widen while it can still write it, or empty.
+function writableFieldHint(source: Type | null, target: Type | null): string {
+	if (source == null || target == null || isReadonlyView(target)) return "";
+	const s = unwrapRefBase(skipModifier(source) as Type);
+	const t = unwrapRefBase(skipModifier(objectShapeTarget(source, target)) as Type);
+	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct || t.typeNames.length > s.typeNames.length) return "";
+	for (let i = 0; i < t.typeNames.length; i += 1) {
+		if (s.typeNames[i] != t.typeNames[i]) return "";
+		if (i >= s.typeChildren.length || i >= t.typeChildren.length) return "";
+		if (!sameType(s.typeChildren[i], t.typeChildren[i]) && isAssignable(s.typeChildren[i], createReadonlyView(t.typeChildren[i]))) {
+			return " — field '" + t.typeNames[i] + "' is " + typeDisplayName(s.typeChildren[i]) + " here but " + typeDisplayName(t.typeChildren[i])
+				+ " in the target, and the target can write it back: declare the parameter "
+				+ typeDisplayName(createReadonlyView(target)) + " to only read it, or give the field its exact type "
+				+ typeDisplayName(s.typeChildren[i]);
+		}
+	}
+	return "";
+}
+
+function objectLayoutFits(source: Type, target: Type, readonlyTarget: boolean): boolean {
 	// Exact-field anon→named pairs are assignable; fitNode materializes the
 	// member-wise re-construction. Every other anon→named pair stays rejected:
 	// no lowering exists, so C emits two distinct types (clang error) while js
@@ -1050,6 +1178,7 @@ function objectLayoutFits(source: Type, target: Type): boolean {
 		if (sNames[idx] != targetProp) return false;
 		if (idx < sChildren.length && idx < tChildren.length) {
 			if (!isAssignable(sChildren[idx], tChildren[idx])) return false;
+			if (!invariantFieldFits(sChildren[idx], tChildren[idx], readonlyTarget)) return false;
 			// Shared fields whose union/numeric repr differs would reinterpret
 			// (mirror of the sameElementRepr gate on Array/Span/Ptr elements above).
 			if (fieldReprMismatch(sChildren[idx], tChildren[idx])) return false;
@@ -1057,6 +1186,73 @@ function objectLayoutFits(source: Type, target: Type): boolean {
 		idx += 1;
 	}
 	return true;
+}
+
+// The property name an instance routine answers to (an accessor `get_x` is `x`);
+// empty for a field, a static member or a constructor.
+function routineName(raw: Node): string {
+	const member = raw.kind == NodeKind.DecoratedDecl ? (raw.data as DecoratedDeclData).decoratedNode : raw;
+	if (member == null || member.kind != NodeKind.MethodDecl) return "";
+	const md = member.data as MethodDeclData;
+	if (md.methodIsStatic) return "";
+	return member.flags.has(NodeFlag.Accessor) ? md.methodName.substring(4) : md.methodName;
+}
+
+function classMembers(cls: Type): Node[] {
+	const decl = classDeclNodeOf(cls.sym!);
+	return decl != null && decl.kind == NodeKind.ClassDecl ? (decl.data as ClassDeclData).classBody : [];
+}
+
+function answersTo(source: Type, fields: string[], name: string): boolean {
+	if (fields.includes(name)) return true;
+	let cls = classBodyOf(source);
+	for (let depth = 0; cls != null && depth < 64; depth += 1) {
+		for (const member of classMembers(cls)) {
+			if (routineName(member) == name) return true;
+		}
+		cls = classBodyOf(cls.typeExtra);
+	}
+	return false;
+}
+
+// A class instance answers to its methods and accessors as well as its fields:
+// the first routine of the target class the source has no member for, or empty.
+// An instantiated class body has no class of its own; its instance relates it.
+function classOutsideLineage(source: Type, target: Type): boolean {
+	const targetClass = classBodyOf(target);
+	if (targetClass == null) return false;
+	if (classBodyOf(source) != null) return !derivesFromClass(source, targetClass.sym!);
+	const shape = unwrapRefBase(source);
+	return (shape.kind == TypeKind.Struct && !isMaybeType(shape)) || shape.kind == TypeKind.GenericInstance;
+}
+
+// What an `implements` clause relates: the class holds every member of the implemented
+// type, field by field in the leading slots and routine by name. No conversion into a slot
+// follows from it, so the lineage a class slot needs does not enter.
+export function holdsMembersOf(classType: Type, implemented: Type): boolean {
+	if (classBodyOf(implemented) == null) return isAssignable(classType, implemented);
+	const shape = peelToStructOrUnion(implemented);
+	return shape != null && missingRoutine(classType, implemented) == ""
+		&& isObjectAssignable(unwrapRefBase(classType), shape);
+}
+
+function missingRoutine(source: Type, target: Type): string {
+	let cls = classBodyOf(target);
+	if (cls == null) return "";
+	const sourceClass = classBodyOf(source);
+	const shape = unwrapRefBase(source);
+	if (sourceClass != null && derivesFromClass(source, cls.sym!)) return "";
+	if (sourceClass == null && (shape.kind != TypeKind.Struct || isMaybeType(shape)
+		|| (shape.sym == null && !isAnonLiteralName(shape.typeName)))) return "";
+	const fields = sourceClass != null ? sourceClass.typeNames : shape.typeNames;
+	for (let depth = 0; cls != null && depth < 64; depth += 1) {
+		for (const member of classMembers(cls)) {
+			const name = routineName(member);
+			if (name != "" && !answersTo(source, fields, name)) return name;
+		}
+		cls = classBodyOf(cls.typeExtra);
+	}
+	return "";
 }
 
 export function viewFieldNotHeld(source: Type, view: Type): string {
@@ -1105,15 +1301,25 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 		return " — a read-only view never converts back to the mutable type: declare the parameter "
 			+ typeDisplayName(createReadonlyView(target)) + ", or copy it with [...x]";
 	}
+	const writable = writableFieldHint(source, target);
+	if (writable != "") return writable;
 	const order = unionOrderHint(source, target);
 	if (order != "") return order;
+	const lineage = classLineageHint(skipModifier(source), skipModifier(objectShapeTarget(source, target)));
+	if (lineage != "") return lineage;
+	return explainMemberPrefix(source, target);
+}
+
+// The members of `target` that `source` does not hold where a structural match reads them:
+// a field in another slot, or a routine of a class `source` has no member for.
+export function explainMemberPrefix(source: Type | null, target: Type | null): string {
 	const shapeTarget = objectShapeTarget(source, target);
 	const s0 = skipModifier(source);
 	const t0 = skipModifier(shapeTarget);
 	if (s0 == null || t0 == null) return "";
 	const s = unwrapRefBase(s0);
 	const t = unwrapRefBase(t0);
-	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct) return "";
+	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct) return routineHint(s0, t0);
 	if (s.typeName == "" || t.typeName == "") return "";
 	if (sameNominal(s, t)) return "";
 	if (isAnonLiteralName(s.typeName) && !isAnonLiteralName(t.typeName)) {
@@ -1139,7 +1345,32 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 		}
 		ti += 1;
 	}
-	return "";
+	return routineHint(s, t);
+}
+
+function classLineageHint(source: Type | null, targetIn: Type | null): string {
+	const target = targetIn != null ? unwrapRefNullUnion(targetIn) ?? targetIn : null;
+	if (source == null || target == null || !classOutsideLineage(source, target)) return "";
+	const from = typeDisplayName(source);
+	const to = typeDisplayName(target);
+	const sourceClass = classBodyOf(source);
+	if (sourceClass != null && derivesFromClass(target, sourceClass.sym!)) {
+		return " (not every " + from + " is a " + to + ": test it with `instanceof " + to
+			+ "`, or convert it with `as " + to + "`, which is checked at run time)";
+	}
+	if (sourceClass == null) {
+		const literal = isAnonLiteralName(unwrapRefBase(source).typeName) ? "annotate the literal `const x: " + to + " = { ... }`, or " : "";
+		return " (" + from + " is not a " + to + ": classes convert only along `extends`; " + literal + "type the slot with an interface)";
+	}
+	return " (" + from + " is not a " + to + ": classes convert only along `extends`; make " + from
+		+ " extend " + to + ", or type the slot with an interface)";
+}
+
+function routineHint(source: Type, target: Type): string {
+	const routine = missingRoutine(source, target);
+	if (routine == "") return "";
+	return " (property '" + routine + "' is missing in type '" + typeDisplayName(source)
+		+ "' but required in type '" + typeDisplayName(target) + "')";
 }
 
 // Duck-typed adoption boundary: a frozen anonymous-literal value may be
@@ -1188,15 +1419,15 @@ export enum TypeRelation {
 // branches may only collapse into one when their types are the same, or a
 // union variant is silently dropped.
 //
-// Structure mirrors the reference `sameType`/`sameTypeAux`: dispatch on kind,
-// nominal types compare by name, anonymous aggregates compare field names +
-// field types + repr flags, value-carrying types compare values, transparent
-// wrappers compare their inner type. Self-referential types (Node, Scope)
-// make the walk cyclic, so the reference bounds it with a recursion check and
-// assumes "same" once the budget is spent — the conservative answer for a
-// merge is to treat the pair as identical rather than to recurse forever.
+interface SameTypeClosure {
+	recCheck: int32;
+	left: Type[];
+	right: Type[];
+}
 
-let _sameTypeDepth = 0;
+function createSameTypeClosure(): SameTypeClosure {
+	return { recCheck: 0, left: [], right: [] };
+}
 
 export function dropsReadonlyView(source: Type | null, target: Type | null): boolean {
 	if (source == null || target == null) return false;
@@ -1218,25 +1449,31 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 		|| dst.kind == TypeKind.Unknown;
 }
 
-function sameDistinct(a: Type, b: Type): boolean {
+function sameDistinct(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
 	if (isBrandDistinct(a) || isBrandDistinct(b)) return a.typeName == b.typeName;
-	return sameNominal(a, b);
+	return sameNominalAux(a, b, c);
 }
 
 export function sameNominal(a: Type, b: Type): boolean {
 	if (a == b) return true;
-	if (isMaybeType(a) && isMaybeType(b)) return sameType(a.typeReturn, b.typeReturn);
+	return sameNominalAux(a, b, createSameTypeClosure());
+}
+
+function sameNominalAux(a: Type, b: Type, c: SameTypeClosure): boolean {
+	if (a == b) return true;
+	if (isMaybeType(a) && isMaybeType(b)) return sameTypeAux(a.typeReturn, b.typeReturn, c);
 	if (a.sym != null && b.sym != null) {
-		if (a.sym == b.sym) return true;
-		return a.sym.modulePath != "" && a.sym.modulePath == b.sym.modulePath
+		const declared = a.sym == b.sym || (a.sym.modulePath != "" && a.sym.modulePath == b.sym.modulePath
 			&& a.sym.name == b.sym.name && a.sym.symbolKind == b.sym.symbolKind
 			&& a.sym.location.line > 0
 			&& a.sym.location.line == b.sym.location.line
-			&& a.sym.location.column == b.sym.location.column;
+			&& a.sym.location.column == b.sym.location.column);
+		return declared && (!a.typeFlags.has(TypeFlag.DuVariant)
+			|| sameTypeList(a.typeChildren, b.typeChildren, c));
 	}
 	return a.sym == null && b.sym == null && a.kind == b.kind
 		&& a.typeName != "" && a.typeName == b.typeName
-		&& sameNameList(a.typeNames, b.typeNames) && sameTypeList(a.typeChildren, b.typeChildren);
+		&& sameNameList(a.typeNames, b.typeNames) && sameTypeList(a.typeChildren, b.typeChildren, c);
 }
 
 // The variant of an enum-discriminated union whose key names the member `lit`
@@ -1257,8 +1494,10 @@ function isOwnGenericBase(base: Type, inst: Type): boolean {
 	return inst.kind == TypeKind.GenericInstance && inst.typeExtra != null && unwrapRefBase(inst.typeExtra) == base;
 }
 
-function sameGenericBase(a: Type, b: Type): boolean {
-	if (a.typeExtra != null && b.typeExtra != null) return sameNominal(unwrapRefBase(a.typeExtra), unwrapRefBase(b.typeExtra));
+function sameGenericBase(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
+	if (a.typeExtra != null && b.typeExtra != null) {
+		return sameNominalAux(unwrapRefBase(a.typeExtra), unwrapRefBase(b.typeExtra), c);
+	}
 	return a.typeName == b.typeName;
 }
 
@@ -1278,37 +1517,50 @@ function differentGenericsFit(source: Type, target: Type): boolean {
 	const s = unwrapRefBase(sBody);
 	const t = unwrapRefBase(tBody);
 	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct) return isAssignable(sBody, tBody);
-	return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && objectLayoutFits(s, t);
+	return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && objectLayoutFits(s, t, isReadonlyView(target));
 }
 
-function sameEnumMember(a: Type, b: Type): boolean {
+function sameEnumMember(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
 	if (a.typeNames.length == 0 || b.typeNames.length == 0 || a.typeNames[0] != b.typeNames[0]) return false;
-	if (a.typeReturn != null && b.typeReturn != null) return sameNominal(a.typeReturn, b.typeReturn);
+	if (a.typeReturn != null && b.typeReturn != null) return sameNominalAux(a.typeReturn, b.typeReturn, c);
 	return a.typeName == b.typeName;
 }
 
 function skipAliasWrapper(t: Type): Type {
 	let cur = t;
 	while (cur.kind == TypeKind.Alias && cur.typeReturn != null) cur = cur.typeReturn;
-	return cur;
+	const seen = peelTransparentInstance(cur);
+	return seen != cur ? skipAliasWrapper(seen) : cur;
 }
 
 export function sameType(a: Type | null, b: Type | null): boolean {
 	if (a == b) return true;
 	if (a == null || b == null) return false;
-	if (_sameTypeDepth > 12) return true;
-	_sameTypeDepth = _sameTypeDepth + 1;
-	const result = sameTypeInner(skipAliasWrapper(a), skipAliasWrapper(b));
-	_sameTypeDepth = _sameTypeDepth - 1;
-	return result;
+	return sameTypeAux(a, b, createSameTypeClosure());
 }
 
-function sameTypeList(a: Type[], b: Type[]): boolean {
+function sameTypeAux(a: Type | null, b: Type | null, c: SameTypeClosure): boolean {
+	if (a == b) return true;
+	if (a == null || b == null) return false;
+	const left = skipAliasWrapper(a);
+	const right = skipAliasWrapper(b);
+	if (left == right) return true;
+	if (c.recCheck < 3) {
+		c.recCheck += 1;
+	} else {
+		if (pairOnStack(c.left, c.right, left, right)) return true;
+		c.left.push(left);
+		c.right.push(right);
+	}
+	return sameTypeInner(left, right, c);
+}
+
+function sameTypeList(a: Type[], b: Type[], c: SameTypeClosure): boolean {
 	if (a == null && b == null) return true;
 	if (a == null || b == null) return false;
 	if (a.length != b.length) return false;
 	for (let i = 0; i < a.length; i += 1) {
-		if (!sameType(a[i], b[i])) return false;
+		if (!sameTypeAux(a[i], b[i], c)) return false;
 	}
 	return true;
 }
@@ -1323,42 +1575,43 @@ function sameNameList(a: string[], b: string[]): boolean {
 	return true;
 }
 
-function sameStructType(a: Type, b: Type): boolean {
-	if (isMaybeType(a) && isMaybeType(b)) return sameType(a.typeReturn, b.typeReturn);
-	if (a.typeName != "" || b.typeName != "") return sameNominal(a, b);
+function sameStructType(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
+	if (isMaybeType(a) && isMaybeType(b)) return sameTypeAux(a.typeReturn, b.typeReturn, c);
+	if (a.typeName != "" || b.typeName != "") return sameNominalAux(a, b, c);
 	if (a.typeFlags != b.typeFlags) return false;
 	if (!sameNameList(a.typeNames, b.typeNames)) return false;
-	return sameTypeList(a.typeChildren, b.typeChildren);
+	return sameTypeList(a.typeChildren, b.typeChildren, c);
 }
 
-function sameInnerType(a: Type, b: Type): boolean {
+function sameInnerType(a: Type, b: Type, c: SameTypeClosure = createSameTypeClosure()): boolean {
 	if (a.typeReturn == null && b.typeReturn == null) return true;
 	if (a.typeReturn == null || b.typeReturn == null) return false;
-	return sameType(a.typeReturn, b.typeReturn);
+	return sameTypeAux(a.typeReturn, b.typeReturn, c);
 }
 
 function isDoubleKind(t: Type): boolean {
 	return t.kind == TypeKind.Number || t.kind == TypeKind.Float64;
 }
 
-function sameTypeInner(a: Type, b: Type): boolean {
+function sameTypeInner(a: Type, b: Type, c: SameTypeClosure): boolean {
 	if (a.kind != b.kind) return isDoubleKind(a) && isDoubleKind(b);
 	return match (a.kind) {
-		TypeKind.Struct => sameStructType(a, b),
-		TypeKind.Enum => sameNominal(a, b),
-		TypeKind.Distinct => sameDistinct(a, b),
+		TypeKind.Struct => sameStructType(a, b, c),
+		TypeKind.Enum => sameNominalAux(a, b, c),
+		TypeKind.Distinct => sameDistinct(a, b, c),
 		TypeKind.GenericParam | TypeKind.StringLiteral | TypeKind.BooleanLiteral | TypeKind.NumberLiteral
 			| TypeKind.TypeReference => a.typeName == b.typeName,
-		TypeKind.EnumLiteral => sameEnumMember(a, b),
-		TypeKind.GenericInstance => sameGenericBase(a, b) && sameTypeList(a.typeChildren, b.typeChildren),
+		TypeKind.EnumLiteral => sameEnumMember(a, b, c),
+		TypeKind.GenericInstance => sameGenericBase(a, b, c) && sameTypeList(a.typeChildren, b.typeChildren, c),
 		TypeKind.Union | TypeKind.Tuple | TypeKind.Varargs
-			| TypeKind.Conditional | TypeKind.IndexedAccess | TypeKind.KeyOf => sameTypeList(a.typeChildren, b.typeChildren),
-		TypeKind.Function => sameTypeList(a.typeChildren, b.typeChildren) && sameInnerType(a, b),
-		TypeKind.SizedArray => a.typeValue == b.typeValue && sameInnerType(a, b),
-		TypeKind.Set => sameInnerType(a, b),
+			| TypeKind.Conditional | TypeKind.IndexedAccess | TypeKind.KeyOf => sameTypeList(a.typeChildren, b.typeChildren, c),
+		TypeKind.Mapped => a.typeValue == b.typeValue && sameTypeList(a.typeChildren, b.typeChildren, c),
+		TypeKind.Function => sameTypeList(a.typeChildren, b.typeChildren, c) && sameInnerType(a, b, c),
+		TypeKind.SizedArray => a.typeValue == b.typeValue && sameInnerType(a, b, c),
+		TypeKind.Set => sameInnerType(a, b, c),
 		TypeKind.Array | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr
 			| TypeKind.Borrow | TypeKind.Var | TypeKind.Sink
-			| TypeKind.Lent => sameInnerType(a, b),
+			| TypeKind.Lent => sameInnerType(a, b, c),
 		// Primitives and every remaining kind carry no payload — same kind is
 		// the whole answer.
 		_ => true,
@@ -1399,6 +1652,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	// Never is the bottom type — relates to everything. After exhaustive
 	// narrowing eliminates all union variants, the residual is never.
 	if (actual.kind == TypeKind.Never) return TypeRelation.Exact;
+	if (classOutsideLineage(actual, formal)) return TypeRelation.None;
 	if (formal.kind == TypeKind.Function && actual.kind != TypeKind.Function) {
 		const widened = distinctWidenBody(actual);
 		if (widened != null && widened.kind == TypeKind.Function) {
@@ -1410,7 +1664,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 		return match (formal.kind) {
 			TypeKind.Struct => {
 				if (formal == actual || sameStructType(formal, actual)) return TypeRelation.Exact;
-				if (isObjectAssignable(actual, formal)) return TypeRelation.Subtype;
+				if (isObjectAssignable(actual, formal) && missingRoutine(actual, formal) == "") return TypeRelation.Subtype;
 				return TypeRelation.None;
 			},
 			TypeKind.Enum => sameNominal(formal, actual) ? TypeRelation.Exact : TypeRelation.None,
@@ -1442,7 +1696,7 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 			},
 			TypeKind.GenericInstance => {
 				// Structural type arg comparison (Result, Promise, Map, Set, user generics)
-				if (!sameGenericBase(formal, actual)) return TypeRelation.None;
+				if (!sameGenericBase(formal, actual)) return ancestorRelation(formal, actual);
 				const giLimit = formal.typeChildren.length < actual.typeChildren.length ? formal.typeChildren.length : actual.typeChildren.length;
 				let instRel = TypeRelation.Exact;
 				for (let gi = 0; gi < giLimit; gi += 1) {
@@ -1460,9 +1714,10 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 				if (leavesInlineConv(actual, formal)) return TypeRelation.None;
 				const formalParams = runtimeParams(formal);
 				const actualParams = runtimeParams(actual);
-				if (formalParams.length != actualParams.length) return TypeRelation.None;
+				if (formalParams.length != actualParams.length) return arityAdapts(actual, formal) ? adaptedRelation(formal, actual, formalParams, actualParams) : TypeRelation.None;
 				let worst = TypeRelation.Exact;
 				for (let pi = 0; pi < formalParams.length; pi += 1) {
+					if (sinkModeDiffers(formalParams[pi], actualParams[pi])) return TypeRelation.None;
 					if (fnSlotReprMismatch(formalParams[pi], actualParams[pi])) return TypeRelation.None;
 					const paramRel = typeRelation(formalParams[pi], actualParams[pi]);
 					if (paramRel == TypeRelation.None) return TypeRelation.None;
@@ -1485,11 +1740,16 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 			_ => TypeRelation.Exact,
 		};
 	}
+	if ((formal.kind == TypeKind.GenericInstance && actual.kind == TypeKind.Struct)
+			|| (formal.kind == TypeKind.Struct && actual.kind == TypeKind.GenericInstance)) {
+		return ancestorRelation(formal, actual);
+	}
 	// Var (out param) unwrap: formal is Var<T>, actual is T → match inner
 	if (formal.kind == TypeKind.Var && formal.typeReturn != null) {
 		return typeRelation(formal.typeReturn, actual);
 	}
 
+	if (actual.kind == TypeKind.Unknown && !takesUnknown(formal)) return TypeRelation.None;
 	// Inference sentinels + user unknown score as Generic
 	if (formal.kind == TypeKind.Unknown || actual.kind == TypeKind.Unknown
 		|| formal.kind == TypeKind.None || actual.kind == TypeKind.None
@@ -1608,6 +1868,13 @@ function typeRelationInner(formal: Type | null, actual: Type | null): TypeRelati
 	return TypeRelation.None;
 }
 
+function ancestorRelation(formal: Type, actual: Type): TypeRelation {
+	const ancestor = classAncestorInstance(actual, formal);
+	if (ancestor == null) return TypeRelation.None;
+	const rel = typeRelation(formal, ancestor);
+	return rel == TypeRelation.Exact || rel == TypeRelation.Generic ? TypeRelation.Subtype : rel;
+}
+
 // Score a candidate function against actual arguments.
 // Returns sum of TypeRelation values, or -1 if any param doesn't match.
 export function scoreCandidate(paramTypes: Type[], argTypes: Type[]): int32 {
@@ -1623,38 +1890,71 @@ export function scoreCandidate(paramTypes: Type[], argTypes: Type[]): int32 {
 
 export interface TypeParamFold {
 	names: string[];
+	params: Type[];
 	types: Type[];
 	chosen: int32[];
 	misfits: int32[];
 }
 
-export function foldTypeParamCandidates(candNames: string[], candTypes: Type[], skip: boolean[], fixedNames: string[], fixedTypes: Type[]): TypeParamFold {
-	const out: TypeParamFold = { names: [], types: [], chosen: [], misfits: [] };
-	for (let ci = 0; ci < candNames.length; ci += 1) {
-		const name = candNames[ci];
-		let seen = false;
-		for (const n of out.names) { if (n == name) { seen = true; break; } }
-		if (seen) continue;
-		let fixedIdx = -1;
-		for (let fi = 0; fi < fixedNames.length; fi += 1) { if (fixedNames[fi] == name) { fixedIdx = fi; break; } }
+export function foldTypeParamCandidates(candParams: Type[], candTypes: Type[], skip: boolean[], fixed: UnifyBindings, literal: boolean[] = []): TypeParamFold {
+	const out: TypeParamFold = { names: [], params: [], types: [], chosen: [], misfits: [] };
+	const order: int32[] = [];
+	for (let ci = 0; ci < candParams.length; ci += 1) { if (!isLiteralCandidate(literal, ci)) order.push(ci); }
+	for (let ci = 0; ci < candParams.length; ci += 1) { if (isLiteralCandidate(literal, ci)) order.push(ci); }
+	const firsts: Type[] = [];
+	for (let oi = 0; oi < order.length; oi += 1) {
+		const ci = order[oi];
+		const param = candParams[ci];
+		if (firsts.indexOf(param) >= 0) continue;
+		firsts.push(param);
+		const fixedIdx = fixed.params.indexOf(param);
 		let chosen: int32 = -1;
-		let bound = fixedIdx >= 0 ? fixedTypes[fixedIdx] : candTypes[ci];
+		let bound = fixedIdx >= 0 ? fixed.types[fixedIdx] : candTypes[ci];
 		if (fixedIdx < 0) {
 			chosen = ci;
-			for (let cj = ci + 1; cj < candNames.length; cj += 1) {
-				if (candNames[cj] != name || skip[cj]) continue;
-				if (isAssignable(bound, candTypes[cj]) && !isAssignable(candTypes[cj], bound)) { bound = candTypes[cj]; chosen = cj; }
+			for (let oj = oi + 1; oj < order.length; oj += 1) {
+				const cj = order[oj];
+				if (candParams[cj] != param || skip[cj]) continue;
+				if (isAssignable(bound, candTypes[cj]) && !candidateFits(candTypes[cj], isLiteralCandidate(literal, cj), bound)) { bound = candTypes[cj]; chosen = cj; }
 			}
 		}
-		out.names.push(name);
+		out.names.push(param.typeName);
+		out.params.push(param);
 		out.types.push(bound);
 		out.chosen.push(chosen);
-		for (let cj = ci; cj < candNames.length; cj += 1) {
-			if (candNames[cj] != name || cj == chosen || skip[cj]) continue;
-			if (!isAssignable(candTypes[cj], bound)) out.misfits.push(cj);
+		for (let oj = oi; oj < order.length; oj += 1) {
+			const cj = order[oj];
+			if (candParams[cj] != param || cj == chosen || skip[cj]) continue;
+			if (!candidateFits(candTypes[cj], isLiteralCandidate(literal, cj), bound)) out.misfits.push(cj);
 		}
 	}
 	return out;
+}
+
+function isLiteralCandidate(literal: boolean[], ci: int32): boolean {
+	return ci < literal.length && literal[ci];
+}
+
+function candidateFits(candidate: Type, fromLiteral: boolean, bound: Type): boolean {
+	return fromLiteral ? literalShapeFits(candidate, bound) : isAssignable(candidate, bound);
+}
+
+// An object literal's own type against a declared type: the literal is retyped by the
+// declared type once inference ends, so it fits when every property it writes is a field
+// of that type with a fitting value and every required field is written.
+function literalShapeFits(literal: Type, target: Type): boolean {
+	if (isAssignable(literal, target)) return true;
+	const s = peelToStructOrUnion(literal);
+	const t = peelToStructOrUnion(target);
+	if (s == null || t == null || s.kind != TypeKind.Struct || t.kind != TypeKind.Struct || isMaybeType(t)) return false;
+	for (let i = 0; i < s.typeNames.length && i < s.typeChildren.length; i += 1) {
+		const j = t.typeNames.indexOf(s.typeNames[i]);
+		if (j < 0 || j >= t.typeChildren.length || !literalShapeFits(s.typeChildren[i], t.typeChildren[j])) return false;
+	}
+	for (const name of t.typeNames) {
+		if (s.typeNames.indexOf(name) < 0 && (t.optionalFields == null || t.optionalFields.indexOf(name) < 0)) return false;
+	}
+	return true;
 }
 
 // ===== Standard-Aligned Overload Resolution (Priority-Based) =====
@@ -1709,14 +2009,31 @@ export function scoreCandidateWithSkip(paramTypes: Type[], argTypes: Type[], min
 		}
 		const rel = literalRels != null && i < literalRels.length && literalRels[i] >= 0
 			? literalRels[i] as TypeRelation
-			: typeRelation(paramTypes[i], argTypes[i]);
+			: argRelation(paramTypes[i], argTypes[i]);
 		if (rel == TypeRelation.None) {
 			score.exactMatches = -1;
 			return score;
 		}
 		countRelation(score, rel);
+		if (rel == TypeRelation.Exact || rel == TypeRelation.Subtype) addInheritancePenalty(score, classDistance(argTypes[i], paramTypes[i]));
 	}
 	return score;
+}
+
+// An argument that lands on one member of a wider union parameter is a subtype
+// match, so `f(x: int32)` outranks `f(x: int32 | string)` for an int32, as the
+// reference ranks a nullable widening; a literal into a literal set stays exact.
+function argRelation(formal: Type, actual: Type): TypeRelation {
+	const rel = typeRelation(formal, actual);
+	if (rel != TypeRelation.Exact) return rel;
+	const slot = skipModifier(formal);
+	if (slot == null || slot.kind != TypeKind.Union || literalUnionBase(slot) != null) return rel;
+	return sameType(slot, actual) ? rel : TypeRelation.Subtype;
+}
+
+function addInheritancePenalty(score: CandidateScore, depth: int32): void {
+	if (depth < 0) return;
+	score.inheritancePenalty += depth + (score.inheritancePenalty < 0 ? 1 : 0);
 }
 
 export function countRelation(score: CandidateScore, rel: TypeRelation): void {
@@ -1774,6 +2091,8 @@ export function cmpCandidates(a: CandidateScore, b: CandidateScore,
 		// 8. complexDisambiguation — genericness depth (Phase 5, stubbed)
 		result = complexDisambiguation(candidateTypeA, candidateTypeB);
 		if (result != 0) return result;
+		result = checkUnionSpecialization(candidateTypeA, candidateTypeB);
+		if (result != 0) return result;
 	}
 	// 9. Scope depth (higher = inner scope = preferred)
 	result = a.calleeScope - b.calleeScope;
@@ -1781,8 +2100,6 @@ export function cmpCandidates(a: CandidateScore, b: CandidateScore,
 }
 
 // Generic specialization: cross-test formal types for specificity.
-// f<T>(x: T[]) is more specific than f<T>(x: T) because T[] can match T generically
-// but T cannot match T[].
 // Returns >0 if A is more specific, <0 if B, 0 if equal/contradictory.
 export function checkGenericSpecialization(typeA: Type, typeB: Type): number {
 	if (typeA == null || typeB == null) return 0;
@@ -1796,19 +2113,47 @@ export function checkGenericSpecialization(typeA: Type, typeB: Type): number {
 	while (i < lenA) {
 		const pA = typeA.typeChildren[i];
 		const pB = typeB.typeChildren[i];
-		// Cross-test: can B's formal match A's as Generic?
-		const bMatchesA = typeRelation(pA, pB);
-		const aMatchesB = typeRelation(pB, pA);
-		if (bMatchesA == TypeRelation.Generic && aMatchesB != TypeRelation.Generic) {
-			aWins = aWins + 1; // A is more specific (B is more general)
-		} else if (aMatchesB == TypeRelation.Generic && bMatchesA != TypeRelation.Generic) {
-			bWins = bWins + 1; // B is more specific (A is more general)
+		const bTakesA = typeRelation(pB, pA);
+		const aTakesB = typeRelation(pA, pB);
+		if (bTakesA == TypeRelation.Generic && aTakesB == TypeRelation.None) {
+			aWins = aWins + 1;
+		} else if (aTakesB == TypeRelation.Generic && bTakesA == TypeRelation.None) {
+			bWins = bWins + 1;
 		}
 		i = i + 1;
 	}
 	if (aWins > 0 && bWins == 0) return 1;
 	if (bWins > 0 && aWins == 0) return -1;
 	return 0; // contradiction or equal
+}
+
+// checkGeneric's cross-test for union formals, which the reference types as `A | B`
+// typeclasses, and for a lone string literal, a one-member set: a formal that fits inside
+// the other candidate's formal, and not the reverse, is the more specific overload
+// (`"a" | "b"` and `"a"` over `string`).
+export function checkUnionSpecialization(typeA: Type, typeB: Type): number {
+	if (typeA.kind != TypeKind.Function || typeB.kind != TypeKind.Function) return 0;
+	if (typeA.typeChildren.length != typeB.typeChildren.length) return 0;
+	let winner = 0;
+	for (let i = 0; i < typeA.typeChildren.length; i += 1) {
+		const pA = typeA.typeChildren[i];
+		const pB = typeB.typeChildren[i];
+		if (pA == null || pB == null || (!isLiteralSetFormal(pA) && !isLiteralSetFormal(pB))) continue;
+		const aFitsB = typeRelation(pB, pA) != TypeRelation.None;
+		const bFitsA = typeRelation(pA, pB) != TypeRelation.None;
+		if (aFitsB && !bFitsA) {
+			if (winner < 0) return 0;
+			winner = 1;
+		} else if (bFitsA && !aFitsB) {
+			if (winner > 0) return 0;
+			winner = -1;
+		}
+	}
+	return winner;
+}
+
+function isLiteralSetFormal(t: Type): boolean {
+	return t.kind == TypeKind.Union || t.kind == TypeKind.StringLiteral;
 }
 
 // Count generic nesting depth of a type (Standard reference implementation).
@@ -1939,6 +2284,22 @@ test "unknown flows only into a slot that takes unknown" {
 	assert isAssignable(unknownType(), unknownType());
 	assert isAssignable(unknownType(), createUnion([unknownType(), nullType()]));
 	assert isAssignable(cls, unknownType());
+}
+
+test "an unknown argument ranks only against a formal that takes unknown" {
+	const gp = createGenericParam("E");
+	assert typeRelation(createArray(gp), unknownType()) == TypeRelation.None;
+	assert typeRelation(createRef(createStruct("Foo", ["n"], [createPrimitive(TypeKind.Int32)], true)), unknownType()) == TypeRelation.None;
+	assert typeRelation(gp, unknownType()) == TypeRelation.Generic;
+	assert typeRelation(createUnion([unknownType(), nullType()]), unknownType()) == TypeRelation.Generic;
+	assert typeRelation(unknownType(), unknownType()) == TypeRelation.Exact;
+}
+
+test "a generic container formal is more specific than an unknown one" {
+	const arrayFormal = createFunction([createArray(createGenericParam("E"))], ["x"], stringType());
+	const unknownFormal = createFunction([unknownType()], ["x"], stringType());
+	assert checkGenericSpecialization(arrayFormal, unknownFormal) > 0;
+	assert checkGenericSpecialization(unknownFormal, arrayFormal) < 0;
 }
 
 test "a function taking a class does not stand in for one taking unknown" {

@@ -6,6 +6,7 @@
 
 export { ProcessError, ProcessErrorKind } from "./errors";
 export { processError, spawnFailed, startFailed, notFound, nonZeroExit, signalTerminated, pipeError, isNotFound, isNonZeroExit, isRetryable } from "./errors";
+export { spawn, ChildProcess, ChildStream, ExitStatus, ReadChunk, SpawnOptions } from "./child";
 
 import { isExecutable } from "../fs";
 import { startFailed, errnoName } from "./errors";
@@ -53,9 +54,6 @@ export function exec(command: string): Result<string, ProcessError> {
 		return Result.err(signalTerminated(command, signal, stdoutText, stderrText));
 	}
 	if (exitCode != 0) {
-		if (exitCode == 127) {
-			return Result.err(notFound(command));
-		}
 		return Result.err(nonZeroExit(command, exitCode, stdoutText, stderrText));
 	}
 	return Result.ok(stdoutText);

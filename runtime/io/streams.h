@@ -42,22 +42,6 @@ static inline void msStdinDisableBuffering(void) {
 /* ===== Stdin ===== */
 
 /**
- * Read a line from stdin (up to \n or EOF).
- * Strips trailing \r\n or \n. Returns empty string on EOF.
- * Buffer: 4 KiB (sufficient for LSP Content-Length headers).
- */
-static inline msString msReadLine(void) {
-	char buf[4096];
-	if (fgets(buf, sizeof(buf), stdin) == NULL) {
-		return MS_EMPTY_STRING;
-	}
-	size_t len = strlen(buf);
-	if (len > 0 && buf[len - 1] == '\n') buf[--len] = '\0';
-	if (len > 0 && buf[len - 1] == '\r') buf[--len] = '\0';
-	return msStringFromCStr(buf);
-}
-
-/**
  * Read exactly n bytes from stdin, retrying on short reads (pipes).
  * Returns what was read (fewer only on EOF/error).
  * Cap: 1 MiB per call.

@@ -1,7 +1,7 @@
 import {
 	Node, NodeKind, NodeFlag, Type, TypeKind, Symbol, SymbolKind,
 	CallExprData, MemberExprData, ArrayAccessData, BinaryExprData,
-	OutExprData, HiddenDerefData, VariableDeclData, FunctionDeclData, BlockStmtData, ProgramData, SwitchCaseData,
+	OutExprData, HiddenDerefData, ReturnStmtData, VariableDeclData, FunctionDeclData, BlockStmtData, ProgramData, SwitchCaseData,
 	DeclKind, createNodeAt,
 } from "../../ast/node";
 import { TransformContext, freshTempSym, reportTransformError } from "../context";
@@ -9,14 +9,16 @@ import { mapChildren } from "../walker";
 import { makeIdentResolved, makeVarDecl, makeNumber, makeString, makeArrayAccess, makeAssign, makeExprStmt, makeCall, runtimeRef } from "../util";
 import { indexedType } from "../coercion/accessJS";
 
-let varParamCtx: TransformContext = null as unknown as TransformContext;
-let boxedSyms: Symbol[] = [];
-let fnStack: Node[] = [];
-let prologueFns: Node[] = [];
-let prologueSyms: Symbol[][] = [];
+interface VarParamRun {
+	ctx: TransformContext;
+	boxedSyms: Symbol[];
+	fnStack: Node[];
+	prologueFns: Node[];
+	prologueSyms: Symbol[][];
+}
 
-function isBoxed(s: Symbol): boolean {
-	for (const b of boxedSyms) { if (b == s) return true; }
+function isBoxed(s: Symbol, run: VarParamRun): boolean {
+	for (const b of run.boxedSyms) { if (b == s) return true; }
 	return false;
 }
 
@@ -28,7 +30,7 @@ function isBorrowType(t: Type | null): boolean {
 	return t != null && t.kind == TypeKind.Borrow;
 }
 
-function calleeFormals(d: CallExprData): Type[] | null {
+export function calleeFormals(d: CallExprData): Type[] | null {
 	let t = d.callee.nodeType;
 	if ((t == null || t.kind != TypeKind.Function)
 		&& d.callee.resolvedSym != null) {
@@ -46,13 +48,13 @@ function receiverFormal(node: Node): Type | null {
 	if (t == null || t.kind != TypeKind.Function || t.typeChildren.length == 0) return null;
 	return t.typeChildren[0];
 }
-function noteBoxedArg(arg: Node): void {
+function noteBoxedArg(arg: Node, run: VarParamRun): void {
 	const inner = unwrapAddr(arg);
 	if (inner.kind == NodeKind.Identifier && inner.resolvedSym != null) {
 		const s = inner.resolvedSym;
 		if (!isVarType(s.symbolType) && !isBorrowType(s.symbolType)) {
-			if (!isBoxed(s)) boxedSyms.push(s);
-			if (s.symbolKind == SymbolKind.Parameter) recordParamPrologue(s);
+			if (!isBoxed(s, run)) run.boxedSyms.push(s);
+			if (s.symbolKind == SymbolKind.Parameter) recordParamPrologue(s, run);
 		}
 	}
 }
@@ -63,32 +65,32 @@ function unwrapAddr(n: Node): Node {
 	return n;
 }
 
-function recordParamPrologue(s: Symbol): void {
-	for (let i = fnStack.length - 1; i >= 0; i -= 1) {
-		const fd = fnStack[i].data as FunctionDeclData;
+function recordParamPrologue(s: Symbol, run: VarParamRun): void {
+	for (let i = run.fnStack.length - 1; i >= 0; i -= 1) {
+		const fd = run.fnStack[i].data as FunctionDeclData;
 		let found = false;
 		for (const pn of fd.params) { if (pn == s.name) { found = true; break; } }
 		if (!found) continue;
-		for (let j = 0; j < prologueFns.length; j += 1) {
-			if (prologueFns[j] == fnStack[i]) {
-				for (const ps of prologueSyms[j]) { if (ps == s) return; }
-				prologueSyms[j].push(s);
+		for (let j = 0; j < run.prologueFns.length; j += 1) {
+			if (run.prologueFns[j] == run.fnStack[i]) {
+				for (const ps of run.prologueSyms[j]) { if (ps == s) return; }
+				run.prologueSyms[j].push(s);
 				return;
 			}
 		}
-		prologueFns.push(fnStack[i]);
-		prologueSyms.push([s]);
+		run.prologueFns.push(run.fnStack[i]);
+		run.prologueSyms.push([s]);
 		return;
 	}
 }
 
-function sc(node: Node): Node {
+function sc(node: Node, run: VarParamRun): Node {
 	if (node == null) return node;
-	if (node.kind == NodeKind.HiddenAddr) noteBoxedArg(node);
+	if (node.kind == NodeKind.HiddenAddr) noteBoxedArg(node, run);
 	if (node.kind == NodeKind.FunctionDecl) {
-		fnStack.push(node);
-		mapChildren(node, sc);
-		fnStack.pop();
+		run.fnStack.push(node);
+		mapChildren(node, (child: Node): Node => sc(child, run));
+		run.fnStack.pop();
 		return node;
 	}
 	if (node.kind == NodeKind.CallExpr) {
@@ -96,12 +98,12 @@ function sc(node: Node): Node {
 		const formals = calleeFormals(d);
 		if (formals != null) {
 			for (let i = 0; i < d.arguments.length && i < formals.length; i += 1) {
-				if (isVarType(formals[i])) noteBoxedArg(d.arguments[i]);
+				if (isVarType(formals[i])) noteBoxedArg(d.arguments[i], run);
 			}
 		}
-		if (isVarType(receiverFormal(node))) noteBoxedArg((d.callee.data as MemberExprData).object);
+		if (isVarType(receiverFormal(node))) noteBoxedArg((d.callee.data as MemberExprData).object, run);
 	}
-	mapChildren(node, sc);
+	mapChildren(node, (child: Node): Node => sc(child, run));
 	return node;
 }
 
@@ -134,14 +136,14 @@ function isRangeAccess(n: Node): boolean {
 	return op == ".." || op == "...";
 }
 
-function pairize(arg: Node): Node {
+function pairize(arg: Node, run: VarParamRun): Node {
 	if (arg == null) return arg;
 	const inner = unwrapAddr(arg);
 	if (inner.kind == NodeKind.Identifier) {
 		const s = inner.resolvedSym;
 		if (s == null) return arg;
 		if (isVarType(s.symbolType) || isBorrowType(s.symbolType)) return inner;
-		if (isBoxed(s)) {
+		if (isBoxed(s, run)) {
 			const cont = makeIdentResolved(s, inner.location);
 			cont.nodeType = null;
 			return pairLit(cont, makeNumber(0, inner.location), inner);
@@ -150,26 +152,26 @@ function pairize(arg: Node): Node {
 	}
 	if (inner.kind == NodeKind.MemberExpr) {
 		const md = inner.data as MemberExprData;
-		const cont = rw(unwrapAddr(md.object));
+		const cont = rw(unwrapAddr(md.object), run);
 		cont.nodeType = null;
 		return pairLit(cont, makeString(md.property, inner.location), inner);
 	}
 	if (inner.kind == NodeKind.ArrayAccess) {
 		const ad = inner.data as ArrayAccessData;
 		const indexed = indexedType(ad.array);
-		const cont = rw(unwrapAddr(ad.array));
+		const cont = rw(unwrapAddr(ad.array), run);
 		if (!isRangeAccess(cont)) cont.nodeType = null;
-		if (indexed == null) return pairLit(cont, rw(ad.index), inner);
+		if (indexed == null) return pairLit(cont, rw(ad.index, run), inner);
 		const cellOf = indexed.kind == TypeKind.Span ? "msSpanCell" : "msArrayCell";
-		return makeCall(runtimeRef(cellOf, inner.location), [cont, rw(ad.index)], inner.location);
+		return makeCall(runtimeRef(cellOf, inner.location), [cont, rw(ad.index, run)], inner.location);
 	}
 	if (inner.kind == NodeKind.HiddenDeref) {
-		const cell = cellLit(rw((inner.data as HiddenDerefData).expr), inner);
+		const cell = cellLit(rw((inner.data as HiddenDerefData).expr, run), inner);
 		cell.nodeType = null;
 		return pairLit(cell, makeNumber(0, inner.location), inner);
 	}
 	if (arg.kind == NodeKind.HiddenAddr && isBorrowType(arg.nodeType)) {
-		const temp = cellLit(rw(inner), inner);
+		const temp = cellLit(rw(inner, run), inner);
 		temp.nodeType = null;
 		return pairLit(temp, makeNumber(0, inner.location), inner);
 	}
@@ -181,13 +183,13 @@ function declaredType(decl: Node): Type | null {
 	return decl.resolvedSym != null ? decl.resolvedSym.symbolType : null;
 }
 
-function fillBoxes(stmts: Node[]): Node[] {
+function fillBoxes(stmts: Node[], run: VarParamRun): Node[] {
 	const result: Node[] = [];
 	for (const stmt of stmts) {
-		if (stmt.kind == NodeKind.VariableDecl && stmt.resolvedSym != null && isBoxed(stmt.resolvedSym)
+		if (stmt.kind == NodeKind.VariableDecl && stmt.resolvedSym != null && isBoxed(stmt.resolvedSym, run)
 			&& (stmt.data as VariableDeclData).initializer == null) {
 			const t = declaredType(stmt);
-			const sym = freshTempSym(varParamCtx, "boxInit", t);
+			const sym = freshTempSym(run.ctx, "boxInit", t);
 			const fill = makeVarDecl(sym.name, null as unknown as Node, DeclKind.Let, stmt.location);
 			fill.resolvedSym = sym;
 			fill.nodeType = t;
@@ -201,23 +203,29 @@ function fillBoxes(stmts: Node[]): Node[] {
 	return result;
 }
 
-function rw(node: Node): Node {
+function rw(node: Node, run: VarParamRun): Node {
 	if (node == null) return node;
-	if (node.kind == NodeKind.OutExpr) return rw((node.data as OutExprData).outArg);
+	if (node.kind == NodeKind.OutExpr) return rw((node.data as OutExprData).outArg, run);
 	if (node.kind == NodeKind.Program) {
 		const pd = node.data as ProgramData;
-		pd.programStmts = fillBoxes(pd.programStmts);
+		pd.programStmts = fillBoxes(pd.programStmts, run);
 	}
 	if (node.kind == NodeKind.BlockStmt) {
 		const bd = node.data as BlockStmtData;
-		bd.statements = fillBoxes(bd.statements);
+		bd.statements = fillBoxes(bd.statements, run);
 	}
 	if (node.kind == NodeKind.SwitchCase) {
 		const cd = node.data as SwitchCaseData;
-		cd.caseStmts = fillBoxes(cd.caseStmts);
+		cd.caseStmts = fillBoxes(cd.caseStmts, run);
+	}
+	if (node.kind == NodeKind.ReturnStmt) {
+		const rd = node.data as ReturnStmtData;
+		if (rd.argument != null && rd.argument.kind == NodeKind.HiddenAddr && isBorrowType(rd.argument.nodeType)) {
+			rd.argument = (rd.argument.data as HiddenDerefData).expr;
+		}
 	}
 	if (node.kind == NodeKind.HiddenAddr) {
-		const result = pairize(node);
+		const result = pairize(node, run);
 		result.nodeType = node.nodeType;
 		return result;
 	}
@@ -226,15 +234,15 @@ function rw(node: Node): Node {
 		const formals = calleeFormals(d);
 		if (isVarType(receiverFormal(node))) {
 			const md = d.callee.data as MemberExprData;
-			md.object = pairize(md.object);
+			md.object = pairize(md.object, run);
 		} else {
-			d.callee = rw(d.callee);
+			d.callee = rw(d.callee, run);
 		}
 		for (let i = 0; i < d.arguments.length; i += 1) {
 			let formal: Type | null = null;
 			if (formals != null && i < formals.length) formal = formals[i];
-			if (isVarType(formal)) d.arguments[i] = pairize(d.arguments[i]);
-			else d.arguments[i] = rw(d.arguments[i]);
+			if (isVarType(formal)) d.arguments[i] = pairize(d.arguments[i], run);
+			else d.arguments[i] = rw(d.arguments[i], run);
 		}
 		return node;
 	}
@@ -243,7 +251,7 @@ function rw(node: Node): Node {
 		if (s != null && ((isVarType(s.symbolType) && s.symbolKind == SymbolKind.Parameter) || isBorrowType(s.symbolType))) {
 			return derefPair(s, node);
 		}
-		if (s != null && isBoxed(s)) {
+		if (s != null && isBoxed(s, run)) {
 			const cont = makeIdentResolved(s, node.location);
 			cont.nodeType = null;
 			const cell = makeArrayAccess(cont, makeNumber(0, node.location), node.location);
@@ -253,36 +261,32 @@ function rw(node: Node): Node {
 		return node;
 	}
 	if (node.kind == NodeKind.VariableDecl) {
-		mapChildren(node, rw);
+		mapChildren(node, (child: Node): Node => rw(child, run));
 		const s = node.resolvedSym;
 		const d = node.data as VariableDeclData;
-		if (s != null && isBoxed(s) && d.initializer != null) {
+		if (s != null && isBoxed(s, run) && d.initializer != null) {
 			d.initializer = cellLit(d.initializer, node);
 		}
-		if (s != null && isBoxed(s) && d.initializer == null) {
-			reportTransformError(varParamCtx, "internal: a local whose address is taken is declared where the JS box cannot be filled", node.location);
+		if (s != null && isBoxed(s, run) && d.initializer == null) {
+			reportTransformError(run.ctx, "internal: a local whose address is taken is declared where the JS box cannot be filled", node.location);
 		}
 		return node;
 	}
-	mapChildren(node, rw);
+	mapChildren(node, (child: Node): Node => rw(child, run));
 	return node;
 }
 
 export function lowerJsVarParam(program: Node, ctx: TransformContext): Node {
-	varParamCtx = ctx;
-	boxedSyms = [];
-	fnStack = [];
-	prologueFns = [];
-	prologueSyms = [];
-	sc(program);
-	rw(program);
-	for (let i = 0; i < prologueFns.length; i += 1) {
-		const fd = prologueFns[i].data as FunctionDeclData;
+	const run: VarParamRun = { ctx, boxedSyms: [], fnStack: [], prologueFns: [], prologueSyms: [] };
+	sc(program, run);
+	rw(program, run);
+	for (let i = 0; i < run.prologueFns.length; i += 1) {
+		const fd = run.prologueFns[i].data as FunctionDeclData;
 		if (fd.fnBody == null) continue;
 		const bs = fd.fnBody.data as BlockStmtData;
-		const at = prologueFns[i];
+		const at = run.prologueFns[i];
 		const pro: Node[] = [];
-		for (const s of prologueSyms[i]) {
+		for (const s of run.prologueSyms[i]) {
 			pro.push(makeExprStmt(makeAssign(makeIdentResolved(s, at.location), cellLit(makeIdentResolved(s, at.location), at), at.location), at.location));
 		}
 		for (const st of bs.statements) { pro.push(st); }

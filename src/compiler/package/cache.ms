@@ -3,19 +3,17 @@
 // Filesystem operations (download, extract, flock) land in later phases.
 // See docs/PACKAGE.md for the cache layout specification.
 
-import { env } from "std/process";
 import { exists } from "std/fs";
+import { join } from "std/fs/path";
+import { metascriptHome } from "../../utils/path";
 
 // --- Base path ---
 
 // Returns the cache root: ~/.metascript/cache
-// Uses $HOME, falling back to $USERPROFILE (Windows does not set HOME by
-// default — same pattern as cc.ms homeDir / cache.ms globalObjectsDir).
 export function cacheRoot(): string {
-	let home = env.get("HOME");
-	if (home == "") home = env.get("USERPROFILE");
+	const home = metascriptHome();
 	if (home == "") return "";
-	return home + "/.metascript/cache";
+	return join(home, "cache");
 }
 
 // --- Registry paths ---

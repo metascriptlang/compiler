@@ -21,22 +21,16 @@ import { TransformContext } from "../context";
 import { addError } from "../../checker/context";
 import { walkNode } from "../walker";
 import { makeBinary, makeCall, makeMember, makeNumber, generatedRef, runtimeRef } from "../util";
-import { createPrimitive, isIntegerType, peelToRepr } from "../../checker/types";
+import { createPrimitive, isIntegerType, peelToRepr, literalUnionBase } from "../../checker/types";
 import { int64ToDecimal, uint64ToDecimal } from "../../utils/string";
-import { cloneIfPure } from "./intArithJS";
+import { cloneIfPure } from "../place";
+import { is64Kind, isSignedKind, isFloatKind, isNarrowIntKind, bitsOfKind } from "../numKinds";
+import { isEagerAssignOp, isComparisonOp, isShiftOp } from "../../ast/operators";
 import { makeRangeCheckFor } from "../native/rangeCheckInject";
 
 export function lowerBigIntJS(program: Node, ctx: TransformContext): Node {
 	walkNode(program, (node: Node): Node => materializeBigInt(node, ctx));
 	return program;
-}
-
-function is64Kind(kind: TypeKind): boolean {
-	return kind == TypeKind.Int64 || kind == TypeKind.Uint64;
-}
-
-function isFractionalKind(kind: TypeKind): boolean {
-	return kind == TypeKind.Float32 || kind == TypeKind.Float64 || kind == TypeKind.Number;
 }
 
 function reprKind(t: Type | null): TypeKind {
@@ -59,8 +53,7 @@ function isNarrowIntType(t: Type | null): boolean {
 }
 
 function isFloatLikeType(t: Type | null): boolean {
-	if (t == null) return false;
-	return t.kind == TypeKind.Number || t.kind == TypeKind.Float64 || t.kind == TypeKind.Float32;
+	return t != null && isFloatKind(t.kind);
 }
 
 function materializeBigInt(node: Node, ctx: TransformContext): Node {
@@ -120,7 +113,8 @@ function bigLit(text: string, kind: TypeKind, loc: SourceLocation): Node {
 export function readsUnionMember(d: TypeAssertionData): boolean {
 	if (d.asExpr == null) return false;
 	if (d.asExpr.kind == NodeKind.HiddenSubConv) return true;
-	return d.asExpr.nodeType != null && d.asExpr.nodeType.kind == TypeKind.Union;
+	const t = d.asExpr.nodeType;
+	return t != null && t.kind == TypeKind.Union && literalUnionBase(t) == null;
 }
 
 function bigintCast(node: Node, d: TypeAssertionData, rangeChecks: boolean): Node | null {
@@ -133,7 +127,7 @@ function bigintCast(node: Node, d: TypeAssertionData, rangeChecks: boolean): Nod
 	if (dstBig) {
 		if (srcBig || srcT == null) return d.asExpr;
 		if (is64Kind(srcT.kind)) return d.asExpr;
-		if (isFractionalKind(reprKind(srcT))) return typedCall("msBigIntFromNumber", [d.asExpr], TypeKind.Int64, loc);
+		if (isFloatKind(reprKind(srcT))) return typedCall("msBigIntFromNumber", [d.asExpr], TypeKind.Int64, loc);
 		return bigIntOf(d.asExpr, loc);
 	}
 	const dstK = reprKind(node.nodeType);
@@ -143,8 +137,8 @@ function bigintCast(node: Node, d: TypeAssertionData, rangeChecks: boolean): Nod
 	if (rangeChecks && dstRepr != null && dstRepr.kind == TypeKind.Char) {
 		return numberOf(makeRangeCheckFor("msCheckRangeU8", d.asExpr, dstRepr, loc), loc);
 	}
-	const bits = narrowBits(dstK);
-	if (bits > 0) return numberOf(asN(!isSignedNarrowKind(dstK), bits, d.asExpr, loc), loc);
+	const bits = bitsOfKind(dstK);
+	if (bits > 0) return numberOf(asN(!isSignedKind(dstK), bits, d.asExpr, loc), loc);
 	if (dstK == TypeKind.Float32) return typedCall("msBigIntToFloat32", [d.asExpr], dstK, loc);
 	return numberOf(d.asExpr, loc);
 }
@@ -170,7 +164,7 @@ function bigConvert(inner: Node, srcK: TypeKind, dstK: TypeKind, loc: SourceLoca
 		let r = inner;
 		if (srcK == TypeKind.Int64) { r = asN(true, 64, inner, loc); }
 		else if (isFloatKind(srcK)) { r = asN(true, 64, bigIntOf(mathTrunc(inner, loc), loc), loc); }
-		else if (isSignedNarrowKind(srcK)) { r = asN(true, 64, bigIntOf(inner, loc), loc); }
+		else if (isSignedKind(srcK)) { r = asN(true, 64, bigIntOf(inner, loc), loc); }
 		else if (isNarrowIntKind(srcK)) { r = bigIntOf(inner, loc); }
 		else { return inner; }
 		r.nodeType = createPrimitive(dstK);
@@ -178,10 +172,10 @@ function bigConvert(inner: Node, srcK: TypeKind, dstK: TypeKind, loc: SourceLoca
 	}
 	if (!is64Kind(srcK)) return inner;
 	// 64-bit source into a narrower slot.
-	const bits = narrowBits(dstK);
+	const bits = bitsOfKind(dstK);
 	let r = inner;
 	if (bits > 0) {
-		r = numberOf(asN(!isSignedNarrowKind(dstK), bits, inner, loc), loc);
+		r = numberOf(asN(!isSignedKind(dstK), bits, inner, loc), loc);
 	} else if (dstK == TypeKind.Float32) {
 		r = makeCall(runtimeRef(srcK == TypeKind.Uint64 ? "msUint64ToFloat32" : "msInt64ToFloat32", loc), [inner], loc);
 	} else if (isFloatKind(dstK)) {
@@ -199,7 +193,7 @@ function binaryAsBigInt(node: Node, ctx: TransformContext): Node {
 	const d = node.data as BinaryExprData;
 	const leftT = d.left != null ? d.left.nodeType : null;
 	const rightT = d.right != null ? d.right.nodeType : null;
-	if (isAssignOp(d.operator)) return assignAsBigInt(node, ctx);
+	if (isEagerAssignOp(d.operator)) return assignAsBigInt(node, ctx);
 	if (isComparisonOp(d.operator)) {
 		if (is64Type(leftT) && isNarrowIntType(rightT)) { d.right = bigIntOf(d.right, node.location); return node; }
 		if (is64Type(rightT) && isNarrowIntType(leftT)) { d.left = bigIntOf(d.left, node.location); return node; }
@@ -374,49 +368,4 @@ function asTyped(node: Node, kind: TypeKind): Node {
 }
 
 // ===== Classifiers =====
-
-export function isFloatKind(kind: TypeKind): boolean {
-	return kind == TypeKind.Number || kind == TypeKind.Float64 || kind == TypeKind.Float32;
-}
-
-function isNarrowIntKind(kind: TypeKind): boolean {
-	return match (kind) {
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 => true,
-		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 => true,
-		_ => false,
-	};
-}
-
-function isSignedNarrowKind(kind: TypeKind): boolean {
-	return kind == TypeKind.Int8 || kind == TypeKind.Int16 || kind == TypeKind.Int32;
-}
-
-function narrowBits(kind: TypeKind): int32 {
-	return match (kind) {
-		TypeKind.Int8 | TypeKind.Uint8 => 8,
-		TypeKind.Int16 | TypeKind.Uint16 => 16,
-		TypeKind.Int32 | TypeKind.Uint32 => 32,
-		_ => 0,
-	};
-}
-
-function isAssignOp(op: string): boolean {
-	return match (op) {
-		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "**=" => true,
-		"<<=" | ">>=" | ">>>=" | "&=" | "|=" | "^=" => true,
-		_ => false,
-	};
-}
-
-function isComparisonOp(op: string): boolean {
-	return match (op) {
-		"===" | "!==" | "==" | "!=" => true,
-		"<" | "<=" | ">" | ">=" => true,
-		_ => false,
-	};
-}
-
-function isShiftOp(op: string): boolean {
-	return op == "<<" || op == ">>" || op == ">>>";
-}
 

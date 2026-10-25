@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: msPromiseAll
 // @serial
 // @stdout: ints 60000
 // @stdout: pts 6000

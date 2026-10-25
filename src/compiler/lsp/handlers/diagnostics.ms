@@ -1,21 +1,23 @@
 // LSP Handlers — Diagnostics, format violations, dependency recording, transitive diagnostics.
 
 import {
-	TransAmDb, dbParse, dbTypeCheck, dbGetCheckedProgram, getFileId, getFilePath,
+	TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, dbGetCheckedProgram, getFileId, getFilePath,
 	clearImportsFor, getTransitiveDependents, recordModuleImport
 } from "../../transam/index";
 import { detectCycle } from "../../transam/moduleDeps";
 import { writeStderr } from "std/io";
 import { platform, env, cwd } from "std/process";
 import { mkdir, writeFile } from "std/fs";
-import { lspNotification, lspFormatMessage, lspPathToUri, dirname } from "../protocol";
+import { lspNotification, lspFormatMessage, lspPathToUri, lspGetField, lspGetObjectField, lspGetArrayItems, lspGetNumberField, dirname } from "../protocol";
+import { parseJson } from "std/serialize/json/parser";
 import { lspFmtDiagnostic, lspFmtDiagnosticRange, lspFmtPublishDiagnostics } from "../format";
 import { sgCollectDiagnostics } from "../../../checker/suggest";
+import { addErrorRange, addErrorFullRange } from "../../../checker/context";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../../../ast/node";
 import { FormatOptions, defaultFormatOptions, applyFmtSection } from "../../fmt/options";
 import { loadFmtSection, loadLspSection, validateBuildConfig, LspSection } from "../../buildConfig";
 import { collectFreestandingAsync, freestandingAsyncLoc, FREESTANDING_ASYNC_MSG } from "../../../checker/freestanding";
-import { dbGetSource, lspEnsureFileLoaded } from "./shared";
+import { dbGetSource, lspEnsureFileLoaded, lspCharacter } from "./shared";
 import { dbResolveImport } from "../../transam/index";
 import { findProjectRoot } from "../../../utils/path";
 
@@ -25,31 +27,27 @@ import { findProjectRoot } from "../../../utils/path";
 // Per-workspace cache: project root → FormatOptions loaded from its build.ms.
 // Keyed by the directory containing build.ms (result of findProjectRoot), so
 // multi-root workspaces each get their own config without collisions.
-let _fmtOptionsCacheKeys: string[] = [];
-let _fmtOptionsCacheValues: FormatOptions[] = [];
+let _fmtOptionsCache: HashMap<string, FormatOptions> = new HashMap<string, FormatOptions>();
 
 // Get format options, loading from the project's build.ms if available.
 // The project root is found by walking up from `path` looking for build.ms.
 // Falls back to defaults when no build.ms is found. Results are cached per root.
 export function getFormatOptions(db: TransAmDb, path: string): FormatOptions {
 	const projectRoot = findProjectRoot(path);
-	for (let i = 0; i < _fmtOptionsCacheKeys.length; i = i + 1) {
-		if (_fmtOptionsCacheKeys[i] == projectRoot) return _fmtOptionsCacheValues[i];
-	}
+	const cached = _fmtOptionsCache.get(projectRoot);
+	if (cached != null) return cached;
 	let opts = defaultFormatOptions();
 	if (projectRoot != "") {
 		const fmtCfg = loadFmtSection(projectRoot);
 		opts = applyFmtSection(opts, fmtCfg);
 	}
-	_fmtOptionsCacheKeys.push(projectRoot);
-	_fmtOptionsCacheValues.push(opts);
+	_fmtOptionsCache.set(projectRoot, opts);
 	return opts;
 }
 
 // Reset cached format options (call when workspace changes or build.ms is saved).
 export function resetFormatOptions(): void {
-	_fmtOptionsCacheKeys = [];
-	_fmtOptionsCacheValues = [];
+	_fmtOptionsCache = new HashMap<string, FormatOptions>();
 }
 
 // ===== LSP Target from build.ms =====
@@ -62,14 +60,12 @@ export interface LspTarget {
 	gc: string;
 }
 
-let _lspTargetCacheKeys: string[] = [];
-let _lspTargetCacheValues: LspTarget[] = [];
+let _lspTargetCache: HashMap<string, LspTarget> = new HashMap<string, LspTarget>();
 
 export function getLspTarget(path: string): LspTarget {
 	const projectRoot = findProjectRoot(path);
-	for (let i = 0; i < _lspTargetCacheKeys.length; i = i + 1) {
-		if (_lspTargetCacheKeys[i] == projectRoot) return _lspTargetCacheValues[i];
-	}
+	const cached = _lspTargetCache.get(projectRoot);
+	if (cached != null) return cached;
 	let section: LspSection = { os: "", gc: "" };
 	if (projectRoot != "") {
 		section = loadLspSection(projectRoot);
@@ -79,14 +75,12 @@ export function getLspTarget(path: string): LspTarget {
 		? section.gc
 		: ((os == "bare" || os == "solana") ? "manual" : "orc");
 	const target: LspTarget = { os, gc };
-	_lspTargetCacheKeys.push(projectRoot);
-	_lspTargetCacheValues.push(target);
+	_lspTargetCache.set(projectRoot, target);
 	return target;
 }
 
 export function resetLspTargetCache(): void {
-	_lspTargetCacheKeys = [];
-	_lspTargetCacheValues = [];
+	_lspTargetCache = new HashMap<string, LspTarget>();
 }
 
 // ===== Format Violation Check =====
@@ -97,7 +91,8 @@ export function splitLines(s: string): string[] {
 	let start = 0;
 	for (let i = 0; i < s.byteLength; i = i + 1) {
 		if (s[i] == "\n") {
-			lines.push(s.slice(start, i));
+			const end = i > start && s[i - 1] == "\r" ? i - 1 : i;
+			lines.push(s.slice(start, end));
 			start = i + 1;
 		}
 	}
@@ -148,7 +143,7 @@ export interface LineIndent {
 	hasSpace: boolean;
 	hasTab: boolean;
 	isMixed: boolean;
-	trailStart: number;
+	trailStart: int32;
 }
 
 export function detectLineIndent(line: string): LineIndent {
@@ -185,12 +180,12 @@ function checkFormatViolations(db: TransAmDb, path: string): string[] {
 	const lines = splitLines(source);
 
 	// Strip trailing empty line from split (artifact of trailing newline)
-	let lineCount = lines.length;
+	let lineCount: int32 = lines.length;
 	while (lineCount > 0 && lines[lineCount - 1] == "") {
 		lineCount = lineCount - 1;
 	}
 
-	for (let i = 0; i < lineCount; i = i + 1) {
+	for (let i: int32 = 0; i < lineCount; i++) {
 		const line = lines[i];
 		if (line.length == 0) continue;
 
@@ -235,24 +230,20 @@ function lspBasename(path: string): string {
 
 export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): string {
 	const ctx = dbTypeCheck(db, path);
+	const source = dbGetSource(db, path);
 
-	let diagArray = "[";
-	let diagCount = 0;
+	const entries: string[] = [];
 
 	if (ctx != null) {
-		const diags = sgCollectDiagnostics(ctx);
-		for (let i = 0; i < diags.length; i = i + 1) {
-			if (diagCount > 0) diagArray = diagArray + ",";
-			const d = diags[i];
+		for (const d of sgCollectDiagnostics(ctx)) {
 			const line = d.line - 1;
-			// Convert 1-based checker columns to 0-based LSP columns
-			const col = d.column > 0 ? d.column - 1 : 0;
+			const col = lspCharacter(source, d.line, d.column);
 			const endLine = d.endLine > 0 ? d.endLine - 1 : line;
-			const endCol = d.endColumn > d.column ? d.endColumn - 1 : col + 1;
-			diagArray = diagArray + lspFmtDiagnosticRange(
+			const hasEnd = d.endColumn > 0 && (endLine > line || d.endColumn > d.column);
+			const endCol = hasEnd ? lspCharacter(source, endLine + 1, d.endColumn) : col + 1;
+			entries.push(lspFmtDiagnosticRange(
 				line, col, endLine, endCol, d.severity, d.message, "metascript", 0, d.tags
-			);
-			diagCount = diagCount + 1;
+			));
 		}
 	}
 
@@ -265,16 +256,14 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 		const fsProgram = dbGetCheckedProgram(db, path);
 		if (fsProgram != null) {
 			const fsHits = collectFreestandingAsync(fsProgram);
-			for (let fi = 0; fi < fsHits.length; fi = fi + 1) {
-				const loc = freestandingAsyncLoc(fsHits[fi]);
+			for (const hit of fsHits) {
+				const loc = freestandingAsyncLoc(hit);
 				if (loc == null) continue;
 				const fsLine = loc.line > 0 ? loc.line - 1 : 0;
 				const fsCol = loc.column > 0 ? loc.column - 1 : 0;
-				if (diagCount > 0) diagArray = diagArray + ",";
-				diagArray = diagArray + lspFmtDiagnostic(
+				entries.push(lspFmtDiagnostic(
 					fsLine, fsCol, fsCol + 1, 2, FREESTANDING_ASYNC_MSG, "metascript", 0, 0
-				);
-				diagCount = diagCount + 1;
+				));
 			}
 		}
 	}
@@ -284,8 +273,8 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 	if (circProgram != null && circProgram.kind == NodeKind.Program) {
 		const circPd = circProgram.data as ProgramData;
 		const circFileId = getFileId(db.fileInput, path);
-		for (let ci = 0; ci < circPd.programStmts.length; ci = ci + 1) {
-			let circStmt = circPd.programStmts[ci];
+		for (const stmt of circPd.programStmts) {
+			let circStmt = stmt;
 			if (circStmt.kind == NodeKind.ExportDecl) {
 				const ced = circStmt.data as ExportDeclData;
 				circStmt = ced.exportedDecl;
@@ -298,20 +287,16 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 					if (circTargetId >= 0 && circFileId >= 0) {
 						const cycle = detectCycle(db.moduleDeps, circFileId, circTargetId);
 						if (cycle.length > 0) {
-							// Build cycle path string
-							let cyclePath = "";
-							for (let cpi = 0; cpi < cycle.length; cpi = cpi + 1) {
-								if (cpi > 0) cyclePath = cyclePath + " -> ";
-								const cp = getFilePath(db.fileInput, cycle[cpi]);
-								cyclePath = cyclePath + lspBasename(cp);
+							const hops: string[] = [];
+							for (const member of cycle) {
+								hops.push(lspBasename(getFilePath(db.fileInput, member)));
 							}
-							cyclePath = cyclePath + " -> " + lspBasename(path);
+							hops.push(lspBasename(path));
+							const cyclePath = hops.join(" -> ");
 							const circLine = circStmt.location != null ? circStmt.location.line - 1 : 0;
-							if (diagCount > 0) diagArray = diagArray + ",";
-							diagArray = diagArray + lspFmtDiagnostic(
+							entries.push(lspFmtDiagnostic(
 								circLine, 0, 1, 2, "Circular import: " + cyclePath, "metascript", 0, 0
-							);
-							diagCount = diagCount + 1;
+							));
 						}
 					}
 				}
@@ -319,31 +304,21 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 		}
 	}
 
-	// Per-line format violation diagnostics — hint severity (4)
-	// Per-line format violation diagnostics — hint severity (4)
-	const fmtDiags = checkFormatViolations(db, path);
-	for (let fi = 0; fi < fmtDiags.length; fi = fi + 1) {
-		if (diagCount > 0) diagArray = diagArray + ",";
-		diagArray = diagArray + fmtDiags[fi];
-		diagCount = diagCount + 1;
+	for (const violation of checkFormatViolations(db, path)) {
+		entries.push(violation);
 	}
 
 	// build.ms validation warnings (entry path not found, etc.)
 	if (path.length > 9 && path.slice(path.length - 9, path.length) == "/build.ms") {
 		const buildSource = dbGetSource(db, path);
 		const buildWarnings = validateBuildConfig(dirname(path), buildSource);
-		for (let bw = 0; bw < buildWarnings.length; bw = bw + 1) {
-			if (diagCount > 0) diagArray = diagArray + ",";
-			const w = buildWarnings[bw];
+		for (const w of buildWarnings) {
 			const wLine = w.line > 0 ? w.line - 1 : 0;
-			diagArray = diagArray + lspFmtDiagnostic(wLine, 0, 999, 2, w.message, "msc", 0, 0);
-			diagCount = diagCount + 1;
+			entries.push(lspFmtDiagnostic(wLine, 0, 999, 2, w.message, "msc", 0, 0));
 		}
 	}
 
-	diagArray = diagArray + "]";
-
-	return lspFmtPublishDiagnostics(uri, diagArray);
+	return lspFmtPublishDiagnostics(uri, "[" + entries.join(",") + "]");
 }
 
 // ===== Dependency Recording =====
@@ -398,8 +373,8 @@ export function buildTransitiveDiagnosticsWire(db: TransAmDb, path: string): str
 	if (deps.length == 0) return "";
 
 	let result = "";
-	for (let i = 0; i < deps.length; i = i + 1) {
-		const depPath = getFilePath(db.fileInput, deps[i]);
+	for (const dep of deps) {
+		const depPath = getFilePath(db.fileInput, dep);
 		if (depPath == "") continue;
 		const depUri = lspPathToUri(depPath);
 		const diagJson = buildDiagnosticsJson(depUri, db, depPath);
@@ -411,6 +386,11 @@ export function buildTransitiveDiagnosticsWire(db: TransAmDb, path: string): str
 		result = result + lspFormatMessage(notif);
 	}
 	return result;
+}
+
+export function recordPublishedDiagnostics(path: string, diagJson: string): string {
+	_lastDiagCache.set(path, diagJson);
+	return diagJson;
 }
 
 export function forgetPublishedDiagnostics(path: string): void {
@@ -457,4 +437,82 @@ test "getLspTarget defaults to host + orc without section" {
 	const t = getLspTarget(dir + "/main.ms");
 	assert t.os == platform;
 	assert t.gc == "orc";
+}
+
+test "synthetic checker spans keep both UTF-16 endpoints" {
+	const sources = ["/*abcdef*/\n/*ghijkl*/", "/*é😀*/\n/*日😀*/", "/*é😀*/\r\n/*日😀*/"];
+	const characters = [8, 5, 5];
+	const messages = ["same-line boundary", "multiline boundary"];
+	const path = "/diagnostic-span-adapter.ms";
+	const uri = "file:///diagnostic-span-adapter.ms";
+	for (let i = 0; i < sources.length; i++) {
+		const db = createTransAmDb(8);
+		dbSetFileText(db, path, sources[i]);
+		const ctx = dbTypeCheck(db, path);
+		assert ctx.errors.length == 0;
+		addErrorRange(ctx, messages[0], 1, 3, 9);
+		addErrorFullRange(ctx, messages[1], 1, 9, 2, 3);
+		const response = buildDiagnosticsJson(uri, db, path);
+		assert parseJson(response).ok;
+		assert lspGetField(response, "uri") == uri;
+		const items = lspGetArrayItems(lspGetObjectField(response, "diagnostics"));
+		assert items.length == 2;
+		for (let j = 0; j < items.length; j++) {
+			assert lspGetField(items[j], "message") == messages[j];
+			assert lspGetField(items[j], "source") == "metascript";
+			assert lspGetNumberField(items[j], "severity") == 1;
+			const range = lspGetObjectField(items[j], "range");
+			const start = lspGetObjectField(range, "start");
+			const end = lspGetObjectField(range, "end");
+			const expectedStart = j == 0 ? 2 : characters[i];
+			const expectedEnd = j == 0 ? characters[i] : 2;
+			assert lspGetNumberField(start, "line") == 0;
+			assert lspGetNumberField(start, "character") == expectedStart;
+			assert lspGetNumberField(end, "line") == j;
+			assert lspGetNumberField(end, "character") == expectedEnd;
+		}
+	}
+}
+
+function assertTrailingWhitespaceDiagnostic(eol: string): void {
+	const path = "/fmt/diagnostic.ms";
+	const uri = "file:///fmt/diagnostic.ms";
+	const db = createTransAmDb(8);
+	dbSetFileText(db, path, "export const value = \"é😀\";   " + eol);
+	const response = buildDiagnosticsJson(uri, db, path);
+	if (!parseJson(response).ok || lspGetField(response, "uri") != uri) throw new Error("Invalid diagnostics envelope");
+	const items = lspGetArrayItems(lspGetObjectField(response, "diagnostics"));
+	if (items.length != 1) throw new Error("Expected one trailing-whitespace diagnostic: " + response);
+	const item = items[0];
+	if (lspGetField(item, "message") != "Remove trailing whitespace" || lspGetField(item, "source") != "metascript-fmt" || lspGetNumberField(item, "severity") != 4) throw new Error("Wrong formatting diagnostic: " + item);
+	const range = lspGetObjectField(item, "range");
+	const start = lspGetObjectField(range, "start");
+	const end = lspGetObjectField(range, "end");
+	if (lspGetNumberField(start, "line") != 0 || lspGetNumberField(start, "character") != 27 || lspGetNumberField(end, "line") != 0 || lspGetNumberField(end, "character") != 30) throw new Error("Wrong whitespace UTF-16 range: " + item);
+}
+
+test "LF line content preserves spaces and trailing blank lines" {
+	const lines = splitLines("é😀   \n日\n\n");
+	assert lines.length == 4;
+	assert lines[0] == "é😀   ";
+	assert lines[1] == "日";
+	assert lines[2] == "";
+	assert lines[3] == "";
+}
+
+test "CRLF line content excludes terminators but preserves spaces and blank lines" {
+	const lines = splitLines("é😀   \r\n日\r\n\r\n");
+	assert lines.length == 4;
+	assert lines[0] == "é😀   ";
+	assert lines[1] == "日";
+	assert lines[2] == "";
+	assert lines[3] == "";
+}
+
+test "LF trailing whitespace diagnostic excludes the line terminator" {
+	assertTrailingWhitespaceDiagnostic("\n");
+}
+
+test "CRLF trailing whitespace diagnostic excludes the line terminator" {
+	assertTrailingWhitespaceDiagnostic("\r\n");
 }

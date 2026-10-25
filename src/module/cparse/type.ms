@@ -49,6 +49,7 @@ export interface CType {
 	isComplete: boolean;
 	isPacked: boolean;
 	isFlexible: boolean;
+	layoutKnown: boolean;
 	// Typedef name — when this type was resolved from a typedef, stores the name.
 	// e.g., "msString" for typedef struct { ... } msString;
 	typedefName: string;
@@ -90,6 +91,7 @@ function newType(kind: CTypeKind, size: int32, align: int32, signed: boolean): C
 		isComplete: true,
 		isPacked: false,
 		isFlexible: false,
+		layoutKnown: true,
 		typedefName: "",
 		origin: null as unknown as CType,
 	};
@@ -254,6 +256,7 @@ export function copyType(ty: CType): CType {
 	t.isComplete = ty.isComplete;
 	t.isPacked = ty.isPacked;
 	t.isFlexible = ty.isFlexible;
+	t.layoutKnown = ty.layoutKnown;
 	t.origin = ty;
 	return t;
 }

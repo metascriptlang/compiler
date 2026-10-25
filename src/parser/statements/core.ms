@@ -8,7 +8,7 @@ import { isGenericCallAhead } from "../typeAnnotation";
 import { getParserDefines } from "../context";
 import { isDefined, definedValue } from "../../compiler/defines";
 import { parseIntStr } from "../../utils/string";
-import { parseExpressionFromState, registerBlockParser } from "../expressions/core";
+import { parseExpressionFromState } from "../expressions/core";
 import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt, parseUnreachableStmt, parseTestDecl, parseAssertStmt } from "./control";
 import { parseVariableDecl, parseStaticVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseStructDecl, parseClassDecl, parseActorDecl, parseMacroInvocation, parseExternDecl, parseMacroDecl, parseConverterDecl, distinctModifierRemoved , parseObjectPattern, parseArrayPattern } from "./declaration";
 import { parseThrowStmt, parseTryCatchStmt } from "./errorHandling";
@@ -479,7 +479,6 @@ export function registerCoreParsers(): void {
 	registerStmtBlockParser(parseBlockStmt);
 	registerStmtExprParser(parseExpressionFromState);
 	registerStateProgramParser(parseProgram);
-	registerBlockParser(parseBlockStmt);
 	registerPatternParsers(parseObjectPattern, parseArrayPattern);
 }
 

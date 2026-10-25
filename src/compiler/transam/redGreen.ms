@@ -28,26 +28,24 @@ import { TaFileInputStore, createFileInputStore, setFileText, getFileHash } from
 import { TaModuleDepGraph, createModuleDepGraph, getTransitiveDependents, recordModuleImport } from "./moduleDeps";
 
 
-// ===== Callback Registration for Query Executor =====
-// avoids function-type parameters (closure codegen issues)
-
-let registeredExecutor: number = 0;  // executor fn slot id (hash-keyed)
-
-type TaExecutorFn = (queryKind: int32, fileId: int32) => number;
-
-// Internal module-level variable for executor function
-let _executorKind: int32 = 0;
-let _executorFileId: int32 = 0;
-let _executorResult: number = 0;
-let _executorCalled: boolean = false;
-
-export function registerExecutorResult(result: number): void {
-	_executorResult = result;
-}
-
 // ===== tryMarkGreen — can we use the cached value? =====
 
 export function tryMarkGreen(
+	cache: TaCacheStore,
+	fileInput: TaFileInputStore,
+	key: TaQueryKey,
+	currentRevision: int32
+): boolean {
+	const green = markGreen(cache, fileInput, key, currentRevision);
+	if (green) {
+		cache.hits += 1;
+	} else {
+		cache.misses += 1;
+	}
+	return green;
+}
+
+function markGreen(
 	cache: TaCacheStore,
 	fileInput: TaFileInputStore,
 	key: TaQueryKey,
@@ -97,7 +95,7 @@ export function tryMarkGreen(
 		}
 
 		// Recursively verify dependency
-		if (!tryMarkGreen(cache, fileInput, dep.depKey, currentRevision)) {
+		if (!markGreen(cache, fileInput, dep.depKey, currentRevision)) {
 			entry.state = TaQueryState.Red;
 			return false;
 		}
@@ -149,6 +147,9 @@ export function executeQueryWith(
 		cachePut(cache, newEntry);
 		entry = cacheGet(cache, key);
 	}
+	const kind = key.queryKind as int32;
+	while (cache.recomputed.length <= kind) cache.recomputed.push(0);
+	cache.recomputed[kind] += 1;
 	entry.state = TaQueryState.Green;
 	entry.computedAt = currentRevision;
 	entry.verifiedAt = currentRevision;
@@ -233,6 +234,7 @@ test "file dependency hash mismatch -> false" {
 	entry.dependencies = makeTestDeps(0, 999);
 	cachePut(cache, entry);
 	assert !tryMarkGreen(cache, fileInput, parseKey, 1);
+	assert cache.hits == 0 && cache.misses == 1;
 }
 
 test "file dependency hash match -> true" {
@@ -247,6 +249,7 @@ test "file dependency hash match -> true" {
 	entry.dependencies = makeTestDeps(0, actualHash);
 	cachePut(cache, entry);
 	assert tryMarkGreen(cache, fileInput, parseKey, 1);
+	assert cache.hits == 1 && cache.misses == 0;
 }
 
 test "stores entry as Green" {
@@ -261,6 +264,8 @@ test "stores entry as Green" {
 	assert entry.state == TaQueryState.Green;
 	assert entry.computedAt == 1;
 	assert entry.outputHash == 42;
+	assert cache.recomputed[TaQueryKind.Parse as int32] == 1;
+	assert cache.recomputed.length == (TaQueryKind.Parse as int32) + 1;
 }
 
 test "collects dependencies from frame" {

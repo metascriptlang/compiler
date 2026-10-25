@@ -1,36 +1,34 @@
 # Project Structure
 
-```
-src/
-  index.ms                          -- entry point + smoke tests
-  ast/     node.ms                  -- NodeKind(37), NodeData, Node, 50+ type aliases
-           printer.ms               -- debug printer (exhaustive match)
-  lexer/   token.ms                 -- TokenKind(80+), identToKeyword
-           scanner.ms               -- core lexer (char scanning)
-           lexer.ms                 -- lex() main function
-           state.ms / chars.ms      -- lexer state machine, char classification
-  parser/  context.ms               -- ParserState, peek, advance
-           typeAnnotation.ms        -- type annotation parser
-           expressions/core.ms      -- parseExpression (Pratt precedence)
-           expressions/call.ms      -- call, member access, array access
-           expressions/arrow.ms     -- arrow functions
-           expressions/object.ms    -- object/array literals
-           expressions/match.ms     -- match expressions
-           statements/core.ms       -- parseProgram, parseBlock, parseStatement
-           statements/declaration.ms -- functions, classes, interfaces, enums, imports
-           statements/control.ms    -- loops, break, continue, switch
-           statements/errorHandling.ms -- try/catch/finally, throw
-           statements/callbacks.ms  -- callback injection (breaks circular imports)
-  checker/ types.ms                 -- TypeKind(27), flat Type interface, constructors
-           symbol.ms                -- SymbolTable, Scope chain, Symbol
-           context.ms               -- CheckerContext, error collection
-           collectPass.ms           -- Pass 1: collect declarations
-           resolvePass.ms           -- Pass 2: resolve type annotations
-           checkPass.ms             -- Pass 3: type inference + validation
-           compat.ms                -- type compatibility (isAssignable)
-  utils/   string.ms                -- string utilities (no indexOf/includes)
-  diagnostics/ diagnostics.ms       -- error formatting
-```
+One line per directory under `src/`: what it owns and where a reader enters it. Phase order and
+contracts are in [`PIPELINE.md`](PIPELINE.md); the files inside a directory are not listed here
+because `ls` is current.
+
+| Directory | Owns | Enter at |
+|---|---|---|
+| `src/index.ms` | CLI dispatch only; also imports the guard and position tests so test discovery finds them | top level |
+| `ast/` | node definitions re-exported from `std/meta/node`, the child visitor (`visitor.ms`: `forEachChild`, `mapChildren`, `anyChild`/`anyDescendant`), the debug dump (`printer.ms`), `fieldspec.ms` (the one per-kind field spec), `operators.ms` and `shape.ms` (operator and node-shape predicates the transform passes share) and the guards that keep the child tables whole | `index.ms` |
+| `lexer/` | source text to tokens; `TokenKind` lives in `std/meta/token` | `lexer.ms` `lex` |
+| `parser/` | recursive descent + Pratt precedence; `statements/` and `expressions/` split by node family | `statements/core.ms` `parseProgram` |
+| `binder/` | flow graph the checker's narrowing reads | `index.ms` `bindFlowGraph` |
+| `checker/` | the three passes (collect, resolve, check), flow narrowing, and `suggest.ms`, the position queries the LSP calls | `orchestrator.ms` `checkModuleGraph` |
+| `monomorphize/` | mangled names for generic instances; instances themselves are made by the checker (`checker/instantiate.ms`) | `registry.ms` `monoInstanceName` |
+| `transform/` | AST lowering passes, grouped `lowering/`, `desugar/`, `coercion/`, `analysis/` (dead code and declaration sweeps); the C-only tail is `native/`, the Raiser list is `raiserLowering.ms`. Shared parts: `walker.ms` (1:1 walk), `blockExpand.ms` (1:N statement walk), `walkEffects.ms` (evaluation order), `context.ms`, `util.ms` (node builders), `place.ms`, `numKinds.ms`, `maybeCarrier.ms`; `testUtil.ms` serves the inline tests | `index.ms` `transformProgram`; `native/index.ms` `transformForNative`; `raiserLowering.ms` `transformForRaiser` |
+| `analyzer/` | DRC injection (C backend only): `inject.ms` places the lifecycle calls, `classify.ms` decides what a type needs, `scope.ms` tracks cleanup per scope, `cursors.ms` finds borrow-only variables, `cfg.ms` and `alias.ms` answer last-read and aliasing, `optimize.ms` removes redundant pairs ([`CLAUDE.md`](../src/analyzer/CLAUDE.md)) | `index.ms` `analyzeProgram` |
+| `codegen/c/` | C emitter, one module of C per source module | `index.ms` `generateCModule` |
+| `codegen/js/` | JS emitter | `jsgen.ms` `generateJS` |
+| `codegen/raiser/` | AST to Raiser bytecode | `rgen.ms` `generateRaiser` |
+| `raiser/` | the bytecode VM: values, heaps, scheduler, host registry | `context.ms` `createContext` / `execute` |
+| `module/` | import resolution, the module graph and loader; `cimport/` and `cparse/` turn a C header into module source | `loader.ms` `loadModuleGraph` |
+| `embed/` | the embedding API over the Raiser VM (create an interpreter, evaluate a module, call a routine) | `index.ms` `createInterpreter` |
+| `compiler/` | the commands behind `msc`: `compile.ms` (build, run, test), `commands.ms` (check, dump, fmt, ...), options, build config, C compiler and cache | `src/index.ms` |
+| `compiler/fmt/` | the formatter | `printer/index.ms` `formatNode` |
+| `compiler/lsp/` | the language server ([`CLAUDE.md`](../src/compiler/lsp/CLAUDE.md)) | `server.ms` `lspRunServer` |
+| `compiler/meta/` | macro expansion and `@comptime` evaluation over the Raiser VM, and the host bridge table | `expand.ms`, `comptime.ms`, `hostTable.ms` |
+| `compiler/package/` | `msc add` / `install` / `publish` / `login` and the registry client ([`PACKAGE.md`](PACKAGE.md)) | `index.ms` `runPackageCommand` |
+| `compiler/transam/` | the incremental query engine ([`TRANSAM.md`](TRANSAM.md)) | `index.ms` |
+| `utils/` | compiler-side helpers that import only `std/*` (colour, paths, command line, link state, string and source-line helpers) | per file |
+| `test/` | the suite, the corpus, the guards and the lane runners ([`CLAUDE.md`](../src/test/CLAUDE.md)) | `index.ms` |
 
 ## Architecture Patterns
 
@@ -40,19 +38,13 @@ itself. It reads target `.ms`/`.cms` files as **raw strings** and parses them
 with its own MetaScript parser. When debugging parse errors on target files
 (e.g. prelude `.cms` files), the issue is always in our parser (`src/parser/`).
 
-### Hub re-exports
-Each module directory has `index.ms` that re-exports the public API. Import
-directly or from the hub.
-
 ### Callback injection (circular import breaker)
-`callbacks.ms` holds function pointers. `core.ms` registers real
-implementations at module load. Sub-parsers import from `callbacks.ms` only —
-no cycles.
+Four `callbacks.ms` files hold function slots that the owning module registers at load;
+[`PIPELINE.md`](PIPELINE.md) §Module dependency rules lists them and the trap.
 
-### Flat Type interface (not discriminated union)
-Avoids codegen bugs with self-referencing anonymous structs. All fields
-present; unused fields empty/null. Fields: `kind`, `typeName`, `typeNames`,
-`typeChildren`, `typeReturn`, `typeExtra`, `typeFlags`.
+### Flat Type class (not discriminated union)
+`Type` (`std/meta/node.ms`) is one class: every field is present and the unused ones are
+empty or null. This avoids codegen bugs with self-referencing anonymous structs.
 
 ### Named-field AST (not sons[] array)
 The standard reference uses a generic `sons: seq[PNode]` array with index
@@ -71,7 +63,5 @@ construction sites, while `sons[]` allows appending freely. We accept this
 cost for the safety and clarity benefits.
 
 **Type annotations as strings**: type annotations (`declType`,
-`fnReturnType`, etc.) are stored as strings for simplicity. Positioned type
-AST is stored separately via `Node.typeExpr` for LSP symbol recording — the
-string path handles type resolution, the Node path handles position tracking.
-This avoids modifying all 18 NodeData type-annotation fields.
+`fnReturnType`, etc.) are stored as strings. The positioned type AST rides beside
+them in `Node.typeExpr` / `typeExprs` (`std/meta/node.ms`) for LSP symbol recording.

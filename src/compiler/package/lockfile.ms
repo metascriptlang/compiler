@@ -4,13 +4,15 @@
 
 import { exists, readFile, writeFile } from "std/fs";
 import { parseJson, jsonObject, jsonString, jsonNumber, stringify, stringifyPretty } from "std/core/json";
-import { JsonValue, JsonKind } from "std/core/json";
+import { JsonValue, JsonKind, getDynamicField, asNumber, asString } from "std/core/json";
+import { depsOf } from "./json";
+import { SourceKind } from "./version";
 
 // --- Types ---
 
 export interface LockEntry {
 	key: string;          // "name@version" or "alias@git:url@sha"
-	source: string;       // "registry" or "git"
+	source: SourceKind;
 	version: string;      // "1.2.3" (registry) or "" (git)
 	integrity: string;    // "sha256-..." or "" (not yet downloaded)
 	url: string;          // "" (registry) or "github.com/owner/repo" (git)
@@ -21,121 +23,105 @@ export interface LockEntry {
 }
 
 export interface Lockfile {
-	version: number;
+	version: int32;
 	entries: LockEntry[];
-	valid: boolean;
+}
+
+export enum LockfileError {
+	Missing,
+	Unreadable,
+	Empty,
+	BadJson,
+	BadVersion,
+	BadShape,
+	Write,
+}
+
+export function lockfileErrorMessage(e: LockfileError): string {
+	return match (e) {
+		LockfileError.Missing => "msc.lock not found",
+		LockfileError.Unreadable => "msc.lock could not be read",
+		LockfileError.Empty => "msc.lock is empty",
+		LockfileError.BadJson => "msc.lock is not valid JSON",
+		LockfileError.BadVersion => "msc.lock has no supported version (expected \"version\": 1)",
+		LockfileError.BadShape => "msc.lock does not have the expected structure",
+		LockfileError.Write => "failed to write msc.lock",
+	};
 }
 
 // --- Read ---
 
-function getStr(obj: JsonValue, field: string): string {
-	if (obj == null || obj.kind != JsonKind.Object) return "";
-	let i = 0;
-	while (i < obj.keys.length) {
-		if (obj.keys[i] == field && i < obj.values.length) {
-			const v = obj.values[i];
-			if (v != null && v.kind == JsonKind.String) return v.strVal;
-			if (v != null && v.kind == JsonKind.Number) return v.numVal.toString();
-		}
-		i = i + 1;
-	}
-	return "";
+function textField(obj: JsonValue, field: string): string {
+	const v = obj.getDynamicField(field);
+	return v.kind == JsonKind.Number ? v.numVal.toString() : v.asString();
 }
 
-function getNum(obj: JsonValue, field: string): number {
-	if (obj == null || obj.kind != JsonKind.Object) return -1;
-	let i = 0;
-	while (i < obj.keys.length) {
-		if (obj.keys[i] == field && i < obj.values.length) {
-			const v = obj.values[i];
-			if (v != null && v.kind == JsonKind.Number) return v.numVal;
-			if (v != null && v.kind == JsonKind.Int) return v.intVal as number;
-		}
-		i = i + 1;
-	}
-	return -1;
+function sourceKindFor(name: string): Result<SourceKind, LockfileError> {
+	return match (name) {
+		"" | "registry" => Result.ok(SourceKind.Registry),
+		"git" => Result.ok(SourceKind.Git),
+		_ => Result.err(LockfileError.BadShape),
+	};
 }
 
-function getObj(obj: JsonValue, field: string): JsonValue {
-	if (obj == null || obj.kind != JsonKind.Object) return null as unknown as JsonValue;
-	let i = 0;
-	while (i < obj.keys.length) {
-		if (obj.keys[i] == field && i < obj.values.length) {
-			return obj.values[i];
-		}
-		i = i + 1;
-	}
-	return null as unknown as JsonValue;
+function sourceName(kind: SourceKind): string {
+	return match (kind) {
+		SourceKind.Registry => "registry",
+		SourceKind.Git => "git",
+	};
 }
 
-function parseDeps(depsObj: JsonValue): { keys: string[], values: string[] } {
-	const keys: string[] = [];
-	const values: string[] = [];
-	if (depsObj == null || depsObj.kind != JsonKind.Object) return { keys, values };
-	let i = 0;
-	while (i < depsObj.keys.length) {
-		keys.push(depsObj.keys[i]);
-		if (i < depsObj.values.length) {
-			const el = depsObj.values[i];
-			if (el != null && el.kind == JsonKind.String) {
-				values.push(el.strVal);
-			} else {
-				values.push("");
-			}
-		} else {
-			values.push("");
-		}
-		i = i + 1;
-	}
-	return { keys, values };
-}
-
-export function readLockfile(path: string): Lockfile {
-	const invalid: Lockfile = { version: 0, entries: [], valid: false };
-	if (!exists(path)) return invalid;
-	const content = try readFile(path) catch "";
-	if (content == "") return invalid;
+export function parseLockfile(content: string): Result<Lockfile, LockfileError> {
+	if (content == "") return Result.err(LockfileError.Empty);
 	const parsed = parseJson(content);
-	if (!parsed.ok) return invalid;
+	if (!parsed.ok) return Result.err(LockfileError.BadJson);
 	const root = parsed.value;
-	if (root == null || root.kind != JsonKind.Object) return invalid;
+	if (root == null || root.kind != JsonKind.Object) return Result.err(LockfileError.BadShape);
 
-	const ver = getNum(root, "version");
-	if (ver != 1) return invalid;
+	if (root.getDynamicField("version").asNumber(-1) != 1) {
+		return Result.err(LockfileError.BadVersion);
+	}
 
-	const pkgsObj = getObj(root, "packages");
-	if (pkgsObj == null || pkgsObj.kind != JsonKind.Object) return invalid;
+	const pkgsObj = root.getDynamicField("packages");
+	if (pkgsObj.kind != JsonKind.Object) {
+		return Result.err(LockfileError.BadShape);
+	}
 
 	const entries: LockEntry[] = [];
-	let pi = 0;
-	while (pi < pkgsObj.keys.length) {
-		const key = pkgsObj.keys[pi];
-		const entryObj = pi < pkgsObj.values.length ? pkgsObj.values[pi] : null as unknown as JsonValue;
-		if (entryObj != null && entryObj.kind == JsonKind.Object) {
-			const source = getStr(entryObj, "source");
-			const deps = parseDeps(getObj(entryObj, "deps"));
-			const entry: LockEntry = {
-				key,
-				source: source != "" ? source : "registry",
-				version: getStr(entryObj, "version"),
-				integrity: getStr(entryObj, "integrity"),
-				url: getStr(entryObj, "url"),
-				gitRef: getStr(entryObj, "ref"),
-				commit: getStr(entryObj, "commit"),
-				depKeys: deps.keys,
-				depValues: deps.values,
-			};
-			entries.push(entry);
+	for (let pi = 0; pi < pkgsObj.keys.length; pi++) {
+		if (pi >= pkgsObj.values.length) return Result.err(LockfileError.BadShape);
+		const entryObj = pkgsObj.values[pi];
+		if (entryObj == null || entryObj.kind != JsonKind.Object) {
+			return Result.err(LockfileError.BadShape);
 		}
-		pi = pi + 1;
+		const source = try sourceKindFor(textField(entryObj, "source"));
+		const deps = depsOf(entryObj.getDynamicField("deps"));
+		entries.push({
+			key: pkgsObj.keys[pi],
+			source,
+			version: textField(entryObj, "version"),
+			integrity: textField(entryObj, "integrity"),
+			url: textField(entryObj, "url"),
+			gitRef: textField(entryObj, "ref"),
+			commit: textField(entryObj, "commit"),
+			depKeys: deps.keys,
+			depValues: deps.values,
+		});
 	}
 
-	return { version: 1, entries, valid: true };
+	return Result.ok({ version: 1, entries });
+}
+
+export function readLockfile(path: string): Result<Lockfile, LockfileError> {
+	if (!exists(path)) return Result.err(LockfileError.Missing);
+	const content = readFile(path);
+	if (!content.ok) return Result.err(LockfileError.Unreadable);
+	return parseLockfile(content.value);
 }
 
 // --- Write ---
 
-export function writeLockfile(path: string, lock: Lockfile): boolean {
+export function writeLockfile(path: string, lock: Lockfile): Result<void, LockfileError> {
 	// Build JSON manually via jsonObject
 	const pkgKeys: string[] = [];
 	const pkgValues: JsonValue[] = [];
@@ -147,9 +133,9 @@ export function writeLockfile(path: string, lock: Lockfile): boolean {
 		const eValues: JsonValue[] = [];
 
 		eKeys.push("source");
-		eValues.push(jsonString(entry.source));
+		eValues.push(jsonString(sourceName(entry.source)));
 
-		if (entry.source == "registry") {
+		if (entry.source == SourceKind.Registry) {
 			eKeys.push("version");
 			eValues.push(jsonString(entry.version));
 		}
@@ -159,7 +145,7 @@ export function writeLockfile(path: string, lock: Lockfile): boolean {
 			eValues.push(jsonString(entry.integrity));
 		}
 
-		if (entry.source == "git") {
+		if (entry.source == SourceKind.Git) {
 			eKeys.push("url");
 			eValues.push(jsonString(entry.url));
 			eKeys.push("ref");
@@ -188,18 +174,18 @@ export function writeLockfile(path: string, lock: Lockfile): boolean {
 	const rootObj = jsonObject(rootKeys, rootValues);
 
 	const json = stringifyPretty(rootObj, 2);
-	const result = writeFile(path, json);
-	return result.ok;
+	if (!writeFile(path, json).ok) return Result.err(LockfileError.Write);
+	return Result.ok(null);
 }
 
 // --- Helpers ---
 
-export function findEntry(lock: Lockfile, name: string, version: string): LockEntry {
+export function findEntry(lock: Lockfile, name: string, version: string): LockEntry | null {
 	const key = name + "@" + version;
 	for (const entry of lock.entries) {
 		if (entry.key == key) return entry;
 	}
-	return null as unknown as LockEntry;
+	return null;
 }
 
 // Extract the package name from a lock entry key.
@@ -254,9 +240,87 @@ export function entryName(key: string): string {
 
 // --- Inline tests ---
 
-test "readLockfile empty file" {
+test "a lockfile that does not exist is Missing" {
 	const lock = readLockfile("/nonexistent/path/msc.lock");
-	assert !lock.valid;
+	assert !lock.ok;
+	if (!lock.ok) assert lock.error == LockfileError.Missing;
+}
+
+function parseError(content: string): LockfileError {
+	const r = parseLockfile(content);
+	if (r.ok) return LockfileError.Write;
+	return r.error;
+}
+
+test "a corrupt lockfile is told apart from a missing one" {
+	assert parseError("") == LockfileError.Empty;
+	assert parseError("{ \"version\": ") == LockfileError.BadJson;
+	assert parseError("[]") == LockfileError.BadShape;
+	assert parseError("{ \"version\": 2, \"packages\": {} }") == LockfileError.BadVersion;
+	assert parseError("{ \"packages\": {} }") == LockfileError.BadVersion;
+	assert parseError("{ \"version\": 1 }") == LockfileError.BadShape;
+	const notAnObject = '{ "version": 1, "packages": { "a@1.0.0": 7 } }';
+	assert parseError(notAnObject) == LockfileError.BadShape;
+	const unknownSource = '{ "version": 1, "packages": { "a@1.0.0": { "source": "svn" } } }';
+	assert parseError(unknownSource) == LockfileError.BadShape;
+}
+
+test "a git entry reads as a Git source and a bare entry as Registry" {
+	const content = '{ "version": 1, "packages": {' +
+		' "fork@git:github.com/me/foo@abc": { "source": "git", "url": "github.com/me/foo" },' +
+		' "bare@1.0.0": {} } }';
+	const r = parseLockfile(content);
+	assert r.ok;
+	if (r.ok) {
+		assert r.value.entries[0].source == SourceKind.Git;
+		assert r.value.entries[1].source == SourceKind.Registry;
+	}
+}
+
+test "a valid lockfile keeps its entries, deps and source" {
+	const content = '{ "version": 1, "packages": { "cool-json@1.2.3": {' +
+		' "source": "registry", "version": "1.2.3", "integrity": "sha256-abc",' +
+		' "deps": { "dep": "0.1.0" } } } }';
+	const r = parseLockfile(content);
+	assert r.ok;
+	if (r.ok) {
+		assert r.value.entries.length == 1;
+		assert r.value.entries[0].key == "cool-json@1.2.3";
+		assert r.value.entries[0].depKeys[0] == "dep";
+		assert r.value.entries[0].depValues[0] == "0.1.0";
+		assert findEntry(r.value, "cool-json", "1.2.3") != null;
+		assert findEntry(r.value, "cool-json", "9.9.9") == null;
+	}
+}
+
+test "a mistyped field reads as empty, a fractional number as its text" {
+	const content = '{ "version": 1, "packages": { "a@1.0.0": {' +
+		' "version": 1.5, "integrity": 7, "url": null, "ref": true, "commit": ["x"],' +
+		' "deps": { "ok": "1.0.0", "int": 3, "obj": {} } } } }';
+	const r = parseLockfile(content);
+	assert r.ok;
+	if (r.ok) {
+		const e = r.value.entries[0];
+		assert e.version == "1.5";
+		assert e.integrity == "" && e.url == "" && e.gitRef == "" && e.commit == "";
+		assert e.depKeys.length == 3 && e.depKeys[2] == "obj";
+		assert e.depValues[0] == "1.0.0" && e.depValues[1] == "" && e.depValues[2] == "";
+	}
+	const wrongDeps = parseLockfile('{ "version": 1, "packages": { "a@1.0.0": { "deps": [1] }, "b@1.0.0": { "deps": "x" } } }');
+	assert wrongDeps.ok;
+	if (wrongDeps.ok) {
+		assert wrongDeps.value.entries[0].depKeys.length == 0;
+		assert wrongDeps.value.entries[1].depKeys.length == 0;
+	}
+	assert parseError('{ "version": 1, "packages": [] }') == LockfileError.BadShape;
+	assert parseError('{ "version": "1", "packages": {} }') == LockfileError.BadVersion;
+	assert parseError('{ "version": 1.0, "packages": { "a@1": { "source": 1.5 } } }') == LockfileError.BadShape;
+}
+
+test "writing under a missing directory is a Write error" {
+	const w = writeLockfile("/nonexistent/path/msc.lock", { version: 1, entries: [] });
+	assert !w.ok;
+	if (!w.ok) assert w.error == LockfileError.Write;
 }
 
 test "entryName registry" {

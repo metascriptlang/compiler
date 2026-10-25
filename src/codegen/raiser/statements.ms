@@ -2,7 +2,8 @@
 // AST statement nodes → bytecode instructions.
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, NodeFlag, TypeKind, DeclKind, Symbol,
+	BinaryExprData, UnaryExprData, UpdateExprData, MemberExprData, ArrayAccessData, HiddenStdConvData, HiddenDerefData, NumberLiteralData,
 	ReturnStmtData, BlockStmtData, ExprStmtData, MacroInvocationData, UnreachableStmtData,
 	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
 	ForStmtData, ForOfStmtData, BreakStmtData, ContinueStmtData,
@@ -10,19 +11,20 @@ import {
 	SwitchStmtData, SwitchCaseData,
 	TryCatchStmtData, ThrowStmtData,
 } from "../../ast/node";
-import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
-import { raiserNil, raiserInt, raiserString } from "../../raiser/value";
+import { RaiserOpcode, RaiserRegClass, RaiserRole, RaiserInstruction, raiserABC, raiserAx, immValue, branchField, opRole, opHasSite, siteArgCount } from "../../raiser/bytecode";
+import { raiserNil, raiserInt, raiserConstString } from "../../raiser/value";
 import {
-	RaiserCompState, emitInst, allocReg, emitLoadConst, emitRet,
+	RaiserCompState, emitInst, allocReg, allocBlock, allocWord, allocRef, allocDyn, classOfReg, emitLoadConst, emitRet, emitReturnNothing,
 	declareLocal, declaredSymbol, regIsFixedLocal,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	emitAbxPlaceholder, patchAbxTo,
-	pushLoop, jumpTarget, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
+	pushLoop, jumpTarget, currentLoop, landsPast, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
 	emitClosurePair,
-	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, resolveRoutine, addConst,
+	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, resolveRoutine, addConst, isScalarClass,
 } from "./context";
-import { compileExpr, compileExprForEffect, condJumps, exprIsString } from "./expressions";
-import { emitValueCopy, emitZeroValue } from "./valueCopy";
+import { compileExpr, compileExprForEffect, condJumps, exprIsString, isAssignOp } from "./expressions";
+import { forEachChild } from "../../ast/visitor";
+import { emitValueCopy, emitZeroValue, regClassOf, allocFor } from "./valueCopy";
 
 // --- Statement compilation ---
 
@@ -33,12 +35,8 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 			if (d.argument != null) {
 				const reg = emitValueCopy(s, compileExpr(s, d.argument), d.argument.nodeType);
 				emitRet(s, reg);
-			} else if (s.receiverReg >= 0) {
-				emitRet(s, s.receiverReg);
 			} else {
-				const reg = allocReg(s);
-				emitLoadConst(s, reg, raiserNil());
-				emitRet(s, reg);
+				emitReturnNothing(s);
 			}
 		},
 		NodeKind.ExprStmt => {
@@ -117,7 +115,11 @@ function trapMissingTarget(s: RaiserCompState, node: Node, jump: string): void {
 function compileBlock(s: RaiserCompState, node: Node): void {
 	const d = node.data as BlockStmtData;
 	const savedLocals = s.locals.items.length;
-	for (const stmt of d.statements) {
+	for (let i = 0; i < d.statements.length; i += 1) {
+		const stmt = d.statements[i];
+		if (stmt.kind == NodeKind.VariableDecl && i + 1 < d.statements.length && d.statements[i + 1].kind == NodeKind.WhileStmt) {
+			markBoundedCounterStep(s, stmt, d.statements[i + 1]);
+		}
 		compileStmt(s, stmt);
 	}
 	// Restore locals scope — drop block-scoped vars
@@ -134,7 +136,7 @@ function compileVariableDecl(s: RaiserCompState, node: Node): void {
 		return;
 	}
 
-	const guardReg = allocReg(s);
+	const guardReg = allocDyn(s);
 	emitInst(s, raiserABC(RaiserOpcode.LoadGlobal, guardReg, initGuard, 0));
 	const jumpToInit = emitBranchIfFalsy(s, guardReg);
 	const jumpPastInit = emitJumpPlaceholder(s);
@@ -146,7 +148,8 @@ function compileVariableDecl(s: RaiserCompState, node: Node): void {
 }
 
 function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDeclData): void {
-	if (d.initializer != null) {
+	const placeholderNull = d.initializer != null && d.initializer.kind == NodeKind.NullLiteral && isScalarClass(regClassOf(s, node.nodeType));
+	if (d.initializer != null && !placeholderNull) {
 		if (d.initializer.kind == NodeKind.Identifier) {
 			const fIdx = resolveRoutine(s, d.initializer.resolvedSym);
 			if (fIdx >= 0) {
@@ -167,8 +170,9 @@ function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDec
 			emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, reg, global, 0));
 			return;
 		}
-		if (regIsFixedLocal(s, reg)) {
-			const slot = allocReg(s);
+		const declaredClass = node.nodeType == null ? classOfReg(s, reg) : regClassOf(s, node.nodeType);
+		if (regIsFixedLocal(s, reg) || classOfReg(s, reg) != declaredClass) {
+			const slot = allocReg(s, declaredClass);
 			emitInst(s, raiserABC(RaiserOpcode.Move, slot, reg, 0));
 			declareLocal(s, declaredSymbol(node, d.declName), slot, isStr);
 			return;
@@ -179,6 +183,13 @@ function compileVariableDeclValue(s: RaiserCompState, node: Node, d: VariableDec
 		const global = resolveGlobal(s, node.resolvedSym);
 		if (global >= 0) {
 			emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, reg, global, 0));
+			return;
+		}
+		const declaredClass = regClassOf(s, node.nodeType);
+		if (classOfReg(s, reg) != declaredClass) {
+			const slot = allocReg(s, declaredClass);
+			emitInst(s, raiserABC(RaiserOpcode.Move, slot, reg, 0));
+			declareLocal(s, declaredSymbol(node, d.declName), slot);
 			return;
 		}
 		declareLocal(s, declaredSymbol(node, d.declName), reg);
@@ -229,18 +240,149 @@ function compileWhileStmt(s: RaiserCompState, node: Node): void {
 	pushLoop(s, loopStart, d.whileLabel);
 
 	const exitJumps = condJumps(s, d.whileCondition, false);
+	const bodyStart = codeLen(s);
 
 	compileStmt(s, d.whileBody);
 
+	const continued = currentLoop(s).continuePatches.items.length > 0;
 	patchLoopContinues(s);
 
-	// Jump back to loop start
-	const backOffset = loopStart - codeLen(s) - 1;
-	emitInst(s, raiserAx(RaiserOpcode.Jump, backOffset));
+	// Step and test in one instruction, repeat the test at the bottom, or jump back to loop start
+	if (!continued && fuseCountedStep(s, loopStart, exitJumps, bodyStart)) {
+	} else if (isRepeatableTest(d.whileCondition)) {
+		patchJumpsTo(s, condJumps(s, d.whileCondition, true), bodyStart);
+	} else {
+		const backOffset = loopStart - codeLen(s) - 1;
+		emitInst(s, raiserAx(RaiserOpcode.Jump, backOffset));
+	}
 
 	// Patch exit + break jumps
 	patchJumpsTo(s, exitJumps, codeLen(s));
 	patchLoopBreaks(s);
+}
+
+// A condition built only from reads and operators can be compiled a second time, at the bottom of
+// the loop, where it branches back to the body: the loop then runs one branch per iteration, where
+// the test at the top costs a branch and a jump. Anything that registers code or a constant per
+// compile (a call, a function, an object) is left to the jump.
+function isRepeatableTest(node: Node): boolean {
+	return match (node.kind) {
+		NodeKind.Identifier | NodeKind.NumberLiteral | NodeKind.BooleanLiteral => true,
+		NodeKind.MemberExpr => isRepeatableTest((node.data as MemberExprData).object),
+		NodeKind.ArrayAccess => isRepeatableTest((node.data as ArrayAccessData).array) && isRepeatableTest((node.data as ArrayAccessData).index),
+		NodeKind.HiddenStdConv => isRepeatableTest((node.data as HiddenStdConvData).convExpr),
+		NodeKind.HiddenDeref => isRepeatableTest((node.data as HiddenDerefData).expr),
+		NodeKind.UnaryExpr => {
+			const u = node.data as UnaryExprData;
+			return (u.unaryOp == "!" || u.unaryOp == "-") && isRepeatableTest(u.operand);
+		},
+		NodeKind.BinaryExpr => {
+			const b = node.data as BinaryExprData;
+			return !isAssignOp(b.operator) && b.operator != "instanceof" && isRepeatableTest(b.left) && isRepeatableTest(b.right);
+		},
+		_ => false,
+	};
+}
+
+// `let i: int32 = ..; while (i < bound) { ..; i = i + 1; }` with a bound of at most INT32_MAX: the step
+// runs only after the test passed, and nothing else in the loop writes i, so i + 1 <= bound fits int32
+// and its range check can never fire. The step node is flagged, as the for-of lowering flags its own.
+function markBoundedCounterStep(s: RaiserCompState, decl: Node, loop: Node): void {
+	const sym = decl.resolvedSym;
+	if (sym == null || (decl.data as VariableDeclData).declKind != DeclKind.Let || sym.symbolType.kind != TypeKind.Int32 || resolveGlobal(s, sym) >= 0) return;
+	const w = loop.data as WhileStmtData;
+	if (w.whileCondition.kind != NodeKind.BinaryExpr || w.whileBody.kind != NodeKind.BlockStmt) return;
+	const test = w.whileCondition.data as BinaryExprData;
+	if (test.operator != "<" || !namesSymbol(test.left, sym) || !fitsInt32(test.right) || writesSymbol(test.right, sym)) return;
+	const body = (w.whileBody.data as BlockStmtData).statements;
+	if (body.length == 0 || body[body.length - 1].kind != NodeKind.ExprStmt) return;
+	for (let i = 0; i < body.length - 1; i += 1) {
+		if (writesSymbol(body[i], sym)) return;
+	}
+	const step = (body[body.length - 1].data as ExprStmtData).expr;
+	if (step.kind == NodeKind.UpdateExpr) {
+		const u = step.data as UpdateExprData;
+		if (u.updateOp == "++" && namesSymbol(u.updateArg, sym)) step.flags = step.flags.incl(NodeFlag.NoOverflowCheck);
+	} else if (step.kind == NodeKind.BinaryExpr) {
+		const assign = step.data as BinaryExprData;
+		if (assign.operator != "=" || !namesSymbol(assign.left, sym) || assign.right.kind != NodeKind.BinaryExpr) return;
+		const sum = assign.right.data as BinaryExprData;
+		if (sum.operator == "+" && namesSymbol(sum.left, sym) && sum.right.kind == NodeKind.NumberLiteral && (sum.right.data as NumberLiteralData).intVal == 1) {
+			assign.right.flags = assign.right.flags.incl(NodeFlag.NoOverflowCheck);
+		}
+	}
+}
+
+function namesSymbol(node: Node, sym: Symbol): boolean {
+	return node.kind == NodeKind.Identifier && node.resolvedSym == sym;
+}
+
+function fitsInt32(node: Node): boolean {
+	if (node.nodeType == null) return false;
+	return match (node.nodeType.kind) {
+		TypeKind.Int32 | TypeKind.Int16 | TypeKind.Int8 | TypeKind.Uint16 | TypeKind.Uint8 => true,
+		_ => false,
+	};
+}
+
+// Any write to `sym` in the subtree, nested functions included, and any way to hand out its address.
+function writesSymbol(node: Node, sym: Symbol): boolean {
+	if (node.kind == NodeKind.BinaryExpr && isAssignOp((node.data as BinaryExprData).operator) && namesSymbol((node.data as BinaryExprData).left, sym)) return true;
+	if (node.kind == NodeKind.UpdateExpr && namesSymbol((node.data as UpdateExprData).updateArg, sym)) return true;
+	if ((node.kind == NodeKind.HiddenAddr || node.kind == NodeKind.OutExpr) && mentionsSymbol(node, sym)) return true;
+	if (node.kind == NodeKind.UnaryExpr && (node.data as UnaryExprData).unaryOp == "&" && mentionsSymbol(node, sym)) return true;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && writesSymbol(child, sym)) found = true;
+	});
+	return found;
+}
+
+function mentionsSymbol(node: Node, sym: Symbol): boolean {
+	if (namesSymbol(node, sym)) return true;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && mentionsSymbol(child, sym)) found = true;
+	});
+	return found;
+}
+
+// A loop whose condition is one `i >= bound` exit branch, after at most a constant load of the bound, and
+// whose body ends in `i += 1` that every path of the body reaches, turns that step into one ForLtI64: it steps
+// i, counts the iteration and branches back to the body while i < bound, reading the bound register as the
+// condition would.
+function fuseCountedStep(s: RaiserCompState, loopStart: int32, exitJumps: int32[], bodyStart: int32): boolean {
+	const stepPc = codeLen(s) - 1;
+	if (exitJumps.length != 1 || exitJumps[0] != bodyStart - 1 || stepPc < bodyStart) return false;
+	const test = s.code[bodyStart - 1];
+	const step = s.code[stepPc];
+	if (test.op != RaiserOpcode.BrGeI64 && test.op != RaiserOpcode.BrGeI64Imm) return false;
+	if (step.op != RaiserOpcode.AddI64Imm || step.a != test.a || step.b != test.a || immValue(step.c) != 1) return false;
+	const prefix = bodyStart - 1 - loopStart;
+	if (prefix > 1) return false;
+	const load = s.code[loopStart];
+	if (prefix == 1) {
+		if (test.op != RaiserOpcode.BrGeI64 || load.a != test.b || regIsFixedLocal(s, test.b as int32)) return false;
+		if (load.op != RaiserOpcode.LoadInt && load.op != RaiserOpcode.LoadConst) return false;
+	}
+	for (let pc = bodyStart; pc < stepPc; pc += 1) {
+		const inst = s.code[pc];
+		if (landsPast(inst, pc, stepPc + 1) || inst.op == RaiserOpcode.Try || inst.op == RaiserOpcode.Catch || inst.op == RaiserOpcode.Finally || inst.op == RaiserOpcode.FinallyEnd) return false;
+		if (prefix == 1 && namesRegister(inst, load.a)) return false;
+	}
+	const op = test.op == RaiserOpcode.BrGeI64 ? RaiserOpcode.ForLtI64 : RaiserOpcode.ForLtI64Imm;
+	s.code[stepPc] = raiserABC(op, test.a, test.b, branchField(bodyStart - stepPc - 1));
+	return true;
+}
+
+function namesRegister(inst: RaiserInstruction, reg: number): boolean {
+	const fields = [inst.a, inst.b, inst.c];
+	for (let slot = 0; slot < 3; slot += 1) {
+		const role = opRole(inst.op, slot as int32);
+		if (role == RaiserRole.None) continue;
+		if (fields[slot] == reg || ((role == RaiserRole.IntPair || role == RaiserRole.Route) && fields[slot] + 1 == reg)) return true;
+	}
+	return opHasSite(inst.op) && reg > inst.a && reg <= inst.a + siteArgCount(inst);
 }
 
 // --- For Statement ---
@@ -294,15 +436,16 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 	const readsLocation = isString && d.forOfIterable.kind == NodeKind.Identifier;
 
 	// Hidden index: __i = 0
-	const idxReg = allocReg(s);
+	const idxReg = allocWord(s);
 	emitLoadConst(s, idxReg, raiserInt(0));
 
 	// Length register (recomputed each iteration)
-	const lenReg = allocReg(s);
+	const lenReg = allocWord(s);
 
 	// Element register — declared as a local for the binding name
-	const elemReg = allocReg(s);
-	declareLocal(s, declaredSymbol(node, d.forOfBinding), elemReg);
+	const bindingSym = declaredSymbol(node, d.forOfBinding);
+	const elemReg = allocFor(s, bindingSym.symbolType);
+	declareLocal(s, bindingSym, elemReg);
 
 	const loopStart = codeLen(s);
 	pushLoop(s, loopStart, d.forOfLabel);
@@ -314,12 +457,10 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 	const exitJump = emitJumpPlaceholder(s);
 
 	if (isString) {
-		const callReg = allocReg(s);
-		allocReg(s);
-		allocReg(s);
+		const callReg = allocBlock(s, [classOfReg(s, elemReg), RaiserRegClass.Ref, RaiserRegClass.Word]);
 		emitInst(s, raiserABC(RaiserOpcode.Move, callReg + 1, headReg, 0));
 		emitInst(s, raiserABC(RaiserOpcode.Move, callReg + 2, idxReg, 0));
-		emitInst(s, raiserABC(RaiserOpcode.CallHost, callReg, addConst(s, raiserString("msStringByteAt")), 2));
+		emitInst(s, raiserABC(RaiserOpcode.CallHost, callReg, addConst(s, raiserConstString("msStringByteAt")), 2));
 		emitInst(s, raiserABC(RaiserOpcode.Move, elemReg, callReg, 0));
 	} else {
 		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, elemReg, arrReg, idxReg));
@@ -331,15 +472,15 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 	patchLoopContinues(s);
 
 	const tailReg = readsLocation ? compileExpr(s, d.forOfIterable) : arrReg;
-	const nowReg = allocReg(s);
-	const messageReg = allocReg(s);
+	const nowReg = allocWord(s);
+	const messageReg = allocRef(s);
 	emitInst(s, raiserABC(lenOp, nowReg, tailReg, 0));
 	emitInst(s, raiserABC(RaiserOpcode.BeqI64, nowReg, lenReg, 2));
-	emitLoadConst(s, messageReg, raiserString(`the length of the ${isString ? "string" : "array"} changed while iterating over it`));
+	emitLoadConst(s, messageReg, raiserConstString(`the length of the ${isString ? "string" : "array"} changed while iterating over it`));
 	emitInst(s, raiserABC(RaiserOpcode.Throw, messageReg, 0, 0));
 
 	// Increment index: __i++
-	const oneReg = allocReg(s);
+	const oneReg = allocWord(s);
 	emitLoadConst(s, oneReg, raiserInt(1));
 	emitInst(s, raiserABC(RaiserOpcode.AddI64, idxReg, idxReg, oneReg));
 
@@ -375,8 +516,7 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 // FinallyEnd.
 function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 	const d = node.data as TryCatchStmtData;
-	const routeReg = allocReg(s);
-	allocReg(s);
+	const routeReg = allocBlock(s, [RaiserRegClass.Word, RaiserRegClass.Dyn]);
 	const tryIdx = emitAbxPlaceholder(s, RaiserOpcode.Try);
 	s.tries.push({ finallyBody: d.finallyBody, routeReg });
 	compileStmt(s, d.tryBody);
@@ -389,7 +529,7 @@ function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 	let catchReg = 0;
 	if (d.hasCatchClause) {
 		catchIdx = emitAbxPlaceholder(s, RaiserOpcode.Catch);
-		catchReg = allocReg(s);
+		catchReg = allocDyn(s);
 		if (d.finallyBody != null) {
 			catchGuard = emitAbxPlaceholder(s, RaiserOpcode.Try);
 			s.tries.push({ finallyBody: d.finallyBody, routeReg });
@@ -464,7 +604,7 @@ function compileSwitchStmt(s: RaiserCompState, node: Node): void {
 		} else {
 			// Multiple tests (or-pattern): check each, any match → body
 			// Use a matched flag register
-			const flagReg = allocReg(s);
+			const flagReg = allocWord(s);
 			emitLoadConst(s, flagReg, raiserInt(0));
 			for (const test of cd.caseTests) {
 				const testReg = compileExpr(s, test);
@@ -475,7 +615,7 @@ function compileSwitchStmt(s: RaiserCompState, node: Node): void {
 				patchJumpTo(s, skipSet, codeLen(s));
 			}
 			// If flag == 0, skip body
-			const zeroReg = allocReg(s);
+			const zeroReg = allocWord(s);
 			emitLoadConst(s, zeroReg, raiserInt(0));
 			emitInst(s, raiserABC(RaiserOpcode.BneI64, flagReg, zeroReg, 1));
 			const skipBody = emitJumpPlaceholder(s);

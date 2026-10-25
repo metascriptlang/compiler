@@ -5,13 +5,13 @@
 // inner ?.b transforms first, outer ?.c sees the conditional result.
 
 import { Node, NodeKind, NodeFlag, MemberExprData, CallExprData, TypeAssertionData, BinaryExprData, ConditionalExprData, ExprStmtData } from "../../ast/node";
-import { forEachChild } from "../../ast/visitor";
+import { anyDescendant, noStop } from "../../ast/visitor";
 import { TransformContext } from "../context";
 import { walkNode, walkExpandBlocks, walkWithinStatement, walkOutsideInstanceFieldInits } from "../walker";
 import { makeMember, makeNull, makeBinary, makeConditional, makeIdentResolved } from "../util";
 import { firstExprKindAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 import { rereadOperand, bindOnce, blockifyArrowsReading } from "./nullishCoalesce";
-import { cloneIfPure } from "./intArithJS";
+import { cloneIfPure } from "../place";
 
 // ===== Main Entry Point =====
 
@@ -53,12 +53,7 @@ function bindReadProbe(node: Node, ctx: TransformContext, temps: Node[]): Node {
 }
 
 function reads(tree: Node, shared: Node): boolean {
-	if (tree == shared) return true;
-	let found = false;
-	forEachChild(tree, (child: Node): void => {
-		if (!found && child != null && reads(child, shared)) found = true;
-	});
-	return found;
+	return anyDescendant(tree, (n: Node): boolean => n == shared, noStop);
 }
 
 // ===== Visitor =====

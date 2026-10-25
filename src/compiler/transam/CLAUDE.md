@@ -4,7 +4,7 @@ Demand-driven cache of compilation results with red-green invalidation and outpu
 
 ## Rules
 
-- **One concern per file, `index.ms` is the hub** — no god struct; `TransAmDb` is a thin facade whose fields are the stores below, and each store keeps its inline tests.
+- **One concern per file, `index.ms` is the hub** — each store below is its own file with its inline tests; `TransAmDb` holds the stores beside the bound graph, the tree and context maps and the project's global-import state, so a new concern gets a file, not a field-by-field growth of `TransAmDb`.
 - **Every exported type carries the `Ta` prefix** — interfaces share one global C namespace (`TaQueryKey`, `TaCacheStore`, `TaRevision`); `TransAmDb` is the one exception.
 - **Arrays are bare `T[]` fields** — they pass by pointer, `push()` reaches the caller; no `interface FooList { items: Foo[] }` wrappers.
 - **A query records its dependencies through the frame, never by hand at the call site** — `pushFrame`, compute, then `executeQueryWith` takes the frame's dependencies and minimum durability.
@@ -19,14 +19,13 @@ Demand-driven cache of compilation results with red-green invalidation and outpu
 |------|-------------|
 | `revision.ms` | `TaQueryKind`, `TaQueryState`, `TaDurability`, `TaRevision`, `TaQueryKey`, `createQueryKey`, `queryKeysEqual` |
 | `query.ms` | `TaCacheEntry`, `TaDependencyEntry`, `TaDependencyStack`, `pushFrame`, `popFrame`, `recordDependency`, `recordDurability` |
-| `cache.ms` | `TaCacheStore`, `cacheGet`, `cachePut`, `cacheRemove`, `markAllRed`, `markQueriesRedForFile` |
+| `cache.ms` | `TaCacheStore`, `cacheGet`, `cachePut`, `cacheRemove`, `markQueriesRedForFile` |
 | `redGreen.ms` | `tryMarkGreen`, `executeQueryWith`, `invalidateFile` |
 | `fileInput.ms` | `TaFileInputStore`, `setFileText`, `getFileText`, `getFileHash`, `getFileId`, `getFileDurability`, `setFileDurability` |
 | `moduleDeps.ms` | `TaModuleDepGraph`, `recordModuleImport`, `clearImportsFor`, `getTransitiveDependents`, `detectCycle` |
 | `hash.ms` | `taHashString`, `taHashKey`, `transAmHashNode` |
-| `intern.ms` | `TaStringInterner`, `internString`, `lookupInterned` |
 | `cancel.ms` | `getCancelVersion`, `checkCancel`, `requestCancel`, `resetCancel` (`CancelCtx` lives in `src/checker/context.ms`) |
-| `index.ms` | `TransAmDb`, `createTransAmDb`, `dbSetFileText`, `dbPreprocess`, `dbParse`, `dbTypeCheck`, `dbCheckIsCurrent`, `dbLower`, `dbTransform`, `dbAnalyze`, `dbResolveImport`, `dbEnsureModuleExports` |
+| `index.ms` | `TransAmDb`, `createTransAmDb`, `dbBindGraph`, `dbSetGlobalImports`, `dbSetFileText`, `dbPreprocess`, `dbParse`, `dbTypeCheck`, `dbCheckIsCurrent`, `dbLower`, `dbTransform`, `dbAnalyze`, `dbResolveImport`, `dbEnsureModuleExports` |
 
 ## Tests
 

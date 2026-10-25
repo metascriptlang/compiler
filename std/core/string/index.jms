@@ -60,6 +60,50 @@ export function indexOf(this s: string, sub: string, start: int32 = 0): int32 {
 	unreachable;
 }
 
+export function includes(this s: string, sub: string): boolean {
+	@emit(`return ${s}.includes(${sub});`);
+	unreachable;
+}
+
+export function contains(this s: string, sub: string): boolean {
+	@emit(`return ${s}.includes(${sub});`);
+	unreachable;
+}
+
+export function startsWith(this s: string, prefix: string): boolean {
+	@emit(`return ${s}.startsWith(${prefix});`);
+	unreachable;
+}
+
+export function endsWith(this s: string, suffix: string): boolean {
+	@emit(`return ${s}.endsWith(${suffix});`);
+	unreachable;
+}
+
+export function count(this s: string, sub: string): int32 {
+	if (sub.length == 0) return s.byteLength() + 1;
+	@emit(`var n = 0, at = ${s}.indexOf(${sub});
+	while (at >= 0) { n++; at = ${s}.indexOf(${sub}, at + ${sub}.length); }
+	return n;`);
+	unreachable;
+}
+
+export function split(this s: string, delimiter: string): string[] {
+	@emit(`return ${s}.split(${delimiter});`);
+	unreachable;
+}
+
+export function replace(this s: string, search: string, replacement: string): string {
+	@emit(`var at = ${s}.indexOf(${search});
+	return at < 0 ? ${s} : ${s}.slice(0, at) + ${replacement} + ${s}.slice(at + ${search}.length);`);
+	unreachable;
+}
+
+export function replaceAll(this s: string, search: string, replacement: string): string {
+	@emit(`return ${s}.indexOf(${search}) < 0 ? ${s} : ${s}.replaceAll(${search}, () => ${replacement});`);
+	unreachable;
+}
+
 export function lastIndexOf(this s: string, sub: string, startIdx: int32 = -1): int32 {
 	@emit(`return ${startIdx} < 0 ? ${s}.lastIndexOf(${sub}) : ${s}.lastIndexOf(${sub}, ${startIdx});`);
 	unreachable;
@@ -239,4 +283,4 @@ export function msStringByteAt(s: string, idx: int32): int32 {
 
 // ===== Shared Byte-Loop Algorithms (single source, both backends) =====
 import { clampIndex } from "./shared";
-export { startsWith, endsWith, contains, count, trim, trimStart, trimEnd, split, toLowerCase, toUpperCase, replace, replaceAll, repeat, reverse, equalsIgnoreCase } from "./shared";
+export { trim, trimStart, trimEnd, toLowerCase, toUpperCase, repeat, reverse, equalsIgnoreCase } from "./shared";

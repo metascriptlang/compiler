@@ -39,19 +39,26 @@ const msString msCharTable[128] = {
 
 /* ===== Internal Allocation Helpers ===== */
 
+static void checkCap(int64_t cap) {
+	if (cap < 0 || cap > MS_LEN_MAX) msRaiseRangeError(cap, 0, MS_LEN_MAX);
+}
+
 static msStrPayload* allocPayload(int64_t cap) {
+	checkCap(cap);
 	msStrPayload* p = (msStrPayload*)malloc(msStrContentSize(cap));
 	if (p) p->cap = cap;
 	return p;
 }
 
 static msStrPayload* allocPayload0(int64_t cap) {
+	checkCap(cap);
 	msStrPayload* p = (msStrPayload*)calloc(1, msStrContentSize(cap));
 	if (p) p->cap = cap;
 	return p;
 }
 
 static msStrPayload* reallocPayload(msStrPayload* old, int64_t oldCap, int64_t newCap) {
+	checkCap(newCap);
 	msStrPayload* p = (msStrPayload*)msRealloc(old, msStrContentSize(oldCap), msStrContentSize(newCap));
 	if (p) p->cap = newCap;
 	return p;
@@ -60,6 +67,7 @@ static msStrPayload* reallocPayload(msStrPayload* old, int64_t oldCap, int64_t n
 /* Zeroing realloc — zeros only [oldCap+1..newCap) region.
    Standard reference implementation: reallocPayload0(old, contentSize(oldLen), contentSize(newLen)) */
 static msStrPayload* reallocPayload0(msStrPayload* old, int64_t oldCap, int64_t newCap) {
+	checkCap(newCap);
 	msStrPayload* p = (msStrPayload*)msRealloc(old, msStrContentSize(oldCap), msStrContentSize(newCap));
 	if (p) {
 		p->cap = newCap;
@@ -222,33 +230,6 @@ msString msStringNewLen(int64_t len) {
 	return (msString){ .len = len, .p = p };
 }
 
-void msStringDestroy(msString s) {
-	if (!msIsLiteral(s)) {
-		free(s.p);
-	}
-}
-
-void msStringAssign(msString* a, msString b) {
-	if (a->p == b.p && a->len == b.len) return;
-	if (msIsLiteral(b)) {
-		/* Shallow copy for literals */
-		if (!msIsLiteral(*a)) free(a->p);
-		a->len = b.len;
-		a->p = b.p;
-	} else {
-		if (msIsLiteral(*a) || (a->p->cap & MS_CAP_MASK) < b.len) {
-			if (!msIsLiteral(*a)) free(a->p);
-			a->p = allocPayload(b.len);
-			a->p->cap = b.len;
-		}
-		a->len = b.len;
-		memcpy(a->p->data, b.p->data, b.len + 1);
-		msStrInvalidateAscii(a->p);
-		if (msStrKnownAscii(b.p)) msStrMarkAscii(a->p);
-		else if (b.p != NULL && (msStrCapLoad(b.p) & MS_ASCII_CHECKED) != 0) msStrMarkNonAscii(a->p);
-	}
-}
-
 void msStringPrepareMutation(msString* s) {
 	if (s->p != NULL && (s->p->cap & MS_STRLIT_FLAG) != 0) {
 		msStrPayload* oldP = s->p;
@@ -362,18 +343,7 @@ bool msStringEquals(msString a, msString b) {
 	return memcmp(a.p->data, b.p->data, a.len) == 0;
 }
 
-bool msStringEqualsIgnoreCase(msString a, msString b) {
-	if (a.len != b.len) return false;
-	if (a.len == 0) return true;
-	if (a.p == b.p) return true;
-	for (int64_t i = 0; i < a.len; i++) {
-		if (tolower((unsigned char)a.p->data[i]) != tolower((unsigned char)b.p->data[i]))
-			return false;
-	}
-	return true;
-}
-
-int msStringCompare(msString a, msString b) {
+int msStringCompareBytes(msString a, msString b) {
 	if (a.p == b.p && a.len == b.len) return 0;
 	int64_t minLen = a.len < b.len ? a.len : b.len;
 	if (minLen > 0) {
@@ -381,6 +351,41 @@ int msStringCompare(msString a, msString b) {
 		const char* bd = b.p ? b.p->data : "";
 		int cmp = memcmp(ad, bd, minLen);
 		if (cmp != 0) return cmp;
+	}
+	if (a.len < b.len) return -1;
+	if (a.len > b.len) return 1;
+	return 0;
+}
+
+/* UTF-16 code unit order (TypeScript string ordering). It differs from UTF-8 byte order only where
+   the first differing code points are a supplementary one (lead 0xF0..0xF4, surrogate pair) against
+   a BMP one at or above U+E000 (lead 0xEE/0xEF): the pair sorts below. */
+int msStringCompare(msString a, msString b) {
+	if (a.p == b.p && a.len == b.len) return 0;
+	int64_t minLen = a.len < b.len ? a.len : b.len;
+	if (minLen > 0) {
+		const unsigned char* ad = (const unsigned char*)(a.p ? a.p->data : "");
+		const unsigned char* bd = (const unsigned char*)(b.p ? b.p->data : "");
+		int64_t i = 0;
+		while (i + 8 <= minLen) {
+			uint64_t wa, wb;
+			memcpy(&wa, ad + i, 8);
+			memcpy(&wb, bd + i, 8);
+			if (wa != wb) {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__ && defined(__GNUC__)
+				i += __builtin_ctzll(wa ^ wb) >> 3;
+#endif
+				break;
+			}
+			i += 8;
+		}
+		while (i < minLen && ad[i] == bd[i]) i++;
+		if (i < minLen) {
+			unsigned char x = ad[i], y = bd[i];
+			if (x >= 0xF0 && (y == 0xEE || y == 0xEF)) return -1;
+			if (y >= 0xF0 && (x == 0xEE || x == 0xEF)) return 1;
+			return x < y ? -1 : 1;
+		}
 	}
 	if (a.len < b.len) return -1;
 	if (a.len > b.len) return 1;
@@ -401,8 +406,6 @@ bool msStringEndsWith(msString s, msString suffix) {
 	return memcmp(s.p->data + s.len - suffix.len, suffix.p->data, suffix.len) == 0;
 }
 
-static int64_t msStringByteIndexOf(msString s, msString sub, int64_t byteStart);
-
 bool msStringContains(msString s, msString sub) {
 	if (sub.len == 0) return true;
 	if (sub.len > s.len) return false;
@@ -412,10 +415,9 @@ bool msStringContains(msString s, msString sub) {
 
 /* ===== Search ===== */
 
-/* Internal byte-based indexOf — for C runtime use (replace, split, count).
- * start and return value are byte offsets. */
-static int64_t msStringByteIndexOf(msString s, msString sub, int64_t byteStart) {
-	if (sub.len == 0) return byteStart <= s.len ? byteStart : -1;
+/* start and return value are byte offsets. */
+int64_t msStringByteIndexOf(msString s, msString sub, int64_t byteStart) {
+	if (sub.len == 0) return byteStart;
 	if (byteStart < 0) byteStart = 0;
 	if (sub.len > s.len || s.p == NULL) return -1;
 	const char* haystack = s.p->data;
@@ -571,13 +573,150 @@ int64_t msStringByteAt(msString s, int64_t idx) {
 	return (int64_t)(unsigned char)s.p->data[idx];
 }
 
-msString msStringByteCharAt(msString s, int64_t idx) {
-	if (idx < 0 || idx >= s.len || s.p == NULL) return MS_EMPTY_STRING;
-	unsigned char byte = (unsigned char)s.p->data[idx];
-	if (byte < 128) {
-		return msCharTable[byte];  /* interned — zero alloc */
+/* ---- Byte hash (Map/Set string keys) ---- */
+
+#define MS_FARM_K0 0xc3a5c85c97cb3127ULL
+#define MS_FARM_K1 0xb492b66fbe98f273ULL
+#define MS_FARM_K2 0x9ae16a3b2f90404fULL
+
+static inline uint64_t msFarmLoad8(const unsigned char* p) {
+	uint64_t v;
+	memcpy(&v, p, 8);
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	v = __builtin_bswap64(v);
+#endif
+	return v;
+}
+
+static inline uint64_t msFarmLoad4(const unsigned char* p) {
+	uint32_t v;
+	memcpy(&v, p, 4);
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+	v = __builtin_bswap32(v);
+#endif
+	return v;
+}
+
+static inline uint64_t msFarmRotR(uint64_t v, int bits) { return (v >> bits) | (v << (64 - bits)); }
+static inline uint64_t msFarmShiftMix(uint64_t v) { return v ^ (v >> 47); }
+
+static inline uint64_t msFarmLen16(uint64_t u, uint64_t v, uint64_t mul) {
+	uint64_t a = (u ^ v) * mul;
+	a ^= a >> 47;
+	uint64_t b = (v ^ a) * mul;
+	b ^= b >> 47;
+	return b * mul;
+}
+
+static uint64_t msFarmLen0To16(const unsigned char* s, uint64_t n) {
+	if (n >= 8) {
+		uint64_t mul = MS_FARM_K2 + n * 2;
+		uint64_t a = msFarmLoad8(s) + MS_FARM_K2;
+		uint64_t b = msFarmLoad8(s + n - 8);
+		uint64_t c = msFarmRotR(b, 37) * mul + a;
+		uint64_t d = (msFarmRotR(a, 25) + b) * mul;
+		return msFarmLen16(c, d, mul);
 	}
-	return msStringNew(s.p->data + idx, 1);
+	if (n >= 4) {
+		uint64_t mul = MS_FARM_K2 + n * 2;
+		uint64_t a = msFarmLoad4(s);
+		return msFarmLen16(n + (a << 3), msFarmLoad4(s + n - 4), mul);
+	}
+	if (n > 0) {
+		uint32_t a = s[0];
+		uint32_t b = s[n >> 1];
+		uint32_t c = s[n - 1];
+		uint32_t y = a + (b << 8);
+		uint32_t z = (uint32_t)n + (c << 2);
+		return msFarmShiftMix((uint64_t)y * MS_FARM_K2 ^ (uint64_t)z * MS_FARM_K0) * MS_FARM_K2;
+	}
+	return MS_FARM_K2;
+}
+
+static uint64_t msFarmLen17To32(const unsigned char* s, uint64_t n) {
+	uint64_t mul = MS_FARM_K2 + n * 2;
+	uint64_t a = msFarmLoad8(s) * MS_FARM_K1;
+	uint64_t b = msFarmLoad8(s + 8);
+	uint64_t c = msFarmLoad8(s + n - 8) * mul;
+	uint64_t d = msFarmLoad8(s + n - 16) * MS_FARM_K2;
+	return msFarmLen16(msFarmRotR(a + b, 43) + msFarmRotR(c, 30) + d,
+		a + msFarmRotR(b + MS_FARM_K2, 18) + c, mul);
+}
+
+static uint64_t msFarmLen33To64(const unsigned char* s, uint64_t n) {
+	uint64_t mul = MS_FARM_K2 + n * 2;
+	uint64_t a = msFarmLoad8(s) * MS_FARM_K2;
+	uint64_t b = msFarmLoad8(s + 8);
+	uint64_t c = msFarmLoad8(s + n - 8) * mul;
+	uint64_t d = msFarmLoad8(s + n - 16) * MS_FARM_K2;
+	uint64_t y = msFarmRotR(a + b, 43) + msFarmRotR(c, 30) + d;
+	uint64_t z = msFarmLen16(y, a + msFarmRotR(b + MS_FARM_K2, 18) + c, mul);
+	uint64_t e = msFarmLoad8(s + 16) * mul;
+	uint64_t f = msFarmLoad8(s + 24);
+	uint64_t g = (y + msFarmLoad8(s + n - 32)) * mul;
+	uint64_t h = (z + msFarmLoad8(s + n - 24)) * mul;
+	return msFarmLen16(msFarmRotR(e + f, 43) + msFarmRotR(g, 30) + h,
+		e + msFarmRotR(f + a, 18) + g, mul);
+}
+
+static inline void msFarmWeakLen32(const unsigned char* s, uint64_t seedA, uint64_t seedB, uint64_t out[2]) {
+	uint64_t w = msFarmLoad8(s), x = msFarmLoad8(s + 8), y = msFarmLoad8(s + 16), z = msFarmLoad8(s + 24);
+	uint64_t a = seedA + w;
+	uint64_t b = msFarmRotR(seedB + a + z, 21);
+	uint64_t c = a;
+	a += x;
+	a += y;
+	b += msFarmRotR(a, 44);
+	out[0] = a + z;
+	out[1] = b + c;
+}
+
+static uint64_t msFarmLong(const unsigned char* s, uint64_t n) {
+	uint64_t x = 81;
+	uint64_t y = 81 * MS_FARM_K1 + 113;
+	uint64_t z = msFarmShiftMix(y * MS_FARM_K2 + 113) * MS_FARM_K2;
+	uint64_t v[2] = {0, 0}, w[2] = {0, 0};
+	x = x * MS_FARM_K2 + msFarmLoad8(s);
+	uint64_t eos = ((n - 1) / 64) * 64;
+	uint64_t last64 = eos + ((n - 1) & 63) - 63;
+	uint64_t o = 0;
+	for (;;) {
+		x = msFarmRotR(x + y + v[0] + msFarmLoad8(s + o + 8), 37) * MS_FARM_K1;
+		y = msFarmRotR(y + v[1] + msFarmLoad8(s + o + 48), 42) * MS_FARM_K1;
+		x ^= w[1];
+		y += v[0] + msFarmLoad8(s + o + 40);
+		z = msFarmRotR(z + w[0], 33) * MS_FARM_K1;
+		msFarmWeakLen32(s + o, v[1] * MS_FARM_K1, x + w[0], v);
+		msFarmWeakLen32(s + o + 32, z + w[1], y + msFarmLoad8(s + o + 16), w);
+		uint64_t t = z; z = x; x = t;
+		o += 64;
+		if (o == eos) break;
+	}
+	uint64_t mul = MS_FARM_K1 + ((z & 0xff) << 1);
+	o = last64;
+	w[0] += (n - 1) & 63;
+	v[0] += w[0];
+	w[0] += v[0];
+	x = msFarmRotR(x + y + v[0] + msFarmLoad8(s + o + 8), 37) * mul;
+	y = msFarmRotR(y + v[1] + msFarmLoad8(s + o + 48), 42) * mul;
+	x ^= w[1] * 9;
+	y += v[0] * 9 + msFarmLoad8(s + o + 40);
+	z = msFarmRotR(z + w[0], 33) * mul;
+	msFarmWeakLen32(s + o, v[1] * mul, x + w[0], v);
+	msFarmWeakLen32(s + o + 32, z + w[1], y + msFarmLoad8(s + o + 16), w);
+	uint64_t t = z; z = x; x = t;
+	return msFarmLen16(msFarmLen16(v[0], w[0], mul) + msFarmShiftMix(y) * MS_FARM_K0 + z,
+		msFarmLen16(v[1], w[1], mul) + x, mul);
+}
+
+int64_t msStringHashFarm(msString s) {
+	const unsigned char* data = s.p != NULL ? (const unsigned char*)s.p->data : (const unsigned char*)"";
+	uint64_t n = (uint64_t)s.len;
+	uint64_t h = n <= 16 ? msFarmLen0To16(data, n)
+		: n <= 32 ? msFarmLen17To32(data, n)
+		: n <= 64 ? msFarmLen33To64(data, n)
+		: msFarmLong(data, n);
+	return (int64_t)h;
 }
 
 /* ---- Character-level access (TypeScript parity, UTF-16 code unit indexed) ---- */
@@ -610,6 +749,31 @@ static int msWtf8EncodeSurrogate(uint32_t unit, char* out) {
 	out[1] = (char)(0x80 | ((unit >> 6) & 0x3F));
 	out[2] = (char)(0x80 | (unit & 0x3F));
 	return 3;
+}
+
+/* One string per UTF-16 code unit, in one pass: an astral code point yields its
+ * two surrogate halves WTF-8-encoded, as TS `split("")` does. */
+static msStringArray msStringCodeUnits(msString s) {
+	msStringArray units = msStringArrayNew(s.len > 0 ? s.len : 1);
+	if (s.p == NULL) return units;
+	const unsigned char* p = (const unsigned char*)s.p->data;
+	const unsigned char* end = p + s.len;
+	while (p < end) {
+		if (*p < 0x80) { msStringArrayPush(&units, msCharTable[*p]); p++; continue; }
+		int seqlen;
+		uint32_t cp = msUtf8Decode(p, end, &seqlen);
+		if (cp >= 0x10000 && seqlen == 4) {
+			char half[3];
+			msWtf8EncodeSurrogate(0xD800 + ((cp - 0x10000) >> 10), half);
+			msStringArrayPush(&units, msStringNew(half, 3));
+			msWtf8EncodeSurrogate(0xDC00 + ((cp - 0x10000) & 0x3FF), half);
+			msStringArrayPush(&units, msStringNew(half, 3));
+		} else {
+			msStringArrayPush(&units, msStringNew((const char*)p, seqlen));
+		}
+		p += seqlen;
+	}
+	return units;
 }
 
 msString msStringCharAtSlow(msString s, int64_t idx) {
@@ -732,7 +896,9 @@ msString msStringByteSlice(msString s, int64_t start, int64_t end) {
 	if (start < 0) start = 0;
 	if (end > s.len) end = s.len;
 	if (start >= end || s.p == NULL) return MS_EMPTY_STRING;
-	return msStringNew(s.p->data + start, end - start);
+	msString slice = msStringNew(s.p->data + start, end - start);
+	if (msStrKnownAscii(s.p)) msStrMarkAscii(slice.p);
+	return slice;
 }
 
 /* Character-level slice: TypeScript String.prototype.slice() parity.
@@ -844,30 +1010,16 @@ msString msStringTrimEnd(msString s) {
 	return msStringNew(s.p->data, end);
 }
 
-msString msStringRepeat(msString s, int64_t count) {
-	if (count <= 0 || s.len == 0) return MS_EMPTY_STRING;
-	if (count == 1) return msStringNew(s.p->data, s.len);
-
-	int64_t totalLen = s.len * count;
-	msString result = msStringNewCap(totalLen);
-	for (int64_t i = 0; i < count; i++) {
-		memcpy(result.p->data + i * s.len, s.p->data, s.len);
-	}
-	result.len = totalLen;
-	result.p->data[totalLen] = '\0';
-	return result;
-}
-
 msString msStringReplace(msString s, msString search, msString replacement) {
-	if (s.len == 0 || search.len == 0) {
-		return s.len > 0 ? msStringNew(s.p->data, s.len) : MS_EMPTY_STRING;
-	}
+	if (search.len == 0) return msStringConcat(replacement, s);
+	if (s.len == 0) return MS_EMPTY_STRING;
 	int64_t pos = msStringByteIndexOf(s, search, 0);
 	if (pos < 0) {
 		return msStringNew(s.p->data, s.len);
 	}
 
 	int64_t newLen = s.len - search.len + replacement.len;
+	if (newLen == 0) return MS_EMPTY_STRING;
 	msString result = msStringNewCap(newLen);
 	/* Before match */
 	if (pos > 0) memcpy(result.p->data, s.p->data, pos);
@@ -884,15 +1036,25 @@ msString msStringReplace(msString s, msString search, msString replacement) {
 }
 
 msString msStringReplaceAll(msString s, msString search, msString replacement) {
-	if (s.len == 0 || search.len == 0) {
-		return s.len > 0 ? msStringNew(s.p->data, s.len) : MS_EMPTY_STRING;
+	if (search.len == 0) {
+		msStringArray units = msStringCodeUnits(s);
+		msString result = msStringNewCap(s.len + (units.len + 1) * replacement.len);
+		msStringAppend(&result, replacement);
+		for (int64_t i = 0; i < units.len; i++) {
+			msStringAppend(&result, units.p->data[i]);
+			msStringAppend(&result, replacement);
+		}
+		msStringArrayDestroy(&units);
+		return result;
 	}
+	if (s.len == 0) return MS_EMPTY_STRING;
 
 	/* Count occurrences first to preallocate */
 	int64_t count = msStringCount(s, search);
 	if (count == 0) return msStringNew(s.p->data, s.len);
 
 	int64_t newLen = s.len + count * (replacement.len - search.len);
+	if (newLen == 0) return MS_EMPTY_STRING;
 	msString result = msStringNewCap(newLen);
 	int64_t srcPos = 0;
 	int64_t dstPos = 0;
@@ -1320,18 +1482,11 @@ msString msBoolToString(int value) {
 /* ===== Splitting & Joining ===== */
 
 msStringArray msStringSplit(msString s, msString delimiter) {
+	if (delimiter.len == 0) return msStringCodeUnits(s);
 	msStringArray arr = msStringArrayNew(8);
 
 	if (s.len == 0) {
 		msStringArrayPush(&arr, MS_EMPTY_STRING);
-		return arr;
-	}
-
-	if (delimiter.len == 0) {
-		/* Split into individual characters */
-		for (int64_t i = 0; i < s.len; i++) {
-			msStringArrayPush(&arr, msStringNew(s.p->data + i, 1));
-		}
 		return arr;
 	}
 

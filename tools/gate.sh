@@ -12,20 +12,21 @@ RULES=(
   'build|^tools/.*\.ms$'
   'hcr|^src/test/hcr/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^runtime/hcr|^examples/hcrProbe/'
   'tests|^src/test/(c|js|handoff|fmt|checker3pass|lang)/|^src/test/helpers\.ms$'
+  'lsp|^src/compiler/(lsp|transam)/|^src/checker/|^src/test/lsp/|^std/process/|^runtime/process\.h$'
   "tests,corpus|$EMITS"
   "solana|$SOLANA_SDK|$SOLANA_COMPILER"
   'guard|^(std|runtime)/solana/'
-  'guard|^src/test/guard/'
-  'corpus|^src/test/corpus/'
-  'san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
+  'guard|^src/test/guard/|^src/compiler/meta/|^std/meta/|^src/checker/bindNames\.ms$'
+  'corpus,san|^src/test/corpus/'
+  'san,guard|^src/analyzer/|^runtime/(drc\.|arena\.h|manual\.h|promise/|actor/)|^src/transform/lowering/(destructorLifting|deferLower|ctorLower)\.ms$'
   'fmt|^src/(compiler/fmt|parser|lexer)/|^src/test/fmt/|^std/meta/'
-  'boundary|^src/compiler/(buildConfig|cache|cc|commands|compile|defines|options|toolchain)\.ms$|^src/compiler/(meta/hostTable\.ms$|package/)|^src/index\.ms$|^src/test/nativeBuildBoundary\.ms$|^(runtime|vendor)/|^std/(fs|process)/'
+  'boundary|^src/compiler/(buildConfig|cache|cc|commands|compile|defines|options|toolchain)\.ms$|^src/compiler/(meta/(hostTable|typeQuery)\.ms$|package/)|^src/index\.ms$|^src/test/nativeBuildBoundary\.ms$|^(runtime|vendor)/|^std/(fs|process)/'
 )
 DEFAULT_LANES="build suite"
-ORDER="tools build boundary suite hcr tests fmt corpus san guard solana"
-LADDER="build boundary suite hcr tests fmt corpus san guard solana"
-KNOWN_LANES="boundary suite hcr tests fmt corpus san guard solana"
-RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|\.rms$|^src/test/corpus/run\.ms$'
+ORDER="tools build boundary suite lsp hcr tests fmt corpus san guard solana"
+LADDER="build boundary suite lsp hcr tests fmt corpus san guard solana"
+KNOWN_LANES="boundary suite lsp hcr tests fmt corpus san guard solana"
+RAISER_PATHS='^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|\.rms$|^src/test/corpus/run\.ms$'
 SELECT_BLIND='^(runtime|std|vendor)/|^src/test/corpus/[^/]*$|^src/(raiser|codegen/raiser)/|^src/transform/raiserLowering\.ms$|^src/compiler/meta/hostTable\.ms$|^src/compiler/(buildConfig|cache|cc|compile|defines|options|toolchain)\.ms$'
 SELECT_STD='^std/.*\.(ms|cms|jms)$'
 
@@ -38,7 +39,7 @@ after another, and compare every red against src/test/known-red.json.
 
   --base <rev>   diff against <rev> (default: main); uncommitted paths count too
   --release      the full ladder, whatever the diff says
-  --lanes a,b    run exactly these lanes: tools build boundary suite hcr tests fmt corpus san guard solana
+  --lanes a,b    run exactly these lanes: tools build boundary suite lsp hcr tests fmt corpus san guard solana
   --dry-run      print the chosen lanes and the paths that pulled each one in
   --record       run the ladder on a clean main and rewrite known-red.json (macOS only)
   --local        with --record: write the reds the shared set lacks to this machine's
@@ -86,7 +87,9 @@ corpus and san run on the programs whose emitted C or JS the change alters.
 Control compilers and matching successful program signatures are shared under
 ~/.metascript/cache/gate-ctl/v1; both sides emit from one fixed source/std workspace.
 Unsealed entries, changed program keys and failed emits are never reused; four
-published control entries are kept. --lanes, --release and blind paths run the lane whole.
+published control entries are kept. --lanes, --release and blind paths run the lane whole;
+such a gate still emits the candidate beside the tests lane and caches it, so the gate after
+its land finds a warm control.
 
 A known red that has turned green is named as known-now-green but does not fail
 the run: whether this change or an earlier commit on main fixed it, dropping the
@@ -119,7 +122,7 @@ env:  GATE_WAIT_MAX seconds to wait for load <= cores once the queue is passed (
 ledger: one row per lane and per run (lane secs rc red known new flaky wait) appended to GATE_LEDGER (default ~/.metascript/gate.tsv)
         one row per selection decision (step secs kept total differ_c differ_js touched) appended to
         GATE_SELECT_LEDGER (default ~/.metascript/gate-select.tsv); step is tier-select, select,
-        select-whole or select-off; select-off has zero seconds and empty counts
+        select-whole, select-off or adopt; select-off has zero seconds and empty counts, adopt only seconds and total
 USAGE
 }
 
@@ -134,6 +137,23 @@ cap_jobs() {
     [ "$jobs" -le "$cap" ] || jobs=$cap
   done
   printf '%s\n' "$((10#$jobs))"
+}
+slow_starts() {
+  local n=$1 slow=0 t
+  shift
+  while [ "$n" -gt 0 ]; do
+    t=${EPOCHREALTIME//[.,]/}
+    "$@" >/dev/null 2>&1
+    [ $((${EPOCHREALTIME//[.,]/} - t)) -le 500000 ] || slow=$((slow + 1))
+    n=$((n - 1))
+  done
+  echo "$slow"
+}
+warn_slow_starts() {
+  local slow
+  [ -n "${EPOCHREALTIME:-}" ] || return 0
+  slow=$(slow_starts 20 /usr/bin/true)
+  [ "$slow" -lt 5 ] || say "gate: WARNING this host is stalling on process start ($slow of 20 took over 0.5 s); every lane will run several times slower until a reboot clears it"
 }
 ledger_fmt() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
 ledger() {
@@ -564,7 +584,7 @@ reds_of() {
       '
       ;;
     corpus|san) sed -n 's/^ *✗ FAIL \([^]]*\]\).*$/\1/p' "$log" ;;
-    guard|hcr) sed -n 's/^FAIL \([^:]*\):.*$/\1/p' "$log" ;;
+    guard|hcr|lsp) sed -n 's/^FAIL \([^:]*\):.*$/\1/p' "$log" ;;
     solana) sed -n 's/^FAIL solana \([^:]*\):.*$/\1/p' "$log" ;;
     fmt) sed -nE 's/^(LOSSY|UNSTABLE|NO-FMT|UNREADABLE) (.*\.ms).*$/\2/p' "$log" ;;
   esac | sort -u
@@ -664,7 +684,7 @@ stale_known_self_test() (
   w="$d/wt"
   mkdir -p "$w/tools" "$w/src/test" "$w/out/gate" "$d/home"
   cp "$GATE_SH" "$w/tools/gate.sh"
-  printf '#!/bin/sh\nexit 0\n' >"$w/msc"; chmod +x "$w/msc"; cp "$w/msc" "$w/out/gate/msc"
+  printf '#!/bin/sh\nexit 0\n' >"$w/msc"; chmod +x "$w/msc"; cp "$w/msc" "$w/out/gate/msc$EXE_SUFFIX"
   printf 'out/\nmsc\n' >"$w/.gitignore"
   printf '{"fmt":{"a.ms":{"since":"x","note":"n"},"b.ms":{"since":"x","note":"n"},"c.ms":{"since":"x","note":"n"}},"flaky":{"c.ms":{"since":"x","note":"n"}}}\n' >"$w/src/test/known-red.json"
   printf '{"fmt":{"d.ms":{"since":"y","note":"host"}}}\n' >"$d/local.json"
@@ -987,10 +1007,12 @@ restamp() { find "$@" -type f -exec touch {} +; }
 
 prepare_emit_workspace() {
   local part
+  local -a copy=(cp -aL)
+  case "$OSTYPE" in darwin*) copy=(/bin/cp -caL) ;; esac
   mkdir -p "$CTL_WORK/bin/ctrl" "$CTL_WORK/bin/cand" || return 1
   for part in src std runtime vendor; do
     rm -rf "$CTL_WORK/$part"
-    cp -aL "$TOP/$part" "$CTL_WORK/$part" || return 1
+    "${copy[@]}" "$TOP/$part" "$CTL_WORK/$part" || return 1
   done
   restamp "$CTL_WORK/std" "$CTL_WORK/src" && [ -f "$CTL_WORK/std/core/system/index.ms" ]
 }
@@ -1150,6 +1172,21 @@ emit_sides() {
   trim_controls "$key" "$(control_key HEAD)"
 }
 
+adopt_whole() {
+  local key cand t0=$SECONDS
+  cand_proven && prepare_emit_workspace && CONTROL_SUPPORT=$(control_support "$CTL_WORK") \
+    && key=$(control_key HEAD) || return 0
+  ! control_ready "$(control_dir "$key")" "$key" || return 0
+  cand=$(stage_emit_compiler "$CAND" cand) || return 0
+  rm -rf "$EMIT" && mkdir -p "$EMIT" || return 0
+  stable_programs >"$EMIT/programs"
+  reusable_programs >"$EMIT/ctl.keys" || return 0
+  emit_side "$cand" "$CTL_WORK/e/cand" <"$EMIT/programs" | sort >"$EMIT/cand.sig"
+  adopt_candidate || return 0
+  say "gate: adopt $(fmt_secs $((SECONDS - t0))) · this tree's emits are cached for the next narrowed gate"
+  select_ledger adopt "$((SECONDS - t0))" "" "$(grep -c . "$EMIT/programs" | tr -d ' ')" "" "" ""
+}
+
 std_swap_self_test() (
   local d bad=0 whole="" sha fake TOP CTL_CACHE CTL_WORK EMIT OUT CAND cand_key="" CONTROL_SUPPORT="" EXE_SUFFIX="" g="git -c user.name=t -c user.email=t@t"
   d=$(mktemp -d) || return 1
@@ -1301,16 +1338,41 @@ stable_emit_self_test() (
 )
 
 support_cache_self_test() (
-  local d old new copied before after bad=0 CONTROL_SUPPORT
+  local d old new copied before after bad=0 CONTROL_SUPPORT TOP CTL_WORK platform expected fail_copy=0 has_mode=0 has_link=0
+  local real_os=$OSTYPE OSTYPE=$OSTYPE
   d=$(mktemp -d) || return 1
-  mkdir -p "$d/a/src" "$d/a/std" "$d/a/runtime" "$d/a/vendor/lib" "$d/b"
-  printf 'source\n' >"$d/a/src/a.ms"; printf 'std\n' >"$d/a/std/a.ms"
-  printf '#define RUNTIME_VALUE 1\n' >"$d/a/runtime/core.h"
+  TOP="$d/a" CTL_WORK="$d/b"
+  mkdir -p "$TOP/src/empty dir" "$TOP/std/core/system" "$TOP/runtime" "$TOP/vendor/lib"
+  printf 'source\n' >"$TOP/src/a.ms"; printf 'std\n' >"$TOP/std/a.ms"
+  printf 'system\n' >"$TOP/std/core/system/index.ms"
+  chmod +x "$TOP/src/a.ms"
+  printf '#define RUNTIME_VALUE 1\n' >"$TOP/runtime/core.h"
   printf '#define VENDOR_VALUE 1\n' >"$d/shared.h"
-  ln -s "$d/shared.h" "$d/a/vendor/lib/shared.h"
-  (cd "$d/a" && git init -q && git -c user.name=t -c user.email=t@t add src std runtime vendor \
+  ln -s "$d/shared.h" "$TOP/vendor/lib/shared.h"
+  [ ! -x "$TOP/src/a.ms" ] || has_mode=1
+  [ ! -L "$TOP/vendor/lib/shared.h" ] || has_link=1
+  (cd "$TOP" && git init -q && git -c user.name=t -c user.email=t@t add src std runtime vendor \
     && git -c user.name=t -c user.email=t@t commit -qm inputs) >"$d/git.log" 2>&1 || { rm -rf "$d"; return 1; }
-  cp -aL "$d/a/runtime" "$d/a/vendor" "$d/a/std" "$d/b"
+  cp() {
+    printf 'portable\n' >>"$d/copies"
+    [ "$fail_copy" -eq 0 ] && command cp "$@"
+  }
+  function /bin/cp() {
+    printf 'native\n' >>"$d/copies"
+    [ "$fail_copy" -eq 0 ] && [ "$1" = -caL ] || return 1
+    if [[ "$real_os" == darwin* ]]; then command /bin/cp "$@"; else shift; command cp -aL "$@"; fi
+  }
+  for platform in linux-gnu msys darwin-test; do
+    OSTYPE=$platform; expected=portable
+    [[ "$platform" != darwin* ]] || expected=native
+    : >"$d/copies"
+    prepare_emit_workspace || { printf 'FAIL shared support: %s snapshot failed\n' "$platform"; bad=1; break; }
+    [ "$(grep -c "^$expected$" "$d/copies")" = 4 ] \
+      || { printf 'FAIL shared support: %s used the wrong copy route\n' "$platform"; bad=1; }
+    cmp -s "$TOP/src/a.ms" "$CTL_WORK/src/a.ms" && { [ "$has_mode" = 0 ] || [ -x "$CTL_WORK/src/a.ms" ]; } \
+      && [ -d "$CTL_WORK/src/empty dir" ] && { [ "$has_link" = 0 ] || [ ! -L "$CTL_WORK/vendor/lib/shared.h" ]; } \
+      || { printf 'FAIL shared support: %s changed source bytes/mode or retained a link\n' "$platform"; bad=1; }
+  done
   old=$(control_support "$d/a")
   copied=$(control_support "$d/b")
   [ "$old" = "$copied" ] || { printf 'FAIL shared support: same files at another root changed identity\n'; bad=1; }
@@ -1331,6 +1393,8 @@ support_cache_self_test() (
   new=$(control_support "$d/a")
   printf 'export default {};\n' >"$d/build.ms"
   [ "$(control_support "$d/a")" != "$new" ] || { printf 'FAIL shared support: an ambient build.ms above the workspace kept the same identity\n'; bad=1; }
+  fail_copy=1
+  if prepare_emit_workspace; then printf 'FAIL shared support: a failed copy was accepted\n'; bad=1; fi
   rm -rf "$d"
   return $bad
 )
@@ -1442,6 +1506,11 @@ FAKE
   return $bad
 )
 
+slow_starts_self_test() {
+  [ "$(slow_starts 2 sleep 0.6)" = 2 ] || { printf 'FAIL slow starts: two 0.6 s starts were not counted\n'; return 1; }
+  [ "$(slow_starts 2 :)" = 0 ] || { printf 'FAIL slow starts: an instant start was counted\n'; return 1; }
+}
+
 emit_width_self_test() (
   local d bad=0 SLOTS_DIR GATES_DIR GATE_PAR="" corpus_build_limit="" full half
   d=$(mktemp -d) || return 1
@@ -1513,10 +1582,11 @@ FAKE
 self_test() {
   local bad=0 cases got want log
   cases=$(cat <<'CASES'
-src/checker/checkPass.ms|build corpus solana suite tests
+src/checker/checkPass.ms|build corpus lsp solana suite tests
+src/checker/bindNames.ms|build corpus guard lsp solana suite tests
 src/parser/parser.ms|build corpus fmt suite tests
 src/lexer/lexer.ms|build corpus fmt suite tests
-std/meta/node.ms|build corpus fmt solana suite tests
+std/meta/node.ms|build corpus fmt guard solana suite tests
 std/fs/index.ms|boundary build corpus suite tests
 vendor/miniz/miniz.c|boundary build corpus suite tests
 src/module/loader.ms|build corpus suite tests
@@ -1525,22 +1595,29 @@ src/utils/path.ms|build corpus suite tests
 src/index.ms|boundary build corpus suite tests
 src/analyzer/inject.ms|build corpus guard san suite tests
 runtime/drc.h|boundary build corpus guard san suite tests
+runtime/promise/future.h|boundary build corpus guard san suite tests
+runtime/actor/actor.h|boundary build corpus guard san suite tests
 runtime/hcr.c|boundary build corpus hcr suite tests
 src/codegen/c/expressions.ms|build corpus solana suite tests
 src/transform/lowering/deferLower.ms|build corpus guard san suite tests
 src/compiler/cc.ms|boundary build corpus solana suite tests
 src/compiler/compile.ms|boundary build corpus hcr solana suite tests
-src/compiler/meta/comptime.ms|build corpus solana suite tests
-src/compiler/lsp/server.ms|build suite
-src/compiler/transam/query.ms|build suite
+src/compiler/meta/comptime.ms|build corpus guard solana suite tests
+src/compiler/lsp/server.ms|build lsp suite
+src/compiler/transam/query.ms|build lsp suite
+src/test/lsp/run.ms|build lsp suite
+std/process/child.cms|boundary build corpus lsp suite tests
+runtime/process.h|boundary build corpus lsp suite tests
 src/compiler/package/install.ms|boundary build suite
-src/compiler/meta/hostTable.ms|boundary build corpus solana suite tests
+src/compiler/meta/hostTable.ms|boundary build corpus guard solana suite tests
 src/test/nativeBuildBoundary.ms|boundary build suite
 src/compiler/fmt/printer.ms|build fmt suite
 src/test/c/json.ms|build suite tests
 src/test/helpers.ms|build suite tests
 src/test/fmt/run.ms|build fmt suite tests
-src/test/corpus/programs/804-enumNegativeValue.ms|build corpus suite
+src/test/corpus/programs/804-enumNegativeValue.ms|build corpus san suite
+src/test/corpus/run.ms|build corpus san suite
+src/test/corpus/hammerAsan.sh|build corpus san suite
 src/test/guard/run.ms|build guard suite
 src/test/hcr/run.ms|build hcr suite
 src/test/native/programs/x.ms|build suite
@@ -1597,6 +1674,7 @@ src/codegen/raiser/emit.ms|raiser
 src/transform/raiserLowering.ms|raiser
 std/core/date/index.rms|raiser
 src/test/corpus/run.ms|raiser
+src/compiler/meta/hostTable.ms|raiser
 src/checker/checkPass.ms|
 src/codegen/c/expressions.ms|
 std/core/date/index.cms|
@@ -1744,6 +1822,7 @@ CASES
   control_boot_self_test || bad=1
   emit_many_self_test || bad=1
   emit_width_self_test || bad=1
+  slow_starts_self_test || bad=1
   cand_reuse_self_test || bad=1
   resume_self_test || bad=1
   std_swap_self_test || bad=1
@@ -1872,10 +1951,11 @@ CC_FLAG=""
 lane_cmd() {
   case "$1" in
     build) printf '%s build src/index.ms --gc=drc --danger %s --output=%s' "$BUILDER" "$CC_FLAG" "$CAND" ;;
-    boundary) printf '%s run --target=raiser src/test/nativeBuildBoundary.ms %s' "$CAND" "$CAND" ;;
+    boundary) printf '%s run --target=raiser src/test/nativeBuildBoundary.ms %s; r=$?; %s run --target=raiser src/test/projectConfigCommands.ms %s || r=1; exit $r' "$CAND" "$CAND" "$CAND" "$CAND" ;;
     corpus) printf '%s%sMSC=%s %s run src/test/corpus/run.ms' "$narrow" "$([ "$raiser_on" -eq 1 ] && printf 'MSCORPUS_RAISER=1 ')" "$CAND" "$BUILDER" ;;
     san) printf '%sMSCORPUS_SAN=1 MSC=%s %s run src/test/corpus/run.ms' "$narrow" "$CAND" "$BUILDER" ;;
     fmt) printf '%s run src/test/fmt/run.ms' "$BUILDER" ;;
+    lsp) printf 'MSC=%s %s run --target=raiser src/test/lsp/run.ms' "$CAND" "$CAND" ;;
   esac
 }
 
@@ -2173,7 +2253,7 @@ run_sharded_lane() {
   local lane=$1 var=$2 runner=$3 n=$4 i rc=0 part prc claims="" name
   if [ "$lane" = guard ]; then
     claims="$OUT/guard.claims"
-    rm -rf "$claims" && mkdir -p "$claims/done"
+    rm -rf "$claims" && mkdir -p "$claims/done" "$claims/taken"
     guard_probe_names | while read -r name; do : >"$claims/$name"; done
   fi
   for ((i = 0; i < n; i++)); do
@@ -2215,7 +2295,7 @@ lane_body() {
     guard) bounded run_sharded_lane guard GUARD_SHARD src/test/guard/run.ms "${GATE_GUARD_SHARDS:-$PAR}" >"$log" 2>&1; rc=$? ;;
     hcr) bounded run_sharded_lane hcr HCR_SHARD src/test/hcr/run.ms "${GATE_HCR_SHARDS:-$PAR}" >"$log" 2>&1; rc=$? ;;
     solana) with_slot bounded run_solana_lane >"$log" 2>&1; rc=$? ;;
-    boundary|corpus|san) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
+    boundary|corpus|san|lsp) with_slot bounded env -u FORCE_COLOR NO_COLOR=1 bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
     *) with_slot bounded env -u NO_COLOR -u FORCE_COLOR bash -c "$(lane_cmd "$lane")" >"$log" 2>&1; rc=$? ;;
   esac
   if [ "$lane" = build ] && [ "$rc" -eq 0 ] && [ -n "$cand_key" ] && [ -z "$(git status --porcelain -- src std)" ] \
@@ -2225,12 +2305,12 @@ lane_body() {
   printf '\nSECS=%d\nRC=%d\nEND\n' "$((SECONDS - t0))" "$rc" >>"$log"
 }
 
-PHASES=("build" "tools boundary suite tests fmt" "hcr" "corpus guard" "san" "solana")
+PHASES=("build" "tools boundary suite tests fmt lsp" "hcr" "corpus guard" "san" "solana")
 
 start=$SECONDS
 ran="" blocked="" verdict=GREEN stopped="" selected=0 narrow="" only_csv="" lanes_csv="" ADMIT_WAITED=0 red_sum=0 new_sum=0 flaky_sum=0 stale_local=0
 trap queue_release EXIT
-[ "$lanes" = tools ] || queue_acquire
+[ "$lanes" = tools ] || { queue_acquire; warn_slow_starts; }
 PAR=$(cap_jobs "${GATE_PAR:-$(share_of_cores 5)}") || exit $?
 rm -rf "$SLOTS_DIR" && mkdir -p "$SLOTS_DIR"
 resume_open
@@ -2251,10 +2331,12 @@ for phase in "${PHASES[@]}"; do
   [ "$heavy" -ge 1 ] || heavy=1
   export MSCORPUS_BUILD_JOBS
   MSCORPUS_BUILD_JOBS=$(build_width "$heavy") || exit $?
-  select_pid=""
+  select_pid="" adopt_pid=""
   case " $todo " in *" suite "*|*" tests "*)
     if [ "$select" -eq 1 ] && [ "$selected" -eq 0 ] && [ -x "$CAND" ]; then
       (with_slot select_programs; printf '%s %s\n' "$select" "$selected" >"$OUT/select.state") & select_pid=$!
+    elif [ "$select" -eq 0 ] && [ -n "$select_label" ] && [ -x "$CAND" ]; then
+      (with_slot adopt_whole) & adopt_pid=$!
     fi ;;
   esac
   pids="" launched=""
@@ -2276,6 +2358,7 @@ for phase in "${PHASES[@]}"; do
   done
   [ -z "$pids" ] || wait $pids
   if [ -n "$select_pid" ]; then wait "$select_pid"; read -r select selected <"$OUT/select.state"; fi
+  [ -z "$adopt_pid" ] || wait "$adopt_pid"
   for lane in $launched; do
   log="$OUT/$lane.log"
   rc=$(sed -n 's/^RC=\([0-9][0-9]*\)$/\1/p' "$log" | tail -1); rc=${rc:-1}
@@ -2335,7 +2418,7 @@ resume_close
 if [ "$record" -eq 1 ]; then
   sha=$(git rev-parse --short HEAD)
   target="$KNOWN"
-  [ "$record_local" -eq 0 ] || { target="$KNOWN_LOCAL"; mkdir -p "$GATES_DIR" || die "--record --local: cannot create $GATES_DIR"; }
+  [ "$record_local" -eq 0 ] || { target="$KNOWN_LOCAL"; mkdir -p "$(dirname "$KNOWN_LOCAL")" || die "--record --local: cannot create the directory of $KNOWN_LOCAL"; }
   [ -f "$target" ] || echo '{}' >"$target.prev"
   [ -f "$target" ] && cp "$target" "$target.prev"
   merged="$OUT/known.merged"

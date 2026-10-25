@@ -5,13 +5,13 @@ import {
 	ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData,
 	ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData, FunctionDeclData,
-	DestructuringDeclData, SourceLocation, IdentifierData, ExportDeclData,
+	DestructuringDeclData, SourceLocation, IdentifierData, ExportDeclData, DecoratedDeclData,
 } from "../../../ast/node";
 import { Token } from "../../../lexer/token";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import { Doc, docText, docGroup, docIndent, docLine, docSoftLine, docHardLine, docLineSuffix, docBreakParent, docJoin, docCommaSepList } from "../doc";
 import { callPrintNode } from "./callbacks";
-import { rawBalancedAt, rawGenericsAt, sourceByteAt, writtenOptional, writtenTypeAfterOptional, unoptionalized } from "./literals";
+import { rawBalancedAt, rawGenericsAt, sourceByteAt, sourceSpan, writtenOptional, writtenTypeAfterOptional, unoptionalized } from "./literals";
 
 export function printProgram(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ProgramData;
@@ -51,7 +51,7 @@ export function printProgram(node: Node, options: FormatOptions): Doc {
 				parts.push(docHardLine());
 			}
 		}
-		_structAccessors = structAccessorsAfter(d.programStmts, stmt);
+		noteFollowers(d.programStmts, stmt);
 		parts.push(callPrintNode(stmt, options));
 
 		// Emit inter-statement comments: blank line before first, single newline between
@@ -69,6 +69,7 @@ function lastLineOf(node: Node): int32 {
 }
 
 let _structAccessors: Node[] = [];
+let _listDeclarators: Node[] = [];
 
 export function takeStructAccessors(): Node[] {
 	const taken = _structAccessors;
@@ -76,18 +77,36 @@ export function takeStructAccessors(): Node[] {
 	return taken;
 }
 
-function structAccessorDecl(s: Node): Node | null {
-	const inner = s.kind == NodeKind.ExportDecl ? (s.data as ExportDeclData).exportedDecl : s;
-	return inner.kind == NodeKind.FunctionDecl && inner.flags.has(NodeFlag.Accessor) ? inner : null;
+function takeListDeclarators(): Node[] {
+	const taken = _listDeclarators;
+	_listDeclarators = [];
+	return taken;
 }
 
-function structAccessorsAfter(stmts: Node[], stmt: Node): Node[] {
+function noteFollowers(stmts: Node[], stmt: Node): void {
+	_structAccessors = followersAfter(stmts, stmt, structAccessorDecl);
+	_listDeclarators = followersAfter(stmts, stmt, listDeclarator);
+}
+
+function listDeclarator(s: Node): Node | null {
+	const inner = s.kind == NodeKind.ExportDecl ? (s.data as ExportDeclData).exportedDecl : s;
+	return inner != null && inner.flags.has(NodeFlag.ContinuesList) ? inner : null;
+}
+
+function structAccessorDecl(s: Node): Node | null {
+	const inner = s.kind == NodeKind.ExportDecl ? (s.data as ExportDeclData).exportedDecl : s;
+	let fn = inner.kind == NodeKind.DecoratedDecl ? (inner.data as DecoratedDeclData).decoratedNode : inner;
+	if (fn != null && fn.kind == NodeKind.ExportDecl) fn = (fn.data as ExportDeclData).exportedDecl;
+	return fn != null && fn.kind == NodeKind.FunctionDecl && fn.flags.has(NodeFlag.Accessor) ? inner : null;
+}
+
+function followersAfter(stmts: Node[], stmt: Node, follower: (s: Node) => Node | null): Node[] {
 	const out: Node[] = [];
 	let i = stmts.indexOf(stmt) + 1;
 	while (i > 0 && i < stmts.length) {
-		const acc = structAccessorDecl(stmts[i]);
-		if (acc == null) break;
-		out.push(acc);
+		const next = follower(stmts[i]);
+		if (next == null) break;
+		out.push(next);
 		i += 1;
 	}
 	return out;
@@ -96,7 +115,7 @@ function structAccessorsAfter(stmts: Node[], stmt: Node): Node[] {
 function unpicked(stmts: Node[]): Node[] {
 	const out: Node[] = [];
 	for (const s of stmts) {
-		if (!s.flags.has(NodeFlag.WhenPicked) && !isParamPatternDecl(s) && structAccessorDecl(s) == null) out.push(s);
+		if (!s.flags.has(NodeFlag.WhenPicked) && !isParamPatternDecl(s) && structAccessorDecl(s) == null && listDeclarator(s) == null) out.push(s);
 	}
 	return out;
 }
@@ -163,7 +182,7 @@ export function printBlock(node: Node, options: FormatOptions): Doc {
 	if (written.length == 0 && inner.length == 0) return docText("{}");
 	const stmts: Doc[] = [];
 	for (const s of written) {
-		_structAccessors = structAccessorsAfter(d.statements, s);
+		noteFollowers(d.statements, s);
 		stmts.push(callPrintNode(s, options));
 	}
 	for (const c of inner) {
@@ -209,7 +228,30 @@ export function printVariableDecl(node: Node, options: FormatOptions): Doc {
 	};
 
 	const storage = node.flags.has(NodeFlag.StaticStorage) ? "static " : "";
-	const parts: Doc[] = [docText(storage + kind + " " + d.declName)];
+	const rest = takeListDeclarators();
+	const parts: Doc[] = [docText(storage + kind + " ")];
+	pushDeclarator(parts, node, options);
+	for (const r of rest) {
+		parts.push(docText(", "));
+		pushDeclarator(parts, r, options);
+	}
+	if (options.semi) {
+		parts.push(docText(";"));
+	}
+
+	return docGroup(parts);
+}
+
+function pushDeclarator(parts: Doc[], node: Node, options: FormatOptions): void {
+	if (node.kind == NodeKind.DestructuringDecl) {
+		const dd = node.data as DestructuringDeclData;
+		parts.push(callPrintNode(dd.destrPattern, options));
+		parts.push(docText(" = "));
+		parts.push(callPrintNode(dd.destrInit, options));
+		return;
+	}
+	const d = node.data as VariableDeclData;
+	parts.push(docText(d.declName));
 	if (d.declType != "") {
 		parts.push(docText(": " + d.declType));
 	}
@@ -217,11 +259,6 @@ export function printVariableDecl(node: Node, options: FormatOptions): Doc {
 		parts.push(docText(" = "));
 		parts.push(callPrintNode(d.initializer, options));
 	}
-	if (options.semi) {
-		parts.push(docText(";"));
-	}
-
-	return docGroup(parts);
 }
 
 export function printExprStmt(node: Node, options: FormatOptions): Doc {
@@ -327,6 +364,8 @@ export function printForStmt(node: Node, options: FormatOptions): Doc {
 
 export function printForOfStmt(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ForOfStmtData;
+	const asWritten = headerAsWritten(node, d.forOfBody, options, null);
+	if (asWritten != null) return docGroup([asWritten, printBody(d.forOfBody, options)]);
 	let binding = "let";
 	if (d.forOfIsConst) { binding = "const"; }
 	const target = d.forOfPattern != null ? callPrintNode(d.forOfPattern, options) : docText(d.forOfBinding);
@@ -354,12 +393,13 @@ export function printForInStmt(node: Node, options: FormatOptions): Doc {
 export function printDestructuringDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as DestructuringDeclData;
 	const kind = d.destrIsConst ? "const" : "let";
-	const parts: Doc[] = [
-		docText(kind + " "),
-		callPrintNode(d.destrPattern, options),
-		docText(" = "),
-		callPrintNode(d.destrInit, options),
-	];
+	const rest = takeListDeclarators();
+	const parts: Doc[] = [docText(kind + " ")];
+	pushDeclarator(parts, node, options);
+	for (const r of rest) {
+		parts.push(docText(", "));
+		pushDeclarator(parts, r, options);
+	}
 	if (options.semi) parts.push(docText(";"));
 	return docGroup(parts);
 }
@@ -411,6 +451,8 @@ function printSwitchCase(node: Node, options: FormatOptions): Doc {
 	if (d.caseStmts.length > 0) {
 		const stmts: Doc[] = [];
 		for (const s of d.caseStmts) {
+			if (listDeclarator(s) != null) continue;
+			noteFollowers(d.caseStmts, s);
 			stmts.push(callPrintNode(s, options));
 		}
 		parts.push(docIndent([docHardLine(), docJoin(stmts, docHardLine())]));
@@ -652,6 +694,48 @@ function takeSignatureComments(holder: Node, decl: Node, body: Node, into: Token
 	holder.comments = rest;
 }
 
+function isBetween(c: Token, start: SourceLocation, end: SourceLocation): boolean {
+	const after = c.line > start.line || (c.line == start.line && c.column > start.column);
+	return after && (c.line < end.line || (c.line == end.line && c.column < end.column));
+}
+
+function onParamLines(comments: Token[], decl: Node, paramLocs: SourceLocation[] | null): boolean {
+	if (paramLocs == null || paramLocs.length == 0) return false;
+	const lastLine = paramLocs[paramLocs.length - 1].line;
+	for (const c of comments) {
+		if (c.line <= decl.location.line || c.line >= lastLine) return false;
+	}
+	return true;
+}
+
+export function headerAsWritten(decl: Node, body: Node, options: FormatOptions, paramLocs: SourceLocation[] | null): Doc | null {
+	if (options.source == "" || body == null || isSynthesized(decl, body)) return null;
+	const holders: Node[] = [decl, body];
+	if (body.kind == NodeKind.BlockStmt) {
+		const stmts = (body.data as BlockStmtData).statements;
+		if (stmts.length > 0) holders.push(stmts[0]);
+	}
+	const inner: Token[] = [];
+	for (const h of holders) {
+		for (const c of h.comments) {
+			if (isBetween(c, decl.location, body.location)) inner.push(c);
+		}
+	}
+	if (inner.length == 0 || onParamLines(inner, decl, paramLocs)) return null;
+	const text = sourceSpan(options.source, decl.location.line, decl.location.column, body.location.line, body.location.column);
+	if (text == "") return null;
+	for (const h of holders) {
+		const rest: Token[] = [];
+		for (const c of h.comments) {
+			if (!isBetween(c, decl.location, body.location)) rest.push(c);
+		}
+		h.comments = rest;
+	}
+	const head = text.trimEnd();
+	const gap = text.byteSlice(head.byteLength, text.byteLength);
+	return docGroup([docText(head), gap.includes("\n") ? docHardLine() : docText(" ")]);
+}
+
 function prefixAt(names: string[], positions: string, word: string): void {
 	if (positions == "") return;
 	for (const p of positions.split(",")) {
@@ -692,6 +776,8 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 	if (flagGet(d.fnFlags, "ext") != "" && names.length > 0) names[0] = "this " + names[0];
 	const params: Doc[] = [];
 	const staticType = flagGet(d.fnFlags, "sext");
+	const asWritten = headerAsWritten(node, d.fnBody, options, staticType == "" ? node.paramLocations : null);
+	if (asWritten != null) return docGroup([asWritten, callPrintNode(d.fnBody, options)]);
 	if (staticType != "") params.push(docText("this typeof " + staticType));
 	for (const p of buildParamList(names, types, defaults, options, node.paramLocations)) params.push(p);
 	const paramComments = paramListComments(node, d.fnBody);

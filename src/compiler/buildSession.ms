@@ -2,10 +2,11 @@ import { Node, Type, TypeFlag, TypeKind, Symbol, SymbolKind } from "../ast/node"
 import { CModuleOutput } from "../codegen/c/index";
 import { forEachChild } from "../ast/visitor";
 import { CheckSession, createCheckSession } from "../checker/orchestrator";
-import { resetInstantiationState, checkedInstanceOf } from "../checker/instantiate";
+import { resetInstantiationState, instanceArgsOf } from "../checker/instantiate";
 import { resetDispatchRegistry } from "../checker/context";
 import { resetRaises } from "../checker/raises";
 import { resetResizeSummaries } from "../checker/varPartitions";
+import { resetCapturedAssignments } from "../checker/flow";
 import { resetDuVariantRegistry } from "../checker/types";
 import { resetDuHashes } from "../analyzer/classify";
 import { resetLinkState } from "../utils/linkState";
@@ -100,6 +101,7 @@ export function resetBuildState(): void {
 	resetDispatchRegistry();
 	resetRaises();
 	resetResizeSummaries();
+	resetCapturedAssignments();
 	resetDuVariantRegistry();
 	resetDuHashes();
 	resetLinkState();
@@ -166,7 +168,7 @@ function instanceFingerprint(session: BuildSession, node: Node): string {
 	if (sym != null && sym.instantiatedFrom != null) {
 		const generic = sym.instantiatedFrom;
 		identity = generic.modulePath + ":" + String(generic.item) + ":" + String(generic.disamb);
-		for (const arg of checkedInstanceOf(sym).concreteTypes) identity = identity + "|" + typeShape(session, arg);
+		for (const arg of instanceArgsOf(sym)) identity = identity + "|" + typeShape(session, arg);
 	}
 	const fingerprint = identity + "#" + String(foldTypes(session, node, transAmHashNode(node)));
 	session.instanceFingerprints.set(node, fingerprint);

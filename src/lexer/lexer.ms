@@ -1,6 +1,5 @@
 // Lexer — Main entry point for tokenization
 // Converts source code into a sequence of tokens
-// Pattern: ~/projects/metascript/src/lexer/lexer.zig
 
 import { Token, TokenKind, isIdentOrKeyword } from "./token";
 import { createLexerState, peek, peekAt, advanceChar, skip, addToken } from "./state";
@@ -40,8 +39,6 @@ export function lex(source: string): Result<Token[], string> {
 		if (ch == "`".code) { scanTemplateString(s); continue; }
 
 		// Operators (multi-char and single-char)
-		// scanOperator now handles comments and adds them to s.tokens if TokenKind.Comment was added there
-		// Wait, I should make sure scanOperator actually adds them to s.tokens or s.comments
 		if (scanOperator(s)) { continue; }
 
 		// Punctuation (single-char tokens)
@@ -419,6 +416,27 @@ test "bitwise compound assignments are one token each" {
 test "a regex may follow a bitwise compound assignment" {
 	assert lexKindAt("x |= /a/", 2) == TokenKind.Regex;
 	assert lexKindAt("x >>>= /a/", 2) == TokenKind.Regex;
+}
+
+test "a regex may follow ??, %=, **, a shift, <, |>, a spread and an expression-starting keyword" {
+	assert lexKindAt("a ?? /x/", 2) == TokenKind.Regex;
+	assert lexKindAt("n %= /x/", 2) == TokenKind.Regex;
+	assert lexKindAt("a ** /x/", 2) == TokenKind.Regex;
+	assert lexKindAt("a << /x/", 2) == TokenKind.Regex;
+	assert lexKindAt("a >> /x/", 2) == TokenKind.Regex;
+	assert lexKindAt("a >>> /x/", 2) == TokenKind.Regex;
+	assert lexKindAt("a < /x/", 2) == TokenKind.Regex;
+	assert lexKindAt("a |> /x/", 2) == TokenKind.Regex;
+	assert lexKindAt("[.../x/]", 2) == TokenKind.Regex;
+	assert lexKindAt("throw /x/", 1) == TokenKind.Regex;
+	assert lexKindAt("else /x/", 1) == TokenKind.Regex;
+	assert lexKindAt("do /x/", 1) == TokenKind.Regex;
+}
+
+test "a slash after a value stays a division" {
+	assert lexKindAt("a / b / c", 3) == TokenKind.Slash;
+	assert lexKindAt("a++ / 2", 2) == TokenKind.Slash;
+	assert lexKindAt("a ?? b / 2", 3) == TokenKind.Slash;
 }
 
 test "operators jammed without spaces" {

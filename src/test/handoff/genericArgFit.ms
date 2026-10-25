@@ -64,6 +64,38 @@ test "an explicit type arg of a static generic is checked against the arguments"
 	assert fromErr.contains("Argument type mismatch in 'err' arg 0: got int32, expected string");
 }
 
+const HOLDER = "class Holder {\n\tkeep<T>(v: T): T { return v; }\n"
+	+ "\tstatic skeep<T>(v: T): T { return v; }\n}\n"
+	+ "class Box<T> { static make(v: T): T { return v; } }\n"
+	+ "const h = new Holder();\n";
+
+test "a method's explicit type argument types its literal argument" {
+	const src = HOLDER + "const a = h.keep<int8>(-5);\nconst w: int8 = a;\n"
+		+ "const xs = h.keep<number[]>([1, 2]);";
+	assert strictErrorCount(src) == 0;
+}
+
+test "a static method's explicit type argument types its literal argument" {
+	const src = HOLDER + "const a = Holder.skeep<int8>(-5);\nconst w: int8 = a;\n"
+		+ "const b = Box.make<int16>(-30000);\nconst v: int16 = b;";
+	assert strictErrorCount(src) == 0;
+}
+
+test "a builtin static's explicit type argument types its literal argument" {
+	const src = "const p = Promise.resolve<float32>(5);\nconst f: float32 = await p;\n"
+		+ "const r = Result.ok<number[], string>([1, 2]);";
+	assert strictErrorCount(src) == 0;
+}
+
+test "a method's explicit type argument still refuses a contradicting typed argument" {
+	const src = HOLDER + "const x: int32 = 3;\nconst a = h.keep<int8>(x);";
+	assert hasError(src, "Argument type mismatch in 'keep' arg 0: got int32, expected int8");
+}
+
+test "a method's explicit type argument refuses a literal it cannot hold" {
+	assert hasError(HOLDER + "const a = h.keep<int8>(300);", "cannot convert 300 to int8");
+}
+
 // ===== Rejected: the same rule inside template expansion =====
 
 test "template argument contradicting an inferred T is rejected" {
@@ -261,6 +293,12 @@ test "a binding inside its constraint is accepted" {
 	assert strictErrorCount(BOXED + "const c = g(dog);\nconst d = g<Dog>(dog);\nconst e = g(animal);") == 0;
 }
 
+test "a method's constraint binds its own type parameter, not the class parameter it shadows" {
+	const src = CLASSES + "class Holder<T> {\n\tv: T;\n\tconstructor(v: T) { this.v = v; }\n\tkeep<T extends Animal>(a: T): T { return a; }\n}\nconst h = new Holder<int32>(1);\n";
+	assert hasError(src + "const c = h.keep(5);", "Type 'int32' does not satisfy constraint 'Animal' for type parameter 'T' in 'keep'");
+	assert strictErrorCount(src + "const c = h.keep(dog);\nconst d = h.keep<Dog>(dog);") == 0;
+}
+
 test "a numeric constraint rejects a string and accepts every number" {
 	const src = "function h<T extends number>(a: T): T { return a; }\n";
 	assert hasError(src + "const c = h(\"s\");", "does not satisfy constraint");
@@ -306,6 +344,35 @@ test "a method's and a static method's own constraint is checked" {
 	assert hasError(src + "const c = new H().pick(\"s\");", "Type 'string' does not satisfy constraint 'Animal' for type parameter 'T' in 'pick'");
 	assert hasError(src + "const c = H.take(\"s\");", "Type 'string' does not satisfy constraint 'Animal' for type parameter 'T' in 'take'");
 	assert strictErrorCount(src + "const c = new H().pick(dog);\nconst d = H.take(animal);") == 0;
+}
+
+const ROOT = "interface Root { user: string; n: int32; }\n";
+const AT = ROOT + "type At<T, K extends keyof T> = T[K];\n";
+
+test "a type reference checks a constraint naming a sibling parameter against the arguments" {
+	assert strictErrorCount(AT + "const x: At<Root, \"user\"> = \"u\";") == 0;
+	assert hasError(AT + "const x: At<Root, \"nope\"> = \"u\";", "Type '\"nope\"' does not satisfy constraint '\"user\" | \"n\"' for type parameter 'K' in 'At'");
+	const slot = ROOT + "interface Slot<T, K extends keyof T> { v: T[K]; }\n";
+	assert strictErrorCount(slot + "const s: Slot<Root, \"user\"> = { v: \"u\" };") == 0;
+	assert hasError(slot + "const s: Slot<Root, \"nope\"> = { v: \"u\" };", "for type parameter 'K' in 'Slot'");
+	const cell = ROOT + "class Cell<T, K extends keyof T> { v: T[K]; constructor(v: T[K]) { this.v = v; } }\n";
+	assert strictErrorCount(cell + "function f(c: Cell<Root, \"user\">): string { return c.v; }") == 0;
+	assert hasError(cell + "function f(c: Cell<Root, \"nope\">): int32 { return 0; }", "for type parameter 'K' in 'Cell'");
+	const sub = "type Sub<T, U extends T> = U;\n";
+	assert strictErrorCount(sub + "const x: Sub<int32, int32> = 3;") == 0;
+	assert hasError(sub + "const x: Sub<int32, string> = \"a\";", "Type 'string' does not satisfy constraint 'int32' for type parameter 'U' in 'Sub'");
+}
+
+test "a type reference's constraint binds its declaration's parameters, not the enclosing routine's" {
+	const outer = AT + "interface Other { zzz: int32; }\nfunction outer<T>(t: T, r: Root): int32 {\n\tconst x: At<Root, \"KEY\"> = r.n;\n\treturn x;\n}\nconst o: Other = { zzz: 1 };\nconst s = outer<Other>(o, { user: \"u\", n: 1 });\n";
+	assert strictErrorCount(outer.replace("KEY", "n")) == 0;
+	assert hasError(outer.replace("KEY", "zzz"), "Type '\"zzz\"' does not satisfy constraint '\"user\" | \"n\"' for type parameter 'K' in 'At'");
+}
+
+test "a constraint may name a type parameter declared after it" {
+	const rev = ROOT + "type Rev<K extends keyof T, T> = T[K];\n";
+	assert strictErrorCount(rev + "const x: Rev<\"user\", Root> = \"u\";") == 0;
+	assert hasError(rev + "const x: Rev<\"nope\", Root> = \"u\";", "for type parameter 'K' in 'Rev'");
 }
 
 // ===== One rule settles every candidate of a type parameter =====

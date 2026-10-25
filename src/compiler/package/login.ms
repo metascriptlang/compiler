@@ -7,50 +7,14 @@
 // 4. Exchange GitHub token for registry token via POST /auth/github/token
 // 5. Store registry token at ~/.metascript/credentials
 
-import { exists, readFile, writeFile, chmod } from "std/fs";
-import { env } from "std/process";
-import { join } from "std/fs/path";
 import { HttpResponse } from "std/http/types";
 import { HttpError } from "std/http/errors";
 import { createHeaders, setHeader } from "std/http/headers";
+import { sleepAsync } from "std/core/promise";
+import { registryRequest } from "./registry";
+import { loadToken, saveToken, deleteToken, credentialsErrorMessage } from "./credentials";
 
 const GITHUB_CLIENT_ID = "Ov23liXkaph4TDPP19yd";
-const REGISTRY_HOST = "api.metascriptlang.org";
-const API_BASE = "https://" + REGISTRY_HOST;
-
-function credentialsPath(): string {
-	let home = env.get("HOME");
-	// Windows fallback — HOME isn't set by default there.
-	if (home == "") home = env.get("USERPROFILE");
-	if (home == "") return "";
-	return join(join(home, ".metascript"), "credentials");
-}
-
-export function loadToken(): string {
-	const path = credentialsPath();
-	if (path == "" || !exists(path)) return "";
-	const content = try readFile(path) catch "";
-	return content.trim();
-}
-
-export function saveToken(token: string): boolean {
-	const path = credentialsPath();
-	if (path == "") return false;
-	const result = writeFile(path, token + "\n");
-	if (!result.ok) return false;
-	// Tighten perms to 0600 (owner rw only) — 384 decimal.
-	// Spec (docs/PACKAGE.md §File locations) requires mode 0600 on
-	// ~/.metascript/credentials. No-op on Windows.
-	chmod(path, 384 as int32);
-	return true;
-}
-
-export function deleteToken(): boolean {
-	const path = credentialsPath();
-	if (path == "" || !exists(path)) return true;
-	const result = writeFile(path, "");
-	return result.ok;
-}
 
 // Parse a URL-encoded key=value pair from a &-separated response.
 function parseUrlEncoded(response: string, key: string): string {
@@ -110,15 +74,20 @@ function httpsPost(host: string, path: string, body: string, contentType: string
 	});
 }
 
-// Busy-wait sleep (ms).
-function sleepMs(ms: number): void {
-	const start = performance.now();
-	while (performance.now() - start < ms) {
-		// busy wait
-	}
+const DEFAULT_POLL_SECONDS: int32 = 5;
+const MAX_POLL_SECONDS: int32 = 60;
+const SLOW_DOWN_SECONDS: int32 = 5;
+
+// Seconds between polls: the server's "interval" field, or the default when it is
+// missing or not a positive number; capped so a bad value cannot stall the login.
+export function pollIntervalSeconds(raw: string): int32 {
+	const seconds = raw.parseInt();
+	if (seconds < 1) return DEFAULT_POLL_SECONDS;
+	if (seconds > MAX_POLL_SECONDS) return MAX_POLL_SECONDS;
+	return seconds as int32;
 }
 
-export function cmdLogin(projectRoot: string): boolean {
+export async function cmdLogin(projectRoot: string): Promise<boolean> {
 	const _pr = projectRoot;
 	const existing = loadToken();
 	if (existing != "") {
@@ -149,9 +118,7 @@ export function cmdLogin(projectRoot: string): boolean {
 	const deviceCode = parseUrlEncoded(deviceResp.body, "device_code");
 	const userCode = parseUrlEncoded(deviceResp.body, "user_code");
 	const verificationUri = percentDecode(parseUrlEncoded(deviceResp.body, "verification_uri"));
-	let interval = 5;
-	const intervalStr = parseUrlEncoded(deviceResp.body, "interval");
-	if (intervalStr != "") interval = 8; // conservative default
+	let interval = pollIntervalSeconds(parseUrlEncoded(deviceResp.body, "interval"));
 
 	if (deviceCode == "" || userCode == "") {
 		console.log("error: invalid response from GitHub");
@@ -176,7 +143,7 @@ export function cmdLogin(projectRoot: string): boolean {
 	let githubToken = "";
 
 	while (attempts < maxAttempts && githubToken == "") {
-		sleepMs(interval * 1000);
+		await sleepAsync(interval * 1000);
 
 		const pollBody = "client_id=" + GITHUB_CLIENT_ID + "&device_code=" + deviceCode + "&grant_type=urn:ietf:params:oauth:grant-type:device_code";
 		const pollResult = httpsPost("github.com", "/login/oauth/access_token", pollBody, "application/x-www-form-urlencoded");
@@ -188,7 +155,7 @@ export function cmdLogin(projectRoot: string): boolean {
 				githubToken = token;
 			} else {
 				const err = parseUrlEncoded(body, "error");
-				if (err == "slow_down") { interval = interval + 5; }
+				if (err == "slow_down") { interval = interval + SLOW_DOWN_SECONDS; }
 				else if (err == "expired_token") {
 					console.log("\nerror: device code expired — please try again");
 					return false;
@@ -211,7 +178,7 @@ export function cmdLogin(projectRoot: string): boolean {
 
 	// Step 4: Exchange GitHub token for registry token
 	const authBody = "{\"github_token\":\"" + githubToken + "\"}";
-	const authResult = httpsPost(REGISTRY_HOST, "/auth/github/token", authBody, "application/json");
+	const authResult = registryRequest("POST", "/auth/github/token", authBody, "", "application/json");
 
 	if (!authResult.ok) {
 		console.log("error: failed to connect to registry");
@@ -233,8 +200,8 @@ export function cmdLogin(projectRoot: string): boolean {
 
 	// Step 5: Store token
 	const saved = saveToken(registryToken);
-	if (!saved) {
-		console.log("error: failed to save credentials");
+	if (!saved.ok) {
+		console.log("error: failed to save credentials: " + credentialsErrorMessage(saved.error));
 		return false;
 	}
 
@@ -256,29 +223,13 @@ export function cmdLogout(): boolean {
 	// already rejected, we still fall through to truncate the local file —
 	// the credentials file is the authoritative ticket, server revoke is an
 	// additional guarantee.
-	const meHeaders = createHeaders();
-	setHeader(meHeaders, "authorization", "Bearer " + existing);
-	const meResult = fetch(API_BASE + "/auth/me", {
-		method: "GET",
-		body: "",
-		headers: meHeaders,
-		timeout: 30000,
-		maxRedirects: 5,
-	});
+	const meResult = registryRequest("GET", "/auth/me", "", existing);
 
 	let revoked = false;
 	if (meResult.ok && meResult.value.status == 200) {
 		const tokenId = extractJsonField(meResult.value.body, "tokenId");
 		if (tokenId != "") {
-			const delHeaders = createHeaders();
-			setHeader(delHeaders, "authorization", "Bearer " + existing);
-			const delResult = fetch(API_BASE + "/auth/tokens/" + tokenId, {
-				method: "DELETE",
-				body: "",
-				headers: delHeaders,
-				timeout: 30000,
-				maxRedirects: 0,
-			});
+			const delResult = registryRequest("DELETE", "/auth/tokens/" + tokenId, "", existing);
 			if (delResult.ok && delResult.value.status >= 200 && delResult.value.status < 300) {
 				revoked = true;
 			}
@@ -286,9 +237,10 @@ export function cmdLogout(): boolean {
 	}
 
 	// Step 2: Always truncate local credentials, even if server revoke failed.
-	const ok = deleteToken();
-	if (!ok) {
-		console.log("error: failed to remove credentials");
+	const removed = deleteToken();
+	if (!removed.ok) {
+		const reason = credentialsErrorMessage(removed.error);
+		console.log("error: failed to remove credentials: " + reason);
 		return false;
 	}
 
@@ -324,15 +276,7 @@ export function cmdWhoami(args: string[]): boolean {
 		i = i + 1;
 	}
 
-	const headers = createHeaders();
-	setHeader(headers, "authorization", "Bearer " + token);
-	const result = fetch(API_BASE + "/auth/me", {
-		method: "GET",
-		body: "",
-		headers: headers,
-		timeout: 30000,
-		maxRedirects: 5,
-	});
+	const result = registryRequest("GET", "/auth/me", "", token);
 
 	if (!result.ok) {
 		console.log("error: couldn't reach registry: " + result.error.message);
@@ -385,4 +329,21 @@ export function cmdWhoami(args: string[]): boolean {
 	}
 	console.log(username);
 	return true;
+}
+
+test "the poll interval follows the server" {
+	assert pollIntervalSeconds("10") == 10;
+	assert pollIntervalSeconds("1") == 1;
+}
+
+test "a missing or unusable poll interval falls back to the default" {
+	assert pollIntervalSeconds("") == 5;
+	assert pollIntervalSeconds("0") == 5;
+	assert pollIntervalSeconds("-3") == 5;
+	assert pollIntervalSeconds("soon") == 5;
+}
+
+test "a very long poll interval is capped" {
+	assert pollIntervalSeconds("3600") == 60;
+	assert pollIntervalSeconds("99999999999999") == 60;
 }

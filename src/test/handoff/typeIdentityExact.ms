@@ -16,9 +16,10 @@ import {
 	createPrimitive, createStruct, createStringLiteral, createBooleanLiteral,
 	createUnion, createTuple, createFunction, createArray,
 	createGenericParam, createBorrow, createVar, createVarargs,
-	createConditionalType,
+	createConditionalType, nullType,
 } from "../../checker/types";
 import { sameType } from "../../checker/compat";
+import { canonicalizeBranchJoin } from "../../checker/flow";
 
 function num(): Type { return createPrimitive(TypeKind.Number); }
 function str(): Type { return createPrimitive(TypeKind.String); }
@@ -105,4 +106,102 @@ test "identity: distinct generic params are not identical" {
 test "identity: different kinds are never identical" {
 	assert !sameType(num(), str());
 	assert !sameType(createArray(num()), createTuple([num()]));
+}
+
+function nestedIdentityType(leaf: Type, depth: int32, tuple: boolean): Type {
+	let result = leaf;
+	for (let i = 0; i < depth; i++) {
+		result = tuple ? createTuple([result]) : createArray(result);
+	}
+	return result;
+}
+
+test "identity: deep arrays preserve unequal leaves" {
+	let failures = "";
+	for (const depth of [11, 13, 15, 30]) {
+		const left = nestedIdentityType(createPrimitive(TypeKind.Int32), depth, false);
+		const right = nestedIdentityType(str(), depth, false);
+		if (sameType(left, right)) failures += " " + depth;
+	}
+	assert failures == "", "array depths" + failures;
+}
+
+test "identity: separately allocated deep arrays with equal leaves match" {
+	for (const depth of [11, 13, 15, 30]) {
+		const left = nestedIdentityType(createPrimitive(TypeKind.Int32), depth, false);
+		const right = nestedIdentityType(createPrimitive(TypeKind.Int32), depth, false);
+		assert sameType(left, right), "array depth " + depth;
+	}
+}
+
+test "identity: deep tuples preserve unequal leaves" {
+	let failures = "";
+	for (const depth of [11, 13, 15, 30]) {
+		const left = nestedIdentityType(createPrimitive(TypeKind.Int32), depth, true);
+		const right = nestedIdentityType(str(), depth, true);
+		if (sameType(left, right)) failures += " " + depth;
+	}
+	assert failures == "", "tuple depths" + failures;
+}
+
+test "identity: separately allocated deep tuples with equal leaves match" {
+	for (const depth of [11, 13, 15, 30]) {
+		const left = nestedIdentityType(createPrimitive(TypeKind.Int32), depth, true);
+		const right = nestedIdentityType(createPrimitive(TypeKind.Int32), depth, true);
+		assert sameType(left, right), "tuple depth " + depth;
+	}
+}
+
+test "identity: recursive array pairs terminate without poisoning later queries" {
+	const left = createArray(null);
+	const right = createArray(null);
+	left.typeReturn = left;
+	right.typeReturn = right;
+	const equal = sameType(left, right);
+	left.typeReturn = null;
+	right.typeReturn = null;
+	assert equal;
+	assert !sameType(createPrimitive(TypeKind.Int32), str());
+}
+
+test "identity: recursive tuples still compare leaves after revisiting a pair" {
+	const left = createTuple([]);
+	const right = createTuple([]);
+	left.typeChildren.push(left);
+	left.typeChildren.push(createPrimitive(TypeKind.Int32));
+	right.typeChildren.push(right);
+	right.typeChildren.push(str());
+	const equal = sameType(left, right);
+	left.typeChildren = [];
+	right.typeChildren = [];
+	assert !equal;
+}
+
+test "identity: nullable flow joins keep distinct deep array leaves" {
+	const left = nestedIdentityType(createPrimitive(TypeKind.Int32), 15, false);
+	const different = nestedIdentityType(str(), 15, false);
+	const joined = canonicalizeBranchJoin(createUnion([left, different, nullType()]));
+	assert joined.typeReturn != null;
+	assert joined.typeReturn.kind == TypeKind.Union;
+	assert joined.typeReturn.typeChildren.length == 2;
+}
+
+test "identity: nullable flow joins deduplicate equal deep array leaves" {
+	const left = nestedIdentityType(createPrimitive(TypeKind.Int32), 15, false);
+	const equal = nestedIdentityType(createPrimitive(TypeKind.Int32), 15, false);
+	const joined = canonicalizeBranchJoin(createUnion([left, equal, nullType()]));
+	assert joined.typeReturn != null;
+	assert joined.typeReturn.kind == TypeKind.Array;
+	assert sameType(joined.typeReturn, left);
+}
+
+test "identity: repeated deep queries preserve both outcomes" {
+	const left = nestedIdentityType(createPrimitive(TypeKind.Int32), 15, false);
+	const different = nestedIdentityType(str(), 15, false);
+	const equal = nestedIdentityType(createPrimitive(TypeKind.Int32), 15, false);
+	for (let i = 0; i < 3; i++) {
+		assert sameType(left, equal);
+		assert !sameType(left, different);
+		assert !sameType(different, left);
+	}
 }

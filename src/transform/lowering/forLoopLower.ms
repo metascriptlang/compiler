@@ -6,11 +6,12 @@
 // { let i = 0; while (i < 10) { body; i++; } }
 
 import { Node, NodeKind, SourceLocation, ForStmtData, BlockStmtData, IfStmtData, TryCatchStmtData, WhileStmtData, DoWhileStmtData, MatchStmtData, MatchCaseData, VariableDeclData, IdentifierData, BreakStmtData, ContinueStmtData, DeclKind, Symbol, createNode } from "../../ast/node";
-import { forEachChild } from "../../ast/visitor";
+import { forEachChild, anyChild, anyDescendant } from "../../ast/visitor";
 import { TransformContext, freshOwnedSym } from "../context";
 import { walkNode, mapChildren, isFuncBoundary } from "../walker";
+import { isRoutineOrTestNode } from "../../ast/shape";
 import { makeBool, makeBlock, makeWhile, makeExprStmt, makeBreak, makeSwitchWrapper, extractBodyStmts, makeVarDecl, makeIdentResolved, makeAssign, makeIf, makeUnary, syntheticToken } from "../util";
-import { isFnBoundary, LoopJumps, hasLoopContinue, retargetLoopJumps } from "./jumpRetarget";
+import { LoopJumps, hasLoopContinue, retargetLoopJumps } from "./jumpRetarget";
 import { booleanType } from "../../checker/types";
 import { firstStmtKindAfter, stmtCountAfter, parseInput, makeCtx, getStmts } from "../testUtil";
 
@@ -101,13 +102,7 @@ export function bodySuspends(bodyStmts: Node[]): boolean {
 }
 
 function hasSuspendPoint(node: Node): boolean {
-	if (node.kind == NodeKind.YieldExpr || node.kind == NodeKind.AwaitExpr) return true;
-	if (isFnBoundary(node.kind)) return false;
-	let found = false;
-	forEachChild(node, (child: Node): void => {
-		if (!found && hasSuspendPoint(child)) found = true;
-	});
-	return found;
+	return anyDescendant(node, (n: Node): boolean => n.kind == NodeKind.YieldExpr || n.kind == NodeKind.AwaitExpr, isRoutineOrTestNode);
 }
 
 // Rewrite continue → { update; continue; } at current loop level.
@@ -188,11 +183,7 @@ function capturedInClosure(n: Node | null, sym: Symbol, nested: boolean): boolea
 	if (n == null) return false;
 	if (nested && n.kind == NodeKind.Identifier && n.resolvedSym == sym) return true;
 	const inner = nested || isFuncBoundary(n);
-	let found = false;
-	forEachChild(n, (c: Node): void => {
-		if (!found && capturedInClosure(c, sym, inner)) found = true;
-	});
-	return found;
+	return anyChild(n, (c: Node): boolean => capturedInClosure(c, sym, inner));
 }
 
 function renameBinding(n: Node | null, from: Symbol, to: Symbol): void {
@@ -211,15 +202,13 @@ function isLoopNode(n: Node): boolean {
 		|| n.kind == NodeKind.ForOfStmt || n.kind == NodeKind.ForInStmt;
 }
 
+function isUnlabeledContinue(n: Node): boolean {
+	return n.kind == NodeKind.ContinueStmt && (n.data as ContinueStmtData).continueLabel == "";
+}
+
 function hasOwnContinue(n: Node | null): boolean {
 	if (n == null) return false;
-	if (n.kind == NodeKind.ContinueStmt) return (n.data as ContinueStmtData).continueLabel == "";
-	if (isFuncBoundary(n) || isLoopNode(n)) return false;
-	let found = false;
-	forEachChild(n, (c: Node): void => {
-		if (!found && hasOwnContinue(c)) found = true;
-	});
-	return found;
+	return anyDescendant(n, isUnlabeledContinue, (c: Node): boolean => isFuncBoundary(c) || isLoopNode(c));
 }
 
 function labelOwnBreaks(n: Node | null, label: string): boolean {

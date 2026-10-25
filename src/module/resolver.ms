@@ -143,8 +143,16 @@ export function resolveImport(specifier: string, fromFile: string): ResolveCandi
 	// Std library — handled externally in bare mode
 	if (isStdImport(specifier)) return result;
 
-	// Bare specifiers — unsupported in legacy mode
-	if (!isRelative(specifier)) return result;
+	// Bare specifiers — unsupported in legacy mode, except an absolute path with its extension
+	// (a header module names the headers it includes that way) and a C header beside the importer
+	if (!isRelative(specifier)) {
+		if (isAbsolute(specifier)) {
+			if (hasKnownExtension(specifier)) result.push(normalize(specifier));
+		} else if (specifier.endsWith(".h")) {
+			result.push(normalize(join(dirname(fromFile), specifier)));
+		}
+		return result;
+	}
 
 	const baseDir = dirname(fromFile);
 	// Normalize to collapse ./ and ../ — a file must resolve to ONE canonical path
@@ -182,7 +190,9 @@ function addExtensionCandidates(result: ResolveCandidates, base: string, extensi
 
 // For a specifier with an explicit extension, resolve it directly.
 function addDirectCandidates(result: ResolveCandidates, spec: string, fromFile: string, config: ResolverConfig): ResolveCandidates {
-	if (isRelative(spec)) {
+	if (isAbsolute(spec)) {
+		result.push(normalize(spec));
+	} else if (isRelative(spec)) {
 		const baseDir = dirname(fromFile);
 		result.push(join(baseDir, spec));
 	} else if (isStdImport(spec)) {
@@ -191,7 +201,8 @@ function addDirectCandidates(result: ResolveCandidates, spec: string, fromFile: 
 			result.push(join(config.stdPath, subpath));
 		}
 	} else {
-		// Bare with extension — try search paths
+		// Bare with extension — a C header beside the importer first, then the search paths
+		if (spec.endsWith(".h")) result.push(normalize(join(dirname(fromFile), spec)));
 		for (const sp of config.searchPaths) {
 			result.push(join(sp, spec));
 		}
@@ -245,15 +256,10 @@ export function stripMsModuleExtension(name: string): string {
 // ===== Extension Detection =====
 
 function hasKnownExtension(specifier: string): boolean {
-	return specifier.endsWith(".ms")
-		|| specifier.endsWith(".cms")
-		|| specifier.endsWith(".jms")
-		|| specifier.endsWith(".rms")
-		|| specifier.endsWith(".ems")
-		|| specifier.endsWith(".wms")
-		|| specifier.endsWith(".ts")
-		|| specifier.endsWith(".js")
-		|| specifier.endsWith(".h");
+	for (const ext of msModuleExtensions) {
+		if (specifier.endsWith(ext)) return true;
+	}
+	return specifier.endsWith(".ts") || specifier.endsWith(".js") || specifier.endsWith(".h");
 }
 
 // ===== Helpers =====
@@ -267,18 +273,6 @@ function isRelative(specifier: string): boolean {
 	if (specifier.length < 2) return false;
 	const prefix = specifier.slice(0, 2);
 	return prefix == "./" || prefix == "..";
-}
-
-// ===== Legacy Helpers (kept for backward compat) =====
-
-export function buildFilePath(specifier: string, fromFile: string): string {
-	const baseDir = dirname(fromFile);
-	return normalize(join(baseDir, specifier + ".ms"));
-}
-
-export function buildIndexPath(specifier: string, fromFile: string): string {
-	const baseDir = dirname(fromFile);
-	return normalize(join(baseDir, join(specifier, "index.ms")));
 }
 
 // ===== Tests =====
@@ -323,9 +317,6 @@ test "isStdImport" {
 	assert !isStdImport("ab");
 }
 
-test "buildFilePath" { assert buildFilePath("./foo", "/a/b.ms") == "/a/foo.ms"; }
-
-test "buildIndexPath" { assert buildIndexPath("./sub", "/a/b.ms") == "/a/sub/index.ms"; }
 // -- Backend extension mapping --
 test "backendExtension C" { assert backendExtension(Backend.C) == ".cms"; }
 
@@ -458,6 +449,53 @@ test "explicit .cms extension" {
 	const r = resolveImportWithConfig("std/core.cms", "/a/b.ms", cfg);
 	assert r.length == 1;
 	assert r[0] == "/std/core.cms";
+}
+
+test "every MetaScript module extension names its one file" {
+	const cfg = createDefaultConfig(Backend.C, "");
+	for (const ext of msModuleExtensions) {
+		const r = resolveImportWithConfig(`./foo${ext}`, "/a/b.ms", cfg);
+		assert r.length == 1;
+		assert r[0] == `/a/foo${ext}`;
+	}
+}
+
+test "absolute path with an explicit extension names that one file" {
+	const cfg = createDefaultConfig(Backend.C, "/std");
+	const r = resolveImportWithConfig("/x/lib/m.ms", "/proj/main.ms", cfg);
+	assert r.length == 1;
+	assert r[0] == "/x/lib/m.ms";
+}
+
+test "absolute path to a directory's index.ms names that one file" {
+	const cfg = createDefaultConfig(Backend.JS, "/std");
+	const r = resolveImportWithConfig("/x/lib/index.ms", "/proj/main.ms", cfg);
+	assert r.length == 1;
+	assert r[0] == "/x/lib/index.ms";
+}
+
+test "absolute path with an explicit extension is never joined onto a search path" {
+	const cfg = createDefaultConfig(Backend.C, "");
+	cfg.searchPaths.push("/proj/lib");
+	cfg.searchPaths.push("/proj/vendor");
+	const r = resolveImportWithConfig("/x/lib/m.ms", "/proj/main.ms", cfg);
+	assert r.length == 1;
+	assert r[0] == "/x/lib/m.ms";
+}
+
+test "drive-letter absolute path with an explicit extension names that one file" {
+	const cfg = createDefaultConfig(Backend.C, "");
+	const r = resolveImportWithConfig("C:\\x\\lib\\m.ms", "C:\\proj\\main.ms", cfg);
+	assert r.length == 1;
+	assert r[0] == "C:/x/lib/m.ms";
+}
+
+test "absolute path without an extension probes extensions and index files" {
+	const cfg = createDefaultConfig(Backend.C, "");
+	const r = resolveImportWithConfig("/x/lib/m", "/proj/main.ms", cfg);
+	assert r.length == 8;
+	assert r[1] == "/x/lib/m.ms";
+	assert r[5] == "/x/lib/m/index.ms";
 }
 
 test "explicit .h extension resolves directly" {

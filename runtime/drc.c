@@ -128,11 +128,282 @@ void msLedgerDestroy(void* p, const msTypeInfo* type) {
 }
 #endif  /* MS_DRC_LEDGER */
 
+/* ===== DRC flow counters (perf-only, -DMS_DRC_STAT) ===== */
+#ifdef MS_DRC_STAT
+#include "runtime/drc.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+
+#define MS_DS_TYPE_SLOTS 1024
+#define MS_DS_TOP_TYPES 32
+
+typedef struct msDsBlock {
+	uint64_t c[MS_DS_COUNT];
+	uint64_t cycOther;
+	const msTypeInfo* cycType[MS_DS_TYPE_SLOTS];
+	uint64_t cycCount[MS_DS_TYPE_SLOTS];
+	struct msDsBlock* next;
+} msDsBlock;
+
+static msDsBlock* gDsBlocks = NULL;
+static pthread_mutex_t gDsMutex = PTHREAD_MUTEX_INITIALIZER;
+static _Thread_local msDsBlock* tDsBlock = NULL;
+
+static msDsBlock* msDsLocal(void) {
+	if (tDsBlock != NULL) return tDsBlock;
+	msDsBlock* b = (msDsBlock*)calloc(1, sizeof(msDsBlock));
+	if (b == NULL) abort();
+	pthread_mutex_lock(&gDsMutex);
+	b->next = gDsBlocks;
+	gDsBlocks = b;
+	pthread_mutex_unlock(&gDsMutex);
+	tDsBlock = b;
+	return b;
+}
+
+void msDrcStatAdd(int id, uint64_t n) { msDsLocal()->c[id] += n; }
+
+void msDrcStatCycle(const msTypeInfo* type) {
+	msDsBlock* b = msDsLocal();
+	b->c[MS_DS_CYC_REG]++;
+	size_t i = ((uintptr_t)type >> 4) & (MS_DS_TYPE_SLOTS - 1);
+	for (size_t n = 0; n < MS_DS_TYPE_SLOTS; n++) {
+		if (b->cycType[i] == type || b->cycType[i] == NULL) {
+			b->cycType[i] = type;
+			b->cycCount[i]++;
+			return;
+		}
+		i = (i + 1) & (MS_DS_TYPE_SLOTS - 1);
+	}
+	b->cycOther++;
+}
+
+typedef struct { const char* name; uint64_t count; } msDsTypeRow;
+
+static int msDsRowCmp(const void* a, const void* b) {
+	const msDsTypeRow* x = (const msDsTypeRow*)a;
+	const msDsTypeRow* y = (const msDsTypeRow*)b;
+	if (x->count != y->count) return x->count < y->count ? 1 : -1;
+	return strcmp(x->name, y->name);
+}
+
+static const char* msDsFlowNames[MS_DS_COUNT] = {
+	"alloc", "alloc", "free", "rc.inc", "rc.dec", "rc.incAtomic", "rc.decAtomic", "rc.incCyclic",
+	"orc.decLast", "orc.decLast.true", "cycle.register", "collect", "collect.traced", "collect.freed"
+};
+
+/* Runs from atexit, registered before the pool's, so it runs after the pool joined its workers. */
+static void msDsDump(void) {
+	const char* path = getenv("MS_DRC_STAT");
+	if (path == NULL || path[0] == '\0') return;
+	FILE* f = fopen(path, "a");
+	if (f == NULL) return;
+	pthread_mutex_lock(&gDsMutex);
+	uint64_t total[MS_DS_COUNT] = {0};
+	uint64_t other = 0;
+	size_t cap = 0;
+	for (msDsBlock* b = gDsBlocks; b != NULL; b = b->next) {
+		for (int i = 0; i < MS_DS_COUNT; i++) total[i] += b->c[i];
+		other += b->cycOther;
+		for (int i = 0; i < MS_DS_TYPE_SLOTS; i++) if (b->cycType[i] != NULL) cap++;
+	}
+	msDsTypeRow* rows = (msDsTypeRow*)calloc(cap + 1, sizeof(msDsTypeRow));
+	size_t nrows = 0;
+	for (msDsBlock* b = gDsBlocks; b != NULL; b = b->next) {
+		for (int i = 0; i < MS_DS_TYPE_SLOTS; i++) {
+			if (b->cycType[i] == NULL) continue;
+			const char* name = b->cycType[i]->name != NULL ? b->cycType[i]->name : "<unnamed>";
+			size_t k = 0;
+			while (k < nrows && strcmp(rows[k].name, name) != 0) k++;
+			if (k == nrows) { rows[k].name = name; nrows++; }
+			rows[k].count += b->cycCount[i];
+		}
+	}
+	qsort(rows, nrows, sizeof(msDsTypeRow), msDsRowCmp);
+	static const char* metric[MS_DS_COUNT] = {"count", "bytes"};
+	for (int i = 0; i < MS_DS_COUNT; i++) {
+		fprintf(f, "drc\t%s\t%s\t%llu\n", msDsFlowNames[i],
+			i == MS_DS_ALLOC_BYTES ? metric[1] : metric[0], (unsigned long long)total[i]);
+	}
+	fprintf(f, "drc\trc.decCyclic\tcount\t%llu\n", (unsigned long long)total[MS_DS_ORC_DEC_LAST]);
+	for (size_t k = 0; k < nrows; k++) {
+		if (k < MS_DS_TOP_TYPES) fprintf(f, "drc\tcycle.register.%s\tcount\t%llu\n", rows[k].name, (unsigned long long)rows[k].count);
+		else other += rows[k].count;
+	}
+	fprintf(f, "drc\tcycle.register.other\tcount\t%llu\n", (unsigned long long)other);
+	free(rows);
+	pthread_mutex_unlock(&gDsMutex);
+	fclose(f);
+}
+__attribute__((constructor)) static void msDsRegisterDump(void) { atexit(msDsDump); }
+#endif  /* MS_DRC_STAT */
+
 #ifndef MSGC_MANUAL
 #include "runtime/drc.h"
 
 _Thread_local msSlab msSlabTLS;
 MS_TLS_PUBLISH(msSlabTLS)
+
+#include <stdio.h>
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+#if defined(__linux__)
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
+
+enum { MS_DROP_FRAME = 1, MS_DROP_CONT = 2, MS_DROP_TAG = 3 };
+
+static void msDropBounds(msDropState* d) {
+	uintptr_t lo = 0;
+	uintptr_t hi = 0;
+#if defined(__APPLE__)
+	pthread_t self = pthread_self();
+	hi = (uintptr_t)pthread_get_stackaddr_np(self);
+	lo = hi - (uintptr_t)pthread_get_stacksize_np(self);
+#elif defined(_WIN32)
+	ULONG_PTR low = 0;
+	ULONG_PTR high = 0;
+	GetCurrentThreadStackLimits(&low, &high);
+	lo = (uintptr_t)low;
+	hi = (uintptr_t)high;
+#elif defined(__linux__)
+	pthread_attr_t attr;
+	if (pthread_getattr_np(pthread_self(), &attr) == 0) {
+		void* addr = NULL;
+		size_t size = 0;
+		if (pthread_attr_getstack(&attr, &addr, &size) == 0) {
+			lo = (uintptr_t)addr;
+			hi = lo + size;
+		}
+		pthread_attr_destroy(&attr);
+	}
+	struct rlimit limit;
+	if (hi != 0 && getpid() == (pid_t)syscall(SYS_gettid) && getrlimit(RLIMIT_STACK, &limit) == 0
+		&& limit.rlim_cur != RLIM_INFINITY && hi - lo > (uintptr_t)limit.rlim_cur) {
+		lo = hi - (uintptr_t)limit.rlim_cur;
+	}
+#endif
+	uintptr_t size = hi > lo ? hi - lo : 0;
+	uintptr_t headroom = size / 8;
+	if (headroom < 64 * 1024) headroom = 64 * 1024;
+	if (headroom > 1024 * 1024) headroom = 1024 * 1024;
+	if (size <= 2 * headroom) {
+		d->floor = UINTPTR_MAX;
+		d->span = 1;
+		return;
+	}
+	d->floor = lo + headroom;
+	d->span = hi - d->floor;
+}
+
+static void msDropReserve(msDropState* d, int32_t extra) {
+	if (d->len + extra <= d->cap) return;
+	int32_t cap = d->cap < 64 ? 64 : d->cap;
+	while (cap < d->len + extra) cap *= 2;
+	msDropSlot* data = (msDropSlot*)realloc(d->data, (size_t)cap * sizeof(msDropSlot));
+	if (data == NULL) {
+		fprintf(stderr, "fatal: out of memory growing the drop stack to %d entries\n", cap);
+		abort();
+	}
+	d->data = data;
+	d->cap = cap;
+}
+
+static void msDropReverse(msDropSlot* a, msDropSlot* b) {
+	while (a < b) {
+		msDropSlot swap = *a;
+		*a++ = *b;
+		*b-- = swap;
+	}
+}
+
+static void msDropRun(msSlab* s, void* root) {
+	msDropState* d = &s->drop;
+	void* const outerCur = d->cur;
+	const int32_t outerBase = d->base;
+	const int32_t floor = d->len;
+	void* p = root;
+	for (;;) {
+		d->cur = p;
+		d->base = d->len;
+		MS_DESTROY_DISPATCH(msHeader(p)->type, p);
+		if (d->len == d->base) {
+			msDropDispose(s, p);
+		} else {
+			msDropReserve(d, 1);
+			d->data[d->len++].p = (void*)((uintptr_t)p | MS_DROP_FRAME);
+			msDropReverse(d->data + d->base, d->data + d->len - 1);
+		}
+		p = NULL;
+		while (p == NULL && d->len > floor) {
+			void* item = d->data[--d->len].p;
+			uintptr_t tag = (uintptr_t)item & MS_DROP_TAG;
+			void* obj = (void*)((uintptr_t)item & ~(uintptr_t)MS_DROP_TAG);
+			if (tag == 0) {
+				p = obj;
+			} else if (tag == MS_DROP_FRAME) {
+				msDropDispose(s, obj);
+			} else {
+				msDropCont fn = d->data[--d->len].fn;
+				int32_t resume = (int32_t)d->data[--d->len].n;
+				d->cur = obj;
+				d->base = d->len;
+				fn(obj, resume);
+				if (d->len - d->base > 1) msDropReverse(d->data + d->base, d->data + d->len - 1);
+			}
+		}
+		if (p == NULL) break;
+	}
+	d->cur = outerCur;
+	d->base = outerBase;
+	if (outerCur == NULL && floor == 0) {
+		free(d->data);
+		d->data = NULL;
+		d->cap = 0;
+	}
+}
+
+bool msDropEdgeSlow(void* owner, void* p) {
+	msSlab* s = &msSlabTLS;
+	msDropState* d = &s->drop;
+	if (d->span == 0) {
+		msDropBounds(d);
+		if (msStackPointer() - d->floor < d->span) {
+			MS_DESTROY_DISPATCH(msHeader(p)->type, p);
+			msDropDispose(s, p);
+			return false;
+		}
+	}
+	if (owner != NULL && owner == d->cur) {
+		msDropReserve(d, 1);
+		d->data[d->len++].p = p;
+		return true;
+	}
+	msDropRun(s, p);
+	return false;
+}
+
+void msDropDefer(void* owner, msDropCont fn, int32_t resume) {
+	msDropState* d = &msSlabTLS.drop;
+	msDropReserve(d, 3);
+	d->data[d->len++].p = (void*)((uintptr_t)owner | MS_DROP_CONT);
+	d->data[d->len++].fn = fn;
+	d->data[d->len++].n = resume;
+}
+
+void msDropRestore(const msDropState* saved) {
+	msDropState* d = &msSlabTLS.drop;
+	d->cur = saved->cur;
+	d->len = saved->len;
+	d->base = saved->base;
+}
 #endif
 
 #ifdef MSGC_ORC
@@ -206,6 +477,7 @@ void msRegisterCycle(void* p, const msTypeInfo* type) {
 	/* Already registered? */
 	if (h->rootIdx >= 0) return;
 	h->rootIdx = msRoots.len;
+	MS_DRC_STAT_CYCLE(type);
 	msCell cell = { p, type };
 	msCellSeqPush(&msRoots, cell);
 
@@ -235,7 +507,7 @@ static inline void setColor(msRefHeader* h, int32_t color) {
 	h->rc = (h->rc & ~MS_COLOR_MASK) | color;
 }
 
-static inline int32_t getCount(msRefHeader* h) {
+static inline intptr_t getCount(msRefHeader* h) {
 	return h->rc >> MS_RC_SHIFT;
 }
 
@@ -245,6 +517,10 @@ static inline void decCount(msRefHeader* h) {
 
 static inline void incCount(msRefHeader* h) {
 	h->rc += MS_RC_INCREMENT;
+}
+
+static inline void setLastRefCount(msRefHeader* h) {
+	h->rc &= MS_RC_MASK;
 }
 
 /* ===== Trace Ref (reference ORC parity) ===== */
@@ -407,6 +683,8 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 		collectColor(j, msRoots.data[i].ptr, msRoots.data[i].type, colToCollect);
 	}
 
+	MS_DRC_STAT_ADD(MS_DS_COLLECT, 1); MS_DRC_STAT_ADD(MS_DS_COLLECT_TRACED, j->touched);
+
 	/* Protect against re-entrancy: destructors may trigger registerCycle */
 	int32_t oldThreshold = msRootsThreshold;
 	msRootsThreshold = INT32_MAX;
@@ -416,12 +694,14 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 	for (int32_t i = 0; i < j->toFree.len; i++) {
 		void* p = j->toFree.data[i].ptr;
 		const msTypeInfo* type = j->toFree.data[i].type;
+		setLastRefCount(msHeader(p));
 		MS_DESTROY_DISPATCH(type, p);
 		msDestroyAndDispose(p);
 	}
 
 	msRootsThreshold = oldThreshold;
 	j->freed += j->toFree.len;
+	MS_DRC_STAT_ADD(MS_DS_COLLECT_FREED, j->toFree.len);
 	msCellSeqFree(&j->toFree);
 }
 

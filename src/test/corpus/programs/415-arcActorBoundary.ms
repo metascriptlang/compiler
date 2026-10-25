@@ -3,6 +3,8 @@
 // @stdout: arc-actor-boundary send=2100000 call=1500000
 // @serial
 // @skip-js: Arc<T> is a C-backend atomic-rc box; no js binding
+// @ledger-slack(Sink) 1
+// ledger-slack reason: its actors are never stopped, so they and what they own are still live at exit
 // note: the SHARE verb at the actor boundary (PARALOCK Amendment I / I21). Both invocation classes are exercised on ONE shape: a fire-and-forget SEND (void method, sender never parks) and an awaited CALL (sender parked, mechanically a BORROW). In both the sender drops its LAST reference immediately — the handle dies at the end of the loop iteration while the message may still be in flight — and a fresh Arc is allocated every round so a freed cell is handed straight back to the next allocation. That is the exact shape that was a deterministic use-after-free before this amendment (msMsgSetPtr stored the raw pointer with no incref; the accumulated counter read the reuser's field, rounds x junk.n instead of rounds x 7). It is sound now because msMsgSetPtrShared takes the message's atomic incref at pack and the generated _impl releases exactly once through a synthesized finally. send=2100000 (300000x7) proves the SEND payload survived the sender's scope exit; call=1500000 (300000x5) proves the CALL leg round-trips; flat RSS proves the boundary incref is released, not leaked, on both paths. Bound 40-to-20 + rounds 2000-to-300000 (2026-09-04 RSS audit): measured steady-state ~8.6MB (Linux drc); the old shape left 34.7MB slack over 2k rounds - blind under 18KB/round, unable to see its own guarded class (~65-130B/round of leaked Arc cell + payload). 20 keeps 2.3x headroom while a single-leg boundary leak (~20-39MB at 300k rounds) now trips.
 
 struct Payload { buf: string; n: int32; }

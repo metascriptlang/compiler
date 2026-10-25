@@ -10,9 +10,10 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeCall, makeMember, makeNumber, generatedRef, runtimeRef } from "../util";
 import { createPrimitive, isWideningInt64Conv, peelToRepr, distinctNumericBase } from "../../checker/types";
-import { isFloatKind, readsUnionMember } from "./bigIntJS";
+import { readsUnionMember } from "./bigIntJS";
+import { is64Kind, isFloatKind, isNarrowIntKind } from "../numKinds";
 import { rangeCheckHelper, makeRangeCheckFor } from "../native/rangeCheckInject";
-import { parseInput, makeJsCtx, getStmts, firstExprKindAfter } from "../testUtil";
+import { parseInput, makeJsCtx, getStmts, firstExprKindAfter, castOf } from "../testUtil";
 import { checkProgramJs } from "../../checker/checkPass";
 
 export function lowerIntConvJS(program: Node, ctx: TransformContext): Node {
@@ -58,7 +59,7 @@ function materializeIntConv(node: Node): Node {
 		if (!isIntConvKind(kind)) {
 			if (isFloatKind(kind) && d.asExpr != null) {
 				const srcT = d.asExpr.nodeType;
-				if (srcT != null && (srcT.kind == TypeKind.Int64 || srcT.kind == TypeKind.Uint64)) {
+				if (srcT != null && is64Kind(srcT.kind)) {
 					return numberOf64(d.asExpr, kind == TypeKind.Float32 ? TypeKind.Float32 : TypeKind.Float64, node.location);
 				}
 			}
@@ -73,7 +74,7 @@ function materializeIntConv(node: Node): Node {
 			// int64 is a BigInt at runtime on js; widening to a float must go
 			// through Number() or the BigInt leaks into arithmetic as-is.
 			const srcT = d.convExpr != null ? d.convExpr.nodeType : null;
-			if (srcT != null && (srcT.kind == TypeKind.Int64 || srcT.kind == TypeKind.Uint64)) {
+			if (srcT != null && is64Kind(srcT.kind)) {
 				return numberOf64(d.convExpr, d.convType.kind, node.location);
 			}
 		}
@@ -116,16 +117,11 @@ function isByteSource(t: Type | null): boolean {
 	const r = peelToRepr(t);
 	if (r == null) return false;
 	const kind = r.kind == TypeKind.Enum ? TypeKind.Int32 : r.kind;
-	return isFloatKind(kind) || (isIntConvKind(kind) && kind != TypeKind.Int64 && kind != TypeKind.Uint64);
+	return isFloatKind(kind) || (isIntConvKind(kind) && !is64Kind(kind));
 }
 
 export function isIntConvKind(kind: TypeKind): boolean {
-	return match (kind) {
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 => true,
-		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 => true,
-		TypeKind.Int64 | TypeKind.Uint64 => true,
-		_ => false,
-	};
+	return isNarrowIntKind(kind) || is64Kind(kind);
 }
 
 // ===== Test Helpers =====
@@ -152,10 +148,6 @@ function castOp(input: string): string {
 function castKind(input: string): NodeKind {
 	const r = castResult(input);
 	return r != null ? r.kind : NodeKind.Program;
-}
-
-function castOf(target: string): string {
-	return "function f(v: float64): void { const r = v as " + target + "; }";
 }
 
 // ===== Tests =====

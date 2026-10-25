@@ -3,6 +3,7 @@
 import { execFileResult, ExecFileResult, exit, env, cwd, platform } from "std/process";
 import { readFile, writeFile, readDir, exists, ensureDir, removeAll, copyFile } from "std/fs";
 import { sleepAsync } from "std/core/promise";
+import { spawn as spawnChild, ChildProcess, ChildStream } from "std/process/child";
 
 function slashes(p: string): string {
 	return p.replaceAll("\\", "/");
@@ -68,13 +69,52 @@ const PARKED: { name: string, card: string }[] = [
 	{ name: "hcrModulePassReload", card: "inbox card 2026-10-06-hcr-ref-array-cell-owned-by-user-image.md" },
 ];
 
-// A failed first build leaves `msc run --hcr` waiting for an edit, so every call gets a wall-clock bound.
+const SAN = env.get("MSHCR_SAN") == "1";
+const SAN_DLL = "clang_rt.asan_dynamic-x86_64.dll";
+let sanFlags = "";
+
+function sanSetup(): void {
+	if (sanFlags != "") return;
+	sanFlags = " ";
+	if (platform != "windows") return;
+	const resource = slashes(execFileResult("clang", ["-print-resource-dir"], ROOT).output.trim());
+	const shim = `${TMP}/asan-shim`;
+	const gnu = `${shim}/lib/x86_64-w64-windows-gnu`;
+	if (!exists(`${gnu}/libclang_rt.asan_dynamic.dll.a`)) {
+		ensureDir(TMP);
+		execFileResult("cmd", ["/c", "xcopy", "/E", "/I", "/Y", resource.replaceAll("/", "\\"), shim.replaceAll("/", "\\")], ROOT);
+		ensureDir(gnu);
+		copy(`${resource}/lib/windows/clang_rt.asan_dynamic-x86_64.lib`, `${gnu}/libclang_rt.asan_dynamic.a`);
+		copy(`${resource}/lib/windows/clang_rt.asan_dynamic-x86_64.lib`, `${gnu}/libclang_rt.asan_dynamic.dll.a`);
+		copy(`${resource}/lib/windows/clang_rt.asan_dynamic_runtime_thunk-x86_64.lib`, `${gnu}/libclang_rt.asan_dynamic_runtime_thunk.a`);
+	}
+	sanFlags = ` --target=x86_64-w64-mingw32 -resource-dir ${shim}`;
+}
+
+function sanRuntime(dir: string): void {
+	if (platform != "windows") return;
+	const resource = slashes(execFileResult("clang", ["-print-resource-dir"], ROOT).output.trim());
+	copy(`${resource}/lib/windows/${SAN_DLL}`, `${dir}/${SAN_DLL}`);
+}
+
+// A failed first build leaves `msc run --hcr` waiting for an edit, so every call outside Windows gets a wall-clock bound.
 const MSC_SECONDS = "900";
 const BOUNDED = "my $t = shift; setpgrp(0, 0); my $pid = fork; if (!$pid) { exec @ARGV or exit 127 } $SIG{ALRM} = sub { print STDERR \"msc gave no answer within ${t}s\\n\"; kill \"KILL\", -$$ }; alarm $t; waitpid($pid, 0); exit($? >> 8)";
 
-function msc(dir: string, args: string[]): ExecFileResult {
-	if (platform == "win32") return execFileResult(MSC, args, dir);
+function runMsc(args: string[], dir: string): ExecFileResult {
+	if (platform == "windows") return execFileResult(MSC, args, dir);
 	return execFileResult("perl", ["-e", BOUNDED, MSC_SECONDS, MSC, ...args], dir);
+}
+
+function msc(dir: string, args: string[]): ExecFileResult {
+	if (!SAN || args[0] != "build") return runMsc(args, dir);
+	sanSetup();
+	const full: string[] = [];
+	for (const arg of args) full.push(arg);
+	full.push("--cc=clang");
+	full.push(`--passC=-O0 -g -fsanitize=address -DMS_SLAB_MAX=0 -Wno-error=incompatible-pointer-types${sanFlags}`);
+	full.push(`--passL=-fsanitize=address -pthread${sanFlags}`);
+	return runMsc(full, dir);
 }
 
 // Build that must succeed: its log is printed before the verdict when it does not.
@@ -787,6 +827,7 @@ function engine(): void {
 		"HCR-ENGINE lifecycle v1: destroy probe 8",
 		"HCR-ENGINE lifecycle v1: before reload",
 		"HCR-ENGINE lifecycle v2: after reload",
+		"HCR-ENGINE lifecycle v1: after reload",
 		"HCR-ENGINE after-reload handler throws: rejected lifecycle",
 		"HCR-ENGINE after rollback: value 10 tick 13 version 1",
 		"HCR-ENGINE probe after rollback: instanceof true true scaled 70",
@@ -803,8 +844,10 @@ function engine(): void {
 		"HCR-ENGINE lifecycle v1: after reload",
 		"HCR-ENGINE added global: reloaded logic",
 		"HCR-ENGINE after added global: value 10 tick 15 version 1",
-		"HCR-ENGINE class layout changed: restart required lifecycle",
-		"HCR-ENGINE after class layout rejection: value 10 tick 16 version 1",
+		"HCR-ENGINE lifecycle v1: before reload",
+		"HCR-ENGINE lifecycle v1: after reload",
+		"HCR-ENGINE class layout changed: reloaded lifecycle",
+		"HCR-ENGINE after class layout change: value 10 tick 16 version 1",
 		"HCR-ENGINE core changed: restart required",
 	];
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
@@ -1157,7 +1200,7 @@ function genericIdentity(): void {
 		"IDENT 2 3 4x t v1 given 7 peek 1.5",
 		"IDENT 2 3 4x t v2 given 7 peek 1.5",
 		"IDENT 2 3 4x t v3 given 7 peek 1.5",
-		"IDENT layout restart required: the layout of type 'Box' in module 'box' changed",
+		"IDENT layout restart required names Box generic: true",
 	];
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
 		console.log(both(ran));
@@ -1227,6 +1270,7 @@ function runPrebuilt(tag: string, dir: string, modules: string[], prefix: string
 	const exe = platform == "windows" ? "host.exe" : "host";
 	copy(STD_HOST, `${dir}/host.cms`);
 	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
+	if (SAN) sanRuntime(dir);
 	ensureDir(`${dir}/run`);
 	for (const name of readDir(`${dir}/g1`)) {
 		copy(`${dir}/g1/${name}`, `${dir}/run/${name}`);
@@ -1275,6 +1319,117 @@ function sharedVariable(): void {
 		"HCR-SHARED after title type rejection: 9 two 45 45",
 		"HCR-SHARED g5: reloaded logic",
 		"HCR-SHARED edited constants again: 11 three 56 56",
+	]);
+}
+
+function layoutHolder(variant: string, grown: boolean): string[] {
+	const more = grown ? "b: string; " : "";
+	const moreValue = grown ? "b: \"beta\", " : "";
+	return match (variant) {
+		"array" => ["let held: P[] = [];", "held.push(make());", "held = [];"],
+		"closure" => ["let held: (() => int32) | null = null;", "const p = make(); held = (): int32 => p.a;", "held = null;"],
+		"list" => ["class List<T> { items: T[] = []; }\nlet held: List<P> = new List<P>();", "held.items.push(make());", "held = new List<P>();"],
+		"map" => ["let held = new HashMap<string, P>();", "held.set(\"k\", make());", "held = new HashMap<string, P>();"],
+		"alias" => ["export interface Q { a: int32; " + more + "c: int32; }\nlet held: P | null = null;", "const q: Q = { a: 7, " + moreValue + "c: 1 }; held = q;", "held = null;"],
+		"subclass" => ["export class Q extends P { z: int32 = 1; }\nlet held: P | null = null;", "held = new Q();", "held = null;"],
+		_ => ["let held: P | null = null;", "held = make();", "held = null;"],
+	};
+}
+
+function layoutLogic(variant: string, generation: int32): string {
+	const grown = generation > 1;
+	const isClass = variant == "class" || variant == "subclass";
+	let declaration = grown ? "export interface P { a: int32; b: string; }" : "export interface P { a: int32; }";
+	let literal = grown ? "{ a: 7, b: \"beta\" }" : "{ a: 7 }";
+	if (isClass) {
+		declaration = grown ? "export class P { a: int32 = 7; b: string = \"beta\"; }" : "export class P { a: int32 = 7; }";
+		literal = "new P()";
+	}
+	const holder = layoutHolder(variant, grown);
+	const handlerCounts = variant == "resume" ? " ${befores}/${afters}" : "";
+	const lines = [
+		declaration,
+		holder[0],
+		`function make(): P { return ${literal}; }`,
+		`export function hold(): void { ${holder[1]} }`,
+		`export function release(): void { ${holder[2]} }`,
+		"export function fresh(): string { const p = make(); return " + (grown ? "`${p.a} ${p.b}" : "`${p.a}") + handlerCounts + "`; }",
+	];
+	if (variant == "handler") lines.push("@beforeReload\nfunction drop(): void { held = null; }");
+	if (variant == "resume") {
+		lines.push("let befores: int32 = 0;\nlet afters: int32 = 0;");
+		lines.push("@beforeReload\nfunction pause(): void { befores += 1; }");
+		lines.push("@afterReload\nfunction resume(): void { afters += 1; }");
+	}
+	if (generation > 2) lines.push("export const SALT: int32 = 3;");
+	return lines.join("\n") + "\n";
+}
+
+function layoutStructLogic(generation: int32): string {
+	const grown = generation > 1;
+	return [
+		grown ? "export struct S { a: int32; b: string; }" : "export struct S { a: int32; }",
+		"export class Box { s: S; constructor() { this.s = " + (grown ? "{ a: 7, b: \"beta\" }" : "{ a: 7 }") + "; } }",
+		"let held: Box | null = null;",
+		"export function hold(): void { held = new Box(); }",
+		"export function release(): void { held = null; }",
+		"export function fresh(): string { const b = new Box(); return " + (grown ? "`${b.s.a} ${b.s.b}`" : "`${b.s.a}`") + "; }",
+		generation > 2 ? "export const SALT: int32 = 3;" : "",
+	].join("\n") + "\n";
+}
+
+function layoutVariant(variant: string, want: string[]): void {
+	const tag = `hcrLayout_${variant}`;
+	const dir = freshDir(`${TMP}/layout_${variant}`);
+	copy(`${FIXTURES}/layoutReload/app.ms`, `${dir}/app.ms`);
+	copy(`${FIXTURES}/registrySupport.ms`, `${dir}/support.ms`);
+	for (let g: int32 = 1; g <= 3; g += 1) {
+		put(`${dir}/logic.ms`, variant == "struct" ? layoutStructLogic(g) : layoutLogic(variant, g));
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g${g}/module${sharedLibraryExt()}`], `generation ${g} failed to build`);
+	}
+	runPrebuilt(tag, dir, ["logic", "support"], "HCR-LAYOUT", want);
+}
+
+const OWN_LIVE = "type 'P' in module 'logic' has 1 live values";
+
+function layoutHeld(reason: string): string[] {
+	return [
+		"HCR-LAYOUT before: 7",
+		`HCR-LAYOUT held: restart required logic | ${reason}`,
+		"HCR-LAYOUT after held: 7",
+		"HCR-LAYOUT released: reloaded logic | ",
+		"HCR-LAYOUT after released: 7 beta",
+	];
+}
+
+function layoutReload(): void {
+	layoutVariant("module", layoutHeld(OWN_LIVE));
+	layoutVariant("handler", [
+		"HCR-LAYOUT before: 7",
+		"HCR-LAYOUT held: reloaded logic | ",
+		"HCR-LAYOUT after held: 7 beta",
+		"HCR-LAYOUT released: reloaded logic | ",
+		"HCR-LAYOUT after released: 7 beta",
+	]);
+	layoutVariant("resume", [
+		"HCR-LAYOUT before: 7 0/0",
+		`HCR-LAYOUT held: restart required logic | ${OWN_LIVE}`,
+		"HCR-LAYOUT after held: 7 1/1",
+		"HCR-LAYOUT released: reloaded logic | ",
+		"HCR-LAYOUT after released: 7 beta 2/2",
+	]);
+}
+
+function layoutVariants(): void {
+	for (const variant of ["class", "array", "closure", "list", "map"]) layoutVariant(variant, layoutHeld(OWN_LIVE));
+	layoutVariant("subclass", layoutHeld(`${OWN_LIVE}; type 'Q' in module 'logic' has 1 live values`));
+	layoutVariant("alias", layoutHeld(`${OWN_LIVE}; type 'Q' in module 'logic' has 1 live values`));
+	layoutVariant("struct", [
+		"HCR-LAYOUT before: 7",
+		"HCR-LAYOUT held: restart required logic | type 'S' in module 'logic' is held by value",
+		"HCR-LAYOUT after held: 7",
+		"HCR-LAYOUT released: restart required logic | type 'S' in module 'logic' is held by value",
+		"HCR-LAYOUT after released: 7",
 	]);
 }
 
@@ -1383,6 +1538,18 @@ function functionValues(): void {
 	]);
 }
 
+function dollarNames(): void {
+	const tag = "hcrDollarNames";
+	const dir = buildLogicGenerations(tag, "dollarNames", ["logic.ms", "logicEdit.ms", "logicDollarLayout.ms", "logicLayout.ms"]);
+	runPrebuilt(tag, dir, ["logic", "support"], "HCR-DOLLAR", [
+		"HCR-DOLLAR g1: $step 1 step 1 boxes 1 1",
+		"HCR-DOLLAR g2: reloaded logic []",
+		"HCR-DOLLAR after g2: $step 2 step 2 direct 2 2",
+		"HCR-DOLLAR g3: restart required logic [type '$Box' in module 'logic' has 2 live values]",
+		"HCR-DOLLAR g4: restart required logic [type 'Box' in module 'logic' has 2 live values]",
+	]);
+}
+
 function inlineFunctions(): void {
 	const tag = "hcrInlineFunctions";
 	const dir = buildLogicGenerations(tag, "inlineFunctions", ["logic.ms", "logicEdit.ms"]);
@@ -1453,6 +1620,103 @@ function coreOp(): void {
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
 		console.log(both(ran));
 		failWith(tag, "lifted operations a project image needs first and a core module needs later did not link and reload");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function coreGenericInit(): void {
+	const tag = "hcrCoreGenericInit";
+	const dir = freshDir(`${TMP}/coreGenericInit`);
+	for (const sub of ["app", "lib"]) ensureDir(`${dir}/${sub}`);
+	for (const f of ["app/app.ms", "app/logic.ms", "lib/lib.ms", "logicEdit.ms"]) {
+		copy(`${FIXTURES}/coreGenericInit/${f}`, `${dir}/${f}`);
+	}
+	const ran = msc(`${dir}/app`, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-GI ")) seen.push(line);
+	}
+	const want = [
+		"HCR-GI start V6 42 applib app=4 lib=3",
+		"HCR-GI reloaded logic",
+		"HCR-GI after V6 357 applib app=4 lib=3",
+	];
+	if (!succeeded(ran) || seen.join("
+") != want.join("
+")) {
+		console.log(both(ran));
+		failWith(tag, "a generic class instance a project image and a core module both construct did not link and reload");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function overloadCall(): void {
+	const tag = "hcrOverloadCall";
+	const dir = freshDir(`${TMP}/overloadCall`);
+	for (const f of ["app.ms", "caller.ms", "shapes.ms", "shapesEdit.ms"]) copy(`${FIXTURES}/overloadCall/${f}`, `${dir}/${f}`);
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=img/module${sharedLibraryExt()}`], "calls into another image's overloads did not link");
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-OV ")) seen.push(line);
+	}
+	const want = [
+		"HCR-OV start s x n 2 ns 2 n 3 n 7",
+		"HCR-OV reloaded shapes",
+		"HCR-OV after s x n2 4 ns 2 n2 6 n2 14",
+	];
+	if (!succeeded(ran) || seen.join("|") != want.join("|")) {
+		console.log(both(ran));
+		failWith(tag, "a call into another image's second or later overload did not bind through the registry and follow a reload");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function coreConstant(): void {
+	const tag = "hcrCoreConstant";
+	const dir = freshDir(`${TMP}/coreConstant`);
+	for (const f of ["app.ms", "geo.ms", "scale.ms", "scaleEdit.ms"]) copy(`${FIXTURES}/coreConstant/${f}`, `${dir}/${f}`);
+	mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=img/module${sharedLibraryExt()}`], "an image reading a core static constant did not link");
+	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+	const seen: string[] = [];
+	for (const line of lines(both(ran))) {
+		if (line.startsWith("HCR-CC ")) seen.push(line);
+	}
+	const want = [
+		"HCR-CC start 6.283185307179586 true",
+		"HCR-CC reloaded scale",
+		"HCR-CC after 9.42477796076938 true",
+	];
+	if (!succeeded(ran) || seen.join("|") != want.join("|")) {
+		console.log(both(ran));
+		failWith(tag, "a core static constant was not folded in an image, or a project constant edit did not reach the image after a reload");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function macroHelper(): void {
+	const tag = "hcrMacroHelper";
+	for (const variant of ["base", "second"]) {
+		const dir = freshDir(`${TMP}/macroHelper${variant}`);
+		const files = variant == "base" ? ["app.ms", "tools.ms"] : ["app.ms", "tools.ms", "helpers.ms"];
+		for (const f of files) copy(`${FIXTURES}/macroHelper/${variant}/${f}`, `${dir}/${f}`);
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=img/module${sharedLibraryExt()}`], `an exported helper only a macro calls (${variant}) did not build`);
+		const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+		const seen: string[] = [];
+		for (const line of lines(both(ran))) {
+			if (line.startsWith("HCR-MH ")) seen.push(line);
+		}
+		if (!succeeded(ran) || seen.length != 1 || seen[0] != "HCR-MH B2 0") {
+			console.log(both(ran));
+			failWith(tag, `an exported helper only a macro calls (${variant}) reached the core image or left the project module without an image`);
+		}
+	}
+	const dir = freshDir(`${TMP}/macroHelperRuntime`);
+	for (const f of ["runtimeCall.ms", "tools.ms"]) copy(`${FIXTURES}/macroHelper/base/${f}`, `${dir}/${f}`);
+	const refused = msc(dir, ["build", "runtimeCall.ms", "--hcr", `--output=img/module${sharedLibraryExt()}`]);
+	if (succeeded(refused) || both(refused).indexOf("'arity' calls 'childCount'", 0) < 0) {
+		console.log(both(refused));
+		failWith(tag, "a run-time call to a helper only the macro VM can run was not refused by name");
 	}
 	console.log(`ok   ${tag}`);
 }
@@ -1833,6 +2097,99 @@ function dynamicImportParity(): void {
 	console.log(`ok   ${tag}`);
 }
 
+// ---- hcrJsInstanceFiles: a new instantiation in the app leaves the library's ES module alone ----
+
+function jsInstanceFiles(): void {
+	const tag = "hcrJsInstanceFiles";
+	const dir = freshDir(`${TMP}/jsInstanceFiles`);
+	copy(`${FIXTURES}/jsInstanceFiles/lib.ms`, `${dir}/lib.ms`);
+	const first = "JS-INST first 1 7 own 2 own 1 made=4 counted=1";
+	const second = "JS-INST second 1 true app 3 own 1 made=8 counted=2";
+	const refusal = "invalid object conversion: Box<boolean> is not Box<int32>";
+	const third = "JS-INST third #8";
+	const fourth = "JS-INST fourth true false On:1";
+	const edits = ["app.ms", "appSecondType.ms", "appWrongCast.ms", "appFirstUse.ms", "appLoweringHelpers.ms"];
+	const wants = [[first], [first, second], [first, second, refusal], [first, second, third], [first, second, fourth]];
+	const libOf: string[] = [];
+	for (let i = 0; i < edits.length; i += 1) {
+		copy(`${FIXTURES}/jsInstanceFiles/${edits[i]}`, `${dir}/app.ms`);
+		mustBuild(tag, dir, ["build", "app.ms", "--target=js", "--split", `--output=tree${i}`], `split JS emission failed with ${edits[i]}`);
+		libOf.push(read(`${dir}/tree${i}/lib.js`));
+		const ran = msc(dir, ["run", "--target=js", "app.ms"]);
+		const seen: string[] = [];
+		for (const line of lines(both(ran))) {
+			if (line.startsWith("JS-INST ")) seen.push(line);
+			if (line.contains("invalid object conversion")) seen.push(line.slice(line.indexOf("invalid object conversion")));
+		}
+		if (seen.join("\n") != wants[i].join("\n") || succeeded(ran) != (edits[i] != "appWrongCast.ms")) {
+			console.log(both(ran));
+			failWith(tag, `${edits[i]} did not run as on the native target`);
+		}
+	}
+	need(tag, libOf[0] != "", "the split tree has no lib.js");
+	for (let i = 1; i < edits.length; i += 1) {
+		need(tag, libOf[i] == libOf[0], `${edits[i]} changed the emitted file of the untouched module lib`);
+	}
+	const before = readDir(`${dir}/tree0/_inst`);
+	for (const file of before) {
+		need(tag, read(`${dir}/tree1/_inst/${file}`) == read(`${dir}/tree0/_inst/${file}`), `${edits[1]} changed the instance file ${file}`);
+	}
+	need(tag, readDir(`${dir}/tree1/_inst`).length > before.length, `${edits[1]} added no instance file`);
+	console.log(`ok   ${tag}`);
+}
+
+function readUntil(child: ChildProcess, seen: string[], marker: string, limitMs: number): boolean {
+	const deadline = performance.now() + limitMs;
+	while (!seen[0].contains(marker) && performance.now() < deadline) {
+		const got = child.read(ChildStream.Stdout, 200);
+		if (!got.ok) continue;
+		if (got.value.ended) break;
+		seen[0] = seen[0] + got.value.data;
+	}
+	return seen[0].contains(marker);
+}
+
+function runKeys(): void {
+	const tag = "hcrRunKeys";
+	const globalCache = env.get("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_NO_GLOBAL_CACHE", "1");
+	for (const key of ["R", "r", "q"]) {
+		const dir = freshDir(`${TMP}/runKeys_${key}`);
+		copy(`${FIXTURES}/runKeys/app.ms`, `${dir}/app.ms`);
+		copy(`${FIXTURES}/runKeys/logic.ms`, `${dir}/logic.ms`);
+		copy(`${FIXTURES}/runKeys/logicGrown.ms`, `${dir}/grown.txt`);
+		const started = spawnChild(MSC, ["run", "--hcr", "app.ms"], { cwd: dir, mergeStderr: true });
+		need(tag, started.ok, `cannot start ${MSC}`);
+		if (!started.ok) continue;
+		const child = started.value;
+		const seen = [""];
+		const asked = readUntil(child, seen, "HCR-KEYS reloaded 9", 120000);
+		if (!asked) console.log(seen[0]);
+		need(tag, asked, `key ${key}: the edited body did not reload into the running program`);
+		need(tag, seen[0].contains("HCR-KEYS start 7"), `key ${key}: the program did not start on the first build`);
+		if (key != "q") {
+			child.write(`${key}\n`, 5000);
+			const marker = key == "R" ? "HCR-KEYS start 9" : "watch: rebuilt on key r";
+			const answered = readUntil(child, seen, marker, 120000);
+			if (!answered) console.log(seen[0]);
+			need(tag, answered, `key ${key}: no '${marker}' after the key`);
+			if (key == "R") {
+				need(tag, seen[0].contains("watch: restarting"), "key R: no restart notice");
+				need(tag, seen[0].split("checked ").length == 3, "key R: the restart ran a build (a second 'checked N/N' appeared after the edit's own)");
+			}
+		}
+		child.write("q\n", 5000);
+		const ended = child.wait(30000);
+		if (!ended.ok) console.log(seen[0]);
+		need(tag, ended.ok, `key ${key}: q did not end msc`);
+		readUntil(child, seen, "watch: quit", 2000);
+		need(tag, seen[0].contains("watch: quit"), `key ${key}: q printed no 'watch: quit'`);
+		child.close();
+	}
+	env.set("MSC_NO_GLOBAL_CACHE", globalCache);
+	console.log(`ok   ${tag}`);
+}
+
 const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrFsWatch", run: fsWatch },
 	{ name: "hcrModuleAbi", run: moduleAbi },
@@ -1869,13 +2226,20 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrRetainReport", run: retainReport },
 	{ name: "hcrRegistryVariables", run: registryVariables },
 	{ name: "hcrModulePassReload", run: modulePassReload },
+	{ name: "hcrLayoutReload", run: layoutReload },
+	{ name: "hcrLayoutVariants", run: layoutVariants },
 	{ name: "hcrRegistryGeneric", run: registryGeneric },
 	{ name: "hcrModuleTdz", run: moduleTdz },
 	{ name: "hcrFunctionValues", run: functionValues },
+	{ name: "hcrDollarNames", run: dollarNames },
 	{ name: "hcrInlineFunctions", run: inlineFunctions },
 	{ name: "hcrFileDependency", run: fileDependency },
 	{ name: "hcrCoreCell", run: coreCell },
 	{ name: "hcrCoreOp", run: coreOp },
+	{ name: "hcrCoreGenericInit", run: coreGenericInit },
+	{ name: "hcrMacroHelper", run: macroHelper },
+	{ name: "hcrOverloadCall", run: overloadCall },
+	{ name: "hcrCoreConstant", run: coreConstant },
 	{ name: "hcrCoreNative", run: coreNative },
 	{ name: "hcrGlobalCell", run: globalCell },
 	{ name: "hcrWatchWarmDependency", run: watchWarmDependency },
@@ -1889,6 +2253,8 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrAndroidImages", run: androidImages },
 	{ name: "hcrDynamicImportReload", run: dynamicImportReload },
 	{ name: "hcrDynamicImportParity", run: dynamicImportParity },
+	{ name: "hcrJsInstanceFiles", run: jsInstanceFiles },
+	{ name: "hcrRunKeys", run: runKeys },
 ];
 if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });
 

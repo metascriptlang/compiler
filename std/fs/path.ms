@@ -69,6 +69,27 @@ function toForwardSlash(p: string): string {
 	return result;
 }
 
+// True when normalize(p) would return p unchanged: a POSIX-rooted or relative path with
+// no "\\", no empty, "." or ".." segment and no trailing separator. Drive and UNC paths
+// answer false and take the segment walk. Scans bytes, so a multi-byte name costs no
+// UTF-16 index walk; separator and dot bytes never occur inside a UTF-8 sequence.
+function isNormalPosix(p: string): boolean {
+	const n = p.byteLength;
+	if (n == 0 || hasDriveLetter(p)) return false;
+	if (n == 1) return p.byteAt(0) != ".".code && p.byteAt(0) != "\\".code;
+	let segStart = p.byteAt(0) == "/".code ? 1 : 0;
+	for (let i = segStart; i <= n; i += 1) {
+		const c = i < n ? p.byteAt(i) : "/".code;
+		if (c == "\\".code) return false;
+		if (c != "/".code) continue;
+		const len = i - segStart;
+		if (len == 0) return false;
+		if (p.byteAt(segStart) == ".".code && (len == 1 || (len == 2 && p.byteAt(segStart + 1) == ".".code))) return false;
+		segStart = i + 1;
+	}
+	return true;
+}
+
 // ===== dirname =====
 
 // Return directory portion of path. Accepts both "/" and "\"; emits "/".
@@ -179,6 +200,11 @@ export function isAbsolute(p: string): boolean {
 // "a/b/../c" → "a/c", "a/./b" → "a/b", "///a" → "/a"
 // "C:\a\..\b" → "C:/b", "\\s\d\.\x" → "//s/d/x"
 export function normalize(p: string): string {
+	if (isNormalPosix(p)) return p;
+	return normalizeBySegments(p);
+}
+
+function normalizeBySegments(p: string): string {
 	if (p.length == 0) return ".";
 	const rl = rootLen(p);
 	// Extract root prefix (normalized to forward-slash form)
@@ -258,6 +284,9 @@ export function relative(from: string, to: string): string {
 	const fromN = normalize(from);
 	const toN = normalize(to);
 	if (fromN == toN) return "";
+	if (fromN != "/" && fromN != "." && rootLen(fromN) == rootLen(toN) && toN.byteLength > fromN.byteLength && toN.byteAt(fromN.byteLength) == "/".code && toN.startsWith(fromN)) {
+		return toN.byteSlice(fromN.byteLength + 1, toN.byteLength);
+	}
 
 	const fromRoot = rootLen(fromN);
 	const toRoot = rootLen(toN);
@@ -513,6 +542,23 @@ test "relative Windows mixed separators" {
 test "relative trailing slashes ignored" {
 	assert relative("/a/b/", "/a/b/c") == "c";
 	assert relative("/a/b", "/a/b/") == "";
+}
+
+test "normalize answers a path already in normal form with the same string as the segment walk" {
+	const paths = [
+		"/", ".", "..", "a", "/a", "a/b", "/a/b/c.ms", "/é/日本/👍.ms", "a/../b", "./a", "a/.", "a//b", "/a/b/",
+		"//s/d", "\\a", "a\\b", "C:", "C:/a", "C:\\a", "..a", ".a/b", "a/..b", "/..", "/.", "a/..", "\\",
+	];
+	for (const p of paths) assert normalize(p) == normalizeBySegments(p), p;
+	assert normalize("/é/日本/👍.ms") == "/é/日本/👍.ms";
+}
+
+test "relative descends below an ancestor with multi-byte names" {
+	assert relative("/é/日本", "/é/日本/👍/x.ms") == "👍/x.ms";
+	assert relative("/é/日本", "/é/日本x/y") == "../日本x/y";
+	assert relative("a/b", "a/b/c") == "c";
+	assert relative("C:", "C:/x") == "C:/x";
+	assert relative("//s/d", "//s/d/x") == "x";
 }
 
 test "relative to root" {

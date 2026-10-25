@@ -278,34 +278,6 @@ static inline void* name(void* input, msClosure onFulfilled) { \
     return name##WithRejected(input, onFulfilled, (msClosure){0}); \
 }
 
-/* Typed .finally: invoke handler, then propagate input (value or error) to output
- * via typed msFutureCompleteT. Error propagation goes through msFutureFail
- * (not type-specific). */
-#define MS_DEFINE_FUTURE_FINALLY(name, fut_type) \
-static inline void name##_cb(void* raw) { \
-    msFutureFinallyEnv* e = (msFutureFinallyEnv*)raw; \
-    if (e->onSettled.env != NULL) { \
-        ((void(*)(void*))e->onSettled.fn)(e->onSettled.env); \
-    } else { \
-        ((void(*)(void))e->onSettled.fn)(); \
-    } \
-    if (e->input->base.failed || e->input->base.cancelled) { \
-        msFutureFailShared(e->output, e->input->base.error); \
-    } else { \
-        fut_type* srcT = (fut_type*)e->input; \
-        fut_type* dstT = (fut_type*)e->output; \
-        msFutureCompleteT(dstT, srcT->value); \
-    } \
-    msDecref(e->output); msDecref(e->input); msClosureDestroy(e->onSettled); free(e); \
-} \
-static inline void* name(void* input, msClosure onSettled) { \
-    msFuture* output = (msFuture*)msAlloc(sizeof(fut_type)); \
-    msFutureFinallyEnv* env = (msFutureFinallyEnv*)malloc(sizeof(msFutureFinallyEnv)); \
-    env->output = output; env->input = (msFuture*)input; msIncref(input); msIncref(output); msClosureCopy(onSettled); env->onSettled = onSettled; \
-    msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)name##_cb, .env = env}); \
-    return output; \
-}
-
 /* Typed .catch: on success, propagate input value to output via typed complete.
  * On error, invoke handler with the Error the input holds (lent: the input keeps its
  * count), complete output with NULL on handler success or propagate handler's rethrow. */
@@ -346,13 +318,7 @@ MS_DEFINE_FUTURE_THEN(msFutureThen_bool,   msFuture_bool,   bool,    bool, MS_NO
 MS_DEFINE_FUTURE_THEN(msFutureThen_ptr,    msFuture_ptr,    void*,   void*, MS_NO_DROP)
 MS_DEFINE_FUTURE_THEN(msFutureThen_ref,    msFuture_ptr,    void*,   void*, MS_DROP_REF_SLOT)
 
-MS_DEFINE_FUTURE_FINALLY(msFutureFinally_double, msFuture_double)
-MS_DEFINE_FUTURE_FINALLY(msFutureFinally_int32,  msFuture_int32)
-MS_DEFINE_FUTURE_FINALLY(msFutureFinally_int64,  msFuture_int64)
-MS_DEFINE_FUTURE_FINALLY(msFutureFinally_bool,   msFuture_bool)
-MS_DEFINE_FUTURE_FINALLY(msFutureFinally_ptr,    msFuture_ptr)
-
-/* msFutureCatch_msString / msFutureFinally_msString / msFutureThen_msString
+/* msFutureCatch_msString / msFutureThen_msString
  * are defined in system.h where msString is available. msFutureCatch_<primitive>
  * variants are also defined there (msString is needed for the error handler). */
 
@@ -396,9 +362,10 @@ MS_DEFINE_FUTURE_FINALLY(msFutureFinally_ptr,    msFuture_ptr)
 static inline void msPromiseAllArrRelease(void* arr) { msDecref(arr); }
 
 #define MS_PROMISE_ALL_FOR(SrcT, elemFutType, DstT, arrType, payloadType, copyStmt, arrDestroyFn) \
+    static void elemFutType##_allArrRttiDestroy(void* dest) { arrDestroyFn(dest); } \
     static msTypeInfo elemFutType##_allArrTI = { \
         .name = #arrType "PallCell", \
-        .destroyFn = (msDestroyProc)(arrDestroyFn), \
+        .destroyFn = elemFutType##_allArrRttiDestroy, \
     }; \
     MS_PROMISE_ALL_FOR_TI(SrcT, elemFutType, DstT, arrType, payloadType, copyStmt, &elemFutType##_allArrTI)
 

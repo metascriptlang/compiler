@@ -1,16 +1,15 @@
-// Statement Callbacks - Runtime callback infrastructure
-// Sub-parsers (control, declaration, errorHandling) use callBlockParser/callExprParser
-// to call back into core.ms without circular imports.
+// Statement Callbacks - the slots declaration.ms and module/loader.ms still read.
 // core.ms registers the real implementations at module load time.
 
 import { Node } from "../../ast/node";
-import { ParserState } from "../context";
+import { ParserState } from "../cursor";
 
 type NodeResult = Result<Node, string>;
 type BlockParserFn = (state: ParserState) => NodeResult;
 type ExprParserFn = (state: ParserState) => NodeResult;
 type StmtParserFn = (state: ParserState) => NodeResult;
 type StateProgramParserFn = (state: ParserState) => NodeResult;
+type PatternParserFn = (state: ParserState) => NodeResult;
 
 let blockParserFn: BlockParserFn = (state: ParserState): NodeResult => {
 	return Result.err("Block parser not registered");
@@ -18,10 +17,6 @@ let blockParserFn: BlockParserFn = (state: ParserState): NodeResult => {
 
 let exprParserFn: ExprParserFn = (state: ParserState): NodeResult => {
 	return Result.err("Expr parser not registered");
-};
-
-let stmtParserFn: StmtParserFn = (state: ParserState): NodeResult => {
-	return Result.err("Stmt parser not registered");
 };
 
 let stateProgramParserFn: StateProgramParserFn = (state: ParserState): NodeResult => {
@@ -36,31 +31,13 @@ export function registerStmtExprParser(fn: ExprParserFn): void {
 	exprParserFn = fn;
 }
 
-export function registerStmtParser(fn: StmtParserFn): void {
-	stmtParserFn = fn;
-}
-
 export function registerStateProgramParser(fn: StateProgramParserFn): void {
 	stateProgramParserFn = fn;
 }
 
-type PatternParserFn = (state: ParserState) => NodeResult;
-let objectPatternParserFn: PatternParserFn = (state: ParserState): NodeResult => {
-	return Result.err("Object pattern parser not registered");
-};
-let arrayPatternParserFn: PatternParserFn = (state: ParserState): NodeResult => {
-	return Result.err("Array pattern parser not registered");
-};
-export function registerPatternParsers(objectFn: PatternParserFn, arrayFn: PatternParserFn): void {
-	objectPatternParserFn = objectFn;
-	arrayPatternParserFn = arrayFn;
-}
-export function callObjectPatternParser(state: ParserState): NodeResult {
-	return objectPatternParserFn(state);
-}
-export function callArrayPatternParser(state: ParserState): NodeResult {
-	return arrayPatternParserFn(state);
-}
+export function registerStmtParser(fn: StmtParserFn): void {}
+
+export function registerPatternParsers(objectFn: PatternParserFn, arrayFn: PatternParserFn): void {}
 
 export function callBlockParser(state: ParserState): NodeResult {
 	return blockParserFn(state);
@@ -68,10 +45,6 @@ export function callBlockParser(state: ParserState): NodeResult {
 
 export function callExprParser(state: ParserState): NodeResult {
 	return exprParserFn(state);
-}
-
-export function callStmtParser(state: ParserState): NodeResult {
-	return stmtParserFn(state);
 }
 
 export function callStateProgramParser(state: ParserState): NodeResult {

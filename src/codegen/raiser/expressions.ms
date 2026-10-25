@@ -11,27 +11,31 @@ import {
 	ConditionalExprData, TypeAssertionData, UpdateExprData,
 	ArrayLiteralData, ArrayAccessData, ObjectLiteralData,
 	MoveExprData, OutExprData, VariableDeclData, AwaitExprData, NewExprData,
-	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData,
+	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData, SpreadExprData, ClassDeclData, MethodDeclData,
 	createNodeAt
 } from "../../ast/node";
-import { RaiserOpcode, RaiserInstruction, RaiserConvClass, raiserABC, raiserABx, convOperand, fitsImm, immField, branchField } from "../../raiser/bytecode";
-import { RaiserValueKind, raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
-import { lookupHostFn } from "../../raiser/hostRegistry";
-import { emitValueCopy, emitValueAssign, needsValueAssign } from "./valueCopy";
+import { RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, RaiserCombine, raiserABC, raiserABx, raiserAx, convOperand, convClassBits, convClassSigned, fitsImm, immField, branchField, inRefFile, MAX_SLOT } from "../../raiser/bytecode";
+import { RaiserValueKind, createClassType, raiserInt, raiserFloat, raiserNil, raiserBool, raiserConstString } from "../../raiser/value";
+import { lookupHost } from "../../raiser/hostRegistry";
+import { opName } from "../../raiser/disasm";
+import { resolveRuntimeDir } from "../../utils/path";
+import { emitValueCopy, emitValueAssign, needsValueAssign, regClassOf, allocFor, joinClass, heldByLocation, slotClassesOf, layoutOf, slotKindsOf, fieldInst, newArrayInst } from "./valueCopy";
+import { placedInstanceOf } from "../../checker/instantiate";
 import { nonNullMemberOfNullable } from "../../checker/compat";
-import { widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion } from "../../checker/types";
-import { SymbolFlag, isViewBinding } from "../../checker/symbol";
+import { runtimeClassSym, hasGenericParams, classParentOf, widenNumberLiteralType, typeDisplayName, unwrapRefNullUnion, getProperty, getElementType, unwrapRef, typeofTagOf, isMaybeType, isTagCarriedUnion, nullType, peelTransparentInstance, setRepr, int32Type, createPrimitive, skipModifier, peelToStructOrUnion, numberLiteralSet, isStringLike, literalBase } from "../../checker/types";
+import { isSlotUnion } from "../../checker/fit";
+import { SymbolFlag, isViewBinding, classDeclNodeOf, hasFlag } from "../../checker/symbol";
 import { byteViewRefusal, NO_BYTE_MEMORY, pointerOpRefusal, NO_ADDRESS_ARITHMETIC } from "../../checker/byteViews";
 import { carriesBigInt, RAISER_NO_BIGINT_MSG } from "../../checker/bigIntOnRaiser";
-import { dispatchEntryFor, dispatchOverridesFor } from "../../checker/context";
+import { dispatchEntryFor, dispatchOverridesFor, isGenericFn } from "../../checker/context";
 import {
-	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
+	RaiserCompState, emitInst, allocReg, allocBlock, allocWord, allocFloat, allocBool, convDestClass, allocRef, allocDyn, classOfReg, addConst, emitLoadConst, resolveLocal,
 	isLocalString,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit,
-	callRaiserStmtCompiler, emitTrapNil, resolveGlobal, raiserClassKey, classSymOfType, landResult,
+	callRaiserStmtCompiler, emitTrapNil, layoutOperand, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol,
 } from "./context";
-import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros } from "./valueCopy";
+import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros, emitTrapValue } from "./valueCopy";
 
 // A CallHost the registry cannot serve would only fail at macro RUN time
 // ("Unknown host function"). The host table is loaded before bytecodegen
@@ -39,17 +43,38 @@ import { emitZeroFill, zeroArrayType, emitOmittedFieldZeros } from "./valueCopy"
 // at the call site with a span — the procIsCallback-resolved-at-codegen
 // shape, one phase earlier than the reference needs it.
 function checkHostBridgeCoverage(sym: Symbol, callee: Node): void {
-	if (lookupHostFn(sym.nativeName) == null) {
+	if (lookupHost(sym.nativeName) == null) {
 		queueRaiserCompileError(
 			`no host bridge for '${sym.nativeName}' — the extern is declared in std but nothing registers it (hostTable.ms)`,
 			callee.location.line, callee.location.column);
 	}
 }
 
+let _stdRoot = "";
+
+function stdRoutineName(sym: Symbol): string {
+	if (sym.symbolKind != SymbolKind.Function || sym.modulePath == "") return "";
+	if (_stdRoot == "") _stdRoot = resolveRuntimeDir() + "/std/";
+	if (!sym.modulePath.startsWith(_stdRoot)) return "";
+	let module = sym.modulePath.slice(_stdRoot.length);
+	const dot = module.lastIndexOf(".");
+	if (dot > module.lastIndexOf("/")) module = module.slice(0, dot);
+	if (module.endsWith("/index")) module = module.slice(0, module.length - "/index".length);
+	return `std/${module}.${sym.name}`;
+}
+
+function holdsValue(sym: Symbol): boolean {
+	return sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Temp
+		|| sym.symbolKind == SymbolKind.Parameter || sym.symbolKind == SymbolKind.Property;
+}
+
 function runtimeHostName(sym: Symbol): string {
+	if (holdsValue(sym)) return "";
 	if (sym.nativeName != "") return sym.nativeName;
+	const routine = stdRoutineName(sym);
+	if (routine != "" && lookupHost(routine) != null) return routine;
 	if (sym.declNode != null || !sym.symFlags.has(SymbolFlag.ImportC)) return "";
-	return lookupHostFn(sym.name) != null ? sym.name : "";
+	return lookupHost(sym.name) != null ? sym.name : "";
 }
 
 // --- Operator → Opcode mapping ---
@@ -120,6 +145,11 @@ function comparisonOpcodeImm(op: string): RaiserOpcode {
 
 function isEqualityOp(op: string): boolean {
 	return op == "==" || op == "===" || op == "!=" || op == "!==";
+}
+
+// A union keeps the member it holds beside its payload, so two of them compare by the value they hold.
+function holdsUnion(node: Node): boolean {
+	return node.nodeType != null && isSlotUnion(peelTransparentInstance(node.nodeType));
 }
 
 function immLiteral(node: Node): boolean {
@@ -242,15 +272,37 @@ function emitAtWidth(s: RaiserCompState, reg: int32, t: Type | null): void {
 }
 
 function emitConvTo(s: RaiserCompState, srcReg: int32, cls: int32, fromCls: int32): int32 {
-	const dest = allocReg(s);
+	const dest = allocReg(s, convDestClass(cls));
 	emitInst(s, raiserABC(RaiserOpcode.Conv, dest, srcReg, convOperand(cls as RaiserConvClass, fromCls)));
 	return dest;
+}
+
+function compileIndex(s: RaiserCompState, index: Node): int32 {
+	const reg = compileExpr(s, index);
+	if (!isFloatExpr(index)) return reg;
+	return emitConvTo(s, reg, RaiserConvClass.I64 as int32, RaiserConvClass.F64 as int32);
+}
+
+function isIntegerConvClass(cls: int32): boolean {
+	return cls >= (RaiserConvClass.I64 as int32) && cls <= (RaiserConvClass.U8 as int32);
+}
+
+// An integer register holds the value sign-extended (or zero-extended, for an unsigned class) into
+// 64 bits, so a conversion to a class that holds every value of the source class changes no bit.
+function widensLosslessly(fromCls: int32, toCls: int32): boolean {
+	if (!isIntegerConvClass(fromCls) || !isIntegerConvClass(toCls)) return false;
+	const from = fromCls as RaiserConvClass;
+	const to = toCls as RaiserConvClass;
+	const fromBits = convClassBits(from);
+	const toBits = convClassBits(to);
+	if (convClassSigned(from)) return convClassSigned(to) && toBits >= fromBits;
+	return convClassSigned(to) ? toBits > fromBits : toBits >= fromBits;
 }
 
 function emitNumericConv(s: RaiserCompState, reg: int32, from: Type | null, to: Type | null): int32 {
 	const fromCls = convClassOf(from);
 	const toCls = convClassOf(to);
-	if (fromCls < 0 || toCls < 0 || fromCls == toCls) return reg;
+	if (fromCls < 0 || toCls < 0 || fromCls == toCls || widensLosslessly(fromCls, toCls)) return reg;
 	return emitConvTo(s, reg, toCls, fromCls);
 }
 
@@ -279,6 +331,10 @@ function bitwiseOpcode(op: string): RaiserOpcode {
 	};
 }
 
+export function isAssignOp(op: string): boolean {
+	return op == "=" || isCompoundAssignOp(op);
+}
+
 function isCompoundAssignOp(op: string): boolean {
 	return match (op) {
 		"+=" | "-=" | "*=" | "/=" | "%=" | "**=" => true,
@@ -295,13 +351,13 @@ function emitBitwise(s: RaiserCompState, op: string, dest: int32, lReg: int32, r
 	}
 	const bits = intBandBits(t);
 	const unsigned = isUnsignedBand(t);
-	const count = allocReg(s);
+	const count = allocWord(s);
 	emitInst(s, raiserABC(RaiserOpcode.Move, count, rReg, 0));
 	if (bits > 0) emitInst(s, raiserABC(RaiserOpcode.NarrowU, count, shiftCountBits(bits), 0));
 	let left = lReg;
 	const shift = opc == RaiserOpcode.ShiftRight && unsigned ? RaiserOpcode.ShiftRightU : opc;
 	if (shift == RaiserOpcode.ShiftRightU && bits > 0) {
-		left = allocReg(s);
+		left = allocWord(s);
 		emitInst(s, raiserABC(RaiserOpcode.Move, left, lReg, 0));
 		emitInst(s, raiserABC(RaiserOpcode.NarrowU, left, bits, 0));
 	}
@@ -338,18 +394,23 @@ function emitCompoundArith(s: RaiserCompState, op: string, dest: int32, lhs: int
 	if (isBitwiseOp(base) && convClassOf(target.nodeType) == (RaiserConvClass.F64 as int32)) {
 		const asInt = emitConvTo(s, lhs, RaiserConvClass.I32Wrap as int32, RaiserConvClass.F64 as int32);
 		const stored = base == ">>>" ? createPrimitive(TypeKind.Uint32) : int32Type();
-		emitBitwise(s, base, dest, asInt, rhs, stored);
-		emitInst(s, raiserABC(RaiserOpcode.Move, dest, emitConvTo(s, dest, RaiserConvClass.F64 as int32, convClassOf(stored)), 0));
+		const bits = allocWord(s);
+		emitBitwise(s, base, bits, asInt, rhs, stored);
+		emitInst(s, raiserABC(RaiserOpcode.Move, dest, emitConvTo(s, bits, RaiserConvClass.F64 as int32, convClassOf(stored)), 0));
 		return;
 	}
 	if (isBitwiseOp(base)) {
 		emitBitwise(s, base, dest, lhs, rhs, target.nodeType);
 		return;
 	}
+	if (base == "**" && intPowBridge(target.nodeType) != "") {
+		emitInst(s, raiserABC(RaiserOpcode.Move, dest, emitIntPow(s, lhs, rhs, target.nodeType), 0));
+		return;
+	}
 	if (base == "**") {
-		emitHostPair(s, "pow", dest, lhs, rhs);
+		const power = emitHostPair(s, "pow", lhs, rhs);
 		const cls = convClassOf(target.nodeType);
-		if (cls >= 0 && cls != (RaiserConvClass.F64 as int32)) emitInst(s, raiserABC(RaiserOpcode.Move, dest, emitConvTo(s, dest, cls, RaiserConvClass.F64 as int32), 0));
+		emitInst(s, raiserABC(RaiserOpcode.Move, dest, cls >= 0 && cls != (RaiserConvClass.F64 as int32) ? emitConvTo(s, power, cls, RaiserConvClass.F64 as int32) : power, 0));
 		return;
 	}
 	if (!isFloatExpr(target)) {
@@ -358,22 +419,52 @@ function emitCompoundArith(s: RaiserCompState, op: string, dest: int32, lhs: int
 		return;
 	}
 	if (base != "%") {
-		emitInst(s, raiserABC(arithmeticOpcodeF64(base), dest, lhs, rhs));
+		emitInst(s, raiserABC(arithmeticOpcodeF64(base), dest, floatOperand(s, lhs), floatOperand(s, rhs)));
 		emitAtWidth(s, dest, target.nodeType);
 		return;
 	}
-	emitHostPair(s, "fmod", dest, lhs, rhs);
+	emitInst(s, raiserABC(RaiserOpcode.Move, dest, emitHostPair(s, "fmod", lhs, rhs), 0));
 	emitAtWidth(s, dest, target.nodeType);
 }
 
-function emitHostPair(s: RaiserCompState, name: string, dest: int32, lhs: int32, rhs: int32): void {
-	const out = allocReg(s);
-	const a1 = allocReg(s);
-	const a2 = allocReg(s);
-	emitInst(s, raiserABC(RaiserOpcode.Move, a1, lhs, 0));
-	emitInst(s, raiserABC(RaiserOpcode.Move, a2, rhs, 0));
-	emitInst(s, raiserABC(RaiserOpcode.CallHost, out, addConst(s, raiserString(name)), 2));
-	emitInst(s, raiserABC(RaiserOpcode.Move, dest, out, 0));
+const FLOAT_PAIR_CALL: RaiserRegClass[] = [RaiserRegClass.Float, RaiserRegClass.Float, RaiserRegClass.Float];
+
+// The host arithmetic functions take and return floats; an integer operand is converted first.
+function floatOperand(s: RaiserCompState, reg: int32): int32 {
+	if (classOfReg(s, reg) != RaiserRegClass.Word) return reg;
+	return emitConvTo(s, reg, RaiserConvClass.F64 as int32, RaiserConvClass.I64 as int32);
+}
+
+function intPowBridge(t: Type | null): string {
+	if (t == null) return "";
+	return match (peelDistinct(t).kind) {
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 => "msPowI32",
+		TypeKind.Int64 => "msPowI64",
+		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 => "msPowU32",
+		TypeKind.Uint64 => "msPowU64",
+		_ => "",
+	};
+}
+
+const WORD_PAIR_CALL: RaiserRegClass[] = [RaiserRegClass.Word, RaiserRegClass.Word, RaiserRegClass.Word];
+
+function emitIntPow(s: RaiserCompState, lhs: int32, rhs: int32, t: Type | null): int32 {
+	const out = allocBlock(s, WORD_PAIR_CALL);
+	emitInst(s, raiserABC(RaiserOpcode.Move, out + 1, lhs, 0));
+	emitInst(s, raiserABC(RaiserOpcode.Move, out + 2, rhs, 0));
+	emitInst(s, raiserABC(RaiserOpcode.CallHost, out, addConst(s, raiserConstString(intPowBridge(t))), 2));
+	emitAtWidth(s, out, t);
+	return out;
+}
+
+function emitHostPair(s: RaiserCompState, name: string, lhs: int32, rhs: int32): int32 {
+	const out = allocBlock(s, FLOAT_PAIR_CALL);
+	const a1 = out + 1;
+	const a2 = out + 2;
+	emitInst(s, raiserABC(RaiserOpcode.Move, a1, floatOperand(s, lhs), 0));
+	emitInst(s, raiserABC(RaiserOpcode.Move, a2, floatOperand(s, rhs), 0));
+	emitInst(s, raiserABC(RaiserOpcode.CallHost, out, addConst(s, raiserConstString(name)), 2));
+	return out;
 }
 
 function unsignedOpcode(opc: RaiserOpcode, t: Type | null): RaiserOpcode {
@@ -399,8 +490,7 @@ export function exprIsString(s: RaiserCompState, node: Node): boolean {
 	// cannot know) answer false, so `s.length` emitted ArrayLen against a string
 	// handle and `s.charAt` missed its fast path entirely.
 	if (node.nodeType != null) {
-		const tk = node.nodeType.kind;
-		if (tk == TypeKind.String || tk == TypeKind.StringLiteral) return true;
+		if (literalBase(node.nodeType).kind == TypeKind.String) return true;
 	}
 	const k = node.kind;
 	if (k == NodeKind.StringLiteral) return true;
@@ -431,12 +521,32 @@ function compileExprInto(s: RaiserCompState, node: Node, target: number): void {
 	landResult(s, target, startPc, firstTemp, compileExpr(s, node));
 }
 
+// A Dyn register holds a box, so an expression whose checked type has a plain class (a variable
+// narrowed from a union) is read out of it into a register of that class.
 export function compileExpr(s: RaiserCompState, node: Node): int32 {
+	const reg = compileExprRaw(s, node);
+	if (classOfReg(s, reg) != RaiserRegClass.Dyn || holdsLocation(node)) return reg;
+	const cls = regClassOf(s, node.nodeType);
+	if (cls == RaiserRegClass.Dyn) return reg;
+	const plain = allocReg(s, cls);
+	emitInst(s, raiserABC(RaiserOpcode.Move, plain, reg, 0));
+	return plain;
+}
+
+function holdsLocation(node: Node): boolean {
+	if (node.kind == NodeKind.HiddenAddr) return true;
+	const sym = node.resolvedSym;
+	if (node.kind != NodeKind.Identifier || sym == null || sym.symbolType == null) return false;
+	const held = sym.symbolType.kind;
+	return held == TypeKind.Var || held == TypeKind.Borrow || held == TypeKind.Ref || held == TypeKind.Ptr;
+}
+
+function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 	if (carriesBigInt(node.nodeType)) return refuseBigInt(s, node);
 	return match (node.kind) {
 		NodeKind.NumberLiteral => {
 			const d = node.data as NumberLiteralData;
-			const reg = allocReg(s);
+			const reg = isFloatExpr(node) ? allocFloat(s) : allocWord(s);
 			if (isFloatExpr(node)) {
 				const narrow = node.nodeType != null && peelDistinct(node.nodeType).kind == TypeKind.Float32;
 				emitLoadConst(s, reg, raiserFloat(narrow ? (d.value as float32) as float64 : d.value));
@@ -447,18 +557,18 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 		},
 		NodeKind.StringLiteral => {
 			const d = node.data as StringLiteralData;
-			const reg = allocReg(s);
-			emitLoadConst(s, reg, raiserString(d.value));
+			const reg = allocRef(s);
+			emitLoadConst(s, reg, raiserConstString(d.value));
 			return reg;
 		},
 		NodeKind.BooleanLiteral => {
 			const d = node.data as BooleanLiteralData;
-			const reg = allocReg(s);
+			const reg = allocBool(s);
 			emitLoadConst(s, reg, raiserBool(d.boolValue));
 			return reg;
 		},
 		NodeKind.NullLiteral => {
-			const reg = allocReg(s);
+			const reg = allocRef(s);
 			emitLoadConst(s, reg, raiserNil());
 			return reg;
 		},
@@ -466,19 +576,19 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 			const d = node.data as IdentifierData;
 			const global = resolveGlobal(s, node.resolvedSym);
 			if (global >= 0) {
-				const destination = allocReg(s);
+				const destination = allocFor(s, node.resolvedSym != null && node.resolvedSym!.symbolType != null ? node.resolvedSym!.symbolType : node.nodeType);
 				emitInst(s, raiserABC(RaiserOpcode.LoadGlobal, destination, global, 0));
 				return destination;
 			}
 			const reg = resolveLocal(s, node.resolvedSym);
 			if (reg >= 0) return reg;
 			if (node.resolvedSym != null && node.resolvedSym.builtinKind == "NaN") {
-				const nanReg = allocReg(s);
+				const nanReg = allocFloat(s);
 				emitLoadConst(s, nanReg, raiserFloat(NaN));
 				return nanReg;
 			}
 			if (node.resolvedSym != null && node.resolvedSym.builtinKind == "Infinity") {
-				const infinityReg = allocReg(s);
+				const infinityReg = allocFloat(s);
 				emitLoadConst(s, infinityReg, raiserFloat(Infinity));
 				return infinityReg;
 			}
@@ -488,7 +598,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 			}
 			const funcIdx = resolveRoutine(s, node.resolvedSym);
 			if (funcIdx >= 0) {
-				const r = allocReg(s);
+				const r = allocWord(s);
 				emitLoadConst(s, r, raiserInt(funcIdx));
 				return r;
 			}
@@ -506,6 +616,12 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 					return compileExpr(s, vd.initializer);
 				}
 			}
+			if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Variable
+				&& node.resolvedSym.symFlags.has(SymbolFlag.ImportC)) {
+				const externMsg = `cannot read extern '${d.name}' in the Raiser VM: an extern let or const has no host value`;
+				queueRaiserCompileError(externMsg, node.location.line, node.location.column);
+				return emitTrapValue(s, externMsg, node.nodeType);
+			}
 			// Nothing the bytecode compiler can execute bound this name (module-
 			// level vars and other non-routine symbols land here). Report it
 			// instead of silently splicing nil into the macro's output.
@@ -518,7 +634,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 			else if ((node.resolvedSym.declNode.data as VariableDeclData).initializer == null) why = "declaration has no initializer";
 			const msg = `cannot evaluate '${d.name}' at comptime: ${why}`;
 			queueRaiserCompileError(msg, node.location.line, node.location.column);
-			return emitTrapNil(s, msg);
+			return emitTrapValue(s, msg, node.nodeType);
 		},
 		NodeKind.BinaryExpr => { return compileBinaryExpr(s, node); },
 		NodeKind.UnaryExpr => { return compileUnaryExpr(s, node); },
@@ -530,6 +646,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 			if (refused >= 0) return refused;
 			const reg = compileExpr(s, d.asExpr);
 			if (node.flags.has(NodeFlag.ObjCheck)) return emitObjConv(s, node, reg);
+			if (node.flags.has(NodeFlag.ConvCheck)) emitLitConv(s, node, reg);
 			return emitNumericConv(s, reg, d.asExpr.nodeType, node.nodeType);
 		},
 		NodeKind.UpdateExpr => { return compileUpdateExpr(s, node, false); },
@@ -546,7 +663,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 		NodeKind.AwaitExpr => {
 			const d = node.data as AwaitExprData;
 			const futReg = compileExpr(s, d.awaitArg);
-			const dest = allocReg(s);
+			const dest = allocFor(s, node.nodeType);
 			emitInst(s, raiserABC(RaiserOpcode.Await, dest, futReg, 0));
 			return dest;
 		},
@@ -561,7 +678,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 			const hd = node.data as HiddenDerefData;
 			const pointer = compileExpr(s, hd.expr);
 			if (!heldByLocation(s, node.nodeType)) return pointer;
-			const dest = allocReg(s);
+			const dest = allocFor(s, node.nodeType);
 			emitInst(s, raiserABC(RaiserOpcode.LoadDeref, dest, pointer, 0));
 			return dest;
 		},
@@ -585,7 +702,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 			const d = node.data as BlockStmtData;
 			const n = d.statements.length;
 			if (n == 0) {
-				const reg = allocReg(s);
+				const reg = allocRef(s);
 				emitLoadConst(s, reg, raiserNil());
 				return reg;
 			}
@@ -600,7 +717,7 @@ export function compileExpr(s: RaiserCompState, node: Node): int32 {
 				return compileExpr(s, ld.expr);
 			}
 			callRaiserStmtCompiler(s, last);
-			const reg = allocReg(s);
+			const reg = allocRef(s);
 			emitLoadConst(s, reg, raiserNil());
 			return reg;
 		},
@@ -625,7 +742,7 @@ function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 
 	if (isRefParamTarget(left)) {
 		const pointeeType = left.resolvedSym!.symbolType.typeReturn;
 		const paramReg = resolveLocal(s, left.resolvedSym);
-		if (paramReg < 0 || !needsValueAssign(s, pointeeType)) return -1;
+		if (paramReg < 0 || heldByLocation(s, pointeeType)) return -1;
 		const srcReg = compileExpr(s, right);
 		return emitValueAssign(s, paramReg, srcReg, pointeeType);
 	}
@@ -633,14 +750,19 @@ function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 
 	if (left.kind == NodeKind.HiddenDeref) {
 		const srcReg = compileExpr(s, right);
 		const pointee = compileExpr(s, (left.data as HiddenDerefData).expr);
-		return emitValueAssign(s, pointee, srcReg, left.nodeType);
+		if (!heldByLocation(s, left.nodeType)) return emitValueAssign(s, pointee, srcReg, left.nodeType);
+		const held = allocFor(s, left.nodeType);
+		emitInst(s, raiserABC(RaiserOpcode.LoadDeref, held, pointee, 0));
+		const result = emitValueAssign(s, held, srcReg, left.nodeType);
+		emitInst(s, raiserABC(RaiserOpcode.StoreDeref, pointee, 0, result));
+		return result;
 	}
 	if (left.kind == NodeKind.Identifier) {
 		if (isViewBinding(left.resolvedSym)) return -1;
 		const global = resolveGlobal(s, left.resolvedSym);
 		if (global >= 0) {
 			const srcReg = compileExpr(s, right);
-			const held = allocReg(s);
+			const held = allocFor(s, left.resolvedSym != null && left.resolvedSym!.symbolType != null ? left.resolvedSym!.symbolType : left.nodeType);
 			emitInst(s, raiserABC(RaiserOpcode.LoadGlobal, held, global, 0));
 			const result = emitValueAssign(s, held, srcReg, left.nodeType);
 			emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, result, global, 0));
@@ -657,8 +779,8 @@ function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 
 		const srcReg = compileExpr(s, right);
 		const ad = left.data as ArrayAccessData;
 		const arrReg = compileExpr(s, ad.array);
-		const idxReg = compileExpr(s, ad.index);
-		const held = allocReg(s);
+		const idxReg = compileIndex(s, ad.index);
+		const held = allocFor(s, left.nodeType);
 		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, held, arrReg, idxReg));
 		const result = emitValueAssign(s, held, srcReg, left.nodeType);
 		emitInst(s, raiserABC(RaiserOpcode.StoreIndex, arrReg, idxReg, result));
@@ -668,11 +790,11 @@ function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 
 		const srcReg = compileExpr(s, right);
 		const md = left.data as MemberExprData;
 		const objReg = compileExpr(s, md.object);
-		const nameIdx = addConst(s, raiserString(md.property));
-		const held = allocReg(s);
-		emitInst(s, raiserABC(RaiserOpcode.LoadField, held, objReg, nameIdx));
+		const nameIdx = addConst(s, raiserConstString(md.property));
+		const held = allocFor(s, left.nodeType);
+		emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, held, objReg, nameIdx));
 		const result = emitValueAssign(s, held, srcReg, left.nodeType);
-		emitInst(s, raiserABC(RaiserOpcode.StoreField, objReg, nameIdx, result));
+		emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, objReg, nameIdx, result));
 		return result;
 	}
 	return -1;
@@ -683,16 +805,6 @@ function isPointerTyped(node: Node): boolean {
 	const nonNull = t != null ? nonNullMemberOfNullable(t) : null;
 	if (nonNull != null) t = nonNull;
 	return t != null && t.kind == TypeKind.Ptr;
-}
-
-function heldByLocation(s: RaiserCompState, pointee: Type | null): boolean {
-	const t = skipModifier(pointee);
-	if (t == null) return false;
-	if (t.kind == TypeKind.GenericInstance) {
-		const body = peelToStructOrUnion(t);
-		if (body != null && body.kind == TypeKind.Struct) return false;
-	}
-	return !needsValueAssign(s, t);
 }
 
 function derefTarget(s: RaiserCompState, target: Node): Node | null {
@@ -709,14 +821,14 @@ function derefTarget(s: RaiserCompState, target: Node): Node | null {
 }
 
 function compileCellAddress(s: RaiserCompState, value: Node): int32 {
-	const cell = allocReg(s);
-	const slot = allocReg(s);
+	const cell = allocBlock(s, [RaiserRegClass.Ref, regClassOf(s, value.nodeType)]);
+	const slot = cell + 1;
 	const reg = compileExpr(s, value);
 	if (reg != slot) emitInst(s, raiserABC(RaiserOpcode.Move, slot, reg, 0));
 	emitInst(s, raiserABC(RaiserOpcode.NewArray, cell, 1, 0));
-	const zero = allocReg(s);
+	const zero = allocWord(s);
 	emitLoadConst(s, zero, raiserInt(0));
-	const dest = allocReg(s);
+	const dest = allocDyn(s);
 	emitInst(s, raiserABC(RaiserOpcode.AddrIndex, dest, cell, zero));
 	return dest;
 }
@@ -729,7 +841,7 @@ function isPlace(s: RaiserCompState, node: Node): boolean {
 }
 
 function compileAddress(s: RaiserCompState, place: Node): int32 {
-	const dest = allocReg(s);
+	const dest = allocDyn(s);
 	if (place.kind == NodeKind.Identifier) {
 		const global = resolveGlobal(s, place.resolvedSym);
 		if (global >= 0) {
@@ -746,13 +858,13 @@ function compileAddress(s: RaiserCompState, place: Node): int32 {
 		const held = skipModifier(d.array.nodeType);
 		if (held != null && held.kind == TypeKind.Ptr) return compileExpr(s, d.array);
 		const arrReg = compileExpr(s, d.array);
-		const idxReg = compileExpr(s, d.index);
+		const idxReg = compileIndex(s, d.index);
 		emitInst(s, raiserABC(RaiserOpcode.AddrIndex, dest, arrReg, idxReg));
 		return dest;
 	} else if (place.kind == NodeKind.MemberExpr) {
 		const d = place.data as MemberExprData;
 		const objReg = compileExpr(s, d.object);
-		emitInst(s, raiserABC(RaiserOpcode.AddrField, dest, objReg, addConst(s, raiserString(d.property))));
+		emitInst(s, raiserABC(RaiserOpcode.AddrField, dest, objReg, addConst(s, raiserConstString(d.property))));
 		return dest;
 	} else if (place.kind == NodeKind.HiddenDeref) {
 		return compileExpr(s, (place.data as HiddenDerefData).expr);
@@ -810,12 +922,27 @@ function emitObjConv(s: RaiserCompState, node: Node, reg: int32): int32 {
 		queueRaiserCompileError(msg, node.location.line, node.location.column);
 		return emitTrapNil(s, msg);
 	}
-	emitInst(s, raiserABC(RaiserOpcode.ObjConv, reg, addConst(s, raiserString(key)), addConst(s, raiserString(classTargetDisplay(node.nodeType, key)))));
+	emitInst(s, raiserABC(RaiserOpcode.ObjConv, reg, classTargetOperand(s, node.nodeType, key), addConst(s, raiserConstString(classTargetDisplay(node.nodeType, key)))));
 	return reg;
+}
+
+function emitLitConv(s: RaiserCompState, node: Node, reg: int32): void {
+	const t = node.nodeType;
+	if (t == null) return;
+	const payload = isMaybeType(t) && t.typeReturn != null ? t.typeReturn : t;
+	const literals: Type[] | null = payload.kind != TypeKind.String && isStringLike(payload)
+		? (payload.kind == TypeKind.StringLiteral ? [payload] : payload.typeChildren)
+		: numberLiteralSet(payload);
+	if (literals == null) return;
+	let list = "";
+	for (const lit of literals) list += `${lit.typeName.length}:${lit.typeName}`;
+	const name = payload.sym != null && payload.sym.name != "" ? payload.sym.name : typeDisplayName(payload);
+	emitInst(s, raiserABC(RaiserOpcode.LitConv, reg, addConst(s, raiserConstString(list)), addConst(s, raiserConstString(name))));
 }
 
 function compileInstanceOf(s: RaiserCompState, node: Node, d: BinaryExprData): int32 {
 	const named = d.right.resolvedSym;
+	const target = named != null && named.symbolKind == SymbolKind.Class ? named.symbolType : d.right.nodeType;
 	const key = named != null && named.symbolKind == SymbolKind.Class ? raiserClassKey(named) : classTargetKey(d.right.nodeType);
 	if (key == "") {
 		const msg = "internal: the right side of instanceof did not resolve to a class";
@@ -823,8 +950,8 @@ function compileInstanceOf(s: RaiserCompState, node: Node, d: BinaryExprData): i
 		return emitTrapNil(s, msg);
 	}
 	const held = compileExpr(s, d.left);
-	const dest = allocReg(s);
-	emitInst(s, raiserABC(RaiserOpcode.InstanceOf, dest, held, addConst(s, raiserString(key))));
+	const dest = allocBool(s);
+	emitInst(s, raiserABC(RaiserOpcode.InstanceOf, dest, held, classTargetOperand(s, target, key)));
 	return dest;
 }
 
@@ -836,7 +963,12 @@ function compileCompareTest(s: RaiserCompState, node: Node): RaiserInstruction |
 	const op = d.operator;
 	if (!isComparisonOp(op)) return null;
 	const lReg = compileExpr(s, d.left);
-	const integerCompare = !exprIsString(s, d.left) && !exprIsString(s, d.right) && !isFloatExpr(d.left) && !isFloatExpr(d.right)
+	const valueOpcode = op == "==" || op == "===" ? RaiserOpcode.EqVal : RaiserOpcode.NeVal;
+	if (isEqualityOp(op) && (holdsUnion(d.left) || holdsUnion(d.right))) {
+		const heldReg = compileExpr(s, d.right);
+		return raiserABC(valueOpcode, lReg, heldReg, 1);
+	}
+	const integerCompare = !inRefFile(classOfReg(s, lReg)) && !exprIsString(s, d.left) && !exprIsString(s, d.right) && !isFloatExpr(d.left) && !isFloatExpr(d.right)
 		&& !((isUint64Type(d.left.nodeType) || isUint64Type(d.right.nodeType)) && !isEqualityOp(op));
 	if (integerCompare && immLiteral(d.right)) {
 		return raiserABC(comparisonOpcodeImm(op), lReg, immField(immLiteralValue(d.right)), 1);
@@ -850,7 +982,8 @@ function compileCompareTest(s: RaiserCompState, node: Node): RaiserInstruction |
 		const strict = op == "<" || op == ">";
 		return raiserABC(strict ? RaiserOpcode.LtStr : RaiserOpcode.LeStr, swapped ? rReg : lReg, swapped ? lReg : rReg, 1);
 	}
-	if (isFloatExpr(d.left) || isFloatExpr(d.right)) return raiserABC(comparisonOpcodeF64(op), lReg, rReg, 1);
+	if (isEqualityOp(op) && (inRefFile(classOfReg(s, lReg)) || inRefFile(classOfReg(s, rReg)))) return raiserABC(valueOpcode, lReg, rReg, 1);
+	if (isFloatExpr(d.left) || isFloatExpr(d.right)) return raiserABC(comparisonOpcodeF64(op), floatOperand(s, lReg), floatOperand(s, rReg), 1);
 	if ((isUint64Type(d.left.nodeType) || isUint64Type(d.right.nodeType)) && op != "==" && op != "===" && op != "!=" && op != "!==") {
 		const swapped = op == ">" || op == ">=";
 		const strict = op == "<" || op == ">";
@@ -926,14 +1059,14 @@ export function condJumps(s: RaiserCompState, node: Node, whenTrue: boolean): in
 			if (isEqOp && (d.left.kind == NodeKind.NullLiteral || d.right.kind == NodeKind.NullLiteral)) {
 				const otherSide: Node = d.left.kind == NodeKind.NullLiteral ? d.right : d.left;
 				const valReg = compileExpr(s, otherSide);
-				const isNil = allocReg(s);
+				const isNil = allocBool(s);
 				emitInst(s, raiserABC(RaiserOpcode.IsKind, isNil, valReg, RaiserValueKind.Nil as number));
 				return jumpIfValue(s, isNil, negated ? !whenTrue : whenTrue);
 			}
 			if (isEqOp && (isPointerTyped(d.left) || isPointerTyped(d.right))) {
 				const lReg = compileExpr(s, d.left);
 				const rReg = compileExpr(s, d.right);
-				const same = allocReg(s);
+				const same = allocBool(s);
 				emitInst(s, raiserABC(RaiserOpcode.SameLoc, same, lReg, rReg));
 				return jumpIfValue(s, same, negated ? !whenTrue : whenTrue);
 			}
@@ -993,15 +1126,15 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		if (d.left.kind == NodeKind.ArrayAccess) {
 			const ad = d.left.data as ArrayAccessData;
 			const arrReg = compileExpr(s, ad.array);
-			const idxReg = compileExpr(s, ad.index);
+			const idxReg = compileIndex(s, ad.index);
 			emitInst(s, raiserABC(RaiserOpcode.StoreIndex, arrReg, idxReg, srcReg));
 			return srcReg;
 		}
 		if (d.left.kind == NodeKind.MemberExpr) {
 			const md = d.left.data as MemberExprData;
 			const objReg = compileExpr(s, md.object);
-			const nameIdx = addConst(s, raiserString(md.property));
-			emitInst(s, raiserABC(RaiserOpcode.StoreField, objReg, nameIdx, srcReg));
+			const nameIdx = addConst(s, raiserConstString(md.property));
+			emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, objReg, nameIdx, srcReg));
 			return srcReg;
 		}
 		return srcReg;
@@ -1021,8 +1154,10 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 	if (op == "+" && (exprIsString(s, d.left) || exprIsString(s, d.right))) {
 		const lReg = compileStringPart(s, d.left);
 		const rReg = compileStringPart(s, d.right);
-		const dest = allocReg(s);
-		emitInst(s, raiserABC(RaiserOpcode.ConcatStr, dest, lReg, rReg));
+		const dest = allocRef(s);
+		const typed = hasStringType(d.left) && hasStringType(d.right)
+			&& classOfReg(s, lReg) == RaiserRegClass.Ref && classOfReg(s, rReg) == RaiserRegClass.Ref;
+		emitInst(s, raiserABC(typed ? RaiserOpcode.ConcatStrR : RaiserOpcode.ConcatStr, dest, lReg, rReg));
 		return dest;
 	}
 
@@ -1036,10 +1171,10 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 	if (isEqOp && hasNullLit) {
 		const otherSide: Node = d.left.kind == NodeKind.NullLiteral ? d.right : d.left;
 		const valReg = compileExpr(s, otherSide);
-		const dest = allocReg(s);
+		const dest = allocBool(s);
 		emitInst(s, raiserABC(RaiserOpcode.IsKind, dest, valReg, RaiserValueKind.Nil as number));
 		if (op == "===" || op == "==") return dest;
-		const negated = allocReg(s);
+		const negated = allocBool(s);
 		emitLogicalNot(s, negated, dest);
 		return negated;
 	}
@@ -1047,17 +1182,17 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 	if (isEqOp && (isPointerTyped(d.left) || isPointerTyped(d.right))) {
 		const lReg = compileExpr(s, d.left);
 		const rReg = compileExpr(s, d.right);
-		const dest = allocReg(s);
+		const dest = allocBool(s);
 		emitInst(s, raiserABC(RaiserOpcode.SameLoc, dest, lReg, rReg));
 		if (op == "===" || op == "==") return dest;
-		const negated = allocReg(s);
+		const negated = allocBool(s);
 		emitLogicalNot(s, negated, dest);
 		return negated;
 	}
 
 	const test = compileCompareTest(s, node);
 	if (test != null) {
-		const dest = allocReg(s);
+		const dest = allocBool(s);
 		emitLoadConst(s, dest, raiserBool(true));
 		emitInst(s, test);
 		emitLoadConst(s, dest, raiserBool(false));
@@ -1066,19 +1201,22 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 
 	if ((op == "+" || op == "-") && immLiteral(d.right) && !isFloatExpr(node) && !isUnsignedBand(node.nodeType)) {
 		const lhs = compileExpr(s, d.left);
-		const result = allocReg(s);
+		const result = allocWord(s);
 		emitInst(s, raiserABC(op == "+" ? RaiserOpcode.AddI64Imm : RaiserOpcode.SubI64Imm, result, lhs, immField(immLiteralValue(d.right))));
-		emitAtWidth(s, result, node.nodeType);
+		if (!node.flags.has(NodeFlag.NoOverflowCheck)) emitAtWidth(s, result, node.nodeType);
 		return result;
 	}
 
 	const bitwise = isBitwiseOp(op);
 	const lReg = bitwise ? compileBitwiseOperand(s, d.left) : compileExpr(s, d.left);
 	const rReg = bitwise ? compileBitwiseOperand(s, d.right) : compileExpr(s, d.right);
-	const dest = allocReg(s);
 	const useFloat = isArithmeticOp(op)
 		? isFloatExpr(node)
 		: (isFloatExpr(d.left) || isFloatExpr(d.right));
+	const intPow = !bitwise && op == "**" && intPowBridge(node.nodeType) != "";
+	if (intPow) return emitIntPow(s, lReg, rReg, node.nodeType);
+	const hostCall = !bitwise && (op == "**" || (op == "%" && useFloat));
+	const dest = hostCall ? allocBlock(s, FLOAT_PAIR_CALL) : useFloat && isArithmeticOp(op) ? allocFloat(s) : allocWord(s);
 
 	// Bitwise operators
 	if (bitwise) {
@@ -1086,12 +1224,12 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 		return dest;
 	}
 
-	if (op == "**" || (op == "%" && useFloat)) {
-		const a1 = allocReg(s);
-		const a2 = allocReg(s);
-		emitInst(s, raiserABC(RaiserOpcode.Move, a1, lReg, 0));
-		emitInst(s, raiserABC(RaiserOpcode.Move, a2, rReg, 0));
-		const nameIdx = addConst(s, raiserString(op == "**" ? "pow" : "fmod"));
+	if (hostCall) {
+		const a1 = dest + 1;
+		const a2 = dest + 2;
+		emitInst(s, raiserABC(RaiserOpcode.Move, a1, floatOperand(s, lReg), 0));
+		emitInst(s, raiserABC(RaiserOpcode.Move, a2, floatOperand(s, rReg), 0));
+		const nameIdx = addConst(s, raiserConstString(op == "**" ? "pow" : "fmod"));
 		emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, 2));
 		const resultCls = convClassOf(node.nodeType);
 		if (resultCls >= 0 && resultCls != (RaiserConvClass.F64 as int32)) return emitConvTo(s, dest, resultCls, RaiserConvClass.F64 as int32);
@@ -1101,11 +1239,11 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): int32 {
 	// Arithmetic
 	if (isArithmeticOp(op)) {
 		if (useFloat) {
-			emitInst(s, raiserABC(arithmeticOpcodeF64(op), dest, lReg, rReg));
+			emitInst(s, raiserABC(arithmeticOpcodeF64(op), dest, floatOperand(s, lReg), floatOperand(s, rReg)));
 		} else {
 			emitInst(s, raiserABC(unsignedOpcode(arithmeticOpcode(op), node.nodeType), dest, lReg, rReg));
 		}
-		emitAtWidth(s, dest, node.nodeType);
+		if (!node.flags.has(NodeFlag.NoOverflowCheck)) emitAtWidth(s, dest, node.nodeType);
 		return dest;
 	}
 
@@ -1171,17 +1309,17 @@ function compileTypeof(s: RaiserCompState, operand: Node): int32 {
 			}
 		}
 	}
-	const dest = allocReg(s);
+	const dest = allocRef(s);
 	const fallback = tags.length > 0 ? tags[tags.length - 1] : typeofTagOf(opType);
-	emitLoadConst(s, dest, raiserString(fallback));
-	const zeroReg = allocReg(s);
-	const isKind = allocReg(s);
+	emitLoadConst(s, dest, raiserConstString(fallback));
+	const zeroReg = allocWord(s);
+	const isKind = allocBool(s);
 	emitLoadConst(s, zeroReg, raiserInt(0));
 	for (let i = 0; i < kinds.length; i += 1) {
 		if (tags[i] == fallback) continue;
 		emitInst(s, raiserABC(RaiserOpcode.IsKind, isKind, valReg, kinds[i]));
 		emitInst(s, raiserABC(RaiserOpcode.BeqI64, isKind, zeroReg, 1));
-		emitLoadConst(s, dest, raiserString(tags[i]));
+		emitLoadConst(s, dest, raiserConstString(tags[i]));
 	}
 	return dest;
 }
@@ -1190,7 +1328,7 @@ function compileUnaryExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as UnaryExprData;
 	if (d.unaryOp == "typeof") return compileTypeof(s, d.operand);
 	const srcReg = d.unaryOp == "~" ? compileBitwiseOperand(s, d.operand) : compileExpr(s, d.operand);
-	const dest = allocReg(s);
+	const dest = allocFor(s, node.nodeType);
 
 	if (d.unaryOp == "-") {
 		if (isFloatExpr(node)) {
@@ -1215,7 +1353,7 @@ function compileUnaryExpr(s: RaiserCompState, node: Node): int32 {
 
 function compileLogicalExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as BinaryExprData;
-	const dest = allocReg(s);
+	const dest = allocReg(s, joinClass(regClassOf(s, d.left.nodeType), regClassOf(s, d.right.nodeType)));
 
 	// Compile left operand
 	compileExprInto(s, d.left, dest);
@@ -1252,7 +1390,7 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 	const through = derefTarget(s, d.left);
 	if (through != null) {
 		const ptrReg = compileExpr(s, through);
-		const tmpReg = allocReg(s);
+		const tmpReg = allocFor(s, d.left.nodeType);
 		emitInst(s, raiserABC(RaiserOpcode.LoadDeref, tmpReg, ptrReg, 0));
 		const strConcat = op == "+=" && (exprIsString(s, d.left) || exprIsString(s, d.right));
 		const rhsReg = strConcat ? compileStringPart(s, d.right) : compileExpr(s, d.right);
@@ -1286,9 +1424,9 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 	if (d.left.kind == NodeKind.MemberExpr) {
 		const md = d.left.data as MemberExprData;
 		const objReg = compileExpr(s, md.object);
-		const nameIdx = addConst(s, raiserString(md.property));
-		const tmpReg = allocReg(s);
-		emitInst(s, raiserABC(RaiserOpcode.LoadField, tmpReg, objReg, nameIdx));
+		const nameIdx = addConst(s, raiserConstString(md.property));
+		const tmpReg = allocFor(s, d.left.nodeType);
+		emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, tmpReg, objReg, nameIdx));
 		const strConcat = op == "+=" && (exprIsString(s, d.left) || exprIsString(s, d.right));
 		const rhsReg = strConcat ? compileStringPart(s, d.right) : compileCompoundOperand(s, op, d.right);
 		if (strConcat) {
@@ -1296,7 +1434,7 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 		} else {
 			emitCompoundArith(s, op, tmpReg, tmpReg, rhsReg, d.left);
 		}
-		emitInst(s, raiserABC(RaiserOpcode.StoreField, objReg, nameIdx, tmpReg));
+		emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, objReg, nameIdx, tmpReg));
 		return tmpReg;
 	}
 
@@ -1304,8 +1442,8 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): int32 {
 	if (d.left.kind == NodeKind.ArrayAccess) {
 		const ad = d.left.data as ArrayAccessData;
 		const arrReg = compileExpr(s, ad.array);
-		const idxReg = compileExpr(s, ad.index);
-		const tmpReg = allocReg(s);
+		const idxReg = compileIndex(s, ad.index);
+		const tmpReg = allocFor(s, d.left.nodeType);
 		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, tmpReg, arrReg, idxReg));
 		const rhsReg = compileCompoundOperand(s, op, d.right);
 		emitCompoundArith(s, op, tmpReg, tmpReg, rhsReg, d.left);
@@ -1331,28 +1469,41 @@ function hostValues(args: Node[]): Node[] {
 	return values;
 }
 
+function callBlock(s: RaiserCompState, resultType: Type | null, args: Node[], params: Type[] | null): int32 {
+	const classes: RaiserRegClass[] = [regClassOf(s, resultType)];
+	for (let i = 0; i < args.length; i = i + 1) {
+		const declared = params != null && i < params.length ? params[i] : null;
+		classes.push(regClassOf(s, declared != null ? declared : args[i].nodeType));
+	}
+	return allocBlock(s, classes);
+}
+
+function calleeParamTypes(sym: Symbol | null): Type[] | null {
+	if (sym == null) return null;
+	const declared = placedInstanceOf(sym).symbolType;
+	return declared != null && declared.kind == TypeKind.Function ? declared.typeChildren : null;
+}
+
 function emitCallArgs(s: RaiserCompState, dest: number, args: Node[]): void {
-	const argCount = args.length;
-	for (let i = 0; i < argCount; i = i + 1) { allocReg(s); }
-	for (let i = 0; i < argCount; i = i + 1) {
+	for (let i = 0; i < args.length; i = i + 1) {
 		compileExprInto(s, args[i], dest + 1 + i);
 	}
 }
 
 function emitIntConst(s: RaiserCompState, value: int64): int32 {
-	const reg = allocReg(s);
+	const reg = allocWord(s);
 	emitLoadConst(s, reg, raiserInt(value));
 	return reg;
 }
 
 function emitIntBinary(s: RaiserCompState, op: RaiserOpcode, left: int32, right: int32): int32 {
-	const reg = allocReg(s);
+	const reg = allocWord(s);
 	emitInst(s, raiserABC(op, reg, left, right));
 	return reg;
 }
 
 function emitNarrowU32(s: RaiserCompState, value: int32): int32 {
-	const reg = allocReg(s);
+	const reg = allocWord(s);
 	emitInst(s, raiserABC(RaiserOpcode.Move, reg, value, 0));
 	emitInst(s, raiserABC(RaiserOpcode.NarrowU, reg, 32, 0));
 	return reg;
@@ -1387,7 +1538,7 @@ function compileSetSizeCall(s: RaiserCompState, node: Node): int32 {
 	if (repr != null && repr.kind == TypeKind.SizedArray) {
 		let total = emitIntConst(s, 0);
 		for (let i = 0; i < repr.typeValue; i += 1) {
-			const word = allocReg(s);
+			const word = allocWord(s);
 			emitInst(s, raiserABC(RaiserOpcode.LoadIndex, word, value, emitIntConst(s, i)));
 			total = emitIntBinary(s, RaiserOpcode.AddI64, total, emitSetCard32(s, word));
 		}
@@ -1506,36 +1657,37 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		return emitConvTo(s, compileExpr(s, d.arguments[0]), RaiserConvClass.HandleBits as int32, -1);
 	}
 
-	// spawn(fn) / sleepAsync(ms) / waitFor(h) / Promise.resolve(v) — the async
-	// surface the VM owns as opcodes. Keyed on builtinKind (set from the @builtin
-	// decorator in std/core/promise), never on the name.
+	// spawn(fn) / sleepAsync(ms) / waitFor(h) / Promise.resolve(v) and the
+	// Promise.all / race / any combinators — the async surface the VM owns as
+	// opcodes. Keyed on builtinKind (set from the @builtin decorator in
+	// std/core/promise), never on the name.
 	const asyncKind = builtinKind;
 	if (asyncKind == "PromiseSpawn" && d.arguments.length == 1) {
 		const closureReg = compileExpr(s, d.arguments[0]);
-		const dest = allocReg(s);
+		const dest = allocRef(s);
 		emitInst(s, raiserABC(RaiserOpcode.Spawn, dest, closureReg, 0));
 		return dest;
 	}
 	if (asyncKind == "SleepAsync" && d.arguments.length == 1) {
 		const delayReg = compileExpr(s, d.arguments[0]);
-		const dest = allocReg(s);
+		const dest = allocRef(s);
 		emitInst(s, raiserABC(RaiserOpcode.Sleep, dest, delayReg, 0));
 		return dest;
 	}
 	if (builtinKind == "ModuleImport" && d.arguments.length == 1 && d.arguments[0].kind == NodeKind.StringLiteral) {
-		const dest = allocReg(s);
-		const name = addConst(s, raiserString((d.arguments[0].data as StringLiteralData).value));
+		const dest = allocFor(s, node.nodeType);
+		const name = addConst(s, raiserConstString((d.arguments[0].data as StringLiteralData).value));
 		emitInst(s, raiserABx(RaiserOpcode.ModuleImport, dest, name));
 		return dest;
 	}
 	if (asyncKind == "PromisePending") {
-		const dest = allocReg(s);
+		const dest = allocRef(s);
 		emitInst(s, raiserABC(RaiserOpcode.FutureNew, dest, 0, 0));
 		return dest;
 	}
 	if (asyncKind == "PromiseReject" && d.arguments.length == 1) {
 		const errorReg = compileExpr(s, d.arguments[0]);
-		const dest = allocReg(s);
+		const dest = allocRef(s);
 		emitInst(s, raiserABC(RaiserOpcode.FutureNew, dest, 0, 0));
 		emitInst(s, raiserABC(RaiserOpcode.FutureFail, dest, errorReg, 0));
 		return dest;
@@ -1546,11 +1698,19 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		if (d.arguments.length > 1 && (d.arguments[1].nodeType == null || d.arguments[1].nodeType!.kind != TypeKind.Void)) {
 			valueReg = compileExpr(s, d.arguments[1]);
 		} else {
-			valueReg = allocReg(s);
+			valueReg = allocRef(s);
 			emitLoadConst(s, valueReg, raiserNil());
 		}
 		emitInst(s, raiserABC(asyncKind == "PromiseSettle" ? RaiserOpcode.FutureSettle : RaiserOpcode.FutureFail, futReg, valueReg, 0));
 		return futReg;
+	}
+	const combine = combineOf(asyncKind);
+	const combineArity = combine == (RaiserCombine.Any as int32) ? 2 : 1;
+	if (combine >= 0 && d.arguments.length == combineArity) {
+		const dest = callBlock(s, node.nodeType, d.arguments, null);
+		emitCallArgs(s, dest, d.arguments);
+		emitInst(s, raiserABC(RaiserOpcode.FutureCombine, dest, combine, d.arguments.length));
+		return dest;
 	}
 	if (asyncKind == "PromiseResolve" && d.arguments.length == 1) {
 		// Await reads a finished future as its value, so a future that starts
@@ -1583,11 +1743,11 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	}
 
 	if (isConsoleStderr(d.callee)) {
-		const dest = allocReg(s);
-		const lineReg = allocReg(s);
+		const dest = allocBlock(s, [RaiserRegClass.Ref, RaiserRegClass.Ref]);
+		const lineReg = dest + 1;
 		const line = compileEchoLine(s, d.arguments);
 		if (line != lineReg) emitInst(s, raiserABC(RaiserOpcode.Move, lineReg, line, 0));
-		const nameIdx = addConst(s, raiserString("msEprintln"));
+		const nameIdx = addConst(s, raiserConstString("msEprintln"));
 		emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, 1));
 		return dest;
 	}
@@ -1603,9 +1763,10 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		const hostName = runtimeHostName(sym);
 		if (hostName != "") {
 			if (sym.nativeName != "") checkHostBridgeCoverage(sym, d.callee);
-			const dest = allocReg(s);
-			emitCallArgs(s, dest, hostValues(d.arguments));
-			const nameIdx = addConst(s, raiserString(hostName));
+			const hostArgs = hostValues(d.arguments);
+			const dest = callBlock(s, node.nodeType, hostArgs, null);
+			emitCallArgs(s, dest, hostArgs);
+			const nameIdx = addConst(s, raiserConstString(hostName));
 			emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, d.arguments.length));
 			return dest;
 		}
@@ -1620,16 +1781,21 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 	// as the inline-opcode shortcut for hot methods.
 	if (d.callee.kind == NodeKind.MemberExpr && d.callee.resolvedSym != null) {
 		const sym = d.callee.resolvedSym;
-		if (sym.nativeName != "") {
+		if ((sym.nativeName == "msStringByteAt" || sym.nativeName == "msStringCharCodeAt") && !node.flags.has(NodeFlag.ExtStatic) && d.arguments.length == 1
+				&& hasStringType((d.callee.data as MemberExprData).object)) {
+			return compileStrIndexRead(s, node, sym.nativeName == "msStringByteAt" ? RaiserOpcode.StrByteAt : RaiserOpcode.StrCharCodeAt);
+		}
+		if (sym.nativeName != "" && !holdsValue(sym)) {
 			checkHostBridgeCoverage(sym, d.callee);
 			const isStatic = node.flags.has(NodeFlag.ExtStatic);
 			const md = d.callee.data as MemberExprData;
 			const allArgs: Node[] = [];
 			if (!isStatic) allArgs.push(md.object);
 			for (const a of d.arguments) { allArgs.push(a); }
-			const dest = allocReg(s);
-			emitCallArgs(s, dest, hostValues(allArgs));
-			const nameIdx = addConst(s, raiserString(sym.nativeName));
+			const hostArgs = hostValues(allArgs);
+			const dest = callBlock(s, node.nodeType, hostArgs, null);
+			emitCallArgs(s, dest, hostArgs);
+			const nameIdx = addConst(s, raiserConstString(sym.nativeName));
 			emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, allArgs.length));
 			return dest;
 		}
@@ -1647,16 +1813,13 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 		if (calleeSym != null && calleeSym.overloads != null && calleeSym.overloads.length > 0) {
 			calleeSym = resolveOverloadWinner(calleeSym, d.resolvedOverloadIdx).winnerSym;
 		}
-		const overridden = overriddenMethodName(calleeSym);
-		if (overridden != "" && d.arguments.length > 0) return compileDispatchedCall(s, node, overridden);
-		let funcIdx = resolveRoutine(s, calleeSym);
-		if (funcIdx < 0 && calleeSym != null) {
-			funcIdx = callRaiserOnDemand(calleeSym);
-		}
+		const funcIdx = routineIndex(s, calleeSym);
 		if (funcIdx >= 0) {
-			const dest = allocReg(s);
+			const dest = callBlock(s, node.nodeType, d.arguments, calleeParamTypes(calleeSym));
 			emitCallArgs(s, dest, d.arguments);
+			const pastBase = d.arguments.length > 0 ? emitOverrideCalls(s, node, dest, dispatchOverrides(calleeSym)) : [];
 			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, d.arguments.length));
+			patchJumpsTo(s, pastBase, codeLen(s));
 			return dest;
 		}
 	}
@@ -1688,57 +1851,68 @@ function compileSuperCall(s: RaiserCompState, node: Node, superSym: Symbol): int
 		queueRaiserCompileError(msg, node.location.line, node.location.column);
 		return emitTrapNil(s, msg);
 	}
-	const dest = allocReg(s);
-	for (let i = 0; i <= d.arguments.length; i += 1) allocReg(s);
+	const superClasses: RaiserRegClass[] = [RaiserRegClass.Ref, RaiserRegClass.Ref];
+	for (const a of d.arguments) superClasses.push(regClassOf(s, a.nodeType));
+	const dest = allocBlock(s, superClasses);
 	emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1, thisReg, 0));
 	for (let i = 0; i < d.arguments.length; i += 1) compileExprInto(s, d.arguments[i], dest + 2 + i);
 	emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, d.arguments.length + 1));
 	return dest;
 }
 
-function overriddenMethodName(sym: Symbol | null): string {
-	if (sym == null) return "";
-	const entry = dispatchEntryFor(sym);
-	if (entry == null || entry.overloaded) return "";
-	return dispatchOverridesFor(entry.classSym, entry.methodName).length > 0 ? entry.methodName : "";
+function routineIndex(s: RaiserCompState, sym: Symbol | null): int32 {
+	const funcIdx = resolveRoutine(s, sym);
+	return funcIdx < 0 && sym != null ? callRaiserOnDemand(sym) : funcIdx;
 }
 
-function compileDispatchedCall(s: RaiserCompState, node: Node, methodName: string): int32 {
-	const d = node.data as CallExprData;
-	const dest = allocReg(s);
-	for (let i = 0; i < d.arguments.length; i += 1) allocReg(s);
-	for (let i = 0; i < d.arguments.length; i += 1) compileExprInto(s, d.arguments[i], dest + 1 + i);
-	const closureReg = allocReg(s);
-	emitInst(s, raiserABC(RaiserOpcode.LoadField, closureReg, dest + 1, addConst(s, raiserString(methodName))));
-	const fnReg = allocReg(s);
-	emitInst(s, raiserABC(RaiserOpcode.LoadField, fnReg, closureReg, addConst(s, raiserString("fn"))));
-	emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, fnReg, d.arguments.length));
-	return dest;
+function dispatchOverrides(sym: Symbol | null): Symbol[] {
+	const entry = sym != null ? dispatchEntryFor(sym) : null;
+	if (entry == null || entry.overloaded) return [];
+	return dispatchOverridesFor(entry.classSym, entry.methodName).map((e) => e.sym);
+}
+
+// The receiver's class picks the override, deepest class first, as the C
+// backend's dispatcher does; the base call the caller emits next is the fallthrough.
+function emitOverrideCalls(s: RaiserCompState, node: Node, dest: int32, overrides: Symbol[]): int32[] {
+	const argCount = (node.data as CallExprData).arguments.length;
+	const ends: int32[] = [];
+	for (const ov of overrides) {
+		const ft = ov.symbolType;
+		const receiver = ft != null && ft.typeChildren.length > 0 ? ft.typeChildren[0] : null;
+		const key = classTargetKey(receiver);
+		const funcIdx = routineIndex(s, ov);
+		if (key == "" || funcIdx < 0) {
+			queueRaiserCompileError(`internal: the override '${ov.name}' has no ${key == "" ? "receiver class" : "Raiser routine"}`, node.location.line, node.location.column);
+			continue;
+		}
+		const isOv = allocBool(s);
+		emitInst(s, raiserABC(RaiserOpcode.InstanceOf, isOv, dest + 1, classTargetOperand(s, receiver, key)));
+		const next = emitBranchIfFalsy(s, isOv);
+		emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, argCount));
+		ends.push(emitJumpPlaceholder(s));
+		patchJumpTo(s, next, codeLen(s));
+	}
+	return ends;
 }
 
 function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
-
-	// Compile callee expression → register holding the closure pair object
 	const closureReg = compileExpr(s, d.callee);
 
-	// Extract fn field (integer = function index) and env field
-	const fnIdxReg = allocReg(s);
-	const fnConstIdx = addConst(s, raiserString("fn"));
-	emitInst(s, raiserABC(RaiserOpcode.LoadField, fnIdxReg, closureReg, fnConstIdx));
-
-	const envReg = allocReg(s);
-	const envConstIdx = addConst(s, raiserString("env"));
-	emitInst(s, raiserABC(RaiserOpcode.LoadField, envReg, closureReg, envConstIdx));
-
-	// Allocate dest + (argCount+1) slots (worst case: env + args) and compute each argument into its slot
 	let argCount = 0;
 	for (const a of d.arguments) {
 		if (a.nodeType == null || a.nodeType.kind != TypeKind.Void) argCount = argCount + 1;
 	}
-	const totalArgs = argCount + 1;
-	const dest = allocReg(s);
-	for (let i = 0; i < totalArgs; i = i + 1) { allocReg(s); }
+	const calleeType = skipModifier(d.callee.nodeType);
+	const declaredParams = calleeType != null && calleeType.kind == TypeKind.Function ? calleeType.typeChildren : null;
+	const closureClasses: RaiserRegClass[] = [regClassOf(s, node.nodeType)];
+	for (let i = 0; i < d.arguments.length; i = i + 1) {
+		if (d.arguments[i].nodeType != null && d.arguments[i].nodeType!.kind == TypeKind.Void) continue;
+		const declared = declaredParams != null && i < declaredParams.length ? declaredParams[i] : null;
+		closureClasses.push(regClassOf(s, declared != null ? declared : d.arguments[i].nodeType));
+	}
+	closureClasses.push(RaiserRegClass.Ref);
+	const dest = allocBlock(s, closureClasses);
 	let slot = 0;
 	for (let i = 0; i < d.arguments.length; i = i + 1) {
 		if (d.arguments[i].nodeType != null && d.arguments[i].nodeType!.kind == TypeKind.Void) {
@@ -1748,24 +1922,7 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 		compileExprInto(s, d.arguments[i], dest + 1 + slot);
 		slot = slot + 1;
 	}
-
-	// Runtime check: if env is -1 (non-capturing sentinel), skip env passing
-	const sentinelReg = allocReg(s);
-	emitLoadConst(s, sentinelReg, raiserInt(-1));
-	// BneI64 envReg, sentinelReg, 1 → if env != -1, skip next instruction (jump past no-env path)
-	emitInst(s, raiserABC(RaiserOpcode.BneI64, envReg, sentinelReg, 1));
-	const jumpToNoEnv = emitJumpPlaceholder(s);
-
-	// WITH ENV path: real args first, then env LAST (Standard reference parity: closure calling convention)
-	emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1 + argCount, envReg, 0));
-	emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, fnIdxReg, totalArgs));
-	const jumpPastNoEnv = emitJumpPlaceholder(s);
-
-	// NO ENV path: just real args, no env
-	patchJumpTo(s, jumpToNoEnv, codeLen(s));
-	emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, fnIdxReg, argCount));
-
-	patchJumpTo(s, jumpPastNoEnv, codeLen(s));
+	emitInst(s, raiserABC(declaredParams != null ? RaiserOpcode.CallClosureTyped : RaiserOpcode.CallClosure, dest, closureReg, argCount + 1));
 	return dest;
 }
 
@@ -1773,7 +1930,7 @@ function compileClosureCall(s: RaiserCompState, node: Node): int32 {
 
 function compileConditionalExpr(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as ConditionalExprData;
-	const dest = allocReg(s);
+	const dest = allocReg(s, joinClass(regClassOf(s, d.ternaryConsequent.nodeType), regClassOf(s, d.ternaryAlternate.nodeType)));
 
 	const toAlt = condJumps(s, d.ternaryCondition, false);
 
@@ -1791,21 +1948,21 @@ function compileConditionalExpr(s: RaiserCompState, node: Node): int32 {
 
 // --- Update (i++, ++i, i--, --i) ---
 
-function emitStep(s: RaiserCompState, dest: int32, fromReg: int32, updateOp: string, target: Node): void {
+function emitStep(s: RaiserCompState, dest: int32, fromReg: int32, updateOp: string, target: Node, inRange: boolean): void {
 	if (!isFloatExpr(target) && !isUnsignedBand(target.nodeType)) {
 		emitInst(s, raiserABC(updateOp == "++" ? RaiserOpcode.AddI64Imm : RaiserOpcode.SubI64Imm, dest, fromReg, immField(1)));
-		emitAtWidth(s, dest, target.nodeType);
+		if (!inRange) emitAtWidth(s, dest, target.nodeType);
 	} else {
-		const oneReg = allocReg(s);
+		const oneReg = isFloatExpr(target) ? allocFloat(s) : allocWord(s);
 		emitLoadConst(s, oneReg, isFloatExpr(target) ? raiserFloat(1.0) : raiserInt(1));
 		emitCompoundArith(s, updateOp == "++" ? "+=" : "-=", dest, fromReg, oneReg, target);
 	}
 	if (target.nodeType != null && peelDistinct(target.nodeType).kind == TypeKind.Char) emitInst(s, raiserABC(RaiserOpcode.NarrowS, dest, 8, 1));
 }
 
-function emitStepped(s: RaiserCompState, fromReg: int32, updateOp: string, target: Node): int32 {
-	const outReg = allocReg(s);
-	emitStep(s, outReg, fromReg, updateOp, target);
+function emitStepped(s: RaiserCompState, fromReg: int32, updateOp: string, target: Node, inRange: boolean): int32 {
+	const outReg = isFloatExpr(target) ? allocFloat(s) : allocWord(s);
+	emitStep(s, outReg, fromReg, updateOp, target, inRange);
 	return outReg;
 }
 
@@ -1819,15 +1976,16 @@ function compileUpdateExpr(s: RaiserCompState, node: Node, resultUnused: boolean
 	const refusedOp = refusePointerOp(s, node);
 	if (refusedOp >= 0) return refusedOp;
 	const d = node.data as UpdateExprData;
+	const inRange = node.flags.has(NodeFlag.NoOverflowCheck);
 
 	const refusedTarget = refusePointerOp(s, d.updateArg);
 	if (refusedTarget >= 0) return refusedTarget;
 	const through = derefTarget(s, d.updateArg);
 	if (through != null) {
 		const ptrReg = compileExpr(s, through);
-		const oldReg = allocReg(s);
+		const oldReg = allocFor(s, d.updateArg.nodeType);
 		emitInst(s, raiserABC(RaiserOpcode.LoadDeref, oldReg, ptrReg, 0));
-		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg);
+		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg, inRange);
 		emitInst(s, raiserABC(RaiserOpcode.StoreDeref, ptrReg, 0, newReg));
 		return d.isPrefix ? newReg : oldReg;
 	}
@@ -1838,14 +1996,14 @@ function compileUpdateExpr(s: RaiserCompState, node: Node, resultUnused: boolean
 		if (varReg >= 0) {
 			if (d.isPrefix || resultUnused) {
 				// ++i / --i: modify first, return modified
-				emitStep(s, varReg, varReg, d.updateOp, d.updateArg);
+				emitStep(s, varReg, varReg, d.updateOp, d.updateArg, inRange);
 				if (global >= 0) emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, varReg, global, 0));
 				return varReg;
 			} else {
 				// i++ / i--: save old value, then modify
-				const oldReg = allocReg(s);
+				const oldReg = allocReg(s, classOfReg(s, varReg));
 				emitInst(s, raiserABC(RaiserOpcode.Move, oldReg, varReg, 0));
-				emitStep(s, varReg, varReg, d.updateOp, d.updateArg);
+				emitStep(s, varReg, varReg, d.updateOp, d.updateArg, inRange);
 				if (global >= 0) emitInst(s, raiserABC(RaiserOpcode.StoreGlobal, varReg, global, 0));
 				return oldReg;
 			}
@@ -1855,21 +2013,21 @@ function compileUpdateExpr(s: RaiserCompState, node: Node, resultUnused: boolean
 	if (d.updateArg.kind == NodeKind.MemberExpr) {
 		const md = d.updateArg.data as MemberExprData;
 		const objReg = compileExpr(s, md.object);
-		const nameIdx = addConst(s, raiserString(md.property));
-		const oldReg = allocReg(s);
-		emitInst(s, raiserABC(RaiserOpcode.LoadField, oldReg, objReg, nameIdx));
-		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg);
-		emitInst(s, raiserABC(RaiserOpcode.StoreField, objReg, nameIdx, newReg));
+		const nameIdx = addConst(s, raiserConstString(md.property));
+		const oldReg = allocFor(s, d.updateArg.nodeType);
+		emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, oldReg, objReg, nameIdx));
+		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg, inRange);
+		emitInst(s, fieldInst(s, md.object.nodeType, md.property, RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, objReg, nameIdx, newReg));
 		return d.isPrefix ? newReg : oldReg;
 	}
 
 	if (d.updateArg.kind == NodeKind.ArrayAccess) {
 		const ad = d.updateArg.data as ArrayAccessData;
 		const arrReg = compileExpr(s, ad.array);
-		const idxReg = compileExpr(s, ad.index);
-		const oldReg = allocReg(s);
+		const idxReg = compileIndex(s, ad.index);
+		const oldReg = allocFor(s, d.updateArg.nodeType);
 		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, oldReg, arrReg, idxReg));
-		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg);
+		const newReg = emitStepped(s, oldReg, d.updateOp, d.updateArg, inRange);
 		emitInst(s, raiserABC(RaiserOpcode.StoreIndex, arrReg, idxReg, newReg));
 		return d.isPrefix ? newReg : oldReg;
 	}
@@ -1884,18 +2042,17 @@ function compileUpdateExpr(s: RaiserCompState, node: Node, resultUnused: boolean
 
 function compileObjectLiteral(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as ObjectLiteralData;
-	const dest = allocReg(s);
+	const dest = allocRef(s);
 
-	// Create empty object
-	emitInst(s, raiserABC(RaiserOpcode.NewObject, dest, 0, 0));
+	emitObjectShell(s, dest, node.nodeType);
 
 	// Set each field
 	for (let i = 0; i < d.keys.length; i = i + 1) {
 		const fieldType = node.nodeType != null
 			? getProperty(node.nodeType, d.keys[i]) : d.properties[i].nodeType;
 		const valReg = emitValueCopy(s, compileExpr(s, d.properties[i]), fieldType);
-		const nameIdx = addConst(s, raiserString(d.keys[i]));
-		emitInst(s, raiserABC(RaiserOpcode.StoreField, dest, nameIdx, valReg));
+		const nameIdx = addConst(s, raiserConstString(d.keys[i]));
+		emitInst(s, fieldInst(s, node.nodeType, d.keys[i], RaiserOpcode.StoreField, RaiserOpcode.StoreSlot, dest, nameIdx, valReg));
 	}
 	if (d.keys.length == d.properties.length) emitOmittedFieldZeros(s, dest, node.nodeType, d.keys);
 
@@ -1906,10 +2063,10 @@ function compileObjectLiteral(s: RaiserCompState, node: Node): int32 {
 
 function compileNewArray(s: RaiserCompState, node: Node, arrayType: Type): int32 {
 	const d = node.data as NewExprData;
-	const array = allocReg(s);
-	emitInst(s, raiserABC(RaiserOpcode.NewArray, array, 0, 0));
+	const array = allocRef(s);
+	emitInst(s, newArrayInst(s, array, 0, arrayType.typeReturn));
 	if (d.newArguments.length == 1) {
-		const count = allocReg(s);
+		const count = allocWord(s);
 		emitInst(s, raiserABC(RaiserOpcode.Conv, count, compileExpr(s, d.newArguments[0]), RaiserConvClass.I64));
 		emitInst(s, raiserABC(RaiserOpcode.ArraySetLen, array, count, 1));
 		emitZeroFill(s, array, count, arrayType.typeReturn);
@@ -1939,7 +2096,7 @@ function compileNewExpr(s: RaiserCompState, node: Node): int32 {
 					node.location.line, node.location.column);
 				callArgs = [];
 			}
-			const dest = allocReg(s);
+			const dest = callBlock(s, node.nodeType, callArgs, null);
 			emitCallArgs(s, dest, callArgs);
 			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, callArgs.length));
 			return dest;
@@ -1955,13 +2112,18 @@ function compileNewExpr(s: RaiserCompState, node: Node): int32 {
 
 function compileArrayLiteral(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as ArrayLiteralData;
+	for (const e of d.elements) {
+		if (e.kind == NodeKind.SpreadExpr) return compileSpreadArrayLiteral(s, node);
+	}
 	const elemCount = d.elements.length;
 
 	// Reserve dest + N element slots upfront
-	const dest = allocReg(s);
+	const elementClasses: RaiserRegClass[] = [RaiserRegClass.Ref];
 	for (let slotIdx = 0; slotIdx < elemCount; slotIdx = slotIdx + 1) {
-		allocReg(s);
+		const held = node.nodeType != null ? getElementType(unwrapRef(node.nodeType)) : d.elements[slotIdx].nodeType;
+		elementClasses.push(regClassOf(s, held));
 	}
+	const dest = allocBlock(s, elementClasses);
 
 	// Compile each element, move result to its slot
 	for (let i = 0; i < elemCount; i = i + 1) {
@@ -1974,14 +2136,59 @@ function compileArrayLiteral(s: RaiserCompState, node: Node): int32 {
 		}
 	}
 
-	emitInst(s, raiserABC(RaiserOpcode.NewArray, dest, elemCount, 0));
+	emitInst(s, newArrayInst(s, dest, elemCount, node.nodeType != null ? getElementType(unwrapRef(node.nodeType)) : null));
 	const sized = node.nodeType != null ? unwrapRef(node.nodeType) : null;
 	if (sized != null && sized.kind == TypeKind.SizedArray && sized.typeValue > elemCount) {
-		const tail = allocReg(s);
+		const tail = allocWord(s);
 		emitLoadConst(s, tail, raiserInt((sized.typeValue - elemCount) as int64));
 		emitZeroFill(s, dest, tail, sized.typeReturn);
 	}
 	return dest;
+}
+
+function compileSpreadArrayLiteral(s: RaiserCompState, node: Node): int32 {
+	const d = node.data as ArrayLiteralData;
+	const elementType = node.nodeType != null ? getElementType(unwrapRef(node.nodeType)) : null;
+	const dest = allocRef(s);
+	emitInst(s, newArrayInst(s, dest, 0, elementType));
+	for (const e of d.elements) {
+		if (e.kind == NodeKind.SpreadExpr) {
+			appendSpreadSource(s, dest, (e.data as SpreadExprData).spreadArg, elementType);
+			continue;
+		}
+		const item = emitValueCopy(s, compileExpr(s, e), elementType);
+		emitInst(s, raiserABC(RaiserOpcode.ArrayPush, dest, item, 0));
+	}
+	return dest;
+}
+
+function isIndexedSpreadSource(t: Type | null): boolean {
+	if (t == null) return false;
+	const bare = unwrapRef(peelTransparentInstance(unwrapRef(t)));
+	return bare.kind == TypeKind.Array || bare.kind == TypeKind.SizedArray || bare.kind == TypeKind.Span || bare.kind == TypeKind.Tuple;
+}
+
+function appendSpreadSource(s: RaiserCompState, dest: int32, source: Node, elementType: Type | null): void {
+	if (!isIndexedSpreadSource(source.nodeType)) {
+		const msg = `a spread of '${typeDisplayName(source.nodeType)}' is unsupported by the Raiser bytecode compiler`;
+		queueRaiserCompileError(msg, source.location.line, source.location.column);
+		emitTrapNil(s, msg);
+		return;
+	}
+	const sourceReg = compileExpr(s, source);
+	const idx = allocWord(s);
+	emitLoadConst(s, idx, raiserInt(0));
+	const len = allocWord(s);
+	emitInst(s, raiserABC(RaiserOpcode.ArrayLen, len, sourceReg, 0));
+	const item = allocFor(s, elementType);
+	const loopStart = codeLen(s);
+	emitInst(s, raiserABC(RaiserOpcode.BltI64, idx, len, 1));
+	const exit = emitJumpPlaceholder(s);
+	emitInst(s, raiserABC(RaiserOpcode.LoadIndex, item, sourceReg, idx));
+	emitInst(s, raiserABC(RaiserOpcode.ArrayPush, dest, emitValueCopy(s, item, elementType), 0));
+	emitInst(s, raiserABC(RaiserOpcode.AddI64Imm, idx, idx, immField(1)));
+	emitInst(s, raiserAx(RaiserOpcode.Jump, loopStart - codeLen(s) - 1));
+	patchJumpTo(s, exit, codeLen(s));
 }
 
 function isSpanType(t: Type | null): boolean {
@@ -1991,10 +2198,10 @@ function isSpanType(t: Type | null): boolean {
 }
 
 function compileStringBytes(s: RaiserCompState, strReg: int32): int32 {
-	const dest = allocReg(s);
-	const arg = allocReg(s);
+	const dest = allocBlock(s, [RaiserRegClass.Ref, RaiserRegClass.Ref]);
+	const arg = dest + 1;
 	emitInst(s, raiserABC(RaiserOpcode.Move, arg, strReg, 0));
-	const nameIdx = addConst(s, raiserString("msAsBytes"));
+	const nameIdx = addConst(s, raiserConstString("msAsBytes"));
 	emitInst(s, raiserABC(RaiserOpcode.CallHost, dest, nameIdx, 1));
 	return dest;
 }
@@ -2004,17 +2211,17 @@ function compileArraySlice(s: RaiserCompState, d: ArrayAccessData, bd: BinaryExp
 	if (exprIsString(s, d.array)) srcReg = compileStringBytes(s, srcReg);
 	const startReg = compileExpr(s, bd.left);
 	const endReg = compileExpr(s, bd.right);
-	const slotStart = allocReg(s);
-	const slotEnd = allocReg(s);
+	const slotStart = allocBlock(s, [RaiserRegClass.Word, RaiserRegClass.Word]);
+	const slotEnd = slotStart + 1;
 	emitInst(s, raiserABC(RaiserOpcode.Move, slotStart, startReg, 0));
 	if (bd.operator == "...") {
-		const one = allocReg(s);
+		const one = allocWord(s);
 		emitLoadConst(s, one, raiserInt(1));
 		emitInst(s, raiserABC(RaiserOpcode.AddI64, slotEnd, endReg, one));
 	} else {
 		emitInst(s, raiserABC(RaiserOpcode.Move, slotEnd, endReg, 0));
 	}
-	const dest = allocReg(s);
+	const dest = allocRef(s);
 	emitInst(s, raiserABC(RaiserOpcode.ArraySlice, dest, srcReg, slotStart));
 	return dest;
 }
@@ -2027,7 +2234,7 @@ function compileArrayAccess(s: RaiserCompState, node: Node): int32 {
 	if (held != null && held.kind == TypeKind.Ptr) {
 		const pointer = compileExpr(s, d.array);
 		if (!heldByLocation(s, node.nodeType)) return pointer;
-		const dest = allocReg(s);
+		const dest = allocFor(s, node.nodeType);
 		emitInst(s, raiserABC(RaiserOpcode.LoadDeref, dest, pointer, 0));
 		return dest;
 	}
@@ -2036,15 +2243,15 @@ function compileArrayAccess(s: RaiserCompState, node: Node): int32 {
 		if (bd.operator == ".." || bd.operator == "...") return compileArraySlice(s, d, bd);
 	}
 	const arrReg = compileExpr(s, d.array);
-	const idxReg = compileExpr(s, d.index);
-	const dest = allocReg(s);
+	const idxReg = compileIndex(s, d.index);
+	const dest = allocFor(s, node.nodeType);
 	emitInst(s, raiserABC(RaiserOpcode.LoadIndex, dest, arrReg, idxReg));
 	return dest;
 }
 
 function compileEnumOrdinal(s: RaiserCompState, node: Node, member: Symbol): int32 {
 	const enumTy = member.symbolType.kind == TypeKind.EnumLiteral ? member.symbolType.typeReturn : member.symbolType;
-	const r = allocReg(s);
+	const r = allocWord(s);
 	if (enumTy != null && enumTy.kind == TypeKind.Enum) {
 		for (let ei = 0; ei < enumTy.typeNames.length; ei += 1) {
 			if (enumTy.typeNames[ei] != member.name) continue;
@@ -2078,7 +2285,7 @@ function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 
 	if (d.property == "byteLength" && exprIsString(s, d.object)) {
 		const source = compileExpr(s, d.object);
-		const destination = allocReg(s);
+		const destination = allocWord(s);
 		emitInst(s, raiserABC(RaiserOpcode.StrByteLen, destination, source, 0));
 		return destination;
 	}
@@ -2086,7 +2293,7 @@ function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 	// .length — string vs array
 	if (d.property == "length" && !isRecordOperand(d.object)) {
 		const objReg = compileExpr(s, d.object);
-		const dest = allocReg(s);
+		const dest = allocWord(s);
 		if (exprIsString(s, d.object)) {
 			emitInst(s, raiserABC(RaiserOpcode.StrLen, dest, objReg, 0));
 		} else {
@@ -2097,9 +2304,9 @@ function compileMemberExpr(s: RaiserCompState, node: Node): int32 {
 
 	// General field access on objects
 	const objReg = compileExpr(s, d.object);
-	const nameIdx = addConst(s, raiserString(d.property));
-	const dest = allocReg(s);
-	emitInst(s, raiserABC(RaiserOpcode.LoadField, dest, objReg, nameIdx));
+	const nameIdx = addConst(s, raiserConstString(d.property));
+	const dest = allocFor(s, node.nodeType);
+	emitInst(s, fieldInst(s, d.object.nodeType, d.property, RaiserOpcode.LoadField, RaiserOpcode.LoadSlot, dest, objReg, nameIdx));
 	return dest;
 }
 
@@ -2139,9 +2346,9 @@ function compileToStringCall(s: RaiserCompState, node: Node): int32 {
 
 function compileTextOf(s: RaiserCompState, obj: Node): int32 {
 	const objReg = compileStringPart(s, obj);
-	const emptyReg = allocReg(s);
-	emitLoadConst(s, emptyReg, raiserString(""));
-	const dest = allocReg(s);
+	const emptyReg = allocRef(s);
+	emitLoadConst(s, emptyReg, raiserConstString(""));
+	const dest = allocRef(s);
 	emitInst(s, raiserABC(RaiserOpcode.ConcatStr, dest, objReg, emptyReg));
 	return dest;
 }
@@ -2161,7 +2368,7 @@ function compileArraySetLenCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 	const md = d.callee.data as MemberExprData;
 	const arrReg = compileExpr(s, md.object);
-	const count = allocReg(s);
+	const count = allocWord(s);
 	emitInst(s, raiserABC(RaiserOpcode.Conv, count, compileExpr(s, d.arguments[0]), RaiserConvClass.I64));
 	emitInst(s, raiserABC(RaiserOpcode.ArraySetLen, arrReg, count, 0));
 	return arrReg;
@@ -2169,7 +2376,7 @@ function compileArraySetLenCall(s: RaiserCompState, node: Node): int32 {
 
 function compileExitCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
-	const codeReg = allocReg(s);
+	const codeReg = allocWord(s);
 	if (d.arguments.length == 0) {
 		emitLoadConst(s, codeReg, raiserInt(0));
 	} else {
@@ -2183,18 +2390,18 @@ function compileExitCall(s: RaiserCompState, node: Node): int32 {
 
 function compileMapFatalCall(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
-	const head = allocReg(s);
-	emitLoadConst(s, head, raiserString("fatal error: "));
-	const text = allocReg(s);
+	const head = allocRef(s);
+	emitLoadConst(s, head, raiserConstString("fatal error: "));
+	const text = allocRef(s);
 	emitInst(s, raiserABC(RaiserOpcode.ConcatStr, text, head, compileExpr(s, d.arguments[0])));
-	const newline = allocReg(s);
-	emitLoadConst(s, newline, raiserString("\n"));
+	const newline = allocRef(s);
+	emitLoadConst(s, newline, raiserConstString("\n"));
 	emitInst(s, raiserABC(RaiserOpcode.ConcatStr, text, text, newline));
-	const written = allocReg(s);
-	const arg = allocReg(s);
+	const written = allocBlock(s, [RaiserRegClass.Ref, RaiserRegClass.Ref]);
+	const arg = written + 1;
 	emitInst(s, raiserABC(RaiserOpcode.Move, arg, text, 0));
-	emitInst(s, raiserABC(RaiserOpcode.CallHost, written, addConst(s, raiserString("msWriteStderr")), 1));
-	const code = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.CallHost, written, addConst(s, raiserConstString("msWriteStderr")), 1));
+	const code = allocWord(s);
 	emitLoadConst(s, code, raiserInt(2));
 	emitInst(s, raiserABC(RaiserOpcode.Halt, code, 1, 0));
 	return code;
@@ -2202,6 +2409,13 @@ function compileMapFatalCall(s: RaiserCompState, node: Node): int32 {
 
 // spawn/waitFor/Promise.resolve carry @builtin on the extern; the kind lands
 // on the CallExpr for free functions and on the callee for the static method.
+function combineOf(builtinKind: string): int32 {
+	if (builtinKind == "PromiseAll") return RaiserCombine.All as int32;
+	if (builtinKind == "PromiseRace") return RaiserCombine.Race as int32;
+	if (builtinKind == "PromiseAny") return RaiserCombine.Any as int32;
+	return -1;
+}
+
 function callBuiltinKind(node: Node): string {
 	if (node.resolvedSym != null && node.resolvedSym.builtinKind != "") return node.resolvedSym.builtinKind;
 	const d = node.data as CallExprData;
@@ -2218,12 +2432,29 @@ function isStringMethod(s: RaiserCompState, node: Node, method: string): boolean
 	return exprIsString(s, d.object);
 }
 
+function hasStringType(node: Node): boolean {
+	return node.nodeType != null && literalBase(node.nodeType).kind == TypeKind.String;
+}
+
+function compileStrIndexRead(s: RaiserCompState, node: Node, op: RaiserOpcode): int32 {
+	const d = node.data as CallExprData;
+	const md = d.callee.data as MemberExprData;
+	const strReg = compileExpr(s, md.object);
+	const idxReg = compileExpr(s, d.arguments[0]);
+	if (classOfReg(s, strReg) != RaiserRegClass.Ref || classOfReg(s, idxReg) != RaiserRegClass.Word) {
+		throw new Error(`internal: ${opName(op)} reads a ${classOfReg(s, strReg)} receiver and a ${classOfReg(s, idxReg)} index, not a Ref string and a Word index`);
+	}
+	const dest = allocWord(s);
+	emitInst(s, raiserABC(op, dest, strReg, idxReg));
+	return dest;
+}
+
 function compileStrCharAt(s: RaiserCompState, node: Node): int32 {
 	const d = node.data as CallExprData;
 	const md = d.callee.data as MemberExprData;
 	const strReg = compileExpr(s, md.object);
 	const idxReg = compileExpr(s, d.arguments[0]);
-	const dest = allocReg(s);
+	const dest = allocRef(s);
 	emitInst(s, raiserABC(RaiserOpcode.StrCharAt, dest, strReg, idxReg));
 	return dest;
 }
@@ -2236,26 +2467,26 @@ function compileStrSlice(s: RaiserCompState, node: Node): int32 {
 	const startReg = compileExpr(s, d.arguments[0]);
 	const endReg = compileExpr(s, d.arguments[1]);
 	// Ensure contiguous layout: move to adjacent registers if needed
-	const slotStart = allocReg(s);
-	const slotEnd = allocReg(s);
+	const slotStart = allocBlock(s, [RaiserRegClass.Word, RaiserRegClass.Word]);
+	const slotEnd = slotStart + 1;
 	if (startReg != slotStart) {
 		emitInst(s, raiserABC(RaiserOpcode.Move, slotStart, startReg, 0));
 	}
 	if (endReg != slotEnd) {
 		emitInst(s, raiserABC(RaiserOpcode.Move, slotEnd, endReg, 0));
 	}
-	const dest = allocReg(s);
+	const dest = allocRef(s);
 	emitInst(s, raiserABC(RaiserOpcode.StrSlice, dest, strReg, slotStart));
 	return dest;
 }
 
 // Coerce each argument (ConcatStr with "") and space-join them into one line (C/JS parity).
 function compileEchoLine(s: RaiserCompState, args: Node[]): int32 {
-	const spaceReg = allocReg(s);
-	emitLoadConst(s, spaceReg, raiserString(" "));
-	const emptyReg = allocReg(s);
-	emitLoadConst(s, emptyReg, raiserString(""));
-	const acc = allocReg(s);
+	const spaceReg = allocRef(s);
+	emitLoadConst(s, spaceReg, raiserConstString(" "));
+	const emptyReg = allocRef(s);
+	emitLoadConst(s, emptyReg, raiserConstString(""));
+	const acc = allocRef(s);
 	if (args.length == 0) {
 		emitInst(s, raiserABC(RaiserOpcode.Move, acc, emptyReg, 0));
 		return acc;
@@ -2287,4 +2518,54 @@ function isConsoleLog(node: Node): boolean {
 	if (d.object.kind != NodeKind.Identifier) return false;
 	const obj = d.object.data as IdentifierData;
 	return obj.name == "console";
+}
+
+// --- Class instances ---
+
+export function emitsRoutine(decl: Node, flags: string): boolean {
+	const sym = decl.resolvedSym;
+	if (sym != null && (hasFlag(sym, SymbolFlag.OverloadSig) || hasFlag(sym, SymbolFlag.Borrow))) return false;
+	return !isGenericFn(flags) && (decl.nodeType == null || !hasGenericParams(decl.nodeType));
+}
+
+export function classTypeOperand(s: RaiserCompState, className: string, classSym: Symbol | null): int32 {
+	if (classSym == null) return 0;
+	const chain: string[] = [raiserClassKey(classSym)];
+	let up = classParentOf(classSym.symbolType);
+	while (up != null && classTargetKey(up) != "") {
+		if (chain.length == 64) throw new Error(`internal: the class chain of '${className}' is deeper than 64`);
+		chain.push(classTargetKey(up));
+		up = classParentOf(up);
+	}
+	const display: int64[] = [];
+	for (let i = chain.length - 1; i >= 0; i -= 1) display.push(raiserClassId(chain[i]));
+	s.classTypes.push(createClassType(className, chain.length - 1, display, layoutOf(classSym.symbolType), slotKindsOf(s, classSym.symbolType)));
+	return s.classTypes.length;
+}
+
+// The operand InstanceOf and ObjConv carry: the id of the class `t` names and its depth, packed.
+function classTargetOperand(s: RaiserCompState, t: Type | null, key: string): int32 {
+	let up = classParentOf(t != null && t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t);
+	let depth = 0;
+	while (up != null && classTargetKey(up) != "") {
+		depth += 1;
+		if (depth == 64) throw new Error(`internal: the class chain of '${key}' is deeper than 64`);
+		up = classParentOf(up);
+	}
+	return addConst(s, raiserInt(raiserClassId(key) * 64 + depth));
+}
+
+function literalClass(t: Type | null): Symbol | null {
+	const bare = t != null && t.kind == TypeKind.Ref ? t.typeReturn : t;
+	if (runtimeClassSym(bare) == null) return null;
+	const sym = classSymOfType(bare);
+	return sym != null ? placedInstanceOf(sym) : null;
+}
+
+function emitObjectShell(s: RaiserCompState, dest: int32, t: Type | null): void {
+	const classSym = literalClass(t);
+	const decl = classSym != null ? classDeclNodeOf(classSym) : null;
+	const className = decl != null && decl.kind == NodeKind.ClassDecl ? (decl.data as ClassDeclData).className : "";
+	const shape = classSym != null ? classTypeOperand(s, className != "" ? className : classSym.name, classSym) : layoutOperand(s, layoutOf(t), slotKindsOf(s, t));
+	emitInst(s, raiserABC(RaiserOpcode.NewObject, dest, shape, 0));
 }

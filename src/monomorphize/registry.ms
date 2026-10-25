@@ -3,7 +3,7 @@
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { makeSymbol } from "../checker/symbol";
 import { hashToBase36 } from "std/hash";
-import { nominalTypeKey, hasTypeIdentity, isMaybeType, representedPayload } from "../checker/types";
+import { nominalTypeKey, hasTypeIdentity, isMaybeType, representedPayload, isBrandDistinct, peelTransparentInstance } from "../checker/types";
 
 // Field-name + field-type signature for a nameless struct. Named field types key
 // by name and stop, so a cycle (which always passes through a named type in
@@ -51,7 +51,6 @@ function monoGenericOwner(gi: Type): string {
 // that are never declared) keeps the bare spelling.
 export function monoBaseName(baseName: string, ownerPath: string): string {
 	if (baseName == "" || ownerPath == "") return baseName;
-	if (baseName.indexOf("__", 0) >= 0) return baseName;
 	return baseName + "_" + hashToBase36(ownerPath);
 }
 
@@ -110,12 +109,15 @@ function monoTypeKeyBody(t: Type): string {
 		TypeKind.Struct | TypeKind.Enum => {
 			if (t.typeName == "") return "anon" + hashToBase36(monoStructuralKey(t));
 			if (isMaybeType(t) && t.typeReturn != null && representedPayload(t.typeReturn) != t.typeReturn) return "Maybe_" + monoTypeKey(t.typeReturn);
+			if (t.typeFlags.has(TypeFlag.DuVariant)) return t.typeName + "_" + hashToBase36(nominalTypeKey(t));
 			const owner = monoOwnerPath(t);
 			const name = monoDeclaredName(t);
 			if (owner != "") return name + "_" + hashToBase36(owner);
 			return name;
 		},
 		TypeKind.GenericInstance => {
+			const seen = peelTransparentInstance(t);
+			if (seen != t) return monoTypeKey(seen);
 			let key = monoBaseName(t.typeName, monoGenericOwner(t));
 			let i = 0;
 			while (i < t.typeChildren.length) {
@@ -134,6 +136,7 @@ function monoTypeKeyBody(t: Type): string {
 		TypeKind.Var => "var_" + monoTypeKey(t.typeReturn),
 		TypeKind.Borrow => "borrow_" + monoTypeKey(t.typeReturn),
 		TypeKind.Distinct => {
+			if (isBrandDistinct(t)) return "brand_" + monoTypeKey(t.typeReturn) + "_" + hashToBase36(t.typeName);
 			if (t.typeName == "") return "distinct_" + monoTypeKey(t.typeReturn);
 			const owner = monoOwnerPath(t);
 			const name = monoDeclaredName(t);

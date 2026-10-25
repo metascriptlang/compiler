@@ -12,16 +12,16 @@ import {
 	SpreadExprData, NewExprData, MoveExprData,
 	AwaitExprData, YieldExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, createNodeAt,
 } from "../../ast/node";
-import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess } from "./emit";
-import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName } from "../c/names";
+import { emit, emitNode, mark, markNamed, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes, jsTypedArrayName, recordNeededImport, moduleExportsName, needsAutoAsync, createJSGenerator, lookupModuleSpec, recordNamespaceExport, jsPropertyKey, jsPropertyAccess, fileDeclaring } from "./emit";
+import { mangledFunctionName, mangledGlobalName, isModuleGlobalVar, resolveOverloadWinner, referenceName, mangleQualified, mangleModuleName } from "../c/names";
 import { arrayOf, emitArrayElement, emitCopyOnRead, emitNativeArg, emitValueAssign, jsDefaultValue, nativeResultCopy } from "./valueCopy";
 import { emitCollectionNew, emitCollectionFromPairs } from "./valueKey";
-import { hasFlag, SymbolFlag } from "../../checker/symbol";
+import { enumMemberName, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { isStaticExtensionSym, isNativePattern } from "../../checker/context";
 import { int64ToDecimal } from "../../utils/string";
 import { isRuntimeProcSym, runtimeRef } from "../../transform/util";
 import { spreadStructOf } from "../../transform/desugar/objectSpreadLower";
-import { unwrapRefNullUnion, isMaybeType, isStringLike, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind, peelThrough, PEEL_ALL, unwrapRef } from "../../checker/types";
+import { unwrapRefNullUnion, isMaybeType, isStringLike, numberLiteralSet, isTagCarriedUnion, typeDisplayName, hasGenericParams, runtimeClassSym, unionMemberDisplay, isArrayShaped, classParentOf, peelToRepr, jsMemberKind, peelThrough, PEEL_ALL, unwrapRef } from "../../checker/types";
 import { DYNAMIC_IMPORT } from "../../checker/importCall";
 import { enumMemberLiteral } from "../../checker/constFold";
 
@@ -145,8 +145,20 @@ export function jsBundleReferenceName(sym: Symbol, text: string): string {
 	return jsReferenceName(gen, sym, text);
 }
 
+function enumOfMember(sym: Symbol): Type | null {
+	const t = sym.symbolType;
+	if (t != null && t.kind == TypeKind.Enum) return t;
+	return t != null && t.kind == TypeKind.EnumLiteral && t.typeReturn != null && t.typeReturn.kind == TypeKind.Enum ? t.typeReturn : null;
+}
+
+export function jsEnumMemberName(gen: JSGenerator, enumSym: Symbol | null, enumName: string, member: string): string {
+	if (gen.bundleMode && enumSym != null && enumSym.modulePath != "" && !hasFlag(enumSym, SymbolFlag.ImportC)) return `${mangledGlobalName(enumSym, enumName)}_${member}`;
+	return enumMemberName(enumSym, safeJsName(enumName), member);
+}
+
 function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: string): string {
 	if (sym == null) return safeJsName(name);
+	if (sym.symbolKind == SymbolKind.Variable && sym.instantiatedFrom != null) return safeJsName(sym.name);
 	if (gen.multiFile && sym.jsModulePath != "" && sym.modulePath != "" && sym.modulePath != gen.currentModulePath) {
 		return recordNeededImport(gen, sym.modulePath, safeJsName(name));
 	}
@@ -154,6 +166,10 @@ function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: 
 		return hasFlag(sym, SymbolFlag.ImportC) && !isNativePattern(sym.nativeName) ? sym.nativeName : safeJsName(name);
 	}
 	if (gen.multiFile) return jsMultiFileName(gen, sym, name, declared);
+	if (sym.symbolKind == SymbolKind.EnumMember) {
+		const owner = enumOfMember(sym);
+		if (owner != null) return jsEnumMemberName(gen, owner.sym, owner.typeName, sym.name);
+	}
 	if (!gen.bundleMode && hasFlag(sym, SymbolFlag.Exported)) return safeJsName(name);
 	if (sym.symbolKind == SymbolKind.Function && sym.modulePath != null && sym.modulePath != "") {
 		return mangledFunctionName(sym, declared, sym.overloadIdx);
@@ -229,7 +245,20 @@ function jsMultiFileName(gen: JSGenerator, sym: Symbol, name: string, declared: 
 	const emitted = multiFileHomeName(gen, sym, name, declared);
 	if (emitted == "") return safeJsName(name);
 	const home = sym.modulePath != null && sym.modulePath != "" ? sym.modulePath : gen.currentModulePath;
-	return home != gen.currentModulePath ? recordNeededImport(gen, home, emitted) : emitted;
+	if (home == gen.currentModulePath && hasFlag(sym, SymbolFlag.ImportC)) return emitted;
+	if (gen.ownFunctions.has(sym)) return ownBindingName(gen, sym, emitted);
+	const file = fileDeclaring(gen, home, emitted);
+	return file != gen.currentFile ? recordNeededImport(gen, file, emitted) : ownBindingName(gen, sym, emitted);
+}
+
+export function jsExportedFunctionName(gen: JSGenerator, sym: Symbol, name: string): string {
+	const emitted = multiFileHomeName(gen, sym, name, name);
+	return emitted == "" ? safeJsName(name) : emitted;
+}
+
+export function ownBindingName(gen: JSGenerator, sym: Symbol, emitted: string): string {
+	if (sym.symbolKind != SymbolKind.Function || !gen.innerLocals.has(emitted)) return emitted;
+	return mangleQualified(emitted, mangleModuleName(gen.currentModulePath));
 }
 
 // The binding name the symbol's home module declares, or "" for a symbol no module
@@ -358,8 +387,9 @@ export function emitUnaryExpr(gen: JSGenerator, node: Node): void {
 		emit(gen, "typeof ");
 		emitNode(gen, d.operand);
 	} else {
-		emit(gen, d.unaryOp);
+		emit(gen, d.unaryOp + "(");
 		emitNode(gen, d.operand);
+		emit(gen, ")");
 	}
 }
 
@@ -643,6 +673,19 @@ export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 			}
 		}
 	}
+	const cls = node.nodeType != null && jsMemberKind(node.nodeType) == "class" && node.nodeType.typeReturn.kind != TypeKind.GenericInstance ? runtimeClassSym(node.nodeType.typeReturn) : null;
+	if (cls != null) {
+		emit(gen, "globalThis.Object.assign(globalThis.Object.create(");
+		emitNode(gen, classReference(cls, node.location));
+		emit(gen, ".prototype), ");
+		emitPlainObjectLiteral(gen, node, d);
+		emit(gen, ")");
+		return;
+	}
+	emitPlainObjectLiteral(gen, node, d);
+}
+
+function emitPlainObjectLiteral(gen: JSGenerator, node: Node, d: ObjectLiteralData): void {
 	const omitted = omittedFieldZeros(node, d);
 	if (d.keys.length == 0 && omitted.length == 0) {
 		emit(gen, "{}");
@@ -678,7 +721,7 @@ function omittedFieldZeros(node: Node, d: ObjectLiteralData): string[] {
 	if (t == null) return out;
 	for (let i = 0; i < t.typeNames.length && i < t.typeChildren.length; i += 1) {
 		const name = t.typeNames[i];
-		if (name.startsWith("__") || d.keys.includes(name) || spreadMayProvide(d, name)) continue;
+		if (d.keys.includes(name) || spreadMayProvide(d, name)) continue;
 		const zero = jsDefaultValue(t.typeChildren[i]);
 		if (zero != "") out.push(`${jsPropertyKey(name)}: ${zero}`);
 	}
@@ -1010,6 +1053,17 @@ function emitCheckedNarrowing(gen: JSGenerator, node: Node, d: TypeAssertionData
 		if (union != null && stringSlot != null) openTagTest(gen, stringSlot, union, pass, node.location);
 		emitNode(gen, d.asExpr);
 		emit(gen, union != null && stringSlot != null ? "))" : ")");
+		return true;
+	}
+	const numbers = numberLiteralSet(payload);
+	if (numbers != null) {
+		const tests: string[] = [];
+		for (const lit of numbers) tests.push("v == " + lit.typeName);
+		emit(gen, "((v) => (" + pass + tests.join(" || ") + ") ? v : ");
+		emitDefectCall(gen, "\"invalid union conversion: \" + String(v) + \" is not " + escapeJSString(namedTypeDisplay(payload)) + "\"", node.location);
+		emit(gen, ")(");
+		emitNode(gen, d.asExpr);
+		emit(gen, ")");
 		return true;
 	}
 	if (union == null) return false;

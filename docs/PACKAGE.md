@@ -104,11 +104,16 @@ the pass. Measured on that build: 1062 gave identical C (16 modules via `--emit=
 node flags stop crossing the macro wire. Writing `config` twice inside `when (…) { const config = … }
 else { … }` also works (measured the same day), but its two copies drift.
 
-Not covered: the language server does not load `build.ms` `globalImports` at all, so an editor
-shows neither the injected names nor what the pass emits (card
-`~/metascript/.inbox/compiler/2026-10-06-lsp-ignores-build-global-imports.md`). Under `--hcr`, a
-globalImports module that keeps a module-level `string[]` fails to link, with or without a pass
-(card `2026-10-06-hcr-ref-array-cell-owned-by-user-image.md`).
+The language server checks each `globalImports` entry as an implicit import of the project, with
+the same visibility as batch checking: a module sees the entries before the first one whose import
+closure reaches it, and std modules see none; module passes bind as in batch. Measured 2026-10-23
+by the replay scenarios in `src/compiler/lsp/replayScenarios.ms` (a macro from a global import
+expands, class and generic identity, edits reaching users, both visibility cases, a pass after a
+project switch), each compared with `msc check`. A change to `build.ms` itself still needs a server
+restart.
+
+Under `--hcr`, a globalImports module that keeps a module-level `string[]` fails to link, with
+or without a pass (card `2026-10-06-hcr-ref-array-cell-owned-by-user-image.md`).
 
 ### `lsp` — editor-only target
 
@@ -125,8 +130,15 @@ LSP-only).
 
 Measured 2026-09-22, card `~/metascript/.inbox/compiler/2026-09-22-build-ms-declared-but-unwired.md`:
 
-- `resolve.alias` — extracted, passed to the resolver, and still `Cannot resolve module` for both
-  `"@lib": "./src/lib"` and `"lib": "./src/lib"`.
+- `resolve.alias` — wired for `msc build`, `msc check` and `msc run --target=raiser`, and the value is read relative to
+  the importing file's directory, not the project root. Measured 2026-10-25 with `msc` v0.3.4
+  (`~/.metascript/BUILD` binary `6b8655024`), entry `src/main.ms`: `"@lib": "../lib"` resolves
+  to `<root>/lib` and `"./lib"` to `src/lib` under `msc build`; an alias used from
+  `src/deep/m.ms` with `"../lib"` resolved to `src/lib`; an absolute path resolves;
+  `"./src/lib"` stops with `Cannot resolve module` (also under the name `lib`). `msc run
+  --target=raiser` resolves the same aliases (measured on a candidate built from this branch,
+  2026-10-25: `deep:src-lib`); `msc run` on C and `--target=js` stops with `Cannot resolve module
+  '@lib/util'`. Not verified: Windows paths, an alias target outside the project.
 - `root` — declared in `std/build`'s `BuildConfig` as the base for non-relative imports, and read
   by nothing. Measured 2026-10-15 on a candidate built from `7e7c0dd02`: with `root: "src"` or
   `root: "."`, `import … from "lib/util"` and `from "src/lib/util"` both stop with `Cannot resolve
@@ -150,12 +162,21 @@ what identity is made of; the rest is registry metadata shown by `msc publish`.
 |---|---|---|
 | `"file:../libpkg"` | local folder, relative to the project root or absolute | none — `build.ms` is the whole truth |
 | `"1.2.3"` | registry, **exact minimum version** | `msc.lock` |
-| `"git:github.com/owner/repo@v1.2.3"` | git host archive, tag or 40-char SHA | `msc.lock` |
+| `"git:github.com/owner/repo@v1.2.3"` | not supported yet: `msc add` and `msc install` refuse it | — |
 
-There are no range operators — `^`, `~`, `>=`, `*` are errors, by design: every version is an
-exact minimum and resolution is Maximum Version Selection (one version per package, the highest
-minimum wins, no backtracking). `devDeps` are for tests and tooling; both are compiled and both
-may declare commands.
+There are no range operators — `^`, `~`, `>=`, `*` are errors, by design. A registry dep resolves
+the version `msc.lock` names for it and nothing else: there is no Maximum Version Selection, and
+`build.ms` is not compared with the lock (measured with a candidate built from `e5ab88ef3`:
+`build.ms` naming `2.0.0` against a lock entry `1.0.0` imported the cached `1.0.0`). A registry
+package's own dependencies are not installed; `msc install` refuses an entry that needs one:
+
+```
+$ msc install        # msc.lock: probeOuter@1.0.0 with deps { probeInner: 0.1.0 }, no probeInner entry
+error: probeOuter@1.0.0 needs probeInner@0.1.0; transitive dependencies are not installed yet
+1 missing, 0 OK      # exit 1
+```
+
+`devDeps` are for tests and tooling; both are compiled and both may declare commands.
 
 ### Importing a dependency
 
@@ -167,12 +188,32 @@ import { greeting } from "greeter/src/index";
 ```
 
 `file:` deps are followed transitively (a dep's own `build.ms` `deps`/`devDeps` are read, depth
-capped at 20). Registry/git deps resolve through `msc.lock` to `~/.metascript/cache/src/…`.
+capped at 20). Registry deps resolve through `msc.lock` to `~/.metascript/cache/extracted/<name>@<version>/`. A git
+entry resolves to `cache/extracted/<url>@<commit>/` only when it carries a `commit`; no command writes
+one or fills that directory.
 
 ### `msc.lock`
 
-Plain JSON, written by `msc add` for registry and git sources, read by every build. `file:` deps
+Plain JSON, written by `msc add` for registry sources, read by every build. `file:` deps
 never appear in it — moving the folder is the upgrade. Reader/writer: `src/compiler/package/lockfile.ms`.
+
+`msc install` fails (exit 1, naming the dep) when `msc.lock` holds a git entry, when a registry
+entry needs a package with no entry of its own, when `build.ms` names a registry or git dep
+and `msc.lock` is missing or unreadable, and when a valid `msc.lock` has no entry for a dep of
+`deps` or `devDeps` (measured with the same candidate, and for the last case with a candidate
+built from `dcfa369ab`):
+
+```
+error: foo@git:github.com/acme/foo@v1.2.3: git sources are not installed yet
+error: msc.lock not found, so registry and git deps cannot be installed
+error: outer is in build.ms but msc.lock has no entry for it; run `msc add outer@1.0.0`
+```
+
+The last line is the output for `outer` in either section, exit 1. A git dep with no lock entry
+prints `error: foo: git sources are not installed yet`, because `msc add` refuses git too.
+
+`msc add foo@git:github.com/acme/foo@v1.2.3` (also with `-D`) prints
+`error: git sources are not installed yet` and leaves `build.ms` and `msc.lock` unchanged.
 
 ## Declared commands — `package.bin`
 
@@ -287,17 +328,18 @@ This is an integrity and execution boundary, **not a confidentiality boundary**:
 code may read any file the compiler user can read. Project-local code, `file:` dependencies and
 the compiler's own standard library are outside the cache boundary and retain full host access.
 After compilation, the package command itself also runs with the user's normal permissions.
-`msc.lock` pins registry/git source identity (integrity hash or commit); pinned still does not
-mean audited.
+`msc.lock` records a registry archive's integrity hash. `msc add` and `msc install` check it when
+they download the archive and refuse a missing or mismatched one; a build reads the extracted
+cache directory without hashing it again (see Verified below). Checked once is not audited.
 
 ## Command reference
 
 | Command | Behavior |
 |---|---|
 | `msc init <name>` | Scaffold `build.ms` with `entry: "src/index.ms"` + `src/index.ms` ending in a bare `main();`, so `msc build` / `msc run` take the project without a file argument. Measured 2026-10-15: inside a fresh scaffold, `msc build` printed `Built 1 module(s) → out/debug/index` on a candidate built from `7e7c0dd02`, where v0.3.4 (`15b93cbba`) stopped with `error: build requires an input file` because it wrote `root:`. |
-| `msc add <spec> [-D]` | Add a dep to `deps` (or `devDeps` with `-D`) in `build.ms`, then install commands. Spec: `name` (registry latest), `name@1.2.3`, `name@git:host/path@ref`, `name@file:path`. Also rewrites `msc.lock` for registry/git. |
+| `msc add <spec> [-D]` | Add a dep to `deps` (or `devDeps` with `-D`) in `build.ms`, then install commands. Spec: `name` (registry latest), `name@1.2.3`, `name@file:path`; a `git:` source is refused. Also rewrites `msc.lock` for registry. |
 | `msc remove <name>` | Remove the dep from `build.ms` + `msc.lock`, then prune its shims from `.msc/bin/`. `-g <name>` removes a global install (manifest + `~/.metascript/bin/` shim). |
-| `msc install` | Verify locked deps are present, install commands into `.msc/bin/`. `-g <spec>` = global (see shims). |
+| `msc install` | Verify locked deps are present, install commands into `.msc/bin/`; refuses git entries, transitive registry deps, a missing `msc.lock` and a registry/git dep it has no entry for. `-g <spec>` = global (see shims). |
 | `msc x <cmd> [args…]` | Run a declared command. No argument lists them. |
 | `msc publish [--dry-run]` | Pack `package.files`/`package.ignore` selection and upload with the stored token; the metadata sent to the registry carries `bin`, so the registry can show which commands a package installs (server-side exposure pending — `.inbox/landing/pkg-bin-metadata.md`). `--dry-run` prints the resolved list — measured: `files: 3 … build.ms, src/index.ms, tooling/cli.ms`. |
 | `msc login` / `msc logout` | GitHub device-flow OAuth → registry bearer token in `~/.metascript/credentials` (mode 0600); logout revokes server-side then truncates. |
@@ -309,8 +351,9 @@ There is no `msc update` yet — bump versions by editing `build.ms` / re-runnin
 Publish metadata (`description`, `license`, `repository`, `homepage`, `keywords`, `author`, and
 `bin`) and file selection (`files`, `ignore` — `.gitignore`-subset globs; `.git/`, `out/`,
 `.msc/`, `msc.lock`, `.env*` and friends are always excluded) live on the `package` block.
-`~/.metascript/cache/` holds registry and git downloads plus command binaries;
-`src/compiler/package/cache.ms` owns the layout.
+`~/.metascript/cache/` holds registry archives (`download/registry/<name>/<version>.zip`) and their
+extracted files (`extracted/`); `src/compiler/package/cache.ms` owns the layout and also names git
+paths, which nothing writes yet. No command binary lives there.
 
 ## Verified / not verified
 
@@ -323,3 +366,16 @@ The macro sandbox was probed with the same dependency source under a redirected
 `msc check` exits 1 naming `msFsWriteFileMode` and the dependency module, and the file is absent.
 A cached macro using `msFsExists` plus a project-local macro using `msProcessPlatform` both check
 clean.
+
+Measured 2026-10-24 with a candidate built from `516108dbf`, `HOME` redirected to an empty
+directory and the archive served from `http://127.0.0.1`: a lock entry with `url` and the archive's
+`integrity` and an empty cache printed `downloading probepkg@1.0.0...`, `extracted probepkg@1.0.0
+(2 files)`, `all 1 dependencies OK`, leaving `cache/download/registry/probepkg/1.0.0.zip` and
+`cache/extracted/probepkg@1.0.0/{build.ms,index.ms}` and nothing else but `.update-check`. A build
+importing it printed `hello from cache`. After editing the cached `index.ms`, the next build printed
+`TAMPERED` and `msc install` still printed `all 1 dependencies OK`. With an empty cache and a
+changed or absent `integrity`, `msc install` printed `error: probepkg@1.0.0: integrity missing or
+mismatched` and `1 missing, 0 OK`, exit 1. A hand-written git entry with `commit: "abc123"` and a
+directory at `cache/extracted/github.com/acme/foo@abc123/` built and printed `from git cache`;
+removing the `commit` gave `Cannot resolve module 'foo/index'`; `msc install` refused the entry.
+Not verified: a `file:` dep's transitive deps through the cache, Windows paths, a real registry.

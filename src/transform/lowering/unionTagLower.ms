@@ -1,6 +1,6 @@
 import { Node, NodeKind, NodeFlag, TypeKind, Type, HiddenStdConvData, MemberExprData, BinaryExprData, UnaryExprData, CallExprData, createNode } from "../../ast/node";
-import { storesUnionTag, unionSlotOf, narrowUnionToVariant, declaredTagUnionOf, objectHolderSlots } from "../../checker/fit";
-import { isMaybeType, unwrapRefNullUnion, typeDisplayName, createArray, int32Type, stringType, peelTransparentInstance, createUnion, jsMemberKind, isUnknownType, isArrayShaped, peelToStructOrUnion, unwrapRef } from "../../checker/types";
+import { storesUnionTag, unionSlotOf, narrowUnionToVariant, declaredTagUnionOf, objectHolderSlots, joinBranchTypes } from "../../checker/fit";
+import { isMaybeType, unwrapRefNullUnion, typeDisplayName, createArray, int32Type, stringType, peelTransparentInstance, createUnion, jsMemberKind, isUnknownType, isArrayShaped, peelToStructOrUnion, unwrapRef, widenNumberLiteralType } from "../../checker/types";
 import { TransformContext, reportTransformError } from "../context";
 import { mapChildren } from "../walker";
 import { callBuiltinKind, isRuntimeProcCall, makeCall, makeIntNumber, makeString, makeTypedObjectLiteral, runtimeRef, syntheticToken } from "../util";
@@ -48,9 +48,13 @@ function valueType(ut: Type): Type {
 	const reps: Type[] = [];
 	for (const m of ut.typeChildren) {
 		const kind = jsMemberKind(m);
-		if (kinds.indexOf(kind) >= 0) continue;
-		kinds.push(kind);
-		reps.push(m);
+		const at = kinds.indexOf(kind);
+		if (at < 0) {
+			kinds.push(kind);
+			reps.push(m);
+		} else if (kind == "number") {
+			reps[at] = joinBranchTypes([widenNumberLiteralType(reps[at]), widenNumberLiteralType(m)]);
+		}
 	}
 	return reps.length == 1 ? reps[0] : createUnion(reps);
 }

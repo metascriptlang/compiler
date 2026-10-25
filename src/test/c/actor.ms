@@ -43,7 +43,7 @@ async function main(): Promise<void> {
 
 	for (const a of actors) { a.bump(); }
 
-	let sum = 0;
+	let sum: number = 0;
 	let j = 0;
 	while (j < COUNT) {
 		sum = sum + (await actors[j].get());
@@ -212,7 +212,7 @@ actor R {
 	items: number[] = [10, 20, 30];
 	sum(): number {
 		const r = await spawn(() => {
-			let t = 0;
+			let t: number = 0;
 			for (const v of this.items) { t = t + v; }
 			return t;
 		});

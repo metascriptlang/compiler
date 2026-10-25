@@ -23,8 +23,9 @@ import { projectTagUnionMember, narrowMaybePayload, checkedProjection, storesUni
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeMember, makeBinary } from "../util";
-import { unwrapRefusesNull, wrapMaybeValue } from "../native/nullableLower";
-import { cloneIfPure } from "./intArithJS";
+import { unwrapRefusesNull, wrapMaybeValue } from "../maybeCarrier";
+import { cloneIfPure } from "../place";
+import { isAssignOp, isLogicalAssignOp } from "../../ast/operators";
 
 export function materializeMaybeReads(program: Node, ctx: TransformContext): Node {
 	const project = !ctx.jsBackend && !ctx.raiserBackend;
@@ -37,14 +38,8 @@ function carriesTaggedUnion(carrier: Type | null): boolean {
 	return payload != null && payload.kind == TypeKind.Union && storesUnionTag(payload);
 }
 
-function isAssignOp(op: string): boolean {
-	if (op == "=") return true;
-	if (op.length < 2 || op.charAt(op.length - 1) != "=") return false;
-	return op != "==" && op != "!=" && op != "===" && op != "!==" && op != "<=" && op != ">=";
-}
-
 function isCompoundStoreOp(op: string): boolean {
-	return op != "=" && op != "&&=" && op != "||=" && op != "??=";
+	return op != "=" && !isLogicalAssignOp(op);
 }
 
 // `x op= y` on a narrowed carrier stores what `x = x op y` stores: the checker wraps the
@@ -63,7 +58,10 @@ function storeCompoundInCarrier(node: Node, d: BinaryExprData, read: Node): Node
 function declaredMaybeOf(node: Node): Type | null {
 	if (node.kind == NodeKind.Identifier) {
 		const sym = node.resolvedSym;
-		const st = sym != null && sym.symbolType != null ? peelTransparentInstance(sym.symbolType) : null;
+		let st = sym != null && sym.symbolType != null ? peelTransparentInstance(sym.symbolType) as Type | null : null;
+		if (st != null && (st.kind == TypeKind.Var || st.kind == TypeKind.Borrow) && st.typeReturn != null) {
+			st = peelTransparentInstance(st.typeReturn);
+		}
 		if (st != null && isMaybeType(st)) return st;
 		return null;
 	}
@@ -142,6 +140,14 @@ function qualifiesForTagged(node: Node): boolean {
 	return carriesTaggedUnion(declaredMaybeOf(node));
 }
 
+// Narrowed to null, the read still holds whatever the carrier holds: a call or a closure
+// may have filled it since the check.
+function readNullAsCarrier(node: Node): Node {
+	const carrier = declaredMaybeOf(node);
+	if (carrier != null) node.nodeType = carrier;
+	return node;
+}
+
 function visitMaybeRead(node: Node, projectAll: boolean): Node {
 	const project = projectAll || qualifiesForTagged(node);
 	if (node.kind == NodeKind.BinaryExpr) {
@@ -161,7 +167,8 @@ function visitMaybeRead(node: Node, projectAll: boolean): Node {
 	if (node.kind != NodeKind.Identifier && node.kind != NodeKind.MemberExpr && node.kind != NodeKind.ArrayAccess) return node;
 	const ntRaw = node.nodeType;
 	const nt = ntRaw != null ? peelTransparentInstance(ntRaw) : null;
-	if (nt == null || nt.kind == TypeKind.Null) return node;
+	if (nt == null) return node;
+	if (nt.kind == TypeKind.Null) return readNullAsCarrier(node);
 	if (isMaybeType(nt)) {
 		if (!project) return node;
 		const declared = declaredMaybeOf(node);

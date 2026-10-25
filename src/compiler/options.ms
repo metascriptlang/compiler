@@ -4,7 +4,18 @@ import { argv, cwd, exit, platform, arch } from "std/process";
 import { isAbsolute, join, normalize } from "std/fs/path";
 import { error, bold, cyan, setColorEnabled } from "../utils/color";
 import { parseIntStr } from "../utils/string";
-import { DefineTable, createDefineTable, applyDefineSwitch, initDefines, defineSymbol } from "./defines";
+import {
+	DefineTable,
+	createDefineTable,
+	applyDefineSwitch,
+	initDefines,
+	defineSymbol,
+	applyConfigDefines,
+	seedProjectDir,
+} from "./defines";
+import { BuildConfig, loadBuildConfig } from "./buildConfig";
+import { setParserDefines } from "../parser/context";
+import { setExtraGlobalImports, setModulePasses } from "../checker/prelude";
 import { setDefaultLoopLimit } from "../raiser/vm";
 import { TargetInfo, hostTargetInfo, floatInt64Align } from "../checker/types";
 
@@ -224,6 +235,49 @@ export function applyBuildTarget(opts: CliOptions, name: string): Result<void, s
 export function seedOptionDefines(opts: CliOptions): void {
 	const backendName = opts.target == Target.JS ? "js" : (opts.target == Target.Raiser ? "raiser" : "c");
 	initDefines(opts.defines, backendName, opts.targetOs, buildCpu(opts.targetOs, opts.cpuTarget), opts.gcMode, opts.mode);
+}
+
+function globalImportEntry(projectRoot: string, gi: string): string {
+	if (gi.length > 4 && gi.slice(0, 4) == "std/") return gi;
+	if (isAbsolute(gi)) return normalize(gi);
+	return normalize(join(projectRoot, gi));
+}
+
+// The project's build.ms goes in before any source is parsed: target, defines under the
+// command line's -d: switches, then globalImports and their module passes.
+export function applyProjectConfig(opts: CliOptions, projectRoot: string): Result<BuildConfig, string> {
+	setParserDefines(opts.defines);
+	opts.projectRoot = projectRoot;
+	const buildMsPath = join(projectRoot, "build.ms");
+	const config = loadBuildConfig(projectRoot != "" ? buildMsPath : "", false);
+	if (config.valid) {
+		const targeted = applyBuildTarget(opts, config.build.target);
+		if (!targeted.ok) return Result.err(`${buildMsPath}: build.target: ${targeted.error}`);
+		if (opts.command == "build" && opts.mode == MODE_DEBUG && config.build.optimize == "release") opts.mode = MODE_RELEASE;
+	}
+	seedOptionDefines(opts);
+	if (config.valid) {
+		seedProjectDir(opts.defines, projectRoot);
+		if (config.defines.refused.length > 0) {
+			return Result.err(`${buildMsPath}: define '${config.defines.refused[0]}' must be a string, a number or a boolean`);
+		}
+		const reserved = applyConfigDefines(opts.defines, config.defines.keys, config.defines.values);
+		if (reserved != "") {
+			return Result.err(`${buildMsPath}: define '${reserved}' is a name msc sets from its own options (backend, --os, --cpu, --gc, the build mode); give the project's define another name`);
+		}
+	}
+	setExtraGlobalImports([]);
+	setModulePasses([], []);
+	const giCfg = loadBuildConfig(projectRoot != "" ? buildMsPath : "", false);
+	if (giCfg.valid && giCfg.globalImports.length > 0) {
+		const extras: string[] = [];
+		for (const gi of giCfg.globalImports) extras.push(globalImportEntry(projectRoot, gi));
+		setExtraGlobalImports(extras, buildMsPath);
+		const passFrom: string[] = [];
+		for (const from of giCfg.modulePassFrom) passFrom.push(globalImportEntry(projectRoot, from));
+		setModulePasses(passFrom, giCfg.modulePassMacro);
+	}
+	return Result.ok(config);
 }
 
 function isPackageCommand(command: string): boolean {

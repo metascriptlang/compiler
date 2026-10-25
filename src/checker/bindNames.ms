@@ -8,7 +8,7 @@ import {
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { inferredType } from "./types";
-import { makeSymbol, initSymbol, lookupSymbol, lookupSymbolInDefiningScope, scopeDefining, ScopeKind } from "./symbol";
+import { makeSymbol, initSymbol, lookupSymbol, lookupSymbolInDefiningScope, scopeDefining, isFrameValue, ScopeKind } from "./symbol";
 import { CheckerContext, findExportedSymbol, macroPreludeKind } from "./context";
 
 class BindScope {
@@ -21,6 +21,7 @@ class NameBinder {
 	keys: Node[] = [];
 	metaBound: Map<Node, Symbol | null> | null = null;
 	metaDefiner: string = "";
+	atDefinition: boolean = false;
 
 	constructor(ctx: CheckerContext) {
 		this.ctx = ctx;
@@ -72,6 +73,14 @@ function bindIdentifier(b: NameBinder, node: Node): void {
 	if (node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.EnumMember) return;
 	const name = (node.data as IdentifierData).name;
 	const local = lookupBound(b, name);
+	if (b.atDefinition) {
+		const sym = local != null ? null : lookupSymbol(b.ctx.table, name);
+		if (sym != null && !isFrameValue(sym)) {
+			node.resolvedSym = sym;
+			node.flags = node.flags.incl(NodeFlag.BoundSym);
+		}
+		return;
+	}
 	if (b.metaBound != null) {
 		b.metaBound.set(node, local != null ? local : boundUnlessLeftToPreludes(b, name));
 		return;
@@ -316,6 +325,15 @@ export function bindMetaBodyNames(ctx: CheckerContext, definer: string, params: 
 	for (const p of params) declareName(b, p, SymbolKind.Parameter, body);
 	bindNode(b, body);
 	return bound;
+}
+
+export function bindTemplateBodyNames(ctx: CheckerContext, params: string[], body: Node): void {
+	const b = newBinder(ctx);
+	b.metaBound = new Map<Node, Symbol | null>();
+	b.atDefinition = true;
+	openBindScope(b);
+	for (const p of params) declareName(b, p, SymbolKind.Parameter, body);
+	bindNode(b, body);
 }
 
 export function bindModuleNames(ctx: CheckerContext, program: Node): Node[] {

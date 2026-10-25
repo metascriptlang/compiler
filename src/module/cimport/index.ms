@@ -4,7 +4,7 @@
 // parse one C header, collecting diagnostics from all three phases.
 //
 // Pure C parsing only — no MetaScript-specific emit. The C→MS emitter
-// (emit.ms translateCHeader) is the consumer.
+// (emit.ms translateHeaderModule) is the consumer.
 
 import { tokenizeFile } from "../cparse/tokenize";
 import { preprocess } from "../cparse/preprocess";

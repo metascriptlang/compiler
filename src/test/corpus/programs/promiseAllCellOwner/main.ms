@@ -1,4 +1,3 @@
-// @xfail(raiser): raiser runtime error: Unknown host function: msPromiseAll
 // Parity program — a Promise.all result collected in two modules (a struct, an int32 and an int64
 // element type each) shares one result-cell TypeInfo per element type: the owning module defines it,
 // the other module references it.

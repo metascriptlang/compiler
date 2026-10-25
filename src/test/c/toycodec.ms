@@ -4,7 +4,7 @@
 // call site. No real encode logic yet; just verifies the macro library is
 // wired through compile pipeline.
 
-import { compileToC } from "../helpers";
+import { compileToCWithStd } from "../helpers";
 
 test "E2E A4 smoke: toyEncode macro fires and returns a string" {
 	// Direct import — index.ms re-export doesn't propagate macro body across
@@ -19,6 +19,6 @@ function main(): void {
 	const s: string = toyEncode(u);
 }
 `;
-	const c = compileToC(src);
+	const c = compileToCWithStd(src);
 	assert c.ok;
 }

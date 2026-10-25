@@ -1,7 +1,7 @@
-import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, HiddenStdConvData, IdentifierData } from "../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, Type, TypeKind, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, InterfaceDeclData, CallExprData, MemberExprData, HiddenStdConvData, IdentifierData } from "../ast/node";
 import { classDeclNodeOf, parentClassSymOf, Scope } from "./symbol";
 import { CheckerContext, addError, extReceiverSym } from "./context";
-import { skipModifier, isStructType, isMaybeType, typeDisplayName } from "./types";
+import { skipModifier, distinctBody, isStructType, isMaybeType, typeDisplayName } from "./types";
 import { markInitialized } from "./initTracker";
 
 function unwrapDecl(node: Node | null): Node | null {
@@ -272,6 +272,31 @@ export function refuseHiddenMethodCall(ctx: CheckerContext, call: Node): void {
 	reportClassMember(ctx, owner, md.methodName, "method", vis == DeclaredVisibility.Protected, receiver, call.location.line, call.location.column);
 }
 
+function constructorVisibility(cls: Symbol): DeclaredVisibility {
+	const decl = classDeclNodeOf(cls);
+	if (decl == null || decl.kind != NodeKind.ClassDecl) return DeclaredVisibility.NotDeclared;
+	for (const member of (decl.data as ClassDeclData).classBody) {
+		const m = unwrapDecl(member);
+		if (m != null && m.kind == NodeKind.ConstructorDecl) return memberVisibility((m.data as ConstructorDeclData).ctorVisibility);
+	}
+	return DeclaredVisibility.NotDeclared;
+}
+
+export function refuseHiddenConstructor(ctx: CheckerContext, declaring: Symbol, line: int32, column: int32): void {
+	const owner = originOf(declaring);
+	const vis = constructorVisibility(owner);
+	if (vis != DeclaredVisibility.Private && vis != DeclaredVisibility.Protected) return;
+	const protectedCtor = vis == DeclaredVisibility.Protected;
+	if (enclosingGrant(ctx, owner, protectedCtor) != null) return;
+	addError(ctx, `Constructor of class '${owner.name}' is ${protectedCtor ? "protected" : "private"} and only accessible within the class declaration`, line, column);
+}
+
+export function refuseExtendingPrivateConstructor(ctx: CheckerContext, parent: Symbol, line: int32, column: int32): void {
+	const owner = originOf(parent);
+	if (constructorVisibility(owner) != DeclaredVisibility.Private || enclosingGrant(ctx, owner, false) != null) return;
+	addError(ctx, `Cannot extend a class '${owner.name}'. Class constructor is marked as private`, line, column);
+}
+
 export function isSuperReceiver(object: Node): boolean {
 	return object.kind == NodeKind.Identifier && (object.data as IdentifierData).name == "super";
 }
@@ -291,9 +316,11 @@ export function requiresInit(ctx: CheckerContext, t: Type | null): boolean {
 function noDefaultAt(ctx: CheckerContext, t: Type | null, depth: int32): Type | null {
 	const inner = skipModifier(t);
 	if (inner == null || depth > 16 || isMaybeType(inner)) return null;
-	if (inner.kind == TypeKind.Function || inner.kind == TypeKind.Ref) return inner;
 	if (inner.kind == TypeKind.SizedArray) return inner.typeValue > 0 && noDefaultAt(ctx, inner.typeReturn, depth + 1) != null ? inner : null;
+	const wrapped = distinctBody(inner);
+	if (wrapped != null) return noDefaultAt(ctx, wrapped, depth + 1) != null ? inner : null;
 	const body = inner.kind == TypeKind.GenericInstance && inner.typeReturn != null ? inner.typeReturn : inner;
+	if (body.kind == TypeKind.Function || body.kind == TypeKind.Ref || (body.kind == TypeKind.Struct && !isStructType(body))) return inner;
 	if (!isStructType(body) || body.typeChildren == null) return null;
 	if (body.typeNames != null && hiddenPrivateField(ctx, declaringSymOf(inner), body.typeNames) != "") return inner;
 	for (const field of body.typeChildren) {

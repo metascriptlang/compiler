@@ -9,7 +9,22 @@
 // macro call which walkExpand re-expands at the appropriate recursion depth.
 //
 import { Node, NodeKind } from "std/meta";
-import { detectUnionDisc, namesStruct, parseDiscKey, unwrapType, implementationOf } from "../discDetect";
+import {
+	detectUnionDisc,
+	namesStruct,
+	parseDiscKey,
+	unwrapType,
+	implementationOf,
+	literalCarrier,
+	literalMembers,
+} from "../discDetect";
+
+function isOptionalField(name: string, optionalFields: string[]): boolean {
+	for (const f of optionalFields) {
+		if (f == name) return true;
+	}
+	return false;
+}
 
 export macro jsonValueOf(t: Node): Node {
 	let tt = implementationOf(t);
@@ -142,6 +157,25 @@ export macro jsonValueOf(t: Node): Node {
 		};
 	}
 
+	const literals = literalMembers(tt);
+	if (literals.length > 0) {
+		const carrier = literalCarrier(literals[0]);
+		const builderName: string = match (carrier) {
+			"string" => "jsonString",
+			"boolean" => "jsonBool",
+			"float" => "jsonNumber",
+			_ => "jsonInt",
+		};
+		const literalArg: Node = carrier == "int"
+			? { kind: NodeKind.TypeAssertion, line: t.line, column: t.column, asExpr: t, asType: "int64" }
+			: t;
+		return {
+			kind: NodeKind.CallExpr, line: t.line, column: t.column,
+			callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: builderName },
+			arguments: [literalArg],
+		};
+	}
+
 	// V3 — Tagged-union (discriminated union) field. Emit runtime match on
 	// the disc field that dispatches to per-variant jsonObject construction.
 	// Step 2: bridge-populated path only (match-type DUs + Result/Option peeled).
@@ -222,12 +256,15 @@ export macro jsonValueOf(t: Node): Node {
 			// Build key/value arrays for jsonObject — disc first, then payload.
 			const vKeyNodes: Node[] = [{ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: discField }];
 			const vValueNodes: Node[] = [discValueNode];
+			const vOptional: string[] = v.typExprOptionalFields;
+			const vOptionalFlags: Node[] = [{ kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: false }];
 			let fi = 0;
 			while (fi < v.typExprFieldNames.length) {
 				const fname: string = v.typExprFieldNames[fi];
 				const ft: Node = v.typExprFieldTypes[fi];
 				if (fname != discField) {
 					vKeyNodes.push({ kind: NodeKind.StringLiteral, line: t.line, column: t.column, value: fname });
+					vOptionalFlags.push({ kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: isOptionalField(fname, vOptional) });
 					const memberExpr: Node = {
 						kind: NodeKind.MemberExpr, line: t.line, column: t.column,
 						object: t, property: fname, nodeType: ft, isOptional: false,
@@ -250,11 +287,17 @@ export macro jsonValueOf(t: Node): Node {
 				caseGuard: null as unknown as Node,
 				caseBody: {
 					kind: NodeKind.CallExpr, line: t.line, column: t.column,
-					callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: "jsonObject" },
-					arguments: [
-						{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: vKeyNodes },
-						{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: vValueNodes },
-					],
+					callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: vOptional.length > 0 ? "_jsonObjectOmitAbsent" : "jsonObject" },
+					arguments: vOptional.length > 0
+						? [
+							{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: vKeyNodes },
+							{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: vValueNodes },
+							{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: vOptionalFlags },
+						]
+						: [
+							{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: vKeyNodes },
+							{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: vValueNodes },
+						],
 				},
 			});
 		}
@@ -294,24 +337,6 @@ export macro jsonValueOf(t: Node): Node {
 					{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: ords },
 					{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: names },
 				],
-			};
-		}
-		// Literal-typed field (TS-style DU disc, e.g. `kind: "circle"`).
-		// Bridge emits StringLiteral/BooleanLiteral nodes for these — the
-		// runtime field value is just a regular string/bool, so route to
-		// jsonString/jsonBool. Without this branch they fell through to the
-		// Identifier path below, got tn="circle", missed the atomic match,
-		// and landed in jsonInt with a bad msString-as-int64 cast.
-		const literalBuilder: string = match (tt.kind) {
-			NodeKind.StringLiteral => "jsonString",
-			NodeKind.BooleanLiteral => "jsonBool",
-			_ => "",
-		};
-		if (literalBuilder != "") {
-			return {
-				kind: NodeKind.CallExpr, line: t.line, column: t.column,
-				callee: { kind: NodeKind.Identifier, line: t.line, column: t.column, name: literalBuilder },
-				arguments: [t],
 			};
 		}
 		// V1 supports atomic types and arrays-of-atomic. Unions / Functions
@@ -361,6 +386,8 @@ export macro jsonValueOf(t: Node): Node {
 	const fieldTypes: Node[] = tt.typExprFieldTypes;
 	const valueNodes: Node[] = [];
 	const keyNodes: Node[] = [];
+	const optionalFields: string[] = tt.typExprOptionalFields;
+	const optionalFlags: Node[] = [];
 	let fi = 0;
 	while (fi < fields.length) {
 		const f: string = fields[fi];
@@ -401,6 +428,7 @@ export macro jsonValueOf(t: Node): Node {
 			value: f,
 		};
 		keyNodes.push(keyLit);
+		optionalFlags.push({ kind: NodeKind.BooleanLiteral, line: t.line, column: t.column, boolValue: isOptionalField(f, optionalFields) });
 		fi = fi + 1;
 	}
 
@@ -412,22 +440,18 @@ export macro jsonValueOf(t: Node): Node {
 			kind: NodeKind.Identifier,
 			line: t.line,
 			column: t.column,
-			name: "jsonObject",
+			name: optionalFields.length > 0 ? "_jsonObjectOmitAbsent" : "jsonObject",
 		},
-		arguments: [
-			{
-				kind: NodeKind.ArrayLiteral,
-				line: t.line,
-				column: t.column,
-				elements: keyNodes,
-			},
-			{
-				kind: NodeKind.ArrayLiteral,
-				line: t.line,
-				column: t.column,
-				elements: valueNodes,
-			},
-		],
+		arguments: optionalFields.length > 0
+			? [
+				{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: keyNodes },
+				{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: valueNodes },
+				{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: optionalFlags },
+			]
+			: [
+				{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: keyNodes },
+				{ kind: NodeKind.ArrayLiteral, line: t.line, column: t.column, elements: valueNodes },
+			],
 	};
 }
 

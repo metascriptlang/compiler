@@ -7,19 +7,19 @@ import { Node, NodeKind, NodeFlag, TypeKind, DeclKind, ProgramData, FunctionDecl
 	ExportDeclData, VariableDeclData, ObjectLiteralData, ArrayLiteralData, ClassDeclData, ActorDeclData,
 	CallExprData, MemberExprData, NewExprData, BinaryExprData, DecoratedDeclData, ExternDeclData, IdentifierData, ExprStmtData, MacroInvocationData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { runtimeProcSym } from "../transform/util";
 import { getDeclName } from "./collectPass";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { AliveSet, CTypeInfoDemand, TypeInfoKind, createAliveSet, aliveSetAddSym, aliveSetHasSym, aliveSetAddModule, aliveSetHasDecl, aliveSetHasModule, aliveSetModuleCount } from "../codegen/c/context";
 import { ModuleGraph, findModule, createModuleGraph, createModule, addModule, createImportEntry } from "../module/graph";
-import { refArrayCellKey, refArrayCellOp, requireOpByKey, getOpByKey, typeInfoSubject, objectTypeInfoKey, isPrivateTypeInfoSubject, arcCellKey, promiseAllShape, PromiseAllShape, promiseAllCellKey, hookBaseCName, hookBaseCNameOfSym, anonTypeName, isAnonTypeName } from "../codegen/c/types";
+import { isCHeaderPath } from "../module/loader";
+import { refArrayCellKey, refArrayCellOp, getOpByKey, typeInfoSubject, objectTypeInfoKey, arcCellKey, promiseAllShape, PromiseAllShape, hookBaseCName, anonTypeName, isAnonTypeName } from "../codegen/c/types";
 import { hasFlag, SymbolFlag, makeSymbol } from "./symbol";
-import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, hasAsgnFlag, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym } from "./types";
+import { hasGenericParams, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, getProperty, peelToStructOrUnion } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
 import { ctorRoutineOf } from "./ctorRoutine";
 import { DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
-import { checkedInstanceOf, sameInstanceArgs } from "./instantiate";
+import { instanceArgsOf, sameInstanceArgs } from "./instantiate";
 
 export function functionDeclIsAlive(aliveSet: Readonly<AliveSet>, modulePath: string, node: Readonly<Node>): boolean {
 	if (!aliveSet.computed) return true;
@@ -99,7 +99,6 @@ let _singleModule = "";
 let _imageModules = new HashSet<string>();
 let _sourceDependenciesOnly = false;
 let _compileTimeModules = new HashSet<string>();
-let _compileTimeOnly = new HashMap<Symbol, boolean>();
 let _reachedCompileTime = new HashSet<Symbol>();
 let _walkStack: string[] = [];
 
@@ -198,7 +197,7 @@ function walkBody(node: Node, modulePath: string): void {
 	walkChildrenGeneric(node, modulePath);
 }
 
-function moveCellOwnerIntoCore(key: string, demander: string): void {
+function moveTypeInfoOwnerIntoCore(key: string, demander: string): void {
 	if (_imageModules.size == 0 || _imageModules.has(demander)) return;
 	for (const demand of _aliveSet.typeInfos) {
 		if (demand.key != key) continue;
@@ -215,7 +214,7 @@ function markRefArrayCell(arrT: Type, modulePath: string): void {
 	if (_sourceDependenciesOnly) return;
 	const key = refArrayCellKey(arrT);
 	if (_aliveSet.typeInfoKeys.has(key)) {
-		moveCellOwnerIntoCore(key, modulePath);
+		moveTypeInfoOwnerIntoCore(key, modulePath);
 		return;
 	}
 	const destroy = refArrayCellOp(arrT, AttachedOp.AttachedDestructor);
@@ -228,7 +227,7 @@ function markRefArrayCell(arrT: Type, modulePath: string): void {
 		if (trace != null) owner = trace.modulePath;
 	}
 	_aliveSet.typeInfoKeys.add(key);
-	const demand: CTypeInfoDemand = { kind: TypeInfoKind.RefArrayCell, subject: createRef(arrT), key, owner, cName: "", destroy, trace, baseKey: "", moduleLocal: false };
+	const demand: CTypeInfoDemand = { kind: TypeInfoKind.RefArrayCell, subject: createRef(arrT), key, owner, cName: "", destroy, trace, baseKey: "" };
 	_aliveSet.typeInfos.push(demand);
 	aliveSetAddModule(_aliveSet, owner);
 	markReferenced(destroy, owner);
@@ -241,7 +240,7 @@ function markArcCell(pointee: Type, modulePath: string): void {
 	const destroy = arrayElementNeedsCleanup(pointee) ? getOpByKey(pointee, AttachedOp.AttachedDestructor) : null;
 	const owner = _singleModule != "" ? _singleModule : modulePath;
 	_aliveSet.typeInfoKeys.add(key);
-	const demand: CTypeInfoDemand = { kind: TypeInfoKind.ArcCell, subject: pointee, key, owner, cName: "", destroy, trace: null, baseKey: "", moduleLocal: false };
+	const demand: CTypeInfoDemand = { kind: TypeInfoKind.ArcCell, subject: pointee, key, owner, cName: "", destroy, trace: null, baseKey: "" };
 	_aliveSet.typeInfos.push(demand);
 	aliveSetAddModule(_aliveSet, owner);
 	if (destroy != null) markReferenced(destroy, owner);
@@ -252,22 +251,8 @@ function markPromiseAllResult(resultType: Type, modulePath: string): void {
 	let collected = awaitedType(resultType);
 	if (collected != null && collected.kind == TypeKind.Ref && collected.typeReturn != null) collected = collected.typeReturn;
 	if (collected == null || collected.kind != TypeKind.Array || collected.typeReturn == null) return;
-	const elem = collected.typeReturn;
-	if (promiseAllShape(elem) == PromiseAllShape.None) return;
-	const arrT = createArray(elem);
-	const key = promiseAllCellKey(arrT);
-	if (_aliveSet.typeInfoKeys.has(key)) return;
-	let destroy = runtimeProcSym("msNumberArrayDestroy");
-	let owner = _singleModule != "" ? _singleModule : modulePath;
-	if (elem.kind == TypeKind.Struct && elem.typeName != "" && hasAsgnFlag(elem)) {
-		destroy = requireOpByKey(arrT, AttachedOp.AttachedDestructor);
-		if (_singleModule == "" && destroy.modulePath != "") owner = destroy.modulePath;
-		markReferenced(destroy, owner);
-	}
-	_aliveSet.typeInfoKeys.add(key);
-	const demand: CTypeInfoDemand = { kind: TypeInfoKind.PromiseAllCell, subject: arrT, key, owner, cName: "", destroy, trace: null, baseKey: "", moduleLocal: false };
-	_aliveSet.typeInfos.push(demand);
-	aliveSetAddModule(_aliveSet, owner);
+	if (promiseAllShape(collected.typeReturn) == PromiseAllShape.None) return;
+	markRefArrayCell(createArray(collected.typeReturn), modulePath);
 }
 
 // Union narrow/project sites make codegen emit variant Copy/Destroy calls with no AST edge.
@@ -317,24 +302,27 @@ function markObjectTypeInfo(type: Type | null, modulePath: string): void {
 	const subject = typeInfoSubject(type);
 	if (subject == null) return;
 	if (subject.sym != null && hasFlag(subject.sym, SymbolFlag.ImportC)) return;
-	const key = objectTypeInfoKey(subject, modulePath);
-	if (_aliveSet.typeInfoKeys.has(key)) return;
-	const isPrivate = isPrivateTypeInfoSubject(subject);
+	const key = objectTypeInfoKey(subject);
+	if (_aliveSet.typeInfoKeys.has(key)) {
+		moveTypeInfoOwnerIntoCore(key, modulePath);
+		return;
+	}
 	const destroy = getOpByKey(subject, AttachedOp.AttachedDestructor);
 	const trace = getOpByKey(subject, AttachedOp.AttachedTrace);
 	let owner = _singleModule != "" ? _singleModule : modulePath;
-	if (!isPrivate && _singleModule == "") {
+	if (_singleModule == "") {
 		if (subject.sym != null && subject.sym.modulePath != "") owner = subject.sym.modulePath;
 		else owner = opOwner(destroy, modulePath);
+		if (_imageModules.size > 0 && !_imageModules.has(modulePath) && _imageModules.has(owner)) owner = modulePath;
 	}
 	_aliveSet.typeInfoKeys.add(key);
 	let baseKey = "";
 	const base = classBaseOf(subject);
 	if (base != null) {
 		markObjectTypeInfo(base, modulePath);
-		baseKey = objectTypeInfoKey(typeInfoSubject(base)!, modulePath);
+		baseKey = objectTypeInfoKey(typeInfoSubject(base)!);
 	}
-	const demand: CTypeInfoDemand = { kind: TypeInfoKind.Object, subject, key, owner, cName: "", destroy, trace, baseKey, moduleLocal: isPrivate };
+	const demand: CTypeInfoDemand = { kind: TypeInfoKind.Object, subject, key, owner, cName: "", destroy, trace, baseKey };
 	_aliveSet.typeInfos.push(demand);
 	aliveSetAddModule(_aliveSet, owner);
 	if (destroy != null) markReferenced(destroy, owner);
@@ -431,11 +419,11 @@ function markSymAndWalk(sym: Symbol, modulePath: string): void {
 }
 
 function markInstanceCopy(sym: Symbol): void {
-	const checked = checkedInstanceOf(sym);
+	const checked = instanceArgsOf(sym);
 	let di = _instDeclHead.get(sym.instantiatedFrom!) ?? -1;
 	while (di >= 0) {
 		const copy = _declNodes[di].resolvedSym!;
-		if (sameInstanceArgs(checkedInstanceOf(copy).concreteTypes, checked.concreteTypes)) {
+		if (sameInstanceArgs(instanceArgsOf(copy), checked)) {
 			aliveSetAddSym(_aliveSet, copy);
 			walkDecl(di);
 		}
@@ -502,38 +490,6 @@ function noteCompileTimeReach(sym: Symbol): void {
 	const chain = _walkStack.slice(0);
 	chain.push(sym.name);
 	_aliveSet.compileTimeReaches.push(chain.join(" -> "));
-}
-
-// A routine is compile-time-only when it is marked so, is a host function of a compile-time
-// module, or reaches one through its body; an image never exports it as a runtime root.
-function compileTimeOnly(sym: Symbol): boolean {
-	if (hasFlag(sym, SymbolFlag.CompileTime) || isCompileTimeExtern(sym)) return true;
-	if (sym.symbolKind != SymbolKind.Function) return false;
-	const known = _compileTimeOnly.get(sym);
-	if (known != null) return known;
-	_compileTimeOnly.set(sym, false);
-	let reaches = false;
-	let di = _symDeclHead.get(sym) ?? -1;
-	while (di >= 0 && !reaches) {
-		reaches = bodyReachesCompileTime(_declNodes[di]);
-		di = _symDeclNext[di];
-	}
-	_compileTimeOnly.set(sym, reaches);
-	return reaches;
-}
-
-function bodyReachesCompileTime(node: Node): boolean {
-	if ((node.kind == NodeKind.Identifier || node.kind == NodeKind.MemberExpr) && node.resolvedSym != null
-			&& compileTimeOnly(node.resolvedSym)) return true;
-	let found = false;
-	forEachChild(node, (child: Node): void => {
-		if (!found && bodyReachesCompileTime(child)) found = true;
-	});
-	return found;
-}
-
-function compileTimeOnlyDecl(decl: Node): boolean {
-	return decl.kind == NodeKind.FunctionDecl && decl.resolvedSym != null && compileTimeOnly(decl.resolvedSym);
 }
 
 // The declaration a top-level statement introduces, unwrapped from
@@ -630,7 +586,7 @@ function markSideEffectImportsAlive(graph: ModuleGraph): void {
 		const mod = findModule(graph, pending.pop());
 		if (mod == null) continue;
 		for (const imp of mod.imports) {
-			if (imp.names.length > 0 || aliveSetHasModule(_aliveSet, imp.sourcePath)) continue;
+			if ((imp.names.length > 0 && !isCHeaderPath(imp.sourcePath)) || aliveSetHasModule(_aliveSet, imp.sourcePath)) continue;
 			aliveSetAddModule(_aliveSet, imp.sourcePath);
 			pending.push(imp.sourcePath);
 		}
@@ -678,7 +634,6 @@ export function computeAliveSet(
 	_sourceDependenciesOnly = sourceDependenciesOnly;
 	_compileTimeModules = new HashSet<string>();
 	for (const path of compileTimeModules) _compileTimeModules.add(path);
-	_compileTimeOnly = new HashMap<Symbol, boolean>();
 	_reachedCompileTime = new HashSet<Symbol>();
 	_walkStack = [];
 	const rootFunctions = new HashSet<Symbol>();
@@ -697,6 +652,7 @@ export function computeAliveSet(
 	_visitedSyms = new HashSet<Symbol>();
 	declIndexBuild(programs, paths);
 	aliveSetAddModule(_aliveSet, entryPath);
+	for (const path of imageModules) aliveSetAddModule(_aliveSet, path);
 	const globalDestroys: GlobalDestroysBlock[] = [];
 	const initModules = new HashSet<string>();
 
@@ -723,7 +679,7 @@ export function computeAliveSet(
 
 			if (bare.kind == NodeKind.FunctionDecl) {
 				if (bare.resolvedSym != null && rootFunctions.has(bare.resolvedSym)) {
-					if (!compileTimeOnly(bare.resolvedSym)) markSymAndWalk(bare.resolvedSym, modulePath);
+					if (!hasFlag(bare.resolvedSym, SymbolFlag.CompileTime)) markSymAndWalk(bare.resolvedSym, modulePath);
 					continue;
 				}
 			}
@@ -760,7 +716,7 @@ export function computeAliveSet(
 
 			if ((modulePath == entryPath || exportRootModules.includes(modulePath)) && isExportedDecl(bare)) {
 				const decl = topDecl(bare);
-				if (decl != null && compileTimeOnlyDecl(decl)) continue;
+				if (decl != null && decl.resolvedSym != null && hasFlag(decl.resolvedSym, SymbolFlag.CompileTime)) continue;
 				if (decl != null) {
 					markRootDecl(decl, modulePath);
 					if (modulePath != entryPath && !_imageModules.has(modulePath)) markCompleteClassHooks(decl, modulePath);
@@ -919,16 +875,39 @@ export function isBakeableAggregateConst(node: Readonly<Node>): boolean {
 	if (init.flags.has(NodeFlag.Closure)) return false;
 	const od = init.data as ObjectLiteralData;
 	if (od.properties.length == 0) return false;
-	for (const prop of od.properties) {
+	const owner = peelToStructOrUnion(node.nodeType);
+	for (let i = 0; i < od.properties.length; i += 1) {
+		const prop = od.properties[i];
 		if (prop == null) return false;
+		if (owner != null && owner.kind == TypeKind.Struct && storesNothing(owner, getProperty(owner, od.keys[i]))) {
+			if (prop.kind != NodeKind.BooleanLiteral) return false;
+			continue;
+		}
 		const bakeable = match (prop.kind) {
 			NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral => true,
-			NodeKind.ObjectLiteral => prop.flags.has(NodeFlag.Closure),
+			NodeKind.ObjectLiteral => prop.flags.has(NodeFlag.Closure) && closureWithoutEnv(prop),
 			_ => false,
 		};
 		if (!bakeable) return false;
 	}
 	return true;
+}
+
+function closureWithoutEnv(pair: Readonly<Node>): boolean {
+	const pd = pair.data as ObjectLiteralData;
+	const env = pd.keys.indexOf("env");
+	const fn = pd.keys.indexOf("fn");
+	if (env < 0 || fn < 0 || pd.properties[env].kind != NodeKind.NullLiteral) return false;
+	const routine = pd.properties[fn].resolvedSym;
+	return pd.properties[fn].kind == NodeKind.Identifier && routine != null
+		&& (routine.symbolKind == SymbolKind.Function || routine.symbolKind == SymbolKind.Method);
+}
+
+export function bakesIntoStaticCell(node: Readonly<Node>): boolean {
+	const t = node.nodeType;
+	if (t == null || t.kind != TypeKind.Ref || !isBakeableAggregateConst(node)) return false;
+	const k = (node.data as VariableDeclData).initializer.kind;
+	return k == NodeKind.ObjectLiteral || k == NodeKind.ArrayLiteral || k == NodeKind.CallExpr;
 }
 
 function isExportedDecl(node: Node): boolean {
@@ -990,7 +969,7 @@ test "a computed alive set keeps the side-effect imports of the entry and their 
 
 import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core";
-import { spelled, createStruct, createRef, createUnion, nullType, stringType } from "./types";
+import { createStruct, createRef, createUnion, nullType, stringType } from "./types";
 import { liftedOp, resetHookSyms, objectTypeInfoKey } from "../codegen/c/types";
 import { makeSymbol, setFlag } from "./symbol";
 
@@ -1015,7 +994,7 @@ test "nullable reference allocation demands its concrete TypeInfo from the decla
 	allocation.nodeType = createUnion([createRef(body), nullType()]);
 	const alive = computeAliveSet([program], ["user.ms"], "user.ms", false, createModuleGraph());
 	assert alive.typeInfos.length == 1;
-	assert alive.typeInfos[0].key == objectTypeInfoKey(body, "user.ms");
+	assert alive.typeInfos[0].key == objectTypeInfoKey(body);
 	assert alive.typeInfos[0].owner == "owner.ms";
 }
 
@@ -1032,20 +1011,18 @@ test "an allocation demands its base class TypeInfo and names it" {
 		if (info.owner == "child.ms") childInfo = info;
 	}
 	assert childInfo != null;
-	assert childInfo!.baseKey == objectTypeInfoKey(parent, "user.ms");
+	assert childInfo!.baseKey == objectTypeInfoKey(parent);
 }
 
-test "a lambda environment class is local to the module that lifted it" {
+test "a lifted environment's TypeInfo has one key and is owned by its declaring module" {
 	const program = allocationOf("let value = { label: \"held\" };");
 	const allocation = ((program.data as ProgramData).programStmts[0].data as VariableDeclData).initializer;
-	const env = spelled(createStruct("$Env_run_shared", ["label"], [stringType()], true));
+	const env = declaredClass("$Env_run_shared", "owner.ms", ["label"], null);
 	allocation.nodeType = createRef(env);
 	const alive = computeAliveSet([program], ["user.ms"], "user.ms", false, createModuleGraph());
 	assert alive.typeInfos.length == 1;
-	assert alive.typeInfos[0].moduleLocal;
-	assert alive.typeInfos[0].owner == "user.ms";
-	assert alive.typeInfos[0].key == objectTypeInfoKey(env, "user.ms");
-	assert objectTypeInfoKey(env, "user.ms") != objectTypeInfoKey(env, "other.ms");
+	assert alive.typeInfos[0].owner == "owner.ms";
+	assert alive.typeInfos[0].key == objectTypeInfoKey(env);
 }
 
 function bindIdentifiers(node: Node, name: string, sym: Symbol): void {
@@ -1273,4 +1250,20 @@ test "side-effect import cycle terminates" {
 	const graph = importGraph([["/main.ms", "/a.ms"], ["/a.ms", "/b.ms"], ["/b.ms", "/a.ms"]]);
 	assert moduleAlive(graph, "/a.ms");
 	assert moduleAlive(graph, "/b.ms");
+}
+
+function closureFieldConst(source: string, routineKind: SymbolKind): Node {
+	const decl = (allocationOf(source).data as ProgramData).programStmts[0];
+	decl.nodeType = createRef(createStruct("Cfg", ["name", "on"], [stringType(), stringType()], true));
+	const pair = ((decl.data as VariableDeclData).initializer.data as ObjectLiteralData).properties[1];
+	pair.flags = pair.flags.incl(NodeFlag.Closure);
+	const fn = (pair.data as ObjectLiteralData).properties[0];
+	fn.resolvedSym = makeSymbol((fn.data as IdentifierData).name, routineKind, stringType(), false);
+	return decl;
+}
+
+test "a module constant bakes a closure field only when it names a routine and carries no environment" {
+	assert bakesIntoStaticCell(closureFieldConst("const cfg = { name: \"a\", on: { fn: zero, env: null } };", SymbolKind.Function));
+	assert !bakesIntoStaticCell(closureFieldConst("const cfg = { name: \"a\", on: { fn: zero, env: held } };", SymbolKind.Function));
+	assert !bakesIntoStaticCell(closureFieldConst("const cfg = { name: \"a\", on: { fn: pick, env: null } };", SymbolKind.Variable));
 }
