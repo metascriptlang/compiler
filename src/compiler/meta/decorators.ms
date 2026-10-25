@@ -13,7 +13,7 @@ import { registerApplyDecorators, registerDecoratorDefers, registerApplyDecorate
 import { collectOneStatement, collectTopLevel, getDeclName } from "../../checker/collectPass";
 import { isBuiltinDirective, isIntrinsicDecorator, intrinsicOnly, recordFieldDecorators, resolveDecoratorSymbol } from "../../checker/decoratorHelpers";
 import { expandAutoAccessor, expandAutoAccessors, isAutoAccessorField, autoAccessorStorageName } from "../../checker/autoAccessor";
-import { ensureShaped, fillForwardSymbol, declaredParentClass } from "../../checker/resolvePass";
+import { ensureShaped, fillForwardSymbol, declaredParentClass, resolveAnnotation } from "../../checker/resolvePass";
 import { declaringModuleCtx } from "../../checker/instantiate";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { fieldInitAssignment } from "../../transform/lowering/ctorLower";
@@ -521,13 +521,6 @@ function trimText(t: string): string {
 	return t.slice(start, end);
 }
 
-function containsArrow(t: string): boolean {
-	for (let i = 0; i + 1 < t.length; i += 1) {
-		if (t.slice(i, i + 2) == "=>") return true;
-	}
-	return false;
-}
-
 function macroDeclNode(sym: Symbol): Node {
 	if (sym.declNode == null || sym.declNode.kind != NodeKind.MacroDecl) {
 		throw new Error(`internal: macro '${sym.name}' reaches the decorator expander without its declaration node`);
@@ -578,16 +571,21 @@ function decoratorArity(sym: Symbol, decl: Node, isMacro: boolean, isFactory: bo
 	return r.typeChildren.length;
 }
 
-function macroReturnText(decl: Node, isFactory: boolean): string {
-	let t = macroDeclReturnRaw(decl);
-	if (isFactory) t = arrowReturnText(t);
-	return trimText(t);
+function peelAliases(t: Type | null): Type | null {
+	let peeled = t;
+	while (peeled != null && peeled.kind == TypeKind.Alias) peeled = peeled.typeReturn;
+	return peeled;
 }
 
-function classifyReturnText(t: string): int32 {
-	if (t == "" || t == "void") return shapeVoid;
-	if (containsArrow(t)) return shapeTransformer;
-	return shapeNode;
+function macroReturnType(regCtx: CheckerContext, decl: Node, isFactory: boolean, loc: SourceLocation): Type | null {
+	const text = trimText(macroDeclReturnRaw(decl));
+	if (text == "") return null;
+	let t = peelAliases(resolveAnnotation(text, regCtx, loc.line, loc.column));
+	if (isFactory) {
+		if (t == null || t.kind != TypeKind.Function) return null;
+		t = t.typeReturn;
+	}
+	return t;
 }
 
 function functionReturnType(sym: Symbol, isFactory: boolean): Type | null {
@@ -601,7 +599,8 @@ function functionReturnType(sym: Symbol, isFactory: boolean): Type | null {
 	return r;
 }
 
-function classifyType(t: Type | null): int32 {
+function classifyType(declared: Type | null): int32 {
+	const t = peelAliases(declared);
 	if (t == null || t.kind == TypeKind.Void) return shapeVoid;
 	if (t.kind == TypeKind.Function) return shapeTransformer;
 	return shapeNode;
@@ -746,7 +745,7 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 	const decl = isMacro ? macroDeclNode(sym) : (null as unknown as Node);
 	if (!isMacro && (sym.symbolType == null || sym.symbolType.kind != TypeKind.Function)) ensureShaped(sym, regCtx);
 	const shape = isMacro
-		? classifyReturnText(macroReturnText(decl, isFactory))
+		? classifyType(macroReturnType(regCtx, decl, isFactory, loc))
 		: classifyType(functionReturnType(sym, isFactory));
 	const info = targetInfo(target);
 	const accessor = info.kind == "accessor";
