@@ -487,7 +487,7 @@ function moduleNameProjectRoot(entryPath: string, projectRoot: string): string {
 	return dirname(entry);
 }
 
-function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliOptions, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Drc, session: CheckSession | null = null): ModuleGraph {
+function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliOptions, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Drc, session: CheckSession | null = null, testBuild: boolean = false): ModuleGraph {
 	if (opts.verbose) verboseLog(`loading module graph from ${entryPath}`);
 	const packages = cacheRoot();
 	setModuleNameRoots({
@@ -523,6 +523,7 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 	reportGraphErrors(graph);
 	if (graph.errors.length > 0) stopBuild();
 	exitOnModuleErrors(graph, "error");
+	if (testBuild && (opts.testsInDir || opts.testsShards > 1)) dropUntestedTestDecls(graph, testedModules(graph.loadOrder, entryPath, opts));
 
 	if (opts.verbose) verboseLog("cross-module type check");
 	// Pass targetOs through so @platform("...") directives are filtered against
@@ -3710,7 +3711,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 // Reference parity: global hook ownership registry shared across all modules.
 // Before the graph check: enum toString ops register during checking, and this resets the op table.
 resetLiftedOps();
-	const graph = loadAndCheckGraph(filePath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode));
+	const graph = loadAndCheckGraph(filePath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode), null, true);
 
 	// Phase A: Parse → Check → Mono → Transform → Analyze all modules
 	const processed: ProcessedModule[] = [];
@@ -3892,15 +3893,7 @@ resetLiftedOps();
 
 	// Generate test dispatcher (runs all module inits + test tables)
 	if (opts.verbose) verboseLog("generating test dispatcher");
-	const entryDir = `${dirname(filePath)}/`;
-	const tested: string[] = [];
-	let candidates = 0;
-	for (const p of graph.loadOrder) {
-		if (opts.testsInDir && !p.startsWith(entryDir)) continue;
-		if (candidates % opts.testsShards == opts.testsShard) tested.push(p);
-		candidates += 1;
-	}
-	const dispatcher = genTestDispatcher(graph.loadOrder, tested, filePath);
+	const dispatcher = genTestDispatcher(graph.loadOrder, testedModules(graph.loadOrder, filePath, opts), filePath);
 	// Same concurrent-build rule as cmdBuildC's dispatcher: fp-keyed + atomic .c.
 	const dispFp = moduleCompileFp(dispatcher, fullCompileCmd(opts.ccCompiler, opts.mode, allFlags, opts.ccBinary));
 	writeCSource("_test_dispatch", dispFp, dispatcher);
@@ -4122,6 +4115,36 @@ export interface JsTreeResult {
 	instanceOutRels: string[];
 	testNames: string[][];
 	testFuncs: string[][];
+}
+
+function testedModules(loadOrder: string[], entryPath: string, opts: CliOptions): string[] {
+	const entryDir = `${dirname(entryPath)}/`;
+	const tested: string[] = [];
+	let candidates = 0;
+	for (const p of loadOrder) {
+		if (opts.testsInDir && !p.startsWith(entryDir)) continue;
+		if (candidates % opts.testsShards == opts.testsShard) tested.push(p);
+		candidates += 1;
+	}
+	return tested;
+}
+
+// A module whose tests do not run is checked as a build imports it: its test blocks are
+// dead, so they are never checked, transformed, analyzed or emitted. Prelude modules keep
+// theirs, because their checked state is persisted in the prelude pack and shared by every
+// later build.
+function dropUntestedTestDecls(graph: ModuleGraph, tested: string[]): void {
+	const keep = new HashSet<string>();
+	for (const path of tested) keep.add(path);
+	for (const mod of graph.modules) {
+		if (mod.program == null || mod.stdPrelude || mod.extraPrelude || keep.has(mod.path)) continue;
+		const d = mod.program.data as ProgramData;
+		const stmts: Node[] = [];
+		for (const stmt of d.programStmts) {
+			if (stmt == null || stmt.kind != NodeKind.TestDecl) stmts.push(stmt);
+		}
+		d.programStmts = stmts;
+	}
 }
 
 function testRootName(entryPath: string): string {
