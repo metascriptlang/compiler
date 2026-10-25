@@ -92,3 +92,31 @@ test "E2E C: a closure env whose nested closure reads an ancestor binding keeps 
 	assert env.contains("best"), env;
 	assert env.contains("dollarup_"), env;
 }
+
+const NATIVE_LATER = (decl: string) => `class Runner { ${decl} }
+function outer(next: string): void {
+	const t = (): void => { Runner.later((): int32 => next.length); };
+	t();
+}
+outer("x");`;
+
+function envTypeInfo(c: string, owner: string): string {
+	for (const line of c.split("\n")) {
+		if (line.startsWith(`msTypeInfo dollarEnv_${owner}`)) return line;
+	}
+	return `<no type info ${owner}>`;
+}
+
+test "E2E C: a closure env whose closure goes to a native method holds the enclosing env counted" {
+	const c = compileToC(NATIVE_LATER(`static extern later(cb: () => int32): void from "runLater";`));
+	assert c.ok, c.ok ? "" : c.error;
+	const info = envTypeInfo(c.ok ? c.value : "", "outer_arrow");
+	assert info.contains(".destroyFn = dollarEnv_outer_arrow"), info;
+}
+
+test "E2E C: a closure env whose closure goes to a native method named by its own name holds the enclosing env counted" {
+	const c = compileToC(NATIVE_LATER("static extern later(cb: () => int32): void;"));
+	assert c.ok, c.ok ? "" : c.error;
+	const info = envTypeInfo(c.ok ? c.value : "", "outer_arrow");
+	assert info.contains(".destroyFn = dollarEnv_outer_arrow"), info;
+}
