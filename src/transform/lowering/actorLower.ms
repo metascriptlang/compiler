@@ -18,7 +18,7 @@ import { Node, NodeKind, NodeFlag, SourceLocation, DeclKind, Type, TypeKind,
 import { TransformContext, freshTempSym, mintSym } from "../context";
 import { canFormAcycle } from "../cycles";
 import { containsExprKind } from "../walker";
-import { setFlag, SymbolFlag } from "../../checker/symbol";
+import { setFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import {
 	syntheticToken, makeIdentResolved, makeTypedIdentResolved, makeCall, makeExprStmt, makeReturn,
 	makeVarDecl, makeMember, makeNumber, makeNull, makeBlock, makeBinary,
@@ -1093,7 +1093,7 @@ export function lowerActorPre(program: Node, ctx: TransformContext): Node {
 			};
 			if (isLifecycle) continue;
 			// Detect: method is explicitly async OR its body contains await
-			const isAsync = md.methodFlags == "async" || bodyContainsAwait(md.methodBody);
+			const isAsync = routineFlagSet(md.methodFlags).has(RoutineFlag.Async) || bodyContainsAwait(md.methodBody);
 			if (!isAsync) continue;
 
 			// Extract as top-level FunctionDecl with fnFlags: "async"
