@@ -75,7 +75,17 @@ export function findModuleExports(registry: ExportRegistry, modulePath: string):
 const MACRO_PRELUDE_MODULE = "std/meta/index.ms";
 
 export function macroPreludeSym(ctx: CheckerContext, name: string): Symbol | null {
-	return macroPreludeIn(ctx.exportRegistry, name) ?? (ctx.preludeCtx != null ? macroPreludeIn(ctx.preludeCtx.exportRegistry, name) : null);
+	return macroPreludeIn(ctx.exportRegistry, name) ?? macroPreludeScoped(ctx.preludeCtx != null ? ctx.preludeCtx : ctx, name);
+}
+
+function macroPreludeScoped(prelude: CheckerContext, name: string): Symbol | null {
+	for (const path of prelude.preludeModuleScopes.keys()) {
+		if (!path.endsWith(MACRO_PRELUDE_MODULE)) continue;
+		for (const s of prelude.preludeModuleScopes.get(path)!) {
+			if (s.name == name && s.builtinKind.startsWith("Meta")) return s;
+		}
+	}
+	return null;
 }
 
 function macroPreludeIn(registry: ExportRegistry | null, name: string): Symbol | null {
