@@ -1020,7 +1020,8 @@ function checkFunctionDeclBody(ctx: CheckerContext, node: Node, sym: Symbol): vo
 	if (node.flags.has(NodeFlag.Converter)) checkConverterOwner(ctx, d, fnType);
 
 	// Mark async functions for return type unwrapping
-	if (routineFlagSet(d.fnFlags).has(RoutineFlag.Async)) {
+	const routine = routineFlagSet(d.fnFlags);
+	if (routine.has(RoutineFlag.Async)) {
 		setFlag(sym, SymbolFlag.Async);
 	}
 
@@ -1029,7 +1030,7 @@ function checkFunctionDeclBody(ctx: CheckerContext, node: Node, sym: Symbol): vo
 	// produces a C signature / body type mismatch in codegen — catch it at the
 	// declaration site with a clear, actionable error. async_generator is exempt
 	// because it returns AsyncIterator<T>, not Promise<T>.
-	if (d.fnFlags == "async"
+	if (routine.has(RoutineFlag.Async) && !routine.has(RoutineFlag.Generator)
 		&& fnType != null
 		&& fnType.kind == TypeKind.Function
 		&& fnType.typeReturn != null
@@ -1705,11 +1706,12 @@ function checkActorDecl(ctx: CheckerContext, node: Node): void {
 		}
 		if (m.kind == NodeKind.MethodDecl) {
 			const md = m.data as MethodDeclData;
-			if (md.methodFlags == "async") {
+			const routine = routineFlagSet(md.methodFlags);
+			if (routine.has(RoutineFlag.Async)) {
 				addError(ctx, `actor methods are inherently async — remove 'async' from '${md.methodName}'`,
 					m.location.line, m.location.column);
 			}
-			if (md.methodFlags == "generator") {
+			if (routine.has(RoutineFlag.Generator)) {
 				addError(ctx, `actor methods cannot be generators — '${md.methodName}' uses yield which is incompatible with message passing`,
 					m.location.line, m.location.column);
 			}
