@@ -34,14 +34,14 @@ export function parseTemplateLiteral(state: ParserState, parsePrec: PrecParserFn
 		parts.push(midExpr);
 	}
 
-	// Handle tail
-	if (!isAtEnd(state) && current(state).kind == TokenKind.TemplateTail) {
-		const tailToken = current(state);
-		if (tailToken.value.length > 0) {
-			parts.push(createNode(NodeKind.StringLiteral, { value: tailToken.value }, tailToken));
-		}
-		advance(state);
+	if (isAtEnd(state) || current(state).kind != TokenKind.TemplateTail) {
+		return Result.err(`Expected '}' to close the template substitution opened at line ${headToken.line}, column ${headToken.column}`);
 	}
+	const tailToken = current(state);
+	if (tailToken.value.length > 0) {
+		parts.push(createNode(NodeKind.StringLiteral, { value: tailToken.value }, tailToken));
+	}
+	advance(state);
 
 	// Build left-associative concatenation tree
 	if (parts.length == 0) {
@@ -75,3 +75,9 @@ test "expr in interpolation" { assert parseOk("`sum is ${a + b}`"); }
 test "method call" { assert parseOk("`num ${x.toString()}`"); }
 
 test "three adjacent" { assert parseOk("`${a}${b}${c}`"); }
+
+test "a template substitution without its closing brace is refused" {
+	assert !parseOk("`a ${x");
+	assert !parseOk("`a ${x}b ${y");
+	assert !parseOk("`a ${x y}`");
+}
