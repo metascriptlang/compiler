@@ -590,6 +590,26 @@ function subdirModule(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function runBound(): void {
+	const tag = "hcrRunBound";
+	const cases = [
+		{ fixture: "typeError.ms", capMs: 30000, seen: "type error" },
+		{ fixture: "parseError.ms", capMs: 30000, seen: "Unexpected token" },
+	];
+	for (const c of cases) {
+		const dir = freshDir(`${TMP}/runBound_${c.fixture}`);
+		copy(`${FIXTURES}/runBound/${c.fixture}`, `${dir}/app.ms`);
+		const t0 = performance.now();
+		const ran = msc(dir, ["run", "--hcr", "app.ms"], c.capMs);
+		const took = performance.now() - t0;
+		if (succeeded(ran) || !both(ran).contains(capNotice(c.capMs)) || !both(ran).contains(c.seen) || took > c.capMs + 40000) {
+			console.log(both(ran));
+			failWith(tag, `${c.fixture}: msc run --hcr was not cut at ${c.capMs} ms with its output kept (took ${Math.round(took)} ms)`);
+		}
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function reloadsNewTypeEdit(tag: string, fixture: string, prefix: string, why: string): void {
 	const dir = copyAppAndLib(fixture);
 	copy(`${dir}/app/logicTag.ms`, `${dir}/app/edit.txt`);
@@ -2214,6 +2234,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrDynamicImportParity", run: dynamicImportParity },
 	{ name: "hcrJsInstanceFiles", run: jsInstanceFiles },
 	{ name: "hcrRunKeys", run: runKeys },
+	{ name: "hcrRunBound", run: runBound },
 ];
 if (platform == "windows") CASES.push({ name: "hcrWindowsReload", run: windowsReload });
 
