@@ -3952,6 +3952,14 @@ function genericInstanceClass(gi: Readonly<Type>): Readonly<Type | null> {
 	return gi.typeExtra != null && gi.typeExtra.kind == TypeKind.Ref ? gi.typeExtra.typeReturn : gi.typeExtra;
 }
 
+export function sameDeclaredSym(a: Symbol, b: Symbol): boolean {
+	return a == b || (a.modulePath != "" && a.modulePath == b.modulePath
+		&& a.name == b.name && a.symbolKind == b.symbolKind
+		&& a.location.line > 0
+		&& a.location.line == b.location.line
+		&& a.location.column == b.location.column);
+}
+
 export function classParentOf(t: Type | null): Type | null {
 	if (t == null) return null;
 	const s = t.kind == TypeKind.Ref && t.typeReturn != null ? t.typeReturn : t;
