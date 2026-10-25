@@ -2968,7 +2968,17 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 					}
 				}
 			}
-			if ((!formalAwaitsBinding && needsStdConv(argTypes[pi], paramType)) || addressAtC) {
+			const paramValue = skipModifier(paramType);
+			let widenedIntoUnion = false;
+			if (!formalAwaitsBinding && paramValue != null && instantiatedUnionBehind(paramValue).kind == TypeKind.Union && pi < args.length && argTypes[pi] != null) {
+				const argNow = args[pi].nodeType != null ? args[pi].nodeType! : argTypes[pi];
+				const uw = widenVariantToUnion(args[pi], paramValue, argNow, ctx);
+				if (uw != null as unknown as Node) {
+					args[pi] = uw;
+					widenedIntoUnion = true;
+				}
+			}
+			if (!widenedIntoUnion && ((!formalAwaitsBinding && needsStdConv(argTypes[pi], paramType)) || addressAtC)) {
 				// Implementation parity: insert HiddenStdConv for numeric widening/narrowing OR Span coercion
 				const convType = paramType.kind == TypeKind.Sink && paramType.typeReturn != null ? paramType.typeReturn : paramType;
 				const convTok = createToken(TokenKind.Ident, "", args[pi].location.line);
@@ -2976,12 +2986,6 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 				convNode.nodeType = convType;
 				convNode.flags = convNode.flags.incl(NodeFlag.Sem);
 				args[pi] = convNode;
-			}
-			const paramValue = skipModifier(paramType);
-			if (!formalAwaitsBinding && paramValue != null && instantiatedUnionBehind(paramValue).kind == TypeKind.Union && pi < args.length && argTypes[pi] != null) {
-				const argNow = args[pi].nodeType != null ? args[pi].nodeType! : argTypes[pi];
-				const uw = widenVariantToUnion(args[pi], paramValue, argNow, ctx);
-				if (uw != null as unknown as Node) args[pi] = uw;
 			}
 			if (paramValue != null && instantiatedUnionBehind(paramValue).kind != TypeKind.Union && pi < args.length && argTypes[pi] != null) {
 				const pj = narrowUnionToVariant(args[pi], argTypes[pi]);
