@@ -226,6 +226,11 @@ function instanceHook(owner: Symbol, types: Type[], op: AttachedOp): Symbol | nu
 	return null;
 }
 
+export function declaresInstanceHooks(owner: Symbol): boolean {
+	const hooks = _instanceHooks.get(owner);
+	return hooks != null && hooks.length > 0;
+}
+
 function recordInstanceHook(owner: Symbol, types: Type[], op: AttachedOp, sym: Symbol): void {
 	let hooks = _instanceHooks.get(owner);
 	if (hooks == null) {
