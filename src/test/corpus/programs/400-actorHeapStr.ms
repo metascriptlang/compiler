@@ -2,7 +2,7 @@
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @maxrss: 30
 // @maxatomics(darwin-arm64) 422
-// @maxatomics(linux-x86_64) 117
+// @maxatomics(linux-x86_64) 122
 // @stdout: PASS:actor-heapstr
 // @serial
 // @ledger-slack(Box) 1

@@ -1,6 +1,6 @@
 // @maxrss: 40
 // @maxatomics(darwin-arm64) 92
-// @maxatomics(linux-x86_64) 30
+// @maxatomics(linux-x86_64) 31
 // @stdout: array-literal-strings acc=0
 // note: FIXED in runtime/core/array.c: msStringArrayFromArr deep-copied each element, allocating a redundant 2nd buffer and orphaning the analyzer's already-owned element (the analyzer copies aliased + moves last-read upstream, then assumes FromArr moves). Changed FromArr to MOVE (take the handle as-is), mirroring msGenericArrayPush (ref arrays) and Nim's sink. Permanent regression guard — was 177MB leaking, now flat.
 

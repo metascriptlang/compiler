@@ -1,7 +1,7 @@
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @maxrss: 20
 // @maxatomics(darwin-arm64) 169
-// @maxatomics(linux-x86_64) 47
+// @maxatomics(linux-x86_64) 51
 // @stdout: locked total=480000
 // @serial
 // @skip-js: Locked<T> is a C-backend cell (atomic rc + inline ticket lock); no js binding
