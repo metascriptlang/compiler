@@ -24,10 +24,8 @@ import { firstExprKindAfter } from "../testUtil";
 // ===== Main Entry Point =====
 
 export function lowerConstFold(program: Node, ctx: TransformContext): Node {
-	const cc = ctx.checkerCtx;
-	const declaresHook = (owner: Type): boolean => cc != null && declaresUserHook(owner, cc);
 	const reloadable = ctx.reloadableModules;
-	walkNode(program, reloadable.length == 0 ? (node: Node): Node => foldNode(node, declaresHook) : (n: Node): Node => foldReloadableNode(n, reloadable));
+	walkNode(program, reloadable.length == 0 ? (node: Node): Node => foldNode(node, declaresUserHook) : (n: Node): Node => foldReloadableNode(n, reloadable));
 	return program;
 }
 
