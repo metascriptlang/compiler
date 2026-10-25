@@ -36,7 +36,7 @@ import {
 	AwaitExprData, CallExprData, ObjectLiteralData, ExportDeclData, ProgramData,
 	Type, NodeData, createNodeAt,
 } from "../../ast/node";
-import { TransformContext, freshTempSym, freshOwnedSym, SymSet, createSymSet, symSetAdd, symSetContains } from "../context";
+import { TransformContext, ModuleFact, freshTempSym, freshOwnedSym, SymSet, createSymSet, symSetAdd, symSetContains, noteFact } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { walkExpandBlocksHooked, containsExprKind, walkNode } from "../walker";
 import { makeCall, makeVarDecl, makeExprStmt, makeNumber, makeIdentResolved, makeBlock, makeReturn, makeString, makeIf, makeBinary, makeAssign, makeDefaultValue, unboxVoidPtrToTyped, runtimeRef, attachedOpSym, makeTypedIdentResolved, isRuntimeProcSym, ownedInFuture, isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck, typedFutureReadFn, makeBool, makeUnary } from "../util";
@@ -636,7 +636,10 @@ export function lowerAwait(program: Node, ctx: TransformContext): Node {
 	_settleDeferred = false;
 	_spawnSlotFrames = [];
 	walkExpandBlocksHooked(program, expandStmt, ctx, enterSpawnSlotFrame, exitSpawnSlotFrame);
-	if (_settleDeferred) lowerDefer(program, ctx);
+	if (_settleDeferred) {
+		noteFact(ctx, ModuleFact.Defer);
+		lowerDefer(program, ctx);
+	}
 	return program;
 }
 
@@ -756,6 +759,7 @@ function joinHeldInRoutine(fn: Node, ctx: TransformContext): void {
 		const deferData: NodeData = { deferExpr: makeBlock([settle], loc) };
 		const bd = body.data as BlockStmtData;
 		const stmts: Node[] = [decl, createNodeAt(NodeKind.DeferStmt, deferData, loc)];
+		noteFact(ctx, ModuleFact.Defer);
 		for (const s of bd.statements) stmts.push(s);
 		bd.statements = stmts;
 	}

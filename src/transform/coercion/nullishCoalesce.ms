@@ -6,7 +6,7 @@
 import { Node, NodeKind, BinaryExprData, ArrowFunctionData, TypeAssertionData, ConditionalExprData, ExprStmtData, TypeKind, DeclKind, SourceLocation, Type, createNodeAt } from "../../ast/node";
 import { isMaybeType, unwrapMaybeType, peelTransparentInstance, isNumeric, isBoolType, isStringLike, unknownType } from "../../checker/types";
 import { fitJoinedBranch, nullishPayloadType } from "../../checker/fit";
-import { TransformContext, freshOwnedSym } from "../context";
+import { TransformContext, ModuleFact, freshOwnedSym, noteFact } from "../context";
 import { walkNode, walkExpandBlocks, walkWithinStatement, walkOutsideInstanceFieldInits, isFuncBoundary } from "../walker";
 import { forEachChild } from "../../ast/visitor";
 import { makeNull, makeAbsent, isActorHandle, makeBinary, makeConditional, makeMember, makeVarDecl, makeAssign, makeIdentResolved, makeBlock, makeReturn } from "../util";
@@ -110,6 +110,7 @@ function lowerNullish(left: Node, right: Node, loc: SourceLocation, resultType: 
 		held = makeIdentResolved((bound.data as BinaryExprData).left.resolvedSym!, loc);
 	} else {
 		held = rereadOperand(left);
+		if (held == left) noteFact(ctx, ModuleFact.OptionalChain);
 	}
 
 	// Value-carried nullable (Maybe struct in C): when the fallback is non-null the

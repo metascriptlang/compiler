@@ -29,7 +29,7 @@ import {
 	VariableDeclData, ExprStmtData, ReturnStmtData,
 	Type, TypeKind,
 } from "../../ast/node";
-import { TransformContext } from "../context";
+import { TransformContext, ModuleFact, noteFact } from "../context";
 import { RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { walkExpandBlocksHooked } from "../walker";
 import { makeCall, makeExprStmt, makeNumber, makeNull, makeObjectLiteral, runtimeRef } from "../util";
@@ -191,6 +191,7 @@ function expandSpawnGroup(slots: SpawnSlot[], loc: SourceLocation, ctx: Transfor
 		// Emit: await $doneFut — asyncDesugar converts to yield, stepper handles cooperatively
 		const awaitData: NodeData = { awaitArg: doneFut.ident };
 		const awaitNode = createNodeAt(NodeKind.AwaitExpr, awaitData, loc);
+		noteFact(ctx, ModuleFact.Await);
 		stmts.push(makeExprStmt(awaitNode, loc));
 		for (const r of reads) stmts.push(r);
 	} else {
