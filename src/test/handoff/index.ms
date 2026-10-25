@@ -106,6 +106,7 @@ import "./bitSetCaseLabel";
 import "./destructuringRestLast";
 import "./checkTakesParse";
 import "./hostCallbackBeforeBody";
+import "./engineHelperCheckedOnce";
 import "./comptimeStatement";
 import "./comptimeValues";
 import "./declarationBoundaries";
