@@ -442,7 +442,7 @@ function runRecordSkip(): void {
 	waitForNextSecond();
 	need(build(dir, "record-settled") == 0, "record settled build");
 	record("a define absent from the record loads the module graph", "loaded", loadedGraph(dir, "record-define", ["-d:recordProbe"]));
-	record("a gc mode absent from the record loads the module graph", "loaded", loadedGraph(dir, "record-gc", ["--gc=drc"]));
+	record("a memory mode absent from the record loads the module graph", "loaded", loadedGraph(dir, "record-mm", ["--mm=manual"]));
 }
 
 function runAudit(): void {
