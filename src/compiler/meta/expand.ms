@@ -53,13 +53,13 @@ import {
 	// SymbolKind for Case 2 enum-member rewrite (Bug B Layer 2)
 	SymbolKind, NodeFlag, Symbol,
 } from "../../ast/node";
-import { CheckerContext, CheckerError, Severity, addError, addErrorFullRange, createContext } from "../../checker/context";
+import { CheckerContext, CheckerError, Severity, addError, addErrorFullRange, createContext, extractGenericNames } from "../../checker/context";
 import { walkNode, mapChildren } from "../../transform/walker";
 import { forEachChild } from "../../ast/visitor";
 import { nextQuoteGensymSuffix } from "../../checker/template";
-import { isUnresolvedType } from "../../checker/types";
+import { isUnresolvedType, genericParamNamesOf } from "../../checker/types";
 import { lookupModuleCtx, declaringModuleCtx } from "../../checker/instantiate";
-import { lookupSymbol, lookupSymbolInDefiningScope, hasFlag, SymbolFlag } from "../../checker/symbol";
+import { lookupSymbol, lookupSymbolInDefiningScope, scopeDefining, hasFlag, SymbolFlag } from "../../checker/symbol";
 import { metaTagged, metaNodeType, metaNodeKindType, metaDeclKindType, metaExternKindType } from "./stdTags";
 import { bindMetaBodyNames, metaIntrinsicOf } from "../../checker/bindNames";
 import { anyArgIsParametric, rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
@@ -76,7 +76,7 @@ import { bindExpandedSubtree } from "../../binder/binder";
 import { takeWireRefusals, nodeToValue, builtNodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBakedSym, registerBakedType, valueToExpansion, boundMark, releaseBound } from "./bridge";
 import { symbolCarried } from "../../checker/symbol";
 import { ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
-import { parseIntStr } from "../../utils/string";
+import { parseIntStr, splitTopLevel } from "../../utils/string";
 import { ModuleGraph } from "../../module/graph";
 import { addWarning } from "../../checker/context";
 
@@ -96,12 +96,14 @@ let _quoteSpliceActive = false;
 let _metaScope: CheckerContext | null = null;
 let _metaBound: Map<Node, Symbol | null> = new Map<Node, Symbol | null>();
 let _metaQuoted: Map<Node, Symbol> = new Map<Node, Symbol>();
+let _metaDefiner = "";
 
-interface MetaScope { scope: CheckerContext | null; bound: Map<Node, Symbol | null>; quoted: Map<Node, Symbol>; }
+interface MetaScope { scope: CheckerContext | null; bound: Map<Node, Symbol | null>; quoted: Map<Node, Symbol>; definer: string; }
 
 function enterMetaScope(scope: CheckerContext, definer: string, params: string[], body: Node): MetaScope {
-	const outer: MetaScope = { scope: _metaScope, bound: _metaBound, quoted: _metaQuoted };
+	const outer: MetaScope = { scope: _metaScope, bound: _metaBound, quoted: _metaQuoted, definer: _metaDefiner };
 	_metaScope = scope;
+	_metaDefiner = definer;
 	_metaQuoted = new Map<Node, Symbol>();
 	_metaBound = bindMetaBodyNames(scope, definer, params, body, _metaQuoted);
 	return outer;
@@ -111,6 +113,7 @@ function leaveMetaScope(outer: MetaScope): void {
 	_metaScope = outer.scope;
 	_metaBound = outer.bound;
 	_metaQuoted = outer.quoted;
+	_metaDefiner = outer.definer;
 }
 
 function metaKind(n: Node | null): string {
@@ -132,6 +135,7 @@ function isSpliceCall(node: Node | null): boolean {
 }
 
 let _quoteGensym: HashSet<Node> = new HashSet<Node>();
+let _quoteTypeLocals: string[] = [];
 
 // The std/meta `msMetaBindSym` host while a typed getTypeImpl literal is built:
 // a Symbol cannot be spelled as a literal, so nodeToASTLiteral reads it back from
@@ -225,6 +229,8 @@ function lowerQuoteExpr(node: Node): Node {
 
 	_quoteGensym = new HashSet<Node>();
 	markQuoteLocals(body, []);
+	_quoteTypeLocals = [];
+	collectQuoteTypeLocals(body, _quoteTypeLocals);
 	// Enable splice detection in nodeToASTLiteral
 	_quoteSpliceActive = true;
 
@@ -246,7 +252,99 @@ function lowerQuoteExpr(node: Node): Node {
 
 	_quoteSpliceActive = false;
 	_quoteGensym = new HashSet<Node>();
+	_quoteTypeLocals = [];
 	return result;
+}
+
+function collectGenericNames(params: string, out: string[]): void {
+	for (const name of splitTopLevel(genericParamNamesOf(params), ",")) { if (name != "") out.push(name); }
+}
+
+// Every type name a quote declares itself, or takes as a generic parameter, is resolved
+// where the quote expands, beside the declaration it names.
+function collectQuoteTypeLocals(n: Node | null, out: string[]): void {
+	if (n == null) return;
+	match (n.kind) {
+		NodeKind.ClassDecl => { out.push((n.data as ClassDeclData).className); collectGenericNames(n.typeArg, out); },
+		NodeKind.ActorDecl => { out.push((n.data as ActorDeclData).actorName); collectGenericNames(n.typeArg, out); },
+		NodeKind.InterfaceDecl | NodeKind.StructDecl => { out.push((n.data as InterfaceDeclData).interfaceName); collectGenericNames(n.typeArg, out); },
+		NodeKind.EnumDecl => out.push((n.data as EnumDeclData).enumName),
+		NodeKind.TypeAliasDecl => { out.push((n.data as TypeAliasDeclData).aliasName); collectGenericNames(n.typeArg, out); },
+		NodeKind.FunctionDecl => { for (const g of extractGenericNames((n.data as FunctionDeclData).fnFlags)) out.push(g); },
+		NodeKind.MethodDecl => { for (const g of extractGenericNames((n.data as MethodDeclData).methodFlags)) out.push(g); },
+		NodeKind.ArrowFunction => { for (const g of extractGenericNames((n.data as ArrowFunctionData).arrowFlags)) out.push(g); },
+		NodeKind.FunctionExpr => { for (const g of extractGenericNames((n.data as FunctionExprData).funcExprFlags)) out.push(g); },
+		_ => {},
+	};
+	forEachChild(n, (c: Node): void => { collectQuoteTypeLocals(c, out); });
+}
+
+function namesAnyOf(text: string, names: string[]): boolean {
+	let i = 0;
+	while (i < text.length) {
+		const ch = text.charAt(i);
+		const starts = (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || ch == "_" || ch == "$";
+		if (!starts) { i += 1; continue; }
+		let end = i + 1;
+		while (end < text.length) {
+			const c = text.charAt(end);
+			if (!((c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c == "_" || c == "$")) break;
+			end += 1;
+		}
+		if (names.includes(text.slice(i, end))) return true;
+		i = end;
+	}
+	return false;
+}
+
+// The Type a quote's type text names where the quote is written, as an operand node that
+// carries it. A text that names a quote-local type, or a name nothing declares there, stays
+// text and is resolved where the quote expands.
+function quotedTypeOperand(text: string, loc: SourceLocation): Node | null {
+	if (text == "" || _metaScope == null || _metaDefiner == "" || text.indexOf("typeof") >= 0) return null;
+	if (namesAnyOf(text, _quoteTypeLocals)) return null;
+	const ctx = _metaScope!;
+	const home = scopeDefining(ctx.table, _metaDefiner, _metaDefiner);
+	if (home == null) return null;
+	const here = ctx.table.current;
+	ctx.table.current = home;
+	const mark = ctx.errors.length;
+	const t = resolveAnnotation(text, ctx, loc.line, loc.column);
+	ctx.table.current = here;
+	const failed = ctx.errors.length > mark || isUnresolvedType(t);
+	while (ctx.errors.length > mark) { ctx.errors.pop(); }
+	if (failed) return null;
+	const operand = createNodeAt(NodeKind.Identifier, { name: text } as IdentifierData, loc);
+	operand.nodeType = t;
+	return operand;
+}
+
+function addQuotedTypeOperand(keys: string[], values: Node[], text: string, loc: SourceLocation): void {
+	const operand = quotedTypeOperand(text, loc);
+	if (operand == null) return;
+	keys.push("boundTypeExpr");
+	values.push(nodeToASTLiteral(operand, loc, false));
+}
+
+function addQuotedTypeOperands(keys: string[], values: Node[], text: string, loc: SourceLocation): void {
+	if (text == "") return;
+	const elements: Node[] = [];
+	for (const part of splitTopLevel(text, ",")) {
+		const operand = quotedTypeOperand(part.trim(), loc);
+		if (operand == null) return;
+		elements.push(nodeToASTLiteral(operand, loc, false));
+	}
+	keys.push("boundTypeExprs");
+	values.push(createNodeAt(NodeKind.ArrayLiteral, { elements }, loc));
+}
+
+function addQuotedTypeSlots(node: Node, keys: string[], values: Node[], loc: SourceLocation): void {
+	match (node.kind) {
+		NodeKind.VariableDecl => addQuotedTypeOperand(keys, values, (node.data as VariableDeclData).declType, loc),
+		NodeKind.TypeAssertion => addQuotedTypeOperand(keys, values, (node.data as TypeAssertionData).asType, loc),
+		NodeKind.CallExpr | NodeKind.NewExpr => addQuotedTypeOperands(keys, values, node.typeArg, loc),
+		_ => {},
+	};
 }
 
 // ===== nodeToASTLiteral: Node → ObjectLiteral AST =====
@@ -316,6 +414,7 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst
 
 	// Append kind-specific fields
 	addKindFields(node, keys, values, loc);
+	if (_quoteSpliceActive) addQuotedTypeSlots(node, keys, values, loc);
 
 	if (node.nodeType != null) {
 		keys.push("typeHandle");

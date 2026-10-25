@@ -1672,6 +1672,26 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 	return valueToTypedNode(val, null, objHeap, arrHeap, fallbackLoc);
 }
 
+function readTypeOperand(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): Node {
+	const operand = valueToNode(val, objHeap, arrHeap, loc);
+	if (operand.nodeType == null) throw new Error("internal: a quote's type operand reached the wire without its Type");
+	operand.flags = operand.flags.incl(NodeFlag.BoundSym);
+	return operand;
+}
+
+function readQuotedTypeOperands(out: Node, handle: int64, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): void {
+	if (out.kind != NodeKind.VariableDecl && out.kind != NodeKind.TypeAssertion && out.kind != NodeKind.CallExpr && out.kind != NodeKind.NewExpr) return;
+	const single = heapObjectGetField(objHeap, handle, "boundTypeExpr");
+	if (single.kind == RaiserValueKind.Object) out.typeExpr = readTypeOperand(single, objHeap, arrHeap, loc);
+	const many = heapObjectGetField(objHeap, handle, "boundTypeExprs");
+	if (many.kind != RaiserValueKind.Array) return;
+	const operands: Node[] = [];
+	for (let i = 0; i < heapArrayLen(arrHeap, many.intVal); i += 1) {
+		operands.push(readTypeOperand(heapArrayGet(arrHeap, many.intVal, i), objHeap, arrHeap, loc));
+	}
+	out.typeExprs = operands;
+}
+
 export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, fallbackLoc: SourceLocation): Node {
 	return match (val.kind) {
 		RaiserValueKind.Int => fromTemplate(intValueToNode(val.intVal, t, fallbackLoc)),
@@ -1711,6 +1731,7 @@ export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: Rais
 						out.nodeTypeAst = valueToNode(ntField, objHeap, arrHeap, fallbackLoc);
 						if (out.nodeType == null && out.nodeTypeAst.nodeType != null) out.nodeType = out.nodeTypeAst.nodeType;
 					}
+					readQuotedTypeOperands(out, handle, objHeap, arrHeap, fallbackLoc);
 					const typed = boundTypeOfObject(objHeap, handle);
 					if (typed != null) out.nodeType = typed;
 					const flagsValue = readInt(objHeap, handle, "flags");
