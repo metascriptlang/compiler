@@ -1073,6 +1073,23 @@ test "engine: signed overflow stops at every width" {
 	}
 }
 
+test "engine: an integer power past its type stops on overflow and a negative exponent stops on range" {
+	const overflows = [
+		"function p(b: int64, e: int64): int64 { return b ** e; } console.log(`${p(2, 63)}`);",
+		"function p(b: int32, e: int32): int32 { return b ** e; } console.log(`${p(3, 20)}`);",
+		"function p(b: uint64, e: uint64): uint64 { return b ** e; } console.log(`${p(2, 64)}`);",
+		"let a: int64 = 10; a **= 19; console.log(`${a}`);",
+	];
+	for (const program of overflows) {
+		const ctx = evalOrcVM(program);
+		assert ctx.error.indexOf("over- or underflow") >= 0, program;
+		assert ctx.output == "", program;
+	}
+	const negative = evalOrcVM("function p(b: int64, e: int64): int64 { return b ** e; } console.log(`${p(2, -1)}`);");
+	assert negative.error.indexOf("value -1 not in range 0 .. 9223372036854775807") >= 0, negative.error;
+	assert negative.output == "", negative.output;
+}
+
 test "engine: a char step past 0 or 255 stops and one onto a bound is kept" {
 	const programs = [
 		"let c = 255 as char; c++; console.log(`${c as int32}`);",
