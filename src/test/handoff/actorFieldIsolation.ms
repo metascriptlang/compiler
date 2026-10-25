@@ -141,7 +141,7 @@ test "actorFieldIsolation: a method call on a peer stays legal" {
 	const messages = diagnosticsOf(`actor Counter {
 	n: int32 = 7;
 	get(): int32 { return this.n; }
-	ask(peer: Counter): int32 { return peer.get(); }
+	ask(peer: Counter): int32 { return await peer.get(); }
 }
 `);
 	assert messages.length == 0, messages.join("\n");
