@@ -99,6 +99,7 @@ import "./comptimeMacroValues";
 import "./preludeBodyCompiledOnce";
 import "./moduleParsedOnce";
 import "./bitSetCaseLabel";
+import "./checkTakesParse";
 import "./comptimeStatement";
 import "./comptimeValues";
 import "./declarationBoundaries";

@@ -11,7 +11,7 @@
 //   - Path alias rewriting
 
 import {
-	Module, ModuleGraph, ModuleState, createModuleGraph, createModule, createImportEntry,
+	Module, ModuleGraph, ModuleState, createModuleGraph, createModule, createImportEntry, ImportEntry, ParsedModule,
 	findModule, hasModule, addModule, pushImportStack, popImportStack, createModuleError, ModuleError, ErrorSeverity,
 } from "./graph";
 import {
@@ -315,11 +315,28 @@ export function moduleParseCount(): int32 {
 	return _moduleParses;
 }
 
-export function parseModuleSourceLenient(source: string): Result<Node, string> {
+export function parseModuleSourceLenient(source: string): Result<ParsedModule, string> {
 	_moduleParses += 1;
 	const lr = lex(source);
 	if (!lr.ok) return Result.err(lr.error);
-	return callStateProgramParser(createState(lr.value));
+	const state = createState(lr.value);
+	const parsed = callStateProgramParser(state);
+	if (!parsed.ok) return Result.err(parsed.error);
+	return Result.ok({ program: parsed.value, imports: parsedImports(parsed.value, state.sawImportCall), consumedBy: "" });
+}
+
+export function parsedImports(program: Node, sawImportCall: boolean): ImportEntry[] {
+	const imports: ImportEntry[] = [];
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		const decl = stmt.kind == NodeKind.ExportDecl ? (stmt.data as ExportDeclData).exportedDecl : stmt;
+		if (decl == null || decl.kind != NodeKind.ImportDecl) continue;
+		const d = decl.data as ImportDeclData;
+		imports.push(createImportEntry(d.importNames, d.importAliases, "", d.importSource));
+	}
+	if (sawImportCall) {
+		for (const specifier of collectImportCalls(program)) imports.push(createImportEntry([], [], "", specifier, true));
+	}
+	return imports;
 }
 
 // Load .ms source module — DRC-isolated (mod stays in this scope)
@@ -370,6 +387,7 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 	}
 	const program = parseResult.value;
 	mod.program = program;
+	mod.parsedImports = parsedImports(program, parseState.sawImportCall);
 	const pd = program.data as ProgramData;
 	for (const stmt of pd.programStmts) {
 		if (stmt.kind == NodeKind.ImportDecl) {
