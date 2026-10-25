@@ -28,7 +28,7 @@ import {
 	TypeAssertionData, HiddenStdConvData, AttachedOp,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { getAttachedOp, unwrapRef } from "../checker/types";
+import { getAttachedOp, unwrapRef, unwrapRefNullUnion } from "../checker/types";
 import { lookupInstanceHook } from "../checker/instantiate";
 import { setFlag, hasFlag, isCursorSym, SymbolFlag, findOverloadImpl } from "../checker/symbol";
 import { parseSource } from "../parser/statements/validation";
@@ -454,9 +454,14 @@ function destroyHookOf(t: Type | null): Symbol | null {
 	return declared.sym != null ? getAttachedOp(unwrapRef(declared.sym.symbolType), AttachedOp.AttachedDestructor) : null;
 }
 
+function isClassRef(t: Type | null): boolean {
+	if (t == null) return false;
+	return t.kind == TypeKind.Ref || unwrapRefNullUnion(t) != null;
+}
+
 function convMightOwn(p: Partitions, destIdx: int32, conv: Node, operand: Node): void {
 	const made = destroyHookOf(conv.nodeType);
-	if (made != null && made != destroyHookOf(operand != null ? operand.nodeType : null)) {
+	if (made != null && !isClassRef(conv.nodeType) && made != destroyHookOf(operand != null ? operand.nodeType : null)) {
 		p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
 		return;
 	}
@@ -1817,4 +1822,12 @@ test "a cast into a type whose destroy hook its operand lacks owns the value it 
 	assert !isCursorNamed(body, "lit");
 	assert !isCursorNamed(body, "fromParam");
 	assert isCursorNamed(body, "same");
+}
+
+test "a downcast of a class reference into a hooked class borrows" {
+	const body = getFuncNamed("class Base { n: int32 = 1; }\nclass Derived extends Base { m: int32 = 2; }\n"
+		+ "function onDestroy(this x: Derived): void { }\n"
+		+ "function f(b: Base): int32 { const d = b as Derived; return d.m; }", "f");
+	inferCursors(body);
+	assert isCursorNamed(body, "d");
 }
