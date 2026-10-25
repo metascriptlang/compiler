@@ -9,3 +9,7 @@ export function joined(sep: string, parts: Readonly<Span<string>>): string {
 	for (let i = 0; i < parts.length; i += 1) out += (i == 0 ? "" : sep) + parts[i];
 	return out;
 }
+
+export function pair(): [string, string] {
+	return ["p", "q"];
+}

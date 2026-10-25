@@ -1050,9 +1050,9 @@ function spanParamForward(): void {
 	const dir = freshDir(`${TMP}/spanParamForward`);
 	for (const f of ["lib.ms", "app.ms"]) copy(`${FIXTURES}/spanParamForward/${f}`, `${dir}/${f}`);
 	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
-	if (!succeeded(ran) || !both(ran).includes("HCR-SPAN 10 a-b-c")) {
+	if (!succeeded(ran) || !both(ran).includes("HCR-SPAN 10 a-b-c x+y pq")) {
 		console.log(both(ran));
-		failWith(tag, "an image function taking a Span did not forward both halves of it to its reloaded body");
+		failWith(tag, "an image function taking a Span did not forward both halves of it, or a module-scope statement temporary was lifted apart from the statements that read it");
 	}
 	console.log(`ok   ${tag}`);
 }
