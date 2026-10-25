@@ -3952,7 +3952,7 @@ function genericInstanceClass(gi: Readonly<Type>): Readonly<Type | null> {
 	return gi.typeExtra != null && gi.typeExtra.kind == TypeKind.Ref ? gi.typeExtra.typeReturn : gi.typeExtra;
 }
 
-export function sameDeclaredSym(a: Symbol, b: Symbol): boolean {
+export function sameDeclaredSym(a: Readonly<Symbol>, b: Readonly<Symbol>): boolean {
 	return a == b || (a.modulePath != "" && a.modulePath == b.modulePath
 		&& a.name == b.name && a.symbolKind == b.symbolKind
 		&& a.location.line > 0
