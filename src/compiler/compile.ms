@@ -2504,10 +2504,10 @@ function relayHostStream(child: ChildProcess, stream: ChildStream, timeoutMs: in
 	return 0;
 }
 
-function runHost(host: string, dir: string, stem: string, ctl: Locked<HostCtl>): int32 {
+function runHost(host: string, dir: string, stem: string, ctl: Locked<HostCtl>, errorLabel: string): int32 {
 	const started = spawnChild(host, [dir, stem]);
 	if (!started.ok) {
-		printDiag(`${error("error")}: cannot start the HCR host ${host}: ${started.error.message}`);
+		printDiag(`${errorLabel}: cannot start the HCR host ${host}: ${started.error.message}`);
 		return finishHost(ctl, 1);
 	}
 	const child = started.value;
@@ -2528,7 +2528,7 @@ function runHost(host: string, dir: string, stem: string, ctl: Locked<HostCtl>):
 			break;
 		}
 		if (waited.error.kind != ProcessErrorKind.Timeout) {
-			printDiag(`${error("error")}: waiting for the HCR host failed: ${waited.error.message}`);
+			printDiag(`${errorLabel}: waiting for the HCR host failed: ${waited.error.message}`);
 			child.kill();
 			break;
 		}
@@ -2570,7 +2570,8 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 	}
 	stdinDisableBuffering();
 	const ctl: Locked<HostCtl> = new Locked({ stop: false, done: false, code: 0 });
-	let running = spawn((): int32 => runHost(host, dir, stem, ctl));
+	const errorLabel = error("error");
+	let running = spawn((): int32 => runHost(host, dir, stem, ctl, errorLabel));
 	warmHcrSession(opts);
 	const keys: string[] = [""];
 	const idle = (): boolean => {
@@ -2604,7 +2605,7 @@ export function cmdRunHcr(entryPath: string, opts: CliOptions, resolveSection: R
 			await running;
 			sayFlushed("watch: restarting the program on the last build");
 			lockedUpdate(ctl, (v: HostCtl): HostCtl => { return { stop: false, done: false, code: 0 }; });
-			running = spawn((): int32 => runHost(host, dir, stem, ctl));
+			running = spawn((): int32 => runHost(host, dir, stem, ctl, errorLabel));
 		} else {
 			if (keys[0] == "q") sayFlushed("watch: quit");
 			lockedUpdate(ctl, (v: HostCtl): HostCtl => { return { stop: true, done: v.done, code: v.code }; });
