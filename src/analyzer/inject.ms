@@ -2457,9 +2457,7 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 		// Function-local vars are moved out by destructiveMoveVar in the Consumed walk.
 		// Non-local variables (globals, module-level, outer function) are borrowed —
 		// caller's destroy would free the shared data, causing double-free.
-		// Gate on ORIGINAL identifier name so a fresh borrow temp introduced by
-		// processNode doesn't get copied a second time.
-		if (origKind == NodeKind.Identifier) {
+		if (origKind == NodeKind.Identifier && d.argument.resolvedSym == origSym) {
 			const vi = findVarInfoInFunction(dctx, origSym);
 			if (vi == null) {
 				// Not a function-local var (cursor, param, or global) — check if RC type needs copy
