@@ -3423,6 +3423,7 @@ function expandCollectStmt(ctx: CheckerContext, stmt: Node, out: Node[], emitted
 		call.kind = expanded.kind;
 		call.data = expanded.data;
 		call.typeArg = expanded.typeArg;
+		call.typeExprs = expanded.typeExprs;
 		if (expanded.location != null) call.location = expanded.location;
 		call.nodeType = null as unknown as Type;
 		call.resolvedSym = null;
