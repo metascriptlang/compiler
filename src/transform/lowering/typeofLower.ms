@@ -4,7 +4,7 @@
 // on the held member, one routine per union and table.
 
 import { Node, NodeKind, Type, TypeKind, Symbol, SymbolKind, SourceLocation, ProgramData, UnaryExprData, BinaryExprData, StringLiteralData, SwitchStmtData, SwitchCaseData, MatchExprData, MatchStmtData, MatchCaseData } from "../../ast/node";
-import { peelTransparentInstance, isTagCarriedUnion, isMaybeType, isUnknownType, hasGenericParams, typeofTagOf, primitiveKindName, isPrimitiveKindName, typeofNameMatches, typeDisplayName, stringType, booleanType, nullType, setRepr, symGenericParams, genericInstanceMembers, derivesFromClass, isAwaitable } from "../../checker/types";
+import { peelTransparentInstance, isTagCarriedUnion, isMaybeType, isUnknownType, hasGenericParams, typeofTagOf, primitiveKindName, isPrimitiveKindName, typeofNameMatches, typeDisplayName, stringType, booleanType, nullType, setRepr, createFunction, symGenericParams, genericInstanceMembers, derivesFromClass, isAwaitable } from "../../checker/types";
 import { isTypeofExpr, primitiveNameLiteral } from "../../checker/fit";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
 import { TransformContext, mintSym, reportTransformError } from "../context";
@@ -14,41 +14,43 @@ import { cloneIfPure } from "../place";
 import { is64Kind } from "../numKinds";
 import { armOrder, holdsMember } from "./unionConvLower";
 
-let _routineNames: string[] = [];
-let _routineSyms: Symbol[] = [];
+let _routineSyms = new Map<string, Symbol>();
 let _routineDecls: Node[] = [];
 
 export function lowerTypeof(program: Node, ctx: TransformContext): Node {
-	_routineNames = [];
-	_routineSyms = [];
+	_routineSyms = new Map<string, Symbol>();
 	_routineDecls = [];
 	const result = lowerNode(program, ctx);
 	if (_routineDecls.length > 0 && result.kind == NodeKind.Program) {
 		for (const decl of _routineDecls) (result.data as ProgramData).programStmts.push(decl);
 	}
-	_routineNames = [];
-	_routineSyms = [];
+	_routineSyms = new Map<string, Symbol>();
 	_routineDecls = [];
 	return result;
 }
 
 function lowerNode(node: Node, ctx: TransformContext): Node {
 	if (node == null) return node;
-	if (node.kind == NodeKind.SwitchStmt) lowerSwitchOnKind(node.data as SwitchStmtData, ctx);
-	if (node.kind == NodeKind.MatchExpr) {
-		const d = node.data as MatchExprData;
-		d.matchDisc = lowerArmsOnKind(d.matchDisc, d.matchCases, ctx);
-	}
-	if (node.kind == NodeKind.MatchStmt) {
-		const d = node.data as MatchStmtData;
-		d.matchStmtDisc = lowerArmsOnKind(d.matchStmtDisc, d.matchStmtCases, ctx);
-	}
-	if (node.kind == NodeKind.BinaryExpr) {
-		const test = lowerKindTest(node, ctx);
-		if (test != null) return test;
-		const instance = lowerGenericInstanceof(node, ctx);
-		if (instance != null) return instance;
-	}
+	match (node.kind) {
+		NodeKind.SwitchStmt => {
+			lowerSwitchOnKind(node.data as SwitchStmtData, ctx);
+		},
+		NodeKind.MatchExpr => {
+			const d = node.data as MatchExprData;
+			d.matchDisc = lowerArmsOnKind(d.matchDisc, d.matchCases, ctx);
+		},
+		NodeKind.MatchStmt => {
+			const d = node.data as MatchStmtData;
+			d.matchStmtDisc = lowerArmsOnKind(d.matchStmtDisc, d.matchStmtCases, ctx);
+		},
+		NodeKind.BinaryExpr => {
+			const test = lowerKindTest(node, ctx);
+			if (test != null) return test;
+			const instance = lowerGenericInstanceof(node, ctx);
+			if (instance != null) return instance;
+		},
+		_ => {},
+	};
 	mapChildren(node, (c: Node): Node => lowerNode(c, ctx));
 	if (isTypeofExpr(node)) return lowerTagRead(node, ctx);
 	return node;
@@ -99,21 +101,27 @@ function lowerKindTest(node: Node, ctx: TransformContext): Node | null {
 	const negated = op == "!==" || op == "!=";
 	const operand = lowerNode(operandOf(typeofSide), ctx);
 	const t = operand.nodeType;
+	if (t == null) {
+		opaqueKindTest(operand, name, ctx, node.location);
+		return node;
+	}
 	const shape = shapeOf(t);
-	if (shape == Shape.Single) return makeBool(typeofNameMatches(t!, name) != negated, node.location);
+	if (shape == Shape.Single) return makeBool(typeofNameMatches(t, name) != negated, node.location);
 	if (shape == Shape.Opaque) {
 		opaqueKindTest(operand, name, ctx, node.location);
 		return node;
 	}
 	const op2 = negated ? "!==" : "===";
-	const tag = heldTagOf(kindsOf(t!), name);
+	const members = kindsOf(t);
+	const tag = tagOfKind(members, name);
 	if (tag == null) return makeBool(negated, node.location);
-	if (tag != "") {
+	if (tagIsUnique(members, tag)) {
 		const tagRead = makeUnary("typeof", operand, node.location);
 		tagRead.nodeType = stringType();
 		return makeBinary(lowerTagRead(tagRead, ctx), op2, makeString(tag, node.location), node.location);
 	}
-	const kindRead = routineCall("msTypeofKind_", operand, ctx, node.location, (x: Symbol): Node[] => memberCases(t!, x, kindNameOf, ctx, node.location));
+	const source: Type = t;
+	const kindRead = routineCall("msTypeofKind_", operand, ctx, node.location, (x: Symbol): Node[] => memberCases(source, x, kindNameOf, ctx, node.location));
 	return makeBinary(kindRead, op2, makeString(name, node.location), node.location);
 }
 
@@ -138,19 +146,7 @@ function lowerGenericInstanceof(node: Node, ctx: TransformContext): Node | null 
 	const held: Type = u;
 	const target: Symbol = cls;
 	const prefix = "msInstanceOf_" + hashToBase36(typeKey(cls.symbolType)) + "_";
-	return routineCall(prefix, operand, ctx, loc, (x: Symbol): Node[] => {
-		const order = armOrder(held, ctx, loc);
-		const body: Node[] = [];
-		for (let k = 0; k < order.length; k += 1) {
-			const answer = makeReturn(makeBool(derivesFromClass(held.typeChildren[order[k]], target), loc), loc);
-			if (k == order.length - 1) {
-				body.push(answer);
-			} else {
-				body.push(makeIf(holdsMember(held, x, order[k], ctx, loc), makeBlock([answer], loc), null, loc));
-			}
-		}
-		return body;
-	}, booleanType());
+	return routineCall(prefix, operand, ctx, loc, (x: Symbol): Node[] => memberAnswers(held, x, (member: Type): Node => makeBool(derivesFromClass(member, target), loc), ctx, loc), booleanType());
 }
 
 function holdsAwaitable(u: Type): boolean {
@@ -166,26 +162,27 @@ function instanceTestable(u: Type, cls: Symbol): boolean {
 	return true;
 }
 
-// The TS tag that alone tells the member of kind `name` apart: null when no
-// member has that kind, "" when another member shares its tag.
-function heldTagOf(members: Type[], name: string): string | null {
+function tagOfKind(members: Type[], name: string): string | null {
 	let tag: string | null = null;
 	for (const m of members) {
 		if (primitiveKindName(m) == name) tag = typeofTagOf(m);
 	}
-	if (tag == null) return null;
+	return tag;
+}
+
+function tagIsUnique(members: Type[], tag: string): boolean {
 	let sharing = 0;
 	for (const m of members) {
 		if (typeofTagOf(m) == tag) sharing += 1;
 	}
-	return sharing == 1 ? tag : "";
+	return sharing == 1;
 }
 
 // A switch or match over `typeof x` naming a primitive kind dispatches on the
 // held kind's name; a TS tag case also takes every kind name it covers.
 function lowerSwitchOnKind(d: SwitchStmtData, ctx: TransformContext): void {
 	if (!isTypeofExpr(d.switchDisc) || !testsNameKind(d.switchCases.map((c: Node): Node[] => (c.data as SwitchCaseData).caseTests))) return;
-	const kinds = operandOf(d.switchDisc).nodeType != null ? kindsOf(operandOf(d.switchDisc).nodeType!) : [];
+	const kinds = operandKinds(d.switchDisc);
 	const seen: string[] = [];
 	for (const c of d.switchCases) {
 		const cd = c.data as SwitchCaseData;
@@ -194,9 +191,14 @@ function lowerSwitchOnKind(d: SwitchStmtData, ctx: TransformContext): void {
 	d.switchDisc = kindNameRead(operandOf(d.switchDisc), d.switchDisc, ctx);
 }
 
+function operandKinds(typeofNode: Node): Type[] {
+	const t = operandOf(typeofNode).nodeType;
+	return t != null ? kindsOf(t) : [];
+}
+
 function lowerArmsOnKind(disc: Node, cases: Node[], ctx: TransformContext): Node {
 	if (!isTypeofExpr(disc) || !testsNameKind(cases.map((c: Node): Node[] => (c.data as MatchCaseData).casePatterns))) return disc;
-	const kinds = operandOf(disc).nodeType != null ? kindsOf(operandOf(disc).nodeType!) : [];
+	const kinds = operandKinds(disc);
 	const seen: string[] = [];
 	for (const c of cases) {
 		const cd = c.data as MatchCaseData;
@@ -218,7 +220,11 @@ function kindsOf(t: Type): Type[] {
 	const v = peelTransparentInstance(t);
 	return match (shapeOf(v)) {
 		Shape.Union => v.typeChildren,
-		Shape.Nullable => [v.typeReturn!, nullType()],
+		Shape.Nullable => {
+			const inner = v.typeReturn;
+			if (inner == null) throw new Error(`internal: the nullable '${typeDisplayName(v)}' has no inner type`);
+			return [inner, nullType()];
+		},
 		_ => [v],
 	};
 }
@@ -250,11 +256,20 @@ function expandTagTests(tests: Node[], kinds: Type[], seen: string[], claims: bo
 
 function kindNameRead(operand: Node, typeofNode: Node, ctx: TransformContext): Node {
 	const lowered = lowerNode(operand, ctx);
-	const shape = shapeOf(lowered.nodeType);
-	if (shape == Shape.Single) return tagLiteral(kindNameOf(lowered.nodeType!), typeofNode);
-	if (shape != Shape.Opaque) return routineCall("msTypeofKind_", lowered, ctx, typeofNode.location, (x: Symbol): Node[] => memberCases(lowered.nodeType!, x, kindNameOf, ctx, typeofNode.location));
-	opaqueKindTest(lowered, "a primitive name", ctx, typeofNode.location);
-	return typeofNode;
+	const t = lowered.nodeType;
+	if (t == null) {
+		opaqueKindTest(lowered, "a primitive name", ctx, typeofNode.location);
+		return typeofNode;
+	}
+	const source: Type = t;
+	return match (shapeOf(source)) {
+		Shape.Single => tagLiteral(kindNameOf(source), typeofNode),
+		Shape.Union | Shape.Nullable => routineCall("msTypeofKind_", lowered, ctx, typeofNode.location, (x: Symbol): Node[] => memberCases(source, x, kindNameOf, ctx, typeofNode.location)),
+		Shape.Opaque => {
+			opaqueKindTest(lowered, "a primitive name", ctx, typeofNode.location);
+			return typeofNode;
+		},
+	};
 }
 
 // `typeof x` as a string: the TS tag. A single static type folds, evaluating
@@ -264,14 +279,16 @@ function kindNameRead(operand: Node, typeofNode: Node, ctx: TransformContext): N
 function lowerTagRead(node: Node, ctx: TransformContext): Node {
 	const operand = operandOf(node);
 	const t = operand.nodeType;
-	const shape = shapeOf(t);
+	if (t == null) return node;
+	const source: Type = t;
+	const shape = shapeOf(source);
 	const loc = node.location;
 	if (shape == Shape.Single) {
-		if (cloneIfPure(operand) != null || isLiteral(operand)) return tagLiteral(typeofTagOf(t!), node);
-		return routineCall("msTypeofTag_", operand, ctx, loc, (x: Symbol): Node[] => [makeReturn(makeString(typeofTagOf(t!), loc), loc)]);
+		if (cloneIfPure(operand) != null || isLiteral(operand)) return tagLiteral(typeofTagOf(source), node);
+		return routineCall("msTypeofTag_", operand, ctx, loc, (x: Symbol): Node[] => [makeReturn(makeString(typeofTagOf(source), loc), loc)]);
 	}
 	if (shape == Shape.Opaque || !ctx.jsBackend) return node;
-	const members = kindsOf(t!);
+	const members = kindsOf(source);
 	let wide = false;
 	let big = false;
 	for (const m of members) {
@@ -280,11 +297,11 @@ function lowerTagRead(node: Node, ctx: TransformContext): Node {
 	}
 	if (!wide) return node;
 	if (big) {
-		return routineCall("msTypeofTag_", operand, ctx, loc, (x: Symbol): Node[] => memberCases(t!, x, typeofTagOf, ctx, loc));
+		return routineCall("msTypeofTag_", operand, ctx, loc, (x: Symbol): Node[] => memberCases(source, x, typeofTagOf, ctx, loc));
 	}
 	return routineCall("msTypeofJsTag_", operand, ctx, loc, (x: Symbol): Node[] => {
-		const isBig = makeBinary(rawTypeof(x, t!, loc), "===", makeString("bigint", loc), loc);
-		return [makeIf(isBig, makeBlock([makeReturn(makeString("number", loc), loc)], loc), null, loc), makeReturn(rawTypeof(x, t!, loc), loc)];
+		const isBig = makeBinary(rawTypeof(x, source, loc), "===", makeString("bigint", loc), loc);
+		return [makeIf(isBig, makeBlock([makeReturn(makeString("number", loc), loc)], loc), null, loc), makeReturn(rawTypeof(x, source, loc), loc)];
 	});
 }
 
@@ -311,7 +328,9 @@ function tagLiteral(tag: string, typeofNode: Node): Node {
 }
 
 function routineCall(prefix: string, operand: Node, ctx: TransformContext, loc: SourceLocation, body: (x: Symbol) => Node[], returns: Type = stringType()): Node {
-	const call = makeCall(makeTypedIdentResolved(nameRoutine(prefix, operand.nodeType!, body, returns, ctx, loc), null, loc), [operand], loc);
+	const source = operand.nodeType;
+	if (source == null) throw new Error(`internal: the typeof routine '${prefix}' is called on an operand with no type`);
+	const call = makeCall(makeTypedIdentResolved(nameRoutine(prefix, source, body, returns, ctx, loc), null, loc), [operand], loc);
 	call.nodeType = returns;
 	return call;
 }
@@ -319,17 +338,22 @@ function routineCall(prefix: string, operand: Node, ctx: TransformContext, loc: 
 // The held member's name: a nullable asks presence, a union cases on its member.
 function memberCases(source: Type, x: Symbol, nameOf: (t: Type) => string, ctx: TransformContext, loc: SourceLocation): Node[] {
 	const members = kindsOf(source);
-	const body: Node[] = [];
 	if (shapeOf(source) == Shape.Nullable) {
 		const present = makeBinary(makeTypedIdentResolved(x, source, loc), "!==", makeNull(loc), loc);
-		body.push(makeIf(present, makeBlock([makeReturn(makeString(nameOf(members[0]), loc), loc)], loc), null, loc));
-		body.push(makeReturn(makeString(nameOf(members[1]), loc), loc));
-		return body;
+		return [
+			makeIf(present, makeBlock([makeReturn(makeString(nameOf(members[0]), loc), loc)], loc), null, loc),
+			makeReturn(makeString(nameOf(members[1]), loc), loc),
+		];
 	}
-	const u = peelTransparentInstance(source);
+	return memberAnswers(peelTransparentInstance(source), x, (member: Type): Node => makeString(nameOf(member), loc), ctx, loc);
+}
+
+// Returns each member's answer in arm order, guarded by holding that member; the last arm is unguarded.
+function memberAnswers(u: Type, x: Symbol, answerOf: (member: Type) => Node, ctx: TransformContext, loc: SourceLocation): Node[] {
 	const order = armOrder(u, ctx, loc);
+	const body: Node[] = [];
 	for (let k = 0; k < order.length; k += 1) {
-		const answer = makeReturn(makeString(nameOf(u.typeChildren[order[k]]), loc), loc);
+		const answer = makeReturn(answerOf(u.typeChildren[order[k]]), loc);
 		if (k == order.length - 1) {
 			body.push(answer);
 		} else {
@@ -341,19 +365,15 @@ function memberCases(source: Type, x: Symbol, nameOf: (t: Type) => string, ctx: 
 
 function nameRoutine(prefix: string, source: Type, buildBody: (x: Symbol) => Node[], returns: Type, ctx: TransformContext, loc: SourceLocation): Symbol {
 	const name = prefix + hashToBase36(typeKey(source));
-	const at = _routineNames.indexOf(name);
-	if (at >= 0) return _routineSyms[at];
+	const known = _routineSyms.get(name);
+	if (known != null) return known;
 	const sym = mintSym(ctx, SymbolKind.Function, name, null);
-	_routineNames.push(name);
-	_routineSyms.push(sym);
+	_routineSyms.set(name, sym);
 	const valueSym = mintSym(ctx, SymbolKind.Parameter, "x", source);
 	const fnNode = makeFnDecl(name, [valueSym], ["unknown"], makeBlock(buildBody(valueSym), loc), "", typeDisplayName(returns), loc);
-	if (fnNode.nodeType == null || fnNode.nodeType.typeChildren == null || fnNode.nodeType.typeChildren.length != 1) {
-		throw new Error(`internal: the typeof routine for '${typeDisplayName(source)}' has no parameter type`);
-	}
-	fnNode.nodeType.typeChildren[0] = source;
-	fnNode.nodeType.typeReturn = returns;
-	sym.symbolType = fnNode.nodeType;
+	const fnType = createFunction([source], [valueSym.name], returns);
+	fnNode.nodeType = fnType;
+	sym.symbolType = fnType;
 	fnNode.resolvedSym = sym;
 	_routineDecls.push(fnNode);
 	return sym;
