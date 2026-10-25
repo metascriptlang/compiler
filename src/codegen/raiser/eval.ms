@@ -198,7 +198,7 @@ function freshEngine(): ComptimeEngine {
 function withMetaSeeds(seeds: NamedSymbol[]): NamedSymbol[] {
 	let meta = _engine.metaSeeds;
 	if (meta == null) {
-		meta = metaTypeSeeds(_engineGraph, _engineToken != null ? _engineToken.exportRegistry : null);
+		meta = metaTypeSeeds(_engineGraph, _engineToken);
 		if (seedsComplete(meta)) _engine.metaSeeds = meta;
 	}
 	const all: NamedSymbol[] = [];
