@@ -44,11 +44,25 @@ test "E2E C: a for-of over an extension generator on an array drives no iterator
 	assert !c.contains("dollariter");
 }
 
-test "E2E C: a stored generator is driven through its iterator" {
+test "E2E C: a generator stored in a const that one for-of reads drives no iterator" {
 	const c = emitFor(`
 		const it = count(5);
 		for (const x of it) {
 			console.log(x);
+		}
+	`);
+	assert c != "";
+	assert !c.contains("dollariter");
+}
+
+test "E2E C: a stored generator read twice is driven through its iterator" {
+	const c = emitFor(`
+		const it = count(5);
+		for (const x of it) {
+			console.log(x);
+		}
+		for (const y of it) {
+			console.log(y);
 		}
 	`);
 	assert c != "";
@@ -150,7 +164,7 @@ test "E2E C: code inlined from another module is attributed to the line that cal
 	assert maxLineDirective(c) <= 4;
 }
 
-test "E2E C: a consumer of a stored chain from another module stays a call" {
+test "E2E C: a consumer of a stored chain inside a larger expression from another module stays a call" {
 	const c = mainC(`
 		const it = firsts(count(9), 3);
 		console.log(total(it));
@@ -159,12 +173,30 @@ test "E2E C: a consumer of a stored chain from another module stays a call" {
 	assert c.contains("total__");
 }
 
-test "E2E C: a stored chain of generators from another module is driven through its iterator" {
+test "E2E C: a chain of generators from another module stored in a const and read once drives no iterator" {
 	const c = mainC(`
 		const it = count(4).doubled((v: int32): int32 => v + 1);
 		let s: int32 = 0;
 		for (const y of it) {
 			s += y;
+		}
+		const fw = firsts(count(9), 3);
+		const t = total(fw);
+		console.log(s + t);
+	`);
+	assert c != "";
+	assert !c.contains("dollariter");
+	assert !c.contains("total__");
+}
+
+test "E2E C: a stored chain of generators from another module read inside a loop is driven through its iterator" {
+	const c = mainC(`
+		const it = count(4).doubled((v: int32): int32 => v + 1);
+		let s: int32 = 0;
+		for (let k: int32 = 0; k < 2; k++) {
+			for (const y of it) {
+				s += y;
+			}
 		}
 		console.log(s);
 	`);
