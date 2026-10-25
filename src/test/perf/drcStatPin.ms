@@ -1,7 +1,8 @@
 // Standalone driver, not an inline test: the claim is about a runtime built with -DMS_DRC_STAT, which needs a
 // child `msc build` and a child run. Siblings: src/test/guard/run.ms (same build-and-run shape).
 // Run from the repo root: msc run src/test/perf/drcStatPin.ms   (MSC=<path> names the subject; default ./msc)
-// Pin: the same program with N and 2N objects gives exactly the counter deltas the program causes.
+// Pin: the same program with N and 2N objects gives exactly the counter deltas the program causes, and a
+// ledger-only build of the runtime still compiles and runs.
 import { execFileResult, ExecFileResult, exit, env, cwd } from "std/process";
 import { readFile, remove, ensureDir, exists } from "std/fs";
 
@@ -72,6 +73,17 @@ for (const program of ["collectGraph", "cycleRegister"]) {
 	} else {
 		expect(program, small, big, "cycle.register.count", n);
 		expect(program, small, big, "collect.freed.count", 0);
+	}
+}
+for (const program of ["collectGraph", "cycleRegister"]) {
+	const exe = `${OUT}/${program}.ledger`;
+	const b = execFileResult(MSC, ["build", `${ROOT}/src/test/perf/programs/${program}.ms`, "--gc=orc", "--passC=-DMS_DRC_LEDGER", `--output=${exe}`], OUT);
+	const r = ok(b) ? execFileResult(exe, [`${SMALL}`]) : b;
+	if (!ok(r)) {
+		console.log(`FAIL ledger build ${program}\n${r.output}${r.errorOutput}`);
+		fails++;
+	} else {
+		console.log(`ok   ${program} ledger build runs without the counters`);
 	}
 }
 exit(fails > 0 ? 1 : 0);
