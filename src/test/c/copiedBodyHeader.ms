@@ -39,14 +39,14 @@ function twoModules(comptimeInit: boolean, generic: boolean): string {
 test "a copied @inline body brings the header of the extern it calls" {
 	const main = twoModules(false, false);
 	assert main != "" && !main.startsWith("ERROR"), main;
-	assert main.contains("portableRead(x)");
+	assert main.contains("portableRead(x_p0)");
 	assert main.contains(`#include "${HEADER}"`);
 }
 
 test "a provider with an @comptime initializer still hands its header to the copy" {
 	const main = twoModules(true, false);
 	assert main != "" && !main.startsWith("ERROR"), main;
-	assert main.contains("portableRead(x)");
+	assert main.contains("portableRead(x_p0)");
 	assert main.contains(`#include "${HEADER}"`);
 }
 
@@ -65,6 +65,6 @@ test "a copy made through a middle module brings the provider header" {
 		{ entryPath: MAIN_PATH, entrySource: `import { viaMid } from "./mid";\nconsole.log(viaMid(40));\n` },
 	], MAIN_PATH, "main");
 	assert main != "" && !main.startsWith("ERROR"), main;
-	assert main.contains("portableRead(x)");
+	assert main.contains("portableRead(x_p0)");
 	assert main.contains(`#include "${HEADER}"`);
 }

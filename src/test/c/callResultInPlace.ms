@@ -49,8 +49,8 @@ function main(): void { console.log(plain(3) + target(1, 4)); }
 	assert plain.contains("(&q_1_, (&(src_1_)));");
 	assert !plain.contains("q_1_ = T");
 	const target = bodyOf(c.value, "target");
-	assert target.contains("(&b_1_.q, x, 1LL);");
-	assert target.contains("(&b_1_.arr[i], x);");
+	assert target.contains("(&b_1_.q, x_p1, 1LL);");
+	assert target.contains("(&b_1_.arr[i_p0], x_p1);");
 }
 
 test "a struct call whose argument reads the destination keeps its temporary" {

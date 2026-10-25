@@ -57,6 +57,6 @@ function fpicked615(): int32 {
 	const nestedFirst = c.indexOf("FNESTED615");
 	assert nestedFirst >= 0 && nestedFirst == c.lastIndexOf("FNESTED615"),
 		"FNESTED615 read outside its definition";
-	assert c.indexOf("value > 12000") >= 0, "guard comparison did not inline 12000";
+	assert c.indexOf("value_p0 > 12000") >= 0, "guard comparison did not inline 12000";
 	assert c.indexOf("> 6000") >= 0, "second guard did not inline the folded 6000";
 }

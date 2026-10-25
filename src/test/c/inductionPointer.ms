@@ -47,26 +47,26 @@ function indexKept(c: string, ranPass: boolean): string {
 test "induction pointer: an int64 index of a Span parameter is carried as a pointer" {
 	const c = emitted(vm("int64", "", ""), true);
 	assert !c.startsWith("error:"), c.slice(0, 400);
-	assert c.includes("dollarptr_pc_ = (code.data + 0LL)"), "no pointer initialiser for pc";
+	assert c.includes("dollarptr_pc_ = (code_p0.data + 0LL)"), "no pointer initialiser for pc";
 	assert c.includes("dollarptr_pc_[0]"), "code[pc] is not a read at the pointer";
 	assert c.includes("(dollarptr_pc_ += 1LL)"), "pc += 1 does not step the pointer";
 	assert c.includes("dollarptr_sp_[-2LL]"), "stk[sp - 2] is not a read at a negative offset";
-	assert c.includes("(dollarptr_pc_ - code.data)"), "a read of pc is not the distance from the data";
-	assert !c.includes("msSpanAccessUnchecked(code"), "code is still indexed";
-	assert !c.includes("msSpanAccessUnchecked(stk"), "stk is still indexed";
+	assert c.includes("(dollarptr_pc_ - code_p0.data)"), "a read of pc is not the distance from the data";
+	assert !c.includes("msSpanAccessUnchecked(code_p0"), "code is still indexed";
+	assert !c.includes("msSpanAccessUnchecked(stk_p1"), "stk is still indexed";
 }
 
 test "induction pointer: i = i + e steps the pointer by e" {
 	const c = emitted(vm("int64", "", ""), true);
 	assert c.includes("dollarptr_pc_ += "), "pc = pc + e is not a pointer step";
-	assert !c.includes("dollarptr_pc_ = (code.data + (dollarptr_pc_"), "pc = pc + e re-seated the pointer";
+	assert !c.includes("dollarptr_pc_ = (code_p0.data + (dollarptr_pc_"), "pc = pc + e re-seated the pointer";
 }
 
 test "induction pointer: an int32 index is carried too and reads back as int32" {
 	const c = emitted(vm("int32", "", ""), true);
 	assert !c.startsWith("error:"), c.slice(0, 400);
 	assert c.includes("dollarptr_pc_[0]"), "code[pc] is not a read at the pointer";
-	assert c.includes("(int32_t)((dollarptr_pc_ - code.data))"), "a read of an int32 pc is not narrowed";
+	assert c.includes("(int32_t)((dollarptr_pc_ - code_p0.data))"), "a read of an int32 pc is not narrowed";
 }
 
 test "induction pointer: a checked build keeps every index" {

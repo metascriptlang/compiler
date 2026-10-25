@@ -42,8 +42,8 @@ test "ctorOwnership: a constructor moves its arguments into the fresh fields wit
 	assert body != "";
 	assert !body.contains("Incref");
 	assert !body.contains("oldField");
-	assert occurrences(body, "msPtrWasMoved(left)") == 1;
-	assert occurrences(body, "msPtrWasMoved(right)") == 1;
+	assert occurrences(body, "msPtrWasMoved(left_p1)") == 1;
+	assert occurrences(body, "msPtrWasMoved(right_p2)") == 1;
 }
 
 test "ctorOwnership: the caller of a constructor that cannot raise carries no error check" {
