@@ -13,6 +13,7 @@ import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { isLoopKind } from "./jumpRetarget";
 import { isRoutineOrTestNode } from "../../ast/shape";
 import { hasFlag } from "../../checker/symbol";
+import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { bodyIsErrorBlind } from "../../checker/raises";
 import { isIterator, peelTransparentInstance } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
@@ -440,7 +441,7 @@ function callTarget(call: Node): CallTarget | null {
 	}
 	if (sym == null) return null;
 	for (const a of c.arguments) { args.push(a); }
-	return { sym, args };
+	return { sym: placedInstanceOf(placedInstances(), sym), args };
 }
 
 function inlinable(decl: Node, target: CallTarget, fromCaller: boolean, st: InlineState): boolean {
