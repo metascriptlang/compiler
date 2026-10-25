@@ -193,8 +193,8 @@ export function resolveEmitArgs(g: CGen, mi: Readonly<MacroInvocationData>, p: C
 							}
 						},
 						_ => {
-							// Variable/const → C variable name
-							result = result + safeName(sym.name);
+							const local = lookupLocalSymName(p, sym);
+							result = result + (local != "" ? local : safeName(sym.name));
 						},
 					};
 				} else {

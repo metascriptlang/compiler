@@ -420,10 +420,22 @@ export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Readonly<
 	return arg;
 }
 
+// An indirect parameter is already a pointer, so it passes as the C name its declaration was given.
+function indirectParamCName(g: CGen, p: CProc, id: Readonly<Node>): string {
+	const name = (id.data as IdentifierData).name;
+	let sym = id.resolvedSym;
+	if (sym == null) {
+		const at = p.indirectParams.lastIndexOf(name);
+		sym = at >= 0 && at < p.indirectSyms.length ? p.indirectSyms[at] : null;
+	}
+	const cName = lookupLocalSymName(p, sym);
+	if (cName == "") addCGenError(g, `internal: indirect parameter '${name}' has no C name in '${p.name}' at ${id.location.line}:${id.location.column}`, id.location.line, id.location.column);
+	return cName;
+}
+
 export function genArgCcgPtr(g: CGen, arg: string, argNode: Readonly<Node>, p: CProc, paramType: Readonly<Type>): string {
 	if (argNode.kind == NodeKind.Identifier && isIndirectRef(p, argNode.resolvedSym, (argNode.data as IdentifierData).name)) {
-		// Indirect param: already a pointer — pass raw (reference patterns return snippet as-is)
-		return safeName((argNode.data as IdentifierData).name);
+		return indirectParamCName(g, p, argNode);
 	}
 	// Not indirect: take address — use safeAddrOf to handle bare compound literals
 	return safeAddrOf(g, p, arg, argNode, paramType);
@@ -2199,8 +2211,7 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 		truncResults(ctx, cc);
 		const d = node.data as ExprStmtData;
 		if (d.expr.kind == NodeKind.Identifier && isIndirectRef(p, d.expr.resolvedSym, (d.expr.data as IdentifierData).name)) {
-			// Indirect param: already a pointer — reference pattern returns raw snippet
-			ctx.results.push(safeName((d.expr.data as IdentifierData).name));
+			ctx.results.push(indirectParamCName(g, p, d.expr));
 		} else {
 			ctx.results.push(safeAddrOf(g, p, inner, d.expr, node.nodeType));
 		}
