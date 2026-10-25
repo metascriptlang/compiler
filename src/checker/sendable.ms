@@ -377,6 +377,7 @@ function refuseSentClosures(ctx: CheckerContext, argNode: Node, at: Node): void 
 	if (p.kind == NodeKind.ArrowFunction || p.kind == NodeKind.FunctionExpr || isSendableFunction(p.nodeType) || isSendableFunction(argNode.nodeType)) refuseSentClosureBorrow(ctx, argNode, at);
 }
 
+// Parked: ~/metascript/.inbox/compiler/2026-10-26-a-copy-only-sendable-closure-sent-to-an-actor-shares-its-frame-env-with-plain-rc-a-data-race.md
 function refuseSentClosureBorrow(ctx: CheckerContext, argNode: Node, at: Node): void {
 	let source = spawnedClosure(peelHidden(argNode));
 	const sym = source.kind == NodeKind.Identifier ? aliasTarget(source.resolvedSym) : null;
@@ -723,6 +724,7 @@ function borrowedAwaitableUse(node: Node | null, borrowed: Symbol[]): Node | nul
 			const inCallee = borrowedAwaitableUse(d.callee, borrowed);
 			if (inCallee != null) return inCallee;
 			for (const a of d.arguments) {
+				// Parked: ~/metascript/.inbox/compiler/2026-10-26-a-spawn-task-passes-a-borrowed-promise-to-a-routine-that-attaches-a-callback.md
 				if (borrowedRoot(a, borrowed) != null) continue;
 				const inArg = borrowedAwaitableUse(a, borrowed);
 				if (inArg != null) return inArg;
