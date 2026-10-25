@@ -104,6 +104,7 @@ function transformForEngine(program: Node): Node {
 			? checkProgramWithRegistry(program, outer.registry, outer.graph, outer.module, raiserPreludeCtx())
 			: checkProgram(program);
 		_lastEngineCheckErrors = checkerCtx.errors;
+		keepEngineInstances(checkerCtx);
 		transformed = transformForRaiser(program, checkerCtx);
 	} finally {
 		setEngineCheckMode(prevEngineMode);
@@ -126,7 +127,7 @@ function isCheckedRoutineDecl(decl: Node): boolean {
 	return decl.kind == NodeKind.ClassDecl || (decl.kind == NodeKind.FunctionDecl && decl.paramSyms != null);
 }
 
-function compileCheckedBodyIntoEngine(sym: Symbol, decl: Node, engineName: string): int32 {
+function compileCheckedBodyIntoEngine(sym: Symbol, decl: Node, engineName: string, bodyCtx: CheckerContext): int32 {
 	const previousOnDemand = registerRaiserOnDemand(ensureCompiledIntoEngine);
 	defer registerRaiserOnDemand(previousOnDemand);
 	enterEngineCompile();
@@ -134,7 +135,7 @@ function compileCheckedBodyIntoEngine(sym: Symbol, decl: Node, engineName: strin
 	const clone = cloneNodeKeepSem(decl);
 	if (clone.kind == NodeKind.FunctionDecl) (clone.data as FunctionDeclData).fnName = engineName;
 	const program = createNode(NodeKind.Program, { programStmts: [clone] }, synthToken(decl.location));
-	const transformed = transformCheckedForEngine(program, preludeBodyCtx(raiserPreludeCtx(), sym.modulePath));
+	const transformed = transformCheckedForEngine(program, bodyCtx);
 	return appendProgramToImage(_engine.image, _engine.funcMap, transformed, engineName, sym);
 }
 
@@ -167,6 +168,7 @@ interface ComptimeEngine {
 	vm: RaiserVM;
 	bodyCtxs: HashMap<CheckerContext, CheckerContext>;
 	metaSeeds: NamedSymbol[] | null;
+	instanceCtxs: HashMap<Symbol, CheckerContext>;
 }
 
 let _engine: ComptimeEngine = null as unknown as ComptimeEngine;
@@ -193,7 +195,8 @@ function freshEngine(): ComptimeEngine {
 	const vm = createVM(image, "arena");
 	vm.printSink = (text: string): void => { writeStderr(text + "\n"); };
 	const bodyCtxs = new HashMap<CheckerContext, CheckerContext>();
-	return { image, funcMap, vm, bodyCtxs, metaSeeds: null };
+	const instanceCtxs = new HashMap<Symbol, CheckerContext>();
+	return { image, funcMap, vm, bodyCtxs, metaSeeds: null, instanceCtxs };
 }
 
 function withMetaSeeds(seeds: NamedSymbol[]): NamedSymbol[] {
@@ -206,6 +209,13 @@ function withMetaSeeds(seeds: NamedSymbol[]): NamedSymbol[] {
 	for (const s of meta) all.push(s);
 	for (const s of seeds) all.push(s);
 	return all;
+}
+
+function keepEngineInstances(checkerCtx: CheckerContext): void {
+	if (_engine == null) return;
+	for (const instances of checkerCtx.procInstCache.values()) {
+		for (const inst of instances) _engine.instanceCtxs.set(inst.sym, checkerCtx);
+	}
 }
 
 function seedExtensionsOf(mc: CheckerContext, skip: Symbol | null): ExtensionMethod[] {
@@ -443,7 +453,12 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const vmStd = isVmPreludeSym(sym) || (homeOutsideBuild && isVmStdHelper(sym));
 	const checkedByVmPrelude = isVmPreludeSym(sym) || isVmStdHelper(sym);
 	if (checkedByVmPrelude && isCheckedRoutineDecl(sym.declNode)) {
-		return compileCheckedBodyIntoEngine(sym, sym.declNode, isClass ? name : "$comptime:helper");
+		return compileCheckedBodyIntoEngine(sym, sym.declNode, isClass ? name : "$comptime:helper", preludeBodyCtx(raiserPreludeCtx(), sym.modulePath));
+	}
+	const checkedBy = _engine.instanceCtxs.get(sym);
+	if (checkedBy != null && isCheckedRoutineDecl(sym.declNode)) {
+		const bodyCtx = sym.modulePath == checkedBy.modulePath ? checkedBy : engineBodyCtx(sym.modulePath, sym) ?? checkedBy;
+		return compileCheckedBodyIntoEngine(sym, sym.declNode, "$comptime:helper", bodyCtx);
 	}
 	const seedCtx = seedCtxForSym(sym);
 	const seeds = instanceTypeParamSeeds(sym);
