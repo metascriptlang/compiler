@@ -278,7 +278,17 @@ export function splice<T>(this arr: T[], start: number, deleteCount: number): vo
 }
 
 /** Removes deleteCount elements at start, then inserts item at start; a negative start counts from the end. */
-export extern function splice<T>(this arr: T[], start: number, deleteCount: number, item: T): void from "&msRefArraySplice3";
+export function splice<T>(this arr: T[], start: number, deleteCount: number, sink item: T): void {
+	const n = arr.length as int64;
+	const s = spliceStart(start, n);
+	const k = spliceCount(deleteCount, n - s);
+	if (k > 0) {
+		arr.rotate(s, s + k, n);
+		arr.shrink(n - k);
+	}
+	arr.push(item);
+	arr.rotate(s, n - k, n - k + 1);
+}
 
 /**
  * Sorts an array in place using a user-provided comparator function.
