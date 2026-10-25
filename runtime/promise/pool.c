@@ -830,6 +830,7 @@ void msPoolShutdown(void) {
 	}
 	pthread_cond_destroy(&gPool->space);
 #endif
+	msRootsAdoptOrphans();
 
 	/* Amendment H: after workers have exited (each flushed its TLS on the way
 	 * out above), flush the dispatcher/main thread's TLS and run a final drain
