@@ -1,7 +1,7 @@
-// guard: a std builtin whose compiler-supplied body writes no cell (PtrBits, Float64Bits, HiXorLo,
-// MapFatal) does not refuse a task reading a deep Readonly module const, while a user extern does,
-// a user extern that claims one of those builtin kinds included. The builtins are declared only by
-// the C std, so the accepted cases run on C and the refused ones on C and JS.
+// guard: a std builtin whose compiler-supplied body writes no cell does not refuse a task reading a
+// deep Readonly module const, while a user extern does, a user extern that claims one of those builtin
+// kinds included. The builtins are declared only by the C std, so the accepted cases run on C and the
+// refused ones on C and JS.
 //
 // WHY A SUBPROCESS: the accepted cases are a claim that check stays silent.
 //
@@ -38,6 +38,7 @@ interface Case {
 
 const CELL = "class Cell { n: number = 7; }\nconst K: Readonly<Cell> = new Cell();\n";
 const RUN = "const f = spawn(() => read());\nconsole.log(await f);\n";
+const FARM_KEYS = ["abc", "abcde", "abcdefghij", "a".repeat(20), "a".repeat(40), "a".repeat(80)].map((k: string): string => `"${k}"`).join(", ");
 
 const cases: Case[] = [
 	{
@@ -60,6 +61,35 @@ const cases: Case[] = [
 		targets: ["c"],
 		text: "const M: Readonly<HashMap<int32, int32>> = new HashMap<int32, int32>();\n"
 			+ "function read(): int32 { return M.has(3) ? 1 : 0; }\n" + RUN,
+	},
+	{
+		name: "a HashSet<string> read of the const with keys of every farm length (AsBytes, LoadLE32, LoadLE64)",
+		refused: false,
+		targets: ["c"],
+		text: "const S: Readonly<HashSet<string>> = new HashSet<string>();\n"
+			+ `function read(): int32 { let n: int32 = 0; for (const k of [${FARM_KEYS}]) if (S.has(k)) n += 1; return n; }\n` + RUN,
+	},
+	{
+		name: "a HashMap<string, int32> read of the const with keys of every farm length",
+		refused: false,
+		targets: ["c"],
+		text: "const M: Readonly<HashMap<string, int32>> = new HashMap<string, int32>();\n"
+			+ `function read(): int32 { let n: int32 = 0; for (const k of [${FARM_KEYS}]) if (M.has(k)) n += M.readonlyGet(k) ?? 0; return n; }\n` + RUN,
+	},
+	{
+		name: "a Map<string, int32> read of the const with keys of every farm length",
+		refused: false,
+		targets: ["c"],
+		text: "const M: Readonly<Map<string, int32>> = new Map<string, int32>();\n"
+			+ `function read(): int32 { let n: int32 = 0; for (const k of [${FARM_KEYS}]) n += M.readonlyGet(k) ?? 0; return n; }\n` + RUN,
+	},
+	{
+		name: "the bytes of a string field of the const, sliced (AsBytes)",
+		refused: false,
+		targets: ["c", "js"],
+		text: "class Named { name: string = \"abcdefghijklmnopqrst\"; }\nconst T: Readonly<Named> = new Named();\n"
+			+ "function bytesOf(n: Readonly<Named>): int64 { const b = n.name.asBytes(); return (b[0..4].length as int64) + (b[1] as int64); }\n"
+			+ "function read(): int64 { return bytesOf(T); }\n" + RUN,
 	},
 	{
 		name: "a user extern that claims the PtrBits builtin kind",
