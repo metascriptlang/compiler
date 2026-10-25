@@ -145,6 +145,8 @@ import "./delegateBase";
 import "./bindSymGeneric";
 import "./macroScopeByWrittenName";
 import "./macroInternalTypeNames";
+import "./quoteBindsWhereWritten";
+import "./macroReservedNames";
 import "./macroNamedLikeDirective";
 import "./compileTimeNameUse";
 import "./extensionImportUse";
