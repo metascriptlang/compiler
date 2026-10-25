@@ -9,7 +9,7 @@ import {
 import { forEachChild } from "../ast/visitor";
 import { inferredType } from "./types";
 import { makeSymbol, initSymbol, lookupSymbol, lookupSymbolInDefiningScope, scopeDefining, isFrameValue, ScopeKind } from "./symbol";
-import { CheckerContext, findExportedSymbol, macroPreludeKind, stampItem } from "./context";
+import { CheckerContext, findExportedSymbol, macroPreludeSym, stampItem } from "./context";
 
 class BindScope {
 	names: Map<string, Symbol> = new Map<string, Symbol>();
@@ -329,7 +329,7 @@ export function metaIntrinsicOf(ctx: CheckerContext, bound: Map<Node, Symbol | n
 	const sym = bound.get(callee);
 	if (sym != null) return sym.builtinKind;
 	if (callee.kind != NodeKind.Identifier) return "";
-	return macroPreludeKind(ctx, (callee.data as IdentifierData).name);
+	return macroPreludeSym(ctx, (callee.data as IdentifierData).name)?.builtinKind ?? "";
 }
 
 export function bindMetaBodyNames(ctx: CheckerContext, definer: string, params: string[], body: Node, quoted: Map<Node, Symbol>): Map<Node, Symbol | null> {

@@ -72,21 +72,20 @@ export function findModuleExports(registry: ExportRegistry, modulePath: string):
 	return null as unknown as ModuleExports;
 }
 
+const MACRO_PRELUDE_MODULE = "std/meta/index.ms";
+
+export function macroPreludeSym(ctx: CheckerContext, name: string): Symbol | null {
+	if (ctx.exportRegistry == null) return null;
+	for (const mod of ctx.exportRegistry.entries) {
+		if (!mod.modulePath.endsWith(MACRO_PRELUDE_MODULE)) continue;
+		const e = findExportedSymbol(ctx.exportRegistry, mod.modulePath, name);
+		if (e != null && e.sym != null && e.sym.builtinKind.startsWith("Meta")) return e.sym;
+	}
+	return null;
+}
+
 export function macroPreludeKind(ctx: CheckerContext, name: string): string {
-	if (ctx.exportRegistry != null) {
-		for (const mod of ctx.exportRegistry.entries) {
-			for (const e of mod.symbols) {
-				if (e.name == name && e.sym != null && e.sym.builtinKind.startsWith("Meta")) return e.sym.builtinKind;
-			}
-		}
-	}
-	const prelude = ctx.preludeCtx != null ? ctx.preludeCtx : ctx;
-	for (const members of prelude.preludeModuleScopes.values()) {
-		for (const s of members) {
-			if (s.name == name && s.builtinKind.startsWith("Meta")) return s.builtinKind;
-		}
-	}
-	return "";
+	return macroPreludeSym(ctx, name)?.builtinKind ?? "";
 }
 
 export function findExportedSymbol(registry: ExportRegistry, modulePath: string, name: string): ExportedSymInfo {
