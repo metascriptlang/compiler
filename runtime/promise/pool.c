@@ -640,6 +640,7 @@ static inline bool msPoolTaskIn(const struct msSpawnCtx* task, const void** set,
 	for (int i = 0; i < n; i++) {
 		const void* a = set[i];
 		if (task->fut == a || (const void*)task->group == a || task->slotGroup == a) return true;
+		if (task->group != NULL && atomic_load_explicit(&task->group->doneFut, memory_order_acquire) == a) return true;
 		if (!descend) continue;
 		const msTaskFrame* f = task->parent;
 		for (int d = 0; f != NULL && d < MS_FRAME_WALK_MAX; d++, f = f->parent) {
