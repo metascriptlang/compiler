@@ -3059,8 +3059,13 @@ test "collectFinallyVars empty when no finally" {
 test "finally-protected var blocks move in isLastReadSafe" {
 	const dctx = testDrcContext("const x = 1;");
 	const s = testVarSym("s");
+	const loc = testLoc();
+	const read = makeIdentResolved(s, loc);
+	const stmts = [makeExprStmt(read, loc)];
+	dctx.currentFuncBody = makeBlock(stmts, loc);
+	assert isLastReadSafe(s, read, 0, stmts, dctx);
 	dctx.finallyProtectedVars = [s];
-	assert !isLastReadSafe(s, null as unknown as Node, 0, [], dctx);
+	assert !isLastReadSafe(s, read, 0, stmts, dctx);
 }
 
 test "clearPendingForVar clears by symbol identity" {
