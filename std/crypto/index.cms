@@ -290,22 +290,22 @@ import { emptyEncoding } from "./encodingOutput";
 @inline
 export function toHex(data: string): string {
 	if (data.asBytes().length == 0) return emptyEncoding;
-	return encodeHex(data.asBytes());
+	return data.asBytes().encodeHex();
 }
 @inline
 export function fromHex(hex: string): string {
 	if (hex.asBytes().length == 0) return emptyEncoding;
-	return decodeHexString(hex);
+	return hex.decodeHexString();
 }
 @inline
 export function toBase64(data: string): string {
 	if (data.asBytes().length == 0) return emptyEncoding;
-	return encodeBase64(data.asBytes());
+	return data.asBytes().encodeBase64();
 }
 @inline
 export function fromBase64(b64: string): string {
 	if (b64.asBytes().length == 0) return emptyEncoding;
-	return decodeBase64String(b64);
+	return b64.decodeBase64String();
 }
 
 // ===== Key Derivation =====

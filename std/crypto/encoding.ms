@@ -4,7 +4,7 @@ import {
 } from "./encodingOutput";
 
 @inline
-export function encodeHex(data: Readonly<Span<uint8>>): string {
+export function encodeHex(this data: Readonly<Span<uint8>>): string {
 	if (data.length == 0) return emptyEncoding;
 	const digits = "0123456789abcdef".asBytes();
 	let result = newEncodingOutput((data.length as int64) * 2);
@@ -25,7 +25,7 @@ function hexDigit(byte: int32): int32 {
 	return -1;
 }
 
-export function decodeHex(text: string): uint8[] {
+export function decodeHex(this text: string): uint8[] {
 	const bytes = text.asBytes();
 	const byteCount = bytes.length as int64;
 	if (byteCount % 2 != 0) return [];
@@ -41,7 +41,7 @@ export function decodeHex(text: string): uint8[] {
 }
 
 @inline
-export function encodeBase64(data: Readonly<Span<uint8>>): string {
+export function encodeBase64(this data: Readonly<Span<uint8>>): string {
 	if (data.length == 0) return emptyEncoding;
 	const digits = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".asBytes();
 	let result = newEncodingOutput(((data.length as int64) + 2) / 3 * 4);
@@ -83,7 +83,7 @@ function base64Digit(byte: int32): int32 {
 	};
 }
 
-export function decodeBase64(text: string): uint8[] {
+export function decodeBase64(this text: string): uint8[] {
 	const bytes = text.asBytes();
 	const byteCount = bytes.length as int64;
 	if (byteCount == 0 || byteCount % 4 != 0) return [];
@@ -109,7 +109,7 @@ export function decodeBase64(text: string): uint8[] {
 }
 
 when (c) {
-	export function decodeHexString(text: string): string {
+	export function decodeHexString(this text: string): string {
 		const data = text.asBytes();
 		const count = data.length as int64;
 		if (count == 0 || count % 2 != 0) return emptyEncoding;
@@ -124,7 +124,7 @@ when (c) {
 		return result;
 	}
 
-	export function decodeBase64String(text: string): string {
+	export function decodeBase64String(this text: string): string {
 		const data = text.asBytes();
 		const count = data.length as int64;
 		if (count == 0 || count % 4 != 0) return emptyEncoding;
@@ -207,17 +207,17 @@ when (c) {
 test "hex codec preserves every byte" {
 	const bytes: uint8[] = [];
 	for (let i = 0; i < 256; i++) bytes.push(i as uint8);
-	const encoded = encodeHex(bytes);
-	const decoded = decodeHex(encoded);
+	const encoded = bytes.encodeHex();
+	const decoded = encoded.decodeHex();
 	assert encoded.length == 512;
 	assert decoded.length == 256;
 	for (let i = 0; i < decoded.length; i++) assert decoded[i] == bytes[i];
-	assert encodeHex(decodeHex("AaFf00")) == "aaff00";
+	assert "AaFf00".decodeHex().encodeHex() == "aaff00";
 }
 
 test "hex decoder keeps empty odd and invalid input behavior" {
 	for (const text of ["", "0", "000", "gg", "00gg", "00 0", "\0f", "é"]) {
-		assert decodeHex(text).length == 0;
+		assert text.decodeHex().length == 0;
 	}
 }
 
@@ -225,16 +225,16 @@ test "base64 codec matches RFC 4648 tails" {
 	const plain = ["", "f", "fo", "foo", "foob", "fooba", "foobar"];
 	const encoded = ["", "Zg==", "Zm8=", "Zm9v", "Zm9vYg==", "Zm9vYmE=", "Zm9vYmFy"];
 	for (let i = 0; i < plain.length; i++) {
-		assert encodeBase64(plain[i].asBytes()) == encoded[i];
-		assert decodeBase64(encoded[i]).asString() == plain[i];
+		assert plain[i].asBytes().encodeBase64() == encoded[i];
+		assert encoded[i].decodeBase64().asString() == plain[i];
 	}
-	assert encodeBase64("hé😀".asBytes()) == "aMOp8J+YgA==";
+	assert "hé😀".asBytes().encodeBase64() == "aMOp8J+YgA==";
 }
 
 test "base64 codec preserves binary data across all tail lengths" {
 	const bytes: uint8[] = [];
 	for (let length = 0; length < 259; length++) {
-		const decoded = decodeBase64(encodeBase64(bytes));
+		const decoded = bytes.encodeBase64().decodeBase64();
 		assert decoded.length == bytes.length;
 		for (let i = 0; i < decoded.length; i++) assert decoded[i] == bytes[i];
 		bytes.push((length % 256) as uint8);
@@ -243,10 +243,10 @@ test "base64 codec preserves binary data across all tail lengths" {
 
 test "base64 decoder keeps existing alphabet length and padding behavior" {
 	for (const text of ["", "Zg", " Zg==", "Zg==\n", "====", "_w==", "AAA?", "AA\0A"]) {
-		assert decodeBase64(text).length == 0;
+		assert text.decodeBase64().length == 0;
 	}
-	assert encodeHex(decodeBase64("/w==")) == "ff";
-	assert encodeHex(decodeBase64("AB==")) == "00";
-	assert encodeHex(decodeBase64("AA=A")) == "0000";
-	assert encodeHex(decodeBase64("AA==AAAA")) == "000000000000";
+	assert "/w==".decodeBase64().encodeHex() == "ff";
+	assert "AB==".decodeBase64().encodeHex() == "00";
+	assert "AA=A".decodeBase64().encodeHex() == "0000";
+	assert "AA==AAAA".decodeBase64().encodeHex() == "000000000000";
 }

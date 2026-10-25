@@ -12,7 +12,7 @@ extern function msCryptoHashFinalIntoHandle(ctx: int64, ref output: uint8[64], c
 extern function msCryptoHmacFinalIntoHandle(ctx: int64, ref output: uint8[64], capacity: int64): int64;
 
 function encodeDigest(data: Readonly<Span<uint8>>, encoding: string): string {
-	return encoding == "base64" ? encodeBase64(data) : encodeHex(data);
+	return encoding == "base64" ? data.encodeBase64() : data.encodeHex();
 }
 
 @exportName("msCryptoHashString")
@@ -66,5 +66,5 @@ export function encodedHmacFinal(ctx: int64, encoding: string): string {
 
 @exportName("msCryptoToBase64")
 export function base64String(data: string): string {
-	return encodeBase64(data.asBytes());
+	return data.asBytes().encodeBase64();
 }
