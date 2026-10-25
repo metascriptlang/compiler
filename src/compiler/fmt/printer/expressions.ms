@@ -9,6 +9,7 @@ import {
 	OutExprData, SizeofExprData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
 	IdentifierData, MacroInvocationData, FunctionExprData, AwaitExprData, YieldExprData, BlockStmtData, ReturnStmtData,
 } from "../../../ast/node";
+import { isAssignOp } from "../../../ast/operators";
 import { Token } from "../../../lexer/token";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
@@ -77,6 +78,7 @@ function bareBinaryPrec(node: Node): number {
 }
 
 function opPrecedence(op: string): number {
+	if (isAssignOp(op)) return 5;
 	return match (op) {
 		"**" => 65,
 		"*" | "/" | "%" => 60,
@@ -90,17 +92,13 @@ function opPrecedence(op: string): number {
 		"&&" => 20,
 		"||" => 10,
 		"??" => 8,
-		"=" | "+=" | "-=" | "*=" | "/=" | "%=" | "**=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => 5,
 		"|>" => 3,
 		_ => 0,
 	};
 }
 
 function isRightAssocOp(op: string): boolean {
-	return match (op) {
-		"**" | "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "**=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>=" => true,
-		_ => false,
-	};
+	return op == "**" || isAssignOp(op);
 }
 
 export function printUnaryExpr(node: Node, options: FormatOptions): Doc {
