@@ -71,6 +71,9 @@ test "spawnHandleEscape: a borrowing handle lent to a Readonly parameter that on
 		{ name: "length read", source: "function count(xs: Readonly<Promise<int32>[]>): int32 { return xs.length; }\nasync function f(): Promise<int32> { " + HANDLES + " const n = count(xs); return (await xs[0]) + n; }" },
 		{ name: "forwarded to a second Readonly helper", source: BOTH + "async function mid(xs: Readonly<Promise<int32>[]>): Promise<int32> { return await both(xs); }\nasync function f(): Promise<int32> { " + HANDLES + " return await mid(xs); }" },
 		{ name: "method", source: "class H { async both(xs: Readonly<Promise<int32>[]>): Promise<int32> { return (await xs[0]) + (await xs[1]); } }\nasync function f(): Promise<int32> { " + HANDLES + " return await new H().both(xs); }" },
+		{ name: "const alias read", source: "async function mid(xs: Readonly<Promise<int32>[]>): Promise<int32> { const h = xs[0]; const h2 = h; return await h2; }\nasync function f(): Promise<int32> { " + HANDLES + " return await mid(xs); }" },
+		{ name: "destructured read", source: "async function mid(xs: Readonly<Promise<int32>[]>): Promise<int32> { const [h, k] = xs; return (await h) + (await k); }\nasync function f(): Promise<int32> { " + HANDLES + " return await mid(xs); }" },
+		{ name: "for-of read", source: "async function mid(xs: Readonly<Promise<int32>[]>): Promise<int32> { let t: int32 = 0; for (const h of xs) t += await h; return t; }\nasync function f(): Promise<int32> { " + HANDLES + " return await mid(xs); }" },
 	];
 	for (const c of cases) {
 		const got = outcome(c.source);
@@ -90,6 +93,9 @@ test "spawnHandleEscape: a borrowing handle lent to a callee that keeps it or ca
 		{ name: "plain parameter", how: "is not Readonly<...>", source: "function plain(xs: Promise<int32>[]): int32 { return xs.length; }\nasync function f(): Promise<int32> { " + HANDLES + " return plain(xs) + (await xs[0]); }" },
 		{ name: "async call not awaited in place", how: "not awaited in place", source: BOTH + "async function f(): Promise<int32> { " + HANDLES + " const r = both(xs); return await r; }" },
 		{ name: "bodiless callee", how: "has no body to check", source: "extern function ext(xs: Readonly<Promise<int32>[]>): int32 from \"msExt\";\nasync function f(): Promise<int32> { " + HANDLES + " return ext(xs) + (await xs[0]); }" },
+		{ name: "const alias escapes", how: "passing it to 'parkedAll.push'", source: "function mid(xs: Readonly<Promise<int32>[]>): void { const h = xs[0]; const h2 = h; parkedAll.push(h2); }\nasync function f(): Promise<int32> { " + HANDLES + " mid(xs); return await xs[0]; }" },
+		{ name: "destructured escapes", how: "passing it to 'parkedAll.push'", source: "function mid(xs: Readonly<Promise<int32>[]>): void { const [h] = xs; parkedAll.push(h); }\nasync function f(): Promise<int32> { " + HANDLES + " mid(xs); return await xs[0]; }" },
+		{ name: "for-of escapes", how: "passing it to 'parkedAll.push'", source: "function mid(xs: Readonly<Promise<int32>[]>): void { for (const h of xs) parkedAll.push(h); }\nasync function f(): Promise<int32> { " + HANDLES + " mid(xs); return await xs[0]; }" },
 	];
 	for (const c of cases) {
 		const got = outcome(c.source);
