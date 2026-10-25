@@ -49,7 +49,8 @@ import { registerModuleProgram, registerModuleCtx, lookupModuleProgram, lookupMo
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
 import "../../codegen/raiser/eval"; // side-effect: registers macro evaluator callback
-import { macroCompileCount, macroPreprocessCount } from "../meta/expand"; // also registers the expandMacroInvocation callback
+import { macroCompileCount, macroPreprocessCount } from "../meta/expand";
+import { boundHandleCount } from "../meta/bridge"; // also registers the expandMacroInvocation callback
 import "../meta/modulePass";
 import "../meta/comptime"; // side-effect: registers evalComptimeBlock callback
 import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, updateModuleExports, findExportedSymbol, collectExports } from "../../checker/context";
@@ -2156,4 +2157,46 @@ test "a macro body is preprocessed once per declaration, not once per call site 
 	dbSetFileText(db, "/m/mac.ms", MACRO_TWICE.replace("* 2", "* 3"));
 	assert checkMessages(db, "/m/use.ms") == "";
 	assert macroPreprocessCount() == before + 2;
+}
+
+test "rechecking a module that passes typed arguments to a macro keeps no handle table entry" {
+	const user = MACRO_USER.replace("twice(2)", "twice(a)").replace("export const x", "const a: int32 = 2;\nexport const x");
+	const db = macroDb(MACRO_TWICE, user);
+	const edit = (k: int32): string => {
+		dbSetFileText(db, "/m/use.ms", user + `const n${k} = ${k};\n`);
+		return checkMessages(db, "/m/use.ms");
+	};
+	for (let k = 0; k < 2; k += 1) assert edit(k) == "";
+	const afterTwo = boundHandleCount();
+	for (let k = 2; k < 8; k += 1) assert edit(k) == "";
+	assert boundHandleCount() == afterTwo, `${boundHandleCount() - afterTwo} handles stayed over 6 rechecks`;
+}
+
+const HANDLE_LIB = 'import { Node, NodeKind, bindSym, getImpl } from "std/meta";\n'
+	+ 'export function helper(x: int32): int32 { return x + 100; }\n'
+	+ 'export function other(): string { return "o"; }\n'
+	+ 'export macro wrapped(n: Node): Node {\n'
+	+ '\treturn { kind: NodeKind.CallExpr, line: n.line, column: n.column, callee: bindSym("helper"), arguments: [n] };\n'
+	+ '}\n'
+	+ 'export macro hasImpl(fn: Node): Node {\n'
+	+ '\tconst decl = getImpl(bindSym(fn.name));\n'
+	+ '\treturn { kind: NodeKind.NumberLiteral, line: fn.line, column: fn.column, value: decl === null ? 0 : 1, isFloat: false };\n'
+	+ '}\n';
+const HANDLE_USE = 'import { wrapped, hasImpl, other } from "./hlib";\n'
+	+ 'const found = hasImpl(later);\n'
+	+ 'function later(): int32 { return wrapped(1); }\n'
+	+ 'const second: int32 = wrapped(other().length + other().length + other().length + other().length + other().length + other().length);\n';
+
+test "a macro first built inside another macro's run keeps the symbol its body baked" {
+	resetInstantiationState();
+	const db = createTransAmDb(100);
+	dbSetStdPath(db, resolveRuntimeDir() + "/std");
+	dbSetFileText(db, "/h/hlib.ms", HANDLE_LIB);
+	dbSetFileText(db, "/h/use.ms", HANDLE_USE);
+	recordModuleImport(db.moduleDeps, getFileId(db.fileInput, "/h/use.ms"), getFileId(db.fileInput, "/h/hlib.ms"));
+	for (let k = 0; k < 3; k += 1) {
+		dbSetFileText(db, "/h/use.ms", HANDLE_USE + `const n${k} = ${k};\n`);
+		const messages = checkMessages(db, "/h/use.ms");
+		assert messages == "", `check ${k}: ${messages}`;
+	}
 }

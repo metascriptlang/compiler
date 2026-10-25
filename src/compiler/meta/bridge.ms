@@ -705,25 +705,45 @@ function setNodeArrays(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, h: i
 // declaring module and registers the real Symbol here; the baked literal
 // carries the index as `symHandle` and valueToNode rebinds it on the way out.
 // A handle baked into a macro body outlives the compilation that baked it, so
-// the table only grows there; a handle that marshals an argument lives in the
-// expansion's VM heaps, so boundMark/releaseBound drop it with them.
+// the baked tables only grow; a handle that marshals an argument lives in the
+// expansion's VM heaps, so boundMark/releaseBound drop it with them. Baked
+// handles count up from BAKED_HANDLE_BASE, so baking while an expansion is
+// running (a getImpl reaching a body that calls another macro) is never cut.
+const BAKED_HANDLE_BASE: int32 = 1073741824;
+
 let _boundSyms: Symbol[] = [];
+let _bakedSyms: Symbol[] = [];
 
 export function registerBoundSym(sym: Symbol): number {
 	_boundSyms.push(sym);
 	return _boundSyms.length - 1;
 }
 
+export function registerBakedSym(sym: Symbol): number {
+	_bakedSyms.push(sym);
+	return BAKED_HANDLE_BASE + _bakedSyms.length - 1;
+}
+
 export function boundSymAt(index: int32): Symbol | null {
+	if (index >= BAKED_HANDLE_BASE) {
+		const baked = index - BAKED_HANDLE_BASE;
+		return baked < _bakedSyms.length ? _bakedSyms[baked] : null;
+	}
 	if (index < 0 || index >= _boundSyms.length) return null;
 	return _boundSyms[index];
 }
 
 let _boundTypes: Type[] = [];
+let _bakedTypes: Type[] = [];
 
 export function registerBoundType(t: Type): number {
 	_boundTypes.push(t);
 	return _boundTypes.length - 1;
+}
+
+export function registerBakedType(t: Type): number {
+	_bakedTypes.push(t);
+	return BAKED_HANDLE_BASE + _bakedTypes.length - 1;
 }
 
 export interface BoundMark {
@@ -740,7 +760,15 @@ export function releaseBound(mark: BoundMark): void {
 	_boundTypes.shrink(mark.types);
 }
 
+export function boundHandleCount(): int32 {
+	return _boundSyms.length + _boundTypes.length;
+}
+
 export function boundTypeAt(index: int32): Type | null {
+	if (index >= BAKED_HANDLE_BASE) {
+		const baked = index - BAKED_HANDLE_BASE;
+		return baked < _bakedTypes.length ? _bakedTypes[baked] : null;
+	}
 	if (index < 0 || index >= _boundTypes.length) return null;
 	return _boundTypes[index];
 }
@@ -1813,8 +1841,9 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 		NodeKind.Identifier => {
 			const n = createNodeAt(NodeKind.Identifier, { name: gensymName(objHeap, h, readStr(objHeap, arrHeap, h, "name")) }, loc);
 			const hv = heapObjectGetField(objHeap, h, "symHandle");
-			if (hv.kind == RaiserValueKind.Int && hv.intVal >= 0 && hv.intVal < _boundSyms.length) {
-				n.resolvedSym = _boundSyms[hv.intVal];
+			const bound = hv.kind == RaiserValueKind.Int ? boundSymAt(hv.intVal as int32) : null;
+			if (bound != null) {
+				n.resolvedSym = bound;
 				n.flags = n.flags.incl(NodeFlag.BoundSym);
 			}
 			return n;

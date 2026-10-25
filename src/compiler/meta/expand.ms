@@ -72,7 +72,7 @@ import { RaiserContext } from "../../raiser/context";
 import { RaiserVM, vmReleaseHeaps } from "../../raiser/vm";
 import { callWithComptimeHostPolicy } from "./hostPolicy";
 import { bindExpandedSubtree } from "../../binder/binder";
-import { takeWireRefusals, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBoundSym, registerBoundType, valueToExpansion, boundMark, releaseBound } from "./bridge";
+import { takeWireRefusals, nodeToValue, stripMacroArgWrappers, mkNumber, mkString, mkBool, mkNull, synthToken, mapTypeToAst, registerBakedSym, registerBakedType, valueToExpansion, boundMark, releaseBound } from "./bridge";
 import { symbolCarried } from "../../checker/symbol";
 import { ensureShaped, resolveAnnotation } from "../../checker/resolvePass";
 import { parseIntStr } from "../../utils/string";
@@ -261,7 +261,7 @@ function bindSymCall(hostSym: Symbol, name: string, bound: Symbol, loc: SourceLo
 	return createNodeAt(NodeKind.TypeAssertion, {
 		asExpr: createNodeAt(NodeKind.CallExpr, {
 			callee: callee,
-			arguments: [mkString(name, loc), mkNumber(registerBoundSym(bound), loc)],
+			arguments: [mkString(name, loc), mkNumber(registerBakedSym(bound), loc)],
 		}, loc),
 		asType: "Node",
 	}, loc);
@@ -306,7 +306,7 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst
 
 	if (node.nodeType != null) {
 		keys.push("typeHandle");
-		values.push(mkNumber(registerBoundType(node.nodeType), loc));
+		values.push(mkNumber(registerBakedType(node.nodeType), loc));
 		if (includeTypeAst) {
 			const typeAst = mapTypeToAst(node.nodeType, loc);
 			keys.push("nodeType");
@@ -339,7 +339,7 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst
 	const carried = symbolCarried(node);
 	if (carried != null) {
 		keys.push("symHandle");
-		values.push(mkNumber(registerBoundSym(carried), loc));
+		values.push(mkNumber(registerBakedSym(carried), loc));
 	}
 
 	return createNodeAt(NodeKind.ObjectLiteral, {
