@@ -19,7 +19,7 @@ import {
 	sgFormatHover, sgCollectSymbolsInFile, sgFormatSignature, sgFormatExtensionSignatures,
 	sgGetSignatureContext, sgPickActiveOverload, sgCollectInlayHints,
 	sgFormatHoverDoc, sgExtractDocComment, sgBuiltinDoc,
-	sgQueryAtPosition, sgQueryBySym, sgQueryByName, sgQueryByDefiningModule,
+	sgQueryAtPosition, sgQueryBySym,
 	sgFindCallExprByCalleeLocation, sgFieldDeclLine, FIELD_NO_CONTAINER,
 	SgDocumentSymbol,
 	SgSignatureInfo,
@@ -28,9 +28,9 @@ import {
 } from "../../../checker/suggest";
 import { CheckerContext } from "../../../checker/context";
 import { lookupSymbol } from "../../../checker/symbol";
-import { Symbol, SymbolKind, CallExprData, TypeKind } from "../../../ast/node";
+import { Symbol, SymbolKind, CallExprData, MemberExprData, NodeKind, Type, TypeKind } from "../../../ast/node";
 import {
-	lspExtractPosition, lspDocumentUri, dbGetSource, lspEnsureFileLoaded,
+	lspExtractPosition, lspDocumentUri, dbGetSource, lspEnsureFileLoaded, lspHasBuiltinDoc,
 } from "./shared";
 import { LineIndex } from "../../../utils/sourceLines";
 import { lspCharacterIn } from "../position";
@@ -101,7 +101,7 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	}
 	let docComment = sgExtractDocComment(source, docLine);
 	// Fallback to built-in docs for well-known symbols (MDN-style)
-	if (docComment == "") {
+	if (docComment == "" && lspHasBuiltinDoc(db, suggest.sym)) {
 		docComment = sgBuiltinDoc(suggest.name, suggest.containerName);
 	}
 	const hoverDoc = sgFormatHoverDoc(suggest, docComment);
@@ -186,26 +186,43 @@ export function handleSignatureHelp(id: string, params: string, db: TransAmDb): 
 	const sigCtx = sgGetSignatureContext(program, source, pos.line, pos.col);
 	if (sigCtx.calleeName == "") return lspResponse(id, "null");
 
+	// The checked call names its callee and receiver; the text scan of an incomplete call has
+	// only spellings, so it is the one path that looks a name up in module scope.
+	let receiverSym: Symbol | null = null;
+	let receiverType: Type | null = null;
+	let calleeSym: Symbol | null = null;
+	if (sigCtx.callNode != null) {
+		const callee = (sigCtx.callNode.data as CallExprData).callee;
+		if (callee.kind == NodeKind.MemberExpr) {
+			const receiver = (callee.data as MemberExprData).object;
+			receiverSym = receiver.resolvedSym;
+			receiverType = receiver.nodeType;
+		}
+		calleeSym = callee.resolvedSym != null ? callee.resolvedSym : sigCtx.callNode.resolvedSym;
+	} else {
+		if (sigCtx.receiverName != "") {
+			receiverSym = lookupSymbol(ctx.table, sigCtx.receiverName);
+			receiverType = receiverSym != null ? receiverSym.symbolType : null;
+		}
+		calleeSym = lookupSymbol(ctx.table, sigCtx.calleeName);
+	}
+
 	// For member calls (receiver.method()), try extension-based signatures first
 	let sigs: SgSignatureInfo[] = [];
 	let activeSignature = 0;
-	if (sigCtx.receiverName != "") {
-		const recSym = lookupSymbol(ctx.table, sigCtx.receiverName);
-		if (recSym != null && recSym.symbolType != null) {
-			sigs = sgFormatExtensionSignatures(ctx, sigCtx.calleeName, recSym.symbolType, recSym);
-		}
+	if (receiverType != null) {
+		sigs = sgFormatExtensionSignatures(ctx, sigCtx.calleeName, receiverType, receiverSym);
 	}
-	// Fallback: standard symbol lookup (direct calls + non-extension methods)
+	// Fallback: the callee's own symbol (direct calls + non-extension methods)
 	if (sigs.length == 0) {
-		const sym = lookupSymbol(ctx.table, sigCtx.calleeName);
-		if (sym == null) return lspResponse(id, "null");
-		sigs = sgFormatSignature(sym);
+		if (calleeSym == null) return lspResponse(id, "null");
+		sigs = sgFormatSignature(calleeSym);
 		// Overload narrowing: pick the signature whose param types best match
 		// the already-typed arguments at the cursor position. Without this,
 		// the LSP always highlights the primary (first) overload, so typing
 		// `createNodeAt(NodeKind.StringLiteral, ...)` shows the NumberLiteral
 		// signature hint — misleading for macro authors.
-		activeSignature = sgPickActiveOverload(sigCtx.callNode, sym);
+		activeSignature = sgPickActiveOverload(sigCtx.callNode, calleeSym);
 	}
 	if (sigs.length == 0) return lspResponse(id, "null");
 
@@ -309,7 +326,6 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 	pushUniqueLocations(items, pos.uri, dbGetSource(db, path), sgQueryBySym(ctx, suggest.sym));
 
 	// Search transitive dependents only (files that could import this symbol)
-	const defModule = suggest.modulePath != null && suggest.modulePath != "" ? suggest.modulePath : path;
 	const targetFileId = getFileId(db.fileInput, path);
 	let depIds: int32[] = [];
 	if (targetFileId >= 0) {
@@ -322,7 +338,7 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 		if (otherCtx == null) continue;
 		pushUniqueLocations(
 			items, lspPathToUri(otherPath), dbGetSource(db, otherPath),
-			sgQueryByDefiningModule(otherCtx, suggest.name, defModule),
+			sgQueryBySym(otherCtx, suggest.sym),
 		);
 	}
 
@@ -374,9 +390,14 @@ function buildFileEditsBySym(ctx: CheckerContext, sym: Symbol | null, newName: s
 	return buildTextEdits(sgQueryBySym(ctx, sym), newName, source);
 }
 
-// Build TextEdit array for refs in a cross-module file (name + modulePath fallback)
-function buildFileEdits(ctx: CheckerContext, name: string, modulePath: string, newName: string, source: string): string {
-	return buildTextEdits(sgQueryByName(ctx, name, modulePath), newName, source);
+// Build TextEdit array for refs to a symbol imported into another file: an import imports the
+// exporter's own symbol, so identity finds it; a use under another local name (`f as g`) keeps its name.
+function buildFileEditsOfImport(ctx: CheckerContext, sym: Symbol | null, name: string, newName: string, source: string): string {
+	const refs: SgSymbolRef[] = [];
+	for (const ref of sgQueryBySym(ctx, sym)) {
+		if (ref.name == name) refs.push(ref);
+	}
+	return buildTextEdits(refs, newName, source);
 }
 
 export function handleRename(id: string, params: string, db: TransAmDb): string {
@@ -408,7 +429,7 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 		if (otherPath == path) continue;
 		const otherCtx = dbTypeCheck(db, otherPath);
 		if (otherCtx == null) continue;
-		const otherEdits = buildFileEdits(otherCtx, suggest.name, suggest.modulePath, newName, dbGetSource(db, otherPath));
+		const otherEdits = buildFileEditsOfImport(otherCtx, suggest.sym, suggest.name, newName, dbGetSource(db, otherPath));
 		if (otherEdits.byteLength > 0) {
 			changes.push(lspJsonString(lspPathToUri(otherPath)) + ":" + otherEdits);
 		}

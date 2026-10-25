@@ -11,9 +11,10 @@ import {
 import {
 	lspFmtLocation,
 } from "../format";
-import { sgGetPrefix, sgFindImportSource, sgFindExportedDecl, sgQueryAtPosition } from "../../../checker/suggest";
+import { sgQueryAtPosition } from "../../../checker/suggest";
+import { findExportedSymbol } from "../../../checker/context";
 import { SymbolFlag, hasFlag } from "../../../checker/symbol";
-import { SourceLocation, makeLoc, SymbolKind } from "../../../ast/node";
+import { Node, SourceLocation, makeLoc, Symbol, SymbolKind, NodeKind, TypeKind, EnumDeclData, ImportDeclData, ExportDeclData, ProgramData } from "../../../ast/node";
 import { lspExtractPosition, dbGetSource, lspEnsureFileLoaded } from "./shared";
 import { lspCharacter, lspCharacterIn } from "../position";
 import { dbResolveImport } from "../../transam/index";
@@ -84,16 +85,17 @@ function lspFindFieldLine(src: string, startLine: int32, fieldName: string): Sou
 	return makeLoc(-1, -1);
 }
 
-// Find an enum member declaration: the `enum ContainerName` line, then the member before the
-// closing brace. A member that is not found resolves to the enum declaration itself.
-function lspFindEnumMemberLine(src: string, containerName: string, memberName: string): SourceLocation {
-	const enumAt = findWord(src, "enum " + containerName, 0, src.byteLength);
-	if (enumAt < 0) return makeLoc(-1, -1);
-	const enumEnd = enumAt + "enum ".length + containerName.byteLength;
-	const memberAt = findWord(src, memberName, enumEnd, src.byteLength);
-	const brace = src.byteIndexOf("}", enumEnd);
-	const found = memberAt >= 0 && (brace < 0 || memberAt < brace) ? memberAt : enumAt;
-	return locationAt(src, found);
+// The member's own declaration, read from the enum declaration its type's symbol owns;
+// line 0 when the symbol names no enum member.
+function lspEnumMemberDecl(sym: Symbol | null, memberName: string): SourceLocation {
+	let enumType = sym != null ? sym.symbolType : null;
+	if (enumType != null && enumType.kind == TypeKind.EnumLiteral) enumType = enumType.typeReturn;
+	const enumSym = enumType != null ? enumType.sym : null;
+	const decl = enumSym != null ? enumSym.declNode : null;
+	if (decl == null || decl.kind != NodeKind.EnumDecl) return makeLoc(0, 0);
+	const d = decl.data as EnumDeclData;
+	const at = d.enumMembers.indexOf(memberName);
+	return at >= 0 && at < d.memberLocations.length ? d.memberLocations[at] : makeLoc(0, 0);
 }
 
 // ===== Extern -> Native Header Navigation =====
@@ -195,12 +197,11 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 		// Refine line/col using source text
 		if (defSrc != "") {
 			defCol = lspCharacter(defSrc, defLine + 1, defCol + 1);
-			if (suggest.kind == SymbolKind.EnumMember && suggest.containerName != "") {
-				// Enum member: search for "enum ContainerName" then member within block
-				const enumLoc = lspFindEnumMemberLine(defSrc, suggest.containerName, suggest.name);
-				if (enumLoc.line >= 0) {
-					defLine = enumLoc.line;
-					defCol = enumLoc.column;
+			if (suggest.kind == SymbolKind.EnumMember) {
+				const memberLoc = lspEnumMemberDecl(suggest.sym, suggest.name);
+				if (memberLoc.line > 0) {
+					defLine = memberLoc.line - 1;
+					defCol = lspCharacter(defSrc, memberLoc.line, memberLoc.column);
 				}
 			} else if (suggest.kind == SymbolKind.Property) {
 				const fieldLoc = lspFindFieldLine(defSrc, defLine, suggest.name);
@@ -220,35 +221,52 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 		return lspResponse(id, "[" + location + "]");
 	}
 
-	// Cross-module fallback: check if cursor is on an imported name
-	const src = dbGetSource(db, path);
-	const identName = sgGetPrefix(src, pos.line, pos.col);
-	if (identName == "") return lspResponse(id, "null");
-
-	const importSpec = sgFindImportSource(program, identName);
-	if (importSpec == "") return lspResponse(id, "null");
-
+	// No record at the cursor: it may sit on an import specifier whose binding is not recorded.
+	// The specifier names an export of the source module; that export's symbol says where it is declared.
+	const specifier = lspImportSpecifierAt(program, pos.line, pos.col1);
+	if (specifier == null) return lspResponse(id, "null");
+	const importSpec = specifier.source;
 	const targetPath = dbResolveImport(db, path, importSpec);
-	if (targetPath == "") return lspResponse(id, "null");
+	if (targetPath == "" || db.exportRegistry == null) return lspResponse(id, "null");
 
 	lspEnsureFileLoaded(db, targetPath);
 
-	const targetProgram = dbParse(db, targetPath);
-	if (targetProgram == null) return lspResponse(id, "null");
+	const exported = findExportedSymbol(db.exportRegistry, targetPath, specifier.name);
+	if (exported == null || exported.sym == null || exported.sym.location == null || exported.sym.location.line <= 0) return lspResponse(id, "null");
+	const declPath = exported.sym.modulePath != null && exported.sym.modulePath != "" ? exported.sym.modulePath : targetPath;
+	lspEnsureFileLoaded(db, declPath);
 
-	const declLoc = sgFindExportedDecl(targetProgram, identName);
-	if (declLoc.line == 0) return lspResponse(id, "null");
-
-	const targetUri = lspPathToUri(targetPath);
-	const tLine = declLoc.line - 1;
-	let tCol = declLoc.column - 1;
-	const targetSrc = dbGetSource(db, targetPath);
+	const targetUri = lspPathToUri(declPath);
+	const tLine = exported.sym.location.line - 1;
+	let tCol = exported.sym.location.column - 1;
+	const targetSrc = dbGetSource(db, declPath);
 	if (targetSrc != "") {
 		tCol = lspCharacter(targetSrc, tLine + 1, tCol + 1);
-		const tNameCol = lspFindNameCol(targetSrc, tLine, identName);
+		const tNameCol = lspFindNameCol(targetSrc, tLine, specifier.name);
 		if (tNameCol >= 0) tCol = tNameCol;
 	}
-	return lspResponse(id, "[" + lspFmtLocation(targetUri, tLine, tCol, tLine, tCol + identName.length) + "]");
+	return lspResponse(id, "[" + lspFmtLocation(targetUri, tLine, tCol, tLine, tCol + specifier.name.length) + "]");
+}
+
+interface ImportSpecifierAt {
+	source: string;
+	name: string;
+}
+
+// The import specifier written at a 1-based position, found by its recorded location and not by spelling.
+function lspImportSpecifierAt(program: Node, line: int32, col1: int32): ImportSpecifierAt | null {
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		const decl = stmt.kind == NodeKind.ExportDecl ? (stmt.data as ExportDeclData).exportedDecl : stmt;
+		if (decl.kind != NodeKind.ImportDecl) continue;
+		const imp = decl.data as ImportDeclData;
+		for (let i = 0; i < imp.importNames.length && i < imp.nameLocations.length; i += 1) {
+			const at = imp.nameLocations[i];
+			if (at.line == line && col1 >= at.column && col1 < at.column + imp.importNames[i].byteLength) {
+				return { source: imp.importSource, name: imp.importNames[i] };
+			}
+		}
+	}
+	return null;
 }
 
 // ===== Tests =====
@@ -282,12 +300,4 @@ test "lspFindFieldLine stops at the closing brace" {
 	assert lspFindFieldLine(src, 0, "y").line == 2;
 	assert lspFindFieldLine(src, 0, "y").column == 1;
 	assert lspFindFieldLine(src, 0, "z").line == -1;
-}
-
-test "lspFindEnumMemberLine falls back to the enum line" {
-	const src = "enum Color {\n\tRed,\n\tBlue,\n}\nenum ColorX {\n\tGreen,\n}";
-	assert lspFindEnumMemberLine(src, "Color", "Blue").line == 2;
-	assert lspFindEnumMemberLine(src, "Color", "Green").line == 0;
-	assert lspFindEnumMemberLine(src, "ColorX", "Green").line == 5;
-	assert lspFindEnumMemberLine(src, "Nope", "Red").line == -1;
 }
