@@ -25,3 +25,4 @@ import "./armFromObject";
 import "./propertyNames";
 import "./logicalAssignment";
 import "./refParamOwner";
+import "./globalReferences";
