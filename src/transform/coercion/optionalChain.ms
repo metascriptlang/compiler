@@ -30,7 +30,7 @@ function bindReadProbes(stmt: Node, ctx: TransformContext): Node[] {
 
 // The checker reads `x?.f` as `x !== null ? x.f : null` with one `x` node in both
 // places when `x` is not a name path.
-function sharedProbe(node: Node): Node | null {
+export function sharedProbe(node: Node): Node | null {
 	if (node.kind != NodeKind.ConditionalExpr) return null;
 	const arms = node.data as ConditionalExprData;
 	if (arms.ternaryCondition.kind != NodeKind.BinaryExpr) return null;

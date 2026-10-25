@@ -4,6 +4,8 @@
 
 import { Node, Type, TypeKind, TypeFlag } from "../../ast/node";
 import { mapChildren } from "../walker";
+import { TransformContext, ModuleFact } from "../context";
+import { factsOf } from "../moduleFacts";
 
 const ERASE_MAX_DEPTH: int32 = 8;
 
@@ -25,15 +27,22 @@ function eraseBrandType(t: Type | null, depth: int32): Type | null {
 	return t;
 }
 
+let seenFacts = 0 as BitSet<ModuleFact>;
+
 function walkErase(node: Node): Node {
 	if (node == null) return node;
 	if (node.nodeType != null) {
 		node.nodeType = eraseBrandType(node.nodeType, 0) as Type;
 	}
 	mapChildren(node, walkErase);
+	seenFacts = seenFacts.union(factsOf(node));
 	return node;
 }
 
-export function eraseBrandTypes(program: Node): Node {
-	return walkErase(program);
+export function eraseBrandTypes(program: Node, ctx: TransformContext): Node {
+	seenFacts = 0 as BitSet<ModuleFact>;
+	const erased = walkErase(program);
+	ctx.facts = ctx.facts.union(seenFacts);
+	ctx.factsCollected = true;
+	return erased;
 }

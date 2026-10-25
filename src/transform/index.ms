@@ -127,7 +127,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	ctx.reloadableModules = reloadableModules;
 	bindCompilerFuncs(checkerCtx.compilerFuncs, checkerCtx.table.identCache);
 	flowMark();
-	let result = eraseBrandTypes(program);
+	let result = eraseBrandTypes(program, ctx);
 	flowLap("pass.eraseBrandTypes");
 	if (!jsBackend) { result = lowerActorHandles(result, ctx); flowLap("pass.lowerActorHandles"); }
 	if (!jsBackend) { result = planModuleTdz(result, ctx); flowLap("pass.planModuleTdz"); }

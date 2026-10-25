@@ -13,6 +13,18 @@ export interface PendingTupleOp {
 	ops: string[];  // which ops needed: "Lt", "Le"
 }
 
+export enum ModuleFact {
+	Async,
+	Await,
+	Generator,
+	Spawn,
+	Defer,
+	OptionalChain,
+	Nullish,
+	Spread,
+	Switch,
+}
+
 export class TransformContext {
 	tempCounter: number;
 	errors: string[];
@@ -33,6 +45,8 @@ export class TransformContext {
 	jsEnumToStrings: EnumToStringCopy[];
 	tdzFlags: HashMap<Symbol, Symbol>;  // module binding → its initialized flag (moduleTdz); every read and write inside a function is guarded by it
 	liftTables: WriteSummaries | null;
+	facts: BitSet<ModuleFact>;
+	factsCollected: boolean;
 }
 
 export interface EnumToStringCopy {
@@ -41,13 +55,21 @@ export interface EnumToStringCopy {
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, raiserBackend: false, reloadableModules: [], rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingUnionEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [], tdzFlags: new HashMap<Symbol, Symbol>(), liftTables: null };
+	return { tempCounter: 0, errors: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, raiserBackend: false, reloadableModules: [], rangeChecks: true, boundChecks: true, objChecks: true, keepBuiltinMemberCalls: false, pendingTupleOps: [], pendingUnionEqs: [], cyclicCache: createNameSet(), acyclicCache: createNameSet(), splitLoopLocals: [], actorImpls: new HashMap<Symbol, Symbol>(), jsEnumToStrings: [], tdzFlags: new HashMap<Symbol, Symbol>(), liftTables: null, facts: 0 as BitSet<ModuleFact>, factsCollected: false };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {
 	const ctx = createTransformContext();
 	ctx.checkerCtx = cc;
 	return ctx;
+}
+
+export function noteFact(ctx: TransformContext, f: ModuleFact): void {
+	ctx.facts = ctx.facts.incl(f);
+}
+
+export function mayContain(ctx: TransformContext, need: BitSet<ModuleFact>): boolean {
+	return !ctx.factsCollected || !ctx.facts.isDisjointFrom(need);
 }
 
 export function reportTransformError(ctx: TransformContext, msg: string, loc: SourceLocation): void {
