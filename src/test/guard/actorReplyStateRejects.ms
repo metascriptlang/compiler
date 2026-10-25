@@ -1,0 +1,45 @@
+// An actor's reply never carries a reference the actor still reaches
+//
+// INVARIANT (ULTRALOCK V0, V2): a reply crosses to the caller's thread, so it is a COPY, a fresh
+//   value nothing in the actor keeps, or an Arc<T>; a field path of 'this' is none of them.
+//
+// WHAT IT CATCHES: a reply of the actor's own state: a class field, a nullable class field, an
+//   array field, a local alias of a field, a fallback between two of its fields, and a fresh local
+//   the actor also stored. The caller would then write what the actor reads, from another thread.
+//
+// RED MEANS: one of the shapes compiled. Accepted neighbours: actorReplyCopiesRun.ms.
+//
+// GUARD-JS
+// GUARD-CHECK-FAIL actor method 'root' replies with 'this.top', which this actor still reaches
+// GUARD-CHECK-FAIL actor method 'maybe' replies with 'this.last', which this actor still reaches
+// GUARD-CHECK-FAIL actor method 'all' replies with 'this.hits', which this actor still reaches
+// GUARD-CHECK-FAIL actor method 'pick' replies with a value, which this actor still reaches
+// GUARD-CHECK-FAIL cannot move 'r': it is not the sole owner
+// GUARD-CHECK-FAIL cannot move 'n': it is not the sole owner
+
+import { stop, ExitReason } from "std/actor";
+
+class Node { hits: int32 = 0; next: Node | null = null; }
+
+actor Scene {
+	top: Node = new Node();
+	last: Node | null = null;
+	hits: int32[] = [];
+	root(): Node { return this.top; } // GUARD-REFUSED
+	maybe(): Node | null { return this.last; } // GUARD-REFUSED
+	all(): int32[] { return this.hits; } // GUARD-REFUSED
+	pick(): Node { return this.top.next ?? this.top; } // GUARD-REFUSED
+	alias(): Node {
+		const r = this.top;
+		return r; // GUARD-REFUSED
+	}
+	kept(): Node {
+		const n = new Node();
+		this.last = n;
+		return n; // GUARD-REFUSED
+	}
+}
+
+const s = new Scene();
+console.log((await s.root()).hits);
+stop(s.pid, ExitReason.Normal);

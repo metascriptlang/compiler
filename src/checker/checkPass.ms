@@ -42,7 +42,7 @@ import { inlineDecorator } from "./decoratorHelpers";
 import { cloneNodeForCheck } from "../monomorphize/clone";
 import { gensymSplicePrefix, rewindTemplateGensym, beginGensymUnit, templateGensymMark } from "./template";
 import { convertStoredUnionRead, storedTypeOfNullRead, fitNode, fitViewLocal, wrapInConv, joinBranchTypes, fitJoinedBranch, settleYields, isSyncGeneratorFlags, valueOfInPlace, ReadNeed, refuseFunctionTruthiness, checkSwitchCase, kindArmHandled, offersProtocol, widenNumberLiteral, projectNarrowedRead, comparedUnion, widenToSlotUnion } from "./fit";
-import { checkActorNonisolatedField, checkActorStaticField } from "./sendable";
+import { checkActorNonisolatedField, checkActorReplies, checkActorStaticField } from "./sendable";
 import { preludePackKey, preludePackStamp, tryLoadPreludePack, writePreludePack } from "./preludePack";
 import { callApplyDecorators, callApplyModulePasses, callDecoratorDefers, callExpandMacroInvocation, callApplyDecoratedStmt, registerCheckStmt, registerCheckFunctionBody, registerCheckLocalInstance, registerDemandReturn, registerDemandBinding, registerSelfReadType, registerUndefinedVariableMessage } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
@@ -1735,6 +1735,7 @@ function checkActorDecl(ctx: CheckerContext, node: Node): void {
 		checkClassMember(ctx, member, d.actorName, sym.symbolType);
 		checkActorStaticField(ctx, member);
 		checkActorNonisolatedField(ctx, sym, member);
+		checkActorReplies(ctx, member);
 	}
 	ctx.currentActor = prevActor;
 	closeScope(ctx.table);

@@ -2,7 +2,7 @@
 
 import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, ThrowStmtData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { CheckerContext, addError, addWarning, dispatchEntryFor, dispatchOverridesFor, isOutsideResolvedStd } from "./context";
+import { CheckerContext, addError, addWarning, dispatchEntryFor, dispatchOverridesFor, isGenericFn, isOutsideResolvedStd } from "./context";
 import { isAsyncFunctionNode } from "./freestanding";
 import { Effect, EffectCause, FreshScope, aliasTarget, boundRoutine, callEffect, deferEffectCheck, isFreshValue, newEffect, peelView, routineEffect, walkEffect, walkWithViews } from "./effects";
 import { constBindingInitializer } from "./constFold";
@@ -129,6 +129,83 @@ export function checkActorNonisolatedField(ctx: CheckerContext, actorSym: Symbol
 	if (pd.propIsReadonly && t != null && isNonisolatedValueType(t)) return;
 	addError(ctx, "a nonisolated field is read from other threads, so it must be readonly and of a value type (number, bigint, boolean, string, enum)",
 		member.location.line, member.location.column);
+}
+
+function crossesAsReply(t: Type | null): boolean {
+	if (t == null || !typeCarriesRef(t) || isAtomicRef(t)) return true;
+	if (isDeepSendable(t, (SendLeaf.String | SendLeaf.Function) as int32, declaresNoHook)) return true;
+	if (t.kind == TypeKind.GenericInstance && t.typeExtra != null && t.typeExtra!.kind == TypeKind.Union) {
+		for (const a of t.typeChildren) {
+			if (!crossesAsReply(a)) return false;
+		}
+		return true;
+	}
+	if (t.kind == TypeKind.Ref) return t.sym != null && t.sym.symbolKind == SymbolKind.Actor;
+	if (t.kind != TypeKind.Union) return false;
+	for (const c of t.typeChildren) {
+		if (!crossesAsReply(c)) return false;
+	}
+	return true;
+}
+
+const REPLY_SCOPE: FreshScope = {
+	moveNames: [],
+	table: null,
+	buildsAlone: (site: Node): boolean => (site.kind == NodeKind.NewExpr ? newEffect(site, Effect.SideEffect) : callEffect(site, Effect.SideEffect)) == null,
+};
+
+function sharedReplyPart(ctx: CheckerContext, n: Node | null, result: Node): Node | null {
+	if (n == null) return null;
+	const p = peelView(n);
+	if (crossesAsReply(p.nodeType)) return null;
+	return match (p.kind) {
+		NodeKind.ArrayLiteral => firstSharedReplyPart(ctx, (p.data as ArrayLiteralData).elements, result),
+		NodeKind.ObjectLiteral => firstSharedReplyPart(ctx, (p.data as ObjectLiteralData).properties, result),
+		NodeKind.SpreadExpr => {
+			const arg = (p.data as SpreadExprData).spreadArg;
+			const t = arg.nodeType != null ? peelThrough(arg.nodeType!, PEEL_ALIAS) : null;
+			if (t != null && t.kind == TypeKind.Array && crossesAsReply(t.typeReturn)) return null;
+			return sharedReplyPart(ctx, arg, result);
+		},
+		NodeKind.ConditionalExpr => {
+			const d = p.data as ConditionalExprData;
+			const a = sharedReplyPart(ctx, d.ternaryConsequent, result);
+			return a != null ? a : sharedReplyPart(ctx, d.ternaryAlternate, result);
+		},
+		NodeKind.Identifier when (p.resolvedSym != null && p.resolvedSym!.name != "this") => {
+			checkMoveSoleOwner(ctx, p.resolvedSym!, [], result, p.location);
+			return null;
+		},
+		_ => isFreshValue(p, REPLY_SCOPE) ? null : p,
+	};
+}
+
+function firstSharedReplyPart(ctx: CheckerContext, nodes: Node[], result: Node): Node | null {
+	for (const n of nodes) {
+		const s = sharedReplyPart(ctx, n, result);
+		if (s != null) return s;
+	}
+	return null;
+}
+
+export function checkActorReplies(ctx: CheckerContext, raw: Node): void {
+	let member = raw;
+	if (member.kind == NodeKind.DecoratedDecl) member = (member.data as DecoratedDeclData).decoratedNode;
+	if (member == null || member.kind != NodeKind.MethodDecl || member.resolvedSym == null) return;
+	const d = member.data as MethodDeclData;
+	if (d.methodIsStatic || d.methodVisibility == "private" || d.methodName.startsWith("#") || d.methodBody == null || isGenericFn(d.methodFlags)) return;
+	const results: Node[] = [];
+	collectResults(d.methodBody, results);
+	const here = ctx.currentFunction;
+	ctx.currentFunction = member.resolvedSym;
+	for (const r of results) {
+		const shared = sharedReplyPart(ctx, r, r);
+		if (shared == null) continue;
+		const name = describeExpr(shared);
+		addError(ctx, `actor method '${d.methodName}' replies with ${name == "an expression" ? "a value" : "'" + name + "'"}, which this actor still reaches; a reply crosses to the caller's thread, so it must be a copy (a number, string or plain struct), a fresh value nothing in the actor keeps (a literal, \`new\`, or a local built for the reply), or an Arc<T> — build a copy of what the caller needs, or keep the shared value in an Arc<T>`,
+			shared.location.line, shared.location.column);
+	}
+	ctx.currentFunction = here;
 }
 
 export function checkArcPointeeSendable(ctx: CheckerContext, pointee: Type, declaresHook: (owner: Type) => boolean, line: int32, column: int32): void {
