@@ -95,6 +95,7 @@ import "./moduleParsedOnce";
 import "./comptimeStatement";
 import "./comptimeValues";
 import "./declarationBoundaries";
+import "./declarationIdentity";
 import "./declaredSubscript";
 import "./rangeSliceSource";
 import "./staticClassTypeParam";
