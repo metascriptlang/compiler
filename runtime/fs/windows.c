@@ -137,7 +137,7 @@ msString msFsReadDirEntries(msString path) {
 		     (fd.cFileName[1] == L'.' && fd.cFileName[2] == L'\0'))) {
 			continue;
 		}
-		int nlen = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, fd.cFileName, -1, NULL, 0, NULL, NULL) - 1;
+		int nlen = WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, NULL, 0, NULL, NULL) - 1;
 		if (nlen < 0) { free(buf); FindClose(h); _msFsLastErrno = EINVAL; return MS_EMPTY_STRING; }
 		int isDir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
 		/* Resize buffer if needed: name + optional "/" + "\n" */
@@ -148,7 +148,7 @@ msString msFsReadDirEntries(msString path) {
 			buf = nb;
 			cap = newCap;
 		}
-		WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, fd.cFileName, -1, buf + len, nlen + 1, NULL, NULL);
+		WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, buf + len, nlen + 1, NULL, NULL);
 		len += (size_t)nlen;
 		if (isDir) buf[len++] = '/';
 		buf[len++] = '\n';
