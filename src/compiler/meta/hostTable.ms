@@ -1138,7 +1138,7 @@ function _bridgeMsStringByteAt(args: RaiserValue[]): RaiserValue {
 	return boxInt(unboxString(args[0]).byteAt(unboxInt(args[1]) as int32));
 }
 
-function _bridgeMsStringHashFarm(args: RaiserValue[]): RaiserValue {
+function _bridgeStdHashFarm(args: RaiserValue[]): RaiserValue {
 	return raiserInt(hashFarm(unboxString(args[0])));
 }
 
@@ -1409,7 +1409,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msStringReplaceAll",    _bridgeMsStringReplaceAll, HostCapability.Pure);
 	registerHostFn("msStringByteLength",    _bridgeMsStringByteLength, HostCapability.Pure);
 	registerHostFn("msStringByteAt",        _bridgeMsStringByteAt, HostCapability.Pure);
-	registerHostFn("msStringHashFarm",      _bridgeMsStringHashFarm, HostCapability.Pure);
+	registerHostFn("std/core/struct.hashFarm", _bridgeStdHashFarm, HostCapability.Pure);
 	registerHostFn("msStringByteSlice",     _bridgeMsStringByteSlice, HostCapability.Pure);
 	registerHostFn("msStringByteIndexOf",   _bridgeMsStringByteIndexOf, HostCapability.Pure);
 	registerHostFn("msStringByteLastIndexOf", _bridgeMsStringByteLastIndexOf, HostCapability.Pure);

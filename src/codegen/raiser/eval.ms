@@ -1274,6 +1274,15 @@ test "engine: a little-endian load past the end of the view is an index error" {
 	assert ctx.error != "";
 }
 
+test "engine: hashFarm runs on the host bridge, not as a VM body" {
+	const h = compiledFunc("function h(s: string): int64 { return hashFarm(s); } console.log(`${h('abc')}`);", "h");
+	assert disasmFunc(h).includes("CallHost"), disasmFunc(h);
+	const long = "é0123456789abcdefghijklmnopqrstuvwxyzé0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZé";
+	const ctx = evalOrcVM(`console.log(\`\${hashFarm('abc')} \${hashFarm('${long}')}\`);`);
+	assert ctx.error == "", ctx.error;
+	assert ctx.output == `${hashFarm("abc")} ${hashFarm(long)}\n`, ctx.output;
+}
+
 test "orc: correct result + no error on object program" {
 	const vm = evalOrcVM("function mk(): { x: number } { return { x: 7 }; } const o = mk(); return o.x;");
 	assert vm.error == "";
