@@ -11,8 +11,10 @@
 18	_msSpawnWorkerSettle
 2	_msActorJobAbandon
 2	_msActorJobTick
+2	_msAdoptOrphanRoots
 2	_msDrainUntilIdle
-2	_msOrcCollect
+2	_msMsgOrphansTake
+2	_msMsgPoolsThreadTeardown
 2	_msPoolRunQueued
 2	_msPoolShutdown
 29	_main__SsrcZtestZcorpusZprogramsZ40545locked83hared67ounterOms_u0
