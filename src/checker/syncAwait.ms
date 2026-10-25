@@ -4,7 +4,7 @@ import { CheckerContext, addError } from "./context";
 import { isAsyncFunctionNode, isSpawnCall, isFunctionLike } from "./freestanding";
 import { lex } from "../lexer/lexer";
 import { parseProgram } from "../parser/statements/core";
-import { createState } from "../parser/context";
+import { createState } from "../parser/cursor";
 
 export const JS_SYNC_AWAIT_MSG: string = "await in a function that is not async: the JS backend has no blocking wait, so every caller of this function would receive a Promise — declare it async and await its calls, or move this code to the module top level";
 

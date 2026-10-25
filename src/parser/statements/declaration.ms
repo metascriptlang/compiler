@@ -3,7 +3,8 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, ExternKind, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, MacroInvocationData, InterfaceDeclData, FunctionDeclData, ClassDeclData, ImportDeclData, ExportDeclData, EnumDeclData, DestructuringDeclData, ObjectPatternData, ObjectPatternPropData, ArrayPatternData, PropertyDeclData, DecoratedDeclData, NumberLiteralData, UnaryExprData } from "../../ast/node";
-import { takePendingComments, ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, collectTokenText, stampEnd } from "../context";
+import { takePendingComments, ParserState, current, advance, isAtEnd, peek, consumeSemicolon, skipBalanced, collectTokenText, stampEnd } from "../cursor";
+import { skipGenericParams, captureGenericParams } from "../generics";
 import { splitTopLevel, optionalizeTypeString } from "../../utils/string";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, getLastParamPatterns, prependParamPatterns, isIdentLike, isPropertyName } from "../util";

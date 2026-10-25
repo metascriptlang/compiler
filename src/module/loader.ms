@@ -23,7 +23,8 @@ import {
 	createDefaultConfig,
 } from "./resolver";
 import { lex } from "../lexer/lexer";
-import { createState, getParserDefines, setParserDefines } from "../parser/context";
+import { getParserDefines, setParserDefines } from "../parser/context";
+import { createState } from "../parser/cursor";
 import { definedValue, createDefineTable, initDefines } from "../compiler/defines";
 import { callStateProgramParser } from "../parser/statements/callbacks";
 import "../parser/statements/core";
