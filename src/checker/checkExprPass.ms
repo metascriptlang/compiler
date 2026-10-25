@@ -3555,6 +3555,11 @@ function checkIdentifier(ctx: CheckerContext, node: Node, expectedType: Type | n
 		addError(ctx, "a static initializer cannot read the " + what + " '" + d.name + "' — a class declared in a function body initializes its statics once, before any call runs", node.location.line, node.location.column);
 		node.nodeType = errorType(); return;
 	}
+	if (ctx.hookBodyBoundary != null && isFrameValue(sym) && isCapturedAcross(ctx.table, d.name, sym, ctx.hookBodyBoundary)) {
+		const what = sym.symbolKind == SymbolKind.Parameter ? "parameter" : "enclosing local";
+		addError(ctx, "a lifecycle hook cannot read the " + what + " '" + d.name + "' — it runs wherever a value of its type is destroyed, copied or moved, outside the call that declares it", node.location.line, node.location.column);
+		node.nodeType = errorType(); return;
+	}
 	const crossed = isFrameValue(sym) ? crossesFunction(ctx, d.name, sym) : null;
 	if (crossed != null && crossed) recordCapture(ctx, sym);
 	if (crossed != null && capturesView(ctx, sym, crossed)) {

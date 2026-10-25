@@ -1447,6 +1447,7 @@ export class CheckerContext {
 	capturedSyms: HashSet<Symbol>;
 	identifierMoves: Node[];
 	staticInitBoundary: Cursor<Scope>;
+	hookBodyBoundary: Cursor<Scope>;
 	pendingSpawnThunk: boolean;
 	awaitedCall: Node | null;  // the call an await expression is checking as its operand
 	awaitedPayload: Type | null; // the payload type the awaited overload call's signature returns, set by the call for the await to read
@@ -1553,6 +1554,7 @@ export function createContext(): CheckerContext {
 		capturedSyms: new HashSet<Symbol>(),
 		identifierMoves: [],
 		staticInitBoundary: null as unknown as Cursor<Scope>,
+		hookBodyBoundary: null as unknown as Cursor<Scope>,
 		pendingSpawnThunk: false,
 		awaitedCall: null,
 		awaitedPayload: null,
