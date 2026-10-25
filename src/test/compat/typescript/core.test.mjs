@@ -208,6 +208,41 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   });
 }
 
+for (const mode of ['timeout', 'output-limit']) {
+  test(`nested ${mode} cancellation reaps the inner subject`, async t => {
+    const root = scratch(t);
+    const pidFile = join(root, 'subject.pid');
+    const inner = `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`;
+    const script = `import { runCommand } from ${JSON.stringify(new URL('./core.mjs', import.meta.url).href)};
+      import { existsSync } from 'node:fs'; import { setTimeout as delay } from 'node:timers/promises';
+      const task = runCommand(process.execPath, ['-e', ${JSON.stringify(inner)}], { timeout: 10000 });
+      while (!existsSync(${JSON.stringify(pidFile)})) await delay(5);
+      ${mode === 'output-limit' ? 'console.log("x".repeat(100000));' : ''}
+      await task;`;
+    let pid;
+    t.after(() => {
+      if (pid) {
+        try { process.kill(-pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+      }
+    });
+    const result = await runCommand(process.execPath, ['--input-type=module', '-e', script],
+      mode === 'timeout' ? { timeout: 500 } : { timeout: 5000, maxBuffer: 100 });
+    assert.equal(result.status, mode);
+    assert.ok(existsSync(pidFile), 'inner subject did not start');
+    pid = Number(readFileSync(pidFile, 'utf8'));
+    assert.throws(() => process.kill(pid, 0), error => error.code === 'ESRCH');
+  });
+}
+
+test('a subject ignoring SIGTERM is killed after bounded cleanup grace', async () => {
+  const code = 'process.on("SIGTERM", () => {}); console.log("armed"); setInterval(() => {}, 1000);';
+  const result = await runCommand(process.execPath, ['-e', code], { timeout: 1000 });
+  assert.match(result.stdout, /armed/);
+  assert.equal(result.status, 'timeout');
+  assert.equal(result.signal, 'SIGKILL');
+  assert.ok(result.milliseconds < 5000);
+});
+
 test('output overflow is named, not silently truncated into a success', async () => {
   const result = await runCommand(process.execPath, ['-e', 'console.log("x".repeat(100000))'], { maxBuffer: 100 });
   assert.equal(result.status, 'output-limit');

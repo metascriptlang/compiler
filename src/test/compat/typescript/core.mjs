@@ -61,18 +61,22 @@ export function ambientProjectConfig(entry, cwd) {
 const activeChildren = new Map();
 let cancelled;
 
-function killGroup(pid) {
+const TERMINATION_GRACE_MS = 500;
+
+function terminateGroup(pid, force = false) {
   const state = activeChildren.get(pid);
-  if (!state || state.killed) return;
-  try { process.kill(-pid, 'SIGKILL'); }
-  catch (error) { if (error.code !== 'ESRCH') throw error; }
-  state.killed = true;
+  const signal = force ? 'SIGKILL' : 'SIGTERM';
+  if (!state || state.signal === 'SIGKILL' || state.signal === signal) return;
+  state.signal = signal;
+  try { process.kill(-pid, signal); }
+  catch (error) { if (error.code !== 'ESRCH') throw error; return; }
+  if (!force) state.escalation = setTimeout(() => terminateGroup(pid, true), TERMINATION_GRACE_MS);
 }
 
 for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
   process.on(signal, () => {
     cancelled = code;
-    for (const pid of activeChildren.keys()) killGroup(pid);
+    for (const pid of activeChildren.keys()) terminateGroup(pid);
     if (activeChildren.size === 0) process.exit(code);
   });
 }
@@ -86,24 +90,25 @@ export function runCommand(command, args, options = {}) {
       ...spawnOptions, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0', ...options.env },
     });
-    if (child.pid) activeChildren.set(child.pid, { killed: false });
+    if (child.pid) activeChildren.set(child.pid, {});
     const buffers = { stdout: [], stderr: [] };
     let bytes = 0;
     let status;
     let failure;
-    const timer = setTimeout(() => { status ??= 'timeout'; killGroup(child.pid); }, timeout);
+    const timer = setTimeout(() => { status ??= 'timeout'; terminateGroup(child.pid); }, timeout);
     for (const stream of ['stdout', 'stderr']) {
       child[stream].on('data', chunk => {
         const remaining = Math.max(0, maxBuffer - bytes);
         buffers[stream].push(chunk.subarray(0, remaining));
         bytes += chunk.length;
-        if (bytes > maxBuffer) { status ??= 'output-limit'; killGroup(child.pid); }
+        if (bytes > maxBuffer) { status ??= 'output-limit'; terminateGroup(child.pid); }
       });
     }
     child.on('error', error => { failure = error; });
-    child.on('exit', () => killGroup(child.pid));
+    child.on('exit', () => terminateGroup(child.pid));
     child.on('close', (exit, signal) => {
       clearTimeout(timer);
+      clearTimeout(activeChildren.get(child.pid)?.escalation);
       activeChildren.delete(child.pid);
       if (cancelled && activeChildren.size === 0) process.exit(cancelled);
       resolveResult({
