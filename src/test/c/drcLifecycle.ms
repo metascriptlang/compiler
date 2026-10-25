@@ -332,7 +332,7 @@ test "E2E C: a narrowed captured local returned through an identity assertion is
 		}
 	`);
 	assert c.ok;
-	assert c.value.contains(").got1.value)));");
+	assert c.value.contains(").got0.value)));");
 	assert !c.value.contains("*__result = (*_env");
 }
 

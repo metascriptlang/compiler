@@ -38,7 +38,7 @@ function emitted(source: string, danger: boolean): string {
 function indexKept(c: string, ranPass: boolean): string {
 	if (c.startsWith("error:")) return c.slice(0, 400);
 	if (c.includes("dollarptr_pc")) return "pc was carried as a pointer";
-	if (!c.includes("pc_1_ = 0LL") && !c.includes(").pc1")) return "pc is no longer an integer local";
+	if (!c.includes("pc_1_ = 0LL") && !c.includes(").pc0")) return "pc is no longer an integer local";
 	if (ranPass && !c.includes("dollarptr_sp_")) return "the pass left the whole function alone, so the bail proves nothing";
 	if (!ranPass && c.includes("dollarptr_")) return "a checked build was rewritten";
 	return "";
