@@ -168,10 +168,14 @@ function lowerWordSetOp(node: Node, name: string, recv: Node, other: Node, repr:
 
 function wordCount(repr: Type): int32 { return repr.typeValue; }
 
+function readAgain(operand: Node): Node {
+	const copy = cloneIfPure(operand);
+	if (copy == null) throw new Error(`internal: a ${operand.kind.toString()} BitSet operand over 64 members reached its per-word read without being hoisted`);
+	return copy;
+}
+
 function wordAtIndex(recv: Node, index: Node, loc: SourceLocation): Node {
-	const r = cloneIfPure(recv);
-	if (r == null) return null as unknown as Node;
-	const access = makeArrayAccess(r, index, loc);
+	const access = makeArrayAccess(readAgain(recv), index, loc);
 	access.nodeType = byteType();
 	return access;
 }
@@ -181,15 +185,11 @@ function wordAt(recv: Node, i: int32, loc: SourceLocation): Node {
 }
 
 function memberWordIndex(member: Node, loc: SourceLocation): Node {
-	const m = cloneIfPure(member);
-	if (m == null) return null as unknown as Node;
-	return typedBinary(m, ">>", typedNumber(3, int32Type(), loc), int32Type(), loc);
+	return typedBinary(readAgain(member), ">>", typedNumber(3, int32Type(), loc), int32Type(), loc);
 }
 
 function memberBitInWord(member: Node, loc: SourceLocation): Node {
-	const m = cloneIfPure(member);
-	if (m == null) return null as unknown as Node;
-	const offset = typedBinary(m, "&", typedNumber(7, int32Type(), loc), int32Type(), loc);
+	const offset = typedBinary(readAgain(member), "&", typedNumber(7, int32Type(), loc), int32Type(), loc);
 	return typedBinary(typedNumber(1, byteType(), loc), "<<", offset, byteType(), loc);
 }
 
