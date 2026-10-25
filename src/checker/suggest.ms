@@ -267,41 +267,6 @@ export function sgQueryBySym(ctx: CheckerContext, targetSym: Symbol | null): SgS
 	return result;
 }
 
-// Cross-module fallback: match by (name, modulePath) when sym pointers differ across checker contexts.
-export function sgQueryByName(ctx: CheckerContext, name: string, modulePath: string): SgSymbolRef[] {
-	const result: SgSymbolRef[] = [];
-	if (ctx.symRecords == null) return result;
-	const records = sortedRecords(ctx);
-	let i = 0;
-	while (i < records.length) {
-		const rec = records[i];
-		if (rec.name == name) {
-			if (modulePath == "" || rec.sym == null || rec.sym.modulePath == null || rec.sym.modulePath == "" || rec.sym.modulePath == modulePath) {
-				result.push({ name: rec.name, line: rec.line, col: rec.col, nameLen: rec.colEnd - rec.col, isDecl: rec.isDecl });
-			}
-		}
-		i = i + 1;
-	}
-	return result;
-}
-
-// Strict cross-module match: name AND defining module must match exactly.
-// Two-pass: fast text match + precise semantic confirmation.
-export function sgQueryByDefiningModule(ctx: CheckerContext, name: string, defModule: string): SgSymbolRef[] {
-	const result: SgSymbolRef[] = [];
-	if (ctx.symRecords == null) return result;
-	const records = sortedRecords(ctx);
-	let i = 0;
-	while (i < records.length) {
-		const rec = records[i];
-		if (rec.name == name && rec.sym != null && rec.sym.modulePath != null && rec.sym.modulePath == defModule) {
-			result.push({ name: rec.name, line: rec.line, col: rec.col, nameLen: rec.colEnd - rec.col, isDecl: rec.isDecl });
-		}
-		i = i + 1;
-	}
-	return result;
-}
-
 // ===== sgTypeToString — full recursive type formatting =====
 
 export function sgTypeToString(t: Type | null): string {

@@ -28,11 +28,11 @@ import {
 } from "../../../checker/suggest";
 import { CheckerContext } from "../../../checker/context";
 import { lookupSymbol } from "../../../checker/symbol";
-import { makeLoc, Symbol, SymbolKind, CallExprData, MemberExprData, NodeKind, Type, TypeKind, ImportDeclData, ExportDeclData, ProgramData } from "../../../ast/node";
+import { Symbol, SymbolKind, CallExprData, MemberExprData, NodeKind, Type, TypeKind, ImportDeclData, ExportDeclData, ProgramData } from "../../../ast/node";
 import {
 	lspExtractPosition, lspDocumentUri, dbGetSource, lspEnsureFileLoaded, lspHasBuiltinDoc,
 } from "./shared";
-import { LineIndex, lineOffset } from "../../../utils/sourceLines";
+import { LineIndex } from "../../../utils/sourceLines";
 import { lspCharacterIn } from "../position";
 
 // ===== Hover =====
@@ -405,26 +405,24 @@ function buildFileEditsOfImport(ctx: CheckerContext, sym: Symbol | null, name: s
 function renameImportAlias(db: TransAmDb, path: string, ctx: CheckerContext, sym: Symbol, alias: string, newName: string, source: string): string | null {
 	const program = dbParse(db, path);
 	if (program == null) return null;
-	const refs: SgSymbolRef[] = [];
-	let specifierAt = makeLoc(0, 0);
+	const symRefs = sgQueryBySym(ctx, sym);
+	let specifierFound = false;
 	for (const stmt of (program.data as ProgramData).programStmts) {
 		const decl = stmt.kind == NodeKind.ExportDecl ? (stmt.data as ExportDeclData).exportedDecl : stmt;
 		if (decl.kind != NodeKind.ImportDecl) continue;
 		const imp = decl.data as ImportDeclData;
-		for (let i = 0; i < imp.importNames.length && i < imp.nameLocations.length; i += 1) {
-			if (imp.importAliases[i] != alias || imp.importNames[i] != sym.name) continue;
-			const at = imp.nameLocations[i];
-			const nameOffset = lineOffset(source, at.line) + at.column - 1;
-			const asOffset = source.byteIndexOf("as", nameOffset + imp.importNames[i].byteLength);
-			const aliasOffset = asOffset < 0 ? -1 : source.byteIndexOf(alias, asOffset + 2);
-			if (aliasOffset < 0 || source.slice(nameOffset, aliasOffset).indexOf("\n", 0) >= 0) return null;
-			specifierAt = at;
-			refs.push({ name: alias, line: at.line, col: at.column + aliasOffset - nameOffset, nameLen: alias.byteLength, isDecl: false });
+		for (let i = 0; i < imp.importAliases.length && i < imp.aliasLocations.length; i += 1) {
+			if (imp.importAliases[i] != alias) continue;
+			const at = imp.aliasLocations[i];
+			for (const ref of symRefs) {
+				if (ref.line == at.line && ref.col == at.column && ref.name == alias) specifierFound = true;
+			}
 		}
 	}
-	if (specifierAt.line == 0) return null;
-	for (const ref of sgQueryBySym(ctx, sym)) {
-		if (ref.name == alias && !(ref.line == specifierAt.line && ref.col == specifierAt.column)) refs.push(ref);
+	if (!specifierFound) return null;
+	const refs: SgSymbolRef[] = [];
+	for (const ref of symRefs) {
+		if (ref.name == alias) refs.push(ref);
 	}
 	return buildTextEdits(refs, newName, source);
 }
