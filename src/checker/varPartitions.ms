@@ -1892,8 +1892,9 @@ function refuseWorkerWrites(parent: BorrowUnit, l: Lend): void {
 }
 
 function checkUnit(ctx: CheckerContext, body: Node | null): void {
-	if (body == null || (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program)) return;
+	if (body == null) return;
 	if (spawnsIn(body)) refuseBorrowingHandleEscapes(ctx, body);
+	if (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program) return;
 	const pointers: Symbol[] = [];
 	collectPointers(body, pointers);
 	if (pointers.length == 0 && !declaresView(body, new TypeVisitSet()) && !spawnsIn(body)) return;

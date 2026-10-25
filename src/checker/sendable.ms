@@ -559,6 +559,11 @@ function checkHandleFrame(f: HandleFrame, body: Node): void {
 	let grew = true;
 	while (grew) grew = spreadHolders(f);
 	walkHandleUses(f, body);
+	if (body.kind != NodeKind.BlockStmt && body.kind != NodeKind.Program) refuseReturnedHandle(f, body);
+}
+
+function refuseReturnedHandle(f: HandleFrame, value: Node | null): void {
+	if (f.returnsLeave && carriesHandle(f, value)) refuseHandleEscape(f.ctx, value!, "returning it");
 }
 
 function isNestedRoutine(n: Node): boolean {
@@ -856,10 +861,7 @@ function walkHandleUses(f: HandleFrame, node: Node | null): void {
 			const init = (node.data as VariableDeclData).initializer;
 			if (node.resolvedSym != null && !f.locals.includes(node.resolvedSym!) && carriesHandle(f, init)) refuseHandleEscape(f.ctx, init!, "storing it in '" + (node.data as VariableDeclData).declName + "'");
 		},
-		NodeKind.ReturnStmt => {
-			const arg = (node.data as ReturnStmtData).argument;
-			if (f.returnsLeave && carriesHandle(f, arg)) refuseHandleEscape(f.ctx, arg!, "returning it");
-		},
+		NodeKind.ReturnStmt => refuseReturnedHandle(f, (node.data as ReturnStmtData).argument),
 		NodeKind.YieldExpr => {
 			const arg = (node.data as YieldExprData).yieldArg;
 			if (carriesHandle(f, arg)) refuseHandleEscape(f.ctx, arg, "yielding it");
