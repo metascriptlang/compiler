@@ -1,18 +1,46 @@
-# MetaScript authoring guideline
+# MetaScript Authoring Standard
 
-Write TypeScript-shaped code with explicit ownership, native layouts and deliberate concurrency.
-MetaScript combines values, non-owning views, ownership transfer, compiler-managed native
-lifetimes and compile-time execution. Choose semantics first; profile representative work with
-`--release`, keeping target, toolchain, flags and inputs identical between variants.
+This is the official, standalone authoring standard for this repository: how to choose data,
+write APIs, organize modules, express failure, manage ownership and cross runtime boundaries.
+It is both a style guide and an authoring handbook; ordinary work needs no second style guide.
+[LANG.md](LANG.md) owns the detailed grammar and language contracts. This document owns preferred
+choices, their reasons, runnable compositions and the limits attached to their checked baselines.
+Project-specific build/release rules remain in the project's instructions, not in this standard.
 
-This is the standalone gold standard for writing MetaScript: everyday syntax, code organization,
-ownership, safety and performance practice in one place. Follow the defaults; use the exceptions
-when their contract is the one your program needs. [LANG.md](LANG.md) remains the authoritative
-detailed language reference, not a prerequisite for ordinary authoring.
+Write TypeScript-shaped code with explicit widths, ownership and deliberate concurrency.
+Choose the contract before the syntax: value or shared identity, borrowed access or an owner,
+recoverable failure or caller misuse, suspension or CPU work. A familiar spelling is not proof
+of identical storage, allocation or host behavior.
 
-Each example is a separate `.ms` module unless related files are named together. Native-only
-behavior is marked. An exported signature or accepted syntax does not certify every target or
-shape: §19 distinguishes checked limits, source-audited facilities and design-only additions.
+### Read the part the task needs
+
+Read relevant sections when authoring or reviewing code, not this entire file at every session
+start. The defaults and review checklist are the common entry points; the longer recipes are
+here so a reader can finish the corresponding task without inventing an API.
+
+| Task | Read |
+|---|---|
+| Ordinary module/API change | Defaults (§1), organization and formatting (§2), then the affected feature section |
+| Data model, identifiers or numeric boundary | Widths/conversions (§3), storage (§5), cases/errors (§8) |
+| Text, byte offsets or binary data | Text index spaces (§4), ownership (§6), untrusted format data (§14) |
+| Buffer, view, move or resource owner | Ownership (§6), collection access (§7); native retention also needs §10 |
+| Async, CPU job or stateful service | Concurrency (§9), including completion and shutdown, not just the submission syntax |
+| Reusable generic or extension | Generics (§11), protocols and caller visibility (§12) |
+| Macro, decorator or JSX DSL | Compile-time phases and complete recipes (§13) |
+| Untrusted input or native/host integration | Validation (§14), ABI (§10), actual target (§16) |
+| Review or performance work | The checklist and measurement discipline (§18); checked limitations and evidence (§19 and below) |
+
+Defaults are preferred choices, not a reason to erase a different explicit requirement. Safety
+obligations still apply when taking an exception: a raw pointer does not excuse a lifetime proof,
+a numeric cast does not replace validation, and removing memory management does not remove cleanup.
+A project can impose narrower conventions, but cannot redefine the language's ownership or ABI.
+
+Examples are separate `.ms` modules unless related files are named together. Native-only contracts
+are marked even when a JS facade produces similar text. Code examples illustrate use; their output
+is not a substitute for assertions in application tests. A declared API or accepted syntax alone
+certifies neither every input nor every target. §19 separates baseline observations from designs.
+When an older observation differs from the current compiler, reproduce the consumer path before
+changing a status claim; do not preserve a historical bug as a permanent authoring prohibition.
 
 Quick navigation:
 
@@ -62,9 +90,18 @@ that surface. Do not make every helper public or create a class just to namespac
 
 Use camelCase for files, variables, fields and functions; PascalCase for types and enum members;
 UPPER_SNAKE_CASE for true module constants. Spell out domain names instead of saving characters.
-Use tabs, semicolons, braces and code lines no wider than 100 columns. Break long fields,
-arguments, imports and parameters one per line with trailing commas; put enum members on separate
-lines. Prefer early guards to deep nesting. Comments explain a non-obvious constraint, not the code.
+Use tabs for indentation, semicolons and braces. Keep code at most 100 display columns wide;
+a tab stop is four columns, not one character. When a construct no longer fits, put one field,
+argument, import or parameter per line with a trailing comma. Enum declarations put one member
+per line with trailing commas even when short. Break a binary expression after its operator;
+start a continued method chain with the dot on the following line. Prefer early guards to deep
+nesting. These are authoring rules, not a claim that every alternative spelling is a parse error.
+
+Use meaningful domain names rather than compressed abbreviations. Keep implementation helpers
+private beside their consumer; an index barrel exposes a deliberate API, not every file. Prefer
+a literal or spread over a constructor that only forwards fields. Introduce a type/helper when
+it gives a real contract a name, not merely to move a line elsewhere. Comments explain a
+non-obvious constraint that the name, type or test cannot express; do not narrate the code.
 
 Annotate exported parameters and returns, callback contracts and data-layout fields. Infer obvious
 locals instead of repeating types; use `void` when there is no result. A small complete module:
@@ -83,9 +120,48 @@ when (!testBuild) {
 }
 ```
 
-Save as `app.ms`: `msc check app.ms`, `msc run app.ms`, `msc test app.ms`.
+### Formatting is part of the API's readability
+
+This complete module shows trailing commas, an operator at the end of a continued line and
+leading dots on a continued method chain. Formatting does not change the value contract:
+
+```ms
+enum Level {
+	First,
+	Second,
+}
+function bounded(
+	value: int32,
+	low: int32,
+	high: int32,
+): int32 {
+	return Math.min(
+		Math.max(value, low),
+		high,
+	);
+}
+const bits = (1 as uint32) |
+	(2 as uint32);
+const text = "a"
+	.repeat(2)
+	.repeat(3);
+console.log(Level.First as int32, Level.Second as int32, bounded(7, 0, 4), bits, text);
+```
+
+C and JS print `0 1 4 3 aaaaaa`. Run `msc fmt` when useful, inspect what it changes and keep
+semantic tests; a formatter result is not a correctness check or proof of idempotence. Avoid
+unrelated whole-file formatting in a behavioral change because it hides the contract being reviewed.
+
+### Program entry, tests and shutdown
+
+Save the `doubled` module above as `app.ms`: `msc check app.ms`, `msc run app.ms`,
+`msc test app.ms`.
 Compiler options precede the file: `msc run --release app.ms`, `msc run --target=js app.ms`.
 Guard a CLI entry with `when (!testBuild)` so testing its module does not start the application.
+A named `main` is an ordinary function: call it explicitly, or keep a short entry at top level.
+Await an async entry so its errors and completion remain visible. Do not finish every host tool
+with `process.exit(main())`: an explicit exit skips pending work, cleanup and orphan rejection
+reporting. Use it only when intentionally bypassing that lifecycle and owning the consequences.
 Keep library imports free of unrelated startup effects. Use `.cms` for native implementations,
 `.jms` for JS implementations, and `.ms` for portable code; native success is not backend parity.
 
@@ -134,9 +210,23 @@ function compatibility and overrides. Destructuring does not waive lifetime or m
 
 Annotate large literals at their declaration. Do integer-domain work as integers, not through a
 floating intermediate; integer `/` truncates toward zero. Validate external values and ranges
-before narrowing or crossing signedness. An explicit `as` expresses a conversion, not proof that
-the value belongs to your domain. Do not rely on build-mode-dependent overflow checks as validation.
+before narrowing or crossing signedness. A negative signed value is not a valid unsigned quantity
+merely because a mixed expression can widen it. An explicit `as` expresses a conversion, not proof
+that the value belongs to your domain. Remainder follows the dividend's sign; do not use `%` as
+positive modular arithmetic without handling negative inputs. Do not rely on debug overflow
+checks, release wrapping or a runtime narrowing check as application validation.
+A floating-to-integer cast truncates toward zero, not to the nearest integer: the checked
+`4.9 as int32` and `-4.9 as int32` give `4` and `-4`. Validate finite/range and domain constraints
+before that cast when the input is external. An enum likewise needs an explicit integer boundary;
+do not perform arithmetic on members as if an ordinal were a general numeric quantity.
 Keep wire formats explicit for large integers: the external consumer may not represent them exactly.
+
+`Math.min`/`Math.max` can keep a shared integer domain: an explicitly uint64 pair does not need a
+floating detour. Mixed integer/floating operands are a different contract. For example, the
+checked `Math.min(7 as uint64, 4 as uint64)` gives integer `4`, while
+`Math.min(7 as int32, 4.5)` gives `4.5`. Clamp with these operations when their common type is
+intentional; validate the low/high bounds too. Do not justify an elaborate guard-only match by
+an unmeasured speed difference.
 
 A type alias names an existing type; it does not change its ownership or separate two ID domains.
 Use `distinct` when mixing those domains must be an error. Convert at explicit boundaries and
@@ -225,6 +315,9 @@ Neither length counts user-perceived graphemes. `char` is an 8-bit byte characte
 code point; hold code points in `int32`.
 `'A'` is a string, not a char literal. String `for..of` visits UTF-8 bytes, not Unicode characters;
 choose an explicit index space rather than using it as a Unicode loop. Supply both slice endpoints.
+For an ASCII byte delimiter, a single-character literal's `.code` gives its compile-time code:
+`"A".code` is `65`, `"\n".code` is `10`. This is not a `.code` member on arbitrary char values,
+a Unicode character iterator, or permission to use a multi-character literal as one character.
 For a read-only string window use `Readonly<Span<char>>`, not writable `Span<char>`. Do not infer
 allocation behavior or native layout from a JS implementation.
 
@@ -247,6 +340,16 @@ A struct is **not automatically stack-only or allocation-free**: strings, Vec bu
 reference fields keep their own storage rules. Copying a struct containing `T[]` does not clone
 that array. Likewise, copying a numeric native handle does not retain the resource.
 
+An accessor that stores or returns a shared array/reference can let aliases bypass the owning
+store's validation and change tracking. Comparing two wrappers afterward cannot reconstruct a
+change when both already point at the modified data. Choose a deliberate owned snapshot, a
+borrow with a valid scope, or mutation through the owning store. Do not blanket-convert every
+field to Vec: owning copies in getters and loops are real semantic work.
+
+Validate an identifier in its owning store. An index plus generation can reject an obsolete slot,
+but does not by itself distinguish equal-looking slots in different stores. Carry or verify owner
+identity at the boundary; a `distinct` wrapper prevents accidental type mixing, not forged IDs.
+
 Add behavior with extensions, not struct-body methods or forwarding constructors:
 
 ```ms
@@ -265,8 +368,18 @@ console.log(b.total());
 
 Plain struct/Vec parameters are read-only through value-owned storage; referenced fields still
 alias. Use `ref p: T` for caller mutation, or `this ref p: T` for a mutating extension.
-Use `function create(this typeof T, ...)` only when construction computes or supplies defaults;
-otherwise use a literal or `{ ...old, changed: value }`.
+Use a static extension (`function create(this typeof T, ...)`) for a public value-type constructor
+or namespace-level operation that computes, acquires owned state or supplies defaults. A private
+setup helper can stay an ordinary function. A constructor that merely forwards fields earns
+neither surface: use a literal or `{ ...old, changed: value }`.
+
+A reader whose natural receiver is a struct should use an instance extension, including a private
+helper. A writer uses an explicit mutable location (`ref`, or `this ref` for a mutating extension).
+Scalar arithmetic with no meaningful receiver stays a free function; do not add a wrapper/class
+just to namespace it. Export and import extension names along with the receiver type.
+A constructor name is not required to be globally unique across unrelated receiver types;
+check resolution through the real importing module rather than inventing unique factory names
+from an old limitation. Same-named source types imported under aliases are a separate case.
 
 Prefer return values (or a tuple) for ordinary outputs. Reserve `out` for deliberate in-place
 filling or a native output slot; assign it on every returning path. `ref` is a parameter mode,
@@ -301,7 +414,10 @@ The override dispatches through a base-typed reference (`7 6`). Do not extrapola
 field order and required storage matter; a method/getter does not fill a function-typed field.
 Neither structural spelling nor a cast manufactures arbitrary width-subtyping or compatible ABI.
 
-An optional `x?: T` stores `T | null`. A readonly field restricts writing that field; it is not
+In supported interface/class property shapes, an optional `x?: T` stores `T | null` and can
+carry omission semantics for a codec. A struct declaration instead writes `x: T | null`
+explicitly; the checked parser refuses the `?` shorthand on a struct field. Optional parameters
+also include a null default (§2). A readonly field restricts writing that field; it is not
 a deep freeze of all referenced data. Private struct fields can reserve construction authority
 to their declaring module; obtain such a value through that module rather than forging a literal,
 a default-filled array or a cast.
@@ -574,6 +690,12 @@ Both traversals print `5`, but their storage/work need not be identical. The sta
 `Iterator.toItems` adapter drains into an array; do not promise streaming/allocation-free
 `for..of` from the generator spelling. Use checked `.next()` consumption when that distinction
 matters. Keep suspension state owned; a borrowed view cannot simply remain valid across a yield.
+
+Keep loops structured; extract a helper when multiple exit levels would obscure the operation.
+Do not replace a counted `for` with a hand-maintained `while` counter. Array helpers belong to
+the actual container and backend, not an assumed JS prototype: do not assume `map`, `filter`,
+`reduce`, sorting or splice semantics from the spelling `T[]`. A direct loop is the clear fallback
+when the helper's supported contract is not established, not a blanket ban on library helpers.
 Do not assume delegation, send/throw/close or a final return payload from another generator API.
 
 ## 8. Express cases and failure, not encodings
@@ -600,6 +722,16 @@ Use enum errors for machine handling, strings for human diagnostics. No useful s
 `Result<void, E>` with `Result.ok(null)`, not a dummy count. A payload can still allocate.
 
 Use `match` instead of enum `if/else` ladders. Keep ordinary preconditions and thresholds as `if`.
+Choose the construct by what the reader must understand, not by using match everywhere:
+
+| Decision | Prefer |
+|---|---|
+| One enum/literal selects a case | A match table with complete coverage |
+| Discrete cases plus a guarded exception | Keep the guard beside its case |
+| Every arm would be `_ when ...` | An if chain or a named helper; there is no useful case table |
+| A precondition that exits early | An if guard |
+| An ordinary binary condition | If/ternary; a meaningful two-variant family can still deserve match |
+
 An enum and its complete dispatch table make the choices visible:
 
 ```ms
@@ -629,11 +761,61 @@ for exceptional failures or foreign APIs that already throw; use `try/catch/fina
 or clean up at that boundary, not to erase an error. Test failures and caller misuse must fail
 loudly. Ordinary absence and yes/no queries remain nullable and boolean, not artificial Results.
 
-Use `BitSet<E>` over an ordinal enum (default `0, 1, ...`, not power-of-two flag values).
-Query `.has`, keep the result of `.incl`/`.excl`. Empty is `0 as BitSet<Mode>`, not a cast of
-one enum member. Format enum/set text with `.toString()`; set iteration/stringification may
-allocate. For optional data, write `T | null` and narrow with `if (x !== null)`; never disguise
-an empty value as a valid `T` with a double cast.
+### Enum membership is not an integer flag field
+
+Use `BitSet<E>` instead of an integer mask when the meaning is membership in a named enum.
+Members are ordinal (`0, 1, ...`), not hand-numbered powers of two. A member's ordinal and a
+one-member bit mask are different values: do not write `Feature.Write as BitSet<Feature>`.
+Start from empty and include it. A bare member is not a standalone set literal.
+
+```ms
+enum Feature {
+	Read,
+	Write,
+	Trace,
+}
+const empty = 0 as BitSet<Feature>;
+const active = empty.incl(Feature.Read).incl(Feature.Write);
+const next = active.excl(Feature.Read).incl(Feature.Trace);
+console.log(active.has(Feature.Read), active.size(), empty.isEmpty());
+console.log(active.intersection(next).toString());
+console.log(active.difference(next).toString());
+console.log(active.union(next).toString());
+console.log(active.symmetricDifference(next).toString());
+console.log(active.isSubsetOf(active.union(next)), active.isDisjointFrom(empty));
+let mask = empty;
+mask |= Feature.Write;
+console.log(mask.toString(), active == empty);
+for (const feature of active) { console.log(feature.toString()); }
+const decoded = (3 as uint8) as BitSet<Feature>;
+console.log(decoded.has(Feature.Read), decoded.has(Feature.Write));
+```
+
+The methods return a new set or a query result; `next` does not mutate `active`. Intersection is
+`{Write}`, difference `{Read}`, union `{Read, Write, Trace}` and symmetric difference
+`{Read, Trace}`. Iteration visits `Read` then `Write`; it is ordinal, not insertion order.
+Use `.has` for membership, `.isSubsetOf`/`.isSupersetOf` for containment and `.isDisjointFrom`
+for disjointness. Equality compares sets of the same enum, not a set against one member.
+
+`|`, `&` and `^` express union, intersection and symmetric difference; retain the assigned result.
+Use `.excl`/`.difference` instead of treating a set or member as an arbitrary integer to complement.
+Its native representation depends on the enum's size: do not assume every set is a uint32 or
+uint64 ABI field. At a raw mask boundary choose the actual storage width and validate unknown bits
+before constructing the set; the small checked example intentionally uses uint8 for three members.
+Packed wire/native layouts may instead store an explicit integer and expose a validated typed view.
+The same applies to an enum field: a small ordinal does not itself promise uint8 ABI storage.
+Choose the layout's actual integer width, validate which ordinals are allowed and then convert
+at the domain boundary; neither a cast nor a familiar TS enum spelling proves the external layout.
+
+Format enum/set text explicitly with `.toString()`, including logging and wire adapters. Do not
+assume `String(value)`, a template and a debug console call share the same custom dispatch.
+Iteration and stringification can materialize arrays/strings, so their convenient spelling is
+not an allocation-free or on-chain recipe. Native custom hashing is not JS custom-key parity (§12).
+
+### Absence and variants
+
+For optional data, write `T | null` and narrow with `if (x !== null)`; never disguise an empty
+value as a valid `T` with a double cast.
 
 Optional chaining/nullish fallback handle expected absence; they are not input validation.
 Prefer a real checked branch over a non-null assertion when absence is an error.
@@ -907,6 +1089,13 @@ APIs in checked `Result` APIs at the application boundary.
 | Callback plus context pointer | Keep callback code and context valid until C unregisters/releases them. Capturing closures are not universal C function pointers. |
 | `Handle<T>` | Explicit managed retention: `retain` adds a count, `borrow` does not; `at` reconstructs a wrapper, `value` reads it, `take` consumes the hand-off. Copying the wrapper does not retain. |
 
+Header pointer parameters describe the C call's actual pointer, pointee and mutability contract.
+An address coercion accepted for that call is not a general address-of expression and does not
+make a temporary safe to retain. A scalar-pointer argument also does not prove that the following
+bytes are a contiguous array. For pointer/count consumers, test multiple elements through the real
+binding, including a slice and empty input; do not take element zero merely to manufacture an
+address for an empty sequence. Readonly and writable pointees are different contracts.
+
 Balance handle counts manually; do not release again after ownership-taking `take`. Never let C
 retain a temporary cstring, stack address, span or unretained object. Use real writable storage
 for C output and convert back under its length/terminator contract, not a managed-string cast.
@@ -1094,6 +1283,30 @@ compound writes and chained writes do not all have ordinary field semantics. Nat
 extensions do not make JS's separate collections custom-hash collections. Check the actual key
 contract before claiming cross-backend value-key parity.
 
+### Formatting is a protocol, not a cast
+
+Keep formatting explicit where it becomes a user-visible or wire contract. This struct extension
+is used by an explicit call, concatenation, interpolation and append:
+
+```ms
+struct Point { x: int32; }
+function toString(this point: Point): string { return `point:${point.x}`; }
+const point: Point = { x: 3 };
+console.log(point.toString());
+console.log(`at ${point}`, "at " + point);
+let text = "at ";
+text += point;
+console.log(text);
+```
+
+C and JS print `point:3`, `at point:3 at point:3`, then `at point:3`. A separate checked
+`String(point)` call also prints `point:3` on this baseline; an older blanket prohibition is
+not a current language rule. This one receiver does not certify every class, enum, debug console
+or overload combination. Prefer `.toString()` when the exact formatting operation is part of
+the API. A debug dump is not a wire format; a formatting method is not a parser or validator.
+
+### Dynamic fields and one-step conversions
+
 ```ms
 interface Store { id: int32; fields: Map<string, int32>; }
 export function getDynamicField(this store: Store, key: string): int32 {
@@ -1177,7 +1390,11 @@ function category<T>(value: T): string {
 console.log(category(7), category("text"));
 ```
 
-Use `when (c)` / `when (js)` or target flags to gate target-specific declarations. Untaken branches
+Use `when (c)` / `when (js)` or target flags to gate target-specific declarations. `debug` and
+`testBuild` select their corresponding build contexts; OS/host flags describe the chosen target,
+not a runtime test. Supply a custom flag through `-d:canonicalExample` or `build.ms` `defines`;
+for example, `msc run -d:canonicalExample app.ms` selects `when (canonicalExample)`.
+Untaken branches
 are not type-checked; unknown flags are false, so check spelling. Comptime function arguments must
 be compile-time values. Compile-time I/O is a build input, not free runtime work. Macros use
 `macro`/`quote` for AST generation and are invoked as ordinary bare calls; keep generation local,
@@ -1422,7 +1639,9 @@ Decode into a representation wide enough for validation, then narrow into the do
 Decoding directly into a narrow field can fail or lose information before your domain check runs.
 Validate lengths before indexing, arithmetic ranges before narrowing, IDs against their owning
 store, and a C API's status before reading its output. Static types do not authenticate a peer,
-retain a native object, or prove that a buffer is still alive. A failed invariant names the case;
+retain a native object, or prove that a buffer is still alive. Check both the successful payload
+and every refusal at the actual input boundary; logging an error and then returning success does
+not make an invalid value safe. A failed invariant names the case;
 it does not silently default, clamp untrusted data or return a partly initialized success value.
 
 ### Serialization is a format contract, not an assertion
@@ -1436,7 +1655,18 @@ field. Enums encode by member name in the checked example. Typed decode can norm
 nullable field to null: the checked required `nul: string | null` accepted explicit null and an
 absent key. Validate presence explicitly when it matters; a nullable result slot does not prove it.
 Wide unsigned/bigint values need an exact chosen wire representation, not an assumed lossless
-passage through a floating-point JSON number.
+passage through a floating-point JSON number. In particular, the checked uint64 value `2^63`
+is refused by typed stringify's signed-range conversion in C/JS debug; native `--danger` instead
+emits `-9223372036854775808`, while JS still refuses it. Do not use that codec path as a lossless
+full-uint64 encoder. Agree on an explicit representation with the consumer; debug refusal alone
+is not a release-mode validation guarantee. A string wire field filled with `n.toString()` emits
+`{"n":"9223372036854775808"}` on both checked targets, preserving this value. That is an explicit
+wire-contract choice requiring consumer agreement, not an automatic codec repair.
+
+The checked enum/nullable interface round trip emits `{"mode":"Write","nul":null}` on C/JS,
+omits a null optional field, and decodes the enum back to its matching member. A direct
+`JSON.parse<int32[]>("[1,2]")` is refused because this typed entry expects a struct/interface;
+use an appropriate tree/schema consumer instead of assuming every top-level shape is supported.
 
 | Surface | Contract |
 |---|---|
@@ -1640,10 +1870,17 @@ none is an arbitrary runtime cast or a universal dynamic object model.
 ### Imports and packages
 
 Named imports/re-exports keep APIs explicit. Namespace imports group an API; aliases resolve name
-clashes; side-effect imports request initialization. Type-only use carries declarations for
-checking, not value initialization; default exports and `import type` are supported. Imported
-bindings/namespaces are not writable copies. Cycles do not authorize reading a value
-before initialization. Prefer extensionless imports; target variants include `.cms`, `.jms`,
+clashes; side-effect imports request initialization. Prefer named library exports. `import type`
+carries declarations for checking, not value initialization: the checked consumer prints `7`
+without running its type provider's top-level initializer. Imported bindings/namespaces are not
+writable copies.
+
+Do not infer ordinary default-import support from a configuration file's `export default`.
+The checked `import value from "./defaultLib"` is refused at parse time; named/namespace lookup
+also found no `default` value from the checked `export default 7`. The `build.ms` loader contract
+below is separate. Use an explicit named API rather than assuming TS module forms are universal.
+
+Cycles do not authorize reading a value before initialization. Prefer extensionless imports; target variants include `.cms`, `.jms`,
 `.rms`, `.wms` over the portable `.ms`, with target-specific resolution rules.
 
 Dynamic `import()` takes a statically resolvable literal path and returns a promise of the module
@@ -1716,6 +1953,23 @@ unreviewed code; macros/plugins/build actions are trusted-code boundaries.
 | Cross-compilation / mobile / UI hosts | Actual SDK, ABI, libraries and host lifecycle; a target name is not app certification. |
 | Erlang | Postponed, not an alternative supported recipe. |
 
+### Allocation-constrained and manually hosted code
+
+For an allocation-constrained entry, start with scalars in/out, value structs, fixed inline
+storage and deliberate output slots. The owner determines allocation, not the fact that the
+API accepts a Span or returns a Result. Vecs, shared arrays, classes, dynamic strings, generator
+adapters, codecs and some set operations can acquire storage; a linkable build does not prove
+that the host supplies a safe allocator or that an operation fits a chain's compute budget.
+
+Check module state and initialization against the actual host: a scalar constant, an aggregate
+initializer and mutable global state are different requests. Do not turn an old target-specific
+compile error into a permanent language rule, or work around it by silently changing ownership.
+A freestanding build flag does not make I/O, native worker threads or runtime callbacks available.
+Require the real host consumer for claims about account layout, deterministic execution, resource
+budgets, allocation or shutdown; the ordinary C and JS examples here certify none of those.
+
+### Reload and long-lived host resources
+
 For HCR, `reload`/`lastReload`/`step` and `@beforeReload`/`@afterReload` delimit application work;
 quiesce external callbacks/jobs or keep their resources under stable host ownership. Without HCR,
 `step` invokes its body and reload reports NoChange. These are source-audited boundaries, not a
@@ -1769,16 +2023,62 @@ from hot loops; change the data layout only when measurement supports it. Never 
 validation or resource lifetime for an assumed speedup. Scope performance claims to the measured
 host, target, build and workload. Use the project's release checks when publishing a release.
 
-Before considering a module finished:
+### Review checklist
 
-- Its API makes value ownership, sharing, mutation, absence and errors deliberate.
-- Its data widths, text offsets and wire/native layouts match the consumer's contract.
-- Views cannot outlive or invalidate their owners; native retention/cleanup is balanced.
-- CPU jobs are submitted before joining; actor and lock rules remain valid on every exit.
-- Tests cover boundaries and failure paths; supported backends keep the intended results.
-- The code is formatted, named and organized for its reader, without speculative machinery.
+Apply the items the change reaches; this is not a demand to run every target for every edit.
 
-Use `assert condition, "context"` for a useful failure. `msc fmt` formats source; review its diff
+**Meaning and API**
+
+- [ ] A discrete enum/literal dispatch is a match table; thresholds and early guards remain if.
+- [ ] Recoverable operation failures use `Result`, absence is nullable and yes/no queries are boolean.
+- [ ] A no-payload success is `Result<void, E>`, not a dummy count; every error reaches its consumer.
+- [ ] Plain data uses value records; shared identity earns a reference/class. Constructors earn
+  their work rather than hiding forwarded field names.
+- [ ] Natural struct readers, including private helpers, use extensions; writers declare mutable
+  locations. No globally unique factory-name convention is invented for unrelated types.
+- [ ] Module/private/export boundaries, domain names and callback contracts are deliberate.
+
+**Data and ownership**
+
+- [ ] Counts, identifiers, arithmetic and ABI fields have intended widths; large literals are
+  annotated and narrowing/signedness changes follow validation.
+- [ ] Enum membership uses `BitSet`, not ordinal-as-mask casts. Set/enum formatting is explicit.
+- [ ] Owned buffers, shared arrays, fixed storage and views are chosen by ownership, not spelling.
+- [ ] A struct copy is not assumed to deep-clone references, native handles or store membership.
+- [ ] Getters/setters and borrowed queries do not expose mutation that bypasses owner invariants;
+  IDs are validated against the correct store, not generation alone.
+- [ ] Views and raw addresses remain valid across every use; resize, replacement, move, suspension
+  and shutdown cannot invalidate an outstanding borrow unnoticed.
+- [ ] Custom hooks account for all owned fields, old destinations and moved-from states; generated
+  field traversal stays in charge where no custom resource operation is required.
+
+**Boundaries and concurrency**
+
+- [ ] Text positions use the intended byte/code-unit space; wire and native layouts match consumers.
+- [ ] Decode success is followed by required presence, original kind, exact extraction and domain
+  checks. A defaulting accessor or cast is not a schema validator.
+- [ ] C names, widths, pointer/count pairs and allocator/retain/release ownership match the real ABI.
+- [ ] Retained callbacks are unregistered/quiesced before release, on failure and exceptional exits.
+- [ ] CPU jobs are submitted before joining; local handles are consumed once and borrowed captures
+  stay alive and unchanged. A moved graph is no longer the parent's mutable work item.
+- [ ] Shared mutation uses the supported lock/message contract; lock callbacks never await or block.
+- [ ] Actor SEND is submission, CALL is a reply; message ownership and failure/shutdown are explicit.
+- [ ] Native ownership/lifecycle behavior is not inferred from JS facade output or a successful link.
+- [ ] Allocation-constrained code has proven owners, host initialization and resource budgets.
+
+**Verification and presentation**
+
+- [ ] Module tests use assertions and cover success, refusal, boundaries and a relevant ownership
+  variant; a real boundary has been exercised with its consumer.
+- [ ] Library imports do not accidentally launch the application, and CLI tests guard startup.
+- [ ] Target/build differences are explicit; benchmarks use representative optimized work and
+  preserve inputs, toolchain and semantics.
+- [ ] Names, tabs, 100-column wrapping, trailing commas and enum formatting follow §2, without
+  unrelated scaffolding or formatting churn.
+
+`assert condition, "context"` belongs inside a test block; the checked compiler refuses it outside
+one. Application invariants instead need a meaningful checked error/exception at the appropriate
+boundary, not a test-only statement or a silent default. `msc fmt` formats source; review its diff
 rather than treating formatting as validation. `dump-tokens`, `dump-ast` and `pipeline` inspect
 compiler representations, not wire schemas. Use `msc lsp` for editor integration; a language-server
 roadmap is not a guarantee that every rename/refactoring/completion feature works. Diagnostics,
@@ -1787,9 +2087,10 @@ debug info and timing tools answer different questions from sanitizers and resou
 ## 19. Current limits and design boundaries
 
 Judge a capability by code plus a focused consumer check, not a historical SHIPPED label or an
-accepted signature. These limits were observed on BUILD `6b8655024`, not inferred from a signature
-or re-certified by the later cookbook checks on BUILD `00bcf1a39`. They are baseline observations,
-not desired future semantics; check the current consumer before claiming a limit is fixed.
+accepted signature. The concrete refusal/runtime cases below were rechecked on installed
+BUILD `38009de37` on macOS arm64 with Node `24.1.0`; they are still scoped observations,
+not permanent prohibitions or desired future semantics. Broader design/host boundaries remain
+requirements, not a claim that every combination was executed.
 
 | Surface | Current disposition |
 |---|---|
@@ -1800,14 +2101,18 @@ not desired future semantics; check the current consumer before claiming a limit
 | Template-literal types | The tested literal-union template type was rejected. Runtime string templates are a different feature. |
 | Additional familiar TS surfaces | `DeepReadonly` did not resolve as a prelude type; the checked regex literal's `.test()` call was refused on C/JS. An AST node or familiar name is not an implemented runtime/type API. |
 | Function generic defaults / const generics | The checked `zero<T = int32>()` call could not infer T. Use explicit supported type arguments/specialization; do not infer const generics from generic syntax. |
-| `allSettled` | Declared `T[]` disagrees with native payload. Reading the checked result aborted; JS returned an array. |
+| `allSettled` | Declared `T[]` disagrees with native payload. Reading the checked result aborted (exit 134); JS produced a settlement object, not the declared integer element. |
 | `throwIfAborted` | Native aborted signal threw AbortError; JS stopped with Error: unreachable. Flag/reason behavior does not certify this method. |
-| Supervisor | Checked native import fails on Promise<number> comparisons/indexing inside the implementation. Restart design/API is not a green recipe. |
+| Supervisor | The checked namespace import fails on C and JS on Promise<number> comparisons/indexing inside the implementation. Restart design/API is not a green recipe. |
 | Cross-caller protocols | Caller-visible extensions work for instantiation, not guaranteed independent cached meanings for the same concrete type. Keep implementations coherent/type-local. |
 | Lifetime/cross-thread law | §§6 and 9 are obligations, not proof that all retained addresses, thread affinity, shutdown races or unsafe closure shapes are diagnosed. |
 | Proposed ownership syntax | `lent`, WeakRef and author acyclic/thread-bound annotations are not substitutes for the current documented model. Do not invent syntax from designs. |
+| JSON width/shape | Full-uint64 stringify is not lossless: C debug refuses `2^63`, native danger writes a negative number and JS refuses it. The checked typed top-level int32-array parse is refused. |
 | Serialization ecosystem | JSON/CBOR and UntypedTree do not establish planned common typed codecs, per-format overrides, rename/skip/default, streaming/transcoding or additional formats. |
 | Other proposed extensions | Concepts/where constraints, custom literal suffixes, multimethod vtables, `.parallel()`, custom awaitable annotations and mixed-JS/WASM ownership are not current recipes merely because designs survive. |
+| Optional struct fields | `struct Packet { optional?: string; }` is refused; spell a nullable value field explicitly. Interface optional properties are a different shape. |
+| Ordinary default imports | The checked default-import spelling is refused; configuration's `export default` is not proof of runtime-module support. `import type` has a checked no-initialization consumer. |
+| Assertion placement | `assert` is refused outside a test block. Assertion-function type narrowing is a separate feature with the native limitation above. |
 | Full target parity | Native, JS, evaluator, bare/WASM and HCR have different consumers/limits; one target's success is not all targets' support. |
 
 Coverage spans functions/classes/advanced types (§§2–5, 8, 11), ownership/views/hooks/FFI (§§5–6, 10),
@@ -1817,81 +2122,58 @@ not promoted to available authoring APIs.
 
 ## Verification scope
 
-Checked on macOS arm64, installed `msc 0.3.4`, binary/support BUILD `6b8655024`, Node `24.1.0`;
-source survey tree `888671e9c130e7778600088efda81e0216e8e0dc`. Commands:
-`msc run probe.ms`, `msc run --target=js probe.ms`, and `msc check [--target=js] reject.ms`.
+The official-standard revision was checked on macOS arm64, Node `24.1.0`, installed
+`msc 0.3.4`, binary/support BUILD `38009de37` (tree `4cfe2614d7ab4ec95d5179c9aa0959a3e75c1a5a`).
+The authoring base is tree `ee4a66cb4721d597b0f64eaa5d3f7b2c9408284a`. All 50 MS blocks match
+runnable entry sources or named related files; all 47 inherited blocks remain unchanged.
+The four non-entry files are exercised through their macro, generic, dynamic-import or manifest
+consumer. The four C blocks are the two compiled header/companion fixtures.
 
-C/JS probes printed `5 10` then `0` (mutable receiver/out), `1 9 5` (Vec copy/slice),
-`6` (Result), `9 16` then `2` (spawn/actor), and `4096 4` (comptime).
-Additional variants covered shared reference fields, fixed-array/Vec/shared-array Span inputs,
-Borrow reads, move, enum dispatch, BitSet and generic traits. Native-only probes printed `42`
-(header import + companion C), `9` (manual extern), and `6` then `2` (moved capture/Locked).
-The native `externSpanAcrossModules` corpus consumer printed `6 26 30 0 13` for readonly/mutable
-Span ABI calls across modules, including fixed arrays, a Vec, an empty array and a slice.
-Both checkers refused value-parameter mutation, a Borrow write, an incompletely written out
-parameter and a direct Span return. The audit additionally checked ordinal-enum refusals on C/JS,
-actor Result replies and mailbox order on C/JS, and move into borrowing parameters on C/JS.
-Native probes printed `after custom 0` / `after automatic 1` for custom-hook field cleanup;
-[hook replacement](../src/test/handoff/userDestructor.ms) and
-[formal ownership](../src/test/corpus/programs/parameterHookDemand/main.ms) retain the contracts.
+All 46 entry consumers ran successfully on native C. Of those, 42 produced matching JS output;
+the owner-hook example intentionally produced `destroyed 0` on JS instead of native `destroyed 2`.
+The three native-only bindings (Locked helpers, manual C extern, retained C callback) were not
+JS recipes and failed there as expected. Matching output for Handle or actor facades does not
+certify native retention, scheduling, hooks or shutdown on JS.
 
-The previous standalone revision exercised modules/test entry, distinct IDs, Unicode index
-spaces, Map/Set iteration, match/BitSet, trait specialization, async entry, moved/Locked work,
-Handle/defer and JSON validation. Its 16 MS blocks match checked runnable sources: 14 have C/JS
-results, two are native-only; the original six retain unchanged verified code. The module
-example passes `check` and `test` (302 tests including imported std tests). JSON validation returns
-`true false false false false` on C, JS and C `--danger`, including integers beyond int32 and int64.
-Unknown scalar/array/map admissions are refused on C/JS; class narrowing and LIFO defer order run
-on both. The companion-header C example prints `42`.
+Commands were `msc run probe.ms`, `msc run --target=js probe.ms`, `msc run --gc=orc probe.ms`,
+`msc run --danger probe.ms`, and `msc test app.ms`, with flags before source names. The module
+example's test invocation passed 302 imported-inclusive tests. A separate `build --target=c`
+produced an executable without running it; running that artifact afterward printed `42`.
+This is not the compiler suite.
 
-The feature inventory revision mapped its then-39 MS blocks to checked entry modules or named fixtures:
-36 have C/JS evidence and three are native-only. New outputs include `4 7 6` (parameter forms),
-`7 6` (override/getter), `5` / `12n 255` (operators/bigint/shift), two `5`s (iterator consumers),
-`7 9` / `8` / `10 10` (dynamic/converter/valueOf), `7` (cross-module generic), `4 Panel` (macro/JSX),
-`value:marker` (field metadata), `7` (auto-accessor), `3 3` (Proxy), `4` / `7` / `true first`
-(Promise/thenable/abort), `7` (CBOR) and `configured` (manifest, C/JS). Native lifecycle/direct
-immutable-field access printed `7 1`; native borrowed CALL/moved SEND printed `7` twice and fused
-timed spawn printed `7`. Brand/tuple probes printed `a a`, `1 2`, `1 a`; utility probes printed
-`3 4 5 6 true 7` / `a b`. Quote hygiene preserved caller values (`7 8`). A comptime statement
-printed `building` during compilation and only `running` at runtime.
+| Checked boundary | Representative result |
+|---|---|
+| Parameter modes / value storage | Mutable receiver/out `5 10` then `0`; Vec copy/view `1 9 5`; shared array field alias `0.5`, C/JS |
+| Formatting / numeric choice | Formatting `0 1 4 3 aaaaaa`; signed division/remainder `-2 -1`; integer versus mixed Math.min `4 4.5`; ASCII literal codes `65 10`, C/JS |
+| BitSet | Membership, empty/size, union/intersection/difference/symmetric difference, subset/disjointness, equality, ordinal iteration and a width-matched mask, C/JS |
+| Static extensions | Two defining modules both export `create`; both import orders print `2 3`, C/JS |
+| Protocols and generics | Dynamic field/converter/valueOf `7 9`, `8`, `10 10`; generic import `7`; custom formatting works at the explicitly checked sites, C/JS |
+| Checked AST generation | Checked int32 macro `7 9`; string/int64 calls refused; declaration splice/hygiene `41 42 40`, C/JS |
+| Decorators / Proxy | Accessor `7`, field metadata `value:marker`, interception `3 3`, refusing setter `1`, C/JS |
+| Async / actor completion | Spawn/actor `9 16` then `2`; borrowed CALL/moved SEND `7 7` then `9`; executor/thenable and first abort reason run, C/JS |
+| Promise.any | Rejected input plus fulfillment yields `3`; empty input rejects, C/JS |
+| JSON / CBOR validation | Typed JSON `true false false false false`; 17-input JSON and 16-input CBOR tree matrices agree on C, JS and native danger |
+| CBOR exact extraction | `9007199254740991`, `9007199254740993`, `9223372036854775807` on C/JS |
+| Module consumers | Imported declarations/type-only use, caller-visible extensions, macro expansion, once-only dynamic initialization, custom flag selection and manifest defines run through their consumers |
 
-The existing `accessorFieldDesugars` consumer ran on C/JS with
-`accessor:x | 1 3 13 ab! | 6 dirty=1 | 6.5 dirty=2`; `typeOnlyImportInit` ran with
-`inits=[side,mixed,made] sum=26 k=none`. Repeated dynamic imports initialized once on C, JS bundle
-and JS split. `build --target=c` produced an executable that printed `5` when run separately;
-`build --emit=c` emitted three C modules without compiling/linking. A simple VM entry printed `5`;
-that does not certify all evaluator APIs. The refusal,
-abstract-construction, native allSettled abort, JS abort-method failure and supervisor diagnostics
-in §19 were separately observed, not counted as successful recipes. Source-audited API/target
-inventory is distinguished from these executed examples; not every listed API/shape was run.
+Native owner, moved/Locked, actor argument/lifecycle and retained callback examples also ran
+with ORC. Retained C registration prints `false 1`, `7 1`, then `2`; a forced throw in its
+scope still unregisters/releases and prints `caught` before final `2`. The separate imported
+header consumer prints `42`; the existing `externSpanAcrossModules` consumer prints
+`6 26 30 0 13` for fixed/Vec/empty/sliced readonly and mutable Span ABI calls.
 
-The reader-feedback cookbook revision uses installed `msc 0.3.4` BUILD `00bcf1a39`
-(compiler/support tree `3a5694c70a73f1af5dcf8746d9a8b1ff95b7a121`) on the same host/Node;
-its authoring base tree is `dd695d2156f58383eb01af2b15267e364a78ffcb`. It retains 38 of the previous
-39 MS blocks unchanged and replaces the trusted CBOR round trip with strict field validation.
-All 47 current MS blocks match checked entry sources or named fixtures: 41 have C/JS evidence,
-six are native-only. Earlier evidence above remains scoped to its original baseline.
+The refusals and runtime failures in §19 were measured too: they are not successful recipes.
+This includes the native allSettled abort, JS abort-method failure, native assertion-function C
+error, supervisor import errors and full-uint64 JSON danger corruption. `assert` outside tests,
+optional struct `?` syntax and the tested ordinary default import/lookup forms were refused.
+Explicit generic arguments, type-only imports, named library imports, optional interface JSON
+and constructor/executor forms are positive controls, not evidence for all neighboring forms.
 
-New checks run `msc run [--target=js] recipe.ms`, `msc check [--target=js] reject.ms`,
-`msc run --danger recipe.ms`, and native `msc run --gc=drc recipe.ms` / `--gc=orc`.
-The JSON matrix's 17 inputs cover byte budgets, malformed/wrong roots, absence, explicit null,
-empty string, nested/escaped keys, wrong kinds and last-wins duplicates. The CBOR matrix's
-16 inputs cover byte budgets, inclusive bounds, unknown/non-text keys, missing/duplicate fields,
-wrong kinds, range, int64 extremes and malformed bytes. C/JS and native `--danger` outputs agree.
-Separate tree extraction on C/JS prints exact `9007199254740991`, `9007199254740993` and
-`9223372036854775807`, rather than only checking that a large value is rejected.
-The checked macro prints `7 9` and refuses string/int64 inputs with `addInt32 requires int32` on C/JS;
-the two-declaration macro prints `41 42 40` on both, including the caller-name hygiene variant.
-Proxy refusal prints `1`; byte-to-unit conversion prints `0 1 3 4` on C/JS.
-
-Native DRC and ORC each print `false 1 | 7 1 | 2` for the compiled C callback fixture,
-`original changed | original 2 2 original 0 | destroyed 2` for owner replacement/move/copies,
-and `7 7 | 9` for borrowed CALL/moved SEND. A forced throw inside the callback scope still
-unregisters/releases: both modes print `false 1 | 7 1 | caught | 2`, including a later no-op emit.
-Emitted owner C also retains generated Vec cleanup
-alongside the token hook. These are not foreign-thread callback, SDK-unregister-race, manual
-managed-graph trace, arbitrary macro-input or all-decoder safety certifications. Unchanged
-examples, the 302-test module suite, §19 limits and other targets were not rerun for this revision.
-
-This is syntax/behavior evidence, not a benchmark, exhaustive safety audit, sanitizer run or
-guarantee for Windows, Linux, browser, freestanding, HCR or on-chain.
+Source-audited API inventories are labeled separately from these executed consumers. Earlier
+VM, JS-split, platform and performance observations are not freshly certified by this rewrite.
+This is not a benchmark, compiler gate, exhaustive safety audit, sanitizer run, new reader study,
+or a guarantee for foreign-thread callbacks, arbitrary managed-cycle hooks, every decoder input,
+Windows/Linux/browser/freestanding/HCR/on-chain hosts. The applicable host and consumer still own
+those checks. [Hook replacement](../src/test/handoff/userDestructor.ms) and
+[formal ownership](../src/test/corpus/programs/parameterHookDemand/main.ms) are implementation
+regression consumers, not additional test runs claimed here.
