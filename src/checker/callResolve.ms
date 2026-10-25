@@ -2016,7 +2016,6 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
 			markUsedIn(ctx, sym);
-			sgRecordSym(ctx, d.callee.location.line, d.callee.location.column, d.callee.location.column + calleeName.length, sym, sym.symbolType, sym.symbolKind, calleeName, "", false);
 			// Template: inline AST substitution (reference parity). Expand the
 			// template body at the call site — no function call emitted.
 			// With overloads present, scoring runs first (concrete wins);
