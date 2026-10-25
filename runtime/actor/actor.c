@@ -75,15 +75,15 @@ MS_THREAD_LOCAL msMsgPool msMsgPools[MS_MSG_POOL_CLASSES];
 MS_TLS_PUBLISH(msMsgPools)
 
 static msMessage* msMsgOrphans[MS_MSG_POOL_CLASSES];
-static char msMsgOrphansLock;
+static pthread_mutex_t msMsgOrphansLock = PTHREAD_MUTEX_INITIALIZER;
 int32_t msMsgOrphansPending[MS_MSG_POOL_CLASSES];
 
 static void msMsgOrphansAcquire(void) {
-    while (__atomic_test_and_set(&msMsgOrphansLock, __ATOMIC_ACQUIRE)) {}
+    pthread_mutex_lock(&msMsgOrphansLock);
 }
 
 static void msMsgOrphansRelease(void) {
-    __atomic_clear(&msMsgOrphansLock, __ATOMIC_RELEASE);
+    pthread_mutex_unlock(&msMsgOrphansLock);
 }
 
 __attribute__((noinline)) msMessage* msMsgOrphansTake(uint8_t cls) {

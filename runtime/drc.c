@@ -530,16 +530,24 @@ void msRootsAdopt(msCellSeq* orphan) {
 }
 
 static msCellSeq msOrphanRoots;
-static char msOrphanRootsLock;
 static int32_t msOrphanRootsPending;
 
+#if !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
+#include <pthread.h>
+static pthread_mutex_t msOrphanRootsLock = PTHREAD_MUTEX_INITIALIZER;
+
 static void msOrphanRootsAcquire(void) {
-	while (__atomic_test_and_set(&msOrphanRootsLock, __ATOMIC_ACQUIRE)) {}
+	pthread_mutex_lock(&msOrphanRootsLock);
 }
 
 static void msOrphanRootsRelease(void) {
-	__atomic_clear(&msOrphanRootsLock, __ATOMIC_RELEASE);
+	pthread_mutex_unlock(&msOrphanRootsLock);
 }
+#else
+static void msOrphanRootsAcquire(void) {}
+
+static void msOrphanRootsRelease(void) {}
+#endif
 
 static __attribute__((noinline)) void msAdoptOrphanRoots(void) {
 	msOrphanRootsAcquire();
