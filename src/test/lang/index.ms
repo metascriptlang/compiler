@@ -45,6 +45,7 @@ import "./macroEmitInstance";
 import "./macroEmitLaterModule";
 import "./macroFlowExpansion";
 import "./macroHiddenConversions";
+import "./macroHostCallLoop";
 import "./macroLiteralValues";
 import "./macroOverloadWinner";
 import "./macroPrefixIdentity";
