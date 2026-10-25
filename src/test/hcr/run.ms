@@ -1,7 +1,7 @@
 // HCR runner: msc run --target=raiser src/test/hcr/run.ms, from the recompiler root.
 // Env: MSC=<path to msc> (default: ./msc, else installed msc).
 import { execFileResult, ExecFileResult, exit, env, cwd, platform } from "std/process";
-import { readFile, writeFile, readDir, exists, ensureDir, removeAll, copyFile } from "std/fs";
+import { readFile, writeFile, readDir, exists, ensureDir, remove, removeAll, copyFile } from "std/fs";
 import { sleepAsync } from "std/core/promise";
 import { spawn as spawnChild, ChildProcess, ChildStream } from "std/process/child";
 
@@ -1015,6 +1015,46 @@ function stepCrash(): void {
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
 		console.log(both(ran));
 		failWith(tag, "a crash inside step() did not roll back to the previous generation and keep running");
+	}
+	console.log(`ok   ${tag}`);
+}
+
+function reloadLines(output: string): string[] {
+	const seen: string[] = [];
+	for (const line of lines(output)) {
+		if (line.startsWith("HCR reload module:")) seen.push(line);
+	}
+	return seen;
+}
+
+function unchangedObjectKeepsImage(): void {
+	const tag = "hcrUnchangedObjectKeepsImage";
+	const globalCache = env.get("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_NO_GLOBAL_CACHE", "1");
+	if (platform != "windows") {
+		const racy = freshDir(`${TMP}/unchangedRacyHeader`);
+		for (const f of readDir(`${FIXTURES}/step`)) copy(`${FIXTURES}/step/${f}`, `${racy}/${f}`);
+		need(tag, execFileResult("touch", ["-t", "203001010000", "hold.h"], racy).exitCode == 0, "cannot date hold.h into the future");
+		put(`${racy}/replay.txt`, "crashIndex.txt logic.ms\n");
+		const watched = mustBuild(tag, racy, ["build", "app.ms", "--hcr", "--watch-replay=replay.txt"], "the watch replay over a header dated in the future failed");
+		const seen = reloadLines(watched);
+		if (seen.join("\n") != "HCR reload module: implementation changed (logic)") {
+			console.log(watched);
+			failWith(tag, "an edit of logic.ms reloaded another module while a header the app includes was too new to record its object");
+		}
+	}
+	const lost = freshDir(`${TMP}/unchangedLostRecord`);
+	for (const f of readDir(`${FIXTURES}/step`)) copy(`${FIXTURES}/step/${f}`, `${lost}/${f}`);
+	mustBuild(tag, lost, ["build", "app.ms", "--hcr"], "the first build failed");
+	const cache = `${lost}/out/debug/.cache`;
+	for (const f of readDir(cache)) {
+		if (f.endsWith(".cfp")) remove(`${cache}/${f}`);
+	}
+	const rebuilt = mustBuild(tag, lost, ["build", "app.ms", "--hcr"], "the rebuild without object records failed");
+	env.set("MSC_NO_GLOBAL_CACHE", globalCache);
+	if (reloadLines(rebuilt).length != 0) {
+		console.log(rebuilt);
+		failWith(tag, "recompiling unchanged sources after their object records were lost reported a module as changed");
 	}
 	console.log(`ok   ${tag}`);
 }
@@ -2307,6 +2347,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrLiftKinds", run: liftKinds },
 	{ name: "hcrRun", run: runCommand },
 	{ name: "hcrStepCrash", run: stepCrash },
+	{ name: "hcrUnchangedObjectKeepsImage", run: unchangedObjectKeepsImage },
 	{ name: "hcrStepJoinCrash", run: stepJoinCrash },
 	{ name: "hcrStepSpareCrash", run: stepSpareCrash },
 	{ name: "hcrCrossImageNew", run: crossImageNew },
