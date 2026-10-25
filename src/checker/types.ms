@@ -4597,6 +4597,21 @@ export function mergeUnifyBindings(into: UnifyBindings, from: UnifyBindings): vo
 	}
 }
 
+function genericBaseSym(t: Type): Symbol | null {
+	const base = t.kind == TypeKind.GenericInstance && t.typeExtra != null ? unwrapRefBase(t.typeExtra) : t;
+	return base.sym;
+}
+
+// Affine and plain Promises share a typeName and carry no declaring symbol, so
+// the spelling only decides between types that have none.
+function sameGenericBase(a: Type, b: Type): boolean {
+	if (a.typeName != b.typeName) return false;
+	const sa = genericBaseSym(a);
+	const sb = genericBaseSym(b);
+	if (sa == null || sb == null) return true;
+	return sa == sb || (sa.modulePath == sb.modulePath && sa.name == sb.name && sa.disamb == sb.disamb);
+}
+
 let _unifyCount: float64 = 0;
 export function unifyTypeProfile(): float64[] { return [_unifyCount]; }
 export function unifyType(formal: Type | null, concrete: Type | null, bindings: UnifyBindings): void {
@@ -4662,7 +4677,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	if (formal.kind == TypeKind.GenericInstance && concrete.kind == TypeKind.GenericInstance) {
 		// Affine and plain Promises share typeName "Promise" — their distinction
 		// is in flag bits, not in the name. Simple equality covers both.
-		const namesMatch = formal.typeName == concrete.typeName;
+		const namesMatch = sameGenericBase(formal, concrete);
 		if (!namesMatch) {
 			const aliased = peelTransparentInstance(concrete);
 			if (aliased != concrete) {
@@ -4693,7 +4708,7 @@ function unifyTypeInner(formal: Type | null, concrete: Type | null, bindings: Un
 	if (formal.kind == TypeKind.Struct && concrete.kind == TypeKind.GenericInstance) {
 		// Struct("Map") with generic params vs GenericInstance("Map", [string, string])
 		// Unify by matching formal's fields against the instantiated body's fields
-		if (formal.typeName == concrete.typeName && concrete.typeReturn != null) {
+		if (sameGenericBase(formal, concrete) && concrete.typeReturn != null) {
 			const body = unwrapRef(concrete.typeReturn);
 			if (body.kind == TypeKind.Struct) {
 				const limit = formal.typeChildren.length < body.typeChildren.length ? formal.typeChildren.length : body.typeChildren.length;
