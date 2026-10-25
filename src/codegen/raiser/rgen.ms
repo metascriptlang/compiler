@@ -555,17 +555,6 @@ export function generateRaiserProject(modules: RaiserModuleInput[], plan: Dynami
 	return compiled;
 }
 
-// --- Public API ---
-// Parse source code → check it → compile to Raiser bytecode → execute → return context.
-// The context holds lastResult (exit value) and lastOutput (console.log captures).
-
-export function evalSource(code: string): RaiserContext {
-	const parseResult = parseSource(code);
-	if (!parseResult.ok) return createContext();
-	checkProgram(parseResult.value);
-	return runProgram(parseResult.value);
-}
-
 function runProgram(program: Node): RaiserContext {
 	const mod = generateRaiser(program);
 	const ctx = createContext();

@@ -6,7 +6,6 @@ Compiles the post-Phase-3 AST into Raiser bytecode: `parse → check → transfo
 
 | File | Holds |
 |------|-------|
-| `index.ms` | hub |
 | `context.ms` | `RaiserCompState`, emit helpers, register allocator, loop and scope state |
 | `expressions.ms` / `statements.ms` | `compileExpr` / `compileStmt` |
 | `rgen.ms` | `generateRaiser`, `generateRaiserProject`, class compilation, tests |
