@@ -19,7 +19,7 @@ import {
 	sgFormatHover, sgCollectSymbolsInFile, sgFormatSignature, sgFormatExtensionSignatures,
 	sgGetSignatureContext, sgPickActiveOverload, sgCollectInlayHints,
 	sgFormatHoverDoc, sgExtractDocComment, sgBuiltinDoc,
-	sgQueryAtPosition, sgQueryBySym, sgQueryByName, sgQueryByDefiningModule,
+	sgQueryAtPosition, sgQuerySourceAt, sgQueryBySym, sgQueryByName, sgQueryByDefiningModule,
 	sgFindCallExprByCalleeLocation, sgFieldDeclLine, FIELD_NO_CONTAINER,
 	SgDocumentSymbol,
 	SgSignatureInfo,
@@ -47,7 +47,7 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	const ctx = dbTypeCheck(db, path);
 	if (ctx == null) return lspResponse(id, "null");
 
-	const suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
+	const suggest = sgQuerySourceAt(ctx, dbGetSource(db, path), pos.line, pos.col1);
 	if (suggest == null) return lspResponse(id, "null");
 
 	// Overload-aware hover: the symRecord stores the PRIMARY sym (so

@@ -1453,6 +1453,33 @@ function hoverShowsTheFieldDocAtItsUses(): LspScenario {
 	};
 }
 
+const EXPANSION_SOURCE = "import { Node, NodeKind } from \"std/meta\";\n/** Makes the value. */\nfunction make(): int32 { return 7; }\n/** A documented component. */\nfunction Greet(): int32 { return 1; }\nconverter toNum(n: Node): int32 {\n\treturn { kind: NodeKind.CallExpr, line: n.line, column: n.column, callee: bindSym(\"make\"), arguments: [] };\n}\nconst a: int32 = <Greet />;\nconst b: int32 = <div id=\"x\" />;\n";
+
+function hoverIgnoresWhatAMacroExpansionReplaced(): LspScenario {
+	const uri = "file:///lspwire/expansion.ms";
+	return {
+		name: "hover on a tag a macro replaced answers the tag's own symbol or nothing, never the expansion",
+		batching: "any",
+		drains: [
+			initializeDrain(),
+			frames([notification("textDocument/didOpen", openParams(uri, EXPANSION_SOURCE))]),
+			frames([
+				request("10", "textDocument/hover", positionParams(uri, 8, 18)),
+				request("11", "textDocument/hover", positionParams(uri, 9, 18)),
+				request("12", "textDocument/hover", positionParams(uri, 9, 22)),
+			]),
+		],
+		check: (r: LspReplay) => firstFailure([
+			sameText("component tag", "```metascript\nfunction Greet(): int32\n```\n\n---\n\nA documented component. @ 8:18-8:23", hoverSummary(r, "n:10")),
+			sameText("intrinsic tag", "no hover: null", hoverSummary(r, "n:11")),
+			sameText("intrinsic attribute", "no hover: null", hoverSummary(r, "n:12")),
+		]),
+		checkAnyBatching: null,
+		checkpoints: null,
+		project: null,
+	};
+}
+
 const TOKENS_SOURCE = "class Box {\n\tv: int32;\n\tconstructor(v: int32) {\n\t\tthis.v = v;\n\t}\n}\nfunction add(a: int32): int32 {\n\tconst k = 2;\n\treturn a + k;\n}\n";
 
 const TOKENS_URI = "file:///lspwire/tokens.ms";
@@ -1570,6 +1597,7 @@ export function lspScenarios(): LspScenario[] {
 		signatureHelpFollowsTheArgument(),
 		hoverShowsDeclarations(),
 		hoverShowsTheFieldDocAtItsUses(),
+		hoverIgnoresWhatAMacroExpansionReplaced(),
 		insignificantEditsKeepAnswers(),
 		semanticTokensClassifyReadsAndDeclarations(),
 	];
