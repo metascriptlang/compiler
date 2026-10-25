@@ -38,20 +38,12 @@ void* msArrayPayloadNew(int64_t cap, int64_t elemSize) {
 	return p;
 }
 
-void* msArrayPayloadNewUninit(int64_t cap, int64_t elemSize) {
-	if (cap == 0) return NULL;
-	int64_t totalSize = msArrayBytes(cap, elemSize);
-	msArrayPayloadBase* p = (msArrayPayloadBase*)msMemAlloc(totalSize);
-	p->cap = cap;
-	return p;
-}
-
 /* A payload whose cap carries string flag bits reached us through the byte-view
    bridge (string literal = static memory, or lazily ASCII-cached heap string).
    It is NOT uniquely owned: copy the live prefix to a fresh payload — never
    realloc, never free the source (Nim prepareSeqAddUninit copy-on-flag parity).
    Stale ASCII-cache bits are dropped with the copy. */
-static void* msArrayPayloadCopyFlagged(int64_t len, void* p, int64_t needed, int64_t elemSize, bool zeroTail) {
+static void* msArrayPayloadCopyFlagged(int64_t len, void* p, int64_t needed, int64_t elemSize) {
 	int64_t headerSize = sizeof(msArrayPayloadBase);
 	int64_t oldCap = ((msArrayPayloadBase*)p)->cap & MS_CAP_MASK;
 	int64_t newCap = msArrayResizeCap(oldCap);
@@ -59,9 +51,7 @@ static void* msArrayPayloadCopyFlagged(int64_t len, void* p, int64_t needed, int
 	int64_t newSize = msArrayBytes(newCap, elemSize);
 	msArrayPayloadBase* q = (msArrayPayloadBase*)msMemAlloc(newSize);
 	memcpy((char*)q + headerSize, (char*)p + headerSize, len * elemSize);
-	if (zeroTail) {
-		memset((char*)q + headerSize + len * elemSize, 0, newSize - headerSize - len * elemSize);
-	}
+	memset((char*)q + headerSize + len * elemSize, 0, newSize - headerSize - len * elemSize);
 	q->cap = newCap;
 	return q;
 }
@@ -74,7 +64,7 @@ void* msArrayPrepareAdd(int64_t len, void* p, int64_t addLen, int64_t elemSize) 
 	}
 	msArrayPayloadBase* base = (msArrayPayloadBase*)p;
 	if ((base->cap & ~MS_CAP_MASK) != 0) {
-		return msArrayPayloadCopyFlagged(len, p, msArrayCountAdd(len, addLen), elemSize, true);
+		return msArrayPayloadCopyFlagged(len, p, msArrayCountAdd(len, addLen), elemSize);
 	}
 	/* Payload is uniquely owned — safe to realloc in place */
 	int64_t oldCap = base->cap;
@@ -248,41 +238,6 @@ msString msNumberArrayJoin(msNumberArray* arr, msString sep) {
 	return result;
 }
 
-/* ===== Type-Erased Core: Uninit + SamePayload ===== */
-
-void* msArrayPrepareAddUninit(int64_t len, void* p, int64_t addLen, int64_t elemSize) {
-	int64_t headerSize = sizeof(msArrayPayloadBase);
-	if (addLen <= 0) return p;
-	if (p == NULL) {
-		int64_t cap = msArrayCountAdd(len, addLen);
-		int64_t totalSize = msArrayBytes(cap, elemSize);
-		msArrayPayloadBase* q = (msArrayPayloadBase*)msMemAlloc(totalSize);
-		q->cap = cap;
-		return q;
-	}
-	msArrayPayloadBase* base = (msArrayPayloadBase*)p;
-	if ((base->cap & ~MS_CAP_MASK) != 0) {
-		return msArrayPayloadCopyFlagged(len, p, msArrayCountAdd(len, addLen), elemSize, false);
-	}
-	/* Payload is uniquely owned — safe to realloc in place */
-	int64_t oldCap = base->cap;
-	int64_t needed = msArrayCountAdd(len, addLen);
-	if (needed <= oldCap) return p;
-
-	int64_t newCap = msArrayResizeCap(oldCap);
-	if (newCap < needed) newCap = needed;
-
-	int64_t oldSize = headerSize + oldCap * elemSize;
-	int64_t newSize = msArrayBytes(newCap, elemSize);
-	msArrayPayloadBase* q = (msArrayPayloadBase*)msRealloc(p, oldSize, newSize);
-	q->cap = newCap;
-	return q;
-}
-
-bool msArraySamePayload(void* a, void* b) {
-	return a == b;
-}
-
 void msArrayRotateBytes(char* data, int64_t lo, int64_t mid, int64_t hi, int64_t elemSize) {
 	int64_t left = (mid - lo) * elemSize;
 	int64_t right = (hi - mid) * elemSize;
@@ -334,17 +289,6 @@ void msNumberArraySetLen(msNumberArray* arr, int64_t newLen) {
 
 int64_t msNumberArrayCapacity(msNumberArray* arr) {
 	return arr->p ? arr->p->cap : 0;
-}
-
-void msNumberArraySetLenUninit(msNumberArray* arr, int64_t newLen) {
-	if (newLen < arr->len) {
-		arr->len = newLen;
-		return;
-	}
-	if (arr->p == NULL || arr->p->cap < newLen) {
-		arr->p = (msNumberPayload*)msArrayPrepareAddUninit(arr->len, arr->p, newLen - arr->len, sizeof(double));
-	}
-	arr->len = newLen;
 }
 
 /* ===== String Array ===== */
@@ -556,29 +500,7 @@ int64_t msStringArrayCapacity(msStringArray* arr) {
 	return arr->p ? arr->p->cap : 0;
 }
 
-void msStringArraySetLenUninit(msStringArray* arr, int64_t newLen) {
-	if (newLen < arr->len) {
-		/* Still destroy evicted strings for safety */
-		for (int64_t i = newLen; i < arr->len; i++) {
-			msStringDestroy(arr->p->data[i]);
-		}
-		arr->len = newLen;
-		return;
-	}
-	if (arr->p == NULL || arr->p->cap < newLen) {
-		arr->p = (msStringPayload*)msArrayPrepareAddUninit(arr->len, arr->p, newLen - arr->len, sizeof(msString));
-	}
-	arr->len = newLen;
-}
-
 /* ===== Uint8 Array ===== */
-
-msUint8Array msUint8ArrayNew(int64_t cap) {
-	msUint8Array arr;
-	arr.len = 0;
-	arr.p = (msUint8Payload*)msArrayPayloadNew(cap, sizeof(uint8_t));
-	return arr;
-}
 
 void msUint8ArrayDestroy(msUint8Array* arr) {
 	if (arr->p != NULL) {
@@ -600,12 +522,6 @@ void msUint8ArrayPush(msUint8Array* arr, uint8_t value) {
 	arr->len++;
 }
 
-uint8_t msUint8ArrayAt(msUint8Array* arr, int64_t idx) {
-	int64_t i = idx < 0 ? arr->len + idx : idx;
-	if ((uint64_t)i >= (uint64_t)arr->len) msRaiseIndexError(idx, arr->len);
-	return arr->p->data[i];
-}
-
 /* Copying exit kernel (cstrToNimstr shape): the result OWNS a fresh payload,
    so it may outlive the source array. Zero-copy move is a later analyzer arc. */
 msString msAsString(msUint8Array* arr) {
@@ -614,13 +530,6 @@ msString msAsString(msUint8Array* arr) {
 }
 
 /* ===== Ref Array ===== */
-
-msRefArray msRefArrayNew(int64_t cap) {
-	msRefArray arr;
-	arr.len = 0;
-	arr.p = (msRefPayload*)msArrayPayloadNew(cap, sizeof(void*));
-	return arr;
-}
 
 static void msRefPayloadFreeAfterDrop(void* payload, int32_t resume) {
 	(void)resume;
@@ -646,26 +555,6 @@ void msRefArrayDestroy(msRefArray* arr) {
 		return;
 	}
 	free(p);
-}
-
-void msRefArrayPush(msRefArray* arr, void* value) {
-	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
-		arr->p = (msRefPayload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(void*));
-	}
-	arr->p->data[arr->len] = value;
-	arr->len++;
-}
-
-void* msRefArrayPop(msRefArray* arr) {
-	if (arr->len <= 0) msRaiseIndexError(arr->len - 1, arr->len);
-	arr->len--;
-	return arr->p->data[arr->len];
-}
-
-void* msRefArrayAt(msRefArray* arr, int64_t idx) {
-	int64_t i = idx < 0 ? arr->len + idx : idx;
-	if ((uint64_t)i >= (uint64_t)arr->len) msRaiseIndexError(idx, arr->len);
-	return arr->p->data[i];
 }
 
 void msRefArrayShrink(msRefArray* arr, int64_t newLen) {
@@ -696,21 +585,6 @@ void msRefArraySetLen(msRefArray* arr, int64_t newLen) {
 	} else if (newLen > arr->len) {
 		msRefArrayGrow(arr, newLen, NULL);
 	}
-}
-
-int64_t msRefArrayCapacity(msRefArray* arr) {
-	return arr->p ? arr->p->cap : 0;
-}
-
-void msRefArraySetLenUninit(msRefArray* arr, int64_t newLen) {
-	if (newLen < arr->len) {
-		msRefArrayShrink(arr, newLen);
-		return;
-	}
-	if (arr->p == NULL || arr->p->cap < newLen) {
-		arr->p = (msRefPayload*)msArrayPrepareAddUninit(arr->len, arr->p, newLen - arr->len, sizeof(void*));
-	}
-	arr->len = newLen;
 }
 
 /* Atomic-rc elements (Locked<T>, Arc<T>): eviction releases atomically. A cell
