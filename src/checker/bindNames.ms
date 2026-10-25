@@ -21,6 +21,8 @@ class NameBinder {
 	keys: Node[] = [];
 	metaBound: Map<Node, Symbol | null> | null = null;
 	metaDefiner: string = "";
+	quoted: Map<Node, Symbol> | null = null;
+	quoteDepth: int32 = 0;
 	atDefinition: boolean = false;
 
 	constructor(ctx: CheckerContext) {
@@ -82,7 +84,10 @@ function bindIdentifier(b: NameBinder, node: Node): void {
 		return;
 	}
 	if (b.metaBound != null) {
-		b.metaBound.set(node, local != null ? local : boundUnlessLeftToPreludes(b, name));
+		const outer = local != null ? local : boundUnlessLeftToPreludes(b, name);
+		b.metaBound.set(node, outer);
+		if (local == null && outer != null && b.quoted != null && b.quoteDepth > 0
+				&& !outer.builtinKind.startsWith("Meta") && !isFrameValue(outer)) b.quoted.set(node, outer);
 		return;
 	}
 	if (local != null) {
@@ -170,7 +175,11 @@ function bindNode(b: NameBinder, node: Node): void {
 			if (b.metaBound != null) bindNestedMetaBody(b, node);
 		},
 		NodeKind.QuoteExpr => {
-			if (b.metaBound != null) forEachChild(node, (child: Node): void => { bindQuotedCallees(b, child); });
+			if (b.metaBound != null) {
+				b.quoteDepth += 1;
+				forEachChild(node, (child: Node): void => { bindNode(b, child); });
+				b.quoteDepth -= 1;
+			}
 		},
 		NodeKind.MethodDecl | NodeKind.ConstructorDecl | NodeKind.ClassDecl | NodeKind.ActorDecl
 		| NodeKind.MacroDecl | NodeKind.ComptimeBlock => {},
@@ -276,19 +285,6 @@ function bindNestedMetaBody(b: NameBinder, node: Node): void {
 	closeBindScope(b);
 }
 
-function bindQuotedCallees(b: NameBinder, node: Node): void {
-	if (node == null) return;
-	if (node.kind == NodeKind.CallExpr) {
-		const d = node.data as CallExprData;
-		bindNode(b, d.callee);
-		if (d.arguments.length == 1 && (node.flags.has(NodeFlag.QuoteSplice) || metaIntrinsicOf(b.ctx, b.metaBound!, d.callee) == "MetaSplice")) {
-			bindNode(b, d.arguments[0]);
-			return;
-		}
-	}
-	forEachChild(node, (child: Node): void => { bindQuotedCallees(b, child); });
-}
-
 function newBinder(ctx: CheckerContext): NameBinder {
 	return new NameBinder(ctx);
 }
@@ -316,10 +312,11 @@ export function metaIntrinsicOf(ctx: CheckerContext, bound: Map<Node, Symbol | n
 	return macroPreludeKind(ctx, (callee.data as IdentifierData).name);
 }
 
-export function bindMetaBodyNames(ctx: CheckerContext, definer: string, params: string[], body: Node): Map<Node, Symbol | null> {
+export function bindMetaBodyNames(ctx: CheckerContext, definer: string, params: string[], body: Node, quoted: Map<Node, Symbol>): Map<Node, Symbol | null> {
 	const b = newBinder(ctx);
 	const bound = new Map<Node, Symbol | null>();
 	b.metaBound = bound;
+	b.quoted = quoted;
 	b.metaDefiner = definer;
 	openBindScope(b);
 	for (const p of params) declareName(b, p, SymbolKind.Parameter, body);

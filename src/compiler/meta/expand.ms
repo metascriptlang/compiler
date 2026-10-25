@@ -95,19 +95,22 @@ let _quoteSpliceActive = false;
 
 let _metaScope: CheckerContext | null = null;
 let _metaBound: Map<Node, Symbol | null> = new Map<Node, Symbol | null>();
+let _metaQuoted: Map<Node, Symbol> = new Map<Node, Symbol>();
 
-interface MetaScope { scope: CheckerContext | null; bound: Map<Node, Symbol | null>; }
+interface MetaScope { scope: CheckerContext | null; bound: Map<Node, Symbol | null>; quoted: Map<Node, Symbol>; }
 
 function enterMetaScope(scope: CheckerContext, definer: string, params: string[], body: Node): MetaScope {
-	const outer: MetaScope = { scope: _metaScope, bound: _metaBound };
+	const outer: MetaScope = { scope: _metaScope, bound: _metaBound, quoted: _metaQuoted };
 	_metaScope = scope;
-	_metaBound = bindMetaBodyNames(scope, definer, params, body);
+	_metaQuoted = new Map<Node, Symbol>();
+	_metaBound = bindMetaBodyNames(scope, definer, params, body, _metaQuoted);
 	return outer;
 }
 
 function leaveMetaScope(outer: MetaScope): void {
 	_metaScope = outer.scope;
 	_metaBound = outer.bound;
+	_metaQuoted = outer.quoted;
 }
 
 function metaKind(n: Node | null): string {
@@ -248,6 +251,15 @@ function lowerQuoteExpr(node: Node): Node {
 
 // ===== nodeToASTLiteral: Node → ObjectLiteral AST =====
 //
+// A free identifier of a quote carries the declaration it named where the quote was written.
+function quotedSymbolOf(node: Node): Symbol | null {
+	if (!_quoteSpliceActive || node.kind != NodeKind.Identifier || _quoteGensym.has(node)) return null;
+	const sym = _metaQuoted.get(node);
+	if (sym == null || _metaScope == null) return null;
+	if (sym.symbolKind != SymbolKind.Macro) ensureShaped(sym, _metaScope!);
+	return sym;
+}
+
 function bindSymHostOf(declCtx: CheckerContext): Symbol | null {
 	if (declCtx.moduleGraph == null) return null;
 	const bindSym = metaTagged(declCtx.moduleGraph, ["MetaBindSym"])[0];
@@ -337,7 +349,7 @@ function nodeToASTLiteral(node: Node | null, loc: SourceLocation, includeTypeAst
 			properties: symValues, keys: symKeys, keyLocations: [],
 		}, loc));
 	}
-	const carried = symbolCarried(node);
+	const carried = quotedSymbolOf(node) ?? symbolCarried(node);
 	if (carried != null) {
 		keys.push("symHandle");
 		values.push(mkNumber(registerBakedSym(carried), loc));
