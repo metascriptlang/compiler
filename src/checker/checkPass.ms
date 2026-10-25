@@ -526,6 +526,13 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 }
 
 function checkStmtNode(ctx: CheckerContext, node: Node): void {
+	const recordsWereOff = ctx.symRecordsOff;
+	ctx.symRecordsOff = node.flags.has(NodeFlag.FromTemplate);
+	checkStmtKind(ctx, node);
+	ctx.symRecordsOff = recordsWereOff;
+}
+
+function checkStmtKind(ctx: CheckerContext, node: Node): void {
 	match (node.kind) {
 		NodeKind.VariableDecl => checkVariableDecl(ctx, node),
 		NodeKind.FunctionDecl => {

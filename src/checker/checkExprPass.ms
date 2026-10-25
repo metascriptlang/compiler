@@ -395,7 +395,10 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type | 
 		: (expectedType != null && (expectedType.kind == TypeKind.Sink || expectedType.kind == TypeKind.Lent) && expectedType.typeReturn != null)
 		? expectedType.typeReturn
 		: expectedType;
+	const recordsWereOff = ctx.symRecordsOff;
+	ctx.symRecordsOff = node.flags.has(NodeFlag.FromTemplate);
 	checkExprInner(ctx, node, slotType);
+	ctx.symRecordsOff = recordsWereOff;
 	viewThroughReadonlyBase(node);
 	node.flags = node.flags.incl(NodeFlag.Sem);
 	derefBorrowResult(node);

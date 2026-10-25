@@ -5,7 +5,7 @@ import { builtinTypeNamed, ensureShaped, resolveAnnotation } from "../../checker
 import { instantiateGenericBody, genericParamsOf, unwrapRefBase, sizeOfType, alignOfType, offsetOfField, structLayoutType, SIZE_NOT_COMPUTABLE } from "../../checker/types";
 import { RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserBool, heapObjectGetField } from "../../raiser/value";
 import { HostCapability, registerHostFn, activeHostObjectHeap, activeHostArrayHeap, raiseFromHost } from "../../raiser/hostRegistry";
-import { mapTypeToAst, nodeToValue, boundSymAt, boundSymOfObject, boundTypeOfObject, attachFieldTypeNodes } from "./bridge";
+import { mapTypeToAst, nodeToValue, builtNodeToValue, boundSymAt, boundSymOfObject, boundTypeOfObject, attachFieldTypeNodes } from "./bridge";
 import { sameType } from "../../checker/compat";
 import { activeMetaCtx, activeMetaLine, activeMetaColumn } from "./callbacks";
 import { boxString, unboxString } from "../../raiser/marshal";
@@ -39,12 +39,19 @@ function emitNode(n: Node): RaiserValue {
 	return nodeToValue(n, objHeap, arrHeap);
 }
 
+function emitBuiltNode(n: Node): RaiserValue {
+	const objHeap = activeHostObjectHeap();
+	const arrHeap = activeHostArrayHeap();
+	if (objHeap == null || arrHeap == null) return raiserNil();
+	return builtNodeToValue(n, objHeap, arrHeap);
+}
+
 function emitTypeNode(n: Node, src: Type): RaiserValue {
 	n.nodeType = src;
 	const objHeap = activeHostObjectHeap();
 	const arrHeap = activeHostArrayHeap();
 	if (objHeap == null || arrHeap == null) return raiserNil();
-	return nodeToValue(n, objHeap, arrHeap, false);
+	return builtNodeToValue(n, objHeap, arrHeap, false);
 }
 
 function peelAlias(t: Type): Type {
@@ -113,7 +120,7 @@ function hostBindSym(args: RaiserValue[]): RaiserValue {
 	const ident = createNodeAt(NodeKind.Identifier, { name: bound >= 0 ? unboxString(args[0]) : sym.name }, makeLoc(activeMetaLine(), activeMetaColumn()));
 	ident.resolvedSym = sym;
 	ident.flags = ident.flags.incl(NodeFlag.BoundSym);
-	return emitNode(ident);
+	return emitBuiltNode(ident);
 }
 
 function hostGetType(args: RaiserValue[]): RaiserValue {

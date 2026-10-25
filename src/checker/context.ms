@@ -1256,7 +1256,7 @@ export function sgRecordSym(
 	sym: Symbol | null, symType: Type | null, kind: SymbolKind,
 	name: string, containerName: string, isDecl: boolean
 ): void {
-	if (ctx.symRecords == null) return;
+	if (ctx.symRecords == null || ctx.symRecordsOff) return;
 	const rec: SgSymRecord = { line, col, colEnd, sym, symType, kind, name, containerName, isDecl };
 	ctx.symRecords.push(rec);
 }
@@ -1396,6 +1396,7 @@ export class CheckerContext {
 	cancelVersion: int32;        // version at check start
 	modulePath: string;          // Implementation parity: source path for name mangling
 	symRecords: SgSymRecord[];   // check-time symbol recordings for LSP (reference suggest parity)
+	symRecordsOff: boolean;      // true while checking a node macro expansion built
 	matchExprDepth: number;      // >0 when inside match expression block arm (return targets match, not function)
 	compileTimeBodyDepth: number;
 	matchArmExpected: Type | null;
@@ -1492,6 +1493,7 @@ export function createContext(): CheckerContext {
 		cancelVersion: 0,
 		modulePath: "",
 		symRecords: [],
+		symRecordsOff: false,
 		matchExprDepth: 0,
 		compileTimeBodyDepth: 0,
 		matchArmExpected: null,

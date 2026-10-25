@@ -611,7 +611,7 @@ export function attachFieldTypeNodes(impl: RaiserValue, decl: Node, shape: Type,
 		const kind = heapObjectGetField(objHeap, member.intVal, "kind");
 		if (kind.kind != RaiserValueKind.Int || kind.intVal != NodeKind.PropertyDecl as int64) continue;
 		const node = fieldTypeNode(fieldTypeIn(shape, readStr(objHeap, arrHeap, member.intVal, "propName")), decl.location);
-		heapObjectSetField(objHeap, member.intVal, "typeExpr", nodeToValue(node, objHeap, arrHeap, false));
+		heapObjectSetField(objHeap, member.intVal, "typeExpr", builtNodeToValue(node, objHeap, arrHeap, false));
 	}
 }
 
@@ -807,7 +807,7 @@ function symbolToValue(sym: Symbol, objHeap: RaiserObjectHeap, arrHeap: RaiserAr
 function setTypeFields(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, handle: int64, t: Type, loc: SourceLocation, includeTypeAst: boolean): void {
 	heapObjectSetField(objHeap, handle, "typeHandle", raiserInt(registerBoundType(t) as int64));
 	if (includeTypeAst) {
-		setNode(objHeap, arrHeap, handle, "nodeType", mapTypeToAst(t, loc), false);
+		heapObjectSetField(objHeap, handle, "nodeType", builtNodeToValue(mapTypeToAst(t, loc), objHeap, arrHeap, false));
 	}
 }
 
@@ -836,6 +836,16 @@ export function stripMacroArgWrappers(node: Node): Node {
 	return n;
 }
 
+let _marshalsBuilt = false;
+
+export function builtNodeToValue(node: Node, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, includeTypeAst: boolean = true): RaiserValue {
+	const outer = _marshalsBuilt;
+	_marshalsBuilt = true;
+	const v = nodeToValue(node, objHeap, arrHeap, includeTypeAst);
+	_marshalsBuilt = outer;
+	return v;
+}
+
 export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, includeTypeAst: boolean = true): RaiserValue {
 	const node = stripMacroArgWrappers(nodeIn);
 	const handle = heapAllocObject(objHeap);
@@ -848,6 +858,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 	heapObjectSetField(objHeap, handle, "column", colVal);
 	heapObjectSetField(objHeap, handle, "endLine", raiserInt(node.location.endLine));
 	heapObjectSetField(objHeap, handle, "endColumn", raiserInt(node.location.endColumn));
+	if (!_marshalsBuilt && !node.flags.has(NodeFlag.FromTemplate)) heapObjectSetField(objHeap, handle, "argOrigin", raiserInt(1));
 	const syntaxFlags = node.flags.intersection(PARSER_NODE_FLAGS);
 	if (!syntaxFlags.isEmpty()) heapObjectSetField(objHeap, handle, "flags", raiserInt((syntaxFlags as uint64) as int64));
 	if (node.resolvedSym != null && declaresLocal(node)) {
@@ -1418,7 +1429,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 		setTypeFields(objHeap, arrHeap, handle, node.nodeType, node.location, includeTypeAst);
 		if (node.flags.has(NodeFlag.Folded)) setBool(objHeap, handle, "folded", true);
 	} else if (includeTypeAst && node.nodeTypeAst != null) {
-		setNode(objHeap, arrHeap, handle, "nodeType", node.nodeTypeAst, false);
+		heapObjectSetField(objHeap, handle, "nodeType", builtNodeToValue(node.nodeTypeAst, objHeap, arrHeap, false));
 	}
 
 	// Day 9: emit `resolvedSym` for nodes the checker bound to a Symbol.
@@ -1662,11 +1673,11 @@ export function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap
 
 export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, fallbackLoc: SourceLocation): Node {
 	return match (val.kind) {
-		RaiserValueKind.Int => intValueToNode(val.intVal, t, fallbackLoc),
-		RaiserValueKind.Float => mkFloat(val.floatVal, fallbackLoc),
-		RaiserValueKind.Bool => mkBool(val.intVal != 0, fallbackLoc),
-		RaiserValueKind.String => mkString(heapStringText(arrHeap, val), fallbackLoc),
-		RaiserValueKind.Nil => mkNull(fallbackLoc),
+		RaiserValueKind.Int => fromTemplate(intValueToNode(val.intVal, t, fallbackLoc)),
+		RaiserValueKind.Float => fromTemplate(mkFloat(val.floatVal, fallbackLoc)),
+		RaiserValueKind.Bool => fromTemplate(mkBool(val.intVal != 0, fallbackLoc)),
+		RaiserValueKind.String => fromTemplate(mkString(heapStringText(arrHeap, val), fallbackLoc)),
+		RaiserValueKind.Nil => fromTemplate(mkNull(fallbackLoc)),
 		RaiserValueKind.Array => {
 			const handle = val.intVal;
 			const len = heapArrayLen(arrHeap, handle);
@@ -1677,7 +1688,7 @@ export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: Rais
 				elements.push(valueToTypedNode(elem, elementTypeOf(t), objHeap, arrHeap, fallbackLoc));
 				i = i + 1;
 			}
-			return createNodeAt(NodeKind.ArrayLiteral, { elements }, fallbackLoc);
+			return fromTemplate(createNodeAt(NodeKind.ArrayLiteral, { elements }, fallbackLoc));
 		},
 		RaiserValueKind.Object => {
 			const handle = val.intVal;
@@ -1690,6 +1701,7 @@ export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: Rais
 				// The argument's type survives the wire twice: the Type through its
 				// bound-type handle, the type-AST Node form in nodeTypeAst.
 				if (out != null) {
+					if (heapObjectGetField(objHeap, handle, "argOrigin").kind != RaiserValueKind.Int) fromTemplate(out);
 					const typeHandle = heapObjectGetField(objHeap, handle, "typeHandle");
 					if (typeHandle.kind == RaiserValueKind.Int) out.nodeType = boundTypeAt(typeHandle.intVal as int32);
 					else if (typeHandle.kind == RaiserValueKind.Float) out.nodeType = boundTypeAt(typeHandle.floatVal as int32);
@@ -1723,8 +1735,13 @@ export function valueToTypedNode(val: RaiserValue, t: Type | null, objHeap: Rais
 			// No "kind" field — fall back to ObjectLiteral
 			return deserializeObjectLiteral(handle, t, objHeap, arrHeap, fallbackLoc);
 		},
-		_ => mkNull(fallbackLoc),
+		_ => fromTemplate(mkNull(fallbackLoc)),
 	};
+}
+
+function fromTemplate(n: Node): Node {
+	n.flags = n.flags.incl(NodeFlag.FromTemplate);
+	return n;
 }
 
 function deserializeObjectLiteral(handle: int64, shape: Type | null, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): Node {
@@ -1738,7 +1755,7 @@ function deserializeObjectLiteral(handle: int64, shape: Type | null, objHeap: Ra
 		keys.push(name);
 		values.push(valueToTypedNode(fieldValueAt(obj, i), record != null && record.kind == TypeKind.Struct ? fieldTypeIn(record, name) : null, objHeap, arrHeap, loc));
 	}
-	return createNodeAt(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, loc);
+	return fromTemplate(createNodeAt(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, loc));
 }
 
 const PARSER_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.QuoteSplice | NodeFlag.ExportDefault | NodeFlag.ExternC | NodeFlag.Converter | NodeFlag.StaticStorage | NodeFlag.Parenthesized | NodeFlag.WhenPicked | NodeFlag.ExplicitDeref | NodeFlag.CommaWritten | NodeFlag.Accessor | NodeFlag.AutoAccessor | NodeFlag.ContinuesList;
