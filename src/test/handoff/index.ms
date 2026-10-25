@@ -206,3 +206,4 @@ import "./cacheKeys";
 import "./preludePackParity";
 import "./routineFlagRefusals";
 import "./logicalAssignmentCheck";
+import "./stdSpellingShadow";
