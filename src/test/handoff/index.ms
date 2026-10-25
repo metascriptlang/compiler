@@ -151,6 +151,7 @@ import "./sendableFunction";
 import "./slotRelation";
 import "./brandArrayRelations";
 import "./storageMutability";
+import "./symbolNotSpelling";
 import "./tupleIndex";
 import "./unknownAdmission";
 import "./cstringIntoString";
