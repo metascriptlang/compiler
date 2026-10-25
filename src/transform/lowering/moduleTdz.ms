@@ -8,7 +8,7 @@ import { forEachChild, anyChild } from "../../ast/visitor";
 import { isEagerAssignOp } from "../../ast/operators";
 import { booleanType } from "../../checker/types";
 import { setFlag } from "../../checker/symbol";
-import { ModuleGraph, Module } from "../../module/graph";
+import { ModuleGraph, Module, findModuleIndex } from "../../module/graph";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { mapChildren, hasEffect } from "../walker";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
@@ -320,10 +320,10 @@ function visitScc(w: SccWalk, path: string): void {
 	w.stack.push(path);
 	w.onStack.add(path);
 	let low = own;
-	const at = w.graph.modulePaths.indexOf(path);
+	const at = findModuleIndex(w.graph, path);
 	for (const entry of w.graph.modules[at].imports) {
 		const next = entry.sourcePath;
-		if (w.graph.modulePaths.indexOf(next) < 0) continue;
+		if (findModuleIndex(w.graph, next) < 0) continue;
 		if (!w.index.has(next)) {
 			visitScc(w, next);
 			const nextLow = w.low.get(next)!;
