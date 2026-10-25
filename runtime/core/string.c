@@ -5,7 +5,6 @@
 
 #include "runtime/core/system.h"
 #include "runtime/core/array.h"
-#include "runtime/core/dragonbox.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -1050,106 +1049,6 @@ void msStringSetChar(msString* s, int64_t idx, msString ch) {
 	}
 }
 
-static int msWriteUint64Decimal(uint64_t value, char* out) {
-	char reversed[20];
-	int n = 0;
-	do {
-		reversed[n++] = (char)('0' + value % 10);
-		value /= 10;
-	} while (value != 0);
-	for (int i = 0; i < n; i++) out[i] = reversed[n - 1 - i];
-	return n;
-}
-
-static int msWriteInt64Decimal(int64_t value, char* out) {
-	if (value < 0) {
-		out[0] = '-';
-		return 1 + msWriteUint64Decimal((uint64_t)0 - (uint64_t)value, out + 1);
-	}
-	return msWriteUint64Decimal((uint64_t)value, out);
-}
-
-msString msIntToString(int64_t value) {
-	char buf[32];
-	int len = msWriteInt64Decimal(value, buf);
-	return msStringNew(buf, len);
-}
-
-static int msShortestRoundTripDigits(double value, char* digits, int* decExp) {
-	uint64_t bits;
-	__builtin_memcpy(&bits, &value, sizeof bits);
-	msDragonboxDecimal decimal = msDragonboxToDecimal64(bits & (MS_DRAGONBOX_HIDDEN_BIT - 1), (bits >> 52) & 0x7FF);
-	uint64_t significand = decimal.significand;
-	int32_t exponent = decimal.exponent;
-	while (significand % 10 == 0) {
-		significand /= 10;
-		exponent++;
-	}
-	int k = msWriteUint64Decimal(significand, digits);
-	*decExp = exponent + k - 1;
-	return k;
-}
-
-msString msNumberToString(double value) {
-	char buf[64];
-	uint64_t bits;
-	__builtin_memcpy(&bits, &value, sizeof bits);
-	bool nonFinite = (bits & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL;
-	if (nonFinite && (bits & 0x000FFFFFFFFFFFFFULL) != 0) return msStringNew("NaN", 3);
-	if (value == 0.0) return msStringNew("0", 1);
-	if (nonFinite) return value < 0.0 ? msStringNew("-Infinity", 9) : msStringNew("Infinity", 8);
-	if (value >= -1e15 && value <= 1e15 && value == (double)(int64_t)value) {
-		int len = msWriteInt64Decimal((int64_t)value, buf);
-		return msStringNew(buf, len);
-	}
-
-	char* p = buf;
-	if (value < 0.0) {
-		*p++ = '-';
-		value = -value;
-	}
-	char digits[32];
-	int decExp = 0;
-	int k = msShortestRoundTripDigits(value, digits, &decExp);
-	int n = decExp + 1;
-	if (k <= n && n <= 21) {
-		memcpy(p, digits, (size_t)k);
-		p += k;
-		for (int i = 0; i < n - k; i++) *p++ = '0';
-	} else if (n > 0 && n <= 21) {
-		memcpy(p, digits, (size_t)n);
-		p += n;
-		*p++ = '.';
-		memcpy(p, digits + n, (size_t)(k - n));
-		p += k - n;
-	} else if (n > -6 && n <= 0) {
-		*p++ = '0';
-		*p++ = '.';
-		for (int i = 0; i < -n; i++) *p++ = '0';
-		memcpy(p, digits, (size_t)k);
-		p += k;
-	} else {
-		*p++ = digits[0];
-		if (k > 1) {
-			*p++ = '.';
-			memcpy(p, digits + 1, (size_t)(k - 1));
-			p += k - 1;
-		}
-		*p++ = 'e';
-		*p++ = n > 0 ? '+' : '-';
-		p += msWriteInt64Decimal(n > 0 ? n - 1 : -(n - 1), p);
-	}
-	return msStringNew(buf, (int)(p - buf));
-}
-
-/* Unsigned counterpart of msIntToString: values above INT64_MAX print as a
-   negative through the signed formatter. */
-msString msUint64ToString(uint64_t value) {
-	char buf[24];
-	int len = msWriteUint64Decimal(value, buf);
-	return msStringNew(buf, len);
-}
-
 static int msCheckedRadix(double radix) {
 	if (!(radix >= 2.0 && radix < 37.0)) msRaiseRadixError();
 	return (int)radix;
@@ -1248,11 +1147,6 @@ msString msNumberToStringRadix(double value, double radix) {
 	} while (integer > 0);
 	if (negative) buffer[--integerCursor] = '-';
 	return msStringNew(buffer + integerCursor, fractionCursor - integerCursor);
-}
-
-msString msBoolToString(int value) {
-	if (value) return msStringNew("true", 4);
-	return msStringNew("false", 5);
 }
 
 /* ===== Splitting & Joining ===== */

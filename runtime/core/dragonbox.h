@@ -11,16 +11,9 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "runtime/core/mulWide.h"
 
 typedef struct { uint64_t hi; uint64_t lo; } msDragonboxU128;
-typedef struct { uint64_t significand; int32_t exponent; } msDragonboxDecimal;
 typedef struct { uint64_t mul; uint64_t cmp; } msDragonboxMulCmp;
-
-#define MS_DRAGONBOX_SIGNIFICAND_SIZE 53
-#define MS_DRAGONBOX_EXPONENT_BIAS (1024 - 1 + (MS_DRAGONBOX_SIGNIFICAND_SIZE - 1))
-#define MS_DRAGONBOX_HIDDEN_BIT ((uint64_t)1 << (MS_DRAGONBOX_SIGNIFICAND_SIZE - 1))
-#define MS_DRAGONBOX_POW10_MIN (-292)
 
 static const msDragonboxU128 msDragonboxPow10Table[619] = {
 	{0xFF77B1FCBEBCDC4FULL, 0x25E8E89C13BB0F7BULL},
@@ -672,149 +665,9 @@ static const msDragonboxMulCmp msDragonboxMod5Table[25] = {
 	{0x2C2AD1AB7BFA3661ULL, 0x0000000000000135ULL}
 };
 
-static inline int32_t msDragonboxFloorLog2Pow10(int32_t e) {
-	return (e * 1741647) >> 19;
-}
-
-static inline int32_t msDragonboxFloorLog10Pow2(int32_t e) {
-	return (e * 1262611) >> 22;
-}
-
-static inline int32_t msDragonboxFloorLog10ThreeQuartersPow2(int32_t e) {
-	return (e * 1262611 - 524031) >> 22;
-}
-
-static inline msDragonboxU128 msDragonboxPow10(int32_t k) {
-	return msDragonboxPow10Table[k - MS_DRAGONBOX_POW10_MIN];
-}
-
-static inline bool msDragonboxMultipleOfPow2(uint64_t value, int32_t e2) {
-	return e2 < 64 && (value & (((uint64_t)1 << e2) - 1)) == 0;
-}
-
-static inline bool msDragonboxMultipleOfPow5(uint64_t value, int32_t e5) {
-	msDragonboxMulCmp m5 = msDragonboxMod5Table[e5];
-	return value * m5.mul <= m5.cmp;
-}
-
-static inline msDragonboxU128 msDragonboxMul128(uint64_t a, uint64_t b) {
-	msDragonboxU128 r = { msMulHi64(a, b), a * b };
-	return r;
-}
-
-static inline uint64_t msDragonboxMulShift(uint64_t x, msDragonboxU128 y) {
-	msDragonboxU128 p1 = msDragonboxMul128(x, y.hi);
-	msDragonboxU128 p0 = msDragonboxMul128(x, y.lo);
-	p1.lo += p0.hi;
-	p1.hi += p1.lo < p0.hi;
-	return p1.hi;
-}
-
-static inline bool msDragonboxMulParity(uint64_t twoF, msDragonboxU128 pow10, int32_t betaMinus1) {
-	uint64_t p01 = twoF * pow10.hi;
-	uint64_t p10 = msDragonboxMul128(twoF, pow10.lo).hi;
-	uint64_t mid = p01 + p10;
-	return (mid & ((uint64_t)1 << (64 - betaMinus1))) != 0;
-}
-
-static inline bool msDragonboxIsIntegralEndpoint(uint64_t twoF, int32_t e2, int32_t minusK) {
-	if (e2 < -2) return false;
-	if (e2 <= 9) return true;
-	if (e2 <= 86) return msDragonboxMultipleOfPow5(twoF, minusK);
-	return false;
-}
-
-static inline bool msDragonboxIsIntegralMidpoint(uint64_t twoF, int32_t e2, int32_t minusK) {
-	if (e2 < -4) return msDragonboxMultipleOfPow2(twoF, minusK - e2 + 1);
-	if (e2 <= 9) return true;
-	if (e2 <= 86) return msDragonboxMultipleOfPow5(twoF, minusK);
-	return false;
-}
-
-static inline msDragonboxDecimal msDragonboxAsymmetricInterval(int32_t e2) {
-	const int32_t p = MS_DRAGONBOX_SIGNIFICAND_SIZE;
-	int32_t minusK = msDragonboxFloorLog10ThreeQuartersPow2(e2);
-	int32_t betaMinus1 = e2 + msDragonboxFloorLog2Pow10(-minusK);
-	msDragonboxU128 pow10 = msDragonboxPow10(-minusK);
-	uint64_t lowerEndpoint = (pow10.hi - (pow10.hi >> (p + 1))) >> (64 - p - betaMinus1);
-	uint64_t upperEndpoint = (pow10.hi + (pow10.hi >> (p + 0))) >> (64 - p - betaMinus1);
-	bool lowerEndpointIsInteger = 2 <= e2 && e2 <= 3;
-	uint64_t xi = lowerEndpoint + (uint64_t)(!lowerEndpointIsInteger);
-	uint64_t zi = upperEndpoint;
-	uint64_t q = zi / 10;
-	if (q * 10 >= xi) {
-		msDragonboxDecimal r = { q, minusK + 1 };
-		return r;
-	}
-	q = ((pow10.hi >> (64 - (p + 1) - betaMinus1)) + 1) / 2;
-	if (e2 == -77) {
-		q -= (uint64_t)(q % 2 != 0);
-	} else {
-		q += (uint64_t)(q < xi);
-	}
-	msDragonboxDecimal r = { q, minusK };
-	return r;
-}
-
-static inline msDragonboxDecimal msDragonboxToDecimal64(uint64_t ieeeSignificand, uint64_t ieeeExponent) {
-	const int32_t kappa = 2;
-	const uint32_t bigDivisor = 1000;
-	const uint32_t smallDivisor = 100;
-	uint64_t m2;
-	int32_t e2;
-	if (ieeeExponent != 0) {
-		m2 = MS_DRAGONBOX_HIDDEN_BIT | ieeeSignificand;
-		e2 = (int32_t)ieeeExponent - MS_DRAGONBOX_EXPONENT_BIAS;
-		if (0 <= -e2 && -e2 < MS_DRAGONBOX_SIGNIFICAND_SIZE && msDragonboxMultipleOfPow2(m2, -e2)) {
-			msDragonboxDecimal r = { m2 >> -e2, 0 };
-			return r;
-		}
-		if (ieeeSignificand == 0 && ieeeExponent > 1) return msDragonboxAsymmetricInterval(e2);
-	} else {
-		m2 = ieeeSignificand;
-		e2 = 1 - MS_DRAGONBOX_EXPONENT_BIAS;
-	}
-	bool isEven = m2 % 2 == 0;
-	bool acceptLower = isEven;
-	bool acceptUpper = isEven;
-	int32_t minusK = msDragonboxFloorLog10Pow2(e2) - kappa;
-	int32_t betaMinus1 = e2 + msDragonboxFloorLog2Pow10(-minusK);
-	msDragonboxU128 pow10 = msDragonboxPow10(-minusK);
-	uint32_t delta = (uint32_t)(pow10.hi >> (64 - 1 - betaMinus1));
-	uint64_t twoFl = 2 * m2 - 1;
-	uint64_t twoFc = 2 * m2;
-	uint64_t twoFr = 2 * m2 + 1;
-	uint64_t zi = msDragonboxMulShift(twoFr << betaMinus1, pow10);
-	uint64_t q = zi / bigDivisor;
-	uint32_t r = (uint32_t)zi - bigDivisor * (uint32_t)q;
-	if (r < delta) {
-		if (r != 0 || acceptUpper || !msDragonboxIsIntegralEndpoint(twoFr, e2, minusK)) {
-			msDragonboxDecimal out = { q, minusK + kappa + 1 };
-			return out;
-		}
-		q -= 1;
-		r = bigDivisor;
-	} else if (r == delta) {
-		if ((acceptLower && msDragonboxIsIntegralEndpoint(twoFl, e2, minusK))
-			|| msDragonboxMulParity(twoFl, pow10, betaMinus1)) {
-			msDragonboxDecimal out = { q, minusK + kappa + 1 };
-			return out;
-		}
-	}
-	q = q * 10;
-	uint32_t dist = r - (delta / 2) + (smallDivisor / 2);
-	uint32_t distQ = dist / 100;
-	q += distQ;
-	if (dist == distQ * 100) {
-		bool approxYParity = (dist & 1) != 0;
-		if (msDragonboxMulParity(twoFc, pow10, betaMinus1) != approxYParity) {
-			q -= 1;
-		} else if (q % 2 != 0 && msDragonboxIsIntegralMidpoint(twoFc, e2, minusK)) {
-			q -= 1;
-		}
-	}
-	msDragonboxDecimal out = { q, minusK + kappa };
-	return out;
-}
+static inline uint64_t msDragonboxPow10Hi(int32_t k) { return msDragonboxPow10Table[k + 292].hi; }
+static inline uint64_t msDragonboxPow10Lo(int32_t k) { return msDragonboxPow10Table[k + 292].lo; }
+static inline uint64_t msDragonboxMod5Mul(int32_t e5) { return msDragonboxMod5Table[e5].mul; }
+static inline uint64_t msDragonboxMod5Cmp(int32_t e5) { return msDragonboxMod5Table[e5].cmp; }
 
 #endif
