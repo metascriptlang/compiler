@@ -7,13 +7,13 @@ import {
 	ConstructorDeclData, ExprStmtData, BinaryExprData, MemberExprData,
 } from "../../ast/node";
 import { markUsedIn, CheckerContext, Severity, addError, createContext, sgSortRecords } from "../../checker/context";
-import { lookupSymbol, makeSymbol, hasFlag, classDeclNodeOf, SymbolFlag, ScopeKind } from "../../checker/symbol";
+import { lookupSymbol, makeSymbol, hasFlag, SymbolFlag, ScopeKind } from "../../checker/symbol";
 import { collectOneDirective } from "../../checker/checkPass";
 import { registerApplyDecorators, registerDecoratorDefers, registerApplyDecoratedStmt } from "../../checker/checkerCallbacks";
 import { collectOneStatement, collectTopLevel, getDeclName } from "../../checker/collectPass";
 import { isBuiltinDirective, isIntrinsicDecorator, intrinsicOnly, recordFieldDecorators, resolveDecoratorSymbol } from "../../checker/decoratorHelpers";
 import { expandAutoAccessor, expandAutoAccessors, isAutoAccessorField, autoAccessorStorageName } from "../../checker/autoAccessor";
-import { ensureShaped, fillForwardSymbol } from "../../checker/resolvePass";
+import { ensureShaped, fillForwardSymbol, declaredParentClass } from "../../checker/resolvePass";
 import { declaringModuleCtx } from "../../checker/instantiate";
 import { cloneNodeForCheck } from "../../monomorphize/clone";
 import { fieldInitAssignment } from "../../transform/lowering/ctorLower";
@@ -142,10 +142,11 @@ function applyStatementAt(ctx: CheckerContext, index: int32): void {
 	_pendingExtras[index] = after;
 }
 
-function applyPendingClass(ctx: CheckerContext, name: string): void {
+function applyPendingClass(ctx: CheckerContext, sym: Symbol): void {
 	for (let i = 0; i < _pendingStmts.length; i += 1) {
 		if (_pendingDone[i]) continue;
-		if (deferredDeclName(_pendingStmts[i]) != name) continue;
+		const decl = deferredDeclOf(_pendingStmts[i]);
+		if (decl == null || decl.resolvedSym != sym) continue;
 		applyStatementAt(ctx, i);
 		return;
 	}
@@ -337,18 +338,16 @@ function seedInheritedMetadata(ctx: CheckerContext, plan: ClassPlan): void {
 	if (plan == null || plan.seeded) return;
 	plan.seeded = true;
 	if (plan.classNode.kind != NodeKind.ClassDecl) return;
-	let parentName = (plan.classNode.data as ClassDeclData).classExtends;
+	let cls = planClassSymbol(plan);
 	let depth = 0;
-	while (parentName != "" && depth < 64) {
-		applyPendingClass(ctx, parentName);
-		const parentSym = lookupSymbol(ctx.table, parentName);
+	while (depth < 64) {
+		const parentSym = declaredParentClass(ctx, cls);
 		if (parentSym == null || parentSym.symbolKind != SymbolKind.Class) return;
+		applyPendingClass(ctx, parentSym);
 		for (let i = 0; i < parentSym.metaKeys.length; i += 1) {
 			addInheritedPair(plan, parentSym.metaKeys[i], parentSym.metaValues[i]);
 		}
-		const parentDecl = classDeclNodeOf(parentSym);
-		if (parentDecl == null || parentDecl.kind != NodeKind.ClassDecl) return;
-		parentName = (parentDecl.data as ClassDeclData).classExtends;
+		cls = parentSym;
 		depth += 1;
 	}
 }

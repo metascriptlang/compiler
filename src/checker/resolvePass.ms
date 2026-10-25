@@ -2960,7 +2960,7 @@ function inheritConstructor(ctx: CheckerContext, node: Node, sym: Symbol, parent
 
 // A resolved class names its parent by Symbol; one not resolved yet is declared in
 // this module, so its `extends` name binds in this scope.
-function declaredParentClass(ctx: CheckerContext, classSym: Symbol): Symbol | null {
+export function declaredParentClass(ctx: CheckerContext, classSym: Symbol): Symbol | null {
 	if (classSym.declNode == null || classSym.declNode.kind != NodeKind.ClassDecl) return null;
 	const resolved = parentClassSymOf(classSym);
 	if (resolved != null) return resolved;
