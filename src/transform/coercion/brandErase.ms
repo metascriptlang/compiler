@@ -2,7 +2,7 @@
 // item 5 S1). Erasing BrandWiden Distincts to their base BEFORE any lowering
 // means string/number lowerings and codegen never see a Distinct to peel.
 
-import { Node, Type, TypeKind, TypeFlag } from "../../ast/node";
+import { Node, Type, TypeKind, TypeFlag, ProgramData, ExprStmtData, BinaryExprData } from "../../ast/node";
 import { mapChildren } from "../walker";
 import { TransformContext, ModuleFact } from "../context";
 import { factsOf } from "../moduleFacts";
@@ -82,6 +82,20 @@ test "the brand-erasure walk collects each gated feature wherever it sits" {
 	assert scansAs("const o = { ...p, a: 1 };", ModuleFact.Spread);
 	assert scansAs("switch (x) { case 1: f(); }", ModuleFact.Switch);
 	assert scansAs("function f() { while (c) { switch (x) { default: g(); } } }", ModuleFact.Switch);
+}
+
+test "a logical assignment collects the nullish fact, since the nullish pass lowers it" {
+	const parsed = parseInput("x += 1;");
+	assert parsed.ok;
+	const stmt = (parsed.value.data as ProgramData).programStmts[0];
+	const assign = (stmt.data as ExprStmtData).expr;
+	for (const op of ["??=", "||=", "&&="]) {
+		(assign.data as BinaryExprData).operator = op;
+		const facts = factsOf(assign);
+		assert facts.has(ModuleFact.Nullish) && facts.size() == 1, op;
+	}
+	(assign.data as BinaryExprData).operator = "+=";
+	assert factsOf(assign).isEmpty();
 }
 
 test "an await collects both the await and its async routine" {
