@@ -29,9 +29,9 @@
 /* ===== Atomic primitives ===== */
 
 #if defined(__GNUC__) || defined(__clang__)
-  #define msAtomicFetchAdd(p, v) __atomic_fetch_add(p, v, __ATOMIC_RELAXED)
-  #define msAtomicLoad(p) __atomic_load_n(p, __ATOMIC_ACQUIRE)
-  #define msAtomicStore(p, v) __atomic_store_n(p, v, __ATOMIC_RELEASE)
+  #define msAtomicFetchAdd(p, v) __atomic_fetch_add(p, v, __ATOMIC_SEQ_CST)
+  #define msAtomicLoad(p) __atomic_load_n(p, __ATOMIC_SEQ_CST)
+  #define msAtomicStore(p, v) __atomic_store_n(p, v, __ATOMIC_SEQ_CST)
   #if defined(__x86_64__) || defined(__i386__)
     #define msCpuRelax() __builtin_ia32_pause()
   #elif defined(__aarch64__)
