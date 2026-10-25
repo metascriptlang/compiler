@@ -63,7 +63,13 @@ function stdRoutineName(sym: Symbol): string {
 	return `std/${module}.${sym.name}`;
 }
 
+function holdsValue(sym: Symbol): boolean {
+	return sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Temp
+		|| sym.symbolKind == SymbolKind.Parameter || sym.symbolKind == SymbolKind.Property;
+}
+
 function runtimeHostName(sym: Symbol): string {
+	if (holdsValue(sym)) return "";
 	if (sym.nativeName != "") return sym.nativeName;
 	const routine = stdRoutineName(sym);
 	if (routine != "" && lookupHost(routine) != null) return routine;
@@ -1779,7 +1785,7 @@ function compileCallExpr(s: RaiserCompState, node: Node): int32 {
 				&& hasStringType((d.callee.data as MemberExprData).object)) {
 			return compileStrIndexRead(s, node, sym.nativeName == "msStringByteAt" ? RaiserOpcode.StrByteAt : RaiserOpcode.StrCharCodeAt);
 		}
-		if (sym.nativeName != "") {
+		if (sym.nativeName != "" && !holdsValue(sym)) {
 			checkHostBridgeCoverage(sym, d.callee);
 			const isStatic = node.flags.has(NodeFlag.ExtStatic);
 			const md = d.callee.data as MemberExprData;
