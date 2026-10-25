@@ -9,6 +9,7 @@
 // @stdout: 1 2 0 0
 // @stdout: 50 50 50 3
 // @stdout: 1 1 9
+// @stdout: 1 3
 // Logical assignment keeps its TS meaning on C and JS: the place (object and index
 // included) is evaluated once, read once, the right side runs only when the test
 // passes, and the expression's value is the place afterwards.
@@ -127,3 +128,14 @@ function lazy(given: Item | null): int32 {
 let zero: int32 = 0;
 zero ||= 9;
 console.log(lazy(null), lazy(new Item()), zero);
+
+// A struct stored by a logical assignment is a copy, as with `=`.
+let source: Pt = { x: 1, y: 0 };
+let slot: Pt | null = null;
+slot ??= source;
+if (slot != null) slot.x = 5;
+let other: Pt = { x: 3, y: 0 };
+let full: Pt | null = { x: 4, y: 0 };
+full &&= other;
+if (full != null) full.x = 8;
+console.log(source.x, other.x);
