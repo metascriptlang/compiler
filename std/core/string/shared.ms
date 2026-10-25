@@ -68,7 +68,7 @@ export function repeat(this s: string, count: int32): string {
 	return result.asString();
 }
 
-// Byte reverse, matching msStringReverse — mangles multi-byte UTF-8 on both backends.
+// Byte reverse — mangles multi-byte UTF-8 on both backends.
 export function reverse(this s: string): string {
 	const sb = s.asBytes();
 	const result: uint8[] = [];
