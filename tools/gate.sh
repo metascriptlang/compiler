@@ -122,6 +122,7 @@ env:  GATE_WAIT_MAX seconds to wait for load <= cores once the queue is passed (
       GATE_PAR outer lane slots; when set, also caps selector emit and corpus build workers unless MSCORPUS_BUILD_JOBS is set
       MSCORPUS_BUILD_JOBS width of selector emit and corpus build workers, kept across phases; it replaces the GATE_PAR cap on them
       these limits do not cap aggregate processes or compiler-internal parallelism
+      GATE_ADOPT=0 skips caching a whole run's candidate emits for the next narrowed gate; for a host whose cache does not outlive the gate
 ledger: one row per lane and per run (lane secs rc red known new flaky wait) appended to GATE_LEDGER (default ~/.metascript/gate.tsv)
         one row per selection decision (step secs kept total differ_c differ_js touched) appended to
         GATE_SELECT_LEDGER (default ~/.metascript/gate-select.tsv); step is tier-select, select,
@@ -130,6 +131,7 @@ USAGE
 }
 
 say() { printf '%s\n' "$*"; }
+fmt_secs() { printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); }
 die() { printf 'gate: %s\n' "$*" >&2; exit 2; }
 cap_jobs() {
   local jobs=$1 cap
@@ -907,6 +909,33 @@ FAKE
   return $bad
 }
 
+adopt_cache_self_test() (
+  local d bad=0 got CTL_CACHE EMIT CAND EXE_SUFFIX="" GATE_ADOPT
+  d=$(mktemp -d) || return 1
+  CTL_CACHE="$d/cache" EMIT="$d/emit" CAND="$d/cand"
+  mkdir -p "$EMIT"; : >"$EMIT/cand.sig"; : >"$EMIT/ctl.keys"; printf '#!/bin/sh\n' >"$CAND"; chmod +x "$CAND"
+  cand_proven() { true; }
+  control_key() { printf 'k1'; }
+  control_snapshot() { mkdir -p "$2/std/core/system" && printf 'x\n' >"$2/std/core/system/index.ms"; }
+  adopt_candidate || { printf 'FAIL adopt cache: a cache without an entries directory refused the candidate\n'; bad=1; }
+  control_ready "$(control_dir k1)" k1 || { printf 'FAIL adopt cache: the candidate was not published on a cold cache\n'; bad=1; }
+  got=$(GATE_ADOPT=0 adopt_whole)
+  [ "$got" = "gate: adopt skipped · GATE_ADOPT=0" ] || { printf 'FAIL adopt cache: GATE_ADOPT=0 did not skip: "%s"\n' "$got"; bad=1; }
+  prepare_emit_workspace() { true; }
+  control_support() { printf 's'; }
+  control_key() { printf 'k2'; }
+  stage_emit_compiler() { printf '%s' "$1"; }
+  stable_programs() { :; }
+  reusable_programs() { :; }
+  emit_side() { :; }
+  adopt_candidate() { return 1; }
+  got=$(adopt_whole); rc=$?
+  { [ "$rc" -eq 0 ] && [[ "$got" == "gate: adopt failed after "*" · publishing the candidate's emits" ]]; } \
+    || { printf 'FAIL adopt cache: a failed publication was not reported: rc=%s "%s"\n' "$rc" "$got"; bad=1; }
+  rm -rf "$d"
+  return $bad
+)
+
 adopt_self_test() {
   local bad=0 d got saveTOP=$TOP saveCAND=$CAND savekey=${cand_key-} g="git -c user.name=t -c user.email=t@t"
   d=$(mktemp -d) || return 1
@@ -1109,6 +1138,7 @@ adopt_candidate() {
   dir=$(control_dir "$key")
   if ! control_ready "$dir" "$key"; then
     rm -rf "$dir"
+    mkdir -p "$CTL_CACHE/entries" || return 1
     tmp=$(mktemp -d "$CTL_CACHE/entries/.adopt.XXXXXX") || return 1
     control_snapshot HEAD "$tmp" && cp "$CAND" "$(control_binary "$tmp")" \
       && publish_control "$tmp" "$dir" "$key" || { rm -rf "$tmp"; return 1; }
@@ -1184,15 +1214,17 @@ emit_sides() {
 
 adopt_whole() {
   local key cand t0=$SECONDS
-  cand_proven && prepare_emit_workspace && CONTROL_SUPPORT=$(control_support "$CTL_WORK") \
-    && key=$(control_key HEAD) || return 0
+  [ "${GATE_ADOPT:-1}" != 0 ] || { say "gate: adopt skipped · GATE_ADOPT=0"; return 0; }
+  cand_proven || return 0
+  prepare_emit_workspace && CONTROL_SUPPORT=$(control_support "$CTL_WORK") \
+    && key=$(control_key HEAD) || { say "gate: adopt failed · emit workspace"; return 0; }
   ! control_ready "$(control_dir "$key")" "$key" || return 0
-  cand=$(stage_emit_compiler "$CAND" cand) || return 0
-  rm -rf "$EMIT" && mkdir -p "$EMIT" || return 0
+  cand=$(stage_emit_compiler "$CAND" cand) || { say "gate: adopt failed · staging the candidate"; return 0; }
+  rm -rf "$EMIT" && mkdir -p "$EMIT" || { say "gate: adopt failed · $EMIT"; return 0; }
   stable_programs >"$EMIT/programs"
-  reusable_programs >"$EMIT/ctl.keys" || return 0
+  reusable_programs >"$EMIT/ctl.keys" || { say "gate: adopt failed · program keys"; return 0; }
   emit_side "$cand" "$CTL_WORK/e/cand" <"$EMIT/programs" | sort >"$EMIT/cand.sig"
-  adopt_candidate || return 0
+  adopt_candidate || { say "gate: adopt failed after $(fmt_secs $((SECONDS - t0))) · publishing the candidate's emits"; return 0; }
   say "gate: adopt $(fmt_secs $((SECONDS - t0))) · this tree's emits are cached for the next narrowed gate"
   select_ledger adopt "$((SECONDS - t0))" "" "$(grep -c . "$EMIT/programs" | tr -d ' ')" "" "" ""
 }
@@ -1868,6 +1900,7 @@ CASES
   stable_emit_self_test || bad=1
   queue_self_test || bad=1
   adopt_self_test || bad=1
+  adopt_cache_self_test || bad=1
   boot_self_test || bad=1
   [ "$bad" -ne 0 ] || say "gate: self-test ok"
   return $bad
@@ -2250,7 +2283,6 @@ need_cand() {
   [ -x "$CAND" ] || die "lane '$1' tests the candidate compiler; include the build lane"
 }
 
-fmt_secs() { printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); }
 
 if [ "$select_only" -eq 1 ]; then
   need_cand select
