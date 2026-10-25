@@ -208,3 +208,4 @@ import "./routineFlagRefusals";
 import "./logicalAssignmentCheck";
 import "./stdSpellingShadow";
 import "./typeIdentityBySymbol";
+import "./decoratorMetadataChain";
