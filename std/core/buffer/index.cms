@@ -834,16 +834,17 @@ export function bufReverse(this buf: Buffer): void {
 
 // --- Variable-Length Integer Read/Write (1-6 bytes) ---
 
-function badByteLength(byteLength: number, rule: string): never {
+@noinline function badByteLength(byteLength: number): never {
+	const rule = Math.floor(byteLength) != byteLength ? "an integer" : ">= 1 and <= 6";
 	throw new RangeError(
 		`The value of "byteLength" is out of range. It must be ${rule}. Received ${byteLength}`,
 	);
 }
 
-function checkedWidth(byteLength: number): int64 {
-	if (Math.floor(byteLength) != byteLength) badByteLength(byteLength, "an integer");
-	if (byteLength < 1 || byteLength > 6) badByteLength(byteLength, ">= 1 and <= 6");
-	return byteLength as int64;
+@inline function widthOrZero(byteLength: number): int64 {
+	if (!(byteLength >= 1 && byteLength <= 6)) return 0;
+	const width = byteLength as int64;
+	return (width as number) == byteLength ? width : 0;
 }
 
 function readVariable(
@@ -853,7 +854,8 @@ function readVariable(
 	bigEndian: boolean,
 	signed: boolean,
 ): number {
-	const width = checkedWidth(byteLength);
+	const width = widthOrZero(byteLength);
+	if (width == 0) badByteLength(byteLength);
 	const at = offset as int64;
 	if (!buf.fits(at, width)) return 0;
 	const value = buf.loadField(at, width, bigEndian);
@@ -867,7 +869,8 @@ function writeVariable(
 	byteLength: number,
 	bigEndian: boolean,
 ): number {
-	const width = checkedWidth(byteLength);
+	const width = widthOrZero(byteLength);
+	if (width == 0) badByteLength(byteLength);
 	const at = offset as int64;
 	if (buf.byteCount() == 0 || !buf.fits(at, width)) return at as number;
 	buf.storeField(at, width, bigEndian, value as int64);
