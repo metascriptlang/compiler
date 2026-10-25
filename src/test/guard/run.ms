@@ -935,7 +935,7 @@ function publishCountsBeforeVisible(): void {
 		fail(tag, "emit error");
 		return;
 	}
-	const pairs: string[][] = [["msMsgSetPtrShared(", "msActorSend("], ["msAwaitGroupSetDoneFut(", "msSpawnTaskSubmit("]];
+	const pairs: string[][] = [["msMsgSetPtrShared(", "msActorSendOrDrop("], ["msAwaitGroupSetDoneFut(", "msSpawnTaskSubmit("]];
 	const seen: int32[] = [0, 0];
 	for (const f of readDir(`${dir}/out/debug`)) {
 		if (!f.endsWith(".c")) continue;
